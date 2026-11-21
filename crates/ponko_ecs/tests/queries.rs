@@ -472,9 +472,9 @@ fn option_fetches_see_exactly_the_components_each_archetype_has() {
         bits.iter().enumerate().map(|(j, &k)| ((m >> k) & 1) << j).sum::<u32>()
     };
     let mut seen = 0;
-    // One option, two (split loops), three (one plain loop), and two
-    // spread over nested tuples: `for_each` sees what `iter` and the
-    // model see, value included.
+    // One option to four (split loops), five (one plain loop that tests
+    // each row), and options spread over nested tuples: `for_each` sees
+    // what the model sees, value included.
     w.query::<(Entity, &Pos, Option<&Opt<0>>)>().for_each(|(e, p, a)| {
         assert_eq!(present(&[a.map(|b| b.0)]), expect(e, &[0]));
         assert!(a.is_none_or(|b| b.0 as f32 == p.0));
@@ -510,7 +510,32 @@ fn option_fetches_see_exactly_the_components_each_archetype_has() {
             );
             seen += 1;
         });
-    assert_eq!(seen, 4 * model.len());
+    w.query::<(
+        (Entity, Option<&Opt<3>>),
+        (Option<&Opt<0>>, &Pos),
+        (Option<&Opt<2>>, Option<&Opt<1>>),
+    )>()
+    .for_each(|((e, a), (b, p), (c, d))| {
+        let all = [a.map(|b| b.0), b.map(|b| b.0), c.map(|b| b.0), d.map(|b| b.0)];
+        assert_eq!(present(&all), expect(e, &[3, 0, 2, 1]));
+        assert!(all.iter().flatten().all(|&v| v as f32 == p.0));
+        seen += 1;
+    });
+    w.query::<(
+        Entity,
+        Option<&Opt<0>>,
+        Option<&Opt<1>>,
+        Option<&Opt<2>>,
+        Option<&Opt<3>>,
+        Option<&Pos>,
+    )>()
+    .for_each(|(e, a, b, c, d, p)| {
+        let all = [a.map(|b| b.0), b.map(|b| b.0), c.map(|b| b.0), d.map(|b| b.0)];
+        assert_eq!(present(&all), expect(e, &[0, 1, 2, 3]));
+        assert!(p.is_some());
+        seen += 1;
+    });
+    assert_eq!(seen, 6 * model.len());
     // `Option<&mut T>` writes exactly the entities that have `T`.
     w.query::<(Option<&mut Opt<1>>, Option<&mut Opt<2>>)>()
         .for_each(|(a, b)| {

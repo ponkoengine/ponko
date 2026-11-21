@@ -5,10 +5,16 @@
 // octahedral directions in a one-texel border: rgb is the irradiance over
 // pi, a which probe the slot holds) in its top part, and a 16x16 tile of
 // distances (14x14 in a border: r the mean distance to what the probe sees
-// that way, g its mean square) below. Tiles go 64 to a row.
+// that way, g its mean square) below. Tiles go 64 to a row. The light
+// tiles fill the left half of their rows; in the right half, beside each,
+// is its settled tile (the same layout: the light extrapolated to where
+// its bounces settle, see gi_update.wgsl), which the camera's view reads.
+// The probes' own views read the light tiles, so each bounce starts from
+// the light as it is.
 //
-// frame.gi[0]: x 1 in the probes' own views (0 elsewhere), yz unused, w
-// the probe spacing; frame.gi[1]: xyz probes along each axis, w the
+// frame.gi[0]: x 1 in the probes' own views (0 elsewhere), y 1 to read
+// the light tiles in the camera's view too (tests), z unused, w the probe
+// spacing; frame.gi[1]: xyz probes along each axis, w the
 // intensity (0: off); frame.gi[2]: xyz the grid's lowest probe (in probe
 // cells), w the rows of tiles.
 @group(0) @binding(10) var gi_atlas: texture_2d<f32>;
@@ -57,6 +63,9 @@ fn gi_light(world: vec3<f32>, n: vec3<f32>, view: vec3<f32>) -> vec4<f32> {
     let local = p / spacing - lowest;
     let base = clamp(floor(local), vec3<f32>(0.0), counts - 2.0);
     let t = clamp(local - base, vec3<f32>(0.0), vec3<f32>(1.0));
+    // The settled tiles (64 tiles of 8 texels to the right), except in the
+    // probes' own views.
+    let settled = vec2<f32>(select(512.0, 0.0, frame.gi[0].x > 0.5 || frame.gi[0].y > 0.5), 0.0);
     var sum = vec3<f32>(0.0);
     var total = 0.0;
     var covered = 0.0;
@@ -71,12 +80,15 @@ fn gi_light(world: vec3<f32>, n: vec3<f32>, view: vec3<f32>) -> vec4<f32> {
         let s = cell - wrap * counts;
         let slot = s.x + counts.x * (s.y + counts.y * s.z);
         let tile = vec2<f32>(slot % 64.0, floor(slot / 64.0));
-        let light = textureSampleLevel(gi_atlas, sky_sampler, gi_tile_uv(tile * 8.0, 8.0, n), 0.0);
+        let light = textureSampleLevel(gi_atlas, sky_sampler, gi_tile_uv(tile * 8.0 + settled, 8.0, n), 0.0);
         let k = wrap - 8.0 * floor(wrap / 8.0);
-        if abs(light.a - (1.0 + k.x + 8.0 * k.y + 64.0 * k.z)) > 0.25 {
+        if abs(abs(light.a) - (1.0 + k.x + 8.0 * k.y + 64.0 * k.z)) > 0.25 {
             continue; // the slot doesn't hold this probe (yet)
         }
         covered += trilinear;
+        if light.a < 0.0 {
+            continue; // in a wall: it sees both sides (see gi_update.wgsl)
+        }
         // Probes behind the surface count less.
         let toward = normalize(probe - world);
         var w = (dot(toward, n) + 1.0) * 0.5;

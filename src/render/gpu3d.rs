@@ -347,6 +347,10 @@ pub(crate) struct Renderer3D {
     /// one for the sample count (to time both in one run).
     #[cfg(test)]
     pub(super) debug_see_through: Option<super::debug_lines::SeeThrough>,
+    /// Tests: light with the probes' latest light instead of the settled
+    /// estimate (see `gi_update.wgsl`).
+    #[cfg(test)]
+    pub(super) gi_unsettled: bool,
 
     // ---- Scene targets: replaced when the size or the passes change ----
     targets: Option<Targets>,
@@ -1095,6 +1099,8 @@ impl Renderer3D {
             debug_lines: None,
             #[cfg(test)]
             debug_see_through: None,
+            #[cfg(test)]
+            gi_unsettled: false,
             occlusion: super::occlusion::Occlusion::new(device, compute),
             occluded: 0,
             shadows: ShadowMaps {

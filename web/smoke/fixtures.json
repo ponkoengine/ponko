@@ -29,6 +29,15 @@
     "afterReload": ["settings_at_start:Loaded", "storage:persistent"],
     "engineGpu": true
   },
+  "web_editor_save": {
+    "example": "web_editor_save",
+    "features": ["editor"],
+    "asset": "crab.png",
+    "assetSize": "32x32",
+    "min": { "read_back": 1 },
+    "afterReload": ["kept:Loaded"],
+    "engineGpu": true
+  },
   "lights2d": {
     "example": "lights2d",
     "asset": "crab.png",
