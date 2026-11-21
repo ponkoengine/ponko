@@ -38,7 +38,9 @@ fn forward(mut client: TcpStream, upstream: SocketAddr, forwarded_for: &str) {
     }
     head.truncate(head.len() - 2);
     head.extend_from_slice(format!("X-Forwarded-For: {forwarded_for}\r\n\r\n").as_bytes());
-    let Ok(mut server) = TcpStream::connect(upstream) else { return };
+    let Ok(mut server) = TcpStream::connect(upstream) else {
+        return;
+    };
     if server.write_all(&head).is_err() {
         return;
     }
@@ -69,7 +71,11 @@ fn browser(via: SocketAddr) -> LobbyClient {
 
 /// Polls until `done` holds for the events every client saw so far (a
 /// hang detector of 30 s: the WebSocket clients connect on threads).
-fn pump(server: &mut LobbyServer, clients: &mut [LobbyClient], mut done: impl FnMut(&[Vec<LobbyEvent>]) -> bool) -> Vec<Vec<LobbyEvent>> {
+fn pump(
+    server: &mut LobbyServer,
+    clients: &mut [LobbyClient],
+    mut done: impl FnMut(&[Vec<LobbyEvent>]) -> bool,
+) -> Vec<Vec<LobbyEvent>> {
     let mut seen: Vec<Vec<LobbyEvent>> = clients.iter().map(|_| Vec::new()).collect();
     let deadline = Instant::now() + Duration::from_secs(30);
     while Instant::now() < deadline {
@@ -91,7 +97,7 @@ fn welcomed(events: &[LobbyEvent]) -> bool {
 }
 
 fn refused(events: &[LobbyEvent], error: LobbyError) -> bool {
-    events.iter().any(|e| *e == LobbyEvent::Refused(error))
+    events.contains(&LobbyEvent::Refused(error))
 }
 
 fn limits(trusted: &str) -> LobbyLimits {
@@ -105,11 +111,15 @@ fn limits(trusted: &str) -> LobbyLimits {
 fn behind_a_trusted_proxy_connections_count_per_forwarded_client() {
     let (mut server, web) = server(limits("127.0.0.1"));
     let (one, other) = (proxy(web, "203.0.113.7"), proxy(web, "198.51.100.9"));
-    // Three browsers that the proxy says are one client, and one more.
+    // Three browsers that the proxy says are one client, and one more:
+    // two of the three and the other one are welcomed.
     let mut clients = vec![browser(one), browser(one), browser(one), browser(other)];
     let seen = pump(&mut server, &mut clients, |seen| {
-        let refusals = seen.iter().filter(|e| refused(e, LobbyError::TooManyConnections)).count();
-        refusals == 1 && seen.iter().filter(|e| welcomed(e)).count() == 4
+        let refusals = seen
+            .iter()
+            .filter(|e| refused(e, LobbyError::TooManyConnections))
+            .count();
+        refusals == 1 && seen.iter().filter(|e| welcomed(e)).count() == 3
     });
     assert!(
         seen[..3].iter().any(|e| refused(e, LobbyError::TooManyConnections)),
@@ -131,7 +141,12 @@ fn the_header_is_ignored_unless_its_sender_is_trusted() {
     let seen = pump(&mut server, &mut clients, |seen| {
         seen.iter().any(|e| refused(e, LobbyError::TooManyConnections))
     });
-    assert_eq!(seen.iter().filter(|e| refused(e, LobbyError::TooManyConnections)).count(), 1);
+    assert_eq!(
+        seen.iter()
+            .filter(|e| refused(e, LobbyError::TooManyConnections))
+            .count(),
+        1
+    );
 }
 
 #[test]
@@ -163,6 +178,12 @@ fn request_rate_limits_use_the_forwarded_client_address() {
     let seen = pump(&mut server, &mut clients, |seen| {
         refused(&seen[1], LobbyError::RateLimited) && seen[2].iter().any(|e| matches!(e, LobbyEvent::Joined(_)))
     });
-    assert!(refused(&seen[1], LobbyError::RateLimited), "same client address, shared budget");
-    assert!(!refused(&seen[2], LobbyError::RateLimited), "another client address, its own budget");
+    assert!(
+        refused(&seen[1], LobbyError::RateLimited),
+        "same client address, shared budget"
+    );
+    assert!(
+        !refused(&seen[2], LobbyError::RateLimited),
+        "another client address, its own budget"
+    );
 }

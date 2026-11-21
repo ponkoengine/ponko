@@ -143,12 +143,14 @@ impl RelayTransport {
         if let Err(e) = result
             && e.kind() != io::ErrorKind::WouldBlock
         {
-            self.error.get_or_insert_with(|| format!("the lobby connection failed: {e}"));
+            self.error
+                .get_or_insert_with(|| format!("the lobby connection failed: {e}"));
         }
         if self.lobby.closed {
             self.error.get_or_insert_with(|| "the lobby connection closed".into());
         } else if self.lobby.room.is_none() {
-            self.error.get_or_insert_with(|| "this client left its lobby room".into());
+            self.error
+                .get_or_insert_with(|| "this client left its lobby room".into());
         }
     }
 

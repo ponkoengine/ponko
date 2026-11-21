@@ -245,9 +245,9 @@ mod native {
     use std::collections::BTreeMap;
     use std::io;
     use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
-    use std::sync::{Arc, Mutex};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     use tungstenite::handshake::MidHandshake;
@@ -455,7 +455,9 @@ mod native {
         fn accept(&mut self) {
             let now = Instant::now();
             while self.handshakes.len() < MAX_HANDSHAKES {
-                let Ok((stream, remote)) = self.listener.accept() else { break };
+                let Ok((stream, remote)) = self.listener.accept() else {
+                    break;
+                };
                 if self.conns.len() >= MAX_CONNECTIONS
                     || stream.set_nonblocking(true).is_err()
                     || stream.set_nodelay(true).is_err()

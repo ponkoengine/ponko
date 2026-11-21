@@ -686,7 +686,9 @@ impl LobbyServer {
     fn connected(&mut self, endpoint: usize, peer: PeerId) {
         let member = MemberId::from_bits(self.next_member);
         self.next_member = self.next_member.wrapping_add(1).max(1);
-        let addr = self.address_of(endpoint, peer).map_or(AddrKey::Member(member), AddrKey::Ip);
+        let addr = self
+            .address_of(endpoint, peer)
+            .map_or(AddrKey::Member(member), AddrKey::Ip);
         let (requests, relay) = (self.limits.request_burst, self.limits.relay_burst_bytes);
         let now = self.now;
         let address = self.addresses.entry(addr).or_insert_with(|| Address {

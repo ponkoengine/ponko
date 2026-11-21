@@ -116,7 +116,9 @@ fn play(nets: Vec<Net>, ticks: u64) -> Vec<Outcome> {
 fn relay_sessions(lobbies: Vec<LobbyClient>, delay: u32) -> Vec<Net> {
     let players = lobbies.len();
     let mut lobbies = lobbies.into_iter();
-    let host = Net::host_relay(lobbies.next().unwrap(), players).unwrap().input_delay(delay);
+    let host = Net::host_relay(lobbies.next().unwrap(), players)
+        .unwrap()
+        .input_delay(delay);
     let mut nets = vec![host];
     nets.extend(lobbies.map(|l| Net::join_relay(l).unwrap()));
     nets
@@ -143,8 +145,11 @@ fn lockstep_through_the_relay_matches_loopback(link: LoopbackLink) {
         assert!(!o.desync, "no desync");
         assert_eq!(o.sum, reference[0].sum, "player {} has the loopback's inputs", o.player);
     }
+    // The relay is the only path between the peers, so the matching sums
+    // already prove the inputs crossed it; a datagram can carry several
+    // ticks, so the frames aren't one per tick.
     let stats = server.stats();
-    assert!(stats.relay_out > TICKS, "the session went through the relay: {stats:?}");
+    assert!(stats.relay_out > 0, "the session went through the relay: {stats:?}");
 }
 
 #[test]
@@ -208,7 +213,9 @@ fn a_message_session_runs_through_the_relay_over_udp_sockets() {
         NetMessages::host_relay(host, 4).unwrap(),
         NetMessages::join_relay(guest).unwrap(),
     ];
-    pump(&mut server, &mut nets, |n| n[1].connected_peers() == 1 && n[0].connected_peers() == 1);
+    pump(&mut server, &mut nets, |n| {
+        n[1].connected_peers() == 1 && n[0].connected_peers() == 1
+    });
     let client = nets[0]
         .events()
         .find_map(|e| match e {
@@ -235,7 +242,10 @@ fn a_message_session_runs_through_the_relay_over_udp_sockets() {
     });
     assert_eq!(up, (0..50).collect::<Vec<u32>>());
     assert_eq!(down, [(Lane::Unreliable, b"state".to_vec())]);
-    assert!(server.stats().relay_out >= 50, "through the relay");
+    // Messages share datagrams, so count bytes: the 50 four-byte payloads
+    // crossed the relay.
+    let stats = server.stats();
+    assert!(stats.relay_bytes_out >= 200, "through the relay: {stats:?}");
 }
 
 #[test]

@@ -178,10 +178,11 @@ impl RtcConfig {
         self
     }
 
-    /// Connects through the TURN servers only, never directly: no host or
-    /// STUN addresses are offered, so the other side never learns this
-    /// machine's address (a browser's `iceTransportPolicy: "relay"`).
-    /// Without a TURN server nothing connects.
+    /// On the desktop, connects through the TURN servers only, never
+    /// directly: no host or STUN addresses are offered, so the other side
+    /// never learns this machine's address (what a browser's
+    /// `iceTransportPolicy: "relay"` does). Without a TURN server nothing
+    /// connects. Ignored in a browser for now.
     /// ```
     /// let config = ponko::net::rtc::RtcConfig::new()
     ///     .turn("turn:192.0.2.10:3478", "user", "secret")

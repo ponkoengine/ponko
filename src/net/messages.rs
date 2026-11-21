@@ -1585,11 +1585,12 @@ impl NetMessages {
     /// ```
     pub fn web_peer(&self, peer: PeerId) -> Option<super::WebPeer> {
         let addr = self.links.get(&peer).filter(|l| l.connected)?.addr;
-        match &self.wire {
-            #[cfg(not(target_arch = "wasm32"))]
-            Wire::UdpWeb(_, web, _) => web.peer(addr),
-            _ => None,
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Wire::UdpWeb(_, web, _) = &self.wire {
+            return web.peer(addr);
         }
+        let _ = addr;
+        None
     }
 
     /// Whether this endpoint hosts (from [`host`](Self::host) or the first

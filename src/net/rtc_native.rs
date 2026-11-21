@@ -125,8 +125,10 @@ impl Agent {
                 turn.push((addr, username.to_owned(), credential.to_owned()));
             }
         }
-        Ok(Self::with_socket(Box::new(socket), SocketAddr::new(ip, local.port()), &servers)?
-            .with_turn(&turn, config.relay_only))
+        Ok(
+            Self::with_socket(Box::new(socket), SocketAddr::new(ip, local.port()), &servers)?
+                .with_turn(&turn, config.relay_only),
+        )
     }
 
     /// Adds TURN servers (address, user name, password); with
@@ -597,9 +599,7 @@ fn resolve_turn(url: &str, v4: bool) -> io::Result<Vec<SocketAddr>> {
     let invalid = |why: &str| io::Error::new(io::ErrorKind::InvalidInput, format!("{url}: {why}"));
     let rest = url.strip_prefix("turn:").ok_or_else(|| invalid("not a turn: URL"))?;
     if let Some((_, query)) = rest.split_once('?')
-        && query
-            .split('&')
-            .any(|kv| kv.eq_ignore_ascii_case("transport=tcp"))
+        && query.split('&').any(|kv| kv.eq_ignore_ascii_case("transport=tcp"))
     {
         return Ok(Vec::new());
     }

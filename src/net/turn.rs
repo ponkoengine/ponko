@@ -522,7 +522,10 @@ impl TurnClient {
             return true; // A late answer to a request already answered.
         };
         // An answer to a signed request must be signed by the server too.
-        if self.key.is_some_and(|key| m.get(MESSAGE_INTEGRITY).is_some() && !m.verify(&key)) {
+        if self
+            .key
+            .is_some_and(|key| m.get(MESSAGE_INTEGRITY).is_some() && !m.verify(&key))
+        {
             return true;
         }
         let purpose = self.pending.remove(i).purpose;
@@ -596,8 +599,8 @@ impl TurnClient {
             return;
         }
         let ip = peer.ip().to_canonical();
-        if !self.permissions.contains_key(&ip) {
-            self.permissions.insert(ip, now + PERMISSION_RENEW);
+        if let std::collections::btree_map::Entry::Vacant(e) = self.permissions.entry(ip) {
+            e.insert(now + PERMISSION_RENEW);
             self.request(Purpose::Permission(ip), now);
             self.poll(now, out);
         }
@@ -632,7 +635,11 @@ pub(super) mod test_server {
     #[derive(Debug, PartialEq, Eq)]
     pub(in crate::net) enum Out {
         ToClient(SocketAddr, Vec<u8>),
-        FromRelay { relay: SocketAddr, to: SocketAddr, bytes: Vec<u8> },
+        FromRelay {
+            relay: SocketAddr,
+            to: SocketAddr,
+            bytes: Vec<u8>,
+        },
     }
 
     pub(in crate::net) struct TestTurnServer {
@@ -649,7 +656,11 @@ pub(super) mod test_server {
     }
 
     impl TestTurnServer {
-        pub(in crate::net) fn new(user: &str, password: &str, relay: impl FnMut() -> SocketAddr + Send + 'static) -> Self {
+        pub(in crate::net) fn new(
+            user: &str,
+            password: &str,
+            relay: impl FnMut() -> SocketAddr + Send + 'static,
+        ) -> Self {
             Self {
                 user: user.into(),
                 password: password.into(),
@@ -684,7 +695,7 @@ pub(super) mod test_server {
         }
 
         /// A datagram from a client to the listening address.
-        pub(in crate::net) fn from_client(&mut self, from: SocketAddr, packet: &[u8], out: &mut Vec<Out>) {
+        pub(in crate::net) fn on_client_packet(&mut self, from: SocketAddr, packet: &[u8], out: &mut Vec<Out>) {
             let Some(m) = parse(packet) else { return };
             if m.class == Class::Indication {
                 if m.method == SEND
@@ -755,7 +766,12 @@ pub(super) mod test_server {
 
         /// A datagram from a peer to relayed address `relay`: a Data
         /// indication to its client, if the client allowed the peer.
-        pub(in crate::net) fn from_peer(&mut self, relay: SocketAddr, from: SocketAddr, bytes: &[u8]) -> Option<(SocketAddr, Vec<u8>)> {
+        pub(in crate::net) fn on_peer_packet(
+            &mut self,
+            relay: SocketAddr,
+            from: SocketAddr,
+            bytes: &[u8],
+        ) -> Option<(SocketAddr, Vec<u8>)> {
             let (&client, _) = self
                 .allocations
                 .iter()
@@ -803,7 +819,7 @@ mod tests {
             }
             let mut out = Vec::new();
             for packet in to_server.drain(..) {
-                server.from_client(from, &packet, &mut out);
+                server.on_client_packet(from, &packet, &mut out);
             }
             for o in out {
                 match o {
@@ -842,7 +858,10 @@ mod tests {
     #[test]
     fn the_long_term_key_is_md5_of_user_realm_and_password() {
         // MD5("user:realm:pass"), from a reference implementation.
-        assert_eq!(hex(&long_term_key("user", "realm", "pass")), "8493fbc53ba582fb4c044c456bdc40eb");
+        assert_eq!(
+            hex(&long_term_key("user", "realm", "pass")),
+            "8493fbc53ba582fb4c044c456bdc40eb"
+        );
     }
 
     fn hex(bytes: &[u8]) -> String {
@@ -856,7 +875,11 @@ mod tests {
         w.attr(REQUESTED_TRANSPORT, &[UDP, 0, 0, 0]).attr(USERNAME, b"alice");
         let bytes = w.sign(&key);
         assert!(parse(&bytes).unwrap().verify(&key));
-        assert!(!parse(&bytes).unwrap().verify(&long_term_key("alice", REALM_NAME, "wrong")));
+        assert!(
+            !parse(&bytes)
+                .unwrap()
+                .verify(&long_term_key("alice", REALM_NAME, "wrong"))
+        );
         let mut changed = bytes.clone();
         changed[HEADER + 4] = 6; // TCP instead of UDP
         assert!(!parse(&changed).unwrap().verify(&key));
@@ -895,7 +918,7 @@ mod tests {
         let mut relayed = Vec::new();
         for packet in out {
             let mut o = Vec::new();
-            server.from_client(CLIENT.parse().unwrap(), &packet, &mut o);
+            server.on_client_packet(CLIENT.parse().unwrap(), &packet, &mut o);
             for o in o {
                 match o {
                     Out::ToClient(_, bytes) => assert!(client.receive(&bytes, Duration::ZERO)),
@@ -907,7 +930,7 @@ mod tests {
             }
         }
         assert_eq!(relayed, [(peer, b"ping".to_vec())]);
-        let (to, data) = server.from_peer(RELAY.parse().unwrap(), peer, b"pong").unwrap();
+        let (to, data) = server.on_peer_packet(RELAY.parse().unwrap(), peer, b"pong").unwrap();
         assert_eq!(to, CLIENT.parse().unwrap());
         assert!(client.receive(&data, Duration::ZERO));
         assert_eq!(
@@ -918,7 +941,11 @@ mod tests {
             })
         );
         // A stranger the client never sent to can't reach it.
-        assert!(server.from_peer(RELAY.parse().unwrap(), "203.0.113.99:1".parse().unwrap(), b"x").is_none());
+        assert!(
+            server
+                .on_peer_packet(RELAY.parse().unwrap(), "203.0.113.99:1".parse().unwrap(), b"x")
+                .is_none()
+        );
     }
 
     #[test]
@@ -933,7 +960,10 @@ mod tests {
         assert_eq!(client.relayed(), Some(RELAY.parse().unwrap()));
         let mut out = Vec::new();
         client.poll(Duration::from_secs(700), &mut out);
-        assert!(client.relayed().is_some(), "refreshed: still allocated after the first lifetime");
+        assert!(
+            client.relayed().is_some(),
+            "refreshed: still allocated after the first lifetime"
+        );
     }
 
     #[test]

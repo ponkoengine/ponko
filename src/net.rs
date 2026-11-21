@@ -103,13 +103,13 @@ mod rtc_browser;
 mod rtc_native;
 #[cfg(all(test, feature = "webrtc", not(target_arch = "wasm32")))]
 mod rtc_tests;
-#[cfg(all(feature = "webrtc", not(target_arch = "wasm32")))]
-mod turn;
 mod sequence;
 mod service;
 pub(crate) mod snapshots;
 #[cfg(any(feature = "lobby", feature = "webrtc"))]
 pub mod stun;
+#[cfg(all(feature = "webrtc", not(target_arch = "wasm32")))]
+mod turn;
 mod websocket;
 pub use websocket::WebPeer;
 #[cfg(target_arch = "wasm32")]

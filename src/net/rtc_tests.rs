@@ -125,17 +125,17 @@ impl Network {
 
     /// A datagram for the TURN server, at its listening address or at one
     /// of its relayed ones; false if `to` is neither.
-    fn to_turn(&mut self, seen: SocketAddr, to: SocketAddr, bytes: &[u8]) -> bool {
+    fn through_turn(&mut self, seen: SocketAddr, to: SocketAddr, bytes: &[u8]) -> bool {
         let Some(mut turn) = self.turn.take() else {
             return false;
         };
         let server: SocketAddr = TURN_SERVER.parse().unwrap();
         let mut out = Vec::new();
         let handled = if to == server {
-            turn.from_client(seen, bytes, &mut out);
+            turn.on_client_packet(seen, bytes, &mut out);
             true
         } else if turn.relays().any(|r| r == to) {
-            if let Some((client, data)) = turn.from_peer(to, seen, bytes) {
+            if let Some((client, data)) = turn.on_peer_packet(to, seen, bytes) {
                 out.push(Out::ToClient(client, data));
             }
             true
@@ -158,7 +158,7 @@ impl Network {
 
     fn send(&mut self, from: SocketAddr, to: SocketAddr, bytes: &[u8]) {
         let seen = self.outward(from, to);
-        if self.to_turn(seen, to, bytes) {
+        if self.through_turn(seen, to, bytes) {
             return;
         }
         if to == STUN_SERVER.parse().unwrap() {
@@ -525,14 +525,14 @@ fn a_relay_only_client_joins_through_a_turn_server_on_real_udp_sockets() {
         let mut buf = [0u8; 4096];
         let mut out = Vec::new();
         while let Ok((n, from)) = listen.recv_from(&mut buf) {
-            turn.from_client(from, &buf[..n], &mut out);
+            turn.on_client_packet(from, &buf[..n], &mut out);
         }
         for socket in new_relays.lock().unwrap().drain(..) {
             relays.insert(socket.local_addr().unwrap(), socket);
         }
         for (&relay, socket) in &relays {
             while let Ok((n, from)) = socket.recv_from(&mut buf) {
-                if let Some((client, data)) = turn.from_peer(relay, from, &buf[..n]) {
+                if let Some((client, data)) = turn.on_peer_packet(relay, from, &buf[..n]) {
                     out.push(Out::ToClient(client, data));
                 }
             }

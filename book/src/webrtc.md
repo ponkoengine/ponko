@@ -118,7 +118,7 @@ coturn and hosted services use), with Send and Data indications; `turns:`
 peer also connects to a browser that uses its own TURN server, since a
 relayed address is just one more address to try. `RtcConfig::relay_only()`
 offers relayed addresses only, never the machine's own, like a browser's
-`iceTransportPolicy: "relay"`. [Putting a game online](online.md) sets up
+`iceTransportPolicy: "relay"` (desktop only for now; a browser ignores it). [Putting a game online](online.md) sets up
 coturn. Players who can't use TURN can fall back to a
 [relay session](lobby.md#game-sessions-through-the-relay) through the
 lobby, which works through any NAT.

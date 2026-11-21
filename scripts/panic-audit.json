@@ -1259,6 +1259,12 @@
     "reason": "Preserves setup/runtime policy; displays the checked operation error. /// ```     pub fn new(config: InterestConfig) -> Self {         if let Err(message) = config.validate() {             panic!(\"{message}\");",
     "site": "src/net/interest.rs:258"
   },
+  "src/net/lobby/relay.rs:eb6b115c1cb8a47b": {
+    "classification": "invariant",
+    "construction": ".expect(\"a joining relay transport has a host\")",
+    "reason": "RelayTransport::new(.., false, ..) sets host from the room's host or returns an error, so a joining transport always has one",
+    "site": "src/net/lobby/relay.rs:326"
+  },
   "src/net/messages.rs:11890ac0dc0afd1b": {
     "classification": "invariant",
     "construction": ".expect(\"link\")",
