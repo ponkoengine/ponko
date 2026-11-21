@@ -19,7 +19,7 @@
 //!
 //! It publishes (see `common/web_smoke.rs`), on the first load:
 //!
-//! `{"fixture":"web_editor_save","ticks":120,"frames":118,"clicks":0,"size":[800,600],"asset":[32,32],"found":"Build","kept":"Saved","read_back":1,"listed":2,"reverted":0,"shipped":"Saved","persistent":"Granted"}`
+//! `{"fixture":"web_editor_save","ticks":120,"frames":118,"clicks":0,"size":[800,600],"asset":[32,32],"found":"Build","kept":"Saved","read_back":1,"listed":2,"reverted":0,"shipped":"Saved","persistent":"Refused"}`
 //!
 //! `found` is what `levels/beach.json` was when the page started: `Build`
 //! (the build's file) or `Saved` (the save over it). `kept` is `Saved` on
@@ -30,9 +30,9 @@
 //! again at once. `shipped` is what `levels/beach.json` is at the end of
 //! setup, in the same words as `found`, else what is wrong. `persistent`
 //! is the browser's answer to the request for persistent storage:
-//! `Granted`, `Refused` or `Asking`. On the desktop it writes
-//! `assets/smoke/editor-kept.json`, which a second run finds; the shipped
-//! file is left alone there.
+//! `Granted`, `Refused` (headless Chromium) or `Asking`. On the desktop
+//! it writes `assets/smoke/editor-kept.json`, which a second run finds;
+//! the shipped file is left alone there.
 
 use ponko::hierarchy::EntityName;
 use ponko::prelude::*;
