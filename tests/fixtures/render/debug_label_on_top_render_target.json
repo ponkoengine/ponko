@@ -1,0 +1,17 @@
+{
+  "name": "debug_label_on_top_render_target",
+  "scene": "a render target seeing a grey wall from the front, black around it; a cyan 16 px debug label (not depth-tested) behind the wall drawn over it, top left of the middle, over a yellow debug line on top through the middle of its letters, both drawn through the wall",
+  "width": 128,
+  "height": 128,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 12,
+    "outliers": 0.01,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "7f9ab5ef2b13886f",
+  "reason": "new: debug labels on top in a render target (#160)"
+}

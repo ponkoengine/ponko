@@ -36,6 +36,8 @@ pub(super) struct Particles {
     strip_alpha: wgpu::RenderPipeline,
     strip_additive: wgpu::RenderPipeline,
     text: wgpu::RenderPipeline,
+    /// Debug labels on top in target cameras: no depth test.
+    text_on_top: wgpu::RenderPipeline,
     camera_layout: wgpu::BindGroupLayout,
     /// The main view's.
     main: ParticleView,
@@ -57,6 +59,9 @@ pub(super) struct ParticleView {
     text_vertices: Synced,
     /// How many text vertices to draw this frame, and their atlas.
     text_count: u32,
+    /// How many of the last of them are debug labels on top, drawn by
+    /// [`Particles::draw_on_top`] instead.
+    text_on_top: u32,
     text_atlas: Option<u32>,
     /// Whether a particle fades against the scene depth (only the main view).
     soft: bool,
@@ -133,43 +138,48 @@ impl Particles {
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32x4],
         };
-        let pipeline =
-            |layout: &wgpu::PipelineLayout, module: &wgpu::ShaderModule, buffer: &wgpu::VertexBufferLayout, blend| {
-                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                    label: Some("particles"),
-                    layout: Some(layout),
-                    vertex: wgpu::VertexState {
-                        module,
-                        entry_point: Some("vs"),
-                        compilation_options: Default::default(),
-                        buffers: &[Some(buffer.clone())],
-                    },
-                    primitive: wgpu::PrimitiveState::default(),
-                    depth_stencil: Some(wgpu::DepthStencilState {
-                        format: depth,
-                        depth_write_enabled: Some(false),
-                        depth_compare: Some(wgpu::CompareFunction::GreaterEqual), // reverse-Z scene depth
-                        stencil: Default::default(),
-                        bias: Default::default(),
-                    }),
-                    multisample: wgpu::MultisampleState {
-                        count: samples,
-                        ..Default::default()
-                    },
-                    fragment: Some(wgpu::FragmentState {
-                        module,
-                        entry_point: Some("fs"),
-                        compilation_options: Default::default(),
-                        targets: &[Some(wgpu::ColorTargetState {
-                            format: super::gpu3d::HDR_FORMAT,
-                            blend: Some(blend),
-                            write_mask: wgpu::ColorWrites::ALL,
-                        })],
-                    }),
-                    multiview_mask: None,
-                    cache: None,
-                })
-            };
+        let tested = wgpu::CompareFunction::GreaterEqual; // reverse-Z scene depth
+        let pipeline_with = |layout: &wgpu::PipelineLayout,
+                             module: &wgpu::ShaderModule,
+                             buffer: &wgpu::VertexBufferLayout,
+                             blend,
+                             compare| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("particles"),
+                layout: Some(layout),
+                vertex: wgpu::VertexState {
+                    module,
+                    entry_point: Some("vs"),
+                    compilation_options: Default::default(),
+                    buffers: &[Some(buffer.clone())],
+                },
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: depth,
+                    depth_write_enabled: Some(false),
+                    depth_compare: Some(compare),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: wgpu::MultisampleState {
+                    count: samples,
+                    ..Default::default()
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module,
+                    entry_point: Some("fs"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: super::gpu3d::HDR_FORMAT,
+                        blend: Some(blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let pipeline = |layout, module, buffer, blend| pipeline_with(layout, module, buffer, blend, tested);
         let add = wgpu::BlendComponent {
             src_factor: wgpu::BlendFactor::One,
             dst_factor: wgpu::BlendFactor::One,
@@ -187,6 +197,13 @@ impl Particles {
             strip_alpha: pipeline(&pipeline_layout, &strip_module, &strip_layout, alpha),
             strip_additive: pipeline(&pipeline_layout, &strip_module, &strip_layout, additive),
             text: pipeline(&pipeline_layout, &text_module, &text_layout, alpha),
+            text_on_top: pipeline_with(
+                &pipeline_layout,
+                &text_module,
+                &text_layout,
+                alpha,
+                wgpu::CompareFunction::Always,
+            ),
             camera_layout,
             main,
             targets: Vec::new(),
@@ -370,14 +387,31 @@ impl Particles {
                 pass.draw(0..6, run.first..run.first + run.count);
             }
         }
-        if view.text_count > 0
+        let tested = view.text_count - view.text_on_top;
+        if tested > 0
             && let Some(atlas) = view.text_atlas.and_then(|id| textures.texture(id))
         {
             pass.set_pipeline(&self.text);
             pass.set_bind_group(1, &atlas.bind_group, &[]);
             pass.set_vertex_buffer(0, view.text_vertices.buffer().slice(..));
-            pass.draw(0..view.text_count, 0..1);
+            pass.draw(0..tested, 0..1);
         }
+    }
+
+    /// Draws `view`'s debug labels on top (a target camera's), over
+    /// everything drawn before them in `pass`: last, without a depth test.
+    pub fn draw_on_top(&self, view: &ParticleView, pass: &mut wgpu::RenderPass<'_>, textures: &dyn TextureTable) {
+        if view.text_on_top == 0 {
+            return;
+        }
+        let Some(atlas) = view.text_atlas.and_then(|id| textures.texture(id)) else {
+            return;
+        };
+        pass.set_bind_group(0, &view.group, &[]);
+        pass.set_pipeline(&self.text_on_top);
+        pass.set_bind_group(1, &atlas.bind_group, &[]);
+        pass.set_vertex_buffer(0, view.text_vertices.buffer().slice(..));
+        pass.draw(view.text_count - view.text_on_top..view.text_count, 0..1);
     }
 }
 impl ParticleView {
@@ -407,6 +441,7 @@ impl ParticleView {
             strip_runs: Vec::new(),
             text_vertices: vertices::<TextVertex>(device, "3d text vertices", 6),
             text_count: 0,
+            text_on_top: 0,
             text_atlas: None,
             soft: false,
         }
@@ -429,6 +464,7 @@ impl ParticleView {
         self.strip_runs.extend_from_slice(&frame.strips.runs);
         let texts = &frame.texts.vertices;
         self.text_count = texts.len() as u32;
+        self.text_on_top = frame.texts.on_top.min(texts.len()) as u32;
         self.text_atlas = frame.texts.atlas.map(|t| t.id);
         self.soft = depth && frame.soft && !frame.runs.is_empty();
         if !self.has_draws() {
@@ -452,7 +488,10 @@ impl ParticleView {
         clip(&mut self.runs, instances, |r| (&mut r.first, &mut r.count));
         let strips = fits(&self.strip_vertices, size_of::<StripVertex>());
         clip(&mut self.strip_runs, strips, |r| (&mut r.first, &mut r.count));
-        self.text_count = self.text_count.min(fits(&self.text_vertices, size_of::<TextVertex>()));
+        let fitting = self.text_count.min(fits(&self.text_vertices, size_of::<TextVertex>()));
+        // Past the most, the labels on top go first (they are the last).
+        self.text_on_top = self.text_on_top.saturating_sub(self.text_count - fitting);
+        self.text_count = fitting;
         let right = glam::Vec4::from_array(frame.right).truncate();
         let up = glam::Vec4::from_array(frame.up).truncate();
         let camera = Camera {
@@ -473,7 +512,10 @@ impl ParticleView {
 
     /// How many draw calls `draw_view` makes.
     fn draw_count(&self) -> usize {
-        self.runs.len() + self.strip_runs.len() + usize::from(self.text_count > 0)
+        self.runs.len()
+            + self.strip_runs.len()
+            + usize::from(self.text_count > self.text_on_top)
+            + usize::from(self.text_on_top > 0)
     }
 
     fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {

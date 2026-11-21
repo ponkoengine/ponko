@@ -1201,6 +1201,10 @@ impl Renderer3D {
         if let Some(lines) = &self.debug_lines {
             lines.draw_target(&mut pass, id);
         }
+        // Debug labels on top last, over everything, as on screen.
+        if let Some((view, textures)) = particles {
+            self.particles.draw_on_top(view, &mut pass, textures);
+        }
     }
 
     /// Whether see-through surfaces and particles get a pass of their own
