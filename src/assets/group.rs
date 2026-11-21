@@ -560,6 +560,18 @@ pub struct GroupStats {
     pub total_upload_ms: f64,
     /// Bytes every step uploaded, since the game started.
     pub total_upload_bytes: u64,
+    /// The GPU's own time copying the textures of the latest step it timed,
+    /// in milliseconds: what `upload_ms` leaves out. It arrives a frame or
+    /// a few after that step. `None` before the first, and always where the
+    /// GPU can't time uploads (see `gpu_upload_timing`).
+    pub gpu_upload_ms: Option<f32>,
+    /// The GPU's own time copying every step's textures it timed, since the
+    /// game started, in milliseconds.
+    pub total_gpu_upload_ms: f64,
+    /// Whether the GPU times uploads (it has timestamp queries): `false`
+    /// headless, on GPUs without them, and in browsers that don't offer
+    /// them; then only the game thread's time is measured.
+    pub gpu_upload_timing: bool,
 }
 
 /// The default time budget of the game thread's per-frame asset group
@@ -762,7 +774,7 @@ pub(crate) struct Groups {
     /// A group failed or was cancelled since the last step.
     stopping: bool,
     budget_ms: f32,
-    stats: GroupStats,
+    pub(crate) stats: GroupStats,
     /// Tests: decode on the game thread a slice at a time (as where there
     /// are no workers) or not, instead of what the platform has.
     pub(crate) sliced: Option<bool>,
@@ -1204,11 +1216,13 @@ impl Ctx {
             uploads: 0,
             upload_secs: 0.0,
         };
+        self.gfx.begin_timed_uploads(true);
         for index in 0..self.assets.groups.list.len() {
             if self.assets.groups.list[index].state == GroupState::Loading {
                 self.pump_group(index, &mut frame);
             }
         }
+        self.gfx.end_timed_uploads();
         let (bytes, uploads) = &mut self.gfx.streaming.group_uploads;
         *bytes += frame.spent;
         *uploads += frame.uploads;

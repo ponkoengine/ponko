@@ -173,6 +173,17 @@ pub struct UploadStats {
     pub step_ms: f32,
     /// The longest upload step so far, in milliseconds.
     pub max_step_ms: f32,
+    /// The GPU's own time copying the textures the latest timed upload
+    /// step uploaded, in milliseconds: what `step_ms` leaves out. It
+    /// arrives a frame or a few after that step. `None` before the first,
+    /// and always where the GPU can't time uploads (see
+    /// `gpu_upload_timing`). Asset groups' uploads are timed apart, in
+    /// [`GroupStats`](crate::assets::GroupStats).
+    pub gpu_upload_ms: Option<f32>,
+    /// Whether the GPU times uploads (it has timestamp queries): `false`
+    /// headless, on GPUs without them, and in browsers that don't offer
+    /// them; then only the game thread's time is measured.
+    pub gpu_upload_timing: bool,
 }
 
 /// One streamed asset, for diagnostics ([`Graphics::streamed_assets`](crate::gfx::Graphics::streamed_assets)).
@@ -595,6 +606,7 @@ impl Ctx {
     /// The engine's per-frame streaming work, before the game's systems:
     /// streamed LOD groups ask for their levels, then the upload step.
     pub(crate) fn pump_streaming(&mut self) {
+        self.collect_upload_times();
         #[cfg(feature = "3d")]
         self.stream_lod_levels();
         // What entities stopped showing (LOD levels, despawned models) can
@@ -613,7 +625,9 @@ impl Ctx {
                 self.gfx.slice_streams(&mut clock);
                 self.gfx.streaming.stats.frame_slices = clock.pieces();
             }
+            self.gfx.begin_timed_uploads(false);
             self.gfx.upload_step(&mut self.world);
+            self.gfx.end_timed_uploads();
         } else {
             let (bytes, uploads) = std::mem::take(&mut self.gfx.streaming.group_uploads);
             let stats = &mut self.gfx.streaming.stats;
@@ -621,6 +635,28 @@ impl Ctx {
             stats.frame_uploads = uploads;
             stats.total_bytes += bytes;
             stats.total_uploads += u64::from(uploads);
+        }
+    }
+
+    /// Takes the GPU's times of earlier steps' uploads that came back.
+    fn collect_upload_times(&mut self) {
+        #[cfg(feature = "window")]
+        {
+            let gfx = &mut self.gfx;
+            let renderer = if gfx.headless { None } else { gfx.renderer.as_mut() };
+            let timing = renderer.as_ref().is_some_and(|r| r.times_uploads());
+            let (streams, groups) = (&mut gfx.streaming.stats, &mut self.assets.groups.stats);
+            streams.gpu_upload_timing = timing;
+            groups.gpu_upload_timing = timing;
+            if let Some(renderer) = renderer {
+                renderer.collect_upload_times(|step, ms| match step {
+                    crate::render::upload_timer::UploadStep::Groups => {
+                        groups.gpu_upload_ms = Some(ms);
+                        groups.total_gpu_upload_ms += f64::from(ms);
+                    }
+                    crate::render::upload_timer::UploadStep::Streaming => streams.gpu_upload_ms = Some(ms),
+                });
+            }
         }
     }
 
@@ -886,6 +922,34 @@ impl crate::gfx::Graphics {
         stats.total_uploads += u64::from(uploads);
         stats.step_ms = start.elapsed().as_secs_f32() * 1000.0;
         stats.max_step_ms = stats.max_step_ms.max(stats.step_ms);
+    }
+
+    /// Times the texture uploads that follow on the GPU, where it can:
+    /// the asset group step's (`groups`) or the streaming step's.
+    pub(crate) fn begin_timed_uploads(&mut self, groups: bool) {
+        #[cfg(feature = "window")]
+        if !self.headless
+            && let Some(renderer) = self.renderer.as_mut()
+        {
+            use crate::render::upload_timer::UploadStep;
+            renderer.begin_timed_uploads(if groups {
+                UploadStep::Groups
+            } else {
+                UploadStep::Streaming
+            });
+        }
+        #[cfg(not(feature = "window"))]
+        let _ = groups;
+    }
+
+    /// Stops timing texture uploads (see `begin_timed_uploads`).
+    pub(crate) fn end_timed_uploads(&mut self) {
+        #[cfg(feature = "window")]
+        if !self.headless
+            && let Some(renderer) = self.renderer.as_mut()
+        {
+            renderer.end_timed_uploads();
+        }
     }
 
     /// Decodes slices of the queued streamed assets that decode on the game

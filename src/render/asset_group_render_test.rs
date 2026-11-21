@@ -108,6 +108,96 @@ fn group_textures_are_made_on_the_gpu_draw_and_count_their_upload_cost() {
     );
 }
 
+#[test]
+fn uploads_report_the_gpus_own_copy_time_where_it_has_timestamps_and_still_draw() {
+    // The production renderer asks for timestamp queries where the adapter
+    // has them: so does this device.
+    let Some(gpu) = support::gpu_with(|adapter| {
+        Ok(wgpu::DeviceDescriptor {
+            required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
+            ..Default::default()
+        })
+    }) else {
+        return;
+    };
+    let mut ctx = Ctx::new(1.0 / 60.0, vec2(SIZE as f32, SIZE as f32));
+    ctx.audio.headless = true;
+    ctx.gfx.renderer = Some(super::gpu::Renderer::offscreen(gpu, (SIZE, SIZE)));
+    ctx.scene3d.sky.atmosphere = false;
+    ctx.gfx.clear(Color::BLACK);
+    let blue = |_, _| [0, 0, 255, 255];
+    let source = MemorySource::new("mem")
+        .with("red.png", png(SIZE, SIZE, |_, _| [255, 0, 0, 255]))
+        .with("blue.png", png(SIZE, SIZE, blue))
+        .with("noise.png", noise_png(512, 7));
+    ctx.assets.add_background_source(source);
+    let id = ctx
+        .assets
+        .start_group(AssetGroup::new("art").texture("red.png").texture("noise.png"));
+    load(&mut ctx, id);
+    assert_eq!(ctx.assets.group_state(id), GroupState::Ready);
+    // A streamed texture, through the streaming step's uploads.
+    assert_eq!(ctx.gfx.stream_texture("blue.png"), None);
+    let mut streamed = None;
+    for _ in 0..1000 {
+        ctx.pump_streaming();
+        streamed = ctx.gfx.stream_texture("blue.png");
+        let state = ctx
+            .gfx
+            .asset_state(crate::streaming::ResidencyKind::Texture, "blue.png");
+        if state == crate::streaming::AssetState::Resident {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let streamed = streamed.expect("the streamed texture loaded");
+
+    // The timed uploads still carry the pixels (the negative control: the
+    // frame before them was black).
+    let texture = ctx.gfx.load_texture("red.png");
+    let half = SIZE as f32 / 2.0;
+    ctx.gfx.draw(texture, vec2(half, half));
+    let red_frame = frame(&mut ctx, "timed-red");
+    let covered = red_frame.pixels().filter(|p| red(p)).count() as f32 / (SIZE * SIZE) as f32;
+    assert!(covered > 0.95, "the group's texture covers the frame: {covered}");
+    ctx.gfx.draw(streamed, vec2(half, half));
+    let blue_frame = frame(&mut ctx, "timed-blue");
+    let p = blue_frame.get_pixel(SIZE / 2, SIZE / 2);
+    assert!(p[2] > 200 && p[0] < 40, "the streamed texture draws: {p:?}");
+
+    // The times come back a few frames later.
+    let mut groups = ctx.assets.group_stats();
+    let mut streams = ctx.gfx.upload_stats();
+    for i in 0..200 {
+        if groups.gpu_upload_ms.is_some() && streams.gpu_upload_ms.is_some() {
+            break;
+        }
+        frame(&mut ctx, &format!("collect{i}"));
+        ctx.pump_streaming();
+        groups = ctx.assets.group_stats();
+        streams = ctx.gfx.upload_stats();
+    }
+    let adapter = &ctx.gfx.renderer.as_ref().unwrap().capabilities().adapter;
+    assert_eq!(groups.gpu_upload_timing, streams.gpu_upload_timing);
+    if !groups.gpu_upload_timing {
+        // Said so, and nothing made up.
+        assert_eq!((groups.gpu_upload_ms, streams.gpu_upload_ms), (None, None));
+        eprintln!(
+            "{} ({}) has no timestamp queries: uploads not timed on the GPU",
+            adapter.name, adapter.backend
+        );
+        return;
+    }
+    let (group_ms, stream_ms) = (groups.gpu_upload_ms.unwrap(), streams.gpu_upload_ms.unwrap());
+    assert!(group_ms > 0.0 && stream_ms > 0.0, "{group_ms} {stream_ms}");
+    assert!(groups.total_gpu_upload_ms >= f64::from(group_ms));
+    eprintln!(
+        "{} ({}): the GPU copied the group's {} bytes in {group_ms:.3} ms (game thread {:.3} ms); \
+         the last streamed upload in {stream_ms:.3} ms",
+        adapter.name, adapter.backend, groups.total_upload_bytes, groups.total_upload_ms
+    );
+}
+
 /// What a group's uploads cost on a real GPU: the game thread's time per
 /// step (`GroupStats::upload_ms`), and how much longer a frame takes to
 /// finish on the GPU when it carries a step's uploads. Run on purpose, on a

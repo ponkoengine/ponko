@@ -102,6 +102,9 @@ pub(crate) struct Renderer {
     sprite_mirror: traffic::Mirror,
 
     timer: Option<GpuTimer>,
+    /// Times the GPU's copies of the asset group and streaming steps'
+    /// texture uploads; `None` without timestamp queries.
+    upload_timer: Option<super::upload_timer::UploadTimer>,
     /// What this GPU can do and the fallbacks used (fixed once opened).
     capabilities: super::GpuCapabilities,
     /// Draw frames the window can't take into `hidden_target` instead of
@@ -739,6 +742,7 @@ impl Renderer {
         });
         let instance_buffer = Self::create_instance_buffer(&device, INITIAL_INSTANCE_CAPACITY);
         let timer = GpuTimer::new(&device, &queue);
+        let upload_timer = super::upload_timer::UploadTimer::new(&device, &queue);
 
         Self {
             window_surface,
@@ -774,6 +778,7 @@ impl Renderer {
             too_many_sprites: false,
             sprite_mirror: traffic::Mirror::default(),
             timer,
+            upload_timer,
             capabilities,
             draw_hidden: false,
             only_hidden: false,
@@ -1411,6 +1416,35 @@ impl Renderer {
         });
         self.three().add_render_target(id, &texture);
         id
+    }
+
+    /// Whether this GPU times the asset group and streaming steps'
+    /// texture uploads (it has timestamp queries).
+    pub fn times_uploads(&self) -> bool {
+        self.upload_timer.is_some() || super::upload_timer::active()
+    }
+
+    /// Times the texture uploads made on this thread, as `step`'s, until
+    /// [`end_timed_uploads`](Self::end_timed_uploads).
+    pub fn begin_timed_uploads(&mut self, step: super::upload_timer::UploadStep) {
+        if let Some(timer) = self.upload_timer.take() {
+            super::upload_timer::activate(timer, step);
+        }
+    }
+
+    /// Stops timing texture uploads; their GPU time comes back through
+    /// [`collect_upload_times`](Self::collect_upload_times) a few frames later.
+    pub fn end_timed_uploads(&mut self) {
+        if let Some(timer) = super::upload_timer::deactivate() {
+            self.upload_timer = Some(timer);
+        }
+    }
+
+    /// Calls `done` with each timed step whose GPU time came back.
+    pub fn collect_upload_times(&mut self, done: impl FnMut(super::upload_timer::UploadStep, f32)) {
+        if let Some(timer) = &mut self.upload_timer {
+            timer.collect(done);
+        }
     }
 
     /// Uploads RGBA8 (sRGB) pixels and returns the texture's id.
