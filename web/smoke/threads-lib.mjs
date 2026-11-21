@@ -241,7 +241,9 @@ export function checkWarningBuild(status, output) {
     problems.push(`the threaded build of ${WARNING_FIXTURE} passed: its warning didn't fail it (-D warnings or the atomics were dropped)`);
     return problems;
   }
-  if (!output.includes(WARNING_ITEM)) {
+  if (!output.includes(WARNING_ITEM) && /Finished `release` profile/.test(output)) {
+    problems.push(`cargo compiled ${WARNING_FIXTURE} without failing on its warning (-D warnings or the atomics were dropped); a later step failed`);
+  } else if (!output.includes(WARNING_ITEM)) {
     problems.push(`the threaded build failed, but not on ${WARNING_ITEM} (a build that compiles it has atomics); see the output above`);
   } else if (!output.includes("implied by `-D warnings`")) {
     problems.push(`${WARNING_ITEM} was reported, but not as an error from -D warnings`);

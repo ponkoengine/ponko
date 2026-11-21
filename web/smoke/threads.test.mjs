@@ -164,6 +164,10 @@ test("the warning self-test passes only when the build fails on the fixture's wa
   assert.deepEqual(checkWarningBuild(101, failedOnIt), []);
   // Passed: the warning didn't fail it.
   assert.match(checkWarningBuild(0, "warning: function is never used")[0], /passed/);
+  // Cargo compiled it without atomics (the warning's code left out), and
+  // wasm-bindgen failed after: what the old build.sh did under RUSTFLAGS.
+  const lost = "    Finished `release` profile [optimized] target(s) in 3m 06s\nerror: failed to find intrinsics";
+  assert.match(checkWarningBuild(1, lost)[0], /without failing on its warning/);
   // Failed on something else (no nightly, say): not proof.
   assert.match(checkWarningBuild(1, "error: toolchain 'nightly' is not installed")[0], /not on/);
   // Reported, but only as a warning, while something else failed.
