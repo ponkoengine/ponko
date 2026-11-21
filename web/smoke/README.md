@@ -272,11 +272,11 @@ are not tried yet.
 
 `spectrum.mjs` times the water kit's CPU wave spectrum in the browser (the
 water guide's "Waves from a spectrum"): the fixture
-`examples/web_spectrum.rs`, in four builds (`--build` makes them):
-`scalar` (`web/build.sh --features 3d web_spectrum`), `simd128` (`-C target-feature=+simd128` alone), `fft-simd` (with the
-`wasm-simd` feature: rustfft's SIMD FFT) and `simd` (that, and
-`-C target-feature=+simd128` for the whole module, added to the rust flags
-cargo reads). Each page load times one new moment of the field
+`examples/web_spectrum.rs`, in three builds (`--build` makes them):
+`scalar` (`web/build.sh --features 3d web_spectrum`), `simd128`
+(`-C target-feature=+simd128` for the whole module, added to the rust
+flags cargo reads) and `simd` (that, and the `wasm-simd` feature:
+rustfft's SIMD FFT; the feature without the flag doesn't compile). Each page load times one new moment of the field
 (`Waves::height_at` at a new time, what a WebGL2 upload costs) and one with
 the sway's speed (`Waves::sample`, what buoyancy costs) at 64, 128 and 256
 cells, eight moments per reading because the browser's clock is coarse.

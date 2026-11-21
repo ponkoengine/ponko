@@ -1,8 +1,8 @@
 //! The sea's CPU wave spectrum in the browser: the benchmark the runner
 //! `web/smoke/spectrum.mjs` reads (the water guide's "Waves from a
 //! spectrum"). Build it with `web/build.sh --features 3d web_spectrum`;
-//! the runner also builds it with WASM SIMD (`--features 3d,wasm-simd` and
-//! `-C target-feature=+simd128`) and compares the two.
+//! the runner also builds it with `-C target-feature=+simd128`, alone and
+//! with `--features 3d,wasm-simd`, and compares the three.
 //!
 //! What it times is what a WebGL2 sea pays each frame: one new moment of
 //! the spectrum's field on the CPU (`Waves::height_at` at a time not asked
@@ -107,11 +107,11 @@ fn main() {
         .system(|ctx: &mut Ctx| {
             let mut bench = ctx.world.remove_resource::<Bench>().expect("made in setup");
             // The first frames draw before anything is timed.
-            if ctx.time.frame() > 10 {
-                if let Some((cells, speed)) = bench.todo.pop() {
-                    let timed = bench.run(cells, speed);
-                    bench.done.push(timed);
-                }
+            if ctx.time.frame() > 10
+                && let Some((cells, speed)) = bench.todo.pop()
+            {
+                let timed = bench.run(cells, speed);
+                bench.done.push(timed);
             }
             let rows: Vec<_> = bench
                 .done
