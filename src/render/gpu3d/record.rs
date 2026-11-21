@@ -1023,6 +1023,7 @@ impl Renderer3D {
             self.draw_model_runs(&mut pass, &self.lists.gi_runs, Kind::Shadow(0), &self.instances);
             if let Some(slot) = self.lists.gi_batch_slot {
                 self.draw_static(&mut pass, Kind::Shadow(0), slot);
+                self.draw_crowds(&mut pass, Kind::Shadow(0), slot);
             }
         }
         // Each view in its own square of the views image.
@@ -1045,6 +1046,8 @@ impl Renderer3D {
                 if let Some(slot) = self.lists.gi_batch_slot {
                     self.draw_static(pass, kind, slot + 1 + i % 6);
                     self.draw_static(pass, kind, slot + crate::three::gi::GI_BATCH_FACES + i);
+                    // Crowds in their face direction's view.
+                    self.draw_crowds(pass, kind, slot + 1 + i % 6);
                 }
             }
         };

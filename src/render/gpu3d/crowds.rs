@@ -24,8 +24,22 @@
 //!   frames or clips (a character shows the clip it shows more of), and no
 //!   motion vectors (WebGL2 has no temporal antialiasing).
 //!
+//! Both paths cull against every view the frame draws: the camera, the sun's
+//! cascades, light shadow views, target cameras, global illumination's
+//! views (its sun shadow map and its six face directions, keeping only the
+//! characters at least a pixel wide from a probe updated this frame), and a
+//! window view's camera when that view is drawn. The camera's view also
+//! leaves out what the occlusion grid hides, when occlusion culling is on.
+//!
+//! Time: each crowd keeps when its records were first drawn (its epoch) in
+//! 64-bit seconds, and the shaders get the 32-bit seconds since then. So
+//! that never grows large, every [`REBASE_SECONDS`] the records' clip times
+//! are moved on to the frame's time and the epoch with them (a compute
+//! dispatch, `crowd_advance.wgsl`, on the GPU path).
+//!
 //! A game without crowds makes none of this: no buffers, pipelines or passes.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 
 use glam::{Mat4, Vec3, Vec4};
@@ -51,12 +65,32 @@ pub(super) const INFLUENCE_LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::Ver
 };
 
 const CULL: &str = include_str!("crowd_cull.wgsl");
+const ADVANCE: &str = include_str!("crowd_advance.wgsl");
 const VERTEX: &str = include_str!("crowd_vertex.wgsl");
 
 /// Bytes of one indirect indexed draw.
 const ARGS: u64 = 20;
 /// Bytes of the cull pass's uniform (see `Params` in `crowd_cull.wgsl`).
-const PARAMS: u64 = 48 + 16 * MAX_CROWD_LEVELS as u64;
+const PARAMS: u64 = 80 + 16 * MAX_CROWD_LEVELS as u64;
+/// Where the advance pass's uniform (`Advance` in `crowd_advance.wgsl`)
+/// starts in the params buffer: past the cull's, at the offset alignment
+/// every device allows.
+const ADVANCE_AT: u64 = 256;
+/// Seconds of game time between two moves of a crowd's clock (see the
+/// module's docs): the 32-bit seconds the shaders add stay below this
+/// (plus a frame), precise to about 2 microseconds.
+pub(super) const REBASE_SECONDS: f64 = 16.0;
+/// Room for the probes global illumination updates in a frame, after the
+/// views (see `Params::probes` in `crowd_cull.wgsl`).
+const PROBES: u64 = crate::three::gi::MAX_GI_PROBES_PER_FRAME as u64;
+/// The most bytes the depth grid's uniform takes (a uniform binding's most
+/// on most devices).
+const GRID_BYTES: u64 = 64 << 10;
+
+/// The cull shader for a depth grid uniform of `bytes` bytes.
+fn cull_source(bytes: u64) -> String {
+    CULL.replace("GRID_VEC4S", &(bytes / 16 - 5).to_string())
+}
 /// What the CPU path's posed frames may take per crowd: more frames than
 /// fit are thinned out (every second one, every third...).
 const POSED_BYTES: u64 = 64 << 20;
@@ -108,13 +142,17 @@ struct Frame {
 }
 
 /// Which of the frame's view slots are drawn: the camera, the cascades and
-/// light views drawn this frame, the target cameras.
+/// light views drawn this frame, the target cameras, global
+/// illumination's views.
 #[derive(Clone, Copy)]
 struct Drawn {
     cascades: usize,
     light_views: usize,
     /// The first target camera's slot.
     targets: usize,
+    /// Global illumination's sun shadow slot, then its six face
+    /// directions' (`None`: no probe updates this frame).
+    gi: Option<usize>,
 }
 
 impl Drawn {
@@ -128,8 +166,23 @@ impl Drawn {
     }
 
     fn shadow(self, s: usize) -> bool {
-        (1..self.targets).contains(&s)
+        (1..self.targets).contains(&s) || self.gi == Some(s)
     }
+
+    /// Global illumination's face direction slots (empty without updates).
+    fn gi_faces(self) -> std::ops::Range<usize> {
+        self.gi.map_or(0..0, |gi| gi + 1..gi + crate::three::gi::GI_BATCH_FACES)
+    }
+}
+
+/// What the camera's view culls against besides its frustum, and global
+/// illumination's face views besides theirs.
+#[derive(Clone, Copy, Default)]
+struct Extra<'a> {
+    /// The depth grid (occlusion culling on) and where the camera is.
+    grid: Option<(&'a crate::three::occlusion::OcclusionGrid, Vec3)>,
+    /// The probes global illumination updates this frame.
+    probes: &'a [Vec3],
 }
 
 /// A crowd on the renderer's side.
@@ -144,10 +197,15 @@ struct GpuCrowd {
     /// The bake it was made from (a new bake makes the crowd anew).
     animation: Arc<[[f32; 4]]>,
     /// When its records were first drawn (`None`: not yet), and the ones
-    /// the last frame drew; whether an update waits for the next frame.
-    epoch: Option<f32>,
-    past_epoch: f32,
+    /// the last frame drew, in game seconds; whether an update waits for
+    /// the next frame.
+    epoch: Option<f64>,
+    past_epoch: f64,
     updated: bool,
+    /// Seconds since the epoch at the main frame and at the last one (what
+    /// window views draw too).
+    elapsed: f32,
+    past_elapsed: f32,
     /// Whether this frame draws records newer than the last frame's.
     moved: bool,
     path: Path,
@@ -182,6 +240,16 @@ struct GpuPath {
     part_base: Vec<u32>,
     /// The cull bind group, per current records buffer.
     cull: [wgpu::BindGroup; 2],
+    /// The advance bind group, per current records buffer.
+    advance: [wgpu::BindGroup; 2],
+    /// A clock move this frame's cull pass makes, from the epoch it
+    /// replaced (see the module's docs), and whether a pass recorded it: a
+    /// frame prepared but never drawn moved nothing, so the next one puts
+    /// the epoch back.
+    pending: Option<f64>,
+    advanced: AtomicBool,
+    /// Seconds that move covers.
+    seconds: f32,
     /// The draw bind group, per current buffer and whether the last frame's
     /// records are the other one.
     draw: [[wgpu::BindGroup; 2]; 2],
@@ -195,6 +263,8 @@ struct GpuPath {
 struct CpuPath {
     records: Vec<CrowdRecord>,
     spheres: Vec<[f32; 4]>,
+    /// The clip table as baked (first frame, frames, fps, looping).
+    table: Vec<[f32; 4]>,
     /// Per clip: its first frame among the posed ones, how many were posed,
     /// and every how many baked frames one was.
     clips: Vec<(u32, u32, f32, bool, u32)>,
@@ -219,6 +289,16 @@ struct Shared {
     cull_layout: wgpu::BindGroupLayout,
     cull: wgpu::ComputePipeline,
     finish: wgpu::ComputePipeline,
+    advance_layout: wgpu::BindGroupLayout,
+    advance: wgpu::ComputePipeline,
+    /// The depth grid the camera's views cull against (one for every
+    /// crowd), what it holds, its size and scratch to fill it.
+    grid: wgpu::Buffer,
+    grid_mirror: traffic::Mirror,
+    grid_bytes: u64,
+    grid_scratch: Vec<f32>,
+    /// Whether this frame's grid is on.
+    grid_on: bool,
     draw_layout: wgpu::BindGroupLayout,
     layout: wgpu::PipelineLayout,
     shadow_layout: wgpu::PipelineLayout,
@@ -251,9 +331,11 @@ pub(super) struct Crowds {
     /// This frame: the shadow views a crowd draws into.
     shadow_mask: u32,
     /// The last prepared frame's time.
-    last_now: Option<f32>,
+    last_now: Option<f64>,
     /// Limits already reported, so each is said once.
     reported: bool,
+    /// This frame's probe updates (global illumination), for the cut.
+    probes: Vec<Vec3>,
 }
 
 impl Crowds {
@@ -266,6 +348,7 @@ impl Crowds {
             shadow_mask: 0,
             last_now: None,
             reported: false,
+            probes: Vec::new(),
         }
     }
 
@@ -298,11 +381,11 @@ impl Crowds {
             .iter()
             .flatten()
             .map(|c| match &c.path {
-                Path::Gpu(_) => 14,
+                Path::Gpu(_) => 16,
                 Path::Cpu(p) => p.posed.iter().flatten().count() + usize::from(p.instances.is_some()),
             })
             .sum();
-        crowds + if self.shared.is_some() { 8 } else { 0 } + self.sets.len()
+        crowds + if self.shared.is_some() { 11 } else { 0 } + self.sets.len()
     }
 
     pub(super) fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
@@ -332,6 +415,7 @@ impl Crowds {
         }
         if let Some(shared) = &self.shared {
             t.buffer(C::InstanceBatches, "crowd marker", &shared.marker);
+            t.buffer(C::InstanceBatches, "crowd depth grid", &shared.grid);
         }
     }
 
@@ -343,6 +427,85 @@ impl Crowds {
             .find(|s| s.sides == sides && std::ptr::eq(s.set.as_ptr(), at))?
             .pipelines
             .as_ref()
+    }
+}
+
+impl GpuCrowd {
+    /// The main frame's clock at `now` (the last frame's at `last_now`):
+    /// the epoch of an update first drawn, the clock moved on every
+    /// [`REBASE_SECONDS`], and the seconds since the epoch the shaders get.
+    fn tick(&mut self, now: f64, last_now: f64) {
+        // A move the last frame planned but no pass made: undo it.
+        if let Path::Gpu(g) = &mut self.path
+            && let Some(old) = g.pending.take()
+            && !g.advanced.swap(false, Ordering::Relaxed)
+        {
+            self.epoch = Some(old);
+        }
+        self.moved = std::mem::take(&mut self.updated);
+        // A new crowd's last frame is its first records, played back.
+        self.past_epoch = self.epoch.unwrap_or(now);
+        if self.moved {
+            self.epoch = Some(now);
+        }
+        if let Some(epoch) = self.epoch
+            && !self.moved
+            && self.count > 0
+            && now - epoch >= REBASE_SECONDS
+        {
+            // The records move on to `now`; the last frame's are the same
+            // records (nothing was updated), so both count from `now`.
+            let seconds = now - epoch;
+            match &mut self.path {
+                Path::Gpu(g) => {
+                    g.pending = Some(epoch);
+                    g.seconds = seconds as f32;
+                }
+                Path::Cpu(p) => p.advance(seconds),
+            }
+            self.epoch = Some(now);
+            self.past_epoch = now;
+        }
+        self.elapsed = (now - self.epoch.unwrap_or(now)) as f32;
+        self.past_elapsed = (last_now - self.past_epoch) as f32;
+    }
+}
+
+/// The time on clip `clip` (its row of the clip table: first frame, frames,
+/// fps, looping) that shows, from now on, what `time` shows `seconds` later
+/// at `speed`: wrapped into a looping clip, held at the end a held clip
+/// plays towards (as `crowd_advance.wgsl` does on the GPU).
+pub(super) fn advance_time(time: f32, speed: f32, seconds: f64, clip: [f32; 4]) -> f32 {
+    if speed == 0.0 {
+        return time;
+    }
+    let (frames, fps, looping) = (f64::from(clip[1]), f64::from(clip[2]), clip[3] > 0.5);
+    let last = (frames - 1.0).max(0.0);
+    let mut p = (f64::from(time) + f64::from(speed) * seconds) * fps;
+    if looping && last > 0.0 {
+        p = p.rem_euclid(last);
+    } else if speed > 0.0 {
+        p = p.min(last);
+    } else {
+        p = p.max(0.0);
+    }
+    (p / fps) as f32
+}
+
+impl Shared {
+    /// Fills the depth grid's uniform from `grid` (the finest level that
+    /// fits), with the camera now at `camera`; false if none fits.
+    fn fill_grid(&mut self, grid: &crate::three::occlusion::OcclusionGrid, camera: Vec3) -> bool {
+        let room = (self.grid_bytes / 4) as usize - 20;
+        let Some((w, h, depths)) = grid.levels().iter().find(|(_, _, d)| d.len() <= room) else {
+            return false;
+        };
+        let s = &mut self.grid_scratch;
+        s.clear();
+        s.extend_from_slice(&[*w as f32, *h as f32, grid.camera.distance(camera), 1.0]);
+        s.extend_from_slice(&grid.view_proj.to_cols_array());
+        s.extend_from_slice(depths);
+        true
     }
 }
 
@@ -499,6 +662,8 @@ impl Renderer3D {
             epoch: None,
             past_epoch: 0.0,
             updated: true,
+            elapsed: 0.0,
+            past_elapsed: 0.0,
             moved: false,
             path,
         })
@@ -535,11 +700,13 @@ impl Renderer3D {
                 storage(2, true, compute, false),
                 storage(3, false, compute, false),
                 storage(4, false, compute, false),
+                uniform(5, compute, false),
             ],
         });
+        let grid_bytes = limits.max_uniform_buffer_binding_size.min(GRID_BYTES);
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("crowd cull"),
-            source: wgpu::ShaderSource::Wgsl(CULL.into()),
+            source: wgpu::ShaderSource::Wgsl(cull_source(grid_bytes).into()),
         });
         let cull_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("crowd cull"),
@@ -557,6 +724,36 @@ impl Renderer3D {
             })
         };
         let (cull, finish) = (entry("cull"), entry("finish"));
+        let advance_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("crowd advance"),
+            entries: &[
+                uniform(0, compute, false),
+                storage(1, false, compute, false),
+                storage(2, true, compute, false),
+            ],
+        });
+        let advance_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("crowd advance"),
+            source: wgpu::ShaderSource::Wgsl(ADVANCE.into()),
+        });
+        let advance = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("crowd advance"),
+            layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("crowd advance"),
+                bind_group_layouts: &[Some(&advance_layout)],
+                immediate_size: 0,
+            })),
+            module: &advance_module,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let grid = device.new_buffer(&wgpu::BufferDescriptor {
+            label: Some("crowd depth grid"),
+            size: grid_bytes,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         // `items` and `static_indices` as material shaders declare them
         // (their `surface` may read `items`), then the crowd's own.
         let both = wgpu::ShaderStages::VERTEX_FRAGMENT;
@@ -595,6 +792,13 @@ impl Renderer3D {
             cull_layout,
             cull,
             finish,
+            advance_layout,
+            advance,
+            grid,
+            grid_mirror: traffic::Mirror::default(),
+            grid_bytes,
+            grid_scratch: Vec::new(),
+            grid_on: false,
             draw_layout,
             layout,
             shadow_layout,
@@ -703,6 +907,7 @@ impl Renderer3D {
         CpuPath {
             records: Vec::new(),
             spheres: Vec::new(),
+            table,
             clips,
             step,
             posed,
@@ -721,39 +926,91 @@ impl Renderer3D {
     /// views they reach, and the crowd pipelines of the materials they
     /// draw. Runs after the batches' views are known (`prepare_static`) and
     /// before the shadow views are planned. Nothing without a crowd.
+    ///
+    /// In a window view (`self.extra`) only the view's camera is culled,
+    /// at the main frame's time, and nothing the main frame decided for
+    /// every view (the clock, the shadow views, updates) changes.
     pub(super) fn prepare_crowds(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         frame: &crate::three::Frame3D,
-        (now, dt): (f32, f32),
+        (now, dt): (f64, f32),
+        (occlusion, camera): (bool, Vec3),
     ) {
-        self.crowds.shadow_mask = 0;
+        let extra = self.extra;
+        if !extra {
+            self.crowds.shadow_mask = 0;
+        }
         if self.crowds.crowds.iter().all(Option::is_none) {
-            self.crowds.last_now = None;
+            if !extra {
+                self.crowds.last_now = None;
+            }
             return;
         }
         // Tests count what the crowd code itself allocates in a frame.
         #[cfg(test)]
         let _crowd_code = crate::three::lights::tests::marked();
-        let last_now = self.crowds.last_now.unwrap_or(now - dt);
-        self.crowds.last_now = Some(now);
+        let last_now = if extra {
+            now
+        } else {
+            let last = self.crowds.last_now.unwrap_or(now - f64::from(dt));
+            self.crowds.last_now = Some(now);
+            last
+        };
+        // A window view culls for its camera alone; the main frame also for
+        // its shadow views, target cameras and global illumination's views
+        // (its sun shadow map and face directions; not each probe's own).
+        let gi = self.lists.gi_batch_slot.filter(|_| !extra);
         let drawn = Drawn {
             cascades: self.lists.cascades,
             light_views: self.lists.light_views,
             targets: 1 + MAX_CASCADES + frame.light_views,
+            gi,
         };
-        let views = self.lists.gi_batch_slot.unwrap_or(self.batching.slots.len());
         let slots = &self.batching.slots;
+        let views = if extra {
+            1
+        } else {
+            gi.map_or(slots.len(), |gi| gi + crate::three::gi::GI_BATCH_FACES)
+                .min(slots.len())
+        };
         let crowds = &mut self.crowds;
-        for crowd in crowds.crowds.iter_mut().flatten() {
-            crowd.moved = std::mem::take(&mut crowd.updated);
-            // A new crowd's last frame is its first records, played back.
-            crowd.past_epoch = crowd.epoch.unwrap_or(now);
-            if crowd.moved {
-                crowd.epoch = Some(now);
+        crowds.probes.clear();
+        if gi.is_some()
+            && let Some(g) = frame.gi.as_deref()
+        {
+            let probes = g.batch_views.iter().skip(crate::three::gi::GI_BATCH_FACES).step_by(6);
+            crowds.probes.extend(probes.filter_map(|v| v.1));
+        }
+        let grid = frame
+            .occlusion
+            .as_ref()
+            .filter(|g| occlusion && !extra && g.base().is_some())
+            .map(|g| (g, camera));
+        let gpu_crowds = crowds
+            .crowds
+            .iter()
+            .flatten()
+            .any(|c| matches!(c.path, Path::Gpu(_)) && c.count > 0);
+        if let Some(shared) = crowds.shared.as_mut().filter(|_| gpu_crowds) {
+            shared.grid_on = !extra && grid.is_some_and(|(g, camera)| shared.fill_grid(g, camera));
+            if shared.grid_on {
+                let bytes = bytemuck::cast_slice(&shared.grid_scratch);
+                shared
+                    .grid_mirror
+                    .upload(queue, Upload::StaticBatches, &shared.grid, 0, bytes);
             }
-            if crowd.casts && crowd.count > 0 {
+        }
+        let cull_extra = Extra {
+            grid,
+            probes: &crowds.probes,
+        };
+        for crowd in crowds.crowds.iter_mut().flatten() {
+            if !extra {
+                crowd.tick(now, last_now);
+            }
+            if !extra && crowd.casts && crowd.count > 0 {
                 let casting = || crowd.levels.iter().filter(|l| l.shadows);
                 let near = casting().map(|l| l.min).fold(f32::INFINITY, f32::min);
                 let far = casting().map(|l| l.max).fold(0.0, f32::max);
@@ -768,8 +1025,8 @@ impl Renderer3D {
                 count: crowd.count,
                 clips: crowd.clips,
                 bounds: crowd.bounds,
-                elapsed: now - crowd.epoch.unwrap_or(now),
-                past_elapsed: last_now - crowd.past_epoch,
+                elapsed: crowd.elapsed,
+                past_elapsed: crowd.past_elapsed,
             };
             let GpuCrowd {
                 levels, path, moved, ..
@@ -789,13 +1046,14 @@ impl Renderer3D {
                         );
                     }
                     g.culled = (views as u32).min(g.view_capacity);
-                    if *moved {
+                    if *moved && !extra {
                         g.current = 1 - g.current;
                     }
-                    g.upload(queue, shared, levels, info, slots, drawn);
+                    let occluded = shared.grid_on && !extra;
+                    g.upload(queue, shared, levels, info, slots, drawn, (occluded, cull_extra.probes));
                 }
                 Path::Cpu(p) => {
-                    p.cull(levels, info, slots, views, drawn);
+                    p.cull(levels, info, slots, views, drawn, cull_extra);
                     p.upload(device, queue);
                 }
             }
@@ -882,9 +1140,11 @@ impl Renderer3D {
         }
     }
 
-    /// The crowds' cull pass (GPU path), at the start of the frame.
+    /// The crowds' cull pass (GPU path), at the start of the frame (and of
+    /// each window view's), after moving the clock of the crowds whose
+    /// move this frame plans (the main frame's only).
     pub(super) fn cull_crowds<'t>(&self, encoder: &mut wgpu::CommandEncoder, time: &super::PassTimer<'_, 't>) {
-        if self.extra || !self.crowds.culls() {
+        if !self.crowds.culls() {
             return;
         }
         let Some(shared) = &self.crowds.shared else { return };
@@ -911,9 +1171,15 @@ impl Renderer3D {
             if crowd.count == 0 || g.culled == 0 {
                 continue;
             }
-            pass.set_bind_group(0, &g.cull[g.current], &[]);
             let groups = crowd.count.div_ceil(64);
             let row = groups.min(shared.max_groups);
+            if g.pending.is_some() && !self.extra {
+                pass.set_bind_group(0, &g.advance[g.current], &[]);
+                pass.set_pipeline(&shared.advance);
+                pass.dispatch_workgroups(row, groups.div_ceil(row), 1);
+                g.advanced.store(true, Ordering::Relaxed);
+            }
+            pass.set_bind_group(0, &g.cull[g.current], &[]);
             pass.set_pipeline(&shared.cull);
             pass.dispatch_workgroups(row, groups.div_ceil(row), 1);
             pass.set_pipeline(&shared.finish);
@@ -923,10 +1189,10 @@ impl Renderer3D {
 
     /// Draws every crowd's levels that `view` sees, for one pass (`view`
     /// as the batches number them: 0 the camera, then the shadow views,
-    /// then target cameras). Neither global illumination's views nor
-    /// window views draw crowds.
+    /// then target cameras, then global illumination's sun shadow map and
+    /// six face directions). In a window view, 0 is its camera.
     pub(super) fn draw_crowds(&self, pass: &mut wgpu::RenderPass<'_>, kind: Kind, view: usize) {
-        if self.extra || kind == Kind::VelocityStill || self.crowds.crowds.is_empty() {
+        if kind == Kind::VelocityStill || self.crowds.crowds.is_empty() {
             return;
         }
         let mut n = super::draw_order::StateChanges::default();
@@ -1105,7 +1371,7 @@ impl GpuPath {
         let records = Self::records(device, capacity);
         let params = device.new_buffer(&wgpu::BufferDescriptor {
             label: Some("crowd cull params"),
-            size: PARAMS,
+            size: ADVANCE_AT + 16,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -1118,6 +1384,7 @@ impl GpuPath {
         let (views, visible, draws) = Self::view_buffers(device, 1, 1, 1, 1);
         let cull = Self::cull_groups(device, shared, &records, &params, &views, &visible, &draws);
         let draw = Self::draw_groups(device, shared, &records, &visible, &anim, &level_buffer, 4);
+        let advance = Self::advance_groups(device, shared, &records, &params, &anim);
         Self {
             records,
             capacity,
@@ -1133,6 +1400,10 @@ impl GpuPath {
             parts,
             part_base,
             cull,
+            advance,
+            pending: None,
+            advanced: AtomicBool::new(false),
+            seconds: 0.0,
             draw,
             culled: 0,
             scratch: Vec::new(),
@@ -1161,7 +1432,7 @@ impl GpuPath {
     ) -> (wgpu::Buffer, wgpu::Buffer, wgpu::Buffer) {
         let views_buffer = device.new_buffer(&wgpu::BufferDescriptor {
             label: Some("crowd views"),
-            size: (u64::from(views) * 7 + u64::from(parts.div_ceil(4)).max(1)) * 16,
+            size: (u64::from(views) * 7 + u64::from(parts.div_ceil(4)).max(1) + PROBES) * 16,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -1194,14 +1465,57 @@ impl GpuPath {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("crowd cull"),
                 layout: &shared.cull_layout,
-                entries: &[params, r, views, visible, draws]
+                entries: &[params, r, views, visible, draws, &shared.grid]
                     .iter()
                     .enumerate()
                     .map(|(binding, b)| wgpu::BindGroupEntry {
                         binding: binding as u32,
-                        resource: b.as_entire_binding(),
+                        resource: if binding == 0 {
+                            wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                                buffer: b,
+                                offset: 0,
+                                size: wgpu::BufferSize::new(PARAMS),
+                            })
+                        } else {
+                            b.as_entire_binding()
+                        },
                     })
                     .collect::<Vec<_>>(),
+            })
+        })
+    }
+
+    /// The advance groups: per current records buffer, the advance
+    /// uniform (in `params`), the records to move on and the clip table.
+    fn advance_groups(
+        device: &wgpu::Device,
+        shared: &Shared,
+        records: &[wgpu::Buffer; 2],
+        params: &wgpu::Buffer,
+        anim: &wgpu::Buffer,
+    ) -> [wgpu::BindGroup; 2] {
+        records.each_ref().map(|r| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("crowd advance"),
+                layout: &shared.advance_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: params,
+                            offset: ADVANCE_AT,
+                            size: wgpu::BufferSize::new(16),
+                        }),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: r.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: anim.as_entire_binding(),
+                    },
+                ],
             })
         })
     }
@@ -1276,6 +1590,7 @@ impl GpuPath {
             &self.visible,
             &self.draws,
         );
+        self.advance = Self::advance_groups(device, shared, &self.records, &self.params, &self.anim);
         let list_bytes = u64::from(self.region) * 4;
         self.draw = Self::draw_groups(
             device,
@@ -1313,7 +1628,7 @@ impl GpuPath {
                 "a crowd's visible lists",
                 (u64::from(views) * l * list_bytes) as usize,
                 shared.max_binding as usize,
-                "the crowd isn't drawn in the last views (target cameras first)",
+                "the crowd isn't drawn in the last views (global illumination's, then target cameras)",
             );
         }
         self.region = region as u32;
@@ -1340,7 +1655,10 @@ impl GpuPath {
         self.rebind(device, shared);
     }
 
-    /// This frame's cull uniform, views and level uniforms.
+    /// This frame's cull and advance uniforms, views and level uniforms.
+    /// `occluded`: the camera's view culls against the depth grid;
+    /// `probes`: global illumination's probe updates this frame.
+    #[allow(clippy::too_many_arguments)]
     fn upload(
         &mut self,
         queue: &wgpu::Queue,
@@ -1349,39 +1667,10 @@ impl GpuPath {
         crowd: Frame,
         slots: &[super::instances::SlotView],
         drawn: Drawn,
+        (occluded, probes): (bool, &[Vec3]),
     ) {
-        // The cull uniform.
-        let mut params = [0u32; (PARAMS / 4) as usize];
-        let groups = crowd.count.div_ceil(64);
-        let row = groups.min(shared.max_groups).max(1);
-        params[..8].copy_from_slice(&[
-            crowd.count,
-            self.culled,
-            levels.len() as u32,
-            self.parts,
-            self.region,
-            self.view_capacity * levels.len() as u32,
-            row * 64,
-            0,
-        ]);
-        let (center, radius) = crowd.bounds;
-        params[8..12].copy_from_slice(&[center.x, center.y, center.z, radius].map(f32::to_bits));
-        for (l, level) in levels.iter().enumerate() {
-            let band = [
-                level.min,
-                level.max,
-                f32::from(u8::from(level.camera)),
-                f32::from(u8::from(level.shadows)),
-            ];
-            params[12 + l * 4..16 + l * 4].copy_from_slice(&band.map(f32::to_bits));
-        }
-        gpu!(
-            queue
-                .uploading(Upload::StaticBatches)
-                .write_buffer(&self.params, 0, bytemuck::cast_slice(&params))
-        );
         // The views (one not drawn this frame culls everything), then each
-        // draw's level.
+        // draw's level, then the probes.
         let scratch = &mut self.scratch;
         scratch.clear();
         for (s, slot) in slots.iter().enumerate().take(self.culled as usize) {
@@ -1405,6 +1694,54 @@ impl GpuPath {
         scratch.resize(
             align(scratch.len() as u64, 16) as usize + 16 * usize::from(self.parts == 0),
             0,
+        );
+        let probes_at = (scratch.len() / 16) as u32;
+        let probes = &probes[..probes.len().min(PROBES as usize)];
+        for probe in probes {
+            scratch.extend_from_slice(bytemuck::cast_slice(&probe.extend(0.0).to_array()));
+        }
+        // The cull uniform, and the advance pass's after it.
+        let mut params = [0u32; (ADVANCE_AT / 4 + 4) as usize];
+        let groups = crowd.count.div_ceil(64);
+        let row = groups.min(shared.max_groups).max(1);
+        let gi = drawn.gi_faces();
+        params[..8].copy_from_slice(&[
+            crowd.count,
+            self.culled,
+            levels.len() as u32,
+            self.parts,
+            self.region,
+            self.view_capacity * levels.len() as u32,
+            row * 64,
+            crowd.clips,
+        ]);
+        let (center, radius) = crowd.bounds;
+        params[8..12].copy_from_slice(&[center.x, center.y, center.z, radius].map(f32::to_bits));
+        params[12..20].copy_from_slice(&[
+            u32::from(occluded),
+            gi.start as u32,
+            gi.end as u32,
+            probes.len() as u32,
+            probes_at,
+            crate::three::gi::GI_SMALLEST.to_bits(),
+            0,
+            0,
+        ]);
+        for (l, level) in levels.iter().enumerate() {
+            let band = [
+                level.min,
+                level.max,
+                f32::from(u8::from(level.camera)),
+                f32::from(u8::from(level.shadows)),
+            ];
+            params[20 + l * 4..24 + l * 4].copy_from_slice(&band.map(f32::to_bits));
+        }
+        let advance = (ADVANCE_AT / 4) as usize;
+        params[advance..advance + 4].copy_from_slice(&[crowd.count, row * 64, crowd.clips, self.seconds.to_bits()]);
+        gpu!(
+            queue
+                .uploading(Upload::StaticBatches)
+                .write_buffer(&self.params, 0, bytemuck::cast_slice(&params))
         );
         gpu!(
             queue
@@ -1437,6 +1774,20 @@ impl GpuPath {
 }
 
 impl CpuPath {
+    /// Moves every character's clip times `seconds` on (see
+    /// [`advance_time`]).
+    fn advance(&mut self, seconds: f64) {
+        let clip = |c: u32| self.table.get(c as usize).or(self.table.last()).copied().unwrap_or_default();
+        for r in &mut self.records {
+            let [clips, ta, tb, packed] = r.anim;
+            let speed = f32::from((packed >> 16) as u16 as i16) / 256.0;
+            let a = advance_time(f32::from_bits(ta), speed, seconds, clip(clips & 0xffff));
+            let b = advance_time(f32::from_bits(tb), speed, seconds, clip(clips >> 16));
+            r.anim[1] = a.to_bits();
+            r.anim[2] = b.to_bits();
+        }
+    }
+
     /// The baked frame nearest each character's time, among the posed ones.
     fn frame_of(&self, record: &CrowdRecord, elapsed: f32) -> u32 {
         let [clips, ta, tb, packed] = record.anim;
@@ -1471,7 +1822,9 @@ impl CpuPath {
         slots: &[super::instances::SlotView],
         views: usize,
         drawn: Drawn,
+        extra: Extra<'_>,
     ) {
+        let gi_faces = drawn.gi_faces();
         self.frames.clear();
         for i in 0..self.records.len() {
             let f = self.frame_of(&self.records[i], crowd.elapsed);
@@ -1486,6 +1839,17 @@ impl CpuPath {
             for (i, s) in self.spheres.iter().enumerate() {
                 let center = Vec3::new(s[0], s[1], s[2]);
                 if !slot.planes.iter().all(|p| p.truncate().dot(center) + p.w >= -s[3]) {
+                    continue;
+                }
+                let r = Vec3::splat(s[3]);
+                if v == 0
+                    && let Some((grid, camera)) = extra.grid
+                    && grid.hides(center - r, center + r, camera)
+                {
+                    continue;
+                }
+                let cut = crate::three::gi::GI_SMALLEST;
+                if gi_faces.contains(&v) && !extra.probes.iter().any(|p| s[3] >= cut * center.distance(*p)) {
                     continue;
                 }
                 let m = &self.records[i].instance.model;
@@ -1593,7 +1957,10 @@ mod tests {
                 }
             }
         }
-        super::super::shaders::check_shader("crowd cull", CULL).unwrap_or_else(|e| panic!("{e}"));
+        for bytes in [16 << 10, GRID_BYTES] {
+            super::super::shaders::check_shader("crowd cull", &cull_source(bytes)).unwrap_or_else(|e| panic!("{e}"));
+        }
+        super::super::shaders::check_shader("crowd advance", ADVANCE).unwrap_or_else(|e| panic!("{e}"));
     }
 
     #[test]
@@ -1602,6 +1969,7 @@ mod tests {
             cascades: 2,
             light_views: 1,
             targets: 1 + MAX_CASCADES + 1,
+            gi: None,
         };
         let drawn: Vec<bool> = (0..d.targets + 2).map(|s| d.slot(s)).collect();
         let mut expected = vec![true, true, true];
@@ -1609,5 +1977,52 @@ mod tests {
         expected.extend([true, true, true]);
         assert_eq!(drawn, expected);
         assert!(!d.shadow(0) && d.shadow(1) && d.shadow(d.targets - 1) && !d.shadow(d.targets));
+        assert!(d.gi_faces().is_empty());
+        // Global illumination's sun shadow map is a shadow view, its face
+        // directions are drawn and are not.
+        let gi = d.targets + 2;
+        let d = Drawn { gi: Some(gi), ..d };
+        assert!(d.shadow(gi) && d.slot(gi));
+        assert_eq!(d.gi_faces(), gi + 1..gi + 7);
+        assert!(d.gi_faces().all(|s| d.slot(s) && !d.shadow(s)));
+    }
+
+    /// Where clip `clip` shows character `time` at `speed` after `t` more
+    /// seconds, in baked frames (as `crowd_frames` in `crowd_vertex.wgsl`).
+    fn shown(time: f32, speed: f32, t: f64, clip: [f32; 4]) -> f64 {
+        let last = f64::from(clip[1] - 1.0);
+        let p = (f64::from(time) + f64::from(speed) * t) * f64::from(clip[2]);
+        if clip[3] > 0.5 { p.rem_euclid(last) } else { p.clamp(0.0, last) }
+    }
+
+    #[test]
+    fn a_moved_clock_shows_the_same_poses_from_then_on() {
+        // A looping clip of 31 frames at 30 a second (one second), and one
+        // that holds.
+        let looping = [0.0, 31.0, 30.0, 1.0];
+        let held = [31.0, 31.0, 30.0, 0.0];
+        for clip in [looping, held] {
+            for (time, speed) in [(0.25, 1.0), (0.7, -0.5), (-3.0, 2.0), (5.0, -1.0), (0.4, 0.0)] {
+                for seconds in [REBASE_SECONDS, 86_400.0] {
+                    let moved = advance_time(time, speed, seconds, clip);
+                    for later in [0.0, 0.01, 0.5, 3.0, 40.0] {
+                        let (a, b) = (
+                            shown(time, speed, seconds + later, clip),
+                            shown(moved, speed, later, clip),
+                        );
+                        // On a loop the same pose is also one loop on.
+                        let off = (a - b).abs();
+                        let off = if clip[3] > 0.5 { off.min(30.0 - off) } else { off };
+                        assert!(
+                            off < 1e-3,
+                            "clip {clip:?}, {time} s at {speed}x, moved {seconds} s: {a} against {b} frames after {later} s"
+                        );
+                    }
+                    if clip[3] > 0.5 && speed != 0.0 {
+                        assert!((0.0..=1.0).contains(&moved), "a loop's time stays in it: {moved}");
+                    }
+                }
+            }
+        }
     }
 }
