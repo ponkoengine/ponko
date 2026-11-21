@@ -116,10 +116,11 @@ The **first failure** stops the group: its state is `Failed` and
 (`error.path()`) and its kind: `NotFound` for a missing file, `Decode` for a
 broken one, or what your `with` loader returned. The assets the group
 already finished stay loaded, and no more are started. The ones already
-being read when it failed finish on their workers and wait, so a restart
-doesn't read them again. Which assets had finished by the time the failure
-came back depends on the workers, so a failed group's `loaded` can differ
-from run to run; a test should check it after the restart, not before.
+being read when it failed go on: the following frames take them as they
+finish, and `loaded` counts them, so a restart doesn't read them again.
+Which of them had finished in the frame the failure came back depends on
+the workers, but `ctx.finish_uploads()` waits for all of them, so a test
+sees the same `loaded` after it every run.
 
 `ctx.assets.cancel_group(id)` stops a group: the files not yet started are
 never read, the ones on workers are dropped when they finish, and streams
@@ -133,7 +134,7 @@ group. It is `Loading` again at once, and from the next frame it reads
 **only the assets that had not loaded**: the one that failed and the ones
 never started. What loaded keeps its handle and isn't read again, values
 you haven't taken yet stay, and the files that were being read when it
-failed are taken as they are. Restarting a group that is loading or ready
+failed are taken as they finish. Restarting a group that is loading or ready
 does nothing. It's for a loading screen's "try again" after a dropped
 connection, or after fixing a broken file:
 
@@ -185,7 +186,7 @@ time. Where the GPU has **timestamp queries** (most desktop GPUs; browsers
 only with WebGPU's `timestamp-query`), the group measures that too:
 
 - `group_stats()`: `gpu_upload_ms`, the GPU's own time copying the textures
-  of the latest step it timed, and `total_gpu_upload_ms` since the game
+  and mesh buffers of the latest step it timed, and `total_gpu_upload_ms` since the game
   started. They arrive a frame or a few after the step, as the GPU's
   results are read back without waiting.
 - `gpu_upload_timing` says whether this GPU times uploads. Where it doesn't
@@ -193,14 +194,21 @@ only with WebGPU's `timestamp-query`), the group measures that too:
   it is `false` and `gpu_upload_ms` stays `None`: only the game thread's
   time is measured.
 
-To time a copy, the step makes each texture write itself, as the GPU
-driver layer otherwise does (through a staging buffer), with the copy
-between two timestamps, and submits it at once. The time is the sum of
-those copies: the GPU's work alone, without the time it sat idle between
-them. Textures of other uploads (made by systems with `create_texture`, or
-glTF files' buffers) aren't timed. Streamed textures and meshes upload in
-the streaming step and count in `ctx.gfx.upload_stats()` instead, which has
-the same `gpu_upload_ms` and `gpu_upload_timing` for that step's textures.
+To time a copy, the step makes each texture and mesh buffer write itself,
+as the GPU driver layer otherwise does (through a staging buffer), with the
+copy between two timestamps, and submits it at once. A mesh buffer made
+with its contents is made empty and its contents copied in that way, and
+meshes made in the step are copied into the shared mesh buffers before it
+ends rather than at the next draw, so their copies are the step's. The time
+is the sum of those copies: the GPU's work alone, without the time it sat
+idle between them. Streamed textures and meshes upload in the streaming
+step and count in `ctx.gfx.upload_stats()` instead, which has the same
+`gpu_upload_ms` and `gpu_upload_timing` for that step's uploads. Textures
+made outside the steps (by systems, with `create_texture`) are timed
+together, a frame's worth at a time: `upload_stats().gpu_created_ms` is
+the GPU's time for those of the latest frame it timed. At most 64 copies
+are timed per step (or frame of made textures); later ones still upload,
+untimed.
 Some drivers now and then leave a timestamp unwritten (on an Apple GPU
 about one copy in three, in our tests): such a copy is left out of the sum,
 and a step whose copies all lost one keeps the previous step's time.
@@ -315,9 +323,11 @@ samples are exactly those of the one-piece decode. Uploading it waits for a
 frame with budget left. A group's streamed textures and meshes are decoded
 in slices by the streaming step, after the group step and within what it
 left of the same budget ([Streaming](streaming.md#browsers-and-asset-sources)).
-What can't be split still runs in one piece: other image formats (JPEG and
-the rest), interlaced PNGs, your own `with` loaders and `bytes`, and the
-geometry of a glTF file (its PNG images are sliced).
+KTX2 textures and the images, JSON, buffers and geometry of a glTF file
+are sliced too ([Streaming](streaming.md#browsers-and-asset-sources) says
+how). What can't be split still runs in one piece: other image formats
+(JPEG and the rest), interlaced PNGs, and your own `with` loaders and
+`bytes`.
 
 The tests run this path natively, decoding on the game thread as a browser
 does, and check the slicing by counting rather than timing: each piece of
@@ -361,3 +371,82 @@ In C++, `ponko::asset_group` is the builder, `ctx.start_asset_group`,
 `ctx.take_asset_group_bytes(id, path, decode)` returns what your
 `decode(data, len)` returns. There is no C or C++ form of `with`: take the
 bytes and decode them yourself.
+
+### Sliced loaders from C
+
+A [sliced loader](#loaders-that-work-in-slices) from C is the same idea
+with the Rust trait taken apart: a Rust loader is a value with `step` and
+`finish`; a C loader is three callbacks over a state pointer of the game's
+own, in the versioned `PonkoSliceLoader`, added with
+`ponko_asset_group_add_sliced(group, path, &loader)`:
+
+- `start(user, bytes, len, &state)` gets the file's bytes, valid during the
+  call only (copy what the state keeps), and makes the state: the parsed
+  header, a cursor, the value being built. A restart of a failed group
+  calls it again.
+- `step(user, state, &done)` does the next bounded piece of the work and
+  sets `done` once it is all done. Any status but `PONKO_OK` from `start`
+  or `step` fails the group with a decode error naming the asset and the
+  status.
+- `free_state(user, state)` frees a state nobody took: the group failed or
+  was cancelled, the game ended, or the value was never taken. It may be
+  `NULL` for a state that needs no freeing.
+- `user` is the loader's: it is passed to every call, and `free_user` (if
+  set) runs once when the group no longer needs it. A call that returns an
+  error keeps the ownership of `user` with the caller.
+- **The value is the finished state.** There is no `finish`:
+  `ponko_ctx_take_asset_group_sliced(ctx, id, path, &state)` hands the state
+  pointer over once, and from then on the game owns it and frees it.
+  Before the group finished it, after it was taken, or for an asset that
+  isn't a sliced one, it says `PONKO_NOT_FOUND`.
+
+The calls run where Rust's would: on a worker thread where there are
+workers, between the frame budget's checks on the game thread where there
+are none. Several loaders' calls may run at the same time on different
+workers, but never two calls of one asset at once. So the callbacks touch
+only their own state and `user`, and never call `ponko_ctx_*`; keep each
+`step` short, as in Rust.
+
+<div class="lang-pair">
+<div>
+
+```c
+{{#include ../../examples/cpp/guide.c:sliced_loader_c}}
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:sliced_loader_cpp}}
+```
+
+</div>
+</div>
+
+Then the group, and the value once it is ready:
+
+<div class="lang-pair">
+<div>
+
+```c
+{{#include ../../examples/cpp/guide.c:sliced_group_c}}
+{{#include ../../examples/cpp/guide.c:sliced_take_c}}
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:sliced_group_cpp}}
+```
+
+</div>
+</div>
+
+C++'s `asset_group::sliced(path, start)` takes a `start(bytes, len)` that
+returns the state by value, a type with a `bool step()` that returns `true`
+once done; the wrapper keeps it on the heap and frees it with `delete`. An
+exception from `start` or `step` fails the group.
+`ctx.take_asset_group_sliced<T>(id, path)` returns it as a
+`std::unique_ptr<T>`; `T` must be the type `start` returned.

@@ -537,34 +537,52 @@ pub unsafe extern "C" fn ponko_ctx_set_touch_controls(
     // SAFETY: forwarded caller contract.
     boundary(|| unsafe {
         ctx_access(ctx, |c| {
-            if controls.is_null() && count != 0 {
-                return Err(invalid("controls is null"));
-            }
-            let list = if count == 0 {
-                &[]
-            } else {
-                std::slice::from_raw_parts(controls, count)
-            };
-            let mut set = TouchControls::new().show(show_from_c(show)?).over_screens(over_screens);
-            for control in list {
-                let action = text(control.action)?;
-                let label = if control.label.is_null() {
-                    ""
-                } else {
-                    text(control.label)?
-                };
-                set = match control.kind {
-                    0 => set.stick(action),
-                    1 => set.right_stick(action),
-                    2 => set.button(action, label),
-                    3 => set.corner_button(action, label),
-                    _ => return Err(invalid("unknown touch control kind")),
-                };
-            }
+            let set = controls_from_c(controls, count, show, over_screens)?;
             c.input.set_touch_controls(set);
             Ok(())
         })
     })
+}
+
+/// The Rust set of `count` C controls, checked.
+///
+/// # Safety
+/// `controls` readable for `count` elements (or null with count 0), their
+/// strings NUL-terminated.
+pub(crate) unsafe fn controls_from_c(
+    controls: *const PonkoTouchControl,
+    count: usize,
+    show: u32,
+    over_screens: bool,
+) -> Result<TouchControls, Failure> {
+    if controls.is_null() && count != 0 {
+        return Err(invalid("controls is null"));
+    }
+    let list = if count == 0 {
+        &[]
+    } else {
+        // SAFETY: caller contract.
+        unsafe { std::slice::from_raw_parts(controls, count) }
+    };
+    let mut set = TouchControls::new().show(show_from_c(show)?).over_screens(over_screens);
+    for control in list {
+        // SAFETY: caller contract: NUL-terminated strings.
+        let action = unsafe { text(control.action)? };
+        let label = if control.label.is_null() {
+            ""
+        } else {
+            // SAFETY: as above.
+            unsafe { text(control.label)? }
+        };
+        set = match control.kind {
+            0 => set.stick(action),
+            1 => set.right_stick(action),
+            2 => set.button(action, label),
+            3 => set.corner_button(action, label),
+            _ => return Err(invalid("unknown touch control kind")),
+        };
+    }
+    Ok(set)
 }
 
 fn show_from_c(value: u32) -> Result<TouchShow, Failure> {
@@ -690,6 +708,74 @@ pub unsafe extern "C" fn ponko_input_scenario_touch(
     unsafe {
         edit(scenario, || {
             let event = touch_event(id, phase, position)?;
+            Ok(move |s: InputScenario| s.at(tick, event))
+        })
+    }
+}
+
+/// Feeds a trackpad gesture, as a Mac's trackpad does (Rust
+/// `InputEvent::Trackpad`): `gesture` is `PONKO_GESTURE_PINCH` (`amount`:
+/// how much it spread, 0.1 for 10 %), `PONKO_GESTURE_ROTATE` (`amount` in
+/// radians, clockwise positive) or `PONKO_GESTURE_DOUBLE_TAP` (`amount`
+/// unused); `phase` (a `PonkoTouchPhase`) says whether it begins, goes on
+/// or ends. It feeds the same gestures and amounts as two fingers would,
+/// at the mouse pointer, and makes no touches and no touch device. Other
+/// gestures are ignored. An unknown gesture or phase, or an amount that
+/// isn't finite: `PONKO_INVALID_ARGUMENT`.
+/// ```
+/// assert_ne!(unsafe { ponko_ffi::ponko_ctx_feed_trackpad(std::ptr::null_mut(), 4, 0, 0.25) } as u32, 0);
+/// ```
+/// # Safety
+/// Context live or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_feed_trackpad(
+    ctx: *mut PonkoCtx,
+    gesture: u32,
+    phase: u32,
+    amount: f32,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        let event = trackpad_event(gesture, phase, amount)?;
+        ctx_access(ctx, |c| {
+            c.input.feed(event);
+            Ok(())
+        })
+    })
+}
+
+fn trackpad_event(gesture: u32, phase: u32, amount: f32) -> Result<InputEvent, Failure> {
+    if !amount.is_finite() {
+        return Err(invalid("a trackpad amount must be finite"));
+    }
+    Ok(InputEvent::Trackpad {
+        gesture: gesture_from_c(gesture)?,
+        phase: phase_from_c(phase)?,
+        amount,
+    })
+}
+
+/// Adds a trackpad gesture at simulation tick `tick` (as
+/// `ponko_ctx_feed_trackpad`). The JSON step is `trackpad`.
+/// ```
+/// let s = ponko_ffi::ponko_input_scenario_new();
+/// assert_eq!(unsafe { ponko_ffi::ponko_input_scenario_trackpad(s, 2, 4, 0, 0.25) } as u32, 0);
+/// unsafe { ponko_ffi::ponko_input_scenario_free(s) };
+/// ```
+/// # Safety
+/// `scenario` null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_input_scenario_trackpad(
+    scenario: *mut PonkoInputScenario,
+    tick: u64,
+    gesture: u32,
+    phase: u32,
+    amount: f32,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        edit(scenario, || {
+            let event = trackpad_event(gesture, phase, amount)?;
             Ok(move |s: InputScenario| s.at(tick, event))
         })
     }

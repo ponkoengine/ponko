@@ -108,6 +108,9 @@ the same waves on every machine, and the sea loops every
 `SPECTRUM_PERIOD` (200 s) so the shader's numbers stay small however
 long a game runs.
 
+<div class="lang-pair">
+<div>
+
 ```rust
 # use ponko::prelude::*;
 # use ponko::water::{Water, WaterDesc, WaveSpectrum, Waves};
@@ -122,6 +125,16 @@ let height = water.height_at(vec2(30.0, -8.0), ctx.time.elapsed() as f32);
 assert!(height.abs() < water.desc().waves.max_height());
 # });
 ```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:water_spectrum}}
+```
+
+</div>
+</div>
 
 `height` is the significant wave height (trough to crest of the highest
 third, four times the heights' spread). The wind's speed sets how long
@@ -264,5 +277,9 @@ adds the plugin; `ponko_ctx_water_sample`, `ponko_ctx_water_touch` and
 `ponko::water_desc::sea(...)`, `ctx.spawn_water`, `ctx.water_height` and
 `game.water()`. `ponko_ctx_set_buoyancy_box` and `_sphere` float boxes
 and balls in fresh water; custom sample points (`Buoyancy::points`), the
-water's density, the ripple switch and waves from a spectrum
-(`Waves::spectrum`) are Rust-only for now.
+water's density and the ripple switch are Rust-only for now. A sea from
+a spectrum is `PonkoWaterDesc` version 2: set `has_spectrum` and fill
+`spectrum`, a `PonkoWaveSpectrum` that `ponko_wave_spectrum(wind,
+height)` starts with the engine's defaults (C++ `ponko::wave_spectrum`
+and `water_desc::with_spectrum`). A program built against version 1 keeps
+its Gerstner waves.

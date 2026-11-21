@@ -12,6 +12,6 @@
   "adapter": "Apple M4 Max",
   "backend": "Metal",
   "driver": "unknown",
-  "checksum": "f454108dabefca5e",
-  "reason": "Screen-space reflections: rebuilt march (no grain in contact reflections) and a hits pyramid for the spread fill (smooth edges on wide blurred reflections)"
+  "checksum": "763d35f1c3cf1b1e",
+  "reason": "Reflections assume thin things as deep as the screen shows them (not a thickness growing with distance): thinner reflections of far rails and bars"
 }

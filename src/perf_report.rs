@@ -72,7 +72,8 @@ pub struct ScopeReport {
     /// the thread that made it while the scope was open there: a scope inside
     /// a parallel loop counts the loop's work on every thread, and nothing a
     /// thread pool allocates for itself. 0 unless allocations are counted
-    /// (and for scopes timed with `begin`/`end`, as C does).
+    /// (and for scopes timed with `begin`/`end` that don't end with
+    /// `end_counting`; C's `ponko_profile_begin`/`_end` do).
     #[serde(default)]
     pub allocs_per_frame: f32,
 }
