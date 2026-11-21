@@ -1317,7 +1317,14 @@ fn contact_reflections_show_no_grain_at_full_hd_without_taa() {
 /// Returns, for each rail, the point at its middle and the floor point
 /// that mirrors it.
 fn rails_over_a_mirror(stage: &mut Stage) -> Vec<(Vec3, Vec3)> {
-    let mirror = stage.mesh(
+    rails(stage, true)
+}
+
+/// The rails of [`rails_over_a_mirror`]; without the `mirror`, their mirror
+/// images instead (each rail again, upside down under the floor's plane,
+/// with no floor): what a true mirror shows.
+fn rails(stage: &mut Stage, mirror: bool) -> Vec<(Vec3, Vec3)> {
+    let floor = stage.mesh(
         &MeshData::cube(1.0),
         MaterialDesc {
             color: Color::WHITE,
@@ -1334,7 +1341,9 @@ fn rails_over_a_mirror(stage: &mut Stage) -> Vec<(Vec3, Vec3)> {
             ..Default::default()
         },
     );
-    stage.block(mirror, vec3(-100.0, -1.0, -100.0), vec3(100.0, 0.0, 10.0));
+    if mirror {
+        stage.block(floor, vec3(-100.0, -1.0, -100.0), vec3(100.0, 0.0, 10.0));
+    }
     stage.ctx.scene3d.lighting.sun_intensity = 0.0;
     stage.ctx.scene3d.lighting.ambient_intensity = 0.0;
     stage.ctx.scene3d.post.exposure = -5.0;
@@ -1349,10 +1358,11 @@ fn rails_over_a_mirror(stage: &mut Stage) -> Vec<(Vec3, Vec3)> {
         .map(|(i, &d)| {
             let x = -5.7 + i as f32 * 4.0 * d / 14.0;
             let (half, length) = (0.03 + 0.0025 * d, 0.15 * d);
+            let y = if mirror { 1.0 } else { -1.0 };
             stage.block(
                 glow,
-                vec3(x, 1.0 - half, -d - half),
-                vec3(x + length, 1.0 + half, -d + half),
+                vec3(x, y - half, -d - half),
+                vec3(x + length, y + half, -d + half),
             );
             let middle = vec3(x + length * 0.5, 1.0, -d);
             (middle, through(middle * vec3(1.0, -1.0, 1.0)))
@@ -1488,4 +1498,155 @@ fn far_thin_things_stay_thin_in_reflections_without_taa() {
     );
     reference_rejects("regression_ssr_far_rails", &off, EFFECT_REFERENCE, "reflections off");
     stage.finish();
+}
+
+// ---- The screen passes' depth reads, timed ----
+
+/// Offscreen timestamp measurement of the passes that read the scene's
+/// depth; run with --ignored --nocapture (GPU timestamps, which the build's
+/// optimization doesn't change; the GPU is kept busy between frames, see
+/// `Busy`). At 1920x1080 on a device with the limits a game asks for: the
+/// High preset with depth of field and 400 large soft particles (the
+/// transparent pass), over a glossy floor with a glowing box; with
+/// reflections on and off. Prints each pass's median span over 300 frames
+/// and the frame's: run before and after a change, alternating runs.
+#[test]
+#[ignore]
+fn screen_pass_gpu_cost_at_1080p() {
+    use crate::three::particles::{ParticleEmitter3D, ParticleSettings3D};
+    let Some(mut rig) = Rig::with_limits(1920, 1080, true) else {
+        return;
+    };
+    let Some(mut timer) = super::timer::GpuTimer::new(&rig.device, &rig.queue) else {
+        crate::render::render_test_support::skip("timestamp queries unavailable");
+        return;
+    };
+    let floor = rig.mesh(
+        &MeshData::cube(1.0),
+        MaterialDesc {
+            roughness: 0.35,
+            metallic: 1.0,
+            ..Default::default()
+        },
+    );
+    rig.ctx.world.spawn((
+        Transform3D {
+            position: vec3(0.0, -0.5, 0.0),
+            scale: vec3(20.0, 1.0, 20.0),
+            ..Default::default()
+        },
+        Model::new(floor),
+    ));
+    let block = rig.mesh(
+        &MeshData::cube(1.0),
+        MaterialDesc {
+            color: Color::BLACK,
+            emissive: Color::rgb(4.0, 0.0, 0.0),
+            ..Default::default()
+        },
+    );
+    rig.ctx.world.spawn((
+        Transform3D {
+            position: vec3(0.0, 1.0, 0.0),
+            ..Default::default()
+        },
+        Model::new(block),
+    ));
+    let points: Vec<Vec3> = (0..400)
+        .map(|i| vec3((i % 20) as f32 * 0.5 - 5.0, 0.3, -((i / 20) as f32) * 0.5 + 3.0))
+        .collect();
+    let settings = ParticleSettings3D {
+        size: (1.5, 1.5),
+        lifetime: (1000.0, 1000.0),
+        gravity: Vec3::ZERO,
+        softness: 1.0,
+        max_particles: points.len(),
+        ..Default::default()
+    };
+    rig.ctx.world.spawn((
+        Transform3D::default(),
+        ParticleEmitter3D::at_points_for_test(settings, &points),
+    ));
+    rig.ctx.scene3d.camera.position = vec3(0.0, 2.0, 6.0);
+    rig.ctx.scene3d.camera.look_at(Vec3::ZERO);
+    let busy = Busy::new(&rig.device);
+    rig.ctx.scene3d.set_quality(crate::render::GraphicsQuality::High);
+    let strength = rig.ctx.scene3d.post.ssr;
+    let post = &mut rig.ctx.scene3d.post;
+    // Bloom's many passes would use up the timer's queries.
+    post.bloom = 0.0;
+    post.depth_of_field.enabled = true;
+    post.depth_of_field.focus_distance = 6.0;
+    post.depth_of_field.blur = 0.02;
+    let median = |samples: &mut Vec<f32>| {
+        samples.sort_by(f32::total_cmp);
+        samples[samples.len() / 2]
+    };
+    for ssr in [true, false] {
+        rig.ctx.scene3d.post.ssr = if ssr { strength } else { 0.0 };
+        let mut frames = Vec::new();
+        let mut passes: Vec<(&'static str, Vec<f32>)> = Vec::new();
+        let mut read = timer.frames_read;
+        for frame in 0..340 {
+            busy.run(&rig.device, &rig.queue);
+            rig.draw_timed(Some(&mut timer));
+            if frame < 40 || timer.frames_read == read {
+                continue;
+            }
+            read = timer.frames_read;
+            frames.push(timer.last_frame.iter().map(|s| s.ms).sum::<f32>());
+            for span in &timer.last_frame {
+                match passes.iter_mut().find(|(name, _)| *name == span.name) {
+                    Some((_, times)) => times.push(span.ms),
+                    None => passes.push((span.name, vec![span.ms])),
+                }
+            }
+        }
+        assert!(!passes.is_empty(), "GPU timestamps must be collected");
+        let spans: Vec<String> = passes
+            .iter_mut()
+            .map(|(name, times)| format!("{name} {:.4}", median(times)))
+            .collect();
+        eprintln!(
+            "1920x1080, High, depth of field, soft particles, reflections {}: frame median {:.4} ms; passes: {}",
+            if ssr { "on" } else { "off" },
+            median(&mut frames),
+            spans.join(", ")
+        );
+    }
+}
+
+/// What a true mirror shows of each rail of [`rails_over_a_mirror`]:
+/// (energy, RMS width) of the band where the floor reflects it, with the
+/// rails drawn upside down under the floor's plane and no floor.
+fn true_rail_reflections() -> Option<Vec<(f32, f32)>> {
+    let mut stage = Stage::with(super::regression_stage::Setup {
+        size: (1920, 1080),
+        ..Default::default()
+    })?;
+    let rails = rails(&mut stage, false);
+    let image = stage.settled(2);
+    let found = rails.iter().map(|&(_, at)| band(&stage, &image, None, at, 30)).collect();
+    stage.finish();
+    Some(found)
+}
+
+/// Without TAA, the reflections of thin things far away are about as wide
+/// as a true mirror shows them (it also shows their undersides, which the
+/// screen doesn't: the trace assumes a thickness for what it sees).
+#[test]
+fn far_thin_things_are_reflected_about_as_wide_as_in_a_true_mirror() {
+    let (Some(truth), Some((rails, _, stage))) = (true_rail_reflections(), rail_reflections()) else {
+        return;
+    };
+    stage.finish();
+    let mut widths = Vec::new();
+    for ((d, truth), [_, reflected]) in [8, 14, 22, 32].iter().zip(&truth).zip(&rails) {
+        let wider = reflected.1 / truth.1;
+        eprintln!(
+            "rail {d} away: true mirror (energy {:.1}, RMS width {:.2}), screen-space (energy {:.1}, RMS width {:.2}): x{wider:.2} as wide",
+            truth.0, truth.1, reflected.0, reflected.1
+        );
+        widths.push(wider);
+    }
 }
