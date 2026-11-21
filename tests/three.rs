@@ -1679,6 +1679,17 @@ fn screen_space_reflections_are_off_until_turned_on() {
         assert_eq!(ctx.scene3d.post.ssr, 0.0, "medium turns them off");
         ctx.scene3d.set_quality(GraphicsQuality::High);
         assert_eq!(ctx.scene3d.post.ssr, 1.0, "high turns them on");
+        assert!(!ctx.scene3d.post.ssr_thin_objects, "high leaves thin objects off");
+        ctx.scene3d.set_quality(GraphicsQuality::Ultra);
+        assert!(ctx.scene3d.post.ssr_thin_objects, "ultra turns thin objects on");
+        // ANCHOR: ssr_thin
+        // Without TAA: railings, cables and poles stay whole in reflections.
+        ctx.scene3d.post.anti_aliasing = AntiAliasing::Smaa;
+        ctx.scene3d.post.ssr_thin_objects = true; // about 1 ms more at 1080p
+        // ANCHOR_END: ssr_thin
+        assert_eq!(ctx.scene3d.quality(), Some(GraphicsQuality::Ultra));
+        ctx.scene3d.post.ssr_thin_objects = false;
+        assert_eq!(ctx.scene3d.quality(), None, "custom without them");
     });
 }
 

@@ -51,9 +51,7 @@ const MAPPING: u8 = 2;
 const READY: u8 = 3;
 
 struct Slot {
-    /// Its own queries, written from 0 (resolving a range that doesn't
-    /// start at 0 read the wrong queries on Metal).
-    queries: wgpu::QuerySet,
+    /// Slot `i` writes queries `i * QUERIES_PER_SLOT..` of the timer's set.
     resolve: wgpu::Buffer,
     readback: wgpu::Buffer,
     state: Arc<AtomicU8>,
@@ -69,6 +67,9 @@ pub(crate) struct UploadTimer {
     /// An empty compute shader: each timestamp's pass runs it once, since
     /// some GPUs (Metal) write no timestamps for an empty pass.
     marker: wgpu::ComputePipeline,
+    /// One set for every slot: Metal lets a process hold only 32 sets
+    /// (see `query_sets.rs`).
+    queries: wgpu::QuerySet,
     slots: [Slot; SLOTS],
     /// Nanoseconds per timestamp tick.
     period: f64,
@@ -78,6 +79,8 @@ pub(crate) struct UploadTimer {
     /// open until [`collect`](Self::collect).
     created: Option<usize>,
     next: usize,
+    /// The right to hold `queries`; declared last, so they are dropped first.
+    _lease: super::query_sets::Lease,
 }
 
 thread_local! {
@@ -86,17 +89,20 @@ thread_local! {
 }
 
 impl UploadTimer {
-    /// `None` if the GPU can't do timestamp queries.
+    /// `None` if the GPU can't do timestamp queries, or (after one
+    /// warning) if this process already holds all the timestamp query sets
+    /// the engine takes (see `query_sets.rs`).
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Self> {
         if !device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
             return None;
         }
+        let lease = super::query_sets::lease(device, "GPU upload timer")?;
+        let queries = device.create_query_set(&wgpu::QuerySetDescriptor {
+            label: Some("upload timestamps"),
+            ty: wgpu::QueryType::Timestamp,
+            count: QUERIES_PER_SLOT * SLOTS as u32,
+        });
         let slot = || Slot {
-            queries: device.create_query_set(&wgpu::QuerySetDescriptor {
-                label: Some("upload timestamps"),
-                ty: wgpu::QueryType::Timestamp,
-                count: QUERIES_PER_SLOT,
-            }),
             resolve: device.new_buffer(&wgpu::BufferDescriptor {
                 label: Some("upload timestamp resolve"),
                 size: SLOT_BYTES,
@@ -129,11 +135,13 @@ impl UploadTimer {
             device: device.clone(),
             queue: queue.clone(),
             marker,
+            queries,
             slots: std::array::from_fn(|_| slot()),
             period: f64::from(queue.get_timestamp_period()),
             current: None,
             created: None,
             next: 0,
+            _lease: lease,
         })
     }
 
@@ -191,7 +199,8 @@ impl UploadTimer {
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("upload timestamps"),
         });
-        encoder.resolve_query_set(&slot.queries, 0..used, &slot.resolve, 0);
+        let first = i as u32 * QUERIES_PER_SLOT;
+        encoder.resolve_query_set(&self.queries, first..first + used, &slot.resolve, 0);
         encoder.copy_buffer_to_buffer(&slot.resolve, 0, &slot.readback, 0, u64::from(used) * 8);
         self.queue.submit([encoder.finish()]);
         slot.state.store(MAPPING, Ordering::Release);
@@ -305,7 +314,7 @@ impl UploadTimer {
     /// Records what `copy` records between two timestamps of slot `i`, and
     /// submits it at once.
     fn timed_copy(&mut self, i: usize, label: &str, copy: impl FnOnce(&mut wgpu::CommandEncoder)) {
-        let at = self.slots[i].pairs * 2;
+        let at = i as u32 * QUERIES_PER_SLOT + self.slots[i].pairs * 2;
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) });
@@ -321,7 +330,7 @@ impl UploadTimer {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("upload timestamp"),
                 timestamp_writes: Some(wgpu::ComputePassTimestampWrites {
-                    query_set: &self.slots[i].queries,
+                    query_set: &self.queries,
                     beginning_of_pass_write_index: begin,
                     end_of_pass_write_index: end,
                 }),

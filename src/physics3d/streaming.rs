@@ -227,6 +227,78 @@ impl TerrainCollider {
     }
 }
 
+/// What [`Physics3D::set_terrain_rebuild`] keeps.
+pub(super) type TerrainRebuild = Box<dyn Fn(&World, Entity) -> Option<CollisionMeshData> + Send + Sync>;
+
+impl Physics3D {
+    /// Makes terrain tiles solid again after a world load. A saved world
+    /// keeps each [`TerrainCollider`] (its friction, restitution and
+    /// groups) but not its heightfield, which was made in code: after
+    /// [`Ctx::load_world`](crate::ctx::Ctx::load_world) or
+    /// [`load_scene`](crate::ctx::Ctx::load_scene), `rebuild` is called with
+    /// the loaded world and each tile whose collider has no mesh, and the
+    /// mesh it returns (the tile's heightfield, from the same heights as
+    /// before: [`CollisionMeshData::heightfield`]) goes in the tile's
+    /// collider, ready for the next physics step. The tile's saved
+    /// components say which heights it had: its
+    /// [`d3::Transform`](crate::d3::Transform), or a component of your own
+    /// (a tile coordinate, a seed). `None` leaves that tile without ground.
+    /// Set it once, in setup; it stays through loads.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # let dir = std::env::temp_dir().join(format!("ponko-doc-terrain-rebuild-{}", std::process::id()));
+    /// use ponko::d3::{CollisionMeshData, TerrainCollider, Transform};
+    /// fn heights() -> Vec<f32> {
+    ///     vec![0.0; 33 * 33]
+    /// }
+    /// Game::new("t", 1, 1).data_dir(&dir).physics3d(vec3(0.0, -9.81, 0.0)).run_headless(1, |ctx| {
+    ///     ctx.physics3d.set_terrain_rebuild(|_world, _tile| Some(CollisionMeshData::heightfield(&heights(), 64.0)));
+    ///     let ground = ctx.physics3d.heightfield(&heights(), 64.0);
+    ///     ctx.world.spawn((Transform::default(), TerrainCollider::new(ground)));
+    ///     ctx.storage.save_world(&ctx.world, "slot").unwrap();
+    ///     ctx.load_world("slot").unwrap();
+    ///     let loaded = *ctx.world.query::<(Entity, &TerrainCollider)>().iter().next().unwrap().1;
+    ///     assert!(ctx.physics3d.is_live(loaded.mesh), "solid again");
+    /// });
+    /// # let _ = std::fs::remove_dir_all(dir);
+    /// ```
+    pub fn set_terrain_rebuild(
+        &mut self,
+        rebuild: impl Fn(&World, Entity) -> Option<CollisionMeshData> + Send + Sync + 'static,
+    ) {
+        self.terrain_rebuild = Some(Box::new(rebuild));
+    }
+
+    /// Stops making terrain tiles solid again after a load.
+    pub fn clear_terrain_rebuild(&mut self) {
+        self.terrain_rebuild = None;
+    }
+
+    /// After a load: a mesh from the rebuild for every terrain collider
+    /// without one.
+    pub(crate) fn rebuild_terrain(&mut self, world: &mut World) {
+        let Some(rebuild) = self.terrain_rebuild.take() else {
+            return;
+        };
+        let mut lost = Vec::new();
+        world.query::<(Entity, &TerrainCollider)>().for_each(|(e, t)| {
+            if !self.is_live(t.mesh) {
+                lost.push(e);
+            }
+        });
+        for e in lost {
+            if let Some(data) = rebuild(world, e) {
+                let mesh = self.add_mesh(&data);
+                if let Some(t) = world.get_mut::<TerrainCollider>(e) {
+                    t.mesh = mesh;
+                }
+            }
+        }
+        self.terrain_rebuild = Some(rebuild);
+    }
+}
+
 /// Keeps static colliders around an entity (the player, a vehicle) once
 /// [`Physics3D::stream_colliders`] is on: the colliders of fixed bodies and
 /// [`TerrainCollider`]s within `radius` of it (on the ground, X and Z) are

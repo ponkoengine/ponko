@@ -6,6 +6,7 @@
 #   web/build.sh battle site/play        # choose the output folder
 #   web/build.sh --features 3d web_smoke_3d   # with Cargo features (comma-separated)
 #   web/build.sh --threads battle        # with threads (nightly; see below)
+#   web/build.sh --simd --features 3d my_game   # with WASM SIMD (see below)
 #   web/build.sh --threads --print-env   # what a threaded build would set, no build
 #   web/build.sh --threads --clippy      # nightly clippy on the threaded configuration, no build
 #   web/build.sh --threads --isolation-worker battle   # threads on hosts that can't send headers
@@ -13,6 +14,13 @@
 #
 # Needs: rustup target add wasm32-unknown-unknown
 #        cargo install wasm-bindgen-cli --version <the wasm-bindgen in Cargo.lock>
+#
+# --simd builds with WASM SIMD: `-C target-feature=+simd128` for every
+# crate and the engine's `wasm-simd` feature (rustfft's SIMD FFT, which
+# the water's CPU wave spectrum uses), always the two together: each alone
+# is no faster or slower (the water guide's "On the web"). The module then
+# needs a browser with fixed-width SIMD (Chrome 91, Firefox 89, Safari
+# 16.4). It goes with --threads too.
 #
 # --threads builds with worker threads (the guide's "Threads on the web"):
 # atomics and shared memory, which need a nightly toolchain that rebuilds
@@ -30,10 +38,10 @@
 #
 # Cargo reads the first of CARGO_ENCODED_RUSTFLAGS, RUSTFLAGS and
 # CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS that is set and ignores the
-# others, so --threads adds its flags to that one and keeps what it holds:
-# RUSTFLAGS="-D warnings" still fails a threaded build on a warning.
-# --print-env prints the toolchain and that variable instead of building
-# (web/smoke/build.test.mjs checks it).
+# others, so --threads and --simd add their flags to that one and keep what
+# it holds: RUSTFLAGS="-D warnings" still fails a threaded build on a
+# warning. --print-env prints the toolchain, that variable and the features
+# instead of building (web/smoke/build.test.mjs checks it).
 #
 # --clippy (with --threads) lints the engine and the threads fixture with
 # the same toolchain and flags, with -D warnings: the nightly clippy has
@@ -44,6 +52,7 @@ set -euo pipefail
 kind=example
 features=
 threads=
+simd=
 print_env=
 clippy=
 isolation_worker=
@@ -52,6 +61,7 @@ while [ $# -gt 0 ]; do
     --bin) kind=bin; shift ;;
     --features) features=${2:?--features needs a list}; shift 2 ;;
     --threads) threads=1; shift ;;
+    --simd) simd=1; shift ;;
     --print-env) print_env=1; shift ;;
     --clippy) clippy=1; shift ;;
     --isolation-worker) isolation_worker=1; shift ;;
@@ -59,6 +69,12 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+if [ -n "$simd" ]; then
+  # As a dependency's feature, so a game's own build (--bin) has it too.
+  features=${features:+$features,}ponko/wasm-simd
+fi
+flags=
+toolchain=default
 if [ -n "$threads" ]; then
   # Atomics in every crate, std rebuilt with them (-Zbuild-std), and a
   # shared, imported memory with the thread-local symbols wasm-bindgen
@@ -69,6 +85,11 @@ if [ -n "$threads" ]; then
   flags="$flags -C link-arg=--export=__wasm_init_tls -C link-arg=--export=__tls_size"
   flags="$flags -C link-arg=--export=__tls_align -C link-arg=--export=__tls_base"
   toolchain=${PONKO_WEB_TOOLCHAIN:-nightly}
+fi
+if [ -n "$simd" ]; then
+  flags="${flags:+$flags }-C target-feature=+simd128"
+fi
+if [ -n "$flags" ]; then
   if [ -n "${CARGO_ENCODED_RUSTFLAGS:-}" ]; then
     flags_var=CARGO_ENCODED_RUSTFLAGS
     flags_value="$(printf '%s' "$flags" | tr ' ' '\037')"$'\037'"$CARGO_ENCODED_RUSTFLAGS"
@@ -93,13 +114,15 @@ if [ -n "$features" ]; then
   clippy_args+=(--features "$features")
 fi
 if [ -n "$print_env" ]; then
-  if [ -n "$threads" ]; then
-    printf 'toolchain=%s\n%s=%s\n' "$toolchain" "$flags_var" "$flags_value"
-    if [ -n "$clippy" ]; then
-      echo "clippy=cargo +$toolchain clippy ${clippy_args[*]} -- -D warnings"
-    fi
-  else
-    echo "toolchain=default"
+  echo "toolchain=$toolchain"
+  if [ -n "$flags" ]; then
+    printf '%s=%s\n' "$flags_var" "$flags_value"
+  fi
+  if [ -n "$simd" ]; then
+    echo "features=$features"
+  fi
+  if [ -n "$clippy" ]; then
+    echo "clippy=cargo +$toolchain clippy ${clippy_args[*]} -- -D warnings"
   fi
   exit 0
 fi
@@ -118,6 +141,8 @@ fi
 if [ -n "$threads" ]; then
   env "$flags_var=$flags_value" cargo "+$toolchain" build -Zbuild-std=panic_abort,std \
     --release --target wasm32-unknown-unknown "--$kind" "$name" ${feature_args[@]+"${feature_args[@]}"}
+elif [ -n "$flags" ]; then
+  env "$flags_var=$flags_value" cargo build --release --target wasm32-unknown-unknown "--$kind" "$name" ${feature_args[@]+"${feature_args[@]}"}
 else
   cargo build --release --target wasm32-unknown-unknown "--$kind" "$name" ${feature_args[@]+"${feature_args[@]}"}
 fi

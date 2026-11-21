@@ -26,11 +26,13 @@ order:
    `AudioContext` and `AudioBufferSourceNode.start` to see this.
 5. **State minimums** (`--min`): fields the fixture must report at least
    (the 3D fixture's models and triangles drawn).
-   **Storage** (`--after-reload`): once the game's writes are stored (its
-   `saving` field is no longer `true`), the page is reloaded, and the new page
-   must report the given fields (`coin_dash`: the settings it saved when the
-   settings screen was left are `Loaded` from the browser's storage, which is
-   `persistent`).
+   **Storage** (`--after-reload`, `--reload`): once the game's writes are
+   stored (its `saving` field is no longer `true`), the page is reloaded, and
+   the new page must report the given fields (`coin_dash`: the settings it
+   saved when the settings screen was left are `Loaded` from the browser's
+   storage, which is `persistent`). A fixture can ask for several reloads,
+   each a page load of its own with its own fields (`web_editor_save`: save,
+   reload and revert, reload and find the revert held).
 6. **Rendering**: the canvas is not blank (screenshot, or a copy of the
    canvas for WebGPU).
 
@@ -47,13 +49,14 @@ runner needs to know about each one, so `--fixture <name>` is all a run takes:
 | `web_smoke` | `examples/web_smoke.rs` | none | `crab.png` fetched and decoded 32x32; an image and streamed music loaded from an in-memory asset source; an asset group of the fetched image and a file from the source, ready (`group_ready` at least 1); the music, started at setup, heard after the first click; sprites drawn |
 | `web_smoke_3d` | `examples/web_smoke_3d.rs` | `3d` | `models/house.glb` fetched and parsed; a sun with shadows; at least 1 model and 100 triangles drawn |
 | `coin_dash` | `examples/coin_dash` | none | the complete game: its picture, keys and the screens they reach (see [A complete game, packaged](../../book/src/packaging.md#the-web-build)); after a reload, the settings it saved come back from the browser's storage |
-| `web_editor_save` | `examples/web_editor_save.rs` | `editor` | `crab.png` fetched and decoded 32x32; a scene saved with the editor in the build is read back at once from the browser's storage (`read_back` 1); after a reload it comes back over the fetched files (`kept` is `Loaded`) |
+| `web_editor_save` | `examples/web_editor_save.rs` | `editor` | `crab.png` fetched and decoded 32x32; three page loads: a new scene and one over a file the build ships are saved and read back at once from the browser's storage (`read_back` 1, `listed` 2); after a reload both come back over the fetched files and the one over the build's file is reverted, read again at once (`found` `Saved`, `reverted` 1); after another reload the revert held and the other save is still there (`found` `Build`, `kept` `Loaded`). It also reports the browser's answer to its request for persistent storage (`persistent`) |
 | `lights2d` | `examples/lights2d.rs` | none | `crab.png` fetched and decoded 32x32; 2D lights with stencil shadows and normal maps drawing on the page's backend (WebGL2 in CI); at least 7 lights
 
 To add one: publish the state with the helper (or the same attributes by hand),
 add an entry to `fixtures.json` (`example`, `features`, `asset`, `assetSize`
-or none, `assetSource` or none, `presses`, `min`, `afterReload`, `engineGpu`,
-`music`), and name it in the CI job. Every
+or none, `assetSource` or none, `presses`, `min`, `afterReload` (one reload)
+or `reloads` (several: a list of steps, each a list of `<field>:<value>`),
+`engineGpu`, `music`), and name it in the CI job. Every
 fixture needs `?smoke_case=panic` and `?smoke_case=stall` handled if it is to
 run the self-tests; the helper does that.
 
@@ -299,8 +302,9 @@ water guide's "Waves from a spectrum"): the fixture
 `examples/web_spectrum.rs`, in three builds (`--build` makes them):
 `scalar` (`web/build.sh --features 3d web_spectrum`), `simd128`
 (`-C target-feature=+simd128` for the whole module, added to the rust
-flags cargo reads) and `simd` (that, and the `wasm-simd` feature:
-rustfft's SIMD FFT; the feature without the flag doesn't compile). Each page load times one new moment of the field
+flags cargo reads) and `simd` (`web/build.sh --simd`: that, and the
+`wasm-simd` feature: rustfft's SIMD FFT; the feature without the flag
+doesn't compile). Each page load times one new moment of the field
 (`Waves::height_at` at a new time, what a WebGL2 upload costs) and one with
 the sway's speed (`Waves::sample`, what buoyancy costs) at 64, 128 and 256
 cells, eight moments per reading because the browser's clock is coarse.
@@ -359,7 +363,8 @@ Options:
 | `--asset-source <W>x<H>` / `none` | The size the image from the game's in-memory asset source must decode to (the state's `source`); its streamed music must load too, and nothing under `assets/embedded/` may be fetched. Default `4x2` without a fixture. |
 | `--press <Key>=<field>:<value>` | After the click, press the key (Playwright key name: `Enter`, `Escape`, `Q`) and wait up to 10 s for the reported state's `<field>` to become `<value>`. Repeatable, in order. |
 | `--min <field>=<n>` | The reported state's numeric `<field>` must be at least `n`. Repeatable. |
-| `--after-reload <field>:<value>` | After the presses, reload the page (once the state's `saving` is not `true`); the new page's `<field>` must then be `<value>`. Repeatable. |
+| `--after-reload <field>:<value>` | After the presses, reload the page (once the state's `saving` is not `true`); the new page's `<field>` must then be `<value>`. Repeatable: each adds a field to the last reload step. |
+| `--reload` | Adds another reload step: the page is reloaded again after the one before, and the `--after-reload` fields that follow are checked on that page load. Repeatable. |
 | `--engine-gpu required` | Fail when the fixture publishes no engine GPU report (fixtures set this). |
 | `--music required` / `none` | Check that music started at setup waits for the first click and is heard after it (the fixture reports `audio_unlocked`). `required` for fixtures with `"music": true`. |
 | `--no-trace` / `--chrome-trace` | Skip the Playwright trace, or also write Chromium's GPU trace (it slows a heavy page a lot, enough to trip the stall check on a 3D scene: use it on the 2D fixture, or to look at one run). |
