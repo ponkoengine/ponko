@@ -162,3 +162,81 @@ What it says:
   the CPU side of the frame pays for.
 - Devices without `INDIRECT_FIRST_INSTANCE` (some browsers and older GPUs)
   draw each cell on its own, exactly as before.
+
+## Draws across cells on the CPU path, records without padding
+
+Two follow-ups of the table above: on the CPU path, the visible runs of all
+cells of one mesh in a view are joined where one cell's range of the shared
+vertex buffer ends where another's starts (cells are still culled one by
+one); on the GPU-driven path, cells keep their records in pools of their
+own, each cell's block starting on a record (96 bytes) instead of on the
+storage binding alignment and a record (768 bytes on this device, whose
+storage bindings align to 256).
+
+Same scenes and command as above (`PONKO_CELLS_BENCH=draws`, then
+`stream`). Apple M4 Max, Metal (wgpu 30.0.1), macOS; rustc 1.100.0, release
+profile, features `3d` plus the defaults. "Before" is revision `cea1abd6`
+(the code of the table above, with the new columns), "after" `b8773bba`.
+2026-11-21. **records KiB** is what the pools' records buffers hand out,
+each block padded to its pool's alignment; **pools KiB** what the pools'
+buffers (records, visible lists, draw arguments) take, which grow by
+doubling. The rows "each on its own" take the old code paths in both
+builds (`Batching::separate_cells`), so they are the same in both.
+
+The machine was **not quiet** (load average 99 to 119 for "before", 82 to
+104 for "after"). The counts and bytes are exact and the same every frame;
+the frame times are not compared.
+
+| path | visible cells | cells drawn | draws per frame | bind groups set | vertex buffers set | records KiB (pools KiB) |
+|---|---|---|---|---|---|---|
+| GPU | 100 | each on its own | 200 | 205 | 7 | 175.0 (448) |
+| GPU | 100 | together, before | 2 | 7 | 7 | 225.0 (448) |
+| GPU | 100 | together, after | 2 | 7 | 7 | 159.4 (448) |
+| GPU | 1000 | each on its own | 2000 | 2005 | 7 | 1750.0 (3136) |
+| GPU | 1000 | together, before | 2 | 7 | 7 | 2250.0 (5248) |
+| GPU | 1000 | together, after | 2 | 7 | 7 | 1593.8 (3200) |
+| CPU | 100 | each on its own | 200 | 7 | 205 | - |
+| CPU | 100 | together, before | 200 | 7 | 7 | - |
+| CPU | 100 | together, after | 2 | 7 | 7 | - |
+| CPU | 1000 | each on its own | 2000 | 7 | 2005 | - |
+| CPU | 1000 | together, before | 2000 | 7 | 7 | - |
+| CPU | 1000 | together, after | 2 | 7 | 7 | - |
+
+Frame time medians of the same runs (ms, load as above; for the record,
+not a result): GPU 1,000 together 7.86 before, 4.85 after; CPU 1,000
+together 4.85 before, 8.96 after, each on its own 5.47 and 10.58 in the
+same two runs: the second run's machine was slower across the board.
+
+The streaming scene (122 live cells of 1,024 instances, 33 of them in the
+camera's view at the median frame), draws per frame over every pass:
+
+| path | streamed as | draws per frame before (p50 / max) | after (p50 / max) |
+|---|---|---|---|
+| GPU | cells | 5 / 6 | 5 / 6 |
+| CPU | cells | 145 / 169 | 66 / 85 |
+| CPU | one batch, made again | 30 / 32 | 30 / 32 |
+
+What it says:
+
+- **CPU path: one draw per pass for a field of cells added together.**
+  1,000 visible cells went from 2,000 draws a frame to 2 (100 from 200 to
+  2): cells added one after another take neighbouring ranges, so the
+  whole field is one run of the buffer in each of the camera's two passes.
+- **In a streamed world runs join less**: 145 draws a frame became 66
+  (2.2 times fewer), against 30 for one batch made again. A cell streamed
+  in takes the first freed range that fits, which is next to cells loaded
+  at about the same time, not necessarily to its neighbours on the
+  ground; cells of a row loaded together still join. Allocating by
+  position (a freed range next to a neighbour's) could join more; it is
+  not done, as the draws left are a few dozen a frame.
+- **GPU-driven path: 29 % fewer record bytes for 1,000 small cells**
+  (2,304 to 1,632 bytes a cell of 16 instances: 1,584 bytes of records,
+  padded to 768 before and to 96 now), and the pool buffers' 5,248 KiB
+  became 3,200 KiB, about what each cell on its own takes (3,136 KiB, its
+  blocks padded to 256). For 100 cells the buffers stay at their first
+  sizes (448 KiB). The pool stops growing in a streaming world as before
+  (`streamed_cells_draw_what_one_batch_draws_in_every_view_on_both_paths`).
+- Cell views bind the whole records buffer and index it, so a device whose
+  storage bindings align to 256 bytes (this one) needs no padding; a cell
+  drawn on its own (a device without `INDIRECT_FIRST_INSTANCE`) binds it
+  the same way, with its own visible list.
