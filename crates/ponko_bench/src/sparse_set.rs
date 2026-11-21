@@ -833,28 +833,11 @@ fn rss(b: &Bench) {
             let bytes = either!(&mut w, |w| w.store.bytes());
             println!(
                 "{name}: peak RSS {}, storage {} KiB",
-                peak_rss().map_or("unavailable".into(), |b| format!("{} KiB", b / 1024)),
+                crate::alloc::peak_rss().map_or("unavailable".into(), |b| format!("{} KiB", b / 1024)),
                 bytes / 1024
             );
         }
     }
-}
-
-#[cfg(unix)]
-fn peak_rss() -> Option<usize> {
-    // SAFETY: `getrusage` fills the struct it is given.
-    let usage = unsafe {
-        let mut usage = std::mem::zeroed::<libc::rusage>();
-        (libc::getrusage(libc::RUSAGE_SELF, &mut usage) == 0).then_some(usage)?
-    };
-    // Bytes on macOS, KiB on Linux.
-    let unit = if cfg!(target_os = "macos") { 1 } else { 1024 };
-    Some(usage.ru_maxrss as usize * unit)
-}
-
-#[cfg(not(unix))]
-fn peak_rss() -> Option<usize> {
-    None
 }
 
 #[cfg(test)]
@@ -945,9 +928,28 @@ mod tests {
         }
     }
 
+    /// The set-driven `and` join (archetype data read by cached id) finds
+    /// what the archetype queries find. Small, so it runs under Miri.
+    #[test]
+    fn the_set_driven_and_join_matches_the_archetype_queries() {
+        for rows in [false, true] {
+            let mut arch = Workload::new(World::new(), 40, 20, 0, 1);
+            let sset = Sset {
+                h: Hybrid::default(),
+                rows,
+            };
+            let mut sset = Workload::new(sset, 40, 20, 0, 1);
+            arch.churn_tick();
+            sset.churn_tick();
+            let want = arch.store.and();
+            assert_ne!(want, 0, "some entities have both tags of a pair");
+            assert_eq!(sset.store.and(), want);
+        }
+    }
+
     #[test]
     fn the_dense_case_computes_the_same_on_every_storage() {
-        let n = 2000;
+        let n = if cfg!(miri) { 200 } else { 2000 };
         let (mut w, es) = dense_arch(n);
         let (mut set_driven, _) = dense_sset(n);
         let (mut row_driven, _) = dense_sset(n);

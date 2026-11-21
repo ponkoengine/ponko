@@ -183,8 +183,18 @@ its own Miri jobs, in AGENTS.md) the list is
 [scripts/unsafe-inventory.txt](scripts/unsafe-inventory.txt): each item with
 unsafe code (`function`, `Type::method`, `impl Send for Type`), the test that
 runs it, and whether that test runs under Miri or why not (a GPU, a C
-library, signals or sockets, another platform). The C API crate's helpers need
-no line when a tested C function reaches them: the script finds that test.
+library, signals or sockets, another platform, or `window`: a check a person
+runs in a real window). The benchmark binary `crates/ponko_bench` is
+covered too. The C API crate's helpers need no line when a tested C function
+reaches them: the script finds that test.
+
+Checks that need a person (a real window) are listed in the guide's "Unsafe
+code" section; run them when you touch the code they cover. For the
+accessibility adapter on the engine's window:
+
+```sh
+cargo test --features accessibility --test ui_access_window -- --ignored
+```
 
 ```sh
 python3 scripts/check-unsafe.py            # every unsafe item has a test

@@ -224,7 +224,7 @@ pub struct Ctx {
     /// plugins' names, from the builder.
     pub(crate) extensions: crate::control::GameExtensions,
     /// Where gamepads come from (`Game::gamepad_backend`, or gilrs in a
-    /// window), polled in `begin_frame`.
+    /// window; the browser's gamepads on the web), polled in `begin_frame`.
     pub(crate) gamepad_driver: crate::input::backend::GamepadDriver,
     /// `true` while the game's setup (and plugins' setups) run.
     in_setup: bool,
@@ -508,11 +508,28 @@ impl Ctx {
             debug: crate::debug::DebugDraw::default(),
             storage: crate::storage::Storage::default(),
         };
+        ctx.window.set_logical_size(window_size);
         // On-screen controls are placed for the window from the start.
-        ctx.input.touch.view = (window_size, 1.0);
+        ctx.input.touch.view = (Rect::new(0.0, 0.0, window_size.x, window_size.y), 1.0);
         #[cfg(feature = "3d")]
         ctx.sync_audio_camera();
         ctx
+    }
+
+    /// Which frames' GPU passes are timed: every frame while something reads
+    /// every frame (profiling, the HUD, a trace, a benchmark run, automatic
+    /// quality, which counts consecutive frames over or under its budget),
+    /// otherwise every [`GPU_TIMING_EVERY`](crate::perf::GPU_TIMING_EVERY)th.
+    pub(crate) fn gpu_timing_every(&self) -> u32 {
+        #[cfg(feature = "3d")]
+        let autotune = self.scene3d.autotune.policy.is_some();
+        #[cfg(not(feature = "3d"))]
+        let autotune = false;
+        if autotune || self.perf.reads_every_gpu_frame() {
+            1
+        } else {
+            crate::perf::GPU_TIMING_EVERY
+        }
     }
 
     /// Engine side: draw everything queued this frame, then reset the queue.
@@ -524,6 +541,10 @@ impl Ctx {
         if self.scene3d.autotune.policy.is_some() || self.gfx.autotune.is_some() {
             let sample = self.gfx.renderer.as_ref().and_then(Renderer::quality_sample);
             self.update_quality_autotune(sample, capture);
+        }
+        let every = self.gpu_timing_every();
+        if let Some(renderer) = self.gfx.renderer.as_mut() {
+            renderer.set_gpu_timing_every(every);
         }
         self.follow_msaa();
         #[cfg(feature = "3d")]
@@ -711,6 +732,7 @@ impl Ctx {
 
     pub(crate) fn set_window_size(&mut self, size: Vec2) {
         self.window_size = size;
+        self.window.set_logical_size(size);
         self.place_cameras();
     }
 

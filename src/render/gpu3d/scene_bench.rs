@@ -133,6 +133,9 @@ pub struct SceneSetup {
     /// screen-space reflections, FXAA, and every shadow cascade redrawn
     /// every frame. For the side-by-side scenes in `bench/bevy_scenes`.
     pub matched: bool,
+    /// Time the GPU passes of every this many frames (1: every frame, the
+    /// default; a game outside profiling times one frame in 16).
+    pub gpu_timing_every: u32,
 }
 
 impl Default for SceneSetup {
@@ -143,6 +146,7 @@ impl Default for SceneSetup {
             scale: 1.0,
             quality: GraphicsQuality::High,
             matched: false,
+            gpu_timing_every: 1,
         }
     }
 }
@@ -442,7 +446,10 @@ impl SceneBench {
         ));
         ctx.scene3d.set_quality(setup.quality);
         ctx.gfx.assets3d.decals_supported = super::supports_decals(&device);
-        let timer = GpuTimer::new(&device, &queue);
+        let mut timer = GpuTimer::new(&device, &queue);
+        if let Some(timer) = &mut timer {
+            timer.set_every(setup.gpu_timing_every);
+        }
         let mut bench = Self {
             kind,
             setup,
@@ -1496,7 +1503,9 @@ impl SceneBench {
                 &self.textures,
                 self.timer.as_ref(),
             );
-            if let Some(timer) = &mut self.timer {
+            // An untimed frame has nothing to resolve: no extra command
+            // buffer, as in a game, where the resolve goes into the frame's own.
+            if let Some(timer) = self.timer.as_mut().filter(|t| t.timing_this_frame()) {
                 let mut encoder = self.device.create_command_encoder(&Default::default());
                 timer.resolve(&mut encoder);
                 buffers.push(encoder.finish());

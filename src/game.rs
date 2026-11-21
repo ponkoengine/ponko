@@ -2860,7 +2860,8 @@ impl Game {
     }
 
     /// Reads gamepads from `backend` instead of the default: in a window the
-    /// engine reads them with gilrs (feature `gamepad`), and a headless run
+    /// engine reads them with gilrs (feature `gamepad`; on the web, from the
+    /// browser itself), and a headless run
     /// has none. The backend is polled once before setup, so its pads are
     /// connected there. [`FakeGamepads`](crate::input::FakeGamepads) is a
     /// scripted one for tests.

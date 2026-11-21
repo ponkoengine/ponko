@@ -26,6 +26,7 @@ pub(super) struct Measured {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct LayoutKey {
     pub viewport: Vec2,
+    pub safe_area: Option<crate::camera::Rect>,
     pub scale: f32,
     pub pixels: f32,
     pub external_fonts: bool,
@@ -38,6 +39,65 @@ pub(super) struct LayoutKey {
 pub(super) struct LayoutCache {
     pub key: Option<LayoutKey>,
     pub passes: u64,
+    /// Each node's text as measured, by slot. Kept while what it is
+    /// measured from holds, so a label Taffy asks again (its row resized
+    /// around it) is not measured again.
+    pub sizes: Vec<TextSizes>,
+}
+
+/// How many widths a wrapped text keeps its height for: a row resized
+/// back and forth, or Taffy asking for its smallest and its largest size,
+/// finds them kept.
+const WIDTHS: usize = 4;
+
+/// A node's text as measured, in layout units: its size unwrapped, its
+/// narrowest width, its height wrapped at each of the last few widths.
+#[derive(Default, Clone)]
+pub(super) struct TextSizes {
+    /// Its width and height on unwrapped lines.
+    natural: Option<Vec2>,
+    /// Wrapped: its widest word or image, as narrow as it can wrap.
+    min_content: Option<f32>,
+    /// Wrapped: its height at each width (`f32::to_bits`), the oldest
+    /// replaced first.
+    wrapped: [(u32, f32); WIDTHS],
+    /// How many of `wrapped` are measured.
+    len: u8,
+    /// The one replaced next once all are.
+    next: u8,
+}
+
+impl TextSizes {
+    /// Its unwrapped size, measured with `measure` the first time.
+    pub(super) fn natural(&mut self, measure: impl FnOnce() -> Vec2) -> Vec2 {
+        *self.natural.get_or_insert_with(measure)
+    }
+
+    /// Its narrowest width, measured with `measure` the first time.
+    pub(super) fn min_content(&mut self, measure: impl FnOnce() -> f32) -> f32 {
+        *self.min_content.get_or_insert_with(measure)
+    }
+
+    /// Its height wrapped at `width`, measured with `measure` unless this
+    /// width is one of the last few it was measured at.
+    pub(super) fn wrapped(&mut self, width: f32, measure: impl FnOnce() -> f32) -> f32 {
+        let bits = width.to_bits();
+        let len = usize::from(self.len);
+        if let Some(&(_, height)) = self.wrapped[..len].iter().find(|(w, _)| *w == bits) {
+            return height;
+        }
+        let height = measure();
+        let at = if len < WIDTHS {
+            self.len += 1;
+            len
+        } else {
+            let at = usize::from(self.next);
+            self.next = ((at + 1) % WIDTHS) as u8;
+            at
+        };
+        self.wrapped[at] = (bits, height);
+        height
+    }
 }
 
 impl Node {
@@ -104,9 +164,16 @@ impl Ui {
     /// shown root has something to lay out.
     pub(super) fn mark_layout_changes(&mut self, key: LayoutKey) -> bool {
         let all = self.layout_cache.key != Some(key);
-        for n in self.nodes.iter_mut().flatten() {
+        let sizes = &mut self.layout_cache.sizes;
+        sizes.resize(self.nodes.len(), TextSizes::default());
+        for (slot, n) in self.nodes.iter_mut().enumerate() {
+            let Some(n) = n else {
+                sizes[slot] = TextSizes::default();
+                continue;
+            };
             if n.measure_changed() | all {
                 let _ = self.tree.mark_dirty(n.layout);
+                sizes[slot] = TextSizes::default();
             }
         }
         self.layout_cache.key = Some(key);
@@ -264,6 +331,95 @@ mod tests {
         assert_eq!(passes_over(&mut ui, 1, &typed), 1);
         assert_eq!(ui.text(name), Some("Ada"));
         assert_eq!(passes_over(&mut ui, 3, &UiInput::default()), 0);
+    }
+
+    /// A row of a panel `width` wide and a plain and a rich wrapped label
+    /// sharing what is left; laid out once. Returns the UI, the panel and
+    /// the labels.
+    fn wrapped_row(width: f32) -> (Ui, crate::ui::UiId, [crate::ui::UiId; 2]) {
+        let mut ui = Ui::default();
+        let root = ui.root().layout(UiLayout::centered(400.0, 300.0)).id();
+        let row = ui.panel(root).layout(UiLayout::row(200.0).gap(4.0)).id();
+        let panel = ui.panel(row).layout(UiLayout::fixed(width, 20.0)).id();
+        let plain = ui
+            .label(
+                row,
+                "A paragraph long enough to wrap onto a few lines next to the panel.",
+            )
+            .wrap()
+            .layout(UiLayout::auto().grow(1.0))
+            .id();
+        let rich = ui
+            .label(
+                row,
+                "[color=#ff0]Gold[/color] and [b]a few more words[/b] to wrap as well.",
+            )
+            .rich()
+            .wrap()
+            .layout(UiLayout::auto().grow(1.0))
+            .id();
+        ui.push_modeless(root);
+        ui.frame(VIEW, &UiInput::default());
+        (ui, panel, [plain, rich])
+    }
+
+    #[test]
+    fn wrapped_text_is_measured_once_per_width_it_is_offered() {
+        let widths = [60.0, 140.0];
+        let (mut ui, panel, labels) = wrapped_row(widths[0]);
+        let sizes = |ui: &Ui| labels.map(|l| ui.rect(l).unwrap().size());
+        let first = sizes(&ui);
+        // The panel resized back and forth: each width is measured once.
+        ui.set_layout(panel, UiLayout::fixed(widths[1], 20.0));
+        ui.frame(VIEW, &UiInput::default());
+        let second = sizes(&ui);
+        assert_ne!(first, second, "the labels wrap differently");
+        for round in 0..6 {
+            let width = widths[round % 2];
+            ui.set_layout(panel, UiLayout::fixed(width, 20.0));
+            let (passes, measured) = (ui.layout_passes(), ui.measure.layouts());
+            ui.frame(VIEW, &UiInput::default());
+            assert_eq!(ui.layout_passes(), passes + 1, "laid out");
+            assert_eq!(ui.measure.layouts(), measured, "{width} wide again: no text measured");
+            assert_eq!(sizes(&ui), [first, second][round % 2], "{width} wide: the same sizes");
+        }
+        // What is kept is what a fresh layout gives.
+        for width in widths {
+            ui.set_layout(panel, UiLayout::fixed(width, 20.0));
+            ui.frame(VIEW, &UiInput::default());
+            let (fresh, _, fresh_labels) = wrapped_row(width);
+            assert_eq!(
+                sizes(&ui),
+                fresh_labels.map(|l| fresh.rect(l).unwrap().size()),
+                "{width} wide"
+            );
+        }
+        // The controls: a new width is measured, and the kept widths are
+        // bounded: after four others, the first is measured again.
+        ui.set_layout(panel, UiLayout::fixed(100.0, 20.0));
+        let measured = ui.measure.layouts();
+        ui.frame(VIEW, &UiInput::default());
+        assert!(ui.measure.layouts() > measured, "a new width is measured");
+        for width in [70.0, 80.0, 90.0, 110.0] {
+            ui.set_layout(panel, UiLayout::fixed(width, 20.0));
+            ui.frame(VIEW, &UiInput::default());
+        }
+        ui.set_layout(panel, UiLayout::fixed(widths[0], 20.0));
+        let measured = ui.measure.layouts();
+        ui.frame(VIEW, &UiInput::default());
+        assert!(
+            ui.measure.layouts() > measured,
+            "a width long forgotten is measured again"
+        );
+        assert_eq!(sizes(&ui), first);
+        // New text is measured again at a width it had.
+        ui.set_text(
+            labels[0],
+            "Another paragraph, long enough to wrap onto a few lines too.",
+        );
+        let measured = ui.measure.layouts();
+        ui.frame(VIEW, &UiInput::default());
+        assert!(ui.measure.layouts() > measured, "new text is measured");
     }
 
     #[test]

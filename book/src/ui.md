@@ -347,6 +347,12 @@ ctx.ui.show_hud(corner);
 C++: `tree.show_hud(root)`, `tree.hide_hud(root)` and `tree.is_hud(root)`;
 C: `ponko_ctx_ui_show_hud`, `ponko_ctx_ui_hide_hud` and `ponko_ctx_ui_is_hud`.
 
+On a phone, give a HUD or a screen `.inside_safe_area()` when it is made
+(`ctx.ui.set_inside_safe_area(root, true)`) and it is laid out clear of the
+notch, the home bar and the rounded corners, in `ctx.window.safe_area()`; see
+[Touch](touch.md#notches-home-bars-and-rounded-corners). Roots are laid out
+in the whole window by default (Rust-only so far).
+
 ## Events, navigation and ownership
 
 <div class="lang-pair">
@@ -627,19 +633,41 @@ keep their sprites and only move in depth. A node that moves redraws itself and 
 else.
 
 Text keeps its glyphs separately from the rest of its node. While a node's
-text, font, size, wrapping, alignment and place stay the same, drawing it
-again pushes the glyphs it laid out before, in its color now: a node whose
-opacity, scale, offset, background or text color animates, or whose fill
-fades on hover, is drawn each frame without its text being shaped or laid
-out again. Only a focused text field measures its caret and selection each
-time it is drawn.
+text, font, size, wrapping, alignment and width stay the same, drawing it
+again places the glyphs it laid out before where the node is now, in its
+color now. Only that placing is redone: each line's origin snaps to the
+physical pixel grid again, so the text looks the same wherever it lands. A
+node that moves (a scroll area or list scrolled by a fraction of a pixel, a
+row whose sibling resized), and a node whose opacity, scale, offset,
+background or text color animates, or whose fill fades on hover, is drawn
+each frame without its text being shaped, measured or wrapped again. A
+virtual list scrolled past a row lays out only the item that came into
+view. The tooltip and an item dragged with the pointer lay their text out
+once, not on each frame they follow the pointer. Only a focused text field
+measures its caret and selection each time it is drawn.
+
+Text that doesn't wrap, plain or rich, is aligned in its box's width as it
+is placed, so its width is not part of what its glyphs are kept for: a
+label pushed sideways, whose width changes in its last bits as it moves,
+or a centred label in a box that grows, keeps them. Wrapped text breaks its
+lines at its width, so it is laid out again when its width changes. Its
+size is measured for the layout once per width, though: the layout keeps a
+wrapped label's height at the last four widths it was offered, so a label
+in a row whose sibling resizes back and forth is not measured again for a
+width it has had.
 
 The `ui/draw-...` benchmarks of `ponko_bench` time the UI's frame and draw
 list for the same HUD and settings screen, with every glyph pushed as with
 a GPU. A frame of the settings screen fading went from about 0.20 ms to
 0.030 ms with this, one where 40 labels pulse in color from 0.047 ms to
 0.027 ms, and one where a HUD slot is added or removed from 0.21 ms to
-0.027 ms; a still frame costs about 0.024 ms.
+0.027 ms; a still frame costs about 0.024 ms. A frame with the settings
+screen's list scrolling a fraction of a pixel went from about 0.074 ms to
+0.028 ms once moved text kept its glyphs. In `ui/draw-resize`, a panel in a
+row of the settings screen switches between two widths each frame, moving a
+rich label sideways and giving a wrapped paragraph each width in turn; a
+frame went from about 0.105 ms to 0.068 ms with aligned rich lines and
+wrapped sizes kept per width.
 
 The `frame2d/...` benchmarks of `ponko_bench` time a whole 2D frame without a
 window (2,000 sprites under a HUD and a settings screen of about 150 nodes):
@@ -845,6 +873,13 @@ How it is checked:
   roles, names, descriptions, values and states, operates the menu through
   the Action, Value and Component interfaces, and turns accessibility off
   and on again to check that the tree comes back whole.
+- **In the engine's own window, offscreen** (by hand, on macOS and
+  Windows: `cargo test --features accessibility --test ui_access_window --
+  --ignored`): `Game::run` attaches the adapter to its window, which opens
+  far off the screen, and the system's accessibility API (`NSAccessibility`
+  on macOS, a UI Automation client on Windows) finds Play through that
+  window and presses it; the check passes when the game's status line
+  changes.
 - **In the engine's own window on macOS** (by hand, `PONKO_ACCESS_WINDOW=1
   cargo test --features accessibility --test ui_access_macos
   engine_window`): the game runs with `Game::run`, which attaches the

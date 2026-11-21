@@ -1115,29 +1115,29 @@
     "reason": "The host finds the peer ID in this same map immediately before removing it. Nothing changes the map between the two operations.",
     "site": "src/net/messages.rs:871"
   },
+  "src/net/messages.rs:196cba739fc4328e": {
+    "classification": "invariant",
+    "construction": ".expect(\"loopback inbox\")",
+    "reason": "Internal invariant: the loopback inbox lock is only held for a push or a pop, nothing panics while holding it, so it is never poisoned.",
+    "site": "src/net/messages.rs:472"
+  },
   "src/net/messages.rs:26af48c2452f30a6": {
     "classification": "caller-contract",
     "construction": "assert!(!timeout.is_zero(), \"timeout must be positive\")",
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. ///     .timeout(std::time::Duration::from_secs(3));     /// ```     pub fn timeout(mut self, timeout: Duration) -> Self {         assert!(!timeout.is_zero(), \"timeout must be positive\");",
     "site": "src/net/messages.rs:549"
   },
+  "src/net/messages.rs:28e351f01ca7bcd5": {
+    "classification": "caller-contract",
+    "construction": "assert!((2..=1025).contains(&players), \"players must be 2..=1025\")",
+    "reason": "Caller constraint given in the message (documented under Panics of loopback_lossy and loopback_link): 2..=1025 players.",
+    "site": "src/net/messages.rs:696"
+  },
   "src/net/messages.rs:30a7d9cc767c741d": {
     "classification": "invariant",
     "construction": ".expect(\"sequence\")",
     "reason": "Internal invariant: };                             let bytes = if lane == Lane::Unreliable {                                 let Some(seq) = message.get(..8) else { continue };                                 let seq = u64::from_le_bytes(seq.try_into().expect(\"sequence\"));",
     "site": "src/net/messages.rs:789"
-  },
-  "src/net/messages.rs:37a4933813d5dc1d": {
-    "classification": "invariant",
-    "construction": ".expect(\"loopback inbox\")",
-    "reason": "Internal invariant: if *drop_one_in != 0 && sent.is_multiple_of(u64::from(*drop_one_in)) {                     return Ok(true);                 }                 let mut queues = inboxes.lock().expect(\"loopback inbox\");",
-    "site": "src/net/messages.rs:309"
-  },
-  "src/net/messages.rs:6448dbb4163b724c": {
-    "classification": "invariant",
-    "construction": ".expect(\"loopback inbox\")",
-    "reason": "Internal invariant: }             Self::Local { me, inboxes, .. } => {                 // Reverse arrival intentionally exercises packet reordering.                 Ok(inboxes.lock().expect(\"loopback inbox\")[*me]",
-    "site": "src/net/messages.rs:344"
   },
   "src/net/messages.rs:77624beeee3c4998": {
     "classification": "invariant",
@@ -1157,11 +1157,17 @@
     "reason": "Internal invariant: return Ok(());         }         let kind = data[4];         let cn = u64::from_le_bytes(data[5..13].try_into().expect(\"nonce\"));",
     "site": "src/net/messages.rs:845"
   },
-  "src/net/messages.rs:f999663cc29faf55": {
+  "src/net/messages.rs:cd5dbc75f40d9bee": {
+    "classification": "invariant",
+    "construction": ".expect(\"loopback inbox\")",
+    "reason": "Internal invariant: the loopback inbox lock is only held for a push or a pop, nothing panics while holding it, so it is never poisoned.",
+    "site": "src/net/messages.rs:436"
+  },
+  "src/net/messages.rs:f1db41b6067982c3": {
     "classification": "caller-contract",
-    "construction": "assert!((2..=1025).contains(&players), \"players must be 2..=1025\")",
-    "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. /// assert_eq!(nets.len(), 2);     /// ```     pub fn loopback_lossy(players: usize, drop_one_in: u32) -> Vec<Self> {         assert!((2..=1025).contains(&players), \"players must be 2..=1025\");",
-    "site": "src/net/messages.rs:516"
+    "construction": "assert!((0.0..=1.0).contains(&share), \"loss must be a share from 0.0 to 1.0\")",
+    "reason": "The message names the misuse: a loss share outside 0.0..=1.0 (documented under Panics).",
+    "site": "src/net/messages.rs:300"
   },
   "src/net/prediction.rs:233709b9d75182b7": {
     "classification": "caller-contract",
@@ -1571,17 +1577,11 @@
     "reason": "Preserves setup/runtime policy; displays the checked operation error. /// # }     /// ```     pub fn load_collision_mesh(&mut self, path: &str) -> CollisionMesh {         self.try_load_collision_mesh(path).unwrap_or_else(|e| panic!(\"{e}\"))",
     "site": "src/physics3d/files.rs:92"
   },
-  "src/physics3d/mod.rs:42efbc4415026baf": {
+  "src/physics3d/mod.rs:60360e84506e1514": {
     "classification": "invariant",
     "construction": ".expect(\"live slot\")",
-    "reason": "Internal invariant: Vec3::ZERO,             ),             Shape3D::Mesh(m) => match self.mesh(m) {                 Some(slot) if scale == Vec3::ONE => (slot.shape.clone().expect(\"live slot\"), slot.offset),",
-    "site": "src/physics3d/mod.rs:1119"
-  },
-  "src/physics3d/mod.rs:93347f7f19f62db8": {
-    "classification": "invariant",
-    "construction": ".expect(\"live slot\")",
-    "reason": "Internal invariant: Shape3D::Mesh(m) => match self.mesh(m) {                 Some(slot) if scale == Vec3::ONE => (slot.shape.clone().expect(\"live slot\"), slot.offset),                 Some(slot) => (                     streaming::scaled(slot.shape.as_ref().expect(\"live slot\"), scale),",
-    "site": "src/physics3d/mod.rs:1121"
+    "reason": "Internal invariant: Physics3D::mesh returns only slots of live meshes, whose shape is set.",
+    "site": "src/physics3d/mod.rs:1300"
   },
   "src/physics3d/query.rs:96d8397a15f3de54": {
     "classification": "invariant",
@@ -3425,12 +3425,6 @@
     "reason": "Preserves setup/runtime policy; displays the checked operation error. /// or the GPU can't make a texture that large.     pub fn create_ui_panel(&mut self, width: u32, height: u32, size: Vec2) -> (UiPanel3D, crate::render::Model) {         self.try_create_ui_panel(width, height, size)             .unwrap_or_else(|message| panic!(\"{message}\"))",
     "site": "src/ui/panel3d.rs:195"
   },
-  "src/ui/retained.rs:010e9dbca8b3f128": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "Screens and HUDs hold live roots: Ui::remove takes a removed root off both lists.",
-    "site": "src/ui/retained.rs:1707"
-  },
   "src/ui/retained.rs:0274e1172425e574": {
     "classification": "caller-contract",
     "construction": "assert!( self.node(root).is_some_and(|n| n.parent.is_none()), \"UI screen must be a detached root; add a root node or detach it before pushing\" )",
@@ -3556,6 +3550,12 @@
     "construction": "assert!( !self.is_screen(root), \"UI HUD is already a screen; pop it before showing it as a HUD\" )",
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. self.node(root).is_some_and(|n| n.parent.is_none()),             \"UI HUD must be a detached root; add a root node or detach it first\"         );         assert!(",
     "site": "src/ui/retained.rs:1124"
+  },
+  "src/ui/retained.rs:785a0ef1e04eb5d2": {
+    "classification": "invariant",
+    "construction": ".unwrap()",
+    "reason": "HUD and screen roots are live nodes: a root's node is freed only when it is removed from huds/screens.",
+    "site": "src/ui/retained.rs:1798"
   },
   "src/ui/retained.rs:842ad1d2c7596002": {
     "classification": "invariant",

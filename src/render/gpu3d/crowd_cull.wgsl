@@ -1,5 +1,6 @@
 // Crowd culling (see `crowds.rs`): one thread per character tests its
-// culling box (its clips' box under its transform) against every view of
+// culling box (the box of the frame range its clip shows now, under its
+// transform) against every view of
 // the frame and its origin's distance against each level's band, and
 // appends it to the visible list of each (view, level) that draws it:
 // from the list's front when the level draws it whole, from its back when
@@ -22,9 +23,10 @@ struct Params {
     row: u32,
     // Clips in the bake.
     clips: u32,
-    // Where the clips' boxes start in `views` (two vec4s a clip: lowest
-    // and highest corner, around every level's mesh in every frame baked
-    // of the clip, in model space).
+    // Where the cull table starts in `views` (`CrowdData::cull_table`): per
+    // clip a vec4 (frames, fps, looping, its first frame range), then per
+    // frame range two vec4s (lowest and highest corner, around every
+    // level's mesh in the frames of the range, in model space).
     boxes_at: u32,
     // 1: the first view (the camera) leaves out what the depth grid hides.
     occlusion: u32,
@@ -37,7 +39,9 @@ struct Params {
     probes: u32,
     probes_at: u32,
     cut: f32,
-    pad0: u32,
+    // Seconds the characters' clips played on since their times (as
+    // `elapsed` in `crowd_vertex.wgsl`).
+    elapsed: f32,
     // Per level: nearest distance, farthest (exclusive), the distance it
     // fades out over before the farthest, and in over before the nearest.
     bands: array<vec4<f32>, 8>,
@@ -60,7 +64,7 @@ struct Grid {
 // Per view: six planes, then the eye (w: 1 for a shadow view). After the
 // views, the level of each indirect draw, four to a vec4 (as bits), then
 // the probes global illumination updates this frame, and from `boxes_at`
-// the clips' boxes.
+// the cull table.
 @group(0) @binding(2) var<storage, read> views: array<vec4<f32>>;
 @group(0) @binding(3) var<storage, read_write> visible: array<u32>;
 // Per (view, level) two counts (whole, dithered), then the indirect draws
@@ -124,6 +128,32 @@ fn probe_sized(center: vec3<f32>, radius: f32) -> bool {
     return false;
 }
 
+// Frames of a clip that share a box (`RANGE_FRAMES` in `three/crowd.rs`).
+const RANGE_FRAMES: u32 = 4u;
+
+struct Bounds {
+    lo: vec3<f32>,
+    hi: vec3<f32>,
+};
+
+// The box of clip `clip` at `t` seconds: its frame range's, the range of
+// the first of the two frames the vertex shader blends (`crowd_frames`
+// in `crowd_vertex.wgsl`; `range_at` in `three/crowd.rs`).
+fn range_bounds(clip: u32, t: f32) -> Bounds {
+    let c = views[params.boxes_at + min(clip, params.clips - 1u)];
+    let last = max(c.x - 1.0, 0.0);
+    var p = t * c.y;
+    if c.z > 0.5 && last > 0.0 {
+        p = p - floor(p / last) * last;
+    } else {
+        p = clamp(p, 0.0, last);
+    }
+    let first = u32(max(min(floor(p), last), 0.0));
+    let range = min(first / RANGE_FRAMES, u32(last) / RANGE_FRAMES);
+    let k = params.boxes_at + params.clips + (u32(c.w) + range) * 2u;
+    return Bounds(views[k].xyz, views[k + 1u].xyz);
+}
+
 @compute @workgroup_size(64)
 fn cull(@builtin(global_invocation_id) id: vec3<u32>) {
     let i = id.x + id.y * params.row;
@@ -135,21 +165,23 @@ fn cull(@builtin(global_invocation_id) id: vec3<u32>) {
     let m1 = records[base + 1u].xyz;
     let m2 = records[base + 2u].xyz;
     let origin = records[base + 3u].xyz;
-    // The box of the clip it plays, of the one it blends to, or of both
-    // while it blends (as `character_bounds` in `three/crowd.rs`).
+    // The box of the frame range its clip shows now, of the one its blend
+    // clip shows, or of both while it blends (as `character_bounds_at` in
+    // `three/crowd.rs`).
     let anim = bitcast<vec4<u32>>(records[base + 5u]);
     let blend = anim.w & 0xffffu;
+    let speed = f32(bitcast<i32>(anim.w) >> 16u) / 256.0;
     var lo = vec3<f32>(1e30);
     var hi = vec3<f32>(-1e30);
     if blend < 0xffffu {
-        let k = params.boxes_at + min(anim.x & 0xffffu, params.clips - 1u) * 2u;
-        lo = views[k].xyz;
-        hi = views[k + 1u].xyz;
+        let b = range_bounds(anim.x & 0xffffu, bitcast<f32>(anim.y) + speed * params.elapsed);
+        lo = b.lo;
+        hi = b.hi;
     }
     if blend > 0u {
-        let k = params.boxes_at + min(anim.x >> 16u, params.clips - 1u) * 2u;
-        lo = min(lo, views[k].xyz);
-        hi = max(hi, views[k + 1u].xyz);
+        let b = range_bounds(anim.x >> 16u, bitcast<f32>(anim.z) + speed * params.elapsed);
+        lo = min(lo, b.lo);
+        hi = max(hi, b.hi);
     }
     // In the world: a center and three half axes (`CullBox`).
     let mid = (lo + hi) * 0.5;

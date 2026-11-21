@@ -26,6 +26,10 @@
 //! South presses seen. Pressing West makes the game rumble that pad for 2.5
 //! seconds (`Rumble::new(0.8, 0.3)`), which the runner sees as the calls
 //! on the page's fake `vibrationActuator`; `rumble` is the pad's capability.
+//! Pressing North rumbles that pad's trigger motors with the weak body
+//! motor for 1.5 seconds (`Rumble::new(0.0, 0.2).triggers(0.4, 0.9)`): a
+//! pad whose actuator plays `trigger-rumble` gets all four levels, any other
+//! the body motor alone; `trigger_rumble` is that capability.
 //!
 //! **Bench** (`?bench=<workload>&threads=<n>`, `threads=1` for one
 //! thread): times one workload of the native simulation benchmarks
@@ -234,6 +238,7 @@ fn pads(input: &Input) -> serde_json::Value {
                 "vendor": info.and_then(|i| i.vendor_id),
                 "product": info.and_then(|i| i.product_id),
                 "rumble": info.map(|i| i.capabilities.rumble),
+                "trigger_rumble": info.map(|i| i.capabilities.trigger_rumble),
                 "down": down,
                 "axes": {
                     "lx": axis(GamepadAxis::LeftStickX),
@@ -357,6 +362,17 @@ fn check(game: Game) {
             .collect();
         for pad in west {
             ctx.input.rumble(pad, Rumble::new(0.8, 0.3).seconds(2.5));
+        }
+        let north: Vec<_> = ctx
+            .input
+            .gamepads()
+            .iter()
+            .copied()
+            .filter(|&p| ctx.input.gamepad_pressed(p, GamepadButton::North))
+            .collect();
+        for pad in north {
+            ctx.input
+                .rumble(pad, Rumble::new(0.0, 0.2).triggers(0.4, 0.9).seconds(1.5));
         }
         let extra = json!({
             "threads": engine_threads(),

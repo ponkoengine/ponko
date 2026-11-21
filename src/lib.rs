@@ -62,7 +62,7 @@
 //! - `audio` (default): sound through kira; without it sounds are silent.
 //! - `inspector` (default): the in-game inspector overlay (egui), opened
 //!   with the backquote key. On in debug builds; see `Game::inspector`.
-//! - `gamepad` (default): gamepads through gilrs; without it
+//! - `gamepad` (default): gamepads through gilrs (the browser's own on the web); without it
 //!   `Input::gamepads` is always empty. On Linux it needs libudev headers.
 //! - `profiling`: per-system scopes for `puffin_viewer`. (Not needed for
 //!   [`profile_scope!`], [`Perf::report`](perf::Perf::report) or [`CountingAllocator`](ponko::perf::CountingAllocator), which
@@ -146,21 +146,17 @@ pub mod error;
 pub mod events;
 pub mod flow;
 pub mod game;
-// Not in a web build with threads: the browser's gamepad objects can't be sent
-// between threads there (`GamepadBackend` is `Send`), so such a build reads
-// them with `gamepad_web` instead.
-#[cfg(all(feature = "gamepad", not(all(target_arch = "wasm32", target_feature = "atomics"))))]
+// The built-in controllers on the desktop: gilrs.
+#[cfg(all(feature = "gamepad", not(target_arch = "wasm32")))]
 mod gamepad;
-// The built-in controllers of a web build with threads (and its tests, natively).
-#[cfg(all(
-    feature = "gamepad",
-    any(test, all(target_arch = "wasm32", target_feature = "atomics"))
-))]
+// The built-in controllers of every web build (and its tests, natively): the
+// browser's gamepads, read by the engine itself.
+#[cfg(all(feature = "gamepad", any(test, target_arch = "wasm32")))]
 mod gamepad_web;
-// Rumble through the browser's `vibrationActuator`, shared by both web gamepad backends.
 pub mod gfx;
 pub mod handle;
 pub mod hierarchy;
+// Rumble through the browser's `vibrationActuator`, for `gamepad_web`.
 #[cfg(all(feature = "gamepad", any(test, target_arch = "wasm32")))]
 mod web_rumble;
 
