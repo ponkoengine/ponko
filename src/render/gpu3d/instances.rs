@@ -19,7 +19,8 @@
 //! - **CPU** (WebGL2 and other devices without compute culling, small
 //!   batches, and batches that exceed a device limit): the batch's cells are
 //!   culled on the CPU and the instances drawn straight from a vertex
-//!   buffer, one draw per run of neighbouring visible instances. Distances
+//!   buffer, one draw per run of neighbouring visible instances (instance
+//!   cells' runs of their shared buffer join across cells). Distances
 //!   are tested per instance where a cell straddles a band's edge, so both
 //!   paths draw the same instances but for those outside the view or hidden
 //!   behind others, which leave no pixels.
