@@ -125,6 +125,7 @@ skip = [
     { crate = "foldhash@0.1.5", reason = "follows hashbrown 0.15" },
     { crate = "rustc-hash@1.1.0", reason = "naga and wgpu-core; dioxus (hot patching) and type-map use 2.x" },
     { crate = "itertools@0.14.0", reason = "puffin (the optional `profiling` feature); egui uses 0.15" },
+    { crate = "allocator-api2@0.2.21", reason = "hashbrown 0.15 and 0.16 (kira's hashlink, fontdue, gpu-allocator, spade); talc 5 (one heap per thread on the web, `--cfg ponko_web_thread_heaps`) uses 0.4" },
 
     # -- Hashes, ciphers and random numbers: the WebRTC stack (str0m's dimpl,
     #    the optional `webrtc` feature) is on the newer RustCrypto and rand
