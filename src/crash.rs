@@ -1059,7 +1059,7 @@ mod os {
         (status == 0).then(|| format!("{}.{}.{}", info.major, info.minor, info.build))
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows, target_arch = "wasm32")))]
     fn version() -> Option<String> {
         None
     }
@@ -1081,7 +1081,7 @@ mod os {
         Some(format!("{} {}", field(&name.sysname), field(&name.release)))
     }
 
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, target_arch = "wasm32")))]
     fn kernel() -> Option<String> {
         None
     }

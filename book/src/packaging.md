@@ -576,6 +576,10 @@ the game starts from the defaults and says so on the title screen. A write that
 fails (a read-only disk) is shown and doesn't stop the game. The tests cover
 every one of these cases for both files.
 
+A packaged game also leaves a [crash report](crash-reports.md) in
+`crash-reports/` of the same folder when it panics: the release build has
+them on by default.
+
 ## The web build
 
 ```sh
