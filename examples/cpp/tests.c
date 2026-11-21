@@ -3008,6 +3008,119 @@ static void headless_play(void) {
     CHECK(!up[0] && !up[1] && up[2] && up[3] && !up[4] && !up[5]);
 }
 
+/* World brains inside query loops: the brain and blackboard columns. */
+typedef struct BrainLoop {
+    uint64_t alert, chase, speed, at;
+    uint32_t ids[2];
+    int chasing, started;
+    float seen_speed;
+} BrainLoop;
+
+static uint64_t ai_key_of(const char* name) {
+    uint64_t k = 0;
+    CHECK(ponko_ai_key(name, &k) == PONKO_OK);
+    return k;
+}
+
+static void brain_senses_rows(const PonkoChunk* chunk, void* user) {
+    const BrainLoop* l = user;
+    for (size_t i = 0; i < chunk->count; ++i) {
+        PonkoAiBlackboard* board = ponko_chunk_ai_blackboard(chunk, 1, i);
+        CHECK(board != NULL);
+        CHECK(ponko_ai_blackboard_set_flag(board, l->alert, true) == PONKO_OK);
+        PonkoVec2 at = {(float)i, 2};
+        CHECK(ponko_ai_blackboard_set_vec2(board, l->at, at) == PONKO_OK);
+    }
+    CHECK(ponko_chunk_ai_blackboard(chunk, 1, chunk->count) == NULL);
+}
+
+static void brain_act_rows(const PonkoChunk* chunk, void* user) {
+    BrainLoop* l = user;
+    for (size_t i = 0; i < chunk->count; ++i) {
+        PonkoAiBrain* brain = ponko_chunk_ai_brain(chunk, 0, i);
+        const PonkoAiBlackboard* board = ponko_chunk_ai_blackboard(chunk, 1, i);
+        uint64_t action = 0;
+        bool started = false, alert = false;
+        PonkoVec2 at = {0, 0};
+        CHECK(ponko_ai_brain_action(brain, 0, &action) == PONKO_OK);
+        CHECK(ponko_ai_blackboard_flag(board, l->alert, &alert) == PONKO_OK && alert);
+        CHECK(ponko_ai_blackboard_vec2(board, l->at, &at) == PONKO_OK && at.y == 2);
+        if (action != l->chase) continue;
+        ++l->chasing;
+        CHECK(ponko_ai_brain_started(brain, 0, &started) == PONKO_OK);
+        if (started) ++l->started;
+        CHECK(ponko_ai_brain_param_num(brain, 0, l->speed, &l->seen_speed) == PONKO_OK);
+        CHECK(ponko_ai_brain_finish(brain, l->chase, PONKO_AI_SUCCESS) == PONKO_OK);
+    }
+}
+
+static void brain_senses(PonkoCtx* ctx, void* user) {
+    BrainLoop* l = user;
+    CHECK(ponko_query(ponko_ctx_world(ctx), l->ids, 2, brain_senses_rows, l) == PONKO_OK);
+}
+
+static void brain_think(PonkoCtx* ctx, void* user) {
+    (void)user;
+    CHECK(ponko_ctx_ai_think(ctx) == PONKO_OK);
+}
+
+static void brain_act(PonkoCtx* ctx, void* user) {
+    BrainLoop* l = user;
+    CHECK(ponko_query(ponko_ctx_world(ctx), l->ids, 2, brain_act_rows, l) == PONKO_OK);
+}
+
+static void brain_setup(PonkoCtx* ctx, void* user) {
+    BrainLoop* l = user;
+    PonkoWorld* w = ponko_ctx_world(ctx);
+    CHECK(ponko_ai_brain_component(w, &l->ids[0]) == PONKO_OK);
+    CHECK(ponko_ai_blackboard_component(w, &l->ids[1]) == PONKO_OK);
+    PonkoBehaviorTree* tree = ponko_behavior_tree_new(
+        "{\"root\": {\"sequence\": [{\"check\": \"alert\"}, {\"do\": \"chase\", \"speed\": 2.5}]}}");
+    CHECK(tree != NULL);
+    CHECK(ponko_ctx_ai_add_tree(ctx, "guard", tree) == PONKO_OK);
+    ponko_behavior_tree_free(tree);
+    for (int i = 0; i < 4; ++i) {
+        uint64_t e = 0;
+        CHECK(ponko_spawn(w, NULL, 0, &e) == PONKO_OK);
+        CHECK(ponko_ctx_ai_add_brain(ctx, e, "guard", 1) == PONKO_OK);
+        if (i == 0) {
+            /* Entities and points on a blackboard read back by entity, too. */
+            PonkoVec3 p = {1, 2, 3}, q = {0, 0, 0};
+            uint64_t buddy = 0;
+            CHECK(ponko_ctx_ai_set_entity(ctx, e, ai_key_of("buddy"), e) == PONKO_OK);
+            CHECK(ponko_ctx_ai_set_vec3(ctx, e, ai_key_of("p3"), p) == PONKO_OK);
+            CHECK(ponko_ctx_ai_entity(ctx, e, ai_key_of("buddy"), &buddy) == PONKO_OK && buddy == e);
+            CHECK(ponko_ctx_ai_vec3(ctx, e, ai_key_of("p3"), &q) == PONKO_OK && q.z == 3);
+            PonkoVec2 none;
+            CHECK(ponko_ctx_ai_vec2(ctx, e, ai_key_of("p3"), &none) == PONKO_NOT_FOUND);
+        }
+    }
+}
+
+static void world_brains_in_loops(void) {
+    BrainLoop l = {ai_key_of("alert"), ai_key_of("chase"), ai_key_of("speed"), ai_key_of("at"), {0, 0}, 0, 0, 0};
+    PonkoGame* game = ponko_game_new("brain loops", 1, 1);
+    CHECK(ponko_game_sim_system(game, "senses", 1, brain_senses, &l) == PONKO_OK);
+    CHECK(ponko_game_sim_system(game, "think", 1, brain_think, &l) == PONKO_OK);
+    CHECK(ponko_game_sim_system(game, "act", 1, brain_act, &l) == PONKO_OK);
+    PonkoWorld* w = NULL;
+    CHECK(ponko_game_run_headless(game, 4, brain_setup, &l, &w) == PONKO_OK);
+    ponko_world_free(w);
+    /* Each chase is reported done when seen: the tree succeeds at the next
+       think and starts over at the one after, so they chase at ticks 0 and 2. */
+    CHECK(l.chasing == 8 && l.started == 8 && l.seen_speed == 2.5f);
+
+    /* A native brain's blackboard holds entities and points as well. */
+    PonkoBrain* b = ponko_brain_new(1);
+    PonkoVec2 p = {3, 4}, q = {0, 0};
+    uint64_t e = 0;
+    CHECK(ponko_brain_set_vec2(b, l.at, p) == PONKO_OK && ponko_brain_vec2(b, l.at, &q) == PONKO_OK && q.y == 4);
+    CHECK(ponko_brain_set_entity(b, l.alert, 9) == PONKO_OK && ponko_brain_entity(b, l.alert, &e) == PONKO_OK && e == 9);
+    PonkoVec3 r;
+    CHECK(ponko_brain_vec3(b, l.at, &r) == PONKO_NOT_FOUND);
+    ponko_brain_free(b);
+}
+
 int main(void) {
     states();
     change_detection();
@@ -3114,5 +3227,6 @@ int main(void) {
     render_descriptors();
     camera_rigs();
     headless_play();
+    world_brains_in_loops();
     return 0;
 }
