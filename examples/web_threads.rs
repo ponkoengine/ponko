@@ -19,6 +19,12 @@
 //! many threads ran them. `?smoke_case=worker-panic` panics inside the
 //! parallel query at tick 30: the game must stop with an error, not hang.
 //!
+//! `pads` lists the controllers the engine sees (`threads.mjs --case
+//! gamepads` feeds the page fake browser gamepads): `[{"slot":0,"name":"...",
+//! "family":"Xbox","vendor":69,"product":2835,"down":["South"],"axes":{"lx":0.5,
+//! "ly":-1,"rx":0,"ry":0,"lt":0.25,"rt":0}}]`, and `pad_presses` counts the
+//! South presses seen.
+//!
 //! **Bench** (`?bench=<workload>&threads=<n>`, `threads=1` for one
 //! thread): times one workload of the native simulation benchmarks
 //! (`crates/ponko_bench`), then publishes `bench` (the workload, the
@@ -44,6 +50,7 @@ use std::time::Duration;
 
 use ponko::access::SystemAccess;
 use ponko::assets::{AssetGroup, GroupId, GroupState};
+use ponko::input::Input;
 use ponko::prelude::*;
 use ponko::streaming::Job;
 use ponko::system_view::SystemView;
@@ -186,10 +193,64 @@ fn main() {
     }
 }
 
+/// The controllers the engine sees, for the runner's `gamepads` case.
+fn pads(input: &Input) -> serde_json::Value {
+    use GamepadButton as B;
+    const BUTTONS: [GamepadButton; 16] = [
+        B::South,
+        B::East,
+        B::North,
+        B::West,
+        B::LeftBumper,
+        B::RightBumper,
+        B::LeftTrigger,
+        B::RightTrigger,
+        B::Select,
+        B::Start,
+        B::LeftStick,
+        B::RightStick,
+        B::DPadUp,
+        B::DPadDown,
+        B::DPadLeft,
+        B::DPadRight,
+    ];
+    let pads: Vec<_> = input
+        .gamepads()
+        .iter()
+        .map(|&pad| {
+            let info = input.gamepad_info(pad);
+            let down: Vec<_> = BUTTONS
+                .iter()
+                .filter(|&&b| input.gamepad_down(pad, b))
+                .map(|b| format!("{b:?}"))
+                .collect();
+            let axis = |a| input.gamepad_axis(pad, a);
+            json!({
+                "slot": pad.slot(),
+                "name": info.map(|i| i.name.clone()),
+                "family": info.map(|i| format!("{:?}", i.family)),
+                "vendor": info.and_then(|i| i.vendor_id),
+                "product": info.and_then(|i| i.product_id),
+                "down": down,
+                "axes": {
+                    "lx": axis(GamepadAxis::LeftStickX),
+                    "ly": axis(GamepadAxis::LeftStickY),
+                    "rx": axis(GamepadAxis::RightStickX),
+                    "ry": axis(GamepadAxis::RightStickY),
+                    "lt": axis(GamepadAxis::LeftTrigger),
+                    "rt": axis(GamepadAxis::RightTrigger),
+                },
+            })
+        })
+        .collect();
+    json!(pads)
+}
+
 /// What the check publishes, filled in by its systems.
 #[derive(Default)]
 struct Check {
     ticks: u64,
+    pad_presses: u64,
     checksum: Option<f64>,
     wait_off_page: Option<bool>,
     job_off_page: Option<bool>,
@@ -278,6 +339,12 @@ fn check(game: Game) {
             }
         }
         let batch_threaded_runs = s.batch_threaded_runs;
+        s.pad_presses += ctx
+            .input
+            .gamepads()
+            .iter()
+            .filter(|&&p| ctx.input.gamepad_pressed(p, GamepadButton::South))
+            .count() as u64;
         let extra = json!({
             "threads": engine_threads(),
             "isolated": isolated(),
@@ -293,6 +360,8 @@ fn check(game: Game) {
             "group_off_page": s.group_off_page,
             "group_bytes": s.group_bytes,
             "checksum": s.checksum,
+            "pads": pads(&ctx.input),
+            "pad_presses": s.pad_presses,
         });
         let ticks = s.ticks;
         drop(s);
