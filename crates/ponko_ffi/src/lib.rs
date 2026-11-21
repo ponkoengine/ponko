@@ -30,6 +30,7 @@
 mod access;
 mod actions;
 mod ai;
+mod ai_columns;
 mod ai_world;
 mod animator;
 mod asset_groups;
@@ -153,6 +154,7 @@ mod camera_rigs;
 mod viewports;
 // Touch input, gestures and on-screen controls (gl#61).
 mod touch;
+mod touch_layout;
 // The water kit: lakes, rivers, seas and buoyancy (gl#51).
 mod water;
 // Native API parity, round 4 (gl#122): hooks, sky kit, video, baking,
@@ -165,13 +167,18 @@ mod replication_raw;
 mod scenario_touch;
 mod sky_kit;
 mod video;
+// Native API parity, round 5 (gl#157): crash reports and sliced loaders.
+mod crash;
+mod slice_loaders;
 pub use access::*;
 pub use actions::*;
 pub use ai::*;
+pub use ai_columns::*;
 pub use ai_world::*;
 pub use animator::*;
 pub use component_hooks::*;
 pub use controllers::*;
+pub use crash::*;
 pub use crowd_clips::*;
 pub use debug::*;
 pub use ime::*;
@@ -182,6 +189,7 @@ pub use replication_raw::*;
 pub use scenario_touch::*;
 pub use skeleton2d::*;
 pub use sky_kit::*;
+pub use slice_loaders::*;
 pub use states::*;
 pub use video::*;
 /// Counts the library's heap allocations while profiling is on (one atomic
@@ -278,6 +286,7 @@ pub use text3d::*;
 pub use three::*;
 pub use tiles::*;
 pub use touch::*;
+pub use touch_layout::*;
 pub use types::*;
 pub use ui_access::*;
 pub use ui_focus_hud::*;
@@ -1324,12 +1333,20 @@ pub(crate) fn resolve(w: &World, input: &[u32]) -> Result<([ComponentId; 32], [u
         if input[..i].contains(&raw) {
             return Err(invalid("duplicate query component id"));
         }
-        let (id, kind) = component(w, raw)?;
-        if !kind.is_plain() {
-            return Err(invalid(
-                "sprites and physics bodies/colliders can't be query columns: use ponko_get/ponko_set",
-            ));
-        }
+        // Brains and blackboards are columns C reads only through the
+        // `ponko_ai_brain_*` and `ponko_ai_blackboard_*` calls.
+        let id = match w.component_at(raw as usize) {
+            Some(id) if ai_columns::is_ai_column(w, id) => id,
+            _ => {
+                let (id, kind) = component(w, raw)?;
+                if !kind.is_plain() {
+                    return Err(invalid(
+                        "sprites and physics bodies/colliders can't be query columns: use ponko_get/ponko_set",
+                    ));
+                }
+                id
+            }
+        };
         resolved[i] = id;
         sizes[i] = w.component_info(id).layout().size();
     }

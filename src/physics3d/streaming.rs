@@ -379,25 +379,13 @@ impl Physics3D {
     }
 }
 
-/// A shape `scale`d (heightfields and triangle meshes; others as they are).
-pub(super) fn scaled(shape: &rp::SharedShape, scale: Vec3) -> rp::SharedShape {
-    let scale = to_rp(scale.abs().max(Vec3::splat(1e-6)));
-    if let Some(field) = shape.as_heightfield() {
-        rp::SharedShape::new(field.clone().scaled(scale))
-    } else if let Some(mesh) = shape.as_trimesh() {
-        rp::SharedShape::new(mesh.clone().scaled(scale))
-    } else {
-        shape.clone()
-    }
-}
-
 /// A copy of `shape` scaled by `scale` for a
 /// [`Shape3D::ScaledMesh`](super::Shape3D::ScaledMesh): a hull or triangle
 /// mesh is built again from its scaled points, so a negative component
 /// mirrors it and a stretch keeps its normals right (a triangle mesh
 /// mirrored along one or three axes turns its triangles around, so they
-/// still face out); a heightfield takes the scale's size, as
-/// [`scaled`] does. Each component is at least 1e-6 from zero. `None` if
+/// still face out); a heightfield takes the scale's size (its sign
+/// left out). Each component is at least 1e-6 from zero. `None` if
 /// the scaled hull has no volume or the triangle mesh can't be built.
 pub(super) fn scaled_copy(shape: &rp::SharedShape, scale: Vec3) -> Option<rp::SharedShape> {
     let tiny = 1e-6;
@@ -419,8 +407,10 @@ pub(super) fn scaled_copy(shape: &rp::SharedShape, scale: Vec3) -> Option<rp::Sh
     } else if let Some(hull) = shape.as_convex_polyhedron() {
         let points: Vec<rp::Vector> = hull.points().iter().map(|&p| p * s).collect();
         rp::SharedShape::convex_hull(&points)
+    } else if let Some(field) = shape.as_heightfield() {
+        Some(rp::SharedShape::new(field.clone().scaled(to_rp(scale.abs()))))
     } else {
-        Some(scaled(shape, scale))
+        Some(shape.clone())
     }
 }
 

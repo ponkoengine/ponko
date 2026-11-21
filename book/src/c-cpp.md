@@ -163,6 +163,11 @@ other world or context calls throw (C: return `PONKO_BUSY`), except
   `ponko_ctx_nav_view`), taken before the loop, whose `sample_position`,
   `sample_positions` and `find_path` work in `each_par` too. Read each once
   per system: a second read of the events gives only newer ones;
+- world brains: `ai::each` and `ai::query` visit each entity's brain and
+  blackboard with its components, and their rows are read and written in
+  the `_par` versions too (C: the brain and blackboard query columns,
+  `ponko_chunk_ai_brain` and the `ponko_ai_brain_*` and
+  `ponko_ai_blackboard_*` calls; see [Game AI](ai.md));
 - spatial queries, and the clock values `dt()`, `sim_tick()`, `random()`.
 
 ```cpp
@@ -384,6 +389,9 @@ to it. The full rule is in
 | `PonkoTargetCameraEx` | `ponko_ctx_set_target_cameras_ex`, `ponko_ctx_target_camera_ex`, `ponko_target_camera_ex_from` | `particles`, per target camera |
 | `PonkoWindowModeEx`, `PonkoWindowVideoModeEx` | `ponko_ctx_window_mode_ex`, `ponko_ctx_window_set_mode_ex`, `ponko_ctx_window_video_mode_ex` | new in this release (no ABI 2 struct): the [window](window.md#c-and-c) mode and a monitor's exclusive modes |
 | `PonkoWindowPropertiesEx`, `PonkoWindowStateEx`, `PonkoWindowMonitorEx`, `PonkoWindowImageEx`, `PonkoWindowEventEx` | `ponko_ctx_window_properties_ex`, `ponko_ctx_window_state_ex`, `ponko_ctx_window_monitor_ex`, `ponko_ctx_window_set_icon_ex`, `ponko_ctx_window_set_cursor_image_ex`, `ponko_ctx_window_event_ex` | new in this release: requested and reported window state, monitors, icon and cursor images, window events |
+| `PonkoCrashReports`, `PonkoTouchControlsDesc`, `PonkoSliceLoader` | `ponko_game_crash_reports`, `ponko_ctx_set_touch_controls_ex`, `ponko_asset_group_add_sliced` | new in this release: [crash report](crash-reports.md#c-and-c) settings and hook, touch controls with their [styles and places](touch.md#c-and-c), [sliced loaders](loading.md#sliced-loaders-from-c) |
+| `PonkoCrowdDesc`, `PonkoNavCrowdStats` | `ponko_ctx_create_crowd_ex`, `ponko_ctx_navmesh_crowd_stats` | new in this release: a crowd with [crossfading levels](crowds.md#c-and-c), the [navmesh crowd's counts](navigation3d.md#counting-the-crowds-work) |
+| `PonkoWaterDesc` version 2 | `ponko_ctx_spawn_water` | `has_spectrum` and `spectrum`: a [sea from a wave spectrum](water.md#from-c-and-c) |
 
 In C++ the same types are `ponko::material_desc_ex`,
 `nav_bake_settings_ex`, `lighting_ex`, `collider_ex`, `query_filter_ex`,
@@ -438,6 +446,7 @@ where C++ does the same thing another way:
 | `ponko_ctx_cast_ray_filtered`, `ponko_ctx_overlap_ball` (2D) | `ctx::cast_ray_filtered` and `ctx::overlap_ball` call `ponko_ctx_cast_ray2d` and `ponko_ctx_overlap_circle2d`, which also take the `filter2d`'s collision groups |
 | `ponko_ctx_cast_ray2d_ex`, `ponko_ctx_cast_ray2d_all_ex`, `ponko_ctx_cast_circle2d_ex`, `ponko_ctx_cast_box2d_ex`, `ponko_ctx_cast_capsule2d_ex`, `ponko_ctx_overlap_point2d_ex`, `ponko_ctx_overlap_circle2d_ex`, `ponko_ctx_overlap_box2d_ex`, `ponko_ctx_overlap_capsule2d_ex`, `ponko_ctx_closest_point2d_ex`, `ponko_ctx_penetrations2d_ex`, `ponko_ctx_cast_ray3d_ex`, `ponko_ctx_cast_ray3d_all_ex`, `ponko_ctx_cast_sphere3d_ex`, `ponko_ctx_cast_capsule3d_ex`, `ponko_ctx_cast_box3d_ex`, `ponko_ctx_overlap_point3d_ex`, `ponko_ctx_overlap_sphere3d_ex`, `ponko_ctx_overlap_box3d_ex`, `ponko_ctx_overlap_capsule3d_ex`, `ponko_ctx_closest_point3d_ex`, `ponko_ctx_penetrations3d_ex` | The `ctx` queries of the same names take a `filter2d` or `filter3d`, which carries the collision groups already; `query_filter_ex_of` turns one into a `PonkoQueryFilterEx` for the C calls |
 | `ponko_ctx_set_particle_emitter3d` | `ctx::set_particle_emitter3d` calls `ponko_ctx_set_particle_emitter3d_ex`, which also takes the settings' `softness` |
+| `ponko_ctx_set_touch_controls` | `ctx::set_touch_controls` calls `ponko_ctx_set_touch_controls_ex`, which also takes the controls' styles and places |
 | `ponko_ctx_ui_next_event` | `ui::tree::next_event` calls `ponko_ctx_ui_next_event_ex`, which also gives the widget set's events (`chosen`, `dropped`, `rows_shown`) |
 
 `scripts/check-cpp-api.py` keeps this true: CI fails when a C function has no
@@ -471,15 +480,8 @@ binding arrives:
 | `SaveFormat`, `Storage::save_world_in_background` | [Saves and settings](storage.md#large-worlds) | Not bound yet: save slots are JSON, written on the game's thread by `ponko_ctx_save_world`; `ponko_ctx_load_world` reads binary slots too |
 | `UiAccessAdapter::for_ns_view` | [Retained game UI](ui.md#the-screen-reader-adapter) | It needs a Rust `Ui`; the engine's own window gets the adapter, and `ponko_ui_access_*` give a snapshot for one of your own |
 | `Buoyancy::points` | [Water](water.md#floating-bodies) | Custom sample points, water density and the ripple switch aren't bound: C floats boxes and spheres (`ponko_ctx_set_buoyancy_box`, `_sphere`) in fresh water |
-| `Waves::spectrum`, `WaveSpectrum` | [Water](water.md#waves-from-a-spectrum) | Seas from C use the Gerstner waves of `PonkoWaterDesc` |
 | `NavObstacleShape` | [3D navigation meshes](navigation3d.md#obstacle-shapes) | Obstacles are unturned boxes: `ponko_ctx_set_nav_obstacle` and `ponko_ctx_set_nav_carve_obstacle` |
-| `NavCrowdStats` | [3D navigation meshes](navigation3d.md#counting-the-crowds-work) | The crowd's cost shows as the navigation step's time in the profiler |
-| `thread_alloc_counts` | [Performance and profiling](profiling.md#allocations-per-thread) | Scopes timed with `ponko_profile_begin`/`_end` count time only; the report's per-frame and per-system allocations cover the whole process |
 | `SkyShader` | [A sky of your own](3d.md#a-sky-of-your-own) | The built-in atmosphere or the flat sky (`PonkoSky`); sky shaders have no C binding yet |
-| `CameraTarget` | [Following something](camera-ui.md#following-something) | Keep the rig descriptor and update it once a frame (`ponko_follow_camera2d_update`, the 3D rigs' update calls) |
-| `TouchLayout` | [Touch](touch.md) | Set the controls with `ponko_ctx_set_touch_controls`; the player's saved layout, its edit mode, styles and trackpad events are not bound yet |
-| `Input::arrange_touch_controls` | [Touch](touch.md#the-ready-made-arrange-screen) | Not bound yet: the screen builds on the player's layout and its edit mode, which are Rust-only too; a C or C++ game builds a screen of its own |
-| `CrashReports` | [Crash reports](crash-reports.md) | Not bound yet: install a handler of the game's own and write its own report |
 | `Graphics::stream_instance_cell` | [Streaming instance cells](3d.md#streaming-instance-cells) | Build a cell's matrices on your own threads, then `ponko_ctx_add_instance_cell` (`ctx::add_instance_cell`) on the game's |
 | `InstanceCellData` | [Streaming instance cells](3d.md#streaming-instance-cells) | The same: matrices and colours go straight to `ponko_ctx_add_instance_cell` |
 | `GamepadBackend` | [Backends and tests](controllers.md#backends-and-tests) | Native games use the built-in gamepad backend |
@@ -501,9 +503,6 @@ binding arrives:
 | `Plugin::dependencies` | [Plugins for other crates](plugins.md#from-c-and-c) | C plugins (`ponko_game_plugin`) have no names or dependencies and are never duplicates |
 | `Game::debug_toggle` | [Plugins for other crates](plugins.md#debug-toggles) | Draw behind a flag of the game's own; `debug.draw` turns the engine's views on and off |
 | `Game::control_method` | [Plugins for other crates](plugins.md#control-methods) | The control endpoint's built-in methods only; a native game's tools read its reflected resources |
-| `AssetGroup::with_sliced`, `SliceLoader` | [Loading screens](loading.md#loaders-that-work-in-slices) | Not bound yet: add the file with `PONKO_GROUP_BYTES` and decode it once the group is ready |
-| `Game::restore_window_settings` | [Window service](window.md#remember-the-players-choice) | Call `ponko_ctx_window_restore_settings` in setup; the window can show at its default size for a moment first |
-| `CrowdLevel::with_fade` | [Crowds](crowds.md#levels-of-detail) | Not bound yet: C and C++ crowd levels switch at once (a fade in `PonkoCrowdLevel` would change its layout) |
 
 System phases, system ids, setup callbacks and plugins are not on this
 list. They have C and C++ calls, described in

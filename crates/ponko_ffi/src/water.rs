@@ -18,7 +18,8 @@ use std::mem::{offset_of, size_of};
 
 use ponko::prelude::{Color, Ctx, Entity, Vec2};
 use ponko::water::{
-    FlowMap, MAX_WAVES, Water, WaterDesc, WaterPlugin, WaterQuality, WaterReflection, Wave, Waves, despawn_water,
+    FlowMap, MAX_WAVES, Water, WaterDesc, WaterPlugin, WaterQuality, WaterReflection, Wave, WaveSpectrum, Waves,
+    despawn_water,
 };
 
 use crate::ctx::{ctx_access, out};
@@ -29,7 +30,7 @@ use crate::types::{PonkoColor, PonkoVec2, to_c};
 use crate::{Failure, PonkoCtx, PonkoGame, PonkoStatus, boundary, engine_error, error, invalid};
 
 /// The version of `PonkoWaterDesc` this header describes.
-pub const PONKO_WATER_DESC_VERSION: u32 = 1;
+pub const PONKO_WATER_DESC_VERSION: u32 = 2;
 /// How many waves a `PonkoWaterDesc` holds.
 pub const PONKO_WATER_MAX_WAVES: usize = 8;
 const _: () = assert!(PONKO_WATER_MAX_WAVES == MAX_WAVES);
@@ -91,12 +92,83 @@ pub struct PonkoWave {
     pub phase: f32,
 }
 
+/// A sea's waves from a wind-driven spectrum (Rust `ponko::water::WaveSpectrum`):
+/// thousands of waves worked out each frame with an FFT, instead of a
+/// handful of Gerstner waves. Start from `ponko_wave_spectrum`, change what
+/// you like, and put it in `PonkoWaterDesc::spectrum` with `has_spectrum`.
+/// ```
+/// let s = ponko_ffi::ponko_wave_spectrum(ponko_ffi::PonkoVec2 { x: 12.0, y: 4.0 }, 2.0);
+/// assert_eq!((s.tile, s.resolution, s.seed), (256.0, 128, 1));
+/// ```
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PonkoWaveSpectrum {
+    /// The wind along x and z, in m/s: the waves run with it, and its
+    /// speed sets how long the biggest are (about `0.9 * speed^2` metres).
+    pub wind: PonkoVec2,
+    /// The significant wave height in metres: trough to crest of the
+    /// highest third of the waves.
+    pub height: f32,
+    /// The side of the square of sea that repeats, in metres.
+    pub tile: f32,
+    /// Cells across the square: 64, 128 or 256 (rounded to the nearest).
+    pub resolution: u32,
+    /// How sharp the crests are: 0 rounded, 1 pointed.
+    pub choppiness: f32,
+    /// Picks the random sea: equal seeds draw equal seas.
+    pub seed: u32,
+}
+
+/// The spectrum of a sea under `wind` (m/s along x and z) with `height`
+/// metres of significant wave height, on a 256 m square of 128 cells,
+/// choppiness 1, seed 1 (Rust `WaveSpectrum::new`).
+/// ```
+/// let s = ponko_ffi::ponko_wave_spectrum(ponko_ffi::PonkoVec2 { x: 10.0, y: 0.0 }, 1.5);
+/// assert_eq!((s.height, s.choppiness), (1.5, 1.0));
+/// ```
+#[unsafe(no_mangle)]
+pub extern "C" fn ponko_wave_spectrum(wind: PonkoVec2, height: f32) -> PonkoWaveSpectrum {
+    spectrum_to_c(WaveSpectrum::new(to_c(wind), height))
+}
+
+fn spectrum_to_c(s: WaveSpectrum) -> PonkoWaveSpectrum {
+    PonkoWaveSpectrum {
+        wind: to_c(s.wind),
+        height: s.height,
+        tile: s.tile,
+        resolution: s.resolution,
+        choppiness: s.choppiness,
+        seed: s.seed,
+    }
+}
+
+fn spectrum_from_c(s: &PonkoWaveSpectrum) -> Result<WaveSpectrum, Failure> {
+    finite(
+        &[s.wind.x, s.wind.y, s.height, s.tile, s.choppiness],
+        "the wave spectrum's settings must be finite",
+    )?;
+    if s.height < 0.0 || s.choppiness < 0.0 {
+        return Err(invalid(
+            "the wave spectrum's height and choppiness must not be negative",
+        ));
+    }
+    if s.tile <= 0.0 {
+        return Err(invalid("the wave spectrum's tile must be positive"));
+    }
+    Ok(WaveSpectrum::new(to_c(s.wind), s.height)
+        .with_tile(s.tile, s.resolution)
+        .with_choppiness(s.choppiness)
+        .with_seed(s.seed))
+}
+
 /// Everything about one body of water (Rust `WaterDesc`). A versioned
 /// descriptor: set `struct_size` and `version`, fill it with
 /// `ponko_water_desc_lake`, `_river` or `_sea`, change what you like, and
 /// spawn it with `ponko_ctx_spawn_water`.
 ///
-/// Version 1: every field below.
+/// Version 1: every field up to `underwater`. Version 2 adds
+/// `has_spectrum` and `spectrum` (a program built against version 1 gets
+/// Gerstner waves, as before).
 /// ```
 /// use ponko_ffi::*;
 /// let mut d: PonkoWaterDesc = unsafe { std::mem::zeroed() };
@@ -157,6 +229,11 @@ pub struct PonkoWaterDesc {
     pub ripple_area: f32,
     /// The underwater screen effect when the camera dips below.
     pub underwater: bool,
+    /// Version 2: the waves come from `spectrum` instead of `waves` (Rust
+    /// `Waves::spectrum`); `waves` and `wave_count` are then ignored.
+    pub has_spectrum: bool,
+    /// Version 2: the sea's spectrum, used when `has_spectrum` is set.
+    pub spectrum: PonkoWaveSpectrum,
 }
 
 const _: () = assert!(offset_of!(PonkoWaterDesc, struct_size) == 0 && offset_of!(PonkoWaterDesc, version) == 4);
@@ -166,6 +243,7 @@ impl Versioned for PonkoWaterDesc {
     fn len_of(version: u32) -> Option<usize> {
         match version {
             1 => Some(offset_of!(Self, underwater) + size_of::<bool>()),
+            2 => Some(offset_of!(Self, spectrum) + size_of::<PonkoWaveSpectrum>()),
             _ => None,
         }
     }
@@ -233,6 +311,8 @@ fn desc_to_c(d: &WaterDesc) -> PonkoWaterDesc {
         ripples: d.ripples,
         ripple_area: d.ripple_area,
         underwater: d.underwater,
+        has_spectrum: d.waves.is_spectrum(),
+        spectrum: d.waves.spectrum_settings().map(spectrum_to_c).unwrap_or_default(),
     }
 }
 
@@ -333,7 +413,11 @@ unsafe fn desc_from_c(c: &PonkoWaterDesc) -> Result<WaterDesc, Failure> {
         center: to_c(c.center),
         size: to_c(c.size),
         follow_camera: c.follow_camera,
-        waves: Waves::new(&waves),
+        waves: if c.has_spectrum {
+            Waves::spectrum(spectrum_from_c(&c.spectrum)?)
+        } else {
+            Waves::new(&waves)
+        },
         flow: to_c(c.flow),
         flow_map,
         absorption: to_c(c.absorption),

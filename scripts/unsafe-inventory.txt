@@ -8,8 +8,10 @@
 #
 # Format: <path> | <item> | <test file>::<test fn> | <miri>
 # <miri>: miri (the test runs under Miri), miri(<features>), or why it can't:
-# c-library, gpu, os, windows, macos, wasm, window, sanitizers. The Miri
-# commands come from this file: python3 scripts/check-unsafe.py --miri.
+# c-library, gpu, os, windows, macos, wasm, window (a check a person runs, in
+# a real window), sanitizers. A check of a test program without the harness
+# (`harness = false`) is named like a test. The Miri commands come from this
+# file: python3 scripts/check-unsafe.py --miri.
 
 # ---- The engine --------------------------------------------------------------
 
@@ -42,9 +44,9 @@ src/reflect/hash.rs | of_layout | tests/world_hash.rs::described_c_components_ha
 src/reflect/hash.rs | FieldLayout::hash | tests/world_hash.rs::described_c_components_hash_their_fields_only | miri
 src/reflect/hash.rs | word_at | tests/world_hash.rs::described_c_components_hash_their_fields_only | miri
 src/net/replicate/kinds.rs | Raw::schema | tests/net_replication.rs::more_than_64_component_types_are_refused | miri
-src/net/replicate/kinds.rs | Raw::visit | crates/ponko_ffi/tests/replication.rs::a_c_server_replicates_c_components_to_a_c_client | os
-src/net/replicate/kinds.rs | Raw::read | crates/ponko_ffi/tests/replication.rs::a_c_server_replicates_c_components_to_a_c_client | os
-src/net/replicate/kinds.rs | Raw::write | crates/ponko_ffi/tests/replication.rs::a_c_server_replicates_c_components_to_a_c_client | os
+src/net/replicate/kinds.rs | Raw::visit | src/net/replication_conformance.rs::raw_components_declared_from_c_replicate_every_field_type | miri
+src/net/replicate/kinds.rs | Raw::read | src/net/replication_conformance.rs::raw_components_declared_from_c_replicate_every_field_type | miri
+src/net/replicate/kinds.rs | Raw::write | src/net/replication_conformance.rs::raw_components_declared_from_c_replicate_every_field_type | miri
 src/net/replicate/kinds.rs | visit_raw | src/net/raw_replication_conformance.rs::raw_values_cross_a_clean_network_in_a_few_ticks | miri
 src/net/replicate/raw.rs | RawValue::fields | src/net/raw_replication_conformance.rs::raw_values_cross_a_clean_network_in_a_few_ticks | miri
 src/net/replicate/raw.rs | RawPredicted::value_of | src/net/raw_replication_conformance.rs::raw_values_cross_a_clean_network_in_a_few_ticks | miri
@@ -105,10 +107,12 @@ src/three/gltf_ext.rs | decode_meshopt | src/three/gltf_ext.rs::meshopt_compress
 # The GPU: Metal's own memory figure (an offscreen GPU test).
 src/render/memory.rs | metal_allocated_bytes | src/render/gpu_memory_render_test.rs::adapter_figure_child | gpu
 
-# Screen readers: the platform adapters attach to a real window's view.
-src/ui/access_native.rs | UiAccessAdapter::for_ns_view | - | window
-src/ui/access_native.rs | UiAccessAdapter::for_hwnd | - | window
-src/ui/access_native.rs | for_window | - | window
+# Screen readers: the platform adapters attach to a view (macOS) or a window
+# (Windows): one with no window, one never shown, and, for the engine's own
+# window, a check a person runs (`-- --ignored`), offscreen.
+src/ui/access_native.rs | UiAccessAdapter::for_ns_view | tests/ui_access_macos.rs::nothing_is_built_until_assistive_technology_asks | macos
+src/ui/access_native.rs | UiAccessAdapter::for_hwnd | tests/ui_access_platforms.rs::the_sample_menu_is_read_and_operated_through_ui_automation | windows
+src/ui/access_native.rs | for_window | tests/ui_access_window.rs::the_engine_window_answers_the_system_through_its_adapter_offscreen | window
 
 # The threaded web build: worker threads and their mailbox (wasm only), run
 # by the browser smoke test of the threaded build.
@@ -125,7 +129,64 @@ src/web_threads.rs | spawn_worker | web/smoke/threads.mjs | wasm
 
 # ---- The command-line tool ---------------------------------------------------
 
-crates/ponko_cli/src/textures.rs | uastc | crates/ponko_cli/src/textures.rs::basis_textures_keep_uastc_blocks_and_say_their_channels | c-library
+crates/ponko_cli/src/textures.rs | uastc_on | crates/ponko_cli/src/textures.rs::a_reused_encoder_gives_the_same_blocks_as_a_fresh_one | c-library
+
+# ---- The benchmark binary (crates/ponko_bench) ------------------------------
+
+# The allocator that counts every benchmark's allocations, and the peak
+# resident memory the memory cases print.
+crates/ponko_bench/src/alloc.rs | impl GlobalAlloc for Counting | crates/ponko_bench/src/alloc.rs::the_counting_allocator_forwards_every_call_to_the_system_allocator | miri
+crates/ponko_bench/src/alloc.rs | Counting::alloc | crates/ponko_bench/src/alloc.rs::the_counting_allocator_forwards_every_call_to_the_system_allocator | miri
+crates/ponko_bench/src/alloc.rs | Counting::alloc_zeroed | crates/ponko_bench/src/alloc.rs::the_counting_allocator_forwards_every_call_to_the_system_allocator | miri
+crates/ponko_bench/src/alloc.rs | Counting::dealloc | crates/ponko_bench/src/alloc.rs::the_counting_allocator_forwards_every_call_to_the_system_allocator | miri
+crates/ponko_bench/src/alloc.rs | Counting::realloc | crates/ponko_bench/src/alloc.rs::the_counting_allocator_forwards_every_call_to_the_system_allocator | miri
+crates/ponko_bench/src/alloc.rs | peak_rss | crates/ponko_bench/src/alloc.rs::the_peak_resident_set_covers_memory_in_use | os
+crates/ponko_bench/src/streaming.rs | thread_cpu | crates/ponko_bench/src/streaming.rs::the_thread_clock_moves_forward_with_work | os
+
+# The prototype archetype world (what the C API path costs without the ECS).
+crates/ponko_bench/src/own.rs | Column::ptr | crates/ponko_bench/src/own.rs::spawn_get_despawn | miri
+crates/ponko_bench/src/own.rs | Column::grow | crates/ponko_bench/src/own.rs::swap_remove_keeps_rows_valid | miri
+crates/ponko_bench/src/own.rs | Column::swap_remove_forget | crates/ponko_bench/src/own.rs::swap_remove_keeps_rows_valid | miri
+crates/ponko_bench/src/own.rs | Column::dealloc | crates/ponko_bench/src/own.rs::drops_run_exactly_once | miri
+crates/ponko_bench/src/own.rs | drop_ptr | crates/ponko_bench/src/own.rs::drops_run_exactly_once | miri
+crates/ponko_bench/src/own.rs | Archetype::reserve | crates/ponko_bench/src/own.rs::swap_remove_keeps_rows_valid | miri
+crates/ponko_bench/src/own.rs | Archetype::swap_remove_drop | crates/ponko_bench/src/own.rs::swap_remove_keeps_rows_valid | miri
+crates/ponko_bench/src/own.rs | Archetype::drop | crates/ponko_bench/src/own.rs::drops_run_exactly_once | miri
+crates/ponko_bench/src/own.rs | World::spawn | crates/ponko_bench/src/own.rs::spawn_get_despawn | miri
+crates/ponko_bench/src/own.rs | World::spawn_dynamic | crates/ponko_bench/src/own.rs::dynamic_components_and_chunks | miri
+crates/ponko_bench/src/own.rs | World::despawn | crates/ponko_bench/src/own.rs::spawn_get_despawn | miri
+crates/ponko_bench/src/own.rs | World::get | crates/ponko_bench/src/own.rs::spawn_get_despawn | miri
+crates/ponko_bench/src/own.rs | World::get_mut | crates/ponko_bench/src/own.rs::get_mut_writes_the_entitys_own_row | miri
+crates/ponko_bench/src/own.rs | World::insert | crates/ponko_bench/src/own.rs::insert_remove_moves_archetype | miri
+crates/ponko_bench/src/own.rs | World::remove | crates/ponko_bench/src/own.rs::insert_remove_moves_archetype | miri
+crates/ponko_bench/src/own.rs | World::move_row | crates/ponko_bench/src/own.rs::insert_remove_moves_archetype | miri
+crates/ponko_bench/src/own.rs | World::for_each | crates/ponko_bench/src/own.rs::query_matches_across_archetypes | miri
+crates/ponko_bench/src/own.rs | trait Bundle | crates/ponko_bench/src/own.rs::spawn_get_despawn | miri
+crates/ponko_bench/src/own.rs | macro bundle_tuple! | crates/ponko_bench/src/own.rs::spawn_get_despawn | miri
+crates/ponko_bench/src/own.rs | trait Query | crates/ponko_bench/src/own.rs::query_matches_across_archetypes | miri
+crates/ponko_bench/src/own.rs | impl Query for &T | crates/ponko_bench/src/own.rs::query_matches_across_archetypes | miri
+crates/ponko_bench/src/own.rs | impl Query for &mut T | crates/ponko_bench/src/own.rs::query_matches_across_archetypes | miri
+crates/ponko_bench/src/own.rs | T::fetch | crates/ponko_bench/src/own.rs::query_matches_across_archetypes | miri
+crates/ponko_bench/src/own.rs | macro query_tuple! | crates/ponko_bench/src/own.rs::query_matches_across_archetypes | miri
+crates/ponko_bench/src/main.rs | own_dynamic_world | crates/ponko_bench/src/main.rs::the_dynamic_chunk_step_moves_every_entity | miri
+crates/ponko_bench/src/main.rs | own_dynamic_step | crates/ponko_bench/src/main.rs::the_dynamic_chunk_step_moves_every_entity | miri
+
+# Components registered and written by id, as the C API does.
+crates/ponko_bench/src/membership.rs | registered_world | crates/ponko_bench/src/membership.rs::candidates_agree_with_the_linear_scan | miri
+crates/ponko_bench/src/membership.rs | add | crates/ponko_bench/src/membership.rs::warm_transitions_create_no_archetypes | miri
+crates/ponko_bench/src/membership.rs | noop_drop | crates/ponko_bench/src/membership.rs::a_component_with_a_drop_function_toggles_without_new_archetypes | miri
+crates/ponko_bench/src/membership.rs | register_with_drop | crates/ponko_bench/src/membership.rs::a_component_with_a_drop_function_toggles_without_new_archetypes | miri
+crates/ponko_bench/src/membership.rs | add_with_drop | crates/ponko_bench/src/membership.rs::a_component_with_a_drop_function_toggles_without_new_archetypes | miri
+crates/ponko_bench/src/membership.rs | query_world | crates/ponko_bench/src/membership.rs::the_query_worlds_hold_every_archetype_with_p_and_v | miri
+crates/ponko_bench/src/query_filters.rs | step | crates/ponko_bench/src/query_filters.rs::the_c_path_steps_every_row_once_with_and_without_a_filter | miri
+crates/ponko_bench/src/query_policy.rs | register_late | crates/ponko_bench/src/query_policy.rs::components_registered_late_keep_query_results | miri
+
+# Sparse-set prototypes reading archetype components by cached id.
+crates/ponko_bench/src/sparse_set/proto.rs | dense_ref | crates/ponko_bench/src/sparse_set/proto.rs::both_join_drivers_visit_the_same_entities | miri
+crates/ponko_bench/src/sparse_set/proto.rs | dense_mut | crates/ponko_bench/src/sparse_set/proto.rs::both_join_drivers_visit_the_same_entities | miri
+crates/ponko_bench/src/sparse_set/proto.rs | Hybrid::join_from_set | crates/ponko_bench/src/sparse_set/proto.rs::both_join_drivers_visit_the_same_entities | miri
+crates/ponko_bench/src/sparse_set.rs | Sset::and | crates/ponko_bench/src/sparse_set.rs::the_set_driven_and_join_matches_the_archetype_queries | miri
+crates/ponko_bench/src/sparse_set.rs | dense_sset_iter | crates/ponko_bench/src/sparse_set.rs::the_dense_case_computes_the_same_on_every_storage | miri
 
 # ---- The C API: helpers no tested C function reaches by a plain call ---------
 
@@ -146,6 +207,14 @@ crates/ponko_ffi/src/contacts3d.rs | impl Sync for Hook | crates/ponko_ffi/tests
 crates/ponko_ffi/src/save_migrations.rs | impl Send for Convert | crates/ponko_ffi/tests/save_migrations.rs::c_conversions_change_components_resources_entities_and_the_whole_save | sanitizers
 crates/ponko_ffi/src/component_hooks.rs | impl Send for CHook | crates/ponko_ffi/tests/component_hooks.rs::hooks_from_c_run_for_spawns_made_by_a_game_system | sanitizers
 crates/ponko_ffi/src/component_hooks.rs | impl Sync for CHook | crates/ponko_ffi/tests/component_hooks.rs::hooks_from_c_run_for_spawns_made_by_a_game_system | sanitizers
+crates/ponko_ffi/src/crash.rs | impl Send for Hook | crates/ponko_ffi/tests/crash_reports.rs::crash_reports_from_c_name_the_version_run_the_hook_and_are_saved | sanitizers
+crates/ponko_ffi/src/crash.rs | impl Sync for Hook | crates/ponko_ffi/tests/crash_reports.rs::crash_reports_from_c_name_the_version_run_the_hook_and_are_saved | sanitizers
+crates/ponko_ffi/src/slice_loaders.rs | impl Send for Callbacks | crates/ponko_ffi/tests/slice_loaders.rs::a_sliced_c_loader_works_in_pieces_and_hands_over_its_state_once | sanitizers
+crates/ponko_ffi/src/slice_loaders.rs | impl Sync for Callbacks | crates/ponko_ffi/tests/slice_loaders.rs::a_sliced_c_loader_works_in_pieces_and_hands_over_its_state_once | sanitizers
+crates/ponko_ffi/src/slice_loaders.rs | impl Send for State | crates/ponko_ffi/tests/slice_loaders.rs::a_sliced_c_loader_works_in_pieces_and_hands_over_its_state_once | sanitizers
+crates/ponko_ffi/src/slice_loaders.rs | Callbacks::free | crates/ponko_ffi/tests/slice_loaders.rs::a_finished_state_nobody_takes_is_freed_with_the_game | sanitizers
+crates/ponko_ffi/src/slice_loaders.rs | Callbacks::drop | crates/ponko_ffi/tests/slice_loaders.rs::a_sliced_c_loader_works_in_pieces_and_hands_over_its_state_once | sanitizers
+crates/ponko_ffi/src/slice_loaders.rs | State::step | crates/ponko_ffi/tests/slice_loaders.rs::a_sliced_c_loader_works_in_pieces_and_hands_over_its_state_once | sanitizers
 crates/ponko_ffi/src/component_hooks.rs | CHook::drop | crates/ponko_ffi/tests/component_hooks.rs::freeing_the_world_frees_each_hooks_user_data_once | sanitizers
 crates/ponko_ffi/src/replication_raw.rs | impl Send for CStep | crates/ponko_ffi/tests/replication_raw.rs::c_inputs_move_a_predicted_body_the_same_on_server_and_client | sanitizers
 crates/ponko_ffi/src/replication_raw.rs | impl Sync for CStep | crates/ponko_ffi/tests/replication_raw.rs::c_inputs_move_a_predicted_body_the_same_on_server_and_client | sanitizers

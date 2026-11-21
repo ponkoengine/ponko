@@ -489,14 +489,22 @@ fn shape3d() -> ValueSchema {
         ValueSchema::strict_object([("Capsule", ValueSchema::object([("height", Number), ("radius", Number)]))]),
         // A mesh file, as a scene names it (see `physics3d::files`): scale
         // and convex may be left out. Meshes made in code aren't saved.
+        ValueSchema::strict_object([("Mesh", mesh_file())]),
+        // A mesh file scaled where it is used (`Collider::scaled_mesh`).
         ValueSchema::strict_object([(
-            "Mesh",
-            ValueSchema::object([
-                ("file", String),
-                ("scale", ValueSchema::optional(Vec3)),
-                ("convex", ValueSchema::optional(Bool)),
-            ]),
+            "ScaledMesh",
+            ValueSchema::object([("mesh", mesh_file()), ("scale", Vec3)]),
         )]),
+    ])
+}
+/// A collision mesh named by its file: `{"file": "rock.glb", "scale": [1,
+/// 1, 1], "convex": false}`, scale and convex optional.
+#[cfg(feature = "physics3d")]
+fn mesh_file() -> ValueSchema {
+    ValueSchema::object([
+        ("file", String),
+        ("scale", ValueSchema::optional(Vec3)),
+        ("convex", ValueSchema::optional(Bool)),
     ])
 }
 
@@ -812,6 +820,17 @@ pub(in crate::reflect) mod tests {
             // A scene may leave scale and convex out: only the file is required.
             let mesh = &collider3d().to_json_schema()["properties"]["shape"]["anyOf"][3];
             assert_eq!(mesh["properties"]["Mesh"]["required"], json!(["file"]), "{mesh}");
+            // A scaled mesh of a file: the file's description and its scale.
+            let scale = glam::Vec3::new(-1.0, 2.0, 1.0);
+            let scaled = Collider3D::scaled_mesh(CollisionMesh::NONE, scale);
+            let saved = super::super::collider_json(&world, &scaled).unwrap().unwrap();
+            assert_eq!(
+                saved["shape"],
+                json!({ "ScaledMesh": { "mesh": file, "scale": [-1.0, 2.0, 1.0] } })
+            );
+            validate(&collider3d(), &saved);
+            let made_scaled = Collider3D::scaled_mesh(CollisionMesh { id: 0 }, scale);
+            assert!(super::super::collider_json(&world, &made_scaled).is_none());
             check!(crate::d3::Velocity, crate::d3::Velocity::default());
             check!(crate::d3::Character, crate::d3::Character::default());
             let vehicle = json_of(crate::d3::Vehicle::default());
