@@ -1452,6 +1452,11 @@ type RailBands = Vec<[(f32, f32); 2]>;
 /// The rails' bands, the frame with and without reflections cropped to the
 /// nearest rail, and the stage.
 fn rail_reflections() -> Option<(RailBands, [Image; 2], Stage)> {
+    rail_reflections_with(false)
+}
+
+/// [`rail_reflections`], with `Post::ssr_thin_objects` set to `thin`.
+fn rail_reflections_with(thin: bool) -> Option<(RailBands, [Image; 2], Stage)> {
     let mut stage = Stage::with(super::regression_stage::Setup {
         size: (1920, 1080),
         ..Default::default()
@@ -1460,6 +1465,7 @@ fn rail_reflections() -> Option<(RailBands, [Image; 2], Stage)> {
         return None;
     }
     let rails = rails_over_a_mirror(&mut stage);
+    stage.ctx.scene3d.post.ssr_thin_objects = thin;
     let off = stage.settled(2);
     stage.ctx.scene3d.post.ssr = 1.0;
     let on = stage.settled(4);
@@ -1792,35 +1798,10 @@ fn soft_particles_draw_with_temporal_antialiasing() {
 /// the march steps over parts of it.
 #[test]
 fn thin_bars_are_reflected_about_as_wide_as_in_a_true_mirror_at_full_hd() {
-    let setup = || super::regression_stage::Setup {
-        size: (1920, 1080),
-        ..Default::default()
-    };
-    let Some(mut truth) = Stage::with(setup()) else {
+    let Some(bands) = thin_bar_bands(false) else {
         return;
     };
-    let (low, high) = bars(&mut truth, 0.0, false);
-    let image = truth.settled(2);
-    let true_bands = [
-        band(&truth, &image, None, low, 40),
-        band(&truth, &image, None, high, 40),
-    ];
-    truth.finish();
-    let mut stage = Stage::with(setup()).unwrap();
-    bars_over_a_floor(&mut stage, 0.0);
-    let off = stage.settled(2);
-    stage.ctx.scene3d.post.ssr = 1.0;
-    let on = stage.settled(4);
-    let bands = [
-        band(&stage, &on, Some(&off), low, 40),
-        band(&stage, &on, Some(&off), high, 40),
-    ];
-    stage.finish();
-    for (name, (truth, reflected)) in ["low", "high"].iter().zip(true_bands.iter().zip(&bands)) {
-        eprintln!(
-            "{name} bar: true mirror (energy {:.1}, RMS width {:.2}), screen-space (energy {:.1}, RMS width {:.2})",
-            truth.0, truth.1, reflected.0, reflected.1
-        );
+    for (name, (truth, reflected)) in ["low", "high"].iter().zip(&bands) {
         assert!(
             reflected.0 > truth.0 * 0.25,
             "the {name} bar is reflected: energy {:.1} of {:.1}",
@@ -1834,4 +1815,189 @@ fn thin_bars_are_reflected_about_as_wide_as_in_a_true_mirror_at_full_hd() {
             truth.1
         );
     }
+}
+
+/// The bars of [`bars_over_a_floor`] at 1920x1080 without TAA, with
+/// `Post::ssr_thin_objects` set to `thin`: for each bar, low then high, what
+/// a true mirror shows and its screen-space reflection (energy, RMS width;
+/// see `band`).
+fn thin_bar_bands(thin: bool) -> Option<[((f32, f32), (f32, f32)); 2]> {
+    let setup = || super::regression_stage::Setup {
+        size: (1920, 1080),
+        ..Default::default()
+    };
+    let mut truth = Stage::with(setup())?;
+    if !crate::render::render_test_support::needs(&truth.device, GpuFeature::ScreenSpaceReflections) {
+        return None;
+    }
+    let (low, high) = bars(&mut truth, 0.0, false);
+    let image = truth.settled(2);
+    let true_bands = [
+        band(&truth, &image, None, low, 40),
+        band(&truth, &image, None, high, 40),
+    ];
+    truth.finish();
+    let mut stage = Stage::with(setup()).unwrap();
+    bars_over_a_floor(&mut stage, 0.0);
+    stage.ctx.scene3d.post.ssr_thin_objects = thin;
+    let off = stage.settled(2);
+    stage.ctx.scene3d.post.ssr = 1.0;
+    let on = stage.settled(4);
+    let bands = [
+        band(&stage, &on, Some(&off), low, 40),
+        band(&stage, &on, Some(&off), high, 40),
+    ];
+    stage.finish();
+    for (name, (truth, reflected)) in ["low", "high"].iter().zip(true_bands.iter().zip(&bands)) {
+        eprintln!(
+            "{name} bar, thin objects {thin}: true mirror (energy {:.1}, RMS width {:.2}), screen-space (energy \
+             {:.1}, RMS width {:.2})",
+            truth.0, truth.1, reflected.0, reflected.1
+        );
+    }
+    Some([(true_bands[0], bands[0]), (true_bands[1], bands[1])])
+}
+
+// ---- Thin objects (`Post::ssr_thin_objects`): the strict twins ----
+//
+// The trace above leaves thin things near the camera dotted without TAA
+// (its long steps jump over parts of them), so the tests above allow it.
+// With the setting on, a long step reads the coarse depth along what it
+// jumps over (see `ssr_thin.wgsl`): the same scenes meet the bounds the
+// trace without it can't.
+
+/// [`far_thin_things_stay_thin_in_reflections_without_taa`] with thin
+/// objects on: every rail, the nearest too, keeps most of its light and is
+/// reflected about as thin as it is seen.
+#[test]
+fn near_thin_things_are_reflected_whole_without_taa_with_thin_objects() {
+    let Some((rails, [image, off], stage)) = rail_reflections_with(true) else {
+        return;
+    };
+    let mut wider = 0.0;
+    for (d, [seen, reflected]) in [8, 14, 22, 32].iter().zip(&rails) {
+        eprintln!(
+            "thin objects, rail {d} away: seen (energy {:.1}, RMS width {:.2}), reflected (energy {:.1}, RMS width \
+             {:.2}): x{:.2} as wide",
+            seen.0,
+            seen.1,
+            reflected.0,
+            reflected.1,
+            reflected.1 / seen.1
+        );
+        wider += reflected.1 / seen.1 / 4.0;
+        assert!(
+            reflected.0 > seen.0 * 0.7,
+            "the rail {d} away is reflected whole, not dotted: energy {:.1} of {:.1}",
+            reflected.0,
+            seen.0
+        );
+        assert!(
+            reflected.1 < seen.1 * 1.4,
+            "the rail {d} away is reflected thin: RMS width {:.2}, the rail's {:.2}",
+            reflected.1,
+            seen.1
+        );
+    }
+    assert!(wider < 1.25, "on average about as thin as the rails: x{wider:.2}");
+    check_reference(
+        "regression_ssr_far_rails_thin",
+        &image,
+        EFFECT_REFERENCE,
+        "Four thin red glowing rails (emissive 4, 0, 0; 1 up, 0.15 d long, 0.06 + 0.005 d thick) over a white \
+         mirror floor (metallic 1, roughness 0), d = 8, 14, 22 and 32 away; nothing lit, exposure -5, \
+         screen-space reflections at 1.0 reaching 60 with thin objects on (the coarse depth), no TAA, fourth \
+         frame; camera at (0, 1.2, 4) looking at (0, 0.6, -20); 1920x1080 cropped to 144x192 from (496, 512): \
+         the nearest rail and its whole reflection, 4x multisampling, no tonemapping.",
+        &stage.info,
+    );
+    reference_rejects("regression_ssr_far_rails_thin", &off, EFFECT_REFERENCE, "reflections off");
+    stage.finish();
+}
+
+/// [`far_thin_things_are_reflected_about_as_wide_as_in_a_true_mirror`]
+/// with thin objects on: every rail keeps most of the light a true mirror
+/// shows, and is reflected within a quarter of its width.
+#[test]
+fn thin_things_are_reflected_as_whole_and_wide_as_in_a_true_mirror_with_thin_objects() {
+    let (Some(truth), Some((rails, _, stage))) = (true_rail_reflections(), rail_reflections_with(true)) else {
+        return;
+    };
+    stage.finish();
+    for ((d, truth), [_, reflected]) in [8, 14, 22, 32].iter().zip(&truth).zip(&rails) {
+        let wider = reflected.1 / truth.1;
+        eprintln!(
+            "thin objects, rail {d} away: true mirror (energy {:.1}, RMS width {:.2}), screen-space (energy {:.1}, \
+             RMS width {:.2}): x{wider:.2} as wide",
+            truth.0, truth.1, reflected.0, reflected.1
+        );
+        assert!(
+            reflected.0 > truth.0 * 0.6,
+            "the rail {d} away is reflected whole, not dotted: energy {:.1} of {:.1}",
+            reflected.0,
+            truth.0
+        );
+        assert!(
+            (0.75..1.25).contains(&wider),
+            "the rail {d} away is reflected about as wide as in a true mirror: x{wider:.2}"
+        );
+    }
+}
+
+/// [`thin_bars_are_reflected_about_as_wide_as_in_a_true_mirror_at_full_hd`]
+/// with thin objects on: both bars keep most of the light a true mirror
+/// shows (the high one kept a third without the setting).
+#[test]
+fn thin_bars_are_reflected_whole_at_full_hd_with_thin_objects() {
+    let Some(bands) = thin_bar_bands(true) else {
+        return;
+    };
+    for (name, (truth, reflected)) in ["low", "high"].iter().zip(&bands) {
+        assert!(
+            reflected.0 > truth.0 * 0.7,
+            "the {name} bar is reflected whole: energy {:.1} of {:.1}",
+            reflected.0,
+            truth.0
+        );
+        assert!(
+            reflected.1 < truth.1 * 1.5,
+            "the {name} bar is reflected not much wider than in a true mirror: RMS width {:.2} to {:.2}",
+            reflected.1,
+            truth.1
+        );
+    }
+}
+
+/// Thin objects switch on and off while the game runs: on, the nearest
+/// rail's reflection gets back the light the long steps jumped over; off
+/// again, it is what it was before (the trace without the setting, whose
+/// own reference `regression_ssr_far_rails` stays as it was).
+#[test]
+fn thin_objects_switch_on_and_off_while_the_game_runs() {
+    let Some(mut stage) = Stage::with(super::regression_stage::Setup {
+        size: (1920, 1080),
+        ..Default::default()
+    }) else {
+        return;
+    };
+    if !crate::render::render_test_support::needs(&stage.device, GpuFeature::ScreenSpaceReflections) {
+        return;
+    }
+    let nearest = rails_over_a_mirror(&mut stage)[0].1;
+    stage.ctx.scene3d.post.ssr = 1.0;
+    let energy = |stage: &mut Stage, thin: bool| {
+        stage.ctx.scene3d.post.ssr_thin_objects = thin;
+        let image = stage.settled(4);
+        band(stage, &image, None, nearest, 30).0
+    };
+    let before = energy(&mut stage, false);
+    let with = energy(&mut stage, true);
+    let after = energy(&mut stage, false);
+    stage.finish();
+    eprintln!("nearest rail's reflection, energy: off {before:.1}, thin objects {with:.1}, off again {after:.1}");
+    assert!(with > before * 1.3, "on, the reflection is fuller: {with:.1} from {before:.1}");
+    assert!(
+        (after - before).abs() < before * 0.1,
+        "off again, it is as it was: {after:.1} to {before:.1}"
+    );
 }

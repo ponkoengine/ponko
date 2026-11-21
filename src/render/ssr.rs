@@ -21,6 +21,12 @@
 //! its ray went. It reads the filled image directly where the device has a
 //! texture slot for it; elsewhere GTAO's denoise (or the mark pass, without
 //! GTAO) copies it into the first level's alpha.
+//!
+//! With `Post::ssr_thin_objects` (see `ssr_thin.wgsl`), a compute pass
+//! makes a coarse depth from the copy before the trace, and the trace is
+//! another pipeline that reads it along its long steps. Its pipelines are
+//! made when first used, and without it the trace is exactly the one
+//! without them.
 use crate::render::traffic::{Counted, Upload};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -45,6 +51,15 @@ pub(super) const SPREAD_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Fl
 pub(super) const HITS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg16Float;
 /// The copy of the scene depth the trace reads (see `ssr.wgsl`).
 pub(super) const DEPTH_COPY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
+/// The coarse depth's blocks: each of its pixels holds the nearest depth of
+/// this many pixels squared of the copy, and their plane where they are flat
+/// (`CELL` in `ssr_thin.wgsl`).
+const COARSE_CELL: u32 = 8;
+/// The coarse depth's levels: blocks of 8, 16, 32 and 64 pixels
+/// (`COARSE_LEVELS` in `ssr_thin.wgsl`).
+const COARSE_LEVELS: u32 = 4;
+/// The coarse depth's format: nearest depth and plane (see `ssr_thin.wgsl`).
+pub(super) const COARSE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
 
 /// Lets the cost test time frames with and without the filtered levels.
 #[cfg(test)]
@@ -81,6 +96,31 @@ pub(super) struct Ssr {
     /// the last frame's.
     previous: Option<Mat4>,
     frame: u32,
+    /// The passes of `Post::ssr_thin_objects`, made when first used.
+    thin: Option<Thin>,
+}
+
+/// The coarse depth's pass and the trace that reads it (see
+/// `ssr_thin.wgsl`), from their own shader module: `ssr.wgsl` with
+/// `ssr_thin.wgsl` after it.
+struct Thin {
+    /// The trace's bindings plus the coarse depth.
+    layout: wgpu::BindGroupLayout,
+    trace_pipeline: wgpu::RenderPipeline,
+    coarse_layout: wgpu::BindGroupLayout,
+    coarse_pipeline: wgpu::ComputePipeline,
+    /// The coarse depth's gathers: the copy can't be filtered.
+    nearest_sampler: wgpu::Sampler,
+}
+
+/// The coarse depth of one size, and the trace's bindings that read it.
+struct ThinTargets {
+    /// All its levels: blocks of 8 pixels in level 0, 64 in level 3.
+    coarse: wgpu::TextureView,
+    coarse_group: wgpu::BindGroup,
+    /// One workgroup a block of its last level.
+    coarse_workgroups: (u32, u32),
+    trace_group: wgpu::BindGroup,
 }
 
 pub(super) struct SsrTargets {
@@ -115,6 +155,9 @@ pub(super) struct SsrTargets {
     depth_group: wgpu::BindGroup,
     /// The depth copy (see `ssr.wgsl`), written before the trace each frame.
     depth_copy: wgpu::TextureView,
+    /// With `Post::ssr_thin_objects`: the coarse depth, made from the copy
+    /// before the trace each frame, and the trace's bindings with it.
+    thin: Option<ThinTargets>,
 }
 
 /// The filtered levels' pass: the compute shader writes them to `levels`,
@@ -145,6 +188,13 @@ impl SsrTargets {
     /// declare.
     pub fn depth_copy(&self) -> &wgpu::TextureView {
         &self.depth_copy
+    }
+
+    /// The coarse depth the trace reads, with `Post::ssr_thin_objects`
+    /// (see `ssr_thin.wgsl`): for checking it against what the frame's
+    /// passes declare, and whether the targets were made for it.
+    pub fn coarse_depth(&self) -> Option<&wgpu::TextureView> {
+        self.thin.as_ref().map(|t| &t.coarse)
     }
 
     /// The cone's spread, as the trace writes it, and filled in (see the
@@ -374,7 +424,140 @@ impl Ssr {
             sampler,
             previous: None,
             frame: 0,
+            thin: None,
         }
+    }
+
+    /// Makes the passes of `Post::ssr_thin_objects` if they aren't there
+    /// yet: a game that never turns it on never compiles them.
+    pub fn use_thin(&mut self, device: &wgpu::Device) {
+        if self.thin.is_some() {
+            return;
+        }
+        let source = concat!(include_str!("ssr.wgsl"), "\n", include_str!("ssr_thin.wgsl"));
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("screen reflections thin objects"),
+            source: wgpu::ShaderSource::Wgsl(source.into()),
+        });
+        let texture = |binding, visibility, filterable| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        };
+        let fragment = wgpu::ShaderStages::FRAGMENT;
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("screen reflections thin objects"),
+            entries: &[
+                texture(0, fragment, false),
+                texture(1, fragment, true),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: fragment,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: fragment,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // The coarse depth.
+                texture(11, fragment, false),
+            ],
+        });
+        let target = |format| {
+            Some(wgpu::ColorTargetState {
+                format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })
+        };
+        let trace_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("fs_trace_thin"),
+            layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("screen reflections thin objects"),
+                bind_group_layouts: &[Some(&layout)],
+                immediate_size: 0,
+            })),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_full"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_trace_thin"),
+                compilation_options: Default::default(),
+                targets: &[target(SCREEN_FORMAT), target(HITS_FORMAT)],
+            }),
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        // The coarse depth reads the copy and writes its levels.
+        let compute = |binding, ty| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty,
+            count: None,
+        };
+        let coarse_level = |binding| {
+            compute(
+                binding,
+                wgpu::BindingType::StorageTexture {
+                    access: wgpu::StorageTextureAccess::WriteOnly,
+                    format: COARSE_FORMAT,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                },
+            )
+        };
+        let coarse_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("screen reflection coarse depth"),
+            entries: &[
+                texture(0, wgpu::ShaderStages::COMPUTE, false),
+                compute(13, wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering)),
+                coarse_level(14),
+                coarse_level(15),
+                coarse_level(16),
+                coarse_level(17),
+            ],
+        });
+        let coarse_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("screen reflection coarse depth"),
+            layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("screen reflection coarse depth"),
+                bind_group_layouts: &[Some(&coarse_layout)],
+                immediate_size: 0,
+            })),
+            module: &shader,
+            entry_point: Some("cs_coarse"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let nearest_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("screen reflection coarse depth"),
+            ..Default::default()
+        });
+        self.thin = Some(Thin {
+            layout,
+            trace_pipeline,
+            coarse_layout,
+            coarse_pipeline,
+            nearest_sampler,
+        });
     }
 
     /// Forgets the last frame's image (reflections are off, or it can't be
@@ -413,7 +596,9 @@ impl Ssr {
     /// Targets for frames of `size`: `depth` the prepass's, `lit` the image
     /// the opaque pass resolves into; `ao` whether GTAO writes `ao` (and
     /// copies the cone's spread into it), `spread_slot` whether the opaque
-    /// pass reads the spread image directly.
+    /// pass reads the spread image directly, `thin` whether the trace reads
+    /// the coarse depth (after [`Ssr::use_thin`]).
+    #[allow(clippy::too_many_arguments)]
     pub fn targets(
         &self,
         device: &wgpu::Device,
@@ -422,6 +607,7 @@ impl Ssr {
         lit: &wgpu::TextureView,
         ao: bool,
         spread_slot: bool,
+        thin: bool,
     ) -> SsrTargets {
         let texture = |label, size: (u32, u32), levels, format, usage| {
             device.create_texture(&wgpu::TextureDescriptor {
@@ -595,8 +781,84 @@ impl Ssr {
                 })
             },
         );
+        let thin = self.thin.as_ref().filter(|_| thin).map(|passes| {
+            // Blocks of 8x8 pixels, as many as make whole blocks of the last
+            // level (each level halves them), one workgroup each.
+            let last = COARSE_CELL << (COARSE_LEVELS - 1);
+            let groups = (size.0.div_ceil(last), size.1.div_ceil(last));
+            let blocks = (groups.0 << (COARSE_LEVELS - 1), groups.1 << (COARSE_LEVELS - 1));
+            let coarse_texture = texture(
+                "screen reflection coarse depth",
+                blocks,
+                COARSE_LEVELS,
+                COARSE_FORMAT,
+                wgpu::TextureUsages::STORAGE_BINDING,
+            );
+            let coarse_levels: Vec<_> = (0..COARSE_LEVELS)
+                .map(|level| {
+                    coarse_texture.create_view(&wgpu::TextureViewDescriptor {
+                        base_mip_level: level,
+                        mip_level_count: Some(1),
+                        ..Default::default()
+                    })
+                })
+                .collect();
+            let coarse = coarse_texture.create_view(&Default::default());
+            let mut entries = vec![
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&depth_copy),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 13,
+                    resource: wgpu::BindingResource::Sampler(&passes.nearest_sampler),
+                },
+            ];
+            entries.extend(coarse_levels.iter().zip(14..).map(|(view, binding)| wgpu::BindGroupEntry {
+                binding,
+                resource: wgpu::BindingResource::TextureView(view),
+            }));
+            let coarse_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("screen reflection coarse depth"),
+                layout: &passes.coarse_layout,
+                entries: &entries,
+            });
+            let trace_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("screen reflections thin objects"),
+                layout: &passes.layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&depth_copy),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&history),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: self.uniform.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 11,
+                        resource: wgpu::BindingResource::TextureView(&coarse),
+                    },
+                ],
+            });
+            ThinTargets {
+                coarse,
+                coarse_group,
+                coarse_workgroups: groups,
+                trace_group,
+            }
+        });
         SsrTargets {
             blur,
+            thin,
             trace_group: group(&history),
             copy_group: group(lit),
             fill_group: device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -649,6 +911,22 @@ impl Ssr {
             &targets.depth_copy,
             time("reflection depth"),
         );
+        let thin = self.thin.as_ref().zip(targets.thin.as_ref());
+        if let Some((passes, thin)) = thin {
+            super::gpu3d::mark_step("reflection coarse depth");
+            let time = time("reflection coarse depth");
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("3d reflection coarse depth"),
+                timestamp_writes: time.map(|t| wgpu::ComputePassTimestampWrites {
+                    query_set: t.query_set,
+                    beginning_of_pass_write_index: t.beginning_of_pass_write_index,
+                    end_of_pass_write_index: t.end_of_pass_write_index,
+                }),
+            });
+            pass.set_pipeline(&passes.coarse_pipeline);
+            pass.set_bind_group(0, &thin.coarse_group, &[]);
+            pass.dispatch_workgroups(thin.coarse_workgroups.0, thin.coarse_workgroups.1, 1);
+        }
         super::gpu3d::mark_step("reflections");
         if targets.unmarked.swap(false, Ordering::Relaxed) {
             // Blue 1: the reflections are there (see `SsrTargets::unmarked`).
@@ -689,8 +967,16 @@ impl Ssr {
                 timestamp_writes: time("screen reflections"),
                 ..Default::default()
             });
-            pass.set_pipeline(&self.trace_pipeline);
-            pass.set_bind_group(0, &targets.trace_group, &[]);
+            match thin {
+                Some((passes, thin)) => {
+                    pass.set_pipeline(&passes.trace_pipeline);
+                    pass.set_bind_group(0, &thin.trace_group, &[]);
+                }
+                None => {
+                    pass.set_pipeline(&self.trace_pipeline);
+                    pass.set_bind_group(0, &targets.trace_group, &[]);
+                }
+            }
             pass.draw(0..3, 0..1);
         }
         if let Some(blur) = &targets.blur
@@ -824,6 +1110,9 @@ impl SsrTargets {
             ("reflection depth", &self.depth_copy),
         ] {
             t.view(C::FrameTargets, label, view);
+        }
+        if let Some(thin) = &self.thin {
+            t.view(C::FrameTargets, "reflection coarse depth", &thin.coarse);
         }
         if let Some(blur) = &self.blur {
             t.texture(C::FrameTargets, "reflection blur levels", &blur.levels);

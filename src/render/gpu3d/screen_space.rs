@@ -35,6 +35,9 @@ pub(super) struct ScreenSpace {
     /// whether this frame has them.
     pub(super) ssr: Option<Ssr>,
     pub(super) ssr_on: bool,
+    /// Whether this frame's reflections trace thin objects
+    /// (`Post::ssr_thin_objects`, see `ssr_thin.wgsl`).
+    pub(super) ssr_thin: bool,
 }
 
 impl ScreenSpace {
@@ -50,6 +53,7 @@ impl ScreenSpace {
             ao_enabled: false,
             ssr: None,
             ssr_on: false,
+            ssr_thin: false,
         }
     }
 }

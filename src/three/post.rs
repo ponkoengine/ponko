@@ -339,6 +339,26 @@ pub struct Post {
     /// How far, in world units, a screen-space reflection looks along the
     /// reflected ray; it fades out toward the end. Default 30.
     pub ssr_max_distance: f32,
+    /// Screen-space reflections keep thin things whole without
+    /// [`AntiAliasing::Taa`]: rails, cables, poles and window frames near
+    /// the camera. Far along a reflected ray the trace takes steps tens of
+    /// pixels long and jumps over such things now and then, so without TAA
+    /// to fill the gaps their reflections come out dotted and dimmer. With
+    /// this on, the trace also reads a coarse copy of the depth (the nearest
+    /// depth of 8 to 64 pixel blocks) along each long step and looks closer
+    /// where something could be in front of the ray. It costs about a
+    /// millisecond more at 1920x1080 on a fast GPU (the guide's reflections
+    /// section has the numbers), so it is off by default and on in
+    /// [`GraphicsQuality::Ultra`](crate::render::GraphicsQuality::Ultra).
+    /// With TAA the gaps are filled anyway. Off, the reflections are
+    /// exactly as without the setting. Only matters where [`ssr`](Self::ssr)
+    /// is on.
+    /// ```
+    /// let mut post = ponko::render::Post::default();
+    /// assert!(!post.ssr_thin_objects);
+    /// (post.ssr, post.ssr_thin_objects) = (1.0, true); // a railing over a polished floor
+    /// ```
+    pub ssr_thin_objects: bool,
     /// Post antialiasing. Default off to preserve existing scenes.
     pub anti_aliasing: AntiAliasing,
     /// Samples per pixel of the 3D frame (multisampling), smoothing the
@@ -435,6 +455,7 @@ impl Default for Post {
             contact_shadows: 0.0,
             ssr: 0.0,
             ssr_max_distance: 30.0,
+            ssr_thin_objects: false,
             anti_aliasing: AntiAliasing::None,
             msaa: 4,
             taa_sharpness: 0.25,
@@ -528,7 +549,8 @@ impl Post {
     /// settings from the end where it is on. Choices that can't be mixed
     /// switch halfway: the tone map, the lookup table, antialiasing,
     /// multisampling, the render scale (blending it would make the scene's
-    /// images again every frame) and the ambient occlusion's quality.
+    /// images again every frame), the ambient occlusion's quality and
+    /// whether reflections trace thin objects.
     /// ```
     /// use ponko::render::Post;
     /// let (mut day, mut night) = (Post::default(), Post::default());
@@ -603,6 +625,7 @@ impl Post {
             contact_shadows: f(a.contact_shadows, b.contact_shadows),
             ssr: f(a.ssr, b.ssr),
             ssr_max_distance: f(a.ssr_max_distance, b.ssr_max_distance),
+            ssr_thin_objects: pick(t, a.ssr_thin_objects, b.ssr_thin_objects),
             anti_aliasing: pick(t, a.anti_aliasing, b.anti_aliasing),
             msaa: pick(t, a.msaa, b.msaa),
             taa_sharpness: f(a.taa_sharpness, b.taa_sharpness),

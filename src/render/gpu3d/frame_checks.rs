@@ -110,6 +110,7 @@ fn declared(resource: Resource, output: wgpu::TextureFormat, samples: u32) -> (O
         Format::Spread => Some(crate::render::ssr::SPREAD_FORMAT),
         Format::Hits => Some(crate::render::ssr::HITS_FORMAT),
         Format::DepthCopy => Some(crate::render::ssr::DEPTH_COPY_FORMAT),
+        Format::CoarseDepth => Some(crate::render::ssr::COARSE_FORMAT),
         Format::Output => Some(output),
         Format::Buffer | Format::Any => None,
     };
@@ -227,6 +228,9 @@ impl Renderer3D {
             Features::SSR.only_if(self.screen.ssr.is_some() && targets.ssr.is_some()),
             Features::SSR_SPREAD
                 .only_if(self.screen.ssr.is_some() && targets.ssr.is_some() && self.no_spread.is_some()),
+            Features::SSR_THIN.only_if(
+                self.screen.ssr.is_some() && targets.ssr.as_ref().is_some_and(|s| s.coarse_depth().is_some()),
+            ),
             Features::SPLIT.only_if(has(|p| matches!(p, Part::Transparent))),
             Features::VIEW_MODEL_SEE_THROUGH.only_if(self.view_model_see_through_pass()),
             Features::DEPTH_COPY.only_if(targets.depth_copy.is_some()),
@@ -302,6 +306,11 @@ impl Renderer3D {
                 .ssr
                 .as_ref()
                 .map(|s| view(Resource::ReflectionDepth, s.depth_copy())),
+            targets
+                .ssr
+                .as_ref()
+                .and_then(|s| s.coarse_depth())
+                .map(|coarse| view(Resource::ReflectionCoarseDepth, coarse)),
             targets.ao.as_ref().map(|a| view(Resource::AoRaw, a.images().0)),
             // Without temporal accumulation the history is a stand-in.
             targets
