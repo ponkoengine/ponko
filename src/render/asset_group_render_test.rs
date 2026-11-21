@@ -310,3 +310,142 @@ fn group_upload_cost_on_the_gpu() {
         );
     }
 }
+
+/// A `.glb` of one red-glowing square, two units across, facing +z.
+#[cfg(feature = "3d")]
+fn red_square() -> Vec<u8> {
+    let mut bin = Vec::new();
+    for [x, y] in [[-1.0f32, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]] {
+        for v in [x, y, 0.0f32] {
+            bin.extend_from_slice(&v.to_le_bytes());
+        }
+    }
+    for i in [0u16, 1, 2, 0, 2, 3] {
+        bin.extend_from_slice(&i.to_le_bytes());
+    }
+    let json = serde_json::json!({
+        "asset": { "version": "2.0" },
+        "scene": 0,
+        "scenes": [{ "nodes": [0] }],
+        "nodes": [{ "mesh": 0 }],
+        "meshes": [{ "primitives": [{ "attributes": { "POSITION": 0 }, "indices": 1, "material": 0 }] }],
+        "materials": [{
+            "pbrMetallicRoughness": { "baseColorFactor": [0.0, 0.0, 0.0, 1.0] },
+            "emissiveFactor": [1.0, 0.0, 0.0],
+            "doubleSided": true
+        }],
+        "buffers": [{ "byteLength": bin.len() }],
+        "bufferViews": [
+            { "buffer": 0, "byteOffset": 0, "byteLength": 48 },
+            { "buffer": 0, "byteOffset": 48, "byteLength": 12 }
+        ],
+        "accessors": [
+            { "bufferView": 0, "componentType": 5126, "count": 4, "type": "VEC3",
+              "min": [-1.0, -1.0, 0.0], "max": [1.0, 1.0, 0.0] },
+            { "bufferView": 1, "componentType": 5123, "count": 6, "type": "SCALAR" }
+        ]
+    });
+    let mut json = json.to_string().into_bytes();
+    while !json.len().is_multiple_of(4) {
+        json.push(b' ');
+    }
+    let total = 12 + 8 + json.len() + 8 + bin.len();
+    let mut glb = Vec::with_capacity(total);
+    glb.extend_from_slice(b"glTF");
+    glb.extend_from_slice(&2u32.to_le_bytes());
+    glb.extend_from_slice(&(total as u32).to_le_bytes());
+    glb.extend_from_slice(&(json.len() as u32).to_le_bytes());
+    glb.extend_from_slice(b"JSON");
+    glb.extend_from_slice(&json);
+    glb.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+    glb.extend_from_slice(b"BIN\0");
+    glb.extend_from_slice(&bin);
+    glb
+}
+
+#[cfg(feature = "3d")]
+#[test]
+fn mesh_buffer_and_made_texture_uploads_are_timed_on_the_gpu_where_it_has_timestamps_and_still_draw() {
+    use crate::render::upload_timer::take_timed;
+    use crate::streaming::{AssetState, ResidencyKind};
+    let Some(mut ctx) = timed_ctx() else {
+        return;
+    };
+    let timing = ctx.gfx.renderer.as_ref().unwrap().times_uploads();
+    ctx.scene3d.sky.atmosphere = false;
+    ctx.scene3d.camera.position = vec3(0.0, 0.0, 2.0);
+    ctx.scene3d.camera.look_at(Vec3::ZERO);
+    ctx.gfx.clear(Color::BLACK);
+    ctx.assets
+        .add_background_source(MemorySource::new("mem").with("square.glb", red_square()));
+    let _ = take_timed();
+
+    // A texture made outside the steps: its copy is timed (one copy, no
+    // buffers), or nothing is where the GPU has no timestamps.
+    let red_pixels = [255u8, 0, 0, 255].repeat((SIZE * SIZE) as usize);
+    let made = ctx.gfx.create_texture(SIZE, SIZE, &red_pixels);
+    assert_eq!(take_timed(), if timing { [1, 0] } else { [0, 0] });
+
+    // A streamed mesh, through the streaming step: its vertex and index
+    // buffers' copies are timed.
+    assert_eq!(ctx.gfx.stream_mesh("square.glb"), None);
+    let mut mesh = None;
+    for _ in 0..1000 {
+        ctx.pump_streaming();
+        mesh = ctx.gfx.stream_mesh("square.glb");
+        if ctx.gfx.asset_state(ResidencyKind::Mesh, "square.glb") == AssetState::Resident {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let mesh = mesh.expect("the streamed mesh loaded");
+    // Copied into the shared mesh arena within the step, so nothing is left
+    // for the frame to copy untimed.
+    let [textures, buffers] = take_timed();
+    if timing {
+        assert!(buffers >= 1, "the mesh's buffer copies were timed: {buffers}");
+    } else {
+        assert_eq!((textures, buffers), (0, 0));
+    }
+
+    // The timed copies still carry the bytes: the made texture fills the
+    // frame red, and the streamed square draws red in the middle of an
+    // otherwise black frame (the negative control).
+    let half = SIZE as f32 / 2.0;
+    ctx.gfx.draw(made, vec2(half, half));
+    let texture_frame = frame(&mut ctx, "made-red");
+    let covered = texture_frame.pixels().filter(|p| red(p)).count() as f32 / (SIZE * SIZE) as f32;
+    assert!(covered > 0.95, "the made texture covers the frame: {covered}");
+    let empty = frame(&mut ctx, "no-square");
+    assert!(!red(empty.get_pixel(SIZE / 2, SIZE / 2)));
+    ctx.world
+        .spawn((crate::d3::Transform::default(), crate::render::Model::new(mesh)));
+    let square = frame(&mut ctx, "square");
+    let p = square.get_pixel(SIZE / 2, SIZE / 2);
+    assert!(red(p), "the streamed square draws: {p:?}");
+    let corner = square.get_pixel(1, 1);
+    assert!(!red(corner), "and only where it is: {corner:?}");
+
+    // The made textures' time comes back a few frames later (a frame or
+    // two without one when Metal left a timestamp unwritten: make another,
+    // a bounded number of times).
+    let mut stats = ctx.gfx.upload_stats();
+    for i in 0..200 {
+        if stats.gpu_created_ms.is_some() {
+            break;
+        }
+        if timing && i % 20 == 19 {
+            let _ = ctx.gfx.create_texture(SIZE, SIZE, &red_pixels);
+        }
+        frame(&mut ctx, &format!("created{i}"));
+        ctx.pump_streaming();
+        stats = ctx.gfx.upload_stats();
+    }
+    if !timing {
+        assert_eq!(stats.gpu_created_ms, None, "nothing made up");
+        return;
+    }
+    let ms = stats.gpu_created_ms.expect("the made textures' GPU time came back");
+    assert!(ms > 0.0, "{ms}");
+    eprintln!("the GPU copied a {SIZE}x{SIZE} made texture in {ms:.3} ms");
+}

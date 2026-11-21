@@ -5197,8 +5197,8 @@ int main() {
     headless_play();
     behavior_trees();
     world_brains();
-    native_parity_round5();
     world_brains_in_loops();
+    native_parity_round5();
     brain_rows_in_typed_loops();
     lossy_loopback_links();
     std::cout << "C++ wrapper tests passed\n";

@@ -393,9 +393,11 @@ pub enum GroupState {
     Ready,
     /// An asset failed to load: [`Assets::group_error`] says which and why.
     /// Nothing more of the group starts; what had loaded stays loaded, and
-    /// the assets already being read finish on their workers and wait, so
+    /// the assets already being read finish and are still taken (and
+    /// counted in its progress) by the frames that follow, so
     /// [`Assets::restart_group`] reads again only what failed and what never
-    /// started. [`Assets::cancel_group`] drops what waits.
+    /// started. [`Ctx::finish_uploads`](crate::ctx::Ctx::finish_uploads)
+    /// waits for them too. [`Assets::cancel_group`] drops what is left.
     Failed,
     /// Cancelled with [`Assets::cancel_group`] before it was ready.
     /// [`Assets::restart_group`] loads the rest.
@@ -732,6 +734,12 @@ struct Running {
 }
 
 impl Running {
+    /// Failed with assets started before the failure still on workers,
+    /// decoding or streaming: the step goes on taking them.
+    fn settling(&self) -> bool {
+        self.state == GroupState::Failed && self.in_flight > 0
+    }
+
     fn progress(&self) -> GroupProgress {
         let (mut bytes_read, mut bytes_total, mut bytes_loaded, mut known) = (0, 0, 0, true);
         for (item, read) in self.items.iter().zip(&self.shared.read) {
@@ -773,6 +781,9 @@ pub(crate) struct Groups {
     loading: usize,
     /// A group failed or was cancelled since the last step.
     stopping: bool,
+    /// A failed group may still have assets in flight: the step takes them
+    /// as they finish (see [`Running::settling`]).
+    settling: bool,
     budget_ms: f32,
     pub(crate) stats: GroupStats,
     /// Tests: decode on the game thread a slice at a time (as where there
@@ -792,6 +803,7 @@ impl Default for Groups {
             list: Vec::new(),
             loading: 0,
             stopping: false,
+            settling: false,
             sliced: None,
             piece_cost: None,
             frame_secs: 0.0,
@@ -1075,7 +1087,8 @@ impl Assets {
     /// [`GroupState::Loading`] again, and from the next step it reads only
     /// the assets that had not loaded. What loaded stays loaded and is not
     /// read again, values not yet taken stay, and a failed group's assets
-    /// that were already being read when it failed are taken as they are.
+    /// that were already being read when it failed are taken as they
+    /// finish, as they were while it was failed.
     /// For a loading screen's "try again" after a network error, or after
     /// fixing a broken file. Does nothing to a group that is loading or
     /// ready.
@@ -1203,7 +1216,7 @@ impl Ctx {
         if self.assets.groups.stopping {
             self.stop_cancelled_streams();
         }
-        if self.assets.groups.loading == 0 {
+        if self.assets.groups.loading == 0 && !self.assets.groups.settling {
             return;
         }
         let start = crate::perf::Instant::now();
@@ -1217,11 +1230,17 @@ impl Ctx {
             upload_secs: 0.0,
         };
         self.gfx.begin_timed_uploads(true);
+        let mut settling = false;
         for index in 0..self.assets.groups.list.len() {
-            if self.assets.groups.list[index].state == GroupState::Loading {
+            let group = &self.assets.groups.list[index];
+            if group.state == GroupState::Loading {
                 self.pump_group(index, &mut frame);
+            } else if group.settling() {
+                self.settle_group(index, &mut frame);
             }
+            settling |= self.assets.groups.list[index].settling();
         }
+        self.assets.groups.settling = settling;
         self.gfx.end_timed_uploads();
         let (bytes, uploads) = &mut self.gfx.streaming.group_uploads;
         *bytes += frame.spent;
@@ -1245,15 +1264,17 @@ impl Ctx {
     }
 
     /// Runs the asset group and upload steps without their budgets until
-    /// no group is loading: the group half of [`Ctx::finish_uploads`].
+    /// no group is loading and no failed group has assets in flight: the
+    /// group half of [`Ctx::finish_uploads`].
     pub(crate) fn finish_groups(&mut self) {
         let budget_ms = self.assets.groups.budget_ms;
         self.assets.groups.budget_ms = f32::INFINITY;
-        while self.assets.groups.loading > 0 {
+        let busy = |groups: &Groups| groups.loading > 0 || groups.settling;
+        while busy(&self.assets.groups) {
             self.pump_asset_groups();
             self.gfx.finish_uploads(&mut self.world);
             self.gfx.streaming.group_uploads = (0, 0);
-            if self.assets.groups.loading > 0 {
+            if busy(&self.assets.groups) {
                 std::thread::yield_now();
             }
         }
@@ -1310,6 +1331,24 @@ impl Ctx {
         if group.loaded == group.items.len() {
             group.state = GroupState::Ready;
             self.assets.groups.loading -= 1;
+        }
+    }
+
+    /// One frame's step of failed group `index`: takes what it had started
+    /// before it failed, as it finishes, so its progress counts it and a
+    /// restart doesn't need it. Nothing new starts. An asset that fails
+    /// now waits for the restart too; the group keeps its first error.
+    fn settle_group(&mut self, index: usize, frame: &mut Frame) {
+        for i in 0..self.assets.groups.list[index].items.len() {
+            if self.assets.groups.list[index].in_flight == 0 || !frame.may_work() {
+                return;
+            }
+            if let Err(error) = self.advance_item(index, i, frame) {
+                let group = &mut self.assets.groups.list[index];
+                eprintln!("ponko: asset group \"{}\": {error} (after it failed)", group.name);
+                group.items[i].step = Step::Waiting;
+                group.in_flight -= 1;
+            }
         }
     }
 
@@ -1547,7 +1586,8 @@ impl Ctx {
     }
 
     /// Group `index` failed with `error`: nothing more of it starts. What
-    /// is on workers or streaming finishes and waits for a restart.
+    /// is on workers or streaming finishes and is taken by the following
+    /// steps ([`Ctx::settle_group`]).
     fn fail_group(&mut self, index: usize, error: Error) {
         let group = &mut self.assets.groups.list[index];
         group.state = GroupState::Failed;

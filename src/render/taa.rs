@@ -274,7 +274,9 @@ impl Taa {
         };
         let render = wgpu::TextureUsages::RENDER_ATTACHMENT;
         let bound = render | wgpu::TextureUsages::TEXTURE_BINDING;
-        let input = make("TAA input", HDR_FORMAT, 1, bound);
+        // The split transparent pass copies it for the surfaces and soft
+        // particles that read the scene behind them.
+        let input = make("TAA input", HDR_FORMAT, 1, bound | wgpu::TextureUsages::COPY_SRC);
         let input_view = input.create_view(&Default::default());
         let history = [
             make("TAA history 0", HDR_FORMAT, 1, bound).create_view(&Default::default()),

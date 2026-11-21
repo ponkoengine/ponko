@@ -202,6 +202,14 @@ impl Uploading<'_, wgpu::Queue> {
     /// thread's writes (see [`begin_batch`]), a small one joins it instead.
     pub fn write_buffer(&self, buffer: &wgpu::Buffer, offset: u64, data: &[u8]) {
         add(self.kind, data.len() as u64);
+        // A step whose uploads the GPU times makes a mesh buffer's copy
+        // itself, after whatever is held, so the writes keep their order.
+        if self.kind == Upload::Meshes && super::upload_timer::active() {
+            submit_held();
+            if super::upload_timer::write_buffer(buffer, offset, data) {
+                return;
+            }
+        }
         if batched(buffer, offset, data) {
             return;
         }
@@ -691,12 +699,52 @@ pub(crate) fn release() -> (usize, u32) {
 #[cfg_attr(not(feature = "3d"), allow(dead_code))]
 impl Uploading<'_, wgpu::Device> {
     /// `DeviceExt::create_buffer_init`, counted: a buffer created, and its
-    /// contents uploaded.
+    /// contents uploaded. While a step's uploads are timed (see
+    /// `upload_timer`), a mesh buffer is made empty and its contents copied
+    /// in between two timestamps instead, so the GPU's copy is timed.
     pub fn create_buffer_init(&self, desc: &wgpu::util::BufferInitDescriptor<'_>) -> wgpu::Buffer {
+        if self.kind == Upload::Meshes
+            && super::upload_timer::active()
+            && let Some(buffer) = self.timed_buffer(desc)
+        {
+            return buffer;
+        }
         let buffer = self.to.create_buffer_init(desc);
         created(buffer.size());
         add(self.kind, desc.contents.len() as u64);
         buffer
+    }
+
+    /// [`create_buffer_init`](Self::create_buffer_init) with its contents
+    /// copied in by the active upload timer; `None` (nothing made) when it
+    /// can't time them.
+    fn timed_buffer(&self, desc: &wgpu::util::BufferInitDescriptor<'_>) -> Option<wgpu::Buffer> {
+        // Sized as `create_buffer_init` sizes it: whole 4-byte words.
+        let size = (desc.contents.len() as u64).next_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT);
+        if size == 0 || !super::upload_timer::can_time() {
+            return None;
+        }
+        let buffer = self.to.create_buffer(&wgpu::BufferDescriptor {
+            label: desc.label,
+            size,
+            usage: desc.usage | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut padded;
+        let contents = if desc.contents.len() as u64 == size {
+            desc.contents
+        } else {
+            padded = desc.contents.to_vec();
+            padded.resize(size as usize, 0);
+            &padded
+        };
+        submit_held();
+        if !super::upload_timer::write_buffer(&buffer, 0, contents) {
+            return None;
+        }
+        created(size);
+        add(self.kind, desc.contents.len() as u64);
+        Some(buffer)
     }
 }
 

@@ -114,99 +114,160 @@ pub(super) fn prepare(
     bytes: &[u8],
     fetch: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
 ) -> Result<Prepared, String> {
-    let (json, blob) = if bytes.starts_with(b"glTF") {
-        let glb = gltf::Glb::from_slice(bytes).map_err(|e| format!("{name}: not a glTF file: {e}"))?;
-        (glb.json.into_owned(), glb.bin.map(std::borrow::Cow::into_owned))
-    } else {
-        (bytes.to_vec(), None)
-    };
-    let mut json: Value = serde_json::from_slice(&json).map_err(|e| format!("{name}: not a glTF file: {e}"))?;
-    if !json.is_object() {
-        return Err(format!("{name}: not a glTF file: its JSON isn't an object"));
-    }
-    let mut warnings = Vec::new();
+    let mut start = Start::new(name, bytes)?;
+    while !start.next_buffer(name, fetch, usize::MAX)? {}
+    start.finish(name)
+}
 
-    // Required extensions this build can't read fail; optional ones are
-    // dropped with a warning naming them.
-    let required = strings(&json["extensionsRequired"]);
-    for extension in &required {
-        match support(extension) {
-            Some(Support::Always | Support::Feature(_, true)) => {}
-            Some(Support::Feature(feature, false)) => {
-                return Err(format!(
-                    "{name}: needs the glTF extension {extension}, which this build of ponko doesn't read: \
-                     turn on its `{feature}` cargo feature"
-                ));
+/// [`prepare`] a piece at a time (a streamed mesh where there are no worker
+/// threads): [`Start::new`] parses the JSON, [`Start::next_buffer`] fetches
+/// the buffers (an inline one a bounded number of characters a call), and
+/// [`Start::finish`] makes the document. The same [`Prepared`] either way.
+pub(super) struct Start {
+    json: Value,
+    blob: Option<Vec<u8>>,
+    warnings: Vec<String>,
+    buffers: Vec<Vec<u8>>,
+    /// The inline buffer being decoded: where its text is up to.
+    inline: Option<(usize, super::gltf::Base64)>,
+}
+
+impl Start {
+    /// Splits a GLB, parses the JSON and checks its extensions.
+    pub(super) fn new(name: &str, bytes: &[u8]) -> Result<Self, String> {
+        let (json, blob) = if bytes.starts_with(b"glTF") {
+            let glb = gltf::Glb::from_slice(bytes).map_err(|e| format!("{name}: not a glTF file: {e}"))?;
+            (glb.json.into_owned(), glb.bin.map(std::borrow::Cow::into_owned))
+        } else {
+            (bytes.to_vec(), None)
+        };
+        let json: Value = serde_json::from_slice(&json).map_err(|e| format!("{name}: not a glTF file: {e}"))?;
+        if !json.is_object() {
+            return Err(format!("{name}: not a glTF file: its JSON isn't an object"));
+        }
+        let mut warnings = Vec::new();
+
+        // Required extensions this build can't read fail; optional ones are
+        // dropped with a warning naming them.
+        let required = strings(&json["extensionsRequired"]);
+        for extension in &required {
+            match support(extension) {
+                Some(Support::Always | Support::Feature(_, true)) => {}
+                Some(Support::Feature(feature, false)) => {
+                    return Err(format!(
+                        "{name}: needs the glTF extension {extension}, which this build of ponko doesn't read: \
+                         turn on its `{feature}` cargo feature"
+                    ));
+                }
+                None => {
+                    return Err(format!(
+                        "{name}: needs the glTF extension {extension}, which ponko doesn't read ({})",
+                        ignored_because(extension)
+                    ));
+                }
             }
-            None => {
-                return Err(format!(
-                    "{name}: needs the glTF extension {extension}, which ponko doesn't read ({})",
-                    ignored_because(extension)
-                ));
+        }
+        for extension in strings(&json["extensionsUsed"]) {
+            if required.contains(&extension) {
+                continue;
+            }
+            match support(&extension) {
+                Some(Support::Always | Support::Feature(_, true)) => {}
+                Some(Support::Feature(feature, false)) => warnings.push(format!(
+                    "{name}: uses the glTF extension {extension} without the `{feature}` cargo feature; \
+                     its uncompressed fallback loads instead"
+                )),
+                None => warnings.push(format!(
+                    "{name}: ignores the optional glTF extension {extension}: {}",
+                    ignored_because(&extension)
+                )),
             }
         }
-    }
-    for extension in strings(&json["extensionsUsed"]) {
-        if required.contains(&extension) {
-            continue;
-        }
-        match support(&extension) {
-            Some(Support::Always | Support::Feature(_, true)) => {}
-            Some(Support::Feature(feature, false)) => warnings.push(format!(
-                "{name}: uses the glTF extension {extension} without the `{feature}` cargo feature; \
-                 its uncompressed fallback loads instead"
-            )),
-            None => warnings.push(format!(
-                "{name}: ignores the optional glTF extension {extension}: {}",
-                ignored_because(&extension)
-            )),
-        }
+        Ok(Self {
+            json,
+            blob,
+            warnings,
+            buffers: Vec::new(),
+            inline: None,
+        })
     }
 
-    let folder = super::gltf::folder_of(name);
-    let mut buffers = Vec::new();
-    let mut blob = blob;
-    for (i, buffer) in json["buffers"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default()
-        .iter()
-        .enumerate()
-    {
+    /// Fetches the next buffer, or decodes the next `chars` characters at
+    /// most of an inline one: `true` once every buffer is there.
+    pub(super) fn next_buffer(
+        &mut self,
+        name: &str,
+        fetch: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
+        chars: usize,
+    ) -> Result<bool, String> {
+        let i = self.buffers.len();
+        let Some(buffer) = self.json["buffers"].as_array().and_then(|b| b.get(i)) else {
+            return Ok(true);
+        };
         let length = buffer["byteLength"].as_u64().unwrap_or(0) as usize;
         let fallback = meshopt(buffer).is_some_and(|m| m["fallback"].as_bool() == Some(true));
         let data = match buffer["uri"].as_str() {
             // A meshopt file's fallback buffer holds nothing to read when
             // the views are decompressed (often it has no data at all).
             _ if fallback && MESHOPT => Vec::new(),
-            Some(uri) => super::gltf::fetch(uri, folder, fetch)?,
+            Some(uri) => match super::gltf::inline_data(uri) {
+                Some(text) => {
+                    let text = text?;
+                    let (at, mut decoder) = self
+                        .inline
+                        .take()
+                        .unwrap_or_else(|| (0, super::gltf::Base64::with_capacity(text.len())));
+                    let end = super::gltf::char_boundary(text, at.saturating_add(chars));
+                    decoder.feed(&text[at..end])?;
+                    if end < text.len() {
+                        self.inline = Some((end, decoder));
+                        return Ok(false);
+                    }
+                    decoder.finish()
+                }
+                None => super::gltf::fetch(uri, super::gltf::folder_of(name), fetch)?,
+            },
             None if fallback => Vec::new(),
-            None => blob.take().ok_or_else(|| format!("{name}: missing its binary chunk"))?,
+            None => self
+                .blob
+                .take()
+                .ok_or_else(|| format!("{name}: missing its binary chunk"))?,
         };
         if data.len() < length && !(fallback && data.is_empty()) {
             return Err(format!("{name}: buffer {i} is shorter than it says"));
         }
-        buffers.push(data);
+        self.buffers.push(data);
+        Ok(self.buffers.len() == self.json["buffers"].as_array().map_or(0, Vec::len))
     }
-    decompress_views(name, &mut json, &mut buffers)?;
-    let preferred_image = texture_sources(name, &mut json)?;
-    let dequantize = fold_quantized_positions(&mut json);
 
-    // The `gltf` crate checks required extensions against its own list,
-    // which doesn't know these; they were checked above.
-    json["extensionsRequired"] = Value::Array(Vec::new());
-    let root: gltf::json::Root =
-        serde_json::from_value(json.clone()).map_err(|e| format!("{name}: not a glTF file: {e}"))?;
-    super::gltf::check_position_indices(&root).map_err(|e| format!("{name}: not a valid glTF file: {e}"))?;
-    let document = gltf::Document::from_json(root).map_err(|e| format!("{name}: not a valid glTF file: {e}"))?;
-    Ok(Prepared {
-        document,
-        buffers,
-        json,
-        preferred_image,
-        dequantize,
-        warnings,
-    })
+    /// Decompresses meshopt views and makes the document.
+    pub(super) fn finish(self, name: &str) -> Result<Prepared, String> {
+        let Self {
+            mut json,
+            mut buffers,
+            warnings,
+            ..
+        } = self;
+        decompress_views(name, &mut json, &mut buffers)?;
+        let preferred_image = texture_sources(name, &mut json)?;
+        let dequantize = fold_quantized_positions(&mut json);
+
+        // The `gltf` crate checks required extensions against its own list,
+        // which doesn't know these; they were checked above.
+        json["extensionsRequired"] = Value::Array(Vec::new());
+        let root: gltf::json::Root =
+            serde_json::from_value(json.clone()).map_err(|e| format!("{name}: not a glTF file: {e}"))?;
+        super::gltf::check_position_indices(&root).map_err(|e| format!("{name}: not a valid glTF file: {e}"))?;
+        let document = gltf::Document::from_json(root).map_err(|e| format!("{name}: not a valid glTF file: {e}"))?;
+        Ok(Prepared {
+            document,
+            buffers,
+            json,
+            preferred_image,
+            dequantize,
+            warnings,
+        })
+    }
 }
 
 /// The extension `ponko cook` marks the node a quantized mesh hangs from
