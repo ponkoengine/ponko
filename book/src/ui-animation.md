@@ -118,14 +118,42 @@ Opacity, scale and offset are drawn, not laid out: the node and its children
 fade, scale (around the node's centre) and move together, and input and
 layout keep using its place (`ui.rect`). Background and text color change the
 node's paint; width and height change its layout, so its neighbours move.
-Opacity fades each piece of a node and its children on its own, not the
-group as one picture: half way, a child lets a little of its parent show
-through it. A screen fading over the window looks as expected; for a faded
-card over a busy background, keep fades short.
+Opacity fades each piece of a node and its children on its own, unless the
+node fades as a group (below): half way, a child lets a little of its parent
+show through it, and overlapping children show through each other.
 `ui.drawn(node)` says how a node is drawn now (its rectangle after
 animation, its opacity and scale, its fill), which is what a headless test
 reads. `ui.stop_animations(node)` stops a node's tweens where they are, and
 `ui.is_animating(node)` tells whether anything moves it.
+
+## Fading a group as one image
+
+`ui.set_fade_as_group(node, true)` (or `.fade_as_group()` when building)
+fades the node and everything inside it as one picture: while its opacity
+is between 0 and 1, the group is drawn opaque into an offscreen layer the
+size of the window, and that layer is shown at the group's opacity. A card's
+fill no longer shows through its buttons, and a child no longer shows
+through the sibling on top of it; what is behind the group shows through it
+evenly. The fade that drives it can be the node's own (a tween, a screen
+transition) or an ancestor's.
+
+```rust
+use ponko::ui::{UiLayout, UiScreenTransition};
+
+let card = ctx.ui.root().layout(UiLayout::centered(300.0, 200.0)).fade_as_group().id();
+ctx.ui.button(card, "Play").layout(UiLayout::row(44.0));
+ctx.ui.set_screen_transition(card, UiScreenTransition::fade(0.2), UiScreenTransition::fade(0.2));
+ctx.ui.push_modal(card);
+```
+
+It costs nothing until it is used: a group at rest, or a UI with no group
+marked, draws exactly what it drew before, with no layer. While a group
+fades, its nodes keep their drawings from frame to frame (only the layer's
+opacity changes), and the layer costs one window-sized texture (made the
+first time and kept), a pass drawing the group into it and one quad showing
+it. A group inside a fading group gets a layer of its own. Sprites with an
+additive or multiply blend inside a group blend with the group, not with
+what is behind it. World-space panels (`UiPanel3D`) fade each piece.
 
 ## The UI clock
 
@@ -162,6 +190,9 @@ one turns round without a jump, a screen's pose at each moment, timelines
 that hold, loop, ping-pong and report their end, and the same values at
 different frame rates. `src/render/ui_animation_render_test.rs` draws a
 faded, moved and scaled screen offscreen and checks where its pixels land.
+`src/render/ui_group_fade_render_test.rs` draws two overlapping squares in a
+group at half opacity through the renderer: faded piece by piece the lower
+square shows through the upper one, faded as a group it does not.
 
 ## From C
 
@@ -173,8 +204,10 @@ fills one; its `start` is a delay) and `ponko_ctx_ui_play` an array of them
 as a timeline with a `PonkoUiRepeat`. `ponko_ctx_ui_stop_animations`,
 `ponko_ctx_ui_is_animating`, `ponko_ctx_ui_drawn`, `ponko_ctx_ui_clock`,
 `ponko_ctx_ui_set_reduced_motion` and `ponko_ui_transition_progress` do the
-rest, `ponko_ui_ease` names the curves, and `PONKO_UI_EVENT_ANIMATION_DONE`
+rest, `ponko_ctx_ui_set_fade_as_group` and `ponko_ctx_ui_fades_as_group`
+mark a group to fade as one image, `ponko_ui_ease` names the curves, and `PONKO_UI_EVENT_ANIMATION_DONE`
 arrives through `ponko_ctx_ui_next_event_ex`. In C++ they are
-`ui::tree::animate`, `play`, `set_screen_transition`, `drawn` and the rest,
+`ui::tree::animate`, `play`, `set_screen_transition`, `drawn`,
+`set_fade_as_group` and the rest,
 with `ui::make_transition`, `ui::screen_fade`, `ui::tween_to` and
 `ui::named_ease`.

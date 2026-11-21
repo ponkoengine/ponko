@@ -58,6 +58,10 @@ Options:
                                   cross-origin isolation headers on Netlify,
                                   Cloudflare Pages, Vercel and Apache; the
                                   guide's \"Threads on the web\" has the rest
+  --isolation-worker              With --threads: add ponko-isolate.js, a
+                                  service worker that sends those headers
+                                  on hosts that can't (one reload on the
+                                  first visit; see the guide)
   --features <list>, --no-default-features   As for cargo build
   --profile <name>                The Cargo profile (default: release)
   --locked                        As for cargo build
@@ -101,6 +105,9 @@ pub struct Options {
     pub web: bool,
     /// `--threads`: a web build with worker threads.
     pub threads: bool,
+    /// `--isolation-worker`: the service worker that sends the isolation
+    /// headers, for a web build with threads.
+    pub isolation_worker: bool,
     pub features: Option<String>,
     pub no_default_features: bool,
     pub profile: Option<String>,
@@ -146,6 +153,7 @@ impl Options {
                 "--target" => o.target = Some(value()?),
                 "--web" => o.web = true,
                 "--threads" => o.threads = true,
+                "--isolation-worker" => o.isolation_worker = true,
                 "--features" | "-F" => o.features = Some(value()?),
                 "--no-default-features" => o.no_default_features = true,
                 "--profile" => o.profile = Some(value()?),
@@ -172,6 +180,9 @@ impl Options {
         }
         if o.threads && !o.web {
             return Err("--threads is for web builds (desktop builds always have threads): add --web".into());
+        }
+        if o.isolation_worker && !o.threads {
+            return Err("--isolation-worker is for web builds with threads: add --web --threads".into());
         }
         Ok(o)
     }
@@ -1050,6 +1061,7 @@ pub fn package_command(options: &Options, cwd: &Path) -> Result<String, String> 
             Built::Web {
                 dir: &web_dir,
                 threads: options.threads,
+                isolation_worker: options.isolation_worker,
             },
             &notices,
             icon.as_deref(),
@@ -1146,8 +1158,14 @@ pub fn package_command(options: &Options, cwd: &Path) -> Result<String, String> 
             "threads: the workers start only where the page comes with the headers `{}`; \
              _headers, vercel.json and .htaccess in the folder send them on Netlify, Cloudflare Pages, \
              Vercel and Apache; elsewhere set them yourself (see the guide's \"Threads on the web\"). \
-             Without them the game runs on one thread",
-            headers.join("` and `")
+             Without them the game runs on one thread{}",
+            headers.join("` and `"),
+            if options.isolation_worker {
+                "; where the host sends none, ponko-isolate.js (a service worker) adds them \
+                 after one reload on the first visit"
+            } else {
+                ""
+            }
         ));
     } else if platform.os == Os::Web {
         report.push(format!(
@@ -1254,6 +1272,10 @@ mod tests {
             (&["--bin", "a", "--example", "b"][..], "not both"),
             (&["--web", "--target", "x86_64-pc-windows-msvc"], "--web builds for"),
             (&["--threads"], "--threads is for web builds"),
+            (
+                &["--web", "--isolation-worker"],
+                "--isolation-worker is for web builds with threads",
+            ),
             (&["--out"], "--out needs a value"),
             (&["--smoke-ticks", "many"], "takes a number"),
             (&["--zip"], "unknown argument `--zip`"),
