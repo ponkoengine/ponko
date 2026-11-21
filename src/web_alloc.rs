@@ -24,6 +24,3 @@ const HEAPS: usize = 32;
 static ALLOCATOR: orx_parallel_wasm_allocator::WasmParallelAllocator<HEAPS> =
     orx_parallel_wasm_allocator::WasmParallelAllocator::new();
 
-/// Whether this build has the per-thread allocator (and so builds saves on
-/// the frame pool).
-pub(crate) const PER_THREAD: bool = true;
