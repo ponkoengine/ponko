@@ -290,6 +290,9 @@ constexpr std::uint32_t decal_no_image = PONKO_DECAL_NO_IMAGE;
 /// Which decal layers a model takes (Rust `ReceivesDecals`); models without
 /// it take all. {0} takes none.
 using receives_decals = PonkoReceivesDecals;
+/// Draws a model with its lightmap from the baked lighting set with
+/// ctx::set_baked_lighting (Rust `Lightmapped`): its index in the bake.
+using lightmapped = PonkoLightmapped;
 /// A square of heightfield terrain, drawn more coarsely further from the
 /// camera (Rust `TerrainTile`); made with ctx::create_terrain_tile.
 using terrain_tile = PonkoTerrainTile;
@@ -2023,6 +2026,7 @@ protected:
         else if constexpr (std::is_same<T, reflection_probe3d>::value) status = ponko_reflection_probe3d_component(world, &id);
         else if constexpr (std::is_same<T, decal3d>::value) status = ponko_decal3d_component(world, &id);
         else if constexpr (std::is_same<T, receives_decals>::value) status = ponko_receives_decals_component(world, &id);
+        else if constexpr (std::is_same<T, lightmapped>::value) status = ponko_lightmapped_component(world, &id);
         else if constexpr (std::is_same<T, point_light2d>::value) status = ponko_point_light2d_component(world, &id);
         else if constexpr (std::is_same<T, spot_light2d>::value) status = ponko_spot_light2d_component(world, &id);
         else if constexpr (std::is_same<T, directional_light2d>::value) status = ponko_directional_light2d_component(world, &id);
@@ -3023,6 +3027,11 @@ public:
     std::size_t morph_target_count() const noexcept { return ponko_mesh_data_morph_target_count(raw_); }
     /// Removes every morph target (and the morph frames that use them).
     void clear_morph_targets() { detail::check(ponko_mesh_data_clear_morph_targets(raw_)); }
+    /// Gives it lightmap coordinates, `texels_per_unit` lightmap texels per world unit, for a
+    /// light bake (ponko_mesh_data_generate_lightmap_uvs); returns the square's side in texels.
+    std::uint32_t generate_lightmap_uvs(float texels_per_unit) {
+        std::uint32_t side = 0; detail::check(ponko_mesh_data_generate_lightmap_uvs(raw_, texels_per_unit, &side)); return side;
+    }
     /// Its arrays, valid while it lives.
     PonkoMeshView view() const { PonkoMeshView v{}; detail::check(ponko_mesh_data_view(raw_, &v)); return v; }
     /// A decal (Rust `MeshData::decal`): the part of this mesh inside a box,
@@ -6927,6 +6936,9 @@ public:
     net_events_view net_events() {
         net_events_view v; detail::check(ponko_ctx_net_events(raw_, &v.data, &v.size)); return v;
     }
+    /// Draws the world with baked lighting (ponko::baked_lighting::raw()), or without it (nullptr):
+    /// lightmapped models take their lightmap, the others the probe volume's light.
+    void set_baked_lighting(const PonkoBakedLighting* baked) { detail::check(ponko_ctx_set_baked_lighting(raw_, baked)); }
     /// The Steam lobby of this session, or 0 (not created yet, or not Steam).
     std::uint64_t steam_lobby() const { std::uint64_t l = 0; detail::check(ponko_ctx_steam_lobby(raw_, &l)); return l; }
     /// Opens the Steam overlay to invite friends to this session's lobby.
@@ -10032,6 +10044,190 @@ struct pixel_perfect : PonkoPixelPerfect {
     void apply(ctx& c) const { detail::check(ponko_pixel_perfect_apply(this, c.raw())); }
     /// Where exactly the resolution shows in the window, in window pixels.
     rect screen_rect(ctx& c) const { rect r{}; detail::check(ponko_pixel_perfect_screen_rect(this, c.raw(), &r)); return r; }
+};
+
+/// Where a video is (ponko_video_state): its texture, size, length, time, volume, sound and bus.
+using video_state = PonkoVideoState;
+/// A video played into a texture, its sound through the mixer (Rust `video::Video`, C library
+/// feature `video`): a WebM file with AV1 pictures and Vorbis sound. It starts paused on its first
+/// frame: play(), then update() once a frame and draw state().texture. A handle: free it with
+/// free(ctx), which also frees its texture and sound.
+class video {
+    PonkoVideo* raw_ = nullptr;
+    explicit video(PonkoVideo* raw) : raw_(raw) {}
+public:
+    /// No video.
+    video() = default;
+    /// Loads one from an asset source or `assets/` (ponko_ctx_load_video). Throws ponko::error:
+    /// not found, another codec or a build without the feature, or a damaged file.
+    static video load(ctx& c, const char* path) {
+        PonkoVideo* v = nullptr; detail::check(ponko_ctx_load_video(c.raw(), path, &v)); return video(v);
+    }
+    /// Makes one from a file's bytes, copied (ponko_ctx_video_from_bytes).
+    static video from_bytes(ctx& c, const void* data, std::size_t size) {
+        PonkoVideo* v = nullptr; detail::check(ponko_ctx_video_from_bytes(c.raw(), data, size, &v)); return video(v);
+    }
+    /// Whether this holds a video.
+    explicit operator bool() const noexcept { return raw_ != nullptr; }
+    /// The C handle.
+    PonkoVideo* raw() const noexcept { return raw_; }
+    /// Where it is: texture, size, length, time, volume, playing, finished, looping, sound, bus.
+    video_state state() const {
+        video_state s{}; s.struct_size = sizeof(s); s.version = PONKO_VIDEO_STATE_VERSION;
+        detail::check(ponko_video_state(raw_, &s)); return s;
+    }
+    /// The frame shown as RGBA pixels, valid until the video changes (ponko_video_frame_rgba).
+    std::pair<const std::uint8_t*, std::size_t> frame_rgba() const {
+        const std::uint8_t* p = nullptr; std::size_t n = 0;
+        detail::check(ponko_video_frame_rgba(raw_, &p, &n)); return {p, n};
+    }
+    /// Starts over at its end, or stops there (off by default).
+    void set_looping(bool looping) { detail::check(ponko_video_set_looping(raw_, looping)); }
+    /// Plays from where it is; from the start if it had finished.
+    void play(ctx& c) { detail::check(ponko_ctx_video_play(c.raw(), raw_)); }
+    /// Pauses: the frame stays, the sound stops.
+    void pause(ctx& c) { detail::check(ponko_ctx_video_pause(c.raw(), raw_)); }
+    /// Jumps to `seconds`, playing or paused.
+    void seek(ctx& c, float seconds) { detail::check(ponko_ctx_video_seek(c.raw(), raw_, seconds)); }
+    /// Moves it on by this frame's time and shows that frame: once a frame, from a frame system.
+    void update(ctx& c) { detail::check(ponko_ctx_video_update(c.raw(), raw_)); }
+    /// update() by `seconds` instead of the frame's time.
+    void advance(ctx& c, float seconds) { detail::check(ponko_ctx_video_advance(c.raw(), raw_, seconds)); }
+    /// Its sound's volume, 0 silent to 1 as recorded.
+    void set_volume(ctx& c, float volume) { detail::check(ponko_ctx_video_set_volume(c.raw(), raw_, volume)); }
+    /// Plays its sound on `bus` from now on.
+    void set_bus(ctx& c, audio_bus bus) { detail::check(ponko_ctx_video_set_bus(c.raw(), raw_, bus)); }
+    /// Frees it, its texture and its sound; this handle holds no video afterwards.
+    void free(ctx& c) { detail::check(ponko_ctx_free_video(c.raw(), raw_)); raw_ = nullptr; }
+};
+
+/// How a light bake bakes (Rust `LightBakeSettings`), starting from the defaults.
+struct light_bake_settings : PonkoLightBakeSettings {
+    /// The defaults: 4 texels a unit, 128 samples, 3 bounces, pages up to 1024, directional,
+    /// denoised, probes every 2 units, seed 0.
+    light_bake_settings() : PonkoLightBakeSettings{} {
+        struct_size = sizeof(PonkoLightBakeSettings);
+        version = PONKO_LIGHT_BAKE_SETTINGS_VERSION;
+        detail::check(ponko_light_bake_settings_defaults(this));
+    }
+};
+/// One model to bake (Rust `BakeModel`): `mesh` (with lightmap coordinates if it is lightmapped)
+/// where `at` puts it, white, not glowing, one-sided, lightmapped.
+struct bake_model : PonkoBakeModel {
+    /// `mesh` must outlive the light_bake_scene::add call.
+    bake_model(const mesh_data& m, const transform3d& at) : PonkoBakeModel{} {
+        struct_size = sizeof(PonkoBakeModel);
+        version = PONKO_BAKE_MODEL_VERSION;
+        detail::check(ponko_bake_model_defaults(this));
+        mesh = m.raw();
+        transform = at;
+    }
+};
+/// What a bake made and how it went (pages, GPU bytes, texels, probes, rays, seconds).
+using baked_lighting_info = PonkoBakedLightingInfo;
+/// Where a model's lightmap is on a page.
+using lightmap_rect = PonkoLightmapRect;
+/// The result of a light bake (Rust `BakedLighting`): lightmap pages and the probe volume. Owns
+/// it; draw with it through ctx::set_baked_lighting(raw()), keep it with to_bytes().
+class baked_lighting {
+    PonkoBakedLighting* raw_ = nullptr;
+public:
+    /// Takes a C handle (from ponko_bake_lighting or _from_bytes).
+    explicit baked_lighting(PonkoBakedLighting* raw) : raw_(raw) {}
+    /// Not copyable: it owns its C handle.
+    baked_lighting(const baked_lighting&) = delete;
+    /// Not copyable: it owns its C handle.
+    baked_lighting& operator=(const baked_lighting&) = delete;
+    /// Moves the result.
+    baked_lighting(baked_lighting&& o) noexcept : raw_(o.raw_) { o.raw_ = nullptr; }
+    /// Moves the result.
+    baked_lighting& operator=(baked_lighting&& o) noexcept { std::swap(raw_, o.raw_); return *this; }
+    /// Frees it.
+    ~baked_lighting() { ponko_baked_lighting_free(raw_); }
+    /// Loads one saved with to_bytes() from an asset source or `assets/`
+    /// (ponko_ctx_load_baked_lighting). Throws ponko::error: not found, or not baked lighting.
+    static baked_lighting load(ctx& c, const char* path) {
+        PonkoBakedLighting* b = nullptr;
+        detail::check(ponko_ctx_load_baked_lighting(c.raw(), path, &b));
+        return baked_lighting(b);
+    }
+    /// Reads one back from to_bytes()'s bytes. Throws ponko::error for bytes that aren't one.
+    static baked_lighting from_bytes(const std::vector<std::uint8_t>& bytes) {
+        PonkoBakedLighting* b = nullptr;
+        detail::check(ponko_baked_lighting_from_bytes(bytes.data(), bytes.size(), &b));
+        return baked_lighting(b);
+    }
+    /// The bytes for a file.
+    std::vector<std::uint8_t> to_bytes() const {
+        std::size_t n = 0; detail::check(ponko_baked_lighting_to_bytes(raw_, nullptr, 0, &n));
+        std::vector<std::uint8_t> bytes(n);
+        detail::check(ponko_baked_lighting_to_bytes(raw_, bytes.data(), bytes.size(), &n));
+        return bytes;
+    }
+    /// What it holds and how its bake went.
+    baked_lighting_info info() const {
+        baked_lighting_info i{}; i.struct_size = sizeof(i); i.version = PONKO_BAKED_LIGHTING_INFO_VERSION;
+        detail::check(ponko_baked_lighting_info(raw_, &i)); return i;
+    }
+    /// The component that draws model `index` of the bake with its lightmap, if it has one.
+    std::optional<lightmapped> lightmap(std::size_t index) const {
+        lightmapped l{}; const PonkoStatus status = ponko_baked_lighting_lightmap(raw_, index, nullptr, &l);
+        if (status == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(status); return l;
+    }
+    /// Where model `index`'s lightmap is, if it has one.
+    std::optional<lightmap_rect> rect(std::size_t index) const {
+        lightmap_rect r{}; const PonkoStatus status = ponko_baked_lighting_lightmap(raw_, index, &r, nullptr);
+        if (status == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(status); return r;
+    }
+    /// The baked light at a texel of a page (irradiance over pi) and whether it was baked.
+    std::optional<std::pair<vec3, bool>> texel(std::uint32_t page, std::uint32_t x, std::uint32_t y) const {
+        vec3 l{}; bool baked = false;
+        const PonkoStatus status = ponko_baked_lighting_texel(raw_, page, x, y, &l, &baked);
+        if (status == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(status); return std::make_pair(l, baked);
+    }
+    /// The probe volume's light for a surface at `position` facing `normal`, inside the volume.
+    std::optional<vec3> probe_light(vec3 position, vec3 normal) const {
+        vec3 l{}; const PonkoStatus status = ponko_baked_lighting_probe_light(raw_, position, normal, &l);
+        if (status == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(status); return l;
+    }
+    /// The C handle (for ctx::set_baked_lighting).
+    const PonkoBakedLighting* raw() const noexcept { return raw_; }
+};
+/// The models and lamps to bake (Rust `LightBakeScene`), lit by the game's sun and sky as they
+/// are when it is made. Holds copies, not the ctx: bake() may run on a thread of your own.
+class light_bake_scene {
+    PonkoLightBakeScene* raw_ = nullptr;
+public:
+    /// An empty scene lit as the game is now.
+    explicit light_bake_scene(ctx& c) { detail::check(ponko_ctx_light_bake_scene_new(c.raw(), &raw_)); }
+    /// Not copyable: it owns its C handle.
+    light_bake_scene(const light_bake_scene&) = delete;
+    /// Not copyable: it owns its C handle.
+    light_bake_scene& operator=(const light_bake_scene&) = delete;
+    /// Frees it.
+    ~light_bake_scene() { ponko_light_bake_scene_free(raw_); }
+    /// Adds a model; returns its index, which baked_lighting::lightmap takes.
+    std::size_t add(const bake_model& m) {
+        std::size_t i = 0; detail::check(ponko_light_bake_scene_add(raw_, &m, &i)); return i;
+    }
+    /// Adds a point light at `position`.
+    void add_point_light(vec3 position, const point_light3d& light) {
+        detail::check(ponko_light_bake_scene_add_point_light(raw_, position, &light));
+    }
+    /// Adds a spot light at `position` shining along `forward`.
+    void add_spot_light(vec3 position, vec3 forward, const spot_light3d& light) {
+        detail::check(ponko_light_bake_scene_add_spot_light(raw_, position, forward, &light));
+    }
+    /// Adds every point and spot light of the game's world where it is now.
+    void add_lights(ctx& c) { detail::check(ponko_ctx_light_bake_scene_add_lights(c.raw(), raw_)); }
+    /// Bakes (on every core; seconds to minutes). Throws ponko::error for settings out of range.
+    baked_lighting bake(const light_bake_settings& settings = light_bake_settings()) const {
+        PonkoBakedLighting* b = nullptr; detail::check(ponko_bake_lighting(raw_, &settings, &b)); return baked_lighting(b);
+    }
 };
 
 /// A 3D camera circling a point (Rust d3::OrbitCamera): set target, yaw, pitch and distance (or use

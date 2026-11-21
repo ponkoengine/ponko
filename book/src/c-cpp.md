@@ -480,7 +480,6 @@ binding arrives:
 | `Plugin::dependencies` | [Plugins for other crates](plugins.md#from-c-and-c) | C plugins (`ponko_game_plugin`) have no names or dependencies and are never duplicates |
 | `Game::debug_toggle` | [Plugins for other crates](plugins.md#debug-toggles) | Draw behind a flag of the game's own; `debug.draw` turns the engine's views on and off |
 | `Game::control_method` | [Plugins for other crates](plugins.md#control-methods) | The control endpoint's built-in methods only; a native game's tools read its reflected resources |
-| `Video` | [Video](video.md#c-and-c) | Not bound yet: decode with a library of the game's own and show the frames with `ponko_ctx_update_texture` |
 
 System phases, system ids, setup callbacks and plugins are not on this
 list. They have C and C++ calls, described in

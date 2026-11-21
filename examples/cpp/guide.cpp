@@ -3725,6 +3725,63 @@ ponko::crowd plaza(ponko::ctx& ctx, ponko::entity skeleton, ponko::mesh near, po
 }
 // ANCHOR_END: crowd
 
+// ANCHOR: video_intro
+// An intro before the menu (the C library built with `--features video`).
+void add_intro(ponko::game& game) {
+    auto intro = std::make_shared<ponko::video>();
+    game.setup([intro](ponko::ctx& ctx) {
+        *intro = ponko::video::load(ctx, "intro.webm");  // paused on its first frame
+        intro->play(ctx);
+    });
+    game.system([intro](ponko::ctx& ctx) {
+        if (!*intro) return;
+        intro->update(ctx);
+        const ponko::video_state s = intro->state();
+        if (s.finished) { intro->free(ctx); return; }  // on to the menu
+        const ponko::draw_params at = ponko_draw_params_with_space(ponko::draw_defaults(), PONKO_DRAW_SPACE_SCREEN);
+        ctx.draw(s.texture, {float(s.width) / 2, float(s.height) / 2}, at);
+    });
+}
+// ANCHOR_END: video_intro
+
+// ANCHOR: baked
+static std::vector<std::uint8_t> bake_room(ponko::ctx& ctx) {
+    // Offline (a tool, a build step): the static models and the lights.
+    auto floor = ponko::mesh_data::plane(8);
+    auto block = ponko::mesh_data::cube(1);
+    floor.generate_lightmap_uvs(4);  // or a glTF file's second UV set
+    block.generate_lightmap_uvs(4);
+    ponko::light_bake_scene scene(ctx);  // the game's sun and sky as they are
+    scene.add(ponko::bake_model(floor, ponko::transform3d_at({0, 0, 0})));  // entry 0
+    ponko::bake_model red(block, ponko::transform3d_at({-2, 0.5f, 0}));
+    red.albedo = ponko::rgb(0.9f, 0.1f, 0.1f);
+    scene.add(red);                                                        // entry 1
+    scene.add_lights(ctx);
+    ponko::light_bake_settings settings;
+    settings.samples = 32;
+    return scene.bake(settings).to_bytes();  // save them with the level
+}
+// In the game: the same meshes, each with its entry's lightmap.
+static void light_room(ponko::ctx& ctx, const std::vector<std::uint8_t>& bytes) {
+    auto baked = ponko::baked_lighting::from_bytes(bytes);  // or baked_lighting::load(ctx, "room.lit")
+    auto floor = ponko::mesh_data::plane(8);
+    floor.generate_lightmap_uvs(4);
+    auto floor_mesh = ctx.create_mesh(floor, ctx.create_material(ponko::material_of(ponko::colors::white)));
+    ctx.world().spawn(ponko::transform3d_at({0, 0, 0}), ponko::model_of(floor_mesh), *baked.lightmap(0));
+    ctx.set_baked_lighting(baked.raw());  // nullptr turns it off
+}
+// ANCHOR_END: baked
+
+static void baked_runs() {
+    ponko::game game("Baked", 1, 1);
+    game.setup([](ponko::ctx& ctx) {
+        auto bytes = bake_room(ctx);
+        light_room(ctx, bytes);
+        if (bytes.size() < 64) std::abort();
+    });
+    game.run_headless(1);
+}
+
 // ANCHOR: instance_cells
 void streamed_cell(ponko::ctx& ctx, ponko::mesh tree) {
     // An empty batch: the world's cells bring its instances.
@@ -4388,8 +4445,8 @@ static void replication_runs() {
 
 // ANCHOR: replication_inputs
 struct Stick { float dx = 0, dy = 0; };   // the input: every control in one struct
-struct Walker { float x = 0, y = 0; };    // a component the input moves
-// In setup on every side, after ctx.replication(...) declared `walker`:
+struct Pacer { float x = 0, y = 0; };    // a component the input moves
+// In setup on every side, after ctx.replication(...) declared `pacer`:
 static void declare_inputs(ponko::ctx& ctx, std::uint16_t& chat) {
     static const std::vector<PonkoReplicatedField> stick = {
         {"dx", offsetof(Stick, dx), PONKO_REPLICATED_F32, PONKO_FIELD_RANGE, -1, 1, 0.01f, 0},
@@ -4397,11 +4454,11 @@ static void declare_inputs(ponko::ctx& ctx, std::uint16_t& chat) {
     };
     ctx.replication_input<Stick>("Stick", stick);
     // The owner's client runs this at once, the server for each input it gets.
-    ctx.replication_predicted<Walker, Stick>("walker", [](Walker& w, const Stick& s) {
+    ctx.replication_predicted<Pacer, Stick>("pacer", [](Pacer& w, const Stick& s) {
         w.x += s.dx * 0.1f;
         w.y += s.dy * 0.1f;
     });
-    ctx.replication_interpolated("walker");   // others' walkers move smoothly
+    ctx.replication_interpolated("pacer");   // others' pacers move smoothly
     chat = ctx.replication_event("Chat");
 }
 // Every tick: this side's input, and the events that arrived.
@@ -4419,11 +4476,11 @@ static void replication_inputs_run() {
     ponko::game game("Inputs", 1, 1);
     game.setup([chat](ponko::ctx& ctx) {
         static const std::vector<PonkoReplicatedField> fields = {
-            {"x", offsetof(Walker, x), PONKO_REPLICATED_F32, PONKO_FIELD_EXACT, 0, 0, 0, 0},
-            {"y", offsetof(Walker, y), PONKO_REPLICATED_F32, PONKO_FIELD_EXACT, 0, 0, 0, 0},
+            {"x", offsetof(Pacer, x), PONKO_REPLICATED_F32, PONKO_FIELD_EXACT, 0, 0, 0, 0},
+            {"y", offsetof(Pacer, y), PONKO_REPLICATED_F32, PONKO_FIELD_EXACT, 0, 0, 0, 0},
         };
-        PonkoReplicatedComponent walker = ctx.replicated<Walker>("walker", fields);
-        ctx.replication(&walker, 1);
+        PonkoReplicatedComponent pacer = ctx.replicated<Pacer>("pacer", fields);
+        ctx.replication(&pacer, 1);
         declare_inputs(ctx, *chat);
     });
     game.sim_system([chat, heard](ponko::ctx& ctx) { play_tick(ctx, *chat, *heard); });
@@ -4622,6 +4679,7 @@ int main() {
     builder_setup_runs_headless();
     replication_runs();
     replication_inputs_run();
+    baked_runs();
     states_guide();
     state_screen_guide();
     native_prediction_runs();

@@ -313,6 +313,9 @@ jobs:
           - name: video feature
             scope: -p ponko
             args: --features video
+          - name: C library with video
+            scope: -p ponko_ffi
+            args: --features video
           # The lobby client alone (no window, audio or other optional
           # subsystem), then with the WebRTC endpoints on top of it.
           - name: lobby client without a window
@@ -678,6 +681,7 @@ jobs:
         run: |
           cargo test -p ponko --no-fail-fast --features video --test video
           cargo test -p ponko --no-fail-fast --features video --lib video
+          cargo test -p ponko_ffi --no-fail-fast --features video --test video
       # The lobby client with nothing else in the build, then WebRTC
       # endpoints: the engine's own tests, the lobby server's (its relay
       # carries the signaling) and the C library's, on loopback.
