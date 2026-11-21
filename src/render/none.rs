@@ -32,6 +32,9 @@ impl Renderer {
     pub fn gpu_passes(&self) -> &[crate::profiler::GpuPass] {
         match *self {}
     }
+    pub(crate) fn set_gpu_timing_every(&mut self, _n: u32) {
+        match *self {}
+    }
     pub fn gpu_frame(&self) -> Option<(&[crate::profiler::PassSpan], u64)> {
         match *self {}
     }

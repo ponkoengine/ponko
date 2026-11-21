@@ -6,6 +6,13 @@
 //! The results come back through a small ring of readback buffers, so reading
 //! them never waits for the GPU: a frame's time shows up one to three frames
 //! later. If every buffer is still in flight, that frame isn't timed.
+//!
+//! A timer can time only every `n`th frame ([`GpuTimer::set_every`]):
+//! timestamp writes cost the graphics library a few heap allocations for
+//! each timed pass, so a game times every frame only while something reads
+//! every frame (see `Ctx::gpu_timing_every`). The smoothed times weigh each
+//! sample by the frames it stands for, so they settle where an every-frame
+//! timer's would.
 
 use crate::render::traffic::NewBuffer;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -31,6 +38,39 @@ struct Slot {
     /// `2i` and `2i + 1`.
     names: Vec<&'static str>,
     submitted: Option<(u64, web_time::Instant)>,
+    /// How many frames this slot's frame stands for: the untimed frames
+    /// since the timed one before it, and itself.
+    covers: u32,
+}
+
+/// Which frames are timed: every `every`th one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Cadence {
+    every: u32,
+    /// Frames begun since the last timed frame was submitted, this one included.
+    since: u32,
+}
+
+impl Cadence {
+    /// Times every frame.
+    pub(crate) const EVERY_FRAME: Self = Self { every: 1, since: 0 };
+
+    /// Starts a frame: whether it is due to be timed.
+    fn begin(&mut self) -> bool {
+        self.since = self.since.saturating_add(1);
+        self.since >= self.every
+    }
+
+    /// A frame was timed and submitted: how many frames it stands for.
+    fn timed(&mut self) -> u32 {
+        std::mem::replace(&mut self.since, 0).max(1)
+    }
+}
+
+/// The smoothing weight of a sample that stands for `frames` frames: what
+/// `frames` samples of the same time, weighed 0.1 each, would add up to.
+fn weight(frames: u32) -> f32 {
+    1.0 - 0.9f32.powi(frames.clamp(1, 64) as i32)
 }
 
 pub(crate) struct GpuTimer {
@@ -61,6 +101,7 @@ pub(crate) struct GpuTimer {
     last_end: u64,
     /// Reused by `read_frame` to sort a frame's passes.
     order: Vec<(u64, u64, &'static str)>,
+    cadence: Cadence,
 }
 
 impl GpuTimer {
@@ -91,6 +132,7 @@ impl GpuTimer {
             written: 0,
             names: Vec::with_capacity(MAX_PASSES as usize),
             submitted: None,
+            covers: 1,
         };
         Some(Self {
             frame_number: 0,
@@ -109,7 +151,21 @@ impl GpuTimer {
             scratch: Vec::with_capacity(MAX_PASSES as usize),
             last_end: 0,
             order: Vec::with_capacity(MAX_PASSES as usize),
+            cadence: Cadence::EVERY_FRAME,
         })
+    }
+
+    /// Times every `n`th frame from now on (1, the default: every frame;
+    /// 0 counts as 1). Frames in between write no timestamps.
+    pub fn set_every(&mut self, n: u32) {
+        self.cadence.every = n.max(1);
+    }
+
+    /// Whether the frame begun last writes timestamps (the scene
+    /// benchmark resolves only those).
+    #[cfg(all(feature = "3d", not(target_arch = "wasm32"), any(test, feature = "bench-internals")))]
+    pub fn timing_this_frame(&self) -> bool {
+        self.current.is_some()
     }
 
     /// Picks up finished readbacks. Call once per frame, before `begin_frame`.
@@ -149,11 +205,12 @@ impl GpuTimer {
             }
             self.last_sample = slot.submitted.map(|(frame, at)| (ms, frame, at));
             self.frames_read += 1;
+            let w = weight(slot.covers);
             self.smoothed_ms = Some(match self.smoothed_ms {
                 None => ms,
-                Some(avg) => avg + (ms - avg) * 0.1,
+                Some(avg) => avg + (ms - avg) * w,
             });
-            smooth_passes(&mut self.passes, &mut self.scratch, &self.last_frame);
+            smooth_passes(&mut self.passes, &mut self.scratch, &self.last_frame, w);
         }
     }
 
@@ -178,12 +235,14 @@ impl GpuTimer {
         })
     }
 
-    /// Starts timing a frame, if a readback slot is free.
+    /// Starts timing a frame, if it is due (see [`set_every`](Self::set_every))
+    /// and a readback slot is free.
     pub fn begin_frame(&mut self) {
         self.frame_number = self.frame_number.wrapping_add(1);
         let i = self.next;
         self.names.get_mut().unwrap_or_else(PoisonError::into_inner).clear();
-        self.current = (self.slots[i].state.load(Ordering::Acquire) == FREE).then_some(i);
+        let due = self.cadence.begin();
+        self.current = (due && self.slots[i].state.load(Ordering::Acquire) == FREE).then_some(i);
         if self.current.is_some() {
             self.next = (i + 1) % SLOTS;
         }
@@ -232,6 +291,7 @@ impl GpuTimer {
     pub fn submitted(&mut self) {
         if let Some(i) = self.current.take() {
             let slot = &mut self.slots[i];
+            slot.covers = self.cadence.timed();
             slot.submitted = Some((self.frame_number, web_time::Instant::now()));
             slot.state.store(MAPPING, Ordering::Release);
             let state = slot.state.clone();
@@ -301,10 +361,11 @@ fn read_frame(
     Some((ms(last - first), last))
 }
 
-/// Folds one frame's spans into the smoothed per-pass times. Passes with the
-/// same name are added; the order follows the frame, and passes the frame
-/// didn't run are dropped.
-fn smooth_passes(passes: &mut Vec<GpuPass>, out: &mut Vec<GpuPass>, frame: &[PassSpan]) {
+/// Folds one frame's spans into the smoothed per-pass times, the frame
+/// weighing `weight` (0.1 for a frame that stands for itself only). Passes
+/// with the same name are added; the order follows the frame, and passes the
+/// frame didn't run are dropped.
+fn smooth_passes(passes: &mut Vec<GpuPass>, out: &mut Vec<GpuPass>, frame: &[PassSpan], weight: f32) {
     out.clear();
     for span in frame {
         match out.iter_mut().find(|p| p.name == span.name) {
@@ -317,7 +378,7 @@ fn smooth_passes(passes: &mut Vec<GpuPass>, out: &mut Vec<GpuPass>, frame: &[Pas
     }
     for p in out.iter_mut() {
         if let Some(old) = passes.iter().find(|o| o.name == p.name) {
-            p.ms = old.ms + (p.ms - old.ms) * 0.1;
+            p.ms = old.ms + (p.ms - old.ms) * weight;
         }
     }
     std::mem::swap(passes, out);
@@ -388,6 +449,7 @@ mod tests {
             &mut passes,
             &mut scratch,
             &[span("shadows", 1.0), span("opaque", 4.0), span("shadows", 1.0)],
+            0.1,
         );
         assert_eq!(
             passes,
@@ -402,9 +464,66 @@ mod tests {
                 }
             ]
         );
-        smooth_passes(&mut passes, &mut scratch, &[span("opaque", 14.0)]);
+        smooth_passes(&mut passes, &mut scratch, &[span("opaque", 14.0)], 0.1);
         assert_eq!(passes.len(), 1, "passes that stopped running are dropped");
         assert!((passes[0].ms - 5.0).abs() < 1e-5, "{}", passes[0].ms);
+    }
+
+    #[test]
+    fn a_cadence_of_four_times_every_fourth_frame() {
+        let mut c = Cadence::EVERY_FRAME;
+        c.every = 4;
+        let mut due = Vec::new();
+        for _ in 0..12 {
+            let d = c.begin();
+            if d {
+                assert_eq!(c.timed(), 4, "a timed frame stands for the three before it and itself");
+            }
+            due.push(d);
+        }
+        assert_eq!(due, [false, false, false, true].repeat(3));
+        // A due frame that couldn't be timed (every readback in flight)
+        // leaves the next one due, which then stands for both.
+        assert!(!c.begin() && !c.begin() && !c.begin());
+        assert!(c.begin());
+        assert!(c.begin());
+        assert_eq!(c.timed(), 5);
+        let mut every = Cadence::EVERY_FRAME;
+        assert!((0..5).all(|_| every.begin() && every.timed() == 1));
+    }
+
+    /// The numbers shown stay correct: a sample standing for 16 frames moves
+    /// the smoothed times exactly as far as 16 every-frame samples of the
+    /// same time would, so sampled and every-frame timing settle alike.
+    #[test]
+    fn a_sample_of_sixteen_frames_smooths_like_sixteen_samples() {
+        let span = |name, ms| PassSpan {
+            name,
+            start_ms: 0.0,
+            ms,
+        };
+        let start = [span("shadows", 1.0), span("opaque", 9.0)];
+        let now = [span("shadows", 3.0), span("opaque", 5.0)];
+        let (mut every, mut sampled, mut scratch) = (Vec::new(), Vec::new(), Vec::new());
+        smooth_passes(&mut every, &mut scratch, &start, 0.1);
+        smooth_passes(&mut sampled, &mut scratch, &start, 0.1);
+        let mut every_ms = 10.0f32;
+        for _ in 0..16 {
+            smooth_passes(&mut every, &mut scratch, &now, 0.1);
+            every_ms += (8.0 - every_ms) * 0.1;
+        }
+        smooth_passes(&mut sampled, &mut scratch, &now, weight(16));
+        let sampled_ms = 10.0 + (8.0 - 10.0) * weight(16);
+        assert!((every_ms - sampled_ms).abs() < 1e-4, "{every_ms} vs {sampled_ms}");
+        for (e, s) in every.iter().zip(&sampled) {
+            assert_eq!(e.name, s.name);
+            assert!((e.ms - s.ms).abs() < 1e-4, "{}: {} vs {}", e.name, e.ms, s.ms);
+        }
+        assert!(
+            (weight(1) - 0.1).abs() < 1e-6,
+            "a frame of its own weighs 0.1, as before"
+        );
+        assert!(weight(0) == weight(1) && weight(1000) == weight(64) && weight(64) < 1.0);
     }
 
     /// A device with those of `features` the adapter has. The shared helper
@@ -455,6 +574,86 @@ mod tests {
         timer.frame_number = 1;
         timer.last_sample = Some((20.0, 1, web_time::Instant::now() - std::time::Duration::from_secs(1)));
         assert!(!timer.quality_sample().unwrap().fresh);
+    }
+
+    /// Frames between the timed ones write no timestamps (each timed pass
+    /// costs the graphics library allocations), and every timed frame's
+    /// times come back. Offscreen, no window; skips without a GPU or
+    /// without timestamp queries.
+    #[cfg(feature = "3d")]
+    #[test]
+    fn a_timer_of_every_fourth_frame_writes_timestamps_on_those_frames_only() {
+        let Some((device, queue)) = device(wgpu::Features::TIMESTAMP_QUERY) else {
+            return;
+        };
+        let Some(mut timer) = GpuTimer::new(&device, &queue) else {
+            crate::render::render_test_support::skip("needs timestamp queries");
+            return;
+        };
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width: 16,
+                height: 16,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let view = target.create_view(&Default::default());
+        let run = |timer: &mut GpuTimer, frames: usize| {
+            let mut timed = Vec::new();
+            for _ in 0..frames {
+                timer.collect(&device);
+                timer.begin_frame();
+                let mut encoder = device.create_command_encoder(&Default::default());
+                let writes = timer.pass("clear");
+                timed.push(writes.is_some());
+                drop(encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("clear"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::RED),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: writes,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                }));
+                timer.resolve(&mut encoder);
+                queue.submit([encoder.finish()]);
+                timer.submitted();
+                let _ = device.poll(wgpu::PollType::wait_indefinitely());
+            }
+            timer.collect(&device);
+            timed
+        };
+        timer.set_every(4);
+        let timed = run(&mut timer, 24);
+        assert_eq!(timed, [false, false, false, true].repeat(6));
+        // A pass that only clears can end on the tick it began (some GPUs),
+        // and such a frame isn't counted: at most the 6 timed frames read.
+        let read = timer.frames_read;
+        assert!((1..=6).contains(&read), "{read} frames read of 6 timed");
+        assert!(timer.smoothed_ms.is_some_and(|ms| ms.is_finite() && ms >= 0.0));
+        assert_eq!(timer.passes.iter().map(|p| p.name).collect::<Vec<_>>(), ["clear"]);
+        // Back to every frame (as the HUD asks): every frame is timed again.
+        timer.set_every(1);
+        assert!(run(&mut timer, 8).iter().all(|&t| t));
+        assert!(
+            (read + 1..=read + 8).contains(&timer.frames_read),
+            "{}",
+            timer.frames_read
+        );
     }
 
     /// A device with timestamp queries gets a timer, and it reports nothing
