@@ -348,6 +348,10 @@ fn since_or_world(w: &ponko_ecs::World, raw: u64) -> Tick {
 /// rows that pass, instead of whole archetypes: `count` rows, columns
 /// starting at the run's first row, and `first` counting the rows visited
 /// before it. A filter starts tracking its component.
+///
+/// Ownership: `user` stays the caller's and is only passed to `callback` during
+/// this call; the engine keeps no pointer to it after returning.
+///
 /// ```
 /// use ponko_ffi::*;
 /// unsafe extern "C" fn count(chunk: *const PonkoChunk, user: *mut std::ffi::c_void) {

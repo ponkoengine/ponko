@@ -227,12 +227,6 @@
     "reason": "Internal invariant: let layout = Layout::array::<Entity>(entities.capacity()).expect(\"a list's own layout\");     let mut entities = std::mem::ManuallyDrop::new(entities);     // `Entity` is `Copy`: forgetting the handles drops nothing.     let p = NonNull::new(entities.as_mut_ptr().cast::<u8>()).expect(\"a list with capacity\");",
     "site": "crates/ponko_ecs/src/storage.rs:962"
   },
-  "crates/ponko_ecs/src/storage.rs:48e6ba09f14e10ae": {
-    "classification": "invariant",
-    "construction": "debug_assert!(row < cap)",
-    "reason": "Internal invariant of column storage (pub(crate) callers pass checked rows and permutations; a column larger than the address space cannot be allocated).",
-    "site": "crates/ponko_ecs/src/storage.rs:854"
-  },
   "crates/ponko_ecs/src/storage.rs:4dbdda23721d2461": {
     "classification": "invariant",
     "construction": ".expect(\"too many entities\")",
@@ -508,6 +502,12 @@
     "construction": "assert!( info.layout == layout && info.type_id.is_none(), \"component name `{name}` is already registered with a different layout; use its original layout or a unique name\" )",
     "reason": "Caller constraint and remedy are explicit in the message: assert!( info.layout == layout && info.type_id.is_none(), \"component name `{name}` is already registered with a different layout; use its original layout or a unique name\" )",
     "site": "crates/ponko_ecs/src/world.rs:1267"
+  },
+  "crates/ponko_ecs/src/world.rs:a3f1ad2e9df94634": {
+    "classification": "invariant",
+    "construction": "debug_assert_eq!(c.size(), size)",
+    "reason": "Debug-only check: the bundle's cached column map puts each element in the column of its own type, so the sizes match.",
+    "site": "crates/ponko_ecs/src/world.rs:57"
   },
   "crates/ponko_ecs/src/world.rs:afadd4e2395c636f": {
     "classification": "caller-contract",

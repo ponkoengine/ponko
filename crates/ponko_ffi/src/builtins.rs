@@ -120,6 +120,10 @@ pub unsafe extern "C" fn ponko_game_add_builtin(game: *mut PonkoGame, phase_raw:
 /// their own take the whole `ctx`: theirs is exclusive. An unknown id, or a
 /// physics step the library was built without, is
 /// `PONKO_INVALID_ARGUMENT` (and `*out_access` is null).
+///
+/// Ownership: on success `out_access` receives an owned declaration, the
+/// caller's; free it with ponko_access_free.
+///
 /// ```
 /// use ponko_ffi::*;
 /// let mut a = std::ptr::null_mut();
@@ -149,6 +153,10 @@ pub unsafe extern "C" fn ponko_builtin_access(system_id: u32, out_access: *mut *
 /// `*out_access`: built-in declarations name engine types, which the
 /// `ponko_access_*` calls can't rebuild, so copying one takes this. Free the
 /// copy with `ponko_access_free`.
+///
+/// Ownership: on success `out_access` receives an owned copy, the caller's;
+/// free it with ponko_access_free.
+///
 /// ```
 /// use ponko_ffi::*;
 /// let mut copy = std::ptr::null_mut();

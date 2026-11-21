@@ -33,6 +33,8 @@ pub(crate) mod app;
 #[cfg(feature = "editor")]
 #[path = "inspector_assets.rs"]
 mod assets_panel;
+#[path = "inspector_debug.rs"]
+mod debug_panel;
 #[cfg(feature = "editor")]
 #[path = "inspector_file_picker.rs"]
 mod file_picker;
@@ -202,6 +204,10 @@ impl Panels {
                     CollapsingHeader::new("Systems")
                         .default_open(true)
                         .show(ui, |ui| systems(ui, ctx));
+                    let toggles = ctx.debug.toggles().next().is_some();
+                    CollapsingHeader::new("Debug drawing")
+                        .default_open(toggles)
+                        .show(ui, |ui| debug_panel::panel(ui, ctx));
                 });
             });
         self.world_and_keys(ui, ctx);

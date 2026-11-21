@@ -40,6 +40,39 @@ in `scripts/ffi-coverage-allowlist.txt`. Test the function instead of adding to
 that list; the check also fails when a listed function gets a test, so the
 list only shrinks.
 
+## Unsafe code
+
+Every `unsafe` block needs a test that runs it. The ECS checks its own under
+Miri; for the rest of the workspace, `scripts/unsafe-inventory.txt` lists
+each item with unsafe code, the test that runs it, and whether that test runs
+under Miri (an interpreter that catches undefined behaviour) or why it can't:
+it needs a GPU, a C library, signals or sockets, or another platform.
+`python3 scripts/check-unsafe.py` fails for unsafe code that has no line,
+and prints the line to add; `--list` shows every item with its test, and
+`--miri` the commands that run the Miri tests. The C API crate's helpers need
+no line when a tested C function reaches them; the script finds that test.
+
+The C API is one long unsafe boundary, so its tests also run under
+AddressSanitizer and UndefinedBehaviorSanitizer: the C and C++ test programs
+(`-DPONKO_SANITIZE=ON` in `examples/cpp`) and the `ponko_ffi` tests. The
+commands are in `CONTRIBUTING.md`, "Unsafe code and sanitizers".
+
+Every C function also says who owns each pointer it takes or returns. The
+rules at the top of `include/ponko.h` cover most of them by type: a `Ponko*`
+object is borrowed for the call, a `const` pointer is read during the call
+only, and any other pointer is the caller's memory that the call writes. A
+returned pointer, a pointer to a pointer, callback user data and an object a
+function takes over get an `Ownership:` paragraph in the function's doc
+comment, such as:
+
+```text
+/// Ownership: the returned filter is the caller's (null on failure); free it
+/// with ponko_filter_free.
+```
+
+`python3 scripts/check-ffi-ownership.py` fails for a function that leaves one
+unsaid, and says what to write.
+
 ## The C++ wrapper
 
 `include/ponko.hpp` wraps every C function, or the function is on the short

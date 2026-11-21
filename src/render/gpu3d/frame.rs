@@ -66,6 +66,11 @@ pub(super) struct FrameUniform {
     /// frame's (the same without TAA).
     pub(super) unjittered_view_proj: [[f32; 4]; 4],
     pub(super) previous_view_proj: [[f32; 4]; 4],
+    /// The motion pass's camera motion: what temporal antialiasing's
+    /// reprojection of this view's depth makes of a point, in last frame's
+    /// clip space (`previous_view_proj`, but for the view model's held
+    /// items: see `view_model.rs`).
+    pub(super) reprojection: [[f32; 4]; 4],
     /// xy: this frame's jitter in pixels.
     pub(super) jitter: [f32; 4],
     /// Global illumination's probe grid (see `gi.wgsl`); all zero without.

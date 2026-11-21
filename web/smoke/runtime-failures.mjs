@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 // Failures while a web game runs (see README.md, "Runtime failures"): the
-// 2D fixture (web/build.sh web_smoke) in a headless browser, stopped three
+// 2D fixture (web/build.sh web_smoke) in a headless browser, stopped four
 // ways after it started. Each must reach the page as the engine reported
 // it, through the generated template and through `onPonkoFailure`.
 //
 //   node web/smoke/runtime-failures.mjs --build
 //   node web/smoke/runtime-failures.mjs --dir target/web/web_smoke --browser chromium
+//   node web/smoke/runtime-failures.mjs --case device-lost --chromium-mode new \
+//     --browser-arg --use-webgpu-adapter=swiftshader --allow-unsupported
 //
 // - runtime-panic: the fixture panics in a frame after 20 ticks. The page
 //   shows "The game stopped: <the panic's message>"; the callback gets
@@ -14,9 +16,14 @@
 //   through `ponko::web::on_failure`: the page shows that text instead.
 // - context-lost: on WebGL2, the runner loses the canvas's context while
 //   the game runs: kind "ContextLost" and its message on the page.
+// - device-lost: on WebGPU, the runner destroys the game's GPUDevice while
+//   the game runs: kind "DeviceLost", the engine's sentence with the
+//   browser's reason in it. Where the browser has no WebGPU (the game runs
+//   on WebGL2) the case is unsupported, not failed.
 //
-// Exit codes as smoke.mjs: 0 passed, 1 failed, 2 unsupported (no browser),
-// 3 bad arguments or a missing build. report.json goes to --out.
+// Exit codes as smoke.mjs: 0 passed, 1 failed, 2 unsupported (no browser,
+// or every case asked for was unsupported; --allow-unsupported makes that
+// a pass), 3 bad arguments or a missing build. report.json goes to --out.
 
 import { spawnSync } from "node:child_process";
 import { mkdir, stat, writeFile } from "node:fs/promises";
@@ -28,12 +35,29 @@ import { LAUNCHERS, serve } from "./smoke.mjs";
 
 const USAGE =
   "usage: runtime-failures.mjs [--dir <site>] [--build] [--browser chromium|firefox|webkit]\n" +
-  "                            [--case runtime-panic|failure-text|context-lost] [--out <dir>] [--timeout <s>]";
+  "                            [--case runtime-panic|failure-text|context-lost|device-lost] [--out <dir>] [--timeout <s>]\n" +
+  "                            [--chromium-mode shell|new] [--browser-arg <flag>]... [--allow-unsupported]";
 
-export const RUNTIME_CASES = ["runtime-panic", "failure-text", "context-lost"];
+export const RUNTIME_CASES = ["runtime-panic", "failure-text", "context-lost", "device-lost"];
 
-/** The page's text and the callback's failure each case must produce. */
-export function expected(runtimeCase) {
+/**
+ * The engine's message for a lost WebGPU device (`FailureKind::DeviceLost`,
+ * `device_lost_message` in src/web/failure.rs): its sentence, with the
+ * browser's reason (`GPUDeviceLostInfo.message`) in it when there is one.
+ */
+export function deviceLostMessage(browserMessage) {
+  const reason = (browserMessage ?? "").trim().replace(/\.+$/, "").trimEnd();
+  return reason
+    ? `The WebGPU device was lost while the game was running: ${reason}. Reload the page to try again.`
+    : "The WebGPU device was lost while the game was running. Reload the page to try again.";
+}
+
+/**
+ * The page's text and the callback's failure each case must produce.
+ * `lost` is the page's own `GPUDeviceLostInfo` (device-lost only): the
+ * engine's message carries the browser's reason.
+ */
+export function expected(runtimeCase, lost = null) {
   const panic = `web_smoke: panicking while running, as ?smoke_case=${runtimeCase} asked`;
   switch (runtimeCase) {
     case "runtime-panic":
@@ -46,6 +70,10 @@ export function expected(runtimeCase) {
       const message = "The WebGL2 context was lost while the game was running. Reload the page to try again.";
       return { kind: "ContextLost", message, text: null, status: `The game stopped: ${message}` };
     }
+    case "device-lost": {
+      const message = deviceLostMessage(lost?.message);
+      return { kind: "DeviceLost", message, text: null, status: `The game stopped: ${message}` };
+    }
     default:
       throw new UsageError(`unknown case ${runtimeCase} (${RUNTIME_CASES.join(", ")})`);
   }
@@ -53,12 +81,14 @@ export function expected(runtimeCase) {
 
 /**
  * What is wrong with one run: `seen` holds the state the fixture published
- * before it stopped, the page's status line and the failure a late
- * `onPonkoFailure` subscriber got. An empty list is a pass.
+ * before it stopped, the page's status line, the failure a late
+ * `onPonkoFailure` subscriber got and (device-lost) the `GPUDeviceLostInfo`
+ * the page's own `device.lost` got. An empty list is a pass.
  */
 export function checkRun(runtimeCase, seen) {
-  const want = expected(runtimeCase);
   const problems = [];
+  if (runtimeCase === "device-lost" && !seen.lost) problems.push("the browser never resolved the game's device.lost");
+  const want = expected(runtimeCase, seen.lost);
   if (!(seen.ticks > 0)) problems.push(`the game never ran a tick before it stopped (ticks ${seen.ticks})`);
   if (seen.status !== want.status) problems.push(`the page shows ${JSON.stringify(seen.status)}, wanted ${JSON.stringify(want.status)}`);
   const failure = seen.failure;
@@ -80,6 +110,20 @@ export function checkRun(runtimeCase, seen) {
   return problems;
 }
 
+/**
+ * The exit code and outcome of a run: a problem fails it; a run whose
+ * every case was unsupported is unsupported (a pass with
+ * --allow-unsupported); else it passed, the unsupported cases named.
+ */
+export function runOutcome(report, args) {
+  if (report.problems.length) return [EXIT.app, "failed"];
+  const ran = Object.keys(report.runs).length;
+  if (ran > 0 && report.unsupported.length === ran) {
+    return args.allowUnsupported ? [EXIT.pass, "unsupported"] : [EXIT.unsupported, "unsupported"];
+  }
+  return [EXIT.pass, report.unsupported.length ? "passed, some unsupported" : "passed"];
+}
+
 function parseArgs(argv) {
   const args = {
     dir: "target/web/web_smoke",
@@ -88,6 +132,9 @@ function parseArgs(argv) {
     cases: RUNTIME_CASES,
     out: "target/web-smoke/runtime-failures",
     timeout: 60,
+    chromiumMode: "shell",
+    browserArgs: [],
+    allowUnsupported: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
@@ -110,6 +157,12 @@ function parseArgs(argv) {
       }
       case "--out": args.out = value(); break;
       case "--timeout": args.timeout = Number(value()); break;
+      case "--chromium-mode":
+        args.chromiumMode = value();
+        if (!["shell", "new"].includes(args.chromiumMode)) throw new UsageError(`unknown chromium mode ${args.chromiumMode}`);
+        break;
+      case "--browser-arg": args.browserArgs.push(value()); break;
+      case "--allow-unsupported": args.allowUnsupported = true; break;
       default: throw new UsageError(`unknown argument ${flag}`);
     }
   }
@@ -139,6 +192,7 @@ async function look(page) {
       ticks: raw ? JSON.parse(raw).ticks : 0,
       status: status && status.className === "error" ? status.textContent : null,
       failure,
+      lost: globalThis.__smokeLost ?? null,
     };
   }), "reading the page");
 }
@@ -147,16 +201,41 @@ async function runCase(browser, server, runtimeCase, args) {
   const context = await browser.newContext();
   const lines = [];
   try {
-    if (runtimeCase === "context-lost") {
-      // WebGL2 only: a WebGPU canvas has no context to lose this way.
+    if (runtimeCase !== "device-lost") {
+      // WebGL2 only: a WebGPU canvas has no context to lose this way, and a
+      // panic is the same on either. (Chromium's headless shell can't
+      // present a WebGPU canvas and loses its device at once, which would
+      // stop the game before it panics.)
       await context.addInitScript(() => {
         Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined, configurable: true });
+      });
+    }
+    if (runtimeCase === "device-lost") {
+      // Keep the devices the page opens, so the runner can destroy the
+      // game's: no browser lets a page crash its GPU process, and a
+      // destroyed device is lost the same way to the game. The page's own
+      // `device.lost` says why, and whether the runner did it.
+      await context.addInitScript(() => {
+        if (!globalThis.GPUAdapter) return;
+        const requestDevice = GPUAdapter.prototype.requestDevice;
+        GPUAdapter.prototype.requestDevice = async function (...args) {
+          const device = await requestDevice.apply(this, args);
+          (globalThis.__smokeDevices ??= []).push(device);
+          device.lost.then((info) => {
+            globalThis.__smokeLost ??= {
+              reason: info.reason,
+              message: info.message,
+              by: globalThis.__smokeDestroying ? "runner" : "browser",
+            };
+          });
+          return device;
+        };
       });
     }
     const page = await context.newPage();
     page.on("console", (m) => lines.push(`${m.type()}: ${m.text()}`));
     page.on("pageerror", (e) => lines.push(`pageerror: ${e.message}`));
-    const query = runtimeCase === "context-lost" ? "" : `?smoke_case=${runtimeCase}`;
+    const query = runtimeCase === "context-lost" || runtimeCase === "device-lost" ? "" : `?smoke_case=${runtimeCase}`;
     await call(page.goto(`http://127.0.0.1:${server.address().port}/${query}`), "opening the page");
     const deadline = Date.now() + args.timeout * 1000;
     let seen = await look(page);
@@ -172,6 +251,15 @@ async function runCase(browser, server, runtimeCase, args) {
         }), "losing the WebGL2 context");
         if (!lost) return { problems: ["the canvas has no WebGL2 context to lose"], lines };
       }
+      if (runtimeCase === "device-lost" && !lost && seen.ticks > 0) {
+        lost = await call(page.evaluate(() => {
+          const device = globalThis.__smokeDevices?.at(-1);
+          globalThis.__smokeDestroying = true;
+          device?.destroy();
+          return Boolean(device);
+        }), "destroying the WebGPU device");
+        if (!lost) return { unsupported: "the game opened no WebGPU device here (it runs on WebGL2)", problems: [], lines };
+      }
       await sleep(200);
       seen = await look(page);
       ticks = Math.max(ticks, seen.ticks);
@@ -181,6 +269,7 @@ async function runCase(browser, server, runtimeCase, args) {
     seen = await look(page);
     seen.ticks = Math.max(ticks, seen.ticks);
     return { seen, problems: checkRun(runtimeCase, seen), lines };
+
   } finally {
     await call(context.close(), "closing the page").catch(() => {});
   }
@@ -204,7 +293,7 @@ async function main() {
     process.exit(EXIT.usage);
   }
   await mkdir(args.out, { recursive: true });
-  const report = { fixture: "web_smoke", browser: args.browser, runs: {}, problems: [] };
+  const report = { fixture: "web_smoke", browser: args.browser, runs: {}, problems: [], unsupported: [] };
   const finish = async (code, outcome) => {
     report.outcome = outcome;
     report.browserLog = browserLog.slice(-200);
@@ -218,7 +307,7 @@ async function main() {
   });
   let browser;
   try {
-    browser = await LAUNCHERS[args.browser].launch(launchConfig(args.browser, process.platform).options);
+    browser = await LAUNCHERS[args.browser].launch(launchConfig(args.browser, process.platform, args).options);
   } catch (e) {
     const kind = launchFailureKind(e.message, process.env);
     report.problems.push(e.message);
@@ -231,7 +320,15 @@ async function main() {
       const run = await runCase(browser, server, runtimeCase, args);
       report.runs[runtimeCase] = run;
       report.problems.push(...run.problems.map((p) => `${runtimeCase}: ${p}`));
-      console.log(`${runtimeCase}: ${run.problems.length ? "FAIL" : "ok"}; page shows ${JSON.stringify(run.seen?.status ?? null)}`);
+      if (run.unsupported) {
+        report.unsupported.push(runtimeCase);
+        console.log(`${runtimeCase}: unsupported: ${run.unsupported}`);
+      } else {
+        // Chromium's headless shell loses a WebGPU canvas's device by itself
+        // before the runner gets to: still a lost device reaching the page.
+        const by = run.seen?.lost ? ` (device lost by the ${run.seen.lost.by})` : "";
+        console.log(`${runtimeCase}: ${run.problems.length ? "FAIL" : "ok"}${by}; page shows ${JSON.stringify(run.seen?.status ?? null)}`);
+      }
     }
   } catch (e) {
     report.problems.push(e.message);
@@ -241,8 +338,10 @@ async function main() {
     stopWatchdog();
   }
   for (const p of report.problems) console.error(`FAIL: ${p}`);
-  if (report.problems.length === 0) console.log("PASS");
-  await finish(report.problems.length ? EXIT.app : EXIT.pass, report.problems.length ? "failed" : "passed");
+  const [code, outcome] = runOutcome(report, args);
+  if (code === EXIT.pass) console.log(outcome === "passed" ? "PASS" : `PASS (unsupported here: ${report.unsupported.join(", ")})`);
+  else if (code === EXIT.unsupported) console.log(`UNSUPPORTED: ${report.unsupported.join(", ")}`);
+  await finish(code, outcome);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();

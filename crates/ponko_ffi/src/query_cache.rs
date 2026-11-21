@@ -249,6 +249,10 @@ pub unsafe extern "C" fn ponko_world_query_cache_stats(
 /// same for all three; any other value is `PONKO_INVALID_ARGUMENT`.
 ///
 /// Rust: `query.cached()` and `query.uncached()`.
+///
+/// Ownership: `user` stays the caller's and is only passed to `callback` during
+/// this call; the engine keeps no pointer to it after returning.
+///
 /// ```
 /// use ponko_ffi::*;
 /// unsafe extern "C" fn count(chunk: *const PonkoChunk, user: *mut std::ffi::c_void) {

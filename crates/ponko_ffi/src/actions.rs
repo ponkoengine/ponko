@@ -109,6 +109,10 @@ fn axis(value: u32) -> Result<ponko::input::GamepadAxis, Failure> {
 }
 
 /// Create an empty map. Free once with `ponko_action_map_free`.
+///
+/// Ownership: the returned action map is the caller's (null on failure); free
+/// it with ponko_action_map_free.
+///
 /// ```
 /// let m = ponko_ffi::ponko_action_map_new();
 /// unsafe { ponko_ffi::ponko_action_map_free(m); }

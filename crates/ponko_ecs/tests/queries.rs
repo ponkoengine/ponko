@@ -430,3 +430,146 @@ fn despawning_the_last_entity_in_any_row_order_empties_the_archetype() {
     set_bits(&mut w, back, 0b11);
     assert_eq!(w.query::<&Pos>().filter::<With<Bit<1>>>().count(), 1);
 }
+
+#[derive(Component, Debug, PartialEq, Clone, Copy)]
+struct Opt<const N: u8>(u32);
+
+/// Entity `i` has `Pos` and `Opt<k>` for each bit `k` set in `i % 16`:
+/// sixteen archetypes, every combination of four optional components.
+fn bits_world() -> (World, Vec<(Entity, u32)>) {
+    let mut w = World::new();
+    let mut model = Vec::new();
+    for i in 0..16 * 9u32 {
+        let m = i % 16;
+        let e = w.spawn((Pos(i as f32, 0.0),));
+        if m & 1 != 0 {
+            w.insert(e, Opt::<0>(i));
+        }
+        if m & 2 != 0 {
+            w.insert(e, Opt::<1>(i));
+        }
+        if m & 4 != 0 {
+            w.insert(e, Opt::<2>(i));
+        }
+        if m & 8 != 0 {
+            w.insert(e, Opt::<3>(i));
+        }
+        model.push((e, m));
+    }
+    (w, model)
+}
+
+/// The bits of `i` that `options` names (`Some(k)`: bit `k`), packed in order.
+fn present(options: &[Option<u32>]) -> u32 {
+    options.iter().enumerate().map(|(j, o)| (o.is_some() as u32) << j).sum()
+}
+
+#[test]
+fn option_fetches_see_exactly_the_components_each_archetype_has() {
+    let (mut w, model) = bits_world();
+    let expect = |e: Entity, bits: &[u32]| {
+        let m = model.iter().find(|x| x.0 == e).unwrap().1;
+        bits.iter().enumerate().map(|(j, &k)| ((m >> k) & 1) << j).sum::<u32>()
+    };
+    let mut seen = 0;
+    // One option, two (split loops), three (one plain loop), and two
+    // spread over nested tuples: `for_each` sees what `iter` and the
+    // model see, value included.
+    w.query::<(Entity, &Pos, Option<&Opt<0>>)>().for_each(|(e, p, a)| {
+        assert_eq!(present(&[a.map(|b| b.0)]), expect(e, &[0]));
+        assert!(a.is_none_or(|b| b.0 as f32 == p.0));
+        seen += 1;
+    });
+    w.query::<(Entity, Option<&Opt<1>>, &Pos, Option<&Opt<3>>)>()
+        .for_each(|(e, a, p, b)| {
+            assert_eq!(present(&[a.map(|b| b.0), b.map(|b| b.0)]), expect(e, &[1, 3]));
+            assert!(
+                [a.map(|b| b.0), b.map(|b| b.0)]
+                    .iter()
+                    .flatten()
+                    .all(|&v| v as f32 == p.0)
+            );
+            seen += 1;
+        });
+    w.query::<(Entity, Option<&Opt<0>>, Option<&Opt<1>>, Option<&Opt<2>>)>()
+        .for_each(|(e, a, b, c)| {
+            assert_eq!(
+                present(&[a.map(|b| b.0), b.map(|b| b.0), c.map(|b| b.0)]),
+                expect(e, &[0, 1, 2])
+            );
+            seen += 1;
+        });
+    w.query::<((Entity, Option<&Opt<2>>), (&Pos, Option<&Opt<0>>))>()
+        .for_each(|((e, a), (p, b))| {
+            assert_eq!(present(&[a.map(|b| b.0), b.map(|b| b.0)]), expect(e, &[2, 0]));
+            assert!(
+                [a.map(|b| b.0), b.map(|b| b.0)]
+                    .iter()
+                    .flatten()
+                    .all(|&v| v as f32 == p.0)
+            );
+            seen += 1;
+        });
+    assert_eq!(seen, 4 * model.len());
+    // `Option<&mut T>` writes exactly the entities that have `T`.
+    w.query::<(Option<&mut Opt<1>>, Option<&mut Opt<2>>)>()
+        .for_each(|(a, b)| {
+            if let Some(a) = a {
+                a.0 += 1000;
+            }
+            if let Some(b) = b {
+                b.0 += 2000;
+            }
+        });
+    for &(e, m) in &model {
+        let i = w.get::<Pos>(e).unwrap().0 as u32;
+        assert_eq!(w.get::<Opt<1>>(e).map(|b| b.0), (m & 2 != 0).then_some(i + 1000));
+        assert_eq!(w.get::<Opt<2>>(e).map(|b| b.0), (m & 4 != 0).then_some(i + 2000));
+    }
+}
+
+#[test]
+fn option_fetches_in_tracked_worlds_and_views_see_the_same() {
+    let (mut w, model) = bits_world();
+    w.track_changes::<Opt<1>>();
+    let since = w.advance_change_tick();
+    // The tracked loop: `Option<&mut T>` marks a change only where `T` is.
+    let mut visited = 0;
+    w.query::<(Option<&mut Opt<1>>, Option<&Opt<3>>)>().for_each(|(a, b)| {
+        if let (Some(a), Some(b)) = (a, b) {
+            a.0 = b.0 + 1;
+        }
+        visited += 1;
+    });
+    assert_eq!(visited, model.len());
+    let mut changed: Vec<Entity> = w
+        .query::<Entity>()
+        .filter::<Changed<Opt<1>>>()
+        .since(since)
+        .iter()
+        .collect();
+    changed.sort();
+    let mut with: Vec<Entity> = model.iter().filter(|x| x.1 & 2 != 0).map(|x| x.0).collect();
+    with.sort();
+    assert_eq!(changed, with);
+    // A view runs the same split loops.
+    let mut state = ViewState::new().read::<Pos>().read::<Opt<0>>().write::<Opt<2>>();
+    let mut seen = 0;
+    state.run(&mut w, |mut view| {
+        view.query::<(&Pos, Option<&Opt<0>>, Option<&mut Opt<2>>)>()
+            .for_each(|(p, a, b)| {
+                let i = p.0 as u32;
+                assert_eq!(a.map(|a| a.0), ((i % 16) & 1 != 0).then_some(i));
+                assert_eq!(b.as_ref().map(|b| b.0), ((i % 16) & 4 != 0).then_some(i));
+                if let Some(b) = b {
+                    b.0 = 7;
+                }
+                seen += 1;
+            });
+    });
+    assert_eq!(seen, model.len());
+    assert_eq!(
+        w.query::<&Opt<2>>().iter().filter(|b| b.0 == 7).count(),
+        model.len() / 2
+    );
+}

@@ -277,6 +277,10 @@ pub struct PonkoProfileScope {
 /// `ponko_profile_end`. Keep the pointer (it lives as long as the process):
 /// `PONKO_PROFILE_SCOPE` in `ponko.hpp` keeps it in a `static`. Null if
 /// `name` is null or not UTF-8.
+///
+/// Ownership: the returned scope is the engine's and lives as long as the
+/// process; never free it.
+///
 /// ```
 /// let a = unsafe { ponko_ffi::ponko_profile_scope(c"ai".as_ptr()) };
 /// let b = unsafe { ponko_ffi::ponko_profile_scope(c"ai".as_ptr()) };

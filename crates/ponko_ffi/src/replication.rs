@@ -268,6 +268,10 @@ pub struct PonkoReplicationClientStats {
 /// `_join` or `_loopback`): the engine polls it every frame, and
 /// replication runs over it. Takes the endpoint: don't use or free it
 /// after this call, even when it fails.
+///
+/// Ownership: `endpoint` is taken over (also on failure): the game frees it;
+/// don't use or free it after.
+///
 /// # Safety
 /// `game` null or live; `endpoint` null or a live endpoint, not used after.
 /// ```

@@ -78,6 +78,10 @@ where
             format!("the event loop stopped with an error: {e}"),
         )
     })?;
+    // While the run's crash reports are still on (they end with `app`).
+    if let Some(error) = &app.error {
+        crate::crash::report_error(error);
+    }
     app.error.map_or(Ok(()), Err)
 }
 
@@ -354,6 +358,8 @@ where
         let benchmarking = self.ctx.perf.profiler.benchmarking();
         renderer.set_draw_hidden(benchmarking, benchmarking && !present);
         self.ctx.gfx.renderer = Some(renderer);
+        // A crash report from here on (setup too) names the GPU.
+        crate::crash::note_gpu(&mut self.ctx);
         self.ctx.set_window_size(Self::logical_window_size(&window));
         self.ctx.set_scale_factor(window.scale_factor() as f32);
         // Edit mode (`ponko editor`): the inspector's panels are the window.
@@ -392,6 +398,18 @@ where
             self.ctx.set_gamepad_backend(crate::gamepad::GilrsBackend::new());
         }
 
+        // The web's storage is read now (see `resumed`); a canvas has no
+        // default-sized window to show first.
+        #[cfg(target_arch = "wasm32")]
+        if self.config.restore_window {
+            match self.ctx.window.restore_settings(&self.ctx.storage) {
+                // The title belongs to the game, as on the desktop.
+                Ok(()) => {
+                    let _ = self.ctx.window.set_title(self.config.title.clone());
+                }
+                Err(e) => eprintln!("ponko: opening the window with its default settings: {e}"),
+            }
+        }
         if let Some(setup) = self.setup.take() {
             self.ctx.set_in_setup(true);
             if let Err(error) = run_setups(std::mem::take(&mut self.config.setups), &mut self.ctx) {
@@ -436,16 +454,30 @@ where
             return;
         }
 
-        let attributes = Window::default_attributes()
-            .with_title(self.config.title.clone())
-            .with_inner_size(LogicalSize::new(self.config.width, self.config.height));
-        #[cfg(target_arch = "wasm32")]
-        let attributes = crate::web::canvas_attributes(attributes);
+        let attributes = Window::default_attributes().with_title(self.config.title.clone());
+        // The first window opens with its final settings (the saved ones with
+        // `restore_window_settings`), so no default-sized window shows first.
+        // The web reads its storage after the canvas exists (see `start`).
         #[cfg(not(target_arch = "wasm32"))]
-        let attributes = if self.config.fullscreen {
-            attributes.with_fullscreen(Some(winit::window::Fullscreen::Borderless(None)))
-        } else {
-            attributes
+        let (attributes, settings) = {
+            let handles: Vec<_> = event_loop.available_monitors().collect();
+            let monitors: Vec<_> = handles.iter().map(super::window_service::monitor_info).collect();
+            let mut settings = self.config.first_window_settings(&self.ctx.storage, &monitors);
+            let fullscreen = super::window_service::fullscreen_on(&handles, &settings.mode).unwrap_or_else(|e| {
+                eprintln!("ponko: restoring window settings in windowed mode: {e}");
+                settings.mode = crate::window::WindowMode::Windowed;
+                None
+            });
+            (
+                super::window_service::first_window_attributes(attributes, &settings, fullscreen),
+                settings,
+            )
+        };
+        #[cfg(target_arch = "wasm32")]
+        let (attributes, settings) = {
+            let settings = self.config.default_window_settings();
+            let attributes = attributes.with_inner_size(LogicalSize::new(self.config.width, self.config.height));
+            (crate::web::canvas_attributes(attributes), settings)
         };
         // The accessibility adapter has to be on the view (macOS) or the
         // window (Windows) before it is first shown, so the window starts
@@ -472,16 +504,7 @@ where
         let window = Arc::new(window);
         self.ctx.window.attach(
             super::window_service::Backend::new(window.clone(), self.cursor_sources.clone()),
-            crate::window::WindowSettings {
-                title: self.config.title.clone(),
-                size: Vec2::new(self.config.width as f32, self.config.height as f32),
-                mode: if self.config.fullscreen {
-                    crate::window::WindowMode::Borderless(None)
-                } else {
-                    crate::window::WindowMode::Windowed
-                },
-                ..Default::default()
-            },
+            settings,
         );
         self.window = Some(window.clone());
         self.ctx
@@ -701,15 +724,29 @@ where
             }
 
             WindowEvent::Touch(touch) => {
-                use winit::event::TouchPhase as W;
-                let phase = match touch.phase {
-                    W::Started => crate::input::TouchPhase::Started,
-                    W::Moved => crate::input::TouchPhase::Moved,
-                    W::Ended => crate::input::TouchPhase::Ended,
-                    W::Cancelled => crate::input::TouchPhase::Cancelled,
-                };
                 let pos = touch.location.to_logical::<f32>(window.scale_factor());
-                self.ctx.input.feed_touch(touch.id, phase, Vec2::new(pos.x, pos.y));
+                self.ctx
+                    .input
+                    .feed_touch(touch.id, touch_phase(touch.phase), Vec2::new(pos.x, pos.y));
+            }
+
+            // A Mac's trackpad: its pinch and rotation are the touch
+            // screen's (macOS has no touch screens; see the touch guide).
+            WindowEvent::PinchGesture { delta, phase, .. } => {
+                self.ctx
+                    .input
+                    .feed_trackpad(crate::input::Gesture::Pinch, touch_phase(phase), delta as f32);
+            }
+            WindowEvent::RotationGesture { delta, phase, .. } => {
+                // Degrees counterclockwise; the engine turns clockwise in radians.
+                self.ctx
+                    .input
+                    .feed_trackpad(crate::input::Gesture::Rotate, touch_phase(phase), -delta.to_radians());
+            }
+            WindowEvent::DoubleTapGesture { .. } => {
+                self.ctx
+                    .input
+                    .feed_trackpad(crate::input::Gesture::DoubleTap, crate::input::TouchPhase::Ended, 0.0)
             }
 
             WindowEvent::MouseWheel { delta, .. } => {
@@ -777,6 +814,17 @@ fn apply_cursor_lock(window: &Window, locked: bool) {
         let _ = window.set_cursor_grab(CursorGrabMode::None);
     }
     window.set_cursor_visible(!locked);
+}
+
+/// The engine's phase of a touch or trackpad gesture.
+fn touch_phase(phase: winit::event::TouchPhase) -> crate::input::TouchPhase {
+    use winit::event::TouchPhase as W;
+    match phase {
+        W::Started => crate::input::TouchPhase::Started,
+        W::Moved => crate::input::TouchPhase::Moved,
+        W::Ended => crate::input::TouchPhase::Ended,
+        W::Cancelled => crate::input::TouchPhase::Cancelled,
+    }
 }
 
 /// Whether `event` lets a browser page start sound (a "user activation"):

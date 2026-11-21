@@ -166,6 +166,12 @@ impl Storage {
         Self::with_backend(Backend::Folder(dir.into()))
     }
 
+    /// Another handle to the same files, with its own background-save
+    /// queue (crash reports write through one).
+    pub(crate) fn reopen(&self) -> Self {
+        Self::with_backend(self.backend.clone())
+    }
+
     fn with_backend(backend: Backend) -> Self {
         Self {
             backend,

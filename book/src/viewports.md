@@ -175,6 +175,8 @@ lights near what that camera sees.
 `ctx.debug` draws on layer 0 (`RenderLayers::DEFAULT`), so every camera
 that shows layer 0 shows it, in 2D and in 3D: depth-tested lines, lines on
 top and labels, and the built-in views (colliders, bounds, lights, ...).
+Depth-tested 3D labels (`.depth_tested()`) are drawn in each view's own 3D
+frame, facing that view's camera and hidden by what is nearer to it.
 A minimap whose camera leaves layer 0 out stays clean. Shapes in window
 pixels (`.screen()`) are drawn once, over the whole window.
 

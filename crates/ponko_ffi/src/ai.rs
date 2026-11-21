@@ -126,6 +126,10 @@ pub unsafe extern "C" fn ponko_ai_key_name(
 /// Compiles a tree from JSON (Rust `BehaviorTree::from_json`; the format is
 /// in the guide's "Game AI"). Returns null on a bad tree; `ponko_last_error`
 /// names the node and the problem.
+///
+/// Ownership: the returned tree is the caller's (null on failure); free it with
+/// ponko_behavior_tree_free.
+///
 /// ```
 /// let tree = unsafe { ponko_ffi::ponko_behavior_tree_new(c"{\"root\": {\"do\": \"idle\"}}".as_ptr()) };
 /// assert!(!tree.is_null());
@@ -153,6 +157,9 @@ pub unsafe extern "C" fn ponko_behavior_tree_new(json: *const c_char) -> *mut Po
 /// (`ponko_last_error`), such as a cycle (a tree that runs itself, through
 /// others), which names every tree on it. The new tree keeps what it needs:
 /// the subtrees may be freed after.
+///
+/// Ownership: the returned tree is the caller's (null on failure); free it with
+/// ponko_behavior_tree_free. `subtrees` stay the caller's.
 /// ```
 /// assert!(unsafe { ponko_ffi::ponko_behavior_tree_new_linked(std::ptr::null(), std::ptr::null(), std::ptr::null(), 0) }.is_null());
 /// ```
@@ -232,6 +239,10 @@ pub unsafe extern "C" fn ponko_behavior_tree_len(tree: *const PonkoBehaviorTree,
 /// A brain with an empty blackboard that thinks every `period` ticks (0
 /// counts as 1; see `ponko_brain_due`). It has no tree until its first
 /// `ponko_brain_think`.
+///
+/// Ownership: the returned brain is the caller's (null on failure); free it
+/// with ponko_brain_free.
+///
 /// ```
 /// let brain = ponko_ffi::ponko_brain_new(1);
 /// unsafe { ponko_ffi::ponko_brain_free(brain) };
@@ -484,6 +495,9 @@ pub unsafe extern "C" fn ponko_brain_save_json(
 /// same running node, wait and cooldown, counting ticks on from the one it
 /// was saved at (whatever tick you pass then); with another tree it starts
 /// over. Null on an error (`ponko_last_error`).
+///
+/// Ownership: the returned brain is the caller's (null on failure); free it
+/// with ponko_brain_free.
 /// ```
 /// assert!(unsafe { ponko_ffi::ponko_brain_load_json(c"{}".as_ptr()) }.is_null());
 /// ```

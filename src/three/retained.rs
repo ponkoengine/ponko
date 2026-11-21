@@ -2310,3 +2310,6 @@ mod tests {
         assert_eq!(things.by_key.len(), 0);
     }
 }
+
+#[cfg(test)]
+mod shared_test;

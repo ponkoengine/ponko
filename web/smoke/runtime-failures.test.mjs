@@ -1,6 +1,6 @@
 // The shipped page shows failures that stop a running game (a panic, a
-// lost WebGL2 context, a stopped worker thread), on machines without a
-// browser: the template's script runs against a fake page and a fake
+// lost WebGL2 context or WebGPU device, a stopped worker thread), on
+// machines without a browser: the template's script runs against a fake page and a fake
 // game.js whose callbacks the tests call as the engine would.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -79,6 +79,24 @@ test("a WebGL2 context lost while playing is shown", async () => {
   assert.equal(page.status.textContent, `The game stopped: ${message}`);
 });
 
+test("a WebGPU device lost while playing is shown with the browser's reason", async () => {
+  const page = await startPage();
+  page.started();
+  const message = "The WebGPU device was lost while the game was running: Device was destroyed. Reload the page to try again.";
+  page.fail({ kind: "DeviceLost", message, location: null, text: null });
+  assert.deepEqual(page.body.appended, [page.status]);
+  assert.equal(page.status.className, "error");
+  assert.equal(page.status.textContent, `The game stopped: ${message}`);
+});
+
+test("a game's own text replaces the page's for a lost WebGPU device too", async () => {
+  const page = await startPage();
+  page.started();
+  const message = "The WebGPU device was lost while the game was running. Reload the page to try again.";
+  page.fail({ kind: "DeviceLost", message, location: null, text: "The graphics card stopped answering. Reload to keep playing." });
+  assert.equal(page.status.textContent, "The graphics card stopped answering. Reload to keep playing.");
+});
+
 test("a worker thread that stopped is shown with its panic", async () => {
   const page = await startPage();
   page.started();
@@ -119,7 +137,7 @@ test("a startup error stays on the page when a script error follows it", async (
 });
 
 // The browser runner's own checks (runtime-failures.mjs), on recorded runs.
-const { checkRun, expected } = await import("./runtime-failures.mjs");
+const { checkRun, deviceLostMessage, expected, runOutcome } = await import("./runtime-failures.mjs");
 
 test("the browser runner passes a run that shows the panic it reported", () => {
   const want = expected("runtime-panic");
@@ -145,4 +163,62 @@ test("the browser runner fails a run without the game's own failure text", () =>
 test("the browser runner fails a run where no failure reached onPonkoFailure", () => {
   const want = expected("context-lost");
   assert.deepEqual(checkRun("context-lost", { ticks: 30, status: want.status, failure: null }), ["onPonkoFailure never called its callback"]);
+});
+
+// A lost WebGPU device: the engine's message carries the browser's reason.
+const destroyed = { reason: "destroyed", message: "Device was destroyed.", by: "runner" };
+const lostFailure = (message) => ({ kind: "DeviceLost", message, location: null, text: null });
+
+test("the engine's lost-device sentence carries the browser's reason without a doubled stop", () => {
+  assert.equal(
+    deviceLostMessage("Device was destroyed."),
+    "The WebGPU device was lost while the game was running: Device was destroyed. Reload the page to try again.",
+  );
+  assert.equal(
+    deviceLostMessage(""),
+    "The WebGPU device was lost while the game was running. Reload the page to try again.",
+  );
+  assert.equal(deviceLostMessage("  \n"), deviceLostMessage(""));
+});
+
+test("the browser runner passes a run where the lost device reached the page with its reason", () => {
+  const want = expected("device-lost", destroyed);
+  assert.equal(want.kind, "DeviceLost");
+  const seen = { ticks: 40, status: want.status, failure: lostFailure(want.message), lost: destroyed };
+  assert.deepEqual(checkRun("device-lost", seen), []);
+});
+
+test("the browser runner fails a lost device reported as a lost WebGL2 context", () => {
+  const message = expected("context-lost").message;
+  const seen = { ticks: 40, status: `The game stopped: ${message}`, failure: { ...lostFailure(message), kind: "ContextLost" }, lost: destroyed };
+  const problems = checkRun("device-lost", seen);
+  assert.ok(problems.some((p) => p.startsWith("the failure's kind is \"ContextLost\"")), problems.join("; "));
+  assert.ok(problems.some((p) => p.startsWith("the page shows")), problems.join("; "));
+});
+
+test("the browser runner fails a lost device whose message drops the browser's reason", () => {
+  const generic = deviceLostMessage("");
+  const seen = { ticks: 40, status: `The game stopped: ${generic}`, failure: lostFailure(generic), lost: destroyed };
+  const problems = checkRun("device-lost", seen);
+  assert.ok(problems.some((p) => p.startsWith("the failure's message")), problems.join("; "));
+});
+
+test("the browser runner fails a device-lost run where the page never heard of it", () => {
+  const seen = { ticks: 40, status: null, failure: null, lost: destroyed };
+  const problems = checkRun("device-lost", seen);
+  assert.ok(problems.includes("onPonkoFailure never called its callback"));
+});
+
+test("the browser runner fails a device-lost run where the device was never lost", () => {
+  const want = expected("device-lost");
+  const problems = checkRun("device-lost", { ticks: 40, status: want.status, failure: lostFailure(want.message), lost: null });
+  assert.deepEqual(problems, ["the browser never resolved the game's device.lost"]);
+});
+
+test("a runner run without WebGPU is unsupported only when no case could run", () => {
+  const report = (runs, unsupported, problems = []) => ({ runs: Object.fromEntries(runs.map((r) => [r, {}])), unsupported, problems });
+  assert.deepEqual(runOutcome(report(["device-lost"], ["device-lost"]), {}), [2, "unsupported"]);
+  assert.deepEqual(runOutcome(report(["device-lost"], ["device-lost"]), { allowUnsupported: true }), [0, "unsupported"]);
+  assert.deepEqual(runOutcome(report(["runtime-panic", "device-lost"], ["device-lost"]), {}), [0, "passed, some unsupported"]);
+  assert.deepEqual(runOutcome(report(["runtime-panic"], [], ["runtime-panic: x"]), {}), [1, "failed"]);
 });

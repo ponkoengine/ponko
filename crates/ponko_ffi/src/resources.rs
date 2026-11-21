@@ -246,6 +246,10 @@ impl Taken {
 /// changes, replacing anything set under that name meanwhile.
 /// `PONKO_NOT_FOUND` if there is no such resource; `size` must be its size.
 /// `scope` must not free the world.
+///
+/// Ownership: `user` stays the caller's and is only passed to `scope` during
+/// this call; the engine keeps no pointer to it after returning.
+///
 /// ```
 /// use ponko_ffi::*;
 /// use std::ffi::c_void;

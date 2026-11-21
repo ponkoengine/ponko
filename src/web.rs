@@ -11,7 +11,9 @@ pub(crate) mod ime;
 #[cfg(target_feature = "atomics")]
 pub(crate) use failure::thread_stopped;
 pub use failure::{Failure, FailureKind, on_failure};
-pub(crate) use failure::{context_lost as context_lost_while_playing, report as report_failure};
+pub(crate) use failure::{
+    context_lost as context_lost_while_playing, device_lost as device_lost_while_playing, report as report_failure,
+};
 
 use std::cell::RefCell;
 
@@ -88,6 +90,7 @@ pub(crate) fn finish_startup(result: Result<(), Error>) {
     });
     if let Err(error) = &result {
         log_error(&error.to_string());
+        crate::crash::report_error(error);
     }
     for callback in callbacks {
         callback(result.clone());

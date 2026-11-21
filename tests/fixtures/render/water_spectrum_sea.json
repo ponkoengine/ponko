@@ -1,0 +1,17 @@
+{
+  "name": "water_spectrum_sea",
+  "scene": "Water kit sea (High, sky reflection, crest foam) with Waves::spectrum: wind (8, -6) m/s, 2.5 m significant height, a 128 m square of 128 texels, choppiness 1, seed 1; mesh following the camera; sky-coloured background, flat sky light (0.55, 0.7, 0.95), sun (-0.45, -0.6, -0.65) at 2.5, ambient 1, no tonemapping; camera at (0, 4, 8) looking at (0, 0, -12); 160x160, the offscreen game renderer (4x multisampling); frame 3 at 60 fps.",
+  "width": 160,
+  "height": 160,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 12,
+    "outliers": 0.0075,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "0341f448d6109468",
+  "reason": "New: the water kit's sea with waves from an FFT spectrum (issue 124)"
+}

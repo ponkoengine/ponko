@@ -1,0 +1,157 @@
+# Every item with unsafe code outside the ECS, and the test that runs it
+# (AGENTS.md: "Every `unsafe` block needs a test that exercises it").
+# scripts/check-unsafe.py fails for unsafe code missing here, for a line whose
+# item has no unsafe code any more and for a test that doesn't exist. The C API
+# crate's helpers need no line when a tested C function reaches them (the
+# script finds that test; `--list` shows it); its exports are held to their
+# tests by scripts/check-ffi-coverage.py.
+#
+# Format: <path> | <item> | <test file>::<test fn> | <miri>
+# <miri>: miri (the test runs under Miri), miri(<features>), or why it can't:
+# c-library, gpu, os, windows, macos, wasm, window, sanitizers. The Miri
+# commands come from this file: python3 scripts/check-unsafe.py --miri.
+
+# ---- The engine --------------------------------------------------------------
+
+# The allocator that counts allocations for profiling.
+src/alloc_count.rs | impl GlobalAlloc for CountingAllocator | src/alloc_count.rs::the_counting_allocator_forwards_every_call_to_the_system_allocator | miri
+src/alloc_count.rs | CountingAllocator::alloc | src/alloc_count.rs::the_counting_allocator_forwards_every_call_to_the_system_allocator | miri
+src/alloc_count.rs | CountingAllocator::alloc_zeroed | src/alloc_count.rs::the_counting_allocator_forwards_every_call_to_the_system_allocator | miri
+src/alloc_count.rs | CountingAllocator::dealloc | src/alloc_count.rs::the_counting_allocator_forwards_every_call_to_the_system_allocator | miri
+src/alloc_count.rs | CountingAllocator::realloc | src/alloc_count.rs::the_counting_allocator_forwards_every_call_to_the_system_allocator | miri
+
+# Sprites written into the draw list from many threads.
+src/ctx.rs | Ctx::draw_world_sprites | src/ctx.rs::many_sprites_are_queued_once_each_from_many_threads | miri
+src/ctx.rs | Ctx::draw_styled_sprites | src/ctx.rs::many_sprites_are_queued_once_each_from_many_threads | miri
+src/render/batch.rs | DrawList::extend | src/render/batch.rs::extend_fills_from_many_threads | miri
+src/render/batch.rs | Slots::write | src/render/batch.rs::extend_fills_from_many_threads | miri
+src/render/batch.rs | Slots::write_styled | src/render/batch.rs::styled_writes_from_many_threads_keep_their_looks | miri
+src/render/batch.rs | impl Send for Slots | src/render/batch.rs::extend_fills_from_many_threads | miri
+src/render/batch.rs | impl Sync for Slots | src/render/batch.rs::extend_fills_from_many_threads | miri
+src/skeleton2d/draw.rs | merge | src/skeleton2d/draw.rs::many_skeletons_drawn_in_chunks_match_drawing_them_one_by_one | miri
+
+# Components registered at run time (from C), read and written as bytes.
+src/events.rs | Events::collect_feed | src/events.rs::feeds_collect_reflected_rust_and_c_events | miri
+src/reflect.rs | raw_json | src/events.rs::feeds_collect_reflected_rust_and_c_events | miri
+src/reflect.rs | FieldLayout::read | tests/reflect.rs::described_components_read_as_json_objects | miri
+src/reflect.rs | macro num! | tests/reflect.rs::described_components_read_as_json_objects | miri
+src/reflect.rs | FieldLayout::bytes | tests/reflect.rs::described_components_spawn_and_add_with_missing_fields_zeroed | miri
+src/reflect.rs | World::reflect_fields | tests/reflect.rs::described_components_spawn_and_add_with_missing_fields_zeroed | miri
+src/reflect.rs | World::reflect_resource_fields | tests/reflect.rs::field_described_resources_read_write_and_save | miri
+src/reflect/hash.rs | of_layout | tests/world_hash.rs::described_c_components_hash_their_fields_only | miri
+src/reflect/hash.rs | FieldLayout::hash | tests/world_hash.rs::described_c_components_hash_their_fields_only | miri
+src/reflect/hash.rs | word_at | tests/world_hash.rs::described_c_components_hash_their_fields_only | miri
+src/net/replicate/kinds.rs | Raw::schema | tests/net_replication.rs::more_than_64_component_types_are_refused | miri
+src/net/replicate/kinds.rs | Raw::visit | crates/ponko_ffi/tests/replication.rs::a_c_server_replicates_c_components_to_a_c_client | os
+src/net/replicate/kinds.rs | Raw::read | crates/ponko_ffi/tests/replication.rs::a_c_server_replicates_c_components_to_a_c_client | os
+src/net/replicate/kinds.rs | Raw::write | crates/ponko_ffi/tests/replication.rs::a_c_server_replicates_c_components_to_a_c_client | os
+
+# Hierarchies: components read and written by id.
+src/hierarchy.rs | read | tests/hierarchy.rs::a_body_with_an_arm_and_a_hand | miri
+src/hierarchy.rs | write | tests/hierarchy.rs::a_body_with_an_arm_and_a_hand | miri
+
+# The parallel compare of the retained 3D frame.
+src/three/retained.rs | shared | src/three/retained/shared_test.rs::instances_written_as_shared_words_from_several_threads_are_all_kept | miri(3d)
+
+# A `Ui` can live in a component.
+src/ui/retained.rs | impl Send for Ui | tests/ui_threads.rs::a_ui_moved_to_another_thread_keeps_its_tree_and_lays_out_there | miri
+src/ui/retained.rs | impl Sync for Ui | tests/ui_threads.rs::a_ui_is_read_from_several_threads_at_once | miri
+
+# Dedicated servers: stop signals and memory figures.
+src/server.rs | install_handlers | tests/server_signals.rs::stop_signals_start_the_grace_and_a_second_one_forces_the_stop | os
+src/server.rs | on_signal | tests/server_signals.rs::stop_signals_start_the_grace_and_a_second_one_forces_the_stop | os
+src/server.rs | restore_handlers | tests/server_signals.rs::stop_signals_start_the_grace_and_a_second_one_forces_the_stop | os
+src/server.rs | rss_bytes | src/server.rs::peak_memory_is_reported_on_unix | os
+src/server.rs | peak_rss_bytes | src/server.rs::peak_memory_is_reported_on_unix | os
+
+# The game's output kept for tools (stdout and stderr through pipes). The
+# Windows items run in the same tests on Windows.
+src/logs.rs | redirect | tests/control.rs::the_game_output_is_kept_for_tools | os
+src/logs.rs | restore | tests/control.rs::the_game_output_is_kept_for_tools | os
+src/logs.rs | register_exit_hook | tests/control.rs::output_printed_right_before_exit_still_reaches_the_terminal | os
+src/logs.rs | InFlight::read_from | tests/control.rs::the_game_output_is_kept_for_tools | windows
+src/logs.rs | InFlight::chunk | tests/control.rs::the_game_output_is_kept_for_tools | windows
+src/logs.rs | InFlight::pass_on | tests/control.rs::the_game_output_is_kept_for_tools | windows
+src/logs.rs | InFlight::left | tests/control.rs::the_game_output_is_kept_for_tools | windows
+src/logs.rs | impl Sync for InFlight | tests/control.rs::the_game_output_is_kept_for_tools | windows
+src/logs.rs | IoStatus::bytes | tests/control.rs::the_game_output_is_kept_for_tools | windows
+src/logs.rs | IoStatus::clear | tests/control.rs::the_game_output_is_kept_for_tools | windows
+src/logs.rs | read_recorded | tests/control.rs::the_game_output_is_kept_for_tools | windows
+src/logs.rs | drain | tests/control.rs::the_game_output_is_kept_for_tools | windows
+src/logs.rs | is_dead | tests/control.rs::the_game_output_is_kept_for_tools | windows
+src/logs.rs | watch_this_thread | tests/control.rs::the_game_output_is_kept_for_tools | windows
+src/logs.rs | on_thread_end | tests/control.rs::the_game_output_is_kept_for_tools | windows
+src/logs.rs | extern block in mod windows | tests/control.rs::the_game_output_is_kept_for_tools | windows
+src/logs.rs | impl Send for Saved | tests/control.rs::the_game_output_is_kept_for_tools | windows
+
+# C libraries: dav1d (AV1 video), meshoptimizer (compressed glTF).
+src/video/av1.rs | Av1::new | tests/video.rs::a_loaded_video_is_paused_on_its_first_frame | c-library
+src/video/av1.rs | Av1::decode | tests/video.rs::a_loaded_video_is_paused_on_its_first_frame | c-library
+src/video/av1.rs | Av1::picture | tests/video.rs::a_loaded_video_is_paused_on_its_first_frame | c-library
+src/video/av1.rs | Av1::flush | tests/video.rs::seeking_shows_the_frame_at_that_time_forward_and_back | c-library
+src/video/av1.rs | Av1::drop | tests/video.rs::a_loaded_video_is_paused_on_its_first_frame | c-library
+src/video/av1.rs | Picture::planes | tests/video.rs::a_loaded_video_is_paused_on_its_first_frame | c-library
+src/video/av1.rs | Picture::drop | tests/video.rs::a_loaded_video_is_paused_on_its_first_frame | c-library
+src/video/av1.rs | impl Send for Av1 | tests/video.rs::a_loaded_video_is_paused_on_its_first_frame | c-library
+src/video/av1.rs | impl Sync for Av1 | tests/video.rs::a_loaded_video_is_paused_on_its_first_frame | c-library
+src/three/gltf_ext.rs | decode_meshopt | src/three/gltf_ext.rs::meshopt_compressed_geometry_decompresses_at_load | c-library
+
+# The GPU: Metal's own memory figure (an offscreen GPU test).
+src/render/memory.rs | metal_allocated_bytes | src/render/gpu_memory_render_test.rs::adapter_figure_child | gpu
+
+# Screen readers: the platform adapters attach to a real window's view.
+src/ui/access_native.rs | UiAccessAdapter::for_ns_view | - | window
+src/ui/access_native.rs | UiAccessAdapter::for_hwnd | - | window
+src/ui/access_native.rs | for_window | - | window
+
+# The threaded web build: worker threads and their mailbox (wasm only), run
+# by the browser smoke test of the threaded build.
+src/web_threads.rs | impl Send for Message | web/smoke/threads.mjs | wasm
+src/web_threads.rs | impl Sync for Mailbox | web/smoke/threads.mjs | wasm
+src/web_threads.rs | post | web/smoke/threads.mjs | wasm
+src/web_threads.rs | run_on_pool | web/smoke/threads.mjs | wasm
+src/web_threads.rs | impl Send for SendOp | web/smoke/threads.mjs | wasm
+src/web_threads.rs | SendOp::call | web/smoke/threads.mjs | wasm
+src/web_threads.rs | coordinate | web/smoke/threads.mjs | wasm
+src/web_threads.rs | worker_start | web/smoke/threads.mjs | wasm
+src/web_threads.rs | start_workers | web/smoke/threads.mjs | wasm
+src/web_threads.rs | spawn_worker | web/smoke/threads.mjs | wasm
+
+# ---- The command-line tool ---------------------------------------------------
+
+crates/ponko_cli/src/textures.rs | uastc | crates/ponko_cli/src/textures.rs::basis_textures_keep_uastc_blocks_and_say_their_channels | c-library
+
+# ---- The C API: helpers no tested C function reaches by a plain call ---------
+
+# Called by the engine through a trait object or a drop, not by name.
+crates/ponko_ffi/src/asset_sources.rs | CSource::read | crates/ponko_ffi/tests/asset_sources.rs::a_callback_source_is_asked_first_and_freed_once | sanitizers
+crates/ponko_ffi/src/asset_sources.rs | CSource::contains | crates/ponko_ffi/tests/asset_sources.rs::a_contains_callback_locates_gltf_images_without_reading_them | sanitizers
+crates/ponko_ffi/src/save_migrations.rs | Convert::drop | crates/ponko_ffi/tests/save_migrations.rs::c_conversions_change_components_resources_entities_and_the_whole_save | sanitizers
+crates/ponko_ffi/src/prediction.rs | Bytes::as_slice | crates/ponko_ffi/src/prediction.rs::buffers_are_sixteen_byte_aligned_and_compare_their_bytes_only | sanitizers
+crates/ponko_ffi/src/prediction.rs | Bytes::clone | crates/ponko_ffi/src/prediction.rs::buffers_are_sixteen_byte_aligned_and_compare_their_bytes_only | sanitizers
+# Conversions of built-in components, called through function pointers.
+crates/ponko_ffi/src/lib.rs | from_c | crates/ponko_ffi/tests/sprite_materials.rs::sprite_materials_and_blend_modes_work_from_c | sanitizers
+crates/ponko_ffi/src/lib.rs | to_c | crates/ponko_ffi/tests/sprite_materials.rs::sprite_materials_and_blend_modes_work_from_c | sanitizers
+# Send and Sync for C callbacks and their user data, used on other threads.
+crates/ponko_ffi/src/lib.rs | impl Send for Shared | crates/ponko_ffi/tests/game.rs::parallel_queries_visit_every_row_once_and_turn_commands_off | sanitizers
+crates/ponko_ffi/src/lib.rs | impl Sync for Shared | crates/ponko_ffi/tests/game.rs::parallel_queries_visit_every_row_once_and_turn_commands_off | sanitizers
+crates/ponko_ffi/src/contacts3d.rs | impl Send for Hook | crates/ponko_ffi/tests/contacts3d.rs::the_c_hook_sees_pairs_and_can_drop_them_or_their_points | sanitizers
+crates/ponko_ffi/src/contacts3d.rs | impl Sync for Hook | crates/ponko_ffi/tests/contacts3d.rs::the_c_hook_sees_pairs_and_can_drop_them_or_their_points | sanitizers
+crates/ponko_ffi/src/save_migrations.rs | impl Send for Convert | crates/ponko_ffi/tests/save_migrations.rs::c_conversions_change_components_resources_entities_and_the_whole_save | sanitizers
+crates/ponko_ffi/src/save_migrations.rs | impl Sync for Convert | crates/ponko_ffi/tests/save_migrations.rs::c_conversions_change_components_resources_entities_and_the_whole_save | sanitizers
+# Layout promises between C and Rust types (checked at compile time too).
+crates/ponko_ffi/src/types.rs | trait SameLayout | crates/ponko_ffi/tests/sprite_materials.rs::sprite_materials_and_blend_modes_work_from_c | sanitizers
+crates/ponko_ffi/src/types.rs | macro same_layout! | crates/ponko_ffi/tests/sprite_materials.rs::sprite_materials_and_blend_modes_work_from_c | sanitizers
+crates/ponko_ffi/src/three.rs | impl SameLayout<Mesh> for PonkoMesh | crates/ponko_ffi/tests/three.rs::games_build_and_move_3d_worlds_from_c | sanitizers
+crates/ponko_ffi/src/three.rs | impl SameLayout<PonkoMesh> for Mesh | crates/ponko_ffi/tests/three.rs::games_build_and_move_3d_worlds_from_c | sanitizers
+crates/ponko_ffi/src/three.rs | impl SameLayout<Material> for PonkoMaterial | crates/ponko_ffi/tests/three.rs::games_build_and_move_3d_worlds_from_c | sanitizers
+crates/ponko_ffi/src/three.rs | impl SameLayout<PonkoMaterial> for Material | crates/ponko_ffi/tests/three.rs::games_build_and_move_3d_worlds_from_c | sanitizers
+
+# Crash reports name the system (the OS version and the kernel).
+src/crash.rs | version | src/crash.rs::the_system_is_named_with_its_architecture_and_no_machine_name | os
+src/crash.rs | extern block in version | src/crash.rs::the_system_is_named_with_its_architecture_and_no_machine_name | windows
+src/crash.rs | kernel | src/crash.rs::the_system_is_named_with_its_architecture_and_no_machine_name | os
+
+# Whether the desktop has a touch screen (Windows asks the system).
+src/input/touch_desktop.rs | windows_touch_points | src/input/touch_desktop.rs::windows_says_how_many_touches_its_screens_take | windows
+src/input/touch_desktop.rs | extern block in windows_touch_points | src/input/touch_desktop.rs::windows_says_how_many_touches_its_screens_take | windows

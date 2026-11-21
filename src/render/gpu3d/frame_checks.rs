@@ -8,7 +8,8 @@ use super::passes::{self, Features, Format, Resource, Samples};
 use super::{DEPTH_FORMAT, FADED, HDR_FORMAT, MAX_CASCADES, Part, Renderer3D, Run, Targets};
 
 /// What only the main camera's frame records, for every window view (see
-/// `views.rs`): posing, the sky's maps, buffer pasts and occlusion.
+/// `views.rs`): posing, the sky's maps, buffer pasts, occlusion and the
+/// view model's motion.
 const MAIN_ONLY: Features = Features::SKINNING
     .with(Features::SKY_TEXTURE)
     .with(Features::SKY_BRDF)
@@ -17,7 +18,8 @@ const MAIN_ONLY: Features = Features::SKINNING
     .with(Features::OCCLUSION)
     .with(Features::CLOUD_SHADOWS)
     .with(Features::CLOUDS)
-    .with(Features::KIT_SKY);
+    .with(Features::KIT_SKY)
+    .with(Features::VIEW_MODEL_MOTION);
 
 /// What a frame's parts are recorded against: the frame's features. Empty
 /// in release builds.
@@ -219,6 +221,7 @@ impl Renderer3D {
             Features::SOLID_PREPASS.only_if(self.solid_prepass),
             Features::OCCLUSION.only_if(self.occlusion.recording()),
             Features::VELOCITY.only_if(self.screen.velocity_on && targets.velocity.is_some()),
+            Features::VIEW_MODEL_MOTION.only_if(self.view_model_motion() && targets.velocity.is_some()),
             Features::AO.only_if(self.screen.ao_enabled),
             Features::SSR.only_if(self.screen.ssr.is_some() && targets.ssr.is_some()),
             Features::SSR_SPREAD

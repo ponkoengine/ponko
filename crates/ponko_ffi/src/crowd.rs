@@ -166,6 +166,10 @@ pub extern "C" fn ponko_crowd_instance_at(position: PonkoVec3) -> PonkoCrowdInst
 /// Bakes `clips` on the skeleton of `skeleton_entity` at `fps` frames a
 /// second (Rust `CrowdAnimation::bake`); free the result with
 /// `ponko_crowd_animation_free`. Clip `k` of the array is clip index `k`.
+///
+/// Ownership: on success `output` receives an owned animation, the caller's;
+/// free it with ponko_crowd_animation_free.
+///
 /// # Safety
 /// `ctx` null or live; `clips` holds `clip_count` entries whose clips are
 /// live; output writable.

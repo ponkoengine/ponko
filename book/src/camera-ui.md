@@ -117,8 +117,10 @@ level), the camera cuts to it. With no target (a title screen) the rig
 leaves the camera alone, so the game can move it. The same works in 3D with
 the [3D rigs](3d.md#camera-rigs).
 
-A rig you keep elsewhere (a second camera, a split screen) you update
-yourself, once a frame, after the thing it follows moved:
+`CameraTarget` is Rust-only for now: C and C++ games keep the rig and
+update it themselves, as below. A rig you keep elsewhere (a second camera,
+a split screen) you update yourself too, once a frame, after the thing it
+follows moved:
 
 <div class="lang-pair">
 <div>

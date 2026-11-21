@@ -132,6 +132,7 @@ pub mod color;
 #[cfg(feature = "compressed-textures")]
 pub(crate) mod compressed;
 mod control;
+pub mod crash;
 mod ctx;
 pub mod debug;
 pub mod diagnostics;

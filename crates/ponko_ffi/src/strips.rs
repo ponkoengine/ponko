@@ -379,6 +379,10 @@ pub unsafe extern "C" fn ponko_ctx_remove_line3d(ctx: *mut PonkoCtx, entity_bits
 /// empty one to `ponko_ctx_create_mesh`. Null (see `ponko_last_error`) if
 /// `data` or `projector` is null or the projector isn't finite. Free the
 /// result with `ponko_mesh_data_free`.
+///
+/// Ownership: the returned mesh data is the caller's (null on failure); free it
+/// with ponko_mesh_data_free.
+///
 /// # Safety
 /// `data` null or live; `projector` null or holds 16 floats.
 /// ```
@@ -423,6 +427,10 @@ pub unsafe extern "C" fn ponko_mesh_data_decal(
 /// the GPU: to cut decals from or read its corners. Loads the file each
 /// call; keep the result. Free it with `ponko_mesh_data_free`. Fails if
 /// the file is missing or isn't a glTF file with triangles.
+///
+/// Ownership: on success `out_data` receives an owned mesh data, the caller's;
+/// free it with ponko_mesh_data_free.
+///
 /// # Safety
 /// `ctx` null or live; `path` a NUL-terminated string; `out_data` writable.
 /// ```
