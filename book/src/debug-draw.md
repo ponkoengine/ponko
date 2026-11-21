@@ -159,7 +159,7 @@ is the rule above. A monitor can show the debug drawing without the smoke
 top-down map can be the only place it shows, with the window's camera's
 `debug_draw` at `Some(false)`. From C and C++ it is the `debug_draw` field
 of `PonkoCamera3DEx` and `PonkoTargetCameraEx`, a `PonkoDebugDraw`
-(`ponko::debug_draw`).
+(`ponko::camera_debug_draw`).
 
 In a render target the 3D lines and
 depth-tested labels are drawn against that camera's own depth, and 3D
@@ -260,6 +260,6 @@ then call `ponko_debug_style_ex_defaults`. Set `style.space` to
 such as `ponko_ctx_debug_line2d_ex`. The default is
 `PONKO_DRAW_SPACE_WORLD`, the same coordinate space sprites use.
 In C++, initialize the descriptor with
-`ponko::debug_draw::style_ex(ponko::draw_space::screen)` and pass it to a method
+`ponko::camera_debug_draw::style_ex(ponko::draw_space::screen)` and pass it to a method
 such as `ctx.debug().line_ex`. Existing ABI 2 calls continue to read
 `PonkoDebugStyle::screen`.

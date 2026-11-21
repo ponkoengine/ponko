@@ -7,7 +7,7 @@
   so a monitor can show the debug drawing without the smoke, or a map be the
   only view that shows it. From C, the `debug_draw` field (a
   `PonkoDebugDraw`) of version 2 of `PonkoCamera3DEx` and
-  `PonkoTargetCameraEx`; in C++, `ponko::debug_draw`.
+  `PonkoTargetCameraEx`; in C++, `ponko::camera_debug_draw`.
 - Web: a lost WebGPU device's failure says why:
   `Failure::device_lost_reason()` is `DeviceLostReason::Destroyed` when the
   device's `destroy()` was called and `Unknown` for anything else (the GPU
