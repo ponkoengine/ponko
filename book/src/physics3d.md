@@ -85,6 +85,7 @@ is what you see:
 | `d3::Collider::cuboid(size)` | `ponko::box_collider(size)` | full width, height, depth |
 | `d3::Collider::capsule(h, r)` | `ponko::capsule_collider3d(h, r)` | upright; `h` between the centers of its ends |
 | `d3::Collider::mesh(m)` | `ponko::mesh_collider(m)` | a heightfield, convex hull or triangle mesh |
+| `d3::Collider::scaled_mesh(m, scale)` | none yet (C: shape `PONKO_SHAPE3D_SCALED_MESH`, `size` as the scale) | that mesh scaled where it is used; a negative component mirrors it |
 | `.density(d)`, `.friction(f)`, `.restitution(r)` | fields of the same name | kg/m³ (default 1000), 0 ice..1 rubber, bounciness |
 | `.sensor()` | `.sensor = true` | reports overlaps, doesn't push |
 | `.offset(v)`, `.groups(g)` | `.offset`, `.groups` | shape moved from the entity; who it touches |
@@ -105,6 +106,13 @@ Collision meshes are made once and shared by any number of colliders:
 - `ctx.free(m)` (or `ctx.physics3d.free(m)`) lets go of one; colliders
   still using it keep it until they're removed. A collision mesh is a
   [handle](handles.md): `ctx.is_live(m)` tells whether it still is.
+- `Collider::scaled_mesh(m, scale)` uses one mesh at any size: a rock made
+  once serves a pebble and a boulder, and a negative component mirrors a
+  hull or triangle mesh (a heightfield takes the size only). The mesh stays
+  one; each collider gets a scaled copy when it enters the physics world,
+  shared by the colliders at the same scale and dropped with the last of
+  them. World saves and scene files leave such colliders out; a mesh file
+  in a scene names its own `scale` instead (below).
 
 Each of these has a twin in `CollisionMeshData` (C++
 `ponko::collision_mesh_data`) that builds the mesh on any thread, for

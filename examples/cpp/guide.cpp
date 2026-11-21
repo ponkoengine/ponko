@@ -1371,6 +1371,61 @@ static void ai_guide_runs() {
     }
 }
 
+// ANCHOR: ai_world
+// Sentries are world entities: the engine keeps their brains and
+// blackboards, ponko::ai::think runs them, and a signal wakes them at once.
+static const char* sentry_tree = R"({"root": {"sequence": [
+    {"wait_for": "alarm", "store": "noise"},
+    {"parallel": [{"do": "run", "speed": 90}, {"do": "shout"}]}
+]}})";
+
+static void sentries_setup(ponko::ctx& ctx, std::vector<ponko::entity>& sentries) {
+    ponko::ai::add_tree(ctx, "sentry", ponko::ai::behavior_tree(sentry_tree));
+    for (int i = 0; i < 3; ++i) {
+        const ponko::entity e = ctx.world().spawn();
+        ponko::ai::add_brain(ctx, e, "sentry", 16);   // thinks every 16th tick
+        sentries.push_back(e);
+    }
+}
+
+static void sentries_alarm(ponko::ctx& ctx) {         // signals, before think
+    static const std::uint64_t alarm = ponko::ai::key("alarm");
+    if (ctx.sim_tick() == 30) ponko::ai::signal_vec2(ctx, ponko::ai::every_brain, alarm, {320, 240});
+}
+
+static int sentries_act(ponko::ctx& ctx, const std::vector<ponko::entity>& sentries) {   // act
+    static const std::uint64_t run = ponko::ai::key("run"), shout = ponko::ai::key("shout");
+    int shouts = 0;
+    for (ponko::entity e : sentries) {
+        if (ponko::ai::started(ctx, e, shout)) {           // two actions at once
+            ++shouts;                                        // play the sound once
+            ponko::ai::finish(ctx, e, shout, ponko::ai::status::success);
+        }
+        if (ponko::ai::doing(ctx, e, run)) { /* move toward the noise; finish when there */ }
+    }
+    return shouts;
+}
+// game.sim_system(sentries_alarm).sim_system(ponko::ai::think).sim_system(act)
+// ANCHOR_END: ai_world
+
+static void ai_world_guide_runs() {
+    std::vector<ponko::entity> sentries;
+    int shouts = 0;
+    bool running = false;
+    ponko::game("sentries", 1, 1)
+        .sim_system(sentries_alarm, "alarm")
+        .sim_system(ponko::ai::think, "think")
+        .sim_system([&](ponko::ctx& ctx) {
+            shouts += sentries_act(ctx, sentries);
+            running = ponko::ai::doing(ctx, sentries[0], ponko::ai::key("run"));
+        }, "act")
+        .run_headless(40, [&](ponko::ctx& ctx) { sentries_setup(ctx, sentries); });
+    if (shouts != 3 || !running) {
+        std::fprintf(stderr, "ai world guide: %d shouts, running %d\n", shouts, running);
+        std::abort();
+    }
+}
+
 // ---- Events --------------------------------------------------------------------------
 // ANCHOR: events
 struct Hp { int value; };
@@ -4810,6 +4865,7 @@ int main() {
     declared_access_guide();
     parallel_systems_guide();
     ai_guide_runs();
+    ai_world_guide_runs();
     steering_stays_within_budget();
     navigation_guide();
     ponko::game("shop guide", 900, 700).run_headless(0, shop_guide);

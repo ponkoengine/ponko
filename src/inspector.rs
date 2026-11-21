@@ -158,9 +158,40 @@ pub(crate) struct Panels {
     /// `inspector_app.rs`), not an overlay on the game.
     #[cfg(feature = "editor")]
     pub app: Option<app::App>,
+    /// The next frame starts with no key or modifier held (see
+    /// [`Panels::input_lost`]).
+    forget_held: bool,
 }
 
 impl Panels {
+    /// The keyboard was elsewhere: the window's focus changed, or a system
+    /// dialog had it. Keys let go meanwhile never send their key-up here, so
+    /// the next frame forgets every key and modifier held (Ctrl from Ctrl+O,
+    /// the Enter that confirmed a dialog); keys still down press again.
+    pub(crate) fn input_lost(&mut self) {
+        self.forget_held = true;
+    }
+
+    /// The window's focus changed (`focused`: it came back). Either way the
+    /// held keys are forgotten: keys let go while it was away never send
+    /// their key-up here, and on macOS egui-winit reads a late focus loss as
+    /// focused (it asks the window), so egui would keep them held.
+    pub(crate) fn focus_changed(&mut self, focused: bool) {
+        let _ = focused;
+        self.input_lost();
+    }
+
+    /// Runs one frame of the panels on `egui` with input `raw`: what
+    /// [`Panels::input_lost`] asked to forget first, then `raw`'s events.
+    pub fn run(&mut self, egui: &egui::Context, mut raw: egui::RawInput, ctx: &mut Ctx) -> egui::FullOutput {
+        if std::mem::take(&mut self.forget_held) {
+            // egui's own reset for a window that lost focus: no key down,
+            // no modifier held.
+            raw.events.insert(0, egui::Event::WindowFocused(false));
+        }
+        egui.run_ui(raw, |ui| self.show(ui, ctx))
+    }
+
     /// Draws the inspector into `ui` and applies what was changed in it to `ctx`.
     pub fn show(&mut self, ui: &mut Ui, ctx: &mut Ctx) {
         #[cfg(feature = "editor")]
@@ -1029,8 +1060,16 @@ impl Inspector {
     /// see it: egui uses it, or it's the click that picks an entity.
     pub fn on_event(&mut self, window: &winit::window::Window, event: &winit::event::WindowEvent) -> bool {
         use winit::event::{ElementState, MouseButton, WindowEvent};
+        if let WindowEvent::Focused(focused) = event {
+            // Also while closed: the panels forget what was held when
+            // they're opened again.
+            self.panels.focus_changed(*focused);
+        }
         if !self.open {
             return false;
+        }
+        if let WindowEvent::Focused(_) = event {
+            self.forget_modifiers(window);
         }
         let consumed = self.input.on_window_event(window, event).consumed;
         if self.panels.picking
@@ -1083,7 +1122,7 @@ impl Inspector {
         }
         let raw = self.input.take_egui_input(window);
         let panels = &mut self.panels;
-        let output = self.egui.run_ui(raw, |ui| panels.show(ui, ctx));
+        let output = panels.run(&self.egui, raw, ctx);
         ctx.ui.overlay_has_pointer = self.egui.is_pointer_over_egui();
         self.input.handle_platform_output(window, output.platform_output);
         let primitives = self.egui.tessellate(output.shapes, output.pixels_per_point);
@@ -1095,9 +1134,20 @@ impl Inspector {
             });
         }
         #[cfg(feature = "editor")]
-        panels.run_file_picker(ctx, |request, folder, name| {
+        if panels.run_file_picker(ctx, |request, folder, name| {
             file_picker::system_picker(window, request, folder, name)
-        });
+        }) {
+            // The dialog had the keyboard (focus events may not say so);
+            // `run_file_picker` told the panels to forget what was held.
+            self.forget_modifiers(window);
+        }
+    }
+
+    /// With [`Panels::input_lost`]: egui-winit stamps the modifiers it saw
+    /// last on every key event, so they're released there too.
+    fn forget_modifiers(&mut self, window: &winit::window::Window) {
+        let released = winit::event::WindowEvent::ModifiersChanged(winit::event::Modifiers::default());
+        let _ = self.input.on_window_event(window, &released);
     }
 }
 

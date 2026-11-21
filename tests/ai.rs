@@ -808,9 +808,9 @@ fn a_parallel_counts_successes_and_failures_by_its_policy() {
 #[test]
 fn bad_parallel_nodes_name_the_node_and_the_problem() {
     let error = |json: &str| BehaviorTree::from_json(json).unwrap_err().to_string();
-    let e = error(r#"{"root": {"parallel": [{"do": "a"}, {"sequence": [{"do": "b"}]}]}}"#);
+    let e = error(r#"{"root": {"parallel": [{"do": "a"}, {"check": "x"}, {"sequence": [{"do": "b"}, {"do": "a"}]}]}}"#);
     assert!(
-        e.contains("root/parallel: children [0] and [1] both have \"do\" nodes"),
+        e.contains("root/parallel: children [0] and [2] can both do \"a\" at once"),
         "{e}"
     );
     let e = error(r#"{"root": {"parallel": [{"do": "a"}], "success": 2}}"#);
@@ -824,6 +824,187 @@ fn bad_parallel_nodes_name_the_node_and_the_problem() {
     let (mut brain, mut bb) = (Brain::new("x"), Blackboard::new());
     brain.think(&t, &mut bb, 0, DT);
     assert_eq!(brain.param_num(Key::new("chance")), Some(0.5));
+}
+
+// ---- several actions at once -----------------------------------------------
+
+const MOVE: Key = Key::new("move");
+const AIM: Key = Key::new("aim");
+
+fn actions(brain: &Brain) -> Vec<&'static str> {
+    brain.actions().map(Key::name).collect()
+}
+
+#[test]
+fn a_parallel_runs_the_actions_of_several_children_at_once() {
+    let t = tree(
+        r#"{"root": {"sequence": [
+            {"parallel": [{"do": "move", "to": 3}, {"check": "alert"}, {"do": "aim", "spread": 0.5}]},
+            {"do": "fire"}
+        ]}}"#,
+    );
+    let (mut brain, mut bb) = (Brain::new("s"), Blackboard::new().with(ALERT, true));
+    brain.think(&t, &mut bb, 0, DT);
+    assert_eq!(actions(&brain), ["move", "aim"], "in tree order");
+    assert!(brain.doing(MOVE) && brain.doing(AIM));
+    assert!(brain.started_action(MOVE) && brain.started_action(AIM));
+    // Each action has its own parameters; the single-action calls are
+    // about the first.
+    assert_eq!(brain.action_param(AIM, Key::new("spread")), Some(Value::Num(0.5)));
+    assert_eq!(brain.action_param(MOVE, Key::new("spread")), None);
+    assert_eq!(brain.param_num(Key::new("to")), Some(3.0));
+    assert_eq!(brain.action(), Some(MOVE));
+    // The move ends; the aim carries on, not started again.
+    brain.succeed_action(MOVE);
+    brain.think(&t, &mut bb, 1, DT);
+    assert_eq!(actions(&brain), ["aim"]);
+    assert!(!brain.started_action(AIM));
+    // Both done: the parallel succeeds and the sequence goes on.
+    brain.succeed_action(AIM);
+    brain.think(&t, &mut bb, 2, DT);
+    assert_eq!(actions(&brain), ["fire"]);
+    assert!(brain.started());
+}
+
+#[test]
+fn an_action_reported_for_another_name_changes_nothing() {
+    let t = tree(r#"{"root": {"parallel": [{"do": "move"}, {"do": "aim"}]}}"#);
+    let (mut brain, mut bb) = (Brain::new("s"), Blackboard::new());
+    brain.think(&t, &mut bb, 0, DT);
+    brain.fail_action(Key::new("dance"));
+    brain.think(&t, &mut bb, 1, DT);
+    assert_eq!(actions(&brain), ["move", "aim"]);
+    assert_eq!(brain.status(), Status::Running);
+}
+
+#[test]
+fn a_parallel_drops_every_action_below_it_when_it_ends() {
+    // Fails as soon as one child fails: the aim failing drops the move.
+    let t = tree(
+        r#"{"root": {"selector": [
+        {"parallel": [{"do": "move"}, {"sequence": [{"do": "aim"}, {"do": "shoot"}]}]},
+        {"do": "hide"}
+    ]}}"#,
+    );
+    let (mut brain, mut bb) = (Brain::new("s"), Blackboard::new());
+    brain.think(&t, &mut bb, 0, DT);
+    assert_eq!(actions(&brain), ["move", "aim"]);
+    brain.succeed_action(AIM);
+    brain.think(&t, &mut bb, 1, DT);
+    assert_eq!(actions(&brain), ["move", "shoot"]);
+    assert!(!brain.started_action(MOVE) && brain.started_action(Key::new("shoot")));
+    brain.fail_action(Key::new("shoot"));
+    brain.think(&t, &mut bb, 2, DT);
+    assert_eq!(actions(&brain), ["hide"]);
+    // A higher branch taking over drops them too.
+    let t = tree(
+        r#"{"root": {"selector": [
+        {"sequence": [{"check": "alert"}, {"do": "flee"}]},
+        {"parallel": [{"do": "move"}, {"do": "aim"}]}
+    ]}}"#,
+    );
+    let (mut brain, mut bb) = (Brain::new("s"), Blackboard::new());
+    brain.think(&t, &mut bb, 0, DT);
+    assert_eq!(actions(&brain), ["move", "aim"]);
+    bb.set(ALERT, true);
+    brain.think(&t, &mut bb, 1, DT);
+    assert_eq!(actions(&brain), ["flee"]);
+    bb.set(ALERT, false);
+    brain.think(&t, &mut bb, 2, DT);
+    assert_eq!(actions(&brain), ["move", "aim"]);
+    assert!(brain.started_action(MOVE) && brain.started_action(AIM), "started over");
+}
+
+#[test]
+fn the_same_action_in_branches_that_never_run_together_is_allowed() {
+    // Two `move`s in one child's selector, `aim` in the other: fine.
+    let t = tree(
+        r#"{"root": {"parallel": [
+        {"selector": [{"sequence": [{"check": "alert"}, {"do": "move", "fast": true}]}, {"do": "move"}]},
+        {"do": "aim"}
+    ]}}"#,
+    );
+    let (mut brain, mut bb) = (Brain::new("s"), Blackboard::new());
+    brain.think(&t, &mut bb, 0, DT);
+    assert_eq!(actions(&brain), ["move", "aim"]);
+    // Nested parallels are checked at every level.
+    let e = BehaviorTree::from_json(
+        r#"{"root": {"parallel": [{"parallel": [{"do": "move"}, {"do": "aim"}]}, {"do": "aim"}]}}"#,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        e.contains("root/parallel: children [0] and [1] can both do \"aim\""),
+        "{e}"
+    );
+}
+
+#[test]
+fn think_clears_started_actions_on_ticks_it_skips() {
+    let mut world = Game::new("t", 1, 1).sim_system(ai::think).run_headless(1, |ctx| {
+        load(
+            ctx,
+            "ai/p.json",
+            r#"{"root": {"parallel": [{"do": "move"}, {"do": "aim"}]}}"#,
+        );
+        ctx.world
+            .spawn((Brain::new("ai/p.json").with_period(50), Blackboard::new()));
+    });
+    let brain = world.query::<&Brain>().single().unwrap();
+    assert!(brain.started_action(MOVE) && brain.started_action(AIM));
+    let e = world.query::<Entity>().filter::<With<Brain>>().single().unwrap();
+    // The brain's JSON lists every action.
+    let json = world.get_json(e, "Brain").unwrap();
+    assert_eq!(json["action"], "move");
+    assert_eq!(json["actions"], serde_json::json!(["move", "aim"]));
+    let mut world = Game::new("t", 1, 1).sim_system(ai::think).run_headless(2, |ctx| {
+        load(
+            ctx,
+            "ai/p.json",
+            r#"{"root": {"parallel": [{"do": "move"}, {"do": "aim"}]}}"#,
+        );
+        ctx.world
+            .spawn((Brain::new("ai/p.json").with_period(50), Blackboard::new()));
+    });
+    let brain = world.query::<&Brain>().single().unwrap();
+    assert_eq!(actions(brain), ["move", "aim"]);
+    assert!(!brain.started_action(MOVE) && !brain.started_action(AIM) && !brain.started());
+}
+
+#[test]
+fn a_saved_brain_carries_on_with_all_its_actions() {
+    let t = tree(
+        r#"{"root": {"sequence": [
+        {"parallel": [{"do": "move"}, {"sequence": [{"do": "aim"}, {"do": "fire"}]}, {"do": "shout"}]},
+        {"do": "rest"}
+    ]}}"#,
+    );
+    let (mut brain, mut bb) = (Brain::new("t"), Blackboard::new());
+    brain.think(&t, &mut bb, 0, DT);
+    brain.succeed_action(AIM);
+    brain.think(&t, &mut bb, 1, DT);
+    // The game reported the shout done but the brain hasn't thought since.
+    brain.succeed_action(Key::new("shout"));
+    assert_eq!(actions(&brain), ["move", "fire", "shout"]);
+    let json = serde_json::to_value(&brain).unwrap();
+    assert_eq!(json["actions"], serde_json::json!(["move", "fire", "shout"]));
+    let mut back: Brain = serde_json::from_value(json).unwrap();
+    // Same tree: the move and the fire carry on, the shout's report holds.
+    let mut bb2 = bb.clone();
+    back.think(&t, &mut bb2, 0, DT);
+    brain.think(&t, &mut bb, 2, DT);
+    assert_eq!(actions(&back), ["move", "fire"]);
+    assert_eq!(actions(&back), actions(&brain));
+    assert!(!back.started_action(MOVE) && !back.started_action(Key::new("fire")));
+    // One action: the memory has no "also", as before.
+    let one = tree(r#"{"root": {"do": "idle"}}"#);
+    let mut idle = Brain::new("one");
+    idle.think(&one, &mut Blackboard::new(), 0, DT);
+    let json = serde_json::to_value(&idle).unwrap();
+    assert!(
+        json.get("actions").is_none() && json["memory"].get("also").is_none(),
+        "{json}"
+    );
 }
 
 // ---- random and chance ------------------------------------------------------

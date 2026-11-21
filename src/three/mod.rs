@@ -98,9 +98,12 @@ pub use probe::{ProbeRefresh, ReflectionProbe3D, ReflectionRefresh3D};
 pub(crate) mod autotune;
 #[cfg(test)]
 mod extraction_test;
+#[cfg(test)]
+mod gltf_scene_test;
 mod quality;
 mod resident;
 mod retained;
+mod sliced_mesh;
 mod streamed;
 pub(crate) use streamed::LoadedFile;
 pub use streamed::StreamedLod;
@@ -1304,6 +1307,9 @@ pub(crate) struct Assets3D {
     pub reuse_mesh_id: Option<u32>,
     /// Each mesh's estimated GPU bytes (`asset_inventory`), by id; 0 once freed.
     pub mesh_bytes: Vec<u64>,
+    /// How many times a glTF file was parsed for a scene
+    /// (`Graphics::load_node_meshes`): spawns of an unchanged file don't.
+    pub gltf_scene_parses: u64,
     pub probes: probe::ProbeAssets,
     /// How each skinned mesh binds to joints, by mesh id; shorter than
     /// `bounds` when the last ones aren't skinned.

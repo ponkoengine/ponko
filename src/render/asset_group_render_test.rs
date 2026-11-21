@@ -108,6 +108,123 @@ fn group_textures_are_made_on_the_gpu_draw_and_count_their_upload_cost() {
     );
 }
 
+/// An offscreen game whose device has timestamp queries where the adapter
+/// does, as the production renderer asks for them.
+fn timed_ctx() -> Option<Ctx> {
+    let gpu = support::gpu_with(|adapter| {
+        Ok(wgpu::DeviceDescriptor {
+            required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
+            ..Default::default()
+        })
+    })?;
+    let mut ctx = Ctx::new(1.0 / 60.0, vec2(SIZE as f32, SIZE as f32));
+    ctx.audio.headless = true;
+    ctx.gfx.renderer = Some(super::gpu::Renderer::offscreen(gpu, (SIZE, SIZE)));
+    Some(ctx)
+}
+
+#[test]
+fn uploads_report_the_gpus_own_copy_time_where_it_has_timestamps_and_still_draw() {
+    let Some(mut ctx) = timed_ctx() else {
+        return;
+    };
+    ctx.scene3d.sky.atmosphere = false;
+    ctx.gfx.clear(Color::BLACK);
+    let blue = |_, _| [0, 0, 255, 255];
+    let mut source = MemorySource::new("mem")
+        .with("red.png", png(SIZE, SIZE, |_, _| [255, 0, 0, 255]))
+        .with("blue.png", png(SIZE, SIZE, blue))
+        .with("noise.png", noise_png(512, 7));
+    // More uploads for the collecting below: Metal now and then leaves a
+    // timestamp unwritten, and a step whose copies all lost one has no time.
+    const MORE: u32 = 16;
+    for i in 0..MORE {
+        source.insert(format!("more{i}.png"), noise_png(64, i + 1));
+    }
+    ctx.assets.add_background_source(source);
+    let id = ctx
+        .assets
+        .start_group(AssetGroup::new("art").texture("red.png").texture("noise.png"));
+    load(&mut ctx, id);
+    assert_eq!(ctx.assets.group_state(id), GroupState::Ready);
+    // A streamed texture, through the streaming step's uploads.
+    assert_eq!(ctx.gfx.stream_texture("blue.png"), None);
+    let mut streamed = None;
+    for _ in 0..1000 {
+        ctx.pump_streaming();
+        streamed = ctx.gfx.stream_texture("blue.png");
+        let state = ctx
+            .gfx
+            .asset_state(crate::streaming::ResidencyKind::Texture, "blue.png");
+        if state == crate::streaming::AssetState::Resident {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let streamed = streamed.expect("the streamed texture loaded");
+
+    // The timed uploads still carry the pixels (the negative control: the
+    // frame before them was black).
+    let texture = ctx.gfx.load_texture("red.png");
+    let half = SIZE as f32 / 2.0;
+    ctx.gfx.draw(texture, vec2(half, half));
+    let red_frame = frame(&mut ctx, "timed-red");
+    let covered = red_frame.pixels().filter(|p| red(p)).count() as f32 / (SIZE * SIZE) as f32;
+    assert!(covered > 0.95, "the group's texture covers the frame: {covered}");
+    ctx.gfx.draw(streamed, vec2(half, half));
+    let blue_frame = frame(&mut ctx, "timed-blue");
+    let p = blue_frame.get_pixel(SIZE / 2, SIZE / 2);
+    assert!(p[2] > 200 && p[0] < 40, "the streamed texture draws: {p:?}");
+
+    // The times come back a few frames later. A step whose timestamps the
+    // GPU didn't write has none, so while one is missing, upload a little
+    // more through that step (a bounded count, not a wait on the clock).
+    let mut groups = ctx.assets.group_stats();
+    let mut streams = ctx.gfx.upload_stats();
+    let (mut more_groups, mut more_streams) = (0, 0);
+    for i in 0..400 {
+        if groups.gpu_upload_ms.is_some() && streams.gpu_upload_ms.is_some() {
+            break;
+        }
+        if i % 25 == 24 {
+            if groups.gpu_upload_ms.is_none() && more_groups < MORE / 2 {
+                let more = AssetGroup::new(format!("more{more_groups}")).texture(&format!("more{more_groups}.png"));
+                more_groups += 1;
+                let id = ctx.assets.start_group(more);
+                load(&mut ctx, id);
+            }
+            if streams.gpu_upload_ms.is_none() && more_streams < MORE / 2 {
+                let _ = ctx.gfx.stream_texture(&format!("more{}.png", MORE / 2 + more_streams));
+                more_streams += 1;
+            }
+        }
+        ctx.pump_asset_groups();
+        frame(&mut ctx, &format!("collect{i}"));
+        ctx.pump_streaming();
+        groups = ctx.assets.group_stats();
+        streams = ctx.gfx.upload_stats();
+    }
+    let adapter = &ctx.gfx.renderer.as_ref().unwrap().capabilities().adapter;
+    assert_eq!(groups.gpu_upload_timing, streams.gpu_upload_timing);
+    if !groups.gpu_upload_timing {
+        // Said so, and nothing made up.
+        assert_eq!((groups.gpu_upload_ms, streams.gpu_upload_ms), (None, None));
+        eprintln!(
+            "{} ({}) has no timestamp queries: uploads not timed on the GPU",
+            adapter.name, adapter.backend
+        );
+        return;
+    }
+    let (group_ms, stream_ms) = (groups.gpu_upload_ms.unwrap(), streams.gpu_upload_ms.unwrap());
+    assert!(group_ms > 0.0 && stream_ms > 0.0, "{group_ms} {stream_ms}");
+    assert!(groups.total_gpu_upload_ms >= f64::from(group_ms));
+    eprintln!(
+        "{} ({}): the GPU copied the group's {} bytes in {group_ms:.3} ms (game thread {:.3} ms); \
+         the last streamed upload in {stream_ms:.3} ms",
+        adapter.name, adapter.backend, groups.total_upload_bytes, groups.total_upload_ms
+    );
+}
+
 /// What a group's uploads cost on a real GPU: the game thread's time per
 /// step (`GroupStats::upload_ms`), and how much longer a frame takes to
 /// finish on the GPU when it carries a step's uploads. Run on purpose, on a
@@ -118,7 +235,7 @@ fn group_textures_are_made_on_the_gpu_draw_and_count_their_upload_cost() {
 fn group_upload_cost_on_the_gpu() {
     const TEXTURES: u32 = 16;
     const SIDE: u32 = 1024;
-    let Some(mut ctx) = support::offscreen_ctx((SIZE, SIZE)) else {
+    let Some(mut ctx) = timed_ctx() else {
         return;
     };
     ctx.scene3d.sky.atmosphere = false;
@@ -141,6 +258,8 @@ fn group_upload_cost_on_the_gpu() {
     let mut loaded = Vec::new();
     while ctx.assets.group_state(id) == GroupState::Loading {
         ctx.pump_asset_groups();
+        // As every frame does: takes the GPU's times that came back.
+        ctx.pump_streaming();
         let stats = ctx.assets.group_stats();
         let started = std::time::Instant::now();
         frame(&mut ctx, "loading");
@@ -151,6 +270,11 @@ fn group_upload_cost_on_the_gpu() {
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     assert_eq!(ctx.assets.group_state(id), GroupState::Ready);
+    // The GPU's own copy times come back a few frames later.
+    for i in 0..10 {
+        frame(&mut ctx, &format!("after{i}"));
+        ctx.pump_streaming();
+    }
     empty.sort_by(f32::total_cmp);
     let base = empty[empty.len() / 2];
     let stats = ctx.assets.group_stats();
@@ -166,6 +290,16 @@ fn group_upload_cost_on_the_gpu() {
         stats.total_upload_ms / mib,
         stats.max_upload_ms
     );
+    if stats.gpu_upload_timing {
+        println!(
+            "GPU's own copy time (timestamps): {:.2} ms in all, {:.3} ms per MiB, latest step {:.3} ms",
+            stats.total_gpu_upload_ms,
+            stats.total_gpu_upload_ms / mib,
+            stats.gpu_upload_ms.unwrap_or(0.0)
+        );
+    } else {
+        println!("this GPU has no timestamp queries: copies not timed");
+    }
     println!("frame drawn and read back with nothing uploaded: median {base:.2} ms");
     for (upload_ms, step_ms, bytes, frame_ms) in &loaded {
         println!(

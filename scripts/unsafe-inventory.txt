@@ -164,6 +164,22 @@ src/crash.rs | version | src/crash.rs::the_system_is_named_with_its_architecture
 src/crash.rs | extern block in version | src/crash.rs::the_system_is_named_with_its_architecture_and_no_machine_name | windows
 src/crash.rs | kernel | src/crash.rs::the_system_is_named_with_its_architecture_and_no_machine_name | os
 
+# Crash reports for crashes that are not panics: the signal handler (Unix)
+# and the unhandled exception filter (Windows), run by a child process that
+# crashes.
+src/crash/native.rs | install | tests/native_crash.rs::a_segmentation_fault_in_native_code_leaves_a_report_for_the_next_start | os
+src/crash/native.rs | on_signal | tests/native_crash.rs::a_segmentation_fault_in_native_code_leaves_a_report_for_the_next_start | os
+src/crash/native.rs | hand_on | tests/native_crash.rs::a_segmentation_fault_in_native_code_leaves_a_report_for_the_next_start | os
+src/crash/native.rs | Fd::put | tests/native_crash.rs::a_segmentation_fault_in_native_code_leaves_a_report_for_the_next_start | os
+src/crash/native.rs | now_ms | tests/native_crash.rs::a_segmentation_fault_in_native_code_leaves_a_report_for_the_next_start | os
+src/crash/native.rs | open_locked | tests/native_crash.rs::a_segmentation_fault_in_native_code_leaves_a_report_for_the_next_start | os
+src/crash/native.rs | read_if_unheld | tests/native_crash.rs::a_pending_file_another_running_copy_holds_is_left_alone | os
+src/crash/native.rs | Handle::put | tests/native_crash.rs::a_segmentation_fault_in_native_code_leaves_a_report_for_the_next_start | windows
+src/crash/native.rs | extern block in mod sys | tests/native_crash.rs::a_segmentation_fault_in_native_code_leaves_a_report_for_the_next_start | windows
+src/crash/native.rs | on_exception | tests/native_crash.rs::a_segmentation_fault_in_native_code_leaves_a_report_for_the_next_start | windows
+src/crash/native.rs | write | tests/native_crash.rs::a_segmentation_fault_in_native_code_leaves_a_report_for_the_next_start | windows
+src/crash/native.rs | on_abort | tests/native_crash.rs::an_abort_in_native_code_leaves_a_report_for_the_next_start | windows
+
 # Whether the desktop has a touch screen (Windows asks the system).
 src/input/touch_desktop.rs | windows_touch_points | src/input/touch_desktop.rs::windows_says_how_many_touches_its_screens_take | windows
 src/input/touch_desktop.rs | extern block in windows_touch_points | src/input/touch_desktop.rs::windows_says_how_many_touches_its_screens_take | windows

@@ -397,6 +397,13 @@ where
         if !self.ctx.has_gamepad_backend() {
             self.ctx.set_gamepad_backend(crate::gamepad::GilrsBackend::new());
         }
+        // With threads on the web, the browser's gamepads read on the page's
+        // thread, which keeps no browser object (see `gamepad_web`).
+        #[cfg(all(feature = "gamepad", target_arch = "wasm32", target_feature = "atomics"))]
+        if !self.ctx.has_gamepad_backend() {
+            self.ctx
+                .set_gamepad_backend(crate::gamepad_web::WebGamepads::new(crate::gamepad_web::BrowserPads));
+        }
 
         // The web's storage is read now (see `resumed`); a canvas has no
         // default-sized window to show first.

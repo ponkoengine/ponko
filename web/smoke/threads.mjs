@@ -5,6 +5,8 @@
 //
 //   node web/smoke/threads.mjs --build                  # the checks
 //   node web/smoke/threads.mjs --case worker-panic      # a worker's panic stops the game
+//   node web/smoke/threads.mjs --case gamepads          # fed browser gamepads reach the game
+//   node web/smoke/threads.mjs --case warning           # a warning fails the threaded build
 //   node web/smoke/threads.mjs --bench --repeat 3       # 1 vs N threads
 //
 // The checks open the same build twice: served with the cross-origin
@@ -12,6 +14,12 @@
 // items, scheduler batches and jobs on them and never on the page's thread;
 // served without, it must run on the page's thread alone and say why in the
 // console. Both runs must simulate the same world (a checksum at tick 120).
+// `--build` builds with RUSTFLAGS="-D warnings" added, so a warning in the
+// threaded build fails the check; `--case warning` proves that it does, by
+// building an example whose only code is an unused function that only a
+// threaded build compiles (no browser). `--case gamepads` replaces the
+// isolated page's `navigator.getGamepads()` with fed pads and checks that
+// the engine sees them connect, press, move and leave.
 // The bench runs the fixture's workloads on the isolated page with one
 // thread (`?threads=1`) and with the engine's default, and prints the
 // medians, their spread, and the speed-up with whether it is beyond the
@@ -28,13 +36,19 @@ import { CALL_TIMEOUT_MS, EXIT, UsageError, launchConfig, launchFailureKind, sta
 import { LAUNCHERS, serve } from "./smoke.mjs";
 import {
   FALLBACK_WARNING,
+  GAMEPAD_STEPS,
   ISOLATION_HEADERS,
   STOP_MESSAGE,
   USAGE,
   checkFallback,
   checkIsolated,
   checkReady,
+  checkGamepadStep,
   checkSameResult,
+  checkWarningBuild,
+  denyWarnings,
+  installFakeGamepads,
+  WARNING_FIXTURE,
   parseArgs,
   summarize,
   summaryTable,
@@ -133,6 +147,49 @@ async function workerPanic(browser, servers, args, report) {
   return problems;
 }
 
+/** Fed browser gamepads, on the isolated page: each step must reach the game. */
+async function gamepads(browser, servers, args, report) {
+  const context = await browser.newContext();
+  await context.addInitScript(installFakeGamepads);
+  const { page, lines } = await open(context, `http://127.0.0.1:${servers.isolated.address().port}/`);
+  await until(page, lines, (s) => s != null && s.ticks > 0, args.timeout, "the first frame");
+  const problems = [];
+  const steps = [];
+  for (const step of GAMEPAD_STEPS) {
+    await withDeadline(page.evaluate((pads) => window.__ponkoFeedGamepads(pads), step.pads), CALL_TIMEOUT_MS, "feeding gamepads");
+    let last = null;
+    const deadline = Date.now() + 10_000;
+    let left = ["not checked"];
+    while (Date.now() < deadline) {
+      last = await state(page);
+      left = checkGamepadStep(step, last);
+      if (left.length === 0) break;
+      await sleep(100);
+    }
+    steps.push({ step: step.name, pads: last?.pads ?? null, pad_presses: last?.pad_presses ?? null, problems: left });
+    console.log(`gamepads, ${step.name}: ${left.length ? left.join("; ") : "seen"}`);
+    problems.push(...left.map((p) => `${step.name}: ${p}`));
+  }
+  report.runs = { gamepads: { steps, threads: (await state(page))?.threads, console: lines } };
+  const threads = report.runs.gamepads.threads;
+  if (!(threads >= 2)) problems.push(`the page ran on ${threads} worker threads: the case is about a build with threads, served isolated`);
+  await context.close();
+  return problems;
+}
+
+/** A warning in the threaded build must fail it (no browser): see the file's comment. */
+function warningBuild(report) {
+  const env = denyWarnings(process.env);
+  console.log(`building ${WARNING_FIXTURE} with threads and -D warnings; it must fail on its unused function`);
+  const run = spawnSync("bash", ["web/build.sh", "--threads", WARNING_FIXTURE], { env, encoding: "utf8", maxBuffer: 64 << 20 });
+  const output = `${run.stdout ?? ""}${run.stderr ?? ""}`;
+  process.stdout.write(output.split("\n").slice(-30).join("\n"));
+  const problems = checkWarningBuild(run.status, output);
+  report.runs = { warning: { status: run.status, output_tail: output.split("\n").slice(-60) } };
+  console.log(problems.length ? "" : `\nthe build failed on the warning, as it must`);
+  return problems;
+}
+
 async function bench(browser, servers, args, report) {
   const port = servers.isolated.address().port;
   const settings = args.threads ?? [1, null];
@@ -168,7 +225,19 @@ async function main() {
     console.error(`${e.message}\n${USAGE}`);
     process.exit(EXIT.usage);
   }
-  if (args.build && spawnSync("bash", ["web/build.sh", "--threads", "web_threads"], { stdio: "inherit" }).status !== 0) {
+  if (args.case === "warning") {
+    await mkdir(args.out, { recursive: true });
+    const report = { fixture: WARNING_FIXTURE, mode: "warning", problems: [] };
+    report.problems.push(...warningBuild(report));
+    report.outcome = report.problems.length ? "failed" : "passed";
+    await writeFile(join(args.out, "report.json"), JSON.stringify(report, null, 2) + "\n");
+    for (const p of report.problems) console.error(`FAIL: ${p}`);
+    if (report.problems.length === 0) console.log("PASS");
+    process.exit(report.problems.length ? EXIT.app : EXIT.pass);
+  }
+  // With -D warnings: a warning in the threaded build fails the check.
+  const buildEnv = denyWarnings(process.env);
+  if (args.build && spawnSync("bash", ["web/build.sh", "--threads", "web_threads"], { stdio: "inherit", env: buildEnv }).status !== 0) {
     process.exit(EXIT.usage);
   }
   const root = resolve(args.dir);
@@ -212,7 +281,8 @@ async function main() {
     await finish(kind === "unsupported" ? EXIT.unsupported : EXIT.app, kind);
   }
   try {
-    const run = args.case === "worker-panic" ? workerPanic : args.mode === "bench" ? bench : check;
+    const run =
+      args.case === "worker-panic" ? workerPanic : args.case === "gamepads" ? gamepads : args.mode === "bench" ? bench : check;
     report.problems.push(...(await run(browser, servers, args, report)));
   } catch (e) {
     report.problems.push(e.message);

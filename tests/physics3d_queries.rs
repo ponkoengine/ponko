@@ -545,6 +545,44 @@ fn penetrations_work_for_every_shape() {
 }
 
 #[test]
+fn penetrations_of_a_scaled_mesh_take_its_scale_and_mirror() {
+    let depths = ask_with(
+        |c| {
+            c.world.spawn(left_face_at_zero());
+            // A box on one side of its origin: from x = 0 to 1.
+            let (corners, faces) = cube_mesh();
+            let side: Vec<Vec3> = corners.iter().map(|&p| p * 0.5 + vec3(0.5, 0.0, 0.0)).collect();
+            let hull = c.physics3d.convex_hull(&side).unwrap();
+            let tri = c.physics3d.trimesh(&side, &faces).unwrap();
+            [hull, tri]
+        },
+        |p, [hull, tri]| {
+            let mut pushes = Vec::new();
+            let mut depth = |shape: Shape, x: f32| {
+                p.penetrations(shape, vec3(x, 0.0, 0.0), Q, NO_FILTER, &mut pushes);
+                pushes.first().map(|p| p.depth)
+            };
+            let scaled = |mesh, scale| Shape::ScaledMesh { mesh, scale };
+            [
+                // Each 0.4 into the wall, whose face is at x = 0.
+                depth(Shape::Mesh(hull), -0.6),
+                depth(scaled(hull, vec3(2.0, 1.0, 1.0)), -1.6),
+                depth(scaled(hull, vec3(-1.0, 1.0, 1.0)), 0.4),
+                depth(scaled(tri, vec3(-1.0, 3.0, 1.0)), 0.4),
+                // Mirrored to the other side: clear of the wall.
+                depth(scaled(hull, vec3(-1.0, 1.0, 1.0)), -0.6),
+            ]
+        },
+    );
+    let [deep @ .., clear] = depths;
+    for found in deep {
+        let found = found.expect("in the wall");
+        assert!(close(found, 0.4), "{depths:?}");
+    }
+    assert!(clear.is_none(), "mirrored away from the wall: {depths:?}");
+}
+
+#[test]
 fn penetrations_reach_into_hulls_triangle_meshes_and_terrain() {
     let found = ask_with(
         |c| {

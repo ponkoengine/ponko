@@ -30,6 +30,7 @@
 mod access;
 mod actions;
 mod ai;
+mod ai_world;
 mod animator;
 mod asset_groups;
 mod asset_sources;
@@ -167,6 +168,7 @@ mod video;
 pub use access::*;
 pub use actions::*;
 pub use ai::*;
+pub use ai_world::*;
 pub use animator::*;
 pub use component_hooks::*;
 pub use controllers::*;

@@ -1,7 +1,9 @@
 //! glTF scenes (`GltfRoot::spawn`): a file whose nodes repeat one rock
 //! mesh, some with triangle mesh, convex hull and box colliders, spawned
-//! once and a hundred times. Reports the time, the meshes and collision
-//! meshes held, the meshes' estimated bytes and the heap the spawns keep.
+//! once and a hundred times, and a hundred times with its rocks at
+//! different and mirrored scales. Reports the time, the meshes and
+//! collision meshes held, the meshes' estimated bytes and the heap the
+//! spawns keep.
 use std::time::{Duration, Instant};
 
 use ponko::assets::MemorySource;
@@ -20,10 +22,15 @@ const GRID: usize = 32;
 /// Scenes in the big case.
 const SPAWNS: usize = 100;
 
+/// Scales of the rocks in the scaled case, by node: plain, bigger, flat,
+/// mirrored along X and mirrored and stretched.
+const SCALES: [[f32; 3]; 4] = [[1.0, 1.0, 1.0], [2.0, 2.0, 2.0], [1.5, 0.5, 1.5], [-1.0, 1.0, 1.0]];
+
 /// A `.glb` of `ROCKS` nodes sharing one `GRID` x `GRID` rock mesh: four
 /// with a triangle mesh collider, two with a hull, two with a box, four
-/// without (all at the same scale, so their shapes match).
-pub fn rocks_glb() -> Vec<u8> {
+/// without. `scaled`: the nodes take turns at the [`SCALES`], else all are
+/// at the same scale.
+pub fn rocks_glb(scaled: bool) -> Vec<u8> {
     let mut bin = Vec::new();
     let mut lo = [f32::MAX; 3];
     let mut hi = [f32::MIN; 3];
@@ -61,6 +68,9 @@ pub fn rocks_glb() -> Vec<u8> {
                 "mesh": 0,
                 "translation": [(i % 4) as f32 * 5.0, 0.0, (i / 4) as f32 * 5.0],
             });
+            if scaled {
+                node["scale"] = serde_json::json!(SCALES[i % SCALES.len()]);
+            }
             if let Some(kind) = colliders.get(i) {
                 node["extras"] = serde_json::json!({ "ponko:collider": kind });
             }
@@ -140,21 +150,26 @@ fn sample(glb: &[u8], spawns: usize) -> Sample {
 }
 
 pub fn run(b: &mut Bench) {
-    let glb = rocks_glb();
-    for spawns in [1, SPAWNS] {
-        let name = format!("gltf/spawn-{spawns}");
-        if b.skips(&name) {
+    let cases = [
+        ("gltf/spawn-1", 1, false),
+        ("gltf/spawn-100", SPAWNS, false),
+        ("gltf/scaled-100", SPAWNS, true),
+    ];
+    for (name, spawns, scaled) in cases {
+        if b.skips(name) {
             continue;
         }
+        let glb = rocks_glb(scaled);
         const RUNS: usize = 7;
         let samples: Vec<Sample> = (0..RUNS + 1).map(|_| sample(&glb, spawns)).skip(1).collect();
         let mut times: Vec<Duration> = samples.iter().map(|s| s.time).collect();
-        b.report(report::Record::new(&name, report::Kind::Fresh, 1, &mut times));
+        b.report(report::Record::new(name, report::Kind::Fresh, 1, &mut times));
         let mut heaps: Vec<i64> = samples.iter().map(|s| s.heap).collect();
         heaps.sort_unstable();
         let s = &samples[0];
         println!(
-            "    {spawns} scene(s) of {ROCKS} rock nodes: {} meshes ({:.1} KiB), {} collision meshes, {:.1} KiB heap kept (median)",
+            "    {spawns} scene(s) of {ROCKS} rock nodes{}: {} meshes ({:.1} KiB), {} collision meshes, {:.1} KiB heap kept (median)",
+            if scaled { " at 4 scales" } else { "" },
             s.meshes,
             s.mesh_bytes as f64 / 1024.0,
             s.collision_meshes,

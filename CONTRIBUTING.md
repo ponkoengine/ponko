@@ -158,7 +158,7 @@ The checks that go with a feature are in the same file:
 | The ECS hooks and required components under Miri (Tree Borrows) | `miri`, "par_for_each, tree borrows" |
 | The engine's unsafe code under Miri (the `miri` tests of `scripts/unsafe-inventory.txt`) | `miri`, "engine unsafe code, tree borrows" |
 | The C and C++ test programs and the `ponko_ffi` tests under AddressSanitizer and UndefinedBehaviorSanitizer | `sanitizers` |
-| The threaded web build and its fallback without the isolation headers | `web-smoke`: `web/smoke/threads.mjs` |
+| The threaded web build (with `-D warnings`, and its self-test `--case warning`), its fallback without the isolation headers, and its controllers (`--case gamepads`) | `web-smoke`: `web/smoke/threads.mjs` |
 | Browser multiplayer and replication | `web-smoke`: `web/smoke/multiplayer.mjs`, `web/smoke/replication.mjs` |
 
 Only if a feature has nothing a cargo test can check, put it in

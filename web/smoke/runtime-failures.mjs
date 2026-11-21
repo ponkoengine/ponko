@@ -53,26 +53,29 @@ export function deviceLostMessage(browserMessage) {
 }
 
 /**
- * The page's text and the callback's failure each case must produce.
- * `lost` is the page's own `GPUDeviceLostInfo` (device-lost only): the
- * engine's message carries the browser's reason.
+ * The page's text, the callback's failure and the crash report each case
+ * must produce. `lost` is the page's own `GPUDeviceLostInfo` (device-lost
+ * only): the engine's message carries the browser's reason. The report
+ * (`window.ponkoCrashReport`, see the guide's "Crash reports") is a
+ * `panic` for a panic and an `error` for a failure that stops the game,
+ * with the same message.
  */
 export function expected(runtimeCase, lost = null) {
   const panic = `web_smoke: panicking while running, as ?smoke_case=${runtimeCase} asked`;
   switch (runtimeCase) {
     case "runtime-panic":
-      return { kind: "Panic", message: panic, text: null, status: `The game stopped: ${panic}` };
+      return { kind: "Panic", message: panic, text: null, status: `The game stopped: ${panic}`, report: "panic" };
     case "failure-text": {
       const text = `web_smoke stopped, in its own words: ${panic}`;
-      return { kind: "Panic", message: panic, text, status: text };
+      return { kind: "Panic", message: panic, text, status: text, report: "panic" };
     }
     case "context-lost": {
       const message = "The WebGL2 context was lost while the game was running. Reload the page to try again.";
-      return { kind: "ContextLost", message, text: null, status: `The game stopped: ${message}` };
+      return { kind: "ContextLost", message, text: null, status: `The game stopped: ${message}`, report: "error" };
     }
     case "device-lost": {
       const message = deviceLostMessage(lost?.message);
-      return { kind: "DeviceLost", message, text: null, status: `The game stopped: ${message}` };
+      return { kind: "DeviceLost", message, text: null, status: `The game stopped: ${message}`, report: "error" };
     }
     default:
       throw new UsageError(`unknown case ${runtimeCase} (${RUNTIME_CASES.join(", ")})`);
@@ -80,10 +83,34 @@ export function expected(runtimeCase, lost = null) {
 }
 
 /**
+ * What is wrong with the crash report the page got (`window.ponkoCrashReport`,
+ * `{ name, text, kind, message }`), for a run that wanted `want`.
+ */
+export function checkReport(want, report) {
+  if (!report) return ["no crash report reached the page (window.ponkoCrashReport)"];
+  const problems = [];
+  if (report.kind !== want.report) {
+    problems.push(`the crash report's kind is ${JSON.stringify(report.kind)}, wanted ${JSON.stringify(want.report)}`);
+  }
+  if (report.message !== want.message) {
+    problems.push(`the crash report's message is ${JSON.stringify(report.message)}, wanted ${JSON.stringify(want.message)}`);
+  }
+  const text = String(report.text ?? "");
+  for (const line of [`kind: ${want.report}`, `message: ${want.message}`, "engine version: "]) {
+    if (!text.includes(line)) problems.push(`the crash report's text lacks ${JSON.stringify(line)}`);
+  }
+  if (!String(report.name ?? "").startsWith("crash-reports/")) {
+    problems.push(`the crash report's name ${JSON.stringify(report.name)} is not in crash-reports/`);
+  }
+  return problems;
+}
+
+/**
  * What is wrong with one run: `seen` holds the state the fixture published
  * before it stopped, the page's status line, the failure a late
- * `onPonkoFailure` subscriber got and (device-lost) the `GPUDeviceLostInfo`
- * the page's own `device.lost` got. An empty list is a pass.
+ * `onPonkoFailure` subscriber got, (device-lost) the `GPUDeviceLostInfo`
+ * the page's own `device.lost` got, and the crash report the page got. An
+ * empty list is a pass.
  */
 export function checkRun(runtimeCase, seen) {
   const problems = [];
@@ -107,6 +134,7 @@ export function checkRun(runtimeCase, seen) {
   if (want.kind !== "Panic" && failure.location !== null) {
     problems.push(`only a panic has a location, got ${JSON.stringify(failure.location)}`);
   }
+  problems.push(...checkReport(want, seen.report));
   return problems;
 }
 
@@ -193,6 +221,9 @@ async function look(page) {
       status: status && status.className === "error" ? status.textContent : null,
       failure,
       lost: globalThis.__smokeLost ?? null,
+      report: window.ponkoCrashReport
+        ? (({ name, text, kind, message }) => ({ name, text, kind, message }))(window.ponkoCrashReport)
+        : null,
     };
   }), "reading the page");
 }

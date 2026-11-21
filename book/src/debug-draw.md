@@ -151,9 +151,11 @@ that layer shows it: the main camera, each view of a split screen (see
 into a [render target](3d.md#render-targets) that draws particles (a
 mirror or a monitor shows the 3D lines and the depth-tested labels, a
 reflection probe's capture doesn't). In a render target the 3D lines and
-depth-tested labels are drawn against that camera's own depth; labels on
-top and 2D shapes are window text and sprites, and stay out of render
-targets.
+depth-tested labels are drawn against that camera's own depth, and 3D
+labels on top are on top there as they are on screen: drawn last, over the
+scene, the particles and the lines, laid out facing that camera, the size
+in pixels of the target. In the window they stay screen text. 2D shapes
+are sprites and stay out of render targets.
 
 ## Cost
 

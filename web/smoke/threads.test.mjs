@@ -9,7 +9,15 @@ import {
   checkFallback,
   checkIsolated,
   checkReady,
+  checkGamepadStep,
   checkSameResult,
+  checkWarningBuild,
+  denyWarnings,
+  fakeGamepad,
+  FAKE_PAD_ID,
+  GAMEPAD_STEPS,
+  installFakeGamepads,
+  WARNING_ITEM,
   median,
   parseArgs,
   summarize,
@@ -67,6 +75,8 @@ test("arguments default to the check of the built fixture and refuse what they d
   assert.throws(() => parseArgs(["--workloads", "nope"]), UsageError);
   assert.throws(() => parseArgs(["--repeat", "0"]), UsageError);
   assert.throws(() => parseArgs(["--case", "stall"]), UsageError);
+  assert.equal(parseArgs(["--case", "gamepads"]).case, "gamepads");
+  assert.equal(parseArgs(["--case", "warning"]).case, "warning");
   assert.throws(() => parseArgs(["--bench", "--case", "worker-panic"]), UsageError);
 });
 
@@ -128,4 +138,83 @@ test("the summary compares medians and keeps a speed-up inside the noise from co
   const table = summaryTable(rows);
   assert.match(table, /\| par \| 7 \| 2\.00 \|/);
   assert.match(table, /within noise/);
+});
+
+test("the build denies warnings in the variable cargo reads, keeping the caller's flags", () => {
+  const target = "CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS";
+  assert.equal(denyWarnings({}).RUSTFLAGS, "-D warnings");
+  assert.equal(denyWarnings({ RUSTFLAGS: "--cfg x" }).RUSTFLAGS, "--cfg x -D warnings");
+  assert.equal(denyWarnings({ RUSTFLAGS: "-D warnings" }).RUSTFLAGS, "-D warnings", "not twice");
+  // The target's own flags are what cargo reads when RUSTFLAGS isn't set.
+  const own = denyWarnings({ [target]: "--cfg x" });
+  assert.equal(own[target], "--cfg x -D warnings");
+  assert.equal(own.RUSTFLAGS, undefined);
+  // The encoded flags win over RUSTFLAGS in cargo.
+  const encoded = denyWarnings({ CARGO_ENCODED_RUSTFLAGS: "--cfg\x1fx", RUSTFLAGS: "--cfg y" });
+  assert.equal(encoded.CARGO_ENCODED_RUSTFLAGS, "--cfg\x1fx\x1f-D\x1fwarnings");
+  assert.equal(encoded.RUSTFLAGS, "--cfg y");
+});
+
+test("the warning self-test passes only when the build fails on the fixture's warning", () => {
+  const failedOnIt = [
+    `error: function \`${WARNING_ITEM}\` is never used`,
+    "  |",
+    "  = note: \`-D dead-code\` implied by \`-D warnings\`",
+  ].join("\n");
+  assert.deepEqual(checkWarningBuild(101, failedOnIt), []);
+  // Passed: the warning didn't fail it.
+  assert.match(checkWarningBuild(0, "warning: function is never used")[0], /passed/);
+  // Cargo compiled it without atomics (the warning's code left out), and
+  // wasm-bindgen failed after: what the old build.sh did under RUSTFLAGS.
+  const lost = "    Finished `release` profile [optimized] target(s) in 3m 06s\nerror: failed to find intrinsics";
+  assert.match(checkWarningBuild(1, lost)[0], /without failing on its warning/);
+  // Failed on something else (no nightly, say): not proof.
+  assert.match(checkWarningBuild(1, "error: toolchain 'nightly' is not installed")[0], /not on/);
+  // Reported, but only as a warning, while something else failed.
+  assert.match(checkWarningBuild(1, `warning: function \`${WARNING_ITEM}\` is never used`)[0], /not as an error/);
+});
+
+test("fed gamepads come back from getGamepads at their index, shaped like the browser's", () => {
+  const scope = { navigator: {} };
+  installFakeGamepads(scope);
+  assert.deepEqual(scope.navigator.getGamepads(), [null, null, null, null]);
+  const pad = fakeGamepad({ index: 1, buttons: { 0: 1, 6: 0.25 }, axes: [0.5, -1, 0, 0] });
+  scope.__ponkoFeedGamepads([pad]);
+  const list = scope.navigator.getGamepads();
+  assert.equal(list[0], null);
+  assert.equal(list[1].id, FAKE_PAD_ID);
+  assert.equal(list[1].mapping, "standard");
+  assert.equal(list[1].buttons.length, 17);
+  assert.deepEqual(list[1].buttons[0], { pressed: true, touched: true, value: 1 });
+  assert.deepEqual(list[1].buttons[6], { pressed: false, touched: true, value: 0.25 }, "a quarter-pulled trigger isn't pressed");
+  assert.deepEqual(list[1].axes, [0.5, -1, 0, 0]);
+  scope.__ponkoFeedGamepads([]);
+  assert.deepEqual(scope.navigator.getGamepads(), [null, null, null, null]);
+});
+
+test("each gamepad step passes only on what the engine must report", () => {
+  const pad = (down, axes, extra = {}) => ({
+    slot: 0,
+    name: FAKE_PAD_ID,
+    family: "Xbox",
+    vendor: 0x045e,
+    product: 0x0b13,
+    down,
+    axes: { lx: 0, ly: 0, rx: 0, ry: 0, lt: 0, rt: 0, ...axes },
+    ...extra,
+  });
+  const [none, connect, press, release, unplug] = GAMEPAD_STEPS;
+  assert.deepEqual(checkGamepadStep(none, { pads: [] }), []);
+  assert.equal(checkGamepadStep(none, { pads: [pad([], {})] }).length, 1);
+  assert.deepEqual(checkGamepadStep(connect, { pads: [pad([], {})] }), []);
+  assert.match(checkGamepadStep(connect, { pads: [] })[0], /one pad/);
+  assert.match(checkGamepadStep(connect, { pads: [{ ...pad([], {}), family: "Generic" }] })[0], /family/);
+  const pressed = { pads: [pad(["DPadRight", "South"], { lx: 0.5, ly: -1, ry: 0.75, lt: 0.25 })], pad_presses: 1 };
+  assert.deepEqual(checkGamepadStep(press, pressed), []);
+  // Y up must stay negative, and a quarter-pulled trigger isn't a press.
+  assert.match(checkGamepadStep(press, { ...pressed, pads: [{ ...pressed.pads[0], axes: { ...pressed.pads[0].axes, ly: 1 } }] })[0], /ly/);
+  assert.match(checkGamepadStep(press, { ...pressed, pads: [{ ...pressed.pads[0], down: ["South", "DPadRight", "LeftTrigger"] }] })[0], /buttons down/);
+  assert.match(checkGamepadStep(press, { ...pressed, pad_presses: 0 })[0], /pressed 0 times/);
+  assert.deepEqual(checkGamepadStep(release, { pads: [pad([], {})], pad_presses: 1 }), []);
+  assert.deepEqual(checkGamepadStep(unplug, { pads: [] }), []);
 });

@@ -496,6 +496,7 @@ binding arrives:
 | `Plugin::dependencies` | [Plugins for other crates](plugins.md#from-c-and-c) | C plugins (`ponko_game_plugin`) have no names or dependencies and are never duplicates |
 | `Game::debug_toggle` | [Plugins for other crates](plugins.md#debug-toggles) | Draw behind a flag of the game's own; `debug.draw` turns the engine's views on and off |
 | `Game::control_method` | [Plugins for other crates](plugins.md#control-methods) | The control endpoint's built-in methods only; a native game's tools read its reflected resources |
+| `AssetGroup::with_sliced`, `SliceLoader` | [Loading screens](loading.md#loaders-that-work-in-slices) | Not bound yet: add the file with `PONKO_GROUP_BYTES` and decode it once the group is ready |
 | `Game::restore_window_settings` | [Window service](window.md#remember-the-players-choice) | Call `ponko_ctx_window_restore_settings` in setup; the window can show at its default size for a moment first |
 
 System phases, system ids, setup callbacks and plugins are not on this

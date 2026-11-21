@@ -84,10 +84,11 @@ impl World {
         world
     }
 
-    /// Polls the server and every client until `done` (at most 5 s).
+    /// Polls the server and every client until `done` (at most 30 s: a hang
+    /// detector, which ends as soon as `done` holds).
     fn until(&mut self, mut done: impl FnMut(&mut Self) -> bool) {
         let start = Instant::now();
-        while start.elapsed() < Duration::from_secs(5) {
+        while start.elapsed() < Duration::from_secs(30) {
             self.server.poll();
             for (i, &c) in self.clients.iter().enumerate() {
                 assert_eq!(unsafe { ponko_lobby_poll(c) }, PONKO_OK);
@@ -100,7 +101,7 @@ impl World {
             }
             std::thread::sleep(Duration::from_millis(2));
         }
-        panic!("not done within 5 s: {:?}", self.events);
+        panic!("not done within 30 s: {:?}", self.events);
     }
 
     fn take(&mut self, i: usize) -> Vec<Event> {

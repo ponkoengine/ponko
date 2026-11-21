@@ -147,10 +147,16 @@ pub mod events;
 pub mod flow;
 pub mod game;
 // Not in a web build with threads: the browser's gamepad objects can't be sent
-// between threads there (`GamepadBackend` is `Send`), so such a build has no
-// built-in controllers. A game can still bring its own backend.
+// between threads there (`GamepadBackend` is `Send`), so such a build reads
+// them with `gamepad_web` instead.
 #[cfg(all(feature = "gamepad", not(all(target_arch = "wasm32", target_feature = "atomics"))))]
 mod gamepad;
+// The built-in controllers of a web build with threads (and its tests, natively).
+#[cfg(all(
+    feature = "gamepad",
+    any(test, all(target_arch = "wasm32", target_feature = "atomics"))
+))]
+mod gamepad_web;
 pub mod gfx;
 pub mod handle;
 pub mod hierarchy;

@@ -77,7 +77,9 @@ fn the_program_serves_clients_and_stops_cleanly_on_sigterm() {
     };
     // Its STUN responder tells a socket its own address.
     let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
-    socket.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    // The server is another process: these waits end when it answers, and
+    // their limits are hang detectors only.
+    socket.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
     socket
         .send_to(&ponko::net::stun::binding_request([5; 12]), stun.as_str())
         .unwrap();
@@ -91,7 +93,7 @@ fn the_program_serves_clients_and_stops_cleanly_on_sigterm() {
     client.create_room(2).unwrap();
     let start = Instant::now();
     while client.room().is_none() {
-        assert!(start.elapsed() < Duration::from_secs(10), "no room from the server");
+        assert!(start.elapsed() < Duration::from_secs(30), "no room from the server");
         client.poll().unwrap();
         std::thread::sleep(Duration::from_millis(5));
     }
@@ -101,7 +103,7 @@ fn the_program_serves_clients_and_stops_cleanly_on_sigterm() {
     assert_eq!(unsafe { libc::kill(child.0.id() as i32, libc::SIGTERM) }, 0);
     let mut left = false;
     let start = Instant::now();
-    while start.elapsed() < Duration::from_secs(10) {
+    while start.elapsed() < Duration::from_secs(30) {
         client.poll().unwrap();
         while let Some(event) = client.next_event() {
             left |= event == ponko::net::lobby::LobbyEvent::Left(ponko::net::lobby::LeaveReason::ServerStopping);
