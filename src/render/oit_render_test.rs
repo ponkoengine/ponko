@@ -964,9 +964,11 @@ fn error(image: &Image, reference: &Image, background: &Image) -> Error {
     let (mut sum, mut wrong, mut bad, mut max, mut covered) = (0u64, 0usize, 0usize, 0u8, 0usize);
     for ((p, r), b) in image
         .rgba
-        .chunks_exact(4)
-        .zip(reference.rgba.chunks_exact(4))
-        .zip(background.rgba.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(reference.rgba.as_chunks::<4>().0.iter())
+        .zip(background.rgba.as_chunks::<4>().0.iter())
     {
         if (0..3).all(|c| r[c].abs_diff(b[c]) <= 2) {
             continue;
@@ -1003,8 +1005,10 @@ fn save(scene: &str, method: &str, image: &Image, reference: Option<&Image>) {
     if let Some(reference) = reference {
         let diff: Vec<u8> = image
             .rgba
-            .chunks_exact(4)
-            .zip(reference.rgba.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(reference.rgba.as_chunks::<4>().0.iter())
             .flat_map(|(p, r)| {
                 let d: [u8; 3] = std::array::from_fn(|c| p[c].abs_diff(r[c]).saturating_mul(4));
                 [d[0], d[1], d[2], 255]
