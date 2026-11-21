@@ -4,6 +4,7 @@
 //! and the `StreamedLod` component).
 
 use std::ffi::c_char;
+use std::mem::{offset_of, size_of};
 
 use ponko::__ffi;
 use ponko::render::StreamedLod;
@@ -13,6 +14,7 @@ use ponko::streaming::ResidencyStats;
 use ponko::streaming::UploadStats;
 
 use crate::ctx::{ctx_access, out, text};
+use crate::descriptors::{Versioned, write_desc};
 use crate::three::PonkoMesh;
 use crate::types::{PonkoTexture, texture_to_c};
 use crate::{PonkoCtx, PonkoStatus, boundary, invalid};
@@ -160,6 +162,77 @@ impl From<UploadStats> for PonkoUploadStats {
             failures: s.failures,
             step_ms: s.step_ms,
             max_step_ms: s.max_step_ms,
+        }
+    }
+}
+
+/// The version of `PonkoUploadStatsEx` this header describes.
+pub const PONKO_UPLOAD_STATS_EX_VERSION: u32 = 1;
+
+/// The upload queue's counters (Rust `UploadStats`) in the versioned form
+/// that grows with them: everything `PonkoUploadStats` has, plus the
+/// game-thread decode slices and the GPU's own upload times. Set
+/// `struct_size` and `version`, then call `ponko_ctx_upload_stats_ex`.
+///
+/// Version 1: every field below.
+/// ```
+/// let u: ponko_ffi::PonkoUploadStatsEx = unsafe { std::mem::zeroed() };
+/// assert!(!u.has_gpu_created_ms);
+/// ```
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PonkoUploadStatsEx {
+    /// `sizeof(PonkoUploadStatsEx)` as the caller compiled it.
+    pub struct_size: u32,
+    /// `PONKO_UPLOAD_STATS_EX_VERSION` as the caller compiled it.
+    pub version: u32,
+    /// The counters `ponko_ctx_upload_stats` gives.
+    pub stats: PonkoUploadStats,
+    /// Slices of decodes the last streaming step ran on the game thread
+    /// (where there are no worker threads); 0 elsewhere.
+    pub frame_slices: u32,
+    /// Whether `gpu_upload_ms` holds a time yet.
+    pub has_gpu_upload_ms: bool,
+    /// The GPU's own time copying what the latest timed upload step
+    /// uploaded, in milliseconds (what `step_ms` leaves out).
+    pub gpu_upload_ms: f32,
+    /// Whether `gpu_created_ms` holds a time yet.
+    pub has_gpu_created_ms: bool,
+    /// The GPU's own time copying the textures made outside the upload
+    /// steps (`ponko_ctx_create_texture`, `ponko_ctx_load_texture` and the
+    /// like) in the latest frame that made any, in milliseconds. It arrives
+    /// a few frames later.
+    pub gpu_created_ms: f32,
+    /// Whether the GPU times uploads (it has timestamp queries): false
+    /// headless and on GPUs without them; then both `has_gpu_*` stay false.
+    pub gpu_upload_timing: bool,
+}
+
+impl Versioned for PonkoUploadStatsEx {
+    const NAME: &'static str = "PonkoUploadStatsEx";
+    const VERSION: u32 = PONKO_UPLOAD_STATS_EX_VERSION;
+    fn len_of(version: u32) -> Option<usize> {
+        match version {
+            1 => Some(offset_of!(Self, gpu_upload_timing) + size_of::<bool>()),
+            _ => None,
+        }
+    }
+}
+
+const _: () = assert!(offset_of!(PonkoUploadStatsEx, struct_size) == 0 && offset_of!(PonkoUploadStatsEx, version) == 4);
+
+impl From<UploadStats> for PonkoUploadStatsEx {
+    fn from(s: UploadStats) -> Self {
+        Self {
+            struct_size: size_of::<Self>() as u32,
+            version: PONKO_UPLOAD_STATS_EX_VERSION,
+            stats: s.into(),
+            frame_slices: s.frame_slices,
+            has_gpu_upload_ms: s.gpu_upload_ms.is_some(),
+            gpu_upload_ms: s.gpu_upload_ms.unwrap_or(0.0),
+            has_gpu_created_ms: s.gpu_created_ms.is_some(),
+            gpu_created_ms: s.gpu_created_ms.unwrap_or(0.0),
+            gpu_upload_timing: s.gpu_upload_timing,
         }
     }
 }
@@ -507,6 +580,32 @@ pub unsafe extern "C" fn ponko_ctx_upload_stats(ctx: *mut PonkoCtx, out_stats: *
     boundary(|| unsafe { ctx_access(ctx, |c| out(out_stats, c.gfx.upload_stats().into())) })
 }
 
+/// The upload queue's counters into the fields of `out_stats`'s version
+/// (Rust `Graphics::upload_stats`): what `ponko_ctx_upload_stats` gives,
+/// plus the GPU's own time for the textures made outside the upload steps
+/// and for the latest timed upload step.
+///
+/// Ownership: `out_stats` is the caller's, written during the call only.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_upload_stats_ex(std::ptr::null_mut(), std::ptr::null_mut()) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `out_stats` null or a writable descriptor with its
+/// header set.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_upload_stats_ex(
+    ctx: *mut PonkoCtx,
+    out_stats: *mut PonkoUploadStatsEx,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            let ex = PonkoUploadStatsEx::from(c.gfx.upload_stats());
+            write_desc(out_stats, &ex)
+        })
+    })
+}
+
 /// Waits until everything streamed so far is loaded and every asset group is
 /// done (tests and tools; it blocks the game thread).
 /// # Safety
@@ -563,4 +662,24 @@ pub unsafe extern "C" fn ponko_ctx_set_streamed_lod(
 
 fn invalid_error(e: &ponko::prelude::Error) -> crate::Failure {
     crate::invalid_owned(e.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn upload_stats_ex_carries_the_gpu_times_and_the_old_counters() {
+        let mut s = UploadStats::default();
+        s.total_uploads = 3;
+        s.frame_slices = 2;
+        s.gpu_created_ms = Some(1.25);
+        s.gpu_upload_timing = true;
+        let ex = PonkoUploadStatsEx::from(s);
+        assert_eq!(ex.stats.total_uploads, 3);
+        assert_eq!(ex.frame_slices, 2);
+        assert!(ex.has_gpu_created_ms && ex.gpu_created_ms == 1.25);
+        assert!(!ex.has_gpu_upload_ms && ex.gpu_upload_ms == 0.0);
+        assert!(ex.gpu_upload_timing);
+    }
 }

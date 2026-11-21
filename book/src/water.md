@@ -334,8 +334,20 @@ adds the plugin; `ponko_ctx_water_sample`, `ponko_ctx_water_touch` and
 `ponko_ctx_despawn_water` do the rest. C++ wraps them as
 `ponko::water_desc::sea(...)`, `ctx.spawn_water`, `ctx.water_height` and
 `game.water()`. `ponko_ctx_set_buoyancy_box` and `_sphere` float boxes
-and balls in fresh water; custom sample points (`Buoyancy::points`), the
-water's density and the ripple switch are Rust-only for now. A sea from
+and balls in fresh water. Everything else about a floating body is a
+`PonkoBuoyancyDesc`, a versioned descriptor: `ponko_buoyancy_desc_box`,
+`_sphere` or `_points` fills it (your own sample points, up to
+`PONKO_BUOYANCY_MAX_POINTS`, are copied into it), then change the
+water's density (`PONKO_FRESH_WATER_DENSITY` from the presets), the
+drag or the ripple switch and give it to the body with
+`ponko_ctx_set_buoyancy`; `ponko_ctx_buoyancy` reads it back. C++ starts
+from `ponko::buoyancy_desc::box`, `sphere` or `from_points`:
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:buoyancy_desc}}
+```
+
+A sea from
 a spectrum is `PonkoWaterDesc` version 2: set `has_spectrum` and fill
 `spectrum`, a `PonkoWaveSpectrum` that `ponko_wave_spectrum(wind,
 height)` starts with the engine's defaults (C++ `ponko::wave_spectrum`

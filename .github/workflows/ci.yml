@@ -305,6 +305,11 @@ jobs:
           - name: compressed textures and geometry
             scope: -p ponko
             args: --features 3d,basis-universal,gltf-meshopt
+          # The block-compressed textures alone, without 3D (2D games load
+          # KTX2 and DDS too; what only glTF models use must stay gated).
+          - name: compressed textures without 3D
+            scope: -p ponko
+            args: --features compressed-textures
           # The command line tool's cook and texture features, each alone and
           # the three that need no Aseprite (a test or a dependency used by
           # only some combinations fails here, not in a user's `cargo install`).

@@ -362,7 +362,12 @@ status and sets the last error, its kind and its path.
 to your decode callback once, and `ponko_game_loading_state` makes a loading
 state whose callback adds the group's assets.
 `ponko_ctx_add_background_memory_source` adds a memory source that workers
-read.
+read. The streaming step's counters and the GPU's time for made textures
+come from `ponko_ctx_upload_stats_ex` (C++ `ctx.upload_stats_ex()`), a
+versioned `PonkoUploadStatsEx`: the older `PonkoUploadStats` in `stats`,
+then `gpu_upload_ms` and `gpu_created_ms`, each with a `has_` flag that
+stays false until a time arrives (always, where `gpu_upload_timing` is
+false), and `frame_slices`.
 
 In C++, `ponko::asset_group` is the builder, `ctx.start_asset_group`,
 `ctx.asset_group_progress`, `ctx.restart_asset_group` and the rest are

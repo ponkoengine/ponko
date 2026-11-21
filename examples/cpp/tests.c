@@ -919,6 +919,13 @@ static void streaming_setup(PonkoCtx* ctx, void* user) {
     PonkoUploadStats uploads;
     CHECK(ponko_ctx_upload_stats(ctx, &uploads) == PONKO_OK);
     CHECK(uploads.has_budget && uploads.budget == 1 << 20 && uploads.pending == 0 && uploads.total_uploads >= 2);
+    /* The versioned form: the same counters, plus the GPU's own times (none headless). */
+    PonkoUploadStatsEx uploads_ex = {.struct_size = sizeof uploads_ex, .version = PONKO_UPLOAD_STATS_EX_VERSION};
+    CHECK(ponko_ctx_upload_stats_ex(ctx, &uploads_ex) == PONKO_OK);
+    CHECK(uploads_ex.stats.total_uploads == uploads.total_uploads && uploads_ex.stats.failures == uploads.failures);
+    CHECK(!uploads_ex.gpu_upload_timing && !uploads_ex.has_gpu_created_ms && uploads_ex.gpu_created_ms == 0);
+    uploads_ex.version = 0;
+    CHECK(ponko_ctx_upload_stats_ex(ctx, &uploads_ex) == PONKO_INVALID_ARGUMENT);
     /* Budgets: the mesh is pinned, so a zero budget can't evict it. */
     PonkoMesh pinned = {0};
     CHECK(ponko_ctx_resident_mesh(ctx, "models/house.glb", true, &pinned) == PONKO_OK && pinned.id == m.id);
@@ -3303,6 +3310,31 @@ static void spectrum_setup(PonkoCtx* ctx, void* user) {
     CHECK(ponko_ctx_spawn_water(ctx, &sea, &water) == PONKO_INVALID_ARGUMENT);
 }
 
+/* Buoyancy from a descriptor: sea water, no ripples, points of its own. */
+static void buoyancy_desc_setup(PonkoCtx* ctx, void* user) {
+    (void)user;
+    uint64_t raft;
+    CHECK(ponko_spawn(ponko_ctx_world(ctx), NULL, 0, &raft) == PONKO_OK);
+    PonkoBuoyancyDesc d = {.struct_size = sizeof d, .version = PONKO_BUOYANCY_DESC_VERSION};
+    CHECK(ponko_buoyancy_desc_box(&d, (PonkoVec3){2, 0.4f, 2}) == PONKO_OK);
+    CHECK(d.point_count == 8 && d.water_density == PONKO_FRESH_WATER_DENSITY && d.ripples);
+    d.water_density = 1025;
+    d.ripples = false;
+    CHECK(ponko_ctx_set_buoyancy(ctx, raft, &d) == PONKO_OK);
+    PonkoBuoyancyDesc read = {.struct_size = sizeof read, .version = PONKO_BUOYANCY_DESC_VERSION};
+    CHECK(ponko_ctx_buoyancy(ctx, raft, &read) == PONKO_OK);
+    CHECK(read.water_density == 1025 && !read.ripples && read.point_count == 8);
+    CHECK(read.points[7].x == d.points[7].x && read.points[7].y == d.points[7].y);
+    const PonkoVec3 hull[4] = {{-1, 0, 0}, {1, 0, 0}, {0, 0, -1}, {0, 0, 1}};
+    CHECK(ponko_buoyancy_desc_points(&d, hull, 4, 0.6f, 0.3f) == PONKO_OK);
+    CHECK(d.point_count == 4 && d.drag == PONKO_BUOYANCY_DRAG);
+    CHECK(ponko_ctx_set_buoyancy(ctx, raft, &d) == PONKO_OK);
+    d.point_count = PONKO_BUOYANCY_MAX_POINTS + 1;
+    CHECK(ponko_ctx_set_buoyancy(ctx, raft, &d) == PONKO_INVALID_ARGUMENT);
+    CHECK(ponko_ctx_remove_buoyancy(ctx, raft) == PONKO_OK);
+    CHECK(ponko_ctx_buoyancy(ctx, raft, &read) == PONKO_NOT_FOUND);
+}
+
 /* A sliced loader: counts the '#' of a file, 64 bytes a step. */
 typedef struct { uint8_t* bytes; size_t len, at, walls; } Walls;
 typedef struct { int steps, freed_users; } SliceCounts;
@@ -3392,6 +3424,13 @@ static void alloc_count_setup(PonkoCtx* ctx, void* user) {
     PonkoAllocCounts after = ponko_thread_alloc_counts();
     ponko_profile_end(scope, token);
     CHECK(after.count - before.count == 2 && after.bytes - before.bytes == 96);
+    /* Net bytes: what is given back leaves the figure, what is kept stays in it. */
+    int64_t held = ponko_net_alloc_bytes();
+    ponko_note_allocation(4096);
+    int64_t holding = ponko_net_alloc_bytes();
+    ponko_note_deallocation(4096);
+    int64_t released = ponko_net_alloc_bytes();
+    CHECK(holding - held >= 4096 && holding - released >= 4096);
     CHECK(ponko_ctx_set_profiling(ctx, false) == PONKO_OK);
 }
 
@@ -3441,6 +3480,10 @@ static void native_parity_round5(void) {
 
     game = ponko_game_new("sea", 1, 1);
     CHECK(ponko_game_run_headless(game, 0, spectrum_setup, NULL, &w) == PONKO_OK);
+    CHECK(ponko_world_free(w) == PONKO_OK);
+
+    game = ponko_game_new("raft", 1, 1);
+    CHECK(ponko_game_run_headless(game, 0, buoyancy_desc_setup, NULL, &w) == PONKO_OK);
     CHECK(ponko_world_free(w) == PONKO_OK);
 
     PonkoNavCrowdStats crowd_stats = {.struct_size = sizeof crowd_stats, .version = PONKO_NAV_CROWD_STATS_VERSION};
