@@ -34,6 +34,8 @@ use crate::ctx::Ctx;
 use crate::render::GpuAdapter;
 use crate::storage::Storage;
 
+pub(crate) mod native;
+
 /// The folder of [`ctx.storage`](crate::ctx::Ctx::storage) that holds the
 /// reports, one `.txt` file each, named after the time (UTC) they were
 /// written: `crash-reports/2026-11-21_14-03-07.txt`.
@@ -189,6 +191,11 @@ pub enum CrashKind {
     /// A fatal error: the engine couldn't go on (no usable GPU, the
     /// window couldn't be made), or the game said so with [`report`].
     Error,
+    /// A crash that is not a panic: a signal on Linux and macOS (a
+    /// segmentation fault, an `abort()` in a C library), an unhandled
+    /// exception on Windows. Its report is finished at the game's next
+    /// start; [`CrashReport::signal`] names the signal.
+    Native,
 }
 
 /// One crash report: what [`CrashReports::on_crash`] gets and what the file
@@ -211,6 +218,7 @@ pub struct CrashReport {
     backtrace: String,
     log: Option<Vec<String>>,
     file: Option<String>,
+    signal: Option<String>,
     #[serde(skip)]
     path: Option<PathBuf>,
 }
@@ -323,6 +331,14 @@ impl CrashReport {
         self.path.as_deref()
     }
 
+    /// For a [native](CrashKind::Native) crash, the signal or the Windows
+    /// exception that stopped the game: `SIGSEGV`, `SIGABRT`,
+    /// `EXCEPTION_ACCESS_VIOLATION`.
+    #[must_use]
+    pub fn signal(&self) -> Option<&str> {
+        self.signal.as_deref()
+    }
+
     /// The report as the file has it: a line per field, then the
     /// settings, the backtrace and the log.
     #[must_use]
@@ -331,9 +347,13 @@ impl CrashReport {
         let kind = match self.kind {
             CrashKind::Panic => "panic",
             CrashKind::Error => "error",
+            CrashKind::Native => "native",
         };
         let _ = writeln!(t, "{} crash report", self.game);
         let _ = writeln!(t, "kind: {kind}");
+        if let Some(signal) = &self.signal {
+            let _ = writeln!(t, "signal: {signal}");
+        }
         let _ = writeln!(t, "message: {}", indent_more(&self.message));
         if let Some(location) = &self.location {
             let _ = writeln!(t, "location: {location}");
@@ -471,6 +491,9 @@ pub(crate) struct Shared {
     hook: Option<Hook>,
     os: String,
     started: Instant,
+    /// When the run started, in milliseconds since 1970 (for a native
+    /// crash's uptime, which the next start works out).
+    started_ms: u64,
     paths: PathScrubber,
     /// Updated at each frame.
     snapshot: Mutex<Snapshot>,
@@ -488,7 +511,7 @@ struct Snapshot {
 
 /// The graphics settings at the last frame (copied each frame, so plain
 /// values only: no allocation per frame).
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq)]
 struct Settings {
     framed: bool,
     window: glam::Vec2,
@@ -501,7 +524,7 @@ struct Settings {
 }
 
 #[cfg(feature = "3d")]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 struct Settings3d {
     preset: Option<crate::render::GraphicsQuality>,
     render_scale: f32,
@@ -594,11 +617,98 @@ impl Shared {
             backtrace: self.paths.scrub(&backtrace),
             log,
             file: None,
+            signal: None,
             path: None,
         };
         self.save(&mut report, now);
         #[cfg(all(target_arch = "wasm32", feature = "window"))]
         page::tell(&report);
+        if let Some(hook) = &self.hook {
+            hook(&report);
+        }
+        report
+    }
+
+    /// The fixed part of a native crash's report, as the handler writes it
+    /// (see [`native`]): rebuilt when the GPU or the settings change.
+    fn native_fixed(&self, gpu: Option<&GpuAdapter>, settings: &Settings) -> String {
+        let mut t = native::header_start();
+        native::line(&mut t, "game", &self.game);
+        if let Some(version) = &self.game_version {
+            native::line(&mut t, "game-version", version);
+        }
+        native::line(&mut t, "engine-version", env!("CARGO_PKG_VERSION"));
+        native::line(&mut t, "os", &self.os);
+        native::line(&mut t, "started-ms", &self.started_ms.to_string());
+        if let Some(gpu) = gpu {
+            native::line(&mut t, "gpu-name", &gpu.name);
+            native::line(&mut t, "gpu-backend", &gpu.backend);
+            native::line(&mut t, "gpu-type", &gpu.device_type);
+            native::line(&mut t, "gpu-driver", &gpu.driver);
+            native::line(&mut t, "gpu-driver-info", &gpu.driver_info);
+        }
+        for (name, value) in settings.lines() {
+            native::line(&mut t, "setting", &format!("{name} = {value}"));
+        }
+        native::line(
+            &mut t,
+            "output-kept",
+            if crate::logs::capturing() { "yes" } else { "no" },
+        );
+        t
+    }
+
+    /// Turns what a native crash of an earlier run left into a report:
+    /// saves it (named after the crash's time) and runs the game's hook.
+    fn finish_native(&self, left: &native::Left) -> CrashReport {
+        let crashed_ms = left.time_ms.unwrap_or_else(|| {
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |d| d.as_millis() as u64)
+        });
+        let uptime_secs = left
+            .started_ms
+            .map_or(0.0, |started| crashed_ms.saturating_sub(started) as f64 / 1000.0);
+        let settings = if left.settings.is_empty() {
+            Settings::default().lines()
+        } else {
+            left.settings.clone()
+        };
+        let output = left.output.iter().skip(left.output.len().saturating_sub(LOG_LINES));
+        let mut report = CrashReport {
+            kind: CrashKind::Native,
+            message: self.paths.scrub(&left.message()),
+            location: None,
+            thread: None,
+            time: format!("{} UTC", utc(crashed_ms / 1000, ' ', ':')),
+            uptime_secs,
+            game: if left.game.is_empty() {
+                self.game.clone()
+            } else {
+                left.game.clone()
+            },
+            game_version: left.game_version.clone(),
+            engine_version: if left.engine_version.is_empty() {
+                "not known".to_string()
+            } else {
+                left.engine_version.clone()
+            },
+            os: if left.os.is_empty() {
+                self.os.clone()
+            } else {
+                left.os.clone()
+            },
+            gpu: left.gpu.clone(),
+            settings,
+            backtrace: "not kept for a crash that is not a panic".to_string(),
+            log: left
+                .output_kept
+                .then(|| output.map(|line| self.paths.scrub(line)).collect()),
+            file: None,
+            signal: left.signal.clone(),
+            path: None,
+        };
+        self.save(&mut report, crashed_ms / 1000);
         if let Some(hook) = &self.hook {
             hook(&report);
         }
@@ -660,6 +770,10 @@ pub(crate) struct Running {
     shared: Arc<Shared>,
     /// The game's output, kept for the report's log (desktop).
     _logs: Option<crate::logs::Capture>,
+    /// The pending file a native crash writes into (desktop).
+    native: Option<native::Armed>,
+    /// The settings the native crash's fixed part was last prepared with.
+    native_settings: Settings,
     gpu_noted: bool,
     vsync: bool,
 }
@@ -692,15 +806,32 @@ pub(crate) fn start(
         hook: config.hook.clone(),
         os: os::describe(),
         started: Instant::now(),
+        started_ms: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as u64),
         paths: PathScrubber::for_game(storage.dir()),
         snapshot: Mutex::new(Snapshot::default()),
         panicked: std::sync::atomic::AtomicBool::new(false),
     });
     install_panic_hook();
     *ACTIVE.lock().unwrap_or_else(PoisonError::into_inner) = Some(shared.clone());
+    let logs = crate::logs::Capture::start();
+    // Native crashes of earlier runs become reports now; then this run's
+    // pending file is armed (see the guide's "Crashes that are not panics").
+    let native = storage.dir().and_then(|dir| {
+        for left in native::collect(dir) {
+            shared.finish_native(&native::Left::parse(&left));
+        }
+        native::arm(dir)
+    });
+    if native.is_some() {
+        native::prepare(&shared.native_fixed(None, &Settings::default()));
+    }
     Some(Running {
         shared,
-        _logs: crate::logs::Capture::start(),
+        _logs: logs,
+        native,
+        native_settings: Settings::default(),
         gpu_noted: false,
         vsync,
     })
@@ -710,7 +841,7 @@ pub(crate) fn start(
 /// graphics settings. Runs at each drawn frame while reports are on.
 pub(crate) fn note_frame(ctx: &mut Ctx) {
     note_gpu(ctx);
-    let Some(running) = ctx.crash.as_ref() else {
+    let Some(vsync) = ctx.crash.as_ref().map(|running| running.vsync) else {
         return;
     };
     let settings = Settings {
@@ -722,7 +853,7 @@ pub(crate) fn note_frame(ctx: &mut Ctx) {
             crate::window::WindowMode::Borderless(_) => 1,
             _ => 2,
         },
-        vsync: running.vsync,
+        vsync,
         #[cfg(feature = "3d")]
         three: Some({
             let s = &ctx.scene3d;
@@ -739,10 +870,29 @@ pub(crate) fn note_frame(ctx: &mut Ctx) {
             }
         }),
     };
+    let Some(running) = ctx.crash.as_mut() else {
+        return;
+    };
     // Never wait on the frame: a report being written holds it a moment.
     if let Ok(mut snapshot) = running.shared.snapshot.try_lock() {
         snapshot.settings = settings;
     }
+    // The native crash's fixed part only changes with the settings (no
+    // allocation in a frame that changed nothing).
+    if running.native.is_some() && running.native_settings != settings {
+        running.native_settings = settings;
+        prepare_native(running);
+    }
+}
+
+/// Prepares the native crash's fixed part again, with the GPU and settings
+/// of the last frame.
+fn prepare_native(running: &Running) {
+    let gpu = match running.shared.snapshot.try_lock() {
+        Ok(snapshot) => snapshot.gpu.clone(),
+        Err(_) => None,
+    };
+    native::prepare(&running.shared.native_fixed(gpu.as_ref(), &running.native_settings));
 }
 
 /// Keeps the GPU the renderer opened for a report, once: when the renderer
@@ -762,6 +912,9 @@ pub(crate) fn note_gpu(ctx: &mut Ctx) {
         snapshot.gpu = Some(gpu);
         running.gpu_noted = true;
     }
+    if running.gpu_noted && running.native.is_some() {
+        prepare_native(running);
+    }
 }
 
 #[cfg(all(test, feature = "window", feature = "3d"))]
@@ -777,11 +930,14 @@ impl Running {
                 hook: None,
                 os: os::describe(),
                 started: Instant::now(),
+                started_ms: 0,
                 paths: PathScrubber::default(),
                 snapshot: Mutex::new(Snapshot::default()),
                 panicked: std::sync::atomic::AtomicBool::new(false),
             }),
             _logs: None,
+            native: None,
+            native_settings: Settings::default(),
             gpu_noted: false,
             vsync,
         }
@@ -827,6 +983,8 @@ fn on_panic(info: &std::panic::PanicHookInfo<'_>) {
     if shared.panicked.swap(true, std::sync::atomic::Ordering::AcqRel) {
         return;
     }
+    // The abort that may follow (panic = "abort") is this crash, reported.
+    native::panic_reported();
     WRITING.with(|w| w.set(true));
     let message = info
         .payload_as_str()
@@ -1164,6 +1322,7 @@ mod page {
             match report.kind() {
                 super::CrashKind::Panic => "panic",
                 super::CrashKind::Error => "error",
+                super::CrashKind::Native => "native",
             },
         );
         set("message", report.message());
