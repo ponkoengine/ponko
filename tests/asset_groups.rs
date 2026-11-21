@@ -2,8 +2,9 @@
 //! with progress, failure and cancel, behind a loading state. Headless,
 //! with slow fake sources standing in for a slow disk or network.
 
-use std::sync::Arc;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ponko::assets::{AssetGroup, AssetSource, GroupState, MemorySource, PackSource};
@@ -243,9 +244,10 @@ fn a_missing_asset_fails_the_group_naming_its_path() {
         assert_eq!(error.kind(), ErrorKind::NotFound);
         assert_eq!(error.path(), Some("sprites/missing.png"));
         assert!(error.message().contains("sprites/missing.png"), "{error}");
-        // A failed group can't be cancelled or fail again.
+        // Cancelling a failed group drops what it kept for a restart.
         ctx.assets.cancel_group(id);
-        assert_eq!(ctx.assets.group_state(id), GroupState::Failed);
+        assert_eq!(ctx.assets.group_state(id), GroupState::Cancelled);
+        assert!(ctx.assets.group_error(id).is_none(), "only failed groups have an error");
     });
 }
 
@@ -583,6 +585,292 @@ fn a_failed_group_keeps_the_game_in_its_loading_state() {
         )
         .run_headless(20, |_| {});
     assert_eq!(world.resource::<ponko::state::State<Screen>>().get(), &Screen::Loading);
+}
+
+/// A source that counts the reads of each file and fails the first
+/// `fail_first` reads of the files named in `flaky`, as a dropped
+/// connection would.
+#[derive(Clone)]
+struct Flaky {
+    files: MemorySource,
+    flaky: Vec<&'static str>,
+    fail_first: u32,
+    reads: Arc<Mutex<HashMap<String, u32>>>,
+    delay: Duration,
+}
+
+impl Flaky {
+    fn new(files: &[(&str, Vec<u8>)], flaky: &[&'static str]) -> Self {
+        let mut memory = MemorySource::new("flaky");
+        for (name, bytes) in files {
+            memory.insert(*name, bytes.clone());
+        }
+        Self {
+            files: memory,
+            flaky: flaky.to_vec(),
+            fail_first: 1,
+            reads: Arc::default(),
+            delay: Duration::ZERO,
+        }
+    }
+
+    fn reads(&self) -> Arc<Mutex<HashMap<String, u32>>> {
+        self.reads.clone()
+    }
+}
+
+impl AssetSource for Flaky {
+    fn id(&self) -> &str {
+        "flaky"
+    }
+
+    fn contains(&self, name: &str) -> bool {
+        self.files.contains(name)
+    }
+
+    fn size(&self, name: &str) -> Option<u64> {
+        self.files.size(name)
+    }
+
+    fn read(&self, name: &str) -> std::io::Result<Vec<u8>> {
+        std::thread::sleep(self.delay);
+        let n = {
+            let mut reads = self.reads.lock().unwrap();
+            let n = reads.entry(name.to_string()).or_insert(0);
+            *n += 1;
+            *n
+        };
+        if self.flaky.contains(&name) && n <= self.fail_first {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset,
+                "connection reset",
+            ));
+        }
+        self.files.read(name)
+    }
+}
+
+fn bins(n: usize) -> Vec<(String, Vec<u8>)> {
+    (0..n).map(|i| (format!("{i}.bin"), vec![i as u8; 100 + i])).collect()
+}
+
+fn refs(files: &[(String, Vec<u8>)]) -> Vec<(&str, Vec<u8>)> {
+    files.iter().map(|(n, b)| (n.as_str(), b.clone())).collect()
+}
+
+#[test]
+fn restarting_a_failed_group_reads_again_only_what_failed() {
+    let files = bins(12);
+    let mut all = refs(&files);
+    all.push(("art.png", png(16, 8, [10, 20, 30, 255])));
+    all.push(("beep.wav", wav(400)));
+    let flaky = Flaky::new(&all, &["7.bin"]);
+    let reads = flaky.reads();
+    game().run_headless(0, move |ctx| {
+        ctx.assets.add_background_source(flaky);
+        let mut group = AssetGroup::new("level").texture("art.png").sound("beep.wav");
+        for (name, _) in &files {
+            group = group.bytes(name);
+        }
+        let id = ctx.assets.start_group(group);
+        ctx.finish_uploads();
+        assert_eq!(ctx.assets.group_state(id), GroupState::Failed);
+        let error = ctx.assets.group_error(id).unwrap();
+        assert_eq!(error.path(), Some("7.bin"), "{error}");
+        let art = ctx.gfx.load_texture("art.png");
+
+        ctx.assets.restart_group(id);
+        assert_eq!(ctx.assets.group_state(id), GroupState::Loading);
+        assert!(ctx.assets.group_error(id).is_none());
+        ctx.finish_uploads();
+        assert_eq!(ctx.assets.group_state(id), GroupState::Ready);
+        let progress = ctx.assets.group_progress(id);
+        assert_eq!((progress.loaded, progress.total), (14, 14));
+        assert_eq!(progress.fraction(), 1.0);
+        for (name, bytes) in &files {
+            assert_eq!(
+                ctx.assets.take_group_value::<Vec<u8>>(id, name).as_ref(),
+                Some(bytes),
+                "{name}"
+            );
+        }
+        assert_eq!(ctx.gfx.load_texture("art.png"), art, "the texture kept its handle");
+        let reads = reads.lock().unwrap();
+        assert_eq!(reads.get("7.bin"), Some(&2), "the failed file is read again");
+        for (name, n) in reads.iter().filter(|(name, _)| name.as_str() != "7.bin") {
+            assert_eq!(
+                *n, 1,
+                "{name} loaded (or was being read) before the failure: never read again"
+            );
+        }
+        assert_eq!(reads.len(), 14);
+    });
+}
+
+#[test]
+fn a_restarted_group_that_fails_again_can_be_restarted_again() {
+    let files = bins(3);
+    let mut flaky = Flaky::new(&refs(&files), &["1.bin"]);
+    flaky.fail_first = 2;
+    let reads = flaky.reads();
+    game().run_headless(0, move |ctx| {
+        ctx.assets.add_background_source(flaky);
+        let id = ctx
+            .assets
+            .start_group(AssetGroup::new("g").bytes("0.bin").bytes("1.bin").bytes("2.bin"));
+        for expected in [GroupState::Failed, GroupState::Failed, GroupState::Ready] {
+            ctx.finish_uploads();
+            assert_eq!(ctx.assets.group_state(id), expected);
+            ctx.assets.restart_group(id);
+        }
+        // Restarting a ready group does nothing.
+        assert_eq!(ctx.assets.group_state(id), GroupState::Ready);
+        let reads = reads.lock().unwrap();
+        assert_eq!((reads["0.bin"], reads["1.bin"], reads["2.bin"]), (1, 3, 1));
+    });
+}
+
+#[test]
+fn restarting_a_cancelled_group_loads_only_what_had_not_loaded() {
+    let files = bins(24);
+    let mut flaky = Flaky::new(&refs(&files), &[]);
+    flaky.delay = Duration::from_millis(15);
+    let reads = flaky.reads();
+    game().run_headless(0, move |ctx| {
+        ctx.assets.add_background_source(flaky);
+        let mut group = AssetGroup::new("many");
+        for (name, _) in &files {
+            group = group.bytes(name);
+        }
+        let id = ctx.assets.start_group(group);
+        while ctx.assets.group_progress(id).loaded < 2 {
+            ctx.pump_asset_groups();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        ctx.assets.cancel_group(id);
+        ctx.pump_asset_groups(); // the step that stops its work
+        let loaded: Vec<String> = files
+            .iter()
+            .map(|(name, _)| name.clone())
+            .filter(|name| ctx.assets.take_group_value::<Vec<u8>>(id, name).is_some())
+            .collect();
+        assert!(
+            loaded.len() >= 2 && loaded.len() < 24,
+            "{} loaded before the cancel",
+            loaded.len()
+        );
+        ctx.assets.restart_group(id);
+        ctx.finish_uploads();
+        assert_eq!(ctx.assets.group_state(id), GroupState::Ready);
+        assert_eq!(ctx.assets.group_progress(id).loaded, 24);
+        let reads = reads.lock().unwrap();
+        for name in &loaded {
+            assert_eq!(reads[name], 1, "{name} loaded before the cancel: not read again");
+        }
+        for (name, _) in &files {
+            if !loaded.contains(name) {
+                assert!(ctx.assets.take_group_value::<Vec<u8>>(id, name).is_some(), "{name}");
+            }
+        }
+    });
+}
+
+#[test]
+fn a_group_restarted_before_its_cancel_was_stopped_still_loads() {
+    let files = bins(16);
+    let mut flaky = Flaky::new(&refs(&files), &[]);
+    flaky.delay = Duration::from_millis(10);
+    game().run_headless(0, move |ctx| {
+        ctx.assets.add_background_source(flaky);
+        let mut group = AssetGroup::new("many");
+        for (name, _) in &files {
+            group = group.bytes(name);
+        }
+        let id = ctx.assets.start_group(group);
+        ctx.pump_asset_groups(); // reads start on workers
+        ctx.assets.cancel_group(id);
+        ctx.assets.restart_group(id); // a "back" and "again" in one frame
+        ctx.finish_uploads();
+        assert_eq!(
+            ctx.assets.group_state(id),
+            GroupState::Ready,
+            "{:?}",
+            ctx.assets.group_error(id)
+        );
+        assert_eq!(ctx.assets.group_progress(id).loaded, 16);
+    });
+}
+
+#[test]
+fn restart_does_nothing_to_a_loading_group() {
+    let slow = Slow::new("slow", Duration::from_millis(20), &[("a.bin", vec![1])]);
+    game().run_headless(0, move |ctx| {
+        ctx.assets.add_background_source(slow);
+        let id = ctx.assets.start_group(AssetGroup::new("one").bytes("a.bin"));
+        ctx.assets.restart_group(id);
+        assert_eq!(ctx.assets.group_state(id), GroupState::Loading);
+        ctx.finish_uploads();
+        assert_eq!(ctx.assets.group_state(id), GroupState::Ready);
+    });
+}
+
+#[test]
+fn a_loading_screen_retries_a_failed_group_and_moves_on() {
+    let flaky = Flaky::new(
+        &[("level.bin", vec![5; 8]), ("tiles.png", png(4, 4, [1, 2, 3, 255]))],
+        &["level.bin"],
+    );
+    let reads = flaky.reads();
+    let world = game()
+        .state(Screen::Loading)
+        .loading_state(
+            Screen::Loading,
+            |_| AssetGroup::new("level").bytes("level.bin").texture("tiles.png"),
+            Screen::Playing,
+        )
+        // The loading screen's "try again": restart the group once it failed.
+        .sim_system(|ctx: &mut Ctx| {
+            if let Some(id) = ctx.assets.group("level")
+                && ctx.assets.group_state(id) == GroupState::Failed
+            {
+                ctx.assets.restart_group(id);
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        })
+        .run_headless(200, move |ctx| ctx.assets.add_background_source(flaky));
+    assert_eq!(world.resource::<ponko::state::State<Screen>>().get(), &Screen::Playing);
+    let reads = reads.lock().unwrap();
+    assert_eq!((reads["level.bin"], reads["tiles.png"]), (2, 1));
+}
+
+#[test]
+fn a_group_counts_the_bytes_and_time_of_its_texture_uploads() {
+    let files: Vec<(String, Vec<u8>)> = (0..3)
+        .map(|i| (format!("t{i}.png"), png(32, 16, [i as u8, 0, 0, 255])))
+        .collect();
+    let slow = Slow::new("art", Duration::ZERO, &refs(&files));
+    game().run_headless(0, move |ctx| {
+        ctx.assets.add_background_source(slow);
+        let mut group = AssetGroup::new("art").bytes("t0.png");
+        for (name, _) in &files {
+            group = group.texture(name);
+        }
+        let id = ctx.assets.start_group(group);
+        ctx.finish_uploads();
+        assert_eq!(ctx.assets.group_state(id), GroupState::Ready);
+        let progress = ctx.assets.group_progress(id);
+        // Three 32 x 16 RGBA8 textures; the bytes asset uploads nothing.
+        assert_eq!(progress.bytes_uploaded, 3 * 32 * 16 * 4);
+        assert!(progress.upload_ms >= 0.0);
+        let stats = ctx.assets.group_stats();
+        assert_eq!(stats.total_upload_bytes, 3 * 32 * 16 * 4);
+        assert!(stats.max_upload_ms >= stats.upload_ms);
+        assert!(
+            stats.total_upload_ms + 1e-3 >= f64::from(stats.max_upload_ms),
+            "{stats:?}"
+        );
+        assert!(stats.max_step_ms >= stats.max_upload_ms, "uploads are part of the step");
+    });
 }
 
 #[cfg(feature = "3d")]

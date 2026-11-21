@@ -2,6 +2,7 @@
 //! format is Aseprite's documented `ase-file-specs.md`).
 
 use super::*;
+use serde_json::{Value, json};
 
 /// A layer of a file [`write`] makes.
 pub struct Layer {
@@ -397,7 +398,7 @@ fn layer_and_cel_opacity_and_blend_modes_composite_as_aseprite_does() {
 }
 
 #[test]
-fn broken_and_tilemap_files_fail_naming_the_file() {
+fn broken_sources_and_ambiguous_split_names_are_rejected() {
     let err = export("bad.aseprite", b"not an aseprite file at all", false).unwrap_err();
     assert!(err.starts_with("bad.aseprite: not a readable Aseprite file"), "{err}");
     // Two visible layers of one name can't be split.
@@ -412,4 +413,124 @@ fn broken_and_tilemap_files_fail_naming_the_file() {
     let err = export("twins.aseprite", &twins, true).unwrap_err();
     assert!(err.contains("named \"a\""), "{err}");
     assert!(export("twins.aseprite", &twins, false).is_ok());
+}
+
+#[test]
+fn group_opacity_applies_once_after_compositing_overlapping_children() {
+    let layers = [
+        Layer {
+            group: true,
+            opacity: 128,
+            ..Layer::normal("group")
+        },
+        Layer {
+            level: 1,
+            ..Layer::normal("back")
+        },
+        Layer {
+            level: 1,
+            ..Layer::normal("front")
+        },
+    ];
+    let mut file = write(
+        2,
+        1,
+        &layers,
+        &[(100, vec![solid(1, (0, 0), (2, 1), RED), solid(2, (1, 0), (1, 1), BLUE)])],
+        &[],
+        &[],
+    );
+    let legacy = export("group.ase", &file, false).unwrap();
+    assert_eq!(pixel(&legacy.png, 1, 0), BLUE);
+    file[14] |= 2;
+    let composite = export("group.ase", &file, false).unwrap();
+    assert_eq!(pixel(&composite.png, 0, 0), [255, 0, 0, 128]);
+    assert_eq!(pixel(&composite.png, 1, 0), [0, 0, 255, 128]);
+}
+
+#[test]
+fn tilemap_layers_draw_embedded_tiles_with_flips_empty_entries_and_links() {
+    use std::io::Write;
+
+    let zip = |bytes: &[u8]| {
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        z.write_all(bytes).unwrap();
+        z.finish().unwrap()
+    };
+    let mut tile_layer = vec![3, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 0];
+    string(&mut tile_layer, "tiles");
+    tile_layer.extend(9u32.to_le_bytes());
+    let mut tileset = Vec::new();
+    for field in [9u32, 6, 2] {
+        tileset.extend(field.to_le_bytes());
+    }
+    for field in [2u16, 2, 1] {
+        tileset.extend(field.to_le_bytes());
+    }
+    tileset.extend([0; 14]);
+    string(&mut tileset, "tiles");
+    // 0 is empty. Tile 1 has four distinct corners.
+    let tiles = zip(&[[0; 4]; 4]
+        .into_iter()
+        .chain([RED, GREEN, BLUE, [255; 4]])
+        .flatten()
+        .collect::<Vec<_>>());
+    tileset.extend((tiles.len() as u32).to_le_bytes());
+    tileset.extend(tiles);
+
+    let mut map = vec![0, 0, 0, 0, 0, 0, 255, 3, 0, 0, 0, 0, 0, 0, 0, 0];
+    for field in [4u16, 1, 32] {
+        map.extend(field.to_le_bytes());
+    }
+    for mask in [0x1fff_ffffu32, 0x8000_0000, 0x4000_0000, 0x2000_0000] {
+        map.extend(mask.to_le_bytes());
+    }
+    map.extend([0; 10]);
+    map.extend(zip(&[0x8000_0001u32, 0x4000_0001, 0x2000_0001, 0]
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect::<Vec<_>>()));
+
+    let mut file = write(
+        8,
+        2,
+        &[],
+        &[
+            (100, vec![]),
+            (
+                100,
+                vec![Cel::Linked {
+                    layer: 0,
+                    x: -1,
+                    y: 0,
+                    frame: 0,
+                }],
+            ),
+        ],
+        &[],
+        &[],
+    );
+    let mut chunks = Vec::new();
+    chunk(&mut chunks, 0x2004, &tile_layer);
+    chunk(&mut chunks, 0x2023, &tileset);
+    chunk(&mut chunks, 0x2005, &map);
+    file[128..132].copy_from_slice(&(16 + chunks.len() as u32).to_le_bytes());
+    file[134..136].copy_from_slice(&3u16.to_le_bytes());
+    file[140..144].copy_from_slice(&3u32.to_le_bytes());
+    file.splice(144..144, chunks);
+    let size = file.len() as u32;
+    file[..4].copy_from_slice(&size.to_le_bytes());
+
+    let sheet = export("tiles.ase", &file, true).unwrap();
+    let json: Value = serde_json::from_slice(&sheet.json).unwrap();
+    assert_eq!(json["meta"]["layers"], json!([{"name": "tiles"}]));
+    assert_eq!(pixel(&sheet.png, 0, 0), GREEN);
+    assert_eq!(pixel(&sheet.png, 2, 0), BLUE);
+    assert_eq!(pixel(&sheet.png, 5, 0), BLUE);
+    assert_eq!(pixel(&sheet.png, 6, 0), [0; 4]);
+    assert_eq!(
+        pixel(&sheet.png, 8, 0),
+        RED,
+        "linked cel is clipped at its new position"
+    );
 }

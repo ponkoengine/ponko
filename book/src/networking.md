@@ -106,9 +106,11 @@ Lockstep only works if the simulation really is deterministic. The rules:
 
 When something slips through, Ponko tells you. Every `checksum_every`
 ticks (default 60) the peers compare a hash of every
-[reflected](reflection.md) component and resource; on a mismatch,
-`ctx.net.desync()` reports the tick, the player and **which components
-differ**, so you know where to look:
+[reflected](reflection.md) component and resource: the same
+`ponko::reflect::world_hash` your own determinism tests can use, taken part
+by part (`WorldHashParts`), read in place without making JSON. On a
+mismatch, `ctx.net.desync()` reports the tick, the player and **which
+components differ**, so you know where to look:
 
 ```text
 ponko lockstep: desync with player 1 at tick 119: Unit differ
