@@ -262,7 +262,11 @@ impl Rig {
                 .renderer
                 .create_compute(&self.device, "water ripples", shaders::RIPPLES)
                 .unwrap_or_else(|e| panic!("water ripples: {e}"));
-            assert_eq!(made, r.compute.id);
+            assert_eq!(
+                Some(made),
+                r.compute.map(|c| c.id),
+                "the headless books made the compute pass"
+            );
             self.gpu_target(r.target);
             self.gpu_material(r.material.id, &ripple_material(&desc, &[]));
         }

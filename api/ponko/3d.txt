@@ -9891,6 +9891,7 @@ pub ponko::render::CloudQuality::Low
 pub ponko::render::CloudQuality::Medium
 impl ponko::render::CloudQuality
 pub const ponko::render::CloudQuality::ALL: [ponko::render::CloudQuality; 4]
+pub fn ponko::render::CloudQuality::interleaved(self) -> bool
 pub fn ponko::render::CloudQuality::is_volumetric(self) -> bool
 pub fn ponko::render::CloudQuality::name(self) -> &'static str
 pub fn ponko::render::CloudQuality::steps(self) -> (u32, u32)
@@ -14738,11 +14739,33 @@ impl core::fmt::Debug for ponko::water::WaveSample
 pub fn ponko::water::WaveSample::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::water::WaveSample
 impl core::marker::StructuralPartialEq for ponko::water::WaveSample
+pub struct ponko::water::WaveSpectrum
+pub ponko::water::WaveSpectrum::choppiness: f32
+pub ponko::water::WaveSpectrum::height: f32
+pub ponko::water::WaveSpectrum::resolution: u32
+pub ponko::water::WaveSpectrum::seed: u32
+pub ponko::water::WaveSpectrum::tile: f32
+pub ponko::water::WaveSpectrum::wind: glam::f32::vec2::Vec2
+impl ponko::water::WaveSpectrum
+pub fn ponko::water::WaveSpectrum::cells(&self) -> usize
+pub fn ponko::water::WaveSpectrum::new(glam::f32::vec2::Vec2, f32) -> Self
+pub fn ponko::water::WaveSpectrum::with_choppiness(self, f32) -> Self
+pub fn ponko::water::WaveSpectrum::with_seed(self, u32) -> Self
+pub fn ponko::water::WaveSpectrum::with_tile(self, f32, u32) -> Self
+impl core::clone::Clone for ponko::water::WaveSpectrum
+pub fn ponko::water::WaveSpectrum::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::water::WaveSpectrum
+pub fn ponko::water::WaveSpectrum::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::water::WaveSpectrum
+pub fn ponko::water::WaveSpectrum::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::water::WaveSpectrum
+impl core::marker::StructuralPartialEq for ponko::water::WaveSpectrum
 pub struct ponko::water::Waves
 impl ponko::water::Waves
 pub fn ponko::water::Waves::displace(&self, glam::f32::vec2::Vec2, f32) -> glam::f32::vec3::Vec3
 pub fn ponko::water::Waves::height_at(&self, glam::f32::vec2::Vec2, f32) -> f32
 pub fn ponko::water::Waves::is_empty(&self) -> bool
+pub fn ponko::water::Waves::is_spectrum(&self) -> bool
 pub fn ponko::water::Waves::lake(glam::f32::vec2::Vec2, f32) -> Self
 pub fn ponko::water::Waves::max_height(&self) -> f32
 pub fn ponko::water::Waves::max_sway(&self) -> f32
@@ -14751,6 +14774,8 @@ pub fn ponko::water::Waves::none() -> Self
 pub fn ponko::water::Waves::rest_point(&self, glam::f32::vec2::Vec2, f32) -> glam::f32::vec2::Vec2
 pub fn ponko::water::Waves::sample(&self, glam::f32::vec2::Vec2, f32) -> ponko::water::WaveSample
 pub fn ponko::water::Waves::sea(glam::f32::vec2::Vec2, f32) -> Self
+pub fn ponko::water::Waves::spectrum(ponko::water::WaveSpectrum) -> Self
+pub fn ponko::water::Waves::spectrum_settings(&self) -> core::option::Option<ponko::water::WaveSpectrum>
 pub fn ponko::water::Waves::waves(&self) -> &[ponko::water::Wave]
 impl core::clone::Clone for ponko::water::Waves
 pub fn ponko::water::Waves::clone(&self) -> Self
@@ -14762,6 +14787,7 @@ impl core::fmt::Debug for ponko::water::Waves
 pub fn ponko::water::Waves::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for ponko::water::Waves
 pub const ponko::water::MAX_WAVES: usize
+pub const ponko::water::SPECTRUM_PERIOD: f32
 pub const ponko::water::WAVE_GRAVITY: f32
 pub fn ponko::water::despawn_water(&mut ponko::prelude::Ctx, ponko_ecs::entity::Entity) -> bool
 pub fn ponko::water::update_water(&mut ponko::prelude::Ctx)

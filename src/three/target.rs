@@ -336,6 +336,23 @@ impl Graphics {
     pub fn is_render_target(&self, texture: Texture) -> bool {
         self.assets3d.render_targets.iter().any(|t| t.id == texture.id)
     }
+
+    /// Engine side: replaces every texel of `target` with `texels`, RGBA
+    /// half floats (8 bytes a texel), for fields the CPU works out where
+    /// the GPU can't (the water kit's ripples and spectrum on WebGL2).
+    /// Does nothing headless, for a freed target or a wrong length.
+    pub(crate) fn write_render_target(&mut self, target: RenderTarget, texels: &[u8]) {
+        let (w, h) = (target.width(), target.height());
+        if self.headless
+            || texels.len() != w as usize * h as usize * 8
+            || !self.textures_live.contains(target.texture.id)
+        {
+            return;
+        }
+        if let Some(renderer) = self.renderer.as_mut() {
+            renderer.write_render_target(target.texture.id, w, h, texels);
+        }
+    }
 }
 
 #[cfg(test)]

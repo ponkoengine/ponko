@@ -11,8 +11,8 @@ water needs, and `WaterPlugin` keeps them up to date each frame.
   depth: shallow water is clear, deep water takes the water's colour.
 - **Shore foam** where the water is shallow, and whitecaps on sharp crests.
 - **Flow maps** for rivers: the surface detail drifts with the current.
-- **Gerstner waves** for the sea, with a CPU query of the same waves for
-  buoyancy and gameplay.
+- **Gerstner waves** for the sea, or **waves from a spectrum** (an FFT
+  ocean), with a CPU query of the same waves for buoyancy and gameplay.
 - An **underwater** screen effect when the camera dips below the surface.
 - **Contact ripples** where things touch the water.
 - **Buoyancy** for 3D physics bodies (the `physics3d` feature).
@@ -20,7 +20,9 @@ water needs, and `WaterPlugin` keeps them up to date each frame.
 Run `cargo run --release --example water --features physics3d` to fly
 over a lake on a plateau, a river carrying crates down to a beach, and
 the sea: 1, 2 and 3 pick the quality, R the lake's reflection, Space
-drops a crate.
+drops a crate. The terrain example (`examples/terrain`) fills its
+valleys with a water-kit lake: a planar mirror of the hills, and the
+underwater view when the camera dives in (U toggles it).
 
 ## Bodies of water
 
@@ -94,6 +96,72 @@ probes on the test machine).
 Far away, waves and ripples shorter than a few pixels fade out of the
 normal so the sea doesn't shimmer; the heights the CPU sees don't change.
 
+## Waves from a spectrum
+
+`Waves::spectrum` is the other kind of sea: instead of six Gerstner
+waves, thousands of waves of every length, from a wind-driven (Phillips)
+spectrum turned back into a surface by an inverse FFT each frame. The
+surface is a square of `tile` metres that repeats, worked out on a grid
+of 64, 128 or 256 cells; its waves run with the wind and the crests get
+sharper with `choppiness`. A seed picks the sea, so a seed always gives
+the same waves on every machine, and the sea loops every
+`SPECTRUM_PERIOD` (200 s) so the shader's numbers stay small however
+long a game runs.
+
+```rust
+# use ponko::prelude::*;
+# use ponko::water::{Water, WaterDesc, WaveSpectrum, Waves};
+# Game::new("sea", 320, 180).run_headless(0, |ctx| {
+let storm = WaveSpectrum::new(vec2(12.0, 4.0), 2.5) // wind in m/s, height in m
+    .with_tile(256.0, 128)
+    .with_choppiness(1.2)
+    .with_seed(7);
+let sea = Water::spawn(ctx, WaterDesc::sea(0.0, vec2(12.0, 4.0), 2.5).with_waves(Waves::spectrum(storm)));
+let water = ctx.world.get::<Water>(sea).unwrap();
+let height = water.height_at(vec2(30.0, -8.0), ctx.time.elapsed() as f32);
+assert!(height.abs() < water.desc().waves.max_height());
+# });
+```
+
+`height` is the significant wave height (trough to crest of the highest
+third, four times the heights' spread). The wind's speed sets how long
+the biggest waves are (about `0.9 · speed²` metres): a square much
+smaller than that leaves them out.
+
+Where it is worked out:
+
+- **With compute shaders** (every native backend and WebGPU), compute
+  passes on the GPU: one turns the spectrum to the frame's time, then one
+  per FFT stage along x and along z (13 passes at 64 cells, 17 at 256).
+- **Without** (WebGL2), the CPU runs the same FFT and uploads the field
+  each frame.
+- **The CPU's queries** (`height_at`, `sample`, buoyancy) run the same
+  FFT on the CPU at the time asked, once per moment (the last two are
+  kept), so what floats rides the waves that are drawn. A GPU test reads
+  the drawn surface back and compares it with `height_at`: 9.9 mm worst
+  with the GPU's FFT, 9.1 mm with the CPU's upload, on a 1.5 m sea; the
+  GPU's field matches the CPU's to 6 mm (it runs in half floats).
+
+Cost, measured on an Apple M4 Max (Metal) while the machine was busy
+with other work (`spectrum_waves_cost` in the engine's tests; the GPU
+column over eleven runs in three sessions, the CPU columns over the three
+runs since the CPU's FFT last changed):
+
+| Cells | GPU time over a Gerstner sea (1280x720) | One CPU field | With the sway's speed (buoyancy) |
+|---|---|---|---|
+| 64 | 0.57 to 0.76 ms | 0.16 to 0.53 ms | 0.2 to 0.5 ms |
+| 128 (default) | 0.74 to 0.89 ms | 0.63 to 1.1 ms | 0.9 to 2.4 ms |
+| 256 | 0.88 to 1.02 ms | 4 to 19 ms | 35 to 37 ms |
+
+The GPU column is the whole frame's GPU time against the same sea with
+`Waves::sea` (the copies between FFT passes aren't timed). The CPU
+columns are paid in a frame only when something asks the CPU (a WebGL2
+upload, a query, a floating body), once per moment however many points
+are asked; the underwater check skips the query while the camera is
+clearly above or below every wave. Keep to 128 cells or fewer when the
+CPU works the sea out, on the web or for buoyancy; 256 is for seas drawn
+on the GPU that nothing floats on.
+
 ## Floating bodies
 
 Give a 3D physics body a `Buoyancy` (`Buoyancy::cuboid(size)`,
@@ -116,10 +184,14 @@ water at the last step.
 ## Contact ripples
 
 `Water::touch(at, radius, strength)` starts a ring of ripples. They run
-in a small compute simulation over a square of `ripple_area` metres
-around the water's centre; three contacts start per frame and the rest
-wait their turn. Contact ripples need compute shaders, so on WebGL2 the
-pass isn't made and `touch` does nothing.
+in a small simulation (a damped wave equation on a grid) over a square of
+`ripple_area` metres around the water's centre; three contacts start per
+frame and the rest wait their turn. With compute shaders a compute pass
+steps it on the GPU. Without them (WebGL2) the CPU steps the same
+simulation and uploads the grid while anything moves (128 x 128 texels
+at `Medium`), and nothing while the water is still; a GPU test checks
+the CPU leaves the grid the compute pass does, to 0.002 of a ring 0.12
+high.
 
 ## Quality and cost
 
@@ -163,9 +235,11 @@ shaders or passes behind.
 
 The water's shaders are checked for every native backend (with and
 without multisampling) and translated to GLSL ES 3.0 for WebGL2 in tests.
-On WebGL2 everything but contact ripples works; the flat-sky reflection
-uses the frame's sky colour times the ambient light, as the rest of the
-renderer does without a sky shader.
+On WebGL2 everything works: contact ripples and waves from a spectrum
+are worked out on the CPU and uploaded (see above), and the flat-sky
+reflection uses the frame's sky colour times the ambient light, as the
+rest of the renderer does without a sky shader. GPU tests run both on a
+device limited to what WebGL2 allows.
 
 ## From C and C++
 
@@ -178,4 +252,5 @@ adds the plugin; `ponko_ctx_water_sample`, `ponko_ctx_water_touch` and
 `ponko::water_desc::sea(...)`, `ctx.spawn_water`, `ctx.water_height` and
 `game.water()`. `ponko_ctx_set_buoyancy_box` and `_sphere` float boxes
 and balls in fresh water; custom sample points (`Buoyancy::points`), the
-water's density and the ripple switch are Rust-only for now.
+water's density, the ripple switch and waves from a spectrum
+(`Waves::spectrum`) are Rust-only for now.

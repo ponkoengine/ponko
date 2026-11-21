@@ -623,6 +623,13 @@ impl Renderer {
         ))
     }
 
+    /// Tests: the device, the queue and texture `id` (a render target's),
+    /// to read what the GPU left in it.
+    #[cfg(all(test, feature = "3d"))]
+    pub(super) fn texture_for_test(&self, id: u32) -> (&wgpu::Device, &wgpu::Queue, Option<&wgpu::Texture>) {
+        (&self.device, &self.queue, self.textures.live(id).map(|t| &t.texture))
+    }
+
     #[cfg(all(test, feature = "3d"))]
     pub(super) fn offscreen(gpu: super::render_test_support::TestGpu, size: (u32, u32)) -> Self {
         let msaa = 4;
@@ -1423,6 +1430,29 @@ impl Renderer {
         });
         self.three().add_render_target(id, &texture);
         id
+    }
+
+    /// Writes `texels` (RGBA half floats, 8 bytes each) into render target
+    /// `id`, `width` x `height`: a field the CPU worked out.
+    #[cfg(feature = "3d")]
+    pub fn write_render_target(&mut self, id: u32, width: u32, height: u32, texels: &[u8]) {
+        let Some(tex) = self.textures.live(id) else {
+            return;
+        };
+        self.queue.uploading(Upload::Textures).write_texture(
+            tex.texture.as_image_copy(),
+            texels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(8 * width),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
     }
 
     /// Uploads RGBA8 (sRGB) pixels and returns the texture's id.

@@ -20,7 +20,8 @@ use super::{SceneSettings, Sky};
 /// color, reflections and the ambient light. On top of that:
 ///
 /// - **Clouds** ([`Clouds`]) are raymarched through a layer of the sky at
-///   a quarter of the screen's pixels and smoothed over frames (temporal
+///   a quarter of the screen's pixels (a sixteenth a frame, in turn, at
+///   the `Low` and `Medium` presets) and smoothed over frames (temporal
 ///   reprojection), with the coverage, kind, wind, self-shadowing and
 ///   silver lining set there. [`CloudQuality`] picks how finely they are
 ///   marched, or a flat 2D cloud layer drawn into the sky itself.
@@ -212,28 +213,39 @@ impl Moon {
 
 /// How finely the sky kit draws its clouds ([`SkyKit::quality`]).
 ///
-/// The volumetric presets march the cloud layer at half the frame's width
-/// and height (a quarter of its pixels), from a different offset each
-/// frame, and blend each frame with the last one moved to where the camera
-/// now looks (temporal reprojection), so the steps' noise averages out.
-/// They differ in how many steps a ray takes through the clouds and toward
-/// the sun. What the kit adds to a frame's GPU time at 1920 x 1080 (the
-/// whole frame's, against the same frame with the built-in atmosphere),
-/// measured offscreen on an Apple M4 Max (Metal) while the machine was
-/// busy with other work: three runs of 40 frames each, cloud cover 0.5,
-/// looking just above the horizon (`cloud_presets_gpu_time` in the engine's
-/// tests):
+/// The volumetric presets draw the cloud layer at half the frame's width
+/// and height (a quarter of its pixels) and blend each frame with the last
+/// one moved to where the camera now looks (temporal reprojection), so the
+/// steps' noise averages out. They differ in how many steps a ray takes
+/// through the clouds and toward the sun, and in how many rays a frame
+/// marches: `Low` and `Medium` march one pixel of each 2 x 2 block of the
+/// cloud image a frame, in turn ([`CloudQuality::interleaved`]: a sixteenth
+/// of the frame's pixels), and keep the reprojected history for the other
+/// three; `High` marches every pixel of the cloud image every frame. The
+/// interleaved presets settle on the same clouds as a full march over a few
+/// frames, and clouds that move fast across the screen are a little
+/// softer for those frames.
 ///
-/// | Preset | Steps (view, sun) | Kit's GPU time, median per run |
-/// |---|---|---|
-/// | `Flat` | none: a 2D layer in the sky shader | 0.46, 0.48, 0.60 ms |
-/// | `Low` | 24, 2 | 1.02, 0.84, 0.79 ms |
-/// | `Medium` | 48, 4 | 2.18, 1.83, 1.84 ms |
-/// | `High` | 96, 6 | 3.88, 5.63, 9.88 ms (the march alone 3.9 to 4.3 ms; the rest is the busy machine) |
+/// What the kit adds to a frame's GPU time at 1920 x 1080 (the whole
+/// frame's, against the same frame with the built-in atmosphere), measured
+/// offscreen on an Apple M4 Max (Metal) while the machine was busy with
+/// other work: ten runs in two sessions, each taking turns between the
+/// ways to march in blocks of 12 frames, cloud cover 0.5, looking just
+/// above the horizon (`cloud_presets_gpu_time` in the engine's tests):
 ///
-/// The cloud march itself scales with the steps (0.78, 1.7 to 1.8 and 3.9
-/// to 4.3 ms); the cloud shadow map takes about 0.03 ms, the temporal
-/// resolve 0.06 ms.
+/// | Preset | Steps (view, sun) | Kit's GPU time, median of the runs (range) | Marching every pixel |
+/// |---|---|---|---|
+/// | `Flat` | none: a 2D layer in the sky shader | 0.64 ms (0.52 to 1.09) | |
+/// | `Low` | 24, 2 | 1.33 ms (0.82 to 2.50) | 2.20 ms (1.34 to 2.67) |
+/// | `Medium` | 48, 4 | 1.43 ms (1.03 to 1.95) | 2.87 ms (2.17 to 3.38) |
+/// | `High` | 96, 6 | 3.96 ms (3.37 to 4.00) | (always) |
+///
+/// Interleaving saved `Medium` 1.1 to 1.65 ms in every one of the ten
+/// runs, about half the kit's cost. `Low`'s march pass was cheaper in
+/// every run too (0.6 to 1.5 ms against 1.1 to 2.1 ms), but its whole
+/// frame came out 0.6 ms dearer in one run of ten: on this busy machine
+/// that difference is within the noise. The cloud shadow map takes about
+/// 0.03 to 0.1 ms, the temporal resolve 0.06 to 0.2 ms.
 ///
 /// On a WebGL2-class GPU every preset draws as `Flat`.
 ///
@@ -283,6 +295,21 @@ impl CloudQuality {
             CloudQuality::Medium => (48, 4),
             CloudQuality::High => (96, 6),
         }
+    }
+
+    /// Whether each frame marches a quarter of the cloud image's pixels (one
+    /// of every 2 x 2 block, a different one each frame) and fills in the
+    /// rest from the frames before: `Low` and `Medium`, the presets for
+    /// mid-range GPUs. `High` marches every pixel each frame.
+    ///
+    /// ```
+    /// use ponko::render::CloudQuality;
+    /// assert!(CloudQuality::Medium.interleaved());
+    /// assert!(!CloudQuality::High.interleaved());
+    /// ```
+    #[must_use]
+    pub fn interleaved(self) -> bool {
+        matches!(self, CloudQuality::Low | CloudQuality::Medium)
     }
 
     /// The preset's name: `flat`, `low`, `medium` or `high`.
