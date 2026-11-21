@@ -1370,6 +1370,7 @@ fn render_inspector_json(ctx: &Ctx, history: usize, allocations: usize) -> Value
         adapter: ctx.gfx.gpu_capabilities(),
         history: &frames,
         frustum_culled,
+        gpu_timing: ctx.perf.gpu_timing(),
     });
     #[cfg(feature = "3d")]
     let (autotune, off) = (

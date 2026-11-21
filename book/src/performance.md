@@ -266,6 +266,9 @@ goes, in a running game:
 `ctx.perf.set_gpu_timing` picks the cadence, separately from profiling
 (which also times scopes and counts allocations):
 
+<div class="lang-pair">
+<div>
+
 ```rust
 # use ponko::prelude::*;
 use ponko::perf::GpuTiming;
@@ -281,12 +284,25 @@ fn gpu_times(ctx: &mut Ctx) {
 }
 ```
 
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:gpu_timing}}
+```
+
+</div>
+</div>
+
 An explicit choice also wins over profiling: `Every(4)` with profiling on
 times one frame in four. The overlay, traces, `PONKO_BENCH` runs and
 automatic quality read every frame's times, so they get every frame while
 they are on, whatever the setting; the choice applies again when they stop.
 `Off` leaves `gpu_passes()` empty and `gpu_ms` `None` (with nothing reading
-them). A change takes effect on the next frame.
+them). A change takes effect on the next frame. C reads and writes the
+choice with `ponko_ctx_set_gpu_timing(ctx, PONKO_GPU_TIMING_EVERY, 4)` and
+`ponko_ctx_gpu_timing` (`PONKO_GPU_TIMING_AUTO`, `_EVERY`, `_OFF`; the count
+matters only for `_EVERY`); a bad kind is `PONKO_INVALID_ARGUMENT`.
 
 What each choice costs the game's thread in heap allocations per frame
 (the offscreen test `allocations_per_frame_fall_as_gpu_timing_gets_rarer`;
@@ -421,7 +437,7 @@ are per frame.
 
 | Field | What |
 |---|---|
-| `gpu_timing` | `available`: the GPU has timestamp queries; `frames_timed`: frames whose GPU times came back (one in 16 outside profiling, see `ctx.perf.gpu_passes()` above; `perf.get` with `profiling: true` times every frame) |
+| `gpu_timing` | `available`: the GPU has timestamp queries; `frames_timed`: frames whose GPU times came back (one in 16 outside profiling, see `ctx.perf.gpu_passes()` above; `perf.get` with `profiling: true` times every frame); `cadence`: what the game chose with [`set_gpu_timing`](#how-often-gpu-passes-are-timed), `auto`, `every` (with `every`: the number of frames) or `off`. `cadence: "off"` with `available: true` is the game's choice, so no times are expected (`unavailable` says so); `available: false` is an adapter without timestamps, whatever the cadence |
 | `cpu_ms` | the renderer's CPU time: `total`, split into `extract` (culling, collecting models), `prepare` (uploading 3D data), `encode` (recording command buffers), `submit` and `other` (sprites, overlays) |
 | `gpu_ms` | `frame` and `passes` (`[{name, ms}]` in the order they run), smoothed |
 | `counts` | `draw_calls`, `sprites`, `models`, `triangles`, `shadow_models`, `shadow_triangles`, `occluded_models`, `frustum_culled_models` (see below), `frustum_culled_other_models` (always `null`, see below), `pipelines_built`, and `instance_batches`: how the [static instance batches](3d.md#which-path-a-batch-takes) were culled (`batches`, `instances`, `gpu_driven`, `gpu_instances`, `cpu_small`, `cpu_no_compute`, `cpu_over_limit`, `dropped`, `pools`, `pages`, `pool_bytes`, `cull_dispatches`, `cull_jobs`, `views_skipped`) |
@@ -541,8 +557,10 @@ numbers made up for the example (shapes as the engine's tests build them).
    triangles didn't change, and
    `fps` barely moved because the display's refresh rate capped it. Under
    vsync, compare `gpu_ms`, not `fps`. If `gpu_timing.available` is
-   `false`, `gpu_ms` is `null` on both sides: compare the `cpu_ms` and the
-   `counts` instead, or benchmark with `PONKO_BENCH`.
+   `false` (an adapter without timestamps) or `gpu_timing.cadence` is
+   `off` (the game turned timing off), `gpu_ms` is `null` on both sides:
+   compare the `cpu_ms` and the `counts` instead, or benchmark with
+   `PONKO_BENCH`.
 
 C and C++ games get the control method and the MCP tool through the same
 endpoint, and can read and change the quality level themselves with

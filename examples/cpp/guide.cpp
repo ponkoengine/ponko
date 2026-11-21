@@ -5354,6 +5354,18 @@ struct wall_count {
     // ANCHOR_END: nav_crowd_stats
     (void)work_per_agent;
 }
+[[maybe_unused]] static void gpu_timing_guide(ponko::ctx& ctx) {
+    // ANCHOR: gpu_timing
+    // Fresh GPU pass times every frame, with profiling still off.
+    ctx.set_gpu_timing(ponko::gpu_timing_every(1));
+    // Or one frame in four, or none at all:
+    // ctx.set_gpu_timing(ponko::gpu_timing_every(4));
+    // ctx.set_gpu_timing(ponko::gpu_timing_off());
+    // gpu_timing_auto() is the default: one frame in 16, every frame while profiling is on.
+    bool every_frame = ctx.gpu_timing() == ponko::gpu_timing_every(1); // what was chosen, not what ran
+    // ANCHOR_END: gpu_timing
+    (void)every_frame;
+}
 [[maybe_unused]] static void thread_allocs_guide() {
     // ANCHOR: thread_allocs
     ponko::alloc_counts before = ponko::thread_alloc_counts();
