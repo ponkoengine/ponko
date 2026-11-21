@@ -205,14 +205,53 @@ pub(crate) struct Changes {
     aged_at: u64,
     /// One log per tracked component, in the order they were tracked.
     removed: Vec<Removed>,
+    /// `log[id.index()]` is the place of component `id`'s log in
+    /// `removed`, or `u32::MAX` (untracked): logging a removal finds its
+    /// log without a search.
+    log: Vec<u32>,
 }
 
 /// Entities that lost a tracked component, oldest first.
+///
+/// The ticks come in runs: every removal of one tick shares one entry, so
+/// logging a removal is one push (and one compare), however many entities
+/// a tick removes.
 struct Removed {
-    id: ComponentId,
     entities: Vec<Entity>,
-    /// `ticks[i]` is when `entities[i]` lost it; ascending.
-    ticks: Vec<u64>,
+    /// `(tick, first)`: `entities[first..]` up to the next run's `first`
+    /// lost the component at `tick`. Ticks ascend, and no run is empty.
+    runs: Vec<(u64, usize)>,
+}
+
+impl Removed {
+    /// Logs that `e` lost the component at tick `now`.
+    #[inline]
+    fn push(&mut self, e: Entity, now: u64) {
+        if self.runs.last().is_none_or(|&(tick, _)| tick != now) {
+            self.runs.push((now, self.entities.len()));
+        }
+        self.entities.push(e);
+    }
+
+    /// The first entity logged after tick `since`.
+    fn first_after(&self, since: u64) -> usize {
+        let run = self.runs.partition_point(|&(tick, _)| tick <= since);
+        self.runs.get(run).map_or(self.entities.len(), |&(_, first)| first)
+    }
+
+    /// Forgets the removals at or before tick `tick`.
+    fn forget(&mut self, tick: u64) {
+        let run = self.runs.partition_point(|&(t, _)| t <= tick);
+        if run == 0 {
+            return;
+        }
+        let first = self.runs.get(run).map_or(self.entities.len(), |&(_, first)| first);
+        self.entities.drain(..first);
+        self.runs.drain(..run);
+        for r in &mut self.runs {
+            r.1 -= first;
+        }
+    }
 }
 
 impl Default for Changes {
@@ -222,6 +261,7 @@ impl Default for Changes {
             since: 0,
             aged_at: 1,
             removed: Vec::new(),
+            log: Vec::new(),
         }
     }
 }
@@ -234,11 +274,31 @@ impl Changes {
     }
 
     /// Logs that `e` lost tracked component `id`.
+    #[inline]
     pub(crate) fn log_removal(&mut self, id: ComponentId, e: Entity) {
-        if let Some(log) = self.removed.iter_mut().find(|log| log.id == id) {
-            log.entities.push(e);
-            log.ticks.push(self.now);
+        let now = self.now;
+        if let Some(&at) = self.log.get(id.index())
+            && let Some(log) = self.removed.get_mut(at as usize)
+        {
+            log.push(e, now);
         }
+    }
+
+    /// The removal log of tracked component `id`.
+    fn log_of(&self, id: ComponentId) -> Option<&Removed> {
+        self.removed.get(*self.log.get(id.index())? as usize)
+    }
+
+    /// Gives tracked component `id` a removal log.
+    fn add_log(&mut self, id: ComponentId) {
+        if self.log.len() <= id.index() {
+            self.log.resize(id.index() + 1, u32::MAX);
+        }
+        self.log[id.index()] = self.removed.len() as u32;
+        self.removed.push(Removed {
+            entities: Vec::new(),
+            runs: Vec::new(),
+        });
     }
 
     /// The change-detection half of despawning `e`, row `row` of tracked
@@ -772,11 +832,7 @@ impl World {
                 arch.start_tracking(col, stamp);
             }
         }
-        self.changes.removed.push(Removed {
-            id,
-            entities: Vec::new(),
-            ticks: Vec::new(),
-        });
+        self.changes.add_log(id);
     }
 
     /// Whether any component is tracked: each has a removal log.
@@ -926,15 +982,14 @@ impl World {
     #[track_caller]
     #[must_use]
     pub(crate) fn removed_dynamic_inner(&self, id: ComponentId, since: Tick) -> &[Entity] {
-        let Some(log) = self.changes.removed.iter().find(|log| log.id == id) else {
+        let Some(log) = self.changes.log_of(id) else {
             untracked(self.infos[id.index()].name())
         };
         if since.0 > self.changes.now {
             // Another world's tick: everything, as for the filters.
             return &log.entities;
         }
-        let first = log.ticks.partition_point(|&tick| tick <= since.0);
-        &log.entities[first..]
+        &log.entities[log.first_after(since.0)..]
     }
 
     /// Implementation of [`RawWorld::query_chunks`](crate::RawWorld::query_chunks).
@@ -1053,11 +1108,7 @@ impl World {
     /// ```
     pub fn forget_removed(&mut self, tick: Tick) {
         for log in &mut self.changes.removed {
-            let n = log.ticks.partition_point(|&t| t <= tick.0);
-            if n > 0 {
-                log.ticks.drain(..n);
-                log.entities.drain(..n);
-            }
+            log.forget(tick.0);
         }
     }
 }
