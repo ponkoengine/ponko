@@ -389,6 +389,12 @@ pub(crate) struct TouchState {
     editing: bool,
     /// The control being moved, and by what.
     edit: Option<EditDrag>,
+    /// The control the player grabbed last while arranging them: the one
+    /// the arrange screen resizes.
+    picked: Option<u16>,
+    /// Where the arrange screen's panel is, in window pixels: a press there
+    /// is the panel's, not a control's under it.
+    pub(crate) shield: Option<crate::camera::Rect>,
     /// How many times a control was moved (the UI lays them out again).
     pub(crate) moved: u64,
     /// The mouse's left button went down on a control being moved this
@@ -450,6 +456,8 @@ impl Default for TouchState {
             layout: Default::default(),
             editing: false,
             edit: None,
+            picked: None,
+            shield: None,
             moved: 0,
             mouse_took: false,
             last_lift: None,
@@ -487,10 +495,15 @@ impl TouchState {
         self.edit.map(|e| usize::from(e.zone))
     }
 
+    /// The control the player grabbed last while arranging them.
+    pub(crate) fn picked_zone(&self) -> Option<usize> {
+        self.picked.map(usize::from)
+    }
+
     /// In edit mode, `by` going down at `at`: the control under it is moved
     /// from now on. Returns it.
     fn start_edit(&mut self, by: Mover, at: Vec2) -> Option<u16> {
-        if !self.editing || self.edit.is_some() {
+        if !self.editing || self.edit.is_some() || self.shield.is_some_and(|r| r.contains(at)) {
             return None;
         }
         let zone = self
@@ -505,6 +518,7 @@ impl TouchState {
             by,
             grab: self.zones[usize::from(zone)].center - at,
         });
+        self.picked = Some(zone);
         Some(zone)
     }
 
@@ -586,6 +600,7 @@ impl TouchState {
             }
         }
         self.zones = zones;
+        self.picked = None;
     }
 
     /// Gives zones whose action the map has its state slot.
@@ -1329,6 +1344,7 @@ impl Input {
     pub fn edit_touch_controls(&mut self, on: bool) {
         if !on {
             self.touch.finish_edit();
+            self.touch.picked = None;
         }
         self.touch.editing = on;
     }

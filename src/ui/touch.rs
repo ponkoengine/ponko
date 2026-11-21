@@ -33,6 +33,7 @@
 //! [`TouchLayout`]), and the arrangement is saved with the settings.
 #![deny(missing_docs)]
 
+mod arrange;
 mod layout;
 
 pub use layout::{TouchAdjust, TouchLayout, TouchPlace, TouchStyle};
@@ -254,6 +255,8 @@ pub(crate) struct TouchControlsUi {
     moved: u64,
     /// The disc the controls are drawn with (made once).
     pub(crate) texture: Option<Texture>,
+    /// The arrange screen, while it is open ([`Ctx::arrange_touch_controls`]).
+    pub(crate) arrange: Option<Box<arrange::Arrange>>,
 }
 
 /// `color`, `opacity` times as opaque.
@@ -423,6 +426,7 @@ impl Ctx {
     /// last frame, places them for the window, shows or hides them, moves
     /// the knobs and lights the held buttons.
     pub(crate) fn update_touch_controls(&mut self) {
+        self.update_touch_arrange();
         if self.ui_state.touch.generation != self.input.touch.generation {
             self.build_touch_controls();
         }
@@ -463,7 +467,8 @@ impl Ctx {
         }
         let scale = self.ui.scale().max(1e-3);
         let state = &mut self.ui_state.touch;
-        let dragged = self.input.touch.edited_zone();
+        // The one the player is moving or picked to resize.
+        let dragged = self.input.touch.edited_zone().or(self.input.touch.picked_zone());
         for (i, p) in state.placed.iter().enumerate() {
             let Some(zone) = self.input.touch.zones.get(i) else {
                 continue;

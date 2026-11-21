@@ -79,6 +79,8 @@ impl Ctx {
         self.world
             .query::<&mut super::panel3d::UiPanel3D>()
             .for_each(|p| p.ui.same_frame.again = false);
+        // The arrange screen's buttons take effect before the next system.
+        self.update_touch_arrange();
         self.ui.end_same_frame_pass(before);
         self.input.show_seen_edges();
     }
