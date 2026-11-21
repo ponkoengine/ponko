@@ -74,6 +74,7 @@
 - [Headless runs and testing](headless.md)
 - [When something fails: reading the message](errors.md)
 - [A complete game, packaged](packaging.md)
+- [Crash reports](crash-reports.md)
 - [Ember Hop: a platformer, start to finish](ember-hop.md)
 - [Shard Grove: a 3D game, start to finish](shard-grove.md)
 - [Legions: 100,000 units that replay bit for bit](legions.md)
