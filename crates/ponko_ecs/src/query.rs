@@ -107,6 +107,21 @@ pub(crate) unsafe fn for_rows<'a, Q: QueryData>(
     rows: std::ops::Range<usize>,
     f: &mut impl FnMut(Q::Item<'a>),
 ) {
+    // SAFETY: the caller's contract.
+    unsafe { for_rows_at::<Q>(state, rows, &mut |_, item| f(item)) }
+}
+
+/// [`for_rows`], also passing each row's index: what the parallel loops
+/// use to give each entity its position in the query.
+///
+/// # Safety
+/// As for [`QueryData::fetch`], for every row in `rows`.
+#[inline(always)]
+pub(crate) unsafe fn for_rows_at<'a, Q: QueryData>(
+    state: Q::State,
+    rows: std::ops::Range<usize>,
+    f: &mut impl FnMut(usize, Q::Item<'a>),
+) {
     macro_rules! split {
         ($($present:literal)* ; $last:literal) => {
             // `present` sets only the low `Q::OPTIONS` bits: `$last` is
@@ -116,13 +131,13 @@ pub(crate) unsafe fn for_rows<'a, Q: QueryData>(
                     for row in rows {
                         // SAFETY: the caller's contract; `$present` is what
                         // `present` gave for `state`.
-                        f(unsafe { Q::fetch_split::<$present>(state, row, 0) });
+                        f(row, unsafe { Q::fetch_split::<$present>(state, row, 0) });
                     }
                 })*
                 _ => {
                     for row in rows {
                         // SAFETY: as above, for the last combination.
-                        f(unsafe { Q::fetch_split::<$last>(state, row, 0) });
+                        f(row, unsafe { Q::fetch_split::<$last>(state, row, 0) });
                     }
                 }
             }
@@ -136,7 +151,7 @@ pub(crate) unsafe fn for_rows<'a, Q: QueryData>(
         _ => {
             for row in rows {
                 // SAFETY: the caller's contract.
-                f(unsafe { Q::fetch(state, row) });
+                f(row, unsafe { Q::fetch(state, row) });
             }
         }
     }
@@ -844,11 +859,15 @@ impl<Q: QueryData> ParWork<'_, Q> {
                 .expect("a planned archetype matches the query while it runs");
             let first = task.start + (pos - task.base);
             let last = task.end.min(task.start + (hi - task.base));
-            for row in first..last {
-                // SAFETY: `row` is below the archetype's length (planned under
-                // the same borrow) and only this thread visits it now.
-                f(task.base + row - task.start, unsafe { Q::fetch(state, row) });
-            }
+            // Rows `first..last`, looped as `for_each` loops them: split on
+            // which `Option` components the archetype has, so no row tests it.
+            // SAFETY: the rows are below the archetype's length (planned under
+            // the same borrow) and only this thread visits them now.
+            unsafe {
+                for_rows_at::<Q>(state, first..last, &mut |row, item| {
+                    f(task.base + row - task.start, item)
+                })
+            };
             pos = task.base + (last - task.start);
             t += 1;
         }

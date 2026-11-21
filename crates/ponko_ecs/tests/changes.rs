@@ -1765,6 +1765,7 @@ fn change_filters_that_skip_still_blocks_find_exactly_what_changed() {
     let mut model: HashMap<Entity, (Tick, Tick)> = HashMap::new();
     let mut live: Vec<Entity> = Vec::new();
     let mut readers: Vec<Tick> = vec![Tick::default()];
+    let mut peak = 0;
     let check = |w: &mut World, model: &HashMap<Entity, (Tick, Tick)>, readers: &[Tick], step: usize| {
         for &since in readers {
             let want_changed = sorted(model.iter().filter(|(_, t)| t.1 > since).map(|(&e, _)| e).collect());
@@ -1799,15 +1800,23 @@ fn change_filters_that_skip_still_blocks_find_exactly_what_changed() {
         }
     };
 
-    let steps = if cfg!(miri) { 60 } else { 400 };
+    // Under Miri a smaller model: fewer steps and operations, and spawn
+    // bursts of a bit over two blocks instead of three, so the world still
+    // spans several blocks (see the end) but every check stays small. The
+    // full size took over an hour there.
+    let (steps, max_ops, burst) = if cfg!(miri) {
+        (50, 12, 2 * 64 + 5)
+    } else {
+        (400, 40, 200)
+    };
     for step in 0..steps {
         let now = w.change_tick();
-        let ops = 1 + rng.below(40);
+        let ops = 1 + rng.below(max_ops);
         for _ in 0..ops {
             match rng.below(12) {
                 // Spawn, now and then a burst that grows the archetypes.
                 0 | 1 => {
-                    let n = if rng.below(10) == 0 { 200 } else { 1 };
+                    let n = if rng.below(10) == 0 { burst } else { 1 };
                     for _ in 0..n {
                         let e = if rng.below(2) == 0 {
                             w.spawn((Health(0),))
@@ -1876,6 +1885,7 @@ fn change_filters_that_skip_still_blocks_find_exactly_what_changed() {
                 _ => {}
             }
         }
+        peak = peak.max(live.len());
         if step % 7 == 0 {
             check(&mut w, &model, &readers, step);
         }
@@ -1887,7 +1897,10 @@ fn change_filters_that_skip_still_blocks_find_exactly_what_changed() {
             }
         }
     }
-    check(&mut w, &model, &readers, 400);
+    check(&mut w, &model, &readers, steps);
+    // The model has to have spanned several blocks of rows for the skipped
+    // blocks to have been tested.
+    assert!(peak > 2 * 64, "the model peaked at {peak} entities");
 }
 
 #[test]

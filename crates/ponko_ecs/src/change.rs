@@ -1234,6 +1234,43 @@ mod tests {
         assert_eq!(changed(&mut world, before), [1000]);
     }
 
+    #[derive(Component)]
+    struct Mark;
+
+    #[test]
+    fn a_move_between_archetypes_keeps_the_summary_of_a_still_block_exact() {
+        let mut world = World::new();
+        world.track_changes::<Pos>();
+        // Two blocks in each archetype, all stamped at `spawned`.
+        let plain: Vec<_> = (0..2 * CHANGE_BLOCK as u32).map(|i| world.spawn((Pos(i),))).collect();
+        let marked: Vec<_> = (0..2 * CHANGE_BLOCK as u32 - 1)
+            .map(|i| world.spawn((Pos(1000 + i), Mark)))
+            .collect();
+        let spawned = world.changes.stamp();
+        let seen = world.advance_change_tick();
+        world.advance_change_tick();
+        // A still entity moves into the last row of the marked archetype's
+        // block 1: that block, and the block it left, stay as old as their rows.
+        world.insert(plain[5], Mark);
+        assert_eq!(block_summary(&world, marked[0], 1), spawned, "the block it moved into");
+        assert_eq!(block_summary(&world, plain[0], 0), spawned, "the block it left");
+        assert_eq!(changed(&mut world, seen), []);
+        // And back, by a removal: a new block of the plain archetype.
+        world.remove::<Mark>(plain[5]);
+        assert_eq!(world.entities.get(plain[5]).unwrap().row as usize, 2 * CHANGE_BLOCK - 1);
+        assert_eq!(block_summary(&world, plain[0], 1), spawned);
+        assert_eq!(changed(&mut world, seen), []);
+        // A changed entity takes its stamp into the block it moves to.
+        let before = world.advance_change_tick();
+        world.get_mut::<Pos>(plain[7]).unwrap().0 = 7000;
+        let written = world.changes.stamp();
+        world.insert(plain[7], Mark);
+        let row = world.entities.get(plain[7]).unwrap().row as usize;
+        assert_eq!(block_summary(&world, plain[7], row / CHANGE_BLOCK), written);
+        assert_eq!(changed(&mut world, before), [7000]);
+        assert_eq!(changed(&mut world, seen), [7000]);
+    }
+
     #[test]
     fn a_tick_the_world_has_not_reached_reports_everything() {
         // Such a tick can only be another world's (a reader that outlived
