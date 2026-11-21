@@ -81,6 +81,8 @@ pub struct Perf {
     pub(crate) state: crate::perf_report::PerfState,
     /// The renderer's per-pass GPU times, copied after every frame.
     pub(crate) gpu_passes: Vec<crate::perf::GpuPass>,
+    /// The passes the renderer couldn't time, copied after every frame.
+    pub(crate) gpu_passes_not_timed: Vec<&'static str>,
     /// The last [`RENDER_HISTORY`] drawn frames, oldest first, for the
     /// render inspector. Filled in place: nothing is allocated per frame.
     pub(crate) render_history: std::collections::VecDeque<RenderFrame>,
@@ -191,6 +193,7 @@ impl Perf {
             profiler: crate::profiler::Profiler::new(),
             state: crate::perf_report::PerfState::new(),
             gpu_passes: Vec::new(),
+            gpu_passes_not_timed: Vec::new(),
             render_history: std::collections::VecDeque::new(),
             display_wait_ms: 0.0,
             gpu_memory: None,
@@ -314,6 +317,27 @@ impl Perf {
     /// ```
     pub fn gpu_timing(&self) -> GpuTiming {
         self.gpu_timing
+    }
+
+    /// The passes of the latest timed frame that ran but couldn't be timed:
+    /// their timestamps didn't come back usable (the GPU skipped a pass with
+    /// nothing to do, or the backend writes none for that kind of pass).
+    /// They are left out of [`gpu_passes`](Self::gpu_passes) rather than
+    /// shown as 0 ms; the overlay, [`report`](Self::report) and traces list
+    /// them as not timed. Empty without timestamp queries (then nothing is
+    /// timed at all) and when every pass was timed.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// fn untimed(ctx: &mut Ctx) {
+    ///     for name in ctx.perf.gpu_passes_not_timed() {
+    ///         println!("{name}: not timed");
+    ///     }
+    /// }
+    /// # Game::new("t", 1, 1).system(untimed).run_headless(1, |_| {});
+    /// ```
+    pub fn gpu_passes_not_timed(&self) -> &[&'static str] {
+        &self.gpu_passes_not_timed
     }
 
     /// How long the last frame waited for the display (ms): idle time, not
@@ -514,6 +538,9 @@ impl Perf {
             report.gpu_memory.clone_from(&self.gpu_memory);
         }
         crate::perf_report::analyze(&mut report);
+        if report.render.is_some() {
+            crate::perf_report::warn_not_timed(&mut report, &self.gpu_passes_not_timed);
+        }
         report
     }
 
@@ -560,6 +587,7 @@ impl Perf {
             sample,
             &self.timings,
             &self.gpu_passes,
+            &self.gpu_passes_not_timed,
             gpu_frame,
             self.last_render_stats,
         );
