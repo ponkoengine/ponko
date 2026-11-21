@@ -1939,6 +1939,14 @@ static void crowds() {
         auto crowd = ctx.create_crowd(animation, {{mesh, 0, far, true, true, 4}}, people);
         CHECK(ctx.crowd_len(crowd) == std::optional<std::size_t>(4));
         throws([&] { ctx.create_crowd(animation, {{mesh, 0, far, true, true, 5}}, people); });
+        // Two levels crossfading over the near one's last 5 m; a fade wider than the band, or one fade
+        // short, is refused.
+        auto faded = ctx.create_crowd(animation, {{mesh, 0, 30, true, true, 4}, {mesh, 30, far, true, true, 1}},
+                                      {5, 0}, people);
+        CHECK(ctx.crowd_len(faded) == std::optional<std::size_t>(4));
+        ctx.free_crowd(faded);
+        throws_invalid([&] { ctx.create_crowd(animation, {{mesh, 0, 30, true, true, 4}}, {31}, people); }, "fade");
+        throws([&] { ctx.create_crowd(animation, {{mesh, 0, 30, true, true, 4}}, {}, people); });
         people[3].clip = 2;
         throws([&] { ctx.update_crowd(crowd, people); });
         CHECK(ctx.crowd_len(crowd) == std::optional<std::size_t>(4));
@@ -4807,6 +4815,9 @@ static void native_parity_round5() {
         ctx.save_touch_layout();
         ctx.restore_touch_layout();
         CHECK(ctx.touch_layout_control("move").size == 1.25f);
+        // The engine's own arrange screen: edit mode at once.
+        ctx.arrange_touch_controls();
+        CHECK(ctx.editing_touch_controls());
     });
     // A trackpad pinch is the same gesture as two fingers, from no touch device.
     ponko::game("c++ trackpad", 960, 540).run_headless(0, [](ponko::ctx& ctx) {
@@ -4867,6 +4878,39 @@ static void native_parity_round5() {
         CHECK(spread > 0.001f);
         spectrum.tile = 0;
         throws_invalid([&] { ctx.spawn_water(ponko::water_desc::sea(0, {12, 4}, 2).with_spectrum(spectrum)); }, "tile");
+    });
+
+    // The navmesh crowd's counts: one step a tick, every agent it moved.
+    ponko::nav_crowd_stats crowd_stats{};
+    ponko::game("c++ nav crowd", 1, 1).fixed_hz(60).navmesh3d()
+        .sim_system([&](ponko::ctx& ctx) { crowd_stats = ctx.navmesh_crowd_stats(); })
+        .run_headless(10, [](ponko::ctx& ctx) {
+            throws_kind([&] { ctx.navmesh_crowd_stats(); }, PONKO_ERROR_NOT_FOUND);
+            ponko::nav_sources sources;
+            sources.add_mesh(ponko::mesh_data::plane(20), ponko::transform3d_at({0, 0, 0}));
+            ctx.bake_navmesh(sources);
+            for (int i = 0; i < 3; ++i) {
+                auto e = ctx.world().spawn(ponko::transform3d_at({-5, 0, float(i - 1)}));
+                ctx.set_nav_agent(e, 2, 0.25f);
+                ctx.set_nav_avoidance(e);
+                ctx.set_nav_destination(e, ponko::vec3{5, 0, 0});
+            }
+        });
+    CHECK(crowd_stats.steps == 10 && crowd_stats.agent_steps == 30 && crowd_stats.work > 0);
+
+    // This thread's allocations, and a PONKO_PROFILE_SCOPE counting the ones made inside it.
+    ponko::game("c++ allocs", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
+        ctx.set_profiling(true);
+        ponko::alloc_counts before{}, after{};
+        {
+            PONKO_PROFILE_SCOPE("c++/alloc");
+            before = ponko::thread_alloc_counts();
+            auto* boxed = new int(7); // counted: PONKO_COUNT_CPP_ALLOCATIONS is on in this program
+            after = ponko::thread_alloc_counts();
+            delete boxed;
+        }
+        CHECK(after.count - before.count == 1 && after.bytes - before.bytes == sizeof(int));
+        ctx.set_profiling(false);
     });
 
     // A sliced loader: its state is built in pieces and handed over once.

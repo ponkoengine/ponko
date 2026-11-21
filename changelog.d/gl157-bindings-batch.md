@@ -27,3 +27,15 @@
   game's own) and `ponko_ctx_take_asset_group_sliced` hands the finished
   state over; C++ `asset_group::sliced` and `ctx::take_asset_group_sliced<T>`.
   The design is in the guide's "Sliced loaders from C".
+- The ready-made touch arrange screen from C and C++:
+  `ponko_ctx_arrange_touch_controls` (C++ `ctx::arrange_touch_controls`).
+- Crowd levels that crossfade, from C and C++: `PonkoCrowdDesc` (with
+  `fades`, one per level) and `ponko_ctx_create_crowd_ex`;
+  `PonkoCrowdLevel` keeps its layout. C++: `ctx::create_crowd` with fades.
+- The navmesh crowd's counts from C and C++: `PonkoNavCrowdStats` and
+  `ponko_ctx_navmesh_crowd_stats` (C++ `ctx::navmesh_crowd_stats`).
+- Per-thread allocation counts from C and C++: `ponko_thread_alloc_counts`
+  (C++ `ponko::thread_alloc_counts`), and scopes timed with
+  `ponko_profile_begin`/`_end` (`PONKO_PROFILE_SCOPE`) count the allocations
+  made on their thread, as Rust's `profile_scope!` does. Rust:
+  `ProfileScope::end_counting` ends a `begin`/`end` scope with its count.

@@ -5302,3 +5302,42 @@ struct wall_count {
     // ANCHOR_END: sliced_group_cpp
     (void)walls;
 }
+[[maybe_unused]] static void arrange_touch_guide(ponko::ctx& ctx) {
+    auto tree = ctx.ui_retained();
+    // ANCHOR: arrange_touch_controls
+    auto arrange = tree.find("settings.arrange");
+    while (auto event = tree.next_event()) {
+        if (arrange && event->kind == ponko::ui::event_kind::clicked && event->node == *arrange) {
+            // The controls show (on a desktop too), with a small panel beside them.
+            ctx.arrange_touch_controls();
+        }
+    }
+    // ANCHOR_END: arrange_touch_controls
+}
+[[maybe_unused]] static void crowd_fade_guide(ponko::ctx& ctx, const ponko::crowd_animation& bake, ponko::mesh near,
+                                              ponko::mesh far, const std::vector<ponko::crowd_instance>& people) {
+    // ANCHOR: crowd_fade
+    const float forever = std::numeric_limits<float>::infinity();
+    ponko::crowd crowd = ctx.create_crowd(bake,
+        {{near, 0, 40, true, true, 4}, {far, 40, forever, true, true, 1}},
+        {4, 0}, // the near level crossfades into the far one from 36 m
+        people);
+    // ANCHOR_END: crowd_fade
+    (void)crowd;
+}
+[[maybe_unused]] static void nav_crowd_stats_guide(ponko::ctx& ctx) {
+    // ANCHOR: nav_crowd_stats
+    ponko::nav_crowd_stats stats = ctx.navmesh_crowd_stats();
+    double work_per_agent = double(stats.work) / double(std::max<std::uint64_t>(stats.agent_steps, 1));
+    // ANCHOR_END: nav_crowd_stats
+    (void)work_per_agent;
+}
+[[maybe_unused]] static void thread_allocs_guide() {
+    // ANCHOR: thread_allocs
+    ponko::alloc_counts before = ponko::thread_alloc_counts();
+    std::vector<int> scratch(64); // what is measured
+    ponko::alloc_counts after = ponko::thread_alloc_counts();
+    std::uint64_t made_here = after.count - before.count; // on this thread only
+    // ANCHOR_END: thread_allocs
+    (void)made_here;
+}

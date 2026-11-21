@@ -255,6 +255,9 @@ controls" button. It is built with the [retained UI](ui.md) over the edit
 mode and the player's `TouchLayout` above, and works with a finger and
 with the mouse:
 
+<div class="lang-pair">
+<div>
+
 ```rust
 # use ponko::prelude::*;
 # fn settings_page(ctx: &mut Ctx) {
@@ -267,6 +270,16 @@ while let Some(event) = ctx.ui.next_event() {
 }
 # }
 ```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:arrange_touch_controls}}
+```
+
+</div>
+</div>
 
 - **Move** a control by dragging it; it stays where it is let go,
   anchored to the nearest corner of the view.
@@ -364,3 +377,6 @@ control's place and size as a `PonkoTouchAdjust`; `NULL` forgets it),
 `_restore_touch_layout`, with the same names in C++. A trackpad's gestures
 are fed with `ponko_ctx_feed_trackpad` and `ponko_input_scenario_trackpad`
 (C++ `ctx.feed_trackpad` and the scenario's `trackpad`).
+The ready-made arrange screen is `ponko_ctx_arrange_touch_controls` (C++
+`ctx.arrange_touch_controls()`); its nodes are found by their
+`touch.arrange.*` names with `ponko_ctx_ui_find` like any other.

@@ -363,6 +363,11 @@ using crowd_level = PonkoCrowdLevel;
 using crowd_instance = PonkoCrowdInstance;
 /// Settings of a crowd (Rust `CrowdOptions`).
 using crowd_options = PonkoCrowdOptions;
+/// What a navmesh's crowd has done since it was baked (Rust `NavCrowdStats`), from ctx::navmesh_crowd_stats:
+/// crowd steps, agents moved and the backend's work, all only growing.
+using nav_crowd_stats = PonkoNavCrowdStats;
+/// Heap allocations counted while profiling was on (Rust `AllocCounts`), from thread_alloc_counts.
+using alloc_counts = PonkoAllocCounts;
 /// A clip to bake for crowds (Rust `CrowdClip`), from crowd_clip_of.
 using crowd_clip = PonkoCrowdClip;
 /// A GPU array of four-float elements (Rust `GpuBuffer`) for compute passes, from ctx::create_gpu_buffer. A
@@ -1705,6 +1710,11 @@ public:
         return perf_report(text.str());
     }
 };
+
+/// The allocations counted so far on the calling thread while profiling was on (Rust
+/// `perf::thread_alloc_counts`): read it twice on one thread and subtract to count what the code between
+/// allocated there. A PONKO_PROFILE_SCOPE counts its own the same way.
+inline alloc_counts thread_alloc_counts() noexcept { return ponko_thread_alloc_counts(); }
 
 /// Times the scope it lives in (see PONKO_PROFILE_SCOPE).
 class profile_scope_guard {
@@ -7191,6 +7201,10 @@ public:
     /// `Input::edit_touch_controls`): while on, they show, press nothing, and a drag moves one into
     /// the player's layout. Save it when the player is done (save_touch_layout).
     void edit_touch_controls(bool on) { detail::check(ponko_ctx_edit_touch_controls(raw_, on)); }
+    /// Opens the engine's ready-made screen where the player arranges the on-screen controls (Rust
+    /// `Input::arrange_touch_controls`): edit mode at once, the screen (`touch.arrange.*` UI nodes) at the next
+    /// UI pass; its Save writes the layout to storage, its Cancel puts the old one back.
+    void arrange_touch_controls() { detail::check(ponko_ctx_arrange_touch_controls(raw_)); }
     /// Whether the player is arranging the on-screen controls.
     bool editing_touch_controls() const { bool b = false; detail::check(ponko_ctx_editing_touch_controls(raw_, &b)); return b; }
     /// Every control's size in the player's layout, times the game's.
@@ -7826,6 +7840,24 @@ public:
             people.size(), options, &c));
         return c;
     }
+    /// The same with crossfades between the levels (Rust `CrowdLevel::with_fade`): `fades[k]` is how far
+    /// before level `k`'s far distance it dithers into the next, 0 to switch at once; one per level. Throws
+    /// ponko::error for a fade that isn't finite or is wider than its level's band, and as create_crowd does.
+    crowd create_crowd(const crowd_animation& animation, const std::vector<crowd_level>& levels,
+        const std::vector<float>& fades, const std::vector<crowd_instance>& people, crowd_options options = {true}) {
+        if (fades.size() != levels.size()) throw std::invalid_argument("create_crowd: give one fade per level");
+        PonkoCrowdDesc d = ponko_crowd_desc_defaults();
+        d.animation = animation.raw();
+        d.levels = levels.data();
+        d.level_count = levels.size();
+        d.fades = fades.data();
+        d.instances = people.data();
+        d.count = people.size();
+        d.cast_shadows = options.cast_shadows;
+        crowd c{};
+        detail::check(ponko_ctx_create_crowd_ex(raw_, &d, &c));
+        return c;
+    }
     /// Replaces a crowd's characters (Rust `Graphics::update_crowd`), as often as every frame. Throws
     /// ponko::error for a freed crowd or a rejected character; the crowd then keeps its characters.
     void update_crowd(crowd c, const std::vector<crowd_instance>& people) {
@@ -8316,6 +8348,15 @@ public:
     }
     /// Takes `e`'s agent and obstacle off (whichever it has).
     void remove_nav(entity e) { detail::check(ponko_ctx_remove_nav(raw_, e)); }
+    /// What the navmesh's crowd has done since it was baked (Rust `NavMesh::crowd_stats`), for tests that
+    /// count the crowd's cost instead of timing it. Throws ponko::error with no navmesh.
+    nav_crowd_stats navmesh_crowd_stats() const {
+        nav_crowd_stats s{};
+        s.struct_size = sizeof s;
+        s.version = PONKO_NAV_CROWD_STATS_VERSION;
+        detail::check(ponko_ctx_navmesh_crowd_stats(raw_, &s));
+        return s;
+    }
     /// Gives `e` (which needs a 3D transform) a new particle emitter, replacing any old one.
     void set_particle_emitter3d(entity e, const particle_settings& settings) {
         PonkoParticleSettings3DEx c = settings.raw_ex();

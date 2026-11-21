@@ -1808,6 +1808,25 @@ static void crowd_setup(PonkoCtx* ctx, void* user) {
     CHECK(ponko_ctx_create_crowd(ctx, animation, &level, 1, people, 3, options, &crowd) == PONKO_OK);
     size_t count = 0;
     CHECK(ponko_ctx_crowd_len(ctx, crowd, &count) == PONKO_OK && count == 3);
+    /* Two levels that crossfade over the near one's last 5 m (PonkoCrowdDesc); a fade wider than its
+       band is refused. */
+    {
+        PonkoCrowdLevel near_far[2] = {{mesh, 0, 30, true, true, 4}, {mesh, 30, INFINITY, true, true, 1}};
+        float fades[2] = {5, 0};
+        PonkoCrowdDesc desc = ponko_crowd_desc_defaults();
+        CHECK(desc.struct_size == sizeof desc && desc.cast_shadows && desc.fades == NULL);
+        desc.animation = animation;
+        desc.levels = near_far; desc.level_count = 2; desc.fades = fades;
+        desc.instances = people; desc.count = 3;
+        PonkoCrowd faded;
+        CHECK(ponko_ctx_create_crowd_ex(ctx, &desc, &faded) == PONKO_OK);
+        CHECK(ponko_ctx_crowd_len(ctx, faded, &count) == PONKO_OK && count == 3);
+        CHECK(ponko_ctx_free_crowd(ctx, faded) == PONKO_OK);
+        fades[0] = 31;
+        CHECK(ponko_ctx_create_crowd_ex(ctx, &desc, &faded) == PONKO_INVALID_ARGUMENT);
+        desc.version = 0;
+        CHECK(ponko_ctx_create_crowd_ex(ctx, &desc, &faded) == PONKO_INVALID_ARGUMENT);
+    }
     /* A level that isn't skinned or moves no corner, a clip the bake hasn't. */
     PonkoCrowdLevel bad = {plain, 0, INFINITY, true, true, 4};
     PonkoCrowd other;
@@ -3084,6 +3103,9 @@ static void touch_layout_setup(PonkoCtx* ctx, void* user) {
     CHECK(ponko_ctx_touch_layout_control(ctx, "move", &adjust) == PONKO_OK && adjust.size == 1.25f);
     CHECK(ponko_ctx_save_touch_layout(ctx) == PONKO_OK);
     CHECK(ponko_ctx_restore_touch_layout(ctx) == PONKO_OK);
+    /* The engine's own arrange screen: edit mode at once. */
+    CHECK(ponko_ctx_arrange_touch_controls(ctx) == PONKO_OK);
+    CHECK(ponko_ctx_editing_touch_controls(ctx, &editing) == PONKO_OK && editing);
 }
 
 /* A trackpad pinch: the same gesture as two fingers, and no touch device. */
@@ -3210,6 +3232,52 @@ static void sliced_setup(PonkoCtx* ctx, void* user) {
     CHECK(ponko_ctx_take_asset_group_sliced(ctx, id, "walls.txt", &taken) == PONKO_NOT_FOUND);
 }
 
+/* The navmesh crowd's counts, read after the navigation step each tick. */
+static void crowd_count_setup(PonkoCtx* ctx, void* user) {
+    (void)user;
+    PonkoNavCrowdStats stats = {.struct_size = sizeof stats, .version = PONKO_NAV_CROWD_STATS_VERSION};
+    CHECK(ponko_ctx_navmesh_crowd_stats(ctx, &stats) == PONKO_NOT_FOUND); /* nothing baked yet */
+    PonkoNavSources* sources = ponko_nav_sources_new();
+    PonkoMeshData* floor = ponko_mesh_data_plane(20);
+    CHECK(ponko_nav_sources_add_mesh(sources, floor, ponko_transform3d_at((PonkoVec3){0, 0, 0})) == PONKO_OK);
+    ponko_mesh_data_free(floor);
+    CHECK(ponko_ctx_bake_navmesh(ctx, sources, NULL) == PONKO_OK);
+    ponko_nav_sources_free(sources);
+    PonkoWorld* w = ponko_ctx_world(ctx);
+    uint32_t transform;
+    CHECK(ponko_transform3d_component(w, &transform) == PONKO_OK);
+    for (int i = 0; i < 3; ++i) {
+        PonkoTransform3D at = ponko_transform3d_at((PonkoVec3){-5, 0, (float)i - 1});
+        PonkoValue part = {transform, &at, sizeof at};
+        uint64_t e;
+        CHECK(ponko_spawn(w, &part, 1, &e) == PONKO_OK);
+        CHECK(ponko_ctx_set_nav_agent(ctx, e, 2, 0.25f, 8) == PONKO_OK);
+        CHECK(ponko_ctx_set_nav_avoidance(ctx, e, true, 1, 3) == PONKO_OK);
+        PonkoVec3 to = {5, 0, 0};
+        CHECK(ponko_ctx_set_nav_destination(ctx, e, &to) == PONKO_OK);
+    }
+}
+static void crowd_count_read(PonkoCtx* ctx, void* user) {
+    PonkoNavCrowdStats* stats = user;
+    CHECK(ponko_ctx_navmesh_crowd_stats(ctx, stats) == PONKO_OK);
+}
+
+/* Allocations on this thread, and a scope that counts the ones made inside it. */
+static void alloc_count_setup(PonkoCtx* ctx, void* user) {
+    (void)user;
+    CHECK(ponko_ctx_set_profiling(ctx, true) == PONKO_OK);
+    const PonkoProfileScope* scope = ponko_profile_scope("c/alloc");
+    uint64_t token = ponko_profile_begin(scope);
+    CHECK(token != 0); /* profiling is on */
+    PonkoAllocCounts before = ponko_thread_alloc_counts();
+    ponko_note_allocation(64);
+    ponko_note_allocation(32);
+    PonkoAllocCounts after = ponko_thread_alloc_counts();
+    ponko_profile_end(scope, token);
+    CHECK(after.count - before.count == 2 && after.bytes - before.bytes == 96);
+    CHECK(ponko_ctx_set_profiling(ctx, false) == PONKO_OK);
+}
+
 static void native_parity_round5(void) {
     /* Crash reports: on, with the game's version and a hook. */
     CrashSeen seen = {0};
@@ -3256,6 +3324,18 @@ static void native_parity_round5(void) {
 
     game = ponko_game_new("sea", 1, 1);
     CHECK(ponko_game_run_headless(game, 0, spectrum_setup, NULL, &w) == PONKO_OK);
+    CHECK(ponko_world_free(w) == PONKO_OK);
+
+    PonkoNavCrowdStats crowd_stats = {.struct_size = sizeof crowd_stats, .version = PONKO_NAV_CROWD_STATS_VERSION};
+    game = ponko_game_new("nav crowd", 1, 1);
+    CHECK(ponko_game_fixed_hz(game, 60) == PONKO_OK && ponko_game_navmesh3d(game) == PONKO_OK);
+    CHECK(ponko_game_sim_system(game, "read", 1, crowd_count_read, &crowd_stats) == PONKO_OK);
+    CHECK(ponko_game_run_headless(game, 10, crowd_count_setup, NULL, &w) == PONKO_OK);
+    CHECK(ponko_world_free(w) == PONKO_OK);
+    CHECK(crowd_stats.steps == 10 && crowd_stats.agent_steps == 30 && crowd_stats.work > 0);
+
+    game = ponko_game_new("allocs", 1, 1);
+    CHECK(ponko_game_run_headless(game, 0, alloc_count_setup, NULL, &w) == PONKO_OK);
     CHECK(ponko_world_free(w) == PONKO_OK);
 
     SliceCounts counts = {0};
