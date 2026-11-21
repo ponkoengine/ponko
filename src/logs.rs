@@ -75,6 +75,32 @@ pub(crate) fn get(since: Option<u64>, max: usize) -> Result<Value, String> {
     Ok(json!({ "lines": lines, "next": next, "missed": missed }))
 }
 
+/// The last `max` lines kept, oldest first, for a crash report: `None`
+/// when output isn't captured. Never waits long for the lock (a copy
+/// thread holds it only to add a line).
+pub(crate) fn last_lines(max: usize) -> Option<Vec<String>> {
+    if !capturing() {
+        return None;
+    }
+    // Give the copy threads a moment to pass on what was just printed.
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+    let _ = std::io::Write::flush(&mut std::io::stderr());
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    for _ in 0..50 {
+        match RING.try_lock() {
+            Ok(ring) => return Some(newest(&ring, max)),
+            Err(std::sync::TryLockError::Poisoned(ring)) => return Some(newest(&ring.into_inner(), max)),
+            Err(std::sync::TryLockError::WouldBlock) => std::thread::sleep(std::time::Duration::from_millis(1)),
+        }
+    }
+    None
+}
+
+fn newest(ring: &Ring, max: usize) -> Vec<String> {
+    let skip = ring.lines.len().saturating_sub(max);
+    ring.lines.iter().skip(skip).cloned().collect()
+}
+
 #[cfg(any(unix, windows))]
 pub(crate) use capture::{Capture, capturing};
 

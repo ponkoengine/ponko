@@ -12,11 +12,13 @@
     canvas#ponko { display: block; width: 100vw !important; height: 100vh !important; outline: none; }
     #status { position: fixed; inset: 0; display: grid; place-items: center; pointer-events: none; }
     #status.error { color: #ff8a80; padding: 2em; text-align: center; }
+    #crash-report:not([hidden]) { position: fixed; left: 0; right: 0; bottom: 2em; text-align: center; color: #9ecbff; }
   </style>
 </head>
 <body>
   <canvas id="ponko" tabindex="0"></canvas>
   <div id="status" role="status">Loading…</div>
+  <a id="crash-report" hidden>Save the crash report</a>
   <script type="module">
     import init, * as game from "./game.js";
     const status = document.getElementById("status");
@@ -90,6 +92,21 @@
       started(e);
       console.error(e);
     });
+  </script>
+  <script id="crash-report-script">
+    // A crash report (`ponko::crash`): offer it as a file the player can
+    // send. It comes as an event, and stays in `window.ponkoCrashReport`.
+    (() => {
+      function offer(report) {
+        const link = document.getElementById("crash-report");
+        if (!link || !report || typeof report.text !== "string") return;
+        link.href = URL.createObjectURL(new Blob([report.text], { type: "text/plain" }));
+        link.download = String(report.name ?? "crash-report.txt").split("/").pop();
+        link.hidden = false;
+      }
+      window.addEventListener("ponkocrashreport", (e) => offer(e.detail));
+      if (window.ponkoCrashReport) offer(window.ponkoCrashReport);
+    })();
   </script>
 </body>
 </html>
