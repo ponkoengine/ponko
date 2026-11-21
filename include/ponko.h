@@ -8077,6 +8077,10 @@ enum PonkoStatus ponko_ctx_ui_top_screen(struct PonkoCtx *ctx, uint64_t target, 
 
 enum PonkoStatus ponko_ctx_ui_focus(struct PonkoCtx *ctx, uint64_t target, uint64_t *out_id);
 
+enum PonkoStatus ponko_ctx_ui_layout_passes(struct PonkoCtx *ctx,
+                                            uint64_t target,
+                                            uint64_t *out_passes);
+
 enum PonkoStatus ponko_ctx_ui_set_scale(struct PonkoCtx *ctx, uint64_t target, float scale);
 
 enum PonkoStatus ponko_ctx_ui_rect(struct PonkoCtx *ctx,

@@ -3396,6 +3396,24 @@ static void click_node(ponko::ctx& ctx, const char* name) {
     tree.frame(window, input);
 }
 
+// A HUD written every frame with the text it already shows costs no layout.
+static void layout_passes_guide(ponko::ctx& ctx) {
+    namespace ui = ponko::ui;
+    auto tree = ctx.ui_retained();
+    // ANCHOR: ui_layout_passes
+    auto hud = tree.add_panel(ui::none, ui::fill().padding(16));
+    auto coins = tree.add_label(hud, "Coins: 0", ui::row(30));
+    tree.show_hud(hud);
+    tree.frame({800, 600});
+    const auto laid_out = tree.layout_passes();
+    for (int i = 0; i < 60; ++i) {
+        tree.set_text(coins, "Coins: 0"); // what the label already shows
+        tree.frame({800, 600});
+    }
+    if (tree.layout_passes() != laid_out) std::abort();
+    // ANCHOR_END: ui_layout_passes
+}
+
 static void shop_guide(ponko::ctx& ctx) {
     build_shop(ctx);
     auto tree = ctx.ui_retained();
@@ -4588,6 +4606,7 @@ int main() {
     steering_stays_within_budget();
     navigation_guide();
     ponko::game("shop guide", 900, 700).run_headless(0, shop_guide);
+    ponko::game("layout passes guide", 800, 600).run_headless(0, layout_passes_guide);
     ponko::game("widget guide", 900, 700).run_headless(0, widget_gallery);
     ponko::game("ui animation guide", 900, 700).run_headless(0, ui_animation_guide);
     ponko::game("panel guide", 960, 640).run_headless(0, panel_guide);
