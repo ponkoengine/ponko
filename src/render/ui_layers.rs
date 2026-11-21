@@ -43,7 +43,7 @@ impl Renderer {
 
     /// How many layer textures were made so far (a texture made again
     /// in another size counts again).
-    #[cfg(test)]
+    #[cfg(all(test, feature = "3d"))]
     pub(crate) fn ui_layer_textures_made(&self) -> u64 {
         self.ui_layers_made
     }

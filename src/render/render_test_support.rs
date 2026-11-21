@@ -1171,7 +1171,7 @@ mod reference_workflow {
     }
 
     /// The files that may open a GPU device themselves, and why.
-    const OWN_DEVICE: [(&str, &str); 9] = [
+    const OWN_DEVICE: [(&str, &str); 10] = [
         ("src/render/gpu.rs", "the engine's own device"),
         ("src/render/render_test_support.rs", "the shared helpers"),
         (
@@ -1181,6 +1181,10 @@ mod reference_workflow {
         (
             "src/render/browser_gpu.rs",
             "the engine's own device in a browser: WebGPU first, WebGL2 as the fallback",
+        ),
+        (
+            "src/three/bake/gpu.rs",
+            "the GPU light baker's own device: a game calls it without a window, and no GPU is its `Unsupported` error",
         ),
         ("src/render/lights_bench.rs", "an ignored benchmark, run by hand"),
         ("src/render/gpu3d/record_bench.rs", "benchmark support, not a test"),

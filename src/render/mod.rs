@@ -610,10 +610,10 @@ mod ray_query_prototype_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod ray_tracing_probe_render_test;
 
-#[cfg(all(feature = "3d", feature = "window", not(target_arch = "wasm32")))]
-pub use crate::three::bake_lighting_gpu;
 #[cfg(feature = "3d")]
 pub use crate::three::Upscaler;
+#[cfg(all(feature = "3d", feature = "window", not(target_arch = "wasm32")))]
+pub use crate::three::bake_lighting_gpu;
 #[cfg(feature = "3d")]
 pub use crate::three::{
     AmbientOcclusion, AntiAliasing, BatchCulling, Blend, Compute, ComputePass, Crowd, CrowdAnimation, CrowdClip,

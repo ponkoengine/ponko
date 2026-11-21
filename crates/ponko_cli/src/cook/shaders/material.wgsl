@@ -233,35 +233,50 @@ fn gi_light(world: vec3<f32>, n: vec3<f32>, view: vec3<f32>) -> vec4<f32> {
 // ahead of time, from a lightmap for models with a Lightmapped component and
 // from a probe volume for the others.
 //
-// It is the material's third texture array (custom_array2) when the
+// Its header is the material's third texture array (custom_array2) when the
 // material sets none there. Layer 0: texel 0 is (-1, pages, 1 when
 // directional, intensity) (no array of images holds a negative value);
 // texels 1 and 2 the probe grid's lowest probe in two parts (and its
 // spacing in 1.w); texel 3 its probes along x, y, z and the row its probes
-// start at (x 0: no probes). From texel 8, two texels per lightmap entry:
-// (x, y, width, height) of its rectangle in texels, then (page, ...). Each
-// probe is three texels: irradiance over pi toward normal n is
-// c + cx * n.x + cy * n.y + cz * n.z, laid out as (c.rgb, cx.r),
-// (cx.gb, cy.rg), (cy.b, cz.rgb). Layers 1 to pages hold the pages' light
-// (irradiance over pi), the next ones (when directional) the mean direction
-// the light comes from, its length how much it comes from that way.
+// start at (x 0: no probes); texel 4 the pages' size and layers. From
+// texel 8, two texels per lightmap entry: (x, y, width, height) of its
+// rectangle in texels, then (page, ...). Each probe is three texels:
+// irradiance over pi toward normal n is c + cx * n.x + cy * n.y + cz * n.z,
+// laid out as (c.rgb, cx.r), (cx.gb, cy.rg), (cy.b, cz.rgb).
+//
+// The pages are the second texture array (custom_array1) when the material
+// sets none there (else its lightmapped models take the probes' light):
+// layers 0 to pages - 1 hold the pages' light (irradiance over pi), the
+// next ones (when directional) the mean direction the light comes from as
+// d * 0.5 + 0.5, its length how much it comes from that way. Half floats,
+// BC6H blocks or the shared-exponent format: the sampler decodes them.
 
 // The entry plus one of the model this pixel is of (0: none), and its
 // surface's own normal (before normal maps): set by the entry points.
 var<private> baked_entry: f32 = 0.0;
 var<private> baked_face: vec3<f32> = vec3<f32>(0.0);
 
-// Texel `texel` (in texels, from the top left) of layer `layer`, filtered.
-fn baked_texel(layer: i32, texel: vec2<f32>) -> vec4<f32> {
-    let size = vec2<f32>(textureDimensions(custom_array2));
-    return textureSampleLevel(custom_array2, sky_sampler, texel / size, layer, 0.0);
+// Texel `texel` (in texels, from the top left) of page layer `layer`,
+// filtered.
+fn baked_page(layer: i32, texel: vec2<f32>) -> vec3<f32> {
+    let size = vec2<f32>(textureDimensions(custom_array1));
+    return textureSampleLevel(custom_array1, sky_sampler, texel / size, layer, 0.0).rgb;
 }
 
-// Texel `i` of layer 0, counted row by row (read at its center: exact).
+// Texel `i` of the header, counted row by row (read at its center: exact).
 fn baked_at(i: f32) -> vec4<f32> {
-    let w = f32(textureDimensions(custom_array2).x);
-    let row = floor(i / w);
-    return baked_texel(0, vec2<f32>(i - row * w, row) + 0.5);
+    let size = vec2<f32>(textureDimensions(custom_array2));
+    let row = floor(i / size.x);
+    let texel = vec2<f32>(i - row * size.x, row) + 0.5;
+    return textureSampleLevel(custom_array2, sky_sampler, texel / size, 0, 0.0);
+}
+
+// Whether the second texture array holds the pages the header describes
+// (not one the material set there itself).
+fn baked_has_pages() -> bool {
+    let pages = baked_at(4.0);
+    return pages.y > 0.5 && f32(textureDimensions(custom_array1).x) == pages.x
+        && f32(textureNumLayers(custom_array1)) == max(pages.y, 2.0);
 }
 
 // The baked indirect light at a surface at `world` facing `n` with
@@ -272,18 +287,18 @@ fn baked_light(world: vec3<f32>, n: vec3<f32>, uv1: vec2<f32>) -> vec4<f32> {
     if header.x >= 0.0 {
         return vec4<f32>(0.0);
     }
-    if baked_entry > 0.5 {
+    if baked_entry > 0.5 && baked_has_pages() {
         let at = 8.0 + 2.0 * (baked_entry - 1.0);
         let rect = baked_at(at);
         if rect.z > 0.0 {
             let page = baked_at(at + 1.0).x;
             // Filtered within the rectangle, never past its edge texels.
             let texel = clamp(rect.xy + uv1 * rect.zw, rect.xy + 0.5, rect.xy + rect.zw - 0.5);
-            var light = baked_texel(i32(1.0 + page), texel).rgb;
+            var light = baked_page(i32(page), texel);
             if header.z > 0.5 {
                 // Normal maps tilt toward or away from where the light came
                 // from; the surface's own normal gets the baked value.
-                let d = baked_texel(i32(1.0 + header.y + page), texel).xyz;
+                let d = baked_page(i32(header.y + page), texel) * 2.0 - 1.0;
                 let face = select(n, baked_face, dot(baked_face, baked_face) > 0.5);
                 light *= clamp(max(dot(n, d) + 0.5, 0.0) / max(dot(face, d) + 0.5, 0.05), 0.0, 3.0);
             }

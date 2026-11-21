@@ -161,7 +161,7 @@ pub(crate) struct FadeLayers {
     regions: Vec<([u32; 2], [u32; 2], [u32; 2])>,
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "window", feature = "3d"))]
 impl FadeLayers {
     /// Each layer slot's texture size, as last drawn.
     pub(crate) fn texture_sizes(&self) -> &[[u32; 2]] {
