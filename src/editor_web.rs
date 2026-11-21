@@ -260,7 +260,9 @@ pub(crate) fn restore() {
     let Ok((store, page)) = browser::local() else { return };
     for (name, bytes) in kept_in(&store, &page) {
         if let Some(fetched) = crate::assets::read_web_asset(&name) {
-            browser::SHIPPED.with(|shipped| shipped.borrow_mut().entry(name.clone()).or_insert(fetched));
+            browser::SHIPPED.with(|shipped| {
+                shipped.borrow_mut().entry(name.clone()).or_insert(fetched);
+            });
         }
         crate::assets::insert_web_file(name, bytes);
     }

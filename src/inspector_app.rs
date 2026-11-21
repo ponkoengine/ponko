@@ -1628,7 +1628,7 @@ mod tests {
         click_text(&egui, &mut p, &mut ctx, |t| t == "Delete");
         assert!(p.error.is_none(), "{:?}", p.error);
         assert_eq!(p.status.as_deref(), Some("deleted levels/mine.json from this browser"));
-        assert_eq!(ctx.assets.browser_saves(), [doc.name.clone()]);
+        assert_eq!(ctx.assets.browser_saves(), std::slice::from_ref(&doc.name));
         // One row fewer: the window shrinks.
         frame(&egui, &mut p, &mut ctx, vec![]);
         click_text(&egui, &mut p, &mut ctx, |t| t == "Revert");

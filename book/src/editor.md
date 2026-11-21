@@ -177,7 +177,23 @@ gives you the file.
 files named in `assets/index.json` (which `web/build.sh` and `ponko
 package --web` write), the files in the page's asset pack, and the ones
 saved in the browser. A JSON file is listed as a scene or prefab by its
-`"format"`, as on the desktop.
+`"format"`, as on the desktop. Their tiles get thumbnails made from those
+files in memory (a browser has no folders to read them from): a texture
+scaled down, a scene's map, a prefab's sprite, a model's software drawing,
+with its buffers found beside it by name. A file you save or revert gets
+its thumbnail made again.
+
+**File > Saved in this browser** lists every file the browser keeps for
+this page, with its size, and offers **Revert** for a file the build
+ships (a scene in `assets/` you saved over) and **Delete** for one only
+the browser has. Either removes the browser's copy: a reverted file is
+the build's again at once, from the copy kept aside when the save
+replaced it, and the open document is opened again if it was that file
+and had no unsaved changes. After a reload nothing replaces the shipped
+file any more, so the build's version is back. From code,
+`ctx.assets.browser_saves()` lists the same names and
+`ctx.assets.revert_browser_save(path)` reverts one (both are Rust-only;
+in other builds the list is empty and nothing is reverted).
 
 While the system's picker is up it has the keyboard, so the editor never
 sees the keys let go meanwhile: the Ctrl (⌘) of Ctrl+O, or the Enter that
@@ -214,8 +230,9 @@ Linux, `%LOCALAPPDATA%\ponko\thumbnails` on Windows;
 `PONKO_THUMBNAIL_CACHE` names another folder) under a hash of the model's
 file and the buffers and images it names: the next run shows them at once,
 in any project, and a changed model or texture is drawn again. The web
-build keeps the software drawing: a browser can't wait for the GPU's
-picture within the frame, and has no cache folder. The search field (Ctrl+F) shows
+build keeps the software drawing, made from the page's files in memory
+(see [Saving in a browser](#saving-in-a-browser)): a browser can't wait
+for the GPU's picture within the frame, and has no cache folder. The search field (Ctrl+F) shows
 every asset whose path has all the words typed, in any folder, and
 **List again** reads the folder again after files were added.
 
