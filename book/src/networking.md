@@ -438,7 +438,7 @@ The session's settings, packets, stalls and stats are `Rollback`'s
   `sim_time()` and `every(n)` systems repeat exactly. Timers and cooldowns
   are components or resources, so they are restored with them.
 - **Physics:** `ctx.physics` and `ctx.physics3d` are saved and loaded whole
-  (`save_state` / `load_state`, also callable yourself): bodies, colliders,
+  (`save_state` / `restore_state`, also callable yourself): bodies, colliders,
   joints, contacts, islands, the broad phase and the links to entities. A
   loaded world steps bit for bit like the original; a load builds a fresh
   rapier pipeline, as the joint solver keeps indices there.
@@ -472,7 +472,7 @@ Everything a tick reads that an earlier tick wrote. In this engine:
 | An `Rng` the game keeps | Yes | `Rng` is `Clone` |
 | Components and resources | Those that change | Copy them, as above; `World::save` / `World::load` work but cost far more (below) |
 | Spawned and despawned entities | Yes, if the tick spawns | `World::save_snapshot` / `restore_snapshot` keep the allocator, so later spawns get the same ids (`GameRollback` uses them). Not through `World::load`: it resets the entity allocator, so the next spawn can get another id than on a peer that didn't roll back (`a_world_load_does_not_restore_which_ids_new_spawns_get`) |
-| 2D and 3D physics (rapier) | Yes: bodies, colliders, joints, contacts, islands, the broad phase | `ctx.physics.save_state` / `load_state` (and `ctx.physics3d`'s): a loaded world steps bit for bit like the original. Your own rapier world: every part is `Clone`, but load it with a fresh `PhysicsPipeline`, as the joint solver keeps indices there |
+| 2D and 3D physics (rapier) | Yes: bodies, colliders, joints, contacts, islands, the broad phase | `ctx.physics.save_state` / `restore_state` (and `ctx.physics3d`'s): a loaded world steps bit for bit like the original. Your own rapier world: every part is `Clone`, but load it with a fresh `PhysicsPipeline`, as the joint solver keeps indices there |
 | Events | Only those read in a later tick than they were sent | `GameRollback` restores the event store; with `Rollback` alone, keep such events in the state |
 | Timers and cooldowns | Yes | Fields or components in the state |
 | Sounds and effects | No: they are output | `GameRollback` drops sounds of ticks that run again; otherwise play them only for confirmed ticks, or remember (tick, what) and skip repeats |
@@ -550,7 +550,7 @@ every tick and hashes the world every 60.
 state, and `GameRollback`, which rolls back a whole `Game` from the
 engine's loop: a typed world snapshot (`World::save_snapshot`, which keeps
 entity ids and the archetype layout, so queries visit entities in the same
-order), the physics services' `save_state` and `load_state`, the event
+order), the physics services' `save_state` and `restore_state`, the event
 store, and a loop that runs the simulation systems again from a saved tick.
 Without physics it handles tens of thousands of entities; with physics,
 about a thousand bodies (rapier's state is cloned every tick).

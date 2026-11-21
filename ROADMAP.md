@@ -79,7 +79,7 @@ prediction, re-simulation, packets over any transport, desync checks) runs
 games that save and load their own state, and `GameRollback` rolls back a
 whole `Game` from the engine's loop: a typed world snapshot that keeps
 entity ids (10,000 entities save and restore in about 0.005 ms each),
-`save_state` / `load_state` for both physics services (bit for bit), the
+`save_state` / `restore_state` for both physics services (bit for bit), the
 event store, and re-running the simulation systems from a saved tick, with
 sounds of re-run ticks dropped. With physics, rapier's state is cloned
 every tick, so about a thousand bodies fit a 60 Hz frame. The numbers and

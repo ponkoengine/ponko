@@ -1,5 +1,5 @@
 //! Saving and loading the 2D physics world: [`Physics::save_state`] and
-//! [`Physics::load_state`], for rollback and replays.
+//! [`Physics::restore_state`], for rollback and replays.
 
 use rapier2d::prelude as rp;
 
@@ -10,7 +10,7 @@ use glam::Vec2;
 /// A copy of the 2D physics world ([`Physics::save_state`]): every body,
 /// collider and joint, the contacts, islands and broad phase, what the
 /// engine knows of each entity's body, gravity and the step count. Loading
-/// it ([`Physics::load_state`]) puts the world back exactly: stepped from
+/// it ([`Physics::restore_state`]) puts the world back exactly: stepped from
 /// there, it moves bit for bit as it did after the save.
 ///
 /// Keep one and save into it again: it reuses its memory where it can.
@@ -24,7 +24,7 @@ use glam::Vec2;
 /// let mut state = PhysicsState::default();
 /// physics.save_state(&mut state);
 /// let mut other = Physics::default();
-/// other.load_state(&state);
+/// other.restore_state(&state);
 /// assert_eq!(other.gravity(), vec2(0.0, 980.0));
 /// ```
 #[derive(Default)]
@@ -69,7 +69,7 @@ impl Physics {
     /// let mut state = PhysicsState::default();
     /// physics.save_state(&mut state);
     /// physics.set_gravity(vec2(0.0, 10.0));
-    /// physics.load_state(&state);
+    /// physics.restore_state(&state);
     /// assert_eq!(physics.gravity(), Vec2::ZERO);
     /// ```
     pub fn save_state(&self, into: &mut PhysicsState) {
@@ -98,7 +98,7 @@ impl Physics {
     /// Collision events of steps after the save that weren't sent yet are
     /// dropped. Settings that aren't state stay: whether
     /// [`set_paused`](Self::set_paused) holds the step is part of the state.
-    pub fn load_state(&mut self, from: &PhysicsState) {
+    pub fn restore_state(&mut self, from: &PhysicsState) {
         let w = &mut self.world;
         w.integration_parameters = from.params;
         w.islands.clone_from(&from.islands);
@@ -217,7 +217,7 @@ mod tests {
         run(&mut physics, &mut world, 25);
 
         world.restore_snapshot(&snapshot).unwrap();
-        physics.load_state(&state);
+        physics.restore_state(&state);
         assert_eq!(physics.gravity(), vec2(0.0, 980.0));
         let again = run(&mut physics, &mut world, 60);
         assert!(
@@ -227,7 +227,7 @@ mod tests {
 
         // And once more, from a state saved into again (memory reused).
         world.restore_snapshot(&snapshot).unwrap();
-        physics.load_state(&state);
+        physics.restore_state(&state);
         physics.save_state(&mut state);
         assert!(run(&mut physics, &mut world, 60) == straight);
     }
@@ -249,7 +249,7 @@ mod tests {
         let mut hits = Vec::new();
         physics.overlap_point(Vec2::ZERO, Default::default(), &mut hits);
         assert!(hits.is_empty());
-        physics.load_state(&state);
+        physics.restore_state(&state);
         assert_eq!(physics.body_count(), 1);
         physics.overlap_point(Vec2::ZERO, Default::default(), &mut hits);
         assert_eq!(hits, vec![ball]);

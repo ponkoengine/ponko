@@ -22,6 +22,7 @@ pub(super) const FEATURES: &[(&str, bool)] = &[
     ("editor", cfg!(feature = "editor")),
     ("control-env", cfg!(feature = "control-env")),
     ("gamepad", cfg!(feature = "gamepad")),
+    ("gamepad-sdl", cfg!(feature = "gamepad-sdl")),
     ("profiling", cfg!(feature = "profiling")),
     ("hotpatch", cfg!(feature = "hotpatch")),
     ("physics", cfg!(feature = "physics")),

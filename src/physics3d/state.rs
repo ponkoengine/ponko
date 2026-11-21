@@ -1,5 +1,5 @@
 //! Saving and loading the 3D physics world: [`Physics3D::save_state`] and
-//! [`Physics3D::load_state`], for rollback and replays.
+//! [`Physics3D::restore_state`], for rollback and replays.
 
 use rapier3d::prelude as rp;
 
@@ -12,7 +12,7 @@ use ponko_ecs::Entity;
 /// collider and joint, the contacts, islands and broad phase, what the
 /// engine knows of each entity's body, joint and contact rule, which
 /// streamed colliders are in, gravity and the step count. Loading it
-/// ([`Physics3D::load_state`]) puts the world back exactly: stepped from
+/// ([`Physics3D::restore_state`]) puts the world back exactly: stepped from
 /// there, it moves bit for bit as it did after the save.
 ///
 /// Registered collision meshes, collider streaming's settings and the
@@ -29,7 +29,7 @@ use ponko_ecs::Entity;
 /// let mut state = PhysicsState::default();
 /// physics.save_state(&mut state);
 /// let mut other = Physics::default();
-/// other.load_state(&state);
+/// other.restore_state(&state);
 /// assert_eq!(other.gravity(), vec3(0.0, -9.81, 0.0));
 /// ```
 #[derive(Default)]
@@ -83,7 +83,7 @@ impl Physics3D {
     /// let mut state = PhysicsState::default();
     /// physics.save_state(&mut state);
     /// physics.set_gravity(vec3(0.0, -1.0, 0.0));
-    /// physics.load_state(&state);
+    /// physics.restore_state(&state);
     /// assert_eq!(physics.gravity(), Vec3::ZERO);
     /// ```
     pub fn save_state(&self, into: &mut Physics3DState) {
@@ -119,7 +119,7 @@ impl Physics3D {
     ///
     /// Collision events of steps after the save that weren't sent yet are
     /// dropped.
-    pub fn load_state(&mut self, from: &Physics3DState) {
+    pub fn restore_state(&mut self, from: &Physics3DState) {
         let w = &mut self.world;
         w.integration_parameters = from.params;
         w.islands.clone_from(&from.islands);
@@ -297,7 +297,7 @@ mod tests {
         run(&mut physics, &mut world, 30);
 
         world.restore_snapshot(&snapshot).unwrap();
-        physics.load_state(&state);
+        physics.restore_state(&state);
         let again = run(&mut physics, &mut world, 60);
         assert!(
             again == straight,

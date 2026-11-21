@@ -1017,9 +1017,9 @@ impl crate::net::Runner for RollbackRunner<'_> {
         ctx.events
             .restore_state(&from.events, |reader| systems.iter().any(|s| s.id == reader));
         #[cfg(feature = "physics")]
-        ctx.physics.load_state(&from.physics);
+        ctx.physics.restore_state(&from.physics);
         #[cfg(feature = "physics3d")]
-        ctx.physics3d.load_state(&from.physics3d);
+        ctx.physics3d.restore_state(&from.physics3d);
         ctx.time.set_sim_tick(from.tick);
         ctx.events.set_tick(from.tick);
         ctx.gfx.sim_tick = from.tick;

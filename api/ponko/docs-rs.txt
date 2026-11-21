@@ -2469,7 +2469,7 @@ pub fn ponko::d2::Physics::overlap_circle(&self, glam::f32::vec2::Vec2, f32, pon
 pub fn ponko::d2::Physics::overlap_point(&self, glam::f32::vec2::Vec2, ponko::d2::QueryFilter, &mut alloc::vec::Vec<ponko_ecs::entity::Entity>)
 pub fn ponko::d2::Physics::penetrations(&self, ponko::d2::Shape, glam::f32::vec2::Vec2, f32, ponko::d2::QueryFilter, &mut alloc::vec::Vec<ponko::d2::Penetration>)
 impl ponko::d2::Physics
-pub fn ponko::d2::Physics::load_state(&mut self, &ponko::d2::PhysicsState)
+pub fn ponko::d2::Physics::restore_state(&mut self, &ponko::d2::PhysicsState)
 pub fn ponko::d2::Physics::save_state(&self, &mut ponko::d2::PhysicsState)
 impl core::default::Default for ponko::d2::Physics
 pub fn ponko::d2::Physics::default() -> Self
@@ -3604,10 +3604,10 @@ pub fn ponko::d3::Physics::set_terrain_rebuild(&mut self, impl core::ops::functi
 impl ponko::d3::Physics
 pub fn ponko::d3::Physics::joint_count(&self) -> usize
 impl ponko::d3::Physics
-pub fn ponko::d3::Physics::load_state(&mut self, &ponko::d3::PhysicsState)
-pub fn ponko::d3::Physics::save_state(&self, &mut ponko::d3::PhysicsState)
-impl ponko::d3::Physics
 pub fn ponko::d3::Physics::move_character(&self, ponko_ecs::entity::Entity, &mut ponko::d3::Character, glam::f32::vec3::Vec3, f32) -> glam::f32::vec3::Vec3
+impl ponko::d3::Physics
+pub fn ponko::d3::Physics::restore_state(&mut self, &ponko::d3::PhysicsState)
+pub fn ponko::d3::Physics::save_state(&self, &mut ponko::d3::PhysicsState)
 impl core::default::Default for ponko::d3::Physics
 pub fn ponko::d3::Physics::default() -> Self
 pub struct ponko::d3::PhysicsState
@@ -8788,7 +8788,7 @@ pub fn ponko::d2::Physics::overlap_circle(&self, glam::f32::vec2::Vec2, f32, pon
 pub fn ponko::d2::Physics::overlap_point(&self, glam::f32::vec2::Vec2, ponko::d2::QueryFilter, &mut alloc::vec::Vec<ponko_ecs::entity::Entity>)
 pub fn ponko::d2::Physics::penetrations(&self, ponko::d2::Shape, glam::f32::vec2::Vec2, f32, ponko::d2::QueryFilter, &mut alloc::vec::Vec<ponko::d2::Penetration>)
 impl ponko::d2::Physics
-pub fn ponko::d2::Physics::load_state(&mut self, &ponko::d2::PhysicsState)
+pub fn ponko::d2::Physics::restore_state(&mut self, &ponko::d2::PhysicsState)
 pub fn ponko::d2::Physics::save_state(&self, &mut ponko::d2::PhysicsState)
 impl core::default::Default for ponko::d2::Physics
 pub fn ponko::d2::Physics::default() -> Self
@@ -9923,10 +9923,10 @@ pub fn ponko::d3::Physics::set_terrain_rebuild(&mut self, impl core::ops::functi
 impl ponko::d3::Physics
 pub fn ponko::d3::Physics::joint_count(&self) -> usize
 impl ponko::d3::Physics
-pub fn ponko::d3::Physics::load_state(&mut self, &ponko::d3::PhysicsState)
-pub fn ponko::d3::Physics::save_state(&self, &mut ponko::d3::PhysicsState)
-impl ponko::d3::Physics
 pub fn ponko::d3::Physics::move_character(&self, ponko_ecs::entity::Entity, &mut ponko::d3::Character, glam::f32::vec3::Vec3, f32) -> glam::f32::vec3::Vec3
+impl ponko::d3::Physics
+pub fn ponko::d3::Physics::restore_state(&mut self, &ponko::d3::PhysicsState)
+pub fn ponko::d3::Physics::save_state(&self, &mut ponko::d3::PhysicsState)
 impl core::default::Default for ponko::d3::Physics
 pub fn ponko::d3::Physics::default() -> Self
 pub struct ponko::prelude::d3::PhysicsState

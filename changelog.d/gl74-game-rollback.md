@@ -7,7 +7,7 @@
   save and restore in about 0.005 ms each, with no allocation after the
   first save. Components must be `Clone` (the derive notices;
   `World::register_clone` for the others).
-- `save_state` and `load_state` on `ctx.physics` and `ctx.physics3d`
+- `save_state` and `restore_state` on `ctx.physics` and `ctx.physics3d`
   (`d2::PhysicsState`, `d3::PhysicsState`): the whole rapier state with the
   links to entities. A loaded world steps bit for bit like the original.
 - `net::GameRollback`: rollback for a whole `Game`. Started with
