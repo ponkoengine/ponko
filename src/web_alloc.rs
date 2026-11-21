@@ -28,6 +28,42 @@
 /// that share heaps round-robin.
 const HEAPS: usize = 32;
 
-#[global_allocator]
-static ALLOCATOR: orx_parallel_wasm_allocator::WasmParallelAllocator<HEAPS> =
+use std::alloc::{GlobalAlloc, Layout};
+
+static HEAPS_ALLOCATOR: orx_parallel_wasm_allocator::WasmParallelAllocator<HEAPS> =
     orx_parallel_wasm_allocator::WasmParallelAllocator::new();
+
+/// Forwards to the heaps out of line: the allocator lives in the engine's
+/// crate, so without this the compiler copied its code into every place
+/// that allocates or frees, and the build grew by 2 MB (11%).
+struct Heaps;
+
+// SAFETY: every method forwards to the heaps with the same arguments.
+unsafe impl GlobalAlloc for Heaps {
+    #[inline(never)]
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        // SAFETY: the caller's contract is the heaps'.
+        unsafe { HEAPS_ALLOCATOR.alloc(layout) }
+    }
+
+    #[inline(never)]
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        // SAFETY: as above.
+        unsafe { HEAPS_ALLOCATOR.alloc_zeroed(layout) }
+    }
+
+    #[inline(never)]
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        // SAFETY: `ptr` came from the heaps with this layout.
+        unsafe { HEAPS_ALLOCATOR.dealloc(ptr, layout) }
+    }
+
+    #[inline(never)]
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        // SAFETY: as above.
+        unsafe { HEAPS_ALLOCATOR.realloc(ptr, layout, new_size) }
+    }
+}
+
+#[global_allocator]
+static ALLOCATOR: Heaps = Heaps;
