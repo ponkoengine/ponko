@@ -318,10 +318,16 @@ impl Graphics {
         #[cfg(feature = "aseprite-source")]
         match self.asset_sources.find(path) {
             Ok(found) if matches!(found.origin, Origin::File(_)) => {
-                let origin = found.origin.clone();
+                let mut origins = vec![found.origin.clone()];
                 let bytes = found.into_bytes().map_err(|error| error.with_path(path))?;
-                let sheet =
-                    ponko_aseprite::decode(&bytes, split_layers, max).map_err(|error| Error::decode(path, error))?;
+                // A tileset linked to another file reads it through the
+                // asset sources, and that file is watched as well.
+                let sheet = ponko_aseprite::decode_linked(path, &bytes, split_layers, max, &mut |linked| {
+                    let found = self.asset_sources.find(linked).map_err(|error| error.to_string())?;
+                    origins.push(found.origin.clone());
+                    found.into_bytes().map_err(|error| error.with_path(linked).to_string())
+                })
+                .map_err(|error| Error::decode(path, error))?;
                 let export =
                     serde_json::from_value(sheet.export).map_err(|error| Error::decode(path, error.to_string()))?;
                 let image = Image {
@@ -329,7 +335,7 @@ impl Graphics {
                     height: sheet.height,
                     rgba: sheet.rgba,
                 };
-                return Ok((export, image, vec![origin]));
+                return Ok((export, image, origins));
             }
             Err(error) if error.kind() != ErrorKind::NotFound => return Err(error),
             _ => {}
