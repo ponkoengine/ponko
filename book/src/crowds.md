@@ -327,5 +327,34 @@ crowds next to the other handles, with instance cells, collision meshes,
 sprite shaders and materials, and sky shaders: a leak check that sees
 them all.
 
-`CrowdLevel::with_fade` has no C or C++ equivalent yet: levels made from C
-switch at once.
+Crossfading levels take the versioned `PonkoCrowdDesc`: start it with
+`ponko_crowd_desc_defaults()`, fill in the bake, the levels and the
+characters, point `fades` at one fade per level (null: none), and make the
+crowd with `ponko_ctx_create_crowd_ex`; `PonkoCrowdLevel` keeps its layout.
+C++ has a `ctx::create_crowd` that takes the fades after the levels:
+
+<div class="lang-pair">
+<div>
+
+```rust
+# use ponko::prelude::*;
+# use ponko::render::{CrowdAnimation, CrowdInstance, CrowdLevel, CrowdOptions, Mesh};
+# fn f(ctx: &mut Ctx, bake: &CrowdAnimation, near: Mesh, far: Mesh, people: &[CrowdInstance]) {
+let levels = [
+    CrowdLevel::new(near, 0.0, 40.0).with_fade(4.0), // into the far level from 36 m
+    CrowdLevel::new(far, 40.0, f32::INFINITY).with_influences(1),
+];
+let crowd = ctx.gfx.create_crowd(bake, &levels, people, CrowdOptions::default());
+# let _ = crowd;
+# }
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:crowd_fade}}
+```
+
+</div>
+</div>

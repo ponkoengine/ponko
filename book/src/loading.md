@@ -361,3 +361,82 @@ In C++, `ponko::asset_group` is the builder, `ctx.start_asset_group`,
 `ctx.take_asset_group_bytes(id, path, decode)` returns what your
 `decode(data, len)` returns. There is no C or C++ form of `with`: take the
 bytes and decode them yourself.
+
+### Sliced loaders from C
+
+A [sliced loader](#loaders-that-work-in-slices) from C is the same idea
+with the Rust trait taken apart: a Rust loader is a value with `step` and
+`finish`; a C loader is three callbacks over a state pointer of the game's
+own, in the versioned `PonkoSliceLoader`, added with
+`ponko_asset_group_add_sliced(group, path, &loader)`:
+
+- `start(user, bytes, len, &state)` gets the file's bytes, valid during the
+  call only (copy what the state keeps), and makes the state: the parsed
+  header, a cursor, the value being built. A restart of a failed group
+  calls it again.
+- `step(user, state, &done)` does the next bounded piece of the work and
+  sets `done` once it is all done. Any status but `PONKO_OK` from `start`
+  or `step` fails the group with a decode error naming the asset and the
+  status.
+- `free_state(user, state)` frees a state nobody took: the group failed or
+  was cancelled, the game ended, or the value was never taken. It may be
+  `NULL` for a state that needs no freeing.
+- `user` is the loader's: it is passed to every call, and `free_user` (if
+  set) runs once when the group no longer needs it. A call that returns an
+  error keeps the ownership of `user` with the caller.
+- **The value is the finished state.** There is no `finish`:
+  `ponko_ctx_take_asset_group_sliced(ctx, id, path, &state)` hands the state
+  pointer over once, and from then on the game owns it and frees it.
+  Before the group finished it, after it was taken, or for an asset that
+  isn't a sliced one, it says `PONKO_NOT_FOUND`.
+
+The calls run where Rust's would: on a worker thread where there are
+workers, between the frame budget's checks on the game thread where there
+are none. Several loaders' calls may run at the same time on different
+workers, but never two calls of one asset at once. So the callbacks touch
+only their own state and `user`, and never call `ponko_ctx_*`; keep each
+`step` short, as in Rust.
+
+<div class="lang-pair">
+<div>
+
+```c
+{{#include ../../examples/cpp/guide.c:sliced_loader_c}}
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:sliced_loader_cpp}}
+```
+
+</div>
+</div>
+
+Then the group, and the value once it is ready:
+
+<div class="lang-pair">
+<div>
+
+```c
+{{#include ../../examples/cpp/guide.c:sliced_group_c}}
+{{#include ../../examples/cpp/guide.c:sliced_take_c}}
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:sliced_group_cpp}}
+```
+
+</div>
+</div>
+
+C++'s `asset_group::sliced(path, start)` takes a `start(bytes, len)` that
+returns the state by value, a type with a `bool step()` that returns `true`
+once done; the wrapper keeps it on the heap and frees it with `delete`. An
+exception from `start` or `step` fails the group.
+`ctx.take_asset_group_sliced<T>(id, path)` returns it as a
+`std::unique_ptr<T>`; `T` must be the type `start` returned.
