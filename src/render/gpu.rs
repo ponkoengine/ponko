@@ -530,8 +530,12 @@ impl Renderer {
             eprintln!("ponko: PONKO_GPU_TIER forces the {tier} GPU tier");
         }
         #[cfg_attr(not(feature = "compressed-textures"), allow(unused_mut))]
+        // A first instance in indirect draws: an instance batch's cells are
+        // drawn together where the device has it (`gpu3d/instances.rs`).
         let mut required_features = adapter.features()
-            & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES);
+            & (wgpu::Features::TIMESTAMP_QUERY
+                | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
+                | wgpu::Features::INDIRECT_FIRST_INSTANCE);
         // Block-compressed textures upload as they are where the GPU samples them.
         #[cfg(feature = "compressed-textures")]
         {
