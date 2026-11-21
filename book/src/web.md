@@ -188,8 +188,9 @@ and the panic's message, in place of the game. The same goes for the
 engine's other fatal failures in the browser: the WebGL2 context or the
 WebGPU device lost while the game runs (the browser reset its GPU process;
 the game can't draw on a restored context or a new device, so the page asks
-for a reload; a lost WebGPU device's message includes the browser's reason,
-such as “Device was destroyed”), and a worker thread of a
+for a reload; a lost WebGPU device's message says whether the device was
+destroyed or lost for another reason, with the browser's own words, such as
+“Device was destroyed”), and a worker thread of a
 [threads](web-threads.md) build that stopped, with that worker's panic
 message. The panic also stays in the developer console, with its location.
 A game with [crash reports](crash-reports.md#in-the-browser) on also gets
@@ -198,8 +199,13 @@ the long version for its developers, which the page offers as a file.
 The game can say it in its own words. Register `ponko::web::on_failure`
 before running the game: it runs once, right before the game stops, with
 the failure's `kind()` (`FailureKind::Panic`, `ContextLost`, `DeviceLost`
-or `ThreadStopped`), `message()` and, for a panic, `location()`. Return the
-text the page should show, or `None` to keep the page's own:
+or `ThreadStopped`), `message()`, for a panic `location()`, and for a lost
+WebGPU device `device_lost_reason()`: `DeviceLostReason::Destroyed` when
+something called the device's `destroy()` (the page, an extension, the
+browser tearing the page down), `Unknown` for anything else (the GPU
+process crashed or was reset, the driver failed), so the two can be worded
+differently. Return the text the page should show, or `None` to keep the
+page's own:
 
 ```rust,no_run
 # use ponko::prelude::*;
@@ -219,8 +225,9 @@ Custom pages subscribe with the `onPonkoFailure(callback)` export of
 `game.js`, after `init()` as for `onPonkoStartup`. The callback runs at
 most once, with an `Error` whose `kind` is `"Panic"`, `"ContextLost"`,
 `"DeviceLost"` or `"ThreadStopped"`, `message` the failure's message, `location` a panic's
-source position (else `null`) and `text` the game's own text from
-`on_failure` (else `null`). Only the first failure is reported: the
+source position (else `null`), `reason` a lost WebGPU device's
+`"Destroyed"` or `"Unknown"` (else `null`) and `text` the game's own text
+from `on_failure` (else `null`). Only the first failure is reported: the
 JavaScript exception a panic's abort throws afterwards is not. A callback
 registered after the failure runs immediately.
 

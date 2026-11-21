@@ -99,8 +99,10 @@ node web/smoke/runtime-failures.mjs --case device-lost --chromium-mode new \
 - `device-lost`: on WebGPU, the runner destroys the game's `GPUDevice`
   while the game runs (no browser lets a page crash its GPU process; a
   destroyed device is lost the same way to the game): kind `DeviceLost`,
-  and the engine's message with the reason the page's own `device.lost`
-  got (“Device was destroyed”). Where the game opened no WebGPU device (the
+  `reason` `Destroyed` (`Unknown` when the browser lost it first, as the
+  page's own `device.lost` says), and the engine's message for that reason
+  with the browser's words in it (“The WebGPU device was destroyed while
+  the game was running: Device was destroyed.”). Where the game opened no WebGPU device (the
   browser has none, so it runs on WebGL2) the case is unsupported, not
   failed; a run where every case was unsupported exits 2, or 0 with
   `--allow-unsupported`. Chromium's headless shell can't present a WebGPU
