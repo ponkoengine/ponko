@@ -479,7 +479,7 @@ pub fn textured(n: u32, size: u32) -> (Value, Vec<u8>) {
 /// with meshoptimizer (`EXT_meshopt_compression`, as gltfpack writes
 /// them): those views read a fallback buffer that holds no data, and their
 /// streams sit in the GLB's own chunk beside the images.
-#[cfg(feature = "meshes")]
+#[cfg(all(feature = "meshes", feature = "textures"))]
 pub fn meshopt_textured(size: u32) -> (Value, Vec<u8>) {
     let ext = "EXT_meshopt_compression";
     let (mut json, bin) = textured(2, size);

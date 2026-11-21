@@ -448,8 +448,8 @@ mod tests {
         let pixels = upload_atlas(&gpu, &from_source);
         assert_eq!(from_source.size, from_cook.size);
         assert_eq!(pixels, upload_atlas(&gpu, &from_cook));
-        assert!(pixels.chunks_exact(4).any(|px| px == [255, 0, 0, 255]));
-        assert!(pixels.chunks_exact(4).any(|px| px == [0; 4]));
+        assert!(pixels.as_chunks::<4>().0.contains(&[255, 0, 0, 255]));
+        assert!(pixels.as_chunks::<4>().0.contains(&[0; 4]));
     }
 
     fn upload_atlas(gpu: &crate::render::render_test_support::TestGpu, atlas: &Packed) -> Vec<u8> {
