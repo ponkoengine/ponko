@@ -1391,9 +1391,12 @@ fn band(stage: &Stage, on: &Image, off: Option<&Image>, at: Vec3, reach: u32) ->
 /// The rails' reflections at 1920x1080 without TAA: (energy, RMS width)
 /// of each rail seen directly and of its reflection, and the frame (with
 /// reflections) cropped to the rails and their reflections.
-/// The rails' bands (seen and reflected, see `band`), the frame with and
-/// without reflections cropped to the nearest rail, and the stage.
-fn rail_reflections() -> Option<(Vec<[(f32, f32); 2]>, [Image; 2], Stage)> {
+/// Each rail's bands, seen and reflected (energy, RMS width; see `band`).
+type RailBands = Vec<[(f32, f32); 2]>;
+
+/// The rails' bands, the frame with and without reflections cropped to the
+/// nearest rail, and the stage.
+fn rail_reflections() -> Option<(RailBands, [Image; 2], Stage)> {
     let mut stage = Stage::with(super::regression_stage::Setup {
         size: (1920, 1080),
         ..Default::default()
