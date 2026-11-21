@@ -232,6 +232,11 @@ crates/ponko_ffi/src/component_hooks.rs | impl Send for CHook | crates/ponko_ffi
 crates/ponko_ffi/src/component_hooks.rs | impl Sync for CHook | crates/ponko_ffi/tests/component_hooks.rs::hooks_from_c_run_for_spawns_made_by_a_game_system | sanitizers
 crates/ponko_ffi/src/crash.rs | impl Send for Hook | crates/ponko_ffi/tests/crash_reports.rs::crash_reports_from_c_name_the_version_run_the_hook_and_are_saved | sanitizers
 crates/ponko_ffi/src/crash.rs | impl Sync for Hook | crates/ponko_ffi/tests/crash_reports.rs::crash_reports_from_c_name_the_version_run_the_hook_and_are_saved | sanitizers
+
+# A C or C++ program's main and the game's run in a browser (wasm only), run
+# by the browser smoke test of web/build-cpp.sh.
+crates/ponko_ffi/src/web.rs | call_job | web/smoke/cpp.mjs | wasm
+crates/ponko_ffi/src/web.rs | call_main | web/smoke/cpp.mjs | wasm
 crates/ponko_ffi/src/slice_loaders.rs | impl Send for Callbacks | crates/ponko_ffi/tests/slice_loaders.rs::a_sliced_c_loader_works_in_pieces_and_hands_over_its_state_once | sanitizers
 crates/ponko_ffi/src/slice_loaders.rs | impl Sync for Callbacks | crates/ponko_ffi/tests/slice_loaders.rs::a_sliced_c_loader_works_in_pieces_and_hands_over_its_state_once | sanitizers
 crates/ponko_ffi/src/slice_loaders.rs | impl Send for State | crates/ponko_ffi/tests/slice_loaders.rs::a_sliced_c_loader_works_in_pieces_and_hands_over_its_state_once | sanitizers

@@ -4201,11 +4201,13 @@ name = "ponko_ffi"
 version = "0.1.0"
 dependencies = [
  "cbindgen",
+ "js-sys",
  "ponko",
  "ponko_ecs",
  "ponko_lobby",
  "rayon",
  "serde_json",
+ "wasm-bindgen",
 ]
 
 [[package]]

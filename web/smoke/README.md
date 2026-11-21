@@ -344,6 +344,26 @@ node web/smoke/video.mjs --build      # web/build.sh --features video web_video,
 It runs on WebGL2, like the other Chromium runs. A browser without
 WebCodecs AV1 (`VideoDecoder.isConfigSupported`) exits 2, unsupported.
 
+
+## C and C++
+
+`cpp.mjs` runs a C++ game in the browser (the web guide's "C and C++"): the
+getting-started game of the guide, the `first_game_full` snippet of
+`examples/cpp/guide.cpp` exactly as the guide shows it, with a `main` that
+plays it. `--build` writes that program to `target/web-cpp-src/` and builds
+it with `web/build-cpp.sh` (which needs the WASI SDK, in `$WASI_SDK_PATH`).
+In headless Chromium, on WebGL2, the game must start (the page's status line goes away
+with no page error), fetch `crab.png`, draw something, and move its crab
+right while ArrowRight is held. That last step checks that the C++ systems
+keep running every frame and that `pos`, a local of the game's function
+its system captures by reference, outlives the call to `run()`, which in a
+browser doesn't return. `report.json` has the module's size (and gzipped)
+and the startup time, from navigation to the game's first frame.
+
+```sh
+WASI_SDK_PATH=/opt/wasi-sdk node web/smoke/cpp.mjs --build
+```
+
 ## Running it
 
 ```sh
@@ -467,6 +487,7 @@ table (and appends it to a GitHub job summary).
 | Apple Silicon Mac, Chromium headless shell | same | Passes (ANGLE on SwiftShader) | Unsupported: a SwiftShader fallback adapter exists, but a WebGPU canvas can't be shown |
 | Apple Silicon Mac, `multiplayer.mjs` | Chromium 156 headless shell | Passes: two tabs, a native host and a native UDP client agree on the world at tick 300 | Not tried (WebGPU is hidden) |
 | Apple Silicon Mac, WebKit (Playwright build) | WebKit 27 | Passes | Passes on its own adapter |
+| Apple Silicon Mac, `cpp.mjs` | Chromium 156 headless shell | Passes: the guide's C++ game starts in 0.5 s (a busy machine), draws its crab and moves it 200 px in the second ArrowRight is held | Not tried (WebGPU is hidden: the headless shell can't present it) |
 | Apple Silicon Mac, `threads.mjs` | Chromium 156 headless shell | Passes on whichever backend the page picks (the check is about threads, not drawing): workers on the isolated page, one thread without the headers, the same world; a worker's panic stops the game | Not tried on its own |
 
 Not covered yet: Firefox on a Mac with its Playwright build here (it would

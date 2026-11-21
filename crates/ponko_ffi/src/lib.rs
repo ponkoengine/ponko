@@ -1657,3 +1657,10 @@ mod tests {
 
 mod window;
 pub use window::*;
+
+// C and C++ games in a browser (web/build-cpp.sh). Its JavaScript imports
+// aren't part of the C API.
+/// cbindgen:ignore
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[doc(hidden)]
+pub mod web;

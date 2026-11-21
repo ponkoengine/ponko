@@ -1434,6 +1434,20 @@ jobs:
         timeout-minutes: 20
         if: ${{ !cancelled() }}
         run: node web/smoke/video.mjs --build
+      # C and C++ games in the browser (web/smoke/cpp.mjs, the web guide's
+      # "C and C++"): the guide's first C++ game built with web/build-cpp.sh
+      # and the WASI SDK, which must start, fetch its texture, draw on WebGL2,
+      # and move its crab while ArrowRight is held. The report has the module's size
+      # and the startup time.
+      - name: The WASI SDK (C and C++ for the web)
+        if: ${{ !cancelled() }}
+        run: |
+          curl -sSfL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz | tar xz -C "$RUNNER_TEMP"
+          echo "WASI_SDK_PATH=$RUNNER_TEMP/wasi-sdk-34.0-x86_64-linux" >> "$GITHUB_ENV"
+      - name: Chromium, the guide's C++ game (web/build-cpp.sh)
+        timeout-minutes: 30
+        if: ${{ !cancelled() }}
+        run: node web/smoke/cpp.mjs --build
       # Threads on the web (web/smoke/threads.mjs, the guide's "Threads on the
       # web"): examples/web_threads built with `web/build.sh --threads`
       # (nightly Rust rebuilding std with atomics, hence rust-src). Served with
