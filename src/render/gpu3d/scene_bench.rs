@@ -189,6 +189,8 @@ pub struct SceneFrame {
     pub pipelines_built: usize,
     /// Command buffers submitted.
     pub command_buffers: usize,
+    /// `Queue::submit` calls the frame made.
+    pub submits: usize,
     /// Bytes uploaded and buffers created during this frame.
     pub uploads: GpuUploads,
 }
@@ -1461,7 +1463,7 @@ impl SceneBench {
         let updated = Instant::now();
         let light = self.collect();
         let collected = Instant::now();
-        let (prepared, encoded, submitted, command_buffers) = if self.ctx.scene3d.views.is_empty() {
+        let (prepared, encoded, submitted, (command_buffers, submits)) = if self.ctx.scene3d.views.is_empty() {
             let ctx = &mut self.ctx;
             let scene = Scene3D {
                 frame: &ctx.gfx.frame3d,
@@ -1507,7 +1509,7 @@ impl SceneBench {
                 timer.submitted();
             }
             self.renderer.submitted();
-            (prepared, encoded, submitted, command_buffers)
+            (prepared, encoded, submitted, (command_buffers, 1))
         } else {
             self.draw_views(light)
         };
@@ -1564,6 +1566,7 @@ impl SceneBench {
             occluded: self.renderer.occluded,
             pipelines_built: self.renderer.take_pipelines_built(),
             command_buffers,
+            submits,
             uploads: crate::render::traffic::take(),
         }
     }
@@ -1573,8 +1576,8 @@ impl SceneBench {
     /// and submitted in turn, then copied into its rectangle. Preparing and
     /// encoding interleave, so all of it counts as encoding; the copy is
     /// the submit. Gives when preparing, encoding and submitting ended, and
-    /// the command buffers of the copy.
-    fn draw_views(&mut self, light: SkyLight) -> (Instant, Instant, Instant, usize) {
+    /// the command buffers and submissions of the views and the copy.
+    fn draw_views(&mut self, light: SkyLight) -> (Instant, Instant, Instant, (usize, usize)) {
         let prepared = Instant::now();
         if let Some(timer) = &mut self.timer {
             timer.begin_frame();
@@ -1634,7 +1637,8 @@ impl SceneBench {
         if let Some(timer) = &mut self.timer {
             timer.submitted();
         }
-        (prepared, encoded, submitted, 1)
+        let (buffers, submits) = self.window_views.submitted;
+        (prepared, encoded, submitted, (buffers + 1, submits as usize + 1))
     }
 
     // ------------------------------------------------------------ reporting

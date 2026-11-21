@@ -1124,7 +1124,7 @@ fn a_sliced_loader_makes_its_value_and_its_errors_name_the_asset() {
         let id = ctx
             .assets
             .start_group(AssetGroup::new("good").with_sliced("good.txt", numbers));
-        frames_until_done(ctx, id, 10_000);
+        frames_until_done(ctx, id);
         assert_eq!(ctx.assets.group_state(id), GroupState::Ready);
         assert_eq!(
             ctx.assets.take_group_value::<Vec<i32>>(id, "good.txt"),
@@ -1133,7 +1133,7 @@ fn a_sliced_loader_makes_its_value_and_its_errors_name_the_asset() {
         let id = ctx
             .assets
             .start_group(AssetGroup::new("bad").with_sliced("bad.txt", numbers));
-        frames_until_done(ctx, id, 10_000);
+        frames_until_done(ctx, id);
         let error = ctx.assets.group_error(id).expect("it failed");
         assert_eq!((error.kind(), error.path()), (ErrorKind::Decode, Some("bad.txt")));
         assert!(error.to_string().contains("\"three\" is not a number"), "{error}");
@@ -1146,7 +1146,7 @@ fn headless_upload_stats_say_the_gpu_does_not_time_uploads() {
         ctx.assets
             .add_background_source(MemorySource::new("mem").with("a.png", png(16, 16, [1, 2, 3, 255])));
         let id = ctx.assets.start_group(AssetGroup::new("a").texture("a.png"));
-        frames_until_done(ctx, id, 10_000);
+        frames_until_done(ctx, id);
         let (groups, streams) = (ctx.assets.group_stats(), ctx.gfx.upload_stats());
         assert!(!groups.gpu_upload_timing && !streams.gpu_upload_timing);
         assert_eq!((groups.gpu_upload_ms, streams.gpu_upload_ms), (None, None));

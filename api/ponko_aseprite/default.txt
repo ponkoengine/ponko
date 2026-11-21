@@ -9,5 +9,6 @@ impl core::fmt::Debug for ponko_aseprite::Sheet
 pub fn ponko_aseprite::Sheet::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub fn ponko_aseprite::decode(&[u8], bool, u32) -> core::result::Result<ponko_aseprite::Sheet, alloc::string::String>
 pub fn ponko_aseprite::decode_linked(&str, &[u8], bool, u32, &mut ponko_aseprite::Load<'_>) -> core::result::Result<ponko_aseprite::Sheet, alloc::string::String>
+pub fn ponko_aseprite::is_tileset_only(&[u8]) -> core::result::Result<bool, alloc::string::String>
 pub fn ponko_aseprite::linked_files(&str, &[u8]) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, alloc::string::String>
 pub type ponko_aseprite::Load<'a> = (dyn core::ops::function::FnMut(&str) -> core::result::Result<alloc::vec::Vec<u8>, alloc::string::String> + 'a)
