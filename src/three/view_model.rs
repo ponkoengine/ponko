@@ -256,10 +256,18 @@ pub(crate) fn collect_view_model(
         },
         ..settings.lighting
     };
+    let (enabled, reset) = (main.motion.enabled, main.motion.reset);
+    let forgotten = main.motion.forgotten();
     let frame = main.view_model.get_or_insert_with(Default::default);
     frame.size_limit = main.size_limit;
     frame.lod = settings.lod;
     frame.occlusion = None;
+    // The same past as the main frame's: every held item gets a motion
+    // vector of its own (see `gpu3d/view_model.rs`), over the world's.
+    frame.motion.enabled = enabled;
+    frame.motion.reset = reset;
+    frame.motion.every = true;
+    frame.motion.forget.extend_from_slice(forgotten);
     frame.collect(world, assets, skins, &eye, &lighting);
 }
 

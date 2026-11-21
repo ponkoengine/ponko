@@ -147,6 +147,7 @@ impl Shaders {
                     .map(|sides| builder.timed_build(ShaderVariant::new(sides, Instancing::Plain), &cache.counters)),
                 fade: Default::default(),
                 shared: Default::default(),
+                view_model_cutout: Default::default(),
                 builder,
                 counters: cache.counters.clone(),
                 in_use: true,
@@ -528,6 +529,11 @@ pub(super) struct ShaderPipelines {
     /// their entity's one instance record (a zero-stride instance buffer);
     /// built when first drawn (or by [`Renderer3D::warm_pipelines`]).
     pub(super) shared: [std::sync::OnceLock<Pipelines>; 2],
+    /// The view model's cut-out held items (see `view_model.rs`), one per
+    /// [`ShaderVariant::ALL`]: lit, cutting their own holes and writing
+    /// their own depth. Built the first time one is drawn; never without
+    /// a view model.
+    pub(super) view_model_cutout: [std::sync::OnceLock<wgpu::RenderPipeline>; ShaderVariant::ALL.len()],
     pub(super) builder: SideBuilder,
     /// The cache's counters: builds, misses, and the sets this one drops.
     pub(super) counters: Arc<pipeline_cache::Counters>,
@@ -560,6 +566,19 @@ impl ShaderPipelines {
                 self.counters.missed();
             }
             self.builder.timed_build(variant, &self.counters)
+        })
+    }
+
+    /// The view model's cut-out pipeline of `variant`, built now the
+    /// first time (counted as a build).
+    pub(super) fn view_model_cutout(&self, variant: ShaderVariant) -> &wgpu::RenderPipeline {
+        let at = ShaderVariant::ALL.iter().position(|&v| v == variant).unwrap_or(0);
+        self.view_model_cutout[at].get_or_init(|| {
+            self.counters.missed();
+            let start = crate::perf::Instant::now();
+            let pipeline = self.builder.build_view_model_cutout(variant);
+            self.counters.built(start.elapsed());
+            pipeline
         })
     }
 
@@ -1005,6 +1024,7 @@ pub(super) fn build_pipelines(
         sides: Sides::ALL.map(|sides| builder.timed_build(ShaderVariant::new(sides, Instancing::Plain), counters)),
         fade: Default::default(),
         shared: Default::default(),
+        view_model_cutout: Default::default(),
         builder,
         counters: counters.clone(),
         in_use: false,
@@ -1105,6 +1125,74 @@ impl SideBuilder {
             multiview_mask: None,
             cache: None,
         }))
+    }
+
+    /// The view model's pipeline for cut-out held items in `variant`:
+    /// drawn after the world with no prepass of their own, so they write
+    /// their own depth (nearer, like [`PipelineRole::OpaqueSolid`]) minus
+    /// the pixels their alpha cuts away: with multisampling through alpha
+    /// to coverage (`fs_main_coverage`), else by discarding them
+    /// (`fs_main_cutout`).
+    pub(super) fn build_view_model_cutout(&self, variant: ShaderVariant) -> wgpu::RenderPipeline {
+        let coverage = self.samples > 1;
+        let fade = variant.instancing.fades();
+        let fragment = match (coverage, fade) {
+            (true, _) => PipelineRole::OpaqueCoverage.fragment_entry(variant.instancing),
+            (false, false) => Some("fs_main_cutout"),
+            (false, true) => Some("fs_main_cutout_fade"),
+        };
+        let shared = variant.instancing.shared();
+        let buffers = [
+            Some(wgpu::VertexBufferLayout {
+                array_stride: size_of::<Vertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &VERTEX_ATTRIBUTES,
+            }),
+            Some(wgpu::VertexBufferLayout {
+                array_stride: if shared { 0 } else { size_of::<Instance3D>() as u64 },
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &INSTANCE_ATTRIBUTES,
+            }),
+        ];
+        let targets = [Some(wgpu::ColorTargetState {
+            format: HDR_FORMAT,
+            blend: None,
+            write_mask: wgpu::ColorWrites::ALL,
+        })];
+        self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("3d view model cut-out"),
+            layout: Some(&self.layout),
+            vertex: wgpu::VertexState {
+                module: &self.module,
+                entry_point: Some(PipelineRole::OpaqueSolid.vertex_entry()),
+                compilation_options: Default::default(),
+                buffers: &buffers,
+            },
+            primitive: wgpu::PrimitiveState {
+                cull_mode: variant.sides.cull(),
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: self.depth,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(super::SCENE_DEPTH_NEARER),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: self.samples,
+                alpha_to_coverage_enabled: coverage,
+                ..Default::default()
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &self.module,
+                entry_point: fragment,
+                compilation_options: Default::default(),
+                targets: &targets,
+            }),
+            multiview_mask: None,
+            cache: None,
+        })
     }
 
     /// [`SideBuilder::build`], timed into `counters`.

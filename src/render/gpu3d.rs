@@ -1986,6 +1986,7 @@ impl Renderer3D {
             } else {
                 0
             }
+            + self.view_model_motion_parts()
             + if self.screen.still_motion {
                 self.still_motion_parts()
             } else {
@@ -2141,6 +2142,7 @@ mod tests {
                 "previous_view_proj",
                 std::mem::offset_of!(FrameUniform, previous_view_proj),
             ),
+            ("reprojection", std::mem::offset_of!(FrameUniform, reprojection)),
             ("jitter", std::mem::offset_of!(FrameUniform, jitter)),
             ("cluster_depth", std::mem::offset_of!(FrameUniform, cluster_depth)),
             (
