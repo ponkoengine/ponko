@@ -6,7 +6,9 @@
   video (its container size and the AV1 decoder's frame size).
 - A KTX2 file whose supercompressed (Zstandard or zlib) levels unpack to
   more than their size needs is refused, and unpacking stops as soon as it
-  passes it: a few bytes could claim terabytes before.
+  passes it: a few bytes could claim terabytes before. A KTX2 file with a
+  texel block dimension of 256 in its format descriptor is an error
+  instead of a panic in the `ktx2` crate.
 - Levels (LDtk, Tiled) refuse tile layers of more than 16 777 216 cells,
   tilesets of more than 1 048 576 tiles and tiles or tileset sheets past
   the image limits, with `ErrorKind::Limit`; Tiled's zlib and gzip layer
