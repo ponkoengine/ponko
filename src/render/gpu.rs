@@ -102,6 +102,11 @@ pub(crate) struct Renderer {
     sprite_mirror: traffic::Mirror,
 
     timer: Option<GpuTimer>,
+    /// Time every frame's passes, whatever the game asks for
+    /// ([`set_gpu_timing_every`](Self::set_gpu_timing_every)): the offscreen
+    /// renderer of the GPU tests, so a test that asks for timestamps gets
+    /// every frame's.
+    pub(super) gpu_timing_pinned: bool,
     /// Times the GPU's copies of the asset group and streaming steps'
     /// texture uploads; `None` without timestamp queries.
     upload_timer: Option<super::upload_timer::UploadTimer>,
@@ -405,6 +410,15 @@ impl Renderer {
             .expect("made above")
     }
 
+    /// Times the passes of every `n`th frame from the next frame on (1:
+    /// every frame). The game picks `n` before each frame
+    /// (`Ctx::gpu_timing_every`).
+    pub(crate) fn set_gpu_timing_every(&mut self, n: u32) {
+        if let Some(timer) = &mut self.timer {
+            timer.set_every(if self.gpu_timing_pinned { 1 } else { n });
+        }
+    }
+
     /// The GPU time of each pass, smoothed (empty without timestamp queries).
     pub fn gpu_passes(&self) -> &[crate::profiler::GpuPass] {
         self.timer.as_ref().map_or(&[], |t| &t.passes)
@@ -672,6 +686,7 @@ impl Renderer {
             },
         );
         renderer.set_draw_hidden(true, true);
+        renderer.gpu_timing_pinned = true;
         renderer
     }
 
@@ -843,6 +858,7 @@ impl Renderer {
             too_many_sprites: false,
             sprite_mirror: traffic::Mirror::default(),
             timer,
+            gpu_timing_pinned: false,
             upload_timer,
             capabilities,
             draw_hidden: false,

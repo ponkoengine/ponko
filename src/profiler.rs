@@ -169,6 +169,11 @@ impl Profiler {
         p
     }
 
+    /// A trace is being recorded (it shows every frame's GPU passes).
+    pub(crate) fn tracing(&self) -> bool {
+        self.trace.is_some()
+    }
+
     /// A benchmark run is set up: the game runs with vsync off.
     pub fn benchmarking(&self) -> bool {
         self.bench.is_some()

@@ -212,6 +212,12 @@ goes, in a running game:
   prepass, opaque, transparent, screen effects, bloom, post), measured
   with timestamp queries. On GPUs that draw in tiles, passes overlap, so
   each is counted from the end of the one before.
+  Timing a pass costs the graphics library a few heap allocations, so a
+  game times one frame in 16, and every frame while something reads every
+  frame: profiling, the overlay, a trace, a `PONKO_BENCH` run or automatic
+  quality. The smoothed times weigh each sample by the frames it stands
+  for, so they settle at the same values either way (see
+  [Cost](viewports.md#cost) for what it saves).
 - **`ctx.perf.render_stats()`**: draw calls; 3D models and triangles drawn for
   the camera and, separately, for the shadow maps; and the render CPU
   time split into culling (`collect_ms`), recording (`record_ms`, all

@@ -12,7 +12,7 @@
 //! `PONKO_RENDER_FRAMES`, `PONKO_RENDER_WARMUP`, `PONKO_RENDER_SIZE`,
 //! `PONKO_RENDER_SAMPLES`, `PONKO_RENDER_QUALITY`, `PONKO_RENDER_SCALE`,
 //! `PONKO_RENDER_MATCHED`, `PONKO_RENDER_TAA`, `PONKO_RENDER_SHADOW_FILTER`,
-//! `PONKO_RENDER_VIEWS`,
+//! `PONKO_RENDER_VIEWS`, `PONKO_RENDER_GPU_EVERY`,
 //! and the outputs `PONKO_RENDER_CSV`, `PONKO_RENDER_FRAMES_CSV` and
 //! `PONKO_RENDER_PNG`. `PONKO_GPU_TIER` opens the device as a weaker GPU.
 //! `PONKO_ALLOC_SITES=n` draws `n` more frames and prints where their
@@ -82,6 +82,10 @@ fn settings() -> Result<Settings, String> {
         None | Some("0") => false,
         Some("1") => true,
         Some(other) => return Err(format!("PONKO_RENDER_MATCHED={other} is not 0 or 1")),
+    };
+    setup.gpu_timing_every = match number("PONKO_RENDER_GPU_EVERY", 1)? {
+        0 => return Err("PONKO_RENDER_GPU_EVERY=0 is not a number of frames: 1 times every frame".to_owned()),
+        n => u32::try_from(n).map_err(|_| format!("PONKO_RENDER_GPU_EVERY={n} is too large"))?,
     };
     let frames = number("PONKO_RENDER_FRAMES", 600)?;
     if frames == 0 {
@@ -346,6 +350,12 @@ pub fn run(b: &mut Bench) -> Option<String> {
                 settings.frames,
                 bench.adapter()
             );
+            if settings.setup.gpu_timing_every != 1 {
+                println!(
+                    "    GPU passes timed on every {}th frame (PONKO_RENDER_GPU_EVERY)",
+                    settings.setup.gpu_timing_every
+                );
+            }
             if let Some(reason) = &scene.gpu.unavailable {
                 println!("    GPU pass times unavailable: {reason}");
             }
