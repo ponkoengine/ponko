@@ -1967,10 +1967,12 @@ mod tests {
             ctx.edit(|ed, ctx| ed.set(ctx, crate_e, "Hp", serde_json::json!(8.0)))
                 .unwrap();
             let wall = gltf_node(&mut ctx, "Wall");
-            p.select(Some(wall), false);
+            click_row(&egui, &mut p, &mut ctx, "Wall");
+            assert_eq!(p.selected, Some(wall));
             frame(&egui, &mut p, &mut ctx, vec![plain(Key::Delete)]);
             assert!(!ctx.world.is_alive(wall), "deleted");
-            p.select(Some(crate_e), false);
+            click_row(&egui, &mut p, &mut ctx, "Crate");
+            assert_eq!(p.selected, Some(crate_e));
             let shapes = drawn(&egui, &mut p, &mut ctx, vec![]);
             let all = texts(&shapes);
             for row in ["Crate › Attached3D", "Crate › Hp", "Wall", "Wall/Lamp"] {
@@ -2072,6 +2074,129 @@ mod tests {
             assert_eq!(models, 2, "the crate and the lamp, once");
         }
 
+        /// Clicks the hierarchy row of the entity labelled `name`.
+        fn click_row(egui: &egui::Context, p: &mut Panels, ctx: &mut Ctx, name: &str) {
+            let shapes = drawn(egui, p, ctx, vec![]);
+            let at = text_at(&shapes, |t| t.split("  #").next() == Some(name) && t.contains("  #"))
+                .unwrap_or_else(|| panic!("a row named {name}: {:?}", texts(&shapes)));
+            assert!(at.x < SIDE_PANEL, "in the hierarchy: {at}");
+            frame(egui, p, ctx, vec![moved(at)]);
+            frame(egui, p, ctx, vec![button(at, true)]);
+            frame(egui, p, ctx, vec![button(at, false)]);
+        }
+
+        #[test]
+        fn a_click_on_a_hierarchy_row_selects_its_entity() {
+            let file = gltf_asset("row-click", &yard_nodes(-3.0));
+            let (egui, mut p, mut ctx, _) = editor_with_level(&file);
+            let (wall, lamp) = (gltf_node(&mut ctx, "Wall"), gltf_node(&mut ctx, "Wall/Lamp"));
+            assert_eq!(p.selected, None);
+            click_row(&egui, &mut p, &mut ctx, "Wall");
+            assert_eq!(p.selected, Some(wall), "the clicked row's entity");
+            click_row(&egui, &mut p, &mut ctx, "Lamp");
+            assert_eq!(p.selection(), vec![lamp], "a plain click replaces the selection");
+            // The rows still drag: the lamp onto the crate.
+            let crate_e = gltf_node(&mut ctx, "Crate");
+            let shapes = drawn(&egui, &mut p, &mut ctx, vec![]);
+            let row = |name: &str| text_at(&shapes, |t| t.starts_with(name) && t.contains('#')).unwrap();
+            mouse_drag(&egui, &mut p, &mut ctx, row("Lamp"), row("Crate"), 4);
+            assert_eq!(parent_of(&ctx, lamp), Some(crate_e), "{:?}", p.error);
+            assert_eq!(p.selection(), vec![lamp], "a drag doesn't change the selection");
+        }
+
+        /// The entity of node `path` of the glTF scene of file `file`.
+        fn node_in(ctx: &mut Ctx, file: &TempAsset, path: &str) -> Entity {
+            let found: Vec<Entity> = ctx
+                .world
+                .query::<&crate::d3::GltfRoot>()
+                .iter()
+                .filter(|r| r.path == file.name)
+                .filter_map(|r| r.entity(path))
+                .collect();
+            assert_eq!(found.len(), 1, "one scene of {}", file.name);
+            found[0]
+        }
+
+        #[test]
+        fn a_node_attached_to_a_node_of_another_gltf_scene_stays_on_it_through_save_open_and_play_stop() {
+            let yard = gltf_asset("cross-yard", &yard_nodes(-3.0));
+            let posts = gltf_asset("cross-posts", &serde_json::json!([{ "name": "Post", "mesh": 0 }]));
+            let scene = TempAsset::new("cross-scene");
+            let (egui, mut p, mut ctx, _) = editor_with_level(&yard);
+            ctx.spawn_prefab(&posts.name, T3::at(vec3(4.0, 0.0, 0.0))).unwrap();
+            frame(&egui, &mut p, &mut ctx, vec![]);
+            let (lamp, post) = (node_in(&mut ctx, &yard, "Wall/Lamp"), node_in(&mut ctx, &posts, "Post"));
+
+            // The yard's lamp dragged onto the other scene's post.
+            let shapes = drawn(&egui, &mut p, &mut ctx, vec![]);
+            let row = |name: &str| text_at(&shapes, |t| t.starts_with(name) && t.contains('#')).unwrap();
+            mouse_drag(&egui, &mut p, &mut ctx, row("Lamp"), row("Post"), 4);
+            assert_eq!(parent_of(&ctx, lamp), Some(post), "{:?}", p.error);
+            let lamp_at = position(&ctx, lamp);
+            let on_post = |ctx: &mut Ctx| {
+                let (lamp, post) = (node_in(ctx, &yard, "Wall/Lamp"), node_in(ctx, &posts, "Post"));
+                assert_eq!(parent_of(ctx, lamp), Some(post), "on the other scene's post");
+                let at = position(ctx, lamp);
+                assert!((at - lamp_at).length() < 1e-4, "where it was put: {at}, not {lamp_at}");
+                (lamp, post)
+            };
+
+            // Saved and opened again: the yard spawns first, its lamp
+            // waits for the post's scene.
+            ctx.edit(|ed, ctx| ed.save_as(ctx, &scene.name, DocKind::Scene))
+                .unwrap();
+            let saved: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&scene.file).unwrap()).unwrap();
+            let records = &saved["resources"]["GltfSceneSaves"]["scenes"];
+            assert_eq!(
+                records[0]["overrides"]["Wall/Lamp"]["parent"],
+                serde_json::json!({ "scene_node": { "scene": records[1]["id"], "node": "Post" } }),
+                "{records}"
+            );
+            p.open_file(&mut ctx, &scene.name);
+            assert!(p.error.is_none(), "{:?}", p.error);
+            frame(&egui, &mut p, &mut ctx, vec![]);
+            let (lamp, _) = on_post(&mut ctx);
+
+            // The post's scene moved: the lamp goes with it.
+            let posts_root = ctx
+                .world
+                .query::<(Entity, &crate::d3::GltfRoot)>()
+                .iter()
+                .find(|(_, r)| r.path == posts.name)
+                .map(|(e, _)| e)
+                .unwrap();
+            let mut moved = ctx.world.get_json(posts_root, "Transform3D").unwrap();
+            moved["position"] = serde_json::json!([4.0, 1.0, 0.0]);
+            ctx.edit(|ed, ctx| ed.set(ctx, posts_root, "Transform3D", moved))
+                .unwrap();
+            frame(&egui, &mut p, &mut ctx, vec![]);
+            let lamp_at = {
+                let at = position(&ctx, lamp);
+                assert!((at - (lamp_at + vec3(0.0, 1.0, 0.0))).length() < 1e-4, "{at}");
+                at
+            };
+
+            // Played, the game moves the lamp; stopped.
+            frame(&egui, &mut p, &mut ctx, vec![command(Key::P)]);
+            assert!(ctx.editor.playing());
+            ctx.world.get_mut::<T3>(lamp).unwrap().position.y += 5.0;
+            frame(&egui, &mut p, &mut ctx, vec![command(Key::Period)]);
+            assert!(!ctx.editor.playing() && p.dialog().is_none(), "{:?}", p.error);
+            let lamp = node_in(&mut ctx, &yard, "Wall/Lamp");
+            let at = position(&ctx, lamp);
+            assert!((at - lamp_at).length() < 1e-4, "{at}");
+            on_post_at(&mut ctx, &yard, &posts);
+            let models = ctx.world.query::<&crate::render::Model>().iter().count();
+            assert_eq!(models, 4, "the crate, the wall, the lamp and the post, once");
+        }
+
+        /// The lamp of `yard` hangs off the post of `posts`.
+        fn on_post_at(ctx: &mut Ctx, yard: &TempAsset, posts: &TempAsset) {
+            let (lamp, post) = (node_in(ctx, yard, "Wall/Lamp"), node_in(ctx, posts, "Post"));
+            assert_eq!(parent_of(ctx, lamp), Some(post), "on the other scene's post");
+        }
+
         #[test]
         fn play_then_stop_spawns_gltf_scenes_again_and_undo_still_reaches_their_nodes() {
             let file = gltf_asset("gltf-play", &yard_nodes(-3.0));
@@ -2083,8 +2208,8 @@ mod tests {
                 .unwrap();
             let wall = gltf_node(&mut ctx, "Wall");
             ctx.edit(|ed, ctx| ed.delete(ctx, wall)).unwrap();
-            p.select(Some(crate_e), false);
-            frame(&egui, &mut p, &mut ctx, vec![]);
+            click_row(&egui, &mut p, &mut ctx, "Crate");
+            assert_eq!(p.selected, Some(crate_e));
 
             // Played: the game moves the crate. Stopped.
             frame(&egui, &mut p, &mut ctx, vec![command(Key::P)]);

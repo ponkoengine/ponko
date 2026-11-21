@@ -288,9 +288,12 @@ kinds are per node:
   it elsewhere before deleting it stays where you put it.
 - A node **attached to another parent** (dragged onto another row in the
   hierarchy, or detached) keeps that parent: another node of the scene,
-  the scene's root, or an entity the scene file saves. A parent the save
-  leaves out (a node of another glTF scene) can't be kept, and the editor
-  says so on its console.
+  the scene's root, the root or a node of another glTF scene, or an
+  entity the scene file saves. Through a save, a reopen and Play/Stop a
+  node of another scene comes back on its parent whichever scene spawns
+  first (the scene file numbers each glTF scene's record for it). A
+  parent the save leaves out (an entity marked not saved) can't be kept,
+  and the editor says so on its console.
 
 Selecting a scene's root or any of its nodes shows, at the top of the
 inspector, the file it came from and every override of the scene, one row
