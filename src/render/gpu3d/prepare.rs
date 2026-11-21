@@ -68,7 +68,7 @@ impl Renderer3D {
                 label: Some("frame writes"),
             });
             writes.record(&mut encoder);
-            queue.submit([encoder.finish()]);
+            traffic::submit(queue, [encoder.finish()]);
         }
     }
 
