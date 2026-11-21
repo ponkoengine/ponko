@@ -50,6 +50,7 @@ mod sprites;
 mod streaming;
 mod text;
 mod tilemap;
+mod ui_draw;
 mod ui_list;
 #[cfg(feature = "video")]
 mod video;
@@ -262,6 +263,7 @@ fn main() {
     tilemap::run(&mut b);
     text::run(&mut b);
     ui_list::run(&mut b);
+    ui_draw::run(&mut b);
     frame2d::run(&mut b);
     sparse_set::run(&mut b);
     sprites::run(&mut b);

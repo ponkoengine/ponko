@@ -239,6 +239,30 @@ impl Ctx {
         self.update_retained_ui();
     }
 
+    /// `ponko_bench`: the retained UI's frame with this frame's input, its
+    /// clock moved `dt` seconds (frames of a headless run take no time):
+    /// its animations play, it is laid out and sends its events.
+    /// Unstable (`bench-internals`).
+    #[doc(hidden)]
+    #[cfg(feature = "bench-internals")]
+    pub fn bench_ui_frame(&mut self, dt: f32) {
+        let text = std::mem::take(&mut self.ui_state.retained_input_text);
+        let mut input = self.retained_input(&self.ui, text);
+        input.dt = dt;
+        self.ui.pixels = self.gfx.scale_factor;
+        self.ui.frame_with_text(self.window_size(), &input, &mut self.gfx.text);
+        self.ui_state.retained_input_text = input.text;
+    }
+
+    /// `ponko_bench`: text pushes its glyphs as with a GPU (a headless run
+    /// skips them), into stand-in textures. Unstable (`bench-internals`).
+    #[doc(hidden)]
+    #[cfg(feature = "bench-internals")]
+    pub fn bench_ui_glyphs(&mut self) {
+        self.gfx.stand_in_textures();
+        self.gfx.headless = false;
+    }
+
     /// `ponko_bench`: the retained UI's work after a frame's systems, as a
     /// window's frame does it (layout of what the systems changed, the draw
     /// list), then forgets the draw list. Returns the sprites drawn.
