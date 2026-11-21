@@ -228,6 +228,7 @@ impl Renderer3D {
             Features::SSR_SPREAD
                 .only_if(self.screen.ssr.is_some() && targets.ssr.is_some() && self.no_spread.is_some()),
             Features::SPLIT.only_if(has(|p| matches!(p, Part::Transparent))),
+            Features::VIEW_MODEL_SEE_THROUGH.only_if(self.view_model_see_through_pass()),
             Features::DEPTH_COPY.only_if(targets.depth_copy.is_some()),
             Features::TAA.only_if(self.screen.taa_on && self.screen.taa.is_some() && targets.taa.is_some()),
             Features::TARGET_EFFECTS.only_if(!self.effects.target_frame.is_empty()),

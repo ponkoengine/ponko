@@ -232,6 +232,9 @@ pub fn ponko_ecs::HookWorld<'_>::resource<R: core::marker::Send + core::marker::
 pub fn ponko_ecs::HookWorld<'_>::resource_mut<R: core::marker::Send + core::marker::Sync + 'static>(&mut self) -> &mut R
 pub fn ponko_ecs::HookWorld<'_>::resource_scope<R: core::marker::Send + core::marker::Sync + 'static, T>(&mut self, impl core::ops::function::FnOnce(&mut ponko_ecs::HookWorld<'_>, &mut R) -> T) -> T
 pub fn ponko_ecs::HookWorld<'_>::world(&self) -> &ponko_ecs::World
+impl ponko_ecs::HookWorld<'_>
+pub fn ponko_ecs::HookWorld<'_>::get_dynamic(&self, ponko_ecs::Entity, ponko_ecs::ComponentId) -> core::option::Option<*const u8>
+pub fn ponko_ecs::HookWorld<'_>::get_dynamic_mut(&mut self, ponko_ecs::Entity, ponko_ecs::ComponentId) -> core::option::Option<*mut u8>
 pub struct ponko_ecs::Lookup<'a, L: ponko_ecs::QueryData>
 impl<L: ponko_ecs::QueryData> ponko_ecs::Lookup<'_, L>
 pub fn ponko_ecs::Lookup<'_, L>::contains(&self, ponko_ecs::Entity) -> bool
@@ -321,6 +324,10 @@ pub fn ponko_ecs::QueryResources<'_, Q, R>::resources(&mut self) -> <R as ponko_
 impl<Q: ponko_ecs::QueryData, R: ponko_ecs::ResourceSet> core::ops::drop::Drop for ponko_ecs::QueryResources<'_, Q, R>
 pub fn ponko_ecs::QueryResources<'_, Q, R>::drop(&mut self)
 pub struct ponko_ecs::RawWorld<'a>(_)
+impl ponko_ecs::RawWorld<'_>
+pub fn ponko_ecs::RawWorld<'_>::on_add_dynamic(&mut self, ponko_ecs::ComponentId, ponko_ecs::DynamicHook)
+pub fn ponko_ecs::RawWorld<'_>::on_remove_dynamic(&mut self, ponko_ecs::ComponentId, ponko_ecs::DynamicHook)
+pub fn ponko_ecs::RawWorld<'_>::on_replace_dynamic(&mut self, ponko_ecs::ComponentId, ponko_ecs::DynamicHook)
 impl ponko_ecs::RawWorld<'_>
 pub unsafe fn ponko_ecs::RawWorld<'_>::require_dynamic(&mut self, ponko_ecs::ComponentId, ponko_ecs::ComponentId, *const u8)
 impl<'a> ponko_ecs::RawWorld<'a>
@@ -661,5 +668,6 @@ impl<A: core::marker::Send + core::marker::Sync + 'static> ponko_ecs::ResourceTu
 pub type (A)::Refs<'w> = (&'w mut A)
 pub fn ponko_ecs::compile_tree<T: ponko_ecs::FilterTree>(&T, impl core::ops::function::Fn(u32) -> core::option::Option<ponko_ecs::ComponentId>) -> core::result::Result<ponko_ecs::CompiledFilter, ponko_ecs::FilterError>
 pub type ponko_ecs::DropFn = fn(*mut u8)
+pub type ponko_ecs::DynamicHook = alloc::rcs::arc::Arc<(dyn for<'w> core::ops::function::Fn(&mut ponko_ecs::HookWorld<'w>, ponko_ecs::Entity, ponko_ecs::ComponentId, *const u8) + core::marker::Send + core::marker::Sync)>
 pub type ponko_ecs::Hook = for<'w> fn(&mut ponko_ecs::HookWorld<'w>, ponko_ecs::Entity)
 pub type ponko_ecs::ReplaceHook<T> = for<'w, 'v> fn(&mut ponko_ecs::HookWorld<'w>, ponko_ecs::Entity, &'v T)

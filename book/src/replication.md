@@ -341,7 +341,8 @@ An event type can also be declared by name, with plain bytes for events:
 for C and C++ games, or a Rust game that encodes its own. `raw_event`
 declares it, `to_server_raw`, `to_client_raw` and `to_clients_raw` send
 the bytes, and they arrive unchanged as `NetEvent<RawEvent>`, every raw
-type in one stream, told apart by `name()`:
+type in one stream, told apart by `name()` (or `kind()`, the type's index
+among the declared events, which is how C and C++ name them):
 
 ```rust
 use ponko::net::{NetEvent, RawEvent, Replication};
@@ -411,14 +412,18 @@ forever. A client's own entities are always sent.
 **Each change goes once.** Packets of state are unreliable, so the server
 keeps what each client acknowledged as that client's baseline, and sends
 changes against it. A change goes out once; while the acknowledgement is
-on its way, the entity isn't sent again. Only if the client hasn't
-acknowledged it after a resend timeout, or if the entity changed again
-meanwhile, does it go again. The timeout follows each client's round trip,
-measured from its acknowledgements: the smoothed round trip plus four of
-its deviations, at least two ticks and at most a second (0.2 s until the
-first is measured). Spawns and despawns are resent the same way. On a link
+on its way, the entity isn't sent again. It goes again only if the entity
+changed again meanwhile, if the client acknowledged packets sent after its
+one but not that one (it was lost: resent at once), or if the client hasn't
+acknowledged it after a resend timeout. The timeout follows each client's
+round trip, measured from its acknowledgements: the smoothed round trip
+plus four of its deviations, at least two ticks and at most a second (0.2 s
+until the first is measured), doubling with each try while nothing comes
+back, up to 4 s. Spawns and despawns are resent the same way. On a link
 with a round trip of 100 ms (six ticks at 60 Hz), sending a change in
-every packet until it was acknowledged sent it six times.
+every packet until it was acknowledged sent it six times. [Sent once,
+resent when lost](#sent-once-resent-when-lost) has the details and the
+numbers.
 
 **Interest** sends each client only the entities within the outer ring,
 nearer rings more often. An entity that leaves a client's rings is
@@ -564,7 +569,7 @@ to be done. The other rows' times were measured before changes were sent
 once (next section) and didn't move beyond that busy machine's noise
 since.
 
-### Sent once, resent on a timeout
+### Sent once, resent when lost
 
 Sending a change in every packet until the client acknowledged it cost a
 round trip's worth of packets per change. Sending it once, and again only
@@ -582,6 +587,74 @@ links with longer round trips the saving grows with them):
 Before, the `1 in 20` scenario sat at the 64 KB/s budget, and entities
 that moved waited behind ones resent; now it uses half of it. Where every
 entity changes every tick there is nothing to resend, and nothing changed.
+
+What sends a record again, once it went:
+
+1. **The entity changed again.** The new state goes as soon as it is due.
+2. **Acknowledgements skipped its packet.** The client acknowledges with
+   the newest packet it has and a mask of the 64 before it. When it
+   acknowledges a packet sent at a later tick but not the one that carried
+   the record, that one is lost, and the record goes in the next packet:
+   a round trip after the packet that followed it, instead of after the
+   timeout. A record sent again since, or already acknowledged in a later
+   packet, isn't. On a link that reorders packets, a packet called lost
+   may still arrive; each time one does, the server waits a tick longer
+   before calling the next one lost (packets sent that many ticks later
+   must be acknowledged first), and after 128 acknowledged packets with no
+   such case it waits a tick less.
+3. **The resend timeout passed** without an acknowledgement: the smoothed
+   round trip plus four deviations (above). Each time a timeout sends
+   records again and nothing was acknowledged since, the next one waits
+   twice as long, up to 4 s. The first acknowledgement brings it back to
+   the plain timeout, and everything overdue goes at once.
+
+The engine's suite measures both on its scripted network, a link of three
+ticks each way (50 ms) at 60 Hz. The numbers are exact: the same on every
+run and every machine.
+
+A lost packet. Five entities change, and the packet carrying them is lost
+(jitter of up to a tick each way, a round trip of 8.6 ticks):
+
+| | Resent after |
+|---|---|
+| Before: on the timeout only | 12 ticks (the timeout) |
+| After: when an acknowledgement skips it | 9 ticks |
+
+On a link that keeps its timing steady the two meet: the timeout is the
+round trip plus a tick, and so is the acknowledgement of the next packet.
+The more the round trip varies, the longer the timeout and the more the
+early resend saves. Over 20 seconds, with 100 counters each changing one
+tick in 20 and losing 10% of the packets each way, ticks from a change on
+the server to the client showing it:
+
+| Link | Mean | Slowest 5% (the lost ones), mean | 99th percentile | Most | Server bytes/s |
+|---|---|---|---|---|---|
+| Jitter up to a tick: before | 6.02 | 20.0 | 24 | 44 | 1,630 |
+| Jitter up to a tick: after | 5.80 | 18.2 | 23 | 37 | 1,632 |
+| Jitter up to 3 ticks (packets overtake): before | 7.45 | 24.9 | 24 | 44 | 1,626 |
+| Jitter up to 3 ticks: after | 7.17 | 22.7 | 25 | 40 | 1,635 |
+| Jitter up to 3 ticks: after, without the reordering tolerance | 6.95 | 20.6 | 21 | 36 | 1,748 |
+
+Without the tolerance, a link that reorders packets gets the late ones
+resent too: 7.5% more bytes for the freshest replicas. The tolerance keeps
+the bytes within 0.6% of before.
+
+An outage. The link (round trip 8 ticks) is cut for 9 s, after five
+entities changed and one was despawned:
+
+| | Resent at (ticks into the outage) | Records, despawns sent | Server bytes/s | Client caught up after the link was back |
+|---|---|---|---|---|
+| Before | every 9 ticks | 300, 60 | 833 | 11 ticks |
+| After | 9, 27, 63, 135, 279, 519 (the waits 9, 18, 36, 72, 144 and 240 ticks: 4 s) | 35, 7 | 565 | 18 ticks |
+
+Most of the bytes left are the packet headers the server still sends
+every tick (about 540 B/s). After the outage, the backed-off server waits
+for the first acknowledgement before sending again: the client is up to
+date a round trip plus the trip there (12 ticks) later, plus the 0.1 s
+it shows interpolated values behind. Before, it was a matter of luck where
+the 9-tick cycle stood: from 5 to 13 ticks for the data, plus the same
+0.1 s. Changes made during an outage still go once, at once; only the
+resends wait, so the budget is left for new changes.
 
 The server's CPU per tick, in the `1 in 20` scenario, five runs of each,
 the two builds alternating (2026-11-21, on the busy machine above): the
@@ -658,18 +731,42 @@ a type and a quantization for each), mark entities, read the role, net ids
 and replicas, and set viewers. That is `ponko_ctx_replication`,
 `ponko_ctx_replicate` and the calls above, or `ctx.replicated<T>()`,
 `ctx.replication()` and `ctx.replicate()` in C++. The budget and the
-interest rings are arguments of `ponko_ctx_replication`, and interest uses
-the entities' transforms. Inputs and prediction (`Replication::input`,
-`Replication::predicted`) are Rust-only for now: a native game sends its
-controls as [application messages](networking.md#application-messages-rust),
-and the server moves the players' entities. So are
-`Replication::interpolated` and `Replication::position` (generic over Rust
-types): a C component is set when its update arrives.
+interest rings are arguments of `ponko_ctx_replication`.
 
-Typed events (`Replication::event`) are generic over serde types, so
-events for C and C++ are [raw events](#raw-events-bytes-you-encode):
-bytes the game encodes itself. Their Rust side (`Replication::raw_event`,
-`to_server_raw`, `to_client_raw`, `to_clients_raw` and
-`NetEvent<RawEvent>`) is in place; the C and C++ calls that wrap it are
-not yet, so until then a native game sends its events as application
-messages too.
+Inputs, prediction, events and smooth motion work the same way, by name,
+after `ponko_ctx_replication` in setup and the same on every side:
+
+| C | C++ | Rust |
+|---|---|---|
+| `ponko_ctx_replication_input` | `ctx.replication_input<I>()` | `Replication::input` |
+| `ponko_ctx_replication_predicted` | `ctx.replication_predicted<S, I>()` | `Replication::predicted` |
+| `ponko_ctx_replication_interpolated` | `ctx.replication_interpolated()` | `Replication::interpolated_with` |
+| `ponko_ctx_replication_event` | `ctx.replication_event()` | `Replication::raw_event` |
+| `ponko_ctx_replication_position` | `ctx.replication_position<T>()` | `Replication::position` |
+| `ponko_ctx_set_replication_input`, `ponko_ctx_replication_input_of` | `ctx.set_replication_input()`, `ctx.replication_input_of<I>()` | `set_input`, `input_of` |
+| `ponko_ctx_replication_send` | `ctx.replication_send()` | `to_server_raw`, `to_client_raw`, `to_clients_raw` |
+| `ponko_ctx_net_events` | `ctx.net_events()` | `ctx.events.read::<NetEvent<RawEvent>>()` |
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:replication_inputs}}
+```
+
+- The input is one plain struct of which the declared fields travel,
+  every tick and redundantly, so a lost packet costs nothing.
+- The prediction step gets the component's bytes and one input's bytes.
+  It must give the same result for the same bytes on every machine, and
+  must not call into the ctx: it runs on the server for each input and on
+  the owning client to predict and to replay after a correction.
+- An interpolated component's float fields move between the values
+  received, `delay` in the past, angle fields (`PONKO_FIELD_ANGLE`) the
+  short way round; at most 32 float fields. Its other fields are set when
+  they arrive.
+- Events are [raw events](#raw-events-bytes-you-encode): bytes of a
+  kind, numbered from 0 in the order they were declared (Rust
+  `RawEvent::kind`, `Replication::raw_event_kind`). `ponko_ctx_net_events` hands every event that arrived since the
+  system last read them as one array, valid until the system returns.
+  It works inside `ponko_query` callbacks (not `ponko_query_par`), so read
+  it once per system: a second read gives only newer events.
+- `ponko_ctx_replication_position` makes interest use 2 or 3 floats of a
+  component instead of the entities' transforms; an entity without that
+  component reaches every client.

@@ -75,6 +75,12 @@ steam = ["ponko/steam"]
 # library) to the build. Off: those calls fail with an error.
 webrtc = ["ponko/webrtc"]
 
+# Video playback (ponko_ctx_load_video): WebM files with AV1 pictures and
+# Vorbis sound, decoded on the CPU into a texture. Off by default: it adds
+# the AV1 decoder to the build. Off: loading a video reports
+# PONKO_UNSUPPORTED.
+video = ["ponko/video"]
+
 # The WebRTC test needs the feature (C calls against a lobby server).
 [[test]]
 name = "rtc"

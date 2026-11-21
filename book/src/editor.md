@@ -280,9 +280,31 @@ file makes of it is its override, kept in the scene's saved record:
   editor spawns its glTF scenes where they were, with them, and a game
   that loads the save and spawns the file again gets them too.
 
-Overrides are per component (the changed fields of each), a node's parent
-link is never one, and a node deleted in the editor comes back with the
-file: hide it, or leave it out of the export.
+Overrides are per component (the changed fields of each), and two more
+kinds are per node:
+
+- A node **deleted** in the editor (with the nodes that hang off it) stays
+  deleted: re-exports and reopens leave it out, and what you attached to
+  it elsewhere before deleting it stays where you put it.
+- A node **attached to another parent** (dragged onto another row in the
+  hierarchy, or detached) keeps that parent: another node of the scene,
+  the scene's root, or an entity the scene file saves. A parent the save
+  leaves out (a node of another glTF scene) can't be kept, and the editor
+  says so on its console.
+
+Selecting a scene's root or any of its nodes shows, at the top of the
+inspector, the file it came from and every override of the scene, one row
+each (*node* › *component*, *node* › parent, or the deleted *node*), with a
+**Revert** button that puts the file's value, the file's parent or the
+deleted node back (one undo step each), and **Revert all**. Undoing a
+delete brings the node back whole: what saves leave out of it (its mesh,
+collider, light) comes from the file again.
+
+Play and Stop keep glTF scenes: Play records how they were edited, and
+Stop spawns them again from their files (saves leave their nodes out) with
+those edits. Their nodes are new entities then; the undo history and the
+selection follow them, so undoing past Stop still reaches the edits made
+before Play.
 
 ## Play mode
 
@@ -373,7 +395,11 @@ instance's overrides are listed, reverted one at a time or all together
 and applied to the prefab and its other instances (and, for a prefab
 inside a prefab, to the outer or the included file with **Apply to
 *name***), a glTF scene's node moved with the gizmo keeps its place through
-a re-export and a save and reopen, the 2D and 3D cameras centre on the
+a re-export and a save and reopen, glTF nodes deleted with the Delete key
+or dragged onto another row in the hierarchy stay so through both, a glTF
+scene's overrides are listed and reverted from its panel, Play then Stop
+spawns glTF scenes again with the undo history pointing at their new
+nodes, the 2D and 3D cameras centre on the
 view between the panels and follow a dragged panel edge, a model tile
 shows the thumbnail kept on disk for its content, Stop gives back the
 world saved at Play byte for byte (and keeps only the edits ticked), the

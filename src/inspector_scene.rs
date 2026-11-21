@@ -189,6 +189,13 @@ pub(super) fn label(ctx: &Ctx, e: Entity) -> String {
     {
         return name.0.clone();
     }
+    // A glTF scene's node: its name in the file.
+    #[cfg(feature = "3d")]
+    if let Some(node) = ctx.world.get::<crate::d3::GltfNode>(e)
+        && !node.name.is_empty()
+    {
+        return node.name.clone();
+    }
     if let Ok(model) = ctx.world.get_json(e, "Model")
         && let Some(mesh) = model["mesh"].as_str()
     {

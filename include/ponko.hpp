@@ -290,6 +290,9 @@ constexpr std::uint32_t decal_no_image = PONKO_DECAL_NO_IMAGE;
 /// Which decal layers a model takes (Rust `ReceivesDecals`); models without
 /// it take all. {0} takes none.
 using receives_decals = PonkoReceivesDecals;
+/// Draws a model with its lightmap from the baked lighting set with
+/// ctx::set_baked_lighting (Rust `Lightmapped`): its index in the bake.
+using lightmapped = PonkoLightmapped;
 /// A square of heightfield terrain, drawn more coarsely further from the
 /// camera (Rust `TerrainTile`); made with ctx::create_terrain_tile.
 using terrain_tile = PonkoTerrainTile;
@@ -1209,11 +1212,22 @@ using query_filter_ex = PonkoQueryFilterEx;
 /// (split_toning_shadows, split_toning_highlights, split_toning_balance), depth of field (dof_enabled,
 /// dof_focus_distance, dof_focus_range, dof_blur) and the sample count (msaa).
 using post_ex = PonkoPostEx;
-/// The 3D camera that can grow (PonkoCamera3DEx): `camera` is ponko::camera3d, plus occlusion_culling and
-/// particles (whether it draws particles, trails and lines).
+/// Whether a camera draws `ctx.debug`'s 3D lines and labels (the `debug_draw` of camera3d_ex and
+/// target_camera_ex, Rust `Camera::debug_draw`); set it with `static_cast<std::uint32_t>(...)`.
+enum class camera_debug_draw : std::uint32_t {
+    /// As before the flag: the window's camera draws them, a target camera while it draws particles.
+    as_default = PONKO_DEBUG_DRAW_DEFAULT,
+    /// Always (on the default layer).
+    on = PONKO_DEBUG_DRAW_ON,
+    /// Never.
+    off = PONKO_DEBUG_DRAW_OFF,
+};
+/// The 3D camera that can grow (PonkoCamera3DEx): `camera` is ponko::camera3d, plus occlusion_culling,
+/// particles (whether it draws particles, trails and lines) and debug_draw (a ponko::camera_debug_draw).
 using camera3d_ex = PonkoCamera3DEx;
 /// A target camera that can grow (PonkoTargetCameraEx): `target_camera` is ponko::target_camera, plus
-/// particles.
+/// particles and debug_draw (a ponko::camera_debug_draw: whether it draws `ctx.debug`'s 3D drawing, whatever
+/// particles says).
 using target_camera_ex = PonkoTargetCameraEx;
 
 /// A material_desc_ex holding `d` (no stencil).
@@ -1339,7 +1353,8 @@ inline post_ex blend_post_volumes(const post_ex& base, const std::vector<post_vo
     detail::check(ponko_post_blend_volumes(&base, raw.data(), raw.size(), at, &out));
     return out;
 }
-/// A camera3d_ex holding `c`, with no occlusion culling and particles drawn (set `particles` to change that).
+/// A camera3d_ex holding `c`, with no occlusion culling, particles drawn and camera_debug_draw::as_default (set
+/// `particles` and `debug_draw` to change that).
 inline camera3d_ex camera3d_ex_of(const camera3d& c) {
     camera3d_ex x{};
     x.struct_size = sizeof(camera3d_ex);
@@ -1347,7 +1362,8 @@ inline camera3d_ex camera3d_ex_of(const camera3d& c) {
     detail::check(ponko_camera3d_ex_from(&c, &x));
     return x;
 }
-/// A target_camera_ex holding `t`, with particles drawn (set `particles` to change that).
+/// A target_camera_ex holding `t`, with particles drawn and camera_debug_draw::as_default (set `particles` and
+/// `debug_draw` to change that).
 inline target_camera_ex target_camera_ex_of(const target_camera& t) {
     target_camera_ex x{};
     x.struct_size = sizeof(target_camera_ex);
@@ -1689,6 +1705,7 @@ public:
 
 class world_view;
 class ctx;
+class hook_world;
 /// A query filter: only entities whose `T` changed since the calling system
 /// last ran. Use it as `world.each<ponko::changed<Health>>(fn)`, or in the
 /// list of `query` and `count`. A filter also requires the entity to have
@@ -2022,6 +2039,7 @@ protected:
         else if constexpr (std::is_same<T, reflection_probe3d>::value) status = ponko_reflection_probe3d_component(world, &id);
         else if constexpr (std::is_same<T, decal3d>::value) status = ponko_decal3d_component(world, &id);
         else if constexpr (std::is_same<T, receives_decals>::value) status = ponko_receives_decals_component(world, &id);
+        else if constexpr (std::is_same<T, lightmapped>::value) status = ponko_lightmapped_component(world, &id);
         else if constexpr (std::is_same<T, point_light2d>::value) status = ponko_point_light2d_component(world, &id);
         else if constexpr (std::is_same<T, spot_light2d>::value) status = ponko_spot_light2d_component(world, &id);
         else if constexpr (std::is_same<T, directional_light2d>::value) status = ponko_directional_light2d_component(world, &id);
@@ -2643,6 +2661,32 @@ public:
     tilemap_ref tilemap(entity e);
     /// Reorders Transform2D entities so that neighbors are close in memory.
     void sort_spatial(float cell_size) { valid(); detail::check(ponko_world_sort_spatial(raw_, cell_size)); }
+
+    // ---- component hooks ----
+    /// Calls `f(hook_world&, entity, const T& value)` whenever a `T` arrives
+    /// on an entity that had none: every spawn and every set that adds it,
+    /// from C++, C or Rust (Rust `World::on_add`). It runs inside that call,
+    /// once the entity is complete. `T` must be a plain component (not a
+    /// sprite, body or collider). Hooks stay for the life of the world; see
+    /// hook_world for what one may do. An exception a hook throws is kept and
+    /// rethrown when the system returns (or by game::run); in a world of your
+    /// own, by rethrow_hook_error().
+    template<class T, class F> void on_add(F f) { add_hook<T, false>(ponko_component_on_add, std::move(f)); }
+    /// Calls `f(hook_world&, entity, const T& old, const T& next)` whenever a
+    /// set is about to overwrite an entity's `T` (Rust `World::on_replace`):
+    /// `old` is still in the world. Writes through queries aren't replacements.
+    template<class T, class F> void on_replace(F f) { add_hook<T, true>(ponko_component_on_replace, std::move(f)); }
+    /// Calls `f(hook_world&, entity, const T& value)` whenever a `T` is about
+    /// to leave an entity: remove, despawn or clear (Rust `World::on_remove`),
+    /// with the value still in place.
+    template<class T, class F> void on_remove(F f) { add_hook<T, false>(ponko_component_on_remove, std::move(f)); }
+    /// Rethrows the first exception a component hook of this world threw,
+    /// if one did (systems and game::run do this for you).
+    void rethrow_hook_error() const { valid(); owner_->hook_error.rethrow(); }
+private:
+    using hook_register = PonkoStatus (*)(PonkoWorld*, std::uint32_t, PonkoHookFn, void*, PonkoFreeUserFn);
+    template<class T, bool Replace, class F> void add_hook(hook_register reg, F f);
+public:
 };
 /// Out of line: tilemap_ref is defined after world_view.
 inline tilemap_ref world_view::add_tilemap(entity e, const sprite_sheet& sheet, std::uint32_t width, std::uint32_t height) {
@@ -2650,6 +2694,81 @@ inline tilemap_ref world_view::add_tilemap(entity e, const sprite_sheet& sheet, 
 }
 /// Out of line: tilemap_ref is defined after world_view.
 inline tilemap_ref world_view::tilemap(entity e) { valid(); return tilemap_ref(raw_, e); }
+/// The world as a component hook sees it (world_view::on_add), valid while
+/// the hook runs. The world is busy with the call that ran the hook: read and
+/// write components in place here, and record structural changes, which are
+/// applied before that call returns (Rust `HookWorld`).
+class hook_world {
+    PonkoHookWorld* raw_;
+    detail::identity* owner_;
+    template<class T> std::uint32_t id() const {
+        const std::size_t slot = detail::type_slot<T>();
+        if (slot < owner_->ids.size() && owner_->ids[slot] != 0) return owner_->ids[slot] - 1;
+        throw std::logic_error(detail::type_name<T>() + " is used for the first time inside a component hook; use it on the world first");
+    }
+public:
+    /// Wraps the C handle a hook got (ponko_component_on_add) and the
+    /// world's C++ identity; world_view::on_add does this for you.
+    hook_world(PonkoHookWorld* raw, detail::identity* owner) : raw_(raw), owner_(owner) {}
+    /// `e`'s `T`, or nothing if it has none (ponko_hook_get).
+    template<class T> std::optional<T> get(entity e) const {
+        T value{};
+        const PonkoStatus status = ponko_hook_get(raw_, e, id<T>(), &value, sizeof(T));
+        if (status == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(status);
+        return value;
+    }
+    /// Overwrites `e`'s `T` in place (it must have one; ponko_hook_write).
+    /// No hook runs; change detection sees it.
+    template<class T> void write(entity e, const T& value) { detail::check(ponko_hook_write(raw_, e, id<T>(), &value, sizeof(T))); }
+    /// Adds or replaces `e`'s `T` once the operation is done (ponko_hook_set_later).
+    template<class T> void set_later(entity e, const T& value) {
+        PonkoValue v{id<T>(), &value, sizeof(T)};
+        detail::check(ponko_hook_set_later(raw_, e, &v));
+    }
+    /// Removes `e`'s `T` once the operation is done (ponko_hook_remove_later).
+    template<class T> void remove_later(entity e) { detail::check(ponko_hook_remove_later(raw_, e, id<T>())); }
+    /// Despawns `e` once the operation is done (ponko_hook_despawn_later).
+    void despawn_later(entity e) { detail::check(ponko_hook_despawn_later(raw_, e)); }
+    /// Spawns an entity with these components once the operation is done;
+    /// its id is good at once (ponko_hook_spawn_later).
+    template<class... Ts> entity spawn_later(const Ts&... components) {
+        std::array<PonkoValue, sizeof...(Ts)> args{{PonkoValue{id<Ts>(), &components, sizeof(Ts)}...}};
+        entity e = 0;
+        detail::check(ponko_hook_spawn_later(raw_, args.data(), args.size(), &e));
+        return e;
+    }
+    /// Whether `e` is alive (ponko_hook_is_alive).
+    bool alive(entity e) const { bool a = false; detail::check(ponko_hook_is_alive(raw_, e, &a)); return a; }
+};
+/// Out of line: hook_world is defined after world_view.
+template<class T, bool Replace, class F> void world_view::add_hook(hook_register reg, F f) {
+    valid();
+    world_view::check_component<T>();
+    const std::uint32_t component = id<T>();
+    struct holder { F fn; std::shared_ptr<detail::identity> owner; };
+    auto* h = new holder{std::move(f), owner_};
+    auto call = [](PonkoHookWorld* raw, const PonkoHookEvent* event, void* user) noexcept {
+        auto& hd = *static_cast<holder*>(user);
+        if (hd.owner->hook_error.set.load()) return;
+        try {
+            hook_world w(raw, hd.owner.get());
+            T value{};
+            std::memcpy(static_cast<void*>(&value), event->value, sizeof(T));
+            if constexpr (Replace) {
+                T next{};
+                std::memcpy(static_cast<void*>(&next), event->new_value, sizeof(T));
+                hd.fn(w, entity(event->entity), static_cast<const T&>(value), static_cast<const T&>(next));
+            } else {
+                hd.fn(w, entity(event->entity), static_cast<const T&>(value));
+            }
+        } catch (...) { hd.owner->hook_error.capture(); }
+    };
+    auto free = [](void* user) noexcept { delete static_cast<holder*>(user); };
+    const PonkoStatus status = reg(raw_, component, call, h, free);
+    if (status != PONKO_OK) delete h;
+    detail::check(status);
+}
 /// An owned world (from ponko::game::run_headless, or empty).
 class world final : public world_view {
     friend class game;
@@ -2921,6 +3040,11 @@ public:
     std::size_t morph_target_count() const noexcept { return ponko_mesh_data_morph_target_count(raw_); }
     /// Removes every morph target (and the morph frames that use them).
     void clear_morph_targets() { detail::check(ponko_mesh_data_clear_morph_targets(raw_)); }
+    /// Gives it lightmap coordinates, `texels_per_unit` lightmap texels per world unit, for a
+    /// light bake (ponko_mesh_data_generate_lightmap_uvs); returns the square's side in texels.
+    std::uint32_t generate_lightmap_uvs(float texels_per_unit) {
+        std::uint32_t side = 0; detail::check(ponko_mesh_data_generate_lightmap_uvs(raw_, texels_per_unit, &side)); return side;
+    }
     /// Its arrays, valid while it lives.
     PonkoMeshView view() const { PonkoMeshView v{}; detail::check(ponko_mesh_data_view(raw_, &v)); return v; }
     /// A decal (Rust `MeshData::decal`): the part of this mesh inside a box,
@@ -4877,6 +5001,24 @@ public:
     const PonkoClip* raw() const noexcept { return raw_; }
 };
 
+/// One joint's keys for one channel (PonkoJointTrack), for ctx::create_clip. `times` and `values` point into
+/// arrays the caller keeps until create_clip returns: four floats per value, three values per key for
+/// CUBICSPLINE.
+using joint_track = PonkoJointTrack;
+/// Which part of a joint's pose a joint_track animates.
+using joint_channel = PonkoJointChannel;
+/// A joint_track over `times` and `values` (4 floats per key; 12 for interpolation 2, cubic). Both
+/// vectors must outlive the create_clip call.
+inline joint_track joint_track_of(std::uint32_t joint, joint_channel channel, const std::vector<float>& times,
+                                  const std::vector<float>& values, std::uint32_t interpolation = 1) {
+    if (interpolation > 2 || values.size() != times.size() * 4 * (interpolation == 2 ? 3 : 1))
+        throw std::invalid_argument("joint_track_of: four floats per key (twelve for cubic), interpolation 0 to 2");
+    return joint_track{joint, static_cast<std::uint32_t>(channel), interpolation, times.data(), values.data(), times.size()};
+}
+/// Live handles of every kind in the versioned form (PonkoLiveCountsEx): `counts` is live_counts, plus
+/// crowds, instance_cells, collision_meshes, sprite_shaders, sprite_materials and sky_shaders.
+using live_counts_ex = PonkoLiveCountsEx;
+
 /// A clip to bake for crowds: `c` (copied by the bake), looping or holding its last frame.
 inline crowd_clip crowd_clip_of(const clip& c, bool looping = true) noexcept { return crowd_clip{c.raw(), looping}; }
 
@@ -5794,6 +5936,18 @@ public:
     input_scenario& touch(std::uint64_t tick, std::uint64_t id, touch_phase phase, vec2 at) {
         return step(ponko_input_scenario_touch(raw_, tick, id, static_cast<std::uint32_t>(phase), at));
     }
+    /// A tap at `at` on tick `tick`: a finger down and up within the tick (a tap gesture, or a press of the
+    /// on-screen button under it). Each finger gets an id of its own.
+    input_scenario& tap(std::uint64_t tick, vec2 at) { return step(ponko_input_scenario_tap(raw_, tick, at)); }
+    /// A finger held still at `at` from tick `from` until it lifts on tick `to`.
+    input_scenario& touch_hold(std::uint64_t from, std::uint64_t to, vec2 at) {
+        return step(ponko_input_scenario_touch_hold(raw_, from, to, at));
+    }
+    /// A finger down at `start` on tick `from`, moving in a straight line each tick, lifting at `end` on
+    /// tick `to`: a drag, a swipe, or an on-screen stick pushed and let go.
+    input_scenario& touch_drag(std::uint64_t from, std::uint64_t to, vec2 start, vec2 end) {
+        return step(ponko_input_scenario_touch_drag(raw_, from, to, start, end));
+    }
     /// Checks `c` after the simulation systems of tick `tick` ran.
     input_scenario& expect(std::uint64_t tick, const scenario_check& c) {
         switch (c.kind_) {
@@ -6308,6 +6462,71 @@ template<class T> T window_desc(std::uint32_t version, PonkoStatus (*defaults)(T
 }
 } // namespace detail
 
+/// A read-only view of the 3D navmesh (PonkoNavView), from ctx::nav_view: its reads touch nothing else, so
+/// they work inside world.each and world.query loops and from the _par versions, where the ctx's own navmesh
+/// calls throw. Valid until the system returns, and only until the navmesh is baked again.
+class nav_view {
+    PonkoNavView view_{};
+public:
+    /// Wraps a C view.
+    explicit nav_view(PonkoNavView v) noexcept : view_(v) {}
+    /// The nearest walkable point within `max_distance` of `point`, or std::nullopt.
+    std::optional<vec3> sample_position(vec3 point, float max_distance) const {
+        vec3 p{}; bool found = false;
+        detail::check(ponko_nav_view_sample_position(&view_, point, max_distance, &p, &found));
+        if (!found) return std::nullopt;
+        return p;
+    }
+    /// Snaps every point of `points` in place in one call; `found[i]` says whether point i had a walkable
+    /// point within `max_distance` (if not, it is left as it was).
+    void sample_positions(std::vector<vec3>& points, float max_distance, std::vector<bool>& found) const {
+        std::unique_ptr<bool[]> flags(new bool[points.size() + 1]);
+        detail::check(ponko_nav_view_sample_positions(&view_, points.data(), points.size(), max_distance,
+                                                      points.data(), flags.get()));
+        found.assign(flags.get(), flags.get() + points.size());
+    }
+    /// A path's corners from `from` to `to` into `out` (reusing its capacity), start and end included;
+    /// empty when there is none.
+    void find_path(vec3 from, vec3 to, std::vector<vec3>& out) const {
+        std::size_t len = 0;
+        out.resize(out.capacity() < 16 ? 16 : out.capacity());
+        detail::check(ponko_nav_view_find_path(&view_, from, to, out.data(), out.size(), &len));
+        if (len > out.size()) {
+            out.resize(len);
+            detail::check(ponko_nav_view_find_path(&view_, from, to, out.data(), out.size(), &len));
+        }
+        out.resize(len);
+    }
+    /// The C view.
+    const PonkoNavView& raw() const noexcept { return view_; }
+};
+
+/// The sky kit's settings (PonkoSkyKit, Rust `SkyKit`): clouds that drift and cast shadows, a moon with
+/// phases and stars over the built-in atmosphere. ctx::set_sky_kit turns it on (or off, with `enabled`
+/// false).
+using sky_kit = PonkoSkyKit;
+/// The sky kit's defaults, `enabled` true (Rust `SkyKit::default()`).
+inline sky_kit sky_kit_defaults() { return detail::window_desc<sky_kit>(PONKO_SKY_KIT_VERSION, ponko_sky_kit_defaults); }
+/// The share of the moon's face that is lit at `phase`: 0 new, 1 full (Rust `Moon::illumination`).
+inline float moon_illumination(float phase) { return ponko_moon_illumination(phase); }
+
+/// A day and night cycle (PonkoDayNight, Rust `DayNight`): a clock the game keeps that moves the sun
+/// through the day and the moon through its phases. Its fields (hour, day, hours_per_second,
+/// days_per_moon, first_phase, sun_color, sun_intensity, night_light) are public; call
+/// ctx::update_day_night once a frame.
+struct day_night : PonkoDayNight {
+    /// A cycle at `hour` o'clock on day 0, with the default speed, moon and light.
+    explicit day_night(float hour = 12.0f) : PonkoDayNight{} {
+        struct_size = sizeof(PonkoDayNight);
+        version = PONKO_DAY_NIGHT_VERSION;
+        detail::check(ponko_day_night_new(hour, this));
+    }
+    /// Moves the clock on by `seconds` of real time, counting the days.
+    void advance(float seconds) { detail::check(ponko_day_night_advance(this, seconds)); }
+    /// The moon's phase at the cycle's time: 0 new, 0.5 full.
+    float moon_phase() const { float p = 0; detail::check(ponko_day_night_moon_phase(this, &p)); return p; }
+};
+
 /// What a system gets (Rust `Ctx`): the world, time, input, randomness, drawing, audio, physics and the other
 /// engine services. Valid only during the call; don't keep it. Calls throw ponko::error when the engine
 /// reports a failure.
@@ -6640,6 +6859,101 @@ public:
     PonkoReplicationClientStats replication_client_stats() const {
         PonkoReplicationClientStats s{}; detail::check(ponko_ctx_replication_client_stats(raw_, &s)); return s;
     }
+    /// Declares the game's input, a plain struct `I` of which `fields`
+    /// travel, in setup after replication() (ponko_ctx_replication_input).
+    /// A game has one input type. Throws ponko::error for a second one.
+    template<class I> void replication_input(const char* name, const std::vector<PonkoReplicatedField>& fields) {
+        static_assert(detail::pod<I>, "the input is a plain struct");
+        detail::check(ponko_ctx_replication_input(raw_, name, sizeof(I), fields.data(), fields.size()));
+    }
+    /// Predicts the component replicated as `component` (a plain struct
+    /// `S`) on the client that owns it: `step(S&, const I&)` moves it for
+    /// one input, the same on the server, and must not throw or touch the
+    /// ctx (ponko_ctx_replication_predicted). In setup, after
+    /// replication_input<I>.
+    template<class S, class I, class F> void replication_predicted(const char* component, F step) {
+        static_assert(detail::pod<S> && detail::pod<I>, "predicted state and input are plain structs");
+        auto* h = new F(std::move(step));
+        auto call = [](void* state, std::size_t state_size, const void* input, std::size_t input_size, void* user) noexcept {
+            if (state_size != sizeof(S) || input_size != sizeof(I)) return;
+            S s; I i;
+            std::memcpy(static_cast<void*>(&s), state, sizeof(S));
+            std::memcpy(static_cast<void*>(&i), input, sizeof(I));
+            (*static_cast<F*>(user))(s, static_cast<const I&>(i));
+            std::memcpy(state, static_cast<const void*>(&s), sizeof(S));
+        };
+        auto free = [](void* user) noexcept { delete static_cast<F*>(user); };
+        const PonkoStatus status = ponko_ctx_replication_predicted(raw_, component, call, h, free);
+        if (status != PONKO_OK) delete h;
+        detail::check(status);
+    }
+    /// Shows the component replicated as `component` between the values
+    /// received, on clients: its floats move smoothly `config.delay` in the
+    /// past, its other fields are set when they arrive
+    /// (ponko_ctx_replication_interpolated). nullopt: the defaults with no
+    /// extrapolation. In setup.
+    void replication_interpolated(const char* component, std::optional<snapshot_config> config = std::nullopt) {
+        detail::check(ponko_ctx_replication_interpolated(raw_, component, config ? &*config : nullptr));
+    }
+    /// Declares an event kind called `name`, in setup, and returns its kind
+    /// for replication_send and net_events (ponko_ctx_replication_event).
+    std::uint16_t replication_event(const char* name) {
+        std::uint16_t kind = 0; detail::check(ponko_ctx_replication_event(raw_, name, &kind)); return kind;
+    }
+    /// For interest, an entity is where the `dims` (2 or 3) floats at byte
+    /// `offset` of its `T` say, instead of its transform
+    /// (ponko_ctx_replication_position). In setup.
+    template<class T> void replication_position(std::size_t offset, std::uint32_t dims = 3) {
+        static_assert(detail::pod<T>, "the position's component is a plain struct");
+        detail::check(ponko_ctx_replication_position(raw_, id<T>(), offset, dims));
+    }
+    /// This side's input for this tick (ponko_ctx_set_replication_input).
+    template<class I> void set_replication_input(const I& input) {
+        static_assert(detail::pod<I>, "the input is a plain struct");
+        detail::check(ponko_ctx_set_replication_input(raw_, &input, sizeof(I)));
+    }
+    /// Server: the input of `peer` applied last, if it sent one
+    /// (ponko_ctx_replication_input_of).
+    template<class I> std::optional<I> replication_input_of(std::uint64_t peer) const {
+        static_assert(detail::pod<I>, "the input is a plain struct");
+        I input{};
+        const PonkoStatus status = ponko_ctx_replication_input_of(raw_, peer, &input, sizeof(I));
+        if (status == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(status); return input;
+    }
+    /// Sends `size` bytes as an event of `kind` (replication_event) to the
+    /// server, one client (`peer`) or every client, reliable and in order
+    /// (ponko_ctx_replication_send).
+    void replication_send(PonkoEventTarget target, std::uint16_t kind, const void* data, std::size_t size, std::uint64_t peer = 0) {
+        detail::check(ponko_ctx_replication_send(raw_, static_cast<std::uint32_t>(target), peer, kind, data, size));
+    }
+    /// Sends a plain struct as an event of `kind`. Arrays and pointers (a
+    /// string literal, a buffer) take the bytes-and-size form above.
+    template<class T, std::enable_if_t<!std::is_array_v<T> && !std::is_pointer_v<T>, int> = 0>
+    void replication_send(PonkoEventTarget target, std::uint16_t kind, const T& value, std::uint64_t peer = 0) {
+        static_assert(detail::pod<T>, "an event is a plain struct (or bytes)");
+        replication_send(target, kind, &value, sizeof(T), peer);
+    }
+    /// The events that arrived since this system last read them, in order,
+    /// valid until the system returns (ponko_ctx_net_events). Read once
+    /// per system; works inside a query, not query_par.
+    struct net_events_view {
+        /// The first event.
+        const PonkoNetEvent* data = nullptr;
+        /// How many.
+        std::size_t size = 0;
+        /// For range-for.
+        const PonkoNetEvent* begin() const { return data; }
+        /// For range-for.
+        const PonkoNetEvent* end() const { return data + size; }
+    };
+    /// See net_events_view.
+    net_events_view net_events() {
+        net_events_view v; detail::check(ponko_ctx_net_events(raw_, &v.data, &v.size)); return v;
+    }
+    /// Draws the world with baked lighting (ponko::baked_lighting::raw()), or without it (nullptr):
+    /// lightmapped models take their lightmap, the others the probe volume's light.
+    void set_baked_lighting(const PonkoBakedLighting* baked) { detail::check(ponko_ctx_set_baked_lighting(raw_, baked)); }
     /// The Steam lobby of this session, or 0 (not created yet, or not Steam).
     std::uint64_t steam_lobby() const { std::uint64_t l = 0; detail::check(ponko_ctx_steam_lobby(raw_, &l)); return l; }
     /// Opens the Steam overlay to invite friends to this session's lobby.
@@ -7485,7 +7799,7 @@ public:
         detail::check(ponko_ctx_set_target_cameras(raw_, list.data(), list.size()));
     }
     /// The target camera `index` (counting from 0, up to target_cameras().size()) in its versioned form
-    /// (target_camera_ex), with whether it draws particles. Throws for an index past the end.
+    /// (target_camera_ex), with whether it draws particles and debug drawing. Throws for an index past the end.
     ponko::target_camera_ex target_camera_ex(std::size_t index) const {
         ponko::target_camera_ex t{};
         t.struct_size = sizeof(ponko::target_camera_ex);
@@ -7494,7 +7808,7 @@ public:
         return t;
     }
     /// Replaces the target cameras drawn each frame from their versioned forms (empty: none): as
-    /// set_target_cameras, each with its `particles`.
+    /// set_target_cameras, each with its `particles` and `debug_draw`.
     void set_target_cameras_ex(const std::vector<ponko::target_camera_ex>& list) {
         std::vector<const PonkoTargetCameraEx*> pointers;
         pointers.reserve(list.size());
@@ -9595,6 +9909,48 @@ public:
         detail::check(status);
         return hit;
     }
+
+    // The sky kit and the day-night driver (gl#122).
+    /// The sky kit's settings: `enabled` false (and the defaults) while the plain atmosphere is drawn.
+    ponko::sky_kit sky_kit() const {
+        ponko::sky_kit k{};
+        k.struct_size = sizeof k;
+        k.version = PONKO_SKY_KIT_VERSION;
+        detail::check(ponko_ctx_sky_kit(raw_, &k));
+        return k;
+    }
+    /// Turns the sky kit on with `k`'s settings, or off when `k.enabled` is false. Throws, changing
+    /// nothing, on a non-finite number or an unknown quality.
+    void set_sky_kit(const ponko::sky_kit& k) { detail::check(ponko_ctx_set_sky_kit(raw_, &k)); }
+    /// Sets the sun, the moon's phase (turning the sky kit on if it was off) and the night light to `d`'s
+    /// time.
+    void apply_day_night(const ponko::day_night& d) { detail::check(ponko_ctx_apply_day_night(raw_, &d)); }
+    /// Advances `d` by this frame's time, then applies it: the whole cycle, once a frame.
+    void update_day_night(ponko::day_night& d) { detail::check(ponko_ctx_update_day_night(raw_, &d)); }
+
+    /// A view of the 3D navmesh for reads inside loops (see ponko::nav_view). Take it before the loop.
+    /// Throws if no navmesh was baked.
+    ponko::nav_view nav_view() const {
+        PonkoNavView v{};
+        detail::check(ponko_ctx_nav_view(raw_, &v));
+        return ponko::nav_view(v);
+    }
+    // Joint-track clips and the versioned live counts (gl#122).
+    /// A clip called `name` from joint tracks, for the skeleton of `skeleton` (Rust `AnimationClip::try_new`):
+    /// tracks of one joint merge; a joint outside the skeleton or a channel given twice throws.
+    ponko::clip create_clip(entity skeleton, const char* name, const std::vector<joint_track>& tracks) {
+        PonkoClip* c = nullptr;
+        detail::check(ponko_ctx_create_clip(raw_, skeleton, name, tracks.data(), tracks.size(), &c));
+        return ponko::clip(c);
+    }
+    /// How many handles of each kind are live now, crowds and the other newer kinds included.
+    ponko::live_counts_ex live_counts_ex() const {
+        ponko::live_counts_ex c{};
+        c.struct_size = sizeof c;
+        c.version = PONKO_LIVE_COUNTS_EX_VERSION;
+        detail::check(ponko_ctx_live_counts_ex(raw_, &c));
+        return c;
+    }
 };
 
 // Camera rigs (Rust ponko::camera, d2::FollowCamera, d2::PixelPerfect, d3::OrbitCamera,
@@ -9703,6 +10059,190 @@ struct pixel_perfect : PonkoPixelPerfect {
     void apply(ctx& c) const { detail::check(ponko_pixel_perfect_apply(this, c.raw())); }
     /// Where exactly the resolution shows in the window, in window pixels.
     rect screen_rect(ctx& c) const { rect r{}; detail::check(ponko_pixel_perfect_screen_rect(this, c.raw(), &r)); return r; }
+};
+
+/// Where a video is (ponko_video_state): its texture, size, length, time, volume, sound and bus.
+using video_state = PonkoVideoState;
+/// A video played into a texture, its sound through the mixer (Rust `video::Video`, C library
+/// feature `video`): a WebM file with AV1 pictures and Vorbis sound. It starts paused on its first
+/// frame: play(), then update() once a frame and draw state().texture. A handle: free it with
+/// free(ctx), which also frees its texture and sound.
+class video {
+    PonkoVideo* raw_ = nullptr;
+    explicit video(PonkoVideo* raw) : raw_(raw) {}
+public:
+    /// No video.
+    video() = default;
+    /// Loads one from an asset source or `assets/` (ponko_ctx_load_video). Throws ponko::error:
+    /// not found, another codec or a build without the feature, or a damaged file.
+    static video load(ctx& c, const char* path) {
+        PonkoVideo* v = nullptr; detail::check(ponko_ctx_load_video(c.raw(), path, &v)); return video(v);
+    }
+    /// Makes one from a file's bytes, copied (ponko_ctx_video_from_bytes).
+    static video from_bytes(ctx& c, const void* data, std::size_t size) {
+        PonkoVideo* v = nullptr; detail::check(ponko_ctx_video_from_bytes(c.raw(), data, size, &v)); return video(v);
+    }
+    /// Whether this holds a video.
+    explicit operator bool() const noexcept { return raw_ != nullptr; }
+    /// The C handle.
+    PonkoVideo* raw() const noexcept { return raw_; }
+    /// Where it is: texture, size, length, time, volume, playing, finished, looping, sound, bus.
+    video_state state() const {
+        video_state s{}; s.struct_size = sizeof(s); s.version = PONKO_VIDEO_STATE_VERSION;
+        detail::check(ponko_video_state(raw_, &s)); return s;
+    }
+    /// The frame shown as RGBA pixels, valid until the video changes (ponko_video_frame_rgba).
+    std::pair<const std::uint8_t*, std::size_t> frame_rgba() const {
+        const std::uint8_t* p = nullptr; std::size_t n = 0;
+        detail::check(ponko_video_frame_rgba(raw_, &p, &n)); return {p, n};
+    }
+    /// Starts over at its end, or stops there (off by default).
+    void set_looping(bool looping) { detail::check(ponko_video_set_looping(raw_, looping)); }
+    /// Plays from where it is; from the start if it had finished.
+    void play(ctx& c) { detail::check(ponko_ctx_video_play(c.raw(), raw_)); }
+    /// Pauses: the frame stays, the sound stops.
+    void pause(ctx& c) { detail::check(ponko_ctx_video_pause(c.raw(), raw_)); }
+    /// Jumps to `seconds`, playing or paused.
+    void seek(ctx& c, float seconds) { detail::check(ponko_ctx_video_seek(c.raw(), raw_, seconds)); }
+    /// Moves it on by this frame's time and shows that frame: once a frame, from a frame system.
+    void update(ctx& c) { detail::check(ponko_ctx_video_update(c.raw(), raw_)); }
+    /// update() by `seconds` instead of the frame's time.
+    void advance(ctx& c, float seconds) { detail::check(ponko_ctx_video_advance(c.raw(), raw_, seconds)); }
+    /// Its sound's volume, 0 silent to 1 as recorded.
+    void set_volume(ctx& c, float volume) { detail::check(ponko_ctx_video_set_volume(c.raw(), raw_, volume)); }
+    /// Plays its sound on `bus` from now on.
+    void set_bus(ctx& c, audio_bus bus) { detail::check(ponko_ctx_video_set_bus(c.raw(), raw_, bus)); }
+    /// Frees it, its texture and its sound; this handle holds no video afterwards.
+    void free(ctx& c) { detail::check(ponko_ctx_free_video(c.raw(), raw_)); raw_ = nullptr; }
+};
+
+/// How a light bake bakes (Rust `LightBakeSettings`), starting from the defaults.
+struct light_bake_settings : PonkoLightBakeSettings {
+    /// The defaults: 4 texels a unit, 128 samples, 3 bounces, pages up to 1024, directional,
+    /// denoised, probes every 2 units, seed 0.
+    light_bake_settings() : PonkoLightBakeSettings{} {
+        struct_size = sizeof(PonkoLightBakeSettings);
+        version = PONKO_LIGHT_BAKE_SETTINGS_VERSION;
+        detail::check(ponko_light_bake_settings_defaults(this));
+    }
+};
+/// One model to bake (Rust `BakeModel`): `mesh` (with lightmap coordinates if it is lightmapped)
+/// where `at` puts it, white, not glowing, one-sided, lightmapped.
+struct bake_model : PonkoBakeModel {
+    /// `mesh` must outlive the light_bake_scene::add call.
+    bake_model(const mesh_data& m, const transform3d& at) : PonkoBakeModel{} {
+        struct_size = sizeof(PonkoBakeModel);
+        version = PONKO_BAKE_MODEL_VERSION;
+        detail::check(ponko_bake_model_defaults(this));
+        mesh = m.raw();
+        transform = at;
+    }
+};
+/// What a bake made and how it went (pages, GPU bytes, texels, probes, rays, seconds).
+using baked_lighting_info = PonkoBakedLightingInfo;
+/// Where a model's lightmap is on a page.
+using lightmap_rect = PonkoLightmapRect;
+/// The result of a light bake (Rust `BakedLighting`): lightmap pages and the probe volume. Owns
+/// it; draw with it through ctx::set_baked_lighting(raw()), keep it with to_bytes().
+class baked_lighting {
+    PonkoBakedLighting* raw_ = nullptr;
+public:
+    /// Takes a C handle (from ponko_bake_lighting or _from_bytes).
+    explicit baked_lighting(PonkoBakedLighting* raw) : raw_(raw) {}
+    /// Not copyable: it owns its C handle.
+    baked_lighting(const baked_lighting&) = delete;
+    /// Not copyable: it owns its C handle.
+    baked_lighting& operator=(const baked_lighting&) = delete;
+    /// Moves the result.
+    baked_lighting(baked_lighting&& o) noexcept : raw_(o.raw_) { o.raw_ = nullptr; }
+    /// Moves the result.
+    baked_lighting& operator=(baked_lighting&& o) noexcept { std::swap(raw_, o.raw_); return *this; }
+    /// Frees it.
+    ~baked_lighting() { ponko_baked_lighting_free(raw_); }
+    /// Loads one saved with to_bytes() from an asset source or `assets/`
+    /// (ponko_ctx_load_baked_lighting). Throws ponko::error: not found, or not baked lighting.
+    static baked_lighting load(ctx& c, const char* path) {
+        PonkoBakedLighting* b = nullptr;
+        detail::check(ponko_ctx_load_baked_lighting(c.raw(), path, &b));
+        return baked_lighting(b);
+    }
+    /// Reads one back from to_bytes()'s bytes. Throws ponko::error for bytes that aren't one.
+    static baked_lighting from_bytes(const std::vector<std::uint8_t>& bytes) {
+        PonkoBakedLighting* b = nullptr;
+        detail::check(ponko_baked_lighting_from_bytes(bytes.data(), bytes.size(), &b));
+        return baked_lighting(b);
+    }
+    /// The bytes for a file.
+    std::vector<std::uint8_t> to_bytes() const {
+        std::size_t n = 0; detail::check(ponko_baked_lighting_to_bytes(raw_, nullptr, 0, &n));
+        std::vector<std::uint8_t> bytes(n);
+        detail::check(ponko_baked_lighting_to_bytes(raw_, bytes.data(), bytes.size(), &n));
+        return bytes;
+    }
+    /// What it holds and how its bake went.
+    baked_lighting_info info() const {
+        baked_lighting_info i{}; i.struct_size = sizeof(i); i.version = PONKO_BAKED_LIGHTING_INFO_VERSION;
+        detail::check(ponko_baked_lighting_info(raw_, &i)); return i;
+    }
+    /// The component that draws model `index` of the bake with its lightmap, if it has one.
+    std::optional<lightmapped> lightmap(std::size_t index) const {
+        lightmapped l{}; const PonkoStatus status = ponko_baked_lighting_lightmap(raw_, index, nullptr, &l);
+        if (status == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(status); return l;
+    }
+    /// Where model `index`'s lightmap is, if it has one.
+    std::optional<lightmap_rect> rect(std::size_t index) const {
+        lightmap_rect r{}; const PonkoStatus status = ponko_baked_lighting_lightmap(raw_, index, &r, nullptr);
+        if (status == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(status); return r;
+    }
+    /// The baked light at a texel of a page (irradiance over pi) and whether it was baked.
+    std::optional<std::pair<vec3, bool>> texel(std::uint32_t page, std::uint32_t x, std::uint32_t y) const {
+        vec3 l{}; bool baked = false;
+        const PonkoStatus status = ponko_baked_lighting_texel(raw_, page, x, y, &l, &baked);
+        if (status == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(status); return std::make_pair(l, baked);
+    }
+    /// The probe volume's light for a surface at `position` facing `normal`, inside the volume.
+    std::optional<vec3> probe_light(vec3 position, vec3 normal) const {
+        vec3 l{}; const PonkoStatus status = ponko_baked_lighting_probe_light(raw_, position, normal, &l);
+        if (status == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(status); return l;
+    }
+    /// The C handle (for ctx::set_baked_lighting).
+    const PonkoBakedLighting* raw() const noexcept { return raw_; }
+};
+/// The models and lamps to bake (Rust `LightBakeScene`), lit by the game's sun and sky as they
+/// are when it is made. Holds copies, not the ctx: bake() may run on a thread of your own.
+class light_bake_scene {
+    PonkoLightBakeScene* raw_ = nullptr;
+public:
+    /// An empty scene lit as the game is now.
+    explicit light_bake_scene(ctx& c) { detail::check(ponko_ctx_light_bake_scene_new(c.raw(), &raw_)); }
+    /// Not copyable: it owns its C handle.
+    light_bake_scene(const light_bake_scene&) = delete;
+    /// Not copyable: it owns its C handle.
+    light_bake_scene& operator=(const light_bake_scene&) = delete;
+    /// Frees it.
+    ~light_bake_scene() { ponko_light_bake_scene_free(raw_); }
+    /// Adds a model; returns its index, which baked_lighting::lightmap takes.
+    std::size_t add(const bake_model& m) {
+        std::size_t i = 0; detail::check(ponko_light_bake_scene_add(raw_, &m, &i)); return i;
+    }
+    /// Adds a point light at `position`.
+    void add_point_light(vec3 position, const point_light3d& light) {
+        detail::check(ponko_light_bake_scene_add_point_light(raw_, position, &light));
+    }
+    /// Adds a spot light at `position` shining along `forward`.
+    void add_spot_light(vec3 position, vec3 forward, const spot_light3d& light) {
+        detail::check(ponko_light_bake_scene_add_spot_light(raw_, position, forward, &light));
+    }
+    /// Adds every point and spot light of the game's world where it is now.
+    void add_lights(ctx& c) { detail::check(ponko_ctx_light_bake_scene_add_lights(c.raw(), raw_)); }
+    /// Bakes (on every core; seconds to minutes). Throws ponko::error for settings out of range.
+    baked_lighting bake(const light_bake_settings& settings = light_bake_settings()) const {
+        PonkoBakedLighting* b = nullptr; detail::check(ponko_bake_lighting(raw_, &settings, &b)); return baked_lighting(b);
+    }
 };
 
 /// A 3D camera circling a point (Rust d3::OrbitCamera): set target, yaw, pitch and distance (or use

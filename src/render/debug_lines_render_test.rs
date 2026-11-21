@@ -598,6 +598,80 @@ fn depth_tested_labels_and_lines_show_in_every_3d_view_and_hide_behind_surfaces(
 }
 
 #[test]
+fn debug_drawing_in_a_target_camera_follows_its_own_flag_whatever_its_particles() {
+    let Some(mut views) = Views::new() else {
+        return;
+    };
+    let target = |views: &mut Views, is| shown(views, is)[2];
+    // Negative control: by default a target camera without particles
+    // leaves the debug drawing out.
+    views.ctx.scene3d.passes.target_cameras[0].camera.particles = false;
+    assert_eq!(target(&mut views, magenta8), 0, "no particles, no label by default");
+    assert_eq!(target(&mut views, green8), 0, "no particles, no line by default");
+    // Its own flag on: the depth-tested label and line show, without
+    // particles.
+    let camera = &mut views.ctx.scene3d.passes.target_cameras[0];
+    *camera = camera.with_debug_draw(true);
+    let label = target(&mut views, magenta8);
+    let line = target(&mut views, green8);
+    assert!(
+        label >= 8 && line >= 20,
+        "debug drawing on, particles off: label {label}, line {line}"
+    );
+    assert_eq!(
+        shown(&mut views, cyan8)[2],
+        0,
+        "the wall still hides the label behind it"
+    );
+    // A label on top shows too, over the wall.
+    let (_, image) = views.frame_with(|debug| {
+        debug.text(BEHIND, "MM", Color::rgb(0.0, 1.0, 1.0)).size(16.0);
+    });
+    assert!(
+        count(&image, 0..128, cyan8) >= 8,
+        "the label on top shows without particles"
+    );
+    // Its own flag off: nothing, though it draws particles.
+    let camera = &mut views.ctx.scene3d.passes.target_cameras[0];
+    camera.camera.particles = true;
+    *camera = camera.with_debug_draw(false);
+    assert_eq!(
+        target(&mut views, magenta8),
+        0,
+        "debug drawing off, particles on: no label"
+    );
+    assert_eq!(
+        target(&mut views, green8),
+        0,
+        "debug drawing off, particles on: no line"
+    );
+    // Back to the default, it follows the particles again.
+    views.ctx.scene3d.passes.target_cameras[0].camera.debug_draw = None;
+    assert!(
+        target(&mut views, green8) >= 20,
+        "default, particles on: the line shows"
+    );
+    // The window's camera with the flag off: its half shows nothing, the
+    // second player's half and the target still show it all.
+    views.ctx.scene3d.camera.debug_draw = Some(false);
+    for is in [magenta8, green8] {
+        let seen = shown(&mut views, is);
+        assert!(
+            seen[0] == 0 && seen[1] >= 8 && seen[2] >= 8,
+            "only the window's camera leaves it out: {seen:?}"
+        );
+    }
+    let (window, _) = views.frame_with(|debug| {
+        debug.text(BEHIND, "MM", Color::rgb(0.0, 1.0, 1.0)).size(16.0);
+    });
+    assert_eq!(count(&window, 0..128, cyan8), 0, "nor the label on top, in its half");
+    assert!(
+        count(&window, 128..256, cyan8) >= 8,
+        "the second half still shows the label on top"
+    );
+}
+
+#[test]
 fn labels_on_top_are_on_top_in_a_render_target_as_on_screen() {
     let Some(mut views) = Views::new() else {
         return;

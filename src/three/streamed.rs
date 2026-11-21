@@ -8,7 +8,7 @@ use ponko_ecs::Entity;
 use super::{LodGroup, LodPick, Mesh, Transform3D, gltf};
 use crate::assets::{self, Origin};
 use crate::streaming::ResidencyKind;
-use crate::streaming::{AssetState, StreamedMesh};
+use crate::streaming::{AssetState, Decoded, StreamedMesh};
 use crate::{ctx::Ctx, streaming::Job};
 use ponko_ecs::Component;
 use ponko_ecs::World;
@@ -116,7 +116,19 @@ impl crate::gfx::Graphics {
                 self.add_resident_mesh(path, mesh, origin, true);
                 return Some(mesh);
             }
-            Ok(assets::Lookup::Found(found)) => {
+            Ok(assets::Lookup::Found(found)) if self.streaming.sliced() => {
+                let origin = found.origin.clone();
+                match found.into_bytes() {
+                    Ok(bytes) => Decoded::Slices(Box::new(super::sliced_mesh::MeshSlices::read(
+                        path,
+                        self.model_formats(),
+                        origin,
+                        bytes,
+                    ))),
+                    Err(e) => Decoded::Done(Err(e.with_path(path))),
+                }
+            }
+            Ok(assets::Lookup::Found(found)) => Decoded::Job({
                 let origin = found.origin.clone();
                 let name = path.to_string();
                 match origin {
@@ -135,8 +147,8 @@ impl crate::gfx::Graphics {
                         Job::spawn(move || Ok((origin, LoadedFile::Bytes(bytes?))))
                     }
                 }
-            }
-            Err(e) => Job::spawn(move || Err(e)),
+            }),
+            Err(e) => Decoded::Job(Job::spawn(move || Err(e))),
         };
         self.streaming.meshes.insert(
             path.to_string(),
@@ -167,8 +179,22 @@ impl crate::gfx::Graphics {
             return;
         }
         self.residency.set_mut(ResidencyKind::Mesh).forget(path);
+        if self.streaming.sliced() {
+            let read = move || read().map(|(origin, bytes, _)| (origin, bytes));
+            let slices = super::sliced_mesh::MeshSlices::new(path, self.model_formats(), Box::new(read));
+            self.streaming.meshes.insert(
+                path.to_string(),
+                StreamedMesh {
+                    job: Some(Decoded::Slices(Box::new(slices))),
+                    ready: None,
+                    state: AssetState::Loading,
+                },
+            );
+            self.streaming.queue_mesh(path);
+            return;
+        }
         let name = path.to_string();
-        let job = Job::spawn(move || {
+        let job = Decoded::Job(Job::spawn(move || {
             let (origin, bytes, others) = read()?;
             Ok(match others {
                 Some(others) => {
@@ -179,7 +205,7 @@ impl crate::gfx::Graphics {
                 }
                 None => (origin, LoadedFile::Bytes(bytes)),
             })
-        });
+        }));
         self.streaming.meshes.insert(
             path.to_string(),
             StreamedMesh {
@@ -234,7 +260,7 @@ impl crate::gfx::Graphics {
         };
         if m.ready.is_none() {
             let mut job = m.job.take();
-            let decoded = self.take_decoded(&mut job);
+            let decoded = self.take_stream_decode(&mut job);
             let m = self.streaming.meshes.get_mut(name).expect("still there");
             m.job = job;
             match decoded {

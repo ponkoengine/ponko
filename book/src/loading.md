@@ -50,6 +50,7 @@ its name, as the loads take it:
 | `mesh(path)` (`3d` feature) | a stream, under the mesh residency budget | `ctx.gfx.stream_mesh(path)` returns it |
 | `sound(path)` | decoded on a worker | `ctx.audio.load(path)` returns it |
 | `with(path, decode)` | `decode(bytes)` on a worker: your own format | `ctx.assets.take_group_value::<T>(id, path)` |
+| `with_sliced(path, start)` | your own format, a bounded piece at a time ([below](#loaders-that-work-in-slices)) | `ctx.assets.take_group_value::<T>(id, path)` |
 | `bytes(path)` | the file's bytes | `take_group_value::<Vec<u8>>(id, path)` |
 
 `with` takes the same shape as `ctx.assets.load_with`: a function from the
@@ -58,6 +59,29 @@ any loader written that way plugs in, a level format, a tile map or a sprite
 sheet's data. It is an `Fn`, not an `FnOnce`: a [restart](#trying-again)
 runs it again for a file that failed. A value is taken once, by its type; `take_group_value` returns
 `None` before the group loaded it, after it was taken, or for another type.
+
+### Loaders that work in slices
+
+A large file of your own format (a level of a hundred thousand records, a
+navigation grid to build) can be loaded a bounded piece at a time, so that
+where there are no worker threads it never takes one long frame. Write a
+`SliceLoader`: `step` does the next piece of the work and returns
+`Ok(true)` once everything is done, and `finish` hands over the value.
+`with_sliced(path, start)` adds it: `start` gets the file's bytes (owned,
+so the loader can keep them) and returns the loader.
+
+```rust
+{{#include ../../tests/asset_groups.rs:sliced_loader}}
+```
+
+Where there are no workers (a browser build without threads), the group
+step calls `step` while its frame budget lasts and goes on in the next
+frame, checking the budget between calls; `group_stats().pieces` counts the
+pieces of work a step ran. With workers, a worker calls `step` until it is
+done, as `with` runs on a worker. Keep each `step` short, well under a
+millisecond on the slowest device you target: a long one still takes its
+whole time. An error from `step` fails the group with the asset's path, and
+a restart calls `start` again.
 
 `ctx.assets.start_group(group)` starts it and returns a `GroupId`; the work
 begins at the start of the next frame. `ctx.assets.group(name)` finds the
@@ -156,11 +180,32 @@ overlay) can show what its uploads cost on the player's GPU:
   alone.
 
 The time is the game thread's: making each texture and handing the GPU its
-pixels, measured around those calls. The GPU copies the pixels while it
-draws the frame, in its own time; the [measured numbers](#measured) show
-how much that adds. Streamed textures and meshes upload in the streaming
-step and count in `ctx.gfx.upload_stats()` instead. A headless game has no
-GPU, so there the time is only the engine's bookkeeping.
+pixels, measured around those calls. The GPU copies the pixels in its own
+time. Where the GPU has **timestamp queries** (most desktop GPUs; browsers
+only with WebGPU's `timestamp-query`), the group measures that too:
+
+- `group_stats()`: `gpu_upload_ms`, the GPU's own time copying the textures
+  of the latest step it timed, and `total_gpu_upload_ms` since the game
+  started. They arrive a frame or a few after the step, as the GPU's
+  results are read back without waiting.
+- `gpu_upload_timing` says whether this GPU times uploads. Where it doesn't
+  (headless games, GPUs and browsers without timestamp queries, WebGL),
+  it is `false` and `gpu_upload_ms` stays `None`: only the game thread's
+  time is measured.
+
+To time a copy, the step makes each texture write itself, as the GPU
+driver layer otherwise does (through a staging buffer), with the copy
+between two timestamps, and submits it at once. The time is the sum of
+those copies: the GPU's work alone, without the time it sat idle between
+them. Textures of other uploads (made by systems with `create_texture`, or
+glTF files' buffers) aren't timed. Streamed textures and meshes upload in
+the streaming step and count in `ctx.gfx.upload_stats()` instead, which has
+the same `gpu_upload_ms` and `gpu_upload_timing` for that step's textures.
+Some drivers now and then leave a timestamp unwritten (on an Apple GPU
+about one copy in three, in our tests): such a copy is left out of the sum,
+and a step whose copies all lost one keeps the previous step's time.
+A headless game has no GPU, so there the time is only the engine's
+bookkeeping.
 
 ## Where files are read
 
@@ -242,6 +287,15 @@ default budgets a frame that uploads pays about 4 ms on the game thread
 plus a millisecond or two on the GPU; a lower upload budget
 (`ctx.gfx.set_upload_budget`) spreads that thinner.
 
+With the GPU's own upload time (`gpu_upload_ms`, [What uploads
+cost](#what-uploads-cost)), the same test also prints what the timestamps
+say. Two runs on the M4 Max (Metal, release, load average 140 to 170): the
+GPU copied the 64 MiB in 2.0 to 5.3 ms of its own time (0.03 to 0.08 ms
+per MiB), against 28 to 56 ms of the game thread's. So on this GPU the
+copies themselves are cheap; the longer frames above are mostly the busy
+machine and the frame's other work, which the frame time can't tell apart
+and the timestamps can.
+
 ## In a browser
 
 In an ordinary web build there are no worker threads, so a group's reads
@@ -252,20 +306,29 @@ reads and decodes on job workers as on the desktop ([Threads on the
 web](web-threads.md)); the browser test checks a group from `assets/` there.
 
 Without workers, a large file is **decoded in slices**: a PNG texture a few
-rows at a time (about 64 KiB of pixels a slice) and a sound a few packets at
-a time, with the frame budget checked between slices. So one large image or
-a long piece of music is spread over as many frames as it needs instead of
-taking one long frame, and the pixels and samples are exactly those of the
-one-piece decode. Uploading it waits for a frame with budget left. What
-can't be split still runs in one piece: other image formats (JPEG and the
-rest), interlaced PNGs, your own `with` loaders and `bytes`, and streamed
-textures and meshes (the streaming system decodes those). The tests run
-this path natively, decoding on the game thread as a browser does: a 2048 ×
-2048 noise PNG that decodes in one piece in 2.9 to 4.6 ms (release, M4 Max,
-busy machine) takes 7 or 8 steps of a median 0.50 to 0.51 ms at a 0.5 ms
-budget, 3.4 to 3.7 ms in all (one run in three, paused by the load, had a
-median of 1.2 ms). A browser decodes more slowly, so there a large file
-spreads over more frames.
+rows at a time (about 64 KiB of pixels a slice), a sound a few packets at a
+time, and your own [sliced loaders](#loaders-that-work-in-slices) a `step`
+at a time, with the frame budget checked between slices. So one large
+image, a long piece of music or a large level file is spread over as many
+frames as it needs instead of taking one long frame, and the pixels and
+samples are exactly those of the one-piece decode. Uploading it waits for a
+frame with budget left. A group's streamed textures and meshes are decoded
+in slices by the streaming step, after the group step and within what it
+left of the same budget ([Streaming](streaming.md#browsers-and-asset-sources)).
+What can't be split still runs in one piece: other image formats (JPEG and
+the rest), interlaced PNGs, your own `with` loaders and `bytes`, and the
+geometry of a glTF file (its PNG images are sliced).
+
+The tests run this path natively, decoding on the game thread as a browser
+does, and check the slicing by counting rather than timing: each piece of
+work counts as a fixed time, so how many a step runs follows from the
+budget alone, whatever else the machine is doing. A 2048 × 2048 PNG is 256
+slices of 8 rows; at a 0.5 ms budget with pieces counted as 0.125 ms, every
+step runs at most four pieces and the image takes 65 steps. On real time,
+measured when slicing was added (release, M4 Max, busy machine), the same
+PNG decodes in one piece in 2.9 to 4.6 ms and took 7 or 8 steps of a median
+0.50 to 0.51 ms at a 0.5 ms budget, 3.4 to 3.7 ms in all. A browser decodes
+more slowly, so there a large file spreads over more frames.
 Files come from what the page fetched (`assets/index.json`) and from
 sources, as for every load in a browser. The browser smoke test
 (`web/smoke/`) loads a group from an in-memory source and checks that it is
@@ -281,7 +344,8 @@ the group; free one you don't start with `ponko_asset_group_free`). Group ids
 are `uint32_t`, never 0. `ponko_ctx_asset_group_state`,
 `ponko_ctx_asset_group_progress`, `ponko_ctx_find_asset_group`,
 `ponko_ctx_cancel_asset_group`, `ponko_ctx_restart_asset_group`,
-`ponko_ctx_asset_group_stats` (with the upload fields) and
+`ponko_ctx_asset_group_stats` (with the upload fields; the GPU's own
+upload time and the step's pieces aren't in it yet) and
 `ponko_ctx_set_asset_group_frame_budget` match the Rust calls; `ponko_ctx_asset_group_error` returns the failure's
 status and sets the last error, its kind and its path.
 `ponko_ctx_take_asset_group_bytes` hands a `PONKO_GROUP_BYTES` asset's bytes

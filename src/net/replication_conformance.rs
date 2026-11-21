@@ -31,6 +31,9 @@
 //! | A server without clients keeps nothing pending, and its first client gets everything | `a_server_without_clients_keeps_nothing_pending` |
 //! | A change is sent once; while its acknowledgement is on the way it isn't sent again | `a_change_is_sent_once_while_its_acknowledgement_is_on_the_way` |
 //! | What isn't acknowledged in time (changes, despawns) is sent again after the resend timeout, not every tick, and arrives once the link is back | `unacknowledged_changes_are_resent_after_the_timeout_not_every_tick` |
+//! | A packet that acknowledgements of later packets skip is resent at once, a round trip after the next packet, not after the timeout | `a_packet_that_later_acknowledgements_skip_is_resent_at_once` |
+//! | On a lossy link lost changes arrive sooner for about the same bytes; on one that reorders, a learned tolerance keeps late packets from being resent | `lost_changes_arrive_sooner_on_a_lossy_link_for_the_same_bytes` |
+//! | While nothing is acknowledged each resend waits twice as long as the one before, up to 4 s; the first acknowledgement sends everything again at once | `resends_back_off_while_nothing_is_acknowledged` |
 //!
 //! Over every transport the message protocol lists:
 //!
@@ -53,6 +56,7 @@ use glam::{Vec2, vec2};
 use ponko_ecs::{Component, Entity, World};
 use serde::{Deserialize, Serialize};
 
+use super::replicate::ResendRules;
 use super::scripted::{Network, Shared, addr, port};
 use crate::error::ErrorKind;
 use crate::events::Events;
@@ -165,7 +169,11 @@ pub(super) struct Session {
 
 impl Session {
     /// Over the scripted network, every side declaring `rep()`.
-    fn scripted(clients: usize, rep: impl FnMut() -> Replication, script: impl FnOnce(&mut Network)) -> Self {
+    pub(super) fn scripted(
+        clients: usize,
+        rep: impl FnMut() -> Replication,
+        script: impl FnOnce(&mut Network),
+    ) -> Self {
         let net: Shared = Shared::default();
         script(&mut net.lock().unwrap());
         let mut nets = vec![NetMessages::transported(port(&net, 0), None, clients.max(1))];
@@ -1132,17 +1140,306 @@ fn unacknowledged_changes_are_resent_after_the_timeout_not_every_tick() {
     let after = s.sides[0].rep.peer_stats(peer).unwrap();
     let records = after.records_sent - before.records_sent;
     let destroys = after.destroys_sent - before.destroys_sent;
-    // A round trip of six ticks: resent about every seventh tick, not
-    // in each of the 60 ticks (which would be 300 records, 60 despawns).
-    assert!(
-        (5 * 5..=5 * 12).contains(&records),
-        "{records} records in {ticks} ticks"
-    );
-    assert!((5..=12).contains(&destroys), "{destroys} despawns in {ticks} ticks");
+    // A round trip of about eight ticks: resent after the timeout, then
+    // after twice that, four times that (nothing is acknowledged), not in
+    // each of the 60 ticks (which would be 300 records, 60 despawns).
+    assert!((5 * 3..=5 * 5).contains(&records), "{records} records in {ticks} ticks");
+    assert!((3..=5).contains(&destroys), "{destroys} despawns in {ticks} ticks");
     // Back up: everything arrives.
     s.net.as_ref().unwrap().lock().unwrap().cut = false;
     s.run(30, |_, _| {});
     assert_converged(&mut s, |_, _, _| true);
+}
+
+/// The resend rules of #151: on a timeout only, never backing off.
+const TIMEOUT_ONLY: ResendRules = ResendRules {
+    early: false,
+    reorder: false,
+    backoff: false,
+};
+
+/// Five of 20 entities change while the link (three ticks each way, up to
+/// one more of jitter, packets in order) drops everything for one tick;
+/// returns how many ticks after the change the five went again, the round
+/// trip and the resend timeout then.
+fn one_lost_packet(rules: ResendRules) -> (u64, f32, u32) {
+    let mut s = Session::scripted(1, declarations, |n| {
+        n.delay = 3;
+        n.jitter = 1;
+    });
+    s.sides[0].rep.set_resend_rules(rules);
+    spawn_crowd(&mut s.sides[0].world, 20);
+    s.join(400);
+    s.run(240, |_, _| {});
+    let crowd: Vec<Entity> = originals(&mut s.sides[0].world).into_values().collect();
+    let peer = s.me(1);
+    let (timeout, _) = s.sides[0].rep.peer_resend_ticks(peer).expect("joined");
+    let rtt = s.sides[0].rep.peer_rtt_ticks(peer).expect("measured");
+    s.step(|i, side| {
+        if i == 0 {
+            for &e in &crowd[..5] {
+                side.world.get_mut::<Pos>(e).unwrap().at.y += 50.0;
+            }
+        }
+    });
+    let start = s.sides[0].rep.peer_stats(peer).unwrap();
+    // A tick's packets leave at the next tick's poll: lose those.
+    s.net.as_ref().unwrap().lock().unwrap().cut = true;
+    s.step(|_, _| {});
+    s.net.as_ref().unwrap().lock().unwrap().cut = false;
+    let mut resent = None;
+    for t in 2..=60 {
+        s.step(|_, _| {});
+        let now = s.sides[0].rep.peer_stats(peer).unwrap();
+        if resent.is_none() && now.records_sent > start.records_sent {
+            assert_eq!(now.records_sent - start.records_sent, 5, "the five went again, once");
+            resent = Some(t);
+        }
+    }
+    s.run(30, |_, _| {});
+    assert_converged(&mut s, |_, _, _| true);
+    (resent.expect("resent"), rtt, timeout)
+}
+
+#[test]
+fn a_packet_that_later_acknowledgements_skip_is_resent_at_once() {
+    let (resent, rtt, timeout) = one_lost_packet(ResendRules::default());
+    // The next packet left a tick after the lost one: its acknowledgement,
+    // a round trip later, skips the lost one, which goes again at once.
+    assert!(
+        resent <= 1 + rtt.ceil() as u64 + 1,
+        "{resent} ticks, a round trip of {rtt} after the next packet"
+    );
+    assert!(
+        resent < u64::from(timeout),
+        "{resent} ticks, before the {timeout}-tick timeout"
+    );
+    // Negative control: on the timeout only, it waits the whole timeout.
+    let (old, _, timeout) = one_lost_packet(TIMEOUT_ONLY);
+    assert_eq!(old, u64::from(timeout), "the old rule waits the {timeout}-tick timeout");
+    assert!(resent < old, "{resent} vs {old} ticks");
+}
+
+/// What a run of [`lossy_staleness`] measured.
+#[derive(Debug)]
+struct Staleness {
+    /// Ticks from a change on the server to its replica showing it: the
+    /// mean, the mean of the slowest 5% (changes whose packet was lost),
+    /// the 99th percentile and the most, over every change.
+    mean: f64,
+    tail: f64,
+    p99: u64,
+    most: u64,
+    /// The server's bytes per second to the client while changes went.
+    rate: f64,
+}
+
+/// 100 counters, each changing one tick in 20, for 20 seconds over a link
+/// of three ticks each way plus up to `jitter`, losing `loss` of every
+/// 1000 datagrams both ways; the server resends by `rules`.
+fn lossy_staleness(rules: ResendRules, jitter: u64, loss: u64) -> Staleness {
+    let mut s = Session::scripted(1, || Replication::new().component::<Count>(), |n| n.delay = 3);
+    s.sides[0].rep.set_resend_rules(rules);
+    for _ in 0..100 {
+        s.sides[0].world.spawn((Count(0), Replicated::new()));
+    }
+    s.join(400);
+    s.run(120, |_, _| {});
+    {
+        let mut n = s.net.as_ref().unwrap().lock().unwrap();
+        n.jitter = jitter;
+        n.loss_per_mille = loss;
+    }
+    // Let the round trip estimate settle on the new link.
+    s.run(120, |_, _| {});
+    let originals = originals(&mut s.sides[0].world);
+    let ids: Vec<u32> = originals.keys().copied().collect();
+    let peer = s.me(1);
+    let before = s.sides[0].rep.peer_stats(peer).unwrap();
+    // Per counter: the tick each value was set (value v at index v - 1),
+    // and how many of them the client has shown.
+    let mut set: Vec<Vec<u64>> = vec![Vec::new(); ids.len()];
+    let mut shown = vec![0usize; ids.len()];
+    let mut ages = Vec::new();
+    let mut rate = 0.0;
+    let ticks = 1200u64;
+    for t in 0..ticks + 120 {
+        let tick = s.sides[0].tick;
+        s.step(|i, side| {
+            if i == 0 && t < ticks {
+                for (k, id) in ids.iter().enumerate() {
+                    if (k as u64 + t).is_multiple_of(20) {
+                        side.world.get_mut::<Count>(originals[id]).unwrap().0 += 1;
+                        set[k].push(tick);
+                    }
+                }
+            }
+        });
+        if t + 1 == ticks {
+            let after = s.sides[0].rep.peer_stats(peer).unwrap();
+            rate = (after.bytes_sent - before.bytes_sent) as f64 / (ticks as f64 / HZ);
+        }
+        let replicas = replicas(&mut s.sides[1].world);
+        for (k, id) in ids.iter().enumerate() {
+            let value = s.sides[1].world.get::<Count>(replicas[id]).unwrap().0 as usize;
+            while shown[k] < value.min(set[k].len()) {
+                ages.push(tick - set[k][shown[k]]);
+                shown[k] += 1;
+            }
+        }
+    }
+    for (k, values) in set.iter().enumerate() {
+        assert_eq!(shown[k], values.len(), "counter {k} shows every change in the end");
+    }
+    ages.sort_unstable();
+    let slowest = &ages[ages.len() * 95 / 100..];
+    Staleness {
+        mean: ages.iter().sum::<u64>() as f64 / ages.len() as f64,
+        tail: slowest.iter().sum::<u64>() as f64 / slowest.len() as f64,
+        p99: ages[ages.len() * 99 / 100],
+        most: *ages.last().unwrap(),
+        rate,
+    }
+}
+
+#[test]
+fn lost_changes_arrive_sooner_on_a_lossy_link_for_the_same_bytes() {
+    // 10% loss each way, up to a tick of jitter each way (packets keep
+    // their order).
+    let before = lossy_staleness(TIMEOUT_ONLY, 1, 100);
+    let after = lossy_staleness(ResendRules::default(), 1, 100);
+    assert!(
+        after.tail + 1.0 < before.tail,
+        "lost changes sooner: {after:?} vs {before:?}"
+    );
+    assert!(after.mean < before.mean && after.p99 <= before.p99 && after.most < before.most);
+    assert!(
+        after.rate < before.rate * 1.01,
+        "about the same bytes: {after:?} vs {before:?}"
+    );
+    // A link that reorders: 10% loss, up to three ticks of jitter. Calling
+    // every skipped packet lost resends many that were only late; the
+    // learned tolerance keeps the bytes and still gains.
+    let before = lossy_staleness(TIMEOUT_ONLY, 3, 100);
+    let after = lossy_staleness(ResendRules::default(), 3, 100);
+    let eager = lossy_staleness(
+        ResendRules {
+            reorder: false,
+            ..ResendRules::default()
+        },
+        3,
+        100,
+    );
+    assert!(after.tail < before.tail, "{after:?} vs {before:?}");
+    assert!(after.rate < before.rate * 1.02, "{after:?} vs {before:?}");
+    // Negative control: without the tolerance, the late ones go again.
+    assert!(eager.rate > before.rate * 1.05, "{eager:?} vs {before:?}");
+    assert!(eager.tail < after.tail, "{eager:?} vs {after:?}");
+}
+
+/// What the server sent over a cut link, by [`cut_link`].
+#[derive(Debug)]
+struct Outage {
+    /// The ticks into the outage at which records went again.
+    resends: Vec<u64>,
+    /// Records and despawns sent during the outage.
+    records: u64,
+    destroys: u64,
+    /// The server's bytes per second to the client during the outage.
+    rate: f64,
+    /// Ticks from the link coming back until the client showed everything.
+    recovery: u64,
+}
+
+/// Five of 20 entities change and one dies as the link (three ticks each
+/// way) goes down for `ticks`; then it comes back.
+fn cut_link(rules: ResendRules, ticks: u64) -> Outage {
+    let mut s = Session::scripted(1, declarations, |n| n.delay = 3);
+    s.sides[0].rep.set_resend_rules(rules);
+    spawn_crowd(&mut s.sides[0].world, 20);
+    s.join(400);
+    s.run(120, |_, _| {});
+    let crowd: Vec<Entity> = originals(&mut s.sides[0].world).into_values().collect();
+    let peer = s.me(1);
+    let before = s.sides[0].rep.peer_stats(peer).unwrap();
+    s.net.as_ref().unwrap().lock().unwrap().cut = true;
+    s.step(|i, side| {
+        if i == 0 {
+            for &e in &crowd[..5] {
+                side.world.get_mut::<Pos>(e).unwrap().at.y += 50.0;
+            }
+            side.world.despawn(crowd[19]);
+        }
+    });
+    let mut resends = Vec::new();
+    let mut last = s.sides[0].rep.peer_stats(peer).unwrap();
+    for t in 1..ticks {
+        s.step(|_, _| {});
+        let now = s.sides[0].rep.peer_stats(peer).unwrap();
+        if now.records_sent > last.records_sent {
+            resends.push(t);
+        }
+        last = now;
+    }
+    let records = last.records_sent - before.records_sent;
+    let destroys = last.destroys_sent - before.destroys_sent;
+    let rate = (last.bytes_sent - before.bytes_sent) as f64 / (ticks as f64 / HZ);
+    s.net.as_ref().unwrap().lock().unwrap().cut = false;
+    let mut recovery = 0;
+    loop {
+        s.step(|_, _| {});
+        recovery += 1;
+        let all = originals(&mut s.sides[0].world);
+        let have = replicas(&mut s.sides[1].world);
+        let (server, client) = (&s.sides[0].world, &s.sides[1].world);
+        let caught_up = all.len() == have.len()
+            && all
+                .iter()
+                .all(|(id, &e)| have.get(id).is_some_and(|&c| same(server, e, client, c)));
+        if caught_up {
+            break;
+        }
+        assert!(recovery < 600, "the client never caught up");
+    }
+    assert_converged(&mut s, |_, _, _| true);
+    Outage {
+        resends,
+        records,
+        destroys,
+        rate,
+        recovery,
+    }
+}
+
+#[test]
+fn resends_back_off_while_nothing_is_acknowledged() {
+    // Nine seconds without a packet either way (the transport gives up on
+    // a peer after ten).
+    let ticks = 540;
+    let before = cut_link(TIMEOUT_ONLY, ticks);
+    let after = cut_link(ResendRules::default(), ticks);
+    // Negative control: on the old rule, the five go again every timeout.
+    let timeout = before.resends[1] - before.resends[0];
+    assert!(before.resends.windows(2).all(|w| w[1] - w[0] == timeout), "{before:?}");
+    assert!(before.records >= 5 * (ticks / timeout), "{before:?}");
+    // Now each try waits twice as long as the one before, up to 4 s.
+    let cap = (4.0 * HZ) as u64;
+    assert_eq!(after.resends[0], timeout, "the first try waits the plain timeout");
+    let mut gap = timeout;
+    for w in after.resends.windows(2) {
+        gap = (gap * 2).min(cap);
+        assert_eq!(w[1] - w[0], gap, "{after:?}");
+    }
+    assert_eq!(gap, cap, "it reached the limit: {after:?}");
+    assert_eq!(after.records, 5 * (1 + after.resends.len() as u64), "{after:?}");
+    assert_eq!(after.destroys, 1 + after.resends.len() as u64, "{after:?}");
+    assert!(after.records * 5 < before.records, "{after:?} vs {before:?}");
+    assert!(after.rate < before.rate * 0.75, "{after:?} vs {before:?}");
+    // Once an acknowledgement comes back, everything goes again at once:
+    // a round trip, the trip there, and the 0.1 s the client interpolates
+    // behind, however long the backed-off timeout had grown.
+    let trip = 3 + 1;
+    assert!(after.recovery <= 3 * trip + 6 + 1, "{after:?}");
 }
 
 /// The bytes of raw event number `n`: its length varies (some empty, some

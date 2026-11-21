@@ -130,6 +130,8 @@ pub struct SceneReport {
     /// Pipelines, bind groups, vertex and index buffers set in the last frame.
     pub state_changes: [u64; 4],
     pub command_buffers: u64,
+    /// `Queue::submit` calls in the last frame.
+    pub submits: u64,
     /// Heap allocations (count and bytes) per measured frame, whole process.
     pub allocs_per_frame: f64,
     pub alloc_bytes_per_frame: f64,
@@ -232,6 +234,7 @@ impl SceneReport {
                 "index_buffers": index_buffers,
             },
             "command_buffers": self.command_buffers,
+            "submits": self.submits,
             "upload_bytes_per_frame": uploads,
             "reallocations": self.reallocations,
             "instance_batches": batches,
@@ -643,6 +646,7 @@ mod tests {
             instance_batches: vec![("batches", 2)],
             state_changes: [1, 2, 3, 4],
             command_buffers: 7,
+            submits: 1,
             allocs_per_frame: 1.5,
             alloc_bytes_per_frame: 96.0,
             ..Default::default()

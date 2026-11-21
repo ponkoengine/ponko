@@ -4,14 +4,15 @@
 //! The bytes of an image the cook replaced with KTX2 are dropped from the
 //! buffers this file holds itself (the GLB's own chunk, data URIs): every
 //! later view and compressed stream moves down by a multiple of 16 bytes,
-//! so its alignment and its bytes stay the same.
+//! so its alignment and its bytes stay the same. An external buffer file
+//! gets the same treatment when the cook knows this model is its only
+//! reader; the shortened file goes back to the cook as a companion.
 
 use std::{collections::BTreeSet, ops::Range};
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 
-use super::{Doc, encode_glb};
+use super::{Companions, Doc, base64_encode, encode_glb};
 
 /// Offsets move by multiples of this, which keeps every view's alignment
 /// (glTF asks for at most 4; meshopt decoders like 16).
@@ -27,32 +28,41 @@ pub(super) fn image_views(json: &Value) -> Vec<usize> {
 }
 
 /// Writes the model; also returns how many bytes of replaced images were
-/// dropped from the buffers it holds.
+/// dropped from the buffers it holds and from `owned` (external buffers,
+/// by index and path, that no other model reads), and each shortened
+/// external buffer file as (path, bytes).
 pub(super) fn write(
     mut doc: Doc,
     original_buffers: usize,
     binary: bool,
     has_bin: bool,
     image_views: &[usize],
-) -> Result<(Vec<u8>, usize), String> {
+    owned: &[(usize, String)],
+) -> Result<(Vec<u8>, usize, Companions), String> {
     let appended = doc.buffers.split_off(original_buffers);
     // Drop the replaced images from the buffers this file holds: the BIN
-    // chunk, and data-URI buffers. External files may have other readers.
+    // chunk, and data-URI buffers, and from the external files only this
+    // model reads. Any other external file may have other readers.
     let mut dropped = 0;
+    let mut companions = Vec::new();
     for (b, data) in doc.buffers.iter_mut().enumerate() {
         let data_uri = doc.json["buffers"][b]["uri"]
             .as_str()
             .is_some_and(|uri| uri.starts_with("data:"));
-        if !(data_uri || (b == 0 && has_bin)) {
+        let own_file = owned.iter().find(|(i, _)| *i == b).map(|(_, path)| path);
+        if !(data_uri || (b == 0 && has_bin) || own_file.is_some()) {
             continue;
         }
         let removed = drop_replaced_images(&mut doc.json, b, data, image_views);
         if removed > 0 && data_uri {
             doc.json["buffers"][b]["byteLength"] = json!(data.len());
-            doc.json["buffers"][b]["uri"] = json!(format!(
-                "data:application/octet-stream;base64,{}",
-                STANDARD.encode(&data)
-            ));
+            doc.json["buffers"][b]["uri"] =
+                json!(format!("data:application/octet-stream;base64,{}", base64_encode(data)));
+        } else if removed > 0
+            && let Some(path) = own_file
+        {
+            doc.json["buffers"][b]["byteLength"] = json!(data.len());
+            companions.push((path.clone(), data.clone()));
         }
         dropped += removed;
     }
@@ -92,7 +102,7 @@ pub(super) fn write(
             .ok_or("model buffers must be an array")?;
         buffers.push(json!({
             "byteLength": data.len(),
-            "uri": format!("data:application/octet-stream;base64,{}", STANDARD.encode(&data)),
+            "uri": format!("data:application/octet-stream;base64,{}", base64_encode(&data)),
         }));
         Vec::new()
     };
@@ -101,7 +111,7 @@ pub(super) fn write(
     } else {
         serde_json::to_vec(&doc.json).map_err(|e| e.to_string())?
     };
-    Ok((out, dropped))
+    Ok((out, dropped, companions))
 }
 
 fn range(place: &Value) -> Option<Range<usize>> {

@@ -311,3 +311,97 @@ every archetype against the filters and the occupied-archetype list. The
 rest of the gap between records is the machine and the layout: the same
 `origin/dev` source measured 8.6 M and 9.6 M cycles in two binaries that
 placed it differently, with the same instruction count.
+
+## Change tracking follow-ups (#159)
+
+Measured like the section above, on a machine kept busier still by other
+builds (load average 55–195): only interleaved runs and instruction counts
+count, and no wall-clock win is claimed below the swing between rounds.
+The harness links `dc3ca02d` (before #47 and #89), `origin/dev` at
+`52173b15` (after #136) and the branch.
+
+**Parallel loops with `Option` fetches.** `par_for_each`, its indexed form
+and `par_collect_into` now split each archetype's rows on which `Option`
+components it has, as `for_each` does, and run each chunk in a function
+that borrows the closure, so a value the closure captured is loaded once.
+`(&mut Pos, &Vel, Option<&Spr>)` over 1M entities in four archetypes, ten
+runs on a one-thread pool, instructions per entity (3 rounds, the medians):
+
+| Loop | `origin/dev` | branch | cycles, branch / dev |
+|---|---:|---:|---:|
+| `par_for_each`, closure captures `dt` | 19.7 | 2.87 (0.145×) | 0.31 |
+| `par_for_each`, `move` capture | 17.2 | 2.77 | 0.29 |
+| `par_for_each_indexed`, capture | 18.6 | 2.78 | 0.41 |
+| `par_for_each`, no capture | 16.7 | 2.75 | 0.49 |
+| `for_each` (for reference) | 2.63 | 2.63 | 0.99 |
+| `par_for_each` without the `Option` | 2.23 | 2.20 | 0.84 |
+
+The split alone left a capturing closure scalar (16.6 instructions per
+entity): the compiler reloaded the capture at every row, because a write
+through `&mut Pos` might have changed it. The `ecs/optional-par-*` rows
+(new) agree in their fastest runs, 1M entities: 0.72 to 0.22 ms on one
+thread, 0.19–0.21 to 0.08–0.09 ms on all cores; their medians swung by
+up to 10× between rounds.
+
+**Despawning tracked entities.** The removal logs keep one run per tick
+instead of a tick per entity, and a despawn finds its component's log by
+index. 100k entities despawned in scattered order, instructions per
+entity:
+
+| Tracked components | `dc3ca02d` | `origin/dev` | branch |
+|---|---:|---:|---:|
+| none | 220 | 208.4 | 208.4 |
+| `Pos` | 347.6 | 333.6 | 324 |
+| `Pos`, `Vel` | 397.5 | 393 | 370 |
+
+Before #136 the two-tracked despawn ran 1.14× `dc3ca02d`. Cycles of the
+scattered despawn are bound by memory and swung from 1.0× to 1.6× between
+rounds; despawning from the back (nothing moves) with two tracked
+components took 0.90× the cycles of both `dc3ca02d` and `origin/dev`
+(244.8 instructions, against 266.9 and 258.9).
+
+**The change summary after a move.** An insert or remove used to mark the
+whole block of 64 rows the entity landed in as changed now; the summary
+now takes the newer of itself and the moved entity's own stamp, so it
+stays exact. An insert and remove with two tracked components costs 1.015×
+the instructions; a `Changed<Pos>` loop (100 runs) after 1% of 100k
+entities moved costs 0.68× the instructions and 0.76× the cycles.
+
+**Change filters over many archetypes.** A query with `Added`/`Changed`
+filters reused nothing between archetypes: a `Changed` loop cost about 494
+instructions per archetype, against 174 for a plain loop. The row filter
+and the run cursor are now filled in place. 1024 archetypes × 16
+entities, `Pos` tracked, 1000 runs, branch / `origin/dev`:
+
+| Workload | instructions | cycles |
+|---|---:|---:|
+| `Changed<Pos>` loop, nothing changed | 0.774 | 0.67 |
+| `Changed<Pos>` loop, 1 in 16 changed | 0.787 | 0.71 |
+| `Changed<Pos>` count, nothing changed | 0.597 | 0.45 |
+| `Changed<Pos>` count, 1 in 16 changed | 0.682 | |
+| plain `&Pos` loop and count, same world | 0.91 | |
+
+The new `ponko_bench` rows, 4 interleaved rounds (after/before, rounds
+faster): `archetypes-1024-changed-none` 0.55 (4/4),
+`archetypes-1024-changed-1in16` 0.76 (4/4),
+`query-build+count-changed-x1000` 0.68 (3/4), `archetypes-1024` 0.83
+(4/4); `archetypes-1024-tracked` was within the noise.
+
+**The attachments row.** `attachments` (hierarchy propagation) measured
+13 ms on a quiet machine and 60–480 ms here. A steady update takes about
+1 ms of work; under load, each parallel pass waited 20–90 ms for worker
+threads the system had descheduled, and an update ran about five of them.
+Indexing a level of the hierarchy took 0.16–0.23 ms on all cores and
+0.15 ms on one, so that pass and the count of placed entities now run on
+the calling thread. Timed inside the update, 4 interleaved rounds
+(median / p90, ms):
+
+| Step | before | after |
+|---|---:|---:|
+| whole steady update | 28.7 / 115 | 15.1 / 48 |
+| indexing a level | 2.1 / 60 | 0.15 / 0.9 |
+| placing | 7.2 / — | 3.7 / — |
+
+The row's median fell from 389–651 ms to 222–374 ms (4/4 rounds). What
+remains is the other parallel passes waiting on a loaded machine; on a
+quiet one the row should return to about its recorded 13 ms.

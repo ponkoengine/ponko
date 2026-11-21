@@ -125,6 +125,10 @@ pub(super) const ENCODER_WORK: usize = 250;
 /// The most encoders a frame records into, on as many cores.
 pub(super) const MAX_ENCODERS: usize = 8;
 
+/// A frame's command buffers (see `Renderer3D::draw`): never more than
+/// [`MAX_ENCODERS`], so kept inline.
+pub(crate) type FrameBuffers = smallvec::SmallVec<[wgpu::CommandBuffer; MAX_ENCODERS]>;
+
 /// Splits `parts` (recorded in this order) into consecutive groups, each
 /// recorded into one encoder: as many groups as the frame has
 /// [`ENCODER_WORK`] (at least one, at most [`MAX_ENCODERS`] and `cores`),
@@ -191,6 +195,9 @@ pub(super) enum Kind {
     /// cut-out surfaces writing their own depth at the end of the opaque
     /// pass.
     ViewModel,
+    /// The view model's see-through held items: as `Transparent`, but
+    /// always writing the stencil, for they draw where it can be written.
+    ViewModelBlended,
 }
 
 impl Kind {
@@ -204,6 +211,7 @@ impl Kind {
             Kind::Velocity | Kind::VelocityStill => Pass::Velocity,
             Kind::Capture => Pass::Capture,
             Kind::ViewModel => Pass::Opaque,
+            Kind::ViewModelBlended => Pass::Transparent,
         }
     }
 }
@@ -265,14 +273,15 @@ impl Renderer3D {
                 None => shader.view_model_cutout(variant),
             });
         }
-        if matches!(kind, Kind::Opaque | Kind::Transparent | Kind::ViewModel)
-            && let Some(pipeline) = self.stencil.pipeline(
-                id,
-                variant.instancing,
-                role,
-                kind == Kind::Transparent && self.stencil_read_only,
-            )
-        {
+        if matches!(
+            kind,
+            Kind::Opaque | Kind::Transparent | Kind::ViewModel | Kind::ViewModelBlended
+        ) && let Some(pipeline) = self.stencil.pipeline(
+            id,
+            variant.instancing,
+            role,
+            kind == Kind::Transparent && self.stencil_read_only,
+        ) {
             return Some(pipeline);
         }
         shader.variant(variant).for_kind(kind, role)
@@ -393,17 +402,19 @@ impl Renderer3D {
         clear: wgpu::Color,
         textures: &dyn TextureTable,
         timer: Option<&GpuTimer>,
-    ) -> Vec<wgpu::CommandBuffer> {
+    ) -> FrameBuffers {
         self.state_counters.take();
         let Some(targets) = self.targets.as_ref().filter(|_| !self.too_many) else {
-            return Vec::new();
+            return FrameBuffers::new();
         };
         let time = |name| timer.and_then(|t| t.pass(name));
         let split = self.splits_transparent();
         if !self.extra {
             self.shadow_cache.recorded();
         }
-        let parts = self.frame_parts(split);
+        // The list is kept between frames (see `frame_parts_into`).
+        let mut parts = std::mem::take(&mut *self.parts.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        self.frame_parts_into(split, &mut parts);
         // The frame must keep what its passes declare (see `passes`):
         // checked in debug builds, so in every render test.
         let checks = self.check_frame(&parts, targets, view);
@@ -442,23 +453,38 @@ impl Renderer3D {
             }
             encoder.finish()
         };
-        let mut buffers = Vec::with_capacity(groups);
+        let mut slots: [Option<wgpu::CommandBuffer>; MAX_ENCODERS] = Default::default();
         #[cfg(not(target_arch = "wasm32"))]
         if groups > 1 {
             use rayon::prelude::*;
-            buffers.par_extend((0..groups).into_par_iter().map(record));
+            slots[..groups]
+                .par_iter_mut()
+                .enumerate()
+                .for_each(|(group, slot)| *slot = Some(record(group)));
         } else {
-            buffers.push(record(0));
+            slots[0] = Some(record(0));
         }
         #[cfg(target_arch = "wasm32")]
-        buffers.extend((0..groups).map(record));
-        buffers
+        for (group, slot) in slots[..groups].iter_mut().enumerate() {
+            *slot = Some(record(group));
+        }
+        *self.parts.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = parts;
+        slots.into_iter().flatten().collect()
+    }
+
+    /// [`frame_parts_into`](Self::frame_parts_into) a new list (tests).
+    #[cfg(test)]
+    pub(super) fn frame_parts(&self, split: bool) -> Vec<Part> {
+        let mut parts = Vec::new();
+        self.frame_parts_into(split, &mut parts);
+        parts
     }
 
     /// The parts of this frame, in the order they are recorded and
-    /// submitted (see [`draw`](Self::draw)).
-    pub(super) fn frame_parts(&self, split: bool) -> Vec<Part> {
-        let mut parts = Vec::with_capacity(8 + self.lists.cascades + self.lists.light_views);
+    /// submitted (see [`draw`](Self::draw)), into `parts` (emptied first).
+    pub(super) fn frame_parts_into(&self, split: bool, parts: &mut Vec<Part>) {
+        parts.clear();
+        parts.reserve(8 + self.lists.cascades + self.lists.light_views);
         parts.push(Part::Prelude);
         // Small light views drawn this frame, waiting to share a pass:
         // (first, last, draws).
@@ -525,7 +551,6 @@ impl Renderer3D {
             parts.push(Part::Transparent);
         }
         parts.push(Part::Post);
-        parts
     }
 
     /// How many passes draw into the light shadow atlas this frame (test hook).
@@ -865,6 +890,7 @@ impl Renderer3D {
             }
             Part::Transparent => {
                 if split {
+                    let held_own_pass = self.view_model_see_through_pass();
                     let lit = targets.lit_texture(self.screen.taa_on);
                     passes::mark("scene copy");
                     passes::mark("color");
@@ -889,7 +915,7 @@ impl Renderer3D {
                                     passes::TRANSPARENT,
                                     "color",
                                     frame_checks::Kept::Color,
-                                    if self.samples <= 1 {
+                                    if self.samples <= 1 || held_own_pass {
                                         wgpu::StoreOp::Store
                                     } else {
                                         wgpu::StoreOp::Discard
@@ -912,7 +938,13 @@ impl Renderer3D {
                     self.draw_models(&mut pass, &self.lists.blended_runs, Kind::Transparent, &self.instances);
                     self.particles.draw(&mut pass, textures, self.resources.white);
                     self.draw_debug_lines(&mut pass);
-                    self.draw_view_model(&mut pass, targets.size, false, true);
+                    // Held see-through items that use the stencil draw in a
+                    // pass of their own, which can write it.
+                    self.draw_view_model(&mut pass, targets.size, false, !held_own_pass);
+                    drop(pass);
+                    if held_own_pass {
+                        self.record_view_model_see_through(encoder, targets, time);
+                    }
                 }
             }
             Part::Post => self.record_post(encoder, frame),

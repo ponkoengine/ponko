@@ -27,6 +27,8 @@ use crate::reflect::{JsonMap, NotSaved, WorldReflect};
 mod overrides;
 #[cfg(all(test, feature = "editor"))]
 pub(crate) use overrides::cube_gltf;
+#[cfg(feature = "editor")]
+pub(crate) use overrides::{GltfEntities, GltfOverride, GltfOverrideKind};
 
 /// How [`GltfRoot::spawn`] spawns a file.
 ///
@@ -111,7 +113,14 @@ impl GltfRoot {
         by_path.or_else(by_name).map(|n| n.entity)
     }
 
-    /// Every node's path and entity, parents before their children.
+    /// The entity of the node at exactly `path`.
+    fn entity_at(&self, path: &str) -> Option<Entity> {
+        self.nodes.iter().find(|n| n.path == path).map(|n| n.entity)
+    }
+
+    /// Every node's path and entity, parents before their children. A
+    /// node deleted in the editor (or despawned by the game) has a dead
+    /// entity.
     pub fn entities(&self) -> impl Iterator<Item = (&str, Entity)> {
         self.nodes.iter().map(|n| (n.path.as_str(), n.entity))
     }
@@ -1025,13 +1034,27 @@ impl Ctx {
         // adopted from a save (which keep where the game left them).
         let mut left_out: HashSet<String> = HashSet::new();
         let mut adopted: HashSet<Entity> = HashSet::new();
-        let saved = self
+        let record = self
             .world
             .get_resource::<GltfSceneSaves>()
-            .and_then(|s| s.scenes.iter().find(|s| s.root == Some(root)))
-            .map(|s| s.instances.clone())
+            .and_then(|s| s.scenes.iter().find(|s| s.root == Some(root)));
+        let saved = record.map(|s| s.instances.clone()).unwrap_or_default();
+        // Nodes deleted in the editor (see `overrides.rs`).
+        let deleted: HashSet<String> = record
+            .map(|s| {
+                s.overrides
+                    .iter()
+                    .filter(|(_, o)| o.deleted)
+                    .map(|(path, _)| path.clone())
+                    .collect()
+            })
             .unwrap_or_default();
         for (node_path, instance) in saved {
+            if deleted.contains(&node_path) {
+                // Its dead entity is never adopted (the id may name another
+                // entity after a load).
+                continue;
+            }
             match instance.entity {
                 None => {
                     left_out.insert(node_path);
@@ -1083,7 +1106,7 @@ impl Ctx {
         let mut fresh_prefabs: Vec<(usize, Entity)> = Vec::new();
         for (i, node) in plan.nodes.iter().enumerate() {
             let Some(prefab) = &node.props.prefab else { continue };
-            if node.is_level {
+            if node.is_level || deleted.contains(&node.path) {
                 continue;
             }
             let kept_adopted = old
@@ -1139,6 +1162,34 @@ impl Ctx {
                 .iter()
                 .any(|o| o.path == node.path && adopted.contains(&o.entity));
             if node.is_level || (leave_out(node) && !kept_adopted) {
+                placed.push((parent, offset));
+                continue;
+            }
+            if deleted.contains(&node.path) {
+                // Deleted in the editor: left out, its children hang off
+                // its parent. It keeps a dead entity (its old one if it
+                // had one), which an undo of the delete brings back.
+                let entity = match old.nodes.iter().find(|o| o.path == node.path) {
+                    Some(o) => {
+                        if o.prefab.is_some() {
+                            self.despawn_prefab(o.entity);
+                        } else {
+                            self.world.despawn(o.entity);
+                        }
+                        o.entity
+                    }
+                    None => {
+                        let e = self.world.spawn((NotSaved,));
+                        self.world.despawn(e);
+                        e
+                    }
+                };
+                spawned.push(SpawnedNode {
+                    path: node.path.clone(),
+                    entity,
+                    prefab: node.props.prefab.clone(),
+                    components: Vec::new(),
+                });
                 placed.push((parent, offset));
                 continue;
             }

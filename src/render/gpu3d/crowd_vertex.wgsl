@@ -1,10 +1,12 @@
 // ---- crowds (see `crowds.rs`) ----
-// A crowd draws every character of one (view, level) with one indirect
-// draw: `static_indices` holds the visible characters' indices (after a
-// leading 0), `items` their records (six vec4s each: the model matrix's
-// columns, the tint, the animation). Each corner is skinned here from the
-// baked animation, between its clip's two nearest frames and blended with
-// a second clip, before the material's `vertex` runs.
+// A crowd draws every character of one (view, level) with two indirect
+// draws: `static_indices` holds the visible characters' indices, those
+// drawn whole after a leading 0, those drawn dithered (crossfading between
+// levels) from the list's back with their dither in the top ten bits;
+// `items` their records (six vec4s each: the model matrix's columns, the
+// tint, the animation). Each corner is skinned here from the baked
+// animation, between its clip's two nearest frames and blended with a
+// second clip, before the material's `vertex` runs.
 @group(3) @binding(2) var<storage, read> crowd_past: array<vec4<f32>>;
 // The clip table (first frame, frames, frames a second, looping), then each
 // level's skin matrices: three rows per joint, joints of a frame together.
@@ -21,8 +23,10 @@ struct CrowdLevel {
     // as of the last frame for its records (`crowd_past`).
     elapsed: f32,
     past_elapsed: f32,
-    pad0: f32,
-    pad1: f32,
+    // Where this draw's entries start in the list, and which way they go
+    // (1 for the whole characters, -1 for the dithered ones).
+    first: u32,
+    step: i32,
 };
 @group(3) @binding(4) var<uniform> crowd_level: CrowdLevel;
 
@@ -42,6 +46,20 @@ fn crowd_frames(clip: u32, t: f32) -> vec3<f32> {
     return vec3<f32>(c.x + f0, c.x + f1, p - f0);
 }
 
+// This draw's entry for instance `i`: a character's index, and its
+// dither above bit 22.
+fn crowd_entry(i: u32) -> u32 {
+    return static_indices[u32(i32(crowd_level.first) + crowd_level.step * i32(i))];
+}
+
+// The crossfade dither of the corner's character (see `fade_keeps`): 0
+// drawn whole, else the share of pixels kept, negative fading out.
+fn crowd_fade(v: VertexIn) -> f32 {
+    let q = crowd_entry(v.instance_index) >> 22u;
+    let keep = f32(q & 511u) / 511.0;
+    return select(keep, -keep, (q & 512u) != 0u);
+}
+
 fn crowd_row(frame: f32, slot: u32, row: u32) -> vec4<f32> {
     return crowd_anim[crowd_level.section + (u32(frame) * crowd_level.slots + slot) * 3u + row];
 }
@@ -49,7 +67,7 @@ fn crowd_row(frame: f32, slot: u32, row: u32) -> vec4<f32> {
 fn static_instance(v: VertexIn) -> VertexIn {
     // The motion pass runs this a second time as of the last frame.
     let past = motion_past_time;
-    let base = static_indices[1u + v.instance_index] * 6u;
+    let base = (crowd_entry(v.instance_index) & 0x3fffffu) * 6u;
     var r: array<vec4<f32>, 6>;
     if past {
         for (var k = 0u; k < 6u; k++) {

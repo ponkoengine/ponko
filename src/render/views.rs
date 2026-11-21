@@ -229,6 +229,10 @@ pub(super) struct WindowViews {
     /// as without views).
     #[cfg_attr(not(feature = "3d"), allow(dead_code))]
     pub(super) draw_calls: usize,
+    /// The 3D views' command buffers and submissions last frame (one,
+    /// unless a write that could not wait made the held ones go early).
+    #[cfg_attr(not(feature = "3d"), allow(dead_code))]
+    pub(super) submitted: (usize, u32),
 }
 
 impl WindowViews {
@@ -251,8 +255,13 @@ impl WindowViews {
     /// Prepares, draws and submits the 3D pictures of `main` (the main
     /// camera's) and then each of `views` in order, into pictures of their
     /// rectangles' sizes in a `window` of that size. `lut` finds a post
-    /// setting's lookup table. The main frame is submitted first: it draws
-    /// the shadow maps the others read.
+    /// setting's lookup table. The main frame comes first: it draws the
+    /// shadow maps the others read.
+    ///
+    /// All of them go to the GPU in one submission (`traffic::hold`): each
+    /// frame's buffer writes are copied into place by its own first command
+    /// buffer, so a view prepared after the main frame was recorded still
+    /// reads its own camera and lights, and the main frame its own.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn draw_3d<'a>(
         &mut self,
@@ -275,6 +284,7 @@ impl WindowViews {
         self.outputs.resize_with(count, || None);
         let pipelines = self.pipelines.as_ref().unwrap();
         let main_frame = main.0.frame;
+        super::traffic::hold(queue);
         for (k, (scene, rect, clear)) in std::iter::once(main).chain(views).enumerate() {
             let rect = rect.physical(window);
             let size = (rect[2], rect[3]);
@@ -297,12 +307,11 @@ impl WindowViews {
                 three.draw_view_frame(device, k - 1, output, clear, textures, timer)
             };
             let drawn = !buffers.is_empty();
-            queue.submit(buffers);
-            if k == 0 {
-                three.submitted();
-            }
+            super::traffic::submit(queue, buffers);
             self.frame3d.push((k, rect, drawn));
         }
+        self.submitted = super::traffic::release();
+        three.submitted();
         self.draw_calls = three.views_draw_calls();
     }
 }

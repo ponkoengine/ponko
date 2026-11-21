@@ -447,7 +447,7 @@ fn a_cooked_gltf_leaves_out_the_buffers_its_glb_holds() {
 /// `source/` and what `ponko cook` makes of it in `cooked/`. The engine's
 /// test `tests/cooked_assets.rs` loads both through the same calls and
 /// compares them. `PONKO_UPDATE_COOK_FIXTURE=1` writes them again.
-#[cfg(all(feature = "textures", feature = "meshes"))]
+#[cfg(all(feature = "textures", feature = "meshes", feature = "aseprite"))]
 #[test]
 fn the_shared_cook_fixture_is_what_cook_makes_of_its_source() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/cook");
@@ -769,6 +769,131 @@ fn a_linked_tileset_is_read_from_the_assets_and_its_edits_cook_the_map_again() {
     std::fs::remove_dir_all(cache).unwrap();
 }
 
+#[cfg(feature = "aseprite")]
+#[test]
+fn a_tileset_file_others_link_to_gets_no_sheet_without_a_skip_rule() {
+    use super::aseprite::tests::{linked_map, tileset_file};
+    let cache = temp("aseprite-tileset-only");
+    let settings = settings(Some(cache.clone()));
+    let run = |color: [u8; 4], extra: Vec<(String, Vec<u8>)>| {
+        let mut files = vec![
+            (
+                "art/map.aseprite".to_string(),
+                linked_map("tiles/ground.aseprite", 3, 2),
+            ),
+            ("art/tiles/ground.aseprite".to_string(), tileset_file(3, color)),
+        ];
+        files.extend(extra);
+        cook_files(files, &Config::default(), &settings).unwrap()
+    };
+    let names = |cooked: &Cooked| cooked.files.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>();
+    let corner = |cooked: &Cooked| {
+        let png = file(cooked, "art/map.png");
+        image::load_from_memory(png).unwrap().into_rgba8().get_pixel(3, 1).0
+    };
+    let first = run([0, 255, 0, 255], Vec::new());
+    assert_eq!(names(&first), ["art/map.json", "art/map.png"], "{}", first.report());
+    // The map still reads the tiles from the file that has no sheet.
+    assert_eq!(corner(&first), [0, 255, 0, 255]);
+    let entry = first
+        .entries
+        .iter()
+        .find(|e| e.name == "art/tiles/ground.aseprite")
+        .unwrap();
+    assert_eq!(entry.outcome, Outcome::Skipped);
+    assert!(entry.note.contains("linked from art/map.aseprite"), "{}", entry.note);
+    assert!(
+        first
+            .report()
+            .contains("art/tiles/ground.aseprite: left out, only tilesets")
+    );
+    // Nothing changed: read back; the tileset is still part of the map's key.
+    assert_eq!(run([0, 255, 0, 255], Vec::new()).counts(), (0, 1));
+    let edited = run([0, 0, 255, 255], Vec::new());
+    assert_eq!(edited.counts(), (1, 0), "{}", edited.report());
+    assert_eq!(corner(&edited), [0, 0, 255, 255]);
+    // The control: a file of only tilesets that nothing links to has a sheet.
+    let alone = run(
+        [0, 255, 0, 255],
+        vec![("art/tiles/unused.aseprite".into(), tileset_file(3, [9; 4]))],
+    );
+    assert!(
+        names(&alone).contains(&"art/tiles/unused.png".to_string()),
+        "{}",
+        alone.report()
+    );
+    // And a `skip` rule on the tileset file works as before.
+    let config = Config::parse(r#"{"assets":{"art/tiles/ground.aseprite":"skip"}}"#).unwrap();
+    let skipped = cook_files(
+        vec![
+            ("art/map.aseprite".into(), linked_map("tiles/ground.aseprite", 3, 2)),
+            ("art/tiles/ground.aseprite".into(), tileset_file(3, [0, 255, 0, 255])),
+        ],
+        &config,
+        &settings,
+    )
+    .unwrap();
+    assert_eq!(names(&skipped), ["art/map.json", "art/map.png"]);
+    std::fs::remove_dir_all(cache).unwrap();
+}
+
+#[cfg(feature = "aseprite")]
+#[test]
+fn a_kept_map_that_links_to_a_tileset_file_counts_as_its_linker() {
+    use super::aseprite::tests::{hero, linked_map, tileset_file};
+    let config = Config::parse(r#"{"assets":{"art/map.aseprite":"keep"}}"#).unwrap();
+    let tileset = || {
+        (
+            "art/tiles/ground.aseprite".to_string(),
+            tileset_file(3, [0, 255, 0, 255]),
+        )
+    };
+    let names = |cooked: &Cooked| cooked.files.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>();
+    let cook = |map: Vec<u8>| {
+        cook_files(
+            vec![("art/map.aseprite".to_string(), map), tileset()],
+            &config,
+            &settings(None),
+        )
+        .unwrap()
+    };
+    // The kept map is copied as it is, and the file it links to has no sheet.
+    let map = linked_map("tiles/ground.aseprite", 3, 2);
+    let linked = cook(map.clone());
+    assert_eq!(names(&linked), ["art/map.aseprite"], "{}", linked.report());
+    assert_eq!(file(&linked, "art/map.aseprite"), map.as_slice());
+    let entry = linked
+        .entries
+        .iter()
+        .find(|e| e.name == "art/tiles/ground.aseprite")
+        .unwrap();
+    assert_eq!(entry.outcome, Outcome::Skipped);
+    assert!(entry.note.contains("linked from art/map.aseprite"), "{}", entry.note);
+    // The control: a kept map that does not link to it changes nothing, so
+    // the tileset file still gets its sheet.
+    let unlinked = cook(hero());
+    assert_eq!(
+        names(&unlinked),
+        ["art/map.aseprite", "art/tiles/ground.json", "art/tiles/ground.png"],
+        "{}",
+        unlinked.report()
+    );
+    // And a map a `skip` rule leaves out does not count as a linker either.
+    let skip = Config::parse(r#"{"assets":{"art/map.aseprite":"skip"}}"#).unwrap();
+    let skipped = cook_files(
+        vec![("art/map.aseprite".to_string(), map), tileset()],
+        &skip,
+        &settings(None),
+    )
+    .unwrap();
+    assert_eq!(
+        names(&skipped),
+        ["art/tiles/ground.json", "art/tiles/ground.png"],
+        "{}",
+        skipped.report()
+    );
+}
+
 #[cfg(all(feature = "meshes", feature = "textures"))]
 #[test]
 fn image_only_cooking_keeps_external_geometry_buffers_through_cache_hits() {
@@ -778,9 +903,11 @@ fn image_only_cooking_keeps_external_geometry_buffers_through_cache_hits() {
     let ext = "EXT_meshopt_compression";
     json["extensionsUsed"] = serde_json::json!([ext]);
     json["buffers"][0]["uri"] = serde_json::json!("geometry.bin");
+    // Two models read the buffer, so neither can tell what in it is unused.
     let files = vec![
         ("models/model.gltf".into(), serde_json::to_vec(&json).unwrap()),
         ("models/geometry.bin".into(), original.clone()),
+        ("models/second.gltf".into(), serde_json::to_vec(&json).unwrap()),
     ];
     for expected in [Outcome::Cooked, Outcome::Cached] {
         let cooked = cook_files(files.clone(), &Config::default(), &settings).unwrap();
@@ -799,6 +926,88 @@ fn image_only_cooking_keeps_external_geometry_buffers_through_cache_hits() {
         assert_eq!(cooked.files[0], ("models/geometry.bin".into(), original.clone()));
     }
     std::fs::remove_dir_all(cache).unwrap();
+}
+
+/// The files of a `.gltf` model with meshopt streams reading `geometry.bin`.
+#[cfg(all(feature = "meshes", feature = "textures"))]
+fn meshopt_in_a_bin() -> (serde_json::Value, Vec<u8>, Companions) {
+    let (json, bin) = gltf::tests::external_meshopt(32);
+    let files = vec![
+        ("models/model.gltf".to_string(), serde_json::to_vec(&json).unwrap()),
+        ("models/geometry.bin".to_string(), bin.clone()),
+    ];
+    (json, bin, files)
+}
+
+#[cfg(all(feature = "meshes", feature = "textures"))]
+#[test]
+fn a_buffer_file_only_one_model_reads_loses_the_images_that_model_replaced() {
+    let cache = temp("sole-reader");
+    let settings = settings(Some(cache.clone()));
+    let (json, bin, files) = meshopt_in_a_bin();
+    let mut sizes = Vec::new();
+    for expected in [Outcome::Cooked, Outcome::Cached] {
+        let cooked = cook_files(files.clone(), &Config::default(), &settings).unwrap();
+        // The shortened file is the cook's own output, cached with the model.
+        assert_eq!(outcome(&cooked, "models/model.gltf"), expected);
+        assert_eq!(outcome(&cooked, "models/geometry.bin"), expected);
+        let now = file(&cooked, "models/geometry.bin");
+        let model = gltf_json(file(&cooked, "models/model.gltf")).unwrap();
+        assert!(now.len() + 1000 < bin.len(), "{} -> {}", bin.len(), now.len());
+        assert_eq!(model["buffers"][0]["byteLength"], now.len());
+        assert_eq!(model["accessors"], json["accessors"]);
+        gltf::tests::assert_streams_byte_for_byte((&json, &bin), (&model, now));
+        let entry = cooked.entries.iter().find(|e| e.name == "models/geometry.bin").unwrap();
+        assert_eq!(
+            (entry.source_bytes, entry.cooked_bytes),
+            (bin.len() as u64, now.len() as u64)
+        );
+        assert!(entry.note.contains("models/model.gltf"), "{}", entry.note);
+        sizes.push(cooked.files.iter().map(|(_, b)| b.len()).sum::<usize>());
+    }
+    assert_eq!(sizes[0], sizes[1], "a cache hit writes the same files");
+    std::fs::remove_dir_all(cache).unwrap();
+}
+
+#[cfg(all(feature = "meshes", feature = "textures"))]
+#[test]
+fn a_buffer_file_another_model_a_rule_or_a_skip_covers_stays_as_it_is() {
+    let (json, bin, files) = meshopt_in_a_bin();
+    let untouched = |files: Vec<(String, Vec<u8>)>, rules: &str| {
+        let config = Config::parse(rules).unwrap();
+        let cooked = cook_files(files, &config, &settings(None)).unwrap();
+        assert_eq!(file(&cooked, "models/geometry.bin"), bin, "{rules}");
+        assert_eq!(outcome(&cooked, "models/geometry.bin"), Outcome::Kept(None), "{rules}");
+        let model = gltf_json(file(&cooked, "models/model.gltf")).unwrap();
+        assert_eq!(model["buffers"][0], json["buffers"][0], "{rules}");
+    };
+    // The control: with nothing else, it is shortened.
+    let cooked = cook_files(files.clone(), &Config::default(), &settings(None)).unwrap();
+    assert!(file(&cooked, "models/geometry.bin").len() < bin.len());
+    // A second model reads it, even one the cook leaves alone or leaves out.
+    for rules in [
+        "{}",
+        r#"{"assets": {"models/second.gltf": "keep"}}"#,
+        r#"{"assets": {"models/second.gltf": "skip"}}"#,
+    ] {
+        let mut shared = files.clone();
+        shared.push(("models/second.gltf".to_string(), files[0].1.clone()));
+        untouched(shared, rules);
+    }
+    // The buffer's own rule keeps it as it is.
+    untouched(files, r#"{"assets": {"models/geometry.bin": "keep"}}"#);
+}
+
+#[cfg(all(feature = "meshes", feature = "textures"))]
+#[test]
+fn a_buffer_file_read_from_two_folders_by_one_name_is_one_reader() {
+    // Two models in different folders that name one file: two readers.
+    let (_, bin, mut files) = meshopt_in_a_bin();
+    let mut other = gltf_json(&files[0].1).unwrap();
+    other["buffers"][0]["uri"] = serde_json::json!("../models/geometry.bin");
+    files.push(("other/model.gltf".to_string(), serde_json::to_vec(&other).unwrap()));
+    let cooked = cook_files(files, &Config::default(), &settings(None)).unwrap();
+    assert_eq!(file(&cooked, "models/geometry.bin"), bin);
 }
 
 /// The kept-geometry fixture: `tests/fixtures/cook-kept/source/packed.glb`,

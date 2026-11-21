@@ -68,7 +68,7 @@ impl Renderer3D {
                 label: Some("frame writes"),
             });
             writes.record(&mut encoder);
-            queue.submit([encoder.finish()]);
+            traffic::submit(queue, [encoder.finish()]);
         }
     }
 
@@ -716,7 +716,8 @@ impl Renderer3D {
             ) else {
                 continue;
             };
-            if view.particles {
+            // Debug labels are drawn with the particles' text.
+            if view.particles || view.debug {
                 let particles = &view.frame.particles;
                 self.particles
                     .prepare_target(device, queue, view.target, particles, view.view_proj, view.camera);
