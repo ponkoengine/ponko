@@ -3464,6 +3464,14 @@ static void spectrum_setup(PonkoCtx* ctx, void* user) {
         spread += fabsf(s.height);
     }
     CHECK(spread > 0.001f); /* a 2 m sea is not flat */
+    /* Waves from a spectrum are drawn on the simulation's clock. */
+    float drawn = -1;
+    CHECK(ponko_ctx_water_drawn_time(ctx, water, &drawn) == PONKO_OK && drawn == (float)ponko_ctx_sim_time(ctx));
+    CHECK(ponko_ctx_water_drawn_time(NULL, water, &drawn) == PONKO_INVALID_ARGUMENT);
+    CHECK(ponko_ctx_water_drawn_time(ctx, water, NULL) == PONKO_INVALID_ARGUMENT);
+    uint64_t dry;
+    CHECK(ponko_spawn(ponko_ctx_world(ctx), NULL, 0, &dry) == PONKO_OK);
+    CHECK(ponko_ctx_water_drawn_time(ctx, dry, &drawn) == PONKO_NOT_FOUND);
     sea.spectrum.tile = 0;
     CHECK(ponko_ctx_spawn_water(ctx, &sea, &water) == PONKO_INVALID_ARGUMENT);
 }

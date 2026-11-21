@@ -637,9 +637,10 @@ pub unsafe extern "C" fn ponko_ctx_despawn_water(ctx: *mut PonkoCtx, entity: u64
 }
 
 /// The surface of water body `entity` at ground point `at` (x, z) and time
-/// `t` in seconds (`ponko_ctx_time` is what the shader draws; buoyancy uses
-/// `ponko_ctx_sim_time`): height with the level, normal, velocity and
-/// squeeze. The same waves the GPU draws, to within a centimetre.
+/// `t` in seconds (`ponko_ctx_water_drawn_time` is what the shader draws;
+/// buoyancy uses `ponko_ctx_sim_time`): height with the level, normal,
+/// velocity and squeeze. The same waves the GPU draws, to within a
+/// centimetre.
 /// ```
 /// let mut s = ponko_ffi::PonkoWaterSample::default();
 /// assert_eq!(unsafe { ponko_ffi::ponko_ctx_water_sample(std::ptr::null(), 0, Default::default(), 0.0, &mut s) } as u32, 1);
@@ -667,6 +668,27 @@ pub unsafe extern "C" fn ponko_ctx_water_sample(
                 squeeze: s.squeeze,
             },
         )
+    })
+}
+
+/// The time water body `entity` is drawn at this frame (seconds), to pass
+/// to `ponko_ctx_water_sample` for what the player sees: for waves from a
+/// spectrum the simulation's clock between its two fixed steps (it stops
+/// while the game is paused and follows its speed; within the sea's
+/// period), for other waves the frame's clock (`ponko_ctx_time`). Rust
+/// `Water::drawn_time`.
+/// ```
+/// let mut t = 0.0f32;
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_water_drawn_time(std::ptr::null(), 0, &mut t) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `out_t` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_water_drawn_time(ctx: *const PonkoCtx, entity: u64, out_t: *mut f32) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        let t = ctx_access(ctx, |c| Ok(water_of(c, entity)?.drawn_time(&c.time)))?;
+        out(out_t, t)
     })
 }
 
