@@ -368,7 +368,7 @@ fn the_guide_quotes_the_measured_errors_to_the_path_traced_reference() {
         ),
         format!("({ROOM_SETTLED_ERROR:.2} against that after 1500 frames, flat ambient light {ROOM_FLAT_ERROR:.2}"),
     ] {
-        assert!(guide.contains(&phrase), "book/src/3d.md says: {phrase}");
+        assert!(guide.contains(&phrase), "book/src/3d.md should say: {phrase}");
     }
 }
 
