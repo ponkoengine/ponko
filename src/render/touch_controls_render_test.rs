@@ -37,10 +37,17 @@ struct Rig {
     pipeline: wgpu::RenderPipeline,
     camera_layout: wgpu::BindGroupLayout,
     textures: Vec<GpuTexture>,
+    /// The view's size in pixels.
+    size: (u32, u32),
 }
 
 impl Rig {
     fn new() -> Option<Self> {
+        Self::sized(SIZE)
+    }
+
+    /// A rig drawing a view `size` pixels large.
+    fn sized(size: (u32, u32)) -> Option<Self> {
         let gpu = gpu()?;
         let (device, queue) = (&gpu.device, &gpu.queue);
         let (texture_layout, _white, mut textures) = white_textures(device, queue);
@@ -127,13 +134,14 @@ impl Rig {
             camera_layout,
             textures,
             gpu,
+            size,
         })
     }
 
     /// A `Ctx` with no window, on a touch screen, drawing into this rig's
     /// textures, with `controls` on it.
     fn ctx(&self, controls: TouchControls) -> Ctx {
-        let mut ctx = Ctx::new(1.0 / 60.0, vec2(SIZE.0 as f32, SIZE.1 as f32));
+        let mut ctx = Ctx::new(1.0 / 60.0, vec2(self.size.0 as f32, self.size.1 as f32));
         ctx.gfx.stand_in_textures();
         ctx.ui_state.touch.texture = Some(Texture::new(2, DISC, DISC));
         ctx.input.set_touch_device(true);
@@ -144,7 +152,7 @@ impl Rig {
     /// The controls as the window draws them this frame.
     fn draw(&self, ctx: &mut Ctx) -> Image {
         ctx.update_touch_controls();
-        ctx.ui.layout(vec2(SIZE.0 as f32, SIZE.1 as f32));
+        ctx.ui.layout(vec2(self.size.0 as f32, self.size.1 as f32));
         ctx.draw_retained_ui();
         self.shot(ctx)
     }
@@ -185,7 +193,7 @@ impl Rig {
             contents: bytemuck::cast_slice::<SpriteInstance, u8>(sprites),
             usage: wgpu::BufferUsages::VERTEX,
         });
-        let size = vec2(SIZE.0 as f32, SIZE.1 as f32);
+        let size = vec2(self.size.0 as f32, self.size.1 as f32);
         let camera = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
             contents: bytemuck::cast_slice(&crate::ctx::screen_projection(size).to_cols_array()),
@@ -199,7 +207,7 @@ impl Rig {
                 resource: camera.as_entire_binding(),
             }],
         });
-        let output = target(device, SIZE, FORMAT);
+        let output = target(device, self.size, FORMAT);
         let view = output.create_view(&Default::default());
         let mut encoder = device.create_command_encoder(&Default::default());
         Renderer::sprite_pass(
@@ -208,7 +216,7 @@ impl Rig {
             Some(Color::BLACK),
             None,
             &SpritePass {
-                viewport: [SIZE.0, SIZE.1],
+                viewport: [self.size.0, self.size.1],
                 scale: 1.0,
                 pipeline: &self.pipeline,
                 instances: &instances,
@@ -411,4 +419,76 @@ fn restyled_moved_controls_are_drawn_in_their_color_where_they_were_put_and_fade
     let [fr, fg, fb] = disc_color(&faint, middle, radius);
     assert!(fr < r * 0.8 && fr > 20.0, "fainter: {fr} vs {r}");
     assert!(fg < fr * 0.3 && fb < fr * 0.3, "still red: {fr} {fg} {fb}");
+}
+
+/// The arrange screen's view: a phone held sideways, at UI scale 1.
+const ARRANGE: (u32, u32) = (640, 360);
+
+#[test]
+fn the_arrange_screen_shows_its_panel_beside_the_controls_and_lights_the_picked_one() {
+    let Some(rig) = Rig::sized(ARRANGE) else { return };
+    let controls = TouchControls::new()
+        .stick("move")
+        .button("jump", "A")
+        .button("fire", "B")
+        .corner_button("pause", "II");
+    let mut ctx = rig.ctx(controls);
+    // A desktop: the controls show only because the screen arranges them.
+    ctx.input.set_touch_device(false);
+    ctx.arrange_touch_controls();
+    // A finger taps B: picked, to resize.
+    let fire = ctx.input.touch_control_center("fire").expect("a button");
+    let jump = ctx.input.touch_control_center("jump").expect("a button");
+    let radius = ctx.input.touch.zones[2].radius;
+    ctx.input.feed(InputEvent::touch_start(1, fire));
+    ctx.input.feed(InputEvent::touch_end(1, fire));
+    let image = rig.draw(&mut ctx);
+    let card = ctx
+        .ui
+        .rect(ctx.ui.find("touch.arrange.card").expect("a panel"))
+        .expect("laid out");
+    // The panel: an opaque dark card in the middle, with text on it.
+    let (mut lit, mut dark) = (0u32, 0u32);
+    for y in card.min.y as u32 + 2..card.max.y as u32 - 2 {
+        for x in card.min.x as u32 + 2..card.max.x as u32 - 2 {
+            let l = light(image.pixel(x, y));
+            if l > 180 {
+                lit += 1;
+            } else if (8..60).contains(&l) {
+                dark += 1;
+            }
+        }
+    }
+    let area = card.size().x * card.size().y;
+    assert!(dark as f32 > area * 0.5, "a dark panel: {dark} of {area}");
+    assert!(lit > 400, "with light text and widgets on it: {lit}");
+    for (action, at) in [("jump", jump), ("fire", fire)] {
+        assert!(!card.contains(at), "the panel keeps clear of {action}");
+    }
+    let (picked, other) = (
+        mean_light(&image, fire, radius * 0.8),
+        mean_light(&image, jump, radius * 0.8),
+    );
+    assert!(other > 20.0, "the controls are drawn beside it: {other}");
+    assert!(picked > other * 1.25, "the picked control is lit: {picked} vs {other}");
+    check_reference(
+        "touch_arrange_screen",
+        &image,
+        REFERENCE,
+        "the ready-made screen for arranging on-screen touch controls in a 640x360 view on black: a dark panel in \
+         the middle titled \"Arrange the controls\" with a note, the picked control's row (B, - and + buttons, 100 %), \
+         Size and Opacity sliders and Reset, Cancel and Save buttons; around it a stick at the bottom left, buttons \
+         A and B at the bottom right (B brighter: picked) and a corner button II at the top right",
+        &rig.gpu.info,
+    );
+    // The negative control: while a control is dragged the panel steps
+    // aside, and that frame is not the reference.
+    ctx.input.feed(InputEvent::touch_start(2, jump));
+    ctx.input.feed(InputEvent::touch_move(2, jump - vec2(200.0, 0.0)));
+    let dragging = rig.draw(&mut ctx);
+    assert!(
+        light(dragging.pixel(card.center().x as u32, card.min.y as u32 + 20)) < 8,
+        "no panel while a control is dragged"
+    );
+    reference_rejects("touch_arrange_screen", &dragging, REFERENCE, "a control being dragged");
 }

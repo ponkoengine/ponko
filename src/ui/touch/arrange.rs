@@ -18,7 +18,11 @@ const MARGIN: f32 = 12.0;
 const PADDING: f32 = 12.0;
 const GAP: f32 = 6.0;
 /// The rows' heights: title, note, picked control, size, opacity, buttons.
-const ROWS: [f32; 6] = [26.0, 18.0, 40.0, 30.0, 30.0, 40.0];
+const ROWS: [f32; 6] = [28.0, 18.0, 40.0, 30.0, 30.0, 40.0];
+/// The title's text size, and a line of text's height, in UI units: the
+/// labels sit in the middle of their rows.
+const TITLE_SIZE: f32 = 22.0;
+const LINE: f32 = 20.0;
 /// The panel's height, in UI units.
 const CARD_HEIGHT: f32 = 2.0 * PADDING + 5.0 * GAP + ROWS[0] + ROWS[1] + ROWS[2] + ROWS[3] + ROWS[4] + ROWS[5];
 /// What "Size" spans (every control at once).
@@ -156,13 +160,27 @@ impl Ctx {
             .name("touch.arrange")
             .accessible_name("Arrange the controls")
             .id();
+        // In the game's theme; where its buttons are the panels' color
+        // (the default theme), on a darker card, so they stand out.
+        let theme = ui.theme();
+        let mut background = theme.panel;
+        if theme.control == theme.panel {
+            background = Color {
+                r: background.r * 0.55,
+                g: background.g * 0.55,
+                b: background.b * 0.55,
+                a: background.a.max(0.92),
+            };
+        }
         let card = ui
             .panel(root)
             .layout(UiLayout::fixed(CARD_WIDTH, CARD_HEIGHT).padding(PADDING).gap(GAP))
+            .background(background)
             .name("touch.arrange.card")
             .id();
         ui.title(card, "Arrange the controls")
             .layout(UiLayout::row(ROWS[0]))
+            .size(TITLE_SIZE)
             .align(UiTextAlign::Center)
             .name("touch.arrange.title");
         let note = ui
@@ -181,7 +199,7 @@ impl Ctx {
         let pick_row = row(ui, ROWS[2]);
         let picked = ui
             .label(pick_row, "")
-            .layout(UiLayout::auto().grow(1.0))
+            .layout(UiLayout::auto().grow(1.0).height(LINE).top((ROWS[2] - LINE) / 2.0))
             .name("touch.arrange.picked")
             .id();
         let smaller = ui
@@ -192,7 +210,7 @@ impl Ctx {
             .id();
         let own_size = ui
             .label(pick_row, "")
-            .layout(UiLayout::fixed(56.0, ROWS[2]))
+            .layout(UiLayout::fixed(56.0, LINE).top((ROWS[2] - LINE) / 2.0))
             .align(UiTextAlign::Center)
             .name("touch.arrange.picked_size")
             .id();
@@ -205,7 +223,7 @@ impl Ctx {
         let slider_row = |ui: &mut crate::ui::Ui, height: f32, label: &str, part: &str, value: f32| {
             let r = row(ui, height);
             ui.label(r, label)
-                .layout(UiLayout::fixed(84.0, height))
+                .layout(UiLayout::fixed(84.0, LINE).top((height - LINE) / 2.0))
                 .name(format!("touch.arrange.{part}_label"));
             ui.slider(r)
                 .layout(UiLayout::auto().grow(1.0))

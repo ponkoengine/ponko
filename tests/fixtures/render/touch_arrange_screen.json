@@ -1,0 +1,17 @@
+{
+  "name": "touch_arrange_screen",
+  "scene": "the ready-made screen for arranging on-screen touch controls in a 640x360 view on black: a dark panel in the middle titled \"Arrange the controls\" with a note, the picked control's row (B, - and + buttons, 100 %), Size and Opacity sliders and Reset, Cancel and Save buttons; around it a stick at the bottom left, buttons A and B at the bottom right (B brighter: picked) and a corner button II at the top right",
+  "width": 640,
+  "height": 360,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 24,
+    "outliers": 0.004,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "5b2a866e0cb7fc15",
+  "reason": "new test: the ready-made touch arrange screen"
+}
