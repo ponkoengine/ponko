@@ -398,6 +398,18 @@ where
             self.ctx.set_gamepad_backend(crate::gamepad::GilrsBackend::new());
         }
 
+        // The web's storage is read now (see `resumed`); a canvas has no
+        // default-sized window to show first.
+        #[cfg(target_arch = "wasm32")]
+        if self.config.restore_window {
+            match self.ctx.window.restore_settings(&self.ctx.storage) {
+                // The title belongs to the game, as on the desktop.
+                Ok(()) => {
+                    let _ = self.ctx.window.set_title(self.config.title.clone());
+                }
+                Err(e) => eprintln!("ponko: opening the window with its default settings: {e}"),
+            }
+        }
         if let Some(setup) = self.setup.take() {
             self.ctx.set_in_setup(true);
             if let Err(error) = run_setups(std::mem::take(&mut self.config.setups), &mut self.ctx) {
@@ -442,16 +454,30 @@ where
             return;
         }
 
-        let attributes = Window::default_attributes()
-            .with_title(self.config.title.clone())
-            .with_inner_size(LogicalSize::new(self.config.width, self.config.height));
-        #[cfg(target_arch = "wasm32")]
-        let attributes = crate::web::canvas_attributes(attributes);
+        let attributes = Window::default_attributes().with_title(self.config.title.clone());
+        // The first window opens with its final settings (the saved ones with
+        // `restore_window_settings`), so no default-sized window shows first.
+        // The web reads its storage after the canvas exists (see `start`).
         #[cfg(not(target_arch = "wasm32"))]
-        let attributes = if self.config.fullscreen {
-            attributes.with_fullscreen(Some(winit::window::Fullscreen::Borderless(None)))
-        } else {
-            attributes
+        let (attributes, settings) = {
+            let handles: Vec<_> = event_loop.available_monitors().collect();
+            let monitors: Vec<_> = handles.iter().map(super::window_service::monitor_info).collect();
+            let mut settings = self.config.first_window_settings(&self.ctx.storage, &monitors);
+            let fullscreen = super::window_service::fullscreen_on(&handles, &settings.mode).unwrap_or_else(|e| {
+                eprintln!("ponko: restoring window settings in windowed mode: {e}");
+                settings.mode = crate::window::WindowMode::Windowed;
+                None
+            });
+            (
+                super::window_service::first_window_attributes(attributes, &settings, fullscreen),
+                settings,
+            )
+        };
+        #[cfg(target_arch = "wasm32")]
+        let (attributes, settings) = {
+            let settings = self.config.default_window_settings();
+            let attributes = attributes.with_inner_size(LogicalSize::new(self.config.width, self.config.height));
+            (crate::web::canvas_attributes(attributes), settings)
         };
         // The accessibility adapter has to be on the view (macOS) or the
         // window (Windows) before it is first shown, so the window starts
@@ -478,16 +504,7 @@ where
         let window = Arc::new(window);
         self.ctx.window.attach(
             super::window_service::Backend::new(window.clone(), self.cursor_sources.clone()),
-            crate::window::WindowSettings {
-                title: self.config.title.clone(),
-                size: Vec2::new(self.config.width as f32, self.config.height as f32),
-                mode: if self.config.fullscreen {
-                    crate::window::WindowMode::Borderless(None)
-                } else {
-                    crate::window::WindowMode::Windowed
-                },
-                ..Default::default()
-            },
+            settings,
         );
         self.window = Some(window.clone());
         self.ctx

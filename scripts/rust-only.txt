@@ -69,3 +69,4 @@ Buoyancy::points                 water.md          # C floats boxes and spheres 
 CameraTarget                     camera-ui.md      # C and C++ keep the rig descriptor and update it once a frame (ponko_follow_camera2d_update, the 3D rigs' update calls)
 TouchLayout                      touch.md          # C and C++ set the controls (ponko_ctx_set_touch_controls); the player's saved layout, its edit mode, styles and trackpad events are not bound yet
 CrashReports                     crash-reports.md  # not bound yet: a native game installs its own handler and writes its own report
+Game::restore_window_settings    window.md         # C and C++ games call ponko_ctx_window_restore_settings in setup; the window can show at its default size first

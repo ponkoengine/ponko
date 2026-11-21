@@ -100,6 +100,44 @@ Game::new("Play", 800, 600)
 # let _ = std::fs::remove_dir_all(dir);
 ```
 
+`restore_settings` changes a window that is already open, so for a moment the
+player sees it at its default size and place. To open the first window with
+the saved settings instead, turn on `Game::restore_window_settings(true)`:
+the engine reads `window.json` before it creates the window and creates it at
+the saved size and position, in the saved mode, with the saved limits and
+flags. Nothing is moved or resized after it appears.
+
+```rust
+# use ponko::prelude::*;
+# let dir = std::env::temp_dir().join(format!("ponko-book-window-start-{}", std::process::id()));
+Game::new("Play", 800, 600)
+#   .data_dir(&dir)
+    .app_id("play")
+    .restore_window_settings(true)
+    .run_headless(0, |ctx| {
+        // Already the saved settings here; save them again when they change.
+        ctx.window.save_settings(&mut ctx.storage).expect("storage is writable");
+    });
+# let _ = std::fs::remove_dir_all(dir);
+```
+
+- The saved choice wins over `Game::fullscreen` and the size given to
+  `Game::new`. The title stays the game's: it belongs to the game, not the
+  player.
+- No saved file, or no `app_id`: the window opens with the game's settings.
+  A file that can't be read or holds an invalid size is ignored and the reason
+  is printed; a broken file never stops the game from starting.
+- A saved monitor or exclusive mode that is gone opens windowed at the saved
+  size, and the reason is printed.
+- A headless run applies the same settings to `ctx.window` and the window size
+  before setup, which is how the tests check them
+  (`restore_window_settings_starts_with_the_saved_choice_before_setup` in
+  `tests/window_service.rs`).
+- The web reads its storage after the canvas exists, so there it restores
+  just before setup (the canvas has no default window to show first).
+- `Game::restore_window_settings` is Rust-only for now: C and C++ games call
+  `ponko_ctx_window_restore_settings` in setup (see [C and C++](#c-and-c)).
+
 ## Cursor
 
 `set_cursor(Cursor::System(CursorIcon::Text))` picks a system cursor: the CSS
@@ -266,3 +304,7 @@ These need a real display, so the automated tests can't do them:
 7. Focus, minimize and restore, drop a file, close with and without a cancel;
    check the events and that cancelling keeps the game running while
    `ctx.quit()` exits.
+8. With `Game::restore_window_settings(true)`, save a size, position and mode
+   (windowed, borderless, exclusive), quit and start again; on each desktop
+   OS the window must appear at the saved place and size, in the saved mode,
+   without a default-sized window showing first.

@@ -128,6 +128,15 @@ pub struct Env {
     /// machine group together (`bench_track compare` and `history`). `None`:
     /// `bench_track` makes one from the OS, architecture and CPU.
     pub machine: Option<String>,
+    /// The alignment in bytes of every function of the build, when it was
+    /// built with `scripts/bench-aligned.sh` (`PONKO_BENCH_CODE_ALIGN`);
+    /// `None` for an ordinary build, whose layout moves with any change.
+    pub code_align: Option<u32>,
+}
+
+/// `PONKO_BENCH_CODE_ALIGN` when this binary was compiled.
+pub fn build_code_align() -> Option<u32> {
+    option_env!("PONKO_BENCH_CODE_ALIGN").and_then(|v| v.parse().ok())
 }
 
 impl Env {
@@ -154,6 +163,7 @@ impl Env {
                 .map_or(0, |d| d.as_secs()),
             load_average: load_average(),
             machine: std::env::var("PONKO_BENCH_MACHINE").ok().filter(|m| !m.is_empty()),
+            code_align: build_code_align(),
         }
     }
 }
@@ -231,6 +241,8 @@ pub fn to_json(env: &Env, records: &[Record], render: Option<&str>) -> String {
     let _ = writeln!(s, "    \"load_average\": {},", json_str(&env.load_average));
     let machine = env.machine.as_deref().map_or_else(|| "null".to_owned(), json_str);
     let _ = writeln!(s, "    \"machine\": {machine},");
+    let align = env.code_align.map_or_else(|| "null".to_owned(), |a| a.to_string());
+    let _ = writeln!(s, "    \"code_align\": {align},");
     let _ = writeln!(s, "    \"unix_time\": {}", env.unix_time);
     s.push_str("  },\n  \"results\": [");
     for (i, r) in records.iter().enumerate() {
@@ -344,6 +356,17 @@ mod tests {
     }
 
     #[test]
+    fn the_recorded_function_alignment_is_the_builds() {
+        // `scripts/bench-aligned.sh test -p ponko_bench` (or the variable set
+        // by hand) compiles and runs this with PONKO_BENCH_CODE_ALIGN=128.
+        let at_run = std::env::var("PONKO_BENCH_CODE_ALIGN")
+            .ok()
+            .and_then(|v| v.parse().ok());
+        assert_eq!(build_code_align(), at_run);
+        assert_eq!(Env::detect(None).code_align, at_run);
+    }
+
+    #[test]
     fn json_strings_are_escaped() {
         assert_eq!(json_str("a\"b\\c\nd\u{1}"), r#""a\"b\\c\nd\u0001""#);
     }
@@ -353,6 +376,7 @@ mod tests {
         let env = Env {
             filter: Some("iter".into()),
             machine: Some("lab-m4".into()),
+            code_align: Some(128),
             ..Env::default()
         };
         let mut a = Record::new("iter/a", Kind::Steady, 5, &mut [d(2), d(1)]);
@@ -364,6 +388,7 @@ mod tests {
         assert!(json.contains("\"schema_version\": 1,"));
         assert!(json.contains("\"filter\": \"iter\","));
         assert!(json.contains("\"machine\": \"lab-m4\","));
+        assert!(json.contains("\"code_align\": 128,"));
         assert!(json.contains(
             "{\"name\": \"iter/a\", \"kind\": \"steady\", \"warmup\": 5, \"runs\": 2, \"min_ms\": 1.000000, \
              \"p50_ms\": 1.000000, \"p95_ms\": 2.000000, \"p99_ms\": 2.000000, \"max_ms\": 2.000000, \
@@ -381,6 +406,7 @@ mod tests {
         assert!(empty.ends_with("\"results\": []\n}\n"));
         assert!(empty.contains("\"filter\": null,"));
         assert!(empty.contains("\"machine\": null,"));
+        assert!(empty.contains("\"code_align\": null,"));
     }
 
     #[test]

@@ -34,7 +34,7 @@ With `PONKO_BENCH_JSON=<path>`, the runner writes every result it ran (after the
     "ponko_features": ["physics", "physics3d"], "bevy_ecs": "0.20.1",
     "bevy_ecs_features": ["default", "multi_threaded"], "hecs": "0.11.2",
     "filter": "archetypes", "load_average": "9.12 8.40 7.95", "machine": null,
-    "unix_time": 1794224632
+    "code_align": null, "unix_time": 1794224632
   },
   "results": [
     {"name": "archetypes-1024/ponko", "kind": "steady", "warmup": 5, "runs": 200,
@@ -54,6 +54,9 @@ With `PONKO_BENCH_JSON=<path>`, the runner writes every result it ran (after the
   the same machine find each other (see [Tracking results over
   time](#tracking-results-over-time)).
 - The counting allocator adds two relaxed atomic adds to every allocation, shared by all threads. Rows that allocate a lot from several threads at once can shift slightly against runs from before it was added (before `allocs_per_run` existed); compare such rows only between runs that both have it.
+- `code_align` is the alignment in bytes of every function of a build made
+  with `scripts/bench-aligned.sh` (128), or `null` for an ordinary build; see
+  [Two builds, one layout](#tracking-results-over-time).
 - `rustc` is the `rustc` on `PATH` when the runner starts, which matches the build when run through `cargo run`. Unknown values are `"unknown"` or `null`.
 - `schema_version` changes only when a field changes meaning or is removed.
 
@@ -106,6 +109,58 @@ when something is slower. The rule is tested with synthetic runs, a
 regression that must be flagged and noise that must not
 (`cargo test -p ponko_bench --bin bench_track`); no test asserts on a
 timing.
+
+**Two builds, one layout.** A change to one function moves every function
+after it in the binary, and where a hot loop then falls against cache lines
+and fetch blocks can change its time by a few percent, either way, with no
+change to its code. So that a small difference between two builds is the
+code and not the layout, build both sides with every function aligned to
+128 bytes, keep each side's binary, and run them in turns:
+
+```sh
+git switch before && scripts/bench-aligned.sh build --release -p ponko_bench --bin ponko_bench
+cp target/release/ponko_bench /tmp/bench-before
+git switch after && scripts/bench-aligned.sh build --release -p ponko_bench --bin ponko_bench
+cp target/release/ponko_bench /tmp/bench-after
+for i in 1 2 3 4 5; do   # interleaved, so a busy minute hits both sides
+  PONKO_BENCH_JSON=before/run-$i.json /tmp/bench-before 'ecs/'
+  PONKO_BENCH_JSON=after/run-$i.json /tmp/bench-after 'ecs/'
+done
+cargo run --release -p ponko_bench --bin bench_track -- compare before/ after/
+```
+
+`scripts/bench-aligned.sh` runs cargo with
+`-C llvm-args=-align-all-functions=7` added to `RUSTFLAGS` (stable Rust;
+it replaces a cargo config's `build.rustflags`). Every function compiled for
+the build starts on a 128-byte boundary (a cache line on Apple chips, two on
+x86), so only the functions that changed move; the prebuilt standard library
+stays as it is. The binary records it as `env.code_align` (128, or `null`
+for an ordinary build), and `compare` warns when the two sides differ in it.
+The aligned build is about 6% larger and every crate is rebuilt when
+`RUSTFLAGS` changes, which is why each side's binary is copied. Instruction
+counts (`bench_track counts`, CI) don't need it: padding between functions
+is never run.
+
+What it does, measured on one build of the same code twice, the second with
+an unrelated padding function added to the runner (an Apple M-series
+laptop, `ecs/` spawn, add/remove and query rows, `query-filter/`,
+`rollback/` loads and physics steps; six interleaved rounds of the four
+binaries):
+
+| | Functions of the runner that moved (offset mod 128) | Benchmarks whose two builds differ by more than 2% (of 36) |
+|---|---|---|
+| Ordinary builds | 1,748 of 5,274 (33%) | 12 |
+| Aligned builds | 0 of 5,274 | 11 |
+
+The layout no longer differs, which the symbol table shows exactly. The
+wall clock shows less, because the machine was running eleven other builds
+(load average 107 to 142 on 14 cores): every row whose two builds differed
+by more than 2% had a run-to-run spread of 10% to 660%. On the 14 quiet rows
+of each kind (spread under 15%: the filtered queries, `optional`, `iter`,
+`spawn-despawn`), the ordinary builds differed by up to 3.9% (mean 1.0%) and
+the aligned ones by up to 1.8% (mean 0.8%): in the direction the alignment
+should push, but within this machine's noise. Repeat it on an idle machine
+before quoting the layout's share.
 
 **In CI** (`.github/workflows/bench.yml`, not part of the required check):
 
