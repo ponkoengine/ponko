@@ -154,10 +154,14 @@ mod viewports;
 mod touch;
 // The water kit: lakes, rivers, seas and buoyancy (gl#51).
 mod water;
+// Native API parity, round 4 (gl#122): hooks, sky kit, video, baking,
+// replication inputs and events, crowd clips, touch scenarios, nav views.
+mod component_hooks;
 pub use access::*;
 pub use actions::*;
 pub use ai::*;
 pub use animator::*;
+pub use component_hooks::*;
 pub use controllers::*;
 pub use debug::*;
 pub use ime::*;

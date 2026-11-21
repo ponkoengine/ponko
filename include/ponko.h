@@ -35,7 +35,7 @@
  *
  * Enums (PonkoKey, PonkoMouseButton, PonkoGamepadButton, PonkoGamepadAxis,
  * PonkoControllerFamily, PonkoDeviceKind, PonkoGlyphKind,
- * PonkoTextAlign3D, PonkoBodyKind, PonkoShapeKind, PonkoShape3DKind, PonkoNetState, PonkoPhase, PonkoService, PonkoHandleKind, PonkoAssetClass, PonkoAssetOwner, PonkoResidencyKind, PonkoAssetState, PonkoAssetGroupState, PonkoAssetGroupKind, PonkoGpuTier, PonkoGpuFeature, PonkoScenarioStatus, PonkoWaterQuality, PonkoWaterReflection, and the
+ * PonkoTextAlign3D, PonkoBodyKind, PonkoShapeKind, PonkoShape3DKind, PonkoNetState, PonkoPhase, PonkoService, PonkoHandleKind, PonkoAssetClass, PonkoAssetOwner, PonkoResidencyKind, PonkoAssetState, PonkoAssetGroupState, PonkoAssetGroupKind, PonkoGpuTier, PonkoGpuFeature, PonkoScenarioStatus, PonkoWaterQuality, PonkoWaterReflection, PonkoHookKind, and the
  * PonkoUi* layout and paint enums) are passed as uint32_t.
  * Last-error text is thread-local, borrowed until the next failed call;
  * successful calls leave it unchanged.
@@ -1364,6 +1364,12 @@ typedef enum PonkoUiRepeat {
   PONKO_UI_REPEAT_PING_PONG,
 } PonkoUiRepeat;
 
+typedef enum PonkoHookKind {
+  PONKO_HOOK_ADD = 0,
+  PONKO_HOOK_REPLACE = 1,
+  PONKO_HOOK_REMOVE = 2,
+} PonkoHookKind;
+
 typedef struct PonkoAccess PonkoAccess;
 
 typedef struct PonkoActionMap PonkoActionMap;
@@ -1403,6 +1409,8 @@ typedef struct PonkoGlyphAtlas PonkoGlyphAtlas;
 typedef struct PonkoGrid PonkoGrid;
 
 typedef struct PonkoHeightfield PonkoHeightfield;
+
+typedef struct PonkoHookWorld PonkoHookWorld;
 
 typedef struct PonkoHumanoidMap PonkoHumanoidMap;
 
@@ -3521,6 +3529,19 @@ typedef struct PonkoWaterSample {
   struct PonkoVec3 velocity;
   float squeeze;
 } PonkoWaterSample;
+
+typedef struct PonkoHookEvent {
+  uint64_t entity;
+  uint32_t component;
+  uint32_t kind;
+  const void *value;
+  const void *new_value;
+  size_t size;
+} PonkoHookEvent;
+
+typedef void (*PonkoHookFn)(struct PonkoHookWorld*, const struct PonkoHookEvent*, void*);
+
+typedef void (*PonkoFreeUserFn)(void*);
 
 typedef struct PonkoWindowVideoModeEx {
   uint32_t struct_size;
@@ -9592,6 +9613,53 @@ enum PonkoStatus ponko_ctx_remove_buoyancy(struct PonkoCtx *ctx, uint64_t entity
 enum PonkoStatus ponko_ctx_buoyancy_submerged(const struct PonkoCtx *ctx,
                                               uint64_t entity,
                                               float *out_share);
+
+enum PonkoStatus ponko_component_on_add(struct PonkoWorld *world,
+                                        uint32_t component,
+                                        PonkoHookFn hook,
+                                        void *user,
+                                        PonkoFreeUserFn free_user);
+
+enum PonkoStatus ponko_component_on_replace(struct PonkoWorld *world,
+                                            uint32_t component,
+                                            PonkoHookFn hook,
+                                            void *user,
+                                            PonkoFreeUserFn free_user);
+
+enum PonkoStatus ponko_component_on_remove(struct PonkoWorld *world,
+                                           uint32_t component,
+                                           PonkoHookFn hook,
+                                           void *user,
+                                           PonkoFreeUserFn free_user);
+
+enum PonkoStatus ponko_hook_get(struct PonkoHookWorld *hw,
+                                uint64_t entity,
+                                uint32_t component,
+                                void *out_data,
+                                size_t size);
+
+enum PonkoStatus ponko_hook_write(struct PonkoHookWorld *hw,
+                                  uint64_t entity,
+                                  uint32_t component,
+                                  const void *data,
+                                  size_t size);
+
+enum PonkoStatus ponko_hook_spawn_later(struct PonkoHookWorld *hw,
+                                        const struct PonkoValue *values,
+                                        size_t count,
+                                        uint64_t *out_entity);
+
+enum PonkoStatus ponko_hook_set_later(struct PonkoHookWorld *hw,
+                                      uint64_t entity,
+                                      const struct PonkoValue *value);
+
+enum PonkoStatus ponko_hook_remove_later(struct PonkoHookWorld *hw,
+                                         uint64_t entity,
+                                         uint32_t component);
+
+enum PonkoStatus ponko_hook_despawn_later(struct PonkoHookWorld *hw, uint64_t entity);
+
+enum PonkoStatus ponko_hook_is_alive(struct PonkoHookWorld *hw, uint64_t entity, bool *out_alive);
 
 enum PonkoStatus ponko_window_video_mode_ex_defaults(struct PonkoWindowVideoModeEx *desc);
 

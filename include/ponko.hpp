@@ -1689,6 +1689,7 @@ public:
 
 class world_view;
 class ctx;
+class hook_world;
 /// A query filter: only entities whose `T` changed since the calling system
 /// last ran. Use it as `world.each<ponko::changed<Health>>(fn)`, or in the
 /// list of `query` and `count`. A filter also requires the entity to have
@@ -2643,6 +2644,32 @@ public:
     tilemap_ref tilemap(entity e);
     /// Reorders Transform2D entities so that neighbors are close in memory.
     void sort_spatial(float cell_size) { valid(); detail::check(ponko_world_sort_spatial(raw_, cell_size)); }
+
+    // ---- component hooks ----
+    /// Calls `f(hook_world&, entity, const T& value)` whenever a `T` arrives
+    /// on an entity that had none: every spawn and every set that adds it,
+    /// from C++, C or Rust (Rust `World::on_add`). It runs inside that call,
+    /// once the entity is complete. `T` must be a plain component (not a
+    /// sprite, body or collider). Hooks stay for the life of the world; see
+    /// hook_world for what one may do. An exception a hook throws is kept and
+    /// rethrown when the system returns (or by game::run); in a world of your
+    /// own, by rethrow_hook_error().
+    template<class T, class F> void on_add(F f) { add_hook<T>(ponko_component_on_add, std::move(f)); }
+    /// Calls `f(hook_world&, entity, const T& old, const T& next)` whenever a
+    /// set is about to overwrite an entity's `T` (Rust `World::on_replace`):
+    /// `old` is still in the world. Writes through queries aren't replacements.
+    template<class T, class F> void on_replace(F f) { add_hook<T>(ponko_component_on_replace, std::move(f)); }
+    /// Calls `f(hook_world&, entity, const T& value)` whenever a `T` is about
+    /// to leave an entity: remove, despawn or clear (Rust `World::on_remove`),
+    /// with the value still in place.
+    template<class T, class F> void on_remove(F f) { add_hook<T>(ponko_component_on_remove, std::move(f)); }
+    /// Rethrows the first exception a component hook of this world threw,
+    /// if one did (systems and game::run do this for you).
+    void rethrow_hook_error() const { valid(); owner_->hook_error.rethrow(); }
+private:
+    using hook_register = PonkoStatus (*)(PonkoWorld*, std::uint32_t, PonkoHookFn, void*, PonkoFreeUserFn);
+    template<class T, class F> void add_hook(hook_register reg, F f);
+public:
 };
 /// Out of line: tilemap_ref is defined after world_view.
 inline tilemap_ref world_view::add_tilemap(entity e, const sprite_sheet& sheet, std::uint32_t width, std::uint32_t height) {
@@ -2650,6 +2677,81 @@ inline tilemap_ref world_view::add_tilemap(entity e, const sprite_sheet& sheet, 
 }
 /// Out of line: tilemap_ref is defined after world_view.
 inline tilemap_ref world_view::tilemap(entity e) { valid(); return tilemap_ref(raw_, e); }
+/// The world as a component hook sees it (world_view::on_add), valid while
+/// the hook runs. The world is busy with the call that ran the hook: read and
+/// write components in place here, and record structural changes, which are
+/// applied before that call returns (Rust `HookWorld`).
+class hook_world {
+    PonkoHookWorld* raw_;
+    detail::identity* owner_;
+    template<class T> std::uint32_t id() const {
+        const std::size_t slot = detail::type_slot<T>();
+        if (slot < owner_->ids.size() && owner_->ids[slot] != 0) return owner_->ids[slot] - 1;
+        throw std::logic_error(detail::type_name<T>() + " is used for the first time inside a component hook; use it on the world first");
+    }
+public:
+    /// Wraps the C handle a hook got (ponko_component_on_add) and the
+    /// world's C++ identity; world_view::on_add does this for you.
+    hook_world(PonkoHookWorld* raw, detail::identity* owner) : raw_(raw), owner_(owner) {}
+    /// `e`'s `T`, or nothing if it has none (ponko_hook_get).
+    template<class T> std::optional<T> get(entity e) const {
+        T value{};
+        const PonkoStatus status = ponko_hook_get(raw_, e, id<T>(), &value, sizeof(T));
+        if (status == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(status);
+        return value;
+    }
+    /// Overwrites `e`'s `T` in place (it must have one; ponko_hook_write).
+    /// No hook runs; change detection sees it.
+    template<class T> void write(entity e, const T& value) { detail::check(ponko_hook_write(raw_, e, id<T>(), &value, sizeof(T))); }
+    /// Adds or replaces `e`'s `T` once the operation is done (ponko_hook_set_later).
+    template<class T> void set_later(entity e, const T& value) {
+        PonkoValue v{id<T>(), &value, sizeof(T)};
+        detail::check(ponko_hook_set_later(raw_, e, &v));
+    }
+    /// Removes `e`'s `T` once the operation is done (ponko_hook_remove_later).
+    template<class T> void remove_later(entity e) { detail::check(ponko_hook_remove_later(raw_, e, id<T>())); }
+    /// Despawns `e` once the operation is done (ponko_hook_despawn_later).
+    void despawn_later(entity e) { detail::check(ponko_hook_despawn_later(raw_, e)); }
+    /// Spawns an entity with these components once the operation is done;
+    /// its id is good at once (ponko_hook_spawn_later).
+    template<class... Ts> entity spawn_later(const Ts&... components) {
+        std::array<PonkoValue, sizeof...(Ts)> args{{PonkoValue{id<Ts>(), &components, sizeof(Ts)}...}};
+        entity e = 0;
+        detail::check(ponko_hook_spawn_later(raw_, args.data(), args.size(), &e));
+        return e;
+    }
+    /// Whether `e` is alive (ponko_hook_is_alive).
+    bool alive(entity e) const { bool a = false; detail::check(ponko_hook_is_alive(raw_, e, &a)); return a; }
+};
+/// Out of line: hook_world is defined after world_view.
+template<class T, class F> void world_view::add_hook(hook_register reg, F f) {
+    valid();
+    world_view::check_component<T>();
+    const std::uint32_t component = id<T>();
+    struct holder { F fn; std::shared_ptr<detail::identity> owner; };
+    auto* h = new holder{std::move(f), owner_};
+    auto call = [](PonkoHookWorld* raw, const PonkoHookEvent* event, void* user) noexcept {
+        auto& hd = *static_cast<holder*>(user);
+        if (hd.owner->hook_error.set.load()) return;
+        try {
+            hook_world w(raw, hd.owner.get());
+            T value{};
+            std::memcpy(static_cast<void*>(&value), event->value, sizeof(T));
+            if (event->kind == PONKO_HOOK_REPLACE) {
+                T next{};
+                std::memcpy(static_cast<void*>(&next), event->new_value, sizeof(T));
+                hd.fn(w, entity(event->entity), static_cast<const T&>(value), static_cast<const T&>(next));
+            } else {
+                hd.fn(w, entity(event->entity), static_cast<const T&>(value));
+            }
+        } catch (...) { hd.owner->hook_error.capture(); }
+    };
+    auto free = [](void* user) noexcept { delete static_cast<holder*>(user); };
+    const PonkoStatus status = reg(raw_, component, call, h, free);
+    if (status != PONKO_OK) delete h;
+    detail::check(status);
+}
 /// An owned world (from ponko::game::run_headless, or empty).
 class world final : public world_view {
     friend class game;

@@ -15,6 +15,7 @@
 //! `World::flush_hooks` when the outermost call is done.
 
 use std::ptr::NonNull;
+use std::sync::Arc;
 
 use crate::bundle::Component;
 use crate::commands::Commands;
@@ -136,6 +137,27 @@ pub type Hook = for<'w> fn(&mut HookWorld<'w>, Entity);
 /// its old value), the entity, and the new value. See [`World::on_replace`].
 pub type ReplaceHook<T> = for<'w, 'v> fn(&mut HookWorld<'w>, Entity, &'v T);
 
+/// A hook registered at run time, for components registered at run time
+/// (the dynamic and C paths, [`RawWorld::on_add_dynamic`](crate::RawWorld::on_add_dynamic)).
+/// Called with the world, the entity, the component's id and, for an
+/// `on_replace` hook, a pointer to the new value (the component's
+/// registered layout, not in the world); null for `on_add` and `on_remove`.
+pub type DynamicHook = Arc<dyn for<'w> Fn(&mut HookWorld<'w>, Entity, ComponentId, *const u8) + Send + Sync>;
+
+/// An `on_add` or `on_remove` hook of either kind.
+#[derive(Clone)]
+enum AnyHook {
+    Rust(Hook),
+    Dynamic(DynamicHook),
+}
+
+/// An `on_replace` hook of either kind.
+#[derive(Clone)]
+enum AnyReplace {
+    Rust(Replace),
+    Dynamic(DynamicHook),
+}
+
 /// Archetype flag: a component here has an `on_add` hook.
 const ADD: u8 = 1;
 /// Archetype flag: a component here has an `on_remove` hook.
@@ -174,9 +196,9 @@ unsafe fn call_replace<T: Component>(hook: *const (), world: &mut HookWorld<'_>,
 /// The hooks of one component type, and the components it requires.
 #[derive(Default)]
 struct ComponentHooks {
-    add: Vec<Hook>,
-    remove: Vec<Hook>,
-    replace: Vec<Replace>,
+    add: Vec<AnyHook>,
+    remove: Vec<AnyHook>,
+    replace: Vec<AnyReplace>,
     required: Vec<Required>,
 }
 
@@ -569,7 +591,7 @@ impl World {
     /// ```
     pub fn on_add<T: Component>(&mut self, hook: Hook) {
         let id = self.register::<T>();
-        self.hooks.of_mut(id).add.push(hook);
+        self.hooks.of_mut(id).add.push(AnyHook::Rust(hook));
         self.hooks_changed();
     }
 
@@ -605,7 +627,7 @@ impl World {
     /// ```
     pub fn on_remove<T: Component>(&mut self, hook: Hook) {
         let id = self.register::<T>();
-        self.hooks.of_mut(id).remove.push(hook);
+        self.hooks.of_mut(id).remove.push(AnyHook::Rust(hook));
         self.hooks_changed();
     }
 
@@ -641,10 +663,10 @@ impl World {
     /// ```
     pub fn on_replace<T: Component>(&mut self, hook: ReplaceHook<T>) {
         let id = self.register::<T>();
-        self.hooks.of_mut(id).replace.push(Replace {
+        self.hooks.of_mut(id).replace.push(AnyReplace::Rust(Replace {
             call: call_replace::<T>,
             hook: hook as *const (),
-        });
+        }));
         self.hooks_changed();
     }
 
@@ -725,12 +747,16 @@ impl World {
         let guard = Unrecorded { world: self, was };
         let mut j = 0;
         // Looked up again for each hook, which borrows the whole world.
-        while let Some(&hook) = guard.world.hooks.of.get(id.index()).and_then(|h| match kind {
-            Kind::Add => h.add.get(j),
-            Kind::Remove => h.remove.get(j),
+        while let Some(hook) = guard.world.hooks.of.get(id.index()).and_then(|h| match kind {
+            Kind::Add => h.add.get(j).cloned(),
+            Kind::Remove => h.remove.get(j).cloned(),
         }) {
             j += 1;
-            hook(&mut HookWorld { world: guard.world }, e);
+            let world = &mut HookWorld { world: guard.world };
+            match hook {
+                AnyHook::Rust(hook) => hook(world, e),
+                AnyHook::Dynamic(hook) => hook(world, e, id, std::ptr::null()),
+            }
         }
     }
 
@@ -738,17 +764,27 @@ impl World {
     /// the value at `new`.
     ///
     /// # Safety
-    /// `id` is a Rust component `T` and `new` points to a valid `T` that is
-    /// not in the world and outlives the call.
+    /// `new` points to a valid value of component `id` that is not in the
+    /// world and outlives the call.
     pub(crate) unsafe fn run_replace_hooks(&mut self, id: ComponentId, e: Entity, new: *const u8) {
         let was = self.recorder.pause();
         let guard = Unrecorded { world: self, was };
         let mut j = 0;
-        while let Some(&Replace { call, hook }) = guard.world.hooks.of.get(id.index()).and_then(|h| h.replace.get(j)) {
+        while let Some(hook) = guard
+            .world
+            .hooks
+            .of
+            .get(id.index())
+            .and_then(|h| h.replace.get(j).cloned())
+        {
             j += 1;
-            // SAFETY: `on_replace::<T>` paired `call` with a hook of the
-            // component's own type, and the caller vouches for `new`.
-            unsafe { call(hook, &mut HookWorld { world: guard.world }, e, new) };
+            let world = &mut HookWorld { world: guard.world };
+            match hook {
+                // SAFETY: `on_replace::<T>` paired `call` with a hook of the
+                // component's own type, and the caller vouches for `new`.
+                AnyReplace::Rust(Replace { call, hook }) => unsafe { call(hook, world, e, new) },
+                AnyReplace::Dynamic(hook) => hook(world, e, id, new),
+            }
         }
     }
 
@@ -765,4 +801,88 @@ impl World {
 pub(crate) enum Kind {
     Add,
     Remove,
+}
+
+impl crate::RawWorld<'_> {
+    /// [`World::on_add`] for a component given by id, with a hook that can
+    /// carry data: the dynamic path, and C's `ponko_component_on_add`. The
+    /// hook gets the component's id and a null value pointer.
+    ///
+    /// ```
+    /// use std::sync::{Arc, atomic::{AtomicU32, Ordering}};
+    /// use ponko_ecs::{Component, World};
+    /// #[derive(Component)]
+    /// struct Coin;
+    /// let mut world = World::new();
+    /// let id = world.register::<Coin>();
+    /// let added = Arc::new(AtomicU32::new(0));
+    /// let seen = added.clone();
+    /// world.raw().on_add_dynamic(id, Arc::new(move |_, _, _, _| { seen.fetch_add(1, Ordering::Relaxed); }));
+    /// world.spawn((Coin,));
+    /// assert_eq!(added.load(Ordering::Relaxed), 1);
+    /// ```
+    ///
+    /// # Panics
+    /// If `id` isn't a component of this world.
+    pub fn on_add_dynamic(&mut self, id: ComponentId, hook: DynamicHook) {
+        let world = &mut *self.0;
+        assert!(
+            id.index() < world.components().len(),
+            "on_add_dynamic: component id {} isn't registered in this world",
+            id.index()
+        );
+        world.hooks.of_mut(id).add.push(AnyHook::Dynamic(hook));
+        world.hooks_changed();
+    }
+
+    /// [`World::on_remove`] for a component given by id; see
+    /// [`on_add_dynamic`](Self::on_add_dynamic).
+    ///
+    /// # Panics
+    /// If `id` isn't a component of this world.
+    pub fn on_remove_dynamic(&mut self, id: ComponentId, hook: DynamicHook) {
+        let world = &mut *self.0;
+        assert!(
+            id.index() < world.components().len(),
+            "on_remove_dynamic: component id {} isn't registered in this world",
+            id.index()
+        );
+        world.hooks.of_mut(id).remove.push(AnyHook::Dynamic(hook));
+        world.hooks_changed();
+    }
+
+    /// [`World::on_replace`] for a component given by id; see
+    /// [`on_add_dynamic`](Self::on_add_dynamic). The hook's last argument
+    /// points to the new value (the component's own layout, outside the
+    /// world); the old one is still in the world.
+    ///
+    /// # Panics
+    /// If `id` isn't a component of this world.
+    pub fn on_replace_dynamic(&mut self, id: ComponentId, hook: DynamicHook) {
+        let world = &mut *self.0;
+        assert!(
+            id.index() < world.components().len(),
+            "on_replace_dynamic: component id {} isn't registered in this world",
+            id.index()
+        );
+        world.hooks.of_mut(id).replace.push(AnyReplace::Dynamic(hook));
+        world.hooks_changed();
+    }
+}
+
+impl HookWorld<'_> {
+    /// Component `id` of `e` as bytes, if it has one: the dynamic path's
+    /// [`get`](Self::get) ([`RawWorldRef::get_dynamic`](crate::RawWorldRef::get_dynamic)).
+    /// Valid until the hook changes the world.
+    #[must_use]
+    pub fn get_dynamic(&self, e: Entity, id: ComponentId) -> Option<*const u8> {
+        self.world.raw_ref().get_dynamic(e, id)
+    }
+
+    /// Component `id` of `e` to write in place, if it has one: the dynamic
+    /// path's [`get_mut`](Self::get_mut), a change for change detection.
+    /// Valid until the hook changes the world.
+    pub fn get_dynamic_mut(&mut self, e: Entity, id: ComponentId) -> Option<*mut u8> {
+        self.world.raw().get_dynamic_mut(e, id)
+    }
 }

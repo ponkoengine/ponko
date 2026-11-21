@@ -1915,8 +1915,8 @@ impl World {
     #[cold]
     #[inline(never)]
     unsafe fn replace_hooked(&mut self, e: Entity, id: ComponentId, value: *const u8) -> bool {
-        // SAFETY: `id` has `on_replace` hooks, so it is a Rust component,
-        // and the caller's value is a valid one, outside the world.
+        // SAFETY: the caller's value is a valid one of component `id`,
+        // outside the world.
         unsafe { self.run_replace_hooks(id, e, value) };
         // Hooks can't change the world's structure; looked up again all the same.
         let Some(loc) = self.entities.get(e) else { return false };

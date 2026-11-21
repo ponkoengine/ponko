@@ -1239,13 +1239,13 @@ pub unsafe extern "C" fn ponko_ctx_set_camera(ctx: *mut PonkoCtx, camera: *const
 // ---- commands -----------------------------------------------------------------
 
 /// Values copied out of C memory for a later spawn or insert.
-struct Owned {
+pub(crate) struct Owned {
     bytes: Vec<u8>,
     /// (component, offset, size) per value.
     parts: Vec<(u32, usize, usize)>,
 }
 impl Owned {
-    unsafe fn copy(values: &[PonkoValue]) -> Result<Self, Failure> {
+    pub(crate) unsafe fn copy(values: &[PonkoValue]) -> Result<Self, Failure> {
         let mut owned = Owned {
             bytes: Vec::new(),
             parts: Vec::with_capacity(values.len()),
@@ -1263,7 +1263,7 @@ impl Owned {
         }
         Ok(owned)
     }
-    fn values(&self) -> Vec<PonkoValue> {
+    pub(crate) fn values(&self) -> Vec<PonkoValue> {
         self.parts
             .iter()
             .map(|&(component, at, size)| PonkoValue {
@@ -1276,7 +1276,7 @@ impl Owned {
     }
 }
 
-fn report(what: &str, failure: Failure) {
+pub(crate) fn report(what: &str, failure: Failure) {
     eprintln!("ponko: {what} skipped: {}", failure.1);
 }
 
