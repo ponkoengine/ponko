@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <fstream>
@@ -237,6 +238,9 @@ enum class asset_state : std::uint32_t {
 using residency_stats = PonkoResidencyStats;
 /// The upload queue's budget and counters (Rust `UploadStats`).
 using upload_stats = PonkoUploadStats;
+/// The upload queue's counters in the versioned form (PonkoUploadStatsEx), from ctx::upload_stats_ex:
+/// `stats` is upload_stats, plus the game-thread decode slices and the GPU's own upload times.
+using upload_stats_ex = PonkoUploadStatsEx;
 /// Where an asset group is (Rust `GroupState`).
 enum class group_state : std::uint32_t {
     loading = PONKO_GROUP_LOADING, ready = PONKO_GROUP_READY, failed = PONKO_GROUP_FAILED,
@@ -1721,6 +1725,12 @@ public:
 /// `perf::thread_alloc_counts`): read it twice on one thread and subtract to count what the code between
 /// allocated there. A PONKO_PROFILE_SCOPE counts its own the same way.
 inline alloc_counts thread_alloc_counts() noexcept { return ponko_thread_alloc_counts(); }
+
+/// Bytes allocated minus bytes freed while profiling was on, for the whole process (Rust
+/// `perf::net_alloc_bytes`): the library's memory, and the program's own with PONKO_COUNT_CPP_ALLOCATIONS.
+/// Read it twice with profiling on and subtract: what the code between still holds. A loop that gives
+/// back what it takes reads (close to) zero however long it runs; a leak grows with every pass.
+inline std::int64_t net_alloc_bytes() noexcept { return ponko_net_alloc_bytes(); }
 
 /// Times the scope it lives in (see PONKO_PROFILE_SCOPE).
 class profile_scope_guard {
@@ -8376,6 +8386,21 @@ public:
     void set_buoyancy_sphere(entity e, float radius, float drag = PONKO_BUOYANCY_DRAG) {
         detail::check(ponko_ctx_set_buoyancy_sphere(raw_, e, radius, drag));
     }
+    /// Makes 3D body `e` float as `desc` says (see buoyancy_desc): its points, the water's density,
+    /// drag and the ripple switch. Replaces any buoyancy it had.
+    void set_buoyancy(entity e, const PonkoBuoyancyDesc& desc) {
+        detail::check(ponko_ctx_set_buoyancy(raw_, e, &desc));
+    }
+    /// How floating body `e` floats, if it does: change a field and give it back to set_buoyancy.
+    std::optional<PonkoBuoyancyDesc> buoyancy(entity e) const {
+        PonkoBuoyancyDesc d{};
+        d.struct_size = sizeof d;
+        d.version = PONKO_BUOYANCY_DESC_VERSION;
+        auto status = ponko_ctx_buoyancy(raw_, e, &d);
+        if (status == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(status);
+        return d;
+    }
     /// Stops `e` floating; false if it had no buoyancy.
     bool remove_buoyancy(entity e) {
         auto status = ponko_ctx_remove_buoyancy(raw_, e);
@@ -8938,6 +8963,15 @@ public:
     /// The upload queue's budget and counters.
     ponko::upload_stats upload_stats() const {
         ponko::upload_stats u{}; detail::check(ponko_ctx_upload_stats(raw_, &u)); return u;
+    }
+    /// The upload queue's counters with the GPU's own upload times (Rust `UploadStats::gpu_created_ms`,
+    /// `gpu_upload_ms`): the has_gpu_* flags say whether a time arrived yet.
+    ponko::upload_stats_ex upload_stats_ex() const {
+        ponko::upload_stats_ex u{};
+        u.struct_size = sizeof u;
+        u.version = PONKO_UPLOAD_STATS_EX_VERSION;
+        detail::check(ponko_ctx_upload_stats_ex(raw_, &u));
+        return u;
     }
     /// Waits until everything streamed so far is loaded and every asset group is done (tests and tools).
     void finish_uploads() { detail::check(ponko_ctx_finish_uploads(raw_)); }
@@ -10325,6 +10359,38 @@ private:
     water_desc() : PonkoWaterDesc{} {
         struct_size = sizeof(PonkoWaterDesc);
         version = PONKO_WATER_DESC_VERSION;
+    }
+};
+
+/// How a 3D body floats on water (Rust water::Buoyancy): start from box, sphere or from_points (fresh
+/// water, drag PONKO_BUOYANCY_DRAG, ripples on), change any field (water_density, drag, ripples, the
+/// points), then ctx::set_buoyancy.
+struct buoyancy_desc : PonkoBuoyancyDesc {
+    /// A box of `size` (full width, height and depth) centred on the body: eight points.
+    static buoyancy_desc box(vec3 size) {
+        buoyancy_desc d;
+        detail::check(ponko_buoyancy_desc_box(&d, size));
+        return d;
+    }
+    /// A ball of `radius`: seven points.
+    static buoyancy_desc sphere(float radius) {
+        buoyancy_desc d;
+        detail::check(ponko_buoyancy_desc_sphere(&d, radius));
+        return d;
+    }
+    /// Sample `points` (body space, 1 to PONKO_BUOYANCY_MAX_POINTS) sharing `volume` m³, each standing for
+    /// a column `height` metres tall.
+    static buoyancy_desc from_points(const std::vector<vec3>& points, float volume, float height) {
+        buoyancy_desc d;
+        detail::check(ponko_buoyancy_desc_points(&d, points.data(), static_cast<std::uint32_t>(points.size()),
+                                                 volume, height));
+        return d;
+    }
+
+private:
+    buoyancy_desc() : PonkoBuoyancyDesc{} {
+        struct_size = sizeof(PonkoBuoyancyDesc);
+        version = PONKO_BUOYANCY_DESC_VERSION;
     }
 };
 
@@ -11920,15 +11986,40 @@ template<class... Ts, class F> void each(ctx& c, F&& fn) {
     static const PonkoProfileScope* const PONKO_PP_CAT(ponko_scope_, __LINE__) = ponko_profile_scope(name); \
     ::ponko::profile_scope_guard PONKO_PP_CAT(ponko_scope_guard_, __LINE__)(PONKO_PP_CAT(ponko_scope_, __LINE__))
 
+namespace ponko::detail {
+// PONKO_COUNT_CPP_ALLOCATIONS's operator new and delete: each block keeps its size in front of it (one
+// max_align_t, so what new returns stays aligned), so delete can report the free too and
+// net_alloc_bytes sees what the program gives back.
+inline constexpr std::size_t counted_header = alignof(std::max_align_t);
+inline void* counted_new(std::size_t n) {
+    if (n > std::numeric_limits<std::size_t>::max() - counted_header) throw std::bad_alloc();
+    void* block = std::malloc(n + counted_header);
+    if (!block) throw std::bad_alloc();
+    std::memcpy(block, &n, sizeof n);
+    ponko_note_allocation(n);
+    return static_cast<unsigned char*>(block) + counted_header;
+}
+inline void counted_delete(void* p) noexcept {
+    if (!p) return;
+    unsigned char* block = static_cast<unsigned char*>(p) - counted_header;
+    std::size_t n = 0;
+    std::memcpy(&n, block, sizeof n);
+    ponko_note_deallocation(n);
+    std::free(block);
+}
+} // namespace ponko::detail
+
 /// Put this once, at global scope in one .cpp file, to count C++ heap
-/// allocations (operator new) per frame and per system in the reports. It
-/// replaces the global operator new/delete; counting happens only while
-/// profiling is on, so the cost otherwise is one atomic load per `new`.
+/// allocations (operator new) per frame and per system in the reports, and
+/// their frees in net_alloc_bytes. It replaces the global operator new and
+/// delete (each block keeps its size in a small header); counting happens
+/// only while profiling is on, so the cost otherwise is one atomic load per
+/// `new` and per `delete`.
 #define PONKO_COUNT_CPP_ALLOCATIONS \
-    void* operator new(std::size_t n) { ponko_note_allocation(n); if (void* p = std::malloc(n ? n : 1)) return p; throw std::bad_alloc(); } \
-    void* operator new[](std::size_t n) { ponko_note_allocation(n); if (void* p = std::malloc(n ? n : 1)) return p; throw std::bad_alloc(); } \
-    void operator delete(void* p) noexcept { std::free(p); } \
-    void operator delete[](void* p) noexcept { std::free(p); } \
-    void operator delete(void* p, std::size_t) noexcept { std::free(p); } \
-    void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
+    void* operator new(std::size_t n) { return ::ponko::detail::counted_new(n); } \
+    void* operator new[](std::size_t n) { return ::ponko::detail::counted_new(n); } \
+    void operator delete(void* p) noexcept { ::ponko::detail::counted_delete(p); } \
+    void operator delete[](void* p) noexcept { ::ponko::detail::counted_delete(p); } \
+    void operator delete(void* p, std::size_t) noexcept { ::ponko::detail::counted_delete(p); } \
+    void operator delete[](void* p, std::size_t) noexcept { ::ponko::detail::counted_delete(p); }
 #endif

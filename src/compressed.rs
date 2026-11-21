@@ -653,9 +653,12 @@ fn read_ktx2_header(bytes: &[u8], path: &str, what: &str) -> Result<Unpack, Erro
 /// two files, relative to the image's folder, `metal-rough|occlusion`
 /// (either empty when the material has none). The engine then uploads the
 /// file as it is instead of decoding both and merging them to RGBA8.
+/// Only glTF models (the `3d` feature) read it.
+#[cfg(feature = "3d")]
 pub(crate) const ORM_KEY: &str = "ponkoOrm";
 
 /// The value of [`ORM_KEY`] in a KTX2 file, if it has one.
+#[cfg(feature = "3d")]
 pub(crate) fn orm_note(bytes: &[u8]) -> Option<String> {
     if !is_ktx2(bytes) {
         return None;
