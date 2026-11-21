@@ -1346,6 +1346,7 @@ fn main() {
     hooks::run(&mut b);
     required::run(&mut b);
     flow_benches(&mut b);
+    spatial_benches(&mut b);
 
     if let Some(path) = std::env::var_os("PONKO_BENCH_JSON") {
         let json = report::to_json(env.as_ref().expect("detected at start"), &b.records, render.as_deref());
@@ -1377,6 +1378,28 @@ fn flow_map(side: u32) -> ponko::flow::NavGrid {
         }
     }
     nav
+}
+
+/// A spatial grid rebuilt from 250,000 points: past the size where the
+/// rebuild runs on all cores (through the engine's frame pool runner).
+fn spatial_benches(b: &mut Bench) {
+    use ponko::prelude::{Entity, Vec2};
+    b.steady(
+        "spatial/rebuild-250k",
+        20,
+        || {
+            let mut s = 7u64;
+            let points: Vec<(Entity, Vec2)> = (0..250_000u64)
+                .map(|i| {
+                    s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    let p = Vec2::new((s >> 40) as f32 / 4096.0, ((s >> 16) & 0xffffff) as f32 / 4096.0);
+                    (Entity::from_bits(i + 1), p)
+                })
+                .collect();
+            (ponko::spatial::SpatialGrid::new(16.0), points)
+        },
+        |(grid, points)| grid.rebuild_from(points.iter().copied()),
+    );
 }
 
 fn flow_benches(b: &mut Bench) {

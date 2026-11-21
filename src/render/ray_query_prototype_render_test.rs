@@ -630,6 +630,8 @@ fn town() -> (Vec<Geometry>, Vec<Instance>) {
 
 /// GPU time of the trace pass, median of `frames` timed dispatches, in ms.
 fn trace_ms(gpu: &crate::render::render_test_support::TestGpu, tracer: &Tracer, frames: u32) -> f64 {
+    // Metal allows 32 timestamp query sets per process (`query_sets.rs`).
+    let _lease = super::query_sets::lease(&gpu.device, "ray query timer").expect("a timestamp query set");
     let queries = gpu.device.create_query_set(&wgpu::QuerySetDescriptor {
         label: Some("ray query timestamps"),
         ty: wgpu::QueryType::Timestamp,

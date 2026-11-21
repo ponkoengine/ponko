@@ -994,22 +994,32 @@ static void presence_filters_allocate_nothing() {
     auto parallel_filtered = [&](ponko::ctx& ctx) { ctx.world().each_par<with<Hero>>([](const Label&) {}); };
     auto parallel_plain = [&](ponko::ctx& ctx) { ctx.world().each_par([](const Label&) {}); };
     auto every = [&](ponko::ctx& ctx) { every_rows = ctx.world().count<Label>(); };
-    auto run = ponko::game("filter allocations", 1, 1)
-        .sim_system(each_filtered, "each_filtered")
-        .sim_system(query_filtered, "query_filtered")
-        .sim_system(count_filtered, "count_filtered")
-        .sim_system(every, "every")
-        .sim_system(leaky, "leaky")
-        .sim_system(parallel_filtered, "parallel_filtered")
-        .sim_system(parallel_plain, "parallel_plain")
-        .profile_headless(5, 40, setup);
+    auto profile = [&] {
+        return ponko::game("filter allocations", 1, 1)
+            .sim_system(each_filtered, "each_filtered")
+            .sim_system(query_filtered, "query_filtered")
+            .sim_system(count_filtered, "count_filtered")
+            .sim_system(every, "every")
+            .sim_system(leaky, "leaky")
+            .sim_system(parallel_filtered, "parallel_filtered")
+            .sim_system(parallel_plain, "parallel_plain")
+            .profile_headless(5, 40, setup);
+    };
+    // A system's count is the whole process's while it runs (a parallel system's workers
+    // allocate on their own threads), so on a busy machine another thread's allocation can land
+    // in a sequential system's run now and then (seen once in about 150 runs under a load
+    // average of 100). A filter that allocates is never at zero, so one clean run of three
+    // is asked for, not three.
+    auto run = profile();
+    auto clean = [](const std::string& json) {
+        return system_allocations(json, "each_filtered") == 0.0 && system_allocations(json, "query_filtered") == 0.0 &&
+               system_allocations(json, "count_filtered") == 0.0 && system_allocations(json, "every") == 0.0;
+    };
+    for (int attempt = 1; attempt < 3 && !clean(run.report.json()); ++attempt) run = profile();
     CHECK(each_rows == 32 + 40 && query_rows == 32 && count_rows == 24 && every_rows == 64);
     const std::string json = run.report.json();
     CHECK(system_allocations(json, "leaky") >= 1.0);   // the report does see allocations
-    CHECK(system_allocations(json, "each_filtered") == 0.0);
-    CHECK(system_allocations(json, "query_filtered") == 0.0);
-    CHECK(system_allocations(json, "count_filtered") == 0.0);
-    CHECK(system_allocations(json, "every") == 0.0);
+    CHECK(clean(json));
     // On all cores the thread pool may allocate now and then; the filter must
     // not add an allocation to every call (one call per frame here).
     const double plain = system_allocations(json, "parallel_plain");
@@ -3846,6 +3856,122 @@ static void focus_huds_and_collision_files() {
 
 // The window's safe area: a scenario step feeds a phone's insets, a HUD root made
 // inside it is laid out in it, and the context's calls feed and read it by hand.
+// gl#202: brain rows signalled with a value, ai::each as the typed loop, a water body's waiting ripples and a
+// UI's own safe area.
+static void brain_values_ripples_and_ui_area() {
+    namespace ai = ponko::ai;
+    struct Spot { float x, y; };
+    const auto shout = ai::key("shout"), heard = ai::key("heard"), react = ai::key("react");
+    std::vector<ponko::entity> listeners;
+    int visited = 0, typed = 0, readonly = 0;
+    ponko::game("brain values", 1, 1)
+        .sim_system([&](ponko::ctx& ctx) {
+            if (ctx.sim_tick() == 1) {                // on all cores, each row where it is visited
+                ctx.world().each_par([&](ponko::entity e, const Spot&, ai::brain_row brain) {
+                    const auto at = std::find(listeners.begin(), listeners.end(), e) - listeners.begin();
+                    switch (at) {
+                    case 0: brain.signal_num(shout, 7.5f); break;
+                    case 1: brain.signal_entity(shout, 42); break;
+                    case 2: brain.signal_vec2(shout, {1, -2}); break;
+                    case 3: brain.signal_vec3(shout, {3, 4, 5}); break;
+                    default: brain.signal(shout); break;   // nothing to store
+                    }
+                });
+            }
+        }, "shout")
+        .sim_system(ai::think, "think")
+        .sim_system([&](ponko::ctx& ctx) {
+            if (ctx.sim_tick() != 2) return;
+            ctx.world().each([&](ponko::entity e, ai::brain_row brain, ai::blackboard_row board, const Spot&) {
+                ++visited;
+                const auto at = std::find(listeners.begin(), listeners.end(), e) - listeners.begin();
+                CHECK(brain.doing(react));
+                CHECK(board.num(heard).has_value() == (at == 0));
+                CHECK(board.get_entity(heard).has_value() == (at == 1));
+                CHECK(board.get_vec2(heard).has_value() == (at == 2));
+                CHECK(board.get_vec3(heard).has_value() == (at == 3));
+                if (at == 0) CHECK(*board.num(heard) == 7.5f);
+                if (at == 1) CHECK(*board.get_entity(heard) == 42);
+                if (at == 2) CHECK(board.get_vec2(heard)->x == 1 && board.get_vec2(heard)->y == -2);
+                if (at == 3) CHECK(board.get_vec3(heard)->z == 5 && board.get_vec3(heard)->x == 3);
+            });
+            // ai::each is the typed loop under another name: the same rows, mutable or const.
+            ai::each<Spot>(ctx, [&](ponko::entity, ai::brain_row, ai::blackboard_row, Spot& spot) { ++typed; spot.x += 1; });
+            ai::each<const Spot>(ctx, [&](ponko::entity e, ai::brain_row, ai::blackboard_row, const Spot& spot) {
+                ++readonly;
+                CHECK(spot.x == 1 && e == listeners[std::size_t(spot.y)]);
+            });
+        }, "hear")
+        .run_headless(3, [&](ponko::ctx& ctx) {
+            ai::add_tree(ctx, "listener", ai::behavior_tree(
+                R"({"root": {"sequence": [{"wait_for": "shout", "store": "heard"}, {"do": "react"}]}})"));
+            for (int i = 0; i < 5; ++i) {
+                const ponko::entity e = ctx.world().spawn(Spot{0, float(i)});
+                ai::add_brain(ctx, e, "listener", 1000000);
+                listeners.push_back(e);
+            }
+            ctx.world().spawn(Spot{0, 0});   // no brain: never visited
+        });
+    CHECK(visited == 5 && typed == 5 && readonly == 5);
+
+    // A body falling in starts ripples with its switch on, none with it off.
+    auto splashed = [](bool ripples) {
+        std::uint64_t started = 0;
+        ponko::entity lake = 0;
+        ponko::game("c++ splash", 1, 1)
+            .physics3d({0, -9.81f, 0})
+            .water()
+            .sim_system([&](ponko::ctx& ctx) { started = ctx.water_started_contacts(lake); }, "watch")
+            .run_headless(100, [&](ponko::ctx& ctx) {
+                lake = ctx.spawn_water(ponko::water_desc::lake({0, 0}, {20, 20}, 0));
+                auto box = ponko::box_collider({0.8f, 0.8f, 0.8f});
+                box.density = 500;
+                const auto body = ctx.world().spawn(ponko::transform3d_at({1, 1.5f, 0}), ponko::dynamic_body3d(), box);
+                auto floats = ponko::buoyancy_desc::box({0.8f, 0.8f, 0.8f});
+                floats.ripples = ripples;
+                ctx.set_buoyancy(body, floats);
+                CHECK(ctx.water_waiting_contacts(lake) == 0);
+                throws([&] { ctx.water_waiting_contacts(body); });   // a body is no water
+                throws([&] { ctx.water_started_contacts(body); });
+            });
+        return started;
+    };
+    CHECK(splashed(true) > 0);
+    CHECK(splashed(false) == 0);   // a body with the switch off starts none
+    ponko::game("c++ touch", 1, 1).water().run_headless(0, [](ponko::ctx& ctx) {
+        const auto lake = ctx.spawn_water(ponko::water_desc::lake({0, 0}, {20, 20}, 0));
+        ctx.water_touch(lake, {0, 0}, 0.5f, 0.1f);
+        ctx.water_touch(lake, {500, 0}, 0.5f, 0.1f);   // outside the ripple area: dropped
+        CHECK(ctx.water_waiting_contacts(lake) == 1 && ctx.water_started_contacts(lake) == 1);
+    });
+
+    // A panel's own safe area.
+    ponko::game("c++ panel area", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
+        namespace u = ponko::ui;
+        const auto e = ctx.world().spawn(ponko::transform3d_at({0, 0, -3}));
+        ctx.create_ui_panel(e, 200, 100, {2, 1});
+        auto ui = ctx.panel_ui(e);
+        auto inside = ui.add_panel(u::none, u::fill());
+        auto outside = ui.add_panel(u::none, u::fill());
+        ui.set_inside_safe_area(inside);
+        ui.show_hud(inside);
+        ui.show_hud(outside);
+        CHECK(!ui.safe_area());
+        const ponko::rect area{{10, 5}, {190, 95}};
+        ui.set_safe_area(area);
+        CHECK(ui.safe_area() && ui.safe_area()->min.x == 10 && ui.safe_area()->max.y == 95);
+        ui.layout_for({200, 100});
+        CHECK(ui.rect(inside).min.x == 10 && ui.rect(inside).max.x == 190 && ui.rect(inside).max.y == 95);
+        CHECK(ui.rect(outside).min.x == 0 && ui.rect(outside).max.x == 200);
+        CHECK(!ctx.ui_retained().safe_area());   // the screen's UI is its own
+        ui.clear_safe_area();
+        CHECK(!ui.safe_area());
+        ui.layout_for({200, 100});
+        CHECK(ui.rect(inside).min.x == 0 && ui.rect(inside).max.x == 200);
+        throws([&] { ctx.panel_ui(9999).safe_area(); });
+    });
+}
+
 static void safe_area() {
     struct frame { ponko::rect area, hud, backdrop; };
     std::vector<frame> seen;
@@ -4519,6 +4645,13 @@ static void versioned_render_descriptors() {
         p.msaa = 3;
         throws_kind([&] { ctx.set_post(p); }, PONKO_ERROR_INVALID);
         CHECK(ctx.post_ex().msaa == 4);
+        // Version 2: thin objects in reflections, off by default, on in the ultra preset.
+        CHECK(!ctx.post_ex().ssr_thin_objects);
+        ctx.set_graphics_quality(ponko::graphics_quality_preset(ponko::quality_level::ultra));
+        CHECK(ctx.post_ex().ssr_thin_objects);
+        CHECK(ponko::graphics_quality_level(ctx.graphics_quality()) == ponko::quality_level::ultra);
+        ctx.set_graphics_quality(ponko::graphics_quality_preset(ponko::quality_level::high));
+        CHECK(!ctx.post_ex().ssr_thin_objects);
 
         auto e = ctx.world().spawn(ponko::transform3d_at({0, 1, 0}));
         ctx.set_particle_emitter3d(e, ponko::particle_settings().rate(40).softness(1.5f));
@@ -5158,12 +5291,19 @@ static void native_parity_round5() {
         }
         CHECK(after.count - before.count == 1 && after.bytes - before.bytes == sizeof(int));
         // Net bytes: PONKO_COUNT_CPP_ALLOCATIONS counts the frees too, so what is given back leaves them.
-        const std::int64_t held = ponko::net_alloc_bytes();
-        auto* block = new char[4096];
-        const std::int64_t holding = ponko::net_alloc_bytes();
-        delete[] block;
-        const std::int64_t released = ponko::net_alloc_bytes();
-        CHECK(holding - held >= 4096 && holding - released >= 4096);
+        // The figure is the whole process's: another thread (the engine's workers, still freeing
+        // what an earlier game left) may give memory back in between on a busy machine, so a few
+        // tries are allowed. A block that isn't counted, or a free that isn't, fails every one.
+        bool counted = false;
+        for (int attempt = 0; attempt < 5 && !counted; ++attempt) {
+            const std::int64_t held = ponko::net_alloc_bytes();
+            auto* block = new char[4096];
+            const std::int64_t holding = ponko::net_alloc_bytes();
+            delete[] block;
+            const std::int64_t released = ponko::net_alloc_bytes();
+            counted = holding - held >= 4096 && holding - released >= 4096;
+        }
+        CHECK(counted);
         ctx.set_profiling(false);
     });
 
@@ -5292,5 +5432,6 @@ int main() {
     native_parity_round5();
     brain_rows_in_typed_loops();
     lossy_loopback_links();
+    brain_values_ripples_and_ui_area();
     std::cout << "C++ wrapper tests passed\n";
 }

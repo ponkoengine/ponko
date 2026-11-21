@@ -385,6 +385,12 @@ impl Renderer3D {
         if self.screen.ssr_on && self.screen.ssr.is_none() {
             self.screen.ssr = Some(crate::render::ssr::Ssr::new(device));
         }
+        self.screen.ssr_thin = self.screen.ssr_on && post.ssr_thin_objects;
+        if self.screen.ssr_thin
+            && let Some(ssr) = &mut self.screen.ssr
+        {
+            ssr.use_thin(device);
+        }
         self.screen.velocity_on = self.screen.taa_on || (self.screen.ao_enabled && post.ao_temporal && ao_on);
         FrameView {
             size,

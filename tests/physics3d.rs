@@ -1182,3 +1182,48 @@ fn load_collision_mesh_with_panics_with_the_engine_message_for_a_missing_file() 
         ctx.load_collision_mesh_with("models/missing-collision-convention.glb", Default::default());
     });
 }
+
+/// 40 characters (enough that their moves are planned on all cores) walking
+/// along a ramp's flat part and up its slope in different directions for `ticks`: where
+/// each ends and whether it stands.
+fn crowd_walk(ticks: u64) -> Vec<(Vec3, bool)> {
+    let mut crowd = Vec::new();
+    let mut world = Game::new("t", 1, 1)
+        .sim_system(|ctx: &mut Ctx| {
+            let mut i = 0.0f32;
+            ctx.world.query::<&mut Character3D>().for_each(|c| {
+                c.velocity.x = 2.0 + (i % 5.0) * 0.5;
+                c.velocity.z = (i % 3.0) - 1.0;
+                i += 1.0;
+            });
+        })
+        .physics3d(GRAVITY)
+        .run_headless(ticks, |ctx| {
+            let m = ramp(&mut ctx.physics3d, 20.0);
+            ctx.world
+                .spawn((Transform3D::default(), RigidBody3D::fixed(), Collider3D::mesh(m)));
+            for i in 0..40 {
+                let at = vec3((i % 8) as f32 * 1.5 - 12.0, 0.05, (i / 8) as f32 * 1.5 - 4.0);
+                crowd.push(ctx.world.spawn((Transform3D::at(at), Character3D::new(1.8, 0.3))));
+            }
+        });
+    crowd
+        .into_iter()
+        .map(|e| (position(&mut world, e), world.get::<Character3D>(e).unwrap().grounded))
+        .collect()
+}
+
+#[test]
+fn characters_planned_on_the_frame_pool_move_as_on_one_thread() {
+    // The pass goes through the frame pool's runner; one thread runs it
+    // in order, the default pool cuts it up.
+    let one = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
+    let alone = one.install(|| crowd_walk(120));
+    let shared = crowd_walk(120);
+    assert_eq!(alone, shared);
+    assert!(
+        shared.iter().any(|(p, _)| p.y > 0.5),
+        "some climbed the ramp: {shared:?}"
+    );
+    assert!(shared.iter().all(|(_, grounded)| *grounded));
+}

@@ -1,6 +1,7 @@
 //! Threads on the web: the browser fixture and benchmark for web builds
 //! with threads (`web/smoke/threads.mjs`; the guide's "Threads on the
-//! web"). Build it with `web/build.sh --threads web_threads`.
+//! web"). Build it with `web/build.sh --threads --features 3d,bench-internals
+//! web_threads` (without those features it leaves out the 3D culling).
 //!
 //! **Check** (the default): a parallel query over 20,000 entities every
 //! tick, four view systems the parallel scheduler batches together (its
@@ -8,12 +9,16 @@
 //! any), jobs (one waited for during setup and one every 30 ticks), a
 //! moving root with 4,000 attached children whose transforms are tracked
 //! (so the hierarchy places them by lookups, on the workers when the level
-//! is worth sharing, through the same runner as the parallel query), and an
+//! is worth sharing, through the same runner as the parallel query), the
+//! engine's own parallel passes (a spatial grid of 200,000 entries rebuilt
+//! and a 256 × 256 flow field computed every 10 ticks, the 3D frame of
+//! 20,000 models collected and culled every 10 ticks, and the world saved
+//! as JSON every tick while profiling, all through that runner), and an
 //! asset group of a texture and a file decoded with `AssetGroup::with`,
 //! both from `assets/`. It publishes which threads ran each, for the runner
 //! (see `common/web_smoke.rs`):
 //!
-//! `{"fixture":"web_threads","ticks":160,"threads":7,"isolated":true,"par_threads":7,"par_on_page":false,"batch_threads":4,"batch_threaded_runs":160,"hier_shared":true,"wait_off_page":true,"job_off_page":true,"group":"ready","group_off_page":true,"group_bytes":966,"checksum":...}`
+//! `{"fixture":"web_threads","ticks":160,"threads":7,"isolated":true,"par_threads":7,"par_on_page":false,"batch_threads":4,"batch_threaded_runs":160,"hier_shared":true,"passes_shared":["flow/shared_directions","spatial/shared_rebuild","three/shared_cull","reflect/shared_save"],"frame3d":[...],"save_bytes":...,"wait_off_page":true,"job_off_page":true,"group":"ready","group_off_page":true,"group_bytes":966,"checksum":...}`
 //!
 //! `threads` is what the engine started (`ponko::web::threads()`, 0 when it
 //! runs on the page's thread alone); `par_threads` and `batch_threads`
@@ -21,8 +26,15 @@
 //! systems (batch systems not while profiling, when the scheduler runs them
 //! on the page's thread); `hier_shared` says whether the hierarchy shared a
 //! level out (the engine's `hierarchy/shared_level` scope, timed over 20
-//! ticks with profiling on); `checksum` sums every position and every attached child's
-//! place at tick 120, the same however many threads ran them. `?smoke_case=worker-panic` panics inside the
+//! ticks with profiling on); `passes_shared` lists the engine's passes
+//! that went through the frame pool's runner, by the scope each opens there
+//! (`spatial/shared_rebuild`, `flow/shared_directions`, `three/shared_cull`,
+//! `reflect/shared_save`); `frame3d` is what the 3D collection found at
+//! tick 120 (instances for the camera and the shadow views, and draw runs;
+//! `null` without the features) and `save_bytes` the length of the last JSON
+//! save; `checksum` sums every position, every attached child's place, the
+//! grid's and flow field's results, the 3D frame's counts and the save's
+//! length and hash at tick 120, the same however many threads ran them. `?smoke_case=worker-panic` panics inside the
 //! parallel query at tick 30: the game must stop with an error, not hang.
 //!
 //! `pads` lists the controllers the engine sees (`threads.mjs --case
@@ -82,6 +94,28 @@ const CHILDREN: usize = 4_000;
 
 /// The first of the 20 ticks profiled (see `hier_shared`).
 const PROFILED_FROM: u64 = 90;
+
+/// The engine's own parallel passes the fixture runs, by the scope each
+/// opens on the thread that shares it out (on the web, a worker). The 3D
+/// culling runs only in a build with the `3d` and `bench-internals`
+/// features (`threads.mjs` builds it so).
+const ENGINE_PASSES: [&str; 4] = [
+    "spatial/shared_rebuild",
+    "flow/shared_directions",
+    "three/shared_cull",
+    "reflect/shared_save",
+];
+
+/// The spatial grid's entries: enough that its rebuild runs on all cores.
+const GRID_ENTRIES: usize = 200_000;
+
+/// The spatial grid, the flow field and the 3D frame are redone every this
+/// many ticks.
+const PASS_EVERY: u64 = 10;
+
+/// The 3D models collected (and culled) every `PASS_EVERY` ticks.
+#[cfg(all(feature = "3d", feature = "bench-internals"))]
+const MODELS_3D: usize = 20_000;
 
 /// Profiling is on: the scheduler runs batches on the page's thread.
 static PROFILING: AtomicBool = AtomicBool::new(false);
@@ -294,6 +328,35 @@ struct Check {
     root: Option<Entity>,
     /// The hierarchy shared a level out.
     hier_shared: bool,
+    /// The engine's own passes that went through the frame pool's runner
+    /// (see `ENGINE_PASSES`).
+    passes_shared: Vec<&'static str>,
+    /// Rebuilt every `PASS_EVERY` ticks, big enough to go to the pool.
+    grid: Option<ponko::spatial::SpatialGrid>,
+    /// Computed every `PASS_EVERY` ticks toward a goal that moves.
+    flow: Option<(ponko::flow::NavGrid, ponko::flow::FlowField)>,
+    /// A world of 3D models, its frame collected every `PASS_EVERY` ticks.
+    #[cfg(all(feature = "3d", feature = "bench-internals"))]
+    scene3d: Option<Scene3D>,
+    /// The bytes and a hash of the last JSON save of the game's world.
+    save: Option<(usize, u64)>,
+    /// What the 3D collection found at tick 120, with the checksum.
+    frame3d: Option<(usize, usize, usize)>,
+}
+
+/// A world of `MODELS_3D` models on a grid, some bobbing, collected for a
+/// camera that turns: the retained 3D culling compares every model each
+/// time, on all cores.
+#[cfg(all(feature = "3d", feature = "bench-internals"))]
+struct Scene3D {
+    world: World,
+    models: Vec<Entity>,
+    extraction: ponko::render::ExtractionBench,
+    camera: ponko::d3::Camera,
+    lighting: ponko::render::Lighting,
+    /// What the last collection found: instances for the camera and the
+    /// shadow views, and draw runs.
+    found: (usize, usize, usize),
 }
 
 /// The asset group's file decoded with `with`, and what its decoder returns.
@@ -332,6 +395,14 @@ fn check(game: Game) {
             t.position = vec2(320.0 + (tick % 64) as f32, 180.0);
             t.rotation = tick as f32 * 0.01;
         }
+        // Every tick while scopes are timed, so a frame sees them.
+        let timed = (PROFILED_FROM..PROFILED_FROM + 20).contains(&tick);
+        if tick.is_multiple_of(PASS_EVERY) || timed {
+            engine_passes(&mut s, tick);
+        }
+        if timed {
+            s.save = Some(save_json(&ctx.world));
+        }
         if tick == 120 {
             let mut sum = 0.0f64;
             ctx.world
@@ -340,7 +411,9 @@ fn check(game: Game) {
             ctx.world
                 .query::<(&d2::Transform, &Attached)>()
                 .for_each(|(t, _)| sum += f64::from(t.position.x) + f64::from(t.position.y));
+            sum += passes_checksum(&s);
             s.checksum = Some(sum);
+            s.frame3d = frame3d(&s);
         }
         if tick.is_multiple_of(30) && s.job.is_none() {
             s.job = Some(Job::spawn(|| std::thread::current().id()));
@@ -392,6 +465,11 @@ fn check(game: Game) {
             .scope_timings()
             .iter()
             .any(|t| t.name == "hierarchy/shared_level" && t.calls > 0);
+        for t in ctx.perf.scope_timings() {
+            if t.calls > 0 && ENGINE_PASSES.contains(&t.name) && !s.passes_shared.contains(&t.name) {
+                s.passes_shared.push(t.name);
+            }
+        }
         let batch_threaded_runs = s.batch_threaded_runs;
         s.pad_presses += ctx
             .input
@@ -429,6 +507,9 @@ fn check(game: Game) {
             "batch_on_page": batch_on_page,
             "batch_threaded_runs": batch_threaded_runs,
             "hier_shared": s.hier_shared,
+            "passes_shared": s.passes_shared,
+            "frame3d": s.frame3d.map(|(visible, shadow, runs)| [visible, shadow, runs]),
+            "save_bytes": s.save.map(|(bytes, _)| bytes),
             "schedule_threads": s.schedule_threads,
             "wait_off_page": s.wait_off_page,
             "job_off_page": s.job_off_page,
@@ -467,6 +548,8 @@ fn check(game: Game) {
         }
         // Waited for on the page's thread, which spins (it may not block).
         let thread = Job::spawn(|| std::thread::current().id()).wait();
+        // The children's transforms are saved as JSON (see `save_json`).
+        ctx.world.reflect::<d2::Transform>();
         // Files from assets/ (assets/index.json on the web), read and
         // decoded by jobs.
         let group = AssetGroup::new("web_threads")
@@ -480,6 +563,126 @@ fn check(game: Game) {
         s.root = Some(root);
     })
     .run();
+}
+
+/// The engine's own parallel passes: a spatial grid of `GRID_ENTRIES`
+/// rebuilt, and a flow field computed toward a goal that moves with `tick`.
+fn engine_passes(s: &mut Check, tick: u64) {
+    let shift = (tick % 97) as f32;
+    let grid = s.grid.get_or_insert_with(|| ponko::spatial::SpatialGrid::new(16.0));
+    grid.rebuild_from((0..GRID_ENTRIES as u64).map(|i| {
+        let f = i as f32;
+        (
+            Entity::from_bits(i + 1),
+            vec2((f * 7.31 + shift) % 4096.0, (f * 3.17 + shift * 0.5) % 4096.0),
+        )
+    }));
+    let (nav, flow) = s.flow.get_or_insert_with(|| {
+        let mut nav = ponko::flow::NavGrid::new(256, 256, 4.0);
+        for y in 20..236 {
+            nav.set_cost(128, y, ponko::flow::NavGrid::WALL);
+        }
+        (nav, ponko::flow::FlowField::new())
+    });
+    flow.compute(nav, &[vec2(8.0 + shift * 4.0, 512.0)]);
+    #[cfg(all(feature = "3d", feature = "bench-internals"))]
+    collect_3d(s.scene3d.get_or_insert_with(scene_3d), tick);
+}
+
+/// What the last 3D collection found: `None` before the first or without
+/// the 3D features.
+fn frame3d(_s: &Check) -> Option<(usize, usize, usize)> {
+    #[cfg(all(feature = "3d", feature = "bench-internals"))]
+    if let Some(scene) = &_s.scene3d {
+        return Some(scene.found);
+    }
+    None
+}
+
+/// `MODELS_3D` models on a grid, each of one of 16 unit meshes.
+#[cfg(all(feature = "3d", feature = "bench-internals"))]
+fn scene_3d() -> Scene3D {
+    let extraction = ponko::render::ExtractionBench::new(16);
+    let mut world = World::new();
+    let models = (0..MODELS_3D)
+        .map(|i| {
+            let at = vec3((i % 200) as f32 * 4.0 - 400.0, 0.0, (i / 200) as f32 * 4.0 - 200.0);
+            let mesh = extraction.mesh((i as u32).wrapping_mul(2_654_435_761) % 16);
+            world.spawn((ponko::d3::Transform::at(at), ponko::render::Model::new(mesh)))
+        })
+        .collect();
+    let mut camera = ponko::render::ExtractionBench::camera(1280.0, 720.0);
+    camera.far = 300.0;
+    Scene3D {
+        world,
+        models,
+        extraction,
+        camera,
+        lighting: ponko::render::Lighting::default(),
+        found: (0, 0, 0),
+    }
+}
+
+/// Turns the camera and bobs every 50th model with `tick`, then collects
+/// the frame: the models are compared and culled again.
+#[cfg(all(feature = "3d", feature = "bench-internals"))]
+fn collect_3d(scene: &mut Scene3D, tick: u64) {
+    let angle = tick as f32 * 0.02;
+    scene.camera.position = vec3(angle.cos() * 80.0, 12.0, angle.sin() * 80.0);
+    scene
+        .camera
+        .look_at(vec3((angle + 0.6).cos() * 120.0, 0.0, (angle + 0.6).sin() * 120.0));
+    let y = (tick % 3) as f32 * 0.25;
+    for &e in scene.models.iter().step_by(50) {
+        if let Some(t) = scene.world.get_mut::<ponko::d3::Transform>(e) {
+            t.position.y = y;
+        }
+    }
+    let sample = scene
+        .extraction
+        .collect(&mut scene.world, &scene.camera, &scene.lighting);
+    scene.found = (sample.visible, sample.shadow, sample.runs);
+}
+
+/// The game's world saved as JSON (`World::save`, which builds each
+/// entity's JSON on the frame pool): its length and an FNV-1a hash of the
+/// text, the same however many threads built it.
+fn save_json(world: &World) -> (usize, u64) {
+    let text = serde_json::to_string(&world.save()).unwrap_or_default();
+    let hash = text.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+    });
+    (text.len(), hash)
+}
+
+/// Sums where the grid's entries landed (in its order, which the rebuild
+/// sets) and the flow field's directions and distances at sample points.
+fn passes_checksum(s: &Check) -> f64 {
+    let mut sum = 0.0f64;
+    if let Some(grid) = &s.grid {
+        for (k, e) in grid.entries().iter().enumerate().step_by(997) {
+            sum += (k % 7) as f64 * f64::from(e.position.x + e.position.y);
+        }
+        sum += grid.count_in_radius(vec2(2048.0, 2048.0), 300.0) as f64;
+    }
+    if let Some((_, flow)) = &s.flow {
+        for y in (2..1024).step_by(37) {
+            for x in (2..1024).step_by(41) {
+                let at = vec2(x as f32, y as f32);
+                let d = flow.direction_at(at);
+                sum += f64::from(d.x * 3.0 + d.y) + f64::from(flow.distance_at(at).unwrap_or(-1.0));
+            }
+        }
+    }
+    #[cfg(all(feature = "3d", feature = "bench-internals"))]
+    if let Some(scene) = &s.scene3d {
+        let (visible, shadow, runs) = scene.found;
+        sum += (visible * 3 + shadow * 5 + runs * 7) as f64;
+    }
+    if let Some((bytes, hash)) = s.save {
+        sum += bytes as f64 + (hash % 1_000_003) as f64;
+    }
+    sum
 }
 
 /// `n` steering agents, spread over the field.

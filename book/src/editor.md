@@ -169,15 +169,41 @@ saved. The status bar says the file stayed in the browser.
 
 **File > Download** saves the document, then hands its file to you as a
 browser download, to keep it or to copy it into the project's `assets/`.
-A browser keeps a few megabytes per site this way and may clear them;
-when it refuses a save (it is full), the error says so and Download still
-gives you the file.
+A browser keeps a few megabytes per site this way; when it refuses a save
+(it is full), the error says so and Download still gives you the file.
+
+A browser may also clear a site's storage when the disk runs low, unless
+it keeps that storage *persistent*. Before setup the web editor asks for
+that (`navigator.storage.persist()`): Chromium decides from how the site
+is used (an installed or bookmarked site gets it), Firefox asks you, and
+a page served without HTTPS (other than `localhost`) can't have it. When
+the browser refuses, the status bar says **the browser may clear saves**
+(its tooltip says why) and **File > Saved in this browser** repeats it:
+download what you want to keep. `ctx.assets.browser_saves_persistent()`
+is the answer from code: `Some(true)`, `Some(false)`, or `None` until the
+browser answers (and in other builds).
 
 **Open** and the asset panel list the web build's file manifest: the
 files named in `assets/index.json` (which `web/build.sh` and `ponko
 package --web` write), the files in the page's asset pack, and the ones
 saved in the browser. A JSON file is listed as a scene or prefab by its
-`"format"`, as on the desktop.
+`"format"`, as on the desktop. Their tiles get thumbnails made from those
+files in memory (a browser has no folders to read them from): a texture
+scaled down, a scene's map, a prefab's sprite, a model's software drawing,
+with its buffers found beside it by name. A file you save or revert gets
+its thumbnail made again.
+
+**File > Saved in this browser** lists every file the browser keeps for
+this page, with its size, and offers **Revert** for a file the build
+ships (a scene in `assets/` you saved over) and **Delete** for one only
+the browser has. Either removes the browser's copy: a reverted file is
+the build's again at once, from the copy kept aside when the save
+replaced it, and the open document is opened again if it was that file
+and had no unsaved changes. After a reload nothing replaces the shipped
+file any more, so the build's version is back. From code,
+`ctx.assets.browser_saves()` lists the same names and
+`ctx.assets.revert_browser_save(path)` reverts one (both are Rust-only;
+in other builds the list is empty and nothing is reverted).
 
 While the system's picker is up it has the keyboard, so the editor never
 sees the keys let go meanwhile: the Ctrl (⌘) of Ctrl+O, or the Enter that
@@ -214,8 +240,9 @@ Linux, `%LOCALAPPDATA%\ponko\thumbnails` on Windows;
 `PONKO_THUMBNAIL_CACHE` names another folder) under a hash of the model's
 file and the buffers and images it names: the next run shows them at once,
 in any project, and a changed model or texture is drawn again. The web
-build keeps the software drawing: a browser can't wait for the GPU's
-picture within the frame, and has no cache folder. The search field (Ctrl+F) shows
+build keeps the software drawing, made from the page's files in memory
+(see [Saving in a browser](#saving-in-a-browser)): a browser can't wait
+for the GPU's picture within the frame, and has no cache folder. The search field (Ctrl+F) shows
 every asset whose path has all the words typed, in any folder, and
 **List again** reads the folder again after files were added.
 
@@ -299,7 +326,10 @@ file makes of it is its override, kept in the scene's saved record:
   everything you didn't touch follows the file.
 - **Saving** the scene writes the overrides; opening it again in the
   editor spawns its glTF scenes where they were, with them, and a game
-  that loads the save and spawns the file again gets them too.
+  that loads the save and spawns the file again gets them too. A glTF
+  scene whose file is missing or broken then is left out (its record and
+  overrides stay in the scene, for when the file is back), and the status
+  bar's error line names each such file and why it didn't load.
 
 Overrides are per component (the changed fields of each), and two more
 kinds are per node:
@@ -312,9 +342,15 @@ kinds are per node:
   the scene's root, the root or a node of another glTF scene, or an
   entity the scene file saves. Through a save, a reopen and Play/Stop a
   node of another scene comes back on its parent whichever scene spawns
-  first (the scene file numbers each glTF scene's record for it). A
-  parent the save leaves out (an entity marked not saved) can't be kept,
-  and the editor says so on its console.
+  first (the scene file numbers each glTF scene's record for it).
+  Deleting that parent deletes what hangs off it; undo brings both back,
+  linked, at once. If the other scene's file doesn't load when the scene
+  is opened, the node waits on its file parent and its overrides list
+  the parent as missing: **Revert** forgets the link, or fix the file and
+  the link is made when that scene spawns. Builds from before these links
+  read such saves too, with the node on its file parent. A parent the
+  save leaves out (an entity marked not saved) can't be kept, and the
+  editor says so on its console.
 
 Selecting a scene's root or any of its nodes shows, at the top of the
 inspector, the file it came from and every override of the scene, one row

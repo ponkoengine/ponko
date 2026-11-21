@@ -421,6 +421,7 @@
             "shadows": true,
             "sharpen": 0.0,
             "ssr": 0.0,
+            "ssr_thin_objects": false,
             "tonemap": "aces"
           },
           "scale": 1.0,
@@ -752,6 +753,7 @@
             "shadows": true,
             "sharpen": 0.0,
             "ssr": 0.0,
+            "ssr_thin_objects": false,
             "tonemap": "aces"
           },
           "scale": 1.0,
@@ -1083,6 +1085,7 @@
             "shadows": true,
             "sharpen": 0.0,
             "ssr": 0.0,
+            "ssr_thin_objects": false,
             "tonemap": "aces"
           },
           "scale": 1.0,

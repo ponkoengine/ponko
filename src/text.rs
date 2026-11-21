@@ -683,16 +683,17 @@ impl Text {
         text.len()
     }
 
-    /// Where shaped text wraps: the end of `line`'s first line at `width`
-    /// pixels, or `None` for text that takes the fast path (it wraps at
+    /// Where shaped text wraps: the end of `line`'s first line in `room`
+    /// (its width in pixels; the range of widths that end it there
+    /// narrowed), or `None` for text that takes the fast path (it wraps at
     /// spaces).
     #[cfg_attr(not(feature = "text-shaping"), allow(unused_variables))]
-    pub fn wrap_end_shaped_or_none(&mut self, line: &str, font: Font, px: f32, width: f32) -> Option<usize> {
+    pub fn wrap_end_shaped_or_none(&mut self, line: &str, font: Font, px: f32, room: &mut WrapRoom) -> Option<usize> {
         #[cfg(feature = "text-shaping")]
         if self.shaped_path(line) {
             self.layouts += 1;
             let font = self.resolve(font);
-            return Some(self.wrap_end_shaped(line, font, px, width));
+            return Some(self.wrap_end_shaped(line, font, px, room));
         }
         None
     }
@@ -890,6 +891,50 @@ fn signed_distance(coverage: &[u8], w: u32, h: u32, spread: u32) -> Vec<u8> {
         }
     }
     out
+}
+
+/// The width text is wrapped at, and the range of widths that wrap it
+/// the same way. Every decision of where a line ends compares something
+/// measured with the width ([`exceeds`](Self::exceeds)); each comparison
+/// narrows the range to the widths on the same side of what it measured,
+/// so any width in the range takes every decision the same way and gives
+/// the same lines ([`holds`](Self::holds)).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct WrapRoom {
+    pub width: f32,
+    /// The narrowest width that wraps the same way.
+    pub lo: f32,
+    /// The first width past it that wraps differently, or infinity.
+    pub hi: f32,
+}
+
+impl WrapRoom {
+    /// `width`, before any decision: every width wraps the same way.
+    pub(crate) fn new(width: f32) -> Self {
+        Self {
+            width,
+            lo: f32::NEG_INFINITY,
+            hi: f32::INFINITY,
+        }
+    }
+
+    /// Whether `measured` is wider than the room; the range keeps the
+    /// widths that answer the same.
+    pub(crate) fn exceeds(&mut self, measured: f32) -> bool {
+        if measured > self.width {
+            self.hi = self.hi.min(measured);
+            true
+        } else {
+            self.lo = self.lo.max(measured);
+            false
+        }
+    }
+
+    /// Whether text wrapped at `width` takes every decision made so far
+    /// the same way.
+    pub(crate) fn holds(&self, width: f32) -> bool {
+        self.lo <= width && width < self.hi
+    }
 }
 
 #[cfg(test)]
