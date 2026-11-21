@@ -431,8 +431,14 @@ pub enum Built<'a> {
     /// A desktop executable.
     Program(&'a Path),
     /// A web build: wasm-bindgen's `game.js` and `game_bg.wasm`, in `dir`;
-    /// `threads` when it was built with them (atomics and shared memory).
-    Web { dir: &'a Path, threads: bool },
+    /// `threads` when it was built with them (atomics and shared memory);
+    /// `isolation_worker` adds the service worker that sends the
+    /// cross-origin isolation headers on hosts that can't.
+    Web {
+        dir: &'a Path,
+        threads: bool,
+        isolation_worker: bool,
+    },
 }
 
 /// The name of a package's folder (and archives): `coin-dash-0.1.0-macos-aarch64`.
@@ -494,7 +500,14 @@ pub fn plan(
         });
     };
     let (program, app_dir) = match (built, app) {
-        (Built::Web { dir, threads }, _) => {
+        (
+            Built::Web {
+                dir,
+                threads,
+                isolation_worker,
+            },
+            _,
+        ) => {
             for name in ["game.js", "game_bg.wasm"] {
                 entries.push(Entry {
                     path: top(name),
@@ -505,6 +518,14 @@ pub fn plan(
             let mut page = web_index(&game.name, icon_png.is_some());
             if pack.is_some() {
                 page = with_web_pack(&page);
+            }
+            if isolation_worker {
+                page = with_isolation_worker(&page);
+                entries.push(Entry {
+                    path: top("ponko-isolate.js"),
+                    source: Source::Text(WEB_ISOLATE.to_string()),
+                    executable: false,
+                });
             }
             entries.push(Entry {
                 path: top("index.html"),
@@ -718,6 +739,17 @@ pub const WEB_INDEX: &str = include_str!("index.html");
 /// The worker script of a web build with threads: the engine's
 /// `web/ponko-worker.js` (embedded; a test keeps the copies equal).
 pub const WEB_WORKER: &str = include_str!("ponko-worker.js");
+
+/// The service worker that sends the cross-origin isolation headers on
+/// hosts that can't (`--isolation-worker`): the engine's
+/// `web/ponko-isolate.js` (embedded; a test keeps the copies equal).
+pub const WEB_ISOLATE: &str = include_str!("ponko-isolate.js");
+
+/// The page with the script that registers [`WEB_ISOLATE`], before the
+/// game's own script (as `web/build.sh --isolation-worker`).
+pub fn with_isolation_worker(page: &str) -> String {
+    page.replacen("</head>", "  <script src=\"ponko-isolate.js\"></script>\n</head>", 1)
+}
 
 /// The response headers that make a page cross-origin isolated, which a
 /// web build with threads needs to start its workers.
@@ -993,6 +1025,7 @@ mod tests {
             Built::Web {
                 dir: Path::new("/bindgen"),
                 threads: false,
+                isolation_worker: false,
             },
             "N",
             Some(b"png"),
@@ -1046,6 +1079,7 @@ mod tests {
             Built::Web {
                 dir: Path::new("/bindgen"),
                 threads: true,
+                isolation_worker: false,
             },
             "N",
             None,
@@ -1125,6 +1159,7 @@ mod tests {
             Built::Web {
                 dir: Path::new("/bindgen"),
                 threads: false,
+                isolation_worker: false,
             },
             "N",
             None,
@@ -1200,6 +1235,53 @@ mod tests {
                 "copy web/index.html to crates/ponko_cli/src/package/index.html"
             );
         }
+    }
+
+    #[test]
+    fn the_embedded_isolation_worker_is_the_engines() {
+        // As index.html: the published crate carries a copy of web/ponko-isolate.js.
+        let engine = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/ponko-isolate.js");
+        if let Ok(text) = std::fs::read_to_string(engine) {
+            assert_eq!(
+                WEB_ISOLATE, text,
+                "copy web/ponko-isolate.js to crates/ponko_cli/src/package/ponko-isolate.js"
+            );
+        }
+    }
+
+    #[test]
+    fn an_isolation_worker_package_has_the_script_and_loads_it_before_the_game() {
+        let plan = plan(
+            &game(),
+            &platform("wasm32-unknown-unknown"),
+            false,
+            Built::Web {
+                dir: Path::new("/bindgen"),
+                threads: true,
+                isolation_worker: true,
+            },
+            "N",
+            None,
+            None,
+        )
+        .unwrap();
+        let text = |name: &str| {
+            match &plan
+                .entries
+                .iter()
+                .find(|e| e.path == Path::new("coin-dash-1.2.3-web").join(name))
+                .unwrap_or_else(|| panic!("{name} missing from {:#?}", paths(&plan)))
+                .source
+            {
+                Source::Text(t) => t.clone(),
+                other => panic!("{name}: {other:?}"),
+            }
+        };
+        assert_eq!(text("ponko-isolate.js"), WEB_ISOLATE);
+        let page = text("index.html");
+        let script = page.find("<script src=\"ponko-isolate.js\"></script>").expect("the page loads the worker");
+        let game = page.find("import init").expect("the game's script");
+        assert!(script < page.find("</head>").unwrap() && script < game, "{page}");
     }
 
     #[test]

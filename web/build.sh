@@ -8,6 +8,7 @@
 #   web/build.sh --threads battle        # with threads (nightly; see below)
 #   web/build.sh --threads --print-env   # what a threaded build would set, no build
 #   web/build.sh --threads --clippy      # nightly clippy on the threaded configuration, no build
+#   web/build.sh --threads --isolation-worker battle   # threads on hosts that can't send headers
 #   python3 -m http.server -d target/web/battle 8000
 #
 # Needs: rustup target add wasm32-unknown-unknown
@@ -21,6 +22,11 @@
 # Cross-Origin-Opener-Policy: same-origin and Cross-Origin-Embedder-Policy:
 # require-corp for the threads to start; without them the game runs on one
 # thread (python3 -m http.server sends neither).
+#
+# --isolation-worker (with --threads) adds ponko-isolate.js and its script
+# tag to index.html: on a host that can't send those headers, a service
+# worker adds them, at the cost of one reload on the first visit (the
+# guide's "Hosts that can't send the headers").
 #
 # Cargo reads the first of CARGO_ENCODED_RUSTFLAGS, RUSTFLAGS and
 # CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS that is set and ignores the
@@ -40,6 +46,7 @@ features=
 threads=
 print_env=
 clippy=
+isolation_worker=
 while [ $# -gt 0 ]; do
   case "$1" in
     --bin) kind=bin; shift ;;
@@ -47,6 +54,7 @@ while [ $# -gt 0 ]; do
     --threads) threads=1; shift ;;
     --print-env) print_env=1; shift ;;
     --clippy) clippy=1; shift ;;
+    --isolation-worker) isolation_worker=1; shift ;;
     *) break ;;
   esac
 done
@@ -71,6 +79,10 @@ if [ -n "$threads" ]; then
     flags_var=CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS
     flags_value="$flags${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:+ $CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS}"
   fi
+fi
+if [ -n "$isolation_worker" ] && [ -z "$threads" ]; then
+  echo "--isolation-worker is for --threads (the ordinary web build needs no isolation)" >&2
+  exit 2
 fi
 if [ -n "$clippy" ] && [ -z "$threads" ]; then
   echo "--clippy is for --threads (the ordinary web build is linted by 'cargo clippy --target wasm32-unknown-unknown')" >&2
@@ -130,5 +142,12 @@ fi
 sed "s/{{TITLE}}/$name/" "$here/index.html" > "$out/index.html"
 if [ -n "$threads" ]; then
   cp "$here/ponko-worker.js" "$out/ponko-worker.js"
+fi
+if [ -n "$isolation_worker" ]; then
+  cp "$here/ponko-isolate.js" "$out/ponko-isolate.js"
+  # Before the game's script: it registers the service worker that sends
+  # the cross-origin isolation headers, and reloads the page once.
+  awk '/<\/head>/ { print "  <script src=\"ponko-isolate.js\"></script>" } { print }' "$out/index.html" > "$out/index.html.tmp"
+  mv "$out/index.html.tmp" "$out/index.html"
 fi
 echo "built $out ($(du -sh "$out" | cut -f1)); try it: python3 -m http.server -d $out 8000"
