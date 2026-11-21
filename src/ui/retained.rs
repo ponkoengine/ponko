@@ -1856,11 +1856,12 @@ impl Ui {
                                 }
                                 _ => natural.x,
                             });
-                            // Wrapped, its height at each width it was
-                            // offered lately: a row resized back and forth
+                            // Wrapped, its height for each of the last few
+                            // ranges of widths it was offered that wrap it
+                            // the same way: a row resized back and forth
                             // measures it once for each.
                             let mut height = if n.paint.wrap {
-                                sizes.wrapped(width, || plain_height(text, &n.text, (font, px, k), Some(width)))
+                                sizes.wrapped(width * k, |room| plain_height(text, &n.text, (font, px, k), Some(room)))
                             } else {
                                 natural.y
                             };
@@ -2429,8 +2430,10 @@ fn rich_size(
         _ => natural.x,
     });
     let mut height = if n.paint.wrap {
-        sizes.wrapped(width, || {
-            rich.layout(base, Some(width), Align::MEASURE, text, scratch).y
+        sizes.wrapped(width.max(0.0), |room| {
+            let height = rich.layout(base, Some(width), Align::MEASURE, text, scratch).y;
+            *room = scratch.room;
+            height
         })
     } else {
         natural.y
@@ -2445,15 +2448,20 @@ fn rich_size(
 }
 
 /// The height of plain text `s`'s lines in layout units, measured in
-/// `font` at `px` physical pixels (`k` per layout unit), wrapped at
-/// `wrap` layout units when given.
-fn plain_height(text: &mut crate::text::Text, s: &str, (font, px, k): (Font, f32, f32), wrap: Option<f32>) -> f32 {
+/// `font` at `px` physical pixels (`k` per layout unit), wrapped in
+/// `wrap` (physical pixels) when given.
+fn plain_height(
+    text: &mut crate::text::Text,
+    s: &str,
+    (font, px, k): (Font, f32, f32),
+    mut wrap: Option<&mut crate::text::WrapRoom>,
+) -> f32 {
     let mut height = 0.0;
     for paragraph in s.split('\n') {
         let mut rest = paragraph;
         loop {
-            let end = match wrap {
-                Some(width) => wrap_end(text, rest, font, px, width * k),
+            let end = match wrap.as_deref_mut() {
+                Some(room) => wrap_end(text, rest, font, px, room),
                 None => rest.len(),
             };
             height += text.layout(&rest[..end], font, px, false).y / k;
@@ -2466,8 +2474,17 @@ fn plain_height(text: &mut crate::text::Text, s: &str, (font, px, k): (Font, f32
     height
 }
 
-pub(super) fn wrap_end(text: &mut crate::text::Text, line: &str, font: Font, size: f32, width: f32) -> usize {
-    if let Some(end) = text.wrap_end_shaped_or_none(line, font, size, width) {
+/// Where `line` wrapped in `room` (physical pixels) ends its first line:
+/// at the last space before what doesn't fit (or the first character
+/// that doesn't). `room` keeps the range of widths that end it there.
+pub(super) fn wrap_end(
+    text: &mut crate::text::Text,
+    line: &str,
+    font: Font,
+    size: f32,
+    room: &mut crate::text::WrapRoom,
+) -> usize {
+    if let Some(end) = text.wrap_end_shaped_or_none(line, font, size, room) {
         return end;
     }
     let mut space = None;
@@ -2476,7 +2493,7 @@ pub(super) fn wrap_end(text: &mut crate::text::Text, line: &str, font: Font, siz
             space = Some(i);
         }
         let next = i + ch.len_utf8();
-        if text.layout(&line[..next], font, size, false).x > width {
+        if room.exceeds(text.layout(&line[..next], font, size, false).x) {
             return space.filter(|&s| s > 0).unwrap_or(if i == 0 { next } else { i });
         }
     }

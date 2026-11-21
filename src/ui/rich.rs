@@ -119,6 +119,9 @@ impl Item {
 #[derive(Debug, Default)]
 pub(crate) struct RichLayout {
     pub items: Vec<Item>,
+    /// The width it was wrapped at (`0` unwrapped), and the range of
+    /// widths that wrap it the same way: give the same items.
+    pub room: crate::text::WrapRoom,
 }
 
 /// The node's paint the markup changes, and how to measure.
@@ -554,8 +557,9 @@ impl RichText {
         widest
     }
 
-    /// Lays the text out into `out`, wrapping at `wrap` when given. Returns
-    /// its size.
+    /// Lays the text out into `out`, wrapping at `wrap` when given (`out`'s
+    /// [`room`](RichLayout::room) says which widths wrap it the same way).
+    /// Returns its size.
     pub(crate) fn layout(
         &self,
         base: Base,
@@ -571,13 +575,16 @@ impl RichText {
             align,
             text,
             items: &mut out.items,
+            room: crate::text::WrapRoom::new(wrap.map_or(0.0, |w| w.max(0.0))),
             y: 0.0,
             widest: 0.0,
         };
         for (ps, pe) in self.paragraphs() {
-            lines.paragraph(ps, pe, wrap);
+            lines.paragraph(ps, pe, wrap.is_some());
         }
-        Vec2::new(lines.widest, lines.y)
+        let size = Vec2::new(lines.widest, lines.y);
+        out.room = lines.room;
+        size
     }
 
     /// The link under `point`, given in the layout's units from the text
@@ -616,19 +623,22 @@ struct Lines<'a> {
     align: Align,
     text: &'a mut crate::text::Text,
     items: &'a mut Vec<Item>,
+    /// The width wrapped at, and the widths that break the lines alike.
+    room: crate::text::WrapRoom,
     y: f32,
     widest: f32,
 }
 
 impl Lines<'_> {
-    fn paragraph(&mut self, ps: u32, pe: u32, wrap: Option<f32>) {
+    /// Lays paragraph `ps..pe` out, wrapped in `self.room` if it `wrap`s:
+    /// each decision of where a line ends narrows the room's range.
+    fn paragraph(&mut self, ps: u32, pe: u32, wrap: bool) {
         let rich = self.rich;
         let rtl = self.align.directional && crate::text::Text::is_rtl(&rich.text[ps as usize..pe as usize]);
-        let Some(width) = wrap else {
+        if !wrap {
             self.line(ps, pe, rtl);
             return;
-        };
-        let width = width.max(0.0);
+        }
         let mut line_start = ps;
         let mut line_width = 0.0;
         let mut segment = ps;
@@ -637,12 +647,12 @@ impl Lines<'_> {
         for end in breaks {
             let trimmed = rich.trim_end(segment, end);
             let fits = rich.width(segment, trimmed, self.base, self.text);
-            if line_start < segment && line_width + fits > width {
+            if line_start < segment && self.room.exceeds(line_width + fits) {
                 self.line(line_start, segment, rtl);
                 line_start = segment;
                 line_width = 0.0;
             }
-            if line_start == segment && fits > width {
+            if line_start == segment && self.room.exceeds(fits) {
                 // A word wider than the line: broken between characters,
                 // at least one on each line.
                 let mut at = segment;
@@ -651,7 +661,7 @@ impl Lines<'_> {
                     let mut cut = at;
                     for (i, c) in chars {
                         let next = at + (i + c.len_utf8()) as u32;
-                        if cut > at && rich.width(at, next, self.base, self.text) > width {
+                        if cut > at && self.room.exceeds(rich.width(at, next, self.base, self.text)) {
                             break;
                         }
                         cut = next;
