@@ -126,7 +126,9 @@ pub(crate) fn info_from_id(id: &str) -> GamepadInfo {
     };
     let firefox = || {
         let mut parts = id.splitn(3, '-');
-        Some((hex(parts.next()?)?, hex(parts.next()?)?)).filter(|_| parts.next().is_some())
+        let ids = (hex(parts.next()?)?, hex(parts.next()?)?);
+        parts.next()?; // the name follows
+        Some(ids)
     };
     let ids = chromium().or_else(firefox);
     GamepadInfo {
@@ -175,10 +177,10 @@ impl<R: ReadPads> GamepadBackend for WebGamepads<R> {
                 if now.pressed != before.pressed {
                     events.button(device, BUTTON_NAMES[i], now.pressed);
                 }
-                if now.value != before.value {
-                    if let Some(&(_, axis)) = TRIGGERS.iter().find(|(t, _)| *t == i) {
-                        events.axis(device, axis, now.value.clamp(0.0, 1.0));
-                    }
+                if now.value != before.value
+                    && let Some(&(_, axis)) = TRIGGERS.iter().find(|(t, _)| *t == i)
+                {
+                    events.axis(device, axis, now.value.clamp(0.0, 1.0));
                 }
                 *before = *now;
             }
