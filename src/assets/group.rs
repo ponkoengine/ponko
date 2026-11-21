@@ -15,7 +15,7 @@
 //! cancelled group can be [restarted](Assets::restart_group): only what had
 //! not loaded is read again.
 
-mod sliced;
+pub(crate) mod sliced;
 
 use std::any::Any;
 use std::collections::HashMap;
@@ -42,9 +42,99 @@ enum Kind {
     Sound,
     /// The game's own loader; its value is taken with `take_group_value`.
     Value(Decoder),
+    /// The game's own loader, a slice at a time ([`SliceLoader`]).
+    Sliced(SliceStarter),
 }
 
 type Decoder = Arc<dyn Fn(&[u8]) -> Result<Box<dyn Any + Send>, Error> + Send + Sync>;
+type SliceStarter = Arc<dyn Fn(Vec<u8>) -> Result<Box<dyn AnySlices>, Error> + Send + Sync>;
+
+/// A loader that does its work a bounded piece at a time, for
+/// [`AssetGroup::with_sliced`]: parsing a large level file some records a
+/// call, building a navigation grid a few rows a call. Where there are no
+/// worker threads (a browser build without threads), the group step calls
+/// [`step`](Self::step) while its [frame budget](Assets::set_group_frame_budget)
+/// lasts and goes on in the next frame, so one large file never takes one
+/// long frame; with workers, a worker calls it until it is done.
+///
+/// Keep each `step` short (well under a millisecond on the slowest device
+/// you target): the budget is checked between calls, so one long call
+/// still takes its whole time.
+///
+/// ```
+/// use ponko::assets::{AssetGroup, GroupState, MemorySource, SliceLoader};
+/// # use ponko::prelude::*;
+/// /// Sums a file of numbers, one line per line, a thousand lines a call.
+/// struct Sum {
+///     text: String,
+///     at: usize,
+///     total: i64,
+/// }
+///
+/// impl SliceLoader for Sum {
+///     type Value = i64;
+///     fn step(&mut self) -> Result<bool, Error> {
+///         for _ in 0..1000 {
+///             let Some(line) = self.text[self.at..].lines().next() else { return Ok(true) };
+///             self.at += line.len() + 1;
+///             self.total += line.trim().parse::<i64>().map_err(|e| Error::new(ErrorKind::Decode, e.to_string()))?;
+///             if self.at >= self.text.len() {
+///                 return Ok(true);
+///             }
+///         }
+///         Ok(false)
+///     }
+///     fn finish(self) -> i64 {
+///         self.total
+///     }
+/// }
+///
+/// Game::new("t", 1, 1).run_headless(0, |ctx| {
+///     ctx.assets.add_background_source(MemorySource::new("data").with("numbers.txt", "1\n2\n3\n"));
+///     let group = AssetGroup::new("data").with_sliced("numbers.txt", |bytes| {
+///         let text = String::from_utf8(bytes).map_err(|e| Error::new(ErrorKind::Decode, e.to_string()))?;
+///         Ok(Sum { text, at: 0, total: 0 })
+///     });
+///     let id = ctx.assets.start_group(group);
+///     while ctx.assets.group_state(id) == GroupState::Loading {
+///         ctx.pump_asset_groups(); // the engine does this once per frame
+///     }
+///     assert_eq!(ctx.assets.take_group_value::<i64>(id, "numbers.txt"), Some(6));
+/// });
+/// ```
+pub trait SliceLoader: Send + 'static {
+    /// What it makes, taken with [`Assets::take_group_value`].
+    type Value: Send + 'static;
+
+    /// Does the next bounded piece of the work; `Ok(true)` once it is all
+    /// done (then [`finish`](Self::finish) is called), `Ok(false)` to be
+    /// called again, an [`Error`] to fail the group.
+    ///
+    /// # Errors
+    ///
+    /// What the loader found wrong with the file, usually
+    /// [`ErrorKind::Decode`]: the group fails with it, naming the asset.
+    fn step(&mut self) -> Result<bool, Error>;
+
+    /// The value, once [`step`](Self::step) returned `Ok(true)`.
+    fn finish(self) -> Self::Value;
+}
+
+/// A [`SliceLoader`] of any value.
+trait AnySlices: Send {
+    fn step(&mut self) -> Result<bool, Error>;
+    fn finish(self: Box<Self>) -> Box<dyn Any + Send>;
+}
+
+impl<L: SliceLoader> AnySlices for L {
+    fn step(&mut self) -> Result<bool, Error> {
+        SliceLoader::step(self)
+    }
+
+    fn finish(self: Box<Self>) -> Box<dyn Any + Send> {
+        Box::new(SliceLoader::finish(*self))
+    }
+}
 
 /// A set of assets to load together in the background: a level's textures,
 /// sounds, meshes and data files, behind a loading screen.
@@ -234,6 +324,46 @@ impl AssetGroup {
         self
     }
 
+    /// Adds asset `path` with your own loader that works a bounded piece at
+    /// a time ([`SliceLoader`]): `start` gets the file's bytes and returns
+    /// the loader (or an [`Error`]), and its value is taken with
+    /// [`Assets::take_group_value`] once it is loaded. Where there are no
+    /// worker threads, the group step calls the loader's `step` within
+    /// its frame budget, so a large file is spread over several frames;
+    /// with workers, it runs on a worker, as [`with`](Self::with) does.
+    /// `start` runs again for each [restart](Assets::restart_group) after
+    /// it failed.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// use ponko::assets::SliceLoader;
+    /// struct Count(Vec<u8>, usize, usize);
+    /// impl SliceLoader for Count {
+    ///     type Value = usize;
+    ///     fn step(&mut self) -> Result<bool, Error> {
+    ///         let end = (self.1 + 4096).min(self.0.len());
+    ///         self.2 += self.0[self.1..end].iter().filter(|&&b| b == b'#').count();
+    ///         self.1 = end;
+    ///         Ok(end == self.0.len())
+    ///     }
+    ///     fn finish(self) -> usize {
+    ///         self.2
+    ///     }
+    /// }
+    /// let group = ponko::assets::AssetGroup::new("level").with_sliced("walls.txt", |bytes| Ok(Count(bytes, 0, 0)));
+    /// assert_eq!(group.len(), 1);
+    /// ```
+    #[must_use]
+    pub fn with_sliced<L: SliceLoader>(
+        mut self,
+        path: &str,
+        start: impl Fn(Vec<u8>) -> Result<L, Error> + Send + Sync + 'static,
+    ) -> Self {
+        let start: SliceStarter = Arc::new(move |bytes| start(bytes).map(|l| Box::new(l) as Box<dyn AnySlices>));
+        self.assets.push((path.to_string(), Kind::Sliced(start)));
+        self
+    }
+
     /// Adds asset `path` as its bytes, a `Vec<u8>` to take with
     /// [`Assets::take_group_value`]: for files decoded on the game thread
     /// later (a C game's own formats).
@@ -416,6 +546,10 @@ pub struct GroupStats {
     pub over_budget: u64,
     /// Bytes the last step uploaded (counted against the upload budget).
     pub frame_bytes: u64,
+    /// Pieces of work the last step ran: reads, decodes, uploads, and
+    /// where there are no workers each slice of a decode. The step checks
+    /// its budget between pieces.
+    pub pieces: u32,
     /// Milliseconds the last step spent uploading: making textures on the
     /// GPU and handing them their pixels (part of `step_ms`). The GPU copies
     /// the pixels in its own time, while it draws the frame.
@@ -426,6 +560,18 @@ pub struct GroupStats {
     pub total_upload_ms: f64,
     /// Bytes every step uploaded, since the game started.
     pub total_upload_bytes: u64,
+    /// The GPU's own time copying the textures of the latest step it timed,
+    /// in milliseconds: what `upload_ms` leaves out. It arrives a frame or
+    /// a few after that step. `None` before the first, and always where the
+    /// GPU can't time uploads (see `gpu_upload_timing`).
+    pub gpu_upload_ms: Option<f32>,
+    /// The GPU's own time copying every step's textures it timed, since the
+    /// game started, in milliseconds.
+    pub total_gpu_upload_ms: f64,
+    /// Whether the GPU times uploads (it has timestamp queries): `false`
+    /// headless, on GPUs without them, and in browsers that don't offer
+    /// them; then only the game thread's time is measured.
+    pub gpu_upload_timing: bool,
 }
 
 /// The default time budget of the game thread's per-frame asset group
@@ -518,6 +664,7 @@ enum SliceWork {
     Texture(Box<sliced::PngSlices>),
     #[cfg(feature = "audio")]
     Sound(sliced::SoundSlices),
+    Value(Box<dyn AnySlices>),
 }
 
 impl Sliced {
@@ -534,6 +681,7 @@ impl Sliced {
             SliceWork::Sound(sound) => sound
                 .step()
                 .map_err(|e| Error::decode(path, format!("{}: {e}", self.origin.describe(path)))),
+            SliceWork::Value(loader) => loader.step().map_err(|e| loader_error(e, &self.origin, path)),
         }
     }
 
@@ -542,6 +690,7 @@ impl Sliced {
             SliceWork::Texture(png) => Done::Texture(self.origin, DecodedTexture::Rgba(png.finish())),
             #[cfg(feature = "audio")]
             SliceWork::Sound(sound) => Done::Sound(self.origin, sound.finish()),
+            SliceWork::Value(loader) => Done::Value(loader.finish()),
         }
     }
 }
@@ -625,10 +774,16 @@ pub(crate) struct Groups {
     /// A group failed or was cancelled since the last step.
     stopping: bool,
     budget_ms: f32,
-    stats: GroupStats,
+    pub(crate) stats: GroupStats,
     /// Tests: decode on the game thread a slice at a time (as where there
     /// are no workers) or not, instead of what the platform has.
-    sliced: Option<bool>,
+    pub(crate) sliced: Option<bool>,
+    /// Tests: what each piece of work counts as, in seconds, instead of the
+    /// time it takes (see [`sliced::WorkClock`]).
+    pub(crate) piece_cost: Option<f64>,
+    /// Seconds the group step spent this frame (counted as the clock
+    /// counts them), for what streaming may still spend.
+    frame_secs: f64,
 }
 
 impl Default for Groups {
@@ -638,6 +793,8 @@ impl Default for Groups {
             loading: 0,
             stopping: false,
             sliced: None,
+            piece_cost: None,
+            frame_secs: 0.0,
             budget_ms: DEFAULT_GROUP_FRAME_BUDGET_MS,
             stats: GroupStats {
                 frame_budget_ms: DEFAULT_GROUP_FRAME_BUDGET_MS,
@@ -660,27 +817,17 @@ fn max_in_flight() -> usize {
     }
 }
 
-/// Whether [`Job`]s run where they are spawned, on the game thread: a
-/// browser build without threads, or one whose page didn't start them.
-fn jobs_run_here() -> bool {
-    #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
-    {
-        crate::web_threads::frame_threads() == 0
-    }
-    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
-    {
-        true
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        false
-    }
-}
-
 impl Groups {
+    /// A clock for the streaming step's slices: what this frame's group
+    /// step left of the frame budget.
+    pub(crate) fn clock_after_step(&self) -> sliced::WorkClock {
+        let budget = f64::from(self.budget_ms) / 1000.0 - self.frame_secs;
+        sliced::WorkClock::new(budget, self.piece_cost)
+    }
+
     /// Whether large decodes run a slice at a time on the game thread.
     fn sliced(&self) -> bool {
-        self.sliced.unwrap_or_else(jobs_run_here)
+        self.sliced.unwrap_or_else(sliced::jobs_run_here)
     }
 
     fn get(&self, id: GroupId) -> &Running {
@@ -1052,6 +1199,7 @@ impl Ctx {
     /// ```
     #[doc(hidden)]
     pub fn pump_asset_groups(&mut self) {
+        self.assets.groups.frame_secs = 0.0;
         if self.assets.groups.stopping {
             self.stop_cancelled_streams();
         }
@@ -1062,19 +1210,19 @@ impl Ctx {
         let budget = f64::from(self.assets.groups.budget_ms) / 1000.0;
         let upload_budget = self.gfx.streaming.budget().unwrap_or(u64::MAX);
         let mut frame = Frame {
-            start,
-            budget,
-            worked: false,
+            clock: sliced::WorkClock::new(budget, self.assets.groups.piece_cost),
             upload_budget,
             spent: 0,
             uploads: 0,
             upload_secs: 0.0,
         };
+        self.gfx.begin_timed_uploads(true);
         for index in 0..self.assets.groups.list.len() {
             if self.assets.groups.list[index].state == GroupState::Loading {
                 self.pump_group(index, &mut frame);
             }
         }
+        self.gfx.end_timed_uploads();
         let (bytes, uploads) = &mut self.gfx.streaming.group_uploads;
         *bytes += frame.spent;
         *uploads += frame.uploads;
@@ -1084,6 +1232,8 @@ impl Ctx {
         stats.step_ms = ms;
         stats.max_step_ms = stats.max_step_ms.max(ms);
         stats.frame_bytes = frame.spent;
+        stats.pieces = frame.clock.pieces();
+        self.assets.groups.frame_secs = frame.clock.elapsed();
         let upload_ms = (frame.upload_secs * 1000.0) as f32;
         stats.upload_ms = upload_ms;
         stats.max_upload_ms = stats.max_upload_ms.max(upload_ms);
@@ -1149,7 +1299,7 @@ impl Ctx {
             group.next += 1;
             group.in_flight += 1;
             let started = self.start_item(index, i);
-            frame.worked = true;
+            frame.clock.piece();
             // A browser decodes as it starts: take it at once.
             if let Err(error) = started.and_then(|()| self.advance_item(index, i, frame)) {
                 self.item_failed(index, i, error);
@@ -1270,10 +1420,23 @@ impl Ctx {
             })),
             Kind::Value(decode) => Step::Working(Job::spawn(move || {
                 let (origin, bytes) = read()?;
-                decode(&bytes).map(Done::Value).map_err(|e| {
-                    e.context(format!("{} could not be decoded", origin.describe(&path)))
-                        .with_path(&path)
-                })
+                decode(&bytes)
+                    .map(Done::Value)
+                    .map_err(|e| loader_error(e, &origin, &path))
+            })),
+            Kind::Sliced(start) if sliced => {
+                let (origin, bytes) = read()?;
+                let loader = start(bytes).map_err(|e| loader_error(e, &origin, &path))?;
+                Step::Sliced(Box::new(Sliced {
+                    work: SliceWork::Value(loader),
+                    origin,
+                }))
+            }
+            Kind::Sliced(start) => Step::Working(Job::spawn(move || {
+                let (origin, bytes) = read()?;
+                let mut loader = start(bytes).map_err(|e| loader_error(e, &origin, &path))?;
+                while !loader.step().map_err(|e| loader_error(e, &origin, &path))? {}
+                Ok(Done::Value(loader.finish()))
             })),
         };
         self.assets.groups.list[index].items[i].step = step;
@@ -1295,7 +1458,7 @@ impl Ctx {
                 if !frame.may_work() {
                     return Ok(());
                 }
-                frame.worked = true;
+                frame.clock.piece();
                 if work.step(&item.path)? {
                     break;
                 }
@@ -1337,7 +1500,7 @@ impl Ctx {
                         self.assets.groups.list[index].values.insert(path, value);
                     }
                 }
-                frame.worked = true;
+                frame.clock.piece();
                 true
             }
             Step::Streaming { mesh } => {
@@ -1434,11 +1597,7 @@ impl Ctx {
 
 /// The time and bytes one frame's step may still spend.
 struct Frame {
-    start: crate::perf::Instant,
-    /// Seconds.
-    budget: f64,
-    /// Whether any work ran yet (the first piece always may).
-    worked: bool,
+    clock: sliced::WorkClock,
     upload_budget: u64,
     spent: u64,
     uploads: u32,
@@ -1448,7 +1607,7 @@ struct Frame {
 
 impl Frame {
     fn may_work(&self) -> bool {
-        !self.worked || self.start.elapsed().as_secs_f64() < self.budget
+        self.clock.may_work()
     }
 
     /// Whether `bytes` more may be uploaded now: within the time and the
@@ -1459,6 +1618,13 @@ impl Frame {
         }
         bytes == 0 || self.uploads == 0 || self.spent + bytes <= self.upload_budget
     }
+}
+
+/// An error a game's own loader returned for asset `path`, found at `origin`.
+fn loader_error(error: Error, origin: &Origin, path: &str) -> Error {
+    error
+        .context(format!("{} could not be decoded", origin.describe(path)))
+        .with_path(path)
 }
 
 /// An error about item `path`, naming it if it names nothing.
@@ -1630,12 +1796,13 @@ mod tests {
         bytes
     }
 
-    /// Runs the group step until `id` stops loading; each step's time.
-    fn steps_until_done(ctx: &mut Ctx, id: GroupId) -> Vec<f32> {
+    /// Runs the group step until `id` stops loading; the pieces of work
+    /// each step ran.
+    fn steps_until_done(ctx: &mut Ctx, id: GroupId) -> Vec<u32> {
         let mut steps = Vec::new();
         while ctx.assets.group_state(id) == GroupState::Loading {
             ctx.pump_asset_groups();
-            steps.push(ctx.assets.group_stats().step_ms);
+            steps.push(ctx.assets.group_stats().pieces);
             assert!(steps.len() < 100_000, "the group never finished");
         }
         steps
@@ -1662,36 +1829,121 @@ mod tests {
     }
 
     #[test]
-    fn without_workers_a_long_png_decode_keeps_each_step_near_the_frame_budget() {
-        let png = noise_png(2048, 2048);
-        // The decode in one piece, as a browser without threads did it.
-        let started = std::time::Instant::now();
-        let whole = crate::assets::decode_image(&png, "big.png", "big.png").unwrap();
-        let whole_ms = started.elapsed().as_secs_f32() * 1000.0;
-        assert_eq!(whole.width, 2048);
+    fn without_workers_a_long_png_decode_runs_as_many_slices_a_step_as_the_budget_holds() {
+        let (side, budget_ms, piece_ms) = (2048u32, 0.5f32, 0.125f64);
         Game::new("t", 1, 1).hot_reload(false).run_headless(0, |ctx| {
             ctx.assets.groups.sliced = Some(true);
+            // Each piece of work counts as 0.125 ms whatever it really takes,
+            // so the pieces a step runs follow from the budget alone (a busy
+            // machine can't change them): four a step.
+            ctx.assets.groups.piece_cost = Some(piece_ms / 1000.0);
             ctx.assets
-                .add_background_source(MemorySource::new("mem").with("big.png", png));
-            // Below the decode's few milliseconds here (a browser's is
-            // slower), so it must be spread.
-            let budget = 0.5;
-            ctx.assets.set_group_frame_budget(budget);
+                .add_background_source(MemorySource::new("mem").with("big.png", noise_png(side, side)));
+            ctx.assets.set_group_frame_budget(budget_ms);
             let id = ctx.assets.start_group(AssetGroup::new("big").texture("big.png"));
-            let mut steps = steps_until_done(ctx, id);
+            let steps = steps_until_done(ctx, id);
             assert_eq!(ctx.assets.group_state(id), GroupState::Ready);
-            let total: f32 = steps.iter().sum();
-            steps.sort_by(f32::total_cmp);
-            let median = steps[steps.len() / 2];
-            eprintln!(
-                "one piece: {whole_ms:.1} ms; sliced at a {budget} ms budget: {} steps, median {median:.2} ms, \
-                 longest {:.2} ms, {total:.1} ms in all",
-                steps.len(),
-                steps[steps.len() - 1]
-            );
-            // Spread over frames. The times are printed, not asserted: on a
-            // busy machine a paused thread stretches any of them.
-            assert!(steps.len() >= 3, "{} steps", steps.len());
+            assert_eq!(ctx.gfx.load_texture("big.png").width(), side);
+
+            let per_step = (f64::from(budget_ms) / piece_ms) as u32;
+            assert_eq!(per_step, 4);
+            // 64 KiB of RGBA a slice: 8 rows of 2048 pixels, 256 slices.
+            let rows_per_slice = (sliced::SLICE_BYTES / (side as usize * 4)) as u32;
+            let slices = side.div_ceil(rows_per_slice);
+            assert_eq!(slices, 256);
+            // Every step stops at the budget, and the pieces are the read,
+            // each slice once, and the upload.
+            assert!(steps.iter().all(|&p| (1..=per_step).contains(&p)), "{steps:?}");
+            assert_eq!(steps.iter().sum::<u32>(), 1 + slices + 1);
+            // The first step reads and decodes three slices; then four
+            // slices a step; the last step's one slice leaves room for the
+            // upload.
+            let full_steps = (slices - (per_step - 1)).div_ceil(per_step);
+            assert_eq!(steps.len() as u32, 1 + full_steps, "{steps:?}");
+            assert_eq!(steps[0], per_step);
+            assert_eq!(*steps.last().unwrap(), 2, "a slice and the upload");
+        });
+    }
+
+    /// A [`SliceLoader`] of `calls` calls, counting them.
+    struct Counter {
+        calls: u32,
+        done: u32,
+        fail_at: Option<u32>,
+    }
+
+    impl SliceLoader for Counter {
+        type Value = u32;
+        fn step(&mut self) -> Result<bool, Error> {
+            self.done += 1;
+            if Some(self.done) == self.fail_at {
+                return Err(Error::new(ErrorKind::Decode, "a bad record"));
+            }
+            Ok(self.done == self.calls)
+        }
+        fn finish(self) -> u32 {
+            self.done
+        }
+    }
+
+    #[test]
+    fn without_workers_a_sliced_loader_runs_as_many_calls_a_step_as_the_budget_holds() {
+        Game::new("t", 1, 1).hot_reload(false).run_headless(0, |ctx| {
+            ctx.assets.groups.sliced = Some(true);
+            ctx.assets.groups.piece_cost = Some(0.125 / 1000.0);
+            ctx.assets.set_group_frame_budget(0.5);
+            ctx.assets
+                .add_background_source(MemorySource::new("mem").with("level.dat", "x"));
+            let group = AssetGroup::new("level").with_sliced("level.dat", |bytes| {
+                assert_eq!(bytes, b"x");
+                Ok(Counter {
+                    calls: 100,
+                    done: 0,
+                    fail_at: None,
+                })
+            });
+            let id = ctx.assets.start_group(group);
+            let steps = steps_until_done(ctx, id);
+            assert_eq!(ctx.assets.group_state(id), GroupState::Ready);
+            // Called exactly as often as it needed, never more.
+            assert_eq!(ctx.assets.take_group_value::<u32>(id, "level.dat"), Some(100));
+            // Four pieces a step: the read and three calls, then four calls
+            // a step (97 = 24 x 4 + 1), the last call with taking the value.
+            assert!(steps.iter().all(|&p| (1..=4).contains(&p)), "{steps:?}");
+            assert_eq!(steps.iter().sum::<u32>(), 1 + 100 + 1);
+            assert_eq!(steps.len(), 1 + 25, "{steps:?}");
+        });
+    }
+
+    #[test]
+    fn without_workers_a_sliced_loader_error_fails_the_group_naming_the_asset_and_restarts() {
+        Game::new("t", 1, 1).hot_reload(false).run_headless(0, |ctx| {
+            ctx.assets.groups.sliced = Some(true);
+            ctx.assets.set_group_frame_budget(0.0);
+            ctx.assets
+                .add_background_source(MemorySource::new("mem").with("level.dat", "x"));
+            let starts = Arc::new(AtomicU64::new(0));
+            let counted = Arc::clone(&starts);
+            let group = AssetGroup::new("level").with_sliced("level.dat", move |_| {
+                // Fails on its fifth call the first time only.
+                let first = counted.fetch_add(1, Ordering::Relaxed) == 0;
+                Ok(Counter {
+                    calls: 10,
+                    done: 0,
+                    fail_at: first.then_some(5),
+                })
+            });
+            let id = ctx.assets.start_group(group);
+            let steps = steps_until_done(ctx, id);
+            assert_eq!(steps.len(), 1 + 5, "the read, then a call a step until the fifth fails");
+            let error = ctx.assets.group_error(id).unwrap();
+            assert_eq!((error.kind(), error.path()), (ErrorKind::Decode, Some("level.dat")));
+            assert!(error.to_string().contains("a bad record"), "{error}");
+            ctx.assets.restart_group(id);
+            steps_until_done(ctx, id);
+            assert_eq!(ctx.assets.group_state(id), GroupState::Ready);
+            assert_eq!(starts.load(Ordering::Relaxed), 2);
+            assert_eq!(ctx.assets.take_group_value::<u32>(id, "level.dat"), Some(10));
         });
     }
 
