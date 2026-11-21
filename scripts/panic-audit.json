@@ -3425,12 +3425,6 @@
     "reason": "Preserves setup/runtime policy; displays the checked operation error. /// or the GPU can't make a texture that large.     pub fn create_ui_panel(&mut self, width: u32, height: u32, size: Vec2) -> (UiPanel3D, crate::render::Model) {         self.try_create_ui_panel(width, height, size)             .unwrap_or_else(|message| panic!(\"{message}\"))",
     "site": "src/ui/panel3d.rs:195"
   },
-  "src/ui/retained.rs:010e9dbca8b3f128": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "Screens and HUDs hold live roots: Ui::remove takes a removed root off both lists.",
-    "site": "src/ui/retained.rs:1707"
-  },
   "src/ui/retained.rs:0274e1172425e574": {
     "classification": "caller-contract",
     "construction": "assert!( self.node(root).is_some_and(|n| n.parent.is_none()), \"UI screen must be a detached root; add a root node or detach it before pushing\" )",
@@ -3556,6 +3550,12 @@
     "construction": "assert!( !self.is_screen(root), \"UI HUD is already a screen; pop it before showing it as a HUD\" )",
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. self.node(root).is_some_and(|n| n.parent.is_none()),             \"UI HUD must be a detached root; add a root node or detach it first\"         );         assert!(",
     "site": "src/ui/retained.rs:1124"
+  },
+  "src/ui/retained.rs:785a0ef1e04eb5d2": {
+    "classification": "invariant",
+    "construction": ".unwrap()",
+    "reason": "HUD and screen roots are live nodes: a root's node is freed only when it is removed from huds/screens.",
+    "site": "src/ui/retained.rs:1798"
   },
   "src/ui/retained.rs:842ad1d2c7596002": {
     "classification": "invariant",

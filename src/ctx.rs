@@ -508,8 +508,9 @@ impl Ctx {
             debug: crate::debug::DebugDraw::default(),
             storage: crate::storage::Storage::default(),
         };
+        ctx.window.set_logical_size(window_size);
         // On-screen controls are placed for the window from the start.
-        ctx.input.touch.view = (window_size, 1.0);
+        ctx.input.touch.view = (Rect::new(0.0, 0.0, window_size.x, window_size.y), 1.0);
         #[cfg(feature = "3d")]
         ctx.sync_audio_camera();
         ctx
@@ -731,6 +732,7 @@ impl Ctx {
 
     pub(crate) fn set_window_size(&mut self, size: Vec2) {
         self.window_size = size;
+        self.window.set_logical_size(size);
         self.place_cameras();
     }
 

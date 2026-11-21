@@ -301,14 +301,78 @@ queued with its root (`ctx.ui.find("touch.arrange")` while it is open). Its node
 are named `touch.arrange.<part>` (`title`, `note`, `size_label`,
 `opacity_label`, `reset`, `cancel`, `save`, ...): give them the game's own
 words with `ctx.ui.set_text` or [`set_text_key`](localization.md) after
-opening it. The engine reports no safe areas (a phone's notch or rounded
-corners) yet, so the panel keeps a 12 unit margin from the view's edges.
+opening it. The panel stays inside the window's
+[safe area](#notches-home-bars-and-rounded-corners), 12 units from its
+edges.
 
 The test that drives it with scripted fingers, as a phone would:
 
 ```rust
 {{#include ../../tests/touch_arrange.rs:fingers}}
 ```
+
+## Notches, home bars and rounded corners
+
+A phone's notch or camera hole, its home bar and its rounded corners
+cover parts of the screen. `ctx.window.safe_area()` is the part nothing covers,
+a `Rect` in the same logical pixels as `ctx.window_size()`, and
+`ctx.window.safe_insets()` says how far in from each edge the covered parts
+reach. Where nothing covers the window (desktops), it is the whole
+window.
+
+- **The engine's controls stay inside it.** On-screen controls are laid
+  out in the safe area, a `TouchPlace` counts from its corners, a control
+  the player drags stops at its edge and is kept anchored to its nearest
+  corner, and the [arrange screen](#the-ready-made-arrange-screen)'s panel
+  stays in it. When the phone turns, the safe area moves and they follow.
+- **The game's UI chooses.** A UI root made with `.inside_safe_area()`
+  (or `ctx.ui.set_inside_safe_area(root, true)`) is laid out in the safe
+  area: its sizes, fractions, anchors and `auto` margins count from the
+  safe area's edges, so a HUD in a corner keeps clear of the notch and a
+  centred dialog is centred in what the player sees. Roots are laid out in
+  the whole window by default, so a backdrop still reaches under the notch.
+
+```rust
+# use ponko::prelude::*;
+# fn setup(ctx: &mut Ctx) {
+// A backdrop under everything, the notch too.
+let backdrop = ctx.ui.root().layout(UiLayout::fill()).id();
+ctx.ui.show_hud(backdrop);
+// The score in the top left corner of what the player can see.
+let hud = ctx.ui.root().layout(UiLayout::fill()).inside_safe_area().id();
+ctx.ui.label(hud, "Score 0").layout(UiLayout::fixed(120.0, 30.0));
+ctx.ui.show_hud(hud);
+# }
+```
+
+- **Where it comes from.** In the browser the engine reads the page's
+  `env(safe-area-inset-*)`, at start and whenever the window changes size
+  (turning the phone does). A browser reports insets only for a page that
+  asks to draw under the notch, with `viewport-fit=cover` in its viewport
+  `<meta>` tag; without it the browser keeps the whole page clear of the
+  notch, and the safe area is the whole canvas. Desktop windows have no
+  insets (a full-screen window on a Mac with a notch is placed below it).
+  Ponko has no iOS or Android builds yet.
+- **Testing.** `ctx.window.feed_safe_insets(SafeInsets::new(top, right, bottom, left))`
+  feeds the insets a phone would report, as a test does, and so can a
+  platform layer of the game's own. The UI lays out with them from the
+  next frame.
+
+```rust
+# use ponko::prelude::*;
+use ponko::window::SafeInsets;
+Game::new("notch", 844, 390).run_headless(1, |ctx| {
+    // A phone held sideways: the notch on the left, the home bar below.
+    ctx.window.feed_safe_insets(SafeInsets::new(0.0, 0.0, 21.0, 47.0));
+    assert_eq!(ctx.window.safe_area(), Rect::new(47.0, 0.0, 797.0, 369.0));
+});
+```
+
+What needs a person: the tests feed the insets a phone reports and check
+that the controls, the panel and the game's UI keep out of them; that a
+given phone's browser reports its notch, and that the controls sit
+comfortably beside it, only someone with that phone can see. No real
+notch has been tested yet.
 
 ## Touch screens on desktops
 
