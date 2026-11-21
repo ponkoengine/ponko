@@ -5,7 +5,7 @@
 //! Skips without a GPU or without timestamp queries.
 use super::render_test_support::*;
 use crate::d3::Transform as Transform3D;
-use crate::perf::{GpuTiming, GPU_TIMING_EVERY};
+use crate::perf::{GPU_TIMING_EVERY, GpuTiming};
 use crate::prelude::*;
 use crate::render::{FrameStatus, MaterialDesc, MeshData, Model};
 use crate::time::FrameTiming;
@@ -283,7 +283,13 @@ fn allocations_per_frame_fall_as_gpu_timing_gets_rarer() {
         "game-thread allocations per frame: every frame {every:.1}, every 4th {fourth:.1}, \
          default (every 16th) {sixteenth:.1}, off {off:.1}"
     );
-    assert!(every > fourth, "every frame ({every}) costs more than every 4th ({fourth})");
-    assert!(fourth > sixteenth, "every 4th ({fourth}) costs more than every 16th ({sixteenth})");
+    assert!(
+        every > fourth,
+        "every frame ({every}) costs more than every 4th ({fourth})"
+    );
+    assert!(
+        fourth > sixteenth,
+        "every 4th ({fourth}) costs more than every 16th ({sixteenth})"
+    );
     assert!(sixteenth > off, "every 16th ({sixteenth}) costs more than off ({off})");
 }
