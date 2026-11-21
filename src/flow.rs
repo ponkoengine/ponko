@@ -279,33 +279,39 @@ impl FlowField {
 
         // Directions: each reached cell points at its closest neighbor, in parallel.
         let dist = &self.dist;
-        self.dir[stride..n - stride]
-            .par_chunks_mut(stride)
-            .enumerate()
-            .for_each(|(y, row)| {
-                let base = (y + 1) * stride;
-                for (x, out) in row.iter_mut().enumerate().take(w + 1).skip(1) {
-                    let i = base + x;
-                    let here = dist[i];
-                    if here == 0 || here == UNREACHED {
-                        continue;
-                    }
-                    let mut best = (here, NONE);
-                    for k in 0..8 {
-                        if k % 2 == 1 {
-                            let (sx, sy) = sides[k];
-                            if costs[(i as isize + sx) as usize] == 0 || costs[(i as isize + sy) as usize] == 0 {
-                                continue;
+        let dir = &mut self.dir;
+        // On the frame pool (on the web, its workers, not the page's
+        // thread), as parallel queries run.
+        crate::frame_pool::run(|| {
+            crate::profile_scope!("flow/shared_directions");
+            dir[stride..n - stride]
+                .par_chunks_mut(stride)
+                .enumerate()
+                .for_each(|(y, row)| {
+                    let base = (y + 1) * stride;
+                    for (x, out) in row.iter_mut().enumerate().take(w + 1).skip(1) {
+                        let i = base + x;
+                        let here = dist[i];
+                        if here == 0 || here == UNREACHED {
+                            continue;
+                        }
+                        let mut best = (here, NONE);
+                        for k in 0..8 {
+                            if k % 2 == 1 {
+                                let (sx, sy) = sides[k];
+                                if costs[(i as isize + sx) as usize] == 0 || costs[(i as isize + sy) as usize] == 0 {
+                                    continue;
+                                }
+                            }
+                            let there = dist[(i as isize + off[k]) as usize];
+                            if there < best.0 {
+                                best = (there, k as u8);
                             }
                         }
-                        let there = dist[(i as isize + off[k]) as usize];
-                        if there < best.0 {
-                            best = (there, k as u8);
-                        }
+                        *out = best.1;
                     }
-                    *out = best.1;
-                }
-            });
+                });
+        });
     }
 
     /// The field's raw arrays, for the C API's inline lookups.

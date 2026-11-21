@@ -1918,6 +1918,9 @@ impl Renderer3D {
     /// Starts reading this frame's occlusion depth back. Call after submitting.
     pub fn submitted(&mut self) {
         self.occlusion.submitted();
+        if let Some(gi) = &self.gi {
+            gi.submitted();
+        }
     }
 
     /// For a device without view formats (WebGL2): a sprite texture is read

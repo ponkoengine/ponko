@@ -83,6 +83,21 @@ pub(crate) struct Document {
     /// The file changed on disk while there were unsaved changes: the
     /// person decides between [`Editor::reload`] and [`Editor::keep_mine`].
     pub conflict: bool,
+    /// The glTF scenes the scene names that didn't load when it was
+    /// opened (their files are missing or broken), for the status line.
+    pub unloaded: Vec<Unloaded>,
+}
+
+/// A glTF scene that a scene file names and that didn't load when the
+/// scene was opened: it stays out of the world, and its record (with its
+/// overrides) stays in the scene.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(feature = "editor"), allow(dead_code))]
+pub(crate) struct Unloaded {
+    /// Its file in `assets/`.
+    pub file: String,
+    /// Why it didn't load.
+    pub why: String,
 }
 
 impl Document {
@@ -94,6 +109,7 @@ impl Document {
         self.saved = state;
         self.conflict = false;
         self.next_check = None;
+        self.unloaded.clear();
     }
 
     /// The file's name for a title: its path, or "untitled scene".
@@ -155,14 +171,21 @@ impl Editor {
             )
             .with_path(path)
         })?;
+        #[cfg_attr(not(feature = "3d"), allow(unused_mut))]
+        let mut unloaded = Vec::new();
         match kind {
             Kind::Scene => {
                 ctx.load_scene(path)?;
                 // Its glTF scenes, as the game spawns them after a load
-                // (with their overrides).
+                // (with their overrides). One that doesn't load stays out,
+                // and the status line names it.
                 #[cfg(feature = "3d")]
-                for e in ctx.respawn_saved_gltf() {
+                for (file, e) in ctx.respawn_saved_gltf() {
                     eprintln!("ponko: {path}: {e}");
+                    unloaded.push(Unloaded {
+                        file,
+                        why: e.message().to_string(),
+                    });
                 }
             }
             Kind::Prefab => {
@@ -180,6 +203,7 @@ impl Editor {
             }
         }
         self.reset_document(ctx, Some(path.to_string()), kind);
+        self.doc.unloaded = unloaded;
         Ok(kind)
     }
 

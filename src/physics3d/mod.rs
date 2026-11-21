@@ -715,6 +715,8 @@ pub struct Physics3D {
     contact_hooked: Vec<(Entity, ContactModifier3D)>,
     contact_spare: Vec<(Entity, ContactModifier3D)>,
     contact_hook: Option<contacts::ContactHook>,
+    /// Makes loaded terrain tiles' heightfields (see `set_terrain_rebuild`).
+    terrain_rebuild: Option<streaming::TerrainRebuild>,
 }
 
 impl Default for Physics3D {
@@ -792,6 +794,7 @@ impl Physics3D {
             contact_hooked: Vec::new(),
             contact_spare: Vec::new(),
             contact_hook: None,
+            terrain_rebuild: None,
         }
     }
 
@@ -1502,6 +1505,7 @@ pub(crate) fn start(ctx: &mut Ctx, gravity: Vec3) {
     ctx.world.reflect::<Character3D>();
     ctx.world.reflect::<Vehicle3D>();
     ctx.world.reflect::<ColliderFocus>();
+    ctx.world.reflect::<TerrainCollider>();
     ctx.world.reflect::<Joint3D>();
 }
 
