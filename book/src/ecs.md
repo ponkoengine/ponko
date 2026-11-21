@@ -803,6 +803,9 @@ operation itself, registered per component type:
 | `on_replace::<T>` | before `insert` overwrites an entity's `T`; the old value is in the world, the new one is passed in |
 | `on_remove::<T>` | before a `T` leaves (`remove`, `despawn`, `clear`), while it is still there |
 
+<div class="lang-pair">
+<div>
+
 ```rust
 use std::collections::HashMap;
 
@@ -852,6 +855,16 @@ ctx.world.despawn(crab);
 assert!(ctx.world.resource::<Names>().0.is_empty());
 ```
 
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:component_hooks}}
+```
+
+</div>
+</div>
+
 - **A hook can't change the world's structure right away.** It gets a
   `HookWorld`: components, resources and queries, read and write, but
   spawns, despawns, inserts and removes go to `world.commands()`. They are
@@ -884,8 +897,18 @@ both: the transform hierarchy notes a despawned parent's children with an
 `on_remove` hook on `Children`, while physics drops the bodies of despawned
 entities once per step, in entity order, which keeps runs deterministic.
 
-Hooks are Rust only for now: C and C++ can't register them yet. Their
-spawns, inserts and removes do run the hooks registered from Rust.
+From C, `ponko_component_on_add`, `_on_replace` and `_on_remove` register
+a hook on a plain component (registered from C, or a built-in C sees as
+its own bytes): it gets a `PonkoHookWorld` and a `PonkoHookEvent` with
+the entity, the value and, for a replace, the new one. Inside it,
+`ponko_hook_get` and `ponko_hook_write` read and write components in
+place, and `ponko_hook_spawn_later`, `_set_later`, `_remove_later` and
+`_despawn_later` record structural changes, the same rules as
+`HookWorld`; the world's own calls return `PONKO_BUSY` there. C++ wraps
+them as `world.on_add<T>`, `on_replace<T>` and `on_remove<T>` with a
+`ponko::hook_world`; an exception a hook throws is rethrown when the
+system returns. Hooks registered from any language run for changes made
+from any language.
 
 ## Resources
 

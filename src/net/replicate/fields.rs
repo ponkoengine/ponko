@@ -723,6 +723,14 @@ pub(crate) fn schema_of<T: Replicate>() -> Vec<FieldSpec> {
     specs
 }
 
+/// The words of `value`'s type, described from `value` itself (for values
+/// whose layout is data, such as inputs declared from C).
+pub(crate) fn schema_of_value<T: Replicate>(value: &T) -> Vec<FieldSpec> {
+    let mut specs = Vec::new();
+    value.clone().fields(&mut Fields::describe(&mut specs));
+    specs
+}
+
 /// `value`'s words into `out` (as many as its schema has).
 pub(crate) fn write_words<T: Replicate>(value: &T, out: &mut [u32]) {
     value.clone().fields(&mut Fields::writer(out));

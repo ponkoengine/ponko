@@ -355,6 +355,7 @@ pub struct LightmapRect {
 /// world.spawn((ponko::d3::Transform::default(), ponko::render::Lightmapped(0)));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ponko_ecs::Component)]
+#[repr(transparent)]
 pub struct Lightmapped(pub u32);
 
 /// How a bake went.

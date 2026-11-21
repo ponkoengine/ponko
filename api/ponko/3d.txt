@@ -5957,6 +5957,7 @@ impl core::marker::StructuralPartialEq for ponko::net::PredictionStats
 pub struct ponko::net::RawEvent
 pub ponko::net::RawEvent::bytes: alloc::vec::Vec<u8>
 impl ponko::net::RawEvent
+pub fn ponko::net::RawEvent::kind(&self) -> u16
 pub fn ponko::net::RawEvent::name(&self) -> &str
 impl core::clone::Clone for ponko::net::RawEvent
 pub fn ponko::net::RawEvent::clone(&self) -> Self
@@ -6021,6 +6022,7 @@ impl core::marker::StructuralPartialEq for ponko::net::Replicated
 impl ponko_ecs::bundle::Component for ponko::net::Replicated
 pub struct ponko::net::Replication
 impl ponko::net::Replication
+pub const ponko::net::Replication::RAW_INTERPOLATED_FLOATS: usize
 pub fn ponko::net::Replication::budget(self, u32) -> Self
 pub fn ponko::net::Replication::client_stats(&self) -> ponko::net::ClientStats
 pub fn ponko::net::Replication::clients(&self) -> alloc::vec::Vec<ponko::net::PeerId>
@@ -6028,6 +6030,8 @@ pub fn ponko::net::Replication::component<T: ponko::net::Replicate + ponko_ecs::
 pub fn ponko::net::Replication::entity(&self, ponko::net::NetId) -> core::option::Option<ponko_ecs::entity::Entity>
 pub fn ponko::net::Replication::error(&self) -> core::option::Option<&str>
 pub fn ponko::net::Replication::event<T: serde_core::ser::Serialize + serde_core::de::DeserializeOwned + core::marker::Send + core::marker::Sync + 'static>(self) -> Self
+pub fn ponko::net::Replication::has_input(&self) -> bool
+pub fn ponko::net::Replication::has_raw_input(&self) -> bool
 pub fn ponko::net::Replication::input<I: ponko::net::Replicate>(self) -> Self
 pub fn ponko::net::Replication::input_of<I: ponko::net::Replicate>(&self, ponko::net::PeerId) -> core::option::Option<I>
 pub fn ponko::net::Replication::interest(self, ponko::net::InterestConfig) -> Self
@@ -6042,9 +6046,17 @@ pub fn ponko::net::Replication::position(self, impl core::ops::function::Fn(&pon
 pub fn ponko::net::Replication::predicted<S, I>(self, impl core::ops::function::Fn(&mut S, &I) + core::marker::Send + core::marker::Sync + 'static) -> Self where S: ponko::net::Replicate + ponko_ecs::bundle::Component + core::cmp::PartialEq, I: ponko::net::Replicate
 pub fn ponko::net::Replication::raw_component(self, &str, ponko_ecs::storage::ComponentId, usize, alloc::vec::Vec<ponko::net::RawField>) -> Self
 pub fn ponko::net::Replication::raw_event(self, &str) -> Self
+pub fn ponko::net::Replication::raw_event_kind(&self, &str) -> core::option::Option<u16>
+pub fn ponko::net::Replication::raw_event_name(&self, u16) -> core::option::Option<&str>
+pub fn ponko::net::Replication::raw_fields(&self, &str) -> core::option::Option<&[ponko::net::RawField]>
+pub fn ponko::net::Replication::raw_input(self, &str, usize, alloc::vec::Vec<ponko::net::RawField>) -> Self
+pub fn ponko::net::Replication::raw_input_of(&self, ponko::net::PeerId) -> core::option::Option<&[u8]>
+pub fn ponko::net::Replication::raw_interpolated(self, &str, ponko::net::SnapshotConfig) -> Self
+pub fn ponko::net::Replication::raw_predicted(self, &str, impl core::ops::function::Fn(&mut [u8], &[u8]) + core::marker::Send + core::marker::Sync + 'static) -> Self
 pub fn ponko::net::Replication::role(&self) -> ponko::net::ReplicationRole
 pub fn ponko::net::Replication::server_tick(&self) -> u64
 pub fn ponko::net::Replication::set_input<I: ponko::net::Replicate>(&mut self, I)
+pub fn ponko::net::Replication::set_raw_input(&mut self, &[u8])
 pub fn ponko::net::Replication::set_viewer(&mut self, ponko::net::PeerId, core::option::Option<glam::f32::vec3::Vec3>)
 pub fn ponko::net::Replication::to_client<T: serde_core::ser::Serialize + 'static>(&mut self, ponko::net::PeerId, &T)
 pub fn ponko::net::Replication::to_client_raw(&mut self, ponko::net::PeerId, &str, &[u8]) -> core::result::Result<(), ponko::error::Error>
@@ -10842,7 +10854,7 @@ impl core::fmt::Debug for ponko::render::LightmapRect
 pub fn ponko::render::LightmapRect::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::render::LightmapRect
 impl core::marker::StructuralPartialEq for ponko::render::LightmapRect
-pub struct ponko::render::Lightmapped(pub u32)
+#[repr(transparent)] pub struct ponko::render::Lightmapped(pub u32)
 impl core::clone::Clone for ponko::render::Lightmapped
 pub fn ponko::render::Lightmapped::clone(&self) -> Self
 impl core::cmp::Eq for ponko::render::Lightmapped

@@ -74,6 +74,8 @@ mod lockstep_conformance;
 mod message_conformance;
 mod messages;
 #[cfg(test)]
+mod raw_replication_conformance;
+#[cfg(test)]
 mod replication_conformance;
 #[cfg(test)]
 mod scripted;

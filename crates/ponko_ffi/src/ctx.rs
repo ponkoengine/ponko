@@ -41,6 +41,9 @@ pub struct PonkoCtx {
     fps: f32,
     random_bits: u64,
     window: PonkoVec2,
+    /// Arrays handed to C that live until the callback returns
+    /// (`events_kept`); touched only under `events_busy`.
+    kept: std::cell::UnsafeCell<Vec<Box<dyn std::any::Any>>>,
 }
 
 /// Lends `ctx` to C for one callback.
@@ -77,6 +80,7 @@ pub(crate) fn with_ctx<R>(ctx: &mut Ctx, f: impl FnOnce(*mut PonkoCtx) -> R) -> 
         fps: snapshot.5,
         random_bits: snapshot.6,
         window: snapshot.7,
+        kept: std::cell::UnsafeCell::new(Vec::new()),
     };
     f(&mut handle)
 }
@@ -127,6 +131,30 @@ pub(crate) unsafe fn events<R>(
     // SAFETY: `events` is a field only these calls touch, one at a time
     // (the flag), and ctx-wide calls never run while a C callback runs.
     f(unsafe { &mut (*handle.ctx).events })
+}
+
+/// Events made into an array for C (`f` builds it from the events, inside
+/// `ponko_query` callbacks too), kept until the callback returns: its
+/// pointer and length. An empty array isn't kept, and allocates nothing.
+pub(crate) unsafe fn events_kept<T: 'static>(
+    handle: *const PonkoCtx,
+    f: impl FnOnce(&mut ponko::prelude::Events) -> Result<Box<[T]>, Failure>,
+) -> Result<(*const T, usize), Failure> {
+    if handle.is_null() {
+        return Err(invalid("ctx is null"));
+    }
+    // SAFETY: caller supplies a live ctx from a running callback.
+    let handle = unsafe { &*handle };
+    let _held = hold(handle, &handle.events_busy, "events are off during ponko_query_par")?;
+    // SAFETY: as in `events`: the flag gives this call the events alone.
+    let array = f(unsafe { &mut (*handle.ctx).events })?;
+    let (ptr, len) = (array.as_ptr(), array.len());
+    if len > 0 {
+        // SAFETY: `kept` is touched only under the events flag, held here;
+        // moving the box doesn't move its elements, so `ptr` stays valid.
+        unsafe { (*handle.kept.get()).push(Box::new(array)) };
+    }
+    Ok((ptr, len))
 }
 
 /// Clears a part's busy flag when the call that took it ends.
@@ -1243,13 +1271,13 @@ pub unsafe extern "C" fn ponko_ctx_set_camera(ctx: *mut PonkoCtx, camera: *const
 // ---- commands -----------------------------------------------------------------
 
 /// Values copied out of C memory for a later spawn or insert.
-struct Owned {
+pub(crate) struct Owned {
     bytes: Vec<u8>,
     /// (component, offset, size) per value.
     parts: Vec<(u32, usize, usize)>,
 }
 impl Owned {
-    unsafe fn copy(values: &[PonkoValue]) -> Result<Self, Failure> {
+    pub(crate) unsafe fn copy(values: &[PonkoValue]) -> Result<Self, Failure> {
         let mut owned = Owned {
             bytes: Vec::new(),
             parts: Vec::with_capacity(values.len()),
@@ -1267,7 +1295,7 @@ impl Owned {
         }
         Ok(owned)
     }
-    fn values(&self) -> Vec<PonkoValue> {
+    pub(crate) fn values(&self) -> Vec<PonkoValue> {
         self.parts
             .iter()
             .map(|&(component, at, size)| PonkoValue {
@@ -1280,7 +1308,7 @@ impl Owned {
     }
 }
 
-fn report(what: &str, failure: Failure) {
+pub(crate) fn report(what: &str, failure: Failure) {
     eprintln!("ponko: {what} skipped: {}", failure.1);
 }
 

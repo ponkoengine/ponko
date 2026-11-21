@@ -155,7 +155,19 @@ other world or context calls throw (C: return `PONKO_BUSY`), except
   in the `_par` versions), so a loop can check the ground under each body or
   have the camera follow the character. Anything that changes physics
   (gravity, impulses, bodies) is still refused inside a loop;
+- reads that hand a whole array or a view once per system, so a loop needs
+  no call per item (not in the `_par` versions, except the navigation view):
+  `collisions_started()` and `collisions_stopped()` (C
+  `ponko_ctx_collisions`, 2D and 3D contacts of this tick), `net_events()`
+  (C `ponko_ctx_net_events`, replication events), and `nav_view()` (C
+  `ponko_ctx_nav_view`), taken before the loop, whose `sample_position`,
+  `sample_positions` and `find_path` work in `each_par` too. Read each once
+  per system: a second read of the events gives only newer ones;
 - spatial queries, and the clock values `dt()`, `sim_tick()`, `random()`.
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:loop_reads}}
+```
 
 `each_par` and `query_par` split archetypes into slices and run your function
 on all cores at once. It must only touch its own entity and read shared
@@ -462,8 +474,6 @@ binding arrives:
 | `Waves::spectrum`, `WaveSpectrum` | [Water](water.md#waves-from-a-spectrum) | Seas from C use the Gerstner waves of `PonkoWaterDesc` |
 | `NavObstacleShape` | [3D navigation meshes](navigation3d.md#obstacle-shapes) | Obstacles are unturned boxes: `ponko_ctx_set_nav_obstacle` and `ponko_ctx_set_nav_carve_obstacle` |
 | `SkyShader` | [A sky of your own](3d.md#a-sky-of-your-own) | The built-in atmosphere or the flat sky (`PonkoSky`); sky shaders have no C binding yet |
-| `SkyKit` | [The sky kit](3d.md#the-sky-kit) | The built-in atmosphere (`PonkoSky`), without clouds or a moon; the kit has no C binding yet |
-| `DayNight` | [The sky kit](3d.md#the-sky-kit) | Move the sun each frame with `ponko_sun_direction_at` |
 | `CameraTarget` | [Following something](camera-ui.md#following-something) | Keep the rig descriptor and update it once a frame (`ponko_follow_camera2d_update`, the 3D rigs' update calls) |
 | `TouchLayout` | [Touch](touch.md) | Set the controls with `ponko_ctx_set_touch_controls`; the player's saved layout, its edit mode, styles and trackpad events are not bound yet |
 | `CrashReports` | [Crash reports](crash-reports.md) | Not bound yet: install a handler of the game's own and write its own report |
@@ -479,9 +489,6 @@ binding arrives:
 | `Physics3D::move_character` | [3D physics](physics3d.md#a-walking-character) | Characters walk with the physics step only; one tick can't be replayed on its own |
 | `Net::accept_web`, `Net::join_web`, `Net::web_addr`, `NetMessages::accept_web`, `NetMessages::join_web`, `NetMessages::web_addr` | [Multiplayer in the browser](networking.md#in-the-browser) | Not bound yet: C and C++ hosts take UDP players only, and C and C++ games don't build for the web yet |
 | `LobbyClient::join_web` | [Lobbies, matchmaking and relays](lobby.md#the-client) | C and C++ games don't build for the web yet; their lobby clients join over UDP |
-| `Replication::input`, `Replication::predicted`, `Replication::event` | [From C and C++](replication.md#from-c-and-c) | Not bound yet: C and C++ games declare components, mark entities and read replicas; they send controls and events as application messages, and the server moves their entities |
-| `Replication::raw_event` | [From C and C++](replication.md#from-c-and-c) | The Rust side of events as bytes (`to_server_raw`, `to_client_raw`, `to_clients_raw`, `NetEvent<RawEvent>`) is in place; the C and C++ calls that wrap it are not bound yet, so events go as application messages until then |
-| `Replication::interpolated`, `Replication::position` | [From C and C++](replication.md#from-c-and-c) | Generic over `Interpolate` and a Rust closure: C components are set when their update arrives, and interest uses the entities' transforms |
 | `Signaling` | [Peer to peer over WebRTC](webrtc.md#with-any-signaling-channel) | C and C++ WebRTC endpoints are signaled through a lobby client (`ponko_net_messages_rtc_host`, `_rtc_join`) |
 | `RtcConfig::turn` | [Peer to peer over WebRTC](webrtc.md#stun-turn-and-nats) | TURN works in browsers only, and C and C++ games don't build for the web yet |
 | `SkeletonData::add_bone`, `SpineAtlas` | [2D skeletons](skeleton2d.md#from-c-and-c) | Skeletons come from files (Ponko's format or a Spine export and its atlas) through the assets; a memory source holds files kept in memory |
@@ -489,7 +496,6 @@ binding arrives:
 | `Plugin::dependencies` | [Plugins for other crates](plugins.md#from-c-and-c) | C plugins (`ponko_game_plugin`) have no names or dependencies and are never duplicates |
 | `Game::debug_toggle` | [Plugins for other crates](plugins.md#debug-toggles) | Draw behind a flag of the game's own; `debug.draw` turns the engine's views on and off |
 | `Game::control_method` | [Plugins for other crates](plugins.md#control-methods) | The control endpoint's built-in methods only; a native game's tools read its reflected resources |
-| `Video` | [Video](video.md#c-and-c) | Not bound yet: decode with a library of the game's own and show the frames with `ponko_ctx_update_texture` |
 | `AssetGroup::with_sliced`, `SliceLoader` | [Loading screens](loading.md#loaders-that-work-in-slices) | Not bound yet: add the file with `PONKO_GROUP_BYTES` and decode it once the group is ready |
 | `Game::restore_window_settings` | [Window service](window.md#remember-the-players-choice) | Call `ponko_ctx_window_restore_settings` in setup; the window can show at its default size for a moment first |
 

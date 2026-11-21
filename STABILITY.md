@@ -378,6 +378,18 @@ descriptor follows these rules:
 A future ABI version may make the `...Ex` forms the only ones and drop the
 suffix; until then both stay.
 
+### Planned for ABI 3
+
+What the next C ABI version changes is written down before it ships, so
+programs can prepare:
+
+- **Handle ids carry their kind.** Ids grow to 64 bits: the engine's id in
+  the low 32 bits, `PonkoHandleKind` plus one in the top 8, 0 there meaning
+  "not tagged" (so `{0}` keeps meaning the built-in font, texture and
+  material). Calls check the kind of the ids they are given. The handles
+  chapter of the guide, "The kind in the id, from ABI 3", has the details
+  and why the kind doesn't fit in 32 bits.
+
 The C and C++ names stay flat (`ponko_ctx_cast_ray_filtered`,
 `ctx.graphics_quality()`, ...) even where the Rust API groups things into
 modules and services.

@@ -13,7 +13,7 @@ use ponko_ecs::{Component, Entity, World};
 
 use super::ClientStats;
 use super::bits::{BitReader, BitWriter};
-use super::fields::{FieldSpec, Replicate, quantize_in_place, read_words, schema_of, write_words};
+use super::fields::{FieldSpec, Replicate, quantize_in_place, read_words, schema_of, schema_of_value, write_words};
 use super::wire::INPUT_REDUNDANCY;
 use crate::net::{InputPush, InputQueue, PeerId, Prediction, Reconciled};
 
@@ -250,15 +250,27 @@ pub(crate) struct Inputs<I: Replicate> {
     pub(crate) current: BTreeMap<PeerId, I>,
     /// The host's own input for the next tick.
     pub(crate) local: Option<I>,
+    /// "Nothing pressed": what a tick without an input sends, and what
+    /// received inputs are read into (`I::default()` for Rust types; a
+    /// zeroed value of the declared layout for inputs declared from C).
+    pub(crate) proto: I,
     scratch: Vec<u32>,
     step_scratch: Vec<u32>,
 }
 
 impl<I: Replicate> Inputs<I> {
     pub(crate) fn new() -> Self {
+        Self::with_proto(
+            crate::reflect::short_name(std::any::type_name::<I>()).to_string(),
+            I::default(),
+        )
+    }
+
+    /// An input stream named `name` whose empty input is `proto`.
+    pub(crate) fn with_proto(name: String, proto: I) -> Self {
         Self {
-            name: crate::reflect::short_name(std::any::type_name::<I>()).to_string(),
-            specs: schema_of::<I>(),
+            name,
+            specs: schema_of_value(&proto),
             steps: Vec::new(),
             pending: None,
             next_seq: 0,
@@ -266,6 +278,7 @@ impl<I: Replicate> Inputs<I> {
             queues: BTreeMap::new(),
             current: BTreeMap::new(),
             local: None,
+            proto,
             scratch: Vec::new(),
             step_scratch: Vec::new(),
         }
@@ -309,7 +322,7 @@ impl<I: Replicate> InputStream for Inputs<I> {
             for (word, spec) in self.scratch.iter_mut().zip(&self.specs) {
                 *word = r.read(u32::from(spec.bits))?;
             }
-            let mut input = I::default();
+            let mut input = self.proto.clone();
             read_words(&mut input, &self.scratch);
             let _: InputPush = queue.push(first.wrapping_add(i as u16), input);
         }
@@ -334,7 +347,7 @@ impl<I: Replicate> InputStream for Inputs<I> {
         }
         // The host's own player: one input every tick ("nothing pressed"
         // when the game set none), as an offline game would.
-        let mut input = self.local.take().unwrap_or_default();
+        let mut input = self.local.take().unwrap_or_else(|| self.proto.clone());
         self.scratch.resize(self.specs.len(), 0);
         quantize_in_place(&mut input, &mut self.scratch);
         self.apply(world, owned, PeerId::HOST, &input);
@@ -348,7 +361,7 @@ impl<I: Replicate> InputStream for Inputs<I> {
 
     fn client_tick(&mut self, world: &mut World, mine: &[Entity], w: &mut BitWriter) {
         // Predict with the input as the server will get it.
-        let mut input = self.pending.take().unwrap_or_default();
+        let mut input = self.pending.take().unwrap_or_else(|| self.proto.clone());
         self.scratch.resize(self.specs.len(), 0);
         quantize_in_place(&mut input, &mut self.scratch);
         let seq = self.next_seq;
