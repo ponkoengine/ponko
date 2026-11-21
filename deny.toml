@@ -136,6 +136,8 @@ skip = [
     { crate = "rand_core@0.9.5", reason = "follows rand 0.9" },
     { crate = "zerocopy@0.7.35", reason = "rav1d 1.1 (the optional `video` feature); ahash and the rest are on 0.8" },
     { crate = "zerocopy-derive@0.7.35", reason = "follows zerocopy 0.7" },
+    { crate = "strum@0.26.3", reason = "rav1d 1.1 (the optional `video` feature); aseprite-loader (the Aseprite importer) uses 0.27" },
+    { crate = "strum_macros@0.26.4", reason = "follows strum 0.26" },
 
     # -- Image, build tools and the std-adjacent crates.
     { crate = "miniz_oxide@0.8.9", reason = "png and exr (through `image`); flate2 uses 0.9" },
