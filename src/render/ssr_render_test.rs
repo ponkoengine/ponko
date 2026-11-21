@@ -1308,3 +1308,184 @@ fn contact_reflections_show_no_grain_at_full_hd_without_taa() {
         );
     }
 }
+
+// ---- Thin things far away: their reflections stay thin without TAA ----
+
+/// Four thin glowing red rails (as thick as about 7 pixels at 1080p,
+/// along x) 1 up over a white mirror floor, 8, 14, 22 and 32 away from a
+/// camera 1.2 up looking along the floor; nothing else lit, exposure -5.
+/// Returns, for each rail, the point at its middle and the floor point
+/// that mirrors it.
+fn rails_over_a_mirror(stage: &mut Stage) -> Vec<(Vec3, Vec3)> {
+    let mirror = stage.mesh(
+        &MeshData::cube(1.0),
+        MaterialDesc {
+            color: Color::WHITE,
+            roughness: 0.0,
+            metallic: 1.0,
+            ..Default::default()
+        },
+    );
+    let glow = stage.mesh(
+        &MeshData::cube(1.0),
+        MaterialDesc {
+            color: Color::BLACK,
+            emissive: Color::rgb(4.0, 0.0, 0.0),
+            ..Default::default()
+        },
+    );
+    stage.block(mirror, vec3(-100.0, -1.0, -100.0), vec3(100.0, 0.0, 10.0));
+    stage.ctx.scene3d.lighting.sun_intensity = 0.0;
+    stage.ctx.scene3d.lighting.ambient_intensity = 0.0;
+    stage.ctx.scene3d.post.exposure = -5.0;
+    stage.ctx.scene3d.post.ssr_max_distance = 60.0;
+    stage.ctx.scene3d.camera.position = vec3(0.0, 1.2, 4.0);
+    stage.ctx.scene3d.camera.look_at(vec3(0.0, 0.6, -20.0));
+    let eye = stage.ctx.scene3d.camera.position;
+    let through = |p: Vec3| eye + (p - eye) * (eye.y / (eye.y - p.y));
+    [8.0f32, 14.0, 22.0, 32.0]
+        .iter()
+        .enumerate()
+        .map(|(i, &d)| {
+            let x = -5.7 + i as f32 * 4.0 * d / 14.0;
+            let (half, length) = (0.03 + 0.0025 * d, 0.15 * d);
+            stage.block(
+                glow,
+                vec3(x, 1.0 - half, -d - half),
+                vec3(x + length, 1.0 + half, -d + half),
+            );
+            let middle = vec3(x + length * 0.5, 1.0, -d);
+            (middle, through(middle * vec3(1.0, -1.0, 1.0)))
+        })
+        .collect()
+}
+
+/// A horizontal band's vertical profile in the red channel as linear
+/// light, `on` minus `off` (if any), averaged over the 15 columns around `at` and
+/// within `reach` rows of it: its energy (the sum, in pixels at full
+/// light) and RMS width (pixels) about its center of mass.
+fn band(stage: &Stage, on: &Image, off: Option<&Image>, at: Vec3, reach: u32) -> (f32, f32) {
+    let (cx, cy) = stage.pixel(at);
+    let linear = |image: &Image, x: u32, y: u32| {
+        let v = f32::from(image.pixel(x, y)[0]) / 255.0;
+        if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let rows: Vec<(f32, f32)> = (cy - reach..=cy + reach)
+        .map(|y| {
+            let sum: f32 = (cx - 7..=cx + 7)
+                .map(|x| (linear(on, x, y) - off.map_or(0.0, |off| linear(off, x, y))).max(0.0))
+                .sum();
+            (y as f32, sum / 15.0)
+        })
+        .collect();
+    let energy: f32 = rows.iter().map(|r| r.1).sum();
+    let center = rows.iter().map(|r| r.0 * r.1).sum::<f32>() / energy.max(1e-6);
+    let moment = rows.iter().map(|r| (r.0 - center).powi(2) * r.1).sum::<f32>();
+    (energy, (moment / energy.max(1e-6)).sqrt())
+}
+
+/// The rails' reflections at 1920x1080 without TAA: (energy, RMS width)
+/// of each rail seen directly and of its reflection, and the frame (with
+/// reflections) cropped to the rails and their reflections.
+/// Each rail's bands, seen and reflected (energy, RMS width; see `band`).
+type RailBands = Vec<[(f32, f32); 2]>;
+
+/// The rails' bands, the frame with and without reflections cropped to the
+/// nearest rail, and the stage.
+fn rail_reflections() -> Option<(RailBands, [Image; 2], Stage)> {
+    let mut stage = Stage::with(super::regression_stage::Setup {
+        size: (1920, 1080),
+        ..Default::default()
+    })?;
+    if !crate::render::render_test_support::needs(&stage.device, GpuFeature::ScreenSpaceReflections) {
+        return None;
+    }
+    let rails = rails_over_a_mirror(&mut stage);
+    let off = stage.settled(2);
+    stage.ctx.scene3d.post.ssr = 1.0;
+    let on = stage.settled(4);
+    let found = rails
+        .iter()
+        .map(|&(rail, reflection)| {
+            [
+                band(&stage, &on, None, rail, 30),
+                band(&stage, &on, Some(&off), reflection, 30),
+            ]
+        })
+        .collect();
+    // The nearest rail and its reflection: references stay small.
+    let crop = |image: &Image| {
+        let (x0, y0, w, h) = (496, 512, 144, 192);
+        let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+        for y in y0..y0 + h {
+            let row = ((y * image.width + x0) * 4) as usize;
+            rgba.extend_from_slice(&image.rgba[row..row + (w * 4) as usize]);
+        }
+        Image {
+            width: w,
+            height: h,
+            rgba,
+        }
+    };
+    Some((found, [crop(&on), crop(&off)], stage))
+}
+
+/// Without TAA, a thin thing far away is reflected about as thin as it is
+/// seen, not as a blob. The march's steps grow to tens of pixels far along
+/// a ray, and a crossing used to allow two of them of the ray's travel:
+/// rays that passed well below a rail counted as hits, and its reflection
+/// was a slab (RMS width 4.17, 3.57, 2.58 and 2.17 times the rail's,
+/// nearest to farthest, and up to 2.4 times its light). Now 1.6 to 2 times,
+/// and the light about the rail's. Some rays still step over the nearest
+/// rail without TAA, so its reflection is dotted and keeps about half the
+/// light: what this allows.
+#[test]
+fn far_thin_things_stay_thin_in_reflections_without_taa() {
+    let Some((rails, [image, off], stage)) = rail_reflections() else {
+        return;
+    };
+    for (d, [seen, reflected]) in [8, 14, 22, 32].iter().zip(&rails) {
+        eprintln!(
+            "rail {d} away: seen (energy {:.1}, RMS width {:.2}), reflected (energy {:.1}, RMS width {:.2}): x{:.2} as wide",
+            seen.0,
+            seen.1,
+            reflected.0,
+            reflected.1,
+            reflected.1 / seen.1
+        );
+    }
+    let mut wider = 0.0;
+    for (d, [seen, reflected]) in [8, 14, 22, 32].iter().zip(&rails) {
+        wider += reflected.1 / seen.1 / 4.0;
+        assert!(
+            reflected.0 > seen.0 * 0.4,
+            "the rail {d} away is reflected: energy {:.1} of {:.1}",
+            reflected.0,
+            seen.0
+        );
+        assert!(
+            reflected.1 < seen.1 * 2.2,
+            "the rail {d} away is reflected thin: RMS width {:.2}, the rail's {:.2}",
+            reflected.1,
+            seen.1
+        );
+    }
+    assert!(wider < 2.0, "on average about as thin as the rails: x{wider:.2}");
+    check_reference(
+        "regression_ssr_far_rails",
+        &image,
+        EFFECT_REFERENCE,
+        "Four thin red glowing rails (emissive 4, 0, 0; 1 up, 0.15 d long, 0.06 + 0.005 d thick) over a white \
+         mirror floor (metallic 1, roughness 0), d = 8, 14, 22 and 32 away; nothing lit, exposure -5, \
+         screen-space reflections at 1.0 reaching 60, no TAA, fourth frame; camera at (0, 1.2, 4) looking at \
+         (0, 0.6, -20); 1920x1080 cropped to 144x192 from (496, 512): the nearest rail and its reflection, \
+         4x multisampling, no tonemapping.",
+        &stage.info,
+    );
+    reference_rejects("regression_ssr_far_rails", &off, EFFECT_REFERENCE, "reflections off");
+    stage.finish();
+}

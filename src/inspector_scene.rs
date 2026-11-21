@@ -38,7 +38,8 @@ pub(crate) enum AssetDrag {
     Prefab(String),
     /// A material of a loaded mesh file: dropped on a model, it paints it.
     Material { mesh: String, index: usize },
-    /// An image: dropped in the 2D view, it becomes a sprite.
+    /// An image: dropped in the 2D view, it becomes a sprite; dropped on a
+    /// model in the 3D view, it paints it.
     #[cfg_attr(not(feature = "editor"), allow(dead_code))]
     Texture(String),
 }
@@ -689,9 +690,7 @@ impl Panels {
         at: Vec2,
     ) -> Result<Entity, crate::error::Error> {
         #[cfg(feature = "3d")]
-        if (self.scene.active3d || matches!(asset, AssetDrag::Mesh(_) | AssetDrag::Material { .. }))
-            && !matches!(asset, AssetDrag::Texture(_))
-        {
+        if self.scene.active3d || matches!(asset, AssetDrag::Mesh(_) | AssetDrag::Material { .. }) {
             use crate::edit3d::{Ray, ground_point, pick, snap};
             let ray = Ray::from_screen(&ctx.scene3d.camera, at);
             let mut point = ground_point(&ray, 0.0, 10.0);
@@ -699,24 +698,36 @@ impl Panels {
             if s.on {
                 point = point.map(|v| snap(v, s.step));
             }
+            let model_under = |ctx: &Ctx, what: &str| {
+                pick(&ctx.world, &ctx.gfx.assets3d, &ray, &[])
+                    .map(|h| h.entity)
+                    .filter(|&e| ctx.world.get::<crate::render::Model>(e).is_some())
+                    .ok_or_else(|| {
+                        crate::error::Error::new(
+                            crate::error::ErrorKind::NotFound,
+                            format!("drop {what} on a model to paint it"),
+                        )
+                    })
+            };
             return match asset {
                 AssetDrag::Mesh(path) => ctx.edit(|ed, ctx| ed.spawn_model(ctx, path, crate::d3::Transform::at(point))),
                 AssetDrag::Prefab(path) => ctx.edit(|ed, ctx| ed.spawn_prefab(ctx, path, point)),
                 AssetDrag::Material { mesh, index } => {
-                    let target = pick(&ctx.world, &ctx.gfx.assets3d, &ray, &[])
-                        .map(|h| h.entity)
-                        .filter(|&e| ctx.world.get::<crate::render::Model>(e).is_some())
-                        .ok_or_else(|| {
-                            crate::error::Error::new(
-                                crate::error::ErrorKind::NotFound,
-                                "drop a material on a model to paint it",
-                            )
-                        })?;
+                    let target = model_under(ctx, "a material")?;
                     let value = serde_json::json!({ "mesh": mesh, "material": index });
                     ctx.edit(|ed, ctx| ed.set(ctx, target, "ModelMaterial", value))?;
                     Ok(target)
                 }
-                AssetDrag::Texture(_) => unreachable!("textures are placed in 2D below"),
+                // An image on a model: the model drawn with a material of
+                // that image (saved as `{ "texture": .. }`).
+                AssetDrag::Texture(path) => {
+                    let target = model_under(ctx, "an image")?;
+                    let value = serde_json::json!({ "texture": path });
+                    ctx.load_scene_assets(&serde_json::json!({ "ModelMaterial": value.clone() }))
+                        .map_err(|e| e.with_path(path))?;
+                    ctx.edit(|ed, ctx| ed.set(ctx, target, "ModelMaterial", value))?;
+                    Ok(target)
+                }
             };
         }
         match asset {
@@ -724,11 +735,6 @@ impl Panels {
                 let world_at = ctx.camera.screen_to_world(at);
                 ctx.edit(|ed, ctx| ed.spawn_prefab(ctx, path, world_at))
             }
-            #[cfg(feature = "editor")]
-            AssetDrag::Texture(_) if self.scene.active3d => Err(crate::error::Error::new(
-                crate::error::ErrorKind::Unsupported,
-                "an image becomes a sprite: drop it in the 2D view",
-            )),
             #[cfg(feature = "editor")]
             AssetDrag::Texture(path) => {
                 let world_at = ctx.camera.screen_to_world(at);

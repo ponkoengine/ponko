@@ -109,6 +109,22 @@ impl Graphics {
         self.try_create_material(desc).unwrap_or_else(|e| panic!("{e}"))
     }
 
+    /// The material of image `path` alone (white, otherwise the default
+    /// material), made once and kept: what a scene's `"ModelMaterial": {
+    /// "texture": path }` draws with, and what the editor puts on a model
+    /// an image is dropped on.
+    pub(crate) fn texture_material(&mut self, path: &str) -> Result<Material, crate::error::Error> {
+        if let Some(material) = self.material_names.textured(path)
+            && self.assets3d.materials_live.contains(material.id)
+        {
+            return Ok(material);
+        }
+        let texture = self.try_load_texture(path)?;
+        let material = self.try_create_material(MaterialDesc::default().with_texture(texture))?;
+        self.material_names.add_texture(path, material);
+        Ok(material)
+    }
+
     /// [`create_material`](Self::create_material) with errors as values.
     ///
     /// # Errors
