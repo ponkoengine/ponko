@@ -245,6 +245,28 @@ pub struct PonkoReplicationPeerStats {
     pub deferred: u64,
 }
 
+/// How the server resends to one client (Rust `ResendStats`, from
+/// `ponko_ctx_replication_resend_stats`): records sent again early (the
+/// acknowledgements skipped their packet) and on the timeout, packets
+/// called lost that were acknowledged after all, the resend timeout now in
+/// ticks, the timeouts in a row that doubled it, and the reordering
+/// tolerated in ticks. A struct of its own, so that
+/// `PonkoReplicationPeerStats` keeps its layout.
+/// ```
+/// assert_eq!(ponko_ffi::PonkoReplicationResendStats::default().early_resends, 0);
+/// ```
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[allow(missing_docs)]
+pub struct PonkoReplicationResendStats {
+    pub early_resends: u64,
+    pub timeout_resends: u64,
+    pub late_acks: u64,
+    pub timeout_ticks: u32,
+    pub backoff: u32,
+    pub reorder_ticks: u32,
+}
+
 /// What a client received and sent (Rust `ClientStats`).
 /// ```
 /// assert_eq!(ponko_ffi::PonkoReplicationClientStats::default().spawned, 0);
@@ -733,6 +755,42 @@ pub unsafe extern "C" fn ponko_ctx_replication_peer_stats(
                     deltas_sent: s.deltas_sent,
                     destroys_sent: s.destroys_sent,
                     deferred: s.deferred,
+                },
+            )
+        }
+    })
+}
+
+/// Server: how it resends to `peer` (`PONKO_NOT_FOUND` if no such client).
+/// # Safety
+/// Live ctx; writable output.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_replication_resend_stats(std::ptr::null_mut(), 1, std::ptr::null_mut()) } as u32, 1);
+/// ```
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_replication_resend_stats(
+    ctx: *mut PonkoCtx,
+    peer: u64,
+    out_stats: *mut PonkoReplicationResendStats,
+) -> PonkoStatus {
+    boundary(|| {
+        // SAFETY: forwarded caller contract.
+        unsafe {
+            let s = ctx_access(ctx, |c| {
+                c.net
+                    .replication
+                    .resend_stats(PeerId::from_bits(peer))
+                    .ok_or_else(|| not_found("no such client"))
+            })?;
+            out(
+                out_stats,
+                PonkoReplicationResendStats {
+                    early_resends: s.early_resends,
+                    timeout_resends: s.timeout_resends,
+                    late_acks: s.late_acks,
+                    timeout_ticks: s.timeout_ticks,
+                    backoff: s.backoff,
+                    reorder_ticks: s.reorder_ticks,
                 },
             )
         }

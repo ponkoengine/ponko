@@ -4434,6 +4434,8 @@ static void replication_runs() {
     // ANCHOR_END: replication_server
     game.sim_system([marked, id](ponko::ctx& ctx) {
         if (ctx.replication_status().role != PONKO_REPLICATION_SERVER) std::abort();
+        // No client joined: no peer stats, no resend stats.
+        if (ctx.replication_peer_stats(1) || ctx.replication_resend_stats(1)) std::abort();
         *id = ctx.net_id(*marked);
     });
     game.run_headless(3);

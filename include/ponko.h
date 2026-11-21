@@ -2373,6 +2373,15 @@ typedef struct PonkoReplicationPeerStats {
   uint64_t deferred;
 } PonkoReplicationPeerStats;
 
+typedef struct PonkoReplicationResendStats {
+  uint64_t early_resends;
+  uint64_t timeout_resends;
+  uint64_t late_acks;
+  uint32_t timeout_ticks;
+  uint32_t backoff;
+  uint32_t reorder_ticks;
+} PonkoReplicationResendStats;
+
 typedef struct PonkoReplicationClientStats {
   uint64_t packets_received;
   uint64_t bytes_received;
@@ -6472,6 +6481,10 @@ enum PonkoStatus ponko_ctx_replication_set_viewer(struct PonkoCtx *ctx,
 enum PonkoStatus ponko_ctx_replication_peer_stats(struct PonkoCtx *ctx,
                                                   uint64_t peer,
                                                   struct PonkoReplicationPeerStats *out_stats);
+
+enum PonkoStatus ponko_ctx_replication_resend_stats(struct PonkoCtx *ctx,
+                                                    uint64_t peer,
+                                                    struct PonkoReplicationResendStats *out_stats);
 
 enum PonkoStatus ponko_ctx_replication_client_stats(struct PonkoCtx *ctx,
                                                     struct PonkoReplicationClientStats *out_stats);

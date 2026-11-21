@@ -6636,6 +6636,12 @@ public:
         if (status == PONKO_NOT_FOUND) return std::nullopt;
         detail::check(status); return s;
     }
+    /// Server: how it resends to `peer` (early, on the timeout, the timeout now), if that client is there.
+    std::optional<PonkoReplicationResendStats> replication_resend_stats(std::uint64_t peer) const {
+        PonkoReplicationResendStats s{}; const PonkoStatus status = ponko_ctx_replication_resend_stats(raw_, peer, &s);
+        if (status == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(status); return s;
+    }
     /// Client: what it received and sent.
     PonkoReplicationClientStats replication_client_stats() const {
         PonkoReplicationClientStats s{}; detail::check(ponko_ctx_replication_client_stats(raw_, &s)); return s;
