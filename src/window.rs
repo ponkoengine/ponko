@@ -410,6 +410,11 @@ pub struct WindowService {
     /// what the platform covers of it ([`safe_area`](Self::safe_area)).
     logical_size: Vec2,
     safe_insets: SafeInsets,
+    /// A running scenario fed the insets: the platform's own wait in
+    /// `platform_insets` until it ends.
+    scenario_insets: bool,
+    /// What the platform reported while a scenario held the insets.
+    platform_insets: Option<SafeInsets>,
 }
 impl Default for WindowService {
     fn default() -> Self {
@@ -429,6 +434,8 @@ impl WindowService {
             paste_target: None,
             logical_size: Vec2::ZERO,
             safe_insets: SafeInsets::NONE,
+            scenario_insets: false,
+            platform_insets: None,
         }
     }
     /// Replace the inert backend with an already-created window adapter.
@@ -536,6 +543,31 @@ impl WindowService {
     /// them from the next frame.
     pub fn feed_safe_insets(&mut self, insets: SafeInsets) {
         self.safe_insets = insets.sanitized();
+    }
+    /// The insets the engine read from the platform (the page, on each
+    /// resize). While a scenario's step holds the insets they wait, and
+    /// apply once the scenario ends: a resize doesn't undo the step.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn feed_platform_safe_insets(&mut self, insets: SafeInsets) {
+        if self.scenario_insets {
+            self.platform_insets = Some(insets.sanitized());
+        } else {
+            self.feed_safe_insets(insets);
+        }
+    }
+    /// A scenario's step feeds the insets: they hold until
+    /// [`release_scenario_safe_insets`](Self::release_scenario_safe_insets).
+    pub(crate) fn feed_scenario_safe_insets(&mut self, insets: SafeInsets) {
+        self.scenario_insets = true;
+        self.feed_safe_insets(insets);
+    }
+    /// No scenario holds the insets any more: what the platform reported
+    /// meanwhile applies (else the scenario's stay, as before).
+    pub(crate) fn release_scenario_safe_insets(&mut self) {
+        self.scenario_insets = false;
+        if let Some(insets) = self.platform_insets.take() {
+            self.safe_insets = insets;
+        }
     }
     /// The window's size in logical pixels, which the safe area is cut from.
     pub(crate) fn set_logical_size(&mut self, size: Vec2) {
@@ -973,6 +1005,46 @@ mod safe_area_tests {
         let area = SafeInsets::new(0.0, 300.0, 0.0, 300.0).area(Vec2::new(400.0, 300.0));
         assert_eq!(area.size().x, 0.0);
         assert!(area.min.x <= 400.0 && area.min.x >= 0.0);
+    }
+
+    #[test]
+    fn scenario_insets_hold_through_a_resize_until_the_scenario_ends() {
+        use crate::scenario::InputScenario;
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let step = SafeInsets::new(0.0, 0.0, 21.0, 47.0);
+        let page = SafeInsets::new(30.0, 0.0, 0.0, 0.0);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let out = seen.clone();
+        crate::game::Game::new("notch", 844, 390)
+            .sim_system(move |ctx: &mut crate::ctx::Ctx| {
+                let tick = ctx.time.sim_tick();
+                // A windowed web run re-reads the page's insets on a resize
+                // (the window turned) during the scenario.
+                if tick == 3 {
+                    ctx.window.feed_platform_safe_insets(page);
+                }
+                out.borrow_mut().push((tick, ctx.window.safe_insets()));
+            })
+            .run_headless(10, move |ctx| {
+                ctx.start_scenario(InputScenario::new().safe_insets(1, step).duration(6));
+            });
+        let seen = seen.borrow();
+        for &(tick, insets) in seen.iter() {
+            let expected = match tick {
+                0 => SafeInsets::NONE,
+                // Fed by the step, kept by the resize while the run lasts.
+                1..=5 => step,
+                // Over: what the page said meanwhile applies.
+                _ => page,
+            };
+            assert_eq!(insets, expected, "tick {tick}");
+        }
+        assert_eq!(seen.len(), 10);
+        // Without a scenario holding them, the page's insets apply at once.
+        let mut window = WindowService::default();
+        window.feed_platform_safe_insets(page);
+        assert_eq!(window.safe_insets(), page);
     }
 
     #[test]

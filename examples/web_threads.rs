@@ -8,12 +8,15 @@
 //! any), jobs (one waited for during setup and one every 30 ticks), a
 //! moving root with 4,000 attached children whose transforms are tracked
 //! (so the hierarchy places them by lookups, on the workers when the level
-//! is worth sharing, through the same runner as the parallel query), and an
+//! is worth sharing, through the same runner as the parallel query), the
+//! engine's own parallel passes (a spatial grid of 200,000 entries rebuilt
+//! and a 256 × 256 flow field computed every 10 ticks, also through that
+//! runner), and an
 //! asset group of a texture and a file decoded with `AssetGroup::with`,
 //! both from `assets/`. It publishes which threads ran each, for the runner
 //! (see `common/web_smoke.rs`):
 //!
-//! `{"fixture":"web_threads","ticks":160,"threads":7,"isolated":true,"par_threads":7,"par_on_page":false,"batch_threads":4,"batch_threaded_runs":160,"hier_shared":true,"wait_off_page":true,"job_off_page":true,"group":"ready","group_off_page":true,"group_bytes":966,"checksum":...}`
+//! `{"fixture":"web_threads","ticks":160,"threads":7,"isolated":true,"par_threads":7,"par_on_page":false,"batch_threads":4,"batch_threaded_runs":160,"hier_shared":true,"passes_shared":["flow/shared_directions","spatial/shared_rebuild"],"wait_off_page":true,"job_off_page":true,"group":"ready","group_off_page":true,"group_bytes":966,"checksum":...}`
 //!
 //! `threads` is what the engine started (`ponko::web::threads()`, 0 when it
 //! runs on the page's thread alone); `par_threads` and `batch_threads`
@@ -21,8 +24,11 @@
 //! systems (batch systems not while profiling, when the scheduler runs them
 //! on the page's thread); `hier_shared` says whether the hierarchy shared a
 //! level out (the engine's `hierarchy/shared_level` scope, timed over 20
-//! ticks with profiling on); `checksum` sums every position and every attached child's
-//! place at tick 120, the same however many threads ran them. `?smoke_case=worker-panic` panics inside the
+//! ticks with profiling on); `passes_shared` lists the engine's passes
+//! that went through the frame pool's runner, by the scope each opens there
+//! (`spatial/shared_rebuild`, `flow/shared_directions`); `checksum` sums
+//! every position, every attached child's place and the grid's and flow
+//! field's results at tick 120, the same however many threads ran them. `?smoke_case=worker-panic` panics inside the
 //! parallel query at tick 30: the game must stop with an error, not hang.
 //!
 //! `pads` lists the controllers the engine sees (`threads.mjs --case
@@ -82,6 +88,16 @@ const CHILDREN: usize = 4_000;
 
 /// The first of the 20 ticks profiled (see `hier_shared`).
 const PROFILED_FROM: u64 = 90;
+
+/// The engine's own parallel passes the fixture runs, by the scope each
+/// opens on the thread that shares it out (on the web, a worker).
+const ENGINE_PASSES: [&str; 2] = ["spatial/shared_rebuild", "flow/shared_directions"];
+
+/// The spatial grid's entries: enough that its rebuild runs on all cores.
+const GRID_ENTRIES: usize = 200_000;
+
+/// The spatial grid and the flow field are redone every this many ticks.
+const PASS_EVERY: u64 = 10;
 
 /// Profiling is on: the scheduler runs batches on the page's thread.
 static PROFILING: AtomicBool = AtomicBool::new(false);
@@ -294,6 +310,13 @@ struct Check {
     root: Option<Entity>,
     /// The hierarchy shared a level out.
     hier_shared: bool,
+    /// The engine's own passes that went through the frame pool's runner
+    /// (see `ENGINE_PASSES`).
+    passes_shared: Vec<&'static str>,
+    /// Rebuilt every `PASS_EVERY` ticks, big enough to go to the pool.
+    grid: Option<ponko::spatial::SpatialGrid>,
+    /// Computed every `PASS_EVERY` ticks toward a goal that moves.
+    flow: Option<(ponko::flow::NavGrid, ponko::flow::FlowField)>,
 }
 
 /// The asset group's file decoded with `with`, and what its decoder returns.
@@ -332,6 +355,10 @@ fn check(game: Game) {
             t.position = vec2(320.0 + (tick % 64) as f32, 180.0);
             t.rotation = tick as f32 * 0.01;
         }
+        // Every tick while scopes are timed, so a frame sees them.
+        if tick.is_multiple_of(PASS_EVERY) || (PROFILED_FROM..PROFILED_FROM + 20).contains(&tick) {
+            engine_passes(&mut s, tick);
+        }
         if tick == 120 {
             let mut sum = 0.0f64;
             ctx.world
@@ -340,6 +367,7 @@ fn check(game: Game) {
             ctx.world
                 .query::<(&d2::Transform, &Attached)>()
                 .for_each(|(t, _)| sum += f64::from(t.position.x) + f64::from(t.position.y));
+            sum += passes_checksum(&s);
             s.checksum = Some(sum);
         }
         if tick.is_multiple_of(30) && s.job.is_none() {
@@ -392,6 +420,11 @@ fn check(game: Game) {
             .scope_timings()
             .iter()
             .any(|t| t.name == "hierarchy/shared_level" && t.calls > 0);
+        for t in ctx.perf.scope_timings() {
+            if t.calls > 0 && ENGINE_PASSES.contains(&t.name) && !s.passes_shared.contains(&t.name) {
+                s.passes_shared.push(t.name);
+            }
+        }
         let batch_threaded_runs = s.batch_threaded_runs;
         s.pad_presses += ctx
             .input
@@ -429,6 +462,7 @@ fn check(game: Game) {
             "batch_on_page": batch_on_page,
             "batch_threaded_runs": batch_threaded_runs,
             "hier_shared": s.hier_shared,
+            "passes_shared": s.passes_shared,
             "schedule_threads": s.schedule_threads,
             "wait_off_page": s.wait_off_page,
             "job_off_page": s.job_off_page,
@@ -480,6 +514,50 @@ fn check(game: Game) {
         s.root = Some(root);
     })
     .run();
+}
+
+/// The engine's own parallel passes: a spatial grid of `GRID_ENTRIES`
+/// rebuilt, and a flow field computed toward a goal that moves with `tick`.
+fn engine_passes(s: &mut Check, tick: u64) {
+    let shift = (tick % 97) as f32;
+    let grid = s.grid.get_or_insert_with(|| ponko::spatial::SpatialGrid::new(16.0));
+    grid.rebuild_from((0..GRID_ENTRIES as u64).map(|i| {
+        let f = i as f32;
+        (
+            Entity::from_bits(i + 1),
+            vec2((f * 7.31 + shift) % 4096.0, (f * 3.17 + shift * 0.5) % 4096.0),
+        )
+    }));
+    let (nav, flow) = s.flow.get_or_insert_with(|| {
+        let mut nav = ponko::flow::NavGrid::new(256, 256, 4.0);
+        for y in 20..236 {
+            nav.set_cost(128, y, ponko::flow::NavGrid::WALL);
+        }
+        (nav, ponko::flow::FlowField::new())
+    });
+    flow.compute(nav, &[vec2(8.0 + shift * 4.0, 512.0)]);
+}
+
+/// Sums where the grid's entries landed (in its order, which the rebuild
+/// sets) and the flow field's directions and distances at sample points.
+fn passes_checksum(s: &Check) -> f64 {
+    let mut sum = 0.0f64;
+    if let Some(grid) = &s.grid {
+        for (k, e) in grid.entries().iter().enumerate().step_by(997) {
+            sum += (k % 7) as f64 * f64::from(e.position.x + e.position.y);
+        }
+        sum += grid.count_in_radius(vec2(2048.0, 2048.0), 300.0) as f64;
+    }
+    if let Some((_, flow)) = &s.flow {
+        for y in (2..1024).step_by(37) {
+            for x in (2..1024).step_by(41) {
+                let at = vec2(x as f32, y as f32);
+                let d = flow.direction_at(at);
+                sum += f64::from(d.x * 3.0 + d.y) + f64::from(flow.distance_at(at).unwrap_or(-1.0));
+            }
+        }
+    }
+    sum
 }
 
 /// `n` steering agents, spread over the field.

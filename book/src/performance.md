@@ -338,6 +338,27 @@ ran. The engine's offscreen GPU test of a compute pass
 the graphics library supports there and are checked when that test runs on
 those machines.
 
+### How many devices can be timed
+
+Each timestamp query set the engine makes counts against a limit on Metal:
+a process may hold 32 of them, of any size, shared by all its devices, and
+asking for a 33rd loses the device that asked. (Measured on an Apple M4
+Max with wgpu 30: sets of 8, 64, 384 and 4,096 queries all fail at the
+33rd. Apple's documentation names no number; the ignored test
+`metal_allows_32_timestamp_query_sets_per_process_of_any_size` in
+`src/render/query_sets.rs` repeats the measurement.) The number of queries
+in a set doesn't count, so the engine keeps few sets rather than small
+ones.
+
+A device's renderer holds two sets: one for the frame's passes and one for
+uploads. On Metal the engine takes at most 28 sets in a process, leaving 4
+for a game's own timestamp queries, so up to 14 devices are timed at once
+(a game with tool windows, previews or several offscreen renderers). A
+device past that keeps working without GPU times, and the engine prints
+one line saying so (`ponko: GPU frame timer: GPU timing is off for this
+device...`); dropping another device's renderer makes room again. Other
+backends have no such limit known, and every device is timed.
+
 ### Benchmark runs
 
 `PONKO_BENCH=<frames>` turns any windowed game into a benchmark: after
@@ -439,7 +460,7 @@ are per frame.
 |---|---|
 | `gpu_timing` | `available`: the GPU has timestamp queries; `frames_timed`: frames whose GPU times came back (one in 16 outside profiling, see `ctx.perf.gpu_passes()` above; `perf.get` with `profiling: true` times every frame); `cadence`: what the game chose with [`set_gpu_timing`](#how-often-gpu-passes-are-timed), `auto`, `every` (with `every`: the number of frames) or `off`. `cadence: "off"` with `available: true` is the game's choice, so no times are expected (`unavailable` says so); `available: false` is an adapter without timestamps, whatever the cadence |
 | `cpu_ms` | the renderer's CPU time: `total`, split into `extract` (culling, collecting models), `prepare` (uploading 3D data), `encode` (recording command buffers), `submit` and `other` (sprites, overlays) |
-| `gpu_ms` | `frame` and `passes` (`[{name, ms}]` in the order they run), smoothed |
+| `gpu_ms` | `frame`, `passes` (`[{name, ms}]` in the order they run), smoothed, and `not_timed`: the names of the passes that ran in the latest timed frame but couldn't be timed (see [which passes can be timed](#which-passes-can-be-timed)), `[]` when every pass was timed. They are never in `passes` as 0 ms; the frame's `gpu_ms.frame` still covers them. `passes` and `not_timed` are `null` together (with the reason in `unavailable`) when nothing could be timed |
 | `counts` | `draw_calls`, `sprites`, `models`, `triangles`, `shadow_models`, `shadow_triangles`, `occluded_models`, `frustum_culled_models` (see below), `frustum_culled_other_models` (always `null`, see below), `pipelines_built`, and `instance_batches`: how the [static instance batches](3d.md#which-path-a-batch-takes) were culled (`batches`, `instances`, `gpu_driven`, `gpu_instances`, `cpu_small`, `cpu_no_compute`, `cpu_over_limit`, `dropped`, `pools`, `pages`, `pool_bytes`, `cull_dispatches`, `cull_jobs`, `views_skipped`) |
 | `upload_bytes` | bytes the renderer uploaded to the GPU in the last drawn frame (`render.uploads` in `perf.get` splits them by kind) |
 | `memory_estimate_bytes` | what the renderer's tables hold for the game: its `textures` (render-target textures included), `meshes`, its `gpu_buffers`, the `instance_pools` and their `total`. Not counted: the frame's own targets (scene color and depth, post-processing, ambient occlusion and temporal history), shadow maps, the light shadow atlas, skinning buffers and per-frame instance buffers. An estimate from what the engine allocated, not the driver's total; `gpu_memory_bytes` counts everything |

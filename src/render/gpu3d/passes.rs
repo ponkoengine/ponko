@@ -144,6 +144,11 @@ pub(crate) enum Resource {
     /// The scene depth copied to one 32-bit float per pixel, which the
     /// reflections' trace and filtered levels read.
     ReflectionDepth,
+    /// The nearest depth of each 8x8 block of the reflections' depth copy
+    /// (and of 16, 32 and 64 pixels), with the plane of flat ones, which
+    /// their trace reads along the stretches its long steps jump over
+    /// (`Post::ssr_thin_objects`).
+    ReflectionCoarseDepth,
     /// The reflection cone's spread filled in where the rays found nothing:
     /// the opaque pass reads it, or a copy in the screen image's first
     /// level.
@@ -206,6 +211,9 @@ pub(crate) enum Format {
     Hits,
     /// A copy of the depth as a color image: one 32-bit float channel.
     DepthCopy,
+    /// The reflections' coarse depth: nearest depth and plane, four 32-bit
+    /// float channels.
+    CoarseDepth,
     /// The window's (or render target's) color format.
     Output,
     /// Decided by the game or by another module: not checked.
@@ -234,7 +242,7 @@ pub(crate) struct Desc {
 
 impl Resource {
     /// Every resource, in declaration order.
-    pub(crate) const ALL: [Resource; 50] = {
+    pub(crate) const ALL: [Resource; 51] = {
         use Resource::*;
         [
             VisibleDraws,
@@ -275,6 +283,7 @@ impl Resource {
             ReflectionLevels,
             ReflectionHits,
             ReflectionDepth,
+            ReflectionCoarseDepth,
             ReflectionSpread,
             ReflectionHistory,
             TaaHistory,
@@ -345,6 +354,7 @@ impl Resource {
             Resource::ReflectionLevels => desc("reflection levels", Frame, F::Screen, One),
             Resource::ReflectionHits => desc("reflection hits", Frame, F::Hits, One),
             Resource::ReflectionDepth => desc("reflection depth", Frame, F::DepthCopy, One),
+            Resource::ReflectionCoarseDepth => desc("reflection coarse depth", Frame, F::CoarseDepth, One),
             Resource::ReflectionSpread => desc("reflection spread", Frame, F::Spread, One),
             Resource::ReflectionHistory => desc("reflection history", Persistent, F::Hdr, One),
             Resource::TaaHistory => desc("taa history", Persistent, F::Hdr, One),
@@ -478,6 +488,9 @@ features! {
     /// transparent pass is split off: they draw in a pass of their own
     /// after it, which writes the stencil.
     VIEW_MODEL_SEE_THROUGH = 45, "view model see-through";
+    /// The reflections' trace reads a coarse depth along its long steps
+    /// (`Post::ssr_thin_objects`).
+    SSR_THIN = 46, "reflection thin objects";
 }
 
 impl Features {
@@ -500,6 +513,7 @@ impl Features {
         (Features::AO_TEMPORAL, Features::VELOCITY),
         (Features::SSR_LEVELS, Features::SSR),
         (Features::SSR_SPREAD, Features::SSR),
+        (Features::SSR_THIN, Features::SSR),
         (Features::GI_UPDATE, Features::GI),
     ];
 
@@ -1063,11 +1077,20 @@ pub(crate) const FRAME_PASSES: [Pass; 8] = [
                 on(F::SSR),
                 &[u(SceneDepth, A::SampleMs), u(ReflectionDepth, A::Color)],
             ),
+            // With thin objects on: the nearest depth of each 8x8 block of
+            // the copy and of 16, 32 and 64 pixels, which a long step of the
+            // trace reads along what it jumps over.
+            step(
+                "reflection coarse depth",
+                on(F::SSR_THIN),
+                &[u(ReflectionDepth, A::Read), u(ReflectionCoarseDepth, A::Write)],
+            ),
             step(
                 "reflections",
                 on(F::SSR),
                 &[
                     u(ReflectionDepth, A::Sample),
+                    u(ReflectionCoarseDepth, A::Sample).on(F::SSR_THIN),
                     u(ReflectionHistory, A::SamplePrevious),
                     u(ScreenImage, A::Color),
                     u(ReflectionHits, A::Color),

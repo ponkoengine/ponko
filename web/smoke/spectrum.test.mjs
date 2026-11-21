@@ -16,22 +16,23 @@ test("arguments default to all three builds, three loads each, and refuse what t
   assert.throws(() => parseArgs(["--fast"]), UsageError);
 });
 
-test("both SIMD builds add simd128, to the flags cargo reads, keeping theirs", () => {
+test("the simd128-alone build adds the flag, to the flags cargo reads, keeping theirs", () => {
   const target = "CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS";
   assert.deepEqual(variantEnv("scalar", { PATH: "p" }), { PATH: "p" });
   assert.equal(variantEnv("simd128", {})[target], "-C target-feature=+simd128");
-  assert.equal(variantEnv("simd", {})[target], "-C target-feature=+simd128");
-  assert.equal(variantEnv("simd", { [target]: "-C opt-level=s" })[target], "-C opt-level=s -C target-feature=+simd128");
-  const rust = variantEnv("simd", { RUSTFLAGS: "-D warnings" });
+  assert.equal(variantEnv("simd128", { [target]: "-C opt-level=s" })[target], "-C opt-level=s -C target-feature=+simd128");
+  const rust = variantEnv("simd128", { RUSTFLAGS: "-D warnings" });
   assert.equal(rust.RUSTFLAGS, "-D warnings -C target-feature=+simd128", "cargo ignores the target variable when RUSTFLAGS is set");
   assert.equal(rust[target], undefined);
-  assert.equal(variantEnv("simd", { CARGO_ENCODED_RUSTFLAGS: "-Dwarnings" }).CARGO_ENCODED_RUSTFLAGS, "-Dwarnings\x1f-C\x1ftarget-feature=+simd128");
+  assert.equal(variantEnv("simd128", { CARGO_ENCODED_RUSTFLAGS: "-Dwarnings" }).CARGO_ENCODED_RUSTFLAGS, "-Dwarnings\x1f-C\x1ftarget-feature=+simd128");
+  assert.deepEqual(variantEnv("simd", { PATH: "p" }), { PATH: "p" }, "web/build.sh --simd sets the flag itself");
 });
 
 test("each build goes to its own folder with its features", () => {
   assert.deepEqual(buildArgs("scalar"), ["web/build.sh", "--features", "3d", "web_spectrum", "target/web/web_spectrum"]);
-  assert.deepEqual(buildArgs("simd").slice(1, 3), ["--features", "3d,wasm-simd"]);
-  const dirs = Object.keys(VARIANTS).map((v) => buildArgs(v)[4]);
+  assert.deepEqual(buildArgs("simd").slice(1, 4), ["--simd", "--features", "3d"]);
+  assert.equal(buildArgs("simd").at(-2), "web_spectrum");
+  const dirs = Object.keys(VARIANTS).map((v) => buildArgs(v).at(-1));
   assert.equal(new Set(dirs).size, dirs.length, "no build overwrites another");
 });
 
@@ -40,7 +41,7 @@ function run(variant, ms = (cells) => cells / 100) {
   const v = VARIANTS[variant];
   return {
     simd: v.simd128,
-    rustfft_simd: v.features.includes("wasm-simd"),
+    rustfft_simd: v.rustfftSimd,
     done: true,
     bench: CELLS.flatMap((cells) => KINDS.map((kind) => ({ cells, kind, moment_ms: [ms(cells, kind), ms(cells, kind) * 1.1, ms(cells, kind) * 0.9] }))),
   };
