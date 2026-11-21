@@ -179,7 +179,11 @@ fn draw_run(path: BatchPath, cells: usize, columns: usize, separate: bool) -> Op
         let transforms: Vec<Mat4> = (0..DRAW_PER_CELL)
             .map(|i| {
                 let (u, v) = ((i % side) as f32 + 0.5, (i / side) as f32 + 0.5);
-                Mat4::from_translation(vec3((x + u / side as f32) * DRAW_CELL, 0.2, (z + v / side as f32) * DRAW_CELL))
+                Mat4::from_translation(vec3(
+                    (x + u / side as f32) * DRAW_CELL,
+                    0.2,
+                    (z + v / side as f32) * DRAW_CELL,
+                ))
             })
             .collect();
         add_cell(&mut rig, batch, &transforms, &[]);
@@ -205,11 +209,19 @@ fn draw_run(path: BatchPath, cells: usize, columns: usize, separate: bool) -> Op
             continue;
         }
         out.frames.push(cost.frame_ms);
-        (out.draws, out.bind_groups, out.vertex_buffers) =
-            (cost.changes.draws, cost.changes.bind_groups, cost.changes.vertex_buffers);
+        (out.draws, out.bind_groups, out.vertex_buffers) = (
+            cost.changes.draws,
+            cost.changes.bind_groups,
+            cost.changes.vertex_buffers,
+        );
     }
     if path == BatchPath::Cpu {
-        let in_view = rig.renderer.static_batches.iter().flatten().filter(|b| b.visible.first().is_some_and(|l| !l.is_empty()));
+        let in_view = rig
+            .renderer
+            .static_batches
+            .iter()
+            .flatten()
+            .filter(|b| b.visible.first().is_some_and(|l| !l.is_empty()));
         out.visible = Some(in_view.count());
     }
     Some(out)
@@ -218,7 +230,9 @@ fn draw_run(path: BatchPath, cells: usize, columns: usize, separate: bool) -> Op
 /// Draw calls and frame times of 100 and 1,000 visible cells, each cell on
 /// its own and drawn together, on both paths.
 fn draw_table() {
-    println!("| path | visible cells | cells drawn | draws per frame | bind groups set | vertex buffers set | frame ms (p50 / p95 / p99 / max) |");
+    println!(
+        "| path | visible cells | cells drawn | draws per frame | bind groups set | vertex buffers set | frame ms (p50 / p95 / p99 / max) |"
+    );
     println!("|---|---|---|---|---|---|---|");
     for path in [BatchPath::Gpu, BatchPath::Cpu] {
         for (cells, columns) in [(100, 10), (1000, 40)] {
@@ -229,7 +243,11 @@ fn draw_table() {
                 println!(
                     "| {path:?} | {} | {} | {} | {} | {} | {:.2} / {:.2} / {:.2} / {:.2} |",
                     m.visible.map_or_else(|| cells.to_string(), |v| v.to_string()),
-                    if separate { "each on its own (before)" } else { "together (after)" },
+                    if separate {
+                        "each on its own (before)"
+                    } else {
+                        "together (after)"
+                    },
                     m.draws,
                     m.bind_groups,
                     m.vertex_buffers,

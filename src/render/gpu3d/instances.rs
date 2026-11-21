@@ -1015,9 +1015,12 @@ impl Culling {
                 };
                 let bytes = group.bytes(group.columns);
                 let pages = &mut self.pools[pool].pages;
-                let page = pages
-                    .iter_mut()
-                    .position(|page| page.args.alloc(device, queue, bytes).map(|at| group.args = at).is_some());
+                let page = pages.iter_mut().position(|page| {
+                    page.args
+                        .alloc(device, queue, bytes)
+                        .map(|at| group.args = at)
+                        .is_some()
+                });
                 let page = match page {
                     Some(page) => page,
                     None => {
@@ -1042,7 +1045,9 @@ impl Culling {
                 g
             }
         };
-        let group = self.groups[g].as_mut().expect("just found");
+        let group = self.groups[g]
+            .as_mut()
+            .expect("invariant: the group was found or made just above");
         let page = &mut self.pools[pool].pages[group.page];
         if group.members == group.columns {
             // Twice the columns, in the same page (its lists are there).
@@ -1071,7 +1076,12 @@ impl Culling {
             }
             return None;
         };
-        let column = group.firsts.iter().position(|&f| f == u32::MAX).expect("a free column") as u32;
+        let column = group
+            .firsts
+            .iter()
+            .position(|&f| f == u32::MAX)
+            .expect("invariant: the group has fewer members than columns (it grew just above)")
+            as u32;
         let first = u32::try_from(at / 4).ok()?;
         group.firsts[column as usize] = first;
         group.members += 1;
@@ -1093,11 +1103,17 @@ impl Culling {
     /// Takes column `column` of group `g` back: it draws nothing from now
     /// on, and an emptied group gives its draws back to its page.
     fn leave_group(&mut self, queue: &wgpu::Queue, g: usize, column: u32) {
-        let group = self.groups[g].as_mut().expect("a live group");
+        let group = self.groups[g]
+            .as_mut()
+            .expect("invariant: a view in a group keeps it alive until the view is released");
         let page = &mut self.pools[group.pool].pages[group.page];
         group.firsts[column as usize] = u32::MAX;
         group.members -= 1;
-        group.high = group.firsts.iter().rposition(|&f| f != u32::MAX).map_or(0, |c| c as u32 + 1);
+        group.high = group
+            .firsts
+            .iter()
+            .rposition(|&f| f != u32::MAX)
+            .map_or(0, |c| c as u32 + 1);
         if group.members == 0 {
             page.args.release(group.args, group.bytes(group.columns));
             self.groups[g] = None;
@@ -1117,7 +1133,9 @@ impl Culling {
     fn view_args(&self, view: &BatchView) -> (u64, u64) {
         match view.group {
             Some((g, column)) => {
-                let group = self.groups[g].as_ref().expect("a live group");
+                let group = self.groups[g]
+                    .as_ref()
+                    .expect("invariant: a view in a group keeps it alive until the view is released");
                 (group.column_args(column), u64::from(group.columns) * ARGS)
             }
             None => (view.args, ARGS),
@@ -1524,7 +1542,9 @@ impl Renderer3D {
         let mut vertices = None;
         let mut shared_vertices = None;
         if pooled.is_none() && batch.parent.is_some() {
-            shared_vertices = self.batching.cell_vertices(device, queue, bytemuck::cast_slice(&batch.instances));
+            shared_vertices = self
+                .batching
+                .cell_vertices(device, queue, bytemuck::cast_slice(&batch.instances));
         }
         if pooled.is_none() && shared_vertices.is_none() {
             let bytes = u64::from(count) * VERTEX;
@@ -1968,42 +1988,42 @@ impl Renderer3D {
                                     });
                                     Some(batch.views.len() - 1)
                                 } else {
-                                match placed {
-                                    Some((page, at, args)) => {
-                                        queue.uploading(Upload::StaticBatches).write_buffer(
-                                            &culling.pools[pooled.pool].pages[page].args.buffer,
-                                            args,
-                                            arguments,
-                                        );
-                                        batch.views.push(BatchView {
-                                            read: None,
-                                            page,
-                                            visibility: (at, visibility),
-                                            args,
-                                            group: None,
-                                            band,
-                                            slot,
-                                            level,
-                                            active: false,
-                                        });
-                                        Some(batch.views.len() - 1)
+                                    match placed {
+                                        Some((page, at, args)) => {
+                                            queue.uploading(Upload::StaticBatches).write_buffer(
+                                                &culling.pools[pooled.pool].pages[page].args.buffer,
+                                                args,
+                                                arguments,
+                                            );
+                                            batch.views.push(BatchView {
+                                                read: None,
+                                                page,
+                                                visibility: (at, visibility),
+                                                args,
+                                                group: None,
+                                                band,
+                                                slot,
+                                                level,
+                                                active: false,
+                                            });
+                                            Some(batch.views.len() - 1)
+                                        }
+                                        None => {
+                                            // Its records fit a buffer, so its list
+                                            // does: only a mesh of a million parts
+                                            // gets here.
+                                            batching.skipped += 1;
+                                            Self::report(
+                                                &mut batching.reported,
+                                                SKIPPED_VIEW,
+                                                "an instance batch's visible list and draw arguments for one view",
+                                                (visibility + arguments.len() as u64) as usize,
+                                                traffic::most_bytes(device, wgpu::BufferUsages::STORAGE),
+                                                "the batch is NOT DRAWN in that view",
+                                            );
+                                            None
+                                        }
                                     }
-                                    None => {
-                                        // Its records fit a buffer, so its list
-                                        // does: only a mesh of a million parts
-                                        // gets here.
-                                        batching.skipped += 1;
-                                        Self::report(
-                                            &mut batching.reported,
-                                            SKIPPED_VIEW,
-                                            "an instance batch's visible list and draw arguments for one view",
-                                            (visibility + arguments.len() as u64) as usize,
-                                            traffic::most_bytes(device, wgpu::BufferUsages::STORAGE),
-                                            "the batch is NOT DRAWN in that view",
-                                        );
-                                        None
-                                    }
-                                }
                                 }
                             }
                         };
@@ -2125,7 +2145,9 @@ impl Renderer3D {
         for (b, batch) in self.static_batches.iter().enumerate() {
             for view in batch.iter().flat_map(|batch| &batch.views) {
                 if let (true, Some((g, _))) = (view.active, view.group) {
-                    let group = culling.groups[g].as_mut().expect("a live group");
+                    let group = culling.groups[g]
+                        .as_mut()
+                        .expect("invariant: a view in a group keeps it alive until the view is released");
                     group.leader.get_or_insert(b);
                 }
             }
@@ -2137,7 +2159,14 @@ impl Renderer3D {
             let cells = batch.cells.len() as u32;
             for view in batch.views.iter_mut() {
                 let page = &mut pool.pages[view.page];
-                let group = view.group.map(|(g, column)| (culling.groups[g].as_mut().expect("a live group"), column));
+                let group = view.group.map(|(g, column)| {
+                    (
+                        culling.groups[g]
+                            .as_mut()
+                            .expect("invariant: a view in a group keeps it alive until the view is released"),
+                        column,
+                    )
+                });
                 if !view.active {
                     // A cell left out of a drawn group's view this frame
                     // draws nothing in it: a job of no cells zeroes its
@@ -2447,8 +2476,11 @@ impl Renderer3D {
             .zip(self.static_culling.as_ref());
         // A cell group is drawn whole, by its leader's draw.
         let group = pooled.and_then(|((v, _), culling)| {
-            v.group
-                .map(|(g, _)| culling.groups[g].as_ref().expect("a live group"))
+            v.group.map(|(g, _)| {
+                culling.groups[g]
+                    .as_ref()
+                    .expect("invariant: a view in a group keeps it alive until the view is released")
+            })
         });
         if let Some(group) = group
             && (group.leader != Some(b) || group.broken || group.read.is_none())

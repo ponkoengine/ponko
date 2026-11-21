@@ -441,8 +441,14 @@ fn cells_of_a_batch_share_a_bind_group_and_draw_once_per_material_and_view() {
     // difference allowed.
     let (a, b) = (apart.image(), together.image());
     let d = support::diff(&a, &b, 0);
-    assert!(a.rgba == b.rgba, "cells drawn together differ from each on its own: {d}");
-    assert!(a.fraction(0..a.width, 0..a.height, |p| p[1] > 120 && p[0] < 110) > 0.02, "the cells show");
+    assert!(
+        a.rgba == b.rgba,
+        "cells drawn together differ from each on its own: {d}"
+    );
+    assert!(
+        a.fraction(0..a.width, 0..a.height, |p| p[1] > 120 && p[0] < 110) > 0.02,
+        "the cells show"
+    );
     few.image();
     let (apart_n, together_n, few_n) = (drawn(&mut apart), drawn(&mut together), drawn(&mut few));
     eprintln!(
@@ -463,7 +469,11 @@ fn cells_of_a_batch_share_a_bind_group_and_draw_once_per_material_and_view() {
     let (groups, members) = together.renderer.cell_groups();
     assert!(groups >= 2, "the camera's and the cascades' groups: {groups}");
     assert!(members >= 24, "every cell's camera view is in a group: {members}");
-    assert_eq!(apart.renderer.cell_groups(), (0, 0), "the control draws each cell on its own");
+    assert_eq!(
+        apart.renderer.cell_groups(),
+        (0, 0),
+        "the control draws each cell on its own"
+    );
     // One draw per material and view, however many cells.
     assert_eq!(together_n.draws, few_n.draws, "24 cells draw as often as 6");
     assert_eq!(together_n.bind_groups, few_n.bind_groups);
@@ -485,7 +495,11 @@ fn cells_of_a_batch_share_a_bind_group_and_draw_once_per_material_and_view() {
         free_cell(&mut cells, handle);
     }
     let (a, b) = (cells.image(), reference.image());
-    assert!(a.rgba == b.rgba, "freed cells draw nothing: {}", support::diff(&a, &b, 0));
+    assert!(
+        a.rgba == b.rgba,
+        "freed cells draw nothing: {}",
+        support::diff(&a, &b, 0)
+    );
     for &handle in &handles[..6] {
         free_cell(&mut cells, handle);
     }
@@ -500,13 +514,20 @@ fn cpu_cells_take_ranges_of_one_vertex_buffer_and_reuse_freed_ones() {
         return;
     };
     let (a, b) = (apart.image(), together.image());
-    assert!(a.rgba == b.rgba, "a shared buffer draws the same: {}", support::diff(&a, &b, 0));
+    assert!(
+        a.rgba == b.rgba,
+        "a shared buffer draws the same: {}",
+        support::diff(&a, &b, 0)
+    );
     let rows: Vec<u32> = handles
         .iter()
         .map(|&c| together.ctx.gfx.instance_cell_row(c).unwrap())
         .collect();
     assert!(rows.iter().all(|&row| together.renderer.batch_shares_vertices(row)));
-    assert!(apart.renderer.cell_vertices_use().is_none(), "the control's cells own buffers");
+    assert!(
+        apart.renderer.cell_vertices_use().is_none(),
+        "the control's cells own buffers"
+    );
     let (apart_n, together_n) = (drawn(&mut apart), drawn(&mut together));
     eprintln!(
         "vertex buffers set: apart {} together {}; draws apart {} together {}",
@@ -535,7 +556,10 @@ fn cpu_cells_take_ranges_of_one_vertex_buffer_and_reuse_freed_ones() {
         assert_eq!(used, 24 * 9 * 80, "only the live cells' ranges are handed out");
         capacity.push(bytes);
     }
-    assert!(capacity.iter().all(|&c| c == capacity[0]), "freed ranges are reused: {capacity:?}");
+    assert!(
+        capacity.iter().all(|&c| c == capacity[0]),
+        "freed ranges are reused: {capacity:?}"
+    );
     for handle in live {
         free_cell(&mut together, handle);
     }
