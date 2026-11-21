@@ -16,7 +16,8 @@ const ACTIONS: [&str; 4] = ["move", "jump", "fire", "pause"];
 
 fn actions(ctx: &mut Ctx) {
     for (name, key) in [("jump", Key::Space), ("fire", Key::F), ("pause", Key::Escape)] {
-        ctx.input.set_action(name, Action::Button(vec![ButtonBinding::Key(key)]));
+        ctx.input
+            .set_action(name, Action::Button(vec![ButtonBinding::Key(key)]));
     }
     ctx.input.set_action(
         "move",
@@ -153,7 +154,10 @@ fn without_a_safe_area_the_controls_would_sit_under_the_notch() {
             .iter()
             .filter(|(_, c, r)| !inside(disc(*c, *r), covered))
             .count();
-        assert!(under > 0, "{size:?}: some control lies under {insets:?} with no safe area");
+        assert!(
+            under > 0,
+            "{size:?}: some control lies under {insets:?} with no safe area"
+        );
     }
 }
 
@@ -185,7 +189,10 @@ fn a_control_dragged_into_the_notch_stops_at_its_edge() {
             ctx.input.edit_touch_controls(true);
         });
     let (centre, node, safe) = found.borrow().expect("the drag ran");
-    assert!(inside(node, safe), "dragged into the corner, {node:?} stays in {safe:?}");
+    assert!(
+        inside(node, safe),
+        "dragged into the corner, {node:?} stays in {safe:?}"
+    );
     let radius = node.size().x / 2.0;
     assert!(
         (centre.x - radius - safe.min.x).abs() < 1.0 && (centre.y + radius - safe.max.y).abs() < 1.0,
@@ -220,7 +227,13 @@ fn ui_roots_inside_the_safe_area_lay_out_in_it_and_follow_it_when_it_changes() {
             let backdrop = ctx.ui.root().layout(UiLayout::fill()).name("backdrop").id();
             ctx.ui.show_hud(backdrop);
             // A HUD and its score in the top left corner, clear of the notch.
-            let hud = ctx.ui.root().layout(UiLayout::fill()).name("hud").inside_safe_area().id();
+            let hud = ctx
+                .ui
+                .root()
+                .layout(UiLayout::fill())
+                .name("hud")
+                .inside_safe_area()
+                .id();
             ctx.ui
                 .label(hud, "Score 0")
                 .name("hud.score")
@@ -241,7 +254,10 @@ fn ui_roots_inside_the_safe_area_lay_out_in_it_and_follow_it_when_it_changes() {
     for (i, &(safe, backdrop, hud, score, dialog)) in frames.iter().enumerate() {
         assert_eq!(backdrop, window, "frame {i}: the backdrop fills the window");
         assert_eq!(hud, safe, "frame {i}: the HUD fills the safe area");
-        assert_eq!(score.min, safe.min, "frame {i}: the score sits in the safe area's corner");
+        assert_eq!(
+            score.min, safe.min,
+            "frame {i}: the score sits in the safe area's corner"
+        );
         assert!(
             (dialog.center() - safe.center()).length() < 1.0,
             "frame {i}: the dialog {dialog:?} is centred in {safe:?}"

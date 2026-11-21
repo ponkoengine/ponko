@@ -392,13 +392,7 @@ pub(crate) fn zones(controls: &TouchControls) -> Vec<Zone> {
 /// engine lays them out, or where the game put them, or where the player
 /// moved them, at the sizes of their style and the player's layout, inside
 /// the area. The view their places count from is the area.
-pub(crate) fn place_zones(
-    controls: &TouchControls,
-    layout: &TouchLayout,
-    zones: &mut [Zone],
-    area: Rect,
-    scale: f32,
-) {
+pub(crate) fn place_zones(controls: &TouchControls, layout: &TouchLayout, zones: &mut [Zone], area: Rect, scale: f32) {
     let scale = scale.max(1e-3);
     let view = area.size() / scale;
     let spots = place(&controls.specs, view);
@@ -741,7 +735,12 @@ mod tests {
         // The stick keeps the margin it keeps from the window's corner from the safe area's.
         let mut whole = super::zones(&controls);
         place_zones(&controls, &layout, &mut whole, Rect::new(0.0, 0.0, 960.0, 540.0), 2.0);
-        assert!(zones[0].center.x > whole[0].center.x, "{} {}", zones[0].center, whole[0].center);
+        assert!(
+            zones[0].center.x > whole[0].center.x,
+            "{} {}",
+            zones[0].center,
+            whole[0].center
+        );
         // Dragged into the notch, a control stops at its edge.
         assert_eq!(drag_to(vec2(0.0, 540.0), 20.0, (safe, 2.0)), vec2(80.0, 480.0));
     }
@@ -764,7 +763,13 @@ mod tests {
         };
         layout.adjust("fire").size = 0.5;
         let mut zones = zones(&controls);
-        place_zones(&controls, &TouchLayout::default(), &mut zones, Rect::new(0.0, 0.0, 960.0, 540.0), 1.0);
+        place_zones(
+            &controls,
+            &TouchLayout::default(),
+            &mut zones,
+            Rect::new(0.0, 0.0, 960.0, 540.0),
+            1.0,
+        );
         let plain = zones[0].radius;
         place_zones(&controls, &layout, &mut zones, Rect::new(0.0, 0.0, 960.0, 540.0), 1.0);
         assert!((zones[0].radius - plain * 1.5).abs() < 1e-4);

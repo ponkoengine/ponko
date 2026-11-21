@@ -1175,7 +1175,12 @@ fn jumps_over_the_bottom_edge(compute: bool) -> Option<(Image, Image, Image, u32
     let (skeleton, data) = figure();
     let mesh = skinned_mesh(&mut rig, &data, glow(Color::WHITE), &skeleton);
     let jump = jump(&skeleton);
-    let at = |i: usize| (Mat4::from_translation(vec3(-2.4 + 0.4 * i as f32, 0.0, 0.0)), (2 * i + 1) as f32 / 30.0);
+    let at = |i: usize| {
+        (
+            Mat4::from_translation(vec3(-2.4 + 0.4 * i as f32, 0.0, 0.0)),
+            (2 * i + 1) as f32 / 30.0,
+        )
+    };
     // The standing figure's head stays below the view's bottom edge.
     let top = rig.ctx.scene3d.camera.view_proj().project_point3(vec3(0.0, 2.15, 0.15));
     assert!(top.y < -1.0, "the scene's standing figures are out of view ({top})");
@@ -1186,7 +1191,9 @@ fn jumps_over_the_bottom_edge(compute: bool) -> Option<(Image, Image, Image, u32
             posed.reset_pose();
             jump.sample(t, &mut posed);
             let (_, _, position) = m.to_scale_rotation_translation();
-            rig.ctx.world.spawn((Transform3D::at(position), Model::new(mesh), posed))
+            rig.ctx
+                .world
+                .spawn((Transform3D::at(position), Model::new(mesh), posed))
         })
         .collect();
     let model_image = rig.image();
@@ -1226,7 +1233,11 @@ fn a_crowd_culled_by_frame_ranges_still_draws_every_visible_character() {
             return;
         };
         let lit = |i: &Image| i.fraction(0..i.width, 0..i.height, |p| p[0] > 128);
-        assert!(lit(&model) > 0.005, "compute {compute}: heads come into view ({})", lit(&model));
+        assert!(
+            lit(&model) > 0.005,
+            "compute {compute}: heads come into view ({})",
+            lit(&model)
+        );
         let d = support::diff_within(&crowd, &model, SAME_POSE);
         eprintln!("compute {compute}: {drawn} of 13 characters drawn; crowd against models {d}");
         support::keep_image(&crowd);
@@ -1240,9 +1251,16 @@ fn a_crowd_culled_by_frame_ranges_still_draws_every_visible_character() {
             .flat_map(|y| (0..model.width).map(move |x| (x, y)))
             .filter(|&(x, y)| model.pixel(x, y)[0] > 128 && crowd.pixel(x, y)[0] <= 128)
             .count();
-        assert!(missing <= 2, "compute {compute}: {missing} pixels of the models missing from the crowd");
+        assert!(
+            missing <= 2,
+            "compute {compute}: {missing} pixels of the models missing from the crowd"
+        );
         // Negative control: the crowd standing draws none of it.
-        assert_eq!(lit(&standing), 0.0, "compute {compute}: standing, every figure is out of view");
+        assert_eq!(
+            lit(&standing),
+            0.0,
+            "compute {compute}: standing, every figure is out of view"
+        );
         // Five heads clear the view's edge (frames 11 to 19); a box around
         // the whole jump kept all 13, and the ranges of the jump's start
         // and end lie below the edge.

@@ -843,7 +843,13 @@ impl SafeInsets {
 /// `"47px"` (a computed CSS length) as 47.
 #[cfg(any(test, all(target_arch = "wasm32", feature = "window")))]
 fn css_pixels(value: &str) -> Option<f32> {
-    value.trim().strip_suffix("px")?.trim().parse::<f32>().ok().filter(|v| v.is_finite())
+    value
+        .trim()
+        .strip_suffix("px")?
+        .trim()
+        .parse::<f32>()
+        .ok()
+        .filter(|v| v.is_finite())
 }
 
 /// The browser's safe area insets (`env(safe-area-inset-*)`, non-zero only

@@ -895,7 +895,11 @@ impl Graphics {
                 let (a, b) = frame_bounds[(first + f) as usize];
                 (lo.min(a), hi.max(b))
             });
-            if lo.cmple(hi).all() { (lo, hi) } else { (Vec3::ZERO, Vec3::ZERO) }
+            if lo.cmple(hi).all() {
+                (lo, hi)
+            } else {
+                (Vec3::ZERO, Vec3::ZERO)
+            }
         };
         let mut clip_bounds = Vec::with_capacity(baked.clips.len());
         let mut range_first = Vec::with_capacity(baked.clips.len());
@@ -1272,7 +1276,10 @@ mod tests {
             assert_eq!(data.range_bounds.len(), 9);
             let (clip_lo, clip_hi) = data.clip_bounds[0];
             for &(lo, hi) in &data.range_bounds[..8] {
-                assert!(lo.cmpge(clip_lo).all() && hi.cmple(clip_hi).all(), "inside the clip's box");
+                assert!(
+                    lo.cmpge(clip_lo).all() && hi.cmple(clip_hi).all(),
+                    "inside the clip's box"
+                );
             }
             assert_eq!(data.range_bounds[8], data.clip_bounds[1], "one frame: one range");
             // The top's tip, (0, 2) at rest, turns about (0, 1) to (-1, 1).
@@ -1285,7 +1292,8 @@ mod tests {
                 let t = step as f32 / 100.0;
                 // Held at t, and played up to t from the start.
                 for (time, speed, elapsed) in [(t, 0.0, 0.0), (0.0, 1.0, t), (t / 2.0, 0.5, t)] {
-                    let record = CrowdRecord::new(&CrowdInstance::new(Mat4::IDENTITY).playing(0, time).with_speed(speed));
+                    let record =
+                        CrowdRecord::new(&CrowdInstance::new(Mat4::IDENTITY).playing(0, time).with_speed(speed));
                     let b = data.character_bounds_at(record.anim, elapsed);
                     assert!(inside(tip(t), b), "the tip at {t} s outside {b:?}");
                     assert!(inside(Vec3::ZERO, b), "the base at {t} s outside {b:?}");
