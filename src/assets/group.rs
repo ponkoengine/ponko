@@ -515,7 +515,7 @@ struct Sliced {
 }
 
 enum SliceWork {
-    Texture(sliced::PngSlices),
+    Texture(Box<sliced::PngSlices>),
     #[cfg(feature = "audio")]
     Sound(sliced::SoundSlices),
 }
@@ -1223,7 +1223,7 @@ impl Ctx {
                 let bytes = Arc::new(bytes);
                 match sliced::PngSlices::new(&bytes) {
                     Some(png) => Step::Sliced(Box::new(Sliced {
-                        work: SliceWork::Texture(png),
+                        work: SliceWork::Texture(Box::new(png)),
                         origin,
                     })),
                     None => {

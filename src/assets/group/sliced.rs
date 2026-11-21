@@ -125,7 +125,7 @@ fn push_rgba(out: &mut Vec<u8>, row: &[u8], width: u32, channels: usize, wide: b
     match (channels, wide) {
         (4, false) => return out.extend_from_slice(&row[..width * 4]),
         (3, false) => {
-            for p in row[..width * 3].chunks_exact(3) {
+            for p in row[..width * 3].as_chunks::<3>().0 {
                 out.extend_from_slice(&[p[0], p[1], p[2], 255]);
             }
             return;
@@ -223,9 +223,13 @@ impl SoundSlices {
                 1 => self
                     .frames
                     .extend(self.samples.iter().map(|&s| kira::Frame::from_mono(s))),
-                2 => self
-                    .frames
-                    .extend(self.samples.chunks_exact(2).map(|lr| kira::Frame::new(lr[0], lr[1]))),
+                2 => self.frames.extend(
+                    self.samples
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|[l, r]| kira::Frame::new(*l, *r)),
+                ),
                 _ => return Err(fail(&"unsupported channel configuration")),
             }
         }
