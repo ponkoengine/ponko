@@ -225,6 +225,33 @@ fn placed_by_driver(device: &wgpu::Device, texture: &wgpu::Texture) -> Option<u6
     Some(sizes[0])
 }
 
+/// The adapter's figure once what was dropped has been given back: the
+/// smallest of a few readings, each after waiting for the GPU, stopping
+/// once two in a row agree. Memory a driver frees late (Metal releases a
+/// dropped buffer or texture after its last command buffer completes,
+/// which on a loaded machine can come after the poll that waited for it)
+/// only ever leaves the figure, so the smallest reading is the one to
+/// compare; a resource the engine forgets to count is in every reading
+/// and still breaks the comparison.
+fn settled_adapter_bytes(device: &wgpu::Device) -> u64 {
+    let read = || {
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        adapter_bytes(device).0.expect("reported above")
+    };
+    let mut last = read();
+    let mut least = last;
+    for _ in 0..20 {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let now = read();
+        least = least.min(now);
+        if now == last {
+            break;
+        }
+        last = now;
+    }
+    least
+}
+
 /// Draws each preset and compares the counted total with the adapter's
 /// figure, where the platform has one. Does nothing unless run as the
 /// child of the test above.
@@ -287,7 +314,7 @@ fn adapter_figure_child() {
             (t.sample_count() > 1).then(|| placed_by_driver(&f.device, t)).flatten()
         });
         let m = t.finish();
-        let raw = adapter_bytes(&f.device).0.expect("reported above");
+        let raw = settled_adapter_bytes(&f.device);
         println!("{m}");
         // The engine's share of the figure, and what it is compared with.
         let (counted, adapter, slack) = match f.device.generate_allocator_report() {

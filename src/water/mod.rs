@@ -521,6 +521,8 @@ pub struct Water {
     surface: MaterialDesc,
     /// Ripple contacts waiting for the simulation: x, z, radius, strength.
     contacts: Vec<Vec4>,
+    /// How many contacts [`Water::touch`] accepted since the water was made.
+    contacts_started: u64,
     /// The ripple simulation, where the CPU runs it (no compute shaders).
     cpu_ripples: Option<ripples::CpuRipples>,
     /// The spectrum's field as uploaded, where the CPU works it out.
@@ -669,6 +671,7 @@ impl Water {
             parts,
             surface,
             contacts: Vec::with_capacity(MAX_WAITING_CONTACTS),
+            contacts_started: 0,
             cpu_ripples,
             field_upload: Vec::new(),
             contacts_sent: false,
@@ -768,12 +771,26 @@ impl Water {
             self.contacts.remove(0);
         }
         self.contacts.push(Vec4::new(at.x, at.y, radius.max(0.05), strength));
+        self.contacts_started += 1;
     }
 
-    /// How many ripple contacts wait for a frame.
+    /// How many ripple contacts wait for a frame. The water's update in
+    /// [`Phase::Late`](crate::game::Phase::Late) takes them, so a system after
+    /// physics sees the ones the step started; for a test that only needs to
+    /// know whether any started, see [`contacts_started`](Self::contacts_started).
     #[must_use]
     pub fn waiting_contacts(&self) -> usize {
         self.contacts.len()
+    }
+
+    /// How many ripple contacts have started since the water was made: the
+    /// rings [`touch`](Self::touch) accepted, and floating bodies' crossings of
+    /// the surface. Unlike [`waiting_contacts`](Self::waiting_contacts) the
+    /// update doesn't drain it, so a test reads it once after the physics step
+    /// instead of keeping the most of a count over every tick.
+    #[must_use]
+    pub fn contacts_started(&self) -> u64 {
+        self.contacts_started
     }
 
     /// Whether the underwater effect is in the frame's passes now.
