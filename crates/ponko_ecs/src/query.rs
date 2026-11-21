@@ -544,16 +544,17 @@ impl Filters {
         }
     }
 
-    /// The row test `Added`/`Changed` filters apply inside matching archetype
-    /// `arch`, or `None` if every row passes: no such filters, or each one
+    /// Fills `rows` with the row test `Added`/`Changed` filters apply inside
+    /// matching archetype `arch`, keeping its clock; `false` (and `rows`
+    /// left unspecified) if every row passes: no such filters, or each one
     /// sits in an `Or` that another term already satisfies for all of `arch`.
     #[inline]
-    pub(crate) fn row_filter(&self, arch: &Archetype, clock: Clock) -> Option<RowFilter> {
+    pub(crate) fn fill_row_filter(&self, arch: &Archetype, rows: &mut RowFilter) -> bool {
         let in_or = self.any_added | self.any_changed;
         if self.with_added | self.with_changed == 0 && in_or == 0 {
-            return None;
+            return false;
         }
-        let mut rows = RowFilter::new(clock);
+        rows.clear();
         for i in 0..self.n_with as usize {
             for (mask, added) in [(self.with_added, true), (self.with_changed, false)] {
                 if mask >> i & 1 != 0 {
@@ -578,7 +579,7 @@ impl Filters {
             }
             start = end;
         }
-        (!rows.is_empty()).then_some(rows)
+        !rows.is_empty()
     }
 
     /// Converts required predicates into singleton clauses. Only construction
@@ -1310,7 +1311,7 @@ impl<'w, Q: QueryData> Query<'w, Q> {
     fn for_each_tracked(&mut self, mut f: impl FnMut(Q::Item<'_>)) {
         let ids = self.ids;
         let filters = self.filters;
-        let clock = self.clock();
+        let mut runs = change::Runs::new(self.clock());
         for arch in self.archetypes() {
             let len = arch.len();
             if len == 0 || !filters.matches_tracked(arch) {
@@ -1319,15 +1320,11 @@ impl<'w, Q: QueryData> Query<'w, Q> {
             let Some(state) = Q::state(arch, &ids) else {
                 continue;
             };
-            let mut runs = if arch.tracked() {
-                change::visit::<Q>(arch, &ids, &filters, clock)
-            } else {
-                None
-            };
+            let in_runs = arch.tracked() && change::visit::<Q>(arch, &ids, &filters, &mut runs);
             let (mut start, mut end) = (0, len);
             loop {
-                if let Some(runs) = &mut runs {
-                    match runs.next::<Q>(&ids) {
+                if in_runs {
+                    match runs.next::<Q>(arch, &ids) {
                         Some(run) => (start, end) = run,
                         None => break,
                     }
@@ -1335,7 +1332,7 @@ impl<'w, Q: QueryData> Query<'w, Q> {
                 // SAFETY: rows of a matching archetype, under the query's
                 // validated borrow.
                 unsafe { for_rows::<Q>(state, start..end, &mut f) };
-                if runs.is_none() {
+                if !in_runs {
                     break;
                 }
             }
@@ -1420,7 +1417,7 @@ impl<'w, Q: QueryData> Query<'w, Q> {
         let mut tasks = self.world.par_plan.take();
         let ids = self.ids;
         let filters = self.filters;
-        let clock = self.clock();
+        let mut runs = change::Runs::new(self.clock());
         let tracking = self.tracking();
         let (mut total, mut longest) = (0, 0);
         let mut archetypes = self.archetypes();
@@ -1447,18 +1444,12 @@ impl<'w, Q: QueryData> Query<'w, Q> {
                 total += end - start;
                 longest = longest.max(end - start);
             };
-            let runs = if tracking && arch.tracked() {
-                change::visit::<Q>(arch, &ids, &filters, clock)
-            } else {
-                None
-            };
-            match runs {
-                None => push(0, len),
-                Some(mut runs) => {
-                    while let Some((start, end)) = runs.next::<Q>(&ids) {
-                        push(start, end);
-                    }
+            if tracking && arch.tracked() && change::visit::<Q>(arch, &ids, &filters, &mut runs) {
+                while let Some((start, end)) = runs.next::<Q>(arch, &ids) {
+                    push(start, end);
                 }
+            } else {
+                push(0, len);
             }
         }
         // About 4 chunks per thread, so heavy per-entity work (neighbor
@@ -1687,12 +1678,12 @@ impl<'w, Q: QueryData> Query<'w, Q> {
                 .map(|a| a.len())
                 .sum();
         }
-        let clock = self.clock();
+        let mut rows = RowFilter::new(self.clock());
         self.archetypes()
             .filter(|a| !a.is_empty() && filters.matches(a) && Q::state(a, &ids).is_some())
             .map(|a| {
                 if a.tracked() {
-                    change::count(a, &filters, clock)
+                    change::count(a, &filters, &mut rows)
                 } else {
                     a.len()
                 }

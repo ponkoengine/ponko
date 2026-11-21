@@ -377,6 +377,14 @@ impl RowFilter {
         }
     }
 
+    /// Forgets the terms and clauses, keeping the clock: ready to be
+    /// filled for another archetype.
+    #[inline]
+    pub(crate) fn clear(&mut self) {
+        self.n_terms = 0;
+        self.n_clauses = 0;
+    }
+
     /// Adds a term to the clause being built: the live stamps of one column.
     pub(crate) fn term(&mut self, stamps: Stamps) {
         self.terms[self.n_terms as usize] = stamps.rows;
@@ -467,25 +475,38 @@ impl RowFilter {
 
 /// The rows of one tracked archetype that pass a query's row filter, as
 /// runs of consecutive rows.
-pub(crate) struct Runs<'a> {
-    arch: &'a Archetype,
+///
+/// A loop over many archetypes makes one and refills it for each archetype
+/// ([`visit`]): the filter (a few hundred bytes) is written in place, not
+/// built and moved for every archetype.
+pub(crate) struct Runs {
     rows: RowFilter,
     next: usize,
 }
 
-impl Runs<'_> {
-    /// The next run `start..end` of passing rows, stamped as changed for
-    /// every tracked component `Q` may write.
+impl Runs {
+    /// An empty one, for readers at `clock`; [`visit`] fills it.
+    #[inline]
+    pub(crate) fn new(clock: Clock) -> Self {
+        Runs {
+            rows: RowFilter::new(clock),
+            next: 0,
+        }
+    }
+
+    /// The next run `start..end` of passing rows of `arch` (the archetype
+    /// it was filled for), stamped as changed for every tracked component
+    /// `Q` may write.
     #[inline(never)]
-    pub(crate) fn next<Q: QueryData>(&mut self, ids: &Q::Ids) -> Option<(usize, usize)> {
-        let (start, end) = self.next_run()?;
-        mark::<Q>(self.arch, ids, self.rows.clock.now, start, end);
+    pub(crate) fn next<Q: QueryData>(&mut self, arch: &Archetype, ids: &Q::Ids) -> Option<(usize, usize)> {
+        let (start, end) = self.next_run(arch)?;
+        mark::<Q>(arch, ids, self.rows.clock.now, start, end);
         Some((start, end))
     }
 
-    /// The next run `start..end` of passing rows.
-    fn next_run(&mut self) -> Option<(usize, usize)> {
-        let len = self.arch.len();
+    /// The next run `start..end` of passing rows of `arch`.
+    fn next_run(&mut self, arch: &Archetype) -> Option<(usize, usize)> {
+        let len = arch.len();
         let Some(start) = self.rows.first_passing(self.next, len) else {
             self.next = len;
             return None;
@@ -529,26 +550,22 @@ fn mark_rows(arch: &Archetype, id: ComponentId, stamp: u32, start: usize, end: u
 
 /// Prepares a query's pass over tracked archetype `arch`. Without a row
 /// filter here, stamps every row as changed for every tracked component `Q`
-/// may write, and returns `None`: the caller visits every row. Otherwise
-/// returns the runs of rows to visit.
+/// may write, and returns `false`: the caller visits every row. Otherwise
+/// fills `runs` for `arch` and returns `true`: the caller visits the runs
+/// of rows [`Runs::next`] gives.
 ///
 /// Cold and out of line, like the other entry points the query loops call
 /// for tracked archetypes: the compiler then keeps the loops of worlds that
 /// track nothing as they were, with their state in registers.
 #[cold]
 #[inline(never)]
-pub(crate) fn visit<'a, Q: QueryData>(
-    arch: &'a Archetype,
-    ids: &Q::Ids,
-    filters: &Filters,
-    clock: Clock,
-) -> Option<Runs<'a>> {
-    match filters.row_filter(arch, clock) {
-        Some(rows) => Some(Runs { arch, rows, next: 0 }),
-        None => {
-            mark::<Q>(arch, ids, clock.now, 0, arch.len());
-            None
-        }
+pub(crate) fn visit<Q: QueryData>(arch: &Archetype, ids: &Q::Ids, filters: &Filters, runs: &mut Runs) -> bool {
+    if filters.fill_row_filter(arch, &mut runs.rows) {
+        runs.next = 0;
+        true
+    } else {
+        mark::<Q>(arch, ids, runs.rows.clock.now, 0, arch.len());
+        false
     }
 }
 
@@ -559,7 +576,7 @@ pub(crate) fn visit<'a, Q: QueryData>(
 #[cold]
 #[inline(never)]
 pub(crate) fn enter<Q: QueryData>(arch: &Archetype, ids: Q::Ids, filters: Filters, clock: Clock) -> bool {
-    visit::<Q>(arch, &ids, &filters, clock).is_some()
+    visit::<Q>(arch, &ids, &filters, &mut Runs::new(clock))
 }
 
 /// The first run `start..end` of rows of `arch` at or after row `from` that
@@ -575,8 +592,12 @@ pub(crate) fn next_run<Q: QueryData>(
     clock: Clock,
     from: usize,
 ) -> Option<(usize, usize)> {
-    let rows = filters.row_filter(arch, clock)?;
-    Runs { arch, rows, next: from }.next::<Q>(&ids)
+    let mut runs = Runs::new(clock);
+    if !filters.fill_row_filter(arch, &mut runs.rows) {
+        return None;
+    }
+    runs.next = from;
+    runs.next::<Q>(arch, &ids)
 }
 
 /// [`visit`] for one row: `false` if the row filter rejects it; otherwise
@@ -588,28 +609,34 @@ pub(crate) fn visit_row<Q: QueryData>(
     clock: Clock,
     row: usize,
 ) -> bool {
-    if filters.row_filter(arch, clock).is_some_and(|rows| !rows.passes(row)) {
+    let mut rows = RowFilter::new(clock);
+    if filters.fill_row_filter(arch, &mut rows) && !rows.passes(row) {
         return false;
     }
     mark::<Q>(arch, ids, clock.now, row, row + 1);
     true
 }
 
-/// How many rows of tracked archetype `arch` pass the row filter.
+/// How many rows of tracked archetype `arch` pass the row filter, with
+/// `rows` (for readers at the query's clock) refilled for it: a count over
+/// many archetypes passes the same one to each.
 #[cold]
 #[inline(never)]
-pub(crate) fn count(arch: &Archetype, filters: &Filters, clock: Clock) -> usize {
-    match filters.row_filter(arch, clock) {
-        Some(rows) => rows.count(arch.len(), usize::MAX),
-        None => arch.len(),
+pub(crate) fn count(arch: &Archetype, filters: &Filters, rows: &mut RowFilter) -> usize {
+    if filters.fill_row_filter(arch, rows) {
+        rows.count(arch.len(), usize::MAX)
+    } else {
+        arch.len()
     }
 }
 
 /// [`count`], but it stops looking once it has found `max` rows.
 pub(crate) fn count_at_most(arch: &Archetype, filters: &Filters, clock: Clock, max: usize) -> usize {
-    match filters.row_filter(arch, clock) {
-        Some(rows) => rows.count(arch.len(), max),
-        None => arch.len().min(max),
+    let mut rows = RowFilter::new(clock);
+    if filters.fill_row_filter(arch, &mut rows) {
+        rows.count(arch.len(), max)
+    } else {
+        arch.len().min(max)
     }
 }
 
@@ -1033,6 +1060,7 @@ impl World {
         let stamp = self.changes.stamp();
         let mut cols = [0; MAX];
         let mut ptrs = [std::ptr::null_mut(); MAX];
+        let mut runs = Runs::new(clock);
         let archetypes = self
             .query_matches
             .chunk_archetypes(&self.archetypes, ids, filter, cache, self.slots.scan());
@@ -1046,10 +1074,12 @@ impl World {
                     None => continue 'arch,
                 }
             }
-            // `None`: every row. A filtered column is tracked and present,
-            // so its archetype is tracked.
-            let mut runs = (filtered && arch.tracked()).then(|| {
-                let mut rows = RowFilter::new(clock);
+            // Unfiltered: every row. A filtered column is tracked and
+            // present, so its archetype is tracked.
+            let in_runs = filtered && arch.tracked();
+            if in_runs {
+                let rows = &mut runs.rows;
+                rows.clear();
                 for (i, &id) in ids.iter().enumerate() {
                     for (mask, added) in [(query.added, true), (query.changed, false)] {
                         if bit(mask, i) {
@@ -1063,12 +1093,12 @@ impl World {
                 if query.any {
                     rows.close();
                 }
-                Runs { arch, rows, next: 0 }
-            });
+                runs.next = 0;
+            }
             let (mut start, mut end) = (0, arch.len());
             loop {
-                if let Some(runs) = &mut runs {
-                    match runs.next_run() {
+                if in_runs {
+                    match runs.next_run(arch) {
                         Some(run) => (start, end) = run,
                         None => break,
                     }
@@ -1083,7 +1113,7 @@ impl World {
                     entities: &arch.entities[start..end],
                     columns: &ptrs[..ids.len()],
                 });
-                if runs.is_none() {
+                if !in_runs {
                     break;
                 }
             }
