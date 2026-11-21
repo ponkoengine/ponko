@@ -207,6 +207,14 @@ crates/ponko_ffi/src/contacts3d.rs | impl Sync for Hook | crates/ponko_ffi/tests
 crates/ponko_ffi/src/save_migrations.rs | impl Send for Convert | crates/ponko_ffi/tests/save_migrations.rs::c_conversions_change_components_resources_entities_and_the_whole_save | sanitizers
 crates/ponko_ffi/src/component_hooks.rs | impl Send for CHook | crates/ponko_ffi/tests/component_hooks.rs::hooks_from_c_run_for_spawns_made_by_a_game_system | sanitizers
 crates/ponko_ffi/src/component_hooks.rs | impl Sync for CHook | crates/ponko_ffi/tests/component_hooks.rs::hooks_from_c_run_for_spawns_made_by_a_game_system | sanitizers
+crates/ponko_ffi/src/crash.rs | impl Send for Hook | crates/ponko_ffi/tests/crash_reports.rs::crash_reports_from_c_name_the_version_run_the_hook_and_are_saved | sanitizers
+crates/ponko_ffi/src/crash.rs | impl Sync for Hook | crates/ponko_ffi/tests/crash_reports.rs::crash_reports_from_c_name_the_version_run_the_hook_and_are_saved | sanitizers
+crates/ponko_ffi/src/slice_loaders.rs | impl Send for Callbacks | crates/ponko_ffi/tests/slice_loaders.rs::a_sliced_c_loader_works_in_pieces_and_hands_over_its_state_once | sanitizers
+crates/ponko_ffi/src/slice_loaders.rs | impl Sync for Callbacks | crates/ponko_ffi/tests/slice_loaders.rs::a_sliced_c_loader_works_in_pieces_and_hands_over_its_state_once | sanitizers
+crates/ponko_ffi/src/slice_loaders.rs | impl Send for State | crates/ponko_ffi/tests/slice_loaders.rs::a_sliced_c_loader_works_in_pieces_and_hands_over_its_state_once | sanitizers
+crates/ponko_ffi/src/slice_loaders.rs | Callbacks::free | crates/ponko_ffi/tests/slice_loaders.rs::a_finished_state_nobody_takes_is_freed_with_the_game | sanitizers
+crates/ponko_ffi/src/slice_loaders.rs | Callbacks::drop | crates/ponko_ffi/tests/slice_loaders.rs::a_sliced_c_loader_works_in_pieces_and_hands_over_its_state_once | sanitizers
+crates/ponko_ffi/src/slice_loaders.rs | State::step | crates/ponko_ffi/tests/slice_loaders.rs::a_sliced_c_loader_works_in_pieces_and_hands_over_its_state_once | sanitizers
 crates/ponko_ffi/src/component_hooks.rs | CHook::drop | crates/ponko_ffi/tests/component_hooks.rs::freeing_the_world_frees_each_hooks_user_data_once | sanitizers
 crates/ponko_ffi/src/replication_raw.rs | impl Send for CStep | crates/ponko_ffi/tests/replication_raw.rs::c_inputs_move_a_predicted_body_the_same_on_server_and_client | sanitizers
 crates/ponko_ffi/src/replication_raw.rs | impl Sync for CStep | crates/ponko_ffi/tests/replication_raw.rs::c_inputs_move_a_predicted_body_the_same_on_server_and_client | sanitizers

@@ -19,7 +19,7 @@
 
 use std::mem::{offset_of, size_of};
 
-use ponko::camera::{CameraShake, damp, damp_angle, smooth_damp};
+use ponko::camera::{CameraShake, CameraTarget, damp, damp_angle, smooth_damp};
 use ponko::d2::{FollowCamera, PixelPerfect};
 use ponko::d3::{FirstPersonCamera, OrbitCamera, ThirdPersonCamera};
 use ponko::prelude::{Rect, Vec2, Vec3};
@@ -1248,6 +1248,272 @@ unsafe fn physics_update(
     Err(invalid(
         "the third-person camera's wall checks need the physics3d feature",
     ))
+}
+
+// ---- rigs the engine updates: CameraTarget ------------------------------------
+
+/// Marks entity `entity` as the one the camera rigs follow (Rust
+/// `ponko::camera::CameraTarget`), or takes the mark off (`on` false). Every
+/// frame, at the end of the animate phase, the engine moves each rig kept
+/// with a `ponko_ctx_set_*_rig` call to the marked entity's transform (2D
+/// rigs read `PonkoTransform2D`, 3D rigs `PonkoTransform3D`): no camera code.
+/// The first frame with a target, and whenever another entity is marked,
+/// the camera cuts to it. With no marked entity the rigs leave the camera
+/// alone. With several, the first one found is followed. The mark is saved
+/// with the world. A dead entity: `PONKO_NOT_FOUND`.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_set_camera_target(std::ptr::null_mut(), 0, true) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_set_camera_target(ctx: *mut PonkoCtx, entity: u64, on: bool) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            let e = ponko::prelude::Entity::from_bits(entity);
+            if !c.world.is_alive(e) {
+                return Err(error(PonkoStatus::PONKO_NOT_FOUND, "entity is not alive"));
+            }
+            if on {
+                c.world.insert(e, CameraTarget);
+            } else {
+                c.world.remove::<CameraTarget>(e);
+            }
+            Ok(())
+        })
+    })
+}
+
+/// The entity the rigs follow: the first one marked with
+/// `ponko_ctx_set_camera_target`. `*out_found` says whether there is one;
+/// `*out_entity` is written only then.
+/// ```
+/// let (mut e, mut found) = (0, false);
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_camera_target(std::ptr::null_mut(), &mut e, &mut found) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; outputs writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_camera_target(
+    ctx: *mut PonkoCtx,
+    out_entity: *mut u64,
+    out_found: *mut bool,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            let target = c
+                .world
+                .query::<ponko::prelude::Entity>()
+                .filter::<ponko::prelude::With<CameraTarget>>()
+                .iter()
+                .next();
+            if let Some(e) = target {
+                out(out_entity, e.to_bits())?;
+            }
+            out(out_found, target.is_some())
+        })
+    })
+}
+
+/// Keeps `rig` (read with `to`/`from`) as the world's resource, or takes it away.
+///
+/// # Safety
+/// `ctx` null or live; `rig` null or a readable descriptor with its header set.
+unsafe fn set_kept_rig<C: Versioned, R: Default + Send + Sync + 'static>(
+    ctx: *mut PonkoCtx,
+    rig: *const C,
+    to: fn(&R) -> C,
+    from: fn(&C) -> R,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        let rig = if rig.is_null() {
+            None
+        } else {
+            Some(from(&read_desc(rig, to(&R::default()))?))
+        };
+        ctx_access(ctx, |c| {
+            match rig {
+                Some(r) => c.world.insert_resource(r),
+                None => drop(c.world.remove_resource::<R>()),
+            }
+            Ok(())
+        })
+    })
+}
+
+/// Reads the world's rig resource back into `rig`.
+///
+/// # Safety
+/// `ctx` null or live; `rig` writable with its header set; `out_kept` writable.
+unsafe fn kept_rig<C: Versioned, R: Send + Sync + 'static>(
+    ctx: *mut PonkoCtx,
+    rig: *mut C,
+    out_kept: *mut bool,
+    to: fn(&R) -> C,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        let kept = ctx_access(ctx, |c| Ok(c.world.get_resource::<R>().map(to)))?;
+        if let Some(k) = &kept {
+            write_desc(rig, k)?;
+        }
+        out(out_kept, kept.is_some())
+    })
+}
+
+/// Keeps a 2D follow rig (Rust `d2::FollowCamera` as a resource): it moves the 2D camera, in the world for the engine to update every frame
+/// toward the entity marked with `ponko_ctx_set_camera_target`, replacing
+/// the one kept before; null takes it away. The rig is copied, its state
+/// included: read it back with `ponko_ctx_follow_camera2d_rig` to change a setting,
+/// then set it again.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_set_follow_camera2d_rig(std::ptr::null_mut(), std::ptr::null()) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `rig` null or a readable descriptor with its header set.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_set_follow_camera2d_rig(
+    ctx: *mut PonkoCtx,
+    rig: *const PonkoFollowCamera2D,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { set_kept_rig::<PonkoFollowCamera2D, FollowCamera>(ctx, rig, follow_to_c, follow_from_c) }
+}
+
+/// Reads the rig `ponko_ctx_set_follow_camera2d_rig` keeps (its settings and
+/// state, as the engine last updated it) into `rig`, whose header must be
+/// set, and sets `*out_kept`; with none kept, `*out_kept` is false and
+/// `rig` is left alone.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_follow_camera2d_rig(std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `rig` writable with its header set; `out_kept` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_follow_camera2d_rig(
+    ctx: *mut PonkoCtx,
+    rig: *mut PonkoFollowCamera2D,
+    out_kept: *mut bool,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { kept_rig::<PonkoFollowCamera2D, FollowCamera>(ctx, rig, out_kept, follow_to_c) }
+}
+
+/// Keeps an orbit rig (Rust `d3::OrbitCamera` as a resource): it turns the 3D camera around the target, in the world for the engine to update every frame
+/// toward the entity marked with `ponko_ctx_set_camera_target`, replacing
+/// the one kept before; null takes it away. The rig is copied, its state
+/// included: read it back with `ponko_ctx_orbit_camera_rig` to change a setting,
+/// then set it again.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_set_orbit_camera_rig(std::ptr::null_mut(), std::ptr::null()) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `rig` null or a readable descriptor with its header set.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_set_orbit_camera_rig(
+    ctx: *mut PonkoCtx,
+    rig: *const PonkoOrbitCamera,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { set_kept_rig::<PonkoOrbitCamera, OrbitCamera>(ctx, rig, orbit_to_c, orbit_from_c) }
+}
+
+/// Reads the rig `ponko_ctx_set_orbit_camera_rig` keeps (its settings and
+/// state, as the engine last updated it) into `rig`, whose header must be
+/// set, and sets `*out_kept`; with none kept, `*out_kept` is false and
+/// `rig` is left alone.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_orbit_camera_rig(std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `rig` writable with its header set; `out_kept` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_orbit_camera_rig(
+    ctx: *mut PonkoCtx,
+    rig: *mut PonkoOrbitCamera,
+    out_kept: *mut bool,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { kept_rig::<PonkoOrbitCamera, OrbitCamera>(ctx, rig, out_kept, orbit_to_c) }
+}
+
+/// Keeps a first-person rig (Rust `d3::FirstPersonCamera` as a resource): the 3D camera at the target's eye height, in the world for the engine to update every frame
+/// toward the entity marked with `ponko_ctx_set_camera_target`, replacing
+/// the one kept before; null takes it away. The rig is copied, its state
+/// included: read it back with `ponko_ctx_first_person_camera_rig` to change a setting,
+/// then set it again.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_set_first_person_camera_rig(std::ptr::null_mut(), std::ptr::null()) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `rig` null or a readable descriptor with its header set.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_set_first_person_camera_rig(
+    ctx: *mut PonkoCtx,
+    rig: *const PonkoFirstPersonCamera,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { set_kept_rig::<PonkoFirstPersonCamera, FirstPersonCamera>(ctx, rig, first_to_c, first_from_c) }
+}
+
+/// Reads the rig `ponko_ctx_set_first_person_camera_rig` keeps (its settings and
+/// state, as the engine last updated it) into `rig`, whose header must be
+/// set, and sets `*out_kept`; with none kept, `*out_kept` is false and
+/// `rig` is left alone.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_first_person_camera_rig(std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `rig` writable with its header set; `out_kept` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_first_person_camera_rig(
+    ctx: *mut PonkoCtx,
+    rig: *mut PonkoFirstPersonCamera,
+    out_kept: *mut bool,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { kept_rig::<PonkoFirstPersonCamera, FirstPersonCamera>(ctx, rig, out_kept, first_to_c) }
+}
+
+/// Keeps a third-person rig (Rust `d3::ThirdPersonCamera` as a resource): the 3D camera behind the target, kept out of walls with physics3d, in the world for the engine to update every frame
+/// toward the entity marked with `ponko_ctx_set_camera_target`, replacing
+/// the one kept before; null takes it away. The rig is copied, its state
+/// included: read it back with `ponko_ctx_third_person_camera_rig` to change a setting,
+/// then set it again.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_set_third_person_camera_rig(std::ptr::null_mut(), std::ptr::null()) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `rig` null or a readable descriptor with its header set.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_set_third_person_camera_rig(
+    ctx: *mut PonkoCtx,
+    rig: *const PonkoThirdPersonCamera,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { set_kept_rig::<PonkoThirdPersonCamera, ThirdPersonCamera>(ctx, rig, third_to_c, third_from_c) }
+}
+
+/// Reads the rig `ponko_ctx_set_third_person_camera_rig` keeps (its settings and
+/// state, as the engine last updated it) into `rig`, whose header must be
+/// set, and sets `*out_kept`; with none kept, `*out_kept` is false and
+/// `rig` is left alone.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_third_person_camera_rig(std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `rig` writable with its header set; `out_kept` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_third_person_camera_rig(
+    ctx: *mut PonkoCtx,
+    rig: *mut PonkoThirdPersonCamera,
+    out_kept: *mut bool,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { kept_rig::<PonkoThirdPersonCamera, ThirdPersonCamera>(ctx, rig, out_kept, third_to_c) }
 }
 
 // ---- screen and world -----------------------------------------------------------

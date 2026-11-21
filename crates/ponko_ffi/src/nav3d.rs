@@ -504,3 +504,87 @@ pub unsafe extern "C" fn ponko_ctx_set_nav_avoidance(
         })
     })
 }
+
+/// The version of `PonkoNavCrowdStats` this header describes.
+pub const PONKO_NAV_CROWD_STATS_VERSION: u32 = 1;
+
+/// What the navmesh's crowd has done since it was baked (Rust
+/// `NavCrowdStats`). A versioned descriptor: set `struct_size` and
+/// `version`, then `ponko_ctx_navmesh_crowd_stats` fills it. All three
+/// counts only grow; for crowds of the same density `work / agent_steps`
+/// stays about the same however many agents there are.
+/// ```
+/// let s = ponko_ffi::PonkoNavCrowdStats::default();
+/// assert_eq!((s.version, s.steps), (ponko_ffi::PONKO_NAV_CROWD_STATS_VERSION, 0));
+/// ```
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PonkoNavCrowdStats {
+    /// `sizeof(PonkoNavCrowdStats)` as the caller compiled it.
+    pub struct_size: u32,
+    /// `PONKO_NAV_CROWD_STATS_VERSION` as the caller compiled it.
+    pub version: u32,
+    /// Crowd steps run: one a tick while any agent avoids others, more when
+    /// a long tick is split into 60 Hz steps.
+    pub steps: u64,
+    /// Agents moved, added up over the steps.
+    pub agent_steps: u64,
+    /// The navigation backend's work units, added up over the steps.
+    pub work: u64,
+}
+
+impl Default for PonkoNavCrowdStats {
+    fn default() -> Self {
+        Self {
+            struct_size: size_of::<Self>() as u32,
+            version: PONKO_NAV_CROWD_STATS_VERSION,
+            steps: 0,
+            agent_steps: 0,
+            work: 0,
+        }
+    }
+}
+
+impl crate::descriptors::Versioned for PonkoNavCrowdStats {
+    const NAME: &'static str = "PonkoNavCrowdStats";
+    const VERSION: u32 = PONKO_NAV_CROWD_STATS_VERSION;
+    fn len_of(version: u32) -> Option<usize> {
+        match version {
+            1 => Some(std::mem::offset_of!(Self, work) + size_of::<u64>()),
+            _ => None,
+        }
+    }
+}
+
+/// Reads what the context's navmesh's crowd has done since it was baked
+/// (Rust `NavMesh::crowd_stats`): the steps, the agents moved and the
+/// backend's work, for tests that check the crowd's cost by counting
+/// rather than timing. No navmesh is `PONKO_NOT_FOUND`.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_navmesh_crowd_stats(std::ptr::null_mut(), std::ptr::null_mut()) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `stats` null or a writable descriptor with its header set.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_navmesh_crowd_stats(
+    ctx: *mut PonkoCtx,
+    stats: *mut PonkoNavCrowdStats,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            let s = c
+                .world
+                .get_resource::<NavMesh3D>()
+                .ok_or_else(|| error(PonkoStatus::PONKO_NOT_FOUND, "no navmesh: bake one first"))?
+                .crowd_stats();
+            let value = PonkoNavCrowdStats {
+                steps: s.steps,
+                agent_steps: s.agent_steps,
+                work: s.work,
+                ..Default::default()
+            };
+            crate::descriptors::write_desc(stats, &value)
+        })
+    })
+}
