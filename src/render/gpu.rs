@@ -15,6 +15,9 @@ use crate::error::Error;
 #[path = "startup.rs"]
 mod startup;
 
+#[path = "browser_gpu.rs"]
+mod browser_gpu;
+
 #[derive(Clone)]
 pub(super) struct GpuTexture {
     pub(super) bind_group: wgpu::BindGroup,
@@ -498,74 +501,84 @@ impl Renderer {
         vsync: bool,
         msaa: u32,
     ) -> Result<Self, Error> {
-        let descriptor = wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(display));
-        // In a browser, use WebGPU where it works and WebGL2 elsewhere.
-        #[cfg(target_arch = "wasm32")]
-        let instance = wgpu::util::new_instance_with_webgpu_detection(descriptor).await;
-        #[cfg(not(target_arch = "wasm32"))]
-        let instance = wgpu::Instance::new(descriptor);
-        let surface = startup::result(
-            instance.create_surface(window.clone()),
-            "could not create a GPU surface",
-        )?;
-
-        let adapter = startup::result(
-            instance
-                .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::HighPerformance,
-                    compatible_surface: Some(&surface),
-                    ..Default::default()
-                })
-                .await,
-            "no compatible GPU found",
-        )?;
-
         // `PONKO_GPU_TIER` opens the device as a weaker GPU would be.
         let forced_tier = super::GpuTier::forced();
         if let Some(tier) = forced_tier {
             eprintln!("ponko: PONKO_GPU_TIER forces the {tier} GPU tier");
         }
-        #[cfg_attr(not(feature = "compressed-textures"), allow(unused_mut))]
-        let mut required_features = adapter.features()
-            & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES);
-        // Block-compressed textures upload as they are where the GPU samples them.
-        #[cfg(feature = "compressed-textures")]
-        {
-            required_features |= adapter.features() & super::blocks::FEATURES;
-        }
-        let (device, queue) = startup::result(
-            adapter
-                .request_device(&wgpu::DeviceDescriptor {
-                    label: Some("ponko device"),
-                    required_features: forced_tier.map_or(required_features, |t| t.device_features(required_features)),
-                    // The defaults ask for more than WebGL2 has; we need little.
-                    required_limits: if let Some(tier) = forced_tier {
-                        // The tier's limits, but a surface as large as the window.
-                        tier.window_limits(wgpu::Limits {
-                            max_sampled_textures_per_shader_stage: adapter
-                                .limits()
-                                .max_sampled_textures_per_shader_stage
-                                .clamp(16, 24),
-                            ..wgpu::Limits::default()
-                        })
-                    } else if cfg!(target_arch = "wasm32") {
-                        adapter.limits()
-                    } else {
-                        // One more sampled texture than the default 16, where
-                        // the adapter has it: projected decals' images.
-                        wgpu::Limits {
-                            max_sampled_textures_per_shader_stage: adapter
-                                .limits()
-                                .max_sampled_textures_per_shader_stage
-                                .clamp(16, 24),
-                            ..wgpu::Limits::default()
-                        }
-                    },
-                    ..Default::default()
-                })
-                .await,
-            "could not open the GPU device",
-        )?;
+        let device_descriptor = |adapter: &wgpu::Adapter| -> wgpu::DeviceDescriptor<'static> {
+            #[cfg_attr(not(feature = "compressed-textures"), allow(unused_mut))]
+            let mut required_features = adapter.features()
+                & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES);
+            // Block-compressed textures upload as they are where the GPU samples them.
+            #[cfg(feature = "compressed-textures")]
+            {
+                required_features |= adapter.features() & super::blocks::FEATURES;
+            }
+            wgpu::DeviceDescriptor {
+                label: Some("ponko device"),
+                required_features: forced_tier.map_or(required_features, |t| t.device_features(required_features)),
+                // The defaults ask for more than WebGL2 has; we need little.
+                required_limits: if let Some(tier) = forced_tier {
+                    // The tier's limits, but a surface as large as the window.
+                    tier.window_limits(wgpu::Limits {
+                        max_sampled_textures_per_shader_stage: adapter
+                            .limits()
+                            .max_sampled_textures_per_shader_stage
+                            .clamp(16, 24),
+                        ..wgpu::Limits::default()
+                    })
+                } else if cfg!(target_arch = "wasm32") {
+                    adapter.limits()
+                } else {
+                    // One more sampled texture than the default 16, where
+                    // the adapter has it: projected decals' images.
+                    wgpu::Limits {
+                        max_sampled_textures_per_shader_stage: adapter
+                            .limits()
+                            .max_sampled_textures_per_shader_stage
+                            .clamp(16, 24),
+                        ..wgpu::Limits::default()
+                    }
+                },
+                ..Default::default()
+            }
+        };
+
+        // In a browser: WebGPU where it works, else WebGL2 (`browser_gpu.rs`).
+        #[cfg(target_arch = "wasm32")]
+        let browser_gpu::Opened {
+            instance,
+            surface,
+            adapter,
+            device,
+            queue,
+        } = browser_gpu::open(window.clone(), display, &device_descriptor).await?;
+        #[cfg(not(target_arch = "wasm32"))]
+        let (instance, surface, adapter, device, queue) = {
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(
+                display,
+            )));
+            let surface = startup::result(
+                instance.create_surface(window.clone()),
+                "could not create a GPU surface",
+            )?;
+            let adapter = startup::result(
+                instance
+                    .request_adapter(&wgpu::RequestAdapterOptions {
+                        power_preference: wgpu::PowerPreference::HighPerformance,
+                        compatible_surface: Some(&surface),
+                        ..Default::default()
+                    })
+                    .await,
+                "no compatible GPU found",
+            )?;
+            let (device, queue) = startup::result(
+                adapter.request_device(&device_descriptor(&adapter)).await,
+                "could not open the GPU device",
+            )?;
+            (instance, surface, adapter, device, queue)
+        };
         // In a browser, a WebGPU device lost while the game runs (the GPU
         // process crashed or was reset) stops it for good: the page hears
         // of it through `onPonkoFailure`, kind `DeviceLost`, with whether it
@@ -600,6 +613,10 @@ impl Renderer {
             4
         };
         let mut capabilities = super::capabilities::of_device(&adapter.get_info(), &device, (requested_msaa, msaa));
+        #[cfg(feature = "3d")]
+        let adapter_format_features = device
+            .features()
+            .contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES);
         capabilities.forced_tier = forced_tier;
         // Apple's GPUs (Metal) draw in tiles and drop hidden solid fragments
         // themselves: there solid surfaces skip the depth prepass.
@@ -650,9 +667,7 @@ impl Renderer {
             Render3DSettings {
                 msaa,
                 requested_msaa,
-                supports_msaa2: msaa != 1
-                    && required_features.contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES)
-                    && super::gpu3d::multisamples(&adapter, 2),
+                supports_msaa2: msaa != 1 && adapter_format_features && super::gpu3d::multisamples(&adapter, 2),
                 tiled,
             },
         ))

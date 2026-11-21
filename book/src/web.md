@@ -12,8 +12,10 @@ whether it needs WebGPU and its source at that release. Among them:
 - A 3D scene: materials, a sun with
   shadows and instanced models.
 
-Games draw with WebGPU where the browser has it, and WebGL2 where it
-doesn't. Running the game requires at least one usable graphics backend.
+Games draw with WebGPU where the browser has a working one, and WebGL2
+where it doesn't ([WebGPU first, WebGL2 as the
+fallback](#webgpu-first-webgl2-as-the-fallback)). Running the game requires
+at least one usable graphics backend.
 
 ## Building your game
 
@@ -62,6 +64,56 @@ gallery for its version and publishes it (the release workflow,
 `examples.json`; the gallery's
 [README](../../web/gallery/README.md)
 has the fields, and how to check every page in a headless browser.
+
+## WebGPU first, WebGL2 as the fallback
+
+One build carries both: the same `game_bg.wasm` draws with the browser's
+WebGPU where it works and with WebGL2 where it doesn't, with nothing to
+choose in the game or the page. On startup the engine:
+
+1. looks for `navigator.gpu`;
+2. asks it for an adapter (`requestAdapter()`), then the adapter for a
+   device;
+3. waits for the device's first round trip to the GPU, to see that the
+   browser didn't lose it at once (its GPU process gone, the driver
+   refusing);
+4. only then gives the canvas its WebGPU context.
+
+If any step fails, the canvas is still untouched, so the engine starts over
+on WebGL2 and logs one line in the browser's console saying why, such as
+`ponko: falling back to WebGL2: navigator.gpu.requestAdapter() found no
+adapter` (or `... this browser has no WebGPU`, `... the WebGPU adapter could
+not open a device: <the browser's words>`, `... the WebGPU device was lost
+as it opened: <the browser's words>`). A WebGPU start logs `ponko: drawing
+with WebGPU`. Only when WebGL2 fails too does the page show a startup error
+(next sections). A WebGPU device lost later, while the game runs, is a
+[failure while playing](#failures-while-playing): a game can't switch
+backends mid-game.
+
+The game finds out which it got from `ctx.gfx.gpu_capabilities()`:
+`adapter.backend` is `webgpu` or `gl`, and the report's `tier` and
+per-feature entries say what is drawn (see [GPU tiers](3d.md#gpu-tiers)).
+`ctx.scene3d.set_recommended_quality(caps)` picks settings to match.
+
+What each draws, at the least each gives: WebGPU at WebGPU's default limits
+and without optional features (a browser often gives more, decals and global
+illumination included where its adapter has the texture slots; the report
+is the exact answer), WebGL2 at the `webgl2` tier's floor, with the one
+sample per pixel a browser's WebGL2 draws the 3D frame with. The table is
+made by the engine from the same reports (`src/render/capabilities.rs`,
+test `the_guides_web_backend_table_is_generated_from_the_tier_code`), which
+fails when it is out of date; `PONKO_UPDATE_BOOK=1 cargo test -p ponko
+--features 3d --lib web_backend_table` rewrites it.
+
+<!-- web-backend-table:start -->
+<!-- web-backend-table:end -->
+
+**Size and startup.** One `.wasm` holds both backends: wgpu's WebGPU binding
+and its WebGL2 backend with the shader translator. WEB_SIZE_NUMBERS
+
+`web/smoke/webgpu-fallback.mjs` checks each way into WebGL2 in a headless
+browser, faking the failure in the page before the game starts (see the
+[runner's README](../../web/smoke/README.md#webgpu-first)).
 
 ## What's different in a browser
 

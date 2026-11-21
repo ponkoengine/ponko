@@ -123,6 +123,39 @@ The callback is subscribed late, after the failure, so the run also checks
 that a late subscriber gets it at once. `runtime-failures.test.mjs` checks
 the template's handling and the runner's checks without a browser.
 
+## WebGPU first
+
+`webgpu-fallback.mjs` checks that a web build draws with WebGPU where the
+browser has a working one, and that each way WebGPU can fail before the
+game draws ends on WebGL2, drawing, with one console line saying why
+(the guide's [WebGPU first, WebGL2 as the
+fallback](../../book/src/web.md#webgpu-first-webgl2-as-the-fallback)). Each
+failure is faked in the page before the game's wasm starts:
+
+| Case | Faked | Must end |
+|---|---|---|
+| `webgpu` | nothing | on WebGPU: a WebGPU canvas, the engine's backend `webgpu`, `ponko: drawing with WebGPU` and no fallback line |
+| `no-webgpu` | no `navigator.gpu` | on WebGL2, the line saying `navigator.gpu is missing` |
+| `no-adapter` | `requestAdapter()` resolves to `null` (a stand-in `navigator.gpu` where the browser has none) | on WebGL2, the line saying `requestAdapter() found no adapter` |
+| `device-fails` | `GPUAdapter.requestDevice()` rejects | on WebGL2, the line with the browser's (here the runner's) words |
+| `device-lost` | `requestDevice()` returns a device already destroyed | on WebGL2, the line saying the device was lost as it opened |
+
+"On WebGL2" means: the game ticks, the canvas has a WebGL2 context and is not
+blank, the engine reports backend `gl`, and there is no startup error, page
+error or panic. `webgpu`, `device-fails` and `device-lost` need a real
+WebGPU adapter; without one they are unsupported, not failed. `--repeat <n>`
+(default 3) loads the `webgpu` and `no-webgpu` pages n times each and
+reports the median time to the first frame from navigation start (the
+fixture's first published state).
+
+```sh
+web/build.sh --features 3d web_smoke_3d
+node web/smoke/webgpu-fallback.mjs --dir target/web/web_smoke_3d --chromium-mode new
+node web/smoke/webgpu-fallback.mjs --case device-lost --chromium-mode new   # one case
+```
+
+`webgpu-fallback.test.mjs` checks its decisions without a browser.
+
 ## Multiplayer
 
 `multiplayer.mjs` checks [browser multiplayer](../../book/src/networking.md#in-the-browser):
