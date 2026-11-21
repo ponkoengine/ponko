@@ -613,7 +613,7 @@ impl Perf {
 #[doc(inline)]
 pub use crate::alloc_count::{
     AllocCounts, CountingAllocator, alloc_counts, net_alloc_bytes, note_allocation, note_deallocation,
-    thread_alloc_counts,
+    thread_alloc_counts, thread_net_alloc_bytes,
 };
 pub use crate::perf_report::*;
 pub use crate::profiler::{FrameStats, GpuPass};

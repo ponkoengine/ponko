@@ -1046,7 +1046,9 @@ fn run_one(s: &mut System, ctx: &mut Ctx, timing_index: usize) {
     ctx.feed_ui_same_frame();
     #[cfg(feature = "profiling")]
     puffin::profile_scope!("system", s.name);
-    let allocs_before = ctx.perf.state.on.then(crate::perf::alloc_counts);
+    // This thread's count (with the workers of its parallel loops): what
+    // other threads do meanwhile isn't the system's.
+    let allocs_before = ctx.perf.state.on.then(crate::perf::thread_alloc_counts);
     let start = Instant::now();
     ctx.system_index = timing_index;
     ctx.events.reader = s.id;
@@ -1082,7 +1084,7 @@ fn run_one(s: &mut System, ctx: &mut Ctx, timing_index: usize) {
     ctx.world.set_changes_since(ponko_ecs::Tick::default());
     ctx.perf.timings[timing_index].last_ms += start.elapsed().as_secs_f32() * 1000.0;
     if let Some(before) = allocs_before {
-        let made = crate::perf::alloc_counts().count.saturating_sub(before.count);
+        let made = crate::perf::thread_alloc_counts().count.saturating_sub(before.count);
         ctx.perf.state.add_system_allocs(timing_index, made);
     }
 }
