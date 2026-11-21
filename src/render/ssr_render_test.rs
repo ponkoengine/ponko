@@ -1147,6 +1147,64 @@ fn reflection_gpu_cost(name: &str, quality: crate::render::GraphicsQuality, ao: 
     true
 }
 
+/// The coarse depth of `Post::ssr_thin_objects` gets a GPU time of its own
+/// at 1280x720: a span above zero within the frame, not listed as not
+/// timed (Apple GPUs read 0 for it before the timer copied a frame's
+/// timestamps out only once the GPU had finished it). With thin objects
+/// off the pass isn't drawn, so it has no span. Skips without timestamps.
+#[test]
+fn the_coarse_depth_pass_gets_its_own_gpu_time() {
+    let Some(mut rig) = Rig::with_limits(1280, 720, true) else {
+        return;
+    };
+    if !crate::render::render_test_support::needs(&rig.device, GpuFeature::ScreenSpaceReflections) {
+        return;
+    }
+    let Some(mut timer) = super::timer::GpuTimer::new(&rig.device, &rig.queue) else {
+        crate::render::render_test_support::skip("timestamp queries unavailable");
+        return;
+    };
+    let floor = rig.mesh(
+        &MeshData::cube(1.0),
+        MaterialDesc {
+            metallic: 1.0,
+            ..Default::default()
+        },
+    );
+    rig.ctx.world.spawn((
+        Transform3D {
+            position: vec3(0.0, -0.5, 0.0),
+            scale: vec3(20.0, 1.0, 20.0),
+            ..Default::default()
+        },
+        Model::new(floor),
+    ));
+    rig.ctx.scene3d.camera.position = vec3(0.0, 2.0, 6.0);
+    rig.ctx.scene3d.camera.look_at(Vec3::ZERO);
+    rig.ctx.scene3d.post.ssr = 1.0;
+    const COARSE: &str = "reflection coarse depth";
+    let mut coarse_span = |rig: &mut Rig, thin: bool| {
+        rig.ctx.scene3d.post.ssr_thin_objects = thin;
+        // Results come back a few frames late.
+        for _ in 0..12 {
+            rig.draw_timed(Some(&mut timer));
+        }
+        let frame_ms: f32 = timer.last_frame.iter().map(|s| s.ms).sum();
+        let span = timer.last_frame.iter().find(|s| s.name == COARSE).map(|s| s.ms);
+        eprintln!(
+            "thin objects {thin}: {COARSE} {span:?} of {frame_ms:.4} ms, not timed {:?}",
+            timer.not_timed
+        );
+        (span, frame_ms, timer.not_timed.contains(&COARSE))
+    };
+    let (off, ..) = coarse_span(&mut rig, false);
+    assert_eq!(off, None, "with thin objects off the coarse depth isn't drawn");
+    let (on, frame_ms, not_timed) = coarse_span(&mut rig, true);
+    assert!(!not_timed, "the coarse depth is timed, not left out");
+    let ms = on.expect("with thin objects on the coarse depth has a span of its own");
+    assert!(ms > 0.0 && ms < frame_ms, "{ms} ms, within the frame's {frame_ms} ms");
+}
+
 /// What a true mirror shows of the bars of [`bars_over_a_floor`]: the
 /// (peak, RMS width) of each one's mirror image (see `vertical_profile`),
 /// low then high.
