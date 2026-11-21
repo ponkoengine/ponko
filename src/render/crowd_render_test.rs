@@ -775,7 +775,13 @@ fn a_crowd_behind_a_wall_draws_none_of_it() {
             },
             Model::new(wall),
         ));
-        let face = rig.ctx.scene3d.camera.view_proj().project_point3(vec3(-1.0, 1.0, 2.1)).z;
+        let face = rig
+            .ctx
+            .scene3d
+            .camera
+            .view_proj()
+            .project_point3(vec3(-1.0, 1.0, 2.1))
+            .z;
         let (skeleton, data) = figure();
         let mesh = skinned_mesh(&mut rig, &data, glow(Color::rgb(1.0, 0.0, 0.0)), &skeleton);
         let animation = CrowdAnimation::bake(&skeleton, &[bend(&skeleton).into()], 30.0);
@@ -801,11 +807,18 @@ fn a_crowd_behind_a_wall_draws_none_of_it() {
         rig.ctx.scene3d.camera.occlusion_culling = true;
         rig.grid = Some(left_wall_grid(&rig, face));
         let culled = rig.image();
-        assert_eq!(drawn(&rig), 0, "compute {compute}: the crowd behind the wall draws none of it");
+        assert_eq!(
+            drawn(&rig),
+            0,
+            "compute {compute}: the crowd behind the wall draws none of it"
+        );
         let red = |p: [u8; 4]| p[0] > 100 && p[2] < 50;
         assert_eq!(all.fraction(0..128, 0..128, red), 0.0, "the wall hides them anyway");
         let d = support::diff(&culled, &all, 2);
-        assert!(d.within(super::static_batch_render_test::SAME_DEVICE), "and nothing pops: {d}");
+        assert!(
+            d.within(super::static_batch_render_test::SAME_DEVICE),
+            "and nothing pops: {d}"
+        );
         // Figures beside the wall are drawn.
         let mut people = behind.clone();
         people.extend([4.0, 7.0].map(at));
@@ -929,7 +942,10 @@ fn global_illumination_probes_see_crowds_as_they_see_models() {
     let (m, n) = (models.at(&a, near_red), crowds.at(&b, near_red));
     let (mf, nf) = (models.at(&a, far_side), crowds.at(&b, far_side));
     eprintln!("floor by the red wall: {m:?} model, {n:?} crowd; further away {mf:?}, {nf:?}");
-    assert!(crowds.at(&b, sunlit_wall)[0] > 150, "the crowd wall is drawn, in the sun");
+    assert!(
+        crowds.at(&b, sunlit_wall)[0] > 150,
+        "the crowd wall is drawn, in the sun"
+    );
     assert!(n[0] > n[1] + 20, "red bounce light from a crowd wall: {n:?}");
     for (x, y) in [(m, n), (mf, nf)] {
         assert!(
@@ -962,9 +978,12 @@ fn window_views_draw_crowds_for_their_own_camera() {
         for w in &mut weighted.weights {
             *w = crate::three::normalized_weights(*w);
         }
-        stage
-            .renderer
-            .create_mesh(&stage.device, &weighted, &[(0..data.indices.len() as u32, material)], true);
+        stage.renderer.create_mesh(
+            &stage.device,
+            &weighted,
+            &[(0..data.indices.len() as u32, material)],
+            true,
+        );
         let animation = CrowdAnimation::bake(&skeleton, &[bend(&skeleton).into()], 30.0);
         // A figure at x = -6 and one at x = +6.
         let people = [-6.0, 6.0].map(|x| CrowdInstance::new(Mat4::from_translation(vec3(x, 0.0, 0.0))));
@@ -975,9 +994,7 @@ fn window_views_draw_crowds_for_their_own_camera() {
             CrowdOptions::default(),
         );
         let crowd_data = stage.ctx.gfx.assets3d.crowds[c.id as usize].as_ref();
-        stage
-            .renderer
-            .set_crowd(&stage.device, &stage.queue, c.id, crowd_data);
+        stage.renderer.set_crowd(&stage.device, &stage.queue, c.id, crowd_data);
         // Player one looks at the left figure, player two at the right one.
         let camera_at = |stage: &Stage, x: f32, rect: Viewport| {
             let mut camera = stage.ctx.scene3d.camera;
@@ -1003,7 +1020,10 @@ fn window_views_draw_crowds_for_their_own_camera() {
         stage.ctx.scene3d.views[0].camera = camera_at(&stage, 30.0, Viewport::split(2, 1));
         let image = super::views_render_test::frame(&mut stage, &mut windows, true);
         assert_eq!(image.fraction(64..128, 0..128, red), 0.0, "{tier:?}: nothing there");
-        assert!(image.fraction(0..64, 0..128, red) > 0.02, "{tier:?}: player one still does");
+        assert!(
+            image.fraction(0..64, 0..128, red) > 0.02,
+            "{tier:?}: player one still does"
+        );
         stage.finish();
     }
 }

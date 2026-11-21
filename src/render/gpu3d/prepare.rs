@@ -106,13 +106,7 @@ impl Renderer3D {
         if !self.upload_instances(device, queue, frame, gi_frame, total) {
             return;
         }
-        self.prepare_crowds(
-            device,
-            queue,
-            frame,
-            scene.time,
-            (scene.occlusion, scene.camera),
-        );
+        self.prepare_crowds(device, queue, frame, scene.time, (scene.occlusion, scene.camera));
         self.prepare_shadows_and_lights(device, queue, frame, camera);
         self.upload_uniforms(device, queue, scene, &view, previous_view_proj, gi_frame);
         self.prepare_targets(device, &view, rebuild);

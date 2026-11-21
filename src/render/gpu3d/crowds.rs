@@ -1780,7 +1780,13 @@ impl CpuPath {
     /// Moves every character's clip times `seconds` on (see
     /// [`advance_time`]).
     fn advance(&mut self, seconds: f64) {
-        let clip = |c: u32| self.table.get(c as usize).or(self.table.last()).copied().unwrap_or_default();
+        let clip = |c: u32| {
+            self.table
+                .get(c as usize)
+                .or(self.table.last())
+                .copied()
+                .unwrap_or_default()
+        };
         for r in &mut self.records {
             let [clips, ta, tb, packed] = r.anim;
             let speed = f32::from((packed >> 16) as u16 as i16) / 256.0;
@@ -1960,7 +1966,9 @@ impl Renderer3D {
                 encoder.copy_buffer_to_buffer(&g.draws, (view * levels * 4) as u64, &readback, 0, bytes);
                 queue.submit([encoder.finish()]);
                 readback.map_async(wgpu::MapMode::Read, .., |r| r.expect("crowd counts map"));
-                device.poll(wgpu::PollType::wait_indefinitely()).expect("crowd counts readback");
+                device
+                    .poll(wgpu::PollType::wait_indefinitely())
+                    .expect("crowd counts readback");
                 let counts: Vec<u32> = bytemuck::cast_slice(&readback.get_mapped_range(..).expect("mapped")).to_vec();
                 Some(counts.iter().sum())
             }
@@ -2034,7 +2042,11 @@ mod tests {
     fn shown(time: f32, speed: f32, t: f64, clip: [f32; 4]) -> f64 {
         let last = f64::from(clip[1] - 1.0);
         let p = (f64::from(time) + f64::from(speed) * t) * f64::from(clip[2]);
-        if clip[3] > 0.5 { p.rem_euclid(last) } else { p.clamp(0.0, last) }
+        if clip[3] > 0.5 {
+            p.rem_euclid(last)
+        } else {
+            p.clamp(0.0, last)
+        }
     }
 
     #[test]
