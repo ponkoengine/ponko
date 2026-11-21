@@ -864,8 +864,7 @@ impl Collector {
         frame_allocs: AllocCounts,
         systems: &[SystemTiming],
         system_allocs: &[u32],
-        scopes: &[ScopeTiming],
-        scope_allocs: &[u32],
+        (scopes, scope_allocs): (&[ScopeTiming], &[u32]),
     ) {
         let same_systems = self.systems.len() == systems.len()
             && self
@@ -1081,8 +1080,7 @@ impl PerfState {
             self.frame_allocs,
             timings,
             &self.system_allocs,
-            &self.scopes.timings,
-            &self.scopes.allocs,
+            (&self.scopes.timings, &self.scopes.allocs),
         );
     }
 
@@ -1301,8 +1299,7 @@ mod tests {
                 AllocCounts::default(),
                 &[timing("g::a", a), timing("g::b", b)],
                 &[0, 0],
-                &[],
-                &[],
+                (&[], &[]),
             );
         }
         c
@@ -1333,8 +1330,7 @@ mod tests {
                 AllocCounts::default(),
                 &[timing("s", i as f32)],
                 &[0],
-                &[],
-                &[],
+                (&[], &[]),
             );
         }
         let r = c.report();
@@ -1348,14 +1344,14 @@ mod tests {
     fn scopes_that_appear_later_are_zero_before() {
         let mut c = Collector::new(10);
         let sys = [timing("s", 1.0)];
-        c.push(1, 1.0, AllocCounts::default(), &sys, &[0], &[], &[]);
+        c.push(1, 1.0, AllocCounts::default(), &sys, &[0], (&[], &[]));
         let scope = [ScopeTiming {
             name: "late",
             last_ms: 2.0,
             avg_ms: 2.0,
             calls: 4,
         }];
-        c.push(2, 1.0, AllocCounts::default(), &sys, &[0], &scope, &[6]);
+        c.push(2, 1.0, AllocCounts::default(), &sys, &[0], (&scope, &[6]));
         let r = c.report();
         assert_eq!(
             r.scope("late")
@@ -1367,7 +1363,7 @@ mod tests {
     #[test]
     fn changing_the_systems_starts_the_history_over() {
         let mut c = collector_with(&[(1.0, 1.0, 1.0); 5]);
-        c.push(6, 1.0, AllocCounts::default(), &[timing("only", 1.0)], &[0], &[], &[]);
+        c.push(6, 1.0, AllocCounts::default(), &[timing("only", 1.0)], &[0], (&[], &[]));
         assert_eq!(c.len(), 1);
     }
 

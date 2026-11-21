@@ -5324,6 +5324,7 @@ pub struct ponko::perf::ScopeGuard
 impl core::ops::drop::Drop for ponko::perf::ScopeGuard
 pub fn ponko::perf::ScopeGuard::drop(&mut self)
 pub struct ponko::perf::ScopeReport
+pub ponko::perf::ScopeReport::allocs_per_frame: f32
 pub ponko::perf::ScopeReport::avg_ms: f32
 pub ponko::perf::ScopeReport::calls_per_frame: f32
 pub ponko::perf::ScopeReport::max_ms: f32
@@ -5407,6 +5408,7 @@ pub fn ponko::perf::alloc_counts() -> ponko::perf::AllocCounts
 pub fn ponko::perf::net_alloc_bytes() -> i64
 pub fn ponko::perf::note_allocation(usize)
 pub fn ponko::perf::scope_named(&str) -> &'static ponko::perf::ProfileScope
+pub fn ponko::perf::thread_alloc_counts() -> ponko::perf::AllocCounts
 pub mod ponko::prelude
 pub use ponko::prelude::Added
 pub use ponko::prelude::Changed
