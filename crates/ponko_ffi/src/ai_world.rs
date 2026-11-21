@@ -156,14 +156,14 @@ pub unsafe extern "C" fn ponko_ctx_ai_think(ctx: *mut PonkoCtx) -> PonkoStatus {
 unsafe fn send(ctx: *mut PonkoCtx, target: u64, key: u64, value: Option<Value>) -> PonkoStatus {
     // SAFETY: forwarded caller contract.
     boundary(|| unsafe {
-        let name = key_of(key)?;
-        let mut signal = if target == PONKO_AI_EVERY_BRAIN {
-            Signal::broadcast(name)
-        } else {
-            Signal::to(Entity::from_bits(target), name)
-        };
-        signal.value = value;
         events(ctx, |ev| {
+            let name = key_of(key)?;
+            let mut signal = if target == PONKO_AI_EVERY_BRAIN {
+                Signal::broadcast(name)
+            } else {
+                Signal::to(Entity::from_bits(target), name)
+            };
+            signal.value = value;
             ev.send(signal);
             Ok(())
         })
@@ -178,7 +178,7 @@ unsafe fn send(ctx: *mut PonkoCtx, target: u64, key: u64, value: Option<Value>) 
 /// whose tree doesn't wait for it, and entities without a brain, ignore it.
 /// Works inside `ponko_query` callbacks.
 /// ```
-/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_ai_signal(std::ptr::null_mut(), ponko_ffi::PONKO_AI_EVERY_BRAIN, 0) } as u32, 2);
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_ai_signal(std::ptr::null_mut(), ponko_ffi::PONKO_AI_EVERY_BRAIN, 0) } as u32, 1);
 /// ```
 /// # Safety
 /// `ctx` null or live.
@@ -191,7 +191,7 @@ pub unsafe extern "C" fn ponko_ctx_ai_signal(ctx: *mut PonkoCtx, target: u64, ke
 /// `ponko_ctx_ai_signal` carrying a number, which a `wait_for` node with
 /// `"store": "key"` writes to the blackboard (Rust `Signal::with`).
 /// ```
-/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_ai_signal_num(std::ptr::null_mut(), 0, 0, 1.0) } as u32, 2);
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_ai_signal_num(std::ptr::null_mut(), 0, 0, 1.0) } as u32, 1);
 /// ```
 /// # Safety
 /// `ctx` null or live.
@@ -203,7 +203,7 @@ pub unsafe extern "C" fn ponko_ctx_ai_signal_num(ctx: *mut PonkoCtx, target: u64
 
 /// `ponko_ctx_ai_signal` carrying an entity (who shouted, who shot).
 /// ```
-/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_ai_signal_entity(std::ptr::null_mut(), 0, 0, 0) } as u32, 2);
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_ai_signal_entity(std::ptr::null_mut(), 0, 0, 0) } as u32, 1);
 /// ```
 /// # Safety
 /// `ctx` null or live.
@@ -220,7 +220,7 @@ pub unsafe extern "C" fn ponko_ctx_ai_signal_entity(
 
 /// `ponko_ctx_ai_signal` carrying a 2D point (where the noise was).
 /// ```
-/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_ai_signal_vec2(std::ptr::null_mut(), 0, 0, Default::default()) } as u32, 2);
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_ai_signal_vec2(std::ptr::null_mut(), 0, 0, Default::default()) } as u32, 1);
 /// ```
 /// # Safety
 /// `ctx` null or live.
@@ -238,7 +238,7 @@ pub unsafe extern "C" fn ponko_ctx_ai_signal_vec2(
 
 /// `ponko_ctx_ai_signal` carrying a 3D point.
 /// ```
-/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_ai_signal_vec3(std::ptr::null_mut(), 0, 0, Default::default()) } as u32, 2);
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_ai_signal_vec3(std::ptr::null_mut(), 0, 0, Default::default()) } as u32, 1);
 /// ```
 /// # Safety
 /// `ctx` null or live.
@@ -356,8 +356,8 @@ pub unsafe extern "C" fn ponko_ctx_ai_param_num(
 unsafe fn set(ctx: *mut PonkoCtx, entity: u64, key: u64, value: Value) -> PonkoStatus {
     // SAFETY: forwarded caller contract.
     boundary(|| unsafe {
-        let key = key_of(key)?;
         ctx_access(ctx, |c| {
+            let key = key_of(key)?;
             blackboard(c, entity)?.set(key, value);
             Ok(())
         })
