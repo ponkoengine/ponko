@@ -156,6 +156,8 @@ impl Graphics {
         {
             renderer.create_material(id, &gpu);
         }
+        #[cfg(feature = "editor")]
+        self.note_material_desc(Material { id }, &desc);
         Ok(Material { id })
     }
 
@@ -183,6 +185,8 @@ impl Graphics {
         if !self.assets3d.materials_live.contains(material.id) {
             return;
         }
+        #[cfg(feature = "editor")]
+        self.note_material_desc(material, &desc);
         let gpu = self.gpu_material(&desc);
         if let Some(renderer) = self.renderer.as_mut()
             && !self.headless
@@ -258,6 +262,8 @@ impl Graphics {
         }
         self.assets3d.material_ids.release(id);
         self.asset_ledger.freed(crate::inventory::AssetClass::Material, id);
+        #[cfg(feature = "editor")]
+        self.assets3d.material_descs.remove(&id);
         if self.assets3d.default_material == Some(Material { id }) {
             self.assets3d.default_material = None;
         }
@@ -1237,7 +1243,7 @@ impl Graphics {
     /// `images` and updates its live materials in place, so what shows them
     /// shows the new file; textures no other file uses are freed. An image
     /// with blocks (a KTX2 image the GPU samples) uploads as it is.
-    fn file_materials(
+    pub(super) fn file_materials(
         &mut self,
         path: &str,
         file: &assets::Origin,

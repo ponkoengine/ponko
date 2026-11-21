@@ -76,6 +76,8 @@ pub use ik::{look_at_joint, two_bone_ik};
 pub use lod::{LodGroup, LodHysteresis, LodLevel, LodPick, LodRenderer, LodSettings, LodShadow};
 pub use retarget::{HumanBone, HumanoidMap, RetargetError, Retargeter};
 pub(crate) mod lights;
+#[cfg(feature = "editor")]
+mod material_edit;
 mod material_variant;
 mod stencil;
 pub use stencil::{Stencil, StencilCompare, StencilFace, StencilOp};
@@ -1359,6 +1361,10 @@ pub(crate) struct Assets3D {
     /// shorter than `bounds` when the last ones cast.
     pub shadowless: Vec<bool>,
     pub material_ids: crate::handle::SlotCounter,
+    /// What each material was last made or updated with, for the editor's
+    /// material windows.
+    #[cfg(feature = "editor")]
+    pub material_descs: std::collections::HashMap<u32, MaterialDesc>,
     pub shader_ids: crate::handle::SlotCounter,
     pub compute_ids: crate::handle::SlotCounter,
     pub effect_ids: crate::handle::SlotCounter,

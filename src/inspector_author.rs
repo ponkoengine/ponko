@@ -71,9 +71,9 @@ impl Tool {
         }
     }
 
-    /// The files in `assets/` it can open.
-    fn candidates(self) -> Vec<String> {
-        let ext = match self {
+    /// The extension of the files it opens.
+    fn extension(self) -> &'static str {
+        match self {
             Tool::Tilemap => "tmj",
             Tool::Graph => "json",
             #[cfg(feature = "3d")]
@@ -82,17 +82,67 @@ impl Tool {
             Tool::Shader => "wgsl",
             #[cfg(feature = "3d")]
             Tool::Terrain => "png",
-        };
-        let mut found = crate::assets::list("", ext);
-        found.retain(|p| match self {
-            Tool::Graph => super::graph_panel::is_skeleton_file(p),
-            #[cfg(feature = "3d")]
-            Tool::Terrain => super::terrain_panel::is_heightmap_file(p),
-            _ => true,
-        });
-        found.sort();
-        found
+        }
     }
+
+    /// Whether it can open `path` (one of the files with its extension).
+    fn opens(self, path: &str) -> bool {
+        match self {
+            Tool::Graph => super::graph_panel::is_skeleton_file(path),
+            #[cfg(feature = "3d")]
+            Tool::Terrain => super::terrain_panel::is_heightmap_file(path),
+            _ => true,
+        }
+    }
+}
+
+/// Folders below `assets/` the file lists look into, at most.
+const LIST_DEPTH: usize = 8;
+/// Files a list holds, at most.
+const LIST_FILES: usize = 4096;
+
+/// Every file in the `assets/` folders (or a web build's manifest) ending
+/// in `.{extension}`, as asset names, sorted.
+fn files_with(extension: &str) -> Vec<String> {
+    let suffix = format!(".{extension}");
+    #[cfg(target_arch = "wasm32")]
+    let mut out: Vec<String> = crate::assets::web_manifest()
+        .into_iter()
+        .filter(|n| n.to_ascii_lowercase().ends_with(&suffix))
+        .collect();
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut out = {
+        let mut out = Vec::new();
+        'roots: for root in crate::assets::asset_roots() {
+            let mut stack = vec![(root.clone(), 0usize)];
+            while let Some((dir, depth)) = stack.pop() {
+                let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let name = entry.file_name();
+                    if name.to_str().is_none_or(|n| n.starts_with('.')) {
+                        continue;
+                    }
+                    if path.is_dir() {
+                        if depth < LIST_DEPTH {
+                            stack.push((path, depth + 1));
+                        }
+                    } else if name.to_str().is_some_and(|n| n.to_ascii_lowercase().ends_with(&suffix))
+                        && let Ok(rel) = path.strip_prefix(&root)
+                    {
+                        out.push(rel.to_string_lossy().replace('\\', "/"));
+                        if out.len() >= LIST_FILES {
+                            break 'roots;
+                        }
+                    }
+                }
+            }
+        }
+        out
+    };
+    out.sort();
+    out.dedup();
+    out
 }
 
 /// The authoring windows' state, kept by the editor app.
@@ -108,6 +158,10 @@ pub(crate) struct Authoring {
     pub materials: super::material_panel::MaterialState,
     #[cfg(feature = "3d")]
     pub terrain: super::terrain_panel::TerrainState,
+    /// Frames the windows were shown, and the file lists by extension
+    /// with the frame each was made in.
+    frames: u64,
+    files: std::collections::HashMap<String, (u64, Vec<String>)>,
 }
 
 impl std::fmt::Debug for Authoring {
@@ -131,6 +185,7 @@ impl Panels {
                     if let Some(a) = self.authoring() {
                         a.picking = Some((tool, String::new()));
                         a.error = None;
+                        a.files.clear();
                     }
                     ui.close();
                 }
@@ -153,11 +208,25 @@ impl Panels {
         }
     }
 
+    /// The files in `assets/` ending in `.{extension}` (see `files_with`),
+    /// listed again every two seconds or so.
+    pub(super) fn asset_files(&mut self, extension: &str) -> Vec<String> {
+        let Some(a) = self.authoring() else { return Vec::new() };
+        let frames = a.frames;
+        match a.files.get(extension) {
+            Some((at, list)) if frames.saturating_sub(*at) < 120 => list.clone(),
+            _ => {
+                let list = files_with(extension);
+                a.files.insert(extension.to_string(), (frames, list.clone()));
+                list
+            }
+        }
+    }
+
     /// The picker and every open authoring window, one frame.
     pub(super) fn author_windows(&mut self, ui: &mut Ui, ctx: &mut Ctx) {
-        if self.app.is_none() {
-            return;
-        }
+        let Some(a) = self.authoring() else { return };
+        a.frames += 1;
         self.author_picker(ui, ctx);
         self.tilemap_window(ui, ctx);
         self.graph_window(ui, ctx);
@@ -192,6 +261,11 @@ impl Panels {
         let Some((tool, mut path)) = self.authoring().and_then(|a| a.picking.clone()) else {
             return;
         };
+        let candidates: Vec<String> = self
+            .asset_files(tool.extension())
+            .into_iter()
+            .filter(|p| tool.opens(p))
+            .collect();
         let mut open = None;
         let mut cancel = false;
         egui::Window::new(format!("Open {}", tool.label().trim_end_matches('…').to_lowercase()))
@@ -207,7 +281,7 @@ impl Panels {
                     open = Some(path.clone());
                 }
                 egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
-                    for file in tool.candidates() {
+                    for file in candidates {
                         if ui.selectable_label(false, &file).clicked() {
                             open = Some(file);
                         }
