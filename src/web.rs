@@ -197,8 +197,16 @@ fn page_pack() -> Option<String> {
 /// friends find them: the page's asset pack when the canvas names one,
 /// else every file listed in `assets/index.json`, all at once. A page
 /// with neither has no assets, which is fine for games that make their
-/// textures in code.
+/// textures in code. With the editor, the files it saved in this browser
+/// then replace the fetched ones (`editor::web`).
 pub(crate) async fn fetch_assets() {
+    fetch_files().await;
+    #[cfg(feature = "editor")]
+    crate::editor::web::restore();
+}
+
+/// [`fetch_assets`]' downloads: the pack, else the files in the index.
+async fn fetch_files() {
     let Some(window) = web_sys::window() else {
         return;
     };
