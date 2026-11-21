@@ -123,6 +123,45 @@ pub(crate) struct GpuTimer {
     /// Reused by `read_frame` to sort a frame's passes.
     order: Vec<Charge>,
     cadence: Cadence,
+    /// Tests only: this timer's share of the process's timestamp queries.
+    /// Declared last, so the queries are dropped before it is given back.
+    #[cfg(test)]
+    _permit: test_permits::Permit,
+}
+
+/// Tests run many devices in one process, and they share what the system
+/// allows: Metal loses the device once a process holds more than about
+/// 2,048 timestamp queries. A game has one timer (`QUERIES * SLOTS`
+/// queries); a test making one waits here while too many others hold theirs.
+#[cfg(test)]
+mod test_permits {
+    use std::sync::{Condvar, Mutex, PoisonError};
+
+    /// Timers alive at once: 4 of 384 queries each leave room for the
+    /// tests that make query sets of their own.
+    const AT_ONCE: u32 = 4;
+    static HELD: Mutex<u32> = Mutex::new(0);
+    static FREED: Condvar = Condvar::new();
+
+    pub(super) struct Permit;
+
+    impl Permit {
+        pub(super) fn take() -> Self {
+            let mut held = HELD.lock().unwrap_or_else(PoisonError::into_inner);
+            while *held >= AT_ONCE {
+                held = FREED.wait(held).unwrap_or_else(PoisonError::into_inner);
+            }
+            *held += 1;
+            Permit
+        }
+    }
+
+    impl Drop for Permit {
+        fn drop(&mut self) {
+            *HELD.lock().unwrap_or_else(PoisonError::into_inner) -= 1;
+            FREED.notify_one();
+        }
+    }
 }
 
 impl GpuTimer {
@@ -131,6 +170,8 @@ impl GpuTimer {
         if !device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
             return None;
         }
+        #[cfg(test)]
+        let permit = test_permits::Permit::take();
         let queries = device.create_query_set(&wgpu::QuerySetDescriptor {
             label: Some("frame timestamps"),
             ty: wgpu::QueryType::Timestamp,
@@ -175,6 +216,8 @@ impl GpuTimer {
             last_end: 0,
             order: Vec::with_capacity(MAX_PASSES as usize),
             cadence: Cadence::EVERY_FRAME,
+            #[cfg(test)]
+            _permit: permit,
         })
     }
 
