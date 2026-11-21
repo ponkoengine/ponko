@@ -70,3 +70,4 @@ Game::restore_window_settings    window.md         # C and C++ games call ponko_
 Waves::spectrum                  water.md          # seas from C use the Gerstner waves of PonkoWaterDesc; the spectrum (FFT) sea is not bound yet
 WaveSpectrum                     water.md          # the spectrum (FFT) sea is not bound yet: C and C++ describe Gerstner waves in PonkoWaterDesc
 CrowdLevel::with_fade            crowds.md         # C and C++ crowd levels switch at once: a fade in PonkoCrowdLevel would change its layout
+LoopbackLink                     replication.md    # not bound yet: C and C++ tests use the plain loopback (ponko_net_messages_loopback)

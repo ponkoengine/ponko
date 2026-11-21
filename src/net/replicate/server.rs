@@ -12,7 +12,7 @@ use super::bits::{BitReader, BitWriter};
 use super::inputs::InputStream;
 use super::kinds::Kind;
 use super::wire::{self, ACK_WINDOW, HISTORY, MAX_PACKET, Meta, View};
-use super::{PeerStats, Replicated};
+use super::{PeerStats, Replicated, ResendStats};
 use crate::net::{Interest, InterestEntity, InterestViewer, NetMessages, PeerId};
 
 const NONE: u8 = 0;
@@ -117,6 +117,9 @@ struct ViewState {
     /// client acknowledges one, it is sent again only once the resend
     /// timeout passed since then, not every tick.
     sent_tick: u32,
+    /// Waiting to go again because acknowledgements skipped the packet
+    /// with its newest record, nothing changed since (an early resend).
+    early: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -154,6 +157,9 @@ pub(crate) struct Conn {
     records: Vec<PacketRecord>,
     tokens: f64,
     pub(crate) stats: PeerStats,
+    /// The resend counters (the rest of `ResendStats` is read from the
+    /// state below).
+    resends: ResendStats,
     pub(crate) viewer: Option<Vec3>,
     /// Smoothed round trip in ticks, and its mean deviation (as TCP's
     /// RFC 6298), from the acknowledgements; `None` before the first.
@@ -184,6 +190,7 @@ impl Conn {
             records: (0..ACK_WINDOW).map(|_| PacketRecord::default()).collect(),
             tokens: 0.0,
             stats: PeerStats::default(),
+            resends: ResendStats::default(),
             viewer: None,
             rtt: None,
             newest_acked: 0,
@@ -237,6 +244,8 @@ impl Conn {
                 let waiting = view.state == CREATING
                     || (view.state == LIVE && entry.index.wrapping_sub(view.base_index) as i32 > 0);
                 if newest && waiting {
+                    // Changed since: the new state goes anyway, as new.
+                    view.early |= !view.unsent;
                     view.unsent = true;
                 }
             }
@@ -246,6 +255,7 @@ impl Conn {
                     && view.generation == generation
                     && view.sent_tick == record.tick as u32
                 {
+                    view.early |= !view.unsent;
                     view.unsent = true;
                 }
             }
@@ -524,6 +534,22 @@ impl Server {
         self.tracking = None;
     }
 
+    /// How the server resends to `peer`, at `hz` ticks a second.
+    pub(crate) fn resend_stats(&self, peer: PeerId, hz: f64) -> Option<ResendStats> {
+        let conn = self.clients.get(&peer)?;
+        let (timeout_ticks, backoff) = if self.rules.backoff {
+            (conn.timeout_ticks(hz), conn.backoff)
+        } else {
+            (conn.resend_ticks(hz), 0)
+        };
+        Some(ResendStats {
+            timeout_ticks,
+            backoff,
+            reorder_ticks: if self.rules.reorder { conn.reorder } else { 0 },
+            ..conn.resends
+        })
+    }
+
     /// Ids waiting to be read in full.
     #[cfg(test)]
     pub(crate) fn pending(&self) -> usize {
@@ -702,6 +728,7 @@ impl Server {
             let view = &mut conn.views[id as usize];
             view.dirty = true;
             view.unsent = true;
+            view.early = false;
         }
         // Packets the acknowledgements skipped are lost: their records go
         // again now.
@@ -811,6 +838,7 @@ impl Server {
                     view.dirty = changed;
                     // Nothing to tell: nothing waits to go either.
                     view.unsent &= changed;
+                    view.early &= view.unsent;
                     let owned = slot.meta.owner == Some(peer);
                     // A change goes once; until the client acknowledges
                     // it, again only after the resend timeout.
@@ -875,6 +903,7 @@ impl Server {
                 }
                 if view.state == DESTROYING && waited(view) {
                     timed_out |= !view.unsent;
+                    count_resend(&mut conn.resends, view);
                     writer.write_varint(id as u64);
                     record.destroys.push((id as u32, view.generation));
                     view.unsent = false;
@@ -923,6 +952,10 @@ impl Server {
                 view.sent = view.sent.wrapping_add(1);
                 view.acc = 0.0;
                 timed_out |= !c.forced && !view.unsent;
+                if !c.forced {
+                    count_resend(&mut conn.resends, view);
+                }
+                view.early = false;
                 view.unsent = false;
                 view.sent_tick = this_tick;
                 record.entries.push(Entry {
@@ -965,6 +998,17 @@ impl Server {
     }
 }
 
+/// Counts a record about to go (not an owned one, which goes every tick):
+/// a resend if nothing changed since it last went.
+fn count_resend(resends: &mut ResendStats, view: &mut ViewState) {
+    if view.early {
+        resends.early_resends += 1;
+    } else if !view.unsent {
+        resends.timeout_resends += 1;
+    }
+    view.early = false;
+}
+
 /// A packet the transport refused: nothing in it can be acknowledged,
 /// and what it carried waits to go out (it never did).
 fn record_unsent(record: &mut PacketRecord, views: &mut [ViewState]) {
@@ -1003,6 +1047,7 @@ fn acknowledge(conn: &mut Conn, slots: &mut [Slot], free: &mut Vec<u32>, seq: u1
         // Called lost, resent, and it arrived after all: the link reorders
         // packets this far. Wait that long before calling the next lost.
         let late = conn.newest_acked.saturating_sub(sent).min(u64::from(u32::MAX)) as u32;
+        conn.resends.late_acks += 1;
         conn.reorder = conn.reorder.max((conn.reorder + 1).min(late));
         conn.reorder_quiet = 0;
     } else {
