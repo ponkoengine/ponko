@@ -457,12 +457,12 @@ fn inverse_fft(x: &mut [C], scratch: &mut [C], turns: &[C]) {
     let mut in_x = true;
     while ns < n {
         if in_x {
-            for o in 0..n {
-                scratch[o] = butterfly(x, o, n, ns, turns);
+            for (o, out) in scratch[..n].iter_mut().enumerate() {
+                *out = butterfly(x, o, n, ns, turns);
             }
         } else {
-            for o in 0..n {
-                x[o] = butterfly(scratch, o, n, ns, turns);
+            for (o, out) in x.iter_mut().enumerate() {
+                *out = butterfly(scratch, o, n, ns, turns);
             }
         }
         in_x = !in_x;

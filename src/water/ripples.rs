@@ -83,7 +83,13 @@ impl CpuRipples {
         std::mem::swap(&mut self.now, &mut self.next);
         let was_still = self.still;
         self.still = !moving && self.before.iter().all(|v| *v == 0.0);
-        for (texel, (now, before)) in self.upload.chunks_exact_mut(8).zip(self.now.iter().zip(&self.before)) {
+        for (texel, (now, before)) in self
+            .upload
+            .as_chunks_mut::<8>()
+            .0
+            .iter_mut()
+            .zip(self.now.iter().zip(&self.before))
+        {
             let [r, g, b, a] = [*now, *before, 0.0, 1.0].map(super::spectrum::f16_bits);
             texel[0..2].copy_from_slice(&r.to_le_bytes());
             texel[2..4].copy_from_slice(&g.to_le_bytes());

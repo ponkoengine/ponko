@@ -648,7 +648,9 @@ fn cloud_presets_gpu_time() {
             } else {
                 vec![false]
             };
-            let mut results: Vec<(Vec<f32>, Vec<Vec<f32>>, Vec<f32>)> = ways
+            // Per way: every frame's total, each kit pass's, each block's median.
+            type Way = (Vec<f32>, Vec<Vec<f32>>, Vec<f32>);
+            let mut results: Vec<Way> = ways
                 .iter()
                 .map(|_| (Vec::new(), vec![Vec::new(); kit_passes.len()], Vec::new()))
                 .collect();
