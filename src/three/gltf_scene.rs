@@ -165,10 +165,14 @@ pub(crate) struct GltfShared(HashMap<String, FileShare>);
 /// What the scenes of one glTF file share: the mesh of each node (`None`
 /// for a node without triangles; nodes of one glTF mesh have the same
 /// one) and the shapes fitted for its colliders, by what they were fitted
-/// to (nodes of one mesh at one scale have the same one).
+/// to (nodes of one mesh have the same hull or triangle mesh at every
+/// scale, and the same box, sphere or capsule at one scale), and the
+/// file's nodes as they were read, so a spawn of the file while it is
+/// unchanged doesn't parse it again.
 #[derive(Clone)]
 struct FileShare {
     meshes: Vec<Option<Mesh>>,
+    read: Option<std::sync::Arc<super::gltf::ReadNodes>>,
     #[cfg(feature = "physics3d")]
     shapes: HashMap<ShapeKey, crate::d3::Collider>,
 }
@@ -177,6 +181,7 @@ impl FileShare {
     fn new(meshes: Vec<Option<Mesh>>) -> Self {
         Self {
             meshes,
+            read: None,
             #[cfg(feature = "physics3d")]
             shapes: HashMap::new(),
         }
@@ -194,7 +199,9 @@ impl FileShare {
 
 /// What a collider shape was fitted to: a node's mesh (the first node of
 /// its glTF mesh, [`LoadedNode::same_mesh_as`]), the kind of collider,
-/// and the node's scale and level offset, bit for bit.
+/// the node's scale (for a box, sphere or capsule: a hull or triangle
+/// mesh is fitted unscaled and scaled where it is used) and its level
+/// offset, bit for bit.
 #[cfg(feature = "physics3d")]
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct ShapeKey {
@@ -212,6 +219,7 @@ impl ShapeKey {
         l[..3].copy_from_slice(&bits(&level.position.to_array()));
         l[3..7].copy_from_slice(&bits(&level.rotation.to_array()));
         l[7..].copy_from_slice(&bits(&level.scale.to_array()));
+        let scale = if fits_unscaled(kind) { Vec3::ONE } else { scale };
         Self {
             mesh,
             kind: kind as u8,
@@ -221,13 +229,17 @@ impl ShapeKey {
     }
 }
 
+/// Whether colliders of `kind` are collision meshes (hulls and triangle
+/// meshes), fitted to a node's mesh once and scaled where they are used.
+#[cfg(feature = "physics3d")]
+fn fits_unscaled(kind: NodeCollider) -> bool {
+    matches!(kind, NodeCollider::Hull | NodeCollider::Trimesh)
+}
+
 /// The collision mesh of `c`, if it has one (hulls and triangle meshes).
 #[cfg(feature = "physics3d")]
 fn mesh_shape(c: &crate::d3::Collider) -> Option<crate::d3::CollisionMesh> {
-    match c.shape {
-        crate::d3::Shape::Mesh(shape) => Some(shape),
-        _ => None,
-    }
+    c.shape.collision_mesh()
 }
 
 /// Meshes and collision meshes made for a file's scenes, to free once
@@ -664,7 +676,7 @@ impl GltfScene {
                 world: p.world,
                 properties: p.props,
                 extras: p.extras,
-                mesh: n.mesh.map(|m| m.data),
+                mesh: n.mesh.map(|m| std::sync::Arc::unwrap_or_clone(m.data)),
                 light: n.light,
             })
             .collect();
@@ -680,13 +692,15 @@ impl Ctx {
             .get_resource::<GltfShared>()
             .and_then(|t| t.0.get(path).cloned());
         let reuse = shared.as_ref().map(|s| s.meshes.as_slice());
-        let (loaded, meshes, file) = self.gfx.load_node_meshes(path, false, reuse)?;
+        let read = shared.as_ref().and_then(|s| s.read.as_ref());
+        let (loaded, meshes, file) = self.gfx.load_node_meshes(path, false, reuse, read)?;
         // The file's collision shapes go with its meshes: a spawn that
         // shares the meshes shares the shapes made for them too.
         let mut share = match shared {
             Some(s) if s.meshes == meshes => s,
             _ => FileShare::new(meshes),
         };
+        share.read = Some(std::sync::Arc::clone(&loaded));
         // A shape the game freed itself is made again.
         #[cfg(feature = "physics3d")]
         share
@@ -762,12 +776,14 @@ impl Ctx {
         let mut result = Ok(());
         for root in roots {
             let reuse = fresh.as_ref().map(|f| f.meshes.as_slice());
-            let loaded = self.gfx.load_node_meshes(path, fresh.is_none(), reuse);
+            let read = fresh.as_ref().and_then(|f| f.read.as_ref());
+            let loaded = self.gfx.load_node_meshes(path, fresh.is_none(), reuse, read);
             let applied = loaded.and_then(|(loaded, meshes, _)| {
                 let mut share = match &fresh {
                     Some(f) if f.meshes == meshes => f.clone(),
                     _ => FileShare::new(meshes),
                 };
+                share.read = Some(std::sync::Arc::clone(&loaded));
                 self.apply_gltf(root, path, &loaded.nodes, &mut share, false, false)
                     .map(|()| share)
             });
@@ -1255,10 +1271,13 @@ impl Ctx {
     }
 
     /// Makes the colliders the plan asks for, each from its node's mesh
-    /// scaled as the node is in the world. Shapes already in `made` (by
-    /// what they fit, see [`ShapeKey`]) are used again; the ones made here
-    /// come back too, to add to the file's share. On an error those are
-    /// freed.
+    /// scaled as the node is in the file: a box, sphere or capsule fitted
+    /// to the scaled mesh, a hull or triangle mesh fitted to it unscaled
+    /// and scaled where it is used ([`Shape::ScaledMesh`](crate::d3::Shape::ScaledMesh)),
+    /// so nodes of one mesh at every scale, mirrored too, share it. Shapes
+    /// already in `made` (by what they fit, see [`ShapeKey`]) are used
+    /// again; the ones made here come back too, to add to the file's
+    /// share. On an error those are freed.
     #[cfg(feature = "physics3d")]
     #[allow(clippy::type_complexity)]
     fn gltf_colliders(
@@ -1286,18 +1305,28 @@ impl Ctx {
             let Some(mesh) = &nodes[source].mesh else {
                 return Err(fail(self, &fresh, &node.path, "\"ponko:collider\" needs a mesh to fit"));
             };
-            // Colliders don't take the transform's scale: put it in the shape.
+            // Colliders don't take the transform's scale: put it in the
+            // shape, or for a collision mesh on the collider.
             let level = if source == i {
                 Transform3D::default()
             } else {
                 plan.nodes[source].local
             };
-            let scale = node.world.scale.abs();
+            let scale = node.world.scale;
+            if matches!(kind, NodeCollider::Hull) && scale.cmpeq(Vec3::ZERO).any() {
+                return Err(fail(
+                    self,
+                    &fresh,
+                    &node.path,
+                    "its mesh has no volume for a convex hull",
+                ));
+            }
             let key = ShapeKey::new(nodes[source].same_mesh_as.unwrap_or(source), kind, scale, &level);
             let shape = match made.get(&key).or_else(|| fresh.get(&key)) {
                 Some(&shape) => shape,
                 None => {
-                    let to_node = Mat4::from_scale(scale) * level_matrix(&level);
+                    let fit_scale = if fits_unscaled(kind) { Vec3::ONE } else { scale };
+                    let to_node = Mat4::from_scale(fit_scale) * level_matrix(&level);
                     match self.fit_collider(kind, &mesh.data, to_node) {
                         Ok(shape) => *fresh.entry(key).or_insert(shape),
                         Err(message) => return Err(fail(self, &fresh, &node.path, message)),
@@ -1305,6 +1334,11 @@ impl Ctx {
                 }
             };
             let mut collider = shape;
+            if let crate::d3::Shape::Mesh(mesh) = collider.shape
+                && scale != Vec3::ONE
+            {
+                collider.shape = crate::d3::Shape::ScaledMesh { mesh, scale };
+            }
             collider.sensor = node.props.sensor;
             collider.groups = CollisionGroups::new(
                 node.props.collision_layers.unwrap_or(u32::MAX),

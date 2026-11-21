@@ -248,6 +248,30 @@ pub enum Shape3D {
     /// instead (`{"Mesh": {"file": "rock.glb"}}`); reflection leaves out
     /// colliders of meshes made in code.
     Mesh(#[serde(with = "unsaved_mesh")] CollisionMesh),
+    /// A convex hull, triangle mesh or heightfield made by [`Physics3D`],
+    /// scaled by `scale` where it is used, so one mesh serves colliders of
+    /// every size: see [`Collider3D::scaled_mesh`]. A negative component
+    /// mirrors a hull or triangle mesh; a heightfield takes the size only.
+    /// Serde writes the mesh as [`Shape3D::Mesh`] does; world saves and
+    /// scenes leave such colliders out (a mesh file's description names
+    /// its own `scale` instead).
+    ScaledMesh {
+        /// The mesh, as it was made.
+        #[serde(with = "unsaved_mesh")]
+        mesh: CollisionMesh,
+        /// Its scale along X, Y and Z, in the collider's frame.
+        scale: Vec3,
+    },
+}
+
+impl Shape3D {
+    /// The collision mesh of a mesh shape.
+    pub(crate) fn collision_mesh(&self) -> Option<CollisionMesh> {
+        match *self {
+            Shape3D::Mesh(mesh) | Shape3D::ScaledMesh { mesh, .. } => Some(mesh),
+            _ => None,
+        }
+    }
 }
 
 /// Which colliders touch which: a collider is a member of the groups in
@@ -423,6 +447,28 @@ impl Collider3D {
     #[must_use]
     pub fn mesh(mesh: CollisionMesh) -> Self {
         Self::of(Shape3D::Mesh(mesh))
+    }
+    /// A convex hull, triangle mesh or heightfield made by [`Physics3D`],
+    /// scaled by `scale` (a negative component mirrors a hull or triangle
+    /// mesh). Colliders of one mesh at any number of sizes share the mesh;
+    /// each collider gets its scaled copy when it enters the physics world,
+    /// and colliders at the same scale share that copy too.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// Game::new("t", 1, 1).physics3d(Vec3::ZERO).run_headless(1, |ctx| {
+    ///     let corners = [vec3(0.0, 0.0, 0.0), vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), vec3(0.0, 0.0, 1.0)];
+    ///     let rock = ctx.physics3d.convex_hull(&corners).expect("a hull");
+    ///     for (x, size) in [(0.0, 1.0), (5.0, 3.0)] {
+    ///         let collider = ponko::d3::Collider::scaled_mesh(rock, Vec3::splat(size));
+    ///         ctx.world.spawn((ponko::d3::Transform::at(vec3(x, 0.0, 0.0)), ponko::d3::RigidBody::fixed(), collider));
+    ///     }
+    ///     assert_eq!(ctx.live_counts().collision_meshes, 1);
+    /// });
+    /// ```
+    #[must_use]
+    pub fn scaled_mesh(mesh: CollisionMesh, scale: Vec3) -> Self {
+        Self::of(Shape3D::ScaledMesh { mesh, scale })
     }
     /// With this density.
     #[must_use]
@@ -650,6 +696,9 @@ pub struct Physics3D {
     /// Events taken from the collector, kept to reuse its memory.
     events: Vec<rp::CollisionEvent>,
     meshes: Vec<MeshSlot>,
+    /// The scaled copies of meshes [`Shape3D::ScaledMesh`] colliders use,
+    /// by mesh id and scale, while a collider holds them.
+    scaled_meshes: std::collections::HashMap<(u32, [u32; 3]), std::sync::Weak<dyn rapier3d::parry::shape::Shape>>,
     /// The id each mesh slot was last given out as, and the freed ones.
     mesh_ids: crate::handle::SlotIds,
     /// Reused by the character controller.
@@ -731,6 +780,7 @@ impl Physics3D {
             collector: Collector::default(),
             events: Vec::new(),
             meshes: Vec::new(),
+            scaled_meshes: std::collections::HashMap::new(),
             mesh_ids: crate::handle::SlotIds::default(),
             character: character::Scratch::default(),
             ragdolls: Vec::new(),
@@ -1093,8 +1143,9 @@ impl Physics3D {
         self.mesh(mesh).is_some()
     }
 
-    /// Calls `edge` with the edges of `mesh` scaled by `scale`, in the
-    /// collider's frame (the entity's, before its rotation and position):
+    /// Calls `edge` with the edges of `mesh` scaled by `scale` (mirrored by
+    /// a negative component, but for a heightfield), in the collider's
+    /// frame (the entity's, before its rotation and position):
     /// every edge of a convex hull, and of triangle meshes and heightfields
     /// the three edges of each triangle within `reach` of `near` (in that
     /// frame too), found through the mesh's own tree or grid, so a big mesh
@@ -1116,11 +1167,18 @@ impl Physics3D {
         let Some(shape) = slot.shape.as_ref() else {
             return false;
         };
-        let scale = scale.abs().max(Vec3::splat(1e-6));
+        // A heightfield takes the scale's size, a hull or triangle mesh is
+        // mirrored by a negative component, as their colliders are.
+        let tiny = Vec3::splat(1e-6);
+        let scale = if shape.as_heightfield().is_some() {
+            scale.abs().max(tiny)
+        } else {
+            Vec3::select(scale.abs().cmplt(tiny), tiny.copysign(scale), scale)
+        };
         let place = |p: rp::Vector| (from_rp(p) + slot.offset) * scale;
         // The query box in the shape's own (unscaled) frame.
         let center = near / scale - slot.offset;
-        let half = Vec3::splat(reach) / scale;
+        let half = Vec3::splat(reach) / scale.abs();
         let query = Aabb::new(to_rp(center - half), to_rp(center + half));
         let mut triangle = |t: &Triangle| {
             let (a, b, c) = (place(t.a), place(t.b), place(t.c));
@@ -1172,13 +1230,47 @@ impl Physics3D {
         CollisionMesh { id }
     }
 
+    /// `mesh` scaled by `scale` for a [`Shape3D::ScaledMesh`], with where
+    /// it sits: the copy a collider already uses, or a new one (then
+    /// `true`). `None` for a freed mesh, or a scale that leaves nothing.
+    pub(crate) fn scaled_mesh(&self, mesh: CollisionMesh, scale: Vec3) -> Option<(rp::SharedShape, Vec3, bool)> {
+        let slot = self.mesh(mesh)?;
+        let base = slot.shape.as_ref().expect("live slot");
+        if scale == Vec3::ONE {
+            return Some((base.clone(), slot.offset, false));
+        }
+        let offset = if base.as_heightfield().is_some() {
+            slot.offset * scale.abs()
+        } else {
+            slot.offset * scale
+        };
+        let key = (mesh.id, scale.to_array().map(f32::to_bits));
+        if let Some(shape) = self.scaled_meshes.get(&key).and_then(std::sync::Weak::upgrade) {
+            return Some((rp::SharedShape(shape), offset, false));
+        }
+        Some((streaming::scaled_copy(base, scale)?, offset, true))
+    }
+
+    /// [`scaled_mesh`](Self::scaled_mesh), keeping a new copy for the
+    /// next collider at the same scale.
+    fn scaled_mesh_kept(&mut self, mesh: CollisionMesh, scale: Vec3) -> Option<(rp::SharedShape, Vec3)> {
+        let (shape, offset, fresh) = self.scaled_mesh(mesh, scale)?;
+        if fresh {
+            // Copies no collider holds any more go first.
+            self.scaled_meshes.retain(|_, copy| copy.strong_count() > 0);
+            let key = (mesh.id, scale.to_array().map(f32::to_bits));
+            self.scaled_meshes.insert(key, std::sync::Arc::downgrade(&shape.0));
+        }
+        Some((shape, offset))
+    }
+
     /// A rapier collider for `c` (a speck touching nothing for a freed mesh).
-    fn collider_of(&self, c: &Collider3D, e: Entity) -> rp::Collider {
+    fn collider_of(&mut self, c: &Collider3D, e: Entity) -> rp::Collider {
         self.scaled_collider_of(c, e, Vec3::ONE)
     }
 
     /// A rapier collider for a terrain collider, scaled with its tile.
-    fn terrain_collider_of(&self, t: &TerrainCollider, scale: Vec3, e: Entity) -> rp::Collider {
+    fn terrain_collider_of(&mut self, t: &TerrainCollider, scale: Vec3, e: Entity) -> rp::Collider {
         let c = Collider3D {
             friction: t.friction,
             restitution: t.restitution,
@@ -1189,8 +1281,9 @@ impl Physics3D {
     }
 
     /// [`collider_of`](Self::collider_of) with its mesh scaled by `scale`.
-    fn scaled_collider_of(&self, c: &Collider3D, e: Entity, scale: Vec3) -> rp::Collider {
+    fn scaled_collider_of(&mut self, c: &Collider3D, e: Entity, scale: Vec3) -> rp::Collider {
         let tiny = f32::EPSILON;
+        let mut dead = false;
         let (shape, offset) = match c.shape {
             Shape3D::Sphere { radius } => (rp::SharedShape::ball(radius.max(tiny)), Vec3::ZERO),
             Shape3D::Cuboid { size } => {
@@ -1208,7 +1301,17 @@ impl Physics3D {
                     slot.offset * scale.abs(),
                 ),
                 // A freed mesh: a speck that touches nothing.
-                None => (rp::SharedShape::ball(tiny), Vec3::ZERO),
+                None => {
+                    dead = true;
+                    (rp::SharedShape::ball(tiny), Vec3::ZERO)
+                }
+            },
+            Shape3D::ScaledMesh { mesh, scale } => match self.scaled_mesh_kept(mesh, scale) {
+                Some(placed) => placed,
+                None => {
+                    dead = true;
+                    (rp::SharedShape::ball(tiny), Vec3::ZERO)
+                }
             },
         };
         let mut types = rp::ActiveCollisionTypes::default();
@@ -1216,10 +1319,7 @@ impl Physics3D {
             // Characters are kinematic: let them set off fixed triggers.
             types |= rp::ActiveCollisionTypes::KINEMATIC_FIXED | rp::ActiveCollisionTypes::KINEMATIC_KINEMATIC;
         }
-        let groups = match c.shape {
-            Shape3D::Mesh(m) if self.mesh(m).is_none() => CollisionGroups::new(0, 0),
-            _ => c.groups,
-        };
+        let groups = if dead { CollisionGroups::new(0, 0) } else { c.groups };
         rp::ColliderBuilder::new(shape)
             .density(c.density)
             .friction(c.friction)

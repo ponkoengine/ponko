@@ -2292,12 +2292,14 @@ pub(crate) fn collider_file(value: &Value) -> Option<&Value> {
     value.pointer("/shape/Mesh").filter(|m| m.get("file").is_some())
 }
 
-/// `None` for a collider of a mesh made in code: it has no file to name, so
+/// `None` for a collider of a mesh made in code (or a scaled mesh): it has no file to name, so
 /// the collider isn't saved (the rest of the entity is), as with a model.
 #[cfg(feature = "physics3d")]
 fn collider_json(world: &World, c: &crate::d3::Collider) -> Option<Result<Value, String>> {
     let file = match c.shape {
         crate::d3::Shape::Mesh(mesh) => Some(world.get_resource::<ColliderFiles>()?.by_mesh.get(&mesh)?),
+        // Scaled where it is used: a mesh file names its scale itself.
+        crate::d3::Shape::ScaledMesh { .. } => return None,
         _ => None,
     };
     let mut value = match serde_json::to_value(c) {

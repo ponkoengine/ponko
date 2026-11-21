@@ -384,7 +384,11 @@ fn colliders_fit_the_node_meshes_with_their_scale() {
         world.get::<Collider>(e)
     }
     .unwrap();
-    assert!(matches!(ground.shape, Shape::Mesh(_)));
+    assert!(
+        matches!(ground.shape, Shape::ScaledMesh { scale, .. } if scale == vec3(10.0, 1.0, 10.0)),
+        "the ground's triangle mesh, scaled where it is used: {:?}",
+        ground.shape
+    );
     assert_eq!(
         {
             let e = node(&mut world, "Ground");
@@ -862,8 +866,8 @@ fn a_bad_export_keeps_the_old_scene_drawing_its_meshes() {
     assert_eq!(*live.lock().unwrap(), [true], "the old scene's mesh stays live");
 }
 
-/// A file of four nodes of one glTF mesh with colliders: two triangle
-/// meshes at the same scale, one at another scale, and a hull.
+/// A file of five nodes of one glTF mesh with colliders: two triangle
+/// meshes at the same scale, one at another scale, a hull and a box.
 #[cfg(feature = "physics3d")]
 fn rock_colliders() -> String {
     gltf(
@@ -878,12 +882,13 @@ fn rock_colliders() -> String {
     )
 }
 
-/// The collision mesh of `path`'s collider in the scene of `root`.
+/// The collision mesh of `path`'s collider in the scene of `root`, scaled
+/// or not.
 #[cfg(feature = "physics3d")]
 fn collision_mesh(ctx: &mut Ctx, root: Entity, path: &str) -> ponko::d3::CollisionMesh {
     let e = ctx.world.get::<GltfRoot>(root).unwrap().entity(path).unwrap();
     match ctx.world.get::<ponko::d3::Collider>(e).unwrap().shape {
-        ponko::d3::Shape::Mesh(m) => m,
+        ponko::d3::Shape::Mesh(m) | ponko::d3::Shape::ScaledMesh { mesh: m, .. } => m,
         other => panic!("{path} has a {other:?}"),
     }
 }
@@ -896,18 +901,18 @@ fn spawning_a_scene_again_reuses_its_collision_shapes_until_the_last_one_goes() 
         let first = ctx.spawn_prefab(file.name(), Transform::default()).unwrap();
         assert_eq!(
             ctx.live_counts().collision_meshes,
-            3,
-            "A and B share a triangle mesh; Big's scale and the hull make their own"
+            2,
+            "A, B and Big share a triangle mesh (Big scales it where it is used); the hull makes its own"
         );
         let a = collision_mesh(ctx, first, "A");
         assert_eq!(collision_mesh(ctx, first, "B"), a);
-        assert_ne!(collision_mesh(ctx, first, "Big"), a);
+        assert_eq!(collision_mesh(ctx, first, "Big"), a);
         let mut roots = vec![first];
         for i in 1..100 {
             let at = Transform::at(vec3(i as f32 * 20.0, 0.0, 0.0));
             roots.push(ctx.spawn_prefab(file.name(), at).unwrap());
         }
-        assert_eq!(ctx.live_counts().collision_meshes, 3, "a hundred spawns share them");
+        assert_eq!(ctx.live_counts().collision_meshes, 2, "a hundred spawns share them");
         for path in ["A", "B", "Big", "Hull"] {
             assert_eq!(
                 collision_mesh(ctx, roots[99], path),
@@ -921,7 +926,7 @@ fn spawning_a_scene_again_reuses_its_collision_shapes_until_the_last_one_goes() 
         for &root in &roots[..99] {
             ctx.despawn_prefab(root);
         }
-        assert_eq!(ctx.live_counts().collision_meshes, 3);
+        assert_eq!(ctx.live_counts().collision_meshes, 2);
         assert!(ctx.is_live(a) && ctx.is_live(hull));
         ctx.despawn_prefab(roots[99]);
         assert_eq!(ctx.live_counts().collision_meshes, 0, "freed with the last scene");
@@ -929,7 +934,7 @@ fn spawning_a_scene_again_reuses_its_collision_shapes_until_the_last_one_goes() 
 
         // Spawned again, the file makes them again.
         let again = ctx.spawn_prefab(file.name(), Transform::default()).unwrap();
-        assert_eq!(ctx.live_counts().collision_meshes, 3);
+        assert_eq!(ctx.live_counts().collision_meshes, 2);
         ctx.despawn_prefab(again);
         assert_eq!(ctx.live_counts().collision_meshes, 0);
     });
@@ -1039,7 +1044,7 @@ fn reexporting_frees_the_old_collision_shapes_and_shares_the_new_ones() {
         });
     let seen = seen.lock().unwrap();
     let (before, old, _) = &seen[0];
-    assert_eq!(*before, 3);
+    assert_eq!(*before, 2);
     assert_eq!(old[0], old[1], "both scenes share the first export's shape");
     let (after, new, old_live) = &seen[1];
     assert_eq!(*after, 1, "A and B of both scenes share one new triangle mesh");
@@ -1057,7 +1062,7 @@ fn loading_a_world_frees_the_collision_shapes_of_the_scenes_it_replaced() {
             ctx.spawn_prefab(file.name(), Transform::at(vec3(i as f32 * 20.0, 0.0, 0.0)))
                 .unwrap();
         }
-        assert_eq!(ctx.live_counts().collision_meshes, 3);
+        assert_eq!(ctx.live_counts().collision_meshes, 2);
         let scene = TempAsset::with_contents("empty.json", &empty_world.to_string());
         ctx.load_scene(scene.name()).unwrap();
         assert_eq!(ctx.live_counts().collision_meshes, 0);
