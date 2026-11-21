@@ -196,10 +196,63 @@ ends, children still running are stopped: an action they started is dropped.
 ```
 
 walks to the door for at most five seconds, then knocks; and
-`{"parallel": [{"do": "aim"}, {"check": "alert"}]}` aims while alert. A
-brain does one action at a time, so only one child of a parallel may hold
-`do` nodes; the others check, wait, count down or wait for signals (a tree
-that breaks this is refused).
+`{"parallel": [{"do": "aim"}, {"check": "alert"}]}` aims while alert.
+
+### Several actions at once
+
+When several children of a parallel hold `do` nodes, their actions run
+side by side: a soldier moves to cover *and* aims. Your systems ask for
+each by name, as before, and report each on its own:
+
+```rust
+use ponko::ai::{BehaviorTree, Blackboard, Brain, Key};
+use std::sync::Arc;
+
+const MOVE: Key = Key::new("move");
+const AIM: Key = Key::new("aim");
+const SPREAD: Key = Key::new("spread");
+
+let tree = Arc::new(BehaviorTree::from_json(r#"{"root": {"sequence": [
+    {"parallel": [{"do": "move", "to": "cover"}, {"do": "aim", "spread": 0.5}]},
+    {"do": "fire"}
+]}}"#).unwrap());
+let (mut brain, mut bb) = (Brain::new("soldier"), Blackboard::new());
+brain.think(&tree, &mut bb, 0, 1.0 / 60.0);
+assert!(brain.doing(MOVE) && brain.doing(AIM));            // both run
+assert!(brain.started_action(AIM));                         // started this think
+assert_eq!(brain.action_param(AIM, SPREAD).and_then(|v| v.as_num()), Some(0.5));
+brain.succeed_action(AIM);                                  // aimed; still moving
+brain.think(&tree, &mut bb, 1, 1.0 / 60.0);
+assert_eq!(brain.actions().collect::<Vec<_>>(), [MOVE]);
+brain.succeed_action(MOVE);                                 // in cover: both done
+brain.think(&tree, &mut bb, 2, 1.0 / 60.0);
+assert!(brain.doing(Key::new("fire")));
+```
+
+How it is designed, and why:
+
+- **Actions are named by their names.** `brain.doing(AIM)` and
+  `brain.succeed_action(AIM)` mean one action, so the system that aims
+  needn't know what else runs. To keep that true, a tree where two
+  children of one parallel could run an action of the same name at once is
+  refused when it loads (`children [0] and [1] can both do "aim" at
+  once`); the same action in two branches that never run together (a
+  selector's) is fine.
+- **The one-action calls keep their meaning.** `action()`, `started()`,
+  `status()`, `param()`, `succeed()` and `fail()` are about the *first*
+  action in tree order, the only one in a tree without such a parallel, so
+  existing trees and systems work as before. `actions()` lists them all.
+- **Each ends on its own.** A reported action ends its `do` node and the
+  others carry on. When the parallel ends (its policy decided, or a higher
+  branch took over), every action below it is dropped.
+- **No new cost for one action.** A brain keeps up to two running actions
+  inline, with no heap allocation per think. A save lists the extra
+  actions beside the first, so a save of a one-action brain is unchanged.
+
+Not chosen: *channels* (legs, hands, voice) declared by the tree, where a
+new action on a channel replaces the old one. Every game would need the
+same list of channels, and the parallel's policy already says what runs
+together.
 
 ## Random choices
 
@@ -375,8 +428,74 @@ its `subtree` nodes name, by name (`ponko::ai::behavior_tree(json,
 {{"patrol", &patrol}})`). Signals: `ponko_brain_signal`. Random nodes:
 `ponko_brain_set_seed` per agent. Saves: `ponko_brain_save_json` writes a
 brain with its memory and blackboard, and `ponko_brain_load_json` reads it
-back to carry on where it was.
+back to carry on where it was. Several actions at once:
+`ponko_brain_action_at` (`brain::action_at`), `ponko_brain_finish_action`
+(`succeed_action`, `fail_action`), `ponko_brain_action_started`,
+`ponko_brain_action_param_num`; an action key of 0 means the first.
 
-Not in the C API: the world's `Brain` and `Blackboard` components, the
-`ai::think` system, `Signal` events and hot reload through `assets/`; a
-native game reloads a tree by making a new one from the file's text.
+### World brains and signals
+
+A native game can also leave its brains to the engine, as a Rust game
+does: `Brain` and `Blackboard` components on entities, run by the
+`ai::think` system, woken by `ai::Signal` events.
+`ponko_ctx_ai_load_tree` loads a tree from `assets/` (with hot reload) and
+`ponko_ctx_ai_add_tree` adds a compiled one; `ponko_ctx_ai_add_brain`
+gives an entity a brain; `ponko_ctx_ai_think`, called from a sim system,
+is `ai::think`. Signals go to one brain or, with `PONKO_AI_EVERY_BRAIN`,
+to all: `ponko_ctx_ai_signal` and `_num`, `_entity`, `_vec2`, `_vec3` for a
+value that `"store"` writes. The actions and blackboards of world brains:
+`ponko_ctx_ai_action`, `_started`, `_finish`, `_param_num`, and
+`ponko_ctx_ai_set_num` (and `_flag`, `_vec2`, `_vec3`, `_entity`),
+`ponko_ctx_ai_num`, `ponko_ctx_ai_flag`.
+
+<div class="lang-pair">
+<div>
+
+```rust
+use ponko::ai::{self, BehaviorTree, Blackboard, Brain, Key, Signal};
+use ponko::prelude::*;
+
+const ALARM: Key = Key::new("alarm");
+const SHOUT: Key = Key::new("shout");
+const RUN: Key = Key::new("run");
+
+Game::new("sentries", 640, 480)
+    .sim_system(|ctx: &mut Ctx| {                     // signals, before think
+        if ctx.time.sim_tick() == 30 {
+            ctx.events.send(Signal::broadcast(ALARM).with(vec2(320.0, 240.0)));
+        }
+    })
+    .sim_system(ai::think)
+    .sim_system(|ctx: &mut Ctx| {                     // act
+        ctx.world.query::<&mut Brain>().for_each(|brain| {
+            if brain.started_action(SHOUT) {          // two actions at once
+                brain.succeed_action(SHOUT);          // shouted once
+            }
+            if brain.doing(RUN) { /* move toward the noise; finish when there */ }
+        });
+    })
+    .run_headless(40, |ctx| {
+        let tree = BehaviorTree::from_json(r#"{"root": {"sequence": [
+            {"wait_for": "alarm", "store": "noise"},
+            {"parallel": [{"do": "run", "speed": 90}, {"do": "shout"}]}
+        ]}}"#).unwrap();
+        ai::add_tree(&mut ctx.world, "sentry", tree);
+        for _ in 0..3 {
+            // Thinks every 16th tick; the alarm wakes it at once.
+            ctx.world.spawn((Brain::new("sentry").with_period(16), Blackboard::new()));
+        }
+    });
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:ai_world}}
+```
+
+</div>
+</div>
+
+A system can't read a world brain while it runs a query over the world
+(`ponko_query`): collect the entities first, as above.
