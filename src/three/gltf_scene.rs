@@ -1050,6 +1050,11 @@ impl Ctx {
             })
             .unwrap_or_default();
         for (node_path, instance) in saved {
+            if deleted.contains(&node_path) {
+                // Its dead entity is never adopted (the id may name another
+                // entity after a load).
+                continue;
+            }
             match instance.entity {
                 None => {
                     left_out.insert(node_path);
