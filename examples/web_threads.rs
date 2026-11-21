@@ -9,7 +9,7 @@
 //! tick, four view systems the parallel scheduler batches together (its
 //! threshold at zero, so a batch goes to the workers whenever there are
 //! any), jobs (one waited for during setup and one every 30 ticks), a
-//! moving root with 4,000 attached children whose transforms are tracked
+//! moving root with 20,000 attached children whose transforms are tracked
 //! (so the hierarchy places them by lookups, on the workers when the level
 //! is worth sharing, through the same runner as the parallel query), the
 //! engine's own parallel passes (a spatial grid of 200,000 entries rebuilt
@@ -101,8 +101,9 @@ mod smoke;
 const DT: f32 = 1.0 / 60.0;
 
 /// Children attached to the moving root: enough that the hierarchy's
-/// lookup level is shared out on the web.
-const CHILDREN: usize = 4_000;
+/// lookup level is shared out on the web (its budget there is about 14,000
+/// children).
+const CHILDREN: usize = 20_000;
 
 /// The first of the 20 ticks profiled (see `hier_shared`).
 const PROFILED_FROM: u64 = 90;
@@ -1145,6 +1146,8 @@ struct Sweep {
     children: Vec<Entity>,
     skeletons: Vec<Entity>,
     characters: Vec<Entity>,
+    /// The skeletons' one texture, made once.
+    pixel: Option<Texture>,
     /// Moves the hierarchy's root to a new place every update.
     moves: u32,
     rows: Vec<serde_json::Value>,
@@ -1352,7 +1355,7 @@ fn populate(ctx: &mut Ctx, s: &mut Sweep, pass: SweepPass, n: usize) -> bool {
         SweepPass::Skeletons => {
             use ponko::skeleton2d::{BonePose, Skeleton, SkeletonData, SpritePart};
             if first < n {
-                let pixel = ctx.gfx.create_texture(1, 1, &[255; 4]);
+                let pixel = *s.pixel.get_or_insert_with(|| ctx.gfx.create_texture(1, 1, &[255; 4]));
                 let mut data = SkeletonData::new();
                 let root = data.add_bone("root", None, BonePose::IDENTITY, 0.0);
                 let arm = data.add_bone("arm", Some(root), BonePose::at(vec2(4.0, 0.0)), 8.0);
@@ -1463,12 +1466,30 @@ fn pass_hash(ctx: &mut Ctx, s: &mut Sweep, pass: SweepPass) -> u64 {
     }
 }
 
-/// The allocator sweep: the world's JSON save on the page's thread and on
-/// the workers (the same text from both), parsing it on the page's thread,
-/// and a parallel query that allocates on every item.
+/// The allocator sweep: the world's JSON save on the page's thread (first
+/// alone, then taking turns with the workers), on the workers (the same
+/// text), the save's parts on the page's thread (building the JSON values,
+/// writing the text, dropping the values), parsing it there, small blocks
+/// allocated and freed there, a vector grown there one push at a time, and
+/// a parallel query that allocates on every item.
 #[cfg(feature = "bench-internals")]
 fn alloc_sweep(ctx: &mut Ctx) -> serde_json::Value {
     use ponko::bench_sharing::{Sharing, set_sharing};
+    let reps = |f: &mut dyn FnMut() -> f64| -> f64 { median_ms((0..=SWEEP_REPS).map(|_| f()).skip(1).collect()) };
+    set_sharing(Sharing::Never);
+    let save_page_first = reps(&mut || timed_call(|| serde_json::to_string(&ctx.world.save()).unwrap_or_default()).1);
+    let build_ms = reps(&mut || {
+        let (v, ms) = timed_call(|| ctx.world.save());
+        drop(black_box(v));
+        ms
+    });
+    let saved = ctx.world.save();
+    let write_ms = reps(&mut || timed_call(|| black_box(serde_json::to_string(&saved).unwrap_or_default().len())).1);
+    let drop_ms = reps(&mut || {
+        let copy = saved.clone();
+        timed_call(|| drop(copy)).1
+    });
+    drop(saved);
     let mut save = [Vec::new(), Vec::new()];
     let mut hashes = [0u64; 2];
     let mut text = String::new();
@@ -1484,33 +1505,49 @@ fn alloc_sweep(ctx: &mut Ctx) -> serde_json::Value {
         }
     }
     set_sharing(Sharing::Auto);
-    let parse: Vec<f64> = (0..=SWEEP_REPS)
-        .map(|_| timed_call(|| black_box(serde_json::from_str::<serde_json::Value>(&text).is_ok())).1)
-        .skip(1)
-        .collect();
-    let par: Vec<f64> = (0..=SWEEP_REPS)
-        .map(|_| {
-            timed_call(|| {
-                ctx.world.query::<(&mut Pos, &mut Vel)>().par_for_each(|(p, v)| {
-                    // A path's worth of points and a label: small
-                    // allocations made and freed on whichever thread runs
-                    // the item.
-                    let path: Vec<Vec2> = (0..12).map(|i| vec2(p.x + i as f32, p.y)).collect();
-                    let label = format!("agent at {:.1}", path[11].x);
-                    v.x = black_box(label.len() as f32) * 0.0 + 1.0;
-                });
-            })
-            .1
+    let parse_ms = reps(&mut || timed_call(|| black_box(serde_json::from_str::<serde_json::Value>(&text).is_ok())).1);
+    let small_ms = reps(&mut || {
+        timed_call(|| {
+            let blocks: Vec<Box<[u8; 32]>> = (0..100_000u32).map(|i| Box::new([i as u8; 32])).collect();
+            black_box(blocks.len())
         })
-        .skip(1)
-        .collect();
+        .1
+    });
+    let grow_ms = reps(&mut || {
+        timed_call(|| {
+            let mut v = Vec::new();
+            for i in 0..1_000_000u32 {
+                v.push(i);
+            }
+            black_box(v.len())
+        })
+        .1
+    });
+    let par_alloc_ms = reps(&mut || {
+        timed_call(|| {
+            ctx.world.query::<(&mut Pos, &mut Vel)>().par_for_each(|(p, v)| {
+                // A path's worth of points and a label: small allocations
+                // made and freed on whichever thread runs the item.
+                let path: Vec<Vec2> = (0..12).map(|i| vec2(p.x + i as f32, p.y)).collect();
+                let label = format!("agent at {:.1}", path[11].x);
+                v.x = black_box(label.len() as f32) * 0.0 + 1.0;
+            });
+        })
+        .1
+    });
     let [page, workers] = save;
     json!({
         "save_bytes": text.len(),
         "same_save": hashes[0] == hashes[1],
+        "save_page_first_ms": save_page_first,
         "save_page_ms": median_ms(page),
         "save_workers_ms": median_ms(workers),
-        "parse_ms": median_ms(parse),
-        "par_alloc_ms": median_ms(par),
+        "save_build_ms": build_ms,
+        "save_write_ms": write_ms,
+        "save_drop_ms": drop_ms,
+        "parse_ms": parse_ms,
+        "small_blocks_ms": small_ms,
+        "vec_grow_ms": grow_ms,
+        "par_alloc_ms": par_alloc_ms,
     })
 }

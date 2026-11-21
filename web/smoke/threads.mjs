@@ -76,6 +76,7 @@ import {
   allocatorTable,
   checkAllocator,
   checkSides,
+  hideWebGpu,
   sweepDone,
   sweepTable,
   RUMBLE_SECONDS,
@@ -318,6 +319,7 @@ async function gamepads(browser, servers, args, report, plain = false) {
 /** The threshold sweep, on the isolated page: see the file's comment. */
 async function thresholds(browser, servers, args, report) {
   const context = await browser.newContext();
+  await context.addInitScript(hideWebGpu);
   const { page, lines } = await open(context, `http://127.0.0.1:${servers.isolated.address().port}/?sweep=thresholds`);
   const result = await until(page, lines, sweepDone, args.timeout, "the threshold sweep");
   await context.close();
@@ -336,6 +338,7 @@ async function allocator(browser, servers, args, report) {
   try {
     for (const [name, server] of [["perThread", servers.isolated], ["system", system]]) {
       const context = await browser.newContext();
+      await context.addInitScript(hideWebGpu);
       const { page, lines } = await open(context, `http://127.0.0.1:${server.address().port}/?sweep=allocator`);
       runs[name] = await until(page, lines, sweepDone, args.timeout, `the allocator sweep (${name})`);
       await context.close();

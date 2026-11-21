@@ -675,6 +675,16 @@ export function addRustFlag(env, flag) {
   return out;
 }
 
+/**
+ * Run in the page before its scripts (`addInitScript`): hides WebGPU, so the
+ * engine draws with WebGL2. The sweeps time passes on the CPU only; on a
+ * busy machine the headless shell's WebGPU canvas has lost its device at
+ * the first frame, and the next GPU buffer stopped the page.
+ */
+export function hideWebGpu() {
+  Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined, configurable: true });
+}
+
 /** Whether a sweep page (`?sweep=...`) has published everything. */
 export function sweepDone(state) {
   return state != null && state.done === true;
@@ -746,9 +756,15 @@ export function checkAllocator(perThread, system) {
 export function allocatorTable(perThread, system, sizes) {
   const ms = (v) => (Number.isFinite(v) ? v.toFixed(2) : "n/a");
   const rows = [
-    ["JSON save, page's thread", "save_page_ms"],
+    ["JSON save, page's thread, before the workers saved", "save_page_first_ms"],
+    ["JSON save, page's thread, taking turns with the workers", "save_page_ms"],
     ["JSON save, workers", "save_workers_ms"],
+    ["The save's JSON values built, page's thread", "save_build_ms"],
+    ["The save's text written, page's thread", "save_write_ms"],
+    ["The save's JSON values dropped, page's thread", "save_drop_ms"],
     ["Parsing that JSON, page's thread", "parse_ms"],
+    ["100,000 blocks of 32 bytes allocated and freed, page's thread", "small_blocks_ms"],
+    ["A vector grown to 1,000,000 numbers by pushes, page's thread", "vec_grow_ms"],
     ["Parallel query allocating per item", "par_alloc_ms"],
   ];
   const lines = ["| Pass | Standard allocator (ms) | Per-thread allocator (ms) |", "|---|---|---|"];

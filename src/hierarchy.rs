@@ -1068,7 +1068,18 @@ const PROBE: usize = 256;
 /// there: waking other threads costs more than it saves, and on a busy
 /// machine a woken thread may not run for milliseconds. The same budget as
 /// the ECS's parallel loops, which the other passes use.
+#[cfg(not(all(target_arch = "wasm32", target_feature = "atomics")))]
 pub(crate) const SERIAL_BUDGET_NS: u128 = 50_000;
+
+/// In a web build with threads, handing a level to the frame pool's
+/// workers and waiting for them costs about 0.1 ms, so a level must project
+/// to 0.4 ms on the page's thread (about 14,000 attached children placed by
+/// lookups). In headless Chromium with 13 threads, 4,096 children took 0.12
+/// ms on the page's thread and 0.14 ms shared out, 16,384 took 0.47 and
+/// 0.26 ms (`web/smoke/threads.mjs --case thresholds`; the guide's "Threads
+/// on the web").
+#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+pub(crate) const SERIAL_BUDGET_NS: u128 = 400_000;
 
 /// The components placement reads and writes, looked up once per update.
 #[derive(Clone, Copy)]
