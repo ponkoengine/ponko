@@ -523,9 +523,9 @@ basis-universal = ["compressed-textures", "dep:basis-universal"]
 # web such a file loads only from its uncompressed fallback, if it has one.
 gltf-meshopt = ["3d", "dep:meshopt"]
 # Video playback (`ponko::video::Video`): WebM files with AV1 pictures and
-# Vorbis sound, decoded on the CPU into a texture, the sound through the
-# mixer. Desktop only: on the web loading a video reports `Unsupported`.
-# See the guide's "Video" chapter.
+# Vorbis sound into a texture, the sound through the mixer. Decoded by
+# rav1d on the desktop (converted to RGBA on the GPU), by the browser's own
+# decoder (WebCodecs) on the web. See the guide's "Video" chapter.
 video = ["dep:matroska-demuxer", "dep:rav1d", "symphonia?/mkv"]
 
 # Runs on the main thread (AppKit requires it), so it is its own program

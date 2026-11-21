@@ -10,14 +10,15 @@
 //! `Video` (a resource or a local), call [`Video::update`] once a frame,
 //! draw [`Video::texture`]. [`Video::free`] when done.
 //!
-//! **What it needs:** the `video` feature (off by default). Pictures are
-//! decoded on the CPU by rav1d, the Rust port of the dav1d AV1 decoder,
-//! and copied into an ordinary texture; the sound plays on an audio bus
-//! like any other sound (silent without the `audio` feature or in a
-//! headless run without an offline output). Desktop only: the web build
-//! compiles the API, and loading reports
-//! [`ErrorKind::Unsupported`].
-//! The guide's "Video" chapter has the encoding settings and the reasons.
+//! **What it needs:** the `video` feature (off by default). On the desktop
+//! pictures are decoded on the CPU by rav1d, the Rust port of the dav1d
+//! AV1 decoder (with its assembly on arm64), and converted to RGBA on the
+//! GPU into an ordinary texture; in the browser the browser's own decoder
+//! (WebCodecs) decodes them, behind the same API. The sound plays on an
+//! audio bus like any other sound (silent without the `audio` feature or
+//! in a headless run without an offline output), and the picture keeps
+//! to it. The guide's "Video" chapter has the encoding settings and the
+//! reasons.
 
 #![deny(missing_docs)]
 
@@ -152,9 +153,9 @@ impl Video {
     /// # Errors
     /// [`ErrorKind::Decode`] if it is not a WebM (Matroska) file or its
     /// first frame doesn't decode; [`ErrorKind::Unsupported`] if its
-    /// pictures are not AV1, are more than 8 bits deep, its sound is not
-    /// Vorbis, or this is the web build (which has no decoder: see the
-    /// guide's "Video" chapter).
+    /// pictures are not AV1, are more than 8 bits deep, or its sound is
+    /// not Vorbis; in the browser, also if the browser has no WebCodecs AV1
+    /// decoder (see the guide's "Video" chapter).
     pub fn from_bytes(ctx: &mut Ctx, bytes: Vec<u8>) -> Result<Self, Error> {
         let bytes: Arc<[u8]> = bytes.into();
         let (demuxer, info) = demux::Demuxer::new(bytes.clone()).map_err(|e| Error::new(ErrorKind::Decode, e))?;

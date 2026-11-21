@@ -144,7 +144,9 @@ impl Fixture {
         ctx.gfx.draw_ex(
             video.texture(),
             center,
-            DrawParams::default().with_space(DrawSpace::Screen).with_scale(Vec2::splat(2.0)),
+            DrawParams::default()
+                .with_space(DrawSpace::Screen)
+                .with_scale(Vec2::splat(2.0)),
         );
     }
 
