@@ -110,6 +110,9 @@ pub(super) struct PostChain {
     /// This frame's antialiasing, and SMAA's passes while it is the mode.
     aa: AntiAliasing,
     smaa: Option<Smaa>,
+    /// HDR output's headroom over SDR white (`hdr_output.rs`), or `None`
+    /// to tone map for SDR.
+    pub(super) hdr_headroom: Option<f32>,
 }
 
 /// The post chain's images, of the scene's size.
@@ -383,6 +386,7 @@ impl PostChain {
             dof_on: false,
             aa: AntiAliasing::None,
             smaa: None,
+            hdr_headroom: None,
         }
     }
 
@@ -403,7 +407,8 @@ impl PostChain {
     ) {
         let post_uniform = PostUniform::new(post, lut.map(|(_, n)| n))
             .scaled(post, size, window)
-            .camera(camera.0, camera.1);
+            .camera(camera.0, camera.1)
+            .hdr(self.hdr_headroom);
         let post_uniform = bytemuck::bytes_of(&post_uniform);
         self.mirror
             .upload(queue, Upload::Uniforms, &self.buffer, 0, post_uniform);

@@ -15,6 +15,9 @@ use crate::error::Error;
 #[path = "startup.rs"]
 mod startup;
 
+#[path = "browser_gpu.rs"]
+mod browser_gpu;
+
 #[derive(Clone)]
 pub(super) struct GpuTexture {
     pub(super) bind_group: wgpu::BindGroup,
@@ -31,6 +34,8 @@ struct WindowSurface {
     window: Arc<Window>,
     instance: wgpu::Instance,
     surface: wgpu::Surface<'static>,
+    /// What the surface's display reports (HDR output) is asked through it.
+    adapter: wgpu::Adapter,
 }
 
 #[cfg(feature = "3d")]
@@ -94,6 +99,9 @@ pub(crate) struct Renderer {
     /// GPU-written textures stay conservative.
     #[cfg(feature = "3d")]
     texture_alpha: super::texture_alpha::TextureAlphas,
+    /// Converts video frames to RGBA, made when the first one comes.
+    #[cfg(all(feature = "video", not(target_arch = "wasm32")))]
+    video_yuv: Option<super::video_yuv::YuvToRgba>,
 
     instance_buffer: wgpu::Buffer,
     /// Capacity of `instance_buffer`, in sprites.
@@ -169,6 +177,10 @@ pub(crate) struct Renderer {
     /// egui textures to free once the frame that last used them is submitted.
     #[cfg(feature = "inspector")]
     egui_free: Vec<egui::TextureId>,
+    /// HDR output (`hdr_output.rs`): the settings, what the surface offered,
+    /// and when the window opened with HDR on, the frame image everything is
+    /// drawn into and the pass encoding it for the window.
+    hdr: super::hdr_output::Hdr,
 }
 
 /// The sprite pipeline, drawing into `format`.
@@ -388,10 +400,18 @@ impl Renderer {
     /// A view of the offscreen stand-in for the window, made at its size.
     fn hidden_view(&mut self) -> wgpu::TextureView {
         let (width, height) = (self.config.width, self.config.height);
+        let format = self.output_format();
+        // With HDR output it can be read back (the GPU tests check what the
+        // output pass wrote); its format follows HDR switched on and off.
+        let usage = if self.hdr.pass.is_some() {
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC
+        } else {
+            wgpu::TextureUsages::RENDER_ATTACHMENT
+        };
         let fits = self
             .hidden_target
             .as_ref()
-            .is_some_and(|t| t.width() == width && t.height() == height);
+            .is_some_and(|t| t.width() == width && t.height() == height && t.format() == format);
         if !fits {
             self.hidden_target = Some(self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("offscreen frame"),
@@ -403,8 +423,8 @@ impl Renderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: self.view_format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                format,
+                usage,
                 view_formats: &[],
             }));
         }
@@ -492,8 +512,9 @@ impl Renderer {
         display: winit::event_loop::OwnedDisplayHandle,
         vsync: bool,
         msaa: u32,
+        hdr: super::HdrOutput,
     ) -> Result<Self, Error> {
-        pollster::block_on(Self::new_async(window, display, vsync, msaa))
+        pollster::block_on(Self::new_async(window, display, vsync, msaa, hdr))
     }
 
     pub async fn new_async(
@@ -501,79 +522,90 @@ impl Renderer {
         display: winit::event_loop::OwnedDisplayHandle,
         vsync: bool,
         msaa: u32,
+        hdr: super::HdrOutput,
     ) -> Result<Self, Error> {
-        let descriptor = wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(display));
-        // In a browser, use WebGPU where it works and WebGL2 elsewhere.
-        #[cfg(target_arch = "wasm32")]
-        let instance = wgpu::util::new_instance_with_webgpu_detection(descriptor).await;
-        #[cfg(not(target_arch = "wasm32"))]
-        let instance = wgpu::Instance::new(descriptor);
-        let surface = startup::result(
-            instance.create_surface(window.clone()),
-            "could not create a GPU surface",
-        )?;
-
-        let adapter = startup::result(
-            instance
-                .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::HighPerformance,
-                    compatible_surface: Some(&surface),
-                    ..Default::default()
-                })
-                .await,
-            "no compatible GPU found",
-        )?;
-
         // `PONKO_GPU_TIER` opens the device as a weaker GPU would be.
         let forced_tier = super::GpuTier::forced();
         if let Some(tier) = forced_tier {
             eprintln!("ponko: PONKO_GPU_TIER forces the {tier} GPU tier");
         }
-        #[cfg_attr(not(feature = "compressed-textures"), allow(unused_mut))]
-        // A first instance in indirect draws: an instance batch's cells are
-        // drawn together where the device has it (`gpu3d/instances.rs`).
-        let mut required_features = adapter.features()
-            & (wgpu::Features::TIMESTAMP_QUERY
-                | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
-                | wgpu::Features::INDIRECT_FIRST_INSTANCE);
-        // Block-compressed textures upload as they are where the GPU samples them.
-        #[cfg(feature = "compressed-textures")]
-        {
-            required_features |= adapter.features() & super::blocks::FEATURES;
-        }
-        let (device, queue) = startup::result(
-            adapter
-                .request_device(&wgpu::DeviceDescriptor {
-                    label: Some("ponko device"),
-                    required_features: forced_tier.map_or(required_features, |t| t.device_features(required_features)),
-                    // The defaults ask for more than WebGL2 has; we need little.
-                    required_limits: if let Some(tier) = forced_tier {
-                        // The tier's limits, but a surface as large as the window.
-                        tier.window_limits(wgpu::Limits {
-                            max_sampled_textures_per_shader_stage: adapter
-                                .limits()
-                                .max_sampled_textures_per_shader_stage
-                                .clamp(16, 24),
-                            ..wgpu::Limits::default()
-                        })
-                    } else if cfg!(target_arch = "wasm32") {
-                        adapter.limits()
-                    } else {
-                        // One more sampled texture than the default 16, where
-                        // the adapter has it: projected decals' images.
-                        wgpu::Limits {
-                            max_sampled_textures_per_shader_stage: adapter
-                                .limits()
-                                .max_sampled_textures_per_shader_stage
-                                .clamp(16, 24),
-                            ..wgpu::Limits::default()
-                        }
-                    },
-                    ..Default::default()
-                })
-                .await,
-            "could not open the GPU device",
-        )?;
+        let device_descriptor = |adapter: &wgpu::Adapter| -> wgpu::DeviceDescriptor<'static> {
+            #[cfg_attr(not(feature = "compressed-textures"), allow(unused_mut))]
+            // A first instance in indirect draws: an instance batch's cells are
+            // drawn together where the device has it (`gpu3d/instances.rs`).
+            let mut required_features = adapter.features()
+                & (wgpu::Features::TIMESTAMP_QUERY
+                    | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
+                    | wgpu::Features::INDIRECT_FIRST_INSTANCE);
+            // Block-compressed textures upload as they are where the GPU samples them.
+            #[cfg(feature = "compressed-textures")]
+            {
+                required_features |= adapter.features() & super::blocks::FEATURES;
+            }
+            wgpu::DeviceDescriptor {
+                label: Some("ponko device"),
+                required_features: forced_tier.map_or(required_features, |t| t.device_features(required_features)),
+                // The defaults ask for more than WebGL2 has; we need little.
+                required_limits: if let Some(tier) = forced_tier {
+                    // The tier's limits, but a surface as large as the window.
+                    tier.window_limits(wgpu::Limits {
+                        max_sampled_textures_per_shader_stage: adapter
+                            .limits()
+                            .max_sampled_textures_per_shader_stage
+                            .clamp(16, 24),
+                        ..wgpu::Limits::default()
+                    })
+                } else if cfg!(target_arch = "wasm32") {
+                    adapter.limits()
+                } else {
+                    // One more sampled texture than the default 16, where
+                    // the adapter has it: projected decals' images.
+                    wgpu::Limits {
+                        max_sampled_textures_per_shader_stage: adapter
+                            .limits()
+                            .max_sampled_textures_per_shader_stage
+                            .clamp(16, 24),
+                        ..wgpu::Limits::default()
+                    }
+                },
+                ..Default::default()
+            }
+        };
+
+        // In a browser: WebGPU where it works, else WebGL2 (`browser_gpu.rs`).
+        #[cfg(target_arch = "wasm32")]
+        let browser_gpu::Opened {
+            instance,
+            surface,
+            adapter,
+            device,
+            queue,
+        } = browser_gpu::open(window.clone(), display, &device_descriptor).await?;
+        #[cfg(not(target_arch = "wasm32"))]
+        let (instance, surface, adapter, device, queue) = {
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(
+                display,
+            )));
+            let surface = startup::result(
+                instance.create_surface(window.clone()),
+                "could not create a GPU surface",
+            )?;
+            let adapter = startup::result(
+                instance
+                    .request_adapter(&wgpu::RequestAdapterOptions {
+                        power_preference: wgpu::PowerPreference::HighPerformance,
+                        compatible_surface: Some(&surface),
+                        ..Default::default()
+                    })
+                    .await,
+                "no compatible GPU found",
+            )?;
+            let (device, queue) = startup::result(
+                adapter.request_device(&device_descriptor(&adapter)).await,
+                "could not open the GPU device",
+            )?;
+            (instance, surface, adapter, device, queue)
+        };
         // In a browser, a WebGPU device lost while the game runs (the GPU
         // process crashed or was reset) stops it for good: the page hears
         // of it through `onPonkoFailure`, kind `DeviceLost`, with whether it
@@ -608,6 +640,10 @@ impl Renderer {
             4
         };
         let mut capabilities = super::capabilities::of_device(&adapter.get_info(), &device, (requested_msaa, msaa));
+        #[cfg(feature = "3d")]
+        let adapter_format_features = device
+            .features()
+            .contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES);
         capabilities.forced_tier = forced_tier;
         // Apple's GPUs (Metal) draw in tiles and drop hidden solid fragments
         // themselves: there solid surfaces skip the depth prepass.
@@ -620,6 +656,15 @@ impl Renderer {
         let caps = surface.get_capabilities(&adapter);
         if let Some(srgb) = caps.formats.iter().copied().find(|f| f.is_srgb()) {
             config.format = srgb;
+        }
+        // HDR output, where the game turned it on and the surface offers an
+        // HDR color space: its format and color space instead.
+        let hdr_choice = super::hdr_output::choose_output(adapter.get_info().backend, &caps.format_capabilities);
+        let sdr_format = config.format;
+        let open_hdr = hdr_choice.filter(|_| hdr.enabled);
+        if let Some(choice) = open_hdr {
+            config.format = choice.format;
+            config.color_space = choice.color_space;
         }
         // Browser canvases are never sRGB themselves; draw through an sRGB view.
         let view_format = config.format.add_srgb_suffix();
@@ -644,11 +689,13 @@ impl Renderer {
             &[]
         };
 
-        Ok(Self::from_device(
+        let hdr_state = super::hdr_output::Hdr::plain(hdr, hdr_choice, sdr_format);
+        let renderer = Self::from_device(
             Some(WindowSurface {
                 window,
                 instance,
                 surface,
+                adapter: adapter.clone(),
             }),
             (device, queue),
             config,
@@ -658,12 +705,29 @@ impl Renderer {
             Render3DSettings {
                 msaa,
                 requested_msaa,
-                supports_msaa2: msaa != 1
-                    && required_features.contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES)
-                    && super::gpu3d::multisamples(&adapter, 2),
+                supports_msaa2: msaa != 1 && adapter_format_features && super::gpu3d::multisamples(&adapter, 2),
                 tiled,
             },
-        ))
+        );
+        Ok(renderer.with_hdr(hdr_state, open_hdr.is_some()))
+    }
+
+    /// Takes `hdr` as the window's HDR state; with `open`, the window was
+    /// configured for HDR output: everything is drawn into the frame image
+    /// (`hdr_output::FRAME_FORMAT`) from now on, encoded for the window by
+    /// the output pass. Without, the plain drawing stays exactly as it is.
+    fn with_hdr(mut self, mut hdr: super::hdr_output::Hdr, open: bool) -> Self {
+        if open {
+            let format = super::hdr_output::FRAME_FORMAT;
+            hdr.pass = Some(super::hdr_output::HdrPass::new(&self.device, &self.queue));
+            // Nothing else was made for the window's format yet: the sprite
+            // pipeline alone is built up front.
+            self.view_format = format;
+            self.pipeline = sprite_pipeline(&self.device, &self.sprite_layout, &self.sprite_shader, format);
+        }
+        self.hdr = hdr;
+        self.query_display();
+        self
     }
 
     /// Tests: the device, the queue and texture `id` (a render target's),
@@ -704,6 +768,33 @@ impl Renderer {
         renderer.set_draw_hidden(true, true);
         renderer.gpu_timing_pinned = true;
         renderer
+    }
+
+    /// Tests: [`offscreen`](Self::offscreen) opened for HDR output as a
+    /// window offering `choice` would be, with `settings`. The output pass
+    /// draws into the offscreen frame, which [`read_output`](Self::read_output)
+    /// reads back.
+    #[cfg(all(test, feature = "3d"))]
+    pub(super) fn offscreen_hdr(
+        gpu: super::render_test_support::TestGpu,
+        size: (u32, u32),
+        choice: super::hdr_output::OutputChoice,
+        settings: super::HdrOutput,
+    ) -> Self {
+        let mut renderer = Self::offscreen(gpu, size);
+        renderer.config.format = choice.format;
+        renderer.config.color_space = choice.color_space;
+        let sdr = wgpu::TextureFormat::Rgba8UnormSrgb;
+        renderer.with_hdr(super::hdr_output::Hdr::plain(settings, Some(choice), sdr), true)
+    }
+
+    /// Tests: the last offscreen frame's format and bytes as drawn (with
+    /// HDR output, what the output pass wrote), or `None` before one.
+    #[cfg(all(test, feature = "3d"))]
+    pub(super) fn read_output(&self) -> Option<(wgpu::TextureFormat, Vec<u8>)> {
+        let target = self.hidden_target.as_ref()?;
+        let bytes = super::render_test_support::read_texture(&self.device, &self.queue, target);
+        Some((target.format(), bytes))
     }
 
     /// A renderer drawing offscreen at `size` on this renderer's GPU (the
@@ -751,6 +842,7 @@ impl Renderer {
         #[cfg(feature = "3d")] settings: Render3DSettings,
     ) -> Self {
         let view_format = config.format.add_srgb_suffix();
+        let config_format = config.format;
         // --- pipeline ---
         let shader = device.create_shader_module(wgpu::include_wgsl!("sprite.wgsl"));
 
@@ -870,6 +962,8 @@ impl Renderer {
             textures: Default::default(),
             #[cfg(feature = "3d")]
             texture_alpha: Default::default(),
+            #[cfg(all(feature = "video", not(target_arch = "wasm32")))]
+            video_yuv: None,
             instance_buffer,
             instance_capacity: INITIAL_INSTANCE_CAPACITY,
             too_many_sprites: false,
@@ -910,6 +1004,7 @@ impl Renderer {
             egui: None,
             #[cfg(feature = "inspector")]
             egui_free: Vec::new(),
+            hdr: super::hdr_output::Hdr::plain(super::HdrOutput::default(), None, config_format),
         }
     }
 
@@ -1312,6 +1407,7 @@ impl Renderer {
             self.three(); // debug lines draw in the 3D frame, even without models
         }
         if let Some(three) = &mut self.three {
+            three.set_hdr_headroom(self.hdr.tonemap_headroom());
             let lut = lut.map(|t| (t.id, t.height()));
             let input = super::gpu3d::Prepare3D { scene, lut, size };
             three.prepare(&self.device, &self.queue, &input);
@@ -1341,6 +1437,7 @@ impl Renderer {
             self.views.frame3d.clear();
             return;
         };
+        three.set_hdr_headroom(self.hdr.tonemap_headroom());
         if let Some(timer) = &mut self.timer {
             timer.collect(&self.device);
             timer.begin_frame();
@@ -1448,6 +1545,14 @@ impl Renderer {
         }
         if let Some(hidden) = &self.hidden_target {
             t.texture(C::FrameTargets, "offscreen frame", hidden);
+        }
+        if let Some(frame) = self
+            .hdr
+            .pass
+            .as_ref()
+            .and_then(super::hdr_output::HdrPass::frame_texture)
+        {
+            t.texture(C::FrameTargets, "hdr frame", frame);
         }
         t.buffer(C::InstanceBatches, "sprite instances", &self.instance_buffer);
         for buffer in [&self.camera_buffer, &self.ui_camera_buffer]
@@ -1997,6 +2102,27 @@ impl Renderer {
         let _ = id;
     }
 
+    /// Replaces every pixel of texture `id` (an RGBA8 texture of their
+    /// size) with a video frame's planes, converted to RGBA on the GPU.
+    /// Its alpha stays as it was: opaque, as videos are made.
+    #[cfg(all(feature = "video", not(target_arch = "wasm32")))]
+    pub fn update_texture_yuv(&mut self, id: u32, planes: &crate::video::yuv::Planes<'_>) {
+        let Some(tex) = self.textures.live(id) else {
+            return;
+        };
+        let size = tex.texture.size();
+        if tex.texture.format() != wgpu::TextureFormat::Rgba8UnormSrgb
+            || (size.width as usize, size.height as usize) != (planes.width, planes.height)
+        {
+            return;
+        }
+        let converter = self
+            .video_yuv
+            .get_or_insert_with(|| super::video_yuv::YuvToRgba::new(&self.device));
+        converter.convert(&self.device, &self.queue, planes, &tex.texture);
+        self.refresh_mips(id);
+    }
+
     /// Replaces every pixel of texture `id` (same size as created).
     pub fn update_texture(&mut self, id: u32, width: u32, height: u32, rgba: &[u8]) {
         debug_assert_eq!(rgba.len(), (width * height * 4) as usize);
@@ -2124,12 +2250,60 @@ impl Renderer {
         if !self.lifecycle.suspended() {
             self.configure_surface();
         }
+        self.hdr.frames_to_query = 0;
     }
 
     fn configure_surface(&self) {
         if let Some(window_surface) = &self.window_surface {
             window_surface.surface.configure(&self.device, &self.config);
         }
+    }
+
+    /// The format of the window's image as drawn into: the plain drawing's
+    /// format, or with HDR output, what the output pass writes.
+    fn output_format(&self) -> wgpu::TextureFormat {
+        if self.hdr.pass.is_some() {
+            self.hdr.surface_target().2
+        } else {
+            self.view_format
+        }
+    }
+
+    /// Changes the HDR output settings (`Graphics::set_hdr_output`). With
+    /// the window opened for HDR, switching it on or off configures the
+    /// surface for HDR or SDR output; nothing else is made again.
+    pub fn set_hdr_output(&mut self, settings: super::HdrOutput) {
+        self.hdr.settings = settings;
+        if self.hdr.pass.is_none() {
+            return;
+        }
+        let (format, color_space, view) = self.hdr.surface_target();
+        if (format, color_space) != (self.config.format, self.config.color_space) {
+            self.config.format = format;
+            self.config.color_space = color_space;
+            self.config.view_formats = if view == format { Vec::new() } else { vec![view] };
+            if !self.lifecycle.suspended() {
+                self.configure_surface();
+            }
+        }
+    }
+
+    /// What the window does with the HDR settings (`Graphics::hdr_status`).
+    pub fn hdr_status(&self) -> super::HdrStatus {
+        self.hdr.status()
+    }
+
+    /// Asks the display for its peak and headroom (HDR output only), which
+    /// change as the window moves between screens and brightness changes.
+    fn query_display(&mut self) {
+        if self.hdr.pass.is_none() {
+            return;
+        }
+        if let Some(window_surface) = &self.window_surface {
+            let info = window_surface.surface.display_hdr_info(&window_surface.adapter);
+            self.hdr.display = super::hdr_output::display_report(&info);
+        }
+        self.hdr.frames_to_query = super::hdr_output::QUERY_EVERY;
     }
 
     /// Draws everything in `list` and presents. `list` is left as-is; the caller clears it.
@@ -2149,6 +2323,13 @@ impl Renderer {
         lights: &crate::light2d::Lighting2D,
         cameras2d: &[crate::camera::views::Camera2DFrame],
     ) -> FrameStatus {
+        // HDR output: the display's peak and headroom, asked now and then.
+        if self.hdr.pass.is_some() {
+            match self.hdr.frames_to_query.checked_sub(1) {
+                Some(left) => self.hdr.frames_to_query = left,
+                None => self.query_display(),
+            }
+        }
         // `None` when the window can't be drawn to right now; a requested
         // screenshot is still drawn (offscreen), so it never waits on the
         // window being visible.
@@ -2525,10 +2706,26 @@ impl Renderer {
         }
         let view = match &frame {
             Some(frame) => Some(frame.texture.create_view(&wgpu::TextureViewDescriptor {
-                format: Some(self.view_format),
+                format: Some(self.output_format()),
                 ..Default::default()
             })),
             None => hidden_view.take(),
+        };
+        // HDR output: everything is drawn into the frame image, which the
+        // output pass then encodes into the window's image (`hdr_target`),
+        // and a screenshot reads in SDR.
+        let (output, uniform) = (self.hdr.surface_target().2, self.hdr.uniform());
+        let (view, hdr_target) = match self.hdr.pass.as_mut() {
+            Some(pass) => {
+                pass.write(&self.queue, uniform);
+                pass.prepare_pipeline(&self.device, output);
+                if capture {
+                    pass.prepare_pipeline(&self.device, super::hdr_output::SCREENSHOT_FORMAT);
+                }
+                let size = (self.config.width, self.config.height);
+                (Some(pass.frame_view(&self.device, size)), view.map(|v| (v, output)))
+            }
+            None => (view, None),
         };
         // The 3D passes come in command buffers of their own (recorded in
         // parallel), submitted before `encoder`'s sprites go on top.
@@ -2548,6 +2745,20 @@ impl Renderer {
                 views2d,
             );
         }
+        // With HDR output a screenshot is the frame image in SDR: white and
+        // what is brighter clip, as on an SDR display.
+        let hdr_capture = match (&self.hdr.pass, &view) {
+            (Some(pass), Some(_)) if capture => {
+                let format = super::hdr_output::SCREENSHOT_FORMAT;
+                let target = Capture::new(&self.device, self.config.width, self.config.height, format);
+                let target_view = target.texture.create_view(&wgpu::TextureViewDescriptor::default());
+                pass.record(&mut encoder, &target_view, format, true, None);
+                target.copy(&mut encoder);
+                Some(target)
+            }
+            _ => None,
+        };
+        let capture = capture && hdr_capture.is_none();
         // A screenshot draws the same sprites a second time, into a texture
         // that can be copied (the window's surface can't, on some GPUs).
         let capture = capture.then(|| {
@@ -2575,6 +2786,11 @@ impl Renderer {
         };
         #[cfg(not(feature = "inspector"))]
         let overlay_commands: [wgpu::CommandBuffer; 0] = [];
+        let capture = capture.or(hdr_capture);
+        if let (Some(pass), Some((target, format))) = (&self.hdr.pass, &hdr_target) {
+            let timestamps = self.timer.as_ref().and_then(|t| t.pass("hdr output"));
+            pass.record(&mut encoder, target, *format, false, timestamps);
+        }
         if let Some(timer) = &mut self.timer {
             timer.resolve(&mut encoder);
         }

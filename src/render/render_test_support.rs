@@ -1171,12 +1171,16 @@ mod reference_workflow {
     }
 
     /// The files that may open a GPU device themselves, and why.
-    const OWN_DEVICE: [(&str, &str); 8] = [
+    const OWN_DEVICE: [(&str, &str); 9] = [
         ("src/render/gpu.rs", "the engine's own device"),
         ("src/render/render_test_support.rs", "the shared helpers"),
         (
             "src/render/capabilities_render_test.rs",
             "forces its own tiers on the adapter, and reports a missing one through no_gpu",
+        ),
+        (
+            "src/render/browser_gpu.rs",
+            "the engine's own device in a browser: WebGPU first, WebGL2 as the fallback",
         ),
         ("src/render/lights_bench.rs", "an ignored benchmark, run by hand"),
         ("src/render/gpu3d/record_bench.rs", "benchmark support, not a test"),

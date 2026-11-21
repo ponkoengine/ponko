@@ -19,14 +19,24 @@ reads back).
 | `asset_pack` | An asset pack (`PackSource::from_bytes`) and every file in it |
 | `lockstep` | Datagrams to a running two-player lockstep session (`Net`) |
 | `messages` | Datagrams to a connected message host and client (`NetMessages`) |
+| `replication` | Snapshots, inputs and events to a replication server and a client that joined it (`Replication`) |
+| `lobby` | Lobby protocol frames from a hostile client to a lobby server (`ponko_lobby`), and from a hostile server to a `LobbyClient` |
+| `control` | Control endpoint request lines: refused without the token, then run by the game's dispatcher |
+| `aseprite` | An Aseprite file (`aseprite-source`) and a cooked Aseprite sheet, every frame, layer and animation |
+| `levels` | An LDtk project and a Tiled map (JSON and XML), loaded, merged into solid rectangles and spawned |
+| `cooked_texture` | A texture as `ponko cook` ships it (KTX2, DDS) or any image file, decoded for GPUs with and without block formats, and streamed |
 
-The two network targets reach the packet parsers behind a connected
-session through `ponko::__fuzz`, which only exists in builds with
-`--cfg fuzzing` (as `cargo fuzz` builds); the unit tests in
-`src/net/fuzz.rs` run the same entry points on every `cargo test`. Their
-input is a list of datagrams, each `[flags][length: u16 LE][bytes]`; the
-flags pick the receiving peer, the sender, and whether to write a valid
-header first (see that file).
+The network targets reach the packet parsers behind a connected session
+through `ponko::__fuzz`, which only exists in builds with `--cfg fuzzing`
+(as `cargo fuzz` builds); the unit tests in `src/net/fuzz.rs` run the same
+entry points on every `cargo test`. Their input is a list of datagrams,
+each `[flags][length: u16 LE][bytes]`; the flags pick the receiving peer,
+the sender or channel, and whether to write a valid header first (see that
+file). `control` and `cooked_texture` use `ponko::__fuzz` too (the
+dispatcher and the texture decoders are internal), with unit tests in
+`src/control.rs` and `src/assets.rs`. The `control` target runs in a
+temporary folder of its own, since requests may write files below the
+folder the game runs in.
 
 FBX models are not fuzzed here: the importer hands them to ufbx, a C library
 fuzzed upstream, which `cargo fuzz` can't instrument.

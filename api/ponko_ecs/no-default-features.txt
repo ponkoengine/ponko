@@ -77,6 +77,21 @@ impl core::fmt::Display for ponko_ecs::SingleError
 pub fn ponko_ecs::SingleError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_ecs::SingleError
 impl core::marker::StructuralPartialEq for ponko_ecs::SingleError
+#[non_exhaustive] pub enum ponko_ecs::SnapshotError
+pub ponko_ecs::SnapshotError::NotCloneable
+pub ponko_ecs::SnapshotError::NotCloneable::component: alloc::string::String
+pub ponko_ecs::SnapshotError::OtherWorld
+impl core::clone::Clone for ponko_ecs::SnapshotError
+pub fn ponko_ecs::SnapshotError::clone(&self) -> Self
+impl core::cmp::Eq for ponko_ecs::SnapshotError
+impl core::cmp::PartialEq for ponko_ecs::SnapshotError
+pub fn ponko_ecs::SnapshotError::eq(&self, &Self) -> bool
+impl core::error::Error for ponko_ecs::SnapshotError
+impl core::fmt::Debug for ponko_ecs::SnapshotError
+pub fn ponko_ecs::SnapshotError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for ponko_ecs::SnapshotError
+pub fn ponko_ecs::SnapshotError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko_ecs::SnapshotError
 #[non_exhaustive] pub struct ponko_ecs::AccessLog
 pub ponko_ecs::AccessLog::components: alloc::vec::Vec<(ponko_ecs::ComponentId, bool)>
 pub ponko_ecs::AccessLog::dynamic_resources: alloc::vec::Vec<alloc::string::String>
@@ -181,6 +196,7 @@ impl core::marker::Copy for ponko_ecs::ComponentId
 impl core::marker::StructuralPartialEq for ponko_ecs::ComponentId
 pub struct ponko_ecs::ComponentInfo
 impl ponko_ecs::ComponentInfo
+pub fn ponko_ecs::ComponentInfo::can_snapshot(&self) -> bool
 pub fn ponko_ecs::ComponentInfo::layout(&self) -> core::alloc::layout::Layout
 pub fn ponko_ecs::ComponentInfo::name(&self) -> &str
 pub fn ponko_ecs::ComponentInfo::needs_drop(&self) -> bool
@@ -488,10 +504,27 @@ impl ponko_ecs::World
 pub fn ponko_ecs::World::raw(&mut self) -> ponko_ecs::RawWorld<'_>
 pub fn ponko_ecs::World::raw_ref(&self) -> ponko_ecs::RawWorldRef<'_>
 impl ponko_ecs::World
+pub fn ponko_ecs::World::register_clone<T: ponko_ecs::Component + core::clone::Clone>(&mut self)
+pub fn ponko_ecs::World::restore_snapshot(&mut self, &ponko_ecs::WorldSnapshot) -> core::result::Result<(), ponko_ecs::SnapshotError>
+pub fn ponko_ecs::World::save_snapshot(&self, &mut ponko_ecs::WorldSnapshot) -> core::result::Result<(), ponko_ecs::SnapshotError>
+pub fn ponko_ecs::World::snapshot_resource<R: core::clone::Clone + core::marker::Send + core::marker::Sync + 'static>(&mut self)
+impl ponko_ecs::World
 pub fn ponko_ecs::World::require<T: ponko_ecs::Component, R: ponko_ecs::Component>(&mut self, fn() -> R)
 pub fn ponko_ecs::World::requires(&self, ponko_ecs::ComponentId, ponko_ecs::ComponentId) -> bool
 impl core::default::Default for ponko_ecs::World
 pub fn ponko_ecs::World::default() -> Self
+pub struct ponko_ecs::WorldSnapshot
+impl ponko_ecs::WorldSnapshot
+pub fn ponko_ecs::WorldSnapshot::heap_bytes(&self) -> usize
+pub fn ponko_ecs::WorldSnapshot::is_empty(&self) -> bool
+pub fn ponko_ecs::WorldSnapshot::len(&self) -> usize
+pub fn ponko_ecs::WorldSnapshot::new() -> Self
+impl core::default::Default for ponko_ecs::WorldSnapshot
+pub fn ponko_ecs::WorldSnapshot::default() -> Self
+impl core::fmt::Debug for ponko_ecs::WorldSnapshot
+pub fn ponko_ecs::WorldSnapshot::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Send for ponko_ecs::WorldSnapshot
+impl core::marker::Sync for ponko_ecs::WorldSnapshot
 pub struct ponko_ecs::WorldView<'w>
 impl<'w> ponko_ecs::WorldView<'w>
 pub fn ponko_ecs::WorldView<'w>::change_tick(&self) -> ponko_ecs::Tick

@@ -23,6 +23,11 @@ pub(crate) struct Info {
     /// The AV1 sequence header (its OBUs), to send again after the
     /// decoder is flushed: encoders write it in the first frame only.
     pub sequence_header: Vec<u8>,
+    /// The `av1C` record's first 4 bytes (profile, level, tier, bit
+    /// depth), when the file has one: the browser's decoder is asked for
+    /// that codec.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub config: Option<[u8; 4]>,
     /// Every video frame's time in seconds, in file order, and whether it
     /// is a keyframe.
     pub frames: Vec<(f64, bool)>,
@@ -58,10 +63,17 @@ impl Demuxer {
         let size = video.video().ok_or("its video track has no picture size")?;
         let width = u32::try_from(size.pixel_width().get()).map_err(|_| "its picture is too wide")?;
         let height = u32::try_from(size.pixel_height().get()).map_err(|_| "its picture is too tall")?;
+        // The player allocates a texture of this size before any frame.
+        crate::assets::check_image_size(width.into(), height.into(), "", "its picture")
+            .map_err(|e| e.message().to_string())?;
         let track = video.track_number().get();
         let codec = video.codec_id().to_owned();
         // The `av1C` record: 4 bytes, then the sequence header's OBUs.
         let private = video.codec_private().and_then(|p| p.get(4..)).map(<[u8]>::to_vec);
+        let config = video
+            .codec_private()
+            .and_then(|p| p.get(..4))
+            .and_then(|p| <[u8; 4]>::try_from(p).ok());
         let audio_codec = file
             .tracks()
             .iter()
@@ -107,6 +119,7 @@ impl Demuxer {
             audio_codec,
             seconds,
             sequence_header,
+            config,
             frames,
         };
         Ok((demuxer, info))

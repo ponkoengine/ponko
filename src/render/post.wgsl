@@ -7,7 +7,7 @@
 struct Post {
     grade: vec4<f32>,   // exposure multiplier, bloom, contrast, saturation
     balance: vec4<f32>, // white balance in LMS; w: vignette
-    mode: vec4<u32>,    // tone map, lookup table size (0 none), bloom on
+    mode: vec4<u32>,    // tone map, lookup table size (0 none), bloom on, HDR output on
     bloom: vec4<f32>,   // threshold, soft knee
     output: vec4<f32>,  // scaling: one output pixel in uv, sharpness, scene size / output size
     lens: vec4<f32>,    // distortion: theta (1/theta pinching), sigma, 1/scale, 1 barrel -1 pinch 0 off
@@ -15,7 +15,7 @@ struct Post {
     split_shadows: vec4<f32>,    // split toning: shadows' tint, balance
     split_highlights: vec4<f32>, // highlights' tint, 1 on (0 off)
     dof: vec4<f32>,     // depth of field: focus distance, sharp range, largest blur (0 off)
-    camera: vec4<f32>,  // near and far planes
+    camera: vec4<f32>,  // near and far planes; z: HDR output's headroom over SDR white
 };
 
 @group(0) @binding(0) var source: texture_2d<f32>;
@@ -175,6 +175,23 @@ fn tonemap(c: vec3<f32>) -> vec3<f32> {
     }
 }
 
+// HDR output: the tone mapped color's highlights opened up to the
+// display's headroom over SDR white. Below the knee the SDR curve stays;
+// above it the brightest channel rises to `top`, meeting the curve with the
+// same slope at the knee, and the channels keep their ratios (the SDR
+// picture's hue and saturation). The CPU twin is `hdr.rs`'s.
+fn expand_highlights(c: vec3<f32>, top: f32) -> vec3<f32> {
+    let knee = 0.8;
+    let m = max(c.r, max(c.g, c.b));
+    if m <= knee || top <= 1.0 {
+        return c;
+    }
+    let t = (min(m, 1.0) - knee) / (1.0 - knee);
+    let r = (1.0 - knee) / (top - knee);
+    let g = r * t + (1.0 - r) * t * t;
+    return c * ((knee + (top - knee) * g) / m);
+}
+
 // ---- Grading ----
 
 fn white_balance(c: vec3<f32>) -> vec3<f32> {
@@ -291,12 +308,29 @@ fn fs_tonemap(in: Full) -> @location(0) vec4<f32> {
     // Contrast around middle grey, in stops.
     c = 0.18 * pow(c / 0.18 + 1e-6, vec3<f32>(post.grade.z));
     c = max(mix(vec3<f32>(luma(c)), c, post.grade.w), vec3<f32>(0.0));
-    c = tonemap(c);
+    // With HDR output and no curve, light is kept up to the headroom, and
+    // graded at SDR scale (split toning and the lookup table see 0..1).
+    let hdr = post.mode.w != 0u;
+    var over = 1.0;
+    if hdr && post.mode.x == 3u {
+        c = clamp(c, vec3<f32>(0.0), vec3<f32>(post.camera.z));
+        over = max(1.0, max(c.r, max(c.g, c.b)));
+        c /= over;
+    } else {
+        c = tonemap(c);
+    }
     if post.split_highlights.w != 0.0 {
         c = split_tone(c);
     }
     if post.mode.y != 0u {
         c = apply_lut(c);
+    }
+    if hdr {
+        if post.mode.x == 3u {
+            c *= over;
+        } else {
+            c = expand_highlights(c, post.camera.z);
+        }
     }
     let from_center = (in.uv - 0.5) * 2.0;
     c *= 1.0 - post.balance.w * smoothstep(0.4, 1.4, dot(from_center, from_center));
@@ -361,6 +395,8 @@ fn fs_upscale(in: Full) -> @location(0) vec4<f32> {
     let mx = max(max(max(d, e), max(f, b)), h);
     let amp = sqrt(clamp(min(mn, vec3<f32>(1.0) - mx) / max(mx, vec3<f32>(1e-4)), vec3<f32>(0.0), vec3<f32>(1.0)));
     let w = amp * (-1.0 / mix(8.0, 5.0, sharpness));
-    let c = clamp(((b + d + f + h) * w + e) / (vec3<f32>(1.0) + 4.0 * w), vec3<f32>(0.0), vec3<f32>(1.0));
+    // HDR output's highlights go above white: clamp to its headroom.
+    let top = select(1.0, post.camera.z, post.mode.w != 0u);
+    let c = clamp(((b + d + f + h) * w + e) / (vec3<f32>(1.0) + 4.0 * w), vec3<f32>(0.0), vec3<f32>(top));
     return vec4<f32>(c, 1.0);
 }

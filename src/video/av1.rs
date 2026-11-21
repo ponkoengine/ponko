@@ -1,5 +1,7 @@
-//! AV1 decoding with rav1d, the Rust port of dav1d (BSD-2-Clause), built
-//! without its assembly so it needs no assembler and stays pure Rust.
+//! AV1 decoding with rav1d, the Rust port of dav1d (BSD-2-Clause), as
+//! Rerun publishes it (`re_rav1d`). Its hand-written assembly is on for
+//! arm64 (built with the system's C compiler); on x86-64 it needs nasm, so
+//! a game turns it on itself (the guide's "Video" chapter).
 //!
 //! rav1d's released crate offers only dav1d's C interface, so this file is
 //! the one place with `unsafe`: it owns a decoder context, hands it one
@@ -57,6 +59,9 @@ impl Av1 {
         };
         settings.n_threads = threads.clamp(1, 8) as i32;
         settings.max_frame_delay = 1;
+        // Pictures past what the player takes are refused by the decoder,
+        // before it allocates them (the container's size is checked too).
+        settings.frame_size_limit = crate::assets::MAX_IMAGE_SIDE * crate::assets::MAX_IMAGE_SIDE / 2;
         // dav1d prints what it finds wrong in a stream to stderr; the
         // errors come back as `Result`s here instead.
         // SAFETY: no callback, so nothing is ever called with the cookie.

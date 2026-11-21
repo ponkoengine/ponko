@@ -133,7 +133,10 @@ keep next to their fixtures (`InputScenario::from_json`, `to_json`; C++
 ```
 
 Input steps are `key`, `mouse`, `gamepad_button`, `gamepad_axis`, `focus_lost`,
-`gamepad_connected`, `gamepad_disconnected`, `gamepad_motion` (`gyro` and
+`gamepad_connected` (optional `info`: `{"name": "DualSense Wireless
+Controller", "family": "PlayStation", "vendor_id": 1356, "motion": true}`,
+with `product_id`, `rumble` and `trigger_rumble`; without it a generic pad),
+`gamepad_disconnected`, `gamepad_motion` (`gyro` and
 `accel`, `[x, y, z]` each), `mouse_move` (`position`, window pixels as `[x, y]`)
 and `mouse_wheel` (`delta`, in notches); check steps are `expect_action`, `expect_resource`
 and `expect_count`. Steps may come in any order, and a step's number in a
@@ -153,7 +156,9 @@ its tree: `ui_click`, `ui_type` and `expect_ui` steps (`InputScenario::click`,
 `ctx.input.start_recording()` records the input as it arrives, from the
 window or fed by code, into a scenario that `ctx.input.stop_recording()`
 returns: keys, mouse buttons, the pointer, the wheel, gamepad buttons and
-axes, focus loss, gamepad disconnects and IME events. Each event is stamped
+axes, gamepads connecting (with their name, family, ids and capabilities,
+so a replay shows the same prompts) and disconnecting, gamepad motion (gyro
+and accelerometer), focus loss and IME events. Each event is stamped
 with the simulation tick that first sees it, so replaying the scenario feeds
 the same events before the same ticks and a deterministic game plays the
 same game again. Compare the two worlds with
@@ -181,15 +186,19 @@ fn recorder(ctx: &mut Ctx) {
 ```
 
 - **Its tick 0** is the next simulation tick (from a system, the tick after
-  this one). What is held when it starts (keys, buttons, the pointer, stick
-  positions) is recorded at tick 0, and the scenario lasts the ticks it
-  recorded.
-- **Smaller than the events.** Pointer moves and stick readings between two
-  ticks keep only the last one, the value the next tick reads.
+  this one). What is there when it starts (the pads connected, keys,
+  buttons, the pointer, stick positions, each pad's last motion reading) is
+  recorded at tick 0, and the scenario lasts the ticks it recorded.
+- **Smaller than the events.** Pointer moves, stick readings and motion
+  readings between two ticks keep only the last one, the value the next
+  tick reads.
+- **Pads replay without a pad.** A pad's connection is a
+  `gamepad_connected` step with an `info` object (its `GamepadInfo`), so
+  the replay needs no gamepad backend: the game sees the same controller,
+  family and capabilities. `InputScenario::connect_gamepad` adds one by hand.
 - **Not recorded:** text typed without an IME (the window turns key events
   into it, and the keys are recorded), raw mouse motion for mouse-look, and
-  gamepads being plugged in: a replay that reads a pad needs it connected as
-  it was.
+  rumble (it is the game's output).
 - **Edges last a frame.** A key pressed in a frame that runs no simulation
   tick reaches the next tick as held, and `key_pressed` is false there; the
   replay feeds it before that tick, where it reads as a fresh press. Games
@@ -205,7 +214,8 @@ returns a `std::optional<ponko::input_scenario>`; C:
 
 `tests/input_recording.rs` records a game played through fed events,
 replays the recording on a fresh game and checks the two worlds hash alike,
-and that each event lands on the tick that first saw it.
+and that each event lands on the tick that first saw it; a pad plugged in,
+moved and unplugged through `FakeGamepads` replays the same with no backend.
 
 ### From tools
 

@@ -421,6 +421,16 @@ where
         self.stats
     }
 
+    /// [`checksum_every`](Self::checksum_every)'s value.
+    pub(crate) fn checksum_every_ticks(&self) -> u32 {
+        self.checksum_every
+    }
+
+    /// [`max_prediction`](Self::max_prediction)'s value.
+    pub(crate) fn max_prediction_ticks(&self) -> u32 {
+        self.max_prediction
+    }
+
     /// Runs one tick: rolls back first if inputs arrived that differ from
     /// the prediction, then schedules `input` (this player's) for tick
     /// `frame + input_delay` and runs `frame`, unless a peer is too far

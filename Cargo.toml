@@ -202,18 +202,33 @@ texture2ddecoder = { version = "0.1.2", optional = true }
 # below.
 matroska-demuxer = { version = "0.8.1", optional = true }
 
+# The AV1 decoder's assembly on arm64 (feature `video`): dav1d's NEON code,
+# built with the system's C compiler, which links every build anyway. The
+# dot-product and i8mm versions are chosen at run time by the CPU. Its
+# arm64 code calls one 16-bit routine whatever the bit depths built, so
+# `bitdepth_16` comes with it (10-bit videos are still refused).
+[target.'cfg(target_arch = "aarch64")'.dependencies]
+rav1d = { package = "re_rav1d", version = "0.1.3", optional = true, default-features = false, features = ["bitdepth_8", "bitdepth_16", "asm", "asm_arm64_dotprod", "asm_arm64_i8mm"] }
+
 # Waits for the GPU on desktop (feature `window`); the web build awaits it.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # The desktop's gamepads (feature `gamepad`); web builds read the browser's
 # themselves (src/gamepad_web.rs).
 gilrs = { version = "0.11.2", optional = true }
+# The second desktop gamepad backend (feature `gamepad-sdl`): SDL 3's gamepad
+# API, for gyro, trigger rumble and rumble on macOS, which gilrs lacks
+# (book/src/controllers.md, "Choosing the SDL backend", has the reasons).
+# Low-level bindings only; links the system's SDL 3 (pkg-config, vcpkg).
+sdl3-sys = { version = "0.7.3", optional = true }
 arboard = { version = "3.7", default-features = false, features = ["wayland-data-control"], optional = true }
 pollster = { version = "1.0.1", optional = true }
-# AV1 pictures for `video`: rav1d, the Rust port of dav1d, 8-bit only and
-# without its assembly (that needs nasm on x86-64, and rav1d 1.1.0's
-# package can't build it on arm64). Not on the web: it uses `libc` error
-# numbers that wasm32-unknown-unknown doesn't define.
-rav1d = { version = "1.1.0", optional = true, default-features = false, features = ["bitdepth_8"] }
+# AV1 pictures for `video`: rav1d, the Rust port of dav1d, 8-bit only, as
+# published by Rerun (`re_rav1d`, the same code and BSD-2-Clause license;
+# rav1d 1.1.0's own package lacks the header its arm64 assembly needs).
+# Its assembly is on for arm64 below, where the system's C compiler builds
+# it; on x86-64 it needs nasm, so a game turns it on itself (the guide's
+# "Video" chapter). Not on the web: the browser decodes there.
+rav1d = { package = "re_rav1d", version = "0.1.3", optional = true, default-features = false, features = ["bitdepth_8"] }
 # Basis Universal's UASTC transcoder (feature `basis-universal`): the C++
 # library, built with the system's C++ compiler. Not on the web: it can't be
 # built for wasm32-unknown-unknown, so a web build of the feature reads
@@ -371,6 +386,13 @@ accessibility = ["window", "dep:accesskit", "dep:accesskit_macos", "dep:accesski
 # in web builds the browser's gamepads, read by the engine.
 # Off: `ctx.input.gamepads()` is always empty. On Linux it needs libudev headers.
 gamepad = ["window", "dep:gilrs"]
+# Gamepads through SDL 3 instead of gilrs, on the desktop: gyro and
+# accelerometer, trigger rumble, and rumble on macOS too (the guide's
+# controllers chapter has what each platform gets). Links the SDL 3 library,
+# which must be installed (Homebrew `sdl3`, a distribution's SDL 3 package,
+# vcpkg) and shipped with the game. Web builds keep the browser's gamepads.
+# Off (the default): gilrs, with `gamepad`.
+gamepad-sdl = ["window", "dep:sdl3-sys"]
 # Lets a release build honor `PONKO_CONTROL=1` (debug builds always do), for
 # tools that launch release builds, such as ponko-mcp's `launch`. Off: a
 # release build opens the control endpoint only if the game asks for it with
@@ -518,9 +540,9 @@ basis-universal = ["compressed-textures", "dep:basis-universal"]
 # web such a file loads only from its uncompressed fallback, if it has one.
 gltf-meshopt = ["3d", "dep:meshopt"]
 # Video playback (`ponko::video::Video`): WebM files with AV1 pictures and
-# Vorbis sound, decoded on the CPU into a texture, the sound through the
-# mixer. Desktop only: on the web loading a video reports `Unsupported`.
-# See the guide's "Video" chapter.
+# Vorbis sound into a texture, the sound through the mixer. Decoded by
+# rav1d on the desktop (converted to RGBA on the GPU), by the browser's own
+# decoder (WebCodecs) on the web. See the guide's "Video" chapter.
 video = ["dep:matroska-demuxer", "dep:rav1d", "symphonia?/mkv"]
 
 # Runs on the main thread (AppKit requires it), so it is its own program
@@ -635,6 +657,10 @@ required-features = ["3d"]
 [[example]]
 name = "web_editor_save"
 required-features = ["editor"]
+
+[[example]]
+name = "web_video"
+required-features = ["video"]
 
 [workspace]
 members = [".", "crates/ponko_image_diff", "crates/ponko_ecs", "crates/ponko_macros", "crates/ponko_bench", "crates/ponko_mcp", "crates/ponko_ffi", "crates/ponko_unity", "crates/ponko_cli", "crates/ponko_aseprite", "crates/ponko_lobby"]

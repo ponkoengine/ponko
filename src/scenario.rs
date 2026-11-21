@@ -19,6 +19,7 @@ use crate::input::GamepadAxis;
 use crate::input::GamepadButton;
 use crate::input::ImeEvent;
 use crate::input::TouchPhase;
+use crate::input::{ControllerFamily, GamepadCapabilities, GamepadInfo};
 use crate::input::{Key, MouseButton};
 use crate::reflect::WorldReflect;
 use crate::time::Time;
@@ -282,6 +283,9 @@ pub struct InputScenario {
     ime: Vec<(u64, usize, ImeEvent)>,
     /// Safe area insets fed to the window, sorted like `inputs`.
     safe: Vec<(u64, usize, SafeInsets)>,
+    /// What each `GamepadConnected` input step says about its pad, by step
+    /// number (sorted); steps with no entry connect a generic pad.
+    pad_info: Vec<(usize, GamepadInfo)>,
     /// How many steps were added; the next step's number.
     steps: usize,
     duration: Option<u64>,
@@ -309,6 +313,36 @@ impl InputScenario {
         self.inputs.insert(index, (tick, self.steps, event));
         self.steps += 1;
         self
+    }
+
+    /// Connects a pad into slot `pad` at tick `tick`, described by `info`
+    /// (its name, family, ids and capabilities, so prompts show its
+    /// buttons): what an input recording keeps of a pad plugged in.
+    /// `at(tick, InputEvent::GamepadConnected(pad))` connects a generic pad.
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::input::{ControllerFamily, Gamepad, GamepadInfo};
+    /// use ponko::scenario::InputScenario;
+    /// let pad = Gamepad::from_slot(0).unwrap();
+    /// let scenario = InputScenario::new().connect_gamepad(0, pad, GamepadInfo::new("Xbox Controller"));
+    /// Game::new("t", 1, 1).input_scenario(scenario).run_headless(1, move |_| {});
+    /// let again = InputScenario::from_value(&InputScenario::new()
+    ///     .connect_gamepad(0, pad, GamepadInfo::new("Xbox Controller")).to_json()).unwrap();
+    /// assert_eq!(again.step_count(), 1);
+    /// ```
+    pub fn connect_gamepad(self, tick: u64, pad: Gamepad, info: GamepadInfo) -> Self {
+        let step = self.steps;
+        let mut scenario = self.at(tick, InputEvent::GamepadConnected(pad));
+        if info != GamepadInfo::default() {
+            scenario.pad_info.push((step, info));
+        }
+        scenario
+    }
+
+    /// The pad description of input step `step`, if it has one.
+    fn pad_info(&self, step: usize) -> Option<&GamepadInfo> {
+        let at = self.pad_info.binary_search_by_key(&step, |e| e.0).ok()?;
+        Some(&self.pad_info[at].1)
     }
 
     /// Adds `check` at tick `tick`; it is evaluated after that tick's
@@ -582,7 +616,11 @@ impl InputScenario {
     /// ponko::input::Input steps are `key` (`key`, `down`), `mouse` (`button`, `down`),
     /// `gamepad_button` (`pad`, `button`, `down`), `gamepad_axis` (`pad`,
     /// `axis`, `value`), `focus_lost`, `gamepad_disconnected` (`pad`),
-    /// `gamepad_connected` (`pad`), `gamepad_motion` (`pad`, `gyro` and
+    /// `gamepad_connected` (`pad`, and an optional `info` object: `name`,
+    /// `family` one of `Generic`, `Xbox`, `PlayStation`, `Nintendo`,
+    /// `vendor_id`, `product_id`, and the capabilities `rumble`,
+    /// `trigger_rumble`, `motion`; see [`connect_gamepad`](Self::connect_gamepad)),
+    /// `gamepad_motion` (`pad`, `gyro` and
     /// `accel` as `[x, y, z]`), `mouse_move` (`position`, window pixels as `[x, y]`), `mouse_wheel`
     /// (`delta`, lines as `[x, y]`) and `touch` (`id`, `phase` one of
     /// `started`, `moved`, `ended`, `cancelled`, and `position`).
@@ -654,6 +692,7 @@ impl InputScenario {
             }
             match step.into_step() {
                 Step::Input(event) => scenario = scenario.at(tick, event),
+                Step::Connect(pad, info) => scenario = scenario.connect_gamepad(tick, pad, info),
                 Step::Ui(step) => scenario.push_ui(tick, step),
                 Step::Ime(event) => scenario = scenario.ime(tick, event),
                 Step::Safe(insets) => scenario = scenario.safe_insets(tick, insets),
@@ -696,7 +735,7 @@ impl InputScenario {
         steps.extend(
             self.inputs
                 .iter()
-                .map(|&(tick, n, event)| (n, StepWire::from_input(tick, event))),
+                .map(|&(tick, n, event)| (n, StepWire::from_input(tick, event, self.pad_info(n)))),
         );
         steps.extend(
             self.checks
@@ -1118,11 +1157,16 @@ impl Ctx {
         }
         let rel = self.time.sim_tick() - run.start;
         let mut fed = 0;
-        while let Some(&(tick, _, event)) = run.scenario.inputs.get(run.next_input) {
+        while let Some(&(tick, step, event)) = run.scenario.inputs.get(run.next_input) {
             if tick > rel {
                 break;
             }
-            self.input.feed(event);
+            match (event, run.scenario.pad_info(step)) {
+                (InputEvent::GamepadConnected(pad), Some(info)) => {
+                    self.input.feed_gamepad_connected(pad, info.clone());
+                }
+                _ => self.input.feed(event),
+            }
             run.next_input += 1;
             fed += 1;
         }
@@ -1510,6 +1554,8 @@ fn evaluate_ui(
 
 enum Step {
     Input(InputEvent),
+    /// A pad connecting with its description.
+    Connect(Gamepad, GamepadInfo),
     Ui(UiStep),
     Ime(ImeEvent),
     Safe(SafeInsets),
@@ -1564,6 +1610,8 @@ enum StepWire {
     GamepadConnected {
         tick: u64,
         pad: Gamepad,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        info: Option<PadInfoWire>,
     },
     GamepadMotion {
         tick: u64,
@@ -1663,6 +1711,60 @@ enum StepWire {
     },
 }
 
+/// A `gamepad_connected` step's `info`: a [`GamepadInfo`].
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PadInfoWire {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    name: String,
+    #[serde(default)]
+    family: ControllerFamily,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    vendor_id: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    product_id: Option<u16>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    rumble: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    trigger_rumble: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    motion: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+impl From<&GamepadInfo> for PadInfoWire {
+    fn from(info: &GamepadInfo) -> Self {
+        Self {
+            name: info.name.clone(),
+            family: info.family,
+            vendor_id: info.vendor_id,
+            product_id: info.product_id,
+            rumble: info.capabilities.rumble,
+            trigger_rumble: info.capabilities.trigger_rumble,
+            motion: info.capabilities.motion,
+        }
+    }
+}
+
+impl From<PadInfoWire> for GamepadInfo {
+    fn from(w: PadInfoWire) -> Self {
+        GamepadInfo {
+            name: w.name,
+            family: w.family,
+            vendor_id: w.vendor_id,
+            product_id: w.product_id,
+            capabilities: GamepadCapabilities {
+                rumble: w.rumble,
+                trigger_rumble: w.trigger_rumble,
+                motion: w.motion,
+            },
+        }
+    }
+}
+
 impl StepWire {
     fn tick(&self) -> u64 {
         match self {
@@ -1700,7 +1802,10 @@ impl StepWire {
             Self::GamepadAxis { pad, axis, value, .. } => Step::Input(InputEvent::GamepadAxis(pad, axis, value)),
             Self::FocusLost { .. } => Step::Input(InputEvent::FocusLost),
             Self::GamepadDisconnected { pad, .. } => Step::Input(InputEvent::GamepadDisconnected(pad)),
-            Self::GamepadConnected { pad, .. } => Step::Input(InputEvent::GamepadConnected(pad)),
+            Self::GamepadConnected { pad, info: None, .. } => Step::Input(InputEvent::GamepadConnected(pad)),
+            Self::GamepadConnected {
+                pad, info: Some(info), ..
+            } => Step::Connect(pad, info.into()),
             Self::GamepadMotion { pad, gyro, accel, .. } => Step::Input(InputEvent::GamepadMotion(
                 pad,
                 crate::input::GamepadMotion {
@@ -1776,7 +1881,7 @@ impl StepWire {
         }
     }
 
-    fn from_input(tick: u64, event: InputEvent) -> Self {
+    fn from_input(tick: u64, event: InputEvent, info: Option<&GamepadInfo>) -> Self {
         match event {
             InputEvent::Key(key, down) => Self::Key { tick, key, down },
             InputEvent::Mouse(button, down) => Self::Mouse { tick, button, down },
@@ -1789,7 +1894,11 @@ impl StepWire {
             InputEvent::GamepadAxis(pad, axis, value) => Self::GamepadAxis { tick, pad, axis, value },
             InputEvent::FocusLost => Self::FocusLost { tick },
             InputEvent::GamepadDisconnected(pad) => Self::GamepadDisconnected { tick, pad },
-            InputEvent::GamepadConnected(pad) => Self::GamepadConnected { tick, pad },
+            InputEvent::GamepadConnected(pad) => Self::GamepadConnected {
+                tick,
+                pad,
+                info: info.map(PadInfoWire::from),
+            },
             InputEvent::GamepadMotion(pad, motion) => Self::GamepadMotion {
                 tick,
                 pad,

@@ -219,8 +219,8 @@ Things to know:
   served over HTTPS may only open `wss://` URLs, so put a TLS proxy (Caddy,
   nginx) in front of the WebSocket port and join `wss://your.host/...`.
   Connections are unauthenticated, like UDP sessions.
-- **Rust only, for now.** C and C++ hosts take UDP players only (C and C++
-  games don't build for the web yet either).
+- **Rust only, for now.** C and C++ hosts take UDP players only, and a C
+  or C++ game built for the web can't join over WebSocket.
 - **Hidden tabs stop.** A browser gives a tab that isn't shown (behind
   another tab, or minimized) no animation frames, so its player stops
   sending inputs and the session waits for it. Players in one browser
@@ -356,6 +356,111 @@ with 4–8 ticks of latency (so packets reorder), 10% loss and duplicates:
 every peer ends in exactly the world an offline run with the same inputs
 reaches, and the confirmed checksums agree on every tick.
 
+### Rolling back a whole `Game`
+
+`ponko::net::GameRollback` is the same session with the engine as the
+game: start it with `ctx.net.start_rollback`, and from then on every
+simulation tick runs through it. Before each tick the engine saves the
+world (every component, the entity allocator, the resources you registered),
+both physics worlds, the events and the tick; when an input arrives that
+differs from the prediction, it loads the state saved before that tick and
+runs the simulation systems again up to the present, within the frame.
+Simulation systems read every player's input for the tick; frame systems
+give this player's input and carry the packets:
+
+```rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Default)]
+struct Pad { x: i8, jump: bool }
+
+/// `Clone`: a rollback copies every component.
+#[derive(Component, Clone, Copy)]
+struct Fighter { player: usize, x: f32 }
+
+/// A simulation system: every player's input for this tick, real or predicted.
+fn walk(ctx: &mut Ctx) {
+    let Some(pads) = ctx.net.rollback_inputs::<Pad>() else { return };
+    ctx.world.query::<&mut Fighter>().for_each(|f| f.x += f32::from(pads[f.player].x));
+}
+
+/// A frame system: this player's input out, the peers' packets in.
+fn network(ctx: &mut Ctx) {
+#     fn read_pad(_: &Ctx) -> Pad { Pad::default() }
+#     fn send_to_peers(_: &[u8]) {}
+#     fn received() -> Vec<Vec<u8>> { Vec::new() }
+    let pad = read_pad(ctx);
+    let Some(session) = ctx.net.rollback::<Pad>() else { return };
+    session.set_input(pad);
+    send_to_peers(session.packet());
+    for packet in received() {
+        session.receive(&packet);
+    }
+}
+
+Game::new("duel", 640, 360)
+    .sim_system(walk)
+    .system(network)
+    .run_headless(10, |ctx| {
+        ctx.world.spawn((Fighter { player: 0, x: 0.0 },));
+        ctx.world.spawn((Fighter { player: 1, x: 100.0 },));
+        // Player 0 of 2, started on every peer at the same tick of the same world.
+        ctx.net.start_rollback(ponko::net::GameRollback::<Pad>::new(2, 0).input_delay(2));
+    });
+```
+
+The session's settings, packets, stalls and stats are `Rollback`'s
+(above). What the engine does for you, and what stays yours:
+
+- **Components** must be `Clone`; `#[derive(Component)]` notices, and a
+  hand-written `impl Component` (or a generic one) is registered with
+  `World::register_clone`. A tick panics with the component's name
+  otherwise. C and C++ components are copied as bytes unless they have a
+  destructor. **Resources** are saved only if registered with
+  `World::snapshot_resource`; others (a score shown in the UI, a sound
+  handle) keep their values through a rollback.
+- **Entity ids:** a load restores the allocator too, so the next spawns,
+  direct or through commands, get the ids they got the first time. While a
+  session runs, the ids commands set aside are tidied after every tick
+  instead of once a frame, so they don't depend on how many ticks a frame
+  ran. Keep the same `ctx.world` while a session runs.
+- **Events** sent in a tick that runs again reach simulation systems as
+  they did the first time, including those read a tick later. Frame
+  systems keep their read positions, so they aren't shown events again;
+  events a frame system sent to simulation systems after the loaded tick
+  are forgotten (send input through the session instead).
+- **Sounds** started while a tick runs again are dropped: they were heard
+  the first time. `ctx.net.is_resimulating()` tells your own one-shot
+  output (particle bursts, rumble, log lines) to skip too. A wrong
+  prediction's sound has been heard; a tick that runs again doesn't add
+  the corrected one.
+- **The clock:** the sim tick goes back with the state, so `ctx.random()`,
+  `sim_time()` and `every(n)` systems repeat exactly. Timers and cooldowns
+  are components or resources, so they are restored with them.
+- **Physics:** `ctx.physics` and `ctx.physics3d` are saved and loaded whole
+  (`save_state` / `restore_state`, also callable yourself): bodies, colliders,
+  joints, contacts, islands, the broad phase and the links to entities. A
+  loaded world steps bit for bit like the original; a load builds a fresh
+  rapier pipeline, as the joint solver keeps indices there.
+- **Not restored:** `Changed` filters see every restored component as
+  changed on the next run (rebuild derived data from them, don't count
+  them as game events); despawns undone by a load aren't reported to
+  `removed`; component hooks don't run on a load. The UI, the camera and
+  everything frame systems keep are not part of the state.
+- **Desyncs:** checksums are `world_hash`es (every reflected component and
+  resource) of the saved worlds, taken only on the ticks the session
+  compares (`checksum_every`).
+- A stalled tick still counts as one of `run_headless`'s ticks. A game uses
+  rollback or lockstep, not both.
+
+`tests/game_rollback.rs` runs two headless games on two threads over a
+scripted link (latency, jitter, 10% loss, duplicates; and one slow enough
+that the peers stall): the game spawns and despawns through commands,
+sends events read a tick later, plays sounds and draws from
+`ctx.random()`. Every per-tick checksum agrees, and each peer's world at
+the end has the world hash of an offline run at that tick, with and
+without 2D physics.
+
 ### What a rollback must capture
 
 Everything a tick reads that an earlier tick wrote. In this engine:
@@ -366,11 +471,11 @@ Everything a tick reads that an earlier tick wrote. In this engine:
 | `ctx.random()` | No: its numbers come from (seed, tick, system, entity), so a re-simulated tick draws the same ones | — |
 | An `Rng` the game keeps | Yes | `Rng` is `Clone` |
 | Components and resources | Those that change | Copy them, as above; `World::save` / `World::load` work but cost far more (below) |
-| Spawned and despawned entities | Yes, if the tick spawns | Not through `World::load`: it resets the entity allocator, so the next spawn can get another id than on a peer that didn't roll back (`a_world_load_does_not_restore_which_ids_new_spawns_get`). Keep a fixed pool, or ids of your own |
-| 2D physics (rapier) | Yes: bodies, colliders, contacts, islands, the broad phase | Yes for rapier itself: every part is `Clone`, and a restored copy steps bit for bit like the original (checked by the benchmark). `ctx.physics` doesn't expose it yet, so a rollback game steps its own physics for now |
-| Events | Only those read in a later tick than they were sent | Not generically (the queues are type-erased); keep such events in the state |
+| Spawned and despawned entities | Yes, if the tick spawns | `World::save_snapshot` / `restore_snapshot` keep the allocator, so later spawns get the same ids (`GameRollback` uses them). Not through `World::load`: it resets the entity allocator, so the next spawn can get another id than on a peer that didn't roll back (`a_world_load_does_not_restore_which_ids_new_spawns_get`) |
+| 2D and 3D physics (rapier) | Yes: bodies, colliders, joints, contacts, islands, the broad phase | `ctx.physics.save_state` / `restore_state` (and `ctx.physics3d`'s): a loaded world steps bit for bit like the original. Your own rapier world: every part is `Clone`, but load it with a fresh `PhysicsPipeline`, as the joint solver keeps indices there |
+| Events | Only those read in a later tick than they were sent | `GameRollback` restores the event store; with `Rollback` alone, keep such events in the state |
 | Timers and cooldowns | Yes | Fields or components in the state |
-| Sounds and effects | No: they are output | Play them only for ticks that are confirmed, or remember (tick, what) and skip repeats |
+| Sounds and effects | No: they are output | `GameRollback` drops sounds of ticks that run again; otherwise play them only for confirmed ticks, or remember (tick, what) and skip repeats |
 | Derived data rebuilt every tick (the spatial grid) | No | — |
 
 ### What it costs
@@ -408,23 +513,55 @@ with the default window of 8:
   and one save 15 ms, together more than a 60 Hz frame, so there is no time
   to re-simulate.
 
+The whole-game numbers come from a second run of the same command, on a
+busy machine (load average 90 to 150 on the 14 cores, 2026-11-21): medians
+of 5 runs, and of 3 with physics, where the spread was wide (the fastest
+run is given too). `snapshot` is `World::save_snapshot` and
+`restore_snapshot` of the test's world (two players and a crowd, `Pos` and
+`Vel`) into a reused snapshot: no allocation after the first save. A
+`game` run is a whole `Game` running 300 ticks headless, offline or
+through a `GameRollback` whose remote player's input arrives 4 frames late
+and changes every 4 ticks (133 ticks run again); the engine saves before
+every tick and hashes the world every 60.
+
+| Per operation (ms) | 100 | 1,000 | 10,000 |
+|---|---|---|---|
+| World snapshot, save | < 0.001 | 0.001 | 0.005 |
+| World snapshot, restore | < 0.001 | < 0.001 | 0.005 |
+| `Game`, 300 ticks offline | 0.61 | 0.89 | 4.0 |
+| `Game`, 300 ticks through a session | 1.6 | 2.5 | 9.3 |
+| `Game` with 2D physics, offline | 4.9 | 120 (fastest 26) | — |
+| `Game` with 2D physics, session | 114 (fastest 15) | 351 (fastest 299) | — |
+
+- **Without physics** a session costs about 0.02 ms a tick at 10,000
+  entities over the offline game: the snapshot is a copy of the component
+  columns, far below the 1 ms a save and load of 10,000 entities may take.
+  It is not incremental: copying only the archetypes that changed would
+  need a change stamp per archetype, and the whole copy is already a few
+  microseconds.
+- **With physics** the save before every tick dominates: rapier's sets are
+  cloned (about 8,000 allocations for 1,000 bodies), about 1 ms a tick at
+  1,000 bodies, so up to about a thousand bodies fit a 60 Hz frame with
+  room to re-simulate, as with `Rollback` alone.
+
 ### The decision
 
-**Shipped, limited:** `Rollback` and `RollbackGame`, for games that own a
-small state: a few players and up to thousands of plain entities, or up to
-about a thousand bodies of their own rapier world. **Not shipped:**
-rolling back a whole `Game` (every component, `ctx.physics`, events) from
-the engine's loop. The only whole-world snapshot, `World::save`, is
-50 to several hundred times slower than a typed copy and doesn't keep
-entity ids; the engine's services (the physics links, event queues) have
-no snapshot; and the loop can't re-run simulation systems on demand. That
-needs a typed world snapshot (a copy of the component columns and the
-entity allocator) and a save and load for `ctx.physics` first.
+**Shipped:** `Rollback` and `RollbackGame`, for games that own a small
+state, and `GameRollback`, which rolls back a whole `Game` from the
+engine's loop: a typed world snapshot (`World::save_snapshot`, which keeps
+entity ids and the archetype layout, so queries visit entities in the same
+order), the physics services' `save_state` and `restore_state`, the event
+store, and a loop that runs the simulation systems again from a saved tick.
+Without physics it handles tens of thousands of entities; with physics,
+about a thousand bodies (rapier's state is cloned every tick).
 
 Lockstep stays the choice for big simulations (its cost doesn't grow with
 the world), and client prediction for server-authoritative games.
-`Rollback` is Rust-only: it is generic over the game's own input and state
-types, which C and C++ can't name.
+`Rollback` and `GameRollback` are Rust-only: they are generic over the
+game's own input type (and `Rollback` over its state), which C and C++
+can't name; a C binding would take inputs as fixed-size bytes.
+`WorldSnapshot` is Rust-only too (see "Still Rust-only" in the C and C++
+chapter).
 
 ## Which transport
 

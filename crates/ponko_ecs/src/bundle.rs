@@ -140,6 +140,15 @@ pub trait Component: Send + Sync + 'static {
     /// assert!(world.has::<Velocity>(e));
     /// ```
     fn requires(_required: &mut Requires<'_>) {}
+
+    /// How a world snapshot copies this type's values: written by
+    /// `#[derive(Component)]` for a type that is `Clone`. Not part of the
+    /// API: a hand-written impl leaves it alone and calls
+    /// [`World::register_clone`] instead.
+    #[doc(hidden)]
+    fn __snapshot_clone() -> Option<crate::snapshot::CloneFn> {
+        None
+    }
 }
 
 /// A tuple of components that are spawned together: `(Pos, Vel)`, `(Pos,)`.

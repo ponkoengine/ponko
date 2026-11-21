@@ -52,6 +52,9 @@ pub struct ComponentInfo {
     pub(crate) type_id: Option<TypeId>,
     /// Change stamps are kept for this component (see `World::track_changes`).
     pub(crate) tracked: bool,
+    /// How a world snapshot copies values (see `World::save_snapshot`), if
+    /// the type is `Clone`.
+    pub(crate) clone: Option<crate::snapshot::CloneFn>,
 }
 
 impl ComponentInfo {
@@ -99,6 +102,26 @@ impl ComponentInfo {
     #[must_use]
     pub fn tracks_changes(&self) -> bool {
         self.tracked
+    }
+    /// Whether a world snapshot can copy this component's values
+    /// ([`World::save_snapshot`](crate::World::save_snapshot)): a `Clone`
+    /// type (the derive notices, or [`World::register_clone`](crate::World::register_clone)),
+    /// or plain bytes without a destructor registered from C or C++.
+    ///
+    /// ```
+    /// use ponko_ecs::{Component, World};
+    /// #[derive(Component, Clone)]
+    /// struct Pos(f32);
+    /// #[derive(Component)]
+    /// struct Socket(u32); // not Clone
+    /// let mut world = World::new();
+    /// let (pos, socket) = (world.register::<Pos>(), world.register::<Socket>());
+    /// assert!(world.component_info(pos).can_snapshot());
+    /// assert!(!world.component_info(socket).can_snapshot());
+    /// ```
+    #[must_use]
+    pub fn can_snapshot(&self) -> bool {
+        self.clone.is_some() || (self.type_id.is_none() && self.drop.is_none())
     }
 }
 

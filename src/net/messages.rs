@@ -1290,6 +1290,16 @@ impl NetMessages {
     pub(crate) fn next_internal(&mut self) -> Option<(PeerId, bool, renet::Bytes)> {
         self.internal.pop_front()
     }
+
+    /// Queues `bytes` as an internal message from `peer`, as if it had
+    /// arrived over the link (the replication fuzz target, `net/fuzz.rs`).
+    #[cfg(any(test, fuzzing))]
+    pub(crate) fn fuzz_internal(&mut self, peer: PeerId, reliable: bool, bytes: &[u8]) {
+        if self.internal.len() < INTERNAL_LIMIT {
+            self.internal
+                .push_back((peer, reliable, renet::Bytes::copy_from_slice(bytes)));
+        }
+    }
 }
 
 /// Hooks for the fuzzing entry points in `net/fuzz.rs`.

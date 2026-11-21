@@ -803,6 +803,7 @@ impl Input {
     /// A pad connects into `pad`'s slot, described by `info`. The backend
     /// driver chooses the slot; [`feed`](Self::feed) passes generic info.
     pub(crate) fn connect_gamepad_at(&mut self, pad: Gamepad, info: GamepadInfo) {
+        self.record_connected(pad, &info);
         if self.connected.contains(&pad) {
             self.controllers.info[pad.slot()] = Some(info);
             return;
@@ -815,7 +816,15 @@ impl Input {
         self.refresh_actions();
     }
 
+    /// A scenario's pad connecting with its description: like
+    /// [`feed`](Self::feed)ing `InputEvent::GamepadConnected`, with `info`.
+    pub(crate) fn feed_gamepad_connected(&mut self, pad: Gamepad, info: GamepadInfo) {
+        self.fed_after_ui();
+        self.connect_gamepad_at(pad, info);
+    }
+
     pub(crate) fn set_gamepad_motion(&mut self, pad: Gamepad, motion: GamepadMotion) {
+        self.record(crate::actions::InputEvent::GamepadMotion(pad, motion));
         self.controllers.motion[pad.slot()] = Some(motion);
     }
 

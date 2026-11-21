@@ -12,8 +12,10 @@ whether it needs WebGPU and its source at that release. Among them:
 - A 3D scene: materials, a sun with
   shadows and instanced models.
 
-Games draw with WebGPU where the browser has it, and WebGL2 where it
-doesn't. Running the game requires at least one usable graphics backend.
+Games draw with WebGPU where the browser has a working one, and WebGL2
+where it doesn't ([WebGPU first, WebGL2 as the
+fallback](#webgpu-first-webgl2-as-the-fallback)). Running the game requires
+at least one usable graphics backend.
 
 ## Building your game
 
@@ -62,6 +64,100 @@ gallery for its version and publishes it (the release workflow,
 `examples.json`; the gallery's
 [README](../../web/gallery/README.md)
 has the fields, and how to check every page in a headless browser.
+
+## WebGPU first, WebGL2 as the fallback
+
+One build carries both: the same `game_bg.wasm` draws with the browser's
+WebGPU where it works and with WebGL2 where it doesn't, with nothing to
+choose in the game or the page. On startup the engine:
+
+1. looks for `navigator.gpu`;
+2. asks it for an adapter (`requestAdapter()`), then the adapter for a
+   device;
+3. waits for the device's first round trip to the GPU, to see that the
+   browser didn't lose it at once (its GPU process gone, the driver
+   refusing);
+4. only then gives the canvas its WebGPU context.
+
+If any step fails, the canvas is still untouched, so the engine starts over
+on WebGL2 and logs one line in the browser's console saying why, such as
+`ponko: falling back to WebGL2: navigator.gpu.requestAdapter() found no
+adapter` (or `... this browser has no WebGPU`, `... the WebGPU adapter could
+not open a device: <the browser's words>`, `... the WebGPU device was lost
+as it opened: <the browser's words>`). A WebGPU start logs `ponko: drawing
+with WebGPU`. Only when WebGL2 fails too does the page show a startup error
+(next sections). A WebGPU device lost later, while the game runs, is a
+[failure while playing](#failures-while-playing): a game can't switch
+backends mid-game.
+
+The game finds out which it got from `ctx.gfx.gpu_capabilities()`:
+`adapter.backend` is `webgpu` or `gl`, and the report's `tier` and
+per-feature entries say what is drawn (see [GPU tiers](3d.md#gpu-tiers)).
+`ctx.scene3d.set_recommended_quality(caps)` picks settings to match.
+
+What each draws, at the least each gives: WebGPU at WebGPU's default limits
+and without optional features (a browser often gives more, decals and global
+illumination included where its adapter has the texture slots; the report
+is the exact answer), WebGL2 at the `webgl2` tier's floor, with the one
+sample per pixel a browser's WebGL2 draws the 3D frame with. The table is
+made by the engine from the same reports (`src/render/capabilities.rs`,
+test `the_guides_web_backend_table_is_generated_from_the_tier_code`), which
+fails when it is out of date; `PONKO_UPDATE_BOOK=1 cargo test -p ponko
+--features 3d --lib web_backend_table` rewrites it.
+
+<!-- web-backend-table:start -->
+| | WebGPU | WebGL2 (the fallback) |
+|---|---|---|
+| `GpuTier` | `baseline` | `webgl2` |
+| largest 2D texture | 8192² | 2048² |
+| sampled textures per shader stage | 16 | 16 |
+| storage buffers per shader stage | 8 | 0 |
+| compute workgroups per dimension | 65535 | 0 |
+| `timestamps` | no, no GPU pass times; RenderStats::gpu_ms is None | no, no GPU pass times; RenderStats::gpu_ms is None |
+| `compute` | yes | no, compute passes and the effects that need them are skipped (see the other entries) |
+| `storage_buffers` | yes | no, GPU buffers are not created and compute passes using them do nothing; material shaders reading `items` and GPU-buffer instance setup report an error with a fix to use CPU-backed instance batches or model entities |
+| `compute_culling` | yes | no, instance batches are culled on the CPU, cell by cell, and drawn with direct draws (the same picture); crowds are culled on the CPU and drawn from frames posed when they are made |
+| `gpu_skinning` | yes | no, skinned and morphed meshes are posed on the CPU |
+| `occlusion_culling` | yes | no, off: hidden models are drawn |
+| `temporal_antialiasing` | yes | no, FXAA instead of TAA |
+| `ambient_occlusion` | yes | no, off |
+| `contact_shadows` | yes | no, off |
+| `screen_space_reflections` | yes | no, off |
+| `global_illumination` | no, off: sky and ambient light only | no, off: sky and ambient light only |
+| `decals` | no, decals are not drawn | no, decals are not drawn |
+| `multisampling` | yes | no, no multisampling: edges are smoothed only by FXAA or SMAA, if chosen |
+<!-- web-backend-table:end -->
+
+**Size and startup.** One `.wasm` holds both backends: wgpu's WebGPU binding,
+and its WebGL2 backend with the shader translator, which the WebGL2 path
+needs and the WebGPU path never runs. Measured on the smoke fixtures
+(`web/build.sh`, release, wasm-bindgen 0.2.130; bytes of `game_bg.wasm`):
+
+| Build | Raw | gzip -9 | brotli -q 11 |
+|---|---|---|---|
+| 2D fixture (`web_smoke`), both backends | 15,144,997 | 5,252,906 | 3,378,309 |
+| 2D fixture, WebGPU only (wgpu without `webgl`, an experiment) | 13,181,687 | 4,596,210 | 2,970,584 |
+| 3D fixture (`web_smoke_3d`, `--features 3d`), both backends | 19,176,434 | 6,487,015 | 4,129,117 |
+| 3D fixture, WebGPU only (the same experiment) | 17,188,373 | 5,818,912 | 3,724,727 |
+
+So the fallback costs about 2 MB of the raw module and about 0.4 MB
+(11 to 14 %) of what a server sends brotli-compressed; the engine has no
+switch to leave it out, since every browser without a working WebGPU would
+then show nothing.
+
+Time to the first frame (from the page's navigation start to the 3D
+fixture's first published state; median of five fresh loads each, served
+from the same machine) in Chromium 156's new headless mode on an Apple
+Silicon Mac, on a busy machine (a load average of about 100 from other
+builds), so the absolute numbers are high and noisy: **WebGPU 200 ms**
+(132 to 213), **WebGL2 298 ms** (290 to 355). An earlier run under the
+same load gave 248 and 370 ms. The pages that try WebGPU first and fall
+back (no adapter, a refused device, a device lost as it opens) took 350 to
+433 ms, one load each: the WebGPU attempt adds little to the WebGL2 start.
+
+`web/smoke/webgpu-fallback.mjs` checks each way into WebGL2 in a headless
+browser, faking the failure in the page before the game starts (see the
+[runner's README](../../web/smoke/README.md#webgpu-first)).
 
 ## What's different in a browser
 
@@ -299,5 +395,53 @@ for running it, adding a fixture for another example, and what runs where.
 
 ## C and C++
 
-Not yet: web builds work for Rust games. C and C++ games would need to be
-compiled with Emscripten, which the engine doesn't support so far.
+C and C++ games build for the browser too. Once, besides the Rust setup
+above, install the [WASI SDK](https://github.com/WebAssembly/wasi-sdk),
+version 33 or newer (its C++ library has exceptions, which `ponko.hpp`
+uses), in `/opt/wasi-sdk`, or anywhere with `WASI_SDK_PATH` pointing at it.
+Then, from your game's folder, with
+[`web/build-cpp.sh`](../../web/build-cpp.sh) from a checkout of the engine:
+
+```sh
+../ponko/web/build-cpp.sh -o target/web/my_game main.cpp world.cpp
+python3 -m http.server -d target/web/my_game 8000
+```
+
+The script compiles your sources with the WASI SDK's clang for wasm32, links
+them with its C and C++ libraries into the engine's ordinary web build, and
+writes the same static site as `web/build.sh`: the page, `game.js`,
+`game_bg.wasm` and a copy of your `assets/`. `--features` picks
+`ponko_ffi`'s features, and flags after `--` go to the compiler
+(`-- -DNDEBUG -Isrc`). The guide's first game
+([Getting started](getting-started.md)), built this way, is 21.9 MB of
+WebAssembly (7.5 MB compressed with gzip) and reaches its first frame 0.5 s
+after the page is opened, in headless Chromium on WebGL2 on an Apple
+Silicon laptop (measured while other builds were running, so take the time
+as an upper bound). That is more than a Rust game's build, because the
+library's C API reaches the engine's 3D renderer and navigation whatever
+the game calls, and `ponko_ffi`'s default features (2D and 3D physics, the
+inspector, text shaping, sound) are all in it.
+
+What's different from the desktop, besides [the above](#whats-different-in-a-browser):
+
+- **`run()` doesn't return.** The browser runs the game's frames, so
+  `ponko_game_run` (`game.run(...)` in C++) leaves your `main` without
+  returning while the game plays: the code after it never runs, and nothing
+  in the functions that called it is destroyed. Locals your systems capture
+  by reference stay valid, as they do on the desktop, where `run()` blocks.
+  Save the game when the player asks, not after `run()`.
+- **The standard library has no files.** `printf` and `std::cout` go to
+  the browser's console, `std::cerr` to its errors. `fopen` finds no file:
+  load your data through the engine's assets (they are fetched before
+  setup), and keep saves with the engine's [storage](storage.md). `sleep` returns at once,
+  `std::thread` can't start a thread, and `exit()` stops the game with an
+  error. The build stops, naming them, if your code calls any other function
+  the browser doesn't have.
+- **C++ exceptions** work, with WebAssembly exception handling: the game
+  needs Chrome 137, Firefox 131 or Safari 18.4 or newer.
+
+Emscripten, the usual compiler for C and C++ on the web, can't build the
+engine: its window, input and graphics run on winit and wasm-bindgen, which
+have no Emscripten backend. `web/smoke/cpp.mjs` builds the guide's first
+game this way and checks in a headless browser that it starts, draws and
+moves its crab while the right arrow key is held.

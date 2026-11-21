@@ -378,6 +378,8 @@ pub struct Game {
     fixed_hz_set: bool,
     seed: u64,
     vsync: bool,
+    /// From `hdr_output`: the window opens for HDR output with these.
+    hdr_output: crate::render::HdrOutput,
     fullscreen: bool,
     /// From `restore_window_settings`: open the first window with `window.json`.
     restore_window: bool,
@@ -643,6 +645,12 @@ impl ConfiguredGame {
     /// See [`Game::vsync`].
     pub fn vsync(mut self, on: bool) -> Self {
         self.game = self.game.vsync(on);
+        self
+    }
+
+    /// See [`Game::hdr_output`].
+    pub fn hdr_output(mut self, settings: crate::render::HdrOutput) -> Self {
+        self.game = self.game.hdr_output(settings);
         self
     }
 
@@ -971,6 +979,75 @@ impl ChangesSeen {
     }
 }
 
+/// The game loop as the game of a rollback session
+/// ([`GameRollback`](crate::net::GameRollback)): saves and loads what a
+/// tick changes, and runs the simulation systems.
+struct RollbackRunner<'a> {
+    exec: &'a mut batch::Exec,
+    systems: &'a mut Vec<System>,
+    ctx: &'a mut Ctx,
+    /// The tick this frame runs: earlier ones run again.
+    present: u64,
+}
+
+impl crate::net::Runner for RollbackRunner<'_> {
+    fn tick(&self) -> u64 {
+        self.ctx.time.sim_tick()
+    }
+
+    fn save(&mut self, into: &mut crate::net::GameState) {
+        let ctx = &mut *self.ctx;
+        into.tick = ctx.time.sim_tick();
+        if let Err(e) = ctx.world.save_snapshot(&mut into.world) {
+            panic!("rollback: {e}");
+        }
+        ctx.events.save_state(&mut into.events);
+        #[cfg(feature = "physics")]
+        ctx.physics.save_state(&mut into.physics);
+        #[cfg(feature = "physics3d")]
+        ctx.physics3d.save_state(&mut into.physics3d);
+    }
+
+    fn load(&mut self, from: &crate::net::GameState) {
+        let ctx = &mut *self.ctx;
+        if let Err(e) = ctx.world.restore_snapshot(&from.world) {
+            panic!("rollback: {e}; keep the same `ctx.world` while a rollback session runs");
+        }
+        let systems = &*self.systems;
+        ctx.events
+            .restore_state(&from.events, |reader| systems.iter().any(|s| s.id == reader));
+        #[cfg(feature = "physics")]
+        ctx.physics.restore_state(&from.physics);
+        #[cfg(feature = "physics3d")]
+        ctx.physics3d.restore_state(&from.physics3d);
+        ctx.time.set_sim_tick(from.tick);
+        ctx.events.set_tick(from.tick);
+        ctx.gfx.sim_tick = from.tick;
+    }
+
+    fn hash(&self) -> u64 {
+        crate::reflect::world_hash(&self.ctx.world)
+    }
+
+    fn inputs(&mut self) -> &mut (dyn std::any::Any + Send + Sync) {
+        self.ctx.net.rollback_inputs_mut()
+    }
+
+    fn run_tick(&mut self) {
+        let ctx = &mut *self.ctx;
+        let tick = ctx.time.sim_tick();
+        let again = tick < self.present;
+        ctx.net.resimulating = again;
+        ctx.audio.replaying = again;
+        self.exec.run_list(self.systems, 0, ctx, 0, Some(tick));
+        ctx.set_sim_steps(1);
+        ctx.world.return_idle_ids();
+        ctx.net.resimulating = false;
+        ctx.audio.replaying = false;
+        ctx.advance_tick();
+    }
+}
+
 /// Ids for [`System::id`]; 0 means "outside any system".
 fn next_system_id() -> u32 {
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -1029,8 +1106,12 @@ fn end_timings(ctx: &mut Ctx) {
 /// removal logs of tracked components grow with every removal.
 fn forget_seen_removals<'a>(ctx: &mut Ctx, systems: impl Iterator<Item = &'a System>) {
     // Also once per frame or tick: slots set aside for deferred spawns
-    // that no buffer took go back to the world.
-    ctx.world.return_idle_ids();
+    // that no buffer took go back to the world. A rollback session does it
+    // after every tick it runs instead, so the ids commands get don't
+    // depend on how many ticks a frame ran.
+    if ctx.net.rollback.is_none() {
+        ctx.world.return_idle_ids();
+    }
     let systems = systems.map(|s| s.changes_seen.in_world(&ctx.world)).min();
     // Replication's server reads removals too, once a tick.
     let replication = ctx.net.replication.changes_seen(&ctx.world);
@@ -1264,6 +1345,7 @@ impl Game {
             fixed_hz_set: false,
             seed: crate::random::DEFAULT_SEED,
             vsync: true,
+            hdr_output: crate::render::HdrOutput::default(),
             fullscreen: false,
             restore_window: false,
             sim_systems: Vec::new(),
@@ -2739,6 +2821,7 @@ impl Game {
         let fixed_dt = Clock::new(self.fixed_hz).fixed_dt();
         let mut ctx = Ctx::new(fixed_dt, Vec2::new(self.width as f32, self.height as f32));
         ctx.seed = self.seed;
+        ctx.gfx.hdr_output = self.hdr_output;
         if headless {
             ctx.set_headless(true);
         }
@@ -2924,6 +3007,27 @@ impl Game {
         self
     }
 
+    /// HDR display output (off by default): with `settings.enabled`, the
+    /// window opens in an HDR format and color space where the display
+    /// system offers one, and the 3D frame's highlights reach the display's
+    /// peak while UI and sprites stay at paper white. Where none is offered
+    /// it opens in SDR as usual. Off, nothing changes and nothing extra is
+    /// drawn. While the game runs, `ctx.gfx.set_hdr_output` changes paper
+    /// white and peak and switches between HDR and SDR output (only if the
+    /// window opened with HDR on), and `ctx.gfx.hdr_status()` says what the
+    /// window does. See [`HdrOutput`](crate::render::HdrOutput).
+    ///
+    /// ```no_run
+    /// # use ponko::prelude::*;
+    /// Game::new("Bright", 1280, 720)
+    ///     .hdr_output(ponko::render::HdrOutput::on())
+    ///     .run(|_| |_: &mut Ctx| {});
+    /// ```
+    pub fn hdr_output(mut self, settings: crate::render::HdrOutput) -> Self {
+        self.hdr_output = settings;
+        self
+    }
+
     /// Fills the screen with the game instead of opening a window (off by
     /// default). On macOS, windowed games are shown at most once per display
     /// refresh even with vsync off; fullscreen ones aren't. Web builds
@@ -3051,12 +3155,38 @@ impl Game {
         let hz = f64::from(self.fixed_hz);
         ctx.net
             .replication_begin_tick(&mut ctx.world, &mut ctx.events, tick, hz);
-        self.exec.run_list(&mut self.sim_systems, 0, ctx, 0, Some(tick));
-        ctx.set_sim_steps(1);
+        let ticked = self.run_sim_list(ctx, tick);
         ctx.scenario_end_tick(tick);
         ctx.net.replication_end_tick(&mut ctx.world);
         ctx.net.lockstep.end_tick(&ctx.world, tick);
-        ctx.advance_tick();
+        if !ticked {
+            ctx.advance_tick();
+        }
+    }
+
+    /// The simulation systems for tick `tick`, or, with a rollback session,
+    /// the session's tick: a rollback first if one is due, then the tick
+    /// unless the session stalls. True if the clock already moved on (the
+    /// session ticks it).
+    fn run_sim_list(&mut self, ctx: &mut Ctx, tick: u64) -> bool {
+        let Some(mut session) = ctx.net.rollback.take() else {
+            ctx.events.hold_ticks = 0;
+            self.exec.run_list(&mut self.sim_systems, 0, ctx, 0, Some(tick));
+            ctx.set_sim_steps(1);
+            return false;
+        };
+        ctx.events.hold_ticks = session.hold_ticks();
+        ctx.net.advancing = true;
+        let mut runner = RollbackRunner {
+            exec: &mut self.exec,
+            systems: &mut self.sim_systems,
+            ctx,
+            present: tick,
+        };
+        let _ = session.advance(&mut runner);
+        ctx.net.advancing = false;
+        ctx.net.rollback = Some(session);
+        true
     }
 
     /// The scenario from [`input_scenario`](Self::input_scenario), started
@@ -3088,11 +3218,12 @@ impl Game {
         let hz = f64::from(self.fixed_hz);
         ctx.net
             .replication_begin_tick(&mut ctx.world, &mut ctx.events, tick, hz);
-        self.exec.run_list(&mut self.sim_systems, 0, ctx, 0, Some(tick));
-        ctx.set_sim_steps(1);
+        let ticked = self.run_sim_list(ctx, tick);
         ctx.net.replication_end_tick(&mut ctx.world);
         ctx.net.lockstep.end_tick(&ctx.world, tick);
-        ctx.advance_tick();
+        if !ticked {
+            ctx.advance_tick();
+        }
         ctx.set_in_sim(false);
         let n_sim = self.sim_systems.len();
         let n_frame = self.systems.len();
