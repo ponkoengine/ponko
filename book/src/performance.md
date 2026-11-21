@@ -338,6 +338,27 @@ ran. The engine's offscreen GPU test of a compute pass
 the graphics library supports there and are checked when that test runs on
 those machines.
 
+### How many devices can be timed
+
+Each timestamp query set the engine makes counts against a limit on Metal:
+a process may hold 32 of them, of any size, shared by all its devices, and
+asking for a 33rd loses the device that asked. (Measured on an Apple M4
+Max with wgpu 30: sets of 8, 64, 384 and 4,096 queries all fail at the
+33rd. Apple's documentation names no number; the ignored test
+`metal_allows_32_timestamp_query_sets_per_process_of_any_size` in
+`src/render/query_sets.rs` repeats the measurement.) The number of queries
+in a set doesn't count, so the engine keeps few sets rather than small
+ones.
+
+A device's renderer holds two sets: one for the frame's passes and one for
+uploads. On Metal the engine takes at most 28 sets in a process, leaving 4
+for a game's own timestamp queries, so up to 14 devices are timed at once
+(a game with tool windows, previews or several offscreen renderers). A
+device past that keeps working without GPU times, and the engine prints
+one line saying so (`ponko: GPU frame timer: GPU timing is off for this
+device...`); dropping another device's renderer makes room again. Other
+backends have no such limit known, and every device is timed.
+
 ### Benchmark runs
 
 `PONKO_BENCH=<frames>` turns any windowed game into a benchmark: after
