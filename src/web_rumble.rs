@@ -577,7 +577,7 @@ mod tests {
             effect,
             ms: EFFECT_MS,
         };
-        assert_eq!(fake.take(), [want.clone()]);
+        assert_eq!(fake.take(), std::slice::from_ref(&want));
         clock.set(RESEND);
         rumble.refresh(&mut fake);
         assert_eq!(fake.take(), [want], "replayed before the cap, as body rumble is");
