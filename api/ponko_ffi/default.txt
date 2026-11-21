@@ -1727,10 +1727,12 @@ pub ponko_ffi::PonkoAssetGroupProgress::bytes_known: bool
 pub ponko_ffi::PonkoAssetGroupProgress::bytes_loaded: u64
 pub ponko_ffi::PonkoAssetGroupProgress::bytes_read: u64
 pub ponko_ffi::PonkoAssetGroupProgress::bytes_total: u64
+pub ponko_ffi::PonkoAssetGroupProgress::bytes_uploaded: u64
 pub ponko_ffi::PonkoAssetGroupProgress::fraction: f32
 pub ponko_ffi::PonkoAssetGroupProgress::loaded: usize
 pub ponko_ffi::PonkoAssetGroupProgress::state: u32
 pub ponko_ffi::PonkoAssetGroupProgress::total: usize
+pub ponko_ffi::PonkoAssetGroupProgress::upload_ms: f32
 impl core::clone::Clone for ponko_ffi::PonkoAssetGroupProgress
 pub fn ponko_ffi::PonkoAssetGroupProgress::clone(&self) -> Self
 impl core::cmp::PartialEq for ponko_ffi::PonkoAssetGroupProgress
@@ -1747,9 +1749,13 @@ impl core::marker::StructuralPartialEq for ponko_ffi::PonkoAssetGroupProgress
 pub ponko_ffi::PonkoAssetGroupStats::frame_budget_ms: f32
 pub ponko_ffi::PonkoAssetGroupStats::frame_bytes: u64
 pub ponko_ffi::PonkoAssetGroupStats::max_step_ms: f32
+pub ponko_ffi::PonkoAssetGroupStats::max_upload_ms: f32
 pub ponko_ffi::PonkoAssetGroupStats::over_budget: u64
 pub ponko_ffi::PonkoAssetGroupStats::step_ms: f32
 pub ponko_ffi::PonkoAssetGroupStats::steps: u64
+pub ponko_ffi::PonkoAssetGroupStats::total_upload_bytes: u64
+pub ponko_ffi::PonkoAssetGroupStats::total_upload_ms: f64
+pub ponko_ffi::PonkoAssetGroupStats::upload_ms: f32
 impl core::clone::Clone for ponko_ffi::PonkoAssetGroupStats
 pub fn ponko_ffi::PonkoAssetGroupStats::clone(&self) -> Self
 impl core::cmp::PartialEq for ponko_ffi::PonkoAssetGroupStats
@@ -6072,6 +6078,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_residency(*mut ponko_ffi::PonkoCtx, u32, *mut ponko_ffi::PonkoResidencyStats) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_resident_mesh(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, bool, *mut ponko_ffi::PonkoMesh) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_resident_texture(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, bool, *mut ponko_ffi::PonkoTexture) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_restart_asset_group(*mut ponko_ffi::PonkoCtx, u32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_restore_audio_mixer_state(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_resume(*mut ponko_ffi::PonkoCtx) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_retarget_pose(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoRetargeter, u64, u64) -> ponko_ffi::PonkoStatus
