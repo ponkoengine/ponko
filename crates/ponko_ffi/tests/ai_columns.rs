@@ -677,19 +677,21 @@ fn brain_rows_signalled_with_a_value_store_it_where_the_tree_says() {
             (*guards).push(g);
         }
     });
-    // What each guard's blackboard holds under "heard" and what it does.
+    // A guard's index, then what its blackboard holds under "heard" as a number, an entity, a 2D and a
+    // 3D point, and what it does.
+    type Heard = (
+        usize,
+        Option<f32>,
+        Option<u64>,
+        Option<(f32, f32)>,
+        Option<(f32, f32, f32)>,
+        u64,
+    );
     #[derive(Default)]
     struct Read {
         guards: Vec<u64>,
         heard: u64,
-        rows: Vec<(
-            usize,
-            Option<f32>,
-            Option<u64>,
-            Option<(f32, f32)>,
-            Option<(f32, f32, f32)>,
-            u64,
-        )>,
+        rows: Vec<Heard>,
     }
     let mut read = Read {
         guards: voices.guards.clone(),
@@ -745,7 +747,7 @@ fn brain_rows_signalled_with_a_value_store_it_where_the_tree_says() {
     }
     // The bare signal stores nothing (the negative control), and each value
     // is stored as its own kind only.
-    assert_eq!(read.rows[4].1.is_none() && read.rows[4].2.is_none(), true);
+    assert!(read.rows[4].1.is_none() && read.rows[4].2.is_none());
     assert!(read.rows[4].3.is_none() && read.rows[4].4.is_none());
     assert!(read.rows[0].2.is_none() && read.rows[1].1.is_none());
     unsafe {
