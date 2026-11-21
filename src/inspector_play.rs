@@ -117,6 +117,11 @@ impl Panels {
         let stopped = ctx.edit(|ed, ctx| ed.stop_keeping(ctx, keep));
         if self.report(stopped).is_some() {
             self.scene.forget_drag();
+            // A selected glTF node was spawned again as another entity.
+            self.selected = self.selected.map(|e| ctx.editor.resolve(e));
+            for e in &mut self.others {
+                *e = ctx.editor.resolve(*e);
+            }
             self.status = Some(match keep.len() {
                 0 => "stopped: the world is back as it was at Play".into(),
                 n => format!("stopped, keeping {n} edit(s) made while playing"),

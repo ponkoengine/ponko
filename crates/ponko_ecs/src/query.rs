@@ -107,6 +107,21 @@ pub(crate) unsafe fn for_rows<'a, Q: QueryData>(
     rows: std::ops::Range<usize>,
     f: &mut impl FnMut(Q::Item<'a>),
 ) {
+    // SAFETY: the caller's contract.
+    unsafe { for_rows_at::<Q>(state, rows, &mut |_, item| f(item)) }
+}
+
+/// [`for_rows`], also passing each row's index: what the parallel loops
+/// use to give each entity its position in the query.
+///
+/// # Safety
+/// As for [`QueryData::fetch`], for every row in `rows`.
+#[inline(always)]
+pub(crate) unsafe fn for_rows_at<'a, Q: QueryData>(
+    state: Q::State,
+    rows: std::ops::Range<usize>,
+    f: &mut impl FnMut(usize, Q::Item<'a>),
+) {
     macro_rules! split {
         ($($present:literal)* ; $last:literal) => {
             // `present` sets only the low `Q::OPTIONS` bits: `$last` is
@@ -116,13 +131,13 @@ pub(crate) unsafe fn for_rows<'a, Q: QueryData>(
                     for row in rows {
                         // SAFETY: the caller's contract; `$present` is what
                         // `present` gave for `state`.
-                        f(unsafe { Q::fetch_split::<$present>(state, row, 0) });
+                        f(row, unsafe { Q::fetch_split::<$present>(state, row, 0) });
                     }
                 })*
                 _ => {
                     for row in rows {
                         // SAFETY: as above, for the last combination.
-                        f(unsafe { Q::fetch_split::<$last>(state, row, 0) });
+                        f(row, unsafe { Q::fetch_split::<$last>(state, row, 0) });
                     }
                 }
             }
@@ -136,7 +151,7 @@ pub(crate) unsafe fn for_rows<'a, Q: QueryData>(
         _ => {
             for row in rows {
                 // SAFETY: the caller's contract.
-                f(unsafe { Q::fetch(state, row) });
+                f(row, unsafe { Q::fetch(state, row) });
             }
         }
     }
@@ -529,16 +544,17 @@ impl Filters {
         }
     }
 
-    /// The row test `Added`/`Changed` filters apply inside matching archetype
-    /// `arch`, or `None` if every row passes: no such filters, or each one
+    /// Fills `rows` with the row test `Added`/`Changed` filters apply inside
+    /// matching archetype `arch`, keeping its clock; `false` (and `rows`
+    /// left unspecified) if every row passes: no such filters, or each one
     /// sits in an `Or` that another term already satisfies for all of `arch`.
     #[inline]
-    pub(crate) fn row_filter(&self, arch: &Archetype, clock: Clock) -> Option<RowFilter> {
+    pub(crate) fn fill_row_filter(&self, arch: &Archetype, rows: &mut RowFilter) -> bool {
         let in_or = self.any_added | self.any_changed;
         if self.with_added | self.with_changed == 0 && in_or == 0 {
-            return None;
+            return false;
         }
-        let mut rows = RowFilter::new(clock);
+        rows.clear();
         for i in 0..self.n_with as usize {
             for (mask, added) in [(self.with_added, true), (self.with_changed, false)] {
                 if mask >> i & 1 != 0 {
@@ -563,7 +579,7 @@ impl Filters {
             }
             start = end;
         }
-        (!rows.is_empty()).then_some(rows)
+        !rows.is_empty()
     }
 
     /// Converts required predicates into singleton clauses. Only construction
@@ -827,6 +843,22 @@ unsafe impl<Q: QueryData> Sync for ParWork<'_, Q> {}
 
 #[cfg(feature = "parallel")]
 impl<Q: QueryData> ParWork<'_, Q> {
+    /// [`visit`](Self::visit) with a shared `f`, in a function of its own.
+    ///
+    /// Taking `f` by reference as an argument tells the compiler that what
+    /// the closure captured doesn't change during the loop (it is borrowed
+    /// shared), so a value it captured is loaded once, not at every row.
+    /// Without that, a write through the query's `&mut` items might have
+    /// changed it, and the loop stays scalar.
+    ///
+    /// # Safety
+    /// As for [`visit`](Self::visit).
+    #[inline(never)]
+    unsafe fn visit_shared<F: Fn(usize, Q::Item<'_>)>(&self, lo: usize, hi: usize, f: &F) {
+        // SAFETY: the caller's contract.
+        unsafe { self.visit(lo, hi, f) }
+    }
+
     /// Calls `f(i, item)` for the query positions `lo..hi`, in order.
     ///
     /// # Safety
@@ -844,11 +876,15 @@ impl<Q: QueryData> ParWork<'_, Q> {
                 .expect("a planned archetype matches the query while it runs");
             let first = task.start + (pos - task.base);
             let last = task.end.min(task.start + (hi - task.base));
-            for row in first..last {
-                // SAFETY: `row` is below the archetype's length (planned under
-                // the same borrow) and only this thread visits it now.
-                f(task.base + row - task.start, unsafe { Q::fetch(state, row) });
-            }
+            // Rows `first..last`, looped as `for_each` loops them: split on
+            // which `Option` components the archetype has, so no row tests it.
+            // SAFETY: the rows are below the archetype's length (planned under
+            // the same borrow) and only this thread visits them now.
+            unsafe {
+                for_rows_at::<Q>(state, first..last, &mut |row, item| {
+                    f(task.base + row - task.start, item)
+                })
+            };
             pos = task.base + (last - task.start);
             t += 1;
         }
@@ -1291,7 +1327,7 @@ impl<'w, Q: QueryData> Query<'w, Q> {
     fn for_each_tracked(&mut self, mut f: impl FnMut(Q::Item<'_>)) {
         let ids = self.ids;
         let filters = self.filters;
-        let clock = self.clock();
+        let mut runs = change::Runs::new(self.clock());
         for arch in self.archetypes() {
             let len = arch.len();
             if len == 0 || !filters.matches_tracked(arch) {
@@ -1300,15 +1336,11 @@ impl<'w, Q: QueryData> Query<'w, Q> {
             let Some(state) = Q::state(arch, &ids) else {
                 continue;
             };
-            let mut runs = if arch.tracked() {
-                change::visit::<Q>(arch, &ids, &filters, clock)
-            } else {
-                None
-            };
+            let in_runs = arch.tracked() && change::visit::<Q>(arch, &ids, &filters, &mut runs);
             let (mut start, mut end) = (0, len);
             loop {
-                if let Some(runs) = &mut runs {
-                    match runs.next::<Q>(&ids) {
+                if in_runs {
+                    match runs.next::<Q>(arch, &ids) {
                         Some(run) => (start, end) = run,
                         None => break,
                     }
@@ -1316,7 +1348,7 @@ impl<'w, Q: QueryData> Query<'w, Q> {
                 // SAFETY: rows of a matching archetype, under the query's
                 // validated borrow.
                 unsafe { for_rows::<Q>(state, start..end, &mut f) };
-                if runs.is_none() {
+                if !in_runs {
                     break;
                 }
             }
@@ -1359,7 +1391,8 @@ impl<'w, Q: QueryData> Query<'w, Q> {
     /// ```
     #[cfg(feature = "parallel")]
     pub fn par_for_each(&mut self, f: impl Fn(Q::Item<'_>) + Send + Sync) {
-        self.par_for_each_indexed(|_, item| f(item));
+        // `move`, not a borrow of `f`: see `ParWork::visit_shared`.
+        self.par_for_each_indexed(move |_, item| f(item));
     }
 
     /// Like [`par_for_each`](Self::par_for_each), but also passes each
@@ -1401,7 +1434,7 @@ impl<'w, Q: QueryData> Query<'w, Q> {
         let mut tasks = self.world.par_plan.take();
         let ids = self.ids;
         let filters = self.filters;
-        let clock = self.clock();
+        let mut runs = change::Runs::new(self.clock());
         let tracking = self.tracking();
         let (mut total, mut longest) = (0, 0);
         let mut archetypes = self.archetypes();
@@ -1428,18 +1461,12 @@ impl<'w, Q: QueryData> Query<'w, Q> {
                 total += end - start;
                 longest = longest.max(end - start);
             };
-            let runs = if tracking && arch.tracked() {
-                change::visit::<Q>(arch, &ids, &filters, clock)
-            } else {
-                None
-            };
-            match runs {
-                None => push(0, len),
-                Some(mut runs) => {
-                    while let Some((start, end)) = runs.next::<Q>(&ids) {
-                        push(start, end);
-                    }
+            if tracking && arch.tracked() && change::visit::<Q>(arch, &ids, &filters, &mut runs) {
+                while let Some((start, end)) = runs.next::<Q>(arch, &ids) {
+                    push(start, end);
                 }
+            } else {
+                push(0, len);
             }
         }
         // About 4 chunks per thread, so heavy per-entity work (neighbor
@@ -1475,14 +1502,14 @@ impl<'w, Q: QueryData> Query<'w, Q> {
         let total = plan.total;
         // SAFETY: the plan was built under this query's world borrow, whose
         // access was validated; the serial part runs before the parallel one.
-        let parallel = plan.run_serial_part(|lo, hi| unsafe { work.visit(lo, hi, |i, item| f(i, item)) });
+        let parallel = plan.run_serial_part(|lo, hi| unsafe { work.visit_shared(lo, hi, &f) });
         if let Some((from, chunk)) = parallel {
             let chunks = (total - from).div_ceil(chunk);
             let one = |c: usize| {
                 let lo = from + c * chunk;
                 // SAFETY: as above; chunks are disjoint ranges of positions,
                 // and every position is one row of one archetype.
-                unsafe { work.visit(lo, (lo + chunk).min(total), |i, item| f(i, item)) };
+                unsafe { work.visit_shared(lo, (lo + chunk).min(total), &f) };
             };
             crate::par::run(|| (0..chunks).into_par_iter().for_each(one));
         }
@@ -1537,7 +1564,9 @@ impl<'w, Q: QueryData> Query<'w, Q> {
         out.reserve(n);
         let slots = Slots(out.as_mut_ptr());
         if !std::mem::needs_drop::<R>() {
-            self.par_run(plan, |i, item| {
+            // `move`: `f` lives inside the closure `par_run` borrows, so the
+            // compiler sees its captures don't change (see `visit_shared`).
+            self.par_run(plan, move |i, item| {
                 debug_assert!(i < n);
                 // SAFETY: every index in the reserved buffer is written once.
                 // On panic these values need no cleanup and `out.len()` stays 0.
@@ -1668,12 +1697,12 @@ impl<'w, Q: QueryData> Query<'w, Q> {
                 .map(|a| a.len())
                 .sum();
         }
-        let clock = self.clock();
+        let mut rows = RowFilter::new(self.clock());
         self.archetypes()
             .filter(|a| !a.is_empty() && filters.matches(a) && Q::state(a, &ids).is_some())
             .map(|a| {
                 if a.tracked() {
-                    change::count(a, &filters, clock)
+                    change::count(a, &filters, &mut rows)
                 } else {
                     a.len()
                 }

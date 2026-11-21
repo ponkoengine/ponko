@@ -347,7 +347,7 @@ impl FlowField {
     #[must_use]
     pub fn distance_at(&self, world: Vec2) -> Option<f32> {
         let d = self.dist[self.cell(world)?];
-        (d != UNREACHED).then(|| d as f32 / STRAIGHT as f32 * self.cell_size)
+        (d != UNREACHED).then_some(d as f32 / STRAIGHT as f32 * self.cell_size)
     }
 }
 

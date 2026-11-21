@@ -2559,6 +2559,7 @@ impl core::fmt::Debug for ponko::d3::AudioSource
 pub fn ponko::d3::AudioSource::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl ponko_ecs::bundle::Component for ponko::d3::AudioSource
 pub struct ponko::d3::Camera
+pub ponko::d3::Camera::debug_draw: core::option::Option<bool>
 pub ponko::d3::Camera::far: f32
 pub ponko::d3::Camera::fov_y: f32
 pub ponko::d3::Camera::layers: ponko::camera::RenderLayers
@@ -4767,6 +4768,28 @@ impl ponko::input::Input
 pub fn ponko::input::Input::action_glyphs(&self, impl ponko::actions::ActionRef) -> ponko::input::Glyphs
 pub fn ponko::input::Input::action_glyphs_for(&self, impl ponko::actions::ActionRef, ponko::input::InputDevice) -> ponko::input::Glyphs
 impl ponko::input::Input
+pub fn ponko::input::Input::arrange_touch_controls(&mut self)
+pub fn ponko::input::Input::drag_delta(&self) -> glam::f32::vec2::Vec2
+pub fn ponko::input::Input::edit_touch_controls(&mut self, bool)
+pub fn ponko::input::Input::editing_touch_controls(&self) -> bool
+pub fn ponko::input::Input::gesture_events(&self) -> &[ponko::input::GestureEvent]
+pub fn ponko::input::Input::gesture_settings(&self) -> &ponko::input::GestureSettings
+pub fn ponko::input::Input::pinch_scale(&self) -> f32
+pub fn ponko::input::Input::restore_touch_layout(&mut self, &ponko::storage::Storage) -> core::result::Result<(), ponko::error::Error>
+pub fn ponko::input::Input::rotation_delta(&self) -> f32
+pub fn ponko::input::Input::save_touch_layout(&self, &mut ponko::storage::Storage) -> core::result::Result<(), ponko::error::Error>
+pub fn ponko::input::Input::set_gesture_settings(&mut self, ponko::input::GestureSettings)
+pub fn ponko::input::Input::set_touch_control_shown(&mut self, &str, bool)
+pub fn ponko::input::Input::set_touch_controls(&mut self, ponko::ui::touch::TouchControls)
+pub fn ponko::input::Input::set_touch_controls_show(&mut self, ponko::ui::touch::TouchShow)
+pub fn ponko::input::Input::set_touch_device(&mut self, bool)
+pub fn ponko::input::Input::set_touch_layout(&mut self, ponko::ui::touch::TouchLayout)
+pub fn ponko::input::Input::touch_control_center(&self, &str) -> core::option::Option<glam::f32::vec2::Vec2>
+pub fn ponko::input::Input::touch_controls_shown(&self) -> bool
+pub fn ponko::input::Input::touch_device(&self) -> bool
+pub fn ponko::input::Input::touch_layout(&self) -> &ponko::ui::touch::TouchLayout
+pub fn ponko::input::Input::touches(&self) -> &[ponko::input::Touch]
+impl ponko::input::Input
 pub fn ponko::input::Input::assign_player(&mut self, usize, ponko::input::InputDevice) -> bool
 pub fn ponko::input::Input::free_player(&self) -> core::option::Option<usize>
 pub fn ponko::input::Input::gamepad_family(&self, ponko::input::Gamepad) -> ponko::input::ControllerFamily
@@ -4800,27 +4823,6 @@ pub fn ponko::input::Input::cancel_scenario(&mut self, &mut ponko_ecs::world::Wo
 pub fn ponko::input::Input::injection_allowed(&self) -> bool
 pub fn ponko::input::Input::scenario_report<'w>(&self, &'w ponko_ecs::world::World) -> core::option::Option<&'w ponko::scenario::ScenarioReport>
 pub fn ponko::input::Input::start_scenario(&mut self, &mut ponko_ecs::world::World, &mut ponko::prelude::Time, ponko::scenario::InputScenario)
-impl ponko::input::Input
-pub fn ponko::input::Input::drag_delta(&self) -> glam::f32::vec2::Vec2
-pub fn ponko::input::Input::edit_touch_controls(&mut self, bool)
-pub fn ponko::input::Input::editing_touch_controls(&self) -> bool
-pub fn ponko::input::Input::gesture_events(&self) -> &[ponko::input::GestureEvent]
-pub fn ponko::input::Input::gesture_settings(&self) -> &ponko::input::GestureSettings
-pub fn ponko::input::Input::pinch_scale(&self) -> f32
-pub fn ponko::input::Input::restore_touch_layout(&mut self, &ponko::storage::Storage) -> core::result::Result<(), ponko::error::Error>
-pub fn ponko::input::Input::rotation_delta(&self) -> f32
-pub fn ponko::input::Input::save_touch_layout(&self, &mut ponko::storage::Storage) -> core::result::Result<(), ponko::error::Error>
-pub fn ponko::input::Input::set_gesture_settings(&mut self, ponko::input::GestureSettings)
-pub fn ponko::input::Input::set_touch_control_shown(&mut self, &str, bool)
-pub fn ponko::input::Input::set_touch_controls(&mut self, ponko::ui::touch::TouchControls)
-pub fn ponko::input::Input::set_touch_controls_show(&mut self, ponko::ui::touch::TouchShow)
-pub fn ponko::input::Input::set_touch_device(&mut self, bool)
-pub fn ponko::input::Input::set_touch_layout(&mut self, ponko::ui::touch::TouchLayout)
-pub fn ponko::input::Input::touch_control_center(&self, &str) -> core::option::Option<glam::f32::vec2::Vec2>
-pub fn ponko::input::Input::touch_controls_shown(&self) -> bool
-pub fn ponko::input::Input::touch_device(&self) -> bool
-pub fn ponko::input::Input::touch_layout(&self) -> &ponko::ui::touch::TouchLayout
-pub fn ponko::input::Input::touches(&self) -> &[ponko::input::Touch]
 impl ponko::input::Input
 pub fn ponko::input::Input::gamepad_axis(&self, ponko::input::Gamepad, ponko::input::GamepadAxis) -> f32
 pub fn ponko::input::Input::gamepad_down(&self, ponko::input::Gamepad, ponko::input::GamepadButton) -> bool
@@ -6700,6 +6702,7 @@ pub struct ponko::perf::ScopeGuard
 impl core::ops::drop::Drop for ponko::perf::ScopeGuard
 pub fn ponko::perf::ScopeGuard::drop(&mut self)
 pub struct ponko::perf::ScopeReport
+pub ponko::perf::ScopeReport::allocs_per_frame: f32
 pub ponko::perf::ScopeReport::avg_ms: f32
 pub ponko::perf::ScopeReport::calls_per_frame: f32
 pub ponko::perf::ScopeReport::max_ms: f32
@@ -6783,6 +6786,7 @@ pub fn ponko::perf::alloc_counts() -> ponko::perf::AllocCounts
 pub fn ponko::perf::net_alloc_bytes() -> i64
 pub fn ponko::perf::note_allocation(usize)
 pub fn ponko::perf::scope_named(&str) -> &'static ponko::perf::ProfileScope
+pub fn ponko::perf::thread_alloc_counts() -> ponko::perf::AllocCounts
 pub mod ponko::prelude
 pub use ponko::prelude::Added
 pub use ponko::prelude::Changed
@@ -7468,6 +7472,7 @@ impl core::fmt::Debug for ponko::d3::AudioSource
 pub fn ponko::d3::AudioSource::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl ponko_ecs::bundle::Component for ponko::d3::AudioSource
 pub struct ponko::prelude::d3::Camera
+pub ponko::prelude::d3::Camera::debug_draw: core::option::Option<bool>
 pub ponko::prelude::d3::Camera::far: f32
 pub ponko::prelude::d3::Camera::fov_y: f32
 pub ponko::prelude::d3::Camera::layers: ponko::camera::RenderLayers
@@ -10420,6 +10425,7 @@ impl core::marker::Copy for ponko::render::CrowdInstance
 impl core::marker::StructuralPartialEq for ponko::render::CrowdInstance
 #[non_exhaustive] pub struct ponko::render::CrowdLevel
 pub ponko::render::CrowdLevel::camera: bool
+pub ponko::render::CrowdLevel::fade: f32
 pub ponko::render::CrowdLevel::influences: u8
 pub ponko::render::CrowdLevel::max_distance: f32
 pub ponko::render::CrowdLevel::mesh: ponko::render::Mesh
@@ -10428,6 +10434,7 @@ pub ponko::render::CrowdLevel::shadows: bool
 impl ponko::render::CrowdLevel
 pub fn ponko::render::CrowdLevel::new(ponko::render::Mesh, f32, f32) -> Self
 pub fn ponko::render::CrowdLevel::with_camera(self, bool) -> Self
+pub fn ponko::render::CrowdLevel::with_fade(self, f32) -> Self
 pub fn ponko::render::CrowdLevel::with_influences(self, u8) -> Self
 pub fn ponko::render::CrowdLevel::with_shadows(self, bool) -> Self
 impl core::clone::Clone for ponko::render::CrowdLevel
@@ -11707,6 +11714,7 @@ pub ponko::render::TargetCamera::target: ponko::render::RenderTarget
 impl ponko::render::TargetCamera
 pub fn ponko::render::TargetCamera::new(ponko::d3::Camera, ponko::render::RenderTarget) -> Self
 pub fn ponko::render::TargetCamera::reflection(ponko::d3::Camera, ponko::render::RenderTarget, f32) -> Self
+pub fn ponko::render::TargetCamera::with_debug_draw(self, bool) -> Self
 pub fn ponko::render::TargetCamera::with_particles(self, bool) -> Self
 impl core::clone::Clone for ponko::render::TargetCamera
 pub fn ponko::render::TargetCamera::clone(&self) -> Self

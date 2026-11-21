@@ -475,7 +475,10 @@ binding arrives:
 | `UiAccessAdapter::for_ns_view` | [Retained game UI](ui.md#the-screen-reader-adapter) | It needs a Rust `Ui`; the engine's own window gets the adapter, and `ponko_ui_access_*` give a snapshot for one of your own |
 | `Buoyancy::points` | [Water](water.md#floating-bodies) | Custom sample points, water density and the ripple switch aren't bound: C floats boxes and spheres (`ponko_ctx_set_buoyancy_box`, `_sphere`) in fresh water |
 | `NavObstacleShape` | [3D navigation meshes](navigation3d.md#obstacle-shapes) | Obstacles are unturned boxes: `ponko_ctx_set_nav_obstacle` and `ponko_ctx_set_nav_carve_obstacle` |
+| `NavCrowdStats` | [3D navigation meshes](navigation3d.md#counting-the-crowds-work) | The crowd's cost shows as the navigation step's time in the profiler |
+| `thread_alloc_counts` | [Performance and profiling](profiling.md#allocations-per-thread) | Scopes timed with `ponko_profile_begin`/`_end` count time only; the report's per-frame and per-system allocations cover the whole process |
 | `SkyShader` | [A sky of your own](3d.md#a-sky-of-your-own) | The built-in atmosphere or the flat sky (`PonkoSky`); sky shaders have no C binding yet |
+| `Input::arrange_touch_controls` | [Touch](touch.md#the-ready-made-arrange-screen) | Not bound yet: the screen builds on the player's layout and its edit mode, which are Rust-only too; a C or C++ game builds a screen of its own |
 | `Graphics::stream_instance_cell` | [Streaming instance cells](3d.md#streaming-instance-cells) | Build a cell's matrices on your own threads, then `ponko_ctx_add_instance_cell` (`ctx::add_instance_cell`) on the game's |
 | `InstanceCellData` | [Streaming instance cells](3d.md#streaming-instance-cells) | The same: matrices and colours go straight to `ponko_ctx_add_instance_cell` |
 | `GamepadBackend` | [Backends and tests](controllers.md#backends-and-tests) | Native games use the built-in gamepad backend |
@@ -495,6 +498,7 @@ binding arrives:
 | `Plugin::dependencies` | [Plugins for other crates](plugins.md#from-c-and-c) | C plugins (`ponko_game_plugin`) have no names or dependencies and are never duplicates |
 | `Game::debug_toggle` | [Plugins for other crates](plugins.md#debug-toggles) | Draw behind a flag of the game's own; `debug.draw` turns the engine's views on and off |
 | `Game::control_method` | [Plugins for other crates](plugins.md#control-methods) | The control endpoint's built-in methods only; a native game's tools read its reflected resources |
+| `CrowdLevel::with_fade` | [Crowds](crowds.md#levels-of-detail) | Not bound yet: C and C++ crowd levels switch at once (a fade in `PonkoCrowdLevel` would change its layout) |
 
 System phases, system ids, setup callbacks and plugins are not on this
 list. They have C and C++ calls, described in

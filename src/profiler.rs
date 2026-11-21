@@ -303,7 +303,7 @@ fn summarize(samples: &[FrameSample], sorted: &mut Vec<f32>) -> FrameStats {
         systems_ms: avg(|s| s.systems_ms),
         render_cpu_ms: avg(|s| s.render_ms - s.wait_ms),
         display_wait_ms: avg(|s| s.wait_ms),
-        gpu_ms: (gpu_n > 0).then(|| gpu_sum / gpu_n as f32),
+        gpu_ms: (gpu_n > 0).then_some(gpu_sum / gpu_n as f32),
     }
 }
 

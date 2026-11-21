@@ -223,9 +223,9 @@
 
 #define PONKO_PARTICLE_SETTINGS3D_EX_VERSION 1
 
-#define PONKO_CAMERA3D_EX_VERSION 1
+#define PONKO_CAMERA3D_EX_VERSION 2
 
-#define PONKO_TARGET_CAMERA_EX_VERSION 1
+#define PONKO_TARGET_CAMERA_EX_VERSION 2
 
 #define PONKO_PREDICTION_DEFAULT_CAPACITY 256
 
@@ -1425,6 +1425,12 @@ typedef enum PonkoEventTarget {
   PONKO_EVENT_TO_CLIENT = 1,
   PONKO_EVENT_TO_CLIENTS = 2,
 } PonkoEventTarget;
+
+typedef enum PonkoDebugDraw {
+  PONKO_DEBUG_DRAW_DEFAULT,
+  PONKO_DEBUG_DRAW_ON,
+  PONKO_DEBUG_DRAW_OFF,
+} PonkoDebugDraw;
 
 typedef enum PonkoCrashReportsMode {
   PONKO_CRASH_REPORTS_DEFAULT = 0,
@@ -3373,6 +3379,7 @@ typedef struct PonkoCamera3DEx {
   struct PonkoCamera3D camera;
   bool occlusion_culling;
   bool particles;
+  uint32_t debug_draw;
 } PonkoCamera3DEx;
 
 typedef struct PonkoTargetCameraEx {
@@ -3380,6 +3387,7 @@ typedef struct PonkoTargetCameraEx {
   uint32_t version;
   struct PonkoTargetCamera target_camera;
   bool particles;
+  uint32_t debug_draw;
 } PonkoTargetCameraEx;
 
 typedef bool (*PonkoPredictStepFn)(void *user,

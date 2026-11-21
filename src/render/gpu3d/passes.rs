@@ -474,6 +474,10 @@ features! {
     /// The view model's held items write their own motion vectors (with
     /// temporal antialiasing), after the color pass.
     VIEW_MODEL_MOTION = 44, "view model motion";
+    /// The view model's see-through held items use the stencil, and the
+    /// transparent pass is split off: they draw in a pass of their own
+    /// after it, which writes the stencil.
+    VIEW_MODEL_SEE_THROUGH = 45, "view model see-through";
 }
 
 impl Features {
@@ -486,6 +490,7 @@ impl Features {
         (Features::TARGET_CAMERAS, Features::VIEWS),
         (Features::PROBES, Features::VIEWS),
         (Features::TARGET_CUTOUTS, Features::TARGET_CAMERAS),
+        (Features::VIEW_MODEL_SEE_THROUGH, Features::SPLIT),
         (Features::TARGET_CUTOUTS, Features::MSAA),
         (Features::CUTOUTS, Features::MSAA),
         (Features::TAA, Features::VELOCITY),
@@ -1222,6 +1227,21 @@ pub(crate) const FRAME_PASSES: [Pass; 8] = [
                     u(SceneDepth, A::DepthRead),
                     u(SceneDepth, A::SampleMs).off(F::DEPTH_COPY),
                     u(SceneDepthCopy, A::SampleMs).on(F::DEPTH_COPY),
+                    u(SceneColor, A::ColorLoad).on(F::MSAA),
+                    u(TaaInput, A::Resolve).on(F::MSAA.with(F::TAA)),
+                    u(Hdr, A::Resolve).on(F::MSAA).off(F::TAA),
+                    u(TaaInput, A::ColorLoad).on(F::TAA).off(F::MSAA),
+                    u(Hdr, A::ColorLoad).off(F::MSAA.with(F::TAA)),
+                ],
+            ),
+            // Held see-through items with a stencil, which the read-only
+            // depth above can't write (see `view_model.rs`). They read no
+            // scene.
+            step(
+                "view model see-through",
+                on(F::VIEW_MODEL_SEE_THROUGH),
+                lit_models![
+                    u(SceneDepth, A::DepthLoad),
                     u(SceneColor, A::ColorLoad).on(F::MSAA),
                     u(TaaInput, A::Resolve).on(F::MSAA.with(F::TAA)),
                     u(Hdr, A::Resolve).on(F::MSAA).off(F::TAA),

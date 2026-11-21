@@ -712,7 +712,7 @@ impl Shared {
             },
             gpu: left.gpu.clone(),
             settings,
-            backtrace: "not kept for a crash that is not a panic".to_string(),
+            backtrace: self.paths.scrub(&native::describe_frames(left)),
             log: left
                 .output_kept
                 .then(|| output.map(|line| self.paths.scrub(line)).collect()),
@@ -786,6 +786,9 @@ pub(crate) struct Running {
     native: Option<native::Armed>,
     /// The settings the native crash's fixed part was last prepared with.
     native_settings: Settings,
+    /// When the loaded modules were last checked for the native crash's
+    /// frames.
+    modules_checked: Instant,
     gpu_noted: bool,
     vsync: bool,
 }
@@ -844,6 +847,7 @@ pub(crate) fn start(
         _logs: logs,
         native,
         native_settings: Settings::default(),
+        modules_checked: Instant::now(),
         gpu_noted: false,
         vsync,
     })
@@ -895,6 +899,11 @@ pub(crate) fn note_frame(ctx: &mut Ctx) {
         running.native_settings = settings;
         prepare_native(running);
     }
+    // A library loaded since (a driver, a plugin): its frames need its range.
+    if running.native.is_some() && running.modules_checked.elapsed().as_secs() >= 2 {
+        running.modules_checked = Instant::now();
+        native::refresh_modules(false);
+    }
 }
 
 /// Prepares the native crash's fixed part again, with the GPU and settings
@@ -905,6 +914,7 @@ fn prepare_native(running: &Running) {
         Err(_) => None,
     };
     native::prepare(&running.shared.native_fixed(gpu.as_ref(), &running.native_settings));
+    native::refresh_modules(false);
 }
 
 /// Keeps the GPU the renderer opened for a report, once: when the renderer
@@ -950,6 +960,7 @@ impl Running {
             _logs: None,
             native: None,
             native_settings: Settings::default(),
+            modules_checked: Instant::now(),
             gpu_noted: false,
             vsync,
         }

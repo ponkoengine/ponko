@@ -222,6 +222,8 @@ pub(crate) fn draw_skeletons_with(ctx: &mut Ctx, spread: Spread) {
             .par_iter_mut()
             .zip(d.items.par_chunks(per))
             .for_each(|(chunk, items)| {
+                // Counts this chunk's allocations on whichever thread draws it.
+                crate::profile_scope!("skeleton2d/draw_chunk");
                 chunk.clear();
                 let mut scratch = std::mem::take(&mut chunk.scratch);
                 for (e, t, style) in items {

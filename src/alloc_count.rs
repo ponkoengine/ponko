@@ -13,8 +13,14 @@
 //! threads count too, and a system that allocates inside `par_for_each` is
 //! charged for it. Tests that assert on them should not run next to other
 //! tests that allocate (give them a test file of their own).
+//!
+//! Each thread also keeps a count of its own ([`thread_alloc_counts`]), and
+//! a profiling scope counts the allocations made on its thread while it is
+//! open: what a piece of code allocates, without what a thread pool's
+//! workers allocate for themselves meanwhile.
 
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 
 use crate::scope::ACTIVE;
@@ -23,6 +29,13 @@ static COUNT: AtomicU64 = AtomicU64::new(0);
 static BYTES: AtomicU64 = AtomicU64::new(0);
 static FREED: AtomicU64 = AtomicU64::new(0);
 static SEEN: AtomicBool = AtomicBool::new(false);
+
+thread_local! {
+    /// This thread's allocations while profiling was on. A `const` cell of
+    /// plain numbers: no destructor to register and no lazy set-up, so the
+    /// allocator can touch it without allocating (or recursing into itself).
+    static THREAD: Cell<AllocCounts> = const { Cell::new(AllocCounts { count: 0, bytes: 0 }) };
+}
 
 /// Heap allocations made while profiling was on, from [`alloc_counts`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -52,6 +65,15 @@ fn note(bytes: usize) {
         }
         COUNT.fetch_add(1, Relaxed);
         BYTES.fetch_add(bytes as u64, Relaxed);
+        // `try_with`: never panic inside the allocator, even while a thread
+        // is being torn down.
+        let _ = THREAD.try_with(|t| {
+            let c = t.get();
+            t.set(AllocCounts {
+                count: c.count.wrapping_add(1),
+                bytes: c.bytes.wrapping_add(bytes as u64),
+            });
+        });
     }
 }
 
@@ -114,6 +136,27 @@ pub fn alloc_counts() -> AllocCounts {
         count: COUNT.load(Relaxed),
         bytes: BYTES.load(Relaxed),
     }
+}
+
+/// The allocations counted so far on the calling thread (while profiling was
+/// on): [`alloc_counts`] for one thread. Take two readings on the same thread
+/// and subtract to count what the code between them allocated there, without
+/// what other threads did meanwhile (a rayon worker that parks for the first
+/// time, an asset loader, the audio thread). Work the code hands to other
+/// threads isn't in it either: put a [`profile_scope!`](crate::profile_scope)
+/// inside that work, and the scope counts its allocations on whichever
+/// thread runs it ([`ScopeReport::allocs_per_frame`](crate::perf::ScopeReport::allocs_per_frame)).
+///
+/// All zero if [`CountingAllocator`] isn't installed and nothing calls
+/// [`note_allocation`]. It costs nothing while profiling is off.
+///
+/// ```
+/// let before = ponko::perf::thread_alloc_counts();
+/// let after = ponko::perf::thread_alloc_counts();
+/// assert_eq!(after.count - before.count, 0, "nothing ran in between");
+/// ```
+pub fn thread_alloc_counts() -> AllocCounts {
+    THREAD.try_with(Cell::get).unwrap_or_default()
 }
 
 /// Bytes allocated minus bytes freed, both counted while profiling was on
@@ -195,6 +238,32 @@ mod tests {
             "alloc, realloc and alloc_zeroed are counted"
         );
         assert!(after.bytes >= before.bytes + 64 + 128 + 64);
+    }
+
+    /// What one thread allocates shows in its own count and not in another
+    /// thread's, through the allocator itself (the path Miri checks). The
+    /// unit tests don't install the allocator globally, so only the calls
+    /// made here are counted, and the counts are exact.
+    #[test]
+    fn each_thread_counts_only_its_own_allocations() {
+        let layout = Layout::from_size_align(32, 8).unwrap();
+        let alloc_and_free = move || {
+            let a = CountingAllocator;
+            let before = thread_alloc_counts();
+            // SAFETY: a non-zero layout, freed once with the same layout.
+            unsafe { a.dealloc(a.alloc(layout), layout) };
+            let after = thread_alloc_counts();
+            (after.count - before.count, after.bytes - before.bytes)
+        };
+        crate::scope::enable();
+        let mine = thread_alloc_counts();
+        let other = std::thread::spawn(alloc_and_free).join().unwrap();
+        let untouched = thread_alloc_counts();
+        let own = alloc_and_free();
+        crate::scope::disable();
+        assert_eq!(other, (1, 32), "the other thread counts its allocation");
+        assert_eq!(untouched, mine, "and this thread doesn't");
+        assert_eq!(own, (1, 32));
     }
 
     #[test]

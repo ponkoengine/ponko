@@ -204,7 +204,7 @@ the game keeps their arrangement with its settings.
   action and clicks nothing under it. Where it is let go it stays,
   anchored to the nearest corner of the view. `edit_touch_controls(false)`
   ends it. A see-through screen with a "Done" button over the controls is
-  the usual way to show it.
+  the usual way to show it, or [the engine's own](#the-ready-made-arrange-screen).
 - **Sizing and opacity.** The player's arrangement is a `TouchLayout`:
   each control's place and size (by the action it drives), and the size
   and opacity of them all. A settings screen's sliders change it with
@@ -246,6 +246,56 @@ if let Err(e) = ctx.input.save_touch_layout(&mut ctx.storage) {
 The game's own placement stays the default under the player's: a control
 the player never moved follows the game, and a new set of controls keeps
 the places the player gave the actions it has.
+
+### The ready-made arrange screen
+
+Most games want the same screen for this, so the engine has one:
+`ctx.input.arrange_touch_controls()` opens it, from a settings page's "Arrange
+controls" button. It is built with the [retained UI](ui.md) over the edit
+mode and the player's `TouchLayout` above, and works with a finger and
+with the mouse:
+
+```rust
+# use ponko::prelude::*;
+# fn settings_page(ctx: &mut Ctx) {
+let arrange = ctx.ui.find("settings.arrange");
+while let Some(event) = ctx.ui.next_event() {
+    if arrange.is_some() && event.clicked() == arrange {
+        // The controls show (on a desktop too), with a small panel beside them.
+        ctx.input.arrange_touch_controls();
+    }
+}
+# }
+```
+
+- **Move** a control by dragging it; it stays where it is let go,
+  anchored to the nearest corner of the view.
+- **Resize** one by tapping or clicking it (it lights up) and pressing `-`
+  or `+`, 10 % a press, from half to twice its size. `Size` makes them all
+  bigger or smaller, `Opacity` fainter.
+- **Reset** puts every control back where the game puts it.
+- **Save** writes the arrangement to the player's storage
+  (`save_touch_layout`, so `restore_touch_layout` at setup finds it) and
+  closes the screen. **Cancel**, Escape, a gamepad's East button or the game
+  closing the screen put back the arrangement it had when it opened.
+
+The panel goes where it hides the fewest controls (the middle of the
+view, else its top, bottom or a side), steps aside while a control is
+dragged, and fits a phone held either way: it is 240 UI units tall and at
+most 360 wide. A press on it is the panel's, even over a control.
+However the screen closes, edit mode ends and `UiEvent::ScreenPopped` is
+queued with its root (`ctx.ui.find("touch.arrange")` while it is open). Its nodes
+are named `touch.arrange.<part>` (`title`, `note`, `size_label`,
+`opacity_label`, `reset`, `cancel`, `save`, ...): give them the game's own
+words with `ctx.ui.set_text` or [`set_text_key`](localization.md) after
+opening it. The engine reports no safe areas (a phone's notch or rounded
+corners) yet, so the panel keeps a 12 unit margin from the view's edges.
+
+The test that drives it with scripted fingers, as a phone would:
+
+```rust
+{{#include ../../tests/touch_arrange.rs:fingers}}
+```
 
 ## Touch screens on desktops
 
