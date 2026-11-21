@@ -10524,10 +10524,52 @@ public:
     }
     /// Thinks every `period` ticks.
     void set_period(std::uint32_t period) { detail::check(ponko_brain_set_period(raw_, period)); }
-    /// The key id of its action, 0 for none.
+    /// The key id of its action, 0 for none; with several at once, the first.
     std::uint64_t action() const { std::uint64_t k = 0; detail::check(ponko_brain_action(raw_, &k)); return k; }
-    /// Whether it is doing `action_key`.
-    bool doing(std::uint64_t action_key) const { return action() == action_key; }
+    /// The key id of its `index`th action in tree order, 0 past the last:
+    /// a `parallel` node runs several at once (move and aim).
+    std::uint64_t action_at(std::size_t index) const {
+        std::uint64_t k = 0;
+        detail::check(ponko_brain_action_at(raw_, index, &k));
+        return k;
+    }
+    /// Whether it is doing `action_key` (any of its actions).
+    bool doing(std::uint64_t action_key) const {
+        for (std::size_t i = 0;; ++i) {
+            const std::uint64_t k = action_at(i);
+            if (k == 0) return false;
+            if (k == action_key) return true;
+        }
+    }
+    /// Whether running action `action_key` started at the last think;
+    /// false if it isn't doing it.
+    bool started_action(std::uint64_t action_key) const {
+        bool s = false;
+        const auto st = ponko_brain_action_started(raw_, action_key, &s);
+        if (st == PONKO_NOT_FOUND) return false;
+        detail::check(st);
+        return s;
+    }
+    /// The number parameter `key` of running action `action_key`, if it has one.
+    std::optional<float> action_param(std::uint64_t action_key, std::uint64_t key) const {
+        float v = 0;
+        const auto st = ponko_brain_action_param_num(raw_, action_key, key, &v);
+        if (st == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(st);
+        return v;
+    }
+    /// Running action `action_key` is done and worked; its other actions
+    /// carry on. Nothing if it isn't doing it.
+    void succeed_action(std::uint64_t action_key) {
+        const auto st = ponko_brain_finish_action(raw_, action_key, PONKO_AI_SUCCESS);
+        if (st != PONKO_NOT_FOUND) detail::check(st);
+    }
+    /// Running action `action_key` is done and failed; its other actions
+    /// carry on. Nothing if it isn't doing it.
+    void fail_action(std::uint64_t action_key) {
+        const auto st = ponko_brain_finish_action(raw_, action_key, PONKO_AI_FAILURE);
+        if (st != PONKO_NOT_FOUND) detail::check(st);
+    }
     /// Whether its action started at the last think.
     bool started() const { bool s = false; detail::check(ponko_brain_started(raw_, &s)); return s; }
     /// The current action's number parameter `key`, if it has one.
@@ -10607,6 +10649,115 @@ public:
 inline float curve(PonkoAiCurve c, float x, float param = 0) { return ponko_ai_curve(c, param, x); }
 /// Combines scores into one (the product, made up for the number of factors).
 inline float combine(const std::vector<float>& scores) { return ponko_ai_combine(scores.data(), scores.size()); }
+
+// World brains: Brain and Blackboard components on entities, run by
+// ai::think(ctx) from a sim system, woken by signals (Rust `ai::think`,
+// `Signal`). Senses, think, act: the same three steps as in Rust.
+
+/// The `target` of a signal for every brain that waits for it.
+inline constexpr entity every_brain = PONKO_AI_EVERY_BRAIN;
+/// Loads a tree from a JSON file in `assets/` into the world, under its
+/// path, with the files its subtrees name; hot reload swaps it while the
+/// game runs. Throws ponko::error for a missing file or a bad tree.
+inline void load_tree(ctx& c, const char* path) { detail::check(ponko_ctx_ai_load_tree(c.raw(), path)); }
+/// Adds a compiled tree to the world under `name` (or replaces it).
+inline void add_tree(ctx& c, const char* name, const behavior_tree& tree) {
+    detail::check(ponko_ctx_ai_add_tree(c.raw(), name, tree.raw()));
+}
+/// Gives `e` a brain running the world's tree `tree`, thinking every
+/// `period` ticks, and an empty blackboard if it has none.
+inline void add_brain(ctx& c, entity e, const char* tree, std::uint32_t period = 1) {
+    detail::check(ponko_ctx_ai_add_brain(c.raw(), e, tree, period));
+}
+/// Runs every due world brain (Rust `ai::think`): call it from a sim
+/// system after the senses and signals, before the actions.
+inline void think(ctx& c) { detail::check(ponko_ctx_ai_think(c.raw())); }
+/// Sends signal `key` to the brain of `target`, or to every brain with
+/// every_brain: a `wait_for` node waiting for it succeeds at once,
+/// whatever the brain's period. Send it before think().
+inline void signal(ctx& c, entity target, std::uint64_t key) {
+    detail::check(ponko_ctx_ai_signal(c.raw(), target, key));
+}
+/// signal() carrying a number, which `"store": "key"` writes to the blackboard.
+inline void signal_num(ctx& c, entity target, std::uint64_t key, float value) {
+    detail::check(ponko_ctx_ai_signal_num(c.raw(), target, key, value));
+}
+/// signal() carrying an entity (who shouted).
+inline void signal_entity(ctx& c, entity target, std::uint64_t key, entity value) {
+    detail::check(ponko_ctx_ai_signal_entity(c.raw(), target, key, value));
+}
+/// signal() carrying a 2D point.
+inline void signal_vec2(ctx& c, entity target, std::uint64_t key, vec2 value) {
+    detail::check(ponko_ctx_ai_signal_vec2(c.raw(), target, key, value));
+}
+/// signal() carrying a 3D point.
+inline void signal_vec3(ctx& c, entity target, std::uint64_t key, vec3 value) {
+    detail::check(ponko_ctx_ai_signal_vec3(c.raw(), target, key, value));
+}
+/// The key id of the `index`th action of the brain of `e`, 0 past the last.
+inline std::uint64_t action(ctx& c, entity e, std::size_t index = 0) {
+    std::uint64_t k = 0;
+    detail::check(ponko_ctx_ai_action(c.raw(), e, index, &k));
+    return k;
+}
+/// Whether the brain of `e` is doing `action_key`.
+inline bool doing(ctx& c, entity e, std::uint64_t action_key) {
+    for (std::size_t i = 0;; ++i) {
+        const std::uint64_t k = action(c, e, i);
+        if (k == 0) return false;
+        if (k == action_key) return true;
+    }
+}
+/// Whether action `action_key` (0: the first) of the brain of `e` started
+/// at this tick's think; false if it isn't doing it.
+inline bool started(ctx& c, entity e, std::uint64_t action_key = 0) {
+    bool s = false;
+    const auto st = ponko_ctx_ai_started(c.raw(), e, action_key, &s);
+    if (st == PONKO_NOT_FOUND) return false;
+    detail::check(st);
+    return s;
+}
+/// Reports action `action_key` (0: the first) of the brain of `e` done
+/// (success or failure); its other actions carry on. Throws if it isn't
+/// doing it.
+inline void finish(ctx& c, entity e, std::uint64_t action_key, status result) {
+    detail::check(ponko_ctx_ai_finish(c.raw(), e, action_key, static_cast<PonkoAiStatus>(result)));
+}
+/// The number parameter `key` of action `action_key` (0: the first) of
+/// the brain of `e`, if it has one.
+inline std::optional<float> param(ctx& c, entity e, std::uint64_t action_key, std::uint64_t key) {
+    float v = 0;
+    const auto st = ponko_ctx_ai_param_num(c.raw(), e, action_key, key, &v);
+    if (st == PONKO_NOT_FOUND) return std::nullopt;
+    detail::check(st);
+    return v;
+}
+/// Blackboard writes for the brain of `e` (its senses).
+///@{
+inline void set_num(ctx& c, entity e, std::uint64_t key, float v) { detail::check(ponko_ctx_ai_set_num(c.raw(), e, key, v)); }
+inline void set_flag(ctx& c, entity e, std::uint64_t key, bool v) { detail::check(ponko_ctx_ai_set_flag(c.raw(), e, key, v)); }
+inline void set_vec2(ctx& c, entity e, std::uint64_t key, vec2 v) { detail::check(ponko_ctx_ai_set_vec2(c.raw(), e, key, v)); }
+inline void set_vec3(ctx& c, entity e, std::uint64_t key, vec3 v) { detail::check(ponko_ctx_ai_set_vec3(c.raw(), e, key, v)); }
+inline void set_entity(ctx& c, entity e, std::uint64_t key, entity v) {
+    detail::check(ponko_ctx_ai_set_entity(c.raw(), e, key, v));
+}
+///@}
+/// A number on the blackboard of `e`, if it holds one.
+inline std::optional<float> num(ctx& c, entity e, std::uint64_t key) {
+    float v = 0;
+    const auto st = ponko_ctx_ai_num(c.raw(), e, key, &v);
+    if (st == PONKO_NOT_FOUND) return std::nullopt;
+    detail::check(st);
+    return v;
+}
+/// A flag on the blackboard of `e`, if it holds one.
+inline std::optional<bool> flag(ctx& c, entity e, std::uint64_t key) {
+    bool v = false;
+    const auto st = ponko_ctx_ai_flag(c.raw(), e, key, &v);
+    if (st == PONKO_NOT_FOUND) return std::nullopt;
+    detail::check(st);
+    return v;
+}
 } // namespace ai
 } // namespace ponko
 
