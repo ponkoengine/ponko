@@ -498,7 +498,7 @@ mod collision_events {
     ) -> PonkoStatus {
         boundary(|| {
             if out_data.is_null() || out_count.is_null() {
-                return Err(invalid("output is null"));
+                return Err(crate::invalid("output is null"));
             }
             // SAFETY: forwarded caller contract; both event types have
             // PonkoCollision's layout (asserted above), and the slice lives
@@ -532,7 +532,7 @@ mod collision_events {
         _: *mut usize,
     ) -> PonkoStatus {
         crate::boundary(|| {
-            Err(invalid(
+            Err(crate::invalid(
                 "ponko_ffi was built without the `physics` and `physics3d` features",
             ))
         })
