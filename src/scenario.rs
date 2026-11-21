@@ -22,6 +22,7 @@ use crate::input::TouchPhase;
 use crate::input::{Key, MouseButton};
 use crate::reflect::WorldReflect;
 use crate::time::Time;
+use crate::window::SafeInsets;
 use ponko_ecs::World;
 
 mod record;
@@ -279,6 +280,8 @@ pub struct InputScenario {
     ui: Vec<(u64, usize, UiStep)>,
     /// IME composition steps, sorted like `inputs`.
     ime: Vec<(u64, usize, ImeEvent)>,
+    /// Safe area insets fed to the window, sorted like `inputs`.
+    safe: Vec<(u64, usize, SafeInsets)>,
     /// How many steps were added; the next step's number.
     steps: usize,
     duration: Option<u64>,
@@ -461,6 +464,29 @@ impl InputScenario {
         self
     }
 
+    /// Feeds the window's safe area insets on tick `tick`, as a phone
+    /// reports them ([`WindowService::feed_safe_insets`](crate::window::WindowService::feed_safe_insets)),
+    /// before that tick's simulation systems run: a layout for a notched
+    /// phone is checked without a device. Like the window's own, the UI
+    /// lays out with them in the frame of tick `tick` (with
+    /// [`headless_frames`](crate::game::Game::headless_frames)); the insets
+    /// stay until another step changes them.
+    /// ```
+    /// use ponko::scenario::{InputScenario, ScenarioCheck};
+    /// use ponko::window::SafeInsets;
+    /// // A phone held sideways: the notch on the left, the home bar below.
+    /// let scenario = InputScenario::new()
+    ///     .safe_insets(0, SafeInsets::new(0.0, 0.0, 21.0, 47.0))
+    ///     .expect(1, ScenarioCheck::ui("hud.score").exists(true));
+    /// assert_eq!(scenario.step_count(), 2);
+    /// ```
+    pub fn safe_insets(mut self, tick: u64, insets: SafeInsets) -> Self {
+        let index = self.safe.partition_point(|&(t, ..)| t <= tick);
+        self.safe.insert(index, (tick, self.steps, insets));
+        self.steps += 1;
+        self
+    }
+
     fn push_ui(&mut self, tick: u64, step: UiStep) {
         let index = self.ui.partition_point(|&(t, ..)| t <= tick);
         self.ui.insert(index, (tick, self.steps, step));
@@ -526,10 +552,12 @@ impl InputScenario {
             let last_check = self.checks.last().map(|s| s.0);
             let last_ui = self.ui.last().map(|s| s.0);
             let last_ime = self.ime.last().map(|s| s.0);
+            let last_safe = self.safe.last().map(|s| s.0);
             last_input
                 .max(last_check)
                 .max(last_ui)
                 .max(last_ime)
+                .max(last_safe)
                 .map_or(0, |t| t.saturating_add(1))
         })
     }
@@ -563,6 +591,8 @@ impl InputScenario {
     /// IME steps ([`ime`](Self::ime)) are `ime_enabled`, `ime_preedit`
     /// (`text`, optional `cursor` as `[start, end]` bytes), `ime_commit`
     /// (`text`) and `ime_disabled`.
+    /// A safe area step ([`safe_insets`](Self::safe_insets)) is `safe_insets`
+    /// (`top`, `right`, `bottom`, `left`, logical pixels; one left out is 0).
     /// Check steps are `expect_action` (`action` and any of `pressed`, `down`,
     /// `released`), `expect_resource` (`resource`, `pointer`, `equals`),
     /// `expect_count` (`component`, `equals`) and `expect_ui` (`node` and any
@@ -626,6 +656,7 @@ impl InputScenario {
                 Step::Input(event) => scenario = scenario.at(tick, event),
                 Step::Ui(step) => scenario.push_ui(tick, step),
                 Step::Ime(event) => scenario = scenario.ime(tick, event),
+                Step::Safe(insets) => scenario = scenario.safe_insets(tick, insets),
                 Step::Check(check) => {
                     if check.ui_is_empty() {
                         return Err(ScenarioError(format!(
@@ -681,6 +712,11 @@ impl InputScenario {
             self.ime
                 .iter()
                 .map(|(tick, n, event)| (*n, StepWire::from_ime(*tick, event))),
+        );
+        steps.extend(
+            self.safe
+                .iter()
+                .map(|(tick, n, insets)| (*n, StepWire::from_safe(*tick, *insets))),
         );
         steps.sort_by_key(|s| s.0);
         let file = FileWire {
@@ -835,6 +871,7 @@ pub(crate) struct ScenarioRun {
     next_check: usize,
     next_ui: usize,
     next_ime: usize,
+    next_safe: usize,
     /// A UI step that could not be done; reported when its tick ends.
     ui_failure: Option<(u64, usize, String, String)>,
     /// The control connection that owns it, if it's bound to one.
@@ -937,6 +974,7 @@ impl crate::input::Input {
             next_check: 0,
             next_ui: 0,
             next_ime: 0,
+            next_safe: 0,
             ui_failure: None,
             owner: origin.owner,
             tool: origin.tool,
@@ -1092,6 +1130,14 @@ impl Ctx {
             }
             self.input.feed_ime(event.clone());
             run.next_ime += 1;
+            fed += 1;
+        }
+        while let Some(&(tick, _, insets)) = run.scenario.safe.get(run.next_safe) {
+            if tick > rel {
+                break;
+            }
+            self.window.feed_safe_insets(insets);
+            run.next_safe += 1;
             fed += 1;
         }
         // One UI step a frame: the UI takes one click per frame.
@@ -1459,6 +1505,7 @@ enum Step {
     Input(InputEvent),
     Ui(UiStep),
     Ime(ImeEvent),
+    Safe(SafeInsets),
     Check(ScenarioCheck),
 }
 
@@ -1584,6 +1631,17 @@ enum StepWire {
     ImeDisabled {
         tick: u64,
     },
+    SafeInsets {
+        tick: u64,
+        #[serde(default)]
+        top: f32,
+        #[serde(default)]
+        right: f32,
+        #[serde(default)]
+        bottom: f32,
+        #[serde(default)]
+        left: f32,
+    },
     ExpectUi {
         tick: u64,
         node: String,
@@ -1622,6 +1680,7 @@ impl StepWire {
             | Self::ImePreedit { tick, .. }
             | Self::ImeCommit { tick, .. }
             | Self::ImeDisabled { tick }
+            | Self::SafeInsets { tick, .. }
             | Self::ExpectUi { tick, .. } => *tick,
         }
     }
@@ -1686,6 +1745,13 @@ impl StepWire {
             }),
             Self::ImeCommit { text, .. } => Step::Ime(ImeEvent::Commit(text)),
             Self::ImeDisabled { .. } => Step::Ime(ImeEvent::Disabled),
+            Self::SafeInsets {
+                top,
+                right,
+                bottom,
+                left,
+                ..
+            } => Step::Safe(SafeInsets::new(top, right, bottom, left)),
             Self::ExpectUi {
                 node,
                 exists,
@@ -1792,6 +1858,16 @@ impl StepWire {
         match step.clone() {
             UiStep::Click(node) => Self::UiClick { tick, node },
             UiStep::Type(node, text) => Self::UiType { tick, node, text },
+        }
+    }
+
+    fn from_safe(tick: u64, insets: SafeInsets) -> Self {
+        Self::SafeInsets {
+            tick,
+            top: insets.top,
+            right: insets.right,
+            bottom: insets.bottom,
+            left: insets.left,
         }
     }
 

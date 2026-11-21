@@ -2406,6 +2406,89 @@ static void headless_frames_ui(void) {
     CHECK(ponko_game_headless_frames(NULL, true) == PONKO_INVALID_ARGUMENT);
 }
 
+/* The window's safe area: fed by hand and by a scenario step, and a HUD root laid out inside it. */
+typedef struct SafeSeen {
+    PonkoRect area[6], hud[6], backdrop[6];
+    int frames;
+} SafeSeen;
+static void safe_area_setup(PonkoCtx* ctx, void* user) {
+    (void)user;
+    PonkoUiLayout fill = ponko_ui_layout_fill();
+    uint64_t backdrop = 0, hud = 0;
+    CHECK(ponko_ctx_ui_add_panel(ctx, PONKO_UI_SCREEN, PONKO_UI_NONE, &fill, &backdrop) == PONKO_OK);
+    CHECK(ponko_ctx_ui_add_panel(ctx, PONKO_UI_SCREEN, PONKO_UI_NONE, &fill, &hud) == PONKO_OK);
+    CHECK(ponko_ctx_ui_set_name(ctx, PONKO_UI_SCREEN, backdrop, "backdrop") == PONKO_OK);
+    CHECK(ponko_ctx_ui_set_name(ctx, PONKO_UI_SCREEN, hud, "hud") == PONKO_OK);
+    bool on = true;
+    CHECK(ponko_ctx_ui_inside_safe_area(ctx, PONKO_UI_SCREEN, hud, &on) == PONKO_OK && !on);
+    CHECK(ponko_ctx_ui_set_inside_safe_area(ctx, PONKO_UI_SCREEN, hud, true) == PONKO_OK);
+    CHECK(ponko_ctx_ui_inside_safe_area(ctx, PONKO_UI_SCREEN, hud, &on) == PONKO_OK && on);
+    CHECK(ponko_ctx_ui_set_inside_safe_area(ctx, PONKO_UI_SCREEN, 9999, true) == PONKO_NOT_FOUND);
+    CHECK(ponko_ctx_ui_show_hud(ctx, PONKO_UI_SCREEN, backdrop) == PONKO_OK);
+    CHECK(ponko_ctx_ui_show_hud(ctx, PONKO_UI_SCREEN, hud) == PONKO_OK);
+}
+static void safe_area_frame(PonkoCtx* ctx, void* user) {
+    SafeSeen* seen = user;
+    uint64_t hud = PONKO_UI_NONE, backdrop = PONKO_UI_NONE;
+    CHECK(seen->frames < 6);
+    CHECK(ponko_ctx_window_safe_area(ctx, &seen->area[seen->frames]) == PONKO_OK);
+    CHECK(ponko_ctx_ui_find(ctx, PONKO_UI_SCREEN, "hud", &hud) == PONKO_OK);
+    CHECK(ponko_ctx_ui_find(ctx, PONKO_UI_SCREEN, "backdrop", &backdrop) == PONKO_OK);
+    CHECK(ponko_ctx_ui_rect(ctx, PONKO_UI_SCREEN, hud, &seen->hud[seen->frames]) == PONKO_OK);
+    CHECK(ponko_ctx_ui_rect(ctx, PONKO_UI_SCREEN, backdrop, &seen->backdrop[seen->frames]) == PONKO_OK);
+    ++seen->frames;
+}
+static bool rect_is(PonkoRect r, float x0, float y0, float x1, float y1) {
+    return r.min.x == x0 && r.min.y == y0 && r.max.x == x1 && r.max.y == y1;
+}
+static void safe_area_by_hand(PonkoCtx* ctx, void* user);
+static void safe_area_c(void) {
+    PonkoSafeInsets phone = {0, 0, 21, 47}, turned = {0, 47, 21, 0}, got;
+    PonkoInputScenario* s = ponko_input_scenario_new();
+    CHECK(ponko_input_scenario_safe_insets(s, 1, phone) == PONKO_OK);
+    CHECK(ponko_input_scenario_safe_insets(s, 3, turned) == PONKO_OK);
+    CHECK(ponko_input_scenario_safe_insets(NULL, 3, turned) == PONKO_INVALID_ARGUMENT);
+    SafeSeen seen = {0};
+    PonkoGame* game = ponko_game_new("c notch", 844, 390);
+    CHECK(ponko_game_headless_frames(game, true) == PONKO_OK);
+    CHECK(ponko_game_system(game, "frame", safe_area_frame, &seen) == PONKO_OK);
+    CHECK(ponko_game_input_scenario(game, s) == PONKO_OK);
+    ponko_input_scenario_free(s);
+    PonkoWorld* w = NULL;
+    CHECK(ponko_game_run_headless(game, 5, safe_area_setup, NULL, &w) == PONKO_OK);
+    PonkoScenarioReport report;
+    CHECK(ponko_world_scenario_report(w, &report) == PONKO_OK);
+    CHECK(report.status == PONKO_SCENARIO_PASSED && report.inputs_applied == 2);
+    CHECK(ponko_world_free(w) == PONKO_OK);
+    CHECK(seen.frames == 5);
+    CHECK(rect_is(seen.area[0], 0, 0, 844, 390));
+    for (int i = 1; i < 3; ++i) CHECK(rect_is(seen.area[i], 47, 0, 844, 369));
+    for (int i = 3; i < 5; ++i) CHECK(rect_is(seen.area[i], 0, 0, 797, 369));
+    for (int i = 0; i < 5; ++i) {
+        CHECK(rect_is(seen.hud[i], seen.area[i].min.x, seen.area[i].min.y, seen.area[i].max.x, seen.area[i].max.y));
+        CHECK(rect_is(seen.backdrop[i], 0, 0, 844, 390)); /* reaches under the notch */
+    }
+
+    /* By hand: fed, read back, and a negative inset counts as 0. */
+    game = ponko_game_new("c notch by hand", 844, 390);
+    CHECK(ponko_game_run_headless(game, 0, safe_area_by_hand, NULL, &w) == PONKO_OK);
+    CHECK(ponko_world_free(w) == PONKO_OK);
+    CHECK(ponko_ctx_window_safe_area(NULL, &seen.area[0]) == PONKO_INVALID_ARGUMENT);
+    CHECK(ponko_ctx_window_safe_insets(NULL, &got) == PONKO_INVALID_ARGUMENT);
+    CHECK(ponko_ctx_window_feed_safe_insets(NULL, phone) == PONKO_INVALID_ARGUMENT);
+}
+static void safe_area_by_hand(PonkoCtx* ctx, void* user) {
+    (void)user;
+    PonkoRect area;
+    PonkoSafeInsets got, phone = {-5, 0, 21, 47};
+    CHECK(ponko_ctx_window_safe_area(ctx, NULL) == PONKO_INVALID_ARGUMENT);
+    CHECK(ponko_ctx_window_safe_area(ctx, &area) == PONKO_OK && rect_is(area, 0, 0, 844, 390));
+    CHECK(ponko_ctx_window_feed_safe_insets(ctx, phone) == PONKO_OK);
+    CHECK(ponko_ctx_window_safe_insets(ctx, &got) == PONKO_OK);
+    CHECK(got.top == 0 && got.right == 0 && got.bottom == 21 && got.left == 47);
+    CHECK(ponko_ctx_window_safe_area(ctx, &area) == PONKO_OK && rect_is(area, 47, 0, 844, 369));
+}
+
 /* A menu that opens on its Play button, a HUD that Escape leaves up, and a
    glTF file made solid in one call. */
 static void focus_and_hud_setup(PonkoCtx* ctx, void* user) {
@@ -3781,6 +3864,7 @@ int main(void) {
     wide_queries();
     native_coverage();
     headless_frames_ui();
+    safe_area_c();
     focus_huds_and_collision_files();
     debug_drawing();
     descriptors_retargeting_and_prediction();
