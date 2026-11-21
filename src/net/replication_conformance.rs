@@ -34,6 +34,7 @@
 //! | A packet that acknowledgements of later packets skip is resent at once, a round trip after the next packet, not after the timeout | `a_packet_that_later_acknowledgements_skip_is_resent_at_once` |
 //! | On a lossy link lost changes arrive sooner for about the same bytes; on one that reorders, a learned tolerance keeps late packets from being resent | `lost_changes_arrive_sooner_on_a_lossy_link_for_the_same_bytes` |
 //! | While nothing is acknowledged each resend waits twice as long as the one before, up to 4 s; the first acknowledgement sends everything again at once | `resends_back_off_while_nothing_is_acknowledged` |
+//! | The resend stats count early and timeout resends, the late packets resent for nothing, the reordering tolerated and the timeout now, backed off and back | `resend_stats_say_why_records_went_again`, `resend_stats_count_late_packets_and_the_reordering_learned`, `resend_stats_show_the_timeout_backing_off_and_coming_back` |
 //!
 //! Over every transport the message protocol lists:
 //!
@@ -41,6 +42,7 @@
 //! |---|---|
 //! | Scripted (loss, jitter, reordering, duplication) | every test above |
 //! | Loopback (`loopback_lossy`) | `replicates_over_the_lossy_loopback` |
+//! | Loopback that loses and reorders (`loopback_link`) | `replicates_over_a_loopback_that_loses_and_reorders` |
 //! | UDP, and WebSocket (what browsers use; a native client here) | `replicates_over_udp_and_websocket` |
 //! | Steam relay (fake Steam API, `--features steam`) | `replicates_over_the_steam_relay` in `net/steam_messages.rs` |
 //!
@@ -62,7 +64,7 @@ use crate::error::ErrorKind;
 use crate::events::Events;
 use crate::net::{
     InterestConfig, InterestTier, Interpolate, MAX_RAW_EVENT_BYTES, MessageEvent, NetEvent, NetMessages, PeerId,
-    RawEvent, Replica, Replicate, Replicated, Replication, ReplicationRole,
+    RawEvent, Replica, Replicate, Replicated, Replication, ReplicationRole, ResendStats,
 };
 
 pub(super) const HZ: f64 = 60.0;
@@ -935,6 +937,17 @@ fn replicates_over_the_lossy_loopback() {
 }
 
 #[test]
+fn replicates_over_a_loopback_that_loses_and_reorders() {
+    let link = crate::net::LoopbackLink::new()
+        .loss(0.05)
+        .delay(Duration::from_millis(17))
+        .jitter(Duration::from_millis(50))
+        .seed(1);
+    let nets = NetMessages::loopback_link(3, link);
+    exercise(Session::over(nets, declarations, false), 400, 240);
+}
+
+#[test]
 fn replicates_over_udp_and_websocket() {
     let host = NetMessages::host("127.0.0.1:0", 2)
         .unwrap()
@@ -1161,8 +1174,8 @@ const TIMEOUT_ONLY: ResendRules = ResendRules {
 /// Five of 20 entities change while the link (three ticks each way, up to
 /// one more of jitter, packets in order) drops everything for one tick;
 /// returns how many ticks after the change the five went again, the round
-/// trip and the resend timeout then.
-fn one_lost_packet(rules: ResendRules) -> (u64, f32, u32) {
+/// trip, the resend timeout then, and the server's resend stats after.
+fn one_lost_packet(rules: ResendRules) -> (u64, f32, u32, ResendStats) {
     let mut s = Session::scripted(1, declarations, |n| {
         n.delay = 3;
         n.jitter = 1;
@@ -1183,6 +1196,12 @@ fn one_lost_packet(rules: ResendRules) -> (u64, f32, u32) {
         }
     });
     let start = s.sides[0].rep.peer_stats(peer).unwrap();
+    let quiet = s.sides[0].rep.resend_stats(peer).unwrap();
+    assert_eq!(
+        (quiet.early_resends, quiet.timeout_resends),
+        (0, 0),
+        "nothing was resent on a link that lost nothing"
+    );
     // A tick's packets leave at the next tick's poll: lose those.
     s.net.as_ref().unwrap().lock().unwrap().cut = true;
     s.step(|_, _| {});
@@ -1198,12 +1217,13 @@ fn one_lost_packet(rules: ResendRules) -> (u64, f32, u32) {
     }
     s.run(30, |_, _| {});
     assert_converged(&mut s, |_, _, _| true);
-    (resent.expect("resent"), rtt, timeout)
+    let stats = s.sides[0].rep.resend_stats(peer).unwrap();
+    (resent.expect("resent"), rtt, timeout, stats)
 }
 
 #[test]
 fn a_packet_that_later_acknowledgements_skip_is_resent_at_once() {
-    let (resent, rtt, timeout) = one_lost_packet(ResendRules::default());
+    let (resent, rtt, timeout, _) = one_lost_packet(ResendRules::default());
     // The next packet left a tick after the lost one: its acknowledgement,
     // a round trip later, skips the lost one, which goes again at once.
     assert!(
@@ -1215,9 +1235,22 @@ fn a_packet_that_later_acknowledgements_skip_is_resent_at_once() {
         "{resent} ticks, before the {timeout}-tick timeout"
     );
     // Negative control: on the timeout only, it waits the whole timeout.
-    let (old, _, timeout) = one_lost_packet(TIMEOUT_ONLY);
+    let (old, _, timeout, _) = one_lost_packet(TIMEOUT_ONLY);
     assert_eq!(old, u64::from(timeout), "the old rule waits the {timeout}-tick timeout");
     assert!(resent < old, "{resent} vs {old} ticks");
+}
+
+#[test]
+fn resend_stats_say_why_records_went_again() {
+    // The five records of the lost packet went again early, once each.
+    let (_, _, timeout, stats) = one_lost_packet(ResendRules::default());
+    assert_eq!((stats.early_resends, stats.timeout_resends), (5, 0), "{stats:?}");
+    assert_eq!(stats.late_acks, 0, "the packet was lost, not late: {stats:?}");
+    assert_eq!(stats.backoff, 0, "the client acknowledges: {stats:?}");
+    assert_eq!(stats.timeout_ticks, timeout, "the timeout now: {stats:?}");
+    // Negative control: on the timeout only, they went on the timeout.
+    let (_, _, _, old) = one_lost_packet(TIMEOUT_ONLY);
+    assert_eq!((old.early_resends, old.timeout_resends), (0, 5), "{old:?}");
 }
 
 /// What a run of [`lossy_staleness`] measured.
@@ -1232,6 +1265,8 @@ struct Staleness {
     most: u64,
     /// The server's bytes per second to the client while changes went.
     rate: f64,
+    /// How the server resent, at the end.
+    resends: ResendStats,
 }
 
 /// 100 counters, each changing one tick in 20, for 20 seconds over a link
@@ -1299,6 +1334,7 @@ fn lossy_staleness(rules: ResendRules, jitter: u64, loss: u64) -> Staleness {
         p99: ages[ages.len() * 99 / 100],
         most: *ages.last().unwrap(),
         rate,
+        resends: s.sides[0].rep.resend_stats(peer).unwrap(),
     }
 }
 
@@ -1337,6 +1373,33 @@ fn lost_changes_arrive_sooner_on_a_lossy_link_for_the_same_bytes() {
     assert!(eager.tail < after.tail, "{eager:?} vs {after:?}");
 }
 
+#[test]
+fn resend_stats_count_late_packets_and_the_reordering_learned() {
+    // 10% loss each way, up to three ticks of jitter: packets overtake.
+    let after = lossy_staleness(ResendRules::default(), 3, 100).resends;
+    assert!(after.early_resends > 0 && after.timeout_resends > 0, "{after:?}");
+    assert!(after.late_acks > 0, "some packets called lost were late: {after:?}");
+    assert!((1..=6).contains(&after.reorder_ticks), "{after:?}");
+    // Negative control: without the tolerance, many more were resent for
+    // nothing, and no reordering is tolerated.
+    let eager = lossy_staleness(
+        ResendRules {
+            reorder: false,
+            ..ResendRules::default()
+        },
+        3,
+        100,
+    )
+    .resends;
+    assert_eq!(eager.reorder_ticks, 0, "{eager:?}");
+    assert!(eager.late_acks > after.late_acks * 2, "{eager:?} vs {after:?}");
+    assert!(eager.early_resends > after.early_resends, "{eager:?} vs {after:?}");
+    // On the timeout only, nothing goes early.
+    let old = lossy_staleness(TIMEOUT_ONLY, 3, 100).resends;
+    assert_eq!((old.early_resends, old.late_acks), (0, 0), "{old:?}");
+    assert!(old.timeout_resends > after.timeout_resends, "{old:?} vs {after:?}");
+}
+
 /// What the server sent over a cut link, by [`cut_link`].
 #[derive(Debug)]
 struct Outage {
@@ -1349,6 +1412,9 @@ struct Outage {
     rate: f64,
     /// Ticks from the link coming back until the client showed everything.
     recovery: u64,
+    /// How the server resent: at the end of the outage, and once caught up.
+    cut: ResendStats,
+    back: ResendStats,
 }
 
 /// Five of 20 entities change and one dies as the link (three ticks each
@@ -1384,6 +1450,7 @@ fn cut_link(rules: ResendRules, ticks: u64) -> Outage {
     let records = last.records_sent - before.records_sent;
     let destroys = last.destroys_sent - before.destroys_sent;
     let rate = (last.bytes_sent - before.bytes_sent) as f64 / (ticks as f64 / HZ);
+    let cut = s.sides[0].rep.resend_stats(peer).unwrap();
     s.net.as_ref().unwrap().lock().unwrap().cut = false;
     let mut recovery = 0;
     loop {
@@ -1401,6 +1468,7 @@ fn cut_link(rules: ResendRules, ticks: u64) -> Outage {
         }
         assert!(recovery < 600, "the client never caught up");
     }
+    let back = s.sides[0].rep.resend_stats(peer).unwrap();
     assert_converged(&mut s, |_, _, _| true);
     Outage {
         resends,
@@ -1408,6 +1476,8 @@ fn cut_link(rules: ResendRules, ticks: u64) -> Outage {
         destroys,
         rate,
         recovery,
+        cut,
+        back,
     }
 }
 
@@ -1440,6 +1510,31 @@ fn resends_back_off_while_nothing_is_acknowledged() {
     // behind, however long the backed-off timeout had grown.
     let trip = 3 + 1;
     assert!(after.recovery <= 3 * trip + 6 + 1, "{after:?}");
+}
+
+#[test]
+fn resend_stats_show_the_timeout_backing_off_and_coming_back() {
+    let ticks = 540;
+    let out = cut_link(ResendRules::default(), ticks);
+    let tries = out.resends.len() as u64;
+    let (cut, back) = (out.cut, out.back);
+    // Each try sent the five records and the despawn again, on the timeout.
+    assert_eq!((cut.timeout_resends, cut.early_resends), (6 * tries, 0), "{out:?}");
+    // The timeout doubled with each try and stopped at 4 s.
+    assert_eq!(u64::from(cut.backoff), tries, "{out:?}");
+    assert_eq!(cut.timeout_ticks, (4.0 * HZ) as u32, "{out:?}");
+    // The first acknowledgement brought it back to the plain timeout.
+    assert_eq!(back.backoff, 0, "{out:?}");
+    assert_eq!(u64::from(back.timeout_ticks), out.resends[0], "{out:?}");
+    // Negative control: without backing off, the timeout never grows.
+    let old = cut_link(TIMEOUT_ONLY, ticks);
+    assert_eq!(old.cut.backoff, 0, "{old:?}");
+    assert_eq!(
+        u64::from(old.cut.timeout_ticks),
+        old.resends[1] - old.resends[0],
+        "{old:?}"
+    );
+    assert!(old.cut.timeout_resends > cut.timeout_resends * 5, "{old:?}");
 }
 
 /// The bytes of raw event number `n`: its length varies (some empty, some

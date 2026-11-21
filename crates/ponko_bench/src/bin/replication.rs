@@ -2,12 +2,17 @@
 //! entities to 16 clients over the in-memory loopback. Every side is a
 //! whole headless game on its own thread; they take turns frame by frame
 //! and count game time (`NetMessages::game_clock`), so the bytes are the
-//! same on every run and every machine. Only the CPU time varies.
+//! same on every run and every machine. Only the CPU time varies. One
+//! scenario runs over a link that loses and reorders datagrams
+//! (`NetMessages::loopback_link`), seeded, so its bytes repeat too.
 //!
 //! Reports, per scenario, after a 2 second warm-up (the spawn burst):
 //! - bytes per second each client receives: replication's packets alone
 //!   (`PeerStats::bytes_sent`) and on the wire (`MessageStats`, with the
 //!   transport's framing, acks and resends);
+//! - records the server sent again per second per client, early (the
+//!   acknowledgements skipped their packet) and on the timeout
+//!   (`Replication::resend_stats`);
 //! - the server's CPU time per tick: its whole frame (receiving, the
 //!   game's systems, extracting changes, encoding and sending to every
 //!   client), median and 90th percentile over the ticks of a run, and the
@@ -19,7 +24,7 @@
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use ponko::net::{InterestConfig, InterestTier, NetMessages, Replicate, Replicated, Replication};
+use ponko::net::{InterestConfig, InterestTier, LoopbackLink, NetMessages, Replicate, Replicated, Replication};
 use ponko::prelude::*;
 
 const ENTITIES: usize = 1000;
@@ -55,38 +60,53 @@ struct Scenario {
     move_every: u32,
     budget: u32,
     interest: bool,
+    /// Loss (per mille) and jitter (ms) of every datagram, both ways, on
+    /// top of a frame of delay; `None`: the plain loopback.
+    lossy: Option<(u32, u64)>,
 }
 
-const SCENARIOS: [Scenario; 5] = [
+const SCENARIOS: [Scenario; 6] = [
     Scenario {
         name: "all move, no budget",
         move_every: 1,
         budget: u32::MAX,
         interest: false,
+        lossy: None,
     },
     Scenario {
         name: "all move, 64 KB/s budget",
         move_every: 1,
         budget: ponko::net::DEFAULT_BUDGET,
         interest: false,
+        lossy: None,
     },
     Scenario {
         name: "1 in 10 move, 64 KB/s",
         move_every: 10,
         budget: ponko::net::DEFAULT_BUDGET,
         interest: false,
+        lossy: None,
     },
     Scenario {
         name: "1 in 20 move, 64 KB/s",
         move_every: 20,
         budget: ponko::net::DEFAULT_BUDGET,
         interest: false,
+        lossy: None,
     },
     Scenario {
         name: "all move, interest rings",
         move_every: 1,
         budget: ponko::net::DEFAULT_BUDGET,
         interest: true,
+        lossy: None,
+    },
+    Scenario {
+        name: "1 in 10 move, 5% lost, reordered",
+        move_every: 10,
+        budget: ponko::net::DEFAULT_BUDGET,
+        interest: false,
+        lossy: Some((50, 50)),
     },
 ];
 
@@ -166,6 +186,9 @@ fn take_turns(game: Game, turns: Arc<Turns>, me: usize, timed: Option<Arc<Mutex<
 struct Sent {
     start: Vec<u64>,
     end: Vec<u64>,
+    /// Records sent again, early and on the timeout, summed over clients.
+    resends_start: (u64, u64),
+    resends_end: (u64, u64),
 }
 
 fn server(s: Scenario, net: NetMessages) -> Game {
@@ -218,11 +241,17 @@ fn server(s: Scenario, net: NetMessages) -> Game {
                     .iter()
                     .map(|&p| ctx.net.replication.peer_stats(p).map_or(0, |s| s.bytes_sent))
                     .collect();
+                let resends = clients
+                    .iter()
+                    .filter_map(|&p| ctx.net.replication.resend_stats(p))
+                    .fold((0, 0), |(e, t), s| (e + s.early_resends, t + s.timeout_resends));
                 let sent = ctx.world.resource_mut::<Sent>();
                 if tick == WARMUP {
-                    sent.start = bytes
+                    sent.start = bytes;
+                    sent.resends_start = resends;
                 } else {
-                    sent.end = bytes
+                    sent.end = bytes;
+                    sent.resends_end = resends;
                 }
             }
         })
@@ -262,15 +291,26 @@ fn client(s: Scenario, net: NetMessages) -> Game {
 struct Run {
     payload: Vec<u64>,
     wire: Vec<u64>,
+    /// Records sent again during the measured ticks, early and on the
+    /// timeout, summed over clients.
+    resends: (u64, u64),
     replicas: Vec<usize>,
     frames: Vec<Duration>,
 }
 
 fn run(s: Scenario) -> Run {
-    let mut nets: Vec<NetMessages> = NetMessages::loopback(CLIENTS + 1)
-        .into_iter()
-        .map(NetMessages::game_clock)
-        .collect();
+    let nets = match s.lossy {
+        None => NetMessages::loopback(CLIENTS + 1),
+        Some((per_mille, jitter_ms)) => NetMessages::loopback_link(
+            CLIENTS + 1,
+            LoopbackLink::new()
+                .loss(f64::from(per_mille) / 1000.0)
+                .delay(Duration::from_secs(1) / HZ)
+                .jitter(Duration::from_millis(jitter_ms))
+                .seed(179),
+        ),
+    };
+    let mut nets: Vec<NetMessages> = nets.into_iter().map(NetMessages::game_clock).collect();
     let host = nets.remove(0);
     let turns = Arc::new(Turns {
         turn: Mutex::new(0),
@@ -296,6 +336,10 @@ fn run(s: Scenario) -> Run {
     let frames = std::mem::take(&mut *frames.lock().unwrap());
     Run {
         payload: sent.end.iter().zip(&sent.start).map(|(e, s)| e - s).collect(),
+        resends: (
+            sent.resends_end.0 - sent.resends_start.0,
+            sent.resends_end.1 - sent.resends_start.1,
+        ),
         wire: got.iter().map(|g| g.end - g.start).collect(),
         replicas: got.iter().map(|g| g.replicas).collect(),
         frames,
@@ -333,8 +377,13 @@ fn main() {
         "replication: {ENTITIES} entities, {CLIENTS} clients, {HZ} Hz, {MEASURED} ticks measured after {WARMUP}, {runs} runs"
     );
     println!(
-        "{:<26} {:>22} {:>22} {:>9} {:>34}",
-        "scenario", "payload B/s/client", "wire B/s/client", "replicas", "server ms/tick: median p90 (runs)"
+        "{:<33} {:>22} {:>22} {:>9} {:>22} {:>34}",
+        "scenario",
+        "payload B/s/client",
+        "wire B/s/client",
+        "replicas",
+        "resent/s/client: early timeout",
+        "server ms/tick: median p90 (runs)"
     );
     for s in SCENARIOS.into_iter().filter(|s| s.name.contains(only.as_str())) {
         let mut medians = Vec::new();
@@ -348,8 +397,8 @@ fn main() {
             if let Some(f) = &first {
                 // The traffic is exact: the same on every run.
                 assert_eq!(
-                    (&f.payload, &f.wire),
-                    (&r.payload, &r.wire),
+                    (&f.payload, &f.wire, f.resends),
+                    (&r.payload, &r.wire, r.resends),
                     "the bytes differ between runs"
                 );
             } else {
@@ -367,12 +416,15 @@ fn main() {
             medians[0],
             medians[medians.len() - 1]
         );
+        let rate = |n: u64| n as f64 / CLIENTS as f64 / (MEASURED as f64 / f64::from(HZ));
+        let resent = format!("{:.1} {:.1}", rate(r.resends.0), rate(r.resends.1));
         println!(
-            "{:<26} {:>22} {:>22} {:>9} {:>34}",
+            "{:<33} {:>22} {:>22} {:>9} {:>22} {:>34}",
             s.name,
             spread(&r.payload),
             spread(&r.wire),
             replicas,
+            resent,
             cpu
         );
     }
