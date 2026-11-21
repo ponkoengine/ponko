@@ -502,6 +502,9 @@ enum class crash_kind : std::uint32_t { panic, error, native };
 using crash_report = PonkoCrashReport;
 /// An axis-aligned rectangle from `min` (top-left) to `max` (Rust `Rect`); see rect_at.
 using rect = PonkoRect;
+/// How far in from each edge of the window a phone's notch, home bar and rounded corners cover it, in
+/// logical pixels (Rust `SafeInsets`): `top`, `right`, `bottom`, `left`. See ctx::window_safe_area.
+using safe_insets = PonkoSafeInsets;
 /// A font handle (Rust `Font`) from ctx::load_font; `{0}` is the built-in font.
 using font = PonkoFont;
 /// Alignment within a world text block.
@@ -4849,6 +4852,10 @@ public:
     void set_closes_screen(id node, bool on = true) { detail::check(ponko_ctx_ui_set_closes_screen(raw_, target_, node, on)); }
     /// Whether pressing `node` closes its screen.
     bool closes_screen(id node) const { bool on = false; detail::check(ponko_ctx_ui_closes_screen(raw_, target_, node, &on)); return on; }
+    /// Lays root `node` out inside the window's safe area, clear of a phone's notch and home bar (`on` false: in the whole window, the default).
+    void set_inside_safe_area(id node, bool on = true) { detail::check(ponko_ctx_ui_set_inside_safe_area(raw_, target_, node, on)); }
+    /// Whether root `node` is laid out inside the safe area.
+    bool inside_safe_area(id node) const { bool on = false; detail::check(ponko_ctx_ui_inside_safe_area(raw_, target_, node, &on)); return on; }
     /// Shows the tree under `root` as a HUD: drawn below every screen, never closed by Escape, never takes input.
     void show_hud(id root) { detail::check(ponko_ctx_ui_show_hud(raw_, target_, root)); }
     /// Takes a HUD off the screen; its nodes stay.
@@ -6043,6 +6050,12 @@ public:
     input_scenario& touch_drag(std::uint64_t from, std::uint64_t to, vec2 start, vec2 end) {
         return step(ponko_input_scenario_touch_drag(raw_, from, to, start, end));
     }
+    /// Feeds the window's safe area insets on tick `tick`, as a phone reports them (as ctx::window_feed_safe_insets),
+    /// before that tick's simulation systems run: a layout for a notched phone is checked without a device. They stay
+    /// until another step changes them.
+    input_scenario& safe_insets(std::uint64_t tick, ponko::safe_insets insets) {
+        return step(ponko_input_scenario_safe_insets(raw_, tick, insets));
+    }
     /// Checks `c` after the simulation systems of tick `tick` ran.
     input_scenario& expect(std::uint64_t tick, const scenario_check& c) {
         switch (c.kind_) {
@@ -6868,6 +6881,16 @@ public:
     void window_save_settings() { detail::check(ponko_ctx_window_save_settings(raw_)); }
     /// Restores saved window settings; a monitor or mode that is gone falls back to windowed.
     void window_restore_settings() { detail::check(ponko_ctx_window_restore_settings(raw_)); }
+    /// The window's safe area (Rust `window.safe_area()`): the part a phone's notch, home bar and rounded
+    /// corners leave, in the same logical pixels as window_size(); the whole window where nothing covers it.
+    /// The engine's touch controls keep to it, and UI roots made with ui::set_inside_safe_area are laid out in it.
+    rect window_safe_area() const { rect r{}; detail::check(ponko_ctx_window_safe_area(raw_, &r)); return r; }
+    /// How far in from each edge the platform covers the window (Rust `window.safe_insets()`): what
+    /// window_safe_area() leaves out.
+    safe_insets window_safe_insets() const { safe_insets i{}; detail::check(ponko_ctx_window_safe_insets(raw_, &i)); return i; }
+    /// Feeds the safe area insets a phone would report (Rust `window.feed_safe_insets()`), as a test does; a
+    /// negative or not finite inset counts as 0. The UI lays out with them from the next frame.
+    void window_feed_safe_insets(safe_insets insets) { detail::check(ponko_ctx_window_feed_safe_insets(raw_, insets)); }
     /// Copies UTF-8 text to the clipboard.
     void clipboard_write(const char* value) { detail::check(ponko_ctx_clipboard_write(raw_, value)); }
     /// The clipboard's text; unset headless, with no text, or while a browser read is pending.

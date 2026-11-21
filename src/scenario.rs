@@ -1746,7 +1746,11 @@ impl StepWire {
             Self::ImeCommit { text, .. } => Step::Ime(ImeEvent::Commit(text)),
             Self::ImeDisabled { .. } => Step::Ime(ImeEvent::Disabled),
             Self::SafeInsets {
-                top, right, bottom, left, ..
+                top,
+                right,
+                bottom,
+                left,
+                ..
             } => Step::Safe(SafeInsets::new(top, right, bottom, left)),
             Self::ExpectUi {
                 node,

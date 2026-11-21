@@ -3842,6 +3842,56 @@ static void focus_huds_and_collision_files() {
     std::filesystem::remove(file);
 }
 
+// The window's safe area: a scenario step feeds a phone's insets, a HUD root made
+// inside it is laid out in it, and the context's calls feed and read it by hand.
+static void safe_area() {
+    struct frame { ponko::rect area, hud, backdrop; };
+    std::vector<frame> seen;
+    ponko::input_scenario s;
+    s.safe_insets(1, {0, 0, 21, 47}).safe_insets(3, {0, 47, 21, 0}).duration(5);
+    auto run = ponko::game("c++ notch", 844, 390)
+                   .headless_frames(true)
+                   .system([&](ponko::ctx& ctx) {
+                       auto ui = ctx.ui_retained();
+                       seen.push_back({ctx.window_safe_area(), ui.rect(*ui.find("hud")), ui.rect(*ui.find("backdrop"))});
+                   })
+                   .run_headless_scenario(s, [](ponko::ctx& ctx) {
+                       namespace u = ponko::ui;
+                       auto ui = ctx.ui_retained();
+                       auto backdrop = ui.add_panel(u::none, u::fill());
+                       auto hud = ui.add_panel(u::none, u::fill());
+                       ui.set_name(backdrop, "backdrop");
+                       ui.set_name(hud, "hud");
+                       CHECK(!ui.inside_safe_area(hud));
+                       ui.set_inside_safe_area(hud);
+                       CHECK(ui.inside_safe_area(hud) && !ui.inside_safe_area(backdrop));
+                       throws([&] { ui.set_inside_safe_area(9999); });
+                       ui.show_hud(backdrop);
+                       ui.show_hud(hud);
+                   });
+    CHECK(run.report.passed());
+    auto is = [](ponko::rect r, float x0, float y0, float x1, float y1) {
+        return r.min.x == x0 && r.min.y == y0 && r.max.x == x1 && r.max.y == y1;
+    };
+    CHECK(seen.size() == 5);
+    CHECK(is(seen[0].area, 0, 0, 844, 390));
+    CHECK(is(seen[1].area, 47, 0, 844, 369) && is(seen[2].area, 47, 0, 844, 369));
+    CHECK(is(seen[3].area, 0, 0, 797, 369) && is(seen[4].area, 0, 0, 797, 369));
+    for (const auto& f : seen) {
+        CHECK(is(f.hud, f.area.min.x, f.area.min.y, f.area.max.x, f.area.max.y));
+        CHECK(is(f.backdrop, 0, 0, 844, 390));
+    }
+
+    ponko::game("c++ notch calls", 844, 390).run_headless(0, [](ponko::ctx& ctx) {
+        CHECK(ctx.window_safe_insets().left == 0 && ctx.window_safe_area().max.x == 844);
+        ctx.window_feed_safe_insets({-5, 0, 21, 47});
+        const auto insets = ctx.window_safe_insets();
+        CHECK(insets.top == 0 && insets.bottom == 21 && insets.left == 47);
+        const auto area = ctx.window_safe_area();
+        CHECK(area.min.x == 47 && area.max.y == 369);
+    });
+}
+
 // IME composition (#410): a Japanese composition replayed into a text
 // input, the context's IME calls, and a composition the focus leaves.
 static void ime_composition() {
@@ -5029,6 +5079,7 @@ int main() {
     animators();
     animator_layers_and_blend_trees();
     headless_wrapper_calls();
+    safe_area();
     shader_files();
     inverse_kinematics();
     streaming();
