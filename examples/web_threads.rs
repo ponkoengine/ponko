@@ -29,9 +29,9 @@
 //! ticks with profiling on); `passes_shared` lists the engine's passes
 //! that went through the frame pool's runner, by the scope each opens there
 //! (`spatial/shared_rebuild`, `flow/shared_directions`, `three/shared_cull`,
-//! `reflect/shared_save`); `frame3d` is what the last 3D collection found
-//! (instances for the camera and the shadow views, and draw runs; `null`
-//! without the features) and `save_bytes` the length of the last JSON
+//! `reflect/shared_save`); `frame3d` is what the 3D collection found at
+//! tick 120 (instances for the camera and the shadow views, and draw runs;
+//! `null` without the features) and `save_bytes` the length of the last JSON
 //! save; `checksum` sums every position, every attached child's place, the
 //! grid's and flow field's results, the 3D frame's counts and the save's
 //! length and hash at tick 120, the same however many threads ran them. `?smoke_case=worker-panic` panics inside the
@@ -340,6 +340,8 @@ struct Check {
     scene3d: Option<Scene3D>,
     /// The bytes and a hash of the last JSON save of the game's world.
     save: Option<(usize, u64)>,
+    /// What the 3D collection found at tick 120, with the checksum.
+    frame3d: Option<(usize, usize, usize)>,
 }
 
 /// A world of `MODELS_3D` models on a grid, some bobbing, collected for a
@@ -411,6 +413,7 @@ fn check(game: Game) {
                 .for_each(|(t, _)| sum += f64::from(t.position.x) + f64::from(t.position.y));
             sum += passes_checksum(&s);
             s.checksum = Some(sum);
+            s.frame3d = frame3d(&s);
         }
         if tick.is_multiple_of(30) && s.job.is_none() {
             s.job = Some(Job::spawn(|| std::thread::current().id()));
@@ -505,7 +508,7 @@ fn check(game: Game) {
             "batch_threaded_runs": batch_threaded_runs,
             "hier_shared": s.hier_shared,
             "passes_shared": s.passes_shared,
-            "frame3d": frame3d(&s),
+            "frame3d": s.frame3d.map(|(visible, shadow, runs)| [visible, shadow, runs]),
             "save_bytes": s.save.map(|(bytes, _)| bytes),
             "schedule_threads": s.schedule_threads,
             "wait_off_page": s.wait_off_page,
@@ -586,14 +589,14 @@ fn engine_passes(s: &mut Check, tick: u64) {
     collect_3d(s.scene3d.get_or_insert_with(scene_3d), tick);
 }
 
-/// What the last 3D collection found, for the page: `null` before the
-/// first or without the 3D features.
-fn frame3d(_s: &Check) -> serde_json::Value {
+/// What the last 3D collection found: `None` before the first or without
+/// the 3D features.
+fn frame3d(_s: &Check) -> Option<(usize, usize, usize)> {
     #[cfg(all(feature = "3d", feature = "bench-internals"))]
     if let Some(scene) = &_s.scene3d {
-        return json!([scene.found.0, scene.found.1, scene.found.2]);
+        return Some(scene.found);
     }
-    serde_json::Value::Null
+    None
 }
 
 /// `MODELS_3D` models on a grid, each of one of 16 unit meshes.
@@ -626,14 +629,18 @@ fn scene_3d() -> Scene3D {
 fn collect_3d(scene: &mut Scene3D, tick: u64) {
     let angle = tick as f32 * 0.02;
     scene.camera.position = vec3(angle.cos() * 80.0, 12.0, angle.sin() * 80.0);
-    scene.camera.look_at(vec3((angle + 0.6).cos() * 120.0, 0.0, (angle + 0.6).sin() * 120.0));
+    scene
+        .camera
+        .look_at(vec3((angle + 0.6).cos() * 120.0, 0.0, (angle + 0.6).sin() * 120.0));
     let y = (tick % 3) as f32 * 0.25;
     for &e in scene.models.iter().step_by(50) {
         if let Some(t) = scene.world.get_mut::<ponko::d3::Transform>(e) {
             t.position.y = y;
         }
     }
-    let sample = scene.extraction.collect(&mut scene.world, &scene.camera, &scene.lighting);
+    let sample = scene
+        .extraction
+        .collect(&mut scene.world, &scene.camera, &scene.lighting);
     scene.found = (sample.visible, sample.shadow, sample.runs);
 }
 
@@ -642,9 +649,9 @@ fn collect_3d(scene: &mut Scene3D, tick: u64) {
 /// text, the same however many threads built it.
 fn save_json(world: &World) -> (usize, u64) {
     let text = serde_json::to_string(&world.save()).unwrap_or_default();
-    let hash = text
-        .bytes()
-        .fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3));
+    let hash = text.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+    });
     (text.len(), hash)
 }
 

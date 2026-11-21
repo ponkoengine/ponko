@@ -413,7 +413,13 @@ fn a_save_on_all_cores_is_byte_identical_to_a_one_thread_save() {
     for i in 0..20_000u32 {
         let e = match i % 4 {
             0 => w.spawn((Transform2D::at(vec2(i as f32 * 0.37, -(i as f32))),)),
-            1 => w.spawn((Team((i % 7) as u8), Health { current: i as f32, max: 1e6 })),
+            1 => w.spawn((
+                Team((i % 7) as u8),
+                Health {
+                    current: i as f32,
+                    max: 1e6,
+                },
+            )),
             2 => w.spawn((Secret,)),
             _ => w.spawn((Team(1), Follows(last.unwrap_or(Entity::from_bits(1))))),
         };
