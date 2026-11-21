@@ -165,7 +165,9 @@ moved, placing a level) times its first entities and runs on all cores
 only when the whole pass would take over about 50 µs: the work measured
 decides, not the number of entities. A small update stays on the
 calling thread and never waits for other threads, which on a busy machine
-can take milliseconds to wake. A deep chain is placed a link at a time.
+can take milliseconds to wake. In a [web build with threads](web-threads.md)
+a pass worth sharing runs on the workers, as parallel queries do; the
+page's thread waits without blocking. A deep chain is placed a link at a time.
 
 Linking 100,000 new children to 100,000 parents costs 5.5 ms in the first
 update and about 100 allocations in all: a children list keeps its first
