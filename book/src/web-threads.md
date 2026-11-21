@@ -6,7 +6,16 @@ Web Workers that share the game's memory, as it does on threads natively:
 - the [parallel scheduler](parallel-systems.md)'s batches;
 - the ECS's own parallel sorts;
 - the [hierarchy](hierarchy.md)'s update (attachments), when a pass is big
-  enough to share out.
+  enough to share out;
+- the engine's own parallel passes: [spatial grid](spatial.md) rebuilds
+  (from 200,000 entries), [flow field](pathfinding.md) directions, 2D
+  skeleton drawing and its copy into the frame's draw list (from 64
+  skeletons), and 3D character moves (from 16 characters).
+
+They all go through one runner: a pass started on the page's thread is
+handed to the frame's workers and the page's thread spins until it is done,
+as for a parallel query. Each pass gives the same result on any number of
+threads (the native tests run each on one thread and on all of them).
 
 [Jobs](streaming.md) run on workers of their own. The asset reads and
 decodes of [asset groups](loading.md) and streaming are jobs, so they run
@@ -151,8 +160,11 @@ ponko: this build can use threads, but the page isn't cross-origin isolated (...
   streamed textures and meshes read and decode on them. Saves in the
   background (`save_world_in_background`) stay on the page's thread,
   because the browser's storage belongs to it.
-- **Everything else** stays on the page's thread: your systems, drawing,
-  sound, input and the engine's other internal parallel loops.
+- **Everything else** stays on the page's thread: your systems, drawing
+  (the GPU's command recording too: WebGPU objects can't be sent to a
+  worker), sound, input, and the engine's other internal parallel loops
+  (saving a world as JSON, baking, video frames), which there run one
+  piece after another.
 - **Controllers** work as in the ordinary web build (`ctx.input.gamepads()`
   and the rest of [Input](input.md)), read the same way: the browser's
   gamepad objects can't be sent between threads once the memory is shared,
@@ -246,7 +258,11 @@ time an ordinary build).
 [`web/smoke/threads.mjs`](../../web/smoke/README.md#threads) builds the
 fixture with threads and opens it in headless Chromium twice. Served with
 the headers, the parallel query, the batch systems, the jobs and the asset
-group must run on two or more workers, and never on the page's thread.
+group must run on two or more workers, and never on the page's thread; the
+hierarchy must share a level out, and at least two of the engine's own
+passes (the fixture rebuilds a spatial grid of 200,000 entries and computes
+a flow field) must go through the frame pool's runner (`passes_shared`,
+from the scope each opens there).
 Served without them, everything must run on the page's thread, and the
 console must say why. Both runs must end with the same world, and must
 read the same file. With `--case gamepads` it feeds the isolated page fake
