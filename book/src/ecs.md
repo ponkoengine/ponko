@@ -222,7 +222,7 @@ What you can ask for (Rust):
 |---|---|
 | `&T` | read access to `T` (entity must have it) |
 | `&mut T` | write access to `T` |
-| `Option<&T>`, `Option<&mut T>` | the component if present; doesn't filter (in `for_each` and the parallel loops, up to four of them cost nothing per entity: the loop is chosen per archetype) |
+| `Option<&T>`, `Option<&mut T>` | the component if present; doesn't filter (in `for_each` and the parallel loops, up to four of them cost almost nothing per entity: the loop is chosen per archetype, and vectorizes like one without `Option`s) |
 | `Entity` | the entity's id |
 | a tuple of the above | all of them, up to 12 (nest tuples for more) |
 

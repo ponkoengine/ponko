@@ -332,6 +332,9 @@ window.
   centred dialog is centred in what the player sees. Roots are laid out in
   the whole window by default, so a backdrop still reaches under the notch.
 
+<div class="lang-pair">
+<div>
+
 ```rust
 # use ponko::prelude::*;
 # fn setup(ctx: &mut Ctx) {
@@ -345,6 +348,16 @@ ctx.ui.show_hud(hud);
 # }
 ```
 
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:safe_area}}
+```
+
+</div>
+</div>
+
 - **Where it comes from.** In the browser the engine reads the page's
   `env(safe-area-inset-*)`, at start and whenever the window changes size
   (turning the phone does). A browser reports insets only for a page that
@@ -356,7 +369,9 @@ ctx.ui.show_hud(hud);
 - **Testing.** `ctx.window.feed_safe_insets(SafeInsets::new(top, right, bottom, left))`
   feeds the insets a phone would report, as a test does, and so can a
   platform layer of the game's own. The UI lays out with them from the
-  next frame.
+  next frame. A headless scenario feeds them as a step,
+  [`InputScenario::safe_insets(tick, insets)`](headless.md#insets-as-a-scenario-step),
+  so a layout for a notched phone is checked without a device.
 
 ```rust
 # use ponko::prelude::*;
@@ -427,6 +442,16 @@ and `ctx.feed_touch`. The scenario builders are
 {{#include ../../examples/cpp/guide.cpp:touch_scenario}}
 ```
 
+The safe area is `ponko_ctx_window_safe_area` (a `PonkoRect`),
+`ponko_ctx_window_safe_insets` and `ponko_ctx_window_feed_safe_insets`
+(a `PonkoSafeInsets`: `top`, `right`, `bottom`, `left`); a UI root is laid
+out inside it after `ponko_ctx_ui_set_inside_safe_area` (and
+`ponko_ctx_ui_inside_safe_area` reads it back). The scenario's step is
+`ponko_input_scenario_safe_insets`. In C++ they are `ctx.window_safe_area()`,
+`window_safe_insets()` and `window_feed_safe_insets(insets)`, the UI's
+`set_inside_safe_area(root)` and `inside_safe_area(root)`, and the scenario's
+`safe_insets(tick, insets)`, with `ponko::safe_insets` for the insets.
+
 Styles and placement are the versioned `PonkoTouchControlsDesc` of
 `ponko_ctx_set_touch_controls_ex`: the controls, a `PonkoTouchStyle` for all
 of them (`ponko_touch_style_default` is the engine's look), and lists of
@@ -444,5 +469,3 @@ are fed with `ponko_ctx_feed_trackpad` and `ponko_input_scenario_trackpad`
 The ready-made arrange screen is `ponko_ctx_arrange_touch_controls` (C++
 `ctx.arrange_touch_controls()`); its nodes are found by their
 `touch.arrange.*` names with `ponko_ctx_ui_find` like any other.
-The safe area (`safe_area`, `feed_safe_insets`, `inside_safe_area`) is
-Rust-only so far.

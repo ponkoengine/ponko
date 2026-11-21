@@ -392,6 +392,9 @@ to it. The full rule is in
 | `PonkoCrashReports`, `PonkoTouchControlsDesc`, `PonkoSliceLoader` | `ponko_game_crash_reports`, `ponko_ctx_set_touch_controls_ex`, `ponko_asset_group_add_sliced` | new in this release: [crash report](crash-reports.md#c-and-c) settings and hook, touch controls with their [styles and places](touch.md#c-and-c), [sliced loaders](loading.md#sliced-loaders-from-c) |
 | `PonkoCrowdDesc`, `PonkoNavCrowdStats` | `ponko_ctx_create_crowd_ex`, `ponko_ctx_navmesh_crowd_stats` | new in this release: a crowd with [crossfading levels](crowds.md#c-and-c), the [navmesh crowd's counts](navigation3d.md#counting-the-crowds-work) |
 | `PonkoWaterDesc` version 2 | `ponko_ctx_spawn_water` | `has_spectrum` and `spectrum`: a [sea from a wave spectrum](water.md#from-c-and-c) |
+| `PonkoLoopbackLink` | `ponko_loopback_link_defaults`, `ponko_net_messages_loopback_link` | new in this release: an in-memory link that [loses and delays datagrams](replication.md#test-it), for native tests |
+| `PonkoBuoyancyDesc` | `ponko_buoyancy_desc_box`, `_sphere`, `_points`, `ponko_ctx_set_buoyancy`, `ponko_ctx_buoyancy` | new in this release: a [floating body's](water.md#from-c-and-c) sample points, the water's density, drag and the ripple switch |
+| `PonkoUploadStatsEx` | `ponko_ctx_upload_stats_ex` | the upload counters with the GPU's own time for [made textures](loading.md#c-and-c) (`gpu_created_ms`) and for the latest upload step (`gpu_upload_ms`) |
 
 In C++ the same types are `ponko::material_desc_ex`,
 `nav_bake_settings_ex`, `lighting_ex`, `collider_ex`, `query_filter_ex`,
@@ -479,7 +482,6 @@ binding arrives:
 | `Storage::write_json`, `Storage::read_json` | [Saves and settings](storage.md#save-slots) | Generic over Rust types; serialize yourself and pass the bytes to `storage_write` and `storage_read` |
 | `SaveFormat`, `Storage::save_world_in_background` | [Saves and settings](storage.md#large-worlds) | Not bound yet: save slots are JSON, written on the game's thread by `ponko_ctx_save_world`; `ponko_ctx_load_world` reads binary slots too |
 | `UiAccessAdapter::for_ns_view` | [Retained game UI](ui.md#the-screen-reader-adapter) | It needs a Rust `Ui`; the engine's own window gets the adapter, and `ponko_ui_access_*` give a snapshot for one of your own |
-| `Buoyancy::points` | [Water](water.md#floating-bodies) | Custom sample points, water density and the ripple switch aren't bound: C floats boxes and spheres (`ponko_ctx_set_buoyancy_box`, `_sphere`) in fresh water |
 | `NavObstacleShape` | [3D navigation meshes](navigation3d.md#obstacle-shapes) | Obstacles are unturned boxes: `ponko_ctx_set_nav_obstacle` and `ponko_ctx_set_nav_carve_obstacle` |
 | `SkyShader` | [A sky of your own](3d.md#a-sky-of-your-own) | The built-in atmosphere or the flat sky (`PonkoSky`); sky shaders have no C binding yet |
 | `Graphics::stream_instance_cell` | [Streaming instance cells](3d.md#streaming-instance-cells) | Build a cell's matrices on your own threads, then `ponko_ctx_add_instance_cell` (`ctx::add_instance_cell`) on the game's |
@@ -496,14 +498,10 @@ binding arrives:
 | `LobbyClient::join_web` | [Lobbies, matchmaking and relays](lobby.md#the-client) | C and C++ games don't build for the web yet; their lobby clients join over UDP |
 | `Signaling` | [Peer to peer over WebRTC](webrtc.md#with-any-signaling-channel) | C and C++ WebRTC endpoints are signaled through a lobby client (`ponko_net_messages_rtc_host`, `_rtc_join`) |
 | `RtcConfig::turn` | [Peer to peer over WebRTC](webrtc.md#stun-turn-and-nats) | TURN works in browsers only, and C and C++ games don't build for the web yet |
-| `LoopbackLink` | [Test it](replication.md#test-it) | Not bound yet: C and C++ tests use the plain loopback (`ponko_net_messages_loopback`); a link that loses and reorders datagrams is for Rust tests and benchmarks |
 | `SkeletonData::add_bone`, `SpineAtlas` | [2D skeletons](skeleton2d.md#from-c-and-c) | Skeletons come from files (Ponko's format or a Spine export and its atlas) through the assets; a memory source holds files kept in memory |
-| `perf::net_alloc_bytes` | [Profiling](profiling.md) | C and C++ count the frees of their own memory nowhere; `ponko_ctx_live_counts` and the asset inventory are the leak checks |
 | `Plugin::dependencies` | [Plugins for other crates](plugins.md#from-c-and-c) | C plugins (`ponko_game_plugin`) have no names or dependencies and are never duplicates |
 | `Game::debug_toggle` | [Plugins for other crates](plugins.md#debug-toggles) | Draw behind a flag of the game's own; `debug.draw` turns the engine's views on and off |
 | `Game::control_method` | [Plugins for other crates](plugins.md#control-methods) | The control endpoint's built-in methods only; a native game's tools read its reflected resources |
-| `WindowService::safe_area` | [Touch](touch.md#notches-home-bars-and-rounded-corners) | Not bound yet: the engine's touch controls and arrange screen keep to the safe area all the same; C and C++ can't read or feed it |
-| `Ui::set_inside_safe_area` | [Touch](touch.md#notches-home-bars-and-rounded-corners) | Not bound yet: UI roots made from C and C++ are laid out in the whole window |
 
 System phases, system ids, setup callbacks and plugins are not on this
 list. They have C and C++ calls, described in

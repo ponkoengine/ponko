@@ -36,6 +36,14 @@ pub const PONKO_WATER_MAX_WAVES: usize = 8;
 const _: () = assert!(PONKO_WATER_MAX_WAVES == MAX_WAVES);
 /// The default buoyancy drag (`ponko_ctx_set_buoyancy_box` and `_sphere`).
 pub const PONKO_BUOYANCY_DRAG: f32 = 4.0;
+/// The version of `PonkoBuoyancyDesc` this header describes.
+pub const PONKO_BUOYANCY_DESC_VERSION: u32 = 1;
+/// How many sample points a `PonkoBuoyancyDesc` holds: the most a floating
+/// body is pushed at.
+pub const PONKO_BUOYANCY_MAX_POINTS: usize = 32;
+/// The density of fresh water in kg/m³ (`PonkoBuoyancyDesc::water_density`
+/// from the presets); sea water is about 1025.
+pub const PONKO_FRESH_WATER_DENSITY: f32 = 1000.0;
 
 /// How much work the water's shader and passes do
 /// (`PonkoWaterDesc::quality`).
@@ -264,6 +272,64 @@ pub struct PonkoWaterSample {
     pub velocity: PonkoVec3,
     /// 1 on flat water, below 1 near sharp crests, 0 where it would fold.
     pub squeeze: f32,
+}
+
+/// How a 3D body floats (Rust `water::Buoyancy`): where it samples the
+/// water, the water it displaces, the water's density, the drag and whether
+/// it ripples the surface. A versioned descriptor: set `struct_size` and
+/// `version`, fill it with `ponko_buoyancy_desc_box`, `_sphere` or
+/// `_points`, change what you like, and give it to a body with
+/// `ponko_ctx_set_buoyancy`.
+///
+/// The body's `volume` is split evenly over its points. Each stands for a
+/// column `height` metres tall around it: wholly under water when the
+/// surface is `height / 2` above it, out of it when that far below.
+///
+/// Version 1: every field below.
+/// ```
+/// use ponko_ffi::*;
+/// let mut d: PonkoBuoyancyDesc = unsafe { std::mem::zeroed() };
+/// (d.struct_size, d.version) = (size_of::<PonkoBuoyancyDesc>() as u32, PONKO_BUOYANCY_DESC_VERSION);
+/// d.water_density = 1025.0; // sea water
+/// assert_eq!(d.points.len(), PONKO_BUOYANCY_MAX_POINTS);
+/// ```
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PonkoBuoyancyDesc {
+    /// `sizeof(PonkoBuoyancyDesc)` as the caller compiled it.
+    pub struct_size: u32,
+    /// `PONKO_BUOYANCY_DESC_VERSION` as the caller compiled it.
+    pub version: u32,
+    /// Where the body samples the water, in its own space; the first
+    /// `point_count` are used.
+    pub points: [PonkoVec3; PONKO_BUOYANCY_MAX_POINTS],
+    /// How many of `points` are used, 1 to `PONKO_BUOYANCY_MAX_POINTS`.
+    pub point_count: u32,
+    /// The water the body displaces when wholly under, in m³.
+    pub volume: f32,
+    /// The height of the column each point stands for, in metres.
+    pub height: f32,
+    /// The water's density in kg/m³ (`PONKO_FRESH_WATER_DENSITY`; sea
+    /// water about 1025): denser water floats the body higher.
+    pub water_density: f32,
+    /// How strongly the water drags the body along with it, per second
+    /// (`PONKO_BUOYANCY_DRAG`).
+    pub drag: f32,
+    /// The body starts contact ripples on the water as it crosses the
+    /// surface.
+    pub ripples: bool,
+}
+
+const _: () = assert!(offset_of!(PonkoBuoyancyDesc, struct_size) == 0 && offset_of!(PonkoBuoyancyDesc, version) == 4);
+impl Versioned for PonkoBuoyancyDesc {
+    const NAME: &'static str = "PonkoBuoyancyDesc";
+    const VERSION: u32 = PONKO_BUOYANCY_DESC_VERSION;
+    fn len_of(version: u32) -> Option<usize> {
+        match version {
+            1 => Some(offset_of!(Self, ripples) + size_of::<bool>()),
+            _ => None,
+        }
+    }
 }
 
 fn desc_to_c(d: &WaterDesc) -> PonkoWaterDesc {
@@ -703,6 +769,97 @@ pub unsafe extern "C" fn ponko_ctx_buoyancy_submerged(
     unsafe { imp::submerged(ctx, entity, out_share) }
 }
 
+/// Fills `desc` (header set) with a box of `size` (full width, height and
+/// depth) centred on the body: eight points in two layers, fresh water,
+/// drag `PONKO_BUOYANCY_DRAG`, ripples on (Rust `Buoyancy::cuboid`).
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_buoyancy_desc_box(std::ptr::null_mut(), Default::default()) } as u32, 1);
+/// ```
+/// # Safety
+/// `desc` null or a writable descriptor with its header set.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_buoyancy_desc_box(desc: *mut PonkoBuoyancyDesc, size: PonkoVec3) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { imp::desc_box(desc, size) }
+}
+
+/// Fills `desc` with a ball of `radius`: seven points, fresh water, drag
+/// `PONKO_BUOYANCY_DRAG`, ripples on (Rust `Buoyancy::sphere`).
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_buoyancy_desc_sphere(std::ptr::null_mut(), 0.5) } as u32, 1);
+/// ```
+/// # Safety
+/// `desc` null or a writable descriptor with its header set.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_buoyancy_desc_sphere(desc: *mut PonkoBuoyancyDesc, radius: f32) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { imp::desc_sphere(desc, radius) }
+}
+
+/// Fills `desc` with `count` sample `points` (body space) sharing `volume`
+/// m³, each standing for a column `height` tall; fresh water, drag
+/// `PONKO_BUOYANCY_DRAG`, ripples on (Rust `Buoyancy::points`). `count` is
+/// 1 to `PONKO_BUOYANCY_MAX_POINTS`; the points are copied.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_buoyancy_desc_points(std::ptr::null_mut(), std::ptr::null(), 0, 1.0, 1.0) } as u32, 1);
+/// ```
+/// # Safety
+/// `desc` null or a writable descriptor with its header set; `points` null
+/// or readable for `count` values.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_buoyancy_desc_points(
+    desc: *mut PonkoBuoyancyDesc,
+    points: *const PonkoVec3,
+    count: u32,
+    volume: f32,
+    height: f32,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { imp::desc_points(desc, points, count, volume, height) }
+}
+
+/// Makes 3D body `entity` float as `desc` says: its points, volume, column
+/// height, the water's density, drag and the ripple switch. Floats with
+/// `ponko_game_water`. Replaces any buoyancy it had. Fails, saying why, for
+/// a `point_count` of 0 or over `PONKO_BUOYANCY_MAX_POINTS`, points or
+/// numbers that aren't finite, a volume, height or density that isn't
+/// positive, or a negative drag.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_set_buoyancy(std::ptr::null_mut(), 0, std::ptr::null()) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `desc` null or a readable descriptor.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_set_buoyancy(
+    ctx: *mut PonkoCtx,
+    entity: u64,
+    desc: *const PonkoBuoyancyDesc,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { imp::set_desc(ctx, entity, desc) }
+}
+
+/// Writes how floating body `entity` floats into the fields of
+/// `out_desc`'s version: change some and give it back with
+/// `ponko_ctx_set_buoyancy`. `PONKO_NOT_FOUND` if it has no buoyancy;
+/// `PONKO_INVALID_ARGUMENT` if Rust gave it more than
+/// `PONKO_BUOYANCY_MAX_POINTS` points.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_buoyancy(std::ptr::null(), 0, std::ptr::null_mut()) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `out_desc` null or a writable descriptor with its
+/// header set.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_buoyancy(
+    ctx: *const PonkoCtx,
+    entity: u64,
+    out_desc: *mut PonkoBuoyancyDesc,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { imp::get_desc(ctx, entity, out_desc) }
+}
+
 #[cfg(feature = "physics3d")]
 mod imp {
     use ponko::prelude::Vec3;
@@ -726,6 +883,127 @@ mod imp {
                     Ok(())
                 })
             }
+        })
+    }
+    fn buoyancy_to_c(b: &Buoyancy) -> Result<PonkoBuoyancyDesc, Failure> {
+        if b.points.len() > PONKO_BUOYANCY_MAX_POINTS {
+            return Err(invalid("the body has more than PONKO_BUOYANCY_MAX_POINTS points"));
+        }
+        let mut points = [PonkoVec3::default(); PONKO_BUOYANCY_MAX_POINTS];
+        for (c, p) in points.iter_mut().zip(&b.points) {
+            *c = to_c(*p);
+        }
+        Ok(PonkoBuoyancyDesc {
+            struct_size: size_of::<PonkoBuoyancyDesc>() as u32,
+            version: PONKO_BUOYANCY_DESC_VERSION,
+            points,
+            point_count: b.points.len() as u32,
+            volume: b.volume,
+            height: b.height,
+            water_density: b.water_density,
+            drag: b.drag,
+            ripples: b.ripples,
+        })
+    }
+
+    fn buoyancy_from_c(d: &PonkoBuoyancyDesc) -> Result<Buoyancy, Failure> {
+        let count = d.point_count as usize;
+        if count == 0 || count > PONKO_BUOYANCY_MAX_POINTS {
+            return Err(invalid("point_count must be 1 to PONKO_BUOYANCY_MAX_POINTS"));
+        }
+        let points: Vec<Vec3> = d.points[..count].iter().map(|p| to_c(*p)).collect();
+        if !points.iter().all(|p: &Vec3| p.is_finite()) {
+            return Err(invalid("buoyancy points must be finite"));
+        }
+        finite(
+            &[d.volume, d.height, d.water_density, d.drag],
+            "buoyancy settings must be finite",
+        )?;
+        if d.volume <= 0.0 || d.height <= 0.0 || d.water_density <= 0.0 {
+            return Err(invalid("volume, height and water_density must be positive"));
+        }
+        if d.drag < 0.0 {
+            return Err(invalid("drag must not be negative"));
+        }
+        let mut b = Buoyancy::points(points, d.volume, d.height).with_drag(d.drag);
+        b.water_density = d.water_density;
+        b.ripples = d.ripples;
+        Ok(b)
+    }
+
+    pub(super) unsafe fn desc_box(desc: *mut PonkoBuoyancyDesc, size: PonkoVec3) -> PonkoStatus {
+        // SAFETY: forwarded caller contract.
+        boundary(|| unsafe {
+            let size: Vec3 = to_c(size);
+            if !(size.is_finite() && size.cmpgt(Vec3::ZERO).all()) {
+                return Err(invalid("size must be positive"));
+            }
+            write_desc(desc, &buoyancy_to_c(&Buoyancy::cuboid(size))?)
+        })
+    }
+    pub(super) unsafe fn desc_sphere(desc: *mut PonkoBuoyancyDesc, radius: f32) -> PonkoStatus {
+        // SAFETY: forwarded caller contract.
+        boundary(|| unsafe {
+            if !(radius.is_finite() && radius > 0.0) {
+                return Err(invalid("radius must be positive"));
+            }
+            write_desc(desc, &buoyancy_to_c(&Buoyancy::sphere(radius))?)
+        })
+    }
+    pub(super) unsafe fn desc_points(
+        desc: *mut PonkoBuoyancyDesc,
+        points: *const PonkoVec3,
+        count: u32,
+        volume: f32,
+        height: f32,
+    ) -> PonkoStatus {
+        boundary(|| {
+            if points.is_null() || count == 0 || count as usize > PONKO_BUOYANCY_MAX_POINTS {
+                return Err(invalid("points must hold 1 to PONKO_BUOYANCY_MAX_POINTS values"));
+            }
+            // SAFETY: caller contract: readable for `count` (at most 32) values.
+            let given = unsafe { std::slice::from_raw_parts(points, count as usize) };
+            let mut c = buoyancy_to_c(&Buoyancy::points(Vec::new(), volume, height))?;
+            c.points[..given.len()].copy_from_slice(given);
+            c.point_count = count;
+            c.height = height;
+            // Checked as `ponko_ctx_set_buoyancy` will check it.
+            buoyancy_from_c(&c)?;
+            // SAFETY: forwarded caller contract.
+            unsafe { write_desc(desc, &c) }
+        })
+    }
+    pub(super) unsafe fn set_desc(ctx: *mut PonkoCtx, entity: u64, desc: *const PonkoBuoyancyDesc) -> PonkoStatus {
+        boundary(|| {
+            if desc.is_null() {
+                return Err(invalid("desc is null"));
+            }
+            // SAFETY: forwarded caller contract.
+            unsafe {
+                let defaults = buoyancy_to_c(&Buoyancy::sphere(1.0))?;
+                let b = buoyancy_from_c(&read_desc(desc, defaults)?)?;
+                ctx_access(ctx, |c| {
+                    let e = Entity::from_bits(entity);
+                    if !c.world.is_alive(e) {
+                        return Err(invalid("no such entity"));
+                    }
+                    c.world.insert(e, b);
+                    Ok(())
+                })
+            }
+        })
+    }
+    pub(super) unsafe fn get_desc(ctx: *const PonkoCtx, entity: u64, out_desc: *mut PonkoBuoyancyDesc) -> PonkoStatus {
+        // SAFETY: forwarded caller contract.
+        boundary(|| unsafe {
+            let d = ctx_access(ctx, |c| {
+                let b = c
+                    .world
+                    .get::<Buoyancy>(Entity::from_bits(entity))
+                    .ok_or_else(|| error(PonkoStatus::PONKO_NOT_FOUND, "entity has no buoyancy"))?;
+                buoyancy_to_c(b)
+            })?;
+            write_desc(out_desc, &d)
         })
     }
     pub(super) unsafe fn set_box(ctx: *mut PonkoCtx, entity: u64, size: PonkoVec3, drag: f32) -> PonkoStatus {
@@ -784,6 +1062,27 @@ mod imp {
         boundary(off)
     }
     pub(super) unsafe fn submerged(_: *const PonkoCtx, _: u64, _: *mut f32) -> PonkoStatus {
+        boundary(off)
+    }
+    pub(super) unsafe fn desc_box(_: *mut PonkoBuoyancyDesc, _: PonkoVec3) -> PonkoStatus {
+        boundary(off)
+    }
+    pub(super) unsafe fn desc_sphere(_: *mut PonkoBuoyancyDesc, _: f32) -> PonkoStatus {
+        boundary(off)
+    }
+    pub(super) unsafe fn desc_points(
+        _: *mut PonkoBuoyancyDesc,
+        _: *const PonkoVec3,
+        _: u32,
+        _: f32,
+        _: f32,
+    ) -> PonkoStatus {
+        boundary(off)
+    }
+    pub(super) unsafe fn set_desc(_: *mut PonkoCtx, _: u64, _: *const PonkoBuoyancyDesc) -> PonkoStatus {
+        boundary(off)
+    }
+    pub(super) unsafe fn get_desc(_: *const PonkoCtx, _: u64, _: *mut PonkoBuoyancyDesc) -> PonkoStatus {
         boundary(off)
     }
 }

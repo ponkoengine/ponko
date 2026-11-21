@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <fstream>
@@ -237,6 +238,9 @@ enum class asset_state : std::uint32_t {
 using residency_stats = PonkoResidencyStats;
 /// The upload queue's budget and counters (Rust `UploadStats`).
 using upload_stats = PonkoUploadStats;
+/// The upload queue's counters in the versioned form (PonkoUploadStatsEx), from ctx::upload_stats_ex:
+/// `stats` is upload_stats, plus the game-thread decode slices and the GPU's own upload times.
+using upload_stats_ex = PonkoUploadStatsEx;
 /// Where an asset group is (Rust `GroupState`).
 enum class group_state : std::uint32_t {
     loading = PONKO_GROUP_LOADING, ready = PONKO_GROUP_READY, failed = PONKO_GROUP_FAILED,
@@ -368,6 +372,33 @@ using crowd_options = PonkoCrowdOptions;
 using nav_crowd_stats = PonkoNavCrowdStats;
 /// Heap allocations counted while profiling was on (Rust `AllocCounts`), from thread_alloc_counts.
 using alloc_counts = PonkoAllocCounts;
+/// How often a game times its GPU passes (Rust `GpuTiming`), for ctx::set_gpu_timing. `automatic` leaves it
+/// to the engine (one frame in 16, every frame while profiling is on), `every` times every Nth frame and
+/// `off` never times the GPU.
+enum class gpu_timing_kind : std::uint32_t {
+    /// The engine decides (the default).
+    automatic = PONKO_GPU_TIMING_AUTO,
+    /// Every `every`th frame; 1 is every frame.
+    every = PONKO_GPU_TIMING_EVERY,
+    /// No GPU times at all.
+    off = PONKO_GPU_TIMING_OFF,
+};
+/// The choice ctx::set_gpu_timing made and ctx::gpu_timing reads back (Rust `GpuTiming`); `every` matters
+/// only for gpu_timing_kind::every. Build one with gpu_timing_auto(), gpu_timing_every(n) or gpu_timing_off().
+struct gpu_timing {
+    gpu_timing_kind kind = gpu_timing_kind::automatic;
+    std::uint32_t every = 0;
+    /// Equal when both made the same choice.
+    friend bool operator==(const gpu_timing& a, const gpu_timing& b) noexcept { return a.kind == b.kind && a.every == b.every; }
+    /// Different choices.
+    friend bool operator!=(const gpu_timing& a, const gpu_timing& b) noexcept { return !(a == b); }
+};
+/// Let the engine decide how often the GPU passes are timed (Rust `GpuTiming::Auto`).
+inline gpu_timing gpu_timing_auto() noexcept { return {gpu_timing_kind::automatic, 0}; }
+/// Time every `n`th frame (Rust `GpuTiming::Every`; `1` is every frame, 0 counts as 1).
+inline gpu_timing gpu_timing_every(std::uint32_t n) noexcept { return {gpu_timing_kind::every, n}; }
+/// Never time the GPU (Rust `GpuTiming::Off`).
+inline gpu_timing gpu_timing_off() noexcept { return {gpu_timing_kind::off, 0}; }
 /// A clip to bake for crowds (Rust `CrowdClip`), from crowd_clip_of.
 using crowd_clip = PonkoCrowdClip;
 /// A GPU array of four-float elements (Rust `GpuBuffer`) for compute passes, from ctx::create_gpu_buffer. A
@@ -502,6 +533,9 @@ enum class crash_kind : std::uint32_t { panic, error, native };
 using crash_report = PonkoCrashReport;
 /// An axis-aligned rectangle from `min` (top-left) to `max` (Rust `Rect`); see rect_at.
 using rect = PonkoRect;
+/// How far in from each edge of the window a phone's notch, home bar and rounded corners cover it, in
+/// logical pixels (Rust `SafeInsets`): `top`, `right`, `bottom`, `left`. See ctx::window_safe_area.
+using safe_insets = PonkoSafeInsets;
 /// A font handle (Rust `Font`) from ctx::load_font; `{0}` is the built-in font.
 using font = PonkoFont;
 /// Alignment within a world text block.
@@ -1722,6 +1756,12 @@ public:
 /// allocated there. A PONKO_PROFILE_SCOPE counts its own the same way.
 inline alloc_counts thread_alloc_counts() noexcept { return ponko_thread_alloc_counts(); }
 
+/// Bytes allocated minus bytes freed while profiling was on, for the whole process (Rust
+/// `perf::net_alloc_bytes`): the library's memory, and the program's own with PONKO_COUNT_CPP_ALLOCATIONS.
+/// Read it twice with profiling on and subtract: what the code between still holds. A loop that gives
+/// back what it takes reads (close to) zero however long it runs; a leak grows with every pass.
+inline std::int64_t net_alloc_bytes() noexcept { return ponko_net_alloc_bytes(); }
+
 /// Times the scope it lives in (see PONKO_PROFILE_SCOPE).
 class profile_scope_guard {
     const PonkoProfileScope* scope_;
@@ -1802,6 +1842,8 @@ struct cached {};
 /// instead of using the world's archetype index. Rust: `query.uncached()`.
 struct uncached {};
 
+namespace ai { class brain_row; class blackboard_row; }
+
 namespace detail {
 
 template<class T> struct is_filter : std::false_type {};
@@ -1843,10 +1885,17 @@ template<class F, class... Rest> struct presence<F, Rest...> {
     using type = typename joined<typename std::conditional<is_presence<F>::value, types<F>, types<>>::type,
                                  typename presence<Rest...>::type>::type;
 };
+/// ai::brain_row and ai::blackboard_row: each() parameters that are the
+/// world brain and blackboard columns, handed over as row objects.
+template<class T> struct is_ai_row : std::false_type {};
+template<> struct is_ai_row<ai::brain_row> : std::true_type {};
+template<> struct is_ai_row<ai::blackboard_row> : std::true_type {};
 /// The column type of an each() parameter: `T` for `T&` (written), `const T`
-/// for `const T&` and copies (only read).
+/// for `const T&` and copies (only read). Brain and blackboard rows are
+/// always written: their calls change them.
 template<class P> using column = typename std::conditional<
-    std::is_lvalue_reference<P>::value && !std::is_const<typename std::remove_reference<P>::type>::value,
+    is_ai_row<bare<P>>::value ||
+        (std::is_lvalue_reference<P>::value && !std::is_const<typename std::remove_reference<P>::type>::value),
     bare<P>, const bare<P>>::type;
 /// The component ids and options of one query.
 struct query_plan {
@@ -2081,6 +2130,8 @@ protected:
         else if constexpr (std::is_same<T, spot_light3d>::value) status = ponko_spot_light3d_component(world, &id);
         else if constexpr (std::is_same<T, model>::value) status = ponko_model_component(world, &id);
         else if constexpr (std::is_same<T, terrain_tile>::value) status = ponko_terrain_tile_component(world, &id);
+        else if constexpr (std::is_same<T, ai::brain_row>::value) status = ponko_ai_brain_component(world, &id);
+        else if constexpr (std::is_same<T, ai::blackboard_row>::value) status = ponko_ai_blackboard_component(world, &id);
         else status = ponko_component_register(world, name ? name : detail::type_name<T>().c_str(), sizeof(T), alignof(T), &id);
         if (status == PONKO_BUSY) return std::nullopt;
         detail::check(status);
@@ -2239,15 +2290,20 @@ protected:
                 rows_of(fn, raw, rows);
             }
         }
+        /// Row `i` of column `column`: the value, or a brain or blackboard row object.
+        template<class T> static decltype(auto) cell(const PonkoChunk* raw, std::size_t column, T* values, std::size_t i) {
+            if constexpr (detail::is_ai_row<std::remove_const_t<T>>::value) return std::remove_const_t<T>::at(raw, column, i);
+            else return (values[i]);
+        }
         template<class F, std::size_t... I> static void rows_of(F& fn, const PonkoChunk* raw, std::index_sequence<I...>) {
             const std::tuple<Ts*...> cols{static_cast<Ts*>(raw->columns[I])...};
             const std::size_t n = raw->count;
             if constexpr (WithEntity) {
                 const PonkoEntity* es = raw->entities;
                 for (std::size_t i = 0; i < n; ++i)
-                    fn(entity(es[i].generation) << 32 | es[i].index, std::get<I>(cols)[i]...);
+                    fn(entity(es[i].generation) << 32 | es[i].index, cell(raw, I, std::get<I>(cols), i)...);
             } else {
-                for (std::size_t i = 0; i < n; ++i) fn(std::get<I>(cols)[i]...);
+                for (std::size_t i = 0; i < n; ++i) fn(cell(raw, I, std::get<I>(cols), i)...);
             }
         }
         template<class F, class Filters> static void run(world_view& w, Filters filters, bool parallel, F& fn) {
@@ -2524,10 +2580,14 @@ public:
     /// columns: `query<Position, ponko::changed<Position>>` gets the runs of
     /// rows whose Position changed.
     template<class... Ts, class F> void query(F&& fn) {
+        static_assert(!std::disjunction<detail::is_ai_row<detail::bare<Ts>>...>::value,
+                      "ai::brain_row and ai::blackboard_row are each() parameters; chunk loops over brains use ai::query");
         run_query(typename detail::pick<false, Ts...>::type{}, typename detail::pick<true, Ts...>::type{}, false, fn);
     }
     /// query on all CPU cores at once (see each_par).
     template<class... Ts, class F> void query_par(F&& fn) {
+        static_assert(!std::disjunction<detail::is_ai_row<detail::bare<Ts>>...>::value,
+                      "ai::brain_row and ai::blackboard_row are each_par() parameters; chunk loops over brains use ai::query_par");
         run_query(typename detail::pick<false, Ts...>::type{}, typename detail::pick<true, Ts...>::type{}, true, fn);
     }
     /// How many entities have all of these components (and pass these
@@ -3343,6 +3403,19 @@ public:
     PonkoInputQueue* raw() const noexcept { return raw_; }
 };
 
+/// What an in-memory link does to datagrams (PonkoLoopbackLink, Rust `LoopbackLink`): `loss` (a share, 0
+/// to 1), `delay` and `jitter` (seconds) and `seed`. Start from loopback_link_defaults(), a perfect link; the
+/// same seed loses and delays the same datagrams on every run. For net_messages::loopback.
+using loopback_link = PonkoLoopbackLink;
+/// A perfect loopback_link (nothing lost or delayed), its header set: change the fields you need.
+inline loopback_link loopback_link_defaults() {
+    loopback_link l{};
+    l.struct_size = sizeof(loopback_link);
+    l.version = PONKO_LOOPBACK_LINK_VERSION;
+    detail::check(ponko_loopback_link_defaults(&l));
+    return l;
+}
+
 /// A message endpoint the game owns (Rust `NetMessages`): poll it every frame, send bytes on a reliable or
 /// unreliable lane, read events. The host is peer 0. Plain UDP is not authenticated or encrypted; see
 /// steam_host for Steam relays. Move-only; the destructor disconnects and frees it.
@@ -3373,6 +3446,20 @@ public:
     static std::vector<net_messages> loopback(std::size_t players) {
         std::vector<PonkoNetMessages*> raw(players);
         detail::check(ponko_net_messages_loopback(players, raw.data()));
+        std::vector<net_messages> out;
+        for (auto* m : raw) out.push_back(net_messages(m));
+        return out;
+    }
+    /// `players` endpoints joined in memory over a link that loses, delays and reorders datagrams as
+    /// `link` says, the same ones on every run: a game's netcode on a bad network, in a test. Step them
+    /// together with poll_elapsed (or game_clock) so the delays repeat exactly.
+    ///
+    ///     auto link = ponko::loopback_link_defaults();
+    ///     link.loss = 0.1; link.jitter = 0.05; link.seed = 3;
+    ///     auto nets = ponko::net_messages::loopback(2, link);
+    static std::vector<net_messages> loopback(std::size_t players, const loopback_link& link) {
+        std::vector<PonkoNetMessages*> raw(players);
+        detail::check(ponko_net_messages_loopback_link(players, &link, raw.data()));
         std::vector<net_messages> out;
         for (auto* m : raw) out.push_back(net_messages(m));
         return out;
@@ -3435,6 +3522,9 @@ public:
     void send_to_all(lane l, const std::string& text) { send_to_all(l, text.data(), text.size()); }
     /// Sends what's queued and receives what arrived; then read next_event until empty.
     void poll() { detail::check(ponko_net_messages_poll(raw_)); }
+    /// poll() on a clock of your own: protocol time moves on by `seconds`, not by the wall clock. For tests
+    /// that step loopback endpoints frame by frame, and replays; don't mix it with poll() on one endpoint.
+    void poll_elapsed(double seconds) { detail::check(ponko_net_messages_poll_elapsed(raw_, seconds)); }
     /// The oldest event, or std::nullopt.
     std::optional<message_event> next_event() {
         PonkoMessageEvent e{};
@@ -4849,6 +4939,10 @@ public:
     void set_closes_screen(id node, bool on = true) { detail::check(ponko_ctx_ui_set_closes_screen(raw_, target_, node, on)); }
     /// Whether pressing `node` closes its screen.
     bool closes_screen(id node) const { bool on = false; detail::check(ponko_ctx_ui_closes_screen(raw_, target_, node, &on)); return on; }
+    /// Lays root `node` out inside the window's safe area, clear of a phone's notch and home bar (`on` false: in the whole window, the default).
+    void set_inside_safe_area(id node, bool on = true) { detail::check(ponko_ctx_ui_set_inside_safe_area(raw_, target_, node, on)); }
+    /// Whether root `node` is laid out inside the safe area.
+    bool inside_safe_area(id node) const { bool on = false; detail::check(ponko_ctx_ui_inside_safe_area(raw_, target_, node, &on)); return on; }
     /// Shows the tree under `root` as a HUD: drawn below every screen, never closed by Escape, never takes input.
     void show_hud(id root) { detail::check(ponko_ctx_ui_show_hud(raw_, target_, root)); }
     /// Takes a HUD off the screen; its nodes stay.
@@ -6043,6 +6137,12 @@ public:
     input_scenario& touch_drag(std::uint64_t from, std::uint64_t to, vec2 start, vec2 end) {
         return step(ponko_input_scenario_touch_drag(raw_, from, to, start, end));
     }
+    /// Feeds the window's safe area insets on tick `tick`, as a phone reports them (as ctx::window_feed_safe_insets),
+    /// before that tick's simulation systems run: a layout for a notched phone is checked without a device. They stay
+    /// until another step changes them.
+    input_scenario& safe_insets(std::uint64_t tick, ponko::safe_insets insets) {
+        return step(ponko_input_scenario_safe_insets(raw_, tick, insets));
+    }
     /// Checks `c` after the simulation systems of tick `tick` ran.
     input_scenario& expect(std::uint64_t tick, const scenario_check& c) {
         switch (c.kind_) {
@@ -6726,6 +6826,19 @@ public:
     /// Turns on scope timing (PONKO_PROFILE_SCOPE) and allocation counting;
     /// the overlay and PONKO_BENCH do it by themselves. Off, a scope costs one atomic load.
     void set_profiling(bool on) { detail::check(ponko_ctx_set_profiling(raw_, on)); }
+    /// Chooses how often the GPU passes are timed (Rust `perf.set_gpu_timing`), apart from profiling:
+    /// gpu_timing_auto() (the default: one frame in 16, every frame while profiling is on),
+    /// gpu_timing_every(n) or gpu_timing_off(). The overlay, traces, benchmark runs and automatic quality
+    /// still get every frame's times while they are on.
+    void set_gpu_timing(const ponko::gpu_timing& timing) {
+        detail::check(ponko_ctx_set_gpu_timing(raw_, static_cast<std::uint32_t>(timing.kind), timing.every));
+    }
+    /// What set_gpu_timing chose (Rust `perf.gpu_timing()`), not what the engine did for the frame.
+    ponko::gpu_timing gpu_timing() const {
+        std::uint32_t kind = 0, every = 0;
+        detail::check(ponko_ctx_gpu_timing(raw_, &kind, &every));
+        return {static_cast<gpu_timing_kind>(kind), every};
+    }
     /// Where time and allocations went over the last frames (needs set_profiling(true) for a while).
     ponko::perf_report perf_report() const {
         return ponko::perf_report(detail::read_text([&](char* b, std::size_t c, std::size_t* n) { return ponko_ctx_perf_report(raw_, b, c, n); }));
@@ -6868,6 +6981,16 @@ public:
     void window_save_settings() { detail::check(ponko_ctx_window_save_settings(raw_)); }
     /// Restores saved window settings; a monitor or mode that is gone falls back to windowed.
     void window_restore_settings() { detail::check(ponko_ctx_window_restore_settings(raw_)); }
+    /// The window's safe area (Rust `window.safe_area()`): the part a phone's notch, home bar and rounded
+    /// corners leave, in the same logical pixels as window_size(); the whole window where nothing covers it.
+    /// The engine's touch controls keep to it, and UI roots made with ui::set_inside_safe_area are laid out in it.
+    rect window_safe_area() const { rect r{}; detail::check(ponko_ctx_window_safe_area(raw_, &r)); return r; }
+    /// How far in from each edge the platform covers the window (Rust `window.safe_insets()`): what
+    /// window_safe_area() leaves out.
+    safe_insets window_safe_insets() const { safe_insets i{}; detail::check(ponko_ctx_window_safe_insets(raw_, &i)); return i; }
+    /// Feeds the safe area insets a phone would report (Rust `window.feed_safe_insets()`), as a test does; a
+    /// negative or not finite inset counts as 0. The UI lays out with them from the next frame.
+    void window_feed_safe_insets(safe_insets insets) { detail::check(ponko_ctx_window_feed_safe_insets(raw_, insets)); }
     /// Copies UTF-8 text to the clipboard.
     void clipboard_write(const char* value) { detail::check(ponko_ctx_clipboard_write(raw_, value)); }
     /// The clipboard's text; unset headless, with no text, or while a browser read is pending.
@@ -8326,6 +8449,21 @@ public:
     void set_buoyancy_sphere(entity e, float radius, float drag = PONKO_BUOYANCY_DRAG) {
         detail::check(ponko_ctx_set_buoyancy_sphere(raw_, e, radius, drag));
     }
+    /// Makes 3D body `e` float as `desc` says (see buoyancy_desc): its points, the water's density,
+    /// drag and the ripple switch. Replaces any buoyancy it had.
+    void set_buoyancy(entity e, const PonkoBuoyancyDesc& desc) {
+        detail::check(ponko_ctx_set_buoyancy(raw_, e, &desc));
+    }
+    /// How floating body `e` floats, if it does: change a field and give it back to set_buoyancy.
+    std::optional<PonkoBuoyancyDesc> buoyancy(entity e) const {
+        PonkoBuoyancyDesc d{};
+        d.struct_size = sizeof d;
+        d.version = PONKO_BUOYANCY_DESC_VERSION;
+        auto status = ponko_ctx_buoyancy(raw_, e, &d);
+        if (status == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(status);
+        return d;
+    }
     /// Stops `e` floating; false if it had no buoyancy.
     bool remove_buoyancy(entity e) {
         auto status = ponko_ctx_remove_buoyancy(raw_, e);
@@ -8888,6 +9026,15 @@ public:
     /// The upload queue's budget and counters.
     ponko::upload_stats upload_stats() const {
         ponko::upload_stats u{}; detail::check(ponko_ctx_upload_stats(raw_, &u)); return u;
+    }
+    /// The upload queue's counters with the GPU's own upload times (Rust `UploadStats::gpu_created_ms`,
+    /// `gpu_upload_ms`): the has_gpu_* flags say whether a time arrived yet.
+    ponko::upload_stats_ex upload_stats_ex() const {
+        ponko::upload_stats_ex u{};
+        u.struct_size = sizeof u;
+        u.version = PONKO_UPLOAD_STATS_EX_VERSION;
+        detail::check(ponko_ctx_upload_stats_ex(raw_, &u));
+        return u;
     }
     /// Waits until everything streamed so far is loaded and every asset group is done (tests and tools).
     void finish_uploads() { detail::check(ponko_ctx_finish_uploads(raw_)); }
@@ -10275,6 +10422,38 @@ private:
     water_desc() : PonkoWaterDesc{} {
         struct_size = sizeof(PonkoWaterDesc);
         version = PONKO_WATER_DESC_VERSION;
+    }
+};
+
+/// How a 3D body floats on water (Rust water::Buoyancy): start from box, sphere or from_points (fresh
+/// water, drag PONKO_BUOYANCY_DRAG, ripples on), change any field (water_density, drag, ripples, the
+/// points), then ctx::set_buoyancy.
+struct buoyancy_desc : PonkoBuoyancyDesc {
+    /// A box of `size` (full width, height and depth) centred on the body: eight points.
+    static buoyancy_desc box(vec3 size) {
+        buoyancy_desc d;
+        detail::check(ponko_buoyancy_desc_box(&d, size));
+        return d;
+    }
+    /// A ball of `radius`: seven points.
+    static buoyancy_desc sphere(float radius) {
+        buoyancy_desc d;
+        detail::check(ponko_buoyancy_desc_sphere(&d, radius));
+        return d;
+    }
+    /// Sample `points` (body space, 1 to PONKO_BUOYANCY_MAX_POINTS) sharing `volume` m³, each standing for
+    /// a column `height` metres tall.
+    static buoyancy_desc from_points(const std::vector<vec3>& points, float volume, float height) {
+        buoyancy_desc d;
+        detail::check(ponko_buoyancy_desc_points(&d, points.data(), static_cast<std::uint32_t>(points.size()),
+                                                 volume, height));
+        return d;
+    }
+
+private:
+    buoyancy_desc() : PonkoBuoyancyDesc{} {
+        struct_size = sizeof(PonkoBuoyancyDesc);
+        version = PONKO_BUOYANCY_DESC_VERSION;
     }
 };
 
@@ -11671,10 +11850,18 @@ inline std::optional<vec3> get_vec3(ctx& c, entity e, std::uint64_t key) {
     return v;
 }
 
-// World brains inside loops: ai::query and ai::each visit each entity's
-// brain and blackboard with its other components, so a system reads and
-// writes them where it visits the entity (C `ponko_chunk_ai_brain`, Rust
-// `Query<(&mut Brain, &mut Blackboard, ...)>`).
+// World brains inside loops: world_view::each and each_par take ai::brain_row
+// and ai::blackboard_row parameters (by value) beside the components, so a
+// system reads and writes them where it visits the entity (C
+// `ponko_chunk_ai_brain`, Rust `Query<(&mut Brain, &mut Blackboard, ...)>`):
+//
+//     c.world().each([&](ponko::entity e, ai::brain_row brain, ai::blackboard_row board, const position& p) {
+//         board.set_vec2(at, p.value);
+//         if (brain.doing(chase)) ...
+//     });
+//
+// ai::query hands over whole chunks with their rows; ai::each is the older
+// spelling of the typed each.
 
 /// The world brain of one query row (C `PonkoAiBrain`): what to do. Valid
 /// during the query callback.
@@ -11683,6 +11870,12 @@ class brain_row {
 public:
     /// Wraps a C row; ai::query makes these for you.
     explicit brain_row(PonkoAiBrain* raw) noexcept : raw_(raw) {}
+    /// The brain in row `row` of a chunk's brain column `column`; throws std::out_of_range past the end.
+    static brain_row at(const PonkoChunk* chunk, std::size_t column, std::size_t row) {
+        PonkoAiBrain* b = ponko_chunk_ai_brain(chunk, column, row);
+        if (!b) throw std::out_of_range("brain row");
+        return brain_row(b);
+    }
     /// The key id of its `index`th action in tree order, 0 past the last.
     std::uint64_t action(std::size_t index = 0) const {
         std::uint64_t k = 0;
@@ -11719,6 +11912,13 @@ public:
     void finish(std::uint64_t action_key, status result) {
         detail::check(ponko_ai_brain_finish(raw_, action_key, static_cast<PonkoAiStatus>(result)));
     }
+    /// Thinks at the next ai::think, whatever its period: something it should react to happened (a
+    /// noise, a hit). Fine from ai::query_par and each_par, each row on its chunk's thread.
+    void wake() { detail::check(ponko_ai_brain_wake(raw_)); }
+    /// Hears signal `key` (an ai::key) now: a `wait_for` node waiting for it succeeds at its next think,
+    /// which comes at the next ai::think. Unlike ai::signal it reaches this brain at once, without an
+    /// event, so it works from the parallel loops too.
+    void signal(std::uint64_t key) { detail::check(ponko_ai_brain_signal(raw_, key)); }
     /// The C row.
     PonkoAiBrain* raw() const noexcept { return raw_; }
 };
@@ -11737,6 +11937,13 @@ class blackboard_row {
 public:
     /// Wraps a C row; ai::query makes these for you.
     explicit blackboard_row(PonkoAiBlackboard* raw) noexcept : raw_(raw) {}
+    /// The blackboard in row `row` of a chunk's blackboard column `column`; throws std::out_of_range past the
+    /// end.
+    static blackboard_row at(const PonkoChunk* chunk, std::size_t column, std::size_t row) {
+        PonkoAiBlackboard* b = ponko_chunk_ai_blackboard(chunk, column, row);
+        if (!b) throw std::out_of_range("blackboard row");
+        return blackboard_row(b);
+    }
     /// Sets an entry. A key id must come from ai::key.
     ///@{
     void set_num(std::uint64_t key, float v) { detail::check(ponko_ai_blackboard_set_num(raw_, key, v)); }
@@ -11765,17 +11972,9 @@ public:
     /// The chunk's rows, whose brain column is `column` (the blackboard's the next).
     rows(const PonkoChunk* raw, std::size_t column) noexcept : raw_(raw), column_(column) {}
     /// The brain of row `i`.
-    brain_row brain(std::size_t i) const {
-        PonkoAiBrain* b = ponko_chunk_ai_brain(raw_, column_, i);
-        if (!b) throw std::out_of_range("brain row");
-        return brain_row(b);
-    }
+    brain_row brain(std::size_t i) const { return brain_row::at(raw_, column_, i); }
     /// The blackboard of row `i`.
-    blackboard_row blackboard(std::size_t i) const {
-        PonkoAiBlackboard* b = ponko_chunk_ai_blackboard(raw_, column_ + 1, i);
-        if (!b) throw std::out_of_range("blackboard row");
-        return blackboard_row(b);
-    }
+    blackboard_row blackboard(std::size_t i) const { return blackboard_row::at(raw_, column_ + 1, i); }
 };
 
 } // namespace ai
@@ -11821,7 +12020,9 @@ template<class... Ts, class F> void query(ctx& c, F&& fn) { detail::brain_query<
 /// touch only its own chunk's rows.
 template<class... Ts, class F> void query_par(ctx& c, F&& fn) { detail::brain_query<Ts...>(c, true, fn); }
 /// Calls `fn(entity, ai::brain_row, ai::blackboard_row, Ts&...)` for every
-/// entity with a world brain and all of `Ts`.
+/// entity with a world brain and all of `Ts`. world_view::each does the same
+/// with the rows among its parameters, in any order, with filters and
+/// each_par: prefer it.
 template<class... Ts, class F> void each(ctx& c, F&& fn) {
     query<Ts...>(c, [&fn](chunk<Ts...> ch, rows r) {
         const auto cols = ch.columns();
@@ -11848,15 +12049,40 @@ template<class... Ts, class F> void each(ctx& c, F&& fn) {
     static const PonkoProfileScope* const PONKO_PP_CAT(ponko_scope_, __LINE__) = ponko_profile_scope(name); \
     ::ponko::profile_scope_guard PONKO_PP_CAT(ponko_scope_guard_, __LINE__)(PONKO_PP_CAT(ponko_scope_, __LINE__))
 
+namespace ponko::detail {
+// PONKO_COUNT_CPP_ALLOCATIONS's operator new and delete: each block keeps its size in front of it (one
+// max_align_t, so what new returns stays aligned), so delete can report the free too and
+// net_alloc_bytes sees what the program gives back.
+inline constexpr std::size_t counted_header = alignof(std::max_align_t);
+inline void* counted_new(std::size_t n) {
+    if (n > std::numeric_limits<std::size_t>::max() - counted_header) throw std::bad_alloc();
+    void* block = std::malloc(n + counted_header);
+    if (!block) throw std::bad_alloc();
+    std::memcpy(block, &n, sizeof n);
+    ponko_note_allocation(n);
+    return static_cast<unsigned char*>(block) + counted_header;
+}
+inline void counted_delete(void* p) noexcept {
+    if (!p) return;
+    unsigned char* block = static_cast<unsigned char*>(p) - counted_header;
+    std::size_t n = 0;
+    std::memcpy(&n, block, sizeof n);
+    ponko_note_deallocation(n);
+    std::free(block);
+}
+} // namespace ponko::detail
+
 /// Put this once, at global scope in one .cpp file, to count C++ heap
-/// allocations (operator new) per frame and per system in the reports. It
-/// replaces the global operator new/delete; counting happens only while
-/// profiling is on, so the cost otherwise is one atomic load per `new`.
+/// allocations (operator new) per frame and per system in the reports, and
+/// their frees in net_alloc_bytes. It replaces the global operator new and
+/// delete (each block keeps its size in a small header); counting happens
+/// only while profiling is on, so the cost otherwise is one atomic load per
+/// `new` and per `delete`.
 #define PONKO_COUNT_CPP_ALLOCATIONS \
-    void* operator new(std::size_t n) { ponko_note_allocation(n); if (void* p = std::malloc(n ? n : 1)) return p; throw std::bad_alloc(); } \
-    void* operator new[](std::size_t n) { ponko_note_allocation(n); if (void* p = std::malloc(n ? n : 1)) return p; throw std::bad_alloc(); } \
-    void operator delete(void* p) noexcept { std::free(p); } \
-    void operator delete[](void* p) noexcept { std::free(p); } \
-    void operator delete(void* p, std::size_t) noexcept { std::free(p); } \
-    void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
+    void* operator new(std::size_t n) { return ::ponko::detail::counted_new(n); } \
+    void* operator new[](std::size_t n) { return ::ponko::detail::counted_new(n); } \
+    void operator delete(void* p) noexcept { ::ponko::detail::counted_delete(p); } \
+    void operator delete[](void* p) noexcept { ::ponko::detail::counted_delete(p); } \
+    void operator delete(void* p, std::size_t) noexcept { ::ponko::detail::counted_delete(p); } \
+    void operator delete[](void* p, std::size_t) noexcept { ::ponko::detail::counted_delete(p); }
 #endif

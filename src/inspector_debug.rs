@@ -1,8 +1,10 @@
 //! The inspector's **Debug drawing** section: shows and flips what
 //! `ctx.debug` draws, as the control endpoint's `debug.draw` does: debug
 //! drawing itself, the built-in views, how far the colliders view draws
-//! mesh triangles, and the toggles the game and its plugins added with
-//! [`Game::debug_toggle`](crate::game::Game::debug_toggle).
+//! mesh triangles, the toggles the game and its plugins added with
+//! [`Game::debug_toggle`](crate::game::Game::debug_toggle), and (with 3D)
+//! whether each 3D camera draws the 3D lines and labels: its
+//! [`debug_draw`](crate::d3::Camera::debug_draw), Default, On or Off.
 
 use egui::{DragValue, RichText, Ui};
 
@@ -60,6 +62,38 @@ pub(super) fn panel(ui: &mut Ui, ctx: &mut Ctx) {
         // A name just listed: always a toggle.
         let _ = ctx.debug.set_toggle(&name, state);
     }
+    #[cfg(feature = "3d")]
+    cameras(ui, ctx);
+}
+
+/// A row per 3D camera (the window's, each extra view's, each target
+/// camera's) with its `debug_draw`: Default, On or Off.
+#[cfg(feature = "3d")]
+fn cameras(ui: &mut Ui, ctx: &mut Ctx) {
+    ui.label(RichText::new("Cameras").strong()).on_hover_text(
+        "Whether each 3D camera draws the 3D lines and labels (Camera::debug_draw). \
+         Default: the window's cameras do, a target camera while it draws particles",
+    );
+    let scene = &mut ctx.scene3d;
+    debug_draw_row(ui, "Window camera", &mut scene.camera.debug_draw);
+    for (i, view) in scene.views.iter_mut().enumerate() {
+        debug_draw_row(ui, &format!("View {}", i + 1), &mut view.camera.debug_draw);
+    }
+    for (i, target) in scene.passes.target_cameras.iter_mut().enumerate() {
+        debug_draw_row(ui, &format!("Target camera {}", i + 1), &mut target.camera.debug_draw);
+    }
+}
+
+/// `name`, then Default (`None`), On and Off: the one `value` is, shown
+/// selected; a click sets it.
+#[cfg(feature = "3d")]
+fn debug_draw_row(ui: &mut Ui, name: &str, value: &mut Option<bool>) {
+    ui.horizontal(|ui| {
+        ui.label(name);
+        for (text, state) in [("Default", None), ("On", Some(true)), ("Off", Some(false))] {
+            ui.selectable_value(value, state, text);
+        }
+    });
 }
 
 #[cfg(test)]
@@ -158,6 +192,58 @@ mod tests {
         let texts: Vec<&str> = labels.iter().map(|(t, _)| t.as_str()).collect();
         assert!(texts.contains(&"Debug drawing"), "{texts:?}");
         assert!(texts.contains(&"ai.paths"), "open, listing the toggles: {texts:?}");
+    }
+
+    /// Clicks `text` on the row labelled `row`.
+    #[cfg(feature = "3d")]
+    fn click_in_row(egui: &egui::Context, ctx: &mut Ctx, row: &str, text: &str) {
+        let labels = frame(egui, ctx, vec![]);
+        let (_, name) = labels
+            .iter()
+            .find(|(t, _)| t == row)
+            .unwrap_or_else(|| panic!("no `{row}` in {labels:?}"));
+        let on_row: Vec<(String, egui::Rect)> = labels
+            .iter()
+            .filter(|(_, r)| (r.center().y - name.center().y).abs() < 4.0)
+            .cloned()
+            .collect();
+        click(egui, ctx, &on_row, text);
+    }
+
+    #[test]
+    #[cfg(feature = "3d")]
+    fn each_3d_cameras_debug_draw_is_shown_and_set_as_default_on_or_off() {
+        let mut ctx = game();
+        // A target's texture handle: nothing is drawn here.
+        let target = crate::render::RenderTarget::from_texture(crate::texture::Texture::new(1, 64, 64));
+        let mut camera = ctx.scene3d.camera;
+        camera.debug_draw = Some(false);
+        ctx.scene3d
+            .passes
+            .target_cameras
+            .push(crate::render::TargetCamera::new(camera, target));
+        let egui = egui::Context::default();
+        let labels = frame(&egui, &mut ctx, vec![]);
+        let texts: Vec<&str> = labels.iter().map(|(t, _)| t.as_str()).collect();
+        for name in ["Cameras", "Window camera", "Target camera 1"] {
+            assert!(texts.contains(&name), "`{name}` is shown: {texts:?}");
+        }
+        assert_eq!(texts.iter().filter(|t| **t == "Default").count(), 2, "{texts:?}");
+
+        click_in_row(&egui, &mut ctx, "Window camera", "On");
+        assert_eq!(ctx.scene3d.camera.debug_draw, Some(true));
+        click_in_row(&egui, &mut ctx, "Window camera", "Off");
+        assert_eq!(ctx.scene3d.camera.debug_draw, Some(false));
+        click_in_row(&egui, &mut ctx, "Window camera", "Default");
+        assert_eq!(ctx.scene3d.camera.debug_draw, None);
+        // The target camera's row sets its own flag only.
+        let target_flag = |ctx: &Ctx| ctx.scene3d.passes.target_cameras[0].camera.debug_draw;
+        assert_eq!(target_flag(&ctx), Some(false), "untouched so far");
+        click_in_row(&egui, &mut ctx, "Target camera 1", "Default");
+        assert_eq!(target_flag(&ctx), None);
+        click_in_row(&egui, &mut ctx, "Target camera 1", "On");
+        assert_eq!(target_flag(&ctx), Some(true));
+        assert_eq!(ctx.scene3d.camera.debug_draw, None, "the window camera's stays");
     }
 
     #[test]

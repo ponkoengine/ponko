@@ -211,13 +211,20 @@ goes, in a running game:
 - **`ctx.perf.gpu_passes()`**: GPU time per pass (each shadow cascade, depth
   prepass, opaque, transparent, screen effects, bloom, post), measured
   with timestamp queries. On GPUs that draw in tiles, passes overlap, so
-  each is counted from the end of the one before.
+  each is counted from the end of the one before; a pass the GPU runs
+  entirely alongside others (a compute pass next to a render pass it
+  doesn't depend on) shares that time with them evenly, so the passes add
+  up to no more than the frame's GPU time. A pass that ran but whose times
+  didn't come back is listed by `ctx.perf.gpu_passes_not_timed()` and
+  marked "not timed" in the overlay, the report and traces, never shown as
+  0 ms (see [Which passes can be timed](#which-passes-can-be-timed)).
   Timing a pass costs the graphics library a few heap allocations, so a
   game times one frame in 16, and every frame while something reads every
   frame: profiling, the overlay, a trace, a `PONKO_BENCH` run or automatic
   quality. The smoothed times weigh each sample by the frames it stands
   for, so they settle at the same values either way (see
-  [Cost](viewports.md#cost) for what it saves).
+  [Cost](viewports.md#cost) for what it saves). A game can pick how often
+  itself: [how often GPU passes are timed](#how-often-gpu-passes-are-timed).
 - **`ctx.perf.render_stats()`**: draw calls; 3D models and triangles drawn for
   the camera and, separately, for the shadow maps; and the render CPU
   time split into culling (`collect_ms`), recording (`record_ms`, all
@@ -253,6 +260,83 @@ goes, in a running game:
 
 </div>
 </div>
+
+### How often GPU passes are timed
+
+`ctx.perf.set_gpu_timing` picks the cadence, separately from profiling
+(which also times scopes and counts allocations):
+
+<div class="lang-pair">
+<div>
+
+```rust
+# use ponko::prelude::*;
+use ponko::perf::GpuTiming;
+
+fn gpu_times(ctx: &mut Ctx) {
+    // Fresh `gpu_passes()` every frame, with profiling still off.
+    ctx.perf.set_gpu_timing(GpuTiming::Every(1));
+    // Or one frame in four, or none at all:
+    // ctx.perf.set_gpu_timing(GpuTiming::Every(4));
+    // ctx.perf.set_gpu_timing(GpuTiming::Off);
+    // `GpuTiming::Auto` is the default: one frame in 16, every frame
+    // while profiling is on.
+}
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:gpu_timing}}
+```
+
+</div>
+</div>
+
+An explicit choice also wins over profiling: `Every(4)` with profiling on
+times one frame in four. The overlay, traces, `PONKO_BENCH` runs and
+automatic quality read every frame's times, so they get every frame while
+they are on, whatever the setting; the choice applies again when they stop.
+`Off` leaves `gpu_passes()` empty and `gpu_ms` `None` (with nothing reading
+them). A change takes effect on the next frame. C reads and writes the
+choice with `ponko_ctx_set_gpu_timing(ctx, PONKO_GPU_TIMING_EVERY, 4)` and
+`ponko_ctx_gpu_timing` (`PONKO_GPU_TIMING_AUTO`, `_EVERY`, `_OFF`; the count
+matters only for `_EVERY`); a bad kind is `PONKO_INVALID_ARGUMENT`.
+
+What each choice costs the game's thread in heap allocations per frame
+(the offscreen test `allocations_per_frame_fall_as_gpu_timing_gets_rarer`;
+a debug test build on an Apple M4 Max, Metal, a 64 x 64 offscreen frame of
+one cube, so only the differences carry over to a real scene):
+
+| Setting | Allocations per frame | More than `Off` |
+|---|---|---|
+| `Every(1)` | 282.0 | 45.0 |
+| `Every(4)` | 248.2 | 11.2 |
+| `Auto` (one in 16) | 239.8 | 2.8 |
+| `Off` | 237.0 | |
+
+The rest is the frame itself. These count the game's thread only: the
+graphics library allocates on the threads that record passes too.
+
+### Which passes can be timed
+
+| Backend | Render passes | Compute passes (culling, skinning, GI, reflections) |
+|---|---|---|
+| Metal (macOS, iOS) | Timed | Timed. A frame's timestamps are read once the GPU has finished it: Metal writes a compute pass's late, and reading them sooner gave the previous frame's, so these passes used to read 0 ms. |
+| Vulkan, DirectX 12 | Timed | Timed |
+| OpenGL (desktop, with `GL_ARB_timer_query`) | Timed | Timed |
+| WebGPU in a browser | Timed where the browser offers timestamp queries; browsers round them, so short passes read coarse times | Same |
+| WebGL2, and GPUs without timestamp queries | Not timed: no GPU times at all (`gpu_ms` is `None`) | Not timed |
+
+On any backend, a pass with nothing to do (no draws, no dispatches) may
+write no timestamps: Metal skips such a pass. It is then listed as not
+timed for that frame. The frame's GPU time still covers everything that
+ran. The engine's offscreen GPU test of a compute pass
+(`a_compute_pass_with_real_work_gets_a_time_within_the_frame` in
+`src/render/timer.rs`) has run on Metal; the other rows follow from what
+the graphics library supports there and are checked when that test runs on
+those machines.
 
 ### Benchmark runs
 
@@ -353,7 +437,7 @@ are per frame.
 
 | Field | What |
 |---|---|
-| `gpu_timing` | `available`: the GPU has timestamp queries; `frames_timed`: frames whose GPU times came back (one in 16 outside profiling, see `ctx.perf.gpu_passes()` above; `perf.get` with `profiling: true` times every frame) |
+| `gpu_timing` | `available`: the GPU has timestamp queries; `frames_timed`: frames whose GPU times came back (one in 16 outside profiling, see `ctx.perf.gpu_passes()` above; `perf.get` with `profiling: true` times every frame); `cadence`: what the game chose with [`set_gpu_timing`](#how-often-gpu-passes-are-timed), `auto`, `every` (with `every`: the number of frames) or `off`. `cadence: "off"` with `available: true` is the game's choice, so no times are expected (`unavailable` says so); `available: false` is an adapter without timestamps, whatever the cadence |
 | `cpu_ms` | the renderer's CPU time: `total`, split into `extract` (culling, collecting models), `prepare` (uploading 3D data), `encode` (recording command buffers), `submit` and `other` (sprites, overlays) |
 | `gpu_ms` | `frame` and `passes` (`[{name, ms}]` in the order they run), smoothed |
 | `counts` | `draw_calls`, `sprites`, `models`, `triangles`, `shadow_models`, `shadow_triangles`, `occluded_models`, `frustum_culled_models` (see below), `frustum_culled_other_models` (always `null`, see below), `pipelines_built`, and `instance_batches`: how the [static instance batches](3d.md#which-path-a-batch-takes) were culled (`batches`, `instances`, `gpu_driven`, `gpu_instances`, `cpu_small`, `cpu_no_compute`, `cpu_over_limit`, `dropped`, `pools`, `pages`, `pool_bytes`, `cull_dispatches`, `cull_jobs`, `views_skipped`) |
@@ -473,8 +557,10 @@ numbers made up for the example (shapes as the engine's tests build them).
    triangles didn't change, and
    `fps` barely moved because the display's refresh rate capped it. Under
    vsync, compare `gpu_ms`, not `fps`. If `gpu_timing.available` is
-   `false`, `gpu_ms` is `null` on both sides: compare the `cpu_ms` and the
-   `counts` instead, or benchmark with `PONKO_BENCH`.
+   `false` (an adapter without timestamps) or `gpu_timing.cadence` is
+   `off` (the game turned timing off), `gpu_ms` is `null` on both sides:
+   compare the `cpu_ms` and the `counts` instead, or benchmark with
+   `PONKO_BENCH`.
 
 C and C++ games get the control method and the MCP tool through the same
 endpoint, and can read and change the quality level themselves with

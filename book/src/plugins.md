@@ -178,7 +178,7 @@ a version table, and an `AGENTS.md`. It depends on the engine with
 
 Plugins the project maintains outside the engine live in a companion
 repository of their own,
-[ponko-plugins](https://gitlab.com/ponkoengine/ponko-plugins): a Cargo
+[ponko-extras](https://gitlab.com/ponkoengine/ponko-extras): a Cargo
 workspace with one crate per plugin in `crates/`. Its crates are made with
 `ponko new --plugin` (`--git` pointing at the engine, or the released
 version), follow the naming and versioning rules above with the `ponko_`
