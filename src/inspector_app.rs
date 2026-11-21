@@ -2498,9 +2498,10 @@ mod tests {
             let saved: serde_json::Value =
                 serde_json::from_str(&std::fs::read_to_string(&scene.file).unwrap()).unwrap();
             let records = &saved["resources"]["GltfSceneSaves"]["scenes"];
+            let link = &records[0]["overrides"]["Wall/Lamp"]["scene_parent"];
             assert_eq!(
-                records[0]["overrides"]["Wall/Lamp"]["parent"],
-                serde_json::json!({ "scene_node": { "scene": records[1]["id"], "node": "Post" } }),
+                (&link["scene"], &link["node"]),
+                (&records[1]["id"], &serde_json::json!("Post")),
                 "{records}"
             );
             p.open_file(&mut ctx, &scene.name);
@@ -2539,6 +2540,43 @@ mod tests {
             on_post_at(&mut ctx, &yard, &posts);
             let models = ctx.world.query::<&crate::render::Model>().iter().count();
             assert_eq!(models, 4, "the crate, the wall, the lamp and the post, once");
+        }
+
+        #[test]
+        fn a_node_whose_parent_scene_failed_to_load_shows_the_parent_missing_and_its_revert_undoes() {
+            let yard = gltf_asset("missing-yard", &yard_nodes(-3.0));
+            let posts = gltf_asset("missing-posts", &serde_json::json!([{ "name": "Post", "mesh": 0 }]));
+            let scene = TempAsset::new("missing-scene");
+            let (egui, mut p, mut ctx, _) = editor_with_level(&yard);
+            ctx.spawn_prefab(&posts.name, T3::at(vec3(4.0, 0.0, 0.0))).unwrap();
+            frame(&egui, &mut p, &mut ctx, vec![]);
+            let (lamp, post) = (node_in(&mut ctx, &yard, "Wall/Lamp"), node_in(&mut ctx, &posts, "Post"));
+            ctx.edit(|ed, ctx| ed.set_parent(ctx, lamp, Some(post))).unwrap();
+            ctx.edit(|ed, ctx| ed.save_as(ctx, &scene.name, DocKind::Scene))
+                .unwrap();
+
+            // Opened again with the post's file broken.
+            std::fs::write(&posts.file, "not a glTF file").unwrap();
+            p.open_file(&mut ctx, &scene.name);
+            assert!(p.error.is_none(), "the scene opens without it: {:?}", p.error);
+            frame(&egui, &mut p, &mut ctx, vec![]);
+            let (lamp, wall) = (node_in(&mut ctx, &yard, "Wall/Lamp"), node_in(&mut ctx, &yard, "Wall"));
+            assert_eq!(parent_of(&ctx, lamp), Some(wall), "it waits on the file's parent");
+            click_row(&egui, &mut p, &mut ctx, "Lamp");
+            let missing = |t: &str| t.contains(&format!("node \"Post\" of {}", posts.name)) && t.contains("missing");
+            let shapes = drawn(&egui, &mut p, &mut ctx, vec![]);
+            assert!(text_at(&shapes, missing).is_some(), "{:?}", texts(&shapes));
+            assert!(text_at(&shapes, |t| t == "Wall/Lamp › parent").is_some());
+
+            click_text(&egui, &mut p, &mut ctx, |t| t == "Revert");
+            assert!(p.error.is_none(), "{:?}", p.error);
+            let shapes = drawn(&egui, &mut p, &mut ctx, vec![]);
+            assert!(text_at(&shapes, missing).is_none(), "{:?}", texts(&shapes));
+            assert!(text_at(&shapes, |t| t == "Same as the file").is_some());
+
+            frame(&egui, &mut p, &mut ctx, vec![command(Key::Z)]);
+            let shapes = drawn(&egui, &mut p, &mut ctx, vec![]);
+            assert!(text_at(&shapes, missing).is_some(), "undo: {:?}", texts(&shapes));
         }
 
         /// The lamp of `yard` hangs off the post of `posts`.
