@@ -20,6 +20,7 @@
 //! | Events arrive once, in order, both ways, under loss | `events_arrive_once_and_in_order_both_ways_under_loss` |
 //! | Raw events (bytes, declared by name, for C and C++) arrive once, unchanged, both ways, under loss, in one order with typed events | `raw_events_arrive_once_unchanged_and_in_order_with_typed_ones` |
 //! | A raw event that isn't declared or is too long is refused with an error and nothing is sent; a raw event never matches a typed one | `raw_events_that_cannot_go_are_refused`, `a_raw_event_never_matches_a_typed_one` |
+//! | A component registered from C or C++ (plain bytes, `raw_component`) arrives field by field, every field type at unaligned offsets, and only its declared fields | `raw_components_declared_from_c_replicate_every_field_type` |
 //! | A client with different declarations is refused, and told why | `a_client_with_different_declarations_is_refused` |
 //! | Off, replication does nothing; on, its traffic never reaches the game's own message events | `replication_off_does_nothing`, `replication_traffic_never_reaches_the_games_message_events` |
 //! | A client that leaves is forgotten; a client whose server is gone loses its replicas | `a_client_that_leaves_is_forgotten_and_a_lost_server_takes_its_replicas` |
@@ -62,7 +63,7 @@ use crate::error::ErrorKind;
 use crate::events::Events;
 use crate::net::{
     InterestConfig, InterestTier, Interpolate, MAX_RAW_EVENT_BYTES, MessageEvent, NetEvent, NetMessages, PeerId,
-    RawEvent, Replica, Replicate, Replicated, Replication, ReplicationRole,
+    Quantize, RawEvent, RawField, RawType, Replica, Replicate, Replicated, Replication, ReplicationRole,
 };
 
 pub(super) const HZ: f64 = 60.0;
@@ -1643,4 +1644,129 @@ fn a_raw_event_never_matches_a_typed_one() {
     s.run(100, |_, _| {});
     assert!(!s.sides[1].rep.is_joined());
     assert!(s.sides[1].rep.error().is_some_and(|e| e.contains("different")));
+}
+
+/// A C struct with every replicated field type, packed (`#pragma pack(1)`),
+/// so most fields sit at unaligned offsets, and a last byte that isn't
+/// declared: `{ uint8_t tag; float x; int32_t i; uint32_t u; int16_t s;
+/// uint16_t w; int8_t b; bool on; uint8_t hidden; }`.
+const BLOB_SIZE: usize = 20;
+const BLOB_HIDDEN: usize = 19;
+
+fn blob_fields() -> Vec<RawField> {
+    let range = Quantize::Range {
+        min: -100.0,
+        max: 100.0,
+        step: 0.01,
+    };
+    vec![
+        RawField::new("tag", 0, RawType::U8, Quantize::Exact),
+        RawField::new("x", 1, RawType::F32, range),
+        RawField::new("i", 5, RawType::I32, Quantize::Exact),
+        RawField::new("u", 9, RawType::U32, Quantize::Bits(12)),
+        RawField::new("s", 13, RawType::I16, Quantize::Exact),
+        RawField::new("w", 15, RawType::U16, Quantize::Exact),
+        RawField::new("b", 17, RawType::I8, Quantize::Exact),
+        RawField::new("on", 18, RawType::Bool, Quantize::Exact),
+    ]
+}
+
+/// The bytes of blob `k`, `hidden` in the undeclared byte. Every value fits
+/// its quantization, so a replica holds the same bytes except `x` (rounded
+/// to 0.01) and `hidden` (zero: it never travels).
+fn c_blob(k: u8, hidden: u8) -> [u8; BLOB_SIZE] {
+    let mut b = [0u8; BLOB_SIZE];
+    b[0] = k;
+    b[1..5].copy_from_slice(&(f32::from(k) * 1.25 - 40.0).to_ne_bytes());
+    b[5..9].copy_from_slice(&(-70_000 * i32::from(k)).to_ne_bytes());
+    b[9..13].copy_from_slice(&(0xA00 + u32::from(k)).to_ne_bytes());
+    b[13..15].copy_from_slice(&(-300 * i16::from(k)).to_ne_bytes());
+    b[15..17].copy_from_slice(&(60_000 - u16::from(k)).to_ne_bytes());
+    b[17] = (-(k as i8)) as u8;
+    b[18] = k & 1;
+    b[BLOB_HIDDEN] = hidden;
+    b
+}
+
+fn blob_x(b: &[u8; BLOB_SIZE]) -> f32 {
+    f32::from_ne_bytes(b[1..5].try_into().unwrap())
+}
+
+/// Registers the blob the way a C game does, first in `world`, so it gets
+/// the same id on every side.
+fn register_blob(world: &mut World) -> ponko_ecs::ComponentId {
+    // SAFETY: plain bytes, no destructor.
+    unsafe { world.raw().register_component("Blob", BLOB_SIZE, 1, None) }
+}
+
+/// Entity `e`'s blob, if it has one.
+fn blob_of(world: &World, id: ponko_ecs::ComponentId, e: Entity) -> Option<[u8; BLOB_SIZE]> {
+    let p = world.raw_ref().get_dynamic(e, id)?;
+    let mut out = [0u8; BLOB_SIZE];
+    // SAFETY: `p` points to `e`'s live blob of `BLOB_SIZE` bytes.
+    unsafe { std::ptr::copy_nonoverlapping(p, out.as_mut_ptr(), BLOB_SIZE) };
+    Some(out)
+}
+
+/// Every server entity's blob, as its replica should hold it.
+fn assert_blobs_arrived(s: &mut Session, id: ponko_ecs::ComponentId, count: usize) {
+    let all = originals(&mut s.sides[0].world);
+    let have = replicas(&mut s.sides[1].world);
+    assert_eq!(have.keys().collect::<Vec<_>>(), all.keys().collect::<Vec<_>>());
+    assert_eq!(all.len(), count);
+    for (net_id, &e) in &all {
+        let sent = blob_of(&s.sides[0].world, id, e).expect("the server's blob");
+        let got = blob_of(&s.sides[1].world, id, have[net_id]).expect("the replica's blob");
+        assert!((blob_x(&sent) - blob_x(&got)).abs() <= 0.006, "{sent:?} vs {got:?}");
+        let mut want = sent;
+        want[1..5].copy_from_slice(&got[1..5]);
+        want[BLOB_HIDDEN] = 0;
+        assert_eq!(got, want, "id {net_id}: every declared field, nothing else");
+    }
+}
+
+/// The path of a component registered from C or C++ (`raw_component`):
+/// the server reads each field out of the plain bytes, the client writes
+/// them into a zeroed value, then over it as they change. Over the scripted
+/// network, without sockets or threads, so it runs under Miri.
+#[test]
+fn raw_components_declared_from_c_replicate_every_field_type() {
+    let id = register_blob(&mut World::new());
+    let mut s = Session::scripted(
+        1,
+        || declarations().raw_component("Blob", id, BLOB_SIZE, blob_fields()),
+        |_| {},
+    );
+    for side in &mut s.sides {
+        assert_eq!(register_blob(&mut side.world), id, "registered first on every side");
+    }
+    for k in 1..=3u8 {
+        let w = &mut s.sides[0].world;
+        let e = w.spawn((Replicated::new(),));
+        // SAFETY: `BLOB_SIZE` bytes of the registered blob.
+        assert!(unsafe { w.raw().insert_dynamic(e, id, c_blob(k, 9).as_ptr()) });
+    }
+    s.join(200);
+    s.run(30, |_, _| {});
+    assert_blobs_arrived(&mut s, id, 3);
+
+    // Changes write over the replica's value, the way a C system changes
+    // its bytes: through the pointer, then marked changed.
+    s.run(1, |i, side| {
+        if i == 0 {
+            let all = originals(&mut side.world);
+            for (n, &e) in all.values().enumerate() {
+                let p = side.world.raw().get_dynamic_mut(e, id).unwrap();
+                let next = c_blob(10 + n as u8, 7);
+                // SAFETY: `p` points to `e`'s live blob of `BLOB_SIZE` bytes.
+                unsafe { std::ptr::copy_nonoverlapping(next.as_ptr(), p, BLOB_SIZE) };
+                side.world.raw().mark_changed_dynamic(e, id);
+            }
+        }
+    });
+    s.run(30, |_, _| {});
+    assert_blobs_arrived(&mut s, id, 3);
+    let replica = *replicas(&mut s.sides[1].world).values().next().unwrap();
+    assert_eq!(blob_of(&s.sides[1].world, id, replica).unwrap()[0], 10, "the change arrived");
+    assert_eq!(s.sides[1].rep.client_stats().packets_bad, 0);
 }

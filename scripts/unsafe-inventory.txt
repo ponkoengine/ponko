@@ -42,9 +42,9 @@ src/reflect/hash.rs | of_layout | tests/world_hash.rs::described_c_components_ha
 src/reflect/hash.rs | FieldLayout::hash | tests/world_hash.rs::described_c_components_hash_their_fields_only | miri
 src/reflect/hash.rs | word_at | tests/world_hash.rs::described_c_components_hash_their_fields_only | miri
 src/net/replicate/kinds.rs | Raw::schema | tests/net_replication.rs::more_than_64_component_types_are_refused | miri
-src/net/replicate/kinds.rs | Raw::visit | crates/ponko_ffi/tests/replication.rs::a_c_server_replicates_c_components_to_a_c_client | os
-src/net/replicate/kinds.rs | Raw::read | crates/ponko_ffi/tests/replication.rs::a_c_server_replicates_c_components_to_a_c_client | os
-src/net/replicate/kinds.rs | Raw::write | crates/ponko_ffi/tests/replication.rs::a_c_server_replicates_c_components_to_a_c_client | os
+src/net/replicate/kinds.rs | Raw::visit | src/net/replication_conformance.rs::raw_components_declared_from_c_replicate_every_field_type | miri
+src/net/replicate/kinds.rs | Raw::read | src/net/replication_conformance.rs::raw_components_declared_from_c_replicate_every_field_type | miri
+src/net/replicate/kinds.rs | Raw::write | src/net/replication_conformance.rs::raw_components_declared_from_c_replicate_every_field_type | miri
 
 # Hierarchies: components read and written by id.
 src/hierarchy.rs | read | tests/hierarchy.rs::a_body_with_an_arm_and_a_hand | miri
