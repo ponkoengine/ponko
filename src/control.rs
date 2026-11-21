@@ -2179,16 +2179,26 @@ const WRITING_METHODS: &[&str] = &[
 #[cfg(any(test, fuzzing))]
 #[doc(hidden)]
 pub fn fuzz_requests(data: &[u8]) {
+    // Files the requests write go to a folder of the fuzzer's own, for the
+    // length of one input: the fuzzer's own paths are relative to the
+    // folder it started in.
     #[cfg(fuzzing)]
-    {
-        // Files the requests write go to a folder of the fuzzer's own.
-        static FOLDER: std::sync::OnceLock<()> = std::sync::OnceLock::new();
-        FOLDER.get_or_init(|| {
-            let dir = std::env::temp_dir().join(format!("ponko-fuzz-control-{}", std::process::id()));
-            std::fs::create_dir_all(&dir).expect("a temporary folder");
-            std::env::set_current_dir(&dir).expect("a temporary folder");
+    let _folder = {
+        struct Back(std::path::PathBuf);
+        impl Drop for Back {
+            fn drop(&mut self) {
+                let _ = std::env::set_current_dir(&self.0);
+            }
+        }
+        static FOLDERS: std::sync::OnceLock<(std::path::PathBuf, std::path::PathBuf)> = std::sync::OnceLock::new();
+        let (home, scratch) = FOLDERS.get_or_init(|| {
+            let scratch = std::env::temp_dir().join(format!("ponko-fuzz-control-{}", std::process::id()));
+            std::fs::create_dir_all(&scratch).expect("a temporary folder");
+            (std::env::current_dir().expect("a working folder"), scratch)
         });
-    }
+        std::env::set_current_dir(scratch).expect("a temporary folder");
+        Back(home.clone())
+    };
     let Ok(text) = std::str::from_utf8(data) else { return };
     let token = random_token().unwrap_or_else(|_| "0".repeat(32));
     let (tx, _rx) = mpsc::channel();

@@ -561,9 +561,37 @@ fn invalid(path: &str, what: &str, why: impl std::fmt::Display) -> Error {
     Error::decode(path, format!("{what} is not a valid texture file: {why}"))
 }
 
+/// Opens a KTX2 file, refusing what the `ktx2` crate would panic on: a
+/// basic data format descriptor block with a texel block dimension byte of
+/// 255 (it adds one to it in a `u8`).
+fn ktx2_reader(bytes: &[u8]) -> Result<ktx2::Reader<&[u8]>, String> {
+    let word = |at: usize| -> Option<u32> { Some(u32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?)) };
+    // The descriptor's offset and length sit at bytes 48 and 52 of the
+    // header; `Reader::new` checks they fit the file.
+    if let (Some(offset), Some(length)) = (word(48), word(52)) {
+        let (start, end) = (offset as usize, offset as usize + length as usize);
+        // Skip the descriptor's own 4-byte total size; blocks follow.
+        let mut at = start.saturating_add(4);
+        while at + 16 <= end.min(bytes.len()) {
+            let header = word(at).unwrap_or(0);
+            let size = u16::from_le_bytes([bytes[at + 6], bytes[at + 7]]) as usize;
+            // Vendor 0 (Khronos), type 0 (basic): texel block dimensions
+            // at bytes 12..16.
+            if header == 0 && bytes[at + 12..at + 16].contains(&255) {
+                return Err("a texel block dimension of 256".into());
+            }
+            if size == 0 {
+                break;
+            }
+            at += size;
+        }
+    }
+    ktx2::Reader::new(bytes).map_err(|e| e.to_string())
+}
+
 /// Reads a KTX2 file's header: its levels are unpacked next ([`Unpack`]).
 fn read_ktx2_header(bytes: &[u8], path: &str, what: &str) -> Result<Unpack, Error> {
-    let reader = ktx2::Reader::new(bytes).map_err(|e| invalid(path, what, format_args!("KTX2: {e}")))?;
+    let reader = ktx2_reader(bytes).map_err(|e| invalid(path, what, format_args!("KTX2: {e}")))?;
     let header = reader.header();
     if header.face_count != 1 {
         return Err(unsupported(
@@ -696,7 +724,7 @@ pub(crate) fn orm_note(bytes: &[u8]) -> Option<String> {
     if !is_ktx2(bytes) {
         return None;
     }
-    let reader = ktx2::Reader::new(bytes).ok()?;
+    let reader = ktx2_reader(bytes).ok()?;
     let (_, value) = reader.key_value_data().find(|(key, _)| *key == ORM_KEY)?;
     let value = value.strip_suffix(&[0]).unwrap_or(value);
     String::from_utf8(value.to_vec()).ok()
@@ -1315,6 +1343,25 @@ pub(crate) mod tests {
             panic!("a DDS file 2^20 pixels tall loaded");
         };
         assert_eq!(e.kind(), ErrorKind::Limit, "{}", e.message());
+    }
+
+    #[test]
+    fn a_texel_block_dimension_the_ktx2_crate_would_overflow_is_refused() {
+        // Found by the `cooked_texture` fuzz target: the `ktx2` crate adds
+        // one to each texel block dimension byte in a `u8` and panics on 255.
+        let mut file = ktx2_file(
+            Some(ktx2::Format::BC1_RGBA_UNORM_BLOCK),
+            4,
+            4,
+            &[solid_bc1(4, 4, RED_565)],
+            false,
+        );
+        let dfd_at = u32::from_le_bytes(file[48..52].try_into().unwrap()) as usize;
+        file[dfd_at + 4 + 8 + 4] = 255;
+        let Some(Err(e)) = decode(&file, "a.ktx2", "a", GpuFormats::ALL) else {
+            panic!("a texel block 256 texels wide loaded");
+        };
+        assert_eq!(e.kind(), ErrorKind::Decode, "{}", e.message());
     }
 
     #[test]
