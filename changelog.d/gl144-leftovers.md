@@ -9,3 +9,9 @@
   the saved size. Headless runs apply the same settings to `ctx.window` before
   setup; the web restores once its storage is read, before setup. Guide:
   "Remember the player's choice" in the window chapter. Rust-only for now.
+- The guide's plugins chapter points at the companion plugins repository
+  (`ponko-plugins`, beside the engine): a workspace of plugin crates made
+  from the plugin template, with a check script for each crate's layout,
+  clippy and tests. `scripts/project-url.py` knows companion repositories:
+  `check` fails on a link to one that isn't beside `PROJECT_URL`, and `set`
+  moves those links with the engine's.
