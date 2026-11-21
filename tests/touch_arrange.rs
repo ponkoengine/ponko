@@ -1,5 +1,5 @@
 //! The ready-made screen for arranging the on-screen controls
-//! (`Ctx::arrange_touch_controls`): one call opens it, fingers and the
+//! (`Input::arrange_touch_controls`): one call opens it, fingers and the
 //! mouse move and resize the controls on it, Reset puts back the game's
 //! placement, Save keeps the arrangement in the player's storage, and
 //! Cancel or Escape put back what it had. Headless frames, input scenarios.
@@ -115,7 +115,7 @@ fn spots(size: (u32, u32), scale: f32) -> Spots {
             actions(ctx);
             ctx.input.set_touch_controls(controls());
             settings(ctx);
-            ctx.arrange_touch_controls();
+            ctx.input.arrange_touch_controls();
         });
     Rc::try_unwrap(found).unwrap().into_inner()
 }
@@ -182,12 +182,9 @@ fn fingers_move_and_resize_the_controls_on_the_arrange_screen_and_save_keeps_the
         actions(ctx);
         ctx.input.set_touch_controls(controls());
         settings(ctx);
-        let screen = ctx.arrange_touch_controls();
-        assert_eq!(
-            ctx.arrange_touch_controls(),
-            screen,
-            "opening it again is the same screen"
-        );
+        ctx.input.arrange_touch_controls();
+        // Again while it is open: still one screen (Save leaves none).
+        ctx.input.arrange_touch_controls();
     });
     report.assert_passed();
     let layout = saved(&dir).expect("Save wrote the layout");
@@ -240,7 +237,7 @@ fn the_mouse_moves_and_resizes_the_controls_and_cancel_puts_them_back() {
         .run_headless_scenario(scenario, |ctx| {
             actions(ctx);
             ctx.input.set_touch_controls(controls());
-            ctx.arrange_touch_controls();
+            ctx.input.arrange_touch_controls();
         });
     report.assert_passed();
     let positions = positions.borrow();
@@ -285,7 +282,7 @@ fn reset_puts_back_the_games_placement_and_escape_closes_without_keeping_changes
         .data_dir(&dir)
         .add(Phase::Frame, move |ctx: &mut Ctx| {
             if ctx.time.frame() == 7 {
-                ctx.arrange_touch_controls();
+                ctx.input.arrange_touch_controls();
             }
             log.borrow_mut().push((
                 ctx.input.touch_layout().clone(),
@@ -297,7 +294,7 @@ fn reset_puts_back_the_games_placement_and_escape_closes_without_keeping_changes
             actions(ctx);
             ctx.input.set_touch_controls(controls());
             ctx.input.set_touch_layout(start.clone());
-            ctx.arrange_touch_controls();
+            ctx.input.arrange_touch_controls();
         });
     report.assert_passed();
     let layouts = layouts.borrow();
@@ -357,11 +354,11 @@ fn a_press_on_the_panel_is_the_panels_even_over_a_control() {
     let size = (400, 300);
     let found = Rc::new(RefCell::new(None));
     let out = found.clone();
-    let scenario = InputScenario::new().duration(3);
+    let scenario = InputScenario::new().duration(4);
     let (_, report) = Game::new("shield", size.0, size.1)
         .headless_frames(true)
         .add(Phase::Frame, move |ctx: &mut Ctx| {
-            if ctx.time.frame() != 1 {
+            if ctx.time.frame() != 2 {
                 return;
             }
             let card = ctx.ui.rect(ctx.ui.find("touch.arrange.card").unwrap()).unwrap();
@@ -377,7 +374,7 @@ fn a_press_on_the_panel_is_the_panels_even_over_a_control() {
             actions(ctx);
             ctx.input
                 .set_touch_controls(controls().place("jump", TouchPlace::new(vec2(0.5, 0.5), Vec2::ZERO)));
-            ctx.arrange_touch_controls();
+            ctx.input.arrange_touch_controls();
         });
     report.assert_passed();
     let (distance, before, after) = found.borrow().unwrap();
@@ -405,6 +402,6 @@ fn the_game_ending_edit_mode_closes_the_screen_and_keeps_the_arrangement() {
         .run_headless(4, |ctx| {
             actions(ctx);
             ctx.input.set_touch_controls(controls());
-            ctx.arrange_touch_controls();
+            ctx.input.arrange_touch_controls();
         });
 }

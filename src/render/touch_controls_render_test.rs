@@ -437,7 +437,7 @@ fn the_arrange_screen_shows_its_panel_beside_the_controls_and_lights_the_picked_
     ctx.ui.set_scale(0.5);
     // A desktop: the controls show only because the screen arranges them.
     ctx.input.set_touch_device(false);
-    ctx.arrange_touch_controls();
+    ctx.input.arrange_touch_controls();
     // Placed for the scale.
     ctx.update_touch_controls();
     // A finger taps B: picked, to resize.

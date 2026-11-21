@@ -63,6 +63,9 @@ impl Ctx {
     pub(crate) fn feed_ui_same_frame(&mut self) {
         if self.input.fed_since_ui() {
             self.ui_same_frame_pass();
+        } else if self.input.touch.arrange_before.is_some() {
+            // A system asked for the arrange screen: built for the next one.
+            self.update_touch_arrange();
         }
     }
 

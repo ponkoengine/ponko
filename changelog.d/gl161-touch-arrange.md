@@ -1,5 +1,5 @@
 ### Added
-- `Ctx::arrange_touch_controls()` opens a ready-made screen, built with the
+- `ctx.input.arrange_touch_controls()` opens a ready-made screen, built with the
   retained UI, where the player arranges the on-screen touch controls with
   a finger or the mouse: drag to move, pick one and press `-` or `+` to
   resize it, `Size` and `Opacity` sliders for all of them, `Reset` to the

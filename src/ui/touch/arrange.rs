@@ -1,5 +1,5 @@
 //! The ready-made screen for arranging the on-screen controls
-//! ([`Ctx::arrange_touch_controls`]): a thin front, built with the retained
+//! ([`Input::arrange_touch_controls`](crate::input::Input::arrange_touch_controls)): a thin front, built with the retained
 //! UI, over the edit mode ([`Input::edit_touch_controls`](crate::input::Input::edit_touch_controls))
 //! and the player's [`TouchLayout`].
 
@@ -110,48 +110,9 @@ pub(crate) fn card_spot(view: Vec2, discs: impl Iterator<Item = (Vec2, f32)> + C
 }
 
 impl Ctx {
-    /// Opens the ready-made screen where the player arranges the on-screen
-    /// controls ([`TouchControls`](super::TouchControls)), a settings page's
-    /// "arrange controls" button. It shows the controls (also on a desktop,
-    /// also under the screen that opened it) and a small panel that keeps
-    /// clear of them. With a finger or the mouse, the player:
-    ///
-    /// - **moves** a control by dragging it (it stays where it is let go,
-    ///   anchored to the nearest corner);
-    /// - **resizes** one: tap or click it, then `-` and `+`; `Size` makes
-    ///   them all bigger or smaller and `Opacity` fainter;
-    /// - **resets** them to where the game puts them (`Reset`);
-    /// - **saves** with `Save`, which writes the arrangement to the player's
-    ///   storage ([`Input::save_touch_layout`](crate::input::Input::save_touch_layout))
-    ///   and closes the screen. `Cancel`, Escape, a gamepad's East button
-    ///   or the game closing the screen put back the arrangement it had
-    ///   when it opened.
-    ///
-    /// However it closes, edit mode ends and
-    /// [`UiEvent::ScreenPopped`](crate::ui::UiEvent::ScreenPopped) is queued
-    /// with the screen's root (returned here; the same one while it is
-    /// open). Its nodes are named `touch.arrange.<part>` (`title`, `note`,
-    /// `size_label`, `opacity_label`, `reset`, `cancel`, `save`, ...): a
-    /// game gives them its own words with [`Ui::set_text`](crate::ui::Ui::set_text)
-    /// or [`Ui::set_text_key`](crate::ui::Ui::set_text_key) after opening it.
-    ///
-    /// ```
-    /// use ponko::prelude::*;
-    /// use ponko::ui::touch::TouchControls;
-    /// Game::new("touch", 960, 540).headless_frames(true).run_headless(2, |ctx| {
-    ///     ctx.input.set_touch_controls(TouchControls::new().stick("move").button("jump", "A"));
-    ///     // The settings page's "Arrange controls" button:
-    ///     let screen = ctx.arrange_touch_controls();
-    ///     assert!(ctx.ui.is_screen(screen) && ctx.input.editing_touch_controls());
-    ///     assert!(ctx.ui.find("touch.arrange.save").is_some());
-    /// });
-    /// ```
-    pub fn arrange_touch_controls(&mut self) -> UiId {
-        if let Some(open) = &self.ui_state.touch.arrange {
-            return open.root;
-        }
-        self.input.edit_touch_controls(true);
-        let before = self.input.touch.layout.clone();
+    /// Builds the arrange screen [`Input::arrange_touch_controls`](crate::input::Input::arrange_touch_controls)
+    /// asked for; `before` is the arrangement Cancel puts back.
+    fn open_touch_arrange(&mut self, before: TouchLayout) {
         let ui = &mut self.ui;
         let root = ui
             .root()
@@ -262,14 +223,18 @@ impl Ctx {
             card_at: None,
             shown_pick: None,
         }));
-        self.update_touch_arrange();
-        root
     }
 
     /// Engine side, after each pass of the retained UI: the arrange
     /// screen's buttons and sliders take effect, its panel keeps clear of
     /// the controls, and it closes when the player is done.
     pub(crate) fn update_touch_arrange(&mut self) {
+        if self.ui_state.touch.arrange.is_none() {
+            let Some(before) = self.input.touch.arrange_before.take() else {
+                return;
+            };
+            self.open_touch_arrange(before);
+        }
         let Some(mut screen) = self.ui_state.touch.arrange.take() else {
             return;
         };
@@ -422,6 +387,7 @@ impl Ctx {
     /// when it opened comes back unless `keep`.
     fn close_touch_arrange(&mut self, screen: &Arrange, keep: bool) {
         self.input.touch.shield = None;
+        self.input.touch.arranging = false;
         self.input.edit_touch_controls(false);
         if !keep {
             self.input.set_touch_layout(screen.before.clone());

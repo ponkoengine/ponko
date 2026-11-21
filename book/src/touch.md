@@ -224,7 +224,7 @@ the places the player gave the actions it has.
 ### The ready-made arrange screen
 
 Most games want the same screen for this, so the engine has one:
-`ctx.arrange_touch_controls()` opens it, from a settings page's "Arrange
+`ctx.input.arrange_touch_controls()` opens it, from a settings page's "Arrange
 controls" button. It is built with the [retained UI](ui.md) over the edit
 mode and the player's `TouchLayout` above, and works with a finger and
 with the mouse:
@@ -236,7 +236,7 @@ let arrange = ctx.ui.find("settings.arrange");
 while let Some(event) = ctx.ui.next_event() {
     if arrange.is_some() && event.clicked() == arrange {
         // The controls show (on a desktop too), with a small panel beside them.
-        ctx.arrange_touch_controls();
+        ctx.input.arrange_touch_controls();
     }
 }
 # }
@@ -258,7 +258,7 @@ view, else its top, bottom or a side), steps aside while a control is
 dragged, and fits a phone held either way: it is 240 UI units tall and at
 most 360 wide. A press on it is the panel's, even over a control.
 However the screen closes, edit mode ends and `UiEvent::ScreenPopped` is
-queued with its root (what `arrange_touch_controls` returned). Its nodes
+queued with its root (`ctx.ui.find("touch.arrange")` while it is open). Its nodes
 are named `touch.arrange.<part>` (`title`, `note`, `size_label`,
 `opacity_label`, `reset`, `cancel`, `save`, ...): give them the game's own
 words with `ctx.ui.set_text` or [`set_text_key`](localization.md) after

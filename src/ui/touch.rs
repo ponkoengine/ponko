@@ -31,7 +31,7 @@
 //! them ([`TouchPlace`]); the player moves and resizes them
 //! ([`Input::edit_touch_controls`](crate::input::Input::edit_touch_controls),
 //! [`TouchLayout`]), and the arrangement is saved with the settings.
-//! [`Ctx::arrange_touch_controls`] opens a ready-made screen for that.
+//! [`Input::arrange_touch_controls`](crate::input::Input::arrange_touch_controls) opens a ready-made screen for that.
 #![deny(missing_docs)]
 
 mod arrange;
@@ -256,7 +256,7 @@ pub(crate) struct TouchControlsUi {
     moved: u64,
     /// The disc the controls are drawn with (made once).
     pub(crate) texture: Option<Texture>,
-    /// The arrange screen, while it is open ([`Ctx::arrange_touch_controls`]).
+    /// The arrange screen, while it is open ([`Input::arrange_touch_controls`](crate::input::Input::arrange_touch_controls)).
     pub(crate) arrange: Option<Box<arrange::Arrange>>,
 }
 

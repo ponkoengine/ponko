@@ -466,7 +466,7 @@ binding arrives:
 | `DayNight` | [The sky kit](3d.md#the-sky-kit) | Move the sun each frame with `ponko_sun_direction_at` |
 | `CameraTarget` | [Following something](camera-ui.md#following-something) | Keep the rig descriptor and update it once a frame (`ponko_follow_camera2d_update`, the 3D rigs' update calls) |
 | `TouchLayout` | [Touch](touch.md) | Set the controls with `ponko_ctx_set_touch_controls`; the player's saved layout, its edit mode, styles and trackpad events are not bound yet |
-| `Ctx::arrange_touch_controls` | [Touch](touch.md#the-ready-made-arrange-screen) | Not bound yet: the screen builds on the player's layout and its edit mode, which are Rust-only too; a C or C++ game builds a screen of its own |
+| `Input::arrange_touch_controls` | [Touch](touch.md#the-ready-made-arrange-screen) | Not bound yet: the screen builds on the player's layout and its edit mode, which are Rust-only too; a C or C++ game builds a screen of its own |
 | `CrashReports` | [Crash reports](crash-reports.md) | Not bound yet: install a handler of the game's own and write its own report |
 | `Graphics::stream_instance_cell` | [Streaming instance cells](3d.md#streaming-instance-cells) | Build a cell's matrices on your own threads, then `ponko_ctx_add_instance_cell` (`ctx::add_instance_cell`) on the game's |
 | `InstanceCellData` | [Streaming instance cells](3d.md#streaming-instance-cells) | The same: matrices and colours go straight to `ponko_ctx_add_instance_cell` |
