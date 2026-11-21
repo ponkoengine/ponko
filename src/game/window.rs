@@ -365,7 +365,7 @@ where
         #[cfg(target_arch = "wasm32")]
         self.ctx
             .window
-            .feed_safe_insets(crate::window::web_safe_insets(&window));
+            .feed_platform_safe_insets(crate::window::web_safe_insets(&window));
         // Edit mode (`ponko editor`): the inspector's panels are the window.
         #[cfg(feature = "editor")]
         let edit_mode = crate::inspector::app::requested();
@@ -691,7 +691,7 @@ where
                 #[cfg(target_arch = "wasm32")]
                 self.ctx
                     .window
-                    .feed_safe_insets(crate::window::web_safe_insets(&window));
+                    .feed_platform_safe_insets(crate::window::web_safe_insets(&window));
                 window.request_redraw();
             }
 

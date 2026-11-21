@@ -218,7 +218,9 @@ pub(crate) fn draw_skeletons_with(ctx: &mut Ctx, spread: Spread) {
             d.chunks.resize_with(used, Chunk::default);
         }
         let world = &ctx.world;
-        let DrawChunks { items, chunks, starts, .. } = &mut d;
+        let DrawChunks {
+            items, chunks, starts, ..
+        } = &mut d;
         // Drawn and merged on the frame pool (on the web, its workers, not
         // the page's thread), as parallel queries run.
         crate::frame_pool::run(|| {
