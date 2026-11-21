@@ -57,6 +57,9 @@ impl Av1 {
         };
         settings.n_threads = threads.clamp(1, 8) as i32;
         settings.max_frame_delay = 1;
+        // Pictures past what the player takes are refused by the decoder,
+        // before it allocates them (the container's size is checked too).
+        settings.frame_size_limit = crate::assets::MAX_IMAGE_SIDE * crate::assets::MAX_IMAGE_SIDE / 2;
         // dav1d prints what it finds wrong in a stream to stderr; the
         // errors come back as `Result`s here instead.
         // SAFETY: no callback, so nothing is ever called with the cookie.

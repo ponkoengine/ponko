@@ -147,3 +147,163 @@ pub fn lockstep(data: &[u8]) {
 pub fn messages(data: &[u8]) {
     ponko::__fuzz::message_packets(data);
 }
+
+/// Replication messages (snapshots, inputs, events) to a server and a
+/// client that joined it (`ponko::net::Replication`).
+pub fn replication(data: &[u8]) {
+    ponko::__fuzz::replication_packets(data);
+}
+
+/// Splits fuzzer bytes into `(flags, bytes)` records, `[flags: u8][length:
+/// u16 LE][bytes]` each, the last one cut short where the data ends.
+fn records(mut data: &[u8]) -> impl Iterator<Item = (u8, &[u8])> {
+    std::iter::from_fn(move || {
+        let (&flags, rest) = data.split_first()?;
+        let len = match rest {
+            [a, b, ..] => usize::from(u16::from_le_bytes([*a, *b])),
+            _ => return None,
+        };
+        let rest = &rest[2..];
+        let (bytes, rest) = rest.split_at(len.min(rest.len()));
+        data = rest;
+        Some((flags, bytes))
+    })
+}
+
+/// The lobby protocol both ways: frames from a hostile client to a running
+/// lobby server (`ponko_lobby`, with an honest client in a room), and from a
+/// hostile server to a lobby client (`LobbyClient`). Records as for the
+/// network targets; flags: bit 0 picks the direction (to the server, to the
+/// client), bit 1 the lane (reliable, unreliable). Every frame is also
+/// decoded as a request and as a reply.
+pub fn lobby(data: &[u8]) {
+    use ponko::net::lobby::{LobbyClient, protocol};
+    use ponko::net::{Lane, MessageEvent, NetMessages, PeerId};
+    use std::time::Duration;
+
+    const STEP: Duration = Duration::from_millis(10);
+    let mut limits = ponko_lobby::LobbyLimits::default();
+    limits.address_key = ponko_lobby::AddressKey::Connection;
+    let mut server = ponko_lobby::LobbyServer::new(limits).seed(1);
+    let mut endpoints = NetMessages::loopback(3).into_iter();
+    server.listen(endpoints.next().expect("three endpoints"));
+    let mut raw = endpoints.next().expect("three endpoints");
+    let mut honest = LobbyClient::new(endpoints.next().expect("three endpoints"));
+    let mut endpoints = NetMessages::loopback(2).into_iter();
+    let mut fake_host = endpoints.next().expect("two endpoints");
+    let mut client = LobbyClient::new(endpoints.next().expect("two endpoints"));
+    let mut client_peer = None;
+    let mut step = |server: &mut ponko_lobby::LobbyServer,
+                    raw: &mut NetMessages,
+                    honest: &mut LobbyClient,
+                    fake_host: &mut NetMessages,
+                    client: &mut LobbyClient| {
+        server.poll_elapsed(STEP);
+        let _ = raw.poll_elapsed(STEP);
+        while raw.next_event().is_some() {}
+        let _ = honest.poll_elapsed(STEP);
+        while honest.next_event().is_some() {}
+        let _ = fake_host.poll_elapsed(STEP);
+        while let Some(event) = fake_host.next_event() {
+            if let MessageEvent::Connected(peer) = event {
+                client_peer = Some(peer);
+            }
+        }
+        let _ = client.poll_elapsed(STEP);
+        while client.next_event().is_some() {}
+    };
+    for i in 0..60 {
+        if i == 30 {
+            let _ = honest.create_room(4);
+        }
+        step(&mut server, &mut raw, &mut honest, &mut fake_host, &mut client);
+    }
+    let Some(peer) = client_peer else {
+        panic!("the lobby client connects to its fake host")
+    };
+    for (flags, bytes) in records(data) {
+        let _ = protocol::decode::<protocol::Request>(bytes);
+        let _ = protocol::decode::<protocol::Reply>(bytes);
+        let lane = if flags & 2 == 0 {
+            Lane::Reliable
+        } else {
+            Lane::Unreliable
+        };
+        let _ = if flags & 1 == 0 {
+            raw.send(PeerId::HOST, lane, bytes)
+        } else {
+            fake_host.send(peer, lane, bytes)
+        };
+        step(&mut server, &mut raw, &mut honest, &mut fake_host, &mut client);
+    }
+}
+
+/// Control endpoint request lines (`PONKO_CONTROL`): refused without the
+/// token, then run by the game's dispatcher as if the token were right.
+pub fn control(data: &[u8]) {
+    ponko::__fuzz::control_requests(data);
+}
+
+/// A tile image for the level and Aseprite targets' sheets.
+const TILES_PNG: &[u8] = include_bytes!("../../tests/fixtures/tilemaps/tiles.png");
+
+/// An Aseprite file read directly (`aseprite-source`), and a cooked
+/// Aseprite export (the JSON Array sheet `ponko cook` writes, with a valid
+/// PNG beside it), each loaded split into layers and not, then every frame,
+/// animation and slice asked for.
+pub fn aseprite(data: &[u8]) {
+    let files = MemorySource::new("fuzz")
+        .with("a.aseprite", data)
+        .with("c.json", data)
+        .with("c.png", TILES_PNG)
+        .with("layers.png", TILES_PNG);
+    headless(0, files, |ctx| {
+        for name in ["a.aseprite", "c.aseprite"] {
+            for split in [false, true] {
+                let Ok(sprite) = ctx.gfx.try_load_aseprite(name, split) else {
+                    continue;
+                };
+                let layers = sprite.layers();
+                for frame in 0..sprite.frame_count().min(16) {
+                    let _ = sprite.frame_duration(frame);
+                    let _ = sprite.sprite(frame, None);
+                    for layer in &layers {
+                        let _ = sprite.sprite(frame, Some(layer));
+                    }
+                    let _ = sprite.slice("s", frame);
+                }
+                let _ = sprite.animation("Run", None);
+                let _ = sprite.sprite_at(1.5);
+            }
+        }
+    });
+}
+
+/// A level: the bytes as an LDtk project, a Tiled JSON map and a Tiled XML
+/// map (external levels, tilesets and templates they name read the same
+/// bytes), loaded, its solid rectangles merged, and spawned.
+pub fn levels(data: &[u8]) {
+    use ponko::tilemap::LevelOptions;
+    let mut files = MemorySource::new("fuzz").with("tiles.png", TILES_PNG);
+    for name in ["l.ldtk", "l.tmj", "l.tmx", "l.ldtkl", "t.tsx", "t.tsj", "o.tx"] {
+        files = files.with(name, data);
+    }
+    headless(0, files, |ctx| {
+        for name in ["l.ldtk", "l.tmj", "l.tmx"] {
+            if let Ok(level) = ctx.assets.load_level(name, &LevelOptions::default()) {
+                let _ = level.solid_rects(&LevelOptions::default());
+                if let Ok(root) = ctx.spawn_level(name, Vec2::ZERO) {
+                    ctx.despawn_level(root);
+                }
+            }
+        }
+    });
+}
+
+/// A texture as `ponko cook` ships it (KTX2 with BCn or UASTC blocks,
+/// Zstandard or zlib supercompressed; DDS) or any image file, decoded for a
+/// GPU with every block format and for one with none, and streamed a slice
+/// at a time.
+pub fn cooked_texture(data: &[u8]) {
+    ponko::__fuzz::texture(data);
+}

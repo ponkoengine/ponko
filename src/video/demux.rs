@@ -58,6 +58,9 @@ impl Demuxer {
         let size = video.video().ok_or("its video track has no picture size")?;
         let width = u32::try_from(size.pixel_width().get()).map_err(|_| "its picture is too wide")?;
         let height = u32::try_from(size.pixel_height().get()).map_err(|_| "its picture is too tall")?;
+        // The player allocates a texture of this size before any frame.
+        crate::assets::check_image_size(width.into(), height.into(), "", "its picture")
+            .map_err(|e| e.message().to_string())?;
         let track = video.track_number().get();
         let codec = video.codec_id().to_owned();
         // The `av1C` record: 4 bytes, then the sequence header's OBUs.

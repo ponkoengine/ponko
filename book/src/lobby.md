@@ -190,6 +190,9 @@ Every limit is a field of `LobbyLimits`; each one has a test in
 | Rooms | 10 000 | Refused with `ServerFull` |
 | Idle connection: in no room and no queue | 60 s | Told `Left(Idle)`, then closed |
 | Idle room: no request or relay message from any member | 10 min | Members told `Left(Idle)`, room closed |
+| Silent link: no packet at all (a client that vanished, a half-open connection) | 10 s | Dropped by the endpoint, the member leaves its room |
+| WebSocket handshake | 5 s, 64 at once | Connection closed |
+| WebSocket connection that sends no packet | 30 s | Connection closed |
 
 An **address** is an IP address, whatever the port, so every player behind
 one home router shares the budgets; that is why the budgets are per second
@@ -241,6 +244,20 @@ The rates are of the process, which runs the clients too: the server alone
 is faster. With rooms of 8 (8800 clients) the run took 14 s wall and 3.5 s
 CPU, and delivered 110 000 relay messages a second. The same test with 40
 rooms runs in `cargo test` (`the_load_test_fills_every_room_and_delivers_every_relay_message`).
+
+### Hostile clients
+
+`crates/ponko_lobby/tests/hostile.rs` runs the server for two simulated
+minutes with two honest rooms relaying every 10 ms next to twelve hostile
+connections, each sending four attacks every 10 ms: garbage, requests and
+relay payloads far past the size limits, rooms made and left, queues under
+names never seen before, guessed and real room codes, relay floods to
+everyone and to members that don't exist. A third of them never read what
+the server sends them, a quarter vanish without a goodbye. The test counts
+the heap of the whole process and checks that it grows by less than 1 MiB
+after the first 30 s, that the vanished connections are dropped and the
+others kept, and that the honest players keep their rooms and hear each
+other.
 
 ## The protocol
 

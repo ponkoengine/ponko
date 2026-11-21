@@ -1,0 +1,8 @@
+{"id":1,"token":"x","method":"entity.spawn","params":{"components":{"Transform2D":{"pos":[1,2]}}}}
+{"id":2,"method":"entities.list","params":{"limit":5}}
+{"id":3,"method":"entity.get","params":{"entity":4294967296}}
+{"id":4,"method":"sim.step","params":{"ticks":3}}
+{"id":5,"method":"world.save","params":{"path":"saves/a.json"}}
+{"id":6,"method":"world.load","params":{"path":"saves/a.json"}}
+{"id":7,"method":"events.subscribe","params":{"kinds":["spawn"]}}
+{"id":8,"method":"perf.get","params":{"meshes":3}}

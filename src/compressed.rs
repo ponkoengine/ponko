@@ -368,6 +368,13 @@ impl Unpack {
                 format_args!("KTX2: mip level {i} is past the end of the file"),
             )
         })?;
+        let too_long = |i: usize, unpacked: usize| {
+            invalid(
+                path,
+                what,
+                format_args!("KTX2: mip level {i} unpacks to more than its {unpacked} bytes"),
+            )
+        };
         let level = match self.scheme {
             None => Some(data.to_vec()),
             Some(ktx2::SupercompressionScheme::Zstandard) => {
@@ -394,12 +401,21 @@ impl Unpack {
                     unreachable!("a Zstandard file unpacks with Zstandard")
                 };
                 let mut source = &data[read..];
+                // Never much past the level's length: a few bytes of
+                // Zstandard can unpack to gigabytes.
+                let room = unpacked.saturating_sub(out.len()).saturating_add(1);
                 let done = decoder
-                    .decode_blocks(&mut source, ruzstd::decoding::BlockDecodingStrategy::UptoBytes(slice))
+                    .decode_blocks(
+                        &mut source,
+                        ruzstd::decoding::BlockDecodingStrategy::UptoBytes(slice.min(room)),
+                    )
                     .map_err(|e| zstd(&e))?;
                 read = data.len() - source.len();
                 if let Some(piece) = decoder.collect() {
                     out.extend_from_slice(&piece);
+                }
+                if out.len() > unpacked {
+                    return Err(too_long(i, unpacked));
                 }
                 if done {
                     Some(out)
@@ -427,6 +443,9 @@ impl Unpack {
                         .decompress_vec(input, &mut out, flate2::FlushDecompress::None)
                         .map_err(|e| invalid(path, what, format_args!("zlib: {e}")))?;
                     let stuck = (decoder.total_in(), decoder.total_out()) == before;
+                    if out.len() > unpacked {
+                        return Err(too_long(i, unpacked));
+                    }
                     if status == flate2::Status::StreamEnd || out.len() >= goal || stuck {
                         break (status, stuck);
                     }
@@ -624,15 +643,29 @@ fn read_ktx2_header(bytes: &[u8], path: &str, what: &str) -> Result<Unpack, Erro
             format!("{what} uses {scheme:?} supercompression, which ponko doesn't unpack"),
         ));
     }
-    // Where each level is in the file (the reader checked they are in it).
+    let (width, height) = (header.pixel_width, header.pixel_height);
+    crate::assets::check_image_size(width.into(), height.into(), path, what)?;
+    // Where each level is in the file (the reader checked they are in it),
+    // and how long it is unpacked: what its size needs, never what the
+    // header claims, which a few bytes could make terabytes.
     let base = bytes.as_ptr() as usize;
-    let ranges = reader
-        .levels()
-        .map(|level| {
-            let at = level.data.as_ptr() as usize - base;
-            (at..at + level.data.len(), level.uncompressed_byte_length as usize)
-        })
-        .collect();
+    let mut ranges = Vec::new();
+    for (i, level) in reader.levels().enumerate().take(33) {
+        let at = level.data.as_ptr() as usize - base;
+        let (w, h) = ((width >> i).max(1), (height >> i).max(1));
+        let needed = level_len(&pixels, w, h);
+        if scheme.is_some() && level.uncompressed_byte_length != needed {
+            return Err(invalid(
+                path,
+                what,
+                format_args!(
+                    "KTX2: mip level {i} ({w} x {h}) unpacks to {} bytes, not {needed}",
+                    level.uncompressed_byte_length
+                ),
+            ));
+        }
+        ranges.push((at..at + level.data.len(), needed as usize));
+    }
     Ok(Unpack {
         file: File {
             width: header.pixel_width,
@@ -690,6 +723,16 @@ fn block_format(format: ktx2::Format) -> Option<BlockFormat> {
     })
 }
 
+/// The bytes a `w` x `h` level of `pixels` takes.
+fn level_len(pixels: &Pixels, w: u32, h: u32) -> u64 {
+    match pixels {
+        Pixels::Blocks(format) => format.level_bytes(w, h),
+        Pixels::Rgba8 => u64::from(w) * u64::from(h) * 4,
+        // UASTC blocks are 16 bytes each.
+        Pixels::Uastc(_) => BlockFormat::Bc7.level_bytes(w, h),
+    }
+}
+
 /// Checks every level holds exactly the bytes its size needs, so nothing
 /// short reaches the GPU or the decoders.
 fn check_levels(file: &File, path: &str, what: &str) -> Result<(), Error> {
@@ -701,12 +744,7 @@ fn check_levels(file: &File, path: &str, what: &str) -> Result<(), Error> {
     }
     for (i, level) in file.levels.iter().enumerate() {
         let (w, h) = ((file.width >> i).max(1), (file.height >> i).max(1));
-        let expected = match file.pixels {
-            Pixels::Blocks(format) => format.level_bytes(w, h),
-            Pixels::Rgba8 => u64::from(w) * u64::from(h) * 4,
-            // UASTC blocks are 16 bytes each.
-            Pixels::Uastc(_) => BlockFormat::Bc7.level_bytes(w, h),
-        };
+        let expected = level_len(&file.pixels, w, h);
         if level.len() as u64 != expected {
             return Err(invalid(
                 path,
@@ -790,6 +828,9 @@ fn read_dds(bytes: &[u8], path: &str, what: &str) -> Option<Result<File, Error>>
     }
     if width == 0 || height == 0 {
         return Some(Err(invalid(path, what, "its size is zero")));
+    }
+    if let Err(e) = crate::assets::check_image_size(width.into(), height.into(), path, what) {
+        return Some(Err(e));
     }
     let count = if flags & MIPMAP_COUNT != 0 { mips.max(1) } else { 1 }.min(32);
     let mut levels = Vec::with_capacity(count as usize);
@@ -1227,6 +1268,53 @@ pub(crate) mod tests {
         };
         assert!(!image.srgb);
         assert_eq!(image.levels, levels);
+    }
+
+    #[test]
+    fn a_supercompressed_level_unpacking_past_its_size_is_refused() {
+        // 8 x 8 BC1 is 32 bytes; the level unpacks to 4 MiB of zeros.
+        let bomb = vec![vec![0u8; 4 << 20]];
+        for scheme in [
+            ktx2::SupercompressionScheme::Zstandard,
+            ktx2::SupercompressionScheme::ZLIB,
+        ] {
+            let format = Some(ktx2::Format::BC1_RGBA_UNORM_BLOCK);
+            let mut file = ktx2_file_packed(format, 8, 8, &bomb, Some(scheme), &[]);
+            // As its header says: then the header is checked against the size.
+            let Some(Err(e)) = decode(&file, "a.ktx2", "a", GpuFormats::ALL) else {
+                panic!("{scheme:?}: a level whose header length isn't its size loaded");
+            };
+            assert!(
+                e.message().contains("unpacks to 4194304 bytes, not 32"),
+                "{}",
+                e.message()
+            );
+            // Its header lies (32 bytes): the unpacking stops soon after.
+            file[96..104].copy_from_slice(&32u64.to_le_bytes());
+            let Some(Err(e)) = decode(&file, "a.ktx2", "a", GpuFormats::ALL) else {
+                panic!("{scheme:?}: a level that unpacks past its size loaded");
+            };
+            assert!(
+                e.message().contains("unpacks to more than its 32 bytes"),
+                "{}",
+                e.message()
+            );
+        }
+    }
+
+    #[test]
+    fn a_texture_larger_than_the_limit_is_refused() {
+        let level = vec![solid_bc1(4, 4, RED_565)];
+        let ktx = ktx2_file(Some(ktx2::Format::BC1_RGBA_UNORM_BLOCK), 1 << 20, 4, &level, true);
+        let Some(Err(e)) = decode(&ktx, "a.ktx2", "a", GpuFormats::ALL) else {
+            panic!("a KTX2 file 2^20 pixels wide loaded");
+        };
+        assert_eq!(e.kind(), ErrorKind::Limit, "{}", e.message());
+        let dds = dds(b"DXT1", 4, 1 << 20, &level);
+        let Some(Err(e)) = decode(&dds, "a.dds", "a", GpuFormats::ALL) else {
+            panic!("a DDS file 2^20 pixels tall loaded");
+        };
+        assert_eq!(e.kind(), ErrorKind::Limit, "{}", e.message());
     }
 
     #[test]

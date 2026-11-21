@@ -97,5 +97,6 @@
 - [Performance and benchmarks](performance.md)
 - [Performance and profiling](profiling.md)
 - [GPU regression tests](render-tests.md)
+- [Security: what reads untrusted bytes](security.md)
 - [API reference](api.md)
 - [Contributing](contributing.md)

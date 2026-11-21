@@ -153,6 +153,142 @@ pub fn message_packets(data: &[u8]) {
     }
 }
 
+/// A replicated position, interpolated on the client.
+#[derive(ponko_ecs::Component, super::Replicate, Clone, Copy, Default, PartialEq, Debug)]
+struct Pos {
+    #[replicate(min = -100.0, max = 100.0, step = 0.01)]
+    at: glam::Vec2,
+}
+
+impl super::Interpolate for Pos {
+    fn interpolate(a: &Self, b: &Self, span: f32, t: f32) -> Self {
+        Self {
+            at: glam::Vec2::interpolate(&a.at, &b.at, span, t),
+        }
+    }
+    fn extrapolate(prev: &Self, last: &Self, span: f32, ahead: f32) -> Self {
+        Self {
+            at: glam::Vec2::extrapolate(&prev.at, &last.at, span, ahead),
+        }
+    }
+}
+
+/// A replicated number.
+#[derive(ponko_ecs::Component, super::Replicate, Clone, Copy, Default, PartialEq, Debug)]
+struct Hp(#[replicate(bits = 8)] u8);
+
+/// A body its owner predicts.
+#[derive(ponko_ecs::Component, super::Replicate, Clone, Copy, Default, PartialEq, Debug)]
+struct Body {
+    #[replicate(min = -100.0, max = 100.0, step = 0.01)]
+    at: glam::Vec2,
+}
+
+/// The input.
+#[derive(super::Replicate, Clone, Copy, Default, PartialEq, Debug)]
+struct Stick {
+    #[replicate(min = -1.0, max = 1.0, step = 0.01)]
+    dir: glam::Vec2,
+}
+
+/// A typed event.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
+struct Shout(u32, String);
+
+/// Feeds replication messages to a server and a client that joined it
+/// ([`Replication`](super::Replication)): entity snapshots, inputs and
+/// events, each decoded as the receiving side does. Datagrams are records
+/// as for the other targets; flags: bit 0 picks the receiver (server or
+/// client), bit 1 the reliable (hello, ready, events) or unreliable
+/// (snapshots, inputs) channel. Both sides tick after each one.
+pub fn replication_packets(data: &[u8]) {
+    use super::{Replicated, Replication};
+    use crate::events::Events;
+    use crate::net::PeerId;
+
+    fn declarations() -> Replication {
+        Replication::new()
+            .interpolated::<Pos>()
+            .component::<Hp>()
+            .input::<Stick>()
+            .predicted::<Body, Stick>(|body: &mut Body, stick: &Stick| {
+                body.at = (body.at + stick.dir).clamp(glam::Vec2::splat(-90.0), glam::Vec2::splat(90.0));
+            })
+            .event::<Shout>()
+            .raw_event("raw")
+    }
+    struct Side {
+        world: World,
+        events: Events,
+        net: NetMessages,
+        rep: Replication,
+    }
+    let mut sides: Vec<Side> = NetMessages::loopback(2)
+        .into_iter()
+        .map(|net| Side {
+            world: World::new(),
+            events: Events::default(),
+            net,
+            rep: declarations(),
+        })
+        .collect();
+    let mut tick = 0u64;
+    let step = |sides: &mut [Side], tick: &mut u64| {
+        for (i, side) in sides.iter_mut().enumerate() {
+            let _ = side.net.poll_elapsed(Duration::from_millis(16));
+            side.net.events().for_each(drop);
+            side.rep
+                .begin_tick(Some(&mut side.net), &mut side.world, &mut side.events, *tick, 60.0);
+            if i == 0 {
+                side.world
+                    .query::<&mut Pos>()
+                    .for_each(|p| p.at.x = (p.at.x + 0.5) % 50.0);
+                side.rep.to_clients(&Shout(*tick as u32, "hi".into()));
+            } else {
+                side.rep.set_input(Stick {
+                    dir: glam::vec2(0.5, -0.5),
+                });
+                side.rep.to_server(&Shout(1, String::new()));
+                let _ = side.rep.to_server_raw("raw", &[1, 2, 3]);
+            }
+            side.rep.end_tick(Some(&mut side.net), &mut side.world);
+            side.rep.frame(&mut side.world, 0.0);
+        }
+        *tick += 1;
+    };
+    for i in 0..4u8 {
+        sides[0].world.spawn((
+            Pos {
+                at: glam::vec2(f32::from(i), 0.0),
+            },
+            Hp(i),
+            Replicated::new(),
+        ));
+    }
+    for _ in 0..100 {
+        step(&mut sides, &mut tick);
+        if sides[1].rep.is_joined() && !sides[0].rep.clients().is_empty() {
+            break;
+        }
+    }
+    debug_assert!(sides[1].rep.is_joined(), "the loopback client joins");
+    let client = sides[0].rep.clients().first().copied().unwrap_or(PeerId::HOST);
+    if let Some(me) = sides[1].rep.me() {
+        let mut owned = Replicated::new();
+        owned.set_owner(Some(me));
+        sides[0].world.spawn((Body::default(), owned));
+    }
+    for _ in 0..10 {
+        step(&mut sides, &mut tick);
+    }
+    for (flags, bytes) in datagrams(data) {
+        let to = usize::from(flags & 1);
+        let from = if to == 0 { client } else { PeerId::HOST };
+        sides[to].net.fuzz_internal(from, flags & 2 != 0, bytes);
+        step(&mut sides, &mut tick);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,6 +336,25 @@ mod tests {
             }
         }
         lockstep_packets(&data);
+    }
+
+    #[test]
+    fn replication_survives_garbage_and_forged_messages() {
+        let mut data = Vec::new();
+        for kind in 0..=12u8 {
+            for flags in 0..4u8 {
+                data.extend(record(
+                    flags,
+                    &[kind, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 7],
+                ));
+                data.extend(record(flags, &[kind]));
+                data.extend(record(
+                    flags,
+                    &[kind, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80],
+                ));
+            }
+        }
+        replication_packets(&data);
     }
 
     #[test]

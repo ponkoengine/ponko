@@ -1158,6 +1158,35 @@ fn format_unavailable(format: image::ImageFormat, what: &str, path: &str, by_mag
     crate::error::Error::new(crate::error::ErrorKind::Unsupported, message).with_path(path)
 }
 
+/// The widest or tallest image (or texture, or video picture) the
+/// decoders accept, in pixels: what GPUs sample at most. A file whose
+/// header claims more is refused before its pixels are allocated.
+pub(crate) const MAX_IMAGE_SIDE: u32 = 16_384;
+
+/// The most bytes one decoded image may take as RGBA8 (512 MiB, a
+/// 16384 x 8192 picture): a file can't make a decoder allocate more.
+pub(crate) const MAX_IMAGE_BYTES: u64 = 512 << 20;
+
+/// Fails with [`ErrorKind::Limit`](crate::error::ErrorKind::Limit) when a
+/// `width` x `height` picture is past [`MAX_IMAGE_SIDE`] or, as RGBA8,
+/// [`MAX_IMAGE_BYTES`]. The decoders call it with the size a file's header
+/// claims, before allocating anything for it.
+pub(crate) fn check_image_size(width: u64, height: u64, path: &str, what: &str) -> Result<(), crate::error::Error> {
+    let side = u64::from(MAX_IMAGE_SIDE);
+    if width > side || height > side || width.saturating_mul(height).saturating_mul(4) > MAX_IMAGE_BYTES {
+        return Err(crate::error::Error::new(
+            crate::error::ErrorKind::Limit,
+            format!(
+                "{what} is {width} x {height} pixels, larger than the engine loads \
+                 ({MAX_IMAGE_SIDE} pixels a side, {} MiB of pixels)",
+                MAX_IMAGE_BYTES >> 20
+            ),
+        )
+        .with_path(path));
+    }
+    Ok(())
+}
+
 /// Decodes an image file's bytes into RGBA8. The format comes from the first
 /// bytes, so a mislabelled extension doesn't matter; the extension of `path`
 /// is only used for formats with no recognizable start (TGA). `what` names the
@@ -1188,18 +1217,65 @@ pub(crate) fn decode_image(bytes: &[u8], path: &str, what: &str) -> Result<Image
     if let Some(format) = format.filter(|f| !f.reading_enabled()) {
         return Err(format_unavailable(format, what, path, by_magic.is_some()));
     }
-    let decoded = match format {
-        Some(format) => image::load_from_memory_with_format(bytes, format),
-        None => image::load_from_memory(bytes),
-    };
-    let rgba = decoded
-        .map_err(|e| crate::error::Error::decode(path, format!("{what} is not a valid image: {e}")))?
-        .into_rgba8();
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes));
+    match format {
+        Some(format) => reader.set_format(format),
+        None => {
+            reader = reader
+                .with_guessed_format()
+                .map_err(|e| crate::error::Error::decode(path, e.to_string()))?
+        }
+    }
+    // The size in the header first: a few bytes can claim an image of
+    // gigabytes, which is refused before anything is allocated.
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_IMAGE_SIDE);
+    limits.max_image_height = Some(MAX_IMAGE_SIDE);
+    limits.max_alloc = Some(MAX_IMAGE_BYTES);
+    reader.limits(limits);
+    let decoded = reader.decode().map_err(|e| match e {
+        image::ImageError::Limits(_) => crate::error::Error::new(
+            crate::error::ErrorKind::Limit,
+            format!(
+                "{what} is larger than the engine loads ({MAX_IMAGE_SIDE} pixels a side, {} MiB of pixels): {e}",
+                MAX_IMAGE_BYTES >> 20
+            ),
+        )
+        .with_path(path),
+        e => crate::error::Error::decode(path, format!("{what} is not a valid image: {e}")),
+    })?;
+    check_image_size(u64::from(decoded.width()), u64::from(decoded.height()), path, what)?;
+    let rgba = decoded.into_rgba8();
     Ok(Image {
         width: rgba.width(),
         height: rgba.height(),
         rgba: rgba.into_raw(),
     })
+}
+
+/// Fuzzing entry point for texture files as a game ships them (`ponko
+/// cook` writes KTX2; loose PNG, JPEG and the other image formats): the
+/// bytes decoded as the loaders do, for a GPU with every block format and
+/// for one with none (decoded to RGBA8 on the CPU), and as a streamed PNG
+/// a slice at a time. Errors are fine; a crash, a hang or an allocation
+/// past the image limits is a finding.
+#[cfg(any(test, fuzzing))]
+#[doc(hidden)]
+pub fn fuzz_texture(bytes: &[u8]) {
+    let _ = decode_image(bytes, "t.png", "t");
+    // TGA has no magic bytes: found from the extension only.
+    let _ = decode_image(bytes, "t.tga", "t");
+    #[cfg(feature = "compressed-textures")]
+    for gpu in [
+        crate::compressed::GpuFormats::ALL,
+        crate::compressed::GpuFormats::default(),
+    ] {
+        let _ = crate::compressed::decode(bytes, "t.ktx2", "t", gpu);
+    }
+    let shared = std::sync::Arc::new(bytes.to_vec());
+    if let Some(mut slices) = group::sliced::PngSlices::new(&shared) {
+        while let Ok(false) = slices.step() {}
+    }
 }
 
 /// How to apply a loaded data file's text to the world (kept for reloads).
@@ -1982,6 +2058,81 @@ mod tests {
         let err = format_unavailable(image::ImageFormat::Avif, "\"a.avif\"", "a.avif", false);
         assert_eq!(err.kind(), crate::error::ErrorKind::Unsupported);
         assert!(err.message().contains("can't read"), "{}", err.message());
+    }
+
+    /// A PNG with a header and no pixel data, claiming `width` x `height`.
+    pub(crate) fn png_header(width: u32, height: u32) -> Vec<u8> {
+        fn crc32(bytes: &[u8]) -> u32 {
+            let mut crc = !0u32;
+            for &b in bytes {
+                crc ^= u32::from(b);
+                for _ in 0..8 {
+                    crc = if crc & 1 != 0 {
+                        (crc >> 1) ^ 0xEDB8_8320
+                    } else {
+                        crc >> 1
+                    };
+                }
+            }
+            !crc
+        }
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut ihdr = width.to_be_bytes().to_vec();
+        ihdr.extend_from_slice(&height.to_be_bytes());
+        ihdr.extend_from_slice(&[8, 6, 0, 0, 0]); // 8-bit RGBA
+        // An empty zlib stream for pixels: the header is what matters.
+        for (kind, data) in [
+            (b"IHDR", &ihdr[..]),
+            (b"IDAT", &[0x78, 0x9c, 3, 0, 0, 0, 0, 1]),
+            (b"IEND", &[]),
+        ] {
+            png.extend_from_slice(&(data.len() as u32).to_be_bytes());
+            let mut chunk = kind.to_vec();
+            chunk.extend_from_slice(data);
+            png.extend_from_slice(&chunk);
+            png.extend_from_slice(&crc32(&chunk).to_be_bytes());
+        }
+        png
+    }
+
+    #[test]
+    fn an_image_wider_than_the_limit_is_refused() {
+        let mut png = Vec::new();
+        image::RgbaImage::new(MAX_IMAGE_SIDE + 1, 1)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let err = decode_image(&png, "wide.png", "\"wide.png\"").err().unwrap();
+        assert_eq!(err.kind(), crate::error::ErrorKind::Limit, "{}", err.message());
+    }
+
+    #[test]
+    fn an_image_header_claiming_gigabytes_is_refused_before_allocating() {
+        // 16000 x 16000 RGBA is 1 GB, from a 33-byte file.
+        for (w, h) in [(16_000, 16_000), (u32::MAX, u32::MAX), (1, 100_000)] {
+            let err = decode_image(&png_header(w, h), "big.png", "\"big.png\"").err().unwrap();
+            assert_eq!(
+                err.kind(),
+                crate::error::ErrorKind::Limit,
+                "{w} x {h}: {}",
+                err.message()
+            );
+        }
+        assert!(check_image_size(16_384, 8_192, "a", "a").is_ok());
+        assert!(check_image_size(16_384, 8_193, "a", "a").is_err());
+    }
+
+    #[test]
+    fn the_texture_fuzz_entry_point_survives_cut_and_lying_files() {
+        let mut png = Vec::new();
+        image::RgbaImage::new(3, 2)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        for cut in [0, 8, 20, png.len() / 2, png.len()] {
+            fuzz_texture(&png[..cut]);
+        }
+        fuzz_texture(&png_header(16_000, 16_000));
+        fuzz_texture(b"\xabKTX 20\xbb\r\n\x1a\n");
+        fuzz_texture(b"DDS |");
     }
 
     #[test]

@@ -635,6 +635,23 @@ mod tests {
     }
 
     #[test]
+    fn a_video_whose_picture_is_larger_than_the_limit_is_refused() {
+        // The clip's Video element, `PixelWidth 64, PixelHeight 64,
+        // FlagInterlaced 2`, rewritten in the same 9 bytes as a 65535 x 64
+        // picture and an empty Void element.
+        let mut clip = CLIP.to_vec();
+        let at = clip
+            .windows(9)
+            .position(|w| w == [0xB0, 0x81, 0x40, 0xBA, 0x81, 0x40, 0x9A, 0x81, 0x02])
+            .expect("the clip's picture size");
+        clip[at..at + 9].copy_from_slice(&[0xB0, 0x82, 0xFF, 0xFF, 0xBA, 0x81, 0x40, 0xEC, 0x80]);
+        let Err(e) = demux::Demuxer::new(clip.into()) else {
+            panic!("a 65535 pixels wide video opened");
+        };
+        assert!(e.contains("65535 x 64"), "{e}");
+    }
+
+    #[test]
     fn decoder_rejects_data_that_is_not_av1() {
         let mut decoder = Av1::new(1).unwrap();
         assert!(decoder.decode(&[0xff; 64], 0).is_err());
