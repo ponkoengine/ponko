@@ -262,6 +262,10 @@ pub unsafe extern "C" fn ponko_mesh_data_add_morph_frame(
 }
 
 /// Creates an empty animation clip, ready for named morph tracks.
+///
+/// Ownership: on success `output` receives an owned clip, the caller's; free it
+/// with ponko_clip_free.
+///
 /// # Safety
 /// `name` is a C string; `output` writable.
 /// ```

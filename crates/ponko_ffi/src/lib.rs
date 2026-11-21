@@ -784,6 +784,10 @@ fn present(found: bool) -> Result<(), Failure> {
 }
 
 /// Creates an owned empty world; returns null if Rust panics.
+///
+/// Ownership: the returned world is the caller's (null on failure); free it
+/// with ponko_world_free.
+///
 /// ```
 /// let world = ponko_ffi::ponko_world_new();
 /// unsafe { ponko_ffi::ponko_world_free(world); }
@@ -831,6 +835,10 @@ pub unsafe extern "C" fn ponko_world_free(world: *mut PonkoWorld) -> PonkoStatus
 
 /// Last error on this thread; valid until the next failed ABI call on this thread.
 /// Successful calls leave it unchanged. Never free the returned pointer.
+///
+/// Ownership: the returned string is borrowed (thread-local) until the next
+/// failed call on this thread; never free it.
+///
 /// ```
 /// assert!(!ponko_ffi::ponko_last_error().is_null());
 /// ```
@@ -854,6 +862,10 @@ pub extern "C" fn ponko_last_error_kind() -> PonkoErrorKind {
 /// the call), or an empty string: the C side of Rust's `ponko::prelude::Error::path`.
 /// Set with [`ponko_last_error`]'s message, valid until the next failed call
 /// on this thread. Never free the returned pointer.
+///
+/// Ownership: the returned string is borrowed (thread-local) until the next
+/// failed call on this thread; never free it.
+///
 /// ```
 /// assert!(!ponko_ffi::ponko_last_error_path().is_null());
 /// ```
@@ -865,6 +877,10 @@ pub extern "C" fn ponko_last_error_path() -> *const c_char {
 /// A short English name for a [`PonkoErrorKind`] value (`"not found"`,
 /// `"shader"`, ...), for logs; `"other"` for a value this library doesn't
 /// know. A static string: never free it.
+///
+/// Ownership: the returned string is static (valid for the whole run); never
+/// free it.
+///
 /// ```
 /// let name = unsafe { std::ffi::CStr::from_ptr(ponko_ffi::ponko_error_kind_name(1)) };
 /// assert_eq!(name.to_str(), Ok("not found"));
@@ -1320,6 +1336,10 @@ pub(crate) fn query_input<'a>(components: *const u32, count: usize) -> Result<&'
 /// The columns are writable, so every row of a column whose changes are
 /// tracked (`ponko_component_track_changes`) counts as changed. To read
 /// without that, or to visit only changed rows, use `ponko_query_with`.
+///
+/// Ownership: `user` stays the caller's and is only passed to `callback` during
+/// this call; the engine keeps no pointer to it after returning.
+///
 /// # Safety
 /// Live handle; readable ids; callback and user pointer remain valid.
 /// Callbacks must return normally and preserve valid POD values in all columns.
@@ -1367,6 +1387,11 @@ pub unsafe extern "C" fn ponko_query(
 /// thread-safe: touch only its own chunk's rows, read-only data, the context's
 /// read-only values (dt, tick, random bits) and spatial queries. World calls
 /// return `PONKO_BUSY` and commands are off until it returns.
+///
+/// Ownership: `user` stays the caller's and is only passed to `callback` during
+/// this call; the engine keeps no pointer to it after returning. It must be
+/// safe to use from several threads at once.
+///
 /// # Safety
 /// As `ponko_query`, plus: `callback` and `user` must be safe to use from
 /// several threads at the same time.

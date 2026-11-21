@@ -112,6 +112,11 @@ fn animator(c: &mut Ctx, bits: u64) -> Result<&mut Animator, Failure> {
 // ---- motions ----------------------------------------------------------------------
 
 /// A motion that plays `clip` (copied; the clip stays yours).
+///
+/// Ownership: on success `out_motion` receives an owned motion, the caller's;
+/// free it with ponko_motion_free. (or hand it to a blend tree or a graph
+/// state, which takes it over).
+///
 /// ```
 /// assert_eq!(unsafe { ponko_ffi::ponko_motion_clip(std::ptr::null(), std::ptr::null_mut()) } as u32, 1);
 /// ```
@@ -128,6 +133,11 @@ pub unsafe extern "C" fn ponko_motion_clip(clip: *const PonkoClip, out_motion: *
 
 /// An empty 1D blend tree on float parameter `parameter`; add children with
 /// `ponko_motion_blend1d_add`, in increasing threshold order.
+///
+/// Ownership: on success `out_motion` receives an owned motion, the caller's;
+/// free it with ponko_motion_free. (or hand it to a blend tree or a graph
+/// state, which takes it over).
+///
 /// ```
 /// let mut m = std::ptr::null_mut();
 /// assert_eq!(unsafe { ponko_ffi::ponko_motion_blend1d(0, &mut m) } as u32, 0);
@@ -142,6 +152,11 @@ pub unsafe extern "C" fn ponko_motion_blend1d(parameter: usize, out_motion: *mut
 
 /// An empty 2D blend tree on float parameters `x` and `y`; add children
 /// with `ponko_motion_blend2d_add`.
+///
+/// Ownership: on success `out_motion` receives an owned motion, the caller's;
+/// free it with ponko_motion_free. (or hand it to a blend tree or a graph
+/// state, which takes it over).
+///
 /// ```
 /// let mut m = std::ptr::null_mut();
 /// assert_eq!(unsafe { ponko_ffi::ponko_motion_blend2d(0, 1, &mut m) } as u32, 0);
@@ -156,6 +171,10 @@ pub unsafe extern "C" fn ponko_motion_blend2d(x: usize, y: usize, out_motion: *m
 
 /// Adds `child` to a 1D tree at `threshold`, its clock scaled by
 /// `time_scale` (1 for as recorded). Takes `child` over, even on failure.
+///
+/// Ownership: `child` is taken over (also on failure): the tree frees it; don't
+/// use or free it after.
+///
 /// ```
 /// assert_eq!(unsafe { ponko_ffi::ponko_motion_blend1d_add(std::ptr::null_mut(), 0.0, std::ptr::null_mut(), 1.0) } as u32, 1);
 /// ```
@@ -184,6 +203,10 @@ pub unsafe extern "C" fn ponko_motion_blend1d_add(
 
 /// Adds `child` to a 2D tree at point (`x`, `y`), its clock scaled by
 /// `time_scale`. Takes `child` over, even on failure.
+///
+/// Ownership: `child` is taken over (also on failure): the tree frees it; don't
+/// use or free it after.
+///
 /// ```
 /// assert_eq!(unsafe { ponko_ffi::ponko_motion_blend2d_add(std::ptr::null_mut(), 0.0, 0.0, std::ptr::null_mut(), 1.0) } as u32, 1);
 /// ```
@@ -228,6 +251,11 @@ pub unsafe extern "C" fn ponko_motion_free(motion: *mut PonkoMotion) {
 // ---- the graph builder ------------------------------------------------------------
 
 /// Starts a graph with no parameters, states or transitions.
+///
+/// Ownership: the returned builder is the caller's (null on failure); free it
+/// with ponko_animation_graph_builder_free. ponko_animation_graph_build also
+/// frees it.
+///
 /// ```
 /// let b = ponko_ffi::ponko_animation_graph_builder_new();
 /// unsafe { ponko_ffi::ponko_animation_graph_builder_free(b) };
@@ -312,6 +340,10 @@ fn add_parameter(b: *mut PonkoAnimationGraphBuilder, p: AnimationParameter, out_
 /// (1 for as recorded), its speed also multiplied by float parameter
 /// `speed_parameter` unless that is -1. Looping states wrap; others hold
 /// their last frame. Its index goes to `out_index` (states count from 0).
+///
+/// Ownership: `motion` is taken over (also on failure): the builder frees it;
+/// don't use or free it after.
+///
 /// ```
 /// assert_eq!(unsafe { ponko_ffi::ponko_animation_graph_add_state(std::ptr::null_mut(), std::ptr::null_mut(), 1.0, -1, true, std::ptr::null_mut()) } as u32, 1);
 /// ```
@@ -437,6 +469,11 @@ pub unsafe extern "C" fn ponko_animation_graph_add_condition(
 /// Checks and finishes the graph, starting in state `initial`, and frees
 /// the builder (even on failure). Fails with the reason when a state,
 /// parameter or clock is out of range.
+///
+/// Ownership: `builder_ptr` is taken over and freed (also on failure); don't
+/// use or free it after. On success `out_graph` receives an owned graph, the
+/// caller's; free it with ponko_animation_graph_free.
+///
 /// ```
 /// assert_eq!(unsafe { ponko_ffi::ponko_animation_graph_build(std::ptr::null_mut(), 0, std::ptr::null_mut()) } as u32, 1);
 /// ```

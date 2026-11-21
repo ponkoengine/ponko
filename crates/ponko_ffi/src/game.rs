@@ -24,6 +24,10 @@ pub type PonkoSystemFn = Option<unsafe extern "C" fn(ctx: *mut PonkoCtx, user: *
 /// Rust's `Game::new`, it includes the built-in systems (sprite drawing,
 /// animation, tilemaps); remove them with `ponko_game_remove_system`.
 /// Returns null on bad arguments (see `ponko_last_error`).
+///
+/// Ownership: the returned game is the caller's (null on failure); free it with
+/// ponko_game_free. ponko_game_run and ponko_game_run_headless free it instead.
+///
 /// # Safety
 /// `title` must be a NUL-terminated string.
 /// ```
@@ -293,6 +297,11 @@ pub(crate) fn system(
 /// Adds a simulation system: runs on the fixed tick, every `every` ticks
 /// (1 = every tick; larger = simulation LOD, like Rust's `IntoSystem::every`).
 /// `name` (may be null) shows up in timings and tools.
+///
+/// Ownership: `user` stays the caller's; the engine passes it to `system_fn`
+/// and never frees it. It must stay valid until the game is freed (or its run
+/// returns).
+///
 /// # Safety
 /// Live game; `system` and `user` must stay valid while the game runs.
 /// ```
@@ -377,6 +386,11 @@ pub(crate) fn phase(raw: u32) -> Result<Phase, Failure> {
 /// for logic the current tick's physics step must see. `name` (may be null)
 /// shows up in timings and tools. An unknown phase, `every` = 0 or a frame
 /// phase with `every` > 1 is `PONKO_INVALID_ARGUMENT`.
+///
+/// Ownership: `user` stays the caller's; the engine passes it to `system_fn`
+/// and never frees it. It must stay valid until the game is freed (or its run
+/// returns).
+///
 /// # Safety
 /// Live game; `system` and `user` must stay valid while the game runs.
 /// ```
@@ -414,6 +428,11 @@ pub unsafe extern "C" fn ponko_game_add_system(
 /// Like `ponko_game_add_system`, and writes the new system's id to
 /// `*out_id`, for `ponko_game_remove` (Rust's `Game::add_system`). Ids are
 /// never 0 and never reused. On failure `*out_id` is 0.
+///
+/// Ownership: `user` stays the caller's; the engine passes it to `system_fn`
+/// and never frees it. It must stay valid until the game is freed (or its run
+/// returns).
+///
 /// # Safety
 /// Live game; writable `out_id`; `system` and `user` must stay valid while
 /// the game runs.
@@ -515,6 +534,11 @@ pub unsafe extern "C" fn ponko_game_remove(game: *mut PonkoGame, system_id: u32)
 /// in the order they were added, together with plugin setups, and before the
 /// `setup` passed to `ponko_game_run` and friends; commands are applied
 /// after each one.
+///
+/// Ownership: `user` stays the caller's; the engine passes it to `setup` and
+/// never frees it. It must stay valid until the game ran the setups (or is
+/// freed).
+///
 /// # Safety
 /// Live game; `setup` and `user` must stay valid until the game ran them.
 /// ```
@@ -552,6 +576,11 @@ pub type PonkoPluginBuildFn = Option<unsafe extern "C" fn(game: *mut PonkoGame, 
 /// is queued like `ponko_game_setup`, so plugins start in the order they
 /// were added. Each system names its phase, so the order plugins are added
 /// in only matters between systems of the same phase.
+///
+/// Ownership: `user` stays the caller's; the engine passes it to `build_fn`
+/// (now) and `setup` (when the game starts) and never frees it. It must stay
+/// valid until the game ran the setups (or is freed).
+///
 /// # Safety
 /// Live game; `setup` and `user` must stay valid until the game ran them.
 /// ```
@@ -603,6 +632,11 @@ pub unsafe extern "C" fn ponko_game_plugin(
 /// Adds a late system: runs once per frame after the engine posed animated
 /// skeletons and before drawing, for IK, look-at and other pose fixes. Not
 /// run by `ponko_game_run_headless`.
+///
+/// Ownership: `user` stays the caller's; the engine passes it to `system_fn`
+/// and never frees it. It must stay valid until the game is freed (or its run
+/// returns).
+///
 /// # Safety
 /// Live game; `system` and `user` must stay valid while the game runs.
 /// ```
@@ -632,6 +666,11 @@ pub unsafe extern "C" fn ponko_game_late_system(
 
 /// Adds a frame system: runs once per frame before drawing (input, camera, UI).
 /// Not run by `ponko_game_run_headless`.
+///
+/// Ownership: `user` stays the caller's; the engine passes it to `system_fn`
+/// and never frees it. It must stay valid until the game is freed (or its run
+/// returns).
+///
 /// # Safety
 /// Live game; `system` and `user` must stay valid while the game runs.
 /// ```
@@ -744,6 +783,12 @@ fn setup_fn(setup: crate::PonkoSystemFn, user: *mut c_void) -> impl FnOnce(&mut 
 /// `ponko_perf_report_text`, `ponko_perf_check` and `ponko_perf_compare`.
 /// Rust's allocations are counted; C++'s need `PONKO_COUNT_CPP_ALLOCATIONS`
 /// (or `ponko_note_allocation`).
+///
+/// Ownership: `game` is taken over and freed (also on failure); don't use or
+/// free it after. On success `out_world` receives the owned world, the
+/// caller's; free it with ponko_world_free. `user` stays the caller's, is
+/// passed to `setup`, and must stay valid until this call returns.
+///
 /// # Safety
 /// As `ponko_game_run_headless`.
 /// ```
@@ -791,6 +836,11 @@ pub unsafe extern "C" fn ponko_game_profile_headless(
 /// event loop, a build without the `window` feature) it returns
 /// `PONKO_UNSUPPORTED` and `ponko_last_error()` says why; other failures
 /// keep their statuses.
+///
+/// Ownership: `game` is taken over and freed when the run ends (also on
+/// failure); don't use or free it after. `user` stays the caller's, is passed
+/// to `setup` and the systems, and must stay valid until this call returns.
+///
 /// # Safety
 /// Live game (consumed even on failure); callbacks and `user` valid until it returns.
 /// ```no_run
@@ -812,6 +862,12 @@ pub unsafe extern "C" fn ponko_game_run(game: *mut PonkoGame, setup: PonkoSystem
 /// as possible, then frees `game` and gives you the world in `*out_world`
 /// (free it with `ponko_world_free`). `setup` runs once first; frame systems
 /// don't run. A system can stop early with `ponko_ctx_quit`.
+///
+/// Ownership: `game` is taken over and freed (also on failure); don't use or
+/// free it after. On success `out_world` receives the owned world, the
+/// caller's; free it with ponko_world_free. `user` stays the caller's, is
+/// passed to `setup`, and must stay valid until this call returns.
+///
 /// # Safety
 /// Live game (consumed even on failure); writable `out_world`; callbacks and
 /// `user` valid until it returns.

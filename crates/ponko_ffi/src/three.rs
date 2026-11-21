@@ -1165,6 +1165,10 @@ fn boxed(data: MeshData) -> *mut PonkoMeshData {
 /// coordinates zero) and `index_count` indices, three per triangle,
 /// counter-clockwise seen from the front. Null (see `ponko_last_error`)
 /// if they don't fit together.
+///
+/// Ownership: the returned mesh data is the caller's (null on failure); free it
+/// with ponko_mesh_data_free.
+///
 /// # Safety
 /// Non-null arrays hold the stated counts.
 /// ```
@@ -1226,6 +1230,10 @@ pub unsafe extern "C" fn ponko_mesh_data_new(
 }
 
 /// A cube `size` wide around the origin (Rust `MeshData::cube`).
+///
+/// Ownership: the returned mesh data is the caller's (null on failure); free it
+/// with ponko_mesh_data_free.
+///
 /// ```
 /// let d = ponko_ffi::ponko_mesh_data_cube(1.0);
 /// unsafe { ponko_ffi::ponko_mesh_data_free(d) };
@@ -1236,6 +1244,10 @@ pub extern "C" fn ponko_mesh_data_cube(size: f32) -> *mut PonkoMeshData {
 }
 
 /// A flat square `size` wide on the XZ plane, facing up (Rust `MeshData::plane`).
+///
+/// Ownership: the returned mesh data is the caller's (null on failure); free it
+/// with ponko_mesh_data_free.
+///
 /// ```
 /// let d = ponko_ffi::ponko_mesh_data_plane(10.0);
 /// unsafe { ponko_ffi::ponko_mesh_data_free(d) };
@@ -1247,6 +1259,10 @@ pub extern "C" fn ponko_mesh_data_plane(size: f32) -> *mut PonkoMeshData {
 
 /// A sphere of `radius` from `segments` slices around (at least 3; Rust
 /// `MeshData::sphere`).
+///
+/// Ownership: the returned mesh data is the caller's (null on failure); free it
+/// with ponko_mesh_data_free.
+///
 /// ```
 /// let d = ponko_ffi::ponko_mesh_data_sphere(0.5, 24);
 /// unsafe { ponko_ffi::ponko_mesh_data_free(d) };
@@ -1266,6 +1282,10 @@ pub(crate) fn square_grid(count: usize) -> bool {
 /// after row along +Z, NaN for a hole; every `step`-th height is used, with
 /// skirts at the edges (Rust `MeshData::heightfield`). Null if the heights
 /// aren't a square grid of at least 2 x 2 or `step` is 0.
+///
+/// Ownership: the returned mesh data is the caller's (null on failure); free it
+/// with ponko_mesh_data_free.
+///
 /// # Safety
 /// `heights` holds `count` floats.
 /// ```
@@ -3032,6 +3052,10 @@ pub struct PonkoHeightfield(ponko::terrain::Heightfield);
 /// Makes a heightfield `size` wide from `count` heights (n x n, as
 /// `ponko_ctx_create_terrain_tile` takes them). Returns null (see
 /// `ponko_last_error`) for bad input.
+///
+/// Ownership: the returned heightfield is the caller's (null on failure); free
+/// it with ponko_heightfield_free.
+///
 /// ```
 /// let h = [0.0f32; 9];
 /// let g = unsafe { ponko_ffi::ponko_heightfield_new(h.as_ptr(), 9, 4.0) };

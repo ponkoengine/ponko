@@ -254,6 +254,10 @@ pub unsafe extern "C" fn ponko_authority_check(
 pub struct PonkoLatestWins(LatestWins<u64>);
 
 /// An empty filter.
+///
+/// Ownership: the returned filter is the caller's (null on failure); free it
+/// with ponko_latest_wins_free.
+///
 /// ```
 /// let f = ponko_ffi::ponko_latest_wins_new();
 /// unsafe { ponko_ffi::ponko_latest_wins_free(f) };
@@ -487,6 +491,10 @@ fn stream_mut<'a>(s: *mut PonkoSnapshotStream) -> Result<&'a mut SnapshotStream<
 
 /// Makes a stream from `*config` (null for the defaults). Fails on a
 /// `capacity` below 2 or a negative or non-finite time.
+///
+/// Ownership: on success `out_stream` receives an owned stream, the caller's;
+/// free it with ponko_snapshot_stream_free.
+///
 /// ```
 /// let mut s = std::ptr::null_mut();
 /// assert_eq!(unsafe { ponko_ffi::ponko_snapshot_stream_new(std::ptr::null(), &mut s) } as u32, 0);
@@ -853,6 +861,10 @@ fn interest_ref<'a>(i: *const PonkoInterest) -> Result<&'a PonkoInterest, Failur
 /// Makes an interest manager from `*config` (null for the defaults). Fails
 /// if the rings are invalid: radii not positive and increasing, an `every`
 /// of 0, or a hysteresis not below the first radius.
+///
+/// Ownership: on success `out_interest` receives an owned interest map, the
+/// caller's; free it with ponko_interest_free.
+///
 /// ```
 /// let mut i = std::ptr::null_mut();
 /// assert_eq!(unsafe { ponko_ffi::ponko_interest_new(std::ptr::null(), &mut i) } as u32, 0);

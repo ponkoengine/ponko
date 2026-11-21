@@ -144,6 +144,10 @@ fn json_error(message: String) -> Failure {
 }
 
 /// An empty scenario. Free it with `ponko_input_scenario_free`.
+///
+/// Ownership: the returned scenario is the caller's (null on failure); free it
+/// with ponko_input_scenario_free.
+///
 /// ```
 /// let s = ponko_ffi::ponko_input_scenario_new();
 /// assert!(!s.is_null());
@@ -171,6 +175,10 @@ pub unsafe extern "C" fn ponko_input_scenario_free(scenario: *mut PonkoInputScen
 /// Reads a scenario from the versioned JSON format that Rust, tools and the
 /// control endpoint use. On success `*out` is a new scenario to free; bad
 /// JSON is `PONKO_INVALID_ARGUMENT` with kind `PONKO_ERROR_JSON`.
+///
+/// Ownership: on success `out_scenario` receives an owned scenario, the
+/// caller's; free it with ponko_input_scenario_free.
+///
 /// ```
 /// let mut s = std::ptr::null_mut();
 /// assert_eq!(unsafe { ponko_ffi::ponko_input_scenario_from_json(c"{\"version\": 1, \"steps\": []}".as_ptr(), &mut s) } as u32, 0);
@@ -591,6 +599,10 @@ pub unsafe extern "C" fn ponko_ctx_start_input_recording(ctx: *mut PonkoCtx) -> 
 /// `Input::stop_recording`): `*out_scenario` is a new scenario lasting
 /// the ticks recorded, which replays the input on the same ticks (free it
 /// with `ponko_input_scenario_free`), or null when none was running.
+///
+/// Ownership: on success `out_scenario` receives an owned scenario, the
+/// caller's; free it with ponko_input_scenario_free.
+///
 /// ```
 /// let mut s = std::ptr::null_mut();
 /// assert_eq!(unsafe { ponko_ffi::ponko_ctx_stop_input_recording(std::ptr::null_mut(), &mut s) } as u32, 1);

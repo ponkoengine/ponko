@@ -1548,8 +1548,9 @@ fn fitted(shot: &Screenshot, max_size: u32) -> Result<image::RgbaImage, String> 
     Ok(image)
 }
 
-/// Below this many sprites, one thread is faster than many.
-const SPRITES_PARALLEL_MIN: usize = 20_000;
+/// Below this many sprites, one thread is faster than many. Under Miri a
+/// few dozen, so its test of the parallel path finishes.
+const SPRITES_PARALLEL_MIN: usize = if cfg!(miri) { 48 } else { 20_000 };
 
 /// What the renderer draws for a sprite entity.
 #[inline]
@@ -1795,6 +1796,33 @@ mod tests {
             assert_eq!(ctx.render_frame(), FrameStatus::Skipped);
         }
         assert!(ctx.perf.render_history.is_empty(), "no renderer: nothing was drawn");
+    }
+
+    /// From `SPRITES_PARALLEL_MIN` sprites on, plain and styled sprites are
+    /// written into the draw list from many threads (the `unsafe` extends
+    /// of `draw_world_sprites` and `draw_styled_sprites`): every sprite
+    /// lands exactly once, plain ones first. Runs under Miri.
+    #[test]
+    fn many_sprites_are_queued_once_each_from_many_threads() {
+        use crate::sprite_material::BlendMode;
+        let n = SPRITES_PARALLEL_MIN;
+        let mut ctx = Ctx::new(1.0 / 60.0, Vec2::new(800.0, 600.0));
+        let sprite = Sprite::new(Texture::new(0, 4, 4));
+        for i in 0..n {
+            let at = Transform2D::at(Vec2::new(i as f32, 0.0));
+            ctx.world.spawn((at, sprite));
+            let styled = Transform2D::at(Vec2::new(i as f32, 1.0));
+            ctx.world.spawn((styled, sprite, BlendMode::Additive));
+        }
+        ctx.draw_world_sprites();
+        let (instances, _) = ctx.gfx.draw_list.finish();
+        assert_eq!(instances.len(), 2 * n);
+        for (row, half) in instances.chunks(n).enumerate() {
+            let mut xs: Vec<_> = half.iter().map(|s| s.pos).collect();
+            xs.sort_by(|a, b| a[0].total_cmp(&b[0]));
+            let want: Vec<_> = (0..n).map(|i| [i as f32, row as f32]).collect();
+            assert_eq!(xs, want, "row {row}: each sprite once");
+        }
     }
 
     #[test]

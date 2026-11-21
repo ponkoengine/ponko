@@ -611,7 +611,8 @@ mod tests {
         use rayon::prelude::*;
         let mut list = DrawList::default();
         list.push(1, 0.0, inst(-1.0));
-        let n = 50_000;
+        // Small under Miri, which runs it a thousand times slower.
+        let n = if cfg!(miri) { 300 } else { 50_000 };
         // SAFETY: every index in 0..n is written once.
         unsafe {
             list.extend(n, |slots| {
@@ -943,7 +944,7 @@ mod tests {
     fn styled_writes_from_many_threads_keep_their_looks() {
         use rayon::prelude::*;
         let mut list = DrawList::default();
-        let n = 30_000;
+        let n = if cfg!(miri) { 300 } else { 30_000 };
         // SAFETY: every index in 0..n is written once.
         unsafe {
             list.extend(n, |slots| {

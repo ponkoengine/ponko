@@ -199,6 +199,10 @@ pub unsafe extern "C" fn ponko_ctx_set_input(ctx: *mut PonkoCtx, data: *const c_
 
 /// `player`'s input for the current tick: `*out_size` bytes at `*out_data`
 /// (size 0 if they sent none), valid until this system returns.
+///
+/// Ownership: `out_data` receives a view of bytes the engine owns, valid until
+/// the system returns; never free it.
+///
 /// # Safety
 /// Live ctx; writable outputs.
 /// ```

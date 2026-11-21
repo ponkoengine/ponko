@@ -114,6 +114,10 @@ pub unsafe extern "C" fn ponko_collider_focus_component(world: *mut PonkoWorld, 
 /// Builds a heightfield from `count` (n × n) heights `size` wide, as
 /// `ponko_ctx_physics3d_heightfield` does. Safe to call from any thread.
 /// Null (see `ponko_last_error`) for bad input.
+///
+/// Ownership: the returned data is the caller's (null on failure); free it with
+/// ponko_collision_mesh_data_free.
+///
 /// ```
 /// let h = [0.0f32; 9];
 /// let d = unsafe { ponko_ffi::ponko_collision_mesh_data_heightfield(h.as_ptr(), 9, 4.0) };
@@ -137,6 +141,10 @@ pub unsafe extern "C" fn ponko_collision_mesh_data_heightfield(
 /// `vertex_count` vertices, as `ponko_ctx_physics3d_trimesh` does. Safe to
 /// call from any thread. Null for no triangles, an index out of range or a
 /// vertex that isn't finite.
+///
+/// Ownership: the returned data is the caller's (null on failure); free it with
+/// ponko_collision_mesh_data_free.
+///
 /// ```
 /// use ponko_ffi::*;
 /// let v = [PonkoVec3 { x: 0.0, y: 0.0, z: 0.0 }, PonkoVec3 { x: 1.0, y: 0.0, z: 0.0 }, PonkoVec3 { x: 0.0, y: 0.0, z: 1.0 }];
@@ -160,6 +168,10 @@ pub unsafe extern "C" fn ponko_collision_mesh_data_trimesh(
 /// Builds a convex hull around `count` points, as
 /// `ponko_ctx_physics3d_convex_hull` does. Safe to call from any thread.
 /// Null if they're flat or not finite.
+///
+/// Ownership: the returned data is the caller's (null on failure); free it with
+/// ponko_collision_mesh_data_free.
+///
 /// ```
 /// use ponko_ffi::*;
 /// let p = [PonkoVec3 { x: 0.0, y: 0.0, z: 0.0 }, PonkoVec3 { x: 1.0, y: 0.0, z: 0.0 }, PonkoVec3 { x: 0.0, y: 1.0, z: 0.0 }];

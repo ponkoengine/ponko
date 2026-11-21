@@ -18,6 +18,10 @@ fn live<'a>(p: *mut PonkoSteamLobby) -> Result<&'a mut ponko::net::SteamLobby, c
 }
 
 /// Create an asynchronous Steam lobby. Visibility: 0 friends-only, 1 public, 2 private.
+///
+/// Ownership: on success `output` receives an owned lobby, the caller's; free
+/// it with ponko_steam_lobby_free.
+///
 /// # Safety
 /// Writable output; set to null on failure.
 /// ```
@@ -65,6 +69,10 @@ pub unsafe extern "C" fn ponko_steam_lobby_create(
 }
 
 /// Join an asynchronous Steam lobby. Visibility: 0 friends-only, 1 public, 2 private.
+///
+/// Ownership: on success `output` receives an owned lobby, the caller's; free
+/// it with ponko_steam_lobby_free.
+///
 /// # Safety
 /// Writable output; set to null on failure.
 /// ```
