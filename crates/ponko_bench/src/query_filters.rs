@@ -6,8 +6,13 @@ use ponko_ecs::{Chunk, ChunkQuery, FilterShape, FilterTree, Or, With, Without, W
 use std::hint::black_box;
 
 fn world() -> World {
+    world_of(N)
+}
+
+/// `n` rows over the 16 archetypes of the markers.
+fn world_of(n: usize) -> World {
     let mut w = World::new();
-    for i in 0..N {
+    for i in 0..n {
         let e = w.spawn(ent(i));
         if i & 1 != 0 {
             w.insert(e, M0);
@@ -120,5 +125,54 @@ fn step(chunk: &Chunk<'_>, dt: f32) {
             p.x += v.x * dt;
             p.y += v.y * dt;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every `Pos` of `w`, in entity order.
+    fn positions(w: &mut World) -> Vec<(u32, f32, f32)> {
+        let mut out = Vec::new();
+        w.query::<(ponko_ecs::Entity, &Pos)>()
+            .for_each(|(e, p)| out.push((e.index(), p.x, p.y)));
+        out.sort_by_key(|r| r.0);
+        out
+    }
+
+    /// The raw-column step of the C path moves every row once, with and
+    /// without a runtime filter that matches every row.
+    #[test]
+    fn the_c_path_steps_every_row_once_with_and_without_a_filter() {
+        let mut plain = world_of(64);
+        let mut filtered = world_of(64);
+        let ids = [plain.register::<Pos>(), plain.register::<Vel>()];
+        plain
+            .raw()
+            .query_chunks(ChunkQuery::new(&ids).writes(1), |chunk| step(&chunk, DT));
+        let ids = [filtered.register::<Pos>(), filtered.register::<Vel>()];
+        let (pos, vel, m0) = (
+            ids[0].index() as u32,
+            ids[1].index() as u32,
+            filtered.register::<M0>().index() as u32,
+        );
+        let nested = Tree::Or(vec![
+            Tree::All(vec![Tree::With(pos), Tree::With(vel)]),
+            Tree::Without(m0),
+        ]);
+        let filter = compile_tree(&nested, |raw| filtered.component_at(raw as usize)).unwrap();
+        filtered
+            .raw()
+            .query_chunks(ChunkQuery::new(&ids).writes(1).filter(&filter), |chunk| {
+                step(&chunk, DT)
+            });
+        let moved = positions(&mut plain);
+        assert_eq!(moved.len(), 64);
+        for (i, &(_, x, y)) in moved.iter().enumerate() {
+            let (p, v, _) = ent(i);
+            assert_eq!((x, y), (p.x + v.x * DT, p.y + v.y * DT));
+        }
+        assert_eq!(positions(&mut filtered), moved);
     }
 }
