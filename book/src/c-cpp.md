@@ -480,6 +480,7 @@ binding arrives:
 | `Net::accept_web`, `Net::join_web`, `Net::web_addr`, `NetMessages::accept_web`, `NetMessages::join_web`, `NetMessages::web_addr` | [Multiplayer in the browser](networking.md#in-the-browser) | Not bound yet: C and C++ hosts take UDP players only, and C and C++ games don't build for the web yet |
 | `LobbyClient::join_web` | [Lobbies, matchmaking and relays](lobby.md#the-client) | C and C++ games don't build for the web yet; their lobby clients join over UDP |
 | `Replication::input`, `Replication::predicted`, `Replication::event` | [From C and C++](replication.md#from-c-and-c) | Not bound yet: C and C++ games declare components, mark entities and read replicas; they send controls and events as application messages, and the server moves their entities |
+| `Replication::raw_event` | [From C and C++](replication.md#from-c-and-c) | The Rust side of events as bytes (`to_server_raw`, `to_client_raw`, `to_clients_raw`, `NetEvent<RawEvent>`) is in place; the C and C++ calls that wrap it are not bound yet, so events go as application messages until then |
 | `Replication::interpolated`, `Replication::position` | [From C and C++](replication.md#from-c-and-c) | Generic over `Interpolate` and a Rust closure: C components are set when their update arrives, and interest uses the entities' transforms |
 | `Signaling` | [Peer to peer over WebRTC](webrtc.md#with-any-signaling-channel) | C and C++ WebRTC endpoints are signaled through a lobby client (`ponko_net_messages_rtc_host`, `_rtc_join`) |
 | `RtcConfig::turn` | [Peer to peer over WebRTC](webrtc.md#stun-turn-and-nats) | TURN works in browsers only, and C and C++ games don't build for the web yet |
@@ -489,6 +490,7 @@ binding arrives:
 | `Game::debug_toggle` | [Plugins for other crates](plugins.md#debug-toggles) | Draw behind a flag of the game's own; `debug.draw` turns the engine's views on and off |
 | `Game::control_method` | [Plugins for other crates](plugins.md#control-methods) | The control endpoint's built-in methods only; a native game's tools read its reflected resources |
 | `Video` | [Video](video.md#c-and-c) | Not bound yet: decode with a library of the game's own and show the frames with `ponko_ctx_update_texture` |
+| `AssetGroup::with_sliced`, `SliceLoader` | [Loading screens](loading.md#loaders-that-work-in-slices) | Not bound yet: add the file with `PONKO_GROUP_BYTES` and decode it once the group is ready |
 | `Game::restore_window_settings` | [Window service](window.md#remember-the-players-choice) | Call `ponko_ctx_window_restore_settings` in setup; the window can show at its default size for a moment first |
 
 System phases, system ids, setup callbacks and plugins are not on this

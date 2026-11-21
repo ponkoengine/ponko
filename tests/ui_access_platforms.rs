@@ -124,7 +124,8 @@ mod game {
     }
 }
 
-/// How long the system may take to show a change.
+/// How long the system may take to show a change: a hang detector (each
+/// wait ends as soon as the change shows), far beyond a busy machine's delay.
 #[cfg(all(feature = "accessibility", any(target_os = "windows", target_os = "linux")))]
 const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 

@@ -158,6 +158,12 @@ impl Editor {
         match kind {
             Kind::Scene => {
                 ctx.load_scene(path)?;
+                // Its glTF scenes, as the game spawns them after a load
+                // (with their overrides).
+                #[cfg(feature = "3d")]
+                for e in ctx.respawn_saved_gltf() {
+                    eprintln!("ponko: {path}: {e}");
+                }
             }
             Kind::Prefab => {
                 // Read from the file, not a copy cached before it changed.
@@ -218,6 +224,9 @@ impl Editor {
     pub fn save_as(&mut self, ctx: &mut Ctx, path: &str, kind: Kind) -> Result<(), Error> {
         match kind {
             Kind::Scene => {
+                // How its glTF scenes were edited goes in their records.
+                #[cfg(feature = "3d")]
+                ctx.record_gltf_overrides(None);
                 ctx.assets.save_scene(&ctx.world, path)?;
                 ctx.scene_file = Some(path.to_string());
             }

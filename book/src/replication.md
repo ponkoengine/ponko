@@ -335,6 +335,49 @@ field is which and drops the event. Send the `Option` as it is instead. A client
 newest server tick it had seen when it sent the event: what it was looking
 at, for judging what it aimed at.
 
+### Raw events: bytes you encode
+
+An event type can also be declared by name, with plain bytes for events:
+for C and C++ games, or a Rust game that encodes its own. `raw_event`
+declares it, `to_server_raw`, `to_client_raw` and `to_clients_raw` send
+the bytes, and they arrive unchanged as `NetEvent<RawEvent>`, every raw
+type in one stream, told apart by `name()`:
+
+```rust
+use ponko::net::{NetEvent, RawEvent, Replication};
+
+fn ping(ctx: &mut Ctx) {
+    if ctx.input.key_pressed(Key::P) {
+        // An error, not a panic: an undeclared name, or too many bytes.
+        if let Err(e) = ctx.net.replication.to_server_raw("ping", &[1, 2, 3]) {
+            eprintln!("{e}");
+        }
+    }
+    let pings: Vec<Vec<u8>> = ctx
+        .events
+        .read::<NetEvent<RawEvent>>()
+        .iter()
+        .filter(|e| e.event.name() == "ping")
+        .map(|e| e.event.bytes.clone())
+        .collect();
+    for bytes in pings {
+        let _ = ctx.net.replication.to_clients_raw("ping", &bytes);
+    }
+}
+
+let game = Game::new("Ping", 800, 600)
+    .replication(Replication::new().raw_event("ping"))
+    .sim_system(ping);
+# let _ = game;
+```
+
+Raw events share the typed events' lane: reliable, ordered (one order
+with typed events), delivered at the start of a tick. One carries at most
+`MAX_RAW_EVENT_BYTES` (1 MiB less a 16-byte header). Both sides declare
+it, in the same place among the events; a raw `"Chat"` never matches a
+typed `Chat`, and the server refuses a client whose declarations differ
+that way.
+
 ## Interest and the budget
 
 A small arena can send everything to everyone. A big world can't, and
@@ -364,6 +407,22 @@ default, `DEFAULT_BUDGET`). When the changes don't fit, the rest wait for
 a later tick, and each waiting entity gains its priority every tick (scaled
 by its interest ring), so the most important go first and nothing waits
 forever. A client's own entities are always sent.
+
+**Each change goes once.** Packets of state are unreliable, so the server
+keeps what each client acknowledged as that client's baseline, and sends
+changes against it. A change goes out once; while the acknowledgement is
+on its way, the entity isn't sent again. It goes again only if the entity
+changed again meanwhile, if the client acknowledged packets sent after its
+one but not that one (it was lost: resent at once), or if the client hasn't
+acknowledged it after a resend timeout. The timeout follows each client's
+round trip, measured from its acknowledgements: the smoothed round trip
+plus four of its deviations, at least two ticks and at most a second (0.2 s
+until the first is measured), doubling with each try while nothing comes
+back, up to 4 s. Spawns and despawns are resent the same way. On a link
+with a round trip of 100 ms (six ticks at 60 Hz), sending a change in
+every packet until it was acknowledged sent it six times. [Sent once,
+resent when lost](#sent-once-resent-when-lost) has the details and the
+numbers.
 
 **Interest** sends each client only the entities within the outer ring,
 nearer rings more often. An entity that leaves a client's rings is
@@ -488,8 +547,9 @@ cargo run --release -p ponko_bench --bin replication -- 3
 |---|---|---|---|---|
 | All move, no budget | 571,428 | 588,949 | 1,000 | 0.73 ms, 0.77 ms |
 | All move, 64 KB/s budget (the default) | 63,893 | 67,578 | 1,000 | 0.38 ms, 0.42 ms |
-| 1 in 10 move, 64 KB/s | 63,894 | 67,578 | 1,000 | 0.26 ms, 0.28 ms |
-| All move, interest rings (250 m every tick, 500 m every 4th) | 62,256 (58,562 to 63,923 by client) | 65,915 | 235 | 0.36 ms, 0.38 ms |
+| 1 in 10 move, 64 KB/s | 62,006 | 65,636 | 1,000 | 0.26 ms, 0.28 ms |
+| 1 in 20 move, 64 KB/s | 31,266 | 34,891 | 1,000 | 0.14 ms, 0.39 ms (busy machine, see below) |
+| All move, interest rings (250 m every tick, 500 m every 4th) | 62,246 (58,559 to 63,923 by client) | 65,905 | 235 | 0.36 ms, 0.38 ms |
 
 *Payload* is replication's packets; *on the wire* adds the transport's
 framing, acknowledgements and resends. Ten seconds were measured after a
@@ -500,7 +560,107 @@ changed, encoding and sending to all 16 clients.
 The CPU times come from three runs on a 14-core Apple M4 Max on an idle
 machine (2026-11-20, nothing else running); the medians of the runs varied by
 under 0.03 ms in every scenario (0.728 to 0.755 ms in the first). The byte
-counts are exact and don't change.
+counts are exact and don't change. The `1 in 20` row's CPU time is not
+from an idle machine: it was measured on 2026-11-21 while other builds
+kept the same M4 Max busy (load average 100 to 180), so it is only good
+for comparing with the row below it; an idle-machine run of it is still
+to be done. The other rows' times were measured before changes were sent
+once (next section) and didn't move beyond that busy machine's noise
+since.
+
+### Sent once, resent when lost
+
+Sending a change in every packet until the client acknowledged it cost a
+round trip's worth of packets per change. Sending it once, and again only
+after the resend timeout, changes the bytes where entities change now and
+then (the benchmark's loopback acknowledges within a few ticks; on real
+links with longer round trips the saving grows with them):
+
+| Scenario | Before: payload, on the wire (B/s per client) | After |
+|---|---|---|
+| 1 in 20 move, 64 KB/s | 63,893, 67,577 (at the budget) | 31,266, 34,891 |
+| 1 in 10 move, 64 KB/s | 63,894, 67,578 (at the budget) | 62,006, 65,636 |
+| All move, interest rings | 62,256, 65,915 | 62,246, 65,905 |
+| All move (no budget, or 64 KB/s) | 571,428 / 63,893 | the same |
+
+Before, the `1 in 20` scenario sat at the 64 KB/s budget, and entities
+that moved waited behind ones resent; now it uses half of it. Where every
+entity changes every tick there is nothing to resend, and nothing changed.
+
+What sends a record again, once it went:
+
+1. **The entity changed again.** The new state goes as soon as it is due.
+2. **Acknowledgements skipped its packet.** The client acknowledges with
+   the newest packet it has and a mask of the 64 before it. When it
+   acknowledges a packet sent at a later tick but not the one that carried
+   the record, that one is lost, and the record goes in the next packet:
+   a round trip after the packet that followed it, instead of after the
+   timeout. A record sent again since, or already acknowledged in a later
+   packet, isn't. On a link that reorders packets, a packet called lost
+   may still arrive; each time one does, the server waits a tick longer
+   before calling the next one lost (packets sent that many ticks later
+   must be acknowledged first), and after 128 acknowledged packets with no
+   such case it waits a tick less.
+3. **The resend timeout passed** without an acknowledgement: the smoothed
+   round trip plus four deviations (above). Each time a timeout sends
+   records again and nothing was acknowledged since, the next one waits
+   twice as long, up to 4 s. The first acknowledgement brings it back to
+   the plain timeout, and everything overdue goes at once.
+
+The engine's suite measures both on its scripted network, a link of three
+ticks each way (50 ms) at 60 Hz. The numbers are exact: the same on every
+run and every machine.
+
+A lost packet. Five entities change, and the packet carrying them is lost
+(jitter of up to a tick each way, a round trip of 8.6 ticks):
+
+| | Resent after |
+|---|---|
+| Before: on the timeout only | 12 ticks (the timeout) |
+| After: when an acknowledgement skips it | 9 ticks |
+
+On a link that keeps its timing steady the two meet: the timeout is the
+round trip plus a tick, and so is the acknowledgement of the next packet.
+The more the round trip varies, the longer the timeout and the more the
+early resend saves. Over 20 seconds, with 100 counters each changing one
+tick in 20 and losing 10% of the packets each way, ticks from a change on
+the server to the client showing it:
+
+| Link | Mean | Slowest 5% (the lost ones), mean | 99th percentile | Most | Server bytes/s |
+|---|---|---|---|---|---|
+| Jitter up to a tick: before | 6.02 | 20.0 | 24 | 44 | 1,630 |
+| Jitter up to a tick: after | 5.80 | 18.2 | 23 | 37 | 1,632 |
+| Jitter up to 3 ticks (packets overtake): before | 7.45 | 24.9 | 24 | 44 | 1,626 |
+| Jitter up to 3 ticks: after | 7.17 | 22.7 | 25 | 40 | 1,635 |
+| Jitter up to 3 ticks: after, without the reordering tolerance | 6.95 | 20.6 | 21 | 36 | 1,748 |
+
+Without the tolerance, a link that reorders packets gets the late ones
+resent too: 7.5% more bytes for the freshest replicas. The tolerance keeps
+the bytes within 0.6% of before.
+
+An outage. The link (round trip 8 ticks) is cut for 9 s, after five
+entities changed and one was despawned:
+
+| | Resent at (ticks into the outage) | Records, despawns sent | Server bytes/s | Client caught up after the link was back |
+|---|---|---|---|---|
+| Before | every 9 ticks | 300, 60 | 833 | 11 ticks |
+| After | 9, 27, 63, 135, 279, 519 (the waits 9, 18, 36, 72, 144 and 240 ticks: 4 s) | 35, 7 | 565 | 18 ticks |
+
+Most of the bytes left are the packet headers the server still sends
+every tick (about 540 B/s). After the outage, the backed-off server waits
+for the first acknowledgement before sending again: the client is up to
+date a round trip plus the trip there (12 ticks) later, plus the 0.1 s
+it shows interpolated values behind. Before, it was a matter of luck where
+the 9-tick cycle stood: from 5 to 13 ticks for the data, plus the same
+0.1 s. Changes made during an outage still go once, at once; only the
+resends wait, so the budget is left for new changes.
+
+The server's CPU per tick, in the `1 in 20` scenario, five runs of each,
+the two builds alternating (2026-11-21, on the busy machine above): the
+medians were 0.204 and 0.210 ms before (runs from 0.189 to 0.267 ms), and
+0.138 and 0.160 ms after (0.136 to 0.290 ms): fewer records to encode,
+though the busy machine's spread overlaps. In `all move, 64 KB/s` the
+two builds didn't differ beyond the noise (0.92 to 0.95 ms both).
 
 ### Only what changed
 
@@ -571,10 +731,17 @@ and replicas, and set viewers. That is `ponko_ctx_replication`,
 `ponko_ctx_replicate` and the calls above, or `ctx.replicated<T>()`,
 `ctx.replication()` and `ctx.replicate()` in C++. The budget and the
 interest rings are arguments of `ponko_ctx_replication`, and interest uses
-the entities' transforms. Inputs, prediction and events
-(`Replication::input`, `Replication::predicted`, `Replication::event`)
-are Rust-only for now: a native game sends its controls and events as
-[application messages](networking.md#application-messages-rust), and the
-server moves the players' entities. So are `Replication::interpolated`
-and `Replication::position` (generic over Rust types): a C component is
-set when its update arrives.
+the entities' transforms. Inputs and prediction (`Replication::input`,
+`Replication::predicted`) are Rust-only for now: a native game sends its
+controls as [application messages](networking.md#application-messages-rust),
+and the server moves the players' entities. So are
+`Replication::interpolated` and `Replication::position` (generic over Rust
+types): a C component is set when its update arrives.
+
+Typed events (`Replication::event`) are generic over serde types, so
+events for C and C++ are [raw events](#raw-events-bytes-you-encode):
+bytes the game encodes itself. Their Rust side (`Replication::raw_event`,
+`to_server_raw`, `to_client_raw`, `to_clients_raw` and
+`NetEvent<RawEvent>`) is in place; the C and C++ calls that wrap it are
+not yet, so until then a native game sends its events as application
+messages too.

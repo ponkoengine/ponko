@@ -210,11 +210,28 @@ pixels. Groups are composited the way Aseprite 1.3 does when the file says
 so (its header flag for group blending): the children first, then the
 group's opacity and blend mode once, over what is below. Older files blend
 each child directly, as their Aseprite did. Tilemap layers are drawn from
-their embedded tileset, with flipped and rotated tiles and linked cels;
-embed a tileset in Aseprite if the file links to an external one. The
-cook caches each conversion by the file's bytes and split setting, so a
-cook that changed nothing reads the sheet back instead of converting it
-again ([below](packaging.md#cooking-assets-ponko-cook)).
+their tileset, with flipped and rotated tiles and linked cels.
+
+**External tilesets.** A tileset that links to a tileset in another
+Aseprite file instead of holding its tiles is read from that file, through
+the same asset sources as everything else: a link to
+`tiles/ground.aseprite` from `maps/town.aseprite` reads
+`maps/tiles/ground.aseprite`, and `..` goes up a folder (but not above the
+root; an absolute link is an error that says to make it relative). The
+linked file may link on to another, up to 8 files deep. While you develop,
+saving the tileset file reloads every loose `.aseprite` file that uses it,
+like saving the file itself. In the cook, a file that only holds tilesets
+(at least one tileset and no layer, so nothing to draw) and that another
+file links to gets no sheet: the cook's report says it is left out, and the
+files that link to it still read it. No `"skip"` rule is needed. A file
+of only tilesets that nothing links to still gets a sheet (an empty one),
+and a `"skip"` rule leaves out any file you don't load.
+
+The cook caches each conversion by the file's bytes, the bytes of the
+tileset files it links to and its split setting, so a cook that changed
+nothing reads the sheet back instead of converting it again, and editing a
+linked tileset converts the files that use it
+([below](packaging.md#cooking-assets-ponko-cook)).
 
 ## Blend modes and sprite shaders
 

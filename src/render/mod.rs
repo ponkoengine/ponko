@@ -69,6 +69,8 @@ mod timer;
 #[cfg(feature = "window")]
 pub(crate) mod traffic;
 #[cfg(feature = "window")]
+pub(crate) mod upload_timer;
+#[cfg(feature = "window")]
 mod views;
 
 pub use crate::sprite_material::{BlendMode, SpriteMaterial, SpriteMaterialDesc, SpriteShader};
@@ -464,6 +466,8 @@ mod regression_sequence_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod regression_stage;
 #[cfg(all(test, feature = "window", feature = "3d"))]
+mod render_target_frame_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
 mod reverse_z_render_test;
 #[cfg(all(test, feature = "window", feature = "3d", feature = "video"))]
 mod video_render_test;
@@ -476,6 +480,8 @@ mod views_render_test;
 
 #[cfg(all(test, feature = "window", feature = "3d", feature = "editor"))]
 mod editor_render_test;
+#[cfg(all(test, feature = "window", feature = "3d", feature = "editor"))]
+mod editor_thumbnail_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod gltf_extensions_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]

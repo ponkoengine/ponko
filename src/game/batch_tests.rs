@@ -179,7 +179,7 @@ fn a_panic_in_a_batch_leaves_the_game_and_the_world_whole() {
 
 #[test]
 fn a_batch_keeps_its_usual_run_time_for_the_thread_decision() {
-    const SLOW_MS: u64 = 40;
+    const SLOW_MS: u64 = 200;
     let mut game = bare()
         .parallel_threshold(Duration::MAX)
         .add(
@@ -197,8 +197,10 @@ fn a_batch_keeps_its_usual_run_time_for_the_thread_decision() {
         _ => panic!("a view system"),
     };
     // The sleeper's time is a lower bound; the other system's must stay its
-    // own. A wide margin keeps a loaded machine's scheduling jitter (a few
-    // milliseconds on shared CI runners) from mixing the two up.
+    // own. A wide margin keeps a loaded machine's scheduling jitter from
+    // mixing the two up: the quick system (microseconds of work) would have
+    // to be held up 100 ms, where a thread asleep for 1 ms woke at most
+    // 21 ms late at a load average of 166 on 14 cores.
     let slow_us = SLOW_MS as f32 * 1000.0;
     assert!(usual(&game.systems[0]) >= slow_us, "{}", usual(&game.systems[0]));
     assert!(usual(&game.systems[1]) < slow_us / 2.0, "{}", usual(&game.systems[1]));

@@ -109,6 +109,7 @@ fn declared(resource: Resource, output: wgpu::TextureFormat, samples: u32) -> (O
         Format::Screen => Some(crate::render::ssr::SCREEN_FORMAT),
         Format::Spread => Some(crate::render::ssr::SPREAD_FORMAT),
         Format::Hits => Some(crate::render::ssr::HITS_FORMAT),
+        Format::DepthCopy => Some(crate::render::ssr::DEPTH_COPY_FORMAT),
         Format::Output => Some(output),
         Format::Buffer | Format::Any => None,
     };
@@ -192,7 +193,7 @@ impl Renderer3D {
         let (cloud_shadows, clouds) = self.kit_passes();
         [
             Features::MSAA.only_if(self.samples > 1),
-            Features::STATIC_CULL.only_if(self.static_culling.is_some() || (!self.extra && self.crowds.culls())),
+            Features::STATIC_CULL.only_if(self.static_culling.is_some() || self.crowds.culls()),
             Features::SKINNING.only_if(self.skinning.has_work()),
             Features::BUFFER_COMPUTE.only_if(self.lists.computes.iter().any(buffer)),
             Features::TEXTURE_COMPUTE.only_if(self.lists.computes.iter().any(|c| !buffer(c))),
@@ -296,6 +297,10 @@ impl Renderer3D {
                 .ssr
                 .as_ref()
                 .map(|s| view(Resource::ReflectionSpread, s.spread().1)),
+            targets
+                .ssr
+                .as_ref()
+                .map(|s| view(Resource::ReflectionDepth, s.depth_copy())),
             targets.ao.as_ref().map(|a| view(Resource::AoRaw, a.images().0)),
             // Without temporal accumulation the history is a stand-in.
             targets

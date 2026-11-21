@@ -17,14 +17,15 @@
 //! `extras` of every object are written back as they were read. An
 //! accessor that something else also uses (another primitive, an
 //! animation) keeps its vertex order. A file with compressed geometry
-//! (meshopt, Draco) retains its geometry and buffer layout while eligible
-//! embedded images are compressed. An unknown extension prevents rewriting
+//! (meshopt, Draco) retains its geometry byte for byte while eligible
+//! embedded images are compressed; the replaced images' bytes are dropped
+//! from the buffers the file holds itself. An unknown extension prevents rewriting
 //! the file, since its data may point to objects this module would change.
 
 #![deny(missing_docs)]
 
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(feature = "textures")]
 mod kept;
@@ -293,14 +294,34 @@ fn accessor_uses(json: &Value) -> Vec<usize> {
 /// video memory before and after, when it compressed any.
 pub type Cooked = (Vec<u8>, String, Option<(u64, u64)>);
 
+/// Files a cook rewrote besides the model: (path among the assets, bytes).
+pub type Companions = Vec<(String, Vec<u8>)>;
+
 /// Cooks one glTF or GLB file. `Ok(Err(reason))` keeps it as it is;
 /// `Err` is a broken file.
+#[cfg(test)]
 pub fn cook(
     name: &str,
     bytes: &[u8],
     deps: &[(String, Vec<u8>)],
     options: Options,
 ) -> Result<Result<Cooked, String>, String> {
+    cook_owning(name, bytes, deps, options, &BTreeSet::new()).map(|r| r.map(|(cooked, _)| cooked))
+}
+
+/// [`cook`] for a model that is the only reader of the external buffer
+/// files in `owned` (paths among the assets). A model whose geometry
+/// compression is kept drops the bytes of the images it replaced from those
+/// buffers too, and returns each shortened one as a companion for the cook
+/// to write in place of the original. A buffer another model reads must not
+/// be in `owned`.
+pub fn cook_owning(
+    name: &str,
+    bytes: &[u8],
+    deps: &[(String, Vec<u8>)],
+    options: Options,
+    owned: &BTreeSet<String>,
+) -> Result<Result<(Cooked, Companions), String>, String> {
     let fail = |e: String| format!("{name}: {e}");
     let (json, blob) = if bytes.starts_with(b"glTF") {
         split_glb(bytes).map_err(fail)?
@@ -337,6 +358,9 @@ pub fn cook(
     let has_bin = blob.is_some();
     let folder = name.rfind('/').map_or("", |i| &name[..=i]);
     let mut buffers = Vec::new();
+    // The external buffers only this model reads, by index and path.
+    #[cfg_attr(not(feature = "textures"), allow(unused_mut, unused_variables))]
+    let mut own_buffers: Vec<(usize, String)> = Vec::new();
     let mut blob = blob;
     for (i, buffer) in json["buffers"].as_array().into_iter().flatten().enumerate() {
         let data = match buffer["uri"].as_str() {
@@ -348,10 +372,26 @@ pub fn cook(
             }
             Some(uri) => {
                 let path = super::normalize(&format!("{folder}{}", super::percent_decode(uri)));
-                match deps.iter().find(|(n, _)| *n == path) {
+                let data = match deps.iter().find(|(n, _)| *n == path) {
                     Some((_, bytes)) => bytes.clone(),
                     None => return Err(fail(format!("buffer {i}: {uri} is not among the assets"))),
+                };
+                // Two entries for one file would be changed twice.
+                let twice = json["buffers"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|b| {
+                        b["uri"]
+                            .as_str()
+                            .is_some_and(|u| super::normalize(&format!("{folder}{}", super::percent_decode(u))) == path)
+                    })
+                    .count()
+                    > 1;
+                if owned.contains(&path) && !twice && !(i == 0 && blob.is_some()) {
+                    own_buffers.push((i, path));
                 }
+                data
             }
             None if i == 0 && blob.is_some() => blob.take().unwrap_or_default(),
             // With required meshopt, a fallback placeholder can have no URI.
@@ -372,9 +412,13 @@ pub fn cook(
         if report.images == 0 {
             return Ok(Err(kept_reason(ext)));
         }
-        let out = kept::write(doc, count, binary, has_bin, &image_views).map_err(fail)?;
-        let note = format!("{ext} geometry kept, {} images compressed", report.images);
-        return Ok(Ok((out, note, Some((report.before, report.after)))));
+        let (out, dropped, companions) =
+            kept::write(doc, count, binary, has_bin, &image_views, &own_buffers).map_err(fail)?;
+        let mut note = format!("{ext} geometry kept, {} images compressed", report.images);
+        if dropped > 0 {
+            note.push_str(&format!(", {dropped} bytes of replaced images dropped"));
+        }
+        return Ok(Ok(((out, note, Some((report.before, report.after))), companions)));
     }
 
     let mut stats = optimize(&mut doc, options).map_err(fail)?;
@@ -424,7 +468,7 @@ pub fn cook(
         note.push_str(&format!(", {} images compressed", images.images));
         (images.before, images.after)
     });
-    Ok(Ok((out, note, gpu)))
+    Ok(Ok(((out, note, gpu), Vec::new())))
 }
 
 /// Without the `textures` feature no image is compressed.

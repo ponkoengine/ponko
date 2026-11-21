@@ -8,7 +8,8 @@
 //! # Design
 //!
 //! - **Trees decide, systems act.** A [`BehaviorTree`] reads and writes
-//!   only an agent's [`Blackboard`] and picks one *action* by name. The
+//!   only an agent's [`Blackboard`] and picks an *action* by name (or
+//!   [several at once](#several-actions-at-once)). The
 //!   game's own systems write the blackboard (senses: "the player is 4 m
 //!   away"), and carry out the action ([`Brain::doing`]), reporting when it
 //!   is done ([`Brain::succeed`], [`Brain::fail`]). The tree never touches
@@ -64,7 +65,7 @@
 //! | `{"sequence": [..]}` | its children in order until one doesn't succeed; that one's result |
 //! | `{"selector": [..]}` | its children in order until one doesn't fail (a fallback list) |
 //! | `{"utility": [..], "stick": 0.1}` | its children best score first until one doesn't fail; each child has a `"score"`; `stick` is added to the child that was running, against dithering |
-//! | `{"parallel": [..], "success": "all", "failure": "any"}` | all its children at once; succeeds when that many succeeded (`"all"`, `"any"` or a count), fails when that many failed or all finished short; then stops the ones still running. At most one child may hold `do` nodes |
+//! | `{"parallel": [..], "success": "all", "failure": "any"}` | all its children at once; succeeds when that many succeeded (`"all"`, `"any"` or a count), fails when that many failed or all finished short; then stops the ones still running. Its children's actions run side by side; two children may not share an action name |
 //! | `{"random": [..]}` | its children in a random order until one doesn't fail; a running child carries on |
 //! | `{"invert": node}` | success and failure swapped |
 //! | `{"succeed": node}` | success when the node finishes either way |
@@ -93,6 +94,43 @@
 //! `parallel` likewise keeps its finished children's results but asks
 //! its checks again: `{"parallel": [{"do": "aim"}, {"check": "alert"}]}`
 //! aims while alert.
+//!
+//! # Several actions at once
+//!
+//! A `parallel` whose children hold `do` nodes runs their actions side by
+//! side: `{"parallel": [{"do": "move", "to": [4, 2]}, {"do": "aim"}]}`
+//! moves and aims. The design:
+//!
+//! - **An action is named by its name.** The game asks
+//!   [`Brain::doing`]`(AIM)` and reports with
+//!   [`Brain::succeed_action`]`(AIM)` / [`Brain::fail_action`], so a system
+//!   that carries out one action needn't know what else runs. For that to
+//!   be unambiguous, two children of a `parallel` that could run an action
+//!   of the same name at once are refused when the tree compiles (rename
+//!   one: `aim_left`, `aim_right`). Not refused: the same action in two
+//!   branches that never run together (a selector's).
+//! - **The single-action calls keep their meaning.** [`Brain::action`],
+//!   [`started`](Brain::started), [`status`](Brain::status),
+//!   [`param`](Brain::param), [`succeed`](Brain::succeed) and
+//!   [`fail`](Brain::fail) are about the *first* action in tree order,
+//!   which is the only one in a tree without such a `parallel`. So
+//!   existing trees, systems and saves behave as before.
+//!   [`Brain::actions`] lists them all, and [`started_action`](Brain::started_action)
+//!   and [`action_param`](Brain::action_param) ask about one.
+//! - **Each action ends on its own.** A reported action ends its `do`
+//!   node; the others carry on. When the `parallel` itself ends (its
+//!   policy decided, or a higher branch took over), every action below it
+//!   is dropped, as one action was before.
+//! - **No new cost for one action.** A brain keeps its actions in a small
+//!   list held inline for up to two, reused at every think: no heap
+//!   allocation per think, and none at all with two actions or fewer.
+//!   Saves list the extra actions next to the first (`"also"` in the
+//!   memory), so a save with one action reads and writes as before.
+//!
+//! Rejected: action *channels* (legs, hands, voice) declared by the tree,
+//! where a new action on a channel replaces the old one. It needs a
+//! schema every game would have to share, and the policy of a `parallel`
+//! already says what runs together.
 //!
 //! # Use
 //!
@@ -151,7 +189,7 @@ pub use utility::{Consideration, Curve, best, combine, normalize};
 
 use crate::ctx::Ctx;
 use crate::reflect::WorldReflect;
-use tree::{NodeState, Tick};
+use tree::{Act, Acts, NodeState, Tick};
 
 /// What a node, or an action, did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -462,11 +500,9 @@ pub struct Brain {
     period: u32,
     thinks: u32,
     states: Vec<NodeState>,
-    /// The running `do` node.
-    action: Option<u16>,
-    /// What the game said about it.
-    report: Status,
-    started: bool,
+    /// The running `do` nodes, in tree order, with what the game said
+    /// about each.
+    actions: Acts,
     wake: bool,
     /// Added to the sim tick to give the brain's own tick, which waits,
     /// cooldowns, think periods and random numbers count in: 0, unless the
@@ -496,9 +532,7 @@ impl Brain {
             period: 1,
             thinks: 0,
             states: Vec::new(),
-            action: None,
-            report: Status::Running,
-            started: false,
+            actions: Acts::new(),
             wake: false,
             offset: 0,
             clock: 0,
@@ -589,10 +623,47 @@ impl Brain {
         self.bound.is_some()
     }
 
-    /// The action it is doing, if any.
+    /// The action it is doing, if any; with [several at
+    /// once](Self::actions), the first in tree order.
     pub fn action(&self) -> Option<Key> {
+        self.key_of(self.actions.first()?)
+    }
+
+    /// Every action it is doing, in tree order: one, or several when a
+    /// `parallel` node runs `do` nodes side by side (move and aim). Their
+    /// names differ (a tree where two could share one is refused).
+    ///
+    /// ```
+    /// use ponko::ai::{BehaviorTree, Blackboard, Brain, Key};
+    /// use std::sync::Arc;
+    /// const MOVE: Key = Key::new("move");
+    /// const AIM: Key = Key::new("aim");
+    /// let tree = Arc::new(BehaviorTree::from_json(r#"{"root": {"parallel": [
+    ///     {"do": "move", "to": [4, 2]}, {"do": "aim"}
+    /// ]}}"#).unwrap());
+    /// let (mut brain, mut bb) = (Brain::new("soldier"), Blackboard::new());
+    /// brain.think(&tree, &mut bb, 0, 0.1);
+    /// assert_eq!(brain.actions().collect::<Vec<_>>(), [MOVE, AIM]);
+    /// assert!(brain.doing(MOVE) && brain.doing(AIM));
+    /// // Each is reported on its own; the other carries on.
+    /// brain.fail_action(AIM);
+    /// brain.think(&tree, &mut bb, 1, 0.1);
+    /// assert_eq!(brain.actions().collect::<Vec<_>>(), []); // all must succeed
+    /// ```
+    pub fn actions(&self) -> impl Iterator<Item = Key> + '_ {
+        self.actions.iter().filter_map(|a| self.key_of(a))
+    }
+
+    fn key_of(&self, act: &Act) -> Option<Key> {
+        self.bound.as_ref()?.action_of(act.node as usize)
+    }
+
+    /// The running action called `action`.
+    fn act(&self, action: Key) -> Option<&Act> {
         let tree = self.bound.as_ref()?;
-        tree.action_of(self.action? as usize)
+        self.actions
+            .iter()
+            .find(|a| tree.action_of(a.node as usize) == Some(action))
     }
 
     /// Whether it is doing `action`.
@@ -611,27 +682,42 @@ impl Brain {
     /// # }
     /// ```
     pub fn doing(&self, action: Key) -> bool {
-        self.action() == Some(action)
+        self.act(action).is_some()
     }
 
     /// Whether its action started at this tick's think: the moment to
-    /// pick a destination or play a sound once.
+    /// pick a destination or play a sound once. With several actions, the
+    /// first; [`started_action`](Self::started_action) asks about one.
     pub fn started(&self) -> bool {
-        self.started && self.action.is_some()
+        self.actions.first().is_some_and(|a| a.started)
     }
 
-    /// What the game reported for the current action:
-    /// [`Running`](Status::Running) until [`succeed`](Self::succeed) or
-    /// [`fail`](Self::fail).
+    /// Whether it is doing `action` and that started at this tick's think.
+    pub fn started_action(&self, action: Key) -> bool {
+        self.act(action).is_some_and(|a| a.started)
+    }
+
+    /// What the game reported for the current action (the first, with
+    /// several): [`Running`](Status::Running) until
+    /// [`succeed`](Self::succeed) or [`fail`](Self::fail), and while it
+    /// does none.
     pub fn status(&self) -> Status {
-        self.report
+        self.actions.first().map_or(Status::Running, |a| a.report)
     }
 
     /// The parameter `key` of the current action (its `do` node's other
-    /// fields: `{"do": "chase", "speed": 4.5}`).
+    /// fields: `{"do": "chase", "speed": 4.5}`); with several actions, of
+    /// the first ([`action_param`](Self::action_param) names one).
     pub fn param(&self, key: Key) -> Option<Value> {
         let tree = self.bound.as_ref()?;
-        let node = self.action? as usize;
+        let node = self.actions.first()?.node as usize;
+        tree.params(node).iter().find(|(k, _)| *k == key).map(|&(_, v)| v)
+    }
+
+    /// The parameter `key` of the running action `action`.
+    pub fn action_param(&self, action: Key, key: Key) -> Option<Value> {
+        let tree = self.bound.as_ref()?;
+        let node = self.act(action)?.node as usize;
         tree.params(node).iter().find(|(k, _)| *k == key).map(|&(_, v)| v)
     }
 
@@ -641,19 +727,46 @@ impl Brain {
     }
 
     /// Reports the current action done and worked: the tree goes on at the
-    /// next tick's think, whatever the period.
+    /// next tick's think, whatever the period. With several actions, the
+    /// first; [`succeed_action`](Self::succeed_action) names one.
     pub fn succeed(&mut self) {
-        if self.action.is_some() {
-            self.report = Status::Success;
-            self.wake = true;
-        }
+        self.report(0, Status::Success);
     }
 
     /// Reports the current action done and failed (the target is gone, no
-    /// path): the tree goes on at the next tick's think.
+    /// path): the tree goes on at the next tick's think. With several
+    /// actions, the first; [`fail_action`](Self::fail_action) names one.
     pub fn fail(&mut self) {
-        if self.action.is_some() {
-            self.report = Status::Failure;
+        self.report(0, Status::Failure);
+    }
+
+    /// Reports the running action `action` done and worked (nothing if it
+    /// isn't doing it); its other actions carry on.
+    pub fn succeed_action(&mut self, action: Key) {
+        if let Some(n) = self.position(action) {
+            self.report(n, Status::Success);
+        }
+    }
+
+    /// Reports the running action `action` done and failed (nothing if it
+    /// isn't doing it); its other actions carry on.
+    pub fn fail_action(&mut self, action: Key) {
+        if let Some(n) = self.position(action) {
+            self.report(n, Status::Failure);
+        }
+    }
+
+    fn position(&self, action: Key) -> Option<usize> {
+        let tree = self.bound.as_ref()?;
+        self.actions
+            .iter()
+            .position(|a| tree.action_of(a.node as usize) == Some(action))
+    }
+
+    /// Sets the report of the `n`th running action, and wakes the brain.
+    fn report(&mut self, n: usize, status: Status) {
+        if let Some(act) = self.actions.get_mut(n) {
+            act.report = status;
             self.wake = true;
         }
     }
@@ -730,29 +843,25 @@ impl Brain {
     fn run(&mut self, tree: &BehaviorTree, bb: &mut Blackboard, now: u64, dt: f32, seed: u64, who: u64) {
         self.thinks = self.thinks.wrapping_add(1);
         self.wake = false;
+        // The actions running now stay in front while the tree runs, and
+        // the ones running after it go behind them: no allocation.
+        let prev = self.actions.len();
         let mut t = Tick {
             states: &mut self.states,
             bb,
             thinks: self.thinks,
             now,
             dt,
-            prev_action: self.action.take(),
-            report: self.report,
-            action: None,
-            started: false,
+            actions: &mut self.actions,
+            prev,
             signals: &self.signals,
             seed,
             who,
             rng: None,
         };
         tree.tick(0, &mut t);
-        let (action, started) = (t.action, t.started);
-        self.action = action;
-        self.started = started;
+        self.actions.drain(..prev);
         self.signals.clear();
-        if started || action.is_none() {
-            self.report = Status::Running;
-        }
     }
 
     fn bind(&mut self, tree: Arc<BehaviorTree>, bb: &mut Blackboard) {
@@ -761,9 +870,7 @@ impl Brain {
         }
         self.states.clear();
         self.states.resize(tree.len(), NodeState::NEW);
-        self.action = None;
-        self.report = Status::Running;
-        self.started = false;
+        self.actions.clear();
         // A new tree: think at once, not at the next period.
         self.wake = true;
         if let Some(memory) = self.restore.take()
@@ -779,8 +886,18 @@ impl Brain {
                 };
             }
             self.thinks = memory.thinks;
-            self.action = memory.running;
-            self.report = memory.status;
+            if let Some(node) = memory.running {
+                self.actions.push(Act {
+                    node,
+                    report: memory.status,
+                    started: false,
+                });
+            }
+            self.actions.extend(memory.also.iter().map(|&(node, report)| Act {
+                node,
+                report,
+                started: false,
+            }));
             self.wake = memory.wake;
         }
         self.bound = Some(tree);
@@ -803,8 +920,9 @@ impl Brain {
             tree: format!("{:016x}", tree.fingerprint()),
             clock: self.clock,
             thinks: self.thinks,
-            running: self.action,
-            status: self.report,
+            running: self.actions.first().map(|a| a.node),
+            status: self.status(),
+            also: self.actions.iter().skip(1).map(|a| (a.node, a.report)).collect(),
             wake: self.wake,
             nodes,
         })
@@ -813,9 +931,7 @@ impl Brain {
     fn unbind(&mut self) {
         self.bound = None;
         self.states.clear();
-        self.action = None;
-        self.report = Status::Running;
-        self.started = false;
+        self.actions.clear();
     }
 
     /// The tree as the debug view shows it: every node in order, with its
@@ -874,7 +990,12 @@ impl Serialize for Brain {
             tree: self.tree_name.to_owned(),
             period: self.period,
             action: self.action().map(|k| k.name().to_owned()),
-            status: self.report,
+            actions: if self.actions.len() > 1 {
+                self.actions().map(|k| k.name().to_owned()).collect()
+            } else {
+                Vec::new()
+            },
+            status: self.status(),
             memory: self.memory(),
         }
         .serialize(s)
@@ -897,6 +1018,9 @@ struct BrainJson {
     period: u32,
     #[serde(default)]
     action: Option<String>,
+    /// Every action, when it does several at once.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    actions: Vec<String>,
     #[serde(default)]
     status: Status,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -913,12 +1037,16 @@ struct Memory {
     /// The brain's tick at the save.
     clock: u64,
     thinks: u32,
-    /// The running `do` node.
+    /// The running `do` node (the first, with several).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     running: Option<u16>,
     /// What the game reported for it.
     #[serde(default)]
     status: Status,
+    /// The other running `do` nodes, with their reports, when it does
+    /// several actions at once.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    also: Vec<(u16, Status)>,
     #[serde(default)]
     wake: bool,
     /// `[node, think last ticked in, status, tick or bits]` for every node
@@ -929,7 +1057,11 @@ struct Memory {
 impl Memory {
     fn fits(&self, tree: &BehaviorTree) -> bool {
         self.tree == format!("{:016x}", tree.fingerprint())
-            && self.running.is_none_or(|n| tree.action_of(n as usize).is_some())
+            && self
+                .running
+                .iter()
+                .chain(self.also.iter().map(|(n, _)| n))
+                .all(|&n| (n as usize) < tree.len() && tree.action_of(n as usize).is_some())
             && self.nodes.iter().all(|&(n, ..)| (n as usize) < tree.len())
     }
 }
@@ -1067,7 +1199,9 @@ pub fn think(ctx: &mut Ctx) {
         world
             .query::<(Entity, &mut Brain, &mut Blackboard)>()
             .par_for_each(|(e, brain, bb)| {
-                brain.started = false;
+                for act in &mut brain.actions {
+                    act.started = false;
+                }
                 let now = brain.pass(tick);
                 if brain.generation != trees.generation {
                     brain.generation = trees.generation;

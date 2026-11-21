@@ -6,6 +6,7 @@
 #   web/build.sh battle site/play        # choose the output folder
 #   web/build.sh --features 3d web_smoke_3d   # with Cargo features (comma-separated)
 #   web/build.sh --threads battle        # with threads (nightly; see below)
+#   web/build.sh --threads --print-env   # what a threaded build would set, no build
 #   python3 -m http.server -d target/web/battle 8000
 #
 # Needs: rustup target add wasm32-unknown-unknown
@@ -19,19 +20,58 @@
 # Cross-Origin-Opener-Policy: same-origin and Cross-Origin-Embedder-Policy:
 # require-corp for the threads to start; without them the game runs on one
 # thread (python3 -m http.server sends neither).
+#
+# Cargo reads the first of CARGO_ENCODED_RUSTFLAGS, RUSTFLAGS and
+# CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS that is set and ignores the
+# others, so --threads adds its flags to that one and keeps what it holds:
+# RUSTFLAGS="-D warnings" still fails a threaded build on a warning.
+# --print-env prints the toolchain and that variable instead of building
+# (web/smoke/build.test.mjs checks it).
 set -euo pipefail
 
 kind=example
 features=
 threads=
+print_env=
 while [ $# -gt 0 ]; do
   case "$1" in
     --bin) kind=bin; shift ;;
     --features) features=${2:?--features needs a list}; shift 2 ;;
     --threads) threads=1; shift ;;
+    --print-env) print_env=1; shift ;;
     *) break ;;
   esac
 done
+
+if [ -n "$threads" ]; then
+  # Atomics in every crate, std rebuilt with them (-Zbuild-std), and a
+  # shared, imported memory with the thread-local symbols wasm-bindgen
+  # needs (the linker doesn't add these by itself). The same words as
+  # `ponko package --web --threads`, so the two builds share cargo's cache.
+  flags="-C target-feature=+atomics,+bulk-memory,+mutable-globals"
+  flags="$flags -C link-arg=--shared-memory -C link-arg=--max-memory=1073741824 -C link-arg=--import-memory"
+  flags="$flags -C link-arg=--export=__wasm_init_tls -C link-arg=--export=__tls_size"
+  flags="$flags -C link-arg=--export=__tls_align -C link-arg=--export=__tls_base"
+  toolchain=${PONKO_WEB_TOOLCHAIN:-nightly}
+  if [ -n "${CARGO_ENCODED_RUSTFLAGS:-}" ]; then
+    flags_var=CARGO_ENCODED_RUSTFLAGS
+    flags_value="$(printf '%s' "$flags" | tr ' ' '\037')"$'\037'"$CARGO_ENCODED_RUSTFLAGS"
+  elif [ -n "${RUSTFLAGS:-}" ]; then
+    flags_var=RUSTFLAGS
+    flags_value="$flags $RUSTFLAGS"
+  else
+    flags_var=CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS
+    flags_value="$flags${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:+ $CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS}"
+  fi
+fi
+if [ -n "$print_env" ]; then
+  if [ -n "$threads" ]; then
+    printf 'toolchain=%s\n%s=%s\n' "$toolchain" "$flags_var" "$flags_value"
+  else
+    echo "toolchain=default"
+  fi
+  exit 0
+fi
 name=${1:?usage: build.sh [--bin] [--features <list>] <name> [out-dir]}
 here=$(cd "$(dirname "$0")" && pwd)
 target=$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')
@@ -42,15 +82,7 @@ if [ -n "$features" ]; then
   feature_args=(--features "$features")
 fi
 if [ -n "$threads" ]; then
-  # Atomics in every crate, std rebuilt with them (-Zbuild-std), and a
-  # shared, imported memory with the thread-local symbols wasm-bindgen
-  # needs (the linker doesn't add these by itself).
-  flags="-C target-feature=+atomics,+bulk-memory,+mutable-globals"
-  flags="$flags -C link-arg=--shared-memory -C link-arg=--max-memory=1073741824 -C link-arg=--import-memory"
-  flags="$flags -C link-arg=--export=__wasm_init_tls -C link-arg=--export=__tls_size"
-  flags="$flags -C link-arg=--export=__tls_align -C link-arg=--export=__tls_base"
-  CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$flags ${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-}" \
-    cargo "+${PONKO_WEB_TOOLCHAIN:-nightly}" build -Zbuild-std=panic_abort,std \
+  env "$flags_var=$flags_value" cargo "+$toolchain" build -Zbuild-std=panic_abort,std \
     --release --target wasm32-unknown-unknown "--$kind" "$name" ${feature_args[@]+"${feature_args[@]}"}
 else
   cargo build --release --target wasm32-unknown-unknown "--$kind" "$name" ${feature_args[@]+"${feature_args[@]}"}

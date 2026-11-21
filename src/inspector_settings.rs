@@ -19,6 +19,8 @@ use serde_json::{Map, Value, json};
 use super::keys::Keymap;
 
 /// Environment variable naming the folder the settings file is kept in.
+/// Web builds have no environment (and no settings folder).
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) const ENV_CONFIG_DIR: &str = "PONKO_CONFIG_DIR";
 /// The settings file's name in that folder.
 pub(crate) const FILE: &str = "editor.json";

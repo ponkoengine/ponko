@@ -4,7 +4,8 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread::ThreadId;
 use std::time::{Duration, Instant};
 
 use ponko::assets::{AssetGroup, AssetSource, GroupState, MemorySource, PackSource};
@@ -16,6 +17,11 @@ fn game() -> Game {
     Game::new("asset groups", 1, 1).hot_reload(false)
 }
 
+/// How long a test waits for work on other threads before calling it hung.
+/// Only a hang uses it up (each wait ends as soon as the work is done), so
+/// it can be long enough for a machine that stalls threads for seconds.
+const PATIENCE: Duration = Duration::from_secs(60);
+
 /// A source that takes `delay` to read each file, counting reads; it may
 /// be read on any thread.
 #[derive(Clone)]
@@ -23,7 +29,15 @@ struct Slow {
     id: &'static str,
     files: MemorySource,
     delay: Duration,
+    /// Reads begun.
+    started: Arc<AtomicU32>,
+    /// Reads done.
     reads: Arc<AtomicU32>,
+    /// Reads made on the thread that made the source (the game thread).
+    here: Arc<AtomicU32>,
+    made_on: ThreadId,
+    /// When set, each read waits until it is opened (`Slow::open`).
+    gate: Option<Arc<(Mutex<bool>, Condvar)>>,
 }
 
 impl Slow {
@@ -36,8 +50,26 @@ impl Slow {
             id,
             files: memory,
             delay,
+            started: Arc::new(AtomicU32::new(0)),
             reads: Arc::new(AtomicU32::new(0)),
+            here: Arc::new(AtomicU32::new(0)),
+            made_on: std::thread::current().id(),
+            gate: None,
         }
+    }
+
+    /// Reads wait for [`open`](Self::open) (for at most 10 s: a read on the
+    /// game thread would otherwise wait for itself).
+    fn gated(mut self) -> Self {
+        self.gate = Some(Arc::new((Mutex::new(false), Condvar::new())));
+        self
+    }
+
+    /// Lets every read through, waiting or to come.
+    fn open(&self) {
+        let (open, wake) = &**self.gate.as_ref().expect("a gated source");
+        *open.lock().unwrap() = true;
+        wake.notify_all();
     }
 }
 
@@ -56,6 +88,18 @@ impl AssetSource for Slow {
 
     fn read(&self, name: &str) -> std::io::Result<Vec<u8>> {
         if self.files.contains(name) {
+            self.started.fetch_add(1, Ordering::SeqCst);
+            if std::thread::current().id() == self.made_on {
+                self.here.fetch_add(1, Ordering::SeqCst);
+            }
+            if let Some(gate) = &self.gate {
+                let (open, wake) = &**gate;
+                let open = open.lock().unwrap();
+                drop(
+                    wake.wait_timeout_while(open, Duration::from_secs(10), |open| !*open)
+                        .unwrap(),
+                );
+            }
             std::thread::sleep(self.delay);
             self.reads.fetch_add(1, Ordering::SeqCst);
         }
@@ -95,26 +139,34 @@ fn wav(samples: u32) -> Vec<u8> {
     out
 }
 
-/// Runs the engine's per-frame group step until `id` stops loading, at
-/// most `frames` times; the frames it took.
-fn frames_until_done(ctx: &mut Ctx, id: ponko::assets::GroupId, frames: u32) -> u32 {
-    for frame in 1..=frames {
+/// Runs the engine's per-frame group step until `id` stops loading; the
+/// frames it took. Values decode on workers, so this waits for them (for
+/// at most [`PATIENCE`]) rather than for a number of frames.
+fn frames_until_done(ctx: &mut Ctx, id: ponko::assets::GroupId) -> u32 {
+    let deadline = Instant::now() + PATIENCE;
+    for frame in 1.. {
         ctx.pump_asset_groups();
         if ctx.assets.group_state(id) != GroupState::Loading {
             return frame;
         }
+        assert!(
+            Instant::now() < deadline,
+            "the group was still loading after {frame} frames"
+        );
         std::thread::sleep(Duration::from_millis(2));
     }
-    panic!("the group was still loading after {frames} frames");
+    unreachable!()
 }
 
 #[test]
 fn a_slow_background_source_never_holds_up_a_frame() {
     let files: Vec<(String, Vec<u8>)> = (0..8).map(|i| (format!("chunk{i}.bin"), vec![i as u8; 1000])).collect();
     let refs: Vec<(&str, Vec<u8>)> = files.iter().map(|(n, b)| (n.as_str(), b.clone())).collect();
-    // 60 ms a file: one read on the game thread would blow any frame.
-    let slow = Slow::new("network", Duration::from_millis(60), &refs);
-    let reads = slow.reads.clone();
+    // Every read waits until the test lets it through: a frame step that
+    // waited for one would never end, so steps that return while all of
+    // them wait show that no frame waits for a read, whatever the machine.
+    let slow = Slow::new("network", Duration::ZERO, &refs).gated();
+    let (gate, reads, here) = (slow.clone(), slow.reads.clone(), slow.here.clone());
     game().run_headless(0, move |ctx| {
         ctx.assets.add_background_source(slow);
         let mut group = AssetGroup::new("chunks");
@@ -122,22 +174,17 @@ fn a_slow_background_source_never_holds_up_a_frame() {
             group = group.bytes(name);
         }
         let id = ctx.assets.start_group(group);
-        let mut worst = Duration::ZERO;
-        let mut frames = 0;
-        while ctx.assets.group_state(id) == GroupState::Loading {
-            let start = Instant::now();
+        for _ in 0..3 {
             ctx.pump_asset_groups();
-            worst = worst.max(start.elapsed());
-            frames += 1;
-            assert!(frames < 2000, "the group never finished");
-            std::thread::sleep(Duration::from_millis(1));
         }
+        assert_eq!(ctx.assets.group_state(id), GroupState::Loading);
+        assert_eq!(reads.load(Ordering::SeqCst), 0, "every read is still held");
+        gate.open();
+        let frames = frames_until_done(ctx, id);
         assert_eq!(ctx.assets.group_state(id), GroupState::Ready);
         assert_eq!(reads.load(Ordering::SeqCst), 8);
-        assert!(frames > 1, "it loaded over several frames, not in one");
-        // A coarse bound, far under one 60 ms read: the reads ran on workers.
-        assert!(worst < Duration::from_millis(30), "a frame's group step took {worst:?}");
-        assert!(ctx.assets.group_stats().max_step_ms < 30.0);
+        assert_eq!(here.load(Ordering::SeqCst), 0, "no read ran on the game thread");
+        assert!(frames > 1, "the values were taken a frame after their reads");
         for (name, bytes) in &files {
             assert_eq!(ctx.assets.take_group_value::<Vec<u8>>(id, name).as_ref(), Some(bytes));
         }
@@ -162,7 +209,7 @@ fn a_slow_game_thread_source_is_read_within_the_frame_budget() {
         ctx.pump_asset_groups();
         // One read, then the 1 ms budget is spent: the rest wait.
         assert_eq!(reads.load(Ordering::SeqCst), 1, "one file per frame on the game thread");
-        let frames = frames_until_done(ctx, id, 200);
+        let frames = frames_until_done(ctx, id);
         assert!(frames >= 5, "six reads, one a frame: {frames}");
         assert_eq!(ctx.assets.group_progress(id).loaded, 6);
     });
@@ -217,7 +264,7 @@ fn sizes_are_known_before_reading_when_every_source_is_a_background_one() {
             .assets
             .start_group(AssetGroup::new("two").bytes("a.bin").bytes("b.bin"));
         // The sizes come from a worker; the reads take longer.
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + PATIENCE;
         while !ctx.assets.group_progress(id).bytes_known {
             assert!(Instant::now() < deadline, "the sizes never came");
             ctx.pump_asset_groups();
@@ -284,7 +331,10 @@ fn cancel_stops_reading_the_rest_of_the_group() {
     let files: Vec<(String, Vec<u8>)> = (0..40).map(|i| (format!("{i}.bin"), vec![0; 10])).collect();
     let refs: Vec<(&str, Vec<u8>)> = files.iter().map(|(n, b)| (n.as_str(), b.clone())).collect();
     let slow = Slow::new("slow", Duration::from_millis(20), &refs);
-    let reads = slow.reads.clone();
+    let (started, reads) = (slow.started.clone(), slow.reads.clone());
+    // The frame before the cancel starts at most one read per core (and at
+    // least four): every read that ever happens is one of those.
+    let first_frame = std::thread::available_parallelism().map_or(4, |n| n.get().max(4)) as u32;
     game().run_headless(0, move |ctx| {
         ctx.assets.add_background_source(slow);
         let mut group = AssetGroup::new("many");
@@ -295,18 +345,30 @@ fn cancel_stops_reading_the_rest_of_the_group() {
         ctx.pump_asset_groups();
         ctx.assets.cancel_group(id);
         assert_eq!(ctx.assets.group_state(id), GroupState::Cancelled);
-        ctx.pump_asset_groups();
-        // Reads already running finish; nothing new starts.
-        std::thread::sleep(Duration::from_millis(300));
+        // Frames go on; a group that kept loading would start the rest here.
+        for _ in 0..50 {
+            ctx.pump_asset_groups();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        // Reads already running finish (waited for, not timed); nothing new
+        // starts.
+        let deadline = Instant::now() + PATIENCE;
+        while started.load(Ordering::SeqCst) != reads.load(Ordering::SeqCst) {
+            assert!(Instant::now() < deadline, "the running reads never finished");
+            std::thread::sleep(Duration::from_millis(2));
+        }
         let after = reads.load(Ordering::SeqCst);
         assert!(after < 40, "{after} of 40 files read after cancelling");
-        std::thread::sleep(Duration::from_millis(100));
-        assert_eq!(reads.load(Ordering::SeqCst), after, "no reads after the running ones");
+        assert!(after <= first_frame, "{after} reads, more than the first frame started");
         assert_eq!(ctx.assets.take_group_value::<Vec<u8>>(id, "39.bin"), None);
         for _ in 0..5 {
             ctx.pump_asset_groups();
         }
         assert_eq!(ctx.assets.group_state(id), GroupState::Cancelled, "it stays cancelled");
+        assert!(
+            reads.load(Ordering::SeqCst) <= first_frame,
+            "nothing was started after the cancel"
+        );
     });
 }
 
@@ -1010,4 +1072,84 @@ mod guide {
         assert_eq!(world.resource::<ponko::state::State<Stage>>().get(), &Stage::Playing);
         assert_eq!(*world.resource::<f32>(), 3.5);
     }
+}
+
+// ANCHOR: sliced_loader
+/// Parses lines of numbers, two lines a call.
+struct Numbers {
+    text: String,
+    at: usize,
+    values: Vec<i32>,
+}
+
+impl ponko::assets::SliceLoader for Numbers {
+    type Value = Vec<i32>;
+    fn step(&mut self) -> Result<bool, Error> {
+        for _ in 0..2 {
+            let Some(line) = self.text[self.at..].lines().next() else {
+                return Ok(true);
+            };
+            self.at += line.len() + 1;
+            let value = line
+                .parse()
+                .map_err(|_| Error::new(ErrorKind::Decode, format!("\"{line}\" is not a number")))?;
+            self.values.push(value);
+        }
+        Ok(self.at >= self.text.len())
+    }
+    fn finish(self) -> Vec<i32> {
+        self.values
+    }
+}
+
+/// `start` for `with_sliced`: `AssetGroup::new("level").with_sliced("level.txt", numbers)`.
+fn numbers(bytes: Vec<u8>) -> Result<Numbers, Error> {
+    let text = String::from_utf8(bytes).map_err(|e| Error::new(ErrorKind::Decode, e.to_string()))?;
+    Ok(Numbers {
+        text,
+        at: 0,
+        values: Vec::new(),
+    })
+}
+// ANCHOR_END: sliced_loader
+
+#[test]
+fn a_sliced_loader_makes_its_value_and_its_errors_name_the_asset() {
+    game().run_headless(0, |ctx| {
+        ctx.assets.add_background_source(
+            MemorySource::new("mem")
+                .with("good.txt", "1\n2\n3\n4\n5\n")
+                .with("bad.txt", "1\n2\nthree\n"),
+        );
+        let id = ctx
+            .assets
+            .start_group(AssetGroup::new("good").with_sliced("good.txt", numbers));
+        frames_until_done(ctx, id);
+        assert_eq!(ctx.assets.group_state(id), GroupState::Ready);
+        assert_eq!(
+            ctx.assets.take_group_value::<Vec<i32>>(id, "good.txt"),
+            Some(vec![1, 2, 3, 4, 5])
+        );
+        let id = ctx
+            .assets
+            .start_group(AssetGroup::new("bad").with_sliced("bad.txt", numbers));
+        frames_until_done(ctx, id);
+        let error = ctx.assets.group_error(id).expect("it failed");
+        assert_eq!((error.kind(), error.path()), (ErrorKind::Decode, Some("bad.txt")));
+        assert!(error.to_string().contains("\"three\" is not a number"), "{error}");
+    });
+}
+
+#[test]
+fn headless_upload_stats_say_the_gpu_does_not_time_uploads() {
+    game().run_headless(0, |ctx| {
+        ctx.assets
+            .add_background_source(MemorySource::new("mem").with("a.png", png(16, 16, [1, 2, 3, 255])));
+        let id = ctx.assets.start_group(AssetGroup::new("a").texture("a.png"));
+        frames_until_done(ctx, id);
+        let (groups, streams) = (ctx.assets.group_stats(), ctx.gfx.upload_stats());
+        assert!(!groups.gpu_upload_timing && !streams.gpu_upload_timing);
+        assert_eq!((groups.gpu_upload_ms, streams.gpu_upload_ms), (None, None));
+        assert_eq!(groups.total_gpu_upload_ms, 0.0);
+    });
 }

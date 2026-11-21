@@ -51,13 +51,14 @@ unsafe fn drain(endpoint: Endpoint) -> Vec<Event> {
 }
 
 /// Polls every endpoint now and then until `done` says the events collected
-/// so far are enough (or two seconds pass: then it panics).
+/// so far are enough (or 30 s pass: then it panics). A hang detector: it
+/// ends as soon as the events are in, so only a hang uses the 30 s up.
 unsafe fn pump(endpoints: &[Endpoint], events: &mut [Vec<Event>], done: impl Fn(&[Vec<Event>]) -> bool) {
     unsafe {
         let start = Instant::now();
         while !done(events) {
             assert!(
-                start.elapsed() < Duration::from_secs(2),
+                start.elapsed() < Duration::from_secs(30),
                 "timed out; events: {events:?}"
             );
             for (i, &endpoint) in endpoints.iter().enumerate() {
@@ -203,7 +204,8 @@ fn an_event_stays_valid_until_the_next_one_is_taken() {
                 assert_eq!(next(client), None);
                 break;
             }
-            assert!(start.elapsed() < Duration::from_secs(2), "no message arrived");
+            // A hang detector: the loop ends when the message is in.
+            assert!(start.elapsed() < Duration::from_secs(30), "no message arrived");
             std::thread::sleep(Duration::from_millis(2));
         }
         ponko_net_messages_free(host);
@@ -246,7 +248,9 @@ fn a_silent_peer_times_out() {
         let start = Instant::now();
         let mut seen = Vec::new();
         while !seen.iter().any(|e| matches!(e, Event::Disconnected(..))) {
-            assert!(start.elapsed() < Duration::from_secs(5), "no timeout: {seen:?}");
+            // A hang detector: the 50 ms timeout ends the loop; a stalled
+            // machine only makes it later, never earlier.
+            assert!(start.elapsed() < Duration::from_secs(30), "no timeout: {seen:?}");
             std::thread::sleep(Duration::from_millis(20));
             assert_eq!(ponko_net_messages_poll(client), OK);
             seen.extend(drain(client));

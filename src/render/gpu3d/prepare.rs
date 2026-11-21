@@ -68,7 +68,7 @@ impl Renderer3D {
                 label: Some("frame writes"),
             });
             writes.record(&mut encoder);
-            queue.submit([encoder.finish()]);
+            traffic::submit(queue, [encoder.finish()]);
         }
     }
 
@@ -106,7 +106,7 @@ impl Renderer3D {
         if !self.upload_instances(device, queue, frame, gi_frame, total) {
             return;
         }
-        self.prepare_crowds(device, queue, frame, (scene.time.0 as f32, scene.time.1));
+        self.prepare_crowds(device, queue, frame, scene.time, (scene.occlusion, scene.camera));
         self.prepare_shadows_and_lights(device, queue, frame, camera);
         self.upload_uniforms(device, queue, scene, &view, previous_view_proj, gi_frame);
         self.prepare_targets(device, &view, rebuild);
@@ -148,6 +148,8 @@ impl Renderer3D {
             return;
         }
         self.finish_static(device, queue);
+        // The crowds, for this view's camera at the main frame's time.
+        self.prepare_crowds(device, queue, frame, scene.time, (false, scene.camera));
         let rebind = self.bind_decal_array(frame.decal_array);
         if self.lights.upload(device, queue, &frame.lights, &frame.decals) || rebind {
             self.frame_bind_group = self.frame_sources.bind_group(device, &self.frame_buffer, &self.lights);
@@ -830,6 +832,9 @@ impl Renderer3D {
             && frame.particles.strips.runs.is_empty()
             && frame.debug_lines.is_empty()
             && !self.crowds.has_draws()
+            // A target camera clears its render target even with nothing
+            // in sight, instead of leaving its last picture there.
+            && frame.views.is_empty()
         {
             self.too_many = false;
             return false;

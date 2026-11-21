@@ -3,7 +3,13 @@ use ponko::net::MAX_MESSAGE_BYTES;
 use ponko::net::MessageEvent;
 use ponko::net::NetMessages;
 use ponko::net::PeerId;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+/// How long the WebSocket tests wait for something to arrive. A browser
+/// client connects on a thread of its own, so a number of rounds would be a
+/// time limit in disguise; this is a hang detector, and each wait ends as
+/// soon as what it waits for is in.
+const WEB_WAIT: Duration = Duration::from_secs(30);
 
 fn step(nets: &mut [NetMessages], rounds: usize) {
     for _ in 0..rounds {
@@ -162,7 +168,8 @@ fn udp_and_web_clients_join_one_host_on_every_lane() {
     let mut nets = vec![host, udp, web];
     let mut peers = Vec::new();
     let mut joined = [false; 2];
-    for _ in 0..500 {
+    let deadline = Instant::now() + WEB_WAIT;
+    while Instant::now() < deadline {
         step_udp(&mut nets, 1);
         peers.extend(nets[0].events().filter_map(|e| match e {
             MessageEvent::Connected(p) => Some(p),
@@ -190,7 +197,8 @@ fn udp_and_web_clients_join_one_host_on_every_lane() {
     }
     let mut heard = Vec::new();
     let mut everyone = [false; 2];
-    for _ in 0..500 {
+    let deadline = Instant::now() + WEB_WAIT;
+    while Instant::now() < deadline {
         step_udp(&mut nets, 1);
         heard.extend(nets[0].events().filter_map(|e| match e {
             MessageEvent::Message { bytes, lane, .. } => Some((bytes, lane)),
@@ -249,7 +257,8 @@ fn a_closed_web_host_disconnects_its_client() {
         .unwrap();
     let web = NetMessages::join_web(&format!("ws://{}", host.web_addr().unwrap())).unwrap();
     let mut nets = vec![host, web];
-    for _ in 0..500 {
+    let deadline = Instant::now() + WEB_WAIT;
+    while Instant::now() < deadline {
         step_udp(&mut nets, 1);
         if nets[1].events().any(|e| e == MessageEvent::Connected(PeerId::HOST)) {
             break;
@@ -257,7 +266,8 @@ fn a_closed_web_host_disconnects_its_client() {
     }
     drop(nets.remove(0));
     let mut error = None;
-    for _ in 0..500 {
+    let deadline = Instant::now() + WEB_WAIT;
+    while Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(2));
         if let Err(e) = nets[0].poll_elapsed(Duration::from_millis(20)) {
             error = Some(e);

@@ -7,8 +7,11 @@
 //! the color roles have them: opaque (over the prepass or writing its own
 //! depth), opaque with alpha to coverage, and transparent, the last one
 //! also read-only for the split transparent pass, which reads the depth
-//! and so can't write the stencil beside it. Every other pass draws stencil
-//! materials with their shader's ordinary pipelines.
+//! and so can't write the stencil beside it. First-person held items
+//! (`view_model.rs`) draw with the solid role and, when cut out, with a
+//! view-model cut-out pipeline of their own, both with the stencil. Every
+//! other pass draws stencil materials with their shader's ordinary
+//! pipelines.
 //!
 //! The scene depth gets stencil bits ([`STENCIL_FORMAT`]) only once a
 //! material has a stencil state: until then every pipeline and target is
@@ -33,8 +36,9 @@ const ROLES: [PipelineRole; 4] = [
     PipelineRole::Transparent,
 ];
 const INSTANCING: [Instancing; 3] = [Instancing::Plain, Instancing::Crossfade, Instancing::Shared];
-/// Pipelines per set: every instancing and role, writing and read-only.
-const SLOTS: usize = ROLES.len() * INSTANCING.len() * 2;
+/// Pipelines per set: every instancing and role, writing and read-only,
+/// then the view model's cut-out pipeline for every instancing.
+const SLOTS: usize = ROLES.len() * INSTANCING.len() * 2 + INSTANCING.len();
 
 /// One stencil material's pipelines.
 struct StencilSet {
@@ -184,6 +188,23 @@ impl StencilPipelines {
                 let built = set.shader.builder.build_stencil(variant, role, state);
                 set.shader.counters.built(start.elapsed());
                 built
+            })
+            .as_ref()
+    }
+
+    /// Material `id`'s view-model cut-out pipeline for `instancing` (see
+    /// `ShaderPipelines::view_model_cutout`), with its stencil, built now
+    /// if needed; `None` when it has no stencil.
+    pub(super) fn view_model_cutout(&self, id: u32, instancing: Instancing) -> Option<&wgpu::RenderPipeline> {
+        let set = self.by_material.get(id as usize)?.as_ref()?;
+        let n = INSTANCING.iter().position(|&x| x == instancing)?;
+        set.pipelines[ROLES.len() * INSTANCING.len() * 2 + n]
+            .get_or_init(|| {
+                let variant = ShaderVariant::new(set.sides, instancing);
+                let start = crate::perf::Instant::now();
+                let built = set.shader.builder.build_view_model_cutout(variant, set.state.clone());
+                set.shader.counters.built(start.elapsed());
+                Some(built)
             })
             .as_ref()
     }

@@ -398,6 +398,8 @@ pub(crate) struct Renderer3D {
     /// (see `traffic::WriteBatch`); `draw` records their copies into place
     /// first (or the next `prepare` does, if the frame wasn't drawn).
     writes: std::sync::Mutex<traffic::WriteBatch>,
+    /// `draw`'s list of the frame's parts, kept between frames.
+    parts: std::sync::Mutex<Vec<record::Part>>,
     frame_buffer: wgpu::Buffer,
     /// What `frame_buffer` holds (see `sync_frame`).
     frame_mirror: Mirror,
@@ -1044,6 +1046,7 @@ impl Renderer3D {
             view_model: None,
             extra: false,
             writes: Default::default(),
+            parts: Default::default(),
             post,
             effects: Effects::default(),
             custom_passes: Default::default(),
@@ -2077,9 +2080,13 @@ impl Renderer3D {
         }
     }
 
-    /// Whether this frame has anything to draw.
+    /// Whether this frame has anything to draw. A target camera always
+    /// draws (its render target is cleared even with nothing in sight),
+    /// and so do held items (`view_model.rs`) alone.
     pub fn has_draws(&self) -> bool {
         self.static_batches.iter().any(Option::is_some)
+            || !self.lists.views.is_empty()
+            || (!self.extra && !self.view_model_runs().is_empty())
             || self.crowds.has_draws()
             || !self.lists.runs.is_empty()
             || self.particles.has_draws()

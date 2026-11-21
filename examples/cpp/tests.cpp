@@ -4558,6 +4558,64 @@ static void behavior_trees() {
     if (!cycle) std::abort();
 }
 
+// Several actions at once on a native brain; world brains run by ai::think, woken by signals sent from C++.
+static void world_brains() {
+    namespace ai = ponko::ai;
+    const auto move = ai::key("move"), aim = ai::key("aim"), spread = ai::key("spread");
+    ai::behavior_tree soldier(R"({"root": {"parallel": [{"do": "move"}, {"do": "aim", "spread": 0.5}]}})");
+    ai::brain b;
+    b.think(soldier, 0, 0.1f);
+    CHECK(b.action_at(0) == move && b.action_at(1) == aim && b.action_at(2) == 0);
+    CHECK(b.doing(aim) && b.started_action(aim) && b.action_param(aim, spread).value_or(0) == 0.5f);
+    b.succeed_action(aim);
+    b.fail_action(ai::key("dance"));   // not doing it: nothing
+    b.think(soldier, 1, 0.1f);
+    CHECK(b.doing(move) && !b.doing(aim) && !b.started_action(move));
+
+    std::vector<ponko::entity> guards;
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> seen;
+    ponko::game("world brains", 1, 1)
+        .sim_system([&](ponko::ctx& ctx) {
+            if (ctx.sim_tick() == 3) ai::signal_entity(ctx, guards[0], ai::key("alarm"), guards[1]);
+            if (ctx.sim_tick() == 6) ai::signal(ctx, ai::every_brain, ai::key("alarm"));
+        }, "signals")
+        .sim_system(ai::think, "think")
+        .sim_system([&](ponko::ctx& ctx) {
+            seen.emplace_back(ai::action(ctx, guards[0]), ai::action(ctx, guards[1]));
+            CHECK(ai::doing(ctx, guards[0], move) == (ctx.sim_tick() >= 3));
+            if (ctx.sim_tick() == 3) {
+                CHECK(ai::started(ctx, guards[0], aim) && ai::param(ctx, guards[0], aim, spread).value_or(0) == 0.5f);
+                ai::finish(ctx, guards[0], aim, ai::status::success);
+                throws([&] { ai::finish(ctx, guards[1], aim, ai::status::success); });
+            }
+        }, "act")
+        .run_headless(8, [&](ponko::ctx& ctx) {
+            ai::add_tree(ctx, "guard", ai::behavior_tree(R"({"root": {"sequence": [
+                {"wait_for": "alarm"}, {"parallel": [{"do": "move"}, {"do": "aim", "spread": 0.5}]}
+            ]}})"));
+            throws([&] { ai::load_tree(ctx, "ai/missing.json"); });
+            for (int i = 0; i < 2; ++i) {
+                const ponko::entity e = ctx.world().spawn();
+                ai::add_brain(ctx, e, "guard", 100);
+                guards.push_back(e);
+            }
+            ai::set_num(ctx, guards[0], ai::key("health"), 0.5f);
+            ai::set_flag(ctx, guards[0], ai::key("alert"), true);
+            ai::set_vec2(ctx, guards[0], ai::key("p2"), {1, 2});
+            ai::set_vec3(ctx, guards[0], ai::key("p3"), {1, 2, 3});
+            ai::set_entity(ctx, guards[0], ai::key("buddy"), guards[1]);
+            CHECK(ai::num(ctx, guards[0], ai::key("health")).value_or(0) == 0.5f);
+            CHECK(ai::flag(ctx, guards[0], ai::key("alert")).value_or(false));
+            CHECK(!ai::num(ctx, guards[0], ai::key("alert")));
+            ai::signal_num(ctx, ai::every_brain, ai::key("noise"), 1.0f);
+            ai::signal_vec3(ctx, ai::every_brain, ai::key("noise"), {0, 0, 0});
+        });
+    // The first guard hears the alarm at tick 3, the second at 6; the aim ends at 4.
+    CHECK(seen.size() == 8);
+    CHECK(seen[2].first == 0 && seen[3].first == move && seen[3].second == 0);
+    CHECK(seen[5].second == 0 && seen[6].second == move);
+}
+
 // The pointer, the wheel, the sounds started, quitting and zoom_at, headless; a button that closes its screen.
 static void headless_play() {
     ponko::game("headless play", 800, 600).run_headless(0, [](ponko::ctx& ctx) {
@@ -4744,5 +4802,6 @@ int main() {
     camera_rigs();
     headless_play();
     behavior_trees();
+    world_brains();
     std::cout << "C++ wrapper tests passed\n";
 }

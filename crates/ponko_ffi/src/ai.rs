@@ -15,7 +15,7 @@ use crate::{Failure, PonkoStatus, boundary, error, invalid, invalid_owned, write
 
 /// A compiled behaviour tree. Read only by brains, so one tree may be used
 /// from many threads at once.
-pub struct PonkoBehaviorTree(Arc<BehaviorTree>);
+pub struct PonkoBehaviorTree(pub(crate) Arc<BehaviorTree>);
 
 /// One agent's brain and blackboard. Use from one thread at a time.
 pub struct PonkoBrain {
@@ -77,7 +77,7 @@ unsafe fn brain_mut<'a>(brain: *mut PonkoBrain) -> Result<&'a mut PonkoBrain, Fa
     unsafe { brain.as_mut() }.ok_or_else(|| invalid("brain is null"))
 }
 
-fn key_of(id: u64) -> Result<Key, Failure> {
+pub(crate) fn key_of(id: u64) -> Result<Key, Failure> {
     Key::from_id(id).ok_or_else(|| error(PonkoStatus::PONKO_NOT_FOUND, "no such key: make it with ponko_ai_key"))
 }
 
@@ -737,4 +737,116 @@ pub unsafe extern "C" fn ponko_ai_combine(scores: *const f32, count: usize) -> f
     }
     // SAFETY: caller supplies `count` readable floats.
     ponko::ai::combine(unsafe { std::slice::from_raw_parts(scores, count) })
+}
+
+// ---- several actions at once ------------------------------------------------------
+
+/// The action named by key id `action`, or the first one for 0.
+pub(crate) fn named_action(brain: &Brain, action: u64) -> Result<Key, Failure> {
+    let key = if action == 0 {
+        brain.action()
+    } else {
+        Key::from_id(action)
+    };
+    key.filter(|&k| brain.doing(k))
+        .ok_or_else(|| error(PonkoStatus::PONKO_NOT_FOUND, "the brain isn't doing that action"))
+}
+
+/// The key id of its `index`th action in tree order, or 0 past the last
+/// (Rust `Brain::actions`): a `parallel` node runs several at once.
+/// Index 0 is `ponko_brain_action`.
+/// ```
+/// let mut key = 1;
+/// assert_eq!(unsafe { ponko_ffi::ponko_brain_action_at(std::ptr::null(), 0, &mut key) } as u32, 1);
+/// ```
+/// # Safety
+/// `brain` null or live; `out_key` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_brain_action_at(
+    brain: *const PonkoBrain,
+    index: usize,
+    out_key: *mut u64,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe { out(out_key, brain_ref(brain)?.brain.actions().nth(index).map_or(0, Key::id)) })
+}
+
+/// Whether running action `action` (a key id; 0 for the first) started at
+/// the last think (Rust `Brain::started_action`). `PONKO_NOT_FOUND` if it
+/// isn't doing it.
+/// ```
+/// let mut started = true;
+/// assert_eq!(unsafe { ponko_ffi::ponko_brain_action_started(std::ptr::null(), 0, &mut started) } as u32, 1);
+/// ```
+/// # Safety
+/// `brain` null or live; `out_started` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_brain_action_started(
+    brain: *const PonkoBrain,
+    action: u64,
+    out_started: *mut bool,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        let b = &brain_ref(brain)?.brain;
+        out(out_started, b.started_action(named_action(b, action)?))
+    })
+}
+
+/// Reports running action `action` (a key id; 0 for the first) done, as
+/// `PONKO_AI_SUCCESS` or `PONKO_AI_FAILURE` (Rust `Brain::succeed_action`,
+/// `fail_action`); its other actions carry on. `PONKO_NOT_FOUND` if it
+/// isn't doing it.
+/// ```
+/// use ponko_ffi::PonkoAiStatus::*;
+/// assert_eq!(unsafe { ponko_ffi::ponko_brain_finish_action(std::ptr::null_mut(), 0, PONKO_AI_SUCCESS) } as u32, 1);
+/// ```
+/// # Safety
+/// `brain` null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_brain_finish_action(
+    brain: *mut PonkoBrain,
+    action: u64,
+    status: PonkoAiStatus,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe { finish_action(&mut brain_mut(brain)?.brain, action, status) })
+}
+
+pub(crate) fn finish_action(brain: &mut Brain, action: u64, status: PonkoAiStatus) -> Result<(), Failure> {
+    let key = named_action(brain, action)?;
+    match status {
+        PonkoAiStatus::PONKO_AI_SUCCESS => brain.succeed_action(key),
+        PonkoAiStatus::PONKO_AI_FAILURE => brain.fail_action(key),
+        PonkoAiStatus::PONKO_AI_RUNNING => return Err(invalid("finish takes success or failure")),
+    }
+    Ok(())
+}
+
+/// The number parameter `key` of running action `action` (a key id; 0 for
+/// the first; Rust `Brain::action_param`). `PONKO_NOT_FOUND` if it isn't
+/// doing it, or the action has no such number.
+/// ```
+/// let mut v = 0.0;
+/// assert_eq!(unsafe { ponko_ffi::ponko_brain_action_param_num(std::ptr::null(), 0, 0, &mut v) } as u32, 1);
+/// ```
+/// # Safety
+/// `brain` null or live; `out_value` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_brain_action_param_num(
+    brain: *const PonkoBrain,
+    action: u64,
+    key: u64,
+    out_value: *mut f32,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe { out(out_value, action_param_num(&brain_ref(brain)?.brain, action, key)?) })
+}
+
+pub(crate) fn action_param_num(brain: &Brain, action: u64, key: u64) -> Result<f32, Failure> {
+    let action = named_action(brain, action)?;
+    Key::from_id(key)
+        .and_then(|k| brain.action_param(action, k))
+        .and_then(Value::as_num)
+        .ok_or_else(|| error(PonkoStatus::PONKO_NOT_FOUND, "the action has no such number parameter"))
 }

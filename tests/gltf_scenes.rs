@@ -48,15 +48,20 @@ fn base64(bytes: &[u8]) -> String {
 /// same cube), every node without a parent at the top of the scene, and
 /// `lights` as `KHR_lights_punctual` lights.
 fn gltf(nodes: Value, lights: Value) -> String {
+    gltf_of_box(nodes, lights, Vec3::splat(-0.5), Vec3::splat(0.5))
+}
+
+/// [`gltf`] with its meshes a box from `lo` to `hi` instead.
+fn gltf_of_box(nodes: Value, lights: Value, lo: Vec3, hi: Vec3) -> String {
     let corners: [[f32; 3]; 8] = [
-        [-0.5, -0.5, -0.5],
-        [0.5, -0.5, -0.5],
-        [0.5, 0.5, -0.5],
-        [-0.5, 0.5, -0.5],
-        [-0.5, -0.5, 0.5],
-        [0.5, -0.5, 0.5],
-        [0.5, 0.5, 0.5],
-        [-0.5, 0.5, 0.5],
+        [lo.x, lo.y, lo.z],
+        [hi.x, lo.y, lo.z],
+        [hi.x, hi.y, lo.z],
+        [lo.x, hi.y, lo.z],
+        [lo.x, lo.y, hi.z],
+        [hi.x, lo.y, hi.z],
+        [hi.x, hi.y, hi.z],
+        [lo.x, hi.y, hi.z],
     ];
     let indices: [u16; 36] = [
         0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 0, 1, 5, 0, 5, 4, 3, 7, 6, 3, 6, 2, 0, 4, 7, 0, 7, 3, 1, 2, 6, 1, 6, 5,
@@ -95,7 +100,7 @@ fn gltf(nodes: Value, lights: Value) -> String {
             { "buffer": 0, "byteOffset": 96, "byteLength": 72, "target": 34963 }
         ],
         "accessors": [
-            { "bufferView": 0, "componentType": 5126, "count": 8, "type": "VEC3", "min": [-0.5, -0.5, -0.5], "max": [0.5, 0.5, 0.5] },
+            { "bufferView": 0, "componentType": 5126, "count": 8, "type": "VEC3", "min": lo.to_array(), "max": hi.to_array() },
             { "bufferView": 1, "componentType": 5123, "count": 36, "type": "SCALAR" }
         ]
     })
@@ -384,7 +389,11 @@ fn colliders_fit_the_node_meshes_with_their_scale() {
         world.get::<Collider>(e)
     }
     .unwrap();
-    assert!(matches!(ground.shape, Shape::Mesh(_)));
+    assert!(
+        matches!(ground.shape, Shape::ScaledMesh { scale, .. } if scale == vec3(10.0, 1.0, 10.0)),
+        "the ground's triangle mesh, scaled where it is used: {:?}",
+        ground.shape
+    );
     assert_eq!(
         {
             let e = node(&mut world, "Ground");
@@ -862,8 +871,8 @@ fn a_bad_export_keeps_the_old_scene_drawing_its_meshes() {
     assert_eq!(*live.lock().unwrap(), [true], "the old scene's mesh stays live");
 }
 
-/// A file of four nodes of one glTF mesh with colliders: two triangle
-/// meshes at the same scale, one at another scale, and a hull.
+/// A file of five nodes of one glTF mesh with colliders: two triangle
+/// meshes at the same scale, one at another scale, a hull and a box.
 #[cfg(feature = "physics3d")]
 fn rock_colliders() -> String {
     gltf(
@@ -878,12 +887,13 @@ fn rock_colliders() -> String {
     )
 }
 
-/// The collision mesh of `path`'s collider in the scene of `root`.
+/// The collision mesh of `path`'s collider in the scene of `root`, scaled
+/// or not.
 #[cfg(feature = "physics3d")]
 fn collision_mesh(ctx: &mut Ctx, root: Entity, path: &str) -> ponko::d3::CollisionMesh {
     let e = ctx.world.get::<GltfRoot>(root).unwrap().entity(path).unwrap();
     match ctx.world.get::<ponko::d3::Collider>(e).unwrap().shape {
-        ponko::d3::Shape::Mesh(m) => m,
+        ponko::d3::Shape::Mesh(m) | ponko::d3::Shape::ScaledMesh { mesh: m, .. } => m,
         other => panic!("{path} has a {other:?}"),
     }
 }
@@ -896,18 +906,18 @@ fn spawning_a_scene_again_reuses_its_collision_shapes_until_the_last_one_goes() 
         let first = ctx.spawn_prefab(file.name(), Transform::default()).unwrap();
         assert_eq!(
             ctx.live_counts().collision_meshes,
-            3,
-            "A and B share a triangle mesh; Big's scale and the hull make their own"
+            2,
+            "A, B and Big share a triangle mesh (Big scales it where it is used); the hull makes its own"
         );
         let a = collision_mesh(ctx, first, "A");
         assert_eq!(collision_mesh(ctx, first, "B"), a);
-        assert_ne!(collision_mesh(ctx, first, "Big"), a);
+        assert_eq!(collision_mesh(ctx, first, "Big"), a);
         let mut roots = vec![first];
         for i in 1..100 {
             let at = Transform::at(vec3(i as f32 * 20.0, 0.0, 0.0));
             roots.push(ctx.spawn_prefab(file.name(), at).unwrap());
         }
-        assert_eq!(ctx.live_counts().collision_meshes, 3, "a hundred spawns share them");
+        assert_eq!(ctx.live_counts().collision_meshes, 2, "a hundred spawns share them");
         for path in ["A", "B", "Big", "Hull"] {
             assert_eq!(
                 collision_mesh(ctx, roots[99], path),
@@ -921,7 +931,7 @@ fn spawning_a_scene_again_reuses_its_collision_shapes_until_the_last_one_goes() 
         for &root in &roots[..99] {
             ctx.despawn_prefab(root);
         }
-        assert_eq!(ctx.live_counts().collision_meshes, 3);
+        assert_eq!(ctx.live_counts().collision_meshes, 2);
         assert!(ctx.is_live(a) && ctx.is_live(hull));
         ctx.despawn_prefab(roots[99]);
         assert_eq!(ctx.live_counts().collision_meshes, 0, "freed with the last scene");
@@ -929,7 +939,7 @@ fn spawning_a_scene_again_reuses_its_collision_shapes_until_the_last_one_goes() 
 
         // Spawned again, the file makes them again.
         let again = ctx.spawn_prefab(file.name(), Transform::default()).unwrap();
-        assert_eq!(ctx.live_counts().collision_meshes, 3);
+        assert_eq!(ctx.live_counts().collision_meshes, 2);
         ctx.despawn_prefab(again);
         assert_eq!(ctx.live_counts().collision_meshes, 0);
     });
@@ -988,6 +998,136 @@ fn shared_collision_shapes_collide_in_every_scene() {
     }
 }
 
+/// A file of nodes of one box mesh that sits on one side of its node, from
+/// x = 0 to 1 (so a mirrored node's box is on the other side), at
+/// different scales: triangle mesh colliders plain, tall, wide and
+/// mirrored along X, a hull mirrored and doubled, and a box mirrored.
+#[cfg(feature = "physics3d")]
+fn scaled_rocks() -> String {
+    gltf_of_box(
+        json!([
+            { "name": "Plain", "mesh": 0, "extras": { "ponko:collider": "trimesh" } },
+            { "name": "Tall", "mesh": 0, "translation": [10.0, 0.0, 0.0], "scale": [1.0, 3.0, 1.0],
+              "extras": { "ponko:collider": "trimesh" } },
+            { "name": "Wide", "mesh": 0, "translation": [20.0, 0.0, 0.0], "scale": [2.0, 1.0, 2.0],
+              "extras": { "ponko:collider": "trimesh" } },
+            { "name": "Mirrored", "mesh": 0, "translation": [30.0, 0.0, 0.0], "scale": [-1.0, 1.0, 1.0],
+              "extras": { "ponko:collider": "trimesh" } },
+            { "name": "Hull", "mesh": 0, "translation": [40.0, 0.0, 0.0], "scale": [-2.0, 2.0, 2.0],
+              "extras": { "ponko:collider": "hull" } },
+            { "name": "Box", "mesh": 0, "translation": [50.0, 0.0, 0.0], "scale": [-1.0, 1.0, 1.0],
+              "extras": { "ponko:collider": "box" } }
+        ]),
+        json!([]),
+        vec3(0.0, -0.5, -0.5),
+        vec3(1.0, 0.5, 0.5),
+    )
+}
+
+#[cfg(feature = "physics3d")]
+#[test]
+fn nodes_of_one_mesh_at_any_scale_share_one_collision_mesh_scaled_where_used() {
+    use ponko::d3::{Collider, Shape};
+    let file = TempAsset::with_contents("scaled.gltf", &scaled_rocks());
+    game().physics3d(Vec3::ZERO).run_headless(0, |ctx| {
+        let first = ctx.spawn_prefab(file.name(), Transform::default()).unwrap();
+        assert_eq!(
+            ctx.live_counts().collision_meshes,
+            2,
+            "one triangle mesh for Plain, Tall, Wide and Mirrored, one hull"
+        );
+        let trimesh = collision_mesh(ctx, first, "Plain");
+        for path in ["Tall", "Wide", "Mirrored"] {
+            assert_eq!(collision_mesh(ctx, first, path), trimesh, "{path}");
+        }
+        let shape = |ctx: &mut Ctx, path: &str| {
+            let e = ctx.world.get::<GltfRoot>(first).unwrap().entity(path).unwrap();
+            ctx.world.get::<Collider>(e).unwrap().shape
+        };
+        assert_eq!(shape(ctx, "Plain"), Shape::Mesh(trimesh), "unscaled: the mesh itself");
+        assert_eq!(
+            shape(ctx, "Mirrored"),
+            Shape::ScaledMesh {
+                mesh: trimesh,
+                scale: vec3(-1.0, 1.0, 1.0)
+            }
+        );
+        let hull = collision_mesh(ctx, first, "Hull");
+        assert_eq!(
+            shape(ctx, "Hull"),
+            Shape::ScaledMesh {
+                mesh: hull,
+                scale: vec3(-2.0, 2.0, 2.0)
+            }
+        );
+        assert_eq!(
+            shape(ctx, "Box"),
+            Shape::Cuboid { size: Vec3::ONE },
+            "a box is fitted to the scaled mesh"
+        );
+        let box_e = ctx.world.get::<GltfRoot>(first).unwrap().entity("Box").unwrap();
+        assert_eq!(
+            ctx.world.get::<Collider>(box_e).unwrap().offset,
+            vec3(-0.5, 0.0, 0.0),
+            "the mirrored box sits on the other side of its node"
+        );
+        for i in 1..10 {
+            ctx.spawn_prefab(file.name(), Transform::at(vec3(0.0, 0.0, i as f32 * 10.0)))
+                .unwrap();
+        }
+        assert_eq!(ctx.live_counts().collision_meshes, 2, "ten scenes share them");
+    });
+}
+
+#[cfg(feature = "physics3d")]
+#[test]
+fn balls_land_on_shared_collision_meshes_at_every_scale() {
+    use ponko::d3::{Collider, RigidBody};
+    let file = TempAsset::with_contents("scaled.gltf", &scaled_rocks());
+    // Each ball: where it drops, and the height it rests at (the top of
+    // the node's box plus the radius), or `None` where no box is.
+    let drops: [(f32, Option<f32>); 9] = [
+        (0.5, Some(0.75)),  // Plain: box from x 0 to 1, top 0.5
+        (10.5, Some(1.75)), // Tall: top 1.5
+        (21.5, Some(0.75)), // Wide: box from x 20 to 22
+        (29.5, Some(0.75)), // Mirrored: box from x 29 to 30 ...
+        (30.5, None),       // ... and nothing where the unmirrored one was
+        (39.0, Some(1.25)), // Hull: box from x 38 to 40, top 1.0
+        (40.5, None),       // nothing on its unmirrored side
+        (49.5, Some(0.75)), // Box: from x 49 to 50
+        (50.5, None),       // nothing on its unmirrored side
+    ];
+    let mut world = game().physics3d(vec3(0.0, -9.81, 0.0)).run_headless(75, move |ctx| {
+        for z in [0.0, 30.0] {
+            ctx.spawn_prefab(file.name(), Transform::at(vec3(0.0, 0.0, z))).unwrap();
+            for (x, _) in drops {
+                ctx.world.spawn((
+                    Transform::at(vec3(x, 2.5, z)),
+                    RigidBody::dynamic(),
+                    Collider::sphere(0.25),
+                ));
+            }
+        }
+    });
+    let mut balls: Vec<Vec3> = world
+        .query::<(&Transform, &RigidBody)>()
+        .iter()
+        .filter(|(_, b)| b.kind == BodyKind::Dynamic)
+        .map(|(t, _)| t.position)
+        .collect();
+    assert_eq!(balls.len(), 2 * drops.len());
+    balls.sort_by(|a, b| a.z.total_cmp(&b.z).then(a.x.total_cmp(&b.x)));
+    for (ball, (x, rest)) in balls.iter().zip(drops.iter().chain(drops.iter())) {
+        match rest {
+            Some(y) => assert!(
+                (ball.y - y).abs() < 0.1,
+                "the ball dropped at x {x} rests on its node's box at {y}: {ball}"
+            ),
+            None => assert!(ball.y < 0.0, "the ball dropped at x {x} falls past: {ball}"),
+        }
+    }
+}
+
 #[cfg(feature = "physics3d")]
 #[test]
 fn reexporting_frees_the_old_collision_shapes_and_shares_the_new_ones() {
@@ -1039,7 +1179,7 @@ fn reexporting_frees_the_old_collision_shapes_and_shares_the_new_ones() {
         });
     let seen = seen.lock().unwrap();
     let (before, old, _) = &seen[0];
-    assert_eq!(*before, 3);
+    assert_eq!(*before, 2);
     assert_eq!(old[0], old[1], "both scenes share the first export's shape");
     let (after, new, old_live) = &seen[1];
     assert_eq!(*after, 1, "A and B of both scenes share one new triangle mesh");
@@ -1057,7 +1197,7 @@ fn loading_a_world_frees_the_collision_shapes_of_the_scenes_it_replaced() {
             ctx.spawn_prefab(file.name(), Transform::at(vec3(i as f32 * 20.0, 0.0, 0.0)))
                 .unwrap();
         }
-        assert_eq!(ctx.live_counts().collision_meshes, 3);
+        assert_eq!(ctx.live_counts().collision_meshes, 2);
         let scene = TempAsset::with_contents("empty.json", &empty_world.to_string());
         ctx.load_scene(scene.name()).unwrap();
         assert_eq!(ctx.live_counts().collision_meshes, 0);

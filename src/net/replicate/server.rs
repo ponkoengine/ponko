@@ -28,6 +28,45 @@ const MAX_DESTROYS: usize = 64;
 /// `mark_changed`) is still sent, about a second later at 60 Hz.
 const SWEEP_TICKS: usize = 64;
 
+/// Resend timeout before the first round trip was measured: 0.2 s.
+const FIRST_RESEND_SECONDS: f64 = 0.2;
+/// The longest a resend waits, however slow the round trips: 1 s.
+const MAX_RESEND_SECONDS: f64 = 1.0;
+/// The shortest, in ticks: an acknowledgement takes at least one.
+const MIN_RESEND_TICKS: u32 = 2;
+/// While no acknowledgement comes back, each resend waits twice as long as
+/// the one before, up to this long: 4 s.
+const MAX_BACKOFF_SECONDS: f64 = 4.0;
+/// The most doublings, so the shift never overflows.
+const MAX_BACKOFF_STEPS: u32 = 16;
+/// The reordering tolerance shrinks by a tick after this many acknowledged
+/// packets without a needless early resend.
+const REORDER_DECAY: u32 = 128;
+
+/// When the server sends unacknowledged records again. All on in a game;
+/// tests turn one off to show what it does.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ResendRules {
+    /// A packet that acknowledgements of later packets skip is lost: what
+    /// it carried goes again at once, without waiting for the timeout.
+    pub(crate) early: bool,
+    /// Learn how far the link reorders packets and wait that long before
+    /// calling a skipped packet lost.
+    pub(crate) reorder: bool,
+    /// The timeout doubles with each resend while nothing is acknowledged.
+    pub(crate) backoff: bool,
+}
+
+impl Default for ResendRules {
+    fn default() -> Self {
+        Self {
+            early: true,
+            reorder: true,
+            backoff: true,
+        }
+    }
+}
+
 /// A replicated entity, by net id.
 #[derive(Clone)]
 pub(crate) struct Slot {
@@ -71,6 +110,13 @@ struct ViewState {
     scope: u8,
     /// Due this tick by its ring's rate.
     due: bool,
+    /// It changed (or was created, or started despawning) since a record
+    /// of it last went out: send it as soon as it is due.
+    unsent: bool,
+    /// The tick (low 32 bits) a record of it last went out. Until the
+    /// client acknowledges one, it is sent again only once the resend
+    /// timeout passed since then, not every tick.
+    sent_tick: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -86,8 +132,13 @@ struct Entry {
 #[derive(Default)]
 struct PacketRecord {
     seq: u16,
+    /// The tick it was sent, for measuring round trips.
+    tick: u64,
     live: bool,
     acked: bool,
+    /// Acknowledgements of later packets skipped it: what it carried went
+    /// again (an acknowledgement may still come, if it was only late).
+    lost: bool,
     entries: Vec<Entry>,
     words: Vec<u32>,
     destroys: Vec<(u32, u32)>,
@@ -104,6 +155,22 @@ pub(crate) struct Conn {
     tokens: f64,
     pub(crate) stats: PeerStats,
     pub(crate) viewer: Option<Vec3>,
+    /// Smoothed round trip in ticks, and its mean deviation (as TCP's
+    /// RFC 6298), from the acknowledgements; `None` before the first.
+    rtt: Option<(f32, f32)>,
+    /// The tick the newest acknowledged packet was sent: unacknowledged
+    /// packets sent before it (by more than `reorder`) are lost.
+    newest_acked: u64,
+    /// Ticks a packet may arrive behind ones sent after it before it counts
+    /// as lost: the most seen to arrive late after it was resent.
+    reorder: u32,
+    /// Packets acknowledged since `reorder` last grew.
+    reorder_quiet: u32,
+    /// The resend timeout doubled this many times since the last
+    /// acknowledgement.
+    backoff: u32,
+    /// The tick (low 32 bits) it last doubled.
+    backed_off_at: u32,
 }
 
 impl Conn {
@@ -118,7 +185,103 @@ impl Conn {
             tokens: 0.0,
             stats: PeerStats::default(),
             viewer: None,
+            rtt: None,
+            newest_acked: 0,
+            reorder: 0,
+            reorder_quiet: 0,
+            backoff: 0,
+            backed_off_at: 0,
         }
+    }
+
+    /// The resend timeout now: [`resend_ticks`](Self::resend_ticks),
+    /// doubled for each resend since the last acknowledgement, at most
+    /// [`MAX_BACKOFF_SECONDS`] (or the timeout itself, if that is longer).
+    fn timeout_ticks(&self, hz: f64) -> u32 {
+        let base = self.resend_ticks(hz);
+        let most = ((MAX_BACKOFF_SECONDS * hz).ceil() as u32).max(base);
+        base.saturating_mul(1 << self.backoff).min(most)
+    }
+
+    /// A resend timeout fired at `tick` (`timeout` ticks long): the next
+    /// waits twice as long, unless it already doubled within this timeout.
+    fn back_off(&mut self, tick: u32, timeout: u32) {
+        if self.backoff == 0 || tick.wrapping_sub(self.backed_off_at) >= timeout {
+            self.backoff = (self.backoff + 1).min(MAX_BACKOFF_STEPS);
+            self.backed_off_at = tick;
+        }
+    }
+
+    /// Calls the packets that acknowledgements of later ones skipped lost
+    /// (unless `reorder` allows them to be that late): what they carried,
+    /// and wasn't sent again since, goes in the next packet.
+    fn detect_losses(&mut self, reorder: bool) {
+        let tolerance = if reorder { u64::from(self.reorder) } else { 0 };
+        let Self {
+            records,
+            views,
+            newest_acked,
+            ..
+        } = self;
+        for record in records.iter_mut() {
+            if !record.live || record.acked || record.lost || record.tick + tolerance >= *newest_acked {
+                continue;
+            }
+            record.lost = true;
+            for entry in &record.entries {
+                let Some(view) = views.get_mut(entry.slot as usize) else {
+                    continue;
+                };
+                // Only if this was its newest record, and not acknowledged.
+                let newest = view.generation == entry.generation && view.sent == entry.index;
+                let waiting = view.state == CREATING
+                    || (view.state == LIVE && entry.index.wrapping_sub(view.base_index) as i32 > 0);
+                if newest && waiting {
+                    view.unsent = true;
+                }
+            }
+            for &(id, generation) in &record.destroys {
+                if let Some(view) = views.get_mut(id as usize)
+                    && view.state == DESTROYING
+                    && view.generation == generation
+                    && view.sent_tick == record.tick as u32
+                {
+                    view.unsent = true;
+                }
+            }
+        }
+    }
+
+    /// Ticks a record waits for its acknowledgement before it is sent
+    /// again: the smoothed round trip plus four deviations (at least one
+    /// tick of slack), between [`MIN_RESEND_TICKS`] and a second.
+    fn resend_ticks(&self, hz: f64) -> u32 {
+        let most = (MAX_RESEND_SECONDS * hz).ceil().max(f64::from(MIN_RESEND_TICKS)) as u32;
+        let ticks = match self.rtt {
+            Some((srtt, var)) => (srtt + (4.0 * var).max(1.0)).ceil() as u32,
+            None => (FIRST_RESEND_SECONDS * hz).ceil() as u32,
+        };
+        ticks.clamp(MIN_RESEND_TICKS, most)
+    }
+
+    /// A round trip of `ticks`, measured by an acknowledgement.
+    fn sample_rtt(&mut self, ticks: f32) {
+        self.rtt = Some(match self.rtt {
+            None => (ticks, ticks / 2.0),
+            Some((srtt, var)) => (srtt * 0.875 + ticks * 0.125, var * 0.75 + (srtt - ticks).abs() * 0.25),
+        });
+    }
+
+    /// The resend timeout now (backed off), and the reordering tolerated.
+    #[cfg(test)]
+    pub(crate) fn resend_state(&self, hz: f64) -> (u32, u32) {
+        (self.timeout_ticks(hz), self.reorder)
+    }
+
+    /// The smoothed round trip, in ticks.
+    #[cfg(test)]
+    pub(crate) fn rtt_ticks(&self) -> Option<f32> {
+        self.rtt.map(|r| r.0)
     }
 }
 
@@ -163,6 +326,7 @@ pub(crate) struct Server {
     sweep: usize,
     pub(crate) clients: BTreeMap<PeerId, Conn>,
     pub(crate) interest: Option<Interest>,
+    pub(crate) rules: ResendRules,
     sync_count: u64,
     // Scratch, reused every tick.
     found: Vec<Entity>,
@@ -430,6 +594,7 @@ impl Server {
         peer: PeerId,
         bytes: &[u8],
         stride: usize,
+        tick: u64,
         inputs: Option<&mut (dyn InputStream + 'static)>,
     ) -> Option<()> {
         let mut r = BitReader::new(bytes);
@@ -445,7 +610,7 @@ impl Server {
                     continue;
                 }
                 let seq = latest.wrapping_sub(back);
-                acknowledge(conn, &mut self.slots, &mut self.free, seq, stride);
+                acknowledge(conn, &mut self.slots, &mut self.free, seq, stride, tick);
             }
         }
         let count = r.read_varint()? as usize;
@@ -522,6 +687,7 @@ impl Server {
             interest,
             candidates,
             writer,
+            rules,
             ..
         } = self;
         let Some(conn) = clients.get_mut(&peer) else { return };
@@ -533,8 +699,25 @@ impl Server {
             conn.base_words.resize(slots.len() * stride, 0);
         }
         for &id in changed.iter() {
-            conn.views[id as usize].dirty = true;
+            let view = &mut conn.views[id as usize];
+            view.dirty = true;
+            view.unsent = true;
         }
+        // Packets the acknowledgements skipped are lost: their records go
+        // again now.
+        if rules.early {
+            conn.detect_losses(rules.reorder);
+        }
+        // A record not acknowledged within this many ticks goes again.
+        let this_tick = settings.tick as u32;
+        let resend = if rules.backoff {
+            conn.timeout_ticks(settings.hz)
+        } else {
+            conn.resend_ticks(settings.hz)
+        };
+        // Whether a record went again because its timeout passed.
+        let mut timed_out = false;
+        let waited = |view: &ViewState| view.unsent || this_tick.wrapping_sub(view.sent_tick) >= resend;
 
         // Interest: which ring each entity is in for this client, this tick.
         let tiers = interest.as_ref().map(|i| {
@@ -578,9 +761,10 @@ impl Server {
         for (id, slot) in slots.iter_mut().enumerate() {
             let view = &mut conn.views[id];
             let wanted = slot.alive && view.scope > 0;
-            if view.state != NONE && view.generation != slot.generation {
+            if view.state != NONE && view.generation != slot.generation && view.state != DESTROYING {
                 // Defensive: an id reused under a view that wasn't cleared.
                 view.state = DESTROYING;
+                view.unsent = true;
             }
             match (view.state, wanted) {
                 (NONE, true) => {
@@ -589,21 +773,30 @@ impl Server {
                         generation: slot.generation,
                         scope: view.scope,
                         due: view.due,
+                        unsent: true,
                         ..ViewState::default()
                     };
                     slot.known_by += 1;
                 }
-                (CREATING | LIVE, false) => view.state = DESTROYING,
+                (CREATING | LIVE, false) => {
+                    view.state = DESTROYING;
+                    view.unsent = true;
+                }
                 _ => {}
             }
             match view.state {
                 CREATING => {
-                    view.acc += slot.priority.max(0.0) * 2.0 + 1.0;
-                    candidates.push(Candidate {
-                        slot: id as u32,
-                        forced: slot.meta.owner == Some(peer),
-                        acc: view.acc,
-                    });
+                    // A spawn goes again only when it changed or its
+                    // acknowledgement is overdue (an owned one: always).
+                    let owned = slot.meta.owner == Some(peer);
+                    if owned || waited(view) {
+                        view.acc += slot.priority.max(0.0) * 2.0 + 1.0;
+                        candidates.push(Candidate {
+                            slot: id as u32,
+                            forced: owned,
+                            acc: view.acc,
+                        });
+                    }
                 }
                 LIVE => {
                     // Only entities that changed (or whose baseline did) are
@@ -616,8 +809,12 @@ impl Server {
                             || changed_words(kinds, slot.present, base, now)
                     };
                     view.dirty = changed;
+                    // Nothing to tell: nothing waits to go either.
+                    view.unsent &= changed;
                     let owned = slot.meta.owner == Some(peer);
-                    if changed || owned {
+                    // A change goes once; until the client acknowledges
+                    // it, again only after the resend timeout.
+                    if (changed && waited(view)) || owned {
                         let weight = tiers
                             .as_ref()
                             .and_then(|t| t.get(usize::from(view.scope.max(1) - 1)).copied())
@@ -632,7 +829,7 @@ impl Server {
                         }
                     }
                 }
-                DESTROYING => destroying += 1,
+                DESTROYING if waited(view) => destroying += 1,
                 _ => {}
             }
         }
@@ -652,8 +849,10 @@ impl Server {
                 conn.stats.packets_lost += 1;
             }
             record.seq = seq;
+            record.tick = settings.tick;
             record.live = true;
             record.acked = false;
+            record.lost = false;
             record.entries.clear();
             record.words.clear();
             record.destroys.clear();
@@ -666,18 +865,23 @@ impl Server {
             if let Some(ack) = input_ack {
                 writer.write(u32::from(ack), 16);
             }
-            // Destroys ride in every packet until one carrying them is acked.
+            // Destroys go once, then again after the resend timeout until
+            // a packet carrying them is acknowledged.
             let n_destroy = destroying.min(MAX_DESTROYS);
             writer.write_varint(n_destroy as u64);
-            for (id, view) in conn.views.iter().enumerate() {
+            for (id, view) in conn.views.iter_mut().enumerate() {
                 if record.destroys.len() == n_destroy {
                     break;
                 }
-                if view.state == DESTROYING {
+                if view.state == DESTROYING && waited(view) {
+                    timed_out |= !view.unsent;
                     writer.write_varint(id as u64);
                     record.destroys.push((id as u32, view.generation));
+                    view.unsent = false;
+                    view.sent_tick = this_tick;
                 }
             }
+            destroying -= n_destroy;
             conn.stats.destroys_sent += n_destroy as u64;
             // Each record is preceded by a 1 bit; a 0 bit ends the packet.
             let mut records = 0u64;
@@ -718,6 +922,9 @@ impl Server {
                 }
                 view.sent = view.sent.wrapping_add(1);
                 view.acc = 0.0;
+                timed_out |= !c.forced && !view.unsent;
+                view.unsent = false;
+                view.sent_tick = this_tick;
                 record.entries.push(Entry {
                     slot: c.slot,
                     generation: view.generation,
@@ -739,7 +946,7 @@ impl Server {
             let bytes = writer.finish();
             let sent = bytes.len();
             if endpoint.send_internal(peer, false, bytes).is_err() {
-                record_unsent(&mut conn.records[usize::from(seq) % ACK_WINDOW]);
+                record_unsent(&mut conn.records[usize::from(seq) % ACK_WINDOW], &mut conn.views);
                 break;
             }
             conn.stats.packets_sent += 1;
@@ -752,12 +959,26 @@ impl Server {
             }
         }
         conn.stats.deferred += (candidates.len() - next) as u64;
+        if timed_out && rules.backoff {
+            conn.back_off(this_tick, resend);
+        }
     }
 }
 
-/// A packet the transport refused: nothing in it can be acknowledged.
-fn record_unsent(record: &mut PacketRecord) {
+/// A packet the transport refused: nothing in it can be acknowledged,
+/// and what it carried waits to go out (it never did).
+fn record_unsent(record: &mut PacketRecord, views: &mut [ViewState]) {
     record.live = false;
+    for entry in &record.entries {
+        if let Some(view) = views.get_mut(entry.slot as usize) {
+            view.unsent = true;
+        }
+    }
+    for &(id, _) in &record.destroys {
+        if let Some(view) = views.get_mut(id as usize) {
+            view.unsent = true;
+        }
+    }
 }
 
 /// Whether any present kind's words differ.
@@ -768,8 +989,30 @@ fn changed_words(kinds: &[Kind], present: u64, base: &[u32], now: &[u32]) -> boo
 }
 
 /// The client has packet `seq`: what it carried becomes the baselines.
-fn acknowledge(conn: &mut Conn, slots: &mut [Slot], free: &mut Vec<u32>, seq: u16, stride: usize) {
+fn acknowledge(conn: &mut Conn, slots: &mut [Slot], free: &mut Vec<u32>, seq: u16, stride: usize, tick: u64) {
     let ring = usize::from(seq) % ACK_WINDOW;
+    let record = &conn.records[ring];
+    if !record.live || record.acked || record.seq != seq {
+        return;
+    }
+    let (sent, lost) = (record.tick, record.lost);
+    conn.sample_rtt(tick.saturating_sub(sent) as f32);
+    // The client is reachable: resends wait the plain timeout again.
+    conn.backoff = 0;
+    if lost {
+        // Called lost, resent, and it arrived after all: the link reorders
+        // packets this far. Wait that long before calling the next lost.
+        let late = conn.newest_acked.saturating_sub(sent).min(u64::from(u32::MAX)) as u32;
+        conn.reorder = conn.reorder.max((conn.reorder + 1).min(late));
+        conn.reorder_quiet = 0;
+    } else {
+        conn.reorder_quiet += 1;
+        if conn.reorder_quiet >= REORDER_DECAY {
+            conn.reorder = conn.reorder.saturating_sub(1);
+            conn.reorder_quiet = 0;
+        }
+    }
+    conn.newest_acked = conn.newest_acked.max(sent);
     let Conn {
         records,
         views,
@@ -778,9 +1021,6 @@ fn acknowledge(conn: &mut Conn, slots: &mut [Slot], free: &mut Vec<u32>, seq: u1
         ..
     } = conn;
     let record = &mut records[ring];
-    if !record.live || record.acked || record.seq != seq {
-        return;
-    }
     record.acked = true;
     stats.packets_acked += 1;
 

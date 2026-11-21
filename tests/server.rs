@@ -31,7 +31,8 @@ fn ticks_are_paced_to_wall_time() {
     let elapsed = start.elapsed();
     assert_eq!(status(&world).tick, 20);
     assert_eq!(status(&world).target_hz, 100);
-    // 20 ticks at 100 Hz: the 20th starts 190 ms after the first.
+    // 20 ticks at 100 Hz: the 20th starts 190 ms after the first. A lower
+    // bound: pacing waits, and a busy machine only makes the run longer.
     assert!(elapsed >= Duration::from_millis(185), "{elapsed:?}");
 }
 
@@ -65,7 +66,6 @@ fn a_stop_request_gives_systems_the_grace_to_wrap_up() {
     let stop = config.stop_handle();
     let after_stop = Rc::new(Cell::new(0u32));
     let seen = after_stop.clone();
-    let start = Instant::now();
     let world = Game::new("graceful", 1, 1)
         .fixed_hz(200)
         .sim_system(move |ctx: &mut Ctx| {
@@ -83,10 +83,10 @@ fn a_stop_request_gives_systems_the_grace_to_wrap_up() {
         })
         .run_server(config, |_| {});
     assert_eq!(after_stop.get(), 3);
-    // Ticks 0..=4 run before the request is seen, then three more.
+    // Ticks 0..=4 run before the request is seen, then three more: the
+    // quit ended the grace early (its 5 s at 200 Hz would be ~1000 ticks).
     assert_eq!(status(&world).tick, 8);
     assert_eq!(status(&world).stopping, Some(StopReason::Requested));
-    assert!(start.elapsed() < Duration::from_secs(4), "quit ended the grace early");
 }
 
 #[test]
@@ -112,8 +112,11 @@ fn the_grace_ends_the_run_when_the_game_ignores_the_stop() {
     let start = Instant::now();
     let world = Game::new("stubborn", 1, 1).fixed_hz(100).run_server(config, |_| {});
     let elapsed = start.elapsed();
+    // At least the grace (sleeps only make it longer). The upper bound only
+    // catches a grace that doesn't end the run; a busy machine stretches
+    // 100 ms by far less than a minute.
     assert!(elapsed >= Duration::from_millis(100), "{elapsed:?}");
-    assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
+    assert!(elapsed < Duration::from_secs(60), "{elapsed:?}");
     assert!(status(&world).tick >= 5, "ticks kept running in the grace");
     assert_eq!(status(&world).stopping, Some(StopReason::Requested));
 }

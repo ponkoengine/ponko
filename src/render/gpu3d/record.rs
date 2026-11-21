@@ -125,6 +125,10 @@ pub(super) const ENCODER_WORK: usize = 250;
 /// The most encoders a frame records into, on as many cores.
 pub(super) const MAX_ENCODERS: usize = 8;
 
+/// A frame's command buffers (see `Renderer3D::draw`): never more than
+/// [`MAX_ENCODERS`], so kept inline.
+pub(crate) type FrameBuffers = smallvec::SmallVec<[wgpu::CommandBuffer; MAX_ENCODERS]>;
+
 /// Splits `parts` (recorded in this order) into consecutive groups, each
 /// recorded into one encoder: as many groups as the frame has
 /// [`ENCODER_WORK`] (at least one, at most [`MAX_ENCODERS`] and `cores`),
@@ -249,7 +253,8 @@ impl Renderer3D {
     }
 
     /// The pipeline material `id` draws with: its stencil pipeline in the
-    /// color passes when it has a stencil, its shader's otherwise.
+    /// color passes and the view model's when it has a stencil, its
+    /// shader's otherwise.
     pub(super) fn draw_pipeline<'a>(
         &'a self,
         shader: &'a super::shaders::ShaderPipelines,
@@ -259,9 +264,12 @@ impl Renderer3D {
         role: PipelineRole,
     ) -> Option<&'a wgpu::RenderPipeline> {
         if kind == Kind::ViewModel && self.resources.material(id).cutout {
-            return Some(shader.view_model_cutout(variant));
+            return Some(match self.stencil.view_model_cutout(id, variant.instancing) {
+                Some(pipeline) => pipeline,
+                None => shader.view_model_cutout(variant),
+            });
         }
-        if matches!(kind, Kind::Opaque | Kind::Transparent)
+        if matches!(kind, Kind::Opaque | Kind::Transparent | Kind::ViewModel)
             && let Some(pipeline) = self.stencil.pipeline(
                 id,
                 variant.instancing,
@@ -389,17 +397,19 @@ impl Renderer3D {
         clear: wgpu::Color,
         textures: &dyn TextureTable,
         timer: Option<&GpuTimer>,
-    ) -> Vec<wgpu::CommandBuffer> {
+    ) -> FrameBuffers {
         self.state_counters.take();
         let Some(targets) = self.targets.as_ref().filter(|_| !self.too_many) else {
-            return Vec::new();
+            return FrameBuffers::new();
         };
         let time = |name| timer.and_then(|t| t.pass(name));
         let split = self.splits_transparent();
         if !self.extra {
             self.shadow_cache.recorded();
         }
-        let parts = self.frame_parts(split);
+        // The list is kept between frames (see `frame_parts_into`).
+        let mut parts = std::mem::take(&mut *self.parts.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        self.frame_parts_into(split, &mut parts);
         // The frame must keep what its passes declare (see `passes`):
         // checked in debug builds, so in every render test.
         let checks = self.check_frame(&parts, targets, view);
@@ -438,23 +448,38 @@ impl Renderer3D {
             }
             encoder.finish()
         };
-        let mut buffers = Vec::with_capacity(groups);
+        let mut slots: [Option<wgpu::CommandBuffer>; MAX_ENCODERS] = Default::default();
         #[cfg(not(target_arch = "wasm32"))]
         if groups > 1 {
             use rayon::prelude::*;
-            buffers.par_extend((0..groups).into_par_iter().map(record));
+            slots[..groups]
+                .par_iter_mut()
+                .enumerate()
+                .for_each(|(group, slot)| *slot = Some(record(group)));
         } else {
-            buffers.push(record(0));
+            slots[0] = Some(record(0));
         }
         #[cfg(target_arch = "wasm32")]
-        buffers.extend((0..groups).map(record));
-        buffers
+        for (group, slot) in slots[..groups].iter_mut().enumerate() {
+            *slot = Some(record(group));
+        }
+        *self.parts.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = parts;
+        slots.into_iter().flatten().collect()
+    }
+
+    /// [`frame_parts_into`](Self::frame_parts_into) a new list (tests).
+    #[cfg(test)]
+    pub(super) fn frame_parts(&self, split: bool) -> Vec<Part> {
+        let mut parts = Vec::new();
+        self.frame_parts_into(split, &mut parts);
+        parts
     }
 
     /// The parts of this frame, in the order they are recorded and
-    /// submitted (see [`draw`](Self::draw)).
-    pub(super) fn frame_parts(&self, split: bool) -> Vec<Part> {
-        let mut parts = Vec::with_capacity(8 + self.lists.cascades + self.lists.light_views);
+    /// submitted (see [`draw`](Self::draw)), into `parts` (emptied first).
+    pub(super) fn frame_parts_into(&self, split: bool, parts: &mut Vec<Part>) {
+        parts.clear();
+        parts.reserve(8 + self.lists.cascades + self.lists.light_views);
         parts.push(Part::Prelude);
         // Small light views drawn this frame, waiting to share a pass:
         // (first, last, draws).
@@ -521,7 +546,6 @@ impl Renderer3D {
             parts.push(Part::Transparent);
         }
         parts.push(Part::Post);
-        parts
     }
 
     /// How many passes draw into the light shadow atlas this frame (test hook).
@@ -1036,6 +1060,7 @@ impl Renderer3D {
             self.draw_model_runs(&mut pass, &self.lists.gi_runs, Kind::Shadow(0), &self.instances);
             if let Some(slot) = self.lists.gi_batch_slot {
                 self.draw_static(&mut pass, Kind::Shadow(0), slot);
+                self.draw_crowds(&mut pass, Kind::Shadow(0), slot);
             }
         }
         // Each view in its own square of the views image.
@@ -1058,6 +1083,8 @@ impl Renderer3D {
                 if let Some(slot) = self.lists.gi_batch_slot {
                     self.draw_static(pass, kind, slot + 1 + i % 6);
                     self.draw_static(pass, kind, slot + crate::three::gi::GI_BATCH_FACES + i);
+                    // Crowds in their face direction's view.
+                    self.draw_crowds(pass, kind, slot + 1 + i % 6);
                 }
             }
         };
@@ -1196,6 +1223,10 @@ impl Renderer3D {
         }
         if let Some(lines) = &self.debug_lines {
             lines.draw_target(&mut pass, id);
+        }
+        // Debug labels on top last, over everything, as on screen.
+        if let Some((view, textures)) = particles {
+            self.particles.draw_on_top(view, &mut pass, textures);
         }
     }
 
@@ -1352,7 +1383,7 @@ impl Renderer3D {
         self.draw_crowds(pass, kind, 0);
     }
 
-    fn record_model_parts(
+    pub(super) fn record_model_parts(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         runs: impl Iterator<Item = (Run, Option<usize>)>,

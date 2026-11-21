@@ -137,6 +137,21 @@ impl Panels {
                         self.apply_to_prefab(ctx, root, &path);
                     }
                 });
+                // The selection is in a prefab the instance's prefab
+                // includes: apply that part to its own file.
+                let included = prefab::included_at(ctx, root, e).unwrap_or_default();
+                for (inner, range) in included {
+                    let name = inner.rsplit('/').next().unwrap_or(&inner).to_string();
+                    if ui
+                        .button(format!("Apply to {name}"))
+                        .on_hover_text(format!(
+                            "Write the selected part of this instance into {inner}, the prefab it includes; every instance using it follows"
+                        ))
+                        .clicked()
+                    {
+                        self.apply_to_included(ctx, root, &inner, range);
+                    }
+                }
                 if let Some(which) = revert {
                     let done = ctx.edit(|ed, ctx| ed.revert_overrides(ctx, root, &[which]));
                     self.report(done);
@@ -148,6 +163,23 @@ impl Panels {
         let done = ctx.edit(|ed, ctx| ed.apply_to_prefab(ctx, root)).map_err(String::from);
         if let Some(others) = self.report(done) {
             self.status = Some(format!("applied to {path}; {others} other instance(s) here updated"));
+            self.scene.forget_assets();
+            self.prefabs = None;
+        }
+    }
+
+    pub(crate) fn apply_to_included(
+        &mut self,
+        ctx: &mut Ctx,
+        root: Entity,
+        inner: &str,
+        range: std::ops::Range<usize>,
+    ) {
+        let done = ctx
+            .edit(|ed, ctx| ed.apply_to_included(ctx, root, inner, range))
+            .map_err(String::from);
+        if let Some(n) = self.report(done) {
+            self.status = Some(format!("applied to {inner}; {n} instance(s) here updated"));
             self.scene.forget_assets();
             self.prefabs = None;
         }

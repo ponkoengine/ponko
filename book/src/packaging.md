@@ -217,10 +217,26 @@ per primitive (the test `a_level_too_big_for_one_range_gets_a_range_per_primitiv
 cook compresses eligible images inside meshopt and Draco models using the
 same texture rules as other models. It preserves the original buffers and
 view layout, including external buffer references, and adds the KTX2 data
-alongside them. The bytes of each image it replaced stay where they were,
-so no offset moves; in a GLB's own chunk they are zeroed, which a pack
-deflates to almost nothing (an image in an external `.bin` stays as it
-is). The engine then uploads the KTX2 images as GPU blocks and still
+alongside them. The bytes of each image it replaced are dropped from the
+buffers the model holds itself (a GLB's own chunk, a data URI), so the
+file is smaller on disk, not only once packed. Every view and compressed
+stream after them moves down by a multiple of 16 bytes, which keeps its
+alignment, and its bytes stay the same: the geometry is byte for byte the
+source's. Each run of dropped image bytes keeps 1 to 16 zeroed bytes, so
+the views nothing reads any more stay valid. An image in an external
+`.bin` is shortened the same way when the cook knows one model reads that
+file (no other model names it, and no rule keeps or skips it): the cook
+writes the shorter file in the model's place and rewrites the model's
+offsets, and the cook's line for the `.bin` says which model's images it
+lost. A buffer two models read stays as it is, since each model alone
+can't tell what in it is unused; so does one a `keep` rule covers. The
+meshopt fixture of `tests/fixtures/cook-kept` (three 32 x 32 PNGs and
+their occlusion, 4,067 bytes, replaced by 2,844 bytes of KTX2) went from
+7,116 bytes to 10,188 with the images zeroed, and is 6,128 bytes now. The
+same model with its chunk in an external `.bin` (`geometry.bin`, 4,364
+bytes, and a `.gltf` file of 6,831 bytes, together 11,195) is a `.gltf` file
+of 6,809 bytes and a `.bin` of 316: 7,125 bytes, where its source was 7,112.
+The engine then uploads the KTX2 images as GPU blocks and still
 decompresses the geometry at load (feature `gltf-meshopt`). Set a model's
 `texture` rule to `keep` to keep its embedded textures, or use the `keep`
 rule to copy the whole model verbatim.

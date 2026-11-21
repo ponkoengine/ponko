@@ -354,6 +354,36 @@ unsafe extern "C" fn meshes(ctx: *mut PonkoCtx, _: *mut c_void) {
 }
 
 #[test]
+fn a_scaled_mesh_collider_round_trips_with_its_scale() {
+    let mut ids = Ids::default();
+    unsafe {
+        let w = ponko_world_new();
+        ids_of(w, &mut ids);
+        let scaled = PonkoCollider3D {
+            shape: PonkoShape3DKind::PONKO_SHAPE3D_SCALED_MESH as u32,
+            size: v3(-1.0, 2.0, 0.5),
+            ..ponko_collider3d_mesh(PonkoCollisionMesh { id: 7 })
+        };
+        let values = [value(ids.collider, &scaled)];
+        let mut e = 0;
+        assert_eq!(ponko_spawn(w, values.as_ptr(), 1, &mut e), PONKO_OK);
+        let mut back = ponko_collider3d_sphere(1.0);
+        let n = size_of::<PonkoCollider3D>();
+        assert_eq!(ponko_get(w, e, ids.collider, (&raw mut back).cast(), n), PONKO_OK);
+        assert_eq!(back, scaled, "the scale comes back, mirrored component and all");
+        let bad = PonkoCollider3D {
+            size: v3(f32::NAN, 1.0, 1.0),
+            ..scaled
+        };
+        assert_eq!(
+            ponko_set(w, e, ids.collider, (&raw const bad).cast(), n),
+            PONKO_INVALID_ARGUMENT
+        );
+        ponko_world_free(w);
+    }
+}
+
+#[test]
 fn collision_meshes_are_checked() {
     unsafe {
         let g = ponko_game_new(c"meshes".as_ptr(), 1, 1);

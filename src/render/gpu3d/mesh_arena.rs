@@ -9,7 +9,7 @@
 //! WebGL2, which can't be copy sources), that arena keeps a CPU mirror and
 //! growth uploads it instead.
 use super::resources::Vertex;
-use crate::render::traffic::{Counted, NewBuffer, Upload};
+use crate::render::traffic::{self, Counted, NewBuffer, Upload};
 use std::ops::Range;
 
 #[derive(Clone)]
@@ -124,11 +124,9 @@ impl<T: bytemuck::Pod + bytemuck::Zeroable> Arena<T> {
                 (None, Some(old)) => {
                     // Submitted now, so the queue writes below (applied at the
                     // next submission) land after the copy, not under it.
-                    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("grow shared mesh arena"),
+                    traffic::submit_copy(device, queue, Some("grow shared mesh arena"), |encoder| {
+                        encoder.copy_buffer_to_buffer(&old, 0, &buffer, 0, old.size());
                     });
-                    encoder.copy_buffer_to_buffer(&old, 0, &buffer, 0, old.size());
-                    queue.submit([encoder.finish()]);
                 }
                 (None, None) => {}
             }

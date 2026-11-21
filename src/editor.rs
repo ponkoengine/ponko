@@ -27,6 +27,11 @@ pub(crate) mod play;
 #[cfg(feature = "editor")]
 #[path = "editor_prefab.rs"]
 pub(crate) mod prefab;
+// The web build keeps the software thumbnails: it has no blocking GPU
+// readback to capture a frame with, and no cache folder to keep it in.
+#[cfg(all(feature = "editor", feature = "3d", not(target_arch = "wasm32")))]
+#[path = "editor_thumb_studio.rs"]
+pub(crate) mod thumb_studio;
 #[cfg(feature = "editor")]
 #[path = "editor_thumbs.rs"]
 pub(crate) mod thumbs;
@@ -132,6 +137,10 @@ impl Ctx {
     /// named the old world's entities.
     pub(crate) fn edit<R>(&mut self, f: impl FnOnce(&mut Editor, &mut Ctx) -> R) -> R {
         let mut editor = std::mem::take(&mut self.editor);
+        // glTF scenes keep what their files made from now on, so how they
+        // are edited is kept as their overrides.
+        #[cfg(feature = "3d")]
+        self.track_gltf_overrides();
         if editor.loads != self.scene_loads {
             // Something else loaded a scene: that file is the document now.
             editor.forget_history();

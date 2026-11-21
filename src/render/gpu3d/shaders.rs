@@ -576,7 +576,7 @@ impl ShaderPipelines {
         self.view_model_cutout[at].get_or_init(|| {
             self.counters.missed();
             let start = crate::perf::Instant::now();
-            let pipeline = self.builder.build_view_model_cutout(variant);
+            let pipeline = self.builder.build_view_model_cutout(variant, Default::default());
             self.counters.built(start.elapsed());
             pipeline
         })
@@ -1132,8 +1132,13 @@ impl SideBuilder {
     /// their own depth (nearer, like [`PipelineRole::OpaqueSolid`]) minus
     /// the pixels their alpha cuts away: with multisampling through alpha
     /// to coverage (`fs_main_coverage`), else by discarding them
-    /// (`fs_main_cutout`).
-    pub(super) fn build_view_model_cutout(&self, variant: ShaderVariant) -> wgpu::RenderPipeline {
+    /// (`fs_main_cutout`). `stencil`: a stencil material's state (the
+    /// default for none).
+    pub(super) fn build_view_model_cutout(
+        &self,
+        variant: ShaderVariant,
+        stencil: wgpu::StencilState,
+    ) -> wgpu::RenderPipeline {
         let coverage = self.samples > 1;
         let fade = variant.instancing.fades();
         let fragment = match (coverage, fade) {
@@ -1176,7 +1181,7 @@ impl SideBuilder {
                 format: self.depth,
                 depth_write_enabled: Some(true),
                 depth_compare: Some(super::SCENE_DEPTH_NEARER),
-                stencil: Default::default(),
+                stencil,
                 bias: Default::default(),
             }),
             multisample: wgpu::MultisampleState {

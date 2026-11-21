@@ -176,7 +176,11 @@ name again loads it afresh, as a new handle.
 `perf.get` on the [control endpoint](control.md) reports `residency` (the
 budget and counters of each kind) and `streaming` (the upload queue's
 counters and every asset's state); `ctx.gfx.upload_stats()` gives the same
-numbers in code, including how long the upload step took.
+numbers in code, including how long the upload step took on the game thread
+(`step_ms`) and, where the GPU has timestamp queries, how long the GPU
+itself spent copying the step's textures (`gpu_upload_ms`, a frame or a few
+later; `gpu_upload_timing` says whether this GPU times them). The [loading
+chapter](loading.md#what-uploads-cost) explains how it is measured.
 
 ## Measured
 
@@ -215,9 +219,21 @@ Read the numbers with these caveats:
 
 ## Browsers and asset sources
 
-An ordinary web build has no worker threads, so there a stream's decode
-runs when it is asked for. A build with threads runs it on a job worker
-where the page allows it ([Threads on the web](web-threads.md)). [Asset sources](asset-sources.md) added with
+An ordinary web build has no worker threads. There the streaming step
+decodes streamed textures and meshes **a slice at a time** on the game
+thread, in the order they were asked for, within the asset group frame
+budget (`ctx.assets.set_group_frame_budget`, 4 ms by default, shared with
+the [group step](loading.md#never-stalling-a-frame), which runs first):
+a PNG a few rows a slice and then its smaller resolutions a few rows a
+slice, and for a glTF file its PNG images that way, then the parse of its
+geometry in one piece. Other image formats decode in one piece. So one
+large file is spread over several frames instead of taking one long frame,
+and the texture or mesh is exactly what a worker would have made.
+`upload_stats().frame_slices` counts the slices of the last frame. With
+deterministic uploads (and in `finish_uploads`) the step finishes a decode
+at once instead, as it waits for a worker elsewhere. A build with threads
+decodes on a job worker where the page allows it ([Threads on the
+web](web-threads.md)). [Asset sources](asset-sources.md) added with
 `add_source` are read on the game thread (their trait runs there); ones
 added with `add_background_source` (`Send + Sync`, such as `MemorySource`
 and `PackSource`) are read on workers, like `assets/`. Images are decoded

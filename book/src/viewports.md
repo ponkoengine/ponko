@@ -69,6 +69,9 @@ shadowed lights nearest any of the cameras (up to
 `Lighting::light_shadow_views` of them), in one shadow atlas drawn once a
 frame; each light's shadow is as sharp as the camera nearest it needs.
 
+[Crowds](crowds.md) are culled for each view's camera too, at the main
+frame's time.
+
 Views draw without occlusion culling: it reads the depth of the camera's
 last frame, which only the main camera keeps. A view draws everything in
 its frustum, which costs more in a dense city but never hides anything
@@ -233,25 +236,36 @@ the list. 2D views cost one more pass over the frame's sprite batches each,
 skipping batches off their layers. With no views and the main camera on the
 whole window, nothing of this runs.
 
+The main camera's frame and every view's go to the GPU together, in one
+submission: each frame's buffer writes (its camera, lights, light grid and
+culling data) are copied into place by its own first command buffer, so a
+view drawn after the main camera still reads its own and the main camera
+its own.
+
 The scene benchmark measures it (`PONKO_RENDER_VIEWS=2`, `4` or `minimap`,
 see `crates/ponko_bench/RENDER_SCENES.md`). On an Apple M4 Max at
-1280 x 720, high quality, its town scene made these heap allocations per
-frame (whole process, exact from run to run):
+1280 x 720, high quality, with GPU pass timing on, its town scene made
+these heap allocations per frame (whole process):
 
 | Cameras | Allocations | Each view adds |
 |---|---|---|
-| 1 | 745 | |
-| 2 (halves) | 1255 | 510 |
-| 4 (quarters) | 2113 | 456 |
-| 1 and a minimap (a quarter-sized corner view with bloom, ambient occlusion and screen-space reflections off, FXAA) | 931 | 186 |
+| 1 | 767 | |
+| 2 (halves) | 1262 | 495 |
+| 4 (quarters) | 2094 | 442 |
+| 1 and a minimap (a quarter-sized corner view with bloom, ambient occlusion and screen-space reflections off, FXAA) | 926 | 159 |
 
-Collecting a view allocates nothing once its buffers have grown, and the
-renderer's own code makes a handful of allocations a frame. The rest are
-made inside wgpu: about a dozen for each render pass a view records, a
-few dozen for each command encoder and each submit. A view with fewer
-effects records fewer passes, which is why the minimap costs much less
-than a split-screen view: give a small view its own post settings
-(`d3::View::with_post`) with what it doesn't need turned off.
+Collecting a view, preparing it and recording its passes allocate nothing
+in the engine once its buffers have grown. Almost all of the rest is made
+inside wgpu, about 24 for each pass a view records (29 render and 3 compute
+passes for the town's main camera): its command list growing, the barriers
+and attachment checks of each pass, the timestamp queries' reset map and
+Metal's own pass objects, plus a few for each buffer copy and about 25 for
+each submission. Those can only shrink in wgpu or by recording fewer passes, so
+a frame of this scene stays around 750 allocations and a full-size view
+around 450. A view with fewer effects records fewer passes, which is why
+the minimap costs a third of a split-screen view: give a small view its
+own post settings (`d3::View::with_post`) with what it doesn't need turned
+off.
 
 CPU time grows by roughly what the main camera's collecting and recording
 cost at the view's size. Times measured on a busy machine vary too much to

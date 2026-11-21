@@ -116,7 +116,7 @@ too.";
 
 /// The cooker's version, part of every cache key: bump it whenever a cooked
 /// file's bytes would change for the same input and settings.
-pub const VERSION: u32 = 4;
+pub const VERSION: u32 = 5;
 
 /// The settings file's name.
 pub const CONFIG: &str = "cook.json";
@@ -577,6 +577,9 @@ impl Cooked {
                     Outcome::Converted(files) => {
                         return Some(format!("{}: made into {}, {}", e.name, files.join(" and "), e.note));
                     }
+                    Outcome::Skipped if !e.note.is_empty() => {
+                        return Some(format!("{}: left out, {}", e.name, e.note));
+                    }
                     Outcome::Kept(None) | Outcome::Skipped => return None,
                 };
                 Some(format!(
@@ -599,15 +602,24 @@ struct Cache {
     dir: PathBuf,
 }
 
-/// A cached result: the cooked bytes, and the note for the report.
-fn encode_entry(bytes: &[u8], note: &str, gpu: Option<(u64, u64)>) -> Vec<u8> {
-    let mut out = Vec::with_capacity(bytes.len() + note.len() + 28);
-    out.extend_from_slice(b"PKCOOK1\0");
+/// A cached result: the cooked bytes, the note for the report, the texture
+/// memory, and the other files the cook rewrote with them.
+fn encode_entry(made: &Made) -> Vec<u8> {
+    let ((bytes, note, gpu), companions) = made;
+    let mut out = Vec::with_capacity(bytes.len() + note.len() + 32);
+    out.extend_from_slice(b"PKCOOK2\0");
     let (a, b) = gpu.unwrap_or((u64::MAX, u64::MAX));
     out.extend_from_slice(&a.to_le_bytes());
     out.extend_from_slice(&b.to_le_bytes());
     out.extend_from_slice(&(note.len() as u32).to_le_bytes());
     out.extend_from_slice(note.as_bytes());
+    out.extend_from_slice(&(companions.len() as u32).to_le_bytes());
+    for (name, data) in companions {
+        out.extend_from_slice(&(name.len() as u32).to_le_bytes());
+        out.extend_from_slice(name.as_bytes());
+        out.extend_from_slice(&(data.len() as u64).to_le_bytes());
+        out.extend_from_slice(data);
+    }
     out.extend_from_slice(bytes);
     out
 }
@@ -615,14 +627,34 @@ fn encode_entry(bytes: &[u8], note: &str, gpu: Option<(u64, u64)>) -> Vec<u8> {
 /// A cooked file's bytes, its report note and its texture memory.
 type Result3 = (Vec<u8>, String, Option<(u64, u64)>);
 
-fn decode_entry(data: &[u8]) -> Option<Result3> {
-    let rest = data.strip_prefix(b"PKCOOK1\0")?;
-    let a = u64::from_le_bytes(rest.get(0..8)?.try_into().ok()?);
-    let b = u64::from_le_bytes(rest.get(8..16)?.try_into().ok()?);
-    let len = u32::from_le_bytes(rest.get(16..20)?.try_into().ok()?) as usize;
-    let note = String::from_utf8(rest.get(20..20 + len)?.to_vec()).ok()?;
+/// Files a cook rewrote besides the one it was cooking (a model's shortened
+/// buffer): (name among the assets, bytes). They replace the originals.
+type Companions = Vec<(String, Vec<u8>)>;
+
+/// A cooked file and the companions it needs.
+type Made = (Result3, Companions);
+
+fn decode_entry(data: &[u8]) -> Option<Made> {
+    let mut rest = data.strip_prefix(b"PKCOOK2\0")?;
+    let mut take = |n: usize| {
+        let (head, tail) = rest.split_at_checked(n)?;
+        rest = tail;
+        Some(head)
+    };
+    let a = u64::from_le_bytes(take(8)?.try_into().ok()?);
+    let b = u64::from_le_bytes(take(8)?.try_into().ok()?);
+    let len = u32::from_le_bytes(take(4)?.try_into().ok()?) as usize;
+    let note = String::from_utf8(take(len)?.to_vec()).ok()?;
+    let count = u32::from_le_bytes(take(4)?.try_into().ok()?) as usize;
+    let mut companions = Vec::new();
+    for _ in 0..count {
+        let len = u32::from_le_bytes(take(4)?.try_into().ok()?) as usize;
+        let name = String::from_utf8(take(len)?.to_vec()).ok()?;
+        let len = usize::try_from(u64::from_le_bytes(take(8)?.try_into().ok()?)).ok()?;
+        companions.push((name, take(len)?.to_vec()));
+    }
     let gpu = (a != u64::MAX).then_some((a, b));
-    Some((rest[20 + len..].to_vec(), note, gpu))
+    Some(((rest.to_vec(), note, gpu), companions))
 }
 
 impl Cache {
@@ -630,12 +662,12 @@ impl Cache {
         self.dir.join(&key[..2]).join(key)
     }
 
-    fn get(&self, key: &str) -> Option<Result3> {
+    fn get(&self, key: &str) -> Option<Made> {
         decode_entry(&std::fs::read(self.path(key)).ok()?)
     }
 
     /// Stores an entry; a cache that can't be written is only slower.
-    fn put(&self, key: &str, entry: &Result3) {
+    fn put(&self, key: &str, entry: &Made) {
         let path = self.path(key);
         let Some(parent) = path.parent() else { return };
         if std::fs::create_dir_all(parent).is_err() {
@@ -646,7 +678,7 @@ impl Cache {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let id = NEXT.fetch_add(1, Ordering::Relaxed);
         let temp = parent.join(format!(".{key}.{}.{id}", std::process::id()));
-        if std::fs::write(&temp, encode_entry(&entry.0, &entry.1, entry.2)).is_ok() {
+        if std::fs::write(&temp, encode_entry(entry)).is_ok() {
             let _ = std::fs::rename(&temp, &path);
         }
         let _ = std::fs::remove_file(&temp);
@@ -687,6 +719,35 @@ fn buffer_files(name: &str, bytes: &[u8]) -> Vec<String> {
         .collect()
 }
 
+/// The buffer files exactly one model reads, once, and that no rule keeps
+/// or skips. Only that model can tell what in them is unused.
+fn sole_reader_buffers(jobs: &[Job]) -> BTreeSet<String> {
+    let mut readers: BTreeMap<String, usize> = BTreeMap::new();
+    for job in jobs.iter().filter(|j| Kind::of(j.name) == Kind::Mesh) {
+        for buffer in buffer_files(job.name, job.bytes) {
+            *readers.entry(buffer).or_default() += 1;
+        }
+    }
+    let by_rule: BTreeSet<&str> = jobs
+        .iter()
+        .filter(|j| j.rule.keep || j.rule.skip)
+        .map(|j| j.name)
+        .collect();
+    readers
+        .into_iter()
+        .filter(|(buffer, n)| *n == 1 && !by_rule.contains(buffer.as_str()))
+        .map(|(buffer, _)| buffer)
+        .collect()
+}
+
+/// The buffer files of model `name` that `sole` lists.
+fn owned_buffers(name: &str, bytes: &[u8], sole: &BTreeSet<String>) -> BTreeSet<String> {
+    buffer_files(name, bytes)
+        .into_iter()
+        .filter(|b| sole.contains(b))
+        .collect()
+}
+
 /// The buffer files no output needs: those every model that reads them
 /// (and isn't left out) was cooked into one self-contained GLB, unless a
 /// rule keeps them. Each with the first such model.
@@ -697,7 +758,7 @@ fn embedded_buffers(jobs: &[Job], slots: &[Slot]) -> BTreeMap<String, String> {
             continue;
         }
         let still_external = match slot {
-            Some(Ok((Outcome::Cooked | Outcome::Cached, Some((out, _, _))))) => Some(buffer_files(job.name, out)),
+            Some(Ok((Outcome::Cooked | Outcome::Cached, Some(((out, _, _), _))))) => Some(buffer_files(job.name, out)),
             Some(Ok((Outcome::Skipped, _))) => continue,
             _ => None,
         };
@@ -773,18 +834,23 @@ struct Job<'a> {
 }
 
 /// One job's result, once it ran.
-type Slot = Option<Result<(Outcome, Option<Result3>), String>>;
+type Slot = Option<Result<(Outcome, Option<Made>), String>>;
 
 /// The work for one file: `Ok(None)` keeps it, with the reason.
-type Work = Result<Result<Result3, Option<String>>, String>;
+type Work = Result<Result<Made, Option<String>>, String>;
 
 /// Cooks one file, or says why it stays as it is.
 fn cook_one(
     job: &Job,
     all: &BTreeMap<String, Vec<u8>>,
     model_plans: &BTreeMap<String, model_images::Plan>,
+    sole_buffers: &BTreeSet<String>,
     settings: &Settings,
 ) -> Work {
+    // A file's own result, with nothing else written beside it.
+    let alone = |r: Result<Result<Result3, String>, String>| -> Work {
+        r.map(|r| r.map(|made| (made, Vec::new())).map_err(Some))
+    };
     let (name, bytes, rule) = (job.name, job.bytes, job.rule);
     match Kind::of(name) {
         Kind::Texture => {
@@ -801,7 +867,7 @@ fn cook_one(
                     "the game reads no KTX2 (`compressed-textures` is off)".into(),
                 )));
             }
-            match plan {
+            alone(match plan {
                 // A model's image: compressed for what the model uses it as.
                 Some(model_images::Plan::Encode(kind)) => texture(bytes, *kind, rule, settings),
                 Some(model_images::Plan::Orm { metal_rough, occlusion }) => orm_texture(
@@ -813,8 +879,7 @@ fn cook_one(
                     settings,
                 ),
                 _ => texture(bytes, kind, rule, settings),
-            }
-            .map(|r| r.map_err(Some))
+            })
         }
         Kind::Mesh => {
             #[cfg(feature = "meshes")]
@@ -828,11 +893,12 @@ fn cook_one(
                 if !options.optimize && !options.quantize && options.images.is_none() {
                     return Ok(Err(None));
                 }
-                gltf::cook(name, bytes, &deps, options).map(|r| r.map_err(Some))
+                let owned = owned_buffers(name, bytes, sole_buffers);
+                gltf::cook_owning(name, bytes, &deps, options, &owned).map(|r| r.map_err(Some))
             }
             #[cfg(not(feature = "meshes"))]
             {
-                let _ = all;
+                let _ = (all, sole_buffers);
                 Ok(Err(Some("this ponko was built without the `meshes` feature".into())))
             }
         }
@@ -841,7 +907,7 @@ fn cook_one(
                 return Ok(Err(None));
             }
             match flac::wav_to_flac(bytes).map_err(|e| format!("{name}: {e}"))? {
-                Some(out) => Ok(Ok((out, "FLAC".into(), None))),
+                Some(out) => Ok(Ok(((out, "FLAC".into(), None), Vec::new()))),
                 None => Ok(Err(Some("not 8, 16 or 24-bit PCM (FLAC takes only those)".into()))),
             }
         }
@@ -853,7 +919,10 @@ fn cook_one(
             {
                 let text = std::str::from_utf8(bytes).map_err(|_| format!("{name}: a shader is not UTF-8 text"))?;
                 let kind = shaders::validate(name, text, rule.shader)?;
-                Ok(Ok((bytes.to_vec(), format!("valid {} shader", kind.name()), None)))
+                Ok(Ok((
+                    (bytes.to_vec(), format!("valid {} shader", kind.name()), None),
+                    Vec::new(),
+                )))
             }
             #[cfg(not(feature = "shaders"))]
             Ok(Err(Some("this ponko was built without the `shaders` feature".into())))
@@ -1132,6 +1201,8 @@ pub fn cook_files(files: Vec<(String, Vec<u8>)>, config: &Config, settings: &Set
         })
         .collect();
 
+    let sole_buffers = sole_reader_buffers(&jobs);
+
     // Every core takes the next file; results land in their own slot, so
     // the output's order doesn't depend on who finished first.
     let next = std::sync::atomic::AtomicUsize::new(0);
@@ -1146,7 +1217,7 @@ pub fn cook_files(files: Vec<(String, Vec<u8>)>, config: &Config, settings: &Set
                 loop {
                     let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let Some(job) = jobs.get(i) else { break };
-                    let result = run_job(job, &all, &model_plans, settings, cache.as_ref());
+                    let result = run_job(job, &all, &model_plans, &sole_buffers, settings, cache.as_ref());
                     results.lock().expect("no panics while holding it")[i] = Some(result);
                 }
             });
@@ -1155,15 +1226,33 @@ pub fn cook_files(files: Vec<(String, Vec<u8>)>, config: &Config, settings: &Set
 
     // A `.gltf` file's `.bin` buffers are inside the GLB it was cooked into.
     let mut embedded = embedded_buffers(&jobs, &slots);
+    // A model that shortened a buffer file only it reads: the shortened
+    // bytes take the file's place, with how it was got.
+    let mut shortened: BTreeMap<String, (String, Outcome, Vec<u8>)> = BTreeMap::new();
+    for (job, slot) in jobs.iter().zip(&slots) {
+        if let Some(Ok((outcome @ (Outcome::Cooked | Outcome::Cached), Some((_, companions))))) = slot {
+            for (file, bytes) in companions {
+                shortened.insert(file.clone(), (job.name.to_string(), outcome.clone(), bytes.clone()));
+            }
+        }
+    }
     let mut cooked = Cooked::default();
     let mut errors = Vec::new();
     for (job, slot) in jobs.iter().zip(slots) {
         let (mut outcome, made) = match slot.expect("every job ran") {
-            Ok(r) => r,
+            Ok((outcome, made)) => (outcome, made.map(|(made, _)| made)),
             Err(e) => {
                 errors.push(e);
                 continue;
             }
+        };
+        let made = match shortened.remove(job.name) {
+            Some((model, how, bytes)) if outcome == Outcome::Kept(None) => {
+                outcome = how;
+                let note = format!("the images {model} replaced are dropped");
+                Some((bytes, note, None))
+            }
+            _ => made,
         };
         if outcome == Outcome::Kept(None)
             && let Some(model) = embedded.remove(job.name)
@@ -1220,12 +1309,13 @@ pub fn cook_files(files: Vec<(String, Vec<u8>)>, config: &Config, settings: &Set
 }
 
 /// Makes each Aseprite file of `all` (unless its rule keeps or skips it)
-/// into its sheet and JSON ([`aseprite::export`]): they take its place in
-/// `all`. Returns its entries and, for each file made, the Aseprite file it
-/// was made from. An export already beside an Aseprite file (from
-/// Aseprite, for hot reload while developing) is replaced, so the cooked
-/// files are never older than their source. A file that can't be read is
-/// an error.
+/// into its sheet and JSON ([`aseprite::export_linked`]): they take its
+/// place in `all`. A tileset that links to another Aseprite file reads it
+/// from the assets, and that file's bytes are part of the cache key.
+/// Returns its entries and, for each file made, the Aseprite file it was
+/// made from. An export already beside an Aseprite file (from Aseprite, for
+/// hot reload while developing) is replaced, so the cooked files are never
+/// older than their source. A file that can't be read is an error.
 #[cfg(feature = "aseprite")]
 fn convert_aseprite(
     all: &mut BTreeMap<String, Vec<u8>>,
@@ -1233,10 +1323,46 @@ fn convert_aseprite(
     cache: Option<&Cache>,
 ) -> Result<(Vec<Entry>, BTreeMap<String, String>), String> {
     let names: Vec<String> = all.keys().filter(|n| aseprite::is_aseprite(n)).cloned().collect();
+    // The sources as they were, for tilesets that link to another Aseprite
+    // file: each is replaced by its sheet in `all` as it is converted.
+    let sources: BTreeMap<String, Vec<u8>> = names.iter().map(|n| (n.clone(), all[n].clone())).collect();
     let (mut entries, mut made, mut errors) = (Vec::new(), BTreeMap::new(), Vec::new());
+    // The files a converted file's tilesets link to, each with the first
+    // file that links to it.
+    let mut linked_from: BTreeMap<String, String> = BTreeMap::new();
+    for name in &names {
+        let rule = config.rule_for(name);
+        if rule.keep || rule.skip {
+            continue;
+        }
+        for linked in ponko_aseprite::linked_files(name, &sources[name]).unwrap_or_default() {
+            if linked != *name {
+                linked_from.entry(linked).or_insert_with(|| name.clone());
+            }
+        }
+    }
     for name in names {
         let rule = config.rule_for(&name);
         if rule.keep || rule.skip {
+            continue;
+        }
+        // A file of only tilesets that others link to has nothing to draw:
+        // it gets no sheet (the files that link to it read its bytes from
+        // `sources`).
+        if let Some(from) = linked_from.get(&name)
+            && ponko_aseprite::is_tileset_only(&sources[&name]).unwrap_or(false)
+        {
+            let source_bytes = sources[&name].len() as u64;
+            all.remove(&name);
+            entries.push(Entry {
+                name,
+                kind: Kind::Other,
+                outcome: Outcome::Skipped,
+                source_bytes,
+                cooked_bytes: 0,
+                gpu: None,
+                note: format!("only tilesets, linked from {from}: no sheet"),
+            });
             continue;
         }
         let (json, png) = aseprite::outputs(&name);
@@ -1250,9 +1376,13 @@ fn convert_aseprite(
         // The JSON embeds the sheet's basename. Moving the pair to a
         // different directory reuses the conversion.
         let basename = png.rsplit('/').next().unwrap_or(&png);
-        let key = cache.map(|_| key(Kind::Other, &format!("aseprite:{split}:{basename}"), &bytes, &[]));
+        let find = |path: &str| sources.get(path).or_else(|| all.get(path));
+        let key = cache.map(|_| {
+            let linked = aseprite::linked_files(&name, &bytes, find);
+            key(Kind::Other, &format!("aseprite:{split}:{basename}"), &bytes, &linked)
+        });
         let cached = cache.zip(key.as_deref()).and_then(|(cache, key)| {
-            let (bytes, note, _) = cache.get(key)?;
+            let ((bytes, note, _), _) = cache.get(key)?;
             let (json, png) = aseprite::cached_pair(&bytes)?;
             Some(aseprite::Sheet {
                 json: json.to_vec(),
@@ -1263,9 +1393,16 @@ fn convert_aseprite(
         let (converted, outcome) = match cached {
             Some(sheet) => (Ok(sheet), Outcome::Cached),
             None => {
-                let converted = aseprite::export(&name, &bytes, split);
+                let converted = aseprite::export_linked(&name, &bytes, split, &mut |path| {
+                    find(path)
+                        .cloned()
+                        .ok_or_else(|| format!("{path} is not among the assets"))
+                });
                 if let (Ok(sheet), Some((cache, key))) = (&converted, cache.zip(key.as_deref())) {
-                    cache.put(key, &(aseprite::cache_pair(sheet), sheet.note.clone(), None));
+                    cache.put(
+                        key,
+                        &((aseprite::cache_pair(sheet), sheet.note.clone(), None), Vec::new()),
+                    );
                 }
                 (converted, Outcome::Converted(vec![json.clone(), png.clone()]))
             }
@@ -1318,9 +1455,10 @@ fn run_job(
     job: &Job,
     all: &BTreeMap<String, Vec<u8>>,
     model_plans: &BTreeMap<String, model_images::Plan>,
+    sole_buffers: &BTreeSet<String>,
     settings: &Settings,
     cache: Option<&Cache>,
-) -> Result<(Outcome, Option<Result3>), String> {
+) -> Result<(Outcome, Option<Made>), String> {
     if job.rule.skip {
         return Ok((Outcome::Skipped, None));
     }
@@ -1348,16 +1486,16 @@ fn run_job(
         }
         _ => Vec::new(),
     };
-    let key = key(
-        kind,
-        &how(&job.rule, job.texture_json, settings, kind),
-        job.bytes,
-        &deps,
-    );
+    let mut how = how(&job.rule, job.texture_json, settings, kind);
+    if kind == Kind::Mesh {
+        // Which buffers the model may shorten changes what it writes.
+        how.push_str(&format!(" {:?}", owned_buffers(job.name, job.bytes, sole_buffers)));
+    }
+    let key = key(kind, &how, job.bytes, &deps);
     if let Some(hit) = cache.and_then(|c| c.get(&key)) {
         return Ok((Outcome::Cached, Some(hit)));
     }
-    match cook_one(job, all, model_plans, settings).map_err(|e| {
+    match cook_one(job, all, model_plans, sole_buffers, settings).map_err(|e| {
         if e.starts_with(job.name) {
             e
         } else {
