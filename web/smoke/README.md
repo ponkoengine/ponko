@@ -123,6 +123,39 @@ The callback is subscribed late, after the failure, so the run also checks
 that a late subscriber gets it at once. `runtime-failures.test.mjs` checks
 the template's handling and the runner's checks without a browser.
 
+## WebGPU first
+
+`webgpu-fallback.mjs` checks that a web build draws with WebGPU where the
+browser has a working one, and that each way WebGPU can fail before the
+game draws ends on WebGL2, drawing, with one console line saying why
+(the guide's [WebGPU first, WebGL2 as the
+fallback](../../book/src/web.md#webgpu-first-webgl2-as-the-fallback)). Each
+failure is faked in the page before the game's wasm starts:
+
+| Case | Faked | Must end |
+|---|---|---|
+| `webgpu` | nothing | on WebGPU: a WebGPU canvas, the engine's backend `webgpu`, `ponko: drawing with WebGPU` and no fallback line |
+| `no-webgpu` | no `navigator.gpu` | on WebGL2, the line saying `navigator.gpu is missing` |
+| `no-adapter` | `requestAdapter()` resolves to `null` (a stand-in `navigator.gpu` where the browser has none) | on WebGL2, the line saying `requestAdapter() found no adapter` |
+| `device-fails` | `GPUAdapter.requestDevice()` rejects | on WebGL2, the line with the browser's (here the runner's) words |
+| `device-lost` | `requestDevice()` returns a device already destroyed | on WebGL2, the line saying the device was lost as it opened |
+
+"On WebGL2" means: the game ticks, the canvas has a WebGL2 context and is not
+blank, the engine reports backend `gl`, and there is no startup error, page
+error or panic. `webgpu`, `device-fails` and `device-lost` need a real
+WebGPU adapter; without one they are unsupported, not failed. `--repeat <n>`
+(default 3) loads the `webgpu` and `no-webgpu` pages n times each and
+reports the median time to the first frame from navigation start (the
+fixture's first published state).
+
+```sh
+web/build.sh --features 3d web_smoke_3d
+node web/smoke/webgpu-fallback.mjs --dir target/web/web_smoke_3d --chromium-mode new
+node web/smoke/webgpu-fallback.mjs --case device-lost --chromium-mode new   # one case
+```
+
+`webgpu-fallback.test.mjs` checks its decisions without a browser.
+
 ## Multiplayer
 
 `multiplayer.mjs` checks [browser multiplayer](../../book/src/networking.md#in-the-browser):
@@ -484,6 +517,7 @@ table (and appends it to a GitHub job summary).
 | Release workflow (`gallery` job, ubuntu-latest, no GPU) | Chromium headless shell | Every gallery page must pass (software GL) | Not tried; the demos that need WebGPU must show their message |
 | Apple Silicon Mac, the gallery (`gallery.mjs`) | Chromium 156 | Every page passes in the headless shell; the 2 demos that need WebGPU (compute passes) show their message | Every page passes in new headless mode on the Metal adapter |
 | Apple Silicon Mac, Chromium new headless mode | Chromium 156 | Passes (ANGLE on Metal) | **Passes** on the Metal adapter: the engine reports `webgpu`, the canvas draws |
+| Apple Silicon Mac, `webgpu-fallback.mjs` (3D fixture) | Chromium 156 new headless mode | Each of the four faked failures ends on WebGL2 and draws the scene, with its one console line | Passes on the Metal adapter: the same scene, `ponko: drawing with WebGPU` |
 | Apple Silicon Mac, Chromium headless shell | same | Passes (ANGLE on SwiftShader) | Unsupported: a SwiftShader fallback adapter exists, but a WebGPU canvas can't be shown |
 | Apple Silicon Mac, `multiplayer.mjs` | Chromium 156 headless shell | Passes: two tabs, a native host and a native UDP client agree on the world at tick 300 | Not tried (WebGPU is hidden) |
 | Apple Silicon Mac, WebKit (Playwright build) | WebKit 27 | Passes | Passes on its own adapter |
