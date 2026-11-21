@@ -994,22 +994,32 @@ static void presence_filters_allocate_nothing() {
     auto parallel_filtered = [&](ponko::ctx& ctx) { ctx.world().each_par<with<Hero>>([](const Label&) {}); };
     auto parallel_plain = [&](ponko::ctx& ctx) { ctx.world().each_par([](const Label&) {}); };
     auto every = [&](ponko::ctx& ctx) { every_rows = ctx.world().count<Label>(); };
-    auto run = ponko::game("filter allocations", 1, 1)
-        .sim_system(each_filtered, "each_filtered")
-        .sim_system(query_filtered, "query_filtered")
-        .sim_system(count_filtered, "count_filtered")
-        .sim_system(every, "every")
-        .sim_system(leaky, "leaky")
-        .sim_system(parallel_filtered, "parallel_filtered")
-        .sim_system(parallel_plain, "parallel_plain")
-        .profile_headless(5, 40, setup);
+    auto profile = [&] {
+        return ponko::game("filter allocations", 1, 1)
+            .sim_system(each_filtered, "each_filtered")
+            .sim_system(query_filtered, "query_filtered")
+            .sim_system(count_filtered, "count_filtered")
+            .sim_system(every, "every")
+            .sim_system(leaky, "leaky")
+            .sim_system(parallel_filtered, "parallel_filtered")
+            .sim_system(parallel_plain, "parallel_plain")
+            .profile_headless(5, 40, setup);
+    };
+    // A system's count is the whole process's while it runs (a parallel system's workers
+    // allocate on their own threads), so on a busy machine another thread's allocation can land
+    // in a sequential system's run now and then (seen once in about 150 runs under a load
+    // average of 100). A filter that allocates is never at zero, so one clean run of three
+    // is asked for, not three.
+    auto run = profile();
+    auto clean = [](const std::string& json) {
+        return system_allocations(json, "each_filtered") == 0.0 && system_allocations(json, "query_filtered") == 0.0 &&
+               system_allocations(json, "count_filtered") == 0.0 && system_allocations(json, "every") == 0.0;
+    };
+    for (int attempt = 1; attempt < 3 && !clean(run.report.json()); ++attempt) run = profile();
     CHECK(each_rows == 32 + 40 && query_rows == 32 && count_rows == 24 && every_rows == 64);
     const std::string json = run.report.json();
     CHECK(system_allocations(json, "leaky") >= 1.0);   // the report does see allocations
-    CHECK(system_allocations(json, "each_filtered") == 0.0);
-    CHECK(system_allocations(json, "query_filtered") == 0.0);
-    CHECK(system_allocations(json, "count_filtered") == 0.0);
-    CHECK(system_allocations(json, "every") == 0.0);
+    CHECK(clean(json));
     // On all cores the thread pool may allocate now and then; the filter must
     // not add an allocation to every call (one call per frame here).
     const double plain = system_allocations(json, "parallel_plain");

@@ -17,7 +17,10 @@
   what they claim without a timing assumption: the GPU memory total is
   compared with the adapter's figure once the driver has given back what
   was dropped, and automatic quality's fresh sample every frame allows a
-  lone frame whose timestamps the GPU left unusable.
+  lone frame whose timestamps the GPU left unusable. The C++ test of
+  allocation-free query filters asks for one clean profile run of three
+  (a system's count is the whole process's, so another thread's
+  allocation could land in it), and its net-bytes check likewise retries.
 
 ### Added
 - Tests: the frame uniform's fields, in order and at their offsets, are the
