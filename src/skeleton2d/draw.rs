@@ -374,6 +374,7 @@ pub(crate) fn draw(out: &mut impl Sink, scratch: &mut Scratch, t: &Transform2D, 
                         out.mesh(mesh.texture.id, style, z, verts);
                     }
                 }
+                Attachment::Path(_) => {}
                 Attachment::Clipping(mask) => {
                     if !clipper.active {
                         let deform = s.deform(slot, a);

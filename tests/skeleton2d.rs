@@ -657,7 +657,7 @@ fn bad_skeleton_files_are_errors_that_say_what_is_wrong() {
             "no clip named",
             Box::new(|v| v["graph"]["states"][1]["clip"] = "fly".into()),
         ),
-        ("unknown field", Box::new(|v| v["bones"][0]["shear"] = 1.into())),
+        ("unknown field", Box::new(|v| v["bones"][0]["skew"] = 1.into())),
         (
             "child of its first",
             Box::new(|v| v["ik"][0]["bones"] = serde_json::json!(["shin", "thigh"])),

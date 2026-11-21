@@ -2117,6 +2117,24 @@
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. skin < self.skins.len(),             \"ponko: skin {skin} isn't in the skeleton; add the skin first\"         );         assert!(",
     "site": "src/skeleton2d/data.rs:624"
   },
+  "src/skeleton2d/data.rs:0e77e70d6bb54b1e": {
+    "classification": "forwarded-error",
+    "construction": "panic!(\"ponko: {e}\")",
+    "reason": "Re-raises the SkeletonError from check_physics, whose messages name the constraint and the fix; documented under add_physics_constraint's Panics.",
+    "site": "src/skeleton2d/data.rs:1001"
+  },
+  "src/skeleton2d/data.rs:0eb4f6415297add1": {
+    "classification": "forwarded-error",
+    "construction": "panic!(\"ponko: {e}\")",
+    "reason": "Re-raises the SkeletonError from check_clip (clip, deform and constraint tracks), whose messages name the track and what is wrong; documented under add_clip's Panics.",
+    "site": "src/skeleton2d/data.rs:930"
+  },
+  "src/skeleton2d/data.rs:13c752ea205811e1": {
+    "classification": "caller-contract",
+    "construction": "assert!( mask.end.is_none_or(|e| e < self.slots.len()), \"ponko: clipping mask \\\"{name}\\\" ends at a slot that isn't in the skeleton; add that slot first or end at None\" )",
+    "reason": "The message names the mask, the missing end slot and the fix (add the slot first or end at None); documented under add_attachment's Panics.",
+    "site": "src/skeleton2d/data.rs:874"
+  },
   "src/skeleton2d/data.rs:2a565f6943ddebd2": {
     "classification": "caller-contract",
     "construction": "assert!( skin < self.skins.len(), \"ponko: skin {skin} isn't in the skeleton; add the skin first\" )",
@@ -2129,11 +2147,11 @@
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. /// # Panics     /// If the name is taken.     pub fn add_skin(&mut self, name: &str) -> usize {         assert!(",
     "site": "src/skeleton2d/data.rs:597"
   },
-  "src/skeleton2d/data.rs:57fb92cde321e33c": {
-    "classification": "caller-contract",
-    "construction": "assert!( mask.end.is_none_or(|e| e < self.slots.len()), \"ponko: clipping mask \\\"{name}\\\" ends at a slot that isn't in the skeleton; add that slot first or end at None\" )",
-    "reason": "The message names the mask, the missing end slot and the fix.",
-    "site": "src/skeleton2d/data.rs:859"
+  "src/skeleton2d/data.rs:440cb3558aeb0d32": {
+    "classification": "forwarded-error",
+    "construction": "panic!(\"ponko: path \\\"{name}\\\": {e}\")",
+    "reason": "Re-raises PathShape::check's message (whole points of three vertices, one length per curve, numbers), naming the path; documented under add_attachment's Panics.",
+    "site": "src/skeleton2d/data.rs:871"
   },
   "src/skeleton2d/data.rs:5914a178814141c9": {
     "classification": "caller-contract",
@@ -2146,6 +2164,12 @@
     "construction": "assert!( triangles.len().is_multiple_of(3) && triangles.iter().all(|&i| usize::from(i) < vertices.len()), \"ponko: a skinned mesh's triangles are three indices each, into its vertices\" )",
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. /// that isn't there.     #[must_use]     pub fn new(texture: Texture, vertices: Vec<MeshVertex>, triangles: Vec<u16>) -> Self {         assert!(",
     "site": "src/skeleton2d/data.rs:305"
+  },
+  "src/skeleton2d/data.rs:5caea16f6bb1bd5d": {
+    "classification": "forwarded-error",
+    "construction": "panic!(\"ponko: {e}\")",
+    "reason": "Re-raises the SkeletonError from check_path, whose messages name the constraint and the fix; documented under add_path_constraint's Panics.",
+    "site": "src/skeleton2d/data.rs:982"
   },
   "src/skeleton2d/data.rs:5d0a0d94f043738c": {
     "classification": "caller-contract",
@@ -2188,12 +2212,6 @@
     "construction": "panic!(\"ponko: {e}\")",
     "reason": "Re-raises the SkeletonError from check_transform, whose messages name the constraint and what is wrong; documented under Panics.",
     "site": "src/skeleton2d/data.rs:951"
-  },
-  "src/skeleton2d/data.rs:f3b97e10b8b62b13": {
-    "classification": "forwarded-error",
-    "construction": "panic!(\"ponko: {e}\")",
-    "reason": "Re-raises the SkeletonError from Clip::check / check_deform, whose messages name the clip, track and fix; add_clip documents the panic.",
-    "site": "src/skeleton2d/data.rs:918"
   },
   "src/skeleton2d/data.rs:fba4ee5c72d3c60d": {
     "classification": "caller-contract",
@@ -2242,6 +2260,12 @@
     "construction": "panic!(\"ponko: invalid state change: {e}\")",
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. /// [`try_crossfade_state`](Self::try_crossfade_state) says why instead.     pub fn crossfade_state(&mut self, state: StateId, duration: f32, offset: f32) {         self.try_crossfade_state(state, duration, offset)             .unwrap_or_else(|e| panic!(\"ponko: invalid state change: {e}\"));",
     "site": "src/skeleton2d/skeleton.rs:289"
+  },
+  "src/skeleton2d/skeleton.rs:7062ce87b17a6572": {
+    "classification": "invariant",
+    "construction": ".expect(\"a graph\")",
+    "reason": "Playing::State exists only while the skeleton has a graph (set by play_state/crossfade_state, which require one), as at the other graph lookups.",
+    "site": "src/skeleton2d/skeleton.rs:1057"
   },
   "src/skeleton2d/skeleton.rs:8c79feb4e3015212": {
     "classification": "invariant",
