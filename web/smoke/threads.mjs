@@ -5,7 +5,8 @@
 //
 //   node web/smoke/threads.mjs --build                  # the checks
 //   node web/smoke/threads.mjs --case worker-panic      # a worker's panic stops the game
-//   node web/smoke/threads.mjs --case gamepads          # fed browser gamepads reach the game
+//   node web/smoke/threads.mjs --case gamepads          # fed browser gamepads reach the game, and rumble the pad
+//   node web/smoke/threads.mjs --build --case gamepads-plain   # the same on the ordinary build (gilrs)
 //   node web/smoke/threads.mjs --case warning           # a warning fails the threaded build
 //   node web/smoke/threads.mjs --bench --repeat 3       # 1 vs N threads
 //
@@ -19,7 +20,12 @@
 // building an example whose only code is an unused function that only a
 // threaded build compiles (no browser). `--case gamepads` replaces the
 // isolated page's `navigator.getGamepads()` with fed pads and checks that
-// the engine sees them connect, press, move and leave.
+// the engine sees them connect, press, move and leave; the pads have a fake
+// `vibrationActuator` that records its calls, and the game's rumble must
+// reach it (played again before the browser's 5 s cap, stopped at its end).
+// Real rumble can't be felt in a headless browser: the recorded calls are
+// the proof. `--case gamepads-plain` runs it on the ordinary web build of
+// the same fixture, whose pads come from gilrs, not the threaded backend.
 // The bench runs the fixture's workloads on the isolated page with one
 // thread (`?threads=1`) and with the engine's default, and prints the
 // medians, their spread, and the speed-up with whether it is beyond the
@@ -38,15 +44,19 @@ import {
   FALLBACK_WARNING,
   GAMEPAD_STEPS,
   ISOLATION_HEADERS,
+  RUMBLE_PRESS,
+  RUMBLE_SECONDS,
   STOP_MESSAGE,
   USAGE,
   checkFallback,
   checkIsolated,
   checkReady,
   checkGamepadStep,
+  checkRumbleCalls,
   checkSameResult,
   checkWarningBuild,
   denyWarnings,
+  fakeGamepad,
   installFakeGamepads,
   WARNING_FIXTURE,
   parseArgs,
@@ -147,11 +157,16 @@ async function workerPanic(browser, servers, args, report) {
   return problems;
 }
 
-/** Fed browser gamepads, on the isolated page: each step must reach the game. */
-async function gamepads(browser, servers, args, report) {
+/**
+ * Fed browser gamepads: each step must reach the game, and its rumble the
+ * fake actuator. On the isolated page of the threaded build, or (`plain`)
+ * the ordinary build.
+ */
+async function gamepads(browser, servers, args, report, plain = false) {
   const context = await browser.newContext();
   await context.addInitScript(installFakeGamepads);
-  const { page, lines } = await open(context, `http://127.0.0.1:${servers.isolated.address().port}/`);
+  const server = plain ? servers.plain : servers.isolated;
+  const { page, lines } = await open(context, `http://127.0.0.1:${server.address().port}/`);
   await until(page, lines, (s) => s != null && s.ticks > 0, args.timeout, "the first frame");
   const problems = [];
   const steps = [];
@@ -170,9 +185,35 @@ async function gamepads(browser, servers, args, report) {
     console.log(`gamepads, ${step.name}: ${left.length ? left.join("; ") : "seen"}`);
     problems.push(...left.map((p) => `${step.name}: ${p}`));
   }
-  report.runs = { gamepads: { steps, threads: (await state(page))?.threads, console: lines } };
-  const threads = report.runs.gamepads.threads;
-  if (!(threads >= 2)) problems.push(`the page ran on ${threads} worker threads: the case is about a build with threads, served isolated`);
+  // Rumble: West makes the game rumble the pad for a few seconds.
+  const feed = (pads) => withDeadline(page.evaluate((p) => window.__ponkoFeedGamepads(p), pads), CALL_TIMEOUT_MS, "feeding gamepads");
+  await feed([fakeGamepad()]);
+  await sleep(500);
+  await feed([fakeGamepad({ buttons: RUMBLE_PRESS })]);
+  const calls = () => withDeadline(page.evaluate(() => window.__ponkoRumbleCalls), CALL_TIMEOUT_MS, "reading the rumble calls");
+  const rumbleEnd = Date.now() + (RUMBLE_SECONDS + 8) * 1000;
+  let seen = [];
+  while (Date.now() < rumbleEnd) {
+    seen = await calls();
+    if (seen.some((c) => c.kind === "reset")) break;
+    await sleep(100);
+  }
+  const rumbleProblems = checkRumbleCalls(seen);
+  const plays = seen.filter((c) => c.kind === "play");
+  console.log(
+    `gamepads, rumble: ${plays.length} effects${plays.length ? ` of ${plays[0].duration} ms` : ""}, ` +
+      `${seen.filter((c) => c.kind === "reset").length} stop(s)${rumbleProblems.length ? `: ${rumbleProblems.join("; ")}` : ", as the game asked"}`,
+  );
+  problems.push(...rumbleProblems.map((p) => `rumble: ${p}`));
+  await feed([]);
+  const final = await state(page);
+  report.runs = { gamepads: { steps, rumble_calls: seen, threads: final?.threads, console: lines } };
+  const threads = final?.threads;
+  if (plain) {
+    if (threads !== 0) problems.push(`the ordinary build ran ${threads} worker threads, not 0`);
+  } else if (!(threads >= 2)) {
+    problems.push(`the page ran on ${threads} worker threads: the case is about a build with threads, served isolated`);
+  }
   await context.close();
   return problems;
 }
@@ -237,13 +278,15 @@ async function main() {
   }
   // With -D warnings: a warning in the threaded build fails the check.
   const buildEnv = denyWarnings(process.env);
-  if (args.build && spawnSync("bash", ["web/build.sh", "--threads", "web_threads"], { stdio: "inherit", env: buildEnv }).status !== 0) {
+  // The ordinary build (no --threads) of the same fixture, for gamepads-plain.
+  const buildArgs = args.case === "gamepads-plain" ? ["web/build.sh", "web_threads", args.dir] : ["web/build.sh", "--threads", "web_threads"];
+  if (args.build && spawnSync("bash", buildArgs, { stdio: "inherit", env: buildEnv }).status !== 0) {
     process.exit(EXIT.usage);
   }
   const root = resolve(args.dir);
   // A bench may time a build without threads (`--threads 1`), for what the
   // fallback costs; the checks need the threaded build.
-  const needed = args.mode === "bench" ? ["index.html"] : ["index.html", "ponko-worker.js"];
+  const needed = args.mode === "bench" || args.case === "gamepads-plain" ? ["index.html"] : ["index.html", "ponko-worker.js"];
   for (const file of needed) {
     if (!(await stat(join(root, file)).catch(() => null))) {
       console.error(`${join(root, file)} is missing: pass --build, or build it with web/build.sh --threads web_threads`);
@@ -282,7 +325,15 @@ async function main() {
   }
   try {
     const run =
-      args.case === "worker-panic" ? workerPanic : args.case === "gamepads" ? gamepads : args.mode === "bench" ? bench : check;
+      args.case === "worker-panic"
+        ? workerPanic
+        : args.case === "gamepads"
+          ? gamepads
+          : args.case === "gamepads-plain"
+            ? (...a) => gamepads(...a, true)
+            : args.mode === "bench"
+              ? bench
+              : check;
     report.problems.push(...(await run(browser, servers, args, report)));
   } catch (e) {
     report.problems.push(e.message);

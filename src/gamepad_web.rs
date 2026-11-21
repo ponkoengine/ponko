@@ -558,7 +558,10 @@ mod tests {
         run(&fed, 1, move |ctx, _| {
             assert!(ctx.input.gamepad_info(slot(0)).unwrap().capabilities.rumble);
             assert!(!ctx.input.gamepad_info(slot(1)).unwrap().capabilities.rumble);
-            assert!(!ctx.input.gamepad_info(slot(0)).unwrap().capabilities.trigger_rumble, "body motors only");
+            assert!(
+                !ctx.input.gamepad_info(slot(0)).unwrap().capabilities.trigger_rumble,
+                "body motors only"
+            );
             *count.lock().unwrap() += 1;
         });
         assert_eq!(*seen.lock().unwrap(), 1, "the checks ran");
@@ -571,17 +574,28 @@ mod tests {
             pads.push(rumbling_pad(0));
             pads.push(rumbling_pad(3));
         });
-        run(&fed, 6, move |ctx, frame| {
-            match frame {
-                0 => ctx.input.rumble(slot(1), Rumble::new(0.75, 0.25).seconds(f32::INFINITY)),
-                3 => ctx.input.stop_rumble(slot(1)),
-                _ => {}
-            }
+        run(&fed, 6, move |ctx, frame| match frame {
+            0 => ctx
+                .input
+                .rumble(slot(1), Rumble::new(0.75, 0.25).seconds(f32::INFINITY)),
+            3 => ctx.input.stop_rumble(slot(1)),
+            _ => {}
         });
         let effects = fed.effects.lock().unwrap().clone();
-        assert_eq!(effects.first(), Some(&(3, 0.75, 0.25, 2000)), "the pad's browser index, not its slot: {effects:?}");
-        assert!(effects.iter().all(|e| e.0 == 3), "the other pad stays quiet: {effects:?}");
-        assert_eq!(effects.last(), Some(&(3, 0.0, 0.0, 0)), "reset when the rumble ended: {effects:?}");
+        assert_eq!(
+            effects.first(),
+            Some(&(3, 0.75, 0.25, 2000)),
+            "the pad's browser index, not its slot: {effects:?}"
+        );
+        assert!(
+            effects.iter().all(|e| e.0 == 3),
+            "the other pad stays quiet: {effects:?}"
+        );
+        assert_eq!(
+            effects.last(),
+            Some(&(3, 0.0, 0.0, 0)),
+            "reset when the rumble ended: {effects:?}"
+        );
     }
 
     #[test]
@@ -597,7 +611,10 @@ mod tests {
             *clock.lock().unwrap() = Duration::from_millis(frame * 250);
         });
         let plays = fed.effects.lock().unwrap().iter().filter(|e| e.3 > 0).count();
-        assert!((9..=11).contains(&plays), "once, then about once a second for 10 s: {plays}");
+        assert!(
+            (9..=11).contains(&plays),
+            "once, then about once a second for 10 s: {plays}"
+        );
     }
 
     #[test]
@@ -614,7 +631,10 @@ mod tests {
             _ => {}
         });
         let effects = fed.effects.lock().unwrap().clone();
-        assert!(effects.iter().all(|e| e.3 > 0), "no call for a pad that is gone: {effects:?}");
+        assert!(
+            effects.iter().all(|e| e.3 > 0),
+            "no call for a pad that is gone: {effects:?}"
+        );
         assert_eq!(effects.len(), 1, "not replayed after it left: {effects:?}");
     }
 }

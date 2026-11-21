@@ -10,9 +10,11 @@ import {
   checkIsolated,
   checkReady,
   checkGamepadStep,
+  checkRumbleCalls,
   checkSameResult,
   checkWarningBuild,
   denyWarnings,
+  EFFECT_CAP_MS,
   fakeGamepad,
   FAKE_PAD_ID,
   GAMEPAD_STEPS,
@@ -20,6 +22,7 @@ import {
   WARNING_ITEM,
   median,
   parseArgs,
+  PLAIN_DIR,
   summarize,
   summaryTable,
 } from "./threads-lib.mjs";
@@ -77,6 +80,9 @@ test("arguments default to the check of the built fixture and refuse what they d
   assert.throws(() => parseArgs(["--case", "stall"]), UsageError);
   assert.equal(parseArgs(["--case", "gamepads"]).case, "gamepads");
   assert.equal(parseArgs(["--case", "warning"]).case, "warning");
+  assert.equal(parseArgs(["--case", "gamepads-plain"]).dir, PLAIN_DIR, "the ordinary build is its own folder");
+  assert.equal(parseArgs(["--case", "gamepads-plain", "--dir", "x"]).dir, "x");
+  assert.equal(parseArgs(["--case", "gamepads"]).dir, "target/web/web_threads");
   assert.throws(() => parseArgs(["--bench", "--case", "worker-panic"]), UsageError);
 });
 
@@ -199,6 +205,7 @@ test("each gamepad step passes only on what the engine must report", () => {
     family: "Xbox",
     vendor: 0x045e,
     product: 0x0b13,
+    rumble: true,
     down,
     axes: { lx: 0, ly: 0, rx: 0, ry: 0, lt: 0, rt: 0, ...axes },
     ...extra,
@@ -209,6 +216,7 @@ test("each gamepad step passes only on what the engine must report", () => {
   assert.deepEqual(checkGamepadStep(connect, { pads: [pad([], {})] }), []);
   assert.match(checkGamepadStep(connect, { pads: [] })[0], /one pad/);
   assert.match(checkGamepadStep(connect, { pads: [{ ...pad([], {}), family: "Generic" }] })[0], /family/);
+  assert.match(checkGamepadStep(connect, { pads: [{ ...pad([], {}), rumble: false }] })[0], /rumble capability/);
   const pressed = { pads: [pad(["DPadRight", "South"], { lx: 0.5, ly: -1, ry: 0.75, lt: 0.25 })], pad_presses: 1 };
   assert.deepEqual(checkGamepadStep(press, pressed), []);
   // Y up must stay negative, and a quarter-pulled trigger isn't a press.
@@ -217,4 +225,66 @@ test("each gamepad step passes only on what the engine must report", () => {
   assert.match(checkGamepadStep(press, { ...pressed, pad_presses: 0 })[0], /pressed 0 times/);
   assert.deepEqual(checkGamepadStep(release, { pads: [pad([], {})], pad_presses: 1 }), []);
   assert.deepEqual(checkGamepadStep(unplug, { pads: [] }), []);
+});
+
+/** A scope as a page has it: `performance.now()` from a clock the test moves. */
+function fakeScope() {
+  const clock = { now: 0 };
+  return { scope: { navigator: {}, performance: { now: () => clock.now } }, clock };
+}
+
+test("a pad fed with rumble has a fake vibrationActuator that records its calls, and one without has none", () => {
+  const { scope, clock } = fakeScope();
+  installFakeGamepads(scope);
+  scope.__ponkoFeedGamepads([fakeGamepad({ index: 0 }), fakeGamepad({ index: 1, rumble: false })]);
+  const [first, second] = scope.navigator.getGamepads();
+  assert.equal(second.vibrationActuator, undefined, "Firefox's pads have none");
+  assert.equal(first.rumble, undefined, "the flag isn't a property of the browser's Gamepad");
+  const actuator = first.vibrationActuator;
+  assert.equal(actuator, scope.navigator.getGamepads()[0].vibrationActuator, "the same object every call");
+  clock.now = 1000;
+  actuator.playEffect("dual-rumble", { startDelay: 0, duration: 2000, weakMagnitude: 0.3, strongMagnitude: 0.8 });
+  clock.now = 3000;
+  actuator.reset();
+  assert.deepEqual(scope.__ponkoRumbleCalls, [
+    { kind: "play", index: 0, type: "dual-rumble", duration: 2000, strong: 0.8, weak: 0.3, delay: 0, at: 1000 },
+    { kind: "reset", index: 0, at: 3000 },
+  ]);
+});
+
+test("the fake actuator refuses what a browser refuses: an effect over its cap", async () => {
+  const { scope } = fakeScope();
+  installFakeGamepads(scope);
+  scope.__ponkoFeedGamepads([fakeGamepad()]);
+  const { vibrationActuator } = scope.navigator.getGamepads()[0];
+  const over = { startDelay: 0, duration: EFFECT_CAP_MS + 1, weakMagnitude: 1, strongMagnitude: 1 };
+  await assert.rejects(vibrationActuator.playEffect("dual-rumble", over), TypeError);
+  assert.equal(scope.__ponkoRumbleCalls[0].kind, "rejected");
+  assert.equal(await vibrationActuator.playEffect("dual-rumble", { ...over, duration: EFFECT_CAP_MS }), "complete");
+});
+
+const play = (at, extra = {}) => ({
+  kind: "play", index: 0, type: "dual-rumble", duration: 2000, strong: 0.8, weak: 0.3, delay: 0, at, ...extra,
+});
+const stop = (at) => ({ kind: "reset", index: 0, at });
+
+test("rumble passes when it is played again before the cap, as asked, and stopped at its end", () => {
+  assert.deepEqual(checkRumbleCalls([play(0), play(1000), play(2000), stop(2500)]), []);
+});
+
+test("rumble fails when it is not played again before the browser's cap ends it", () => {
+  // One effect, then the stop: the game gave up, or never re-sent.
+  assert.match(checkRumbleCalls([play(0), stop(2500)])[0], /not again/);
+  // A gap as long as the effect: the pad went quiet in between.
+  assert.ok(checkRumbleCalls([play(0), play(2100), stop(2500)]).some((p) => /went quiet/.test(p)));
+  // An effect over the cap, which a browser refuses.
+  const refused = { ...play(0, { duration: 6000 }), kind: "rejected" };
+  assert.ok(checkRumbleCalls([refused, play(1000), stop(2500)]).some((p) => /refused/.test(p)));
+  assert.ok(checkRumbleCalls([play(0, { duration: 6000 }), play(1000), stop(2500)]).some((p) => /over the 5000 ms cap/.test(p)));
+});
+
+test("rumble fails on wrong levels, no stop, or a stop at the wrong time", () => {
+  assert.ok(checkRumbleCalls([play(0, { strong: 1 }), play(1000), stop(2500)]).some((p) => /levels/.test(p)));
+  assert.ok(checkRumbleCalls([play(0), play(1000), play(2000)]).some((p) => /not the stop/.test(p)));
+  assert.ok(checkRumbleCalls([play(0), play(1000), stop(1200)]).some((p) => /it stopped after/.test(p)));
 });

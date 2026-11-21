@@ -161,7 +161,9 @@ impl Browser {
     pub(crate) fn pads() -> Vec<BrowserPad> {
         let mut out = Vec::new();
         Self::each_pad(|slot, pad| {
-            let index = Self::get(pad, "index").and_then(|i| i.as_f64()).map_or(slot, |i| i as u32);
+            let index = Self::get(pad, "index")
+                .and_then(|i| i.as_f64())
+                .map_or(slot, |i| i as u32);
             let id = Self::get(pad, "id").and_then(|id| id.as_string()).unwrap_or_default();
             out.push(BrowserPad {
                 index,
@@ -178,7 +180,8 @@ impl Browser {
         let Some(navigator) = Self::get(&js_sys::global(), "navigator") else {
             return;
         };
-        let Some(call) = Self::get(&navigator, "getGamepads").and_then(|f| f.dyn_into::<js_sys::Function>().ok()) else {
+        let Some(call) = Self::get(&navigator, "getGamepads").and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+        else {
             return;
         };
         let Ok(list) = call.call0(&navigator) else { return };
@@ -198,7 +201,9 @@ impl Browser {
     fn actuator_at(index: u32) -> Option<wasm_bindgen::JsValue> {
         let mut found = None;
         Self::each_pad(|slot, pad| {
-            let at = Self::get(pad, "index").and_then(|i| i.as_f64()).map_or(slot, |i| i as u32);
+            let at = Self::get(pad, "index")
+                .and_then(|i| i.as_f64())
+                .map_or(slot, |i| i as u32);
             if at == index && found.is_none() {
                 found = Self::actuator(pad);
             }
@@ -243,7 +248,11 @@ impl Actuators for Browser {
         ] {
             let _ = js_sys::Reflect::set(&params, &JsValue::from_str(key), &JsValue::from_f64(value));
         }
-        Self::call(&actuator, "playEffect", &[JsValue::from_str("dual-rumble"), params.into()]);
+        Self::call(
+            &actuator,
+            "playEffect",
+            &[JsValue::from_str("dual-rumble"), params.into()],
+        );
     }
 
     fn stop(&mut self, index: u32) {
@@ -262,7 +271,12 @@ mod tests {
 
     #[derive(Debug, Clone, PartialEq)]
     enum Call {
-        Play { index: u32, strong: f32, weak: f32, ms: u32 },
+        Play {
+            index: u32,
+            strong: f32,
+            weak: f32,
+            ms: u32,
+        },
         Stop(u32),
     }
 
@@ -293,7 +307,12 @@ mod tests {
             self.start + self.elapsed.get()
         }
         fn play(&mut self, index: u32, strong: f32, weak: f32, ms: u32) {
-            self.calls.push(Call::Play { index, strong, weak, ms });
+            self.calls.push(Call::Play {
+                index,
+                strong,
+                weak,
+                ms,
+            });
         }
         fn stop(&mut self, index: u32) {
             self.calls.push(Call::Stop(index));
@@ -322,7 +341,10 @@ mod tests {
     #[test]
     fn an_effect_is_shorter_than_the_browsers_cap_and_is_replayed_before_it_ends() {
         assert!(EFFECT_MS < 5000, "browsers cap an effect at 5 s");
-        assert!(RESEND < Duration::from_millis(u64::from(EFFECT_MS)), "replayed before it ends");
+        assert!(
+            RESEND < Duration::from_millis(u64::from(EFFECT_MS)),
+            "replayed before it ends"
+        );
     }
 
     #[test]
@@ -353,7 +375,10 @@ mod tests {
         assert!(sent.len() >= 11, "sent again about every second: {sent:?}");
         let mut last = Duration::ZERO;
         for at in sent {
-            assert!(at - last < Duration::from_secs(5), "a gap reached the cap: {last:?} to {at:?}");
+            assert!(
+                at - last < Duration::from_secs(5),
+                "a gap reached the cap: {last:?} to {at:?}"
+            );
             assert!(at - last >= RESEND, "not sooner than needed: {last:?} to {at:?}");
             last = at;
         }
@@ -381,7 +406,10 @@ mod tests {
         rumble.set(&mut fake, PAD, 2, MotorLevels::OFF);
         clock.set(Duration::from_secs(10));
         rumble.refresh(&mut fake);
-        assert!(fake.take().is_empty(), "no stop for a pad that wasn't playing, no replay after off");
+        assert!(
+            fake.take().is_empty(),
+            "no stop for a pad that wasn't playing, no replay after off"
+        );
     }
 
     #[test]
