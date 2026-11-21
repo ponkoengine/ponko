@@ -152,14 +152,14 @@ ponko: this build can use threads, but the page isn't cross-origin isolated (...
 - **Everything else** stays on the page's thread: your systems, drawing,
   sound, input and the engine's other internal parallel loops.
 - **Controllers** work as in the ordinary web build (`ctx.input.gamepads()`
-  and the rest of [Input](input.md)), read differently: the browser's
+  and the rest of [Input](input.md)), read the same way: the browser's
   gamepad objects can't be sent between threads once the memory is shared,
   so the engine keeps none. Every frame it calls `navigator.getGamepads()`
   on the page's thread, copies the buttons and axes into plain numbers and
   compares them with the last frame's, which become the engine's events.
-  Pads are read in the browser's standard layout, as in the ordinary build.
-  Rumble goes to the pad's `vibrationActuator` where the browser has one,
-  in both builds, played again every second so the browser's 5-second cap
+  Pads are read in the browser's standard layout, with gilrs's dead zone.
+  Rumble goes to the pad's `vibrationActuator` where the browser has one
+  (trigger rumble where it lists `trigger-rumble`), in both builds, played again every second so the browser's 5-second cap
   never ends it (see [Controllers](controllers.md#what-each-platform-supports)).
   A game's own
   `GamepadBackend` replaces it as usual.

@@ -393,13 +393,13 @@ where
 
         // The built-in controllers, unless the game brought its own backend
         // (setup can still replace them with `set_gamepad_backend`).
-        #[cfg(all(feature = "gamepad", not(all(target_arch = "wasm32", target_feature = "atomics"))))]
+        #[cfg(all(feature = "gamepad", not(target_arch = "wasm32")))]
         if !self.ctx.has_gamepad_backend() {
             self.ctx.set_gamepad_backend(crate::gamepad::GilrsBackend::new());
         }
-        // With threads on the web, the browser's gamepads read on the page's
-        // thread, which keeps no browser object (see `gamepad_web`).
-        #[cfg(all(feature = "gamepad", target_arch = "wasm32", target_feature = "atomics"))]
+        // On the web, the browser's gamepads read on the page's thread,
+        // keeping no browser object (see `gamepad_web`).
+        #[cfg(all(feature = "gamepad", target_arch = "wasm32"))]
         if !self.ctx.has_gamepad_backend() {
             self.ctx
                 .set_gamepad_backend(crate::gamepad_web::WebGamepads::new(crate::gamepad_web::BrowserPads));

@@ -1,29 +1,34 @@
-//! The built-in controllers of a web build with threads: the browser's
-//! gamepads, read on the page's thread and passed to the engine as events.
+//! The built-in controllers of every web build: the browser's gamepads,
+//! read on the page's thread and passed to the engine as events.
 //!
-//! The ordinary web build reads them through gilrs, whose backend keeps the
-//! browser's `Gamepad` objects. Once the memory is shared those can't be
-//! sent between threads, and a [`GamepadBackend`] must be `Send`, so this
-//! one keeps none: every poll it calls `navigator.getGamepads()` on the
-//! page's thread (the game's thread there), copies what it needs into plain
-//! numbers ([`PadReading`]) and compares them with the last poll's to report
-//! connections, buttons and axes. The comparison is plain Rust and is tested
-//! natively with fed readings; `web/smoke/threads.mjs --case gamepads` feeds
-//! a page the browser's side of it.
+//! The ordinary web build used to read them through gilrs, whose backend
+//! keeps the browser's `Gamepad` objects; once the memory is shared (a
+//! build with threads) those can't be sent between threads, and a
+//! [`GamepadBackend`] must be `Send`. This one keeps none: every poll it
+//! calls `navigator.getGamepads()` on the page's thread (the game's thread),
+//! copies what it needs into plain numbers ([`PadReading`]) and compares them
+//! with the last poll's to report connections, buttons and axes. It replaced
+//! gilrs in the ordinary build too (the guide's web chapter has the measured
+//! reasons). The comparison is plain Rust and is tested natively with fed
+//! readings; `web/smoke/threads.mjs --case gamepads` (threads) and
+//! `--case gamepads-plain` (the ordinary build) feed a page the browser's
+//! side of it.
 //!
-//! The pads follow the browser's "standard" layout, as gilrs does on the
-//! web: buttons 0-15 are the face buttons, bumpers, triggers, Select,
-//! Start, the stick buttons and the d-pad, axes 0-3 the two sticks (y down,
-//! as the engine has them). Triggers report their value as an axis and,
-//! when the browser says they are pressed, as a button. A pad's key is its
+//! The pads follow the browser's "standard" layout, as gilrs's did: buttons
+//! 0-15 are the face buttons, bumpers, triggers, Select, Start, the stick
+//! buttons and the d-pad, axes 0-3 the two sticks (y down, as the engine has
+//! them). Triggers report their value as an axis and, when the browser says
+//! they are pressed, as a button. Sticks and triggers get gilrs's dead zone
+//! ([`DEAD_ZONE`]), so they read as on the desktop. A pad's key is its
 //! browser index. Rumble goes to the pad's `vibrationActuator` where the
-//! browser has one (see [`crate::web_rumble`]); there is no motion, as with
+//! browser has one, the trigger motors' with it where that plays
+//! `trigger-rumble` (see [`crate::web_rumble`]); there is no motion, as with
 //! gilrs on the web.
 
 use crate::input::{
     ControllerFamily, DeviceKey, GamepadAxis, GamepadBackend, GamepadButton, GamepadEvents, GamepadInfo, MotorLevels,
 };
-use crate::web_rumble::{Actuators, WebRumble};
+use crate::web_rumble::{Actuators, WebEffect, WebRumble};
 
 /// Buttons of the standard layout the engine reads (16 is the home button,
 /// which it has no name for).
@@ -62,6 +67,28 @@ const AXIS_NAMES: [GamepadAxis; AXES] = [
 /// The standard buttons whose value is also an axis: the triggers.
 const TRIGGERS: [(usize, GamepadAxis); 2] = [(6, GamepadAxis::LeftTrigger), (7, GamepadAxis::RightTrigger)];
 
+/// The dead zone of sticks and triggers, as a share of their travel:
+/// gilrs's default, so a web build reads them as a desktop build does.
+pub(crate) const DEAD_ZONE: f32 = 0.1;
+
+/// A stick's `(x, y)` with the dead zone taken out as gilrs does: nothing
+/// inside a circle of [`DEAD_ZONE`], and the rest rescaled along the
+/// stick's direction so the edge still reads 1.
+pub(crate) fn stick_dead_zone(x: f32, y: f32) -> (f32, f32) {
+    let magnitude = (x * x + y * y).sqrt().clamp(0.0, 1.0);
+    if magnitude <= DEAD_ZONE {
+        (0.0, 0.0)
+    } else {
+        let scale = (magnitude - DEAD_ZONE) / (1.0 - DEAD_ZONE) / magnitude;
+        (x * scale, y * scale)
+    }
+}
+
+/// A trigger's `0..=1` with the dead zone taken out, rescaled so full still reads 1.
+pub(crate) fn trigger_dead_zone(value: f32) -> f32 {
+    stick_dead_zone(value, 0.0).0
+}
+
 /// Pads the browser lists at most (Chromium: 4; the rest are ignored).
 const MAX_PADS: usize = 8;
 
@@ -83,6 +110,8 @@ pub(crate) struct PadReading {
     /// Whether the pad has a `vibrationActuator`. Read with `id`, so only
     /// meaningful when that is `Some`.
     pub(crate) rumble: bool,
+    /// Whether that actuator plays `trigger-rumble`. Read with `id`, too.
+    pub(crate) trigger_rumble: bool,
     pub(crate) buttons: [ButtonReading; BUTTONS],
     pub(crate) axes: [f32; AXES],
 }
@@ -99,8 +128,13 @@ pub(crate) trait ReadPads: Actuators + Send + 'static {
 #[derive(Debug, Clone)]
 struct Known {
     index: u32,
+    /// Whether its actuator plays the trigger motors.
+    trigger_rumble: bool,
     buttons: [ButtonReading; BUTTONS],
+    /// The browser's axes in the last poll.
     axes: [f32; AXES],
+    /// The axes last reported, dead zone taken out.
+    sent: [f32; AXES],
 }
 
 /// The [`GamepadBackend`] over the browser's gamepads (or fed readings).
@@ -177,11 +211,14 @@ impl<R: ReadPads> GamepadBackend for WebGamepads<R> {
                     }
                     let mut info = info_from_id(reading.id.as_deref().unwrap_or(""));
                     info.capabilities.rumble = reading.rumble;
+                    info.capabilities.trigger_rumble = reading.trigger_rumble;
                     events.connected(device, info);
                     self.known.push(Known {
                         index: reading.index,
+                        trigger_rumble: reading.trigger_rumble,
                         buttons: [ButtonReading::default(); BUTTONS],
                         axes: [0.0; AXES],
+                        sent: [0.0; AXES],
                     });
                     self.known.len() - 1
                 }
@@ -194,27 +231,38 @@ impl<R: ReadPads> GamepadBackend for WebGamepads<R> {
                 if now.value != before.value
                     && let Some(&(_, axis)) = TRIGGERS.iter().find(|(t, _)| *t == i)
                 {
-                    events.axis(device, axis, now.value.clamp(0.0, 1.0));
+                    events.axis(device, axis, trigger_dead_zone(now.value.clamp(0.0, 1.0)));
                 }
                 *before = *now;
             }
-            for (i, (&now, before)) in reading.axes.iter().zip(&mut last.axes).enumerate() {
-                if now != *before {
-                    events.axis(device, AXIS_NAMES[i], now.clamp(-1.0, 1.0));
-                    *before = now;
+            if reading.axes != last.axes {
+                // A stick's two axes share its dead zone: both are worked
+                // out again, and the ones that changed are reported.
+                for x in [0, 2] {
+                    let at = |i: usize| reading.axes[i].clamp(-1.0, 1.0);
+                    let (dx, dy) = stick_dead_zone(at(x), at(x + 1));
+                    for (i, value) in [(x, dx), (x + 1, dy)] {
+                        if value != last.sent[i] {
+                            events.axis(device, AXIS_NAMES[i], value);
+                            last.sent[i] = value;
+                        }
+                    }
                 }
+                last.axes = reading.axes;
             }
         }
         self.rumble.refresh(&mut self.reader);
     }
 
-    /// Plays the body motors on the pad's `vibrationActuator`, where it has
-    /// one, again before the browser ends each effect (`web_rumble`).
+    /// Plays the motors the pad's `vibrationActuator` has (the body motors,
+    /// and the triggers' where it plays `trigger-rumble`), again before the
+    /// browser ends each effect (`web_rumble`).
     fn set_rumble(&mut self, device: DeviceKey, levels: MotorLevels) {
         let Some(known) = self.known.iter().find(|k| u64::from(k.index) == device.0) else {
             return;
         };
-        self.rumble.set(&mut self.reader, device, known.index, levels);
+        self.rumble
+            .set(&mut self.reader, device, known.index, known.trigger_rumble, levels);
     }
 }
 
@@ -225,8 +273,8 @@ pub(crate) struct BrowserPads;
 
 #[cfg(target_arch = "wasm32")]
 impl Actuators for BrowserPads {
-    fn play(&mut self, index: u32, strong: f32, weak: f32, duration_ms: u32) {
-        crate::web_rumble::Browser.play(index, strong, weak, duration_ms);
+    fn play(&mut self, index: u32, effect: WebEffect, duration_ms: u32) {
+        crate::web_rumble::Browser.play(index, effect, duration_ms);
     }
 
     fn stop(&mut self, index: u32) {
@@ -260,6 +308,7 @@ impl ReadPads for BrowserPads {
                 index,
                 id: (!known(index)).then(|| get(&pad, "id").and_then(|id| id.as_string()).unwrap_or_default()),
                 rumble: !known(index) && crate::web_rumble::Browser::has_actuator(&pad),
+                trigger_rumble: !known(index) && crate::web_rumble::Browser::has_trigger_actuator(&pad),
                 ..PadReading::default()
             };
             if let Some(buttons) = get(&pad, "buttons") {
@@ -310,6 +359,8 @@ mod tests {
         /// What the browser's actuators were asked: `(index, strong, weak,
         /// duration in ms)` per `playEffect`, `(index, 0, 0, 0)` per `reset`.
         effects: Arc<Mutex<Vec<Effect>>>,
+        /// Every `playEffect`'s effect, in order.
+        played: Arc<Mutex<Vec<WebEffect>>>,
         /// How far the test has moved the clock.
         elapsed: Arc<Mutex<Duration>>,
         start: Arc<web_time::Instant>,
@@ -321,6 +372,7 @@ mod tests {
                 pads: Arc::default(),
                 ids_read: Arc::default(),
                 effects: Arc::default(),
+                played: Arc::default(),
                 elapsed: Arc::default(),
                 start: Arc::new(web_time::Instant::now()),
             }
@@ -331,8 +383,10 @@ mod tests {
         fn now(&self) -> web_time::Instant {
             *self.start + *self.elapsed.lock().unwrap()
         }
-        fn play(&mut self, index: u32, strong: f32, weak: f32, duration_ms: u32) {
+        fn play(&mut self, index: u32, effect: WebEffect, duration_ms: u32) {
+            let (WebEffect::Dual { strong, weak } | WebEffect::Trigger { strong, weak, .. }) = effect;
             self.effects.lock().unwrap().push((index, strong, weak, duration_ms));
+            self.played.lock().unwrap().push(effect);
         }
         fn stop(&mut self, index: u32) {
             self.effects.lock().unwrap().push((index, 0.0, 0.0, 0));
@@ -395,6 +449,56 @@ mod tests {
 
     const XBOX: &str = "Xbox Wireless Controller (STANDARD GAMEPAD Vendor: 045e Product: 0b13)";
 
+    fn near(got: f32, want: f32) {
+        assert!((got - want).abs() < 1e-6, "{got}, not {want}");
+    }
+
+    #[test]
+    fn the_dead_zone_is_gilrss_small_moves_read_zero_and_the_edge_reads_one() {
+        assert_eq!(stick_dead_zone(0.06, -0.07), (0.0, 0.0), "inside the circle");
+        assert_eq!(stick_dead_zone(0.0, 1.0), (0.0, 1.0), "the edge");
+        let (x, y) = stick_dead_zone(0.3, 0.4); // half way out, at an angle
+        near(x, 0.3 * (0.4 / 0.9) / 0.5);
+        near(y, 0.4 * (0.4 / 0.9) / 0.5);
+        assert_eq!(stick_dead_zone(1.0, 1.0), (1.0, 1.0), "past the edge: as read");
+        assert_eq!(trigger_dead_zone(0.1), 0.0);
+        near(trigger_dead_zone(0.55), 0.5);
+        assert_eq!(trigger_dead_zone(1.0), 1.0);
+    }
+
+    #[test]
+    fn a_resting_stick_that_drifts_reads_zero_and_reports_nothing() {
+        let fed = Fed::default();
+        fed.set(|pads| pads.push(pad(0, XBOX)));
+        let feed = fed.clone();
+        let p = slot(0);
+        let seen = Arc::new(Mutex::new(0));
+        let count = seen.clone();
+        run(&fed, 4, move |ctx, frame| match frame {
+            0 => feed.set(|pads| pads[0].axes = [0.04, -0.05, 0.08, 0.0]),
+            1 => {
+                feed.set(|pads| pads[0].axes = [0.0, 0.0, 0.6, 0.0]);
+                for axis in [
+                    GamepadAxis::LeftStickX,
+                    GamepadAxis::LeftStickY,
+                    GamepadAxis::RightStickX,
+                ] {
+                    assert_eq!(ctx.input.gamepad_axis(p, axis), 0.0, "{axis:?} drifted");
+                }
+                assert_eq!(
+                    ctx.input.last_device(),
+                    crate::input::InputDevice::KeyboardMouse,
+                    "drift isn't use"
+                );
+            }
+            _ => {
+                near(ctx.input.gamepad_axis(p, GamepadAxis::RightStickX), 0.5 / 0.9);
+                *count.lock().unwrap() += 1;
+            }
+        });
+        assert_eq!(*seen.lock().unwrap(), 2, "the checks ran");
+    }
+
     #[test]
     fn a_fed_browser_pad_connects_with_its_name_family_and_ids() {
         let fed = Fed::default();
@@ -446,14 +550,19 @@ mod tests {
                         !input.gamepad_down(p, GamepadButton::LeftTrigger),
                         "a quarter isn't pressed"
                     );
-                    assert_eq!(input.gamepad_axis(p, GamepadAxis::LeftTrigger), 0.25);
-                    assert_eq!(input.gamepad_axis(p, GamepadAxis::LeftStickX), 0.5);
+                    // gilrs's dead zone: a quarter-pulled trigger reads (0.25 - 0.1) / 0.9.
+                    near(input.gamepad_axis(p, GamepadAxis::LeftTrigger), 0.15 / 0.9);
+                    assert_eq!(
+                        input.gamepad_axis(p, GamepadAxis::LeftStickX),
+                        0.5,
+                        "past the edge: as fed"
+                    );
                     assert_eq!(
                         input.gamepad_axis(p, GamepadAxis::LeftStickY),
                         -1.0,
                         "up stays negative"
                     );
-                    assert_eq!(input.gamepad_axis(p, GamepadAxis::RightStickY), 0.75);
+                    near(input.gamepad_axis(p, GamepadAxis::RightStickY), 0.65 / 0.9);
                     feed.set(|pads| {
                         press(&mut pads[0], 0, 0.0);
                         press(&mut pads[0], 6, 1.0);
@@ -563,7 +672,7 @@ mod tests {
             assert!(!ctx.input.gamepad_info(slot(1)).unwrap().capabilities.rumble);
             assert!(
                 !ctx.input.gamepad_info(slot(0)).unwrap().capabilities.trigger_rumble,
-                "body motors only"
+                "its actuator doesn't play trigger-rumble"
             );
             *count.lock().unwrap() += 1;
         });
@@ -639,5 +748,49 @@ mod tests {
             "no call for a pad that is gone: {effects:?}"
         );
         assert_eq!(effects.len(), 1, "not replayed after it left: {effects:?}");
+    }
+
+    #[test]
+    fn a_pad_whose_actuator_plays_trigger_rumble_says_so_and_gets_the_trigger_levels() {
+        let fed = Fed::default();
+        fed.set(|pads| {
+            pads.push(PadReading {
+                trigger_rumble: true,
+                ..rumbling_pad(0)
+            });
+            pads.push(rumbling_pad(1));
+        });
+        let seen = Arc::new(Mutex::new(0));
+        let count = seen.clone();
+        run(&fed, 2, move |ctx, frame| {
+            if frame == 0 {
+                let caps = |n| ctx.input.gamepad_info(slot(n)).unwrap().capabilities;
+                assert!(caps(0).trigger_rumble && caps(0).rumble);
+                assert!(!caps(1).trigger_rumble && caps(1).rumble);
+                let kick = Rumble::new(0.0, 0.2).triggers(0.4, 0.9).seconds(f32::INFINITY);
+                ctx.input.rumble(slot(0), kick);
+                ctx.input.rumble(slot(1), kick);
+                *count.lock().unwrap() += 1;
+            }
+        });
+        assert_eq!(*seen.lock().unwrap(), 1, "the checks ran");
+        let effects = fed.effects.lock().unwrap().clone();
+        let played = fed.played.lock().unwrap().clone();
+        let at = |index| effects.iter().zip(&played).find(|(e, _)| e.0 == index).map(|(_, p)| *p);
+        assert_eq!(
+            at(0),
+            Some(WebEffect::Trigger {
+                strong: 0.0,
+                weak: 0.2,
+                left: 0.4,
+                right: 0.9
+            }),
+            "the pad with trigger motors: {played:?}"
+        );
+        assert_eq!(
+            at(1),
+            Some(WebEffect::Dual { strong: 0.0, weak: 0.2 }),
+            "the pad without: the triggers dropped, as on the desktop: {played:?}"
+        );
     }
 }
