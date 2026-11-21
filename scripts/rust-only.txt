@@ -71,3 +71,6 @@ Waves::spectrum                  water.md          # seas from C use the Gerstne
 WaveSpectrum                     water.md          # the spectrum (FFT) sea is not bound yet: C and C++ describe Gerstner waves in PonkoWaterDesc
 CrowdLevel::with_fade            crowds.md         # C and C++ crowd levels switch at once: a fade in PonkoCrowdLevel would change its layout
 LoopbackLink                     replication.md    # not bound yet: C and C++ tests use the plain loopback (ponko_net_messages_loopback)
+GpuTiming                        performance.md    # C and C++ games get the engine default (one frame in 16, every frame while profiling); the choice is not bound yet
+Perf::set_gpu_timing             performance.md    # not bound yet: see GpuTiming
+Perf::gpu_timing                 performance.md    # not bound yet: see GpuTiming

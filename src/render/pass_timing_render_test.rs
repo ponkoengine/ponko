@@ -5,7 +5,7 @@
 //! Skips without a GPU or without timestamp queries.
 use super::render_test_support::*;
 use crate::d3::Transform as Transform3D;
-use crate::perf::GPU_TIMING_EVERY;
+use crate::perf::{GpuTiming, GPU_TIMING_EVERY};
 use crate::prelude::*;
 use crate::render::{FrameStatus, MaterialDesc, MeshData, Model};
 use crate::time::FrameTiming;
@@ -156,4 +156,134 @@ fn traces_and_profiling_time_every_frame() {
     let path = std::env::temp_dir().join(format!("ponko-pass-timing-{}.json", std::process::id()));
     ctx.perf.record_trace(&path, 4);
     assert_eq!(ctx.gpu_timing_every(), 1, "a trace is recording");
+}
+
+/// Frames timed over `n` frames after the setting settled: the first frame
+/// after a change was begun before it, so it isn't counted.
+fn timed_with(ctx: &mut Ctx, timing: GpuTiming, n: u64) -> u64 {
+    ctx.perf.set_gpu_timing(timing);
+    frame(ctx);
+    // Timestamps from before the change may still come back; wait them out.
+    for _ in 0..4 {
+        frame(ctx);
+    }
+    timed_over(ctx, n)
+}
+
+/// The setting alone, with profiling off, picks which frames are timed.
+#[test]
+fn the_gpu_timing_setting_alone_changes_which_frames_are_timed() {
+    let Some(mut ctx) = timed_ctx() else {
+        return;
+    };
+    assert!(!ctx.perf.profiling());
+    assert_eq!(ctx.perf.gpu_timing(), GpuTiming::Auto);
+    let auto = timed_with(&mut ctx, GpuTiming::Auto, 64);
+    assert!((3..=5).contains(&auto), "{auto} of 64 frames timed by default");
+    let every = timed_with(&mut ctx, GpuTiming::Every(1), 64);
+    assert!(every >= 62, "{every} of 64 frames timed with Every(1)");
+    let fourth = timed_with(&mut ctx, GpuTiming::Every(4), 64);
+    assert!((15..=17).contains(&fourth), "{fourth} of 64 frames timed with Every(4)");
+    let slow = timed_with(&mut ctx, GpuTiming::Every(40), 80);
+    assert!((1..=3).contains(&slow), "{slow} of 80 frames timed with Every(40)");
+    assert!(!ctx.perf.profiling(), "none of this turned profiling on");
+
+    // Off: nothing is timed, and nothing stale is shown.
+    let off = timed_with(&mut ctx, GpuTiming::Off, 64);
+    assert_eq!(off, 0, "{off} of 64 frames timed with Off");
+    assert!(ctx.perf.gpu_passes().is_empty(), "no passes are listed while off");
+    assert_eq!(ctx.gfx.renderer.as_ref().unwrap().stats().gpu_ms, None);
+
+    // Back to the default: sampling resumes and the numbers return.
+    let again = timed_with(&mut ctx, GpuTiming::Auto, 64);
+    assert!((3..=5).contains(&again), "{again} of 64 frames timed after Off");
+    assert!(!ctx.perf.gpu_passes().is_empty());
+}
+
+/// The overlay, a trace and automatic quality read every frame, so they get
+/// every frame whatever the game chose, and the choice comes back after.
+#[test]
+fn the_overlay_and_automatic_quality_still_get_every_frame_whatever_the_setting() {
+    let Some(mut ctx) = timed_ctx() else {
+        return;
+    };
+    ctx.perf.set_gpu_timing(GpuTiming::Off);
+    assert_eq!(ctx.gpu_timing_every(), 0);
+    ctx.perf.set_hud(true);
+    assert_eq!(ctx.gpu_timing_every(), 1, "the overlay reads every frame");
+    frame(&mut ctx);
+    let hud = timed_over(&mut ctx, 32);
+    assert!(hud >= 30, "{hud} of 32 frames timed under the overlay with Off");
+    assert!(!ctx.perf.gpu_passes().is_empty(), "the overlay has passes to show");
+    ctx.perf.set_hud(false);
+    assert_eq!(ctx.gpu_timing_every(), 0, "Off again once nothing reads");
+    ctx.scene3d
+        .set_quality_autotune(Some(crate::render::QualityAutotune::default()));
+    ctx.perf.set_gpu_timing(GpuTiming::Every(8));
+    assert_eq!(ctx.gpu_timing_every(), 1, "automatic quality reads every frame");
+    ctx.scene3d.set_quality_autotune(None);
+    assert_eq!(ctx.gpu_timing_every(), 8);
+}
+
+/// Profiling and the setting are separate: an explicit choice wins over
+/// profiling, and `Auto` keeps what profiling did before the setting.
+#[test]
+fn profiling_and_the_gpu_timing_setting_are_separate() {
+    let mut ctx = Ctx::new(1.0 / 60.0, Vec2::new(64.0, 64.0));
+    assert_eq!(ctx.gpu_timing_every(), GPU_TIMING_EVERY);
+    // The setting without profiling.
+    ctx.perf.set_gpu_timing(GpuTiming::Every(1));
+    assert!(!ctx.perf.profiling());
+    assert_eq!(ctx.gpu_timing_every(), 1);
+    ctx.perf.set_gpu_timing(GpuTiming::Every(0));
+    assert_eq!(ctx.gpu_timing_every(), 1, "0 counts as 1");
+    ctx.perf.set_gpu_timing(GpuTiming::Off);
+    assert_eq!(ctx.gpu_timing_every(), 0);
+    // Profiling without the setting.
+    ctx.perf.set_gpu_timing(GpuTiming::Auto);
+    ctx.perf.set_profiling(true);
+    assert_eq!(ctx.gpu_timing_every(), 1);
+    // Profiling does not override a choice.
+    ctx.perf.set_gpu_timing(GpuTiming::Off);
+    assert_eq!(ctx.gpu_timing_every(), 0);
+    ctx.perf.set_gpu_timing(GpuTiming::Every(4));
+    assert_eq!(ctx.gpu_timing_every(), 4);
+    // A trace still overrides it.
+    let path = std::env::temp_dir().join(format!("ponko-gpu-setting-{}.json", std::process::id()));
+    ctx.perf.record_trace(&path, 4);
+    assert_eq!(ctx.gpu_timing_every(), 1, "a trace is recording");
+}
+
+/// What each choice costs the game thread in heap allocations per frame,
+/// the numbers the guide gives. Only the order is asserted: the counts
+/// depend on the graphics library and the adapter.
+#[test]
+fn allocations_per_frame_fall_as_gpu_timing_gets_rarer() {
+    let Some(mut ctx) = timed_ctx() else {
+        return;
+    };
+    const FRAMES: u64 = 64;
+    let per_frame = |ctx: &mut Ctx, timing: GpuTiming| -> f64 {
+        ctx.perf.set_gpu_timing(timing);
+        for _ in 0..8 {
+            frame(ctx);
+        }
+        let ((), allocations) = crate::three::lights::tests::count_allocations(|| {
+            for _ in 0..FRAMES {
+                frame(ctx);
+            }
+        });
+        allocations as f64 / FRAMES as f64
+    };
+    let every = per_frame(&mut ctx, GpuTiming::Every(1));
+    let sixteenth = per_frame(&mut ctx, GpuTiming::Auto);
+    let fourth = per_frame(&mut ctx, GpuTiming::Every(4));
+    let off = per_frame(&mut ctx, GpuTiming::Off);
+    eprintln!(
+        "game-thread allocations per frame: every frame {every:.1}, every 4th {fourth:.1}, \
+         default (every 16th) {sixteenth:.1}, off {off:.1}"
+    );
+    assert!(every > fourth, "every frame ({every}) costs more than every 4th ({fourth})");
+    assert!(fourth > sixteenth, "every 4th ({fourth}) costs more than every 16th ({sixteenth})");
+    assert!(sixteenth > off, "every 16th ({sixteenth}) costs more than off ({off})");
 }
