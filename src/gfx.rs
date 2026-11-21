@@ -1044,6 +1044,17 @@ impl Graphics {
         Ok(())
     }
 
+    /// Puts a video frame's planes into `texture` (a live RGBA texture of
+    /// their size, made by `create_texture` and never streamed or
+    /// compressed), converted to RGBA on the GPU. Nothing to do headless.
+    #[cfg(all(feature = "video", not(target_arch = "wasm32")))]
+    pub(crate) fn update_texture_yuv(&mut self, texture: Texture, planes: &crate::video::yuv::Planes<'_>) {
+        if self.headless || !self.textures_live.contains(texture.id) {
+            return;
+        }
+        self.renderer().update_texture_yuv(texture.id, planes);
+    }
+
     /// Writes checked pixels into `texture` (see [`update_texture`](Self::update_texture)).
     fn write_texture_pixels(&mut self, texture: Texture, rgba: &[u8]) {
         let (w, h) = (texture.width(), texture.height());

@@ -1,5 +1,7 @@
-//! AV1 decoding with rav1d, the Rust port of dav1d (BSD-2-Clause), built
-//! without its assembly so it needs no assembler and stays pure Rust.
+//! AV1 decoding with rav1d, the Rust port of dav1d (BSD-2-Clause), as
+//! Rerun publishes it (`re_rav1d`). Its hand-written assembly is on for
+//! arm64 (built with the system's C compiler); on x86-64 it needs nasm, so
+//! a game turns it on itself (the guide's "Video" chapter).
 //!
 //! rav1d's released crate offers only dav1d's C interface, so this file is
 //! the one place with `unsafe`: it owns a decoder context, hands it one

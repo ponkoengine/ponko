@@ -19,7 +19,7 @@ use symphonia::core::codecs::{CodecParameters, audio::AudioDecoder};
 use symphonia::core::errors::Error as DecodeError;
 use symphonia::core::formats::{FormatReader, SeekMode, SeekTo, TrackType, probe::Hint};
 use symphonia::core::io::MediaSourceStream;
-use symphonia::core::units::Time;
+use symphonia::core::units::{Time, TimeBase};
 
 /// How long a stop fades out: Kira's default tween, which the other voices use.
 const STOP_FADE_SECONDS: f64 = 0.01;
@@ -27,6 +27,12 @@ const STOP_FADE_SECONDS: f64 = 0.01;
 /// How quickly volume and panning follow a change, in seconds (about one
 /// mixer block), so a change doesn't click.
 const SMOOTHING_SECONDS: f64 = 0.01;
+
+/// How far before its target a seek in the file lands: a decoder that was
+/// reset gives nothing for the first packet after it (a Vorbis packet
+/// only completes the one before it), so decoding starts a packet or two
+/// early and the samples before the target are dropped.
+const PREROLL_SECONDS: f64 = 0.1;
 
 /// A sound's header: its sample rate and, when the file says, its length.
 pub(crate) struct Header {
@@ -47,6 +53,9 @@ struct Decoding {
     reader: Box<dyn FormatReader>,
     decoder: Box<dyn AudioDecoder>,
     track: u32,
+    /// The unit of the track's packet timestamps (a Matroska file's are
+    /// milliseconds, not samples).
+    time_base: Option<TimeBase>,
 }
 
 fn open(bytes: &Arc<[u8]>) -> Result<(Decoding, Header), String> {
@@ -69,8 +78,17 @@ fn open(bytes: &Arc<[u8]>) -> Result<(Decoding, Header), String> {
     let decoder = symphonia::default::get_codecs()
         .make_audio_decoder(params, &Default::default())
         .map_err(|e| e.to_string())?;
+    let time_base = track.time_base;
     let track = track.id;
-    Ok((Decoding { reader, decoder, track }, header))
+    Ok((
+        Decoding {
+            reader,
+            decoder,
+            track,
+            time_base,
+        },
+        header,
+    ))
 }
 
 /// Reads the header of encoded `bytes`, decoding no samples.
@@ -89,6 +107,9 @@ struct Shared {
     stop: AtomicBool,
     /// 0 playing, 1 stopping (fading out), 2 stopped.
     state: AtomicU8,
+    /// Seconds into the sound the mixer has played up to, as `f64` bits:
+    /// the clock a video's picture follows.
+    heard: AtomicU64,
     /// Volume changes and stops that wait for a start time or take longer
     /// than the smoothing. Only ever contended in native tests: on the web
     /// one thread both plays and mixes.
@@ -272,6 +293,13 @@ impl ChunkedHandle {
     pub fn set_playback_rate(&mut self, rate: f64) {
         self.shared.rate.store(speed(rate).to_bits(), Relaxed);
     }
+
+    /// Seconds into the sound the mixer has played up to (where it
+    /// started until the mixer first plays it).
+    #[cfg_attr(not(feature = "video"), allow(dead_code))]
+    pub fn position(&self) -> f64 {
+        f64::from_bits(self.shared.heard.load(Relaxed))
+    }
 }
 
 /// A playing streamed sound: decodes a packet whenever it has played the
@@ -299,6 +327,9 @@ pub(crate) struct ChunkedSound {
     position: u64,
     /// Frames still to drop after a seek landed before its target.
     skip: u64,
+    /// After a seek in the file: the source frame to start at, found in
+    /// the decoded packets by their timestamps.
+    align: Option<u64>,
     /// Loop points in source frames.
     loop_start: u64,
     loop_end: Option<u64>,
@@ -330,6 +361,7 @@ impl ChunkedSound {
             rate: AtomicU64::new(data.rate.to_bits()),
             stop: AtomicBool::new(false),
             state: AtomicU8::new(PLAYING),
+            heard: AtomicU64::new(data.from.max(0.0).to_bits()),
             changes: Mutex::new(Vec::with_capacity(4)),
         });
         let rate = f64::from(header.sample_rate);
@@ -347,6 +379,7 @@ impl ChunkedSound {
             tail: 0,
             position: 0,
             skip: 0,
+            align: None,
             loop_start: frames(data.loop_start),
             loop_end: data.loop_end.map(frames),
             waiting: (data.start_time != StartTime::Immediate).then_some(data.start_time),
@@ -377,31 +410,42 @@ impl ChunkedSound {
         self.samples.capacity() * std::mem::size_of::<f32>()
     }
 
+    /// Seconds into the sound being played: the window's current frame
+    /// (three behind the next one read), plus how far towards the next.
+    fn heard(&self) -> f64 {
+        (self.position.saturating_sub(3) as f64 + self.fraction) / f64::from(self.sample_rate)
+    }
+
     fn done(&self) -> bool {
         self.tail >= 3 || (self.stopping && self.fade <= 0.0)
     }
 
     /// Goes to source frame `frame`: a seek in the file where it can
-    /// (decoding from the packet before it and dropping the rest), else
-    /// decoding from the start.
+    /// (decoding from a little before it and dropping the samples before
+    /// it, found by the packets' timestamps), else decoding from the start.
     fn seek(&mut self, frame: u64) {
         self.samples.clear();
         self.next = 0;
         self.position = frame;
         self.skip = 0;
+        self.align = None;
+        let early = (frame as f64 / f64::from(self.sample_rate) - PREROLL_SECONDS).max(0.0);
         if frame > 0
             && let Some(d) = self.decoding.as_mut()
-            && let Some(time) = Time::try_from_secs_f64(frame as f64 / f64::from(self.sample_rate))
-            && let Ok(to) = d.reader.seek(
-                SeekMode::Accurate,
-                SeekTo::Time {
-                    time,
-                    track_id: Some(d.track),
-                },
-            )
+            && d.time_base.is_some()
+            && let Some(time) = Time::try_from_secs_f64(early)
+            && d.reader
+                .seek(
+                    SeekMode::Accurate,
+                    SeekTo::Time {
+                        time,
+                        track_id: Some(d.track),
+                    },
+                )
+                .is_ok()
         {
             d.decoder.reset();
-            self.skip = u64::try_from(to.required_ts.get() - to.actual_ts.get()).unwrap_or(0);
+            self.align = Some(frame);
             return;
         }
         self.decoding = open(&self.bytes).ok().map(|(decoding, _)| decoding);
@@ -443,6 +487,14 @@ impl ChunkedSound {
                         buffer.copy_to_vec_interleaved(&mut self.samples);
                         self.next = 0;
                         reopened = false;
+                        if let Some(target) = self.align {
+                            let start = decoding.time_base.and_then(|tb| tb.calc_time(packet.pts));
+                            let start = start.map(|t| (t.as_secs_f64() * f64::from(self.sample_rate)).round() as i64);
+                            self.next = aligned(start, self.samples.len() / self.channels, target);
+                            if self.next < self.samples.len() / self.channels {
+                                self.align = None;
+                            }
+                        }
                     }
                     // A damaged packet: skip it, as players do.
                     Err(DecodeError::DecodeError(_)) => {}
@@ -529,6 +581,18 @@ impl ChunkedSound {
     }
 }
 
+/// Where to start in a packet of `frames` decoded frames that begins at
+/// source frame `start`, to begin at source frame `target`: `frames` (all
+/// of it dropped) when it ends before the target, and 0 when it begins
+/// after it or its time is unknown.
+fn aligned(start: Option<i64>, frames: usize, target: u64) -> usize {
+    let Some(start) = start else {
+        return 0;
+    };
+    let into = i64::try_from(target).unwrap_or(i64::MAX).saturating_sub(start);
+    usize::try_from(into).map_or(0, |into| into.min(frames))
+}
+
 impl Sound for ChunkedSound {
     fn on_start_processing(&mut self) {
         if let Ok(mut changes) = self.shared.changes.try_lock() {
@@ -598,6 +662,7 @@ impl Sound for ChunkedSound {
                 self.advance();
             }
         }
+        self.shared.heard.store(self.heard().to_bits(), Relaxed);
         if self.done() {
             self.decoding = None;
             self.shared.state.store(STOPPED, Relaxed);
@@ -791,6 +856,32 @@ mod tests {
         // ...then 2000 again, and each 2000 frames after.
         assert!((out[3200].left - value(2000)).abs() < 1e-6, "{:?}", out[3200]);
         assert!((out[5200].left - value(2000)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn chunked_stream_reports_the_position_it_has_played_to() {
+        let bytes = wav(8000, &ramp(8000));
+        let data = ChunkedData::new(bytes, 1.0, 1.0, false).start_position(0.25);
+        let (mut sound, handle) = ChunkedSound::new(data).unwrap();
+        // Before the mixer plays it: where it starts.
+        assert!((handle.position() - 0.25).abs() < 1e-9, "{}", handle.position());
+        let out = run(&mut sound, 800, 1.0 / 8000.0);
+        // The last frame played is sound frame 2000 + 799; the next is 2800.
+        assert!((out[799].left - value(2799)).abs() < 1e-6, "{:?}", out[799]);
+        assert!(
+            (handle.position() - 2800.0 / 8000.0).abs() < 1e-9,
+            "{}",
+            handle.position()
+        );
+        // At another speed the position moves with the sound, not the mixer.
+        let mut handle = handle;
+        handle.set_playback_rate(2.0);
+        run(&mut sound, 800, 1.0 / 8000.0);
+        assert!(
+            (handle.position() - 4400.0 / 8000.0).abs() < 1e-3,
+            "{}",
+            handle.position()
+        );
     }
 
     #[test]

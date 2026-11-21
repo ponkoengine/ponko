@@ -3,7 +3,7 @@
 //! that starts part-way into it and, like music, is never made virtual or
 //! counted against the voice limits.
 
-use super::{Audio, AudioBus, AudioEffects, Clip, SoundParams, StartTime, Voice};
+use super::{Audio, AudioBus, AudioEffects, Clip, Handle, SoundParams, StartTime, Voice};
 use std::sync::Arc;
 
 impl Audio {
@@ -27,5 +27,14 @@ impl Audio {
         self.playing.insert(id, voice);
         self.realize(id, StartTime::Immediate, None);
         id
+    }
+
+    /// Seconds into soundtrack voice `id` the mixer has played up to;
+    /// `None` while it isn't heard (not started yet, or gone).
+    pub fn soundtrack_position(&self, id: u64) -> Option<f64> {
+        match &self.playing.get(&id)?.real.as_ref()?.handle {
+            Handle::Chunked(handle) => Some(handle.position()),
+            _ => None,
+        }
     }
 }
