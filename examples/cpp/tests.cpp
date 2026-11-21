@@ -1546,6 +1546,8 @@ static void asset_streaming() {
         CHECK(crab && crab->width > 0 && ctx.is_live(*crab));
         CHECK(ctx.asset_state(ponko::residency_kind::texture, "crab.png") == ponko::asset_state::resident);
         CHECK(!ctx.upload_stats().has_budget && ctx.upload_stats().pending == 0);
+        const ponko::upload_stats_ex uploads = ctx.upload_stats_ex();  // the GPU's own times: none headless
+        CHECK(uploads.stats.pending == 0 && !uploads.gpu_upload_timing && !uploads.has_gpu_created_ms);
         CHECK(ctx.resident_texture("crab.png").id == crab->id);
         CHECK(ctx.is_resident(ponko::residency_kind::texture, "crab.png"));
         ctx.set_residency_budget(ponko::residency_kind::texture, 1);
@@ -4884,6 +4886,26 @@ static void native_parity_round5() {
         throws_invalid([&] { ctx.spawn_water(ponko::water_desc::sea(0, {12, 4}, 2).with_spectrum(spectrum)); }, "tile");
     });
 
+    // Buoyancy from a descriptor: sea water, no ripples, points of its own.
+    ponko::game("c++ raft", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
+        const ponko::entity raft = ctx.world().spawn();
+        auto planks = ponko::buoyancy_desc::box({2, 0.4f, 2});
+        CHECK(planks.point_count == 8 && planks.water_density == PONKO_FRESH_WATER_DENSITY && planks.ripples);
+        planks.water_density = 1025;
+        planks.ripples = false;
+        ctx.set_buoyancy(raft, planks);
+        auto read = ctx.buoyancy(raft);
+        CHECK(read && read->water_density == 1025 && !read->ripples && read->point_count == 8);
+        auto hull = ponko::buoyancy_desc::from_points({{-1, 0, 0}, {1, 0, 0}, {0, 0, -1}, {0, 0, 1}}, 0.6f, 0.3f);
+        CHECK(hull.point_count == 4 && hull.volume == 0.6f && hull.drag == PONKO_BUOYANCY_DRAG);
+        ctx.set_buoyancy(raft, hull);
+        CHECK(ctx.buoyancy(raft)->point_count == 4);
+        throws_invalid([&] { ponko::buoyancy_desc::from_points({}, 1, 1); }, "no points");
+        hull.water_density = 0;
+        throws_invalid([&] { ctx.set_buoyancy(raft, hull); }, "no density");
+        CHECK(ctx.remove_buoyancy(raft) && !ctx.buoyancy(raft));
+    });
+
     // The navmesh crowd's counts: one step a tick, every agent it moved.
     ponko::nav_crowd_stats crowd_stats{};
     ponko::game("c++ nav crowd", 1, 1).fixed_hz(60).navmesh3d()
@@ -4914,6 +4936,13 @@ static void native_parity_round5() {
             delete boxed;
         }
         CHECK(after.count - before.count == 1 && after.bytes - before.bytes == sizeof(int));
+        // Net bytes: PONKO_COUNT_CPP_ALLOCATIONS counts the frees too, so what is given back leaves them.
+        const std::int64_t held = ponko::net_alloc_bytes();
+        auto* block = new char[4096];
+        const std::int64_t holding = ponko::net_alloc_bytes();
+        delete[] block;
+        const std::int64_t released = ponko::net_alloc_bytes();
+        CHECK(holding - held >= 4096 && holding - released >= 4096);
         ctx.set_profiling(false);
     });
 
