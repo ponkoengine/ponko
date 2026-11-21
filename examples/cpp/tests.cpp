@@ -4900,9 +4900,9 @@ static void native_parity_round5() {
         CHECK(hull.point_count == 4 && hull.volume == 0.6f && hull.drag == PONKO_BUOYANCY_DRAG);
         ctx.set_buoyancy(raft, hull);
         CHECK(ctx.buoyancy(raft)->point_count == 4);
-        throws_invalid([&] { ponko::buoyancy_desc::from_points({}, 1, 1); }, "no points");
+        throws_invalid([&] { ponko::buoyancy_desc::from_points({}, 1, 1); }, "points must hold");
         hull.water_density = 0;
-        throws_invalid([&] { ctx.set_buoyancy(raft, hull); }, "no density");
+        throws_invalid([&] { ctx.set_buoyancy(raft, hull); }, "water_density must be positive");
         CHECK(ctx.remove_buoyancy(raft) && !ctx.buoyancy(raft));
     });
 

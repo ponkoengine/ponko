@@ -106,9 +106,16 @@ fn leak_check(ctx: &mut Ctx) {
 The engine's own long-run test does this over 200 000 ticks
 (`tests/long_run.rs`); "Very long sessions" in
 [the simulation clock](sim-clock.md#very-long-sessions) says what may grow.
-`net_alloc_bytes` is Rust-only: C and C++ count frees of their own memory
-nowhere, so there `ponko_ctx_live_counts` and the asset inventory are the
-leak checks.
+From C and C++ it is `ponko_net_alloc_bytes()` (C++
+`ponko::net_alloc_bytes()`): the library's memory, and the program's own
+where it reports it. `PONKO_COUNT_CPP_ALLOCATIONS` counts C++'s `delete`
+as well as its `new`, so a C++ game's leak check sees both; a C game with
+an allocator of its own calls `ponko_note_deallocation(bytes)` for each
+`ponko_note_allocation(bytes)` it gives back.
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:net_allocs}}
+```
 
 #### Allocations per thread
 
