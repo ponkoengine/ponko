@@ -41,11 +41,11 @@
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. } else {             (1 << ids.len()) - 1         };         assert!(",
     "site": "crates/ponko_ecs/src/change.rs:897"
   },
-  "crates/ponko_ecs/src/change.rs:5044b601dbb57b88": {
+  "crates/ponko_ecs/src/change.rs:52eba6f924769aa9": {
     "classification": "caller-contract",
     "construction": "panic!(\"removals of `{name}` aren't tracked; call `world.track_changes::<{name}>()` first\")",
-    "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. #[cold] #[track_caller] fn untracked(name: &str) -> ! {     panic!(\"removals of `{name}` aren't tracked; call `world.track_changes::<{name}>()` first\")",
-    "site": "crates/ponko_ecs/src/change.rs:1012"
+    "reason": "The message names the untracked component and the track_changes call that fixes it.",
+    "site": "crates/ponko_ecs/src/change.rs:1149"
   },
   "crates/ponko_ecs/src/change.rs:587b5e9b0c95bbec": {
     "classification": "invariant",
@@ -107,23 +107,29 @@
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. // `DEAD` and `RESERVED` are never indices. The counter is far from     // wrapping: that would take four billion more allocations after this     // panic.     assert!(",
     "site": "crates/ponko_ecs/src/entity.rs:364"
   },
+  "crates/ponko_ecs/src/query.rs:0827fac47ff6edca": {
+    "classification": "invariant",
+    "construction": ".expect(\"an `Added`/`Changed` filter's component is present and tracked\")",
+    "reason": "Matching archetypes have every With component, and track_changes made it tracked before the filter was built.",
+    "site": "crates/ponko_ecs/src/query.rs:562"
+  },
   "crates/ponko_ecs/src/query.rs:2d3927f9685069d0": {
     "classification": "invariant",
     "construction": "debug_assert_eq!(initialized.len, from)",
     "reason": "Internal invariant: let mut initialized = Initialized { slots, len: 0 };             let parallel = plan.run_serial_part(|lo, hi| leaf(lo, hi, &mut initialized));             if let Some((from, chunk)) = parallel {                 debug_assert_eq!(initialized.len, from);",
     "site": "crates/ponko_ecs/src/query.rs:1483"
   },
+  "crates/ponko_ecs/src/query.rs:3dc8ffeb85e7b906": {
+    "classification": "invariant",
+    "construction": "debug_assert!(i < n)",
+    "reason": "par_run passes only positions below the plan's total, which sized the reserved buffer.",
+    "site": "crates/ponko_ecs/src/query.rs:1570"
+  },
   "crates/ponko_ecs/src/query.rs:41cfc1083db75278": {
     "classification": "caller-contract",
     "construction": "panic!( \"query `{}` accesses `{}` twice, once mutably; remove the duplicate access or split it into sequential queries\", std::any::type_name::<Q>(), world.component_info(id).name() )",
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. Q::access(ids, &mut |id, mutable, _| {         for &(other, other_mut) in &seen[..n] {             if other == id && (mutable || other_mut) {                 panic!(",
     "site": "crates/ponko_ecs/src/query.rs:235"
-  },
-  "crates/ponko_ecs/src/query.rs:45ffbf7f1c27ff42": {
-    "classification": "invariant",
-    "construction": ".expect(\"an `Added`/`Changed` filter's component is present and tracked\")",
-    "reason": "Internal invariant: for (mask, added) in [(self.with_added, true), (self.with_changed, false)] {                 if mask >> i & 1 != 0 {                     let stamps = arch.read_stamps(self.with[i], added);                     rows.term(stamps.expect(\"an `Added`/`Changed` filter's component is present and tracked\"));",
-    "site": "crates/ponko_ecs/src/query.rs:417"
   },
   "crates/ponko_ecs/src/query.rs:49568201b381738f": {
     "classification": "caller-contract",
@@ -148,12 +154,6 @@
     "construction": "assert!( n < MAX_OR_TERMS, \"at most {MAX_OR_TERMS} components across a query's `Or` filters\" )",
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. /// closed clause.     pub(crate) fn add_or_term(&mut self, id: ComponentId, has: bool) {         let n = self.n_terms as usize;         assert!(",
     "site": "crates/ponko_ecs/src/query.rs:358"
-  },
-  "crates/ponko_ecs/src/query.rs:aed6c80b4b42c4a2": {
-    "classification": "invariant",
-    "construction": "debug_assert!(i < n)",
-    "reason": "Internal invariant: let slots = Slots(out.as_mut_ptr());         if !std::mem::needs_drop::<R>() {             self.par_run(plan, |i, item| {                 debug_assert!(i < n);",
-    "site": "crates/ponko_ecs/src/query.rs:1408"
   },
   "crates/ponko_ecs/src/query.rs:b38ef6ddd559ecef": {
     "classification": "invariant",
@@ -3550,18 +3550,6 @@
     "construction": ".unwrap()",
     "reason": "Internal invariant: a Toggle widget always has a value.",
     "site": "src/ui/retained.rs:1896"
-  },
-  "src/ui/retained_draw.rs:29736f7f9ee016b3": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "draw: every visible node was laid out this frame and has a Taffy node",
-    "site": "src/ui/retained_draw.rs:302"
-  },
-  "src/ui/retained_draw.rs:314c05a3248d3d28": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "Internal invariant: ui.layout_with_text(viewport, &mut self.gfx.text);         let scale = ui.scale();         for (order, &id) in ui.visible.iter().enumerate() {             let n = ui.node(id).unwrap();",
-    "site": "src/ui/retained_draw.rs:212"
   },
   "src/ui/retained_ime.rs:505778b347d4bf2e": {
     "classification": "invariant",

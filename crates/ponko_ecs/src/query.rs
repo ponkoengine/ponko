@@ -843,6 +843,22 @@ unsafe impl<Q: QueryData> Sync for ParWork<'_, Q> {}
 
 #[cfg(feature = "parallel")]
 impl<Q: QueryData> ParWork<'_, Q> {
+    /// [`visit`](Self::visit) with a shared `f`, in a function of its own.
+    ///
+    /// Taking `f` by reference as an argument tells the compiler that what
+    /// the closure captured doesn't change during the loop (it is borrowed
+    /// shared), so a value it captured is loaded once, not at every row.
+    /// Without that, a write through the query's `&mut` items might have
+    /// changed it, and the loop stays scalar.
+    ///
+    /// # Safety
+    /// As for [`visit`](Self::visit).
+    #[inline(never)]
+    unsafe fn visit_shared<F: Fn(usize, Q::Item<'_>)>(&self, lo: usize, hi: usize, f: &F) {
+        // SAFETY: the caller's contract.
+        unsafe { self.visit(lo, hi, f) }
+    }
+
     /// Calls `f(i, item)` for the query positions `lo..hi`, in order.
     ///
     /// # Safety
@@ -1375,7 +1391,8 @@ impl<'w, Q: QueryData> Query<'w, Q> {
     /// ```
     #[cfg(feature = "parallel")]
     pub fn par_for_each(&mut self, f: impl Fn(Q::Item<'_>) + Send + Sync) {
-        self.par_for_each_indexed(|_, item| f(item));
+        // `move`, not a borrow of `f`: see `ParWork::visit_shared`.
+        self.par_for_each_indexed(move |_, item| f(item));
     }
 
     /// Like [`par_for_each`](Self::par_for_each), but also passes each
@@ -1485,14 +1502,14 @@ impl<'w, Q: QueryData> Query<'w, Q> {
         let total = plan.total;
         // SAFETY: the plan was built under this query's world borrow, whose
         // access was validated; the serial part runs before the parallel one.
-        let parallel = plan.run_serial_part(|lo, hi| unsafe { work.visit(lo, hi, |i, item| f(i, item)) });
+        let parallel = plan.run_serial_part(|lo, hi| unsafe { work.visit_shared(lo, hi, &f) });
         if let Some((from, chunk)) = parallel {
             let chunks = (total - from).div_ceil(chunk);
             let one = |c: usize| {
                 let lo = from + c * chunk;
                 // SAFETY: as above; chunks are disjoint ranges of positions,
                 // and every position is one row of one archetype.
-                unsafe { work.visit(lo, (lo + chunk).min(total), |i, item| f(i, item)) };
+                unsafe { work.visit_shared(lo, (lo + chunk).min(total), &f) };
             };
             crate::par::run(|| (0..chunks).into_par_iter().for_each(one));
         }
@@ -1547,7 +1564,9 @@ impl<'w, Q: QueryData> Query<'w, Q> {
         out.reserve(n);
         let slots = Slots(out.as_mut_ptr());
         if !std::mem::needs_drop::<R>() {
-            self.par_run(plan, |i, item| {
+            // `move`: `f` lives inside the closure `par_run` borrows, so the
+            // compiler sees its captures don't change (see `visit_shared`).
+            self.par_run(plan, move |i, item| {
                 debug_assert!(i < n);
                 // SAFETY: every index in the reserved buffer is written once.
                 // On panic these values need no cleanup and `out.len()` stays 0.
