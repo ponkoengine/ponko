@@ -2375,11 +2375,17 @@
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. #[track_caller] fn no_state<S>() -> ! {     panic!(",
     "site": "src/state.rs:910"
   },
-  "src/streaming.rs:1feab06894d7226a": {
+  "src/streaming.rs:0e74d125a1688b9a": {
     "classification": "invariant",
-    "construction": ".expect(\"still there\")",
-    "reason": "Internal invariant: if t.job.is_some() {             let mut job = t.job.take();             let decoded = self.take_decoded(&mut job);             let t = self.streaming.textures.get_mut(name).expect(\"still there\");",
-    "site": "src/streaming.rs:734"
+    "construction": ".expect(\"one level\")",
+    "reason": "A level was pushed just above",
+    "site": "src/streaming.rs:450"
+  },
+  "src/streaming.rs:1ac7cd0f4db7b928": {
+    "classification": "invariant",
+    "construction": ".expect(\"one level\")",
+    "reason": "PyramidSlices starts with the full-size level and only ever pushes more, so it always has one",
+    "site": "src/streaming.rs:431"
   },
   "src/streaming.rs:29e4ada08786e11a": {
     "classification": "invariant",
@@ -2410,6 +2416,12 @@
     "construction": ".expect(\"still there\")",
     "reason": "Internal invariant: if t.texture.is_some() && !self.texture_fits(world, name, bytes.saturating_sub(current)) {             let set = self.residency.set(ResidencyKind::Texture);             let held = (set.budget(), set.resident_bytes(), bytes.saturating_sub(current));             let t = self.streaming.textures.get_mut(name).expect(\"still there\");",
     "site": "src/streaming.rs:784"
+  },
+  "src/streaming.rs:a230d7ec20df9972": {
+    "classification": "invariant",
+    "construction": ".expect(\"still there\")",
+    "reason": "texture_step looked the texture up just above and nothing between removes it (the decode's result is only taken)",
+    "site": "src/streaming.rs:1062"
   },
   "src/streaming.rs:a76a0b6d276b3bd2": {
     "classification": "invariant",
@@ -3197,12 +3209,6 @@
     "reason": "Internal invariant: Some(id) => renderer.replace_sky_shader(id, name, source)?,                 None => {                     let id = renderer.create_sky_shader(name, source)?;                     debug_assert_eq!(id, self.assets3d.sky_shaders);",
     "site": "src/three/sky_shader.rs:159"
   },
-  "src/three/streamed.rs:313bebd53c1199c0": {
-    "classification": "invariant",
-    "construction": ".expect(\"still there\")",
-    "reason": "Internal invariant: if m.ready.is_none() {             let mut job = m.job.take();             let decoded = self.take_decoded(&mut job);             let m = self.streaming.meshes.get_mut(name).expect(\"still there\");",
-    "site": "src/three/streamed.rs:165"
-  },
   "src/three/streamed.rs:433d4b3b89c6ec09": {
     "classification": "invariant",
     "construction": ".expect(\"decoded\")",
@@ -3220,6 +3226,12 @@
     "construction": ".expect(\"still there\")",
     "reason": "Internal invariant: }             }         }         let m = self.streaming.meshes.get(name).expect(\"still there\");",
     "site": "src/three/streamed.rs:180"
+  },
+  "src/three/streamed.rs:efa0e442da911f8b": {
+    "classification": "invariant",
+    "construction": ".expect(\"still there\")",
+    "reason": "mesh_step looked the mesh up just above and nothing between removes it (the decode's result is only taken)",
+    "site": "src/three/streamed.rs:264"
   },
   "src/three/target.rs:4fd850dc2a8bbafc": {
     "classification": "forwarded-error",
