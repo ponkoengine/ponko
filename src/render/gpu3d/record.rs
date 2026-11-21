@@ -249,7 +249,8 @@ impl Renderer3D {
     }
 
     /// The pipeline material `id` draws with: its stencil pipeline in the
-    /// color passes when it has a stencil, its shader's otherwise.
+    /// color passes and the view model's when it has a stencil, its
+    /// shader's otherwise.
     pub(super) fn draw_pipeline<'a>(
         &'a self,
         shader: &'a super::shaders::ShaderPipelines,
@@ -259,9 +260,12 @@ impl Renderer3D {
         role: PipelineRole,
     ) -> Option<&'a wgpu::RenderPipeline> {
         if kind == Kind::ViewModel && self.resources.material(id).cutout {
-            return Some(shader.view_model_cutout(variant));
+            return Some(match self.stencil.view_model_cutout(id, variant.instancing) {
+                Some(pipeline) => pipeline,
+                None => shader.view_model_cutout(variant),
+            });
         }
-        if matches!(kind, Kind::Opaque | Kind::Transparent)
+        if matches!(kind, Kind::Opaque | Kind::Transparent | Kind::ViewModel)
             && let Some(pipeline) = self.stencil.pipeline(
                 id,
                 variant.instancing,
@@ -1352,7 +1356,7 @@ impl Renderer3D {
         self.draw_crowds(pass, kind, 0);
     }
 
-    fn record_model_parts(
+    pub(super) fn record_model_parts(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         runs: impl Iterator<Item = (Run, Option<usize>)>,
