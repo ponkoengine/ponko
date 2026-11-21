@@ -135,7 +135,8 @@ Where it is worked out:
   per FFT stage along x and along z (13 passes at 64 cells, 17 at 256).
 - **Without** (WebGL2), the CPU works out the same field and uploads it
   each frame. Its FFT is [rustfft](https://crates.io/crates/rustfft)'s,
-  which uses the CPU's SIMD (NEON, SSE or AVX) where there is some.
+  which uses the CPU's SIMD (NEON, SSE or AVX) where there is some, and
+  WASM SIMD in a web build made for it (see [On the web](#on-the-web)).
 - **The CPU's queries** (`height_at`, `sample`, buoyancy) run the same
   FFT on the CPU at the time asked, once per moment (the last two are
   kept), so what floats rides the waves that are drawn. A GPU test reads
@@ -169,10 +170,56 @@ tried and left out: on a busy machine waiting for the threads cost more
 than the whole field (0.4 to 40 ms at 256 cells).
 
 On a desktop any size is cheap enough for buoyancy, even 256 cells (about
-a millisecond a moment with the sway's speed). On the web the CPU's FFT
-runs without SIMD and on the page's one thread, and it hasn't been
-measured there: keep to 128 cells or fewer for WebGL2 or for buoyancy in
-the browser, and measure before going higher.
+a millisecond a moment with the sway's speed).
+
+### On the web
+
+In a browser the CPU's FFT runs on the page's one thread, and on WebGL2 it
+runs every frame (the upload). `web/smoke/spectrum.mjs` times it in a
+headless browser with the fixture `examples/web_spectrum.rs`: one new
+moment, and one with the sway's speed, at each size, in three builds. In
+Chromium 156 (headless) on the same Apple M4 Max, the machine busy with
+other work (load average 80 to 135), the median of three page loads of
+fifteen readings each, over two sessions (the ranges cover both):
+
+| Cells | One moment | With the sway's speed | One moment, WASM SIMD | With the sway's speed, WASM SIMD |
+|---|---|---|---|---|
+| 64 | 0.06 ms | 0.09 ms | 0.04 ms | 0.06 ms |
+| 128 (default) | 0.24 to 0.25 ms | 0.35 to 0.36 ms | 0.16 to 0.17 ms | 0.24 to 0.26 ms |
+| 256 | 1.10 to 1.14 ms | 1.65 to 1.70 ms | 0.70 to 0.74 ms | 1.04 to 1.07 ms |
+
+The ordinary web build takes up to about twice the desktop's time above
+(which has NEON).
+A WebGL2 frame pays one moment for the upload, and one with the sway's
+speed as well when something floats or asks `sample` at that time, so the
+default 128 cells cost about 0.6 ms of a 16.7 ms frame at worst, and 256
+cells about 2.8 ms.
+
+**128 cells is the web's default and the cheapest correct choice**: it is
+cheap enough on any build, and it is what the GPU path draws, so the same
+seed gives the same sea on every machine. Halving the grid (64 cells)
+saves under half a millisecond and drops the shortest waves; 256 cells is
+fine on a fast machine but costs about 2.8 ms (1.8 ms with WASM SIMD) a
+frame on WebGL2. There is no update-rate setting: the field is worked out
+at the drawn frame's time, once per moment however many queries ask, and
+an older moment would leave floating bodies off the drawn waves.
+
+**WASM SIMD** is optional. Build with the `wasm-simd` feature and
+`simd128` for the whole module:
+
+```sh
+CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="-C target-feature=+simd128" \
+  web/build.sh --features 3d,wasm-simd my_game
+```
+
+That makes a moment 1.4 to 1.6 times faster (0.08 ms saved at 128 cells,
+0.4 to 0.6 ms at 256), and the module then needs a browser with
+fixed-width SIMD (Chrome 91, Firefox 89, Safari 16.4). Each half alone is
+no good, which is why the feature refuses to compile without the flag:
+`simd128` alone changed nothing (0.99 to 1.05 times), and rustfft's SIMD
+code alone made a moment three times slower (0.99 ms instead of 0.24 at
+128 cells), its SIMD functions called from code built without SIMD. The
+default build leaves both off, for older browsers.
 
 ## Floating bodies
 
