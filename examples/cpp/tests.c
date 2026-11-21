@@ -2966,6 +2966,17 @@ static void render_descriptors_setup(PonkoCtx* ctx, void* user) {
     CHECK(ponko_ctx_set_post_ex(ctx, &post) == PONKO_INVALID_ARGUMENT);
     PonkoPostEx unset = {0};
     CHECK(ponko_ctx_post_ex(ctx, &unset) == PONKO_INVALID_ARGUMENT);
+    /* Version 2: thin objects in reflections. A version 1 caller leaves them as they are. */
+    post.dof_blur = .01f;
+    CHECK(!back.ssr_thin_objects);
+    post.ssr_thin_objects = true;
+    CHECK(ponko_ctx_set_post_ex(ctx, &post) == PONKO_OK);
+    PonkoPostEx v1 = {.struct_size = sizeof v1, .version = 1};
+    CHECK(ponko_ctx_post_ex(ctx, &v1) == PONKO_OK && !v1.ssr_thin_objects); /* not written */
+    CHECK(ponko_ctx_set_post_ex(ctx, &v1) == PONKO_OK);
+    CHECK(ponko_ctx_post_ex(ctx, &back) == PONKO_OK && back.ssr_thin_objects);
+    post.ssr_thin_objects = false;
+    CHECK(ponko_ctx_set_post_ex(ctx, &post) == PONKO_OK);
     /* Two looks blended, and volumes by where the camera is. */
     PonkoPostEx day = {.struct_size = sizeof day, .version = PONKO_POST_EX_VERSION};
     PonkoPostEx cave = day, blended = day;
