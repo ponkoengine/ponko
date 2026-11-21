@@ -102,6 +102,11 @@ pub(crate) struct Renderer {
     sprite_mirror: traffic::Mirror,
 
     timer: Option<GpuTimer>,
+    /// Why there is no `timer` (no timestamp queries, or the query-set
+    /// budget refused one).
+    timer_refused: crate::perf::GpuUntimed,
+    /// Set by the device-lost callback.
+    device_lost: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Time every frame's passes, whatever the game asks for
     /// ([`set_gpu_timing_every`](Self::set_gpu_timing_every)): the offscreen
     /// renderer of the GPU tests, so a test that asks for timestamps gets
@@ -430,6 +435,23 @@ impl Renderer {
         self.timer.as_ref().map_or(&[], |t| &t.not_timed)
     }
 
+    /// Why the latest frame has no usable GPU time, if it has none.
+    pub fn gpu_untimed(&self) -> Option<crate::perf::GpuUntimed> {
+        if self.device_lost.load(std::sync::atomic::Ordering::Acquire) {
+            return Some(crate::perf::GpuUntimed::DeviceLost);
+        }
+        match &self.timer {
+            Some(timer) => timer.untimed(),
+            None => Some(self.timer_refused),
+        }
+    }
+
+    /// The device-lost callback's flag: tests lose a device on purpose.
+    #[cfg(test)]
+    pub(crate) fn device_lost_flag(&self) -> &std::sync::atomic::AtomicBool {
+        &self.device_lost
+    }
+
     /// What the render-pass inspector needs beyond [`RenderStats`].
     pub fn detail(&self) -> super::RenderDetail {
         super::RenderDetail {
@@ -444,6 +466,7 @@ impl Renderer {
             #[cfg(not(feature = "3d"))]
             prepare_ms: 0.0,
             gpu_latest: self.timer.as_ref().and_then(GpuTimer::latest_frame),
+            gpu_untimed: self.gpu_untimed(),
         }
     }
 
@@ -571,13 +594,22 @@ impl Renderer {
         // of it through `onPonkoFailure`, kind `DeviceLost`, with whether it
         // was destroyed or lost for another reason. On WebGL2 the
         // canvas's lost context reports it instead (`ContextLost`).
+        // Everywhere, a lost device stops the GPU timing, and the profiler
+        // says so (`GpuUntimed::DeviceLost`).
+        let device_lost = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         #[cfg(target_arch = "wasm32")]
-        if adapter.get_info().backend == wgpu::Backend::BrowserWebGpu {
-            device.set_device_lost_callback(|reason, message| {
+        let report_to_page = adapter.get_info().backend == wgpu::Backend::BrowserWebGpu;
+        let lost = device_lost.clone();
+        device.set_device_lost_callback(move |reason, message| {
+            lost.store(true, std::sync::atomic::Ordering::Release);
+            #[cfg(target_arch = "wasm32")]
+            if report_to_page {
                 let reason = crate::web::DeviceLostReason::from_wgpu(reason);
                 crate::web::report_failure(crate::web::device_lost_while_playing(reason, &message));
-            });
-        }
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            let _ = (reason, message);
+        });
 
         // The 3D frame's samples per pixel: the game's choice where this GPU
         // can multisample both 3D targets that much, else 4 (always works).
@@ -636,7 +668,7 @@ impl Renderer {
             &[]
         };
 
-        Ok(Self::from_device(
+        let mut renderer = Self::from_device(
             Some(WindowSurface {
                 window,
                 instance,
@@ -655,7 +687,9 @@ impl Renderer {
                     && super::gpu3d::multisamples(&adapter, 2),
                 tiled,
             },
-        ))
+        );
+        renderer.device_lost = device_lost;
+        Ok(renderer)
     }
 
     /// Tests: the device, the queue and texture `id` (a render target's),
@@ -731,6 +765,8 @@ impl Renderer {
             },
         );
         renderer.set_draw_hidden(true, true);
+        // One device, one lost-device callback: the first renderer's.
+        renderer.device_lost = self.device_lost.clone();
         renderer
     }
 
@@ -830,6 +866,7 @@ impl Renderer {
         });
         let instance_buffer = Self::create_instance_buffer(&device, INITIAL_INSTANCE_CAPACITY);
         let timer = GpuTimer::new(&device, &queue);
+        let timer_refused = GpuTimer::why_none(&device);
         let upload_timer = super::upload_timer::UploadTimer::new(&device, &queue);
 
         Self {
@@ -866,6 +903,10 @@ impl Renderer {
             too_many_sprites: false,
             sprite_mirror: traffic::Mirror::default(),
             timer,
+            timer_refused,
+            // Set by `new_async`'s device-lost callback; a renderer made
+            // for the GPU tests registers none (the tests set their own).
+            device_lost: Default::default(),
             gpu_timing_pinned: false,
             upload_timer,
             capabilities,

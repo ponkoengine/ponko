@@ -119,14 +119,28 @@ an allocator of its own calls `ponko_note_deallocation(bytes)` for each
 
 #### Allocations per thread
 
-The per-frame and per-system figures cover the whole process: a system is
-charged for what rayon's workers allocate while it runs, their own
-bookkeeping included (a worker that parks for the first time boxes its
-sleep lock). Each thread also keeps a count of its own, and scopes use it:
-a scope counts the allocations made **on its own thread while it is
-open**, so a scope inside a parallel loop counts the loop's work on every
-thread that runs it, and nothing the pool allocates for itself. The report
-shows them as `allocs_per_frame` of each scope.
+The per-frame figure covers the whole process. A system's figure is its
+own: the allocations made **on the thread that runs it while it runs**,
+plus what the workers of the ECS's parallel loops it starts
+(`par_for_each`, `par_for_each_indexed`, `par_collect_into`, a
+`ViewGroup` on threads, and parallel queries from C and C++) allocate for
+those loops. Each piece of such a loop reads its worker's count before and
+after it runs, and the sum is added to the starting thread's count when
+the loop ends: a few reads per loop, nothing on the allocation path, and
+nothing at all while profiling is off. What other threads do meanwhile
+(another game or test, an asset loader, the audio thread, a pool worker
+parking for the first time) is not in it, so an allocation-free system
+reads exactly zero on a busy machine too. Not counted for the system: a
+loop written directly with rayon (its work counts on the workers that run
+it; put a scope inside it), and a job handed to another thread. The one
+allocation of rayon's own that does land on the starting thread is a new
+block of the queue it hands loops to, every 63 loops.
+
+Scopes count the same way: a scope counts the allocations made **on its
+own thread while it is open**, so a scope inside a parallel loop counts
+the loop's work on every thread that runs it, and nothing the pool
+allocates for itself. The report shows them as `allocs_per_frame` of each
+scope.
 
 ```rust
 # use ponko::prelude::*;
@@ -142,8 +156,11 @@ fn steering(ctx: &mut Ctx) {
 
 `perf::thread_alloc_counts()` is the same count to read directly: two
 readings on one thread, subtracted, are what the code between them
-allocated there. Allocation tests use these instead of allowing for the
-pool's own allocations (`tests/skeleton2d_alloc.rs`). Scopes timed from C
+allocated there (its ECS parallel loops included). Allocation tests use
+these instead of allowing for the pool's own allocations
+(`tests/skeleton2d_alloc.rs`, `tests/alloc_threads.rs`), and
+`perf::thread_net_alloc_bytes()` is `net_alloc_bytes()` for one thread
+(C `ponko_thread_net_alloc_bytes()`, C++ `ponko::thread_net_alloc_bytes()`). Scopes timed from C
 and C++ (`ponko_profile_begin`/`_end`, `PONKO_PROFILE_SCOPE`) count their
 thread's allocations the same way, when they end on the thread that began
 them, and `ponko_thread_alloc_counts()` (C++ `ponko::thread_alloc_counts()`)

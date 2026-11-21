@@ -123,6 +123,9 @@ pub(crate) struct GpuTimer {
     /// Reused by `read_frame` to sort a frame's passes.
     order: Vec<Charge>,
     cadence: Cadence,
+    /// A frame due to be timed found every readback slot in flight, and no
+    /// frame's timestamps have come back since.
+    starved: bool,
     /// The right to hold `queries` (see `query_sets.rs`). Declared last,
     /// so the queries are dropped before it is given back.
     _lease: super::query_sets::Lease,
@@ -181,8 +184,32 @@ impl GpuTimer {
             last_end: 0,
             order: Vec::with_capacity(MAX_PASSES as usize),
             cadence: Cadence::EVERY_FRAME,
+            starved: false,
             _lease: lease,
         })
+    }
+
+    /// Why [`new`](Self::new) gave no timer on `device`: it has no
+    /// timestamp queries, or the query-set budget refused one.
+    pub fn why_none(device: &wgpu::Device) -> crate::perf::GpuUntimed {
+        if device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+            crate::perf::GpuUntimed::QuerySetBudget
+        } else {
+            crate::perf::GpuUntimed::NoTimestamps
+        }
+    }
+
+    /// Why the latest frame has no usable GPU time, if it has none: timing
+    /// is off, or no timed frame's timestamps have come back (none yet, or
+    /// the readbacks are all in flight).
+    pub fn untimed(&self) -> Option<crate::perf::GpuUntimed> {
+        if self.cadence.every == 0 {
+            Some(crate::perf::GpuUntimed::Off)
+        } else if self.frames_read == 0 || self.starved {
+            Some(crate::perf::GpuUntimed::NotReady)
+        } else {
+            None
+        }
     }
 
     /// Times every `n`th frame from now on (1, the default: every frame;
@@ -247,6 +274,7 @@ impl GpuTimer {
             }
             self.last_sample = slot.submitted.map(|(frame, at)| (ms, frame, at));
             self.frames_read += 1;
+            self.starved = false;
             let w = weight(slot.covers);
             self.smoothed_ms = Some(match self.smoothed_ms {
                 None => ms,
@@ -285,6 +313,9 @@ impl GpuTimer {
         self.names.get_mut().unwrap_or_else(PoisonError::into_inner).clear();
         let due = self.cadence.begin();
         self.current = (due && self.slots[i].state.load(Ordering::Acquire) == FREE).then_some(i);
+        if due && self.current.is_none() {
+            self.starved = true;
+        }
         if self.current.is_some() {
             self.next = (i + 1) % SLOTS;
         }

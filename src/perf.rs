@@ -83,6 +83,8 @@ pub struct Perf {
     pub(crate) gpu_passes: Vec<crate::perf::GpuPass>,
     /// The passes the renderer couldn't time, copied after every frame.
     pub(crate) gpu_passes_not_timed: Vec<&'static str>,
+    /// Why the latest frame has no usable GPU time, copied after every frame.
+    pub(crate) gpu_untimed: Option<GpuUntimed>,
     /// The last [`RENDER_HISTORY`] drawn frames, oldest first, for the
     /// render inspector. Filled in place: nothing is allocated per frame.
     pub(crate) render_history: std::collections::VecDeque<RenderFrame>,
@@ -194,6 +196,7 @@ impl Perf {
             state: crate::perf_report::PerfState::new(),
             gpu_passes: Vec::new(),
             gpu_passes_not_timed: Vec::new(),
+            gpu_untimed: Some(GpuUntimed::NoGpu),
             render_history: std::collections::VecDeque::new(),
             display_wait_ms: 0.0,
             gpu_memory: None,
@@ -338,6 +341,27 @@ impl Perf {
     /// ```
     pub fn gpu_passes_not_timed(&self) -> &[&'static str] {
         &self.gpu_passes_not_timed
+    }
+
+    /// Why the latest frame has no usable GPU time, or `None` when it has:
+    /// no GPU (headless), no timestamp queries, the timer refused by the
+    /// query-set budget, timing turned off, timestamps not back yet, or the
+    /// device lost ([`GpuUntimed`]). While it is `Some`, `gpu_ms` is `None`
+    /// or the GPU times shown are from an earlier frame. The overlay, the
+    /// report's warnings, the render-pass inspector and the editor's GPU
+    /// panel say the same.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// use ponko::perf::GpuUntimed;
+    /// fn why(ctx: &mut Ctx) {
+    ///     // Headless: there is no GPU to time.
+    ///     assert_eq!(ctx.perf.gpu_untimed(), Some(GpuUntimed::NoGpu));
+    /// }
+    /// # Game::new("t", 1, 1).system(why).run_headless(1, |_| {});
+    /// ```
+    pub fn gpu_untimed(&self) -> Option<GpuUntimed> {
+        self.gpu_untimed
     }
 
     /// How long the last frame waited for the display (ms): idle time, not
@@ -539,6 +563,7 @@ impl Perf {
         }
         crate::perf_report::analyze(&mut report);
         if report.render.is_some() {
+            crate::perf_report::warn_gpu_untimed(&mut report, self.gpu_untimed);
             crate::perf_report::warn_not_timed(&mut report, &self.gpu_passes_not_timed);
         }
         report
@@ -583,6 +608,7 @@ impl Perf {
         gpu_frame: Option<(&[crate::profiler::PassSpan], u64)>,
     ) -> bool {
         self.profiler.frame_state_changes = self.last_render_detail.and_then(|d| d.state_changes);
+        self.profiler.gpu_untimed = self.gpu_untimed;
         let quit = self.profiler.record(
             sample,
             &self.timings,

@@ -1047,12 +1047,21 @@ fn gpu_pass_rows(passes: &[crate::perf::GpuPass], not_timed: &[&'static str]) ->
 
 /// Each GPU pass's time; a pass that ran but couldn't be timed says
 /// "not timed". Empty until a frame's times have come back (windowed games
-/// time one frame in 16 unless profiling is on).
+/// time one frame in 16 unless profiling is on). When the latest frame has
+/// no usable GPU time, it says why ([`Perf::gpu_untimed`](crate::perf::Perf::gpu_untimed)).
 fn gpu_passes(ui: &mut Ui, ctx: &Ctx) {
     let rows = gpu_pass_rows(ctx.perf.gpu_passes(), ctx.perf.gpu_passes_not_timed());
+    let untimed = ctx.perf.gpu_untimed();
     if rows.is_empty() {
-        ui.label(RichText::new("no GPU pass times yet").weak());
+        let text = match untimed {
+            Some(why) => format!("no GPU pass times: {why}"),
+            None => "no GPU pass times yet".to_owned(),
+        };
+        ui.label(RichText::new(text).weak());
         return;
+    }
+    if let Some(why) = untimed {
+        ui.label(RichText::new(format!("from an earlier frame: {why}")).weak());
     }
     let top = rows.iter().filter_map(|r| r.1).fold(0.001, f32::max);
     egui::Grid::new("inspector-gpu-passes").num_columns(3).show(ui, |ui| {
@@ -1495,6 +1504,8 @@ mod tests {
     #[test]
     fn gpu_passes_that_ran_but_could_not_be_timed_show_as_not_timed_not_as_zero() {
         let mut ctx = Ctx::new(1.0 / 60.0, Vec2::new(400.0, 300.0));
+        // As in a windowed game whose latest frame was timed.
+        ctx.perf.gpu_untimed = None;
         ctx.perf.gpu_passes = vec![
             crate::perf::GpuPass {
                 name: "opaque",
@@ -1525,6 +1536,29 @@ mod tests {
         ctx.perf.gpu_passes.clear();
         ctx.perf.gpu_passes_not_timed.clear();
         assert_eq!(drawn_texts(&ctx), ["no GPU pass times yet"]);
+    }
+
+    /// No GPU time: the panel says why, with rows or without.
+    #[test]
+    fn the_gpu_panel_says_why_a_frame_has_no_gpu_time() {
+        use crate::perf::GpuUntimed;
+        let mut ctx = Ctx::new(1.0 / 60.0, Vec2::new(400.0, 300.0));
+        ctx.perf.gpu_untimed = Some(GpuUntimed::QuerySetBudget);
+        assert_eq!(
+            drawn_texts(&ctx),
+            [format!("no GPU pass times: {}", GpuUntimed::QuerySetBudget.message())]
+        );
+        ctx.perf.gpu_passes = vec![crate::perf::GpuPass {
+            name: "opaque",
+            ms: 1.5,
+        }];
+        ctx.perf.gpu_untimed = Some(GpuUntimed::DeviceLost);
+        let texts = drawn_texts(&ctx);
+        assert_eq!(
+            texts[0],
+            format!("from an earlier frame: {}", GpuUntimed::DeviceLost.message())
+        );
+        assert!(texts.contains(&"1.500 ms".to_owned()), "{texts:?}");
     }
 
     #[test]

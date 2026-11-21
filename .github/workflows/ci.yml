@@ -1262,6 +1262,9 @@ jobs:
       - name: Nightly Rust for the threaded web build
         run: rustup toolchain install nightly --profile minimal --component rust-src,clippy --target wasm32-unknown-unknown
       - run: web/build.sh --threads --clippy
+      # The threaded fixture as the browser runner builds it (3D and the
+      # benchmark internals), whose code only compiles with both.
+      - run: web/build.sh --threads --clippy --features 3d,bench-internals
       - name: Find the wasm-bindgen version in Cargo.lock
         run: echo "WASM_BINDGEN=$(awk '/^name = "wasm-bindgen"$/ { getline; gsub(/version = |"/, ""); print }' Cargo.lock)" >> "$GITHUB_ENV"
       - uses: taiki-e/install-action@v2

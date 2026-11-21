@@ -1514,7 +1514,12 @@ impl ViewGroup {
                 use rayon::prelude::*;
                 let items = &mut *guard.items;
                 let tally = crate::par::LoopTally::start();
-                crate::par::run(|| items.par_iter_mut().enumerate().for_each(|item| tally.count(|| one(item))));
+                crate::par::run(|| {
+                    items
+                        .par_iter_mut()
+                        .enumerate()
+                        .for_each(|item| tally.count(|| one(item)))
+                });
                 tally.finish();
             }
         } else {

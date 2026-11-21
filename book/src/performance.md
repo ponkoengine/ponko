@@ -218,6 +218,8 @@ goes, in a running game:
   didn't come back is listed by `ctx.perf.gpu_passes_not_timed()` and
   marked "not timed" in the overlay, the report and traces, never shown as
   0 ms (see [Which passes can be timed](#which-passes-can-be-timed)).
+  When the latest frame has no usable GPU time at all,
+  `ctx.perf.gpu_untimed()` says why (see [No GPU time](#no-gpu-time)).
   Timing a pass costs the graphics library a few heap allocations, so a
   game times one frame in 16, and every frame while something reads every
   frame: profiling, the overlay, a trace, a `PONKO_BENCH` run or automatic
@@ -356,8 +358,45 @@ for a game's own timestamp queries, so up to 14 devices are timed at once
 (a game with tool windows, previews or several offscreen renderers). A
 device past that keeps working without GPU times, and the engine prints
 one line saying so (`ponko: GPU frame timer: GPU timing is off for this
-device...`); dropping another device's renderer makes room again. Other
-backends have no such limit known, and every device is timed.
+device...`); dropping another device's renderer makes room again
+(`ctx.perf.gpu_untimed()` is then `Some(GpuUntimed::QuerySetBudget)`).
+Other backends have no such limit known, and every device is timed.
+
+### No GPU time
+
+When the latest frame has no usable GPU time (`gpu_ms` is `None`, or the
+times shown are from an earlier frame), `ctx.perf.gpu_untimed()` says why
+instead of leaving it at "not timed":
+
+| `GpuUntimed` | JSON | What to do |
+|---|---|---|
+| `NoGpu` | `no_gpu` | A headless run, or the renderer hasn't opened a GPU yet. |
+| `NoTimestamps` | `no_timestamps` | The GPU or its backend can't write timestamps (WebGL2, some GPUs): measure CPU time and frame time instead. |
+| `QuerySetBudget` | `query_set_budget` | The process already holds every timestamp query set the engine takes ([above](#how-many-devices-can-be-timed)): drop another device's renderer. |
+| `Off` | `off` | The game chose `GpuTiming::Off` and nothing else reads GPU times. |
+| `NotReady` | `not_ready` | No timed frame's timestamps have come back yet (they arrive a few frames late), or every readback is still in flight. |
+| `DeviceLost` | `device_lost` | The GPU device was lost (a driver reset, the GPU removed); nothing is timed from then on. |
+
+The overlay shows it (`gpu not timed: query_set_budget`, or `gpu 2.10
+(stale: device_lost)`), the report adds a `GpuNotTimed` warning, the
+render-pass inspector's `gpu_timing.untimed` names it, and the editor's GPU
+panel says it in words. More reasons may be added, so match with a `_`
+arm. C reads it with `ponko_ctx_gpu_untimed(ctx, &why)` (a
+`PONKO_GPU_UNTIMED_*` value, `PONKO_GPU_UNTIMED_NONE` when the frame was
+timed), C++ with `ctx.gpu_untimed()` (`ponko::gpu_untimed`).
+
+```rust
+# use ponko::prelude::*;
+use ponko::perf::GpuUntimed;
+fn gpu_time(ctx: &mut Ctx) {
+    match ctx.perf.gpu_untimed() {
+        None => println!("{:?}", ctx.perf.frame_stats().gpu_ms),
+        Some(GpuUntimed::NotReady) => {} // in a few frames
+        Some(why) => println!("no GPU time: {why}"),
+    }
+}
+# Game::new("t", 1, 1).system(gpu_time).run_headless(1, |_| {});
+```
 
 ### Benchmark runs
 
@@ -458,7 +497,7 @@ are per frame.
 
 | Field | What |
 |---|---|
-| `gpu_timing` | `available`: the GPU has timestamp queries; `frames_timed`: frames whose GPU times came back (one in 16 outside profiling, see `ctx.perf.gpu_passes()` above; `perf.get` with `profiling: true` times every frame); `cadence`: what the game chose with [`set_gpu_timing`](#how-often-gpu-passes-are-timed), `auto`, `every` (with `every`: the number of frames) or `off`. `cadence: "off"` with `available: true` is the game's choice, so no times are expected (`unavailable` says so); `available: false` is an adapter without timestamps, whatever the cadence |
+| `gpu_timing` | `available`: the renderer has a GPU timer; `frames_timed`: frames whose GPU times came back (one in 16 outside profiling, see `ctx.perf.gpu_passes()` above; `perf.get` with `profiling: true` times every frame); `cadence`: what the game chose with [`set_gpu_timing`](#how-often-gpu-passes-are-timed), `auto`, `every` (with `every`: the number of frames) or `off`; `untimed`, only when the latest frame has no usable GPU time: why, one of the [reasons below](#no-gpu-time) (`no_gpu`, `no_timestamps`, `query_set_budget`, `off`, `not_ready`, `device_lost`). `cadence: "off"` with `available: true` is the game's choice, so no times are expected (`unavailable` says so); `available: false` is an adapter without timestamps or a timer the query-set budget refused, whatever the cadence (`untimed` tells them apart) |
 | `cpu_ms` | the renderer's CPU time: `total`, split into `extract` (culling, collecting models), `prepare` (uploading 3D data), `encode` (recording command buffers), `submit` and `other` (sprites, overlays) |
 | `gpu_ms` | `frame`, `passes` (`[{name, ms}]` in the order they run), smoothed, and `not_timed`: the names of the passes that ran in the latest timed frame but couldn't be timed (see [which passes can be timed](#which-passes-can-be-timed)), `[]` when every pass was timed. They are never in `passes` as 0 ms; the frame's `gpu_ms.frame` still covers them. `passes` and `not_timed` are `null` together (with the reason in `unavailable`) when nothing could be timed |
 | `counts` | `draw_calls`, `sprites`, `models`, `triangles`, `shadow_models`, `shadow_triangles`, `occluded_models`, `frustum_culled_models` (see below), `frustum_culled_other_models` (always `null`, see below), `pipelines_built`, and `instance_batches`: how the [static instance batches](3d.md#which-path-a-batch-takes) were culled (`batches`, `instances`, `gpu_driven`, `gpu_instances`, `cpu_small`, `cpu_no_compute`, `cpu_over_limit`, `dropped`, `pools`, `pages`, `pool_bytes`, `cull_dispatches`, `cull_jobs`, `views_skipped`) |

@@ -451,6 +451,23 @@ pub extern "C" fn ponko_net_alloc_bytes() -> i64 {
     ponko::perf::net_alloc_bytes()
 }
 
+/// `ponko_net_alloc_bytes` for the calling thread (Rust
+/// `perf::thread_net_alloc_bytes`): bytes allocated minus bytes freed on it
+/// while profiling was on, with what the workers of the parallel queries it
+/// started did for it. Two readings on one thread, subtracted, are what the
+/// code between them still holds, whatever other threads take or give back
+/// meanwhile. Memory freed on another thread than the one that allocated it
+/// counts on the freeing thread.
+/// ```
+/// let before = ponko_ffi::ponko_thread_net_alloc_bytes();
+/// let after = ponko_ffi::ponko_thread_net_alloc_bytes();
+/// assert_eq!(after - before, 0, "nothing ran in between");
+/// ```
+#[unsafe(no_mangle)]
+pub extern "C" fn ponko_thread_net_alloc_bytes() -> i64 {
+    ponko::perf::thread_net_alloc_bytes()
+}
+
 /// Turns the deeper profiling on or off: scopes are timed and allocations
 /// counted (the overlay switches it on by itself).
 /// ```
@@ -540,6 +557,56 @@ pub unsafe extern "C" fn ponko_ctx_gpu_timing(
         };
         out(out_kind, kind)?;
         out(out_every, every)
+    })
+}
+
+/// `ponko_ctx_gpu_untimed`: the latest frame's GPU time is usable.
+pub const PONKO_GPU_UNTIMED_NONE: u32 = 0;
+/// `ponko_ctx_gpu_untimed`: no GPU (a headless run, or before the renderer
+/// opened one).
+pub const PONKO_GPU_UNTIMED_NO_GPU: u32 = 1;
+/// `ponko_ctx_gpu_untimed`: the GPU or its backend can't write timestamps.
+pub const PONKO_GPU_UNTIMED_NO_TIMESTAMPS: u32 = 2;
+/// `ponko_ctx_gpu_untimed`: the timer was refused a timestamp query set (the
+/// process holds as many as the engine takes on this backend).
+pub const PONKO_GPU_UNTIMED_QUERY_SET_BUDGET: u32 = 3;
+/// `ponko_ctx_gpu_untimed`: GPU timing is off (`PONKO_GPU_TIMING_OFF`) and
+/// nothing else reads GPU times.
+pub const PONKO_GPU_UNTIMED_OFF: u32 = 4;
+/// `ponko_ctx_gpu_untimed`: no timed frame's timestamps have come back yet.
+pub const PONKO_GPU_UNTIMED_NOT_READY: u32 = 5;
+/// `ponko_ctx_gpu_untimed`: the GPU device was lost.
+pub const PONKO_GPU_UNTIMED_DEVICE_LOST: u32 = 6;
+
+/// Why the latest frame has no usable GPU time (Rust `Perf::gpu_untimed`):
+/// `*out_reason` is a `PONKO_GPU_UNTIMED_*` value, `PONKO_GPU_UNTIMED_NONE`
+/// when it has one. More reasons may be added: treat an unknown value as
+/// "not timed, for a reason this header doesn't name".
+/// ```
+/// use ponko_ffi::*;
+/// let mut why = 9u32;
+/// assert_eq!(unsafe { ponko_ctx_gpu_untimed(std::ptr::null(), &mut why) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` must be null or live; `out_reason` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_gpu_untimed(ctx: *const PonkoCtx, out_reason: *mut u32) -> PonkoStatus {
+    use ponko::perf::GpuUntimed;
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        let why = ctx_access(ctx, |c| Ok(c.perf.gpu_untimed()))?;
+        let code = match why {
+            None => PONKO_GPU_UNTIMED_NONE,
+            Some(GpuUntimed::NoGpu) => PONKO_GPU_UNTIMED_NO_GPU,
+            Some(GpuUntimed::NoTimestamps) => PONKO_GPU_UNTIMED_NO_TIMESTAMPS,
+            Some(GpuUntimed::QuerySetBudget) => PONKO_GPU_UNTIMED_QUERY_SET_BUDGET,
+            Some(GpuUntimed::Off) => PONKO_GPU_UNTIMED_OFF,
+            Some(GpuUntimed::NotReady) => PONKO_GPU_UNTIMED_NOT_READY,
+            Some(GpuUntimed::DeviceLost) => PONKO_GPU_UNTIMED_DEVICE_LOST,
+            // A reason newer than this binding: not timed all the same.
+            Some(_) => PONKO_GPU_UNTIMED_NOT_READY,
+        };
+        out(out_reason, code)
     })
 }
 

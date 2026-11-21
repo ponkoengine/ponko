@@ -1734,7 +1734,8 @@ impl<'w, Q: QueryData> Query<'w, Q> {
                     len: 0,
                 };
                 let tally = crate::par::LoopTally::start();
-                let counted = |lo: usize, hi: usize, initialized: &mut Initialized<R>| tally.count(|| leaf(lo, hi, initialized));
+                let counted =
+                    |lo: usize, hi: usize, initialized: &mut Initialized<R>| tally.count(|| leaf(lo, hi, initialized));
                 let mut rest = crate::par::run(|| fill(rest, from, n - from, chunk, &counted));
                 tally.finish();
                 initialized.len += rest.len;

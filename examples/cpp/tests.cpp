@@ -1005,21 +1005,14 @@ static void presence_filters_allocate_nothing() {
             .sim_system(parallel_plain, "parallel_plain")
             .profile_headless(5, 40, setup);
     };
-    // A system's count is the whole process's while it runs (a parallel system's workers
-    // allocate on their own threads), so on a busy machine another thread's allocation can land
-    // in a sequential system's run now and then (seen once in about 150 runs under a load
-    // average of 100). A filter that allocates is never at zero, so one clean run of three
-    // is asked for, not three.
+    // A system's count is its own thread's (and its parallel queries' workers'), so what other
+    // threads allocate meanwhile never lands in it: one run, exact zeros.
     auto run = profile();
-    auto clean = [](const std::string& json) {
-        return system_allocations(json, "each_filtered") == 0.0 && system_allocations(json, "query_filtered") == 0.0 &&
-               system_allocations(json, "count_filtered") == 0.0 && system_allocations(json, "every") == 0.0;
-    };
-    for (int attempt = 1; attempt < 3 && !clean(run.report.json()); ++attempt) run = profile();
     CHECK(each_rows == 32 + 40 && query_rows == 32 && count_rows == 24 && every_rows == 64);
     const std::string json = run.report.json();
     CHECK(system_allocations(json, "leaky") >= 1.0);   // the report does see allocations
-    CHECK(clean(json));
+    CHECK(system_allocations(json, "each_filtered") == 0.0 && system_allocations(json, "query_filtered") == 0.0 &&
+          system_allocations(json, "count_filtered") == 0.0 && system_allocations(json, "every") == 0.0);
     // On all cores the thread pool may allocate now and then; the filter must
     // not add an allocation to every call (one call per frame here).
     const double plain = system_allocations(json, "parallel_plain");
@@ -5291,25 +5284,24 @@ static void native_parity_round5() {
         }
         CHECK(after.count - before.count == 1 && after.bytes - before.bytes == sizeof(int));
         // Net bytes: PONKO_COUNT_CPP_ALLOCATIONS counts the frees too, so what is given back leaves them.
-        // The figure is the whole process's: another thread (the engine's workers, still freeing
-        // what an earlier game left) may give memory back in between on a busy machine, so a few
-        // tries are allowed. A block that isn't counted, or a free that isn't, fails every one.
-        bool counted = false;
-        for (int attempt = 0; attempt < 5 && !counted; ++attempt) {
-            const std::int64_t held = ponko::net_alloc_bytes();
+        // This thread's figure: what other threads (the engine's workers, still freeing what an
+        // earlier game left) give back meanwhile isn't in it, so the counts are exact.
+        {
+            const std::int64_t held = ponko::thread_net_alloc_bytes();
             auto* block = new char[4096];
-            const std::int64_t holding = ponko::net_alloc_bytes();
+            const std::int64_t holding = ponko::thread_net_alloc_bytes();
             delete[] block;
-            const std::int64_t released = ponko::net_alloc_bytes();
-            counted = holding - held >= 4096 && holding - released >= 4096;
+            const std::int64_t released = ponko::thread_net_alloc_bytes();
+            CHECK(holding - held == 4096 && released == held);
         }
-        CHECK(counted);
         ctx.set_profiling(false);
     });
 
     // The GPU timing choice: the default is auto, and what is set reads back.
     ponko::game("c++ gpu timing", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
         CHECK(ctx.gpu_timing() == ponko::gpu_timing_auto());
+        // Headless: no GPU, and it says so.
+        CHECK(ctx.gpu_untimed() == ponko::gpu_untimed::no_gpu);
         ctx.set_gpu_timing(ponko::gpu_timing_every(4));
         CHECK(ctx.gpu_timing().kind == ponko::gpu_timing_kind::every && ctx.gpu_timing().every == 4);
         ctx.set_gpu_timing(ponko::gpu_timing_off());

@@ -1547,7 +1547,13 @@ pub(crate) unsafe fn chunk_in_parallel(
     if len <= rows {
         task(0);
     } else {
-        (0..len.div_ceil(rows)).into_par_iter().for_each(task);
+        // What the workers allocate for the query counts on the thread
+        // that started it (`perf::thread_alloc_counts`).
+        let tally = ponko_ecs::LoopTally::start();
+        (0..len.div_ceil(rows))
+            .into_par_iter()
+            .for_each(|t| tally.count(|| task(t)));
+        tally.finish();
     }
 }
 
