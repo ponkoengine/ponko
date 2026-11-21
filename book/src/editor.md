@@ -291,9 +291,15 @@ kinds are per node:
   the scene's root, the root or a node of another glTF scene, or an
   entity the scene file saves. Through a save, a reopen and Play/Stop a
   node of another scene comes back on its parent whichever scene spawns
-  first (the scene file numbers each glTF scene's record for it). A
-  parent the save leaves out (an entity marked not saved) can't be kept,
-  and the editor says so on its console.
+  first (the scene file numbers each glTF scene's record for it).
+  Deleting that parent deletes what hangs off it; undo brings both back,
+  linked, at once. If the other scene's file doesn't load when the scene
+  is opened, the node waits on its file parent and its overrides list
+  the parent as missing: **Revert** forgets the link, or fix the file and
+  the link is made when that scene spawns. Builds from before these links
+  read such saves too, with the node on its file parent. A parent the
+  save leaves out (an entity marked not saved) can't be kept, and the
+  editor says so on its console.
 
 Selecting a scene's root or any of its nodes shows, at the top of the
 inspector, the file it came from and every override of the scene, one row

@@ -54,7 +54,7 @@ impl Editor {
                 }
             }
             Undo::Spawned(_) | Undo::Despawned(_) => {}
-            #[cfg(feature = "3d")]
+            #[cfg(all(feature = "editor", feature = "3d"))]
             Undo::GltfLink { .. } => {}
         }
     }
