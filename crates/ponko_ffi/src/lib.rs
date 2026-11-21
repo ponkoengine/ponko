@@ -51,6 +51,8 @@ mod game;
 mod gltf_scenes;
 mod grid;
 mod handles;
+mod hdr_output;
+pub use hdr_output::*;
 mod headless_ui;
 mod hierarchy;
 mod keys;

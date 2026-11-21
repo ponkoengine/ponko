@@ -546,10 +546,12 @@ where
         let msaa = self.ctx.scene3d.post.msaa;
         #[cfg(not(feature = "3d"))]
         let msaa = 4;
+        // HDR output as `Game::hdr_output` set it: the window opens for it.
+        let hdr = self.ctx.gfx.hdr_output;
 
         // Desktop: open the GPU and start right away.
         #[cfg(not(target_arch = "wasm32"))]
-        match Renderer::new(window, display, vsync, msaa) {
+        match Renderer::new(window, display, vsync, msaa, hdr) {
             Ok(renderer) => self.start(renderer),
             Err(error) => self.error = Some(error),
         }
@@ -583,7 +585,7 @@ where
                 if context_lost.get() {
                     return;
                 }
-                let renderer = Renderer::new_async(window, display, vsync, msaa)
+                let renderer = Renderer::new_async(window, display, vsync, msaa, hdr)
                     .await
                     .map_err(|error| error.context("Could not initialize WebGPU or WebGL2"));
                 let _ = proxy.send_event(Ready(renderer));
