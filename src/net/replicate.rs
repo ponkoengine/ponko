@@ -56,6 +56,8 @@ mod fields;
 mod inputs;
 mod kinds;
 mod server;
+#[cfg(test)]
+pub(crate) use server::ResendRules;
 mod wire;
 
 pub use fields::{Fields, Quantize, Replicate, ReplicateField, replicated_bits};
@@ -632,7 +634,9 @@ impl Inner {
         if self.role == ReplicationRole::Client {
             self.client.reset(world, self.inputs.as_deref_mut());
         }
+        let rules = self.server.rules;
         self.server = server::Server::default();
+        self.server.rules = rules;
         self.server.interest = self.interest.clone().map(Interest::new);
         self.client = client::Client::default();
         if let Some(i) = &mut self.inputs {
@@ -1558,6 +1562,23 @@ impl Replication {
     #[cfg(test)]
     pub(crate) fn peer_rtt_ticks(&self, peer: PeerId) -> Option<f32> {
         self.inner.as_ref()?.server.clients.get(&peer)?.rtt_ticks()
+    }
+
+    /// Server: when unacknowledged records go again (tests turn a rule
+    /// off to show what it does).
+    #[cfg(test)]
+    pub(crate) fn set_resend_rules(&mut self, rules: server::ResendRules) {
+        if let Some(inner) = &mut self.inner {
+            inner.server.rules = rules;
+        }
+    }
+
+    /// Server: the resend timeout to `peer` now, in ticks (after backing
+    /// off), and the reordering it tolerates before calling a packet lost.
+    #[cfg(test)]
+    pub(crate) fn peer_resend_ticks(&self, peer: PeerId) -> Option<(u32, u32)> {
+        let inner = self.inner.as_ref()?;
+        inner.server.clients.get(&peer).map(|c| c.resend_state(inner.hz))
     }
 
     /// Server: the ids waiting to be read in full.
