@@ -204,9 +204,21 @@ A screen in the world isn't possible on the web this way.
 
 ## C and C++
 
-Not bound yet: C and C++ games have no `Video` (it is listed in [C and
-C++](c-cpp.md#still-rust-only)); they can decode with a library of their own
-and show the frames with `ponko_ctx_update_texture`.
+Build the C library with the feature (`cargo build -p ponko_ffi --features
+video`); without it, loading a video reports `PONKO_UNSUPPORTED`. The calls
+follow Rust's: `ponko_ctx_load_video` or `ponko_ctx_video_from_bytes` make
+a `PonkoVideo`, `ponko_ctx_video_play`, `_pause`, `_seek`, `_update` and
+`_advance` move it, `ponko_video_state` gives its texture, size, time and
+whether it finished, and `ponko_ctx_free_video` frees it with its texture
+and sound. In C++ it is `ponko::video`:
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:video_intro}}
+```
+
+`ponko_video_frame_rgba` hands the frame's pixels on the CPU, valid until
+the video changes. A file in another codec is `PONKO_UNSUPPORTED`, with
+`ponko_last_error` naming the encoder settings to use instead.
 
 ## Testing
 

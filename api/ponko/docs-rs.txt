@@ -2891,6 +2891,7 @@ impl core::fmt::Debug for ponko::d3::AudioSource
 pub fn ponko::d3::AudioSource::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl ponko_ecs::bundle::Component for ponko::d3::AudioSource
 pub struct ponko::d3::Camera
+pub ponko::d3::Camera::debug_draw: core::option::Option<bool>
 pub ponko::d3::Camera::far: f32
 pub ponko::d3::Camera::fov_y: f32
 pub ponko::d3::Camera::layers: ponko::camera::RenderLayers
@@ -3389,6 +3390,7 @@ pub struct ponko::d3::NavMesh
 impl ponko::d3::NavMesh
 pub fn ponko::d3::NavMesh::bake(&[ponko::nav::NavSource], ponko::nav::NavBakeSettings) -> core::result::Result<Self, ponko::nav::NavBakeError>
 pub fn ponko::d3::NavMesh::carving_pending(&self) -> bool
+pub fn ponko::d3::NavMesh::crowd_stats(&self) -> ponko::nav::NavCrowdStats
 pub fn ponko::d3::NavMesh::find_path(&self, glam::f32::vec3::Vec3, glam::f32::vec3::Vec3) -> core::option::Option<alloc::vec::Vec<glam::f32::vec3::Vec3>>
 pub fn ponko::d3::NavMesh::sample_position(&self, glam::f32::vec3::Vec3, f32) -> core::option::Option<glam::f32::vec3::Vec3>
 pub fn ponko::d3::NavMesh::set_obstacles(&mut self, &[ponko::d3::NavObstacle])
@@ -5699,6 +5701,28 @@ impl ponko::input::Input
 pub fn ponko::input::Input::action_glyphs(&self, impl ponko::actions::ActionRef) -> ponko::input::Glyphs
 pub fn ponko::input::Input::action_glyphs_for(&self, impl ponko::actions::ActionRef, ponko::input::InputDevice) -> ponko::input::Glyphs
 impl ponko::input::Input
+pub fn ponko::input::Input::arrange_touch_controls(&mut self)
+pub fn ponko::input::Input::drag_delta(&self) -> glam::f32::vec2::Vec2
+pub fn ponko::input::Input::edit_touch_controls(&mut self, bool)
+pub fn ponko::input::Input::editing_touch_controls(&self) -> bool
+pub fn ponko::input::Input::gesture_events(&self) -> &[ponko::input::GestureEvent]
+pub fn ponko::input::Input::gesture_settings(&self) -> &ponko::input::GestureSettings
+pub fn ponko::input::Input::pinch_scale(&self) -> f32
+pub fn ponko::input::Input::restore_touch_layout(&mut self, &ponko::storage::Storage) -> core::result::Result<(), ponko::error::Error>
+pub fn ponko::input::Input::rotation_delta(&self) -> f32
+pub fn ponko::input::Input::save_touch_layout(&self, &mut ponko::storage::Storage) -> core::result::Result<(), ponko::error::Error>
+pub fn ponko::input::Input::set_gesture_settings(&mut self, ponko::input::GestureSettings)
+pub fn ponko::input::Input::set_touch_control_shown(&mut self, &str, bool)
+pub fn ponko::input::Input::set_touch_controls(&mut self, ponko::ui::touch::TouchControls)
+pub fn ponko::input::Input::set_touch_controls_show(&mut self, ponko::ui::touch::TouchShow)
+pub fn ponko::input::Input::set_touch_device(&mut self, bool)
+pub fn ponko::input::Input::set_touch_layout(&mut self, ponko::ui::touch::TouchLayout)
+pub fn ponko::input::Input::touch_control_center(&self, &str) -> core::option::Option<glam::f32::vec2::Vec2>
+pub fn ponko::input::Input::touch_controls_shown(&self) -> bool
+pub fn ponko::input::Input::touch_device(&self) -> bool
+pub fn ponko::input::Input::touch_layout(&self) -> &ponko::ui::touch::TouchLayout
+pub fn ponko::input::Input::touches(&self) -> &[ponko::input::Touch]
+impl ponko::input::Input
 pub fn ponko::input::Input::assign_player(&mut self, usize, ponko::input::InputDevice) -> bool
 pub fn ponko::input::Input::free_player(&self) -> core::option::Option<usize>
 pub fn ponko::input::Input::gamepad_family(&self, ponko::input::Gamepad) -> ponko::input::ControllerFamily
@@ -5732,27 +5756,6 @@ pub fn ponko::input::Input::cancel_scenario(&mut self, &mut ponko_ecs::world::Wo
 pub fn ponko::input::Input::injection_allowed(&self) -> bool
 pub fn ponko::input::Input::scenario_report<'w>(&self, &'w ponko_ecs::world::World) -> core::option::Option<&'w ponko::scenario::ScenarioReport>
 pub fn ponko::input::Input::start_scenario(&mut self, &mut ponko_ecs::world::World, &mut ponko::prelude::Time, ponko::scenario::InputScenario)
-impl ponko::input::Input
-pub fn ponko::input::Input::drag_delta(&self) -> glam::f32::vec2::Vec2
-pub fn ponko::input::Input::edit_touch_controls(&mut self, bool)
-pub fn ponko::input::Input::editing_touch_controls(&self) -> bool
-pub fn ponko::input::Input::gesture_events(&self) -> &[ponko::input::GestureEvent]
-pub fn ponko::input::Input::gesture_settings(&self) -> &ponko::input::GestureSettings
-pub fn ponko::input::Input::pinch_scale(&self) -> f32
-pub fn ponko::input::Input::restore_touch_layout(&mut self, &ponko::storage::Storage) -> core::result::Result<(), ponko::error::Error>
-pub fn ponko::input::Input::rotation_delta(&self) -> f32
-pub fn ponko::input::Input::save_touch_layout(&self, &mut ponko::storage::Storage) -> core::result::Result<(), ponko::error::Error>
-pub fn ponko::input::Input::set_gesture_settings(&mut self, ponko::input::GestureSettings)
-pub fn ponko::input::Input::set_touch_control_shown(&mut self, &str, bool)
-pub fn ponko::input::Input::set_touch_controls(&mut self, ponko::ui::touch::TouchControls)
-pub fn ponko::input::Input::set_touch_controls_show(&mut self, ponko::ui::touch::TouchShow)
-pub fn ponko::input::Input::set_touch_device(&mut self, bool)
-pub fn ponko::input::Input::set_touch_layout(&mut self, ponko::ui::touch::TouchLayout)
-pub fn ponko::input::Input::touch_control_center(&self, &str) -> core::option::Option<glam::f32::vec2::Vec2>
-pub fn ponko::input::Input::touch_controls_shown(&self) -> bool
-pub fn ponko::input::Input::touch_device(&self) -> bool
-pub fn ponko::input::Input::touch_layout(&self) -> &ponko::ui::touch::TouchLayout
-pub fn ponko::input::Input::touches(&self) -> &[ponko::input::Touch]
 impl ponko::input::Input
 pub fn ponko::input::Input::gamepad_axis(&self, ponko::input::Gamepad, ponko::input::GamepadAxis) -> f32
 pub fn ponko::input::Input::gamepad_down(&self, ponko::input::Gamepad, ponko::input::GamepadButton) -> bool
@@ -6216,6 +6219,21 @@ pub fn ponko::nav::NavBakeSettings::default() -> Self
 impl core::fmt::Debug for ponko::nav::NavBakeSettings
 pub fn ponko::nav::NavBakeSettings::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::nav::NavBakeSettings
+#[non_exhaustive] pub struct ponko::nav::NavCrowdStats
+pub ponko::nav::NavCrowdStats::agent_steps: u64
+pub ponko::nav::NavCrowdStats::steps: u64
+pub ponko::nav::NavCrowdStats::work: u64
+impl core::clone::Clone for ponko::nav::NavCrowdStats
+pub fn ponko::nav::NavCrowdStats::clone(&self) -> Self
+impl core::cmp::Eq for ponko::nav::NavCrowdStats
+impl core::cmp::PartialEq for ponko::nav::NavCrowdStats
+pub fn ponko::nav::NavCrowdStats::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::nav::NavCrowdStats
+pub fn ponko::nav::NavCrowdStats::default() -> Self
+impl core::fmt::Debug for ponko::nav::NavCrowdStats
+pub fn ponko::nav::NavCrowdStats::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::nav::NavCrowdStats
+impl core::marker::StructuralPartialEq for ponko::nav::NavCrowdStats
 pub struct ponko::nav::NavSource
 pub ponko::nav::NavSource::triangles: alloc::vec::Vec<[glam::f32::vec3::Vec3; 3]>
 impl ponko::nav::NavSource
@@ -7247,6 +7265,7 @@ impl core::marker::StructuralPartialEq for ponko::net::PredictionStats
 pub struct ponko::net::RawEvent
 pub ponko::net::RawEvent::bytes: alloc::vec::Vec<u8>
 impl ponko::net::RawEvent
+pub fn ponko::net::RawEvent::kind(&self) -> u16
 pub fn ponko::net::RawEvent::name(&self) -> &str
 impl core::clone::Clone for ponko::net::RawEvent
 pub fn ponko::net::RawEvent::clone(&self) -> Self
@@ -7311,6 +7330,7 @@ impl core::marker::StructuralPartialEq for ponko::net::Replicated
 impl ponko_ecs::bundle::Component for ponko::net::Replicated
 pub struct ponko::net::Replication
 impl ponko::net::Replication
+pub const ponko::net::Replication::RAW_INTERPOLATED_FLOATS: usize
 pub fn ponko::net::Replication::budget(self, u32) -> Self
 pub fn ponko::net::Replication::client_stats(&self) -> ponko::net::ClientStats
 pub fn ponko::net::Replication::clients(&self) -> alloc::vec::Vec<ponko::net::PeerId>
@@ -7318,6 +7338,8 @@ pub fn ponko::net::Replication::component<T: ponko::net::Replicate + ponko_ecs::
 pub fn ponko::net::Replication::entity(&self, ponko::net::NetId) -> core::option::Option<ponko_ecs::entity::Entity>
 pub fn ponko::net::Replication::error(&self) -> core::option::Option<&str>
 pub fn ponko::net::Replication::event<T: serde_core::ser::Serialize + serde_core::de::DeserializeOwned + core::marker::Send + core::marker::Sync + 'static>(self) -> Self
+pub fn ponko::net::Replication::has_input(&self) -> bool
+pub fn ponko::net::Replication::has_raw_input(&self) -> bool
 pub fn ponko::net::Replication::input<I: ponko::net::Replicate>(self) -> Self
 pub fn ponko::net::Replication::input_of<I: ponko::net::Replicate>(&self, ponko::net::PeerId) -> core::option::Option<I>
 pub fn ponko::net::Replication::interest(self, ponko::net::InterestConfig) -> Self
@@ -7332,9 +7354,17 @@ pub fn ponko::net::Replication::position(self, impl core::ops::function::Fn(&pon
 pub fn ponko::net::Replication::predicted<S, I>(self, impl core::ops::function::Fn(&mut S, &I) + core::marker::Send + core::marker::Sync + 'static) -> Self where S: ponko::net::Replicate + ponko_ecs::bundle::Component + core::cmp::PartialEq, I: ponko::net::Replicate
 pub fn ponko::net::Replication::raw_component(self, &str, ponko_ecs::storage::ComponentId, usize, alloc::vec::Vec<ponko::net::RawField>) -> Self
 pub fn ponko::net::Replication::raw_event(self, &str) -> Self
+pub fn ponko::net::Replication::raw_event_kind(&self, &str) -> core::option::Option<u16>
+pub fn ponko::net::Replication::raw_event_name(&self, u16) -> core::option::Option<&str>
+pub fn ponko::net::Replication::raw_fields(&self, &str) -> core::option::Option<&[ponko::net::RawField]>
+pub fn ponko::net::Replication::raw_input(self, &str, usize, alloc::vec::Vec<ponko::net::RawField>) -> Self
+pub fn ponko::net::Replication::raw_input_of(&self, ponko::net::PeerId) -> core::option::Option<&[u8]>
+pub fn ponko::net::Replication::raw_interpolated(self, &str, ponko::net::SnapshotConfig) -> Self
+pub fn ponko::net::Replication::raw_predicted(self, &str, impl core::ops::function::Fn(&mut [u8], &[u8]) + core::marker::Send + core::marker::Sync + 'static) -> Self
 pub fn ponko::net::Replication::role(&self) -> ponko::net::ReplicationRole
 pub fn ponko::net::Replication::server_tick(&self) -> u64
 pub fn ponko::net::Replication::set_input<I: ponko::net::Replicate>(&mut self, I)
+pub fn ponko::net::Replication::set_raw_input(&mut self, &[u8])
 pub fn ponko::net::Replication::set_viewer(&mut self, ponko::net::PeerId, core::option::Option<glam::f32::vec3::Vec3>)
 pub fn ponko::net::Replication::to_client<T: serde_core::ser::Serialize + 'static>(&mut self, ponko::net::PeerId, &T)
 pub fn ponko::net::Replication::to_client_raw(&mut self, ponko::net::PeerId, &str, &[u8]) -> core::result::Result<(), ponko::error::Error>
@@ -7993,6 +8023,7 @@ pub struct ponko::perf::ScopeGuard
 impl core::ops::drop::Drop for ponko::perf::ScopeGuard
 pub fn ponko::perf::ScopeGuard::drop(&mut self)
 pub struct ponko::perf::ScopeReport
+pub ponko::perf::ScopeReport::allocs_per_frame: f32
 pub ponko::perf::ScopeReport::avg_ms: f32
 pub ponko::perf::ScopeReport::calls_per_frame: f32
 pub ponko::perf::ScopeReport::max_ms: f32
@@ -8076,6 +8107,7 @@ pub fn ponko::perf::alloc_counts() -> ponko::perf::AllocCounts
 pub fn ponko::perf::net_alloc_bytes() -> i64
 pub fn ponko::perf::note_allocation(usize)
 pub fn ponko::perf::scope_named(&str) -> &'static ponko::perf::ProfileScope
+pub fn ponko::perf::thread_alloc_counts() -> ponko::perf::AllocCounts
 pub mod ponko::prelude
 pub use ponko::prelude::Added
 pub use ponko::prelude::Changed
@@ -9047,6 +9079,7 @@ impl core::fmt::Debug for ponko::d3::AudioSource
 pub fn ponko::d3::AudioSource::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl ponko_ecs::bundle::Component for ponko::d3::AudioSource
 pub struct ponko::prelude::d3::Camera
+pub ponko::prelude::d3::Camera::debug_draw: core::option::Option<bool>
 pub ponko::prelude::d3::Camera::far: f32
 pub ponko::prelude::d3::Camera::fov_y: f32
 pub ponko::prelude::d3::Camera::layers: ponko::camera::RenderLayers
@@ -9545,6 +9578,7 @@ pub struct ponko::prelude::d3::NavMesh
 impl ponko::d3::NavMesh
 pub fn ponko::d3::NavMesh::bake(&[ponko::nav::NavSource], ponko::nav::NavBakeSettings) -> core::result::Result<Self, ponko::nav::NavBakeError>
 pub fn ponko::d3::NavMesh::carving_pending(&self) -> bool
+pub fn ponko::d3::NavMesh::crowd_stats(&self) -> ponko::nav::NavCrowdStats
 pub fn ponko::d3::NavMesh::find_path(&self, glam::f32::vec3::Vec3, glam::f32::vec3::Vec3) -> core::option::Option<alloc::vec::Vec<glam::f32::vec3::Vec3>>
 pub fn ponko::d3::NavMesh::sample_position(&self, glam::f32::vec3::Vec3, f32) -> core::option::Option<glam::f32::vec3::Vec3>
 pub fn ponko::d3::NavMesh::set_obstacles(&mut self, &[ponko::d3::NavObstacle])
@@ -12662,6 +12696,7 @@ impl core::marker::Copy for ponko::render::CrowdInstance
 impl core::marker::StructuralPartialEq for ponko::render::CrowdInstance
 #[non_exhaustive] pub struct ponko::render::CrowdLevel
 pub ponko::render::CrowdLevel::camera: bool
+pub ponko::render::CrowdLevel::fade: f32
 pub ponko::render::CrowdLevel::influences: u8
 pub ponko::render::CrowdLevel::max_distance: f32
 pub ponko::render::CrowdLevel::mesh: ponko::render::Mesh
@@ -12670,6 +12705,7 @@ pub ponko::render::CrowdLevel::shadows: bool
 impl ponko::render::CrowdLevel
 pub fn ponko::render::CrowdLevel::new(ponko::render::Mesh, f32, f32) -> Self
 pub fn ponko::render::CrowdLevel::with_camera(self, bool) -> Self
+pub fn ponko::render::CrowdLevel::with_fade(self, f32) -> Self
 pub fn ponko::render::CrowdLevel::with_influences(self, u8) -> Self
 pub fn ponko::render::CrowdLevel::with_shadows(self, bool) -> Self
 impl core::clone::Clone for ponko::render::CrowdLevel
@@ -13096,7 +13132,7 @@ impl core::fmt::Debug for ponko::render::LightmapRect
 pub fn ponko::render::LightmapRect::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::render::LightmapRect
 impl core::marker::StructuralPartialEq for ponko::render::LightmapRect
-pub struct ponko::render::Lightmapped(pub u32)
+#[repr(transparent)] pub struct ponko::render::Lightmapped(pub u32)
 impl core::clone::Clone for ponko::render::Lightmapped
 pub fn ponko::render::Lightmapped::clone(&self) -> Self
 impl core::cmp::Eq for ponko::render::Lightmapped
@@ -13949,6 +13985,7 @@ pub ponko::render::TargetCamera::target: ponko::render::RenderTarget
 impl ponko::render::TargetCamera
 pub fn ponko::render::TargetCamera::new(ponko::d3::Camera, ponko::render::RenderTarget) -> Self
 pub fn ponko::render::TargetCamera::reflection(ponko::d3::Camera, ponko::render::RenderTarget, f32) -> Self
+pub fn ponko::render::TargetCamera::with_debug_draw(self, bool) -> Self
 pub fn ponko::render::TargetCamera::with_particles(self, bool) -> Self
 impl core::clone::Clone for ponko::render::TargetCamera
 pub fn ponko::render::TargetCamera::clone(&self) -> Self

@@ -548,12 +548,14 @@ impl Renderer {
         )?;
         // In a browser, a WebGPU device lost while the game runs (the GPU
         // process crashed or was reset) stops it for good: the page hears
-        // of it through `onPonkoFailure`, kind `DeviceLost`. On WebGL2 the
+        // of it through `onPonkoFailure`, kind `DeviceLost`, with whether it
+        // was destroyed or lost for another reason. On WebGL2 the
         // canvas's lost context reports it instead (`ContextLost`).
         #[cfg(target_arch = "wasm32")]
         if adapter.get_info().backend == wgpu::Backend::BrowserWebGpu {
-            device.set_device_lost_callback(|_reason, message| {
-                crate::web::report_failure(crate::web::device_lost_while_playing(&message));
+            device.set_device_lost_callback(|reason, message| {
+                let reason = crate::web::DeviceLostReason::from_wgpu(reason);
+                crate::web::report_failure(crate::web::device_lost_while_playing(reason, &message));
             });
         }
 

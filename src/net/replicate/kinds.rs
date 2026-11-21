@@ -44,6 +44,9 @@ pub(crate) struct Kind {
     pub(crate) offset: usize,
     pub(crate) type_id: Option<TypeId>,
     pub(crate) access: Box<dyn KindAccess>,
+    /// Kinds declared from C (`raw_component`): their layout, which
+    /// prediction and interpolation of the kind need too.
+    pub(crate) raw: Option<std::sync::Arc<Raw>>,
 }
 
 impl Kind {
@@ -222,7 +225,66 @@ impl RawField {
     }
 }
 
+/// Visits `fields` of the plain bytes at `base` in `f`, in order.
+///
+/// # Safety
+/// Every field lies inside the bytes `base` points to (`offset + size`),
+/// which are readable, and writable too if `f` reads.
+pub(crate) unsafe fn visit_raw(fields: &[RawField], base: *mut u8, f: &mut Fields<'_>) {
+    for field in fields {
+        // SAFETY: the caller guarantees `base` covers every field. Unaligned
+        // reads and writes: C structs may pack fields.
+        unsafe {
+            let p = base.add(field.offset);
+            let (name, q) = (field.name.as_str(), field.quantize);
+            match field.ty {
+                RawType::F32 => {
+                    let mut v = p.cast::<f32>().read_unaligned();
+                    f.f32(name, &mut v, q);
+                    p.cast::<f32>().write_unaligned(v);
+                }
+                RawType::I32 => {
+                    let mut v = p.cast::<i32>().read_unaligned();
+                    f.i32(name, &mut v, q);
+                    p.cast::<i32>().write_unaligned(v);
+                }
+                RawType::U32 => {
+                    let mut v = p.cast::<u32>().read_unaligned();
+                    f.u32(name, &mut v, q);
+                    p.cast::<u32>().write_unaligned(v);
+                }
+                RawType::I16 => {
+                    let mut v = p.cast::<i16>().read_unaligned();
+                    f.i16(name, &mut v, q);
+                    p.cast::<i16>().write_unaligned(v);
+                }
+                RawType::U16 => {
+                    let mut v = p.cast::<u16>().read_unaligned();
+                    f.u16(name, &mut v, q);
+                    p.cast::<u16>().write_unaligned(v);
+                }
+                RawType::I8 => {
+                    let mut v = p.cast::<i8>().read_unaligned();
+                    f.i8(name, &mut v, q);
+                    p.cast::<i8>().write_unaligned(v);
+                }
+                RawType::U8 => {
+                    let mut v = p.read();
+                    f.u8(name, &mut v, q);
+                    p.write(v);
+                }
+                RawType::Bool => {
+                    let mut v = p.read() != 0;
+                    f.bool(name, &mut v);
+                    p.write(u8::from(v));
+                }
+            }
+        }
+    }
+}
+
 /// A component registered from C or C++: plain bytes with known fields.
+#[derive(Clone)]
 pub(crate) struct Raw {
     pub(crate) id: ComponentId,
     pub(crate) size: usize,
@@ -234,59 +296,9 @@ impl Raw {
     ///
     /// # Safety
     /// `base` points to `self.size` readable bytes, writable too if `f` reads.
-    unsafe fn visit(&self, base: *mut u8, f: &mut Fields<'_>) {
-        for field in &self.fields {
-            // SAFETY: registration checked that every field lies inside the
-            // component (`offset + size <= self.size`), and the caller
-            // guarantees `base` covers it. Unaligned reads and writes: C
-            // structs may pack fields.
-            unsafe {
-                let p = base.add(field.offset);
-                let (name, q) = (field.name.as_str(), field.quantize);
-                match field.ty {
-                    RawType::F32 => {
-                        let mut v = p.cast::<f32>().read_unaligned();
-                        f.f32(name, &mut v, q);
-                        p.cast::<f32>().write_unaligned(v);
-                    }
-                    RawType::I32 => {
-                        let mut v = p.cast::<i32>().read_unaligned();
-                        f.i32(name, &mut v, q);
-                        p.cast::<i32>().write_unaligned(v);
-                    }
-                    RawType::U32 => {
-                        let mut v = p.cast::<u32>().read_unaligned();
-                        f.u32(name, &mut v, q);
-                        p.cast::<u32>().write_unaligned(v);
-                    }
-                    RawType::I16 => {
-                        let mut v = p.cast::<i16>().read_unaligned();
-                        f.i16(name, &mut v, q);
-                        p.cast::<i16>().write_unaligned(v);
-                    }
-                    RawType::U16 => {
-                        let mut v = p.cast::<u16>().read_unaligned();
-                        f.u16(name, &mut v, q);
-                        p.cast::<u16>().write_unaligned(v);
-                    }
-                    RawType::I8 => {
-                        let mut v = p.cast::<i8>().read_unaligned();
-                        f.i8(name, &mut v, q);
-                        p.cast::<i8>().write_unaligned(v);
-                    }
-                    RawType::U8 => {
-                        let mut v = p.read();
-                        f.u8(name, &mut v, q);
-                        p.write(v);
-                    }
-                    RawType::Bool => {
-                        let mut v = p.read() != 0;
-                        f.bool(name, &mut v);
-                        p.write(u8::from(v));
-                    }
-                }
-            }
-        }
+    pub(crate) unsafe fn visit(&self, base: *mut u8, f: &mut Fields<'_>) {
+        // SAFETY: forwarded; registration checked the fields lie inside `size`.
+        unsafe { visit_raw(&self.fields, base, f) }
     }
 
     /// The words of this kind, from a zeroed value.
@@ -358,6 +370,7 @@ pub(crate) fn typed_kind<T: Replicate + Component>() -> Kind {
         offset: 0,
         type_id: Some(TypeId::of::<T>()),
         access: Box::new(Typed::<T>::new()),
+        raw: None,
     }
 }
 

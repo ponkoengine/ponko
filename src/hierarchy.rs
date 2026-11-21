@@ -1157,9 +1157,13 @@ fn slot(table: &[AtomicU32], frontier: &[Node], p: Entity) -> Option<usize> {
     (frontier.get(j)?.e == Some(p)).then_some(j)
 }
 
-/// Puts the nodes of `s.frontier` not yet in `s.table` there (on all
-/// cores for many), growing it to `slots`. Returns how many children
-/// their lists name.
+/// Puts the nodes of `s.frontier` not yet in `s.table` there, growing it
+/// to `slots`. Returns how many children their lists name.
+///
+/// On the calling thread: one store per node is too little work to share.
+/// On all cores it took as long as here (0.15-0.23 ms for 100,000 nodes),
+/// and on a busy machine a parallel pass waits for its slowest thread,
+/// which the system may not run for milliseconds.
 fn index_frontier(s: &mut State, slots: usize) -> usize {
     if s.table.len() < slots {
         s.table.resize_with(slots, || AtomicU32::new(u32::MAX));
@@ -1171,13 +1175,7 @@ fn index_frontier(s: &mut State, slots: usize) -> usize {
         }
         n.kids as usize
     };
-    let todo = &s.frontier[from..];
-    let kids = if todo.len() >= PARALLEL {
-        use rayon::prelude::*;
-        todo.par_iter().enumerate().map(put).sum()
-    } else {
-        todo.iter().enumerate().map(put).sum()
-    };
+    let kids = s.frontier[from..].iter().enumerate().map(put).sum();
     s.indexed = s.frontier.len();
     kids
 }
@@ -1310,34 +1308,29 @@ enum Found<T> {
 
 /// Counts what `found` placed and the children its parents' lists name,
 /// and adds those parents to `next` and the entities to place later to
-/// `later`; the counts are on all cores, the rest only when there is any.
-fn gather<T: Copy + Send + Sync>(
+/// `later`, in one pass on the calling thread: like [`index_frontier`],
+/// too little work per entity to share between cores.
+fn gather<T: Copy>(
     found: &[Found<T>],
     next: &mut Vec<Node>,
     later: &mut Vec<Entity>,
     at: impl Fn(T) -> At,
 ) -> (usize, usize) {
-    use rayon::prelude::*;
-    let (placed, kids, more) = found
-        .par_iter()
-        .map(|f| match f {
-            Found::No => (0, 0, 0),
-            Found::Leaf => (1, 0, 0),
-            Found::Parent(_, kids, _) => (1, *kids as usize, 1),
-            Found::Later(_) => (0, 0, 1),
-        })
-        .reduce(|| (0, 0, 0), |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2));
-    if more > 0 {
-        for f in found {
-            match *f {
-                Found::Parent(e, kids, t) => next.push(Node {
+    let (mut placed, mut kids) = (0, 0);
+    for f in found {
+        match *f {
+            Found::No => {}
+            Found::Leaf => placed += 1,
+            Found::Parent(e, n, t) => {
+                placed += 1;
+                kids += n as usize;
+                next.push(Node {
                     e: Some(e),
-                    kids,
+                    kids: n,
                     at: at(t),
-                }),
-                Found::Later(e) => later.push(e),
-                Found::No | Found::Leaf => {}
+                });
             }
+            Found::Later(e) => later.push(e),
         }
     }
     (placed, kids)

@@ -382,8 +382,8 @@ pub(crate) struct ViewFrame {
     pub camera: Vec3,
     /// Whether it draws particles, trails and lines.
     pub particles: bool,
-    /// Whether it draws `ctx.debug`'s 3D lines and depth-tested labels:
-    /// it draws particles and shows the default layer.
+    /// Whether it draws `ctx.debug`'s 3D lines and labels (its camera's
+    /// `debug_draw`, see `Camera3D::draws_debug`).
     pub debug: bool,
     /// The camera as it draws (its viewport the target's size), which its
     /// 3D text faces; `None` until collected.

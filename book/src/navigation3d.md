@@ -240,6 +240,27 @@ scratch during updates; avoid assuming allocation-free crowd simulation. The
 original follower retains its allocation-free steady path. Baking, full-route
 validation on a new target, and crowd updates are synchronous and headless.
 
+### Counting the crowd's work
+
+`NavMesh::crowd_stats()` says what the crowd has done since the mesh was
+baked, as counts rather than times: `steps` (one a tick, more when a long
+tick is split), `agent_steps` (the agents moved, added up over the steps)
+and `work` (the backend's work units: corridors, neighbour and wall
+queries, steering, velocity sampling). A test can check that every agent
+moved every tick, and that `work / agent_steps` stays about the same as
+the crowd grows at the same spacing, on a machine of any speed or load.
+`NavCrowdStats` is Rust-only for now; C and C++ games see the crowd's cost
+as the step's time in the profiler.
+
+```rust
+# use ponko::prelude::*;
+# fn check(world: &World) {
+let stats = world.resource::<ponko::d3::NavMesh>().crowd_stats();
+let work_per_agent = stats.work as f64 / stats.agent_steps.max(1) as f64;
+# let _ = work_per_agent;
+# }
+```
+
 
 ## Dynamic carving
 

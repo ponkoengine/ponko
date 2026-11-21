@@ -17,9 +17,10 @@
 // - context-lost: on WebGL2, the runner loses the canvas's context while
 //   the game runs: kind "ContextLost" and its message on the page.
 // - device-lost: on WebGPU, the runner destroys the game's GPUDevice while
-//   the game runs: kind "DeviceLost", the engine's sentence with the
-//   browser's reason in it. Where the browser has no WebGPU (the game runs
-//   on WebGL2) the case is unsupported, not failed.
+//   the game runs: kind "DeviceLost", reason "Destroyed" (or "Unknown" when
+//   the browser lost it first), the engine's sentence for that reason with
+//   the browser's words in it. Where the browser has no WebGPU (the game
+//   runs on WebGL2) the case is unsupported, not failed.
 //
 // Exit codes as smoke.mjs: 0 passed, 1 failed, 2 unsupported (no browser,
 // or every case asked for was unsupported; --allow-unsupported makes that
@@ -41,21 +42,34 @@ const USAGE =
 export const RUNTIME_CASES = ["runtime-panic", "failure-text", "context-lost", "device-lost"];
 
 /**
- * The engine's message for a lost WebGPU device (`FailureKind::DeviceLost`,
- * `device_lost_message` in src/web/failure.rs): its sentence, with the
- * browser's reason (`GPUDeviceLostInfo.message`) in it when there is one.
+ * The failure's `reason` for a lost WebGPU device (`DeviceLostReason` in
+ * src/web/failure.rs) from the browser's `GPUDeviceLostInfo.reason`:
+ * "Destroyed" for "destroyed", "Unknown" for anything else.
  */
-export function deviceLostMessage(browserMessage) {
-  const reason = (browserMessage ?? "").trim().replace(/\.+$/, "").trimEnd();
-  return reason
-    ? `The WebGPU device was lost while the game was running: ${reason}. Reload the page to try again.`
-    : "The WebGPU device was lost while the game was running. Reload the page to try again.";
+export function deviceLostReason(browserReason) {
+  return browserReason === "destroyed" ? "Destroyed" : "Unknown";
+}
+
+/**
+ * The engine's message for a lost WebGPU device (`FailureKind::DeviceLost`,
+ * `device_lost_message` in src/web/failure.rs): its sentence for the
+ * browser's reason (`GPUDeviceLostInfo.reason`: destroyed, or lost), with
+ * the browser's words (`GPUDeviceLostInfo.message`) in it when there are
+ * some.
+ */
+export function deviceLostMessage(browserReason, browserMessage) {
+  const what = deviceLostReason(browserReason) === "Destroyed" ? "destroyed" : "lost";
+  const words = (browserMessage ?? "").trim().replace(/\.+$/, "").trimEnd();
+  return words
+    ? `The WebGPU device was ${what} while the game was running: ${words}. Reload the page to try again.`
+    : `The WebGPU device was ${what} while the game was running. Reload the page to try again.`;
 }
 
 /**
  * The page's text, the callback's failure and the crash report each case
  * must produce. `lost` is the page's own `GPUDeviceLostInfo` (device-lost
- * only): the engine's message carries the browser's reason. The report
+ * only): the failure's `reason` and the engine's message follow the
+ * browser's reason, and the message carries its words. The report
  * (`window.ponkoCrashReport`, see the guide's "Crash reports") is a
  * `panic` for a panic and an `error` for a failure that stops the game,
  * with the same message.
@@ -64,18 +78,19 @@ export function expected(runtimeCase, lost = null) {
   const panic = `web_smoke: panicking while running, as ?smoke_case=${runtimeCase} asked`;
   switch (runtimeCase) {
     case "runtime-panic":
-      return { kind: "Panic", message: panic, text: null, status: `The game stopped: ${panic}`, report: "panic" };
+      return { kind: "Panic", message: panic, text: null, reason: null, status: `The game stopped: ${panic}`, report: "panic" };
     case "failure-text": {
       const text = `web_smoke stopped, in its own words: ${panic}`;
-      return { kind: "Panic", message: panic, text, status: text, report: "panic" };
+      return { kind: "Panic", message: panic, text, reason: null, status: text, report: "panic" };
     }
     case "context-lost": {
       const message = "The WebGL2 context was lost while the game was running. Reload the page to try again.";
-      return { kind: "ContextLost", message, text: null, status: `The game stopped: ${message}`, report: "error" };
+      return { kind: "ContextLost", message, text: null, reason: null, status: `The game stopped: ${message}`, report: "error" };
     }
     case "device-lost": {
-      const message = deviceLostMessage(lost?.message);
-      return { kind: "DeviceLost", message, text: null, status: `The game stopped: ${message}`, report: "error" };
+      const message = deviceLostMessage(lost?.reason, lost?.message);
+      const reason = deviceLostReason(lost?.reason);
+      return { kind: "DeviceLost", message, text: null, reason, status: `The game stopped: ${message}`, report: "error" };
     }
     default:
       throw new UsageError(`unknown case ${runtimeCase} (${RUNTIME_CASES.join(", ")})`);
@@ -123,7 +138,7 @@ export function checkRun(runtimeCase, seen) {
     problems.push("onPonkoFailure never called its callback");
     return problems;
   }
-  for (const field of ["kind", "message", "text"]) {
+  for (const field of ["kind", "message", "text", "reason"]) {
     if (failure[field] !== want[field]) {
       problems.push(`the failure's ${field} is ${JSON.stringify(failure[field])}, wanted ${JSON.stringify(want[field])}`);
     }
@@ -211,7 +226,7 @@ async function look(page) {
     // module is initialized there is nothing to subscribe to yet.
     try {
       onPonkoFailure((error) => {
-        failure = { kind: error.kind, message: error.message, location: error.location, text: error.text };
+        failure = { kind: error.kind, message: error.message, location: error.location, text: error.text, reason: error.reason };
       });
     } catch {
       // Still loading.

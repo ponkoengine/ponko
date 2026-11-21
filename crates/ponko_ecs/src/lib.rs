@@ -170,7 +170,7 @@ pub use bundle::{Bundle, Component};
 pub use change::{Added, Changed, ChunkQuery, Tick};
 pub use commands::Commands;
 pub use entity::Entity;
-pub use hooks::{Hook, HookWorld, ReplaceHook};
+pub use hooks::{DynamicHook, Hook, HookWorld, ReplaceHook};
 // Web builds with threads only: how the engine runs parallel loops started
 // on the page's own thread, which may not block (see `par`).
 #[cfg(all(feature = "parallel", target_family = "wasm", target_feature = "atomics"))]

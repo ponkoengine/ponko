@@ -1191,5 +1191,29 @@ fn base64(text: &str) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// Encodes standard base64, with padding (the inverse of [`base64`]). Only
+/// models whose compressed textures are kept write it, so it is built with
+/// them; a dependency on the `base64` crate would be unused in every other
+/// feature set.
+#[cfg(feature = "textures")]
+fn base64_encode(data: &[u8]) -> String {
+    const DIGITS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let group = chunk
+            .iter()
+            .enumerate()
+            .fold(0u32, |acc, (i, &b)| acc | u32::from(b) << (16 - 8 * i));
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(DIGITS[(group >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 pub(crate) mod tests;
