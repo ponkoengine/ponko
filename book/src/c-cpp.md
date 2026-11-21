@@ -155,7 +155,19 @@ other world or context calls throw (C: return `PONKO_BUSY`), except
   in the `_par` versions), so a loop can check the ground under each body or
   have the camera follow the character. Anything that changes physics
   (gravity, impulses, bodies) is still refused inside a loop;
+- reads that hand a whole array or a view once per system, so a loop needs
+  no call per item (not in the `_par` versions, except the navigation view):
+  `collisions_started()` and `collisions_stopped()` (C
+  `ponko_ctx_collisions`, 2D and 3D contacts of this tick), `net_events()`
+  (C `ponko_ctx_net_events`, replication events), and `nav_view()` (C
+  `ponko_ctx_nav_view`), taken before the loop, whose `sample_position`,
+  `sample_positions` and `find_path` work in `each_par` too. Read each once
+  per system: a second read of the events gives only newer ones;
 - spatial queries, and the clock values `dt()`, `sim_tick()`, `random()`.
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:loop_reads}}
+```
 
 `each_par` and `query_par` split archetypes into slices and run your function
 on all cores at once. It must only touch its own entity and read shared

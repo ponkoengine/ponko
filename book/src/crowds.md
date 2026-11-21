@@ -207,8 +207,6 @@ for that, and it draws once per frame shown.
 - Stencil states of a material are ignored on the GPU path. Transparent
   materials are drawn unsorted; give crowds opaque or cutout materials.
 - The order characters are drawn in within a level isn't fixed.
-- In C, clips with joint tracks come from glTF files (`ponko_ctx_load_clip`)
-  or retargeting (`ponko_retarget_clip`); they can't be built in code yet.
 
 ## C and C++
 
@@ -224,3 +222,17 @@ C++, `ctx::bake_crowd_animation` returns a move-only `ponko::crowd_animation`
 (`crowd_clip_of` wraps a clip), and `ctx::create_crowd`, `update_crowd`,
 `crowd_len` (`std::nullopt` once freed) and `free_crowd` take `ponko::crowd`
 handles (see the C++ above).
+
+Clips can also be made in code: `ponko_ctx_create_clip` takes
+`PonkoJointTrack`s (a joint of the skeleton, a `PonkoJointChannel`, an
+interpolation and the keys) and makes a clip to bake into a crowd or play
+on a skeleton; C++ builds the tracks with `joint_track_of`:
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:crowd_clip_tracks}}
+```
+
+`ponko_ctx_live_counts_ex` (C++ `ctx.live_counts_ex()`) counts the live
+crowds next to the other handles, with instance cells, collision meshes,
+sprite shaders and materials, and sky shaders: a leak check that sees
+them all.

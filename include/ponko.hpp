@@ -2658,21 +2658,21 @@ public:
     /// hook_world for what one may do. An exception a hook throws is kept and
     /// rethrown when the system returns (or by game::run); in a world of your
     /// own, by rethrow_hook_error().
-    template<class T, class F> void on_add(F f) { add_hook<T>(ponko_component_on_add, std::move(f)); }
+    template<class T, class F> void on_add(F f) { add_hook<T, false>(ponko_component_on_add, std::move(f)); }
     /// Calls `f(hook_world&, entity, const T& old, const T& next)` whenever a
     /// set is about to overwrite an entity's `T` (Rust `World::on_replace`):
     /// `old` is still in the world. Writes through queries aren't replacements.
-    template<class T, class F> void on_replace(F f) { add_hook<T>(ponko_component_on_replace, std::move(f)); }
+    template<class T, class F> void on_replace(F f) { add_hook<T, true>(ponko_component_on_replace, std::move(f)); }
     /// Calls `f(hook_world&, entity, const T& value)` whenever a `T` is about
     /// to leave an entity: remove, despawn or clear (Rust `World::on_remove`),
     /// with the value still in place.
-    template<class T, class F> void on_remove(F f) { add_hook<T>(ponko_component_on_remove, std::move(f)); }
+    template<class T, class F> void on_remove(F f) { add_hook<T, false>(ponko_component_on_remove, std::move(f)); }
     /// Rethrows the first exception a component hook of this world threw,
     /// if one did (systems and game::run do this for you).
     void rethrow_hook_error() const { valid(); owner_->hook_error.rethrow(); }
 private:
     using hook_register = PonkoStatus (*)(PonkoWorld*, std::uint32_t, PonkoHookFn, void*, PonkoFreeUserFn);
-    template<class T, class F> void add_hook(hook_register reg, F f);
+    template<class T, bool Replace, class F> void add_hook(hook_register reg, F f);
 public:
 };
 /// Out of line: tilemap_ref is defined after world_view.
@@ -2729,7 +2729,7 @@ public:
     bool alive(entity e) const { bool a = false; detail::check(ponko_hook_is_alive(raw_, e, &a)); return a; }
 };
 /// Out of line: hook_world is defined after world_view.
-template<class T, class F> void world_view::add_hook(hook_register reg, F f) {
+template<class T, bool Replace, class F> void world_view::add_hook(hook_register reg, F f) {
     valid();
     world_view::check_component<T>();
     const std::uint32_t component = id<T>();
@@ -2742,7 +2742,7 @@ template<class T, class F> void world_view::add_hook(hook_register reg, F f) {
             hook_world w(raw, hd.owner.get());
             T value{};
             std::memcpy(static_cast<void*>(&value), event->value, sizeof(T));
-            if (event->kind == PONKO_HOOK_REPLACE) {
+            if constexpr (Replace) {
                 T next{};
                 std::memcpy(static_cast<void*>(&next), event->new_value, sizeof(T));
                 hd.fn(w, entity(event->entity), static_cast<const T&>(value), static_cast<const T&>(next));

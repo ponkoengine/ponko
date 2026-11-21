@@ -3782,6 +3782,105 @@ static void baked_runs() {
     game.run_headless(1);
 }
 
+// ANCHOR: component_hooks
+struct Badge { std::uint32_t number; };   // a plain component
+using badge_index = std::unordered_map<std::uint32_t, ponko::entity>;
+// Every badge, by number: always the same as the world.
+static void index_badges(ponko::world_view& world, std::shared_ptr<badge_index> index) {
+    world.on_add<Badge>([index](ponko::hook_world&, ponko::entity e, const Badge& b) {
+        (*index)[b.number] = e;
+    });
+    world.on_replace<Badge>([index](ponko::hook_world&, ponko::entity e, const Badge& old, const Badge& next) {
+        index->erase(old.number);
+        (*index)[next.number] = e;
+    });
+    world.on_remove<Badge>([index](ponko::hook_world&, ponko::entity, const Badge& b) {
+        index->erase(b.number);
+    });
+}
+// ANCHOR_END: component_hooks
+
+static void component_hooks_run() {
+    ponko::world world;
+    auto index = std::make_shared<badge_index>();
+    index_badges(world, index);
+    const ponko::entity e = world.spawn(Badge{7});
+    if (index->at(7) != e) std::abort();
+    world.set(e, Badge{8});
+    if (index->count(7) || index->at(8) != e) std::abort();
+    world.despawn(e);
+    if (!index->empty()) std::abort();
+}
+
+// ANCHOR: sky_kit_day
+// In setup: clouds, a moon and stars, and a clock that moves the sun.
+static ponko::day_night cloudy_day(ponko::ctx& ctx) {
+    ponko::sky_kit kit = ponko::sky_kit_defaults();
+    kit.coverage = 0.5f;            // 0 clear to 1 overcast
+    kit.wind = {12, 4};             // meters per second across the ground
+    kit.quality = PONKO_CLOUDS_MEDIUM;
+    ctx.set_sky_kit(kit);
+    ponko::day_night clock(7.5f);   // half past seven in the morning
+    clock.hours_per_second = 0.05f; // a day in eight minutes
+    ctx.apply_day_night(clock);
+    return clock;
+}
+// Once a frame: the clock moves on, the sun and the moon with it.
+static void tick_sky(ponko::ctx& ctx, ponko::day_night& clock) { ctx.update_day_night(clock); }
+// ANCHOR_END: sky_kit_day
+
+static void sky_kit_runs() {
+    auto clock = std::make_shared<ponko::day_night>();
+    ponko::game game("Sky", 1, 1);
+    game.setup([clock](ponko::ctx& ctx) { *clock = cloudy_day(ctx); });
+    game.system([clock](ponko::ctx& ctx) { tick_sky(ctx, *clock); });
+    game.run_headless(2);
+    if (!(clock->hour >= 7.5f)) std::abort();
+}
+
+// ANCHOR: crowd_clip_tracks
+// A wave made in code: joint 3 (the arm) turns up and back down in a second.
+ponko::clip wave_clip(ponko::ctx& ctx, ponko::entity skeleton) {
+    static const std::vector<float> times = {0.0f, 0.5f, 1.0f};
+    static const std::vector<float> turns = {   // quaternions x, y, z, w
+        0, 0, 0, 1,
+        0, 0, 0.7071f, 0.7071f,
+        0, 0, 0, 1,
+    };
+    return ctx.create_clip(skeleton, "wave", {ponko::joint_track_of(3, PONKO_JOINT_ROTATION, times, turns)});
+}
+// ANCHOR_END: crowd_clip_tracks
+
+// ANCHOR: touch_scenario
+// A test's fingers: a tap on a button, a long press, a swipe across.
+static ponko::input_scenario touch_test() {
+    ponko::input_scenario s;
+    s.tap(2, {120, 640})                          // tick 2
+     .touch_hold(5, 40, {300, 300})               // ticks 5 to 40
+     .touch_drag(50, 60, {100, 400}, {500, 400}); // a swipe right
+    return s;
+}
+// ANCHOR_END: touch_scenario
+
+static void touch_scenario_runs() {
+    ponko::game game("Fingers", 640, 800);
+    auto run = game.run_headless_scenario(touch_test());
+    if (run.report.status == PONKO_SCENARIO_FAILED) std::abort();
+}
+
+// ANCHOR: loop_reads
+// One read per system, then plain loops: no call per entity.
+struct Seeker { float x, y, z; };
+void seek(ponko::ctx& ctx) {
+    const ponko::nav_view nav = ctx.nav_view();  // throws if no navmesh is baked
+    auto hits = ctx.collisions_started();        // this tick's new 3D (or 2D) contacts
+    ctx.world().each([&](ponko::entity e, Seeker& s) {
+        if (auto p = nav.sample_position({s.x, s.y, s.z}, 2.0f)) { s.x = p->x; s.y = p->y; s.z = p->z; }
+        for (const auto& c : hits) if (ponko_entity_bits(c.a) == e || ponko_entity_bits(c.b) == e) s.y += 1;
+    });
+}
+// ANCHOR_END: loop_reads
+
 // ANCHOR: instance_cells
 void streamed_cell(ponko::ctx& ctx, ponko::mesh tree) {
     // An empty batch: the world's cells bring its instances.
@@ -4680,6 +4779,9 @@ int main() {
     replication_runs();
     replication_inputs_run();
     baked_runs();
+    component_hooks_run();
+    sky_kit_runs();
+    touch_scenario_runs();
     states_guide();
     state_screen_guide();
     native_prediction_runs();

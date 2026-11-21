@@ -157,6 +157,10 @@ binds gestures with the `PONKO_ACTION_GESTURE`, `PONKO_ACTION_GESTURE_AXIS` and
 `ponko_ctx_gesture_deltas`, and sets controls with
 `ponko_ctx_set_touch_controls` and its neighbours; C++ wraps them as
 `action_binding::gesture`, `gesture_axis` and `drag`, `ponko::touch_controls`
-and `ctx.feed_touch`. The scenario builders `tap`, `touch_hold` and
-`touch_drag` have no C function yet: C scripts each phase with the `touch`
-step.
+and `ctx.feed_touch`. The scenario builders are
+`ponko_input_scenario_tap`, `_touch_hold` and `_touch_drag` (C++
+`tap`, `touch_hold` and `touch_drag`), and write the same steps as Rust's:
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:touch_scenario}}
+```
