@@ -233,6 +233,11 @@ impl Time {
         self.sim.tick += 1;
     }
 
+    /// Rollback: the clock goes back to a saved tick.
+    pub(crate) fn set_sim_tick(&mut self, tick: u64) {
+        self.sim.tick = tick;
+    }
+
     pub(crate) fn set_sim_steps(&mut self, steps: u32) {
         self.sim_steps = steps;
     }

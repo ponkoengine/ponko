@@ -429,6 +429,9 @@ impl Audio {
     }
 
     fn note_started(&mut self, playing: Playing, sound: Sound, bus: AudioBus, volume: f32, speed: f32, looping: bool) {
+        if self.replaying {
+            return;
+        }
         self.started.push(SoundStarted {
             playing,
             sound,

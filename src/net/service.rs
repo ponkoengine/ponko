@@ -111,6 +111,15 @@ pub struct Networking {
     pub replication: Replication,
     /// What the engine's last poll of `messages` returned, if it failed.
     message_error: Option<io::Error>,
+    /// The game's rollback session ([`start_rollback`](Self::start_rollback)).
+    /// Out of here while a tick runs through it.
+    pub(crate) rollback: Option<Box<dyn super::RollbackSession>>,
+    /// Every player's input for the tick running: a `Vec<I>`.
+    rollback_inputs: Option<Box<dyn std::any::Any + Send + Sync>>,
+    /// A rollback runs a tick again.
+    pub(crate) resimulating: bool,
+    /// A tick runs through the rollback session (it is out of `rollback`).
+    pub(crate) advancing: bool,
 }
 
 impl Networking {
@@ -130,6 +139,92 @@ impl Networking {
     #[must_use]
     pub fn message_error(&self) -> Option<&io::Error> {
         self.message_error.as_ref()
+    }
+
+    /// Starts a rollback session ([`GameRollback`](super::GameRollback)):
+    /// from the next tick on, every simulation tick runs through it, and a
+    /// late input that differs from the prediction loads the saved state
+    /// and runs the simulation systems again. Start it on every peer at the
+    /// same tick of the same world (after loading the same level, say). It
+    /// replaces a running one; a game uses rollback or
+    /// [`lockstep`](Self::lockstep), not both.
+    ///
+    /// # Panics
+    ///
+    /// In a simulation system while a session runs: start and stop
+    /// sessions in setup or frame systems.
+    ///
+    /// ```
+    /// use ponko::net::GameRollback;
+    /// use ponko::prelude::*;
+    ///
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     ctx.net.start_rollback(GameRollback::<u8>::new(2, 0).input_delay(1));
+    ///     assert!(ctx.net.rollback::<u8>().is_some());
+    ///     assert!(ctx.net.rollback::<i32>().is_none()); // another input type
+    /// });
+    /// ```
+    pub fn start_rollback<I>(&mut self, session: super::GameRollback<I>)
+    where
+        I: Clone + PartialEq + Default + Serialize + DeserializeOwned + Send + Sync + 'static,
+    {
+        self.not_advancing("start_rollback");
+        self.rollback_inputs = Some(super::RollbackSession::new_inputs(&session));
+        self.rollback = Some(Box::new(session));
+    }
+
+    /// Ends the rollback session, returning it if it had input type `I`.
+    /// Ticks run as before it started.
+    ///
+    /// # Panics
+    ///
+    /// In a simulation system while a session runs.
+    pub fn stop_rollback<I: 'static>(&mut self) -> Option<super::GameRollback<I>> {
+        self.not_advancing("stop_rollback");
+        self.rollback_inputs = None;
+        let session = self.rollback.take()?;
+        let any: Box<dyn std::any::Any> = session.into_any();
+        any.downcast().ok().map(|b| *b)
+    }
+
+    /// The rollback session, if one with input type `I` runs: frame systems
+    /// [`set_input`](super::GameRollback::set_input) and carry its packets.
+    /// `None` inside simulation systems: the tick is running through it.
+    #[must_use]
+    pub fn rollback<I: 'static>(&mut self) -> Option<&mut super::GameRollback<I>> {
+        self.rollback.as_mut()?.as_any_mut().downcast_mut()
+    }
+
+    /// Every player's input for the tick running, by player, in a
+    /// simulation system while a rollback session runs: real inputs where
+    /// they arrived, predictions where not. `None` without a session (or
+    /// with one of another input type).
+    #[must_use]
+    pub fn rollback_inputs<I: 'static>(&self) -> Option<&[I]> {
+        let inputs = self.rollback_inputs.as_ref()?.downcast_ref::<Vec<I>>()?;
+        Some(inputs)
+    }
+
+    /// Whether the tick running is one a rollback runs again. Sounds are
+    /// dropped then by the engine; skip other one-shot output yourself
+    /// (particle bursts, rumble, log lines), as it happened the first time.
+    #[must_use]
+    pub fn is_resimulating(&self) -> bool {
+        self.resimulating
+    }
+
+    #[track_caller]
+    fn not_advancing(&self, call: &str) {
+        assert!(
+            !self.advancing,
+            "ctx.net.{call} in a simulation system that a rollback session runs; \
+             start and stop sessions in setup or frame systems"
+        );
+    }
+
+    /// Engine side: where the session's inputs go for the systems.
+    pub(crate) fn rollback_inputs_mut(&mut self) -> &mut (dyn std::any::Any + Send + Sync) {
+        &mut **self.rollback_inputs.as_mut().expect("a rollback session has inputs")
     }
 
     /// [`Net::player`] of the lockstep session: which player this is.
