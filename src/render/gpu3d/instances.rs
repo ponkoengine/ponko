@@ -2760,6 +2760,21 @@ impl Renderer3D {
         )
     }
 
+    /// Bytes of the pools' records buffers handed out to batches and cells,
+    /// with the padding of each block to its pool's alignment, and the bytes
+    /// the pools' buffers (records, lists, draw arguments) take.
+    pub(crate) fn pool_records(&self) -> (u64, u64) {
+        let Some(culling) = &self.static_culling else {
+            return (0, 0);
+        };
+        let used = culling
+            .pools
+            .iter()
+            .map(|p| p.records.end - p.records.free.iter().map(|&(_, s)| s).sum::<u64>())
+            .sum();
+        (used, culling.pools.iter().map(Pool::bytes).sum())
+    }
+
     pub(crate) fn batch_generations(&self) -> Vec<u32> {
         self.static_culling
             .iter()
