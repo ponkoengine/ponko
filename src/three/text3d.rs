@@ -122,6 +122,9 @@ pub(crate) struct TextVertex {
 #[derive(Default)]
 pub(crate) struct TextFrame {
     pub vertices: Vec<TextVertex>,
+    /// How many of the last `vertices` are debug labels on top (target
+    /// cameras only), drawn after everything else without a depth test.
+    pub on_top: usize,
     pub atlas: Option<Texture>,
     /// Scratch: (depth, entity) of each text to draw.
     order: Vec<(f32, ponko_ecs::Entity)>,
@@ -272,21 +275,28 @@ impl Ctx {
         let lines = &frame3d.debug_lines;
         let main = &self.scene3d.camera;
         let labels_for = |on: bool| (labels && on).then_some(lines);
+        // The window's cameras draw the labels on top as screen text.
         frame3d.particles.texts.lay_out(
             world,
             main,
-            labels_for(shows(main.layers) && !lines.hidden),
+            (labels_for(shows(main.layers) && !lines.hidden), false),
             text,
             atlas,
         );
         for (frame, view) in frame3d.window_views.iter_mut().zip(&self.scene3d.views) {
             let labels = labels_for(shows(view.camera.layers));
-            frame.particles.texts.lay_out(world, &view.camera, labels, text, atlas);
+            frame
+                .particles
+                .texts
+                .lay_out(world, &view.camera, (labels, false), text, atlas);
         }
         for view in &mut frame3d.views {
             if let Some(eye) = view.eye.filter(|_| view.particles) {
                 let labels = labels_for(view.debug);
-                view.frame.particles.texts.lay_out(world, &eye, labels, text, atlas);
+                view.frame
+                    .particles
+                    .texts
+                    .lay_out(world, &eye, (labels, true), text, atlas);
             }
         }
         if let Some(renderer) = self.gfx.renderer.as_mut() {
@@ -303,15 +313,18 @@ impl TextFrame {
     /// Nothing to draw (keeping the storage and the atlas).
     pub(crate) fn clear(&mut self) {
         self.vertices.clear();
+        self.on_top = 0;
     }
 
     /// Lays out every [`Text3D`] in `world` for `camera`, farthest first,
-    /// then `labels`' depth-tested labels, sampling `atlas`.
+    /// then `labels`' depth-tested labels and, with `on_top`, its labels on
+    /// top last (the last [`on_top`](Self::on_top) vertices), sampling
+    /// `atlas`.
     fn lay_out(
         &mut self,
         world: &mut ponko_ecs::World,
         camera: &Camera3D,
-        labels: Option<&crate::debug::GpuLines>,
+        (labels, on_top): (Option<&crate::debug::GpuLines>, bool),
         text: &mut Text,
         atlas: Texture,
     ) {
@@ -336,11 +349,19 @@ impl TextFrame {
         }
         self.order = order;
         if let Some(lines) = labels {
-            for l in &lines.labels {
+            for l in lines.labels.iter().filter(|l| !l.on_top) {
                 let string = &lines.text[l.text.clone()];
                 self.push_label(string, l.at, (l.color, l.size), camera, text);
             }
         }
+        let below = self.vertices.len();
+        if let Some(lines) = labels.filter(|_| on_top) {
+            for l in lines.labels.iter().filter(|l| l.on_top) {
+                let string = &lines.text[l.text.clone()];
+                self.push_label(string, l.at, (l.color, l.size), camera, text);
+            }
+        }
+        self.on_top = self.vertices.len() - below;
     }
 }
 

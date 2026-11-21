@@ -1,8 +1,9 @@
 //! `ctx.debug`'s 3D lines on the GPU: depth-tested lines are hidden behind
 //! nearer surfaces, lines on top are not, a line passing the camera keeps
 //! its visible part, and nothing is drawn while debug drawing is off (the
-//! negative control). With 4 samples and with 1 (as on WebGL2). Skips
-//! without a GPU.
+//! negative control). With 4 samples and with 1 (as on WebGL2). Labels
+//! and lines show in every 3D view; labels on top are on top in a render
+//! target as on screen. Skips without a GPU.
 use super::regression_stage::*;
 use super::render_test_support::{Image, Tolerance, keep_image};
 use crate::prelude::*;
@@ -436,19 +437,26 @@ impl Views {
     /// returns the window and the render target, as RGBA8 (the target's
     /// linear HDR light clamped and encoded as sRGB).
     fn frame(&mut self) -> (Image, Image) {
+        self.frame_with(|debug| {
+            debug
+                .text(FRONT, "MM", Color::rgb(1.0, 0.0, 1.0))
+                .size(16.0)
+                .depth_tested();
+            debug
+                .text(BEHIND, "MM", Color::rgb(0.0, 1.0, 1.0))
+                .size(16.0)
+                .depth_tested();
+            debug.line(LINE.0, LINE.1, Color::GREEN).width(3.0);
+            debug.line(LINE_BEHIND.0, LINE_BEHIND.1, Color::YELLOW).width(3.0);
+        })
+    }
+
+    /// [`frame`](Self::frame), with what `draw` draws instead.
+    fn frame_with(&mut self, draw: impl FnOnce(&mut crate::debug::DebugDraw)) -> (Image, Image) {
         let debug = &mut self.ctx.debug;
         debug.clear();
         debug.set_enabled(true);
-        debug
-            .text(FRONT, "MM", Color::rgb(1.0, 0.0, 1.0))
-            .size(16.0)
-            .depth_tested();
-        debug
-            .text(BEHIND, "MM", Color::rgb(0.0, 1.0, 1.0))
-            .size(16.0)
-            .depth_tested();
-        debug.line(LINE.0, LINE.1, Color::GREEN).width(3.0);
-        debug.line(LINE_BEHIND.0, LINE_BEHIND.1, Color::YELLOW).width(3.0);
+        draw(debug);
         let path = std::env::temp_dir().join(format!(
             "ponko-debug-views-{}-{:?}.png",
             std::process::id(),
@@ -582,11 +590,95 @@ fn depth_tested_labels_and_lines_show_in_every_3d_view_and_hide_behind_surfaces(
         target_only[0] == 0 && target_only[2] >= 20,
         "only the target camera shows the line: {target_only:?}"
     );
-    // A target camera without particles leaves debug drawing out too (the
-    // main camera draws again: a frame with nothing at all to draw skips
-    // the 3D passes, the target cameras' too).
+    // A target camera without particles leaves debug drawing out too.
     views.ctx.scene3d.camera.layers = crate::camera::RenderLayers::ALL;
     views.ctx.scene3d.passes.target_cameras[0].camera.particles = false;
     assert_eq!(shown(&mut views, magenta8)[2], 0, "no particles, no label");
     assert_eq!(shown(&mut views, green8)[2], 0, "no particles, no line");
+}
+
+#[test]
+fn labels_on_top_are_on_top_in_a_render_target_as_on_screen() {
+    let Some(mut views) = Views::new() else {
+        return;
+    };
+    // Behind the wall, not depth-tested: on screen it is drawn over
+    // everything, in both halves, and so it is in the render target, over
+    // the wall and over a debug line on top drawn across it.
+    let on_top = |debug: &mut crate::debug::DebugDraw| {
+        debug.text(BEHIND, "MM", Color::rgb(0.0, 1.0, 1.0)).size(16.0);
+        debug
+            .line(
+                BEHIND + vec3(-0.5, -0.5, 0.0),
+                BEHIND + vec3(2.0, -0.5, 0.0),
+                Color::YELLOW,
+            )
+            .width(3.0)
+            .on_top();
+    };
+    let (window, target) = views.frame_with(on_top);
+    let shown = [
+        count(&window, 0..128, cyan8),
+        count(&window, 128..256, cyan8),
+        count(&target, 0..128, cyan8),
+    ];
+    assert!(
+        shown.iter().all(|&n| n >= 8),
+        "the label on top shows in the main half, the second half and the render target: {shown:?}"
+    );
+    // Over the line on top through it: the label hides part of it, where
+    // the line alone shows whole.
+    let crossed = count(&target, 0..128, yellow8);
+    let (_, alone) = views.frame_with(|debug| {
+        debug
+            .line(
+                BEHIND + vec3(-0.5, -0.5, 0.0),
+                BEHIND + vec3(2.0, -0.5, 0.0),
+                Color::YELLOW,
+            )
+            .width(3.0)
+            .on_top();
+    });
+    let alone = count(&alone, 0..128, yellow8);
+    eprintln!("yellow line pixels: {crossed} under the label, {alone} alone");
+    assert!(
+        crossed + 8 <= alone,
+        "the label is drawn over the line on top: {crossed} of the line's pixels show under it, {alone} alone"
+    );
+    // Negative control: depth-tested, the wall hides it in every view.
+    let (window, target) = views.frame_with(|debug| {
+        debug
+            .text(BEHIND, "MM", Color::rgb(0.0, 1.0, 1.0))
+            .size(16.0)
+            .depth_tested();
+    });
+    let hidden = [
+        count(&window, 0..128, cyan8),
+        count(&window, 128..256, cyan8),
+        count(&target, 0..128, cyan8),
+    ];
+    assert_eq!(hidden, [0; 3], "depth-tested, the wall hides it");
+    // A target camera off the default layer shows no label, as no line.
+    let without_default = crate::camera::RenderLayers::ALL.without(0);
+    views.ctx.scene3d.passes.target_cameras[0].camera.layers = without_default;
+    let (window, off) = views.frame_with(on_top);
+    assert!(count(&window, 0..128, cyan8) >= 8, "the window still shows it");
+    assert_eq!(count(&off, 0..128, cyan8), 0, "off the default layer, no label");
+    views.ctx.scene3d.passes.target_cameras[0].camera.layers = crate::camera::RenderLayers::ALL;
+    let renderer = views.ctx.gfx.renderer.as_ref().expect("an offscreen renderer");
+    let info = renderer.texture_for_test(0).0.adapter_info();
+    let (_, target) = views.frame_with(on_top);
+    super::render_test_support::check_reference(
+        "debug_label_on_top_render_target",
+        &target,
+        Tolerance {
+            channel: 12,
+            outliers: 0.01,
+            edge: 1,
+        },
+        "a render target seeing a grey wall from the front, black around it; a cyan 16 px debug label (not \
+         depth-tested) behind the wall drawn over it, top left of the middle, over a yellow debug line on top \
+         through the middle of its letters, both drawn through the wall",
+        &info,
+    );
 }
