@@ -92,6 +92,27 @@ src/logs.rs | on_thread_end | tests/control.rs::the_game_output_is_kept_for_tool
 src/logs.rs | extern block in mod windows | tests/control.rs::the_game_output_is_kept_for_tools | windows
 src/logs.rs | impl Send for Saved | tests/control.rs::the_game_output_is_kept_for_tools | windows
 
+# SDL 3 for the `gamepad-sdl` backend: its gamepads, through SDL's own
+# virtual gamepads in the test (no device, no window).
+src/gamepad_sdl_sys.rs | impl Send for Sdl | src/gamepad_sdl_sys.rs::tests::a_virtual_sdl_pad_reaches_the_engine_with_motion_and_both_kinds_of_rumble | c-library
+src/gamepad_sdl_sys.rs | error | src/gamepad_sdl_sys.rs::tests::a_virtual_sdl_pad_reaches_the_engine_with_motion_and_both_kinds_of_rumble | c-library
+src/gamepad_sdl_sys.rs | text | src/gamepad_sdl_sys.rs::tests::a_virtual_sdl_pad_reaches_the_engine_with_motion_and_both_kinds_of_rumble | c-library
+src/gamepad_sdl_sys.rs | Sdl::start | src/gamepad_sdl_sys.rs::tests::a_virtual_sdl_pad_reaches_the_engine_with_motion_and_both_kinds_of_rumble | c-library
+src/gamepad_sdl_sys.rs | Sdl::drop | src/gamepad_sdl_sys.rs::tests::a_virtual_sdl_pad_reaches_the_engine_with_motion_and_both_kinds_of_rumble | c-library
+src/gamepad_sdl_sys.rs | Sdl::next_event | src/gamepad_sdl_sys.rs::tests::a_virtual_sdl_pad_reaches_the_engine_with_motion_and_both_kinds_of_rumble | c-library
+src/gamepad_sdl_sys.rs | Sdl::present | src/gamepad_sdl_sys.rs::tests::a_virtual_sdl_pad_reaches_the_engine_with_motion_and_both_kinds_of_rumble | c-library
+src/gamepad_sdl_sys.rs | Sdl::open | src/gamepad_sdl_sys.rs::tests::a_virtual_sdl_pad_reaches_the_engine_with_motion_and_both_kinds_of_rumble | c-library
+src/gamepad_sdl_sys.rs | Sdl::close | src/gamepad_sdl_sys.rs::tests::a_virtual_sdl_pad_reaches_the_engine_with_motion_and_both_kinds_of_rumble | c-library
+src/gamepad_sdl_sys.rs | Sdl::enable_motion | src/gamepad_sdl_sys.rs::tests::a_virtual_sdl_pad_reaches_the_engine_with_motion_and_both_kinds_of_rumble | c-library
+src/gamepad_sdl_sys.rs | Sdl::rumble | src/gamepad_sdl_sys.rs::tests::a_virtual_sdl_pad_reaches_the_engine_with_motion_and_both_kinds_of_rumble | c-library
+src/gamepad_sdl_sys.rs | Sdl::rumble_triggers | src/gamepad_sdl_sys.rs::tests::a_virtual_sdl_pad_reaches_the_engine_with_motion_and_both_kinds_of_rumble | c-library
+src/gamepad_sdl_sys.rs | Sdl::now_ms | src/gamepad_sdl_sys.rs::tests::a_virtual_sdl_pad_reaches_the_engine_with_motion_and_both_kinds_of_rumble | c-library
+
+# The system's keyboard layout, for key labels (macOS: Carbon's
+# UCKeyTranslate; Windows: user32's MapVirtualKeyExW).
+src/input/key_labels.rs | extern block in mod system | src/input/key_labels.rs::tests::the_systems_layout_gives_every_letter_key_a_label | c-library
+src/input/key_labels.rs | layout | src/input/key_labels.rs::tests::the_systems_layout_gives_every_letter_key_a_label | c-library
+
 # C libraries: dav1d (AV1 video), meshoptimizer (compressed glTF).
 src/video/av1.rs | Av1::new | tests/video.rs::a_loaded_video_is_paused_on_its_first_frame | c-library
 src/video/av1.rs | Av1::decode | tests/video.rs::a_loaded_video_is_paused_on_its_first_frame | c-library
@@ -211,6 +232,11 @@ crates/ponko_ffi/src/component_hooks.rs | impl Send for CHook | crates/ponko_ffi
 crates/ponko_ffi/src/component_hooks.rs | impl Sync for CHook | crates/ponko_ffi/tests/component_hooks.rs::hooks_from_c_run_for_spawns_made_by_a_game_system | sanitizers
 crates/ponko_ffi/src/crash.rs | impl Send for Hook | crates/ponko_ffi/tests/crash_reports.rs::crash_reports_from_c_name_the_version_run_the_hook_and_are_saved | sanitizers
 crates/ponko_ffi/src/crash.rs | impl Sync for Hook | crates/ponko_ffi/tests/crash_reports.rs::crash_reports_from_c_name_the_version_run_the_hook_and_are_saved | sanitizers
+
+# A C or C++ program's main and the game's run in a browser (wasm only), run
+# by the browser smoke test of web/build-cpp.sh.
+crates/ponko_ffi/src/web.rs | call_job | web/smoke/cpp.mjs | wasm
+crates/ponko_ffi/src/web.rs | call_main | web/smoke/cpp.mjs | wasm
 crates/ponko_ffi/src/slice_loaders.rs | impl Send for Callbacks | crates/ponko_ffi/tests/slice_loaders.rs::a_sliced_c_loader_works_in_pieces_and_hands_over_its_state_once | sanitizers
 crates/ponko_ffi/src/slice_loaders.rs | impl Sync for Callbacks | crates/ponko_ffi/tests/slice_loaders.rs::a_sliced_c_loader_works_in_pieces_and_hands_over_its_state_once | sanitizers
 crates/ponko_ffi/src/slice_loaders.rs | impl Send for State | crates/ponko_ffi/tests/slice_loaders.rs::a_sliced_c_loader_works_in_pieces_and_hands_over_its_state_once | sanitizers

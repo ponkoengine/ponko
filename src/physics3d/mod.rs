@@ -32,6 +32,8 @@ mod joints;
 pub use joints::{Joint3D, JointAxis3D, JointDrive3D, JointMotion3D};
 mod query;
 mod ragdoll;
+mod state;
+pub use state::Physics3DState;
 mod streaming;
 mod vehicle;
 pub use ragdoll::{Ragdoll3D, RagdollBone};

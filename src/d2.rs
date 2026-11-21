@@ -87,5 +87,6 @@ pub use crate::particles2d::{
 #[cfg(feature = "physics")]
 #[doc(inline)]
 pub use crate::physics::{
-    Collider, CollisionGroups, Penetration, Physics, PointHit, QueryFilter, RayHit as Hit, RigidBody, Shape, Velocity,
+    Collider, CollisionGroups, Penetration, Physics, PhysicsState, PointHit, QueryFilter, RayHit as Hit, RigidBody,
+    Shape, Velocity,
 };

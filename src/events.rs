@@ -79,6 +79,9 @@ pub struct Events {
     tick: u64,
     /// Events live at least this many ticks: the slowest system interval.
     pub(crate) keep_ticks: u32,
+    /// Extra ticks events are kept while a rollback session may load a
+    /// state from that far back ([`EventsState`]); 0 otherwise.
+    pub(crate) hold_ticks: u32,
     /// Types tools can see as JSON.
     reflected: Vec<ReflectedEvent>,
     /// What a tool subscribed to, collected between frames.
@@ -449,7 +452,7 @@ impl Events {
     pub(crate) fn begin_frame(&mut self, frame: u64, tick: u64) {
         self.frame = frame;
         self.tick = tick;
-        let keep = u64::from(self.keep_ticks.max(1));
+        let keep = u64::from(self.keep_ticks.max(1)) + u64::from(self.hold_ticks);
         for ch in &mut self.channels {
             ch.drop_old(frame, tick, keep);
         }
@@ -458,6 +461,66 @@ impl Events {
     /// Engine side: the tick counter moved on.
     pub(crate) fn set_tick(&mut self, tick: u64) {
         self.tick = tick;
+    }
+
+    /// Rollback: notes what is kept now, to go back to with
+    /// [`restore_state`](Self::restore_state). Reuses `into`'s memory.
+    pub(crate) fn save_state(&self, into: &mut EventsState) {
+        into.channels.resize_with(self.channels.len(), ChannelState::default);
+        for (ch, saved) in self.channels.iter().zip(&mut into.channels) {
+            let log = ch.log();
+            saved.end = log.base + log.len as u64;
+            saved.cursors.clone_from(&log.cursors);
+        }
+    }
+
+    /// Rollback: forgets the events sent since `from` was saved, and moves
+    /// the read positions of the readers `rolls_back` picks (simulation
+    /// systems) back to where they were. Other readers (frame systems,
+    /// tools) keep theirs, so they aren't shown events again at positions
+    /// they already read. Events sent before the save are still kept:
+    /// [`hold_ticks`](Self::hold_ticks) keeps them long enough.
+    pub(crate) fn restore_state(&mut self, from: &EventsState, rolls_back: impl Fn(u32) -> bool) {
+        for (i, ch) in self.channels.iter_mut().enumerate() {
+            let saved = from.channels.get(i);
+            let log = ch.log_mut();
+            let end = saved.map_or(0, |s| s.end);
+            debug_assert!(
+                saved.is_none_or(|s| s.cursors.iter().all(|c| !rolls_back(c.0) || c.1 >= log.base)),
+                "rollback: events a simulation system hadn't read were dropped before the load"
+            );
+            let keep = end.saturating_sub(log.base).min(log.len as u64) as usize;
+            // Runs before the save are the same as then (the same history).
+            log.runs.retain(|r| r.0 < end);
+            log.cursors.retain(|c| !rolls_back(c.0));
+            if let Some(s) = saved {
+                log.cursors.extend(s.cursors.iter().filter(|c| rolls_back(c.0)));
+            }
+            ch.truncate(keep);
+        }
+    }
+}
+
+/// What [`Events`] kept at a tick, for rollback: per channel, where its
+/// events ended and where each reader was. The events themselves stay in
+/// the store; a load forgets the ones sent after the save.
+#[derive(Default)]
+pub(crate) struct EventsState {
+    channels: Vec<ChannelState>,
+}
+
+#[derive(Default)]
+struct ChannelState {
+    /// Sequence number after the last event kept at the save.
+    end: u64,
+    cursors: Vec<(u32, u64)>,
+}
+
+impl EventsState {
+    /// Heap bytes held, for the numbers in the guide.
+    pub(crate) fn heap_bytes(&self) -> usize {
+        self.channels.capacity() * std::mem::size_of::<ChannelState>()
+            + self.channels.iter().map(|c| c.cursors.capacity() * 16).sum::<usize>()
     }
 }
 
@@ -485,6 +548,8 @@ fn raw_name<'w>(world: &'w ponko_ecs::World, id: u32, raw: &Raw) -> Option<&'w s
 
 trait Channel: Any {
     fn drop_old(&mut self, frame: u64, tick: u64, keep_ticks: u64);
+    /// Keeps the oldest `len` events (rollback).
+    fn truncate(&mut self, len: usize);
     fn log(&self) -> &Log;
     fn log_mut(&mut self) -> &mut Log;
     fn as_any(&self) -> &dyn Any;
@@ -518,21 +583,28 @@ impl Log {
     /// Indexes of events `reader` hasn't seen.
     fn unread(&self, reader: u32) -> std::ops::Range<usize> {
         let cursor = self.cursors.iter().find(|c| c.0 == reader).map_or(self.base, |c| c.1);
-        (cursor.max(self.base) - self.base) as usize..self.len
+        // A frame reader may be past the end after a rollback forgot events.
+        ((cursor.max(self.base) - self.base) as usize).min(self.len)..self.len
     }
 
     /// Indexes of events `reader` hasn't seen, and marks them seen.
     fn read(&mut self, reader: u32) -> std::ops::Range<usize> {
         let end = self.base + self.len as u64;
         let cursor = match self.cursors.iter_mut().find(|c| c.0 == reader) {
-            Some(c) => std::mem::replace(&mut c.1, end),
+            // Past the end only after a rollback: stay there, so events sent
+            // again at positions already read aren't shown again.
+            Some(c) => {
+                let old = c.1;
+                c.1 = old.max(end);
+                old
+            }
             None => {
                 self.cursors.push((reader, end));
                 self.base
             }
         };
         let start = cursor.max(self.base) - self.base;
-        start as usize..self.len
+        (start as usize).min(self.len)..self.len
     }
 
     /// The tick kept event `index` was sent in.
@@ -572,6 +644,10 @@ impl<T: 'static> Channel for Typed<T> {
         if n > 0 {
             self.items.drain(..n);
         }
+    }
+    fn truncate(&mut self, len: usize) {
+        self.items.truncate(len);
+        self.log.len = len;
     }
     fn log(&self) -> &Log {
         &self.log
@@ -624,6 +700,10 @@ impl Channel for Raw {
             all.copy_within(n * self.size..old_len * self.size, 0);
             self.blocks.truncate((self.log.len * self.size).div_ceil(16));
         }
+    }
+    fn truncate(&mut self, len: usize) {
+        self.log.len = len;
+        self.blocks.truncate((len * self.size).div_ceil(16));
     }
     fn log(&self) -> &Log {
         &self.log
@@ -790,6 +870,57 @@ mod tests {
         ev.begin_frame(5, 3);
         ev.begin_frame(6, 3);
         assert_eq!(ev.peek::<&str>(), &["b"]);
+    }
+
+    #[test]
+    fn a_rollback_load_forgets_later_events_and_moves_only_sim_readers_back() {
+        const SIM: u32 = 1;
+        const FRAME: u32 = 2;
+        let mut ev = Events::default();
+        let read = |ev: &mut Events, reader| {
+            ev.reader = reader;
+            let seen = ev.read::<u32>().to_vec();
+            ev.reader = 0;
+            seen
+        };
+        ev.begin_frame(1, 0);
+        ev.send(1u32);
+        assert_eq!(read(&mut ev, FRAME), [1]);
+        let mut saved = EventsState::default();
+        ev.save_state(&mut saved);
+        // After the save: one more event, and raw events of another type.
+        ev.send(2u32);
+        ev.send_raw(7, &[9; 4]).unwrap();
+        assert_eq!(read(&mut ev, SIM), [1, 2]);
+        assert_eq!(read(&mut ev, FRAME), [2]);
+        ev.restore_state(&saved, |r| r == SIM);
+        assert_eq!(ev.peek::<u32>(), &[1], "sent after the save: forgotten");
+        assert_eq!(ev.read_raw(7, 4).unwrap().1, 0, "raw events too");
+        // The tick runs again and sends something else at the same place.
+        ev.send(3u32);
+        assert_eq!(read(&mut ev, SIM), [1, 3], "the sim reader reads as at the save");
+        assert!(
+            read(&mut ev, FRAME).is_empty(),
+            "the frame reader read that place already"
+        );
+        ev.send(4u32);
+        assert_eq!(read(&mut ev, FRAME), [4]);
+        assert!(EventsState::default().heap_bytes() == 0 && saved.heap_bytes() > 0);
+    }
+
+    #[test]
+    fn hold_ticks_keep_events_longer() {
+        let mut ev = Events {
+            keep_ticks: 1,
+            hold_ticks: 3,
+            ..Default::default()
+        };
+        ev.begin_frame(1, 0);
+        ev.send(1u8);
+        ev.begin_frame(4, 4);
+        assert_eq!(ev.peek::<u8>(), &[1]);
+        ev.begin_frame(5, 5);
+        assert!(ev.peek::<u8>().is_empty());
     }
 
     #[test]

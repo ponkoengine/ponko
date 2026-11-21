@@ -1533,6 +1533,7 @@ impl Renderer3D {
         for batch in self.static_batches.iter().flatten() {
             batch.tally_memory(t);
         }
+        self.batching.tally_memory(t);
         if let Some(culling) = &self.static_culling {
             culling.tally_memory(t);
         }
@@ -1965,6 +1966,12 @@ impl Renderer3D {
     /// Draw calls the frame's models take: two per mesh part (depth
     /// prepass and lit), one per mesh part in each shadow cascade, one per
     /// screen effect, and the post chain's own (see `PostChain::draw_calls`).
+    /// HDR output's headroom over SDR white for the tone mapping of the
+    /// frames prepared from now on; `None` tone maps for SDR.
+    pub(crate) fn set_hdr_headroom(&mut self, headroom: Option<f32>) {
+        self.post.hdr_headroom = headroom;
+    }
+
     pub fn draw_calls(&self) -> usize {
         let parts: usize = self
             .lists

@@ -793,7 +793,9 @@ pub unsafe extern "C" fn ponko_glyph_atlas_region(
     })
 }
 
-/// The atlas as a texture of `ctx`, uploaded on the first call.
+/// The atlas as a texture of `ctx`, uploaded on the first call, its key
+/// caps labelled for the player's keyboard layout (Rust
+/// `GlyphAtlas::set_key_labels` with `Input::key_labels`).
 /// ```
 /// assert_ne!(unsafe { ponko_ffi::ponko_glyph_atlas_texture(std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) } as u32, 0);
 /// ```
@@ -808,14 +810,18 @@ pub unsafe extern "C" fn ponko_glyph_atlas_texture(
     // SAFETY: forwarded caller contract.
     boundary(|| unsafe {
         let a = atlas_mut(atlas)?;
-        ctx_access(ctx, |c| out(out_texture, texture_to_c(a.texture(&mut c.gfx))))
+        ctx_access(ctx, |c| {
+            a.set_key_labels(c.input.key_labels());
+            out(out_texture, texture_to_c(a.texture(&mut c.gfx)))
+        })
     })
 }
 
 /// Draws a prompt row in window pixels (Rust `GlyphAtlas::draw_prompt`):
 /// `count` glyphs as `height`-pixel squares from `pos` (top-left), then
 /// `label` (may be null) in `color`. `out_width` (may be null) receives the
-/// row's width.
+/// row's width. Key caps are labelled for the player's keyboard layout (a
+/// French player's `PONKO_KEY_W` cap reads Z).
 /// ```
 /// assert_ne!(unsafe { ponko_ffi::ponko_glyph_atlas_draw_prompt(std::ptr::null_mut(), std::ptr::null_mut(), Default::default(), 32.0, std::ptr::null(), 0, std::ptr::null(), ponko_ffi::PonkoColor { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }, std::ptr::null_mut()) } as u32, 0);
 /// ```
@@ -845,6 +851,7 @@ pub unsafe extern "C" fn ponko_glyph_atlas_draw_prompt(
             .collect::<Result<_, _>>()?;
         let label = if label.is_null() { "" } else { text(label)? };
         ctx_access(ctx, |c| {
+            a.set_key_labels(c.input.key_labels());
             let width = a.draw_prompt(
                 &mut c.gfx,
                 to_c(pos),

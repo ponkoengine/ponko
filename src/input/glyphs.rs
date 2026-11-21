@@ -9,6 +9,7 @@
 use glam::Vec2;
 
 use super::controller::{ControllerFamily, InputDevice};
+use super::key_labels::KeyLabels;
 use super::{Gamepad, GamepadAxis, GamepadButton, GamepadStick, Input, Key, MouseButton};
 use crate::actions::{Action, ActionRef, Axis2Binding, AxisBinding, ButtonBinding};
 use crate::camera::Rect;
@@ -152,7 +153,7 @@ impl Glyph {
 }
 
 /// A key's long label and the short one drawn on its cap.
-fn key_label(k: Key) -> (&'static str, &'static str) {
+pub(crate) fn key_label(k: Key) -> (&'static str, &'static str) {
     use Key as K;
     macro_rules! same {
         ($s:literal) => {
@@ -545,7 +546,13 @@ pub struct GlyphAtlas {
     height: u32,
     rgba: Vec<u8>,
     texture: Option<Texture>,
-    inline: Vec<(Glyph, Texture)>,
+    /// Whether `rgba` changed since `texture` was uploaded.
+    dirty: bool,
+    /// Glyphs made into their own textures for rich text, and whether each
+    /// is up to date with `rgba`.
+    inline: Vec<(Glyph, Texture, bool)>,
+    /// The layout the key caps are labelled for.
+    key_labels: KeyLabels,
 }
 
 impl GlyphAtlas {
@@ -563,29 +570,82 @@ impl GlyphAtlas {
         let cell = cell.clamp(16, 256);
         let rows = (GLYPH_COUNT as u32).div_ceil(Self::COLUMNS);
         let (width, height) = (Self::COLUMNS * cell, rows * cell);
-        let mut rgba = vec![0; (width * height * 4) as usize];
-        let font = fontdue::Font::from_bytes(epaint_default_fonts::HACK_REGULAR, fontdue::FontSettings::default())
-            .expect("invariant: the built-in font is valid");
-        let mut canvas = Canvas::new(cell);
-        for glyph in Glyph::all() {
-            canvas.clear();
-            paint(&mut canvas, &font, glyph);
-            let i = glyph.index() as u32;
-            let (x0, y0) = ((i % Self::COLUMNS) * cell, (i / Self::COLUMNS) * cell);
-            for y in 0..cell {
-                let row = ((y0 + y) * width + x0) as usize * 4;
-                let src = (y * cell) as usize * 4;
-                rgba[row..row + cell as usize * 4].copy_from_slice(&canvas.pixels[src..src + cell as usize * 4]);
-            }
-        }
-        Self {
+        let rgba = vec![0; (width * height * 4) as usize];
+        let mut atlas = Self {
             cell,
             width,
             height,
             rgba,
             texture: None,
+            dirty: false,
             inline: Vec::new(),
+            key_labels: KeyLabels::us(),
+        };
+        atlas.paint_cells(Glyph::all());
+        atlas
+    }
+
+    /// Draws `glyphs` into their cells.
+    fn paint_cells(&mut self, glyphs: impl Iterator<Item = Glyph>) {
+        let font = fontdue::Font::from_bytes(epaint_default_fonts::HACK_REGULAR, fontdue::FontSettings::default())
+            .expect("invariant: the built-in font is valid");
+        let (cell, width) = (self.cell, self.width);
+        let mut canvas = Canvas::new(cell);
+        for glyph in glyphs {
+            canvas.clear();
+            paint(&mut canvas, &font, glyph, &self.key_labels);
+            let i = glyph.index() as u32;
+            let (x0, y0) = ((i % Self::COLUMNS) * cell, (i / Self::COLUMNS) * cell);
+            for y in 0..cell {
+                let row = ((y0 + y) * width + x0) as usize * 4;
+                let src = (y * cell) as usize * 4;
+                self.rgba[row..row + cell as usize * 4].copy_from_slice(&canvas.pixels[src..src + cell as usize * 4]);
+            }
         }
+    }
+
+    /// Labels the key caps for a keyboard layout: pass
+    /// [`ctx.input.key_labels()`](Input::key_labels) before drawing prompts,
+    /// and a French player's `Key::W` cap reads `Z`. Only the caps whose
+    /// label changed are drawn again (nothing at all when none did, so
+    /// calling it every frame costs a comparison); the texture is updated
+    /// on its next use.
+    ///
+    /// ```
+    /// use ponko::input::{Glyph, GlyphAtlas, KeyLabels};
+    /// use ponko::prelude::*;
+    /// let mut atlas = GlyphAtlas::new(32);
+    /// let us = atlas.glyph_rgba(Glyph::Key(Key::W));
+    /// atlas.set_key_labels(&KeyLabels::from_layout(|k| (k == Key::W).then_some('z')));
+    /// assert_ne!(atlas.glyph_rgba(Glyph::Key(Key::W)), us, "the cap reads Z now");
+    /// assert_eq!(atlas.glyph_rgba(Glyph::Key(Key::Z)), GlyphAtlas::new(32).glyph_rgba(Glyph::Key(Key::Z)));
+    /// ```
+    pub fn set_key_labels(&mut self, labels: &KeyLabels) {
+        if *labels == self.key_labels {
+            return;
+        }
+        let changed: Vec<Glyph> = Key::ALL
+            .into_iter()
+            .filter(|&k| labels.cap(k) != self.key_labels.cap(k))
+            .map(Glyph::Key)
+            .collect();
+        self.key_labels = labels.clone();
+        if changed.is_empty() {
+            return;
+        }
+        for (glyph, _, fresh) in &mut self.inline {
+            if changed.contains(glyph) {
+                *fresh = false;
+            }
+        }
+        self.paint_cells(changed.into_iter());
+        self.dirty = true;
+    }
+
+    /// The layout the key caps are labelled for ([`set_key_labels`](Self::set_key_labels)).
+    #[must_use]
+    pub fn key_labels(&self) -> &KeyLabels {
+        &self.key_labels
     }
 
     /// The side of one cell, in pixels.
@@ -665,15 +725,28 @@ impl GlyphAtlas {
     /// # let _ = texture; }
     /// ```
     pub fn texture(&mut self, gfx: &mut Gfx) -> Texture {
-        *self
-            .texture
-            .get_or_insert_with(|| gfx.create_texture(self.width, self.height, &self.rgba))
+        match self.texture {
+            Some(texture) => {
+                if std::mem::take(&mut self.dirty) {
+                    gfx.update_texture(texture, &self.rgba);
+                }
+                texture
+            }
+            None => {
+                self.dirty = false;
+                *self
+                    .texture
+                    .insert(gfx.create_texture(self.width, self.height, &self.rgba))
+            }
+        }
     }
 
     /// Names `glyph` for rich text (`[img=<name>]`, with
     /// [`Glyph::name`]) and returns the markup that shows it, with its label
-    /// as the alt text: `[img=pad.xbox.south alt=A]`. The glyph's texture is
-    /// made on the first call for it.
+    /// as the alt text (keys labelled for the atlas's
+    /// [`key_labels`](Self::key_labels)): `[img=pad.xbox.south alt=A]`. The
+    /// glyph's texture is made on the first call for it, and drawn again on
+    /// the first call after its key's label changed.
     ///
     /// ```
     /// # use ponko::prelude::*;
@@ -690,12 +763,23 @@ impl GlyphAtlas {
     /// ```
     pub fn inline_image(&mut self, gfx: &mut Gfx, ui: &mut crate::ui::Ui, glyph: Glyph) -> String {
         let name = glyph.name();
-        if !self.inline.iter().any(|(g, _)| *g == glyph) {
-            let texture = gfx.create_texture(self.cell, self.cell, &self.glyph_rgba(glyph));
-            ui.set_inline_image(&name, texture);
-            self.inline.push((glyph, texture));
+        match self.inline.iter().position(|(g, ..)| *g == glyph) {
+            None => {
+                let texture = gfx.create_texture(self.cell, self.cell, &self.glyph_rgba(glyph));
+                ui.set_inline_image(&name, texture);
+                self.inline.push((glyph, texture, true));
+            }
+            Some(at) if !self.inline[at].2 => {
+                let rgba = self.glyph_rgba(glyph);
+                gfx.update_texture(self.inline[at].1, &rgba);
+                self.inline[at].2 = true;
+            }
+            Some(_) => {}
         }
-        format!("[img={name} alt={}]", glyph.label().replace(' ', "\u{a0}"))
+        format!(
+            "[img={name} alt={}]",
+            self.key_labels.glyph(glyph).replace(' ', "\u{a0}")
+        )
     }
 
     /// Draws a prompt row in window pixels: the glyphs as `height`-pixel
@@ -920,9 +1004,9 @@ fn v(x: f32, y: f32) -> Vec2 {
 
 const CENTER: Vec2 = Vec2::new(0.5, 0.5);
 
-fn paint(canvas: &mut Canvas, font: &fontdue::Font, glyph: Glyph) {
+fn paint(canvas: &mut Canvas, font: &fontdue::Font, glyph: Glyph, labels: &KeyLabels) {
     match glyph {
-        Glyph::Key(k) => paint_key(canvas, font, k),
+        Glyph::Key(k) => paint_key(canvas, font, k, labels.cap(k)),
         Glyph::Mouse(b) => paint_mouse(canvas, b),
         Glyph::Button(f, b) => paint_button(canvas, font, f, b),
         Glyph::Stick(_, s) => {
@@ -951,7 +1035,7 @@ fn paint(canvas: &mut Canvas, font: &fontdue::Font, glyph: Glyph) {
     }
 }
 
-fn paint_key(canvas: &mut Canvas, font: &fontdue::Font, k: Key) {
+fn paint_key(canvas: &mut Canvas, font: &fontdue::Font, k: Key, text: &str) {
     let half = v(0.42, 0.40);
     // The cap's lower edge, then its face and outline.
     canvas.fill(ink::CAP_EDGE, rounded(CENTER + v(0.0, 0.04), half, 0.1));
@@ -969,7 +1053,6 @@ fn paint_key(canvas: &mut Canvas, font: &fontdue::Font, k: Key) {
         canvas.fill(ink::CAP_TEXT, arrow_head(CENTER + dir * 0.06, dir, 0.14));
         return;
     }
-    let text = key_label(k).1;
     let height = if text.chars().count() <= 2 { 0.5 } else { 0.34 };
     canvas.text(font, text, CENTER - v(0.0, 0.01), height, 0.7, ink::CAP_TEXT);
 }

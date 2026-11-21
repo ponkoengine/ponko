@@ -1277,6 +1277,12 @@ using query_filter_ex = PonkoQueryFilterEx;
 /// objects in screen-space reflections (ssr_thin_objects: whole without TAA, about a millisecond more at
 /// 1920x1080; the ultra preset turns it on).
 using post_ex = PonkoPostEx;
+/// HDR display output settings that can grow (PonkoHdrOutput): enabled, paper_white_nits, peak_nits
+/// (0: the display's). Off by default; see hdr_output_defaults, game::hdr_output, ctx::set_hdr_output.
+using hdr_output = PonkoHdrOutput;
+/// What the window does with the HDR settings (PonkoHdrStatus): available, active, encoding, reason,
+/// paper white, peak and headroom as used, and what the display reports (0 unknown).
+using hdr_status = PonkoHdrStatus;
 /// Whether a camera draws `ctx.debug`'s 3D lines and labels (the `debug_draw` of camera3d_ex and
 /// target_camera_ex, Rust `Camera::debug_draw`); set it with `static_cast<std::uint32_t>(...)`.
 enum class camera_debug_draw : std::uint32_t {
@@ -1363,6 +1369,15 @@ inline query_filter_ex query_filter_ex_of(const filter3d& f) {
     x.groups = f.raw.groups;
     x.sensors = f.raw.sensors;
     return x;
+}
+
+/// HDR output settings with their defaults (off, 200-nit paper white, the display's peak).
+inline hdr_output hdr_output_defaults() {
+    hdr_output h{};
+    h.struct_size = sizeof(hdr_output);
+    h.version = PONKO_HDR_OUTPUT_VERSION;
+    detail::check(ponko_hdr_output_defaults(&h));
+    return h;
 }
 
 /// A post_ex with only its header set, to read into (ctx::post_ex does).
@@ -4984,6 +4999,10 @@ public:
         detail::check(status);
         return r;
     }
+    /// Fades `node` and everything inside it as one image (drawn opaque into an offscreen layer shown at its opacity), so overlapping children don't show through each other (`on` false: piece by piece, the default).
+    void set_fade_as_group(id node, bool on = true) { detail::check(ponko_ctx_ui_set_fade_as_group(raw_, target_, node, on)); }
+    /// Whether `node` fades as one image.
+    bool fades_as_group(id node) const { bool on = false; detail::check(ponko_ctx_ui_fades_as_group(raw_, target_, node, &on)); return on; }
     /// Shows the tree under `root` as a HUD: drawn below every screen, never closed by Escape, never takes input.
     void show_hud(id root) { detail::check(ponko_ctx_ui_show_hud(raw_, target_, root)); }
     /// Takes a HUD off the screen; its nodes stay.
@@ -9330,6 +9349,26 @@ public:
     /// finite and its balance -1 to 1, dof_focus_distance and dof_focus_range not negative, dof_blur 0 to
     /// 0.05 and msaa 2 or 4. Nothing changes when it throws.
     void set_post(const ponko::post_ex& p) { detail::check(ponko_ctx_set_post_ex(raw_, &p)); }
+    /// The HDR output settings (Rust `ctx.gfx.hdr_output()`).
+    ponko::hdr_output hdr_output() const {
+        ponko::hdr_output h{};
+        h.struct_size = sizeof(h);
+        h.version = PONKO_HDR_OUTPUT_VERSION;
+        detail::check(ponko_ctx_hdr_output(raw_, &h));
+        return h;
+    }
+    /// Changes the HDR output settings: paper white and peak from the next frame; `enabled` switches
+    /// between HDR and SDR if the window opened with HDR on (game::hdr_output), else at the next start.
+    /// Throws, changing nothing, for a NaN or negative peak_nits.
+    void set_hdr_output(const ponko::hdr_output& h) { detail::check(ponko_ctx_set_hdr_output(raw_, &h)); }
+    /// What the window does with the HDR settings: active, encoding, reason, paper white and peak as used.
+    ponko::hdr_status hdr_status() const {
+        ponko::hdr_status s{};
+        s.struct_size = sizeof(s);
+        s.version = PONKO_HDR_STATUS_VERSION;
+        detail::check(ponko_ctx_hdr_status(raw_, &s));
+        return s;
+    }
     /// The current graphics quality, gathered from the post and lighting settings.
     ponko::graphics_quality graphics_quality() const {
         ponko::graphics_quality q{}; detail::check(ponko_ctx_graphics_quality(raw_, &q)); return q;
@@ -11054,6 +11093,9 @@ public:
     game& restore_window_settings(bool on = true) { return check(ponko_game_restore_window_settings(raw_, on)); }
     /// Wait for the display between frames (default on).
     game& vsync(bool on) { return check(ponko_game_vsync(raw_, on)); }
+    /// HDR display output (Rust `Game::hdr_output`): with `h.enabled` the window opens in an HDR format
+    /// and color space where the display system offers one. Off by default, and then nothing changes.
+    game& hdr_output(const ponko::hdr_output& h) { return check(ponko_game_hdr_output(raw_, &h)); }
     /// Samples per pixel of the 3D frame: 4 (default) or 2.
     game& msaa(std::uint32_t samples) { return check(ponko_game_msaa(raw_, samples)); }
     /// Fill the screen instead of opening a window.

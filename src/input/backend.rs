@@ -14,6 +14,31 @@ use super::controller::{GamepadInfo, GamepadMotion, MotorLevels};
 use super::{Gamepad, GamepadAxis, GamepadButton, Input, MAX_GAMEPADS};
 use crate::ctx::Ctx;
 
+/// The dead zone of sticks and triggers, as a share of their travel:
+/// gilrs's default, so the web's and SDL's pads read as gilrs's do.
+#[cfg_attr(not(any(test, feature = "gamepad-sdl", target_arch = "wasm32")), allow(dead_code))]
+pub(crate) const DEAD_ZONE: f32 = 0.1;
+
+/// A stick's `(x, y)` with the dead zone taken out as gilrs does: nothing
+/// inside a circle of [`DEAD_ZONE`], and the rest rescaled along the
+/// stick's direction so the edge still reads 1.
+#[cfg_attr(not(any(test, feature = "gamepad-sdl", target_arch = "wasm32")), allow(dead_code))]
+pub(crate) fn stick_dead_zone(x: f32, y: f32) -> (f32, f32) {
+    let magnitude = (x * x + y * y).sqrt().clamp(0.0, 1.0);
+    if magnitude <= DEAD_ZONE {
+        (0.0, 0.0)
+    } else {
+        let scale = (magnitude - DEAD_ZONE) / (1.0 - DEAD_ZONE) / magnitude;
+        (x * scale, y * scale)
+    }
+}
+
+/// A trigger's `0..=1` with the dead zone taken out, rescaled so full still reads 1.
+#[cfg_attr(not(any(test, feature = "gamepad-sdl", target_arch = "wasm32")), allow(dead_code))]
+pub(crate) fn trigger_dead_zone(value: f32) -> f32 {
+    stick_dead_zone(value, 0.0).0
+}
+
 /// A backend's own number for one physical controller. Report the same
 /// number when the same device comes back, and it gets its old slot (and
 /// player) again.

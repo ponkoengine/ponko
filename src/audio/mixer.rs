@@ -514,6 +514,9 @@ impl Audio {
         } else {
             Playing(self.backend.play_on(sound.id, params, bus, effects.validated()))
         };
+        if self.replaying {
+            return playing;
+        }
         self.started.push(super::SoundStarted {
             playing,
             sound,

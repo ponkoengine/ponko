@@ -311,11 +311,12 @@ fn read_tileset(t: &Value, base: &str, reader: &mut Reader) -> Result<Tileset, E
     let ih = num_or(t, "imageheight", 0.0) as u32;
     let mut columns = num_or(t, "columns", 0.0) as u32;
     if columns == 0 && tw > 0 {
-        columns = (iw + spacing).saturating_sub(2 * margin) / (tw + spacing);
+        columns = iw.saturating_add(spacing).saturating_sub(margin.saturating_mul(2)) / tw.saturating_add(spacing);
     }
     let mut count = num_or(t, "tilecount", 0.0) as u32;
     if count == 0 && th > 0 && columns > 0 {
-        count = columns * ((ih + spacing).saturating_sub(2 * margin) / (th + spacing));
+        let rows = ih.saturating_add(spacing).saturating_sub(margin.saturating_mul(2)) / th.saturating_add(spacing);
+        count = columns.saturating_mul(rows);
     }
     let mut tiles = BTreeMap::new();
     if let Some(Value::Array(list)) = t.get("tiles") {
@@ -403,15 +404,29 @@ fn gids(layer: &Value, data: &Value, path: &str) -> Result<Vec<u32>, Error> {
         Value::String(s) => {
             let raw = base64(s).map_err(|e| decode_error(format!("{path}: layer data: {e}")))?;
             let mut bytes = Vec::new();
+            // A layer's cells at most, 4 bytes each: a few kilobytes of
+            // zlib can unpack to gigabytes.
+            let most = super::level::MAX_LAYER_CELLS * 4;
+            let too_long = || {
+                Error::new(
+                    ErrorKind::Limit,
+                    format!(
+                        "{path}: layer data unpacks to more than {} cells",
+                        super::level::MAX_LAYER_CELLS
+                    ),
+                )
+            };
             match text(layer, "compression") {
                 "" => bytes = raw,
                 "zlib" => {
                     flate2::read::ZlibDecoder::new(&raw[..])
+                        .take(most + 1)
                         .read_to_end(&mut bytes)
                         .map_err(|e| decode_error(format!("{path}: zlib layer data: {e}")))?;
                 }
                 "gzip" => {
                     flate2::read::GzDecoder::new(&raw[..])
+                        .take(most + 1)
                         .read_to_end(&mut bytes)
                         .map_err(|e| decode_error(format!("{path}: gzip layer data: {e}")))?;
                 }
@@ -421,6 +436,9 @@ fn gids(layer: &Value, data: &Value, path: &str) -> Result<Vec<u32>, Error> {
                         format!("{path}: {other} compressed layers aren't read; save the map with zlib, gzip or CSV"),
                     ));
                 }
+            }
+            if bytes.len() as u64 > most {
+                return Err(too_long());
             }
             Ok(bytes
                 .as_chunks::<4>()
@@ -777,6 +795,46 @@ fn read_map(map: &Value, path: &str, reader: &mut Reader) -> Result<Level, Error
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn base64_encode(bytes: &[u8]) -> String {
+        const ABC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::new();
+        for chunk in bytes.chunks(3) {
+            let n = chunk
+                .iter()
+                .enumerate()
+                .fold(0u32, |n, (i, &b)| n | u32::from(b) << (16 - 8 * i));
+            for i in 0..4 {
+                let c = if i <= chunk.len() {
+                    ABC[(n >> (18 - 6 * i) & 63) as usize]
+                } else {
+                    b'='
+                };
+                out.push(char::from(c));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn compressed_layer_data_unpacking_past_the_cell_limit_is_refused() {
+        use std::io::Write as _;
+        // 64 MiB + 4 bytes of zeros: one cell more than a layer may have,
+        // from about 64 KiB of zlib.
+        let cells = usize::try_from(super::super::level::MAX_LAYER_CELLS).unwrap() + 1;
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+        z.write_all(&vec![0u8; cells * 4]).unwrap();
+        let data = Value::String(base64_encode(&z.finish().unwrap()));
+        let err = gids(&json!({ "compression": "zlib" }), &data, "bomb.tmj").unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Limit, "{}", err.message());
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+        z.write_all(&[1, 0, 0, 0, 2, 0, 0, 0]).unwrap();
+        let data = Value::String(base64_encode(&z.finish().unwrap()));
+        assert_eq!(
+            gids(&json!({ "compression": "zlib" }), &data, "ok.tmj").unwrap(),
+            [1, 2]
+        );
+    }
 
     #[test]
     fn base64_decodes_with_padding_and_line_breaks() {

@@ -76,12 +76,19 @@ impl Renderer {
     }
     #[cfg(all(feature = "3d", feature = "compressed-textures"))]
     pub fn create_compressed_texture_array(&mut self, _id: u32, _layers: &[&crate::compressed::CompressedImage]) {}
+    pub fn ui_layer_texture(&mut self, _i: usize) -> u32 {
+        match *self {}
+    }
     #[cfg(feature = "3d")]
     pub fn create_render_target(&mut self, _width: u32, _height: u32) -> u32 {
         match *self {}
     }
     #[cfg(feature = "3d")]
     pub fn write_render_target(&mut self, _id: u32, _width: u32, _height: u32, _texels: &[u8]) {
+        match *self {}
+    }
+    #[cfg(all(feature = "video", not(target_arch = "wasm32")))]
+    pub fn update_texture_yuv(&mut self, _id: u32, _planes: &crate::video::yuv::Planes<'_>) {
         match *self {}
     }
     pub fn update_texture(&mut self, _id: u32, _width: u32, _height: u32, _rgba: &[u8]) {

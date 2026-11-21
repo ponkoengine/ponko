@@ -259,6 +259,138 @@ fn the_soundtrack_plays_through_the_mixer_from_the_video_time() {
     });
 }
 
+/// Seconds into `mix` at which the tone turns from 440 Hz to 880 Hz (the
+/// clip's second second starting): the first upward zero crossing that
+/// comes sooner after the one before than a 660 Hz period would.
+fn switch_to_880(mix: &[[f32; 2]]) -> Option<f32> {
+    let ups: Vec<usize> = (1..mix.len())
+        .filter(|&i| mix[i - 1][0] < 0.0 && mix[i][0] >= 0.0)
+        .collect();
+    let half_way = RATE as f32 / 660.0;
+    ups.windows(2)
+        .find(|w| ((w[1] - w[0]) as f32) < half_way)
+        .map(|w| w[0] as f32 / RATE as f32)
+}
+
+/// The sound's 440-to-880 Hz switch lands `expected` seconds into `mix`,
+/// within 4 ms (about two periods of the tone; a seek that trusted the
+/// reader's tick count landed up to 33 ms off, one up to 180 ms).
+fn assert_switch_at(mix: &[[f32; 2]], expected: f32, when: &str) {
+    let at = switch_to_880(mix).unwrap_or_else(|| panic!("{when}: the tone never turned to 880 Hz"));
+    assert!(
+        (at - expected).abs() < 0.004,
+        "{when}: the sound reached the clip's second second {at:.4} s in, not {expected} s"
+    );
+}
+
+#[test]
+fn the_picture_catches_up_with_the_sound_after_frames_stopped() {
+    with_ctx(|ctx| {
+        ctx.audio.open_offline(RATE);
+        let mut video = clip(ctx);
+        video.play(ctx);
+        // No frame runs for 1.3 s (a blocking load, a debugger, a tab in
+        // the background) while the mixer plays on.
+        let mix = ctx.audio.render_offline(1.3);
+        video.update(ctx).unwrap();
+        if cfg!(feature = "audio") {
+            assert_switch_at(&mix, 1.0, "playing from the start");
+            assert!(
+                (video.time() - 1.3).abs() < 0.03,
+                "the picture is at {} s",
+                video.time()
+            );
+            assert_eq!(frame_number(&video), 13);
+        }
+        // Then they go on together: the frame clock moves the picture.
+        video.advance(ctx, 0.2).unwrap();
+        let _ = ctx.audio.render_offline(0.2);
+        video.update(ctx).unwrap();
+        if cfg!(feature = "audio") {
+            assert!((video.time() - 1.5).abs() < 0.03, "{}", video.time());
+            assert_eq!(frame_number(&video), 15);
+        }
+    });
+}
+
+#[test]
+fn the_sound_stays_with_the_picture_after_a_seek() {
+    with_ctx(|ctx| {
+        ctx.audio.open_offline(RATE);
+        let mut video = clip(ctx);
+        video.play(ctx);
+        let _ = ctx.audio.render_offline(0.3);
+        video.update(ctx).unwrap();
+        // Back to 0.9 s while playing: the sound reaches the second second
+        // 0.1 s later, as the picture does.
+        video.seek(ctx, 0.9).unwrap();
+        assert_eq!(frame_number(&video), 9);
+        let mix = ctx.audio.render_offline(0.25);
+        video.update(ctx).unwrap();
+        if cfg!(feature = "audio") {
+            assert_switch_at(&mix, 0.1, "after seeking back to 0.9 s");
+            assert!((video.time() - 1.15).abs() < 0.03, "{}", video.time());
+            assert_eq!(frame_number(&video), 11);
+        }
+        // Forward past the switch, then back before it: the same.
+        video.seek(ctx, 1.6).unwrap();
+        let _ = ctx.audio.render_offline(0.1);
+        video.seek(ctx, 0.7).unwrap();
+        let mix = ctx.audio.render_offline(0.4);
+        video.update(ctx).unwrap();
+        if cfg!(feature = "audio") {
+            assert_switch_at(&mix, 0.3, "after seeking forward, then back to 0.7 s");
+            assert_eq!(frame_number(&video), 11);
+        }
+    });
+}
+
+#[test]
+fn the_sound_resumes_with_the_picture_after_a_pause() {
+    with_ctx(|ctx| {
+        ctx.audio.open_offline(RATE);
+        let mut video = clip(ctx);
+        video.play(ctx);
+        let _ = ctx.audio.render_offline(0.6);
+        video.update(ctx).unwrap();
+        video.pause(ctx);
+        let at = video.time();
+        // A long pause: neither the picture nor the sound moves.
+        let quiet = ctx.audio.render_offline(1.0);
+        video.update(ctx).unwrap();
+        assert!(loudness(&quiet[2400..]) < 1e-3, "{}", loudness(&quiet[2400..]));
+        assert_eq!(video.time(), at);
+        // Playing again, both go on from where they stopped.
+        video.play(ctx);
+        let mix = ctx.audio.render_offline(0.6);
+        video.update(ctx).unwrap();
+        if cfg!(feature = "audio") {
+            assert!((at - 0.6).abs() < 0.03, "paused at {at} s");
+            assert_switch_at(&mix, 1.0 - at, "after the pause");
+            assert!((video.time() - (at + 0.6)).abs() < 0.03, "{}", video.time());
+            assert_eq!(frame_number(&video), 12);
+        }
+    });
+}
+
+#[test]
+fn a_late_sound_starts_again_at_the_picture() {
+    with_ctx(|ctx| {
+        ctx.audio.open_offline(RATE);
+        let mut video = clip(ctx);
+        video.play(ctx);
+        // The frame clock ran 0.8 s while the mixer played nothing (an
+        // audio device that stalled, a browser that held the sound back).
+        video.advance(ctx, 0.8).unwrap();
+        video.update(ctx).unwrap();
+        assert_eq!(frame_number(&video), 8, "the picture doesn't wait for the sound");
+        let mix = ctx.audio.render_offline(0.4);
+        if cfg!(feature = "audio") {
+            assert_switch_at(&mix, 0.2, "after the sound was restarted at 0.8 s");
+        }
+    });
+}
+
 #[test]
 fn the_soundtrack_takes_the_bus_and_volume_it_is_given() {
     with_ctx(|ctx| {

@@ -1181,6 +1181,101 @@ mod tests {
         assert_eq!((back.tier, back.forced_tier), (GpuTier::WebGl2, None));
     }
 
+    /// The guide's table of what a browser game draws on WebGPU and on its
+    /// WebGL2 fallback (`book/src/web.md`), made from the same reports the
+    /// renderer gives: WebGPU at WebGPU's default limits (wgpu's
+    /// `Limits::default()`, what every browser's WebGPU has) without
+    /// optional features, WebGL2 at its tier's floor with the one sample a
+    /// browser's WebGL2 draws the 3D frame with
+    /// (`gpu3d::browser_gl_has_no_multisampled_textures`).
+    #[cfg(all(feature = "window", feature = "3d"))]
+    fn web_backend_table() -> String {
+        let l = wgpu::Limits::default();
+        let webgpu_limits = GpuLimits {
+            max_texture_dimension_2d: l.max_texture_dimension_2d,
+            max_texture_array_layers: l.max_texture_array_layers,
+            max_sampled_textures_per_shader_stage: l.max_sampled_textures_per_shader_stage,
+            max_storage_buffers_per_shader_stage: l.max_storage_buffers_per_shader_stage,
+            max_storage_textures_per_shader_stage: l.max_storage_textures_per_shader_stage,
+            max_storage_buffer_binding_size: l.max_storage_buffer_binding_size,
+            max_compute_workgroups_per_dimension: l.max_compute_workgroups_per_dimension,
+            max_buffer_size: l.max_buffer_size,
+        };
+        let webgpu = report(GpuAdapter::default(), webgpu_limits, false, (4, 4), true);
+        let webgl2 = report(
+            GpuAdapter::default(),
+            GpuTier::WebGl2.minimum_limits(),
+            false,
+            (4, 1),
+            true,
+        );
+        let cell = |caps: &GpuCapabilities, feature: GpuFeature| {
+            let status = caps.feature(feature).unwrap();
+            match &status.fallback {
+                None => "yes".to_owned(),
+                Some(fallback) => format!("no, {fallback}"),
+            }
+        };
+        let name = |feature: GpuFeature| serde_json::to_value(feature).unwrap().as_str().unwrap().to_owned();
+        let mut table = String::from("| | WebGPU | WebGL2 (the fallback) |\n|---|---|---|\n");
+        table += &format!("| `GpuTier` | `{}` | `{}` |\n", webgpu.tier, webgl2.tier);
+        type Limit = fn(&GpuLimits) -> String;
+        let limits: [(&str, Limit); 4] = [
+            ("largest 2D texture", |l| format!("{}²", l.max_texture_dimension_2d)),
+            ("sampled textures per shader stage", |l| {
+                l.max_sampled_textures_per_shader_stage.to_string()
+            }),
+            ("storage buffers per shader stage", |l| {
+                l.max_storage_buffers_per_shader_stage.to_string()
+            }),
+            ("compute workgroups per dimension", |l| {
+                l.max_compute_workgroups_per_dimension.to_string()
+            }),
+        ];
+        for (label, value) in limits {
+            table += &format!("| {label} | {} | {} |\n", value(&webgpu.limits), value(&webgl2.limits));
+        }
+        for feature in GpuFeature::ALL {
+            table += &format!(
+                "| `{}` | {} | {} |\n",
+                name(feature),
+                cell(&webgpu, feature),
+                cell(&webgl2, feature)
+            );
+        }
+        table
+    }
+
+    /// `PONKO_UPDATE_BOOK=1 cargo test -p ponko --features 3d --lib web_backend_table`
+    /// rewrites the table after a change to the tiers or their fallbacks.
+    #[cfg(all(feature = "window", feature = "3d"))]
+    #[test]
+    fn the_guides_web_backend_table_is_generated_from_the_tier_code() {
+        const START: &str = "<!-- web-backend-table:start -->\n";
+        const END: &str = "<!-- web-backend-table:end -->";
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("book/src/web.md");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let (before, rest) = text
+            .split_once(START)
+            .expect("book/src/web.md has the table's start marker");
+        let (current, after) = rest
+            .split_once(END)
+            .expect("book/src/web.md has the table's end marker");
+        let table = web_backend_table();
+        if std::env::var_os("PONKO_UPDATE_BOOK").is_some() {
+            std::fs::write(&path, format!("{before}{START}{table}{END}{after}")).unwrap();
+            return;
+        }
+        assert_eq!(
+            current, table,
+            "book/src/web.md's WebGPU/WebGL2 table is stale: run PONKO_UPDATE_BOOK=1 cargo test -p ponko --features 3d --lib web_backend_table"
+        );
+        // What the table must show for its point to hold: WebGPU runs the
+        // compute features, WebGL2 falls back from them.
+        assert!(table.contains("| `ambient_occlusion` | yes | no, off |"), "{table}");
+        assert!(table.contains("| `global_illumination` | no, "), "{table}");
+    }
+
     #[cfg(feature = "window")]
     #[test]
     fn tier_floors_match_wgpus_limit_sets() {

@@ -2,10 +2,12 @@
 
 With the `video` feature (off by default), a game plays WebM files into a
 texture: a studio logo before the menu, a cutscene, a looping clip on a
-television in the world. The pictures are AV1, decoded on the CPU by
+television in the world. The pictures are AV1, decoded on the desktop by
 [rav1d](https://crates.io/crates/rav1d) (the Rust port of the dav1d
-decoder) and copied into an ordinary texture each frame; the sound is
-Vorbis, played through the mixer on a bus of your choosing.
+decoder) and converted to RGBA on the GPU into an ordinary texture, and in
+the browser by the browser's own decoder, behind the same API; the sound
+is Vorbis, played through the mixer on a bus of your choosing, and the
+picture keeps to it.
 
 ```toml
 [dependencies]
@@ -69,12 +71,19 @@ decoded a packet at a time as it plays, so a long video doesn't hold its
 whole sound decoded in memory. `ctx.audio.started()` lists it when it
 starts, as it lists every sound, which is how tests check it.
 
-The picture follows the frame clock and the sound the audio device's; both
-run in real time and stay together. The frame clock is clamped to 0.25 s a
-frame, so a frame that blocks for longer (loading a level under the video)
-leaves the picture behind the sound: `video.seek(ctx, video.time())` after
-such a load lines them up again. With `advance` at another speed, the sound
-doesn't follow.
+The picture follows the frame clock and the sound the audio device's;
+both run in real time and stay together, and `update` keeps them so: when
+they drift more than a tenth of a second apart, the one behind catches up.
+Frames that didn't run while the sound played on (a level loading under
+the video, a game stopped in the debugger, a browser tab in the
+background) leave the picture behind, and the next `update` skips it
+ahead to the sound; a sound that started late (a browser waiting for the
+first click) starts again where the picture is. A seek and a pause keep
+them together to the millisecond: the sound goes on from the picture's
+time exactly. Pausing the game's simulation (`ctx.time.pause()`) doesn't
+pause a video, which runs on the frame clock: call `video.pause(ctx)` in
+your pause menu. With `advance` at another speed, the sound doesn't
+follow.
 
 ## Encoding videos for the engine
 
@@ -107,46 +116,63 @@ or BT.2020, in TV range unless it says full range.
 
 ## What it costs
 
-The `video/frame` benchmark times every step of a playing video that shows
-a new frame (demuxing, decoding, converting to RGBA), as `Video::update`
-does in a game:
+On the desktop a playing video costs, in every frame in which it shows a
+new picture, the decoding of that picture (rav1d's own threads, up to
+four, while the game's thread waits) and a copy of its planes; the GPU
+then converts them to RGBA in a small pass (1.5 bytes a pixel uploaded
+for 4:2:0 instead of 4). `frame_rgba()` converts the frame on the CPU
+only when it is asked for. Two benchmarks time these:
 
 ```sh
 PONKO_BENCH_VIDEO=clip.webm cargo run --release -p ponko_bench --features video -- video
 ```
 
-Measured on an Apple M4 Max (14 cores), release build, rav1d without its
-assembly as the engine builds it, 30 fps clips encoded with `-crf 32`. The
-machine was shared with other builds (load average 130 to 170), so these
-are numbers for a busy machine; the minimum is a frame decoded without
-waiting for a core:
+`video/frame` times every step of a playing video that shows a new frame,
+as `Video::update` does in a game; `video/convert` the CPU conversion
+`frame_rgba()` does. Measured on an Apple M4 Max (14 cores), release
+build, a 1920 x 1080 clip at 30 fps encoded with `-crf 32 -g 60` (240
+frames, 7.8 Mbit/s), before and after the assembly and the GPU
+conversion, the runs taking turns. The machine was shared with other
+builds (load average 120 to 143), so these are numbers for a busy machine
+and need repeating on a quiet one:
 
-| Clip | Median | 95th percentile | Minimum |
-|---|---|---|---|
-| 1280 x 720 | 23.3 ms | 92 ms | 0.66 ms |
-| 1920 x 1080 | 27.9 ms | 124 ms | 0.87 ms |
+| 1920 x 1080, per new frame | Median | 95th percentile |
+|---|---|---|
+| Before: no assembly, converted on the CPU | 18.2 ms, 22.1 ms | 124 ms, 232 ms |
+| After: assembly on arm64, converted on the GPU | 4.5 ms, 3.5 ms | 54 ms, 45 ms |
+| The CPU conversion alone (`video/convert`) | 6.5 ms, 7.2 ms | 28 ms, 31 ms |
 
-For comparison, the C dav1d 1.5.5 command-line decoder with the same
-settings (4 threads, one frame in flight), on the same machine under the
-same load, decoded the clips at about 330 and 170 frames per second, 3 and
-6 ms a frame. Measure your own clips on the hardware you ship for.
+Decoding takes up to four threads of its own while a frame decodes, and
+the game's thread waits for the frame. That suits an intro or a cutscene,
+where little else runs, and a screen in the world; several large videos
+at once are not what it is for. Measure your own clips on the hardware
+you ship for.
 
-Decoding takes up to four threads of its own while a frame decodes, and the
-game's thread waits for the frame: a video costs that much of every frame
-in which it shows a new picture. Converting to RGBA runs on rayon's threads
-for frames 256 rows or taller. That suits an intro or a cutscene, where
-little else runs, and a small screen in the world (a 512 x 288 clip is a
-sixth of the 720p one's pixels); several large videos at once are not what
-it is for, and 720p or smaller is the safe size for intros.
+### The decoder's assembly
 
-rav1d has hand-written assembly behind its `asm` feature, which the engine
-leaves off: it needs `nasm` to build on x86-64, and the published rav1d
-1.1.0 can't build it on arm64 (the package lacks `src/arm/asm-offsets.h`;
-tried on macOS).
+rav1d carries dav1d's hand-written assembly. The engine uses rav1d as
+[Rerun](https://crates.io/crates/re_rav1d) publishes it (`re_rav1d`, the
+same code and license), because the published rav1d 1.1.0 lacks a header
+its arm64 assembly includes. On arm64 (Apple silicon, ARM Linux and
+Windows) the assembly is on: the system's C compiler, which links every
+build anyway, builds it, and the CPU's dot-product and i8mm variants are
+picked at run time. On x86-64 it needs [nasm](https://nasm.us), which the
+engine doesn't require; a game whose build machines have nasm turns it on
+by naming the decoder with its `asm` feature next to the engine:
 
-The feature adds 2.0 MB to a release build of a game (the `video_player`
-example: 22.2 MB without it, 24.2 MB with it, macOS arm64). Off, nothing of
-it is built.
+```toml
+[dependencies]
+ponko = { version = "0.1", features = ["video"] }
+re_rav1d = { version = "0.1.3", default-features = false, features = ["bitdepth_8", "asm"] }
+```
+
+Without it, x86-64 decodes with rav1d's Rust code, several times slower
+than with the assembly.
+
+Without the assembly, the feature added 2.0 MB to a release build of a
+game (the `video_player` example, macOS arm64); the assembly and the 16-bit
+code its arm64 build needs add 0.4 MB more (measured on the benchmark
+binary: 29.03 MB before, 29.42 MB after). Off, nothing of it is built.
 
 ## Why AV1 with rav1d: the decoders compared
 
@@ -157,7 +183,7 @@ was compared, from each crate's own metadata and documentation (November
 
 | Decoder | Codecs | License | Patents | Build and size | Web |
 |---|---|---|---|---|---|
-| **rav1d 1.1.0** (chosen) | AV1 | BSD-2-Clause | AV1 is royalty-free under the Alliance for Open Media patent license | Pure Rust without its assembly, no system library; 2.0 MB | Does not build for `wasm32-unknown-unknown` |
+| **rav1d 1.1.0** (chosen, as `re_rav1d` 0.1.3) | AV1 | BSD-2-Clause | AV1 is royalty-free under the Alliance for Open Media patent license | Rust, with dav1d's assembly built by the system's C compiler on arm64 (x86-64: needs nasm, off by default), no system library; 2.4 MB | Does not build for `wasm32-unknown-unknown`: the browser's own decoder plays the same files there |
 | dav1d 0.12.0 (bindings) | AV1 | MIT bindings, BSD-2-Clause library | As above | Needs libdav1d from the system or built with meson and nasm | No |
 | openh264 0.9.10 | H.264 | BSD-2-Clause | H.264 patents are licensed through a pool (Via LA); Cisco's royalty coverage applies only to its own prebuilt binary, not to a copy built from source as the crate does | Builds Cisco's C++ with the system compiler | No |
 | ffmpeg-next 9.1.0 | Nearly all | WTFPL bindings; FFmpeg is LGPL-2.1+ (GPL with some options) | Depends on the codecs enabled | Needs FFmpeg's shared libraries next to the game (tens of MB), dynamically linked to stay LGPL | No |
@@ -172,8 +198,9 @@ was compared, from each crate's own metadata and documentation (November
 The platform APIs need a different code path on every system and leave
 Linux to GStreamer; FFmpeg and GStreamer mean shipping and licensing large
 native libraries; H.264 brings a patent pool. AV1 is royalty-free, compresses
-well, and rav1d decodes it in pure Rust with a permissive license, from one
-code path on every desktop system, without anything to install. The
+well, and rav1d decodes it in Rust (with dav1d's assembly where the system's
+C compiler builds it) with a permissive license, from one code path on every
+desktop system, without anything to install; browsers decode it themselves. The
 container is read by
 [matroska-demuxer](https://crates.io/crates/matroska-demuxer) (Zlib, MIT or
 Apache-2.0, no dependencies), the sound by the Vorbis decoder of
@@ -182,25 +209,33 @@ already builds.
 
 ## In a browser
 
-rav1d doesn't build for the web (it uses C error numbers that
-`wasm32-unknown-unknown` doesn't define), and a decoder compiled to
-WebAssembly would run on the page's one thread anyway. The web build
-compiles the `video` API, and `Video::load` returns an `Unsupported` error.
+In the web build, `Video` takes its pictures from the browser's own AV1
+decoder ([WebCodecs](https://www.w3.org/TR/webcodecs/)' `VideoDecoder`):
+the same calls, the same file, the same sound through the mixer. The
+engine reads the file and keeps the clock as on the desktop; the browser
+decodes on its own threads and hands each frame back a moment later, so
+the engine sends frames a few ahead of the one due and shows each once it
+is decoded. What differs:
 
-The browser has video decoders of its own. For an intro, put a `<video>`
-element over the canvas from the page and remove it when it ends: copy
-`web/index.html` and add, for example,
+- A frame shows once the browser has decoded it: usually by the next
+  `update`, so a video starts on black for a frame or two, and a seek
+  shows its frame a few updates later. `update` keeps showing what
+  arrives also while paused.
+- `frame_rgba()` holds the pixels the browser converted (its color
+  conversion, not the engine's), read back through an `OffscreenCanvas`.
+- A browser without WebCodecs fails `Video::load` with `Unsupported`; one
+  that turns AV1 down (the codec is checked when the browser gets to it)
+  makes `update` return a `Decode` error naming the browser's reason.
+  Check on the browsers you ship for; keep the video optional (an intro
+  that can be skipped).
+- As with all sound on the web, the soundtrack waits for the first click
+  or key; the picture plays meanwhile and the sound starts where the
+  picture is.
 
-```html
-<video id="intro" src="assets/intro.webm" autoplay playsinline
-       style="position:fixed; inset:0; width:100%; height:100%; background:#000"
-       onended="this.remove()" onclick="this.remove()"></video>
-```
-
-(browsers start a video with sound only after a click or key press, the
-same rule as the game's own sound). The game can wait for it by checking
-for the element from Rust through `web-sys`, or simply start behind it.
-A screen in the world isn't possible on the web this way.
+`web/smoke/video.mjs` plays the engine's test clip this way in headless
+Chromium and checks every frame shown against its time (the
+[browser smoke test](https://gitlab.com/ponkoengine/ponko/-/tree/main/web/smoke)'s
+"Video").
 
 ## C and C++
 
@@ -228,4 +263,9 @@ can be rendered with the [offline output](audio.md). The engine's own tests
 (`tests/video.rs`) check the frame shown at known times, seeking both ways,
 looping, the end, and the soundtrack's pitch before and after a seek, on
 small files made by `tests/fixtures/video/make.sh` from generated pictures
-and tones.
+and tones. With the clip's tone, which turns from 440 Hz to 880 Hz at one
+second, they check that the sound stays with the picture after a seek, a
+pause, frames that stopped while the sound played on, and a sound that
+started late. The offscreen GPU tests (`src/render/video_render_test.rs`)
+check the GPU conversion against the CPU one for every chroma layout and
+matrix.

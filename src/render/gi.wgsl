@@ -5,7 +5,9 @@
 // octahedral directions in a one-texel border: rgb is the irradiance over
 // pi, a which probe the slot holds) in its top part, and a 16x16 tile of
 // distances (14x14 in a border: r the mean distance to what the probe sees
-// that way, g its mean square) below. Tiles go 64 to a row. The light
+// that way, g its mean square, b how much of that sees a surface just
+// before the next probe, which finds probes buried in walls; see
+// gi_update.wgsl) below. Tiles go 64 to a row. The light
 // tiles fill the left half of their rows; in the right half, beside each,
 // is its settled tile (the same layout: the light extrapolated to where
 // its bounces settle, see gi_update.wgsl), which the camera's view reads.

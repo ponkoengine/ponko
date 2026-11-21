@@ -813,4 +813,75 @@ impl Entities {
     pub(crate) fn slots(&self) -> usize {
         self.slots.len()
     }
+
+    /// Copies the allocator's state into `into`, reusing its memory: what
+    /// [`restore_state`](Self::restore_state) needs to hand out the same
+    /// ids afterwards as it would from here.
+    pub(crate) fn save_state(&self, into: &mut EntitiesState) {
+        into.slots.clone_from(&self.slots);
+        into.free.clone_from(&self.free);
+        into.alive = self.alive;
+        into.own_end = self.own_end;
+        let pool = self.reserve.pool();
+        // Under the lock, as every other reader of the counter that matters.
+        into.next = self.reserve.next.load(Ordering::Relaxed);
+        into.pool_ids.clone_from(&pool.ids);
+        into.pool = (
+            pool.taken,
+            pool.want,
+            pool.peak,
+            pool.calls,
+            pool.horizon,
+            pool.lowered,
+            pool.too_soon,
+        );
+    }
+
+    /// Makes the allocator what [`save_state`](Self::save_state) saved: the
+    /// same entities alive, with the same generations, and the same ids for
+    /// the next spawns, direct or through command buffers. Like a reset, it
+    /// starts a new epoch: ids buffers reserved before can't be spawned after.
+    pub(crate) fn restore_state(&mut self, from: &EntitiesState) {
+        let mut pool = self.reserve.pool();
+        pool.epoch = pool.epoch.wrapping_add(1);
+        self.epoch = pool.epoch;
+        pool.ids.clone_from(&from.pool_ids);
+        (
+            pool.taken,
+            pool.want,
+            pool.peak,
+            pool.calls,
+            pool.horizon,
+            pool.lowered,
+            pool.too_soon,
+        ) = from.pool;
+        self.reserve.next.store(from.next, Ordering::Relaxed);
+        drop(pool);
+        self.slots.clone_from(&from.slots);
+        self.free.clone_from(&from.free);
+        self.alive = from.alive;
+        self.own_end = from.own_end;
+    }
+}
+
+/// A copy of an [`Entities`] allocator ([`Entities::save_state`]).
+#[derive(Default)]
+pub(crate) struct EntitiesState {
+    slots: Vec<Slot>,
+    free: Vec<u32>,
+    alive: usize,
+    own_end: u32,
+    next: u32,
+    pool_ids: Vec<Entity>,
+    /// The pool's sizing: taken, want, peak, calls, horizon, lowered, too soon.
+    pool: (usize, usize, usize, u32, u32, bool, bool),
+}
+
+impl EntitiesState {
+    /// Bytes this copy holds on the heap.
+    pub(crate) fn heap_bytes(&self) -> usize {
+        self.slots.capacity() * std::mem::size_of::<Slot>()
+            + self.free.capacity() * 4
+            + self.pool_ids.capacity() * std::mem::size_of::<Entity>()
+    }
 }

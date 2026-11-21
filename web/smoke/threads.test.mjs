@@ -8,6 +8,13 @@ import {
   ISOLATION_HEADERS,
   checkFallback,
   checkIsolated,
+  checkPassTimes,
+  checkServiceWorker,
+  PASSES,
+  passRows,
+  passTable,
+  SW_DIR,
+  SW_RELOAD_MESSAGE,
   checkReady,
   checkGamepadStep,
   checkRumbleCalls,
@@ -43,7 +50,15 @@ const isolatedRun = {
   batch_on_page: false,
   batch_threaded_runs: 160,
   hier_shared: true,
-  passes_shared: ["spatial/shared_rebuild", "flow/shared_directions", "three/shared_cull", "reflect/shared_save"],
+  passes_shared: [
+    "spatial/shared_rebuild",
+    "flow/shared_directions",
+    "three/shared_cull",
+    "skeleton2d/shared_draw",
+    "physics3d/shared_characters",
+    "three/shared_bake",
+  ],
+  pass_ms: Object.fromEntries(PASSES.map((p, i) => [p, 1 + i])),
   frame3d: [5210, 9870, 64],
   save_bytes: 437010,
   schedule_threads: true,
@@ -66,6 +81,7 @@ const plainRun = {
   batch_threaded_runs: 0,
   hier_shared: false,
   passes_shared: [],
+  pass_ms: Object.fromEntries(PASSES.map((p, i) => [p, 4 * (1 + i)])),
   frame3d: [5210, 9870, 64],
   save_bytes: 437010,
   schedule_threads: false,
@@ -97,6 +113,7 @@ test("arguments default to the check of the built fixture and refuse what they d
   assert.equal(parseArgs(["--case", "gamepads-plain"]).dir, PLAIN_DIR, "the ordinary build is its own folder");
   assert.equal(parseArgs(["--case", "gamepads-plain", "--dir", "x"]).dir, "x");
   assert.equal(parseArgs(["--case", "gamepads"]).dir, "target/web/web_threads");
+  assert.equal(parseArgs(["--case", "service-worker"]).dir, SW_DIR, "the build with the service worker is its own folder");
   assert.throws(() => parseArgs(["--bench", "--case", "worker-panic"]), UsageError);
 });
 
@@ -122,18 +139,27 @@ test("an isolated run passes only when workers ran the queries, batches and jobs
   // A group that couldn't read its file on a worker fails the check by name.
   const failed = checkIsolated({ ...isolatedRun, group: 'failed: "crab.png" not found in assets/' });
   assert.deepEqual(failed, [`the asset group from assets/ didn't load (failed: "crab.png" not found in assets/)`]);
+  const without = (name) => isolatedRun.passes_shared.filter((p) => p !== name);
   // One of the engine's passes is not "at least two".
   assert.deepEqual(checkIsolated({ ...isolatedRun, passes_shared: ["three/shared_cull"] }), [
     "the engine's own passes that went through the frame pool's runner: three/shared_cull, not at least 2",
-    "the JSON world save didn't go through the frame pool's runner (reflect/shared_save)",
+    "skeleton2d/shared_draw didn't go through the frame pool's runner",
+    "physics3d/shared_characters didn't go through the frame pool's runner",
+    "three/shared_bake didn't go through the frame pool's runner",
   ]);
+  // The bake, the skeletons and the characters each by name.
+  for (const pass of ["skeleton2d/shared_draw", "physics3d/shared_characters", "three/shared_bake"]) {
+    assert.deepEqual(checkIsolated({ ...isolatedRun, passes_shared: without(pass) }), [
+      `${pass} didn't go through the frame pool's runner`,
+    ]);
+  }
   // The 3D culling and the save must each go there, by name.
-  const without = (name) => isolatedRun.passes_shared.filter((p) => p !== name);
   assert.deepEqual(checkIsolated({ ...isolatedRun, passes_shared: without("three/shared_cull") }), [
     "the 3D culling didn't go through the frame pool's runner (three/shared_cull)",
   ]);
-  assert.deepEqual(checkIsolated({ ...isolatedRun, passes_shared: without("reflect/shared_save") }), [
-    "the JSON world save didn't go through the frame pool's runner (reflect/shared_save)",
+  // The JSON save must stay on the page's thread, where it is faster.
+  assert.deepEqual(checkIsolated({ ...isolatedRun, passes_shared: [...isolatedRun.passes_shared, "reflect/shared_save"] }), [
+    "the JSON world save went to the frame pool's workers (reflect/shared_save), where it is slower",
   ]);
   // A build without the 3D features collects no 3D frame.
   assert.deepEqual(checkIsolated({ ...isolatedRun, frame3d: null }), ["the 3D frame found no models to draw (frame3d: null)"]);
@@ -390,4 +416,36 @@ test("the expected axes take out the engine's dead zone as gilrs does", () => {
   assert.ok(Math.abs(deadZone(-0.55) + 0.5) < 1e-12);
   assert.equal(deadZone(1), 1);
   assert.equal(deadZone(-1.5), -1, "past the edge reads full");
+});
+
+test("every timed pass needs a time, in both runs", () => {
+  assert.deepEqual(checkPassTimes(isolatedRun), []);
+  assert.deepEqual(checkPassTimes(plainRun), []);
+  const { ["three/shared_bake"]: _, ...rest } = isolatedRun.pass_ms;
+  assert.deepEqual(checkPassTimes({ ...isolatedRun, pass_ms: rest }), [`no time for three/shared_bake (pass_ms: ${JSON.stringify(rest)})`]);
+  assert.equal(checkPassTimes({ ...isolatedRun, pass_ms: undefined }).length, 1);
+  assert.ok(checkIsolated({ ...isolatedRun, pass_ms: rest }).some((p) => p.includes("no time for three/shared_bake")));
+});
+
+test("the pass table says what was shared out and compares its times on both pages", () => {
+  const rows = passRows({ ...isolatedRun, passes_shared: isolatedRun.passes_shared.slice(1) }, plainRun);
+  assert.deepEqual(rows.map((r) => r.pass), PASSES);
+  assert.equal(rows[0].shared, true, "the hierarchy by hier_shared");
+  assert.equal(rows[1].shared, false, "spatial/shared_rebuild's scope didn't open");
+  assert.equal(rows[2].shared, true);
+  assert.equal(rows[2].speedup, 4);
+  const table = passTable(rows, 13);
+  assert.match(table, /\| Pass \(scope\) \| Shared out \| 13 threads \(ms\) \| Page's thread alone \(ms\) \| Speed-up \|/);
+  assert.match(table, /\| `flow\/shared_directions` \| yes \| 3\.00 \| 12\.00 \| 4\.0x \|/);
+  assert.match(passTable(passRows(isolatedRun, { ...plainRun, pass_ms: {} }), 13), /\| n\/a \| n\/a \|/);
+});
+
+test("the service worker case passes only after the reload, isolated, with the work on the workers", () => {
+  const reloaded = `info: ${SW_RELOAD_MESSAGE}, through the service worker, for cross-origin isolation`;
+  assert.deepEqual(checkServiceWorker(isolatedRun, reloaded), []);
+  assert.deepEqual(checkServiceWorker(isolatedRun, ""), [
+    `the console doesn't say the page reloaded through the service worker ("${SW_RELOAD_MESSAGE}")`,
+  ]);
+  assert.deepEqual(checkServiceWorker(plainRun, reloaded), ["the page isn't cross-origin isolated after the reload (isolated: false)"]);
+  assert.ok(checkServiceWorker({ ...isolatedRun, par_threads: 0 }, reloaded).length > 0, "the isolated run's checks apply");
 });

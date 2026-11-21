@@ -231,12 +231,18 @@ impl Time {
 
     /// The fixed step in seconds, full precision (`sim_time` is the tick
     /// times this).
+    #[cfg(feature = "3d")]
     pub(crate) fn sim_step(&self) -> f64 {
         self.sim.step
     }
 
     pub(crate) fn advance_tick(&mut self) {
         self.sim.tick += 1;
+    }
+
+    /// Rollback: the clock goes back to a saved tick.
+    pub(crate) fn set_sim_tick(&mut self, tick: u64) {
+        self.sim.tick = tick;
     }
 
     pub(crate) fn set_sim_steps(&mut self, steps: u32) {
@@ -507,6 +513,12 @@ impl Time {
     /// ```
     pub fn step(&mut self) {
         self.sim.pending_steps = self.sim.pending_steps.saturating_add(1);
+    }
+
+    /// [`step`](Self::step) `ticks` times, in one go (the control
+    /// endpoint's `sim.step`, which may ask for billions).
+    pub(crate) fn step_by(&mut self, ticks: u32) {
+        self.sim.pending_steps = self.sim.pending_steps.saturating_add(ticks);
     }
 
     /// Sets how fast simulated time runs: `1.0` real time, `4.0` four times

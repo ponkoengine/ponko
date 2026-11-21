@@ -2456,6 +2456,7 @@ pub fn ponko::game::ConfiguredGame::fixed_hz(self, u32) -> Self
 pub fn ponko::game::ConfiguredGame::fullscreen(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::gamepad_backend(self, impl ponko::input::GamepadBackend) -> Self
 pub fn ponko::game::ConfiguredGame::has_plugin(&self, &str) -> bool
+pub fn ponko::game::ConfiguredGame::hdr_output(self, ponko::render::HdrOutput) -> Self
 pub fn ponko::game::ConfiguredGame::headless_frames(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::hot_reload(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::input_injection(self, bool) -> Self
@@ -2511,6 +2512,7 @@ pub fn ponko::game::Game::fullscreen(self, bool) -> Self
 pub fn ponko::game::Game::gamepad_backend(self, impl ponko::input::GamepadBackend) -> Self
 pub fn ponko::game::Game::has_plugin(&self, &str) -> bool
 pub fn ponko::game::Game::has_state<S: ponko::state::States>(&self) -> bool
+pub fn ponko::game::Game::hdr_output(self, ponko::render::HdrOutput) -> Self
 pub fn ponko::game::Game::headless_frames(self, bool) -> Self
 pub fn ponko::game::Game::hot_reload(self, bool) -> Self
 pub fn ponko::game::Game::input_injection(self, bool) -> Self
@@ -2683,6 +2685,10 @@ impl ponko::gfx::Graphics
 pub fn ponko::gfx::Graphics::free<H: ponko::handle::GfxHandle>(&mut self, H)
 pub fn ponko::gfx::Graphics::is_live<H: ponko::handle::GfxHandle>(&self, H) -> bool
 pub fn ponko::gfx::Graphics::live_counts(&self) -> ponko::handle::LiveCounts
+impl ponko::gfx::Graphics
+pub fn ponko::gfx::Graphics::hdr_output(&self) -> ponko::render::HdrOutput
+pub fn ponko::gfx::Graphics::hdr_status(&self) -> ponko::render::HdrStatus
+pub fn ponko::gfx::Graphics::set_hdr_output(&mut self, ponko::render::HdrOutput)
 impl ponko::gfx::Graphics
 pub fn ponko::gfx::Graphics::is_resident(&self, ponko::streaming::ResidencyKind, &str) -> bool
 pub fn ponko::gfx::Graphics::residency(&self, ponko::streaming::ResidencyKind) -> ponko::streaming::ResidencyStats
@@ -3369,9 +3375,11 @@ pub fn ponko::input::GlyphAtlas::cell_size(&self) -> u32
 pub fn ponko::input::GlyphAtlas::draw_prompt(&mut self, &mut ponko::gfx::Graphics, glam::f32::vec2::Vec2, f32, &ponko::input::Glyphs, &str, ponko::color::Color) -> f32
 pub fn ponko::input::GlyphAtlas::glyph_rgba(&self, ponko::input::Glyph) -> alloc::vec::Vec<u8>
 pub fn ponko::input::GlyphAtlas::inline_image(&mut self, &mut ponko::gfx::Graphics, &mut ponko::prelude::Ui, ponko::input::Glyph) -> alloc::string::String
+pub fn ponko::input::GlyphAtlas::key_labels(&self) -> &ponko::input::KeyLabels
 pub fn ponko::input::GlyphAtlas::new(u32) -> Self
 pub fn ponko::input::GlyphAtlas::region(&self, ponko::input::Glyph) -> ponko::camera::Rect
 pub fn ponko::input::GlyphAtlas::rgba(&self) -> &[u8]
+pub fn ponko::input::GlyphAtlas::set_key_labels(&mut self, &ponko::input::KeyLabels)
 pub fn ponko::input::GlyphAtlas::size(&self) -> (u32, u32)
 pub fn ponko::input::GlyphAtlas::texture(&mut self, &mut ponko::gfx::Graphics) -> ponko::texture::Texture
 impl core::clone::Clone for ponko::input::GlyphAtlas
@@ -3497,12 +3505,35 @@ pub fn ponko::input::Input::is_recording(&self) -> bool
 pub fn ponko::input::Input::start_recording(&mut self)
 pub fn ponko::input::Input::stop_recording(&mut self) -> core::option::Option<ponko::scenario::InputScenario>
 impl ponko::input::Input
+pub fn ponko::input::Input::key_labels(&self) -> &ponko::input::KeyLabels
+pub fn ponko::input::Input::key_labels_changed(&self) -> bool
+pub fn ponko::input::Input::set_key_labels(&mut self, ponko::input::KeyLabels)
+impl ponko::input::Input
 pub fn ponko::input::Input::pressed_this_frame(&self) -> impl core::iter::traits::iterator::Iterator<Item = ponko::actions::PressedInput> + '_
 pub fn ponko::input::Input::pressed_this_frame_with_threshold(&self, f32) -> impl core::iter::traits::iterator::Iterator<Item = ponko::actions::PressedInput> + '_
 impl core::clone::Clone for ponko::input::Input
 pub fn ponko::input::Input::clone(&self) -> Self
 impl core::fmt::Debug for ponko::input::Input
 pub fn ponko::input::Input::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct ponko::input::KeyLabels
+impl ponko::input::KeyLabels
+pub fn ponko::input::KeyLabels::from_layout(impl core::ops::function::FnMut(ponko::input::Key) -> core::option::Option<char>) -> Self
+pub fn ponko::input::KeyLabels::glyph(&self, ponko::input::Glyph) -> &str
+pub fn ponko::input::KeyLabels::label(&self, ponko::input::Key) -> &str
+pub fn ponko::input::KeyLabels::set(&mut self, ponko::input::Key, char) -> bool
+pub fn ponko::input::KeyLabels::system() -> core::option::Option<Self>
+pub fn ponko::input::KeyLabels::text(&self, &ponko::input::Glyphs) -> alloc::string::String
+pub fn ponko::input::KeyLabels::us() -> Self
+impl core::clone::Clone for ponko::input::KeyLabels
+pub fn ponko::input::KeyLabels::clone(&self) -> Self
+impl core::cmp::Eq for ponko::input::KeyLabels
+impl core::cmp::PartialEq for ponko::input::KeyLabels
+pub fn ponko::input::KeyLabels::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::input::KeyLabels
+pub fn ponko::input::KeyLabels::default() -> Self
+impl core::fmt::Debug for ponko::input::KeyLabels
+pub fn ponko::input::KeyLabels::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::input::KeyLabels
 pub struct ponko::input::MotorLevels
 pub ponko::input::MotorLevels::left_trigger: f32
 pub ponko::input::MotorLevels::right_trigger: f32
@@ -4193,6 +4224,24 @@ pub fn ponko::net::Fields<'a>::u32(&mut self, &str, &mut u32, ponko::net::Quanti
 pub fn ponko::net::Fields<'a>::u8(&mut self, &str, &mut u8, ponko::net::Quantize)
 pub fn ponko::net::Fields<'a>::vec2(&mut self, &str, &mut glam::f32::vec2::Vec2, ponko::net::Quantize)
 pub fn ponko::net::Fields<'a>::vec3(&mut self, &str, &mut glam::f32::vec3::Vec3, ponko::net::Quantize)
+pub struct ponko::net::GameRollback<I>
+impl<I> ponko::net::GameRollback<I> where I: core::clone::Clone + core::cmp::PartialEq + core::default::Default + serde_core::ser::Serialize + serde_core::de::DeserializeOwned + core::marker::Send + core::marker::Sync + 'static
+pub fn ponko::net::GameRollback<I>::checksum_every(self, u32) -> Self
+pub fn ponko::net::GameRollback<I>::confirmed_frame(&self) -> core::option::Option<u64>
+pub fn ponko::net::GameRollback<I>::desync(&self) -> core::option::Option<ponko::net::RollbackDesync>
+pub fn ponko::net::GameRollback<I>::frame(&self) -> u64
+pub fn ponko::net::GameRollback<I>::input(&self) -> &I
+pub fn ponko::net::GameRollback<I>::input_delay(self, u32) -> Self
+pub fn ponko::net::GameRollback<I>::max_prediction(self, u32) -> Self
+pub fn ponko::net::GameRollback<I>::new(usize, usize) -> Self
+pub fn ponko::net::GameRollback<I>::packet(&mut self) -> &[u8]
+pub fn ponko::net::GameRollback<I>::player(&self) -> usize
+pub fn ponko::net::GameRollback<I>::players(&self) -> usize
+pub fn ponko::net::GameRollback<I>::receive(&mut self, &[u8]) -> bool
+pub fn ponko::net::GameRollback<I>::set_input(&mut self, I)
+pub fn ponko::net::GameRollback<I>::stats(&self) -> ponko::net::RollbackStats
+impl<I> core::fmt::Debug for ponko::net::GameRollback<I>
+pub fn ponko::net::GameRollback<I>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct ponko::net::InputQueue<I>
 impl<I: core::clone::Clone> ponko::net::InputQueue<I>
 pub fn ponko::net::InputQueue<I>::ack(&self) -> core::option::Option<u16>
@@ -4496,14 +4545,19 @@ pub fn ponko::net::Networking::desync(&self) -> core::option::Option<&ponko::net
 pub fn ponko::net::Networking::error(&self) -> core::option::Option<&str>
 pub fn ponko::net::Networking::input<T: serde_core::de::DeserializeOwned>(&self, usize) -> core::option::Option<T>
 pub fn ponko::net::Networking::input_bytes(&self, usize) -> &[u8]
+pub fn ponko::net::Networking::is_resimulating(&self) -> bool
 pub fn ponko::net::Networking::local_addr(&self) -> core::option::Option<core::net::socket_addr::SocketAddr>
 pub fn ponko::net::Networking::message_error(&self) -> core::option::Option<&core::io::error::Error>
 pub fn ponko::net::Networking::player(&self) -> usize
 pub fn ponko::net::Networking::players(&self) -> usize
+pub fn ponko::net::Networking::rollback<I: 'static>(&mut self) -> core::option::Option<&mut ponko::net::GameRollback<I>>
+pub fn ponko::net::Networking::rollback_inputs<I: 'static>(&self) -> core::option::Option<&[I]>
 pub fn ponko::net::Networking::set_input<T: serde_core::ser::Serialize>(&mut self, &T)
 pub fn ponko::net::Networking::set_input_bytes(&mut self, &[u8])
+pub fn ponko::net::Networking::start_rollback<I>(&mut self, ponko::net::GameRollback<I>) where I: core::clone::Clone + core::cmp::PartialEq + core::default::Default + serde_core::ser::Serialize + serde_core::de::DeserializeOwned + core::marker::Send + core::marker::Sync + 'static
 pub fn ponko::net::Networking::state(&self) -> ponko::net::NetState
 pub fn ponko::net::Networking::stats(&self) -> ponko::net::NetStats
+pub fn ponko::net::Networking::stop_rollback<I: 'static>(&mut self) -> core::option::Option<ponko::net::GameRollback<I>>
 impl core::convert::From<ponko::net::Net> for ponko::net::Networking
 pub fn ponko::net::Networking::from(ponko::net::Net) -> Self
 impl core::default::Default for ponko::net::Networking
@@ -6656,6 +6710,7 @@ pub fn ponko::game::ConfiguredGame::fixed_hz(self, u32) -> Self
 pub fn ponko::game::ConfiguredGame::fullscreen(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::gamepad_backend(self, impl ponko::input::GamepadBackend) -> Self
 pub fn ponko::game::ConfiguredGame::has_plugin(&self, &str) -> bool
+pub fn ponko::game::ConfiguredGame::hdr_output(self, ponko::render::HdrOutput) -> Self
 pub fn ponko::game::ConfiguredGame::headless_frames(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::hot_reload(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::input_injection(self, bool) -> Self
@@ -6875,6 +6930,7 @@ pub fn ponko::game::Game::fullscreen(self, bool) -> Self
 pub fn ponko::game::Game::gamepad_backend(self, impl ponko::input::GamepadBackend) -> Self
 pub fn ponko::game::Game::has_plugin(&self, &str) -> bool
 pub fn ponko::game::Game::has_state<S: ponko::state::States>(&self) -> bool
+pub fn ponko::game::Game::hdr_output(self, ponko::render::HdrOutput) -> Self
 pub fn ponko::game::Game::headless_frames(self, bool) -> Self
 pub fn ponko::game::Game::hot_reload(self, bool) -> Self
 pub fn ponko::game::Game::input_injection(self, bool) -> Self
@@ -7341,6 +7397,9 @@ pub fn ponko::prelude::Ui::wants_ime(&self) -> bool
 impl ponko::prelude::Ui
 pub fn ponko::prelude::Ui::cut_selection(&mut self)
 pub fn ponko::prelude::Ui::selected_text(&self) -> core::option::Option<&str>
+impl ponko::prelude::Ui
+pub fn ponko::prelude::Ui::fades_as_group(&self, ponko::prelude::UiId) -> bool
+pub fn ponko::prelude::Ui::set_fade_as_group(&mut self, ponko::prelude::UiId, bool)
 impl ponko::prelude::Ui
 pub fn ponko::prelude::Ui::is_rich(&self, ponko::prelude::UiId) -> bool
 pub fn ponko::prelude::Ui::link(&self, ponko::prelude::UiId, u32) -> core::option::Option<&str>
@@ -7889,6 +7948,40 @@ impl serde_core::ser::Serialize for ponko::render::GpuTier
 pub fn ponko::render::GpuTier::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for ponko::render::GpuTier
 pub fn ponko::render::GpuTier::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+#[non_exhaustive] #[repr(u32)] pub enum ponko::render::HdrEncoding
+pub ponko::render::HdrEncoding::ExtendedSrgb = 2
+pub ponko::render::HdrEncoding::Pq = 3
+pub ponko::render::HdrEncoding::ScRgb = 1
+pub ponko::render::HdrEncoding::Sdr = 0
+impl core::clone::Clone for ponko::render::HdrEncoding
+pub fn ponko::render::HdrEncoding::clone(&self) -> Self
+impl core::cmp::Eq for ponko::render::HdrEncoding
+impl core::cmp::PartialEq for ponko::render::HdrEncoding
+pub fn ponko::render::HdrEncoding::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::render::HdrEncoding
+pub fn ponko::render::HdrEncoding::default() -> Self
+impl core::fmt::Debug for ponko::render::HdrEncoding
+pub fn ponko::render::HdrEncoding::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::render::HdrEncoding
+impl core::marker::StructuralPartialEq for ponko::render::HdrEncoding
+#[non_exhaustive] #[repr(u32)] pub enum ponko::render::HdrOffReason
+pub ponko::render::HdrOffReason::Headless = 1
+pub ponko::render::HdrOffReason::NotRequested = 2
+pub ponko::render::HdrOffReason::Off = 3
+pub ponko::render::HdrOffReason::Unsupported = 4
+impl ponko::render::HdrOffReason
+pub fn ponko::render::HdrOffReason::describe(self) -> &'static str
+impl core::clone::Clone for ponko::render::HdrOffReason
+pub fn ponko::render::HdrOffReason::clone(&self) -> Self
+impl core::cmp::Eq for ponko::render::HdrOffReason
+impl core::cmp::PartialEq for ponko::render::HdrOffReason
+pub fn ponko::render::HdrOffReason::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::render::HdrOffReason
+pub fn ponko::render::HdrOffReason::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for ponko::render::HdrOffReason
+pub fn ponko::render::HdrOffReason::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::render::HdrOffReason
+impl core::marker::StructuralPartialEq for ponko::render::HdrOffReason
 #[non_exhaustive] pub enum ponko::render::ShaderKind
 pub ponko::render::ShaderKind::Compute
 pub ponko::render::ShaderKind::Effect
@@ -8052,6 +8145,41 @@ impl core::fmt::Debug for ponko::render::GpuUploads
 pub fn ponko::render::GpuUploads::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::render::GpuUploads
 impl core::marker::StructuralPartialEq for ponko::render::GpuUploads
+#[non_exhaustive] pub struct ponko::render::HdrOutput
+pub ponko::render::HdrOutput::enabled: bool
+pub ponko::render::HdrOutput::paper_white_nits: f32
+pub ponko::render::HdrOutput::peak_nits: f32
+impl ponko::render::HdrOutput
+pub fn ponko::render::HdrOutput::on() -> Self
+pub fn ponko::render::HdrOutput::paper_white(&self) -> f32
+impl core::clone::Clone for ponko::render::HdrOutput
+pub fn ponko::render::HdrOutput::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::render::HdrOutput
+pub fn ponko::render::HdrOutput::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::render::HdrOutput
+pub fn ponko::render::HdrOutput::default() -> Self
+impl core::fmt::Debug for ponko::render::HdrOutput
+pub fn ponko::render::HdrOutput::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::render::HdrOutput
+impl core::marker::StructuralPartialEq for ponko::render::HdrOutput
+#[non_exhaustive] pub struct ponko::render::HdrStatus
+pub ponko::render::HdrStatus::active: bool
+pub ponko::render::HdrStatus::available: bool
+pub ponko::render::HdrStatus::display_headroom: core::option::Option<f32>
+pub ponko::render::HdrStatus::display_peak_nits: core::option::Option<f32>
+pub ponko::render::HdrStatus::encoding: ponko::render::HdrEncoding
+pub ponko::render::HdrStatus::headroom: f32
+pub ponko::render::HdrStatus::paper_white_nits: f32
+pub ponko::render::HdrStatus::peak_nits: f32
+pub ponko::render::HdrStatus::reason: core::option::Option<ponko::render::HdrOffReason>
+impl core::clone::Clone for ponko::render::HdrStatus
+pub fn ponko::render::HdrStatus::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::render::HdrStatus
+pub fn ponko::render::HdrStatus::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::render::HdrStatus
+pub fn ponko::render::HdrStatus::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::render::HdrStatus
+impl core::marker::StructuralPartialEq for ponko::render::HdrStatus
 #[non_exhaustive] pub struct ponko::render::InstanceBatchStats
 pub ponko::render::InstanceBatchStats::batches: u32
 pub ponko::render::InstanceBatchStats::cpu_no_compute: u32
@@ -8281,6 +8409,7 @@ pub struct ponko::scenario::InputScenario
 impl ponko::scenario::InputScenario
 pub fn ponko::scenario::InputScenario::at(self, u64, ponko::actions::InputEvent) -> Self
 pub fn ponko::scenario::InputScenario::click(self, u64, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn ponko::scenario::InputScenario::connect_gamepad(self, u64, ponko::input::Gamepad, ponko::input::GamepadInfo) -> Self
 pub fn ponko::scenario::InputScenario::duration(self, u64) -> Self
 pub fn ponko::scenario::InputScenario::expect(self, u64, ponko::scenario::ScenarioCheck) -> Self
 pub fn ponko::scenario::InputScenario::from_json(&str) -> core::result::Result<Self, ponko::scenario::ScenarioError>
@@ -10583,6 +10712,9 @@ impl ponko::prelude::Ui
 pub fn ponko::prelude::Ui::cut_selection(&mut self)
 pub fn ponko::prelude::Ui::selected_text(&self) -> core::option::Option<&str>
 impl ponko::prelude::Ui
+pub fn ponko::prelude::Ui::fades_as_group(&self, ponko::prelude::UiId) -> bool
+pub fn ponko::prelude::Ui::set_fade_as_group(&mut self, ponko::prelude::UiId, bool)
+impl ponko::prelude::Ui
 pub fn ponko::prelude::Ui::is_rich(&self, ponko::prelude::UiId) -> bool
 pub fn ponko::prelude::Ui::link(&self, ponko::prelude::UiId, u32) -> core::option::Option<&str>
 pub fn ponko::prelude::Ui::set_inline_font(&mut self, &str, ponko::text::Font)
@@ -10677,6 +10809,7 @@ pub fn ponko::ui::UiBuilder<'_>::border_width(self, f32) -> Self
 pub fn ponko::ui::UiBuilder<'_>::closes_screen(self) -> Self
 pub fn ponko::ui::UiBuilder<'_>::color(self, ponko::color::Color) -> Self
 pub fn ponko::ui::UiBuilder<'_>::enabled(self, bool) -> Self
+pub fn ponko::ui::UiBuilder<'_>::fade_as_group(self) -> Self
 pub fn ponko::ui::UiBuilder<'_>::focused(self) -> Self
 pub fn ponko::ui::UiBuilder<'_>::font(self, ponko::text::Font) -> Self
 pub fn ponko::ui::UiBuilder<'_>::id(self) -> ponko::prelude::UiId

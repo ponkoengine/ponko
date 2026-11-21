@@ -2651,6 +2651,11 @@ static void retained_ui_presets() {
         auto side = ui.add_panel(bar, u::column(120));
         auto buy = ui.add_button(bar, "Buy", u::fixed(100, 30));
         auto map = ui.add_panel(root, u::anchored(0.75f, 0, 0.25f, 0.25f));
+        // Fading as one image: off by default, on once set.
+        CHECK(!ui.fades_as_group(root));
+        ui.set_fade_as_group(root);
+        CHECK(ui.fades_as_group(root) && !ui.fades_as_group(bar));
+        throws([&] { ui.set_fade_as_group(9999); });
         ui.push_screen(root);
         auto dialog = ui.add_panel(u::none, u::centered(200, 100).top(40));
         ui.push_modal(dialog);
@@ -4665,6 +4670,28 @@ static void physics_queries3d_inside_loops() {
     CHECK(change_refused && par_refused);
 }
 
+// HDR display output from C++: the defaults, the game option, the settings while running, and the
+// status headless (no window: SDR, with the reason).
+static void hdr_output() {
+    auto hdr = ponko::hdr_output_defaults();
+    CHECK(!hdr.enabled && hdr.paper_white_nits == 200 && hdr.peak_nits == 0);
+    hdr.enabled = true;
+    hdr.paper_white_nits = 250;
+    ponko::game("c++ hdr", 32, 32).hdr_output(hdr).run_headless(1, [&](ponko::ctx& ctx) {
+        CHECK(ctx.hdr_output().enabled && ctx.hdr_output().paper_white_nits == 250);
+        auto status = ctx.hdr_status();
+        CHECK(!status.active && !status.available && status.encoding == PONKO_HDR_ENCODING_SDR);
+        CHECK(status.reason == PONKO_HDR_OFF_HEADLESS && status.headroom == 1);
+        auto now = ctx.hdr_output();
+        now.peak_nits = 800;
+        ctx.set_hdr_output(now);
+        CHECK(ctx.hdr_output().peak_nits == 800);
+        now.peak_nits = -1;
+        throws_kind([&] { ctx.set_hdr_output(now); }, PONKO_ERROR_INVALID);
+        CHECK(ctx.hdr_output().peak_nits == 800);
+    });
+}
+
 // The 3D picture's versioned descriptors from C++: post with split toning, depth of field and the sample
 // count, blended looks and volumes, soft particles, and cameras with a switch for particles.
 static void versioned_render_descriptors() {
@@ -5391,6 +5418,7 @@ static void native_parity_round5() {
 }
 
 int main() {
+    hdr_output();
     controllers();
     required_components();
     game_states();

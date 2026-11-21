@@ -24,6 +24,9 @@ mod gpu;
 mod gpu3d;
 #[cfg(feature = "window")]
 mod gpu_textures;
+pub(crate) mod hdr;
+#[cfg(feature = "window")]
+mod hdr_output;
 #[cfg(all(feature = "window", feature = "3d"))]
 mod lights;
 #[cfg(feature = "window")]
@@ -72,6 +75,10 @@ mod timer;
 pub(crate) mod traffic;
 #[cfg(feature = "window")]
 pub(crate) mod upload_timer;
+// A video frame's planes to RGBA on the GPU (the browser's decoder gives
+// RGBA itself).
+#[cfg(all(feature = "window", feature = "video", not(target_arch = "wasm32")))]
+mod video_yuv;
 #[cfg(feature = "window")]
 mod views;
 
@@ -98,6 +105,7 @@ pub use gpu3d::{
     LodBench, LodFrame, LodMemory, LodPath, LodScene, RecordBench, RecordScene, SceneBench, SceneFrame, SceneKind,
     SceneSetup,
 };
+pub use hdr::{HdrEncoding, HdrOffReason, HdrOutput, HdrStatus};
 /// Unstable 2D lighting benchmark driver for `ponko_bench` (feature `bench-internals`).
 #[doc(hidden)]
 #[cfg(all(
@@ -462,6 +470,8 @@ mod model_textures_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod occlusion_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
+mod oit_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
 mod pass_timing_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod regression_render_test;
@@ -490,6 +500,8 @@ mod editor_thumbnail_render_test;
 mod gltf_extensions_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod gltf_sharing_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod hdr_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod instance_cells_bench;
 #[cfg(all(test, feature = "window", feature = "3d"))]
@@ -534,6 +546,8 @@ mod transparency_bench;
 mod transparency_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod ui_animation_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod ui_group_fade_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod ui_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]

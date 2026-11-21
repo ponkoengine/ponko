@@ -93,7 +93,7 @@ pub fn derive_replicate(input: TokenStream) -> TokenStream {
 
 fn component(mut input: DeriveInput) -> syn::Result<TokenStream2> {
     let required = options(&input)?;
-    let (trait_path, requires_path) = paths();
+    let (trait_path, requires_path, ecs_root) = paths();
     let name = &input.ident;
     // A generic type is a component where its arguments make it one, without
     // asking for bounds on each parameter.
@@ -105,6 +105,20 @@ fn component(mut input: DeriveInput) -> syn::Result<TokenStream2> {
             .push(parse_quote!(Self: ::core::marker::Send + ::core::marker::Sync + 'static));
     }
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+    // A `Clone` type tells snapshots how to copy it. Only for a concrete
+    // type: the probe decides where it is written, and a generic one's
+    // arguments aren't known there (`World::register_clone` covers those).
+    let snapshot = if input.generics.params.is_empty() {
+        quote! {
+            fn __snapshot_clone() -> ::core::option::Option<#ecs_root::__snapshot::CloneFn> {
+                #[allow(unused_imports)]
+                use #ecs_root::__snapshot::{NotClone as _, ViaClone as _};
+                (&&#ecs_root::__snapshot::Probe::<Self>::NEW).clone_fn()
+            }
+        }
+    } else {
+        quote!()
+    };
     let body = if required.is_empty() {
         quote!()
     } else {
@@ -121,6 +135,7 @@ fn component(mut input: DeriveInput) -> syn::Result<TokenStream2> {
     Ok(quote! {
         impl #impl_generics #trait_path for #name #ty_generics #where_clause {
             #body
+            #snapshot
         }
     })
 }
@@ -195,7 +210,7 @@ fn until_comma(input: syn::parse::ParseStream) -> syn::Result<TokenStream2> {
 /// themselves the path starts with the crate's own name, which each crate
 /// declares with `extern crate self as ..;`, so it also works in their
 /// doctests and examples (where `crate` would name the doctest).
-fn paths() -> (TokenStream2, TokenStream2) {
+fn paths() -> (TokenStream2, TokenStream2, TokenStream2) {
     for krate in ["ponko", "ponko_ecs"] {
         let name = match crate_name(krate) {
             Ok(FoundCrate::Itself) => krate.to_string(),
@@ -204,12 +219,20 @@ fn paths() -> (TokenStream2, TokenStream2) {
         };
         let name = Ident::new(&name, Span::call_site());
         return if krate == "ponko" {
-            (quote!(::#name::prelude::Component), quote!(::#name::ecs_core::Requires))
+            (
+                quote!(::#name::prelude::Component),
+                quote!(::#name::ecs_core::Requires),
+                quote!(::#name::ecs_core),
+            )
         } else {
-            (quote!(::#name::Component), quote!(::#name::Requires))
+            (quote!(::#name::Component), quote!(::#name::Requires), quote!(::#name))
         };
     }
     // Neither is a direct dependency (a crate that re-exports the engine):
     // the engine's name is the best guess, and the error names the path.
-    (quote!(::ponko::prelude::Component), quote!(::ponko::ecs_core::Requires))
+    (
+        quote!(::ponko::prelude::Component),
+        quote!(::ponko::ecs_core::Requires),
+        quote!(::ponko::ecs_core),
+    )
 }

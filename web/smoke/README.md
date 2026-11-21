@@ -123,6 +123,39 @@ The callback is subscribed late, after the failure, so the run also checks
 that a late subscriber gets it at once. `runtime-failures.test.mjs` checks
 the template's handling and the runner's checks without a browser.
 
+## WebGPU first
+
+`webgpu-fallback.mjs` checks that a web build draws with WebGPU where the
+browser has a working one, and that each way WebGPU can fail before the
+game draws ends on WebGL2, drawing, with one console line saying why
+(the guide's [WebGPU first, WebGL2 as the
+fallback](../../book/src/web.md#webgpu-first-webgl2-as-the-fallback)). Each
+failure is faked in the page before the game's wasm starts:
+
+| Case | Faked | Must end |
+|---|---|---|
+| `webgpu` | nothing | on WebGPU: a WebGPU canvas, the engine's backend `webgpu`, `ponko: drawing with WebGPU` and no fallback line |
+| `no-webgpu` | no `navigator.gpu` | on WebGL2, the line saying `navigator.gpu is missing` |
+| `no-adapter` | `requestAdapter()` resolves to `null` (a stand-in `navigator.gpu` where the browser has none) | on WebGL2, the line saying `requestAdapter() found no adapter` |
+| `device-fails` | `GPUAdapter.requestDevice()` rejects | on WebGL2, the line with the browser's (here the runner's) words |
+| `device-lost` | `requestDevice()` returns a device already destroyed | on WebGL2, the line saying the device was lost as it opened |
+
+"On WebGL2" means: the game ticks, the canvas has a WebGL2 context and is not
+blank, the engine reports backend `gl`, and there is no startup error, page
+error or panic. `webgpu`, `device-fails` and `device-lost` need a real
+WebGPU adapter; without one they are unsupported, not failed. `--repeat <n>`
+(default 3) loads the `webgpu` and `no-webgpu` pages n times each and
+reports the median time to the first frame from navigation start (the
+fixture's first published state).
+
+```sh
+web/build.sh --features 3d web_smoke_3d
+node web/smoke/webgpu-fallback.mjs --dir target/web/web_smoke_3d --chromium-mode new
+node web/smoke/webgpu-fallback.mjs --case device-lost --chromium-mode new   # one case
+```
+
+`webgpu-fallback.test.mjs` checks its decisions without a browser.
+
 ## Multiplayer
 
 `multiplayer.mjs` checks [browser multiplayer](../../book/src/networking.md#in-the-browser):
@@ -193,7 +226,7 @@ decisions.
 
 `threads.mjs` checks a web build with threads (the guide's "Threads on the
 web"): the fixture `examples/web_threads.rs`, built with
-`web/build.sh --threads --features 3d,bench-internals web_threads`
+`web/build.sh --threads --features 3d,physics3d,bench-internals web_threads`
 (`--build` builds it first). It serves
 the build twice and opens each in a new browser context:
 
@@ -207,15 +240,24 @@ the build twice and opens each in a new browser context:
   - at least two of the engine's own parallel passes must go through the
     frame pool's runner (`passes_shared`), among them the retained 3D
     culling of 20,000 models (`three/shared_cull`, which must also find
-    models to draw) and a JSON save of the game's world
-    (`reflect/shared_save`).
+    models to draw), the drawing of 256 2D skeletons
+    (`skeleton2d/shared_draw`), the moves of 32 3D characters
+    (`physics3d/shared_characters`) and a small light bake
+    (`three/shared_bake`); the JSON save of the game's world must not
+    (`reflect/shared_save`: in the browser it is faster on the page's
+    thread);
+  - every timed pass must have a time (`pass_ms`).
 - **Without** the headers: everything runs on the page's thread, and the
   console says why (`it runs on the page's thread alone`).
 
-Both runs must reach the same checksum at tick 120 (the 3D frame's counts
-and the JSON save's length and hash are in it, and compared on their own
-too) and read the same file.
-Two more modes:
+Both runs must reach the same checksum at tick 120 (the 3D frame's counts,
+the skeletons' vertices, the characters' places, the bake's hash and the
+JSON save's length and hash are in it; the frame and the save are compared
+on their own too) and read the same file. The run prints a table of the
+timed passes: whether each was shared out, and its median time with threads
+and on the page's thread alone (the guide's list of parallel loops comes
+from it).
+More modes:
 - `--case worker-panic` panics inside the parallel query on a worker. The
   console must say `the game stops`, the page must still answer, and the
   ticks must stop.
@@ -249,6 +291,12 @@ Two more modes:
   come from the same backend built without threads (it replaced gilrs on
   the web; the guide's web chapter says why). Both apply gilrs's dead zone
   (0.1, rescaled), and the expected axes take it out the same way.
+- `--case service-worker` builds the fixture with `ponko-isolate.js`
+  (`web/build.sh --threads --isolation-worker`, in
+  `target/web/web_threads_sw`) and serves it **without** the headers. The
+  page must reload once through the service worker (`ponko-isolate.js:
+  reloading once` in the console), be controlled by it, be cross-origin
+  isolated, and pass every check of the isolated run above.
 - `--case warning` needs no browser: it builds the example
   `examples/web_threads_warning.rs` with threads and `-D warnings`. The
   example's only code is an unused function that only a build with threads
@@ -302,6 +350,51 @@ speed-up over `scalar` and whether it is beyond the noise) and kept in
 ```sh
 node web/smoke/spectrum.mjs --build
 node web/smoke/spectrum.mjs --variants scalar,simd --repeat 5
+```
+
+## Video
+
+`video.mjs` checks that videos play in the browser build
+(`examples/web_video.rs`, the video guide's "In a browser"). The fixture
+plays the engine's test clip (`tests/fixtures/video/clip.webm`, whose
+frames carry their number in a gray quarter) through `ponko::video::Video`,
+which in the browser takes its frames from the browser's own AV1 decoder
+(WebCodecs), and reports what it saw; the runner checks
+(`video-lib.mjs`, `checkVideo`):
+
+- every frame shown is the one `frame_time` names (read from its pixels),
+  with the red, green and blue quarters in place;
+- the frames come in order, at least 12 of the 20, ending on the last;
+- the picture is at most two frames behind the video's clock (the browser
+  hands decoded frames back later);
+- paused, seeking to 1.3 s and back to 0.4 s shows frames 13 and 4 within
+  60 updates each.
+
+```sh
+node web/smoke/video.mjs --build      # web/build.sh --features video web_video, then run
+```
+
+It runs on WebGL2, like the other Chromium runs. A browser without
+WebCodecs AV1 (`VideoDecoder.isConfigSupported`) exits 2, unsupported.
+
+
+## C and C++
+
+`cpp.mjs` runs a C++ game in the browser (the web guide's "C and C++"): the
+getting-started game of the guide, the `first_game_full` snippet of
+`examples/cpp/guide.cpp` exactly as the guide shows it, with a `main` that
+plays it. `--build` writes that program to `target/web-cpp-src/` and builds
+it with `web/build-cpp.sh` (which needs the WASI SDK, in `$WASI_SDK_PATH`).
+In headless Chromium, on WebGL2, the game must start (the page's status line goes away
+with no page error), fetch `crab.png`, draw something, and move its crab
+right while ArrowRight is held. That last step checks that the C++ systems
+keep running every frame and that `pos`, a local of the game's function
+its system captures by reference, outlives the call to `run()`, which in a
+browser doesn't return. `report.json` has the module's size (and gzipped)
+and the startup time, from navigation to the game's first frame.
+
+```sh
+WASI_SDK_PATH=/opt/wasi-sdk node web/smoke/cpp.mjs --build
 ```
 
 ## Running it
@@ -424,9 +517,11 @@ table (and appends it to a GitHub job summary).
 | Release workflow (`gallery` job, ubuntu-latest, no GPU) | Chromium headless shell | Every gallery page must pass (software GL) | Not tried; the demos that need WebGPU must show their message |
 | Apple Silicon Mac, the gallery (`gallery.mjs`) | Chromium 156 | Every page passes in the headless shell; the 2 demos that need WebGPU (compute passes) show their message | Every page passes in new headless mode on the Metal adapter |
 | Apple Silicon Mac, Chromium new headless mode | Chromium 156 | Passes (ANGLE on Metal) | **Passes** on the Metal adapter: the engine reports `webgpu`, the canvas draws |
+| Apple Silicon Mac, `webgpu-fallback.mjs` (3D fixture) | Chromium 156 new headless mode | Each of the four faked failures ends on WebGL2 and draws the scene, with its one console line | Passes on the Metal adapter: the same scene, `ponko: drawing with WebGPU` |
 | Apple Silicon Mac, Chromium headless shell | same | Passes (ANGLE on SwiftShader) | Unsupported: a SwiftShader fallback adapter exists, but a WebGPU canvas can't be shown |
 | Apple Silicon Mac, `multiplayer.mjs` | Chromium 156 headless shell | Passes: two tabs, a native host and a native UDP client agree on the world at tick 300 | Not tried (WebGPU is hidden) |
 | Apple Silicon Mac, WebKit (Playwright build) | WebKit 27 | Passes | Passes on its own adapter |
+| Apple Silicon Mac, `cpp.mjs` | Chromium 156 headless shell | Passes: the guide's C++ game starts in 0.5 s (a busy machine), draws its crab and moves it 200 px in the second ArrowRight is held | Not tried (WebGPU is hidden: the headless shell can't present it) |
 | Apple Silicon Mac, `threads.mjs` | Chromium 156 headless shell | Passes on whichever backend the page picks (the check is about threads, not drawing): workers on the isolated page, one thread without the headers, the same world; a worker's panic stops the game | Not tried on its own |
 
 Not covered yet: Firefox on a Mac with its Playwright build here (it would
