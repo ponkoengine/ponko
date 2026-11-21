@@ -2161,6 +2161,17 @@ static void thin_reflections(ponko::ctx& ctx) {
 }
 // ANCHOR_END: ssr_thin
 
+// ANCHOR: upscaler
+/// Two thirds of the pixels across, rebuilt to the window's resolution over frames.
+static void temporal_upscaling(ponko::ctx& ctx) {
+    auto post = ctx.post_ex(); // version 3 has the upscaler
+    post.post.render_scale = 0.67f;
+    post.post.anti_aliasing = uint32_t(ponko::anti_aliasing::taa); // it builds on TAA
+    post.upscaler = uint32_t(ponko::upscaler::temporal);
+    ctx.set_post(post);
+}
+// ANCHOR_END: upscaler
+
 // ANCHOR: gi
 /// Sunlight bounces off walls and floors onto other surfaces.
 static void bounced_light(ponko::ctx& ctx) {
@@ -2529,6 +2540,8 @@ static void the_village_has_five_spinning_houses() {
         if (ctx.post().ssr != 1.0f) { std::fprintf(stderr, "ssr\n"); std::abort(); }
         thin_reflections(ctx);
         if (!ctx.post_ex().ssr_thin_objects || ctx.post().ssr != 1.0f) { std::fprintf(stderr, "ssr thin\n"); std::abort(); }
+        temporal_upscaling(ctx);
+        if (ctx.post_ex().upscaler != uint32_t(ponko::upscaler::temporal) || ctx.post().render_scale != 0.67f) { std::fprintf(stderr, "upscaler\n"); std::abort(); }
         bounced_light(ctx);
         if (!ctx.lighting().gi_enabled) { std::fprintf(stderr, "gi\n"); std::abort(); }
         trilight(ctx);

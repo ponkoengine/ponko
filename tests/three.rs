@@ -1694,6 +1694,24 @@ fn screen_space_reflections_are_off_until_turned_on() {
 }
 
 #[test]
+fn the_temporal_upscaler_is_a_post_setting_off_by_default() {
+    Game::new("upscaler settings", 64, 64).run_headless(0, |ctx| {
+        use ponko::render::Upscaler;
+        assert_eq!(ctx.scene3d.post.upscaler, Upscaler::Bilinear);
+        // ANCHOR: upscaler
+        // Two thirds of the pixels across, rebuilt to the window's resolution over frames.
+        let post = &mut ctx.scene3d.post;
+        post.render_scale = 0.67;
+        post.anti_aliasing = AntiAliasing::Taa; // it builds on TAA
+        post.upscaler = Upscaler::Temporal;
+        // ANCHOR_END: upscaler
+        assert_eq!(ctx.scene3d.quality(), None, "no preset sets it");
+        let back = ponko::render::Post::lerp(&ctx.scene3d.post, &ponko::render::Post::default(), 0.25);
+        assert_eq!(back.upscaler, Upscaler::Temporal, "a choice switches halfway");
+    });
+}
+
+#[test]
 fn global_illumination_is_off_until_turned_on() {
     Game::new("gi settings", 64, 64).run_headless(0, |ctx| {
         assert!(!ctx.scene3d.lighting.gi.enabled);

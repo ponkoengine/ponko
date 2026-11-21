@@ -2977,6 +2977,18 @@ static void render_descriptors_setup(PonkoCtx* ctx, void* user) {
     CHECK(ponko_ctx_post_ex(ctx, &back) == PONKO_OK && back.ssr_thin_objects);
     post.ssr_thin_objects = false;
     CHECK(ponko_ctx_set_post_ex(ctx, &post) == PONKO_OK);
+    /* Version 3: the upscaler. An unknown one is refused; a version 2 caller leaves it as it is. */
+    CHECK(back.upscaler == PONKO_UPSCALER_BILINEAR);
+    post.upscaler = 9;
+    CHECK(ponko_ctx_set_post_ex(ctx, &post) == PONKO_INVALID_ARGUMENT);
+    post.upscaler = PONKO_UPSCALER_TEMPORAL;
+    CHECK(ponko_ctx_set_post_ex(ctx, &post) == PONKO_OK);
+    PonkoPostEx v2 = {.struct_size = sizeof v2, .version = 2};
+    CHECK(ponko_ctx_post_ex(ctx, &v2) == PONKO_OK && v2.upscaler == 0); /* not written */
+    CHECK(ponko_ctx_set_post_ex(ctx, &v2) == PONKO_OK);
+    CHECK(ponko_ctx_post_ex(ctx, &back) == PONKO_OK && back.upscaler == PONKO_UPSCALER_TEMPORAL);
+    post.upscaler = PONKO_UPSCALER_BILINEAR;
+    CHECK(ponko_ctx_set_post_ex(ctx, &post) == PONKO_OK);
     /* Two looks blended, and volumes by where the camera is. */
     PonkoPostEx day = {.struct_size = sizeof day, .version = PONKO_POST_EX_VERSION};
     PonkoPostEx cave = day, blended = day;

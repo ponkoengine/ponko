@@ -255,7 +255,6 @@ fn fs_resolve(in: Full) -> Resolved {
 fn fs_upscale(in: Full) -> Resolved {
     let in_size = taa.input_size.xy;
     let last = vec2<i32>(in_size) - 1;
-    let samples = i32(textureNumSamples(depth));
     // This output pixel's center in input pixels, and the input pixel under it.
     let at_in = in.uv * in_size;
     let home = clamp(vec2<i32>(floor(at_in)), vec2<i32>(0), last);
@@ -299,10 +298,10 @@ fn fs_upscale(in: Full) -> Resolved {
         let w_soft = exp(-2.29 * dot(d, d));
         soft_sum += vec4<f32>(compressed, c.a) * w_soft;
         soft_w += w_soft;
-        var depth_here = -1.0;
-        for (var k = 0; k < samples; k++) {
-            depth_here = max(depth_here, textureLoad(depth, at, k));
-        }
+        // One sample a pixel: the 3x3 input pixels already reach over
+        // several output pixels, and the depth loads are most of the
+        // pass's cost (four samples each would be 36 an output pixel).
+        let depth_here = textureLoad(depth, at, 0);
         if depth_here > nearest_depth {
             nearest_depth = depth_here;
             nearest = at;

@@ -609,7 +609,8 @@ fn upscaling_evaluation() {
 }
 
 /// A heavy frame for timing: four thousand models with sun shadows, TAA,
-/// ambient occlusion and bloom, and the stripes over everything far.
+/// ambient occlusion, reflections and bloom (about the High preset), and
+/// the stripes over everything far.
 fn timing_scene(rig: &mut BatchRig) {
     const MODELS: usize = 4000;
     let meshes: Vec<Mesh> = (0..20)
@@ -655,6 +656,7 @@ fn timing_scene(rig: &mut BatchRig) {
     let post = &mut rig.ctx.scene3d.post;
     post.bloom = 0.05;
     post.ambient_occlusion.enabled = true;
+    post.ssr = 1.0;
 }
 
 #[test]
@@ -669,8 +671,9 @@ fn upscaling_gpu_time() {
         Method::TaaStretch(0.5),
         Method::Temporal(0.5),
     ];
-    let mut report =
-        String::from("| window | method | frame GPU ms | TAA resolve ms | scaling ms |\n|---|---|---:|---:|---:|\n");
+    let mut report = String::from(
+        "| window | method | frame GPU ms (first pass start to last pass end) | TAA resolve ms | scaling ms |\n|---|---|---:|---:|---:|\n",
+    );
     let mut adapter = String::new();
     for size in [(2560, 1440), (3840, 2160)] {
         for method in methods {
@@ -689,6 +692,7 @@ fn upscaling_gpu_time() {
             timing_scene(&mut rig);
             method.apply(&mut rig.ctx.scene3d.post);
             rig.ctx.scene3d.post.bloom = 0.05;
+            rig.ctx.scene3d.post.ssr = 1.0;
             let start = vec3(-20.0, 6.0, 4.0);
             let ahead = vec3(0.4, -0.15, -1.0).normalize();
             let (mut total, mut resolve, mut scaling) = (Vec::new(), Vec::new(), Vec::new());
@@ -705,10 +709,15 @@ fn upscaling_gpu_time() {
                             .last_frame
                             .iter()
                             .filter(|p| p.name == name)
-                            .map(|p| f64::from(p.ms))
-                            .sum::<f64>()
+                            .fold(0.0, |sum, p| sum + f64::from(p.ms))
                     };
-                    total.push(timer.last_frame.iter().map(|p| f64::from(p.ms)).sum::<f64>());
+                    // From the first pass's start to the last one's end:
+                    // passes overlap on some GPUs, so their sum would
+                    // count some time twice.
+                    let spans = &timer.last_frame;
+                    let end = spans.iter().map(|p| p.start_ms + p.ms).fold(0.0, f32::max);
+                    let first = spans.iter().map(|p| p.start_ms).fold(f32::MAX, f32::min);
+                    total.push(f64::from(end - first));
                     resolve.push(pass("taa"));
                     scaling.push(pass("upscale") + pass("temporal upscale"));
                 }
@@ -730,7 +739,7 @@ fn upscaling_gpu_time() {
     }
     let report = format!(
         "Upscaling GPU time, adapter {adapter}; {WARM_UP} warm-up and {FRAMES} timed frames, medians. \
-         4000 models, sun shadows, TAA, ambient occlusion, bloom.\n\n{report}"
+         4000 models, sun shadows, TAA, ambient occlusion, reflections, bloom.\n\n{report}"
     );
     println!("{report}");
     let dir = evaluation_dir();

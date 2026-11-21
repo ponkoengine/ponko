@@ -186,6 +186,49 @@ fn thin_objects_reach_the_engine_in_version_2_and_version_1_callers_keep_todays_
     });
 }
 
+/// Version 3 adds the upscaler (`Post::upscaler`): it reaches the engine and
+/// comes back, an unknown value is refused, and an older caller neither
+/// reads nor changes it.
+#[test]
+fn the_upscaler_reaches_the_engine_in_version_3_and_older_callers_keep_it() {
+    run_ctx(|ctx| unsafe {
+        let mut p: PonkoPostEx = header(PONKO_POST_EX_VERSION);
+        assert_eq!(ponko_ctx_post_ex(ctx, &mut p), PONKO_OK);
+        assert_eq!(
+            p.upscaler,
+            PonkoUpscaler::PONKO_UPSCALER_BILINEAR as u32,
+            "the stretch by default"
+        );
+        p.post.render_scale = 0.67;
+        p.post.anti_aliasing = 3;
+        p.upscaler = PonkoUpscaler::PONKO_UPSCALER_TEMPORAL as u32;
+        assert_eq!(ponko_ctx_set_post_ex(ctx, &p), PONKO_OK, "{}", last_error());
+        let mut back: PonkoPostEx = header(PONKO_POST_EX_VERSION);
+        assert_eq!(ponko_ctx_post_ex(ctx, &mut back), PONKO_OK);
+        assert_eq!(back.upscaler, PonkoUpscaler::PONKO_UPSCALER_TEMPORAL as u32);
+
+        let mut wrong = back;
+        wrong.upscaler = 7;
+        wrong.post.exposure = 1.5;
+        assert_eq!(ponko_ctx_set_post_ex(ctx, &wrong), PONKO_INVALID_ARGUMENT);
+        assert!(last_error().contains("upscaler"), "{}", last_error());
+        assert_eq!(ponko_ctx_post_ex(ctx, &mut back), PONKO_OK);
+        assert_eq!(back.post.exposure, p.post.exposure, "nothing changes when it fails");
+
+        let mut v2: PonkoPostEx = header(2);
+        assert_eq!(ponko_ctx_post_ex(ctx, &mut v2), PONKO_OK);
+        assert_eq!(v2.upscaler, 0, "a field past version 2 isn't written");
+        v2.upscaler = 7; // past its version: not read
+        assert_eq!(ponko_ctx_set_post_ex(ctx, &v2), PONKO_OK, "{}", last_error());
+        assert_eq!(ponko_ctx_post_ex(ctx, &mut back), PONKO_OK);
+        assert_eq!(
+            back.upscaler,
+            PonkoUpscaler::PONKO_UPSCALER_TEMPORAL as u32,
+            "nor read: it keeps its value"
+        );
+    });
+}
+
 /// `PonkoGraphicsQuality` (ABI 2) has no field for thin objects: they follow
 /// the preset the struct is, so ultra set from C is ultra, as in Rust.
 #[test]
