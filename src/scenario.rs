@@ -1531,6 +1531,12 @@ enum StepWire {
         phase: TouchPhase,
         position: [f32; 2],
     },
+    Trackpad {
+        tick: u64,
+        gesture: crate::input::Gesture,
+        phase: TouchPhase,
+        amount: f32,
+    },
     ExpectAction {
         tick: u64,
         action: String,
@@ -1606,6 +1612,7 @@ impl StepWire {
             | Self::MouseMove { tick, .. }
             | Self::MouseWheel { tick, .. }
             | Self::Touch { tick, .. }
+            | Self::Trackpad { tick, .. }
             | Self::ExpectAction { tick, .. }
             | Self::ExpectResource { tick, .. }
             | Self::ExpectCount { tick, .. }
@@ -1644,6 +1651,9 @@ impl StepWire {
                 phase,
                 position: position.into(),
             }),
+            Self::Trackpad {
+                gesture, phase, amount, ..
+            } => Step::Input(InputEvent::Trackpad { gesture, phase, amount }),
             Self::ExpectAction {
                 action,
                 pressed,
@@ -1726,6 +1736,12 @@ impl StepWire {
                 id,
                 phase,
                 position: position.into(),
+            },
+            InputEvent::Trackpad { gesture, phase, amount } => Self::Trackpad {
+                tick,
+                gesture,
+                phase,
+                amount,
             },
         }
     }

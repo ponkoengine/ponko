@@ -707,15 +707,29 @@ where
             }
 
             WindowEvent::Touch(touch) => {
-                use winit::event::TouchPhase as W;
-                let phase = match touch.phase {
-                    W::Started => crate::input::TouchPhase::Started,
-                    W::Moved => crate::input::TouchPhase::Moved,
-                    W::Ended => crate::input::TouchPhase::Ended,
-                    W::Cancelled => crate::input::TouchPhase::Cancelled,
-                };
                 let pos = touch.location.to_logical::<f32>(window.scale_factor());
-                self.ctx.input.feed_touch(touch.id, phase, Vec2::new(pos.x, pos.y));
+                self.ctx
+                    .input
+                    .feed_touch(touch.id, touch_phase(touch.phase), Vec2::new(pos.x, pos.y));
+            }
+
+            // A Mac's trackpad: its pinch and rotation are the touch
+            // screen's (macOS has no touch screens; see the touch guide).
+            WindowEvent::PinchGesture { delta, phase, .. } => {
+                self.ctx
+                    .input
+                    .feed_trackpad(crate::input::Gesture::Pinch, touch_phase(phase), delta as f32);
+            }
+            WindowEvent::RotationGesture { delta, phase, .. } => {
+                // Degrees counterclockwise; the engine turns clockwise in radians.
+                self.ctx
+                    .input
+                    .feed_trackpad(crate::input::Gesture::Rotate, touch_phase(phase), -delta.to_radians());
+            }
+            WindowEvent::DoubleTapGesture { .. } => {
+                self.ctx
+                    .input
+                    .feed_trackpad(crate::input::Gesture::DoubleTap, crate::input::TouchPhase::Ended, 0.0)
             }
 
             WindowEvent::MouseWheel { delta, .. } => {
@@ -783,6 +797,17 @@ fn apply_cursor_lock(window: &Window, locked: bool) {
         let _ = window.set_cursor_grab(CursorGrabMode::None);
     }
     window.set_cursor_visible(!locked);
+}
+
+/// The engine's phase of a touch or trackpad gesture.
+fn touch_phase(phase: winit::event::TouchPhase) -> crate::input::TouchPhase {
+    use winit::event::TouchPhase as W;
+    match phase {
+        W::Started => crate::input::TouchPhase::Started,
+        W::Moved => crate::input::TouchPhase::Moved,
+        W::Ended => crate::input::TouchPhase::Ended,
+        W::Cancelled => crate::input::TouchPhase::Cancelled,
+    }
 }
 
 /// Whether `event` lets a browser page start sound (a "user activation"):

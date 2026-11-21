@@ -1034,6 +1034,8 @@ fn forget_seen_removals<'a>(ctx: &mut Ctx, systems: impl Iterator<Item = &'a Sys
 /// Runs one system, applies its commands, and records how long both took.
 #[inline]
 fn run_one(s: &mut System, ctx: &mut Ctx, timing_index: usize) {
+    // Input the system before fed reaches the retained UI first.
+    ctx.feed_ui_same_frame();
     #[cfg(feature = "profiling")]
     puffin::profile_scope!("system", s.name);
     let allocs_before = ctx.perf.state.on.then(crate::perf::alloc_counts);
@@ -2957,6 +2959,8 @@ impl Game {
             .run_list(&mut self.late_systems, 2, ctx, n_sim + n_frame, None);
         self.exec
             .run_list(&mut self.draw_systems, 3, ctx, n_sim + n_frame + n_late, None);
+        // Input the last system fed reaches the UI in this frame too.
+        ctx.feed_ui_same_frame();
         end_timings(ctx);
         let frame = self.systems.iter().chain(&self.late_systems).chain(&self.draw_systems);
         forget_seen_removals(ctx, self.sim_systems.iter().chain(frame));
@@ -3022,6 +3026,8 @@ impl Game {
             .run_list(&mut self.late_systems, 2, ctx, n_sim + n_frame, None);
         self.exec
             .run_list(&mut self.draw_systems, 3, ctx, n_sim + n_frame + n_late, None);
+        // Input the last system fed reaches the UI in this frame too.
+        ctx.feed_ui_same_frame();
         end_timings(ctx);
         let frame = self.systems.iter().chain(&self.late_systems).chain(&self.draw_systems);
         forget_seen_removals(ctx, self.sim_systems.iter().chain(frame));

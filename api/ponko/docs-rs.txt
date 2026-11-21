@@ -228,6 +228,10 @@ pub ponko::actions::InputEvent::Touch
 pub ponko::actions::InputEvent::Touch::id: u64
 pub ponko::actions::InputEvent::Touch::phase: ponko::input::TouchPhase
 pub ponko::actions::InputEvent::Touch::position: glam::f32::vec2::Vec2
+pub ponko::actions::InputEvent::Trackpad
+pub ponko::actions::InputEvent::Trackpad::amount: f32
+pub ponko::actions::InputEvent::Trackpad::gesture: ponko::prelude::Gesture
+pub ponko::actions::InputEvent::Trackpad::phase: ponko::input::TouchPhase
 impl ponko::actions::InputEvent
 pub const fn ponko::actions::InputEvent::gamepad_button(ponko::input::Gamepad, ponko::input::GamepadButton, ponko::actions::ButtonState) -> Self
 pub const fn ponko::actions::InputEvent::key(ponko::input::Key, ponko::actions::ButtonState) -> Self
@@ -5708,18 +5712,24 @@ pub fn ponko::input::Input::scenario_report<'w>(&self, &'w ponko_ecs::world::Wor
 pub fn ponko::input::Input::start_scenario(&mut self, &mut ponko_ecs::world::World, &mut ponko::prelude::Time, ponko::scenario::InputScenario)
 impl ponko::input::Input
 pub fn ponko::input::Input::drag_delta(&self) -> glam::f32::vec2::Vec2
+pub fn ponko::input::Input::edit_touch_controls(&mut self, bool)
+pub fn ponko::input::Input::editing_touch_controls(&self) -> bool
 pub fn ponko::input::Input::gesture_events(&self) -> &[ponko::input::GestureEvent]
 pub fn ponko::input::Input::gesture_settings(&self) -> &ponko::input::GestureSettings
 pub fn ponko::input::Input::pinch_scale(&self) -> f32
+pub fn ponko::input::Input::restore_touch_layout(&mut self, &ponko::storage::Storage) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::input::Input::rotation_delta(&self) -> f32
+pub fn ponko::input::Input::save_touch_layout(&self, &mut ponko::storage::Storage) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::input::Input::set_gesture_settings(&mut self, ponko::input::GestureSettings)
 pub fn ponko::input::Input::set_touch_control_shown(&mut self, &str, bool)
 pub fn ponko::input::Input::set_touch_controls(&mut self, ponko::ui::touch::TouchControls)
 pub fn ponko::input::Input::set_touch_controls_show(&mut self, ponko::ui::touch::TouchShow)
 pub fn ponko::input::Input::set_touch_device(&mut self, bool)
+pub fn ponko::input::Input::set_touch_layout(&mut self, ponko::ui::touch::TouchLayout)
 pub fn ponko::input::Input::touch_control_center(&self, &str) -> core::option::Option<glam::f32::vec2::Vec2>
 pub fn ponko::input::Input::touch_controls_shown(&self) -> bool
 pub fn ponko::input::Input::touch_device(&self) -> bool
+pub fn ponko::input::Input::touch_layout(&self) -> &ponko::ui::touch::TouchLayout
 pub fn ponko::input::Input::touches(&self) -> &[ponko::input::Touch]
 impl ponko::input::Input
 pub fn ponko::input::Input::gamepad_axis(&self, ponko::input::Gamepad, ponko::input::GamepadAxis) -> f32
@@ -8165,6 +8175,10 @@ pub ponko::prelude::actions::InputEvent::Touch
 pub ponko::prelude::actions::InputEvent::Touch::id: u64
 pub ponko::prelude::actions::InputEvent::Touch::phase: ponko::input::TouchPhase
 pub ponko::prelude::actions::InputEvent::Touch::position: glam::f32::vec2::Vec2
+pub ponko::prelude::actions::InputEvent::Trackpad
+pub ponko::prelude::actions::InputEvent::Trackpad::amount: f32
+pub ponko::prelude::actions::InputEvent::Trackpad::gesture: ponko::prelude::Gesture
+pub ponko::prelude::actions::InputEvent::Trackpad::phase: ponko::input::TouchPhase
 impl ponko::actions::InputEvent
 pub const fn ponko::actions::InputEvent::gamepad_button(ponko::input::Gamepad, ponko::input::GamepadButton, ponko::actions::ButtonState) -> Self
 pub const fn ponko::actions::InputEvent::key(ponko::input::Key, ponko::actions::ButtonState) -> Self
@@ -15931,17 +15945,39 @@ impl serde_core::ser::Serialize for ponko::ui::touch::TouchShow
 pub fn ponko::ui::touch::TouchShow::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for ponko::ui::touch::TouchShow
 pub fn ponko::ui::touch::TouchShow::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct ponko::ui::touch::TouchAdjust
+pub ponko::ui::touch::TouchAdjust::place: core::option::Option<ponko::ui::touch::TouchPlace>
+pub ponko::ui::touch::TouchAdjust::size: f32
+impl core::clone::Clone for ponko::ui::touch::TouchAdjust
+pub fn ponko::ui::touch::TouchAdjust::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::ui::touch::TouchAdjust
+pub fn ponko::ui::touch::TouchAdjust::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::ui::touch::TouchAdjust
+pub fn ponko::ui::touch::TouchAdjust::default() -> Self
+impl core::fmt::Debug for ponko::ui::touch::TouchAdjust
+pub fn ponko::ui::touch::TouchAdjust::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::ui::touch::TouchAdjust
+impl core::marker::StructuralPartialEq for ponko::ui::touch::TouchAdjust
+impl serde_core::ser::Serialize for ponko::ui::touch::TouchAdjust
+pub fn ponko::ui::touch::TouchAdjust::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::ui::touch::TouchAdjust where ponko::ui::touch::TouchAdjust: core::default::Default
+pub fn ponko::ui::touch::TouchAdjust::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct ponko::ui::touch::TouchControls
 impl ponko::ui::touch::TouchControls
 pub fn ponko::ui::touch::TouchControls::button(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn ponko::ui::touch::TouchControls::control_style(self, impl core::convert::Into<alloc::string::String>, ponko::ui::touch::TouchStyle) -> Self
 pub fn ponko::ui::touch::TouchControls::corner_button(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn ponko::ui::touch::TouchControls::is_empty(&self) -> bool
 pub fn ponko::ui::touch::TouchControls::len(&self) -> usize
 pub fn ponko::ui::touch::TouchControls::new() -> Self
 pub fn ponko::ui::touch::TouchControls::over_screens(self, bool) -> Self
+pub fn ponko::ui::touch::TouchControls::place(self, impl core::convert::Into<alloc::string::String>, ponko::ui::touch::TouchPlace) -> Self
+pub fn ponko::ui::touch::TouchControls::place_of(&self, &str) -> core::option::Option<ponko::ui::touch::TouchPlace>
 pub fn ponko::ui::touch::TouchControls::right_stick(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn ponko::ui::touch::TouchControls::show(self, ponko::ui::touch::TouchShow) -> Self
 pub fn ponko::ui::touch::TouchControls::stick(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn ponko::ui::touch::TouchControls::style(self, ponko::ui::touch::TouchStyle) -> Self
+pub fn ponko::ui::touch::TouchControls::style_of(&self, &str) -> ponko::ui::touch::TouchStyle
 impl core::clone::Clone for ponko::ui::touch::TouchControls
 pub fn ponko::ui::touch::TouchControls::clone(&self) -> Self
 impl core::cmp::PartialEq for ponko::ui::touch::TouchControls
@@ -15951,6 +15987,68 @@ pub fn ponko::ui::touch::TouchControls::default() -> Self
 impl core::fmt::Debug for ponko::ui::touch::TouchControls
 pub fn ponko::ui::touch::TouchControls::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for ponko::ui::touch::TouchControls
+pub struct ponko::ui::touch::TouchLayout
+pub ponko::ui::touch::TouchLayout::controls: alloc::collections::btree::map::BTreeMap<alloc::string::String, ponko::ui::touch::TouchAdjust>
+pub ponko::ui::touch::TouchLayout::opacity: f32
+pub ponko::ui::touch::TouchLayout::size: f32
+impl ponko::ui::touch::TouchLayout
+pub const ponko::ui::touch::TouchLayout::FILE: &'static str
+pub fn ponko::ui::touch::TouchLayout::adjust(&mut self, &str) -> &mut ponko::ui::touch::TouchAdjust
+pub fn ponko::ui::touch::TouchLayout::adjusted(&self, &str) -> ponko::ui::touch::TouchAdjust
+pub fn ponko::ui::touch::TouchLayout::from_json(&str) -> core::result::Result<Self, ponko::error::Error>
+pub fn ponko::ui::touch::TouchLayout::to_json(&self) -> core::result::Result<alloc::string::String, ponko::error::Error>
+impl core::clone::Clone for ponko::ui::touch::TouchLayout
+pub fn ponko::ui::touch::TouchLayout::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::ui::touch::TouchLayout
+pub fn ponko::ui::touch::TouchLayout::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::ui::touch::TouchLayout
+pub fn ponko::ui::touch::TouchLayout::default() -> Self
+impl core::fmt::Debug for ponko::ui::touch::TouchLayout
+pub fn ponko::ui::touch::TouchLayout::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::ui::touch::TouchLayout
+impl serde_core::ser::Serialize for ponko::ui::touch::TouchLayout
+pub fn ponko::ui::touch::TouchLayout::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::ui::touch::TouchLayout where ponko::ui::touch::TouchLayout: core::default::Default
+pub fn ponko::ui::touch::TouchLayout::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct ponko::ui::touch::TouchPlace
+pub ponko::ui::touch::TouchPlace::anchor: glam::f32::vec2::Vec2
+pub ponko::ui::touch::TouchPlace::offset: glam::f32::vec2::Vec2
+impl ponko::ui::touch::TouchPlace
+pub fn ponko::ui::touch::TouchPlace::centre(&self, glam::f32::vec2::Vec2) -> glam::f32::vec2::Vec2
+pub fn ponko::ui::touch::TouchPlace::nearest_corner(glam::f32::vec2::Vec2, glam::f32::vec2::Vec2) -> Self
+pub fn ponko::ui::touch::TouchPlace::new(glam::f32::vec2::Vec2, glam::f32::vec2::Vec2) -> Self
+impl core::clone::Clone for ponko::ui::touch::TouchPlace
+pub fn ponko::ui::touch::TouchPlace::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::ui::touch::TouchPlace
+pub fn ponko::ui::touch::TouchPlace::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::ui::touch::TouchPlace
+pub fn ponko::ui::touch::TouchPlace::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::ui::touch::TouchPlace
+impl core::marker::StructuralPartialEq for ponko::ui::touch::TouchPlace
+impl serde_core::ser::Serialize for ponko::ui::touch::TouchPlace
+pub fn ponko::ui::touch::TouchPlace::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::ui::touch::TouchPlace
+pub fn ponko::ui::touch::TouchPlace::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct ponko::ui::touch::TouchStyle
+pub ponko::ui::touch::TouchStyle::base: ponko::color::Color
+pub ponko::ui::touch::TouchStyle::button: ponko::color::Color
+pub ponko::ui::touch::TouchStyle::held: ponko::color::Color
+pub ponko::ui::touch::TouchStyle::image: core::option::Option<ponko::texture::Texture>
+pub ponko::ui::touch::TouchStyle::knob: ponko::color::Color
+pub ponko::ui::touch::TouchStyle::knob_image: core::option::Option<ponko::texture::Texture>
+pub ponko::ui::touch::TouchStyle::label: ponko::color::Color
+pub ponko::ui::touch::TouchStyle::label_size: f32
+pub ponko::ui::touch::TouchStyle::size: f32
+impl core::clone::Clone for ponko::ui::touch::TouchStyle
+pub fn ponko::ui::touch::TouchStyle::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::ui::touch::TouchStyle
+pub fn ponko::ui::touch::TouchStyle::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::ui::touch::TouchStyle
+pub fn ponko::ui::touch::TouchStyle::default() -> Self
+impl core::fmt::Debug for ponko::ui::touch::TouchStyle
+pub fn ponko::ui::touch::TouchStyle::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::ui::touch::TouchStyle
+impl core::marker::StructuralPartialEq for ponko::ui::touch::TouchStyle
 #[non_exhaustive] pub enum ponko::ui::ScreenMode
 pub ponko::ui::ScreenMode::Modal
 pub ponko::ui::ScreenMode::Modeless
