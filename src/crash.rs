@@ -449,7 +449,12 @@ fn is_report_name(name: &str) -> bool {
 pub fn report(message: impl std::fmt::Display) -> Option<CrashReport> {
     let shared = active()?;
     let backtrace = std::backtrace::Backtrace::force_capture().to_string();
-    Some(shared.write(CrashKind::Error, &message.to_string(), None, backtrace))
+    // A panic in the game's hook while this report is written gets no
+    // report of its own (it would run the hook again, inside a panic hook).
+    let was_writing = WRITING.with(|w| w.replace(true));
+    let report = shared.write(CrashKind::Error, &message.to_string(), None, backtrace);
+    WRITING.with(|w| w.set(was_writing));
+    Some(report)
 }
 
 /// The engine's own fatal errors: a run that ends with an error.
