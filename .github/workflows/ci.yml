@@ -466,7 +466,7 @@ jobs:
       - name: Native crash backtraces with frame pointers (Linux)
         if: ${{ !cancelled() && runner.os == 'Linux' }}
         env:
-          RUSTFLAGS: -C force-frame-pointers=yes
+          RUSTFLAGS: -D warnings -C force-frame-pointers=yes
           PONKO_CRASH_TESTS_FRAME_POINTERS: 1
           CARGO_TARGET_DIR: target/frame-pointers
         run: cargo test -p ponko --no-fail-fast --test native_crash
