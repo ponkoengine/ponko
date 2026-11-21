@@ -34,7 +34,7 @@ With `PONKO_BENCH_JSON=<path>`, the runner writes every result it ran (after the
     "ponko_features": ["physics", "physics3d"], "bevy_ecs": "0.20.1",
     "bevy_ecs_features": ["default", "multi_threaded"], "hecs": "0.11.2",
     "filter": "archetypes", "load_average": "9.12 8.40 7.95", "machine": null,
-    "unix_time": 1794224632
+    "code_align": null, "unix_time": 1794224632
   },
   "results": [
     {"name": "archetypes-1024/ponko", "kind": "steady", "warmup": 5, "runs": 200,
@@ -54,6 +54,9 @@ With `PONKO_BENCH_JSON=<path>`, the runner writes every result it ran (after the
   the same machine find each other (see [Tracking results over
   time](#tracking-results-over-time)).
 - The counting allocator adds two relaxed atomic adds to every allocation, shared by all threads. Rows that allocate a lot from several threads at once can shift slightly against runs from before it was added (before `allocs_per_run` existed); compare such rows only between runs that both have it.
+- `code_align` is the alignment in bytes of every function of a build made
+  with `scripts/bench-aligned.sh` (128), or `null` for an ordinary build; see
+  [Two builds, one layout](#tracking-results-over-time).
 - `rustc` is the `rustc` on `PATH` when the runner starts, which matches the build when run through `cargo run`. Unknown values are `"unknown"` or `null`.
 - `schema_version` changes only when a field changes meaning or is removed.
 
