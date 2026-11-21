@@ -852,7 +852,10 @@ fn from_file(file: FileJson, path: &str) -> Result<SkeletonData, SkeletonError> 
         };
         let rest = BonePose::new(Vec2::new(b.x, b.y), radians(b.rotation), Vec2::from(b.scale))
             .with_shear(Vec2::new(radians(b.shear[0]), radians(b.shear[1])));
-        if !(rest.translation.is_finite() && rest.rotation.is_finite() && rest.scale.is_finite() && rest.shear.is_finite())
+        if !(rest.translation.is_finite()
+            && rest.rotation.is_finite()
+            && rest.scale.is_finite()
+            && rest.shear.is_finite())
         {
             return Err(err(format!("bone \"{}\" needs numbers", b.name)));
         }
@@ -864,7 +867,12 @@ fn from_file(file: FileJson, path: &str) -> Result<SkeletonData, SkeletonError> 
         }
         let bone = index(data.bone(&s.bone), "bone", &s.bone)?;
         let slot = data.add_slot(&s.name, bone);
-        let color = s.color.as_ref().map(ColorJson::color).transpose()?.unwrap_or(Color::WHITE);
+        let color = s
+            .color
+            .as_ref()
+            .map(ColorJson::color)
+            .transpose()?
+            .unwrap_or(Color::WHITE);
         data.set_slot_rest(slot, s.attachment.as_deref(), color);
     }
     let mut influences = Influences::new();
@@ -884,7 +892,12 @@ fn from_file(file: FileJson, path: &str) -> Result<SkeletonData, SkeletonError> 
                     a.slot, a.name
                 )));
             }
-            let color = a.color.as_ref().map(ColorJson::color).transpose()?.unwrap_or(Color::WHITE);
+            let color = a
+                .color
+                .as_ref()
+                .map(ColorJson::color)
+                .transpose()?
+                .unwrap_or(Color::WHITE);
             let image = || -> Result<Arc<str>, SkeletonError> {
                 let image = a
                     .image
@@ -958,9 +971,19 @@ fn from_file(file: FileJson, path: &str) -> Result<SkeletonData, SkeletonError> 
 fn constraints(file: &FileJson, data: &mut SkeletonData) -> Result<(), SkeletonError> {
     let mut all: Vec<(i64, u8, usize)> = Vec::new();
     all.extend(file.ik.iter().enumerate().map(|(i, c)| (c.order.unwrap_or(0), 0, i)));
-    all.extend(file.transform.iter().enumerate().map(|(i, c)| (c.order.unwrap_or(0), 1, i)));
+    all.extend(
+        file.transform
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (c.order.unwrap_or(0), 1, i)),
+    );
     all.extend(file.path.iter().enumerate().map(|(i, c)| (c.order.unwrap_or(0), 2, i)));
-    all.extend(file.physics.iter().enumerate().map(|(i, c)| (c.order.unwrap_or(0), 3, i)));
+    all.extend(
+        file.physics
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (c.order.unwrap_or(0), 3, i)),
+    );
     all.sort_by_key(|(order, _, _)| *order);
     let bones = |data: &SkeletonData, names: &[String]| {
         names
@@ -984,7 +1007,11 @@ fn constraints(file: &FileJson, data: &mut SkeletonData) -> Result<(), SkeletonE
             }
             1 => {
                 let t = &file.transform[i];
-                let mut c = TransformConstraint::new(&t.name, &bones(data, &t.bones)?, index(data.bone(&t.target), "bone", &t.target)?);
+                let mut c = TransformConstraint::new(
+                    &t.name,
+                    &bones(data, &t.bones)?,
+                    index(data.bone(&t.target), "bone", &t.target)?,
+                );
                 c.mix_rotate = t.mix_rotate;
                 c.mix_translate = Vec2::from(t.mix_translate);
                 c.mix_scale = Vec2::from(t.mix_scale);
@@ -1000,7 +1027,11 @@ fn constraints(file: &FileJson, data: &mut SkeletonData) -> Result<(), SkeletonE
             }
             2 => {
                 let p = &file.path[i];
-                let mut c = PathConstraint::new(&p.name, &bones(data, &p.bones)?, index(data.slot(&p.target), "slot", &p.target)?);
+                let mut c = PathConstraint::new(
+                    &p.name,
+                    &bones(data, &p.bones)?,
+                    index(data.slot(&p.target), "slot", &p.target)?,
+                );
                 c.position_mode = match p.position_mode {
                     PositionJson::Fixed => PathPosition::Fixed,
                     PositionJson::Percent => PathPosition::Percent,
@@ -1139,7 +1170,12 @@ fn vertices(
     Ok((out, map))
 }
 
-fn mesh(a: &AttachmentJson, vertices: Vec<MeshVertex>, image: Arc<str>, color: Color) -> Result<SkinnedMesh, SkeletonError> {
+fn mesh(
+    a: &AttachmentJson,
+    vertices: Vec<MeshVertex>,
+    image: Arc<str>,
+    color: Color,
+) -> Result<SkinnedMesh, SkeletonError> {
     if !a.triangles.len().is_multiple_of(3) || a.triangles.iter().any(|&i| usize::from(i) >= vertices.len()) {
         return Err(err(format!(
             "mesh \"{}\"'s triangles are three indices each, into its vertices",
@@ -1248,13 +1284,19 @@ fn clip(data: &SkeletonData, influences: &Influences, c: &ClipJson) -> Result<Cl
                     offsets[*to] = Vec2::from(*o);
                 }
             }
-            track.keys.push(Key::new(k.time, Arc::from(offsets)).with_curve(k.curve.to_curve()?));
+            track
+                .keys
+                .push(Key::new(k.time, Arc::from(offsets)).with_curve(k.curve.to_curve()?));
         }
         end = end.max(last(&track.keys));
         clip.deform.push(track);
     }
     for t in &c.ik {
-        let mut track = IkTrack::new(index(data.ik_constraint(&t.constraint), "IK constraint", &t.constraint)?);
+        let mut track = IkTrack::new(index(
+            data.ik_constraint(&t.constraint),
+            "IK constraint",
+            &t.constraint,
+        )?);
         track.mix = same(&t.mix)?;
         track.bend_positive = same(&t.bend_positive)?;
         end = end.max(last(&track.mix)).max(last(&track.bend_positive));
@@ -1275,7 +1317,11 @@ fn clip(data: &SkeletonData, influences: &Influences, c: &ClipJson) -> Result<Cl
         clip.transforms.push(track);
     }
     for t in &c.path {
-        let mut track = PathTrack::new(index(data.path_constraint(&t.constraint), "path constraint", &t.constraint)?);
+        let mut track = PathTrack::new(index(
+            data.path_constraint(&t.constraint),
+            "path constraint",
+            &t.constraint,
+        )?);
         track.position = same(&t.position)?;
         track.spacing = same(&t.spacing)?;
         track.mix_rotate = same(&t.mix_rotate)?;
@@ -1755,15 +1801,14 @@ fn clip_json(data: &SkeletonData, c: &Clip) -> Result<ClipJson, SkeletonError> {
             }
         })
         .collect();
-    let ik = c
-        .ik
-        .iter()
-        .map(|t| IkTrackJson {
-            constraint: data.ik[t.constraint].name.to_string(),
-            mix: key_json(&t.mix, |v| *v),
-            bend_positive: key_json(&t.bend_positive, |v| *v),
-        })
-        .collect();
+    let ik =
+        c.ik.iter()
+            .map(|t| IkTrackJson {
+                constraint: data.ik[t.constraint].name.to_string(),
+                mix: key_json(&t.mix, |v| *v),
+                bend_positive: key_json(&t.bend_positive, |v| *v),
+            })
+            .collect();
     let transform = c
         .transforms
         .iter()

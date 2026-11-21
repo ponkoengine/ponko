@@ -327,7 +327,10 @@ mod tests {
         // Inertia 1: offset -10. One step: velocity += (0 - (-10) * 100) *
         // (1 / 60) = 16.667; offset += 16.667 / 60 = -9.7222; the bone
         // shows at 10 - 9.7222.
-        assert!((m.translation.x - (10.0 - 10.0 + 1000.0 / 60.0 / 60.0)).abs() < 1e-4, "{m}");
+        assert!(
+            (m.translation.x - (10.0 - 10.0 + 1000.0 / 60.0 / 60.0)).abs() < 1e-4,
+            "{m}"
+        );
         assert_eq!(m.translation.y, 0.0);
     }
 }

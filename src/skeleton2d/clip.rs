@@ -832,9 +832,17 @@ impl Clip {
             };
             for c in range {
                 let o = layout.physics + super::physics::PHYSICS_VALUES * c;
-                for (k, keys) in [&t.inertia, &t.strength, &t.damping, &t.mass, &t.wind, &t.gravity, &t.mix]
-                    .into_iter()
-                    .enumerate()
+                for (k, keys) in [
+                    &t.inertia,
+                    &t.strength,
+                    &t.damping,
+                    &t.mass,
+                    &t.wind,
+                    &t.gravity,
+                    &t.mix,
+                ]
+                .into_iter()
+                .enumerate()
                 {
                     put(o + k, keys);
                 }
@@ -852,7 +860,10 @@ impl Clip {
             pair(o + 3, &t.mix_scale);
         }
         for t in &self.paths {
-            pair(layout.paths + super::path::PATH_VALUES * t.constraint + 3, &t.mix_translate);
+            pair(
+                layout.paths + super::path::PATH_VALUES * t.constraint + 3,
+                &t.mix_translate,
+            );
         }
     }
 
@@ -897,7 +908,15 @@ impl Clip {
             }
         }
         for t in &self.physics {
-            let lists = [&t.inertia, &t.strength, &t.damping, &t.mass, &t.wind, &t.gravity, &t.mix];
+            let lists = [
+                &t.inertia,
+                &t.strength,
+                &t.damping,
+                &t.mass,
+                &t.wind,
+                &t.gravity,
+                &t.mix,
+            ];
             if t.constraint.is_some_and(|c| c >= counts[3])
                 || !lists.iter().all(|k| ok1(k))
                 || !in_order(t.reset.iter().copied())

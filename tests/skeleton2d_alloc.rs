@@ -42,7 +42,14 @@ fn rig(texture: Texture) -> Arc<SkeletonData> {
     (sway.rotate, sway.x, sway.gravity) = (1.0, 1.0, 20.0);
     data.add_physics_constraint(sway);
     let point = |x, y| MeshVertex::new(vec2(x, y), Vec2::ZERO, &[(root, 1.0)]);
-    let curve = [(0.0, 0.0), (5.0, 0.0), (10.0, 0.0), (20.0, 10.0), (25.0, 10.0), (30.0, 10.0)];
+    let curve = [
+        (0.0, 0.0),
+        (5.0, 0.0),
+        (10.0, 0.0),
+        (20.0, 10.0),
+        (25.0, 10.0),
+        (30.0, 10.0),
+    ];
     let shape = PathShape::new(curve.iter().map(|&(x, y)| point(x, y)).collect());
     data.add_attachment(track, "track", shape);
     let corner = |x, y| MeshVertex::new(vec2(x, y), Vec2::ZERO, &[(root, 1.0)]);

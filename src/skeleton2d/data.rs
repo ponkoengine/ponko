@@ -1053,17 +1053,7 @@ impl SkeletonData {
             )));
         }
         let numbers = [
-            c.x,
-            c.y,
-            c.rotate,
-            c.scale_x,
-            c.shear_x,
-            c.limit,
-            c.inertia,
-            c.strength,
-            c.damping,
-            c.wind,
-            c.gravity,
+            c.x, c.y, c.rotate, c.scale_x, c.shear_x, c.limit, c.inertia, c.strength, c.damping, c.wind, c.gravity,
             c.mix,
         ];
         if !numbers.iter().all(|v| v.is_finite())
@@ -1127,12 +1117,22 @@ impl SkeletonData {
     pub(crate) fn check_clip(&self, clip: &super::Clip) -> Result<(), SkeletonError> {
         clip.check(self.bones.len(), self.slots.len())?;
         self.check_deform(clip)?;
-        clip.check_constraints([self.ik.len(), self.transforms.len(), self.paths.len(), self.physics.len()])
+        clip.check_constraints([
+            self.ik.len(),
+            self.transforms.len(),
+            self.paths.len(),
+            self.physics.len(),
+        ])
     }
 
     /// Where each constraint's keyable values sit in a skeleton's list.
     pub(crate) fn constraint_layout(&self) -> super::clip::ConstraintLayout {
-        super::clip::ConstraintLayout::new(self.ik.len(), self.transforms.len(), self.paths.len(), self.physics.len())
+        super::clip::ConstraintLayout::new(
+            self.ik.len(),
+            self.transforms.len(),
+            self.paths.len(),
+            self.physics.len(),
+        )
     }
 
     /// Every constraint's own keyable values, laid out as

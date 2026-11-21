@@ -88,7 +88,7 @@ pub use data::{
 };
 pub(crate) use draw::draw_skeletons;
 pub use graph::{SkeletonGraph, SkeletonMotion, SkeletonState};
+pub(crate) use library::{SkeletonLibrary, library};
 pub use path::{PathConstraint, PathPosition, PathRotate, PathShape, PathSpacing};
 pub use physics::PhysicsConstraint;
-pub(crate) use library::{SkeletonLibrary, library};
 pub use skeleton::Skeleton;

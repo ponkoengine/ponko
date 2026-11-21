@@ -370,7 +370,14 @@ pub(crate) fn apply(
 
 /// Fills `s.positions` with `spaces_count` places along `path` (x, y and
 /// direction each), from `position` on, `s.spaces` apart.
-fn positions(c: &PathConstraint, path: &PathShape, position: f32, spaces_count: usize, tangents: bool, s: &mut PathScratch) {
+fn positions(
+    c: &PathConstraint,
+    path: &PathShape,
+    position: f32,
+    spaces_count: usize,
+    tangents: bool,
+    s: &mut PathScratch,
+) {
     let PathScratch {
         vertices,
         world,
@@ -399,9 +406,9 @@ fn positions(c: &PathConstraint, path: &PathShape, position: f32, spaces_count: 
         let mut previous = None;
         let mut w = [Vec2::ZERO; 4];
         let mut curve = 0;
-        for i in 0..spaces_count {
+        for (i, &space) in spaces.iter().enumerate().take(spaces_count) {
             let o = 3 * i;
-            let space = spaces[i] * multiplier;
+            let space = space * multiplier;
             position += space;
             let mut p = position;
             if closed {
@@ -444,27 +451,21 @@ fn positions(c: &PathConstraint, path: &PathShape, position: f32, spaces_count: 
                     ]
                 };
             }
-            on_curve(
-                p,
-                w,
-                &mut out[o..o + 3],
-                tangents || (i > 0 && space < EPSILON),
-            );
+            on_curve(p, w, &mut out[o..o + 3], tangents || (i > 0 && space < EPSILON));
         }
         return;
     }
     // Measured by distance: the vertices in curve order.
     world.clear();
-    let curve_count;
-    if closed {
+    let curve_count = if closed {
         world.extend_from_slice(&vertices[1..]);
         world.push(vertices[0]);
         world.push(vertices[1]);
-        curve_count = n / 3;
+        n / 3
     } else {
         world.extend_from_slice(&vertices[1..n - 1]);
-        curve_count = n / 3 - 1;
-    }
+        n / 3 - 1
+    };
     curves.clear();
     let mut path_length = 0.0;
     for i in 0..curve_count {
@@ -482,9 +483,9 @@ fn positions(c: &PathConstraint, path: &PathShape, position: f32, spaces_count: 
     let mut curve = 0;
     let mut segment = 0;
     let mut w = [Vec2::ZERO; 4];
-    for i in 0..spaces_count {
+    for (i, &space) in spaces.iter().enumerate().take(spaces_count) {
         let o = 3 * i;
-        let space = spaces[i] * multiplier;
+        let space = space * multiplier;
         position += space;
         let mut p = position;
         if closed {
@@ -518,7 +519,12 @@ fn positions(c: &PathConstraint, path: &PathShape, position: f32, spaces_count: 
         }
         if previous != Some(curve) {
             previous = Some(curve);
-            w = [world[3 * curve], world[3 * curve + 1], world[3 * curve + 2], world[3 * curve + 3]];
+            w = [
+                world[3 * curve],
+                world[3 * curve + 1],
+                world[3 * curve + 2],
+                world[3 * curve + 3],
+            ];
             curve_length = forward_length(w[0], w[1], w[2], w[3], 10, &mut |k, total| segments[k] = total);
             segment = 0;
         }
@@ -538,12 +544,7 @@ fn positions(c: &PathConstraint, path: &PathShape, position: f32, spaces_count: 
             }
             break;
         }
-        on_curve(
-            p * 0.1,
-            w,
-            &mut out[o..o + 3],
-            tangents || (i > 0 && space < EPSILON),
-        );
+        on_curve(p * 0.1, w, &mut out[o..o + 3], tangents || (i > 0 && space < EPSILON));
     }
 }
 

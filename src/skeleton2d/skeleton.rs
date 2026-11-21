@@ -8,9 +8,9 @@ use ponko_ecs::Component;
 
 use super::clip::{sample, sample_deform, step};
 use super::data::{Attachment, BonePose, Constraint, Named, SkeletonData, TransformConstraint, angle_delta};
+use super::graph::{SkeletonGraph, SkeletonMotion};
 use super::path::{PATH_VALUES, PathScratch};
 use super::physics::{PHYSICS_VALUES, Spring};
-use super::graph::{SkeletonGraph, SkeletonMotion};
 use crate::anim::graph::{check_command, consume_triggers, select_transition, set_bool, set_float, set_trigger};
 use crate::anim::{AnimationGraphError, AnimationParameter, ParamId, StateId};
 use crate::color::Color;
@@ -1362,10 +1362,10 @@ fn world_transform(c: &TransformConstraint, mix: [f32; 6], mut m: Affine2, t: Af
         m.translation += if c.relative { to } else { to - m.translation } * mix_translate;
     }
     let mut axes = [m.matrix2.x_axis, m.matrix2.y_axis];
-    for (axis, (target_axis, offset, mix)) in axes.iter_mut().zip([
-        (tx, c.offset_scale.x, mix_scale_x),
-        (ty, c.offset_scale.y, mix_scale_y),
-    ]) {
+    for (axis, (target_axis, offset, mix)) in axes
+        .iter_mut()
+        .zip([(tx, c.offset_scale.x, mix_scale_x), (ty, c.offset_scale.y, mix_scale_y)])
+    {
         if mix == 0.0 {
             continue;
         }
@@ -1483,7 +1483,11 @@ mod tests {
         let root = data.add_bone("root", None, BonePose::IDENTITY, 0.0);
         let slot = data.add_slot("skin", root);
         let vertex = MeshVertex::new(Vec2::ZERO, Vec2::ZERO, &[(root, 1.0)]);
-        data.add_attachment(slot, "skin", SkinnedMesh::new(Texture::new(0, 1, 1), vec![vertex], vec![]));
+        data.add_attachment(
+            slot,
+            "skin",
+            SkinnedMesh::new(Texture::new(0, 1, 1), vec![vertex], vec![]),
+        );
         let mut push = DeformTrack::new(slot, 0, "skin");
         let mut moved = vec![Vec2::ZERO; 4];
         moved[0] = Vec2::new(10.0, 0.0);

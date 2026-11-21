@@ -13,13 +13,13 @@ use super::clip::{
     Bezier, BoneChannel, BoneTrack, ChannelTrack, Clip, Curve, DeformTrack, IkTrack, Key, PathTrack, PhysicsTrack,
     SlotTrack, TransformTrack,
 };
-use super::path::{PathConstraint, PathPosition, PathRotate, PathShape, PathSpacing};
-use super::physics::PhysicsConstraint;
 use super::data::{
     BonePose, ClippingMask, IkConstraint, MeshVertex, SkeletonData, SkeletonError, SkinnedMesh, SpritePart,
     TransformConstraint, err,
 };
 use super::json::beside;
+use super::path::{PathConstraint, PathPosition, PathRotate, PathShape, PathSpacing};
+use super::physics::PhysicsConstraint;
 use crate::color::Color;
 use crate::texture::Texture;
 
@@ -219,9 +219,7 @@ fn read(v: &Value, import: &mut Import) -> Result<SkeletonData, SkeletonError> {
         ],
         "the file",
     );
-    let reference_scale = v
-        .get("skeleton")
-        .map_or(100.0, |s| num(s, "referenceScale", 100.0));
+    let reference_scale = v.get("skeleton").map_or(100.0, |s| num(s, "referenceScale", 100.0));
     for (name, e) in v.get("events").and_then(Value::as_object).into_iter().flatten() {
         if ["int", "float", "string", "audio"].iter().any(|k| present(e, k)) {
             import.warn(
@@ -488,7 +486,16 @@ fn read(v: &Value, import: &mut Import) -> Result<SkeletonData, SkeletonError> {
                     "path" => {
                         import.unknown(
                             a,
-                            &["type", "name", "closed", "constantSpeed", "vertexCount", "vertices", "lengths", "color"],
+                            &[
+                                "type",
+                                "name",
+                                "closed",
+                                "constantSpeed",
+                                "vertexCount",
+                                "vertices",
+                                "lengths",
+                                "color",
+                            ],
                             &place,
                         );
                         let count = a.get("vertexCount").and_then(Value::as_u64).unwrap_or(0) as usize;
@@ -1000,14 +1007,20 @@ fn constraint_timelines(
         let list = list.as_array().map_or(&[][..], Vec::as_slice);
         times(list);
         for k in list {
-            for (key, what) in [("softness", "softness"), ("compress", "compress"), ("stretch", "stretch")] {
+            for (key, what) in [
+                ("softness", "softness"),
+                ("compress", "compress"),
+                ("stretch", "stretch"),
+            ] {
                 if present(k, key) {
                     import.warn(&format!("IK {what} keys ({place})"), "the chain bends without it");
                 }
             }
         }
         let mut track = IkTrack::new(constraint);
-        let f = frames::<2>(list, major, |k| Ok([channel(k, "mix", 1.0), channel(k, "softness", 0.0)]))?;
+        let f = frames::<2>(list, major, |k| {
+            Ok([channel(k, "mix", 1.0), channel(k, "softness", 0.0)])
+        })?;
         track.mix = keys(split(&f, [0]), import, &place, |[v]| v as f32);
         // Spine's positive bend is the negative way on a y-down screen.
         track.bend_positive = list
@@ -1048,8 +1061,12 @@ fn constraint_timelines(
         };
         let mut track = TransformTrack::new(constraint);
         track.mix_rotate = keys(split(&f, [0]), import, &place, |[v]| v as f32);
-        track.mix_translate = keys(split(&f, [1, 2]), import, &place, |[x, y]| Vec2::new(x as f32, y as f32));
-        track.mix_scale = keys(split(&f, [3, 4]), import, &place, |[x, y]| Vec2::new(x as f32, y as f32));
+        track.mix_translate = keys(split(&f, [1, 2]), import, &place, |[x, y]| {
+            Vec2::new(x as f32, y as f32)
+        });
+        track.mix_scale = keys(split(&f, [3, 4]), import, &place, |[x, y]| {
+            Vec2::new(x as f32, y as f32)
+        });
         track.mix_shear_y = keys(split(&f, [5]), import, &place, |[v]| v as f32);
         clip.transforms.push(track);
     }
@@ -1060,7 +1077,10 @@ fn constraint_timelines(
             .ok_or_else(|| err(format!("{place}: no path constraint named \"{name}\"")))?;
         for (key, _) in timelines.as_object().into_iter().flatten() {
             if !["position", "spacing", "mix"].contains(&key.as_str()) {
-                import.warn(&format!("\"{key}\" timeline ({place})"), "the constraint isn't animated by it");
+                import.warn(
+                    &format!("\"{key}\" timeline ({place})"),
+                    "the constraint isn't animated by it",
+                );
             }
         }
         let mut track = PathTrack::new(constraint);
@@ -1088,7 +1108,9 @@ fn constraint_timelines(
             })?
         };
         track.mix_rotate = keys(split(&f, [0]), import, &place, |[v]| v as f32);
-        track.mix_translate = keys(split(&f, [1, 2]), import, &place, |[x, y]| Vec2::new(x as f32, y as f32));
+        track.mix_translate = keys(split(&f, [1, 2]), import, &place, |[x, y]| {
+            Vec2::new(x as f32, y as f32)
+        });
         clip.paths.push(track);
     }
     for (name, timelines) in object(a, "physics").into_iter().flatten() {
@@ -1119,7 +1141,10 @@ fn constraint_timelines(
                     continue;
                 }
                 other => {
-                    import.warn(&format!("\"{other}\" timeline ({place})"), "the constraint isn't animated by it");
+                    import.warn(
+                        &format!("\"{other}\" timeline ({place})"),
+                        "the constraint isn't animated by it",
+                    );
                     continue;
                 }
             };
