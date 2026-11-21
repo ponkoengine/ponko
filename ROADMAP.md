@@ -74,16 +74,17 @@ multiplayer in the browser #422, Steam sockets #423,
 dedicated servers #424, threads on the web #425,
 the audio mixer #418, and the decision on iOS and Android #426.
 
-Rollback is decided: **shipped limited**. `ponko::net::Rollback` (input
-delay, prediction, re-simulation, packets over any transport, desync
-checks) runs games that save and load their own state; measured, a typed
-copy of 10,000 entities saves in 0.02 ms and a worst-case 8-tick rollback
-costs about 0.3 ms, and 1,000 rapier bodies about 6 ms. Rolling back a
-whole `Game` from the engine's loop is not offered: `World::save` is 50 to
-several hundred times slower (8 to 40 ms for 10,000 entities), doesn't keep entity ids,
-and the engine's services have no snapshot. It waits for a typed world
-snapshot and a save and load for `ctx.physics`. The numbers and what must
-be captured are in the guide's "Rollback" section (`book/src/networking.md`).
+Rollback is decided: **shipped**. `ponko::net::Rollback` (input delay,
+prediction, re-simulation, packets over any transport, desync checks) runs
+games that save and load their own state, and `GameRollback` rolls back a
+whole `Game` from the engine's loop: a typed world snapshot that keeps
+entity ids (10,000 entities save and restore in about 0.005 ms each),
+`save_state` / `load_state` for both physics services (bit for bit), the
+event store, and re-running the simulation systems from a saved tick, with
+sounds of re-run ticks dropped. With physics, rapier's state is cloned
+every tick, so about a thousand bodies fit a 60 Hz frame. The numbers and
+what is captured are in the guide's "Rollback" section
+(`book/src/networking.md`).
 
 ### 1.0: the API freeze
 
