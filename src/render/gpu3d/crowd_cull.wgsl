@@ -189,9 +189,9 @@ fn cull(@builtin(global_invocation_id) id: vec3<u32>) {
             if (kinds & select(1u, 2u, shadow)) == 0u {
                 continue;
             }
-            // The share of its pixels the level keeps: 0 whole, negative
+            // The share of its pixels the level keeps: 1 whole, negative
             // fading out, positive fading in (as `level_fade` in `crowds.rs`).
-            var keep = 0.0;
+            var keep = 1.0;
             if far >= band.x && far < band.y {
                 let start = band.y - band.z;
                 if band.z > 0.0 && far >= start {
@@ -204,7 +204,7 @@ fn cull(@builtin(global_invocation_id) id: vec3<u32>) {
             }
             let steps = floor(abs(keep) * 511.0 + 0.5);
             let list = v * params.levels + l;
-            if keep == 0.0 || steps >= 511.0 {
+            if steps >= 511.0 {
                 let slot = atomicAdd(&draws[list * 2u], 1u);
                 visible[list * params.region + 1u + slot] = i;
             } else if steps > 0.0 {

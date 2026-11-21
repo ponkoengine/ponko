@@ -1207,3 +1207,227 @@ fn the_probe_size_cut_keeps_characters_by_their_own_clip() {
         assert!(camera > 0 && faces > 0, "{faces} {camera}");
     }
 }
+
+/// A red near level to `split` m (crossfading over its last `fade` m) and
+/// a green far level past it, of the same figure: a level's color says
+/// which one drew a pixel.
+fn near_and_far(rig: &mut BatchRig, split: f32, fade: f32) -> (CrowdAnimation, [CrowdLevel; 2]) {
+    let (skeleton, data) = figure();
+    let near = skinned_mesh(rig, &data, glow(Color::rgb(1.0, 0.0, 0.0)), &skeleton);
+    let far = skinned_mesh(rig, &data, glow(Color::rgb(0.0, 1.0, 0.0)), &skeleton);
+    let animation = CrowdAnimation::bake(&skeleton, &[bend(&skeleton).into()], 30.0);
+    let levels = [
+        CrowdLevel::new(near, 0.0, split).with_fade(fade),
+        CrowdLevel::new(far, split, f32::INFINITY),
+    ];
+    (animation, levels)
+}
+
+/// A figure whose origin is `distance` from `eye`, `x` to the side, on the
+/// ground, held at 0.25 s of its clip.
+fn figure_at(eye: Vec3, x: f32, distance: f32) -> CrowdInstance {
+    let z = (distance * distance - x * x - eye.y * eye.y).sqrt();
+    CrowdInstance::new(Mat4::from_translation(vec3(eye.x + x, 0.0, eye.z - z)))
+        .playing(0, 0.25)
+        .with_speed(0.0)
+}
+
+fn red(p: [u8; 4]) -> bool {
+    p[0] > 100 && p[1] < 60
+}
+
+fn green(p: [u8; 4]) -> bool {
+    p[1] > 100 && p[0] < 60
+}
+
+/// The red and green pixels of one figure walking straight away from the
+/// camera, every 0.25 m from 7.5 m to 10.5 m, the levels splitting at 10 m
+/// and the near one fading over its last `fade` m. `None` without a GPU.
+fn levels_walking_away(compute: bool, fade: f32) -> Option<Vec<(f32, u32, u32)>> {
+    let mut rig = BatchRig::new(RigSetup {
+        compute,
+        size: (160, 160),
+        ..Default::default()
+    })?;
+    let eye = vec3(0.0, 1.1, 0.0);
+    rig.ctx.scene3d.camera.position = eye;
+    rig.ctx.scene3d.camera.look_at(vec3(0.0, 1.1, -1.0));
+    rig.ctx.scene3d.camera.fov_y = 0.3;
+    let (animation, levels) = near_and_far(&mut rig, 10.0, fade);
+    let c = crowd(
+        &mut rig,
+        &animation,
+        &levels,
+        &[figure_at(eye, 0.0, 7.5)],
+        CrowdOptions::default(),
+    );
+    let mut steps = Vec::new();
+    for k in 0..=12 {
+        let distance = 7.5 + 0.25 * k as f32;
+        assert!(rig.ctx.gfx.update_crowd(c, &[figure_at(eye, 0.0, distance)]));
+        upload(&mut rig, c);
+        let image = rig.image();
+        let count = |test: fn([u8; 4]) -> bool| (image.fraction(0..160, 0..160, test) * 160.0 * 160.0).round() as u32;
+        steps.push((distance, count(red), count(green)));
+    }
+    Some(steps)
+}
+
+#[test]
+fn changing_level_crossfades_instead_of_popping() {
+    for compute in [true, false] {
+        let (Some(faded), Some(popped)) = (levels_walking_away(compute, 2.0), levels_walking_away(compute, 0.0)) else {
+            return;
+        };
+        let share = |&(_, r, g): &(f32, u32, u32)| g as f32 / (r + g).max(1) as f32;
+        let jump = |steps: &[(f32, u32, u32)]| {
+            steps
+                .windows(2)
+                .map(|w| (share(&w[1]) - share(&w[0])).abs())
+                .fold(0.0, f32::max)
+        };
+        for (f, p) in faded.iter().zip(&popped) {
+            eprintln!(
+                "compute {compute}: {:.2} m: crossfade {} red {} green ({:.2} far); switch {} red {} green",
+                f.0,
+                f.1,
+                f.2,
+                share(f),
+                p.1,
+                p.2
+            );
+        }
+        // Negative control: without a fade the far level takes over at
+        // once, between two steps.
+        assert!(jump(&popped) > 0.99, "compute {compute}: without a fade it pops");
+        // With one, the far level's share grows step by step over the
+        // last 2 m (an even 1/8 a step), from none to all.
+        assert!(
+            jump(&faded) < 0.3,
+            "compute {compute}: the crossfade moves at most 0.3 of the figure a step ({})",
+            jump(&faded)
+        );
+        assert_eq!(share(&faded[0]), 0.0, "compute {compute}: before the fade, all near");
+        assert_eq!(share(&faded[12]), 1.0, "compute {compute}: past the split, all far");
+        let middle = share(&faded[6]);
+        assert!(
+            (0.35..0.65).contains(&middle),
+            "compute {compute}: half way through the fade, half of each ({middle})"
+        );
+        // The two levels' dithers fill each other's gaps: the figure
+        // covers as many pixels as when one level draws it whole.
+        for (f, p) in faded.iter().zip(&popped) {
+            let (a, b) = ((f.1 + f.2) as f32, (p.1 + p.2) as f32);
+            assert!(
+                (a - b).abs() <= 0.03 * b,
+                "compute {compute}: at {} m the crossfading figure covers {a} pixels, whole {b}",
+                f.0
+            );
+        }
+    }
+}
+
+/// Three figures 7.5 m, 9 m and 10.5 m from the camera, the levels
+/// splitting at 10 m, the near one fading over its last `fade` m.
+fn crossfade_image(compute: bool, fade: f32) -> Option<(Image, wgpu::AdapterInfo)> {
+    let mut rig = BatchRig::new(RigSetup {
+        compute,
+        size: (192, 128),
+        ..Default::default()
+    })?;
+    let eye = vec3(0.0, 1.1, 0.0);
+    rig.ctx.scene3d.camera.position = eye;
+    rig.ctx.scene3d.camera.look_at(vec3(0.0, 1.1, -1.0));
+    rig.ctx.scene3d.camera.fov_y = 0.3;
+    let (animation, levels) = near_and_far(&mut rig, 10.0, fade);
+    let people = [(-1.3, 7.5), (0.0, 9.0), (1.4, 10.5)].map(|(x, d)| figure_at(eye, x, d));
+    crowd(&mut rig, &animation, &levels, &people, CrowdOptions::default());
+    let image = rig.image();
+    support::keep_image(&image);
+    Some((image, rig.gpu.info.clone()))
+}
+
+const CROSSFADE_TOLERANCE: Tolerance = Tolerance {
+    channel: 24,
+    outliers: 0.005,
+    edge: 1,
+};
+
+#[test]
+fn a_crossfade_dithers_the_figure_between_its_two_levels() {
+    for compute in [true, false] {
+        let (Some((image, info)), Some((switched, _))) = (crossfade_image(compute, 2.0), crossfade_image(compute, 0.0))
+        else {
+            return;
+        };
+        let (w, h) = (image.width, image.height);
+        let third = w / 3;
+        // The middle figure, half way through the fade, is red and green.
+        let (r, g) = (
+            image.fraction(third..2 * third, 0..h, red),
+            image.fraction(third..2 * third, 0..h, green),
+        );
+        eprintln!("compute {compute}: middle figure {r} red, {g} green");
+        assert!(
+            r > 0.01 && g > 0.01,
+            "compute {compute}: both levels draw the middle figure"
+        );
+        assert_eq!(
+            image.fraction(0..third, 0..h, green),
+            0.0,
+            "compute {compute}: the near one is near"
+        );
+        assert_eq!(
+            image.fraction(2 * third..w, 0..h, red),
+            0.0,
+            "compute {compute}: the far one far"
+        );
+        // Both paths draw the same picture.
+        support::check_reference(
+            "crowd_crossfade",
+            &image,
+            CROSSFADE_TOLERANCE,
+            "three skinned crowd figures 7.5 m, 9 m and 10.5 m from the camera; a red near level to 10 m crossfading \
+             over its last 2 m into a green far level; 192x128",
+            &info,
+        );
+        support::reference_rejects(
+            "crowd_crossfade",
+            &switched,
+            CROSSFADE_TOLERANCE,
+            "the levels switching at once (the middle figure all red)",
+        );
+    }
+}
+
+#[test]
+fn a_level_fade_is_finite_and_within_its_band() {
+    let Some(mut rig) = BatchRig::new(RigSetup::default()) else {
+        return;
+    };
+    let (skeleton, data) = figure();
+    let mesh = skinned_mesh(&mut rig, &data, glow(Color::WHITE), &skeleton);
+    let animation = CrowdAnimation::bake(&skeleton, &[bend(&skeleton).into()], 30.0);
+    let people = [CrowdInstance::new(Mat4::IDENTITY)];
+    for fade in [-1.0, f32::NAN, 10.5] {
+        let levels = [CrowdLevel::new(mesh, 0.0, 10.0).with_fade(fade)];
+        let error = rig
+            .ctx
+            .gfx
+            .try_create_crowd(&animation, &levels, &people, CrowdOptions::default())
+            .unwrap_err();
+        assert!(error.to_string().contains("fade"), "{fade}: {error}");
+    }
+    // The whole band, and any fade on a band without end, are fine.
+    for level in [
+        CrowdLevel::new(mesh, 0.0, 10.0).with_fade(10.0),
+        CrowdLevel::new(mesh, 0.0, f32::INFINITY).with_fade(3.0),
+    ] {
+        assert!(
+            rig.ctx
+                .gfx
+                .try_create_crowd(&animation, &[level], &people, CrowdOptions::default())
+                .is_ok()
+        );
+    }
+}
