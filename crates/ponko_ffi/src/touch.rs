@@ -712,3 +712,66 @@ pub unsafe extern "C" fn ponko_input_scenario_touch(
         })
     }
 }
+
+/// Feeds a trackpad gesture, as a Mac's trackpad does (Rust
+/// `InputEvent::Trackpad`): `gesture` is `PONKO_GESTURE_PINCH` (`amount`:
+/// how much it spread, 0.1 for 10 %), `PONKO_GESTURE_ROTATE` (`amount` in
+/// radians, clockwise positive) or `PONKO_GESTURE_DOUBLE_TAP` (`amount`
+/// unused); `phase` (a `PonkoTouchPhase`) says whether it begins, goes on
+/// or ends. It feeds the same gestures and amounts as two fingers would,
+/// at the mouse pointer, and makes no touches and no touch device. Other
+/// gestures are ignored. An unknown gesture or phase, or an amount that
+/// isn't finite: `PONKO_INVALID_ARGUMENT`.
+/// ```
+/// assert_ne!(unsafe { ponko_ffi::ponko_ctx_feed_trackpad(std::ptr::null_mut(), 4, 0, 0.25) } as u32, 0);
+/// ```
+/// # Safety
+/// Context live or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_feed_trackpad(ctx: *mut PonkoCtx, gesture: u32, phase: u32, amount: f32) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        let event = trackpad_event(gesture, phase, amount)?;
+        ctx_access(ctx, |c| {
+            c.input.feed(event);
+            Ok(())
+        })
+    })
+}
+
+fn trackpad_event(gesture: u32, phase: u32, amount: f32) -> Result<InputEvent, Failure> {
+    if !amount.is_finite() {
+        return Err(invalid("a trackpad amount must be finite"));
+    }
+    Ok(InputEvent::Trackpad {
+        gesture: gesture_from_c(gesture)?,
+        phase: phase_from_c(phase)?,
+        amount,
+    })
+}
+
+/// Adds a trackpad gesture at simulation tick `tick` (as
+/// `ponko_ctx_feed_trackpad`). The JSON step is `trackpad`.
+/// ```
+/// let s = ponko_ffi::ponko_input_scenario_new();
+/// assert_eq!(unsafe { ponko_ffi::ponko_input_scenario_trackpad(s, 2, 4, 0, 0.25) } as u32, 0);
+/// unsafe { ponko_ffi::ponko_input_scenario_free(s) };
+/// ```
+/// # Safety
+/// `scenario` null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_input_scenario_trackpad(
+    scenario: *mut PonkoInputScenario,
+    tick: u64,
+    gesture: u32,
+    phase: u32,
+    amount: f32,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        edit(scenario, || {
+            let event = trackpad_event(gesture, phase, amount)?;
+            Ok(move |s: InputScenario| s.at(tick, event))
+        })
+    }
+}

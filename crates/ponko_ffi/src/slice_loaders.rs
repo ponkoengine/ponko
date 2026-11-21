@@ -277,8 +277,9 @@ pub unsafe extern "C" fn ponko_asset_group_add_sliced(
 /// `ponko_asset_group_add_sliced`) into `*out_state`, once: a second call
 /// is `PONKO_NOT_FOUND`, as is a call before the asset finished.
 ///
-/// Ownership: the state written to `*out_state` is the caller's from now
-/// on: the engine won't call `free_state` for it; free it yourself.
+/// Ownership: `out_state` receives the loader's state, owned by the caller
+/// from now on: the engine won't call `free_state` for it; free it yourself
+/// (with the loader's own `free_state`, for example).
 /// ```
 /// let mut state = std::ptr::null_mut();
 /// assert_eq!(unsafe { ponko_ffi::ponko_ctx_take_asset_group_sliced(std::ptr::null_mut(), 1, c"a".as_ptr(), &mut state) } as u32, 1);

@@ -10024,6 +10024,17 @@ enum PonkoStatus ponko_input_scenario_touch(struct PonkoInputScenario *scenario,
                                             uint32_t phase,
                                             struct PonkoVec2 position);
 
+enum PonkoStatus ponko_ctx_feed_trackpad(struct PonkoCtx *ctx,
+                                         uint32_t gesture,
+                                         uint32_t phase,
+                                         float amount);
+
+enum PonkoStatus ponko_input_scenario_trackpad(struct PonkoInputScenario *scenario,
+                                               uint64_t tick,
+                                               uint32_t gesture,
+                                               uint32_t phase,
+                                               float amount);
+
 struct PonkoTouchStyle ponko_touch_style_default(void);
 
 enum PonkoStatus ponko_touch_controls_desc_defaults(struct PonkoTouchControlsDesc *desc);

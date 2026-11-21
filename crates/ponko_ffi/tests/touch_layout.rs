@@ -288,3 +288,40 @@ fn a_saved_layout_comes_back_in_the_next_run() {
     });
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn trackpad_gestures_from_c_feed_the_pinch_and_make_no_touch_device() {
+    use PonkoGesture::*;
+    use PonkoTouchPhase::*;
+    run(None, |ctx| unsafe {
+        assert_eq!(
+            ponko_ctx_feed_trackpad(ctx, PONKO_GESTURE_PINCH as u32, PONKO_TOUCH_STARTED as u32, 0.25),
+            PONKO_OK
+        );
+        let mut scale = 0.0;
+        assert_eq!(ponko_ctx_gesture_deltas(ctx, null_mut(), &mut scale, null_mut()), PONKO_OK);
+        assert_eq!(scale, 1.25);
+        let mut touch = true;
+        assert_eq!(ponko_ctx_touch_device(ctx, &mut touch), PONKO_OK);
+        assert!(!touch, "a trackpad is not a touch screen");
+        assert_eq!(ponko_ctx_feed_trackpad(ctx, 99, 0, 0.0), PONKO_INVALID_ARGUMENT);
+        assert_eq!(ponko_ctx_feed_trackpad(ctx, 4, 9, 0.0), PONKO_INVALID_ARGUMENT);
+        assert_eq!(ponko_ctx_feed_trackpad(ctx, 4, 0, f32::NAN), PONKO_INVALID_ARGUMENT);
+    });
+    // The scenario step is the same one Rust writes.
+    unsafe {
+        let s = ponko_input_scenario_new();
+        assert_eq!(
+            ponko_input_scenario_trackpad(s, 3, PONKO_GESTURE_ROTATE as u32, PONKO_TOUCH_MOVED as u32, 0.5),
+            PONKO_OK
+        );
+        let mut len = 0;
+        assert_eq!(ponko_input_scenario_to_json(s, null_mut(), 0, &mut len), PONKO_OK);
+        let mut json = vec![0u8; len + 1];
+        assert_eq!(ponko_input_scenario_to_json(s, json.as_mut_ptr().cast(), json.len(), &mut len), PONKO_OK);
+        let json = String::from_utf8_lossy(&json[..len]).into_owned();
+        assert!(json.contains("trackpad"), "{json}");
+        assert_eq!(ponko_input_scenario_trackpad(s, 3, 99, 0, 0.0), PONKO_INVALID_ARGUMENT);
+        ponko_input_scenario_free(s);
+    }
+}
