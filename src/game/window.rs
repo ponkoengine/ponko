@@ -142,8 +142,10 @@ struct App<S> {
     /// Delivers [`Ready`] from the task that opens the GPU (web builds).
     #[cfg(target_arch = "wasm32")]
     proxy: Option<winit::event_loop::EventLoopProxy<Ready>>,
+    /// Startup's lost-context listener (which stops startup), then the
+    /// running game's (which reports a failure to the page).
     #[cfg(target_arch = "wasm32")]
-    startup_context: Option<crate::web::StartupContextListener>,
+    startup_context: Option<crate::web::ContextLostListener>,
     config: Game,
     setup: Option<S>,
     /// Setup has run; frames may run.
@@ -515,7 +517,7 @@ where
             let context_proxy = proxy.clone();
             let context_lost = std::rc::Rc::new(std::cell::Cell::new(false));
             let listener_lost = context_lost.clone();
-            self.startup_context = crate::web::StartupContextListener::new(&window, move || {
+            self.startup_context = crate::web::ContextLostListener::new(&window, move || {
                 listener_lost.set(true);
                 let _ = context_proxy.send_event(Ready(Err(crate::web::context_lost())));
             });
@@ -559,6 +561,15 @@ where
         {
             self.startup_context = None;
             crate::web::finish_startup(self.error.clone().map_or(Ok(()), Err));
+            // While playing, a lost context stops the game for good: wgpu
+            // can't draw on a restored one. The page says so.
+            if self.started
+                && let Some(window) = &self.window
+            {
+                self.startup_context = crate::web::ContextLostListener::new(window, || {
+                    crate::web::report_failure(crate::web::context_lost_while_playing());
+                });
+            }
         }
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(error) = &self.error {
