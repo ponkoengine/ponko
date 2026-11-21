@@ -756,6 +756,7 @@ impl ponko::assets::Assets
 pub fn ponko::assets::Assets::add_background_source(&mut self, impl ponko::assets::AssetSource + core::marker::Send + core::marker::Sync)
 pub fn ponko::assets::Assets::add_source(&mut self, impl ponko::assets::AssetSource)
 pub fn ponko::assets::Assets::browser_saves(&self) -> alloc::vec::Vec<alloc::string::String>
+pub fn ponko::assets::Assets::browser_saves_persistent(&self) -> core::option::Option<bool>
 pub fn ponko::assets::Assets::has_source(&self, &str) -> bool
 pub fn ponko::assets::Assets::hot_reload(&self) -> bool
 pub fn ponko::assets::Assets::load_reflected_component_json<T: 'static>(&mut self, &mut ponko_ecs::world::World, &str, ponko_ecs::entity::Entity) -> core::result::Result<(), ponko::error::Error>
@@ -6539,6 +6540,7 @@ impl ponko::assets::Assets
 pub fn ponko::assets::Assets::add_background_source(&mut self, impl ponko::assets::AssetSource + core::marker::Send + core::marker::Sync)
 pub fn ponko::assets::Assets::add_source(&mut self, impl ponko::assets::AssetSource)
 pub fn ponko::assets::Assets::browser_saves(&self) -> alloc::vec::Vec<alloc::string::String>
+pub fn ponko::assets::Assets::browser_saves_persistent(&self) -> core::option::Option<bool>
 pub fn ponko::assets::Assets::has_source(&self, &str) -> bool
 pub fn ponko::assets::Assets::hot_reload(&self) -> bool
 pub fn ponko::assets::Assets::load_reflected_component_json<T: 'static>(&mut self, &mut ponko_ecs::world::World, &str, ponko_ecs::entity::Entity) -> core::result::Result<(), ponko::error::Error>
