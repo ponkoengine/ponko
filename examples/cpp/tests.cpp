@@ -2621,6 +2621,29 @@ static void retained_ui_presets() {
     });
 }
 
+// A still screen costs no layout: the count of layouts stays the same.
+static void retained_ui_still_screen_costs_no_layout() {
+    ponko::game("retained ui layout passes", 1, 1).run_headless(0, [&](ponko::ctx& ctx) {
+        namespace u = ponko::ui;
+        auto ui = ctx.ui_retained();
+        const ponko::vec2 window{800, 600};
+        auto hud = ui.add_panel(u::none, u::fill().padding(10));
+        auto score = ui.add_label(hud, "Score: 0", u::row(30));
+        ui.show_hud(hud);
+        ui.frame(window);
+        const auto laid_out = ui.layout_passes();
+        CHECK(laid_out >= 1);
+        for (int i = 0; i < 10; ++i) {
+            ui.set_text(score, "Score: 0");  // what the label already shows
+            ui.frame(window);
+        }
+        CHECK(ui.layout_passes() == laid_out);
+        ui.set_text(score, "Score: 10");
+        ui.frame(window);
+        CHECK(ui.layout_passes() == laid_out + 1);
+    });
+}
+
 // What a screen reader reads of a UI, what changed, and what it can ask.
 static void retained_ui_access() {
     ponko::game("retained ui access", 1, 1).run_headless(0, [&](ponko::ctx& ctx) {
@@ -4502,6 +4525,37 @@ static void behavior_trees() {
     }
     if (ponko::ai::curve(PONKO_AI_CURVE_QUADRATIC, 0.5f) != 0.25f) std::abort();
     if (ponko::ai::combine({0.5f, 0.5f}) != 0.390625f) std::abort();
+
+    // Subtrees by name, a signal that ends a wait, and a brain saved and read back mid-wait.
+    ponko::ai::behavior_tree knock(R"({"root": {"do": "knock"}})");
+    ponko::ai::behavior_tree guest(R"({"root": {"sequence": [{"wait_for": "door"}, {"wait": 1}, {"subtree": "knock"}]}})",
+                                   {{"knock", &knock}});
+    ponko::ai::brain g;
+    g.set_seed(5);
+    g.think(guest, 0, 0.1f);
+    if (g.action() != 0) std::abort();
+    g.signal(ponko::ai::key("door"));
+    if (!g.due(0, 1)) std::abort();
+    for (std::uint64_t tick = 1; tick < 4; ++tick) g.think(guest, tick, 0.1f);
+    const std::string saved = g.save_json();
+    ponko::ai::brain back = ponko::ai::brain::load_json(saved);
+    if (back.save_json() != saved) std::abort();
+    // The wait began at tick 1 and ends at its tick 11, whatever the game's ticks are now.
+    for (std::uint64_t tick = 500; tick < 507; ++tick) back.think(guest, tick, 0.1f);
+    if (back.action() != 0) std::abort();
+    back.think(guest, 507, 0.1f);
+    if (!back.doing(ponko::ai::key("knock"))) {
+        std::fprintf(stderr, "after the save: %s", back.trace().c_str());
+        std::abort();
+    }
+    bool cycle = false;
+    try {
+        ponko::ai::behavior_tree a(R"({"root": {"subtree": "a"}})");
+        ponko::ai::behavior_tree loop(R"({"root": {"subtree": "a"}})", {{"a", &a}});
+    } catch (const ponko::error& e) {
+        cycle = std::string(e.what()).find("subtree cycle: a -> a") != std::string::npos;
+    }
+    if (!cycle) std::abort();
 }
 
 // The pointer, the wheel, the sounds started, quitting and zoom_at, headless; a button that closes its screen.
@@ -4671,6 +4725,7 @@ int main() {
     ribbons_and_decals();
     retained_ui();
     retained_ui_presets();
+    retained_ui_still_screen_costs_no_layout();
     retained_ui_access();
     ui_panels();
     events();

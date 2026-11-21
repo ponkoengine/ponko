@@ -78,6 +78,10 @@ where
             format!("the event loop stopped with an error: {e}"),
         )
     })?;
+    // While the run's crash reports are still on (they end with `app`).
+    if let Some(error) = &app.error {
+        crate::crash::report_error(error);
+    }
     app.error.map_or(Ok(()), Err)
 }
 
@@ -142,8 +146,10 @@ struct App<S> {
     /// Delivers [`Ready`] from the task that opens the GPU (web builds).
     #[cfg(target_arch = "wasm32")]
     proxy: Option<winit::event_loop::EventLoopProxy<Ready>>,
+    /// Startup's lost-context listener (which stops startup), then the
+    /// running game's (which reports a failure to the page).
     #[cfg(target_arch = "wasm32")]
-    startup_context: Option<crate::web::StartupContextListener>,
+    startup_context: Option<crate::web::ContextLostListener>,
     config: Game,
     setup: Option<S>,
     /// Setup has run; frames may run.
@@ -352,6 +358,8 @@ where
         let benchmarking = self.ctx.perf.profiler.benchmarking();
         renderer.set_draw_hidden(benchmarking, benchmarking && !present);
         self.ctx.gfx.renderer = Some(renderer);
+        // A crash report from here on (setup too) names the GPU.
+        crate::crash::note_gpu(&mut self.ctx);
         self.ctx.set_window_size(Self::logical_window_size(&window));
         self.ctx.set_scale_factor(window.scale_factor() as f32);
         // Edit mode (`ponko editor`): the inspector's panels are the window.
@@ -515,7 +523,7 @@ where
             let context_proxy = proxy.clone();
             let context_lost = std::rc::Rc::new(std::cell::Cell::new(false));
             let listener_lost = context_lost.clone();
-            self.startup_context = crate::web::StartupContextListener::new(&window, move || {
+            self.startup_context = crate::web::ContextLostListener::new(&window, move || {
                 listener_lost.set(true);
                 let _ = context_proxy.send_event(Ready(Err(crate::web::context_lost())));
             });
@@ -559,6 +567,15 @@ where
         {
             self.startup_context = None;
             crate::web::finish_startup(self.error.clone().map_or(Ok(()), Err));
+            // While playing, a lost context stops the game for good: wgpu
+            // can't draw on a restored one. The page says so.
+            if self.started
+                && let Some(window) = &self.window
+            {
+                self.startup_context = crate::web::ContextLostListener::new(window, || {
+                    crate::web::report_failure(crate::web::context_lost_while_playing());
+                });
+            }
         }
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(error) = &self.error {
@@ -690,15 +707,29 @@ where
             }
 
             WindowEvent::Touch(touch) => {
-                use winit::event::TouchPhase as W;
-                let phase = match touch.phase {
-                    W::Started => crate::input::TouchPhase::Started,
-                    W::Moved => crate::input::TouchPhase::Moved,
-                    W::Ended => crate::input::TouchPhase::Ended,
-                    W::Cancelled => crate::input::TouchPhase::Cancelled,
-                };
                 let pos = touch.location.to_logical::<f32>(window.scale_factor());
-                self.ctx.input.feed_touch(touch.id, phase, Vec2::new(pos.x, pos.y));
+                self.ctx
+                    .input
+                    .feed_touch(touch.id, touch_phase(touch.phase), Vec2::new(pos.x, pos.y));
+            }
+
+            // A Mac's trackpad: its pinch and rotation are the touch
+            // screen's (macOS has no touch screens; see the touch guide).
+            WindowEvent::PinchGesture { delta, phase, .. } => {
+                self.ctx
+                    .input
+                    .feed_trackpad(crate::input::Gesture::Pinch, touch_phase(phase), delta as f32);
+            }
+            WindowEvent::RotationGesture { delta, phase, .. } => {
+                // Degrees counterclockwise; the engine turns clockwise in radians.
+                self.ctx
+                    .input
+                    .feed_trackpad(crate::input::Gesture::Rotate, touch_phase(phase), -delta.to_radians());
+            }
+            WindowEvent::DoubleTapGesture { .. } => {
+                self.ctx
+                    .input
+                    .feed_trackpad(crate::input::Gesture::DoubleTap, crate::input::TouchPhase::Ended, 0.0)
             }
 
             WindowEvent::MouseWheel { delta, .. } => {
@@ -766,6 +797,17 @@ fn apply_cursor_lock(window: &Window, locked: bool) {
         let _ = window.set_cursor_grab(CursorGrabMode::None);
     }
     window.set_cursor_visible(!locked);
+}
+
+/// The engine's phase of a touch or trackpad gesture.
+fn touch_phase(phase: winit::event::TouchPhase) -> crate::input::TouchPhase {
+    use winit::event::TouchPhase as W;
+    match phase {
+        W::Started => crate::input::TouchPhase::Started,
+        W::Moved => crate::input::TouchPhase::Moved,
+        W::Ended => crate::input::TouchPhase::Ended,
+        W::Cancelled => crate::input::TouchPhase::Cancelled,
+    }
 }
 
 /// Whether `event` lets a browser page start sound (a "user activation"):

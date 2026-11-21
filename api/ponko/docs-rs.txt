@@ -228,6 +228,10 @@ pub ponko::actions::InputEvent::Touch
 pub ponko::actions::InputEvent::Touch::id: u64
 pub ponko::actions::InputEvent::Touch::phase: ponko::input::TouchPhase
 pub ponko::actions::InputEvent::Touch::position: glam::f32::vec2::Vec2
+pub ponko::actions::InputEvent::Trackpad
+pub ponko::actions::InputEvent::Trackpad::amount: f32
+pub ponko::actions::InputEvent::Trackpad::gesture: ponko::prelude::Gesture
+pub ponko::actions::InputEvent::Trackpad::phase: ponko::input::TouchPhase
 impl ponko::actions::InputEvent
 pub const fn ponko::actions::InputEvent::gamepad_button(ponko::input::Gamepad, ponko::input::GamepadButton, ponko::actions::ButtonState) -> Self
 pub const fn ponko::actions::InputEvent::key(ponko::input::Key, ponko::actions::ButtonState) -> Self
@@ -403,10 +407,13 @@ pub struct ponko::ai::BehaviorTree
 impl ponko::ai::BehaviorTree
 pub fn ponko::ai::BehaviorTree::actions(&self) -> alloc::vec::Vec<ponko::ai::Key>
 pub fn ponko::ai::BehaviorTree::defaults(&self) -> impl core::iter::traits::iterator::Iterator<Item = (ponko::ai::Key, ponko::ai::Value)> + '_
+pub fn ponko::ai::BehaviorTree::fingerprint(&self) -> u64
 pub fn ponko::ai::BehaviorTree::from_json(&str) -> core::result::Result<ponko::ai::BehaviorTree, ponko::error::Error>
 pub fn ponko::ai::BehaviorTree::from_value(&serde_json::value::Value) -> core::result::Result<ponko::ai::BehaviorTree, ponko::error::Error>
 pub fn ponko::ai::BehaviorTree::is_empty(&self) -> bool
 pub fn ponko::ai::BehaviorTree::len(&self) -> usize
+pub fn ponko::ai::BehaviorTree::signals(&self) -> &[ponko::ai::Key]
+pub fn ponko::ai::BehaviorTree::subtrees(&self) -> &[&'static str]
 impl core::fmt::Debug for ponko::ai::BehaviorTree
 pub fn ponko::ai::BehaviorTree::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct ponko::ai::BehaviorTrees
@@ -416,6 +423,7 @@ pub fn ponko::ai::BehaviorTrees::insert(&mut self, &str, ponko::ai::BehaviorTree
 pub fn ponko::ai::BehaviorTrees::is_empty(&self) -> bool
 pub fn ponko::ai::BehaviorTrees::len(&self) -> usize
 pub fn ponko::ai::BehaviorTrees::names(&self) -> alloc::vec::Vec<&'static str>
+pub fn ponko::ai::BehaviorTrees::try_insert(&mut self, &str, impl core::convert::Into<alloc::rcs::arc::Arc<ponko::ai::BehaviorTree>>) -> core::result::Result<(), ponko::error::Error>
 impl core::default::Default for ponko::ai::BehaviorTrees
 pub fn ponko::ai::BehaviorTrees::default() -> Self
 pub struct ponko::ai::Blackboard
@@ -459,7 +467,11 @@ pub fn ponko::ai::Brain::new(&str) -> ponko::ai::Brain
 pub fn ponko::ai::Brain::param(&self, ponko::ai::Key) -> core::option::Option<ponko::ai::Value>
 pub fn ponko::ai::Brain::param_num(&self, ponko::ai::Key) -> core::option::Option<f32>
 pub fn ponko::ai::Brain::period(&self) -> u32
+pub fn ponko::ai::Brain::seed(&self) -> u64
 pub fn ponko::ai::Brain::set_period(&mut self, u32)
+pub fn ponko::ai::Brain::set_seed(&mut self, u64)
+pub fn ponko::ai::Brain::signal(&mut self, ponko::ai::Key)
+pub fn ponko::ai::Brain::signal_with(&mut self, ponko::ai::Key, impl core::convert::Into<ponko::ai::Value>)
 pub fn ponko::ai::Brain::started(&self) -> bool
 pub fn ponko::ai::Brain::status(&self) -> ponko::ai::Status
 pub fn ponko::ai::Brain::succeed(&mut self)
@@ -469,6 +481,7 @@ pub fn ponko::ai::Brain::trace(&self) -> alloc::vec::Vec<ponko::ai::TraceLine<'_
 pub fn ponko::ai::Brain::tree(&self) -> &'static str
 pub fn ponko::ai::Brain::wake(&mut self)
 pub fn ponko::ai::Brain::with_period(self, u32) -> ponko::ai::Brain
+pub fn ponko::ai::Brain::with_seed(self, u64) -> ponko::ai::Brain
 impl core::clone::Clone for ponko::ai::Brain
 pub fn ponko::ai::Brain::clone(&self) -> Self
 impl core::fmt::Debug for ponko::ai::Brain
@@ -517,6 +530,22 @@ pub fn ponko::ai::Key::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::R
 impl core::hash::Hash for ponko::ai::Key
 pub fn ponko::ai::Key::hash<H: core::hash::Hasher>(&self, &mut H)
 impl core::marker::Copy for ponko::ai::Key
+pub struct ponko::ai::Signal
+pub ponko::ai::Signal::name: ponko::ai::Key
+pub ponko::ai::Signal::target: core::option::Option<ponko_ecs::entity::Entity>
+pub ponko::ai::Signal::value: core::option::Option<ponko::ai::Value>
+impl ponko::ai::Signal
+pub fn ponko::ai::Signal::broadcast(ponko::ai::Key) -> ponko::ai::Signal
+pub fn ponko::ai::Signal::to(ponko_ecs::entity::Entity, ponko::ai::Key) -> ponko::ai::Signal
+pub fn ponko::ai::Signal::with(self, impl core::convert::Into<ponko::ai::Value>) -> ponko::ai::Signal
+impl core::clone::Clone for ponko::ai::Signal
+pub fn ponko::ai::Signal::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::ai::Signal
+pub fn ponko::ai::Signal::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::ai::Signal
+pub fn ponko::ai::Signal::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::ai::Signal
+impl core::marker::StructuralPartialEq for ponko::ai::Signal
 pub struct ponko::ai::TraceLine<'a>
 pub ponko::ai::TraceLine::depth: usize
 pub ponko::ai::TraceLine::label: &'a str
@@ -533,6 +562,7 @@ impl<'a> core::marker::StructuralPartialEq for ponko::ai::TraceLine<'a>
 pub fn ponko::ai::add_tree(&mut ponko_ecs::world::World, &str, ponko::ai::BehaviorTree)
 pub fn ponko::ai::best<T>(impl core::iter::traits::collect::IntoIterator<Item = (T, f32)>) -> core::option::Option<(T, f32)>
 pub fn ponko::ai::combine(&[f32]) -> f32
+pub fn ponko::ai::forward<T: 'static>(impl core::ops::function::Fn(&T) -> core::option::Option<ponko::ai::Signal> + 'static) -> impl core::ops::function::FnMut(&mut ponko::prelude::Ctx) + 'static
 pub fn ponko::ai::lod_period(f32, &[(f32, u32)], u32) -> u32
 pub fn ponko::ai::normalize(f32, f32, f32) -> f32
 pub fn ponko::ai::think(&mut ponko::prelude::Ctx)
@@ -1152,7 +1182,7 @@ pub fn ponko::assets::AssetGroup::paths(&self) -> impl core::iter::traits::itera
 pub fn ponko::assets::AssetGroup::sound(self, &str) -> Self
 pub fn ponko::assets::AssetGroup::streamed_texture(self, &str) -> Self
 pub fn ponko::assets::AssetGroup::texture(self, &str) -> Self
-pub fn ponko::assets::AssetGroup::with<T: core::marker::Send + 'static>(self, &str, impl core::ops::function::FnOnce(&[u8]) -> core::result::Result<T, ponko::error::Error> + core::marker::Send + 'static) -> Self
+pub fn ponko::assets::AssetGroup::with<T: core::marker::Send + 'static>(self, &str, impl core::ops::function::Fn(&[u8]) -> core::result::Result<T, ponko::error::Error> + core::marker::Send + core::marker::Sync + 'static) -> Self
 impl core::fmt::Debug for ponko::assets::AssetGroup
 pub fn ponko::assets::AssetGroup::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct ponko::assets::Assets
@@ -1180,6 +1210,7 @@ pub fn ponko::assets::Assets::group_progress(&self, ponko::assets::GroupId) -> p
 pub fn ponko::assets::Assets::group_state(&self, ponko::assets::GroupId) -> ponko::assets::GroupState
 pub fn ponko::assets::Assets::group_stats(&self) -> ponko::assets::GroupStats
 pub fn ponko::assets::Assets::groups(&self) -> impl core::iter::traits::exact_size::ExactSizeIterator<Item = ponko::assets::GroupId> + '_
+pub fn ponko::assets::Assets::restart_group(&mut self, ponko::assets::GroupId)
 pub fn ponko::assets::Assets::set_group_frame_budget(&mut self, f32)
 pub fn ponko::assets::Assets::start_group(&mut self, ponko::assets::AssetGroup) -> ponko::assets::GroupId
 pub fn ponko::assets::Assets::take_group_value<T: 'static>(&mut self, ponko::assets::GroupId, &str) -> core::option::Option<T>
@@ -1212,9 +1243,11 @@ pub ponko::assets::GroupProgress::bytes_known: bool
 pub ponko::assets::GroupProgress::bytes_loaded: u64
 pub ponko::assets::GroupProgress::bytes_read: u64
 pub ponko::assets::GroupProgress::bytes_total: u64
+pub ponko::assets::GroupProgress::bytes_uploaded: u64
 pub ponko::assets::GroupProgress::loaded: usize
 pub ponko::assets::GroupProgress::state: ponko::assets::GroupState
 pub ponko::assets::GroupProgress::total: usize
+pub ponko::assets::GroupProgress::upload_ms: f32
 impl ponko::assets::GroupProgress
 pub fn ponko::assets::GroupProgress::fraction(&self) -> f32
 impl core::clone::Clone for ponko::assets::GroupProgress
@@ -1229,9 +1262,13 @@ impl core::marker::StructuralPartialEq for ponko::assets::GroupProgress
 pub ponko::assets::GroupStats::frame_budget_ms: f32
 pub ponko::assets::GroupStats::frame_bytes: u64
 pub ponko::assets::GroupStats::max_step_ms: f32
+pub ponko::assets::GroupStats::max_upload_ms: f32
 pub ponko::assets::GroupStats::over_budget: u64
 pub ponko::assets::GroupStats::step_ms: f32
 pub ponko::assets::GroupStats::steps: u64
+pub ponko::assets::GroupStats::total_upload_bytes: u64
+pub ponko::assets::GroupStats::total_upload_ms: f64
+pub ponko::assets::GroupStats::upload_ms: f32
 impl core::clone::Clone for ponko::assets::GroupStats
 pub fn ponko::assets::GroupStats::clone(&self) -> Self
 impl core::cmp::PartialEq for ponko::assets::GroupStats
@@ -2038,6 +2075,66 @@ impl serde_core::ser::Serialize for ponko::color::Color
 pub fn ponko::color::Color::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for ponko::color::Color
 pub fn ponko::color::Color::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub mod ponko::crash
+#[non_exhaustive] pub enum ponko::crash::CrashKind
+pub ponko::crash::CrashKind::Error
+pub ponko::crash::CrashKind::Panic
+impl core::clone::Clone for ponko::crash::CrashKind
+pub fn ponko::crash::CrashKind::clone(&self) -> Self
+impl core::cmp::Eq for ponko::crash::CrashKind
+impl core::cmp::PartialEq for ponko::crash::CrashKind
+pub fn ponko::crash::CrashKind::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::crash::CrashKind
+pub fn ponko::crash::CrashKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::crash::CrashKind
+impl core::marker::StructuralPartialEq for ponko::crash::CrashKind
+impl serde_core::ser::Serialize for ponko::crash::CrashKind
+pub fn ponko::crash::CrashKind::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+pub struct ponko::crash::CrashReport
+impl ponko::crash::CrashReport
+pub fn ponko::crash::CrashReport::backtrace(&self) -> &str
+pub fn ponko::crash::CrashReport::engine_version(&self) -> &str
+pub fn ponko::crash::CrashReport::file(&self) -> core::option::Option<&str>
+pub fn ponko::crash::CrashReport::game(&self) -> &str
+pub fn ponko::crash::CrashReport::game_version(&self) -> core::option::Option<&str>
+pub fn ponko::crash::CrashReport::gpu(&self) -> core::option::Option<&ponko::render::GpuAdapter>
+pub fn ponko::crash::CrashReport::kind(&self) -> ponko::crash::CrashKind
+pub fn ponko::crash::CrashReport::location(&self) -> core::option::Option<&str>
+pub fn ponko::crash::CrashReport::log(&self) -> core::option::Option<&[alloc::string::String]>
+pub fn ponko::crash::CrashReport::message(&self) -> &str
+pub fn ponko::crash::CrashReport::os(&self) -> &str
+pub fn ponko::crash::CrashReport::path(&self) -> core::option::Option<&std::path::Path>
+pub fn ponko::crash::CrashReport::settings(&self) -> &[(alloc::string::String, alloc::string::String)]
+pub fn ponko::crash::CrashReport::text(&self) -> alloc::string::String
+pub fn ponko::crash::CrashReport::thread(&self) -> core::option::Option<&str>
+pub fn ponko::crash::CrashReport::time(&self) -> &str
+pub fn ponko::crash::CrashReport::uptime_secs(&self) -> f64
+impl core::clone::Clone for ponko::crash::CrashReport
+pub fn ponko::crash::CrashReport::clone(&self) -> Self
+impl core::fmt::Debug for ponko::crash::CrashReport
+pub fn ponko::crash::CrashReport::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for ponko::crash::CrashReport
+pub fn ponko::crash::CrashReport::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+pub struct ponko::crash::CrashReports
+impl ponko::crash::CrashReports
+pub fn ponko::crash::CrashReports::game_version(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn ponko::crash::CrashReports::is_on(&self, bool) -> bool
+pub fn ponko::crash::CrashReports::off() -> Self
+pub fn ponko::crash::CrashReports::on() -> Self
+pub fn ponko::crash::CrashReports::on_crash(self, impl core::ops::function::Fn(&ponko::crash::CrashReport) + core::marker::Send + core::marker::Sync + 'static) -> Self
+impl core::clone::Clone for ponko::crash::CrashReports
+pub fn ponko::crash::CrashReports::clone(&self) -> Self
+impl core::convert::From<bool> for ponko::crash::CrashReports
+pub fn ponko::crash::CrashReports::from(bool) -> Self
+impl core::default::Default for ponko::crash::CrashReports
+pub fn ponko::crash::CrashReports::default() -> Self
+impl core::fmt::Debug for ponko::crash::CrashReports
+pub fn ponko::crash::CrashReports::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub const ponko::crash::FOLDER: &str
+pub const ponko::crash::KEPT: usize
+pub const ponko::crash::LOG_LINES: usize
+pub fn ponko::crash::report(impl core::fmt::Display) -> core::option::Option<ponko::crash::CrashReport>
+pub fn ponko::crash::saved_reports(&ponko::storage::Storage) -> alloc::vec::Vec<alloc::string::String>
 pub mod ponko::d2
 #[non_exhaustive] pub enum ponko::d2::ParticleShape
 pub ponko::d2::ParticleShape::Circle
@@ -4439,6 +4536,7 @@ pub fn ponko::game::ConfiguredGame::app_id(self, impl core::convert::Into<alloc:
 pub fn ponko::game::ConfiguredGame::barrier(self, ponko::game::Phase) -> Self
 pub fn ponko::game::ConfiguredGame::control_endpoint(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::control_method(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::ops::function::FnMut(&mut ponko::prelude::Ctx, &ponko::reflect::JsonValue) -> core::result::Result<ponko::reflect::JsonValue, ponko::error::Error> + 'static) -> Self
+pub fn ponko::game::ConfiguredGame::crash_reports(self, impl core::convert::Into<ponko::crash::CrashReports>) -> Self
 pub fn ponko::game::ConfiguredGame::data_dir(self, impl core::convert::Into<std::path::PathBuf>) -> Self
 pub fn ponko::game::ConfiguredGame::debug_draw(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::debug_toggle(self, impl core::convert::Into<alloc::string::String>, bool) -> Self
@@ -4493,6 +4591,7 @@ pub fn ponko::game::Game::check_order(&self) -> core::result::Result<(), ponko::
 pub fn ponko::game::Game::configured(self) -> ponko::game::ConfiguredGame
 pub fn ponko::game::Game::control_endpoint(self, bool) -> Self
 pub fn ponko::game::Game::control_method(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::ops::function::FnMut(&mut ponko::prelude::Ctx, &ponko::reflect::JsonValue) -> core::result::Result<ponko::reflect::JsonValue, ponko::error::Error> + 'static) -> Self
+pub fn ponko::game::Game::crash_reports(self, impl core::convert::Into<ponko::crash::CrashReports>) -> Self
 pub fn ponko::game::Game::data_dir(self, impl core::convert::Into<std::path::PathBuf>) -> Self
 pub fn ponko::game::Game::debug_draw(self, bool) -> Self
 pub fn ponko::game::Game::debug_toggle(self, impl core::convert::Into<alloc::string::String>, bool) -> Self
@@ -5613,18 +5712,24 @@ pub fn ponko::input::Input::scenario_report<'w>(&self, &'w ponko_ecs::world::Wor
 pub fn ponko::input::Input::start_scenario(&mut self, &mut ponko_ecs::world::World, &mut ponko::prelude::Time, ponko::scenario::InputScenario)
 impl ponko::input::Input
 pub fn ponko::input::Input::drag_delta(&self) -> glam::f32::vec2::Vec2
+pub fn ponko::input::Input::edit_touch_controls(&mut self, bool)
+pub fn ponko::input::Input::editing_touch_controls(&self) -> bool
 pub fn ponko::input::Input::gesture_events(&self) -> &[ponko::input::GestureEvent]
 pub fn ponko::input::Input::gesture_settings(&self) -> &ponko::input::GestureSettings
 pub fn ponko::input::Input::pinch_scale(&self) -> f32
+pub fn ponko::input::Input::restore_touch_layout(&mut self, &ponko::storage::Storage) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::input::Input::rotation_delta(&self) -> f32
+pub fn ponko::input::Input::save_touch_layout(&self, &mut ponko::storage::Storage) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::input::Input::set_gesture_settings(&mut self, ponko::input::GestureSettings)
 pub fn ponko::input::Input::set_touch_control_shown(&mut self, &str, bool)
 pub fn ponko::input::Input::set_touch_controls(&mut self, ponko::ui::touch::TouchControls)
 pub fn ponko::input::Input::set_touch_controls_show(&mut self, ponko::ui::touch::TouchShow)
 pub fn ponko::input::Input::set_touch_device(&mut self, bool)
+pub fn ponko::input::Input::set_touch_layout(&mut self, ponko::ui::touch::TouchLayout)
 pub fn ponko::input::Input::touch_control_center(&self, &str) -> core::option::Option<glam::f32::vec2::Vec2>
 pub fn ponko::input::Input::touch_controls_shown(&self) -> bool
 pub fn ponko::input::Input::touch_device(&self) -> bool
+pub fn ponko::input::Input::touch_layout(&self) -> &ponko::ui::touch::TouchLayout
 pub fn ponko::input::Input::touches(&self) -> &[ponko::input::Touch]
 impl ponko::input::Input
 pub fn ponko::input::Input::gamepad_axis(&self, ponko::input::Gamepad, ponko::input::GamepadAxis) -> f32
@@ -8070,6 +8175,10 @@ pub ponko::prelude::actions::InputEvent::Touch
 pub ponko::prelude::actions::InputEvent::Touch::id: u64
 pub ponko::prelude::actions::InputEvent::Touch::phase: ponko::input::TouchPhase
 pub ponko::prelude::actions::InputEvent::Touch::position: glam::f32::vec2::Vec2
+pub ponko::prelude::actions::InputEvent::Trackpad
+pub ponko::prelude::actions::InputEvent::Trackpad::amount: f32
+pub ponko::prelude::actions::InputEvent::Trackpad::gesture: ponko::prelude::Gesture
+pub ponko::prelude::actions::InputEvent::Trackpad::phase: ponko::input::TouchPhase
 impl ponko::actions::InputEvent
 pub const fn ponko::actions::InputEvent::gamepad_button(ponko::input::Gamepad, ponko::input::GamepadButton, ponko::actions::ButtonState) -> Self
 pub const fn ponko::actions::InputEvent::key(ponko::input::Key, ponko::actions::ButtonState) -> Self
@@ -10624,6 +10733,7 @@ pub fn ponko::assets::Assets::group_progress(&self, ponko::assets::GroupId) -> p
 pub fn ponko::assets::Assets::group_state(&self, ponko::assets::GroupId) -> ponko::assets::GroupState
 pub fn ponko::assets::Assets::group_stats(&self) -> ponko::assets::GroupStats
 pub fn ponko::assets::Assets::groups(&self) -> impl core::iter::traits::exact_size::ExactSizeIterator<Item = ponko::assets::GroupId> + '_
+pub fn ponko::assets::Assets::restart_group(&mut self, ponko::assets::GroupId)
 pub fn ponko::assets::Assets::set_group_frame_budget(&mut self, f32)
 pub fn ponko::assets::Assets::start_group(&mut self, ponko::assets::AssetGroup) -> ponko::assets::GroupId
 pub fn ponko::assets::Assets::take_group_value<T: 'static>(&mut self, ponko::assets::GroupId, &str) -> core::option::Option<T>
@@ -10734,6 +10844,7 @@ pub fn ponko::game::ConfiguredGame::app_id(self, impl core::convert::Into<alloc:
 pub fn ponko::game::ConfiguredGame::barrier(self, ponko::game::Phase) -> Self
 pub fn ponko::game::ConfiguredGame::control_endpoint(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::control_method(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::ops::function::FnMut(&mut ponko::prelude::Ctx, &ponko::reflect::JsonValue) -> core::result::Result<ponko::reflect::JsonValue, ponko::error::Error> + 'static) -> Self
+pub fn ponko::game::ConfiguredGame::crash_reports(self, impl core::convert::Into<ponko::crash::CrashReports>) -> Self
 pub fn ponko::game::ConfiguredGame::data_dir(self, impl core::convert::Into<std::path::PathBuf>) -> Self
 pub fn ponko::game::ConfiguredGame::debug_draw(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::debug_toggle(self, impl core::convert::Into<alloc::string::String>, bool) -> Self
@@ -10969,6 +11080,7 @@ pub fn ponko::game::Game::check_order(&self) -> core::result::Result<(), ponko::
 pub fn ponko::game::Game::configured(self) -> ponko::game::ConfiguredGame
 pub fn ponko::game::Game::control_endpoint(self, bool) -> Self
 pub fn ponko::game::Game::control_method(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::ops::function::FnMut(&mut ponko::prelude::Ctx, &ponko::reflect::JsonValue) -> core::result::Result<ponko::reflect::JsonValue, ponko::error::Error> + 'static) -> Self
+pub fn ponko::game::Game::crash_reports(self, impl core::convert::Into<ponko::crash::CrashReports>) -> Self
 pub fn ponko::game::Game::data_dir(self, impl core::convert::Into<std::path::PathBuf>) -> Self
 pub fn ponko::game::Game::debug_draw(self, bool) -> Self
 pub fn ponko::game::Game::debug_toggle(self, impl core::convert::Into<alloc::string::String>, bool) -> Self
@@ -11892,6 +12004,22 @@ impl core::default::Default for ponko::reflect::SaveMigrations
 pub fn ponko::reflect::SaveMigrations::default() -> Self
 impl core::fmt::Debug for ponko::reflect::SaveMigrations
 pub fn ponko::reflect::SaveMigrations::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct ponko::reflect::WorldHashParts
+pub ponko::reflect::WorldHashParts::parts: alloc::vec::Vec<(alloc::string::String, u64)>
+pub ponko::reflect::WorldHashParts::total: u64
+impl ponko::reflect::WorldHashParts
+pub fn ponko::reflect::WorldHashParts::differing(&self, &ponko::reflect::WorldHashParts) -> alloc::vec::Vec<alloc::string::String>
+pub fn ponko::reflect::WorldHashParts::of(&ponko_ecs::world::World) -> Self
+impl core::clone::Clone for ponko::reflect::WorldHashParts
+pub fn ponko::reflect::WorldHashParts::clone(&self) -> Self
+impl core::cmp::Eq for ponko::reflect::WorldHashParts
+impl core::cmp::PartialEq for ponko::reflect::WorldHashParts
+pub fn ponko::reflect::WorldHashParts::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::reflect::WorldHashParts
+pub fn ponko::reflect::WorldHashParts::default() -> Self
+impl core::fmt::Debug for ponko::reflect::WorldHashParts
+pub fn ponko::reflect::WorldHashParts::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::reflect::WorldHashParts
 pub trait ponko::reflect::WorldReflect
 pub fn ponko::reflect::WorldReflect::describe_component(&mut self, &str, ponko::reflect::ValueSchema) -> core::result::Result<(), ponko::reflect::ReflectError>
 pub fn ponko::reflect::WorldReflect::describe_resource(&mut self, &str, ponko::reflect::ValueSchema) -> core::result::Result<(), ponko::reflect::ReflectError>
@@ -15817,17 +15945,39 @@ impl serde_core::ser::Serialize for ponko::ui::touch::TouchShow
 pub fn ponko::ui::touch::TouchShow::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for ponko::ui::touch::TouchShow
 pub fn ponko::ui::touch::TouchShow::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct ponko::ui::touch::TouchAdjust
+pub ponko::ui::touch::TouchAdjust::place: core::option::Option<ponko::ui::touch::TouchPlace>
+pub ponko::ui::touch::TouchAdjust::size: f32
+impl core::clone::Clone for ponko::ui::touch::TouchAdjust
+pub fn ponko::ui::touch::TouchAdjust::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::ui::touch::TouchAdjust
+pub fn ponko::ui::touch::TouchAdjust::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::ui::touch::TouchAdjust
+pub fn ponko::ui::touch::TouchAdjust::default() -> Self
+impl core::fmt::Debug for ponko::ui::touch::TouchAdjust
+pub fn ponko::ui::touch::TouchAdjust::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::ui::touch::TouchAdjust
+impl core::marker::StructuralPartialEq for ponko::ui::touch::TouchAdjust
+impl serde_core::ser::Serialize for ponko::ui::touch::TouchAdjust
+pub fn ponko::ui::touch::TouchAdjust::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::ui::touch::TouchAdjust where ponko::ui::touch::TouchAdjust: core::default::Default
+pub fn ponko::ui::touch::TouchAdjust::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct ponko::ui::touch::TouchControls
 impl ponko::ui::touch::TouchControls
 pub fn ponko::ui::touch::TouchControls::button(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn ponko::ui::touch::TouchControls::control_style(self, impl core::convert::Into<alloc::string::String>, ponko::ui::touch::TouchStyle) -> Self
 pub fn ponko::ui::touch::TouchControls::corner_button(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn ponko::ui::touch::TouchControls::is_empty(&self) -> bool
 pub fn ponko::ui::touch::TouchControls::len(&self) -> usize
 pub fn ponko::ui::touch::TouchControls::new() -> Self
 pub fn ponko::ui::touch::TouchControls::over_screens(self, bool) -> Self
+pub fn ponko::ui::touch::TouchControls::place(self, impl core::convert::Into<alloc::string::String>, ponko::ui::touch::TouchPlace) -> Self
+pub fn ponko::ui::touch::TouchControls::place_of(&self, &str) -> core::option::Option<ponko::ui::touch::TouchPlace>
 pub fn ponko::ui::touch::TouchControls::right_stick(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn ponko::ui::touch::TouchControls::show(self, ponko::ui::touch::TouchShow) -> Self
 pub fn ponko::ui::touch::TouchControls::stick(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn ponko::ui::touch::TouchControls::style(self, ponko::ui::touch::TouchStyle) -> Self
+pub fn ponko::ui::touch::TouchControls::style_of(&self, &str) -> ponko::ui::touch::TouchStyle
 impl core::clone::Clone for ponko::ui::touch::TouchControls
 pub fn ponko::ui::touch::TouchControls::clone(&self) -> Self
 impl core::cmp::PartialEq for ponko::ui::touch::TouchControls
@@ -15837,6 +15987,68 @@ pub fn ponko::ui::touch::TouchControls::default() -> Self
 impl core::fmt::Debug for ponko::ui::touch::TouchControls
 pub fn ponko::ui::touch::TouchControls::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for ponko::ui::touch::TouchControls
+pub struct ponko::ui::touch::TouchLayout
+pub ponko::ui::touch::TouchLayout::controls: alloc::collections::btree::map::BTreeMap<alloc::string::String, ponko::ui::touch::TouchAdjust>
+pub ponko::ui::touch::TouchLayout::opacity: f32
+pub ponko::ui::touch::TouchLayout::size: f32
+impl ponko::ui::touch::TouchLayout
+pub const ponko::ui::touch::TouchLayout::FILE: &'static str
+pub fn ponko::ui::touch::TouchLayout::adjust(&mut self, &str) -> &mut ponko::ui::touch::TouchAdjust
+pub fn ponko::ui::touch::TouchLayout::adjusted(&self, &str) -> ponko::ui::touch::TouchAdjust
+pub fn ponko::ui::touch::TouchLayout::from_json(&str) -> core::result::Result<Self, ponko::error::Error>
+pub fn ponko::ui::touch::TouchLayout::to_json(&self) -> core::result::Result<alloc::string::String, ponko::error::Error>
+impl core::clone::Clone for ponko::ui::touch::TouchLayout
+pub fn ponko::ui::touch::TouchLayout::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::ui::touch::TouchLayout
+pub fn ponko::ui::touch::TouchLayout::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::ui::touch::TouchLayout
+pub fn ponko::ui::touch::TouchLayout::default() -> Self
+impl core::fmt::Debug for ponko::ui::touch::TouchLayout
+pub fn ponko::ui::touch::TouchLayout::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::ui::touch::TouchLayout
+impl serde_core::ser::Serialize for ponko::ui::touch::TouchLayout
+pub fn ponko::ui::touch::TouchLayout::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::ui::touch::TouchLayout where ponko::ui::touch::TouchLayout: core::default::Default
+pub fn ponko::ui::touch::TouchLayout::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct ponko::ui::touch::TouchPlace
+pub ponko::ui::touch::TouchPlace::anchor: glam::f32::vec2::Vec2
+pub ponko::ui::touch::TouchPlace::offset: glam::f32::vec2::Vec2
+impl ponko::ui::touch::TouchPlace
+pub fn ponko::ui::touch::TouchPlace::centre(&self, glam::f32::vec2::Vec2) -> glam::f32::vec2::Vec2
+pub fn ponko::ui::touch::TouchPlace::nearest_corner(glam::f32::vec2::Vec2, glam::f32::vec2::Vec2) -> Self
+pub fn ponko::ui::touch::TouchPlace::new(glam::f32::vec2::Vec2, glam::f32::vec2::Vec2) -> Self
+impl core::clone::Clone for ponko::ui::touch::TouchPlace
+pub fn ponko::ui::touch::TouchPlace::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::ui::touch::TouchPlace
+pub fn ponko::ui::touch::TouchPlace::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::ui::touch::TouchPlace
+pub fn ponko::ui::touch::TouchPlace::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::ui::touch::TouchPlace
+impl core::marker::StructuralPartialEq for ponko::ui::touch::TouchPlace
+impl serde_core::ser::Serialize for ponko::ui::touch::TouchPlace
+pub fn ponko::ui::touch::TouchPlace::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::ui::touch::TouchPlace
+pub fn ponko::ui::touch::TouchPlace::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct ponko::ui::touch::TouchStyle
+pub ponko::ui::touch::TouchStyle::base: ponko::color::Color
+pub ponko::ui::touch::TouchStyle::button: ponko::color::Color
+pub ponko::ui::touch::TouchStyle::held: ponko::color::Color
+pub ponko::ui::touch::TouchStyle::image: core::option::Option<ponko::texture::Texture>
+pub ponko::ui::touch::TouchStyle::knob: ponko::color::Color
+pub ponko::ui::touch::TouchStyle::knob_image: core::option::Option<ponko::texture::Texture>
+pub ponko::ui::touch::TouchStyle::label: ponko::color::Color
+pub ponko::ui::touch::TouchStyle::label_size: f32
+pub ponko::ui::touch::TouchStyle::size: f32
+impl core::clone::Clone for ponko::ui::touch::TouchStyle
+pub fn ponko::ui::touch::TouchStyle::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::ui::touch::TouchStyle
+pub fn ponko::ui::touch::TouchStyle::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::ui::touch::TouchStyle
+pub fn ponko::ui::touch::TouchStyle::default() -> Self
+impl core::fmt::Debug for ponko::ui::touch::TouchStyle
+pub fn ponko::ui::touch::TouchStyle::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::ui::touch::TouchStyle
+impl core::marker::StructuralPartialEq for ponko::ui::touch::TouchStyle
 #[non_exhaustive] pub enum ponko::ui::ScreenMode
 pub ponko::ui::ScreenMode::Modal
 pub ponko::ui::ScreenMode::Modeless
@@ -16495,11 +16707,14 @@ pub ponko::ui::UiPaint::texture: core::option::Option<ponko::texture::Texture>
 pub ponko::ui::UiPaint::wrap: bool
 impl core::clone::Clone for ponko::ui::UiPaint
 pub fn ponko::ui::UiPaint::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::ui::UiPaint
+pub fn ponko::ui::UiPaint::eq(&self, &Self) -> bool
 impl core::default::Default for ponko::ui::UiPaint
 pub fn ponko::ui::UiPaint::default() -> Self
 impl core::fmt::Debug for ponko::ui::UiPaint
 pub fn ponko::ui::UiPaint::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::ui::UiPaint
+impl core::marker::StructuralPartialEq for ponko::ui::UiPaint
 pub struct ponko::ui::UiScreenTransition
 pub ponko::ui::UiScreenTransition::offset: glam::f32::vec2::Vec2
 pub ponko::ui::UiScreenTransition::opacity: f32

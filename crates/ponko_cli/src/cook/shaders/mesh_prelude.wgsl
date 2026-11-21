@@ -62,6 +62,11 @@ struct Frame {
     // are the camera without it, and last frame's, to tell motion from jitter.
     unjittered_view_proj: mat4x4<f32>,
     previous_view_proj: mat4x4<f32>,
+    // The motion pass: where temporal antialiasing's reprojection of this
+    // view's depth puts a point of this frame last frame, in clip space.
+    // `previous_view_proj` for the world; the view model's held items take
+    // the main camera's reprojection of the depth sliver they are drawn in.
+    reprojection: mat4x4<f32>,
     jitter: vec4<f32>,     // xy: this frame's jitter in pixels (0 without TAA)
     gi: array<vec4<f32>, 3>, // global illumination's probe grid (see gi.wgsl)
     sky_params: array<vec4<f32>, 4>, // a sky shader's values (`Sky::shader_params`)

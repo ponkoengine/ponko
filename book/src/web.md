@@ -129,7 +129,8 @@ playback](video.md#in-a-browser) (the page's own `<video>` element plays
 intros instead). The player's own
 files do work: `ctx.storage` keeps them in the browser's storage (see [Saves
 and settings](storage.md#in-the-browser)). `println!` output goes
-nowhere; panics appear in the browser's developer console.
+nowhere; panics appear in the browser's developer console and on the page
+(see [Failures while playing](#failures-while-playing)).
 
 ## Startup errors
 
@@ -177,8 +178,64 @@ In Rust browser builds with the `window` feature, register
 `Result<(), ponko::error::Error>`. `Game::try_run` can return errors from
 creating the event loop synchronously. Later initialization and setup report
 through the callback. This contract covers recoverable startup errors.
-Panics appear in the developer console, and failures during play use the
-game loop's normal handling.
+Panics, in setup or later, are reported as failures (next section).
+
+## Failures while playing
+
+A web build can't recover from a panic: it aborts, and the game stops. The
+generated page shows why instead of a frozen canvas: “The game stopped: ”
+and the panic's message, in place of the game. The same goes for the
+engine's other fatal failures in the browser: the WebGL2 context lost while
+the game runs (the browser reset its GPU process; the game can't draw on a
+restored context, so the page asks for a reload), and a worker thread of a
+[threads](web-threads.md) build that stopped, with that worker's panic
+message. The panic also stays in the developer console, with its location.
+A game with [crash reports](crash-reports.md#in-the-browser) on also gets
+the long version for its developers, which the page offers as a file.
+
+The game can say it in its own words. Register `ponko::web::on_failure`
+before running the game: it runs once, right before the game stops, with
+the failure's `kind()` (`FailureKind::Panic`, `ContextLost` or
+`ThreadStopped`), `message()` and, for a panic, `location()`. Return the
+text the page should show, or `None` to keep the page's own:
+
+```rust,no_run
+# use ponko::prelude::*;
+#[cfg(target_arch = "wasm32")]
+ponko::web::on_failure(|failure| {
+    Some(format!("Sorry, the game crashed ({failure}). Reload the page to play again."))
+});
+Game::new("My Game", 800, 600).run(|_ctx| {});
+```
+
+For a panic the callback runs inside the panic hook: keep it short, and
+don't panic in it (a second panic aborts before the page hears of the
+first). Several callbacks may be registered; all run, in order, and the
+last text wins.
+
+Custom pages subscribe with the `onPonkoFailure(callback)` export of
+`game.js`, after `init()` as for `onPonkoStartup`. The callback runs at
+most once, with an `Error` whose `kind` is `"Panic"`, `"ContextLost"` or
+`"ThreadStopped"`, `message` the failure's message, `location` a panic's
+source position (else `null`) and `text` the game's own text from
+`on_failure` (else `null`). Only the first failure is reported: the
+JavaScript exception a panic's abort throws afterwards is not. A callback
+registered after the failure runs immediately.
+
+```js
+import init, { onPonkoFailure } from "./game.js";
+
+try {
+  await init();
+} catch (error) {
+  if (!String(error).includes("Using exceptions for control flow")) throw error;
+}
+
+onPonkoFailure((failure) => {
+  const status = document.getElementById("status");
+  status.textContent = failure.text ?? `The game stopped: ${failure.message}`;
+});
+```
 
 ## Testing in a browser
 

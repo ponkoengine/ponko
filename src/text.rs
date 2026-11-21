@@ -226,6 +226,8 @@ pub(crate) struct Text {
     /// replaced or freed, fallback chains, shaping): the UI lays out again
     /// when it moves ([`Text::revision`]).
     revision: u64,
+    /// Counts the times the glyph atlas was emptied ([`Text::atlas_resets`]).
+    atlas_resets: u64,
 }
 
 /// The bytes of a font file as a font; not one this engine reads is
@@ -266,6 +268,7 @@ impl Text {
             #[cfg(feature = "text-shaping")]
             shaper: shape::Shaper::default(),
             revision: 0,
+            atlas_resets: 0,
         }
     }
 
@@ -486,7 +489,14 @@ impl Text {
         self.shaper.glyphs.clear();
         self.cursor = [PAD, PAD];
         self.row = 0;
+        self.atlas_resets += 1;
         true
+    }
+
+    /// How many times [`begin_frame`](Self::begin_frame) emptied the glyph
+    /// atlas: glyphs drawn before it moves may sit elsewhere in it now.
+    pub fn atlas_resets(&self) -> u64 {
+        self.atlas_resets
     }
 
     /// Lays out `text` at `px` physical pixels per line. With `rasterize`,
@@ -932,9 +942,12 @@ mod tests {
         let many: String = ('A'..='Z').chain('a'..='z').collect();
         t.layout(&many, Font::DEFAULT, 400.0, true);
         assert!(t.full);
+        assert_eq!(t.atlas_resets(), 0);
         assert!(t.begin_frame());
         assert!(!t.full && t.glyphs.is_empty());
+        assert_eq!(t.atlas_resets(), 1, "what was drawn before must be drawn again");
         assert!(!t.begin_frame());
+        assert_eq!(t.atlas_resets(), 1);
     }
 
     #[test]

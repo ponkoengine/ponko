@@ -1,10 +1,17 @@
 //! Web builds (wasm32 with the `window` feature): the game draws into a
-//! canvas on the page, panics show in the browser console, and asset files
+//! canvas on the page, panics and other failures show in the browser
+//! console and reach the page ([`on_failure`], `onPonkoFailure`), and asset files
 //! are fetched over HTTP before setup runs: the page's asset pack (named by
 //! the canvas's `data-pack`, fetched with range requests), or the loose
 //! files listed in `assets/index.json`.
 
+mod failure;
 pub(crate) mod ime;
+
+#[cfg(target_feature = "atomics")]
+pub(crate) use failure::thread_stopped;
+pub use failure::{Failure, FailureKind, on_failure};
+pub(crate) use failure::{context_lost as context_lost_while_playing, report as report_failure};
 
 use std::cell::RefCell;
 
@@ -34,7 +41,8 @@ thread_local! {
 /// The callback runs once, after window and graphics initialization and setup,
 /// or immediately if startup already finished. A callback registered in setup
 /// runs after setup returns. This hook covers recoverable startup failures.
-/// Panics and failures while playing are reported separately.
+/// Panics and failures while playing are reported separately, through
+/// [`on_failure`] (and `onPonkoFailure` in JavaScript).
 pub fn on_startup(callback: impl FnOnce(Result<(), Error>) + 'static) {
     let mut callback = Some(Box::new(callback) as StartupCallback);
     let result = STARTUP.with_borrow_mut(|startup| {
@@ -80,20 +88,22 @@ pub(crate) fn finish_startup(result: Result<(), Error>) {
     });
     if let Err(error) = &result {
         log_error(&error.to_string());
+        crate::crash::report_error(error);
     }
     for callback in callbacks {
         callback(result.clone());
     }
 }
 
-/// Watches the actual game canvas during startup, including while the
-/// renderer is pending. After setup, surface loss belongs to the game loop.
-pub(crate) struct StartupContextListener {
+/// Watches the actual game canvas for a lost WebGL2 context: during
+/// startup, including while the renderer is pending, and then while the
+/// game runs. Dropping it stops listening.
+pub(crate) struct ContextLostListener {
     canvas: web_sys::HtmlCanvasElement,
     lost: Closure<dyn FnMut(web_sys::Event)>,
 }
 
-impl StartupContextListener {
+impl ContextLostListener {
     pub(crate) fn new(window: &Window, on_lost: impl Fn() + 'static) -> Option<Self> {
         use winit::platform::web::WindowExtWebSys;
         let canvas = window.canvas()?;
@@ -105,7 +115,7 @@ impl StartupContextListener {
     }
 }
 
-impl Drop for StartupContextListener {
+impl Drop for ContextLostListener {
     fn drop(&mut self) {
         let _ = self
             .canvas
@@ -124,7 +134,7 @@ pub(crate) fn context_lost() -> Error {
 /// and the parallel scheduler's batches; jobs have their own, half as
 /// many): 0 for a build without threads (the default web build), on a
 /// page that isn't cross-origin isolated, and before startup is done. See
-/// the guide's "Threads on the web" and [`Game::web_threads`](crate::Game::web_threads).
+/// the guide's "Threads on the web" and [`Game::web_threads`](crate::game::Game::web_threads).
 pub fn threads() -> usize {
     #[cfg(target_feature = "atomics")]
     return crate::web_threads::frame_threads();
@@ -147,11 +157,10 @@ pub(crate) fn query_param(name: &str) -> Option<String> {
     crate::query::value(&search, name)
 }
 
-/// Sends panic messages to the browser console (they're lost otherwise).
+/// Sends panic messages to the browser console (they're lost otherwise),
+/// and to the game's and the page's failure callbacks.
 pub(crate) fn show_panics_in_console() {
-    std::panic::set_hook(Box::new(|info| {
-        web_sys::console::error_1(&JsValue::from_str(&info.to_string()));
-    }));
+    failure::install_panic_hook();
 }
 
 /// Draw into `<canvas id="ponko">`, else a new canvas added to the page.

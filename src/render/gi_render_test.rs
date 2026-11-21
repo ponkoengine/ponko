@@ -567,6 +567,73 @@ fn a_light_outside_a_closed_box_adds_no_bounce_inside() {
     );
 }
 
+/// How bright the floor inside a white box under the sun and a grey sky is
+/// (the sum of red, green and blue, the brightest of a few points), after
+/// `frames` frames with global illumination: the box closed, or open to the
+/// east (`open`). The probe grid reaches past the roof, so the camera's
+/// view takes all of its light from the probes.
+fn floor_in_the_sky(open: bool, frames: usize) -> Option<i32> {
+    let mut rig = Rig::new(true)?;
+    let white = rig.mesh(&MeshData::cube(1.0), MaterialDesc::color(Color::WHITE));
+    let (inner, outer) = (3.5, 3.9);
+    let mut walls = vec![
+        (white, vec3(-outer, -0.9, -outer), vec3(outer, -0.5, outer)), // floor
+        (white, vec3(-outer, 3.5, -outer), vec3(outer, 3.9, outer)),   // roof
+        (white, vec3(-outer, -0.5, -outer), vec3(-inner, 3.5, outer)), // west
+        (white, vec3(-inner, -0.5, -outer), vec3(inner, 3.5, -inner)), // north
+        (white, vec3(-inner, -0.5, inner), vec3(inner, 3.5, outer)),   // south
+    ];
+    if !open {
+        walls.push((white, vec3(inner, -0.5, -outer), vec3(outer, 3.5, outer))); // east
+    }
+    rig.blocks(&walls, Build::Models);
+    let lighting = &mut rig.ctx.scene3d.lighting;
+    lighting.sun_direction = vec3(-1.0, -1.0, 0.3);
+    lighting.sun_intensity = 4.0;
+    lighting.ambient_intensity = 0.3;
+    lighting.shadow_distance = 30.0;
+    rig.ctx.scene3d.sky.sky_color = Color::rgb(0.5, 0.5, 0.5);
+    rig.ctx.scene3d.sky.ground_color = Color::rgb(0.5, 0.5, 0.5);
+    lighting.gi = GlobalIllumination {
+        enabled: true,
+        extent: vec3(12.0, 8.0, 12.0),
+        spacing: 1.0,
+        probes_per_frame: crate::render::GlobalIllumination::MAX_PROBES_PER_FRAME,
+        intensity: 1.0,
+    };
+    rig.ctx.scene3d.camera.position = vec3(-2.5, 2.5, 0.3);
+    rig.ctx.scene3d.camera.look_at(vec3(0.0, -0.5, 0.0));
+    let pixels = rig.draw(frames);
+    let points = [vec3(0.0, -0.5, 0.0), vec3(-1.0, -0.5, 1.0), vec3(1.0, -0.5, -1.0)];
+    Some(
+        points
+            .iter()
+            .map(|&p| rig.at(&pixels, p).iter().sum::<i32>())
+            .max()
+            .unwrap(),
+    )
+}
+
+#[test]
+fn a_closed_box_under_the_sky_keeps_no_sky_light_inside() {
+    let Some(open) = floor_in_the_sky(true, 80) else {
+        return;
+    };
+    let Some(closed) = floor_in_the_sky(false, 80) else {
+        return;
+    };
+    eprintln!("floor inside the box under the sky: {open} open, {closed} closed");
+    // Positive control: open to the east, the sun's and sky's light comes in.
+    assert!(open > 150, "light through the open side: {open}");
+    // Closed, nothing gets in. Before, the probes' views took the sky's
+    // ambient light while their probes hadn't looked yet, and the closed
+    // box kept it: the floor was nearly as bright as with the box open.
+    assert!(
+        closed * 10 < open,
+        "no sky light in the closed box: {closed} vs {open} open"
+    );
+}
+
 #[test]
 fn instance_batches_bounce_and_block_light_like_models() {
     // Both paths: culled on the CPU, and by the compute pass (where the

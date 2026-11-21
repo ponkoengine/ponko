@@ -1504,6 +1504,8 @@ typedef struct PonkoAssetGroupProgress {
   bool bytes_known;
   uint64_t bytes_loaded;
   float fraction;
+  float upload_ms;
+  uint64_t bytes_uploaded;
 } PonkoAssetGroupProgress;
 
 typedef uint32_t (*PonkoAssetDecodeFn)(void *user, const uint8_t *data, size_t len);
@@ -1515,6 +1517,10 @@ typedef struct PonkoAssetGroupStats {
   float max_step_ms;
   uint64_t over_budget;
   uint64_t frame_bytes;
+  float upload_ms;
+  float max_upload_ms;
+  double total_upload_ms;
+  uint64_t total_upload_bytes;
 } PonkoAssetGroupStats;
 
 typedef void (*PonkoAssetGroupBuildFn)(struct PonkoCtx *ctx,
@@ -3827,6 +3833,11 @@ enum PonkoStatus ponko_ai_key_name(uint64_t key, char *buffer, size_t capacity, 
 
 struct PonkoBehaviorTree *ponko_behavior_tree_new(const char *json);
 
+struct PonkoBehaviorTree *ponko_behavior_tree_new_linked(const char *json,
+                                                         const char *const *names,
+                                                         const struct PonkoBehaviorTree *const *subtrees,
+                                                         size_t count);
+
 void ponko_behavior_tree_free(struct PonkoBehaviorTree *tree);
 
 enum PonkoStatus ponko_behavior_tree_len(const struct PonkoBehaviorTree *tree, size_t *out_len);
@@ -3860,6 +3871,17 @@ enum PonkoStatus ponko_brain_finish(struct PonkoBrain *brain, enum PonkoAiStatus
 enum PonkoStatus ponko_brain_status(const struct PonkoBrain *brain, enum PonkoAiStatus *out_status);
 
 enum PonkoStatus ponko_brain_wake(struct PonkoBrain *brain);
+
+enum PonkoStatus ponko_brain_signal(struct PonkoBrain *brain, uint64_t key);
+
+enum PonkoStatus ponko_brain_set_seed(struct PonkoBrain *brain, uint64_t seed);
+
+enum PonkoStatus ponko_brain_save_json(const struct PonkoBrain *brain,
+                                       char *buffer,
+                                       size_t capacity,
+                                       size_t *out_len);
+
+struct PonkoBrain *ponko_brain_load_json(const char *json);
 
 enum PonkoStatus ponko_brain_set_num(struct PonkoBrain *brain, uint64_t key, float value);
 
@@ -4079,6 +4101,8 @@ enum PonkoStatus ponko_ctx_asset_group_progress(struct PonkoCtx *ctx,
 enum PonkoStatus ponko_ctx_asset_group_error(struct PonkoCtx *ctx, uint32_t id);
 
 enum PonkoStatus ponko_ctx_cancel_asset_group(struct PonkoCtx *ctx, uint32_t id);
+
+enum PonkoStatus ponko_ctx_restart_asset_group(struct PonkoCtx *ctx, uint32_t id);
 
 enum PonkoStatus ponko_ctx_take_asset_group_bytes(struct PonkoCtx *ctx,
                                                   uint32_t id,
@@ -8052,6 +8076,10 @@ enum PonkoStatus ponko_ctx_ui_pop_screen(struct PonkoCtx *ctx, uint64_t target, 
 enum PonkoStatus ponko_ctx_ui_top_screen(struct PonkoCtx *ctx, uint64_t target, uint64_t *out_root);
 
 enum PonkoStatus ponko_ctx_ui_focus(struct PonkoCtx *ctx, uint64_t target, uint64_t *out_id);
+
+enum PonkoStatus ponko_ctx_ui_layout_passes(struct PonkoCtx *ctx,
+                                            uint64_t target,
+                                            uint64_t *out_passes);
 
 enum PonkoStatus ponko_ctx_ui_set_scale(struct PonkoCtx *ctx, uint64_t target, float scale);
 

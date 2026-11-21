@@ -305,6 +305,10 @@ jobs:
           - name: editor feature
             scope: -p ponko
             args: --features editor
+          # Loose `.aseprite` files read directly in development.
+          - name: aseprite-source feature
+            scope: -p ponko
+            args: --features aseprite-source
           # WebM playback (AV1 pictures, Vorbis sound), desktop only.
           - name: video feature
             scope: -p ponko
@@ -663,6 +667,10 @@ jobs:
       - name: Tests, editor
         if: ${{ !cancelled() }}
         run: cargo test -p ponko --no-fail-fast --features editor --lib editor
+      # `.aseprite` source files loaded without an export beside them.
+      - name: Tests, aseprite-source
+        if: ${{ !cancelled() }}
+        run: cargo test -p ponko --no-fail-fast --features aseprite-source --test aseprite
       # WebM files with AV1 pictures and Vorbis sound (desktop only: on the
       # web loading a video reports `Unsupported`).
       - name: Tests, video
@@ -1226,6 +1234,13 @@ jobs:
         timeout-minutes: 8
         if: ${{ !cancelled() }}
         run: node web/smoke/multiplayer.mjs --browser chromium
+      # Failures while playing (web/smoke/runtime-failures.mjs): a panic after
+      # startup, the game's own failure text and a lost WebGL2 context must
+      # each reach the page. Uses the web_smoke build made above.
+      - name: Chromium, failures after startup reach the page
+        timeout-minutes: 5
+        if: ${{ !cancelled() }}
+        run: node web/smoke/runtime-failures.mjs
       # Threads on the web (web/smoke/threads.mjs, the guide's "Threads on the
       # web"): examples/web_threads built with `web/build.sh --threads`
       # (nightly Rust rebuilding std with atomics, hence rust-src). Served with

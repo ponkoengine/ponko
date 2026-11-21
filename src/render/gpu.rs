@@ -445,6 +445,18 @@ impl Renderer {
         self.screenshot.take()
     }
 
+    /// Tests: texture `id`'s pixels as the GPU holds them (a render
+    /// target's: linear RGBA16F), read back.
+    #[cfg(all(test, feature = "3d"))]
+    pub(super) fn read_texture(&self, id: u32) -> Option<Vec<u8>> {
+        let texture = &self.textures.get(id)?.texture;
+        Some(super::render_test_support::read_texture(
+            &self.device,
+            &self.queue,
+            texture,
+        ))
+    }
+
     /// Opens the GPU and sets up drawing to `window`, waiting for the GPU
     /// (desktop; the web build calls [`Self::new_async`]).
     #[cfg(not(target_arch = "wasm32"))]
