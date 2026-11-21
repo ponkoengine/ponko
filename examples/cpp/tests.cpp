@@ -223,6 +223,71 @@ static void scenes_and_prefabs() {
     CHECK(offline.size() == 2 && offline.get<game::Health>(first).value == 9);
 }
 
+// A mod pack as `ponko pack` writes it (version 1, files stored as they are).
+static std::vector<std::uint8_t> mod_pack(std::vector<std::pair<std::string, std::string>> files) {
+    std::sort(files.begin(), files.end());
+    auto crc32 = [](const std::string& s) {
+        std::uint32_t c = 0xffffffffu;
+        for (unsigned char b : s) { c ^= b; for (int k = 0; k < 8; ++k) c = (c >> 1) ^ (0xedb88320u & (0u - (c & 1u))); }
+        return ~c;
+    };
+    std::vector<std::uint8_t> index, data, out;
+    auto put = [](std::vector<std::uint8_t>& v, std::uint64_t x, int bytes) { for (int i = 0; i < bytes; ++i) v.push_back(std::uint8_t(x >> (8 * i))); };
+    for (const auto& [name, bytes] : files) {
+        put(index, name.size(), 2);
+        index.insert(index.end(), name.begin(), name.end());
+        index.push_back(0);
+        put(index, data.size(), 8);
+        put(index, bytes.size(), 8);
+        put(index, bytes.size(), 8);
+        put(index, crc32(bytes), 4);
+        data.insert(data.end(), bytes.begin(), bytes.end());
+    }
+    for (char c : std::string("PONKOPAK")) out.push_back(std::uint8_t(c));
+    put(out, 1, 4);
+    put(out, files.size(), 4);
+    put(out, index.size(), 8);
+    put(out, data.size(), 8);
+    out.insert(out.end(), index.begin(), index.end());
+    out.insert(out.end(), data.begin(), data.end());
+    return out;
+}
+
+static void mods() {
+    const auto dir = std::filesystem::temp_directory_path();
+    auto write = [&](const char* name, const std::vector<std::uint8_t>& bytes) {
+        std::ofstream(dir / name, std::ios::binary).write(reinterpret_cast<const char*>(bytes.data()), std::streamsize(bytes.size()));
+        return (dir / name).string();
+    };
+    auto manifest = [](const char* id, const char* requires) {
+        return std::string(R"({"format":"ponko-mod","version":1,"id":")") + id + R"(","requires":[)" + requires + "]}";
+    };
+    const std::string health = R"({"format":"ponko-prefab","version":1,"components":{"game::Health":{"value":)";
+    const auto base = write("ponko-cpp-mod-base.pack", mod_pack({{"mod.json", manifest("base", "")}, {"prefabs/bat.json", health + "3}}}"}}));
+    const auto strong = write("ponko-cpp-mod-strong.pack", mod_pack({{"mod.json", manifest("strong", R"("base")")}, {"prefabs/bat.json", health + "30}}}"}, {"prefabs/rat.json", health + "5}}}"}}));
+    const auto ghost = write("ponko-cpp-mod-ghost.pack", mod_pack({{"mod.json", manifest("ghost", "")}, {"prefabs/ghost.json", R"({"format":"ponko-prefab","version":1,"components":{"Ghost":{}}})"}}));
+    ponko::game("mods", 1, 1).run_headless(0, [&](ponko::ctx& ctx) {
+        ctx.world().reflect<game::Health>({ponko::field("value", &game::Health::value)});
+        CHECK(ctx.mod_ids().empty() && ctx.mods_fingerprint() == 0);
+        // A component the game doesn't reflect: the whole set is refused, naming the mod and file.
+        bool refused = false;
+        try { ctx.mount_mods({base, ghost}); } catch (const ponko::error& e) {
+            refused = e.kind() == PONKO_ERROR_NOT_FOUND && e.path() == "prefabs/ghost.json" && std::string(e.what()).find("mod \"ghost\"") != std::string::npos;
+        }
+        CHECK(refused && ctx.mod_ids().empty());
+        // "strong" requires "base", so "base" loads first; "strong"'s bat wins.
+        ctx.mount_mods({strong, base});
+        CHECK((ctx.mod_ids() == std::vector<std::string>{"base", "strong"}));
+        CHECK(ctx.mod_provider("prefabs/bat.json") == std::optional<std::string>("strong"));
+        CHECK(!ctx.mod_provider("crab.png"));
+        CHECK((ctx.mod_files_under("prefabs/") == std::vector<std::string>{"prefabs/bat.json", "prefabs/rat.json"}));
+        CHECK(ctx.mods_fingerprint() != 0);
+        auto bat = ctx.spawn_prefab("prefabs/bat.json", {0, 0});
+        CHECK(ctx.world().get<game::Health>(bat).value == 30);
+        throws([&] { ctx.mount_mods({base}); });   // once per game
+    });
+}
+
 static void three_d() {
     auto probes = ponko::game("probes", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
         auto e = ctx.world().spawn(ponko::transform3d_at({0, 0, 0}), ponko::reflection_probe3d_default());
@@ -5339,6 +5404,7 @@ int main() {
     data_files();
     described_schemas_reach_capabilities();
     scenes_and_prefabs();
+    mods();
     world_text();
     three_d();
     skeletons();

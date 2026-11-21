@@ -66,6 +66,7 @@
 - [Loading screens: asset groups with progress](loading.md)
 - [Data files: tune without restarting](data-files.md)
 - [Asset sources: assets that don't live in `assets/`](asset-sources.md)
+  - [Mods: what players can add and change](mods.md)
 - [Scenes and prefabs](scenes.md)
 - [From Blender to the game](blender.md)
 - [Saves and settings](storage.md)

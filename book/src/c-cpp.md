@@ -476,6 +476,7 @@ binding arrives:
 |---|---|---|
 | `Assets::scene_asset_field` | [Asset sources](asset-sources.md) | C components have no text fields to name an asset in; load what a scene needs before `load_scene` |
 | `PackSource` | [Asset sources](asset-sources.md#packs) | C and C++ games read the default `assets.pack` like Rust games; a pack of their own can be read through `ponko_ctx_add_asset_source` |
+| `ModPack::from_files`, `ModPack::from_pack_bytes`, `ModSet::problems` | [Mods](mods.md#in-c-and-c) | Mod packs mount by path (`ponko_ctx_mount_mods`, `ctx.mount_mods`; `ponko pack` makes one from loose files), and a refused set reports its first problem |
 | `Query::with_lookup`, `World::get_many_mut` | [Entities, components, queries](ecs.md#borrowing-several-things-at-once) | Generic borrows; component pointers from `get` don't borrow |
 | `World::query_ref` | [Entities, components, queries](ecs.md#read-only-queries-on-a-shared-world) | C and C++ queries read through component pointers and need no exclusive borrow of the world |
 | `SystemView` | [Declared system access](system-access.md) | C and C++ systems take the whole `ctx`, so they run alone; declare their access by name |
