@@ -704,6 +704,21 @@ impl MatchCache {
         Some(&entry.indices)
     }
 
+    /// Forgets every indexed signature: the world's archetypes were laid
+    /// out again (a snapshot restore), and slots may have gone. Signatures
+    /// are indexed again as queries ask for them; the policy stays.
+    pub(crate) fn forget_layout(&mut self) {
+        self.map.clear();
+        self.indices = 0;
+        self.misses = 0;
+        *self.full.get_mut() = false;
+        self.wanted
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        *self.pending.get_mut() = false;
+    }
+
     /// Slot `slot` of `all` holds a new archetype now, in place of a
     /// reclaimed one: every index list that has seen the slot gets it if
     /// the new archetype matches, and loses it if not, keeping its order.

@@ -209,6 +209,36 @@
     "reason": "The message names the misuse (bytes of a component with a destructor) and the fix (World::require with a constructor).",
     "site": "crates/ponko_ecs/src/required.rs:176"
   },
+  "crates/ponko_ecs/src/snapshot.rs:5705539cd4226837": {
+    "classification": "invariant",
+    "construction": ".expect(\"invariant: an alignment is never zero\")",
+    "reason": "A Layout's alignment is never zero, so the dangling pointer is non-null.",
+    "site": "crates/ponko_ecs/src/snapshot.rs:203"
+  },
+  "crates/ponko_ecs/src/snapshot.rs:655867d7a002da5c": {
+    "classification": "invariant",
+    "construction": "debug_assert_eq!(c.size(), saved.item.size())",
+    "reason": "Debug check: a snapshot restores only its own world, with the saved layout, so columns match.",
+    "site": "crates/ponko_ecs/src/snapshot.rs:666"
+  },
+  "crates/ponko_ecs/src/snapshot.rs:7be31b74d42d823a": {
+    "classification": "invariant",
+    "construction": ".expect(\"too much component data for one snapshot column\")",
+    "reason": "The world's own column already holds this many values of this layout, so the array layout fits.",
+    "site": "crates/ponko_ecs/src/snapshot.rs:164"
+  },
+  "crates/ponko_ecs/src/snapshot.rs:defcba9a1922749f": {
+    "classification": "invariant",
+    "construction": ".expect(\"invariant: an alignment is never zero\")",
+    "reason": "A Layout's alignment is never zero, so the dangling pointer is non-null.",
+    "site": "crates/ponko_ecs/src/snapshot.rs:154"
+  },
+  "crates/ponko_ecs/src/snapshot.rs:f8b8fe8c5d67f9c8": {
+    "classification": "invariant",
+    "construction": "debug_assert_eq!(self.len, 0)",
+    "reason": "Debug check: shape_like is only called right after clear(), which sets len to 0.",
+    "site": "crates/ponko_ecs/src/snapshot.rs:259"
+  },
   "crates/ponko_ecs/src/storage.rs:020d1a4ff6d27862": {
     "classification": "invariant",
     "construction": ".expect(\"just pushed\")",
@@ -1720,12 +1750,6 @@
     "construction": "debug_assert!(vertices.len().is_multiple_of(3), \"a triangle list\")",
     "reason": "Internal invariant: /// [`SpriteInstance::vertex`]) are one triangle, drawn with `texture`     /// and `style` at `z`, after what was pushed before at the same `z`.     pub fn push_mesh(&mut self, texture: u32, style: u32, z: f32, vertices: &[SpriteInstance]) {         debug_assert!(vertices.len().is_multiple_of(3), \"a triangle list\");",
     "site": "src/render/batch.rs:268"
-  },
-  "src/render/batch.rs:425b76146f336cfa": {
-    "classification": "invariant",
-    "construction": "debug_assert_eq!(sprites.len(), tinted.len(), \"one mark per sprite\")",
-    "reason": "The UI passes one tint mark per saved sprite; both lists are built together in retained_draw.",
-    "site": "src/render/batch.rs:445"
   },
   "src/render/batch.rs:8a7c66e1c35edbe8": {
     "classification": "invariant",

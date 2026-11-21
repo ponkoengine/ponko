@@ -160,6 +160,7 @@ mod par;
 mod query;
 mod required;
 mod slots;
+mod snapshot;
 mod storage;
 mod view;
 mod world;
@@ -184,6 +185,12 @@ pub use query::{
     compile_tree,
 };
 pub use required::Requires;
+pub use snapshot::{SnapshotError, WorldSnapshot};
+/// What `#[derive(Component)]` uses to notice a `Clone` type. Not part of the API.
+#[doc(hidden)]
+pub mod __snapshot {
+    pub use crate::snapshot::{CloneFn, NotClone, Probe, ViaClone};
+}
 pub use storage::{Archetype, ComponentId, ComponentInfo, DropFn};
 pub use view::{QueryRef, ViewGroup, ViewQuery, ViewState, WorldView};
 pub use world::{Chunk, World};
