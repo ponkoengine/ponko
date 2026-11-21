@@ -158,6 +158,9 @@ where the game wants it instead of where the engine lays it out: a
 right) and an offset from it in UI units, so a control anchored to a
 corner keeps its distance from it when the phone turns.
 
+<div class="lang-pair">
+<div>
+
 ```rust
 # use ponko::prelude::*;
 # use ponko::ui::touch::{TouchControls, TouchPlace, TouchStyle};
@@ -176,6 +179,16 @@ ctx.input.set_touch_controls(
 );
 # }
 ```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:touch_styles}}
+```
+
+</div>
+</div>
 
 A control placed or sized so that it would stick out of the view is moved
 in.
@@ -202,6 +215,9 @@ the game keeps their arrangement with its settings.
   at setup (no file: nothing changes). `TouchLayout::to_json` and
   `from_json` are there for a settings file of the game's own.
 
+<div class="lang-pair">
+<div>
+
 ```rust
 # use ponko::prelude::*;
 # fn setup(ctx: &mut Ctx) {
@@ -216,6 +232,16 @@ if let Err(e) = ctx.input.save_touch_layout(&mut ctx.storage) {
 }
 # }
 ```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:touch_layout}}
+```
+
+</div>
+</div>
 
 The game's own placement stays the default under the player's: a control
 the player never moved follows the game, and a new set of controls keeps
@@ -274,5 +300,17 @@ and `ctx.feed_touch`. The scenario builders are
 {{#include ../../examples/cpp/guide.cpp:touch_scenario}}
 ```
 
-Styles, placement, the player's layout and its edit mode, and trackpad
-events are Rust-only so far.
+Styles and placement are the versioned `PonkoTouchControlsDesc` of
+`ponko_ctx_set_touch_controls_ex`: the controls, a `PonkoTouchStyle` for all
+of them (`ponko_touch_style_default` is the engine's look), and lists of
+`PonkoTouchControlStyle` and `PonkoTouchControlPlace` naming one control's
+action; C++'s `touch_controls::style`, `control_style` and `place` fill it.
+The player's layout is `ponko_ctx_edit_touch_controls`,
+`ponko_ctx_touch_layout` and `_set_touch_layout` (size and opacity),
+`ponko_ctx_touch_layout_control` and `_set_touch_layout_control` (one
+control's place and size as a `PonkoTouchAdjust`; `NULL` forgets it),
+`ponko_ctx_reset_touch_layout`, `ponko_ctx_touch_layout_json` and
+`_set_touch_layout_json`, and `ponko_ctx_save_touch_layout` and
+`_restore_touch_layout`, with the same names in C++. A trackpad's gestures
+are fed with `ponko_ctx_feed_trackpad` and `ponko_input_scenario_trackpad`
+(C++ `ctx.feed_trackpad` and the scenario's `trackpad`).

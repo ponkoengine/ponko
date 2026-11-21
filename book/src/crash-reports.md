@@ -260,12 +260,72 @@ see [Web builds](web.md)), for the same panic or failure: the page shows
 the short message for the player, and the report is the longer version, for
 the developer.
 
+## C and C++
+
+A C or C++ game gets the same default (reports in a release build of the
+engine's library, for a game with a window and an app id). The settings, the
+game's version and the hook are one versioned descriptor,
+`PonkoCrashReports`, given to `ponko_game_crash_reports` before the run; C++
+wraps it as `game::crash_reports`. `mode` is `PONKO_CRASH_REPORTS_DEFAULT`
+(the build's default), `_ON` or `_OFF`.
+
+<div class="lang-pair">
+<div>
+
+```rust,no_run
+# use ponko::prelude::*;
+use ponko::crash::CrashReports;
+# fn main() {
+Game::new("Space Crab", 1280, 720)
+    .app_id("space-crab")
+    .crash_reports(CrashReports::default().game_version("1.4.2").on_crash(|report| {
+        if let Some(path) = report.path() {
+            eprintln!("Space Crab stopped. A report is in {}", path.display());
+        }
+    }))
+    .run(|ctx| {
+        for name in ponko::crash::saved_reports(&ctx.storage) {
+            let text = ctx.storage.read(&name);
+            // Ask the player, then send it with an HTTP client of your choice.
+#           let _ = text;
+            let _ = ctx.storage.delete(&name);
+        }
+    });
+# }
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:crash_reports}}
+```
+
+</div>
+</div>
+
+The hook gets a `PonkoCrashReport`: the fields of the table above as
+strings (`NULL` where a report has none: a `location` for an error, a `path`
+without storage), `kind` (`PONKO_CRASH_PANIC`, `_ERROR` or `_NATIVE`),
+`uptime_secs`, and `text`, the whole file. The report and its strings live
+only during the call: copy what you keep. The hook may run on any thread,
+inside the panic hook, so the same rules hold as for Rust's: quick, and it
+must not unwind (C++'s wrapper catches what the function throws). `user` is
+the game's own and is passed back to each call; it must stay valid for the
+run.
+
+`ponko_ctx_saved_crash_reports` lists the saved reports, newest first, one
+name a line, to read with `ponko_ctx_storage_read`; C++'s
+`ctx.saved_crash_reports()` splits them. The game's own fatal error is
+`ponko_crash_report("why")` (C++ `ponko::report_crash`), which says
+`PONKO_NOT_FOUND` (C++: returns `false`) while reports are off:
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:crash_report_own}}
+```
+
 ## Limits
 
-- Rust only for now: the C and C++ API has no crash report calls. A C or
-  C++ game gets the default (reports in a release build of the engine's
-  library, for a game with a window and an app id), without a hook or a
-  game version.
 - A crash that is not a panic writes its report at the next start, without
   a backtrace (see [Crashes that are not panics](#crashes-that-are-not-panics));
   a process the system kills (`SIGKILL`, running out of memory) writes none.

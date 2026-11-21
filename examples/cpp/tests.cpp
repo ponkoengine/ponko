@@ -4714,6 +4714,178 @@ static void controllers() {
     });
 }
 
+// Native parity, round 5 (gl#157) through the wrapper: crash reports, touch looks and the player's
+// layout, trackpad gestures, camera targets with kept rigs, the window restored before setup,
+// spectrum seas and sliced loaders.
+namespace round5 {
+// A sliced loader's state: counts the '#' of a file, 64 bytes a step.
+struct walls {
+    std::vector<std::uint8_t> bytes;
+    std::size_t at = 0, count = 0;
+    bool step() {
+        const std::size_t end = std::min(at + 64, bytes.size());
+        for (; at < end; ++at) count += bytes[at] == '#';
+        return at == bytes.size();
+    }
+};
+}
+
+static void native_parity_round5() {
+    // Crash reports: the version and the hook, an error report, the saved list.
+    std::vector<std::string> seen;
+    ponko::game("c++ crash", 1, 1)
+        .data_dir("ponko-cpp-batch5")
+        .crash_reports(ponko::crash_mode::on, "2.0.1", [&](const ponko::crash_report& r) {
+            seen.push_back(std::string(r.message) + "|" + r.game_version + "|" + std::to_string(r.kind));
+        })
+        .run_headless(0, [&](ponko::ctx& ctx) {
+            CHECK(ponko::report_crash("the level file is damaged"));
+            CHECK(seen.size() == 1 && seen[0] == "the level file is damaged|2.0.1|1");
+            const auto names = ctx.saved_crash_reports();
+            CHECK(!names.empty());
+            const auto text = ctx.storage_read_text(names[0].c_str());
+            CHECK(text && text->find("game version: 2.0.1") != std::string::npos);
+            ctx.storage_delete(names[0].c_str());
+        });
+    ponko::game("c++ crash off", 1, 1).crash_reports(ponko::crash_mode::off).run_headless(0, [](ponko::ctx&) {
+        CHECK(!ponko::report_crash("not written"));
+    });
+    CHECK(seen.size() == 1);
+
+    // Touch: a look for every control and one for jump, jump placed; edit mode; the layout.
+    ponko::game("c++ touch layout", 960, 540).data_dir("ponko-cpp-batch5").run_headless(0, [](ponko::ctx& ctx) {
+        ponko::touch_style look;
+        CHECK(look.size == 1);
+        look.size = 1.2f;
+        ponko::touch_style red;
+        red.button = {1, 0.2f, 0.2f, 0.4f};
+        ctx.set_touch_controls(ponko::touch_controls()
+                                   .show(ponko::touch_show::always)
+                                   .stick("move")
+                                   .button("jump", "A")
+                                   .style(look)
+                                   .control_style("jump", red)
+                                   .place("jump", ponko::touch_place({0.75f, 1}, {0, -60})));
+        const auto jump = ctx.touch_control_center("jump");
+        CHECK(jump && jump->x == 720 && jump->y == 480);
+        ponko::touch_style bad;
+        bad.size = 0;
+        throws_invalid([&] { ctx.set_touch_controls(ponko::touch_controls().button("jump", "A").style(bad)); }, "size");
+        ctx.set_touch_controls(ponko::touch_controls()
+                                   .show(ponko::touch_show::always)
+                                   .stick("move")
+                                   .button("jump", "A")
+                                   .place("jump", ponko::touch_place({0.75f, 1}, {0, -60})));
+
+        ctx.edit_touch_controls(true);
+        CHECK(ctx.editing_touch_controls());
+        const ponko::vec2 to{jump->x - 300, jump->y};
+        ctx.feed_touch(1, ponko::touch_phase::started, *jump);
+        ctx.feed_touch(1, ponko::touch_phase::moved, to);
+        ctx.feed_touch(1, ponko::touch_phase::ended, to);
+        ctx.edit_touch_controls(false);
+        const auto moved = ctx.touch_control_center("jump");
+        CHECK(moved && moved->x == to.x && moved->y == to.y);
+        CHECK(ctx.touch_layout_control("jump").placed);
+
+        ctx.set_touch_layout(1.5f, 0.5f);
+        CHECK(ctx.touch_layout_size() == 1.5f && ctx.touch_layout_opacity() == 0.5f);
+        const std::string json = ctx.touch_layout_json();
+        CHECK(json.find("jump") != std::string::npos);
+        ctx.reset_touch_layout();
+        CHECK(!ctx.touch_layout_control("jump").placed && ctx.touch_layout_size() == 1);
+        ctx.set_touch_layout_json(json.c_str());
+        CHECK(ctx.touch_layout_control("jump").placed);
+        ctx.forget_touch_layout_control("jump");
+        ponko::touch_adjust bigger{};
+        bigger.size = 1.25f;
+        ctx.set_touch_layout_control("move", bigger);
+        CHECK(ctx.touch_layout_control("move").size == 1.25f);
+        ctx.save_touch_layout();
+        ctx.restore_touch_layout();
+        CHECK(ctx.touch_layout_control("move").size == 1.25f);
+    });
+    // A trackpad pinch is the same gesture as two fingers, from no touch device.
+    ponko::game("c++ trackpad", 960, 540).run_headless(0, [](ponko::ctx& ctx) {
+        ctx.feed_trackpad(ponko::gesture::pinch, ponko::touch_phase::started, 0.25f);
+        CHECK(ctx.pinch_scale() == 1.25f && !ctx.touch_device());
+    });
+    ponko::input_scenario scenario;
+    scenario.trackpad(2, ponko::gesture::rotate, ponko::touch_phase::moved, 0.5f);
+    CHECK(scenario.to_json().find("trackpad") != std::string::npos);
+
+    // A kept rig follows the marked entity with no camera code.
+    ponko::entity hero = 0;
+    std::optional<ponko::follow_camera2d> last;
+    std::optional<ponko::entity> target;
+    ponko::game("c++ camera target", 640, 360)
+        .headless_frames(true)
+        .late_system([&](ponko::ctx& ctx) {
+            last = ponko::follow_camera2d::kept(ctx);
+            target = ctx.camera_target();
+        })
+        .run_headless(3, [&](ponko::ctx& ctx) {
+            ponko::follow_camera2d().keep(ctx);
+            ponko::transform2d at{};
+            at.position = {500, 200};
+            at.scale = {1, 1};
+            hero = ctx.world().spawn(at);
+            ctx.set_camera_target(hero);
+            CHECK(!ponko::orbit_camera::kept(ctx));
+            ponko::orbit_camera().keep(ctx);
+            ponko::orbit_camera::remove_kept(ctx);
+            CHECK(!ponko::orbit_camera::kept(ctx));
+        });
+    CHECK(target == hero && last && last->started);
+    CHECK(std::fabs(last->center.x - 500) < 1e-3f && std::fabs(last->center.y - 200) < 1e-3f);
+
+    // The saved window size is there before setup when restored.
+    auto window_size = [](bool restore, bool save) {
+        ponko::vec2 size{};
+        ponko::game("c++ restore", 800, 600).data_dir("ponko-cpp-batch5").restore_window_settings(restore)
+            .run_headless(0, [&](ponko::ctx& ctx) {
+                size = ctx.window_properties().size;
+                if (save) { ctx.window_set_size({1024, 768}); ctx.window_save_settings(); }
+            });
+        return size;
+    };
+    CHECK(window_size(false, true).x == 800);
+    const ponko::vec2 restored = window_size(true, false);
+    CHECK(restored.x == 1024 && restored.y == 768);
+
+    // A sea from a wave spectrum.
+    ponko::game("c++ spectrum", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
+        ponko::wave_spectrum spectrum({12, 4}, 2);
+        CHECK(spectrum.tile == 256 && spectrum.resolution == 128);
+        spectrum.seed = 7;
+        const auto sea = ctx.spawn_water(ponko::water_desc::sea(0, {12, 4}, 2).with_spectrum(spectrum));
+        float spread = 0;
+        for (int i = 0; i < 4; ++i) spread += std::fabs(ctx.water_height(sea, {i * 17.0f, i * -9.0f}, i * 0.7f));
+        CHECK(spread > 0.001f);
+        spectrum.tile = 0;
+        throws_invalid([&] { ctx.spawn_water(ponko::water_desc::sea(0, {12, 4}, 2).with_spectrum(spectrum)); }, "tile");
+    });
+
+    // A sliced loader: its state is built in pieces and handed over once.
+    ponko::game("c++ sliced", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
+        std::string level(200, '.');
+        for (std::size_t i = 0; i < level.size(); i += 4) level[i] = '#';
+        ponko::memory_source files("walls");
+        files.with("walls.txt", level);
+        ctx.add_background_asset_source(files);
+        ponko::asset_group group("level");
+        group.sliced("walls.txt", [](const std::uint8_t* data, std::size_t len) {
+            return round5::walls{std::vector<std::uint8_t>(data, data + len)};
+        });
+        const auto id = ctx.start_asset_group(std::move(group));
+        ctx.finish_uploads();
+        CHECK(ctx.asset_group_state(id) == ponko::group_state::ready);
+        const auto walls = ctx.take_asset_group_sliced<round5::walls>(id, "walls.txt");
+        CHECK(walls && walls->count == 50 && walls->at == 200);
+        throws_kind([&] { ctx.take_asset_group_sliced<round5::walls>(id, "walls.txt"); }, PONKO_ERROR_NOT_FOUND);
+    });
+}
+
 int main() {
     controllers();
     required_components();
@@ -4803,5 +4975,6 @@ int main() {
     headless_play();
     behavior_trees();
     world_brains();
+    native_parity_round5();
     std::cout << "C++ wrapper tests passed\n";
 }

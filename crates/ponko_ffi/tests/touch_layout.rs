@@ -299,7 +299,10 @@ fn trackpad_gestures_from_c_feed_the_pinch_and_make_no_touch_device() {
             PONKO_OK
         );
         let mut scale = 0.0;
-        assert_eq!(ponko_ctx_gesture_deltas(ctx, null_mut(), &mut scale, null_mut()), PONKO_OK);
+        assert_eq!(
+            ponko_ctx_gesture_deltas(ctx, null_mut(), &mut scale, null_mut()),
+            PONKO_OK
+        );
         assert_eq!(scale, 1.25);
         let mut touch = true;
         assert_eq!(ponko_ctx_touch_device(ctx, &mut touch), PONKO_OK);
@@ -318,7 +321,10 @@ fn trackpad_gestures_from_c_feed_the_pinch_and_make_no_touch_device() {
         let mut len = 0;
         assert_eq!(ponko_input_scenario_to_json(s, null_mut(), 0, &mut len), PONKO_OK);
         let mut json = vec![0u8; len + 1];
-        assert_eq!(ponko_input_scenario_to_json(s, json.as_mut_ptr().cast(), json.len(), &mut len), PONKO_OK);
+        assert_eq!(
+            ponko_input_scenario_to_json(s, json.as_mut_ptr().cast(), json.len(), &mut len),
+            PONKO_OK
+        );
         let json = String::from_utf8_lossy(&json[..len]).into_owned();
         assert!(json.contains("trackpad"), "{json}");
         assert_eq!(ponko_input_scenario_trackpad(s, 3, 99, 0, 0.0), PONKO_INVALID_ARGUMENT);

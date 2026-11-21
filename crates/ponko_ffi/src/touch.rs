@@ -728,7 +728,12 @@ pub unsafe extern "C" fn ponko_input_scenario_touch(
 /// # Safety
 /// Context live or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ponko_ctx_feed_trackpad(ctx: *mut PonkoCtx, gesture: u32, phase: u32, amount: f32) -> PonkoStatus {
+pub unsafe extern "C" fn ponko_ctx_feed_trackpad(
+    ctx: *mut PonkoCtx,
+    gesture: u32,
+    phase: u32,
+    amount: f32,
+) -> PonkoStatus {
     // SAFETY: forwarded caller contract.
     boundary(|| unsafe {
         let event = trackpad_event(gesture, phase, amount)?;

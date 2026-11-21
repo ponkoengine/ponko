@@ -384,6 +384,8 @@ to it. The full rule is in
 | `PonkoTargetCameraEx` | `ponko_ctx_set_target_cameras_ex`, `ponko_ctx_target_camera_ex`, `ponko_target_camera_ex_from` | `particles`, per target camera |
 | `PonkoWindowModeEx`, `PonkoWindowVideoModeEx` | `ponko_ctx_window_mode_ex`, `ponko_ctx_window_set_mode_ex`, `ponko_ctx_window_video_mode_ex` | new in this release (no ABI 2 struct): the [window](window.md#c-and-c) mode and a monitor's exclusive modes |
 | `PonkoWindowPropertiesEx`, `PonkoWindowStateEx`, `PonkoWindowMonitorEx`, `PonkoWindowImageEx`, `PonkoWindowEventEx` | `ponko_ctx_window_properties_ex`, `ponko_ctx_window_state_ex`, `ponko_ctx_window_monitor_ex`, `ponko_ctx_window_set_icon_ex`, `ponko_ctx_window_set_cursor_image_ex`, `ponko_ctx_window_event_ex` | new in this release: requested and reported window state, monitors, icon and cursor images, window events |
+| `PonkoCrashReports`, `PonkoTouchControlsDesc`, `PonkoSliceLoader` | `ponko_game_crash_reports`, `ponko_ctx_set_touch_controls_ex`, `ponko_asset_group_add_sliced` | new in this release: [crash report](crash-reports.md#c-and-c) settings and hook, touch controls with their [styles and places](touch.md#c-and-c), [sliced loaders](loading.md#sliced-loaders-from-c) |
+| `PonkoWaterDesc` version 2 | `ponko_ctx_spawn_water` | `has_spectrum` and `spectrum`: a [sea from a wave spectrum](water.md#from-c-and-c) |
 
 In C++ the same types are `ponko::material_desc_ex`,
 `nav_bake_settings_ex`, `lighting_ex`, `collider_ex`, `query_filter_ex`,
@@ -472,12 +474,8 @@ binding arrives:
 | `SaveFormat`, `Storage::save_world_in_background` | [Saves and settings](storage.md#large-worlds) | Not bound yet: save slots are JSON, written on the game's thread by `ponko_ctx_save_world`; `ponko_ctx_load_world` reads binary slots too |
 | `UiAccessAdapter::for_ns_view` | [Retained game UI](ui.md#the-screen-reader-adapter) | It needs a Rust `Ui`; the engine's own window gets the adapter, and `ponko_ui_access_*` give a snapshot for one of your own |
 | `Buoyancy::points` | [Water](water.md#floating-bodies) | Custom sample points, water density and the ripple switch aren't bound: C floats boxes and spheres (`ponko_ctx_set_buoyancy_box`, `_sphere`) in fresh water |
-| `Waves::spectrum`, `WaveSpectrum` | [Water](water.md#waves-from-a-spectrum) | Seas from C use the Gerstner waves of `PonkoWaterDesc` |
 | `NavObstacleShape` | [3D navigation meshes](navigation3d.md#obstacle-shapes) | Obstacles are unturned boxes: `ponko_ctx_set_nav_obstacle` and `ponko_ctx_set_nav_carve_obstacle` |
 | `SkyShader` | [A sky of your own](3d.md#a-sky-of-your-own) | The built-in atmosphere or the flat sky (`PonkoSky`); sky shaders have no C binding yet |
-| `CameraTarget` | [Following something](camera-ui.md#following-something) | Keep the rig descriptor and update it once a frame (`ponko_follow_camera2d_update`, the 3D rigs' update calls) |
-| `TouchLayout` | [Touch](touch.md) | Set the controls with `ponko_ctx_set_touch_controls`; the player's saved layout, its edit mode, styles and trackpad events are not bound yet |
-| `CrashReports` | [Crash reports](crash-reports.md) | Not bound yet: install a handler of the game's own and write its own report |
 | `Graphics::stream_instance_cell` | [Streaming instance cells](3d.md#streaming-instance-cells) | Build a cell's matrices on your own threads, then `ponko_ctx_add_instance_cell` (`ctx::add_instance_cell`) on the game's |
 | `InstanceCellData` | [Streaming instance cells](3d.md#streaming-instance-cells) | The same: matrices and colours go straight to `ponko_ctx_add_instance_cell` |
 | `GamepadBackend` | [Backends and tests](controllers.md#backends-and-tests) | Native games use the built-in gamepad backend |
@@ -497,8 +495,6 @@ binding arrives:
 | `Plugin::dependencies` | [Plugins for other crates](plugins.md#from-c-and-c) | C plugins (`ponko_game_plugin`) have no names or dependencies and are never duplicates |
 | `Game::debug_toggle` | [Plugins for other crates](plugins.md#debug-toggles) | Draw behind a flag of the game's own; `debug.draw` turns the engine's views on and off |
 | `Game::control_method` | [Plugins for other crates](plugins.md#control-methods) | The control endpoint's built-in methods only; a native game's tools read its reflected resources |
-| `AssetGroup::with_sliced`, `SliceLoader` | [Loading screens](loading.md#loaders-that-work-in-slices) | Not bound yet: add the file with `PONKO_GROUP_BYTES` and decode it once the group is ready |
-| `Game::restore_window_settings` | [Window service](window.md#remember-the-players-choice) | Call `ponko_ctx_window_restore_settings` in setup; the window can show at its default size for a moment first |
 
 System phases, system ids, setup callbacks and plugins are not on this
 list. They have C and C++ calls, described in

@@ -15,6 +15,8 @@ use PonkoStatus::*;
 struct Seen {
     follow: Option<PonkoFollowCamera2D>,
     orbit: Option<PonkoOrbitCamera>,
+    first: Option<PonkoFirstPersonCamera>,
+    third: Option<PonkoThirdPersonCamera>,
     target: Option<u64>,
 }
 
@@ -43,6 +45,12 @@ unsafe extern "C" fn look(ctx: *mut PonkoCtx, _: *mut c_void) {
         let mut orbit: PonkoOrbitCamera = header(PONKO_ORBIT_CAMERA_VERSION);
         assert_eq!(ponko_ctx_orbit_camera_rig(ctx, &mut orbit, &mut kept), PONKO_OK);
         seen.orbit = kept.then_some(orbit);
+        let mut first: PonkoFirstPersonCamera = header(PONKO_FIRST_PERSON_CAMERA_VERSION);
+        assert_eq!(ponko_ctx_first_person_camera_rig(ctx, &mut first, &mut kept), PONKO_OK);
+        seen.first = kept.then_some(first);
+        let mut third: PonkoThirdPersonCamera = header(PONKO_THIRD_PERSON_CAMERA_VERSION);
+        assert_eq!(ponko_ctx_third_person_camera_rig(ctx, &mut third, &mut kept), PONKO_OK);
+        seen.third = kept.then_some(third);
         let (mut e, mut found) = (0, false);
         assert_eq!(ponko_ctx_camera_target(ctx, &mut e, &mut found), PONKO_OK);
         seen.target = found.then_some(e);
@@ -167,4 +175,43 @@ fn a_kept_orbit_rig_turns_around_the_marked_3d_entity() {
     let orbit = seen.orbit.expect("kept");
     assert_eq!((orbit.target.x, orbit.target.y, orbit.target.z), (3.0, 0.0, 4.0));
     assert!(orbit.started);
+}
+
+#[test]
+fn kept_first_and_third_person_rigs_keep_their_settings_and_follow_the_target() {
+    let _one = TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let seen = frames(2, |ctx| unsafe {
+        let mut first: PonkoFirstPersonCamera = header(PONKO_FIRST_PERSON_CAMERA_VERSION);
+        assert_eq!(ponko_first_person_camera_defaults(&mut first), PONKO_OK);
+        first.yaw = 0.5;
+        assert_eq!(ponko_ctx_set_first_person_camera_rig(ctx, &first), PONKO_OK);
+        let mut third: PonkoThirdPersonCamera = header(PONKO_THIRD_PERSON_CAMERA_VERSION);
+        assert_eq!(ponko_third_person_camera_defaults(&mut third), PONKO_OK);
+        third.distance = 7.0;
+        assert_eq!(ponko_ctx_set_third_person_camera_rig(ctx, &third), PONKO_OK);
+        // Read back at once: the settings as given, not started yet.
+        let mut back: PonkoThirdPersonCamera = header(PONKO_THIRD_PERSON_CAMERA_VERSION);
+        let mut kept = false;
+        assert_eq!(ponko_ctx_third_person_camera_rig(ctx, &mut back, &mut kept), PONKO_OK);
+        assert!(kept && back.distance == 7.0 && !back.started);
+        let world = ponko_ctx_world(ctx);
+        let mut id = 0;
+        assert_eq!(ponko_transform3d_component(world, &mut id), PONKO_OK);
+        let t = ponko_transform3d_at(PonkoVec3 { x: 1.0, y: 0.0, z: 2.0 });
+        let value = PonkoValue {
+            component: id,
+            data: (&raw const t).cast(),
+            size: size_of::<PonkoTransform3D>(),
+        };
+        let mut target = 0;
+        assert_eq!(ponko_spawn(world, &value, 1, &mut target), PONKO_OK);
+        assert_eq!(ponko_ctx_set_camera_target(ctx, target, true), PONKO_OK);
+    });
+    let first = seen.first.expect("kept");
+    assert!(
+        first.started && first.yaw == 0.5,
+        "the engine moved it, the yaw is the game's"
+    );
+    let third = seen.third.expect("kept");
+    assert!(third.started && third.distance == 7.0);
 }
