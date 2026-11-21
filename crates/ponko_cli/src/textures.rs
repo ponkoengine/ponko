@@ -638,40 +638,51 @@ fn uastc_on(compressor: &mut Compressor, params: &CompressorParams) -> Result<(V
 /// per core for every image. The cost: each keeps the buffers of the
 /// largest image it encoded, as much memory as encoding them all at once
 /// took anyway, until the process (a `ponko` command) exits.
-static IDLE_ENCODERS: std::sync::Mutex<Vec<Compressor>> = std::sync::Mutex::new(Vec::new());
+static IDLE_ENCODERS: EncoderList = std::sync::Mutex::new(Vec::new());
 
-/// An encoder from [`IDLE_ENCODERS`] (a new one when all are in use), which
-/// goes back there when this is dropped, even in a panic.
-struct LentEncoder(Option<Compressor>);
+type EncoderList = std::sync::Mutex<Vec<Compressor>>;
 
+/// An encoder from an idle list (a new one when it is empty), which goes
+/// back there when this is dropped, even in a panic.
+struct LentEncoder {
+    encoder: Option<Compressor>,
+    from: &'static EncoderList,
+}
+
+/// An encoder from [`IDLE_ENCODERS`].
 fn lend_encoder() -> LentEncoder {
-    let idle = IDLE_ENCODERS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .pop();
-    LentEncoder(Some(idle.unwrap_or_else(|| {
+    lend_encoder_from(&IDLE_ENCODERS)
+}
+
+fn lend_encoder_from(list: &'static EncoderList) -> LentEncoder {
+    let idle = list.lock().unwrap_or_else(std::sync::PoisonError::into_inner).pop();
+    let encoder = idle.unwrap_or_else(|| {
         let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
         Compressor::new(u32::try_from(cores).unwrap_or(u32::MAX))
-    })))
+    });
+    LentEncoder {
+        encoder: Some(encoder),
+        from: list,
+    }
 }
 
 impl std::ops::Deref for LentEncoder {
     type Target = Compressor;
     fn deref(&self) -> &Compressor {
-        self.0.as_ref().expect("lent until dropped")
+        self.encoder.as_ref().expect("lent until dropped")
     }
 }
 
 impl std::ops::DerefMut for LentEncoder {
     fn deref_mut(&mut self) -> &mut Compressor {
-        self.0.as_mut().expect("lent until dropped")
+        self.encoder.as_mut().expect("lent until dropped")
     }
 }
 
 impl Drop for LentEncoder {
     fn drop(&mut self) {
-        if let Some(encoder) = self.0.take() {
-            IDLE_ENCODERS
+        if let Some(encoder) = self.encoder.take() {
+            self.from
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .push(encoder);
@@ -1030,15 +1041,17 @@ pub(crate) mod tests {
 
     #[test]
     fn a_lent_encoder_goes_back_to_the_idle_list_even_in_a_panic() {
-        let idle = |pointer| IDLE_ENCODERS.lock().unwrap().iter().any(|c| c.0 == pointer);
-        let encoder = lend_encoder();
-        let pointer = encoder.0.as_ref().unwrap().0;
+        // A list of its own: other tests borrow from the shared one meanwhile.
+        static LIST: EncoderList = std::sync::Mutex::new(Vec::new());
+        let idle = |pointer| LIST.lock().unwrap().iter().any(|c| c.0 == pointer);
+        let encoder = lend_encoder_from(&LIST);
+        let pointer = encoder.0;
         assert!(!idle(pointer), "lent out");
         drop(encoder);
         assert!(idle(pointer), "back after use");
         let lent = std::panic::catch_unwind(|| {
-            let encoder = lend_encoder();
-            let pointer = encoder.0.as_ref().unwrap().0 as usize;
+            let encoder = lend_encoder_from(&LIST);
+            let pointer = encoder.0 as usize;
             std::panic::panic_any(pointer);
         });
         let pointer = *lent.unwrap_err().downcast::<usize>().unwrap() as *mut _;
