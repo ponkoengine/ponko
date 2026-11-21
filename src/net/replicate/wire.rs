@@ -3,7 +3,8 @@
 //! On the internal reliable lane, byte messages: `HELLO` (server to client:
 //! schema hash, the client's peer id, tick rate), `READY` (client to
 //! server: its schema hash), `REJECT` (server to client: why), and `EVENT`
-//! (either way: event type, server tick, payload).
+//! (either way: event type and server tick as LEB128 varints, then the
+//! event in MessagePack, fields by position).
 //!
 //! On the internal unreliable lane, bit-packed packets:
 //!

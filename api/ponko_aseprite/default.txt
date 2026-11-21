@@ -1,0 +1,10 @@
+pub mod ponko_aseprite
+pub struct ponko_aseprite::Sheet
+pub ponko_aseprite::Sheet::export: serde_json::value::Value
+pub ponko_aseprite::Sheet::height: u32
+pub ponko_aseprite::Sheet::note: alloc::string::String
+pub ponko_aseprite::Sheet::rgba: alloc::vec::Vec<u8>
+pub ponko_aseprite::Sheet::width: u32
+impl core::fmt::Debug for ponko_aseprite::Sheet
+pub fn ponko_aseprite::Sheet::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn ponko_aseprite::decode(&[u8], bool, u32) -> core::result::Result<ponko_aseprite::Sheet, alloc::string::String>

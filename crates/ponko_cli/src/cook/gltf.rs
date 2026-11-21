@@ -17,14 +17,17 @@
 //! `extras` of every object are written back as they were read. An
 //! accessor that something else also uses (another primitive, an
 //! animation) keeps its vertex order. A file with compressed geometry
-//! (meshopt, Draco) or an extension this module doesn't know is left as it
-//! is, since its data may point into the buffers being rewritten.
+//! (meshopt, Draco) retains its geometry and buffer layout while eligible
+//! embedded images are compressed. An unknown extension prevents rewriting
+//! the file, since its data may point to objects this module would change.
 
 #![deny(missing_docs)]
 
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
+#[cfg(feature = "textures")]
+mod kept;
 #[cfg(feature = "textures")]
 mod textures;
 
@@ -68,6 +71,12 @@ const KNOWN: &[&str] = &[
     "EXT_texture_webp",
     "EXT_mesh_gpu_instancing",
     POSITIONS_EXTENSION,
+];
+
+const COMPRESSED_GEOMETRY: &[&str] = &[
+    "EXT_meshopt_compression",
+    "KHR_meshopt_compression",
+    "KHR_draco_mesh_compression",
 ];
 
 /// The extension that marks the node a quantized mesh hangs from (see
@@ -302,14 +311,30 @@ pub fn cook(
     if !json.is_object() {
         return Err(fail("not a glTF file".into()));
     }
-    for extension in json["extensionsUsed"].as_array().into_iter().flatten() {
+    let mut kept_geometry = None;
+    for extension in ["extensionsUsed", "extensionsRequired"]
+        .into_iter()
+        .flat_map(|key| json[key].as_array().into_iter().flatten())
+    {
         let extension = extension.as_str().unwrap_or_default();
-        if !KNOWN.contains(&extension) {
+        if let Some(compression) = COMPRESSED_GEOMETRY.iter().copied().find(|known| *known == extension) {
+            kept_geometry = Some(compression);
+        } else if !KNOWN.contains(&extension) {
             return Ok(Err(format!(
                 "it uses {extension}, whose data the cooker doesn't rewrite"
             )));
         }
     }
+    let kept_reason = |ext| format!("it uses {ext}, whose geometry the cooker keeps");
+    if let Some(ext) = kept_geometry
+        && (!cfg!(feature = "textures") || options.images.is_none())
+    {
+        return Ok(Err(kept_reason(ext)));
+    }
+    #[cfg(feature = "textures")]
+    let binary = bytes.starts_with(b"glTF");
+    #[cfg(feature = "textures")]
+    let has_bin = blob.is_some();
     let folder = name.rfind('/').map_or("", |i| &name[..=i]);
     let mut buffers = Vec::new();
     let mut blob = blob;
@@ -328,7 +353,10 @@ pub fn cook(
                     None => return Err(fail(format!("buffer {i}: {uri} is not among the assets"))),
                 }
             }
-            None => blob.take().ok_or_else(|| fail(format!("buffer {i} has no data")))?,
+            None if i == 0 && blob.is_some() => blob.take().unwrap_or_default(),
+            // With required meshopt, a fallback placeholder can have no URI.
+            None if kept_geometry.is_some() => Vec::new(),
+            None => return Err(fail(format!("buffer {i} has no data"))),
         };
         buffers.push(data);
     }
@@ -336,6 +364,19 @@ pub fn cook(
     if !doc.json["bufferViews"].is_array() {
         doc.json["bufferViews"] = json!([]);
     }
+    #[cfg(feature = "textures")]
+    if let (Some(ext), Some(images)) = (kept_geometry, options.images) {
+        let count = doc.buffers.len();
+        let image_views = kept::image_views(&doc.json);
+        let report = textures::compress(&mut doc, images).map_err(fail)?;
+        if report.images == 0 {
+            return Ok(Err(kept_reason(ext)));
+        }
+        let out = kept::write(doc, count, binary, has_bin, &image_views).map_err(fail)?;
+        let note = format!("{ext} geometry kept, {} images compressed", report.images);
+        return Ok(Ok((out, note, Some((report.before, report.after)))));
+    }
+
     let mut stats = optimize(&mut doc, options).map_err(fail)?;
     if options.quantize {
         let q = quantize_positions(&mut doc).map_err(fail)?;
@@ -1057,7 +1098,11 @@ fn write_glb(mut doc: Doc) -> Result<Vec<u8>, String> {
     } else {
         json!([{ "byteLength": bin.len() }])
     };
-    let mut text = serde_json::to_vec(&doc.json).map_err(|e| e.to_string())?;
+    encode_glb(&doc.json, &bin)
+}
+
+fn encode_glb(json: &Value, bin: &[u8]) -> Result<Vec<u8>, String> {
+    let mut text = serde_json::to_vec(json).map_err(|e| e.to_string())?;
     while !text.len().is_multiple_of(4) {
         text.push(b' ');
     }
@@ -1072,7 +1117,7 @@ fn write_glb(mut doc: Doc) -> Result<Vec<u8>, String> {
     if !bin.is_empty() {
         out.extend_from_slice(&(bin.len() as u32).to_le_bytes());
         out.extend_from_slice(b"BIN\0");
-        out.extend_from_slice(&bin);
+        out.extend_from_slice(bin);
     }
     Ok(out)
 }
