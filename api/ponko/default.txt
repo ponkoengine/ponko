@@ -6622,6 +6622,8 @@ pub ponko::prelude::Ctx::views2d: alloc::vec::Vec<ponko::d2::View>
 pub ponko::prelude::Ctx::window: ponko::window::WindowService
 pub ponko::prelude::Ctx::world: ponko_ecs::world::World
 impl ponko::prelude::Ctx
+pub fn ponko::prelude::Ctx::arrange_touch_controls(&mut self) -> ponko::prelude::UiId
+impl ponko::prelude::Ctx
 pub fn ponko::prelude::Ctx::asset_inventory(&self) -> ponko::inventory::AssetInventory
 impl ponko::prelude::Ctx
 pub fn ponko::prelude::Ctx::cancel_scenario(&mut self) -> bool
