@@ -8,7 +8,8 @@
 //! on the thread's first allocation; a block freed on another thread goes
 //! back to the heap it came from.
 //!
-//! It isn't the default because in the threads fixture it made allocation
+//! Experimental: the guide's "One heap per thread" says what has been
+//! checked. It isn't the default because in the threads fixture it made allocation
 //! on the page's thread, where systems run, slower: a world's JSON save
 //! there took 61 ms instead of 41 ms, parsing JSON 15 ms instead of 13 ms.
 //! What it buys is work that allocates on the workers: a parallel query
@@ -33,35 +34,57 @@ use std::alloc::{GlobalAlloc, Layout};
 static HEAPS_ALLOCATOR: orx_parallel_wasm_allocator::WasmParallelAllocator<HEAPS> =
     orx_parallel_wasm_allocator::WasmParallelAllocator::new();
 
-/// Forwards to the heaps out of line: the allocator lives in the engine's
-/// crate, so without this the compiler copied its code into every place
-/// that allocates or frees, and the build grew by 2 MB (11%).
+/// The alignment of every block. The standard allocator of wasm32 aligns
+/// every block to 8 bytes whatever is asked, and code that reads a byte
+/// buffer as 8-byte values relies on it: the heaps align a block to what is
+/// asked behind a 4-byte header, and a page of the threads fixture stopped
+/// on such a read (`bytemuck`'s `cast_slice`) after its WebGPU device was
+/// lost. Every request asks for at least this much.
+const MIN_ALIGN: usize = 8;
+
+/// `layout`, aligned to at least [`MIN_ALIGN`].
+fn widened(layout: Layout) -> Layout {
+    match layout.align_to(MIN_ALIGN) {
+        Ok(wider) => wider,
+        // Only a size near `isize::MAX` can't be aligned more; the heaps
+        // refuse such a size anyway.
+        Err(_) => layout,
+    }
+}
+
+/// Forwards to the heaps out of line, with every block aligned to
+/// [`MIN_ALIGN`]: the allocator lives in the engine's crate, so without
+/// this the compiler copied its code into every place that allocates or
+/// frees, and the build grew by 2 MB (11%).
 struct Heaps;
 
-// SAFETY: every method forwards to the heaps with the same arguments.
+// SAFETY: every method forwards to the heaps with the caller's layout
+// widened the same way ([`widened`]), so a block is freed and grown with
+// the layout it was allocated with.
 unsafe impl GlobalAlloc for Heaps {
     #[inline(never)]
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        // SAFETY: the caller's contract is the heaps'.
-        unsafe { HEAPS_ALLOCATOR.alloc(layout) }
+        // SAFETY: the caller's contract is the heaps', and a wider
+        // alignment still satisfies the caller's.
+        unsafe { HEAPS_ALLOCATOR.alloc(widened(layout)) }
     }
 
     #[inline(never)]
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         // SAFETY: as above.
-        unsafe { HEAPS_ALLOCATOR.alloc_zeroed(layout) }
+        unsafe { HEAPS_ALLOCATOR.alloc_zeroed(widened(layout)) }
     }
 
     #[inline(never)]
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // SAFETY: `ptr` came from the heaps with this layout.
-        unsafe { HEAPS_ALLOCATOR.dealloc(ptr, layout) }
+        // SAFETY: `ptr` came from the heaps with this layout, widened.
+        unsafe { HEAPS_ALLOCATOR.dealloc(ptr, widened(layout)) }
     }
 
     #[inline(never)]
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        // SAFETY: as above.
-        unsafe { HEAPS_ALLOCATOR.realloc(ptr, layout, new_size) }
+        // SAFETY: as above; the new block keeps the widened alignment.
+        unsafe { HEAPS_ALLOCATOR.realloc(ptr, widened(layout), new_size) }
     }
 }
 

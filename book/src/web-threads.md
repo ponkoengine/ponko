@@ -5,12 +5,14 @@ Web Workers that share the game's memory, as it does on threads natively:
 - parallel queries (`par_for_each` and the other `par_*` calls);
 - the [parallel scheduler](parallel-systems.md)'s batches;
 - the ECS's own parallel sorts;
-- the [hierarchy](hierarchy.md)'s update (attachments), when a pass is big
-  enough to share out;
+- the [hierarchy](hierarchy.md)'s update (attachments), when a level is big
+  enough to share out (on the web, one that would take 0.4 ms on the
+  page's thread: about 14,000 attached children);
 - the engine's own parallel passes: [spatial grid](spatial.md) rebuilds
   (from 200,000 entries), [flow field](pathfinding.md) directions, 2D
-  skeleton drawing and its copy into the frame's draw list (from 64
-  skeletons), 3D character moves (from 16 characters), the 3D renderer's
+  skeleton drawing and its copy into the frame's draw list (from 512
+  skeletons on the web, 64 natively), 3D character moves (from 512
+  characters on the web, 16 natively), the 3D renderer's
   culling (each model compared with its last frame and culled again for
   the camera and the shadow views) and [light baking](3d.md#baked-lighting)
   (`bake_lighting`).
@@ -253,8 +255,9 @@ ponko: this build can use threads, but the page isn't cross-origin isolated (...
   streamed textures and meshes read and decode on them. Saves
   (`World::save`, `save_world`, `save_world_in_background`) build the
   world's JSON on the page's thread, where it is faster (see
-  [below](#the-engines-parallel-loops)), and encode and write it there too,
-  because the browser's storage belongs to it.
+  [below](#the-engines-parallel-loops)), unless the build has
+  [one heap per thread](#one-heap-per-thread), and encode and write it
+  there too, because the browser's storage belongs to it.
 - **Everything else** stays on the page's thread: your systems, drawing
   (the GPU's command recording too: WebGPU objects can't be sent to a
   worker), sound and input.
@@ -299,14 +302,14 @@ the ones under half a millisecond are not.
 | Loop | In the fixture | Where it runs | 13 threads (ms) | Page's thread alone (ms) |
 |---|---|---|---|---|
 | Parallel queries, view systems, the scheduler's batches, the ECS's parallel sorts (the 2D sprite pass's parallel query too) | see [Numbers](#numbers) | the frame pool, through the ECS's runner | see [Numbers](#numbers) | |
-| [Hierarchy](hierarchy.md) update (`hierarchy/shared_level`) | 4,000 attached children | the frame pool, when a level is worth sharing | 0.20 | 0.10 |
-| [Spatial grid](spatial.md) rebuild (`spatial/shared_rebuild`) | 200,000 entries | the frame pool | 1.40 | 1.60 |
-| [Flow field](pathfinding.md) directions (`flow/shared_directions`) | 256 × 256 cells | the frame pool | 0.96 | 1.30 |
-| 3D culling, retained (`three/shared_cull`) | 20,000 models | the frame pool | 0.38 | 1.00 |
-| 2D skeleton drawing (`skeleton2d/shared_draw`) | 256 skeletons of two sprites | the frame pool, from 64 skeletons | 0.23 | 0.10 |
-| 3D character moves (`physics3d/shared_characters`) | 32 characters | the frame pool, from 16 characters | 0.29 | 0.20 |
-| [Light baking](3d.md#baked-lighting) (`three/shared_bake`): gathering, smoothing, probes | a floor, a ball and a wall, 16 samples | the frame pool | 18.1 | 52.3 |
-| Entities' JSON of a world save (`World::save`) | 24,000 entities, 1 MB of JSON | **the page's thread**: on the workers it took 223 ms | 25.2 | 22.2 |
+| [Hierarchy](hierarchy.md) update (`hierarchy/shared_level`) | 20,000 attached children | the frame pool, when a level would take 0.4 ms on the page's thread ([thresholds](#when-sharing-out-pays)) | 0.57 | 0.60 |
+| [Spatial grid](spatial.md) rebuild (`spatial/shared_rebuild`) | 200,000 entries | the frame pool | 1.37 | 1.70 |
+| [Flow field](pathfinding.md) directions (`flow/shared_directions`) | 256 × 256 cells | the frame pool | 0.92 | 1.30 |
+| 3D culling, retained (`three/shared_cull`) | 20,000 models | the frame pool | 0.36 | 0.90 |
+| 2D skeleton drawing (`skeleton2d/shared_draw`) | 1,024 skeletons of two sprites | the frame pool, from 512 skeletons (64 natively) | 0.26 | 0.30 |
+| 3D character moves (`physics3d/shared_characters`) | 600 characters walking | the frame pool, from 512 characters (16 natively) | 6.98 | 2.59 |
+| [Light baking](3d.md#baked-lighting) (`three/shared_bake`): gathering, smoothing, probes | a floor, a ball and a wall, 16 samples | the frame pool | 21.9 | 52.3 |
+| Entities' JSON of a world save (`World::save`) | 40,000 entities, 4 MB of JSON | **the page's thread**: on the workers it took 17 times as long ([below](#one-heap-per-thread)) | 67.6 | 68.5 |
 | 3D command recording | | **the page's thread**, one encoder after another: WebGPU objects can't be sent to a worker | | |
 | Jobs (asset reads and decodes, streaming) | | the job workers | | |
 | Video frames (YUV to RGB) | | not in web builds: the `video` feature decodes on the desktop only | | |
@@ -314,19 +317,130 @@ the ones under half a millisecond are not.
 | The Unity importer (`ponko_unity`) | | not in web builds: a desktop tool | | |
 
 What the numbers say:
-- **The bake (2.9×), the 3D culling (2.6×) and the flow field (1.4×) gain
-  from the workers.** The spatial grid's rebuild is the same within the
-  noise.
-- **The small passes don't gain at the fixture's sizes**: the hierarchy's
-  4,000 children, 256 small skeletons and 32 characters take 0.1 to 0.2 ms
-  on one thread, about what waking 13 workers and waiting for them costs.
-  They are shared out because their thresholds were set for the desktop;
-  nobody has measured yet from what size they gain in a browser.
-- **The JSON save is ten times slower on the workers** (223 ms on 13
-  threads against 22 ms alone, measured before it was moved back): it is
-  many small allocations, and the browser's threads share one allocator
-  lock. So a web build with threads builds it on the page's thread (25 ms
-  there in the run with threads), and the desktop keeps it parallel.
+- **The bake (2.4×), the 3D culling (2.5×) and the flow field (1.4×) gain
+  from the workers.** The spatial grid's rebuild (1.2×) is the same within
+  the noise.
+- **The small passes are shared out only from sizes where that pays in a
+  browser** (below): the fixture's 20,000 children and 1,024 skeletons are
+  past their thresholds and come out the same as on the page's thread in
+  this run, with the rest of the frame going on.
+- **The characters were slower on the workers in the fixture** (7.0 ms
+  against 2.6 ms), although their moves alone, in the threshold sweep, are
+  twice as fast shared out at 512. The fixture's characters stand on the
+  floor, and rapier's character controller allocates for every collider a
+  character touches when it looks for the ground: on the workers, those
+  allocations wait for each other on the browser's one allocator lock
+  ([below](#one-heap-per-thread)). The sweep starts each move off the
+  ground, which most likely skips that query. Below 512 characters they
+  stay on the page's thread (the threshold was 16 before, where sharing
+  out lost too); a game with more characters standing on the ground is
+  likely faster with fewer of them moving on the workers, which nobody has
+  measured yet.
+- **The JSON save stays on the page's thread**: the browser's threads share
+  one allocator lock, and the save is many small allocations, so on the
+  workers it took 17 times as long as on the page's thread. The desktop
+  keeps it parallel. [One heap per thread](#one-heap-per-thread) changes
+  that.
+
+### When sharing out pays
+
+Handing a pass to the 13 workers and waiting for them costs 0.05 to 0.1 ms
+in a browser, more than on the desktop, so the hierarchy, the 2D skeleton
+drawing and the 3D characters have thresholds of their own in a web build
+with threads. `node web/smoke/threads.mjs --case thresholds` times each at
+several sizes, on the page's thread and shared out, in one page load (the
+medians of 15 runs each, taking turns), then runs each just below and at
+its threshold, where it must stay on the page's thread and be shared out,
+and end on the same result as on the page's thread alone. Headless
+Chromium 156, Apple M4 Max, 13 frame threads, with other builds running (a
+load average of about 100); the two numbers are the lowest and highest of
+three page loads:
+
+| Pass | Size | Page's thread (ms) | Shared out (ms) |
+|---|---|---|---|
+| Hierarchy (attached children, placed by lookups) | 2,048 | 0.06 | 0.13 |
+| | 4,096 | 0.12 | 0.13 to 0.15 |
+| | 8,192 | 0.23 to 0.26 | 0.17 to 0.21 |
+| | 16,384 | 0.46 | 0.26 to 0.30 |
+| | 65,536 | 1.89 | 0.82 to 0.93 |
+| 2D skeletons (two sprites each) | 128 | 0.04 | 0.09 to 0.13 |
+| | 256 | 0.08 | 0.10 to 0.17 |
+| | 512 | 0.16 | 0.10 to 0.18 |
+| | 1,024 | 0.32 | 0.16 to 0.24 |
+| | 4,096 | 1.28 to 1.30 | 0.38 to 0.50 |
+| 3D characters (the moves alone, on a floor) | 128 | 0.06 | 0.08 to 0.09 |
+| | 256 | 0.13 | 0.10 to 0.19 |
+| | 512 | 0.27 to 0.28 | 0.13 to 0.14 |
+
+So, in a web build with threads:
+- **the hierarchy** shares a level out when its first 256 children, timed,
+  project it over 0.4 ms on the page's thread (about 14,000 children; 50 µs
+  natively). Sharing pays from about 5,000, but by less than 0.1 ms up to
+  8,000;
+- **2D skeletons** are drawn on the workers from 512 (64 natively): the
+  first size where sharing never lost;
+- **3D characters** move on the workers from 512 (16 natively): at 256 one
+  run was faster each way.
+
+Below a threshold, staying on the page's thread costs at most about 0.1 ms
+against sharing out; past it, sharing saves more the bigger the pass. On
+the desktop the thresholds stay as they were.
+
+## One heap per thread
+
+The standard allocator of a web build is one heap behind one lock, which
+the page's thread can only spin on (browsers don't let it block). Threads
+that allocate at the same time wait for each other, so allocation-heavy
+work is slow on the workers. A build with threads can instead give each
+thread a heap of its own ([talc](https://crates.io/crates/talc), through
+the `orx-parallel-wasm-allocator` crate): each thread allocates from its
+own heap, and a block freed on another thread goes back to the one it came
+from. It is not the default, because it made allocation on the page's
+thread, where your systems run, slower:
+
+| Pass | Standard allocator (ms) | One heap per thread (ms) |
+|---|---|---|
+| JSON world save (24,000 entities, 3 MB), on the page's thread | 41 | 56 to 63 |
+| The same, on the workers | 698 to 700 | 38 to 40 |
+| Parsing that JSON, on the page's thread | 13.2 to 15.3 | 14.9 to 15.1 |
+| 100,000 blocks of 32 bytes allocated and freed, on the page's thread | 1.32 | 1.47 to 1.53 |
+| A vector grown to 1,000,000 numbers by pushes, on the page's thread | 0.53 | 0.58 |
+| A parallel query over 20,000 entities making a small vector and a string on each | 73 to 78 | 1.6 to 1.8 |
+| `game_bg.wasm` | 21,634 KiB | 21,639 KiB |
+
+From `node web/smoke/threads.mjs --build --case allocator` (three page
+loads of each build, on the same busy machine as above; the ranges are the
+lowest and highest median). The save on the page's thread, split up, is
+slower in every part: building the JSON values (33 against 42 ms), writing
+the text (5.6 against 9.1 ms) and dropping the values (2.6 against 6.4 ms).
+
+So with the standard allocator the save stays on the page's thread (41 ms
+there against 700 ms on the workers), and with one heap per thread it goes
+to the workers (38 to 40 ms, against 56 to 63 ms on the page's thread):
+about the same time as the default build. One heap per thread is worth it
+for a game whose parallel code allocates (a parallel query that collects a
+path or formats a label for each item, 40 times faster), and a loss for one
+whose page thread allocates a lot. To try it:
+
+```sh
+RUSTFLAGS="--cfg ponko_web_thread_heaps" web/build.sh --threads --bin my_game
+```
+
+It is experimental. In the threads fixture's check, a page of a build with
+it stopped on a misaligned read of a byte buffer (after the browser lost
+its WebGPU device, which the standard build survives): the heaps aligned a
+block only to what was asked, where the standard allocator always aligns
+to 8 bytes. Every block is now aligned to 8 bytes too; that build hasn't
+been run in a browser since.
+
+Only a web build with threads takes it: the ordinary web build and native
+builds ignore the flag, and keep the standard allocator and their size.
+Such a build has its own global allocator, so a game that sets one (with
+`#[global_allocator]`, such as `ponko::perf::CountingAllocator`) can't use
+it. A worker's first two allocations (its stack and its thread-local
+block, made before the thread has thread-local storage) read which heap to
+use from the bottom of the memory, the deepest end of the page thread's
+stack, which is normally untouched and so names the first heap.
 
 ## Limits
 
@@ -399,8 +513,8 @@ the headers, the parallel query, the batch systems, the jobs and the asset
 group must run on two or more workers, and never on the page's thread; the
 hierarchy must share a level out, and the engine's own passes (the
 fixture rebuilds a spatial grid of 200,000 entries, computes a flow field,
-collects the 3D frame of 20,000 models, draws 256 2D skeletons, walks 32 3D
-characters and bakes a small scene's light) must go through the frame
+collects the 3D frame of 20,000 models, draws 1,024 2D skeletons, walks 600
+3D characters and bakes a small scene's light, each past its threshold) must go through the frame
 pool's runner (`passes_shared`, from the scope each opens there), the 3D
 culling, the skeletons, the characters and the bake among them; its world's
 JSON save must not. Every pass must report its time, and the runner prints
@@ -414,7 +528,13 @@ must read the same file. With `--case service-worker` it serves a build
 with [the service worker](#hosts-that-cant-send-the-headers) without the
 headers, and the page must reach the isolated run's results. With `--case gamepads` it feeds the isolated page fake
 browser gamepads and checks that the engine sees each one connect, press,
-move and leave.
+move and leave. With `--case thresholds` it times the small passes at
+several sizes and checks each on both sides of its threshold
+([above](#when-sharing-out-pays)); with `--case allocator` it builds the
+fixture again with [one heap per thread](#one-heap-per-thread) and compares
+the two builds. The sweeps hide WebGPU from the page, so the engine draws
+with WebGL2: they time the CPU only, and on a busy machine the headless
+shell's WebGPU canvas once lost its device at the first frame.
 
 ```sh
 node web/smoke/threads.mjs --build                # the checks
@@ -423,6 +543,8 @@ node web/smoke/threads.mjs --case gamepads        # fed gamepads reach the game
 node web/smoke/threads.mjs --build --case service-worker   # isolated without headers
 node web/smoke/threads.mjs --case warning         # a warning fails the build
 node web/smoke/threads.mjs --bench --repeat 3     # the numbers above
+node web/smoke/threads.mjs --case thresholds      # where sharing out pays, both sides of each threshold
+node web/smoke/threads.mjs --build --case allocator   # the standard allocator against one heap per thread
 ```
 
 So far this runs in Chromium only. Firefox and Safari also allow shared
