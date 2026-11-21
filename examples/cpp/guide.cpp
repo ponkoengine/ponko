@@ -2110,6 +2110,16 @@ static void screen_reflections(ponko::ctx& ctx) {
 }
 // ANCHOR_END: ssr
 
+// ANCHOR: ssr_thin
+/// Without TAA: railings, cables and poles stay whole in reflections.
+static void thin_reflections(ponko::ctx& ctx) {
+    auto post = ctx.post_ex(); // version 2 has ssr_thin_objects
+    post.post.anti_aliasing = uint32_t(ponko::anti_aliasing::smaa);
+    post.ssr_thin_objects = true; // about 1 ms more at 1080p
+    ctx.set_post(post);
+}
+// ANCHOR_END: ssr_thin
+
 // ANCHOR: gi
 /// Sunlight bounces off walls and floors onto other surfaces.
 static void bounced_light(ponko::ctx& ctx) {
@@ -2457,6 +2467,8 @@ static void the_village_has_five_spinning_houses() {
         teleport_one(ctx, ctx.world().spawn(ponko::transform3d_at({0, 0, 0})));
         screen_reflections(ctx);
         if (ctx.post().ssr != 1.0f) { std::fprintf(stderr, "ssr\n"); std::abort(); }
+        thin_reflections(ctx);
+        if (!ctx.post_ex().ssr_thin_objects || ctx.post().ssr != 1.0f) { std::fprintf(stderr, "ssr thin\n"); std::abort(); }
         bounced_light(ctx);
         if (!ctx.lighting().gi_enabled) { std::fprintf(stderr, "gi\n"); std::abort(); }
         trilight(ctx);
