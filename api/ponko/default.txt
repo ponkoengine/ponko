@@ -4325,6 +4325,23 @@ impl<K: core::fmt::Debug + core::hash::Hash + core::cmp::Eq> core::fmt::Debug fo
 pub fn ponko::net::LatestWins<K>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<K: core::hash::Hash + core::cmp::Eq> core::default::Default for ponko::net::LatestWins<K>
 pub fn ponko::net::LatestWins<K>::default() -> Self
+pub struct ponko::net::LoopbackLink
+impl ponko::net::LoopbackLink
+pub fn ponko::net::LoopbackLink::delay(self, core::time::Duration) -> Self
+pub fn ponko::net::LoopbackLink::jitter(self, core::time::Duration) -> Self
+pub fn ponko::net::LoopbackLink::loss(self, f64) -> Self
+pub fn ponko::net::LoopbackLink::new() -> Self
+pub fn ponko::net::LoopbackLink::seed(self, u64) -> Self
+impl core::clone::Clone for ponko::net::LoopbackLink
+pub fn ponko::net::LoopbackLink::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::net::LoopbackLink
+pub fn ponko::net::LoopbackLink::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::net::LoopbackLink
+pub fn ponko::net::LoopbackLink::default() -> Self
+impl core::fmt::Debug for ponko::net::LoopbackLink
+pub fn ponko::net::LoopbackLink::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::net::LoopbackLink
+impl core::marker::StructuralPartialEq for ponko::net::LoopbackLink
 pub struct ponko::net::MessageStats
 pub ponko::net::MessageStats::bytes_received: u64
 pub ponko::net::MessageStats::bytes_sent: u64
@@ -4423,6 +4440,7 @@ pub fn ponko::net::NetMessages::join(impl std::net::socket_addr::ToSocketAddrs) 
 pub fn ponko::net::NetMessages::join_web(&str) -> core::io::error::Result<Self>
 pub fn ponko::net::NetMessages::local_addr(&self) -> core::option::Option<core::net::socket_addr::SocketAddr>
 pub fn ponko::net::NetMessages::loopback(usize) -> alloc::vec::Vec<Self>
+pub fn ponko::net::NetMessages::loopback_link(usize, ponko::net::LoopbackLink) -> alloc::vec::Vec<Self>
 pub fn ponko::net::NetMessages::loopback_lossy(usize, u32) -> alloc::vec::Vec<Self>
 pub fn ponko::net::NetMessages::next_event(&mut self) -> core::option::Option<ponko::net::MessageEvent>
 pub fn ponko::net::NetMessages::peer_addr(&self, ponko::net::PeerId) -> core::option::Option<core::net::socket_addr::SocketAddr>
@@ -4683,6 +4701,7 @@ pub fn ponko::net::Replication::position(self, impl core::ops::function::Fn(&pon
 pub fn ponko::net::Replication::predicted<S, I>(self, impl core::ops::function::Fn(&mut S, &I) + core::marker::Send + core::marker::Sync + 'static) -> Self where S: ponko::net::Replicate + ponko_ecs::bundle::Component + core::cmp::PartialEq, I: ponko::net::Replicate
 pub fn ponko::net::Replication::raw_component(self, &str, ponko_ecs::storage::ComponentId, usize, alloc::vec::Vec<ponko::net::RawField>) -> Self
 pub fn ponko::net::Replication::raw_event(self, &str) -> Self
+pub fn ponko::net::Replication::resend_stats(&self, ponko::net::PeerId) -> core::option::Option<ponko::net::ResendStats>
 pub fn ponko::net::Replication::role(&self) -> ponko::net::ReplicationRole
 pub fn ponko::net::Replication::server_tick(&self) -> u64
 pub fn ponko::net::Replication::set_input<I: ponko::net::Replicate>(&mut self, I)
@@ -4697,6 +4716,24 @@ impl core::default::Default for ponko::net::Replication
 pub fn ponko::net::Replication::default() -> Self
 impl core::fmt::Debug for ponko::net::Replication
 pub fn ponko::net::Replication::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub struct ponko::net::ResendStats
+pub ponko::net::ResendStats::backoff: u32
+pub ponko::net::ResendStats::early_resends: u64
+pub ponko::net::ResendStats::late_acks: u64
+pub ponko::net::ResendStats::reorder_ticks: u32
+pub ponko::net::ResendStats::timeout_resends: u64
+pub ponko::net::ResendStats::timeout_ticks: u32
+impl core::clone::Clone for ponko::net::ResendStats
+pub fn ponko::net::ResendStats::clone(&self) -> Self
+impl core::cmp::Eq for ponko::net::ResendStats
+impl core::cmp::PartialEq for ponko::net::ResendStats
+pub fn ponko::net::ResendStats::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::net::ResendStats
+pub fn ponko::net::ResendStats::default() -> Self
+impl core::fmt::Debug for ponko::net::ResendStats
+pub fn ponko::net::ResendStats::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::net::ResendStats
+impl core::marker::StructuralPartialEq for ponko::net::ResendStats
 pub struct ponko::net::Rollback<I, S>
 impl<I, S> ponko::net::Rollback<I, S> where I: core::clone::Clone + core::cmp::PartialEq + core::default::Default + serde_core::ser::Serialize + serde_core::de::DeserializeOwned, S: core::default::Default
 pub fn ponko::net::Rollback<I, S>::advance<G>(&mut self, &mut G, I) -> ponko::net::Advance where G: ponko::net::RollbackGame<I, State = S>

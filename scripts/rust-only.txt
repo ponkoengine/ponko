@@ -75,3 +75,4 @@ CrashReports                     crash-reports.md  # not bound yet: a native gam
 Game::restore_window_settings    window.md         # C and C++ games call ponko_ctx_window_restore_settings in setup; the window can show at its default size first
 Waves::spectrum                  water.md          # seas from C use the Gerstner waves of PonkoWaterDesc; the spectrum (FFT) sea is not bound yet
 WaveSpectrum                     water.md          # the spectrum (FFT) sea is not bound yet: C and C++ describe Gerstner waves in PonkoWaterDesc
+LoopbackLink                     replication.md    # not bound yet: C and C++ tests use the plain loopback (ponko_net_messages_loopback)
