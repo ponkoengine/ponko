@@ -125,6 +125,10 @@ pub(super) const ENCODER_WORK: usize = 250;
 /// The most encoders a frame records into, on as many cores.
 pub(super) const MAX_ENCODERS: usize = 8;
 
+/// A frame's command buffers (see `Renderer3D::draw`): never more than
+/// [`MAX_ENCODERS`], so kept inline.
+pub(crate) type FrameBuffers = smallvec::SmallVec<[wgpu::CommandBuffer; MAX_ENCODERS]>;
+
 /// Splits `parts` (recorded in this order) into consecutive groups, each
 /// recorded into one encoder: as many groups as the frame has
 /// [`ENCODER_WORK`] (at least one, at most [`MAX_ENCODERS`] and `cores`),
@@ -393,17 +397,19 @@ impl Renderer3D {
         clear: wgpu::Color,
         textures: &dyn TextureTable,
         timer: Option<&GpuTimer>,
-    ) -> Vec<wgpu::CommandBuffer> {
+    ) -> FrameBuffers {
         self.state_counters.take();
         let Some(targets) = self.targets.as_ref().filter(|_| !self.too_many) else {
-            return Vec::new();
+            return FrameBuffers::new();
         };
         let time = |name| timer.and_then(|t| t.pass(name));
         let split = self.splits_transparent();
         if !self.extra {
             self.shadow_cache.recorded();
         }
-        let parts = self.frame_parts(split);
+        // The list is kept between frames (see `frame_parts_into`).
+        let mut parts = std::mem::take(&mut *self.parts.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        self.frame_parts_into(split, &mut parts);
         // The frame must keep what its passes declare (see `passes`):
         // checked in debug builds, so in every render test.
         let checks = self.check_frame(&parts, targets, view);
@@ -442,23 +448,38 @@ impl Renderer3D {
             }
             encoder.finish()
         };
-        let mut buffers = Vec::with_capacity(groups);
+        let mut slots: [Option<wgpu::CommandBuffer>; MAX_ENCODERS] = Default::default();
         #[cfg(not(target_arch = "wasm32"))]
         if groups > 1 {
             use rayon::prelude::*;
-            buffers.par_extend((0..groups).into_par_iter().map(record));
+            slots[..groups]
+                .par_iter_mut()
+                .enumerate()
+                .for_each(|(group, slot)| *slot = Some(record(group)));
         } else {
-            buffers.push(record(0));
+            slots[0] = Some(record(0));
         }
         #[cfg(target_arch = "wasm32")]
-        buffers.extend((0..groups).map(record));
-        buffers
+        for (group, slot) in slots[..groups].iter_mut().enumerate() {
+            *slot = Some(record(group));
+        }
+        *self.parts.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = parts;
+        slots.into_iter().flatten().collect()
+    }
+
+    /// [`frame_parts_into`](Self::frame_parts_into) a new list (tests).
+    #[cfg(test)]
+    pub(super) fn frame_parts(&self, split: bool) -> Vec<Part> {
+        let mut parts = Vec::new();
+        self.frame_parts_into(split, &mut parts);
+        parts
     }
 
     /// The parts of this frame, in the order they are recorded and
-    /// submitted (see [`draw`](Self::draw)).
-    pub(super) fn frame_parts(&self, split: bool) -> Vec<Part> {
-        let mut parts = Vec::with_capacity(8 + self.lists.cascades + self.lists.light_views);
+    /// submitted (see [`draw`](Self::draw)), into `parts` (emptied first).
+    pub(super) fn frame_parts_into(&self, split: bool, parts: &mut Vec<Part>) {
+        parts.clear();
+        parts.reserve(8 + self.lists.cascades + self.lists.light_views);
         parts.push(Part::Prelude);
         // Small light views drawn this frame, waiting to share a pass:
         // (first, last, draws).
@@ -525,7 +546,6 @@ impl Renderer3D {
             parts.push(Part::Transparent);
         }
         parts.push(Part::Post);
-        parts
     }
 
     /// How many passes draw into the light shadow atlas this frame (test hook).

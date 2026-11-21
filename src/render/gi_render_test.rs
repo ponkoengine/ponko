@@ -35,6 +35,8 @@ pub(super) struct Rig {
     /// come) and cells [`blocks`](Self::blocks) made.
     batches: Vec<crate::render::InstanceBatch>,
     cells: Vec<crate::render::InstanceCell>,
+    /// How long the last [`frame`](Self::frame)'s `prepare` took, in ms.
+    pub(super) prepare_ms: f64,
 }
 
 impl Rig {
@@ -199,6 +201,7 @@ impl Rig {
             size,
             batches: Vec::new(),
             cells: Vec::new(),
+            prepare_ms: 0.0,
         })
     }
 
@@ -257,6 +260,7 @@ impl Rig {
                 time: (0.0, 1.0 / 60.0),
                 occlusion: false,
             };
+            let prepare = std::time::Instant::now();
             self.renderer.prepare(
                 &self.device,
                 &self.queue,
@@ -266,6 +270,7 @@ impl Rig {
                     size: self.size,
                 },
             );
+            self.prepare_ms = prepare.elapsed().as_secs_f64() * 1000.0;
             let mut buffers = self.renderer.draw(
                 &self.device,
                 &self.target,
@@ -1001,6 +1006,113 @@ fn gpu_probe_views_leave_out_subpixel_instances() {
     assert!(tiny_after > 0, "the ones near the probes are kept: {tiny_after}");
 }
 
+/// A 40 x 40 field of tiny cubes (0.1 wide, 0.5 apart) in cells of 2,
+/// with one big cube (2 wide) among them at (15, 0.5, 15), far from this
+/// frame's probes: as one batch of one mesh and as a batch of two distance
+/// levels, on `path`. The probes' views are drawn with and without leaving
+/// out cells far from every probe first; gives the instances in the probe
+/// views of either batch each way, as `count` reads them, and the cells the
+/// CPU path left out whole.
+fn far_cells(path: BatchPath, count: impl Fn(&Rig, u32) -> u32) -> Option<([[u32; 2]; 2], [u32; 2])> {
+    let mut rig = Rig::new(true)?;
+    rig.renderer.batching.path = path;
+    let cube = rig.mesh(&MeshData::cube(1.0), MaterialDesc::color(Color::WHITE));
+    let mut field: Vec<Mat4> = (0..80 * 80)
+        .map(|k| {
+            let at = vec3((k / 80) as f32 * 0.5 - 20.0, 0.5, (k % 80) as f32 * 0.5 - 20.0);
+            Mat4::from_scale_rotation_translation(Vec3::splat(0.1), Quat::IDENTITY, at)
+        })
+        .collect();
+    field.push(Mat4::from_scale_rotation_translation(
+        Vec3::splat(2.0),
+        Quat::IDENTITY,
+        vec3(15.0, 0.5, 15.0),
+    ));
+    let options = crate::render::InstanceBatchOptions {
+        cell_size: 2.0,
+        ..Default::default()
+    };
+    let one = rig.ctx.gfx.create_instance_batch(cube, &field, options);
+    let level = |min_distance, max_distance| crate::render::InstanceLevel {
+        mesh: cube,
+        min_distance,
+        max_distance,
+        camera: true,
+        shadows: true,
+    };
+    let levels =
+        rig.ctx
+            .gfx
+            .create_instance_batch_levels(&[level(0.0, 5.0), level(5.0, f32::INFINITY)], &field, &[], options);
+    for batch in [one, levels] {
+        rig.sync_row(batch.id);
+        let route = rig.renderer.batch_route(batch.id);
+        let gpu = route == Some(Route::Gpu);
+        if gpu != (path == BatchPath::Gpu) {
+            crate::render::render_test_support::skip("the batch did not take the path asked for");
+            return None;
+        }
+    }
+    field_gi(&mut rig, true);
+    let mut counts = [[0; 2]; 2];
+    let mut skipped = [0; 2];
+    for (skip, (row, cells)) in [false, true].into_iter().zip(counts.iter_mut().zip(&mut skipped)) {
+        rig.renderer.batching.no_far_cells = !skip;
+        // The same probes, the frame with and without: the probes' lists
+        // start over for each.
+        rig.ctx.scene3d.lighting.gi.enabled = false;
+        let _ = rig.draw(1);
+        rig.ctx.scene3d.lighting.gi.enabled = true;
+        let _ = rig.draw(1);
+        *cells = rig.renderer.batching.far_cells;
+        for (n, batch) in row.iter_mut().zip([one, levels]) {
+            *n = count(&rig, batch.id);
+        }
+    }
+    Some((counts, skipped))
+}
+
+#[test]
+fn probe_views_leave_out_whole_cells_far_from_every_probe() {
+    // The CPU path: a probe's view leaves out a cell whose widest instance
+    // is under one of its pixels at the cell's nearest point before
+    // testing its instances, and keeps exactly what it kept before.
+    let Some(([before, after], [off, on])) = far_cells(BatchPath::Cpu, |rig, id| rig.renderer.probe_view_instances(id))
+    else {
+        return;
+    };
+    eprintln!(
+        "probe view instances (one mesh, levels): {before:?} testing every cell, {after:?} leaving out {on} far cells"
+    );
+    assert!(
+        before[0] > 0,
+        "positive control: the probes see the near cubes: {before:?}"
+    );
+    assert_eq!(off, 0, "without it, no cell is left out whole");
+    assert!(on > 1000, "most cells are far from every probe: {on}");
+    assert_eq!(after, before, "the same instances drawn either way");
+    assert_eq!(after[0], after[1], "levels keep what one mesh keeps");
+}
+
+#[test]
+fn gpu_probe_views_leave_out_whole_cells_far_from_every_probe() {
+    // The GPU culling shader's cell test: the same instances drawn in the
+    // probes' face views with and without it.
+    let Some(([before, after], _)) = far_cells(BatchPath::Gpu, |rig, id| {
+        rig.renderer.gpu_probe_view_instances(&rig.device, &rig.queue, id)
+    }) else {
+        return;
+    };
+    eprintln!(
+        "GPU probe face view instances (one mesh, levels): {before:?} testing every cell, {after:?} leaving far ones out"
+    );
+    assert!(
+        before[0] > 0,
+        "positive control: the probes see the near cubes: {before:?}"
+    );
+    assert_eq!(after, before, "the same instances drawn either way");
+}
+
 #[test]
 fn without_the_texture_slot_bounced_light_is_skipped() {
     // As on WebGL2: the frame is the same as with it off.
@@ -1288,6 +1400,112 @@ fn gi_cost_small_instances() {
              {cull:.3} ms, GPU frame {frame:.3} ms, {drawn} pebbles in the probes' face views",
             all.join(" ")
         );
+    }
+}
+
+/// What leaving out cells far from every probe saves, in a large
+/// scattered scene at 1920x1080: 250,000 rocks (12-segment spheres 0.3
+/// wide) strewn over 1 km x 1 km in cells of 16, 16 probes a frame by the
+/// camera. On each path (CPU and GPU culling), rounds with the far-cell
+/// test and without it (as before it) take turns, so both see the same
+/// load; each round is 30 frames after 10 to settle. Run in release
+/// (`cargo test --release --lib --features 3d -- --ignored --nocapture
+/// gi_cost_far_cells`); prints each setting's median round: the CPU's
+/// `prepare` (where the CPU path builds the probes' lists), the GPU's
+/// instance culling and GI passes, and the rocks in the probes' views.
+#[test]
+#[ignore = "benchmark: run in release"]
+fn gi_cost_far_cells() {
+    for path in [BatchPath::Cpu, BatchPath::Gpu] {
+        let Some(mut rig) = Rig::sized(true, (1920, 1080)) else {
+            return;
+        };
+        let Some(mut timer) = super::timer::GpuTimer::new(&rig.device, &rig.queue) else {
+            crate::render::render_test_support::skip("no GPU timestamps");
+            return;
+        };
+        let ground = rig.mesh(&MeshData::cube(1.0), MaterialDesc::color(Color::WHITE));
+        rig.block(ground, vec3(-500.0, -1.0, -500.0), vec3(500.0, 0.0, 500.0));
+        let rock = rig.mesh(
+            &MeshData::sphere(0.15, 12),
+            MaterialDesc::color(Color::rgb(0.5, 0.45, 0.4)),
+        );
+        // A fixed pseudo-random scatter.
+        let mut seed = 0x9e37_79b9_u32;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed as f32 / u32::MAX as f32
+        };
+        let rocks: Vec<Mat4> = (0..250_000)
+            .map(|_| Mat4::from_translation(vec3(next() * 1000.0 - 500.0, 0.15, next() * 1000.0 - 500.0)))
+            .collect();
+        rig.renderer.batching.path = path;
+        let options = crate::render::InstanceBatchOptions {
+            cell_size: 16.0,
+            ..Default::default()
+        };
+        let batch = rig.ctx.gfx.create_instance_batch(rock, &rocks, options);
+        rig.sync_row(batch.id);
+        let gpu = rig.renderer.batch_route(batch.id) == Some(Route::Gpu);
+        if gpu != (path == BatchPath::Gpu) {
+            crate::render::render_test_support::skip("the batch did not take the path asked for");
+            continue;
+        }
+        rig.ctx.scene3d.lighting.sun_direction = vec3(-0.4, -1.0, -0.3);
+        rig.ctx.scene3d.lighting.gi = GlobalIllumination {
+            enabled: true,
+            probes_per_frame: crate::render::GlobalIllumination::MAX_PROBES_PER_FRAME,
+            ..Default::default()
+        };
+        rig.ctx.scene3d.camera.position = vec3(1.0, 1.7, 1.0);
+        rig.ctx.scene3d.camera.look_at(vec3(20.0, 0.0, 12.0));
+        rig.ctx.scene3d.camera.far = 400.0;
+        // (prepare, culling, GI passes, rocks in the probe views) of each round.
+        let mut rounds: [Vec<(f64, f32, f32, u32)>; 2] = [Vec::new(), Vec::new()];
+        for _ in 0..5 {
+            for (skip, round) in [false, true].into_iter().zip(&mut rounds) {
+                rig.renderer.batching.no_far_cells = !skip;
+                for _ in 0..10 {
+                    let _ = rig.frame(Some(&mut timer));
+                }
+                let (mut frames, mut prepare, mut gi, mut cull) = (0, 0.0, 0.0, 0.0);
+                let mut read = timer.frames_read;
+                for _ in 0..30 {
+                    let _ = rig.frame(Some(&mut timer));
+                    prepare += rig.prepare_ms;
+                    if timer.frames_read != read {
+                        read = timer.frames_read;
+                        frames += 1;
+                        let spans = &timer.last_frame;
+                        let sum = |f: &dyn Fn(&str) -> bool| -> f32 {
+                            spans.iter().filter(|p| f(p.name)).map(|p| p.ms).sum()
+                        };
+                        gi += sum(&|n| n.starts_with("gi"));
+                        cull += sum(&|n| n == "static instance cull");
+                    }
+                }
+                let drawn = if gpu {
+                    rig.renderer.gpu_probe_view_instances(&rig.device, &rig.queue, batch.id)
+                } else {
+                    rig.renderer.probe_view_instances(batch.id)
+                };
+                let n = frames.max(1) as f32;
+                round.push((prepare / 30.0, cull / n, gi / n, drawn));
+            }
+        }
+        let name = if gpu { "GPU" } else { "CPU" };
+        for (label, round) in ["testing every cell", "leaving out far cells"].iter().zip(&mut rounds) {
+            round.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let (prepare, cull, gi, drawn) = round[round.len() / 2];
+            let all: Vec<String> = round.iter().map(|r| format!("{:.3}/{:.3}", r.0, r.1)).collect();
+            println!(
+                "gi far cells, {name} path, {label}: prepare {prepare:.3} ms, instance culling {cull:.3} ms, \
+                 GI passes {gi:.3} ms, {drawn} rocks in the probes' views (rounds prepare/cull: {})",
+                all.join(" ")
+            );
+        }
     }
 }
 

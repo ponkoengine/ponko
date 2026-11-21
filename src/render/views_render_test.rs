@@ -395,6 +395,72 @@ fn a_spot_lights_shadow_falls_in_a_view_far_from_the_main_camera() {
 }
 
 #[test]
+fn every_view_goes_to_the_gpu_in_one_submission_with_its_own_lights() {
+    // A long floor lit only by two point lights far apart: a red one near
+    // the main camera and a green one near the right half's. Each view
+    // writes its own lights into the renderer's shared light grid; with
+    // all of them submitted together, each view's copies land in its own
+    // command buffers, so each still reads its own.
+    let Some(mut stage) = Stage::new() else { return };
+    let grey = stage.cube(Color::rgb(0.7, 0.7, 0.7));
+    stage.block(grey, vec3(-60.0, -1.0, -20.0), vec3(60.0, 0.0, 20.0));
+    let light = |color| d3::PointLight {
+        color,
+        intensity: 60.0,
+        range: 8.0,
+        ..Default::default()
+    };
+    let (near, far) = (vec3(-40.0, 1.5, 0.0), vec3(40.0, 1.5, 0.0));
+    let red_light = stage
+        .ctx
+        .world
+        .spawn((d3::Transform::at(near), light(Color::rgb(1.0, 0.0, 0.0))));
+    let green_light = stage
+        .ctx
+        .world
+        .spawn((d3::Transform::at(far), light(Color::rgb(0.0, 1.0, 0.0))));
+    stage.ctx.scene3d.lighting.sun_intensity = 0.0;
+    stage.ctx.scene3d.lighting.ambient_intensity = 0.0;
+    stage.ctx.scene3d.camera = camera_at(&stage, vec3(-40.0, 0.0, 0.0), Viewport::split(2, 0));
+    let right = camera_at(&stage, vec3(40.0, 0.0, 0.0), Viewport::split(2, 1));
+    stage.ctx.scene3d.views.push(d3::View::new(right));
+    let mut windows = WindowViews::default();
+    let image = frame(&mut stage, &mut windows, true);
+    let (buffers, submissions) = windows.submitted;
+    assert_eq!(submissions, 1, "the main frame and the view in one submission");
+    assert!(buffers >= 2, "each frame's command buffers held: {buffers}");
+
+    let main = stage.ctx.scene3d.camera;
+    let view = stage.ctx.scene3d.views[0].camera;
+    let (mx, my) = seen(&main, vec3(-40.0, 0.0, 0.0));
+    let (vx, vy) = seen(&view, vec3(40.0, 0.0, 0.0));
+    let tint = |c: [f32; 3]| (c[0] - c[1], c[1] - c[0]);
+    let (main_red, _) = tint(mean_color(&image, mx, my, 2));
+    let (_, view_green) = tint(mean_color(&image, vx, vy, 2));
+    assert!(
+        main_red > 30.0,
+        "the main camera's floor is lit by its red light: {main_red}"
+    );
+    assert!(
+        view_green > 30.0,
+        "the view's floor is lit by its green light: {view_green}"
+    );
+
+    // Negative control: the lights swapped, the colours swap too.
+    stage.ctx.world.insert(red_light, d3::Transform::at(far));
+    stage.ctx.world.insert(green_light, d3::Transform::at(near));
+    let swapped = frame(&mut stage, &mut windows, true);
+    let (_, main_green) = tint(mean_color(&swapped, mx, my, 2));
+    let (view_red, _) = tint(mean_color(&swapped, vx, vy, 2));
+    assert!(
+        main_green > 30.0,
+        "swapped: the main camera's floor is green: {main_green}"
+    );
+    assert!(view_red > 30.0, "swapped: the view's floor is red: {view_red}");
+    stage.finish();
+}
+
+#[test]
 fn each_view_keeps_its_own_temporal_history() {
     let Some(mut stage) = Stage::new() else { return };
     let (red_box, green_box) = two_boxes(&mut stage);

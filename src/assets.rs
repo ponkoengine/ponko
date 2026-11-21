@@ -67,9 +67,11 @@ use crate::hot_reload::Asset;
 use crate::reflect::WorldReflect;
 use crate::scene::{PREFAB_FORMAT, PREFAB_VERSION};
 
-mod group;
+pub(crate) mod group;
 mod pack;
-pub use group::{AssetGroup, DEFAULT_GROUP_FRAME_BUDGET_MS, GroupId, GroupProgress, GroupState, GroupStats};
+pub use group::{
+    AssetGroup, DEFAULT_GROUP_FRAME_BUDGET_MS, GroupId, GroupProgress, GroupState, GroupStats, SliceLoader,
+};
 pub use pack::PackSource;
 #[cfg(all(target_arch = "wasm32", feature = "window"))]
 pub(crate) use pack::{parse_header as parse_pack_header, set_web_pack};

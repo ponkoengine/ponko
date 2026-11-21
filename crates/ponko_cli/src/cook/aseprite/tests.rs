@@ -772,3 +772,24 @@ fn the_linked_tileset_fixture_is_what_these_builders_make() {
         assert_eq!(&std::fs::read(&path).unwrap(), bytes, "{name}");
     }
 }
+
+#[test]
+fn only_a_file_with_tilesets_and_no_layer_is_tileset_only() {
+    assert_eq!(ponko_aseprite::is_tileset_only(&tileset_file(3, GREEN)), Ok(true));
+    // Layers of its own: the hero's, and a map's tilemap layer.
+    assert_eq!(ponko_aseprite::is_tileset_only(&hero()), Ok(false));
+    assert_eq!(
+        ponko_aseprite::is_tileset_only(&linked_map("tiles/ground.aseprite", 3, 2)),
+        Ok(false)
+    );
+    // No tileset and no layer: nothing to link to.
+    assert_eq!(
+        ponko_aseprite::is_tileset_only(&write(4, 2, &[], &[(100, vec![])], &[], &[])),
+        Ok(false)
+    );
+    assert!(
+        ponko_aseprite::is_tileset_only(b"not a file")
+            .unwrap_err()
+            .contains("not a readable")
+    );
+}

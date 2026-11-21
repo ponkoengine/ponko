@@ -163,10 +163,27 @@ pub struct UploadStats {
     pub held_by_budget: u64,
     /// Loads that failed.
     pub failures: u64,
+    /// Slices of decodes the last streaming step ran on the game thread:
+    /// where there are no worker threads, streamed textures and meshes are
+    /// decoded a slice at a time within the [asset group frame
+    /// budget](crate::assets::Assets::set_group_frame_budget) (what the
+    /// group step left of it); 0 elsewhere.
+    pub frame_slices: u32,
     /// Milliseconds the last upload step took on the game thread.
     pub step_ms: f32,
     /// The longest upload step so far, in milliseconds.
     pub max_step_ms: f32,
+    /// The GPU's own time copying the textures the latest timed upload
+    /// step uploaded, in milliseconds: what `step_ms` leaves out. It
+    /// arrives a frame or a few after that step. `None` before the first,
+    /// and always where the GPU can't time uploads (see
+    /// `gpu_upload_timing`). Asset groups' uploads are timed apart, in
+    /// [`GroupStats`](crate::assets::GroupStats).
+    pub gpu_upload_ms: Option<f32>,
+    /// Whether the GPU times uploads (it has timestamp queries): `false`
+    /// headless, on GPUs without them, and in browsers that don't offer
+    /// them; then only the game thread's time is measured.
+    pub gpu_upload_timing: bool,
 }
 
 /// One streamed asset, for diagnostics ([`Graphics::streamed_assets`](crate::gfx::Graphics::streamed_assets)).
@@ -232,10 +249,22 @@ pub(crate) type Pyramid = Vec<Level>;
 
 /// Halves `level` by averaging 2 × 2 blocks (edge pixels repeat for odd sizes).
 fn halve(level: &Level) -> Level {
-    let (w, h) = (level.width, level.height);
-    let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
+    let (nw, nh) = halved(level);
     let mut rgba = vec![0u8; (nw * nh * 4) as usize];
-    for y in 0..nh {
+    halve_rows(level, &mut rgba, 0..nh);
+    Level::new(nw, nh, rgba)
+}
+
+/// The size [`halve`] makes of `level`.
+fn halved(level: &Level) -> (u32, u32) {
+    ((level.width / 2).max(1), (level.height / 2).max(1))
+}
+
+/// Rows `rows` of [`halve`]'s output, into `rgba` (the whole output).
+fn halve_rows(level: &Level, rgba: &mut [u8], rows: std::ops::Range<u32>) {
+    let (w, h) = (level.width, level.height);
+    let (nw, _) = halved(level);
+    for y in rows {
         for x in 0..nw {
             let mut sum = [0u32; 4];
             for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
@@ -252,7 +281,6 @@ fn halve(level: &Level) -> Level {
             }
         }
     }
-    Level::new(nw, nh, rgba)
 }
 
 /// The resolutions of `image`, from the largest that fits `max` down to
@@ -267,7 +295,11 @@ pub(crate) fn pyramid(image: assets::Image, max: u32) -> Pyramid {
         let next = halve(last);
         levels.push(next);
     }
-    // Levels larger than the GPU can hold never upload.
+    fitting(levels, max)
+}
+
+/// `levels` without those larger than `max`: they never upload.
+fn fitting(mut levels: Pyramid, max: u32) -> Pyramid {
     let fits = levels
         .iter()
         .position(|l| l.width.max(l.height) <= max)
@@ -300,7 +332,125 @@ pub(crate) fn block_pyramid(image: &crate::compressed::CompressedImage, max: u32
     levels
 }
 
-type Decoded<T> = Job<Result<T, crate::error::Error>>;
+/// Where a streamed asset's decode is: on a worker, a slice at a time on
+/// the game thread (where there are no workers), or done.
+pub(crate) enum Decoded<T> {
+    Job(Job<Result<T, crate::error::Error>>),
+    Slices(Box<dyn StreamSlices<T>>),
+    Done(Result<T, crate::error::Error>),
+}
+
+/// A streamed asset decoded a slice at a time by the streaming step, where
+/// there are no workers ([`Graphics::slice_streams`](crate::gfx::Graphics)).
+pub(crate) trait StreamSlices<T>: Send {
+    /// Does the next slice of the work (reading files from `sources`, on
+    /// the game thread): its result once done.
+    fn step(&mut self, sources: &assets::SharedSources) -> Result<Option<T>, crate::error::Error>;
+}
+
+/// Reads a streamed asset's file, wherever the decode runs.
+pub(crate) type ReadFile = Box<dyn FnOnce() -> Result<(Origin, Vec<u8>), crate::error::Error> + Send>;
+
+/// A texture decoded a slice at a time: read, a PNG a few rows a slice
+/// (other formats in one piece), then its smaller resolutions a few rows a
+/// slice. The same levels as [`decode_texture`] and [`pyramid`] make.
+struct TextureSlices {
+    name: String,
+    max: u32,
+    gpu: TextureFormats,
+    phase: TexturePhase,
+}
+
+enum TexturePhase {
+    Read(ReadFile),
+    Png(Origin, Box<assets::group::sliced::PngSlices>),
+    Pyramid(Origin, PyramidSlices),
+    Taken,
+}
+
+impl StreamSlices<(Origin, Pyramid)> for TextureSlices {
+    fn step(&mut self, _: &assets::SharedSources) -> Result<Option<(Origin, Pyramid)>, crate::error::Error> {
+        let name = &self.name;
+        match std::mem::replace(&mut self.phase, TexturePhase::Taken) {
+            TexturePhase::Read(read) => {
+                let (origin, bytes) = read().map_err(|e| e.with_path(name))?;
+                let bytes = std::sync::Arc::new(bytes);
+                match assets::group::sliced::PngSlices::new(&bytes) {
+                    Some(png) => self.phase = TexturePhase::Png(origin, Box::new(png)),
+                    // Not a PNG it can split: in one piece, as on a worker.
+                    None => {
+                        let bytes = std::sync::Arc::unwrap_or_clone(bytes);
+                        return decode_texture(name, origin, Ok(bytes), self.max, self.gpu).map(Some);
+                    }
+                }
+                Ok(None)
+            }
+            TexturePhase::Png(origin, mut png) => {
+                let done = png.step().map_err(|e| {
+                    crate::error::Error::decode(name, format!("{} is not a valid image: {e}", origin.describe(name)))
+                })?;
+                self.phase = if done {
+                    TexturePhase::Pyramid(origin, PyramidSlices::new(png.finish()))
+                } else {
+                    TexturePhase::Png(origin, png)
+                };
+                Ok(None)
+            }
+            TexturePhase::Pyramid(origin, mut levels) => {
+                if levels.step() {
+                    return Ok(Some((origin, fitting(levels.levels, self.max))));
+                }
+                self.phase = TexturePhase::Pyramid(origin, levels);
+                Ok(None)
+            }
+            TexturePhase::Taken => Err(crate::error::Error::new(
+                crate::error::ErrorKind::Invalid,
+                format!("{name} was decoded already"),
+            )),
+        }
+    }
+}
+
+/// [`pyramid`]'s halving, a few rows a slice.
+struct PyramidSlices {
+    levels: Pyramid,
+    /// The level being made: its pixels so far and the rows done.
+    next: Option<(Vec<u8>, u32)>,
+}
+
+impl PyramidSlices {
+    fn new(image: assets::Image) -> Self {
+        Self {
+            levels: vec![Level::new(image.width, image.height, image.rgba)],
+            next: None,
+        }
+    }
+
+    /// Halves the next few rows; `true` once every level is made.
+    fn step(&mut self) -> bool {
+        let last = self.levels.last().expect("one level");
+        if last.width.max(last.height) <= STAND_IN {
+            return true;
+        }
+        let (nw, nh) = halved(last);
+        let (mut rgba, row) = self
+            .next
+            .take()
+            .unwrap_or_else(|| (vec![0u8; (nw * nh * 4) as usize], 0));
+        let rows = u32::try_from(assets::group::sliced::SLICE_BYTES / (nw as usize * 4))
+            .unwrap_or(u32::MAX)
+            .max(1);
+        let end = row.saturating_add(rows).min(nh);
+        halve_rows(last, &mut rgba, row..end);
+        if end < nh {
+            self.next = Some((rgba, end));
+            return false;
+        }
+        self.levels.push(Level::new(nw, nh, rgba));
+        let last = self.levels.last().expect("one level");
+        last.width.max(last.height) <= STAND_IN
+    }
+}
 
 /// A streamed texture.
 pub(crate) struct StreamedTexture {
@@ -364,6 +514,9 @@ pub(crate) struct Streaming {
     /// Bytes and uploads asset groups made this frame, before the upload
     /// step: they count against its budget.
     pub group_uploads: (u64, u32),
+    /// Tests: decode a slice at a time on the game thread (as where there
+    /// are no workers) or not, instead of what the platform has.
+    pub(crate) sliced: Option<bool>,
 }
 
 impl Default for Streaming {
@@ -384,6 +537,7 @@ impl Default for Streaming {
             #[cfg(feature = "3d")]
             lod_scratch: Vec::new(),
             group_uploads: (0, 0),
+            sliced: None,
         }
     }
 }
@@ -403,6 +557,11 @@ impl Streaming {
 
     fn pending(&self) -> usize {
         self.queue.len()
+    }
+
+    /// Whether decodes run a slice at a time in the streaming step.
+    pub(crate) fn sliced(&self) -> bool {
+        self.sliced.unwrap_or_else(assets::group::sliced::jobs_run_here)
     }
 
     /// The resolution texture `id` has on the GPU, if it is a streamed one
@@ -447,6 +606,7 @@ impl Ctx {
     /// The engine's per-frame streaming work, before the game's systems:
     /// streamed LOD groups ask for their levels, then the upload step.
     pub(crate) fn pump_streaming(&mut self) {
+        self.collect_upload_times();
         #[cfg(feature = "3d")]
         self.stream_lod_levels();
         // What entities stopped showing (LOD levels, despawned models) can
@@ -456,8 +616,18 @@ impl Ctx {
         for kind in ResidencyKind::ALL {
             self.gfx.enforce_residency(&mut self.world, kind);
         }
+        self.gfx.streaming.stats.frame_slices = 0;
         if !self.gfx.streaming.queue.is_empty() {
+            if self.gfx.streaming.sliced() {
+                // What the group step left of the frame budget (at least
+                // one slice).
+                let mut clock = self.assets.groups.clock_after_step();
+                self.gfx.slice_streams(&mut clock);
+                self.gfx.streaming.stats.frame_slices = clock.pieces();
+            }
+            self.gfx.begin_timed_uploads(false);
             self.gfx.upload_step(&mut self.world);
+            self.gfx.end_timed_uploads();
         } else {
             let (bytes, uploads) = std::mem::take(&mut self.gfx.streaming.group_uploads);
             let stats = &mut self.gfx.streaming.stats;
@@ -465,6 +635,28 @@ impl Ctx {
             stats.frame_uploads = uploads;
             stats.total_bytes += bytes;
             stats.total_uploads += u64::from(uploads);
+        }
+    }
+
+    /// Takes the GPU's times of earlier steps' uploads that came back.
+    fn collect_upload_times(&mut self) {
+        #[cfg(feature = "window")]
+        {
+            let gfx = &mut self.gfx;
+            let renderer = if gfx.headless { None } else { gfx.renderer.as_mut() };
+            let timing = renderer.as_ref().is_some_and(|r| r.times_uploads());
+            let (streams, groups) = (&mut gfx.streaming.stats, &mut self.assets.groups.stats);
+            streams.gpu_upload_timing = timing;
+            groups.gpu_upload_timing = timing;
+            if let Some(renderer) = renderer {
+                renderer.collect_upload_times(|step, ms| match step {
+                    crate::render::upload_timer::UploadStep::Groups => {
+                        groups.gpu_upload_ms = Some(ms);
+                        groups.total_gpu_upload_ms += f64::from(ms);
+                    }
+                    crate::render::upload_timer::UploadStep::Streaming => streams.gpu_upload_ms = Some(ms),
+                });
+            }
         }
     }
 
@@ -732,8 +924,118 @@ impl crate::gfx::Graphics {
         stats.max_step_ms = stats.max_step_ms.max(stats.step_ms);
     }
 
+    /// Times the texture uploads that follow on the GPU, where it can:
+    /// the asset group step's (`groups`) or the streaming step's.
+    pub(crate) fn begin_timed_uploads(&mut self, groups: bool) {
+        #[cfg(feature = "window")]
+        if !self.headless
+            && let Some(renderer) = self.renderer.as_mut()
+        {
+            use crate::render::upload_timer::UploadStep;
+            renderer.begin_timed_uploads(if groups {
+                UploadStep::Groups
+            } else {
+                UploadStep::Streaming
+            });
+        }
+        #[cfg(not(feature = "window"))]
+        let _ = groups;
+    }
+
+    /// Stops timing texture uploads (see `begin_timed_uploads`).
+    pub(crate) fn end_timed_uploads(&mut self) {
+        #[cfg(feature = "window")]
+        if !self.headless
+            && let Some(renderer) = self.renderer.as_mut()
+        {
+            renderer.end_timed_uploads();
+        }
+    }
+
+    /// Decodes slices of the queued streamed assets that decode on the game
+    /// thread, in the order they were asked for, while `clock` allows.
+    pub(crate) fn slice_streams(&mut self, clock: &mut assets::group::sliced::WorkClock) {
+        fn advance<T>(
+            job: &mut Option<Decoded<T>>,
+            sources: &assets::SharedSources,
+            clock: &mut assets::group::sliced::WorkClock,
+        ) {
+            let Some(Decoded::Slices(slices)) = job else {
+                return;
+            };
+            while clock.may_work() {
+                clock.piece();
+                match slices.step(sources) {
+                    Ok(None) => {}
+                    Ok(Some(done)) => return *job = Some(Decoded::Done(Ok(done))),
+                    Err(e) => return *job = Some(Decoded::Done(Err(e))),
+                }
+            }
+        }
+        let streaming = &mut self.streaming;
+        let sources = &self.asset_sources;
+        for request in &streaming.queue {
+            if !clock.may_work() {
+                return;
+            }
+            match request {
+                Request::Texture(name) => {
+                    if let Some(t) = streaming.textures.get_mut(name) {
+                        advance(&mut t.job, sources, clock);
+                    }
+                }
+                #[cfg(feature = "3d")]
+                Request::Mesh(name) => {
+                    if let Some(m) = streaming.meshes.get_mut(name) {
+                        advance(&mut m.job, sources, clock);
+                    }
+                }
+                #[cfg(feature = "3d")]
+                Request::InstanceCell(_) => {}
+            }
+        }
+    }
+
+    /// Takes a streamed asset's decoded result if it is done, or finishes
+    /// it in deterministic mode (waiting for its worker, or decoding its
+    /// remaining slices here); `None` if it isn't done.
+    pub(crate) fn take_stream_decode<T: Send + 'static>(
+        &mut self,
+        job: &mut Option<Decoded<T>>,
+    ) -> Option<Result<T, crate::error::Error>> {
+        match job.take()? {
+            Decoded::Done(result) => Some(result),
+            Decoded::Job(mut work) => {
+                if let Some(result) = work.take() {
+                    return Some(result);
+                }
+                if !self.streaming.deterministic {
+                    *job = Some(Decoded::Job(work));
+                    return None;
+                }
+                self.streaming.stats.decode_waits += 1;
+                Some(work.wait())
+            }
+            Decoded::Slices(mut slices) => {
+                if !self.streaming.deterministic {
+                    *job = Some(Decoded::Slices(slices));
+                    return None;
+                }
+                self.streaming.stats.decode_waits += 1;
+                loop {
+                    match slices.step(&self.asset_sources) {
+                        Ok(None) => {}
+                        Ok(Some(done)) => return Some(Ok(done)),
+                        Err(e) => return Some(Err(e)),
+                    }
+                }
+            }
+        }
+    }
+
     /// Takes `job`'s result if it is done, or waits for it in
     /// deterministic mode; `None` if it isn't done.
+    #[cfg(feature = "3d")]
     pub(crate) fn take_decoded<T: Send + 'static>(&mut self, job: &mut Option<Job<T>>) -> Option<T> {
         let ready = job.as_mut()?.take();
         if ready.is_some() {
@@ -756,7 +1058,7 @@ impl crate::gfx::Graphics {
         };
         if t.job.is_some() {
             let mut job = t.job.take();
-            let decoded = self.take_decoded(&mut job);
+            let decoded = self.take_stream_decode(&mut job);
             let t = self.streaming.textures.get_mut(name).expect("still there");
             t.job = job;
             match decoded {
@@ -1088,10 +1390,19 @@ impl crate::gfx::Graphics {
         let max = self.max_texture_side();
         let gpu = self.texture_formats();
         let name_owned = name.to_string();
-        let job = Job::spawn(move || {
-            let (origin, bytes) = read()?;
-            decode_texture(&name_owned, origin, Ok(bytes), max, gpu)
-        });
+        let job = if self.streaming.sliced() {
+            Decoded::Slices(Box::new(TextureSlices {
+                name: name_owned,
+                max,
+                gpu,
+                phase: TexturePhase::Read(Box::new(read)),
+            }))
+        } else {
+            Decoded::Job(Job::spawn(move || {
+                let (origin, bytes) = read()?;
+                decode_texture(&name_owned, origin, Ok(bytes), max, gpu)
+            }))
+        };
         let entry = self.texture_entry(name);
         entry.job = Some(job);
         entry.held = None;
@@ -1377,7 +1688,7 @@ impl crate::gfx::Graphics {
 #[cfg(feature = "compressed-textures")]
 type TextureFormats = crate::compressed::GpuFormats;
 #[cfg(not(feature = "compressed-textures"))]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct TextureFormats;
 
 /// Decodes texture `name` from `bytes` into its resolutions: a KTX2 or DDS
@@ -1448,6 +1759,13 @@ fn write_streamed(
 mod tests {
     use super::*;
 
+    /// The formats a texture decode targets (a unit struct without compressed
+    /// textures, a set of supported formats with them).
+    #[allow(clippy::default_constructed_unit_structs)]
+    fn formats() -> TextureFormats {
+        TextureFormats::default()
+    }
+
     fn image(w: u32, h: u32) -> assets::Image {
         assets::Image {
             width: w,
@@ -1493,5 +1811,166 @@ mod tests {
         let half = halve(&level);
         assert_eq!((half.width, half.height), (1, 1));
         assert_eq!(half.rgba, [128, 128, 128, 255]);
+    }
+
+    /// A PNG of `width` x `height` noise.
+    fn noise_png(width: u32, height: u32) -> Vec<u8> {
+        let mut s = 0x2545_F491u32;
+        let image = image::RgbaImage::from_fn(width, height, |_, _| {
+            s ^= s << 13;
+            s ^= s >> 17;
+            s ^= s << 5;
+            image::Rgba([s as u8, (s >> 8) as u8, (s >> 16) as u8, (s >> 24) as u8])
+        });
+        let mut bytes = Vec::new();
+        image
+            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+            .unwrap();
+        bytes
+    }
+
+    /// Steps `slices` to the end: its result and the slices it took.
+    fn run<T>(slices: &mut dyn StreamSlices<T>, sources: &assets::SharedSources) -> (T, u32) {
+        let mut n = 0;
+        loop {
+            n += 1;
+            if let Some(done) = slices.step(sources).unwrap() {
+                return (done, n);
+            }
+        }
+    }
+
+    fn same(a: &Pyramid, b: &Pyramid) -> bool {
+        a.len() == b.len()
+            && a.iter()
+                .zip(b)
+                .all(|(a, b)| (a.width, a.height) == (b.width, b.height) && a.rgba == b.rgba)
+    }
+
+    #[test]
+    fn sliced_texture_decodes_make_the_levels_the_worker_decode_makes() {
+        let sources = assets::SharedSources::default();
+        for (w, h, max) in [
+            (1024, 1024, u32::MAX),
+            (300, 77, u32::MAX),
+            (513, 1025, 256),
+            (20, 9, u32::MAX),
+        ] {
+            let png = noise_png(w, h);
+            let formats = formats();
+            let whole = decode_texture("t.png", Origin::File("t.png".into()), Ok(png.clone()), max, formats).unwrap();
+            let mut slices = TextureSlices {
+                name: "t.png".into(),
+                max,
+                gpu: formats,
+                phase: TexturePhase::Read(Box::new(move || Ok((Origin::File("t.png".into()), png)))),
+            };
+            let ((origin, levels), _) = run(&mut slices, &sources);
+            assert_eq!(origin, whole.0);
+            assert!(same(&levels, &whole.1), "{w} x {h} at most {max}: other levels");
+        }
+    }
+
+    #[test]
+    fn a_sliced_texture_takes_a_slice_per_few_rows_of_each_level() {
+        let png = noise_png(1024, 1024);
+        let mut slices = TextureSlices {
+            name: "t.png".into(),
+            max: u32::MAX,
+            gpu: formats(),
+            phase: TexturePhase::Read(Box::new(move || Ok((Origin::File("t.png".into()), png)))),
+        };
+        let (_, n) = run(&mut slices, &assets::SharedSources::default());
+        // The read; 64 KiB of output a slice: 16 rows of the 1024-pixel
+        // decode (64 slices), then the halvings to 512 (16), 256 (4), and
+        // 128, 64 and 32 (one each).
+        assert_eq!(n, 1 + 64 + 16 + 4 + 3);
+    }
+
+    #[test]
+    fn a_broken_png_fails_its_slices_with_a_decode_error() {
+        let mut png = noise_png(256, 256);
+        png.truncate(png.len() / 2);
+        let mut slices = TextureSlices {
+            name: "cut.png".into(),
+            max: u32::MAX,
+            gpu: formats(),
+            phase: TexturePhase::Read(Box::new(move || Ok((Origin::File("cut.png".into()), png)))),
+        };
+        let sources = assets::SharedSources::default();
+        let error = loop {
+            match slices.step(&sources) {
+                Ok(None) => {}
+                Ok(Some(_)) => panic!("half a file decoded"),
+                Err(e) => break e,
+            }
+        };
+        assert_eq!(
+            (error.kind(), error.path()),
+            (crate::error::ErrorKind::Decode, Some("cut.png"))
+        );
+    }
+
+    #[test]
+    fn without_workers_a_streamed_texture_decodes_as_many_slices_a_frame_as_the_budget_holds() {
+        use crate::prelude::*;
+        Game::new("t", 1, 1).hot_reload(false).run_headless(0, |ctx| {
+            ctx.gfx.streaming.sliced = Some(true);
+            // Each piece counts as 0.125 ms whatever it takes: four a frame
+            // at a 0.5 ms budget, however busy the machine is.
+            ctx.assets.groups.piece_cost = Some(0.125 / 1000.0);
+            ctx.assets.set_group_frame_budget(0.5);
+            ctx.assets
+                .add_background_source(assets::MemorySource::new("mem").with("big.png", noise_png(1024, 1024)));
+            assert_eq!(ctx.gfx.stream_texture("big.png"), None);
+            let mut frames = Vec::new();
+            while ctx.gfx.asset_state(ResidencyKind::Texture, "big.png") != AssetState::Resident {
+                ctx.pump_asset_groups();
+                ctx.pump_streaming();
+                frames.push(ctx.gfx.upload_stats().frame_slices);
+                assert!(frames.len() < 1000, "never loaded");
+            }
+            let decoding: Vec<u32> = frames.iter().copied().filter(|&n| n > 0).collect();
+            // The read and 87 slices (see the test above), four a frame.
+            assert_eq!(decoding.iter().sum::<u32>(), 88, "{frames:?}");
+            assert!(decoding.iter().all(|&n| n <= 4), "{frames:?}");
+            assert_eq!(decoding.len(), 22, "{frames:?}");
+            let texture = ctx.gfx.stream_texture("big.png").expect("loaded");
+            assert_eq!((texture.width(), texture.height()), (1024, 1024));
+        });
+    }
+
+    #[test]
+    fn without_workers_a_group_leaves_streamed_decodes_what_its_step_did_not_spend() {
+        use crate::prelude::*;
+        Game::new("t", 1, 1).hot_reload(false).run_headless(0, |ctx| {
+            ctx.gfx.streaming.sliced = Some(true);
+            ctx.assets.groups.sliced = Some(true);
+            ctx.assets.groups.piece_cost = Some(0.125 / 1000.0);
+            ctx.assets.set_group_frame_budget(0.5);
+            ctx.assets.add_background_source(
+                assets::MemorySource::new("mem")
+                    .with("a.png", noise_png(512, 512))
+                    .with("b.png", noise_png(512, 512)),
+            );
+            let id = ctx.assets.start_group(assets::AssetGroup::new("g").texture("a.png"));
+            assert_eq!(ctx.gfx.stream_texture("b.png"), None);
+            let mut frames = 0;
+            while ctx.assets.group_state(id) == assets::GroupState::Loading {
+                ctx.pump_asset_groups();
+                ctx.pump_streaming();
+                let (group, streams) = (ctx.assets.group_stats().pieces, ctx.gfx.upload_stats().frame_slices);
+                // The two share the frame's four pieces (the group's first,
+                // streaming at least one).
+                assert!(group + streams <= 4 || streams == 1, "{group} + {streams}");
+                frames += 1;
+                assert!(frames < 1000);
+            }
+            ctx.finish_uploads();
+            assert_eq!(
+                ctx.gfx.asset_state(ResidencyKind::Texture, "b.png"),
+                AssetState::Resident
+            );
+        });
     }
 }
