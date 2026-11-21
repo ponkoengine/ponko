@@ -152,7 +152,16 @@ Where it is worked out:
   WASM SIMD in a web build made for it (see [On the web](#on-the-web)).
 - **The CPU's queries** (`height_at`, `sample`, buoyancy) run the same
   FFT on the CPU at the time asked, once per moment (the last two are
-  kept), so what floats rides the waves that are drawn. A GPU test reads
+  kept), so what floats rides the waves that are drawn. Buoyancy and
+  `sample` also need the sway's speed, which costs about half a moment
+  more; when a moment worked out without it is asked again with it (a
+  WebGL2 upload, then buoyancy at the same time on the next fixed step),
+  the next moments are worked out with it from the start, so each is still
+  worked out once, until a moment so worked out goes unasked. A frame
+  of a WebGL2 sea with something floating at 128 cells costs 0.21 ms of
+  CPU field instead of 0.35 ms (0.93 instead of 1.55 ms at 256 cells;
+  `upload_and_buoyancy_frame_cost`, release, one thread, the medians of
+  seven runs alternating before and after on the busy machine below). A GPU test reads
   the drawn surface back and compares it with `height_at`: 9.9 mm worst
   with the GPU's FFT, 9.1 mm with the CPU's upload, on a 1.5 m sea; the
   GPU's field matches the CPU's to 6 mm (it runs in half floats).
