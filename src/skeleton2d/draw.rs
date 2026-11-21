@@ -187,7 +187,7 @@ pub(crate) fn draw_skeletons_with(ctx: &mut Ctx, spread: Spread) {
         }
         n
     };
-    let threads = rayon::current_num_threads();
+    let threads = crate::frame_pool::threads();
     let per = match spread {
         Spread::Auto => (n >= PARALLEL_MIN && threads > 1).then(|| run_length(n, threads)),
         #[cfg(test)]
@@ -218,22 +218,28 @@ pub(crate) fn draw_skeletons_with(ctx: &mut Ctx, spread: Spread) {
             d.chunks.resize_with(used, Chunk::default);
         }
         let world = &ctx.world;
-        d.chunks[..used]
-            .par_iter_mut()
-            .zip(d.items.par_chunks(per))
-            .for_each(|(chunk, items)| {
-                // Counts this chunk's allocations on whichever thread draws it.
-                crate::profile_scope!("skeleton2d/draw_chunk");
-                chunk.clear();
-                let mut scratch = std::mem::take(&mut chunk.scratch);
-                for (e, t, style) in items {
-                    if let Some(s) = world.get::<Skeleton>(*e) {
-                        draw(chunk, &mut scratch, t, s, *style);
+        let DrawChunks { items, chunks, starts, .. } = &mut d;
+        // Drawn and merged on the frame pool (on the web, its workers, not
+        // the page's thread), as parallel queries run.
+        crate::frame_pool::run(|| {
+            crate::profile_scope!("skeleton2d/shared_draw");
+            chunks[..used]
+                .par_iter_mut()
+                .zip(items.par_chunks(per))
+                .for_each(|(chunk, items)| {
+                    // Counts this chunk's allocations on whichever thread draws it.
+                    crate::profile_scope!("skeleton2d/draw_chunk");
+                    chunk.clear();
+                    let mut scratch = std::mem::take(&mut chunk.scratch);
+                    for (e, t, style) in items {
+                        if let Some(s) = world.get::<Skeleton>(*e) {
+                            draw(chunk, &mut scratch, t, s, *style);
+                        }
                     }
-                }
-                chunk.scratch = scratch;
-            });
-        merge(list, &d.chunks[..used], &mut d.starts);
+                    chunk.scratch = scratch;
+                });
+            merge(list, &chunks[..used], starts);
+        });
     } else {
         let scratch = &mut d.serial.scratch;
         ctx.world
