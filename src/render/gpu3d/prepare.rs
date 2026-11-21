@@ -791,7 +791,9 @@ impl Renderer3D {
             |k| drawn[k],
             // Poses that moved are posed as they were too, for the motion
             // pass (only when it draws something: not on a reset frame).
-            self.screen.velocity_on && !frame.motion.runs.is_empty(),
+            self.screen.velocity_on
+                && (!frame.motion.runs.is_empty()
+                    || frame.view_model.as_ref().is_some_and(|v| !v.motion.runs.is_empty())),
         );
         self.lists.skin_drawn = drawn;
         self.order_runs();
@@ -884,6 +886,7 @@ impl Renderer3D {
                 self.lists.moved_runs.extend_from_slice(&frame.motion.runs);
             }
         }
+        self.upload_view_model_motion(device, queue, frame);
         true
     }
 
@@ -998,6 +1001,7 @@ impl Renderer3D {
             view_proj: view_proj.to_cols_array_2d(),
             unjittered_view_proj: unjittered.to_cols_array_2d(),
             previous_view_proj: previous_view_proj.to_cols_array_2d(),
+            reprojection: previous_view_proj.to_cols_array_2d(),
             jitter: [jitter[0], jitter[1], 0.0, 0.0],
             sun_view_proj: frame.sun_view_proj.map(|m| m.to_cols_array_2d()),
             caster_view_proj: Mat4::IDENTITY.to_cols_array_2d(),
@@ -1180,6 +1184,7 @@ impl Renderer3D {
             // Target cameras are not resolved over time.
             theirs.unjittered_view_proj = theirs.view_proj;
             theirs.previous_view_proj = theirs.view_proj;
+            theirs.reprojection = theirs.view_proj;
             theirs.jitter = [0.0; 4];
             theirs.camera = view.camera.extend(1.0).to_array();
             theirs.screen = [
@@ -1217,6 +1222,7 @@ impl Renderer3D {
                 theirs.inv_view_proj = view_proj.inverse().to_cols_array_2d();
                 theirs.unjittered_view_proj = theirs.view_proj;
                 theirs.previous_view_proj = theirs.view_proj;
+                theirs.reprojection = theirs.view_proj;
                 theirs.camera = probe.extend(1.0).to_array();
                 theirs.sky_light[3] = (probe.y / 1000.0).max(0.0);
                 sync_frame(queue, &gi.face_buffers[i], 0, &mut gi.face_mirrors[i], &theirs);

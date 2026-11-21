@@ -28,25 +28,33 @@ pub const VIEW_MODEL_LAYER: u32 = 31;
 /// [`far`](Self::far): a held item keeps its size and shape whatever field
 /// of view the player picks. Its models are drawn after the world, into
 /// the sliver of the depth range nearest the eye (the world is pushed
-/// behind it by less than a hundredth of the near plane's distance), so
-/// they cover the world and still hide each other's back faces. They are
-/// lit by the world's sun, lights and shadows where they are, and cast
-/// their shadows into the world.
+/// behind it by less than a hundredth of the near plane's distance, and
+/// whatever of the world is nearer than that is pushed back first), so
+/// they cover the world and still hide each other's back faces. Cut-out
+/// ([`Blend::Cutout`](crate::three::Blend::Cutout)) materials cut their
+/// holes there as in the world; see-through ones are blended over. They are lit
+/// by the world's sun, lights and shadows where they are, and cast their
+/// shadows into the world.
+///
+/// With temporal antialiasing on they write motion vectors of their own:
+/// an item held still stays put on screen while the eye turns and walks,
+/// and one that sways or recoils moves as far as it does.
 ///
 /// # Cost and limits
 ///
 /// `None` (the default) costs nothing. On, it costs one more collection
-/// of the held items (only the models on its layers) and their draws at
-/// the end of the main view's color pass: no extra render pass, target or
-/// copy. The held items are drawn by the main camera only (not window
-/// views or target cameras, which never show them). Screen effects that
-/// read the depth (ambient occlusion, reflections, depth of field, fog
-/// reconstructed from depth) treat them as being at the near plane:
-/// ambient occlusion and screen-space reflections leave them out, depth of
-/// field focused far away blurs them. Their motion isn't written for
-/// temporal antialiasing, which may smear them a little while the view
-/// turns fast. Cut-out materials (alpha cut-off) aren't drawn in the pass;
-/// solid and see-through ones are.
+/// of the held items (only the models on its layers), their draws at the
+/// end of the main view's color pass and one full-screen depth-tested
+/// triangle before them: no extra render target or copy. With temporal
+/// antialiasing, one small render pass draws their motion. A cut-out held
+/// item's pipeline is built the first time one is drawn. The held items
+/// are drawn by the main camera only (not window views or target cameras,
+/// which never show them). Screen effects that read the depth (ambient
+/// occlusion, reflections, depth of field, fog reconstructed from depth)
+/// treat them as being at the near plane: ambient occlusion and
+/// screen-space reflections leave them out, depth of field focused far
+/// away blurs them. See-through held items write no motion vectors, like
+/// every see-through surface.
 ///
 /// ```
 /// use ponko::prelude::*;
@@ -256,10 +264,18 @@ pub(crate) fn collect_view_model(
         },
         ..settings.lighting
     };
+    let (enabled, reset) = (main.motion.enabled, main.motion.reset);
+    let forgotten = main.motion.forgotten();
     let frame = main.view_model.get_or_insert_with(Default::default);
     frame.size_limit = main.size_limit;
     frame.lod = settings.lod;
     frame.occlusion = None;
+    // The same past as the main frame's: every held item gets a motion
+    // vector of its own (see `gpu3d/view_model.rs`), over the world's.
+    frame.motion.enabled = enabled;
+    frame.motion.reset = reset;
+    frame.motion.every = true;
+    frame.motion.forget.extend_from_slice(forgotten);
     frame.collect(world, assets, skins, &eye, &lighting);
 }
 

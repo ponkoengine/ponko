@@ -1,0 +1,17 @@
+{
+  "name": "view_model_cutout",
+  "scene": "a yellow 12 cm card held half a metre ahead (below and right of the centre), cut into three solid and three empty vertical stripes, over a grey wall 0.3 m ahead that shows through the empty ones; 4x multisampling",
+  "width": 128,
+  "height": 128,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 12,
+    "outliers": 0.01,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "4dbe0435de944a67",
+  "reason": "New: a cut-out held item drawn by the view model"
+}
