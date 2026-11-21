@@ -73,6 +73,14 @@ enum Undo {
     Despawned(Vec<(Entity, Value)>),
     /// Resource `name` was `before`.
     Resource { name: String, before: Value },
+    /// The record of `root`'s glTF scene held this link of node `node` to
+    /// a parent in another scene (`None`: none).
+    #[cfg(all(feature = "editor", feature = "3d"))]
+    GltfLink {
+        root: Entity,
+        node: String,
+        link: Option<crate::three::WaitingLink>,
+    },
     /// Several changes made as one (a drag of several entities).
     Group(Vec<Undo>),
 }
@@ -845,6 +853,12 @@ impl Editor {
                 let now = ctx.world.resource_json(&name)?;
                 ctx.world.set_resource_json(&name, before)?;
                 Undo::Resource { name, before: now }
+            }
+            #[cfg(all(feature = "editor", feature = "3d"))]
+            Undo::GltfLink { root, node, link } => {
+                let root = self.resolve(root);
+                let link = ctx.set_waiting_link(root, &node, link)?;
+                Undo::GltfLink { root, node, link }
             }
             Undo::Group(steps) => {
                 let mut back = Vec::with_capacity(steps.len());
