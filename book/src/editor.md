@@ -241,7 +241,7 @@ included root's changed components, those it no longer has (`remove`) and
 changes to the included prefab's own parts (`parts`), as
 [Prefabs that include prefabs](scenes.md#prefabs-that-include-prefabs)
 describes. With a part of an included prefab selected, an **Apply to
-<name>** button writes that part of the instance into the included prefab's
+*name*** button writes that part of the instance into the included prefab's
 own file instead; every instance in the scene that uses it, directly or
 inside another prefab, follows. A part deleted from an included prefab
 can't be written as a link: revert it, or apply to the included prefab.
@@ -350,7 +350,7 @@ dropped on a model paints it and the scene keeps it, a prefab
 instance's overrides are listed, reverted one at a time or all together
 and applied to the prefab and its other instances (and, for a prefab
 inside a prefab, to the outer or the included file with **Apply to
-<name>**), a glTF scene's node moved with the gizmo keeps its place through
+*name***), a glTF scene's node moved with the gizmo keeps its place through
 a re-export and a save and reopen, the 2D and 3D cameras centre on the
 view between the panels and follow a dragged panel edge, a model tile
 shows the thumbnail kept on disk for its content, Stop gives back the

@@ -2,7 +2,7 @@
 - Editor: **Apply to prefab** works on an instance of a prefab that includes
   other prefabs, writing each included prefab back as its link with how
   this instance changes it, and a selected part of an included prefab has
-  **Apply to <name>**, which writes it into the included prefab's own file;
+  **Apply to *name***, which writes it into the included prefab's own file;
   every instance in the scene using it follows, in one undo step.
 - Prefab files: an included prefab's entry takes `"remove"` (components its
   root doesn't get) and `"parts"` (changes to its other entities, by their
