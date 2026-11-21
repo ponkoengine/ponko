@@ -627,12 +627,18 @@ keep their sprites and only move in depth. A node that moves redraws itself and 
 else.
 
 Text keeps its glyphs separately from the rest of its node. While a node's
-text, font, size, wrapping, alignment and place stay the same, drawing it
-again pushes the glyphs it laid out before, in its color now: a node whose
-opacity, scale, offset, background or text color animates, or whose fill
-fades on hover, is drawn each frame without its text being shaped or laid
-out again. Only a focused text field measures its caret and selection each
-time it is drawn.
+text, font, size, wrapping, alignment and width stay the same, drawing it
+again places the glyphs it laid out before where the node is now, in its
+color now. Only that placing is redone: each line's origin snaps to the
+physical pixel grid again, so the text looks the same wherever it lands. A
+node that moves (a scroll area or list scrolled by a fraction of a pixel, a
+row whose sibling resized), and a node whose opacity, scale, offset,
+background or text color animates, or whose fill fades on hover, is drawn
+each frame without its text being shaped, measured or wrapped again. A
+virtual list scrolled past a row lays out only the item that came into
+view. The tooltip and an item dragged with the pointer lay their text out
+once, not on each frame they follow the pointer. Only a focused text field
+measures its caret and selection each time it is drawn.
 
 The `ui/draw-...` benchmarks of `ponko_bench` time the UI's frame and draw
 list for the same HUD and settings screen, with every glyph pushed as with
