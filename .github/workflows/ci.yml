@@ -674,10 +674,14 @@ jobs:
           cargo test -p ponko --no-fail-fast --features 3d,system-fonts --test text_shaping
           cargo test -p ponko --no-fail-fast --features 3d,system-fonts --lib text
       # The editor as an app: documents, undo, saving scenes and prefabs,
-      # cooking and play mode, all without a window.
+      # cooking and play mode, all without a window; then its panels (the
+      # inspector's modules with the editor on: file picker, path field,
+      # keys after a dialog, asset panel).
       - name: Tests, editor
         if: ${{ !cancelled() }}
-        run: cargo test -p ponko --no-fail-fast --features editor --lib editor
+        run: |
+          cargo test -p ponko --no-fail-fast --features editor --lib editor
+          cargo test -p ponko --no-fail-fast --features editor --lib inspector
       # `.aseprite` source files loaded without an export beside them.
       - name: Tests, aseprite-source
         if: ${{ !cancelled() }}
