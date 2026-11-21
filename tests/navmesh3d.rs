@@ -7,7 +7,7 @@ use ponko::d3::Transform as Transform3D;
 use ponko::d3::{NavAgent as NavAgent3D, NavMesh as NavMesh3D, NavObstacle as NavObstacle3D};
 #[allow(unused_imports)]
 #[cfg(feature = "navmesh")]
-use ponko::nav::{NavBakeSettings, NavSource};
+use ponko::nav::{NavBakeSettings, NavCrowdStats, NavSource};
 use ponko::prelude::*;
 #[allow(unused_imports)]
 #[cfg(feature = "3d")]
@@ -442,23 +442,28 @@ fn fifty_agents_reach_a_shared_goal_region_without_overlaps() {
         .for_each(|t| assert!(t.position.with_y(0.0).length() < 4.5, "{:?}", t.position));
 }
 
-#[test]
-fn five_hundred_agents_step_within_a_coarse_budget() {
-    let start = std::time::Instant::now();
-    let mut world = Game::new("crowd", 1, 1)
+/// `n` agents in rows of 25, 0.72 apart, each walking one unit, for 60
+/// ticks at 60 Hz.
+fn walking_grid(n: usize) -> World {
+    Game::new("crowd", 1, 1)
         .fixed_hz(60)
         .sim_system(systems::step_navmesh3d)
-        .run_headless(60, |ctx| {
+        .run_headless(60, move |ctx| {
             ctx.world
                 .insert_resource(bake(&[source(MeshData::plane(20.0), Vec3::ZERO)]));
-            for i in 0..500 {
+            for i in 0..n {
                 let position = vec3((i % 25) as f32 * 0.72 - 8.64, 0.0, (i / 25) as f32 * 0.72 - 6.84);
                 let mut a = crowd_agent(Some(position + Vec3::Z));
                 a.radius = 0.2;
                 a.avoidance_weight = 0.0;
                 ctx.world.spawn((Transform3D::at(position), a));
             }
-        });
+        })
+}
+
+#[test]
+fn five_hundred_agents_each_step_every_tick_with_work_that_grows_linearly() {
+    let mut world = walking_grid(500);
     assert_eq!(world.query::<&NavAgent3D>().iter().count(), 500);
     world.query::<(&Transform3D, &NavAgent3D)>().for_each(|(t, a)| {
         assert!(
@@ -467,10 +472,27 @@ fn five_hundred_agents_step_within_a_coarse_budget() {
             t.position
         );
     });
-    // A coarse guard against a crowd step that grows with the square of the
-    // agents (or worse): this whole file runs in about a second even at a
-    // load average far above the core count, so 30 s holds on a busy machine.
-    assert!(start.elapsed() < std::time::Duration::from_secs(30));
+    // Counted work, not time: one crowd step per 60 Hz tick, each moving
+    // every agent, holds on a machine of any speed and any load.
+    let many = world.resource::<NavMesh3D>().crowd_stats();
+    assert_eq!((many.steps, many.agent_steps), (60, 60 * 500), "{many:?}");
+    // A crowd step that grew with the square of the agents (or worse) would
+    // do ten times the work per agent for ten times the agents at the same
+    // spacing; a linear one does about the same (rows inside the grid have
+    // more neighbours than the edge rows, so a little more).
+    let few = walking_grid(50).resource::<NavMesh3D>().crowd_stats();
+    assert_eq!((few.steps, few.agent_steps), (60, 60 * 50), "{few:?}");
+    let per_agent = |s: NavCrowdStats| s.work as f64 / s.agent_steps as f64;
+    let growth = per_agent(many) / per_agent(few);
+    eprintln!(
+        "work per agent step: {:.0} for 50, {:.0} for 500 ({growth:.2}x)",
+        per_agent(few),
+        per_agent(many)
+    );
+    assert!(
+        growth < 2.0,
+        "work per agent step grew {growth:.2}x: {few:?} -> {many:?}"
+    );
 }
 
 #[test]

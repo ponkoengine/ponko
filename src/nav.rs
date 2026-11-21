@@ -9,4 +9,4 @@
 #![deny(missing_docs)]
 
 #[cfg(feature = "navmesh")]
-pub use crate::nav3d::{NavBakeError, NavBakeSettings, NavSource};
+pub use crate::nav3d::{NavBakeError, NavBakeSettings, NavCrowdStats, NavSource};
