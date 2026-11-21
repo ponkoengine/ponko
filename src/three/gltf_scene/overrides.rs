@@ -38,7 +38,11 @@ use crate::reflect::{JsonMap, WorldReflect};
 pub(crate) struct GltfEditing;
 
 /// How one node differs from the file.
+///
+/// Saved as [`SavedNodeOverrides`]: a parent in another scene goes in a
+/// field of its own, which builds from before such parents existed skip.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(from = "SavedNodeOverrides", into = "SavedNodeOverrides")]
 pub(super) struct NodeOverrides {
     /// Changed components (the changed fields of an object) and added
     /// ones (the whole value), by name.
@@ -69,6 +73,96 @@ impl NodeOverrides {
     }
 }
 
+/// [`NodeOverrides`] as saves hold it. A parent in another scene, with its
+/// offset (the node's `Attached3D` without `to`), is `scene_parent`, not
+/// `parent` and `components`: an older build reads a variant of
+/// [`NodeParent`] it doesn't know as an error, which would lose the whole
+/// record, and would put that offset on the file's parent. It skips the
+/// unknown field instead and leaves the node on the file's parent. Saves
+/// that hold such a parent as `parent` still read.
+#[derive(Serialize, Deserialize)]
+struct SavedNodeOverrides {
+    #[serde(default, skip_serializing_if = "JsonMap::is_empty")]
+    components: JsonMap,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    remove: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    deleted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    parent: Option<NodeParent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scene_parent: Option<SceneParent>,
+}
+
+/// A parent in another scene, as saves hold it.
+#[derive(Serialize, Deserialize)]
+struct SceneParent {
+    /// The number of that scene's record.
+    scene: u64,
+    /// The node's path; none for the scene's root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    node: Option<String>,
+    /// The `Attached3D` fields but `to`: the offset in that parent's space.
+    #[serde(default, skip_serializing_if = "JsonMap::is_empty")]
+    link: JsonMap,
+}
+
+impl From<NodeOverrides> for SavedNodeOverrides {
+    fn from(o: NodeOverrides) -> Self {
+        let NodeOverrides {
+            mut components,
+            remove,
+            deleted,
+            parent,
+        } = o;
+        let (parent, scene_parent) = match parent {
+            Some(NodeParent::SceneRoot(scene)) => (None, Some((scene, None))),
+            Some(NodeParent::SceneNode { scene, node }) => (None, Some((scene, Some(node)))),
+            other => (other, None),
+        };
+        let scene_parent = scene_parent.map(|(scene, node)| SceneParent {
+            scene,
+            node,
+            link: match components.remove("Attached3D") {
+                Some(Value::Object(link)) => link,
+                _ => JsonMap::new(),
+            },
+        });
+        Self {
+            components,
+            remove,
+            deleted,
+            parent,
+            scene_parent,
+        }
+    }
+}
+
+impl From<SavedNodeOverrides> for NodeOverrides {
+    fn from(o: SavedNodeOverrides) -> Self {
+        let SavedNodeOverrides {
+            mut components,
+            remove,
+            deleted,
+            mut parent,
+            scene_parent,
+        } = o;
+        if let Some(SceneParent { scene, node, link }) = scene_parent {
+            parent = Some(match node {
+                Some(node) => NodeParent::SceneNode { scene, node },
+                None => NodeParent::SceneRoot(scene),
+            });
+            components.insert("Attached3D".into(), Value::Object(link));
+        }
+        Self {
+            components,
+            remove,
+            deleted,
+            parent,
+        }
+    }
+}
+
 /// The parent a node was attached to instead of the file's.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -79,9 +173,11 @@ pub(super) enum NodeParent {
     Node(String),
     /// An entity saved with the world (its id is kept by world saves).
     Entity(Entity),
-    /// The root of another scene, by its record's number.
+    /// The root of another scene, by its record's number. Saved as
+    /// [`SceneParent`]; read here from saves that held it as `parent`.
     SceneRoot(u64),
     /// A node of another scene: its record's number and the node's path.
+    /// Saved as [`SceneParent`], as [`SceneRoot`](Self::SceneRoot) is.
     SceneNode { scene: u64, node: String },
 }
 
@@ -93,6 +189,16 @@ impl NodeParent {
             _ => None,
         }
     }
+}
+
+/// A node's link to a parent in another scene, as its scene's record
+/// holds it: the parent and the `Attached3D` fields but `to` (see
+/// [`Ctx::set_waiting_link`]).
+#[cfg_attr(not(feature = "editor"), allow(dead_code))]
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct WaitingLink {
+    parent: NodeParent,
+    link: Value,
 }
 
 /// One way a node of a glTF scene differs from its file, as the editor
@@ -120,6 +226,11 @@ pub(crate) enum GltfOverrideKind {
     Removed(String),
     /// It hangs off another parent: the entity it is attached to now.
     Parent(Entity),
+    /// It was attached to the root or a node of another scene that isn't
+    /// there (its file didn't load): which one, as the editor names it
+    /// (`node "Post" of posts.glb`). The node waits on the file's parent;
+    /// the link stays in its record until it is reverted.
+    MissingParent(String),
     /// It was deleted.
     Deleted,
 }
@@ -130,7 +241,7 @@ impl GltfOverrideKind {
     pub(crate) fn component(&self) -> Option<&str> {
         match self {
             Self::Changed { name, .. } | Self::Added(name) | Self::Removed(name) => Some(name),
-            Self::Parent(_) => Some("Attached3D"),
+            Self::Parent(_) | Self::MissingParent(_) => Some("Attached3D"),
             Self::Deleted => None,
         }
     }
@@ -329,7 +440,9 @@ impl Ctx {
                 push(GltfOverrideKind::Deleted);
                 continue;
             }
-            if o.parent.is_some()
+            if let Some(missing) = o.parent.as_ref().and_then(|p| self.missing_parent(p)) {
+                push(GltfOverrideKind::MissingParent(missing));
+            } else if o.parent.is_some()
                 && let Some(link) = self.world.get::<crate::attach::Attached3D>(entity)
             {
                 push(GltfOverrideKind::Parent(link.to));
@@ -515,6 +628,71 @@ impl Ctx {
         Some((parent, o.components.get("Attached3D")?.clone()))
     }
 
+    /// `parent` named as the editor lists it, if it is in another scene
+    /// that has a record and isn't spawned: the node waits for it.
+    fn missing_parent(&self, parent: &NodeParent) -> Option<String> {
+        let id = parent.other_scene()?;
+        let saves = self.world.get_resource::<GltfSceneSaves>()?;
+        let other = saves.scenes.iter().find(|s| s.id == id)?;
+        if other.root.is_some_and(|r| self.world.is_alive(r)) {
+            return None;
+        }
+        Some(match parent {
+            NodeParent::SceneNode { node, .. } => format!("node \"{node}\" of {}", other.path),
+            _ => format!("the root of {}", other.path),
+        })
+    }
+
+    /// Sets the link of node `node` of `root`'s scene to a parent in
+    /// another scene, as its record holds it, to `link` (`None` forgets
+    /// it: the node stays on the file's parent), and returns the link the
+    /// record held. A link to a scene that is spawned is made at once.
+    #[cfg_attr(not(feature = "editor"), allow(dead_code))]
+    pub(crate) fn set_waiting_link(
+        &mut self,
+        root: Entity,
+        node: &str,
+        link: Option<WaitingLink>,
+    ) -> Result<Option<WaitingLink>, crate::error::Error> {
+        let Some(scene) = self
+            .world
+            .get_resource_mut::<GltfSceneSaves>()
+            .and_then(|s| s.scenes.iter_mut().find(|s| s.root == Some(root)))
+        else {
+            return Err(crate::error::Error::new(
+                crate::error::ErrorKind::NotFound,
+                "the glTF scene has no saved record",
+            ));
+        };
+        let was = scene.overrides.get(node).and_then(|o| {
+            let parent = o.parent.clone().filter(|p| p.other_scene().is_some())?;
+            let link = o.components.get("Attached3D").cloned().unwrap_or(Value::Null);
+            Some(WaitingLink { parent, link })
+        });
+        let linked = link.is_some();
+        match link {
+            Some(WaitingLink { parent, link }) => {
+                let o = scene.overrides.entry(node.to_string()).or_default();
+                o.parent = Some(parent);
+                o.components.insert("Attached3D".into(), link);
+            }
+            None => {
+                if let Some(o) = scene.overrides.get_mut(node)
+                    && o.parent.as_ref().is_some_and(|p| p.other_scene().is_some())
+                {
+                    o.parent = None;
+                    o.components.remove("Attached3D");
+                }
+                scene.overrides.retain(|_, o| !o.is_empty());
+            }
+        }
+        if linked {
+            self.link_scene_parents();
+            crate::hierarchy::settle(&mut self.world);
+        }
+        Ok(was)
+    }
+
     /// Hangs every spawned node whose saved parent is in another scene off
     /// that parent, where it is spawned and the node isn't on it yet, with
     /// its saved offset.
@@ -565,9 +743,10 @@ impl Ctx {
 
     /// Spawns again every glTF scene whose saved record lost its root
     /// (a scene file or save was loaded), where it was saved; each adopts
-    /// its record. Returns the errors, one per scene that didn't spawn.
+    /// its record. Returns the scenes that didn't spawn: each one's file,
+    /// and its error.
     #[cfg_attr(not(feature = "editor"), allow(dead_code))]
-    pub(crate) fn respawn_saved_gltf(&mut self) -> Vec<crate::error::Error> {
+    pub(crate) fn respawn_saved_gltf(&mut self) -> Vec<(String, crate::error::Error)> {
         let orphans: Vec<(String, Transform3D)> = self
             .world
             .get_resource::<GltfSceneSaves>()
@@ -582,7 +761,7 @@ impl Ctx {
         let mut errors = Vec::new();
         for (path, at) in orphans {
             if let Err(e) = self.spawn_gltf(&path, at, super::GltfOptions::default()) {
-                errors.push(e);
+                errors.push((path, e));
             }
         }
         errors
@@ -628,7 +807,7 @@ impl Ctx {
     /// file no longer loads stays out.
     #[cfg_attr(not(feature = "editor"), allow(dead_code))]
     pub(crate) fn respawn_gltf_entities(&mut self, before: &GltfEntities) -> Vec<(Entity, Entity)> {
-        for e in self.respawn_saved_gltf() {
+        for (_, e) in self.respawn_saved_gltf() {
             eprintln!("ponko: {e}");
         }
         let roots: Vec<Option<Entity>> = self
@@ -1059,11 +1238,9 @@ mod tests {
         ctx.record_gltf_overrides(None);
         let save = ctx.world.save();
         let records = &save["resources"]["GltfSceneSaves"]["scenes"];
-        assert_eq!(
-            records[0]["overrides"]["Shed/Wall"]["parent"],
-            json!({ "scene_node": { "scene": records[1]["id"], "node": "Post" } }),
-            "{records}"
-        );
+        let wall_record = &records[0]["overrides"]["Shed/Wall"];
+        assert_eq!(wall_record["scene_parent"]["scene"], records[1]["id"], "{records}");
+        assert_eq!(wall_record["scene_parent"]["node"], "Post", "{records}");
 
         for posts_first in [false, true] {
             let mut game = self::ctx();
@@ -1090,6 +1267,105 @@ mod tests {
             let now = game.world.get::<T3>(wall).unwrap().position;
             assert!((now - at.position).length() < 1e-4, "posts first: {posts_first}: {now}");
         }
+    }
+
+    /// A save whose wall hangs off the post of another scene.
+    fn cross_scene_save(yard_file: &Temp, posts: &Temp) -> Value {
+        let mut ctx = ctx();
+        let a = ctx.spawn_prefab(&yard_file.name, T3::default()).unwrap();
+        let b = ctx.spawn_prefab(&posts.name, T3::at(vec3(4.0, 0.0, 0.0))).unwrap();
+        ctx.track_gltf_overrides();
+        let (wall, post) = (node(&ctx, a, "Shed/Wall"), node(&ctx, b, "Post"));
+        let at = *ctx.world.get::<T3>(wall).unwrap();
+        ctx.world.insert(wall, crate::attach::Attached3D::to(post));
+        crate::editor::place_world3d(&mut ctx.world, wall, at);
+        // Changed on top: an older build keeps that.
+        ctx.world.insert(node(&ctx, a, "Crate"), Hp(9.0));
+        ctx.record_gltf_overrides(None);
+        ctx.world.save()
+    }
+
+    /// The records of glTF scenes as builds from before parents in other
+    /// scenes read them (the types of then, field for field).
+    mod before_scene_parents {
+        use super::*;
+
+        #[derive(Debug, Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        #[allow(dead_code)]
+        pub enum NodeParent {
+            Root,
+            Node(String),
+            Entity(Entity),
+        }
+
+        #[derive(Debug, Deserialize)]
+        pub struct NodeOverrides {
+            #[serde(default)]
+            pub components: JsonMap,
+            #[serde(default)]
+            pub parent: Option<NodeParent>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        pub struct SavedScene {
+            #[allow(dead_code)]
+            pub path: String,
+            #[serde(default)]
+            pub overrides: BTreeMap<String, NodeOverrides>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        pub struct GltfSceneSaves {
+            pub scenes: Vec<SavedScene>,
+        }
+    }
+
+    #[test]
+    fn a_save_with_a_parent_in_another_scene_stays_readable_by_builds_from_before_such_parents() {
+        let yard_file = Temp::new("old-build-yard", &yard(3.0, 1.0));
+        let posts = Temp::new("old-build-posts", &cube_gltf(&json!([{ "name": "Post", "mesh": 0 }])));
+        let save = cross_scene_save(&yard_file, &posts);
+        let records = save["resources"]["GltfSceneSaves"].clone();
+
+        let old: before_scene_parents::GltfSceneSaves = serde_json::from_value(records.clone())
+            .unwrap_or_else(|e| panic!("an older build reads the records: {e}\n{records}"));
+        let wall = &old.scenes[0].overrides["Shed/Wall"];
+        assert!(
+            wall.parent.is_none(),
+            "it leaves the wall on the file's parent: {wall:?}"
+        );
+        assert!(
+            !wall.components.contains_key("Attached3D"),
+            "and doesn't put the other parent's offset on the file's: {wall:?}"
+        );
+        assert_eq!(
+            old.scenes[0].overrides["Crate"].components["Hp"],
+            json!(9.0),
+            "the rest it keeps"
+        );
+
+        // Negative control: the link held as `parent`, as saves of builds
+        // in between wrote it, is what an older build can't read.
+        let mut between = records.clone();
+        let link = between["scenes"][0]["overrides"]["Shed/Wall"].as_object_mut().unwrap();
+        let held = link.remove("scene_parent").unwrap();
+        link.insert(
+            "parent".into(),
+            json!({ "scene_node": { "scene": held["scene"], "node": held["node"] } }),
+        );
+        link.insert("components".into(), json!({ "Attached3D": held["link"] }));
+        let refused = serde_json::from_value::<before_scene_parents::GltfSceneSaves>(between.clone());
+        assert!(refused.is_err(), "{refused:?}");
+
+        // This build reads both forms the same.
+        let now: GltfSceneSaves = serde_json::from_value(records).unwrap();
+        let then: GltfSceneSaves = serde_json::from_value(between).unwrap();
+        assert_eq!(now.scenes[0].overrides, then.scenes[0].overrides);
+        assert!(matches!(
+            now.scenes[0].overrides["Shed/Wall"].parent,
+            Some(NodeParent::SceneNode { ref node, .. }) if node == "Post"
+        ));
     }
 
     fn map(v: Value) -> JsonMap {

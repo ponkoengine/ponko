@@ -1146,6 +1146,8 @@ impl Ctx {
     pub(crate) fn scenario_begin_tick(&mut self) {
         self.input.recording_tick_begins(self.time.sim_tick());
         let Some(mut run) = self.input.scenarios.run.take() else {
+            // The run (if any) ended: the platform's insets apply again.
+            self.window.release_scenario_safe_insets();
             return;
         };
         // Started by a system during an earlier tick: tick 0 is still to come.
@@ -1180,9 +1182,14 @@ impl Ctx {
             if tick > rel {
                 break;
             }
-            self.window.feed_safe_insets(insets);
+            // Held until the run ends: a resize doesn't overwrite it.
+            self.window.feed_scenario_safe_insets(insets);
             run.next_safe += 1;
             fed += 1;
+        }
+        if run.next_safe == 0 {
+            // This run fed none (yet): one that ended before it held them.
+            self.window.release_scenario_safe_insets();
         }
         // One UI step a frame: the UI takes one click per frame.
         if let Some((tick, step, ui)) = run.scenario.ui.get(run.next_ui)

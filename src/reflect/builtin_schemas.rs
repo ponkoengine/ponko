@@ -229,6 +229,17 @@ fn vehicle3d() -> ValueSchema {
 fn colliderfocus() -> ValueSchema {
     ValueSchema::object([("radius", Number), ("keep_radius", Number)])
 }
+/// A terrain tile's collider: its surface. The heightfield, made in code,
+/// is saved as `null` and made again after a load (`set_terrain_rebuild`).
+#[cfg(feature = "physics3d")]
+fn terraincollider() -> ValueSchema {
+    ValueSchema::object([
+        ("mesh", ValueSchema::Null),
+        ("friction", Number),
+        ("restitution", Number),
+        ("groups", collisiongroups()),
+    ])
+}
 fn rect() -> ValueSchema {
     ValueSchema::object([("min", Vec2), ("max", Vec2)])
 }
@@ -392,6 +403,10 @@ pub(super) fn builtin<T: 'static>() -> Option<ValueSchema> {
     #[cfg(feature = "physics3d")]
     if id == std::any::TypeId::of::<crate::physics3d::ColliderFocus>() {
         return Some(colliderfocus());
+    }
+    #[cfg(feature = "physics3d")]
+    if id == std::any::TypeId::of::<crate::physics3d::TerrainCollider>() {
+        return Some(terraincollider());
     }
     None
 }
@@ -842,6 +857,10 @@ pub(in crate::reflect) mod tests {
             check!(
                 crate::physics3d::ColliderFocus,
                 crate::physics3d::ColliderFocus::default()
+            );
+            check!(
+                crate::physics3d::TerrainCollider,
+                crate::physics3d::TerrainCollider::new(CollisionMesh { id: 3 }).friction(0.2)
             );
         }
     }

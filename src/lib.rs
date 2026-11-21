@@ -145,6 +145,7 @@ mod editor;
 pub mod error;
 pub mod events;
 pub mod flow;
+mod frame_pool;
 pub mod game;
 // The built-in controllers on the desktop: gilrs.
 #[cfg(all(feature = "gamepad", not(target_arch = "wasm32")))]

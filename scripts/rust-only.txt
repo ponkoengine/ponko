@@ -37,6 +37,8 @@ Ui::link                         ui.md             # same; a button for each lin
 UiEvent::LinkClicked             ui.md             # same
 Smoothing                        networking.md     # generic over what is drawn (Smooth types); C and C++ fade the correction offset themselves
 Physics3D::move_character        physics3d.md      # C and C++ characters walk with the physics step only; no replay of one tick
+Physics3D::set_terrain_rebuild   physics3d.md      # a callback over the world; C and C++ give a loaded tile a new terrain collider from its heights
+Physics3D::clear_terrain_rebuild physics3d.md      # same
 Net::accept_web                  networking.md     # not bound yet; C and C++ hosts take UDP players only
 Net::join_web                    networking.md     # same; C and C++ games don't build for the web yet
 Net::web_addr                    networking.md     # same
@@ -58,3 +60,6 @@ GamepadBackend                   controllers.md    # native games use the built-
 FakeGamepads                     controllers.md    # native tests feed ponko_ctx_feed_input (kind 8 connects a pad) and ponko_ctx_feed_gamepad_motion
 KeyLabels                        controllers.md    # ponko_glyph_atlas_draw_prompt and _texture label the caps for the player's layout; ponko_glyph_label gives US labels
 InputScenario::connect_gamepad   controllers.md    # C and C++ scenarios are JSON: a gamepad_connected step's info object
+Assets::browser_saves            editor.md         # C and C++ games don't build for the web yet, so they keep no files in a browser
+Assets::revert_browser_save      editor.md         # same
+Assets::browser_saves_persistent editor.md         # same

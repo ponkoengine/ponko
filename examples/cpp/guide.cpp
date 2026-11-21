@@ -1424,17 +1424,17 @@ static int sentries_act(ponko::ctx& ctx) {            // act
 // ANCHOR_END: ai_world
 
 // ANCHOR: ai_loop
-struct Eyes { float range; bool spotted; };          // a component of your own
+struct Eyes { float range; bool spotted; ponko::vec2 at; };   // a component of your own
 
 // Senses on all cores: each sentry's blackboard learns how far it sees, and
-// one that spotted something hears the alarm now, without waiting for the
-// broadcast (brain.wake() would only make it think at once).
+// one that spotted something hears the alarm now, with where it was, without
+// waiting for the broadcast (brain.wake() would only make it think at once).
 static void sentries_senses(ponko::ctx& ctx) {
     static const std::uint64_t range = ponko::ai::key("range"), alarm = ponko::ai::key("alarm");
     ctx.world().each_par([&](Eyes& eyes, ponko::ai::brain_row brain, ponko::ai::blackboard_row board) {
         board.set_num(range, eyes.range);
         if (eyes.spotted) {
-            brain.signal(alarm);
+            brain.signal_vec2(alarm, eyes.at);
             eyes.spotted = false;
         }
     });
@@ -1458,7 +1458,7 @@ static void ai_world_guide_runs() {
         }, "act")
         .run_headless(40, [&](ponko::ctx& ctx) {
             sentries_setup(ctx, sentries);
-            for (ponko::entity e : sentries) ctx.world().set(e, Eyes{12, e == sentries[0]});
+            for (ponko::entity e : sentries) ctx.world().set(e, Eyes{12, e == sentries[0], {40, 25}});
         });
     // The first sentry spotted something at once; the others waited for the alarm at tick 30.
     if (shouts != 3 || !running || range != 12 || first_run != 0) {
@@ -2151,6 +2151,16 @@ static void screen_reflections(ponko::ctx& ctx) {
 }
 // ANCHOR_END: ssr
 
+// ANCHOR: ssr_thin
+/// Without TAA: railings, cables and poles stay whole in reflections.
+static void thin_reflections(ponko::ctx& ctx) {
+    auto post = ctx.post_ex(); // version 2 has ssr_thin_objects
+    post.post.anti_aliasing = uint32_t(ponko::anti_aliasing::smaa);
+    post.ssr_thin_objects = true; // about 1 ms more at 1080p
+    ctx.set_post(post);
+}
+// ANCHOR_END: ssr_thin
+
 // ANCHOR: gi
 /// Sunlight bounces off walls and floors onto other surfaces.
 static void bounced_light(ponko::ctx& ctx) {
@@ -2517,6 +2527,8 @@ static void the_village_has_five_spinning_houses() {
         teleport_one(ctx, ctx.world().spawn(ponko::transform3d_at({0, 0, 0})));
         screen_reflections(ctx);
         if (ctx.post().ssr != 1.0f) { std::fprintf(stderr, "ssr\n"); std::abort(); }
+        thin_reflections(ctx);
+        if (!ctx.post_ex().ssr_thin_objects || ctx.post().ssr != 1.0f) { std::fprintf(stderr, "ssr thin\n"); std::abort(); }
         bounced_light(ctx);
         if (!ctx.lighting().gi_enabled) { std::fprintf(stderr, "gi\n"); std::abort(); }
         trilight(ctx);

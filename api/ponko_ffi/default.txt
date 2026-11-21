@@ -4012,6 +4012,7 @@ pub ponko_ffi::PonkoPostEx::post: ponko_ffi::PonkoPost
 pub ponko_ffi::PonkoPostEx::split_toning_balance: f32
 pub ponko_ffi::PonkoPostEx::split_toning_highlights: ponko_ffi::PonkoColor
 pub ponko_ffi::PonkoPostEx::split_toning_shadows: ponko_ffi::PonkoColor
+pub ponko_ffi::PonkoPostEx::ssr_thin_objects: bool
 pub ponko_ffi::PonkoPostEx::struct_size: u32
 pub ponko_ffi::PonkoPostEx::version: u32
 impl core::clone::Clone for ponko_ffi::PonkoPostEx
@@ -6169,6 +6170,10 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ai_brain_finish(*mut ponko_ffi::PonkoAiBrain, u64, ponko_ffi::PonkoAiStatus) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ai_brain_param_num(*const ponko_ffi::PonkoAiBrain, u64, u64, *mut f32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ai_brain_signal(*mut ponko_ffi::PonkoAiBrain, u64) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ai_brain_signal_entity(*mut ponko_ffi::PonkoAiBrain, u64, u64) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ai_brain_signal_num(*mut ponko_ffi::PonkoAiBrain, u64, f32) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ai_brain_signal_vec2(*mut ponko_ffi::PonkoAiBrain, u64, ponko_ffi::PonkoVec2) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ai_brain_signal_vec3(*mut ponko_ffi::PonkoAiBrain, u64, ponko_ffi::PonkoVec3) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ai_brain_started(*const ponko_ffi::PonkoAiBrain, u64, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ai_brain_wake(*mut ponko_ffi::PonkoAiBrain) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ai_combine(*const f32, usize) -> f32
@@ -7158,6 +7163,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_ui_rect(*mut ponko_ffi::PonkoCtx, u64, u64, *mut ponko_ffi::PonkoRect) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_ui_reduced_motion(*mut ponko_ffi::PonkoCtx, u64, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_ui_remove(*mut ponko_ffi::PonkoCtx, u64, u64) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_ui_safe_area(*mut ponko_ffi::PonkoCtx, u64, *mut ponko_ffi::PonkoRect) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_ui_screen_transition(*mut ponko_ffi::PonkoCtx, u64, u64, *mut ponko_ffi::PonkoUiScreenTransition, *mut ponko_ffi::PonkoUiScreenTransition) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_ui_scroll(*mut ponko_ffi::PonkoCtx, u64, u64, *mut ponko_ffi::PonkoVec2) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_ui_scroll_to_item(*mut ponko_ffi::PonkoCtx, u64, u64, u64) -> ponko_ffi::PonkoStatus
@@ -7189,6 +7195,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_ui_set_paint(*mut ponko_ffi::PonkoCtx, u64, u64, *const ponko_ffi::PonkoUiPaint) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_ui_set_parent(*mut ponko_ffi::PonkoCtx, u64, u64, u64) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_ui_set_reduced_motion(*mut ponko_ffi::PonkoCtx, u64, bool) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_ui_set_safe_area(*mut ponko_ffi::PonkoCtx, u64, *const ponko_ffi::PonkoRect) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_ui_set_scale(*mut ponko_ffi::PonkoCtx, u64, f32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_ui_set_screen_transition(*mut ponko_ffi::PonkoCtx, u64, u64, *const ponko_ffi::PonkoUiScreenTransition, *const ponko_ffi::PonkoUiScreenTransition) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_ui_set_scroll(*mut ponko_ffi::PonkoCtx, u64, u64, ponko_ffi::PonkoVec2) -> ponko_ffi::PonkoStatus
@@ -7246,7 +7253,9 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_warm_render_pipelines(*mut ponko_ffi::PonkoCtx) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_was_reloaded(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_water_sample(*const ponko_ffi::PonkoCtx, u64, ponko_ffi::PonkoVec2, f32, *mut ponko_ffi::PonkoWaterSample) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_water_started_contacts(*mut ponko_ffi::PonkoCtx, u64, *mut u64) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_water_touch(*mut ponko_ffi::PonkoCtx, u64, ponko_ffi::PonkoVec2, f32, f32) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_water_waiting_contacts(*mut ponko_ffi::PonkoCtx, u64, *mut u32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_window_cancel_close(*mut ponko_ffi::PonkoCtx) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_window_close_requested(*mut ponko_ffi::PonkoCtx, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_window_event_count(*mut ponko_ffi::PonkoCtx, *mut usize) -> ponko_ffi::PonkoStatus

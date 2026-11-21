@@ -314,3 +314,25 @@ fn built_in_grid_sorts_entities_by_cell() {
         .collect();
     assert!(keys.windows(2).all(|w| w[0] <= w[1]), "{keys:?}");
 }
+
+#[test]
+fn a_grid_rebuilt_on_the_frame_pool_matches_one_rebuilt_on_one_thread() {
+    // Big enough that the rebuild goes to the frame pool's runner and is
+    // cut up there; one thread runs the same pass in order.
+    let pts = points(250_000, 3_000.0, 7);
+    let one = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
+    let alone = one.install(|| grid(16.0, &pts));
+    let shared = grid(16.0, &pts);
+    let entries = |g: &SpatialGrid| g.entries().iter().map(|e| (e.entity, e.position)).collect::<Vec<_>>();
+    assert_eq!(entries(&alone), entries(&shared));
+    assert_eq!(shared.len(), pts.len());
+    let center = vec2(100.0, -40.0);
+    let mut found = Vec::new();
+    shared.for_each_in_radius(center, 50.0, |e| found.push(e.entity));
+    let brute: Vec<_> = pts
+        .iter()
+        .filter(|(_, p)| p.distance(center) <= 50.0)
+        .map(|(e, _)| *e)
+        .collect();
+    assert_eq!(sorted(found), sorted(brute));
+}
