@@ -12,7 +12,10 @@
   instead of blending when the 3D frame has several samples a pixel (the
   default 4x MSAA): their alpha is the share of a pixel's samples they
   cover, in steps of a quarter, and overlapping see-through lines no longer
-  add up. With one sample a pixel they are still blended.
+  add up. 100,000 see-through lines at 1280x720 with 4 samples (Apple M4
+  Max, busy machine, four runs): 3.0 to 3.06 ms opaque pass instead of 3.7
+  to 4.8 ms. With one sample a pixel they are still blended (unchanged,
+  1.67 ms).
 
 ### Fixed
 - Depth-tested debug labels show in every 3D camera that shows the default
