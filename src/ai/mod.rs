@@ -480,7 +480,7 @@ pub struct Brain {
     /// Signals heard since the last think.
     signals: Vec<(Key, Option<Value>)>,
     /// The seed for `random` and `chance` nodes when the game runs the
-    /// brain itself ([`think`](Self::think)); [`think`](think) uses the
+    /// brain itself ([`think`](Self::think)); [`ai::think`](crate::ai::think) uses the
     /// game's.
     seed: u64,
 }
@@ -510,7 +510,7 @@ impl Brain {
 
     /// This brain, drawing the random numbers of `random` and `chance`
     /// nodes from `seed` when you run it yourself ([`think`](Self::think)):
-    /// give each agent its own. The [`think`](think) system ignores it and
+    /// give each agent its own. The [`ai::think`](crate::ai::think) system ignores it and
     /// uses the game's [seed](crate::game::Game::seed) and the entity.
     pub fn with_seed(mut self, seed: u64) -> Brain {
         self.set_seed(seed);
@@ -531,7 +531,7 @@ impl Brain {
     /// next think, which comes at the next tick whatever the period. A
     /// signal its tree doesn't wait for wakes it all the same. Signals
     /// heard are forgotten after that think; the same signal twice before
-    /// it counts once. [`think`](think) delivers the [`Signal`] events
+    /// it counts once. [`ai::think`](crate::ai::think) delivers the [`Signal`] events
     /// sent to a brain this way.
     ///
     /// ```
