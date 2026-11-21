@@ -1651,3 +1651,56 @@ fn far_thin_things_are_reflected_about_as_wide_as_in_a_true_mirror() {
         widths.push(wider);
     }
 }
+
+/// With temporal antialiasing, a soft particle splits the transparent pass
+/// off, which copies the lit frame for what reads the scene behind it: the
+/// frame temporal antialiasing resolves, which must allow the copy (it
+/// didn't, and the frame was rejected). The particle fades where it meets
+/// the floor and shows above it.
+#[test]
+fn soft_particles_draw_with_temporal_antialiasing() {
+    use crate::three::particles::{ParticleEmitter3D, ParticleSettings3D};
+    let Some(mut rig) = Rig::sized(SIZE, SIZE) else {
+        return;
+    };
+    let floor = rig.mesh(&MeshData::cube(1.0), MaterialDesc::default());
+    rig.ctx.world.spawn((
+        Transform3D {
+            position: vec3(0.0, -0.5, 0.0),
+            scale: vec3(20.0, 1.0, 20.0),
+            ..Default::default()
+        },
+        Model::new(floor),
+    ));
+    let settings = ParticleSettings3D {
+        size: (2.0, 2.0),
+        lifetime: (1000.0, 1000.0),
+        gravity: Vec3::ZERO,
+        softness: 1.0,
+        max_particles: 1,
+        ..Default::default()
+    };
+    rig.ctx.world.spawn((
+        Transform3D::default(),
+        ParticleEmitter3D::at_points_for_test(settings, &[vec3(0.0, 0.5, 0.0)]),
+    ));
+    rig.ctx.scene3d.lighting.sun_intensity = 0.0;
+    rig.ctx.scene3d.lighting.ambient_intensity = 0.0;
+    rig.ctx.scene3d.camera.position = vec3(0.0, 0.5, 4.0);
+    rig.ctx.scene3d.camera.look_at(vec3(0.0, 0.5, 0.0));
+    rig.ctx.scene3d.post.anti_aliasing = AntiAliasing::Taa;
+    let mut image = Vec::new();
+    for _ in 0..4 {
+        image = rig.draw();
+    }
+    let view_proj = rig.ctx.scene3d.camera.view_proj();
+    let at = |p: Vec3| {
+        let (x, y) = pixel(view_proj, p);
+        image[((y * SIZE + x) * 4) as usize]
+    };
+    // The floor line seen in front of the particle (its plane's distance).
+    let (above, floor_line) = (at(vec3(0.0, 0.8, 0.0)), at(vec3(0.0, 0.0, 0.0)));
+    eprintln!("soft particle with TAA: above the floor {above}, where it meets the floor {floor_line}");
+    assert!(above > 60, "the particle shows above the floor: {above}");
+    assert!(floor_line < above, "it fades where it meets the floor: {floor_line} of {above}");
+}
