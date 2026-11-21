@@ -6079,6 +6079,9 @@ struct PonkoCollider3D ponko_collider3d_capsule(float height, float radius);
 
 struct PonkoCollider3D ponko_collider3d_mesh(struct PonkoCollisionMesh mesh);
 
+struct PonkoCollider3D ponko_collider3d_scaled_mesh(struct PonkoCollisionMesh mesh,
+                                                    struct PonkoVec3 scale);
+
 struct PonkoCharacter3D ponko_character3d(float height, float radius);
 
 enum PonkoStatus ponko_rigid_body3d_component(struct PonkoWorld *world, uint32_t *out_id);

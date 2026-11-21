@@ -2456,6 +2456,10 @@ static void focus_and_hud_setup(PonkoCtx* ctx, void* user) {
     CHECK(ponko_ctx_load_collision_mesh(ctx, path, one, true, &wide) == PONKO_INVALID_ARGUMENT); /* a flat hull */
     CHECK(ponko_ctx_load_collision_mesh(ctx, "no/such.glb", one, false, &wide) == PONKO_NOT_FOUND);
     CHECK(ponko_ctx_load_collision_mesh(ctx, path, one, false, NULL) == PONKO_INVALID_ARGUMENT);
+    /* One mesh at any size: a collider scaled where it is used. */
+    PonkoCollider3D mirrored = ponko_collider3d_scaled_mesh(floor, (PonkoVec3){-1, 1, 2});
+    CHECK(mirrored.shape == PONKO_SHAPE3D_SCALED_MESH && mirrored.mesh.id == floor.id);
+    CHECK(mirrored.size.x == -1 && mirrored.size.z == 2 && mirrored.friction == 0.5f);
 }
 static void focus_huds_and_collision_files(void) {
     char path[1024];

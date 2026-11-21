@@ -1656,7 +1656,7 @@ static void streamed_worlds() {
     throws([] { ponko::collision_mesh_data::convex_hull({{0, 0, 0}, {1, 0, 0}, {0, 1, 0}}); });
     // A ball on terrain built on another thread; a far wall that comes in
     // once the focus walks to it.
-    ponko::entity ball = 0, wall = 0, focus = 0, ground = 0;
+    ponko::entity ball = 0, high_ball = 0, wall = 0, focus = 0, ground = 0;
     bool wall_at_start = true, wall_later = false;
     auto w = ponko::game("t", 1, 1)
         .physics3d({0, -9.81f, 0})
@@ -1677,10 +1677,14 @@ static void streamed_worlds() {
             auto world = ctx.world();
             ground = world.spawn(ponko::transform3d_at({-10, 0, -10}), ponko::solid_terrain(mesh));
             ball = world.spawn(ponko::transform3d_at({0, 4, 0}), ponko::dynamic_body3d(), ponko::sphere_collider(0.5f));
+            // The same ground twice as high, scaled where it is used.
+            world.spawn(ponko::transform3d_at({-10, 0, 20}), ponko::fixed_body3d(), ponko::scaled_mesh_collider(mesh, {1, 2, 1}));
+            high_ball = world.spawn(ponko::transform3d_at({0, 8, 30}), ponko::dynamic_body3d(), ponko::sphere_collider(0.5f));
             wall = world.spawn(ponko::transform3d_at({300, 0, 0}), ponko::fixed_body3d(), ponko::box_collider({1, 1, 1}));
             focus = world.spawn(ponko::transform3d_at({0, 0, 0}), ponko::focus_colliders(50, 80));
         });
     CHECK(std::fabs(w.get<ponko::transform3d>(ball).position.y - 2.5f) < 0.05f);
+    CHECK(std::fabs(w.get<ponko::transform3d>(high_ball).position.y - 4.5f) < 0.05f);
     CHECK(!wall_at_start && wall_later);
     CHECK(w.get<ponko::terrain_collider>(ground).friction == 0.5f);
     CHECK(w.get<ponko::collider_focus>(focus).keep_radius == 80);

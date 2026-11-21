@@ -679,7 +679,8 @@ using collision = PonkoCollision;
 /// needs a collider3d and a transform3d). Make one with dynamic_body3d, fixed_body3d or kinematic_body3d.
 using rigid_body3d = PonkoRigidBody3D;
 /// The built-in `Collider3D` component (Rust `Collider3D`): a body's shape in meters, its surface and its
-/// groups. Make one with sphere_collider, box_collider, capsule_collider3d or mesh_collider.
+/// groups. Make one with sphere_collider, box_collider, capsule_collider3d, mesh_collider or
+/// scaled_mesh_collider.
 using collider3d = PonkoCollider3D;
 /// The built-in `Velocity3D` component (Rust `Velocity3D`), meters and radians per second. A query column.
 using velocity3d = PonkoVelocity3D;
@@ -851,6 +852,11 @@ inline collider3d capsule_collider3d(float height, float radius) { return ponko_
 /// A collider of a heightfield, convex hull or triangle mesh made by
 /// ctx::heightfield_collider and friends.
 inline collider3d mesh_collider(collision_mesh m) { return ponko_collider3d_mesh(m); }
+/// A collider of `m` scaled by `scale` where it is used (Rust
+/// `Collider3D::scaled_mesh`), so one mesh serves colliders of every size: a
+/// negative component mirrors a hull or triangle mesh; a heightfield takes
+/// the size only. Colliders of one mesh at one scale share one scaled copy.
+inline collider3d scaled_mesh_collider(collision_mesh m, vec3 scale) { return ponko_collider3d_scaled_mesh(m, scale); }
 /// Makes a terrain tile's entity solid: a collider of `m` (its heightfield)
 /// at the tile's transform3d, turned and scaled with it (Rust
 /// `TerrainCollider::new`). Change friction, restitution and groups on the result.

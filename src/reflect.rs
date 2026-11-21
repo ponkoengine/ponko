@@ -2357,36 +2357,54 @@ pub(crate) fn collider_file_parts(file: &Value) -> (Option<&str>, glam::Vec3, bo
     (file["file"].as_str(), scale, file["convex"].as_bool().unwrap_or(false))
 }
 
-/// A collider described by a mesh file, as JSON: its mesh's description.
+/// Where a collider's JSON holds its mesh: `{"Mesh": ...}`, or the
+/// `mesh` of `{"ScaledMesh": {"mesh": ..., "scale": [x, y, z]}}`.
 #[cfg(feature = "physics3d")]
-pub(crate) fn collider_file(value: &Value) -> Option<&Value> {
-    value.pointer("/shape/Mesh").filter(|m| m.get("file").is_some())
+fn collider_mesh_pointer(value: &Value) -> Option<&'static str> {
+    ["/shape/Mesh", "/shape/ScaledMesh/mesh"]
+        .into_iter()
+        .find(|at| value.pointer(at).is_some())
 }
 
-/// `None` for a collider of a mesh made in code (or a scaled mesh): it has no file to name, so
-/// the collider isn't saved (the rest of the entity is), as with a model.
+/// A collider described by a mesh file, as JSON: its mesh's description
+/// (also of a scaled mesh, whose `scale` sits beside it).
+#[cfg(feature = "physics3d")]
+pub(crate) fn collider_file(value: &Value) -> Option<&Value> {
+    value
+        .pointer(collider_mesh_pointer(value)?)
+        .filter(|m| m.get("file").is_some())
+}
+
+/// `None` for a collider of a mesh made in code: it has no file to name,
+/// so the collider isn't saved (the rest of the entity is), as with a
+/// model. A scaled mesh of a file is saved as that file's description and
+/// its own scale: `{"ScaledMesh": {"mesh": {"file": "rock.glb"}, "scale":
+/// [2, 2, 2]}}`.
 #[cfg(feature = "physics3d")]
 fn collider_json(world: &World, c: &crate::d3::Collider) -> Option<Result<Value, String>> {
-    let file = match c.shape {
-        crate::d3::Shape::Mesh(mesh) => Some(world.get_resource::<ColliderFiles>()?.by_mesh.get(&mesh)?),
-        // Scaled where it is used: a mesh file names its scale itself.
-        crate::d3::Shape::ScaledMesh { .. } => return None,
+    let file = |mesh| world.get_resource::<ColliderFiles>()?.by_mesh.get(&mesh);
+    let shape = match c.shape {
+        crate::d3::Shape::Mesh(mesh) => Some(serde_json::json!({ "Mesh": file(mesh)? })),
+        crate::d3::Shape::ScaledMesh { mesh, scale } => Some(serde_json::json!({
+            "ScaledMesh": { "mesh": file(mesh)?, "scale": scale.to_array() }
+        })),
         _ => None,
     };
     let mut value = match serde_json::to_value(c) {
         Ok(v) => v,
         Err(err) => return Some(Err(err.to_string())),
     };
-    if let Some(file) = file {
-        value["shape"] = serde_json::json!({ "Mesh": file });
+    if let Some(shape) = shape {
+        value["shape"] = shape;
     }
     Some(Ok(value))
 }
 
-/// A mesh collider names its mesh file; only loaded files give a mesh.
+/// A mesh collider (plain or scaled) names its mesh file; only loaded
+/// files give a mesh.
 #[cfg(feature = "physics3d")]
 fn collider_mesh_json(world: &World, value: &Value) -> Result<Option<crate::physics3d::CollisionMesh>, String> {
-    let Some(mesh) = value.pointer("/shape/Mesh") else {
+    let Some(mesh) = collider_mesh_pointer(value).and_then(|at| value.pointer(at)) else {
         return Ok(None);
     };
     let Some(file) = collider_file(value) else {
@@ -2405,8 +2423,10 @@ fn collider_mesh_json(world: &World, value: &Value) -> Result<Option<crate::phys
 /// The JSON with a named mesh replaced by the `null` that serde reads.
 #[cfg(feature = "physics3d")]
 fn without_mesh_file(mut value: Value) -> Value {
-    if collider_file(&value).is_some() {
-        value["shape"] = serde_json::json!({ "Mesh": null });
+    if collider_file(&value).is_some()
+        && let Some(mesh) = collider_mesh_pointer(&value).and_then(|at| value.pointer_mut(at))
+    {
+        *mesh = Value::Null;
     }
     value
 }
@@ -2417,7 +2437,10 @@ fn collider_from_json(world: &World, value: Value) -> Result<crate::d3::Collider
     let mut collider: crate::d3::Collider =
         serde_json::from_value(without_mesh_file(value)).map_err(|err| err.to_string())?;
     if let Some(mesh) = mesh {
-        collider.shape = crate::d3::Shape::Mesh(mesh);
+        collider.shape = match collider.shape {
+            crate::d3::Shape::ScaledMesh { scale, .. } => crate::d3::Shape::ScaledMesh { mesh, scale },
+            _ => crate::d3::Shape::Mesh(mesh),
+        };
     }
     Ok(collider)
 }
@@ -2462,7 +2485,7 @@ pub(crate) fn reflect_collider(world: &mut World) {
             Ok(w.spawn_at(e, (c,)))
         }),
         check: Arc::new(|v: &Value| {
-            if v.pointer("/shape/Mesh").is_some() && collider_file(v).is_none() {
+            if collider_mesh_pointer(v).is_some() && collider_file(v).is_none() {
                 return Err("a mesh collider names its mesh file, like {\"Mesh\": {\"file\": \"rock.glb\"}}".into());
             }
             check::<crate::d3::Collider>(&without_mesh_file(v.clone()))
