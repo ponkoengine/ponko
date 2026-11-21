@@ -633,7 +633,7 @@ name = "web_editor_save"
 required-features = ["editor"]
 
 [workspace]
-members = [".", "crates/ponko_image_diff", "crates/ponko_ecs", "crates/ponko_macros", "crates/ponko_bench", "crates/ponko_mcp", "crates/ponko_ffi", "crates/ponko_unity", "crates/ponko_cli", "crates/ponko_aseprite", "crates/ponko_lobby"]
+members = [".", "crates/ponko_image_diff", "crates/ponko_ecs", "crates/ponko_macros", "crates/ponko_bench", "crates/ponko_mcp", "crates/ponko_ffi", "crates/ponko_unity", "crates/ponko_cli", "crates/ponko_aseprite", "crates/ponko_lobby", "crates/mods_eval"]
 
 [workspace.package]
 edition = "2024"

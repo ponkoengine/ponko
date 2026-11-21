@@ -1,0 +1,31 @@
+[package]
+name = "mods_eval"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Throwaway: compares mod runtimes for issue 70. Not shipped."
+
+[features]
+wasmtime = ["dep:wasmtime"]
+wasmi = ["dep:wasmi"]
+rhai = ["dep:rhai"]
+lua = ["dep:mlua"]
+sample = ["dep:ponko", "dep:serde", "dep:serde_json"]
+
+[dependencies]
+ponko = { path = "../..", features = ["physics"], optional = true }
+wasmtime = { version = "51", optional = true, default-features = false, features = ["cranelift", "runtime", "std"] }
+wasmi = { version = "2", optional = true }
+rhai = { version = "1.27", optional = true, default-features = false, features = ["std", "sync"] }
+mlua = { version = "0.12", optional = true, features = ["lua54", "vendored"] }
+
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+
+[build-dependencies]
+wat = "1"
+
+[[bin]]
+name = "sample"
+path = "src/bin/sample.rs"
+required-features = ["sample"]
