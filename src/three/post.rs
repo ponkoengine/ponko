@@ -387,12 +387,13 @@ pub struct Post {
     /// the camera. Far along a reflected ray the trace takes steps tens of
     /// pixels long and jumps over such things now and then, so without TAA
     /// to fill the gaps their reflections come out dotted and dimmer. With
-    /// this on, the trace also reads a coarse copy of the depth (the nearest
-    /// depth of 8 to 64 pixel blocks) along each long step and looks closer
-    /// where something could be in front of the ray. It costs about half a
-    /// millisecond more at 1920x1080 on a fast GPU (the guide's reflections
-    /// section has the numbers), so it is off by default and on in
-    /// [`GraphicsQuality::Ultra`](crate::render::GraphicsQuality::Ultra).
+    /// this on, the trace walks a coarse copy of the depth instead (the
+    /// nearest depth of 8 to 64 pixel blocks): it skips blocks the ray stays
+    /// in front of and reads the depth closely where something could be in
+    /// front of it. It costs about 0.2 ms more at 2560x1440 on a fast GPU
+    /// (the guide's reflections section has the numbers), and is off by
+    /// default and on in [`GraphicsQuality::High`](crate::render::GraphicsQuality::High)
+    /// and [`GraphicsQuality::Ultra`](crate::render::GraphicsQuality::Ultra).
     /// With TAA the gaps are filled anyway. Off, the reflections are
     /// exactly as without the setting. Only matters where [`ssr`](Self::ssr)
     /// is on.

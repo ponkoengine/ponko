@@ -324,6 +324,10 @@ ponko_mcp = { path = "crates/ponko_mcp" }
 # The renderer's tests translate its shaders to GLSL ES 3.0, as wgpu does for
 # WebGL2 (src/render/gpu3d/webgl2_shaders_test.rs). The naga wgpu already uses.
 naga = { version = "30.0.1", features = ["wgsl-in", "glsl-out"] }
+# The GPU timers' tests count the timestamp query sets a device really
+# holds (`Device::get_internal_counters`), which wgpu only counts with this
+# feature (src/render/query_sets.rs). The wgpu the engine already uses.
+wgpu = { version = "30.0.1", features = ["counters"] }
 
 # The native accessibility test (tests/ui_access_macos.rs) asks an `NSView`
 # what a screen reader would ask it. The same objc2 versions AccessKit's

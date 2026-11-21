@@ -1044,7 +1044,30 @@ fn reflection_gpu_cost_at_1080p() {
         if !name.contains(only.as_str()) {
             continue;
         }
-        if !reflection_gpu_cost(name, quality, ao, game, thin) {
+        if !reflection_gpu_cost((1920, 1080), name, quality, ao, game, thin) {
+            return;
+        }
+    }
+}
+
+/// [`reflection_gpu_cost_at_1080p`] at 2560x1440, for thin objects
+/// (`Post::ssr_thin_objects`): High with them off and on, and without
+/// ambient occlusion (where the trace's span is the trace alone).
+/// `PONKO_REFLECTION_COST` keeps only the setups whose name contains it.
+#[test]
+#[ignore]
+fn thin_objects_gpu_cost_at_1440p() {
+    use crate::render::GraphicsQuality;
+    let only = std::env::var("PONKO_REFLECTION_COST").unwrap_or_default();
+    for (name, ao, thin) in [
+        ("High", true, false),
+        ("High, thin objects", true, true),
+        ("High without ambient occlusion", false, false),
+        ("High without ambient occlusion, thin objects", false, true),
+    ] {
+        if name.contains(only.as_str())
+            && !reflection_gpu_cost((2560, 1440), name, GraphicsQuality::High, ao, true, thin)
+        {
             return;
         }
     }
@@ -1052,8 +1075,15 @@ fn reflection_gpu_cost_at_1080p() {
 
 /// One setup of `reflection_gpu_cost_at_1080p`; false without a GPU or
 /// timestamps.
-fn reflection_gpu_cost(name: &str, quality: crate::render::GraphicsQuality, ao: bool, game: bool, thin: bool) -> bool {
-    let Some(mut rig) = Rig::with_limits(1920, 1080, game) else {
+fn reflection_gpu_cost(
+    (width, height): (u32, u32),
+    name: &str,
+    quality: crate::render::GraphicsQuality,
+    ao: bool,
+    game: bool,
+    thin: bool,
+) -> bool {
+    let Some(mut rig) = Rig::with_limits(width, height, game) else {
         return false;
     };
     let Some(mut timer) = super::timer::GpuTimer::new(&rig.device, &rig.queue) else {
@@ -1139,7 +1169,7 @@ fn reflection_gpu_cost(name: &str, quality: crate::render::GraphicsQuality, ao: 
         .map(|(name, times)| format!("{name} {:.4}", median(times)))
         .collect();
     eprintln!(
-        "1920x1080, {name}: frame median {off:.4} ms without reflections, {on:.4} ms with (+{:.4} ms); \
+        "{width}x{height}, {name}: frame median {off:.4} ms without reflections, {on:.4} ms with (+{:.4} ms); \
          reflection passes: {}",
         on - off,
         spans.join(", ")
@@ -2108,4 +2138,142 @@ fn thin_objects_switch_on_and_off_while_the_game_runs() {
         differing, 0,
         "off again, the frame is the one drawn before the setting was on"
     );
+}
+
+/// A measurement for changes to the thin-objects trace: the scenes of the
+/// tests above (the rails over a mirror, the bars over a floor) at
+/// 1920x1080 with thin objects on, no TAA. `PONKO_THIN_SAVE=<dir>` saves
+/// their frames; `PONKO_THIN_BASE=<dir>` compares this trace's with frames
+/// saved before (by another trace): the error is the light that differs,
+/// as a share of the reflected light in the saved frames (red, linear,
+/// over the whole frame), and each rail's and bar's reflection's energy
+/// and width as a share of the saved one's. Run with --ignored --nocapture.
+#[test]
+#[ignore = "a measurement: run by hand, comparing two traces"]
+fn thin_objects_trace_against_a_saved_trace() {
+    let save = std::env::var_os("PONKO_THIN_SAVE").map(std::path::PathBuf::from);
+    let base = std::env::var_os("PONKO_THIN_BASE").map(std::path::PathBuf::from);
+    let linear = |v: u8| {
+        let v = f32::from(v) / 255.0;
+        if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    for scene in ["rails", "bars"] {
+        let Some(mut stage) = Stage::with(super::regression_stage::Setup {
+            size: (1920, 1080),
+            ..Default::default()
+        }) else {
+            return;
+        };
+        if !crate::render::render_test_support::needs(&stage.device, GpuFeature::ScreenSpaceReflections) {
+            return;
+        }
+        let points: Vec<Vec3> = if scene == "rails" {
+            rails_over_a_mirror(&mut stage).iter().map(|r| r.1).collect()
+        } else {
+            let (low, high) = bars_over_a_floor(&mut stage, 0.0);
+            vec![low, high]
+        };
+        stage.ctx.scene3d.post.ssr_thin_objects = true;
+        let off = stage.settled(2);
+        stage.ctx.scene3d.post.ssr = 1.0;
+        let on = stage.settled(4);
+        let bands: Vec<(f32, f32)> = points.iter().map(|&p| band(&stage, &on, Some(&off), p, 40)).collect();
+        if let Some(dir) = &save {
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::write(dir.join(format!("{scene}.rgba")), &on.rgba).unwrap();
+        }
+        if let Some(dir) = &base {
+            let saved = Image {
+                width: on.width,
+                height: on.height,
+                rgba: std::fs::read(dir.join(format!("{scene}.rgba"))).expect("a saved frame"),
+            };
+            let (mut differs, mut reflected) = (0.0f64, 0.0f64);
+            for ((a, b), o) in on.rgba.chunks(4).zip(saved.rgba.chunks(4)).zip(off.rgba.chunks(4)) {
+                differs += f64::from((linear(a[0]) - linear(b[0])).abs());
+                reflected += f64::from((linear(b[0]) - linear(o[0])).max(0.0));
+            }
+            let shares: Vec<String> = points
+                .iter()
+                .zip(&bands)
+                .map(|(&p, now)| {
+                    let was = band(&stage, &saved, Some(&off), p, 40);
+                    format!("energy x{:.3}, width x{:.3}", now.0 / was.0, now.1 / was.1)
+                })
+                .collect();
+            eprintln!(
+                "{scene}: {:.2}% of the reflected light differs; {}",
+                100.0 * differs / reflected.max(1e-9),
+                shares.join("; ")
+            );
+        }
+        eprintln!("{scene}: bands (energy, RMS width) {bands:?}");
+        stage.finish();
+    }
+}
+
+/// The thin-objects trace's GPU time over the rails of
+/// [`rails_over_a_mirror`] at 2560x1440: thin things and their edges,
+/// where the trace reads the depth most (the scene of
+/// [`thin_objects_gpu_cost_at_1440p`] is a floor and a box). Reflections
+/// on, thin objects off and on in alternating blocks of 20 frames: the
+/// medians of the trace's span and of the coarse depth's, the GPU kept
+/// busy between frames (see `Busy`). Run with --ignored --nocapture.
+#[test]
+#[ignore = "a measurement: run by hand; it asserts nothing about the times"]
+fn thin_objects_gpu_cost_over_rails_at_1440p() {
+    let Some(mut stage) = Stage::with(super::regression_stage::Setup {
+        size: (2560, 1440),
+        timestamps: true,
+        ..Default::default()
+    }) else {
+        return;
+    };
+    let Some(mut timer) = super::timer::GpuTimer::new(&stage.device, &stage.queue) else {
+        crate::render::render_test_support::skip("timestamp queries unavailable");
+        return;
+    };
+    rails_over_a_mirror(&mut stage);
+    stage.ctx.scene3d.post.ssr = 1.0;
+    let busy = Busy::new(&stage.device);
+    // [off, on]: the trace's spans, and the coarse depth's with thin objects on.
+    let mut trace = [Vec::new(), Vec::new()];
+    let mut coarse = Vec::new();
+    for frame in 0..640 {
+        let on = (frame / 20) % 2 == 1;
+        stage.ctx.scene3d.post.ssr_thin_objects = on;
+        busy.run(&stage.device, &stage.queue);
+        stage.render_timed(Some(&mut timer));
+        // Each frame done before the next: its times come back in order.
+        let _ = stage.device.poll(wgpu::PollType::wait_indefinitely());
+        // Results come back a few frames late: keep each block's last 12.
+        if frame < 40 || frame % 20 < 8 {
+            continue;
+        }
+        for span in &timer.last_frame {
+            match span.name {
+                "screen reflections" => trace[usize::from(on)].push(span.ms),
+                "reflection coarse depth" if on => coarse.push(span.ms),
+                _ => {}
+            }
+        }
+    }
+    let median = |samples: &mut Vec<f32>| {
+        samples.sort_by(f32::total_cmp);
+        samples.get(samples.len() / 2).copied().unwrap_or(f32::NAN)
+    };
+    let [mut off, mut on] = trace;
+    let samples = (off.len(), on.len(), coarse.len());
+    let (off, on, coarse) = (median(&mut off), median(&mut on), median(&mut coarse));
+    eprintln!("samples (off, on, coarse): {samples:?}");
+    eprintln!(
+        "2560x1440, rails: trace {off:.4} ms with thin objects off, {on:.4} ms on, coarse depth {coarse:.4} ms: \
+         +{:.4} ms",
+        on + coarse - off
+    );
+    stage.finish();
 }

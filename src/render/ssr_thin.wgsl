@@ -7,12 +7,12 @@
 //
 // Far along the ray the march's steps are tens of pixels long and jump over
 // thin things: without TAA to fill the gaps, a rail near the camera was
-// reflected dotted, keeping about half its light. Here a long step first
-// reads the coarse depth along the stretch it jumps over, and where
-// something there could be in front of the ray, the depth every half of
-// the crossing's allowance (`most`); the step ends where the ray first
-// went behind something. Flat surfaces (floors, walls, the sky) cost a read
-// or two a step, so the depth is read where there are edges, where thin
+// reflected dotted, keeping about half its light. Here the ray walks the
+// blocks of a coarse copy of the depth instead (a Hi-Z march): a block it
+// stays in front of is skipped whole, and where something in a block could
+// be in front of it, the depth itself is read there, about half a pixel
+// apart. Flat surfaces (floors, walls, the sky) are skipped in blocks of
+// up to 64 pixels, so the depth is read where there are edges, where thin
 // things are.
 // The coarse depth: for each CELL x CELL block of `depth` (its level 0),
 // and each 2x2 of the level before (levels 1 to 3: 16, 32 and 64 pixels),
@@ -21,12 +21,8 @@
 // `flat_tolerance`, the plane's depth at the middle and its change a pixel
 // to the right and down, else -1, 0, 0). The depth of a flat surface
 // changes linearly across the screen, and so does the ray's: whether the
-// ray goes behind a flat block follows from where it starts and ends
-// there, without reading the depth. A long step of the march reads the
-// level whose blocks are as wide as the step at its ends, the blocks of
-// level 0 only where the ray may go behind those, and the depth itself
-// only in such blocks (see the march in `fs_trace_thin`). Floors, walls and the sky are flat,
-// so the depth is read where there are edges, where thin things are.
+// ray goes behind a flat block follows from where it enters and leaves it,
+// without reading the depth (see the march in `fs_trace_thin`).
 @group(0) @binding(11) var coarse: texture_2d<f32>;
 const CELL: i32 = 8;
 const COARSE_LEVELS: u32 = 4u;
@@ -149,37 +145,21 @@ fn may_pass_behind(l: Line, a: f32, b: f32, c: Coarse, size: vec2<f32>) -> bool 
     // made from.
     return min(ray.x - plane.x, ray.y - plane.y) < f32(2u * COARSE_LEVELS) * flat_tolerance(c.depth.x);
 }
-// Where between `a` and `b` on the line (the ray in front of the depth at
-// `a`) the ray first goes behind something, looked at `fine` apart at most
-// (fractions of the line), and how far apart the points looked at there
-// were; (-1, 0): nothing there. For a stretch of a level above 0: by the
-// blocks of level 0 (`cell`, a block's width as a fraction of the line),
-// reading the depth only in those the ray may go behind.
-fn skipped_in_blocks(l: Line, a: f32, b: f32, size: vec2<f32>, cell: f32, fine: f32) -> vec2<f32> {
-    let spans = i32(min(ceil((b - a) / cell), f32(1 << (COARSE_LEVELS - 1u))));
-    var head = a;
-    var at_head = coarse_at(line_uv(l, a), size, 0u);
-    for (var k = 1; k <= spans; k++) {
-        let tail = mix(a, b, f32(k) / f32(spans));
-        let at_tail = coarse_at(line_uv(l, tail), size, 0u);
-        if may_pass_behind(l, head, tail, at_head, size) || may_pass_behind(l, head, tail, at_tail, size) {
-            let found = skipped_pixels(l, head, tail, size, fine);
-            if found.x >= 0.0 { return found; }
-        }
-        head = tail;
-        at_head = at_tail;
-    }
-    return vec2<f32>(-1.0, 0.0);
+// Where the line leaves the block `width` pixels wide around `middle` (in
+// pixels), as a fraction of the line, from `s` on: a hundredth of a pixel
+// past its edge, so the next block is the one after it.
+fn block_exit(l: Line, s: f32, middle: vec2<f32>, width: f32, size: vec2<f32>) -> f32 {
+    let start = l.uv * size;
+    let span = l.uv_span * size;
+    let along = abs(span) >= vec2<f32>(1e-6);
+    let edge = middle + sign(span) * width * 0.5;
+    let t = select(vec2<f32>(1e9), (edge - start) / select(vec2<f32>(1.0), span, along), along);
+    return max(min(t.x, t.y), s) + 0.01 / length(span);
 }
-// The same within a block's stretch, from `a` to `b`: the depth itself.
-fn skipped_pixels(l: Line, a: f32, b: f32, size: vec2<f32>, fine: f32) -> vec2<f32> {
-    let n = max(ceil((b - a) / fine), 1.0);
-    for (var j = 1; j <= i32(n); j++) {
-        let t = mix(a, b, f32(j) / n);
-        if line_behind(l, t, size) { return vec2<f32>(t, (b - a) / n); }
-    }
-    return vec2<f32>(-1.0, 0.0);
-}
+// The march's turns at most: a GPU hangs on a loop that doesn't end. A
+// turn looks at one block or reads the depth once; the rays of the
+// engine's tests take far fewer.
+const TURNS: i32 = 320;
 
 @fragment fn fs_trace_thin(in: Full) -> Traced {
     // The top left of the 2x2 full-size pixels this one stands for.
@@ -216,10 +196,6 @@ fn skipped_pixels(l: Line, a: f32, b: f32, size: vec2<f32>, fine: f32) -> vec2<f
         reach = (start.w - nearest) / (start.w - end.w);
         end = mix(start, end, reach);
     }
-    // Interleaved gradient noise, moving each frame: TAA averages the steps
-    // of several frames into a finer march.
-    let noise = vec2<f32>(p) + 5.588238 * f32(u32(settings.params.z) % 64u);
-    let jitter = fract(52.9829189 * fract(dot(noise, vec2<f32>(0.06711056, 0.00583715))));
     let size = vec2<f32>(textureDimensions(depth));
     let uv0 = to_uv(start);
     let uv1 = to_uv(end);
@@ -229,128 +205,98 @@ fn skipped_pixels(l: Line, a: f32, b: f32, size: vec2<f32>, fine: f32) -> vec2<f
         1.0 / start.w, 1.0 / end.w - 1.0 / start.w,
     );
     let pixels = max(length((uv1 - uv0) * size), 0.0001);
-    // The steps: on screen, from `first` on, each e^(GROWTH / STEPS) times
-    // the one before. Short steps near the surface, where contact
-    // reflections are, and as many pixels apart however far the ray goes
-    // into the scene. The first lands a pixel and a half out: the start's
-    // own pixel can't tell the surface from what's behind it at a grazing
-    // angle. Step `k` (0 to 1) falls at `first + scale (e^(GROWTH k) - 1)`;
-    // `grown` holds e^(GROWTH k), one multiplication a step.
+    // The first look lands a pixel and a half out: the start's own pixel
+    // can't tell the surface from what's behind it at a grazing angle.
     let first = min(1.5 / pixels, 1.0);
+    // The trace's steps (see `fs_trace`), taken while the ray is behind
+    // something: step `k` (0 to 1) at `first + scale (e^(GROWTH k) - 1)`.
     let scale = (1.0 - first) / (exp(GROWTH) - 1.0);
-    let ratio = exp(GROWTH / f32(STEPS));
-    var grown = exp(GROWTH * jitter / f32(STEPS));
     // The most of a step a crossing may count as the ray's travel (see
     // below): two pixels at 1080p, as many of the screen's height at other
     // sizes, and at least two.
     let most = max(2.0, size.y / 540.0) / pixels;
+    // How far apart the depth is read in a block: half a pixel or so. A
+    // thin thing's edge can keep the ray behind it for less than a pixel,
+    // and reads a pixel apart, at the same place in every pixel's ray,
+    // missed whole rows of a rail's reflection.
+    let fine = most * 0.25;
     // The ray's direction on screen, a pixel long (see `surface_thickness`).
     let direction = (uv1 - uv0) * size / pixels;
-    // A step longer than half of `most` also reads the coarse depth along
-    // the stretch it jumps over (see `skipped_in_blocks`), and the depth every
-    // half of `most` where something there could be in front of the ray:
-    // without TAA to fill the gaps, steps tens of pixels long jumped over
-    // thin things (a rail near the camera came out dotted).
-    let cell = f32(CELL) / pixels;
-    var before = 0.0;
+    // The march: where the ray was last looked at (in front of the depth
+    // there unless `was_behind`), the level of the coarse depth it walks
+    // (-1: the depth itself) and, reading the depth, where the block it
+    // reads ends. A block of `level` it stays in front of (by its plane
+    // where it is flat, by its nearest depth elsewhere; see
+    // `may_pass_behind`) is skipped whole, and the next one looked at a
+    // level coarser; where it may go behind something in the block, a level
+    // finer; below level 0, the depth is read `fine` apart to the end of the
+    // block. Behind something without a hit (it passed behind it), the
+    // march takes the trace's own steps until it is in front again, then
+    // goes back to the blocks.
+    var before = max(first - fine, 0.0);
+    var level = -1;
+    var block_end = first;
     var was_behind = false;
     // How far in front of the camera the surface the ray was last behind
     // is (see the still-behind case below).
     var behind_w = 0.0;
     var hit = -1.0;
-    // The block of the coarse depth where the last step ended, and where on
-    // the line and at which level (-1: none yet): the march's steps meet,
-    // so a step doesn't read again what the one before read.
-    var last_block = Coarse(vec4<f32>(0.0), vec2<f32>(0.0));
-    var last_block_at = vec2<f32>(-1.0);
-    var i = 0;
-    // Shortened steps don't count toward STEPS, so the loop has its own
-    // limit: a GPU hangs on a loop that doesn't end.
-    var turns = 0;
-    loop {
-        if i >= STEPS || turns >= 2 * STEPS { break; }
-        turns++;
-        var s = first + scale * (grown - 1.0);
-        // This step's share of the line: the march's slope here.
-        var step = scale * GROWTH * grown / f32(STEPS);
-        if !on_screen(line_uv(line, s)) { break; }
-        // Whether the ray went behind something the step jumped over: then
-        // this step ends there instead, and the next one is taken again
-        // from it (once, as the ray is then behind).
-        var shortened = false;
-        if !was_behind && step > most * 0.5 {
-            let level = u32(clamp(ceil(log2((s - before) / cell)), 0.0, f32(COARSE_LEVELS - 1u)));
-            if any(last_block_at != vec2<f32>(before, f32(level))) {
-                last_block = coarse_at(line_uv(line, before), size, level);
+    for (var turn = 0; turn < TURNS; turn++) {
+        if before >= 1.0 || !on_screen(line_uv(line, before)) { break; }
+        if level >= 0 {
+            let width = f32(CELL << u32(level));
+            let block = coarse_at(line_uv(line, before), size, u32(level));
+            let exit = min(block_exit(line, before, block.middle, width, size), 1.0);
+            if !may_pass_behind(line, before, exit, block, size) {
+                before = exit;
+                level = min(level + 1, i32(COARSE_LEVELS) - 1);
+            } else if level > 0 {
+                level -= 1;
+            } else {
+                level = -1;
+                block_end = exit;
             }
-            let at_end = coarse_at(line_uv(line, s), size, level);
-            var skip = vec2<f32>(-1.0, 0.0);
-            if may_pass_behind(line, before, s, last_block, size) || may_pass_behind(line, before, s, at_end, size) {
-                if level == 0u {
-                    skip = skipped_pixels(line, before, s, size, most * 0.5);
-                } else {
-                    skip = skipped_in_blocks(line, before, s, size, cell, most * 0.5);
-                }
-            }
-            last_block = at_end;
-            last_block_at = vec2<f32>(s, f32(level));
-            if skip.x >= 0.0 && skip.x < s {
-                s = skip.x;
-                step = skip.y;
-                shortened = true;
-            }
+            continue;
         }
+        let step = select(fine, GROWTH / f32(STEPS) * (before - first + scale), was_behind);
+        let s = min(before + max(step, fine), 1.0);
         let uv = line_uv(line, s);
+        if !on_screen(uv) { break; }
         let q = vec2<i32>(uv * size);
         let z = z_at(q);
         let is_behind = !is_sky(z) && line_depth(line, s) < z;
         if is_behind {
-            // A shortened step was looked at `step` apart.
-            var lo = select(before, s - step, shortened);
+            var lo = before;
             var hi = s;
             var found = false;
             if !was_behind {
                 // It went behind something: where it crossed, and whether
                 // it was behind by less than the thickness of what it went
-                // behind (see `surface_thickness`) and two of its steps
-                // there. Testing where it crossed rather than where
-                // the step fell keeps the reflection's edges where the
-                // scene puts them, and allowing for the steps keeps where
-                // a contact reflection ends from depending on where each
-                // pixel's jittered steps fell (no grain without TAA). But
-                // a step counts as at most two pixels (`most`): far along
-                // the ray steps are tens of pixels long, and two of them
-                // made a thin thing far away as thick as the ray's travel
-                // over them, a blob in the reflection where a thin line
-                // belongs.
+                // behind (see `surface_thickness`) and its travel there,
+                // half of this look's distance from the last (as in
+                // `fs_trace`, where a step counts as at most two pixels:
+                // here the looks are closer, so a thin thing's reflection
+                // is as thin as the thing).
                 for (var j = 0; j < REFINE; j++) {
                     let mid = (lo + hi) * 0.5;
                     if line_behind(line, mid, size) { hi = mid; } else { lo = mid; }
                 }
                 let w = line_w(line, hi);
                 let at = vec2<i32>(line_uv(line, hi) * size);
-                // The crossing was looked for at most half of `most` apart:
-                // a quarter of what the trace without the coarse depth
-                // allows, so a thin thing's reflection is as thin as the
-                // thing.
-                let travel = line_w_change(line, w, min(step, most) * 0.5);
+                let travel = line_w_change(line, w, min(s - before, most) * 0.5);
                 behind_w = scene_w(at, z_at(at));
                 found = w - behind_w < surface_thickness(at, behind_w, direction) + travel;
             } else {
                 // Still behind, now by less than the thickness and two of
                 // this step: in front of something new, which it hit
-                // within the step (where, it doesn't know; large things
-                // far away are found here, past a crossing too thin for
-                // them). Only a new surface, farther than the one it was
-                // behind: past a rejected crossing the ray is often still
-                // behind the same thin thing (its top, a step further),
-                // and taking that as a hit put back the blob and the
-                // grain the tight crossing leaves out.
+                // within the step (large things far away are found here,
+                // past a crossing too thin for them). Only a new surface,
+                // farther than the one it was behind (see `fs_trace`).
                 let w = line_w(line, s);
                 let surface = scene_w(q, z);
                 let new_surface = surface > behind_w + thickness(behind_w);
                 behind_w = surface;
-                if new_surface && w - surface < thickness(w) + 2.0 * line_w_change(line, w, step) {
+                if new_surface && w - surface < thickness(w) + 2.0 * line_w_change(line, w, s - before) {
                     for (var j = 0; j < REFINE; j++) {
                         let mid = (lo + hi) * 0.5;
                         if line_behind(line, mid, size) { hi = mid; } else { lo = mid; }
@@ -366,10 +312,8 @@ fn skipped_pixels(l: Line, a: f32, b: f32, size: vec2<f32>, fine: f32) -> vec2<f
         }
         was_behind = is_behind;
         before = s;
-        if !shortened {
-            grown *= ratio;
-            i++;
-        }
+        // In front again past the block: back to the blocks.
+        if !was_behind && before >= block_end { level = 0; }
     }
     if hit < 0.0 { return missed; }
     let uv = line_uv(line, hit);

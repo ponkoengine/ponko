@@ -1292,9 +1292,9 @@ using query_filter_ex = PonkoQueryFilterEx;
 /// Post-processing that can grow (PonkoPostEx): `post` is ponko::post, plus split toning
 /// (split_toning_shadows, split_toning_highlights, split_toning_balance), depth of field (dof_enabled,
 /// dof_focus_distance, dof_focus_range, dof_blur), the sample count (msaa) and, from version 2, thin
-/// objects in screen-space reflections (ssr_thin_objects: whole without TAA, about a millisecond more at
-/// 1920x1080; the ultra preset turns it on) and, from version 3, the upscaler (a ponko::upscaler; set it
-/// with `static_cast<std::uint32_t>(...)`).
+/// objects in screen-space reflections (ssr_thin_objects: whole without TAA, about 0.2 ms more at
+/// 2560x1440; the high and ultra presets turn it on) and, from version 3, the upscaler (a ponko::upscaler;
+/// set it with `static_cast<std::uint32_t>(...)`).
 using post_ex = PonkoPostEx;
 /// HDR display output settings that can grow (PonkoHdrOutput): enabled, paper_white_nits, peak_nits
 /// (0: the display's). Off by default; see hdr_output_defaults, game::hdr_output, ctx::set_hdr_output.

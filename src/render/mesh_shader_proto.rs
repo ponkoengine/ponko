@@ -996,7 +996,7 @@ impl Rig {
         let lease = device
             .features()
             .contains(wgpu::Features::TIMESTAMP_QUERY)
-            .then(|| super::query_sets::lease(device, "prototype timer"))
+            .then(|| super::query_sets::lease(device, &gpu.queue, "prototype timer"))
             .flatten();
         let queries = lease.map(|lease| {
             (

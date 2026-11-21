@@ -2906,8 +2906,8 @@ fn quality_from_c(q: &PonkoGraphicsQuality, settings: &mut SceneSettings) -> Res
     l.light_shadow_atlas = q.light_shadow_atlas;
     // The ABI 2 struct has no field for thin objects in reflections
     // (`PonkoPostEx::ssr_thin_objects`): it follows the preset the rest of
-    // the struct is, so a preset set from C is that preset (Ultra turns it
-    // on, the others off), and stays as it was for a custom struct.
+    // the struct is, so a preset set from C is that preset (High and Ultra
+    // turn it on, Low and Medium off), and stays as it was for a custom struct.
     let kept = settings.post.ssr_thin_objects;
     if settings.quality().is_none() {
         settings.post.ssr_thin_objects = !kept;
@@ -3013,7 +3013,7 @@ pub unsafe extern "C" fn ponko_ctx_graphics_quality(
 /// automatic quality; the next frame draws at the new resolution and
 /// shadow map sizes. Thin objects in reflections, which the struct has no
 /// field for (`PonkoPostEx::ssr_thin_objects`), follow the preset the struct
-/// is (on for ultra, off for the others) and are left as they are for a
+/// is (on for high and ultra, off for low and medium) and are left as they are for a
 /// custom one. Fields outside their ranges (see
 /// `PonkoGraphicsQuality`) are `PONKO_INVALID_ARGUMENT` and change nothing.
 /// # Safety

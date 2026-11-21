@@ -139,7 +139,7 @@ impl GpuTimer {
         if !device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
             return None;
         }
-        let lease = super::query_sets::lease(device, "GPU frame timer")?;
+        let lease = super::query_sets::lease(device, queue, "GPU frame timer")?;
         let queries = device.create_query_set(&wgpu::QuerySetDescriptor {
             label: Some("frame timestamps"),
             ty: wgpu::QueryType::Timestamp,
