@@ -918,6 +918,7 @@ mod tests {
         assert_eq!(POST_CHAIN.map(|link| link), RECORDED.map(|(link, ..)| link));
         // `record_post` walks the chain and ends in the chain's own links.
         let walk = &source[source.find("fn record_post(").unwrap()..];
+        let walk: String = walk.split_whitespace().collect();
         assert!(walk.contains("self.post.record("), "the chain's own links come last");
         let mut last = ("", 0);
         for (link, function, text) in RECORDED {

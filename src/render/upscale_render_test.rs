@@ -328,8 +328,10 @@ fn rig(scene: Scene, method: Method, size: (u32, u32), timestamps: bool) -> Opti
 fn errors(image: &Image, reference: &Image) -> Vec<f32> {
     image
         .rgba
-        .chunks_exact(4)
-        .zip(reference.rgba.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(reference.rgba.as_chunks::<4>().0)
         .map(|(a, b)| (0..3).map(|c| (f32::from(a[c]) - f32::from(b[c])).abs()).sum::<f32>() / (3.0 * 255.0))
         .collect()
 }
