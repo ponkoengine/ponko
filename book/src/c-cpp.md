@@ -392,6 +392,7 @@ to it. The full rule is in
 | `PonkoCrashReports`, `PonkoTouchControlsDesc`, `PonkoSliceLoader` | `ponko_game_crash_reports`, `ponko_ctx_set_touch_controls_ex`, `ponko_asset_group_add_sliced` | new in this release: [crash report](crash-reports.md#c-and-c) settings and hook, touch controls with their [styles and places](touch.md#c-and-c), [sliced loaders](loading.md#sliced-loaders-from-c) |
 | `PonkoCrowdDesc`, `PonkoNavCrowdStats` | `ponko_ctx_create_crowd_ex`, `ponko_ctx_navmesh_crowd_stats` | new in this release: a crowd with [crossfading levels](crowds.md#c-and-c), the [navmesh crowd's counts](navigation3d.md#counting-the-crowds-work) |
 | `PonkoWaterDesc` version 2 | `ponko_ctx_spawn_water` | `has_spectrum` and `spectrum`: a [sea from a wave spectrum](water.md#from-c-and-c) |
+| `PonkoLoopbackLink` | `ponko_loopback_link_defaults`, `ponko_net_messages_loopback_link` | new in this release: an in-memory link that [loses and delays datagrams](replication.md#test-it), for native tests |
 | `PonkoBuoyancyDesc` | `ponko_buoyancy_desc_box`, `_sphere`, `_points`, `ponko_ctx_set_buoyancy`, `ponko_ctx_buoyancy` | new in this release: a [floating body's](water.md#from-c-and-c) sample points, the water's density, drag and the ripple switch |
 | `PonkoUploadStatsEx` | `ponko_ctx_upload_stats_ex` | the upload counters with the GPU's own time for [made textures](loading.md#c-and-c) (`gpu_created_ms`) and for the latest upload step (`gpu_upload_ms`) |
 
@@ -497,13 +498,10 @@ binding arrives:
 | `LobbyClient::join_web` | [Lobbies, matchmaking and relays](lobby.md#the-client) | C and C++ games don't build for the web yet; their lobby clients join over UDP |
 | `Signaling` | [Peer to peer over WebRTC](webrtc.md#with-any-signaling-channel) | C and C++ WebRTC endpoints are signaled through a lobby client (`ponko_net_messages_rtc_host`, `_rtc_join`) |
 | `RtcConfig::turn` | [Peer to peer over WebRTC](webrtc.md#stun-turn-and-nats) | TURN works in browsers only, and C and C++ games don't build for the web yet |
-| `LoopbackLink` | [Test it](replication.md#test-it) | Not bound yet: C and C++ tests use the plain loopback (`ponko_net_messages_loopback`); a link that loses and reorders datagrams is for Rust tests and benchmarks |
 | `SkeletonData::add_bone`, `SpineAtlas` | [2D skeletons](skeleton2d.md#from-c-and-c) | Skeletons come from files (Ponko's format or a Spine export and its atlas) through the assets; a memory source holds files kept in memory |
 | `Plugin::dependencies` | [Plugins for other crates](plugins.md#from-c-and-c) | C plugins (`ponko_game_plugin`) have no names or dependencies and are never duplicates |
 | `Game::debug_toggle` | [Plugins for other crates](plugins.md#debug-toggles) | Draw behind a flag of the game's own; `debug.draw` turns the engine's views on and off |
 | `Game::control_method` | [Plugins for other crates](plugins.md#control-methods) | The control endpoint's built-in methods only; a native game's tools read its reflected resources |
-| `WindowService::safe_area` | [Touch](touch.md#notches-home-bars-and-rounded-corners) | Not bound yet: the engine's touch controls and arrange screen keep to the safe area all the same; C and C++ can't read or feed it |
-| `Ui::set_inside_safe_area` | [Touch](touch.md#notches-home-bars-and-rounded-corners) | Not bound yet: UI roots made from C and C++ are laid out in the whole window |
 
 System phases, system ids, setup callbacks and plugins are not on this
 list. They have C and C++ calls, described in

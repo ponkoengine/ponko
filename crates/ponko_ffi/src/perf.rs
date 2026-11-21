@@ -4,6 +4,7 @@
 use std::ffi::c_char;
 
 use ponko::perf::Budget;
+use ponko::perf::GpuTiming;
 use ponko::perf::PerfReport;
 use ponko::perf::ProfileScope;
 
@@ -465,6 +466,80 @@ pub unsafe extern "C" fn ponko_ctx_set_profiling(ctx: *mut PonkoCtx, on: bool) -
             c.perf.set_profiling(on);
             Ok(())
         })
+    })
+}
+
+/// `ponko_ctx_set_gpu_timing` kind: the engine decides how often the GPU
+/// passes are timed (Rust `GpuTiming::Auto`).
+pub const PONKO_GPU_TIMING_AUTO: u32 = 0;
+/// `ponko_ctx_set_gpu_timing` kind: time every `every`th frame (Rust
+/// `GpuTiming::Every`; 1 is every frame, 0 counts as 1).
+pub const PONKO_GPU_TIMING_EVERY: u32 = 1;
+/// `ponko_ctx_set_gpu_timing` kind: never time the GPU (Rust `GpuTiming::Off`).
+pub const PONKO_GPU_TIMING_OFF: u32 = 2;
+
+/// Chooses how often the GPU passes are timed (Rust `Perf::set_gpu_timing`):
+/// `kind` is `PONKO_GPU_TIMING_AUTO` (the default: one frame in 16, every
+/// frame while profiling is on), `PONKO_GPU_TIMING_EVERY` (every `every`th
+/// frame, also while profiling is on) or `PONKO_GPU_TIMING_OFF` (no GPU times
+/// at all). `every` is read only for `EVERY`. The overlay, traces, benchmark
+/// runs and automatic quality still get every frame's times while they are
+/// on. Any other `kind` is `PONKO_INVALID_ARGUMENT` and changes nothing.
+/// ```
+/// use ponko_ffi::*;
+/// let null = std::ptr::null_mut();
+/// assert_eq!(unsafe { ponko_ctx_set_gpu_timing(null, PONKO_GPU_TIMING_OFF, 0) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` must be null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_set_gpu_timing(ctx: *mut PonkoCtx, kind: u32, every: u32) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        let timing = match kind {
+            PONKO_GPU_TIMING_AUTO => GpuTiming::Auto,
+            PONKO_GPU_TIMING_EVERY => GpuTiming::Every(every),
+            PONKO_GPU_TIMING_OFF => GpuTiming::Off,
+            _ => {
+                return Err(invalid(
+                    "kind must be PONKO_GPU_TIMING_AUTO, PONKO_GPU_TIMING_EVERY or PONKO_GPU_TIMING_OFF",
+                ));
+            }
+        };
+        ctx_access(ctx, |c| {
+            c.perf.set_gpu_timing(timing);
+            Ok(())
+        })
+    })
+}
+
+/// What `ponko_ctx_set_gpu_timing` chose (Rust `Perf::gpu_timing`; not what
+/// the engine did for the frame): `*out_kind` is a `PONKO_GPU_TIMING_*` value
+/// and `*out_every` the `every` that was set (0 unless the kind is `EVERY`).
+/// ```
+/// use ponko_ffi::*;
+/// let null = std::ptr::null_mut();
+/// let (mut kind, mut every) = (9u32, 9u32);
+/// assert_eq!(unsafe { ponko_ctx_gpu_timing(null, &mut kind, &mut every) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` must be null or live; `out_kind` and `out_every` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_gpu_timing(
+    ctx: *const PonkoCtx,
+    out_kind: *mut u32,
+    out_every: *mut u32,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        let timing = ctx_access(ctx, |c| Ok(c.perf.gpu_timing()))?;
+        let (kind, every) = match timing {
+            GpuTiming::Auto => (PONKO_GPU_TIMING_AUTO, 0),
+            GpuTiming::Every(n) => (PONKO_GPU_TIMING_EVERY, n),
+            GpuTiming::Off => (PONKO_GPU_TIMING_OFF, 0),
+        };
+        out(out_kind, kind)?;
+        out(out_every, every)
     })
 }
 

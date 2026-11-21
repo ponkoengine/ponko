@@ -97,10 +97,13 @@ pub unsafe trait QueryData {
 /// for. A query with one to four `Option` fetches gets one loop for each
 /// combination of the components the archetype may have, picked once here:
 /// no row tests whether the archetype has them, so the loop compiles (and
-/// vectorizes) like that of a query without `Option`s. With three or four,
-/// that is 8 or 16 copies of the loop, measured worth it: about 0.7× the
-/// instructions and 0.6× the cycles of testing each row, for 1-2 KB more
-/// code per loop (`crates/ponko_bench/ECS.md`).
+/// vectorizes) like that of a query without `Option`s: two `Option`s a
+/// closure combines cost 2.8 instructions per entity, none 2.0. With three
+/// or four, that is 8 or 16 copies of the loop, measured worth it: 3.1 and
+/// 3.3 instructions per entity against 24 and 28 testing each row, for 2-6
+/// KB more code per loop (`crates/ponko_bench/ECS.md`). The copies stay
+/// apart only because `fetch_split` tells LLVM a present column isn't null
+/// (#196).
 ///
 /// # Safety
 /// As for [`QueryData::fetch`], for every row in `rows`.
@@ -241,8 +244,15 @@ unsafe impl<T: Component> QueryData for Option<&T> {
     unsafe fn fetch_split<'a, const PRESENT: u32>(state: Option<*const T>, row: usize, bit: u32) -> Option<&'a T> {
         if PRESENT.checked_shr(bit).unwrap_or(0) & 1 != 0 {
             // SAFETY: the caller's contract: the bit is set, so the
-            // archetype has the column and `state` is `Some`.
-            Some(unsafe { &*state.unwrap_unchecked().add(row) })
+            // archetype has the column and `state` is `Some`, a column's
+            // base, which is never null. Telling LLVM so lets it drop the
+            // closure's test of the `Option`; with it, the split loops look
+            // alike and LLVM merges them back into one that tests every row.
+            Some(unsafe {
+                let base = state.unwrap_unchecked();
+                std::hint::assert_unchecked(!base.is_null());
+                &*base.add(row)
+            })
         } else {
             None
         }
@@ -280,8 +290,15 @@ unsafe impl<T: Component> QueryData for Option<&mut T> {
     unsafe fn fetch_split<'a, const PRESENT: u32>(state: Option<*mut T>, row: usize, bit: u32) -> Option<&'a mut T> {
         if PRESENT.checked_shr(bit).unwrap_or(0) & 1 != 0 {
             // SAFETY: the caller's contract: the bit is set, so the
-            // archetype has the column and `state` is `Some`.
-            Some(unsafe { &mut *state.unwrap_unchecked().add(row) })
+            // archetype has the column and `state` is `Some`, a column's
+            // base, which is never null. Telling LLVM so lets it drop the
+            // closure's test of the `Option`; with it, the split loops look
+            // alike and LLVM merges them back into one that tests every row.
+            Some(unsafe {
+                let base = state.unwrap_unchecked();
+                std::hint::assert_unchecked(!base.is_null());
+                &mut *base.add(row)
+            })
         } else {
             None
         }

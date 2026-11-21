@@ -5036,6 +5036,21 @@ pub fn ponko::particles::ParticleGradient::fmt(&self, &mut core::fmt::Formatter<
 impl core::marker::StructuralPartialEq for ponko::particles::ParticleGradient
 pub mod ponko::perf
 pub use ponko::perf::Instant
+pub enum ponko::perf::GpuTiming
+pub ponko::perf::GpuTiming::Auto
+pub ponko::perf::GpuTiming::Every(u32)
+pub ponko::perf::GpuTiming::Off
+impl core::clone::Clone for ponko::perf::GpuTiming
+pub fn ponko::perf::GpuTiming::clone(&self) -> Self
+impl core::cmp::Eq for ponko::perf::GpuTiming
+impl core::cmp::PartialEq for ponko::perf::GpuTiming
+pub fn ponko::perf::GpuTiming::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::perf::GpuTiming
+pub fn ponko::perf::GpuTiming::default() -> Self
+impl core::fmt::Debug for ponko::perf::GpuTiming
+pub fn ponko::perf::GpuTiming::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::perf::GpuTiming
+impl core::marker::StructuralPartialEq for ponko::perf::GpuTiming
 #[non_exhaustive] pub enum ponko::perf::WarningKind
 pub ponko::perf::WarningKind::AllocatesEveryFrame
 pub ponko::perf::WarningKind::CpuBound
@@ -5043,6 +5058,7 @@ pub ponko::perf::WarningKind::GpuBound
 pub ponko::perf::WarningKind::HeavyShadows
 pub ponko::perf::WarningKind::Hotspot
 pub ponko::perf::WarningKind::ManyDrawCalls
+pub ponko::perf::WarningKind::PassesNotTimed
 pub ponko::perf::WarningKind::Spikes
 impl core::clone::Clone for ponko::perf::WarningKind
 pub fn ponko::perf::WarningKind::clone(&self) -> Self
@@ -5261,6 +5277,8 @@ pub struct ponko::perf::Perf
 impl ponko::perf::Perf
 pub fn ponko::perf::Perf::frame_stats(&self) -> ponko::perf::FrameStats
 pub fn ponko::perf::Perf::gpu_passes(&self) -> &[ponko::perf::GpuPass]
+pub fn ponko::perf::Perf::gpu_passes_not_timed(&self) -> &[&'static str]
+pub fn ponko::perf::Perf::gpu_timing(&self) -> ponko::perf::GpuTiming
 pub fn ponko::perf::Perf::hud(&self) -> bool
 pub fn ponko::perf::Perf::profiling(&self) -> bool
 pub fn ponko::perf::Perf::record_trace(&mut self, impl core::convert::Into<std::path::PathBuf>, usize)
@@ -5268,6 +5286,7 @@ pub fn ponko::perf::Perf::render_stats(&self) -> ponko::render::RenderStats
 pub fn ponko::perf::Perf::report(&self) -> ponko::perf::PerfReport
 pub fn ponko::perf::Perf::scope(&self, &str) -> ponko::perf::ScopeGuard
 pub fn ponko::perf::Perf::scope_timings(&self) -> &[ponko::perf::ScopeTiming]
+pub fn ponko::perf::Perf::set_gpu_timing(&mut self, ponko::perf::GpuTiming)
 pub fn ponko::perf::Perf::set_hud(&mut self, bool)
 pub fn ponko::perf::Perf::set_profiling(&mut self, bool)
 pub fn ponko::perf::Perf::system_timings(&self) -> &[ponko::perf::SystemTiming]
@@ -5458,6 +5477,7 @@ pub fn ponko::perf::WorstFrame::deserialize<__D>(__D) -> core::result::Result<Se
 pub fn ponko::perf::alloc_counts() -> ponko::perf::AllocCounts
 pub fn ponko::perf::net_alloc_bytes() -> i64
 pub fn ponko::perf::note_allocation(usize)
+pub fn ponko::perf::note_deallocation(usize)
 pub fn ponko::perf::scope_named(&str) -> &'static ponko::perf::ProfileScope
 pub fn ponko::perf::thread_alloc_counts() -> ponko::perf::AllocCounts
 pub mod ponko::prelude
@@ -8264,6 +8284,7 @@ pub fn ponko::scenario::InputScenario::ime(self, u64, ponko::input::ImeEvent) ->
 pub fn ponko::scenario::InputScenario::named(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn ponko::scenario::InputScenario::new() -> Self
 pub fn ponko::scenario::InputScenario::release_when_done(self) -> Self
+pub fn ponko::scenario::InputScenario::safe_insets(self, u64, ponko::window::SafeInsets) -> Self
 pub fn ponko::scenario::InputScenario::step_count(&self) -> usize
 pub fn ponko::scenario::InputScenario::tap(self, u64, glam::f32::vec2::Vec2) -> Self
 pub fn ponko::scenario::InputScenario::ticks(&self) -> u64

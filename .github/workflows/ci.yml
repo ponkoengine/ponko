@@ -464,6 +464,17 @@ jobs:
       - name: Build examples
         if: ${{ !cancelled() && runner.os != 'Windows' }}
         run: cargo build --workspace --examples
+      # Linux keeps no frame pointers by default, so the native crash
+      # backtrace tests check the whole chain only in a build that has them
+      # (`tests/native_crash.rs`, the guide's "Backtraces of a native crash").
+      # Its own target directory: the flag rebuilds everything.
+      - name: Native crash backtraces with frame pointers (Linux)
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        env:
+          RUSTFLAGS: -D warnings -C force-frame-pointers=yes
+          PONKO_CRASH_TESTS_FRAME_POINTERS: 1
+          CARGO_TARGET_DIR: target/frame-pointers
+        run: cargo test -p ponko --no-fail-fast --test native_crash
       # Linux and macOS run the render tests only where the runner has a
       # GPU adapter (they skip with a logged reason otherwise; Windows is
       # the lane that requires one, in windows-unit).
@@ -808,6 +819,9 @@ jobs:
         run: |
           cargo test -p ponko --no-fail-fast --features accessibility --lib -- ui::access_kit ui::access_native
           cargo test -p ponko --no-fail-fast --features accessibility --test ui_access_macos --test ui_access_platforms --test ui_access --test ui_access_changes
+          # Built, not run: the engine's own window needs a person
+          # (`ui_access_window -- --ignored`, see the file's header).
+          cargo test -p ponko --features accessibility --test ui_access_window --no-run
       # Linux: the AT-SPI adapter on a private session bus with the
       # accessibility bus launcher (at-spi2-core), read and operated over
       # D-Bus as Orca does. No display is needed.

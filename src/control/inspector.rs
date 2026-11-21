@@ -51,9 +51,12 @@ pub(super) struct Inputs<'a> {
     /// Plain models outside the camera's view in the last frame, or why
     /// they can't be counted now.
     pub frustum_culled: Result<usize, &'static str>,
+    /// What the game chose with `Perf::set_gpu_timing`.
+    pub gpu_timing: crate::perf::GpuTiming,
 }
 
 const NO_TIMESTAMPS: &str = "the GPU adapter doesn't support timestamp queries, so GPU time can't be measured";
+const TIMING_OFF: &str = "the game turned GPU timing off (Perf::set_gpu_timing(GpuTiming::Off)), and nothing else is reading GPU times, so none were measured";
 const NOT_TIMED_YET: &str = "no frame's GPU timestamps have come back yet";
 pub(super) const NO_GPU: &str = "headless runs open no GPU";
 pub(super) const NO_GPU_YET: &str = "the renderer hasn't opened a GPU yet";
@@ -62,6 +65,23 @@ const FRUSTUM_OTHER: &str = "not counted: LOD groups, terrain tiles, skinned mod
 /// Why `counts.frustum_culled_models` is null in a rush.
 #[cfg_attr(not(feature = "3d"), allow(dead_code))]
 pub(super) const FRUSTUM_STALE: &str = "most models changed in recent frames, so what is kept per model is stale and isn't counted from; it is again once they settle";
+
+/// The `gpu_timing` block: whether the adapter can time, how many frames
+/// were timed, and which cadence the game chose (`cadence`: `auto`, `every`
+/// with `every` frames, or `off`).
+fn gpu_timing_json(available: bool, frames_timed: u64, choice: crate::perf::GpuTiming) -> Value {
+    use crate::perf::GpuTiming;
+    let mut block = json!({ "available": available, "frames_timed": frames_timed });
+    match choice {
+        GpuTiming::Auto => block["cadence"] = json!("auto"),
+        GpuTiming::Every(n) => {
+            block["cadence"] = json!("every");
+            block["every"] = json!(n.max(1));
+        }
+        GpuTiming::Off => block["cadence"] = json!("off"),
+    }
+    block
+}
 
 pub(super) fn render_inspector(inputs: &Inputs<'_>) -> Value {
     let mut unavailable = Map::new();
@@ -152,7 +172,7 @@ pub(super) fn render_inspector(inputs: &Inputs<'_>) -> Value {
             for path in ["cpu_ms", "gpu_ms", "counts", "upload_bytes"] {
                 gone(path, why);
             }
-            let timing = json!({ "available": false, "frames_timed": 0 });
+            let timing = gpu_timing_json(false, 0, inputs.gpu_timing);
             (timing, Value::Null, Value::Null, Value::Null, Value::Null)
         }
         Source::Drawn(detail) => {
@@ -176,8 +196,12 @@ pub(super) fn render_inspector(inputs: &Inputs<'_>) -> Value {
                 gone("gpu_ms.passes", NO_TIMESTAMPS);
                 (Value::Null, Value::Null)
             } else if !timed {
-                gone("gpu_ms.frame", NOT_TIMED_YET);
-                gone("gpu_ms.passes", NOT_TIMED_YET);
+                let why = match inputs.gpu_timing {
+                    crate::perf::GpuTiming::Off => TIMING_OFF,
+                    _ => NOT_TIMED_YET,
+                };
+                gone("gpu_ms.frame", why);
+                gone("gpu_ms.passes", why);
                 (Value::Null, Value::Null)
             } else {
                 let passes: Vec<Value> = inputs
@@ -219,10 +243,7 @@ pub(super) fn render_inspector(inputs: &Inputs<'_>) -> Value {
                 "pipelines_built": s.pipelines_built,
                 "instance_batches": instance_batches_json(&s.instance_batches),
             });
-            let timing = json!({
-                "available": detail.gpu_timestamps,
-                "frames_timed": detail.gpu_frames_timed,
-            });
+            let timing = gpu_timing_json(detail.gpu_timestamps, detail.gpu_frames_timed, inputs.gpu_timing);
             let uploads = json!(s.uploads.bytes());
             (
                 timing,
@@ -462,6 +483,10 @@ mod tests {
     ];
 
     fn inspect(source: Source, gpu_ms: Option<f32>) -> Value {
+        inspect_with(source, gpu_ms, crate::perf::GpuTiming::Auto)
+    }
+
+    fn inspect_with(source: Source, gpu_ms: Option<f32>, gpu_timing: crate::perf::GpuTiming) -> Value {
         render_inspector(&Inputs {
             source,
             stats: stats(gpu_ms),
@@ -493,6 +518,7 @@ mod tests {
             adapter: None,
             history: &HISTORY,
             frustum_culled: Ok(5),
+            gpu_timing,
         })
     }
 
@@ -667,6 +693,7 @@ mod tests {
             adapter: None,
             history: &[],
             frustum_culled: Err(FRUSTUM_STALE),
+            gpu_timing: crate::perf::GpuTiming::Auto,
         });
         assert!(stale["counts"]["frustum_culled_models"].is_null());
         assert_eq!(stale["unavailable"]["counts.frustum_culled_models"], FRUSTUM_STALE);
@@ -687,6 +714,7 @@ mod tests {
             adapter: Some(&caps),
             history: &[],
             frustum_culled: Ok(0),
+            gpu_timing: crate::perf::GpuTiming::Auto,
         });
         let a = &v["adapter"];
         for key in ["name", "backend", "device_type", "driver", "driver_info", "tier"] {
@@ -715,7 +743,10 @@ mod tests {
     #[test]
     fn measured_gpu_times_are_reported_per_pass_in_order() {
         let v = inspect(drawn(true, 5), Some(2.0));
-        assert_eq!(v["gpu_timing"], json!({ "available": true, "frames_timed": 5 }));
+        assert_eq!(
+            v["gpu_timing"],
+            json!({ "available": true, "frames_timed": 5, "cadence": "auto" })
+        );
         assert_eq!(v["gpu_ms"]["frame"], 2.0);
         let names: Vec<_> = v["gpu_ms"]["passes"]
             .as_array()
@@ -743,6 +774,44 @@ mod tests {
         assert_eq!(batches.len(), 14);
         assert!(batches.values().all(Value::is_u64), "{batches:?}");
         assert_eq!(v["cpu_ms"]["total"], 4.0);
+        assert_nulls_explained(&v);
+    }
+
+    #[test]
+    fn gpu_timing_says_which_cadence_the_game_chose() {
+        use crate::perf::GpuTiming;
+        let cadence = |timing, source| {
+            let v = inspect_with(source, None, timing);
+            assert_nulls_explained(&v);
+            v["gpu_timing"].clone()
+        };
+        let drawn_no_stamps = || drawn(false, 0);
+        assert_eq!(cadence(GpuTiming::Auto, drawn(true, 5))["cadence"], "auto");
+        let every = cadence(GpuTiming::Every(4), drawn(true, 5));
+        assert_eq!((&every["cadence"], &every["every"]), (&json!("every"), &json!(4)));
+        // Every(0) counts as 1, as the engine does.
+        assert_eq!(cadence(GpuTiming::Every(0), drawn(true, 5))["every"], 1);
+        // Off and an adapter without timestamps look different: `cadence`
+        // tells the game's choice apart from `available`.
+        let off = cadence(GpuTiming::Off, drawn(true, 0));
+        assert_eq!((&off["cadence"], &off["available"]), (&json!("off"), &json!(true)));
+        let none = cadence(GpuTiming::Auto, drawn_no_stamps());
+        assert_eq!((&none["cadence"], &none["available"]), (&json!("auto"), &json!(false)));
+        // `every` is only there for the `every` cadence.
+        assert!(off.get("every").is_none() && none.get("every").is_none());
+        // Headless games know their choice too.
+        assert_eq!(cadence(GpuTiming::Off, Source::Headless)["cadence"], "off");
+    }
+
+    #[test]
+    fn gpu_times_are_explained_as_off_when_the_game_turned_timing_off() {
+        use crate::perf::GpuTiming;
+        let v = inspect_with(drawn(true, 0), None, GpuTiming::Off);
+        assert!(v["gpu_ms"]["frame"].is_null(), "{v}");
+        assert_eq!(v["unavailable"]["gpu_ms.frame"], TIMING_OFF);
+        // Not mistaken for the adapter's lack of timestamps, which wins.
+        let v = inspect_with(drawn(false, 0), None, GpuTiming::Off);
+        assert_eq!(v["unavailable"]["gpu_ms.frame"], NO_TIMESTAMPS);
         assert_nulls_explained(&v);
     }
 
@@ -782,6 +851,7 @@ mod tests {
             adapter: None,
             history: &[],
             frustum_culled: Ok(0),
+            gpu_timing: crate::perf::GpuTiming::Auto,
         });
         assert!(v["pipelines"].is_null(), "headless: {v}");
         assert!(v["memory_estimate_bytes"].is_null() && v["adapter"].is_null(), "{v}");
@@ -834,6 +904,7 @@ mod state_change_tests {
             adapter: None,
             history: &[],
             frustum_culled: Ok(0),
+            gpu_timing: crate::perf::GpuTiming::Auto,
         };
         let report = render_inspector(&input);
         assert_eq!(report["schema"], 1);

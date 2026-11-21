@@ -145,7 +145,15 @@
 
 #define PONKO_TILE_FLIP_DIAGONAL 4
 
+#define PONKO_LOOPBACK_LINK_VERSION 1
+
 #define PONKO_NAV_CROWD_STATS_VERSION 1
+
+#define PONKO_GPU_TIMING_AUTO 0
+
+#define PONKO_GPU_TIMING_EVERY 1
+
+#define PONKO_GPU_TIMING_OFF 2
 
 #define PONKO_PRESS_THRESHOLD 0.5
 
@@ -2023,6 +2031,15 @@ typedef struct PonkoTurns {
   float dt;
 } PonkoTurns;
 
+typedef struct PonkoLoopbackLink {
+  uint32_t struct_size;
+  uint32_t version;
+  double loss;
+  double delay;
+  double jitter;
+  uint64_t seed;
+} PonkoLoopbackLink;
+
 typedef struct PonkoMessageEvent {
   enum PonkoMessageEventKind kind;
   uint64_t peer;
@@ -3870,6 +3887,13 @@ typedef struct PonkoNetEvent {
   size_t size;
 } PonkoNetEvent;
 
+typedef struct PonkoSafeInsets {
+  float top;
+  float right;
+  float bottom;
+  float left;
+} PonkoSafeInsets;
+
 typedef struct PonkoSkyKit {
   uint32_t struct_size;
   uint32_t version;
@@ -4401,6 +4425,10 @@ enum PonkoStatus ponko_ai_brain_param_num(const struct PonkoAiBrain *brain,
                                           uint64_t action,
                                           uint64_t key,
                                           float *out_value);
+
+enum PonkoStatus ponko_ai_brain_wake(struct PonkoAiBrain *brain);
+
+enum PonkoStatus ponko_ai_brain_signal(struct PonkoAiBrain *brain, uint64_t key);
 
 enum PonkoStatus ponko_ai_blackboard_set_num(struct PonkoAiBlackboard *board,
                                              uint64_t key,
@@ -6047,6 +6075,12 @@ enum PonkoStatus ponko_net_messages_join(const char *addr, struct PonkoNetMessag
 enum PonkoStatus ponko_net_messages_loopback(size_t players,
                                              struct PonkoNetMessages **out_endpoints);
 
+enum PonkoStatus ponko_loopback_link_defaults(struct PonkoLoopbackLink *link);
+
+enum PonkoStatus ponko_net_messages_loopback_link(size_t players,
+                                                  const struct PonkoLoopbackLink *link,
+                                                  struct PonkoNetMessages **out_endpoints);
+
 void ponko_net_messages_free(struct PonkoNetMessages *endpoint);
 
 enum PonkoStatus ponko_net_messages_set_timeout(struct PonkoNetMessages *endpoint, uint64_t ms);
@@ -6066,6 +6100,8 @@ enum PonkoStatus ponko_net_messages_send_to_all(struct PonkoNetMessages *endpoin
                                                 size_t len);
 
 enum PonkoStatus ponko_net_messages_poll(struct PonkoNetMessages *endpoint);
+
+enum PonkoStatus ponko_net_messages_poll_elapsed(struct PonkoNetMessages *endpoint, double seconds);
 
 enum PonkoStatus ponko_net_messages_next_event(struct PonkoNetMessages *endpoint,
                                                struct PonkoMessageEvent *out_event,
@@ -6288,6 +6324,12 @@ void ponko_note_deallocation(size_t bytes);
 int64_t ponko_net_alloc_bytes(void);
 
 enum PonkoStatus ponko_ctx_set_profiling(struct PonkoCtx *ctx, bool on);
+
+enum PonkoStatus ponko_ctx_set_gpu_timing(struct PonkoCtx *ctx, uint32_t kind, uint32_t every);
+
+enum PonkoStatus ponko_ctx_gpu_timing(const struct PonkoCtx *ctx,
+                                      uint32_t *out_kind,
+                                      uint32_t *out_every);
 
 enum PonkoStatus ponko_ctx_perf_report(const struct PonkoCtx *ctx,
                                        char *buffer,
@@ -8554,6 +8596,16 @@ enum PonkoStatus ponko_ctx_ui_closes_screen(struct PonkoCtx *ctx,
                                             uint64_t id,
                                             bool *out_on);
 
+enum PonkoStatus ponko_ctx_ui_set_inside_safe_area(struct PonkoCtx *ctx,
+                                                   uint64_t target,
+                                                   uint64_t id,
+                                                   bool on);
+
+enum PonkoStatus ponko_ctx_ui_inside_safe_area(struct PonkoCtx *ctx,
+                                               uint64_t target,
+                                               uint64_t id,
+                                               bool *out_on);
+
 enum PonkoStatus ponko_ctx_ui_show_hud(struct PonkoCtx *ctx, uint64_t target, uint64_t root);
 
 enum PonkoStatus ponko_ctx_ui_hide_hud(struct PonkoCtx *ctx, uint64_t target, uint64_t root);
@@ -10578,6 +10630,10 @@ enum PonkoStatus ponko_input_scenario_touch_drag(struct PonkoInputScenario *scen
                                                  struct PonkoVec2 start,
                                                  struct PonkoVec2 end);
 
+enum PonkoStatus ponko_input_scenario_safe_insets(struct PonkoInputScenario *scenario,
+                                                  uint64_t tick,
+                                                  struct PonkoSafeInsets insets);
+
 enum PonkoStatus ponko_sky_kit_defaults(struct PonkoSkyKit *kit);
 
 enum PonkoStatus ponko_ctx_sky_kit(struct PonkoCtx *ctx, struct PonkoSkyKit *out_kit);
@@ -10714,6 +10770,13 @@ enum PonkoStatus ponko_ctx_window_save_settings(struct PonkoCtx *ctx);
 enum PonkoStatus ponko_game_restore_window_settings(struct PonkoGame *game, bool on);
 
 enum PonkoStatus ponko_ctx_window_restore_settings(struct PonkoCtx *ctx);
+
+enum PonkoStatus ponko_ctx_window_safe_area(struct PonkoCtx *ctx, struct PonkoRect *area);
+
+enum PonkoStatus ponko_ctx_window_safe_insets(struct PonkoCtx *ctx, struct PonkoSafeInsets *insets);
+
+enum PonkoStatus ponko_ctx_window_feed_safe_insets(struct PonkoCtx *ctx,
+                                                   struct PonkoSafeInsets insets);
 
 enum PonkoStatus ponko_ctx_window_monitor_count(struct PonkoCtx *ctx, size_t *count);
 

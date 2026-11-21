@@ -424,6 +424,12 @@ impl Renderer {
         self.timer.as_ref().map_or(&[], |t| &t.passes)
     }
 
+    /// The latest timed frame's passes whose timestamps didn't come back
+    /// usable: not timed, rather than 0 ms.
+    pub fn gpu_passes_not_timed(&self) -> &[&'static str] {
+        self.timer.as_ref().map_or(&[], |t| &t.not_timed)
+    }
+
     /// What the render-pass inspector needs beyond [`RenderStats`].
     pub fn detail(&self) -> super::RenderDetail {
         super::RenderDetail {

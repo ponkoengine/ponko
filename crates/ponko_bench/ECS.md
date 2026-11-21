@@ -537,3 +537,63 @@ cargo run --release -p ponko_bench -- 'changes/|despawn/|attach/|hierarchy/|par-
   attachments row should return to about its recorded 13 ms);
 - `par-arch/*` ([PAR_ARCHETYPES.md](PAR_ARCHETYPES.md): single big
   archetypes are now timed too).
+
+## Split `Option` loops that vectorize (#196)
+
+After #181 a loop with two `Option` fetches whose closure combines their
+values still cost 13–14 instructions per entity against 2 with none,
+although each archetype got its own loop. Measured with a probe built in
+release (Rust 1.100.0, Apple M4 Max, a machine kept busy by other builds,
+load average 100–170): `(&mut Pos, &Vel)` plus the `Option`s, the closure
+multiplying their values (`a.map_or(1.0, |a| a.0) * b.map_or(..) * dt`)
+into `pos += vel * s`, 1M entities over the 16 archetypes of four optional
+components, `proc_pid_rusage` instruction and cycle counts per entity.
+
+**Why it didn't vectorize.** On worlds where every entity has the same
+combination, only "neither component" ran at 2.0 instructions; "first
+only" was 9.5, "second only" 9.6 and "both" 14.0. In the generated code
+(arm64) the loops for the other three combinations were one loop again,
+testing the two column pointers (`cbz`/`cbnz`, both loop-invariant) on
+every row, scalar. `fetch_split` made `Some(&*base.add(row))` from a raw
+column pointer that LLVM can't prove non-null, so the closure's
+`map_or` test survived in the "present" loops; loops that then differ
+only by "pointer or null" are what LLVM merges back into one with a
+per-row test. With one `Option` the merged loop was small enough to be
+unswitched again, so one `Option` vectorized and two did not.
+
+Three approaches were allowed; two were needed:
+
+1. **Each split loop its own `#[inline(never)]` function** (so LLVM can't
+   merge them): worse. Every `Option` query fell to 14–16 instructions,
+   one `Option` included: the closure's captured `dt`, now behind two
+   levels of `&mut`, was loaded again on every row, which blocks
+   vectorizing. Dropped.
+2. **Tell LLVM a present column isn't null**
+   (`std::hint::assert_unchecked(!base.is_null())` in `fetch_split`; a
+   column's base is a `NonNull`, dangling when empty or zero-sized): the
+   `Option` test folds away in the present loops, they stay apart and
+   each vectorizes (`ldp q`/`fmul.4s`). Kept.
+
+Interleaved, `origin/dev` with #181 (`58ccc1a4`) and the branch built as
+two binaries, run alternately 3 times, 4 rounds of 20 passes each,
+medians per entity:
+
+| Loop | instructions before / after | cycles before / after |
+|---|---:|---:|
+| no `Option` | 2.01 / 2.01 | 0.78 / 0.81 |
+| 1 `Option` | 2.50 / 2.51 | 0.85 / 0.92 |
+| 2 `Option`s, combined | 14.00 / 2.83 | 2.01 / 1.00 |
+| 2 `Option`s, only the first used | 9.50 / 2.51 | 1.43 / 0.93 |
+| 2 `Option`s, one `&mut` written | 15.51 / 2.88 | 2.02 / 1.04 |
+| 3 `Option`s, combined | 17.13 / 3.08 | 2.42 / 1.12 |
+| 4 `Option`s, combined | 19.65 / 3.31 | 2.90 / 1.18 |
+| 2 `Option`s, `par_for_each`, one thread | 14.08 / 2.89 | 2.20 / 1.06 |
+
+The cycle ranges of the rounds don't overlap for any `Option` row with
+two or more (2 `Option`s: 1.96–2.39 before, 0.92–1.22 after); the rows
+without or with one `Option` are unchanged within the noise. The cost is
+code, now that every combination's loop is vectorized: the probe's
+`for_each` callers grew from 7920 to 9076 bytes (two `Option`s), 9104 to
+11548 (three) and 11380 to 17332 (four), the parallel chunk function from
+1244 to 1904 bytes (two). About half the cycles for 1–6 KB per loop that
+uses them: kept.

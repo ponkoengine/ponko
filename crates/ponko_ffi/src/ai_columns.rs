@@ -257,6 +257,48 @@ pub unsafe extern "C" fn ponko_ai_brain_param_num(
     boundary(|| unsafe { out(out_value, action_param_num(brain_ref(brain)?, action, key)?) })
 }
 
+/// Makes a brain row think at the next `ponko_ctx_ai_think`, whatever its
+/// period (Rust `Brain::wake`): something it should react to happened (a
+/// noise, a hit). Safe inside loops and from `ponko_query_par`, each row
+/// from the thread of its chunk.
+///
+/// Ownership: `brain` is changed during the call only.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ai_brain_wake(std::ptr::null_mut()) } as u32, 1);
+/// ```
+/// # Safety
+/// `brain` null or a row from `ponko_chunk_ai_brain`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ai_brain_wake(brain: *mut PonkoAiBrain) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        brain_mut(brain)?.wake();
+        Ok(())
+    })
+}
+
+/// A brain row hears signal `key` (Rust `Brain::signal`): a `wait_for`
+/// node waiting for it succeeds at its next think, which comes at the next
+/// `ponko_ctx_ai_think` whatever its period. Unlike `ponko_ctx_ai_signal`
+/// it reaches this one brain at once, without an event, so it works from
+/// `ponko_query_par` too. A tree that doesn't wait for it ignores it.
+///
+/// Ownership: `brain` is changed during the call only.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ai_brain_signal(std::ptr::null_mut(), 0) } as u32, 1);
+/// ```
+/// # Safety
+/// `brain` null or a row from `ponko_chunk_ai_brain`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ai_brain_signal(brain: *mut PonkoAiBrain, key: u64) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        let brain = brain_mut(brain)?;
+        brain.signal(key_of(key)?);
+        Ok(())
+    })
+}
+
 // ---- blackboard rows ---------------------------------------------------------------
 
 unsafe fn board_set(board: *mut PonkoAiBlackboard, key: u64, value: Value) -> PonkoStatus {

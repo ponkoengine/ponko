@@ -129,6 +129,58 @@ pub unsafe extern "C" fn ponko_ctx_ui_closes_screen(
     })
 }
 
+/// Lays root `id` out inside the window's safe area (clear of a phone's
+/// notch, home bar and rounded corners), or in the whole window (`on`
+/// false, the default): its sizes, fractions, anchors and `auto` margins then
+/// count from the safe area's edges (Rust `Ui::set_inside_safe_area`). A
+/// backdrop stays in the whole window so it reaches under the notch; a HUD or
+/// a dialog goes inside. See `ponko_ctx_window_safe_area`.
+/// `PONKO_NOT_FOUND` for a node that doesn't exist.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_ui_set_inside_safe_area(std::ptr::null_mut(), ponko_ffi::PONKO_UI_SCREEN, 0, true) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_ui_set_inside_safe_area(
+    ctx: *mut PonkoCtx,
+    target: u64,
+    id: u64,
+    on: bool,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        with_ui(ctx, target, |ui| {
+            let id = existing(ui, id)?;
+            ui.set_inside_safe_area(id, on);
+            Ok(())
+        })
+    })
+}
+
+/// Whether root `id` is laid out inside the safe area
+/// (`ponko_ctx_ui_set_inside_safe_area`).
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_ui_inside_safe_area(std::ptr::null_mut(), ponko_ffi::PONKO_UI_SCREEN, 0, &mut false) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `out_on` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_ui_inside_safe_area(
+    ctx: *mut PonkoCtx,
+    target: u64,
+    id: u64,
+    out_on: *mut bool,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        with_ui(ctx, target, |ui| {
+            let id = existing(ui, id)?;
+            out(out_on, ui.inside_safe_area(id))
+        })
+    })
+}
+
 /// Shows the tree under a detached `root` as a HUD: display-only UI (a
 /// score, a health bar) drawn below every screen. Escape (or a gamepad's
 /// East button) never closes it, it takes no pointer or focus, and it

@@ -463,3 +463,143 @@ fn blackboard_entities_and_points_read_back_from_world_and_native_brains() {
         ponko_brain_free(brain);
     }
 }
+
+/// How brains are stirred in `stir_rows`: woken, or signalled.
+#[derive(Clone, Copy, PartialEq)]
+enum Stir {
+    /// Every blackboard says alert; brains of even entities are woken.
+    Wake,
+    /// Brains of even entities hear "door", the others "bell".
+    Signal,
+}
+
+/// At tick 1, on all cores: each row's brain is stirred where the
+/// parallel query visits it.
+unsafe extern "C" fn stir_par(ctx: *mut PonkoCtx, user: *mut c_void) {
+    unsafe extern "C" fn rows(chunk: *const PonkoChunk, user: *mut c_void) {
+        // SAFETY: the stir outlives the query; a live chunk of this thread.
+        unsafe {
+            let stir = *user.cast::<Stir>();
+            let c = &*chunk;
+            for i in 0..c.count {
+                let even = (*c.entities.add(i)).index % 2 == 0;
+                let brain = ponko_chunk_ai_brain(chunk, 0, i);
+                let board = ponko_chunk_ai_blackboard(chunk, 1, i);
+                match stir {
+                    Stir::Wake => {
+                        assert_eq!(ponko_ai_blackboard_set_flag(board, key("alert"), true), PONKO_OK);
+                        if even {
+                            assert_eq!(ponko_ai_brain_wake(brain), PONKO_OK);
+                        }
+                    }
+                    Stir::Signal => {
+                        let signal = key(if even { "door" } else { "bell" });
+                        assert_eq!(ponko_ai_brain_signal(brain, signal), PONKO_OK);
+                    }
+                }
+            }
+        }
+    }
+    if unsafe { ponko_ctx_sim_tick(ctx) } != 1 {
+        return;
+    }
+    let world = unsafe { ponko_ctx_world(ctx) };
+    let ids = columns(world);
+    let status = unsafe { ponko_query_par(world, ids.as_ptr(), 2, Some(rows), user) };
+    assert_eq!(status, PONKO_OK, "{}", last_error());
+}
+
+/// What each brain does after `ticks` ticks of stir, think; `count` brains
+/// of tree `json` thinking once in a million ticks (so only waking or a
+/// signal makes them think again after the first time).
+fn stirred(stir: Stir, json: &str, count: usize, ticks: u64) -> Vec<(u64, u64)> {
+    let mut stir = stir;
+    let game = new_game();
+    unsafe {
+        let user: *mut c_void = (&raw mut stir).cast();
+        assert_eq!(
+            ponko_game_sim_system(game, c"stir".as_ptr(), 1, Some(stir_par), user),
+            PONKO_OK
+        );
+        assert_eq!(
+            ponko_game_sim_system(game, c"think".as_ptr(), 1, Some(think), user),
+            PONKO_OK
+        );
+    }
+    let mut guards = Vec::new();
+    let world = run_game(game, ticks, |ctx| unsafe {
+        let json = CString::new(json).unwrap();
+        let tree = ponko_behavior_tree_new(json.as_ptr());
+        assert!(!tree.is_null(), "{}", last_error());
+        assert_eq!(ponko_ctx_ai_add_tree(ctx, c"t".as_ptr(), tree), PONKO_OK);
+        ponko_behavior_tree_free(tree);
+        for _ in 0..count {
+            let g = spawn(ctx);
+            assert_eq!(ponko_ctx_ai_add_brain(ctx, g, c"t".as_ptr(), 1_000_000), PONKO_OK);
+            guards.push(g);
+        }
+    });
+    let mut actions: Vec<(u64, u64)> = Vec::new();
+    let (mut brain, mut board) = (0, 0);
+    unsafe {
+        assert_eq!(ponko_ai_brain_component(world, &mut brain), PONKO_OK);
+        assert_eq!(ponko_ai_blackboard_component(world, &mut board), PONKO_OK);
+        unsafe extern "C" fn read(chunk: *const PonkoChunk, user: *mut c_void) {
+            // SAFETY: the list outlives the query; a live chunk.
+            unsafe {
+                let out = &mut *user.cast::<Vec<(u64, u64)>>();
+                let c = &*chunk;
+                for i in 0..c.count {
+                    let mut action = u64::MAX;
+                    assert_eq!(
+                        ponko_ai_brain_action(ponko_chunk_ai_brain(chunk, 0, i), 0, &mut action),
+                        PONKO_OK
+                    );
+                    out.push((bits(&*c.entities.add(i)), action));
+                }
+            }
+        }
+        let ids = [brain, board];
+        assert_eq!(
+            ponko_query(world, ids.as_ptr(), 2, Some(read), (&raw mut actions).cast()),
+            PONKO_OK
+        );
+        ponko_world_free(world);
+    }
+    actions.sort_unstable();
+    assert_eq!(actions.iter().map(|a| a.0).collect::<Vec<_>>(), guards);
+    actions
+}
+
+#[test]
+fn brain_rows_woken_from_query_par_think_at_the_next_tick() {
+    // Enough rows that the query splits them over several threads.
+    let after_first = stirred(Stir::Wake, GUARD, 5000, 1);
+    assert!(after_first.iter().all(|a| a.1 == key("idle")), "not alert at tick 0");
+    let actions = stirred(Stir::Wake, GUARD, 5000, 2);
+    for (e, action) in actions {
+        // Woken brains thought at tick 1 and saw the alert; the others
+        // (the negative control) didn't think, so they are still idle.
+        let expected = if e & 1 == 0 { key("chase") } else { key("idle") };
+        assert_eq!(action, expected, "entity {e:#x}");
+    }
+}
+
+#[test]
+fn brain_rows_signalled_from_query_par_hear_it_at_the_next_think() {
+    const GUEST: &str = r#"{"root": {"sequence": [{"wait_for": "door"}, {"do": "enter"}]}}"#;
+    let actions = stirred(Stir::Signal, GUEST, 5000, 2);
+    for (e, action) in actions {
+        // "door" lets even entities in at once, whatever their period; the
+        // odd ones heard "bell", which their tree doesn't wait for.
+        let expected = if e & 1 == 0 { key("enter") } else { 0 };
+        assert_eq!(action, expected, "entity {e:#x}");
+    }
+    unsafe {
+        assert_eq!(ponko_ai_brain_wake(std::ptr::null_mut()), PONKO_INVALID_ARGUMENT);
+        assert_eq!(
+            ponko_ai_brain_signal(std::ptr::null_mut(), key("door")),
+            PONKO_INVALID_ARGUMENT
+        );
+    }
+}

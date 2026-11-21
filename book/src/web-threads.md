@@ -4,7 +4,9 @@ A web build can use more than one core. The frame's parallel work runs on
 Web Workers that share the game's memory, as it does on threads natively:
 - parallel queries (`par_for_each` and the other `par_*` calls);
 - the [parallel scheduler](parallel-systems.md)'s batches;
-- the ECS's own parallel sorts.
+- the ECS's own parallel sorts;
+- the [hierarchy](hierarchy.md)'s update (attachments), when a pass is big
+  enough to share out.
 
 [Jobs](streaming.md) run on workers of their own. The asset reads and
 decodes of [asset groups](loading.md) and streaming are jobs, so they run

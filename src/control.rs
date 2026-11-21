@@ -1370,6 +1370,7 @@ fn render_inspector_json(ctx: &Ctx, history: usize, allocations: usize) -> Value
         adapter: ctx.gfx.gpu_capabilities(),
         history: &frames,
         frustum_culled,
+        gpu_timing: ctx.perf.gpu_timing(),
     });
     #[cfg(feature = "3d")]
     let (autotune, off) = (
@@ -1515,6 +1516,7 @@ fn perf_json(ctx: &Ctx, meshes: usize, history: usize, allocations: usize) -> Va
         "cpu_ms": { "systems": f.systems_ms, "render": f.render_cpu_ms, "display_wait": f.display_wait_ms },
         "gpu_ms": f.gpu_ms,
         "gpu_passes": passes,
+        "gpu_passes_not_timed": ctx.perf.gpu_passes_not_timed(),
         "render": {
             "draw_calls": r.draw_calls,
             "sprites": r.sprites,

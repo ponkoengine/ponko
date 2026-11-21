@@ -2470,6 +2470,89 @@ static void headless_frames_ui(void) {
     CHECK(ponko_game_headless_frames(NULL, true) == PONKO_INVALID_ARGUMENT);
 }
 
+/* The window's safe area: fed by hand and by a scenario step, and a HUD root laid out inside it. */
+typedef struct SafeSeen {
+    PonkoRect area[6], hud[6], backdrop[6];
+    int frames;
+} SafeSeen;
+static void safe_area_setup(PonkoCtx* ctx, void* user) {
+    (void)user;
+    PonkoUiLayout fill = ponko_ui_layout_fill();
+    uint64_t backdrop = 0, hud = 0;
+    CHECK(ponko_ctx_ui_add_panel(ctx, PONKO_UI_SCREEN, PONKO_UI_NONE, &fill, &backdrop) == PONKO_OK);
+    CHECK(ponko_ctx_ui_add_panel(ctx, PONKO_UI_SCREEN, PONKO_UI_NONE, &fill, &hud) == PONKO_OK);
+    CHECK(ponko_ctx_ui_set_name(ctx, PONKO_UI_SCREEN, backdrop, "backdrop") == PONKO_OK);
+    CHECK(ponko_ctx_ui_set_name(ctx, PONKO_UI_SCREEN, hud, "hud") == PONKO_OK);
+    bool on = true;
+    CHECK(ponko_ctx_ui_inside_safe_area(ctx, PONKO_UI_SCREEN, hud, &on) == PONKO_OK && !on);
+    CHECK(ponko_ctx_ui_set_inside_safe_area(ctx, PONKO_UI_SCREEN, hud, true) == PONKO_OK);
+    CHECK(ponko_ctx_ui_inside_safe_area(ctx, PONKO_UI_SCREEN, hud, &on) == PONKO_OK && on);
+    CHECK(ponko_ctx_ui_set_inside_safe_area(ctx, PONKO_UI_SCREEN, 9999, true) == PONKO_NOT_FOUND);
+    CHECK(ponko_ctx_ui_show_hud(ctx, PONKO_UI_SCREEN, backdrop) == PONKO_OK);
+    CHECK(ponko_ctx_ui_show_hud(ctx, PONKO_UI_SCREEN, hud) == PONKO_OK);
+}
+static void safe_area_frame(PonkoCtx* ctx, void* user) {
+    SafeSeen* seen = user;
+    uint64_t hud = PONKO_UI_NONE, backdrop = PONKO_UI_NONE;
+    CHECK(seen->frames < 6);
+    CHECK(ponko_ctx_window_safe_area(ctx, &seen->area[seen->frames]) == PONKO_OK);
+    CHECK(ponko_ctx_ui_find(ctx, PONKO_UI_SCREEN, "hud", &hud) == PONKO_OK);
+    CHECK(ponko_ctx_ui_find(ctx, PONKO_UI_SCREEN, "backdrop", &backdrop) == PONKO_OK);
+    CHECK(ponko_ctx_ui_rect(ctx, PONKO_UI_SCREEN, hud, &seen->hud[seen->frames]) == PONKO_OK);
+    CHECK(ponko_ctx_ui_rect(ctx, PONKO_UI_SCREEN, backdrop, &seen->backdrop[seen->frames]) == PONKO_OK);
+    ++seen->frames;
+}
+static bool rect_is(PonkoRect r, float x0, float y0, float x1, float y1) {
+    return r.min.x == x0 && r.min.y == y0 && r.max.x == x1 && r.max.y == y1;
+}
+static void safe_area_by_hand(PonkoCtx* ctx, void* user);
+static void safe_area_c(void) {
+    PonkoSafeInsets phone = {0, 0, 21, 47}, turned = {0, 47, 21, 0}, got;
+    PonkoInputScenario* s = ponko_input_scenario_new();
+    CHECK(ponko_input_scenario_safe_insets(s, 1, phone) == PONKO_OK);
+    CHECK(ponko_input_scenario_safe_insets(s, 3, turned) == PONKO_OK);
+    CHECK(ponko_input_scenario_safe_insets(NULL, 3, turned) == PONKO_INVALID_ARGUMENT);
+    SafeSeen seen = {0};
+    PonkoGame* game = ponko_game_new("c notch", 844, 390);
+    CHECK(ponko_game_headless_frames(game, true) == PONKO_OK);
+    CHECK(ponko_game_system(game, "frame", safe_area_frame, &seen) == PONKO_OK);
+    CHECK(ponko_game_input_scenario(game, s) == PONKO_OK);
+    ponko_input_scenario_free(s);
+    PonkoWorld* w = NULL;
+    CHECK(ponko_game_run_headless(game, 5, safe_area_setup, NULL, &w) == PONKO_OK);
+    PonkoScenarioReport report;
+    CHECK(ponko_world_scenario_report(w, &report) == PONKO_OK);
+    CHECK(report.status == PONKO_SCENARIO_PASSED && report.inputs_applied == 2);
+    CHECK(ponko_world_free(w) == PONKO_OK);
+    CHECK(seen.frames == 5);
+    CHECK(rect_is(seen.area[0], 0, 0, 844, 390));
+    for (int i = 1; i < 3; ++i) CHECK(rect_is(seen.area[i], 47, 0, 844, 369));
+    for (int i = 3; i < 5; ++i) CHECK(rect_is(seen.area[i], 0, 0, 797, 369));
+    for (int i = 0; i < 5; ++i) {
+        CHECK(rect_is(seen.hud[i], seen.area[i].min.x, seen.area[i].min.y, seen.area[i].max.x, seen.area[i].max.y));
+        CHECK(rect_is(seen.backdrop[i], 0, 0, 844, 390)); /* reaches under the notch */
+    }
+
+    /* By hand: fed, read back, and a negative inset counts as 0. */
+    game = ponko_game_new("c notch by hand", 844, 390);
+    CHECK(ponko_game_run_headless(game, 0, safe_area_by_hand, NULL, &w) == PONKO_OK);
+    CHECK(ponko_world_free(w) == PONKO_OK);
+    CHECK(ponko_ctx_window_safe_area(NULL, &seen.area[0]) == PONKO_INVALID_ARGUMENT);
+    CHECK(ponko_ctx_window_safe_insets(NULL, &got) == PONKO_INVALID_ARGUMENT);
+    CHECK(ponko_ctx_window_feed_safe_insets(NULL, phone) == PONKO_INVALID_ARGUMENT);
+}
+static void safe_area_by_hand(PonkoCtx* ctx, void* user) {
+    (void)user;
+    PonkoRect area;
+    PonkoSafeInsets got, phone = {-5, 0, 21, 47};
+    CHECK(ponko_ctx_window_safe_area(ctx, NULL) == PONKO_INVALID_ARGUMENT);
+    CHECK(ponko_ctx_window_safe_area(ctx, &area) == PONKO_OK && rect_is(area, 0, 0, 844, 390));
+    CHECK(ponko_ctx_window_feed_safe_insets(ctx, phone) == PONKO_OK);
+    CHECK(ponko_ctx_window_safe_insets(ctx, &got) == PONKO_OK);
+    CHECK(got.top == 0 && got.right == 0 && got.bottom == 21 && got.left == 47);
+    CHECK(ponko_ctx_window_safe_area(ctx, &area) == PONKO_OK && rect_is(area, 47, 0, 844, 369));
+}
+
 /* A menu that opens on its Play button, a HUD that Escape leaves up, and a
    glTF file made solid in one call. */
 static void focus_and_hud_setup(PonkoCtx* ctx, void* user) {
@@ -3498,6 +3581,27 @@ static void alloc_count_setup(PonkoCtx* ctx, void* user) {
     CHECK(ponko_ctx_set_profiling(ctx, false) == PONKO_OK);
 }
 
+/* The GPU timing choice: set and read back; a bad kind changes nothing. */
+static void gpu_timing_setup(PonkoCtx* ctx, void* user) {
+    (void)user;
+    uint32_t kind = 99, every = 99;
+    CHECK(ponko_ctx_gpu_timing(ctx, &kind, &every) == PONKO_OK);
+    CHECK(kind == PONKO_GPU_TIMING_AUTO && every == 0); /* the default */
+    CHECK(ponko_ctx_set_gpu_timing(ctx, PONKO_GPU_TIMING_EVERY, 4) == PONKO_OK);
+    CHECK(ponko_ctx_gpu_timing(ctx, &kind, &every) == PONKO_OK);
+    CHECK(kind == PONKO_GPU_TIMING_EVERY && every == 4);
+    CHECK(ponko_ctx_set_gpu_timing(ctx, PONKO_GPU_TIMING_OFF, 0) == PONKO_OK);
+    CHECK(ponko_ctx_gpu_timing(ctx, &kind, &every) == PONKO_OK);
+    CHECK(kind == PONKO_GPU_TIMING_OFF && every == 0);
+    CHECK(ponko_ctx_set_gpu_timing(ctx, 7, 1) == PONKO_INVALID_ARGUMENT);
+    CHECK(ponko_ctx_gpu_timing(ctx, &kind, &every) == PONKO_OK);
+    CHECK(kind == PONKO_GPU_TIMING_OFF); /* unchanged */
+    CHECK(ponko_ctx_gpu_timing(ctx, NULL, &every) == PONKO_INVALID_ARGUMENT);
+    CHECK(ponko_ctx_set_gpu_timing(ctx, PONKO_GPU_TIMING_AUTO, 5) == PONKO_OK);
+    CHECK(ponko_ctx_gpu_timing(ctx, &kind, &every) == PONKO_OK);
+    CHECK(kind == PONKO_GPU_TIMING_AUTO && every == 0);
+}
+
 static void native_parity_round5(void) {
     /* Crash reports: on, with the game's version and a hook. */
     CrashSeen seen = {0};
@@ -3562,11 +3666,166 @@ static void native_parity_round5(void) {
     CHECK(ponko_game_run_headless(game, 0, alloc_count_setup, NULL, &w) == PONKO_OK);
     CHECK(ponko_world_free(w) == PONKO_OK);
 
+    game = ponko_game_new("gpu timing", 1, 1);
+    CHECK(ponko_game_run_headless(game, 0, gpu_timing_setup, NULL, &w) == PONKO_OK);
+    CHECK(ponko_world_free(w) == PONKO_OK);
+
     SliceCounts counts = {0};
     game = ponko_game_new("walls", 1, 1);
     CHECK(ponko_game_run_headless(game, 0, sliced_setup, &counts, &w) == PONKO_OK);
     CHECK(ponko_world_free(w) == PONKO_OK);
     CHECK(counts.freed_users == 1);
+}
+
+/* gl#190: brain rows woken and signalled from ponko_query_par, and a lossy, reordering loopback link. */
+typedef struct BrainStir {
+    uint32_t ids[2];
+    uint64_t alert, door, chase, idle, enter, guest;
+    int checked, wrong;
+} BrainStir;
+
+static void stir_rows(const PonkoChunk* chunk, void* user) {
+    const BrainStir* s = user;
+    for (size_t i = 0; i < chunk->count; ++i) {
+        PonkoAiBrain* brain = ponko_chunk_ai_brain(chunk, 0, i);
+        PonkoAiBlackboard* board = ponko_chunk_ai_blackboard(chunk, 1, i);
+        int even = chunk->entities[i].index % 2 == 0;
+        bool guest = false;
+        CHECK(ponko_ai_blackboard_flag(board, s->guest, &guest) == PONKO_OK);
+        CHECK(ponko_ai_blackboard_set_flag(board, s->alert, true) == PONKO_OK);
+        /* Even rows are woken (guards) or hear the door (guests); the others are left alone. */
+        if (even && !guest) CHECK(ponko_ai_brain_wake(brain) == PONKO_OK);
+        if (even && guest) CHECK(ponko_ai_brain_signal(brain, s->door) == PONKO_OK);
+    }
+}
+
+static void stir_brains(PonkoCtx* ctx, void* user) {
+    BrainStir* s = user;
+    if (ponko_ctx_sim_tick(ctx) != 1) return;
+    CHECK(ponko_query_par(ponko_ctx_world(ctx), s->ids, 2, stir_rows, s) == PONKO_OK);
+}
+
+static void check_stirred_rows(const PonkoChunk* chunk, void* user) {
+    BrainStir* s = user;
+    for (size_t i = 0; i < chunk->count; ++i) {
+        uint64_t action = 1, other = 1;
+        int even = chunk->entities[i].index % 2 == 0;
+        CHECK(ponko_ai_brain_action(ponko_chunk_ai_brain(chunk, 0, i), 0, &action) == PONKO_OK);
+        CHECK(ponko_ai_brain_action(ponko_chunk_ai_brain(chunk, 0, i), 1, &other) == PONKO_OK && other == 0);
+        bool guest = false;
+        CHECK(ponko_ai_blackboard_flag(ponko_chunk_ai_blackboard(chunk, 1, i), s->guest, &guest) == PONKO_OK);
+        /* Guards: chase if woken, idle (not thought since tick 0) otherwise. Guests: enter if signalled. */
+        uint64_t expected = guest ? (even ? s->enter : 0) : (even ? s->chase : s->idle);
+        int ok = action == expected;
+        if (!ok) ++s->wrong;
+        ++s->checked;
+    }
+}
+
+static void check_stirred(PonkoCtx* ctx, void* user) {
+    BrainStir* s = user;
+    if (ponko_ctx_sim_tick(ctx) != 1) return;
+    CHECK(ponko_query(ponko_ctx_world(ctx), s->ids, 2, check_stirred_rows, s) == PONKO_OK);
+}
+
+static void stir_setup(PonkoCtx* ctx, void* user) {
+    BrainStir* s = user;
+    PonkoWorld* w = ponko_ctx_world(ctx);
+    CHECK(ponko_ai_brain_component(w, &s->ids[0]) == PONKO_OK);
+    CHECK(ponko_ai_blackboard_component(w, &s->ids[1]) == PONKO_OK);
+    PonkoBehaviorTree* guard = ponko_behavior_tree_new(
+        "{\"root\": {\"selector\": [{\"sequence\": [{\"check\": \"alert\"}, {\"do\": \"chase\"}]}, {\"do\": \"idle\"}]}}");
+    PonkoBehaviorTree* guest = ponko_behavior_tree_new(
+        "{\"root\": {\"sequence\": [{\"wait_for\": \"door\"}, {\"do\": \"enter\"}]}}");
+    CHECK(guard && guest);
+    CHECK(ponko_ctx_ai_add_tree(ctx, "guard", guard) == PONKO_OK && ponko_ctx_ai_add_tree(ctx, "guest", guest) == PONKO_OK);
+    ponko_behavior_tree_free(guard);
+    ponko_behavior_tree_free(guest);
+    for (int i = 0; i < 2000; ++i) {
+        uint64_t e = 0;
+        CHECK(ponko_spawn(w, NULL, 0, &e) == PONKO_OK);
+        /* Once in a million ticks: only waking or a signal makes them think again. */
+        CHECK(ponko_ctx_ai_add_brain(ctx, e, i < 1000 ? "guard" : "guest", 1000000) == PONKO_OK);
+        CHECK(ponko_ctx_ai_set_flag(ctx, e, s->guest, i >= 1000) == PONKO_OK);
+    }
+}
+
+/* Steps a host and a client over `link` at 60 Hz on their own clocks. The host sends 0..99 on both lanes,
+   one a frame once connected; returns the frames until every reliable one was in, in order. */
+static int lossy_run(const PonkoLoopbackLink* link, int* unreliable_count, uint32_t* unreliable_sum) {
+    PonkoNetMessages* e[2] = {NULL, NULL};
+    CHECK(ponko_net_messages_loopback_link(2, link, e) == PONKO_OK);
+    uint64_t peer = 0;
+    int host_saw = 0, joined = 0, frame = 0;
+    uint32_t sent = 0, next_reliable = 0;
+    *unreliable_count = 0;
+    *unreliable_sum = 0;
+    for (; frame < 5000 && next_reliable < 100; ++frame) {
+        for (int i = 0; i < 2; ++i) CHECK(ponko_net_messages_poll_elapsed(e[i], 1.0 / 60) == PONKO_OK);
+        PonkoMessageEvent ev;
+        bool found = true;
+        while (ponko_net_messages_next_event(e[0], &ev, &found) == PONKO_OK && found)
+            if (ev.kind == PONKO_MESSAGE_CONNECTED) { peer = ev.peer; host_saw = 1; }
+        while (ponko_net_messages_next_event(e[1], &ev, &found) == PONKO_OK && found) {
+            if (ev.kind == PONKO_MESSAGE_CONNECTED) joined = 1;
+            if (ev.kind != PONKO_MESSAGE) continue;
+            uint32_t n = 0;
+            CHECK(ev.len == sizeof n);
+            memcpy(&n, ev.bytes, sizeof n);
+            if (ev.lane == PONKO_LANE_RELIABLE) {
+                CHECK(n == next_reliable); /* every one, in order */
+                ++next_reliable;
+            } else {
+                ++*unreliable_count;
+                *unreliable_sum += n;
+            }
+        }
+        if (host_saw && joined && sent < 100) {
+            CHECK(ponko_net_messages_send(e[0], peer, PONKO_LANE_RELIABLE, (const uint8_t*)&sent, sizeof sent) == PONKO_OK);
+            CHECK(ponko_net_messages_send(e[0], peer, PONKO_LANE_UNRELIABLE, (const uint8_t*)&sent, sizeof sent) == PONKO_OK);
+            ++sent;
+        }
+    }
+    CHECK(next_reliable == 100);
+    ponko_net_messages_free(e[0]);
+    ponko_net_messages_free(e[1]);
+    return frame;
+}
+
+static void lossy_loopback_and_brain_rows(void) {
+    BrainStir s = {{0, 0}, ai_key_of("alert"), ai_key_of("door"), ai_key_of("chase"), ai_key_of("idle"),
+                   ai_key_of("enter"), ai_key_of("guest"), 0, 0};
+    PonkoGame* game = ponko_game_new("brain rows", 1, 1);
+    CHECK(ponko_game_sim_system(game, "stir", 1, stir_brains, &s) == PONKO_OK);
+    CHECK(ponko_game_sim_system(game, "think", 1, brain_think, &s) == PONKO_OK);
+    CHECK(ponko_game_sim_system(game, "check", 1, check_stirred, &s) == PONKO_OK);
+    PonkoWorld* w = NULL;
+    CHECK(ponko_game_run_headless(game, 2, stir_setup, &s, &w) == PONKO_OK);
+    ponko_world_free(w);
+    CHECK(s.checked == 2000 && s.wrong == 0);
+    CHECK(ponko_ai_brain_wake(NULL) == PONKO_INVALID_ARGUMENT);
+    CHECK(ponko_ai_brain_signal(NULL, s.door) == PONKO_INVALID_ARGUMENT);
+
+    PonkoLoopbackLink link = {.struct_size = sizeof link, .version = PONKO_LOOPBACK_LINK_VERSION};
+    CHECK(ponko_loopback_link_defaults(&link) == PONKO_OK && link.loss == 0 && link.jitter == 0);
+    int perfect_count = 0, lossy_count = 0, again_count = 0;
+    uint32_t perfect_sum = 0, lossy_sum = 0, again_sum = 0;
+    int perfect_frames = lossy_run(&link, &perfect_count, &perfect_sum);
+    CHECK(perfect_count == 100);
+    link.loss = 0.2;
+    link.delay = 0.03;
+    link.jitter = 0.05;
+    link.seed = 3;
+    int lossy_frames = lossy_run(&link, &lossy_count, &lossy_sum);
+    CHECK(lossy_count >= 50 && lossy_count < 100 && lossy_frames > perfect_frames);
+    /* The same seed loses the same datagrams. */
+    CHECK(lossy_run(&link, &again_count, &again_sum) == lossy_frames && again_count == lossy_count && again_sum == lossy_sum);
+    link.loss = 1.5;
+    PonkoNetMessages* e[2] = {NULL, NULL};
+    CHECK(ponko_net_messages_loopback_link(2, &link, e) == PONKO_INVALID_ARGUMENT);
+    link.loss = 0;
+    link.version = 0;
+    CHECK(ponko_net_messages_loopback_link(2, &link, e) == PONKO_INVALID_ARGUMENT);
 }
 
 int main(void) {
@@ -3670,6 +3929,7 @@ int main(void) {
     wide_queries();
     native_coverage();
     headless_frames_ui();
+    safe_area_c();
     focus_huds_and_collision_files();
     debug_drawing();
     descriptors_retargeting_and_prediction();
@@ -3678,5 +3938,6 @@ int main(void) {
     headless_play();
     world_brains_in_loops();
     native_parity_round5();
+    lossy_loopback_and_brain_rows();
     return 0;
 }

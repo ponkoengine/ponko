@@ -10,7 +10,7 @@
   setup; the web restores once its storage is read, before setup. Guide:
   "Remember the player's choice" in the window chapter. Rust-only for now.
 - The guide's plugins chapter points at the companion plugins repository
-  (`ponko-plugins`, beside the engine): a workspace of plugin crates made
+  (`ponko-extras`, beside the engine): a workspace of plugin crates made
   from the plugin template, built against an engine checkout beside it,
   with a check script for each crate's layout, clippy and tests. `scripts/project-url.py` knows companion repositories:
   `check` fails on a link to one that isn't beside `PROJECT_URL`, and `set`

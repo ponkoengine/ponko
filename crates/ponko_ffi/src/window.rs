@@ -878,6 +878,99 @@ pub unsafe extern "C" fn ponko_ctx_window_restore_settings(ctx: *mut PonkoCtx) -
     // SAFETY: all pointer use follows the caller contract; inputs are checked before mutation.
     boundary(|| unsafe { ctx_access(ctx, |c| c.window.restore_settings(&c.storage).map_err(window_error)) })
 }
+/// How far in from each edge of the window the platform covers it (a phone's
+/// notch or camera cutout, its home bar, rounded corners), in logical pixels
+/// (Rust `SafeInsets`). All zero where nothing covers the window.
+/// ```
+/// let insets = ponko_ffi::PonkoSafeInsets { top: 0.0, right: 0.0, bottom: 21.0, left: 47.0 };
+/// assert_eq!(insets.left, 47.0);
+/// ```
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PonkoSafeInsets {
+    /// From the top edge.
+    pub top: f32,
+    /// From the right edge.
+    pub right: f32,
+    /// From the bottom edge.
+    pub bottom: f32,
+    /// From the left edge.
+    pub left: f32,
+}
+impl From<PonkoSafeInsets> for ponko::window::SafeInsets {
+    fn from(i: PonkoSafeInsets) -> Self {
+        Self::new(i.top, i.right, i.bottom, i.left)
+    }
+}
+impl From<ponko::window::SafeInsets> for PonkoSafeInsets {
+    fn from(i: ponko::window::SafeInsets) -> Self {
+        Self {
+            top: i.top,
+            right: i.right,
+            bottom: i.bottom,
+            left: i.left,
+        }
+    }
+}
+/// Writes the window's safe area: the part of it a phone's notch, home bar
+/// and rounded corners leave, a rectangle in the same logical pixels as
+/// `ponko_ctx_window_size` (Rust `WindowService::safe_area`). Where nothing
+/// covers the window (desktops), it is the whole window. The engine's
+/// on-screen touch controls and arrange screen keep to it, and UI roots made
+/// inside it (`ponko_ctx_ui_set_inside_safe_area`) are laid out in it.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_window_safe_area(std::ptr::null_mut(), std::ptr::null_mut()) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live outside queries; `area` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_window_safe_area(ctx: *mut PonkoCtx, area: *mut crate::PonkoRect) -> PonkoStatus {
+    // SAFETY: all pointer use follows the caller contract; inputs are checked before mutation.
+    boundary(|| unsafe {
+        if area.is_null() {
+            return Err(invalid("safe area output is null"));
+        }
+        ctx_access(ctx, |c| out(area, crate::types::to_c(c.window.safe_area())))
+    })
+}
+/// Writes how far in from each edge of the window the platform covers it
+/// (Rust `WindowService::safe_insets`): what `ponko_ctx_window_safe_area`
+/// leaves out, as last fed or reported.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_window_safe_insets(std::ptr::null_mut(), std::ptr::null_mut()) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live outside queries; `insets` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_window_safe_insets(ctx: *mut PonkoCtx, insets: *mut PonkoSafeInsets) -> PonkoStatus {
+    // SAFETY: all pointer use follows the caller contract; inputs are checked before mutation.
+    boundary(|| unsafe {
+        if insets.is_null() {
+            return Err(invalid("safe insets output is null"));
+        }
+        ctx_access(ctx, |c| out(insets, c.window.safe_insets().into()))
+    })
+}
+/// Feeds the window's safe area insets, as the platform reports them
+/// (Rust `WindowService::feed_safe_insets`): a test feeds what a phone would
+/// report, and so can a platform layer of the game's own. A negative or not
+/// finite inset counts as 0. The UI lays out with them from the next frame.
+/// ```
+/// let insets = ponko_ffi::PonkoSafeInsets { top: 47.0, right: 0.0, bottom: 34.0, left: 0.0 };
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_window_feed_safe_insets(std::ptr::null_mut(), insets) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live outside queries.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_window_feed_safe_insets(ctx: *mut PonkoCtx, insets: PonkoSafeInsets) -> PonkoStatus {
+    // SAFETY: all pointer use follows the caller contract; inputs are checked before mutation.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            c.window.feed_safe_insets(insets.into());
+            Ok(())
+        })
+    })
+}
 /// Writes the number of connected monitors (0 headless). Indices are valid until monitors change.
 /// # Safety
 /// Contexts must be null or live outside queries. Descriptor headers must be initialized;

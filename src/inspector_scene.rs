@@ -60,6 +60,32 @@ enum RowAction {
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct HierarchyDrag(Entity);
 
+/// One hierarchy row: a single widget that senses clicks and drags, and
+/// carries [`HierarchyDrag`] while it is dragged, drawn at the pointer.
+///
+/// Not `Ui::dnd_drag_source` around a selectable label: that lays a
+/// drag-only area over the label, and egui gives a click to nothing where
+/// a drag-only widget lies on top of a click-only one, so no click on a
+/// row ever selected it.
+fn hierarchy_row(ui: &mut Ui, e: Entity, selected: bool, text: &str) -> egui::Response {
+    let row = ui.add(egui::Button::selectable(selected, text).sense(Sense::click_and_drag()));
+    if row.dragged() {
+        egui::DragAndDrop::set_payload(ui.ctx(), HierarchyDrag(e));
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        if let Some(at) = ui.ctx().pointer_interact_pos() {
+            let layer = egui::LayerId::new(egui::Order::Tooltip, row.id);
+            ui.ctx().layer_painter(layer).text(
+                at + egui::vec2(12.0, 0.0),
+                egui::Align2::LEFT_CENTER,
+                text,
+                egui::TextStyle::Button.resolve(ui.style()),
+                ui.visuals().strong_text_color(),
+            );
+        }
+    }
+    row
+}
+
 /// The scene editing state of the panels.
 #[derive(Default)]
 pub(crate) struct SceneEdit {
@@ -482,11 +508,7 @@ impl Panels {
                     let selected = selection.contains(&e);
                     ui.horizontal(|ui| {
                         ui.add_space(indent);
-                        let row = ui
-                            .dnd_drag_source(egui::Id::unique(("hierarchy", e)), HierarchyDrag(e), |ui| {
-                                ui.selectable_label(selected, format!("{text}  #{}", e.to_bits()))
-                            })
-                            .inner;
+                        let row = hierarchy_row(ui, e, selected, &format!("{text}  #{}", e.to_bits()));
                         if row.double_clicked() {
                             action = Some(RowAction::StartRename(e));
                         } else if row.clicked() {
