@@ -119,7 +119,7 @@ async function check(browser, servers, args, report) {
   const s = runs.isolated.state;
   console.log(
     `isolated: ${s.threads} worker threads; query items on ${s.par_threads}, batch systems on ${s.batch_threads}, ` +
-      `${s.batch_threaded_runs} batches threaded; jobs off the page: ${s.wait_off_page && s.job_off_page}; ` +
+      `${s.batch_threaded_runs} batches threaded; hierarchy level shared: ${s.hier_shared}; jobs off the page: ${s.wait_off_page && s.job_off_page}; ` +
       `asset group ${s.group}, decoded off the page: ${s.group_off_page}`,
   );
   console.log(`not isolated: ${runs.plain.state.threads} worker threads ("${FALLBACK_WARNING}"); checksums ${s.checksum} and ${runs.plain.state.checksum}`);

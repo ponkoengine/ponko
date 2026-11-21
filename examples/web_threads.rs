@@ -13,12 +13,15 @@
 //! both from `assets/`. It publishes which threads ran each, for the runner
 //! (see `common/web_smoke.rs`):
 //!
-//! `{"fixture":"web_threads","ticks":160,"threads":7,"isolated":true,"par_threads":7,"par_on_page":false,"batch_threads":4,"batch_threaded_runs":160,"wait_off_page":true,"job_off_page":true,"group":"ready","group_off_page":true,"group_bytes":966,"checksum":...}`
+//! `{"fixture":"web_threads","ticks":160,"threads":7,"isolated":true,"par_threads":7,"par_on_page":false,"batch_threads":4,"batch_threaded_runs":160,"hier_shared":true,"wait_off_page":true,"job_off_page":true,"group":"ready","group_off_page":true,"group_bytes":966,"checksum":...}`
 //!
 //! `threads` is what the engine started (`ponko::web::threads()`, 0 when it
 //! runs on the page's thread alone); `par_threads` and `batch_threads`
 //! count the threads other than the page's that ran query items and batch
-//! systems; `checksum` sums every position and every attached child's
+//! systems (batch systems not while profiling, when the scheduler runs them
+//! on the page's thread); `hier_shared` says whether the hierarchy shared a
+//! level out (the engine's `hierarchy/shared_level` scope, timed over 20
+//! ticks with profiling on); `checksum` sums every position and every attached child's
 //! place at tick 120, the same however many threads ran them. `?smoke_case=worker-panic` panics inside the
 //! parallel query at tick 30: the game must stop with an error, not hang.
 //!
@@ -50,6 +53,7 @@ use std::cell::Cell;
 use std::hint::black_box;
 use std::rc::Rc;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::ThreadId;
 use std::time::Duration;
 
@@ -71,6 +75,12 @@ const DT: f32 = 1.0 / 60.0;
 /// Children attached to the moving root: enough that the hierarchy's
 /// lookup level is shared out on the web.
 const CHILDREN: usize = 4_000;
+
+/// The first of the 20 ticks profiled (see `hier_shared`).
+const PROFILED_FROM: u64 = 90;
+
+/// Profiling is on: the scheduler runs batches on the page's thread.
+static PROFILING: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Copy, Component)]
 struct Pos {
@@ -128,7 +138,9 @@ fn steer(p: &mut Pos, v: &mut Vel) {
 
 /// `schedule.rs`'s heavy system: roughly 20 ns per entity natively.
 fn heavy<const N: usize>(sys: &mut SystemView) {
-    note(&SEEN_BATCH, &BATCH_THREADS);
+    if !PROFILING.load(Ordering::Relaxed) {
+        note(&SEEN_BATCH, &BATCH_THREADS);
+    }
     let dt = black_box(DT);
     sys.world.query::<&mut Val<N>>().for_each(|v| {
         for _ in 0..4 {
@@ -275,6 +287,8 @@ struct Check {
     group_bytes: Option<usize>,
     /// The root the hierarchy's children follow.
     root: Option<Entity>,
+    /// The hierarchy shared a level out.
+    hier_shared: bool,
 }
 
 /// The asset group's file decoded with `with`, and what its decoder returns.
@@ -327,6 +341,8 @@ fn check(game: Game) {
             s.job = Some(Job::spawn(|| std::thread::current().id()));
         }
     })
+    // The hierarchy's update: the children follow the root.
+    .sim_system(ponko::systems::follow_attachments)
     .system(move |ctx| {
         let mut s = frame.borrow_mut();
         if let Some(job) = &mut s.job
@@ -360,6 +376,17 @@ fn check(game: Game) {
                 }
             }
         }
+        // Scopes are timed for a few ticks (the scheduler doesn't batch
+        // while profiling): `hierarchy/shared_level` runs once per level
+        // shared out.
+        let profiling = (PROFILED_FROM..PROFILED_FROM + 20).contains(&s.ticks);
+        ctx.perf.set_profiling(profiling);
+        PROFILING.store(profiling, Ordering::Relaxed);
+        s.hier_shared |= ctx
+            .perf
+            .scope_timings()
+            .iter()
+            .any(|t| t.name == "hierarchy/shared_level" && t.calls > 0);
         let batch_threaded_runs = s.batch_threaded_runs;
         s.pad_presses += ctx
             .input
@@ -385,6 +412,7 @@ fn check(game: Game) {
             "batch_threads": batch_threads,
             "batch_on_page": batch_on_page,
             "batch_threaded_runs": batch_threaded_runs,
+            "hier_shared": s.hier_shared,
             "schedule_threads": s.schedule_threads,
             "wait_off_page": s.wait_off_page,
             "job_off_page": s.job_off_page,

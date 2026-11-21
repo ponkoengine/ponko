@@ -1514,7 +1514,12 @@ fn place_level(world: &mut World, s: &mut State, ids: &Ids) -> Option<usize> {
             if worth_sharing(start.elapsed().as_nanos(), first.len(), s.pairs.len()) {
                 use rayon::prelude::*;
                 let placed = &mut s.placed;
-                on_pool(|| placed.par_extend(rest.par_iter().map(one)));
+                on_pool(|| {
+                    // Once per shared level, on the thread that shares it
+                    // out (on the web, a worker).
+                    crate::profile_scope!("hierarchy/shared_level");
+                    placed.par_extend(rest.par_iter().map(one));
+                });
             } else {
                 s.placed.extend(rest.iter().map(one));
             }
