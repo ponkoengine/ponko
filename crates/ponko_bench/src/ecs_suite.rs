@@ -21,7 +21,8 @@
 //! - `add-remove`: insert a marker into every one of `n` entities, then
 //!   remove it again (two archetype moves per entity).
 //! - `optional`: `(&mut Pos, &Vel, Option<&Boost>)` over four archetypes, half
-//!   with `Boost`.
+//!   with `Boost`. `optional-par`: the same with `par_for_each` (ponko
+//!   only), on every core and on a pool of one thread.
 //! - `with` / `without`: `(&mut Pos, &Vel)` filtered by a marker half the
 //!   entities have, over the same four archetypes.
 //! - `game`: one tick of a small game: four entity layouts and five systems,
@@ -513,6 +514,11 @@ pub fn optional_ponko(w: &mut ponko_ecs::World, dt: f32) {
     w.query::<(&mut Pos, &Vel, Option<&Boost>)>()
         .for_each(|(p, v, b)| boosted(p, v, b, dt));
 }
+/// [`optional_ponko`] with `par_for_each`.
+pub fn optional_par_ponko(w: &mut ponko_ecs::World, dt: f32) {
+    w.query::<(&mut Pos, &Vel, Option<&Boost>)>()
+        .par_for_each(|(p, v, b)| boosted(p, v, b, dt));
+}
 pub fn optional_bevy(w: &mut bevy_ecs::world::World, q: &mut BevyOptional, dt: f32) {
     q.iter_mut(w).for_each(|(mut p, v, b)| boosted(&mut p, v, b, dt));
 }
@@ -594,6 +600,23 @@ fn queries(b: &mut Bench, n: usize) {
         r,
         || hecs_split(n),
         |w| optional_hecs(w, black_box(DT)),
+    );
+    // The same loop with `par_for_each`: on every core, and on a pool of
+    // one thread, which times the loop's own code without the other cores.
+    b.steady(
+        &format!("ecs/optional-par-{l}/ponko"),
+        r,
+        || ponko_split(n),
+        |w| optional_par_ponko(w, black_box(DT)),
+    );
+    b.steady(
+        &format!("ecs/optional-par-{l}/ponko-1-thread"),
+        r,
+        || {
+            let pool = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
+            (ponko_split(n), pool)
+        },
+        |(w, pool)| pool.install(|| optional_par_ponko(w, black_box(DT))),
     );
     b.steady(
         &format!("ecs/with-{l}/ponko"),
@@ -1152,6 +1175,9 @@ mod tests {
         optional_ponko(&mut pw, DT);
         optional_bevy(&mut bw, &mut q, DT);
         optional_hecs(&mut hw, DT);
+        let mut par = ponko_split(SMALL);
+        optional_par_ponko(&mut par, DT);
+        assert_eq!(ponko_pos(&mut par), ponko_pos(&mut pw));
         let p = ponko_pos(&mut pw);
         assert_eq!(moved(&p), SMALL);
         let boosted_y = (0.5 * (2.0 * DT)).to_bits();

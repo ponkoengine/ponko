@@ -2,8 +2,15 @@
 //! mesh deform, keyed IK, transform, path and physics constraints) and
 //! drawing (a skinned mesh, a sprite, a
 //! clipping mask), both for a few skeletons (drawn on one thread) and for
-//! many (drawn in chunks on all of the pool's threads). Its own process, so
-//! nothing else allocates while it counts.
+//! many (drawn in chunks on all of the pool's threads).
+//!
+//! It counts with profiling scopes, which count the allocations made on
+//! their own thread while they are open: the game thread's work in `pose`
+//! and `draw`, and each chunk on whichever worker draws it
+//! (`skeleton2d/draw_chunk`). What rayon's workers allocate for themselves
+//! (a worker's sleep lock, boxed the first time it parks, which on a busy
+//! machine can be in the middle of the count) is on no scope's thread at
+//! those moments, so nothing has to be allowed for it.
 use std::sync::Arc;
 
 use ponko::perf::CountingAllocator;
@@ -22,16 +29,14 @@ const WORKERS: usize = 4;
 /// Ticks counted, after the warm-up.
 const TICKS: u64 = 120;
 
-/// The allocations rayon itself may still make while the ticks are counted.
-/// The counts are the whole process's, and rayon's workers allocate on
-/// their own: std boxes each worker's sleep mutex and condvar the first time
-/// it sleeps or is woken (two allocations a worker, once), and the queue the
-/// game thread hands jobs to takes a new block every 63 jobs (two jobs a
-/// tick for many skeletons: drawing and merging). On a quiet machine the
-/// workers sleep for the first time during the warm-up; on a busy one a
-/// late worker does it while a system is being counted. Both are bounded:
-/// posing or drawing that allocated would do so on every tick (120 or more).
-const RAYON_AT_MOST: u64 = 2 * WORKERS as u64 + (2 * TICKS).div_ceil(63) + 1;
+/// The one allocation of rayon's own that lands on the game thread: the
+/// queue the game thread hands jobs to takes a new block every 63 jobs,
+/// allocated by whichever push reaches the block's end. Drawing many
+/// skeletons hands it two jobs a tick (drawing and merging), and the
+/// control system one. A number of jobs, not a matter of load: the same on
+/// any machine. Drawing that allocated would do so on every tick (120 or
+/// more).
+const INJECTOR_BLOCKS: u64 = (3 * TICKS).div_ceil(63) + 1;
 
 /// Makes the global pool `WORKERS` threads and starts every one of them
 /// (their first allocations, thread and queue set-up, happen before
@@ -134,17 +139,37 @@ fn rig(texture: Texture) -> Arc<SkeletonData> {
 }
 
 fn pose(ctx: &mut Ctx) {
+    profile_scope!("pose");
     let dt = 1.0 / 60.0;
     ctx.world.query::<&mut Skeleton>().for_each(|s| s.update(dt));
+}
+
+fn draw(ctx: &mut Ctx) {
+    profile_scope!("draw");
+    ponko::systems::draw_sprites(ctx);
+}
+
+/// The negative control: one allocation a tick on the game thread, and one
+/// per skeleton on the pool's workers, each inside its scope.
+fn allocate(ctx: &mut Ctx) {
+    use rayon::prelude::*;
+    profile_scope!("allocate");
+    std::hint::black_box(Box::new(1u8));
+    let n = ctx.world.query::<&Skeleton>().count();
+    (0..n).into_par_iter().for_each(|_| {
+        profile_scope!("allocate/each");
+        std::hint::black_box(Box::new(1u8));
+    });
 }
 
 #[test]
 fn posing_and_drawing_skeletons_allocates_nothing_once_warm() {
     start_pool();
-    for count in [8, 400] {
+    for count in [8u64, 400] {
         let (_world, report) = Game::new("t", 1, 1)
             .sim_system(pose)
-            .sim_system(ponko::systems::draw_sprites)
+            .sim_system(draw)
+            .sim_system(allocate)
             .profile_headless(30, TICKS, move |ctx| {
                 let data = rig(ctx.gfx.create_texture(1, 1, &[255; 4]));
                 for i in 0..count {
@@ -157,12 +182,30 @@ fn posing_and_drawing_skeletons_allocates_nothing_once_warm() {
                 }
             });
         assert!(report.allocs.is_some(), "the counting allocator is installed");
-        for system in ["pose", "draw_sprites"] {
-            let allocs = (report.system(system).unwrap().allocs_per_frame * TICKS as f32).round() as u64;
-            assert!(
-                allocs <= RAYON_AT_MOST,
-                "{count} skeletons, {system}: {allocs} allocations in {TICKS} ticks: {report}"
+        let allocs = |scope: &str| {
+            let s = report.scope(scope).unwrap_or_else(|| panic!("{scope} ran: {report}"));
+            (s.allocs_per_frame * TICKS as f32).round() as u64
+        };
+        assert_eq!(
+            allocs("allocate/each"),
+            count * TICKS,
+            "every worker's allocations count: {report}"
+        );
+        assert!(allocs("allocate") >= TICKS, "the game thread's count: {report}");
+        let many = count >= 64;
+        assert_eq!(allocs("pose"), 0, "{count} skeletons, posing: {report}");
+        if many {
+            assert_eq!(
+                allocs("skeleton2d/draw_chunk"),
+                0,
+                "{count} skeletons, a chunk: {report}"
             );
         }
+        let at_most = if many { INJECTOR_BLOCKS } else { 0 };
+        let drawing = allocs("draw");
+        assert!(
+            drawing <= at_most,
+            "{count} skeletons, drawing: {drawing} allocations in {TICKS} ticks: {report}"
+        );
     }
 }

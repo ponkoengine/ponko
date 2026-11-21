@@ -68,6 +68,13 @@ pub struct ScopeReport {
     pub max_ms: f32,
     /// How often it ran per frame, on average.
     pub calls_per_frame: f32,
+    /// Heap allocations made inside it per frame, on average, each counted on
+    /// the thread that made it while the scope was open there: a scope inside
+    /// a parallel loop counts the loop's work on every thread, and nothing a
+    /// thread pool allocates for itself. 0 unless allocations are counted
+    /// (and for scopes timed with `begin`/`end`, as C does).
+    #[serde(default)]
+    pub allocs_per_frame: f32,
 }
 
 /// Heap allocations per frame, from [`PerfReport::allocs`].
@@ -785,6 +792,8 @@ struct Series {
     ms: Vec<f32>,
     /// Allocations (systems) or calls (scopes).
     n: Vec<u32>,
+    /// Allocations made inside a scope on its own threads (empty for systems).
+    allocs: Vec<u32>,
 }
 
 impl Series {
@@ -793,7 +802,13 @@ impl Series {
         ms.resize(len, 0.0);
         let mut n = Vec::with_capacity(cap);
         n.resize(len, 0);
-        Self { name, sim, ms, n }
+        Self {
+            name,
+            sim,
+            ms,
+            n,
+            allocs: Vec::new(),
+        }
     }
 }
 
@@ -849,7 +864,7 @@ impl Collector {
         frame_allocs: AllocCounts,
         systems: &[SystemTiming],
         system_allocs: &[u32],
-        scopes: &[ScopeTiming],
+        (scopes, scope_allocs): (&[ScopeTiming], &[u32]),
     ) {
         let same_systems = self.systems.len() == systems.len()
             && self
@@ -867,7 +882,10 @@ impl Collector {
         let len = self.frame_ms.len();
         while self.scopes.len() < scopes.len() {
             let t = &scopes[self.scopes.len()];
-            self.scopes.push(Series::new(t.name, false, len, self.cap));
+            let mut series = Series::new(t.name, false, len, self.cap);
+            series.allocs = series.n.clone();
+            series.allocs.reserve(self.cap.saturating_sub(len));
+            self.scopes.push(series);
         }
         let i = if len >= self.cap {
             let i = self.next;
@@ -888,6 +906,7 @@ impl Collector {
             let t = scopes.get(k);
             set(&mut s.ms, i, t.map_or(0.0, |t| t.last_ms));
             set(&mut s.n, i, t.map_or(0, |t| t.calls));
+            set(&mut s.allocs, i, scope_allocs.get(k).copied().unwrap_or(0));
         }
     }
 
@@ -929,6 +948,7 @@ impl Collector {
                 avg_ms: s.ms.iter().sum::<f32>() / nf,
                 max_ms: max(&s.ms),
                 calls_per_frame: s.n.iter().map(|&c| c as f32).sum::<f32>() / nf,
+                allocs_per_frame: s.allocs.iter().map(|&a| a as f32).sum::<f32>() / nf,
             })
             .collect();
         scopes.sort_by(|a, b| b.avg_ms.total_cmp(&a.avg_ms));
@@ -1060,7 +1080,7 @@ impl PerfState {
             self.frame_allocs,
             timings,
             &self.system_allocs,
-            &self.scopes.timings,
+            (&self.scopes.timings, &self.scopes.allocs),
         );
     }
 
@@ -1279,7 +1299,7 @@ mod tests {
                 AllocCounts::default(),
                 &[timing("g::a", a), timing("g::b", b)],
                 &[0, 0],
-                &[],
+                (&[], &[]),
             );
         }
         c
@@ -1310,7 +1330,7 @@ mod tests {
                 AllocCounts::default(),
                 &[timing("s", i as f32)],
                 &[0],
-                &[],
+                (&[], &[]),
             );
         }
         let r = c.report();
@@ -1324,22 +1344,26 @@ mod tests {
     fn scopes_that_appear_later_are_zero_before() {
         let mut c = Collector::new(10);
         let sys = [timing("s", 1.0)];
-        c.push(1, 1.0, AllocCounts::default(), &sys, &[0], &[]);
+        c.push(1, 1.0, AllocCounts::default(), &sys, &[0], (&[], &[]));
         let scope = [ScopeTiming {
             name: "late",
             last_ms: 2.0,
             avg_ms: 2.0,
             calls: 4,
         }];
-        c.push(2, 1.0, AllocCounts::default(), &sys, &[0], &scope);
+        c.push(2, 1.0, AllocCounts::default(), &sys, &[0], (&scope, &[6]));
         let r = c.report();
-        assert_eq!(r.scope("late").map(|s| (s.avg_ms, s.calls_per_frame)), Some((1.0, 2.0)));
+        assert_eq!(
+            r.scope("late")
+                .map(|s| (s.avg_ms, s.calls_per_frame, s.allocs_per_frame)),
+            Some((1.0, 2.0, 3.0))
+        );
     }
 
     #[test]
     fn changing_the_systems_starts_the_history_over() {
         let mut c = collector_with(&[(1.0, 1.0, 1.0); 5]);
-        c.push(6, 1.0, AllocCounts::default(), &[timing("only", 1.0)], &[0], &[]);
+        c.push(6, 1.0, AllocCounts::default(), &[timing("only", 1.0)], &[0], (&[], &[]));
         assert_eq!(c.len(), 1);
     }
 

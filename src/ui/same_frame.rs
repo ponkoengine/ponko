@@ -63,6 +63,9 @@ impl Ctx {
     pub(crate) fn feed_ui_same_frame(&mut self) {
         if self.input.fed_since_ui() {
             self.ui_same_frame_pass();
+        } else if self.input.touch.arrange_before.is_some() {
+            // A system asked for the arrange screen: built for the next one.
+            self.update_touch_arrange();
         }
     }
 
@@ -79,6 +82,8 @@ impl Ctx {
         self.world
             .query::<&mut super::panel3d::UiPanel3D>()
             .for_each(|p| p.ui.same_frame.again = false);
+        // The arrange screen's buttons take effect before the next system.
+        self.update_touch_arrange();
         self.ui.end_same_frame_pass(before);
         self.input.show_seen_edges();
     }

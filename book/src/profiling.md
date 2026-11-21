@@ -110,6 +110,36 @@ The engine's own long-run test does this over 200 000 ticks
 nowhere, so there `ponko_ctx_live_counts` and the asset inventory are the
 leak checks.
 
+#### Allocations per thread
+
+The per-frame and per-system figures cover the whole process: a system is
+charged for what rayon's workers allocate while it runs, their own
+bookkeeping included (a worker that parks for the first time boxes its
+sleep lock). Each thread also keeps a count of its own, and scopes use it:
+a scope counts the allocations made **on its own thread while it is
+open**, so a scope inside a parallel loop counts the loop's work on every
+thread that runs it, and nothing the pool allocates for itself. The report
+shows them as `allocs_per_frame` of each scope.
+
+```rust
+# use ponko::prelude::*;
+fn steering(ctx: &mut Ctx) {
+    ctx.world.query::<&mut ponko::d2::Transform>().par_for_each(|t| {
+        profile_scope!("steering/agent"); // counted on whichever thread runs it
+        t.position.x += 1.0;
+    });
+}
+# let (_w, report) = Game::new("t", 1, 1).sim_system(steering).profile_headless(1, 3, |_| {});
+# let _ = report.scope("steering/agent").map(|s| s.allocs_per_frame);
+```
+
+`perf::thread_alloc_counts()` is the same count to read directly: two
+readings on one thread, subtracted, are what the code between them
+allocated there. Allocation tests use these instead of allowing for the
+pool's own allocations (`tests/skeleton2d_alloc.rs`). Scopes timed from C
+and C++ (`ponko_profile_begin`/`_end`) count time only, and
+`thread_alloc_counts` is Rust-only.
+
 ### In a running game
 
 <div class="lang-pair">
@@ -366,6 +396,7 @@ flame graph of the systems.
 
 - Per-mesh GPU memory: meshes share one arena, listed as one entry.
 - Rust allocations on other threads are counted for the whole process, so a
-  system is charged for what rayon workers allocate during it.
+  system is charged for what rayon workers allocate during it. Scopes count
+  per thread ([Allocations per thread](#allocations-per-thread)).
 - Scopes are process-wide: two games running side by side in one process
   (only tests do that) would see each other's scopes.

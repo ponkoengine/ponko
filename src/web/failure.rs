@@ -28,11 +28,35 @@ pub enum FailureKind {
     /// The browser lost the WebGPU device while the game was running (the
     /// GPU process crashed or was reset, or the device was destroyed). The
     /// game can't draw again without a reload. The message carries the
-    /// browser's reason, when it gives one.
+    /// browser's reason, when it gives one, and
+    /// [`Failure::device_lost_reason`] which of the two it was.
     DeviceLost,
     /// A worker thread of a build with threads stopped (it panicked or its
     /// script failed), so the game stops too.
     ThreadStopped,
+}
+
+/// Why the browser lost the WebGPU device ([`FailureKind::DeviceLost`]),
+/// as `GPUDeviceLostInfo.reason` says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DeviceLostReason {
+    /// Something called the device's `destroy()`: the page, an extension,
+    /// or the browser tearing the page's GPU work down.
+    Destroyed,
+    /// Any other reason (`"unknown"`): the GPU process crashed or was
+    /// reset, the driver failed, the GPU was unplugged.
+    Unknown,
+}
+
+impl DeviceLostReason {
+    /// The reason from wgpu's.
+    pub(crate) fn from_wgpu(reason: wgpu::DeviceLostReason) -> Self {
+        match reason {
+            wgpu::DeviceLostReason::Destroyed => Self::Destroyed,
+            _ => Self::Unknown,
+        }
+    }
 }
 
 /// A failure that stopped the browser game: what kind it is, its message
@@ -43,6 +67,7 @@ pub struct Failure {
     kind: FailureKind,
     message: String,
     location: Option<String>,
+    device_lost: Option<DeviceLostReason>,
 }
 
 impl Failure {
@@ -51,6 +76,7 @@ impl Failure {
             kind,
             message: message.into(),
             location: None,
+            device_lost: None,
         }
     }
 
@@ -67,6 +93,22 @@ impl Failure {
     /// For a panic, the source position it came from (`src/main.rs:12:5`).
     pub fn location(&self) -> Option<&str> {
         self.location.as_deref()
+    }
+
+    /// For a lost WebGPU device ([`FailureKind::DeviceLost`]), whether it
+    /// was destroyed or lost for another reason, so a game can word the
+    /// two differently; `None` for every other kind.
+    ///
+    /// ```no_run
+    /// use ponko::web::DeviceLostReason;
+    /// ponko::web::on_failure(|failure| match failure.device_lost_reason() {
+    ///     Some(DeviceLostReason::Destroyed) => Some("The graphics were switched off. Reload to keep playing.".into()),
+    ///     Some(_) => Some("The graphics card stopped answering. Reload to keep playing.".into()),
+    ///     None => None,
+    /// });
+    /// ```
+    pub fn device_lost_reason(&self) -> Option<DeviceLostReason> {
+        self.device_lost
     }
 }
 
@@ -166,6 +208,8 @@ fn to_js(failure: &Failure, text: Option<&str>) -> JsValue {
     };
     set("kind", JsValue::from_str(&format!("{:?}", failure.kind())));
     set("location", failure.location().map_or(JsValue::NULL, JsValue::from_str));
+    let reason = failure.device_lost_reason().map(|r| format!("{r:?}"));
+    set("reason", reason.as_deref().map_or(JsValue::NULL, JsValue::from_str));
     set("text", text.map_or(JsValue::NULL, JsValue::from_str));
     error.into()
 }
@@ -228,6 +272,7 @@ pub(crate) fn install_panic_hook() {
             kind: FailureKind::Panic,
             message,
             location: info.location().map(ToString::to_string),
+            device_lost: None,
         });
     }));
 }
@@ -253,20 +298,29 @@ pub(crate) fn context_lost() -> Failure {
     )
 }
 
-/// The failure for the WebGPU device lost while the game runs.
-/// `browser_message` is the browser's reason (`GPUDeviceLostInfo.message`),
-/// which may be empty.
-pub(crate) fn device_lost(browser_message: &str) -> Failure {
-    Failure::new(FailureKind::DeviceLost, device_lost_message(browser_message))
+/// The failure for the WebGPU device lost while the game runs, for
+/// `reason` (`GPUDeviceLostInfo.reason`). `browser_message` is the
+/// browser's own words (`GPUDeviceLostInfo.message`), which may be empty.
+pub(crate) fn device_lost(reason: DeviceLostReason, browser_message: &str) -> Failure {
+    Failure {
+        device_lost: Some(reason),
+        ..Failure::new(FailureKind::DeviceLost, device_lost_message(reason, browser_message))
+    }
 }
 
-/// What the page shows for a lost WebGPU device: the engine's sentence,
-/// with the browser's reason in it when there is one.
-fn device_lost_message(browser_message: &str) -> String {
-    let reason = browser_message.trim().trim_end_matches('.').trim_end();
-    if reason.is_empty() {
-        "The WebGPU device was lost while the game was running. Reload the page to try again.".to_string()
+/// What the page shows for a lost WebGPU device: the engine's sentence
+/// for `reason` (destroyed, or lost), with the browser's words in it when
+/// there are some. `web/smoke/runtime-failures.mjs` (`deviceLostMessage`)
+/// mirrors it.
+fn device_lost_message(reason: DeviceLostReason, browser_message: &str) -> String {
+    let what = match reason {
+        DeviceLostReason::Destroyed => "destroyed",
+        DeviceLostReason::Unknown => "lost",
+    };
+    let words = browser_message.trim().trim_end_matches('.').trim_end();
+    if words.is_empty() {
+        format!("The WebGPU device was {what} while the game was running. Reload the page to try again.")
     } else {
-        format!("The WebGPU device was lost while the game was running: {reason}. Reload the page to try again.")
+        format!("The WebGPU device was {what} while the game was running: {words}. Reload the page to try again.")
     }
 }

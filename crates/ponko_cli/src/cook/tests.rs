@@ -447,7 +447,7 @@ fn a_cooked_gltf_leaves_out_the_buffers_its_glb_holds() {
 /// `source/` and what `ponko cook` makes of it in `cooked/`. The engine's
 /// test `tests/cooked_assets.rs` loads both through the same calls and
 /// compares them. `PONKO_UPDATE_COOK_FIXTURE=1` writes them again.
-#[cfg(all(feature = "textures", feature = "meshes"))]
+#[cfg(all(feature = "textures", feature = "meshes", feature = "aseprite"))]
 #[test]
 fn the_shared_cook_fixture_is_what_cook_makes_of_its_source() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/cook");
@@ -835,6 +835,63 @@ fn a_tileset_file_others_link_to_gets_no_sheet_without_a_skip_rule() {
     .unwrap();
     assert_eq!(names(&skipped), ["art/map.json", "art/map.png"]);
     std::fs::remove_dir_all(cache).unwrap();
+}
+
+#[cfg(feature = "aseprite")]
+#[test]
+fn a_kept_map_that_links_to_a_tileset_file_counts_as_its_linker() {
+    use super::aseprite::tests::{hero, linked_map, tileset_file};
+    let config = Config::parse(r#"{"assets":{"art/map.aseprite":"keep"}}"#).unwrap();
+    let tileset = || {
+        (
+            "art/tiles/ground.aseprite".to_string(),
+            tileset_file(3, [0, 255, 0, 255]),
+        )
+    };
+    let names = |cooked: &Cooked| cooked.files.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>();
+    let cook = |map: Vec<u8>| {
+        cook_files(
+            vec![("art/map.aseprite".to_string(), map), tileset()],
+            &config,
+            &settings(None),
+        )
+        .unwrap()
+    };
+    // The kept map is copied as it is, and the file it links to has no sheet.
+    let map = linked_map("tiles/ground.aseprite", 3, 2);
+    let linked = cook(map.clone());
+    assert_eq!(names(&linked), ["art/map.aseprite"], "{}", linked.report());
+    assert_eq!(file(&linked, "art/map.aseprite"), map.as_slice());
+    let entry = linked
+        .entries
+        .iter()
+        .find(|e| e.name == "art/tiles/ground.aseprite")
+        .unwrap();
+    assert_eq!(entry.outcome, Outcome::Skipped);
+    assert!(entry.note.contains("linked from art/map.aseprite"), "{}", entry.note);
+    // The control: a kept map that does not link to it changes nothing, so
+    // the tileset file still gets its sheet.
+    let unlinked = cook(hero());
+    assert_eq!(
+        names(&unlinked),
+        ["art/map.aseprite", "art/tiles/ground.json", "art/tiles/ground.png"],
+        "{}",
+        unlinked.report()
+    );
+    // And a map a `skip` rule leaves out does not count as a linker either.
+    let skip = Config::parse(r#"{"assets":{"art/map.aseprite":"skip"}}"#).unwrap();
+    let skipped = cook_files(
+        vec![("art/map.aseprite".to_string(), map), tileset()],
+        &skip,
+        &settings(None),
+    )
+    .unwrap();
+    assert_eq!(
+        names(&skipped),
+        ["art/tiles/ground.json", "art/tiles/ground.png"],
+        "{}",
+        skipped.report()
+    );
 }
 
 #[cfg(all(feature = "meshes", feature = "textures"))]

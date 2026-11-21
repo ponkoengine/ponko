@@ -208,25 +208,21 @@ fn cameras2d<'a>(
         .map(move |c| (c, (!alone).then(|| c.screen_rect())))
 }
 
-/// [`cameras2d`] for the 3D cameras.
+/// [`cameras2d`] for the 3D cameras (those whose `debug_draw` allows it).
 #[cfg(feature = "3d")]
 fn cameras3d(scene: &crate::render::SceneSettings) -> impl Iterator<Item = (&crate::d3::Camera, Option<Rect>)> + '_ {
     let alone = scene.views.is_empty() && scene.camera.rect.is_full();
     std::iter::once(&scene.camera)
         .chain(scene.views.iter().map(|v| &v.camera))
-        .filter(|c| c.layers.intersects(RenderLayers::DEFAULT))
+        .filter(|c| c.draws_debug(false))
         .map(move |c| (c, (!alone).then(|| c.screen_rect())))
 }
 
-/// Whether a target camera draws debug drawing: it draws particles and
-/// shows the default layer (`three::collect::ViewFrame::debug`).
+/// Whether a target camera draws debug drawing (`Camera3D::draws_debug`,
+/// as `three::collect::ViewFrame::debug`).
 #[cfg(feature = "3d")]
 fn target_labels(scene: &crate::render::SceneSettings) -> bool {
-    scene
-        .passes
-        .target_cameras
-        .iter()
-        .any(|t| t.camera.particles && t.camera.layers.intersects(RenderLayers::DEFAULT))
+    scene.passes.target_cameras.iter().any(|t| t.camera.draws_debug(true))
 }
 
 /// Where `at` is in `camera`'s picture, in window pixels; `None` when it

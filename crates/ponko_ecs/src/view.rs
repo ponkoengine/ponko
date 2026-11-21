@@ -1028,7 +1028,7 @@ impl<'v, Q: QueryData> ViewQuery<'v, Q> {
     unsafe fn visit(&self, mut f: impl FnMut(Q::Item<'v>)) {
         let filters = self.filters;
         let tracking = self.world.tracks_changes();
-        let clock = self.clock();
+        let mut runs = change::Runs::new(self.clock());
         for arch in self.archetypes() {
             let len = arch.len();
             if len == 0 || !filters.matches(arch) {
@@ -1041,15 +1041,11 @@ impl<'v, Q: QueryData> ViewQuery<'v, Q> {
             // view declared written, which no other view touches. Change
             // filters read the stamps of declared components, which no
             // other view writes.
-            let mut runs = if tracking && arch.tracked() {
-                change::visit::<Q>(arch, &self.ids, &filters, clock)
-            } else {
-                None
-            };
+            let in_runs = tracking && arch.tracked() && change::visit::<Q>(arch, &self.ids, &filters, &mut runs);
             let (mut start, mut end) = (0, len);
             loop {
-                if let Some(runs) = &mut runs {
-                    match runs.next::<Q>(&self.ids) {
+                if in_runs {
+                    match runs.next::<Q>(arch, &self.ids) {
                         Some(run) => (start, end) = run,
                         None => break,
                     }
@@ -1058,7 +1054,7 @@ impl<'v, Q: QueryData> ViewQuery<'v, Q> {
                 // only touches declared components, with declared
                 // mutability (a `QueryRef`'s `Q` only reads).
                 unsafe { crate::query::for_rows::<Q>(state, start..end, &mut f) };
-                if runs.is_none() {
+                if !in_runs {
                     break;
                 }
             }
@@ -1098,12 +1094,12 @@ impl<'v, Q: QueryData> ViewQuery<'v, Q> {
     fn count_shared(&self) -> usize {
         let filters = self.filters;
         let tracking = self.world.tracks_changes();
-        let clock = self.clock();
+        let mut rows = change::RowFilter::new(self.clock());
         self.archetypes()
             .filter(|a| !a.is_empty() && filters.matches(a) && Q::state(a, &self.ids).is_some())
             .map(|a| {
                 if tracking && a.tracked() {
-                    change::count(a, &filters, clock)
+                    change::count(a, &filters, &mut rows)
                 } else {
                     a.len()
                 }

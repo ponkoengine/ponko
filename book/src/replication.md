@@ -341,7 +341,8 @@ An event type can also be declared by name, with plain bytes for events:
 for C and C++ games, or a Rust game that encodes its own. `raw_event`
 declares it, `to_server_raw`, `to_client_raw` and `to_clients_raw` send
 the bytes, and they arrive unchanged as `NetEvent<RawEvent>`, every raw
-type in one stream, told apart by `name()`:
+type in one stream, told apart by `name()` (or `kind()`, the type's index
+among the declared events, which is how C and C++ name them):
 
 ```rust
 use ponko::net::{NetEvent, RawEvent, Replication};
@@ -730,18 +731,42 @@ a type and a quantization for each), mark entities, read the role, net ids
 and replicas, and set viewers. That is `ponko_ctx_replication`,
 `ponko_ctx_replicate` and the calls above, or `ctx.replicated<T>()`,
 `ctx.replication()` and `ctx.replicate()` in C++. The budget and the
-interest rings are arguments of `ponko_ctx_replication`, and interest uses
-the entities' transforms. Inputs and prediction (`Replication::input`,
-`Replication::predicted`) are Rust-only for now: a native game sends its
-controls as [application messages](networking.md#application-messages-rust),
-and the server moves the players' entities. So are
-`Replication::interpolated` and `Replication::position` (generic over Rust
-types): a C component is set when its update arrives.
+interest rings are arguments of `ponko_ctx_replication`.
 
-Typed events (`Replication::event`) are generic over serde types, so
-events for C and C++ are [raw events](#raw-events-bytes-you-encode):
-bytes the game encodes itself. Their Rust side (`Replication::raw_event`,
-`to_server_raw`, `to_client_raw`, `to_clients_raw` and
-`NetEvent<RawEvent>`) is in place; the C and C++ calls that wrap it are
-not yet, so until then a native game sends its events as application
-messages too.
+Inputs, prediction, events and smooth motion work the same way, by name,
+after `ponko_ctx_replication` in setup and the same on every side:
+
+| C | C++ | Rust |
+|---|---|---|
+| `ponko_ctx_replication_input` | `ctx.replication_input<I>()` | `Replication::input` |
+| `ponko_ctx_replication_predicted` | `ctx.replication_predicted<S, I>()` | `Replication::predicted` |
+| `ponko_ctx_replication_interpolated` | `ctx.replication_interpolated()` | `Replication::interpolated_with` |
+| `ponko_ctx_replication_event` | `ctx.replication_event()` | `Replication::raw_event` |
+| `ponko_ctx_replication_position` | `ctx.replication_position<T>()` | `Replication::position` |
+| `ponko_ctx_set_replication_input`, `ponko_ctx_replication_input_of` | `ctx.set_replication_input()`, `ctx.replication_input_of<I>()` | `set_input`, `input_of` |
+| `ponko_ctx_replication_send` | `ctx.replication_send()` | `to_server_raw`, `to_client_raw`, `to_clients_raw` |
+| `ponko_ctx_net_events` | `ctx.net_events()` | `ctx.events.read::<NetEvent<RawEvent>>()` |
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:replication_inputs}}
+```
+
+- The input is one plain struct of which the declared fields travel,
+  every tick and redundantly, so a lost packet costs nothing.
+- The prediction step gets the component's bytes and one input's bytes.
+  It must give the same result for the same bytes on every machine, and
+  must not call into the ctx: it runs on the server for each input and on
+  the owning client to predict and to replay after a correction.
+- An interpolated component's float fields move between the values
+  received, `delay` in the past, angle fields (`PONKO_FIELD_ANGLE`) the
+  short way round; at most 32 float fields. Its other fields are set when
+  they arrive.
+- Events are [raw events](#raw-events-bytes-you-encode): bytes of a
+  kind, numbered from 0 in the order they were declared (Rust
+  `RawEvent::kind`, `Replication::raw_event_kind`). `ponko_ctx_net_events` hands every event that arrived since the
+  system last read them as one array, valid until the system returns.
+  It works inside `ponko_query` callbacks (not `ponko_query_par`), so read
+  it once per system: a second read gives only newer events.
+- `ponko_ctx_replication_position` makes interest use 2 or 3 floats of a
+  component instead of the entities' transforms; an entity without that
+  component reaches every client.
