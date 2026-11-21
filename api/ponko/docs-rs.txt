@@ -15333,6 +15333,7 @@ pub ponko::streaming::UploadStats::failures: u64
 pub ponko::streaming::UploadStats::frame_bytes: u64
 pub ponko::streaming::UploadStats::frame_slices: u32
 pub ponko::streaming::UploadStats::frame_uploads: u32
+pub ponko::streaming::UploadStats::gpu_created_ms: core::option::Option<f32>
 pub ponko::streaming::UploadStats::gpu_upload_ms: core::option::Option<f32>
 pub ponko::streaming::UploadStats::gpu_upload_timing: bool
 pub ponko::streaming::UploadStats::held_by_budget: u64
