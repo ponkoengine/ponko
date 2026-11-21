@@ -3395,6 +3395,27 @@ static void alloc_count_setup(PonkoCtx* ctx, void* user) {
     CHECK(ponko_ctx_set_profiling(ctx, false) == PONKO_OK);
 }
 
+/* The GPU timing choice: set and read back; a bad kind changes nothing. */
+static void gpu_timing_setup(PonkoCtx* ctx, void* user) {
+    (void)user;
+    uint32_t kind = 99, every = 99;
+    CHECK(ponko_ctx_gpu_timing(ctx, &kind, &every) == PONKO_OK);
+    CHECK(kind == PONKO_GPU_TIMING_AUTO && every == 0); /* the default */
+    CHECK(ponko_ctx_set_gpu_timing(ctx, PONKO_GPU_TIMING_EVERY, 4) == PONKO_OK);
+    CHECK(ponko_ctx_gpu_timing(ctx, &kind, &every) == PONKO_OK);
+    CHECK(kind == PONKO_GPU_TIMING_EVERY && every == 4);
+    CHECK(ponko_ctx_set_gpu_timing(ctx, PONKO_GPU_TIMING_OFF, 0) == PONKO_OK);
+    CHECK(ponko_ctx_gpu_timing(ctx, &kind, &every) == PONKO_OK);
+    CHECK(kind == PONKO_GPU_TIMING_OFF && every == 0);
+    CHECK(ponko_ctx_set_gpu_timing(ctx, 7, 1) == PONKO_INVALID_ARGUMENT);
+    CHECK(ponko_ctx_gpu_timing(ctx, &kind, &every) == PONKO_OK);
+    CHECK(kind == PONKO_GPU_TIMING_OFF); /* unchanged */
+    CHECK(ponko_ctx_gpu_timing(ctx, NULL, &every) == PONKO_INVALID_ARGUMENT);
+    CHECK(ponko_ctx_set_gpu_timing(ctx, PONKO_GPU_TIMING_AUTO, 5) == PONKO_OK);
+    CHECK(ponko_ctx_gpu_timing(ctx, &kind, &every) == PONKO_OK);
+    CHECK(kind == PONKO_GPU_TIMING_AUTO && every == 0);
+}
+
 static void native_parity_round5(void) {
     /* Crash reports: on, with the game's version and a hook. */
     CrashSeen seen = {0};
@@ -3453,6 +3474,10 @@ static void native_parity_round5(void) {
 
     game = ponko_game_new("allocs", 1, 1);
     CHECK(ponko_game_run_headless(game, 0, alloc_count_setup, NULL, &w) == PONKO_OK);
+    CHECK(ponko_world_free(w) == PONKO_OK);
+
+    game = ponko_game_new("gpu timing", 1, 1);
+    CHECK(ponko_game_run_headless(game, 0, gpu_timing_setup, NULL, &w) == PONKO_OK);
     CHECK(ponko_world_free(w) == PONKO_OK);
 
     SliceCounts counts = {0};

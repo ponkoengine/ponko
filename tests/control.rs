@@ -1047,6 +1047,39 @@ fn a_refused_scenario_leaves_the_running_one_alone() {
     game.join().unwrap();
 }
 
+/// `perf.get`'s `render_inspector.gpu_timing` says which cadence the game
+/// chose with `ctx.perf.set_gpu_timing`, so a tool can tell a game that
+/// turned timing off from an adapter without timestamps.
+#[test]
+fn perf_get_reports_the_gpu_timing_cadence_the_game_chose() {
+    use ponko::perf::GpuTiming;
+    for (choice, cadence, every) in [
+        (GpuTiming::Auto, "auto", None),
+        (GpuTiming::Every(4), "every", Some(4)),
+        (GpuTiming::Off, "off", None),
+    ] {
+        let (tx, rx) = mpsc::channel();
+        let game = thread::spawn(move || {
+            Game::new("gpu timing", 1, 1)
+                .control_endpoint(true)
+                .run_headless(u64::MAX, move |ctx| {
+                    ctx.perf.set_gpu_timing(choice);
+                    ctx.time.pause();
+                    tx.send(ctx.control_addr().unwrap()).unwrap();
+                })
+        });
+        let addr = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        let mut c = connect(addr);
+        let perf = c.call("perf.get", json!({})).unwrap();
+        let timing = &perf["render_inspector"]["gpu_timing"];
+        assert_eq!(timing["cadence"], cadence, "{timing}");
+        assert_eq!(timing["every"], json!(every), "{timing}");
+        assert_eq!(timing["available"], false, "a headless game has no adapter: {timing}");
+        c.call("game.quit", json!({})).unwrap();
+        game.join().unwrap();
+    }
+}
+
 /// `quality.set` over the socket on a headless game: what `capabilities`
 /// says about it matches what the endpoint does, and with the `3d` feature
 /// the new settings show in `perf.get`'s render inspector.
