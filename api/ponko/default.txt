@@ -743,6 +743,7 @@ pub fn ponko::assets::AssetGroup::sound(self, &str) -> Self
 pub fn ponko::assets::AssetGroup::streamed_texture(self, &str) -> Self
 pub fn ponko::assets::AssetGroup::texture(self, &str) -> Self
 pub fn ponko::assets::AssetGroup::with<T: core::marker::Send + 'static>(self, &str, impl core::ops::function::Fn(&[u8]) -> core::result::Result<T, ponko::error::Error> + core::marker::Send + core::marker::Sync + 'static) -> Self
+pub fn ponko::assets::AssetGroup::with_sliced<L: ponko::assets::SliceLoader>(self, &str, impl core::ops::function::Fn(alloc::vec::Vec<u8>) -> core::result::Result<L, ponko::error::Error> + core::marker::Send + core::marker::Sync + 'static) -> Self
 impl core::fmt::Debug for ponko::assets::AssetGroup
 pub fn ponko::assets::AssetGroup::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct ponko::assets::Assets
@@ -821,11 +822,15 @@ impl core::marker::StructuralPartialEq for ponko::assets::GroupProgress
 #[non_exhaustive] pub struct ponko::assets::GroupStats
 pub ponko::assets::GroupStats::frame_budget_ms: f32
 pub ponko::assets::GroupStats::frame_bytes: u64
+pub ponko::assets::GroupStats::gpu_upload_ms: core::option::Option<f32>
+pub ponko::assets::GroupStats::gpu_upload_timing: bool
 pub ponko::assets::GroupStats::max_step_ms: f32
 pub ponko::assets::GroupStats::max_upload_ms: f32
 pub ponko::assets::GroupStats::over_budget: u64
+pub ponko::assets::GroupStats::pieces: u32
 pub ponko::assets::GroupStats::step_ms: f32
 pub ponko::assets::GroupStats::steps: u64
+pub ponko::assets::GroupStats::total_gpu_upload_ms: f64
 pub ponko::assets::GroupStats::total_upload_bytes: u64
 pub ponko::assets::GroupStats::total_upload_ms: f64
 pub ponko::assets::GroupStats::upload_ms: f32
@@ -881,6 +886,10 @@ pub fn ponko::assets::PackSource::contains(&self, &str) -> bool
 pub fn ponko::assets::PackSource::id(&self) -> &str
 pub fn ponko::assets::PackSource::read(&self, &str) -> core::io::error::Result<alloc::vec::Vec<u8>>
 pub fn ponko::assets::PackSource::size(&self, &str) -> core::option::Option<u64>
+pub trait ponko::assets::SliceLoader: core::marker::Send + 'static
+pub type ponko::assets::SliceLoader::Value: core::marker::Send + 'static
+pub fn ponko::assets::SliceLoader::finish(self) -> Self::Value
+pub fn ponko::assets::SliceLoader::step(&mut self) -> core::result::Result<bool, ponko::error::Error>
 pub mod ponko::attach
 #[repr(C)] pub struct ponko::attach::Attached
 pub ponko::attach::Attached::offset: glam::f32::vec2::Vec2
@@ -9403,7 +9412,10 @@ pub ponko::streaming::UploadStats::budget: core::option::Option<u64>
 pub ponko::streaming::UploadStats::decode_waits: u64
 pub ponko::streaming::UploadStats::failures: u64
 pub ponko::streaming::UploadStats::frame_bytes: u64
+pub ponko::streaming::UploadStats::frame_slices: u32
 pub ponko::streaming::UploadStats::frame_uploads: u32
+pub ponko::streaming::UploadStats::gpu_upload_ms: core::option::Option<f32>
+pub ponko::streaming::UploadStats::gpu_upload_timing: bool
 pub ponko::streaming::UploadStats::held_by_budget: u64
 pub ponko::streaming::UploadStats::max_step_ms: f32
 pub ponko::streaming::UploadStats::oversized: u64

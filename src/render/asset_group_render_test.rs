@@ -188,8 +188,7 @@ fn uploads_report_the_gpus_own_copy_time_where_it_has_timestamps_and_still_draw(
         }
         if i % 25 == 24 {
             if groups.gpu_upload_ms.is_none() && more_groups < MORE / 2 {
-                let more = AssetGroup::new(format!("more{more_groups}"))
-                    .texture(&format!("more{more_groups}.png"));
+                let more = AssetGroup::new(format!("more{more_groups}")).texture(&format!("more{more_groups}.png"));
                 more_groups += 1;
                 let id = ctx.assets.start_group(more);
                 load(&mut ctx, id);
