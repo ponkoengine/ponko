@@ -116,7 +116,7 @@ too.";
 
 /// The cooker's version, part of every cache key: bump it whenever a cooked
 /// file's bytes would change for the same input and settings.
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 
 /// The settings file's name.
 pub const CONFIG: &str = "cook.json";
@@ -642,7 +642,10 @@ impl Cache {
             return;
         }
         // Written beside, then renamed: a reader never sees half a file.
-        let temp = parent.join(format!(".{key}.{}", std::process::id()));
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let temp = parent.join(format!(".{key}.{}.{id}", std::process::id()));
         if std::fs::write(&temp, encode_entry(&entry.0, &entry.1, entry.2)).is_ok() {
             let _ = std::fs::rename(&temp, &path);
         }
@@ -690,15 +693,16 @@ fn buffer_files(name: &str, bytes: &[u8]) -> Vec<String> {
 fn embedded_buffers(jobs: &[Job], slots: &[Slot]) -> BTreeMap<String, String> {
     let mut readers: BTreeMap<String, (String, bool)> = BTreeMap::new();
     for (job, slot) in jobs.iter().zip(slots) {
-        let cooked = match slot {
-            Some(Ok((Outcome::Cooked | Outcome::Cached, _))) => true,
-            Some(Ok((Outcome::Skipped, _))) => continue,
-            _ => false,
-        };
         if Kind::of(job.name) != Kind::Mesh {
             continue;
         }
+        let still_external = match slot {
+            Some(Ok((Outcome::Cooked | Outcome::Cached, Some((out, _, _))))) => Some(buffer_files(job.name, out)),
+            Some(Ok((Outcome::Skipped, _))) => continue,
+            _ => None,
+        };
         for buffer in buffer_files(job.name, job.bytes) {
+            let cooked = still_external.as_ref().is_some_and(|paths| !paths.contains(&buffer));
             let entry = readers.entry(buffer).or_insert_with(|| (job.name.to_string(), true));
             entry.1 &= cooked;
         }
@@ -1110,14 +1114,13 @@ fn texture_json_kinds(_: &BTreeMap<String, Vec<u8>>) -> Result<BTreeMap<String, 
 pub fn cook_files(files: Vec<(String, Vec<u8>)>, config: &Config, settings: &Settings) -> Result<Cooked, String> {
     let start = Instant::now();
     let mut all: BTreeMap<String, Vec<u8>> = files.into_iter().collect();
-    // Aseprite files become the sheet and JSON beside them, cooked from
-    // there on as if they had been exported.
-    let (converted, made_from) = convert_aseprite(&mut all, config)?;
-    let model_plans = model_images::plans(&all);
-    let texture_json = texture_json_kinds(&all)?;
     let cache = settings.cache.as_ref().map(|dir| Cache {
         dir: dir.join(format!("v{VERSION}")),
     });
+    // From here on the in-memory sheet and JSON are cooked as exports.
+    let (converted, made_from) = convert_aseprite(&mut all, config, cache.as_ref())?;
+    let model_plans = model_images::plans(&all);
+    let texture_json = texture_json_kinds(&all)?;
     let jobs: Vec<Job> = all
         .iter()
         .filter(|(name, _)| name.as_str() != CONFIG)
@@ -1227,6 +1230,7 @@ pub fn cook_files(files: Vec<(String, Vec<u8>)>, config: &Config, settings: &Set
 fn convert_aseprite(
     all: &mut BTreeMap<String, Vec<u8>>,
     config: &Config,
+    cache: Option<&Cache>,
 ) -> Result<(Vec<Entry>, BTreeMap<String, String>), String> {
     let names: Vec<String> = all.keys().filter(|n| aseprite::is_aseprite(n)).cloned().collect();
     let (mut entries, mut made, mut errors) = (Vec::new(), BTreeMap::new(), Vec::new());
@@ -1242,7 +1246,31 @@ fn convert_aseprite(
             .map(String::as_str)
             .collect();
         let bytes = all.remove(&name).unwrap_or_default();
-        match aseprite::export(&name, &bytes, rule.layers.unwrap_or(false)) {
+        let split = rule.layers.unwrap_or(false);
+        // The JSON embeds the sheet's basename. Moving the pair to a
+        // different directory reuses the conversion.
+        let basename = png.rsplit('/').next().unwrap_or(&png);
+        let key = cache.map(|_| key(Kind::Other, &format!("aseprite:{split}:{basename}"), &bytes, &[]));
+        let cached = cache.zip(key.as_deref()).and_then(|(cache, key)| {
+            let (bytes, note, _) = cache.get(key)?;
+            let (json, png) = aseprite::cached_pair(&bytes)?;
+            Some(aseprite::Sheet {
+                json: json.to_vec(),
+                png: png.to_vec(),
+                note,
+            })
+        });
+        let (converted, outcome) = match cached {
+            Some(sheet) => (Ok(sheet), Outcome::Cached),
+            None => {
+                let converted = aseprite::export(&name, &bytes, split);
+                if let (Ok(sheet), Some((cache, key))) = (&converted, cache.zip(key.as_deref())) {
+                    cache.put(key, &(aseprite::cache_pair(sheet), sheet.note.clone(), None));
+                }
+                (converted, Outcome::Converted(vec![json.clone(), png.clone()]))
+            }
+        };
+        match converted {
             Ok(mut sheet) => {
                 if !beside.is_empty() {
                     sheet.note = format!("{}, replacing the {} beside it", sheet.note, beside.join(" and "));
@@ -1250,7 +1278,7 @@ fn convert_aseprite(
                 entries.push(Entry {
                     name: name.clone(),
                     kind: Kind::Other,
-                    outcome: Outcome::Converted(vec![json.clone(), png.clone()]),
+                    outcome,
                     source_bytes: bytes.len() as u64,
                     cooked_bytes: 0,
                     gpu: None,
@@ -1280,6 +1308,7 @@ fn convert_aseprite(
 fn convert_aseprite(
     _: &mut BTreeMap<String, Vec<u8>>,
     _: &Config,
+    _: Option<&Cache>,
 ) -> Result<(Vec<Entry>, BTreeMap<String, String>), String> {
     Ok((Vec::new(), BTreeMap::new()))
 }

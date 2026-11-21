@@ -163,3 +163,86 @@ fn builtin_sprite_animation_uses_aseprite_timing_and_retains_sprite_style() {
         assert_eq!((shown.z, shown.pivot), (first.z, first.pivot));
     });
 }
+
+#[test]
+fn an_aseprite_source_name_also_loads_its_cooked_export() {
+    Game::new("aseprite", 1, 1).run_headless(0, |ctx| {
+        ctx.assets.add_source(
+            MemorySource::new("cooked sprites")
+                .with("art/hero.json", COMPOSITE)
+                .with("art/layers.png", png()),
+        );
+        let atlas = ctx.gfx.try_load_aseprite("art/hero.aseprite", false).unwrap();
+        assert_eq!(atlas.frame_count(), 2);
+    });
+}
+
+#[test]
+fn a_source_name_without_its_export_says_how_to_get_one() {
+    Game::new("aseprite", 1, 1).run_headless(0, |ctx| {
+        let err = ctx.gfx.try_load_aseprite("art/missing.aseprite", false).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::NotFound);
+        assert!(
+            err.message()
+                .contains("art/missing.aseprite is an Aseprite source and art/missing.json isn't beside it"),
+            "{err}"
+        );
+        assert!(err.message().contains("ponko cook"), "{err}");
+    });
+}
+
+#[cfg(all(feature = "aseprite-source", not(target_arch = "wasm32")))]
+#[test]
+fn loose_aseprite_edits_refresh_live_playback_without_an_export() {
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    let folder = std::env::temp_dir().join(format!("ponko-aseprite-source-{}", std::process::id()));
+    std::fs::create_dir_all(&folder).unwrap();
+    let path = folder.join("hero.aseprite");
+    let source = include_bytes!("fixtures/cook/source/hero.aseprite");
+    std::fs::write(&path, source).unwrap();
+    let path_str = path.to_str().unwrap().to_owned();
+    let reload_path = path_str.clone();
+    let playback = Arc::new(Mutex::new(None::<ponko::aseprite::AsepriteAnimation>));
+    let running = playback.clone();
+    let reloaded = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let observed = reloaded.clone();
+    let mut deadline = None;
+    Game::new("aseprite source", 1, 1)
+        .hot_reload(true)
+        .sim_system(move |ctx: &mut Ctx| {
+            let state = running.lock().unwrap();
+            let clip = state.as_ref().unwrap();
+            if deadline.is_none() {
+                assert_eq!(clip.sprite_at(0.08), clip.sprite_at(0.0));
+                let mut edited = source.to_vec();
+                edited[136..138].copy_from_slice(&25u16.to_le_bytes());
+                // Change the file size as well so coarse filesystem stamps
+                // cannot hide an edit made immediately after writing.
+                edited.extend_from_slice(&16u32.to_le_bytes());
+                edited.extend_from_slice(&0xf1fau16.to_le_bytes());
+                edited.extend_from_slice(&[0; 10]);
+                let size = edited.len() as u32;
+                edited[..4].copy_from_slice(&size.to_le_bytes());
+                edited[6..8].copy_from_slice(&4u16.to_le_bytes());
+                std::fs::write(&path, edited).unwrap();
+                deadline = Some(Instant::now() + Duration::from_secs(3));
+            } else if ctx.assets.reloaded_files().contains(&reload_path) {
+                assert_ne!(clip.sprite_at(0.08), clip.sprite_at(0.0));
+                observed.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            if !observed.load(std::sync::atomic::Ordering::Relaxed) {
+                assert!(Instant::now() < deadline.unwrap(), "source edit was not reloaded");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        })
+        .run_headless(160, |ctx| {
+            let atlas = ctx.gfx.try_load_aseprite(&path_str, false).unwrap();
+            assert_eq!(atlas.frame_count(), 3);
+            *playback.lock().unwrap() = Some(atlas.animation("Walk", None).unwrap());
+        });
+    assert!(reloaded.load(std::sync::atomic::Ordering::Relaxed));
+    assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 1);
+    std::fs::remove_dir_all(folder).unwrap();
+}

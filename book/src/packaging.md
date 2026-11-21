@@ -182,8 +182,8 @@ ponko pack --cook                       # the same, as ponko pack's option
 | Source | Cooked | Kept as it is when |
 |---|---|---|
 | PNG, JPEG | KTX2 with a full mip chain: BC7 for colors (sRGB) and data, BC5 for normal maps, BC4 for masks on `desktop` and `web`; Basis Universal UASTC on `mobile` (transcoded at load to ASTC 4x4, ETC2 or BC7). An image file a glTF model reads (its `uri`) is cooked for its use there, whether the model is cooked or kept: base color BC7 sRGB, normal map BC5, metallic-roughness BC7 with the occlusion merged in ([below](#model-image-files)) | a glTF model reads it with two uses (one texture as color and as data), as the occlusion merged into a metallic-roughness file, or beside an image inside the model; 16 bits per channel (a height map), sides not multiples of 4, or the game reads no KTX2 |
-| glTF, GLB | one GLB: triangles reordered for the vertex cache and for overdraw, vertices in the order they are first used (meshoptimizer), unused vertices dropped; normals as 16-bit and texture coordinates in 0..1 as 16-bit unsigned integers (`KHR_mesh_quantization`, an error under 2e-5); positions as 16-bit integers when that moves none by more than 0.1 mm (one range for a mesh up to 13 m across, else one per primitive up to 13 m; [below](#quantized-positions)); the images a GLB holds as KTX2 for their use (`KHR_texture_basisu`): base color BC7 sRGB, normal map BC5, metallic-roughness BC7 with the occlusion merged in, as the engine merges it; UASTC on `mobile`; a `.gltf` file's `.bin` buffers stay out, as the GLB holds them | compressed geometry (meshopt, Draco) or an extension the cooker doesn't rewrite; vertices that two primitives share keep their order; positions of skinned, instanced or morphed meshes, of primitives past 13 m and of shared position data; images with two uses (one texture as color and as data), 16 bits or sides not multiples of 4 (images in their own files are cooked as images, above) |
-| Aseprite (`.aseprite`, `.ase`) | the JSON Array export and PNG sheet [`load_aseprite`](drawing.md#sprites-and-animations-from-aseprite) reads, `hero.json` and `hero.png` beside it, made without Aseprite: frames composited with layer and cel opacity and blend modes, durations, tags with direction and repeats, slices with their pivot and nine-slice center; `"layers": true` exports each visible layer (`--split-layers`); the sheet is then cooked as any PNG | `"keep"`; a file the cook can't read (tilemap layers too) fails it. An export already beside it is replaced by the one the cook makes |
+| glTF, GLB | one GLB: triangles reordered for the vertex cache and for overdraw, vertices in the order they are first used (meshoptimizer), unused vertices dropped; normals as 16-bit and texture coordinates in 0..1 as 16-bit unsigned integers (`KHR_mesh_quantization`, an error under 2e-5); positions as 16-bit integers when that moves none by more than 0.1 mm (one range for a mesh up to 13 m across, else one per primitive up to 13 m; [below](#quantized-positions)); the images a GLB holds as KTX2 for their use (`KHR_texture_basisu`): base color BC7 sRGB, normal map BC5, metallic-roughness BC7 with the occlusion merged in, as the engine merges it; UASTC on `mobile`; a `.gltf` file's `.bin` buffers stay out, as the GLB holds them | compressed geometry (meshopt, Draco) keeps its buffer layout while eligible embedded images are compressed; models with an unknown extension are copied; vertices that two primitives share keep their order; positions of skinned, instanced or morphed meshes, of primitives past 13 m and of shared position data; images with two uses (one texture as color and as data), 16 bits or sides not multiples of 4 (images in their own files are cooked as images, above) |
+| Aseprite (`.aseprite`, `.ase`) | the JSON Array export and PNG sheet [`load_aseprite`](drawing.md#sprites-and-animations-from-aseprite) reads, `hero.json` and `hero.png` beside it, made without Aseprite: frames composited with group, layer and cel opacity and blend modes, embedded tilemaps, durations, tags with direction and repeats, slices with their pivot and nine-slice center; `"layers": true` exports each visible layer (`--split-layers`); the sheet is then cooked as any PNG | `"keep"`; a file the cook can't read fails it. An export already beside it is replaced by the one the cook makes |
 | WAV (8, 16, 24-bit PCM) | FLAC: lossless, smaller | float or 32-bit samples |
 | WGSL | the same file, checked: the engine's own rules for its kind (the hook's signature, no entry points and no bindings of its own), then composed with the engine's code for its kind (found from its hook: `vertex`/`surface`, `fragment`, `sky`, `effect`, `compute`) and validated with naga, as the engine does at load; an error names the file's own line | `"shader": "keep"` |
 | anything else | copied | |
@@ -212,6 +212,18 @@ each with its own scale. A 48 m test level of 16 primitives (1,089 corners
 each) is 627,716 bytes with float positions and 561,256 bytes with a range
 per primitive (the test `a_level_too_big_for_one_range_gets_a_range_per_primitive`).
 `"quantize": false` keeps a model's positions and normals as floats.
+
+**Embedded images in compressed models.** When the game reads KTX2, the
+cook compresses eligible images inside meshopt and Draco models using the
+same texture rules as other models. It preserves the original buffers and
+view layout, including external buffer references, and adds the KTX2 data
+alongside them. The bytes of each image it replaced stay where they were,
+so no offset moves; in a GLB's own chunk they are zeroed, which a pack
+deflates to almost nothing (an image in an external `.bin` stays as it
+is). The engine then uploads the KTX2 images as GPU blocks and still
+decompresses the geometry at load (feature `gltf-meshopt`). Set a model's
+`texture` rule to `keep` to keep its embedded textures, or use the `keep`
+rule to copy the whole model verbatim.
 
 <a id="model-image-files"></a>**A model's image files.** The cook reads each
 glTF model's materials and cooks the image files they name for their use:
@@ -264,7 +276,10 @@ a SHA-256 of the cooker's version, the platform, the asset's settings and its
 bytes (and a model's buffers). A second cook reads unchanged files back; a
 changed file or setting is cooked again, alone. Files are cooked on every
 core, and the same input always gives the same bytes: no time, path or
-machine goes into a cooked file.
+machine goes into a cooked file. Aseprite conversion caches the JSON
+and PNG as a pair keyed by source bytes, split mode and export basename.
+An unchanged cook can reuse the pair without parsing the source, compositing
+frames or encoding another PNG.
 
 **In `ponko package`.** The pack is cooked by default, after the build:
 cargo says which engine features the game was built with, and images become
