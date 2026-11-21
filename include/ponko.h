@@ -35,7 +35,7 @@
  *
  * Enums (PonkoKey, PonkoMouseButton, PonkoGamepadButton, PonkoGamepadAxis,
  * PonkoControllerFamily, PonkoDeviceKind, PonkoGlyphKind,
- * PonkoTextAlign3D, PonkoBodyKind, PonkoShapeKind, PonkoShape3DKind, PonkoNetState, PonkoPhase, PonkoService, PonkoHandleKind, PonkoAssetClass, PonkoAssetOwner, PonkoResidencyKind, PonkoAssetState, PonkoAssetGroupState, PonkoAssetGroupKind, PonkoGpuTier, PonkoGpuFeature, PonkoScenarioStatus, PonkoWaterQuality, PonkoWaterReflection, PonkoHookKind, PonkoCloudQuality, PonkoJointChannel, and the
+ * PonkoTextAlign3D, PonkoBodyKind, PonkoShapeKind, PonkoShape3DKind, PonkoNetState, PonkoPhase, PonkoService, PonkoHandleKind, PonkoAssetClass, PonkoAssetOwner, PonkoResidencyKind, PonkoAssetState, PonkoAssetGroupState, PonkoAssetGroupKind, PonkoGpuTier, PonkoGpuFeature, PonkoScenarioStatus, PonkoWaterQuality, PonkoWaterReflection, PonkoHookKind, PonkoCloudQuality, PonkoJointChannel, PonkoEventTarget, and the
  * PonkoUi* layout and paint enums) are passed as uint32_t.
  * Last-error text is thread-local, borrowed until the next failed call;
  * successful calls leave it unchanged.
@@ -1388,6 +1388,12 @@ typedef enum PonkoJointChannel {
   PONKO_JOINT_ROTATION = 1,
   PONKO_JOINT_SCALE = 2,
 } PonkoJointChannel;
+
+typedef enum PonkoEventTarget {
+  PONKO_EVENT_TO_SERVER = 0,
+  PONKO_EVENT_TO_CLIENT = 1,
+  PONKO_EVENT_TO_CLIENTS = 2,
+} PonkoEventTarget;
 
 typedef struct PonkoAccess PonkoAccess;
 
@@ -3588,6 +3594,16 @@ typedef struct PonkoLiveCountsEx {
 typedef struct PonkoNavView {
   const struct PonkoNavMesh *navmesh;
 } PonkoNavView;
+
+typedef void (*PonkoPredictFn)(void*, size_t, const void*, size_t, void*);
+
+typedef struct PonkoNetEvent {
+  uint64_t from;
+  uint64_t tick;
+  uint32_t kind;
+  const uint8_t *data;
+  size_t size;
+} PonkoNetEvent;
 
 typedef struct PonkoSkyKit {
   uint32_t struct_size;
@@ -9773,6 +9789,51 @@ enum PonkoStatus ponko_nav_view_find_path(const struct PonkoNavView *view,
                                           struct PonkoVec3 *out_corners,
                                           size_t capacity,
                                           size_t *out_len);
+
+enum PonkoStatus ponko_ctx_replication_input(struct PonkoCtx *ctx,
+                                             const char *name,
+                                             size_t size,
+                                             const struct PonkoReplicatedField *fields,
+                                             size_t field_count);
+
+enum PonkoStatus ponko_ctx_replication_predicted(struct PonkoCtx *ctx,
+                                                 const char *component,
+                                                 PonkoPredictFn step,
+                                                 void *user,
+                                                 PonkoFreeUserFn free_user);
+
+enum PonkoStatus ponko_ctx_replication_interpolated(struct PonkoCtx *ctx,
+                                                    const char *component,
+                                                    const struct PonkoSnapshotConfig *config);
+
+enum PonkoStatus ponko_ctx_replication_event(struct PonkoCtx *ctx,
+                                             const char *name,
+                                             uint16_t *out_kind);
+
+enum PonkoStatus ponko_ctx_replication_position(struct PonkoCtx *ctx,
+                                                uint32_t component,
+                                                size_t offset,
+                                                uint32_t dims);
+
+enum PonkoStatus ponko_ctx_set_replication_input(struct PonkoCtx *ctx,
+                                                 const void *data,
+                                                 size_t size);
+
+enum PonkoStatus ponko_ctx_replication_input_of(struct PonkoCtx *ctx,
+                                                uint64_t peer,
+                                                void *out_data,
+                                                size_t size);
+
+enum PonkoStatus ponko_ctx_replication_send(struct PonkoCtx *ctx,
+                                            uint32_t target,
+                                            uint64_t peer,
+                                            uint16_t kind,
+                                            const void *data,
+                                            size_t size);
+
+enum PonkoStatus ponko_ctx_net_events(struct PonkoCtx *ctx,
+                                      const struct PonkoNetEvent **out_events,
+                                      size_t *out_count);
 
 enum PonkoStatus ponko_input_scenario_tap(struct PonkoInputScenario *scenario,
                                           uint64_t tick,

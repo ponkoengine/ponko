@@ -160,7 +160,11 @@ pub(super) struct Session {
 
 impl Session {
     /// Over the scripted network, every side declaring `rep()`.
-    fn scripted(clients: usize, rep: impl FnMut() -> Replication, script: impl FnOnce(&mut Network)) -> Self {
+    pub(super) fn scripted(
+        clients: usize,
+        rep: impl FnMut() -> Replication,
+        script: impl FnOnce(&mut Network),
+    ) -> Self {
         let net: Shared = Shared::default();
         script(&mut net.lock().unwrap());
         let mut nets = vec![NetMessages::transported(port(&net, 0), None, clients.max(1))];

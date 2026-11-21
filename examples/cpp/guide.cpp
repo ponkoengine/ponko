@@ -4386,6 +4386,52 @@ static void replication_runs() {
     if (!*id) { std::fprintf(stderr, "replication guide: no net id\n"); std::abort(); }
 }
 
+// ANCHOR: replication_inputs
+struct Stick { float dx = 0, dy = 0; };   // the input: every control in one struct
+struct Walker { float x = 0, y = 0; };    // a component the input moves
+// In setup on every side, after ctx.replication(...) declared `walker`:
+static void declare_inputs(ponko::ctx& ctx, std::uint16_t& chat) {
+    static const std::vector<PonkoReplicatedField> stick = {
+        {"dx", offsetof(Stick, dx), PONKO_REPLICATED_F32, PONKO_FIELD_RANGE, -1, 1, 0.01f, 0},
+        {"dy", offsetof(Stick, dy), PONKO_REPLICATED_F32, PONKO_FIELD_RANGE, -1, 1, 0.01f, 0},
+    };
+    ctx.replication_input<Stick>("Stick", stick);
+    // The owner's client runs this at once, the server for each input it gets.
+    ctx.replication_predicted<Walker, Stick>("walker", [](Walker& w, const Stick& s) {
+        w.x += s.dx * 0.1f;
+        w.y += s.dy * 0.1f;
+    });
+    ctx.replication_interpolated("walker");   // others' walkers move smoothly
+    chat = ctx.replication_event("Chat");
+}
+// Every tick: this side's input, and the events that arrived.
+static void play_tick(ponko::ctx& ctx, std::uint16_t chat, int& heard) {
+    ctx.set_replication_input(Stick{1, 0});
+    for (const PonkoNetEvent& e : ctx.net_events())
+        if (e.kind == chat) heard += static_cast<int>(e.size);
+    if (ctx.sim_tick() == 1) ctx.replication_send(PONKO_EVENT_TO_SERVER, chat, "hi", 2);
+}
+// ANCHOR_END: replication_inputs
+
+static void replication_inputs_run() {
+    auto chat = std::make_shared<std::uint16_t>(0);
+    auto heard = std::make_shared<int>(0);
+    ponko::game game("Inputs", 1, 1);
+    game.setup([chat](ponko::ctx& ctx) {
+        static const std::vector<PonkoReplicatedField> fields = {
+            {"x", offsetof(Walker, x), PONKO_REPLICATED_F32, PONKO_FIELD_EXACT, 0, 0, 0, 0},
+            {"y", offsetof(Walker, y), PONKO_REPLICATED_F32, PONKO_FIELD_EXACT, 0, 0, 0, 0},
+        };
+        PonkoReplicatedComponent walker = ctx.replicated<Walker>("walker", fields);
+        ctx.replication(&walker, 1);
+        declare_inputs(ctx, *chat);
+    });
+    game.sim_system([chat, heard](ponko::ctx& ctx) { play_tick(ctx, *chat, *heard); });
+    game.run_headless(4);
+    // Without an endpoint this game is the server: its own event arrived.
+    if (*heard != 2) { std::fprintf(stderr, "replication inputs guide: %d\n", *heard); std::abort(); }
+}
+
 // The guide's native prediction (networking chapter): pure data, run below.
 // ANCHOR: native_prediction
 struct Runner {          // trivially copyable, no padding: compared byte for byte
@@ -4575,6 +4621,7 @@ int main() {
     camera_rigs_guide();
     builder_setup_runs_headless();
     replication_runs();
+    replication_inputs_run();
     states_guide();
     state_screen_guide();
     native_prediction_runs();

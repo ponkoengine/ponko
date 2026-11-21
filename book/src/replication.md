@@ -570,11 +570,41 @@ a type and a quantization for each), mark entities, read the role, net ids
 and replicas, and set viewers. That is `ponko_ctx_replication`,
 `ponko_ctx_replicate` and the calls above, or `ctx.replicated<T>()`,
 `ctx.replication()` and `ctx.replicate()` in C++. The budget and the
-interest rings are arguments of `ponko_ctx_replication`, and interest uses
-the entities' transforms. Inputs, prediction and events
-(`Replication::input`, `Replication::predicted`, `Replication::event`)
-are Rust-only for now: a native game sends its controls and events as
-[application messages](networking.md#application-messages-rust), and the
-server moves the players' entities. So are `Replication::interpolated`
-and `Replication::position` (generic over Rust types): a C component is
-set when its update arrives.
+interest rings are arguments of `ponko_ctx_replication`.
+
+Inputs, prediction, events and smooth motion work the same way, by name,
+after `ponko_ctx_replication` in setup and the same on every side:
+
+| C | C++ | Rust |
+|---|---|---|
+| `ponko_ctx_replication_input` | `ctx.replication_input<I>()` | `Replication::input` |
+| `ponko_ctx_replication_predicted` | `ctx.replication_predicted<S, I>()` | `Replication::predicted` |
+| `ponko_ctx_replication_interpolated` | `ctx.replication_interpolated()` | `Replication::interpolated_with` |
+| `ponko_ctx_replication_event` | `ctx.replication_event()` | `Replication::event` |
+| `ponko_ctx_replication_position` | `ctx.replication_position<T>()` | `Replication::position` |
+| `ponko_ctx_set_replication_input`, `ponko_ctx_replication_input_of` | `ctx.set_replication_input()`, `ctx.replication_input_of<I>()` | `set_input`, `input_of` |
+| `ponko_ctx_replication_send` | `ctx.replication_send()` | `to_server`, `to_client`, `to_clients` |
+| `ponko_ctx_net_events` | `ctx.net_events()` | `ctx.events.read::<NetEvent<T>>()` |
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:replication_inputs}}
+```
+
+- The input is one plain struct of which the declared fields travel,
+  every tick and redundantly, so a lost packet costs nothing.
+- The prediction step gets the component's bytes and one input's bytes.
+  It must give the same result for the same bytes on every machine, and
+  must not call into the ctx: it runs on the server for each input and on
+  the owning client to predict and to replay after a correction.
+- An interpolated component's float fields move between the values
+  received, `delay` in the past, angle fields (`PONKO_FIELD_ANGLE`) the
+  short way round; at most 32 float fields. Its other fields are set when
+  they arrive.
+- Events are bytes of a kind, numbered from 0 in the order they were
+  declared. `ponko_ctx_net_events` hands every event that arrived since the
+  system last read them as one array, valid until the system returns.
+  It works inside `ponko_query` callbacks (not `ponko_query_par`), so read
+  it once per system: a second read gives only newer events.
+- `ponko_ctx_replication_position` makes interest use 2 or 3 floats of a
+  component instead of the entities' transforms; an entity without that
+  component reaches every client.

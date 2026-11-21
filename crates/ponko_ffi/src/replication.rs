@@ -4,8 +4,8 @@
 //! (`ponko_ctx_replication`, in setup), and marks entities
 //! (`ponko_ctx_replicate`). The engine keeps the clients' worlds in step
 //! with the server's: delta compression, interest, the bandwidth budget,
-//! spawns and despawns. Inputs, prediction and events are Rust-only for
-//! now (the guide's "Replication" chapter names the gap).
+//! spawns and despawns. Inputs, prediction, events and interpolation are
+//! in `replication_raw`.
 
 use std::ffi::c_char;
 
@@ -319,7 +319,7 @@ fn raw_type(t: PonkoReplicatedType) -> RawType {
 
 /// The field as Rust's, checked the way the declaration would check it
 /// (so a mistake is an error here, not a panic later).
-fn field(f: &PonkoReplicatedField, component: &str, size: usize) -> Result<RawField, Failure> {
+pub(crate) fn field(f: &PonkoReplicatedField, component: &str, size: usize) -> Result<RawField, Failure> {
     // SAFETY: the caller guarantees NUL-terminated field names.
     let name = unsafe { text(f.name) }?;
     if name.is_empty() {
@@ -452,7 +452,7 @@ pub unsafe extern "C" fn ponko_ctx_replication(
 
 /// # Safety
 /// `ptr` null or readable for `len` values.
-unsafe fn slice<'a, T>(ptr: *const T, len: usize, what: &str) -> Result<&'a [T], Failure> {
+pub(crate) unsafe fn slice<'a, T>(ptr: *const T, len: usize, what: &str) -> Result<&'a [T], Failure> {
     if len == 0 {
         Ok(&[])
     } else if ptr.is_null() {
@@ -463,7 +463,7 @@ unsafe fn slice<'a, T>(ptr: *const T, len: usize, what: &str) -> Result<&'a [T],
     }
 }
 
-fn not_found(what: &'static str) -> Failure {
+pub(crate) fn not_found(what: &'static str) -> Failure {
     error(PonkoStatus::PONKO_NOT_FOUND, what)
 }
 

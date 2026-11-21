@@ -473,8 +473,6 @@ binding arrives:
 | `Physics3D::move_character` | [3D physics](physics3d.md#a-walking-character) | Characters walk with the physics step only; one tick can't be replayed on its own |
 | `Net::accept_web`, `Net::join_web`, `Net::web_addr`, `NetMessages::accept_web`, `NetMessages::join_web`, `NetMessages::web_addr` | [Multiplayer in the browser](networking.md#in-the-browser) | Not bound yet: C and C++ hosts take UDP players only, and C and C++ games don't build for the web yet |
 | `LobbyClient::join_web` | [Lobbies, matchmaking and relays](lobby.md#the-client) | C and C++ games don't build for the web yet; their lobby clients join over UDP |
-| `Replication::input`, `Replication::predicted`, `Replication::event` | [From C and C++](replication.md#from-c-and-c) | Not bound yet: C and C++ games declare components, mark entities and read replicas; they send controls and events as application messages, and the server moves their entities |
-| `Replication::interpolated`, `Replication::position` | [From C and C++](replication.md#from-c-and-c) | Generic over `Interpolate` and a Rust closure: C components are set when their update arrives, and interest uses the entities' transforms |
 | `Signaling` | [Peer to peer over WebRTC](webrtc.md#with-any-signaling-channel) | C and C++ WebRTC endpoints are signaled through a lobby client (`ponko_net_messages_rtc_host`, `_rtc_join`) |
 | `RtcConfig::turn` | [Peer to peer over WebRTC](webrtc.md#stun-turn-and-nats) | TURN works in browsers only, and C and C++ games don't build for the web yet |
 | `SkeletonData::add_bone`, `SpineAtlas` | [2D skeletons](skeleton2d.md#from-c-and-c) | Skeletons come from files (Ponko's format or a Spine export and its atlas) through the assets; a memory source holds files kept in memory |

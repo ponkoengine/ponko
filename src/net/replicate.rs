@@ -54,6 +54,7 @@ mod client;
 mod fields;
 mod inputs;
 mod kinds;
+mod raw;
 mod server;
 mod wire;
 
@@ -61,9 +62,11 @@ pub use fields::{Fields, Quantize, Replicate, ReplicateField, replicated_bits};
 pub use kinds::{RawField, RawType};
 /// `#[derive(Replicate)]`: see [`Replicate`](trait@Replicate).
 pub use ponko_macros::Replicate;
+pub use raw::RawNetEvent;
 
 use inputs::{InputStream, Inputs, Predicted};
 use kinds::{Kind, Raw};
+use raw::{RawInterpolated, RawPredicted, RawValue};
 
 /// Bandwidth a server sends each client at most, by default: 64 KB/s.
 pub const DEFAULT_BUDGET: u32 = 64_000;
@@ -378,8 +381,9 @@ type PositionFn = Arc<dyn Fn(&World, Entity) -> Option<Vec3> + Send + Sync>;
 /// An event type declared with [`Replication::event`].
 struct EventType {
     name: String,
-    type_id: TypeId,
-    deliver: fn(&mut Events, PeerId, u64, &[u8]) -> bool,
+    /// The Rust type; `None` for kinds declared by name (`raw_event`).
+    type_id: Option<TypeId>,
+    deliver: fn(&mut Events, PeerId, u64, u16, &[u8]) -> bool,
 }
 
 /// Where an outgoing event goes.
@@ -535,6 +539,33 @@ impl Inner {
         }
     }
 
+    /// The input stream of inputs declared at run time.
+    fn raw_inputs(&mut self) -> Option<&mut Inputs<RawValue>> {
+        self.inputs.as_mut()?.as_any_mut().downcast_mut::<Inputs<RawValue>>()
+    }
+
+    fn raw_inputs_ref(&self) -> Option<&Inputs<RawValue>> {
+        self.inputs.as_ref()?.as_any().downcast_ref::<Inputs<RawValue>>()
+    }
+
+    /// Queues an event of a kind declared by name.
+    fn queue_raw_event(&mut self, target: Target, kind: u16, bytes: &[u8]) {
+        match self.events.get(usize::from(kind)) {
+            Some(e) if e.type_id.is_none() => {}
+            _ => panic!(
+                "Replication: event kind {kind} wasn't declared with `raw_event`; use the index `raw_event_kind` gives"
+            ),
+        }
+        if self.outbox.len() >= OUTBOX_LIMIT {
+            return;
+        }
+        let tick = match self.role {
+            ReplicationRole::Client => self.client.server_tick,
+            _ => self.tick,
+        };
+        self.outbox.push((target, kind, tick, bytes.to_vec()));
+    }
+
     /// A hash of everything both sides must declare alike.
     fn schema_hash(&self) -> u64 {
         let mut h = Fnv::new();
@@ -580,7 +611,7 @@ impl Inner {
     fn deliver(&mut self, events: &mut Events) {
         for (index, from, tick, bytes) in self.inbox.drain(..) {
             if let Some(t) = self.events.get(usize::from(index)) {
-                let _ = (t.deliver)(events, from, tick, &bytes);
+                let _ = (t.deliver)(events, from, tick, index, &bytes);
             }
         }
     }
@@ -807,7 +838,7 @@ impl Inner {
     }
 
     fn queue_event<T: Serialize + 'static>(&mut self, target: Target, event: &T) {
-        let Some(index) = self.events.iter().position(|e| e.type_id == TypeId::of::<T>()) else {
+        let Some(index) = self.events.iter().position(|e| e.type_id == Some(TypeId::of::<T>())) else {
             panic!(
                 "Replication: `{0}` isn't a declared event; add `.event::<{0}>()` to the Replication",
                 crate::reflect::short_name(std::any::type_name::<T>())
@@ -876,6 +907,7 @@ fn deliver_event<T: DeserializeOwned + Send + Sync + 'static>(
     events: &mut Events,
     from: PeerId,
     tick: u64,
+    _kind: u16,
     bytes: &[u8],
 ) -> bool {
     match rmp_serde::from_slice::<T>(bytes) {
@@ -1048,12 +1080,12 @@ impl Replication {
         let inner = self.declare();
         let name = crate::reflect::short_name(std::any::type_name::<T>()).to_string();
         assert!(
-            !inner.events.iter().any(|e| e.type_id == TypeId::of::<T>()),
+            !inner.events.iter().any(|e| e.type_id == Some(TypeId::of::<T>())),
             "Replication: event `{name}` is declared twice; declare each event once"
         );
         inner.events.push(EventType {
             name,
-            type_id: TypeId::of::<T>(),
+            type_id: Some(TypeId::of::<T>()),
             deliver: deliver_event::<T>,
         });
         self
@@ -1118,9 +1150,193 @@ impl Replication {
             specs,
             offset: 0,
             type_id: None,
-            access: Box::new(raw),
+            access: Box::new(raw.clone()),
+            raw: Some(Arc::new(raw)),
         });
         self
+    }
+
+    /// The game's input declared at run time (from C or C++), instead of a
+    /// Rust type ([`input`](Self::input)): plain bytes of `size` whose
+    /// `fields` travel. Set it with [`set_raw_input`](Self::set_raw_input),
+    /// read it with [`raw_input_of`](Self::raw_input_of); a tick without
+    /// one sends zeroed bytes.
+    ///
+    /// # Panics
+    /// If an input was declared already, or a field lies outside `size`.
+    ///
+    /// ```
+    /// use ponko::net::{Quantize, RawField, RawType, Replication};
+    /// let fields = vec![RawField::new("dx", 0, RawType::F32, Quantize::range(-1.0, 1.0, 0.01))];
+    /// let r = Replication::new().raw_input("Move", 4, fields);
+    /// # let _ = r;
+    /// ```
+    #[must_use]
+    pub fn raw_input(mut self, name: &str, size: usize, fields: Vec<RawField>) -> Self {
+        raw::check_fields("raw_input", name, size, &fields);
+        let inner = self.declare();
+        assert!(
+            inner.inputs.is_none(),
+            "Replication::raw_input: an input type is declared already; a game has one input type (put every control in it)"
+        );
+        let proto = RawValue::zeroed(fields.into(), size);
+        inner.inputs = Some(Box::new(Inputs::with_proto(name.to_string(), proto)));
+        self
+    }
+
+    /// Predicts the component declared at run time as `component`
+    /// ([`raw_component`](Self::raw_component)) on the client that owns
+    /// the entity, as [`predicted`](Self::predicted) does for Rust types:
+    /// `step` changes the component's bytes for one input's bytes
+    /// ([`raw_input`](Self::raw_input)).
+    ///
+    /// # Panics
+    /// If no component was declared under that name with `raw_component`,
+    /// or no input with `raw_input`.
+    #[must_use]
+    pub fn raw_predicted(mut self, component: &str, step: impl Fn(&mut [u8], &[u8]) + Send + Sync + 'static) -> Self {
+        let inner = self.declare();
+        let Some((kind, raw)) = inner
+            .kinds
+            .iter()
+            .enumerate()
+            .find_map(|(i, k)| (k.name == component).then(|| k.raw.clone().map(|r| (i, r)))?)
+        else {
+            panic!("Replication::raw_predicted: no component `{component}` was declared with raw_component");
+        };
+        let Some(inputs) = inner.raw_inputs() else {
+            panic!("Replication::raw_predicted: declare the input with raw_input first");
+        };
+        inputs
+            .steps
+            .push(Box::new(RawPredicted::new(kind, raw, Arc::new(step))));
+        self
+    }
+
+    /// Shows the component declared at run time as `component` between the
+    /// values received on clients, as [`interpolated_with`](Self::interpolated_with)
+    /// does for Rust types: its float fields (angles the short way round)
+    /// move smoothly, `config.delay` in the past; its other fields are set
+    /// when they arrive.
+    ///
+    /// # Panics
+    /// If no component was declared under that name with `raw_component`,
+    /// it has more than 32 float fields, or `config` isn't valid.
+    #[must_use]
+    pub fn raw_interpolated(mut self, component: &str, config: SnapshotConfig) -> Self {
+        if let Err(e) = config.validate() {
+            panic!("Replication::raw_interpolated: {e}");
+        }
+        let inner = self.declare();
+        let Some(kind) = inner.kinds.iter_mut().find(|k| k.name == component && k.raw.is_some()) else {
+            panic!("Replication::raw_interpolated: no component `{component}` was declared with raw_component");
+        };
+        let raw = kind
+            .raw
+            .as_deref()
+            .cloned()
+            .unwrap_or_else(|| unreachable!("found by its layout"));
+        kind.access = Box::new(RawInterpolated::new(raw, config, component));
+        self
+    }
+
+    /// Declares an event kind by name, for games that declare their types
+    /// at run time: its bytes travel as they are, reliable and ordered, and
+    /// arrive as a [`RawNetEvent`] in [`ctx.events`](crate::ctx::Ctx::events).
+    /// Send one with [`raw_to_server`](Self::raw_to_server) and its kin,
+    /// using the index [`raw_event_kind`](Self::raw_event_kind) gives.
+    ///
+    /// # Panics
+    /// If an event of that name was declared already.
+    ///
+    /// ```
+    /// let r = ponko::net::Replication::new().raw_event("Chat");
+    /// assert_eq!(r.raw_event_kind("Chat"), Some(0));
+    /// ```
+    #[must_use]
+    pub fn raw_event(mut self, name: &str) -> Self {
+        let inner = self.declare();
+        assert!(
+            !inner.events.iter().any(|e| e.name == name),
+            "Replication: event `{name}` is declared twice; declare each event once"
+        );
+        inner.events.push(EventType {
+            name: name.to_string(),
+            type_id: None,
+            deliver: raw::deliver_raw,
+        });
+        self
+    }
+
+    /// The fields of the component declared as `name` with
+    /// [`raw_component`](Self::raw_component), or `None` if none was: what
+    /// bindings check before [`raw_predicted`](Self::raw_predicted) and
+    /// [`raw_interpolated`](Self::raw_interpolated), instead of panicking.
+    #[must_use]
+    pub fn raw_fields(&self, name: &str) -> Option<&[RawField]> {
+        let inner = self.inner.as_ref()?;
+        let kind = inner.kinds.iter().find(|k| k.name == name)?;
+        kind.raw.as_deref().map(|r| r.fields.as_slice())
+    }
+
+    /// The most float fields a component given to
+    /// [`raw_interpolated`](Self::raw_interpolated) may have.
+    pub const RAW_INTERPOLATED_FLOATS: usize = raw::MAX_INTERPOLATED_FLOATS;
+
+    /// Whether an input type was declared, by [`input`](Self::input) or
+    /// [`raw_input`](Self::raw_input).
+    #[must_use]
+    pub fn has_input(&self) -> bool {
+        self.inner.as_ref().is_some_and(|i| i.inputs.is_some())
+    }
+
+    /// Whether the input type was declared with [`raw_input`](Self::raw_input).
+    ///
+    /// ```
+    /// use ponko::net::{Quantize, RawField, RawType, Replication};
+    /// let r = Replication::new().raw_input("Move", 4, vec![RawField::new("dx", 0, RawType::F32, Quantize::Exact)]);
+    /// assert!(r.has_input() && r.has_raw_input() && r.raw_fields("Move").is_none());
+    /// ```
+    #[must_use]
+    pub fn has_raw_input(&self) -> bool {
+        self.inner.as_ref().is_some_and(|i| i.raw_inputs_ref().is_some())
+    }
+
+    /// Whether an event was declared under `name` (by
+    /// [`raw_event`](Self::raw_event), or a Rust type of that short name).
+    #[must_use]
+    pub fn has_event(&self, name: &str) -> bool {
+        self.inner
+            .as_ref()
+            .is_some_and(|i| i.events.iter().any(|e| e.name == name))
+    }
+
+    /// The kind of the event declared as `name` with
+    /// [`raw_event`](Self::raw_event): what the `raw_to_*` calls take and
+    /// [`RawNetEvent::kind`] gives.
+    #[must_use]
+    pub fn raw_event_kind(&self, name: &str) -> Option<u16> {
+        let inner = self.inner.as_ref()?;
+        let i = inner
+            .events
+            .iter()
+            .position(|e| e.type_id.is_none() && e.name == name)?;
+        u16::try_from(i).ok()
+    }
+
+    /// The name of the event kind `kind` declared with
+    /// [`raw_event`](Self::raw_event), or `None` if `kind` is no such kind:
+    /// the reverse of [`raw_event_kind`](Self::raw_event_kind).
+    ///
+    /// ```
+    /// let r = ponko::net::Replication::new().raw_event("Chat");
+    /// assert_eq!(r.raw_event_name(0), Some("Chat"));
+    /// assert_eq!(r.raw_event_name(1), None);
+    /// ```
+    #[must_use]
+    pub fn raw_event_name(&self, kind: u16) -> Option<&str> {
+        let e = self.inner.as_ref()?.events.get(usize::from(kind))?;
+        e.type_id.is_none().then_some(e.name.as_str())
     }
 
     // The running session.
@@ -1213,6 +1429,69 @@ impl Replication {
                 inputs.name(),
                 std::any::type_name::<I>()
             ),
+        }
+    }
+
+    /// This tick's input as bytes, for an input declared with
+    /// [`raw_input`](Self::raw_input), as [`set_input`](Self::set_input)
+    /// does for Rust types. Bytes past the declared size are ignored,
+    /// missing ones are zero.
+    ///
+    /// # Panics
+    /// If no input was declared with `raw_input`.
+    pub fn set_raw_input(&mut self, bytes: &[u8]) {
+        let Some(inner) = self.inner.as_mut() else {
+            panic!("Replication::set_raw_input: no input was declared; add `.raw_input(..)` to the Replication");
+        };
+        let role = inner.role;
+        let Some(inputs) = inner.raw_inputs() else {
+            panic!("Replication::set_raw_input: the input wasn't declared with raw_input");
+        };
+        let input = inputs.proto.with_bytes(bytes);
+        match role {
+            ReplicationRole::Client => inputs.pending = Some(input),
+            _ => inputs.local = Some(input),
+        }
+    }
+
+    /// Server: the bytes of the input of `peer` (or [`PeerId::HOST`])
+    /// applied last, for an input declared with [`raw_input`](Self::raw_input).
+    #[must_use]
+    pub fn raw_input_of(&self, peer: PeerId) -> Option<&[u8]> {
+        let raw = self.inner.as_ref()?.raw_inputs_ref()?;
+        raw.current.get(&peer).map(|v| v.bytes.as_slice())
+    }
+
+    /// Sends an event of a kind declared with [`raw_event`](Self::raw_event)
+    /// to the server, as [`to_server`](Self::to_server) does.
+    ///
+    /// # Panics
+    /// If `kind` isn't a kind `raw_event` declared.
+    pub fn raw_to_server(&mut self, kind: u16, bytes: &[u8]) {
+        self.declare().queue_raw_event(Target::Server, kind, bytes);
+    }
+
+    /// Server: sends an event declared with `raw_event` to one client, as
+    /// [`to_client`](Self::to_client) does.
+    ///
+    /// # Panics
+    /// As [`raw_to_server`](Self::raw_to_server).
+    pub fn raw_to_client(&mut self, peer: PeerId, kind: u16, bytes: &[u8]) {
+        let inner = self.declare();
+        if inner.role != ReplicationRole::Client {
+            inner.queue_raw_event(Target::Client(peer), kind, bytes);
+        }
+    }
+
+    /// Server: sends an event declared with `raw_event` to every client
+    /// that joined, as [`to_clients`](Self::to_clients) does.
+    ///
+    /// # Panics
+    /// As [`raw_to_server`](Self::raw_to_server).
+    pub fn raw_to_clients(&mut self, kind: u16, bytes: &[u8]) {
+        let inner = self.declare();
+        if inner.role != ReplicationRole::Client {
+            inner.queue_raw_event(Target::Clients, kind, bytes);
         }
     }
 
@@ -1426,7 +1705,7 @@ mod tests {
         let (index, back_tick, payload) = read_event(&message[1..]).expect("a whole message");
         assert_eq!((index, back_tick), (3, tick));
         let mut events = Events::default();
-        assert!(deliver_event::<T>(&mut events, PeerId::HOST, back_tick, payload));
+        assert!(deliver_event::<T>(&mut events, PeerId::HOST, back_tick, 0, payload));
         let got: Vec<T> = events.read::<NetEvent<T>>().iter().map(|e| e.event.clone()).collect();
         assert_eq!(got, std::slice::from_ref(event));
         message.len()
@@ -1468,7 +1747,7 @@ mod tests {
         let message = binary_message(&Chat { text: "gg".into() }, 1);
         let (_, tick, payload) = read_event(&message[1..]).unwrap();
         let mut events = Events::default();
-        assert!(!deliver_event::<Hit>(&mut events, PeerId::HOST, tick, payload));
+        assert!(!deliver_event::<Hit>(&mut events, PeerId::HOST, tick, 0, payload));
         assert!(events.read::<NetEvent<Hit>>().is_empty());
         assert_eq!(read_event(&[0x80]), None, "a varint cut short");
     }
@@ -1486,7 +1765,7 @@ mod tests {
         let message = binary_message(&Sparse { note: None, value: 9 }, 1);
         let (_, tick, payload) = read_event(&message[1..]).unwrap();
         let mut events = Events::default();
-        assert!(!deliver_event::<Sparse>(&mut events, PeerId::HOST, tick, payload));
+        assert!(!deliver_event::<Sparse>(&mut events, PeerId::HOST, tick, 0, payload));
         // With the field there, it arrives.
         assert_eq!(
             round_trip(

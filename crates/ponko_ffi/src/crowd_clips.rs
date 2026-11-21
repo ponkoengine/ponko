@@ -79,7 +79,7 @@ fn track_from_c(t: &PonkoJointTrack) -> Result<AnimationTrack, crate::Failure> {
             std::slice::from_raw_parts(t.values, t.count * per_key * 4),
         )
     };
-    let values = values.chunks_exact(4).map(Vec4::from_slice).collect();
+    let values = values.as_chunks::<4>().0.iter().map(|&v| Vec4::from_array(v)).collect();
     AnimationTrack::try_new(times.to_vec(), values, interpolation).map_err(invalid_owned)
 }
 

@@ -6837,6 +6837,96 @@ public:
     PonkoReplicationClientStats replication_client_stats() const {
         PonkoReplicationClientStats s{}; detail::check(ponko_ctx_replication_client_stats(raw_, &s)); return s;
     }
+    /// Declares the game's input, a plain struct `I` of which `fields`
+    /// travel, in setup after replication() (ponko_ctx_replication_input).
+    /// A game has one input type. Throws ponko::error for a second one.
+    template<class I> void replication_input(const char* name, const std::vector<PonkoReplicatedField>& fields) {
+        static_assert(detail::pod<I>, "the input is a plain struct");
+        detail::check(ponko_ctx_replication_input(raw_, name, sizeof(I), fields.data(), fields.size()));
+    }
+    /// Predicts the component replicated as `component` (a plain struct
+    /// `S`) on the client that owns it: `step(S&, const I&)` moves it for
+    /// one input, the same on the server, and must not throw or touch the
+    /// ctx (ponko_ctx_replication_predicted). In setup, after
+    /// replication_input<I>.
+    template<class S, class I, class F> void replication_predicted(const char* component, F step) {
+        static_assert(detail::pod<S> && detail::pod<I>, "predicted state and input are plain structs");
+        auto* h = new F(std::move(step));
+        auto call = [](void* state, std::size_t state_size, const void* input, std::size_t input_size, void* user) noexcept {
+            if (state_size != sizeof(S) || input_size != sizeof(I)) return;
+            S s; I i;
+            std::memcpy(static_cast<void*>(&s), state, sizeof(S));
+            std::memcpy(static_cast<void*>(&i), input, sizeof(I));
+            (*static_cast<F*>(user))(s, static_cast<const I&>(i));
+            std::memcpy(state, static_cast<const void*>(&s), sizeof(S));
+        };
+        auto free = [](void* user) noexcept { delete static_cast<F*>(user); };
+        const PonkoStatus status = ponko_ctx_replication_predicted(raw_, component, call, h, free);
+        if (status != PONKO_OK) delete h;
+        detail::check(status);
+    }
+    /// Shows the component replicated as `component` between the values
+    /// received, on clients: its floats move smoothly `config.delay` in the
+    /// past, its other fields are set when they arrive
+    /// (ponko_ctx_replication_interpolated). nullopt: the defaults with no
+    /// extrapolation. In setup.
+    void replication_interpolated(const char* component, std::optional<snapshot_config> config = std::nullopt) {
+        detail::check(ponko_ctx_replication_interpolated(raw_, component, config ? &*config : nullptr));
+    }
+    /// Declares an event kind called `name`, in setup, and returns its kind
+    /// for replication_send and net_events (ponko_ctx_replication_event).
+    std::uint16_t replication_event(const char* name) {
+        std::uint16_t kind = 0; detail::check(ponko_ctx_replication_event(raw_, name, &kind)); return kind;
+    }
+    /// For interest, an entity is where the `dims` (2 or 3) floats at byte
+    /// `offset` of its `T` say, instead of its transform
+    /// (ponko_ctx_replication_position). In setup.
+    template<class T> void replication_position(std::size_t offset, std::uint32_t dims = 3) {
+        static_assert(detail::pod<T>, "the position's component is a plain struct");
+        detail::check(ponko_ctx_replication_position(raw_, id<T>(), offset, dims));
+    }
+    /// This side's input for this tick (ponko_ctx_set_replication_input).
+    template<class I> void set_replication_input(const I& input) {
+        static_assert(detail::pod<I>, "the input is a plain struct");
+        detail::check(ponko_ctx_set_replication_input(raw_, &input, sizeof(I)));
+    }
+    /// Server: the input of `peer` applied last, if it sent one
+    /// (ponko_ctx_replication_input_of).
+    template<class I> std::optional<I> replication_input_of(std::uint64_t peer) const {
+        static_assert(detail::pod<I>, "the input is a plain struct");
+        I input{};
+        const PonkoStatus status = ponko_ctx_replication_input_of(raw_, peer, &input, sizeof(I));
+        if (status == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(status); return input;
+    }
+    /// Sends `size` bytes as an event of `kind` (replication_event) to the
+    /// server, one client (`peer`) or every client, reliable and in order
+    /// (ponko_ctx_replication_send).
+    void replication_send(PonkoEventTarget target, std::uint16_t kind, const void* data, std::size_t size, std::uint64_t peer = 0) {
+        detail::check(ponko_ctx_replication_send(raw_, static_cast<std::uint32_t>(target), peer, kind, data, size));
+    }
+    /// Sends a plain struct as an event of `kind`.
+    template<class T> void replication_send(PonkoEventTarget target, std::uint16_t kind, const T& value, std::uint64_t peer = 0) {
+        static_assert(detail::pod<T>, "an event is a plain struct (or bytes)");
+        replication_send(target, kind, &value, sizeof(T), peer);
+    }
+    /// The events that arrived since this system last read them, in order,
+    /// valid until the system returns (ponko_ctx_net_events). Read once
+    /// per system; works inside a query, not query_par.
+    struct net_events_view {
+        /// The first event.
+        const PonkoNetEvent* data = nullptr;
+        /// How many.
+        std::size_t size = 0;
+        /// For range-for.
+        const PonkoNetEvent* begin() const { return data; }
+        /// For range-for.
+        const PonkoNetEvent* end() const { return data + size; }
+    };
+    /// See net_events_view.
+    net_events_view net_events() {
+        net_events_view v; detail::check(ponko_ctx_net_events(raw_, &v.data, &v.size)); return v;
+    }
     /// The Steam lobby of this session, or 0 (not created yet, or not Steam).
     std::uint64_t steam_lobby() const { std::uint64_t l = 0; detail::check(ponko_ctx_steam_lobby(raw_, &l)); return l; }
     /// Opens the Steam overlay to invite friends to this session's lobby.
