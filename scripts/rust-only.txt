@@ -67,6 +67,8 @@ TouchLayout                      touch.md          # C and C++ set the controls 
 Input::arrange_touch_controls     touch.md          # not bound yet: C and C++ games build an arrange screen of their own; the edit mode and saved layout are Rust-only too
 CrashReports                     crash-reports.md  # not bound yet: a native game installs its own handler and writes its own report
 Game::restore_window_settings    window.md         # C and C++ games call ponko_ctx_window_restore_settings in setup; the window can show at its default size first
+Ctx::safe_area                   touch.md          # not bound yet: the engine's touch controls keep to it all the same; C and C++ can't read or feed it
+Ui::set_inside_safe_area         touch.md          # not bound yet: C and C++ UI roots are laid out in the whole window
 Waves::spectrum                  water.md          # seas from C use the Gerstner waves of PonkoWaterDesc; the spectrum (FFT) sea is not bound yet
 WaveSpectrum                     water.md          # the spectrum (FFT) sea is not bound yet: C and C++ describe Gerstner waves in PonkoWaterDesc
 CrowdLevel::with_fade            crowds.md         # C and C++ crowd levels switch at once: a fade in PonkoCrowdLevel would change its layout

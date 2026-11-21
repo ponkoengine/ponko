@@ -347,6 +347,12 @@ ctx.ui.show_hud(corner);
 C++: `tree.show_hud(root)`, `tree.hide_hud(root)` and `tree.is_hud(root)`;
 C: `ponko_ctx_ui_show_hud`, `ponko_ctx_ui_hide_hud` and `ponko_ctx_ui_is_hud`.
 
+On a phone, give a HUD or a screen `.inside_safe_area()` when it is made
+(`ctx.ui.set_inside_safe_area(root, true)`) and it is laid out clear of the
+notch, the home bar and the rounded corners, in `ctx.safe_area()`; see
+[Touch](touch.md#notches-home-bars-and-rounded-corners). Roots are laid out
+in the whole window by default (Rust-only so far).
+
 ## Events, navigation and ownership
 
 <div class="lang-pair">

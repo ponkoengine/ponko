@@ -260,6 +260,8 @@ pub struct Ctx {
     /// ```
     pub time: Time,
     window_size: Vec2,
+    /// What the platform covers of the window ([`safe_area`](Self::safe_area)).
+    safe_insets: crate::window::SafeInsets,
     /// Window requests and observed OS state; inert in headless runs.
     pub window: crate::window::WindowService,
     quit_requested: bool,
@@ -496,6 +498,7 @@ impl Ctx {
             gamepad_driver: Default::default(),
             time: Time::new(fixed_dt),
             window_size,
+            safe_insets: crate::window::SafeInsets::NONE,
             window: crate::window::WindowService::default(),
             quit_requested: false,
             camera: Camera2D::new(window_size),
@@ -509,7 +512,7 @@ impl Ctx {
             storage: crate::storage::Storage::default(),
         };
         // On-screen controls are placed for the window from the start.
-        ctx.input.touch.view = (window_size, 1.0);
+        ctx.input.touch.view = (Rect::new(0.0, 0.0, window_size.x, window_size.y), 1.0);
         #[cfg(feature = "3d")]
         ctx.sync_audio_camera();
         ctx
@@ -1481,6 +1484,43 @@ impl Ctx {
     /// ```
     pub fn window_size(&self) -> Vec2 {
         self.window_size
+    }
+
+    /// The part of the window nothing covers, in logical pixels (as
+    /// [`window_size`](Self::window_size)): the window less a phone's
+    /// notch or camera cutout, its home bar and rounded corners, where
+    /// the platform reports them (see [`SafeInsets`](crate::window::SafeInsets)).
+    /// The whole window where nothing covers it. Touch controls, the
+    /// arrange screen and UI roots made with
+    /// [`inside_safe_area`](crate::ui::UiBuilder::inside_safe_area) stay in it.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::window::SafeInsets;
+    /// Game::new("notch", 800, 400).run_headless(0, |ctx| {
+    ///     assert_eq!(ctx.safe_area().size(), vec2(800.0, 400.0), "nothing covered");
+    ///     // As a phone held sideways reports it: the notch left, the home bar below.
+    ///     ctx.feed_safe_insets(SafeInsets::new(0.0, 0.0, 21.0, 47.0));
+    ///     assert_eq!(ctx.safe_area(), Rect::new(47.0, 0.0, 753.0, 379.0));
+    /// });
+    /// ```
+    pub fn safe_area(&self) -> Rect {
+        self.safe_insets.area(self.window_size)
+    }
+
+    /// How far in from each window edge the platform covers it: what
+    /// [`safe_area`](Self::safe_area) leaves out.
+    pub fn safe_insets(&self) -> crate::window::SafeInsets {
+        self.safe_insets
+    }
+
+    /// Feeds the window's safe area insets, as the platform reports them:
+    /// a test of a notched phone, a platform layer of the game's own. The
+    /// engine feeds them itself where it reads them (the browser, on a
+    /// page with `viewport-fit=cover`), again whenever the window changes
+    /// size. Negative or not finite insets count as 0.
+    pub fn feed_safe_insets(&mut self, insets: crate::window::SafeInsets) {
+        self.safe_insets = insets.sanitized();
     }
 
     /// Closes the window and ends the game after this frame.

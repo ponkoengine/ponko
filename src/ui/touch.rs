@@ -41,6 +41,7 @@ pub use layout::{TouchAdjust, TouchLayout, TouchPlace, TouchStyle};
 
 use glam::{Vec2, vec2};
 
+use crate::camera::Rect;
 use crate::color::Color;
 use crate::ctx::Ctx;
 pub use crate::input::touch::TouchShow;
@@ -386,19 +387,20 @@ pub(crate) fn zones(controls: &TouchControls) -> Vec<Zone> {
         .collect()
 }
 
-/// Places `zones` (those of `controls`) for a window `window` pixels large
-/// at UI scale `scale`, in window pixels: where the engine lays them out,
-/// or where the game put them, or where the player moved them, at the
-/// sizes of their style and the player's layout, inside the view.
+/// Places `zones` (those of `controls`) in `area` of the window (its safe
+/// area, in window pixels) at UI scale `scale`, in window pixels: where the
+/// engine lays them out, or where the game put them, or where the player
+/// moved them, at the sizes of their style and the player's layout, inside
+/// the area. The view their places count from is the area.
 pub(crate) fn place_zones(
     controls: &TouchControls,
     layout: &TouchLayout,
     zones: &mut [Zone],
-    window: Vec2,
+    area: Rect,
     scale: f32,
 ) {
     let scale = scale.max(1e-3);
-    let view = window / scale;
+    let view = area.size() / scale;
     let spots = place(&controls.specs, view);
     for ((zone, spec), (centre, radius, reach)) in zones.iter_mut().zip(&controls.specs).zip(spots) {
         let action = spec.action();
@@ -410,16 +412,18 @@ pub(crate) fn place_zones(
             .place
             .or_else(|| controls.place_of(action))
             .map_or(centre, |p| p.centre(view));
-        zone.center = keep_inside(centre, radius, view) * scale;
+        zone.center = area.min + keep_inside(centre, radius, view) * scale;
         zone.radius = radius * scale;
         zone.reach = reach * scale;
     }
 }
 
 /// Where the centre of a control `radius` window pixels large dragged to
-/// `at` goes, in window pixels: inside the window.
-pub(crate) fn drag_to(at: Vec2, radius: f32, view: (Vec2, f32)) -> Vec2 {
-    keep_inside(at, radius, view.0)
+/// `at` goes, in window pixels: inside the area of the window the controls
+/// are placed in (`view.0`, its safe area).
+pub(crate) fn drag_to(at: Vec2, radius: f32, view: (Rect, f32)) -> Vec2 {
+    let area = view.0;
+    area.min + keep_inside(at - area.min, radius, area.size())
 }
 
 impl Ctx {
@@ -434,8 +438,9 @@ impl Ctx {
         let Some(root) = self.ui_state.touch.root else {
             return;
         };
-        // The window or the UI scale changed: place the zones again.
-        let view = (self.window_size(), self.ui.scale());
+        // The window, its safe area or the UI scale changed: place the
+        // zones again.
+        let view = (self.safe_area(), self.ui.scale());
         let touch = &mut self.input.touch;
         if touch.view != view {
             touch.view = view;
@@ -697,18 +702,48 @@ mod tests {
         // 100 left of and 80 above the bottom right corner, at UI scale 2.
         layout.adjust("jump").place = Some(TouchPlace::nearest_corner(vec2(380.0, 190.0), vec2(480.0, 270.0)));
         let mut zones = zones(&controls);
-        place_zones(&controls, &layout, &mut zones, vec2(960.0, 540.0), 2.0);
+        place_zones(&controls, &layout, &mut zones, Rect::new(0.0, 0.0, 960.0, 540.0), 2.0);
         assert_eq!(zones[1].center, vec2(760.0, 380.0));
         // The phone turns: the same distance from the same corner.
-        place_zones(&controls, &layout, &mut zones, vec2(540.0, 960.0), 2.0);
+        place_zones(&controls, &layout, &mut zones, Rect::new(0.0, 0.0, 540.0, 960.0), 2.0);
         assert_eq!(zones[1].center, vec2(340.0, 800.0));
         // A view too small for it: moved in.
-        place_zones(&controls, &layout, &mut zones, vec2(200.0, 200.0), 1.0);
+        place_zones(&controls, &layout, &mut zones, Rect::new(0.0, 0.0, 200.0, 200.0), 1.0);
         let (c, r) = (zones[1].center, zones[1].radius);
         assert!(
             c.x - r >= 0.0 && c.y - r >= 0.0 && c.x + r <= 200.0 && c.y + r <= 200.0,
             "{c} {r}"
         );
+    }
+
+    #[test]
+    fn controls_stay_in_the_safe_area_and_their_places_count_from_its_corners() {
+        let controls = TouchControls::new()
+            .stick("move")
+            .button("jump", "A")
+            .corner_button("pause", "II");
+        let mut layout = TouchLayout::default();
+        layout.adjust("jump").place = Some(TouchPlace::new(vec2(1.0, 1.0), vec2(-100.0, -80.0)));
+        let mut zones = zones(&controls);
+        // A phone held sideways at UI scale 2: a notch 60 pixels wide on
+        // the left, rounded corners as deep on the right, a home bar 40 tall.
+        let safe = Rect::new(60.0, 0.0, 840.0, 500.0);
+        place_zones(&controls, &layout, &mut zones, safe, 2.0);
+        for z in &zones {
+            let (c, r) = (z.center, z.radius);
+            assert!(
+                c.x - r >= safe.min.x && c.y - r >= safe.min.y && c.x + r <= safe.max.x && c.y + r <= safe.max.y,
+                "{}: {c} {r} outside {safe:?}",
+                z.action
+            );
+        }
+        assert_eq!(zones[1].center, vec2(700.0, 340.0), "from the safe area's corner");
+        // The stick keeps the margin it keeps from the window's corner from the safe area's.
+        let mut whole = super::zones(&controls);
+        place_zones(&controls, &layout, &mut whole, Rect::new(0.0, 0.0, 960.0, 540.0), 2.0);
+        assert!(zones[0].center.x > whole[0].center.x, "{} {}", zones[0].center, whole[0].center);
+        // Dragged into the notch, a control stops at its edge.
+        assert_eq!(drag_to(vec2(0.0, 540.0), 20.0, (safe, 2.0)), vec2(80.0, 480.0));
     }
 
     #[test]
@@ -729,9 +764,9 @@ mod tests {
         };
         layout.adjust("fire").size = 0.5;
         let mut zones = zones(&controls);
-        place_zones(&controls, &TouchLayout::default(), &mut zones, vec2(960.0, 540.0), 1.0);
+        place_zones(&controls, &TouchLayout::default(), &mut zones, Rect::new(0.0, 0.0, 960.0, 540.0), 1.0);
         let plain = zones[0].radius;
-        place_zones(&controls, &layout, &mut zones, vec2(960.0, 540.0), 1.0);
+        place_zones(&controls, &layout, &mut zones, Rect::new(0.0, 0.0, 960.0, 540.0), 1.0);
         assert!((zones[0].radius - plain * 1.5).abs() < 1e-4);
         assert!((zones[1].radius - plain * 2.0 * 1.5 * 0.5).abs() < 1e-4);
         assert!(zones[1].reach >= zones[1].radius);
