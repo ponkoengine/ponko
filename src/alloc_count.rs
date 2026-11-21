@@ -175,7 +175,7 @@ mod tests {
         // freed once with the layout it has.
         unsafe {
             let p = a.alloc(layout);
-            assert!(!p.is_null() && p as usize % 16 == 0);
+            assert!(!p.is_null() && (p as usize).is_multiple_of(16));
             p.write_bytes(7, 64);
             let p = a.realloc(p, layout, 128);
             assert!(!p.is_null());

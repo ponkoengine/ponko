@@ -11,7 +11,9 @@
   bytes (reflection, world hashes, C events), hierarchies, the retained 3D
   frame's parallel compare and `Ui` across threads. New tests cover what had
   none: `the_counting_allocator_forwards_every_call_to_the_system_allocator`,
-  `many_sprites_are_queued_once_each_from_many_threads` and `tests/ui_threads.rs`.
+  `many_sprites_are_queued_once_each_from_many_threads`, the retained 3D frame's
+  `instances_written_as_shared_words_from_several_threads_are_all_kept` and
+  `tests/ui_threads.rs`.
 - The C and C++ test programs build with AddressSanitizer and
   UndefinedBehaviorSanitizer (`-DPONKO_SANITIZE=ON` in `examples/cpp`), and the
   `ponko_ffi` tests run with AddressSanitizer; the commands are in
