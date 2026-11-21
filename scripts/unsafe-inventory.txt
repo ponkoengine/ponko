@@ -8,8 +8,10 @@
 #
 # Format: <path> | <item> | <test file>::<test fn> | <miri>
 # <miri>: miri (the test runs under Miri), miri(<features>), or why it can't:
-# c-library, gpu, os, windows, macos, wasm, window, sanitizers. The Miri
-# commands come from this file: python3 scripts/check-unsafe.py --miri.
+# c-library, gpu, os, windows, macos, wasm, window (a check a person runs, in
+# a real window), sanitizers. A check of a test program without the harness
+# (`harness = false`) is named like a test. The Miri commands come from this
+# file: python3 scripts/check-unsafe.py --miri.
 
 # ---- The engine --------------------------------------------------------------
 
@@ -99,10 +101,12 @@ src/three/gltf_ext.rs | decode_meshopt | src/three/gltf_ext.rs::meshopt_compress
 # The GPU: Metal's own memory figure (an offscreen GPU test).
 src/render/memory.rs | metal_allocated_bytes | src/render/gpu_memory_render_test.rs::adapter_figure_child | gpu
 
-# Screen readers: the platform adapters attach to a real window's view.
-src/ui/access_native.rs | UiAccessAdapter::for_ns_view | - | window
-src/ui/access_native.rs | UiAccessAdapter::for_hwnd | - | window
-src/ui/access_native.rs | for_window | - | window
+# Screen readers: the platform adapters attach to a view (macOS) or a window
+# (Windows): one with no window, one never shown, and, for the engine's own
+# window, a check a person runs (`-- --ignored`), offscreen.
+src/ui/access_native.rs | UiAccessAdapter::for_ns_view | tests/ui_access_macos.rs::nothing_is_built_until_assistive_technology_asks | macos
+src/ui/access_native.rs | UiAccessAdapter::for_hwnd | tests/ui_access_platforms.rs::the_sample_menu_is_read_and_operated_through_ui_automation | windows
+src/ui/access_native.rs | for_window | tests/ui_access_window.rs::the_engine_window_answers_the_system_through_its_adapter_offscreen | window
 
 # The threaded web build: worker threads and their mailbox (wasm only), run
 # by the browser smoke test of the threaded build.

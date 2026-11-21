@@ -20,17 +20,18 @@ has one line in scripts/unsafe-inventory.txt:
 
     <path> | <item> | <test> | <miri>
 
-<test> is `<test file>::<test function>` (a Rust test, or a function of a C
-or C++ test program in examples/cpp; `<file>::<module>::<function>` for a
-test a macro makes in a module) or a browser runner (`web/smoke/*.mjs`), and
-must exist. <miri> is `miri` (the
+<test> is `<test file>::<test function>` (a Rust test, a check of a test
+program without the harness (`harness = false` in Cargo.toml: any function
+of the file), or a function of a C or C++ test program in examples/cpp;
+`<file>::<module>::<function>` for a test a macro makes in a module) or a
+browser runner (`web/smoke/*.mjs`), and must exist. <miri> is `miri` (the
 test runs under Miri: no GPU, window, audio device or C library),
 `miri(<features>)` (the same, with those engine features on), or the reason
 it can't: `c-library` (it calls a C library), `gpu`, `os` (signals, sockets,
 processes), `windows`, `macos`, `wasm`, `window` (a real window) or
 `sanitizers` (C API code, run under AddressSanitizer with the C and C++ test
-programs instead). Only code that needs a real window may have `-` for its
-test, with `window`: nothing headless can run it.
+programs instead). `window` is a check a person runs, in a real window
+(the guide's "Unsafe code" lists them).
 The check fails for an unsafe item without a line (with the line to add), a
 line whose item has no unsafe code any more, a test that does not exist, and
 a malformed line.
@@ -460,6 +461,27 @@ def split_test(test):
     return m.group(1), [x for x in m.group(2).split('::') if x], m.group(3)
 
 
+def harnessless_tests():
+    """The files of test programs without the test harness (`[[test]]` with
+    `harness = false` in a Cargo.toml): their checks are plain functions."""
+    found = set()
+    for manifest in [ROOT / 'Cargo.toml'] + sorted((ROOT / 'crates').glob('*/Cargo.toml')):
+        text = manifest.read_text()
+        for block in re.split(r'^\[', text, flags=re.MULTILINE):
+            if not block.startswith('[test]]') or not re.search(r'^harness\s*=\s*false', block, re.MULTILINE):
+                continue
+            name = re.search(r'^name\s*=\s*"([^"]+)"', block, re.MULTILINE)
+            path = re.search(r'^path\s*=\s*"([^"]+)"', block, re.MULTILINE)
+            if path:
+                file = manifest.parent / path.group(1)
+            elif name:
+                file = manifest.parent / 'tests' / f'{name.group(1)}.rs'
+            else:
+                continue
+            found.add(file.relative_to(ROOT).as_posix())
+    return found
+
+
 def test_exists(test):
     """None if `<file>::<test fn>` names a test function, else the problem.
     In a Rust file the function is a `#[test]`, or one that a macro of the
@@ -475,6 +497,10 @@ def test_exists(test):
     if not path.is_file():
         return f'{file} does not exist'
     code = code_only(path.read_text())
+    if file in harnessless_tests():
+        if re.search(rf'\bfn\s+{re.escape(name)}\s*[(<]', code):
+            return None
+        return f'no check {name} in {file} (a test program without the harness)'
     if not file.endswith('.rs'):
         if any(n == name for n, _s, _e in c_functions(code)):
             return None
@@ -505,12 +531,12 @@ def check():
     for key in sorted(entries.keys() - sites.keys()):
         path, item = key
         problems.append(f'{INVENTORY.name}:{entries[key][2]}: {path} | {item} has no unsafe code any more; remove the line.')
+    harnessless = harnessless_tests()
     for key, (test, miri, number) in sorted(entries.items(), key=lambda kv: kv[1][2]):
-        if test == '-':
-            if miri != 'window':
-                problems.append(f'{INVENTORY.name}:{number}: {key[0]} | {key[1]}: only code that needs a real window may go without a test')
-            continue
         problem = test_exists(test)
+        if not problem and miri.startswith('miri') and (split_test(test) or ('',))[0] in harnessless:
+            problem = ('a check of a test program without the harness is not run under Miri by name: '
+                       'give the reason it cannot run instead')
         if problem:
             problems.append(f'{INVENTORY.name}:{number}: {key[0]} | {key[1]}: {problem}')
     for p in problems:

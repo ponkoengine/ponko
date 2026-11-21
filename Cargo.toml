@@ -508,6 +508,13 @@ video = ["dep:matroska-demuxer", "dep:rav1d", "symphonia?/mkv"]
 name = "ui_access_macos"
 harness = false
 
+# The adapter on the engine's own window, which a person runs with
+# `-- --ignored`: winit and AppKit need the main thread, so it is a program
+# without the test harness too. Does nothing on Linux and the web.
+[[test]]
+name = "ui_access_window"
+harness = false
+
 [[example]]
 name = "physics"
 required-features = ["physics"]
