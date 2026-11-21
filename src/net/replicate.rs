@@ -307,7 +307,10 @@ pub struct PeerStats {
     pub packets_acked: u64,
     /// State packets never acknowledged within the window of 64.
     pub packets_lost: u64,
-    /// Entity records sent (creates, full states and deltas).
+    /// Entity records sent (creates, full states and deltas). A change goes
+    /// once; it goes again only if the client hasn't acknowledged it within
+    /// the resend timeout (the measured round trip plus a margin), or if it
+    /// changed again meanwhile.
     pub records_sent: u64,
     /// Spawns sent.
     pub creates_sent: u64,
@@ -315,7 +318,8 @@ pub struct PeerStats {
     pub fulls_sent: u64,
     /// Deltas against an acknowledged baseline.
     pub deltas_sent: u64,
-    /// Despawns sent (repeated until acknowledged).
+    /// Despawns sent (repeated after the resend timeout until
+    /// acknowledged).
     pub destroys_sent: u64,
     /// Changed entities left for a later tick by the budget, summed over
     /// ticks.
@@ -623,7 +627,7 @@ impl Inner {
                 } else {
                     let _ = self
                         .server
-                        .receive(peer, &bytes, self.stride, self.inputs.as_deref_mut());
+                        .receive(peer, &bytes, self.stride, self.tick, self.inputs.as_deref_mut());
                 }
             }
         }
@@ -1336,6 +1340,13 @@ impl Replication {
             (ReplicationRole::Server, endpoint) => inner.server_end(endpoint, world),
             _ => {}
         }
+    }
+
+    /// Server: the round trip to `peer` the resend timeout is set by, in
+    /// ticks (smoothed).
+    #[cfg(test)]
+    pub(crate) fn peer_rtt_ticks(&self, peer: PeerId) -> Option<f32> {
+        self.inner.as_ref()?.server.clients.get(&peer)?.rtt_ticks()
     }
 
     /// Server: the ids waiting to be read in full.

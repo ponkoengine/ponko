@@ -27,6 +27,8 @@
 //! | A write the world can't see still arrives, within a sweep | `writes_the_world_cannot_see_arrive_within_a_sweep` |
 //! | A world the game replaced is read in full | `a_replaced_world_is_read_in_full` |
 //! | A server without clients keeps nothing pending, and its first client gets everything | `a_server_without_clients_keeps_nothing_pending` |
+//! | A change is sent once; while its acknowledgement is on the way it isn't sent again | `a_change_is_sent_once_while_its_acknowledgement_is_on_the_way` |
+//! | What isn't acknowledged in time (changes, despawns) is sent again after the resend timeout, not every tick, and arrives once the link is back | `unacknowledged_changes_are_resent_after_the_timeout_not_every_tick` |
 //!
 //! Over every transport the message protocol lists:
 //!
@@ -1066,5 +1068,76 @@ fn a_server_without_clients_keeps_nothing_pending() {
     }
     s.join(200);
     s.run(60, |_, _| {});
+    assert_converged(&mut s, |_, _, _| true);
+}
+
+/// Records the server sent client `client` so far.
+fn records_to(s: &Session, client: usize) -> u64 {
+    s.sides[0].rep.peer_stats(s.me(client)).expect("joined").records_sent
+}
+
+#[test]
+fn a_change_is_sent_once_while_its_acknowledgement_is_on_the_way() {
+    // Six ticks each way: an acknowledgement is back twelve ticks after
+    // its packet left.
+    let mut s = Session::scripted(1, declarations, |n| n.delay = 6);
+    spawn_crowd(&mut s.sides[0].world, 20);
+    s.join(400);
+    s.run(120, |_, _| {});
+    let rtt = s.sides[0].rep.peer_rtt_ticks(s.me(1)).expect("measured");
+    assert!((11.0..=14.0).contains(&rtt), "round trip {rtt} ticks");
+    let movers: Vec<Entity> = originals(&mut s.sides[0].world).into_values().take(5).collect();
+    let before = records_to(&s, 1);
+    // Five entities change once every 30 ticks, ten times.
+    for round in 0..10 {
+        s.step(|i, side| {
+            if i == 0 {
+                for &e in &movers {
+                    side.world.get_mut::<Pos>(e).unwrap().at.x += 1.0 + round as f32;
+                }
+            }
+        });
+        s.run(29, |_, _| {});
+    }
+    // Sending every tick until acknowledged would have sent each change
+    // about twelve times.
+    assert_eq!(records_to(&s, 1) - before, 5 * 10, "each change went once");
+    assert_converged(&mut s, |_, _, _| true);
+}
+
+#[test]
+fn unacknowledged_changes_are_resent_after_the_timeout_not_every_tick() {
+    let mut s = Session::scripted(1, declarations, |n| n.delay = 3);
+    spawn_crowd(&mut s.sides[0].world, 20);
+    s.join(400);
+    s.run(120, |_, _| {});
+    let crowd: Vec<Entity> = originals(&mut s.sides[0].world).into_values().collect();
+    let peer = s.me(1);
+    let before = s.sides[0].rep.peer_stats(peer).unwrap();
+    // The link goes down; five entities change once and one dies.
+    s.net.as_ref().unwrap().lock().unwrap().cut = true;
+    s.step(|i, side| {
+        if i == 0 {
+            for &e in &crowd[..5] {
+                side.world.get_mut::<Pos>(e).unwrap().at.y += 50.0;
+            }
+            side.world.despawn(crowd[19]);
+        }
+    });
+    let ticks = 60;
+    s.run(ticks - 1, |_, _| {});
+    let after = s.sides[0].rep.peer_stats(peer).unwrap();
+    let records = after.records_sent - before.records_sent;
+    let destroys = after.destroys_sent - before.destroys_sent;
+    // A round trip of six ticks: resent about every seventh tick, not
+    // in each of the 60 ticks (which would be 300 records, 60 despawns).
+    assert!(
+        (5 * 5..=5 * 12).contains(&records),
+        "{records} records in {ticks} ticks"
+    );
+    assert!((5..=12).contains(&destroys), "{destroys} despawns in {ticks} ticks");
+    // Back up: everything arrives.
+    s.net.as_ref().unwrap().lock().unwrap().cut = false;
+    s.run(30, |_, _| {});
     assert_converged(&mut s, |_, _, _| true);
 }
