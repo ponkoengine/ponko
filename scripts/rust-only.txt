@@ -64,6 +64,7 @@ AssetGroup::with_sliced          loading.md        # C and C++ groups take the f
 SliceLoader                      loading.md        # the same: no sliced loaders from C yet
 CameraTarget                     camera-ui.md      # C and C++ keep the rig descriptor and update it once a frame (ponko_follow_camera2d_update, the 3D rigs' update calls)
 TouchLayout                      touch.md          # C and C++ set the controls (ponko_ctx_set_touch_controls); the player's saved layout, its edit mode, styles and trackpad events are not bound yet
+Input::arrange_touch_controls     touch.md          # not bound yet: C and C++ games build an arrange screen of their own; the edit mode and saved layout are Rust-only too
 CrashReports                     crash-reports.md  # not bound yet: a native game installs its own handler and writes its own report
 Game::restore_window_settings    window.md         # C and C++ games call ponko_ctx_window_restore_settings in setup; the window can show at its default size first
 Waves::spectrum                  water.md          # seas from C use the Gerstner waves of PonkoWaterDesc; the spectrum (FFT) sea is not bound yet
