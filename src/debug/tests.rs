@@ -541,6 +541,22 @@ fn the_collider_view_draws_terrain_triangles_scaled_with_its_tile() {
     );
     let reach = scaled.iter().flat_map(|l| [l.a.x, l.b.x]).fold(f32::MIN, f32::max);
     assert!(reach > 5.0 && reach < 6.0 + 5.0, "{reach}");
+    // Mirrored along X from a corner at x = 32: drawn over x from -32 to
+    // 32, sloping up towards -X, as its collider is.
+    c.world.clear();
+    let mirrored = crate::d3::Transform {
+        scale: vec3(-1.0, 1.0, 1.0),
+        ..crate::d3::Transform::at(vec3(32.0, -1.0, -32.0))
+    };
+    c.world.spawn((mirrored, crate::d3::TerrainCollider::new(ground)));
+    let lines = collider_lines(&mut c, vec3(4.0, 0.0, 0.0), 6.0);
+    assert!(!lines.is_empty());
+    for l in &lines {
+        for p in [l.a, l.b] {
+            let column = (32.0 - p.x) / 2.0;
+            assert!(p.x <= 32.0 + 1e-3 && (p.y - (-1.0 + column * 0.05)).abs() < 1e-3, "{p}");
+        }
+    }
 }
 
 #[cfg(feature = "navmesh")]

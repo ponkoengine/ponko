@@ -224,7 +224,7 @@ pub struct Ctx {
     /// plugins' names, from the builder.
     pub(crate) extensions: crate::control::GameExtensions,
     /// Where gamepads come from (`Game::gamepad_backend`, or gilrs in a
-    /// window), polled in `begin_frame`.
+    /// window; the browser's gamepads on the web), polled in `begin_frame`.
     pub(crate) gamepad_driver: crate::input::backend::GamepadDriver,
     /// `true` while the game's setup (and plugins' setups) run.
     in_setup: bool,
@@ -508,8 +508,9 @@ impl Ctx {
             debug: crate::debug::DebugDraw::default(),
             storage: crate::storage::Storage::default(),
         };
+        ctx.window.set_logical_size(window_size);
         // On-screen controls are placed for the window from the start.
-        ctx.input.touch.view = (window_size, 1.0);
+        ctx.input.touch.view = (Rect::new(0.0, 0.0, window_size.x, window_size.y), 1.0);
         #[cfg(feature = "3d")]
         ctx.sync_audio_camera();
         ctx
@@ -731,6 +732,7 @@ impl Ctx {
 
     pub(crate) fn set_window_size(&mut self, size: Vec2) {
         self.window_size = size;
+        self.window.set_logical_size(size);
         self.place_cameras();
     }
 

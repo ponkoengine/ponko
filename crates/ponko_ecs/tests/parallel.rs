@@ -256,10 +256,12 @@ fn cached_parallel_chunks_follow_growth_and_preserve_order() {
 
 // ---- the work plan across archetypes of every size ---------------------------
 
-/// Rows per parallel chunk at least (`PAR_MIN_CHUNK`). A query over small
-/// archetypes only times its first chunk of rows on the calling thread and
-/// runs the rest in parallel unless the whole query would take under 50 µs.
+/// Rows per parallel chunk at least (`PAR_MIN_CHUNK`). A query of more
+/// than one chunk times its first rows on the calling thread and runs the
+/// rest in parallel unless the whole query would take under 50 µs.
 const MIN_CHUNK: usize = if cfg!(miri) { 64 } else { 512 };
+/// Rows timed first (`PAR_PROBE_FIRST`): slow rows go parallel after these.
+const PROBE_FIRST: usize = 64;
 
 /// Asserts that a query over `n` rows reaches worker threads: more than four
 /// chunks, so at least three parallel chunks remain after the timed first
@@ -700,8 +702,8 @@ fn a_slow_query_over_tiny_archetypes_runs_on_more_than_one_thread() {
     let here = std::thread::current().id();
     let rows_here = std::sync::atomic::AtomicUsize::new(0);
     // At least 2 µs per entity (a lower bound: a paused thread only spins
-    // longer), so the timed first chunk projects the query far over the
-    // serial budget. That chunk runs here, on the test's own thread, which
+    // longer), so the first timed rows project the query far over the
+    // serial budget. Those rows run here, on the test's own thread, which
     // is not one of the pool's, and every later row goes to the pool: rows
     // land on more than one thread however late the workers wake.
     w.query::<&Id>().par_for_each(|_| {
@@ -716,8 +718,8 @@ fn a_slow_query_over_tiny_archetypes_runs_on_more_than_one_thread() {
     });
     assert_eq!(
         rows_here.into_inner(),
-        MIN_CHUNK,
-        "only the timed first chunk runs on the calling thread"
+        PROBE_FIRST,
+        "only the first timed rows run on the calling thread"
     );
     let threads = threads.into_inner().unwrap().len();
     assert!(threads > 1, "{threads} thread ran {n} rows of slow work");
@@ -793,8 +795,8 @@ fn parallel_option_fetches_see_exactly_the_components_each_archetype_has() {
     let got: Vec<u32> = out.iter().map(|a| a.load(Ordering::Relaxed)).collect();
     assert_eq!(got, order);
 
-    // Two options, also spread over nested tuples (split loops), and three
-    // (one loop that tests each row): collected in query order.
+    // Two to four options, also spread over nested tuples (split loops),
+    // and five (one loop that tests each row): collected in query order.
     let mut two = Vec::new();
     w.query::<(&Id, Option<&Opt<1>>, Option<&Opt<3>>)>()
         .par_collect_into(&mut two, |(id, a, b)| {
@@ -813,7 +815,37 @@ fn parallel_option_fetches_see_exactly_the_components_each_archetype_has() {
                 packed(&[a.map(|o| o.0), b.map(|o| o.0), c.map(|o| o.0)], id.0 as u32),
             )
         });
-    for (got, bits) in [(&two, &[1, 3][..]), (&nested, &[3, 0]), (&three, &[0, 1, 2])] {
+    let mut four = Vec::new();
+    w.query::<(
+        (&Id, Option<&Opt<2>>),
+        Option<&Opt<0>>,
+        (Option<&Opt<3>>, Option<&Opt<1>>),
+    )>()
+    .par_collect_into(&mut four, |((id, a), b, (c, d))| {
+        let all = [a.map(|o| o.0), b.map(|o| o.0), c.map(|o| o.0), d.map(|o| o.0)];
+        ((id.0 as u32), packed(&all, id.0 as u32))
+    });
+    let mut five = Vec::new();
+    w.query::<(
+        &Id,
+        Option<&Opt<0>>,
+        Option<&Opt<1>>,
+        Option<&Opt<2>>,
+        Option<&Opt<3>>,
+        Option<&Id>,
+    )>()
+    .par_collect_into(&mut five, |(id, a, b, c, d, again)| {
+        assert_eq!(again, Some(id));
+        let all = [a.map(|o| o.0), b.map(|o| o.0), c.map(|o| o.0), d.map(|o| o.0)];
+        ((id.0 as u32), packed(&all, id.0 as u32))
+    });
+    for (got, bits) in [
+        (&two, &[1, 3][..]),
+        (&nested, &[3, 0]),
+        (&three, &[0, 1, 2]),
+        (&four, &[2, 0, 3, 1]),
+        (&five, &[0, 1, 2, 3]),
+    ] {
         assert_eq!(got.len(), n);
         let ids: Vec<u32> = got.iter().map(|x| x.0).collect();
         assert_eq!(ids, order, "the sequential order");

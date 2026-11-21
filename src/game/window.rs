@@ -362,6 +362,10 @@ where
         crate::crash::note_gpu(&mut self.ctx);
         self.ctx.set_window_size(Self::logical_window_size(&window));
         self.ctx.set_scale_factor(window.scale_factor() as f32);
+        #[cfg(target_arch = "wasm32")]
+        self.ctx
+            .window
+            .feed_safe_insets(crate::window::web_safe_insets(&window));
         // Edit mode (`ponko editor`): the inspector's panels are the window.
         #[cfg(feature = "editor")]
         let edit_mode = crate::inspector::app::requested();
@@ -393,13 +397,13 @@ where
 
         // The built-in controllers, unless the game brought its own backend
         // (setup can still replace them with `set_gamepad_backend`).
-        #[cfg(all(feature = "gamepad", not(all(target_arch = "wasm32", target_feature = "atomics"))))]
+        #[cfg(all(feature = "gamepad", not(target_arch = "wasm32")))]
         if !self.ctx.has_gamepad_backend() {
             self.ctx.set_gamepad_backend(crate::gamepad::GilrsBackend::new());
         }
-        // With threads on the web, the browser's gamepads read on the page's
-        // thread, which keeps no browser object (see `gamepad_web`).
-        #[cfg(all(feature = "gamepad", target_arch = "wasm32", target_feature = "atomics"))]
+        // On the web, the browser's gamepads read on the page's thread,
+        // keeping no browser object (see `gamepad_web`).
+        #[cfg(all(feature = "gamepad", target_arch = "wasm32"))]
         if !self.ctx.has_gamepad_backend() {
             self.ctx
                 .set_gamepad_backend(crate::gamepad_web::WebGamepads::new(crate::gamepad_web::BrowserPads));
@@ -683,6 +687,11 @@ where
                     self.ctx.set_window_size(Self::logical_window_size(&window));
                 }
                 self.ctx.set_scale_factor(window.scale_factor() as f32);
+                // Turning the phone moves the notch.
+                #[cfg(target_arch = "wasm32")]
+                self.ctx
+                    .window
+                    .feed_safe_insets(crate::window::web_safe_insets(&window));
                 window.request_redraw();
             }
 

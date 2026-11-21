@@ -74,6 +74,7 @@ impl Ctx {
         input.preedit_cursor = self.input.preedit_cursor();
         input.composing = self.input.composing();
         self.ui.pixels = self.gfx.scale_factor;
+        self.ui.safe_area = Some(self.window.safe_area());
         self.ui.frame_with_text(self.window_size(), &input, &mut self.gfx.text);
         self.ui_state.retained_input_text = input.text;
         self.ui_state.retained_preedit = input.preedit;
@@ -250,6 +251,7 @@ impl Ctx {
         let mut input = self.retained_input(&self.ui, text);
         input.dt = dt;
         self.ui.pixels = self.gfx.scale_factor;
+        self.ui.safe_area = Some(self.window.safe_area());
         self.ui.frame_with_text(self.window_size(), &input, &mut self.gfx.text);
         self.ui_state.retained_input_text = input.text;
     }
@@ -501,10 +503,10 @@ impl Ctx {
         let focused = at.is_some() && ui.focus == Some(id);
         let width = text_rect.size().x;
         let glyph_key = (!cache.off && !focused).then(|| GlyphKey {
-            // Plain text that doesn't wrap is aligned in its width as it is
-            // placed: the width of a node that moves may change in its last
-            // bits without laying it out again.
-            width: if n.paint.wrap || n.rich().is_some() { width } else { 0.0 },
+            // Text that doesn't wrap, plain or rich, is aligned in its
+            // width as it is placed: the width of a node that moves may
+            // change in its last bits without laying it out again.
+            width: if n.paint.wrap { width } else { 0.0 },
             font: n.paint.font,
             size: font_size,
             wrap: n.paint.wrap,
@@ -699,8 +701,10 @@ impl Ctx {
     }
 
     /// Lays a rich node's text ([`crate::ui::Ui::set_rich`]) out into
-    /// `out` (emptied) in a box `width` wide: its runs and images, each
-    /// run's glyphs, for [`push_rich`](Self::push_rich) to draw.
+    /// `out` (emptied), wrapped (if it wraps) in a box `width` wide: its
+    /// runs and images, each run's glyphs, for [`push_rich`](Self::push_rich)
+    /// to draw. Its lines start at the box's left edge: they are aligned
+    /// where they are placed.
     fn lay_out_rich(
         &mut self,
         rich: &super::rich::RichText,
@@ -712,7 +716,7 @@ impl Ctx {
         let base = rich_base(paint, scale, self.gfx.scale_factor);
         let align = super::rich::Align {
             align: paint.align,
-            width,
+            width: None,
             directional: true,
         };
         let wrap = paint.wrap.then_some(width);
@@ -731,8 +735,9 @@ impl Ctx {
         self.ui_state.rich_layout = layout;
     }
 
-    /// Draws a rich node's text laid out in `glyphs` in `rect`: each run in
-    /// its color (`paint`'s where it has none), its images, underlines.
+    /// Draws a rich node's text laid out in `glyphs` in `rect`, its lines
+    /// aligned in its width: each run in its color (`paint`'s where it has
+    /// none), its images, underlines.
     fn push_rich(
         &mut self,
         rich: &super::rich::RichText,
@@ -748,7 +753,7 @@ impl Ctx {
             let span = &rich.spans[item.span as usize];
             let (font, size) = rich.font_size(span, base);
             let color = span.style.color.unwrap_or(paint.color);
-            let at = rect.min + item.at;
+            let at = rect.min + Vec2::new(item.at.x + item.line_x(rect.size().x), item.at.y);
             if let Some(image) = span.image {
                 // Images keep their own colors, and their edges go on
                 // physical pixels like the text around them.
@@ -1790,6 +1795,114 @@ mod tests {
             let before = layouts(&ctx);
             same_as_drawn_anew(&mut ctx, &still, &what);
             assert!(layouts(&ctx) > before, "{what}: new text is laid out");
+        }
+    }
+
+    #[test]
+    fn rich_text_moved_sideways_keeps_its_glyphs() {
+        use crate::ui::UiTextAlign;
+        const MARKUP: &str = "[color=#ff0]Gold[/color] [img=coin] [b]x3[/b] [u]each[/u]";
+        for (pixels, scale) in SCALES {
+            let mut ctx = ctx();
+            ctx.set_scale_factor(pixels);
+            ctx.ui.set_scale(scale);
+            ctx.ui.set_inline_image("coin", Texture::new(10, 32, 32));
+            let ui = &mut ctx.ui;
+            let menu = ui.root().layout(UiLayout::centered(460.0, 300.0).gap(4.0)).id();
+            // Rows of a panel that is resized and a rich label it pushes
+            // along: in a box wider than its text, aligned each way, a
+            // right-to-left one, and one as wide as its text.
+            let mut grows = Vec::new();
+            let mut labels = Vec::new();
+            let boxes = [
+                (MARKUP, UiTextAlign::Start, Some(260.3)),
+                (MARKUP, UiTextAlign::Center, Some(260.3)),
+                (MARKUP, UiTextAlign::End, Some(260.3)),
+                (
+                    "[color=#ff0]\u{5e9}\u{5dc}\u{5d5}\u{5dd}[/color] [img=coin]",
+                    UiTextAlign::Start,
+                    Some(260.3),
+                ),
+                (MARKUP, UiTextAlign::Start, None),
+            ];
+            for (markup, align, width) in boxes {
+                let row = ui.panel(menu).layout(UiLayout::row(28.0).gap(6.0)).id();
+                grows.push(ui.panel(row).layout(UiLayout::fixed(40.0, 20.0)).id());
+                let layout = width.map_or(UiLayout::auto(), |w| UiLayout::fixed(w, 24.0));
+                labels.push(ui.label(row, markup).rich().align(align).layout(layout).id());
+            }
+            ui.push_modeless(menu);
+            let what = format!("scale factor {pixels}, UI scale {scale}");
+            let still = UiInput::default();
+            same_as_drawn_anew(&mut ctx, &still, &what);
+            let at = |ctx: &Ctx| labels.iter().map(|&l| ctx.ui.rect(l).unwrap()).collect::<Vec<_>>();
+            for width in [41.3, 55.7, 40.0, 63.15, 47.9] {
+                let before_rects = at(&ctx);
+                for &grow in &grows {
+                    ctx.ui.set_layout(grow, UiLayout::fixed(width, 20.0));
+                }
+                let before = layouts(&ctx);
+                let (redrawn, ..) = frame(&mut ctx, &still);
+                assert!(redrawn >= 10, "{what}: the panels and the labels: {redrawn}");
+                assert_eq!(layouts(&ctx), before, "{what}: pushed by {width}: no text laid out");
+                for (was, now) in before_rects.iter().zip(at(&ctx)) {
+                    assert_ne!(was.min.x, now.min.x, "{what}: every label moved sideways");
+                }
+                same_as_drawn_anew(&mut ctx, &still, &what);
+            }
+            // The control: drawn with nothing kept, the same move lays
+            // every label's text out.
+            ctx.ui.draw_cache.off = true;
+            for &grow in &grows {
+                ctx.ui.set_layout(grow, UiLayout::fixed(52.4, 20.0));
+            }
+            let before = layouts(&ctx);
+            frame(&mut ctx, &still);
+            assert!(
+                layouts(&ctx) - before >= labels.len() as u64,
+                "{what}: drawn anew, the labels are laid out"
+            );
+            ctx.ui.draw_cache.off = false;
+            // Another alignment is laid out again.
+            let mut paint = ctx.ui.paint(labels[0]).unwrap();
+            paint.align = UiTextAlign::End;
+            ctx.ui.set_paint(labels[0], paint);
+            let before = layouts(&ctx);
+            same_as_drawn_anew(&mut ctx, &still, &what);
+            assert!(layouts(&ctx) > before, "{what}: a new alignment is laid out");
+        }
+    }
+
+    #[test]
+    fn a_row_resized_back_and_forth_draws_what_drawing_anew_gives() {
+        for (pixels, scale) in SCALES {
+            let mut ctx = ctx();
+            ctx.set_scale_factor(pixels);
+            ctx.ui.set_scale(scale);
+            let ui = &mut ctx.ui;
+            let menu = ui.root().layout(UiLayout::centered(420.0, 300.0)).id();
+            let row = ui.panel(menu).layout(UiLayout::row(160.0).gap(6.0)).id();
+            let panel = ui.panel(row).layout(UiLayout::fixed(40.0, 20.0)).id();
+            ui.label(row, "[color=#ff0]Gold[/color] [b]x3[/b]")
+                .rich()
+                .align(crate::ui::UiTextAlign::Center)
+                .layout(UiLayout::fixed(90.0, 24.0));
+            ui.label(row, "A paragraph long enough to wrap onto a few lines in the row.")
+                .wrap()
+                .layout(UiLayout::auto().grow(1.0));
+            ui.label(row, "[u]Rich[/u] text long enough to wrap onto lines too.")
+                .rich()
+                .wrap()
+                .layout(UiLayout::auto().grow(1.0));
+            ui.push_modeless(menu);
+            let what = format!("scale factor {pixels}, UI scale {scale}");
+            let still = UiInput::default();
+            same_as_drawn_anew(&mut ctx, &still, &what);
+            for round in 0..6 {
+                let width = [40.0, 64.3][round % 2];
+                ctx.ui.set_layout(panel, UiLayout::fixed(width, 20.0));
+                same_as_drawn_anew(&mut ctx, &still, &format!("{what}, {width} wide"));
+            }
         }
     }
 

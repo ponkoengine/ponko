@@ -347,6 +347,12 @@ ctx.ui.show_hud(corner);
 C++: `tree.show_hud(root)`, `tree.hide_hud(root)` and `tree.is_hud(root)`;
 C: `ponko_ctx_ui_show_hud`, `ponko_ctx_ui_hide_hud` and `ponko_ctx_ui_is_hud`.
 
+On a phone, give a HUD or a screen `.inside_safe_area()` when it is made
+(`ctx.ui.set_inside_safe_area(root, true)`) and it is laid out clear of the
+notch, the home bar and the rounded corners, in `ctx.window.safe_area()`; see
+[Touch](touch.md#notches-home-bars-and-rounded-corners). Roots are laid out
+in the whole window by default (Rust-only so far).
+
 ## Events, navigation and ownership
 
 <div class="lang-pair">
@@ -640,6 +646,16 @@ view. The tooltip and an item dragged with the pointer lay their text out
 once, not on each frame they follow the pointer. Only a focused text field
 measures its caret and selection each time it is drawn.
 
+Text that doesn't wrap, plain or rich, is aligned in its box's width as it
+is placed, so its width is not part of what its glyphs are kept for: a
+label pushed sideways, whose width changes in its last bits as it moves,
+or a centred label in a box that grows, keeps them. Wrapped text breaks its
+lines at its width, so it is laid out again when its width changes. Its
+size is measured for the layout once per width, though: the layout keeps a
+wrapped label's height at the last four widths it was offered, so a label
+in a row whose sibling resizes back and forth is not measured again for a
+width it has had.
+
 The `ui/draw-...` benchmarks of `ponko_bench` time the UI's frame and draw
 list for the same HUD and settings screen, with every glyph pushed as with
 a GPU. A frame of the settings screen fading went from about 0.20 ms to
@@ -647,7 +663,11 @@ a GPU. A frame of the settings screen fading went from about 0.20 ms to
 0.027 ms, and one where a HUD slot is added or removed from 0.21 ms to
 0.027 ms; a still frame costs about 0.024 ms. A frame with the settings
 screen's list scrolling a fraction of a pixel went from about 0.074 ms to
-0.028 ms once moved text kept its glyphs.
+0.028 ms once moved text kept its glyphs. In `ui/draw-resize`, a panel in a
+row of the settings screen switches between two widths each frame, moving a
+rich label sideways and giving a wrapped paragraph each width in turn; a
+frame went from about 0.105 ms to 0.068 ms with aligned rich lines and
+wrapped sizes kept per width.
 
 The `frame2d/...` benchmarks of `ponko_bench` time a whole 2D frame without a
 window (2,000 sprites under a HUD and a settings screen of about 150 nodes):

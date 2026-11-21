@@ -61,3 +61,5 @@ Buoyancy::points                 water.md          # C floats boxes and spheres 
 LoopbackLink                     replication.md    # not bound yet: C and C++ tests use the plain loopback (ponko_net_messages_loopback)
 Assets::browser_saves            editor.md         # C and C++ games don't build for the web yet, so they keep no files in a browser
 Assets::revert_browser_save      editor.md         # same
+WindowService::safe_area         touch.md          # not bound yet: the engine's touch controls keep to it all the same; C and C++ can't read or feed it
+Ui::set_inside_safe_area         touch.md          # not bound yet: C and C++ UI roots are laid out in the whole window
