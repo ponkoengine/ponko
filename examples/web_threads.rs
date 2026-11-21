@@ -818,8 +818,12 @@ fn bake() -> u64 {
         .with_samples(16)
         .with_page_size(256)
         .with_probe_spacing(2.0);
-    let bytes = bake_lighting(&scene, &settings).map(|b| b.to_bytes()).unwrap_or_default();
-    bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))
+    let bytes = bake_lighting(&scene, &settings)
+        .map(|b| b.to_bytes())
+        .unwrap_or_default();
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+    })
 }
 
 /// What the last 3D collection found: `None` before the first or without

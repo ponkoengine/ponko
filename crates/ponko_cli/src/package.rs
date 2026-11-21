@@ -1272,7 +1272,10 @@ mod tests {
             (&["--bin", "a", "--example", "b"][..], "not both"),
             (&["--web", "--target", "x86_64-pc-windows-msvc"], "--web builds for"),
             (&["--threads"], "--threads is for web builds"),
-            (&["--web", "--isolation-worker"], "--isolation-worker is for web builds with threads"),
+            (
+                &["--web", "--isolation-worker"],
+                "--isolation-worker is for web builds with threads",
+            ),
             (&["--out"], "--out needs a value"),
             (&["--smoke-ticks", "many"], "takes a number"),
             (&["--zip"], "unknown argument `--zip`"),

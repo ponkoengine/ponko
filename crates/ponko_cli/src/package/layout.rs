@@ -1265,21 +1265,21 @@ mod tests {
             None,
         )
         .unwrap();
-        let text = |name: &str| {
-            match &plan
-                .entries
-                .iter()
-                .find(|e| e.path == Path::new("coin-dash-1.2.3-web").join(name))
-                .unwrap_or_else(|| panic!("{name} missing from {:#?}", paths(&plan)))
-                .source
-            {
-                Source::Text(t) => t.clone(),
-                other => panic!("{name}: {other:?}"),
-            }
+        let text = |name: &str| match &plan
+            .entries
+            .iter()
+            .find(|e| e.path == Path::new("coin-dash-1.2.3-web").join(name))
+            .unwrap_or_else(|| panic!("{name} missing from {:#?}", paths(&plan)))
+            .source
+        {
+            Source::Text(t) => t.clone(),
+            other => panic!("{name}: {other:?}"),
         };
         assert_eq!(text("ponko-isolate.js"), WEB_ISOLATE);
         let page = text("index.html");
-        let script = page.find("<script src=\"ponko-isolate.js\"></script>").expect("the page loads the worker");
+        let script = page
+            .find("<script src=\"ponko-isolate.js\"></script>")
+            .expect("the page loads the worker");
         let game = page.find("import init").expect("the game's script");
         assert!(script < page.find("</head>").unwrap() && script < game, "{page}");
     }
