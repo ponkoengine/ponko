@@ -19,6 +19,8 @@ pub(crate) struct Harness {
     pub egui: egui::Context,
     pub panels: Panels,
     pub ctx: Ctx,
+    /// Every texture change egui asked for so far, to paint a frame with.
+    pub textures: egui::TexturesDelta,
     time: f64,
 }
 
@@ -29,6 +31,12 @@ impl Harness {
         // No GPU: textures a level or a palette loads are handles that
         // remember their size.
         ctx.set_headless(true);
+        Self::with_ctx(ctx)
+    }
+
+    /// The editor app in edit mode over `ctx` (one with an offscreen
+    /// renderer, for the GPU tests), one frame run.
+    pub(crate) fn with_ctx(ctx: Ctx) -> Self {
         let panels = Panels {
             app: Some(App::with_settings(None, None, "test".into())),
             ..Default::default()
@@ -39,6 +47,7 @@ impl Harness {
             egui,
             panels,
             ctx,
+            textures: egui::TexturesDelta::default(),
             time: 0.0,
         };
         h.frame(vec![]);
@@ -68,8 +77,8 @@ impl Harness {
             events,
             ..Default::default()
         };
-        let mut out = self.panels.run(&self.egui, input, &mut self.ctx);
-        out.textures_delta.clear();
+        let out = self.panels.run(&self.egui, input, &mut self.ctx);
+        self.textures.append(out.textures_delta);
         out.shapes
     }
 
@@ -173,6 +182,13 @@ impl Harness {
     pub(crate) fn click_text(&mut self, wanted: impl Fn(&str) -> bool) {
         let at = self.find(wanted).expect("the text is drawn");
         self.click(at);
+    }
+}
+
+impl Drop for Harness {
+    fn drop(&mut self) {
+        // Painted or not, the test is done with them.
+        self.textures.clear();
     }
 }
 

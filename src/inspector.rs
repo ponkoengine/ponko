@@ -38,7 +38,7 @@ mod assets_panel;
 pub(crate) mod author;
 #[cfg(all(test, feature = "editor"))]
 #[path = "inspector_author_harness.rs"]
-mod author_harness;
+pub(crate) mod author_harness;
 #[path = "inspector_debug.rs"]
 mod debug_panel;
 #[cfg(feature = "editor")]
