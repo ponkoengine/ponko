@@ -61,9 +61,10 @@ async function start() {
   root.dataset.backend = problem ? "webgl2" : "webgpu";
 
   window.addEventListener("error", (e) => {
-    show("error", `The demo stopped: ${e.message} (see the browser console)`);
+    // The engine's report of a panic comes first; the trap after it says less.
+    if (root.dataset.gallery !== "error") show("error", `The demo stopped: ${e.message} (see the browser console)`);
   });
-  const { default: init, onPonkoStartup } = await import(new URL("game.js", location.href));
+  const { default: init, onPonkoStartup, onPonkoFailure } = await import(new URL("game.js", location.href));
   try {
     await init();
   } catch (e) {
@@ -73,6 +74,10 @@ async function start() {
       throw e;
     }
   }
+  // A panic, the WebGL2 context lost while playing, a stopped worker thread.
+  onPonkoFailure?.((failure) => {
+    if (root.dataset.gallery !== "error") show("error", failure.text ?? `The demo stopped: ${failure.message}`);
+  });
   function started(error) {
     if (error) {
       show("error", `Could not start the demo: ${error.message}`);

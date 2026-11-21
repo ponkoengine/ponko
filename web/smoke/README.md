@@ -71,6 +71,32 @@ backends, or loses the real WebGL2 context before setup, respectively. Each
 case checks the error from the generated callback and the visible text in
 the template. The runner records both in `report.json`.
 
+## Runtime failures
+
+`runtime-failures.mjs` stops the 2D fixture after it started, three ways,
+and checks that each reaches the page (the guide's
+[Failures while playing](../../book/src/web.md#failures-while-playing)):
+
+```sh
+web/build.sh web_smoke
+node web/smoke/runtime-failures.mjs                       # all three cases
+node web/smoke/runtime-failures.mjs --case context-lost   # one of them
+```
+
+- `runtime-panic`: the fixture panics in a frame after 20 ticks. The page
+  must show “The game stopped: ” and the panic's message (not the trap the
+  abort throws after it), and `onPonkoFailure` must give kind `Panic`, the
+  message and the panic's location.
+- `failure-text`: the same panic, with the fixture's own text registered
+  through `ponko::web::on_failure`: the page shows that text, and the
+  callback's `text` holds it.
+- `context-lost`: on WebGL2, the runner loses the canvas's context while
+  the game runs: kind `ContextLost` and its message on the page.
+
+The callback is subscribed late, after the failure, so the run also checks
+that a late subscriber gets it at once. `runtime-failures.test.mjs` checks
+the template's handling and the runner's checks without a browser.
+
 ## Multiplayer
 
 `multiplayer.mjs` checks [browser multiplayer](../../book/src/networking.md#in-the-browser):

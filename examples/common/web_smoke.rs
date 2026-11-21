@@ -15,8 +15,11 @@
 //!
 //! The failure cases come from the page's query string: `?smoke_case=panic`
 //! panics during setup, `?smoke_case=stall` pauses the simulation after a few
-//! ticks. On the desktop the case comes from the `SMOKE_CASE` environment
-//! variable and the state is printed once a second.
+//! ticks, `?smoke_case=runtime-panic` panics in a frame after a few ticks,
+//! and `?smoke_case=failure-text` does too, with the game's own failure
+//! text for the page (`ponko::web::on_failure`). On the desktop the case
+//! comes from the `SMOKE_CASE` environment variable and the state is
+//! printed once a second.
 
 use ponko::prelude::*;
 
@@ -44,6 +47,10 @@ impl Smoke {
         if case == "panic" {
             panic!("{fixture}: panicking during setup, as ?smoke_case=panic asked");
         }
+        #[cfg(target_arch = "wasm32")]
+        if case == "failure-text" {
+            ponko::web::on_failure(move |failure| Some(format!("{fixture} stopped, in its own words: {failure}")));
+        }
         Self {
             fixture,
             case,
@@ -66,6 +73,12 @@ impl Smoke {
         self.frames += 1;
         if self.case == "stall" && ticks >= STALL_AFTER && !ctx.time.is_paused() {
             ctx.time.pause();
+        }
+        if (self.case == "runtime-panic" || self.case == "failure-text") && ticks >= STALL_AFTER {
+            panic!(
+                "{}: panicking while running, as ?smoke_case={} asked",
+                self.fixture, self.case
+            );
         }
         if ctx.input.mouse_pressed(MouseButton::Left) {
             self.clicks += 1;
