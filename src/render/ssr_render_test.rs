@@ -1506,7 +1506,7 @@ fn far_thin_things_stay_thin_in_reflections_without_taa() {
 /// depth; run with --ignored --nocapture (GPU timestamps, which the build's
 /// optimization doesn't change; the GPU is kept busy between frames, see
 /// `Busy`). At 1920x1080 on a device with the limits a game asks for: the
-/// High preset with depth of field and 400 large soft particles (the
+/// High preset with TAA, depth of field and 400 large soft particles (the
 /// transparent pass), over a glossy floor with a glowing box; with
 /// reflections on and off. Prints each pass's median span over 300 frames
 /// and the frame's: run before and after a change, alternating runs.
@@ -1575,6 +1575,7 @@ fn screen_pass_gpu_cost_at_1080p() {
     let post = &mut rig.ctx.scene3d.post;
     // Bloom's many passes would use up the timer's queries.
     post.bloom = 0.0;
+    post.anti_aliasing = AntiAliasing::Taa;
     post.depth_of_field.enabled = true;
     post.depth_of_field.focus_distance = 6.0;
     post.depth_of_field.blur = 0.02;
@@ -1608,7 +1609,7 @@ fn screen_pass_gpu_cost_at_1080p() {
             .map(|(name, times)| format!("{name} {:.4}", median(times)))
             .collect();
         eprintln!(
-            "1920x1080, High, depth of field, soft particles, reflections {}: frame median {:.4} ms; passes: {}",
+            "1920x1080, High, TAA, depth of field, soft particles, reflections {}: frame median {:.4} ms; passes: {}",
             if ssr { "on" } else { "off" },
             median(&mut frames),
             spans.join(", ")
