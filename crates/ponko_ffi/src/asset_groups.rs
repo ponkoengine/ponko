@@ -64,6 +64,11 @@ pub struct PonkoAssetGroupProgress {
     pub bytes_loaded: u64,
     /// How much is done, from 0 to 1, for a progress bar; 1 once ready.
     pub fraction: f32,
+    /// Milliseconds the game thread spent uploading the group's textures
+    /// to the GPU.
+    pub upload_ms: f32,
+    /// Bytes of the group's textures uploaded to the GPU.
+    pub bytes_uploaded: u64,
 }
 
 impl From<GroupProgress> for PonkoAssetGroupProgress {
@@ -77,6 +82,8 @@ impl From<GroupProgress> for PonkoAssetGroupProgress {
             bytes_known: p.bytes_known,
             bytes_loaded: p.bytes_loaded,
             fraction: p.fraction(),
+            upload_ms: p.upload_ms,
+            bytes_uploaded: p.bytes_uploaded,
         }
     }
 }
@@ -101,6 +108,14 @@ pub struct PonkoAssetGroupStats {
     pub over_budget: u64,
     /// Bytes the last step uploaded.
     pub frame_bytes: u64,
+    /// Milliseconds the last step spent uploading textures to the GPU.
+    pub upload_ms: f32,
+    /// The most milliseconds one step spent uploading.
+    pub max_upload_ms: f32,
+    /// Milliseconds every step spent uploading, since the game started.
+    pub total_upload_ms: f64,
+    /// Bytes every step uploaded, since the game started.
+    pub total_upload_bytes: u64,
 }
 
 impl From<GroupStats> for PonkoAssetGroupStats {
@@ -112,6 +127,10 @@ impl From<GroupStats> for PonkoAssetGroupStats {
             max_step_ms: s.max_step_ms,
             over_budget: s.over_budget,
             frame_bytes: s.frame_bytes,
+            upload_ms: s.upload_ms,
+            max_upload_ms: s.max_upload_ms,
+            total_upload_ms: s.total_upload_ms,
+            total_upload_bytes: s.total_upload_bytes,
         }
     }
 }
@@ -342,7 +361,8 @@ pub unsafe extern "C" fn ponko_ctx_asset_group_error(ctx: *mut PonkoCtx, id: u32
 }
 
 /// Stops loading group `id` (Rust's `Assets::cancel_group`): what loaded
-/// stays loaded; nothing more is read.
+/// stays loaded; nothing more is read. A failed group is cancelled too,
+/// dropping what it kept for a restart.
 /// ```
 /// assert_eq!(unsafe { ponko_ffi::ponko_ctx_cancel_asset_group(std::ptr::null_mut(), 1) } as u32, 1);
 /// ```
@@ -355,6 +375,26 @@ pub unsafe extern "C" fn ponko_ctx_cancel_asset_group(ctx: *mut PonkoCtx, id: u3
         ctx_access(ctx, |c| {
             let id = group_id(c, id)?;
             c.assets.cancel_group(id);
+            Ok(())
+        })
+    })
+}
+
+/// Loads the rest of a failed or cancelled group `id` (Rust's
+/// `Assets::restart_group`): only the assets that had not loaded are read
+/// again. Does nothing to a group that is loading or ready.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_restart_asset_group(std::ptr::null_mut(), 1) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_restart_asset_group(ctx: *mut PonkoCtx, id: u32) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            let id = group_id(c, id)?;
+            c.assets.restart_group(id);
             Ok(())
         })
     })
