@@ -179,6 +179,17 @@ src/crash/native.rs | extern block in mod sys | tests/native_crash.rs::a_segment
 src/crash/native.rs | on_exception | tests/native_crash.rs::a_segmentation_fault_in_native_code_leaves_a_report_for_the_next_start | windows
 src/crash/native.rs | write | tests/native_crash.rs::a_segmentation_fault_in_native_code_leaves_a_report_for_the_next_start | windows
 src/crash/native.rs | on_abort | tests/native_crash.rs::an_abort_in_native_code_leaves_a_report_for_the_next_start | windows
+src/crash/native.rs | open_probe_now | src/crash/native.rs::reading_an_unmapped_address_through_the_pipe_fails_without_faulting | os
+src/crash/native.rs | read_pair | src/crash/native.rs::reading_an_unmapped_address_through_the_pipe_fails_without_faulting | os
+src/crash/native.rs | this_thread_stack | src/crash/native.rs::a_recorded_threads_stack_bounds_the_walk_on_that_thread | os
+src/crash/native.rs | registers | tests/native_crash.rs::a_segmentation_fault_in_native_code_leaves_a_report_for_the_next_start | os
+src/crash/native.rs | module_signature | src/crash/native.rs::this_program_is_among_the_loaded_modules_with_a_stable_id_and_its_names | os
+src/crash/native.rs | modules | src/crash/native.rs::this_program_is_among_the_loaded_modules_with_a_stable_id_and_its_names | os
+src/crash/native.rs | first | src/crash/native.rs::this_program_is_among_the_loaded_modules_with_a_stable_id_and_its_names | os
+src/crash/native.rs | each | src/crash/native.rs::this_program_is_among_the_loaded_modules_with_a_stable_id_and_its_names | os
+src/crash/native.rs | pe_id | src/crash/native.rs::this_program_is_among_the_loaded_modules_with_a_stable_id_and_its_names | windows
+src/crash/native.rs | exported_name | src/crash/native.rs::a_library_without_debug_info_is_named_by_its_exported_symbols | os
+src/crash/native.rs | capture | tests/native_crash.rs::a_segmentation_fault_in_native_code_leaves_a_report_for_the_next_start | windows
 
 # Whether the desktop has a touch screen (Windows asks the system).
 src/input/touch_desktop.rs | windows_touch_points | src/input/touch_desktop.rs::windows_says_how_many_touches_its_screens_take | windows
