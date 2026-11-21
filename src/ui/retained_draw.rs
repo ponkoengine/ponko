@@ -702,8 +702,8 @@ impl Ctx {
         z: f32,
         tinted: &mut Vec<bool>,
     ) {
-        let start = self.gfx.ui_list.len();
         use super::rich::{Align, Base, bold_offset};
+        let start = self.gfx.ui_list.len();
         let base = Base {
             font: paint.font,
             size: paint.font_size,
