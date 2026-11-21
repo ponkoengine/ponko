@@ -286,7 +286,9 @@ fn a_loose_aseprite_files_linked_tileset_loads_and_its_edits_reload_the_file() {
                 edited[..4].copy_from_slice(&size.to_le_bytes());
                 edited[6..8].copy_from_slice(&2u16.to_le_bytes());
                 std::fs::write(&tiles, edited).unwrap();
-                deadline = Some(Instant::now() + Duration::from_secs(3));
+                // As above: frames sleep, so the checks keep up with them,
+                // and the deadline is a hang detector.
+                deadline = Some(Instant::now() + Duration::from_secs(30));
             } else if ctx.assets.reloaded_files().contains(&reload_path) {
                 observed.store(true, Ordering::Relaxed);
             }
