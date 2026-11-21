@@ -362,7 +362,8 @@ impl Ctx {
         self.gfx
             .ui_list
             .set_clip(Some(intersect(n.motion.shown_clip, xf.map_rect(n.rect))));
-        let layout = ui.tree.layout(n.layout).unwrap();
+        // Every node in the tree has a Taffy node.
+        let Ok(layout) = ui.tree.layout(n.layout) else { return };
         // A control keeps what it draws at least three quarters of the theme's
         // spacing from its left and right edges.
         let framed = super::widgets_draw::framed(n.widget);
@@ -871,6 +872,8 @@ mod tests {
     use crate::ui::{UiAxis, UiId, UiInput, UiLayout, UiScreenTransition, UiTheme, UiTransition, UiTween};
 
     const VIEW: Vec2 = Vec2::new(800.0, 600.0);
+    /// A named change to the UI, giving the input of the frame that shows it.
+    type Step = (&'static str, Box<dyn Fn(&mut Ctx) -> UiInput>);
     /// The glyph atlas's texture id (`stand_in_textures`).
     const GLYPHS: u32 = 1;
 
@@ -1070,7 +1073,7 @@ mod tests {
             1,
             "only the spinner, whose dots go round"
         );
-        let mut steps: Vec<(&str, Box<dyn Fn(&mut Ctx) -> UiInput>)> = vec![
+        let mut steps: Vec<Step> = vec![
             (
                 "text",
                 Box::new(move |c| {
@@ -1262,7 +1265,7 @@ mod tests {
             ),
         ];
         // A modal screen sliding in, and off again.
-        let dialog_steps = |steps: &mut Vec<(&str, Box<dyn Fn(&mut Ctx) -> UiInput>)>| {
+        let dialog_steps = |steps: &mut Vec<Step>| {
             steps.push((
                 "modal",
                 Box::new(|c| {
