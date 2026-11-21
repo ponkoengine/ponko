@@ -205,7 +205,10 @@ impl Ctx {
         #[cfg(feature = "physics")]
         self.physics.forget_bodies();
         #[cfg(feature = "physics3d")]
-        self.physics3d.forget_bodies();
+        {
+            self.physics3d.forget_bodies();
+            self.physics3d.rebuild_terrain(&mut self.world);
+        }
         #[cfg(feature = "3d")]
         {
             // Keyboard focus named an entity of the old world: the same id

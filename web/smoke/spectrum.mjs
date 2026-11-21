@@ -7,8 +7,9 @@
 //   node web/smoke/spectrum.mjs --variants scalar,simd --repeat 5
 //
 // The builds (spectrum-lib.mjs, VARIANTS): `scalar`, the ordinary web
-// build; `simd128`, `-C target-feature=+simd128` alone; `simd`, that and
-// the `wasm-simd` feature (rustfft's SIMD FFT). Each page load times one new moment of the field (the
+// build; `simd128`, `-C target-feature=+simd128` alone; `simd`,
+// `web/build.sh --simd`: that and the `wasm-simd` feature (rustfft's SIMD
+// FFT). Each page load times one new moment of the field (the
 // WebGL2 upload, `height_at`) and one with the sway's speed (`sample`,
 // buoyancy) at 64, 128 and 256 cells; the runner checks every build says
 // it was built as asked and timed everything, then prints the median of
@@ -74,7 +75,8 @@ async function main() {
   }
   if (args.build) {
     for (const variant of args.variants) {
-      console.log(`building ${variant}: ${buildArgs(variant).join(" ")}${VARIANTS[variant].simd128 ? " with simd128" : ""}`);
+      const alone = VARIANTS[variant].simd128 && !VARIANTS[variant].rustfftSimd;
+      console.log(`building ${variant}: ${buildArgs(variant).join(" ")}${alone ? " with simd128" : ""}`);
       if (spawnSync("bash", buildArgs(variant), { stdio: "inherit", env: variantEnv(variant, process.env) }).status !== 0) {
         process.exit(EXIT.usage);
       }

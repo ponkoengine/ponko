@@ -264,7 +264,9 @@ window's [safe area](touch.md#notches-home-bars-and-rounded-corners) on that
 tick, before its systems run, as `ctx.window.feed_safe_insets` does. With
 frames, the UI lays out with it in the frame of that tick (a root made
 `inside_safe_area` follows it) and the insets stay until another step changes
-them, so a scenario can turn the phone. In the JSON form, which the control
+them, so a scenario can turn the phone. They hold for as long as the scenario
+runs: a windowed web run that re-reads the page's insets on a resize keeps the
+step's, and the page's apply once the scenario ends. In the JSON form, which the control
 endpoint and tools take, it is `{ "tick": 3, "type": "safe_insets", "top": 0,
 "right": 47, "bottom": 21, "left": 0 }` (a side left out is 0). From C it is
 `ponko_input_scenario_safe_insets`, from C++ `safe_insets(tick, insets)`.

@@ -84,8 +84,39 @@ test("clippy_runs_nightly_with_the_threaded_flags_and_denies_warnings", () => {
   assert.deepEqual(words.slice(-3), ["--", "-D", "warnings"]);
 });
 
+test("simd_sets_simd128_and_the_wasm_simd_feature_together", () => {
+  const env = printEnv({}, ["--simd", "--features", "3d"]);
+  assert.deepEqual(env, { toolchain: "default", [TARGET]: "-C target-feature=+simd128", features: "3d,ponko/wasm-simd" });
+  assert.equal(printEnv({}, ["--simd"]).features, "ponko/wasm-simd", "with no other features");
+});
+
+test("simd_keeps_the_callers_flags", () => {
+  const rust = printEnv({ RUSTFLAGS: "-D warnings" }, ["--simd"]);
+  assert.deepEqual(Object.keys(rust), ["toolchain", "RUSTFLAGS", "features"], "cargo ignores the target's flags once RUSTFLAGS is set");
+  assert.equal(rust.RUSTFLAGS, "-C target-feature=+simd128 -D warnings");
+  const target = printEnv({ [TARGET]: "-C opt-level=s" }, ["--simd"]);
+  assert.equal(target[TARGET], "-C target-feature=+simd128 -C opt-level=s");
+  const encoded = printEnv({ CARGO_ENCODED_RUSTFLAGS: "-D\x1fwarnings" }, ["--simd"]);
+  assert.deepEqual(encoded.CARGO_ENCODED_RUSTFLAGS.split("\x1f"), ["-C", "target-feature=+simd128", "-D", "warnings"]);
+});
+
+test("simd_goes_with_threads", () => {
+  const env = printEnv({}, ["--threads", "--simd"]);
+  assert.equal(env.toolchain, "nightly");
+  const words = env[TARGET].split(" ");
+  assertThreadFlags(words);
+  assert.ok(words.includes("target-feature=+simd128"), words.join(" "));
+  assert.equal(env.features, "ponko/wasm-simd");
+});
+
 test("clippy_is_only_for_threaded_builds", () => {
   const run = spawnSync("bash", [BUILD, "--clippy", "--print-env"], { encoding: "utf8" });
   assert.equal(run.status, 2);
   assert.match(run.stderr, /--clippy is for --threads/);
+});
+
+test("the_isolation_worker_is_only_for_threaded_builds", () => {
+  const run = spawnSync("bash", [BUILD, "--isolation-worker", "--print-env"], { encoding: "utf8" });
+  assert.equal(run.status, 2);
+  assert.match(run.stderr, /--isolation-worker is for --threads/);
 });

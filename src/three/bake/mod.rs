@@ -1331,7 +1331,12 @@ struct Gathered {
 /// [`ErrorKind::Limit`] when the lightmaps need more than
 /// [`MAX_LIGHTMAP_PAGES`] pages.
 pub fn bake_lighting(scene: &LightBakeScene, settings: &LightBakeSettings) -> Result<BakedLighting, Error> {
-    bake_with(scene, settings, &mut CpuGather)
+    // On the frame pool (on the web, its workers, not the page's thread),
+    // as parallel queries run: the bake's parallel loops start inside.
+    crate::frame_pool::run(|| {
+        crate::profile_scope!("three/shared_bake");
+        bake_with(scene, settings, &mut CpuGather)
+    })
 }
 
 /// A probe's gathered order-1 harmonics (none: inside geometry), and the
@@ -1428,7 +1433,7 @@ fn bake_with(
     settings: &LightBakeSettings,
     gatherer: &mut dyn Gatherer,
 ) -> Result<BakedLighting, Error> {
-    let start = std::time::Instant::now();
+    let start = web_time::Instant::now();
     let invalid = |m: String| Error::new(ErrorKind::Invalid, format!("bake_lighting: {m}"));
     let tpu = settings.texels_per_unit;
     if !(tpu.is_finite() && tpu > 0.0) {

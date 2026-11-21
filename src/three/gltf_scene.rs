@@ -28,7 +28,7 @@ mod overrides;
 #[cfg(all(test, feature = "editor"))]
 pub(crate) use overrides::cube_gltf;
 #[cfg(feature = "editor")]
-pub(crate) use overrides::{GltfEntities, GltfOverride, GltfOverrideKind};
+pub(crate) use overrides::{GltfEntities, GltfOverride, GltfOverrideKind, WaitingLink};
 
 /// How [`GltfRoot::spawn`] spawns a file.
 ///

@@ -13,10 +13,17 @@
 //!   light extrapolated to where the bounces settle, which the camera's
 //!   view reads; the probes' own views read the light tile. The update
 //!   also marks probes inside thin walls, which give no light.
+//! - The **change readback**: each slot's history (how much its light
+//!   changed the last time it looked) is copied out after the update and
+//!   read back a frame or two later, for the probe planner, which gives
+//!   probes whose light is still changing their turns sooner (see
+//!   `three/gi.rs`, `GI_CHANGE_BOOST`).
 use super::lights::LightTextures;
 use crate::render::traffic::{NewBuffer, Upload};
 use crate::three::MAX_GI_PROBES_PER_FRAME;
 use crate::three::gi::{GI_SHADOW_SIZE, GiFrame};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 /// Each probe view's width and height, in pixels (`GI_VIEW` in
 /// `gi_update.wgsl`).
@@ -32,6 +39,21 @@ const ATLAS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// Bytes of history per probe slot (a `vec4<f32>` in `gi_update.wgsl`).
 const HISTORY_BYTES: u64 = 16;
+/// The change readback's states.
+const FREE: u8 = 0;
+const COPIED: u8 = 1;
+const MAPPING: u8 = 2;
+const READY: u8 = 3;
+
+/// The history read back for the probe planner: copied out after an
+/// update (when the last copy has been read), mapped after the submit,
+/// read when the map is done.
+struct ChangeReadback {
+    buffer: wgpu::Buffer,
+    state: Arc<AtomicU8>,
+    /// The slots it holds.
+    slots: usize,
+}
 
 /// One probe to update, as `gi_update.wgsl` reads it.
 #[repr(C)]
@@ -91,6 +113,7 @@ pub(super) struct Gi {
     pub shadow: wgpu::TextureView,
     /// This frame's updates: (slot, tile column, tile row).
     updates: Vec<(u32, u32, u32)>,
+    readback: ChangeReadback,
 }
 
 impl Gi {
@@ -252,6 +275,7 @@ impl Gi {
             .collect();
         let (atlas, atlas_view) = Self::atlas(device, 1);
         let history = Self::history(device, 1);
+        let readback = ChangeReadback::new(device, 1);
         let views = views.create_view(&Default::default());
         let resolve = resolve.create_view(&Default::default());
         let depth_read = depth.create_view(&wgpu::TextureViewDescriptor {
@@ -294,6 +318,7 @@ impl Gi {
             shadow_array,
             shadow: shadow_map.create_view(&Default::default()),
             updates: Vec::new(),
+            readback,
         }
     }
 
@@ -322,7 +347,7 @@ impl Gi {
         device.new_buffer(&wgpu::BufferDescriptor {
             label: Some("3d gi history"),
             size: HISTORY_BYTES * slots.max(1) as u64,
-            usage: wgpu::BufferUsages::STORAGE,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         })
     }
@@ -397,6 +422,7 @@ impl Gi {
             self.rows = (slots as u32).div_ceil(COLUMNS).max(1);
             (self.atlas, self.atlas_view) = Self::atlas(device, self.rows);
             self.history = Self::history(device, slots);
+            self.readback = ChangeReadback::new(device, slots);
             self.group = Self::group(
                 device,
                 &self.layout,
@@ -408,6 +434,7 @@ impl Gi {
                 &self.history,
             );
         }
+        self.read_changes(frame.changes());
         self.updates.clear();
         let mut updates = Updates {
             list: [ProbeUpdate::default(); MAX_UPDATES as usize],
@@ -474,6 +501,11 @@ impl Gi {
             height: s,
             depth_or_array_layers: 1,
         };
+        if self.readback.state.load(Ordering::Acquire) == FREE {
+            let bytes = HISTORY_BYTES * self.readback.slots as u64;
+            encoder.copy_buffer_to_buffer(&self.history, 0, &self.readback.buffer, 0, bytes);
+            self.readback.state.store(COPIED, Ordering::Release);
+        }
         for (k, &(_, column, row)) in self.updates.iter().enumerate() {
             let y = k as u32 * DEPTH_TILE;
             encoder.copy_texture_to_texture(
@@ -492,6 +524,61 @@ impl Gi {
                 size(LIGHT_TILE),
             );
         }
+    }
+}
+
+impl ChangeReadback {
+    fn new(device: &wgpu::Device, slots: usize) -> Self {
+        Self {
+            buffer: device.new_buffer(&wgpu::BufferDescriptor {
+                label: Some("3d gi change readback"),
+                size: HISTORY_BYTES * slots.max(1) as u64,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            state: Arc::new(AtomicU8::new(FREE)),
+            slots,
+        }
+    }
+}
+
+impl Gi {
+    /// Starts reading back the history copied out this frame. Call after
+    /// submitting.
+    pub fn submitted(&self) {
+        let r = &self.readback;
+        if r.state.load(Ordering::Acquire) != COPIED {
+            return;
+        }
+        r.state.store(MAPPING, Ordering::Release);
+        let state = r.state.clone();
+        r.buffer.map_async(wgpu::MapMode::Read, .., move |result| {
+            state.store(if result.is_ok() { READY } else { FREE }, Ordering::Release);
+        });
+    }
+
+    /// Hands a finished readback to the planner: each slot's last change
+    /// over its light (its expected light, which a rising light stays
+    /// under: see `gi_update.wgsl`).
+    fn read_changes(&self, changes: &crate::three::gi::GiChanges) {
+        let r = &self.readback;
+        if r.state.load(Ordering::Acquire) != READY {
+            return;
+        }
+        if let Ok(view) = r.buffer.get_mapped_range(..) {
+            let history: &[[f32; 4]] = bytemuck::cast_slice(&view);
+            if r.slots == self.slots
+                && let Ok(mut out) = changes.lock()
+            {
+                out.clear();
+                out.extend(history.iter().take(r.slots).map(|h| {
+                    let light = h[2].max(h[0].abs());
+                    if light > 1e-4 { h[0].abs() / light } else { 0.0 }
+                }));
+            }
+        }
+        r.buffer.unmap();
+        r.state.store(FREE, Ordering::Release);
     }
 }
 
@@ -515,6 +602,7 @@ impl Gi {
         t.buffer(C::Probes, "probe uniforms", &self.uniform);
         t.texture(C::Probes, "probe atlas", &self.atlas);
         t.buffer(C::Probes, "probe history", &self.history);
+        t.buffer(C::Probes, "probe change readback", &self.readback.buffer);
         for (label, view) in [
             ("probe capture", &self.views),
             ("probe capture resolve", &self.resolve),

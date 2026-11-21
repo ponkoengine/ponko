@@ -581,7 +581,7 @@ fn interleaved_presets_march_a_quarter_and_settle_on_the_same_clouds() {
 /// `cargo test -p ponko --lib --features 3d --release cloud_presets_gpu_time -- --ignored --nocapture`
 /// (`PONKO_CLOUD_RUNS` sets the runs, default 3).
 #[test]
-#[ignore]
+#[ignore = "a measurement: run by hand in release (the command above); it asserts nothing"]
 fn cloud_presets_gpu_time() {
     let Some(mut stage) = stage_with(Setup {
         size: (1920, 1080),

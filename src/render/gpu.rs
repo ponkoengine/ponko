@@ -77,6 +77,10 @@ pub(crate) struct Renderer {
     view_cameras2d: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
     /// This frame's 2D views (beside `view_cameras2d`), kept between frames.
     sprite_views: Vec<super::views::SpriteView>,
+    /// Textures UI groups fading as one image are drawn into
+    /// (`DrawList::offscreen`): ids and sizes, made as first needed, the
+    /// window's size.
+    ui_layers: Vec<(u32, [u32; 2])>,
     /// Blend modes and sprite materials: their pipelines and bind groups.
     sprite_pipelines: super::sprite_pipelines::SpritePipelines,
     /// 2D lighting's passes, made the first frame lighting is on.
@@ -526,8 +530,12 @@ impl Renderer {
             eprintln!("ponko: PONKO_GPU_TIER forces the {tier} GPU tier");
         }
         #[cfg_attr(not(feature = "compressed-textures"), allow(unused_mut))]
+        // A first instance in indirect draws: an instance batch's cells are
+        // drawn together where the device has it (`gpu3d/instances.rs`).
         let mut required_features = adapter.features()
-            & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES);
+            & (wgpu::Features::TIMESTAMP_QUERY
+                | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
+                | wgpu::Features::INDIRECT_FIRST_INSTANCE);
         // Block-compressed textures upload as they are where the GPU samples them.
         #[cfg(feature = "compressed-textures")]
         {
@@ -853,6 +861,7 @@ impl Renderer {
             panel_cameras: Vec::new(),
             view_cameras2d: Vec::new(),
             sprite_views: Vec::new(),
+            ui_layers: Vec::new(),
             sprite_pipelines,
             lights2d: None,
             texture_layout,
@@ -1469,6 +1478,64 @@ impl Renderer {
 
     pub fn max_texture_size(&self) -> u32 {
         self.device.limits().max_texture_dimension_2d
+    }
+
+    /// The id of the `i`th texture a fading UI group is drawn into
+    /// (`DrawList::offscreen`), made the first time; it has the window's
+    /// size when a frame draws into it.
+    pub fn ui_layer_texture(&mut self, i: usize) -> u32 {
+        while self.ui_layers.len() <= i {
+            let size = [self.config.width, self.config.height];
+            let texture = self.ui_layer_target(size);
+            let bind_group = self.sprite_bind_group(&texture, false);
+            let id = self.textures.add(GpuTexture {
+                bind_group,
+                texture,
+                nearest: false,
+                #[cfg(feature = "3d")]
+                mips: Some(false),
+            });
+            self.ui_layers.push((id, size));
+        }
+        self.ui_layers[i].0
+    }
+
+    /// The UI layer textures this frame draws into made the window's
+    /// size again, under the same ids, if it changed.
+    fn fit_ui_layers(&mut self, used: usize) {
+        let size = [self.config.width, self.config.height];
+        for i in 0..used.min(self.ui_layers.len()) {
+            let (id, made) = self.ui_layers[i];
+            if made == size || self.textures.live(id).is_none() {
+                continue;
+            }
+            let texture = self.ui_layer_target(size);
+            let bind_group = self.sprite_bind_group(&texture, false);
+            if let Some(slot) = self.textures.live_mut(id) {
+                slot.texture = texture;
+                slot.bind_group = bind_group;
+            }
+            self.ui_layers[i].1 = size;
+        }
+    }
+
+    /// A texture of `size` the screen's sprites can be drawn into, as onto
+    /// the window, and then sampled.
+    fn ui_layer_target(&self, [width, height]: [u32; 2]) -> wgpu::Texture {
+        self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("ui group layer"),
+            size: wgpu::Extent3d {
+                width: width.max(1),
+                height: height.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.view_format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        })
     }
 
     /// A texture target cameras draw into (linear HDR); returns its id.
@@ -2161,19 +2228,22 @@ impl Renderer {
             timer.collect(&self.device);
             timer.begin_frame();
         }
+        self.fit_ui_layers(ui.offscreen().len());
         let (world, world_batches) = world.finish();
-        let (ui, ui_batches) = ui.finish();
+        let (ui, ui_batches, offscreen) = ui.finish_with_offscreen();
         let panels: Vec<_> = panels
             .iter_mut()
             .filter(|p| self.textures.live(p.texture).is_some())
             .map(|p| (p.texture, p.size, p.list.finish()))
             .collect();
         let panel_sprites: usize = panels.iter().map(|(_, _, (sprites, _))| sprites.len()).sum();
-        let total = world.len() + ui.len() + panel_sprites;
+        let layer_sprites: usize = offscreen.iter().map(|l| l.finished().0.len()).sum();
+        let total = world.len() + ui.len() + panel_sprites + layer_sprites;
         self.stats.sprites = total;
         self.stats.draw_calls = world_batches.len()
             + ui_batches.len()
-            + panels.iter().map(|(_, _, (_, batches))| batches.len()).sum::<usize>();
+            + panels.iter().map(|(_, _, (_, batches))| batches.len()).sum::<usize>()
+            + offscreen.iter().map(|l| l.finished().1.len()).sum::<usize>();
         #[cfg(feature = "3d")]
         if let Some(three) = &self.three {
             self.stats.draw_calls += three.draw_calls() + self.views.draw_calls;
@@ -2201,10 +2271,10 @@ impl Renderer {
             traffic::too_big("sprites", total * size, most * size, "no sprites are drawn");
         }
         self.too_many_sprites = too_many;
-        let (world, world_batches, ui, ui_batches, panels) = if too_many {
-            (&[][..], &[][..], &[][..], &[][..], Vec::new())
+        let (world, world_batches, ui, ui_batches, panels, offscreen) = if too_many {
+            (&[][..], &[][..], &[][..], &[][..], Vec::new(), &[][..])
         } else {
-            (world, world_batches, ui, ui_batches, panels)
+            (world, world_batches, ui, ui_batches, panels, offscreen)
         };
         // Only the sprites that changed since the last frame are uploaded,
         // with the few unchanged ones between two of them, in at most
@@ -2250,6 +2320,25 @@ impl Renderer {
             panel_starts.push(panel_base);
             panel_base += sprites.len() as u32;
         }
+        // Fading UI groups' sprites go after the panels'.
+        let mut layer_starts = Vec::with_capacity(offscreen.len());
+        for layer in offscreen {
+            let sprites = layer.finished().0;
+            if !sprites.is_empty() {
+                let (buffer, uploads) = (&self.instance_buffer, self.queue.uploading(Upload::Sprites));
+                self.sprite_mirror.sync_capped(
+                    panel_base as usize * page,
+                    bytemuck::cast_slice(sprites),
+                    (page, SPRITE_BRIDGE),
+                    MAX_WRITES,
+                    |at, bytes| {
+                        uploads.write_buffer(buffer, at as u64, bytes);
+                    },
+                );
+            }
+            layer_starts.push(panel_base);
+            panel_base += sprites.len() as u32;
+        }
         if !panels.is_empty() && self.panel_pipeline.is_none() {
             // Panels draw into render targets, which only 3D makes.
             #[cfg(feature = "3d")]
@@ -2281,8 +2370,10 @@ impl Renderer {
             bytemuck::cast_slice(&ui_camera),
         );
         // Blend modes and sprite materials: their pipelines and bind groups.
-        if DrawList::batches_styled(world_batches) || DrawList::batches_styled(ui_batches) {
-            for batches in [world_batches, ui_batches] {
+        let layers_styled = offscreen.iter().any(|l| DrawList::batches_styled(l.finished().1));
+        if DrawList::batches_styled(world_batches) || DrawList::batches_styled(ui_batches) || layers_styled {
+            let layer_batches = offscreen.iter().map(|l| l.finished().1);
+            for batches in [world_batches, ui_batches].into_iter().chain(layer_batches) {
                 self.sprite_pipelines
                     .prepare(&self.device, &self.textures, batches, self.view_format);
             }
@@ -2410,6 +2501,28 @@ impl Renderer {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
+        // Fading UI groups are drawn first, each into its texture as onto
+        // the window; the UI's sprites (or an enclosing group's) show
+        // them. A group inside another comes after it in the list: drawn
+        // before it.
+        for (layer, &start) in offscreen.iter().zip(&layer_starts).rev() {
+            let Some(target) = self.textures.live(layer.texture) else {
+                continue;
+            };
+            let view = target.texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let layers = [(&self.ui_camera_bind_group, layer.finished().1, start)];
+            Self::sprite_pass_with(
+                &mut encoder,
+                &view,
+                Some(Color::TRANSPARENT),
+                None,
+                &SpritePass {
+                    layers: &layers,
+                    ..pass
+                },
+                Some((&self.sprite_pipelines, self.view_format)),
+            );
+        }
         let view = match &frame {
             Some(frame) => Some(frame.texture.create_view(&wgpu::TextureViewDescriptor {
                 format: Some(self.view_format),

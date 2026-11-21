@@ -881,3 +881,22 @@ fn a_world_bake_reads_its_materials_textures() {
         assert!(c.y > 0.5 && c.x < 0.01, "{c}");
     });
 }
+
+#[test]
+fn bakes_run_on_the_frame_pool_inside_their_scope() {
+    // The scope the web's threaded build checks for (`threads.mjs`): it opens
+    // inside the frame pool's runner, where the bake's parallel loops start.
+    let (_, report) = crate::game::Game::new("bake", 1, 1)
+        .sim_system(|_ctx| {
+            let mut scene = gray_sky(0.4, 4.0);
+            room(true, &mut scene, 1.0);
+            let s = settings().with_texels_per_unit(1.0).with_samples(2);
+            std::hint::black_box(bake_lighting(&scene, &s).unwrap());
+        })
+        .profile_headless(0, 2, |_| {});
+    let scope = report.scope("three/shared_bake");
+    assert!(
+        scope.is_some_and(|s| s.calls_per_frame >= 1.0),
+        "three/shared_bake didn't run: {report}"
+    );
+}

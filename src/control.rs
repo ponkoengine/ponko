@@ -1359,6 +1359,7 @@ fn render_inspector_json(ctx: &Ctx, history: usize, allocations: usize) -> Value
         source,
         stats: ctx.perf.render_stats(),
         passes: ctx.perf.gpu_passes(),
+        passes_not_timed: ctx.perf.gpu_passes_not_timed(),
         quality,
         pipelines: ctx.gfx.pipeline_stats(),
         memory: ctx.gfx.renderer.as_ref().and_then(crate::render::Renderer::residency),

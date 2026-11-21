@@ -34,7 +34,8 @@ use super::waves::{WAVE_GRAVITY, WaveSample};
 // asks for both.
 #[cfg(all(feature = "wasm-simd", target_arch = "wasm32", not(target_feature = "simd128")))]
 compile_error!(
-    "the `wasm-simd` feature needs the whole build compiled with SIMD: set \
+    "the `wasm-simd` feature needs the whole build compiled with SIMD: build with \
+     `web/build.sh --simd`, which sets both, or set \
      CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS=\"-C target-feature=+simd128\" \
      (or add it to RUSTFLAGS), or leave the feature off"
 );
@@ -204,7 +205,7 @@ pub(crate) struct SpectrumField {
     /// heights' and sways' spread).
     pub max_height: f32,
     pub max_sway: f32,
-    /// The last two moments worked out (newest last), and the buffers the
+    /// The last [`KEPT_MOMENTS`] moments asked for (the latest last), and the buffers the
     /// next one is worked out in.
     cache: Mutex<Cache>,
 }
@@ -229,6 +230,22 @@ impl std::fmt::Debug for Plan {
     }
 }
 
+/// How many moments the CPU keeps: the two fixed steps a drawn frame sits
+/// between (which floating bodies ask for too, see
+/// [`SpectrumField::write_drawn`]), and one for a query at the frame's own
+/// time.
+const KEPT_MOMENTS: usize = 3;
+
+/// The two fixed steps a drawn frame sits between: the next step's time
+/// (as `float_bodies` asks it on that step), the one after, and how far the
+/// frame is from the first to the second (0 to 1).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct DrawnSteps {
+    pub t0: f32,
+    pub t1: f32,
+    pub between: f32,
+}
+
 /// The CPU's moments and its work space: kept between frames, so a new
 /// moment allocates nothing once the first few are made.
 #[derive(Debug, Default)]
@@ -248,6 +265,27 @@ struct Cache {
     v_t: Vec<Complex32>,
     /// The FFT's work space.
     scratch: Vec<Complex32>,
+    /// Whether new moments are worked out with the sway's speed though
+    /// not asked for it: on after a moment worked out without it was
+    /// asked again with it (a WebGL2 upload, then buoyancy at the same
+    /// time), off after such a guess goes unused.
+    guess_speed: bool,
+    /// The moment last worked out with the sway's speed on a guess, until
+    /// a query with the sway's speed uses it.
+    guessed: Option<f32>,
+    /// Moments worked out (tests count them).
+    #[cfg(test)]
+    computed: usize,
+    /// The next step's time (in the period) of the last frame drawn
+    /// between two steps.
+    drawn_t0: Option<f32>,
+    /// Never draw from the steps' moments: the upload as it was before
+    /// (tests time both).
+    #[cfg(test)]
+    never_share: bool,
+    /// Never guess: the field as it was before guessing (tests time both).
+    #[cfg(test)]
+    never_guess: bool,
 }
 
 impl PartialEq for SpectrumField {
@@ -375,10 +413,60 @@ impl SpectrumField {
             max_height: 10.0 * sigma,
             max_sway: 10.0 * settings.choppiness.max(0.0) * sigma,
             cache: Mutex::new(Cache {
-                fields: Vec::with_capacity(2),
+                fields: Vec::with_capacity(KEPT_MOMENTS),
                 ..Cache::default()
             }),
         }
+    }
+
+    /// The field drawn at frame time `t`, as the half floats of the WebGL2
+    /// upload, into `out`. When the frame sits between two fixed steps
+    /// (`steps`, see `water::drawn_steps`) it is the blend of their two
+    /// moments, which floating bodies ask for on those steps (`floating`:
+    /// they are worked out with the sway's speed for them), so a frame works
+    /// out no moment of its own; within a few tenths of a millimetre of the
+    /// moment at `t` (`the_drawn_blend_of_two_steps_is_the_moment_between`).
+    /// Without floating bodies it blends when one of the two is kept
+    /// already, or when the last frame was between the same two steps
+    /// (frames come faster than steps: two moments once, then one a step
+    /// instead of one a frame); a frame otherwise never works out more than
+    /// one moment. Otherwise it is the moment at `t`. Returns whether it
+    /// blended.
+    pub(crate) fn write_drawn(&self, t: f32, steps: Option<DrawnSteps>, floating: bool, out: &mut Vec<u8>) -> bool {
+        if let Some(s) = steps
+            && self.shares(s, floating)
+        {
+            let (a, b) = (self.field(s.t0, floating), self.field(s.t1, floating));
+            write_half_texels_between(&a.texels, &b.texels, s.between, out);
+            return true;
+        }
+        write_half_texels(&self.field(t, false).texels, out);
+        false
+    }
+
+    /// Whether drawing from the two steps' moments costs at most what the
+    /// moment at the frame's time would.
+    fn shares(&self, s: DrawnSteps, floating: bool) -> bool {
+        let mut cache = self.cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        #[cfg(test)]
+        if cache.never_share {
+            return false;
+        }
+        let kept = |t: f32| cache.fields.iter().any(|f| f.t == wrap_time(t));
+        let again = cache.drawn_t0 == Some(wrap_time(s.t0));
+        let shares = floating || again || kept(s.t0) || kept(s.t1);
+        cache.drawn_t0 = Some(wrap_time(s.t0));
+        shares
+    }
+
+    /// The surface's height at rest point `at` as drawn from `steps` (see
+    /// [`write_drawn`](Self::write_drawn)): from the two kept moments, no
+    /// new one.
+    pub(crate) fn drawn_height(&self, at: Vec2, s: DrawnSteps) -> f32 {
+        let tile = self.settings.tile.max(1.0);
+        let (a, b) = (self.field(s.t0, false), self.field(s.t1, false));
+        let height = |f: &Field| f.displace(f.rest_point(at, tile), tile).y;
+        height(&a) + (height(&b) - height(&a)) * s.between
     }
 
     /// The spectrum's start as the GPU's texture holds it (RGBA per texel:
@@ -388,24 +476,66 @@ impl SpectrumField {
     }
 
     /// The field at time `t`, worked out on the CPU (with the sway's speed
-    /// if `speed`); the last two moments are kept.
+    /// if `speed`); the last three moments asked for are kept, so each is worked out
+    /// once however many queries ask. When a moment worked out without the
+    /// sway's speed is then asked with it (the WebGL2 upload, then buoyancy
+    /// at the same time), the next moments are worked out with it from the
+    /// start, until one such guess goes unused.
     pub fn field(&self, t: f32, speed: bool) -> Arc<Field> {
         let mut cache = self.cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(f) = cache
+        // Kept by the moment in the period, as `compute` names it.
+        let key = wrap_time(t);
+        if let Some(i) = cache
             .fields
             .iter()
-            .find(|f| f.t == t && (!speed || !f.sway_speed.is_empty()))
+            .position(|f| f.t == key && (!speed || !f.sway_speed.is_empty()))
         {
-            return f.clone();
+            if speed && cache.guessed == Some(key) {
+                cache.guessed = None;
+            }
+            // Asked again: the last to go (the next step's moment outlives a
+            // query at a frame's own time).
+            let f = cache.fields.remove(i);
+            cache.fields.push(f.clone());
+            return f;
         }
-        // The oldest moment's buffers are reused, unless someone still
-        // holds it.
-        let old = if cache.fields.len() == 2 {
-            Arc::try_unwrap(cache.fields.remove(0)).ok()
+        // The same moment without the sway's speed: replaced, and a sign
+        // that the next moments will be asked with it too.
+        let again = cache.fields.iter().position(|f| f.t == key);
+        let with_speed = if speed {
+            #[cfg(test)]
+            let guess = !cache.never_guess;
+            #[cfg(not(test))]
+            let guess = true;
+            if again.is_some() && guess {
+                cache.guess_speed = true;
+            }
+            true
+        } else if cache.guess_speed {
+            if cache.guessed.is_some() {
+                // The last guess went unused: stop guessing.
+                cache.guess_speed = false;
+                cache.guessed = None;
+                false
+            } else {
+                cache.guessed = Some(key);
+                true
+            }
         } else {
-            None
+            false
         };
-        let field = Arc::new(self.compute(t, speed, &mut cache, old));
+        // The least recently asked moment's buffers are reused (or the one
+        // replaced), unless someone still holds it.
+        let old = match again {
+            Some(i) => Arc::try_unwrap(cache.fields.remove(i)).ok(),
+            None if cache.fields.len() == KEPT_MOMENTS => Arc::try_unwrap(cache.fields.remove(0)).ok(),
+            None => None,
+        };
+        #[cfg(test)]
+        {
+            cache.computed += 1;
+        }
+        let field = Arc::new(self.compute(t, with_speed, &mut cache, old));
         cache.fields.push(field.clone());
         field
     }
@@ -616,6 +746,18 @@ pub(crate) fn f16_bits(v: f32) -> u16 {
 pub(crate) fn write_half_texels(texels: &[[f32; 4]], out: &mut Vec<u8>) {
     out.clear();
     out.extend(texels.iter().flat_map(|t| t.map(f16_bits)).flat_map(u16::to_le_bytes));
+}
+
+/// [`write_half_texels`] of the blend of two moments' texels, `f` (0 to 1)
+/// of the way from `a` to `b`.
+fn write_half_texels_between(a: &[[f32; 4]], b: &[[f32; 4]], f: f32, out: &mut Vec<u8>) {
+    out.clear();
+    out.extend(
+        a.iter()
+            .zip(b)
+            .flat_map(|(a, b)| std::array::from_fn::<_, 4, _>(|i| f16_bits(a[i] + (b[i] - a[i]) * f)))
+            .flat_map(u16::to_le_bytes),
+    );
 }
 
 #[cfg(test)]
@@ -920,13 +1062,412 @@ mod tests {
 
     #[test]
     fn the_sea_loops_every_period() {
-        let spectrum = SpectrumField::new(WaveSpectrum::new(Vec2::new(6.0, 6.0), 1.0).with_tile(100.0, 64));
+        let settings = WaveSpectrum::new(Vec2::new(6.0, 6.0), 1.0).with_tile(100.0, 64);
+        // Two fields, so the second moment isn't the first one's cache.
         let (a, b) = (
-            spectrum.field(12.5, false),
-            spectrum.field(12.5 + SPECTRUM_PERIOD, false),
+            SpectrumField::new(settings).field(12.5, false),
+            SpectrumField::new(settings).field(12.5 + SPECTRUM_PERIOD, false),
         );
         for (x, y) in a.texels.iter().zip(&b.texels) {
             assert!((x[0] - y[0]).abs() < 1e-3);
+        }
+    }
+
+    fn computed(spectrum: &SpectrumField) -> usize {
+        spectrum.cache.lock().unwrap().computed
+    }
+
+    /// A frame of a WebGL2 sea with something floating, as the game runs
+    /// it on a fixed step: buoyancy at the step's time (with the sway's
+    /// speed), then the texture upload at the frame's, which is the next
+    /// step's time.
+    fn upload_and_buoyancy_frame(spectrum: &SpectrumField, frame: u32) {
+        let step = 1.0 / 60.0;
+        spectrum.field(frame as f32 * step, true);
+        spectrum.field((frame + 1) as f32 * step, false);
+    }
+
+    #[test]
+    fn the_upload_and_buoyancy_work_out_one_moment_once() {
+        let spectrum = SpectrumField::new(WaveSpectrum::new(Vec2::new(6.0, 6.0), 1.0).with_tile(100.0, 64));
+        for frame in 0..3 {
+            upload_and_buoyancy_frame(&spectrum, frame);
+        }
+        let before = computed(&spectrum);
+        for frame in 3..13 {
+            upload_and_buoyancy_frame(&spectrum, frame);
+        }
+        assert_eq!(computed(&spectrum) - before, 10, "one new moment a frame");
+        // The other order (upload first, then buoyancy at the same time).
+        let spectrum = SpectrumField::new(WaveSpectrum::new(Vec2::new(6.0, 6.0), 1.0).with_tile(100.0, 64));
+        for frame in 0..10 {
+            let t = frame as f32 * 0.1;
+            spectrum.field(t, false);
+            spectrum.field(t, true);
+        }
+        assert_eq!(computed(&spectrum), 11, "the first moment twice, then each once");
+    }
+
+    #[test]
+    fn a_guessed_sway_speed_is_what_a_query_asking_for_it_gets() {
+        let spectrum = SpectrumField::new(WaveSpectrum::new(Vec2::new(8.0, 0.0), 1.5).with_tile(128.0, 64));
+        spectrum.field(1.0, false);
+        spectrum.field(1.0, true);
+        let guessed = spectrum.field(2.0, false);
+        assert!(!guessed.sway_speed.is_empty(), "worked out with the sway's speed");
+        let asked = SpectrumField::new(spectrum.settings).field(2.0, true);
+        assert_eq!(*guessed, *asked, "the same field as when asked for it");
+    }
+
+    #[test]
+    fn an_unused_guess_stops_the_guessing() {
+        let spectrum = SpectrumField::new(WaveSpectrum::new(Vec2::new(6.0, 6.0), 1.0).with_tile(100.0, 64));
+        spectrum.field(1.0, false);
+        spectrum.field(1.0, true);
+        assert!(!spectrum.field(2.0, false).sway_speed.is_empty(), "guessed");
+        // Nothing asks 2.0 with the sway's speed: the next moment is plain.
+        assert!(spectrum.field(3.0, false).sway_speed.is_empty(), "no longer guessed");
+        assert!(spectrum.field(4.0, false).sway_speed.is_empty());
+        // Without a moment asked twice, plain queries never pay for the speed.
+        let plain = SpectrumField::new(spectrum.settings);
+        for i in 0..5 {
+            assert!(plain.field(i as f32, false).sway_speed.is_empty());
+            plain.field(i as f32 + 0.5, true);
+        }
+    }
+
+    #[test]
+    fn a_moment_after_the_first_period_is_worked_out_once() {
+        let spectrum = SpectrumField::new(WaveSpectrum::new(Vec2::new(6.0, 6.0), 1.0).with_tile(100.0, 64));
+        let t = SPECTRUM_PERIOD * 3.0 + 41.3;
+        let a = spectrum.field(t, false);
+        let b = spectrum.field(t, false);
+        assert!(Arc::ptr_eq(&a, &b), "the second query reads the first one's moment");
+        assert_eq!(computed(&spectrum), 1);
+    }
+
+    /// A frame's CPU field at 128 cells (and 64 and 256) for a WebGL2 sea
+    /// with something floating (`upload_and_buoyancy_frame`), before (no
+    /// guessing: the upload's moment worked out again for buoyancy) and
+    /// after, run after run. Run by hand in release:
+    /// `cargo test -p ponko --lib --features 3d --release upload_and_buoyancy_frame_cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn upload_and_buoyancy_frame_cost() {
+        use std::time::Instant;
+        let runs: usize = std::env::var("PONKO_SPECTRUM_RUNS")
+            .ok()
+            .and_then(|r| r.parse().ok())
+            .unwrap_or(5);
+        for run in 0..runs {
+            for cells in [64, 128, 256] {
+                let mut line = format!("run {run}, {cells} cells:");
+                for guess in [false, true] {
+                    let settings = WaveSpectrum::new(Vec2::new(8.0, -6.0), 1.5).with_tile(256.0, cells);
+                    let spectrum = SpectrumField::new(settings);
+                    spectrum.cache.lock().unwrap().never_guess = !guess;
+                    for frame in 0..4 {
+                        upload_and_buoyancy_frame(&spectrum, frame);
+                    }
+                    let mut times: Vec<f32> = (4..19)
+                        .map(|frame| {
+                            let start = Instant::now();
+                            upload_and_buoyancy_frame(&spectrum, frame);
+                            start.elapsed().as_secs_f32() * 1000.0
+                        })
+                        .collect();
+                    times.sort_by(f32::total_cmp);
+                    line += &format!(
+                        " {} {:.3} ms a frame;",
+                        if guess { "after" } else { "before" },
+                        times[times.len() / 2]
+                    );
+                }
+                eprintln!("{line}");
+            }
+        }
+    }
+
+    /// A game's clocks driving a WebGL2 sea as the engine does: each frame
+    /// its fixed steps (50 a second; buoyancy asks each step's moment with
+    /// the sway's speed if `floating`, as `float_bodies`), then the upload
+    /// at the frame's time (as `update_water`).
+    struct Frames {
+        clock: crate::time::Clock,
+        time: crate::time::Time,
+        upload: Vec<u8>,
+        speed: f64,
+        /// A frame system asks the height at the frame's time (what is
+        /// drawn) between the steps and the upload.
+        query: bool,
+    }
+
+    impl Frames {
+        fn new() -> Self {
+            Self {
+                clock: crate::time::Clock::new(50),
+                time: crate::time::Time::new(1.0 / 50.0),
+                upload: Vec::new(),
+                speed: 1.0,
+                query: false,
+            }
+        }
+
+        /// One frame of `dt` seconds: its steps, then the upload. Whether
+        /// the upload blended two steps' moments.
+        fn frame(&mut self, spectrum: &SpectrumField, dt: f64, floating: bool) -> bool {
+            let timing = self.clock.advance(dt, self.speed);
+            self.time.begin_frame(timing);
+            for _ in 0..timing.fixed_steps {
+                if floating {
+                    spectrum.field(self.time.sim_time() as f32, true);
+                }
+                self.time.advance_tick();
+            }
+            if self.query {
+                drop(spectrum.field(self.time.elapsed() as f32, false));
+            }
+            let steps = crate::water::drawn_steps(&self.time);
+            spectrum.write_drawn(self.time.elapsed() as f32, steps, floating, &mut self.upload)
+        }
+    }
+
+    /// Frame `i`'s length at `hz` frames a second, give or take a quarter
+    /// (a variable frame rate).
+    fn frame_dt(hz: f64, i: u32) -> f64 {
+        (0.75 + 0.5 * f64::from((i * 7919) % 101) / 100.0) / hz
+    }
+
+    #[test]
+    fn floating_bodies_and_the_upload_share_one_moment_per_step_at_any_frame_rate() {
+        for hz in [144.0, 60.0, 50.0, 30.0] {
+            let spectrum = SpectrumField::new(WaveSpectrum::new(Vec2::new(6.0, 6.0), 1.0).with_tile(100.0, 64));
+            let mut frames = Frames::new();
+            for i in 0..3 {
+                frames.frame(&spectrum, frame_dt(hz, i), true);
+            }
+            let (before, tick) = (computed(&spectrum), frames.time.sim_tick());
+            for i in 3..90 {
+                assert!(
+                    frames.frame(&spectrum, frame_dt(hz, i), true),
+                    "{hz} Hz: drawn from the steps"
+                );
+            }
+            let steps = (frames.time.sim_tick() - tick) as usize;
+            assert_eq!(
+                computed(&spectrum) - before,
+                steps,
+                "{hz} Hz: one moment a step, none of the frames' own"
+            );
+        }
+    }
+
+    #[test]
+    fn without_floating_bodies_the_upload_works_out_no_more_than_a_moment_a_frame() {
+        for hz in [144.0, 60.0, 30.0, 20.0] {
+            let spectrum = SpectrumField::new(WaveSpectrum::new(Vec2::new(6.0, 6.0), 1.0).with_tile(100.0, 64));
+            let mut frames = Frames::new();
+            let (mut steps, start, mut twice) = (0, frames.time.sim_tick(), 0);
+            for i in 0..90 {
+                let before = computed(&spectrum);
+                frames.frame(&spectrum, frame_dt(hz, i), false);
+                let new = computed(&spectrum) - before;
+                assert!(new <= 2, "{hz} Hz, frame {i}");
+                twice += usize::from(new == 2);
+                steps = frames.time.sim_tick() - start;
+            }
+            assert!(twice <= 1, "{hz} Hz: two moments in a frame only to start blending");
+            assert!(computed(&spectrum) <= 90, "{hz} Hz: never more than a moment a frame");
+            if hz > 50.0 {
+                assert!(
+                    computed(&spectrum) <= steps as usize + 3,
+                    "{hz} Hz: one moment a step, not one a frame"
+                );
+            }
+            // Not one with the sway's speed: nothing asks for it.
+            assert!(
+                spectrum
+                    .cache
+                    .lock()
+                    .unwrap()
+                    .fields
+                    .iter()
+                    .all(|f| f.sway_speed.is_empty())
+            );
+        }
+    }
+
+    #[test]
+    fn a_paused_or_slowed_game_draws_the_frames_own_moment() {
+        let spectrum = SpectrumField::new(WaveSpectrum::new(Vec2::new(6.0, 6.0), 1.0).with_tile(100.0, 64));
+        let mut frames = Frames::new();
+        assert!(frames.frame(&spectrum, 1.0 / 60.0, true));
+        frames.speed = 0.0;
+        // The frame's clock goes on, the steps' doesn't: no two steps around it.
+        for _ in 0..3 {
+            assert!(!frames.frame(&spectrum, 1.0 / 60.0, true));
+        }
+        assert!(crate::water::drawn_steps(&frames.time).is_none());
+        let drawn = frames.upload.clone();
+        let mut exact = Vec::new();
+        write_half_texels(&spectrum.field(frames.time.elapsed() as f32, false).texels, &mut exact);
+        assert_eq!(drawn, exact, "the moment at the frame's time");
+    }
+
+    #[test]
+    fn the_blended_upload_reuses_the_kept_moments_buffers_with_a_query_at_the_frames_time() {
+        // Floating bodies, the upload and a game asking the height at the
+        // frame's time (what is drawn) every frame: three moments kept, no
+        // new buffers once warm.
+        let spectrum = SpectrumField::new(WaveSpectrum::new(Vec2::new(6.0, 6.0), 1.0).with_tile(100.0, 64));
+        let mut frames = Frames::new();
+        frames.query = true;
+        let buffers = |s: &SpectrumField| -> Vec<usize> {
+            let mut b: Vec<usize> = s
+                .cache
+                .lock()
+                .unwrap()
+                .fields
+                .iter()
+                .map(|f| f.texels.as_ptr() as usize)
+                .collect();
+            b.sort_unstable();
+            b
+        };
+        let (mut seen, mut start) = (Vec::new(), (0, 0));
+        for i in 0..60 {
+            assert!(frames.frame(&spectrum, frame_dt(60.0, i), true));
+            if i == 10 {
+                seen = buffers(&spectrum);
+                start = (computed(&spectrum), frames.time.sim_tick());
+            } else if i > 10 {
+                assert!(
+                    buffers(&spectrum).iter().all(|b| seen.contains(b)),
+                    "frame {i}: a moment in new buffers"
+                );
+            }
+        }
+        let steps = (frames.time.sim_tick() - start.1) as usize;
+        assert_eq!(
+            computed(&spectrum) - start.0,
+            steps + 49,
+            "a moment a step, and the query's own"
+        );
+    }
+
+    /// The largest difference between the drawn blend of two steps' moments
+    /// and the moment the frame is at, in the height and the sway (metres).
+    fn blend_error(settings: WaveSpectrum, t0: f32, step: f32, between: f32) -> f32 {
+        let spectrum = SpectrumField::new(settings);
+        let steps = DrawnSteps {
+            t0,
+            t1: t0 + step,
+            between,
+        };
+        let mut blended = Vec::new();
+        assert!(spectrum.write_drawn(t0 + step * between, Some(steps), true, &mut blended));
+        let exact = SpectrumField::new(settings).field(t0 + step * between, false);
+        let mut exact_half = Vec::new();
+        write_half_texels(&exact.texels, &mut exact_half);
+        let half = |b: &[u8]| -> Vec<f32> {
+            b.as_chunks::<2>()
+                .0
+                .iter()
+                .map(|&c| half::f16::from_bits(u16::from_le_bytes(c)).to_f32())
+                .collect()
+        };
+        let (a, b) = (half(&blended), half(&exact_half));
+        // Height and sway (x, z): the first three of each texel's four.
+        a.as_chunks::<4>()
+            .0
+            .iter()
+            .zip(b.as_chunks::<4>().0)
+            .flat_map(|(a, b)| (0..3).map(move |i| (a[i] - b[i]).abs()))
+            .fold(0.0, f32::max)
+    }
+
+    #[test]
+    fn the_drawn_blend_of_two_steps_is_the_moment_between() {
+        // The sea of the GPU test (1.5 m, 128 cells over 256 m), a small
+        // choppy tile whose shortest waves turn fastest, and a calm pond.
+        let seas = [
+            WaveSpectrum::new(Vec2::new(8.0, -6.0), 1.5).with_tile(256.0, 128),
+            WaveSpectrum::new(Vec2::new(10.0, 0.0), 2.0).with_tile(64.0, 128),
+            WaveSpectrum::new(Vec2::new(2.0, 1.0), 0.2).with_tile(32.0, 64),
+        ];
+        for (sea, most) in seas.into_iter().zip([0.002, 0.003, 0.001]) {
+            let worst = [0.25, 0.5, 0.75]
+                .into_iter()
+                .map(|between| blend_error(sea, 41.3, 1.0 / 50.0, between))
+                .fold(0.0, f32::max);
+            eprintln!("{:?}: {:.2} mm", (sea.tile, sea.cells()), worst * 1000.0);
+            assert!(worst < most, "{:?}: {worst} m off the moment between", sea.tile);
+        }
+    }
+
+    /// A frame's CPU field on a WebGL2 sea at a variable frame rate (144,
+    /// 60 and 30 frames a second, give or take a quarter; 50 steps a
+    /// second), with and without floating bodies, at 64, 128 and 256
+    /// cells: before (the upload works out the moment at the frame's time)
+    /// and after (it blends the steps' moments), the moments worked out a
+    /// frame and the thread's CPU time a frame (a busy machine stretches
+    /// the wall clock), over 60 frames, run after run. Run by hand in
+    /// release:
+    /// `cargo test -p ponko --lib --features 3d --release variable_frame_rate_cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn variable_frame_rate_cost() {
+        /// This thread's CPU time so far, in milliseconds.
+        fn cpu_ms() -> f64 {
+            #[cfg(unix)]
+            {
+                let mut t = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+                // SAFETY: `t` is a valid, writable timespec.
+                let ok = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut t) } == 0;
+                assert!(ok, "the thread's CPU clock");
+                t.tv_sec as f64 * 1000.0 + t.tv_nsec as f64 / 1e6
+            }
+            #[cfg(not(unix))]
+            {
+                use std::sync::OnceLock;
+                static START: OnceLock<std::time::Instant> = OnceLock::new();
+                START.get_or_init(std::time::Instant::now).elapsed().as_secs_f64() * 1000.0
+            }
+        }
+        let runs: usize = std::env::var("PONKO_SPECTRUM_RUNS")
+            .ok()
+            .and_then(|r| r.parse().ok())
+            .unwrap_or(3);
+        for run in 0..runs {
+            for cells in [64, 128, 256] {
+                for floating in [true, false] {
+                    let mut line = format!("run {run}, {cells} cells, floating {floating}:");
+                    for hz in [144.0, 60.0, 30.0] {
+                        line += &format!(" {hz} Hz");
+                        for share in [false, true] {
+                            let settings = WaveSpectrum::new(Vec2::new(8.0, -6.0), 1.5).with_tile(256.0, cells);
+                            let spectrum = SpectrumField::new(settings);
+                            spectrum.cache.lock().unwrap().never_share = !share;
+                            let mut frames = Frames::new();
+                            for i in 0..10 {
+                                frames.frame(&spectrum, frame_dt(hz, i), floating);
+                            }
+                            let (start, moments) = (cpu_ms(), computed(&spectrum));
+                            for i in 10..70 {
+                                frames.frame(&spectrum, frame_dt(hz, i), floating);
+                            }
+                            let ms = (cpu_ms() - start) / 60.0;
+                            let per_frame = (computed(&spectrum) - moments) as f64 / 60.0;
+                            line += &format!(
+                                " {} {per_frame:.2} moments {ms:.3}",
+                                if share { "after" } else { "before" }
+                            );
+                        }
+                        line += " ms;";
+                    }
+                    eprintln!("{line}");
+                }
+            }
         }
     }
 
@@ -938,19 +1479,21 @@ mod tests {
         let kept = first.texels.clone();
         drop(first);
         spectrum.field(2.0, false);
-        // The cache holds two moments: the third takes over the first's.
-        let third = spectrum.field(3.0, false);
+        spectrum.field(3.0, false);
+        // The cache holds three moments: the fourth takes over the first's.
+        let fourth = spectrum.field(4.0, false);
         assert_eq!(
-            third.texels.as_ptr(),
+            fourth.texels.as_ptr(),
             first_texels,
             "the oldest moment's texels are reused"
         );
-        assert_ne!(third.texels, kept, "and hold the new moment");
+        assert_ne!(fourth.texels, kept, "and hold the new moment");
         // A moment someone still holds is left alone.
-        let held = spectrum.field(4.0, false);
+        let held = spectrum.field(5.0, false);
         let held_texels = held.texels.clone();
-        spectrum.field(5.0, false);
-        spectrum.field(6.0, false);
+        for t in 6..9 {
+            spectrum.field(t as f32, false);
+        }
         assert_eq!(held.texels, held_texels, "a held moment never changes");
     }
 

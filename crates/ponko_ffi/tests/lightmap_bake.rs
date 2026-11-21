@@ -225,7 +225,9 @@ fn c_baked_lighting_survives_bytes() {
         let (baked, ..) = bake(ctx);
         let mut len = 0usize;
         assert_eq!(ponko_baked_lighting_to_bytes(baked, null_mut(), 0, &mut len), PONKO_OK);
-        assert!(len > 64 * 64 * 8, "{len}");
+        // Compressed (the default): the page's blocks packed with LZ4, under
+        // a page of half floats but more than the header.
+        assert!(len > 64 && len < 64 * 64 * 8, "{len}");
         // Too small: only the length.
         let mut small = vec![0u8; 16];
         assert_eq!(

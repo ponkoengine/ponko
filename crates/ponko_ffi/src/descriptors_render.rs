@@ -41,21 +41,25 @@ macro_rules! assert_header {
 // ---- post-processing --------------------------------------------------------
 
 /// The version of `PonkoPostEx` this header describes.
-pub const PONKO_POST_EX_VERSION: u32 = 1;
+pub const PONKO_POST_EX_VERSION: u32 = 2;
 
 /// What happens to the lit 3D frame on its way to the screen, in a layout
 /// that can grow (Rust `ctx.scene3d.post`): `PonkoPost` plus the fields it
-/// couldn't hold, split toning, depth of field and the sample count. Read it
+/// couldn't hold, split toning, depth of field, the sample count and thin
+/// objects in reflections. Read it
 /// with `ponko_ctx_post_ex` (set `struct_size` and `version` first), change
 /// it, and give it back with `ponko_ctx_set_post_ex`.
 ///
-/// Version 1: `post`, `split_toning_*`, `dof_*`, `msaa`.
+/// Version 1: `post`, `split_toning_*`, `dof_*`, `msaa`. Version 2 adds
+/// `ssr_thin_objects`; a version 1 caller leaves it as it is (off, unless
+/// Rust or a newer caller turned it on).
 /// ```
 /// use ponko_ffi::*;
 /// let mut p: PonkoPostEx = unsafe { std::mem::zeroed() };
 /// (p.struct_size, p.version) = (size_of::<PonkoPostEx>() as u32, PONKO_POST_EX_VERSION);
 /// assert_eq!(unsafe { ponko_post_ex_defaults(&mut p) }, PonkoStatus::PONKO_OK);
 /// assert_eq!((p.dof_enabled, p.dof_focus_distance, p.msaa), (false, 10.0, 4));
+/// assert!(!p.ssr_thin_objects);
 /// ```
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -90,6 +94,13 @@ pub struct PonkoPostEx {
     /// `ponko_game_msaa` sets it at startup; this changes it while the game
     /// runs (the 3D targets and pipelines are made again).
     pub msaa: u32,
+    /// Version 2. Screen-space reflections keep thin things (rails, cables,
+    /// poles) whole without temporal antialiasing: the trace also reads a
+    /// coarse depth along its long steps, for about a millisecond more at
+    /// 1920x1080 on a fast GPU (Rust `Post::ssr_thin_objects`). Default
+    /// false; `PONKO_GRAPHICS_QUALITY_ULTRA` turns it on. Only matters where
+    /// `post.ssr` is above 0.
+    pub ssr_thin_objects: bool,
 }
 assert_header!(PonkoPostEx);
 
@@ -99,6 +110,7 @@ impl Versioned for PonkoPostEx {
     fn len_of(version: u32) -> Option<usize> {
         match version {
             1 => Some(end_of!(Self, msaa: u32)),
+            2 => Some(end_of!(Self, ssr_thin_objects: bool)),
             _ => None,
         }
     }
@@ -118,6 +130,7 @@ fn post_ex_of(p: &Post) -> PonkoPostEx {
         dof_focus_range: p.depth_of_field.focus_range,
         dof_blur: p.depth_of_field.blur,
         msaa: p.msaa,
+        ssr_thin_objects: p.ssr_thin_objects,
     }
 }
 
@@ -164,6 +177,7 @@ fn post_of_ex(base: Post, ex: &PonkoPostEx) -> Result<Post, Failure> {
         blur: ex.dof_blur,
     };
     post.msaa = ex.msaa;
+    post.ssr_thin_objects = ex.ssr_thin_objects;
     Ok(post)
 }
 
@@ -823,7 +837,11 @@ mod tests {
             PonkoTargetCameraEx::len_of(2),
             Some(offset_of!(PonkoTargetCameraEx, debug_draw) + 4)
         );
-        assert_eq!(PonkoPostEx::len_of(2), None);
+        assert_eq!(
+            PonkoPostEx::len_of(2),
+            Some(offset_of!(PonkoPostEx, ssr_thin_objects) + 1)
+        );
+        assert_eq!(PonkoPostEx::len_of(3), None);
     }
 
     /// A descriptor with its header set for version 1.

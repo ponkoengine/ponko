@@ -27,7 +27,10 @@
 // 2 = test against the depth grid, 4 = a face view of global illumination's
 // probes: leave out instances under one of their pixels (see `probe_sized`),
 // 8 = with 4, leave out whole cells too far from every probe for any of their
-// instances to be a pixel wide (see `probe_near`).
+// instances to be a pixel wide (see `probe_near`), 16 = an instance cell's
+// view drawn with its batch's other cells: its list holds indices into the
+// whole of `data` (the block starts on a record, at `block / 6`) and its
+// parts' draw arguments are `flags >> 8` draws apart (else one).
 @group(0) @binding(0) var<storage,read> data:array<vec4<f32>>;
 @group(0) @binding(1) var<storage,read_write> indices:array<u32>;
 @group(0) @binding(2) var<storage,read_write> args:array<atomic<u32>>;
@@ -191,7 +194,8 @@ fn prefix(@builtin(global_invocation_id) id:vec3<u32>) {
         let count=indices[at]; indices[at]=found; found+=count;
     }
     let arguments=indices[job+2u]; let parts=indices[job+3u];
-    for(var part=0u;part<parts;part++) {atomicStore(&args[arguments+part*5u+1u],found);}
+    let stride=max(indices[job+7u]>>8u,1u)*5u;
+    for(var part=0u;part<parts;part++) {atomicStore(&args[arguments+part*stride+1u],found);}
 }
 @compute @workgroup_size(64)
 fn scatter(@builtin(workgroup_id) group:vec3<u32>, @builtin(local_invocation_index) lane:u32) {
@@ -203,8 +207,9 @@ fn scatter(@builtin(workgroup_id) group:vec3<u32>, @builtin(local_invocation_ind
     let start=bitcast<u32>(data[base].w); let count=bitcast<u32>(data[base+1u].w);
     let cells=indices[job+5u];
     let offset=indices[list+1u+2u*total+cell]+indices[list+1u+2u*total+cells+cell/64u];
+    let first=select(0u,block/6u,(indices[job+7u]&16u)!=0u);
     for(var i=start+lane;i<start+count;i+=64u) {
         let rank=indices[list+1u+total+i];
-        if rank!=0xffffffffu {indices[list+1u+offset+rank]=i;}
+        if rank!=0xffffffffu {indices[list+1u+offset+rank]=first+i;}
     }
 }

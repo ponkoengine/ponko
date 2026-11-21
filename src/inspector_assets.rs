@@ -19,7 +19,7 @@ use super::keys::Action;
 use super::scene::AssetDrag;
 use crate::ctx::Ctx;
 use crate::editor::cook::{AssetKind, CookSettings, Source};
-use crate::editor::thumbs::{SIZE, Thumbnails};
+use crate::editor::thumbs::{self, SIZE, Thumbnails};
 
 /// A tile's size, in points.
 const TILE: egui::Vec2 = egui::vec2(76.0, 90.0);
@@ -42,10 +42,10 @@ pub(crate) struct AssetPanel {
     pub previewing: Option<crate::audio::Playing>,
     /// The search field takes the keyboard next frame.
     focus_search: bool,
-    /// The assets folder, instead of the game's (tests list a fixture
-    /// folder).
+    /// Where the files are, instead of the game's assets (tests list a
+    /// fixture folder, or files in memory as a web build has them).
     #[cfg(test)]
-    pub root: Option<PathBuf>,
+    pub root: Option<thumbs::Source>,
 }
 
 impl std::fmt::Debug for AssetPanel {
@@ -123,8 +123,9 @@ fn folders(paths: &[(String, AssetKind)]) -> BTreeSet<String> {
     out
 }
 
-/// The assets folder that has `rel`.
-fn root_of(panel: &AssetPanel, rel: &str) -> Option<PathBuf> {
+/// Where `rel` is read from: the assets folder that has it, or on the web
+/// the files the page fetched and the editor saved (no folders there).
+fn root_of(panel: &AssetPanel, rel: &str) -> Option<thumbs::Source> {
     #[cfg(test)]
     if let Some(root) = &panel.root {
         return Some(root.clone());
@@ -132,12 +133,15 @@ fn root_of(panel: &AssetPanel, rel: &str) -> Option<PathBuf> {
     let _ = panel;
     #[cfg(not(target_arch = "wasm32"))]
     {
-        crate::assets::asset_roots().into_iter().find(|r| r.join(rel).is_file())
+        let root = crate::assets::asset_roots().into_iter().find(|r| r.join(rel).is_file());
+        root.map(thumbs::Source::Folder)
     }
     #[cfg(target_arch = "wasm32")]
     {
         let _ = rel;
-        None
+        Some(thumbs::Source::Memory(std::sync::Arc::new(
+            crate::assets::read_web_asset,
+        )))
     }
 }
 
@@ -175,7 +179,7 @@ impl Panels {
         let panel = self
             .asset_panel()
             .expect("the asset panel is the editor app's: set `Panels::app` first");
-        panel.root = Some(root);
+        panel.root = Some(thumbs::Source::Folder(root));
         panel.selected = selected.map(str::to_string);
     }
 
@@ -186,6 +190,15 @@ impl Panels {
 }
 
 impl Panels {
+    /// Asset `path` changed (saved, or reverted to the build's file): its
+    /// thumbnail is made again.
+    pub(super) fn asset_changed(&mut self, path: &str) {
+        if let Some(panel) = self.asset_panel() {
+            panel.thumbs.forget(path);
+            panel.textures.remove(path);
+        }
+    }
+
     fn asset_panel(&mut self) -> Option<&mut AssetPanel> {
         self.app.as_mut().map(|a| &mut a.assets)
     }
@@ -489,7 +502,7 @@ fn details(ui: &mut Ui, ctx: &mut Ctx, panel: &mut AssetPanel, all: &[(String, A
         _ => {}
     }
     if !kind.settings().is_empty()
-        && let Some(root) = root
+        && let Some(thumbs::Source::Folder(root)) = root
     {
         ui.separator();
         import_settings(ui, panel, &root, &path, kind);

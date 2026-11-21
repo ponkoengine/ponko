@@ -297,10 +297,20 @@ impl Panels {
             .map_err(String::from)
             .map(|kind| format!("opened {} {path}", kind.name()));
         if let Some(done) = self.report(opened) {
-            self.status = Some(done);
+            self.opened(ctx, done);
             self.scene_path = path.to_string();
             self.select(None, false);
             self.scene.forget_drag();
+        }
+    }
+
+    /// After the document was opened: `done` in the status line, and in
+    /// the error line the glTF scenes it names that didn't load, by file
+    /// (otherwise only the console would say).
+    pub(crate) fn opened(&mut self, ctx: &Ctx, done: String) {
+        self.status = Some(done);
+        if let Some(line) = unloaded_line(&ctx.editor.doc.unloaded) {
+            self.error = Some(line);
         }
     }
 
@@ -1226,6 +1236,20 @@ impl Panels {
     pub(super) fn keys_3d(&mut self, _: &Ui, _: &mut Ctx) {}
     pub(super) fn highlight_3d(&self, _: &Ui, _: &Ctx) {}
     pub(super) fn end_gizmo_drag(&mut self, _: &mut Ctx) {}
+}
+
+/// The error line for glTF scenes that didn't load when the document was
+/// opened, naming each file; `None` when they all loaded.
+fn unloaded_line(unloaded: &[crate::editor::Unloaded]) -> Option<String> {
+    let files: Vec<String> = unloaded.iter().map(|u| format!("{} ({})", u.file, u.why)).collect();
+    match files.len() {
+        0 => None,
+        1 => Some(format!("a glTF scene didn't load and is left out: {}", files[0])),
+        n => Some(format!(
+            "{n} glTF scenes didn't load and are left out: {}",
+            files.join("; ")
+        )),
+    }
 }
 
 #[cfg(test)]

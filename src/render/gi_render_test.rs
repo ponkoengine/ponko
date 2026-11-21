@@ -291,6 +291,7 @@ impl Rig {
             }
             let start = std::time::Instant::now();
             self.queue.submit(buffers);
+            self.renderer.submitted();
             if let Some(t) = timer {
                 t.submitted();
             }
@@ -1752,8 +1753,11 @@ fn floor_east_of(rig: &Rig, pixels: &[u8], x: f32, points: &[f32]) -> Vec<i32> {
 
 /// A 10 cm wall on a plane of probes 2 units apart keeps the bounced light
 /// in the lit room: the dark room's floor stays dark right up to the wall,
-/// a sixteenth as bright as the lit room's floor a unit from the wall or
-/// less.
+/// under a fiftieth as bright as the lit room's floor a unit from the wall
+/// (the sums of the image's 8-bit channels). The probes in the wall half a
+/// unit below its top are found buried too: before, rays over the top in
+/// their neighbours' views hid them, and they lit the dark room with the
+/// lit one's light (the floor at about a twentieth).
 #[test]
 fn a_thin_wall_on_a_plane_of_coarse_probes_keeps_the_dark_room_dark() {
     use crate::render::render_test_support::{Image, keep_image};
@@ -1784,7 +1788,7 @@ fn a_thin_wall_on_a_plane_of_coarse_probes_keeps_the_dark_room_dark() {
         "positive control: without the wall the light reaches there: {open:?} vs {lit}"
     );
     assert!(
-        dark.iter().all(|&d| d * 16 <= lit),
+        dark.iter().all(|&d| d * 50 <= lit),
         "the dark room stays dark: {dark:?} vs {lit}"
     );
     crate::render::render_test_support::check_reference(
@@ -1796,5 +1800,118 @@ fn a_thin_wall_on_a_plane_of_coarse_probes_keeps_the_dark_room_dark() {
          the west room only; 200 frames of probe updates at 16 a frame, camera at (0, 6.5, 0.01) looking straight \
          down, 100 degree field of view; 128x128, 4x multisampling, no tonemapping.",
         &rig.info,
+    );
+}
+
+/// A closed room 10 x 4 x 10 inside with light gray walls (each bounce
+/// keeps about half the light) and a shadowed lamp, under a black sky, in
+/// a default-size probe grid (17 x 9 x 17 at 2 units, 4 probes a frame: a
+/// full round of updates is 650 frames, and only about a twentieth of the
+/// probes are in the room). The lamp comes on after every probe has
+/// looked around once in the dark. Returns how bright the roof is after
+/// each `step` frames, `steps` times (the linear sum of red, green and
+/// blue over a few points). `unboosted`: the probes take turns by age
+/// and distance alone, as before changing ones went first.
+fn lamp_on_in_a_default_grid(step: usize, steps: usize, unboosted: bool) -> Option<Vec<f32>> {
+    crate::three::gi::GI_UNBOOSTED.with(|u| u.set(unboosted));
+    let mut rig = Rig::new(true)?;
+    let gray = rig.mesh(
+        &MeshData::cube(1.0),
+        MaterialDesc::color(Color::rgb(0.7, 0.7, 0.7)).with_roughness(1.0),
+    );
+    let (inner, outer) = (5.0, 5.4);
+    let walls = [
+        (gray, vec3(-outer, -0.9, -outer), vec3(outer, -0.5, outer)), // floor
+        (gray, vec3(-outer, 3.5, -outer), vec3(outer, 3.9, outer)),   // roof
+        (gray, vec3(-outer, -0.5, -outer), vec3(-inner, 3.5, outer)), // west
+        (gray, vec3(inner, -0.5, -outer), vec3(outer, 3.5, outer)),   // east
+        (gray, vec3(-inner, -0.5, -outer), vec3(inner, 3.5, -inner)), // north
+        (gray, vec3(-inner, -0.5, inner), vec3(inner, 3.5, outer)),   // south
+    ];
+    rig.blocks(&walls, Build::Models);
+    let lamp = rig.ctx.world.spawn((
+        Transform3D::at(vec3(2.5, 0.5, 2.5)),
+        crate::d3::PointLight {
+            intensity: 0.0,
+            range: 14.0,
+            shadows: true,
+            ..Default::default()
+        },
+    ));
+    dark_world(&mut rig);
+    rig.ctx.scene3d.lighting.gi = GlobalIllumination {
+        enabled: true,
+        ..Default::default()
+    };
+    rig.ctx.scene3d.camera.position = vec3(-3.5, 0.5, -3.5);
+    rig.ctx.scene3d.camera.look_at(vec3(0.0, 3.5, 0.0));
+    rig.draw(700);
+    rig.ctx.world.get_mut::<crate::d3::PointLight>(lamp).unwrap().intensity = 2.0;
+    let points = [vec3(0.0, 3.5, 0.0), vec3(-1.0, 3.5, 1.0), vec3(1.0, 3.5, -1.0)];
+    let linear = |c: i32| {
+        let c = c as f32 / 255.0;
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let out = (0..steps)
+        .map(|_| {
+            let pixels = rig.draw(step);
+            points
+                .iter()
+                .map(|&p| rig.at(&pixels, p).iter().map(|&c| linear(c)).sum::<f32>())
+                .sum()
+        })
+        .collect();
+    crate::three::gi::GI_UNBOOSTED.with(|u| u.set(false));
+    Some(out)
+}
+
+/// The first of `curve`'s steps from which it stays within `within` of
+/// `settled`.
+fn settles_at(curve: &[f32], settled: f32, within: f32) -> usize {
+    curve
+        .iter()
+        .rposition(|v| (v / settled - 1.0).abs() > within)
+        .map_or(0, |k| k + 1)
+}
+
+/// The bound: with a default-size grid at its default 4 probes a frame,
+/// after a lamp comes on in a closed room the roof stays within 5% of
+/// where it settles from 600 frames on, because the probes whose light is
+/// still changing (those in the room) take more of the turns. Taking
+/// turns by age and distance alone, it is still more than 5% off at 900
+/// frames (it took 1200 when measured).
+#[test]
+fn probes_whose_light_changes_take_more_turns_so_a_lamp_settles_sooner() {
+    let Some(boosted) = lamp_on_in_a_default_grid(100, 15, false) else {
+        return;
+    };
+    let unboosted = lamp_on_in_a_default_grid(100, 15, true).unwrap();
+    let settled = *boosted.last().unwrap();
+    let print = |c: &[f32]| {
+        c.iter()
+            .map(|v| format!("{:.3}", v / settled))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let (fast, slow) = (
+        settles_at(&boosted, settled, 0.05) * 100,
+        settles_at(&unboosted, settled, 0.05) * 100,
+    );
+    eprintln!(
+        "roof every 100 frames after the lamp comes on, changing probes first: {}",
+        print(&boosted)
+    );
+    eprintln!("by age and distance alone: {}", print(&unboosted));
+    eprintln!("within 5% from {fast} frames, against {slow}");
+    assert!(boosted[0] > 0.0, "the lamp lights the roof: {}", print(&boosted));
+    assert!(fast <= 600, "settles within 600 frames: {}", print(&boosted));
+    assert!(
+        slow > 900,
+        "negative control: by age alone it is still off at 900 frames: {}",
+        print(&unboosted)
     );
 }

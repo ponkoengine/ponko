@@ -1488,7 +1488,8 @@ impl Renderer3D {
         self.resources.texture_replaced(device, textures, texture);
     }
 
-    #[cfg(any(test, feature = "bench-internals"))]
+    // For tests and the native benches (unused in a web build).
+    #[cfg(all(not(target_arch = "wasm32"), any(test, feature = "bench-internals")))]
     pub fn create_material(
         &mut self,
         device: &wgpu::Device,
@@ -1578,6 +1579,7 @@ impl Renderer3D {
         for batch in self.static_batches.iter().flatten() {
             batch.tally_memory(t);
         }
+        self.batching.tally_memory(t);
         if let Some(culling) = &self.static_culling {
             culling.tally_memory(t);
         }
@@ -1635,7 +1637,8 @@ impl Renderer3D {
     }
 
     /// Compiles a material shader from the game's WGSL; returns its index.
-    #[cfg(any(test, feature = "bench-internals"))]
+    // For tests and the native benches (unused in a web build).
+    #[cfg(all(not(target_arch = "wasm32"), any(test, feature = "bench-internals")))]
     pub fn create_shader(
         &mut self,
         device: &wgpu::Device,
@@ -1964,6 +1967,9 @@ impl Renderer3D {
     /// Starts reading this frame's occlusion depth back. Call after submitting.
     pub fn submitted(&mut self) {
         self.occlusion.submitted();
+        if let Some(gi) = &self.gi {
+            gi.submitted();
+        }
     }
 
     /// For a device without view formats (WebGL2): a sprite texture is read
