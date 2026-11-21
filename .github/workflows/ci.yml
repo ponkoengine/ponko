@@ -1241,6 +1241,15 @@ jobs:
         timeout-minutes: 5
         if: ${{ !cancelled() }}
         run: node web/smoke/runtime-failures.mjs
+      # A WebGPU device lost while playing (the device-lost case): in the new
+      # headless mode, where a WebGPU canvas presents, with software Vulkan.
+      # A runner without a WebGPU adapter reports it unsupported.
+      - name: Chromium, a lost WebGPU device reaches the page (new headless mode)
+        timeout-minutes: 5
+        if: ${{ !cancelled() }}
+        run: >-
+          node web/smoke/runtime-failures.mjs --case device-lost --chromium-mode new
+          --browser-arg --use-webgpu-adapter=swiftshader --allow-unsupported --out target/web-smoke/runtime-failures-webgpu
       # Threads on the web (web/smoke/threads.mjs, the guide's "Threads on the
       # web"): examples/web_threads built with `web/build.sh --threads`
       # (nightly Rust rebuilding std with atomics, hence rust-src). Served with

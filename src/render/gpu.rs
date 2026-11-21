@@ -543,6 +543,16 @@ impl Renderer {
                 .await,
             "could not open the GPU device",
         )?;
+        // In a browser, a WebGPU device lost while the game runs (the GPU
+        // process crashed or was reset) stops it for good: the page hears
+        // of it through `onPonkoFailure`, kind `DeviceLost`. On WebGL2 the
+        // canvas's lost context reports it instead (`ContextLost`).
+        #[cfg(target_arch = "wasm32")]
+        if adapter.get_info().backend == wgpu::Backend::BrowserWebGpu {
+            device.set_device_lost_callback(|_reason, message| {
+                crate::web::report_failure(crate::web::device_lost_while_playing(&message));
+            });
+        }
 
         // The 3D frame's samples per pixel: the game's choice where this GPU
         // can multisample both 3D targets that much, else 4 (always works).
