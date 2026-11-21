@@ -88,7 +88,11 @@ assert!(under_the_boat.height.abs() < 1.2);
 # });
 ```
 
-The shader draws the waves at `ctx.time.elapsed()`; buoyancy uses the
+`Water::drawn_time(&ctx.time)` is the time the surface is drawn at this
+frame: pass it to ask about what the player sees. These waves (from the
+wave table) are drawn on the frame's clock, `ctx.time.elapsed()`, which
+is also what a custom shader reads as `frame.time.x`; waves from a
+spectrum (below) are drawn on the simulation's. Buoyancy uses the
 simulation's time. A GPU test reads the drawn surface back and compares
 it with `height_at`: they agree to within 1 cm (5.8 mm worst over the
 probes on the test machine).
@@ -121,7 +125,7 @@ let storm = WaveSpectrum::new(vec2(12.0, 4.0), 2.5) // wind in m/s, height in m
     .with_seed(7);
 let sea = Water::spawn(ctx, WaterDesc::sea(0.0, vec2(12.0, 4.0), 2.5).with_waves(Waves::spectrum(storm)));
 let water = ctx.world.get::<Water>(sea).unwrap();
-let height = water.height_at(vec2(30.0, -8.0), ctx.time.elapsed() as f32);
+let height = water.height_at(vec2(30.0, -8.0), water.drawn_time(&ctx.time));
 assert!(height.abs() < water.desc().waves.max_height());
 # });
 ```
@@ -144,7 +148,8 @@ smaller than that leaves them out.
 Where it is worked out:
 
 - **With compute shaders** (every native backend and WebGPU), compute
-  passes on the GPU: one turns the spectrum to the frame's time, then one
+  passes on the GPU: one turns the spectrum to the drawn time (see the
+  clock below), then one
   per FFT stage along x and along z (13 passes at 64 cells, 17 at 256).
 - **Without** (WebGL2), the CPU works out the same field and uploads it
   each frame. Its FFT is [rustfft](https://crates.io/crates/rustfft)'s,
@@ -165,23 +170,43 @@ Where it is worked out:
   GPU test reads the drawn surface back and compares it with `height_at`: 9.9 mm worst
   with the GPU's FFT, 9.1 mm with the CPU's upload, on a 1.5 m sea; the
   GPU's field matches the CPU's to 6 mm (it runs in half floats).
+- **The clock.** Waves from a spectrum are drawn on the simulation's
+  clock, where floating bodies ride them: `ctx.time.sim_time()` plus
+  `fixed_alpha()` of a fixed step (`Water::drawn_time`; the GPU's pass
+  gets it in full precision, taken within `SPECTRUM_PERIOD`). Until the
+  game first pauses or changes speed this is the frame's clock to a
+  microsecond, so nothing looks different. A paused game's sea stands
+  still (the surface's small detail and the underwater caustics stay on
+  the frame's clock and keep moving), and it works out and uploads
+  nothing while paused; at another simulation speed the waves run at that
+  speed. After a pause the drawn waves are the ones floating bodies ride,
+  where the frame's clock would leave them off by as much as the waves
+  move in the time paused (a GPU test pauses for 1.2 s, then runs at double
+  speed: the field drawn is the CPU's at the drawn time to 6 mm with the
+  GPU's FFT and 0.5 mm uploaded on WebGL2, and 0.6 to 1.7 m off the
+  frame clock's waves; `a_paused_or_sped_up_sea_is_drawn_on_the_simulations_clock`).
+  `frame.time.x` in a shader is still the frame's clock: a game shader
+  that drew something in step with a spectrum's waves from it should take
+  the drawn time in a material value instead. Waves from the wave table
+  stay on the frame's clock: their shader works them out from
+  `frame.time`, which motion vectors for temporal antialiasing read as of
+  the last frame too, and there is no upload to share.
 - **Sharing the fixed steps' moments.** Floating bodies ask for the
-  waves at each fixed step's time, the WebGL2 upload at the frame's,
-  which falls between two steps; with a variable frame rate the two never
-  meet, so each frame worked out a moment of its own besides the steps'.
-  Now, while the frame's clock is on the steps' (no pause or simulation
-  speed change has moved them apart), the upload blends the moments of
-  the next two steps, which the floating bodies ask for anyway: a frame
-  works out at most the moment one step ahead, and none when it falls
-  between the same steps as the last. The blend is within a millimetre of
+  waves at each fixed step's time, and the drawn time falls between two
+  steps, so with a variable frame rate the two never meet. The WebGL2
+  upload therefore blends the moments of the two steps around the drawn
+  time, which the floating bodies ask for anyway: a frame works out at
+  most the moment one step ahead, and none when it falls between the same
+  steps as the last. On the simulation's clock this holds through pauses
+  and speed changes (`pausing_resuming_and_changing_speed_keep_one_moment_a_step`
+  runs the engine's clock through a pause, a single step, resuming, double
+  and half speed: at most one moment a step all along). The blend is within a millimetre of
   the moment it stands for (0.98 mm worst on the 1.5 m sea at 128 cells,
   both in the half floats they are uploaded in;
   `the_drawn_blend_of_two_steps_is_the_moment_between`). Without floating
   bodies it blends only when that costs no more moments than drawing the
   frame's own (two once, to start), so frames faster than the steps work
-  out one moment a step instead of one a frame. Once
-  paused or slowed, each frame works out its own moment, as before.
-  Measured with `variable_frame_rate_cost` (release, one thread's CPU
+  out one moment a step instead of one a frame. Measured with `variable_frame_rate_cost` (release, one thread's CPU
   time, the medians of five runs alternating before and after, load
   average about 100 to 170, so a run with the same moments either way
   still moved by up to a fifth): with something floating, 50 steps a second
@@ -197,6 +222,31 @@ Where it is worked out:
   Without floating bodies at 144 frames a second, 0.23 → 0.20 ms at 128
   cells and 1.05 → 0.89 ms at 256; at 60 and 30 the difference was within
   the noise, as was every case at 64 cells (under 0.2 ms either way).
+- **The upload's half floats.** The field goes up as half floats, a
+  conversion of every one of its numbers each frame, which on its own
+  cost about as much as a moment of the field at 128 cells. Where the CPU
+  converts half floats itself (F16C on x86, FP16 on ARM, used through the
+  [half](https://crates.io/crates/half) crate, which checks at run time)
+  the upload uses it, a chunk of 1024 at a time; elsewhere (the web, an
+  older x86) a branch-free conversion that a loop vectorises. Both give
+  the bits the conversion gave before for every one of the 2^32 floats
+  (`every_float_converts_as_the_reference`, run by hand; the test suite
+  checks zeros, subnormals, infinities, NaNs and rounding ties). Measured
+  alone with `half_upload_cost` (release, one thread's CPU time per
+  upload, medians of five runs of 100, two sets on an Apple M4 Max at a
+  load average of 70 to 130), against 0.13 ms (128 cells) and 0.59 to
+  0.62 ms (256) for a moment of the field:
+
+  | Cells | Upload of one moment | Upload blending two |
+  |---|---|---|
+  | 128 | 0.083 to 0.089 → 0.007 ms | 0.114 to 0.151 → 0.013 to 0.014 ms |
+  | 256 | 0.356 to 0.363 → 0.029 ms | 0.491 to 0.543 → 0.054 to 0.055 ms |
+
+  With both, `variable_frame_rate_cost` (medians of five, same machine)
+  gives a WebGL2 frame with something floating 0.09 ms of CPU field at
+  128 cells and 144 frames a second (0.19 ms at 60, 0.46 ms at 30), and
+  0.37, 0.97 and 1.84 ms at 256 cells; the browser's conversion was not
+  measured.
 
 Cost, measured on an Apple M4 Max (Metal) while the machine was busy
 with other work (load average 70 to 116). The GPU column is from
@@ -256,7 +306,7 @@ seed gives the same sea on every machine. Halving the grid (64 cells)
 saves under half a millisecond and drops the shortest waves; 256 cells is
 fine on a fast machine but costs about 2.8 ms (1.8 ms with WASM SIMD) a
 frame on WebGL2. There is no update-rate setting: the field is drawn at
-the frame's time (from the two fixed steps around it, see above), once
+the drawn time (from the two fixed steps around it, see above), once
 per moment however many queries ask, and an older moment would leave
 floating bodies off the drawn waves.
 
@@ -365,9 +415,10 @@ device limited to what WebGL2 allows.
 `PONKO_WATER_MAX_WAVES` waves, a flow map as RGBA8 texels, which is
 copied) and spawn it with `ponko_ctx_spawn_water`. `ponko_game_water`
 adds the plugin; `ponko_ctx_water_sample`, `ponko_ctx_water_touch` and
-`ponko_ctx_despawn_water` do the rest. C++ wraps them as
-`ponko::water_desc::sea(...)`, `ctx.spawn_water`, `ctx.water_height` and
-`game.water()`. `ponko_ctx_set_buoyancy_box` and `_sphere` float boxes
+`ponko_ctx_despawn_water` do the rest, and `ponko_ctx_water_drawn_time`
+gives the time the surface is drawn at (Rust `Water::drawn_time`). C++
+wraps them as `ponko::water_desc::sea(...)`, `ctx.spawn_water`,
+`ctx.water_height`, `ctx.water_drawn_time` and `game.water()`. `ponko_ctx_set_buoyancy_box` and `_sphere` float boxes
 and balls in fresh water. Everything else about a floating body is a
 `PonkoBuoyancyDesc`, a versioned descriptor: `ponko_buoyancy_desc_box`,
 `_sphere` or `_points` fills it (your own sample points, up to

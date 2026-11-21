@@ -8583,6 +8583,13 @@ public:
         detail::check(status);
         return true;
     }
+    /// The time `water` is drawn at this frame (seconds), for water_sample and water_height: the
+    /// simulation's clock for waves from a spectrum (it stops while paused), the frame's otherwise.
+    float water_drawn_time(entity water) const {
+        float t = 0;
+        detail::check(ponko_ctx_water_drawn_time(raw_, water, &t));
+        return t;
+    }
     /// The water's surface at ground point `at` (x, z) and time `t` (seconds): height, normal, velocity.
     PonkoWaterSample water_sample(entity water, vec2 at, float t) {
         PonkoWaterSample s{};

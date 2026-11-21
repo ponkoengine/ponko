@@ -5370,6 +5370,9 @@ static void native_parity_round5() {
         float spread = 0;
         for (int i = 0; i < 4; ++i) spread += std::fabs(ctx.water_height(sea, {i * 17.0f, i * -9.0f}, i * 0.7f));
         CHECK(spread > 0.001f);
+        CHECK(ctx.water_drawn_time(sea) == static_cast<float>(ctx.sim_time()));
+        const ponko::entity dry = ctx.world().spawn();
+        throws([&] { ctx.water_drawn_time(dry); });
         spectrum.tile = 0;
         throws_invalid([&] { ctx.spawn_water(ponko::water_desc::sea(0, {12, 4}, 2).with_spectrum(spectrum)); }, "tile");
     });

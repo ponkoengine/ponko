@@ -10460,6 +10460,10 @@ enum PonkoStatus ponko_ctx_water_sample(const struct PonkoCtx *ctx,
                                         float t,
                                         struct PonkoWaterSample *out_sample);
 
+enum PonkoStatus ponko_ctx_water_drawn_time(const struct PonkoCtx *ctx,
+                                            uint64_t entity,
+                                            float *out_t);
+
 enum PonkoStatus ponko_ctx_water_touch(struct PonkoCtx *ctx,
                                        uint64_t entity,
                                        struct PonkoVec2 at,

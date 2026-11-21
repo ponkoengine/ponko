@@ -5473,7 +5473,7 @@ int main() {
     storm.choppiness = 1.2f;
     storm.seed = 7;
     ponko::entity sea = ctx.spawn_water(ponko::water_desc::sea(0, {12, 4}, 2.5f).with_spectrum(storm));
-    float height = ctx.water_height(sea, {30, -8}, static_cast<float>(ctx.time()));
+    float height = ctx.water_height(sea, {30, -8}, ctx.water_drawn_time(sea));
     // ANCHOR_END: water_spectrum
     (void)height;
 }

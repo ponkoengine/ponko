@@ -1,7 +1,9 @@
 // Waves from a spectrum, first pass (the water kit's compute pass over
-// the field): the spectrum at this frame's time, from its random start.
+// the field): the spectrum at the drawn time, from its random start.
 // custom[0]: the field's texels across, the square's side in metres, the
 // choppiness, the period the waves repeat in (seconds).
+// custom[1].x: the drawn time within the period, on the simulation's clock
+// (`water::drawn_steps`), so it stops while the game is paused.
 // custom_texture0: the start, h0(k) (rg) and conj(h0(-k)) (ba).
 // Out: A = h + i·Dx (rg) and B = Dz + i·dh/dt (ba), whose inverse FFTs
 // are the height, the sway and the rising speed (see `spectrum.rs`).
@@ -22,7 +24,7 @@ fn compute(c: Cell) -> vec4<f32> {
     // Deep-water speed, rounded to whole turns per period (as `omega`).
     let turn = 6.2831853 / settings.w;
     let w = floor(sqrt(9.81 * kl) / turn) * turn;
-    let t = frame.time.x - floor(frame.time.x / settings.w) * settings.w;
+    let t = material.custom[1].x;
     let e = vec2<f32>(cos(w * t), sin(w * t));
     let up = spectrum_mul(start.xy, e);
     let down = spectrum_mul(start.zw, vec2<f32>(e.x, -e.y));
