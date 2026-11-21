@@ -282,6 +282,15 @@ default budgets a frame that uploads pays about 4 ms on the game thread
 plus a millisecond or two on the GPU; a lower upload budget
 (`ctx.gfx.set_upload_budget`) spreads that thinner.
 
+With the GPU's own upload time (`gpu_upload_ms`, [What uploads
+cost](#what-uploads-cost)), the same test also prints what the timestamps
+say. Two runs on the M4 Max (Metal, release, load average 140 to 170): the
+GPU copied the 64 MiB in 2.0 to 5.3 ms of its own time (0.03 to 0.08 ms
+per MiB), against 28 to 56 ms of the game thread's. So on this GPU the
+copies themselves are cheap; the longer frames above are mostly the busy
+machine and the frame's other work, which the frame time can't tell apart
+and the timestamps can.
+
 ## In a browser
 
 In an ordinary web build there are no worker threads, so a group's reads

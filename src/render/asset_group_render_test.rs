@@ -236,6 +236,8 @@ fn group_upload_cost_on_the_gpu() {
     let mut loaded = Vec::new();
     while ctx.assets.group_state(id) == GroupState::Loading {
         ctx.pump_asset_groups();
+        // As every frame does: takes the GPU's times that came back.
+        ctx.pump_streaming();
         let stats = ctx.assets.group_stats();
         let started = std::time::Instant::now();
         frame(&mut ctx, "loading");

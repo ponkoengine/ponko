@@ -260,7 +260,7 @@ impl UploadTimer {
             let ms = match slot.readback.get_mapped_range(..) {
                 Ok(view) => {
                     let t: &[u64] = bytemuck::cast_slice(&view);
-                    Some(copy_time(&t[..slot.pairs as usize * 2], self.period))
+                    copy_time(&t[..slot.pairs as usize * 2], self.period)
                 }
                 Err(_) => None,
             };
@@ -274,16 +274,20 @@ impl UploadTimer {
 }
 
 /// The milliseconds of timestamp pairs (begin, end): their sum, leaving out
-/// pairs the GPU didn't write sensibly.
-fn copy_time(t: &[u64], period: f64) -> f32 {
-    let ticks: u64 = t
+/// pairs the GPU didn't write sensibly (Metal now and then leaves one
+/// unwritten); `None` if it wrote none.
+fn copy_time(t: &[u64], period: f64) -> Option<f32> {
+    let valid: Vec<u64> = t
         .as_chunks::<2>()
         .0
         .iter()
         .filter(|[begin, end]| *begin != 0 && end >= begin)
         .map(|[begin, end]| end - begin)
-        .sum();
-    (ticks as f64 * period / 1e6) as f32
+        .collect();
+    if valid.is_empty() {
+        return None;
+    }
+    Some((valid.iter().sum::<u64>() as f64 * period / 1e6) as f32)
 }
 
 /// The rows of a texture write, as a staging buffer copy needs them.
@@ -381,8 +385,9 @@ mod tests {
     fn copy_times_add_up_the_pairs_the_gpu_wrote() {
         // Two copies of 1000 and 500 ticks, and a pair never written.
         let t = [100, 1100, 2000, 2500, 0, 0];
-        assert!((copy_time(&t, 1.0) - 0.0015).abs() < 1e-7);
-        // A pair that ends before it begins is left out.
-        assert_eq!(copy_time(&[500, 400], 1.0), 0.0);
+        assert!((copy_time(&t, 1.0).unwrap() - 0.0015).abs() < 1e-7);
+        // A pair that ends before it begins (or never ends) is left out,
+        // and a step with no pair written reports nothing.
+        assert_eq!(copy_time(&[500, 400, 600, 0], 1.0), None);
     }
 }
