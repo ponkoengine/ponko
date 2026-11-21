@@ -230,6 +230,28 @@ impl Ctx {
         Ok(())
     }
 
+    /// `ponko_bench`: the retained UI's work before a frame's systems, as a
+    /// window's frame does it (this frame's input, layout, events).
+    /// Unstable (`bench-internals`).
+    #[doc(hidden)]
+    #[cfg(feature = "bench-internals")]
+    pub fn bench_ui_update(&mut self) {
+        self.update_retained_ui();
+    }
+
+    /// `ponko_bench`: the retained UI's work after a frame's systems, as a
+    /// window's frame does it (layout of what the systems changed, the draw
+    /// list), then forgets the draw list. Returns the sprites drawn.
+    /// Unstable (`bench-internals`).
+    #[doc(hidden)]
+    #[cfg(feature = "bench-internals")]
+    pub fn bench_ui_draw(&mut self) -> usize {
+        self.draw_retained_ui();
+        let drawn = self.gfx.ui_list.len();
+        self.gfx.ui_list.clear();
+        drawn
+    }
+
     pub(crate) fn draw_retained_ui(&mut self) {
         // The language may have changed in this frame's systems.
         self.localize_ui();

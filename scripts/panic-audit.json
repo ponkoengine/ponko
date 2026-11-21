@@ -2117,6 +2117,24 @@
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. skin < self.skins.len(),             \"ponko: skin {skin} isn't in the skeleton; add the skin first\"         );         assert!(",
     "site": "src/skeleton2d/data.rs:624"
   },
+  "src/skeleton2d/data.rs:0e77e70d6bb54b1e": {
+    "classification": "forwarded-error",
+    "construction": "panic!(\"ponko: {e}\")",
+    "reason": "Re-raises the SkeletonError from check_physics, whose messages name the constraint and the fix; documented under add_physics_constraint's Panics.",
+    "site": "src/skeleton2d/data.rs:1001"
+  },
+  "src/skeleton2d/data.rs:0eb4f6415297add1": {
+    "classification": "forwarded-error",
+    "construction": "panic!(\"ponko: {e}\")",
+    "reason": "Re-raises the SkeletonError from check_clip (clip, deform and constraint tracks), whose messages name the track and what is wrong; documented under add_clip's Panics.",
+    "site": "src/skeleton2d/data.rs:930"
+  },
+  "src/skeleton2d/data.rs:13c752ea205811e1": {
+    "classification": "caller-contract",
+    "construction": "assert!( mask.end.is_none_or(|e| e < self.slots.len()), \"ponko: clipping mask \\\"{name}\\\" ends at a slot that isn't in the skeleton; add that slot first or end at None\" )",
+    "reason": "The message names the mask, the missing end slot and the fix (add the slot first or end at None); documented under add_attachment's Panics.",
+    "site": "src/skeleton2d/data.rs:874"
+  },
   "src/skeleton2d/data.rs:2a565f6943ddebd2": {
     "classification": "caller-contract",
     "construction": "assert!( skin < self.skins.len(), \"ponko: skin {skin} isn't in the skeleton; add the skin first\" )",
@@ -2129,11 +2147,11 @@
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. /// # Panics     /// If the name is taken.     pub fn add_skin(&mut self, name: &str) -> usize {         assert!(",
     "site": "src/skeleton2d/data.rs:597"
   },
-  "src/skeleton2d/data.rs:57fb92cde321e33c": {
-    "classification": "caller-contract",
-    "construction": "assert!( mask.end.is_none_or(|e| e < self.slots.len()), \"ponko: clipping mask \\\"{name}\\\" ends at a slot that isn't in the skeleton; add that slot first or end at None\" )",
-    "reason": "The message names the mask, the missing end slot and the fix.",
-    "site": "src/skeleton2d/data.rs:859"
+  "src/skeleton2d/data.rs:440cb3558aeb0d32": {
+    "classification": "forwarded-error",
+    "construction": "panic!(\"ponko: path \\\"{name}\\\": {e}\")",
+    "reason": "Re-raises PathShape::check's message (whole points of three vertices, one length per curve, numbers), naming the path; documented under add_attachment's Panics.",
+    "site": "src/skeleton2d/data.rs:871"
   },
   "src/skeleton2d/data.rs:5914a178814141c9": {
     "classification": "caller-contract",
@@ -2146,6 +2164,12 @@
     "construction": "assert!( triangles.len().is_multiple_of(3) && triangles.iter().all(|&i| usize::from(i) < vertices.len()), \"ponko: a skinned mesh's triangles are three indices each, into its vertices\" )",
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. /// that isn't there.     #[must_use]     pub fn new(texture: Texture, vertices: Vec<MeshVertex>, triangles: Vec<u16>) -> Self {         assert!(",
     "site": "src/skeleton2d/data.rs:305"
+  },
+  "src/skeleton2d/data.rs:5caea16f6bb1bd5d": {
+    "classification": "forwarded-error",
+    "construction": "panic!(\"ponko: {e}\")",
+    "reason": "Re-raises the SkeletonError from check_path, whose messages name the constraint and the fix; documented under add_path_constraint's Panics.",
+    "site": "src/skeleton2d/data.rs:982"
   },
   "src/skeleton2d/data.rs:5d0a0d94f043738c": {
     "classification": "caller-contract",
@@ -2188,12 +2212,6 @@
     "construction": "panic!(\"ponko: {e}\")",
     "reason": "Re-raises the SkeletonError from check_transform, whose messages name the constraint and what is wrong; documented under Panics.",
     "site": "src/skeleton2d/data.rs:951"
-  },
-  "src/skeleton2d/data.rs:f3b97e10b8b62b13": {
-    "classification": "forwarded-error",
-    "construction": "panic!(\"ponko: {e}\")",
-    "reason": "Re-raises the SkeletonError from Clip::check / check_deform, whose messages name the clip, track and fix; add_clip documents the panic.",
-    "site": "src/skeleton2d/data.rs:918"
   },
   "src/skeleton2d/data.rs:fba4ee5c72d3c60d": {
     "classification": "caller-contract",
@@ -2242,6 +2260,12 @@
     "construction": "panic!(\"ponko: invalid state change: {e}\")",
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. /// [`try_crossfade_state`](Self::try_crossfade_state) says why instead.     pub fn crossfade_state(&mut self, state: StateId, duration: f32, offset: f32) {         self.try_crossfade_state(state, duration, offset)             .unwrap_or_else(|e| panic!(\"ponko: invalid state change: {e}\"));",
     "site": "src/skeleton2d/skeleton.rs:289"
+  },
+  "src/skeleton2d/skeleton.rs:7062ce87b17a6572": {
+    "classification": "invariant",
+    "construction": ".expect(\"a graph\")",
+    "reason": "Playing::State exists only while the skeleton has a graph (set by play_state/crossfade_state, which require one), as at the other graph lookups.",
+    "site": "src/skeleton2d/skeleton.rs:1057"
   },
   "src/skeleton2d/skeleton.rs:8c79feb4e3015212": {
     "classification": "invariant",
@@ -3287,6 +3311,12 @@
     "reason": "Preserves setup/runtime policy; displays the checked operation error. /// or the GPU can't make a texture that large.     pub fn create_ui_panel(&mut self, width: u32, height: u32, size: Vec2) -> (UiPanel3D, crate::render::Model) {         self.try_create_ui_panel(width, height, size)             .unwrap_or_else(|message| panic!(\"{message}\"))",
     "site": "src/ui/panel3d.rs:195"
   },
+  "src/ui/retained.rs:010e9dbca8b3f128": {
+    "classification": "invariant",
+    "construction": ".unwrap()",
+    "reason": "Screens and HUDs hold live roots: Ui::remove takes a removed root off both lists.",
+    "site": "src/ui/retained.rs:1707"
+  },
   "src/ui/retained.rs:0274e1172425e574": {
     "classification": "caller-contract",
     "construction": "assert!( self.node(root).is_some_and(|n| n.parent.is_none()), \"UI screen must be a detached root; add a root node or detach it before pushing\" )",
@@ -3323,12 +3353,6 @@
     "reason": "Internal invariant: n.caret = prev;                 changed = true;             } else if delete && n.caret < n.text.len() {                 let end = n.caret + n.text[n.caret..].chars().next().unwrap().len_utf8();",
     "site": "src/ui/retained.rs:1878"
   },
-  "src/ui/retained.rs:24f26aee6359ffd6": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "Internal invariant: ) * self.scale     }     fn place(&mut self, id: UiId, origin: Vec2, clip: Rect) {         let layout = *self.tree.layout(self.node(id).unwrap().layout).unwrap();",
-    "site": "src/ui/retained.rs:1540"
-  },
   "src/ui/retained.rs:2e06d039dce823cc": {
     "classification": "invariant",
     "construction": ".expect(\"valid UI layout\")",
@@ -3340,18 +3364,6 @@
     "construction": ".unwrap()",
     "reason": "Internal invariant: /// `ime_keys`, a composition owns the keys: only committed text goes in.     fn edit(&mut self, input: &UiInput, ime_keys: bool) {         let id = self.focus.unwrap();         let n = self.node_mut(id).unwrap();",
     "site": "src/ui/retained.rs:1832"
-  },
-  "src/ui/retained.rs:317aaed934ef6171": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "Internal invariant: self.visible.push(id);         let child_clip = if scrollable {             let mut inner = rect;             if self.node(id).unwrap().max_scroll.y > 0.0 {",
-    "site": "src/ui/retained.rs:1562"
-  },
-  "src/ui/retained.rs:39d9969e186fa50d": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "Internal invariant: min: pos,             max: pos + size,         };         let n = self.node_mut(id).unwrap();",
-    "site": "src/ui/retained.rs:1548"
   },
   "src/ui/retained.rs:3ababb3bf0d3bd8f": {
     "classification": "invariant",
@@ -3383,12 +3395,6 @@
     "reason": "Internal invariant: let n = self.node(id).unwrap();             if n.widget == UiWidget::Scroll {                 let next = n.scroll + input.wheel / self.scale;                 self.node_mut(id).unwrap().scroll = next;",
     "site": "src/ui/retained.rs:1643"
   },
-  "src/ui/retained.rs:479a9552c1ba6332": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "Internal invariant: self.edit(input, ime_keys);         } else if let Some(id) = self             .focus             .filter(|&id| self.node(id).unwrap().widget == UiWidget::Slider)",
-    "site": "src/ui/retained.rs:1708"
-  },
   "src/ui/retained.rs:496114de541e8292": {
     "classification": "invariant",
     "construction": ".unwrap()",
@@ -3419,12 +3425,6 @@
     "reason": "place: ids come from the screen stack or a placed parent's children, all live nodes with Taffy nodes",
     "site": "src/ui/retained.rs:1792"
   },
-  "src/ui/retained.rs:5c64cb4ca657c5f2": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "Internal invariant: } else {             clip         };         let count = self.node(id).unwrap().children.len();",
-    "site": "src/ui/retained.rs:1569"
-  },
   "src/ui/retained.rs:5e9eec72fe6b3ad0": {
     "classification": "invariant",
     "construction": ".unwrap()",
@@ -3436,12 +3436,6 @@
     "construction": ".expect(\"valid UI child\")",
     "reason": "Internal invariant: let node = self.node_mut(id).unwrap();         node.parent = Some(parent);         let layout = node.layout;         self.tree.add_child(p, layout).expect(\"valid UI child\");",
     "site": "src/ui/retained.rs:730"
-  },
-  "src/ui/retained.rs:70dfa7c3ad4d3a8a": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "Internal invariant: HUD and screen roots are live nodes (free detaches them first).",
-    "site": "src/ui/retained.rs:1516"
   },
   "src/ui/retained.rs:770336853e26275d": {
     "classification": "caller-contract",
@@ -3491,12 +3485,6 @@
     "reason": "Internal invariant: .pressed                 .filter(|&id| self.node(id).is_some_and(|n| n.widget == UiWidget::Slider))             {                 let n = self.node(id).unwrap();",
     "site": "src/ui/retained.rs:1681"
   },
-  "src/ui/retained.rs:afb16c486dde7b51": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "Internal invariant: }         let editing = self             .focus             .is_some_and(|id| self.node(id).unwrap().widget == UiWidget::TextInput);",
-    "site": "src/ui/retained.rs:1703"
-  },
   "src/ui/retained.rs:b9b01831c8f59645": {
     "classification": "invariant",
     "construction": ".unwrap()",
@@ -3514,18 +3502,6 @@
     "construction": ".unwrap()",
     "reason": "place: the node was read at the top of place and is still live",
     "site": "src/ui/retained.rs:1801"
-  },
-  "src/ui/retained.rs:c47b9caa898e0f1b": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "Internal invariant: HUD and screen roots are live nodes (free detaches them first).",
-    "site": "src/ui/retained.rs:1644"
-  },
-  "src/ui/retained.rs:d0cf129464f51abd": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "Internal invariant: ) * self.scale     }     fn place(&mut self, id: UiId, origin: Vec2, clip: Rect) {         let layout = *self.tree.layout(self.node(id).unwrap().layout).unwrap();",
-    "site": "src/ui/retained.rs:1540"
   },
   "src/ui/retained.rs:d170fafce50fb3e3": {
     "classification": "caller-contract",
@@ -3557,12 +3533,6 @@
     "reason": "Internal invariant: }                     }                     Drag::Bar(id, start, offset) => {                         let n = self.node(id).unwrap();",
     "site": "src/ui/retained.rs:1661"
   },
-  "src/ui/retained.rs:e601fdc7f7d58bb2": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "Internal invariant: .filter(|&id| self.node(id).unwrap().widget == UiWidget::Slider)             && direction.x != 0.0         {             let value = self.value(id).unwrap() + direction.x * super::access::SLIDER_STEP;",
-    "site": "src/ui/retained.rs:1711"
-  },
   "src/ui/retained.rs:e61b4eb46337a31e": {
     "classification": "invariant",
     "construction": ".unwrap()",
@@ -3586,12 +3556,6 @@
     "construction": ".unwrap()",
     "reason": "Internal invariant: ui.layout_with_text(viewport, &mut self.gfx.text);         let scale = ui.scale();         for (order, &id) in ui.visible.iter().enumerate() {             let n = ui.node(id).unwrap();",
     "site": "src/ui/retained_draw.rs:212"
-  },
-  "src/ui/retained_draw.rs:3ed84b3c94bf5193": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "Internal invariant: );             }             self.gfx.ui_list.set_clip(Some(intersect(n.clip, n.rect)));             let layout = ui.tree.layout(n.layout).unwrap();",
-    "site": "src/ui/retained_draw.rs:253"
   },
   "src/ui/retained_ime.rs:505778b347d4bf2e": {
     "classification": "invariant",

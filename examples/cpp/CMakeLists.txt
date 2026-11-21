@@ -39,6 +39,13 @@ ponko_native(ponko_c_example main.c)
 ponko_native(ponko_cpp_example main.cpp)
 ponko_native(ponko_c_tests tests.c)
 ponko_native(ponko_cpp_tests tests.cpp)
+# Say so when the library was built with `--features webrtc`: the tests then
+# check the WebRTC calls with the feature, not the error they give without it.
+option(PONKO_WEBRTC "ponko_ffi was built with the webrtc feature" OFF)
+if(PONKO_WEBRTC)
+    target_compile_definitions(ponko_c_tests PRIVATE PONKO_WEBRTC=1)
+    target_compile_definitions(ponko_cpp_tests PRIVATE PONKO_WEBRTC=1)
+endif()
 ponko_native(ponko_cpp_bench bench.cpp)
 ponko_native(ponko_cpp_boids boids.cpp)
 ponko_native(ponko_cpp_guide guide.cpp)
