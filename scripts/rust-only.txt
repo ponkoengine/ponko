@@ -27,8 +27,6 @@ Storage::save_world_in_background  storage.md      # C and C++ save slots on the
 UiAccessAdapter::for_ns_view     ui.md             # needs a Rust Ui; the engine's window gets the adapter; ponko_ui_access_* give a snapshot
 NavObstacleShape                 navigation3d.md   # C and C++ obstacles are unturned boxes; ponko_ctx_set_nav_obstacle and its carve variant
 SkyShader                        3d.md             # C and C++ games use the built-in atmosphere or the flat sky
-SkyKit                           3d.md             # C and C++ games use the built-in atmosphere (PonkoSky) without clouds or a moon
-DayNight                         3d.md             # move the sun with ponko_sun_direction_at each frame
 Graphics::stream_instance_cell   3d.md             # Job is Rust's; C and C++ games build a cell's matrices on their own threads and call ponko_ctx_add_instance_cell
 InstanceCellData                 3d.md             # same: the matrices and colours go straight to ponko_ctx_add_instance_cell
 Graphics::instance_cell_state    3d.md             # same: a cell added from C is on the GPU at once

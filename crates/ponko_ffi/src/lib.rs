@@ -157,16 +157,24 @@ mod water;
 // Native API parity, round 4 (gl#122): hooks, sky kit, video, baking,
 // replication inputs and events, crowd clips, touch scenarios, nav views.
 mod component_hooks;
+mod crowd_clips;
+mod nav_view;
+mod scenario_touch;
+mod sky_kit;
 pub use access::*;
 pub use actions::*;
 pub use ai::*;
 pub use animator::*;
 pub use component_hooks::*;
 pub use controllers::*;
+pub use crowd_clips::*;
 pub use debug::*;
 pub use ime::*;
 pub use locale::*;
+pub use nav_view::*;
+pub use scenario_touch::*;
 pub use skeleton2d::*;
+pub use sky_kit::*;
 pub use states::*;
 /// Counts the library's heap allocations while profiling is on (one atomic
 /// load per allocation otherwise), so a C or C++ game's reports show how many

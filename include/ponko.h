@@ -35,7 +35,7 @@
  *
  * Enums (PonkoKey, PonkoMouseButton, PonkoGamepadButton, PonkoGamepadAxis,
  * PonkoControllerFamily, PonkoDeviceKind, PonkoGlyphKind,
- * PonkoTextAlign3D, PonkoBodyKind, PonkoShapeKind, PonkoShape3DKind, PonkoNetState, PonkoPhase, PonkoService, PonkoHandleKind, PonkoAssetClass, PonkoAssetOwner, PonkoResidencyKind, PonkoAssetState, PonkoAssetGroupState, PonkoAssetGroupKind, PonkoGpuTier, PonkoGpuFeature, PonkoScenarioStatus, PonkoWaterQuality, PonkoWaterReflection, PonkoHookKind, and the
+ * PonkoTextAlign3D, PonkoBodyKind, PonkoShapeKind, PonkoShape3DKind, PonkoNetState, PonkoPhase, PonkoService, PonkoHandleKind, PonkoAssetClass, PonkoAssetOwner, PonkoResidencyKind, PonkoAssetState, PonkoAssetGroupState, PonkoAssetGroupKind, PonkoGpuTier, PonkoGpuFeature, PonkoScenarioStatus, PonkoWaterQuality, PonkoWaterReflection, PonkoHookKind, PonkoCloudQuality, PonkoJointChannel, and the
  * PonkoUi* layout and paint enums) are passed as uint32_t.
  * Last-error text is thread-local, borrowed until the next failed call;
  * successful calls leave it unchanged.
@@ -238,6 +238,12 @@
 #define PONKO_WATER_MAX_WAVES 8
 
 #define PONKO_BUOYANCY_DRAG 4.0
+
+#define PONKO_LIVE_COUNTS_EX_VERSION 1
+
+#define PONKO_SKY_KIT_VERSION 1
+
+#define PONKO_DAY_NIGHT_VERSION 1
 
 #define PONKO_WINDOW_NO_MONITOR UINT32_MAX
 
@@ -1370,6 +1376,19 @@ typedef enum PonkoHookKind {
   PONKO_HOOK_REMOVE = 2,
 } PonkoHookKind;
 
+typedef enum PonkoCloudQuality {
+  PONKO_CLOUDS_FLAT = 0,
+  PONKO_CLOUDS_LOW = 1,
+  PONKO_CLOUDS_MEDIUM = 2,
+  PONKO_CLOUDS_HIGH = 3,
+} PonkoCloudQuality;
+
+typedef enum PonkoJointChannel {
+  PONKO_JOINT_TRANSLATION = 0,
+  PONKO_JOINT_ROTATION = 1,
+  PONKO_JOINT_SCALE = 2,
+} PonkoJointChannel;
+
 typedef struct PonkoAccess PonkoAccess;
 
 typedef struct PonkoActionMap PonkoActionMap;
@@ -1431,6 +1450,8 @@ typedef struct PonkoMeshData PonkoMeshData;
 typedef struct PonkoMotion PonkoMotion;
 
 typedef struct PonkoNavGrid PonkoNavGrid;
+
+typedef struct PonkoNavMesh PonkoNavMesh;
 
 typedef struct PonkoNavSources PonkoNavSources;
 
@@ -3542,6 +3563,66 @@ typedef struct PonkoHookEvent {
 typedef void (*PonkoHookFn)(struct PonkoHookWorld*, const struct PonkoHookEvent*, void*);
 
 typedef void (*PonkoFreeUserFn)(void*);
+
+typedef struct PonkoJointTrack {
+  uint32_t joint;
+  uint32_t channel;
+  uint32_t interpolation;
+  const float *times;
+  const float *values;
+  size_t count;
+} PonkoJointTrack;
+
+typedef struct PonkoLiveCountsEx {
+  uint32_t struct_size;
+  uint32_t version;
+  struct PonkoLiveCounts counts;
+  size_t crowds;
+  size_t instance_cells;
+  size_t collision_meshes;
+  size_t sprite_shaders;
+  size_t sprite_materials;
+  size_t sky_shaders;
+} PonkoLiveCountsEx;
+
+typedef struct PonkoNavView {
+  const struct PonkoNavMesh *navmesh;
+} PonkoNavView;
+
+typedef struct PonkoSkyKit {
+  uint32_t struct_size;
+  uint32_t version;
+  bool enabled;
+  uint32_t quality;
+  float coverage;
+  float kind;
+  struct PonkoVec2 wind;
+  struct PonkoVec2 offset;
+  float altitude;
+  float thickness;
+  float density;
+  float self_shadow;
+  float silver_lining;
+  float shadows;
+  bool moon_has_direction;
+  struct PonkoVec3 moon_direction;
+  float moon_phase;
+  float moon_size;
+  float moon_brightness;
+} PonkoSkyKit;
+
+typedef struct PonkoDayNight {
+  uint32_t struct_size;
+  uint32_t version;
+  float hour;
+  uint32_t day;
+  float hours_per_second;
+  float days_per_moon;
+  float first_phase;
+  struct PonkoColor sun_color;
+  float sun_intensity;
+  struct PonkoColor night_light;
+} PonkoDayNight;
 
 typedef struct PonkoWindowVideoModeEx {
   uint32_t struct_size;
@@ -9660,6 +9741,71 @@ enum PonkoStatus ponko_hook_remove_later(struct PonkoHookWorld *hw,
 enum PonkoStatus ponko_hook_despawn_later(struct PonkoHookWorld *hw, uint64_t entity);
 
 enum PonkoStatus ponko_hook_is_alive(struct PonkoHookWorld *hw, uint64_t entity, bool *out_alive);
+
+enum PonkoStatus ponko_ctx_create_clip(struct PonkoCtx *ctx,
+                                       uint64_t skeleton_entity,
+                                       const char *name,
+                                       const struct PonkoJointTrack *tracks,
+                                       size_t track_count,
+                                       struct PonkoClip **out_clip);
+
+enum PonkoStatus ponko_ctx_live_counts_ex(struct PonkoCtx *ctx,
+                                          struct PonkoLiveCountsEx *out_counts);
+
+enum PonkoStatus ponko_ctx_nav_view(struct PonkoCtx *ctx, struct PonkoNavView *out_view);
+
+enum PonkoStatus ponko_nav_view_sample_position(const struct PonkoNavView *view,
+                                                struct PonkoVec3 point,
+                                                float max_distance,
+                                                struct PonkoVec3 *out_point,
+                                                bool *out_found);
+
+enum PonkoStatus ponko_nav_view_sample_positions(const struct PonkoNavView *view,
+                                                 const struct PonkoVec3 *points,
+                                                 size_t count,
+                                                 float max_distance,
+                                                 struct PonkoVec3 *out_points,
+                                                 bool *out_found);
+
+enum PonkoStatus ponko_nav_view_find_path(const struct PonkoNavView *view,
+                                          struct PonkoVec3 from,
+                                          struct PonkoVec3 to,
+                                          struct PonkoVec3 *out_corners,
+                                          size_t capacity,
+                                          size_t *out_len);
+
+enum PonkoStatus ponko_input_scenario_tap(struct PonkoInputScenario *scenario,
+                                          uint64_t tick,
+                                          struct PonkoVec2 at);
+
+enum PonkoStatus ponko_input_scenario_touch_hold(struct PonkoInputScenario *scenario,
+                                                 uint64_t from,
+                                                 uint64_t to,
+                                                 struct PonkoVec2 at);
+
+enum PonkoStatus ponko_input_scenario_touch_drag(struct PonkoInputScenario *scenario,
+                                                 uint64_t from,
+                                                 uint64_t to,
+                                                 struct PonkoVec2 start,
+                                                 struct PonkoVec2 end);
+
+enum PonkoStatus ponko_sky_kit_defaults(struct PonkoSkyKit *kit);
+
+enum PonkoStatus ponko_ctx_sky_kit(struct PonkoCtx *ctx, struct PonkoSkyKit *out_kit);
+
+enum PonkoStatus ponko_ctx_set_sky_kit(struct PonkoCtx *ctx, const struct PonkoSkyKit *kit);
+
+float ponko_moon_illumination(float phase);
+
+enum PonkoStatus ponko_day_night_new(float hour, struct PonkoDayNight *out_day);
+
+enum PonkoStatus ponko_day_night_advance(struct PonkoDayNight *day, float seconds);
+
+enum PonkoStatus ponko_day_night_moon_phase(const struct PonkoDayNight *day, float *out_phase);
+
+enum PonkoStatus ponko_ctx_apply_day_night(struct PonkoCtx *ctx, const struct PonkoDayNight *day);
+
+enum PonkoStatus ponko_ctx_update_day_night(struct PonkoCtx *ctx, struct PonkoDayNight *day);
 
 enum PonkoStatus ponko_window_video_mode_ex_defaults(struct PonkoWindowVideoModeEx *desc);
 

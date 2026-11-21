@@ -461,8 +461,6 @@ binding arrives:
 | `Buoyancy::points` | [Water](water.md#floating-bodies) | Custom sample points, water density and the ripple switch aren't bound: C floats boxes and spheres (`ponko_ctx_set_buoyancy_box`, `_sphere`) in fresh water |
 | `NavObstacleShape` | [3D navigation meshes](navigation3d.md#obstacle-shapes) | Obstacles are unturned boxes: `ponko_ctx_set_nav_obstacle` and `ponko_ctx_set_nav_carve_obstacle` |
 | `SkyShader` | [A sky of your own](3d.md#a-sky-of-your-own) | The built-in atmosphere or the flat sky (`PonkoSky`); sky shaders have no C binding yet |
-| `SkyKit` | [The sky kit](3d.md#the-sky-kit) | The built-in atmosphere (`PonkoSky`), without clouds or a moon; the kit has no C binding yet |
-| `DayNight` | [The sky kit](3d.md#the-sky-kit) | Move the sun each frame with `ponko_sun_direction_at` |
 | `Graphics::stream_instance_cell` | [Streaming instance cells](3d.md#streaming-instance-cells) | Build a cell's matrices on your own threads, then `ponko_ctx_add_instance_cell` (`ctx::add_instance_cell`) on the game's |
 | `InstanceCellData` | [Streaming instance cells](3d.md#streaming-instance-cells) | The same: matrices and colours go straight to `ponko_ctx_add_instance_cell` |
 | `GamepadBackend` | [Backends and tests](controllers.md#backends-and-tests) | Native games use the built-in gamepad backend |

@@ -4979,6 +4979,24 @@ public:
     const PonkoClip* raw() const noexcept { return raw_; }
 };
 
+/// One joint's keys for one channel (PonkoJointTrack), for ctx::create_clip. `times` and `values` point into
+/// arrays the caller keeps until create_clip returns: four floats per value, three values per key for
+/// CUBICSPLINE.
+using joint_track = PonkoJointTrack;
+/// Which part of a joint's pose a joint_track animates.
+using joint_channel = PonkoJointChannel;
+/// A joint_track over `times` and `values` (4 floats per key; 12 for interpolation 2, cubic). Both
+/// vectors must outlive the create_clip call.
+inline joint_track joint_track_of(std::uint32_t joint, joint_channel channel, const std::vector<float>& times,
+                                  const std::vector<float>& values, std::uint32_t interpolation = 1) {
+    if (interpolation > 2 || values.size() != times.size() * 4 * (interpolation == 2 ? 3 : 1))
+        throw std::invalid_argument("joint_track_of: four floats per key (twelve for cubic), interpolation 0 to 2");
+    return joint_track{joint, static_cast<std::uint32_t>(channel), interpolation, times.data(), values.data(), times.size()};
+}
+/// Live handles of every kind in the versioned form (PonkoLiveCountsEx): `counts` is live_counts, plus
+/// crowds, instance_cells, collision_meshes, sprite_shaders, sprite_materials and sky_shaders.
+using live_counts_ex = PonkoLiveCountsEx;
+
 /// A clip to bake for crowds: `c` (copied by the bake), looping or holding its last frame.
 inline crowd_clip crowd_clip_of(const clip& c, bool looping = true) noexcept { return crowd_clip{c.raw(), looping}; }
 
@@ -5896,6 +5914,18 @@ public:
     input_scenario& touch(std::uint64_t tick, std::uint64_t id, touch_phase phase, vec2 at) {
         return step(ponko_input_scenario_touch(raw_, tick, id, static_cast<std::uint32_t>(phase), at));
     }
+    /// A tap at `at` on tick `tick`: a finger down and up within the tick (a tap gesture, or a press of the
+    /// on-screen button under it). Each finger gets an id of its own.
+    input_scenario& tap(std::uint64_t tick, vec2 at) { return step(ponko_input_scenario_tap(raw_, tick, at)); }
+    /// A finger held still at `at` from tick `from` until it lifts on tick `to`.
+    input_scenario& touch_hold(std::uint64_t from, std::uint64_t to, vec2 at) {
+        return step(ponko_input_scenario_touch_hold(raw_, from, to, at));
+    }
+    /// A finger down at `start` on tick `from`, moving in a straight line each tick, lifting at `end` on
+    /// tick `to`: a drag, a swipe, or an on-screen stick pushed and let go.
+    input_scenario& touch_drag(std::uint64_t from, std::uint64_t to, vec2 start, vec2 end) {
+        return step(ponko_input_scenario_touch_drag(raw_, from, to, start, end));
+    }
     /// Checks `c` after the simulation systems of tick `tick` ran.
     input_scenario& expect(std::uint64_t tick, const scenario_check& c) {
         switch (c.kind_) {
@@ -6409,6 +6439,71 @@ template<class T> T window_desc(std::uint32_t version, PonkoStatus (*defaults)(T
     return d;
 }
 } // namespace detail
+
+/// A read-only view of the 3D navmesh (PonkoNavView), from ctx::nav_view: its reads touch nothing else, so
+/// they work inside world.each and world.query loops and from the _par versions, where the ctx's own navmesh
+/// calls throw. Valid until the system returns, and only until the navmesh is baked again.
+class nav_view {
+    PonkoNavView view_{};
+public:
+    /// Wraps a C view.
+    explicit nav_view(PonkoNavView v) noexcept : view_(v) {}
+    /// The nearest walkable point within `max_distance` of `point`, or std::nullopt.
+    std::optional<vec3> sample_position(vec3 point, float max_distance) const {
+        vec3 p{}; bool found = false;
+        detail::check(ponko_nav_view_sample_position(&view_, point, max_distance, &p, &found));
+        if (!found) return std::nullopt;
+        return p;
+    }
+    /// Snaps every point of `points` in place in one call; `found[i]` says whether point i had a walkable
+    /// point within `max_distance` (if not, it is left as it was).
+    void sample_positions(std::vector<vec3>& points, float max_distance, std::vector<bool>& found) const {
+        std::unique_ptr<bool[]> flags(new bool[points.size() + 1]);
+        detail::check(ponko_nav_view_sample_positions(&view_, points.data(), points.size(), max_distance,
+                                                      points.data(), flags.get()));
+        found.assign(flags.get(), flags.get() + points.size());
+    }
+    /// A path's corners from `from` to `to` into `out` (reusing its capacity), start and end included;
+    /// empty when there is none.
+    void find_path(vec3 from, vec3 to, std::vector<vec3>& out) const {
+        std::size_t len = 0;
+        out.resize(out.capacity() < 16 ? 16 : out.capacity());
+        detail::check(ponko_nav_view_find_path(&view_, from, to, out.data(), out.size(), &len));
+        if (len > out.size()) {
+            out.resize(len);
+            detail::check(ponko_nav_view_find_path(&view_, from, to, out.data(), out.size(), &len));
+        }
+        out.resize(len);
+    }
+    /// The C view.
+    const PonkoNavView& raw() const noexcept { return view_; }
+};
+
+/// The sky kit's settings (PonkoSkyKit, Rust `SkyKit`): clouds that drift and cast shadows, a moon with
+/// phases and stars over the built-in atmosphere. ctx::set_sky_kit turns it on (or off, with `enabled`
+/// false).
+using sky_kit = PonkoSkyKit;
+/// The sky kit's defaults, `enabled` true (Rust `SkyKit::default()`).
+inline sky_kit sky_kit_defaults() { return detail::window_desc<sky_kit>(PONKO_SKY_KIT_VERSION, ponko_sky_kit_defaults); }
+/// The share of the moon's face that is lit at `phase`: 0 new, 1 full (Rust `Moon::illumination`).
+inline float moon_illumination(float phase) { return ponko_moon_illumination(phase); }
+
+/// A day and night cycle (PonkoDayNight, Rust `DayNight`): a clock the game keeps that moves the sun
+/// through the day and the moon through its phases. Its fields (hour, day, hours_per_second,
+/// days_per_moon, first_phase, sun_color, sun_intensity, night_light) are public; call
+/// ctx::update_day_night once a frame.
+struct day_night : PonkoDayNight {
+    /// A cycle at `hour` o'clock on day 0, with the default speed, moon and light.
+    explicit day_night(float hour = 12.0f) : PonkoDayNight{} {
+        struct_size = sizeof(PonkoDayNight);
+        version = PONKO_DAY_NIGHT_VERSION;
+        detail::check(ponko_day_night_new(hour, this));
+    }
+    /// Moves the clock on by `seconds` of real time, counting the days.
+    void advance(float seconds) { detail::check(ponko_day_night_advance(this, seconds)); }
+    /// The moon's phase at the cycle's time: 0 new, 0.5 full.
+    float moon_phase() const { float p = 0; detail::check(ponko_day_night_moon_phase(this, &p)); return p; }
+};
 
 /// What a system gets (Rust `Ctx`): the world, time, input, randomness, drawing, audio, physics and the other
 /// engine services. Valid only during the call; don't keep it. Calls throw ponko::error when the engine
@@ -9696,6 +9791,48 @@ public:
         if (status == PONKO_NOT_FOUND) return std::nullopt;
         detail::check(status);
         return hit;
+    }
+
+    // The sky kit and the day-night driver (gl#122).
+    /// The sky kit's settings: `enabled` false (and the defaults) while the plain atmosphere is drawn.
+    ponko::sky_kit sky_kit() const {
+        ponko::sky_kit k{};
+        k.struct_size = sizeof k;
+        k.version = PONKO_SKY_KIT_VERSION;
+        detail::check(ponko_ctx_sky_kit(raw_, &k));
+        return k;
+    }
+    /// Turns the sky kit on with `k`'s settings, or off when `k.enabled` is false. Throws, changing
+    /// nothing, on a non-finite number or an unknown quality.
+    void set_sky_kit(const ponko::sky_kit& k) { detail::check(ponko_ctx_set_sky_kit(raw_, &k)); }
+    /// Sets the sun, the moon's phase (turning the sky kit on if it was off) and the night light to `d`'s
+    /// time.
+    void apply_day_night(const ponko::day_night& d) { detail::check(ponko_ctx_apply_day_night(raw_, &d)); }
+    /// Advances `d` by this frame's time, then applies it: the whole cycle, once a frame.
+    void update_day_night(ponko::day_night& d) { detail::check(ponko_ctx_update_day_night(raw_, &d)); }
+
+    /// A view of the 3D navmesh for reads inside loops (see ponko::nav_view). Take it before the loop.
+    /// Throws if no navmesh was baked.
+    ponko::nav_view nav_view() const {
+        PonkoNavView v{};
+        detail::check(ponko_ctx_nav_view(raw_, &v));
+        return ponko::nav_view(v);
+    }
+    // Joint-track clips and the versioned live counts (gl#122).
+    /// A clip called `name` from joint tracks, for the skeleton of `skeleton` (Rust `AnimationClip::try_new`):
+    /// tracks of one joint merge; a joint outside the skeleton or a channel given twice throws.
+    ponko::clip create_clip(entity skeleton, const char* name, const std::vector<joint_track>& tracks) {
+        PonkoClip* c = nullptr;
+        detail::check(ponko_ctx_create_clip(raw_, skeleton, name, tracks.data(), tracks.size(), &c));
+        return ponko::clip(c);
+    }
+    /// How many handles of each kind are live now, crowds and the other newer kinds included.
+    ponko::live_counts_ex live_counts_ex() const {
+        ponko::live_counts_ex c{};
+        c.struct_size = sizeof c;
+        c.version = PONKO_LIVE_COUNTS_EX_VERSION;
+        detail::check(ponko_ctx_live_counts_ex(raw_, &c));
+        return c;
     }
 };
 

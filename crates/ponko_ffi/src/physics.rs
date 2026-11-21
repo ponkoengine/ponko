@@ -441,7 +441,11 @@ pub unsafe extern "C" fn ponko_ctx_body_mass(
 /// Collisions this system hasn't seen yet, oldest first: `started` true for
 /// pairs that started touching, false for pairs that stopped. `*out_count`
 /// values at `*out_data`, valid until the system returns. Each system that
-/// runs every tick sees each collision once.
+/// runs every tick sees each collision once. The 2D and the 3D physics step
+/// both send them, so it works with either feature. It works inside
+/// `ponko_query` callbacks (not `ponko_query_par`): read the array once in
+/// the loop (a second read in the same system returns only newer pairs) and
+/// check each entity the loop visits against it, with no call per pair.
 /// # Safety
 /// Live ctx; writable outputs.
 /// ```
@@ -455,31 +459,20 @@ pub unsafe extern "C" fn ponko_ctx_collisions(
     out_count: *mut usize,
 ) -> PonkoStatus {
     // SAFETY: forwarded caller contract.
-    unsafe { imp::collisions(ctx, started, out_data, out_count) }
+    unsafe { collision_events::collisions(ctx, started, out_data, out_count) }
 }
 
-#[cfg(feature = "physics")]
-mod imp {
-    use std::cell::RefCell;
-
-    use ponko::d2::Collider;
-    use ponko::d2::RigidBody;
-    use ponko::d2::Shape;
-    use ponko::d2::Velocity;
-    use ponko::prelude::{BodyKind, CollisionStarted, CollisionStopped, Vec2};
-    use ponko_ecs::Entity;
+/// Collision events, sent by the 2D and the 3D physics step alike: read
+/// with either feature (gl#122), inside `ponko_query` callbacks too.
+#[cfg(any(feature = "physics", feature = "physics3d"))]
+mod collision_events {
+    use ponko::prelude::{CollisionStarted, CollisionStopped};
 
     use super::*;
-    use crate::ctx::{collect, ctx_access, events, out, physics_read};
-    use crate::game::{build, ok};
-    use crate::types::to_c;
-    use crate::{PonkoCtx, boundary, builtin, error};
+    use crate::boundary;
+    use crate::ctx::{events, out};
 
     const _: () = {
-        assert!(size_of::<PonkoVelocity>() == size_of::<Velocity>());
-        assert!(align_of::<PonkoVelocity>() == align_of::<Velocity>());
-        assert!(std::mem::offset_of!(PonkoVelocity, linear) == std::mem::offset_of!(Velocity, linear));
-        assert!(std::mem::offset_of!(PonkoVelocity, angular) == std::mem::offset_of!(Velocity, angular));
         // Collision events are handed to C in place.
         assert!(size_of::<PonkoCollision>() == size_of::<CollisionStarted>());
         assert!(align_of::<PonkoCollision>() == align_of::<CollisionStarted>());
@@ -491,6 +484,79 @@ mod imp {
         assert!(std::mem::offset_of!(PonkoCollision, a) == std::mem::offset_of!(CollisionStopped, a));
         assert!(std::mem::offset_of!(PonkoCollision, b) == std::mem::offset_of!(CollisionStopped, b));
         assert!(std::mem::offset_of!(PonkoCollision, sensor) == std::mem::offset_of!(CollisionStopped, sensor));
+    };
+
+    pub(super) unsafe fn collisions(
+        ctx: *mut crate::PonkoCtx,
+        started: bool,
+        out_data: *mut *const PonkoCollision,
+        out_count: *mut usize,
+    ) -> PonkoStatus {
+        boundary(|| {
+            if out_data.is_null() || out_count.is_null() {
+                return Err(invalid("output is null"));
+            }
+            // SAFETY: forwarded caller contract; both event types have
+            // PonkoCollision's layout (asserted above), and the slice lives
+            // in the events until the next send of its type, which only the
+            // physics steps do, between systems.
+            unsafe {
+                let (ptr, len) = events(ctx, |ev| {
+                    Ok(if started {
+                        let s = ev.read::<CollisionStarted>();
+                        (s.as_ptr().cast::<PonkoCollision>(), s.len())
+                    } else {
+                        let s = ev.read::<CollisionStopped>();
+                        (s.as_ptr().cast::<PonkoCollision>(), s.len())
+                    })
+                })?;
+                out(out_data, ptr)?;
+                out(out_count, len)
+            }
+        })
+    }
+}
+
+#[cfg(not(any(feature = "physics", feature = "physics3d")))]
+mod collision_events {
+    use super::*;
+
+    pub(super) unsafe fn collisions(
+        _: *mut crate::PonkoCtx,
+        _: bool,
+        _: *mut *const PonkoCollision,
+        _: *mut usize,
+    ) -> PonkoStatus {
+        crate::boundary(|| {
+            Err(invalid(
+                "ponko_ffi was built without the `physics` and `physics3d` features",
+            ))
+        })
+    }
+}
+
+#[cfg(feature = "physics")]
+mod imp {
+    use std::cell::RefCell;
+
+    use ponko::d2::Collider;
+    use ponko::d2::RigidBody;
+    use ponko::d2::Shape;
+    use ponko::d2::Velocity;
+    use ponko::prelude::{BodyKind, Vec2};
+    use ponko_ecs::Entity;
+
+    use super::*;
+    use crate::ctx::{collect, ctx_access, out, physics_read};
+    use crate::game::{build, ok};
+    use crate::types::to_c;
+    use crate::{PonkoCtx, boundary, builtin, error};
+
+    const _: () = {
+        assert!(size_of::<PonkoVelocity>() == size_of::<Velocity>());
+        assert!(align_of::<PonkoVelocity>() == align_of::<Velocity>());
+        assert!(std::mem::offset_of!(PonkoVelocity, linear) == std::mem::offset_of!(Velocity, linear));
+        assert!(std::mem::offset_of!(PonkoVelocity, angular) == std::mem::offset_of!(Velocity, angular));
     };
 
     fn non_negative(x: f32, what: &'static str) -> Result<f32, Failure> {
@@ -825,36 +891,6 @@ mod imp {
             unsafe { out(out_mass, mass) }
         })
     }
-
-    pub(super) unsafe fn collisions(
-        ctx: *mut PonkoCtx,
-        started: bool,
-        out_data: *mut *const PonkoCollision,
-        out_count: *mut usize,
-    ) -> PonkoStatus {
-        boundary(|| {
-            if out_data.is_null() || out_count.is_null() {
-                return Err(invalid("output is null"));
-            }
-            // SAFETY: forwarded caller contract; both event types have
-            // PonkoCollision's layout (asserted above), and the slice lives
-            // in the events until the next send of its type, which only the
-            // physics step does, between systems.
-            unsafe {
-                let (ptr, len) = events(ctx, |ev| {
-                    Ok(if started {
-                        let s = ev.read::<CollisionStarted>();
-                        (s.as_ptr().cast::<PonkoCollision>(), s.len())
-                    } else {
-                        let s = ev.read::<CollisionStopped>();
-                        (s.as_ptr().cast::<PonkoCollision>(), s.len())
-                    })
-                })?;
-                out(out_data, ptr)?;
-                out(out_count, len)
-            }
-        })
-    }
 }
 
 #[cfg(not(feature = "physics"))]
@@ -914,14 +950,6 @@ mod imp {
         boundary(off)
     }
     pub(super) unsafe fn mass(_: *mut PonkoCtx, _: u64, _: *mut f32) -> PonkoStatus {
-        boundary(off)
-    }
-    pub(super) unsafe fn collisions(
-        _: *mut PonkoCtx,
-        _: bool,
-        _: *mut *const PonkoCollision,
-        _: *mut usize,
-    ) -> PonkoStatus {
         boundary(off)
     }
 }
