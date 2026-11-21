@@ -804,109 +804,124 @@ impl Frame3D {
                 Option<&ModelMaterial>,
                 Option<&ModelMaterials>,
                 Option<&crate::camera::RenderLayers>,
+                Option<&super::Lightmapped>,
             )>()
-            .for_each(|(entity, t, g, decals, hysteresis, material, parts, layers)| {
-                // On none of the camera's layers: only its shadows are drawn.
-                let keep = if layers.copied().unwrap_or_default().0 & camera.layers.0 == 0 {
-                    !1
-                } else {
-                    !0
-                };
-                // `hidden`: the renderers of the pick the occlusion grid
-                // hid from the camera, counted once whatever else sees them.
-                let (mut pick, mut seen, mut hidden) = picks[at];
-                // Hysteresis: when the pick changes, hold last frame's
-                // instead while near its thresholds (the same entity at the
-                // same place in the query, else it's new or the query
-                // changed: no history this frame).
-                if let Some(&LodHysteresis(band)) = hysteresis {
-                    let (e, previous) = held[at];
-                    if e == Some(entity) && previous != pick {
-                        let kept = g.pick_held(g.screen_height(t, camera), &lod, band, previous);
-                        if kept != pick {
-                            pick = kept;
-                            (seen, hidden) = (0, 0);
-                            lod_draws(g, pick, false, |r, drawn, casts, _, _| {
-                                let f = lod_flags(t, r, drawn, casts).map_or(0, |(_, f)| f);
-                                seen |= f & !OCCLUDED;
-                                hidden += u32::from(f & OCCLUDED != 0);
-                            });
+            .for_each(
+                |(entity, t, g, decals, hysteresis, material, parts, layers, lightmap)| {
+                    // On none of the camera's layers: only its shadows are drawn.
+                    let keep = if layers.copied().unwrap_or_default().0 & camera.layers.0 == 0 {
+                        !1
+                    } else {
+                        !0
+                    };
+                    // `hidden`: the renderers of the pick the occlusion grid
+                    // hid from the camera, counted once whatever else sees them.
+                    let (mut pick, mut seen, mut hidden) = picks[at];
+                    // Hysteresis: when the pick changes, hold last frame's
+                    // instead while near its thresholds (the same entity at the
+                    // same place in the query, else it's new or the query
+                    // changed: no history this frame).
+                    if let Some(&LodHysteresis(band)) = hysteresis {
+                        let (e, previous) = held[at];
+                        if e == Some(entity) && previous != pick {
+                            let kept = g.pick_held(g.screen_height(t, camera), &lod, band, previous);
+                            if kept != pick {
+                                pick = kept;
+                                (seen, hidden) = (0, 0);
+                                lod_draws(g, pick, false, |r, drawn, casts, _, _| {
+                                    let f = lod_flags(t, r, drawn, casts).map_or(0, |(_, f)| f);
+                                    seen |= f & !OCCLUDED;
+                                    hidden += u32::from(f & OCCLUDED != 0);
+                                });
+                            }
                         }
+                        held[at] = (Some(entity), pick);
                     }
-                    held[at] = (Some(entity), pick);
-                }
-                at += 1;
-                // Posed renderers move past their rest bounds: test them
-                // with their posed bounds, below, whatever `seen` says.
-                let posed = if any_posed {
-                    skins.lod_draws(entity)
-                } else {
-                    (0, &[][..])
-                };
-                if seen != 0 || !posed.1.is_empty() {
-                    // Counted again as they are drawn (skinned ones with
-                    // their posed bounds).
-                    hidden = 0;
-                    let receives = super::projected::receiver_mask(decals);
-                    // Which of the group's renderers this is, in the order
-                    // the pick draws them.
-                    let mut renderer = retained::LOD;
-                    lod_draws(g, pick, !posed.1.is_empty(), |r, drawn, casts, fade, ordinal| {
-                        renderer += 1;
-                        if !posed.1.is_empty() && assets.skin(r.mesh.id).is_some() {
-                            // Its materials come with the skinned draw.
-                            let found = skinned(posed, ordinal, drawn, casts);
-                            hidden += found.map_or(0, |(_, _, f)| u32::from(f & OCCLUDED != 0));
-                            if let Some((d, mesh, f)) = found.map(|(d, mesh, f)| (d, mesh, f & !OCCLUDED & keep))
-                                && f != 0
+                    at += 1;
+                    // Posed renderers move past their rest bounds: test them
+                    // with their posed bounds, below, whatever `seen` says.
+                    let posed = if any_posed {
+                        skins.lod_draws(entity)
+                    } else {
+                        (0, &[][..])
+                    };
+                    if seen != 0 || !posed.1.is_empty() {
+                        // Counted again as they are drawn (skinned ones with
+                        // their posed bounds).
+                        hidden = 0;
+                        let receives = super::projected::receiver_mask(decals);
+                        // Which of the group's renderers this is, in the order
+                        // the pick draws them.
+                        let mut renderer = retained::LOD;
+                        // A lightmapped group: the first level's renderer k
+                        // reads entry `first + k` (as a bake of the group lays
+                        // them out); the other levels take the probes' light.
+                        let lightmapped =
+                            lightmap.map(|l| (l.0, g.levels.first().map_or(0, |l| l.renderers.len() as u32)));
+                        let ordinals = !posed.1.is_empty() || lightmapped.is_some();
+                        lod_draws(g, pick, ordinals, |r, drawn, casts, fade, ordinal| {
+                            renderer += 1;
+                            if !posed.1.is_empty() && assets.skin(r.mesh.id).is_some() {
+                                // Its materials come with the skinned draw.
+                                let found = skinned(posed, ordinal, drawn, casts);
+                                hidden += found.map_or(0, |(_, _, f)| u32::from(f & OCCLUDED != 0));
+                                if let Some((d, mesh, f)) = found.map(|(d, mesh, f)| (d, mesh, f & !OCCLUDED & keep))
+                                    && f != 0
+                                {
+                                    let mut instance = d.instance;
+                                    instance.model[0][3] = receives;
+                                    // Characters move: motion vectors of
+                                    // their own, as skinned models have.
+                                    touch(
+                                        (entity.to_bits(), renderer),
+                                        d.entity,
+                                        [mesh; 1 + MAX_CASCADES],
+                                        instance.with_fade(fade),
+                                        f,
+                                    );
+                                }
+                            } else if let Some((matrix, f)) = lod_flags(t, r, drawn, casts).map(|(m, f)| {
+                                hidden += u32::from(f & OCCLUDED != 0);
+                                (m, f & !OCCLUDED & keep)
+                            }) && f != 0
                             {
-                                let mut instance = d.instance;
-                                instance.model[0][3] = receives;
-                                // Characters move: motion vectors of
-                                // their own, as skinned models have.
+                                let mut model = matrix.to_cols_array_2d();
+                                model[0][3] = receives;
+                                if let Some((first, level_0)) = lightmapped
+                                    && drawn
+                                    && ordinal < level_0
+                                {
+                                    model[2][3] = retained::lightmap_slot(Some(&super::Lightmapped(first + ordinal)));
+                                }
+                                let instance = Instance3D {
+                                    model,
+                                    color: linear(r.color),
+                                };
+                                // The group's renderers take its override; a
+                                // level's separate shadow casters keep theirs.
+                                // (The cheap test first: most groups have no override.)
+                                let mesh = if drawn && (material.is_some() || parts.is_some()) {
+                                    overridden(r.mesh.slot(), material, parts)
+                                } else {
+                                    r.mesh.slot()
+                                };
+                                // No motion of their own for temporal antialiasing: they
+                                // reproject with the camera (scenery stays put).
                                 touch(
                                     (entity.to_bits(), renderer),
-                                    d.entity,
+                                    super::motion::NO_KEY,
                                     [mesh; 1 + MAX_CASCADES],
                                     instance.with_fade(fade),
                                     f,
                                 );
                             }
-                        } else if let Some((matrix, f)) = lod_flags(t, r, drawn, casts).map(|(m, f)| {
-                            hidden += u32::from(f & OCCLUDED != 0);
-                            (m, f & !OCCLUDED & keep)
-                        }) && f != 0
-                        {
-                            let mut model = matrix.to_cols_array_2d();
-                            model[0][3] = receives;
-                            let instance = Instance3D {
-                                model,
-                                color: linear(r.color),
-                            };
-                            // The group's renderers take its override; a
-                            // level's separate shadow casters keep theirs.
-                            // (The cheap test first: most groups have no override.)
-                            let mesh = if drawn && (material.is_some() || parts.is_some()) {
-                                overridden(r.mesh.slot(), material, parts)
-                            } else {
-                                r.mesh.slot()
-                            };
-                            // No motion of their own for temporal antialiasing: they
-                            // reproject with the camera (scenery stays put).
-                            touch(
-                                (entity.to_bits(), renderer),
-                                super::motion::NO_KEY,
-                                [mesh; 1 + MAX_CASCADES],
-                                instance.with_fade(fade),
-                                f,
-                            );
-                        }
-                    });
-                }
-                if hidden != 0 {
-                    culler.count_occluded(hidden as usize);
-                }
-            });
+                        });
+                    }
+                    if hidden != 0 {
+                        culler.count_occluded(hidden as usize);
+                    }
+                },
+            );
         // Terrain: the detail level for how far the camera is from the
         // tile's bounds (the finest level's, which hold every coarser one).
         // Shadow cascade i draws at least level i: its texels are too big

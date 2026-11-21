@@ -29,12 +29,15 @@ use crate::three::{LodGroup, MaterialDesc, MeshData, Model, ModelMaterial, Model
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ponko_ecs::Component)]
 pub struct Unbaked;
 
+/// A kept mesh and its parts' materials.
+type KeptMesh = (Arc<MeshData>, Vec<(Range<u32>, Material)>);
+
 /// The mesh data, materials and textures a world bake reads, kept while
 /// [`Graphics::keep_bake_sources`] is on.
 #[derive(Default)]
 pub(crate) struct BakeSources {
     /// Each mesh's data and parts (index ranges and materials), by id.
-    meshes: HashMap<u32, (Arc<MeshData>, Vec<(Range<u32>, Material)>)>,
+    meshes: HashMap<u32, KeptMesh>,
     /// Each material's description, by id.
     materials: HashMap<u32, MaterialDesc>,
     /// Each texture made from pixels, shrunk for the bake, by id.

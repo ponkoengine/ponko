@@ -14,7 +14,7 @@
 use glam::Vec3;
 
 use super::trace::TraceScene;
-use super::{BakeStats, BakedLighting, Gathered, Gatherer, LightBakeScene, LightBakeSettings, Texel};
+use super::{BakeStats, BakedLighting, Gathered, GatheredProbe, Gatherer, LightBakeScene, LightBakeSettings, Texel};
 use crate::error::{Error, ErrorKind};
 
 /// What a bake dispatch reads besides its buffers (`Params` in bake.wgsl).
@@ -399,7 +399,7 @@ impl Gatherer for GpuGather<'_> {
         positions: &[Vec3],
         samples: u32,
         seed: u64,
-    ) -> Result<Vec<(Option<[f32; 12]>, u64)>, Error> {
+    ) -> Result<Vec<GatheredProbe>, Error> {
         let jobs: Vec<[f32; 4]> = positions
             .iter()
             .flat_map(|p| [p.extend(0.0).to_array(), [0.0; 4], [0.0; 4]])

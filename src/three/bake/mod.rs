@@ -437,6 +437,12 @@ pub struct LightmapRect {
 /// coordinates it was baked with. Without baked lighting set, or with an
 /// index it doesn't have, the model is drawn as without the component.
 ///
+/// On a [`LodGroup`](crate::render::LodGroup) it is the entry of the first
+/// level's first renderer, and renderer `k` of that level reads entry
+/// `index + k` (as [`LightBakeScene::add_world`] lays a group out). The
+/// other levels, and instance batches, which have no lightmaps, take the
+/// light of the bake's probe volume, as models without the component do.
+///
 /// ```
 /// # use ponko::prelude::*;
 /// let mut world = World::new();
@@ -1015,6 +1021,10 @@ pub fn bake_lighting(scene: &LightBakeScene, settings: &LightBakeSettings) -> Re
     bake_with(scene, settings, &mut CpuGather)
 }
 
+/// A probe's gathered order-1 harmonics (none: inside geometry), and the
+/// rays traced for it.
+type GatheredProbe = (Option<[f32; 12]>, u64);
+
 /// Where a bake gathers its light: rays traced on the CPU's cores, or on a
 /// GPU (`gpu::GpuGather`).
 trait Gatherer {
@@ -1029,7 +1039,7 @@ trait Gatherer {
         positions: &[Vec3],
         samples: u32,
         seed: u64,
-    ) -> Result<Vec<(Option<[f32; 12]>, u64)>, Error>;
+    ) -> Result<Vec<GatheredProbe>, Error>;
 }
 
 /// Gathering on every CPU core.
@@ -1055,7 +1065,7 @@ impl Gatherer for CpuGather {
         positions: &[Vec3],
         samples: u32,
         seed: u64,
-    ) -> Result<Vec<(Option<[f32; 12]>, u64)>, Error> {
+    ) -> Result<Vec<GatheredProbe>, Error> {
         Ok(positions
             .par_iter()
             .enumerate()

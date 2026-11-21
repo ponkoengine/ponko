@@ -955,3 +955,196 @@ fn the_gpu_baker_reads_albedo_maps_lamps_and_two_sided_surfaces() {
     );
     assert!(!within_noise(control, noise), "the map matters: {control:?}");
 }
+
+/// How [`room_with`] makes the room's floor.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Floor {
+    /// A model with its lightmap.
+    Model,
+    /// A [`LodGroup`](crate::render::LodGroup) of two levels (both the
+    /// floor's mesh), showing its first (`near`) or its second level, with
+    /// the [`Lightmapped`](crate::render::Lightmapped) entry `entry`.
+    Lod { near: bool, entry: Option<u32> },
+}
+
+/// The room with its bake, the floor made as `floor` says, and a small
+/// white cube (not in the bake) by the red wall: a model, or (`batch`)
+/// an instance batch of one on `path`.
+fn room_with(
+    baked: &BakedLighting,
+    tpu: f32,
+    floor: Floor,
+    batch: Option<super::gpu3d::BatchPath>,
+) -> Option<(Rig, Vec<u8>)> {
+    use crate::render::{LodGroup, LodLevel, LodRenderer};
+    let mut rig = Rig::any()?;
+    set_up(&mut rig.ctx);
+    for (i, (red, lo, hi)) in room().into_iter().enumerate() {
+        let mesh = rig.mesh(&box_mesh(lo, hi, tpu), material(red));
+        let at = Transform3D::at((lo + hi) * 0.5);
+        match floor {
+            Floor::Lod { near, entry } if i == 0 => {
+                // Near: the first level whatever the size on screen; far:
+                // the second (the first only above 100 screen heights).
+                let first = if near { 0.0 } else { 100.0 };
+                let group = LodGroup::new(
+                    8.0,
+                    vec![
+                        LodLevel::new(first, vec![LodRenderer::new(mesh)]),
+                        LodLevel::new(0.0, vec![LodRenderer::new(mesh)]),
+                    ],
+                );
+                let e = rig.ctx.world.spawn((at, group));
+                if let Some(entry) = entry {
+                    rig.ctx.world.insert(e, crate::render::Lightmapped(entry));
+                }
+            }
+            _ => {
+                let lightmap = baked.lightmap(i).expect("lightmapped");
+                rig.ctx.world.spawn((at, Model::new(mesh), lightmap));
+            }
+        }
+    }
+    let (lo, hi) = (vec3(-3.2, -0.5, 0.6), vec3(-2.8, -0.1, 1.0));
+    let cube = rig.mesh(&box_mesh(lo, hi, tpu), material(false));
+    if let Some(path) = batch {
+        rig.renderer.batching.path = path;
+        let transform = Mat4::from_translation((lo + hi) * 0.5);
+        let made =
+            rig.ctx
+                .gfx
+                .create_instance_batch(cube, &[transform], crate::render::InstanceBatchOptions::default());
+        rig.renderer.set_instance_batch(
+            &rig.device,
+            &rig.queue,
+            made.id,
+            rig.ctx.gfx.assets3d.instance_batches[made.id as usize].as_ref(),
+        );
+    } else {
+        rig.ctx
+            .world
+            .spawn((Transform3D::at((lo + hi) * 0.5), Model::new(cube)));
+    }
+    let layers = baked.gpu_layers().expect("fits");
+    rig.renderer.set_baked_lighting(
+        &rig.device,
+        &rig.queue,
+        Some((baked.page_size(), &layers)),
+        &rig.textures,
+    );
+    let pixels = rig.draw(2);
+    keep_image(&Image {
+        width: SIZE,
+        height: SIZE,
+        rgba: pixels.clone(),
+    });
+    Some((rig, pixels))
+}
+
+/// The mean difference between two images, 0 to 255 a channel.
+fn apart(a: &[u8], b: &[u8]) -> f32 {
+    let sum: u64 = a.iter().zip(b).map(|(&x, &y)| u64::from(x.abs_diff(y))).sum();
+    sum as f32 / a.len() as f32
+}
+
+#[test]
+fn a_lightmapped_lod_group_draws_its_first_level_with_the_lightmap_and_the_others_with_probes() {
+    let tpu = 4.0;
+    let Some(rig) = Rig::any() else {
+        skip("no GPU");
+        return;
+    };
+    let mut ctx = rig.ctx;
+    set_up(&mut ctx);
+    let baked = bake_lighting(&bake_scene(&ctx, tpu), &settings(tpu).with_samples(64)).expect("bakes");
+    let Some((_, model)) = room_with(&baked, tpu, Floor::Model, None) else {
+        return;
+    };
+    let draw = |near, entry| room_with(&baked, tpu, Floor::Lod { near, entry }, None).map(|d| d.1);
+    let (Some(lod), Some(unmapped), Some(wrong), Some(far), Some(far_unmapped)) = (
+        draw(true, Some(0)),
+        draw(true, None),
+        draw(true, Some(1)),
+        draw(false, Some(0)),
+        draw(false, None),
+    ) else {
+        return;
+    };
+    let (same, probes, wrong, far, far_probes) = (
+        apart(&lod, &model),
+        apart(&unmapped, &model),
+        apart(&wrong, &model),
+        apart(&far, &far_unmapped),
+        apart(&far, &model),
+    );
+    eprintln!(
+        "mean difference (0-255) from the floor as a lightmapped model: as a lightmapped LOD group {same}, \
+         without its lightmap {probes}, with the red wall's entry {wrong}; its second level with the \
+         component against without {far}, against the model {far_probes}"
+    );
+    assert!(same < 0.05, "the first level reads the floor's lightmap: {same}");
+    assert!(
+        probes > 0.5 && wrong > 0.5,
+        "negative controls: without the entry or with another's, the floor is lit otherwise: {probes}, {wrong}"
+    );
+    assert!(far < 0.05, "the second level takes the probes' light: {far}");
+    assert!(far_probes > 0.5, "and so is not drawn as the lightmap: {far_probes}");
+}
+
+#[test]
+fn instance_batches_take_the_baked_probes_light_as_models_do() {
+    use super::gpu3d::BatchPath;
+    let tpu = 4.0;
+    let Some(rig) = Rig::any() else {
+        skip("no GPU");
+        return;
+    };
+    let mut ctx = rig.ctx;
+    set_up(&mut ctx);
+    let baked = bake_lighting(&bake_scene(&ctx, tpu), &settings(tpu).with_samples(64)).expect("bakes");
+    let Some((rig, model)) = room_with(&baked, tpu, Floor::Model, None) else {
+        return;
+    };
+    // The cube's top, which the bounced light from the sunlit walls and
+    // the floor reaches (not the sun).
+    let top = vec3(-3.0, -0.1, 0.8);
+    let lit = rig.at(&model, top);
+    for path in [BatchPath::Cpu, BatchPath::Gpu] {
+        let Some((rig, batch)) = room_with(&baked, tpu, Floor::Model, Some(path)) else {
+            return;
+        };
+        let got = rig.at(&batch, top);
+        eprintln!(
+            "{path:?}: the cube's top: {got:?} as a batch, {lit:?} as a model; images {}",
+            apart(&batch, &model)
+        );
+        assert!(
+            (0..3).all(|k| (got[k] - lit[k]).abs() <= 2),
+            "{path:?}: a batch takes the probes' light: {got:?} vs {lit:?}"
+        );
+        assert!(apart(&batch, &model) < 0.05, "{path:?}: the same image");
+    }
+    // The negative control: the same cube without baked lighting.
+    let Some(mut flat) = Rig::any() else { return };
+    set_up(&mut flat.ctx);
+    let mesh = flat.mesh(
+        &box_mesh(vec3(-3.2, -0.5, 0.6), vec3(-2.8, -0.1, 1.0), tpu),
+        material(false),
+    );
+    flat.ctx
+        .world
+        .spawn((Transform3D::at(vec3(-3.0, -0.3, 0.8)), Model::new(mesh)));
+    for (red, lo, hi) in room() {
+        let mesh = flat.mesh(&box_mesh(lo, hi, tpu), material(red));
+        flat.ctx
+            .world
+            .spawn((Transform3D::at((lo + hi) * 0.5), Model::new(mesh)));
+    }
+    let pixels = flat.draw(2);
+    let unbaked = flat.at(&pixels, top);
+    eprintln!("the cube's top without baked lighting: {unbaked:?}");
+    assert!(
+        (0..3).any(|k| (unbaked[k] - lit[k]).abs() > 10),
+        "negative control: without the bake the top is lit otherwise: {unbaked:?} vs {lit:?}"
+    );
+}
