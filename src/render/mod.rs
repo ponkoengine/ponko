@@ -464,6 +464,8 @@ mod regression_sequence_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod regression_stage;
 #[cfg(all(test, feature = "window", feature = "3d"))]
+mod render_target_frame_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
 mod reverse_z_render_test;
 #[cfg(all(test, feature = "window", feature = "3d", feature = "video"))]
 mod video_render_test;

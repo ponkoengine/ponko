@@ -127,6 +127,8 @@ pub(crate) struct UiState {
     pub(crate) shown_scratch: String,
     /// Reused for laying out rich text to draw it.
     pub(crate) rich_layout: rich::RichLayout,
+    /// The glyphs of the UI node drawn now, handed to it after drawing.
+    pub(crate) glyphs: retained_draw::Glyphs,
     /// The `Strings` revision the retained UI was last localized to.
     pub(crate) localized: u64,
     /// The retained UI allowed IME for its focused text input.

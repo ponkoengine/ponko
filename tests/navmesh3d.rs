@@ -467,6 +467,9 @@ fn five_hundred_agents_step_within_a_coarse_budget() {
             t.position
         );
     });
+    // A coarse guard against a crowd step that grows with the square of the
+    // agents (or worse): this whole file runs in about a second even at a
+    // load average far above the core count, so 30 s holds on a busy machine.
     assert!(start.elapsed() < std::time::Duration::from_secs(30));
 }
 

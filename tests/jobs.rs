@@ -41,39 +41,41 @@ fn a_job_hands_its_result_over_once() {
 #[test]
 fn busy_jobs_dont_stall_parallel_queries() {
     use std::sync::{Condvar, Mutex};
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     let mut world = World::new();
     for i in 0..100_000 {
         world.spawn((Transform2D::at(vec2(i as f32, 0.0)),));
     }
     // Long jobs, one per thread of the frame's pool, held until released (or
-    // 3 s at most, so this test ends even when they do block the query).
+    // 60 s at most, so this test ends even when they do block the query).
     let release = Arc::new((Mutex::new(false), Condvar::new()));
-    let jobs: Vec<_> = (0..rayon::current_num_threads())
+    let mut jobs: Vec<_> = (0..rayon::current_num_threads())
         .map(|_| {
             let release = release.clone();
             ponko::streaming::Job::spawn(move || {
                 let (lock, cvar) = &*release;
                 let held = lock.lock().unwrap();
                 let _held = cvar
-                    .wait_timeout_while(held, Duration::from_secs(3), |go| !*go)
+                    .wait_timeout_while(held, Duration::from_secs(60), |go| !*go)
                     .unwrap();
             })
         })
         .collect();
     std::thread::sleep(Duration::from_millis(50)); // let the jobs start
-    let start = Instant::now();
     world.query::<&mut Transform2D>().par_for_each(|t| t.position.y += 1.0);
-    let took = start.elapsed();
+    // The query is done while every job is still held: it didn't wait for
+    // them (a count, not a time, so a busy machine can't fail it).
+    let held = jobs.iter_mut().map(|job| !job.is_done()).filter(|&held| held).count();
     *release.0.lock().unwrap() = true;
     release.1.notify_all();
     for job in jobs {
         job.wait();
     }
-    assert!(
-        took < Duration::from_secs(1),
-        "par_for_each waited {took:?} for background jobs"
+    assert_eq!(
+        held,
+        rayon::current_num_threads(),
+        "par_for_each waited for background jobs"
     );
     assert!(world.query::<&Transform2D>().iter().all(|t| t.position.y == 1.0));
 }

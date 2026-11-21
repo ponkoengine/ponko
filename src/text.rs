@@ -228,6 +228,8 @@ pub(crate) struct Text {
     revision: u64,
     /// Counts the times the glyph atlas was emptied ([`Text::atlas_resets`]).
     atlas_resets: u64,
+    /// Counts the strings laid out or shaped ([`Text::layouts`]).
+    layouts: u64,
 }
 
 /// The bytes of a font file as a font; not one this engine reads is
@@ -269,6 +271,7 @@ impl Text {
             shaper: shape::Shaper::default(),
             revision: 0,
             atlas_resets: 0,
+            layouts: 0,
         }
     }
 
@@ -499,10 +502,19 @@ impl Text {
         self.atlas_resets
     }
 
+    /// How many times a string was laid out or shaped: measured, drawn, or
+    /// a caret, selection, click or line break found in it. For tests that
+    /// text kept from an earlier frame is not laid out again.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn layouts(&self) -> u64 {
+        self.layouts
+    }
+
     /// Lays out `text` at `px` physical pixels per line. With `rasterize`,
     /// missing glyphs are drawn into the atlas (queued in `uploads`).
     /// Returns the size in physical pixels; the glyphs are in `placed()`.
     pub fn layout(&mut self, text: &str, font: Font, px: f32, rasterize: bool) -> Vec2 {
+        self.layouts += 1;
         let font = self.resolve(font);
         let key_px = px.round().max(1.0) as u32;
         #[cfg(feature = "text-shaping")]
@@ -528,6 +540,7 @@ impl Text {
     /// each line's width in `line_widths()`.
     #[cfg_attr(not(feature = "3d"), allow(dead_code))]
     pub fn layout_sdf(&mut self, text: &str, font: Font) -> Vec2 {
+        self.layouts += 1;
         let font = self.resolve(font);
         #[cfg(feature = "text-shaping")]
         if self.shaped_path(text) {
@@ -626,6 +639,7 @@ impl Text {
     pub fn caret_x(&mut self, text: &str, font: Font, px: f32, index: usize) -> f32 {
         #[cfg(feature = "text-shaping")]
         if self.shaped_path(text) {
+            self.layouts += 1;
             let font = self.resolve(font);
             return self.caret_x_shaped(text, font, px, index);
         }
@@ -639,6 +653,7 @@ impl Text {
         out.clear();
         #[cfg(feature = "text-shaping")]
         if self.shaped_path(text) {
+            self.layouts += 1;
             let font = self.resolve(font);
             return self.selection_shaped(text, font, px, lo..hi, out);
         }
@@ -652,6 +667,7 @@ impl Text {
     pub fn hit(&mut self, text: &str, font: Font, px: f32, x: f32) -> usize {
         #[cfg(feature = "text-shaping")]
         if self.shaped_path(text) {
+            self.layouts += 1;
             let font = self.resolve(font);
             return self.hit_shaped(text, font, px, x);
         }
@@ -674,6 +690,7 @@ impl Text {
     pub fn wrap_end_shaped_or_none(&mut self, line: &str, font: Font, px: f32, width: f32) -> Option<usize> {
         #[cfg(feature = "text-shaping")]
         if self.shaped_path(line) {
+            self.layouts += 1;
             let font = self.resolve(font);
             return Some(self.wrap_end_shaped(line, font, px, width));
         }
@@ -686,6 +703,7 @@ impl Text {
     pub fn min_content_width(&mut self, text: &str, font: Font, px: f32) -> f32 {
         #[cfg(feature = "text-shaping")]
         if self.shaped_path(text) {
+            self.layouts += 1;
             let font = self.resolve(font);
             return self.min_content_shaped(text, font, px);
         }
