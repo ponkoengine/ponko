@@ -19,7 +19,7 @@
 //! buttons and the d-pad, axes 0-3 the two sticks (y down, as the engine has
 //! them). Triggers report their value as an axis and, when the browser says
 //! they are pressed, as a button. Sticks and triggers get gilrs's dead zone
-//! ([`DEAD_ZONE`]), so they read as on the desktop. A pad's key is its
+//! ([`DEAD_ZONE`](crate::input::backend::DEAD_ZONE)), so they read as on the desktop. A pad's key is its
 //! browser index. Rumble goes to the pad's `vibrationActuator` where the
 //! browser has one, the trigger motors' with it where that plays
 //! `trigger-rumble` (see [`crate::web_rumble`]); there is no motion, as with
@@ -67,27 +67,8 @@ const AXIS_NAMES: [GamepadAxis; AXES] = [
 /// The standard buttons whose value is also an axis: the triggers.
 const TRIGGERS: [(usize, GamepadAxis); 2] = [(6, GamepadAxis::LeftTrigger), (7, GamepadAxis::RightTrigger)];
 
-/// The dead zone of sticks and triggers, as a share of their travel:
-/// gilrs's default, so a web build reads them as a desktop build does.
-pub(crate) const DEAD_ZONE: f32 = 0.1;
-
-/// A stick's `(x, y)` with the dead zone taken out as gilrs does: nothing
-/// inside a circle of [`DEAD_ZONE`], and the rest rescaled along the
-/// stick's direction so the edge still reads 1.
-pub(crate) fn stick_dead_zone(x: f32, y: f32) -> (f32, f32) {
-    let magnitude = (x * x + y * y).sqrt().clamp(0.0, 1.0);
-    if magnitude <= DEAD_ZONE {
-        (0.0, 0.0)
-    } else {
-        let scale = (magnitude - DEAD_ZONE) / (1.0 - DEAD_ZONE) / magnitude;
-        (x * scale, y * scale)
-    }
-}
-
-/// A trigger's `0..=1` with the dead zone taken out, rescaled so full still reads 1.
-pub(crate) fn trigger_dead_zone(value: f32) -> f32 {
-    stick_dead_zone(value, 0.0).0
-}
+// The dead zone of sticks and triggers, shared with the SDL backend.
+pub(crate) use crate::input::backend::{stick_dead_zone, trigger_dead_zone};
 
 /// Pads the browser lists at most (Chromium: 4; the rest are ignored).
 const MAX_PADS: usize = 8;

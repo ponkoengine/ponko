@@ -150,6 +150,13 @@ pub mod game;
 // The built-in controllers on the desktop: gilrs.
 #[cfg(all(feature = "gamepad", not(target_arch = "wasm32")))]
 mod gamepad;
+// The second desktop backend: SDL 3's gamepads (feature `gamepad-sdl`), and
+// its tests with a scripted device layer in every test build.
+#[cfg(any(test, all(feature = "gamepad-sdl", not(target_arch = "wasm32"))))]
+mod gamepad_sdl;
+// The calls into SDL for it.
+#[cfg(all(feature = "gamepad-sdl", not(target_arch = "wasm32")))]
+mod gamepad_sdl_sys;
 // The built-in controllers of every web build (and its tests, natively): the
 // browser's gamepads, read by the engine itself.
 #[cfg(all(feature = "gamepad", any(test, target_arch = "wasm32")))]

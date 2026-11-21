@@ -1001,11 +1001,11 @@
     "reason": "The generational table is exhausted after every slot is live or retired. This is the existing SlotIds limit, checked before a GPU build reserves a slot.",
     "site": "src/handle.rs:632"
   },
-  "src/input/glyphs.rs:d5a08427d402462f": {
+  "src/input/glyphs.rs:298d456ee48fd2c8": {
     "classification": "invariant",
     "construction": ".expect(\"invariant: the built-in font is valid\")",
-    "reason": "Parses the font bundled at compile time (epaint's Hack); its bytes are fixed and the UI loads the same font, so no caller can reach it",
-    "site": "src/input/glyphs.rs:568"
+    "reason": "The engine's built-in font (epaint's Hack) is compiled in and always parses; moved into paint_cells, which also repaints caps for a keyboard layout.",
+    "site": "src/input/glyphs.rs:591"
   },
   "src/jobs.rs:16b9dc620cca7123": {
     "classification": "caller-contract",

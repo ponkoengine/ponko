@@ -488,6 +488,8 @@ binding arrives:
 | `InstanceCellData` | [Streaming instance cells](3d.md#streaming-instance-cells) | The same: matrices and colours go straight to `ponko_ctx_add_instance_cell` |
 | `GamepadBackend` | [Backends and tests](controllers.md#backends-and-tests) | Native games use the built-in gamepad backend |
 | `FakeGamepads` | [Backends and tests](controllers.md#backends-and-tests) | Native tests feed `ponko_ctx_feed_input` (kind 8 connects a pad) and `ponko_ctx_feed_gamepad_motion` |
+| `KeyLabels` | [Key labels follow the keyboard layout](controllers.md#key-labels-follow-the-keyboard-layout) | `ponko_glyph_atlas_draw_prompt` and `ponko_glyph_atlas_texture` label the key caps for the player's layout themselves; `ponko_glyph_label` gives the US labels |
+| `InputScenario::connect_gamepad` | [Backends and tests](controllers.md#backends-and-tests) | Scenarios are JSON in C and C++: a `gamepad_connected` step takes the same `info` object |
 | `Graphics::instance_cell_state` | [Streaming instance cells](3d.md#streaming-instance-cells) | The same: a cell added from C is on the GPU at once |
 | `Ui::set_rich`, `Ui::set_inline_image`, `Ui::set_inline_font`, `Ui::link`, `UiEvent::LinkClicked` | [Retained game UI](ui.md#rich-text) | Not bound yet: several labels side by side, each with its own paint; a button for each link |
 | `GltfScene::nav_source` | [From Blender to the game](blender.md#navigation-meshes) | Read the nodes and their places with `ponko_gltf_scene_load`, and bake from mesh data of your own (`ponko_nav_sources_add_mesh`, `ponko_ctx_bake_navmesh`) |

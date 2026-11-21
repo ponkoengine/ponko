@@ -215,6 +215,11 @@ rav1d = { package = "re_rav1d", version = "0.1.3", optional = true, default-feat
 # The desktop's gamepads (feature `gamepad`); web builds read the browser's
 # themselves (src/gamepad_web.rs).
 gilrs = { version = "0.11.2", optional = true }
+# The second desktop gamepad backend (feature `gamepad-sdl`): SDL 3's gamepad
+# API, for gyro, trigger rumble and rumble on macOS, which gilrs lacks
+# (book/src/controllers.md, "Choosing the SDL backend", has the reasons).
+# Low-level bindings only; links the system's SDL 3 (pkg-config, vcpkg).
+sdl3-sys = { version = "0.7.3", optional = true }
 arboard = { version = "3.7", default-features = false, features = ["wayland-data-control"], optional = true }
 pollster = { version = "1.0.1", optional = true }
 # AV1 pictures for `video`: rav1d, the Rust port of dav1d, 8-bit only, as
@@ -377,6 +382,13 @@ accessibility = ["window", "dep:accesskit", "dep:accesskit_macos", "dep:accesski
 # in web builds the browser's gamepads, read by the engine.
 # Off: `ctx.input.gamepads()` is always empty. On Linux it needs libudev headers.
 gamepad = ["window", "dep:gilrs"]
+# Gamepads through SDL 3 instead of gilrs, on the desktop: gyro and
+# accelerometer, trigger rumble, and rumble on macOS too (the guide's
+# controllers chapter has what each platform gets). Links the SDL 3 library,
+# which must be installed (Homebrew `sdl3`, a distribution's SDL 3 package,
+# vcpkg) and shipped with the game. Web builds keep the browser's gamepads.
+# Off (the default): gilrs, with `gamepad`.
+gamepad-sdl = ["window", "dep:sdl3-sys"]
 # Lets a release build honor `PONKO_CONTROL=1` (debug builds always do), for
 # tools that launch release builds, such as ponko-mcp's `launch`. Off: a
 # release build opens the control endpoint only if the game asks for it with

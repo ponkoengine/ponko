@@ -395,8 +395,22 @@ where
             }
         }
 
+        // The keys' labels on the system's layout, for prompts.
+        if let Some(labels) = crate::input::KeyLabels::system() {
+            self.ctx.input.set_key_labels(labels);
+        }
+
         // The built-in controllers, unless the game brought its own backend
-        // (setup can still replace them with `set_gamepad_backend`).
+        // (setup can still replace them with `set_gamepad_backend`): SDL's
+        // with `gamepad-sdl` (gyro, trigger rumble, rumble on macOS), else
+        // gilrs's; gilrs's too when SDL can't start and `gamepad` is on.
+        #[cfg(all(feature = "gamepad-sdl", not(target_arch = "wasm32")))]
+        if !self.ctx.has_gamepad_backend() {
+            match crate::gamepad_sdl_sys::Sdl::start() {
+                Ok(sdl) => self.ctx.set_gamepad_backend(crate::gamepad_sdl::SdlGamepads::new(sdl)),
+                Err(e) => eprintln!("ponko: SDL's gamepads unavailable ({e})"),
+            }
+        }
         #[cfg(all(feature = "gamepad", not(target_arch = "wasm32")))]
         if !self.ctx.has_gamepad_backend() {
             self.ctx.set_gamepad_backend(crate::gamepad::GilrsBackend::new());
@@ -708,8 +722,16 @@ where
 
             WindowEvent::Focused(false) => self.ctx.input.release_all(),
 
-            // The system lets go of the cursor while the window is away.
-            WindowEvent::Focused(true) if self.ctx.input.cursor_locked() => apply_cursor_lock(&window, true),
+            WindowEvent::Focused(true) => {
+                // The system lets go of the cursor while the window is away.
+                if self.ctx.input.cursor_locked() {
+                    apply_cursor_lock(&window, true);
+                }
+                // The player may have switched keyboard layouts meanwhile.
+                if let Some(labels) = crate::input::KeyLabels::system() {
+                    self.ctx.input.set_key_labels(labels);
+                }
+            }
 
             WindowEvent::Ime(ime) => self.ctx.input.feed_ime(crate::input::ImeEvent::from_winit(ime)),
             WindowEvent::KeyboardInput { event, .. } => {
@@ -724,6 +746,20 @@ where
                 if let PhysicalKey::Code(code) = event.physical_key
                     && let Some(key) = Key::from_winit(code)
                 {
+                    // What the key types names it in prompts (Z for
+                    // `Key::W` on a French keyboard).
+                    if event.state == ElementState::Pressed {
+                        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+                        let typed = {
+                            use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
+                            crate::input::key_labels::typed_char(&event.key_without_modifiers(), false)
+                        };
+                        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+                        let typed = crate::input::key_labels::typed_char(&event.logical_key, true);
+                        if let Some(c) = typed {
+                            self.ctx.input.learn_key_label(key, c);
+                        }
+                    }
                     self.ctx.input.set_key(key, event.state == ElementState::Pressed);
                 }
             }
