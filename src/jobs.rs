@@ -15,7 +15,14 @@ use glam::{Vec2, Vec3};
 /// Start it with [`Job::spawn`], then check [`Job::take`] each frame: the
 /// game keeps running meanwhile. GPU work (making meshes, textures) belongs
 /// on the game's thread, after the job; building the data for it (heights,
-/// `MeshData`, decoded images) belongs in the job. In a browser the
+#[cfg_attr(
+    feature = "3d",
+    doc = " [`MeshData`](crate::render::MeshData), decoded images) belongs in the job. In a browser the"
+)]
+#[cfg_attr(
+    not(feature = "3d"),
+    doc = " `MeshData`, decoded images) belongs in the job. In a browser the"
+)]
 /// work runs on a worker thread when the build has threads and the page
 /// allows them (see the guide's "Threads on the web"); otherwise it runs
 /// when it's spawned.
