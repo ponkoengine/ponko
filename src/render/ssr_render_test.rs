@@ -1022,7 +1022,6 @@ fn reflection_gpu_cost_at_1080p() {
             false,
         ),
     ] {
-        if std::env::var_os("TMP_ONLY_HIGH").is_some() && name != "High" { continue; } // TMP
         if !reflection_gpu_cost(name, quality, ao, game) {
             return;
         }
@@ -1557,6 +1556,16 @@ fn far_thin_things_stay_thin_in_reflections_without_taa() {
 /// transparent pass), over a glossy floor with a glowing box; with
 /// reflections on and off. Prints each pass's median span over 300 frames
 /// and the frame's: run before and after a change, alternating runs.
+///
+/// Measured on an Apple M4 Max, three runs each, reflections on: GTAO
+/// reading the reflections' single-sample depth copy instead of the
+/// multisampled depth took 0.83, 0.96 and 0.89 ms for its two passes, to
+/// 0.76, 0.67 and 0.77 ms; depth of field reading it took 1.22 ms three
+/// times, to 1.08, 1.33 and 1.21 ms. Neither reads the copy: it pays off
+/// in the reflections' trace, whose reads jump along rays, not in passes
+/// that read around their own pixel. Temporal antialiasing reads every
+/// sample (a copy of one would change what it draws), and soft particles
+/// read the depth once a fragment.
 #[test]
 #[ignore]
 fn screen_pass_gpu_cost_at_1080p() {
