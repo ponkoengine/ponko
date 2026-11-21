@@ -161,6 +161,14 @@ pub(crate) struct FadeLayers {
     regions: Vec<([u32; 2], [u32; 2], [u32; 2])>,
 }
 
+#[cfg(test)]
+impl FadeLayers {
+    /// Each layer slot's texture size, as last drawn.
+    pub(crate) fn texture_sizes(&self) -> &[[u32; 2]] {
+        &self.kept
+    }
+}
+
 impl Ctx {
     /// Before drawing `ui`'s nodes: which go into layers this frame, their
     /// opacity made relative to their layer's. Whether any does: when not
