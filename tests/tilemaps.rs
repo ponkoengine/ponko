@@ -272,9 +272,9 @@ fn files_that_are_not_levels_are_refused_with_the_reason() {
 #[test]
 fn levels_whose_sizes_would_allocate_without_bound_are_refused() {
     // Each a few hundred bytes of text that would take gigabytes once spawned.
-    let huge_layer_ldtk = r#"{"defs": {"layers": [], "tilesets": []}, "levels": [{"identifier": "L", "iid": "l",
+    let huge_layer_ldtk = r#"{"jsonVersion": "1.5.3", "defs": {"layers": [], "tilesets": []}, "levels": [{"identifier": "L", "iid": "l",
         "layerInstances": [{"__identifier": "Big", "__type": "IntGrid", "__cWid": 100000, "__cHei": 100000, "__gridSize": 16}]}]}"#;
-    let huge_tileset_ldtk = r#"{"defs": {"layers": [], "tilesets": [{"identifier": "T", "uid": 1, "relPath": "t.png",
+    let huge_tileset_ldtk = r#"{"jsonVersion": "1.5.3", "defs": {"layers": [], "tilesets": [{"identifier": "T", "uid": 1, "relPath": "t.png",
         "tileGridSize": 16, "__cWid": 4294967295, "__cHei": 4294967295}]}, "levels": [{"identifier": "L", "iid": "l", "layerInstances": []}]}"#;
     let huge_layer_tmj = r#"{"type": "map", "width": 100000, "height": 100000, "tilewidth": 16, "tileheight": 16,
         "tilesets": [], "layers": [{"type": "tilelayer", "name": "Big", "infinite": true,
