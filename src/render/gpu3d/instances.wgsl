@@ -1,7 +1,9 @@
 // Culls a page's static batch views with stable compaction in four stages.
 //
-// `data` holds a pool's batches as vec4s: per batch a block of a header,
-// six vec4s per instance and two per cell. `indices` is a page: its root,
+// `data` holds a pool's batches as vec4s: per batch a block of a header
+// (instances, cells, the widest instance's reach for the probes' size cut),
+// six vec4s per instance and two per cell (its box with its first instance
+// and count). `indices` is a page: its root,
 // this frame's jobs, and the visible instance list of each of its views.
 // `args` holds the views' indirect draw arguments (five words per mesh
 // part). `depth` holds what all pages share this frame: the occlusion
@@ -23,7 +25,9 @@
 // `arguments` indexes `args`.
 // Flags: 1 = one mesh with a maximum distance to the instance's sphere,
 // 2 = test against the depth grid, 4 = a face view of global illumination's
-// probes: leave out instances under one of their pixels (see `probe_sized`).
+// probes: leave out instances under one of their pixels (see `probe_sized`),
+// 8 = with 4, leave out whole cells too far from every probe for any of their
+// instances to be a pixel wide (see `probe_near`).
 @group(0) @binding(0) var<storage,read> data:array<vec4<f32>>;
 @group(0) @binding(1) var<storage,read_write> indices:array<u32>;
 @group(0) @binding(2) var<storage,read_write> args:array<atomic<u32>>;
@@ -56,6 +60,19 @@ fn probe_sized(center:vec3<f32>, radius:f32) -> bool {
     if count==0u {return true;}
     for(var k=0u;k<count;k++) {
         if radius >= depth[23]*distance(center,word(first+k*4u).xyz) {return true;}
+    }
+    return false;
+}
+// Flag 8: whether the batch's widest instance (`reach`), in this cell, can
+// be a pixel wide seen from one of this frame's probes: from the box's
+// nearest point. A little margin keeps rounding on the safe side.
+fn probe_near(lo:vec3<f32>, hi:vec3<f32>, reach:f32) -> bool {
+    let first=bitcast<u32>(depth[21]); let count=bitcast<u32>(depth[22]);
+    if count==0u {return true;}
+    for(var k=0u;k<count;k++) {
+        let p=word(first+k*4u).xyz;
+        let near=max(max(lo-p,p-hi),vec3<f32>(0.0));
+        if reach >= depth[23]*0.999*length(near) {return true;}
     }
     return false;
 }
@@ -100,6 +117,7 @@ fn main(@builtin(workgroup_id) group:vec3<u32>, @builtin(local_invocation_index)
         let cell_lo=data[base]; let cell_hi=data[base+1u];
         start=bitcast<u32>(cell_lo.w); count=bitcast<u32>(cell_hi.w);
         eligible=visible((cell_lo.xyz+cell_hi.xyz)*0.5,length(cell_hi.xyz-cell_lo.xyz)*0.5,view,flags,band.y);
+        eligible=eligible && ((flags & 8u) == 0u || probe_near(cell_lo.xyz,cell_hi.xyz,data[block].z));
         if (flags & 1u) == 0u {
             let near=max(max(cell_lo.xyz-eye,eye-cell_hi.xyz),vec3<f32>(0.0));
             let far=max(abs(cell_lo.xyz-eye),abs(cell_hi.xyz-eye));

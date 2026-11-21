@@ -126,7 +126,7 @@ impl Renderer3D {
         clear: wgpu::Color,
         textures: &dyn TextureTable,
         timer: Option<&GpuTimer>,
-    ) -> Vec<wgpu::CommandBuffer> {
+    ) -> FrameBuffers {
         self.swap_view(index);
         self.extra = true;
         let buffers = self.draw(device, view, clear, textures, timer);
