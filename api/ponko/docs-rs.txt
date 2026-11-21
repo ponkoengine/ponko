@@ -2038,6 +2038,66 @@ impl serde_core::ser::Serialize for ponko::color::Color
 pub fn ponko::color::Color::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for ponko::color::Color
 pub fn ponko::color::Color::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub mod ponko::crash
+#[non_exhaustive] pub enum ponko::crash::CrashKind
+pub ponko::crash::CrashKind::Error
+pub ponko::crash::CrashKind::Panic
+impl core::clone::Clone for ponko::crash::CrashKind
+pub fn ponko::crash::CrashKind::clone(&self) -> Self
+impl core::cmp::Eq for ponko::crash::CrashKind
+impl core::cmp::PartialEq for ponko::crash::CrashKind
+pub fn ponko::crash::CrashKind::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::crash::CrashKind
+pub fn ponko::crash::CrashKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::crash::CrashKind
+impl core::marker::StructuralPartialEq for ponko::crash::CrashKind
+impl serde_core::ser::Serialize for ponko::crash::CrashKind
+pub fn ponko::crash::CrashKind::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+pub struct ponko::crash::CrashReport
+impl ponko::crash::CrashReport
+pub fn ponko::crash::CrashReport::backtrace(&self) -> &str
+pub fn ponko::crash::CrashReport::engine_version(&self) -> &str
+pub fn ponko::crash::CrashReport::file(&self) -> core::option::Option<&str>
+pub fn ponko::crash::CrashReport::game(&self) -> &str
+pub fn ponko::crash::CrashReport::game_version(&self) -> core::option::Option<&str>
+pub fn ponko::crash::CrashReport::gpu(&self) -> core::option::Option<&ponko::render::GpuAdapter>
+pub fn ponko::crash::CrashReport::kind(&self) -> ponko::crash::CrashKind
+pub fn ponko::crash::CrashReport::location(&self) -> core::option::Option<&str>
+pub fn ponko::crash::CrashReport::log(&self) -> core::option::Option<&[alloc::string::String]>
+pub fn ponko::crash::CrashReport::message(&self) -> &str
+pub fn ponko::crash::CrashReport::os(&self) -> &str
+pub fn ponko::crash::CrashReport::path(&self) -> core::option::Option<&std::path::Path>
+pub fn ponko::crash::CrashReport::settings(&self) -> &[(alloc::string::String, alloc::string::String)]
+pub fn ponko::crash::CrashReport::text(&self) -> alloc::string::String
+pub fn ponko::crash::CrashReport::thread(&self) -> core::option::Option<&str>
+pub fn ponko::crash::CrashReport::time(&self) -> &str
+pub fn ponko::crash::CrashReport::uptime_secs(&self) -> f64
+impl core::clone::Clone for ponko::crash::CrashReport
+pub fn ponko::crash::CrashReport::clone(&self) -> Self
+impl core::fmt::Debug for ponko::crash::CrashReport
+pub fn ponko::crash::CrashReport::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for ponko::crash::CrashReport
+pub fn ponko::crash::CrashReport::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+pub struct ponko::crash::CrashReports
+impl ponko::crash::CrashReports
+pub fn ponko::crash::CrashReports::game_version(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn ponko::crash::CrashReports::is_on(&self, bool) -> bool
+pub fn ponko::crash::CrashReports::off() -> Self
+pub fn ponko::crash::CrashReports::on() -> Self
+pub fn ponko::crash::CrashReports::on_crash(self, impl core::ops::function::Fn(&ponko::crash::CrashReport) + core::marker::Send + core::marker::Sync + 'static) -> Self
+impl core::clone::Clone for ponko::crash::CrashReports
+pub fn ponko::crash::CrashReports::clone(&self) -> Self
+impl core::convert::From<bool> for ponko::crash::CrashReports
+pub fn ponko::crash::CrashReports::from(bool) -> Self
+impl core::default::Default for ponko::crash::CrashReports
+pub fn ponko::crash::CrashReports::default() -> Self
+impl core::fmt::Debug for ponko::crash::CrashReports
+pub fn ponko::crash::CrashReports::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub const ponko::crash::FOLDER: &str
+pub const ponko::crash::KEPT: usize
+pub const ponko::crash::LOG_LINES: usize
+pub fn ponko::crash::report(impl core::fmt::Display) -> core::option::Option<ponko::crash::CrashReport>
+pub fn ponko::crash::saved_reports(&ponko::storage::Storage) -> alloc::vec::Vec<alloc::string::String>
 pub mod ponko::d2
 #[non_exhaustive] pub enum ponko::d2::ParticleShape
 pub ponko::d2::ParticleShape::Circle
@@ -4439,6 +4499,7 @@ pub fn ponko::game::ConfiguredGame::app_id(self, impl core::convert::Into<alloc:
 pub fn ponko::game::ConfiguredGame::barrier(self, ponko::game::Phase) -> Self
 pub fn ponko::game::ConfiguredGame::control_endpoint(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::control_method(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::ops::function::FnMut(&mut ponko::prelude::Ctx, &ponko::reflect::JsonValue) -> core::result::Result<ponko::reflect::JsonValue, ponko::error::Error> + 'static) -> Self
+pub fn ponko::game::ConfiguredGame::crash_reports(self, impl core::convert::Into<ponko::crash::CrashReports>) -> Self
 pub fn ponko::game::ConfiguredGame::data_dir(self, impl core::convert::Into<std::path::PathBuf>) -> Self
 pub fn ponko::game::ConfiguredGame::debug_draw(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::debug_toggle(self, impl core::convert::Into<alloc::string::String>, bool) -> Self
@@ -4493,6 +4554,7 @@ pub fn ponko::game::Game::check_order(&self) -> core::result::Result<(), ponko::
 pub fn ponko::game::Game::configured(self) -> ponko::game::ConfiguredGame
 pub fn ponko::game::Game::control_endpoint(self, bool) -> Self
 pub fn ponko::game::Game::control_method(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::ops::function::FnMut(&mut ponko::prelude::Ctx, &ponko::reflect::JsonValue) -> core::result::Result<ponko::reflect::JsonValue, ponko::error::Error> + 'static) -> Self
+pub fn ponko::game::Game::crash_reports(self, impl core::convert::Into<ponko::crash::CrashReports>) -> Self
 pub fn ponko::game::Game::data_dir(self, impl core::convert::Into<std::path::PathBuf>) -> Self
 pub fn ponko::game::Game::debug_draw(self, bool) -> Self
 pub fn ponko::game::Game::debug_toggle(self, impl core::convert::Into<alloc::string::String>, bool) -> Self
@@ -10734,6 +10796,7 @@ pub fn ponko::game::ConfiguredGame::app_id(self, impl core::convert::Into<alloc:
 pub fn ponko::game::ConfiguredGame::barrier(self, ponko::game::Phase) -> Self
 pub fn ponko::game::ConfiguredGame::control_endpoint(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::control_method(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::ops::function::FnMut(&mut ponko::prelude::Ctx, &ponko::reflect::JsonValue) -> core::result::Result<ponko::reflect::JsonValue, ponko::error::Error> + 'static) -> Self
+pub fn ponko::game::ConfiguredGame::crash_reports(self, impl core::convert::Into<ponko::crash::CrashReports>) -> Self
 pub fn ponko::game::ConfiguredGame::data_dir(self, impl core::convert::Into<std::path::PathBuf>) -> Self
 pub fn ponko::game::ConfiguredGame::debug_draw(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::debug_toggle(self, impl core::convert::Into<alloc::string::String>, bool) -> Self
@@ -10969,6 +11032,7 @@ pub fn ponko::game::Game::check_order(&self) -> core::result::Result<(), ponko::
 pub fn ponko::game::Game::configured(self) -> ponko::game::ConfiguredGame
 pub fn ponko::game::Game::control_endpoint(self, bool) -> Self
 pub fn ponko::game::Game::control_method(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::ops::function::FnMut(&mut ponko::prelude::Ctx, &ponko::reflect::JsonValue) -> core::result::Result<ponko::reflect::JsonValue, ponko::error::Error> + 'static) -> Self
+pub fn ponko::game::Game::crash_reports(self, impl core::convert::Into<ponko::crash::CrashReports>) -> Self
 pub fn ponko::game::Game::data_dir(self, impl core::convert::Into<std::path::PathBuf>) -> Self
 pub fn ponko::game::Game::debug_draw(self, bool) -> Self
 pub fn ponko::game::Game::debug_toggle(self, impl core::convert::Into<alloc::string::String>, bool) -> Self
