@@ -23,22 +23,43 @@
     import init, * as game from "./game.js";
     const status = document.getElementById("status");
     const canvas = document.getElementById("ponko");
+    // The status line leaves the page once the game runs; a failure brings it back.
+    let statusShown = true;
+    // The first failure is the one shown: what follows it (the trap after a
+    // panic) says less.
+    let stopped = false;
 
     function showError(message) {
+      if (!statusShown) {
+        document.body.append(status);
+        statusShown = true;
+      }
       status.className = "error";
       status.textContent = message;
     }
 
     function started(error) {
       if (error) {
+        stopped = true;
         showError("Could not start the game: " + (error.message ?? String(error)));
       } else if (status.className !== "error") {
         status.remove();
+        statusShown = false;
         canvas.focus();
       }
     }
 
+    // A panic, the WebGL2 context lost while playing, a worker thread that
+    // stopped: `text` is the game's own words for it, when it has some.
+    function failed(failure) {
+      if (stopped) return;
+      stopped = true;
+      showError(failure.text ?? "The game stopped: " + (failure.message ?? String(failure)));
+    }
+
     window.addEventListener("error", (e) => {
+      if (stopped) return;
+      stopped = true;
       showError("The game stopped: " + e.message + " (see the browser console)");
     });
 
@@ -52,15 +73,18 @@
           let engineError;
           try {
             game.onPonkoStartup?.((error) => { engineError = error; });
+            // A panic before the event loop started.
+            game.onPonkoFailure?.(failed);
           } catch {
             // The Wasm module could not be loaded.
           }
-          started(engineError ?? e);
+          if (!stopped) started(engineError ?? e);
           console.error(e);
           return;
         }
       }
       // Packages can also use game.js from older engine versions.
+      game.onPonkoFailure?.(failed);
       if (game.onPonkoStartup) game.onPonkoStartup(started);
       else started(null);
     }

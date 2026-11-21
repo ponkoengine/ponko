@@ -116,6 +116,7 @@ files = [
 ]
 
 [dependencies]
+ponko_aseprite = { path = "crates/ponko_aseprite", version = "0.1.0", optional = true }
 taffy = { version = "0.15.1", default-features = false, features = ["std", "taffy_tree", "flexbox", "grid", "content_size"] }
 navmesh-rs = { version = "0.2.1", optional = true, default-features = false, features = ["std", "libm", "recast", "detour", "crowd", "tilecache", "polyref64"] }
 # Obstacle turns use the same platform-independent sin/cos as the navmesh backend.
@@ -128,7 +129,10 @@ half = { version = "2.7.1", optional = true }
 bytemuck = { version = "1.25.2", features = ["derive"] }
 glam = { version = "0.34.2", features = ["serde"] }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
-wgpu = { version = "30.0.1", optional = true, features = ["glsl"] }
+# The PNG decoder `image` uses, row by row: asset groups decode a large PNG
+# in slices across frames where there are no worker threads (the web).
+png = "0.18.1"
+wgpu ={ version = "30.0.1", optional = true, features = ["glsl"] }
 winit = { version = "0.30.13", optional = true }
 puffin = { version = "0.20.0", optional = true }
 puffin_http = { version = "0.17.0", optional = true }
@@ -315,6 +319,8 @@ async-io = "2.6.0"
 web-sys = { version = "0.3.107", features = ["Window", "Document", "Element", "Location"] }
 
 [features]
+# Load loose Aseprite source files during development. Cooked exports need no decoder.
+aseprite-source = ["dep:ponko_aseprite"]
 # Unstable benchmark drivers for `crates/ponko_bench` (`ponko::render::SceneBench`,
 # `LodBench`, `RecordBench`, `ExtractionBench`). Not part of the public API:
 # they change without notice in any release.
@@ -590,7 +596,7 @@ name = "web_smoke_3d"
 required-features = ["3d"]
 
 [workspace]
-members = [".", "crates/ponko_image_diff", "crates/ponko_ecs", "crates/ponko_macros", "crates/ponko_bench", "crates/ponko_mcp", "crates/ponko_ffi", "crates/ponko_unity", "crates/ponko_cli", "crates/ponko_lobby"]
+members = [".", "crates/ponko_image_diff", "crates/ponko_ecs", "crates/ponko_macros", "crates/ponko_bench", "crates/ponko_mcp", "crates/ponko_ffi", "crates/ponko_unity", "crates/ponko_cli", "crates/ponko_aseprite", "crates/ponko_lobby"]
 
 [workspace.package]
 edition = "2024"

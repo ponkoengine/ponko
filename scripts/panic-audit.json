@@ -587,6 +587,12 @@
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. let events = ctx.events.used.get_mut().take().unwrap_or_default();     let problems = access.undeclared(&ctx.world, &used, &events, !ctx.commands.is_empty());     if !problems.is_empty() {         panic!(",
     "site": "src/access.rs:884"
   },
+  "src/ai/mod.rs:d8912e00f29d9446": {
+    "classification": "forwarded-error",
+    "construction": "panic!(\"{e}\")",
+    "reason": "BehaviorTrees::insert displays try_insert's error, which names every tree on the subtree cycle; try_insert returns it instead.",
+    "site": "src/ai/mod.rs:200"
+  },
   "src/ai/mod.rs:e38794b1532eada7": {
     "classification": "forwarded-error",
     "construction": "panic!(\"{e}\")",

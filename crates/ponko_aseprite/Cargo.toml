@@ -1,0 +1,16 @@
+[package]
+name = "ponko_aseprite"
+version = "0.1.0"
+description = "Shared Aseprite source decoder for Ponko development loading and cooking"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+# tiles.rs compensates for the 0.4.2 X/Y tile-mask parser order.
+aseprite-loader = "=0.4.2"
+flate2 = "1.1.10"
+serde_json = "1.0.154"

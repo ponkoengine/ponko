@@ -8370,8 +8370,11 @@ public:
         if (ponko_ctx_asset_group_error(raw_, id) == PONKO_OK) return std::nullopt;
         return detail::last_error();
     }
-    /// Stops loading group `id`; what loaded stays loaded.
+    /// Stops loading group `id`; what loaded stays loaded. A failed group is cancelled too, dropping
+    /// what it kept for a restart.
     void cancel_asset_group(std::uint32_t id) { detail::check(ponko_ctx_cancel_asset_group(raw_, id)); }
+    /// Loads the rest of a failed or cancelled group `id`: only what had not loaded is read again.
+    void restart_asset_group(std::uint32_t id) { detail::check(ponko_ctx_restart_asset_group(raw_, id)); }
     /// Takes the bytes of asset `path` of group `id` (added with `asset_group::bytes`) and returns
     /// `decode(data, len)`. Throws ponko::error if they aren't there (not loaded, or taken), and what
     /// `decode` throws.
@@ -10456,6 +10459,20 @@ public:
     explicit behavior_tree(const std::string& json) : raw_(ponko_behavior_tree_new(json.c_str())) {
         if (!raw_) throw detail::last_error();
     }
+    /// Compiles `json`, its `subtree` nodes running the trees in `subtrees`
+    /// by name (they may name each other; the new tree keeps what it needs).
+    /// Throws ponko::error for a bad tree or a cycle, naming the trees on it.
+    behavior_tree(const std::string& json, const std::vector<std::pair<std::string, const behavior_tree*>>& subtrees)
+        : raw_(nullptr) {
+        std::vector<const char*> names;
+        std::vector<const PonkoBehaviorTree*> trees;
+        for (const auto& [name, tree] : subtrees) {
+            names.push_back(name.c_str());
+            trees.push_back(tree ? tree->raw() : nullptr);
+        }
+        raw_ = ponko_behavior_tree_new_linked(json.c_str(), names.data(), trees.data(), names.size());
+        if (!raw_) throw detail::last_error();
+    }
     ~behavior_tree() { ponko_behavior_tree_free(raw_); }
     /// Movable: takes `o`'s handle (a compiled tree).
     ///@{
@@ -10477,6 +10494,8 @@ public:
 /// from one thread at a time. Move-only; the destructor frees it.
 class brain {
     PonkoBrain* raw_;
+    struct adopt {};
+    brain(adopt, PonkoBrain* raw) noexcept : raw_(raw) {}
 public:
     /// A brain that thinks every `period` ticks (see due()).
     explicit brain(std::uint32_t period = 1) : raw_(ponko_brain_new(period)) {}
@@ -10529,6 +10548,22 @@ public:
     }
     /// Thinks at the next chance, whatever the period.
     void wake() { detail::check(ponko_brain_wake(raw_)); }
+    /// Hears signal `key` (from ai::key): a `wait_for` node waiting for it
+    /// succeeds at the next think, which is due at once.
+    void signal(std::uint64_t key) { detail::check(ponko_brain_signal(raw_, key)); }
+    /// The seed its `random` and `chance` nodes draw from: give each agent its own.
+    void set_seed(std::uint64_t seed) { detail::check(ponko_brain_set_seed(raw_, seed)); }
+    /// The brain for a save: its memory (running nodes, waits, cooldowns) and blackboard.
+    std::string save_json() const {
+        return detail::read_text([&](char* b, std::size_t c, std::size_t* l) { return ponko_brain_save_json(raw_, b, c, l); });
+    }
+    /// A brain read back from save_json(): it carries on where it was with
+    /// the same tree. Throws ponko::error if `json` isn't a saved brain.
+    static brain load_json(const std::string& json) {
+        PonkoBrain* raw = ponko_brain_load_json(json.c_str());
+        if (!raw) throw detail::last_error();
+        return brain(adopt{}, raw);
+    }
     /// Sets a blackboard entry. A key id must come from ai::key.
     ///@{
     void set_num(std::uint64_t key, float v) { detail::check(ponko_brain_set_num(raw_, key, v)); }

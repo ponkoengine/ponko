@@ -1012,14 +1012,17 @@ fn end_timings(ctx: &mut Ctx) {
 
 /// Drops the removals of tracked components that every one of `systems` has
 /// already been shown (those logged before the oldest of their last runs),
-/// so the logs don't grow. A system that hasn't run in this world yet keeps
+/// and replication's server has read, so the logs don't grow. A system that hasn't run in this world yet keeps
 /// everything: while one never runs (the simulation is paused, say), the
 /// removal logs of tracked components grow with every removal.
 fn forget_seen_removals<'a>(ctx: &mut Ctx, systems: impl Iterator<Item = &'a System>) {
     // Also once per frame or tick: slots set aside for deferred spawns
     // that no buffer took go back to the world.
     ctx.world.return_idle_ids();
-    if let Some(oldest) = systems.map(|s| s.changes_seen.in_world(&ctx.world)).min() {
+    let systems = systems.map(|s| s.changes_seen.in_world(&ctx.world)).min();
+    // Replication's server reads removals too, once a tick.
+    let replication = ctx.net.replication.changes_seen(&ctx.world);
+    if let Some(oldest) = systems.into_iter().chain(replication).min() {
         ctx.world.forget_removed(oldest);
     }
 }
