@@ -6914,8 +6914,10 @@ public:
     void replication_send(PonkoEventTarget target, std::uint16_t kind, const void* data, std::size_t size, std::uint64_t peer = 0) {
         detail::check(ponko_ctx_replication_send(raw_, static_cast<std::uint32_t>(target), peer, kind, data, size));
     }
-    /// Sends a plain struct as an event of `kind`.
-    template<class T> void replication_send(PonkoEventTarget target, std::uint16_t kind, const T& value, std::uint64_t peer = 0) {
+    /// Sends a plain struct as an event of `kind`. Arrays and pointers (a
+    /// string literal, a buffer) take the bytes-and-size form above.
+    template<class T, std::enable_if_t<!std::is_array_v<T> && !std::is_pointer_v<T>, int> = 0>
+    void replication_send(PonkoEventTarget target, std::uint16_t kind, const T& value, std::uint64_t peer = 0) {
         static_assert(detail::pod<T>, "an event is a plain struct (or bytes)");
         replication_send(target, kind, &value, sizeof(T), peer);
     }
