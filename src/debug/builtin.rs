@@ -193,6 +193,9 @@ fn colliders(ctx: &mut Ctx) {
                     Shape3D::Mesh(mesh) => {
                         mesh_edges(debug, physics, (center, t.rotation, Vec3::ONE), mesh, eye, color);
                     }
+                    Shape3D::ScaledMesh { mesh, scale } => {
+                        mesh_edges(debug, physics, (center, t.rotation, scale), mesh, eye, color);
+                    }
                 }
             });
         // Terrain: scaled with its tile, placed by its corner.

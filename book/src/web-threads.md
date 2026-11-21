@@ -151,6 +151,15 @@ ponko: this build can use threads, but the page isn't cross-origin isolated (...
   because the browser's storage belongs to it.
 - **Everything else** stays on the page's thread: your systems, drawing,
   sound, input and the engine's other internal parallel loops.
+- **Controllers** work as in the ordinary web build (`ctx.input.gamepads()`
+  and the rest of [Input](input.md)), read differently: the browser's
+  gamepad objects can't be sent between threads once the memory is shared,
+  so the engine keeps none. Every frame it calls `navigator.getGamepads()`
+  on the page's thread, copies the buttons and axes into plain numbers and
+  compares them with the last frame's, which become the engine's events.
+  Pads are read in the browser's standard layout, as in the ordinary build,
+  and there is no rumble on the web in either. A game's own
+  `GamepadBackend` replaces it as usual.
 
 `ponko::web::threads()` says how many frame threads the game runs on (0 on
 the page's thread alone).
@@ -182,13 +191,19 @@ game also stays on one thread, after at most 20 seconds, and says why.
   shared memory must have a maximum.
 - **Thread-local values on workers are never dropped**: the workers live
   as long as the page.
-- **No built-in controllers.** The browser's gamepad objects can't be sent
-  between threads once the memory is shared, and the controller backend must
-  be `Send`, so a build with threads doesn't start the built-in one
-  (`ctx.input.gamepads()` stays empty unless the game brings its own
-  `GamepadBackend`). The ordinary web build has controllers as before.
 - **A nightly toolchain.** The ordinary web build stays on stable, without
   threads.
+
+## Warnings fail the build
+
+`web/build.sh --threads` adds its flags to whichever of
+`CARGO_ENCODED_RUSTFLAGS`, `RUSTFLAGS` and the target's flags cargo reads
+(the first that is set), and keeps what is there. So the check list's
+`RUSTFLAGS="-D warnings"` fails a threaded build on a warning, as it does
+the others; code that only a build with threads compiles is checked too.
+`web/smoke/threads.mjs --case warning` proves it: it builds an example
+whose only code is an unused function behind
+`target_feature = "atomics"`, and that build must fail on it.
 
 ## Numbers
 
@@ -229,11 +244,15 @@ the headers, the parallel query, the batch systems, the jobs and the asset
 group must run on two or more workers, and never on the page's thread.
 Served without them, everything must run on the page's thread, and the
 console must say why. Both runs must end with the same world, and must
-read the same file.
+read the same file. With `--case gamepads` it feeds the isolated page fake
+browser gamepads and checks that the engine sees each one connect, press,
+move and leave.
 
 ```sh
 node web/smoke/threads.mjs --build                # the checks
 node web/smoke/threads.mjs --case worker-panic    # a worker's panic stops the game
+node web/smoke/threads.mjs --case gamepads        # fed gamepads reach the game
+node web/smoke/threads.mjs --case warning         # a warning fails the build
 node web/smoke/threads.mjs --bench --repeat 3     # the numbers above
 ```
 

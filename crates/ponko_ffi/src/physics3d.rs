@@ -26,6 +26,10 @@ pub enum PonkoShape3DKind {
     PONKO_SHAPE3D_CAPSULE,
     /// A convex hull, triangle mesh or heightfield: uses `mesh`.
     PONKO_SHAPE3D_MESH,
+    /// A convex hull, triangle mesh or heightfield scaled where it is used
+    /// (a negative component mirrors a hull or triangle mesh): uses `mesh`,
+    /// and `size` as its scale along X, Y and Z.
+    PONKO_SHAPE3D_SCALED_MESH,
 }
 
 /// A convex hull, triangle mesh or heightfield for colliders
@@ -110,7 +114,7 @@ pub struct PonkoCollider3D {
     pub radius: f32,
     /// Capsule height between the centers of its ends.
     pub height: f32,
-    /// Box width, height and depth.
+    /// Box width, height and depth; the scale of a scaled mesh.
     pub size: PonkoVec3,
     /// The mesh of a mesh collider.
     pub mesh: PonkoCollisionMesh,
@@ -1125,6 +1129,7 @@ mod imp {
                 }
                 2 => Collider3D::capsule(non_negative(c.height, SIZE)?, positive(c.radius, SIZE)?),
                 3 => Collider3D::mesh(mesh_from_c(c.mesh)),
+                4 => Collider3D::scaled_mesh(mesh_from_c(c.mesh), finite(c.size, "mesh scale must be finite")?),
                 _ => return Err(invalid("unknown collider shape")),
             };
             const AMOUNT: &str = "density, friction and restitution must not be negative";
@@ -1142,6 +1147,11 @@ mod imp {
                 Shape3D::Cuboid { size } => ponko_collider3d_box(to_c(size)),
                 Shape3D::Capsule { height, radius } => ponko_collider3d_capsule(height, radius),
                 Shape3D::Mesh(m) => ponko_collider3d_mesh(mesh_to_c(m)),
+                Shape3D::ScaledMesh { mesh, scale } => PonkoCollider3D {
+                    shape: PonkoShape3DKind::PONKO_SHAPE3D_SCALED_MESH as u32,
+                    size: to_c(scale),
+                    ..ponko_collider3d_mesh(mesh_to_c(mesh))
+                },
                 _ => unreachable!("a new Shape3D needs a PonkoShape3DKind"),
             };
             PonkoCollider3D {

@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 use std::ops::Range;
+use std::sync::Arc;
 
 use glam::{Mat3, Mat4, Quat, Vec2, Vec3};
 
@@ -428,7 +429,8 @@ pub(crate) struct LoadedNode {
 
 /// The mesh of one node, from [`load_nodes`].
 pub(crate) struct NodeMesh {
-    pub data: MeshData,
+    /// Its corners and triangles; nodes of one glTF mesh hold the same.
+    pub data: Arc<MeshData>,
     /// Index ranges of `data`, each with its material (an index into
     /// [`LoadedNodes::materials`]).
     pub parts: Vec<(Range<u32>, usize)>,
@@ -445,6 +447,72 @@ pub(crate) struct LoadedNodes {
     pub images: Vec<Image>,
     pub blocks: Vec<Option<Blocks>>,
     pub image_sources: Vec<Option<String>>,
+    /// The files its buffers were read from, each with its
+    /// [`fingerprint`].
+    pub files: Vec<(String, Fingerprint)>,
+}
+
+/// A file's length and a hash of its bytes: whether it changed.
+pub(crate) type Fingerprint = (usize, u64);
+
+/// The [`Fingerprint`] of `bytes`.
+pub(crate) fn fingerprint(bytes: &[u8]) -> Fingerprint {
+    use std::hash::Hasher;
+    let mut hash = std::hash::DefaultHasher::new();
+    hash.write(bytes);
+    (bytes.len(), hash.finish())
+}
+
+/// The nodes of a file as [`load_nodes`] read them, kept to spawn the file
+/// again without parsing it while it is unchanged (see
+/// [`unchanged`](Self::unchanged)). It keeps no images or materials, and
+/// of each glTF mesh only its corners and triangles, once: enough to fit
+/// colliders and size level-of-detail groups, not to upload meshes.
+pub(crate) struct ReadNodes {
+    pub nodes: Vec<LoadedNode>,
+    /// The file's own fingerprint.
+    file: Fingerprint,
+    /// The files its buffers came from, by name, with their fingerprints.
+    files: Vec<(String, Fingerprint)>,
+}
+
+impl ReadNodes {
+    /// What to keep of `loaded`, read from `bytes`.
+    pub(crate) fn keep(loaded: LoadedNodes, bytes: &[u8]) -> Self {
+        let mut corners: HashMap<usize, Arc<MeshData>> = HashMap::new();
+        let mut nodes = loaded.nodes;
+        for (i, node) in nodes.iter_mut().enumerate() {
+            let same_mesh_as = node.same_mesh_as;
+            let Some(mesh) = &mut node.mesh else { continue };
+            mesh.data = match same_mesh_as.and_then(|first| corners.get(&first)) {
+                Some(first) => Arc::clone(first),
+                None => {
+                    let kept = Arc::new(MeshData {
+                        positions: mesh.data.positions.clone(),
+                        indices: mesh.data.indices.clone(),
+                        ..MeshData::default()
+                    });
+                    corners.insert(i, Arc::clone(&kept));
+                    kept
+                }
+            };
+        }
+        Self {
+            nodes,
+            file: fingerprint(bytes),
+            files: loaded.files,
+        }
+    }
+
+    /// Whether the file, now `bytes`, and the files of its buffers (read
+    /// with `read`) are as they were read.
+    pub(crate) fn unchanged(&self, bytes: &[u8], read: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>) -> bool {
+        self.file == fingerprint(bytes)
+            && self
+                .files
+                .iter()
+                .all(|(name, was)| read(name).is_ok_and(|now| fingerprint(&now) == *was))
+    }
 }
 
 /// Parses glTF `bytes` as [`load`] does, but keeps every node of the
@@ -460,6 +528,7 @@ pub(crate) fn load_nodes(
     gpu: GpuFormats,
 ) -> Result<LoadedNodes, String> {
     check_glb_length(name, bytes)?;
+    let mut files = Vec::new();
     let gltf_ext::Prepared {
         document: gltf,
         buffers,
@@ -467,7 +536,14 @@ pub(crate) fn load_nodes(
         preferred_image,
         dequantize,
         mut warnings,
-    } = gltf_ext::prepare(name, bytes, read)?;
+    } = {
+        let mut fetch = |file: &str| {
+            let bytes = read(file)?;
+            files.push((file.to_string(), fingerprint(&bytes)));
+            Ok(bytes)
+        };
+        gltf_ext::prepare(name, bytes, &mut fetch)?
+    };
     check_accessors(&gltf).map_err(|e| format!("{name}: {e}"))?;
     check_node_tree(&gltf).map_err(|e| format!("{name}: {e}"))?;
     let FileMaterials {
@@ -519,7 +595,7 @@ pub(crate) fn load_nodes(
         });
         if let Some(&first) = key.as_ref().and_then(|k| first_of_mesh.get(k)) {
             mesh = nodes[first].mesh.as_ref().map(|m| NodeMesh {
-                data: m.data.clone(),
+                data: Arc::clone(&m.data),
                 parts: m.parts.clone(),
                 morph_defaults: m.morph_defaults.clone(),
             });
@@ -562,7 +638,7 @@ pub(crate) fn load_nodes(
                     })
                     .collect();
                 mesh = Some(NodeMesh {
-                    data,
+                    data: Arc::new(data),
                     parts,
                     morph_defaults,
                 });
@@ -597,6 +673,7 @@ pub(crate) fn load_nodes(
         images,
         blocks,
         image_sources,
+        files,
     })
 }
 

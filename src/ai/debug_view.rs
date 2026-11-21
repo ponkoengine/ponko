@@ -13,10 +13,15 @@ const FAILURE: Color32 = Color32::from_rgb(230, 100, 90);
 /// what [`show`] draws, and what tests read.
 pub(crate) fn rows(brain: &Brain) -> Vec<(String, Option<Color32>)> {
     let mut rows = Vec::new();
-    let action = brain.action().map_or("none", |k| k.name());
+    let names: Vec<&str> = brain.actions().map(|k| k.name()).collect();
+    let action = match names.as_slice() {
+        [] => "action none".to_owned(),
+        [one] => format!("action {one}"),
+        several => format!("actions {}", several.join(", ")),
+    };
     rows.push((
         format!(
-            "{}: action {action} ({:?}), period {}, {} thinks",
+            "{}: {action} ({:?}), period {}, {} thinks",
             brain.tree(),
             brain.status(),
             brain.period(),
