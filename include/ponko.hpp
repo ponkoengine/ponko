@@ -4943,6 +4943,10 @@ public:
     void set_inside_safe_area(id node, bool on = true) { detail::check(ponko_ctx_ui_set_inside_safe_area(raw_, target_, node, on)); }
     /// Whether root `node` is laid out inside the safe area.
     bool inside_safe_area(id node) const { bool on = false; detail::check(ponko_ctx_ui_inside_safe_area(raw_, target_, node, &on)); return on; }
+    /// Fades `node` and everything inside it as one image (drawn opaque into an offscreen layer shown at its opacity), so overlapping children don't show through each other (`on` false: piece by piece, the default).
+    void set_fade_as_group(id node, bool on = true) { detail::check(ponko_ctx_ui_set_fade_as_group(raw_, target_, node, on)); }
+    /// Whether `node` fades as one image.
+    bool fades_as_group(id node) const { bool on = false; detail::check(ponko_ctx_ui_fades_as_group(raw_, target_, node, &on)); return on; }
     /// Shows the tree under `root` as a HUD: drawn below every screen, never closed by Escape, never takes input.
     void show_hud(id root) { detail::check(ponko_ctx_ui_show_hud(raw_, target_, root)); }
     /// Takes a HUD off the screen; its nodes stay.
