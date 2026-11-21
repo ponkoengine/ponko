@@ -251,7 +251,7 @@ pub enum Shape3D {
     /// A convex hull, triangle mesh or heightfield made by [`Physics3D`],
     /// scaled by `scale` where it is used, so one mesh serves colliders of
     /// every size: see [`Collider3D::scaled_mesh`]. A negative component
-    /// mirrors a hull or triangle mesh; a heightfield takes the size only.
+    /// mirrors it (a heightfield along X and Z; its Y takes the size only).
     /// Serde writes the mesh as [`Shape3D::Mesh`] does. World saves and
     /// scenes keep such a collider of a mesh file (one loaded with
     /// [`Ctx::load_collision_mesh`](crate::ctx::Ctx::load_collision_mesh) or
@@ -452,8 +452,8 @@ impl Collider3D {
         Self::of(Shape3D::Mesh(mesh))
     }
     /// A convex hull, triangle mesh or heightfield made by [`Physics3D`],
-    /// scaled by `scale` (a negative component mirrors a hull or triangle
-    /// mesh). Colliders of one mesh at any number of sizes share the mesh;
+    /// scaled by `scale` (a negative component mirrors it; a heightfield's
+    /// Y takes the size only, so its ground still faces up). Colliders of one mesh at any number of sizes share the mesh;
     /// each collider gets its scaled copy when it enters the physics world,
     /// and colliders at the same scale share that copy too. A mesh loaded
     /// from a file is saved by its file and this scale.
@@ -1148,7 +1148,7 @@ impl Physics3D {
     }
 
     /// Calls `edge` with the edges of `mesh` scaled by `scale` (mirrored by
-    /// a negative component, but for a heightfield), in the collider's
+    /// a negative component, but a heightfield's Y), in the collider's
     /// frame (the entity's, before its rotation and position):
     /// every edge of a convex hull, and of triangle meshes and heightfields
     /// the three edges of each triangle within `reach` of `near` (in that
@@ -1171,14 +1171,15 @@ impl Physics3D {
         let Some(shape) = slot.shape.as_ref() else {
             return false;
         };
-        // A heightfield takes the scale's size, a hull or triangle mesh is
-        // mirrored by a negative component, as their colliders are.
+        // A negative component mirrors the mesh, as it does its collider;
+        // a heightfield's Y takes the size only.
         let tiny = Vec3::splat(1e-6);
         let scale = if shape.as_heightfield().is_some() {
-            scale.abs().max(tiny)
+            scale.with_y(scale.y.abs())
         } else {
-            Vec3::select(scale.abs().cmplt(tiny), tiny.copysign(scale), scale)
+            scale
         };
+        let scale = Vec3::select(scale.abs().cmplt(tiny), tiny.copysign(scale), scale);
         let place = |p: rp::Vector| (from_rp(p) + slot.offset) * scale;
         // The query box in the shape's own (unscaled) frame.
         let center = near / scale - slot.offset;
@@ -1244,7 +1245,8 @@ impl Physics3D {
             return Some((base.clone(), slot.offset, false));
         }
         let offset = if base.as_heightfield().is_some() {
-            slot.offset * scale.abs()
+            // A mirrored heightfield is built mirrored, around its center.
+            slot.offset * scale.with_y(scale.y.abs())
         } else {
             slot.offset * scale
         };
