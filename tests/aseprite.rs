@@ -227,7 +227,9 @@ fn loose_aseprite_edits_refresh_live_playback_without_an_export() {
                 edited[..4].copy_from_slice(&size.to_le_bytes());
                 edited[6..8].copy_from_slice(&4u16.to_le_bytes());
                 std::fs::write(&path, edited).unwrap();
-                deadline = Some(Instant::now() + Duration::from_secs(3));
+                // The next check (every 250 ms) reloads it; frames sleep, so
+                // they can't outrun it. The deadline is a hang detector.
+                deadline = Some(Instant::now() + Duration::from_secs(30));
             } else if ctx.assets.reloaded_files().contains(&reload_path) {
                 assert_ne!(clip.sprite_at(0.08), clip.sprite_at(0.0));
                 observed.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -284,7 +286,9 @@ fn a_loose_aseprite_files_linked_tileset_loads_and_its_edits_reload_the_file() {
                 edited[..4].copy_from_slice(&size.to_le_bytes());
                 edited[6..8].copy_from_slice(&2u16.to_le_bytes());
                 std::fs::write(&tiles, edited).unwrap();
-                deadline = Some(Instant::now() + Duration::from_secs(3));
+                // As above: frames sleep, so the checks keep up with them,
+                // and the deadline is a hang detector.
+                deadline = Some(Instant::now() + Duration::from_secs(30));
             } else if ctx.assets.reloaded_files().contains(&reload_path) {
                 observed.store(true, Ordering::Relaxed);
             }

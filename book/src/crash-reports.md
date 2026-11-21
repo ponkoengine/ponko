@@ -69,6 +69,10 @@ file.
 - **The game's own fatal error**: `ponko::crash::report("why")` writes one
   for a game that stops without panicking.
 
+- **A crash that is not a panic**: a segmentation fault or an `abort()` in
+  a native library, an access violation on Windows. Its report is finished
+  at the game's next start ([below](#crashes-that-are-not-panics)).
+
 Reports start when the run starts and end with it: a panic after `run`
 returned gets none.
 
@@ -117,8 +121,9 @@ machine name, no network address, no hardware serial numbers.
 
 | Field | What it is |
 |---|---|
-| `kind` | `panic` or `error`. |
-| `message` | The panic's message, or the error's. |
+| `kind` | `panic`, `error` or `native` (a crash that is not a panic, see below). |
+| `signal` | For a `native` crash only: the signal or the Windows exception (`SIGSEGV`, `SIGABRT`, `EXCEPTION_ACCESS_VIOLATION`). |
+| `message` | The panic's message, or the error's; for a `native` crash, the signal, what it means and, for a memory fault, the address it touched. |
 | `location` | For a panic, the source position it came from (`src/main.rs:12:5`). |
 | `thread` | The name of the thread that panicked (`main`), when it has one. |
 | `time` | When, in UTC (`2026-11-21 14:03:07 UTC`). |
@@ -134,8 +139,8 @@ machine name, no network address, no hardware serial numbers.
 
 The JSON form (`serde_json`) has the same fields, named `kind`, `message`,
 `location`, `thread`, `time`, `uptime_secs`, `game`, `game_version`,
-`engine_version`, `os`, `gpu`, `settings`, `backtrace`, `log` and `file` (its
-name in `ctx.storage`).
+`engine_version`, `os`, `gpu`, `settings`, `backtrace`, `log`, `file` (its
+name in `ctx.storage`) and `signal`.
 
 **Paths are made relative to the game's folders.** In every field, the data
 folder becomes `<data>`, the program's folder `<game>`, the working folder
@@ -148,6 +153,88 @@ or e-mail address puts it in its reports.
 To keep the log, the engine passes standard output and error through pipes
 while reports are on, the way the [control endpoint](control.md) does; the
 terminal still shows everything.
+
+## Crashes that are not panics
+
+A segmentation fault in a C library, an `abort()` in a GPU driver or an
+access violation on Windows stops the game without a panic. With reports on,
+these leave a report too, of kind `native`, on Linux, macOS and Windows. It
+says which signal (or Windows exception) stopped the game, when, the game's
+and the engine's versions, the system, the GPU and the settings of the last
+change, and the last lines the game printed. It has no backtrace, no thread
+name and no panic location.
+
+The report is finished at the **next start** of the game: `saved_reports`
+lists it, and the game's `on_crash` hook runs with it, early in that start,
+with `report.kind()` being `CrashKind::Native`. That is where a game shows
+"the game stopped last time" or offers to send it.
+
+### How it is written (the design)
+
+A crashing process can't be trusted. When the signal arrives, the thread
+that crashed may hold the allocator's lock, the lock of standard output or
+any of the engine's own locks, and the memory near the crash may be
+damaged. Code that runs then may only do what is safe at any instruction:
+
+- **Linux and macOS (a signal handler).** Only async-signal-safe calls:
+  `write` to a file descriptor, `clock_gettime`, `sigaction`, `raise`. No
+  allocation (`malloc` may hold its lock), no locks (`Mutex`, `println!`,
+  `Backtrace`), no formatting machinery (`format!` allocates), nothing that
+  loads symbols. The handler reads only memory that was set up for it, with
+  atomic loads.
+- **Windows (an unhandled exception filter, and the C runtime's `SIGABRT`
+  handler).** The same rules: the filter runs on the thread that faulted, the
+  process heap may be locked, and the loader lock may be held. Only
+  `WriteFile` to a handle opened earlier, `GetSystemTimeAsFileTime`, and
+  plain reads of prepared memory.
+
+So everything is **prepared ahead of time**, while the game runs normally:
+
+1. When a run with reports on starts, the engine opens a file of its own,
+   `crash-reports/.native-<pid>` in the game's data folder, and keeps it open
+   (and locked: `flock` on Unix, no sharing on Windows, so a second copy of
+   the game running at the same time leaves it alone).
+2. It writes the report's fixed part as text into a buffer in static memory:
+   the game, the versions, the system, the start time, and later the GPU
+   once the renderer opened one, and the settings each time they change (not
+   each frame: only when a value changed). The buffer is two halves of
+   atomic bytes; the engine fills the idle half and then switches, so the
+   handler always reads a whole one.
+3. Every line the game prints also goes into a ring of the last 16 KiB of
+   output in static memory, as atomic bytes, next to the log the control
+   endpoint reads.
+4. It installs the handlers for `SIGSEGV`, `SIGBUS`, `SIGILL`, `SIGFPE` and
+   `SIGABRT` (Unix, on the alternate signal stack where the thread has one,
+   so a stack overflow still gets one), or the unhandled exception filter and
+   a `SIGABRT` handler (Windows), and remembers the ones that were there.
+
+When the game crashes, the handler only copies bytes: the prepared fixed
+part, the signal's name and description from a constant table, the signal's
+number, the address for a memory fault and the time, as digits it writes
+itself into a small buffer on the stack, then the ring of output. It writes
+them to the open file with `write` (or `WriteFile`). Only the first crash of
+a run writes; a second one (the `abort` after a stack overflow message, a
+second thread) doesn't. Then it puts back the handler that was there before
+and hands the crash on: Rust's own stack overflow message, a handler of
+another library, or the system's default, so the process still ends as a
+crash, with its exit status and the system's own crash report.
+
+**At the next start**, the engine looks in `crash-reports/` for files left
+by earlier runs that no running copy of the game holds: an empty one was a
+run that ended without crashing (it is deleted), a full one is a crash. It
+turns that into an ordinary report: the times become dates, the paths in the
+log are made relative (as above), the output is cut to the last 100 whole
+lines, and the report is saved as `crash-reports/<date>_<time>.txt`, at the
+time of the crash. A run that ends normally deletes its own file.
+
+What this can't catch: `SIGKILL` and Windows' `TerminateProcess` (the system
+killing the game for using too much memory, or the player ending it), a
+crash in the first moments before the run started, and Windows' fail-fast
+exits (`__fastfail`, which Rust's own `abort` uses), which skip every
+handler. The lines printed in the last moment before the crash may be
+missing when the engine's copy thread hadn't passed them on yet (the
+handler gives it 50 ms). A library that installs its own handler after the
+engine started comes first, and decides itself whether to hand a crash on.
 
 ## In the browser
 
@@ -179,8 +266,9 @@ the developer.
   C++ game gets the default (reports in a release build of the engine's
   library, for a game with a window and an app id), without a hook or a
   game version.
-- A crash that is not a panic (a segmentation fault in a C library, the GPU
-  driver killing the process, running out of memory) writes no report.
+- A crash that is not a panic writes its report at the next start, without
+  a backtrace (see [Crashes that are not panics](#crashes-that-are-not-panics));
+  a process the system kills (`SIGKILL`, running out of memory) writes none.
 - In a browser, the log isn't kept, and a backtrace has no frames (wasm has
   no backtraces); the message and location are there.
 - A Windows game built for the GUI subsystem (`windows_subsystem = "windows"`)

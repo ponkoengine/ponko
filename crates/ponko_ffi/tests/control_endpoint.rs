@@ -95,6 +95,7 @@ fn the_control_endpoint_opens_registers_answers_and_closes() {
     let client_dir = dir.clone();
     let client = std::thread::spawn(move || {
         let _stop = StopOnDrop;
+        // A hang detector: the wait ends when the game has registered.
         let deadline = Instant::now() + Duration::from_secs(20);
         // The registry file is written in place, so it can be seen while it is
         // still empty or half written: wait until it parses.

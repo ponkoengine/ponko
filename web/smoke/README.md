@@ -108,6 +108,11 @@ node web/smoke/runtime-failures.mjs --case device-lost --chromium-mode new \
   says which (“device lost by the browser” or “by the runner”). The other
   cases hide WebGPU, so that loss can't stop the game before they do.
 
+Every case also checks the crash report the engine hands the page
+(`window.ponkoCrashReport`, the guide's [Crash reports](../../book/src/crash-reports.md#in-the-browser)):
+kind `panic` for the panics and `error` for the lost context and the lost
+device, with the same message as the failure, in its text too.
+
 The callback is subscribed late, after the failure, so the run also checks
 that a late subscriber gets it at once. `runtime-failures.test.mjs` checks
 the template's handling and the runner's checks without a browser.

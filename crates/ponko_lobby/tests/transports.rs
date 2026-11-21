@@ -14,9 +14,11 @@ fn pump(
     clients: &mut [&mut LobbyClient],
     mut done: impl FnMut(&mut [&mut LobbyClient]) -> bool,
 ) {
-    // At most 4 s of wall time: loopback packets arrive at once, the
-    // WebSocket client connects on a thread of its own.
-    for _ in 0..800 {
+    // Loopback packets arrive at once, but the WebSocket client connects on
+    // a thread of its own: wait for it (a hang detector of 30 s, not a
+    // number of rounds, which a busy machine could use up).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while std::time::Instant::now() < deadline {
         server.poll_elapsed(STEP);
         for client in clients.iter_mut() {
             client.poll_elapsed(STEP).unwrap();

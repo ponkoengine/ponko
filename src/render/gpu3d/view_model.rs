@@ -17,7 +17,10 @@
 //!
 //! Cut-out held items cut their own holes there too, with a pipeline of
 //! their own built the first time one is drawn (`ShaderPipelines::
-//! view_model_cutout`). Before the held items, one full-screen triangle
+//! view_model_cutout`). Held items whose material has a stencil state draw
+//! with it (`stencil.rs`), after the others and in their stencil's order,
+//! as solid stencil materials do in the world: one that marks the stencil
+//! draws before one that tests it. Before the held items, one full-screen triangle
 //! pushes any world surface inside that sliver (a wall nearer than a
 //! hundredth of the near plane's distance beyond it) back to the sliver's
 //! far edge, so nothing in the world ever cuts into them.
@@ -49,6 +52,10 @@ pub(super) struct ViewModelPass {
     /// The held items' runs: (mesh id, first instance, count), in the
     /// frame's instance buffer.
     pub(super) runs: Vec<Run>,
+    /// With a stencil material among them, their mesh parts in the order
+    /// they draw: by stencil rank, then as `runs` holds them (empty
+    /// otherwise: `runs` is drawn as it is).
+    parts: Vec<(Run, usize)>,
     /// Their motion's runs, in `motion`: every held item, with temporal
     /// antialiasing on (empty otherwise, and on a frame without a past).
     motion_runs: Vec<Run>,
@@ -96,6 +103,7 @@ impl Renderer3D {
             let frame_bind_group = self.frame_sources.bind_group(device, &frame_buffer, &self.lights);
             ViewModelPass {
                 runs: Vec::new(),
+                parts: Vec::new(),
                 motion_runs: Vec::new(),
                 motion: None,
                 previous: None,
@@ -116,10 +124,42 @@ impl Renderer3D {
                 .iter()
                 .map(|&(mesh, start, count)| (mesh, start + offset, count)),
         );
+        let mut parts = std::mem::take(&mut pass.parts);
+        self.order_view_model_parts(&mut parts);
+        let Some(pass) = self.view_model.as_mut() else { return };
+        pass.parts = parts;
         let (format, samples) = (self.shaders.depth_format(), self.samples);
         if !pass.push_back.as_ref().is_some_and(|p| (p.1, p.2) == (format, samples)) {
             pass.push_back = Some((push_back_pipeline(device, format, samples), format, samples));
         }
+    }
+
+    /// Fills `parts` with the held items' mesh parts in stencil order
+    /// (see [`ViewModelPass::parts`]), or leaves it empty when none of
+    /// their materials has a stencil.
+    fn order_view_model_parts(&self, parts: &mut Vec<(Run, usize)>) {
+        parts.clear();
+        if !self.stencil.any() {
+            return;
+        }
+        let mut ranked = false;
+        for &run in self.view_model_runs() {
+            let mesh = &self.resources.meshes[self.base(run.0 & !FADED) as usize];
+            for (part, &(_, own)) in mesh.parts.iter().enumerate() {
+                ranked |= self.stencil.has(self.part_material(run.0 & !FADED, part, own));
+                parts.push((run, part));
+            }
+        }
+        if !ranked {
+            parts.clear();
+            return;
+        }
+        // Stable: the rest keep their order.
+        parts.sort_by_key(|&(run, part)| {
+            let mesh = run.0 & !FADED;
+            let own = self.resources.meshes[self.base(mesh) as usize].parts[part].1;
+            self.stencil.rank(self.part_material(mesh, part, own))
+        });
     }
 
     /// Step 6, for the view model: its held items' motion instances (all
@@ -300,11 +340,19 @@ impl Renderer3D {
         }
         pass.set_bind_group(0, &vm.frame_bind_group, &[]);
         pass.set_bind_group(2, &self.no_scene, &[]);
+        let draw = |pass: &mut wgpu::RenderPass<'_>, kind| {
+            if vm.parts.is_empty() {
+                self.draw_model_runs(pass, &vm.runs, kind, &self.instances);
+            } else {
+                let parts = vm.parts.iter().map(|&(run, part)| (run, Some(part)));
+                self.record_model_parts(pass, parts, kind, &self.instances);
+            }
+        };
         if solid {
-            self.draw_model_runs(pass, &vm.runs, record::Kind::ViewModel, &self.instances);
+            draw(pass, record::Kind::ViewModel);
         }
         if blended {
-            self.draw_model_runs(pass, &vm.runs, record::Kind::Transparent, &self.instances);
+            draw(pass, record::Kind::Transparent);
         }
     }
 

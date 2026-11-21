@@ -27,7 +27,9 @@ pub(crate) struct LineInstance {
     pub color: [u8; 4],
 }
 
-/// A depth-tested 3D label, for the 3D frame's text (`three::text3d`).
+/// A 3D label in the 3D frame's text (`three::text3d`): a depth-tested
+/// one for every 3D camera that shows it, or one on top for the target
+/// cameras (the window's cameras draw those as screen text).
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(not(feature = "3d"), allow(dead_code))]
 pub(crate) struct GpuLabel {
@@ -37,12 +39,16 @@ pub(crate) struct GpuLabel {
     pub size: f32,
     /// Its text in [`GpuLines::text`].
     pub text: std::ops::Range<usize>,
+    /// Drawn over everything (not depth-tested), in target cameras only.
+    pub on_top: bool,
 }
 
 /// This frame's 3D lines, for the renderer, in the order they are drawn:
 /// the depth-tested opaque ones, the depth-tested see-through ones, then
-/// the same two on top; and the depth-tested 3D labels, drawn as 3D text
-/// by every 3D camera that shows them (`three::text3d`). Opaque lines
+/// the same two on top; and the 3D labels, drawn as 3D text
+/// (`three::text3d`): the depth-tested ones by every 3D camera that shows
+/// them, the ones on top by the target cameras that show them, over
+/// everything they draw, as the window's cameras draw them as screen text. Opaque lines
 /// (alpha 1, nearly all) are drawn without blending, which costs a
 /// fraction of blending with several samples a pixel; see-through ones use
 /// alpha to coverage then (`render::debug_lines`). Cleared each frame,
@@ -101,9 +107,9 @@ impl GpuLines {
         self.top_blended.extend_from_slice(&other.top_blended);
     }
 
-    /// Adds a depth-tested 3D label saying `text`.
+    /// Adds a 3D label saying `text`, depth-tested or `on_top`.
     #[cfg_attr(not(feature = "3d"), allow(dead_code))]
-    fn push_label(&mut self, l: &DebugLabel, text: &str) {
+    fn push_label(&mut self, l: &DebugLabel, text: &str, on_top: bool) {
         let start = self.text.len();
         self.text.push_str(text);
         self.labels.push(GpuLabel {
@@ -111,6 +117,7 @@ impl GpuLines {
             color: l.color,
             size: l.size,
             text: start..self.text.len(),
+            on_top,
         });
     }
 
@@ -211,6 +218,17 @@ fn cameras3d(scene: &crate::render::SceneSettings) -> impl Iterator<Item = (&cra
         .map(move |c| (c, (!alone).then(|| c.screen_rect())))
 }
 
+/// Whether a target camera draws debug drawing: it draws particles and
+/// shows the default layer (`three::collect::ViewFrame::debug`).
+#[cfg(feature = "3d")]
+fn target_labels(scene: &crate::render::SceneSettings) -> bool {
+    scene
+        .passes
+        .target_cameras
+        .iter()
+        .any(|t| t.camera.particles && t.camera.layers.intersects(RenderLayers::DEFAULT))
+}
+
 /// Where `at` is in `camera`'s picture, in window pixels; `None` when it
 /// is behind the camera or nearer than its near plane.
 #[cfg(feature = "3d")]
@@ -269,9 +287,15 @@ impl Out<'_> {
                 if label.flags & super::TESTED != 0 {
                     // In the 3D frame, against its depth (`three::text3d`).
                     if cfg!(feature = "3d") {
-                        lines.push_label(label, text);
+                        lines.push_label(label, text, false);
                     }
                     continue;
+                }
+                // On top in the render targets of target cameras that show
+                // it too (`three::text3d`), as on screen.
+                #[cfg(feature = "3d")]
+                if target_labels(self.scene3d) {
+                    lines.push_label(label, text, true);
                 }
                 #[cfg(feature = "3d")]
                 for (camera, clip) in cameras3d(self.scene3d) {

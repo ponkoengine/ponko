@@ -125,9 +125,10 @@ pub(crate) fn content_key(file: &Path, bytes: &[u8]) -> String {
 }
 
 /// A model to draw with the renderer: `rel` in assets folder `root`, kept
-/// as `png` (`None`: no cache folder).
+/// as `png` (`None`: no cache folder). Builds without the renderer's studio
+/// (no `3d`, or the web) drop these and keep the software thumbnail.
 #[derive(Debug, Clone)]
-#[cfg_attr(not(feature = "3d"), allow(dead_code))]
+#[cfg_attr(any(not(feature = "3d"), target_arch = "wasm32"), allow(dead_code))]
 struct RenderJob {
     root: PathBuf,
     rel: String,
@@ -457,7 +458,7 @@ pub(crate) struct Thumbnails {
     renders: Vec<RenderJob>,
     /// Paths whose thumbnail the renderer replaced since the panel last looked.
     updated: Vec<String>,
-    #[cfg(feature = "3d")]
+    #[cfg(all(feature = "3d", not(target_arch = "wasm32")))]
     studio: Option<super::thumb_studio::Studio>,
     /// Counts `clear`s: what was asked for before one is dropped.
     generation: u64,
@@ -475,7 +476,7 @@ impl Default for Thumbnails {
             cache: default_cache(),
             renders: Vec::new(),
             updated: Vec::new(),
-            #[cfg(feature = "3d")]
+            #[cfg(all(feature = "3d", not(target_arch = "wasm32")))]
             studio: None,
             generation: 0,
         }
@@ -563,6 +564,9 @@ impl Thumbnails {
     /// (once the worker has made its software thumbnail), keeps it on disk
     /// and in place of the software one. Without a GPU (headless) the
     /// software thumbnails stay. Returns whether one was drawn.
+    ///
+    /// Web builds have no studio (see `thumb_studio`): there, too, the
+    /// software thumbnails stay.
     #[cfg(feature = "3d")]
     pub fn render_models(&mut self, gpu: Option<&crate::render::Renderer>) -> bool {
         self.collect();
@@ -573,6 +577,18 @@ impl Thumbnails {
             self.renders.clear();
             return false;
         };
+        self.render_next(gpu)
+    }
+
+    #[cfg(all(feature = "3d", target_arch = "wasm32"))]
+    fn render_next(&mut self, _: &crate::render::Renderer) -> bool {
+        self.renders.clear();
+        false
+    }
+
+    /// Draws the oldest model in `renders` (see [`Self::render_models`]).
+    #[cfg(all(feature = "3d", not(target_arch = "wasm32")))]
+    fn render_next(&mut self, gpu: &crate::render::Renderer) -> bool {
         let job = self.renders.remove(0);
         let studio = self.studio.get_or_insert_with(|| super::thumb_studio::Studio::new(gpu));
         let out = job
@@ -617,7 +633,7 @@ impl Thumbnails {
         self.waiting() || !self.renders.is_empty()
     }
 
-    /// Waits (at most `timeout`) until every thumbnail asked for is made.
+    /// Waits (at most `timeout`: a hang detector) until every thumbnail asked for is made.
     #[cfg(test)]
     pub fn wait(&mut self, timeout: std::time::Duration) -> bool {
         let end = web_time::Instant::now() + timeout;
