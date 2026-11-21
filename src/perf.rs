@@ -91,6 +91,8 @@ pub struct Perf {
     /// The GPU memory the renderer held when last counted (while profiling
     /// is on, about twice a second), for the report.
     pub(crate) gpu_memory: Option<crate::perf::GpuMemory>,
+    /// How often the game wants its GPU passes timed.
+    pub(crate) gpu_timing: GpuTiming,
     /// No window or GPU: there are no frames to trace or draw statistics for.
     pub(crate) headless: bool,
     /// Entities alive when the last system finished, for the report.
@@ -101,6 +103,30 @@ pub struct Perf {
 /// timestamp writes cost the graphics library a few heap allocations for
 /// every timed pass. See [`Perf::gpu_passes`].
 pub(crate) const GPU_TIMING_EVERY: u32 = 16;
+
+/// How often a game times its GPU passes ([`Perf::set_gpu_timing`]).
+///
+/// Timing a pass costs the graphics library a few heap allocations, so the
+/// default times one frame in 16. A game that wants fresher
+/// [`gpu_passes`](Perf::gpu_passes), or none at all, says so here, without
+/// turning on profiling (which also times scopes and counts allocations).
+/// The overlay, traces, benchmark runs and automatic quality read every
+/// frame's times, so they get every frame while they are on, whatever this
+/// says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GpuTiming {
+    /// The engine decides: one frame in 16, and every frame while something
+    /// reads every frame, including [`Perf::set_profiling`].
+    #[default]
+    Auto,
+    /// Times every `n`th frame (`Every(1)` is every frame; 0 counts as 1),
+    /// also while profiling is on.
+    Every(u32),
+    /// Never times the GPU: [`gpu_passes`](Perf::gpu_passes) is empty and
+    /// `gpu_ms` is `None`, except while the overlay, a trace, a benchmark run
+    /// or automatic quality reads the times.
+    Off,
+}
 
 /// How many drawn frames the render inspector's history keeps.
 pub(crate) const RENDER_HISTORY: usize = 120;
@@ -171,6 +197,7 @@ impl Perf {
             render_history: std::collections::VecDeque::new(),
             display_wait_ms: 0.0,
             gpu_memory: None,
+            gpu_timing: GpuTiming::Auto,
             headless: false,
             entities: 0,
         }
@@ -242,6 +269,7 @@ impl Perf {
     /// automatic quality. Each sample then weighs as much as the frames it
     /// stands for, so the smoothed times settle where every-frame timing
     /// would put them; they only follow a change a little later.
+    /// [`set_gpu_timing`](Self::set_gpu_timing) picks the cadence instead.
     ///
     /// ```
     /// # use ponko::prelude::*;
@@ -275,6 +303,41 @@ impl Perf {
     /// ```
     pub fn gpu_passes_not_timed(&self) -> &[&'static str] {
         &self.gpu_passes_not_timed
+    }
+
+    /// Chooses how often the GPU passes are timed: [`GpuTiming::Auto`] (the
+    /// default), every `n`th frame, or never. It is separate from
+    /// [`set_profiling`](Self::set_profiling): a game that wants fresh
+    /// [`gpu_passes`](Self::gpu_passes) every frame says
+    /// `GpuTiming::Every(1)` and pays only for the timestamps, not for
+    /// timing scopes and counting allocations. The change takes effect on
+    /// the next frame. The overlay, traces, benchmark runs and automatic
+    /// quality still get every frame's times while they are on.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// use ponko::perf::GpuTiming;
+    /// fn fresh_gpu_times(ctx: &mut Ctx) {
+    ///     ctx.perf.set_gpu_timing(GpuTiming::Every(1));
+    /// }
+    /// # Game::new("t", 1, 1).system(fresh_gpu_times).run_headless(1, |_| {});
+    /// ```
+    pub fn set_gpu_timing(&mut self, timing: GpuTiming) {
+        self.gpu_timing = timing;
+    }
+
+    /// What [`set_gpu_timing`](Self::set_gpu_timing) chose (not what the
+    /// overlay or a trace may force meanwhile).
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// use ponko::perf::GpuTiming;
+    /// # fn f(ctx: &mut Ctx) {
+    /// assert_eq!(ctx.perf.gpu_timing(), GpuTiming::Auto);
+    /// # }
+    /// ```
+    pub fn gpu_timing(&self) -> GpuTiming {
+        self.gpu_timing
     }
 
     /// How long the last frame waited for the display (ms): idle time, not
@@ -481,11 +544,22 @@ impl Perf {
         report
     }
 
-    /// Whether something reads every frame's GPU times: profiling, the HUD,
-    /// a trace or a benchmark run. Otherwise the GPU is timed every
-    /// [`GPU_TIMING_EVERY`]th frame.
-    pub(crate) fn reads_every_gpu_frame(&self) -> bool {
-        self.state.explicit || self.profiler.hud || self.profiler.benchmarking() || self.profiler.tracing()
+    /// Which frames' GPU passes are timed: every `n`th, 0 for none. Every
+    /// frame while something reads every frame (the HUD, a trace, a
+    /// benchmark run, or automatic quality, `autotune`), whatever the game
+    /// chose with [`set_gpu_timing`](Self::set_gpu_timing); otherwise what it
+    /// chose, and for [`GpuTiming::Auto`] every frame while profiling is on
+    /// and [`GPU_TIMING_EVERY`] otherwise.
+    pub(crate) fn gpu_timing_every(&self, autotune: bool) -> u32 {
+        if autotune || self.profiler.hud || self.profiler.benchmarking() || self.profiler.tracing() {
+            return 1;
+        }
+        match self.gpu_timing {
+            GpuTiming::Auto if self.state.explicit => 1,
+            GpuTiming::Auto => GPU_TIMING_EVERY,
+            GpuTiming::Every(n) => n.max(1),
+            GpuTiming::Off => 0,
+        }
     }
 
     /// Starts or stops the deeper profiling to match what's wanted: the

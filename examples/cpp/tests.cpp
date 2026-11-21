@@ -4979,6 +4979,17 @@ static void native_parity_round5() {
         ctx.set_profiling(false);
     });
 
+    // The GPU timing choice: the default is auto, and what is set reads back.
+    ponko::game("c++ gpu timing", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
+        CHECK(ctx.gpu_timing() == ponko::gpu_timing_auto());
+        ctx.set_gpu_timing(ponko::gpu_timing_every(4));
+        CHECK(ctx.gpu_timing().kind == ponko::gpu_timing_kind::every && ctx.gpu_timing().every == 4);
+        ctx.set_gpu_timing(ponko::gpu_timing_off());
+        CHECK(ctx.gpu_timing() == ponko::gpu_timing_off());
+        ctx.set_gpu_timing(ponko::gpu_timing_auto());
+        CHECK(ctx.gpu_timing() == ponko::gpu_timing_auto());
+    });
+
     // A sliced loader: its state is built in pieces and handed over once.
     ponko::game("c++ sliced", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
         std::string level(200, '.');

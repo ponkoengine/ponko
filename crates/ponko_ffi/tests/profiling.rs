@@ -142,3 +142,54 @@ fn a_c_scope_counts_the_allocations_made_on_its_thread() {
         .unwrap_or_else(|| panic!("the scope is in the report: {json}"));
     assert_eq!(scope["allocs_per_frame"].as_f64(), Some(3.0), "{scope}");
 }
+
+unsafe extern "C" fn gpu_timing_choice(ctx: *mut PonkoCtx, _user: *mut c_void) {
+    unsafe {
+        let read_back = || {
+            let (mut kind, mut every) = (99, 99);
+            assert_eq!(ponko_ctx_gpu_timing(ctx, &mut kind, &mut every), PONKO_OK);
+            (kind, every)
+        };
+        assert_eq!(
+            read_back(),
+            (PONKO_GPU_TIMING_AUTO, 0),
+            "the default is the engine's choice"
+        );
+        assert_eq!(ponko_ctx_set_gpu_timing(ctx, PONKO_GPU_TIMING_EVERY, 4), PONKO_OK);
+        assert_eq!(read_back(), (PONKO_GPU_TIMING_EVERY, 4));
+        assert_eq!(ponko_ctx_set_gpu_timing(ctx, PONKO_GPU_TIMING_OFF, 7), PONKO_OK);
+        assert_eq!(read_back(), (PONKO_GPU_TIMING_OFF, 0), "`every` counts only for EVERY");
+        // A bad kind is refused and changes nothing.
+        assert_eq!(ponko_ctx_set_gpu_timing(ctx, 3, 1), PONKO_INVALID_ARGUMENT);
+        assert_eq!(read_back(), (PONKO_GPU_TIMING_OFF, 0));
+        // Both outputs are required.
+        let mut every = 0;
+        assert_eq!(
+            ponko_ctx_gpu_timing(ctx, null_mut(), &mut every),
+            PONKO_INVALID_ARGUMENT
+        );
+        assert_eq!(
+            ponko_ctx_gpu_timing(ctx, &mut every, null_mut()),
+            PONKO_INVALID_ARGUMENT
+        );
+        // Back to the engine's choice; the C choice is the Rust one, so a
+        // zero count passes through as the Rust enum keeps it (0 counts as 1).
+        assert_eq!(ponko_ctx_set_gpu_timing(ctx, PONKO_GPU_TIMING_EVERY, 0), PONKO_OK);
+        assert_eq!(read_back(), (PONKO_GPU_TIMING_EVERY, 0));
+        assert_eq!(ponko_ctx_set_gpu_timing(ctx, PONKO_GPU_TIMING_AUTO, 5), PONKO_OK);
+        assert_eq!(read_back(), (PONKO_GPU_TIMING_AUTO, 0));
+    }
+}
+
+#[test]
+fn the_gpu_timing_choice_is_set_and_read_back_from_c() {
+    unsafe {
+        let g = ponko_game_new(c"gpu timing".as_ptr(), 1, 1);
+        let mut world = null_mut();
+        assert_eq!(
+            ponko_game_run_headless(g, 0, Some(gpu_timing_choice), null_mut(), &mut world),
+            PONKO_OK
+        );
+        assert_eq!(ponko_world_free(world), PONKO_OK);
+    }
+}

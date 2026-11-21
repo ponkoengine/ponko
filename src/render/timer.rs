@@ -59,7 +59,7 @@ struct Slot {
     covers: u32,
 }
 
-/// Which frames are timed: every `every`th one.
+/// Which frames are timed: every `every`th one, none if 0.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Cadence {
     every: u32,
@@ -74,7 +74,7 @@ impl Cadence {
     /// Starts a frame: whether it is due to be timed.
     fn begin(&mut self) -> bool {
         self.since = self.since.saturating_add(1);
-        self.since >= self.every
+        self.every != 0 && self.since >= self.every
     }
 
     /// A frame was timed and submitted: how many frames it stands for.
@@ -179,9 +179,17 @@ impl GpuTimer {
     }
 
     /// Times every `n`th frame from now on (1, the default: every frame;
-    /// 0 counts as 1). Frames in between write no timestamps.
+    /// 0: none). Frames in between write no timestamps. Turned off, the
+    /// times shown so far are dropped, and readbacks still in flight are
+    /// discarded.
     pub fn set_every(&mut self, n: u32) {
-        self.cadence.every = n.max(1);
+        self.cadence.every = n;
+        if n == 0 {
+            self.smoothed_ms = None;
+            self.passes.clear();
+            self.last_frame.clear();
+            self.last_sample = None;
+        }
     }
 
     /// Whether the frame begun last writes timestamps (the scene
@@ -221,6 +229,9 @@ impl GpuTimer {
             let slot = &mut self.slots[i];
             slot.buffer.unmap();
             slot.state.store(FREE, Ordering::Release);
+            if self.cadence.every == 0 {
+                continue;
+            }
             let Some((ms, end)) = ok else { continue };
             self.last_end = end;
             // A bogus sample (clock reset, overflow) would ruin the average.
@@ -686,6 +697,13 @@ mod tests {
         smooth_passes(&mut passes, &mut scratch, &[span("opaque", 14.0)], 0.1);
         assert_eq!(passes.len(), 1, "passes that stopped running are dropped");
         assert!((passes[0].ms - 5.0).abs() < 1e-5, "{}", passes[0].ms);
+    }
+
+    #[test]
+    fn a_cadence_of_none_times_no_frame() {
+        let mut c = Cadence::EVERY_FRAME;
+        c.every = 0;
+        assert!((0..100).all(|_| !c.begin()));
     }
 
     #[test]

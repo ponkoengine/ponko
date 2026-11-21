@@ -368,6 +368,33 @@ using crowd_options = PonkoCrowdOptions;
 using nav_crowd_stats = PonkoNavCrowdStats;
 /// Heap allocations counted while profiling was on (Rust `AllocCounts`), from thread_alloc_counts.
 using alloc_counts = PonkoAllocCounts;
+/// How often a game times its GPU passes (Rust `GpuTiming`), for ctx::set_gpu_timing. `automatic` leaves it
+/// to the engine (one frame in 16, every frame while profiling is on), `every` times every Nth frame and
+/// `off` never times the GPU.
+enum class gpu_timing_kind : std::uint32_t {
+    /// The engine decides (the default).
+    automatic = PONKO_GPU_TIMING_AUTO,
+    /// Every `every`th frame; 1 is every frame.
+    every = PONKO_GPU_TIMING_EVERY,
+    /// No GPU times at all.
+    off = PONKO_GPU_TIMING_OFF,
+};
+/// The choice ctx::set_gpu_timing made and ctx::gpu_timing reads back (Rust `GpuTiming`); `every` matters
+/// only for gpu_timing_kind::every. Build one with gpu_timing_auto(), gpu_timing_every(n) or gpu_timing_off().
+struct gpu_timing {
+    gpu_timing_kind kind = gpu_timing_kind::automatic;
+    std::uint32_t every = 0;
+    /// Equal when both made the same choice.
+    friend bool operator==(const gpu_timing& a, const gpu_timing& b) noexcept { return a.kind == b.kind && a.every == b.every; }
+    /// Different choices.
+    friend bool operator!=(const gpu_timing& a, const gpu_timing& b) noexcept { return !(a == b); }
+};
+/// Let the engine decide how often the GPU passes are timed (Rust `GpuTiming::Auto`).
+inline gpu_timing gpu_timing_auto() noexcept { return {gpu_timing_kind::automatic, 0}; }
+/// Time every `n`th frame (Rust `GpuTiming::Every`; `1` is every frame, 0 counts as 1).
+inline gpu_timing gpu_timing_every(std::uint32_t n) noexcept { return {gpu_timing_kind::every, n}; }
+/// Never time the GPU (Rust `GpuTiming::Off`).
+inline gpu_timing gpu_timing_off() noexcept { return {gpu_timing_kind::off, 0}; }
 /// A clip to bake for crowds (Rust `CrowdClip`), from crowd_clip_of.
 using crowd_clip = PonkoCrowdClip;
 /// A GPU array of four-float elements (Rust `GpuBuffer`) for compute passes, from ctx::create_gpu_buffer. A
@@ -6726,6 +6753,19 @@ public:
     /// Turns on scope timing (PONKO_PROFILE_SCOPE) and allocation counting;
     /// the overlay and PONKO_BENCH do it by themselves. Off, a scope costs one atomic load.
     void set_profiling(bool on) { detail::check(ponko_ctx_set_profiling(raw_, on)); }
+    /// Chooses how often the GPU passes are timed (Rust `perf.set_gpu_timing`), apart from profiling:
+    /// gpu_timing_auto() (the default: one frame in 16, every frame while profiling is on),
+    /// gpu_timing_every(n) or gpu_timing_off(). The overlay, traces, benchmark runs and automatic quality
+    /// still get every frame's times while they are on.
+    void set_gpu_timing(const ponko::gpu_timing& timing) {
+        detail::check(ponko_ctx_set_gpu_timing(raw_, static_cast<std::uint32_t>(timing.kind), timing.every));
+    }
+    /// What set_gpu_timing chose (Rust `perf.gpu_timing()`), not what the engine did for the frame.
+    ponko::gpu_timing gpu_timing() const {
+        std::uint32_t kind = 0, every = 0;
+        detail::check(ponko_ctx_gpu_timing(raw_, &kind, &every));
+        return {static_cast<gpu_timing_kind>(kind), every};
+    }
     /// Where time and allocations went over the last frames (needs set_profiling(true) for a while).
     ponko::perf_report perf_report() const {
         return ponko::perf_report(detail::read_text([&](char* b, std::size_t c, std::size_t* n) { return ponko_ctx_perf_report(raw_, b, c, n); }));

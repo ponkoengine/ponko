@@ -147,6 +147,12 @@
 
 #define PONKO_NAV_CROWD_STATS_VERSION 1
 
+#define PONKO_GPU_TIMING_AUTO 0
+
+#define PONKO_GPU_TIMING_EVERY 1
+
+#define PONKO_GPU_TIMING_OFF 2
+
 #define PONKO_PRESS_THRESHOLD 0.5
 
 #define PONKO_QUERY_CACHE_AUTO 0
@@ -6246,6 +6252,12 @@ struct PonkoAllocCounts ponko_thread_alloc_counts(void);
 void ponko_note_allocation(size_t bytes);
 
 enum PonkoStatus ponko_ctx_set_profiling(struct PonkoCtx *ctx, bool on);
+
+enum PonkoStatus ponko_ctx_set_gpu_timing(struct PonkoCtx *ctx, uint32_t kind, uint32_t every);
+
+enum PonkoStatus ponko_ctx_gpu_timing(const struct PonkoCtx *ctx,
+                                      uint32_t *out_kind,
+                                      uint32_t *out_every);
 
 enum PonkoStatus ponko_ctx_perf_report(const struct PonkoCtx *ctx,
                                        char *buffer,
