@@ -435,7 +435,7 @@ const PARAMS_BYTES: u64 = 64;
 fn end_scope(scope: wgpu::ErrorScopeGuard) -> Option<String> {
     use std::future::Future;
     use std::task::{Context, Poll, Waker};
-    let mut future = Box::pin(scope.pop());
+    let mut future = std::pin::pin!(scope.pop());
     match future.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
         Poll::Ready(error) => error.map(|e| e.to_string()),
         #[cfg(target_arch = "wasm32")]

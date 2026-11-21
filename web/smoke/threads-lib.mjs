@@ -23,18 +23,25 @@ export const WORKLOADS = ["par", "sweep", "interleaved", "jobs"];
 /** Ticks a check waits for: past the checksum (tick 120) and a few jobs. */
 export const CHECK_TICKS = 150;
 
-/** The `--case`s: the browser ones, and `warning`, a build with no browser. */
-export const CASES = ["worker-panic", "gamepads", "warning"];
+/**
+ * The `--case`s: the browser ones, and `warning`, a build with no browser.
+ * `gamepads-plain` is `gamepads` on the ordinary web build (no threads),
+ * which reads the pads through gilrs.
+ */
+export const CASES = ["worker-panic", "gamepads", "gamepads-plain", "warning"];
+
+/** Where the ordinary build of the fixture goes for `--case gamepads-plain`. */
+export const PLAIN_DIR = "target/web/web_threads_plain";
 
 export const USAGE =
   "usage: threads.mjs [--dir <site>] [--build] [--browser chromium|firefox|webkit]\n" +
-  "                   [--check] [--case worker-panic|gamepads|warning]\n" +
+  "                   [--check] [--case worker-panic|gamepads|gamepads-plain|warning]\n" +
   "                   [--bench [--workloads par,sweep,interleaved,jobs] [--threads 1,<n>] [--repeat <r>]]\n" +
   "                   [--out <dir>] [--timeout <s>]";
 
 export function parseArgs(argv) {
   const args = {
-    dir: "target/web/web_threads",
+    dir: null,
     build: false,
     browser: "chromium",
     mode: "check",
@@ -82,6 +89,7 @@ export function parseArgs(argv) {
     }
   }
   if (args.case && args.mode !== "check") throw new UsageError("--case goes with --check");
+  args.dir ??= args.case === "gamepads-plain" ? PLAIN_DIR : "target/web/web_threads";
   return args;
 }
 
@@ -259,10 +267,13 @@ export const FAKE_PAD_ID = "Xbox Wireless Controller (STANDARD GAMEPAD Vendor: 0
  * buttons, 4 axes). `buttons` maps a button's index to its value; above
  * half is pressed, as browsers report triggers.
  */
-export function fakeGamepad({ index = 0, id = FAKE_PAD_ID, buttons = {}, axes = [0, 0, 0, 0] } = {}) {
+export function fakeGamepad({ index = 0, id = FAKE_PAD_ID, buttons = {}, axes = [0, 0, 0, 0], rumble = true } = {}) {
   return {
     id,
     index,
+    // Not a property of the browser's Gamepad: installFakeGamepads turns it
+    // into a `vibrationActuator` (Chromium has one on every pad, Firefox none).
+    rumble,
     connected: true,
     mapping: "standard",
     timestamp: 0,
@@ -274,20 +285,61 @@ export function fakeGamepad({ index = 0, id = FAKE_PAD_ID, buttons = {}, axes = 
   };
 }
 
+/** The longest effect Chromium accepts from `playEffect`, in milliseconds. */
+export const EFFECT_CAP_MS = 5000;
+
 /**
  * Replaces `navigator.getGamepads()` in `scope` (the page, before its
  * scripts run) with fed pads: `scope.__ponkoFeedGamepads(pads)` sets them,
- * and the call returns four places, each pad at its `index`. Self-contained,
+ * and the call returns four places, each pad at its `index`. A pad fed with
+ * `rumble: true` has a fake `vibrationActuator` that records every call in
+ * `scope.__ponkoRumbleCalls` (`{kind: "play", index, type, duration,
+ * strong, weak, at}`, `{kind: "reset", index, at}`, or `kind: "rejected"`
+ * for an effect over the browser's cap, which a real one refuses). Self-contained,
  * so the runner can pass it to the page as it is.
  */
 export function installFakeGamepads(scope = globalThis) {
   let pads = [];
+  const calls = (scope.__ponkoRumbleCalls = []);
+  const now = () => (scope.performance ? scope.performance.now() : Date.now());
+  const actuators = new Map();
+  const actuator = (index) => {
+    if (!actuators.has(index)) {
+      actuators.set(index, {
+        type: "dual-rumble",
+        playEffect(type, params) {
+          const call = {
+            index,
+            type,
+            duration: params.duration,
+            strong: params.strongMagnitude,
+            weak: params.weakMagnitude,
+            delay: params.startDelay,
+            at: now(),
+          };
+          if (type !== "dual-rumble" || !(params.duration <= 5000)) {
+            calls.push({ ...call, kind: "rejected" });
+            return Promise.reject(new TypeError("effect over the cap, or not dual-rumble"));
+          }
+          calls.push({ ...call, kind: "play" });
+          return Promise.resolve("complete");
+        },
+        reset() {
+          calls.push({ kind: "reset", index, at: now() });
+          return Promise.resolve("complete");
+        },
+      });
+    }
+    return actuators.get(index);
+  };
   scope.__ponkoFeedGamepads = (next) => {
     pads = next;
   };
   const list = () => {
     const places = [null, null, null, null];
-    for (const pad of pads) places[pad.index] = pad;
+    for (const { rumble, ...pad } of pads) {
+      places[pad.index] = rumble ? { ...pad, vibrationActuator: actuator(pad.index) } : pad;
+    }
     return places;
   };
   Object.defineProperty(scope.navigator, "getGamepads", { configurable: true, value: list });
@@ -318,8 +370,14 @@ export const GAMEPAD_STEPS = [
   { name: "the pad unplugged", pads: [], expect: null },
 ];
 
-/** The problems with the fixture's state after a gamepad step. */
-export function checkGamepadStep(step, state) {
+/** How far an axis may be from the fed value on the ordinary build: gilrs applies its own dead zone and scaling. */
+export const GILRS_AXIS_TOLERANCE = 0.1;
+
+/**
+ * The problems with the fixture's state after a gamepad step; axes must be
+ * within `tolerance` of the fed values (exact for the threaded backend).
+ */
+export function checkGamepadStep(step, state, tolerance = 1e-6) {
   const pads = state?.pads ?? [];
   if (step.expect == null) return pads.length === 0 ? [] : [`expected no pads, the engine sees ${JSON.stringify(pads)}`];
   if (pads.length !== 1) return [`expected one pad, the engine sees ${pads.length}: ${JSON.stringify(pads)}`];
@@ -331,12 +389,49 @@ export function checkGamepadStep(step, state) {
   expect(pad.family === "Xbox", `the pad's family is ${pad.family}, not Xbox (from its vendor id)`);
   expect(pad.vendor === 0x045e && pad.product === 0x0b13, `the pad's ids are ${pad.vendor}:${pad.product}, not 0x045e:0x0b13`);
   const down = [...pad.down].sort().join(",");
+  expect(pad.rumble === true, `the pad's rumble capability is ${pad.rumble}, not true (it has a vibrationActuator)`);
   expect(down === [...step.expect.down].sort().join(","), `buttons down: [${pad.down}], not [${step.expect.down}]`);
   for (const [axis, want] of Object.entries(step.expect.axes)) {
-    expect(Math.abs((pad.axes?.[axis] ?? NaN) - want) < 1e-6, `axis ${axis} is ${pad.axes?.[axis]}, not ${want}`);
+    expect(Math.abs((pad.axes?.[axis] ?? NaN) - want) < tolerance, `axis ${axis} is ${pad.axes?.[axis]}, not ${want}`);
   }
   if (step.expect.presses != null) {
     expect(state.pad_presses === step.expect.presses, `South was pressed ${state.pad_presses} times, not ${step.expect.presses}`);
+  }
+  return problems;
+}
+
+/**
+ * The rumble scenario: West pressed makes the fixture rumble the pad at
+ * 0.8 / 0.3 for 2.5 s. The problems with the calls the fake actuator saw
+ * by the time the game stopped it: it played the levels, it played them
+ * again before the browser's cap (never an effect over it, never a gap of
+ * the cap), and the last call was the stop.
+ */
+export const RUMBLE_PRESS = { 2: 1 };
+export const RUMBLE_SECONDS = 2.5;
+
+export function checkRumbleCalls(calls) {
+  const problems = [];
+  const expect = (ok, what) => ok || problems.push(what);
+  const plays = calls.filter((c) => c.kind === "play");
+  expect(!calls.some((c) => c.kind === "rejected"), `the browser refused an effect (over its ${EFFECT_CAP_MS} ms cap, or not dual-rumble)`);
+  expect(plays.length >= 2, `the rumble was played ${plays.length} time(s), not again before its end (at least 2)`);
+  for (const c of plays) {
+    expect(c.type === "dual-rumble", `an effect of type ${c.type}`);
+    expect(Math.abs(c.strong - 0.8) < 1e-6 && Math.abs(c.weak - 0.3) < 1e-6, `levels ${c.strong}/${c.weak}, not 0.8/0.3`);
+    expect(c.duration > 0 && c.duration <= EFFECT_CAP_MS, `an effect of ${c.duration} ms, over the ${EFFECT_CAP_MS} ms cap`);
+    expect(c.delay === 0, `an effect that starts after ${c.delay} ms`);
+  }
+  for (let i = 1; i < plays.length; i++) {
+    const gap = plays[i].at - plays[i - 1].at;
+    expect(gap < plays[i - 1].duration, `${gap.toFixed(0)} ms between two effects of ${plays[i - 1].duration} ms: it went quiet in between`);
+    expect(gap < EFFECT_CAP_MS, `${gap.toFixed(0)} ms between two effects, past the browser's cap`);
+  }
+  const last = calls[calls.length - 1];
+  expect(last?.kind === "reset", `the last call was ${last?.kind ?? "none"}, not the stop (reset) after ${RUMBLE_SECONDS} s`);
+  if (last?.kind === "reset" && plays.length) {
+    const lasted = (last.at - plays[0].at) / 1000;
+    expect(lasted >= RUMBLE_SECONDS - 0.3 && lasted < RUMBLE_SECONDS + 3, `it stopped after ${lasted.toFixed(2)} s, not about ${RUMBLE_SECONDS} s`);
   }
   return problems;
 }
