@@ -835,7 +835,9 @@ pub unsafe extern "C" fn ponko_game_profile_headless(
 /// start on this machine (no usable GPU or graphics device, no window or
 /// event loop, a build without the `window` feature) it returns
 /// `PONKO_UNSUPPORTED` and `ponko_last_error()` says why; other failures
-/// keep their statuses.
+/// keep their statuses. In a browser it doesn't return once the game is
+/// running: the game's frames stay as they are while it plays (the guide's
+/// "C and C++ on the web").
 ///
 /// Ownership: `game` is taken over and freed when the run ends (also on
 /// failure); don't use or free it after. `user` stays the caller's, is passed
@@ -854,6 +856,9 @@ pub unsafe extern "C" fn ponko_game_run(game: *mut PonkoGame, setup: PonkoSystem
     boundary(|| {
         // SAFETY: forwarded caller contract.
         let game = unsafe { take(game)? };
+        #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+        return crate::web::run_event_loop(|| game.try_run(setup_fn(setup, user))).map_err(crate::startup_error);
+        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
         game.try_run(setup_fn(setup, user)).map_err(crate::startup_error)
     })
 }

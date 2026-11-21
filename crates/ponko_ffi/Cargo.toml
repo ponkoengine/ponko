@@ -97,6 +97,11 @@ ponko_ecs = { path = "../ponko_ecs", version = "0.1.0" }
 rayon = "1.12.0"
 serde_json = "1.0.154"
 
+# C and C++ games in a browser (src/web.rs, examples/web_main.rs).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2.130"
+js-sys = "0.3.107"
+
 [dev-dependencies]
 cbindgen = { version = "0.29.2", default-features = false }
 # A lobby server for the lobby client's tests (tests/lobby.rs).
