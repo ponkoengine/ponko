@@ -149,7 +149,7 @@ pub(crate) type Blocks = crate::compressed::CompressedImage;
 
 /// Without `compressed-textures` there are none.
 #[cfg(not(feature = "compressed-textures"))]
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub(crate) enum Blocks {}
 
 pub(crate) struct LoadedMaterial {
