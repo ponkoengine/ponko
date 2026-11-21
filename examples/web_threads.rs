@@ -5,7 +5,10 @@
 //! **Check** (the default): a parallel query over 20,000 entities every
 //! tick, four view systems the parallel scheduler batches together (its
 //! threshold at zero, so a batch goes to the workers whenever there are
-//! any), jobs (one waited for during setup and one every 30 ticks), and an
+//! any), jobs (one waited for during setup and one every 30 ticks), a
+//! moving root with 4,000 attached children whose transforms are tracked
+//! (so the hierarchy places them by lookups, on the workers when the level
+//! is worth sharing, through the same runner as the parallel query), and an
 //! asset group of a texture and a file decoded with `AssetGroup::with`,
 //! both from `assets/`. It publishes which threads ran each, for the runner
 //! (see `common/web_smoke.rs`):
@@ -15,8 +18,8 @@
 //! `threads` is what the engine started (`ponko::web::threads()`, 0 when it
 //! runs on the page's thread alone); `par_threads` and `batch_threads`
 //! count the threads other than the page's that ran query items and batch
-//! systems; `checksum` sums every position at tick 120, the same however
-//! many threads ran them. `?smoke_case=worker-panic` panics inside the
+//! systems; `checksum` sums every position and every attached child's
+//! place at tick 120, the same however many threads ran them. `?smoke_case=worker-panic` panics inside the
 //! parallel query at tick 30: the game must stop with an error, not hang.
 //!
 //! `pads` lists the controllers the engine sees (`threads.mjs --case
@@ -52,6 +55,7 @@ use std::time::Duration;
 
 use ponko::access::SystemAccess;
 use ponko::assets::{AssetGroup, GroupId, GroupState};
+use ponko::attach::Attached;
 use ponko::input::{Input, Rumble};
 use ponko::prelude::*;
 use ponko::streaming::Job;
@@ -63,6 +67,10 @@ use web_time::Instant;
 mod smoke;
 
 const DT: f32 = 1.0 / 60.0;
+
+/// Children attached to the moving root: enough that the hierarchy's
+/// lookup level is shared out on the web.
+const CHILDREN: usize = 4_000;
 
 #[derive(Clone, Copy, Component)]
 struct Pos {
@@ -265,6 +273,8 @@ struct Check {
     group_state: Option<String>,
     group_off_page: Option<bool>,
     group_bytes: Option<usize>,
+    /// The root the hierarchy's children follow.
+    root: Option<Entity>,
 }
 
 /// The asset group's file decoded with `with`, and what its decoder returns.
@@ -297,11 +307,20 @@ fn check(game: Game) {
             }
             steer(p, v);
         });
+        if let Some(root) = s.root
+            && let Some(t) = ctx.world.get_mut::<d2::Transform>(root)
+        {
+            t.position = vec2(320.0 + (tick % 64) as f32, 180.0);
+            t.rotation = tick as f32 * 0.01;
+        }
         if tick == 120 {
             let mut sum = 0.0f64;
             ctx.world
                 .query::<&Pos>()
                 .for_each(|p| sum += f64::from(p.x) + f64::from(p.y));
+            ctx.world
+                .query::<(&d2::Transform, &Attached)>()
+                .for_each(|(t, _)| sum += f64::from(t.position.x) + f64::from(t.position.y));
             s.checksum = Some(sum);
         }
         if tick.is_multiple_of(30) && s.job.is_none() {
@@ -392,6 +411,16 @@ fn check(game: Game) {
     .setup(move |ctx| {
         spawn_agents(ctx, 20_000);
         spawn_vals::<4>(ctx, 16_000);
+        // Tracked transforms: the hierarchy places the children by lookups.
+        ctx.world.track_changes::<d2::Transform>();
+        let root = ctx.world.spawn((d2::Transform::at(vec2(320.0, 180.0)),));
+        for i in 0..CHILDREN {
+            let f = i as f32;
+            ctx.world.spawn((
+                d2::Transform::default(),
+                Attached::to(root).offset(vec2((f * 0.37) % 200.0, (f * 0.11) % 120.0)),
+            ));
+        }
         // Waited for on the page's thread, which spins (it may not block).
         let thread = Job::spawn(|| std::thread::current().id()).wait();
         // Files from assets/ (assets/index.json on the web), read and
@@ -404,6 +433,7 @@ fn check(game: Game) {
         let mut s = state.borrow_mut();
         s.wait_off_page = Some(thread != page);
         s.group = Some(ctx.assets.start_group(group));
+        s.root = Some(root);
     })
     .run();
 }

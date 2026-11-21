@@ -1513,7 +1513,8 @@ fn place_level(world: &mut World, s: &mut State, ids: &Ids) -> Option<usize> {
             s.placed.extend(first.iter().map(one));
             if worth_sharing(start.elapsed().as_nanos(), first.len(), s.pairs.len()) {
                 use rayon::prelude::*;
-                s.placed.par_extend(rest.par_iter().map(one));
+                let placed = &mut s.placed;
+                on_pool(|| placed.par_extend(rest.par_iter().map(one)));
             } else {
                 s.placed.extend(rest.iter().map(one));
             }
@@ -1541,6 +1542,17 @@ fn place_level(world: &mut World, s: &mut State, ids: &Ids) -> Option<usize> {
         }
     }
     s.next.is_empty().then_some(0)
+}
+
+/// Runs `op`, which starts rayon work, where the ECS's parallel queries
+/// run theirs: on the web's frame pool when called on the page's thread,
+/// which may not block (nor call into rayon), else here.
+#[inline]
+fn on_pool<R: Send>(op: impl FnOnce() -> R + Send) -> R {
+    #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+    return crate::web_threads::on_frame_pool(op);
+    #[cfg(not(all(target_arch = "wasm32", target_feature = "atomics")))]
+    op()
 }
 
 /// Whether a pass of `total` items, whose first `done` took `spent_ns` on
