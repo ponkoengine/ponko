@@ -33,7 +33,7 @@ skinned geometry). §5 lists what would change this.
 |---|---|---|
 | Adapter probe (§1) | `src/render/ray_tracing_probe_render_test.rs` | `cargo test --lib --features 3d ray_tracing_probe -- --nocapture` |
 | SSR failures (§2) | `src/render/ssr_render_test.rs`, `screen_space_reflections_lose_*` | `cargo test --lib --features 3d screen_space_reflections_lose -- --nocapture` |
-| GI leak (§2) | `src/render/gi_render_test.rs`, `bounced_light_leaks_through_a_thin_partition_on_a_probe_plane` | `cargo test --lib --features 3d bounced_light_leaks -- --nocapture` |
+| GI leak (§2) | `src/render/gi_render_test.rs`, `bounced_light_stops_at_a_thin_partition_on_a_probe_plane` | `cargo test --lib --features 3d bounced_light_stops -- --nocapture` |
 | Prototype (§3) | `src/render/ray_query_prototype_render_test.rs` | `cargo test --lib --features 3d ray_query_prototype -- --nocapture` |
 | Prototype cost (§3) | same file, `ray_query_reflection_cost` (ignored) | `cargo test --release --lib --features 3d -- --ignored --nocapture --test-threads=1 ray_query_reflection_cost` |
 | SSR cost baseline (§3) | `ssr_render_test.rs`, `reflection_filter_gpu_cost` (ignored, existing) | `cargo test --release --lib --features 3d -- --ignored --nocapture --test-threads=1 reflection_filter_gpu_cost` |
@@ -151,8 +151,11 @@ and a 14x14 distance-moments tile. A surface blends its eight probes,
 weighting each by a Chebyshev test on the distances that probe saw. So:
 
 1. **Light leaks** through walls thinner than the probe spacing where the
-   wall is close to a probe (the guide says "walls thinner than about a
-   tenth of the spacing may leak").
+   wall is close to a probe. Since then fixed for the case measured below:
+   a probe buried in a thin wall (its neighbours' distances show the wall
+   on both sides of it) is left out of the blend. A little light still
+   gets through where a wall meets a surface that runs on past it into the
+   next room (see the guide's "Coarse light").
 2. **Small things are coarse**: a view texel covers about 5.6°, and
    irradiance is kept at 6x6 directions per probe: no light is told apart
    inside a cell, and the bounce is diffuse only (glossy bounce is left to
@@ -175,19 +178,19 @@ that runs floor to roof, so the floor there can't see the sunlit red wall;
 |---|---:|---:|
 | None (positive control, same floor point) | 56 | 56 |
 | At x = -1.5, between probe planes | 0 | 0 |
-| At x = -1.0, on a probe plane (failure 1) | **34** | 0 |
+| At x = -1.0, on a probe plane (failure 1) | **34** (now 1) | 0 |
 
-So the leak depends on where a thin wall falls against the grid, not only
-on its thickness: 60% of the open room's bounce comes through the partition
-when it lies on the probe plane. Failures 2 to 5 follow from the code and
-the guide's own numbers and weren't measured separately.
+So the leak depended on where a thin wall falls against the grid, not only
+on its thickness: 60% of the open room's bounce came through the partition
+when it lay on the probe plane. With buried probes left out it measures 1
+(the open room now reads 78, as the probes' light is shown where it
+settles). The test now asserts `<= 5` on the plane as between planes.
+Failures 2 to 5 follow from the code and the guide's own numbers and
+weren't measured separately.
 
-These three tests pin known limitations, not wanted behaviour: each says in
-its doc comment which assertion to flip once the limitation is fixed. Their
-margins differ: the SSR ones measure 0 against a limit of 40 (and 255 against
-120), while the GI leak's `> 20` against a measured 34 is the tightest in the
-set, so a GPU or driver that filters the probe atlas a little differently
-could move it first.
+The two SSR tests pin known limitations, not wanted behaviour: each says in
+its doc comment which assertion to flip once the limitation is fixed. They
+measure 0 against a limit of 40 (and 255 against 120).
 
 ### What a ray-traced technique would fix
 
@@ -343,8 +346,9 @@ Why not adopt now:
    TLAS rebuilds at real instance counts (1.4 to 1.9 ms wall here for
    2,049).
 
-Why not reject: the benefit is measured. Both SSR blind spots and the GI
-leak class are real in the engine today, ray queries fix the reflection
+Why not reject: the benefit is measured. Both SSR blind spots are real in
+the engine today (the GI leak measured here has since been fixed in the
+raster probes), ray queries fix the reflection
 ones on this machine, and the cost of tracing alone is in the same range as
 SSR's trace.
 
