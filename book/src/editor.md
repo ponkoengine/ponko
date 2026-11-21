@@ -132,6 +132,23 @@ leaves the document as it was.
 The files are JSON in `assets/`, readable and diffable; the paths are
 relative to `assets/` and can't leave it.
 
+### Choosing a file
+
+On macOS, Windows and Linux, **Open** and **Save as** use the system's
+own file picker. With unsaved changes, **Open** first asks whether to
+drop them. **Save as** first asks whether to save a **Scene** or a
+**Prefab**; **Choose file…** then opens the save picker in the
+document's folder with its name filled in (**Save** on an untitled
+document does the same). Canceling a picker changes nothing: the
+document and its unsaved edits stay as they were.
+
+The file has to be inside the project's `assets/` folder. The editor
+refuses one outside it, or one that another `assets/` folder or a
+registered asset source would shadow, and says why. A name typed without
+an extension gets `.json`. On Linux the picker is the desktop's file
+chooser portal, with Zenity as the fallback. Builds without a system
+picker (the web) keep the editor's own path field.
+
 ## When the file changes on disk
 
 The editor looks at the open file twice a second. If another program
@@ -283,8 +300,7 @@ undo history, prefab comparison, play mode or settings), and
 Everything behind the panels is tested without a window: the history and
 its merged drags, the unsaved marker, scene and prefab round trips, the
 file watch, the gizmos' math, and the panels themselves driven by fake
-mouse and keyboard input: Ctrl+S, the Save as and Open dialogs, F2, the
-close question, dragging a hierarchy row onto another, dragging a number
+mouse and keyboard input: Ctrl+S, F2, the close question, dragging a hierarchy row onto another, dragging a number
 in the inspector, and snapped move, rotate and scale drags in 2D and in a
 3D game, each one undo step. The newer parts are tested the same way:
 dragging an asset into the view places it (one undo step), a prefab
@@ -295,7 +311,9 @@ shortcuts are rebound by key presses and saved, the layout and recent
 projects survive a restart, and the asset panel's thumbnails, search and
 import settings match what `ponko cook` reads (both read one shared
 fixture). A sound's preview is checked through the audio engine's offline
-output, without a speaker. Offscreen GPU tests draw the editor's window
+output, without a speaker. Open and Save as tests inject paths through
+a fake picker. Trying the real system file picker requires a desktop
+session. Offscreen GPU tests draw the editor's window
 over a 2D world and over a frame of the 3D renderer and check where its
 panels and gizmo are, and draw the asset panel, a prefab's overrides, the
 shortcuts window and the play bar, each against a control.
