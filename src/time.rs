@@ -229,6 +229,12 @@ impl Time {
         self.sim.pending_steps = self.sim.pending_steps.saturating_sub(n);
     }
 
+    /// The fixed step in seconds, full precision (`sim_time` is the tick
+    /// times this).
+    pub(crate) fn sim_step(&self) -> f64 {
+        self.sim.step
+    }
+
     pub(crate) fn advance_tick(&mut self) {
         self.sim.tick += 1;
     }
