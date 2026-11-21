@@ -258,7 +258,7 @@ impl Physics3D {
     ///     ctx.world.spawn((Transform::default(), TerrainCollider::new(ground)));
     ///     ctx.storage.save_world(&ctx.world, "slot").unwrap();
     ///     ctx.load_world("slot").unwrap();
-    ///     let (_, loaded) = ctx.world.query::<(Entity, &TerrainCollider)>().iter().next().unwrap();
+    ///     let loaded = *ctx.world.query::<(Entity, &TerrainCollider)>().iter().next().unwrap().1;
     ///     assert!(ctx.physics3d.is_live(loaded.mesh), "solid again");
     /// });
     /// # let _ = std::fs::remove_dir_all(dir);
