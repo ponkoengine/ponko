@@ -1577,17 +1577,11 @@
     "reason": "Preserves setup/runtime policy; displays the checked operation error. /// # }     /// ```     pub fn load_collision_mesh(&mut self, path: &str) -> CollisionMesh {         self.try_load_collision_mesh(path).unwrap_or_else(|e| panic!(\"{e}\"))",
     "site": "src/physics3d/files.rs:92"
   },
-  "src/physics3d/mod.rs:42efbc4415026baf": {
+  "src/physics3d/mod.rs:60360e84506e1514": {
     "classification": "invariant",
     "construction": ".expect(\"live slot\")",
-    "reason": "Internal invariant: Vec3::ZERO,             ),             Shape3D::Mesh(m) => match self.mesh(m) {                 Some(slot) if scale == Vec3::ONE => (slot.shape.clone().expect(\"live slot\"), slot.offset),",
-    "site": "src/physics3d/mod.rs:1119"
-  },
-  "src/physics3d/mod.rs:93347f7f19f62db8": {
-    "classification": "invariant",
-    "construction": ".expect(\"live slot\")",
-    "reason": "Internal invariant: Shape3D::Mesh(m) => match self.mesh(m) {                 Some(slot) if scale == Vec3::ONE => (slot.shape.clone().expect(\"live slot\"), slot.offset),                 Some(slot) => (                     streaming::scaled(slot.shape.as_ref().expect(\"live slot\"), scale),",
-    "site": "src/physics3d/mod.rs:1121"
+    "reason": "Internal invariant: Physics3D::mesh returns only slots of live meshes, whose shape is set.",
+    "site": "src/physics3d/mod.rs:1300"
   },
   "src/physics3d/query.rs:96d8397a15f3de54": {
     "classification": "invariant",
