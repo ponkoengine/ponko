@@ -1516,6 +1516,8 @@ typedef struct PonkoLatestWins PonkoLatestWins;
 
 typedef struct PonkoLightBakeScene PonkoLightBakeScene;
 
+typedef struct PonkoLoadedWorld PonkoLoadedWorld;
+
 typedef struct PonkoLobby PonkoLobby;
 
 typedef struct PonkoMemorySource PonkoMemorySource;
@@ -2297,6 +2299,10 @@ typedef struct PonkoColliderFocus {
   float radius;
   float keep_radius;
 } PonkoColliderFocus;
+
+typedef struct PonkoCollisionMeshData *(*PonkoTerrainRebuildFn)(const struct PonkoLoadedWorld *world,
+                                                                uint64_t tile,
+                                                                void *user);
 
 typedef struct PonkoPointHit2D {
   struct PonkoEntity entity;
@@ -6537,6 +6543,18 @@ enum PonkoStatus ponko_ctx_physics3d_stream_colliders(struct PonkoCtx *ctx,
 enum PonkoStatus ponko_ctx_physics3d_is_collider_active(struct PonkoCtx *ctx,
                                                         uint64_t entity,
                                                         bool *out_active);
+
+enum PonkoStatus ponko_ctx_physics3d_set_terrain_rebuild(struct PonkoCtx *ctx,
+                                                         PonkoTerrainRebuildFn rebuild,
+                                                         void *user);
+
+enum PonkoStatus ponko_ctx_physics3d_clear_terrain_rebuild(struct PonkoCtx *ctx);
+
+enum PonkoStatus ponko_loaded_world_get(const struct PonkoLoadedWorld *world,
+                                        uint64_t entity,
+                                        uint32_t component,
+                                        void *out_data,
+                                        size_t size);
 
 enum PonkoStatus ponko_ctx_set_physics_paused(struct PonkoCtx *ctx, bool paused);
 

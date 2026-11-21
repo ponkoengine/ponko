@@ -1607,6 +1607,9 @@ struct identity {
     // a ctx only lasts one system call, the hook as long as the game. An
     // exception it throws is kept in hook_error and rethrown by the game.
     std::function<void(contact_pair3d&)> contact_hook;
+    // The terrain rebuild (ctx::set_terrain_rebuild), for the same reason,
+    // already turned into what the C callback returns.
+    std::function<PonkoCollisionMeshData*(const PonkoLoadedWorld*, std::uint64_t)> terrain_rebuild;
     first_error hook_error;
 };
 
@@ -2787,6 +2790,28 @@ public:
     }
     /// Whether `e` is alive (ponko_hook_is_alive).
     bool alive(entity e) const { bool a = false; detail::check(ponko_hook_is_alive(raw_, e, &a)); return a; }
+};
+/// The world just loaded, as a terrain rebuild sees it
+/// (ctx::set_terrain_rebuild): read-only, valid only during the call.
+class loaded_world {
+    const PonkoLoadedWorld* raw_;
+    detail::identity* owner_;
+public:
+    /// Wraps the C handle a rebuild got and the world's C++ identity;
+    /// ctx::set_terrain_rebuild does this for you.
+    loaded_world(const PonkoLoadedWorld* raw, detail::identity* owner) : raw_(raw), owner_(owner) {}
+    /// `e`'s `T`, or nothing if it has none (ponko_loaded_world_get). `T`
+    /// must have been used on the world before the load.
+    template<class T> std::optional<T> get(entity e) const {
+        const std::size_t slot = detail::type_slot<T>();
+        if (slot >= owner_->ids.size() || owner_->ids[slot] == 0)
+            throw std::logic_error(detail::type_name<T>() + " is used for the first time inside a terrain rebuild; use it on the world first");
+        T value{};
+        const PonkoStatus status = ponko_loaded_world_get(raw_, e, owner_->ids[slot] - 1, &value, sizeof(T));
+        if (status == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(status);
+        return value;
+    }
 };
 /// Out of line: hook_world is defined after world_view.
 template<class T, bool Replace, class F> void world_view::add_hook(hook_register reg, F f) {
@@ -5471,6 +5496,7 @@ public:
 /// `CollisionMeshData`): make it on any thread (std::async), then
 /// ctx::add_collision_mesh on the game's, which is quick.
 class collision_mesh_data {
+    friend class ctx;  // hands the data to the engine from a terrain rebuild
     std::unique_ptr<PonkoCollisionMeshData, void (*)(PonkoCollisionMeshData*)> raw_;
     explicit collision_mesh_data(PonkoCollisionMeshData* d) : raw_(d, ponko_collision_mesh_data_free) {
         if (!d) throw std::invalid_argument(ponko_last_error());
@@ -6693,6 +6719,14 @@ class ctx {
         if (owner.hook_error.set.load() || !owner.contact_hook) return;
         try { contact_pair3d pair(raw); owner.contact_hook(pair); }
         catch (...) { owner.hook_error.capture(); }
+    }
+    /// Calls the rebuild from ctx::set_terrain_rebuild. Nothing may unwind
+    /// into the engine: an exception is kept for the game to rethrow.
+    static PonkoCollisionMeshData* terrain_trampoline(const PonkoLoadedWorld* raw, std::uint64_t tile, void* user) noexcept {
+        auto& owner = *static_cast<detail::identity*>(user);
+        if (owner.hook_error.set.load() || !owner.terrain_rebuild) return nullptr;
+        try { return owner.terrain_rebuild(raw, tile); }
+        catch (...) { owner.hook_error.capture(); return nullptr; }
     }
     friend class game;
     /// Replays what after_system queued, now that no query holds the world.
@@ -9998,6 +10032,32 @@ public:
     void clear_contact_hook3d() {
         detail::check(ponko_ctx_set_contact_hook3d(raw_, nullptr, nullptr));
         owner_->contact_hook = nullptr;
+    }
+    /// How terrain tiles are made solid again after a load (Rust
+    /// `Physics3D::set_terrain_rebuild`): a saved world keeps each
+    /// terrain_collider's surface but not its heightfield, so after
+    /// load_world or load_scene `rebuild(world, tile)` is called for each
+    /// tile whose collider has no mesh, and the heightfield it returns goes
+    /// in the tile's collider before the next step. The tile's saved
+    /// components (`world.get<transform3d>(tile)`, or one of your own) say
+    /// which heights it had; std::nullopt leaves it without ground. Set it
+    /// once, in setup; it stays through loads and replaces an earlier one.
+    /// It runs inside the load: it must not use this ctx. An exception it
+    /// throws leaves that tile without ground, stops the game and comes out
+    /// of `run`/`run_headless`.
+    void set_terrain_rebuild(std::function<std::optional<collision_mesh_data>(const loaded_world&, entity)> rebuild) {
+        if (!rebuild) { clear_terrain_rebuild(); return; }
+        detail::identity* owner = owner_.get();
+        owner_->terrain_rebuild = [owner, rebuild = std::move(rebuild)](const PonkoLoadedWorld* raw, std::uint64_t tile) {
+            std::optional<collision_mesh_data> made = rebuild(loaded_world(raw, owner), tile);
+            return made ? made->raw_.release() : nullptr;
+        };
+        detail::check(ponko_ctx_physics3d_set_terrain_rebuild(raw_, terrain_trampoline, owner));
+    }
+    /// Stops making terrain tiles solid again after a load.
+    void clear_terrain_rebuild() {
+        detail::check(ponko_ctx_physics3d_clear_terrain_rebuild(raw_));
+        owner_->terrain_rebuild = nullptr;
     }
     /// The closest collider a ray hits within `max_distance`.
     std::optional<hit3d> cast_ray3d(vec3 origin, vec3 direction, float max_distance, filter3d filter = {}) {

@@ -952,6 +952,20 @@ static std::optional<ponko::point_hit3d> nearest3d(ponko::ctx& ctx, ponko::vec3 
 }
 // ANCHOR_END: physics3d_shape_queries
 
+// ANCHOR: physics3d_terrain_rebuild
+/// The heights of the tile whose corner is at `corner` (here flat).
+static std::vector<float> heights_at(ponko::vec3) { return std::vector<float>(33 * 33, 0.0f); }
+
+static void rebuild_terrain_after_loads(ponko::ctx& ctx) {
+    ctx.set_terrain_rebuild([](const ponko::loaded_world& world, ponko::entity tile)
+                                -> std::optional<ponko::collision_mesh_data> {
+        auto at = world.get<ponko::transform3d>(tile);
+        if (!at) return std::nullopt;
+        return ponko::collision_mesh_data::heightfield(heights_at(at->position), 64);
+    });
+}
+// ANCHOR_END: physics3d_terrain_rebuild
+
 static bool physics3d_snippets() {
     bool saw_ground = false;
     // ANCHOR: physics3d_setup
@@ -968,7 +982,10 @@ static bool physics3d_snippets() {
                 saw_ground = saw_ground && stop.y < 5 && nearest3d(ctx, stop).has_value();
             }
         }, "test")
-        .run_headless(100, build_world3d);
+        .run_headless(100, [](ponko::ctx& ctx) {
+            build_world3d(ctx);
+            rebuild_terrain_after_loads(ctx);
+        });
     const auto me = world.resource<Walker>().id;
     return saw_ground && world.get<ponko::character3d>(me).grounded;
 }
