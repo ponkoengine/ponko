@@ -426,6 +426,12 @@ webrtc = [
 # drawn under the 2D layer (`Transform3D`, `Model`, `ctx.scene3d`).
 # Off: no 3D pass, no glTF loader in the build.
 3d = ["dep:gltf", "dep:half", "dep:rustfft", "image-jpeg", "image-hdr", "image-exr"]
+# WASM SIMD for the water kit's CPU wave spectrum (with `3d`): rustfft's
+# simd128 FFT in web builds, for a WebGL2 sea and buoyancy in the browser
+# (book/src/water.md, "Waves from a spectrum", has the measured gain). The
+# module then needs a browser with fixed-width SIMD (Chrome 91, Firefox 89,
+# Safari 16.4). Does nothing outside wasm32 or without `3d`.
+wasm-simd = ["rustfft?/wasm_simd"]
 
 # Text shaping with harfrust: ligatures and kerning from the font's
 # OpenType tables, complex scripts (Arabic joining, Devanagari), right-to-left
@@ -603,6 +609,10 @@ required-features = ["3d"]
 
 [[example]]
 name = "web_smoke_3d"
+required-features = ["3d"]
+
+[[example]]
+name = "web_spectrum"
 required-features = ["3d"]
 
 [workspace]
