@@ -159,9 +159,13 @@ and one root despawned per update, an update takes 0.41 ms at best, where
 scanning every link took 0.51 ms.
 
 A level with many children (a wide tree, many moving roots) is placed in
-one pass over the attached entities on all cores, each finding its
-parent's new transform in a table; the roots that moved are found on all
-cores too. A deep chain is placed a link at a time.
+one pass over the attached entities, each finding its parent's new
+transform in a table. Each pass of the update (finding the roots that
+moved, placing a level) times its first entities and runs on all cores
+only when the whole pass would take over about 50 µs: the work measured
+decides, not the number of entities. A small update stays on the
+calling thread and never waits for other threads, which on a busy machine
+can take milliseconds to wake. A deep chain is placed a link at a time.
 
 Linking 100,000 new children to 100,000 parents costs 5.5 ms in the first
 update and about 100 allocations in all: a children list keeps its first
