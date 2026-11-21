@@ -173,6 +173,8 @@ pub(crate) enum Resource {
     SmaaScratch,
     /// With a render scale: the finished frame at the scene's size.
     Upscaled,
+    /// The temporal upscaler's accumulated image, of the window's size.
+    UpscaleHistory,
     /// The window or render target the frame ends in.
     Output,
 }
@@ -242,7 +244,7 @@ pub(crate) struct Desc {
 
 impl Resource {
     /// Every resource, in declaration order.
-    pub(crate) const ALL: [Resource; 51] = {
+    pub(crate) const ALL: [Resource; 52] = {
         use Resource::*;
         [
             VisibleDraws,
@@ -295,6 +297,7 @@ impl Resource {
             SmaaInput,
             SmaaScratch,
             Upscaled,
+            UpscaleHistory,
             Output,
         ]
     };
@@ -358,6 +361,7 @@ impl Resource {
             Resource::ReflectionSpread => desc("reflection spread", Frame, F::Spread, One),
             Resource::ReflectionHistory => desc("reflection history", Persistent, F::Hdr, One),
             Resource::TaaHistory => desc("taa history", Persistent, F::Hdr, One),
+            Resource::UpscaleHistory => desc("upscale history", Persistent, F::Hdr, One),
             Resource::OcclusionGrid => desc("occlusion grid", Frame, F::Buffer, One),
             Resource::OcclusionReadback => desc("occlusion readback", Persistent, F::Buffer, One),
             Resource::EffectTargets => desc("effect targets", Persistent, F::Any, One),
@@ -498,6 +502,10 @@ features! {
     /// The reflections' trace reads a coarse depth along its long steps
     /// (`Post::ssr_thin_objects`).
     SSR_THIN = 46, "reflection thin objects";
+    /// The temporal upscaler scales the frame (`Upscaler::Temporal`): the
+    /// frame is jittered and has motion vectors, but TAA's resolve doesn't
+    /// run; the tone mapped frame is accumulated into a window-sized history.
+    TEMPORAL_UPSCALE = 47, "temporal upscale";
 }
 
 impl Features {
@@ -522,6 +530,8 @@ impl Features {
         (Features::SSR_SPREAD, Features::SSR),
         (Features::SSR_THIN, Features::SSR),
         (Features::GI_UPDATE, Features::GI),
+        (Features::TEMPORAL_UPSCALE, Features::UPSCALE),
+        (Features::TEMPORAL_UPSCALE, Features::VELOCITY),
     ];
 
     /// No frame has both.
@@ -529,6 +539,9 @@ impl Features {
         (Features::FXAA, Features::SMAA),
         (Features::FXAA, Features::TAA),
         (Features::SMAA, Features::TAA),
+        (Features::TEMPORAL_UPSCALE, Features::TAA),
+        (Features::TEMPORAL_UPSCALE, Features::FXAA),
+        (Features::TEMPORAL_UPSCALE, Features::SMAA),
     ];
 
     pub(crate) const fn with(self, other: Features) -> Features {
@@ -1437,8 +1450,23 @@ pub(crate) const FRAME_PASSES: [Pass; 8] = [
             ),
             step(
                 "upscale",
-                on(F::UPSCALE),
+                When {
+                    all: F::UPSCALE,
+                    none: F::TEMPORAL_UPSCALE,
+                },
                 &[u(Upscaled, A::Sample), u(Output, A::Color)],
+            ),
+            step(
+                "temporal upscale",
+                on(F::TEMPORAL_UPSCALE),
+                &[
+                    u(Upscaled, A::Sample),
+                    u(UpscaleHistory, A::SamplePrevious),
+                    u(Velocity, A::Sample),
+                    u(SceneDepth, A::SampleMs),
+                    u(UpscaleHistory, A::Color),
+                    u(Output, A::Color),
+                ],
             ),
         ],
     },

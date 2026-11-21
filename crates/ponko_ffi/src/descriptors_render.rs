@@ -12,7 +12,7 @@
 use std::mem::{offset_of, size_of};
 
 use ponko::prelude::{Color, Vec3};
-use ponko::render::{DepthOfField, Post, PostVolume, SplitToning};
+use ponko::render::{DepthOfField, Post, PostVolume, SplitToning, Upscaler};
 
 use crate::ctx::ctx_access;
 use crate::descriptors::{Versioned, read_desc, write_desc};
@@ -41,18 +41,19 @@ macro_rules! assert_header {
 // ---- post-processing --------------------------------------------------------
 
 /// The version of `PonkoPostEx` this header describes.
-pub const PONKO_POST_EX_VERSION: u32 = 2;
+pub const PONKO_POST_EX_VERSION: u32 = 3;
 
 /// What happens to the lit 3D frame on its way to the screen, in a layout
 /// that can grow (Rust `ctx.scene3d.post`): `PonkoPost` plus the fields it
 /// couldn't hold, split toning, depth of field, the sample count and thin
-/// objects in reflections. Read it
+/// objects in reflections and the upscaler. Read it
 /// with `ponko_ctx_post_ex` (set `struct_size` and `version` first), change
 /// it, and give it back with `ponko_ctx_set_post_ex`.
 ///
 /// Version 1: `post`, `split_toning_*`, `dof_*`, `msaa`. Version 2 adds
 /// `ssr_thin_objects`; a version 1 caller leaves it as it is (off, unless
-/// Rust or a newer caller turned it on).
+/// Rust or a newer caller turned it on). Version 3 adds `upscaler` (a
+/// `PonkoUpscaler`); an older caller leaves it as it is.
 /// ```
 /// use ponko_ffi::*;
 /// let mut p: PonkoPostEx = unsafe { std::mem::zeroed() };
@@ -60,6 +61,7 @@ pub const PONKO_POST_EX_VERSION: u32 = 2;
 /// assert_eq!(unsafe { ponko_post_ex_defaults(&mut p) }, PonkoStatus::PONKO_OK);
 /// assert_eq!((p.dof_enabled, p.dof_focus_distance, p.msaa), (false, 10.0, 4));
 /// assert!(!p.ssr_thin_objects);
+/// assert_eq!(p.upscaler, PonkoUpscaler::PONKO_UPSCALER_BILINEAR as u32);
 /// ```
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -101,8 +103,45 @@ pub struct PonkoPostEx {
     /// false; `PONKO_GRAPHICS_QUALITY_ULTRA` turns it on. Only matters where
     /// `post.ssr` is above 0.
     pub ssr_thin_objects: bool,
+    /// Version 3. How a `post.render_scale` below 1 is brought up to the
+    /// window's size, a `PonkoUpscaler` (Rust `Post::upscaler`): stretched
+    /// (`PONKO_UPSCALER_BILINEAR`, the default) or rebuilt over frames from
+    /// the jittered frame and its motion (`PONKO_UPSCALER_TEMPORAL`, which
+    /// needs `post.anti_aliasing` 3, TAA; otherwise it stretches). Another
+    /// value fails with `PONKO_INVALID_ARGUMENT`.
+    pub upscaler: u32,
 }
 assert_header!(PonkoPostEx);
+
+/// How a 3D frame drawn below the window's size is brought up to it (the
+/// `upscaler` of `PonkoPostEx`, Rust `Upscaler`). Passed as a `uint32_t`.
+/// ```
+/// assert_eq!(ponko_ffi::PonkoUpscaler::PONKO_UPSCALER_TEMPORAL as u32, 1);
+/// ```
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
+pub enum PonkoUpscaler {
+    /// One pass stretches the finished frame, sharpened by `post.sharpen`.
+    PONKO_UPSCALER_BILINEAR = 0,
+    /// Temporal upscaling on TAA's history and motion vectors.
+    PONKO_UPSCALER_TEMPORAL = 1,
+}
+
+fn upscaler_to_c(u: Upscaler) -> u32 {
+    (match u {
+        Upscaler::Temporal => PonkoUpscaler::PONKO_UPSCALER_TEMPORAL,
+        _ => PonkoUpscaler::PONKO_UPSCALER_BILINEAR,
+    }) as u32
+}
+
+fn upscaler_from_c(u: u32) -> Result<Upscaler, Failure> {
+    match u {
+        u if u == PonkoUpscaler::PONKO_UPSCALER_BILINEAR as u32 => Ok(Upscaler::Bilinear),
+        u if u == PonkoUpscaler::PONKO_UPSCALER_TEMPORAL as u32 => Ok(Upscaler::Temporal),
+        _ => Err(invalid("upscaler is not a PonkoUpscaler")),
+    }
+}
 
 impl Versioned for PonkoPostEx {
     const NAME: &'static str = "PonkoPostEx";
@@ -111,6 +150,7 @@ impl Versioned for PonkoPostEx {
         match version {
             1 => Some(end_of!(Self, msaa: u32)),
             2 => Some(end_of!(Self, ssr_thin_objects: bool)),
+            3 => Some(end_of!(Self, upscaler: u32)),
             _ => None,
         }
     }
@@ -131,6 +171,7 @@ fn post_ex_of(p: &Post) -> PonkoPostEx {
         dof_blur: p.depth_of_field.blur,
         msaa: p.msaa,
         ssr_thin_objects: p.ssr_thin_objects,
+        upscaler: upscaler_to_c(p.upscaler),
     }
 }
 
@@ -165,6 +206,7 @@ fn post_of_ex(base: Post, ex: &PonkoPostEx) -> Result<Post, Failure> {
     if ex.msaa != 2 && ex.msaa != 4 {
         return Err(invalid("msaa takes 2 or 4 samples"));
     }
+    let upscaler = upscaler_from_c(ex.upscaler)?;
     post.split_toning = SplitToning {
         shadows,
         highlights,
@@ -178,6 +220,7 @@ fn post_of_ex(base: Post, ex: &PonkoPostEx) -> Result<Post, Failure> {
     };
     post.msaa = ex.msaa;
     post.ssr_thin_objects = ex.ssr_thin_objects;
+    post.upscaler = upscaler;
     Ok(post)
 }
 
@@ -210,7 +253,7 @@ pub unsafe extern "C" fn ponko_ctx_post_ex(ctx: *mut PonkoCtx, out_post: *mut Po
 /// Changes the 3D post-processing settings from their versioned form (the
 /// checks of `ponko_ctx_set_post`, plus the split toning tints finite and its
 /// balance -1 to 1, `dof_focus_distance` and `dof_focus_range` not negative,
-/// `dof_blur` 0 to 0.05 and `msaa` 2 or 4). Fields newer than the caller's
+/// `dof_blur` 0 to 0.05, `msaa` 2 or 4 and `upscaler` a `PonkoUpscaler`). Fields newer than the caller's
 /// version keep their current values. Nothing changes when it fails.
 /// # Safety
 /// `ctx` null or live; `post` null or a readable descriptor.
@@ -236,7 +279,7 @@ pub unsafe extern "C" fn ponko_ctx_set_post_ex(ctx: *mut PonkoCtx, post: *const 
 /// colors blend; an effect on at one end and off at the other fades its
 /// strength to nothing at the end where it's off; choices that can't mix
 /// (the tone map, the lookup table, antialiasing, the sample count, the
-/// render scale, ambient occlusion's quality) switch halfway. Both inputs are
+/// render scale, the upscaler, ambient occlusion's quality) switch halfway. Both inputs are
 /// checked like `ponko_ctx_set_post_ex`'s. The result is written to
 /// `out_post` (set its `struct_size` and `version` first), which may be `a`
 /// or `b`.
@@ -841,7 +884,8 @@ mod tests {
             PonkoPostEx::len_of(2),
             Some(offset_of!(PonkoPostEx, ssr_thin_objects) + 1)
         );
-        assert_eq!(PonkoPostEx::len_of(3), None);
+        assert_eq!(PonkoPostEx::len_of(3), Some(offset_of!(PonkoPostEx, upscaler) + 4));
+        assert_eq!(PonkoPostEx::len_of(4), None);
     }
 
     /// A descriptor with its header set for version 1.

@@ -1293,7 +1293,8 @@ using query_filter_ex = PonkoQueryFilterEx;
 /// (split_toning_shadows, split_toning_highlights, split_toning_balance), depth of field (dof_enabled,
 /// dof_focus_distance, dof_focus_range, dof_blur), the sample count (msaa) and, from version 2, thin
 /// objects in screen-space reflections (ssr_thin_objects: whole without TAA, about a millisecond more at
-/// 1920x1080; the ultra preset turns it on).
+/// 1920x1080; the ultra preset turns it on) and, from version 3, the upscaler (a ponko::upscaler; set it
+/// with `static_cast<std::uint32_t>(...)`).
 using post_ex = PonkoPostEx;
 /// HDR display output settings that can grow (PonkoHdrOutput): enabled, paper_white_nits, peak_nits
 /// (0: the display's). Off by default; see hdr_output_defaults, game::hdr_output, ctx::set_hdr_output.
@@ -1301,6 +1302,14 @@ using hdr_output = PonkoHdrOutput;
 /// What the window does with the HDR settings (PonkoHdrStatus): available, active, encoding, reason,
 /// paper white, peak and headroom as used, and what the display reports (0 unknown).
 using hdr_status = PonkoHdrStatus;
+/// How a 3D frame drawn below the window's size (`render_scale` under 1) is brought up to it (the
+/// `upscaler` of post_ex, Rust `Upscaler`).
+enum class upscaler : std::uint32_t {
+    /// One pass stretches the finished frame, sharpened by `sharpen`.
+    bilinear = PONKO_UPSCALER_BILINEAR,
+    /// Temporal upscaling on TAA's history and motion vectors: needs anti_aliasing::taa.
+    temporal = PONKO_UPSCALER_TEMPORAL,
+};
 /// Whether a camera draws `ctx.debug`'s 3D lines and labels (the `debug_draw` of camera3d_ex and
 /// target_camera_ex, Rust `Camera::debug_draw`); set it with `static_cast<std::uint32_t>(...)`.
 enum class camera_debug_draw : std::uint32_t {

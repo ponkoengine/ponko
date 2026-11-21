@@ -1974,6 +1974,17 @@ impl Renderer3D {
         self.targets.as_ref().is_some_and(|t| t.post.scales_output())
     }
 
+    /// Whether the temporal upscaler scales this frame, with its histories
+    /// (test hook).
+    #[cfg(test)]
+    pub(super) fn upscales_temporally(&self) -> bool {
+        self.screen.upscale_on
+            && self
+                .targets
+                .as_ref()
+                .is_some_and(|t| t.upscaler.is_some() && t.taa.is_none())
+    }
+
     /// Draw calls the frame's models take: two per mesh part (depth
     /// prepass and lit), one per mesh part in each shadow cascade, one per
     /// screen effect, and the post chain's own (see `PostChain::draw_calls`).

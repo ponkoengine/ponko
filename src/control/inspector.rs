@@ -377,6 +377,7 @@ pub(super) fn quality_json(s: &crate::render::SceneSettings) -> Value {
         "level": level,
         "render_scale": p.render_scale,
         "sharpen": p.sharpen,
+        "upscaler": format!("{:?}", p.upscaler).to_lowercase(),
         "shadows": l.shadows,
         "shadow_distance": l.shadow_distance,
         "shadow_cascades": l.shadow_cascades,
@@ -982,6 +983,7 @@ mod tests {
         let q = quality_json(&s);
         assert_eq!(q["render_scale"], crate::render::Post::MAX_RENDER_SCALE);
         assert_eq!(q["sharpen"], 0.0);
+        assert_eq!(q["upscaler"], "bilinear");
         assert_eq!(q["light_shadow_atlas"], 4096);
     }
 }

@@ -21,6 +21,11 @@ pub(super) struct ScreenSpace {
     pub(super) taa_supported: bool,
     /// Whether this frame is resolved by it.
     pub(super) taa_on: bool,
+    /// Whether the temporal upscaler (`Upscaler::Temporal`) stands in for
+    /// the resolve this frame: `taa_on` holds too (the frame is jittered and
+    /// has motion vectors), but nothing is resolved at the render size;
+    /// the tone mapped frame is accumulated into a window-sized history.
+    pub(super) upscale_on: bool,
     /// Whether moved models are drawn again for their motion vectors
     /// (temporal antialiasing or temporal ambient occlusion).
     pub(super) velocity_on: bool,
@@ -47,6 +52,7 @@ impl ScreenSpace {
             taa: None,
             taa_supported,
             taa_on: false,
+            upscale_on: false,
             velocity_on: false,
             still_motion: false,
             ao: None,

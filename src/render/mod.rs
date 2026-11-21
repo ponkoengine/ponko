@@ -559,6 +559,8 @@ mod upload_bench;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod upload_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
+mod upscale_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
 mod variant_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod water_render_test;
@@ -608,6 +610,8 @@ mod ray_query_prototype_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod ray_tracing_probe_render_test;
 
+#[cfg(feature = "3d")]
+pub use crate::three::Upscaler;
 #[cfg(feature = "3d")]
 pub use crate::three::{
     AmbientOcclusion, AntiAliasing, BatchCulling, Blend, Compute, ComputePass, Crowd, CrowdAnimation, CrowdClip,

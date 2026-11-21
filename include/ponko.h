@@ -251,7 +251,7 @@
 
 #define PONKO_LIGHTING_EX_VERSION 1
 
-#define PONKO_POST_EX_VERSION 2
+#define PONKO_POST_EX_VERSION 3
 
 #define PONKO_PARTICLE_SETTINGS3D_EX_VERSION 1
 
@@ -1496,6 +1496,11 @@ typedef enum PonkoCrashKind {
   PONKO_CRASH_ERROR = 1,
   PONKO_CRASH_NATIVE = 2,
 } PonkoCrashKind;
+
+typedef enum PonkoUpscaler {
+  PONKO_UPSCALER_BILINEAR = 0,
+  PONKO_UPSCALER_TEMPORAL = 1,
+} PonkoUpscaler;
 
 typedef struct PonkoAccess PonkoAccess;
 
@@ -3498,6 +3503,7 @@ typedef struct PonkoPostEx {
   float dof_blur;
   uint32_t msaa;
   bool ssr_thin_objects;
+  uint32_t upscaler;
 } PonkoPostEx;
 
 typedef struct PonkoPostVolume {

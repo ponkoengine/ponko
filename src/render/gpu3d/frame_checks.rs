@@ -234,6 +234,12 @@ impl Renderer3D {
             Features::VIEW_MODEL_SEE_THROUGH.only_if(self.view_model_see_through_pass()),
             Features::DEPTH_COPY.only_if(targets.depth_copy.is_some()),
             Features::TAA.only_if(self.screen.taa_on && self.screen.taa.is_some() && targets.taa.is_some()),
+            Features::TEMPORAL_UPSCALE.only_if(
+                self.screen.upscale_on
+                    && self.screen.taa.is_some()
+                    && targets.upscaler.is_some()
+                    && targets.post.upscaled().is_some(),
+            ),
             Features::TARGET_EFFECTS.only_if(!self.effects.target_frame.is_empty()),
             Features::EFFECTS.only_if(effects >= 1),
             Features::EFFECTS_BACK.only_if(effects >= 2),
@@ -318,6 +324,10 @@ impl Renderer3D {
                 .and_then(|a| a.images().1)
                 .map(|history| view(Resource::AoHistory, history)),
             targets.taa.as_ref().map(|t| view(Resource::TaaHistory, t.history())),
+            targets
+                .upscaler
+                .as_ref()
+                .map(|u| view(Resource::UpscaleHistory, u.history())),
             targets.post.ldr().map(|l| view(Resource::Ldr, l)),
             targets.post.upscaled().map(|u| view(Resource::Upscaled, u)),
             self.shadows.layers.first().map(|l| view(Resource::SunShadowMap, l)),

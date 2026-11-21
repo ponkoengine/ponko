@@ -5,9 +5,9 @@
 //! The resolve reads an *input* image (the frame as the 3D passes resolved
 //! it), the history and the motion vectors, and writes an *output*: the new
 //! history and the frame post processing goes on with. Input and output sizes
-//! are separate numbers throughout, so a lower-resolution input can later
-//! be resolved up to the output's size; for now the renderer uses one size
-//! for both.
+//! are separate numbers throughout: the resolve uses one size for both, and
+//! the temporal upscaler (`Upscaler::Temporal`, see [`UpscaleTargets`])
+//! accumulates a lower-resolution input into a history of the output's size.
 
 use crate::render::traffic::{NewBuffer, Upload};
 use glam::Mat4;
@@ -20,6 +20,15 @@ pub(super) const JITTER_SAMPLES: u32 = 16;
 /// Object-only backward UV motion, added to depth-derived camera motion.
 /// Zero for static surfaces; MSAA resolves coverage without a validity channel.
 pub(super) const VELOCITY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg16Float;
+
+/// How many jitter positions a temporal upscale from `scale` (the render
+/// size over the output's, below 1) visits before it repeats: about eight
+/// per output pixel, as an input pixel covers `1 / scale²` of them, and never
+/// fewer than plain TAA's.
+pub(super) fn jitter_phases(scale: f32) -> u32 {
+    let scale = if scale.is_finite() { scale.clamp(0.25, 1.0) } else { 1.0 };
+    ((8.0 / (scale * scale)).ceil() as u32).clamp(JITTER_SAMPLES, 128)
+}
 
 /// The `index`th number of the Halton sequence in `base`, in 0..1.
 pub(super) fn halton(mut index: u32, base: u32) -> f32 {
@@ -35,7 +44,12 @@ pub(super) fn halton(mut index: u32, base: u32) -> f32 {
 /// Frame `frame`'s jitter in pixels, each in -0.5..0.5: Halton (2, 3), the
 /// sequence's zeroth element skipped.
 pub(super) fn jitter(frame: u32) -> [f32; 2] {
-    let i = frame % JITTER_SAMPLES + 1;
+    jitter_of(frame, JITTER_SAMPLES)
+}
+
+/// [`jitter`] with a sequence of `phases` positions.
+pub(super) fn jitter_of(frame: u32, phases: u32) -> [f32; 2] {
+    let i = frame % phases.max(1) + 1;
     [halton(i, 2) - 0.5, halton(i, 3) - 0.5]
 }
 
@@ -60,6 +74,9 @@ struct TaaUniform {
     input_size: [f32; 4],
     output_size: [f32; 4],
     params: [f32; 4],
+    /// The temporal upscaler's: x, y the jitter in input pixels; z one over
+    /// the weight a frame's samples give an output pixel on average.
+    upscale: [f32; 4],
 }
 
 /// One frame's resolve settings.
@@ -71,6 +88,9 @@ pub(super) struct Resolve {
     pub previous: Mat4,
     pub input_size: (u32, u32),
     pub output_size: (u32, u32),
+    /// The jitter the frame was drawn with, in input pixels (read by the
+    /// temporal upscaler only).
+    pub jitter: [f32; 2],
     pub sharpness: f32,
     /// Ignore the history (first frame, camera cut, resize).
     pub reset: bool,
@@ -78,6 +98,12 @@ pub(super) struct Resolve {
 
 /// How much of a still frame is blended into the history each frame.
 const STILL_BLEND: f32 = 0.1;
+
+/// The integral of the temporal upscaler's sample weight,
+/// `exp(-2.29 d²)` over the plane (d in output pixels): pi / 2.29. A
+/// frame's samples, one per input pixel, give an output pixel this weight
+/// times the input pixels per output pixel on average.
+const SAMPLE_WEIGHT: f32 = std::f32::consts::PI / 2.29;
 
 /// The resolve pass and its pipeline.
 pub(super) struct Taa {
@@ -87,6 +113,9 @@ pub(super) struct Taa {
     /// What `uniform` holds: only what changed is uploaded.
     uniform_mirror: crate::render::traffic::Mirror,
     sampler: wgpu::Sampler,
+    /// The temporal upscaler's pipeline and the output format it was made
+    /// for: made the first time it is on.
+    upscale: Option<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
 }
 
 /// The images temporal antialiasing needs, as big as the window.
@@ -104,6 +133,32 @@ impl TaaTargets {
     /// declare.
     pub fn history(&self) -> &wgpu::TextureView {
         &self.history[0]
+    }
+}
+
+/// The temporal upscaler's images (`Upscaler::Temporal`): two histories of
+/// the output's size, each read by one bind group that also reads the
+/// tone mapped frame at the render size, the motion vectors and the depth.
+pub(super) struct UpscaleTargets {
+    history: [wgpu::TextureView; 2],
+    groups: [wgpu::BindGroup; 2],
+    /// The output's size.
+    pub size: (u32, u32),
+}
+
+impl UpscaleTargets {
+    /// A history image: for checking it against what the frame's passes
+    /// declare.
+    pub fn history(&self) -> &wgpu::TextureView {
+        &self.history[0]
+    }
+
+    /// Counts both histories as frame targets (see `memory.rs`).
+    pub fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
+        use crate::render::memory::MemoryClass as C;
+        for view in &self.history {
+            t.view(C::FrameTargets, "upscale history", view);
+        }
     }
 }
 
@@ -244,52 +299,90 @@ impl Taa {
             uniform,
             uniform_mirror: Default::default(),
             sampler,
+            upscale: None,
         }
     }
 
-    /// Images for a `size` window, reading `depth` (the multisampled depth
-    /// the frame was drawn with).
-    pub fn targets(
-        &self,
-        device: &wgpu::Device,
-        size: (u32, u32),
-        velocity: &wgpu::TextureView,
-        depth: &wgpu::TextureView,
-    ) -> TaaTargets {
-        let make = |label, format, samples, usage| {
-            device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(label),
-                size: wgpu::Extent3d {
-                    width: size.0,
-                    height: size.1,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: samples,
-                dimension: wgpu::TextureDimension::D2,
+    /// Makes the temporal upscaler's pipeline for an output in `format`,
+    /// the first time it is on (or the format changed).
+    pub fn prepare_upscale(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
+        if self.upscale.as_ref().is_some_and(|(f, _)| *f == format) {
+            return;
+        }
+        let shader = device.create_shader_module(wgpu::include_wgsl!("taa.wgsl"));
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("temporal upscale pipeline layout"),
+            bind_group_layouts: &[Some(&self.layout)],
+            immediate_size: 0,
+        });
+        let target = |format| {
+            Some(wgpu::ColorTargetState {
                 format,
-                usage,
-                view_formats: &[],
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
             })
         };
-        let render = wgpu::TextureUsages::RENDER_ATTACHMENT;
-        let bound = render | wgpu::TextureUsages::TEXTURE_BINDING;
-        // The split transparent pass copies it for the surfaces and soft
-        // particles that read the scene behind them.
-        let input = make("TAA input", HDR_FORMAT, 1, bound | wgpu::TextureUsages::COPY_SRC);
-        let input_view = input.create_view(&Default::default());
-        let history = [
-            make("TAA history 0", HDR_FORMAT, 1, bound).create_view(&Default::default()),
-            make("TAA history 1", HDR_FORMAT, 1, bound).create_view(&Default::default()),
-        ];
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("temporal upscale"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_full"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_upscale"),
+                compilation_options: Default::default(),
+                targets: &[target(HDR_FORMAT), target(format)],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        self.upscale = Some((format, pipeline));
+    }
+
+    /// Two histories of `size` (`label`), and a bind group reading each
+    /// along with `input`, `velocity` and `depth`.
+    fn histories(
+        &self,
+        device: &wgpu::Device,
+        (label, size): (&'static str, (u32, u32)),
+        input: &wgpu::TextureView,
+        velocity: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+    ) -> ([wgpu::TextureView; 2], [wgpu::BindGroup; 2]) {
+        let history = || {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d {
+                        width: size.0,
+                        height: size.1,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: HDR_FORMAT,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                })
+                .create_view(&Default::default())
+        };
+        let history = [history(), history()];
         let group = |history: &wgpu::TextureView| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("TAA"),
+                label: Some(label),
                 layout: &self.layout,
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&input_view),
+                        resource: wgpu::BindingResource::TextureView(input),
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
@@ -315,6 +408,76 @@ impl Taa {
             })
         };
         let groups = [group(&history[0]), group(&history[1])];
+        (history, groups)
+    }
+
+    /// The temporal upscaler's histories for an output of `size`, reading
+    /// `input` (the tone mapped frame at the render size), and the render
+    /// size's `velocity` and multisampled `depth`.
+    pub fn upscale_targets(
+        &self,
+        device: &wgpu::Device,
+        size: (u32, u32),
+        input: &wgpu::TextureView,
+        velocity: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+    ) -> UpscaleTargets {
+        let (history, groups) = self.histories(device, ("upscale history", size), input, velocity, depth);
+        UpscaleTargets { history, groups, size }
+    }
+
+    /// Accumulates the input and `read` history of `targets` into history
+    /// `1 - read` and `output` (the window's image), with the pipeline
+    /// [`prepare_upscale`](Self::prepare_upscale) made.
+    pub fn draw_upscale(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        targets: &UpscaleTargets,
+        read: usize,
+        output: &wgpu::TextureView,
+        timestamps: Option<wgpu::RenderPassTimestampWrites<'_>>,
+    ) {
+        let Some((_, pipeline)) = &self.upscale else {
+            return;
+        };
+        resolve_pass(
+            encoder,
+            "temporal upscale",
+            (pipeline, &targets.groups[read]),
+            [&targets.history[1 - read], output],
+            timestamps,
+        );
+    }
+
+    /// Images for a `size` window, reading `depth` (the multisampled depth
+    /// the frame was drawn with).
+    pub fn targets(
+        &self,
+        device: &wgpu::Device,
+        size: (u32, u32),
+        velocity: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+    ) -> TaaTargets {
+        // The split transparent pass copies it for the surfaces and soft
+        // particles that read the scene behind them.
+        let input = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("TAA input"),
+            size: wgpu::Extent3d {
+                width: size.0,
+                height: size.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: HDR_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let input_view = input.create_view(&Default::default());
+        let (history, groups) = self.histories(device, ("TAA history", size), &input_view, velocity, depth);
         TaaTargets {
             input,
             input_view,
@@ -345,6 +508,18 @@ impl Taa {
                     f32::from(resolve.reset),
                     0.0,
                 ],
+                upscale: {
+                    // An input pixel covers 1 / scale² output pixels; the
+                    // samples of one frame weigh about `SAMPLE_WEIGHT`
+                    // times that on an output pixel.
+                    let scale = resolve.input_size.0 as f32 / resolve.output_size.0.max(1) as f32;
+                    [
+                        resolve.jitter[0],
+                        resolve.jitter[1],
+                        1.0 / (SAMPLE_WEIGHT * scale * scale).max(1e-3),
+                        0.0,
+                    ]
+                },
             }),
         );
     }
@@ -359,29 +534,47 @@ impl Taa {
         hdr: &wgpu::TextureView,
         timestamps: Option<wgpu::RenderPassTimestampWrites<'_>>,
     ) {
-        let attachment = |view| {
-            Some(wgpu::RenderPassColorAttachment {
-                view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-            })
-        };
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("TAA resolve"),
-            color_attachments: &[attachment(&targets.history[1 - read]), attachment(hdr)],
-            depth_stencil_attachment: None,
-            timestamp_writes: timestamps,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &targets.groups[read], &[]);
-        pass.draw(0..3, 0..1);
+        resolve_pass(
+            encoder,
+            "TAA resolve",
+            (&self.pipeline, &targets.groups[read]),
+            [&targets.history[1 - read], hdr],
+            timestamps,
+        );
     }
+}
+
+/// A full-screen pass of `pipeline` reading `group`, writing the new
+/// history and the frame.
+fn resolve_pass(
+    encoder: &mut wgpu::CommandEncoder,
+    label: &'static str,
+    (pipeline, group): (&wgpu::RenderPipeline, &wgpu::BindGroup),
+    [history, frame]: [&wgpu::TextureView; 2],
+    timestamps: Option<wgpu::RenderPassTimestampWrites<'_>>,
+) {
+    let attachment = |view| {
+        Some(wgpu::RenderPassColorAttachment {
+            view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                store: wgpu::StoreOp::Store,
+            },
+        })
+    };
+    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some(label),
+        color_attachments: &[attachment(history), attachment(frame)],
+        depth_stencil_attachment: None,
+        timestamp_writes: timestamps,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
+    pass.set_pipeline(pipeline);
+    pass.set_bind_group(0, group, &[]);
+    pass.draw(0..3, 0..1);
 }
 
 #[cfg(test)]
