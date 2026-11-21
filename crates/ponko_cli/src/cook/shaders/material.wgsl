@@ -613,6 +613,28 @@ fn fs_main_fade(in: VertexOut, @builtin(front_facing) front: bool) -> @location(
     return opaque_color(in, front, dp_x, dp_y);
 }
 
+// The view model's cut-out held items without multisampling: in no
+// prepass, so they cut their own holes and write their own depth.
+@fragment
+fn fs_main_cutout(in: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    let dp_x = dpdx(in.world);
+    let dp_y = dpdy(in.world);
+    if surface_at(in, front).alpha < 0.5 {
+        discard;
+    }
+    return opaque_color(in, front, dp_x, dp_y);
+}
+
+@fragment
+fn fs_main_cutout_fade(in: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    let dp_x = dpdx(in.world);
+    let dp_y = dpdy(in.world);
+    if !fade_keeps(in.fade, in.clip.xy) || surface_at(in, front).alpha < 0.5 {
+        discard;
+    }
+    return opaque_color(in, front, dp_x, dp_y);
+}
+
 fn opaque_color(in: VertexOut, front: bool, dp_x: vec3<f32>, dp_y: vec3<f32>) -> vec4<f32> {
     var s = surface_at(in, front);
     var geometric = normalize(in.normal);
@@ -695,7 +717,8 @@ struct VelocityIn {
 struct VelocityOut {
     // The same position as `vs_main`, so depth matches exactly.
     @builtin(position) @invariant clip: vec4<f32>,
-    // Previous camera, with previous and current object transforms.
+    // Previous camera, with the previous object transforms (`before`) and
+    // as the depth's reprojection sees the current ones (`rigid`).
     @location(0) before: vec4<f32>,
     @location(1) rigid: vec4<f32>,
 };
@@ -724,7 +747,7 @@ fn vs_velocity(in: VelocityIn) -> VelocityOut {
     let before = world_vertex_before(b);
     var out: VelocityOut;
     out.clip = frame.view_proj * vec4<f32>(now.position, 1.0);
-    out.rigid = frame.previous_view_proj * vec4<f32>(now.position, 1.0);
+    out.rigid = frame.reprojection * vec4<f32>(now.position, 1.0);
     out.before = frame.previous_view_proj * vec4<f32>(before.position, 1.0);
     return out;
 }
@@ -750,7 +773,7 @@ fn vs_velocity_still(in: VertexIn) -> VelocityOut {
     let before = world_vertex_before(in);
     var out: VelocityOut;
     out.clip = frame.view_proj * vec4<f32>(now.position, 1.0);
-    out.rigid = frame.previous_view_proj * vec4<f32>(now.position, 1.0);
+    out.rigid = frame.reprojection * vec4<f32>(now.position, 1.0);
     out.before = frame.previous_view_proj * vec4<f32>(before.position, 1.0);
     return out;
 }
