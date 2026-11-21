@@ -51,7 +51,7 @@ src/hierarchy.rs | read | tests/hierarchy.rs::a_body_with_an_arm_and_a_hand | mi
 src/hierarchy.rs | write | tests/hierarchy.rs::a_body_with_an_arm_and_a_hand | miri
 
 # The parallel compare of the retained 3D frame.
-src/three/retained.rs | shared | src/three/extraction_test.rs::on_several_cores::a_moved_model_rewrites_its_own_instances_only | miri(3d)
+src/three/retained.rs | shared | src/three/retained/shared_test.rs::instances_written_as_shared_words_from_several_threads_are_all_kept | miri(3d)
 
 # A `Ui` can live in a component.
 src/ui/retained.rs | impl Send for Ui | tests/ui_threads.rs::a_ui_moved_to_another_thread_keeps_its_tree_and_lays_out_there | miri

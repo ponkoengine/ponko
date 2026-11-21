@@ -179,7 +179,10 @@ mod tests {
             p.write_bytes(7, 64);
             let p = a.realloc(p, layout, 128);
             assert!(!p.is_null());
-            assert!(std::slice::from_raw_parts(p, 64).iter().all(|&b| b == 7), "reallocation keeps the bytes");
+            assert!(
+                std::slice::from_raw_parts(p, 64).iter().all(|&b| b == 7),
+                "reallocation keeps the bytes"
+            );
             a.dealloc(p, Layout::from_size_align(128, 16).unwrap());
             let z = a.alloc_zeroed(layout);
             assert!(std::slice::from_raw_parts(z, 64).iter().all(|&b| b == 0));
@@ -187,7 +190,10 @@ mod tests {
         }
         let after = alloc_counts();
         crate::scope::disable();
-        assert!(after.count >= before.count + 3, "alloc, realloc and alloc_zeroed are counted");
+        assert!(
+            after.count >= before.count + 3,
+            "alloc, realloc and alloc_zeroed are counted"
+        );
         assert!(after.bytes >= before.bytes + 64 + 128 + 64);
     }
 
