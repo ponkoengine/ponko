@@ -12,8 +12,12 @@
 
 mod bvh;
 mod pack;
+mod sources;
 mod trace;
 mod uv;
+
+pub(crate) use sources::BakeSources;
+pub use sources::{GltfBake, Unbaked, WorldBake};
 
 use glam::{Mat3, Mat4, UVec3, Vec2, Vec3};
 use rayon::prelude::*;
@@ -122,6 +126,10 @@ pub struct BakeModel {
     normals: Vec<Vec3>,
     uvs1: Vec<Vec2>,
     indices: Vec<u32>,
+    /// Index ranges (of `indices`) drawn with materials of their own: a
+    /// mesh of several parts, from a world or a glTF scene. Triangles in
+    /// none take the model's own.
+    parts: Vec<(std::ops::Range<u32>, PartMaterial)>,
     /// Its color (sRGB, as [`MaterialDesc::color`]): how much light it
     /// bounces. Textures aren't read: for a textured surface, set it to
     /// the texture's average color times the material's. Default white.
@@ -157,6 +165,7 @@ impl BakeModel {
                 .collect(),
             uvs1: mesh.uvs1.clone(),
             indices: mesh.indices.clone(),
+            parts: Vec::new(),
             albedo: Color::WHITE,
             emissive: Color::rgb(0.0, 0.0, 0.0),
             double_sided: false,
@@ -182,6 +191,20 @@ impl BakeModel {
         double_sided: bool => with_double_sided;
         /// Sets [`lightmapped`](Self::lightmapped).
         lightmapped: bool => with_lightmapped;
+    }
+
+    /// Draws the triangles of `indices` (a range of the mesh's indices)
+    /// with `material` instead of the model's own.
+    pub(crate) fn with_part(mut self, indices: std::ops::Range<u32>, material: PartMaterial) -> Self {
+        self.parts.push((indices, material));
+        self
+    }
+
+    /// The material of the model's `k`th triangle: its part's, else the
+    /// model's own (`None`).
+    fn part_of(&self, k: usize) -> Option<usize> {
+        let first = (k * 3) as u32;
+        self.parts.iter().position(|(range, _)| range.contains(&first))
     }
 
     fn triangles(&self) -> impl Iterator<Item = [usize; 3]> + '_ {
@@ -210,6 +233,30 @@ impl BakeModel {
                 ((u[b] - u[a]).perp_dot(u[c] - u[a]) * 0.5).abs()
             })
             .sum()
+    }
+}
+
+/// What a part of a [`BakeModel`] is made of (see `BakeModel::with_part`),
+/// in linear color.
+#[derive(Debug, Clone)]
+pub(crate) struct PartMaterial {
+    pub albedo: Vec3,
+    pub emissive: Vec3,
+    pub double_sided: bool,
+}
+
+impl PartMaterial {
+    /// `material` drawn tinted with `tint` (sRGB, as a model's color).
+    pub(crate) fn of(material: &MaterialDesc, tint: Color) -> Self {
+        let rgb = |c: Color| {
+            let [r, g, b, _] = linear(c);
+            Vec3::new(r, g, b)
+        };
+        Self {
+            albedo: rgb(material.color) * rgb(tint),
+            emissive: rgb(material.emissive),
+            double_sided: material.double_sided,
+        }
     }
 }
 
@@ -1100,14 +1147,22 @@ fn trace_scene(scene: &LightBakeScene, bounces: u32) -> (TraceScene, Vec<Tri>, V
     let mut corner_normals = Vec::new();
     let mut surfaces = Vec::with_capacity(scene.models.len());
     let mut first_tri = Vec::with_capacity(scene.models.len());
-    for (m, model) in scene.models.iter().enumerate() {
+    for model in &scene.models {
+        let base = surfaces.len() as u32;
         surfaces.push(Surface {
             albedo: rgb(model.albedo).clamp(Vec3::ZERO, Vec3::ONE),
             emissive: rgb(model.emissive).max(Vec3::ZERO),
             double_sided: model.double_sided,
         });
+        for (_, part) in &model.parts {
+            surfaces.push(Surface {
+                albedo: part.albedo.clamp(Vec3::ZERO, Vec3::ONE),
+                emissive: part.emissive.max(Vec3::ZERO),
+                double_sided: part.double_sided,
+            });
+        }
         first_tri.push(tris.len());
-        for [a, b, c] in model.triangles() {
+        for (k, [a, b, c]) in model.triangles().enumerate() {
             let p = &model.positions;
             let tri = Tri::new(p[a], p[b], p[c]);
             // Degenerate triangles stay, so indices line up with the
@@ -1119,7 +1174,7 @@ fn trace_scene(scene: &LightBakeScene, bounces: u32) -> (TraceScene, Vec<Tri>, V
                 [n[a], n[b], n[c]]
             });
             tris.push(tri);
-            tri_surface.push(m as u32);
+            tri_surface.push(base + model.part_of(k).map_or(0, |p| p as u32 + 1));
         }
     }
     let trace = TraceScene::new(

@@ -156,6 +156,9 @@ impl Graphics {
         {
             renderer.create_material(id, &gpu);
         }
+        if let Some(sources) = self.assets3d.bake_sources.as_mut() {
+            sources.material_set(id, &desc);
+        }
         Ok(Material { id })
     }
 
@@ -182,6 +185,9 @@ impl Graphics {
         self.check_material(&desc).unwrap_or_else(|e| panic!("{e}"));
         if !self.assets3d.materials_live.contains(material.id) {
             return;
+        }
+        if let Some(sources) = self.assets3d.bake_sources.as_mut() {
+            sources.material_set(material.id, &desc);
         }
         let gpu = self.gpu_material(&desc);
         if let Some(renderer) = self.renderer.as_mut()
@@ -1461,6 +1467,9 @@ impl Graphics {
             self.assets3d.bounds[slot as usize] = data.bounds();
         }
         self.asset_ledger.made(crate::inventory::AssetClass::Mesh, id);
+        if let Some(sources) = self.assets3d.bake_sources.as_mut() {
+            sources.mesh_made(id, data, parts);
+        }
         let mesh = Mesh { id };
         let slot = mesh.slot() as usize;
         if self.assets3d.mesh_bytes.len() <= slot {
@@ -1568,6 +1577,9 @@ impl Graphics {
         }
         self.release_resident_mesh_id(mesh.id, true);
         self.asset_ledger.freed(crate::inventory::AssetClass::Mesh, mesh.id);
+        if let Some(sources) = self.assets3d.bake_sources.as_mut() {
+            sources.mesh_freed(mesh.id);
+        }
         self.assets3d.bounds[slot] = (Vec3::ZERO, -1.0);
         if let Some(bytes) = self.assets3d.mesh_bytes.get_mut(slot) {
             *bytes = 0;

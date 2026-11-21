@@ -455,7 +455,7 @@ fn spawn_name(n: &GltfSceneNode) -> &str {
 /// The levels of the level-of-detail group `group`: its children with
 /// meshes, by name. `nodes` gives each node's parent, name and whether it
 /// has a mesh.
-fn lod_levels<'a>(nodes: impl Iterator<Item = (Option<usize>, &'a str, bool)>, group: usize) -> Vec<usize> {
+pub(crate) fn lod_levels<'a>(nodes: impl Iterator<Item = (Option<usize>, &'a str, bool)>, group: usize) -> Vec<usize> {
     let mut levels: Vec<(usize, &str)> = nodes
         .enumerate()
         .filter(|(_, (parent, _, mesh))| *parent == Some(group) && *mesh)
