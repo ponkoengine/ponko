@@ -470,10 +470,10 @@ impl Text {
         })
     }
 
-    /// Where to end the first line of `line` wrapped at `width` pixels:
+    /// Where to end the first line of `line` wrapped in `room` (pixels):
     /// the last Unicode line-break opportunity (UAX #14) that fits, with
     /// trailing spaces left out; inside the first word if none does.
-    pub(super) fn wrap_end_shaped(&mut self, line: &str, font: Font, px: f32, width: f32) -> usize {
+    pub(super) fn wrap_end_shaped(&mut self, line: &str, font: Font, px: f32, room: &mut crate::text::WrapRoom) -> usize {
         self.with_shaped(line, font, |_, s| {
             // Width of the logical prefix that ends at byte `end`.
             let prefix = |end: usize| -> f32 {
@@ -490,7 +490,7 @@ impl Text {
                 if end == 0 {
                     continue;
                 }
-                if prefix(end) > width {
+                if room.exceeds(prefix(end)) {
                     break;
                 }
                 best = Some(if at == line.len() { at } else { end });
@@ -500,7 +500,7 @@ impl Text {
                 // at least one character.
                 let mut end = line.chars().next().map_or(0, char::len_utf8);
                 for (i, c) in line.char_indices().skip(1) {
-                    if prefix(i + c.len_utf8()) > width {
+                    if room.exceeds(prefix(i + c.len_utf8())) {
                         break;
                     }
                     end = i + c.len_utf8();
@@ -695,12 +695,12 @@ mod tests {
         t.set_fallbacks(Font::DEFAULT, &[jp]);
         let text = "日本語のテキスト";
         let full = t.layout(text, Font::DEFAULT, 20.0, false).x;
-        let end = t.wrap_end_shaped(text, Font::DEFAULT, 20.0, full * 0.5);
+        let end = t.wrap_end_shaped(text, Font::DEFAULT, 20.0, &mut crate::text::WrapRoom::new(full * 0.5));
         // No spaces, yet it breaks between characters, about half way.
         assert!(end > 0 && end < text.len() && text.is_char_boundary(end), "{end}");
         let words = "été hiver";
         let full = t.layout(words, Font::DEFAULT, 20.0, false).x;
-        assert_eq!(t.wrap_end_shaped(words, Font::DEFAULT, 20.0, full - 1.0), "été".len());
+        assert_eq!(t.wrap_end_shaped(words, Font::DEFAULT, 20.0, &mut crate::text::WrapRoom::new(full - 1.0)), "été".len());
     }
 
     #[test]

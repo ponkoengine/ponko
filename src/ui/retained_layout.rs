@@ -5,7 +5,7 @@
 //! widget or rich markup changed, or, for every node, the window size,
 //! the scale or the fonts did. A root with nothing dirty keeps its layout.
 use super::retained::{Node, Ui, UiWidget};
-use crate::text::Font;
+use crate::text::{Font, WrapRoom};
 use glam::Vec2;
 
 /// What a node's text was measured from in the last layout.
@@ -44,22 +44,23 @@ pub(super) struct LayoutCache {
     pub sizes: Vec<TextSizes>,
 }
 
-/// How many widths a wrapped text keeps its height for: a row resized
-/// back and forth, or Taffy asking for its smallest and its largest size,
-/// finds them kept.
+/// How many ranges of widths a wrapped text keeps its height for: a row
+/// resized back and forth, or Taffy asking for its smallest and its
+/// largest size, finds them kept.
 const WIDTHS: usize = 4;
 
 /// A node's text as measured, in layout units: its size unwrapped, its
-/// narrowest width, its height wrapped at each of the last few widths.
+/// narrowest width, its height wrapped at each of the last few ranges of
+/// widths that wrap it the same way.
 #[derive(Default, Clone)]
 pub(super) struct TextSizes {
     /// Its width and height on unwrapped lines.
     natural: Option<Vec2>,
     /// Wrapped: its widest word or image, as narrow as it can wrap.
     min_content: Option<f32>,
-    /// Wrapped: its height at each width (`f32::to_bits`), the oldest
-    /// replaced first.
-    wrapped: [(u32, f32); WIDTHS],
+    /// Wrapped: its height for each range of widths that wraps it one
+    /// way, the oldest replaced first.
+    wrapped: [(WrapRoom, f32); WIDTHS],
     /// How many of `wrapped` are measured.
     len: u8,
     /// The one replaced next once all are.
@@ -77,15 +78,17 @@ impl TextSizes {
         *self.min_content.get_or_insert_with(measure)
     }
 
-    /// Its height wrapped at `width`, measured with `measure` unless this
-    /// width is one of the last few it was measured at.
-    pub(super) fn wrapped(&mut self, width: f32, measure: impl FnOnce() -> f32) -> f32 {
-        let bits = width.to_bits();
+    /// Its height wrapped at `width`, measured with `measure` (given the
+    /// room to wrap in, and narrowing it to the widths that wrap the same
+    /// way) unless `width` wraps it as one of the last few it was measured
+    /// at did. `width` is in the units its wrapping compares widths in.
+    pub(super) fn wrapped(&mut self, width: f32, measure: impl FnOnce(&mut WrapRoom) -> f32) -> f32 {
         let len = usize::from(self.len);
-        if let Some(&(_, height)) = self.wrapped[..len].iter().find(|(w, _)| *w == bits) {
+        if let Some(&(_, height)) = self.wrapped[..len].iter().find(|(room, _)| room.holds(width)) {
             return height;
         }
-        let height = measure();
+        let mut room = WrapRoom::new(width);
+        let height = measure(&mut room);
         let at = if len < WIDTHS {
             self.len += 1;
             len
@@ -94,7 +97,7 @@ impl TextSizes {
             self.next = ((at + 1) % WIDTHS) as u8;
             at
         };
-        self.wrapped[at] = (bits, height);
+        self.wrapped[at] = (room, height);
         height
     }
 }
