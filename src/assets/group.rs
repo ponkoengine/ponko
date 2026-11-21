@@ -42,9 +42,99 @@ enum Kind {
     Sound,
     /// The game's own loader; its value is taken with `take_group_value`.
     Value(Decoder),
+    /// The game's own loader, a slice at a time ([`SliceLoader`]).
+    Sliced(SliceStarter),
 }
 
 type Decoder = Arc<dyn Fn(&[u8]) -> Result<Box<dyn Any + Send>, Error> + Send + Sync>;
+type SliceStarter = Arc<dyn Fn(Vec<u8>) -> Result<Box<dyn AnySlices>, Error> + Send + Sync>;
+
+/// A loader that does its work a bounded piece at a time, for
+/// [`AssetGroup::with_sliced`]: parsing a large level file some records a
+/// call, building a navigation grid a few rows a call. Where there are no
+/// worker threads (a browser build without threads), the group step calls
+/// [`step`](Self::step) while its [frame budget](Assets::set_group_frame_budget)
+/// lasts and goes on in the next frame, so one large file never takes one
+/// long frame; with workers, a worker calls it until it is done.
+///
+/// Keep each `step` short (well under a millisecond on the slowest device
+/// you target): the budget is checked between calls, so one long call
+/// still takes its whole time.
+///
+/// ```
+/// use ponko::assets::{AssetGroup, GroupState, MemorySource, SliceLoader};
+/// # use ponko::prelude::*;
+/// /// Sums a file of numbers, one line per line, a thousand lines a call.
+/// struct Sum {
+///     text: String,
+///     at: usize,
+///     total: i64,
+/// }
+///
+/// impl SliceLoader for Sum {
+///     type Value = i64;
+///     fn step(&mut self) -> Result<bool, Error> {
+///         for _ in 0..1000 {
+///             let Some(line) = self.text[self.at..].lines().next() else { return Ok(true) };
+///             self.at += line.len() + 1;
+///             self.total += line.trim().parse::<i64>().map_err(|e| Error::new(ErrorKind::Decode, e.to_string()))?;
+///             if self.at >= self.text.len() {
+///                 return Ok(true);
+///             }
+///         }
+///         Ok(false)
+///     }
+///     fn finish(self) -> i64 {
+///         self.total
+///     }
+/// }
+///
+/// Game::new("t", 1, 1).run_headless(0, |ctx| {
+///     ctx.assets.add_background_source(MemorySource::new("data").with("numbers.txt", "1\n2\n3\n"));
+///     let group = AssetGroup::new("data").with_sliced("numbers.txt", |bytes| {
+///         let text = String::from_utf8(bytes).map_err(|e| Error::new(ErrorKind::Decode, e.to_string()))?;
+///         Ok(Sum { text, at: 0, total: 0 })
+///     });
+///     let id = ctx.assets.start_group(group);
+///     while ctx.assets.group_state(id) == GroupState::Loading {
+///         ctx.pump_asset_groups(); // the engine does this once per frame
+///     }
+///     assert_eq!(ctx.assets.take_group_value::<i64>(id, "numbers.txt"), Some(6));
+/// });
+/// ```
+pub trait SliceLoader: Send + 'static {
+    /// What it makes, taken with [`Assets::take_group_value`].
+    type Value: Send + 'static;
+
+    /// Does the next bounded piece of the work; `Ok(true)` once it is all
+    /// done (then [`finish`](Self::finish) is called), `Ok(false)` to be
+    /// called again, an [`Error`] to fail the group.
+    ///
+    /// # Errors
+    ///
+    /// What the loader found wrong with the file, usually
+    /// [`ErrorKind::Decode`]: the group fails with it, naming the asset.
+    fn step(&mut self) -> Result<bool, Error>;
+
+    /// The value, once [`step`](Self::step) returned `Ok(true)`.
+    fn finish(self) -> Self::Value;
+}
+
+/// A [`SliceLoader`] of any value.
+trait AnySlices: Send {
+    fn step(&mut self) -> Result<bool, Error>;
+    fn finish(self: Box<Self>) -> Box<dyn Any + Send>;
+}
+
+impl<L: SliceLoader> AnySlices for L {
+    fn step(&mut self) -> Result<bool, Error> {
+        SliceLoader::step(self)
+    }
+
+    fn finish(self: Box<Self>) -> Box<dyn Any + Send> {
+        Box::new(SliceLoader::finish(*self))
+    }
+}
 
 /// A set of assets to load together in the background: a level's textures,
 /// sounds, meshes and data files, behind a loading screen.
@@ -231,6 +321,46 @@ impl AssetGroup {
     ) -> Self {
         let decode: Decoder = Arc::new(move |bytes| decode(bytes).map(|value| Box::new(value) as Box<dyn Any + Send>));
         self.assets.push((path.to_string(), Kind::Value(decode)));
+        self
+    }
+
+    /// Adds asset `path` with your own loader that works a bounded piece at
+    /// a time ([`SliceLoader`]): `start` gets the file's bytes and returns
+    /// the loader (or an [`Error`]), and its value is taken with
+    /// [`Assets::take_group_value`] once it is loaded. Where there are no
+    /// worker threads, the group step calls the loader's `step` within
+    /// its frame budget, so a large file is spread over several frames;
+    /// with workers, it runs on a worker, as [`with`](Self::with) does.
+    /// `start` runs again for each [restart](Assets::restart_group) after
+    /// it failed.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// use ponko::assets::SliceLoader;
+    /// struct Count(Vec<u8>, usize, usize);
+    /// impl SliceLoader for Count {
+    ///     type Value = usize;
+    ///     fn step(&mut self) -> Result<bool, Error> {
+    ///         let end = (self.1 + 4096).min(self.0.len());
+    ///         self.2 += self.0[self.1..end].iter().filter(|&&b| b == b'#').count();
+    ///         self.1 = end;
+    ///         Ok(end == self.0.len())
+    ///     }
+    ///     fn finish(self) -> usize {
+    ///         self.2
+    ///     }
+    /// }
+    /// let group = ponko::assets::AssetGroup::new("level").with_sliced("walls.txt", |bytes| Ok(Count(bytes, 0, 0)));
+    /// assert_eq!(group.len(), 1);
+    /// ```
+    #[must_use]
+    pub fn with_sliced<L: SliceLoader>(
+        mut self,
+        path: &str,
+        start: impl Fn(Vec<u8>) -> Result<L, Error> + Send + Sync + 'static,
+    ) -> Self {
+        let start: SliceStarter = Arc::new(move |bytes| start(bytes).map(|l| Box::new(l) as Box<dyn AnySlices>));
+        self.assets.push((path.to_string(), Kind::Sliced(start)));
         self
     }
 
@@ -522,6 +652,7 @@ enum SliceWork {
     Texture(Box<sliced::PngSlices>),
     #[cfg(feature = "audio")]
     Sound(sliced::SoundSlices),
+    Value(Box<dyn AnySlices>),
 }
 
 impl Sliced {
@@ -538,6 +669,7 @@ impl Sliced {
             SliceWork::Sound(sound) => sound
                 .step()
                 .map_err(|e| Error::decode(path, format!("{}: {e}", self.origin.describe(path)))),
+            SliceWork::Value(loader) => loader.step().map_err(|e| loader_error(e, &self.origin, path)),
         }
     }
 
@@ -546,6 +678,7 @@ impl Sliced {
             SliceWork::Texture(png) => Done::Texture(self.origin, DecodedTexture::Rgba(png.finish())),
             #[cfg(feature = "audio")]
             SliceWork::Sound(sound) => Done::Sound(self.origin, sound.finish()),
+            SliceWork::Value(loader) => Done::Value(loader.finish()),
         }
     }
 }
@@ -1260,10 +1393,23 @@ impl Ctx {
             })),
             Kind::Value(decode) => Step::Working(Job::spawn(move || {
                 let (origin, bytes) = read()?;
-                decode(&bytes).map(Done::Value).map_err(|e| {
-                    e.context(format!("{} could not be decoded", origin.describe(&path)))
-                        .with_path(&path)
-                })
+                decode(&bytes)
+                    .map(Done::Value)
+                    .map_err(|e| loader_error(e, &origin, &path))
+            })),
+            Kind::Sliced(start) if sliced => {
+                let (origin, bytes) = read()?;
+                let loader = start(bytes).map_err(|e| loader_error(e, &origin, &path))?;
+                Step::Sliced(Box::new(Sliced {
+                    work: SliceWork::Value(loader),
+                    origin,
+                }))
+            }
+            Kind::Sliced(start) => Step::Working(Job::spawn(move || {
+                let (origin, bytes) = read()?;
+                let mut loader = start(bytes).map_err(|e| loader_error(e, &origin, &path))?;
+                while !loader.step().map_err(|e| loader_error(e, &origin, &path))? {}
+                Ok(Done::Value(loader.finish()))
             })),
         };
         self.assets.groups.list[index].items[i].step = step;
@@ -1445,6 +1591,13 @@ impl Frame {
         }
         bytes == 0 || self.uploads == 0 || self.spent + bytes <= self.upload_budget
     }
+}
+
+/// An error a game's own loader returned for asset `path`, found at `origin`.
+fn loader_error(error: Error, origin: &Origin, path: &str) -> Error {
+    error
+        .context(format!("{} could not be decoded", origin.describe(path)))
+        .with_path(path)
 }
 
 /// An error about item `path`, naming it if it names nothing.
@@ -1682,6 +1835,88 @@ mod tests {
             assert_eq!(steps.len() as u32, 1 + full_steps, "{steps:?}");
             assert_eq!(steps[0], per_step);
             assert_eq!(*steps.last().unwrap(), 2, "a slice and the upload");
+        });
+    }
+
+    /// A [`SliceLoader`] of `calls` calls, counting them.
+    struct Counter {
+        calls: u32,
+        done: u32,
+        fail_at: Option<u32>,
+    }
+
+    impl SliceLoader for Counter {
+        type Value = u32;
+        fn step(&mut self) -> Result<bool, Error> {
+            self.done += 1;
+            if Some(self.done) == self.fail_at {
+                return Err(Error::new(ErrorKind::Decode, "a bad record"));
+            }
+            Ok(self.done == self.calls)
+        }
+        fn finish(self) -> u32 {
+            self.done
+        }
+    }
+
+    #[test]
+    fn without_workers_a_sliced_loader_runs_as_many_calls_a_step_as_the_budget_holds() {
+        Game::new("t", 1, 1).hot_reload(false).run_headless(0, |ctx| {
+            ctx.assets.groups.sliced = Some(true);
+            ctx.assets.groups.piece_cost = Some(0.125 / 1000.0);
+            ctx.assets.set_group_frame_budget(0.5);
+            ctx.assets
+                .add_background_source(MemorySource::new("mem").with("level.dat", "x"));
+            let group = AssetGroup::new("level").with_sliced("level.dat", |bytes| {
+                assert_eq!(bytes, b"x");
+                Ok(Counter {
+                    calls: 100,
+                    done: 0,
+                    fail_at: None,
+                })
+            });
+            let id = ctx.assets.start_group(group);
+            let steps = steps_until_done(ctx, id);
+            assert_eq!(ctx.assets.group_state(id), GroupState::Ready);
+            // Called exactly as often as it needed, never more.
+            assert_eq!(ctx.assets.take_group_value::<u32>(id, "level.dat"), Some(100));
+            // Four pieces a step: the read and three calls, then four calls
+            // a step (97 = 24 x 4 + 1), the last call with taking the value.
+            assert!(steps.iter().all(|&p| (1..=4).contains(&p)), "{steps:?}");
+            assert_eq!(steps.iter().sum::<u32>(), 1 + 100 + 1);
+            assert_eq!(steps.len(), 1 + 25, "{steps:?}");
+        });
+    }
+
+    #[test]
+    fn without_workers_a_sliced_loader_error_fails_the_group_naming_the_asset_and_restarts() {
+        Game::new("t", 1, 1).hot_reload(false).run_headless(0, |ctx| {
+            ctx.assets.groups.sliced = Some(true);
+            ctx.assets.set_group_frame_budget(0.0);
+            ctx.assets
+                .add_background_source(MemorySource::new("mem").with("level.dat", "x"));
+            let starts = Arc::new(AtomicU64::new(0));
+            let counted = Arc::clone(&starts);
+            let group = AssetGroup::new("level").with_sliced("level.dat", move |_| {
+                // Fails on its fifth call the first time only.
+                let first = counted.fetch_add(1, Ordering::Relaxed) == 0;
+                Ok(Counter {
+                    calls: 10,
+                    done: 0,
+                    fail_at: first.then_some(5),
+                })
+            });
+            let id = ctx.assets.start_group(group);
+            let steps = steps_until_done(ctx, id);
+            assert_eq!(steps.len(), 1 + 5, "the read, then a call a step until the fifth fails");
+            let error = ctx.assets.group_error(id).unwrap();
+            assert_eq!((error.kind(), error.path()), (ErrorKind::Decode, Some("level.dat")));
+            assert!(error.to_string().contains("a bad record"), "{error}");
+            ctx.assets.restart_group(id);
+            steps_until_done(ctx, id);
+            assert_eq!(ctx.assets.group_state(id), GroupState::Ready);
+            assert_eq!(starts.load(Ordering::Relaxed), 2);
+            assert_eq!(ctx.assets.take_group_value::<u32>(id, "level.dat"), Some(10));
         });
     }
 

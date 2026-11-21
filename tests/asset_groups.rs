@@ -1011,3 +1011,66 @@ mod guide {
         assert_eq!(*world.resource::<f32>(), 3.5);
     }
 }
+
+/// Parses lines of numbers a few at a time.
+struct Numbers {
+    text: String,
+    at: usize,
+    values: Vec<i32>,
+}
+
+impl ponko::assets::SliceLoader for Numbers {
+    type Value = Vec<i32>;
+    fn step(&mut self) -> Result<bool, Error> {
+        for _ in 0..2 {
+            let Some(line) = self.text[self.at..].lines().next() else {
+                return Ok(true);
+            };
+            self.at += line.len() + 1;
+            let value = line
+                .parse()
+                .map_err(|_| Error::new(ErrorKind::Decode, format!("\"{line}\" is not a number")))?;
+            self.values.push(value);
+        }
+        Ok(self.at >= self.text.len())
+    }
+    fn finish(self) -> Vec<i32> {
+        self.values
+    }
+}
+
+fn numbers(bytes: Vec<u8>) -> Result<Numbers, Error> {
+    let text = String::from_utf8(bytes).map_err(|e| Error::new(ErrorKind::Decode, e.to_string()))?;
+    Ok(Numbers {
+        text,
+        at: 0,
+        values: Vec::new(),
+    })
+}
+
+#[test]
+fn a_sliced_loader_makes_its_value_and_its_errors_name_the_asset() {
+    game().run_headless(0, |ctx| {
+        ctx.assets.add_background_source(
+            MemorySource::new("mem")
+                .with("good.txt", "1\n2\n3\n4\n5\n")
+                .with("bad.txt", "1\n2\nthree\n"),
+        );
+        let id = ctx
+            .assets
+            .start_group(AssetGroup::new("good").with_sliced("good.txt", numbers));
+        frames_until_done(ctx, id, 10_000);
+        assert_eq!(ctx.assets.group_state(id), GroupState::Ready);
+        assert_eq!(
+            ctx.assets.take_group_value::<Vec<i32>>(id, "good.txt"),
+            Some(vec![1, 2, 3, 4, 5])
+        );
+        let id = ctx
+            .assets
+            .start_group(AssetGroup::new("bad").with_sliced("bad.txt", numbers));
+        frames_until_done(ctx, id, 10_000);
+        let error = ctx.assets.group_error(id).expect("it failed");
+        assert_eq!((error.kind(), error.path()), (ErrorKind::Decode, Some("bad.txt")));
+        assert!(error.to_string().contains("\"three\" is not a number"), "{error}");
+    });
+}
