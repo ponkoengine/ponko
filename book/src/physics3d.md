@@ -107,8 +107,9 @@ Collision meshes are made once and shared by any number of colliders:
   still using it keep it until they're removed. A collision mesh is a
   [handle](handles.md): `ctx.is_live(m)` tells whether it still is.
 - `Collider::scaled_mesh(m, scale)` uses one mesh at any size: a rock made
-  once serves a pebble and a boulder, and a negative component mirrors a
-  hull or triangle mesh (a heightfield takes the size only). The mesh stays
+  once serves a pebble and a boulder, and a negative component mirrors it
+  (a heightfield along X and Z; its Y takes the size only, so the ground
+  still faces up). The mesh stays
   one; each collider gets a scaled copy when it enters the physics world,
   shared by the colliders at the same scale and dropped with the last of
   them. C: `ponko_collider3d_scaled_mesh(m, scale)` (the shape
@@ -129,8 +130,16 @@ drawn twice as high is solid twice as high), so it matches the drawn ground
 triangle for triangle, holes included. The scale works as
 `Collider::scaled_mesh`'s: a triangle mesh is built again from its scaled
 corners, so a piece of ground stretched or mirrored (a negative component)
-is solid where it is drawn and its triangles still face up; a heightfield
-takes the size only. Despawning the tile removes it; to
+is solid where it is drawn and its triangles still face up. A heightfield
+mirrored along X or Z (a tile flipped to reuse its heights on the other
+side of a seam) is built again with its heights, holes and the diagonals
+of its cells flipped, so it too is solid exactly where it is drawn; that
+costs one copy of its heights when the tile enters the physics world
+(what a stretched tile's copy costs too), and tiles at one scale share it.
+A negative Y scale takes the size only: the ground still faces up. A saved
+world keeps the tile's `d3::Transform`, mirror included, but not its
+`TerrainCollider` (a heightfield made in code has no file to name): give
+the loaded tile a new one from its heights. Despawning the tile removes it; to
 edit the ground (a crater), make a new heightfield, put it in the
 component's `mesh` and free the old one: the collider changes at the next
 step. Its `friction`, `restitution` and `groups` work as on a `d3::Collider`.

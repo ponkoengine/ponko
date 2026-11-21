@@ -854,8 +854,8 @@ inline collider3d capsule_collider3d(float height, float radius) { return ponko_
 inline collider3d mesh_collider(collision_mesh m) { return ponko_collider3d_mesh(m); }
 /// A collider of `m` scaled by `scale` where it is used (Rust
 /// `Collider3D::scaled_mesh`), so one mesh serves colliders of every size: a
-/// negative component mirrors a hull or triangle mesh; a heightfield takes
-/// the size only. Colliders of one mesh at one scale share one scaled copy.
+/// negative component mirrors it (a heightfield along X and Z; its Y takes
+/// the size only). Colliders of one mesh at one scale share one scaled copy.
 inline collider3d scaled_mesh_collider(collision_mesh m, vec3 scale) { return ponko_collider3d_scaled_mesh(m, scale); }
 /// Makes a terrain tile's entity solid: a collider of `m` (its heightfield)
 /// at the tile's transform3d, turned and scaled with it (Rust

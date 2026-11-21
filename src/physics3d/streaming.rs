@@ -2,6 +2,8 @@
 //! keeping static colliders only near the places that need them, for big
 //! streamed worlds.
 
+use rapier3d::parry::shape::{HeightField, HeightFieldCellStatus};
+use rapier3d::parry::utils::Array2;
 use rapier3d::prelude as rp;
 use serde::{Deserialize, Serialize};
 
@@ -384,7 +386,8 @@ impl Physics3D {
 /// mesh is built again from its scaled points, so a negative component
 /// mirrors it and a stretch keeps its normals right (a triangle mesh
 /// mirrored along one or three axes turns its triangles around, so they
-/// still face out); a heightfield takes the scale's size (its sign
+/// still face out); a heightfield takes the scale's size and is mirrored
+/// by a negative X or Z as [`scaled_field`] builds it (a negative Y is
 /// left out). Each component is at least 1e-6 from zero. `None` if
 /// the scaled hull has no volume or the triangle mesh can't be built.
 pub(super) fn scaled_copy(shape: &rp::SharedShape, scale: Vec3) -> Option<rp::SharedShape> {
@@ -408,10 +411,55 @@ pub(super) fn scaled_copy(shape: &rp::SharedShape, scale: Vec3) -> Option<rp::Sh
         let points: Vec<rp::Vector> = hull.points().iter().map(|&p| p * s).collect();
         rp::SharedShape::convex_hull(&points)
     } else if let Some(field) = shape.as_heightfield() {
-        Some(rp::SharedShape::new(field.clone().scaled(to_rp(scale.abs()))))
+        Some(rp::SharedShape::new(scaled_field(field, scale)))
     } else {
         Some(shape.clone())
     }
+}
+
+/// `field` stretched by the size of `scale` and mirrored by a negative X
+/// or Z, so it is solid where a tile of that scale is drawn. A heightfield
+/// can't take a negative scale, so a mirrored one is built again with its
+/// heights, cells (holes) and cell diagonals flipped: one copy of its
+/// heights, what an unmirrored copy costs too. Its center then sits at the
+/// unmirrored offset times the signed scale. The ground always faces up: a
+/// negative Y takes its size only.
+fn scaled_field(field: &HeightField, scale: Vec3) -> HeightField {
+    let size = to_rp(scale.abs());
+    let (flip_x, flip_z) = (scale.x < 0.0, scale.z < 0.0);
+    if !flip_x && !flip_z {
+        return field.clone().scaled(size);
+    }
+    // Rows run along Z, columns along X; a mirror reads them backwards.
+    let heights = field.heights();
+    let (rows, cols) = (heights.nrows(), heights.ncols());
+    let (last_row, last_col) = (rows - 1, cols - 1);
+    let at = |i: usize, j: usize, (last_i, last_j): (usize, usize)| {
+        (if flip_z { last_i - i } else { i }, if flip_x { last_j - j } else { j })
+    };
+    let flipped = Array2::from_fn(rows, cols, |i, j| heights[at(i, j, (last_row, last_col))]);
+    let mut out = HeightField::with_flags(flipped, field.scale() * size, field.flags());
+    // One mirror turns each cell's diagonal the other way; two (a half
+    // turn) keep it. A mirror along X also swaps a cell's two triangles.
+    let turn = if flip_x == flip_z {
+        HeightFieldCellStatus::empty()
+    } else {
+        HeightFieldCellStatus::ZIGZAG_SUBDIVISION
+    };
+    let cells = field.cells_statuses();
+    for i in 0..last_row {
+        for j in 0..last_col {
+            let mut status = cells[at(i, j, (last_row - 1, last_col - 1))] ^ turn;
+            if flip_x {
+                let left = status.contains(HeightFieldCellStatus::LEFT_TRIANGLE_REMOVED);
+                let right = status.contains(HeightFieldCellStatus::RIGHT_TRIANGLE_REMOVED);
+                status.set(HeightFieldCellStatus::LEFT_TRIANGLE_REMOVED, right);
+                status.set(HeightFieldCellStatus::RIGHT_TRIANGLE_REMOVED, left);
+            }
+            out.set_cell_status(i, j, status);
+        }
+    }
+    out
 }
 
 /// Brings static colliders near a focus in (nearest first, at most the
@@ -498,5 +546,80 @@ fn find_holders(physics: &mut Physics3D, holders: &mut Vec<Rect>) {
             aabb.maxs.x + HOLD_MARGIN,
             aabb.maxs.z + HOLD_MARGIN,
         ]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::physics3d::from_rp;
+
+    /// Every triangle of `field`, its corners rounded to a millimeter and
+    /// sorted, so two fields can be compared as sets of triangles.
+    fn triangles(field: &HeightField, scale: Vec3) -> Vec<[[i64; 3]; 3]> {
+        let mut out = Vec::new();
+        for i in 0..field.nrows() {
+            for j in 0..field.ncols() {
+                let (a, b) = field.triangles_at(i, j);
+                for t in [a, b].into_iter().flatten() {
+                    let mut corners =
+                        [t.a, t.b, t.c].map(|p| (from_rp(p) * scale * 1000.0).round().as_i64vec3().to_array());
+                    corners.sort_unstable();
+                    out.push(corners);
+                }
+            }
+        }
+        out.sort_unstable();
+        out
+    }
+
+    #[test]
+    fn a_mirrored_heightfield_is_the_original_with_every_triangle_mirrored() {
+        // Bumpy heights (no cell is flat, so a wrong diagonal shows), a
+        // hole, and a cell with only its left triangle.
+        let n = 6;
+        let heights: Vec<f32> = (0..n * n)
+            .map(|i| {
+                if i == 2 * n + 3 {
+                    f32::NAN
+                } else {
+                    (i * 37 % 11) as f32 * 0.4
+                }
+            })
+            .collect();
+        let data = CollisionMeshData::heightfield(&heights, 10.0);
+        let mut field = data.shape.as_heightfield().unwrap().clone();
+        field.set_cell_status(4, 1, HeightFieldCellStatus::LEFT_TRIANGLE_REMOVED);
+        let original = field.clone();
+        for scale in [
+            Vec3::new(-1.0, 1.0, 1.0),
+            Vec3::new(1.0, 1.0, -1.0),
+            Vec3::new(-1.0, 1.0, -1.0),
+            Vec3::new(-2.0, 0.5, 3.0),
+            Vec3::new(1.5, 2.0, -0.5),
+            Vec3::new(-0.75, 1.0, -1.25),
+        ] {
+            // Both fields in their own frames, centered on the tile: the
+            // mirrored tile's center is the original's times the scale.
+            let mirrored = scaled_field(&field, scale);
+            let want = triangles(&original, scale);
+            assert_eq!(triangles(&mirrored, Vec3::ONE), want, "at scale {scale}");
+            assert_eq!(want.len(), 2 * 25 - 2 * 4 - 1, "the hole and the half cell stay open");
+        }
+        // Negative control: mirroring the heights alone, without turning
+        // the diagonals, is not the mirrored ground.
+        let flip = Vec3::new(-1.0, 1.0, 1.0);
+        let mut naive = scaled_field(&field, flip);
+        for i in 0..n - 1 {
+            for j in 0..n - 1 {
+                let status = naive.cell_status(i, j) ^ HeightFieldCellStatus::ZIGZAG_SUBDIVISION;
+                naive.set_cell_status(i, j, status);
+            }
+        }
+        assert_ne!(triangles(&naive, Vec3::ONE), triangles(&original, flip));
+        // Unmirrored, it is only stretched.
+        let stretched = scaled_field(&field, Vec3::new(2.0, 3.0, 0.5));
+        assert_eq!(stretched.heights().data(), field.heights().data());
+        assert_eq!(stretched.cells_statuses().data(), field.cells_statuses().data());
     }
 }
