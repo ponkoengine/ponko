@@ -240,6 +240,12 @@ impl MeshArena {
 }
 
 impl super::Renderer3D {
+    /// Copies the meshes made since the last flush into the shared mesh
+    /// arena now (as the frame's draw does).
+    pub fn flush_mesh_arena(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        self.resources.mesh_arena.flush(device, queue);
+    }
+
     /// Bytes the shared mesh arena holds on the CPU (`GpuResidency::mesh_cpu_bytes`).
     pub fn mesh_arena_cpu_bytes(&self) -> u64 {
         self.resources.mesh_arena.cpu_bytes()

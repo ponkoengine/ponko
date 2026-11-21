@@ -178,8 +178,10 @@ budget and counters of each kind) and `streaming` (the upload queue's
 counters and every asset's state); `ctx.gfx.upload_stats()` gives the same
 numbers in code, including how long the upload step took on the game thread
 (`step_ms`) and, where the GPU has timestamp queries, how long the GPU
-itself spent copying the step's textures (`gpu_upload_ms`, a frame or a few
-later; `gpu_upload_timing` says whether this GPU times them). The [loading
+itself spent copying the step's textures and mesh buffers (`gpu_upload_ms`,
+a frame or a few later; `gpu_upload_timing` says whether this GPU times
+them), and copying the textures made outside the steps with `create_texture`
+in the latest frame it timed (`gpu_created_ms`). The [loading
 chapter](loading.md#what-uploads-cost) explains how it is measured.
 
 ## Measured
@@ -225,10 +227,17 @@ thread, in the order they were asked for, within the asset group frame
 budget (`ctx.assets.set_group_frame_budget`, 4 ms by default, shared with
 the [group step](loading.md#never-stalling-a-frame), which runs first):
 a PNG a few rows a slice and then its smaller resolutions a few rows a
-slice, and for a glTF file its PNG images that way, then the parse of its
-geometry in one piece. Other image formats decode in one piece. So one
+slice; a KTX2 file a bounded piece of its Zstandard or zlib levels a slice,
+then a band of block rows a slice where the GPU can't sample its format
+(decoded to RGBA) or a band of a Basis UASTC level a slice (transcoded to
+the GPU's format), and a DDS file's block rows that way too. For a glTF file, its PNG
+and KTX2 images that way, then its JSON, then each of its buffers (an
+inline `data:` buffer about 64 KiB of bytes a slice, a separate `.bin`
+file a slice of its own), then its geometry a few thousand vertices a
+slice. Other image formats (JPEG and the rest) decode in one piece. So one
 large file is spread over several frames instead of taking one long frame,
-and the texture or mesh is exactly what a worker would have made.
+and the texture or mesh is exactly what a worker would have made: the tests
+check the bytes and pixels against the one-piece decode.
 `upload_stats().frame_slices` counts the slices of the last frame. With
 deterministic uploads (and in `finish_uploads`) the step finishes a decode
 at once instead, as it waits for a worker elsewhere. A build with threads

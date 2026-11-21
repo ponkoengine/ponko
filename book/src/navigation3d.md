@@ -249,8 +249,12 @@ and `work` (the backend's work units: corridors, neighbour and wall
 queries, steering, velocity sampling). A test can check that every agent
 moved every tick, and that `work / agent_steps` stays about the same as
 the crowd grows at the same spacing, on a machine of any speed or load.
-`NavCrowdStats` is Rust-only for now; C and C++ games see the crowd's cost
-as the step's time in the profiler.
+C reads them with `ponko_ctx_navmesh_crowd_stats` into the versioned
+`PonkoNavCrowdStats` (no navmesh is `PONKO_NOT_FOUND`), C++ with
+`ctx.navmesh_crowd_stats()`.
+
+<div class="lang-pair">
+<div>
 
 ```rust
 # use ponko::prelude::*;
@@ -260,6 +264,16 @@ let work_per_agent = stats.work as f64 / stats.agent_steps.max(1) as f64;
 # let _ = work_per_agent;
 # }
 ```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:nav_crowd_stats}}
+```
+
+</div>
+</div>
 
 
 ## Dynamic carving

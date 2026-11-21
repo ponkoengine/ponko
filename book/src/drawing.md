@@ -654,6 +654,13 @@ ponko textures assets
 ponko textures assets --check   # in CI: fail if a .ktx2 is missing or stale
 ```
 
+Encoding takes every core: each image being encoded gets a Basis Universal
+encoder with a thread per core, and `ponko cook` encodes one image per core
+at once. The encoders are made once and reused until the command exits,
+because dropping one could hang on a busy machine (its job pool's shutdown
+can miss waking a worker); the memory they keep is what encoding the images
+took at the peak anyway.
+
 A `textures.json` in that folder says what each image is, by path or
 pattern (`*` within a folder name, `**` across folders; an exact path wins
 over patterns, and a longer pattern over a shorter one):

@@ -107,6 +107,9 @@ the engine reads `window.json` before it creates the window and creates it at
 the saved size and position, in the saved mode, with the saved limits and
 flags. Nothing is moved or resized after it appears.
 
+<div class="lang-pair">
+<div>
+
 ```rust
 # use ponko::prelude::*;
 # let dir = std::env::temp_dir().join(format!("ponko-book-window-start-{}", std::process::id()));
@@ -120,6 +123,16 @@ Game::new("Play", 800, 600)
     });
 # let _ = std::fs::remove_dir_all(dir);
 ```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:restore_window}}
+```
+
+</div>
+</div>
 
 - The saved choice wins over `Game::fullscreen` and the size given to
   `Game::new`. The title stays the game's: it belongs to the game, not the
@@ -135,8 +148,8 @@ Game::new("Play", 800, 600)
   `tests/window_service.rs`).
 - The web reads its storage after the canvas exists, so there it restores
   just before setup (the canvas has no default window to show first).
-- `Game::restore_window_settings` is Rust-only for now: C and C++ games call
-  `ponko_ctx_window_restore_settings` in setup (see [C and C++](#c-and-c)).
+- C turns it on with `ponko_game_restore_window_settings(game, true)` before
+  the run, C++ with `game::restore_window_settings()`.
 
 ## Cursor
 

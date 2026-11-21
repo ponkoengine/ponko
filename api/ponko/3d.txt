@@ -6691,6 +6691,7 @@ pub struct ponko::perf::ProfileScope
 impl ponko::perf::ProfileScope
 pub fn ponko::perf::ProfileScope::begin(&'static self) -> u64
 pub fn ponko::perf::ProfileScope::end(&self, u64)
+pub fn ponko::perf::ProfileScope::end_counting(&self, u64, u64)
 pub fn ponko::perf::ProfileScope::enter(&'static self) -> ponko::perf::ScopeGuard
 pub fn ponko::perf::ProfileScope::name(&self) -> &'static str
 pub const fn ponko::perf::ProfileScope::new(&'static str) -> Self
@@ -13099,6 +13100,7 @@ pub ponko::streaming::UploadStats::failures: u64
 pub ponko::streaming::UploadStats::frame_bytes: u64
 pub ponko::streaming::UploadStats::frame_slices: u32
 pub ponko::streaming::UploadStats::frame_uploads: u32
+pub ponko::streaming::UploadStats::gpu_created_ms: core::option::Option<f32>
 pub ponko::streaming::UploadStats::gpu_upload_ms: core::option::Option<f32>
 pub ponko::streaming::UploadStats::gpu_upload_timing: bool
 pub ponko::streaming::UploadStats::held_by_budget: u64

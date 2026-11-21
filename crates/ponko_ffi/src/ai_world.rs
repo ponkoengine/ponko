@@ -9,6 +9,7 @@ use ponko::prelude::{Ctx, Entity, Vec2, Vec3};
 use ponko::reflect::WorldReflect;
 
 use crate::ai::{PonkoAiStatus, PonkoBehaviorTree, action_param_num, finish_action, key_of, named_action};
+use crate::ai_columns::{NO_ENTITY, NO_VEC2, NO_VEC3, board_value};
 use crate::ctx::{ctx_access, events, out, text};
 use crate::types::*;
 use crate::{Failure, PonkoCtx, PonkoStatus, PonkoVec3, boundary, engine_error, error, invalid};
@@ -495,5 +496,83 @@ pub unsafe extern "C" fn ponko_ctx_ai_flag(
             _ => return Err(error(PonkoStatus::PONKO_NOT_FOUND, "no flag at that key")),
         };
         out(out_value, value)
+    })
+}
+
+/// The entity (its bits) at entry `key` of the blackboard of `entity`.
+/// `PONKO_NOT_FOUND` if it has no blackboard, or no entity there.
+///
+/// Ownership: `out_value` is the caller's, written during the call only.
+/// ```
+/// let mut v = 0;
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_ai_entity(std::ptr::null_mut(), 0, 0, &mut v) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `out_value` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_ai_entity(
+    ctx: *mut PonkoCtx,
+    entity: u64,
+    key: u64,
+    out_value: *mut u64,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        let e = ctx_access(ctx, |c| {
+            board_value(blackboard(c, entity)?, key, Value::as_entity, NO_ENTITY)
+        })?;
+        out(out_value, e.to_bits())
+    })
+}
+
+/// The 2D point at entry `key` of the blackboard of `entity`.
+/// `PONKO_NOT_FOUND` if it has no blackboard, or no 2D point there.
+///
+/// Ownership: `out_value` is the caller's, written during the call only.
+/// ```
+/// let mut v = ponko_ffi::PonkoVec2::default();
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_ai_vec2(std::ptr::null_mut(), 0, 0, &mut v) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `out_value` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_ai_vec2(
+    ctx: *mut PonkoCtx,
+    entity: u64,
+    key: u64,
+    out_value: *mut PonkoVec2,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        let v = ctx_access(ctx, |c| {
+            board_value(blackboard(c, entity)?, key, Value::as_vec2, NO_VEC2)
+        })?;
+        out(out_value, to_c(v))
+    })
+}
+
+/// The 3D point at entry `key` of the blackboard of `entity`.
+/// `PONKO_NOT_FOUND` if it has no blackboard, or no 3D point there.
+///
+/// Ownership: `out_value` is the caller's, written during the call only.
+/// ```
+/// let mut v = ponko_ffi::PonkoVec3::default();
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_ai_vec3(std::ptr::null_mut(), 0, 0, &mut v) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `out_value` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_ai_vec3(
+    ctx: *mut PonkoCtx,
+    entity: u64,
+    key: u64,
+    out_value: *mut PonkoVec3,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        let v = ctx_access(ctx, |c| {
+            board_value(blackboard(c, entity)?, key, Value::as_vec3, NO_VEC3)
+        })?;
+        out(out_value, to_c(v))
     })
 }

@@ -795,6 +795,13 @@ use super::render_test_support::{Image, check_reference, reference_rejects};
 /// floor's ray reaches it after about 0.7. The high bar's, after about 2.6.
 /// Returns the floor points that mirror a point on each, low then high.
 fn bars_over_a_floor(stage: &mut Stage, roughness: f32) -> (Vec3, Vec3) {
+    bars(stage, roughness, true)
+}
+
+/// The bars of [`bars_over_a_floor`]; without the `mirror`, their mirror
+/// images instead (upside down under the floor's plane, with no floor):
+/// what a true mirror shows.
+fn bars(stage: &mut Stage, roughness: f32, mirror: bool) -> (Vec3, Vec3) {
     let floor = stage.mesh(
         &MeshData::cube(1.0),
         MaterialDesc {
@@ -812,9 +819,20 @@ fn bars_over_a_floor(stage: &mut Stage, roughness: f32) -> (Vec3, Vec3) {
             ..Default::default()
         },
     );
-    stage.block(floor, vec3(-10.0, -1.0, -10.0), vec3(10.0, 0.0, 10.0));
-    stage.block(glow, vec3(-2.6, 0.22, -0.03), vec3(-0.2, 0.28, 0.03));
-    stage.block(glow, vec3(0.2, 1.17, -0.03), vec3(2.6, 1.23, 0.03));
+    let flip = if mirror {
+        stage.block(floor, vec3(-10.0, -1.0, -10.0), vec3(10.0, 0.0, 10.0));
+        1.0
+    } else {
+        -1.0
+    };
+    let bar = |lo: Vec3, hi: Vec3| {
+        let (a, b) = (lo * vec3(1.0, flip, 1.0), hi * vec3(1.0, flip, 1.0));
+        (a.min(b), a.max(b))
+    };
+    let (lo, hi) = bar(vec3(-2.6, 0.22, -0.03), vec3(-0.2, 0.28, 0.03));
+    stage.block(glow, lo, hi);
+    let (lo, hi) = bar(vec3(0.2, 1.17, -0.03), vec3(2.6, 1.23, 0.03));
+    stage.block(glow, lo, hi);
     stage.ctx.scene3d.lighting.sun_intensity = 0.0;
     stage.ctx.scene3d.lighting.ambient_intensity = 0.0;
     stage.ctx.scene3d.post.exposure = -5.0;
@@ -1106,6 +1124,26 @@ fn reflection_gpu_cost(name: &str, quality: crate::render::GraphicsQuality, ao: 
     true
 }
 
+/// What a true mirror shows of the bars of [`bars_over_a_floor`]: the
+/// (peak, RMS width) of each one's mirror image (see `vertical_profile`),
+/// low then high.
+fn true_bar_reflections() -> Option<BarProfiles> {
+    let mut stage = Stage::new()?;
+    let (low, high) = bars(&mut stage, 0.0, false);
+    let on = stage.settled(2);
+    let off = Image {
+        width: on.width,
+        height: on.height,
+        rgba: vec![0; on.rgba.len()],
+    };
+    let found = [
+        vertical_profile(&stage, &on, &off, low),
+        vertical_profile(&stage, &on, &off, high),
+    ];
+    stage.finish();
+    Some(found)
+}
+
 #[test]
 fn contact_reflections_stay_sharper_than_distant_ones_on_a_rough_floor() {
     for ao in [false, true] {
@@ -1122,9 +1160,16 @@ fn contact_reflections_stay_sharper(ao: bool) {
         return;
     };
     rough_stage.finish();
+    if let Some(truth) = true_bar_reflections() {
+        eprintln!("true mirror: (peak, RMS width) {truth:?}");
+    }
     // How much of the mirror's peak each reflection keeps, and how much
     // wider the contact reflection is. (Blurred by roughness alone, the
-    // contact reflection kept 0.19 of its peak and grew 3.2 times wider.)
+    // contact reflection kept 0.19 of its peak and grew 3.2 times wider.
+    // The mirror's own contact reflection is about as thin as a true
+    // mirror's, 0.87 pixels RMS to its 0.5: when the trace assumed things
+    // were thicker it was 1.32, and the rough one kept 0.75 of its peak
+    // and was 1.17 times as wide.)
     let kept = [rough[0].0 / mirror[0].0, rough[1].0 / mirror[1].0];
     let wider = rough[0].1 / mirror[0].1;
     eprintln!(
@@ -1132,9 +1177,9 @@ fn contact_reflections_stay_sharper(ao: bool) {
          {kept:.2?}, contact x{wider:.2} wider"
     );
     assert!(kept[1] < 0.25, "the distant reflection blurs: x{:.2}", kept[1]);
-    assert!(kept[0] > 0.5, "the contact reflection stays sharp: x{:.2}", kept[0]);
-    assert!(kept[0] > kept[1] * 3.0, "far more than the distant one: {kept:.2?}");
-    assert!(wider < 1.6, "and about as narrow as the mirror's: x{wider:.2}");
+    assert!(kept[0] > 0.35, "the contact reflection stays sharp: x{:.2}", kept[0]);
+    assert!(kept[0] > kept[1] * 2.0, "far more than the distant one: {kept:.2?}");
+    assert!(wider < 2.4, "and not much wider than the mirror's: x{wider:.2}");
 }
 
 #[test]
@@ -1317,7 +1362,14 @@ fn contact_reflections_show_no_grain_at_full_hd_without_taa() {
 /// Returns, for each rail, the point at its middle and the floor point
 /// that mirrors it.
 fn rails_over_a_mirror(stage: &mut Stage) -> Vec<(Vec3, Vec3)> {
-    let mirror = stage.mesh(
+    rails(stage, true)
+}
+
+/// The rails of [`rails_over_a_mirror`]; without the `mirror`, their mirror
+/// images instead (each rail again, upside down under the floor's plane,
+/// with no floor): what a true mirror shows.
+fn rails(stage: &mut Stage, mirror: bool) -> Vec<(Vec3, Vec3)> {
+    let floor = stage.mesh(
         &MeshData::cube(1.0),
         MaterialDesc {
             color: Color::WHITE,
@@ -1334,7 +1386,9 @@ fn rails_over_a_mirror(stage: &mut Stage) -> Vec<(Vec3, Vec3)> {
             ..Default::default()
         },
     );
-    stage.block(mirror, vec3(-100.0, -1.0, -100.0), vec3(100.0, 0.0, 10.0));
+    if mirror {
+        stage.block(floor, vec3(-100.0, -1.0, -100.0), vec3(100.0, 0.0, 10.0));
+    }
     stage.ctx.scene3d.lighting.sun_intensity = 0.0;
     stage.ctx.scene3d.lighting.ambient_intensity = 0.0;
     stage.ctx.scene3d.post.exposure = -5.0;
@@ -1349,10 +1403,11 @@ fn rails_over_a_mirror(stage: &mut Stage) -> Vec<(Vec3, Vec3)> {
         .map(|(i, &d)| {
             let x = -5.7 + i as f32 * 4.0 * d / 14.0;
             let (half, length) = (0.03 + 0.0025 * d, 0.15 * d);
+            let y = if mirror { 1.0 } else { -1.0 };
             stage.block(
                 glow,
-                vec3(x, 1.0 - half, -d - half),
-                vec3(x + length, 1.0 + half, -d + half),
+                vec3(x, y - half, -d - half),
+                vec3(x + length, y + half, -d + half),
             );
             let middle = vec3(x + length * 0.5, 1.0, -d);
             (middle, through(middle * vec3(1.0, -1.0, 1.0)))
@@ -1439,10 +1494,11 @@ fn rail_reflections() -> Option<(RailBands, [Image; 2], Stage)> {
 /// a ray, and a crossing used to allow two of them of the ray's travel:
 /// rays that passed well below a rail counted as hits, and its reflection
 /// was a slab (RMS width 4.17, 3.57, 2.58 and 2.17 times the rail's,
-/// nearest to farthest, and up to 2.4 times its light). Now 1.6 to 2 times,
-/// and the light about the rail's. Some rays still step over the nearest
-/// rail without TAA, so its reflection is dotted and keeps about half the
-/// light: what this allows.
+/// nearest to farthest, and up to 2.4 times its light). Then 1.6 to 2
+/// times, with the nearest rail dotted (rays stepped over it) and keeping
+/// half its light. Now the trace assumes a rail as deep as it is tall (see
+/// `surface_thickness` in `ssr.wgsl`): 1.33 to 1.62 times (1.46 on
+/// average, from 1.74), still with the nearest dotted.
 #[test]
 fn far_thin_things_stay_thin_in_reflections_without_taa() {
     let Some((rails, [image, off], stage)) = rail_reflections() else {
@@ -1468,13 +1524,13 @@ fn far_thin_things_stay_thin_in_reflections_without_taa() {
             seen.0
         );
         assert!(
-            reflected.1 < seen.1 * 2.2,
+            reflected.1 < seen.1 * 1.8,
             "the rail {d} away is reflected thin: RMS width {:.2}, the rail's {:.2}",
             reflected.1,
             seen.1
         );
     }
-    assert!(wider < 2.0, "on average about as thin as the rails: x{wider:.2}");
+    assert!(wider < 1.6, "on average about as thin as the rails: x{wider:.2}");
     check_reference(
         "regression_ssr_far_rails",
         &image,
@@ -1488,4 +1544,294 @@ fn far_thin_things_stay_thin_in_reflections_without_taa() {
     );
     reference_rejects("regression_ssr_far_rails", &off, EFFECT_REFERENCE, "reflections off");
     stage.finish();
+}
+
+// ---- The screen passes' depth reads, timed ----
+
+/// Offscreen timestamp measurement of the passes that read the scene's
+/// depth; run with --ignored --nocapture (GPU timestamps, which the build's
+/// optimization doesn't change; the GPU is kept busy between frames, see
+/// `Busy`). At 1920x1080 on a device with the limits a game asks for: the
+/// High preset with TAA, depth of field and 400 large soft particles (the
+/// transparent pass), over a glossy floor with a glowing box; with
+/// reflections on and off. Prints each pass's median span over 300 frames
+/// and the frame's: run before and after a change, alternating runs.
+///
+/// Measured on an Apple M4 Max, three runs each, reflections on: GTAO
+/// reading the reflections' single-sample depth copy instead of the
+/// multisampled depth took 0.83, 0.96 and 0.89 ms for its two passes, to
+/// 0.76, 0.67 and 0.77 ms; depth of field reading it took 1.22 ms three
+/// times, to 1.08, 1.33 and 1.21 ms. Neither reads the copy: it pays off
+/// in the reflections' trace, whose reads jump along rays, not in passes
+/// that read around their own pixel. Temporal antialiasing reads every
+/// sample (a copy of one would change what it draws), and soft particles
+/// read the depth once a fragment.
+#[test]
+#[ignore]
+fn screen_pass_gpu_cost_at_1080p() {
+    use crate::three::particles::{ParticleEmitter3D, ParticleSettings3D};
+    let Some(mut rig) = Rig::with_limits(1920, 1080, true) else {
+        return;
+    };
+    let Some(mut timer) = super::timer::GpuTimer::new(&rig.device, &rig.queue) else {
+        crate::render::render_test_support::skip("timestamp queries unavailable");
+        return;
+    };
+    let floor = rig.mesh(
+        &MeshData::cube(1.0),
+        MaterialDesc {
+            roughness: 0.35,
+            metallic: 1.0,
+            ..Default::default()
+        },
+    );
+    rig.ctx.world.spawn((
+        Transform3D {
+            position: vec3(0.0, -0.5, 0.0),
+            scale: vec3(20.0, 1.0, 20.0),
+            ..Default::default()
+        },
+        Model::new(floor),
+    ));
+    let block = rig.mesh(
+        &MeshData::cube(1.0),
+        MaterialDesc {
+            color: Color::BLACK,
+            emissive: Color::rgb(4.0, 0.0, 0.0),
+            ..Default::default()
+        },
+    );
+    rig.ctx.world.spawn((
+        Transform3D {
+            position: vec3(0.0, 1.0, 0.0),
+            ..Default::default()
+        },
+        Model::new(block),
+    ));
+    let points: Vec<Vec3> = (0..400)
+        .map(|i| vec3((i % 20) as f32 * 0.5 - 5.0, 0.3, -((i / 20) as f32) * 0.5 + 3.0))
+        .collect();
+    let settings = ParticleSettings3D {
+        size: (1.5, 1.5),
+        lifetime: (1000.0, 1000.0),
+        gravity: Vec3::ZERO,
+        softness: 1.0,
+        max_particles: points.len(),
+        ..Default::default()
+    };
+    rig.ctx.world.spawn((
+        Transform3D::default(),
+        ParticleEmitter3D::at_points_for_test(settings, &points),
+    ));
+    rig.ctx.scene3d.camera.position = vec3(0.0, 2.0, 6.0);
+    rig.ctx.scene3d.camera.look_at(Vec3::ZERO);
+    let busy = Busy::new(&rig.device);
+    rig.ctx.scene3d.set_quality(crate::render::GraphicsQuality::High);
+    let strength = rig.ctx.scene3d.post.ssr;
+    let post = &mut rig.ctx.scene3d.post;
+    // Bloom's many passes would use up the timer's queries.
+    post.bloom = 0.0;
+    post.anti_aliasing = AntiAliasing::Taa;
+    post.depth_of_field.enabled = true;
+    post.depth_of_field.focus_distance = 6.0;
+    post.depth_of_field.blur = 0.02;
+    let median = |samples: &mut Vec<f32>| {
+        samples.sort_by(f32::total_cmp);
+        samples[samples.len() / 2]
+    };
+    for ssr in [true, false] {
+        rig.ctx.scene3d.post.ssr = if ssr { strength } else { 0.0 };
+        let mut frames = Vec::new();
+        let mut passes: Vec<(&'static str, Vec<f32>)> = Vec::new();
+        let mut read = timer.frames_read;
+        for frame in 0..340 {
+            busy.run(&rig.device, &rig.queue);
+            rig.draw_timed(Some(&mut timer));
+            if frame < 40 || timer.frames_read == read {
+                continue;
+            }
+            read = timer.frames_read;
+            frames.push(timer.last_frame.iter().map(|s| s.ms).sum::<f32>());
+            for span in &timer.last_frame {
+                match passes.iter_mut().find(|(name, _)| *name == span.name) {
+                    Some((_, times)) => times.push(span.ms),
+                    None => passes.push((span.name, vec![span.ms])),
+                }
+            }
+        }
+        assert!(!passes.is_empty(), "GPU timestamps must be collected");
+        let spans: Vec<String> = passes
+            .iter_mut()
+            .map(|(name, times)| format!("{name} {:.4}", median(times)))
+            .collect();
+        eprintln!(
+            "1920x1080, High, TAA, depth of field, soft particles, reflections {}: frame median {:.4} ms; passes: {}",
+            if ssr { "on" } else { "off" },
+            median(&mut frames),
+            spans.join(", ")
+        );
+    }
+}
+
+/// What a true mirror shows of each rail of [`rails_over_a_mirror`]:
+/// (energy, RMS width) of the band where the floor reflects it, with the
+/// rails drawn upside down under the floor's plane and no floor.
+fn true_rail_reflections() -> Option<Vec<(f32, f32)>> {
+    let mut stage = Stage::with(super::regression_stage::Setup {
+        size: (1920, 1080),
+        ..Default::default()
+    })?;
+    let rails = rails(&mut stage, false);
+    let image = stage.settled(2);
+    let found = rails
+        .iter()
+        .map(|&(_, at)| band(&stage, &image, None, at, 30))
+        .collect();
+    stage.finish();
+    Some(found)
+}
+
+/// Without TAA, the reflections of thin things far away are not much wider
+/// than a true mirror shows them (it also shows their undersides, which the
+/// screen doesn't: the trace assumes a thickness for what it sees): 1.23,
+/// 1.29, 1.33 and 1.36 times as wide, nearest to farthest. Assumed as
+/// thick as the distance alone said (0.1 + 0.02 w), 1.45, 1.54, 1.58 and
+/// 1.63 times. The nearest keeps less than half the light: the march's
+/// steps, tens of pixels long there, step over parts of it (TAA fills
+/// those in).
+#[test]
+fn far_thin_things_are_reflected_about_as_wide_as_in_a_true_mirror() {
+    const WIDEST: f32 = 1.45;
+    let (Some(truth), Some((rails, _, stage))) = (true_rail_reflections(), rail_reflections()) else {
+        return;
+    };
+    stage.finish();
+    let mut widths = Vec::new();
+    for ((d, truth), [_, reflected]) in [8, 14, 22, 32].iter().zip(&truth).zip(&rails) {
+        let wider = reflected.1 / truth.1;
+        eprintln!(
+            "rail {d} away: true mirror (energy {:.1}, RMS width {:.2}), screen-space (energy {:.1}, RMS width {:.2}): x{wider:.2} as wide",
+            truth.0, truth.1, reflected.0, reflected.1
+        );
+        widths.push((*d, wider, reflected.0 / truth.0));
+    }
+    for (d, wider, light) in widths {
+        assert!(
+            light > 0.3,
+            "the rail {d} away is reflected: x{light:.2} the light a true mirror shows"
+        );
+        assert!(
+            (0.75..WIDEST).contains(&wider),
+            "the rail {d} away is reflected about as wide as in a true mirror: x{wider:.2}"
+        );
+    }
+}
+
+/// With temporal antialiasing, a soft particle splits the transparent pass
+/// off, which copies the lit frame for what reads the scene behind it: the
+/// frame temporal antialiasing resolves, which must allow the copy (it
+/// didn't, and the frame was rejected). The particle fades where it meets
+/// the floor and shows above it.
+#[test]
+fn soft_particles_draw_with_temporal_antialiasing() {
+    use crate::three::particles::{ParticleEmitter3D, ParticleSettings3D};
+    let Some(mut rig) = Rig::sized(SIZE, SIZE) else {
+        return;
+    };
+    let floor = rig.mesh(&MeshData::cube(1.0), MaterialDesc::default());
+    rig.ctx.world.spawn((
+        Transform3D {
+            position: vec3(0.0, -0.5, 0.0),
+            scale: vec3(20.0, 1.0, 20.0),
+            ..Default::default()
+        },
+        Model::new(floor),
+    ));
+    let settings = ParticleSettings3D {
+        size: (2.0, 2.0),
+        lifetime: (1000.0, 1000.0),
+        gravity: Vec3::ZERO,
+        softness: 1.0,
+        max_particles: 1,
+        ..Default::default()
+    };
+    rig.ctx.world.spawn((
+        Transform3D::default(),
+        ParticleEmitter3D::at_points_for_test(settings, &[vec3(0.0, 0.5, 0.0)]),
+    ));
+    rig.ctx.scene3d.lighting.sun_intensity = 0.0;
+    rig.ctx.scene3d.lighting.ambient_intensity = 0.0;
+    rig.ctx.scene3d.camera.position = vec3(0.0, 0.5, 4.0);
+    rig.ctx.scene3d.camera.look_at(vec3(0.0, 0.5, 0.0));
+    rig.ctx.scene3d.post.anti_aliasing = AntiAliasing::Taa;
+    let mut image = Vec::new();
+    for _ in 0..4 {
+        image = rig.draw();
+    }
+    let view_proj = rig.ctx.scene3d.camera.view_proj();
+    let at = |p: Vec3| {
+        let (x, y) = pixel(view_proj, p);
+        image[((y * SIZE + x) * 4) as usize]
+    };
+    // The floor line seen in front of the particle (its plane's distance).
+    let (above, floor_line) = (at(vec3(0.0, 0.8, 0.0)), at(vec3(0.0, 0.0, 0.0)));
+    eprintln!("soft particle with TAA: above the floor {above}, where it meets the floor {floor_line}");
+    assert!(above > 60, "the particle shows above the floor: {above}");
+    assert!(
+        floor_line < above,
+        "it fades where it meets the floor: {floor_line} of {above}"
+    );
+}
+
+/// The bars of [`bars_over_a_floor`] at 1920x1080 without TAA, each
+/// reflection (energy, RMS width; see `band`) against what a true mirror
+/// shows: not much wider (1.38 and 1.11 times; the trace assumes each bar
+/// as deep as it is tall, as it is, and its half-size image widens it a
+/// little). Assumed as thick as the distance alone said (0.1 + 0.02 w), the
+/// low one was 2.34 times as wide. The high one keeps a third of its light:
+/// the march steps over parts of it.
+#[test]
+fn thin_bars_are_reflected_about_as_wide_as_in_a_true_mirror_at_full_hd() {
+    let setup = || super::regression_stage::Setup {
+        size: (1920, 1080),
+        ..Default::default()
+    };
+    let Some(mut truth) = Stage::with(setup()) else {
+        return;
+    };
+    let (low, high) = bars(&mut truth, 0.0, false);
+    let image = truth.settled(2);
+    let true_bands = [
+        band(&truth, &image, None, low, 40),
+        band(&truth, &image, None, high, 40),
+    ];
+    truth.finish();
+    let mut stage = Stage::with(setup()).unwrap();
+    bars_over_a_floor(&mut stage, 0.0);
+    let off = stage.settled(2);
+    stage.ctx.scene3d.post.ssr = 1.0;
+    let on = stage.settled(4);
+    let bands = [
+        band(&stage, &on, Some(&off), low, 40),
+        band(&stage, &on, Some(&off), high, 40),
+    ];
+    stage.finish();
+    for (name, (truth, reflected)) in ["low", "high"].iter().zip(true_bands.iter().zip(&bands)) {
+        eprintln!(
+            "{name} bar: true mirror (energy {:.1}, RMS width {:.2}), screen-space (energy {:.1}, RMS width {:.2})",
+            truth.0, truth.1, reflected.0, reflected.1
+        );
+        assert!(
+            reflected.0 > truth.0 * 0.25,
+            "the {name} bar is reflected: energy {:.1} of {:.1}",
+            reflected.0,
+            truth.0
+        );
+        assert!(
+            reflected.1 < truth.1 * 1.6,
+            "the {name} bar is reflected not much wider than in a true mirror: RMS width {:.2} to {:.2}",
+            reflected.1,
+            truth.1
+        );
+    }
 }
