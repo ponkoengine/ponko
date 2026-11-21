@@ -233,7 +233,11 @@ impl Systems {
     pub const FOLLOW_ATTACHMENTS: SystemId = SystemId(8);
     /// Navigation update, when explicitly registered.
     pub const STEP_NAVMESH3D: SystemId = SystemId(9);
-    /// Advances every `Animator` and poses its skeleton
+    #[cfg_attr(
+        feature = "3d",
+        doc = " Advances every [`Animator`](crate::anim::Animator) and poses its skeleton"
+    )]
+    #[cfg_attr(not(feature = "3d"), doc = " Advances every `Animator` and poses its skeleton")]
     /// (feature `3d`). Stays at the end of [`Phase::Animate`].
     pub const UPDATE_ANIMATORS: SystemId = SystemId(10);
     /// Advances particle emitters (2D, and with feature `3d` the 3D ones
@@ -1004,14 +1008,17 @@ fn end_timings(ctx: &mut Ctx) {
 
 /// Drops the removals of tracked components that every one of `systems` has
 /// already been shown (those logged before the oldest of their last runs),
-/// so the logs don't grow. A system that hasn't run in this world yet keeps
+/// and replication's server has read, so the logs don't grow. A system that hasn't run in this world yet keeps
 /// everything: while one never runs (the simulation is paused, say), the
 /// removal logs of tracked components grow with every removal.
 fn forget_seen_removals<'a>(ctx: &mut Ctx, systems: impl Iterator<Item = &'a System>) {
     // Also once per frame or tick: slots set aside for deferred spawns
     // that no buffer took go back to the world.
     ctx.world.return_idle_ids();
-    if let Some(oldest) = systems.map(|s| s.changes_seen.in_world(&ctx.world)).min() {
+    let systems = systems.map(|s| s.changes_seen.in_world(&ctx.world)).min();
+    // Replication's server reads removals too, once a tick.
+    let replication = ctx.net.replication.changes_seen(&ctx.world);
+    if let Some(oldest) = systems.into_iter().chain(replication).min() {
         ctx.world.forget_removed(oldest);
     }
 }
@@ -3162,7 +3169,11 @@ impl Game {
     /// a game that pauses behind a menu still sees the scenario input that
     /// closes it. To hold only physics (a pause screen whose sim systems keep
     /// running, in a window and headless alike), use
-    /// `Physics::set_paused` (2D) or
+    #[cfg_attr(
+        feature = "physics",
+        doc = " [`Physics::set_paused`](crate::d2::Physics::set_paused) (2D) or"
+    )]
+    #[cfg_attr(not(feature = "physics"), doc = " `Physics::set_paused` (2D) or")]
     /// `ctx.physics3d.set_paused` (3D, feature `physics3d`). Textures
     /// still load (for their sizes), but nothing is uploaded to a GPU.
     ///

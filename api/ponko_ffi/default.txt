@@ -1727,10 +1727,12 @@ pub ponko_ffi::PonkoAssetGroupProgress::bytes_known: bool
 pub ponko_ffi::PonkoAssetGroupProgress::bytes_loaded: u64
 pub ponko_ffi::PonkoAssetGroupProgress::bytes_read: u64
 pub ponko_ffi::PonkoAssetGroupProgress::bytes_total: u64
+pub ponko_ffi::PonkoAssetGroupProgress::bytes_uploaded: u64
 pub ponko_ffi::PonkoAssetGroupProgress::fraction: f32
 pub ponko_ffi::PonkoAssetGroupProgress::loaded: usize
 pub ponko_ffi::PonkoAssetGroupProgress::state: u32
 pub ponko_ffi::PonkoAssetGroupProgress::total: usize
+pub ponko_ffi::PonkoAssetGroupProgress::upload_ms: f32
 impl core::clone::Clone for ponko_ffi::PonkoAssetGroupProgress
 pub fn ponko_ffi::PonkoAssetGroupProgress::clone(&self) -> Self
 impl core::cmp::PartialEq for ponko_ffi::PonkoAssetGroupProgress
@@ -1747,9 +1749,13 @@ impl core::marker::StructuralPartialEq for ponko_ffi::PonkoAssetGroupProgress
 pub ponko_ffi::PonkoAssetGroupStats::frame_budget_ms: f32
 pub ponko_ffi::PonkoAssetGroupStats::frame_bytes: u64
 pub ponko_ffi::PonkoAssetGroupStats::max_step_ms: f32
+pub ponko_ffi::PonkoAssetGroupStats::max_upload_ms: f32
 pub ponko_ffi::PonkoAssetGroupStats::over_budget: u64
 pub ponko_ffi::PonkoAssetGroupStats::step_ms: f32
 pub ponko_ffi::PonkoAssetGroupStats::steps: u64
+pub ponko_ffi::PonkoAssetGroupStats::total_upload_bytes: u64
+pub ponko_ffi::PonkoAssetGroupStats::total_upload_ms: f64
+pub ponko_ffi::PonkoAssetGroupStats::upload_ms: f32
 impl core::clone::Clone for ponko_ffi::PonkoAssetGroupStats
 pub fn ponko_ffi::PonkoAssetGroupStats::clone(&self) -> Self
 impl core::cmp::PartialEq for ponko_ffi::PonkoAssetGroupStats
@@ -5553,6 +5559,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_behavior_tree_free(*mut ponko_ffi::PonkoBehaviorTree)
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_behavior_tree_len(*const ponko_ffi::PonkoBehaviorTree, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_behavior_tree_new(*const core::ffi::primitives::c_char) -> *mut ponko_ffi::PonkoBehaviorTree
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_behavior_tree_new_linked(*const core::ffi::primitives::c_char, *const *const core::ffi::primitives::c_char, *const *const ponko_ffi::PonkoBehaviorTree, usize) -> *mut ponko_ffi::PonkoBehaviorTree
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_blend_mode_component(*mut ponko_ffi::PonkoWorld, *mut u32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_brain_action(*const ponko_ffi::PonkoBrain, *mut u64) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_brain_blackboard_json(*const ponko_ffi::PonkoBrain, *mut core::ffi::primitives::c_char, usize, *mut usize) -> ponko_ffi::PonkoStatus
@@ -5560,15 +5567,19 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_brain_finish(*mut ponko_ffi::PonkoBrain, ponko_ffi::PonkoAiStatus) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_brain_flag(*const ponko_ffi::PonkoBrain, u64, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_brain_free(*mut ponko_ffi::PonkoBrain)
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_brain_load_json(*const core::ffi::primitives::c_char) -> *mut ponko_ffi::PonkoBrain
 #[no_mangle] pub c fn ponko_ffi::ponko_brain_new(u32) -> *mut ponko_ffi::PonkoBrain
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_brain_num(*const ponko_ffi::PonkoBrain, u64, *mut f32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_brain_param_num(*const ponko_ffi::PonkoBrain, u64, *mut f32) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_brain_save_json(*const ponko_ffi::PonkoBrain, *mut core::ffi::primitives::c_char, usize, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_brain_set_entity(*mut ponko_ffi::PonkoBrain, u64, u64) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_brain_set_flag(*mut ponko_ffi::PonkoBrain, u64, bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_brain_set_num(*mut ponko_ffi::PonkoBrain, u64, f32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_brain_set_period(*mut ponko_ffi::PonkoBrain, u32) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_brain_set_seed(*mut ponko_ffi::PonkoBrain, u64) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_brain_set_vec2(*mut ponko_ffi::PonkoBrain, u64, ponko_ffi::PonkoVec2) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_brain_set_vec3(*mut ponko_ffi::PonkoBrain, u64, ponko_ffi::PonkoVec3) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_brain_signal(*mut ponko_ffi::PonkoBrain, u64) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_brain_started(*const ponko_ffi::PonkoBrain, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_brain_status(*const ponko_ffi::PonkoBrain, *mut ponko_ffi::PonkoAiStatus) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_brain_think(*mut ponko_ffi::PonkoBrain, *const ponko_ffi::PonkoBehaviorTree, u64, f32) -> ponko_ffi::PonkoStatus
@@ -6072,6 +6083,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_residency(*mut ponko_ffi::PonkoCtx, u32, *mut ponko_ffi::PonkoResidencyStats) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_resident_mesh(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, bool, *mut ponko_ffi::PonkoMesh) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_resident_texture(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, bool, *mut ponko_ffi::PonkoTexture) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_restart_asset_group(*mut ponko_ffi::PonkoCtx, u32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_restore_audio_mixer_state(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_resume(*mut ponko_ffi::PonkoCtx) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_retarget_pose(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoRetargeter, u64, u64) -> ponko_ffi::PonkoStatus

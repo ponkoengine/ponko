@@ -176,14 +176,45 @@ reads `.aseprite` files itself and writes the same export next to each:
 `hero.aseprite` becomes `hero.json` and `hero.png`, with every frame on a
 whole canvas, the tags (direction and repeats), slices and, with
 `"layers": true` for the file in `cook.json`, each visible layer under
-`{frame}:{layer}` names. The game loads `hero.json` as above. The Aseprite
-file itself isn't in the cooked files. While you develop, the game reads
-`assets/` as it is, with hot reload, so keep exporting from Aseprite there
-if you edit sprites while it runs: the cook replaces that export with the
-one it makes from the `.aseprite` file, so a shipped sheet is never older
-than its source. Group opacity isn't applied to the layers in a group, and
-tilemap layers aren't read: export those from Aseprite and set the file to
-`"keep"`.
+`{frame}:{layer}` names. The game can load `hero.json` as above.
+
+**Loading the `.aseprite` file directly.** While you develop, turn on
+ponko's `aseprite-source` Cargo feature and load the source file itself:
+no export, and with [hot reload](#hot-reload) on, saving the file in
+Aseprite refreshes the atlas and every animation playing from it. An
+edit that doesn't read keeps the last good atlas.
+
+```toml
+[dependencies]
+ponko = { version = "0.1", features = ["aseprite-source"] }
+```
+
+```rust
+# fn sprites(ctx: &mut Ctx) -> Result<(), Error> {
+let atlas = ctx.gfx.try_load_aseprite("sprites/hero.aseprite", false)?;
+let walk = atlas.animation("Walk", None)?;
+# let _ = walk;
+# Ok(())
+# }
+```
+
+The same line works in a cooked build: there `sprites/hero.aseprite`
+reads the `hero.json` and `hero.png` the cook wrote beside it, with or
+without the feature, so shipped games carry no Aseprite decoder. Use the
+same split-layer setting in the loader and in `cook.json`. A source name
+with neither the loose file (and the feature) nor an export beside it is
+a `NotFound` error that says which of the two to add.
+
+Direct loading and the cook share one decoder, so both give the same
+pixels. Groups are composited the way Aseprite 1.3 does when the file says
+so (its header flag for group blending): the children first, then the
+group's opacity and blend mode once, over what is below. Older files blend
+each child directly, as their Aseprite did. Tilemap layers are drawn from
+their embedded tileset, with flipped and rotated tiles and linked cels;
+embed a tileset in Aseprite if the file links to an external one. The
+cook caches each conversion by the file's bytes and split setting, so a
+cook that changed nothing reads the sheet back instead of converting it
+again ([below](packaging.md#cooking-assets-ponko-cook)).
 
 ## Blend modes and sprite shaders
 

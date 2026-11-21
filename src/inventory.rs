@@ -25,22 +25,78 @@ pub enum AssetClass {
     /// (glyph atlases, UI images), which the game can't free, so it can read
     /// more than [`LiveCounts::textures`](crate::handle::LiveCounts::textures).
     Texture,
-    /// 3D: textures cameras draw into (`Graphics::create_render_target`),
+    #[cfg_attr(
+        feature = "3d",
+        doc = " 3D: textures cameras draw into ([`Graphics::create_render_target`](crate::gfx::Graphics::create_render_target)),"
+    )]
+    #[cfg_attr(
+        not(feature = "3d"),
+        doc = " 3D: textures cameras draw into (`Graphics::create_render_target`),"
+    )]
     /// freed with [`Graphics::free`](crate::gfx::Graphics::free).
     RenderTarget,
-    /// 3D: `TextureArray`s, freed with [`Graphics::free`](crate::gfx::Graphics::free).
+    #[cfg_attr(
+        feature = "3d",
+        doc = " 3D: [`TextureArray`](crate::terrain::TextureArray)s, freed with [`Graphics::free`](crate::gfx::Graphics::free)."
+    )]
+    #[cfg_attr(
+        not(feature = "3d"),
+        doc = " 3D: `TextureArray`s, freed with [`Graphics::free`](crate::gfx::Graphics::free)."
+    )]
     TextureArray,
-    /// 3D: `Material`s, freed with [`Graphics::free`](crate::gfx::Graphics::free).
+    #[cfg_attr(
+        feature = "3d",
+        doc = " 3D: [`Material`](crate::render::Material)s, freed with [`Graphics::free`](crate::gfx::Graphics::free)."
+    )]
+    #[cfg_attr(
+        not(feature = "3d"),
+        doc = " 3D: `Material`s, freed with [`Graphics::free`](crate::gfx::Graphics::free)."
+    )]
     Material,
-    /// 3D: material `Shader`s, freed with [`Graphics::free`](crate::gfx::Graphics::free).
+    #[cfg_attr(
+        feature = "3d",
+        doc = " 3D: material [`Shader`](crate::render::Shader)s, freed with [`Graphics::free`](crate::gfx::Graphics::free)."
+    )]
+    #[cfg_attr(
+        not(feature = "3d"),
+        doc = " 3D: material `Shader`s, freed with [`Graphics::free`](crate::gfx::Graphics::free)."
+    )]
     Shader,
-    /// 3D: `Mesh`es, freed with [`Graphics::free`](crate::gfx::Graphics::free).
+    #[cfg_attr(
+        feature = "3d",
+        doc = " 3D: [`Mesh`](crate::render::Mesh)es, freed with [`Graphics::free`](crate::gfx::Graphics::free)."
+    )]
+    #[cfg_attr(
+        not(feature = "3d"),
+        doc = " 3D: `Mesh`es, freed with [`Graphics::free`](crate::gfx::Graphics::free)."
+    )]
     Mesh,
-    /// 3D: `GpuBuffer`s, freed with [`Graphics::free`](crate::gfx::Graphics::free).
+    #[cfg_attr(
+        feature = "3d",
+        doc = " 3D: [`GpuBuffer`](crate::render::GpuBuffer)s, freed with [`Graphics::free`](crate::gfx::Graphics::free)."
+    )]
+    #[cfg_attr(
+        not(feature = "3d"),
+        doc = " 3D: `GpuBuffer`s, freed with [`Graphics::free`](crate::gfx::Graphics::free)."
+    )]
     GpuBuffer,
-    /// 3D: screen `Effect`s, freed with [`Graphics::free`](crate::gfx::Graphics::free).
+    #[cfg_attr(
+        feature = "3d",
+        doc = " 3D: screen [`Effect`](crate::render::Effect)s, freed with [`Graphics::free`](crate::gfx::Graphics::free)."
+    )]
+    #[cfg_attr(
+        not(feature = "3d"),
+        doc = " 3D: screen `Effect`s, freed with [`Graphics::free`](crate::gfx::Graphics::free)."
+    )]
     Effect,
-    /// 3D: `Compute` passes, freed with [`Graphics::free`](crate::gfx::Graphics::free).
+    #[cfg_attr(
+        feature = "3d",
+        doc = " 3D: [`Compute`](crate::render::Compute) passes, freed with [`Graphics::free`](crate::gfx::Graphics::free)."
+    )]
+    #[cfg_attr(
+        not(feature = "3d"),
+        doc = " 3D: `Compute` passes, freed with [`Graphics::free`](crate::gfx::Graphics::free)."
+    )]
     Compute,
     /// [`Sound`](crate::audio::Sound)s, loaded or made, freed with [`Audio::free`](crate::audio::Audio::free).
     Sound,
