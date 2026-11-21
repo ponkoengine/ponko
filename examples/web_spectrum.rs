@@ -1,8 +1,9 @@
 //! The sea's CPU wave spectrum in the browser: the benchmark the runner
 //! `web/smoke/spectrum.mjs` reads (the water guide's "Waves from a
 //! spectrum"). Build it with `web/build.sh --features 3d web_spectrum`;
-//! the runner also builds it with `-C target-feature=+simd128`, alone and
-//! with `--features 3d,wasm-simd`, and compares the three.
+//! the runner also builds it with `-C target-feature=+simd128` alone and
+//! with `web/build.sh --simd` (that flag and the `wasm-simd` feature), and
+//! compares the three.
 //!
 //! What it times is what a WebGL2 sea pays each frame: one new moment of
 //! the spectrum's field on the CPU (`Waves::height_at` at a time not asked

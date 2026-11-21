@@ -603,3 +603,164 @@ fn brain_rows_signalled_from_query_par_hear_it_at_the_next_think() {
         );
     }
 }
+
+/// Which value each row of `brain_rows_signalled_with_a_value_...` hears.
+struct Voices {
+    guards: Vec<u64>,
+    shout: u64,
+}
+
+/// At tick 1, on all cores: guard 0 hears a number, 1 an entity, 2 a 2D
+/// point, 3 a 3D point and 4 nothing but the bare signal.
+unsafe extern "C" fn shout_par(ctx: *mut PonkoCtx, user: *mut c_void) {
+    unsafe extern "C" fn rows(chunk: *const PonkoChunk, user: *mut c_void) {
+        // SAFETY: the voices outlive the query and are only read; a live chunk.
+        unsafe {
+            let voices = &*user.cast::<Voices>();
+            let c = &*chunk;
+            for i in 0..c.count {
+                let at = voices
+                    .guards
+                    .iter()
+                    .position(|&g| g == bits(&*c.entities.add(i)))
+                    .unwrap();
+                let brain = ponko_chunk_ai_brain(chunk, 0, i);
+                let status = match at {
+                    0 => ponko_ai_brain_signal_num(brain, voices.shout, 7.5),
+                    1 => ponko_ai_brain_signal_entity(brain, voices.shout, 42),
+                    2 => ponko_ai_brain_signal_vec2(brain, voices.shout, PonkoVec2 { x: 1.0, y: -2.0 }),
+                    3 => ponko_ai_brain_signal_vec3(brain, voices.shout, PonkoVec3 { x: 3.0, y: 4.0, z: 5.0 }),
+                    _ => ponko_ai_brain_signal(brain, voices.shout),
+                };
+                assert_eq!(status, PONKO_OK);
+            }
+        }
+    }
+    if unsafe { ponko_ctx_sim_tick(ctx) } != 1 {
+        return;
+    }
+    let world = unsafe { ponko_ctx_world(ctx) };
+    let ids = columns(world);
+    let status = unsafe { ponko_query_par(world, ids.as_ptr(), 2, Some(rows), user) };
+    assert_eq!(status, PONKO_OK, "{}", last_error());
+}
+#[test]
+fn brain_rows_signalled_with_a_value_store_it_where_the_tree_says() {
+    const LISTENER: &str = r#"{"root": {"sequence": [{"wait_for": "shout", "store": "heard"}, {"do": "react"}]}}"#;
+    let mut voices = Voices {
+        guards: Vec::new(),
+        shout: key("shout"),
+    };
+    let heard = key("heard");
+    let game = new_game();
+    unsafe {
+        let user: *mut c_void = (&raw mut voices).cast();
+        assert_eq!(
+            ponko_game_sim_system(game, c"shout".as_ptr(), 1, Some(shout_par), user),
+            PONKO_OK
+        );
+        assert_eq!(
+            ponko_game_sim_system(game, c"think".as_ptr(), 1, Some(think), user),
+            PONKO_OK
+        );
+    }
+    let guards = &mut voices.guards as *mut Vec<u64>;
+    let world = run_game(game, 3, |ctx| unsafe {
+        let json = CString::new(LISTENER).unwrap();
+        let tree = ponko_behavior_tree_new(json.as_ptr());
+        assert!(!tree.is_null(), "{}", last_error());
+        assert_eq!(ponko_ctx_ai_add_tree(ctx, c"t".as_ptr(), tree), PONKO_OK);
+        ponko_behavior_tree_free(tree);
+        for _ in 0..5 {
+            let g = spawn(ctx);
+            assert_eq!(ponko_ctx_ai_add_brain(ctx, g, c"t".as_ptr(), 1_000_000), PONKO_OK);
+            (*guards).push(g);
+        }
+    });
+    // A guard's index, then what its blackboard holds under "heard" as a number, an entity, a 2D and a
+    // 3D point, and what it does.
+    type Heard = (
+        usize,
+        Option<f32>,
+        Option<u64>,
+        Option<(f32, f32)>,
+        Option<(f32, f32, f32)>,
+        u64,
+    );
+    #[derive(Default)]
+    struct Read {
+        guards: Vec<u64>,
+        heard: u64,
+        rows: Vec<Heard>,
+    }
+    let mut read = Read {
+        guards: voices.guards.clone(),
+        heard,
+        rows: Vec::new(),
+    };
+    unsafe extern "C" fn collect(chunk: *const PonkoChunk, user: *mut c_void) {
+        // SAFETY: the read outlives the query; a live chunk.
+        unsafe {
+            let read = &mut *user.cast::<Read>();
+            let c = &*chunk;
+            for i in 0..c.count {
+                let at = read
+                    .guards
+                    .iter()
+                    .position(|&g| g == bits(&*c.entities.add(i)))
+                    .unwrap();
+                let (brain, board) = (
+                    ponko_chunk_ai_brain(chunk, 0, i),
+                    ponko_chunk_ai_blackboard(chunk, 1, i),
+                );
+                let (mut n, mut e, mut v2, mut v3) = (0.0, 0, PonkoVec2::default(), PonkoVec3::default());
+                let mut action = u64::MAX;
+                assert_eq!(ponko_ai_brain_action(brain, 0, &mut action), PONKO_OK);
+                read.rows.push((
+                    at,
+                    (ponko_ai_blackboard_num(board, read.heard, &mut n) == PONKO_OK).then_some(n),
+                    (ponko_ai_blackboard_entity(board, read.heard, &mut e) == PONKO_OK).then_some(e),
+                    (ponko_ai_blackboard_vec2(board, read.heard, &mut v2) == PONKO_OK).then_some((v2.x, v2.y)),
+                    (ponko_ai_blackboard_vec3(board, read.heard, &mut v3) == PONKO_OK).then_some((v3.x, v3.y, v3.z)),
+                    action,
+                ));
+            }
+        }
+    }
+    unsafe {
+        let ids = columns(world);
+        assert_eq!(
+            ponko_query(world, ids.as_ptr(), 2, Some(collect), (&raw mut read).cast()),
+            PONKO_OK
+        );
+        ponko_world_free(world);
+    }
+    read.rows.sort_by_key(|r| r.0);
+    let react = key("react");
+    assert_eq!(read.rows.len(), 5);
+    assert_eq!(read.rows[0].1, Some(7.5), "a number");
+    assert_eq!(read.rows[1].2, Some(42), "an entity");
+    assert_eq!(read.rows[2].3, Some((1.0, -2.0)), "a 2D point");
+    assert_eq!(read.rows[3].4, Some((3.0, 4.0, 5.0)), "a 3D point");
+    for (at, row) in read.rows.iter().enumerate() {
+        assert_eq!(row.5, react, "guard {at} heard it and went on");
+    }
+    // The bare signal stores nothing (the negative control), and each value
+    // is stored as its own kind only.
+    assert!(read.rows[4].1.is_none() && read.rows[4].2.is_none());
+    assert!(read.rows[4].3.is_none() && read.rows[4].4.is_none());
+    assert!(read.rows[0].2.is_none() && read.rows[1].1.is_none());
+    unsafe {
+        let null = std::ptr::null_mut();
+        assert_eq!(ponko_ai_brain_signal_num(null, 1, 1.0), PONKO_INVALID_ARGUMENT);
+        assert_eq!(ponko_ai_brain_signal_entity(null, 1, 1), PONKO_INVALID_ARGUMENT);
+        assert_eq!(
+            ponko_ai_brain_signal_vec2(null, 1, PonkoVec2::default()),
+            PONKO_INVALID_ARGUMENT
+        );
+        assert_eq!(
+            ponko_ai_brain_signal_vec3(null, 1, PonkoVec3::default()),
+            PONKO_INVALID_ARGUMENT
+        );
+    }
+}

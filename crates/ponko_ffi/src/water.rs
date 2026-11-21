@@ -701,6 +701,35 @@ pub unsafe extern "C" fn ponko_ctx_water_touch(
     })
 }
 
+/// Writes how many contact ripples wait for the water's next update on water
+/// body `entity` (Rust `Water::waiting_contacts`): the rings
+/// `ponko_ctx_water_touch` and floating bodies crossing the surface started
+/// that the ripple simulation hasn't taken yet. Each update takes three, and
+/// the oldest are dropped past a limit; a body outside the ripple area, or
+/// water without ripples, starts none, so a test sees a floating body's
+/// ripple switch (`PonkoBuoyancyDesc::ripples`) by its effect: read it in a
+/// system that runs after physics. `PONKO_NOT_FOUND` for an entity that
+/// isn't a water body.
+///
+/// Ownership: `out_count` is written during the call only.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_water_waiting_contacts(std::ptr::null_mut(), 0, std::ptr::null_mut()) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `out_count` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_water_waiting_contacts(
+    ctx: *mut PonkoCtx,
+    entity: u64,
+    out_count: *mut u32,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        let n = ctx_access(ctx, |c| Ok(water_of(c, entity)?.waiting_contacts()))?;
+        out(out_count, u32::try_from(n).unwrap_or(u32::MAX))
+    })
+}
+
 /// Makes 3D body `entity` float: a box of `size` (full width, height and
 /// depth) sampling the water at its eight corners' layers. `drag` is how
 /// strongly the water pulls it along (`PONKO_BUOYANCY_DRAG` normally).

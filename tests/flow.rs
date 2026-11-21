@@ -189,3 +189,35 @@ fn empty_grids_panic() {
 fn cell_size_must_be_positive() {
     let _ = NavGrid::new(4, 4, 0.0);
 }
+
+#[test]
+fn a_field_computed_on_the_frame_pool_matches_one_computed_on_one_thread() {
+    // Every row's directions go to the frame pool's runner and are cut up
+    // there; one thread runs the same pass in order.
+    let mut nav = NavGrid::new(300, 200, 2.0);
+    for y in 10..190 {
+        nav.set_cost(100, y, NavGrid::WALL);
+        nav.set_cost(200, 199 - y, NavGrid::WALL);
+    }
+    for x in 120..180 {
+        nav.set_cost(x, 50, 5);
+    }
+    let goals = [vec2(590.0, 10.0), vec2(4.0, 390.0)];
+    let compute = || {
+        let mut flow = FlowField::new();
+        flow.compute(&nav, &goals);
+        flow
+    };
+    let one = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
+    let alone = one.install(compute);
+    let shared = compute();
+    assert_eq!(alone.raw_view().dir, shared.raw_view().dir);
+    for y in 0..200 {
+        for x in 0..300 {
+            let at = nav.center_of(uvec2(x, y));
+            assert_eq!(alone.distance_at(at), shared.distance_at(at));
+        }
+    }
+    let path = walk(&nav, &shared, vec2(1.0, 1.0), 2_000);
+    assert!(path.len() > 100, "it walks around both walls: {} cells", path.len());
+}

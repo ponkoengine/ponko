@@ -88,11 +88,16 @@ impl Panels {
                             "parent".into(),
                             format!("attached to {}", super::scene::label(ctx, *to)),
                         ),
+                        GltfOverrideKind::MissingParent(to) => (
+                            "parent".into(),
+                            format!("attached to {to}, which is missing: it waits on the file's parent"),
+                        ),
                         GltfOverrideKind::Deleted => (String::new(), "deleted".into()),
                     };
                     ui.horizontal(|ui| {
                         let tip = match o.kind {
                             GltfOverrideKind::Deleted => "Spawn it again from the file",
+                            GltfOverrideKind::MissingParent(_) => "Forget that parent: keep the file's",
                             _ => "Back to the file's value",
                         };
                         if ui.small_button("Revert").on_hover_text(tip).clicked() {
@@ -104,7 +109,12 @@ impl Panels {
                             format!("{} › {what}", o.node)
                         };
                         ui.label(label);
-                        ui.label(RichText::new(detail).weak());
+                        match o.kind {
+                            GltfOverrideKind::MissingParent(_) => {
+                                ui.label(RichText::new(detail).color(ui.visuals().warn_fg_color))
+                            }
+                            _ => ui.label(RichText::new(detail).weak()),
+                        };
                     });
                 }
                 if ui

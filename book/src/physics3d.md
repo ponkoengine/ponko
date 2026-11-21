@@ -137,10 +137,34 @@ of its cells flipped, so it too is solid exactly where it is drawn. That
 copy is made once when the tile enters the physics world (about 0.1 ms for
 257 × 257 heights) and shared by the tiles at one scale; unmirrored tiles
 cost what they did.
-A negative Y scale takes the size only: the ground still faces up. A saved
-world keeps the tile's `d3::Transform`, mirror included, but not its
-`TerrainCollider` (a heightfield made in code has no file to name): give
-the loaded tile a new one from its heights. Despawning the tile removes it; to
+A negative Y scale takes the size only: the ground still faces up.
+
+A saved world keeps the tile's `d3::Transform`, mirror included, and its
+`TerrainCollider`'s surface (`friction`, `restitution`, `groups`), but not
+the heightfield: it was made in code and has no file to name. Tell physics
+once, in setup, how to make a tile's ground again, and every load
+(`ctx.load_world`, `ctx.load_scene`) makes it solid where it is drawn,
+before the next step. The rebuild gets the loaded world and the tile, so
+the tile's saved components (its transform, or a component of your own
+such as a tile coordinate) say which heights it had; `None` leaves that
+tile without ground:
+
+```rust
+# use ponko::d3::*;
+# use ponko::prelude::*;
+# fn heights_at(corner: Vec3) -> Vec<f32> { vec![0.0; 33 * 33] }
+# fn setup(ctx: &mut Ctx) {
+ctx.physics3d.set_terrain_rebuild(|world, tile| {
+    let corner = world.get::<Transform>(tile)?.position;
+    Some(CollisionMeshData::heightfield(&heights_at(corner), 64.0))
+});
+# }
+```
+
+Without one, the loaded tile has no ground until the game gives it a new
+`TerrainCollider` from its heights (as before). The rebuild
+(`set_terrain_rebuild`, `clear_terrain_rebuild`) is Rust-only: C and C++
+games give the loaded tile a new collider. Despawning the tile removes it; to
 edit the ground (a crater), make a new heightfield, put it in the
 component's `mesh` and free the old one: the collider changes at the next
 step. Its `friction`, `restitution` and `groups` work as on a `d3::Collider`.
