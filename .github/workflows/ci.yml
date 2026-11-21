@@ -305,6 +305,27 @@ jobs:
           - name: compressed textures and geometry
             scope: -p ponko
             args: --features 3d,basis-universal,gltf-meshopt
+          # The command line tool's cook and texture features, each alone and
+          # the three that need no Aseprite (a test or a dependency used by
+          # only some combinations fails here, not in a user's `cargo install`).
+          - name: command line tool with no features
+            scope: -p ponko_cli
+            args: --no-default-features
+          - name: command line tool with textures only
+            scope: -p ponko_cli
+            args: --no-default-features --features textures
+          - name: command line tool with meshes only
+            scope: -p ponko_cli
+            args: --no-default-features --features meshes
+          - name: command line tool with shaders only
+            scope: -p ponko_cli
+            args: --no-default-features --features shaders
+          - name: command line tool with Aseprite only
+            scope: -p ponko_cli
+            args: --no-default-features --features aseprite
+          - name: command line tool with textures, meshes and shaders
+            scope: -p ponko_cli
+            args: --no-default-features --features meshes,textures,shaders
           # Every benchmark driver: the offscreen rendering benchmarks
           # (`render/scene`, `render/record`), the positional sound, shaped
           # text and video decoding ones.
@@ -641,6 +662,18 @@ jobs:
       - name: Tests, engine with no default features
         if: ${{ !cancelled() }}
         run: cargo test -p ponko --tests --no-fail-fast --no-default-features
+      # The command line tool's feature subsets: its unit tests (the cook and
+      # texture code) with each of its features alone, and the three without
+      # Aseprite.
+      - name: Tests, command line tool feature subsets
+        if: ${{ !cancelled() }}
+        run: |
+          cargo test -p ponko_cli --no-fail-fast --no-default-features --bin ponko
+          cargo test -p ponko_cli --no-fail-fast --no-default-features --features textures --bin ponko
+          cargo test -p ponko_cli --no-fail-fast --no-default-features --features meshes --bin ponko
+          cargo test -p ponko_cli --no-fail-fast --no-default-features --features shaders --bin ponko
+          cargo test -p ponko_cli --no-fail-fast --no-default-features --features aseprite --bin ponko
+          cargo test -p ponko_cli --no-fail-fast --no-default-features --features meshes,textures,shaders --bin ponko
       # JPEG off (the no-default-features run above) names the feature in its
       # error; a 2D build with only JPEG loads one; every format loads its own.
       - name: Tests, 2D engine with JPEG only
