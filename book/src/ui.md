@@ -845,6 +845,13 @@ How it is checked:
   roles, names, descriptions, values and states, operates the menu through
   the Action, Value and Component interfaces, and turns accessibility off
   and on again to check that the tree comes back whole.
+- **In the engine's own window, offscreen** (by hand, on macOS and
+  Windows: `cargo test --features accessibility --test ui_access_window --
+  --ignored`): `Game::run` attaches the adapter to its window, which opens
+  far off the screen, and the system's accessibility API (`NSAccessibility`
+  on macOS, a UI Automation client on Windows) finds Play through that
+  window and presses it; the check passes when the game's status line
+  changes.
 - **In the engine's own window on macOS** (by hand, `PONKO_ACCESS_WINDOW=1
   cargo test --features accessibility --test ui_access_macos
   engine_window`): the game runs with `Game::run`, which attaches the

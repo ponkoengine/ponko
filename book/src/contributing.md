@@ -51,6 +51,26 @@ it needs a GPU, a C library, signals or sockets, or another platform.
 and prints the line to add; `--list` shows every item with its test, and
 `--miri` the commands that run the Miri tests. The C API crate's helpers need
 no line when a tested C function reaches them; the script finds that test.
+The benchmark binary (`crates/ponko_bench`) is held to the same rule: its
+prototype worlds, counting allocator and raw-column loops have tests, and
+most run under Miri. A component registered from C replicates through
+`Replication::raw_component`; its read and write code is tested over the
+in-memory scripted network, so it runs under Miri too.
+
+A few checks need a person, because they open a real window or need a
+system's own screen reader. They are written down, compile with the rest
+and do nothing unless asked:
+
+| Check | Command | What it runs |
+|---|---|---|
+| The accessibility adapter on the engine's window (macOS, Windows) | `cargo test --features accessibility --test ui_access_window -- --ignored` | `Game::run` attaches the adapter (`for_window`, and through it `for_ns_view` or `for_hwnd`) to a window placed far off the screen; the system's accessibility API presses a button through it |
+| The same on macOS, in view | `PONKO_ACCESS_WINDOW=1 cargo test --features accessibility --test ui_access_macos engine_window` | the sample menu read and operated through the window's content view |
+| A screen reader's own speech | by hand, see [Screen reader records](ui-accessibility.md) | VoiceOver, Narrator, NVDA, Orca |
+
+In `scripts/unsafe-inventory.txt` such a check is named like any test, with
+`window` for why it can't run under Miri. A check of a test program without
+the harness (`harness = false`, for code that needs the main thread) is
+named by its function: `tests/ui_access_window.rs::the_engine_window_...`.
 
 The C API is one long unsafe boundary, so its tests also run under
 AddressSanitizer and UndefinedBehaviorSanitizer: the C and C++ test programs
