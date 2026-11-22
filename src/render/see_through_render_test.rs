@@ -142,13 +142,17 @@ fn a_ribbon_between_two_panes_is_drawn_between_them() {
 
 /// One particle of `size` at `at`, tinted `color`.
 fn puff(at: Vec3, size: f32, color: Color) -> (Transform3D, ParticleEmitter3D) {
+    puff_blended(at, size, color, ParticleBlend3D::Alpha)
+}
+
+fn puff_blended(at: Vec3, size: f32, color: Color, blend: ParticleBlend3D) -> (Transform3D, ParticleEmitter3D) {
     let settings = ParticleSettings3D {
         rate: 0.0,
         speed: (0.0, 0.0),
         gravity: Vec3::ZERO,
         size: (size, size),
         lifetime: (100.0, 100.0),
-        blend: ParticleBlend3D::Alpha,
+        blend,
         softness: 0.0,
         color_over_life: ParticleGradient::new(vec![(0.0, color)]),
         ..Default::default()
@@ -356,5 +360,165 @@ fn see_through_models_that_overlap_keep_their_far_to_near_order() {
     assert!(
         c[0] > 30.0 && c[1] > 100.0,
         "the red pane shows under the green one: {c:?}"
+    );
+}
+
+/// Thin see-through bars of three meshes in columns at the left and right
+/// edges and the middle of the view, rows close together, depths that
+/// interleave the meshes far to near. Their bounding spheres' rectangles
+/// overlap the rows around them (and grow towards the edges), their turned
+/// boxes' don't: with the boxes, far more bars are drawn together, and
+/// the picture is still the same to the byte as strictly far to near.
+#[test]
+fn tighter_screen_rectangles_group_more_models_near_the_edges_and_in_a_cluster() {
+    let Some(mut rig) = rig() else { return };
+    let colors = [Color::RED, Color::GREEN, Color::rgb(0.2, 0.4, 1.0)];
+    let glass = tinted(&mut rig, 0.5);
+    let meshes: Vec<Mesh> = [0.9, 0.95, 1.0]
+        .iter()
+        .map(|&v| {
+            let desc = MaterialDesc {
+                color: Color::rgb(v, v, v),
+                ..glass
+            };
+            rig.mesh(&MeshData::cube(1.0), desc)
+        })
+        .collect();
+    let mut k = 0;
+    for x in [-4.6, 0.0, 4.6] {
+        for row in 0..14 {
+            let y = row as f32 * 0.8 - 5.2;
+            rig.ctx.world.spawn((
+                Transform3D {
+                    position: vec3(x, y, -10.0 - k as f32 * 0.01),
+                    rotation: Quat::from_rotation_z(0.05),
+                    scale: vec3(1.4, 0.1, 0.1),
+                },
+                Model {
+                    color: colors[k % 3],
+                    ..Model::new(meshes[k % 3])
+                },
+            ));
+            k += 1;
+        }
+    }
+    let mut drawn = |group: bool, tight: bool| {
+        rig.renderer.group_see_through = group;
+        rig.renderer.tight_grouping = tight;
+        rig.frame();
+        let image = rig.image();
+        (image, rig.renderer.see_through_changes())
+    };
+    let (strict, strict_changes) = drawn(false, false);
+    let (spheres, sphere_changes) = drawn(true, false);
+    let (boxes, box_changes) = drawn(true, true);
+    let line = format!(
+        "see-through list, 42 bars of 3 meshes: [pipelines, bind groups, vertex buffers, index buffers, draws] \
+         far to near {strict_changes:?}, grouped by spheres {sphere_changes:?}, grouped by boxes {box_changes:?}"
+    );
+    support::record(&support::output_dir(), &line);
+    eprintln!("{line}");
+    assert!(
+        box_changes[4] * 2 < sphere_changes[4],
+        "the boxes group at least twice as many bars: {line}"
+    );
+    assert!(box_changes[1] < sphere_changes[1], "fewer material binds: {line}");
+    assert!(strict.rgba == spheres.rgba, "spheres: the same picture to the byte");
+    assert!(strict.rgba == boxes.rgba, "boxes: the same picture to the byte");
+    // Negative control: the bars are seen, so a wrong order would show.
+    let lit = strict.fraction(0..128, 0..128, |p| p[0] > 40 || p[1] > 40 || p[2] > 40);
+    assert!(lit > 0.05, "the bars cover part of the view ({lit})");
+}
+
+/// One particle like [`puff`]'s, blended additively.
+fn glow(at: Vec3, size: f32, color: Color) -> (Transform3D, ParticleEmitter3D) {
+    puff_blended(at, size, color, ParticleBlend3D::Additive)
+}
+
+/// Far to near: an additive red glow in the middle, a see-through pane on
+/// the left, an additive blue line down the middle, an additive green glow
+/// over the first and the line, and a pane of the same mesh on the right.
+/// The second glow joins the first past the pane (they don't overlap) and
+/// the line (both add); the right pane joins the left one past the line
+/// (they don't overlap): two draws where far to near takes five. The
+/// picture is the same up to the rounding of the sums.
+#[test]
+fn additive_particles_between_models_no_longer_keep_them_apart() {
+    let Some(mut rig) = rig() else { return };
+    let glass = tinted(&mut rig, 0.5);
+    let mesh = rig.mesh(&MeshData::cube(1.0), glass);
+    let small_pane = |x: f32, z: f32, color: Color| {
+        (
+            Transform3D {
+                position: vec3(x, 0.0, -z),
+                scale: vec3(2.0, 2.0, 0.05),
+                ..Default::default()
+            },
+            Model {
+                color,
+                ..Model::new(mesh)
+            },
+        )
+    };
+    rig.ctx.world.spawn(glow(vec3(0.0, 0.0, -12.0), 2.0, Color::RED));
+    rig.ctx.world.spawn(small_pane(-3.0, 11.0, Color::rgb(0.0, 0.0, 1.0)));
+    let mut line = Line3D::new(
+        vec![vec3(0.0, -2.0, -10.5), vec3(0.0, 2.0, -10.5)],
+        0.3,
+        Color::rgb(0.2, 0.3, 1.0),
+    );
+    line.blend = ParticleBlend3D::Additive;
+    rig.ctx.world.spawn((Transform3D::default(), line));
+    rig.ctx.world.spawn(glow(vec3(0.3, 0.0, -10.0), 2.0, Color::GREEN));
+    rig.ctx.world.spawn(small_pane(3.0, 9.0, Color::rgb(1.0, 1.0, 0.0)));
+    let mut drawn = |tight: bool| {
+        rig.renderer.tight_grouping = tight;
+        rig.frame();
+        (rig.image(), rig.renderer.see_through_for_test())
+    };
+    let (before, before_list) = drawn(false);
+    let (after, after_list) = drawn(true);
+    eprintln!("before {before_list:?}\nafter {after_list:?}");
+    assert_eq!(
+        before_list,
+        [
+            SeeThrough::Particles(0, 1),
+            SeeThrough::Models(0, 1),
+            SeeThrough::Strips(0, 1),
+            SeeThrough::Particles(1, 2),
+            SeeThrough::Models(1, 2),
+            SeeThrough::Unsorted,
+        ],
+        "before: every effect kept the panes apart"
+    );
+    assert_eq!(
+        after_list,
+        [
+            SeeThrough::Particles(0, 2),
+            SeeThrough::Models(0, 1),
+            SeeThrough::Strips(0, 1),
+            SeeThrough::Unsorted,
+        ],
+        "the glows together, then both panes in one run, then the line"
+    );
+    let differs = before
+        .rgba
+        .iter()
+        .zip(&after.rgba)
+        .filter(|(a, b)| a.abs_diff(**b) > 1)
+        .count();
+    assert_eq!(differs, 0, "the same picture, up to rounding");
+    // Negative control: the glows, the line and both panes are seen.
+    let (left, right, middle) = (
+        around(&after, 64 - 30, 64),
+        around(&after, 64 + 36, 64),
+        around(&after, 64, 64),
+    );
+    eprintln!("left pane {left:?}, right pane {right:?}, middle {middle:?}");
+    assert!(left[2] > 60.0, "the left pane shows: {left:?}");
+    assert!(right[0] > 60.0 && right[1] > 60.0, "the right pane shows: {right:?}");
+    assert!(
+        middle[0] > 60.0 && middle[1] > 60.0,
+        "the glows add up in the middle: {middle:?}"
     );
 }
