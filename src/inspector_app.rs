@@ -2123,6 +2123,48 @@ mod tests {
         }
 
         #[test]
+        fn a_terrain_tile_dragged_with_the_gizmo_settles_when_the_drag_ends_not_at_every_frame() {
+            use crate::terrain::{TerrainFile, TerrainTile};
+            let (egui, mut p, mut ctx, e) = editor3d();
+            let file =
+                serde_json::json!({"format": "ponko-terrain", "size": 4.0, "heights": "t-heights.png", "high": 1.0});
+            ctx.assets.add_source(
+                crate::assets::MemorySource::new("mem")
+                    .with("t.json", serde_json::to_vec(&file).unwrap())
+                    .with("t-heights.png", crate::three::encode_grey16(2, &[0; 4]).unwrap()),
+            );
+            // The entity at the origin becomes the tile of `t.json`.
+            let made = TerrainTile::spawn_from_file(&mut ctx, "t.json", Vec3::ZERO).unwrap();
+            let tile = *ctx.world.get::<TerrainTile>(made).unwrap();
+            ctx.world.despawn(made);
+            ctx.world.insert(e, tile);
+            ctx.world.insert(e, TerrainFile::new("t.json"));
+            select_it(&egui, &mut p, &mut ctx, e);
+            p.scene.gizmo.snap.on = false;
+            let corner = |ctx: &Ctx| crate::three::terrain_file::placed_corner(ctx, tile).unwrap();
+
+            let grab = on_axis(&ctx, Mode::Translate, 0, 0.7);
+            let to = screen(&ctx, vec3(along_x(&ctx, grab) + 2.0, 0.0, 0.0));
+            frame(&egui, &mut p, &mut ctx, vec![moved(grab)]);
+            frame(&egui, &mut p, &mut ctx, vec![button(grab, true)]);
+            for i in 1..=5 {
+                frame(&egui, &mut p, &mut ctx, vec![moved(grab.lerp(to, i as f32 / 5.0))]);
+                crate::three::follow_terrain_files(&mut ctx);
+                assert_eq!(corner(&ctx), Vec3::ZERO, "held while the drag goes on (frame {i})");
+            }
+            assert!(the_transform(&mut ctx).position.x > 1.5, "the gizmo moved it");
+            frame(&egui, &mut p, &mut ctx, vec![button(to, false)]);
+            crate::three::follow_terrain_files(&mut ctx);
+            let at = the_transform(&mut ctx).position;
+            assert_eq!(corner(&ctx), at, "re-placed once the drag ended");
+            assert_eq!(
+                *ctx.world.get::<TerrainTile>(e).unwrap(),
+                tile,
+                "the same tile, not made again"
+            );
+        }
+
+        #[test]
         fn the_3d_camera_centres_on_the_view_between_the_panels() {
             let (egui, mut p, mut ctx, e) = editor3d();
             let view = p

@@ -1181,6 +1181,8 @@ impl Panels {
         if let Some((_, before)) = self.scene.gizmo.drag.take() {
             ctx.edit(|ed, ctx| ed.changed(&ctx.world, before));
         }
+        // Terrain tiles it moved settle now.
+        ctx.gfx.assets3d.terrain_files.held = None;
     }
 
     /// Move, Rotate and Scale (W, E, R) pick the gizmo; Frame (F) frames

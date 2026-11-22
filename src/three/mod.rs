@@ -127,7 +127,7 @@ mod sky_kit;
 mod sky_shader;
 mod target;
 mod terrain;
-mod terrain_file;
+pub(crate) mod terrain_file;
 pub use far_terrain::FarTerrain;
 mod texture_array;
 pub(crate) mod view_model;
