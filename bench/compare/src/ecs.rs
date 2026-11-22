@@ -132,7 +132,7 @@ impl Bench {
 
     pub fn report(&mut self, name: &str, kind: &str, warmup: usize, times: Vec<Duration>) {
         let mut values: Vec<f64> = times.into_iter().map(ms).collect();
-        let d = crate::scenes::Dist::of(&mut values);
+        let d = crate::common::Dist::of(&mut values);
         println!(
             "{name:<40} median {:>9.4} ms   p95 {:>9.4} ms   min {:>9.4} ms",
             d.p50, d.p95, d.min

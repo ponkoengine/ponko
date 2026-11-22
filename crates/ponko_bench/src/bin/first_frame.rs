@@ -12,7 +12,7 @@ use ponko::prelude::*;
 
 fn main() {
     let started = Instant::now();
-    Game::new("first frame", 1280, 720)
+    let world = Game::new("first frame", 1280, 720)
         .bench_offscreen()
         .run_headless(1, |ctx| {
             let texture = ctx.gfx.create_texture(32, 32, &[255; 32 * 32 * 4]);
@@ -23,4 +23,11 @@ fn main() {
         "first frame {:.1} ms after main started",
         started.elapsed().as_secs_f64() * 1e3
     );
+    // The scoreboard's tuned table ends both engines' programs the same
+    // way: `process::exit` right after the frame (the first table returns
+    // from `main` and drops the world).
+    if std::env::var_os("PONKO_COMPARE_EXIT").is_some() {
+        std::process::exit(0);
+    }
+    drop(world);
 }

@@ -938,12 +938,15 @@ How to read it:
   and equal sprites share one material. One color is therefore Bevy's fast
   path. A different tint for every sprite gives every sprite its own
   material, and Bevy's frame grows from 11.6 to 44.8 ms. Ponko batches tinted
-  and untinted sprites the same way. The 2D rows draw with 4x MSAA on Ponko
-  and none on Bevy (its cheapest setting).
+  and untinted sprites the same way. Neither engine multisamples the 2D
+  rows: Ponko's 2D renderer draws with one sample, and Bevy's 2D camera has
+  `Msaa::Off`. (An earlier version of this page said Ponko used 4x MSAA
+  here; it does not.)
 - **Pipelined rendering is off for Bevy.** Ponko has no pipelined renderer,
   so both engines simulate and render on one thread and finish each frame
   before the next. With pipelining on, Bevy can overlap a frame's simulation
-  with the previous frame's rendering on a multi-core machine.
+  with the previous frame's rendering on a multi-core machine: the
+  [tuned table](#both-engines-tuned) has it on.
 - **Time to first frame** counts one launch after a warm-up launch, so the
   OS file cache and the driver's shader cache are warm for both. The very
   first launch after a build took Ponko 487 ms. Bevy exits with
@@ -977,11 +980,139 @@ The rebuild ranges are within 0.03 s of the medians. Bevy's default features
 include much more than either program uses (3D, glTF, audio formats,
 animation, picking and more). A Bevy game that turns off what it doesn't use
 builds faster and smaller, and so does a Ponko game that turns off default
-features it doesn't use (the inspector, audio, gamepads).
+features it doesn't use (the inspector, audio, gamepads). The
+[tuned table](#both-engines-tuned) measures that.
 
 The scoreboard compares the Rust APIs. The C and C++ API calls the same
 engine, but it has no rows here: a C or C++ program of these workloads has
 not been written yet.
+
+### Both engines tuned
+
+The table above measures each engine as a new project starts. The second
+table measures each engine the way a careful game built on it would ship:
+
+```sh
+python3 bench/compare/scoreboard.py --tuned      # the run-time rows (about 10 minutes) and the build rows
+```
+
+What changed, on both sides at once unless named (`bench/compare/README.md`,
+"The tuned table", has the source of every choice):
+
+- **One shipping profile** for both: fat LTO, one codegen unit,
+  `panic = "abort"`.
+- **Bevy's pipelined rendering is on** (its default). A frame is timed from
+  one frame finished on the GPU to the next, and every frame is still
+  waited for, so the GPU never runs ahead. With pipelining Bevy's frame is
+  the longer of its simulation and its drawing, not their sum. Ponko has no
+  pipelined renderer: its frame is still both, one after the other.
+- **Only the Bevy features each workload needs** (`default-features =
+  false` and Bevy's feature collections, one program per group of
+  workloads).
+- **The faster of each engine's documented ways**, measured: Bevy draws
+  the sprite rows with `Mesh2d` and a `ColorMaterial` (faster than
+  `Sprite`), moves the sprites and the sim with `par_iter_mut`, and keeps
+  its CSS grid for the UI (faster than flex rows). Ponko moves the sprites
+  and the sim with `par_for_each`.
+- **rapier's `parallel` and `simd8` features** on both sides (rapier 0.36
+  has no `simd-stable`).
+- **Time to first frame** ends both programs the same way (`process::exit`
+  right after the frame).
+- Unchanged: neither engine multisamples 2D (the same as before), the 3D
+  scenes use 4x MSAA on both, and Bevy 0.20 has no sprite path that avoids
+  one material per tint (its own `many_sprites` example says tinted sprites
+  render "in multiple batches, reducing performance").
+
+**Machine and build.** The machine of the first table, on AC power, Ponko
+at `784d7a2b` (the run-time rows were taken from that code before it was
+committed; the result file names its parent), Bevy 0.20.1, bevy_rapier2d
+0.37.0, rapier 0.36.1. Measured 2026-11-22 with a 1-minute load of 1.7 to
+2.9.
+
+| Workload | Ponko (ms) | Bevy (ms) | Bevy / Ponko | | Time against the first table |
+|---|---:|---:|---:|---|---|
+| ECS: spawn and despawn 100k in a world of 1M | 1.60 (1.59–1.62) | 4.38 (4.34–4.52) | 2.7× | Ponko faster | Ponko −9%, Bevy +3% |
+| ECS: iterate 1M (one archetype) | 0.165 (0.164–0.173) | 0.391 (0.370–0.404) | 2.4× | Ponko faster | both within noise |
+| ECS: iterate 16k fragmented over 1,024 archetypes | 0.005 (0.005–0.006) | 0.010 (0.010–0.012) | 2.2× | Ponko faster | both within noise |
+| ECS: add and remove a component, 1M entities | 42.1 (42.1–42.1) | 104.0 (102.3–107.8) | 2.5× | Ponko faster | Bevy +5%, Ponko within noise |
+| ECS: parallel iterate 1M (all cores) | 0.624 (0.614–0.629) | 0.755 (0.733–0.773) | 1.2× | Ponko faster | both within noise |
+| ECS: commands, 100k spawns and despawns in a world of 1M | 2.23 (2.22–2.29) | 5.05 (5.03–5.17) | 2.3× | Ponko faster | Ponko −7%, Bevy −6% |
+| Sprites: 100k moving, one frame drawn | 1.02 (0.99–1.03) | 6.74 (6.71–6.84) | 6.6× | Ponko faster | Bevy −42%, Ponko −7% (was 10×) |
+| Sprites: 100k moving, a different tint each | 0.99 (0.98–0.99) | 37.4 (36.5–37.9) | 38× | Ponko faster | Bevy −17%, Ponko −10% |
+| Sprites: 1M moving, one frame drawn | 7.62 (7.35–7.74) | 58.9 (58.8–59.1) | 7.7× | Ponko faster | Bevy −44%, Ponko −8% (was 13×) |
+| 3D: 100k moving meshes (16 kinds) with a 4-cascade sun shadow | 4.68 (4.66–4.72) | 14.1 (14.0–14.1) | 3.0× | Ponko faster | Bevy −11%, Ponko +1% |
+| 3D: 1,000 skinned characters (16 joints) with a sun shadow | 6.06 (5.96–6.06) | 3.12 (3.07–3.23) | 0.51× | **Bevy faster** | Bevy −19%, Ponko within noise (was 0.64×) |
+| 2D physics: 10k boxes falling into a pile, one tick | 3.25 (3.17–3.40) | 4.50 (4.48–4.76) | 1.4× | Ponko faster | Ponko −49%, Bevy −45% (rapier `parallel`) |
+| UI: 10k nodes, still, one frame drawn | 1.24 (1.20–1.26) | 2.71 (2.62–2.73) | 2.2× | Ponko faster | Bevy −41%, Ponko within noise |
+| UI: 10k nodes, all recolored every frame | 1.66 (1.62–1.83) | 4.60 (4.51–4.67) | 2.8× | Ponko faster | Ponko −33%, Bevy −32% |
+| Headless sim: 1M entities, one tick | 0.069 (0.069–0.071) | 0.170 (0.164–0.172) | 2.5× | Ponko faster | both −58% (all cores) |
+| Time to first frame (process start to first frame done on the GPU, exit included) | 26.8 (26.0–29.3) | 71.6 (71.0–76.4) | 2.7× | Ponko faster | Bevy −64%, Ponko within noise (was 6.9×) |
+
+How to read it, row by row:
+
+- **No row changed sides.** Ponko is faster on every row but the skinned
+  characters, where Bevy is faster and its lead grows (3.12 against
+  6.06 ms, 0.51×; it was 0.64×).
+- **Bevy's GPU rows moved most**, from pipelining and the leaner builds:
+  100k sprites 11.6 to 6.74 ms, 1M sprites 105.7 to 58.9 ms, the still UI
+  4.58 to 2.71 ms, the moving 3D world 15.8 to 14.1 ms. Ponko is still
+  6.6 to 7.7 times faster on sprites, 3.0 times on the 3D world and 2.2 to
+  2.8 times on the UI. Ponko's GPU rows moved little: its sprite rows are
+  7 to 10% faster with the movement on all cores, its still UI and first frame
+  are within noise, and its 3D world is 1% slower (4.68 against 4.63 ms,
+  just outside both ranges).
+- **Tinted sprites** stay Bevy's slow path (37.4 ms; `Mesh2d` was the
+  faster of its two ways), 38 times Ponko's 0.99 ms.
+- **Physics**: rapier's `parallel` feature halves the tick on both sides
+  (Ponko 6.39 to 3.25 ms, Bevy 8.11 to 4.50 ms). Ponko stays 1.4 times
+  faster; the difference is outside rapier (the solver is the same crate).
+- **The sim** runs on all cores on both sides: 0.069 against 0.170 ms.
+- **Time to first frame**: Bevy's falls from 199 to 72 ms with only the 2D
+  features, the shipping profile and the same exit; Ponko's stays at 27 ms.
+  Which of the three gives Bevy most of it was not separated.
+- **The ECS rows** run the same code with the shipping profile. Two of
+  Bevy's got slower: add and remove 98.9 to 104.0 ms (5%) and spawn and
+  despawn 4.27 to 4.38 ms (3%), both outside the ranges, with no
+  explanation found (the code is the same; only the profile changed).
+  Ponko's spawn and commands rows got 7 to 9% faster.
+- The ranking is these workloads on one machine, not a verdict on the
+  engines (see [the engine comparison](comparison.md)).
+
+**Builds and sizes, tuned.** The small game only (the hello world was not
+built again), each engine with the features the game uses and nothing
+else: Ponko with `default-features = false, features = ["window"]` (no
+audio, gamepads, inspector or JPEG), Bevy with `2d_bevy_render`,
+`ui_bevy_render`, `default_app`, `bevy_winit`, `default_font` and the
+platform features (`std`, `multi_threaded`, and `webgl2`, `x11`,
+`wayland` for the web and Linux). Debug builds use each engine's fast-
+compile advice: the templates' dev profile on both sides, and for Bevy its
+`dynamic_linking` feature (Bevy's own `config_fast_builds.toml` keeps
+macOS on the default linker, as Ponko's guide does). The release and wasm
+rows use the shipping profile. Measured on AC power; the load during the
+builds (2.3 to 16) is the builds' own.
+
+| | Ponko small game | Bevy small game | First table: Ponko / Bevy |
+|---|---:|---:|---|
+| Clean debug build (s) | 41.6 (40.1–42.6) | 97.0 (96.0–101.0) | 45.1 / 118 |
+| Debug rebuild, one-line change in `src/lib.rs` (s) | 0.42 | 0.54 | 0.47 / 0.83 |
+| ... in `src/main.rs` (s) | 0.29 | 0.32 | 0.32 / 0.64 |
+| Link (rustc's `link_binary`, debug) (s) | 0.12 | 0.08 | |
+| Clean build, shipping profile (s, one run) | 108 | 212 | release: 35.7 / 91.0 |
+| Binary / stripped | 9.8 / 8.5 MB | 52.1 / 33.1 MB | release: 24.5 / 19.4 MB, 134.4 / 82.4 MB |
+| wasm, shipping profile / gzipped | 12.7 / 3.6 MB | 57.5 / 11.9 MB | release: 20.7 / 5.8 MB, 120.7 / 21.5 MB |
+
+Row by row: Ponko builds faster from clean (41.6 against 97.0 s) and
+rebuilds faster after a change in `src/lib.rs` (0.42 against 0.54 s).
+After a change in `src/main.rs` the two are 0.29 and 0.32 s; the rebuild
+ranges are within 0.03 s, so that is close to the noise. Bevy's
+`dynamic_linking` gives it the faster link (0.08 against 0.12 s) and cut
+its rebuilds by a third to a half against the first table. Bevy's clean
+build is 21 s shorter than in the first table (fewer features and dynamic
+linking together, not measured apart), Ponko's 3.5 s (fewer features). The
+shipping profile takes two to three times as long as a release build, and
+the binaries come out at 40% of their release size or less. Ponko's game is
+still the smaller download: 8.5 MB stripped against 33.1 MB, and 3.6 MB
+against 11.9 MB of gzipped wasm.
 
 ## 3D: Ponko vs Unity
 

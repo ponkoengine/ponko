@@ -35,7 +35,6 @@ use bevy::{
     prelude::*,
     render::{
         RenderPlugin,
-        pipelined_rendering::PipelinedRenderingPlugin,
         render_resource::{Extent3d, PollType, TextureDimension, TextureFormat},
         renderer::{RenderAdapterInfo, RenderDevice},
         view::screenshot::{Screenshot, save_to_disk},
@@ -44,7 +43,11 @@ use bevy::{
 };
 use serde_json::{Value, json};
 
+#[cfg(feature = "stock")]
+use bevy::render::pipelined_rendering::PipelinedRenderingPlugin;
+
 use crate::BEVY_VERSION;
+use crate::common::{Dist, command_line, load_average, write};
 
 /// Joints per skinned figure, and its height.
 const JOINTS: usize = 16;
@@ -654,47 +657,6 @@ fn settings() -> Result<Settings, String> {
     })
 }
 
-/// Nearest-rank percentiles, as the ponko report computes them.
-#[derive(Clone, Copy)]
-pub struct Dist {
-    pub samples: usize,
-    pub min: f64,
-    pub p50: f64,
-    pub p95: f64,
-    pub p99: f64,
-    pub max: f64,
-    pub mean: f64,
-}
-
-impl Dist {
-    pub fn of(values: &mut [f64]) -> Dist {
-        values.sort_by(f64::total_cmp);
-        let rank = |pct: usize| values[(pct * values.len()).div_ceil(100).max(1) - 1];
-        Dist {
-            samples: values.len(),
-            min: values[0],
-            p50: rank(50),
-            p95: rank(95),
-            p99: rank(99),
-            max: values[values.len() - 1],
-            mean: values.iter().sum::<f64>() / values.len() as f64,
-        }
-    }
-
-    pub fn json(&self) -> Value {
-        let round = |v: f64| (v * 1e6).round() / 1e6;
-        json!({
-            "samples": self.samples,
-            "min": round(self.min),
-            "p50": round(self.p50),
-            "p95": round(self.p95),
-            "p99": round(self.p99),
-            "max": round(self.max),
-            "mean": round(self.mean),
-        })
-    }
-}
-
 struct Measured {
     name: &'static str,
     built: Built,
@@ -716,22 +678,26 @@ fn measure(name: &'static str, settings: &Settings, png: Option<&std::path::Path
         plugins = plugins.disable::<bevy::log::LogPlugin>();
     }
     let mut app = App::new();
-    app.add_plugins(
-        plugins
-            .set(WindowPlugin {
-                primary_window: None,
-                exit_condition: ExitCondition::DontExit,
-                ..default()
-            })
-            .set(RenderPlugin {
-                synchronous_pipeline_compilation: true,
-                ..default()
-            })
-            // One thread simulates and renders, as in the ponko run.
-            .disable::<PipelinedRenderingPlugin>()
-            // No window, so no event loop (one per process at most).
-            .disable::<bevy::winit::WinitPlugin>(),
-    );
+    let plugins = plugins
+        .set(WindowPlugin {
+            primary_window: None,
+            exit_condition: ExitCondition::DontExit,
+            ..default()
+        })
+        .set(RenderPlugin {
+            synchronous_pipeline_compilation: true,
+            ..default()
+        });
+    // The first table: one thread simulates and renders, as in the ponko
+    // run. Tuned: Bevy's default, pipelined rendering (`finished.rs`).
+    #[cfg(feature = "stock")]
+    let plugins = plugins
+        .disable::<PipelinedRenderingPlugin>()
+        // No window, so no event loop (one per process at most).
+        .disable::<bevy::winit::WinitPlugin>();
+    app.add_plugins(plugins);
+    #[cfg(not(feature = "stock"))]
+    let finished = crate::finished::Finished::install(&mut app);
     // The sun and the ambient light of ponko's default `Lighting`, in
     // ponko's units (the camera's exposure stands in for the tone curve).
     let rgb = |hex: u32| Color::srgb_u8((hex >> 16) as u8, (hex >> 8) as u8, hex as u8);
@@ -822,9 +788,19 @@ fn measure(name: &'static str, settings: &Settings, png: Option<&std::path::Path
         }
         let updated = Instant::now();
         // Every schedule of the main world, then extraction and the render
-        // world up to the submit.
+        // world up to the submit (tuned: the render world's part runs on
+        // the render thread, and `frame` is taken from its stamps below).
         apps.update();
         let submitted = Instant::now();
+        #[cfg(not(feature = "stock"))]
+        {
+            if index >= settings.warmup {
+                update.push((updated - started).as_secs_f64() * 1e3);
+                cpu.push((submitted - updated).as_secs_f64() * 1e3);
+            }
+            continue;
+        }
+        #[cfg(feature = "stock")]
         apps.main
             .world()
             .resource::<RenderDevice>()
@@ -840,6 +816,14 @@ fn measure(name: &'static str, settings: &Settings, png: Option<&std::path::Path
             cpu.push((submitted - updated).as_secs_f64() * 1e3);
             frame.push((done - updated).as_secs_f64() * 1e3);
         }
+    }
+    #[cfg(not(feature = "stock"))]
+    {
+        let updates = settings.warmup + settings.frames;
+        // One more frame closes the last measured one.
+        apps.update();
+        finished.wait_for(updates + 1);
+        frame = finished.times(settings.warmup);
     }
     if let Some(dir) = png {
         let path = dir.join(format!("{name}.png"));
@@ -877,43 +861,6 @@ fn measure(name: &'static str, settings: &Settings, png: Option<&std::path::Path
         update: Dist::of(&mut update),
         cpu: Dist::of(&mut cpu),
         frame: Dist::of(&mut frame),
-    }
-}
-
-/// First line of a command's output, or `"unknown"`.
-pub fn command_line(cmd: &str, args: &[&str]) -> String {
-    std::process::Command::new(cmd)
-        .args(args)
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .and_then(|s| s.lines().next().map(|l| l.trim().to_owned()))
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "unknown".to_owned())
-}
-
-/// The 1, 5 and 15 minute load averages (how busy the machine is), as the
-/// ponko run records them, or `"unknown"`.
-pub fn load_average() -> String {
-    if cfg!(target_os = "macos") {
-        let s = command_line("sysctl", &["-n", "vm.loadavg"]);
-        return s.trim_matches(|c| c == '{' || c == '}' || c == ' ').to_owned();
-    }
-    std::fs::read_to_string("/proc/loadavg")
-        .ok()
-        .map(|s| s.split_whitespace().take(3).collect::<Vec<_>>().join(" "))
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "unknown".to_owned())
-}
-
-pub fn write(path: &std::ffi::OsStr, what: &str, text: String) {
-    match std::fs::write(path, text) {
-        Ok(()) => println!("{what} written to {}", path.to_string_lossy()),
-        Err(e) => {
-            eprintln!("could not write {}: {e}", path.to_string_lossy());
-            std::process::exit(1);
-        }
     }
 }
 
