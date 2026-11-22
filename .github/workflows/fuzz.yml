@@ -1,6 +1,7 @@
 # Fuzzing of the loaders that read untrusted files and packets (fuzz/,
 # fuzz/README.md): scenes, prefabs, glTF, the Unity importer's readers,
-# action maps, asset packs and both network protocols.
+# action maps, asset packs, the network protocols, sounds and the sound of
+# WebM videos (fuzz/targets.txt lists them all).
 #
 # Every Monday on `main` (and by hand): each target runs a few minutes from
 # the committed seeds plus the repository's fixtures. A crash, hang or
@@ -46,6 +47,11 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-fuzz@${{ env.CARGO_FUZZ_VERSION }}
+      # The fuzz crate builds the engine with `audio` (the audio output
+      # library links ALSA on Linux: its headers) and `video` (the AV1
+      # decoder's x86 assembly is built with nasm).
+      - name: Install system libraries
+        run: bash scripts/ci-apt-install.sh libasound2-dev nasm
       # The engine's lock file pins the dependencies the fuzz crate shares
       # with it; cargo adds the few it has of its own.
       - name: Build

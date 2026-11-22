@@ -310,16 +310,35 @@ pub fn cooked_texture(data: &[u8]) {
 }
 
 /// A sound file in any format the engine plays (WAV, AIFF, ADPCM, OGG
-/// Vorbis, FLAC, MP3): decoded whole, in slices, streamed from memory and
-/// played as a stream, which must refuse absurd headers and stop at the
-/// length limit.
+/// Vorbis, FLAC, MP3): decoded whole, in slices, streamed from memory,
+/// run through the desktop's streaming decoder (the one Kira's decoder
+/// thread runs: decoding and seeking) and played as the web streams, which
+/// must refuse absurd headers and stop at the length limit.
 pub fn sound(data: &[u8]) {
-    // The engine turns a panic inside a format's reader into an error
-    // (`audio::sound_file::guarded`), but cargo-fuzz's panic hook aborts at
-    // the first panic, caught or not, so the same upstream bug would end
-    // every run. The hook is replaced with one that only prints the first
-    // few; a panic the engine doesn't catch unwinds out of the target
-    // (a function the fuzzer calls) and aborts it all the same.
+    quiet_caught_panics();
+    // What the engine's limits promise for any sound it decoded whole.
+    if let Some((frames, rate)) = ponko::__fuzz::sound(data) {
+        assert!(frames <= 64 * 1024 * 1024, "a sound over the length limit loaded");
+        assert!((1..=768_000).contains(&rate), "a sound over the sample rate limit loaded");
+    }
+}
+
+/// The sound of a WebM file (feature `video`): the tracks a video reads
+/// first, then its soundtrack's header and a little of it played, with
+/// seeks and a loop, as a video plays it.
+pub fn webm_audio(data: &[u8]) {
+    quiet_caught_panics();
+    ponko::__fuzz::webm_audio(data);
+}
+
+/// The engine turns a panic inside a sound format's reader into an error
+/// (`audio::sound_file::guarded`, and the streaming decoder's guard), but
+/// cargo-fuzz's panic hook aborts at the first panic, caught or not, so the
+/// same upstream bug would end every run. The hook is replaced with one
+/// that only prints the first few; a panic the engine doesn't catch unwinds
+/// out of the target (a function the fuzzer calls) and aborts it all the
+/// same.
+fn quiet_caught_panics() {
     static HOOK: std::sync::Once = std::sync::Once::new();
     HOOK.call_once(|| {
         static SEEN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
@@ -329,9 +348,4 @@ pub fn sound(data: &[u8]) {
             }
         }));
     });
-    // What the engine's limits promise for any sound it decoded whole.
-    if let Some((frames, rate)) = ponko::__fuzz::sound(data) {
-        assert!(frames <= 64 * 1024 * 1024, "a sound over the length limit loaded");
-        assert!((1..=768_000).contains(&rate), "a sound over the sample rate limit loaded");
-    }
 }

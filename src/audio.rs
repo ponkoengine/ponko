@@ -169,8 +169,11 @@ mod tracks;
 // for a video's soundtrack (feature `video`).
 #[cfg(all(feature = "audio", any(target_arch = "wasm32", test, feature = "video", fuzzing)))]
 mod chunked;
+// Streams on the desktop: the decoder Kira's decoder thread runs, guarded.
 #[cfg(feature = "audio")]
 pub(crate) mod sound_file;
+#[cfg(all(feature = "audio", not(target_arch = "wasm32")))]
+mod stream_decoder;
 #[cfg(feature = "audio")]
 mod unlock;
 
@@ -203,10 +206,9 @@ mod backend {
     #[cfg(any(target_arch = "wasm32", feature = "video"))]
     use super::chunked::{ChunkedData, ChunkedHandle};
     #[cfg(not(target_arch = "wasm32"))]
-    use kira::sound::{
-        FromFileError,
-        streaming::{StreamingSoundData, StreamingSoundHandle},
-    };
+    use super::stream_decoder::StreamDecoder;
+    #[cfg(not(target_arch = "wasm32"))]
+    use kira::sound::streaming::{StreamingSoundData, StreamingSoundHandle};
     use kira::track::{SendTrackBuilder, SendTrackHandle, TrackBuilder, TrackHandle};
     use kira::{Frame, StartTime, Tween};
     use std::{collections::HashMap, path::PathBuf, sync::Arc};
@@ -239,7 +241,7 @@ mod backend {
     enum Handle {
         Static(StaticSoundHandle),
         #[cfg(not(target_arch = "wasm32"))]
-        Stream(StreamingSoundHandle<FromFileError>),
+        Stream(StreamingSoundHandle<String>),
         #[cfg(any(target_arch = "wasm32", feature = "video"))]
         Chunked(ChunkedHandle),
     }
@@ -354,6 +356,14 @@ mod backend {
                 Self::Chunked(h) => h.set_playback_rate(rate),
             }
         }
+        /// The error that ended a stream (its decoder failed or crashed).
+        fn take_error(&mut self) -> Option<String> {
+            match self {
+                #[cfg(not(target_arch = "wasm32"))]
+                Self::Stream(h) => h.pop_error(),
+                _ => None,
+            }
+        }
         /// Volume, panning and speed, smoothed over Kira's default 10 ms.
         fn apply(&mut self, volume: f32, pan: f32, speed: f32) {
             self.set_volume(volume, Tween::default());
@@ -377,21 +387,29 @@ mod backend {
         /// streamed file's fetched copy), kept (not decoded) in memory and
         /// shared by every playback.
         Memory(Arc<[u8]>),
+        /// Tests: encoded bytes whose decoder panics at its first packet,
+        /// as a reader bug would.
+        #[cfg(test)]
+        Crashing(Arc<[u8]>),
     }
     #[cfg(not(target_arch = "wasm32"))]
     impl StreamFrom {
-        fn open(&self) -> Result<StreamingSoundData<FromFileError>, String> {
-            match self {
-                Self::File(path) => {
-                    // The file may have changed since it was first checked.
-                    super::sound_file::check_file(path)?;
-                    StreamingSoundData::from_file(path).map_err(|e| e.to_string())
+        /// A decoder over the sound, its header checked again (a file may
+        /// have changed since it was first opened). Every call into it is
+        /// guarded: a decoder panic while it plays ends the sound with an
+        /// error instead of Kira's decoder thread (`stream_decoder`).
+        fn open(&self) -> Result<StreamingSoundData<String>, String> {
+            let decoder = match self {
+                Self::File(path) => StreamDecoder::from_file(path)?,
+                Self::Memory(bytes) => StreamDecoder::from_bytes(bytes)?,
+                #[cfg(test)]
+                Self::Crashing(bytes) => {
+                    let mut decoder = StreamDecoder::from_bytes(bytes)?;
+                    decoder.panic_next_decode = true;
+                    decoder
                 }
-                Self::Memory(bytes) => {
-                    super::sound_file::check_bytes(bytes)?;
-                    StreamingSoundData::from_cursor(std::io::Cursor::new(bytes.clone())).map_err(|e| e.to_string())
-                }
-            }
+            };
+            Ok(StreamingSoundData::from_decoder(decoder))
         }
     }
     #[derive(Default)]
@@ -494,6 +512,8 @@ mod backend {
                 #[cfg(not(target_arch = "wasm32"))]
                 Clip::Stream(StreamFrom::File(_)) => 0,
                 Clip::Stream(StreamFrom::Memory(bytes)) => bytes.len() as u64,
+                #[cfg(test)]
+                Clip::Stream(StreamFrom::Crashing(bytes)) => bytes.len() as u64,
                 #[cfg(feature = "video")]
                 Clip::Chunked(bytes) => bytes.len() as u64,
                 Clip::Freed => 0,
@@ -952,6 +972,37 @@ mod backend {
             assert!(matches!(&audio.sounds[0], Clip::Stream(_)));
         }
 
+        #[test]
+        fn a_decoder_panic_while_a_stream_plays_ends_that_sound_with_an_error_not_the_game() {
+            use super::super::stream_decoder::tests::{hostile_wav, wav};
+            let (mut audio, out) = Audio::with_buffer_output(8000);
+            let tone: Vec<i16> = (0..8000).map(|i| if i % 20 < 10 { 8000 } else { -8000 }).collect();
+            let bytes = wav(8000, &tone);
+            let crashing = audio.push(Clip::Stream(StreamFrom::Crashing(bytes.clone())), 1.0);
+            let fine = audio.push(Clip::Stream(StreamFrom::Memory(bytes)), 1.0);
+            let looping = SoundParams {
+                looping: true,
+                ..Default::default()
+            };
+            let crashed = audio.play(crashing, looping);
+            let playing = audio.play(fine, looping);
+            // Kira decodes on its own thread: mix until it has caught up.
+            let rms =
+                |frames: &[[f32; 2]]| (frames.iter().map(|f| f[0] * f[0]).sum::<f32>() / frames.len() as f32).sqrt();
+            let mut loudness = 0.0;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while (audio.playing.contains_key(&crashed) || loudness < 0.05) && std::time::Instant::now() < deadline {
+                loudness = rms(&out.render(1.0 / 60.0));
+                audio.update(1.0 / 60.0);
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            assert!(!audio.playing.contains_key(&crashed), "the crashed stream ended");
+            assert!(audio.playing.contains_key(&playing), "the other stream plays on");
+            assert!(loudness > 0.05, "and is heard: {loudness}");
+            // The known hostile header: refused when the stream opens.
+            assert!(audio.stream_bytes(hostile_wav()).is_err());
+        }
+
         /// The backend as on the web before the first click.
         fn locked() -> Audio {
             Audio {
@@ -1271,8 +1322,24 @@ pub fn fuzz_sound(bytes: &[u8]) -> Option<(u64, u32)> {
         .ok()
         .map(|sound| (sound.frames.len() as u64, sound.sample_rate));
     let _ = backend::Audio::default().stream_bytes(bytes.to_vec());
+    stream_decoder::fuzz_stream(bytes);
     chunked::fuzz_stream(bytes);
     decoded
+}
+
+/// What the fuzz target `webm_audio` does with the bytes of a WebM file:
+/// what a video reads before its soundtrack (the container's tracks), then
+/// the soundtrack as a video plays it (its header read, then decoded a
+/// packet at a time with seeks and a loop). The soundtrack runs even when
+/// the track check would refuse the file, so the fuzzer reaches the audio
+/// decoder without having to build a valid picture track first.
+#[cfg(all(fuzzing, feature = "audio", feature = "video"))]
+#[doc(hidden)]
+pub fn fuzz_webm_audio(bytes: &[u8]) {
+    let shared: std::sync::Arc<[u8]> = bytes.into();
+    let seconds = crate::video::fuzz_tracks(&shared).unwrap_or(0.0);
+    let _ = backend::Audio::default().soundtrack(shared, seconds as f32);
+    chunked::fuzz_stream(bytes);
 }
 
 /// A sound decoded on a worker thread, for [`Audio::adopt_decoded`].
