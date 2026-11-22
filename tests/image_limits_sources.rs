@@ -186,3 +186,20 @@ fn a_texture_array_reads_each_layer_under_its_sources_limits() {
         assert!(err.message().contains("asset source \"mods\""), "{}", err.message());
     });
 }
+
+#[test]
+fn a_game_gives_its_mods_tight_limits_and_reads_what_is_in_force() {
+    let _own = own();
+    game().run_headless(0, |ctx| {
+        // ANCHOR: source_image_limits
+        // Pictures from the mods (source id "mods") must be small: at most
+        // 1 024 pixels a side and 8 MiB of pixels. Everything else follows
+        // the game's limits. Set it before the mods are mounted; a picture
+        // past it is `ErrorKind::Limit`, and its message names the source.
+        ctx.assets
+            .set_source_image_limits(ponko::mods::SOURCE_ID, ImageLimits::new(1_024, 8 << 20));
+        // ANCHOR_END: source_image_limits
+        assert_eq!(ctx.assets.source_image_limits("mods"), Some(ImageLimits::new(1_024, 8 << 20)));
+        ctx.assets.clear_source_image_limits("mods");
+    });
+}

@@ -2652,7 +2652,7 @@ mod tests {
         );
         assets.add_source(MemorySource::new("own").with("own.png", png));
         let decode = |bytes: &[u8]| decode_image(bytes, "x.png", "\"x.png\"").map(|i| i.width);
-        let err = assets.load_with("mod.png", decode).unwrap_err();
+        let err = assets.load_with("mod.png", decode).err().unwrap();
         assert_eq!(err.kind(), crate::error::ErrorKind::Limit, "{}", err.message());
         assert!(err.message().contains("asset source \"mods\""), "{}", err.message());
         assert_eq!(assets.load_with("own.png", decode).unwrap(), 40);
@@ -2679,9 +2679,12 @@ mod tests {
         };
         let from_source = sources
             .scope(&origin("mods"), || decode_image(&png, "a.png", "\"a.png\""))
-            .unwrap_err();
+            .err()
+            .unwrap();
         assert!(from_source.message().contains("the limits of asset source \"mods\""), "{}", from_source.message());
-        let from_call = with_image_limits(tight, || decode_image(&png, "a.png", "\"a.png\"")).unwrap_err();
+        let from_call = with_image_limits(tight, || decode_image(&png, "a.png", "\"a.png\""))
+            .err()
+            .unwrap();
         assert!(from_call.message().contains("limits given for this picture"), "{}", from_call.message());
         // A source without limits of its own, and a loose file, follow the game's.
         assert!(sources.scope(&origin("other"), || decode_image(&png, "a.png", "a")).is_ok());

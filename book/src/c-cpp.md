@@ -478,6 +478,7 @@ binding arrives:
 | Rust feature | Where | From C and C++ |
 |---|---|---|
 | `Assets::scene_asset_field` | [Asset sources](asset-sources.md) | C components have no text fields to name an asset in; load what a scene needs before `load_scene` |
+| `Assets::image_limit_sources` | [Image size limits](security.md#tighter-limits-for-a-source-you-dont-trust) | C and C++ read the limits of a source whose id they know (`ponko_ctx_source_image_limits`); the control endpoint's `assets.image_limits` lists every source that has limits |
 | `PackSource` | [Asset sources](asset-sources.md#packs) | C and C++ games read the default `assets.pack` like Rust games; a pack of their own can be read through `ponko_ctx_add_asset_source` |
 | `ModPack::from_files`, `ModSet::problems` | [Mods](mods.md#in-c-and-c) | Mod packs mount by path or from bytes in memory (`ponko_ctx_mount_mods`, `ponko_ctx_mount_mods_from_memory`, `ctx.mount_mods`, `ctx.mount_mods_from_memory`; `ponko pack` makes one from loose files), and a refused set reports its first problem |
 | `with_code`, `ModSet::code_limits` | [Mods](mods.md#code-mods) | Code mods (feature `mods-wasm`) are Rust-only: the C library is built without it, and refuses a mod with code like any bad mod (`PONKO_INVALID_ARGUMENT`); data-only mods work the same |

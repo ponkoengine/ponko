@@ -3576,6 +3576,21 @@ static void native_coverage() {
             throws_kind([&] { ctx.set_image_limits(0, 4); }, PONKO_ERROR_INVALID);
             auto junk = ctx.try_decode_texture(std::vector<std::uint8_t>{1, 2, 3}, "x.png", 64, 1024);
             CHECK(!junk && junk.kind() == PONKO_ERROR_DECODE);
+
+            // A source with limits of its own: its picture is refused, the game's own loads.
+            ctx.add_asset_source(ponko::memory_source("mods").with("mod.png", pixel));
+            ctx.add_asset_source(ponko::memory_source("own").with("own.png", pixel));
+            CHECK(!ctx.source_image_limits("mods"));
+            ctx.set_source_image_limits("mods", 1, 3);
+            CHECK(ctx.source_image_limits("mods") == std::make_optional(std::make_pair(std::uint32_t{1}, std::uint64_t{3})));
+            auto modded = ctx.try_load_texture("mod.png");
+            CHECK(!modded && modded.kind() == PONKO_ERROR_LIMIT);
+            CHECK(std::string(modded.error().what()).find("asset source \"mods\"") != std::string::npos);
+            CHECK(ctx.try_load_texture("own.png"));
+            ctx.clear_source_image_limits("mods");
+            CHECK(!ctx.source_image_limits("mods"));
+            CHECK(ctx.try_load_texture("mod.png"));
+            throws_kind([&] { ctx.set_source_image_limits("", 4, 4); }, PONKO_ERROR_INVALID);
         }
 
         // Asset sources, then your own decoder.

@@ -290,3 +290,93 @@ fn bad_arguments_are_invalid_not_a_crash() {
         );
     });
 }
+
+#[test]
+fn a_source_with_limits_of_its_own_refuses_its_picture_while_the_games_own_loads() {
+    let _own = LIMITS.lock().unwrap_or_else(|e| e.into_inner());
+    run_ctx(|ctx| unsafe {
+        for id in [c"mods", c"built-in"] {
+            let source = ponko_memory_source_new(id.as_ptr());
+            let bytes = png(64);
+            let name = std::ffi::CString::new(format!("{}.png", id.to_str().unwrap())).unwrap();
+            assert_eq!(
+                ponko_memory_source_insert(source, name.as_ptr(), bytes.as_ptr(), bytes.len()),
+                PONKO_OK
+            );
+            assert_eq!(ponko_ctx_add_memory_source(ctx, source), PONKO_OK);
+            ponko_memory_source_free(source);
+        }
+        let (mut side, mut bytes, mut has) = (0u32, 0u64, true);
+        assert_eq!(
+            ponko_ctx_source_image_limits(ctx, c"mods".as_ptr(), &mut side, &mut bytes, &mut has),
+            PONKO_OK
+        );
+        assert!(!has, "no limits of its own yet");
+        assert_eq!(ponko_ctx_set_source_image_limits(ctx, c"mods".as_ptr(), 32, 1 << 20), PONKO_OK);
+        assert_eq!(
+            ponko_ctx_source_image_limits(ctx, c"mods".as_ptr(), &mut side, &mut bytes, &mut has),
+            PONKO_OK
+        );
+        assert_eq!((has, side, bytes), (true, 32, 1 << 20));
+        // The game's own limits are untouched.
+        assert_eq!(ponko_ctx_image_limits(ctx, &mut side, &mut bytes), PONKO_OK);
+        assert_eq!((side, bytes), (DEFAULT_SIDE, DEFAULT_BYTES));
+
+        let mut texture = empty();
+        assert_eq!(
+            ponko_ctx_try_load_texture(ctx, c"mods.png".as_ptr(), &mut texture),
+            PONKO_INVALID_ARGUMENT
+        );
+        assert_eq!(ponko_last_error_kind(), PONKO_ERROR_LIMIT);
+        let message = last_error();
+        assert!(message.contains("32 pixels a side"), "{message}");
+        assert!(message.contains("asset source \"mods\""), "{message}");
+        assert_eq!(
+            ponko_ctx_try_load_texture(ctx, c"built-in.png".as_ptr(), &mut texture),
+            PONKO_OK
+        );
+        assert_eq!(texture.width, 64);
+
+        assert_eq!(ponko_ctx_clear_source_image_limits(ctx, c"mods".as_ptr()), PONKO_OK);
+        assert_eq!(
+            ponko_ctx_source_image_limits(ctx, c"mods".as_ptr(), &mut side, &mut bytes, &mut has),
+            PONKO_OK
+        );
+        assert!(!has);
+        assert_eq!(
+            ponko_ctx_try_load_texture(ctx, c"mods.png".as_ptr(), &mut texture),
+            PONKO_OK,
+            "follows the game's again"
+        );
+    });
+}
+
+#[test]
+fn source_limits_refuse_nulls_zeros_and_an_empty_id() {
+    unsafe {
+        assert_eq!(
+            ponko_ctx_set_source_image_limits(std::ptr::null_mut(), c"mods".as_ptr(), 64, 64),
+            PONKO_INVALID_ARGUMENT
+        );
+        assert_eq!(
+            ponko_ctx_clear_source_image_limits(std::ptr::null_mut(), c"mods".as_ptr()),
+            PONKO_INVALID_ARGUMENT
+        );
+    }
+    run_ctx(|ctx| unsafe {
+        assert_eq!(ponko_ctx_set_source_image_limits(ctx, c"mods".as_ptr(), 0, 64), PONKO_INVALID_ARGUMENT);
+        assert_eq!(ponko_ctx_set_source_image_limits(ctx, c"mods".as_ptr(), 64, 0), PONKO_INVALID_ARGUMENT);
+        assert_eq!(ponko_ctx_set_source_image_limits(ctx, c"".as_ptr(), 64, 64), PONKO_INVALID_ARGUMENT);
+        assert_eq!(ponko_ctx_set_source_image_limits(ctx, std::ptr::null(), 64, 64), PONKO_INVALID_ARGUMENT);
+        let (mut side, mut bytes, mut has) = (0u32, 0u64, false);
+        assert_eq!(
+            ponko_ctx_source_image_limits(ctx, c"mods".as_ptr(), std::ptr::null_mut(), &mut bytes, &mut has),
+            PONKO_INVALID_ARGUMENT
+        );
+        assert_eq!(
+            ponko_ctx_source_image_limits(ctx, c"mods".as_ptr(), &mut side, &mut bytes, &mut has),
+            PONKO_OK
+        );
+        assert!(!has, "a refused call set nothing");
+    });
+}

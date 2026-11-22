@@ -142,6 +142,55 @@ texture limit still fails at upload, with the usual error.
 </div>
 </div>
 
+#### Tighter limits for a source you don't trust
+
+The limits above are the game's. An asset source (a mod pack, a download
+cache, a folder) can carry limits of its own: pictures read from it are
+decoded under them and everything else under the game's, so a game keeps
+generous limits for its own art and gives mods tight ones. The mounted mods'
+source id is `mods` (`ponko::mods::SOURCE_ID`); the call works before a source
+exists, so set it in setup, before the mods are mounted. A source added with
+`add_source_with_image_limits` (or `add_background_source_with_image_limits`)
+has them from the start, and `clear_source_image_limits` takes them back. The
+limits go with the decode to worker threads too, so asset groups and streamed
+textures follow them. The pictures a model refers to, the layers of a texture
+array, a level's tilesets, a terrain's weight maps and the sheet of an
+Aseprite export follow the source their file came from.
+
+In C: `ponko_ctx_set_source_image_limits`,
+`ponko_ctx_clear_source_image_limits` and `ponko_ctx_source_image_limits`; in
+C++: `ctx::set_source_image_limits`, `clear_source_image_limits` and
+`source_image_limits`.
+
+A refused picture's message says which limits refused it and where they came
+from: `(1024 pixels a side, 8 MiB of pixels; the limits of asset source
+"mods")`, or `the game's limits`, or, for `try_decode_texture`, `limits given
+for this picture`.
+
+Rust can list every source that has limits (`Assets::image_limit_sources`); C
+and C++ read a source whose id they know. The limits in force are read only for
+tools: the control endpoint's
+`assets.image_limits` (and the MCP tool `image_limits`) lists the game's and
+each source's, and the inspector's asset view shows them. Nothing remote can
+raise them; they are set in code.
+
+<div class="lang-pair">
+<div>
+
+```rust
+{{#include ../../tests/image_limits_sources.rs:source_image_limits}}
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:source_image_limits}}
+```
+
+</div>
+</div>
+
 ## The control endpoint
 
 The control endpoint (`PONKO_CONTROL=1`, [the control endpoint](control.md))
