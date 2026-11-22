@@ -35,7 +35,7 @@ include = [
 [package.metadata.docs.rs]
 # Everything public. Left out: `hotpatch` (a dev tool, no API) and
 # `bench-internals` (unstable, not part of the API).
-features = ["physics", "physics3d", "physics-determinism", "steam", "3d", "navmesh", "accessibility", "control-env", "profiling", "video", "lobby", "webrtc"]
+features = ["physics", "physics3d", "physics-determinism", "steam", "3d", "navmesh", "accessibility", "control-env", "profiling", "video", "lobby", "webrtc", "mods-wasm"]
 targets = ["x86_64-unknown-linux-gnu"]
 rustdoc-args = ["--cfg", "docsrs"]
 

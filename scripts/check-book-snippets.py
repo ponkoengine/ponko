@@ -51,7 +51,7 @@ ROOT = Path(__file__).resolve().parent.parent
 BOOK = ROOT / "book" / "src"
 MAX_IGNORED = 3
 # Everything except the mutually exclusive or tooling-only features.
-DEFAULT_FEATURES = "3d,physics,physics3d,navmesh,steam,video,lobby,webrtc"
+DEFAULT_FEATURES = "3d,physics,physics3d,navmesh,steam,video,lobby,webrtc,mods-wasm"
 
 FENCE = re.compile(r"^(\s*)(`{3,}|~{3,})\s*([^`]*)$")
 IGNORE_REASON = re.compile(r"//\s*ignore:\s*\S")

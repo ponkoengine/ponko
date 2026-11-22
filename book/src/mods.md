@@ -5,12 +5,13 @@ ship: a new enemy, harder levels, other art. Ponko supports **data-only
 mods**: packs of asset files, mounted in a load order the player picks,
 checked before anything of them is used. A mod adds files (a new enemy's
 prefab and sprite sheet) and replaces the game's own by using the same path.
-It runs no code.
+With the feature `mods-wasm`, a mod may also bring [code](#code-mods): a
+WebAssembly module the game calls, run in a sandbox.
 
-This chapter shows how a game takes mods, what is checked, and, at the end,
-[why data first](#why-data-only-mods-first): the comparison with mods that run
-code (WebAssembly modules and an embedded scripting language) on a real
-sample.
+This chapter shows how a game takes mods, what is checked, how code mods
+run and what they cost, and, at the end, [why data first](#why-data-only-mods-first):
+the comparison with mods that run code (WebAssembly modules and an embedded
+scripting language) on a real sample.
 
 ## A mod
 
@@ -39,7 +40,9 @@ frost-drips/
 `ponko pack frost-drips --out frost-drips.pack` makes the pack. The `id` is
 lowercase letters, digits, `-` and `_`. `requires` names mods that must be on
 too and load first; `after` names mods that load first when they are on.
-Everything but `format`, `version` and `id` may be left out.
+`"code": "frost/crawl.wasm"` names the mod's WebAssembly module, for a
+[code mod](#code-mods). Everything but `format`, `version` and `id` may be
+left out.
 
 The files are what a game already reads by name: prefabs and scenes of
 [reflected components](reflection.md), data files, images, sounds. The frost
@@ -131,14 +134,118 @@ What is checked:
   stack overflow), and the prefabs and scenes in it name only components and
   resources the game reflects, with fields that fit their types. A change to
   an included prefab is partial, so only its component names are checked.
+- **Every asset those files name**: sprite and animation textures, particle
+  textures, 2D skeletons, meshes and their materials, collision meshes, the
+  prefabs they include, and the fields the game registered with
+  [`scene_asset_field`](asset-sources.md). Each must be a file of a mod in
+  the set or one of the game's assets. `mount` lists **every** missing one in
+  one `ModProblem::MissingAssets`, each with the file that names it, so a
+  modder fixes them all at once instead of finding them one by one in play:
+
+  ```text
+  mod "art", file "enemies/bat.json": 2 asset(s) named that no mod and not the game has: "sprites/bat.png" (in "enemies/bat.json"), "sprites/rat.png" (in "enemies/rat.json")
+  ```
+
+  `ModSet::problems` doesn't check them: it has only the world, not the
+  game's assets.
+- **Its code**, for a code mod: the module compiles, imports only the host
+  functions, and starts within its limits (see [Code mods](#code-mods)).
 
 What a check can only find when the file is used fails then, with that file's
-error, as for the game's own files: an image that doesn't decode, a prefab
-that includes one that isn't there.
+error, as for the game's own files: an image that doesn't decode. A name the
+game made in code rather than read from a file (a texture it drew itself)
+isn't an asset to a mod: name files.
 
 `ModError` turns into an engine `Error` with `?` (its `path()` is the file):
-`NotFound` for a missing mod, component or resource, `Limit` for sizes,
-`Json` for bad values and manifests, `Decode` for damaged packs.
+`NotFound` for a missing mod, component, resource or asset, `Limit` for
+sizes, `Json` for bad values and manifests, `Decode` for damaged packs,
+`Invalid` for code that can't be used.
+
+## Code mods
+
+A data-only mod can't make a frost drip that *behaves* differently. With the
+feature `mods-wasm`, a mod's manifest may name a WebAssembly module (built
+from Rust, C, Zig, AssemblyScript...), and the game calls the functions it
+exports, when and with what it decides:
+
+```rust
+fn crawl_frost_drips(ctx: &mut Ctx, drips: &mut [(Vec2, f32)]) {
+    ponko::mods::with_code(ctx, |code| {
+        let Some(crawl) = code.function("frost-drips", "crawl") else { return };
+        for (at, heading) in drips.iter_mut() {
+            let args = [at.x.into(), at.y.into(), (*heading).into()];
+            if let Ok(Some(turned)) = code.call(crawl, &args) {
+                *heading = turned.as_f32().unwrap_or(*heading);
+            }
+        }
+    });
+}
+```
+
+`with_code` hands the mounted code (`ModCode`) to the closure, its host
+functions reaching this tick's `dt` and the game's 2D physics; it returns
+`None` when no mod has code. `code.function(mod, name)` finds a function
+once (keep the `ModFn`); `code.exporting(name)` lists every mod's function of
+that name in load order, for hooks every mod may answer; `code.call(f, args)`
+calls it with numbers (`i32`, `i64`, `f32`, `f64`) and returns its one result
+or none, allocating nothing. `code.take_log()` gives what mods logged.
+
+A module reaches only what the engine links, imported from module `"ponko"`:
+
+| Import | Type | What it does |
+|---|---|---|
+| `log` | `(ptr: i32, len: i32)` | Text from the module's exported `memory`, for `take_log` (4096 bytes a line, 1024 lines between takes) |
+| `dt` | `() -> f32` | The tick's step in seconds |
+| `cast_ray` | `(ox, oy, dx, dy, max: f32) -> f32` | A 2D physics ray cast (feature `physics`): the distance to the first collider hit, or -1 |
+
+The frost drip's crawl rule, as the sample's code mod
+(`tests/mod_sample.rs` checks it turns on exactly the ticks the game's Rust
+rule does):
+
+```text
+(module
+  (import "ponko" "cast_ray" (func $ray (param f32 f32 f32 f32 f32) (result f32)))
+  (func (export "crawl") (param $x f32) (param $y f32) (param $h f32) (result f32)
+    ;; turn at a wall ahead or no floor ahead, else keep the heading
+    ...))
+```
+
+**The sandbox.** A module that imports anything else (files, clocks, WASI)
+is refused at mount. Each call (and each module's start function, at mount)
+gets `CodeLimits::fuel_per_call` fuel, about one unit per instruction
+(default 10 million, a few milliseconds): an endless loop stops with a
+`ModProblem::Trap` and the game goes on. A module's memory grows to
+`CodeLimits::memory_bytes` at most (default 16 MiB): one that asks for more
+up front is refused at mount, and `memory.grow` past it fails. A call that
+traps returns its error; the mod stays callable, and what to do with a mod
+that fails (turn it off, show it in the mods menu) is the game's choice. Set
+other limits with `ModSet::new().code_limits(CodeLimits { .. })`.
+
+**Where it runs, and what it costs.** Code mods run on
+[wasmi](https://github.com/wasmi-labs/wasmi), a WebAssembly interpreter in
+pure Rust: the same backend on every platform the engine builds for, the
+web (`wasm32-unknown-unknown`) and consoles or phones that forbid a JIT
+included. There is no JIT backend: wasmtime was measured below at two to
+three times faster per call, but it adds 8 MB and runs neither in a browser
+nor where a platform forbids writable code, so it isn't in the engine. The
+frost drip's crawl for 1000 drips per tick (`cargo run --release -p
+ponko_bench -- mods/`), November 2026, Apple Silicon laptop, busy (load
+average 75 to 115), two runs that agreed:
+
+| Backend | Where | 1000 drips per tick (median) | Per drip | Added size |
+|---|---|---|---|---|
+| The game's own Rust rule (data-only mods) | Everywhere | 0.098 ms | 98 ns | 0 |
+| Code mod on wasmi (`mods-wasm`) | Everywhere, the web included | 0.204 ms | 204 ns (about 106 ns over Rust: the call, the interpreter, two host calls) | about 2.2 MB (measured below) |
+
+Both include the two physics ray casts each drip makes. A game that calls a
+mod function a few thousand times per tick spends well under a millisecond;
+one that runs a mod's whole simulation per entity should measure first.
+
+**Determinism.** wasmi runs with NaN results canonicalized, so the same
+module and inputs give the same bits on every machine; the sample's crawl is
+bit-identical to the Rust rule. The module's bytes are part of
+`mods.fingerprint()`. Lockstep games call mods from their simulation in a
+fixed order, as they would any system.
 
 ## Determinism
 
@@ -146,21 +253,25 @@ A mod is data, so a modded game is as deterministic as the game: the same
 mods in the same order give the same files, on every machine. Lockstep
 peers and replays should agree on `mods.fingerprint()`, a hash of the mods'
 ids, versions and order, their files' names and sizes and the bytes of their
-JSON files (art and sound count by name and size only).
+JSON files and code (art and sound count by name and size only).
 
 ## In C and C++
 
 `ponko_ctx_mount_mods(ctx, paths, count)` mounts mod packs by path in that
-order. On a refused set it returns `PONKO_NOT_FOUND` (a missing mod,
+order; `ponko_ctx_mount_mods_from_memory(ctx, mods, count)` mounts packs
+held in memory (downloaded, built into the game), each a `PonkoModBytes`
+with a name for errors and the pack's bytes, copied during the call. On a refused set it returns `PONKO_NOT_FOUND` (a missing mod,
 component or resource) or `PONKO_INVALID_ARGUMENT`, with the mod, file and
 reason in `ponko_last_error()` and the file in `ponko_last_error_path()`.
 `ponko_ctx_mod_count`, `ponko_ctx_mod_id`, `ponko_ctx_mod_provider`,
 `ponko_ctx_mod_file_under` and `ponko_ctx_mods_fingerprint` read the
 `Mods` resource. In C++: `ctx.mount_mods({"a.pack", "b.pack"})`,
-`ctx.mod_ids()`, `ctx.mod_provider(name)`, `ctx.mod_files_under(prefix)` and
-`ctx.mods_fingerprint()`. Mods from memory (`ModPack::from_files`,
-`ModPack::from_pack_bytes`) and `ModSet::problems` are Rust-only for now
-([Still Rust-only](c-cpp.md#still-rust-only)).
+`ctx.mount_mods_from_memory({{"a.pack", bytes}})`, `ctx.mod_ids()`,
+`ctx.mod_provider(name)`, `ctx.mod_files_under(prefix)` and
+`ctx.mods_fingerprint()`. Loose files (`ModPack::from_files`; `ponko pack`
+makes a pack of them), `ModSet::problems` and code mods are Rust-only for
+now: the C library is built without `mods-wasm` and refuses a mod with code
+like any bad mod ([Still Rust-only](c-cpp.md#still-rust-only)).
 
 ## Why data-only mods first
 
@@ -218,8 +329,7 @@ What the numbers say:
   the smallest (0.4 MB) and quick, but isn't sandboxed by default, isn't
   deterministic across runs and doesn't build for the web.
 
-**The decision**: data-only mods ship now (this chapter). Code mods are a
-later, optional step: a `mods-wasm` feature on wasmi, off by default, with
-host functions generated from the C API so a mod calls the same engine
-functions a native game does. Nothing of it is in the build today; the
-prototypes were measured and removed.
+**The decision**: data-only mods first, code mods as an optional feature on
+wasmi. Both ship now: data-only mods always, [code mods](#code-mods) with
+the feature `mods-wasm`, off by default, with a small host API (log, `dt`, 2D
+ray casts) that grows as games need it.

@@ -125,7 +125,7 @@ pub use code::{CodeLimits, ModCode, ModFn, ModValue, with_code};
 #[cfg(feature = "mods-wasm")]
 type CodeEngine = wasmi::Engine;
 #[cfg(not(feature = "mods-wasm"))]
-type CodeEngine = ();
+struct CodeEngine;
 
 /// The manifest's file name, at the root of a mod.
 pub const MANIFEST: &str = "mod.json";
@@ -832,7 +832,7 @@ impl ModSet {
         #[cfg(feature = "mods-wasm")]
         return code::engine();
         #[cfg(not(feature = "mods-wasm"))]
-        ()
+        CodeEngine
     }
 
     /// The mods' ids in the order they load: the order they were added,
