@@ -124,7 +124,11 @@ assert_ne!(world_hash(world), before);
 - **Fast.** It reads components in place, word by word, without making
   JSON: Rust components through their `Serialize`, components described
   with `reflect_fields` (C) through their fields. Only components with a
-  custom reflection (models, animations) go through their JSON.
+  custom reflection (models, animations) go through their JSON. 100,000
+  entities with three reflected components hash in 0.45 ms, where saving
+  the same world as JSON takes 680 ms (`cargo run --release -p ponko_bench
+  -- world_hash`; Apple M4 Max, idle machine, 2026-11-22, the median of
+  three runs within 6%).
 - **Everywhere the same,** on every platform and thread count. The value can
   change between engine versions: compare hashes made by the same build.
 

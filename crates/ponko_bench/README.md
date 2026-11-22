@@ -199,7 +199,7 @@ of the ECS matrix on an Apple M4 Max at commit `90bfe8ec`, the last
 re-recording before the 0.1.0 tag (six engine commits came between; the
 ones in `crates/ponko_ecs` are listed by
 `git log 90bfe8ec..v0.1.0 -- crates/ponko_ecs`). The file in the working tree
-has since been recorded again (2026-11-20). Compare 0.2.0 with the 0.1.0 record
+has since been recorded again (2026-11-20 and 2026-11-22). Compare 0.2.0 with the 0.1.0 record
 by saving it first:
 `git show v0.1.0:crates/ponko_bench/baselines/ecs.json > ecs-0.1.0.json`, then
 `bench_track compare ecs-0.1.0.json releases/0.2.0/macos-aarch64-apple-m4-max/`,
@@ -304,20 +304,20 @@ ray-query reflection prototype's cost and memory, and the decision (defer):
 [RAY_TRACING.md](RAY_TRACING.md) (offscreen tests:
 `cargo test --release --lib --features 3d -- --ignored --nocapture --test-threads=1 ray_query_reflection_cost`).
 
-## Many small archetypes and query construction (2026-11-20)
+## Many small archetypes and query construction (2026-11-22)
 
-`ponko_ecs` vs `bevy_ecs` 0.20.1 and `hecs` 0.11.2, M4 Max, release, single thread, rustc 1.100.0, revision `e60e15a8`, on an idle machine (the rows of [ECS.md](ECS.md)'s baselines). The world: 1024 archetypes of 16 entities (16,384 total), each `(Pos, Vel, Spr)` plus a different subset of 10 zero-sized markers. `cargo run --release -p ponko_bench -- archetypes-1024` and `-- query-build`. Medians of 200 runs (iteration) or 100 runs (queries).
+`ponko_ecs` vs `bevy_ecs` 0.20.1 and `hecs` 0.11.2, M4 Max, release, single thread, rustc 1.100.0, revision `9235ea05`, on an idle machine (the rows of [ECS.md](ECS.md)'s baselines). The world: 1024 archetypes of 16 entities (16,384 total), each `(Pos, Vel, Spr)` plus a different subset of 10 zero-sized markers. `cargo run --release -p ponko_bench -- archetypes-1024` and `-- query-build`. Medians of 200 runs (iteration) or 100 runs (queries).
 
 | Benchmark | ponko_ecs | bevy_ecs | hecs |
 |---|---:|---:|---:|
-| iterate `pos += vel*dt` over 1024 archetypes | 0.005 ms | 0.010 ms | 0.006 ms |
-| build the `(&mut Pos, &Vel)` query, ×1000 | 0.019 ms | 8.4 ms | 0.0003 ms |
-| build the query and count its matches, ×1000 | 2.4 ms | 9.1 ms | 0.22 ms (cache hit) |
+| iterate `pos += vel*dt` over 1024 archetypes | 0.005 ms | 0.009 ms | 0.006 ms |
+| build the `(&mut Pos, &Vel)` query, ×1000 | 0.018 ms | 7.9 ms | 0.0003 ms |
+| build the query and count its matches, ×1000 | 2.0 ms | 8.8 ms | 0.22 ms (cache hit) |
 | ECS storage for this world (`world_bytes`) | 1056 KiB | not reported | not reported |
 
 - The "build" rows measure different work: building a bevy `QueryState` matches it against every archetype, while a ponko `Query` only resolves component ids and matches while it runs, and hecs only borrows the world (it keeps a per-world cache of each query type's matching archetypes). The "build and count" row does the same work in ponko and bevy (resolve, match all 1024 archetypes, sum lengths), so compare those two; hecs hits its cache. bevy systems normally keep their `QueryState` and update it incrementally, which this benchmark does not measure.
 - The iteration row builds the query once for bevy (a kept `QueryState`) and once per run for ponko, as each library's systems use them.
-- ponko's "build and count" is 2.4 ms here, against 1.5 ms in the recording of 2026-11-09 (taken while the machine was shared with other work). The code went from 33 M to 42 M instructions per 1000 builds and counts on 2026-11-09 to 11 (typed query filters and the query index test each archetype against more) and has not moved since; the rest of the gap is the machine and code layout. [ECS.md](ECS.md#costs-won-back-since-the-baselines) has the revisions, the p95 and the cold-world row.
+- ponko's "build and count" is 2.0 ms here (three idle runs, 2.03 to 2.05 ms), against 2.4 ms in the idle recording of 2026-11-20 and 1.5 ms in that of 2026-11-09 (taken while the machine was shared with other work). The code went from 33 M to 42 M instructions per 1000 builds and counts on 2026-11-09 to 11 (typed query filters and the query index test each archetype against more), 27% more, and has not moved since: 1.5 ms times 1.27 is 1.9 ms, close to today's 2.0 ms, so the rise is that work; the 2.4 ms of 2026-11-20 was that run's machine and code layout. [ECS.md](ECS.md#costs-won-back-since-the-baselines) has the revisions, the p95 and the cold-world row.
 
 ## Caveats
 

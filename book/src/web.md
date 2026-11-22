@@ -148,12 +148,15 @@ then show nothing.
 Time to the first frame (from the page's navigation start to the 3D
 fixture's first published state; median of five fresh loads each, served
 from the same machine) in Chromium 156's new headless mode on an Apple
-Silicon Mac, on a busy machine (a load average of about 100 from other
-builds), so the absolute numbers are high and noisy: **WebGPU 200 ms**
-(132 to 213), **WebGL2 298 ms** (290 to 355). An earlier run under the
-same load gave 248 and 370 ms. The pages that try WebGPU first and fall
-back (no adapter, a refused device, a device lost as it opens) took 350 to
-433 ms, one load each: the WebGPU attempt adds little to the WebGL2 start.
+M4 Max, idle apart from the fixture's own build just before (2026-11-22,
+revision `9235ea05`, two runs of `webgpu-fallback.mjs --repeat 5`):
+**WebGPU 108 to 109 ms** (106 to 114), **WebGL2 230 to 231 ms** (229 to
+245, after a first load of 1,070 ms in the first run, the browser's
+first start). The pages that try WebGPU first and fall back (no adapter,
+a refused device, a device lost as it opens) took 228 to 234 ms, one load
+each: the WebGPU attempt adds nothing measurable to the WebGL2 start.
+On a busy machine (load average about 100) the same runs gave 200 and
+298 ms, and 248 and 370 ms.
 
 `web/smoke/webgpu-fallback.mjs` checks each way into WebGL2 in a headless
 browser, faking the failure in the page before the game starts (see the

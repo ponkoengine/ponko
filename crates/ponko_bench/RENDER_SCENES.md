@@ -191,24 +191,19 @@ percentiles and both runs' `env.load_average`.
 
 ## The committed baseline
 
-`baselines/render.json` and `baselines/render.csv`, recorded 2026-11-20 at
-`e60e15a8` (a clean tree) on an Apple M4 Max (14 cores), Metal, wgpu 30.0.1,
-Rust 1.100.0, release profile, features `physics`, `physics3d`, `navmesh`,
-`window`; 1280×720, 4× MSAA, `high`, scale 1, 120 warm-up and 600 measured
-frames. Peak resident memory of the run: 237 MB. The files hold the memory
-sizes computed for render targets and shadow maps (`render_target_bytes`,
-`shadow_map_bytes`, `light_shadow_atlas_bytes`, `computed_bytes`).
+`baselines/render.json` and `baselines/render.csv`, recorded 2026-11-22 at
+`9235ea05` (the engine's sources as at that revision; the files record
+`git_dirty` because only these two baseline files differed) on an Apple M4
+Max (14 cores), Metal, wgpu 30.0.1, Rust 1.100.0, release profile, features
+`physics`, `physics3d`, `navmesh`, `window`; 1280×720, 4× MSAA, `high`,
+scale 1, 120 warm-up and 600 measured frames. Peak resident memory of the
+run: 225 MB. The files hold the memory sizes computed for render targets
+and shadow maps (`render_target_bytes`, `shadow_map_bytes`,
+`light_shadow_atlas_bytes`, `computed_bytes`).
 
-The machine was idle: nothing else was running, and the three recordings in
-this chapter were made one after the other. The load averages (1, 5, 15
-minutes) when each started were 2.57 4.96 4.81 for this run, 1.56 4.99 4.82
-for the matched Ponko run and 2.08 5.04 4.83 for the Bevy run, so the 95th and
-99th percentiles are the scenes' own spread, not other processes. This
-replaces the baseline of 2026-11-11 (`e63e8db1`, recorded under a load
-average of 25.41 23.83 20.80 while other builds were running), which also
-had seven scenes: `single-material` is new, and the figures below are not an
-improvement or a regression of the old ones in every row (see the notes under
-the tables). Re-record it with:
+The machine was idle (load averages 1.64 3.23 3.37 when the run started).
+Two more runs right before it gave frame medians within 0.1 ms of these in
+every scene except `dynamic-world` (6.33 to 6.54 ms). Re-record it with:
 
 ```sh
 PONKO_BENCH_JSON=crates/ponko_bench/baselines/render.json \
@@ -220,54 +215,57 @@ Milliseconds, medians unless a percentile is named:
 
 | Scene | CPU | Frame | Frame p95 | Frame p99 | GPU passes | Draw calls | Triangles (camera / shadows) |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| `single-material` | 0.378 | 1.569 | 2.933 | 5.971 | 0.751 | 25 | 1,200 / 2,220 |
-| `static-world` | 0.562 | 4.838 | 5.698 | 5.993 | 3.702 | 26 | 2 / 6 |
-| `dynamic-world` | 2.995 | 5.838 | 6.328 | 6.618 | 2.132 | 107 | 721,530 / 241,252 |
-| `multi-material` | 2.035 | 4.933 | 7.871 | 10.158 | 2.228 | 2,079 | 219,480 / 314,276 |
-| `shadow-heavy` | 1.228 | 5.022 | 5.484 | 5.878 | 3.401 | 259 | 133,686 / 614,002 |
-| `alpha-heavy` | 3.910 | 17.471 | 23.967 | 26.356 | 12.647 | 87 | 142,866 / 339,270 |
-| `animated` | 1.596 | 5.814 | 6.406 | 6.668 | 3.627 | 2,139 | 145,922 / 373,256 |
-| `game-like` | 0.812 | 3.034 | 3.438 | 3.695 | 1.873 | 112 | 38,280 / 319,360 |
+| `single-material` | 0.299 | 1.634 | 1.850 | 1.941 | 1.018 | 25 | 1,200 / 2,220 |
+| `static-world` | 0.421 | 4.886 | 5.681 | 5.793 | 4.151 | 26 | 2 / 6 |
+| `dynamic-world` | 2.876 | 6.457 | 6.733 | 6.915 | 2.892 | 107 | 721,530 / 241,252 |
+| `multi-material` | 1.740 | 5.513 | 5.975 | 6.260 | 2.966 | 2,079 | 219,480 / 314,276 |
+| `shadow-heavy` | 1.186 | 6.353 | 6.568 | 6.743 | 4.890 | 259 | 133,686 / 614,002 |
+| `alpha-heavy` | 2.554 | 17.731 | 19.027 | 21.169 | 14.247 | 87 | 142,866 / 339,270 |
+| `animated` | 1.440 | 6.670 | 7.507 | 7.616 | 4.852 | 2,139 | 145,922 / 373,256 |
+| `game-like` | 0.640 | 3.411 | 3.648 | 3.870 | 2.484 | 112 | 38,280 / 319,360 |
 
 `static-world` shows 2 triangles because its 200,000 instances are in static
 batches (see the counts note above).
 
 | Scene | Collect | Prepare | Encode | Submit | Allocations a frame | Counted GPU bytes |
 |---|---:|---:|---:|---:|---:|---:|
-| `single-material` | 0.014 | 0.033 | 0.285 | 0.044 | 528.0 | 2,308 |
-| `static-world` | 0.021 | 0.091 | 0.395 | 0.050 | 549.4 | 24,580 |
-| `dynamic-world` | 1.453 | 1.040 | 0.440 | 0.051 | 631.0 | 49,156 |
-| `multi-material` | 0.174 | 0.257 | 1.430 | 0.157 | 880.8 | 2,271,876 |
-| `shadow-heavy` | 0.386 | 0.440 | 0.354 | 0.058 | 733.9 | 40,964 |
-| `alpha-heavy` | 0.506 | 0.646 | 2.671 | 0.093 | 697.6 | 42,328 |
-| `animated` | 0.134 | 0.247 | 1.070 | 0.124 | 918.1 | 41,044 |
-| `game-like` | 0.132 | 0.175 | 0.431 | 0.061 | 738.2 | 1,630,140 |
+| `single-material` | 0.010 | 0.023 | 0.227 | 0.039 | 542.0 | 2,308 |
+| `static-world` | 0.008 | 0.074 | 0.299 | 0.041 | 563.4 | 24,580 |
+| `dynamic-world` | 1.429 | 0.959 | 0.410 | 0.050 | 661.0 | 49,156 |
+| `multi-material` | 0.152 | 0.229 | 1.223 | 0.120 | 901.9 | 2,271,876 |
+| `shadow-heavy` | 0.371 | 0.434 | 0.347 | 0.056 | 764.9 | 40,964 |
+| `alpha-heavy` | 0.465 | 1.044 | 0.980 | 0.065 | 731.6 | 42,328 |
+| `animated` | 0.123 | 0.224 | 0.994 | 0.096 | 951.1 | 41,044 |
+| `game-like` | 0.098 | 0.133 | 0.348 | 0.050 | 772.3 | 1,630,140 |
 
-Against the heavily loaded baseline of 2026-11-11, frame medians moved like
+Against the baseline of 2026-11-20 (`e60e15a8`, also idle), the CPU got
+faster in every scene (by 3 to 35%: `alpha-heavy` 3.91 → 2.55 ms, its
+encode step 2.67 → 0.98 ms), but **the GPU got slower in every scene and
+the frames with it**: GPU passes 0.75 → 1.02 (`single-material`), 3.70 →
+4.15, 2.13 → 2.89, 2.23 → 2.97, 3.40 → 4.89, 12.65 → 14.25, 3.63 → 4.85
+and 1.87 → 2.48 ms; frame medians up by 1 to 27% (`shadow-heavy` 5.02 →
+6.35, `animated` 5.81 → 6.67, `dynamic-world` 5.84 → 6.46). Draw calls and
+triangles are unchanged. The cause is one setting: the `high` preset now
+turns on screen reflections' thin objects (`ssr_thin_objects`, the only
+quality field that differs between the two files). The screen reflections
+pass went from 0.24 to 0.47 ms to 0.34 to 2.31 ms (`shadow-heavy` 0.47 →
+1.88, `static-world` 0.43 → 1.15, `animated` 0.38 → 1.33, `alpha-heavy`
+from none to 2.31), plus the coarse depth and reflection depth passes
+(0.01 to 0.03 ms each). That is far over the 0.2 ms the setting was
+measured at over a floor and rails in the guide: these scenes have edges
+everywhere. Allocations a frame rose by 14 to 34 in every scene; that was
+not looked into.
+
+On 2026-11-20, against the heavily loaded baseline of 2026-11-11, frame
+medians moved like
 this: `dynamic-world` 8.34 → 5.84, `multi-material` 8.89 → 4.93,
 `shadow-heavy` 9.25 → 5.02, `static-world` 4.93 → 4.84, `game-like` 2.86 →
 3.03, `animated` 4.24 → 5.81 and `alpha-heavy` 9.54 → 17.47. The first three
-mostly show what the old load did to them (the old 95th and 99th percentiles
-were up to ten times the median). **Two scenes got slower, and the cause is
-the engine, not the machine:**
-
-- `alpha-heavy` went from 9.54 to 17.47 ms. See-through models are now drawn
-  one by one in sorted order, so its recorded draws went from 18 to 3,513,
-  the encode step from 0.47 to 2.67 ms and the opaque pass on the GPU from 6.0
-  to 11.4 ms.
-- `animated` went from 4.24 to 5.81 ms. Skinning keeps last frame's joints
-  for the motion vectors: the skinning pass went from 1.14 to 1.82 ms and the
-  uploads from 414 KB to 835 KB a frame.
-- Both draw more shadow casters than before: shadow triangles went from
-  196,420 to 339,270 (`alpha-heavy`) and from 227,334 to 373,256
-  (`animated`), and shadow instances rose by about 65 to 70%. The shadow
-  triangles of `dynamic-world` (38,698 to 241,252), `multi-material`
-  (146,678 to 314,276) and `game-like` (284,574 to 319,360) rose too, though
-  those scenes' frames did not get slower. `shadow-heavy` still draws the
-  same 614,002.
-- Draw calls rose in `multi-material` (1,566 to 2,079), `animated` (1,378 to
-  2,139), `dynamic-world` (90 to 107) and `game-like` (91 to 112) with the
-  same camera triangles.
+mostly show what the old load did to them. Two scenes got slower then
+because of the engine: see-through models drawn one by one in sorted order
+(`alpha-heavy`, 18 → 3,513 recorded draws) and skinning keeping last
+frame's joints for the motion vectors (`animated`, the skinning pass 1.14
+→ 1.82 ms); both also drew more shadow casters.
 
 The counted bytes are small because what dominates GPU memory here is not
 in the renderer's tables: render targets and shadow maps (computed from

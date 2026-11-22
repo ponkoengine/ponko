@@ -677,6 +677,13 @@ frame went from about 0.105 ms to 0.068 ms with aligned rich lines and
 wrapped sizes kept per width, and to about 0.028 ms once the paragraph kept
 its glyphs for each width.
 
+Those before-and-after figures were taken in turns on a busy machine. On
+an idle Apple M4 Max (2026-11-22, revision `9235ea05`, load average 2.2,
+`cargo run --release -p ponko_bench -- ui/draw`, medians of three runs
+within 10% of each other) a frame costs 0.022 ms still, 0.028 ms fading,
+0.025 ms pulsing, 0.024 ms adding a slot, 0.026 ms scrolling, 0.021 ms
+with a tooltip and 0.026 ms resizing.
+
 The `frame2d/...` benchmarks of `ponko_bench` time a whole 2D frame without a
 window (2,000 sprites under a HUD and a settings screen of about 150 nodes):
 the UI's input, layout and draw list, the game's systems and the sprite

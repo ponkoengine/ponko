@@ -84,32 +84,33 @@ cargo test --release --lib --features 3d stereo_frame_cost -- --ignored --nocapt
 ```
 
 Apple M4 Max (Metal), Shard Grove's level, default post settings, shadows
-on. **The machine was heavily loaded** (a load average above 100: many other
-builds were running), so the wall-clock numbers moved from run to run; the
-ranges are three runs.
+on, three runs on an idle machine on 2026-11-22 (1-minute load about 2);
+the ranges are the three runs:
 
 | Eye size | Frame | CPU (ms) | Until the GPU is idle (ms) |
 |---|---|---|---|
-| 960 x 1080 | one view, one eye's size | 1.03 – 1.07 | 2.2 – 3.2 |
-| | one view, both eyes' size | 1.11 – 1.16 | 3.6 – 4.7 |
-| | stereo: two views | 1.80 – 2.12 | 4.9 – 7.2 |
-| 1440 x 1600 | one view, one eye's size | 1.11 – 1.33 | 4.0 – 6.7 |
-| | one view, both eyes' size | 0.76 – 1.24 | 5.6 – 7.7 |
-| | stereo: two views | 1.83 – 2.39 | 5.4 – 13.6 |
+| 960 x 1080 | one view, one eye's size | 0.18 | 0.76 – 0.79 |
+| | one view, both eyes' size | 0.19 – 0.20 | 0.89 – 0.92 |
+| | stereo: two views | 0.34 – 0.35 | 1.37 – 1.47 |
+| 1440 x 1600 | one view, one eye's size | 0.19 – 0.20 | 0.94 |
+| | one view, both eyes' size | 0.19 – 0.20 | 1.39 |
+| | stereo: two views | 0.39 | 1.72 – 1.75 |
+
+An earlier run on a machine with a load average above 100 gave five to
+eight times these (CPU 0.8 to 2.4 ms, until idle 2.2 to 13.6 ms).
 
 What holds across the runs:
 
-- The CPU side of a stereo frame costs 1.6 to 2.1 times one eye's: the
+- The CPU side of a stereo frame costs 1.9 to 2.0 times one eye's: the
   collecting, preparing and recording run once per eye. A view as wide as
   both eyes costs about what one eye costs: the CPU work is per camera, not
   per pixel.
-- Until the GPU is idle, stereo took 1.2 to 2.3 times one eye's frame, and
-  in most runs somewhat longer than one view of the same pixels: the second
-  eye adds its pixels, its own fixed passes and a submission of its own.
-  The noise on this machine is too large to split that further.
-- GPU pass times are not quoted: on this adapter only 4 to 6 of the frame's
-  passes come back timed. (The timer held 32 passes a frame when these runs
-  were made, which two full views can pass; it now grows to the frame's
+- Until the GPU is idle, stereo took 1.8 to 1.9 times one eye's frame, and
+  1.2 to 1.6 times one view of the same pixels: the second eye adds its
+  pixels, its own fixed passes and a submission of its own.
+- GPU pass times are not quoted: on this adapter only 5 or 6 of the frame's
+  passes come back timed (4 to 6 in the earlier runs, when the timer held
+  32 passes a frame, which two full views can pass; it now grows to the frame's
   passes, up to 336, see [How many passes a frame can
   time](performance.md#how-many-passes-a-frame-can-time).)
 

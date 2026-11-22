@@ -227,12 +227,12 @@ shows how to build and serve them locally. The [website](https://ponko.dev/) has
 
 Measured on 2026-11-20 on an idle MacBook Pro (M4 Max), native release builds,
 at revision `e60e15a8` (the sprite and Unity rows below are older and were not
-run again); web builds run on one thread and are slower. Reproduction commands and workload context are on the
+run again; the ECS row was run again on 2026-11-22 at `9235ea05`); web builds run on one thread and are slower. Reproduction commands and workload context are on the
 [benchmarks page](book/src/performance.md).
 
 | Workload | Time |
 |---|---|
-| ECS iteration, 1M entities: Ponko / bevy_ecs / hecs | **0.17** / 0.39 / 0.71 ms |
+| ECS iteration, 1M entities: Ponko / bevy_ecs / hecs | **0.16** / 0.36 / 0.70 ms |
 | Headless simulation, 10M agents | 7.2 ms per tick |
 | Battle, 1M units: flow fields, spatial grids, fighting | 19.3 ms per tick |
 | Ant colonies, 1M ants | 16 ms per tick |

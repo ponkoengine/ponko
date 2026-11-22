@@ -229,20 +229,25 @@ framing and reliability layer; only the sockets are left out), on a
 simulated clock. Every member sends 20 relay messages of 64 bytes to its
 room on the reliable lane, then every host leaves and the rooms migrate.
 
-Measured on an Apple silicon laptop (macOS, release build) that was
-building other projects at the same time, over six runs:
+Measured on an Apple M4 Max (macOS, release build) on an idle machine
+(2026-11-22, revision `9235ea05`, load average under 2.8), three runs:
 
 | | |
 |---|---|
-| Whole run | 4.6–6.4 s wall, 1.1–1.2 s CPU (the rest is waiting for a busy machine) |
-| Rooms by code (create, then two joins each) | 1990–2600 rooms a second |
-| Relay | 26 400–34 200 messages a second delivered, 1.6–2.1 MiB/s of payload, 132 000 of 132 000 delivered |
+| Whole run | 0.70–0.72 s wall, 0.70–0.72 s CPU |
+| Rooms by code (create, then two joins each) | 16,100–16,600 rooms a second |
+| Relay | 240,000–244,000 messages a second delivered, 14.7–14.9 MiB/s of payload, 132,000 of 132,000 delivered |
 | Host migrations | 1100 of 1100 seen by every member |
-| Peak memory | 104–105 MiB for the process: the server and all 3300 clients |
+| Peak memory | 122–124 MiB for the process: the server and all 3300 clients |
 
 The rates are of the process, which runs the clients too: the server alone
-is faster. With rooms of 8 (8800 clients) the run took 14 s wall and 3.5 s
-CPU, and delivered 110 000 relay messages a second. The same test with 40
+is faster. With rooms of 8 (8800 clients, `load_test 1000 8`) the run took
+2.4 s wall and CPU, delivered 634,000–654,000 relay messages a second and
+peaked at 334–336 MiB. Earlier figures on this page were taken on a laptop
+busy with other builds (4.6–6.4 s wall and 1.1–1.2 s CPU for the first
+run), where the process mostly waited; the peak memory was 104–105 MiB
+then, 18 MiB less than now, a change load doesn't explain and that is not
+yet looked into. The same test with 40
 rooms runs in `cargo test` (`the_load_test_fills_every_room_and_delivers_every_relay_message`).
 
 ### Hostile clients

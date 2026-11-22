@@ -39,6 +39,39 @@ sun shadows with four cascades) and waits for the GPU after every frame.
 
 ## Results
 
+### On an idle machine (2026-11-22)
+
+Apple M4 Max, Metal, macOS; rustc 1.100.0, release, features `3d,physics3d`
+plus the defaults; revision `9235ea05`. Three runs, 1-minute load average
+1.9 to 2.0. Medians of the three runs' medians, then their range.
+
+Streaming:
+
+| path | streamed as | upload ms per cell, p50 | upload ms per cell, max | frame ms, p50 | frames that changed cells, ms, p50 |
+|---|---|---|---|---|---|
+| GPU | cells | 0.034 (0.034–0.035) | 0.050–0.140 | 1.34 (1.33–1.36) | 1.39 (1.38–1.40) |
+| GPU | one batch, made again | 1.870 (1.863–1.906) | 2.20–2.40 | 5.59 (5.56–5.67) | 5.82 (5.82–5.93) |
+| CPU | cells | 0.030 (0.030–0.031) | 0.041–0.044 | 1.19 (1.19–1.20) | 1.24 (1.23–1.24) |
+| CPU | one batch, made again | 1.704 (1.685–1.711) | 2.00–2.16 | 5.15 (5.11–5.15) | 5.37 (5.32–5.41) |
+
+Draws (frame ms, p50):
+
+| path | visible cells | each on its own | together |
+|---|---|---|---|
+| GPU | 100 | 0.85 (0.85–0.86) | 0.83 (0.81–0.84) |
+| GPU | 1000 | 1.56 (1.55–1.57) | 1.16 (1.16–1.17) |
+| CPU | 100 | 0.78 (0.71–0.79) | 0.69 (0.68–0.71) |
+| CPU | 1000 | 1.39 (1.38–1.39) | 0.87 (0.87–0.87) |
+
+Draw, bind group and vertex buffer counts are as in the tables below.
+Uploading a cell costs about 55 times less than making the batch again,
+and on an idle machine that shows in the frame: 1.2 to 1.3 ms streaming
+cells against 5.2 to 5.6 ms making the batch again. Drawing 1,000 cells
+together saves 0.4 ms (GPU path) and 0.5 ms (CPU path) a frame. The
+sections below were measured on a busy machine and keep their own numbers.
+
+### On a busy machine (2026-11-15)
+
 Apple M4 Max, Metal (wgpu 30.0.1), macOS; rustc 1.99.1, release profile,
 features `3d` plus the defaults; revision `b688f902`. 2026-11-15.
 
