@@ -292,27 +292,32 @@ included. There is no JIT backend: wasmtime was measured below at two to
 three times faster per call, but it adds 8 MB and runs neither in a browser
 nor where a platform forbids writable code, so it isn't in the engine. The
 frost drip's crawl for 1000 drips per tick (`cargo run --release -p
-ponko_bench -- mods/`), November 2026, Apple Silicon laptop, busy (load
-average 75 to 115), two runs that agreed:
+ponko_bench -- mods/`), Apple M4 Max on an idle machine (2026-11-22,
+revision `9235ea05`, load average 2.2), the median of three runs that
+agreed within 8%:
 
 | Backend | Where | 1000 drips per tick (median) | Per drip | Added size |
 |---|---|---|---|---|
-| The game's own Rust rule (data-only mods) | Everywhere | 0.098 ms | 98 ns | 0 |
-| Code mod on wasmi (`mods-wasm`) | Everywhere, the web included | 0.204 ms | 204 ns (about 106 ns over Rust: the call, the interpreter, two host calls) | about 2.2 MB (measured below) |
+| The game's own Rust rule (data-only mods) | Everywhere | 0.095 ms | 95 ns | 0 |
+| Code mod on wasmi (`mods-wasm`) | Everywhere, the web included | 0.190 ms | 190 ns (about 95 ns over Rust: the call, the interpreter, two host calls) | about 2.2 MB (measured below) |
 
 Both include the two physics ray casts each drip makes. A game that calls a mod function a few thousand times per tick spends well under a millisecond; one that runs a mod's whole simulation per entity should measure first.
 
 What one host call costs, from 1000 calls per tick of a mod function that
 makes one (`cargo run --release -p ponko_bench -- mods/host-call`), against
-the same function making none. Apple Silicon laptop, November 2026, busy (load
-average 55 to 90), two runs within 0.003 ms of each other:
+the same function making none. Same machine and runs as above (the
+medians agreed within 0.004 ms, 0.045 ms for `get_field`):
 
 | Host call | 1000 calls per tick (median) | One host call, over the call itself |
 |---|---|---|
-| None (the call alone) | 0.046 ms | 46 ns for the call |
-| `random` | 0.060 ms | about 14 ns |
-| `get_field` (`"Transform2D.rotation"`) | 0.358 ms | about 310 ns |
-| `set_field` (`"Transform2D.rotation"`) | 0.692 ms | about 645 ns |
+| None (the call alone) | 0.058 ms | 58 ns for the call |
+| `random` | 0.070 ms | about 12 ns |
+| `get_field` (`"Transform2D.rotation"`) | 0.359 ms | about 300 ns |
+| `set_field` (`"Transform2D.rotation"`) | 0.679 ms | about 620 ns |
+
+The call alone measured 0.046 ms on a busy machine before; 0.058 ms here
+is slower by more than the runs' spread (0.054 to 0.058 ms), the one
+number in this section that moved the wrong way.
 
 `get_field` and `set_field` go through reflection's JSON (the component is
 read whole, and written back for a set), so they cost what `get_json` and

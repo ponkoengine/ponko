@@ -224,17 +224,19 @@ is measured offscreen by the ignored test `legions_frame_cost` in
 view, 300 ticks into a battle: "fill" is the `animate` frame system, the
 ground and the engine's sprite drawing into the draw list; "frame" adds
 sorting and batching, the instance upload, the GPU pass and reading the
-picture back (which a window doesn't do). Medians of 40 frames, three runs,
-same busy machine as above, so again an upper bound:
+picture back (which a window doesn't do). Medians of 40 frames, three runs
+on an idle machine (2026-11-22, revision `9235ea05`, load average 2.4 to
+2.7), which agreed within 0.03 ms:
 
 | Units | Fill | Whole frame |
 |---:|---|---|
-| 10,000 | 2.3 to 8.3 ms | 5.4 to 10.5 ms |
-| 100,000 | 13.9 to 34.3 ms | 21.3 to 38.4 ms |
-| 250,000 | 8.1 to 25.5 ms | 19.8 to 43.1 ms |
+| 10,000 | 0.08 ms | 1.16 to 1.17 ms |
+| 100,000 | 0.24 ms | 2.68 to 2.71 ms |
+| 250,000 | 0.40 to 0.41 ms | 5.78 to 5.79 ms |
 
-The spread between runs is bigger than the difference between 100,000 and
-250,000 units, which says how much the other jobs on the machine weighed.
+Measured before on the busy machine above, the same frames took 5 to
+43 ms, with a spread between runs bigger than the difference between
+100,000 and 250,000 units.
 
 ```sh
 cargo test --release --lib --features 3d legions_frame_cost -- --ignored --nocapture

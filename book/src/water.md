@@ -370,18 +370,20 @@ high.
 
 GPU time added by a 1280x720 frame of open sea, against the same frame
 without water, measured with timestamp queries (median of three runs,
-each the median of its frames; the spread is the three runs):
+each the median of its frames; the spread is the nine runs of three
+invocations), on an Apple M4 Max (Metal) on an idle machine (2026-11-22,
+revision `9235ea05`, load average 1.8 to 2.1):
 
 | Preset | Added GPU time | Runs |
 |---|---|---|
-| `Low` | 0.68 ms | 0.681–0.682 ms |
-| `Medium` | 2.66 ms | 2.60–2.68 ms |
-| `High`, screen-space reflection | 3.83 ms | 3.69–4.95 ms |
-| `High`, planar mirror | 2.04 ms | 2.00–2.05 ms |
+| `Low` | 0.15 ms | 0.154–0.155 ms |
+| `Medium` | 0.60 ms | 0.593–0.666 ms |
+| `High`, screen-space reflection | 1.98 ms | 1.95–2.04 ms |
+| `High`, planar mirror | 0.51 ms | 0.50–0.54 ms |
 
-These numbers are to be repeated on a quiet machine: they were taken on
-an Apple M4 Max (Metal) under heavy load from other work (load average
-90 to 180), which shows in the spread of the `High` row. The planar
+An earlier run on the same machine under heavy load from other work (load
+average 90 to 180) measured three to four times these (0.68, 2.66, 3.83
+and 2.04 ms). The planar
 mirror looks cheaper only because the test scene is a few boxes: it
 draws the scene a second time, so its cost grows with the scene, while
 screen-space reflections cost the same whatever is on screen. Measure

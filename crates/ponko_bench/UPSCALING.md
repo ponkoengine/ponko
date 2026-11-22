@@ -84,7 +84,8 @@ at N%, the temporal upscaler, `taa_sharpness` 0.25).
 Adapter: Apple M4 Max, Metal. The machine was busy with other builds and
 tests (load average 75 to 136 during the runs), so the GPU times are noisy:
 each is the median of three runs (each run 20 to 25 s), and differences
-under about 0.5 ms are noise.
+under about 0.5 ms are noise. The GPU times below were measured again on
+an idle machine; the errors don't depend on load.
 
 ## Image quality
 
@@ -118,26 +119,32 @@ What the images show:
 
 Frame GPU ms; the resolve and scaling columns are the TAA resolve pass at
 the render size and the scaling pass (bilinear stretch, or the temporal
-upscale):
+upscale). Measured again on an idle machine (Apple M4 Max, 2026-11-22,
+revision `9235ea05`, load average 1.4 to 1.5; `upscaling_gpu_time`, the
+median of three runs, which agreed within 0.07 ms), after the TAA resolve
+went to one depth sample a pixel (#238):
 
 | window | method | frame | TAA resolve | scaling |
 |---|---|---:|---:|---:|
-| 2560x1440 | native_taa | 7.02 | 1.74 | |
-| 2560x1440 | taa_stretch_67 | 6.00 | 1.19 | 0.09 |
-| 2560x1440 | temporal_67 | 6.38 | | 1.44 |
-| 2560x1440 | taa_stretch_50 | 5.05 | 0.79 | 0.10 |
-| 2560x1440 | temporal_50 | 5.43 | | 1.44 |
-| 3840x2160 | native_taa | 14.50 | 3.98 | |
-| 3840x2160 | taa_stretch_67 | 7.25 | 1.77 | 0.11 |
-| 3840x2160 | temporal_67 | 7.26 | | 1.89 |
-| 3840x2160 | taa_stretch_50 | 6.03 | 1.29 | 0.14 |
-| 3840x2160 | temporal_50 | 6.45 | | 2.27 |
+| 2560x1440 | native_taa | 6.05 | 0.99 | |
+| 2560x1440 | taa_stretch_67 | 3.25 | 0.44 | 0.05 |
+| 2560x1440 | temporal_67 | 3.61 | | 0.87 |
+| 2560x1440 | taa_stretch_50 | 2.07 | 0.24 | 0.05 |
+| 2560x1440 | temporal_50 | 2.89 | | 0.84 |
+| 3840x2160 | native_taa | 12.25 | 2.26 | |
+| 3840x2160 | taa_stretch_67 | 6.34 | 1.01 | 0.12 |
+| 3840x2160 | temporal_67 | 7.15 | | 1.94 |
+| 3840x2160 | taa_stretch_50 | 3.85 | 0.55 | 0.11 |
+| 3840x2160 | temporal_50 | 5.04 | | 1.90 |
 
-At 4K, 67% halves the frame (14.5 to 7.3 ms) and the temporal upscaler
-costs the same as TAA plus the stretch. At 1440p this frame is less
-pixel-bound: 67% saves about 0.6 ms with the temporal upscaler (1.0 ms
-with the stretch). The temporal pass costs about the same at 50% as at
-67%, since it runs once per window pixel.
+At 67% the temporal upscaler takes 60% of native's frame at either size,
+and costs 0.4 ms (1440p) to 0.8 ms (4K) more than TAA plus the stretch;
+at 50% at 4K, 1.2 ms more. The temporal pass costs about the same at 50%
+as at 67%, since it runs once per window pixel. The first recording of
+this table, on a machine busy with other builds, had native TAA at 7.02
+and 14.50 ms and its resolve at 1.74 and 3.98 ms; the resolve's 0.99 ms at
+1440p is the one-sample resolve's saving (#238 measured about 1.7 to
+2.1 ms before it and 1.0 to 1.1 ms after, on a busy machine).
 
 ## Follow-ups
 

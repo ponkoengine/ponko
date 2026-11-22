@@ -143,7 +143,7 @@ How it stays fast, in case your game needs the same tricks:
 | What | Per tick |
 |---|---|
 | 100k [events](events.md) sent, read by another system and dropped | 0.44 ms (4.4 ns per event) |
-| 100k [attachments](attachments.md) following 100k moving entities | 1.1 ms |
+| 100k [attachments](attachments.md) following 100k moving entities | 1.0 ms |
 
 Both allocate nothing once running: events reuse their buffers, and
 attachments are placed in parallel into scratch kept between ticks.
@@ -941,7 +941,9 @@ even with vsync off. To measure past 120 FPS, run fullscreen
 Speed is half of scale; the other half is what each entity costs. The
 headless example prints it: 1M agents with `d2::Transform`, `Sprite` and a
 small `Agent` component take **96 bytes per entity** allocated, spare
-capacity included.
+capacity included: 20 for the transform, 60 for the sprite, 8 for `Agent`
+and 8 for the entity handle. (Before 2026-11-20 this page said 76 bytes, a
+figure taken before `Sprite` gained its 20-byte `region`.)
 
 From code, `world.allocated_bytes()` is the total for all component data,
 and `Archetype::bytes_per_entity()` is what one more entity of that exact

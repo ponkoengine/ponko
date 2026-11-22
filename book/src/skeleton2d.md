@@ -596,17 +596,17 @@ Only `skeleton` is required; the rest default to the skeleton's start.
 ## Cost
 
 Measured with `cargo run --release -p ponko_bench -- skeleton2d` on an
-Apple M4 Max (14 cores), with the machine busy with other builds (load
-average about 75, so medians are noisy and the minimum is closer to the
-unloaded cost). Each of 1,000 skeletons has 16 bones, 15 rigid parts, two
+Apple M4 Max (14 cores) on an idle machine (2026-11-22, revision
+`9235ea05`, load average under 2.5; the median of three runs, which agreed
+within 1.2%). Each of 1,000 skeletons has 16 bones, 15 rigid parts, two
 skinned meshes of 20 vertices and 24 triangles, a walk/run 1D blend keying
 every bone, and a two-bone IK constraint; one frame advances them all (on
 all cores), draws them, then orders and batches the draw list:
 
 | Benchmark | Median | Minimum | Drawn |
 |---|---|---|---|
-| `skeleton2d/1k` | 11.1 ms | 3.6 ms | 234,000 vertices, 1 batch |
-| `skeleton2d/1k-z` (two layers) | 19.3 ms | 6.8 ms | 234,000 vertices, 1 batch |
+| `skeleton2d/1k` | 0.95 ms | 0.89 ms | 234,000 vertices, 1 batch |
+| `skeleton2d/1k-z` (two layers) | 3.6 ms | 3.4 ms | 234,000 vertices, 1 batch |
 
 Parts on one texture (or atlas) and one look batch into one draw call.
 
@@ -615,20 +615,19 @@ Posing and drawing are timed on their own by `skeleton2d/update-1k`,
 of them). Posing runs on all cores. Drawing splits the skeletons into runs,
 and each thread builds its runs' vertices into its own chunk. The chunks are
 then copied into the draw list in draw order, so the result is the same as
-drawing them one by one (posing was on all cores already). Three runs
-each, before (drawing on one thread) and
-after, taken in turns on the same busy machine (load average 50 to 90).
-These are **to be repeated on a quiet machine**:
+drawing them one by one. On the idle machine (same runs as above):
 
-| Benchmark | Before: median | Before: min | After: median | After: min |
-|---|---|---|---|---|
-| `update-1k` | 3.5 to 7.2 ms | 0.64 to 0.75 ms | 1.1 to 2.8 ms | 0.49 to 0.52 ms |
-| `draw-1k` | 3.8 to 6.2 ms | 2.5 to 2.6 ms | 3.1 to 21 ms | 0.63 to 0.87 ms |
-| `update-10k` | 7.8 to 30 ms | 5.4 to 6.0 ms | 19 to 30 ms | 4.0 to 5.0 ms |
-| `draw-10k` | 29 to 89 ms | 25.6 to 26.6 ms | 33 to 50 ms | 5.6 to 8.4 ms |
+| Benchmark | Median | Minimum |
+|---|---|---|
+| `update-1k` | 0.49 ms | 0.47 ms |
+| `draw-1k` | 0.38 ms | 0.34 ms |
+| `update-10k` | 6.9 ms | 6.5 ms |
+| `draw-10k` | 2.9 ms | 2.7 ms |
 
-The minimums (the closest to an idle machine) show drawing three to four
-times faster. The medians are within the noise of the other work on the
-machine: a parallel draw waits for cores that other processes hold.
+When drawing moved onto all cores it was measured before and after on a
+machine busy with other builds, where only the minimums could be read:
+drawing 10,000 went from 25.6–26.6 ms to 5.6–8.4 ms at the minimum, and
+the idle machine's 2.7 ms confirms it. The busy-machine medians (up to
+50 ms) were the wait for cores other processes held.
 Posing, drawing and clipping allocate nothing per frame once warm, apart
 from rayon's job queue taking a new block now and then on all cores.

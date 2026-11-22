@@ -88,9 +88,10 @@ it looks at the remaining entries directly.
 
 Measured with `cargo run --release -p ponko_bench -- nearest/` (100,000
 entities in a 2,000 × 2,000 square, cell size 16, 10,000 searches; Apple M4
-Max, busy machine at load average about 150, medians): 1.79 ms against
-4.27 ms for visiting every cell in a 32 radius, and 1.65 ms against 402 ms
-in a 256 radius.
+Max on an idle machine, 2026-11-22, revision `9235ea05`, load average
+under 2.8, the median of three runs): 1.53 ms against 3.45 ms for visiting
+every cell in a 32 radius, and 1.46 ms against 77 ms in a 256 radius. The
+runs agreed within 10% (the scans) and 8% (the rings).
 
 Every 32 ticks (`SpatialGrid::SORT_EVERY`) the built-in system also reorders
 entities by grid cell (`World::sort_by` with `spatial_key`), so neighbors in

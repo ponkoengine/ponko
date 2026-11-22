@@ -57,8 +57,9 @@ a whole subtree.
 
 Placing runs on all cores when there is enough of it (a small update
 stays on the calling thread) and allocates nothing in steady state: about
-**0.7 ms per tick for 100,000 attachments** (release, M-series Mac,
-`cargo run --release -p ponko_bench -- attach`). Entities without
+**1.0 ms per tick for 100,000 attachments** following 100,000 moving
+entities, the move included (release, Apple M4 Max, idle machine,
+2026-11-22, `cargo run --release -p ponko_bench -- attach`). Entities without
 `Attached` cost nothing.
 
 Attachments are a sim system, so they're deterministic, saved with the world

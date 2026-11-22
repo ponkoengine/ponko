@@ -135,28 +135,31 @@ Chains can be as deep as you like; there is no depth limit.
 ## Cost
 
 `cargo run --release -p ponko_bench -- hierarchy`, Apple M4 Max (14
-cores), Rust 1.99.1, one update of 100,000 2D transforms; the fastest of
-twenty updates after five warm-up ones, the range over three runs:
+cores), on an idle machine (2026-11-22, revision `9235ea05`, Rust 1.100.0,
+load average under 2.7), one update of 100,000 2D transforms; the fastest
+of twenty updates after five warm-up ones, the range over three runs (the
+medians are 2–20% above these):
 
 | Tree | Root moves | Nothing moves |
 |---|---|---|
-| deep (one chain 100,000 long) | 2.4–2.5 ms | 0.002–0.003 ms |
-| wide (100,000 children of one root) | 0.20–0.40 ms | 0.002–0.003 ms |
-| wide, 3D | 0.26–0.52 ms | |
-| 100,000 roots with one child each, all moving | 0.63–1.1 ms | |
+| deep (one chain 100,000 long) | 2.27–2.29 ms | 0.0017 ms |
+| wide (100,000 children of one root) | 0.096–0.104 ms | 0.0018 ms |
+| wide, 3D | 0.13–0.14 ms | |
+| 100,000 roots with one child each, all moving | 0.43–0.48 ms | |
 
 A subtree that didn't move gets no traversal and no transform writes, and
 a still tree costs per chunk of 64 entities, not per entity: the scan for
 changed attachments skips chunks nobody wrote to (see [change
 detection](ecs.md#change-detection)). Removing a child and attaching a
-new one under a still 100,000-wide root costs 0.04–0.12 ms: the update
+new one under a still 100,000-wide root costs 0.035–0.037 ms: the update
 takes removed links out of their old parent's list directly, without
 walking the tree. A despawned parent costs the links of its own children:
 the hierarchy notes its children list as it goes, with an `on_remove`
 hook on `Children` (see [component hooks](ecs.md#component-hooks)), and
 the update looks at those links only. With 100,000 root and child pairs
-and one root despawned per update, an update takes 0.41 ms at best, where
-scanning every link took 0.51 ms.
+and one root despawned per update, an update takes 0.34 ms at best (0.41 ms
+on a busy machine when this was built, where scanning every link took
+0.51 ms).
 
 A level with many children (a wide tree, many moving roots) is placed in
 one pass over the attached entities, each finding its parent's new
@@ -169,15 +172,14 @@ can take milliseconds to wake. In a [web build with threads](web-threads.md)
 a pass worth sharing runs on the workers, as parallel queries do; the
 page's thread waits without blocking. A deep chain is placed a link at a time.
 
-Linking 100,000 new children to 100,000 parents costs 5.5 ms in the first
-update and about 100 allocations in all: a children list keeps its first
+Linking 100,000 new children to 100,000 parents costs 4.5–4.6 ms in the
+first update and about 116 allocations in all: a children list keeps its first
 four entries in the component itself. Steady updates allocate nothing (a
 list that grows past four, or past its capacity, reallocates now and
 then).
 
-The machine was busy with other builds during these runs (load average
-60–90), so treat the figures as rough; under that load the medians of
-the parallel cases spread too widely to quote.
+Earlier figures in this section were taken on a machine busy with other
+builds (load average 60–90) and were up to four times these.
 
 The update turns on change tracking for `Attached`, `Attached3D` and
 `Children` the first time it runs; a game that never uses attachments

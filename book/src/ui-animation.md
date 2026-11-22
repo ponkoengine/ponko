@@ -168,27 +168,30 @@ What it costs on the GPU, for a menu of 480 x 400 points (twelve rows of a
 label on a fill) faded at half, from the engine's pass timer (`ui layers`
 is the pass drawing the group into its layer, `sprites` the window's
 sprite pass, which shows it), offscreen on an Apple M4 Max, medians of
-three runs on a busy machine:
+three runs on an idle machine (2026-11-22, revision `9235ea05`; the runs
+agreed within 0.004 ms):
 
 | Window | Faded | `ui layers` | `sprites` | Layer texture |
 |---|---|---|---|---|
-| 1920 x 1080 | piece by piece | none | 0.089 ms | none |
-| 1920 x 1080 | as a group, window-sized layer (before) | 0.089 ms | 0.084 ms | 8.3 MB |
-| 1920 x 1080 | as a group | 0.051 ms | 0.060 ms | 0.9 MB |
-| 3840 x 2160 | piece by piece | none | 0.231 ms | none |
-| 3840 x 2160 | as a group, window-sized layer (before) | 0.114 ms | 0.149 ms | 33.2 MB |
-| 3840 x 2160 | as a group | 0.052 ms | 0.201 ms | 0.9 MB |
+| 1920 x 1080 | piece by piece | none | 0.021 ms | none |
+| 1920 x 1080 | as a group, window-sized layer (before) | 0.021 ms | 0.020 ms | 8.3 MB |
+| 1920 x 1080 | as a group | 0.013 ms | 0.014 ms | 0.9 MB |
+| 3840 x 2160 | piece by piece | none | 0.052 ms | none |
+| 3840 x 2160 | as a group, window-sized layer (before) | 0.052 ms | 0.068 ms | 33.2 MB |
+| 3840 x 2160 | as a group | 0.013 ms | 0.044 ms | 0.9 MB |
 
-The layer's pass costs about 0.05 ms at either size; the `sprites` pass
-varies by more than the one quad it adds (at 4K it also clears and fills
-the whole window), so fading as a group costs about the layer's pass over
-fading piece by piece. `group_fade_gpu_timings` in
+The layer's pass costs 0.013 ms at either size, and the `sprites` pass
+draws the faded group as one quad, so fading as a group costs about what
+fading piece by piece does: 0.028 against 0.021 ms at 1080p, 0.058
+against 0.052 ms at 4K. (Measured before on a busy machine, every figure
+here was two to five times as large.) `group_fade_gpu_timings` in
 `src/render/ui_group_fade_render_test.rs` measures it.
 
 On the CPU, the `ui/draw-fade-group` benchmark row (the settings screen of
-about 150 nodes fading as one image) takes 0.027 ms a frame where fading it
-piece by piece (`ui/draw-fade`) takes 0.032 ms (same busy machine; finding
-what the layer covers walks its sprites once a frame).
+about 150 nodes fading as one image) takes 0.024 ms a frame where fading it
+piece by piece (`ui/draw-fade`) takes 0.028 ms (an idle M4 Max, 2026-11-22,
+medians of three runs within 9%; finding what the layer covers walks its
+sprites once a frame).
 
 Limits: sprites with an additive or multiply blend inside a group blend
 with the group, not with what is behind it.

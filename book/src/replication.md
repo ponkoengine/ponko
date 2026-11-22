@@ -599,12 +599,12 @@ cargo run --release -p ponko_bench --bin replication -- 3
 
 | Scenario | Payload, B/s per client | On the wire, B/s per client | Entities a client holds | Server CPU per tick: median, p90 |
 |---|---|---|---|---|
-| All move, no budget | 571,428 | 588,949 | 1,000 | 0.73 ms, 0.77 ms |
-| All move, 64 KB/s budget (the default) | 63,893 | 67,578 | 1,000 | 0.38 ms, 0.42 ms |
-| 1 in 10 move, 64 KB/s | 62,006 | 65,636 | 1,000 | 0.26 ms, 0.28 ms |
-| 1 in 20 move, 64 KB/s | 31,266 | 34,891 | 1,000 | 0.14 ms, 0.39 ms (busy machine, see below) |
-| All move, interest rings (250 m every tick, 500 m every 4th) | 62,246 (58,559 to 63,923 by client) | 65,905 | 235 | 0.36 ms, 0.38 ms |
-| 1 in 10 move, 64 KB/s, 5% lost each way and reordered | 63,443 (63,055 to 63,831 by client) | 63,937 | 1,000 | 0.61 ms, 0.73 ms (busy machine, see below) |
+| All move, no budget | 571,428 | 588,949 | 1,000 | 0.76 ms, 0.80 ms |
+| All move, 64 KB/s budget (the default) | 63,893 | 67,578 | 1,000 | 0.41 ms, 0.44 ms |
+| 1 in 10 move, 64 KB/s | 62,006 | 65,636 | 1,000 | 0.19 ms, 0.20 ms |
+| 1 in 20 move, 64 KB/s | 31,266 | 34,891 | 1,000 | 0.14 ms, 0.15 ms |
+| All move, interest rings (250 m every tick, 500 m every 4th) | 62,246 (58,559 to 63,923 by client) | 65,905 | 235 | 0.39 ms, 0.41 ms |
+| 1 in 10 move, 64 KB/s, 5% lost each way and reordered | 63,443 (63,055 to 63,831 by client) | 63,937 | 1,000 | 0.22 ms, 0.24 ms |
 
 *Payload* is replication's packets; *on the wire* adds the transport's
 framing, acknowledgements and resends. The last scenario runs over
@@ -621,22 +621,19 @@ two-second warm-up (everyone joining and getting the spawn burst). Server
 CPU is its whole tick: receiving, the game's systems, finding what
 changed, encoding and sending to all 16 clients.
 
-The CPU times come from three runs on a 14-core Apple M4 Max on an idle
-machine (2026-11-20, nothing else running); the medians of the runs varied by
-under 0.03 ms in every scenario (0.728 to 0.755 ms in the first). The byte
-counts are exact and don't change. The `1 in 20` row's CPU time is not
-from an idle machine: it was measured on 2026-11-21 while other builds
-kept the same M4 Max busy (load average 100 to 180), so it is only good
-for comparing with the row below it; an idle-machine run of it is still
-to be done. The other rows' times were measured before changes were sent
-once (next section) and didn't move beyond that busy machine's noise
-since. The lossy row's time is from 2026-11-21 too, with the load average
-at 97 to 114: three invocations of three runs each, alternating with the
-lossless `1 in 10` row. Its medians were 0.608, 0.618 and 0.610 ms; the
-lossless row's in the same invocations 0.521, 0.362 and 0.499 ms (it
-measured 0.26 ms on the idle machine). On that machine the lossy link
-costs the server somewhat more (more records, at the budget), but take
-nothing finer than that from those numbers.
+The CPU times are the medians of three invocations of the command above
+(three runs each) on a 14-core Apple M4 Max on an idle machine
+(2026-11-22, revision `9235ea05`, load average 1.6 to 2.9); the medians of
+the nine runs varied by under 0.02 ms in every scenario (0.756 to 0.776 ms
+in the first). The byte counts are exact and don't change. Against the
+idle-machine run of 2026-11-20 the `1 in 10` row fell from 0.26 to
+0.19 ms, beyond the noise: changes are now sent once and resent only when
+lost (next section), so a quiet entity costs less. The rows where
+everything moves are 0.03 ms slower than that run, about the spread of
+the two runs together, so take that as within the noise. The lossy link costs the
+server 0.03 ms a tick more than the same scenario without losses (more
+records, at the budget); on a busy machine (2026-11-21, load average 97 to
+114) the two had measured 0.61 and 0.36 to 0.52 ms.
 
 ### Sent once, resent when lost
 

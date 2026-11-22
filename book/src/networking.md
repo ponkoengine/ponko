@@ -447,8 +447,7 @@ The session's settings, packets, stalls and stats are `Rollback`'s
   physics don't yet: rapier (0.36) can only copy its world with `clone`,
   which allocates for every body, collider and contact pair, about 5.8
   allocations per body for each save and each load (580 at 100 boxes,
-  7,950 at 1,000; 0.037 ms and 0.59 ms per save on an M4 Max, the machine
-  busy), and a few even for an empty world when a physics feature is
+  7,950 at 1,000; 0.038 ms and 0.38 ms per save on an idle M4 Max), and a few even for an empty world when a physics feature is
   compiled in. Profiling shows them apart, in the `rollback/save physics`
   and `rollback/load physics` scopes.
 - **Change detection:** a load restores every change stamp and removal
@@ -522,42 +521,40 @@ Everything a tick reads that an earlier tick wrote. In this engine:
 ### What it costs
 
 `cargo run --release -p ponko_bench -- rollback/` on an Apple M4 Max
-(14 cores), one run on an idle machine (2026-11-20): medians. A "tick" is the
+(14 cores), on an idle machine (2026-11-22, revision `9235ea05`, load
+average under 1.8): the median of three runs. A "tick" is the
 test's game (players pushing a crowd); physics is a pile of 10 px boxes in
 rapier that has settled for a second.
 
 | Per operation (ms) | 100 | 1,000 | 10,000 |
 |---|---|---|---|
-| Typed copy, save | < 0.001 | 0.002 | 0.054 |
-| Typed copy, load | < 0.001 | 0.005 | 0.052 |
-| `World::save` (JSON) | 0.44 | 3.7 | 34 |
-| `World::load` (JSON) | 0.028 | 0.27 | 2.8 |
+| Typed copy, save | < 0.001 | 0.002 | 0.024 |
+| Typed copy, load | < 0.001 | 0.005 | 0.049 |
+| `World::save` (JSON) | 0.46 | 3.8 | 35 |
+| `World::load` (JSON) | 0.026 | 0.26 | 2.7 |
 | One tick of the game | < 0.001 | 0.001 | 0.010 |
-| Rapier state, save (clone) | 0.038 | 0.40 | 15 |
-| Rapier state, load | 0.037 | 0.37 | 6.2 |
-| One rapier step | 0.019 | 0.20 | 8.2 |
+| Rapier state, save (clone) | 0.038 | 0.38 | 14 |
+| Rapier state, load | 0.037 | 0.37 | 6.0 |
+| One rapier step | 0.017 | 0.20 | 7.7 |
 
 The worst tick is one load plus `max_prediction + 1` saves and ticks;
 with the default window of 8:
 
-- **Without physics, typed copies:** 10,000 entities, about 0.6 ms. A
+- **Without physics, typed copies:** 10,000 entities, about 0.4 ms. A
   whole two-peer session of 300 ticks with 1,000 entities over a 4–8 tick,
-  10%-loss link took 4.3 ms for both peers (about 2.1 ms each) against
-  0.32 ms for one offline run: 475 ticks re-simulated across both peers,
+  10%-loss link took 4.2 ms for both peers (about 2.1 ms each) against
+  0.31 ms for one offline run: 475 ticks re-simulated across both peers,
   and a save every tick.
-- **`World::save` and `World::load`:** 1,000 entities already take about 33 ms
-  (9 saves of 3.7 ms), and allocate about 22,000 times per save; one save
-  of 10,000 entities takes 34 ms. Too slow for every tick, and they don't restore entity ids
+- **`World::save` and `World::load`:** 1,000 entities already take about 34 ms
+  (9 saves of 3.8 ms), and allocate about 22,000 times per save; one save
+  of 10,000 entities takes 35 ms. Too slow for every tick, and they don't restore entity ids
   (above).
 - **With 2D physics:** 1,000 bodies, about 6 ms (a third of a 60 Hz
-  frame); 100 bodies, under 1 ms. At 10,000 bodies one step takes 8 ms
-  and one save 15 ms, together more than a 60 Hz frame, so there is no time
+  frame); 100 bodies, under 1 ms. At 10,000 bodies one step takes 7.7 ms
+  and one save 14 ms, together more than a 60 Hz frame, so there is no time
   to re-simulate.
 
-The whole-game numbers come from a second run of the same command, on a
-busy machine (load average 90 to 150 on the 14 cores, 2026-11-21): medians
-of 5 runs, and of 3 with physics, where the spread was wide (the fastest
-run is given too). `snapshot` is `World::save_snapshot` and
+The whole-game numbers come from the same three runs. `snapshot` is `World::save_snapshot` and
 `restore_snapshot` of the test's world (two players and a crowd, `Pos` and
 `Vel`) into a reused snapshot: no allocation after the first save. A
 `game` run is a whole `Game` running 300 ticks headless, offline or
@@ -567,23 +564,28 @@ every tick and hashes the world every 60.
 
 | Per operation (ms) | 100 | 1,000 | 10,000 |
 |---|---|---|---|
-| World snapshot, save | < 0.001 | 0.001 | 0.005 |
+| World snapshot, save | < 0.001 | < 0.001 | 0.005 |
 | World snapshot, restore | < 0.001 | < 0.001 | 0.005 |
-| `Game`, 300 ticks offline | 0.61 | 0.89 | 4.0 |
-| `Game`, 300 ticks through a session | 1.6 | 2.5 | 9.3 |
-| `Game` with 2D physics, offline | 4.9 | 120 (fastest 26) | — |
-| `Game` with 2D physics, session | 114 (fastest 15) | 351 (fastest 299) | — |
+| `Game`, 300 ticks offline | 0.56 | 0.82 | 3.6 |
+| `Game`, 300 ticks through a session | 1.5 | 2.1 | 8.1 |
+| `Game` with 2D physics, offline | 4.4 | 24 | — |
+| `Game` with 2D physics, session | 13 | 82 | — |
 
-- **Without physics** a session costs about 0.02 ms a tick at 10,000
+The physics rows were 114 and 351 ms on a busy machine (2026-11-21, load
+average 90 to 150); the idle runs agreed within 7% at 100 bodies and 14%
+at 1,000.
+
+- **Without physics** a session costs about 0.015 ms a tick at 10,000
   entities over the offline game: the snapshot is a copy of the component
   columns, far below the 1 ms a save and load of 10,000 entities may take.
   It is not incremental: copying only the archetypes that changed would
   need a change stamp per archetype, and the whole copy is already a few
   microseconds.
 - **With physics** the save before every tick dominates: rapier's sets are
-  cloned (about 8,000 allocations for 1,000 bodies), about 1 ms a tick at
-  1,000 bodies, so up to about a thousand bodies fit a 60 Hz frame with
-  room to re-simulate, as with `Rollback` alone.
+  cloned (about 8,000 allocations for 1,000 bodies). At 1,000 bodies the
+  session adds 58 ms to the 300 ticks, about 0.2 ms a tick, so up to about
+  a thousand bodies fit a 60 Hz frame with room to re-simulate, as with
+  `Rollback` alone.
 
 ### The decision
 
