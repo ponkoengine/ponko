@@ -111,7 +111,10 @@ fn a_picture_one_pixel_past_a_lowered_side_is_refused_by_every_format() {
     set(ImageLimits::new(16, 1 << 20));
     for (format, extension, _) in formats() {
         let name = format!("a.{extension}");
-        assert!(load(&name, &picture(format, 16, 1)).is_ok(), "{format:?}: 16 x 1 is within");
+        assert!(
+            load(&name, &picture(format, 16, 1)).is_ok(),
+            "{format:?}: 16 x 1 is within"
+        );
         let err = load(&name, &picture(format, 17, 1)).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::Limit, "{format:?}: {}", err.message());
         assert!(
@@ -132,7 +135,10 @@ fn a_picture_past_lowered_bytes_is_refused_by_every_format() {
     set(ImageLimits::new(1_024, 4_096));
     for (format, extension, _) in formats() {
         let name = format!("a.{extension}");
-        assert!(load(&name, &picture(format, 16, 16)).is_ok(), "{format:?}: 16 x 16 is within");
+        assert!(
+            load(&name, &picture(format, 16, 16)).is_ok(),
+            "{format:?}: 16 x 16 is within"
+        );
         let err = load(&name, &picture(format, 33, 32)).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::Limit, "{format:?}: {}", err.message());
         assert!(
@@ -177,7 +183,11 @@ fn the_game_builder_sets_the_limits_at_startup() {
         });
     let err = load("a.png", &picture(image::ImageFormat::Png, 4_097, 1)).unwrap_err();
     assert_eq!(err.kind(), ErrorKind::Limit);
-    assert!(err.message().contains("4096 pixels a side, 64 MiB"), "{}", err.message());
+    assert!(
+        err.message().contains("4096 pixels a side, 64 MiB"),
+        "{}",
+        err.message()
+    );
     assert!(load("a.png", &picture(image::ImageFormat::Png, 4_096, 1)).is_ok());
 }
 
@@ -201,10 +211,13 @@ fn one_picture_decodes_under_tighter_limits_without_changing_the_games() {
         assert!(err.message().contains("64 pixels a side"), "{}", err.message());
         // The game's own limits are untouched: the same picture loads by name.
         assert_eq!(ctx.assets.image_limits(), ImageLimits::default());
-        ctx.assets.add_source(MemorySource::new("mem").with("avatar.png", avatar.clone()));
+        ctx.assets
+            .add_source(MemorySource::new("mem").with("avatar.png", avatar.clone()));
         assert!(ctx.gfx.try_load_texture("avatar.png").is_ok());
         // And a picture within them decodes.
-        let ok = ctx.gfx.try_decode_texture(&avatar, "avatar.png", ImageLimits::new(100, 1 << 20));
+        let ok = ctx
+            .gfx
+            .try_decode_texture(&avatar, "avatar.png", ImageLimits::new(100, 1 << 20));
         assert_eq!(ok.map(|t| (t.width(), t.height())).unwrap(), (100, 100));
     });
 }
@@ -216,11 +229,21 @@ fn per_picture_limits_hold_for_every_format_and_for_bytes() {
         for (format, extension, _) in formats() {
             let name = format!("a.{extension}");
             let tight = ImageLimits::new(16, 1 << 20);
-            assert!(ctx.gfx.try_decode_texture(&picture(format, 16, 1), &name, tight).is_ok());
-            let err = ctx.gfx.try_decode_texture(&picture(format, 17, 1), &name, tight).unwrap_err();
+            assert!(
+                ctx.gfx
+                    .try_decode_texture(&picture(format, 16, 1), &name, tight)
+                    .is_ok()
+            );
+            let err = ctx
+                .gfx
+                .try_decode_texture(&picture(format, 17, 1), &name, tight)
+                .unwrap_err();
             assert_eq!(err.kind(), ErrorKind::Limit, "{format:?}: {}", err.message());
             let few = ImageLimits::new(1_024, 4_096);
-            let err = ctx.gfx.try_decode_texture(&picture(format, 33, 32), &name, few).unwrap_err();
+            let err = ctx
+                .gfx
+                .try_decode_texture(&picture(format, 33, 32), &name, few)
+                .unwrap_err();
             assert_eq!(err.kind(), ErrorKind::Limit, "{format:?}: {}", err.message());
         }
     });
@@ -232,7 +255,11 @@ fn per_picture_limits_can_be_higher_than_the_games() {
     set(ImageLimits::new(16, 1 << 20));
     let wide = picture(image::ImageFormat::Png, 40, 1);
     Game::new("limits", 1, 1).run_headless(0, |ctx| {
-        assert!(ctx.gfx.try_decode_texture(&wide, "w.png", ImageLimits::default()).is_ok());
+        assert!(
+            ctx.gfx
+                .try_decode_texture(&wide, "w.png", ImageLimits::default())
+                .is_ok()
+        );
         assert_eq!(ctx.assets.image_limits(), ImageLimits::new(16, 1 << 20));
     });
 }
@@ -243,12 +270,14 @@ fn per_picture_limits_end_with_the_call_even_when_it_fails() {
     Game::new("limits", 1, 1).run_headless(0, |ctx| {
         let tight = ImageLimits::new(8, 1 << 20);
         assert!(ctx.gfx.try_decode_texture(b"not a picture", "x.png", tight).is_err());
-        assert!(ctx
-            .gfx
-            .try_decode_texture(&picture(image::ImageFormat::Png, 9, 1), "x.png", tight)
-            .is_err());
+        assert!(
+            ctx.gfx
+                .try_decode_texture(&picture(image::ImageFormat::Png, 9, 1), "x.png", tight)
+                .is_err()
+        );
         // Back to the game's: a 9-pixel picture loads.
-        ctx.assets.add_source(MemorySource::new("mem").with("x.png", picture(image::ImageFormat::Png, 9, 1)));
+        ctx.assets
+            .add_source(MemorySource::new("mem").with("x.png", picture(image::ImageFormat::Png, 9, 1)));
         assert!(ctx.gfx.try_load_texture("x.png").is_ok());
     });
 }
@@ -263,4 +292,31 @@ fn bytes_that_are_not_a_picture_are_still_a_decode_error_under_any_limits() {
             .unwrap_err();
         assert_eq!(err.kind(), ErrorKind::Decode, "{}", err.message());
     });
+}
+
+#[test]
+fn a_game_lowers_its_limits_and_decodes_players_pictures_under_tighter_ones() {
+    let _own = exclusive();
+    let downloaded = picture(image::ImageFormat::Png, 600, 8);
+    // ANCHOR: image_limits
+    // Everything this game loads: at most 8 192 pixels a side and 256 MiB of pixels.
+    Game::new("Avatars", 800, 600)
+        .image_limits(ImageLimits::new(8_192, 256 << 20))
+        .run_headless(0, |ctx| {
+            // A picture from a player: much tighter, without touching the limits above.
+            let tight = ImageLimits::new(512, 1 << 20);
+            match ctx.gfx.try_decode_texture(&downloaded, "avatar.png", tight) {
+                Ok(avatar) => println!("avatar is {} x {}", avatar.width(), avatar.height()),
+                Err(e) if e.kind() == ErrorKind::Limit => println!("too big: {e}"),
+                Err(e) => println!("not a picture: {e}"),
+            }
+            // ANCHOR_END: image_limits
+            assert_eq!(ctx.assets.image_limits(), ImageLimits::new(8_192, 256 << 20));
+            assert!(
+                ctx.gfx
+                    .try_decode_texture(&downloaded, "avatar.png", tight)
+                    .is_err_and(|e| e.kind() == ErrorKind::Limit)
+            );
+            ctx.assets.set_image_limits(ImageLimits::default());
+        });
 }

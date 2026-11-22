@@ -1255,7 +1255,11 @@ impl ImageLimits {
     /// The limits as the messages say them: `4096 pixels a side, 64 MiB of pixels`.
     fn describe(self) -> String {
         if self.max_bytes % (1 << 20) == 0 {
-            format!("{} pixels a side, {} MiB of pixels", self.max_side, self.max_bytes >> 20)
+            format!(
+                "{} pixels a side, {} MiB of pixels",
+                self.max_side,
+                self.max_bytes >> 20
+            )
         } else {
             format!("{} pixels a side, {} bytes of pixels", self.max_side, self.max_bytes)
         }
@@ -1280,9 +1284,11 @@ thread_local! {
 /// The limits in force on this thread: those of the enclosing
 /// [`with_image_limits`] call, else the process's.
 pub(crate) fn image_limits() -> ImageLimits {
-    SCOPED_IMAGE_LIMITS
-        .get()
-        .unwrap_or_else(|| *GLOBAL_IMAGE_LIMITS.read().unwrap_or_else(std::sync::PoisonError::into_inner))
+    SCOPED_IMAGE_LIMITS.get().unwrap_or_else(|| {
+        *GLOBAL_IMAGE_LIMITS
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    })
 }
 
 /// Sets the limits for the whole process.
@@ -1376,10 +1382,7 @@ pub(crate) fn decode_image(bytes: &[u8], path: &str, what: &str) -> Result<Image
     let decoded = reader.decode().map_err(|e| match e {
         image::ImageError::Limits(_) => crate::error::Error::new(
             crate::error::ErrorKind::Limit,
-            format!(
-                "{what} is larger than the engine loads ({}): {e}",
-                in_force.describe()
-            ),
+            format!("{what} is larger than the engine loads ({}): {e}", in_force.describe()),
         )
         .with_path(path),
         e => crate::error::Error::decode(path, format!("{what} is not a valid image: {e}")),
@@ -2380,12 +2383,16 @@ mod tests {
             .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
             .unwrap();
         let tight = ImageLimits::new(32, 1 << 20);
-        let err = with_image_limits(tight, || decode_image(&png, "a.png", "\"a.png\"")).err().unwrap();
+        let err = with_image_limits(tight, || decode_image(&png, "a.png", "\"a.png\""))
+            .err()
+            .unwrap();
         assert_eq!(err.kind(), crate::error::ErrorKind::Limit, "{}", err.message());
         assert!(err.message().contains("32 pixels a side, 1 MiB"), "{}", err.message());
         // Bytes: 40 x 20 x 4 is 3 200.
         let few = ImageLimits::new(64, 3_199);
-        let err = with_image_limits(few, || decode_image(&png, "a.png", "\"a.png\"")).err().unwrap();
+        let err = with_image_limits(few, || decode_image(&png, "a.png", "\"a.png\""))
+            .err()
+            .unwrap();
         assert_eq!(err.kind(), crate::error::ErrorKind::Limit, "{}", err.message());
         assert!(err.message().contains("3199 bytes"), "{}", err.message());
         let exact = ImageLimits::new(64, 3_200);
@@ -2424,7 +2431,9 @@ mod tests {
         let err = decode_image(&header, "b.png", "\"b.png\"").err().unwrap();
         assert_eq!(err.kind(), crate::error::ErrorKind::Limit, "{}", err.message());
         let raised = ImageLimits::new(16_384, 1 << 30);
-        let err = with_image_limits(raised, || decode_image(&header, "b.png", "\"b.png\"")).err().unwrap();
+        let err = with_image_limits(raised, || decode_image(&header, "b.png", "\"b.png\""))
+            .err()
+            .unwrap();
         assert_ne!(
             err.kind(),
             crate::error::ErrorKind::Limit,
@@ -2441,7 +2450,11 @@ mod tests {
             assert!(check_image_size(100, 10, "a", "a").is_ok());
             let wide = check_image_size(101, 1, "a", "a").unwrap_err();
             assert_eq!(wide.kind(), crate::error::ErrorKind::Limit);
-            assert!(wide.message().contains("100 pixels a side, 4000 bytes"), "{}", wide.message());
+            assert!(
+                wide.message().contains("100 pixels a side, 4000 bytes"),
+                "{}",
+                wide.message()
+            );
             assert!(check_image_size(100, 11, "a", "a").is_err(), "4 400 bytes");
         });
         assert!(check_image_size(100, 11, "a", "a").is_ok());

@@ -44,7 +44,7 @@ pack, a download, a mod. A file can lie in its header about anything.
 
 | Loader | What an attacker wants | What stops it | Checked by |
 |---|---|---|---|
-| Images (PNG, JPEG and the `image-*` formats) | Make the game allocate gigabytes from a small file, crash the decoder | The size in the header is checked before decoding: 16 384 pixels a side and 512 MiB of RGBA8 at most (`ErrorKind::Limit`) | `assets.rs` tests, fuzz target `cooked_texture` |
+| Images (PNG, JPEG and the `image-*` formats) | Make the game allocate gigabytes from a small file, crash the decoder | The size in the header is checked before decoding: 16 384 pixels a side and 512 MiB of RGBA8 at most by default, and a game can change both (`ErrorKind::Limit`, see "Image size limits" below) | `assets.rs` tests, fuzz target `cooked_texture` |
 | Cooked and compressed textures (KTX2, DDS) | The same; a supercompressed level that unpacks to terabytes | The same size limits; every level must unpack to exactly the bytes its size needs, and unpacking stops as soon as it passes them | `compressed.rs` tests, fuzz target `cooked_texture` |
 | Video (WebM with AV1) | A picture size that allocates gigabytes before the first frame | The container's picture size is checked against the image limits; the AV1 decoder refuses larger frames itself | `video.rs` tests |
 | glTF models (`.glb`, `.gltf`) | Crash the loader, allocate without bound from accessor counts | Accessors and buffers are bounds-checked against the file; images go through the image limits | fuzz target `gltf` |
@@ -55,6 +55,44 @@ pack, a download, a mod. A file can lie in its header about anything.
 | Action maps (players' key bindings) | Crash the input system | Malformed bindings are an error; nothing else is read | fuzz target `action_map` |
 | Unity imports (`ponko_unity`) | Crash the importer with a malformed project | Every read is bounds-checked | fuzz targets `unity_yaml`, `unity_binary` |
 | Sounds (WAV, OGG, FLAC, MP3) | Crash the decoder | Decoded by symphonia, which is fuzzed upstream | — |
+
+### Image size limits
+
+Every image decoder reads one setting, `ImageLimits`: the longest side in
+pixels and the most bytes the decoded pixels may take (RGBA8, four bytes a
+pixel). The defaults are 16 384 pixels, what nearly every desktop GPU takes as
+a texture, and 512 MiB, past any game texture but small enough that a hostile
+file can't exhaust a normal machine. A game that loads pictures from players or
+the network (avatars, mods, user levels) should lower them for everything it
+loads, and decode each untrusted picture under tighter limits still, which
+doesn't change the game's. A tool that reads large source art (a height map, a
+panorama to slice) raises them. Set them once at startup with
+`Game::image_limits` (C: `ponko_game_image_limits`, C++: `game::image_limits`)
+or later with `Assets::set_image_limits` (`ponko_ctx_set_image_limits`,
+`ctx::set_image_limits`); they are for the whole process, not one game, and
+`Graphics::try_decode_texture` (`ponko_ctx_try_decode_texture`,
+`ctx::try_decode_texture`) takes limits of its own for one picture. A picture
+past them fails with `ErrorKind::Limit` (`PONKO_ERROR_LIMIT`) before its
+pixels are allocated, and the message names the limits in force. Raising a
+limit doesn't promise a texture: a picture wider than the device's own
+texture limit still fails at upload, with the usual error.
+
+<div class="lang-pair">
+<div>
+
+```rust
+{{#include ../../tests/image_limits.rs:image_limits}}
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:image_limits}}
+```
+
+</div>
+</div>
 
 ## The control endpoint
 

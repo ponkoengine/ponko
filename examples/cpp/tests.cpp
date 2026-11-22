@@ -3537,6 +3537,27 @@ static void native_coverage() {
         }
         CHECK(thrown);
 
+        // Image limits: the game's, and one picture's own.
+        {
+            const std::vector<std::uint8_t> pixel = {
+                137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0, 31, 21, 196,
+                137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 207, 192, 240, 31, 0, 5, 0, 1, 255, 137, 153, 61, 29, 0, 0, 0,
+                0, 73, 69, 78, 68, 174, 66, 96, 130};
+            CHECK(ctx.image_limits() == std::make_pair(std::uint32_t{16384}, std::uint64_t{512} << 20));
+            auto fits = ctx.try_decode_texture(pixel, "pixel.png", 1, 4);
+            CHECK(fits && fits.value().width == 1);
+            auto past = ctx.try_decode_texture(pixel, "pixel.png", 1, 3); // 4 bytes of RGBA8 against 3
+            CHECK(!past && past.kind() == PONKO_ERROR_LIMIT && past.error().path() == "pixel.png");
+            CHECK(std::string(past.error().what()).find("1 pixels a side, 3 bytes") != std::string::npos);
+            CHECK(ctx.image_limits().first == 16384); // the game's own limits are untouched
+            ctx.set_image_limits(2048, 8u << 20);
+            CHECK(ctx.image_limits() == std::make_pair(std::uint32_t{2048}, std::uint64_t{8} << 20));
+            ctx.set_image_limits(16384, std::uint64_t{512} << 20);
+            throws_kind([&] { ctx.set_image_limits(0, 4); }, PONKO_ERROR_INVALID);
+            auto junk = ctx.try_decode_texture(std::vector<std::uint8_t>{1, 2, 3}, "x.png", 64, 1024);
+            CHECK(!junk && junk.kind() == PONKO_ERROR_DECODE);
+        }
+
         // Asset sources, then your own decoder.
         ctx.add_asset_source(ponko::memory_source("embedded").with("level.txt", std::string("##.")).with("bytes.bin", {1, 2, 3}));
         CHECK(ctx.load_asset_with("bytes.bin", [](const std::uint8_t* data, std::size_t len) { return len == 3 && data[2] == 3; }));

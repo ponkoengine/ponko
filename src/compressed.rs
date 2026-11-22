@@ -1357,7 +1357,11 @@ pub(crate) mod tests {
                 panic!("{name}: a picture 12 pixels on a side loaded under 8");
             };
             assert_eq!(e.kind(), ErrorKind::Limit, "{name}: {}", e.message());
-            assert!(e.message().contains("8 pixels a side, 1 MiB"), "{name}: {}", e.message());
+            assert!(
+                e.message().contains("8 pixels a side, 1 MiB"),
+                "{name}: {}",
+                e.message()
+            );
             // The same file is past the limit only because of the limit.
             let Some(Err(e)) = decode(file, name, "a", GpuFormats::ALL) else {
                 continue; // it loads: not a hostile file at all

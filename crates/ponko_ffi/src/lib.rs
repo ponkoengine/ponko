@@ -139,6 +139,7 @@ mod text_shaping;
 mod buffer_motion;
 mod motion;
 // IME composition (#410).
+mod image_limits;
 mod ime;
 // Localization (#411).
 mod locale;
@@ -184,6 +185,7 @@ pub use controllers::*;
 pub use crash::*;
 pub use crowd_clips::*;
 pub use debug::*;
+pub use image_limits::*;
 pub use ime::*;
 pub use lightmap_bake::*;
 pub use locale::*;
