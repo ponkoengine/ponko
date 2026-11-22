@@ -99,8 +99,10 @@ impl Tool {
 }
 
 /// Folders below `assets/` the file lists look into, at most.
+#[cfg(not(target_arch = "wasm32"))]
 const LIST_DEPTH: usize = 8;
 /// Files a list holds, at most.
+#[cfg(not(target_arch = "wasm32"))]
 const LIST_FILES: usize = 4096;
 
 /// Every file in the `assets/` folders (or a web build's manifest) ending

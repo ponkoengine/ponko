@@ -146,7 +146,7 @@ mod apple {
     }
 
     /// Tests: the layer's EDR metadata is set.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "macos", feature = "3d"))]
     pub(super) fn layer_has_metadata(surface: &wgpu::Surface<'_>) -> bool {
         // SAFETY: as in `send`: wgpu's own layer, read under its lock.
         unsafe {

@@ -120,6 +120,7 @@ impl BakeTexture {
     }
 
     /// Its texels in linear color, row by row (for the GPU baker).
+    #[cfg(any(test, all(feature = "window", not(target_arch = "wasm32"))))]
     pub(crate) fn texels(&self) -> &[Vec3] {
         &self.texels
     }

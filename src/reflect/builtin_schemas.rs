@@ -368,6 +368,10 @@ pub(super) fn builtin<T: 'static>() -> Option<ValueSchema> {
     if id == std::any::TypeId::of::<crate::d3::HeldItem>() {
         return Some(ValueSchema::object([("offset", transform3d())]));
     }
+    #[cfg(feature = "3d")]
+    if id == std::any::TypeId::of::<crate::three::TerrainFile>() {
+        return Some(ValueSchema::strict_object([("path", String)]));
+    }
     #[cfg(feature = "physics")]
     if id == std::any::TypeId::of::<crate::d2::RigidBody>() {
         return Some(rigidbody());
@@ -747,6 +751,10 @@ pub(in crate::reflect) mod tests {
             check!(crate::render::LodHysteresis, crate::render::LodHysteresis::default());
             check!(crate::render::ShadowOnly, crate::render::ShadowOnly);
             check!(crate::d3::HeldItem, crate::d3::HeldItem::default());
+            check!(
+                crate::three::TerrainFile,
+                crate::three::TerrainFile::new("terrain/hill.json")
+            );
         }
         check!(crate::camera::RenderLayers, crate::camera::RenderLayers::layer(1));
         check!(crate::camera::CameraTarget, crate::camera::CameraTarget);

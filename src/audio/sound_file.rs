@@ -83,10 +83,12 @@ pub(crate) fn guarded<T>(f: impl FnOnce() -> Result<T, String>) -> Result<T, Str
 
 /// Reads the header of `source` and checks its sample rate and channels
 /// (not its length: a stream holds no decoded samples), decoding no samples.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))] // streams from memory are native only
 fn probe(source: impl MediaSource + 'static) -> Result<(), String> {
     guarded(|| probe_unguarded(source))
 }
 
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))] // streams from memory are native only
 fn probe_unguarded(source: impl MediaSource + 'static) -> Result<(), String> {
     let stream = MediaSourceStream::new(Box::new(source), Default::default());
     let reader = symphonia::default::get_probe()
@@ -100,6 +102,7 @@ fn probe_unguarded(source: impl MediaSource + 'static) -> Result<(), String> {
 }
 
 /// [`probe`] for encoded bytes held in memory.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))] // streams from memory are native only
 pub(crate) fn check_bytes(bytes: &Arc<[u8]>) -> Result<(), String> {
     probe(Cursor::new(bytes.clone()))
 }
