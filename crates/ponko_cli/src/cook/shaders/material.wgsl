@@ -71,8 +71,9 @@ fn apply_decals(s_in: Surface, geometric: vec3<f32>, layers: u32, dp_x: vec3<f32
         let low = min(rect.xy, rect.zw) + texel;
         let high = max(rect.xy, rect.zw) - texel;
         let uv_at = clamp(uv, low, max(low, high));
-        let slope_x = vec2<f32>(dot(r0.xyz, dp_x), -dot(r1.xyz, dp_x)) * size;
-        let slope_y = vec2<f32>(dot(r0.xyz, dp_y), -dot(r1.xyz, dp_y)) * size;
+        // Scaled by the mip bias, as the material's own textures are.
+        let slope_x = vec2<f32>(dot(r0.xyz, dp_x), -dot(r1.xyz, dp_x)) * size * exp2(texture_mip_bias());
+        let slope_y = vec2<f32>(dot(r0.xyz, dp_y), -dot(r1.xyz, dp_y)) * size * exp2(texture_mip_bias());
         var color = vec3<f32>(1.0);
         var alpha = 1.0;
         if images.x >= 0.0 {
@@ -478,7 +479,7 @@ fn fade_keeps(fade: f32, pixel: vec2<f32>) -> bool {
 
 // The surface from the material and its textures, then the shader's `surface`.
 fn surface_at(in: VertexOut, front: bool) -> Surface {
-    let base = textureSample(base_texture, material_sampler, in.uv) * material.color * in.color;
+    let base = textureSampleBias(base_texture, material_sampler, in.uv, texture_mip_bias()) * material.color * in.color;
     var s: Surface;
     s.albedo = base.rgb;
     s.alpha = base.a;
@@ -505,7 +506,7 @@ fn surface_at(in: VertexOut, front: bool) -> Surface {
         let t = dp2perp * duv1.x + dp1perp * duv2.x;
         let b = dp2perp * duv1.y + dp1perp * duv2.y;
         let inv = inverseSqrt(max(max(dot(t, t), dot(b, b)), 1e-20));
-        let texel = textureSample(normal_texture, material_sampler, in.uv);
+        let texel = textureSampleBias(normal_texture, material_sampler, in.uv, texture_mip_bias());
         var m = texel.xyz * 2.0 - 1.0;
         // Two-channel normal maps (BC5, EAC; 3: X and Y in red and alpha)
         // store no Z: it is the rest of the unit length.
@@ -524,14 +525,14 @@ fn surface_at(in: VertexOut, front: bool) -> Surface {
     s.metallic = material.params.y;
     s.occlusion = 1.0;
     if material.maps.y != 0u {
-        let orm = textureSample(orm_texture, material_sampler, in.uv);
+        let orm = textureSampleBias(orm_texture, material_sampler, in.uv, texture_mip_bias());
         s.occlusion = orm.r;
         s.roughness *= orm.g;
         s.metallic *= orm.b;
     }
     s.emissive = material.emissive.rgb;
     if material.maps.z != 0u {
-        s.emissive *= textureSample(emissive_texture, material_sampler, in.uv).rgb;
+        s.emissive *= textureSampleBias(emissive_texture, material_sampler, in.uv, texture_mip_bias()).rgb;
     }
     s = surface(s);
     s.roughness = clamp(s.roughness, 0.03, 1.0);

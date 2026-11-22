@@ -71,7 +71,9 @@ pub(super) struct FrameUniform {
     /// clip space (`previous_view_proj`, but for the view model's held
     /// items: see `view_model.rs`).
     pub(super) reprojection: [[f32; 4]; 4],
-    /// xy: this frame's jitter in pixels.
+    /// xy: this frame's jitter in pixels; z: the mip bias textures are
+    /// sampled with (`log2` of the render scale while the temporal
+    /// upscaler runs, else 0).
     pub(super) jitter: [f32; 4],
     /// Global illumination's probe grid (see `gi.wgsl`); all zero without.
     pub(super) gi: [[f32; 4]; 3],

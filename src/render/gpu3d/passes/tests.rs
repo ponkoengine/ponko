@@ -198,20 +198,21 @@ fn a_new_pass_slots_in_with_declared_dependencies() {
     let mut table = FRAME_PASSES.to_vec();
     table.push(with("3d custom", &["3d opaque", "3d transparent"], WRITES_CAMERAS));
     let custom = table.len() - 1;
-    // Writing target cameras after the passes that read them (the probe
-    // captures first, then the opaque pass) is caught.
+    // Writing target cameras after a pass that reads them (the opaque
+    // pass) is caught. The probe captures read what their own pass drew
+    // just before, in every frame: they read this frame's images.
     let error = check_passes(&table).unwrap_err();
     assert_eq!(
         error,
         PassError::UndeclaredRead {
-            pass: "3d target cameras",
+            pass: "3d opaque",
             resource: TargetImage,
             writer: "3d custom",
         }
     );
     assert_eq!(
         error.to_string(),
-        "pass \"3d target cameras\" reads target camera image but doesn't run after \"3d custom\", \
+        "pass \"3d opaque\" reads target camera image but doesn't run after \"3d custom\", \
          which writes it"
     );
     table[custom].steps = WRITES_OUTPUT;
