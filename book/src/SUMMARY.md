@@ -5,6 +5,7 @@
 # Guide
 
 - [Ponko vs Bevy vs Unity](comparison.md)
+  - [Coming from Bevy](from-bevy.md)
 - [Getting started](getting-started.md)
 - [Tutorial: a first 2D game](tutorial-2d.md)
 - [Tutorial: a first 3D game](tutorial-3d.md)

@@ -1,10 +1,66 @@
 # Ponko vs Bevy vs Unity
 
-**Last reviewed: 2026-11-14.** Ponko was renamed before 0.1.0 (the
+**Last reviewed: 2026-11-22.** Ponko was renamed before 0.1.0 (the
 [naming chapter](naming.md) maps the old names). This comparison describes
 the checked-in implementation and the linked official documentation; it does
 not claim feature parity or general performance superiority. Product versions
 and tool availability change.
+
+**Versions compared.** Ponko: this guide's `main` (0.1.0 is the latest
+release; see [Getting started](getting-started.md#your-first-game)). Bevy:
+**0.20.1**, the newest release, pinned in `bench/compare/Cargo.toml` and
+used for every number and every Bevy API named below. Unity: the newest
+long-term-support release is [Unity 6.3 LTS](https://unity.com/releases/unity-6);
+the Unity manual links on this page point at the Unity 6.0 (`6000.0`)
+manual, whose pages cover the same features. Coming from Bevy? [Coming
+from Bevy](from-bevy.md) maps its concepts to Ponko's and ports one of its
+examples.
+
+## The numbers: Ponko against Bevy 0.20.1
+
+The same workloads written as an ordinary Ponko game and an ordinary Bevy
+app, on one machine (MacBook Pro, Apple M4 Max, macOS 27.2.1, rustc
+1.100.0, Metal, measured 2026-11-22). Each cell is the median of three runs,
+in milliseconds per frame or tick, Ponko first; the ratio is Bevy's time
+over Ponko's, so above 1× Ponko is faster and below 1× Bevy is. "As a
+project starts" uses each engine's defaults and Cargo's release profile;
+"tuned" gives both a shipping profile (fat LTO, one codegen unit), Bevy its
+pipelined rendering and only the features each workload needs, and each
+engine the faster of its documented ways. The ranges, the loads, the method
+and a review of what is and is not the same on both sides are in
+[the scoreboard](performance.md#ponko-vs-bevy-the-scoreboard) and
+[`bench/compare/README.md`](../../bench/compare/README.md).
+
+| Workload | As a project starts: Ponko / Bevy | Ratio | Tuned: Ponko / Bevy | Ratio |
+|---|---:|---:|---:|---:|
+| ECS: spawn and despawn 100k in a world of 1M | 1.76 / 4.27 | 2.4× | 1.60 / 4.38 | 2.7× |
+| ECS: iterate 1M (one archetype) | 0.165 / 0.390 | 2.4× | 0.165 / 0.391 | 2.4× |
+| ECS: iterate 16k over 1,024 archetypes | 0.005 / 0.010 | 1.9× | 0.005 / 0.010 | 2.2× |
+| ECS: add and remove a component, 1M entities | 42.8 / 98.9 | 2.3× | 42.1 / 104.0 | 2.5× |
+| ECS: parallel iterate 1M (all cores) | 0.560 / 0.741 | 1.3× | 0.624 / 0.755 | 1.2× |
+| ECS: commands, 100k spawns and despawns | 2.40 / 5.39 | 2.2× | 2.23 / 5.05 | 2.3× |
+| Sprites: 100k moving | 1.10 / 11.6 | 10× | 1.02 / 6.74 | 6.6× |
+| Sprites: 100k moving, a different tint each | 1.09 / 44.8 | 41× | 0.99 / 37.4 | 38× |
+| Sprites: 1M moving | 8.32 / 105.7 | 13× | 7.62 / 58.9 | 7.7× |
+| 3D: 100k moving meshes with a 4-cascade sun shadow | 4.63 / 15.8 | 3.4× | 4.68 / 14.1 | 3.0× |
+| 3D: 1,000 skinned characters (16 joints) | 6.06 / 3.86 | **0.64×, Bevy faster** | 6.06 / 3.12 | **0.51×, Bevy faster** |
+| 2D physics: 10k boxes, one tick | 6.39 / 8.11 | 1.3× | 3.25 / 4.50 | 1.4× |
+| UI: 10k nodes, still | 1.63 / 4.58 | 2.8× | 1.24 / 2.71 | 2.2× |
+| UI: 10k nodes, all recolored every frame | 2.49 / 6.73 | 2.7× | 1.66 / 4.60 | 2.8× |
+| Headless sim: 1M entities, one tick | 0.166 / 0.407 | 2.5× | 0.069 / 0.170 | 2.5× |
+| Time to first frame | 28.9 / 198.7 | 6.9× | 26.8 / 71.6 | 2.7× |
+
+Builds of a small 2D game (Ponko's template and its Bevy port), Ponko
+first: a clean debug build takes 45.2 / 118 s as a project starts and
+41.6 / 97.0 s tuned; the stripped binary is 19.4 / 82.4 MB (release) and
+8.5 / 33.1 MB (shipping profile); the gzipped wasm is 5.8 / 21.5 MB and
+3.6 / 11.9 MB. A rebuild after a one-line change in `src/main.rs` is
+0.29 / 0.32 s tuned, close to the noise.
+
+Bevy is faster at skinned characters in both tables (issue #241 tracks
+it), and Ponko has no pipelined renderer, which is most of what Bevy gains
+between the tables. These are sixteen workloads on one machine, not a
+ranking of the engines.
 
 Ponko aims to make a capable 2D/3D engine accessible through a small,
 code-first public API and integrated runtime tools. Its differentiator is
@@ -213,10 +269,11 @@ with crash-safe writes, kept in the browser's storage on the web (see
 [Saves and settings](storage.md)). Do not infer a complete production asset
 pipeline from a successful import of one asset.
 
-Ponko's tests run in CI on Linux, macOS and Windows. The browser target
-(WebGPU with a WebGL2 fallback) is built on every change, and small web
-builds are run in headless Chromium and WebKit in the merge queue. That does
-not mean that every desktop feature works on every browser. Mobile and
+The project's check list (`.github/workflows/ci.yml`) runs the tests on
+Linux, macOS and Windows, builds the browser target (WebGPU with a WebGL2
+fallback) and runs small web builds in headless Chromium, Firefox and
+WebKit (see [Web builds](web.md)). That does not mean that every desktop
+feature works on every browser. Mobile and
 consoles are not currently validated release targets.
 [STABILITY.md](../../STABILITY.md)
 is the compatibility contract: ordinary 0.x minor releases may break the API
@@ -248,8 +305,8 @@ should be evaluated alongside its familiar GameObject workflow.
 Use [the performance chapter](performance.md) as a record of specific
 reproducible workloads, not a league table of engines. Its
 [scoreboard against Bevy](performance.md#ponko-vs-bevy-the-scoreboard) runs
-the same workloads on both engines with one command, and lists where Bevy is
-faster as plainly as where Ponko is. Match workloads,
+the same workloads on both engines with one command (the numbers above),
+and lists where Bevy is faster as plainly as where Ponko is. Match workloads,
 resolution, quality, build configuration and target hardware before drawing
 conclusions. Consult [the roadmap](../../ROADMAP.md)
 for unresolved foundations; it is directional and has no promised dates.

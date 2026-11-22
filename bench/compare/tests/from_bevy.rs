@@ -17,14 +17,16 @@ struct Health(f32);
 #[derive(Component)]
 struct Player;
 
+// Unindented so the chapter shows it at the left margin.
+#[rustfmt::skip]
 fn app() {
-    // ANCHOR: app
-    App::new()
-        .add_plugins(DefaultPlugins)
-        .add_systems(Startup, setup)
-        .add_systems(Update, movement)
-        .run();
-    // ANCHOR_END: app
+// ANCHOR: app
+App::new()
+    .add_plugins(DefaultPlugins)
+    .add_systems(Startup, setup)
+    .add_systems(Update, movement)
+    .run();
+// ANCHOR_END: app
 }
 
 // ANCHOR: sprite
@@ -55,7 +57,7 @@ fn steer(keys: Res<ButtonInput<KeyCode>>, mut player: Single<&mut Velocity, With
         player.0.x -= 200.0;
     }
     if keys.just_pressed(KeyCode::Space) {
-        info!("jump");
+        player.0.y = 400.0; // jump: +y is up
     }
 }
 // ANCHOR_END: input
