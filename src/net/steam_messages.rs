@@ -13,7 +13,7 @@ use super::{NetMessages, PeerId};
 
 const CHANNEL: u32 = 12701; // independent of lockstep's channel zero
 const PACKET_LIMIT: usize = 1500; // renet's MTU plus our session envelope
-const PROTOCOL: &str = "ponko-messages-1";
+const PROTOCOL: &str = "ponko-messages-2";
 #[derive(Default)]
 struct LobbyResult {
     result: Option<Result<LobbyId, String>>,
@@ -752,7 +752,7 @@ mod tests {
         for n in &mut nets {
             n.events().for_each(drop);
         }
-        let mut hello = b"CRM1".to_vec();
+        let mut hello = b"CRM2".to_vec();
         hello.push(1); // valid HELLO: would connect without membership filtering
         hello.extend_from_slice(&1u64.to_le_bytes());
         hello.extend_from_slice(&0u64.to_le_bytes());
@@ -780,7 +780,7 @@ mod tests {
         let metadata = state.lock().unwrap().rooms[&1].metadata.clone();
         assert_eq!(
             metadata.get("ponko_protocol").map(String::as_str),
-            Some("ponko-messages-1")
+            Some("ponko-messages-2")
         );
         state
             .lock()
@@ -797,7 +797,7 @@ mod tests {
         {
             let mut state = state.lock().unwrap();
             let metadata = &mut state.rooms.get_mut(&1).unwrap().metadata;
-            metadata.insert("ponko_protocol".into(), "ponko-messages-2".into());
+            metadata.insert("ponko_protocol".into(), "ponko-messages-3".into());
         }
         assert!(
             nets[1].poll_elapsed(Duration::ZERO).is_err(),

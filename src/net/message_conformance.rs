@@ -47,6 +47,7 @@
 //! | Oversized messages are refused before sending; emitted datagrams fit 1500 bytes | `oversized_messages_are_refused_and_datagrams_fit_the_mtu` |
 //! | Undrained events make `poll` return `WouldBlock` without losing messages | `undrained_events_backpressure_poll_without_loss` |
 //! | Peer IDs follow handshake order; a full host refuses | `peer_ids_follow_handshake_order_and_full_hosts_refuse` |
+//! | A UDP host proves a client's address with a cookie before it keeps anything; replayed and expired cookies are refused; one extra round trip | cookie tests in `net/messages.rs`, `tests/net_cookies.rs` |
 //! | The same script gives the same traffic | `same_script_gives_the_same_traffic` |
 //!
 //! # Lockstep is a different contract

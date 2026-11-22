@@ -122,6 +122,13 @@ navmesh-rs = { version = "0.2.1", optional = true, default-features = false, fea
 # Obstacle turns use the same platform-independent sin/cos as the navmesh backend.
 libm = { version = "0.2.16", optional = true }
 renet = "2.0.0"
+# The UDP message host's address cookies (book/src/security.md, "Forged
+# hellos"): SipHash-2-4 with a 128-bit tag is a keyed MAC made for short
+# inputs (Linux uses it for TCP SYN cookies), already in the tree through
+# AccessKit; `subtle` (already in the tree through WebRTC) compares tags in
+# constant time.
+siphasher = "1.0.4"
+subtle = { version = "2.6.1", default-features = false }
 ponko_ecs = { path = "crates/ponko_ecs", version = "0.1.0", features = ["serde", "derive"] }
 # `#[derive(Replicate)]` (exported as `ponko::net::Replicate`).
 ponko_macros = { path = "crates/ponko_macros", version = "0.1.0" }

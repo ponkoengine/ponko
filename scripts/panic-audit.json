@@ -1277,6 +1277,12 @@
     "reason": "The message names the misuse: a loss share outside 0.0..=1.0 (documented under Panics).",
     "site": "src/net/messages.rs:300"
   },
+  "src/net/messages.rs:ff0194de9ba88434": {
+    "classification": "invariant",
+    "construction": "assert!( HEADER + COOKIE <= HELLO_BYTES, \"a challenge is never larger than its hello\" )",
+    "reason": "Compile-time check in a const item: a challenge (HEADER + COOKIE) fits in a padded hello; it fails the build, never a run.",
+    "site": "src/net/messages.rs:47"
+  },
   "src/net/prediction.rs:233709b9d75182b7": {
     "classification": "caller-contract",
     "construction": "assert!( (1..=32768).contains(&capacity), \"Prediction: capacity must be 1..=32768\" )",
