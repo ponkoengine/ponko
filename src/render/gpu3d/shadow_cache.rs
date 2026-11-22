@@ -173,6 +173,13 @@ pub(super) struct ShadowCache {
     /// What this frame draws into each view in `pending`.
     pending: [ShadowContent; MAX_SHADOW_VIEWS],
     pending_mask: u32,
+    /// Per sun cascade, the box (view-projection) its layer was last drawn
+    /// in and the epoch then, whatever it drew (`Lighting::shadow_lag`
+    /// keeps a held cascade on this alone); epoch 0 never matches.
+    boxes: [(u64, [[f32; 4]; 4]); MAX_CASCADES],
+    /// What this frame draws into the cascades in `box_mask`.
+    pending_boxes: [(u64, [[f32; 4]; 4]); MAX_CASCADES],
+    box_mask: u32,
     /// Views whose record goes once this frame is drawn: drawn from data
     /// that can't be compared, or light views whose tile may be overdrawn.
     forget_mask: u32,
@@ -203,6 +210,9 @@ impl Default for ShadowCache {
             drawn: Default::default(),
             pending: Default::default(),
             pending_mask: 0,
+            boxes: Default::default(),
+            pending_boxes: Default::default(),
+            box_mask: 0,
             forget_mask: 0,
             light_kept: 0,
             kept: 0,
@@ -272,6 +282,29 @@ impl ShadowCache {
                 content.epoch = 0;
             }
         }
+        for (epoch, caster) in self.boxes.iter_mut().chain(&mut self.pending_boxes) {
+            if *epoch != 0 && reaches(Mat4::from_cols_array_2d(caster)) {
+                *epoch = 0;
+            }
+        }
+    }
+
+    /// Keeps sun cascade `v` placed as `key` places it, whatever its
+    /// casters do (`Lighting::shadow_lag`), when its layer was last drawn in
+    /// that box with nothing it reads changed since. True if kept.
+    pub fn held(&mut self, v: usize, key: &ViewKey) -> bool {
+        let (epoch, caster) = self.boxes[v];
+        let kept = epoch == self.epoch && caster == key.caster;
+        if kept {
+            self.kept |= 1 << v;
+        }
+        kept
+    }
+
+    /// Notes that this frame draws sun cascade `v` as `key` places it.
+    pub fn drawing(&mut self, v: usize, key: &ViewKey) {
+        self.pending_boxes[v] = (self.epoch, key.caster);
+        self.box_mask |= 1 << v;
     }
 
     /// The eye view `v`'s layer or tile was drawn from.
@@ -308,6 +341,11 @@ impl ShadowCache {
                 content.epoch = 0;
             }
         }
+        // Which materials a cascade drawn from volatile data used isn't
+        // recorded: a held box is drawn again (materials change seldom).
+        for (epoch, _) in self.boxes.iter_mut().chain(&mut self.pending_boxes) {
+            *epoch = 0;
+        }
     }
 
     /// Notes that this frame's commands were recorded (called by `draw`).
@@ -328,8 +366,14 @@ impl ShadowCache {
                 self.drawn[v].epoch = 0;
             }
         }
+        for v in 0..MAX_CASCADES {
+            if self.box_mask & (1 << v) != 0 {
+                self.boxes[v] = self.pending_boxes[v];
+            }
+        }
         self.pending_mask = 0;
         self.forget_mask = 0;
+        self.box_mask = 0;
     }
 
     /// Decides for view `v` (which the frame would draw) by comparing its
@@ -374,6 +418,7 @@ impl ShadowCache {
         self.commit();
         self.pending_mask = 0;
         self.forget_mask = 0;
+        self.box_mask = 0;
         self.kept = 0;
         self.light_kept = 0;
         #[cfg(test)]
@@ -485,12 +530,38 @@ impl Renderer3D {
         // Static batches cull the cascades' casters by distance from the camera.
         let by_distance = self.static_batches.iter().flatten().any(|b| b.shadow_distance());
         for v in shadow_views(self.lists.cascades, self.lists.light_views) {
+            let generation = frame.shadow_generations[v];
+            // `Lighting::shadow_lag`: a far cascade holding its box keeps
+            // its map, whatever its casters do.
+            if v < MAX_CASCADES && frame.shadow_lag && frame.redrawn & (1 << v) == 0 {
+                let key = ViewKey {
+                    caster: frame.sun_view_proj[v].to_cols_array_2d(),
+                    eye: [0.0; 3],
+                    tile: [0; 3],
+                    generation,
+                };
+                if self.shadow_cache.held(v, &key) {
+                    self.lists.shadow_runs[v].clear();
+                    self.lists.redrawn &= !(1 << v);
+                    continue;
+                }
+            }
+            if v < MAX_CASCADES {
+                self.shadow_cache.drawing(
+                    v,
+                    &ViewKey {
+                        caster: frame.sun_view_proj[v].to_cols_array_2d(),
+                        eye: [0.0; 3],
+                        tile: [0; 3],
+                        generation,
+                    },
+                );
+            }
             // A crowd moves: the views it reaches are drawn anew.
             if self.crowds.reaches_shadow_view(v) {
                 self.shadow_cache.forget(v);
                 continue;
             }
-            let generation = frame.shadow_generations[v];
             let key = if v < MAX_CASCADES {
                 ViewKey {
                     caster: frame.sun_view_proj[v].to_cols_array_2d(),

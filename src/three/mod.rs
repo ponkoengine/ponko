@@ -1140,8 +1140,27 @@ pub struct Lighting {
     /// Maps holding casters drawn from data that can change unseen
     /// (skinned or morphing models, meshes drawn from GPU buffers, custom
     /// vertex functions reading the time or the camera) are drawn every
-    /// frame.
+    /// frame. [`shadow_lag`](Self::shadow_lag) trades that exactness for
+    /// fewer shadow passes.
     pub shadow_refresh: u32,
+    /// Whether the far cascades may lag behind their casters, to draw fewer
+    /// shadow passes. Off (the default): shadows are exact, so a far
+    /// cascade holding anything that moves or is animated (a vehicle, a
+    /// skinned walker) is drawn every frame, as if
+    /// [`shadow_refresh`](Self::shadow_refresh) were 1. On: while a far
+    /// cascade holds its box, its map is kept whatever its casters do, so
+    /// their shadows there can be up to `shadow_refresh - 1` frames behind
+    /// (they catch up in steps); each far cascade is drawn again at least
+    /// every `shadow_refresh` frames, and when its box moves. The near
+    /// cascades, point and spot lights stay exact, and a change to what
+    /// the casters are drawn with (a mesh's data, a material, a shader, an
+    /// instance batch) still draws a cascade again at once. No effect at
+    /// `shadow_refresh` 1.
+    ///
+    /// Worth it when the far cascades hold many moving or animated casters
+    /// the player won't look at closely (traffic, crowds far away); the
+    /// lag shows as shadows a little behind their caster while it moves.
+    pub shadow_lag: bool,
     /// How far the sun may turn, in radians, before its shadows follow it.
     /// 0 (the default): every frame's shadows use the exact sun direction.
     /// Above 0, the sun's shadow maps are drawn from a held direction that
@@ -1211,6 +1230,7 @@ impl Default for Lighting {
             shadow_cascades: 4,
             shadow_resolution: SHADOW_MAP_SIZE,
             shadow_refresh: 2,
+            shadow_lag: false,
             shadow_sun_step: 0.0,
             shadow_filter: ShadowFilter::Softest,
             shadow_sun_size: DEFAULT_SHADOW_SUN_SIZE,

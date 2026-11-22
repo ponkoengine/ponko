@@ -500,6 +500,7 @@ binding arrives:
 | `Ui::set_rich`, `Ui::set_inline_image`, `Ui::set_inline_font`, `Ui::link`, `UiEvent::LinkClicked` | [Retained game UI](ui.md#rich-text) | Not bound yet: several labels side by side, each with its own paint; a button for each link |
 | `GltfScene::nav_source` | [From Blender to the game](blender.md#navigation-meshes) | Read the nodes and their places with `ponko_gltf_scene_load`, and bake from mesh data of your own (`ponko_nav_sources_add_mesh`, `ponko_ctx_bake_navmesh`) |
 | `Graphics::load_lights`, `Graphics::load_cameras` | [3D](3d.md#gltf-extensions-lights-and-cameras) | Models load with the same glTF extensions; a file's lights and cameras aren't returned yet, so place them yourself |
+| `Lighting::shadow_lag` | [3D](3d.md#light-and-shadows) | Not bound yet: C and C++ far cascades are always exact (the default); `PonkoLightingEx` will carry it |
 | `LightBakeScene::add_world`, `LightBakeScene::add_gltf`, `Graphics::keep_bake_sources`, `Unbaked` | [Baked lighting](3d.md#baked-lighting) | C and C++ components can't be listed by mesh: add each model with `ponko_light_bake_scene_add` (`light_bake_scene::add`), and leave out the ones that shouldn't bake |
 | `BakeTexture` | [Baked lighting](3d.md#baked-lighting) | Not bound yet: give a textured model its texture's average color as its albedo |
 | `bake_lighting_gpu` | [Baked lighting](3d.md#baked-lighting) | Not bound yet: `ponko_bake_lighting` bakes the same light on the CPU |
