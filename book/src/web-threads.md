@@ -480,8 +480,18 @@ The engine's simulation benchmarks (the workloads of `crates/ponko_bench`),
 in headless Chromium 156, one thread (`?threads=1`) against the default (13
 frame threads, 6 for jobs). The machine was an Apple M4 Max (14 cores) with
 other builds running: a load average of about 100. These are medians of
-three page loads, 60 timed runs each after 20 untimed ones. Repeat them on a
-quiet machine before quoting them.
+three page loads, 60 timed runs each after 20 untimed ones.
+
+Run again on the same machine while it was idle (2026-11-22, revision
+`9235ea05`, 1-minute load 1.3, `--build --bench --repeat 3`), every
+workload came out **slower**, the one-thread runs too: `par` 4.10 and
+1.73 ms, `sweep` 16.06 and 4.39, `interleaved` 8.87 and 4.11, `jobs` 2.92
+and 1.96 (one thread, then the default threads), speed-ups 1.5× to 3.7×.
+The one-thread `par` run takes three times what it took on the busy
+machine, which load alone can't explain; the likeliest cause is that macOS
+runs the headless browser's threads on the slower efficiency cores when
+nothing else asks for the fast ones, which was not confirmed. Until it is,
+neither set is a clean measurement: the table keeps the busy machine's.
 
 | Workload | One thread (ms) | Default threads (ms) | Speed-up | What limits it |
 |---|---|---|---|---|

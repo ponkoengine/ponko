@@ -228,24 +228,22 @@ impl Moon {
 ///
 /// What the kit adds to a frame's GPU time at 1920 x 1080 (the whole
 /// frame's, against the same frame with the built-in atmosphere), measured
-/// offscreen on an Apple M4 Max (Metal) while the machine was busy with
-/// other work: ten runs in two sessions, each taking turns between the
-/// ways to march in blocks of 12 frames, cloud cover 0.5, looking just
-/// above the horizon (`cloud_presets_gpu_time` in the engine's tests):
+/// offscreen on an Apple M4 Max (Metal) on an idle machine (2026-11-22):
+/// nine runs in three sessions, each taking turns between the ways to
+/// march in blocks of 12 frames, cloud cover 0.5, looking just above the
+/// horizon (`cloud_presets_gpu_time` in the engine's tests):
 ///
 /// | Preset | Steps (view, sun) | Kit's GPU time, median of the runs (range) | Marching every pixel |
 /// |---|---|---|---|
-/// | `Flat` | none: a 2D layer in the sky shader | 0.64 ms (0.52 to 1.09) | |
-/// | `Low` | 24, 2 | 1.33 ms (0.82 to 2.50) | 2.20 ms (1.34 to 2.67) |
-/// | `Medium` | 48, 4 | 1.43 ms (1.03 to 1.95) | 2.87 ms (2.17 to 3.38) |
-/// | `High` | 96, 6 | 3.96 ms (3.37 to 4.00) | (always) |
+/// | `Flat` | none: a 2D layer in the sky shader | 0.57 ms (0.52 to 0.58) | |
+/// | `Low` | 24, 2 | 0.45 ms (0.40 to 0.45) | 0.85 ms (0.81 to 0.86) |
+/// | `Medium` | 48, 4 | 0.90 ms (0.85 to 0.90) | 1.81 ms (1.77 to 1.82) |
+/// | `High` | 96, 6 | 3.96 ms (3.90 to 4.00) | (always) |
 ///
-/// Interleaving saved `Medium` 1.1 to 1.65 ms in every one of the ten
-/// runs, about half the kit's cost. `Low`'s march pass was cheaper in
-/// every run too (0.6 to 1.5 ms against 1.1 to 2.1 ms), but its whole
-/// frame came out 0.6 ms dearer in one run of ten: on this busy machine
-/// that difference is within the noise. The cloud shadow map takes about
-/// 0.03 to 0.1 ms, the temporal resolve 0.06 to 0.2 ms.
+/// Interleaving halves `Low` and `Medium` (0.9 ms saved for `Medium`).
+/// The cloud shadow map takes about 0.03 to 0.07 ms, the temporal resolve
+/// 0.05 ms. Measured on a busy machine before, the medians were 0.64,
+/// 1.33, 1.43 and 3.96 ms, with ranges up to twice as wide as the medians.
 ///
 /// On a WebGL2-class GPU every preset draws as `Flat`.
 ///

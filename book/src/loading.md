@@ -255,54 +255,43 @@ again and start a new group, reading every file again.)
 `stream_texture` cases of the same files. It measures the game thread's CPU
 time spent loading in each frame, as the [streaming numbers](streaming.md#measured)
 do. On an Apple M4 Max (macOS, release build, default budgets: 4 ms per
-frame, 16 MiB uploads), three runs with the machine under heavy other load
-(load average 100 to 140):
+frame, 16 MiB uploads), three runs on an idle machine (2026-11-22,
+revision `9235ea05`, load average 2.1 to 2.2):
 
 | | Worst frame's loading work | Median | Usable after |
 |---|---|---|---|
-| `load_texture` | 12.1 to 12.8 ms | 0.23 to 0.25 ms | the same frame |
-| `stream_texture` | 0.14 to 0.27 ms | 0.002 to 0.004 ms | 5 to 11 frames (32-pixel stand-ins) |
-| asset group | 0.03 to 0.08 ms | 0.001 ms | 9 to 10 frames (full size) |
+| `load_texture` | 8.3 to 8.7 ms | 0.15 ms | the same frame |
+| `stream_texture` | 0.08 to 0.19 ms | 0.001 ms | 5 frames (32-pixel stand-ins) |
+| asset group | 0.05 to 0.11 ms | under 0.001 ms | 5 to 7 frames (full size) |
 
 The group never came near its 4 ms frame budget: decoding runs on workers,
 and the game thread only takes the results and hands them to the GPU. The
 streaming chapter's caveats apply: headless runs don't include the GPU's
-share of uploads (the upload budget is what bounds that), noise PNGs may
-decode more cheaply than real art, and one set of runs on a loaded machine
-is for comparing the cases within a run.
-
-Repeated after restarts and sliced decodes were added (same machine and
-command, three runs, load average 117 to 145, so again not a quiet
-machine): `load_texture` 11.0 to 16.0 ms worst and 0.20 to 0.21 ms median,
-`stream_texture` 0.12 to 0.22 ms and 0.001 to 0.003 ms, the asset group
-0.04 to 0.06 ms and 0.001 ms, usable after 6 to 9 frames. The ordering and
-the group's distance from its budget hold; a repeat on a quiet machine is
-still to be done (the same command).
+share of uploads (the upload budget is what bounds that), and noise PNGs
+may decode more cheaply than real art. These runs include restarts and
+sliced decodes; the earlier runs on a machine busy with other builds (load
+average 100 to 145) had `load_texture`'s worst frame at 11 to 16 ms and
+the group usable after 6 to 10 frames, with the same ordering.
 
 **Uploads on a real GPU.** The offscreen timing test
 `group_upload_cost_on_the_gpu` (`cargo test --release -p ponko --lib
 --features 3d group_upload_cost_on_the_gpu -- --ignored --nocapture`)
 loads sixteen 1024 × 1024 noise PNGs (64 MiB of RGBA) as a group on the
 production renderer, drawing and reading back a frame after each step.
-On the same M4 Max (Metal, release, load average 145 to 210), three runs:
-the game thread spent 0.28 to 0.99 ms per MiB uploading (18 to 63 ms for
-the 64 MiB), a step uploading 16 MiB (the default upload budget) about 4
-ms of it, and that step's frame took 0.2 to 2 ms longer to finish on the
-GPU than a frame with nothing uploaded. Single steps of 14 to 32 ms and
-frames 14 to 29 ms longer showed up in every run, where the busy machine
-paused the thread; on a quiet machine expect the low ends. So with the
-default budgets a frame that uploads pays about 4 ms on the game thread
-plus a millisecond or two on the GPU; a lower upload budget
-(`ctx.gfx.set_upload_budget`) spreads that thinner.
-
-With the GPU's own upload time (`gpu_upload_ms`, [What uploads
-cost](#what-uploads-cost)), the same test also prints what the timestamps
-say. Two runs on the M4 Max (Metal, release, load average 140 to 170): the
-GPU copied the 64 MiB in 2.0 to 5.3 ms of its own time (0.03 to 0.08 ms
-per MiB), against 28 to 56 ms of the game thread's. So on this GPU the
-copies themselves are cheap; the longer frames above are mostly the busy
-machine and the frame's other work, which the frame time can't tell apart
-and the timestamps can.
+On the same M4 Max (Metal, release), three runs on an idle machine
+(2026-11-22, revision `9235ea05`, load average 2.3 to 2.4): the game
+thread spent 0.145 to 0.154 ms per MiB uploading (9.3 to 9.9 ms for the
+64 MiB), a step uploading 16 MiB (the default upload budget) 2.3 to 2.8 ms
+of it, and that step's frame took 0.08 to 0.31 ms longer to finish on the
+GPU than a frame with nothing uploaded (0.37 to 0.42 ms). The GPU copied
+the 64 MiB in 0.9 to 1.1 ms of its own time (`gpu_upload_ms`, [What
+uploads cost](#what-uploads-cost); 0.014 to 0.017 ms per MiB). So with
+the default budgets a frame that uploads pays about 2.5 ms on the game
+thread and a few tenths of a millisecond on the GPU; a lower upload budget
+(`ctx.gfx.set_upload_budget`) spreads that thinner. On a busy machine
+(load average 140 to 210) the same test had measured 0.28 to 0.99 ms per
+MiB, steps of 14 to 32 ms where the machine paused the thread, and 2.0 to
+5.3 ms of GPU copying.
 
 ## In a browser
 

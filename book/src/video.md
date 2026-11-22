@@ -131,16 +131,21 @@ PONKO_BENCH_VIDEO=clip.webm cargo run --release -p ponko_bench --features video 
 as `Video::update` does in a game; `video/convert` the CPU conversion
 `frame_rgba()` does. Measured on an Apple M4 Max (14 cores), release
 build, a 1920 x 1080 clip at 30 fps encoded with `-crf 32 -g 60` (240
-frames, 7.8 Mbit/s), before and after the assembly and the GPU
-conversion, the runs taking turns. The machine was shared with other
-builds (load average 120 to 143), so these are numbers for a busy machine
-and need repeating on a quiet one:
+frames, 7.8 Mbit/s; made with ffmpeg's SVT-AV1 from its `testsrc2`
+pattern with light noise), on an idle machine (2026-11-22, revision
+`9235ea05`, load average 1.5), three runs whose medians agreed within 3%:
 
 | 1920 x 1080, per new frame | Median | 95th percentile |
 |---|---|---|
-| Before: no assembly, converted on the CPU | 18.2 ms, 22.1 ms | 124 ms, 232 ms |
-| After: assembly on arm64, converted on the GPU | 4.5 ms, 3.5 ms | 54 ms, 45 ms |
-| The CPU conversion alone (`video/convert`) | 6.5 ms, 7.2 ms | 28 ms, 31 ms |
+| A new frame shown (`video/frame`): assembly on arm64, converted on the GPU | 2.2 ms | 11.7 ms |
+| The CPU conversion alone (`video/convert`) | 0.65 ms | 0.78 to 0.87 ms |
+
+One frame in twenty takes about five times the median: decoding cost
+differs a lot between the pictures of a clip. When the assembly and the GPU conversion
+were added they were measured before and after on a machine shared with
+other builds (load average 120 to 143): 18.2 and 22.1 ms a frame without
+them, 4.5 and 3.5 ms with them, and 6.5 to 7.2 ms for the CPU conversion,
+all several times the idle machine's figures.
 
 Decoding takes up to four threads of its own while a frame decodes, and
 the game's thread waits for the frame. That suits an intro or a cutscene,

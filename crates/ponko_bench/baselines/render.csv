@@ -1,28 +1,28 @@
 scene,group,metric,unit,samples,min,p50,p95,p99,max,mean,note
-single-material,cpu,update,ms,600,0.000083,0.000583,0.001958,0.003042,0.014125,0.000751,
-single-material,cpu,collect,ms,600,0.009167,0.014458,0.030750,0.049083,0.108209,0.016731,
-single-material,cpu,prepare,ms,600,0.019875,0.032625,0.059500,0.081792,0.228666,0.036030,
-single-material,cpu,encode,ms,600,0.219167,0.284958,0.431792,0.568458,1.139458,0.305655,
-single-material,cpu,submit,ms,600,0.032500,0.043750,0.068125,0.122542,0.295792,0.047772,
-single-material,cpu,cpu,ms,600,0.286708,0.377708,0.579000,0.786791,1.561750,0.406189,
-single-material,cpu,frame,ms,600,1.228333,1.569000,2.932834,5.971208,9.198583,1.790103,
-single-material,gpu,total,ms,600,0.475041,0.751375,1.572999,2.656875,3.426792,0.867434,
-single-material,gpu,span,ms,600,0.507208,0.811084,1.743541,2.684084,3.545459,0.944826,
-single-material,gpu_pass,shadows 0,ms,600,0.005417,0.007709,0.025833,0.033166,0.062667,0.012592,
-single-material,gpu_pass,shadows 1,ms,600,0.015958,0.027709,0.055750,0.100167,0.158958,0.031578,
-single-material,gpu_pass,shadows 3,ms,300,0.014458,0.020916,0.058583,0.193250,0.752541,0.029605,
-single-material,gpu_pass,depth prepass,ms,600,0.000000,0.022792,0.042459,0.047667,0.222459,0.023049,
-single-material,gpu_pass,motion vectors,ms,600,0.000000,0.000833,0.007500,0.010041,0.385041,0.003505,
-single-material,gpu_pass,screen reflections,ms,600,0.000000,0.244125,0.435500,0.704458,0.813625,0.264832,
-single-material,gpu_pass,reflection spread,ms,600,0.038084,0.054375,0.101292,0.203875,0.607083,0.064112,
-single-material,gpu_pass,GTAO horizons,ms,600,0.000000,0.000000,0.139666,0.255542,0.280208,0.026713,
-single-material,gpu_pass,GTAO bilateral,ms,600,0.087166,0.140542,0.269042,0.475333,0.717166,0.154659,
-single-material,gpu_pass,opaque,ms,598,0.091625,0.137875,0.276167,0.475708,1.193958,0.158383,
-single-material,gpu_pass,reflection blur,ms,600,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
-single-material,gpu_pass,bloom,ms,584,0.029292,0.088875,0.233250,0.409333,0.484250,0.109367,
-single-material,gpu_pass,shadows 2,ms,114,0.011917,0.021166,0.057375,0.104167,0.450000,0.028826,
-single-material,gpu_pass,post,ms,25,0.011417,0.027250,0.062750,0.075834,0.075834,0.032538,
-single-material,gpu_pass,occlusion depth,ms,7,0.031291,0.041375,0.042750,0.042750,0.042750,0.038750,
+single-material,cpu,update,ms,600,0.000083,0.000166,0.000250,0.000625,0.001250,0.000172,
+single-material,cpu,collect,ms,600,0.008333,0.010083,0.011000,0.016166,0.021500,0.010202,
+single-material,cpu,prepare,ms,600,0.018375,0.022625,0.027917,0.034875,0.064000,0.023879,
+single-material,cpu,encode,ms,600,0.214167,0.227208,0.240500,0.280500,0.452583,0.228696,
+single-material,cpu,submit,ms,600,0.032333,0.039250,0.042042,0.048417,0.066333,0.039284,
+single-material,cpu,cpu,ms,600,0.283333,0.299334,0.315791,0.379292,0.578750,0.302061,
+single-material,cpu,frame,ms,600,1.480750,1.634125,1.849542,1.941042,2.185291,1.658188,
+single-material,gpu,total,ms,600,0.897207,1.017874,1.205333,1.255083,1.286376,1.041944,
+single-material,gpu,span,ms,600,0.946875,1.084250,1.279333,1.347125,1.650959,1.105301,
+single-material,gpu_pass,shadows 0,ms,600,0.005250,0.005667,0.018542,0.018833,0.147334,0.009377,
+single-material,gpu_pass,shadows 1,ms,600,0.012125,0.021500,0.024042,0.024917,0.025458,0.020222,
+single-material,gpu_pass,depth prepass,ms,600,0.009250,0.018917,0.019708,0.020083,0.020333,0.018366,
+single-material,gpu_pass,reflection depth,ms,600,0.007083,0.010208,0.013667,0.014042,0.020292,0.010854,
+single-material,gpu_pass,reflection coarse depth,ms,600,0.007667,0.016625,0.017792,0.018416,0.018917,0.014537,
+single-material,gpu_pass,screen reflections,ms,600,0.266020,0.339083,0.466312,0.651125,0.729396,0.355878,
+single-material,gpu_pass,reflection spread,ms,600,0.022000,0.023625,0.025791,0.027459,0.029749,0.023970,
+single-material,gpu_pass,GTAO horizons,ms,600,0.057209,0.218396,0.300146,0.322562,0.368416,0.219943,
+single-material,gpu_pass,GTAO bilateral,ms,600,0.082584,0.102542,0.118458,0.122792,0.125000,0.104050,
+single-material,gpu_pass,opaque,ms,600,0.086125,0.102416,0.121750,0.129708,0.140209,0.103944,
+single-material,gpu_pass,bloom,ms,600,0.099041,0.103917,0.107500,0.111542,0.235292,0.104411,
+single-material,gpu_pass,reflection blur,ms,600,0.014479,0.015521,0.017333,0.017812,0.020500,0.015851,
+single-material,gpu_pass,post,ms,600,0.028417,0.029291,0.029625,0.030875,0.031375,0.029255,
+single-material,gpu_pass,shadows 3,ms,300,0.006125,0.015917,0.019542,0.020833,0.021042,0.016382,
+single-material,gpu_pass,shadows 2,ms,113,0.006146,0.016167,0.019917,0.020792,0.021583,0.016440,
 single-material,count,draw_calls,count,600,24.000000,25.000000,26.000000,26.000000,26.000000,24.953333,
 single-material,count,recorded_draws,count,600,3.000000,4.000000,5.000000,5.000000,5.000000,3.953333,
 single-material,count,instances,count,600,100.000000,100.000000,100.000000,100.000000,100.000000,100.000000,
@@ -30,21 +30,21 @@ single-material,count,triangles,count,600,1200.000000,1200.000000,1200.000000,12
 single-material,count,shadow_instances,count,600,80.000000,185.000000,198.000000,200.000000,200.000000,158.358333,
 single-material,count,shadow_triangles,count,600,960.000000,2220.000000,2376.000000,2400.000000,2400.000000,1900.300000,
 single-material,count,occluded,count,600,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
-single-material,count,upload_bytes,count,600,15648.000000,15648.000000,15728.000000,15808.000000,16608.000000,15658.133333,
+single-material,count,upload_bytes,count,600,15968.000000,15968.000000,16048.000000,16128.000000,16928.000000,15978.133333,
 single-material,count,buffers_created,count,600,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
 single-material,count,pipelines_built,count,600,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
 single-material,upload,instances,bytes/frame,1,10.133333,10.133333,10.133333,10.133333,10.133333,10.133333,mean over the measured frames
 single-material,upload,sprites,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 single-material,upload,static_batches,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
-single-material,upload,uniforms,bytes/frame,1,15648.000000,15648.000000,15648.000000,15648.000000,15648.000000,15648.000000,mean over the measured frames
+single-material,upload,uniforms,bytes/frame,1,15968.000000,15968.000000,15968.000000,15968.000000,15968.000000,15968.000000,mean over the measured frames
 single-material,upload,lights,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 single-material,upload,materials,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 single-material,upload,skins,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 single-material,upload,meshes,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 single-material,upload,textures,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 single-material,upload,other,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
-single-material,alloc,allocations,count/frame,1,528.023333,528.023333,528.023333,528.023333,528.023333,528.023333,whole process
-single-material,alloc,bytes,bytes/frame,1,102284.293333,102284.293333,102284.293333,102284.293333,102284.293333,102284.293333,whole process
+single-material,alloc,allocations,count/frame,1,542.023333,542.023333,542.023333,542.023333,542.023333,542.023333,whole process
+single-material,alloc,bytes,bytes/frame,1,113963.093333,113963.093333,113963.093333,113963.093333,113963.093333,113963.093333,whole process
 single-material,memory,mesh_bytes,bytes,1,2304.000000,2304.000000,2304.000000,2304.000000,2304.000000,2304.000000,
 single-material,memory,gpu_buffer_bytes,bytes,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
 single-material,memory,instance_batch_pool_bytes,bytes,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
@@ -57,30 +57,30 @@ single-material,memory,light_shadow_atlas_bytes,bytes,1,0.000000,0.000000,0.0000
 single-material,memory,computed_bytes,bytes,1,129777664.000000,129777664.000000,129777664.000000,129777664.000000,129777664.000000,129777664.000000,"computed from texture sizes, not read from the device"
 single-material,memory,device_allocated_bytes,bytes,0,,,,,,,wgpu reports no allocator totals on the metal backend
 single-material,memory,device_reserved_bytes,bytes,0,,,,,,,wgpu reports no allocator totals on the metal backend
-static-world,cpu,update,ms,600,0.000083,0.001209,0.003000,0.003875,0.027541,0.001363,
-static-world,cpu,collect,ms,600,0.007125,0.020583,0.035667,0.049792,0.114500,0.020550,
-static-world,cpu,prepare,ms,600,0.066958,0.091000,0.143833,0.161417,0.337083,0.096395,
-static-world,cpu,encode,ms,600,0.269625,0.394542,0.658167,0.917583,1.495209,0.429444,
-static-world,cpu,submit,ms,600,0.033875,0.049792,0.102792,0.173750,0.410375,0.057233,
-static-world,cpu,cpu,ms,600,0.385042,0.562250,0.932917,1.191333,2.002417,0.603623,
-static-world,cpu,frame,ms,600,3.962250,4.838459,5.697708,5.993208,6.509416,4.810760,
-static-world,gpu,total,ms,600,2.949251,3.701959,4.489916,4.731041,5.204417,3.776974,
-static-world,gpu,span,ms,600,3.135084,3.793875,4.743459,5.647208,6.141125,3.860971,
-static-world,gpu_pass,shadows 0,ms,600,0.031000,0.038333,0.043375,0.046125,0.232584,0.038105,
-static-world,gpu_pass,depth prepass,ms,600,0.000000,0.988584,1.149833,1.234500,1.479750,0.919252,
-static-world,gpu_pass,shadows 1,ms,600,0.000000,0.050500,0.062750,0.067667,0.297459,0.047460,
-static-world,gpu_pass,motion vectors,ms,600,0.000000,0.000666,0.001083,0.001917,0.113917,0.000862,
-static-world,gpu_pass,screen reflections,ms,600,0.000000,0.424584,0.506375,0.541250,0.679917,0.417597,
-static-world,gpu_pass,reflection spread,ms,600,0.000000,0.075167,0.090250,0.130875,0.386333,0.076928,
-static-world,gpu_pass,GTAO horizons,ms,600,0.000000,0.116875,0.125083,0.132291,0.258792,0.115676,
-static-world,gpu_pass,GTAO bilateral,ms,600,0.000000,0.354959,0.436458,0.587375,0.666416,0.361466,
-static-world,gpu_pass,opaque,ms,599,0.900959,1.134250,1.539458,1.895583,2.193417,1.174925,
-static-world,gpu_pass,reflection blur,ms,600,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
-static-world,gpu_pass,bloom,ms,590,0.024000,0.056084,0.318334,0.438834,0.481375,0.082539,
-static-world,gpu_pass,shadows 2,ms,300,0.000000,0.114250,0.212250,0.451542,0.479459,0.113872,
-static-world,gpu_pass,shadows 3,ms,243,0.850084,1.291958,1.480625,1.694333,2.574416,1.199877,
-static-world,gpu_pass,post,ms,30,0.010583,0.029166,0.090917,0.092459,0.092459,0.051062,
-static-world,gpu_pass,occlusion depth,ms,1,0.034875,0.034875,0.034875,0.034875,0.034875,0.034875,
+static-world,cpu,update,ms,600,0.000083,0.000208,0.000625,0.001167,0.001709,0.000242,
+static-world,cpu,collect,ms,600,0.006917,0.008209,0.013625,0.020125,0.025791,0.008767,
+static-world,cpu,prepare,ms,600,0.067875,0.074375,0.082958,0.095791,0.111500,0.074856,
+static-world,cpu,encode,ms,600,0.266584,0.298750,0.338917,0.436416,0.464000,0.303235,
+static-world,cpu,submit,ms,600,0.033834,0.040541,0.045125,0.054042,0.065916,0.040874,
+static-world,cpu,cpu,ms,600,0.387375,0.420541,0.480542,0.605709,0.647791,0.427732,
+static-world,cpu,frame,ms,600,4.518167,4.886208,5.680833,5.793167,6.355916,5.085757,
+static-world,gpu,total,ms,600,3.853375,4.151000,4.946208,5.057625,5.624166,4.366060,
+static-world,gpu,span,ms,600,3.853375,4.152584,4.946208,5.057625,5.624166,4.366382,
+static-world,gpu_pass,shadows 0,ms,600,0.031167,0.038417,0.042416,0.045375,0.046917,0.037761,
+static-world,gpu_pass,shadows 1,ms,600,0.001208,0.051083,0.061708,0.067250,0.068042,0.048441,
+static-world,gpu_pass,depth prepass,ms,600,0.384000,0.989500,1.101208,1.134584,1.163625,0.919383,
+static-world,gpu_pass,shadows 2,ms,300,0.004166,0.081771,0.203750,0.210791,0.283917,0.102218,
+static-world,gpu_pass,reflection depth,ms,600,0.000666,0.036333,0.042500,0.044709,0.164250,0.028681,
+static-world,gpu_pass,screen reflections,ms,600,1.044333,1.147082,1.256812,1.411125,1.518458,1.154263,
+static-world,gpu_pass,reflection spread,ms,600,0.028979,0.032459,0.041541,0.044771,0.123499,0.034789,
+static-world,gpu_pass,GTAO horizons,ms,600,0.097917,0.107583,0.127708,0.132792,0.241292,0.110841,
+static-world,gpu_pass,GTAO bilateral,ms,600,0.313667,0.330083,0.354291,0.363208,0.368792,0.331595,
+static-world,gpu_pass,opaque,ms,600,0.906625,1.007708,1.054416,1.074000,1.689792,1.000957,
+static-world,gpu_pass,reflection coarse depth,ms,600,0.013875,0.015855,0.017750,0.020688,0.064438,0.016131,
+static-world,gpu_pass,reflection blur,ms,600,0.020209,0.023000,0.028730,0.029708,0.040875,0.024130,
+static-world,gpu_pass,bloom,ms,600,0.110167,0.115709,0.117834,0.119500,0.130917,0.115535,
+static-world,gpu_pass,post,ms,600,0.028791,0.029958,0.030417,0.030625,0.031375,0.029922,
+static-world,gpu_pass,shadows 3,ms,243,0.901875,1.048667,1.331167,1.342042,1.347417,1.142033,
 static-world,count,draw_calls,count,600,25.000000,26.000000,26.000000,26.000000,26.000000,25.905000,
 static-world,count,recorded_draws,count,600,140.000000,277.000000,368.000000,373.000000,376.000000,273.546667,
 static-world,count,instances,count,600,1.000000,1.000000,1.000000,1.000000,1.000000,1.000000,
@@ -88,21 +88,21 @@ static-world,count,triangles,count,600,2.000000,2.000000,2.000000,2.000000,2.000
 static-world,count,shadow_instances,count,600,2.000000,3.000000,3.000000,3.000000,3.000000,2.905000,
 static-world,count,shadow_triangles,count,600,4.000000,6.000000,6.000000,6.000000,6.000000,5.810000,
 static-world,count,occluded,count,600,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
-static-world,count,upload_bytes,count,600,15568.000000,15648.000000,15648.000000,15648.000000,15648.000000,15647.600000,
+static-world,count,upload_bytes,count,600,15888.000000,15968.000000,15968.000000,15968.000000,15968.000000,15967.600000,
 static-world,count,buffers_created,count,600,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
 static-world,count,pipelines_built,count,600,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
 static-world,upload,instances,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 static-world,upload,sprites,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 static-world,upload,static_batches,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
-static-world,upload,uniforms,bytes/frame,1,15647.600000,15647.600000,15647.600000,15647.600000,15647.600000,15647.600000,mean over the measured frames
+static-world,upload,uniforms,bytes/frame,1,15967.600000,15967.600000,15967.600000,15967.600000,15967.600000,15967.600000,mean over the measured frames
 static-world,upload,lights,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 static-world,upload,materials,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 static-world,upload,skins,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 static-world,upload,meshes,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 static-world,upload,textures,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 static-world,upload,other,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
-static-world,alloc,allocations,count/frame,1,549.416667,549.416667,549.416667,549.416667,549.416667,549.416667,whole process
-static-world,alloc,bytes,bytes/frame,1,163486.280000,163486.280000,163486.280000,163486.280000,163486.280000,163486.280000,whole process
+static-world,alloc,allocations,count/frame,1,563.416667,563.416667,563.416667,563.416667,563.416667,563.416667,whole process
+static-world,alloc,bytes,bytes/frame,1,175425.880000,175425.880000,175425.880000,175425.880000,175425.880000,175425.880000,whole process
 static-world,memory,mesh_bytes,bytes,1,24576.000000,24576.000000,24576.000000,24576.000000,24576.000000,24576.000000,
 static-world,memory,gpu_buffer_bytes,bytes,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
 static-world,memory,instance_batch_pool_bytes,bytes,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
@@ -115,29 +115,31 @@ static-world,memory,light_shadow_atlas_bytes,bytes,1,0.000000,0.000000,0.000000,
 static-world,memory,computed_bytes,bytes,1,129777664.000000,129777664.000000,129777664.000000,129777664.000000,129777664.000000,129777664.000000,"computed from texture sizes, not read from the device"
 static-world,memory,device_allocated_bytes,bytes,0,,,,,,,wgpu reports no allocator totals on the metal backend
 static-world,memory,device_reserved_bytes,bytes,0,,,,,,,wgpu reports no allocator totals on the metal backend
-dynamic-world,cpu,update,ms,600,0.185042,0.242375,0.283875,0.320750,0.379167,0.243152,
-dynamic-world,cpu,collect,ms,600,1.334042,1.453458,1.603791,1.683208,1.949542,1.466927,
-dynamic-world,cpu,prepare,ms,600,0.887333,1.039708,1.227084,1.348792,1.640791,1.052057,
-dynamic-world,cpu,encode,ms,600,0.386458,0.440334,0.548833,0.596625,0.817292,0.454144,
-dynamic-world,cpu,submit,ms,600,0.040375,0.050875,0.066875,0.140291,0.221083,0.053667,
-dynamic-world,cpu,cpu,ms,600,2.709250,2.995334,3.412542,3.539833,3.853458,3.026795,
-dynamic-world,cpu,frame,ms,600,5.323208,5.837917,6.327917,6.617833,7.045000,5.862683,
-dynamic-world,gpu,total,ms,600,1.207125,2.131667,2.306791,2.647750,3.071750,2.149050,
-dynamic-world,gpu,span,ms,600,1.207125,2.163542,2.682167,6.298667,6.867291,2.337356,
-dynamic-world,gpu_pass,shadows 0,ms,600,0.017958,0.019750,0.026042,0.032625,0.035667,0.021295,
-dynamic-world,gpu_pass,shadows 1,ms,600,0.000000,0.000875,0.017000,0.019750,0.022208,0.006682,
-dynamic-world,gpu_pass,shadows 2,ms,600,0.000000,0.002250,0.019375,0.029000,0.067583,0.009120,
-dynamic-world,gpu_pass,shadows 3,ms,600,0.000167,0.003333,0.050209,0.057500,0.324500,0.019423,
-dynamic-world,gpu_pass,depth prepass,ms,600,0.116750,0.154209,0.211375,0.229250,0.239209,0.158607,
-dynamic-world,gpu_pass,motion vectors,ms,600,0.176958,0.217875,0.247250,0.264750,0.279958,0.220193,
-dynamic-world,gpu_pass,screen reflections,ms,600,0.000000,0.316917,0.357917,0.400625,0.478875,0.320451,
-dynamic-world,gpu_pass,reflection spread,ms,600,0.053708,0.059542,0.076666,0.082750,0.186208,0.061386,
-dynamic-world,gpu_pass,GTAO horizons,ms,600,0.091292,0.097292,0.118875,0.125583,0.161792,0.099189,
-dynamic-world,gpu_pass,GTAO bilateral,ms,600,0.290959,0.309209,0.397584,0.426333,0.498375,0.320060,
-dynamic-world,gpu_pass,opaque,ms,599,0.798792,0.841917,0.947250,1.108166,1.201958,0.856383,
-dynamic-world,gpu_pass,reflection blur,ms,600,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
-dynamic-world,gpu_pass,bloom,ms,585,0.031792,0.055833,0.065417,0.098792,0.123084,0.056553,
-dynamic-world,gpu_pass,post,ms,25,0.025958,0.070458,0.090792,0.096250,0.096250,0.061225,
+dynamic-world,cpu,update,ms,600,0.195833,0.240459,0.266500,0.280250,0.322666,0.240154,
+dynamic-world,cpu,collect,ms,600,1.337041,1.428875,1.500125,1.572916,1.775083,1.432213,
+dynamic-world,cpu,prepare,ms,600,0.855209,0.959125,1.103250,1.147250,1.217500,0.988464,
+dynamic-world,cpu,encode,ms,600,0.383542,0.410125,0.469375,0.524208,0.592333,0.416718,
+dynamic-world,cpu,submit,ms,600,0.040792,0.050208,0.059041,0.064458,0.074125,0.050745,
+dynamic-world,cpu,cpu,ms,600,2.692792,2.875625,3.085708,3.235000,3.360083,2.888141,
+dynamic-world,cpu,frame,ms,600,6.088125,6.457500,6.732834,6.914791,12.861125,6.478790,
+dynamic-world,gpu,total,ms,600,2.642416,2.891625,3.031750,3.103042,8.553250,2.890350,
+dynamic-world,gpu,span,ms,600,2.642416,2.891625,3.031750,3.103042,8.553250,2.890436,
+dynamic-world,gpu_pass,shadows 0,ms,600,0.018500,0.019542,0.020250,0.025000,0.095791,0.019825,
+dynamic-world,gpu_pass,depth prepass,ms,600,0.139167,0.150791,0.210209,0.224458,0.521875,0.159930,
+dynamic-world,gpu_pass,shadows 1,ms,600,0.000167,0.000333,0.001750,0.005625,0.029209,0.000710,
+dynamic-world,gpu_pass,motion vectors,ms,600,0.125709,0.225916,0.265041,0.279458,0.564208,0.230377,
+dynamic-world,gpu_pass,shadows 2,ms,600,0.001333,0.001791,0.002917,0.005541,0.088125,0.002172,
+dynamic-world,gpu_pass,reflection depth,ms,600,0.014625,0.017875,0.020542,0.023333,0.071250,0.018199,
+dynamic-world,gpu_pass,shadows 3,ms,600,0.021438,0.026167,0.030417,0.032291,0.058187,0.026592,
+dynamic-world,gpu_pass,screen reflections,ms,600,0.767375,0.981833,1.072083,1.099083,2.760188,0.962274,
+dynamic-world,gpu_pass,reflection spread,ms,600,0.027291,0.031897,0.033563,0.037417,0.111562,0.031867,
+dynamic-world,gpu_pass,GTAO horizons,ms,600,0.091959,0.097667,0.101375,0.106542,0.225334,0.097843,
+dynamic-world,gpu_pass,GTAO bilateral,ms,600,0.294333,0.308667,0.320958,0.330625,0.679500,0.310404,
+dynamic-world,gpu_pass,opaque,ms,600,0.805250,0.843333,0.891042,0.929333,2.794166,0.850331,
+dynamic-world,gpu_pass,reflection coarse depth,ms,600,0.011479,0.013583,0.014917,0.016479,0.070625,0.013841,
+dynamic-world,gpu_pass,bloom,ms,600,0.108500,0.114625,0.117208,0.129625,0.433417,0.115370,
+dynamic-world,gpu_pass,reflection blur,ms,600,0.018479,0.019938,0.021312,0.022396,0.091896,0.020196,
+dynamic-world,gpu_pass,post,ms,600,0.029250,0.030208,0.030750,0.031875,0.134167,0.030418,
 dynamic-world,count,draw_calls,count,600,107.000000,107.000000,107.000000,107.000000,107.000000,107.000000,
 dynamic-world,count,recorded_draws,count,600,86.000000,86.000000,86.000000,86.000000,86.000000,86.000000,
 dynamic-world,count,instances,count,600,15442.000000,15666.000000,15805.000000,15845.000000,15854.000000,15637.785000,
@@ -145,21 +147,21 @@ dynamic-world,count,triangles,count,600,711898.000000,721530.000000,726526.00000
 dynamic-world,count,shadow_instances,count,600,4759.000000,5295.000000,5739.000000,5761.000000,5767.000000,5210.308333,
 dynamic-world,count,shadow_triangles,count,600,217140.000000,241252.000000,262560.000000,263368.000000,263848.000000,238211.226667,
 dynamic-world,count,occluded,count,600,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
-dynamic-world,count,upload_bytes,count,600,4136112.000000,4183712.000000,4495952.000000,4504816.000000,4682096.000000,4304365.040000,
+dynamic-world,count,upload_bytes,count,600,4136432.000000,4184032.000000,4496272.000000,4505136.000000,4682416.000000,4304685.040000,
 dynamic-world,count,buffers_created,count,600,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
 dynamic-world,count,pipelines_built,count,600,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
 dynamic-world,upload,instances,bytes/frame,1,4288717.040000,4288717.040000,4288717.040000,4288717.040000,4288717.040000,4288717.040000,mean over the measured frames
 dynamic-world,upload,sprites,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 dynamic-world,upload,static_batches,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
-dynamic-world,upload,uniforms,bytes/frame,1,15648.000000,15648.000000,15648.000000,15648.000000,15648.000000,15648.000000,mean over the measured frames
+dynamic-world,upload,uniforms,bytes/frame,1,15968.000000,15968.000000,15968.000000,15968.000000,15968.000000,15968.000000,mean over the measured frames
 dynamic-world,upload,lights,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 dynamic-world,upload,materials,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 dynamic-world,upload,skins,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 dynamic-world,upload,meshes,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 dynamic-world,upload,textures,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 dynamic-world,upload,other,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
-dynamic-world,alloc,allocations,count/frame,1,631.033333,631.033333,631.033333,631.033333,631.033333,631.033333,whole process
-dynamic-world,alloc,bytes,bytes/frame,1,177434.866667,177434.866667,177434.866667,177434.866667,177434.866667,177434.866667,whole process
+dynamic-world,alloc,allocations,count/frame,1,661.036667,661.036667,661.036667,661.036667,661.036667,661.036667,whole process
+dynamic-world,alloc,bytes,bytes/frame,1,191546.866667,191546.866667,191546.866667,191546.866667,191546.866667,191546.866667,whole process
 dynamic-world,memory,mesh_bytes,bytes,1,49152.000000,49152.000000,49152.000000,49152.000000,49152.000000,49152.000000,
 dynamic-world,memory,gpu_buffer_bytes,bytes,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
 dynamic-world,memory,instance_batch_pool_bytes,bytes,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
@@ -172,30 +174,30 @@ dynamic-world,memory,light_shadow_atlas_bytes,bytes,1,0.000000,0.000000,0.000000
 dynamic-world,memory,computed_bytes,bytes,1,129777664.000000,129777664.000000,129777664.000000,129777664.000000,129777664.000000,129777664.000000,"computed from texture sizes, not read from the device"
 dynamic-world,memory,device_allocated_bytes,bytes,0,,,,,,,wgpu reports no allocator totals on the metal backend
 dynamic-world,memory,device_reserved_bytes,bytes,0,,,,,,,wgpu reports no allocator totals on the metal backend
-multi-material,cpu,update,ms,600,0.000583,0.001792,0.003208,0.003709,0.022625,0.001921,
-multi-material,cpu,collect,ms,600,0.102125,0.174125,0.248500,0.457875,6.611792,0.198709,
-multi-material,cpu,prepare,ms,600,0.201041,0.257459,0.326291,0.401417,1.057875,0.264941,
-multi-material,cpu,encode,ms,600,0.739166,1.429750,1.707208,2.431458,8.699458,1.436784,
-multi-material,cpu,submit,ms,600,0.087250,0.157458,0.224792,0.295750,0.525625,0.161874,
-multi-material,cpu,cpu,ms,600,1.206959,2.035084,2.364209,3.891125,16.894750,2.062308,
-multi-material,cpu,frame,ms,600,3.753084,4.933125,7.870583,10.158250,28.147500,5.247212,
-multi-material,gpu,total,ms,600,1.984875,2.228125,4.743834,6.145834,7.082541,2.505193,
-multi-material,gpu,span,ms,600,2.003875,2.274042,4.981917,6.402750,7.422417,2.586307,
-multi-material,gpu_pass,shadows 0,ms,600,0.017708,0.019125,0.043459,0.158458,0.403042,0.025206,
-multi-material,gpu_pass,shadows 1,ms,600,0.000000,0.014291,0.029416,0.051000,0.110125,0.014277,
-multi-material,gpu_pass,shadows 2,ms,589,0.000000,0.118209,0.650916,1.035125,1.702166,0.169390,
-multi-material,gpu_pass,depth prepass,ms,600,0.021333,0.064833,0.098708,0.134375,0.206125,0.068113,
-multi-material,gpu_pass,shadows 3,ms,596,0.000000,0.053083,0.111709,0.440000,0.498667,0.049778,
-multi-material,gpu_pass,motion vectors,ms,600,0.000000,0.000000,0.043667,0.071458,0.127625,0.020687,
-multi-material,gpu_pass,screen reflections,ms,600,0.000000,0.405625,0.510667,0.898625,1.665583,0.392802,
-multi-material,gpu_pass,reflection spread,ms,600,0.000000,0.065333,0.112459,0.198375,0.508375,0.069921,
-multi-material,gpu_pass,GTAO horizons,ms,600,0.000000,0.114417,0.262208,0.288209,0.479833,0.118817,
-multi-material,gpu_pass,GTAO bilateral,ms,600,0.325709,0.341542,0.767167,0.862250,1.366417,0.392689,
-multi-material,gpu_pass,opaque,ms,600,0.839833,0.937875,2.171917,2.996917,4.045875,1.079228,
-multi-material,gpu_pass,reflection blur,ms,600,0.000000,0.000000,0.000000,0.000000,0.093083,0.000155,
-multi-material,gpu_pass,bloom,ms,592,0.033041,0.090834,0.238750,0.447583,0.668750,0.103765,
-multi-material,gpu_pass,post,ms,106,0.010833,0.025958,0.061292,0.089792,0.092333,0.028778,
-multi-material,gpu_pass,occlusion depth,ms,2,0.025667,0.025667,0.036209,0.036209,0.036209,0.030938,
+multi-material,cpu,update,ms,600,0.000292,0.000959,0.001500,0.003583,0.006625,0.001059,
+multi-material,cpu,collect,ms,600,0.107208,0.152334,0.194834,0.217458,0.233208,0.155773,
+multi-material,cpu,prepare,ms,600,0.192000,0.228750,0.288833,0.320959,0.386333,0.236412,
+multi-material,cpu,encode,ms,600,0.697334,1.222666,1.532833,1.643292,1.736625,1.232985,
+multi-material,cpu,submit,ms,600,0.072083,0.120417,0.164542,0.209042,0.241042,0.125970,
+multi-material,cpu,cpu,ms,600,1.096458,1.740292,2.070292,2.230333,2.291333,1.751140,
+multi-material,cpu,frame,ms,600,4.408583,5.513292,5.974708,6.259709,11.900416,5.477108,
+multi-material,gpu,total,ms,600,2.753333,2.965708,3.247750,3.434417,9.215334,3.023954,
+multi-material,gpu,span,ms,600,2.768416,2.979375,3.251709,3.434875,9.215334,3.031538,
+multi-material,gpu_pass,shadows 0,ms,600,0.017709,0.019667,0.022917,0.025708,0.044000,0.020165,
+multi-material,gpu_pass,shadows 1,ms,600,0.000791,0.009541,0.014666,0.016167,0.030625,0.009807,
+multi-material,gpu_pass,shadows 2,ms,589,0.069340,0.088833,0.121855,0.141478,0.211597,0.092470,
+multi-material,gpu_pass,shadows 3,ms,596,0.046208,0.566292,0.705764,0.905465,2.660632,0.534411,
+multi-material,gpu_pass,depth prepass,ms,600,0.025459,0.065084,0.099208,0.105250,0.157375,0.068429,
+multi-material,gpu_pass,reflection depth,ms,600,0.012541,0.019250,0.063292,0.064417,0.066458,0.028418,
+multi-material,gpu_pass,screen reflections,ms,600,0.376153,0.595250,1.024626,1.076020,2.597243,0.623345,
+multi-material,gpu_pass,reflection spread,ms,600,0.023202,0.026868,0.033229,0.035771,0.080646,0.027633,
+multi-material,gpu_pass,GTAO horizons,ms,600,0.106708,0.119750,0.497854,0.522375,0.542270,0.151133,
+multi-material,gpu_pass,GTAO bilateral,ms,600,0.325250,0.340875,0.352417,0.369625,0.808292,0.343442,
+multi-material,gpu_pass,reflection coarse depth,ms,600,0.012312,0.018541,0.023646,0.025292,0.049500,0.018436,
+multi-material,gpu_pass,opaque,ms,600,0.861333,0.937917,1.006834,1.045084,3.853000,0.949061,
+multi-material,gpu_pass,bloom,ms,600,0.107708,0.113541,0.117375,0.131500,0.433875,0.114708,
+multi-material,gpu_pass,reflection blur,ms,600,0.015215,0.016951,0.020958,0.023146,0.057916,0.017591,
+multi-material,gpu_pass,post,ms,600,0.028625,0.029959,0.030500,0.031542,0.093083,0.030162,
 multi-material,count,draw_calls,count,600,1055.000000,2079.000000,2084.000000,2085.000000,2086.000000,2066.420000,
 multi-material,count,recorded_draws,count,600,1034.000000,2058.000000,2063.000000,2064.000000,2065.000000,2045.420000,
 multi-material,count,instances,count,600,4787.000000,4931.000000,4979.000000,4999.000000,5005.000000,4901.531667,
@@ -203,21 +205,21 @@ multi-material,count,triangles,count,600,213194.000000,219480.000000,223120.0000
 multi-material,count,shadow_instances,count,600,8.000000,7113.000000,8055.000000,8079.000000,8087.000000,7192.995000,
 multi-material,count,shadow_triangles,count,600,46.000000,314276.000000,358148.000000,359128.000000,359700.000000,320507.650000,
 multi-material,count,occluded,count,600,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
-multi-material,count,upload_bytes,count,600,15968.000000,87728.000000,491488.000000,615248.000000,806928.000000,157352.133333,
+multi-material,count,upload_bytes,count,600,16288.000000,88048.000000,491808.000000,615568.000000,807248.000000,157672.133333,
 multi-material,count,buffers_created,count,600,0.000000,0.000000,0.000000,0.000000,1.000000,0.001667,
 multi-material,count,pipelines_built,count,600,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
 multi-material,upload,instances,bytes/frame,1,141704.400000,141704.400000,141704.400000,141704.400000,141704.400000,141704.400000,mean over the measured frames
 multi-material,upload,sprites,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 multi-material,upload,static_batches,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
-multi-material,upload,uniforms,bytes/frame,1,15647.733333,15647.733333,15647.733333,15647.733333,15647.733333,15647.733333,mean over the measured frames
+multi-material,upload,uniforms,bytes/frame,1,15967.733333,15967.733333,15967.733333,15967.733333,15967.733333,15967.733333,mean over the measured frames
 multi-material,upload,lights,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 multi-material,upload,materials,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 multi-material,upload,skins,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 multi-material,upload,meshes,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 multi-material,upload,textures,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 multi-material,upload,other,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
-multi-material,alloc,allocations,count/frame,1,880.840000,880.840000,880.840000,880.840000,880.840000,880.840000,whole process
-multi-material,alloc,bytes,bytes/frame,1,992709.220000,992709.220000,992709.220000,992709.220000,992709.220000,992709.220000,whole process
+multi-material,alloc,allocations,count/frame,1,901.918333,901.918333,901.918333,901.918333,901.918333,901.918333,whole process
+multi-material,alloc,bytes,bytes/frame,1,1024390.986667,1024390.986667,1024390.986667,1024390.986667,1024390.986667,1024390.986667,whole process
 multi-material,memory,mesh_bytes,bytes,1,1572864.000000,1572864.000000,1572864.000000,1572864.000000,1572864.000000,1572864.000000,
 multi-material,memory,gpu_buffer_bytes,bytes,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
 multi-material,memory,instance_batch_pool_bytes,bytes,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
@@ -230,30 +232,32 @@ multi-material,memory,light_shadow_atlas_bytes,bytes,1,0.000000,0.000000,0.00000
 multi-material,memory,computed_bytes,bytes,1,129777664.000000,129777664.000000,129777664.000000,129777664.000000,129777664.000000,129777664.000000,"computed from texture sizes, not read from the device"
 multi-material,memory,device_allocated_bytes,bytes,0,,,,,,,wgpu reports no allocator totals on the metal backend
 multi-material,memory,device_reserved_bytes,bytes,0,,,,,,,wgpu reports no allocator totals on the metal backend
-shadow-heavy,cpu,update,ms,600,0.012375,0.019792,0.025542,0.028042,0.033375,0.019764,
-shadow-heavy,cpu,collect,ms,600,0.307334,0.385500,0.442625,0.506583,0.613083,0.388510,
-shadow-heavy,cpu,prepare,ms,600,0.339834,0.440292,0.500875,0.536542,0.594209,0.432208,
-shadow-heavy,cpu,encode,ms,600,0.310083,0.353959,0.508791,0.610875,0.678417,0.378895,
-shadow-heavy,cpu,submit,ms,600,0.042667,0.057500,0.080584,0.112375,0.134792,0.060078,
-shadow-heavy,cpu,cpu,ms,600,1.069875,1.228458,1.483833,1.640250,1.795084,1.259691,
-shadow-heavy,cpu,frame,ms,600,4.680333,5.022000,5.483625,5.878375,6.052709,5.068902,
-shadow-heavy,gpu,total,ms,600,3.185750,3.400791,3.613875,3.775459,4.013667,3.402047,
-shadow-heavy,gpu,span,ms,600,3.185750,3.416458,3.684500,5.188917,6.081709,3.454176,
-shadow-heavy,gpu_pass,shadows 0,ms,600,0.063208,0.067542,0.070292,0.071166,0.166000,0.067686,
-shadow-heavy,gpu_pass,shadows 1,ms,600,0.067834,0.081958,0.100083,0.105625,0.252417,0.083996,
-shadow-heavy,gpu_pass,shadows 2,ms,600,0.000000,0.115708,0.156084,0.168792,0.180416,0.122431,
-shadow-heavy,gpu_pass,light shadows,ms,600,0.461292,0.549459,0.576792,0.606583,0.772791,0.548852,
-shadow-heavy,gpu_pass,shadows 3,ms,600,0.000000,0.082959,0.091708,0.115958,0.302666,0.085785,
-shadow-heavy,gpu_pass,depth prepass,ms,600,0.031834,0.038833,0.043459,0.046583,0.133334,0.038822,
-shadow-heavy,gpu_pass,motion vectors,ms,600,0.052542,0.057042,0.059292,0.122458,0.247084,0.058295,
-shadow-heavy,gpu_pass,screen reflections,ms,600,0.446041,0.474791,0.503750,0.513292,0.613667,0.476487,
-shadow-heavy,gpu_pass,reflection spread,ms,600,0.054750,0.060917,0.065166,0.076417,0.162834,0.061393,
-shadow-heavy,gpu_pass,GTAO horizons,ms,600,0.088625,0.095333,0.098584,0.104542,0.115959,0.095190,
-shadow-heavy,gpu_pass,GTAO bilateral,ms,600,0.297250,0.307625,0.319500,0.328584,0.438791,0.308741,
-shadow-heavy,gpu_pass,opaque,ms,600,1.266291,1.394666,1.554542,1.701125,1.976500,1.396862,
-shadow-heavy,gpu_pass,reflection blur,ms,600,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
-shadow-heavy,gpu_pass,bloom,ms,589,0.032125,0.055125,0.064083,0.122417,0.340376,0.057037,
-shadow-heavy,gpu_pass,post,ms,13,0.026167,0.071250,0.091167,0.091167,0.091167,0.069904,
+shadow-heavy,cpu,update,ms,600,0.011542,0.015416,0.023166,0.025875,0.029167,0.016252,
+shadow-heavy,cpu,collect,ms,600,0.309000,0.370708,0.412000,0.432792,0.494416,0.370080,
+shadow-heavy,cpu,prepare,ms,600,0.329584,0.434208,0.491917,0.547000,0.565791,0.417281,
+shadow-heavy,cpu,encode,ms,600,0.323250,0.346916,0.428834,0.499458,0.526292,0.355256,
+shadow-heavy,cpu,submit,ms,600,0.044583,0.056042,0.064625,0.069042,0.088625,0.056292,
+shadow-heavy,cpu,cpu,ms,600,1.045209,1.186291,1.343375,1.450208,1.479708,1.198910,
+shadow-heavy,cpu,frame,ms,600,5.999750,6.352625,6.568000,6.743292,7.018917,6.353855,
+shadow-heavy,gpu,total,ms,600,4.655208,4.890084,5.006125,5.082167,5.419542,4.874301,
+shadow-heavy,gpu,span,ms,600,4.655208,4.890084,5.006125,5.082167,5.419542,4.874301,
+shadow-heavy,gpu_pass,shadows 0,ms,600,0.063166,0.066500,0.069541,0.070459,0.071417,0.066659,
+shadow-heavy,gpu_pass,shadows 1,ms,600,0.066125,0.082666,0.097750,0.101167,0.115417,0.082753,
+shadow-heavy,gpu_pass,shadows 2,ms,600,0.103541,0.114167,0.155834,0.167959,0.174708,0.119578,
+shadow-heavy,gpu_pass,light shadows,ms,600,0.486375,0.552833,0.576167,0.583334,0.628959,0.552023,
+shadow-heavy,gpu_pass,shadows 3,ms,600,0.073708,0.083958,0.092458,0.093833,0.095417,0.085527,
+shadow-heavy,gpu_pass,depth prepass,ms,600,0.033125,0.038541,0.043125,0.045792,0.049041,0.038690,
+shadow-heavy,gpu_pass,motion vectors,ms,600,0.052084,0.057625,0.060208,0.061416,0.064500,0.057484,
+shadow-heavy,gpu_pass,reflection depth,ms,600,0.011000,0.015625,0.016166,0.016500,0.018417,0.015638,
+shadow-heavy,gpu_pass,screen reflections,ms,600,1.750541,1.876375,1.957062,1.987021,2.070604,1.877430,
+shadow-heavy,gpu_pass,reflection spread,ms,600,0.027729,0.031854,0.033042,0.036625,0.133833,0.032186,
+shadow-heavy,gpu_pass,GTAO horizons,ms,600,0.088625,0.094959,0.097959,0.101917,0.139250,0.094790,
+shadow-heavy,gpu_pass,GTAO bilateral,ms,600,0.297084,0.307917,0.318375,0.322417,0.477875,0.308829,
+shadow-heavy,gpu_pass,opaque,ms,600,1.259292,1.379542,1.430000,1.449250,1.658250,1.365765,
+shadow-heavy,gpu_pass,bloom,ms,600,0.108375,0.114041,0.116333,0.121000,0.397458,0.114589,
+shadow-heavy,gpu_pass,reflection coarse depth,ms,600,0.011396,0.011937,0.012604,0.012834,0.013917,0.012020,
+shadow-heavy,gpu_pass,reflection blur,ms,600,0.018854,0.019875,0.021020,0.021583,0.099271,0.020214,
+shadow-heavy,gpu_pass,post,ms,600,0.029208,0.030125,0.030584,0.031083,0.031292,0.030127,
 shadow-heavy,count,draw_calls,count,600,258.000000,259.000000,260.000000,261.000000,262.000000,258.736667,
 shadow-heavy,count,recorded_draws,count,600,316.000000,319.000000,323.000000,324.000000,328.000000,319.275000,
 shadow-heavy,count,instances,count,600,2821.000000,2900.000000,2948.000000,2954.000000,2956.000000,2897.066667,
@@ -261,21 +265,21 @@ shadow-heavy,count,triangles,count,600,130066.000000,133686.000000,135586.000000
 shadow-heavy,count,shadow_instances,count,600,13064.000000,13378.000000,13955.000000,14000.000000,14013.000000,13474.315000,
 shadow-heavy,count,shadow_triangles,count,600,599946.000000,614002.000000,642658.000000,645110.000000,645878.000000,619135.300000,
 shadow-heavy,count,occluded,count,600,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
-shadow-heavy,count,upload_bytes,count,600,1326096.000000,1524464.000000,1682064.000000,1757248.000000,1843424.000000,1531254.666667,
+shadow-heavy,count,upload_bytes,count,600,1327952.000000,1526320.000000,1683920.000000,1759104.000000,1845280.000000,1533110.666667,
 shadow-heavy,count,buffers_created,count,600,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
 shadow-heavy,count,pipelines_built,count,600,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
 shadow-heavy,upload,instances,bytes/frame,1,1423451.146667,1423451.146667,1423451.146667,1423451.146667,1423451.146667,1423451.146667,mean over the measured frames
 shadow-heavy,upload,sprites,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 shadow-heavy,upload,static_batches,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
-shadow-heavy,upload,uniforms,bytes/frame,1,88608.000000,88608.000000,88608.000000,88608.000000,88608.000000,88608.000000,mean over the measured frames
+shadow-heavy,upload,uniforms,bytes/frame,1,90464.000000,90464.000000,90464.000000,90464.000000,90464.000000,90464.000000,mean over the measured frames
 shadow-heavy,upload,lights,bytes/frame,1,19195.520000,19195.520000,19195.520000,19195.520000,19195.520000,19195.520000,mean over the measured frames
 shadow-heavy,upload,materials,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 shadow-heavy,upload,skins,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 shadow-heavy,upload,meshes,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 shadow-heavy,upload,textures,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 shadow-heavy,upload,other,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
-shadow-heavy,alloc,allocations,count/frame,1,733.935000,733.935000,733.935000,733.935000,733.935000,733.935000,whole process
-shadow-heavy,alloc,bytes,bytes/frame,1,311034.320000,311034.320000,311034.320000,311034.320000,311034.320000,311034.320000,whole process
+shadow-heavy,alloc,allocations,count/frame,1,764.940000,764.940000,764.940000,764.940000,764.940000,764.940000,whole process
+shadow-heavy,alloc,bytes,bytes/frame,1,328128.093333,328128.093333,328128.093333,328128.093333,328128.093333,328128.093333,whole process
 shadow-heavy,memory,mesh_bytes,bytes,1,40960.000000,40960.000000,40960.000000,40960.000000,40960.000000,40960.000000,
 shadow-heavy,memory,gpu_buffer_bytes,bytes,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
 shadow-heavy,memory,instance_batch_pool_bytes,bytes,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
@@ -288,51 +292,53 @@ shadow-heavy,memory,light_shadow_atlas_bytes,bytes,1,67108864.000000,67108864.00
 shadow-heavy,memory,computed_bytes,bytes,1,398213120.000000,398213120.000000,398213120.000000,398213120.000000,398213120.000000,398213120.000000,"computed from texture sizes, not read from the device"
 shadow-heavy,memory,device_allocated_bytes,bytes,0,,,,,,,wgpu reports no allocator totals on the metal backend
 shadow-heavy,memory,device_reserved_bytes,bytes,0,,,,,,,wgpu reports no allocator totals on the metal backend
-alpha-heavy,cpu,update,ms,600,0.023625,0.043709,0.059083,0.068292,0.098708,0.043031,
-alpha-heavy,cpu,collect,ms,600,0.404667,0.506000,0.584084,0.702750,17.923459,0.569916,
-alpha-heavy,cpu,prepare,ms,600,0.487416,0.645583,0.684166,0.734333,3.253458,0.648015,
-alpha-heavy,cpu,encode,ms,600,2.583875,2.671125,2.861292,3.113875,11.999500,2.719703,
-alpha-heavy,cpu,submit,ms,600,0.070333,0.093250,0.129292,0.156917,0.280958,0.096851,
-alpha-heavy,cpu,cpu,ms,600,3.717958,3.909541,4.183917,4.858209,21.621167,4.034484,
-alpha-heavy,cpu,frame,ms,600,15.719292,17.471167,23.967000,26.356375,41.692167,18.185293,
-alpha-heavy,gpu,total,ms,600,10.975251,12.646833,18.885251,20.307542,22.978042,13.248487,
-alpha-heavy,gpu,span,ms,600,10.991292,12.671750,18.902458,20.450750,22.991168,13.278855,
-alpha-heavy,gpu_pass,shadows 0,ms,600,0.011875,0.022833,0.025917,0.029167,0.032625,0.022553,
-alpha-heavy,gpu_pass,depth prepass,ms,600,0.011250,0.016541,0.025750,0.027125,0.040042,0.017093,
-alpha-heavy,gpu_pass,shadows 1,ms,600,0.019166,0.026875,0.034000,0.039459,0.069291,0.027496,
-alpha-heavy,gpu_pass,shadows 2,ms,600,0.025000,0.061250,0.062958,0.080041,0.533459,0.060324,
-alpha-heavy,gpu_pass,motion vectors,ms,600,0.000000,0.000000,0.019417,0.036583,0.041583,0.001765,
-alpha-heavy,gpu_pass,shadows 3,ms,600,0.017208,0.514042,0.579167,0.642292,0.721417,0.486711,
-alpha-heavy,gpu_pass,screen reflections,ms,600,0.000000,0.000000,0.558375,0.598291,0.624916,0.040586,
-alpha-heavy,gpu_pass,reflection spread,ms,600,0.013541,0.054917,0.061667,0.082333,0.234833,0.056467,
-alpha-heavy,gpu_pass,GTAO horizons,ms,600,0.000000,0.100541,0.103708,0.110417,0.302500,0.094568,
-alpha-heavy,gpu_pass,GTAO bilateral,ms,600,0.275459,0.285750,0.299166,0.348666,0.431625,0.288404,
-alpha-heavy,gpu_pass,opaque,ms,600,9.766875,11.440833,17.587292,19.156792,21.828459,12.029062,
-alpha-heavy,gpu_pass,reflection blur,ms,600,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
-alpha-heavy,gpu_pass,bloom,ms,598,0.037084,0.110125,0.113625,0.198541,0.407000,0.107333,
-alpha-heavy,gpu_pass,post,ms,377,0.025250,0.025875,0.026333,0.026708,0.148916,0.026235,
+alpha-heavy,cpu,update,ms,600,0.022333,0.032875,0.053042,0.059208,0.092000,0.035436,
+alpha-heavy,cpu,collect,ms,600,0.399958,0.465292,0.533375,0.602542,12.742917,0.520216,
+alpha-heavy,cpu,prepare,ms,600,0.976667,1.043542,1.103834,1.222875,2.313166,1.052694,
+alpha-heavy,cpu,encode,ms,600,0.912250,0.979750,1.030166,1.148125,3.097792,0.989200,
+alpha-heavy,cpu,submit,ms,600,0.051667,0.064916,0.092958,0.127125,0.196875,0.068200,
+alpha-heavy,cpu,cpu,ms,600,2.429291,2.554167,2.762667,3.044834,15.573042,2.630310,
+alpha-heavy,cpu,frame,ms,600,16.470791,17.730750,19.027000,21.168750,36.075084,17.831662,
+alpha-heavy,gpu,total,ms,600,13.045459,14.247291,15.397000,15.999169,20.575125,14.283455,
+alpha-heavy,gpu,span,ms,600,13.045459,14.247291,15.397000,16.103624,20.575125,14.284630,
+alpha-heavy,gpu_pass,shadows 0,ms,600,0.011542,0.024083,0.027500,0.031000,0.046209,0.023859,
+alpha-heavy,gpu_pass,depth prepass,ms,600,0.007958,0.014375,0.017875,0.026959,0.097305,0.014896,
+alpha-heavy,gpu_pass,shadows 1,ms,600,0.018042,0.029166,0.037292,0.044833,0.050084,0.029985,
+alpha-heavy,gpu_pass,shadows 2,ms,600,0.014681,0.028743,0.038652,0.044861,0.046438,0.030092,
+alpha-heavy,gpu_pass,motion vectors,ms,600,0.007500,0.016160,0.022854,0.026000,0.093375,0.017133,
+alpha-heavy,gpu_pass,shadows 3,ms,600,0.015243,0.017271,0.030334,0.032125,0.042459,0.019265,
+alpha-heavy,gpu_pass,reflection depth,ms,600,0.020083,0.027951,0.041972,0.043882,0.046069,0.029917,
+alpha-heavy,gpu_pass,screen reflections,ms,600,1.204437,2.312666,2.499021,2.601708,2.670333,2.310206,
+alpha-heavy,gpu_pass,reflection spread,ms,600,0.027896,0.032396,0.034084,0.037875,0.115042,0.032504,
+alpha-heavy,gpu_pass,GTAO horizons,ms,600,0.095167,0.103625,0.108083,0.115625,1.148917,0.108686,
+alpha-heavy,gpu_pass,GTAO bilateral,ms,600,0.276666,0.286625,0.297791,0.303542,0.342083,0.287806,
+alpha-heavy,gpu_pass,opaque,ms,600,9.796333,11.242167,12.338875,12.875584,17.529791,11.197808,
+alpha-heavy,gpu_pass,reflection coarse depth,ms,600,0.012187,0.014021,0.017313,0.018271,0.023250,0.014433,
+alpha-heavy,gpu_pass,bloom,ms,600,0.109084,0.115334,0.117917,0.183333,0.300916,0.116747,
+alpha-heavy,gpu_pass,reflection blur,ms,600,0.018291,0.019646,0.021125,0.022041,0.093750,0.019910,
+alpha-heavy,gpu_pass,post,ms,600,0.029125,0.030042,0.030500,0.031084,0.080792,0.030208,
 alpha-heavy,count,draw_calls,count,600,82.000000,87.000000,89.000000,89.000000,89.000000,86.656667,
-alpha-heavy,count,recorded_draws,count,600,3457.000000,3513.000000,3547.000000,3566.000000,3584.000000,3513.518333,
+alpha-heavy,count,recorded_draws,count,600,1125.000000,1205.000000,1248.000000,1260.000000,1267.000000,1201.760000,
 alpha-heavy,count,instances,count,600,4929.000000,4935.000000,4939.000000,4941.000000,4942.000000,4935.191667,
 alpha-heavy,count,triangles,count,600,142486.000000,142866.000000,142876.000000,142878.000000,142878.000000,142757.576667,
 alpha-heavy,count,shadow_instances,count,600,11688.000000,11847.000000,12387.000000,12419.000000,12422.000000,11959.308333,
 alpha-heavy,count,shadow_triangles,count,600,334792.000000,339270.000000,357396.000000,358106.000000,358526.000000,342746.420000,
 alpha-heavy,count,occluded,count,600,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
-alpha-heavy,count,upload_bytes,count,600,2031328.000000,2079168.000000,2240768.000000,2300304.000000,3282880.000000,2109276.373333,
+alpha-heavy,count,upload_bytes,count,600,2031648.000000,2079488.000000,2241088.000000,2300624.000000,3283200.000000,2109596.373333,
 alpha-heavy,count,buffers_created,count,600,0.000000,0.000000,0.000000,0.000000,1.000000,0.001667,
 alpha-heavy,count,pipelines_built,count,600,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
 alpha-heavy,upload,instances,bytes/frame,1,2093628.373333,2093628.373333,2093628.373333,2093628.373333,2093628.373333,2093628.373333,mean over the measured frames
 alpha-heavy,upload,sprites,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 alpha-heavy,upload,static_batches,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
-alpha-heavy,upload,uniforms,bytes/frame,1,15648.000000,15648.000000,15648.000000,15648.000000,15648.000000,15648.000000,mean over the measured frames
+alpha-heavy,upload,uniforms,bytes/frame,1,15968.000000,15968.000000,15968.000000,15968.000000,15968.000000,15968.000000,mean over the measured frames
 alpha-heavy,upload,lights,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 alpha-heavy,upload,materials,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 alpha-heavy,upload,skins,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 alpha-heavy,upload,meshes,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 alpha-heavy,upload,textures,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 alpha-heavy,upload,other,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
-alpha-heavy,alloc,allocations,count/frame,1,697.581667,697.581667,697.581667,697.581667,697.581667,697.581667,whole process
-alpha-heavy,alloc,bytes,bytes/frame,1,1117085.806667,1117085.806667,1117085.806667,1117085.806667,1117085.806667,1117085.806667,whole process
+alpha-heavy,alloc,allocations,count/frame,1,731.590000,731.590000,731.590000,731.590000,731.590000,731.590000,whole process
+alpha-heavy,alloc,bytes,bytes/frame,1,645332.040000,645332.040000,645332.040000,645332.040000,645332.040000,645332.040000,whole process
 alpha-heavy,memory,mesh_bytes,bytes,1,20480.000000,20480.000000,20480.000000,20480.000000,20480.000000,20480.000000,
 alpha-heavy,memory,gpu_buffer_bytes,bytes,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
 alpha-heavy,memory,instance_batch_pool_bytes,bytes,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
@@ -345,31 +351,32 @@ alpha-heavy,memory,light_shadow_atlas_bytes,bytes,1,0.000000,0.000000,0.000000,0
 alpha-heavy,memory,computed_bytes,bytes,1,129777664.000000,129777664.000000,129777664.000000,129777664.000000,129777664.000000,129777664.000000,"computed from texture sizes, not read from the device"
 alpha-heavy,memory,device_allocated_bytes,bytes,0,,,,,,,wgpu reports no allocator totals on the metal backend
 alpha-heavy,memory,device_reserved_bytes,bytes,0,,,,,,,wgpu reports no allocator totals on the metal backend
-animated,cpu,update,ms,600,0.025583,0.028417,0.037000,0.042416,0.055167,0.029794,
-animated,cpu,collect,ms,600,0.116125,0.133542,0.164834,0.207542,0.581084,0.139382,
-animated,cpu,prepare,ms,600,0.198250,0.246625,0.317584,0.373458,0.601500,0.255341,
-animated,cpu,encode,ms,600,0.735375,1.070416,1.310625,1.512375,4.892375,1.076160,
-animated,cpu,submit,ms,600,0.080750,0.123792,0.217417,0.241750,0.323458,0.138604,
-animated,cpu,cpu,ms,600,1.152959,1.596042,1.956875,2.205792,5.482500,1.609488,
-animated,cpu,frame,ms,600,5.063833,5.814250,6.406125,6.667625,9.980000,5.843242,
-animated,gpu,total,ms,600,3.257749,3.627083,3.904875,3.987791,4.113626,3.627688,
-animated,gpu,span,ms,600,3.298000,3.651583,3.940625,4.064875,5.524875,3.661624,
-animated,gpu_pass,skinning,ms,600,1.589875,1.822916,2.068417,2.159375,2.240791,1.832274,
-animated,gpu_pass,depth prepass,ms,600,0.034541,0.041667,0.050625,0.053167,0.055417,0.042428,
-animated,gpu_pass,shadows 0,ms,600,0.007875,0.028333,0.030708,0.031333,0.033709,0.021851,
-animated,gpu_pass,motion vectors,ms,600,0.058208,0.067375,0.075917,0.083500,0.191125,0.068898,
-animated,gpu_pass,shadows 1,ms,600,0.005250,0.025667,0.034666,0.037583,0.041041,0.024437,
-animated,gpu_pass,screen reflections,ms,600,0.327458,0.378833,0.423584,0.460833,0.517583,0.381163,
-animated,gpu_pass,shadows 2,ms,600,0.000000,0.017458,0.018709,0.060791,0.119333,0.012548,
-animated,gpu_pass,reflection spread,ms,600,0.001125,0.058208,0.063083,0.109792,0.135791,0.059063,
-animated,gpu_pass,GTAO horizons,ms,600,0.000000,0.101833,0.106500,0.116500,0.140542,0.101914,
-animated,gpu_pass,shadows 3,ms,600,0.000000,0.000000,0.000000,0.000000,0.449667,0.000755,
-animated,gpu_pass,GTAO bilateral,ms,600,0.000000,0.332000,0.343625,0.366917,0.438666,0.332495,
-animated,gpu_pass,opaque,ms,600,0.558666,0.654667,0.714208,0.806000,0.929167,0.644298,
-animated,gpu_pass,reflection blur,ms,600,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
-animated,gpu_pass,bloom,ms,599,0.030875,0.106500,0.110000,0.136583,0.339666,0.092532,
-animated,gpu_pass,post,ms,300,0.025167,0.025875,0.026375,0.029167,0.032083,0.025963,
-animated,gpu_pass,occlusion depth,ms,2,0.053417,0.053417,0.069417,0.069417,0.069417,0.061417,
+animated,cpu,update,ms,600,0.025208,0.027458,0.029166,0.032417,0.062084,0.027413,
+animated,cpu,collect,ms,600,0.113292,0.122583,0.133542,0.143041,0.152625,0.123527,
+animated,cpu,prepare,ms,600,0.202000,0.224208,0.247250,0.270583,0.327791,0.226333,
+animated,cpu,encode,ms,600,0.732833,0.994083,1.177416,1.251625,1.344917,1.006545,
+animated,cpu,submit,ms,600,0.077875,0.096375,0.173375,0.209834,0.235875,0.108288,
+animated,cpu,cpu,ms,600,1.178791,1.439833,1.687834,1.741375,1.834417,1.464693,
+animated,cpu,frame,ms,600,5.799541,6.670416,7.506584,7.616166,8.110083,6.763030,
+animated,gpu,total,ms,600,4.281458,4.851624,5.197792,5.314208,5.779500,4.854937,
+animated,gpu,span,ms,600,4.284000,4.857666,5.210209,5.334375,5.809500,4.863366,
+animated,gpu_pass,skinning,ms,600,1.583792,1.953500,2.167125,2.218750,2.279833,1.966739,
+animated,gpu_pass,shadows 0,ms,600,0.010042,0.028583,0.030417,0.031834,0.033625,0.023705,
+animated,gpu_pass,depth prepass,ms,600,0.033375,0.039667,0.049500,0.051167,0.055542,0.040955,
+animated,gpu_pass,shadows 1,ms,600,0.007500,0.025500,0.031375,0.034083,0.041875,0.021883,
+animated,gpu_pass,motion vectors,ms,600,0.056708,0.064667,0.077167,0.079250,0.084625,0.066931,
+animated,gpu_pass,shadows 2,ms,600,0.009365,0.010628,0.027720,0.028391,0.028852,0.015316,
+animated,gpu_pass,reflection depth,ms,600,0.003944,0.005653,0.006326,0.006493,0.006604,0.005578,
+animated,gpu_pass,screen reflections,ms,600,0.402559,1.330389,1.577417,1.679229,2.000114,1.140592,
+animated,gpu_pass,shadows 3,ms,600,0.031750,0.036313,1.023976,1.081085,1.380012,0.298869,
+animated,gpu_pass,reflection spread,ms,600,0.025570,0.031355,0.032853,0.035528,0.079126,0.030930,
+animated,gpu_pass,GTAO horizons,ms,600,0.095125,0.102583,0.106500,0.108542,0.110792,0.102460,
+animated,gpu_pass,reflection coarse depth,ms,600,0.006365,0.007221,0.008725,0.009236,0.009455,0.007310,
+animated,gpu_pass,GTAO bilateral,ms,600,0.315125,0.331250,0.339500,0.343125,0.398458,0.331341,
+animated,gpu_pass,opaque,ms,600,0.562000,0.650000,0.704625,0.724250,0.762000,0.643114,
+animated,gpu_pass,bloom,ms,600,0.104167,0.109417,0.112333,0.116958,0.228333,0.109735,
+animated,gpu_pass,reflection blur,ms,600,0.015632,0.019403,0.021209,0.021625,0.022541,0.019469,
+animated,gpu_pass,post,ms,600,0.028750,0.029875,0.030375,0.030875,0.073500,0.030011,
 animated,count,draw_calls,count,600,2075.000000,2139.000000,2244.000000,2250.000000,2251.000000,2153.918333,
 animated,count,recorded_draws,count,600,2054.000000,2118.000000,2223.000000,2229.000000,2230.000000,2132.918333,
 animated,count,instances,count,600,370.000000,381.000000,391.000000,392.000000,392.000000,381.205000,
@@ -377,21 +384,21 @@ animated,count,triangles,count,600,141698.000000,145922.000000,149762.000000,150
 animated,count,shadow_instances,count,600,939.000000,976.000000,1051.000000,1054.000000,1055.000000,990.365000,
 animated,count,shadow_triangles,count,600,359048.000000,373256.000000,402056.000000,403208.000000,403592.000000,378772.160000,
 animated,count,occluded,count,600,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
-animated,count,upload_bytes,count,600,834720.000000,834720.000000,850848.000000,884832.000000,888000.000000,837158.266667,
+animated,count,upload_bytes,count,600,835040.000000,835040.000000,851168.000000,885152.000000,888320.000000,837478.266667,
 animated,count,buffers_created,count,600,0.000000,0.000000,0.000000,2.000000,2.000000,0.030000,
 animated,count,pipelines_built,count,600,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
 animated,upload,instances,bytes/frame,1,2438.266667,2438.266667,2438.266667,2438.266667,2438.266667,2438.266667,mean over the measured frames
 animated,upload,sprites,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 animated,upload,static_batches,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
-animated,upload,uniforms,bytes/frame,1,15648.000000,15648.000000,15648.000000,15648.000000,15648.000000,15648.000000,mean over the measured frames
+animated,upload,uniforms,bytes/frame,1,15968.000000,15968.000000,15968.000000,15968.000000,15968.000000,15968.000000,mean over the measured frames
 animated,upload,lights,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 animated,upload,materials,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 animated,upload,skins,bytes/frame,1,819072.000000,819072.000000,819072.000000,819072.000000,819072.000000,819072.000000,mean over the measured frames
 animated,upload,meshes,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 animated,upload,textures,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 animated,upload,other,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
-animated,alloc,allocations,count/frame,1,918.086667,918.086667,918.086667,918.086667,918.086667,918.086667,whole process
-animated,alloc,bytes,bytes/frame,1,1649815.946667,1649815.946667,1649815.946667,1649815.946667,1649815.946667,1649815.946667,whole process
+animated,alloc,allocations,count/frame,1,951.106667,951.106667,951.106667,951.106667,951.106667,951.106667,whole process
+animated,alloc,bytes,bytes/frame,1,1675385.646667,1675385.646667,1675385.646667,1675385.646667,1675385.646667,1675385.646667,whole process
 animated,memory,mesh_bytes,bytes,1,41040.000000,41040.000000,41040.000000,41040.000000,41040.000000,41040.000000,
 animated,memory,gpu_buffer_bytes,bytes,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
 animated,memory,instance_batch_pool_bytes,bytes,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
@@ -404,32 +411,34 @@ animated,memory,light_shadow_atlas_bytes,bytes,1,0.000000,0.000000,0.000000,0.00
 animated,memory,computed_bytes,bytes,1,129777664.000000,129777664.000000,129777664.000000,129777664.000000,129777664.000000,129777664.000000,"computed from texture sizes, not read from the device"
 animated,memory,device_allocated_bytes,bytes,0,,,,,,,wgpu reports no allocator totals on the metal backend
 animated,memory,device_reserved_bytes,bytes,0,,,,,,,wgpu reports no allocator totals on the metal backend
-game-like,cpu,update,ms,600,0.006750,0.009916,0.014667,0.022667,0.043250,0.010419,
-game-like,cpu,collect,ms,600,0.092084,0.131750,0.173791,0.208959,0.261458,0.133885,
-game-like,cpu,prepare,ms,600,0.109625,0.175208,0.241042,0.331167,0.535917,0.179536,
-game-like,cpu,encode,ms,600,0.300833,0.430667,0.686083,0.780375,1.078167,0.462375,
-game-like,cpu,submit,ms,600,0.040708,0.060583,0.112958,0.149416,0.226167,0.066302,
-game-like,cpu,cpu,ms,600,0.576458,0.812083,1.135334,1.278042,1.428417,0.842097,
-game-like,cpu,frame,ms,600,2.645250,3.033709,3.437542,3.695417,4.408417,3.068053,
-game-like,gpu,total,ms,600,1.718417,1.872791,2.041583,2.113167,2.171542,1.884946,
-game-like,gpu,span,ms,600,1.725208,1.877417,2.068542,2.133292,2.780125,1.893802,
-game-like,gpu_pass,skinning,ms,600,0.031333,0.080792,0.126875,0.135334,0.169750,0.084562,
-game-like,gpu_pass,shadows 0,ms,600,0.000000,0.000000,0.023500,0.025500,0.077250,0.004234,
-game-like,gpu_pass,shadows 1,ms,600,0.000000,0.001625,0.021208,0.026042,0.027958,0.007383,
-game-like,gpu_pass,shadows 2,ms,600,0.000000,0.032042,0.041417,0.043875,0.113875,0.028532,
-game-like,gpu_pass,shadows 3,ms,600,0.150125,0.246250,0.288708,0.299875,0.385125,0.248442,
-game-like,gpu_pass,light shadows,ms,600,0.012375,0.036750,0.081417,0.112333,0.199250,0.048412,
-game-like,gpu_pass,depth prepass,ms,600,0.065250,0.185167,0.237083,0.258500,0.293417,0.186674,
-game-like,gpu_pass,motion vectors,ms,600,0.044667,0.083375,0.091250,0.116334,0.128917,0.082520,
-game-like,gpu_pass,screen reflections,ms,600,0.228167,0.273125,0.307833,0.351959,0.381875,0.275879,
-game-like,gpu_pass,reflection spread,ms,600,0.046000,0.049458,0.152042,0.223291,0.338750,0.062197,
-game-like,gpu_pass,GTAO horizons,ms,600,0.085209,0.088000,0.101208,0.140750,0.244291,0.090503,
-game-like,gpu_pass,GTAO bilateral,ms,600,0.268958,0.284042,0.312959,0.436792,0.617250,0.289871,
-game-like,gpu_pass,opaque,ms,600,0.237250,0.298875,0.331750,0.383916,0.416500,0.294780,
-game-like,gpu_pass,bloom,ms,600,0.069167,0.154667,0.170792,0.221208,0.307959,0.153999,
-game-like,gpu_pass,reflection blur,ms,600,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
-game-like,gpu_pass,post,ms,456,0.000000,0.034625,0.036167,0.036750,0.039167,0.034334,
-game-like,gpu_pass,occlusion depth,ms,9,0.000000,0.063709,0.125333,0.125333,0.125333,0.057551,
+game-like,cpu,update,ms,600,0.006292,0.007208,0.008667,0.010250,0.011292,0.007352,
+game-like,cpu,collect,ms,600,0.085250,0.098250,0.129042,0.140916,0.155958,0.101808,
+game-like,cpu,prepare,ms,600,0.114083,0.132583,0.165417,0.291833,0.329792,0.139762,
+game-like,cpu,encode,ms,600,0.321917,0.348125,0.482250,0.557750,0.614042,0.384507,
+game-like,cpu,submit,ms,600,0.042209,0.049667,0.056625,0.064125,0.098917,0.050656,
+game-like,cpu,cpu,ms,600,0.584250,0.640208,0.800584,0.957708,1.136041,0.676732,
+game-like,cpu,frame,ms,600,3.098459,3.411375,3.647958,3.870500,4.124208,3.410805,
+game-like,gpu,total,ms,600,2.244958,2.483625,2.647917,2.714542,2.910917,2.493127,
+game-like,gpu,span,ms,600,2.222226,2.480416,2.646166,2.738708,2.915208,2.490032,
+game-like,gpu_pass,skinning,ms,600,0.027146,0.065465,0.102195,0.117000,0.132098,0.070049,
+game-like,gpu_pass,shadows 0,ms,600,0.000125,0.009902,0.014167,0.023250,0.024083,0.009942,
+game-like,gpu_pass,shadows 1,ms,600,0.000166,0.011625,0.018625,0.024292,0.028042,0.012360,
+game-like,gpu_pass,shadows 2,ms,600,0.000209,0.034708,0.043083,0.045667,0.046834,0.031477,
+game-like,gpu_pass,shadows 3,ms,600,0.109042,0.244042,0.289292,0.303250,0.316291,0.245390,
+game-like,gpu_pass,light shadows,ms,600,0.014125,0.036958,0.078083,0.096958,0.115666,0.046776,
+game-like,gpu_pass,depth prepass,ms,600,0.068791,0.180167,0.227625,0.247500,0.304167,0.181294,
+game-like,gpu_pass,motion vectors,ms,600,0.042833,0.081500,0.087208,0.090333,0.123667,0.081014,
+game-like,gpu_pass,reflection depth,ms,600,0.007792,0.025792,0.032250,0.034209,0.167875,0.025365,
+game-like,gpu_pass,screen reflections,ms,600,0.641020,0.842000,0.967062,1.023396,1.132792,0.836823,
+game-like,gpu_pass,reflection spread,ms,600,0.025000,0.027833,0.029854,0.031541,0.034354,0.027882,
+game-like,gpu_pass,GTAO horizons,ms,600,0.085000,0.087958,0.090125,0.092000,0.094167,0.088003,
+game-like,gpu_pass,GTAO bilateral,ms,600,0.265834,0.279250,0.291959,0.297625,0.457125,0.280308,
+game-like,gpu_pass,opaque,ms,600,0.234875,0.295167,0.321917,0.332500,0.347125,0.289054,
+game-like,gpu_pass,reflection coarse depth,ms,600,0.010562,0.012187,0.017562,0.021146,0.034875,0.013009,
+game-like,gpu_pass,bloom,ms,600,0.110290,0.154250,0.160833,0.163917,0.243646,0.150446,
+game-like,gpu_pass,reflection blur,ms,600,0.016562,0.018771,0.019687,0.020730,0.021813,0.018685,
+game-like,gpu_pass,post,ms,600,0.030250,0.036625,0.039250,0.049771,0.055916,0.036855,
+game-like,gpu_pass,occlusion depth,ms,600,0.018292,0.045542,0.078175,0.086100,0.123230,0.048395,
 game-like,count,draw_calls,count,600,93.000000,112.000000,146.000000,153.000000,160.000000,115.570000,
 game-like,count,recorded_draws,count,600,235.000000,270.000000,340.000000,347.000000,350.000000,278.081667,
 game-like,count,instances,count,600,74.000000,99.000000,134.000000,140.000000,145.000000,101.155000,
@@ -437,21 +446,21 @@ game-like,count,triangles,count,600,36266.000000,38280.000000,42678.000000,43866
 game-like,count,shadow_instances,count,600,141.000000,185.000000,240.000000,256.000000,259.000000,188.190000,
 game-like,count,shadow_triangles,count,600,277022.000000,319360.000000,385316.000000,386908.000000,415876.000000,330670.266667,
 game-like,count,occluded,count,600,292.000000,339.000000,370.000000,376.000000,382.000000,338.690000,
-game-like,count,upload_bytes,count,600,225760.000000,295584.000000,319072.000000,325184.000000,333264.000000,292164.000000,
+game-like,count,upload_bytes,count,600,226592.000000,296416.000000,319904.000000,326016.000000,334096.000000,292996.000000,
 game-like,count,buffers_created,count,600,0.000000,0.000000,0.000000,2.000000,4.000000,0.046667,
 game-like,count,pipelines_built,count,600,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
 game-like,upload,instances,bytes/frame,1,29495.520000,29495.520000,29495.520000,29495.520000,29495.520000,29495.520000,mean over the measured frames
 game-like,upload,sprites,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 game-like,upload,static_batches,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
-game-like,upload,uniforms,bytes/frame,1,39968.000000,39968.000000,39968.000000,39968.000000,39968.000000,39968.000000,mean over the measured frames
+game-like,upload,uniforms,bytes/frame,1,40800.000000,40800.000000,40800.000000,40800.000000,40800.000000,40800.000000,mean over the measured frames
 game-like,upload,lights,bytes/frame,1,58956.480000,58956.480000,58956.480000,58956.480000,58956.480000,58956.480000,mean over the measured frames
 game-like,upload,materials,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 game-like,upload,skins,bytes/frame,1,163712.000000,163712.000000,163712.000000,163712.000000,163712.000000,163712.000000,mean over the measured frames
 game-like,upload,meshes,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 game-like,upload,textures,bytes/frame,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,mean over the measured frames
 game-like,upload,other,bytes/frame,1,32.000000,32.000000,32.000000,32.000000,32.000000,32.000000,mean over the measured frames
-game-like,alloc,allocations,count/frame,1,738.170000,738.170000,738.170000,738.170000,738.170000,738.170000,whole process
-game-like,alloc,bytes,bytes/frame,1,271694.043333,271694.043333,271694.043333,271694.043333,271694.043333,271694.043333,whole process
+game-like,alloc,allocations,count/frame,1,772.270000,772.270000,772.270000,772.270000,772.270000,772.270000,whole process
+game-like,alloc,bytes,bytes/frame,1,296706.103333,296706.103333,296706.103333,296706.103333,296706.103333,296706.103333,whole process
 game-like,memory,mesh_bytes,bytes,1,1586448.000000,1586448.000000,1586448.000000,1586448.000000,1586448.000000,1586448.000000,
 game-like,memory,gpu_buffer_bytes,bytes,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
 game-like,memory,instance_batch_pool_bytes,bytes,1,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,
@@ -464,4 +473,4 @@ game-like,memory,light_shadow_atlas_bytes,bytes,1,67108864.000000,67108864.00000
 game-like,memory,computed_bytes,bytes,1,196886528.000000,196886528.000000,196886528.000000,196886528.000000,196886528.000000,196886528.000000,"computed from texture sizes, not read from the device"
 game-like,memory,device_allocated_bytes,bytes,0,,,,,,,wgpu reports no allocator totals on the metal backend
 game-like,memory,device_reserved_bytes,bytes,0,,,,,,,wgpu reports no allocator totals on the metal backend
-all,memory,peak_rss_bytes,bytes,1,237322240.000000,237322240.000000,237322240.000000,237322240.000000,237322240.000000,237322240.000000,the whole run
+all,memory,peak_rss_bytes,bytes,1,224657408.000000,224657408.000000,224657408.000000,224657408.000000,224657408.000000,224657408.000000,the whole run

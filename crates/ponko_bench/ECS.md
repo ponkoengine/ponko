@@ -134,83 +134,94 @@ a read-only draw pass over `(Pos, Spr)` without `Tag`.
 - Wall-clock numbers on a shared machine move with its load. Compare runs
   from the same machine, build and load, and prefer min and p50 to p95.
 
-## Baselines (2026-11-20)
+## Baselines (2026-11-22)
 
-Apple M4 Max (14 logical cores), macOS, rustc 1.100.0, release, revision
-`e60e15a8`. The machine was idle: nothing else was running, and the runs were
-one at a time. The load average (1, 5, 15 minutes) was 15.23, 5.82, 3.52 when
-the run started (the JSON's figure; the high 1-minute value is probably the build
-just before the run, and the 5- and 15-minute values show the quiet machine).
-These replace the numbers of 2026-11-12 (revision `90bfe8e`, load average
-1.91 3.47 2.75), which agree with them within a few percent at p50 in most
-rows. One run of the command above produced every row here. p50 / p95
-per timed run. The p95 columns are noisier than in the 2026-11-12 recording
-(for example `iter` at 1M: ponko 272 µs, bevy 600 µs, hecs 348 µs), so read
-p50 and the minimums first:
+Apple M4 Max (14 logical cores), macOS 27.2, on mains power, rustc 1.100.0,
+release, revision `9235ea05`. The machine was idle: nothing else was
+running, and the runs were one at a time. The command above ran three
+times (load average at the start of each: 2.46, 2.25 and 2.05 for the last
+minute); `baselines/ecs.json` is the third run, the one closest to the
+three runs' medians, and every row below comes from it. The three runs'
+medians agreed within 5% in most rows (`bench_track compare` against the
+2026-11-20 file used the larger of 5% and twice the spread). p50 / p95 per
+timed run:
 
 | Case | Size | ponko_ecs | bevy_ecs | hecs |
 |---|---|---:|---:|---:|
-| iter | 1k | 0.12 µs / 0.12 µs | 0.12 µs / 0.17 µs | 0.21 µs / 0.25 µs |
-| iter | 100k | 16.3 µs / 16.5 µs | 40.3 µs / 45.4 µs | 18.6 µs / 19.1 µs |
-| iter | 1M | 171 µs / 272 µs | 407 µs / 600 µs | 192 µs / 348 µs |
-| spawn-loop | 1k | 13.9 µs / 15.5 µs | 21.1 µs / 24.5 µs | 16.4 µs / 16.6 µs |
-| spawn-loop | 100k | 1.20 ms / 1.35 ms | 1.76 ms / 1.90 ms | 1.59 ms / 1.70 ms |
-| spawn-loop | 1M | 13.6 ms / 14.2 ms | 19.7 ms / 21.1 ms | 16.4 ms / 17.1 ms |
-| spawn-batch | 1k | 10.7 µs / 10.8 µs | 12.5 µs / 12.8 µs | 11.7 µs / 12.5 µs |
-| spawn-batch | 100k | 999 µs / 1.07 ms | 1.19 ms / 1.26 ms | 1.15 ms / 1.33 ms |
-| spawn-batch | 1M | 10.1 ms / 10.4 ms | 12.9 ms / 13.1 ms | 11.7 ms / 12.2 ms |
-| spawn-despawn | 1k | 2.21 µs / 2.29 µs | 4.00 µs / 4.33 µs | 2.96 µs / 3.04 µs |
-| spawn-despawn | 100k | 212 µs / 235 µs | 439 µs / 611 µs | 308 µs / 433 µs |
-| spawn-despawn | 1M | 2.10 ms / 2.21 ms | 4.58 ms / 4.97 ms | 3.03 ms / 3.14 ms |
-| add-remove | 1k | 44.6 µs / 50.6 µs | 62.2 µs / 71.3 µs | 58.5 µs / 66.0 µs |
-| add-remove | 100k | 4.82 ms / 5.33 ms | 9.68 ms / 10.6 ms | 6.31 ms / 6.70 ms |
-| add-remove | 1M | 44.3 ms / 45.7 ms | 108.1 ms / 114.2 ms | 60.2 ms / 61.2 ms |
-| optional | 1k | 0.50 µs / 0.58 µs | 0.17 µs / 0.17 µs | 0.17 µs / 0.21 µs |
-| optional | 100k | 43.8 µs / 54.7 µs | 37.4 µs / 52.4 µs | 19.4 µs / 22.9 µs |
-| optional | 1M | 480 µs / 588 µs | 399 µs / 469 µs | 210 µs / 350 µs |
-| with | 1k | 0.08 µs / 0.12 µs | 0.08 µs / 0.08 µs | 0.12 µs / 0.12 µs |
-| with | 100k | 7.58 µs / 10.6 µs | 17.3 µs / 21.0 µs | 9.50 µs / 25.9 µs |
-| with | 1M | 96.2 µs / 116 µs | 201 µs / 242 µs | 105 µs / 130 µs |
-| without | 1k | 0.08 µs / 0.12 µs | 0.08 µs / 0.08 µs | 0.12 µs / 0.12 µs |
-| without | 100k | 8.29 µs / 8.42 µs | 18.6 µs / 20.2 µs | 9.46 µs / 14.2 µs |
-| without | 1M | 85.4 µs / 114 µs | 209 µs / 271 µs | 104 µs / 122 µs |
-| game | 10k | 14.6 µs / 22.5 µs | 16.4 µs / 28.2 µs | 15.2 µs / 23.5 µs |
-| game | 100k | 149 µs / 257 µs | 170 µs / 314 µs | 154 µs / 215 µs |
-| archetypes-1024 | 16k | 5.12 µs / 5.25 µs | 9.79 µs / 11.1 µs | 6.33 µs / 6.50 µs |
-| query-build-x1000 | 16k | 18.7 µs / 18.9 µs | 8.42 ms / 9.01 ms | 0.25 µs / 0.29 µs |
-| query-build+count-x1000 | 16k | 2.38 ms / 2.48 ms | 9.15 ms / 9.81 ms | 216 µs / 245 µs (cache hit) |
-| query-build+count-cold | 16k | 2.62 µs / 4.75 µs | 23.3 µs / 41.5 µs | 17.9 µs / 22.9 µs |
-| query-build+count-cold, min | 16k | 2.46 µs | 9.92 µs | 13.1 µs |
+| iter | 1k | 0.12 µs / 0.12 µs | 0.12 µs / 0.12 µs | 0.21 µs / 0.21 µs |
+| iter | 100k | 16.2 µs / 16.3 µs | 36.1 µs / 40.3 µs | 16.7 µs / 18.6 µs |
+| iter | 1M | 167 µs / 175 µs | 372 µs / 396 µs | 182 µs / 191 µs |
+| spawn-loop | 1k | 10.0 µs / 10.1 µs | 21.6 µs / 22.1 µs | 16.4 µs / 16.5 µs |
+| spawn-loop | 100k | 834 µs / 839 µs | 1.84 ms / 1.85 ms | 1.56 ms / 1.58 ms |
+| spawn-loop | 1M | 9.66 ms / 9.85 ms | 20.0 ms / 20.3 ms | 15.8 ms / 16.1 ms |
+| spawn-batch | 1k | 5.17 µs / 5.38 µs | 12.2 µs / 15.9 µs | 11.6 µs / 11.7 µs |
+| spawn-batch | 100k | 443 µs / 446 µs | 1.18 ms / 1.27 ms | 1.15 ms / 1.16 ms |
+| spawn-batch | 1M | 4.80 ms / 4.83 ms | 12.4 ms / 13.0 ms | 12.2 ms / 12.9 ms |
+| spawn-despawn | 1k | 1.67 µs / 1.75 µs | 4.92 µs / 5.79 µs | 2.83 µs / 2.96 µs |
+| spawn-despawn | 100k | 176 µs / 181 µs | 434 µs / 462 µs | 273 µs / 280 µs |
+| spawn-despawn | 1M | 1.83 ms / 1.90 ms | 4.49 ms / 4.57 ms | 2.79 ms / 2.83 ms |
+| add-remove | 1k | 43.4 µs / 43.8 µs | 62.1 µs / 65.0 µs | 58.7 µs / 61.2 µs |
+| add-remove | 100k | 4.29 ms / 4.35 ms | 8.54 ms / 8.66 ms | 5.80 ms / 5.99 ms |
+| add-remove | 1M | 43.9 ms / 44.4 ms | 99.1 ms / 107.7 ms | 59.2 ms / 60.1 ms |
+| optional | 1k | 0.21 µs / 0.21 µs | 0.17 µs / 0.17 µs | 0.17 µs / 0.21 µs |
+| optional | 100k | 19.2 µs / 19.3 µs | 34.2 µs / 38.1 µs | 17.2 µs / 19.2 µs |
+| optional | 1M | 197 µs / 205 µs | 380 µs / 392 µs | 197 µs / 200 µs |
+| with | 1k | 0.08 µs / 0.08 µs | 0.04 µs / 0.08 µs | 0.08 µs / 0.12 µs |
+| with | 100k | 8.17 µs / 8.25 µs | 17.3 µs / 17.3 µs | 9.33 µs / 9.38 µs |
+| with | 1M | 93.2 µs / 93.7 µs | 182 µs / 192 µs | 98.5 µs / 99.8 µs |
+| without | 1k | 0.08 µs / 0.08 µs | 0.04 µs / 0.08 µs | 0.08 µs / 0.12 µs |
+| without | 100k | 8.25 µs / 8.29 µs | 17.3 µs / 19.3 µs | 9.33 µs / 9.46 µs |
+| without | 1M | 77.5 µs / 82.7 µs | 180 µs / 200 µs | 95.2 µs / 96.4 µs |
+| game | 10k | 14.2 µs / 17.5 µs | 16.1 µs / 23.7 µs | 15.0 µs / 19.8 µs |
+| game | 100k | 139 µs / 170 µs | 164 µs / 244 µs | 144 µs / 193 µs |
+| archetypes-1024 | 16k | 4.92 µs / 4.96 µs | 9.46 µs / 9.88 µs | 6.42 µs / 6.88 µs |
+| query-build-x1000 | 16k | 18.4 µs / 18.6 µs | 7.87 ms / 8.08 ms | 0.25 µs / 0.29 µs |
+| query-build+count-x1000 | 16k | 2.04 ms / 2.06 ms | 8.76 ms / 9.01 ms | 215 µs / 218 µs |
+| query-build+count-cold | 16k | 2.25 µs / 2.42 µs | 9.79 µs / 12.1 µs | 12.9 µs / 13.5 µs |
+| query-build+count-cold, min | 16k | 2.00 µs | 8.46 µs | 11.5 µs |
 
 On a fresh world, with nothing cached anywhere, matching the 1024 archetypes
-once takes ponko about 2.5 µs at the minimum and 2.6 µs at the median; bevy
-takes 10 µs at the minimum and 23 µs at the median, hecs 13 and 18 µs.
+once takes ponko about 2.0 µs at the minimum and 2.3 µs at the median; bevy
+takes 8.5 µs at the minimum and 9.8 µs at the median, hecs 11.5 and 12.9 µs.
+
+**What moved since 2026-11-20** (revision `e60e15a8`, one run, also on an
+idle machine), beyond the threshold above: ponko's spawns (`spawn-loop`
+29% faster at 1M, `spawn-batch` 53%, `spawn-despawn` 19%; the work of
+#136), `optional` (59% faster at 1M: #136 and #196), `add-remove` at 100k
+(12%), every `par` row at 100k and 1M (7–15%), and at 1k the parallel
+rows (below). `query-build+count-x1000` went from 2.38 to 2.04 ms (15%)
+and `query-build+count-cold` from 2.6 to 2.3 µs. bevy_ecs and hecs moved
+too, by 5–13% in some rows (for example bevy's `iter` at 1M, 407 to
+372 µs), on code that didn't change: that is the size of the difference
+between two idle runs two days apart, and smaller changes in ponko's rows
+are within it. One row is slower: `par-1k/ponko-t4`, 10.1 to 12.6 µs.
 
 Parallel scaling, the `par` steering workload, p50 / p95. `ponko par` is
 ponko on the global pool without `install`, the setup that matches bevy's:
 
 | Size | ponko serial | ponko t1 | t2 | t4 | t8 | t14 | ponko par | bevy serial | bevy par | hecs serial |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 1k | 5.92 µs / 7.25 µs | 10.9 µs / 17.7 µs | 11.1 µs / 22.4 µs | 10.1 µs / 19.2 µs | 20.0 µs / 35.4 µs | 28.0 µs / 58.8 µs | 25.5 µs / 60.1 µs | 6.12 µs / 6.38 µs | 10.4 µs / 18.7 µs | 5.88 µs / 6.38 µs |
-| 100k | 568 µs / 630 µs | 589 µs / 653 µs | 308 µs / 345 µs | 175 µs / 225 µs | 132 µs / 171 µs | 111 µs / 145 µs | 115 µs / 169 µs | 583 µs / 655 µs | 127 µs / 163 µs | 573 µs / 654 µs |
-| 1M | 5.20 ms / 6.04 ms | 5.16 ms / 5.67 ms | 2.61 ms / 2.90 ms | 1.31 ms / 1.51 ms | 732 µs / 856 µs | 647 µs / 830 µs | 606 µs / 666 µs | 5.06 ms / 5.77 ms | 761 µs / 911 µs | 4.98 ms / 5.69 ms |
+| 1k | 5.67 µs / 5.92 µs | 10.2 µs / 11.5 µs | 11.4 µs / 13.4 µs | 12.6 µs / 16.4 µs | 15.0 µs / 21.3 µs | 16.0 µs / 20.6 µs | 5.25 µs / 5.88 µs | 5.75 µs / 6.04 µs | 11.2 µs / 18.1 µs | 5.29 µs / 5.83 µs |
+| 100k | 566 µs / 570 µs | 540 µs / 574 µs | 290 µs / 305 µs | 161 µs / 178 µs | 130 µs / 165 µs | 99.3 µs / 132 µs | 94.6 µs / 124 µs | 573 µs / 592 µs | 130 µs / 137 µs | 567 µs / 575 µs |
+| 1M | 4.87 ms / 5.54 ms | 4.70 ms / 5.53 ms | 2.48 ms / 2.86 ms | 1.30 ms / 1.49 ms | 797 µs / 912 µs | 573 µs / 723 µs | 562 µs / 645 µs | 4.99 ms / 5.71 ms | 731 µs / 840 µs | 4.88 ms / 5.61 ms |
 
-- At 1M the curve is linear up to 4 threads (4.0×) and reaches 7.1× on 8 and
-  8.0× on 14; at 100k it reaches 3.3× on 4 and 5.1× on 14. bevy's pool
-  reaches 6.7× at 1M and 4.6× at 100k.
-- At 100k and 1M, `ponko par` matches the `t14` row (4.9× and 8.6× over
-  serial, against 5.1× and 8.0×); the `install` hop costs nothing measurable
-  there.
-- At 1k every parallel row is slower than the serial loop (5.9 µs): ponko
-  10–11 µs with 1–4 threads and 20–28 µs with 8, 14 or the global pool; bevy
-  10 µs. The cost grows with the number of threads woken, not with
-  `install`: `ponko par` (no `install`, 14 threads) is as slow as `t14`.
+- Over the serial loop, at 1M the curve is nearly linear up to 4 threads
+  (3.7×) and reaches 6.1× on 8 and 8.5× on 14; at 100k it reaches 3.5× on
+  4 and 5.7× on 14. bevy's pool
+  reaches 6.8× at 1M and 4.4× at 100k.
+- At 100k and 1M, `ponko par` is as fast as the `t14` row or a little
+  faster (6.0× and 8.7× over serial).
+- At 1k, `ponko par` now stays on the calling thread (5.3 µs, the serial
+  loop's 5.7 µs): a parallel loop times its first rows and keeps a loop
+  that small where it is (#181). The `t1` to `t14` rows still take 10–16 µs:
+  each runs inside `install` on its own pool, which hands the loop to one
+  of that pool's threads and waits for it. bevy takes 11 µs.
 
 Allocations per timed run, where any library made one (all other rows make
 none in all three libraries):
 
 | Case | ponko_ecs | bevy_ecs | hecs |
-|---|---:|---:|---:|
+|---:|---:|---:|---:|
 | spawn-loop 1k / 100k / 1M | 58 / 93 / 108 | 131 / 215 / 251 | 41 / 83 / 101 |
 | spawn-batch 1k / 100k / 1M | 30 / 37 / 40 | 43 / 50 / 53 | 13 / 13 / 13 |
 | spawn-despawn 1k / 100k / 1M | 0 | 0.04 / 0.24 / 0.6 | 0 |
@@ -225,14 +236,13 @@ entity lists, the game's list of expired projectiles, which all three share).
 `world_bytes` for ponko: 43 KiB / 4.2 MiB / 42 MiB for `iter` at 1k / 100k / 1M
 (44 bytes per entity: 36 bytes of components and 8 of entity handle),
 1056 KiB for `archetypes-1024`, 474 KiB / 4.3 MiB for `game` at 10k / 100k.
+None of these changed since 2026-11-20.
 
 What the numbers point at, for later ECS work (each needs its own measured
-change): an `Option<&T>` query in ponko takes 2.7–2.8× as long as `iter` over
-the same number of entities at 100k and 1M, and is about 17–20% slower than
-bevy's there; hecs runs the same query in about the time of its own `iter`
-(210 µs at 1M, against 480 µs for ponko), so on this row ponko is the slowest
-of the three. (Since done: [below](#costs-won-back-since-the-baselines).) Spawning one entity at a time costs a fifth to a third more than
-`spawn_batch` (1.2× at 100k, 1.3× at 1k and 1M).
+change): the `Option<&T>` gap of the earlier baselines is closed (197 µs
+at 1M, as hecs, against bevy's 380 µs). Spawning one entity at a time now
+costs about twice `spawn_batch` (1.9× at 1k and 100k, 2.0× at 1M): the
+batch got faster by more than the loop did.
 
 ## Costs won back since the baselines
 

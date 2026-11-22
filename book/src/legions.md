@@ -199,23 +199,27 @@ the reference image `tests/fixtures/render/legions_battle.png`.
 
 ## Numbers
 
-Measured on an Apple M4 Max (14 cores) while other jobs kept the machine
-busy (load average 100 to 150): the engine's `battle` demo, whose documented
-time for 20,000 units is 0.57 ms per tick, ran at 9.2 to 14.3 ms per tick
-during these runs, so the times below are many times what a quiet machine
-gives. They are an upper bound, not a benchmark result. Release build,
+Measured on an idle Apple M4 Max (14 cores) on 2026-11-22, revision
+`9235ea05`, three runs each (1-minute load 1.9 to 2.8). Release build,
 headless, seed 1, `legions --headless --units N --ticks 600`; the first 600
 ticks are the march and the first clash:
 
 | Units | Map (cells) | Sim tick, all cores (mean of a run, 3 runs) | p95 | CPU work per tick, one thread |
 |---:|---|---|---|---:|
-| 10,000 | 400 x 225 | 11.9, 12.0, 15.6 ms | 41 ms | 2.3 to 2.7 ms |
-| 100,000 | 894 x 503 | 23.0, 25.7, 28.2 ms | 58 to 63 ms | 16.6 ms (300 ticks) |
-| 250,000 | 1414 x 795 | 43.4, 52.9, 58.4 ms | 83 to 99 ms | not measured (over the time limit) |
+| 10,000 | 400 x 225 | 0.50, 0.50, 0.52 ms | 0.75 to 0.76 ms | 1.65 ms |
+| 100,000 | 894 x 503 | 2.53, 2.55, 2.56 ms | 3.76 to 3.82 ms | 13.4 ms |
+| 250,000 | 1414 x 795 | 5.52, 5.56, 5.76 ms | 8.0 to 8.2 ms | 30.0 ms |
+
+The same runs on a machine busy with other jobs (load average 100 to 150)
+took 12 to 16, 23 to 28 and 43 to 58 ms a tick on all cores, and 2.3 to
+2.7 and 16.6 ms of CPU work.
 
 "CPU work" is the process's CPU time per tick with `--threads 1`, less a
-run of no ticks: the work itself, which load changes far less than wall time.
-`fight` is about 95% of every tick. `--headless` prints the tick-time
+run of no ticks (the three runs agreed within 1%): the work itself, which
+load changes far less than wall time. On all cores 100,000 and 250,000
+units take about a fifth of the one-thread work.
+`fight` is 70 to 85% of a tick (85% at 10,000 units, 70% at 250,000, where
+`aim` and `resolve` take 0.8 ms each). `--headless` prints the tick-time
 percentiles and each system's share.
 
 **Frame time.** Opening a window is not part of these runs, so the frame
@@ -224,17 +228,19 @@ is measured offscreen by the ignored test `legions_frame_cost` in
 view, 300 ticks into a battle: "fill" is the `animate` frame system, the
 ground and the engine's sprite drawing into the draw list; "frame" adds
 sorting and batching, the instance upload, the GPU pass and reading the
-picture back (which a window doesn't do). Medians of 40 frames, three runs,
-same busy machine as above, so again an upper bound:
+picture back (which a window doesn't do). Medians of 40 frames, three runs
+on an idle machine (2026-11-22, revision `9235ea05`, load average 2.4 to
+2.7), which agreed within 0.03 ms:
 
 | Units | Fill | Whole frame |
 |---:|---|---|
-| 10,000 | 2.3 to 8.3 ms | 5.4 to 10.5 ms |
-| 100,000 | 13.9 to 34.3 ms | 21.3 to 38.4 ms |
-| 250,000 | 8.1 to 25.5 ms | 19.8 to 43.1 ms |
+| 10,000 | 0.08 ms | 1.16 to 1.17 ms |
+| 100,000 | 0.24 ms | 2.68 to 2.71 ms |
+| 250,000 | 0.40 to 0.41 ms | 5.78 to 5.79 ms |
 
-The spread between runs is bigger than the difference between 100,000 and
-250,000 units, which says how much the other jobs on the machine weighed.
+Measured before on the busy machine above, the same frames took 5 to
+43 ms, with a spread between runs bigger than the difference between
+100,000 and 250,000 units.
 
 ```sh
 cargo test --release --lib --features 3d legions_frame_cost -- --ignored --nocapture

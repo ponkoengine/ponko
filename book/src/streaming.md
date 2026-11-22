@@ -194,16 +194,16 @@ time spent loading in each frame: the load or stream calls plus the upload
 step, which for meshes includes building them from the decoded file. CPU
 time rather than wall time, so a busy machine pausing the thread doesn't
 count (on Windows, which has no such clock here, it is wall time). On an
-Apple M4 Max (macOS, release build, the default 16 MiB upload budget, one
-set of three runs with the machine under heavy other load, load average
-about 60):
+Apple M4 Max (macOS, release build, the default 16 MiB upload budget,
+three runs on an idle machine: 2026-11-22, revision `9235ea05`, load
+average 2.1 to 2.2):
 
 | | Worst frame's loading work | Median | Usable after |
 |---|---|---|---|
-| `load_texture` | 10.1 to 11.5 ms | 0.18 ms | the same frame |
-| `stream_texture` | 0.42 to 0.73 ms | 0.001 ms | 3 to 11 frames |
-| `load_mesh` | 44.0 to 48.4 ms | 0.19 ms | the same frame |
-| `stream_mesh` | 0.52 to 0.65 ms | 0.002 to 0.005 ms | 10 to 11 frames |
+| `load_texture` | 8.3 to 8.7 ms | 0.15 ms | the same frame |
+| `stream_texture` | 0.08 to 0.19 ms | 0.001 ms | 5 frames |
+| `load_mesh` | 34.1 to 44.5 ms | 0.15 ms | the same frame |
+| `stream_mesh` | 0.29 to 0.31 ms | 0.002 ms | 8 to 9 frames |
 
 The loading calls decode all sixteen in the frame that first needs them;
 streaming moves decoding to workers and spreads the uploads over frames.
@@ -216,8 +216,9 @@ Read the numbers with these caveats:
 - Decode cost depends on the files: noise PNGs stand in for real art and
   may decode more cheaply than it, and the grid meshes have no materials
   or textures.
-- One set of runs on a loaded machine: compare the two ways within a run,
-  not against other machines.
+- One machine: compare the two ways within a run, not against other
+  machines. (A set of runs on the same machine under heavy other load,
+  load average about 60, had the worst frames 20 to 40% higher.)
 
 ## Browsers and asset sources
 

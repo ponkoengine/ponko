@@ -235,13 +235,12 @@ Every frame, on devices with compute culling and storage buffers
   vertex shader reads the character's record, finds its clips' two nearest
   frames, blends the joints' matrices between them and with the second clip,
   and skins the corner.
-- A crowd's cull pass costs about 10 µs of GPU time for 10,000 characters
-  (40 µs with two levels and sun shadows) on the machine measured below.
-  Culling by each clip's box instead of one sphere left that unchanged
-  within the noise (30 to 50 µs with two levels and sun shadows, before
-  and after, measured on 2026-11-21 on a busy machine). Culling by frame
-  ranges' boxes was not timed again: the pass reads one more vec4 per
-  clip a character plays. A crossfading
+- A crowd's cull pass costs about 0.02 ms of GPU time for 10,000
+  characters, with or without two levels and sun shadows (the benchmark
+  prints it to a hundredth of a millisecond; three runs on an idle
+  machine on 2026-11-22, with culling by each clip's box and by frame
+  ranges' boxes). Earlier figures were 10 µs (40 µs with two levels and
+  sun shadows), and 30 to 50 µs on a busy machine. A crossfading
   level adds its dithered draws: 30 draws instead of 18 for the
   benchmark's two levels with sun shadows (`crowd_benchmark`'s
   crossfading scene).
@@ -294,7 +293,7 @@ range), on 2026-11-20 on an idle machine (nothing else was running). "Prepare
 | Crowd | 7.01 (6.91–7.02) | 0.17 (0.17–0.17) | 4 | – |
 | Crowd, sun shadows | 8.42 (8.34–8.43) | 0.25 (0.25–0.25) | 12 | – |
 | Crowd, two levels (36 triangles past 40 m), sun shadows | 1.06 (1.06–1.06) | 0.25 (0.24–0.25) | 18 | – |
-| Crowd, CPU path (WebGL2's limits) | 3.51 (3.51–3.51) | 0.44 (0.44–0.44) | 126 | – |
+| Crowd, CPU path (WebGL2's limits) | 3.51 (3.51–3.51) | 0.44 (0.44–0.44); 0.55 (0.54–0.56) on 2026-11-22 | 126 | – |
 | Skinned models | 27.89 (27.84–27.92) | 9.39 (9.39–9.42) | 19,246 | 0.33 |
 | Skinned models, sun shadows | 28.89 (28.88–28.97) | 9.96 (9.94–10.02) | 20,310 | 0.34 |
 
@@ -306,6 +305,14 @@ work a frame, with 0.3 ms more to pose them). The frame times this benchmark
 also prints (1.7 to 9.1 ms for the crowds, 37 ms for the skinned models)
 wait for the GPU after the CPU work, so they are not the frame rate a game
 would reach.
+
+Measured again on 2026-11-22 (idle, revision `9235ea05`, three runs),
+every row came out within 0.03 ms of the table except the CPU path's
+prepare + record, 0.55 ms (0.54–0.56) against 0.44, almost all of it in
+the prepare step (0.40 ms), where the CPU path culls the characters.
+That is slower by a quarter; culling by each clip's box and then by frame
+ranges' boxes (2026-11-21) is the change to that step since, but this
+was not confirmed.
 
 The CPU path's GPU time is lower than the GPU path's here because its
 corners are posed in advance: it trades blending between frames and clips

@@ -205,48 +205,53 @@ so steady drawing doesn't allocate: `tests/debug_draw_alloc.rs` checks it with
 a counting allocator, and `cargo run --release -p ponko_bench -- debug/`
 prints each case's allocations per frame.
 
-Handing 100,000 lines to the renderer costs about 0.5 ms a frame for 3D lines
-and 0.6 ms for 2D lines on a laptop (`cargo run --release -p ponko_bench --
-debug/`), measured while the machine was busy with other work. Turned off, the
-100,000 calls cost about 0.1 ms.
+Handing 100,000 lines to the renderer costs 0.51 ms a frame for 3D lines
+and 0.80 ms for 2D lines (`cargo run --release -p ponko_bench -- debug/`;
+Apple M4 Max, idle machine, 2026-11-22, median of three runs within 3%).
+Turned off, the 100,000 calls cost 0.09 ms. A frame of 2,000 3D shapes,
+2,000 2D circles and 1,500 labels (`debug/shapes-and-labels`) costs 1.27 ms.
 
 On the GPU, the offscreen test `hundred_thousand_lines_gpu_time` (`cargo test
 -p ponko --lib --features 3d hundred_thousand_lines_gpu_time -- --ignored
 --nocapture`) times 100,000 one-pixel lines with GPU timestamps, at 1280x720
-over a small scene whose opaque pass takes 0.38 ms. Medians of about 160
-frames, cases taking turns, two runs each, on an Apple M4 Max (Metal):
+over a small scene. On an Apple M4 Max (Metal) on an idle machine
+(2026-11-22, revision `9235ea05`, load average 1.3 to 1.5), the opaque
+pass, where the lines are drawn, takes 0.09 ms without them; what 100,000
+lines add to it (medians of 160 frames, cases taking turns, three runs
+that agreed within 0.003 ms):
 
 | 100,000 lines | 4 samples a pixel | 1 sample |
 |---|---|---|
-| in view (half on top), blended as before | +4.5 ms | +1.2 ms |
-| in view (half on top), opaque without blending | +1.5 ms | +0.9 ms |
-| all on top, blended as before / now | +5.0 to +5.8 ms / +1.6 ms | +1.9 ms / +0.9 ms |
-| behind the camera (vertex work only) | +0.6 ms | +0.6 ms |
+| in view, half on top (opaque, no blending) | +0.34 ms | +0.19 ms |
+| in view, all depth-tested | +0.33 ms | +0.18 ms |
+| in view, all on top | +0.35 ms | +0.20 ms |
+| about a pixel long each (rasterizing without filling) | +0.14 ms | +0.13 ms |
+| behind the camera (uploading and vertex work only) | +0.13 ms | +0.13 ms |
 
-Most of the cost was blending: a line one pixel wide covers only some of a
-pixel's samples, and blending those into the 4-sample HDR frame cost about
-three times as much as writing them. Vertex work is about 0.6 ms of what is
-left; the rest is filling the pixels the lines cover. The machine was busy with
-other builds and GPU tests while this was measured (the spread was within 3%
-between runs); the numbers are to be repeated on a quiet machine.
+About 0.13 ms is uploading and vertex work; the rest is filling the pixels
+the lines cover. When lines stopped blending they were measured on a
+machine busy with other builds and GPU tests: half on top cost +4.5 ms at 4
+samples blended and +1.5 ms opaque, and +0.9 ms with 1 sample, many times
+the idle figures. Most of that was blending: a line one pixel wide covers
+only some of a pixel's samples, and blending those into the 4-sample HDR
+frame cost about three times as much as writing them.
 
 See-through lines don't blend either with several samples a pixel: with
 alpha to coverage a line of alpha 0.5 covers half of each pixel's samples,
 and the frame's resolve averages them with what is behind, as blending
 would. The same test times the 100,000 lines (half on top) at alpha 0.5
-both ways, taking turns in one run; the opaque pass's median over about 160
-frames in four runs, on the same M4 Max while about a dozen other builds
-ran (load 130 to 170):
+both ways, taking turns in one run; what they add to the opaque pass, same
+idle runs as above:
 
 | 100,000 see-through lines | 4 samples a pixel | 1 sample |
 |---|---|---|
-| blended (as before) | 3.70, 4.81, 4.67, 4.84 ms | 1.67 ms each run |
-| alpha to coverage (now, 4 samples) | 3.03, 3.03, 3.00, 3.06 ms | blended: 1.67 ms each run |
-| for comparison: the same lines opaque / no lines | 1.89 / 0.41 ms | 1.30 / 0.44 ms |
+| blended (as before) | +0.97 ms | +0.28 ms |
+| alpha to coverage (now, 4 samples) | +0.58 ms | blended: +0.28 ms |
+| for comparison: the same lines opaque | +0.34 ms | +0.19 ms |
 
-So the see-through lines' own cost at 4 samples went from about 3.3 to 4.4
-ms to about 2.6 ms; blended runs were the noisy ones (single frames from 1.5
-to 5.1 ms), the coverage runs stayed within 0.06 ms of each other. Coverage
+So coverage costs 40% less than blending at 4 samples. (On a busy
+machine, about a dozen other builds, the same comparison measured 3.3 to
+4.4 ms against about 2.6 ms.) Coverage
 comes in steps of a quarter with 4 samples (how a GPU rounds alpha to
 samples, and whether it dithers, varies), and
 overlapping see-through lines no longer add up: the second covers the same
