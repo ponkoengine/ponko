@@ -2543,8 +2543,23 @@ impl Renderer3D {
     /// and material are bound once for all of them; the transparent pass
     /// keeps the batches' own order.
     pub(super) fn draw_static(&self, pass: &mut wgpu::RenderPass<'_>, kind: Kind, view: usize) {
+        let n = self.draw_static_counted(pass, kind, view, true);
+        self.state_counters.add(&n);
+    }
+
+    /// [`Self::draw_static`], returning what it recorded uncounted; with
+    /// `sorted` false the main view's see-through batches drawn far to
+    /// near are left out (the see-through list draws them, see
+    /// `draw_order.rs`).
+    pub(super) fn draw_static_counted(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        kind: Kind,
+        view: usize,
+        sorted: bool,
+    ) -> StateChanges {
         if self.batching.order.is_empty() {
-            return;
+            return StateChanges::default();
         }
         // Tests count what this code allocates itself (see `gpu!`).
         #[cfg(test)]
@@ -2553,14 +2568,13 @@ impl Renderer3D {
         if kind == Kind::Transparent {
             for (b, batch) in self.static_batches.iter().enumerate() {
                 // The main view draws a see-through batch far to near.
-                if let Some(order) = batch.as_ref().and_then(|b| b.blend.as_ref())
-                    && view == 0
-                    && order.buffer.is_some()
-                    && !order.runs.is_empty()
-                {
-                    for &(level, start, count) in &order.runs {
-                        let sorted = Some((start, count));
-                        self.draw_batch_level(pass, &mut state, kind, view, b, level as usize, sorted);
+                if view == 0 && batch.as_ref().is_some_and(|b| b.sorted_see_through()) {
+                    let order = batch.as_ref().and_then(|b| b.blend.as_ref()).expect("checked above");
+                    if sorted {
+                        for &(level, start, count) in &order.runs {
+                            let sorted = Some((start, count));
+                            self.draw_batch_level(pass, &mut state, kind, view, b, level as usize, sorted);
+                        }
                     }
                     continue;
                 }
@@ -2573,8 +2587,26 @@ impl Renderer3D {
                 self.draw_batch_level(pass, &mut state, kind, view, b as usize, level as usize, None);
             }
         }
-        self.state_counters.add(&state.n);
         self.shaders.cache.counters.looked_up(u64::from(state.lookups));
+        state.n
+    }
+
+    /// Instances `start..start + count` of see-through batch `b`'s
+    /// far-to-near copy, all of level `level`, in the main view: a stretch
+    /// of the see-through list (see `draw_order.rs`), with what the list's
+    /// earlier batch draws left bound in `binds`. Returns what it recorded.
+    pub(super) fn draw_see_through_stretch(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        binds: &mut BatchBinds,
+        b: usize,
+        level: usize,
+        (start, count): (u32, u32),
+    ) -> StateChanges {
+        (binds.n, binds.lookups) = (StateChanges::default(), 0);
+        self.draw_batch_level(pass, binds, Kind::Transparent, 0, b, level, Some((start, count)));
+        self.shaders.cache.counters.looked_up(u64::from(binds.lookups));
+        binds.n
     }
 
     /// Draws level `level` of batch `b` in view `slot`: its visible
@@ -2776,7 +2808,7 @@ const CELL_VERTICES: usize = SORTED - 1;
 
 /// What the batch draws of one pass have bound, so only changes are set
 /// again: each `set_*` costs wgpu validation and a backend call.
-struct BatchDraws {
+pub(super) struct BatchDraws {
     n: StateChanges,
     lookups: u32,
     pipeline: Option<*const wgpu::RenderPipeline>,
@@ -2804,7 +2836,35 @@ impl Default for BatchDraws {
     }
 }
 
+/// What the see-through list's batch stretches have bound (see
+/// `Renderer3D::draw_see_through`).
+pub(super) type BatchBinds = BatchDraws;
+
+impl BatchDraws {
+    /// Models were drawn since: they set the pipeline, group 1, vertex
+    /// slots 0 and 1, the index buffer and group 3.
+    pub(super) fn after_models(&mut self) {
+        let n = self.n;
+        *self = Self { n, ..Self::default() };
+    }
+
+    /// Particles, ribbons, lines or text were drawn since: they set the
+    /// pipeline, group 1 and vertex slot 0.
+    pub(super) fn after_effects(&mut self) {
+        (self.pipeline, self.mesh, self.material) = (None, u32::MAX, u32::MAX);
+    }
+}
+
 impl StaticBatch {
+    /// Whether the main view draws it far to near from its own sorted
+    /// copy (see `blend_order.rs`): a CPU-path see-through batch whose
+    /// visible instances fit one buffer.
+    pub(super) fn sorted_see_through(&self) -> bool {
+        self.blend
+            .as_ref()
+            .is_some_and(|o| o.buffer.is_some() && !o.runs.is_empty())
+    }
+
     /// Counts the batch's instance records as instance batches (see `memory.rs`).
     pub(super) fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
         if let Some(vertices) = &self.vertices {

@@ -181,6 +181,9 @@ pub struct SceneFrame {
     pub recorded_draws: u32,
     /// Pipelines, bind groups, vertex and index buffers the model passes set.
     pub state_changes: [u32; 4],
+    /// Pipelines, bind groups, vertex and index buffers set and draws
+    /// recorded by the main view's see-through list (part of the above).
+    pub see_through_changes: [u32; 5],
     /// Models and triangles the camera draws.
     pub instances: usize,
     pub triangles: usize,
@@ -1568,6 +1571,7 @@ impl SceneBench {
             draw_calls: self.renderer.draw_calls(),
             recorded_draws: draws,
             state_changes: [pipelines, bind_groups, vertex_buffers, index_buffers],
+            see_through_changes: self.renderer.see_through_changes(),
             instances,
             triangles,
             shadow_instances,
@@ -2052,6 +2056,72 @@ mod render_test {
         };
         let scene = json(&bench.scene_json());
         assert!(scene["content"]["transparent_models"].as_u64().unwrap() >= 16);
+    }
+
+    /// The alpha-heavy scene at full size: what its see-through list
+    /// records with models of one mesh drawn together where they share no
+    /// pixel, and strictly far to near (the order before), in the same
+    /// frames (the scene turns as time goes on, so both orders are drawn
+    /// from one start).
+    fn see_through_counts(group: bool) -> Option<[u32; 5]> {
+        let setup = SceneSetup { scale: 1.0, ..small() };
+        let mut bench = open(SceneKind::AlphaHeavy, setup)?.expect("the scene fits");
+        bench.renderer.group_see_through = group;
+        let mut last = SceneFrame::default();
+        for _ in 0..3 {
+            last = bench.frame();
+        }
+        Some(last.see_through_changes)
+    }
+
+    #[test]
+    fn the_alpha_heavy_scene_draws_its_see_through_models_with_fewer_state_changes() {
+        let (Some(before), Some(after)) = (see_through_counts(false), see_through_counts(true)) else {
+            return;
+        };
+        let line = format!(
+            "alpha-heavy scene, see-through list [pipelines, bind groups, vertex buffers, index buffers, draws]: \
+             far to near {before:?}, grouped {after:?}"
+        );
+        eprintln!("{line}");
+        crate::render::render_test_support::record(&crate::render::render_test_support::output_dir(), &line);
+        assert!(after[4] < before[4], "fewer draws: {line}");
+        assert!(after[1] < before[1], "fewer bind groups: {line}");
+        assert!(after[0] <= before[0], "no more pipelines: {line}");
+    }
+
+    /// Frame time of the alpha-heavy scene with the see-through models
+    /// grouped and strictly far to near: medians of 60 frames, three
+    /// rounds. Ignored: run explicitly in release,
+    /// `cargo test --release --lib --features 3d alpha_heavy_see_through_frame_time -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "benchmark: run explicitly"]
+    fn alpha_heavy_see_through_frame_time() {
+        let setup = SceneSetup {
+            size: (1280, 720),
+            scale: 1.0,
+            ..small()
+        };
+        let Some(Ok(mut bench)) = open(SceneKind::AlphaHeavy, setup) else {
+            return;
+        };
+        for round in 0..3 {
+            let mut medians = [0.0; 2];
+            for (i, group) in [false, true].into_iter().enumerate() {
+                bench.renderer.group_see_through = group;
+                let mut ms: Vec<f64> = (0..70)
+                    .map(|_| bench.frame())
+                    .skip(10)
+                    .map(|f| f.frame.as_secs_f64() * 1e3)
+                    .collect();
+                ms.sort_by(f64::total_cmp);
+                medians[i] = ms[ms.len() / 2];
+            }
+            eprintln!(
+                "alpha-heavy frame time round {round}: far to near {:.3} ms, grouped {:.3} ms",
+                medians[0], medians[1]
+            );
+        }
     }
 
     #[test]

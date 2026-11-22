@@ -656,6 +656,11 @@ impl Resources {
                 .iter()
                 .map(|(r, m)| (r.start + offset..r.end + offset, m.id))
                 .collect(),
+            radius: if skin.is_some() {
+                f32::INFINITY
+            } else {
+                data.positions.iter().map(|p| p.length()).fold(0.0, f32::max)
+            },
             skin,
             gpu_buffer: None,
         };
@@ -780,6 +785,10 @@ pub(super) struct GpuMesh {
     /// What skinning it needs, if it's skinned.
     pub(super) skin: Option<skinning::GpuSkin>,
     pub(super) gpu_buffer: Option<(u32, u32)>,
+    /// How far its farthest vertex is from its origin, in its own space
+    /// (infinite when skinned: a pose moves its vertices). Where a
+    /// see-through model can cover the screen (see `draw_order.rs`).
+    pub(super) radius: f32,
 }
 
 pub(super) struct StorageBuffer {

@@ -48,6 +48,27 @@ pub(super) struct Particles {
     /// for when a camera is back).
     target_count: usize,
 }
+/// What the particles, ribbons, lines and text drawn so far in a pass
+/// left bound, so the next ones set only what changes. The default knows
+/// nothing bound (after anything else was drawn).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct EffectBinds {
+    /// The view's camera at group 0.
+    camera: bool,
+    pipeline: Option<*const wgpu::RenderPipeline>,
+    /// The image at group 1, by texture id.
+    texture: Option<u32>,
+    /// What vertex slot 0 holds.
+    buffer: Option<EffectBuffer>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EffectBuffer {
+    Particles,
+    Strips,
+    Text,
+}
+
 /// One view's camera and buffers. GPU storage grows only at high-water
 /// marks, and each frame uploads only the parts that changed.
 pub(super) struct ParticleView {
@@ -353,36 +374,49 @@ impl Particles {
     }
 
     /// The main view's particles from instance `particles.start` to
-    /// `particles.end` (far to near), and how many state changes and
-    /// draws that recorded: a stretch of them drawn among the see-through
-    /// models (see `Renderer3D::draw_see_through`).
+    /// `particles.end` (far to near), with what the effects drawn before
+    /// them in the pass left bound (`bound`, kept up to date), and how
+    /// many state changes and draws that recorded: a stretch of them
+    /// drawn among the see-through models (see
+    /// `Renderer3D::draw_see_through`).
     pub fn draw_particles(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         textures: &dyn TextureTable,
         white: u32,
         particles: std::ops::Range<u32>,
+        bound: &mut EffectBinds,
     ) -> StateChanges {
         let mut n = StateChanges::default();
-        if self.main.has_draws() {
-            pass.set_bind_group(0, &self.main.group, &[]);
-            n.bind_groups += 1;
-            self.draw_particle_runs(&self.main, pass, textures, white, particles, &mut n);
-        }
+        self.draw_particle_runs(&self.main, pass, textures, white, particles, bound, &mut n);
         n
     }
 
-    /// The main view's ribbons and lines, its particles from instance
-    /// `from` on and its text: what is drawn after every see-through
-    /// model. From 0, everything the main view draws.
-    pub fn draw_rest(
+    /// The main view's ribbons and lines `strips.start..strips.end` (their
+    /// index, far to near), the same way.
+    pub fn draw_strips(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         textures: &dyn TextureTable,
         white: u32,
-        from: u32,
+        strips: std::ops::Range<u32>,
+        bound: &mut EffectBinds,
     ) -> StateChanges {
-        self.draw_counted(&self.main, pass, textures, white, from..u32::MAX)
+        let mut n = StateChanges::default();
+        self.draw_strip_runs(&self.main, pass, textures, white, strips, bound, &mut n);
+        n
+    }
+
+    /// The main view's depth-tested 3D text, the same way: last.
+    pub fn draw_text(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        textures: &dyn TextureTable,
+        bound: &mut EffectBinds,
+    ) -> StateChanges {
+        let mut n = StateChanges::default();
+        self.draw_tested_text(&self.main, pass, textures, bound, &mut n);
+        n
     }
 
     /// [`draw`](Self::draw) for `view`.
@@ -393,68 +427,96 @@ impl Particles {
         textures: &dyn TextureTable,
         white: u32,
     ) {
-        self.draw_counted(view, pass, textures, white, 0..u32::MAX);
+        let (mut bound, mut n) = (EffectBinds::default(), StateChanges::default());
+        if !view.has_draws() {
+            return;
+        }
+        self.draw_strip_runs(view, pass, textures, white, 0..u32::MAX, &mut bound, &mut n);
+        self.draw_particle_runs(view, pass, textures, white, 0..u32::MAX, &mut bound, &mut n);
+        self.draw_tested_text(view, pass, textures, &mut bound, &mut n);
     }
 
-    /// `view`'s ribbons and lines, its particles in `particles` and its
-    /// text, counted.
-    fn draw_counted(
+    /// Binds `view`'s camera at group 0 unless `bound` says it is.
+    fn bind_camera(
+        view: &ParticleView,
+        pass: &mut wgpu::RenderPass<'_>,
+        bound: &mut EffectBinds,
+        n: &mut StateChanges,
+    ) {
+        if !bound.camera {
+            pass.set_bind_group(0, &view.group, &[]);
+            n.bind_groups += 1;
+            bound.camera = true;
+        }
+    }
+
+    /// Sets `pipeline` and the image `texture` at group 1 where `bound`
+    /// says they are not set yet.
+    fn bind_run(
+        pass: &mut wgpu::RenderPass<'_>,
+        bound: &mut EffectBinds,
+        n: &mut StateChanges,
+        pipeline: &wgpu::RenderPipeline,
+        (id, texture): (u32, &wgpu::BindGroup),
+    ) {
+        if bound.pipeline != Some(pipeline as *const _) {
+            pass.set_pipeline(pipeline);
+            n.pipelines += 1;
+            bound.pipeline = Some(pipeline as *const _);
+        }
+        if bound.texture != Some(id) {
+            pass.set_bind_group(1, texture, &[]);
+            n.bind_groups += 1;
+            bound.texture = Some(id);
+        }
+    }
+
+    /// `view`'s ribbons and lines in `strips` (indices into its runs).
+    #[allow(clippy::too_many_arguments)]
+    fn draw_strip_runs(
         &self,
         view: &ParticleView,
         pass: &mut wgpu::RenderPass<'_>,
         textures: &dyn TextureTable,
         white: u32,
-        particles: std::ops::Range<u32>,
-    ) -> StateChanges {
-        let mut n = StateChanges::default();
-        if !view.has_draws() {
-            return n;
-        }
-        let texture = |id: Option<u32>| {
-            textures
-                .texture(id.unwrap_or(white))
-                .or_else(|| textures.texture(white))
-        };
-        pass.set_bind_group(0, &view.group, &[]);
-        n.bind_groups += 1;
-        if !view.strip_runs.is_empty() {
-            pass.set_vertex_buffer(0, view.strip_vertices.buffer().slice(..));
-            n.vertex_buffers += 1;
-            for run in &view.strip_runs {
-                let Some(texture) = texture(run.texture) else {
-                    continue;
-                };
-                pass.set_pipeline(if run.blend == ParticleBlend3D::Alpha {
-                    &self.strip_alpha
-                } else {
-                    &self.strip_additive
-                });
-                pass.set_bind_group(1, &texture.bind_group, &[]);
-                pass.draw(run.first..run.first + run.count, 0..1);
-                n.pipelines += 1;
-                n.bind_groups += 1;
-                n.draws += 1;
+        strips: std::ops::Range<u32>,
+        bound: &mut EffectBinds,
+        n: &mut StateChanges,
+    ) {
+        let end = (strips.end as usize).min(view.strip_runs.len());
+        let first = (strips.start as usize).min(end);
+        for run in &view.strip_runs[first..end] {
+            let id = run.texture.unwrap_or(white);
+            let Some((id, texture)) = textures
+                .texture(id)
+                .map(|t| (id, t))
+                .or_else(|| textures.texture(white).map(|t| (white, t)))
+            else {
+                continue;
+            };
+            if run.count == 0 {
+                continue;
             }
-        }
-        self.draw_particle_runs(view, pass, textures, white, particles, &mut n);
-        let tested = view.text_count - view.text_on_top;
-        if tested > 0
-            && let Some(atlas) = view.text_atlas.and_then(|id| textures.texture(id))
-        {
-            pass.set_pipeline(&self.text);
-            pass.set_bind_group(1, &atlas.bind_group, &[]);
-            pass.set_vertex_buffer(0, view.text_vertices.buffer().slice(..));
-            pass.draw(0..tested, 0..1);
-            n.pipelines += 1;
-            n.bind_groups += 1;
-            n.vertex_buffers += 1;
+            Self::bind_camera(view, pass, bound, n);
+            if bound.buffer != Some(EffectBuffer::Strips) {
+                pass.set_vertex_buffer(0, view.strip_vertices.buffer().slice(..));
+                n.vertex_buffers += 1;
+                bound.buffer = Some(EffectBuffer::Strips);
+            }
+            let pipeline = if run.blend == ParticleBlend3D::Alpha {
+                &self.strip_alpha
+            } else {
+                &self.strip_additive
+            };
+            Self::bind_run(pass, bound, n, pipeline, (id, &texture.bind_group));
+            pass.draw(run.first..run.first + run.count, 0..1);
             n.draws += 1;
         }
-        n
     }
 
-    /// `view`'s particles in `particles` (its camera bound): each run's
-    /// part in that range, one draw each.
+    /// `view`'s particles in `particles`: each run's part in that range,
+    /// one draw each.
+    #[allow(clippy::too_many_arguments)]
     fn draw_particle_runs(
         &self,
         view: &ParticleView,
@@ -462,6 +524,7 @@ impl Particles {
         textures: &dyn TextureTable,
         white: u32,
         particles: std::ops::Range<u32>,
+        bound: &mut EffectBinds,
         n: &mut StateChanges,
     ) {
         let runs = view.runs.iter().filter_map(|run| {
@@ -469,30 +532,57 @@ impl Particles {
             let end = (run.first + run.count).min(particles.end);
             (first < end).then_some((run, first..end))
         });
-        let mut bound = false;
         for (run, instances) in runs {
-            let Some(texture) = textures
-                .texture(run.texture.unwrap_or(white))
-                .or_else(|| textures.texture(white))
+            let id = run.texture.unwrap_or(white);
+            let Some((id, texture)) = textures
+                .texture(id)
+                .map(|t| (id, t))
+                .or_else(|| textures.texture(white).map(|t| (white, t)))
             else {
                 continue;
             };
-            if !bound {
+            Self::bind_camera(view, pass, bound, n);
+            if bound.buffer != Some(EffectBuffer::Particles) {
                 pass.set_vertex_buffer(0, view.instances.buffer().slice(..));
                 n.vertex_buffers += 1;
-                bound = true;
+                bound.buffer = Some(EffectBuffer::Particles);
             }
-            pass.set_pipeline(if run.blend == ParticleBlend3D::Alpha {
+            let pipeline = if run.blend == ParticleBlend3D::Alpha {
                 &self.alpha
             } else {
                 &self.additive
-            });
-            pass.set_bind_group(1, &texture.bind_group, &[]);
+            };
+            Self::bind_run(pass, bound, n, pipeline, (id, &texture.bind_group));
             pass.draw(0..6, instances);
-            n.pipelines += 1;
-            n.bind_groups += 1;
             n.draws += 1;
         }
+    }
+
+    /// `view`'s depth-tested text: one draw.
+    fn draw_tested_text(
+        &self,
+        view: &ParticleView,
+        pass: &mut wgpu::RenderPass<'_>,
+        textures: &dyn TextureTable,
+        bound: &mut EffectBinds,
+        n: &mut StateChanges,
+    ) {
+        let tested = view.text_count - view.text_on_top;
+        if tested == 0 {
+            return;
+        }
+        let Some((id, atlas)) = view.text_atlas.and_then(|id| textures.texture(id).map(|t| (id, t))) else {
+            return;
+        };
+        Self::bind_camera(view, pass, bound, n);
+        Self::bind_run(pass, bound, n, &self.text, (id, &atlas.bind_group));
+        if bound.buffer != Some(EffectBuffer::Text) {
+            pass.set_vertex_buffer(0, view.text_vertices.buffer().slice(..));
+            n.vertex_buffers += 1;
+            bound.buffer = Some(EffectBuffer::Text);
+        }
+        pass.draw(0..tested, 0..1);
+        n.draws += 1;
     }
 
     /// Draws `view`'s debug labels on top (a target camera's), over
@@ -584,7 +674,11 @@ impl ParticleView {
         let instances = fits(&self.instances, size_of::<ParticleInstance>());
         clip(&mut self.runs, instances, |r| (&mut r.first, &mut r.count));
         let strips = fits(&self.strip_vertices, size_of::<StripVertex>());
-        clip(&mut self.strip_runs, strips, |r| (&mut r.first, &mut r.count));
+        // Strips keep their place (the see-through list names them by
+        // index): one past the most draws nothing.
+        for r in &mut self.strip_runs {
+            r.count = r.count.min(strips.saturating_sub(r.first));
+        }
         let fitting = self.text_count.min(fits(&self.text_vertices, size_of::<TextVertex>()));
         // Past the most, the labels on top go first (they are the last).
         self.text_on_top = self.text_on_top.saturating_sub(self.text_count - fitting);
@@ -610,7 +704,7 @@ impl ParticleView {
     /// How many draw calls `draw_view` makes.
     fn draw_count(&self) -> usize {
         self.runs.len()
-            + self.strip_runs.len()
+            + self.strip_runs.iter().filter(|r| r.count > 0).count()
             + usize::from(self.text_count > self.text_on_top)
             + usize::from(self.text_on_top > 0)
     }

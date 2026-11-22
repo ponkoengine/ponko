@@ -1,0 +1,17 @@
+{
+  "name": "see_through_line_between_panes",
+  "scene": "Between two unlit see-through panes filling the view (two see-through models, alpha 0.6), blue at depth 10 and green at depth 4: a red line (Line3D, 0.5 wide) across the view at depth 7; camera at the origin looking down -z; black background, no sun, no bloom; 128x128.",
+  "width": 128,
+  "height": 128,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 12,
+    "outliers": 0.0075,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "88ad2411d6aa16ac",
+  "reason": "new: see-through list (issue 226): a line and particles drawn between see-through panes"
+}

@@ -10,8 +10,9 @@
 //!
 //! GPU-driven batches keep the batch's own order (see
 //! [`BatchCulling::PreferGpu`](crate::render::BatchCulling::PreferGpu)).
-//! Batches are drawn after the models: a batch is sorted within itself,
-//! not against models or other batches.
+//! The sorted copies join the main view's see-through list (see
+//! `draw_order.rs`): a batch's instances are drawn far to near among the
+//! see-through models, other batches, ribbons, lines and particles.
 use super::*;
 
 /// What a see-through CPU-path batch keeps to draw its visible instances
@@ -30,7 +31,7 @@ pub(crate) struct BlendOrder {
     /// The visible instances, far to near.
     sorted: Vec<Instance3D>,
     /// Stretches of `sorted` of one level each: (level, start, count).
-    pub(super) runs: Vec<(u32, u32, u32)>,
+    pub(in crate::render::gpu3d) runs: Vec<(u32, u32, u32)>,
     /// `sorted` on the GPU.
     pub(super) buffer: Option<wgpu::Buffer>,
     /// The eye the order was made for; `None` when it must be made again.
@@ -130,6 +131,17 @@ impl BlendOrder {
         let (items, instances) = (&self.items, &self.instances);
         let copy = |&key: &u64| instances[items[(key & u64::from(u32::MAX)) as usize].1 as usize];
         self.sorted.extend(self.keys.iter().map(copy));
+    }
+
+    /// The visible instances, far to near, as uploaded.
+    pub(in crate::render::gpu3d) fn sorted(&self) -> &[Instance3D] {
+        &self.sorted
+    }
+
+    /// The level of the instance at `at` in [`Self::sorted`].
+    pub(in crate::render::gpu3d) fn level_at(&self, at: u32) -> u32 {
+        let run = self.runs.partition_point(|&(_, start, _)| start <= at);
+        self.runs.get(run.wrapping_sub(1)).map_or(0, |r| r.0)
     }
 
     /// The order last made: each instance's (level, index in the batch).

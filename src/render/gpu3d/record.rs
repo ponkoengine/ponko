@@ -404,6 +404,7 @@ impl Renderer3D {
         timer: Option<&GpuTimer>,
     ) -> FrameBuffers {
         self.state_counters.take();
+        self.see_through_counters.take();
         let Some(targets) = self.targets.as_ref().filter(|_| !self.too_many) else {
             return FrameBuffers::new();
         };
@@ -1400,25 +1401,44 @@ impl Renderer3D {
         kind: Kind,
         instances: &wgpu::Buffer,
     ) {
+        let mut binds = ModelBinds::default();
+        let n = self.record_model_parts_bound(pass, runs, kind, instances, &mut binds);
+        self.state_counters.add(&n);
+    }
+
+    /// [`Self::record_model_parts`] with what the pass has bound so far
+    /// (`binds`, kept up to date): only what changes is set. Returns what
+    /// it recorded, uncounted.
+    pub(super) fn record_model_parts_bound<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'_>,
+        runs: impl Iterator<Item = (Run, Option<usize>)>,
+        kind: Kind,
+        instances: &'a wgpu::Buffer,
+        binds: &mut ModelBinds<'a>,
+    ) -> StateChanges {
         let mut n = StateChanges::default();
         // Pipeline lookups, added to the cache's counters once at the end.
         let mut lookups = 0;
-        pass.set_vertex_buffer(1, instances.slice(..));
-        n.vertex_buffers += 1;
-        if let Some(dummy) = &self.resources.storage_dummy {
-            pass.set_bind_group(3, dummy, &[]);
-            n.bind_groups += 1;
+        if !binds.started {
+            pass.set_vertex_buffer(1, instances.slice(..));
+            n.vertex_buffers += 1;
+            if let Some(dummy) = &self.resources.storage_dummy {
+                pass.set_bind_group(3, dummy, &[]);
+                n.bind_groups += 1;
+            }
+            binds.started = true;
+            (binds.dummy_bound, binds.instances_bound) = (true, true);
         }
-        // Whether group 3 holds the dummy and slot 1 the whole `instances`
-        // (storage meshes and batches change them).
-        let (mut dummy_bound, mut instances_bound) = (true, true);
-        // Only what changes is set again: each `set_*` costs wgpu
-        // validation and a Metal/Vulkan call per draw otherwise.
-        let mut bound = None;
-        let mut bound_material = u32::MAX;
-        let mut bound_buffers = None;
-        // Unknown: an earlier call in the pass may have set any.
-        let mut bound_reference = u32::MAX;
+        let ModelBinds {
+            dummy_bound,
+            instances_bound,
+            pipeline: bound,
+            material: bound_material,
+            buffers: bound_buffers,
+            reference: bound_reference,
+            ..
+        } = binds;
         for ((mesh, start, models), only_part) in runs {
             let fading = mesh & FADED != 0;
             let mesh = mesh & !FADED;
@@ -1478,18 +1498,18 @@ impl Renderer3D {
                 let Some(pipeline) = self.draw_pipeline(shader, *material, variant, kind, role) else {
                     continue;
                 };
-                if bound != Some(pipeline as *const _) {
+                if *bound != Some(pipeline as *const _) {
                     pass.set_pipeline(pipeline);
                     n.pipelines += 1;
-                    bound = Some(pipeline as *const _);
+                    *bound = Some(pipeline as *const _);
                 }
                 if let Some(reference) = self.stencil.reference(*material)
-                    && bound_reference != reference
+                    && *bound_reference != reference
                 {
                     pass.set_stencil_reference(reference);
-                    bound_reference = reference;
+                    *bound_reference = reference;
                 }
-                if !buffers_set && bound_buffers != Some((vertices, indices, previous)) {
+                if !buffers_set && *bound_buffers != Some((vertices, indices, previous)) {
                     pass.set_vertex_buffer(0, vertices.slice(..));
                     pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
                     n.vertex_buffers += 1;
@@ -1499,12 +1519,12 @@ impl Renderer3D {
                         n.vertex_buffers += 1;
                     }
                     buffers_set = true;
-                    bound_buffers = Some((vertices, indices, previous));
+                    *bound_buffers = Some((vertices, indices, previous));
                 }
-                if bound_material != *material {
+                if *bound_material != *material {
                     pass.set_bind_group(1, &m.bind_group, &[]);
                     n.bind_groups += 1;
-                    bound_material = *material;
+                    *bound_material = *material;
                 }
                 if let Some((b, count)) = storage {
                     // Each model gets its own draw: its one instance record
@@ -1512,7 +1532,7 @@ impl Renderer3D {
                     if count > 0 {
                         pass.set_bind_group(3, &b.read, &[]);
                         n.bind_groups += 1;
-                        (dummy_bound, instances_bound) = (false, false);
+                        (*dummy_bound, *instances_bound) = (false, false);
                         let record = if kind == Kind::Velocity {
                             size_of::<MovedInstance>()
                         } else {
@@ -1529,63 +1549,150 @@ impl Renderer3D {
                         }
                     }
                 } else {
-                    if let Some(dummy) = self.resources.storage_dummy.as_ref().filter(|_| !dummy_bound) {
+                    if let Some(dummy) = self.resources.storage_dummy.as_ref().filter(|_| !*dummy_bound) {
                         pass.set_bind_group(3, dummy, &[]);
                         n.bind_groups += 1;
-                        dummy_bound = true;
+                        *dummy_bound = true;
                     }
-                    if !instances_bound {
+                    if !*instances_bound {
                         pass.set_vertex_buffer(1, instances.slice(..));
                         n.vertex_buffers += 1;
-                        instances_bound = true;
+                        *instances_bound = true;
                     }
                     pass.draw_indexed(range.clone(), 0, start..start + models);
                     n.draws += 1;
                 }
             }
         }
-        self.state_counters.add(&n);
         self.shaders.cache.counters.looked_up(lookups);
+        n
+    }
+}
+
+/// What the model draws of one pass have bound, so a draw sets only what
+/// changed (see [`Renderer3D::record_model_parts_bound`]). The default
+/// knows nothing bound yet.
+pub(super) struct ModelBinds<'a> {
+    /// Whether slot 1 and group 3 were set at least once.
+    started: bool,
+    /// Whether group 3 holds the dummy and slot 1 the whole instances
+    /// (storage meshes and batches change them).
+    dummy_bound: bool,
+    instances_bound: bool,
+    pipeline: Option<*const wgpu::RenderPipeline>,
+    material: u32,
+    buffers: Option<(&'a wgpu::Buffer, &'a wgpu::Buffer, &'a wgpu::Buffer)>,
+    /// The stencil reference (`u32::MAX`: unknown).
+    reference: u32,
+}
+
+impl Default for ModelBinds<'_> {
+    fn default() -> Self {
+        Self {
+            started: false,
+            dummy_bound: false,
+            instances_bound: false,
+            pipeline: None,
+            material: u32::MAX,
+            buffers: None,
+            reference: u32::MAX,
+        }
+    }
+}
+
+impl ModelBinds<'_> {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// Particles, ribbons, lines or text were drawn: they set the
+    /// pipeline, group 1 and vertex slot 0, and leave slot 1, group 3 and
+    /// the stencil reference as they were.
+    fn after_effects(&mut self) {
+        (self.pipeline, self.material, self.buffers) = (None, u32::MAX, None);
     }
 }
 
 impl Renderer3D {
-    /// The main view's see-through models and particles, far to near
-    /// together (with the frame bound at group 0 and the scene at group
-    /// 2): the sorted model runs with the stretches of particles between
-    /// them (`blend_steps`), then the see-through batches and crowds, then
-    /// the ribbons, lines and particles nearer than every see-through
-    /// model, then the 3D text. Without see-through models, or with every
-    /// particle nearer than them, that is the order of before: the models,
-    /// then everything the particles draw.
+    /// The main view's see-through draws, far to near together (with the
+    /// frame bound at group 0 and the scene at group 2): `see_through`
+    /// in order (see `draw_order.rs`), then the 3D text. What one entry
+    /// leaves bound, the next one does not set again.
     fn draw_see_through(&self, pass: &mut wgpu::RenderPass<'_>, textures: &dyn TextureTable) {
+        use super::draw_order::SeeThrough;
         let (runs, white) = (&self.lists.blended_runs, self.resources.white);
-        let mut n = StateChanges::default();
-        let (mut drawn_runs, mut drawn_particles) = (0, 0);
-        for &(run, particles) in &self.lists.blend_steps {
-            let (run, particles) = (run as usize, particles);
-            if run > drawn_runs {
-                if drawn_particles > 0 {
-                    // The particles bound their camera at group 0.
-                    pass.set_bind_group(0, &self.frame_bind_group, &[]);
-                    n.bind_groups += 1;
-                }
-                self.draw_model_runs(pass, &runs[drawn_runs..run], Kind::Transparent, &self.instances);
+        let (mut n, mut effects) = (StateChanges::default(), StateChanges::default());
+        let mut models = ModelBinds::new();
+        let mut batches = super::instances::BatchBinds::default();
+        let mut bound = crate::render::particles::EffectBinds::default();
+        // Whether group 0 holds the frame (the effects bind their camera there).
+        let mut frame = true;
+        let rebind_frame = |pass: &mut wgpu::RenderPass<'_>, n: &mut StateChanges, frame: &mut bool| {
+            if !*frame {
+                pass.set_bind_group(0, &self.frame_bind_group, &[]);
+                n.bind_groups += 1;
+                *frame = true;
             }
-            n += self
-                .particles
-                .draw_particles(pass, textures, white, drawn_particles..particles);
-            (drawn_runs, drawn_particles) = (run, particles);
+        };
+        for &entry in &self.lists.see_through {
+            match entry {
+                SeeThrough::Models(first, end) => {
+                    rebind_frame(pass, &mut n, &mut frame);
+                    let drawn = runs[first as usize..end as usize].iter().map(|&r| (r, None));
+                    n += self.record_model_parts_bound(pass, drawn, Kind::Transparent, &self.instances, &mut models);
+                    bound = Default::default();
+                    batches.after_models();
+                }
+                SeeThrough::Batch {
+                    batch,
+                    level,
+                    start,
+                    count,
+                } => {
+                    rebind_frame(pass, &mut n, &mut frame);
+                    n += self.draw_see_through_stretch(
+                        pass,
+                        &mut batches,
+                        batch as usize,
+                        level as usize,
+                        (start, count),
+                    );
+                    bound = Default::default();
+                    models = ModelBinds::new();
+                }
+                SeeThrough::Unsorted => {
+                    rebind_frame(pass, &mut n, &mut frame);
+                    n += self.draw_static_counted(pass, Kind::Transparent, 0, false);
+                    n += self.draw_crowds_counted(pass, Kind::Transparent, 0);
+                    bound = Default::default();
+                    models = ModelBinds::new();
+                    batches = super::instances::BatchBinds::default();
+                }
+                SeeThrough::Strips(first, end) => {
+                    let e = self
+                        .particles
+                        .draw_strips(pass, textures, white, first..end, &mut bound);
+                    (n, effects) = (n + e, effects + e);
+                    frame = false;
+                    models.after_effects();
+                    batches.after_effects();
+                }
+                SeeThrough::Particles(first, end) => {
+                    let e = self
+                        .particles
+                        .draw_particles(pass, textures, white, first..end, &mut bound);
+                    (n, effects) = (n + e, effects + e);
+                    frame = false;
+                    models.after_effects();
+                    batches.after_effects();
+                }
+            }
         }
-        if drawn_particles > 0 {
-            pass.set_bind_group(0, &self.frame_bind_group, &[]);
-            n.bind_groups += 1;
-        }
-        self.draw_model_runs(pass, &runs[drawn_runs..], Kind::Transparent, &self.instances);
-        self.draw_static(pass, Kind::Transparent, 0);
-        self.draw_crowds(pass, Kind::Transparent, 0);
-        n += self.particles.draw_rest(pass, textures, white, drawn_particles);
-        self.particle_counters.add(&n);
+        let e = self.particles.draw_text(pass, textures, &mut bound);
+        (n, effects) = (n + e, effects + e);
+        self.state_counters.add(&n);
+        self.see_through_counters.add(&n);
+        self.particle_counters.add(&effects);
     }
 
     /// `ctx.debug`'s 3D lines, last in the pass that draws the particles.
