@@ -1194,11 +1194,15 @@ pub fn ponko::assets::AssetGroup::fmt(&self, &mut core::fmt::Formatter<'_>) -> c
 pub struct ponko::assets::Assets
 impl ponko::assets::Assets
 pub fn ponko::assets::Assets::add_background_source(&mut self, impl ponko::assets::AssetSource + core::marker::Send + core::marker::Sync)
+pub fn ponko::assets::Assets::add_background_source_with_image_limits(&mut self, impl ponko::assets::AssetSource + core::marker::Send + core::marker::Sync, ponko::assets::ImageLimits)
 pub fn ponko::assets::Assets::add_source(&mut self, impl ponko::assets::AssetSource)
+pub fn ponko::assets::Assets::add_source_with_image_limits(&mut self, impl ponko::assets::AssetSource, ponko::assets::ImageLimits)
 pub fn ponko::assets::Assets::browser_saves(&self) -> alloc::vec::Vec<alloc::string::String>
 pub fn ponko::assets::Assets::browser_saves_persistent(&self) -> core::option::Option<bool>
+pub fn ponko::assets::Assets::clear_source_image_limits(&mut self, &str)
 pub fn ponko::assets::Assets::has_source(&self, &str) -> bool
 pub fn ponko::assets::Assets::hot_reload(&self) -> bool
+pub fn ponko::assets::Assets::image_limit_sources(&self) -> alloc::vec::Vec<(alloc::string::String, ponko::assets::ImageLimits)>
 pub fn ponko::assets::Assets::image_limits(&self) -> ponko::assets::ImageLimits
 pub fn ponko::assets::Assets::load_reflected_component_json<T: 'static>(&mut self, &mut ponko_ecs::world::World, &str, ponko_ecs::entity::Entity) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::assets::Assets::load_reflected_resource_json<T: 'static>(&mut self, &mut ponko_ecs::world::World, &str) -> core::result::Result<(), ponko::error::Error>
@@ -1211,6 +1215,8 @@ pub fn ponko::assets::Assets::revert_browser_save(&self, &str) -> core::result::
 pub fn ponko::assets::Assets::save_prefab(&mut self, &ponko_ecs::world::World, ponko_ecs::entity::Entity, &str) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::assets::Assets::save_scene(&self, &ponko_ecs::world::World, &str) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::assets::Assets::set_image_limits(&mut self, ponko::assets::ImageLimits)
+pub fn ponko::assets::Assets::set_source_image_limits(&mut self, &str, ponko::assets::ImageLimits)
+pub fn ponko::assets::Assets::source_image_limits(&self, &str) -> core::option::Option<ponko::assets::ImageLimits>
 pub fn ponko::assets::Assets::try_load_resource<R: core::marker::Send + core::marker::Sync + 'static + serde_core::de::DeserializeOwned>(&mut self, &mut ponko_ecs::world::World, &str) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::assets::Assets::try_load_strings(&mut self, &mut ponko_ecs::world::World, &str) -> core::result::Result<(), ponko::error::Error>
 impl ponko::assets::Assets
@@ -6376,9 +6382,15 @@ pub struct ponko::mods::ModCode
 impl ponko::mods::ModCode
 pub fn ponko::mods::ModCode::call(&mut self, ponko::mods::ModFn, &[ponko::mods::ModValue]) -> core::result::Result<core::option::Option<ponko::mods::ModValue>, ponko::mods::ModError>
 pub fn ponko::mods::ModCode::exporting<'a>(&'a self, &'a str) -> impl core::iter::traits::iterator::Iterator<Item = (&'a str, ponko::mods::ModFn)> + 'a
+pub fn ponko::mods::ModCode::expose(&mut self, ponko_ecs::entity::Entity)
+pub fn ponko::mods::ModCode::expose_prefab(&mut self, impl core::convert::Into<alloc::string::String>)
 pub fn ponko::mods::ModCode::fuel_left(&self) -> u64
 pub fn ponko::mods::ModCode::function(&self, &str, &str) -> core::option::Option<ponko::mods::ModFn>
+pub fn ponko::mods::ModCode::hide(&mut self, ponko_ecs::entity::Entity) -> bool
+pub fn ponko::mods::ModCode::hide_all(&mut self)
+pub fn ponko::mods::ModCode::is_exposed(&self, ponko_ecs::entity::Entity) -> bool
 pub fn ponko::mods::ModCode::mods(&self) -> impl core::iter::traits::iterator::Iterator<Item = &str>
+pub fn ponko::mods::ModCode::seed_random(&mut self, u64)
 pub fn ponko::mods::ModCode::take_log(&mut self) -> alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
 impl core::fmt::Debug for ponko::mods::ModCode
 pub fn ponko::mods::ModCode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -6486,6 +6498,9 @@ pub fn ponko::mods::Mods::clone(&self) -> Self
 impl core::fmt::Debug for ponko::mods::Mods
 pub fn ponko::mods::Mods::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub const ponko::mods::MANIFEST: &str
+pub const ponko::mods::REFUSED_ENTITY: i32
+pub const ponko::mods::REFUSED_FIELD: i32
+pub const ponko::mods::REFUSED_VALUE: i32
 pub const ponko::mods::SOURCE_ID: &str
 pub fn ponko::mods::with_code<R>(&mut ponko::prelude::Ctx, impl core::ops::function::FnOnce(&mut ponko::mods::ModCode) -> R) -> core::option::Option<R>
 pub mod ponko::nav
@@ -8309,6 +8324,7 @@ impl ponko::perf::Perf
 pub fn ponko::perf::Perf::frame_stats(&self) -> ponko::perf::FrameStats
 pub fn ponko::perf::Perf::gpu_passes(&self) -> &[ponko::perf::GpuPass]
 pub fn ponko::perf::Perf::gpu_passes_not_timed(&self) -> &[&'static str]
+pub fn ponko::perf::Perf::gpu_passes_over_limit(&self) -> u32
 pub fn ponko::perf::Perf::gpu_timing(&self) -> ponko::perf::GpuTiming
 pub fn ponko::perf::Perf::gpu_untimed(&self) -> core::option::Option<ponko::perf::GpuUntimed>
 pub fn ponko::perf::Perf::hud(&self) -> bool
@@ -11212,11 +11228,15 @@ pub fn ponko::actions::ActionMap::deserialize<__D>(__D) -> core::result::Result<
 pub struct ponko::prelude::Assets
 impl ponko::assets::Assets
 pub fn ponko::assets::Assets::add_background_source(&mut self, impl ponko::assets::AssetSource + core::marker::Send + core::marker::Sync)
+pub fn ponko::assets::Assets::add_background_source_with_image_limits(&mut self, impl ponko::assets::AssetSource + core::marker::Send + core::marker::Sync, ponko::assets::ImageLimits)
 pub fn ponko::assets::Assets::add_source(&mut self, impl ponko::assets::AssetSource)
+pub fn ponko::assets::Assets::add_source_with_image_limits(&mut self, impl ponko::assets::AssetSource, ponko::assets::ImageLimits)
 pub fn ponko::assets::Assets::browser_saves(&self) -> alloc::vec::Vec<alloc::string::String>
 pub fn ponko::assets::Assets::browser_saves_persistent(&self) -> core::option::Option<bool>
+pub fn ponko::assets::Assets::clear_source_image_limits(&mut self, &str)
 pub fn ponko::assets::Assets::has_source(&self, &str) -> bool
 pub fn ponko::assets::Assets::hot_reload(&self) -> bool
+pub fn ponko::assets::Assets::image_limit_sources(&self) -> alloc::vec::Vec<(alloc::string::String, ponko::assets::ImageLimits)>
 pub fn ponko::assets::Assets::image_limits(&self) -> ponko::assets::ImageLimits
 pub fn ponko::assets::Assets::load_reflected_component_json<T: 'static>(&mut self, &mut ponko_ecs::world::World, &str, ponko_ecs::entity::Entity) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::assets::Assets::load_reflected_resource_json<T: 'static>(&mut self, &mut ponko_ecs::world::World, &str) -> core::result::Result<(), ponko::error::Error>
@@ -11229,6 +11249,8 @@ pub fn ponko::assets::Assets::revert_browser_save(&self, &str) -> core::result::
 pub fn ponko::assets::Assets::save_prefab(&mut self, &ponko_ecs::world::World, ponko_ecs::entity::Entity, &str) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::assets::Assets::save_scene(&self, &ponko_ecs::world::World, &str) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::assets::Assets::set_image_limits(&mut self, ponko::assets::ImageLimits)
+pub fn ponko::assets::Assets::set_source_image_limits(&mut self, &str, ponko::assets::ImageLimits)
+pub fn ponko::assets::Assets::source_image_limits(&self, &str) -> core::option::Option<ponko::assets::ImageLimits>
 pub fn ponko::assets::Assets::try_load_resource<R: core::marker::Send + core::marker::Sync + 'static + serde_core::de::DeserializeOwned>(&mut self, &mut ponko_ecs::world::World, &str) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::assets::Assets::try_load_strings(&mut self, &mut ponko_ecs::world::World, &str) -> core::result::Result<(), ponko::error::Error>
 impl ponko::assets::Assets

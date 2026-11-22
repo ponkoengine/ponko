@@ -701,6 +701,16 @@ does a host of another protocol version (the reason starts with "version
 mismatch"; hosts and clients from before message protocol 2 can't send
 or read that refusal, and the join times out instead).
 
+A version-2 host doesn't answer a version-1 hello at all, on purpose. A
+version-1 client ignores every packet that doesn't start with its own
+magic, and of the packets it does read, the only one that ends a join is
+"host full": it would show "host is full", which is false and sends its
+player looking for another server. Every other way to end a version-1
+connection (a leave notification, a disconnect from the reliable layer)
+comes after a welcome, so the old client would first report `Connected`.
+A timeout ("peer timed out") at least doesn't claim a wrong cause, so the
+join of an old client times out.
+
 A UDP host checks that a joining client can receive at its address before
 it gives the client anything: the first hello gets a small challenge with
 a cookie, the client echoes it at once, and only then does the host make

@@ -223,6 +223,7 @@ impl Renderer3D {
             Features::SOLID_PREPASS.only_if(self.solid_prepass),
             Features::OCCLUSION.only_if(self.occlusion.recording()),
             Features::VELOCITY.only_if(self.screen.velocity_on && targets.velocity.is_some()),
+            Features::MOTION_KEPT.only_if(self.screen.motion_kept && targets.velocity.is_some()),
             Features::VIEW_MODEL_MOTION.only_if(self.view_model_motion() && targets.velocity.is_some()),
             Features::AO.only_if(self.screen.ao_enabled),
             Features::SSR.only_if(self.screen.ssr.is_some() && targets.ssr.is_some()),

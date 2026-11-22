@@ -2,8 +2,8 @@
 // the history (last frame's result) reprojected along each pixel's motion.
 //
 //  * Motion: moved models wrote their own vectors; everything else moves with
-//    the camera, worked out from depth (the nearest depth of any sample in
-//    3x3, so edges take the motion of the surface in front).
+//    the camera, worked out from depth (the nearest depth in 3x3, one
+//    sample a pixel, so edges take the motion of the surface in front).
 //  * The history is read with a Catmull-Rom filter, then clipped to the
 //    colors around the pixel now (variance clipping in YCoCg), so what was
 //    uncovered or changed cannot ghost.
@@ -122,7 +122,7 @@ struct Earlier {
     usable: bool,
 };
 
-fn earlier_of(uv: vec2<f32>, home: vec2<i32>, nearest: vec2<i32>, nearest_depth: f32) -> Earlier {
+fn earlier_of(uv: vec2<f32>, home: vec2<i32>, nearest: vec2<i32>, nearest_depth: f32, moved_near: bool) -> Earlier {
     var motion = vec2<f32>(0.0);
     let point = (vec2<f32>(nearest) + 0.5) * taa.input_size.zw;
     let ndc = vec2<f32>(point.x * 2.0 - 1.0, 1.0 - point.y * 2.0);
@@ -141,9 +141,13 @@ fn earlier_of(uv: vec2<f32>, home: vec2<i32>, nearest: vec2<i32>, nearest_depth:
     motion += object_motion;
     // A moved model's vector dilated onto a pixel it does not cover (the
     // background it just uncovered, sky included) would fetch the model
-    // again from the history: such a pixel starts over instead.
+    // again from the history: such a pixel starts over instead. So does a
+    // pixel next to one a moved model wrote its motion into
+    // (`moved_near`): the depth is read at one sample a pixel, which can
+    // miss a model that covers only part of the pixel next door.
     let own_motion = textureLoad(velocity, home, 0).xy;
-    usable = usable && !(all(own_motion == vec2<f32>(0.0)) && any(object_motion != vec2<f32>(0.0)));
+    let beside_motion = any(object_motion != vec2<f32>(0.0)) || moved_near;
+    usable = usable && !(all(own_motion == vec2<f32>(0.0)) && beside_motion);
     let earlier = uv + motion;
     usable = usable && taa.params.z < 0.5 && all(earlier > vec2<f32>(0.0)) && all(earlier < vec2<f32>(1.0));
     return Earlier(motion, usable);
@@ -161,7 +165,6 @@ struct Resolved {
 fn fs_resolve(in: Full) -> Resolved {
     let in_size = taa.input_size.xy;
     let last = vec2<i32>(in_size) - 1;
-    let samples = i32(textureNumSamples(depth));
     // The input pixel under this output pixel, and its 3x3 neighbours.
     let home = clamp(vec2<i32>(floor(in.uv * in_size)), vec2<i32>(0), last);
     var colors: array<vec4<f32>, 9>;
@@ -175,6 +178,7 @@ fn fs_resolve(in: Full) -> Resolved {
     var nearest = home;
     // Reverse-Z depth: nearer is greater (1 the near plane, 0 the far).
     var nearest_depth = -1.0;
+    var moved_near = false;
     for (var n = 0; n < 9; n++) {
         let at = clamp(home + vec2<i32>(n % 3 - 1, n / 3 - 1), vec2<i32>(0), last);
         let c = safe(textureLoad(current, at, 0));
@@ -188,15 +192,15 @@ fn fs_resolve(in: Full) -> Resolved {
         hi = max(hi, y);
         alpha_lo = min(alpha_lo, c.a);
         alpha_hi = max(alpha_hi, c.a);
-        // The nearest of the pixel's samples: edges take the front surface.
-        var d = -1.0;
-        for (var k = 0; k < samples; k++) {
-            d = max(d, textureLoad(depth, at, k));
-        }
+        // One sample a pixel: the 3x3 block already takes the front
+        // surface at an edge, and reading every sample (36 loads a pixel
+        // with 4x multisampling) was most of the pass's memory traffic.
+        let d = textureLoad(depth, at, 0);
         if d > nearest_depth {
             nearest_depth = d;
             nearest = at;
         }
+        moved_near = moved_near || any(textureLoad(velocity, at, 0).xy != vec2<f32>(0.0));
     }
     let now = colors[4];
     m1 /= 9.0;
@@ -204,7 +208,7 @@ fn fs_resolve(in: Full) -> Resolved {
     let sigma = sqrt(max(m2 - m1 * m1, vec3<f32>(0.0)));
 
     // Where this pixel was last frame.
-    let found = earlier_of(in.uv, home, nearest, nearest_depth);
+    let found = earlier_of(in.uv, home, nearest, nearest_depth, moved_near);
     let motion = found.motion;
     let usable = found.usable;
     let earlier = in.uv + motion;
@@ -275,6 +279,7 @@ fn fs_upscale(in: Full) -> Resolved {
     var alpha_hi = 0.0;
     var nearest = home;
     var nearest_depth = -1.0;
+    var moved_near = false;
     for (var n = 0; n < 9; n++) {
         let offset = vec2<i32>(n % 3 - 1, n / 3 - 1);
         let at = clamp(home + offset, vec2<i32>(0), last);
@@ -306,6 +311,7 @@ fn fs_upscale(in: Full) -> Resolved {
             nearest_depth = depth_here;
             nearest = at;
         }
+        moved_near = moved_near || any(textureLoad(velocity, at, 0).xy != vec2<f32>(0.0));
     }
     m1 /= 9.0;
     m2 /= 9.0;
@@ -315,7 +321,7 @@ fn fs_upscale(in: Full) -> Resolved {
     let soft = soft_sum / max(soft_w, 1e-12);
     let now = vec4<f32>(uncompress(near.rgb), near.a);
 
-    let found = earlier_of(in.uv, home, nearest, nearest_depth);
+    let found = earlier_of(in.uv, home, nearest, nearest_depth, moved_near);
     var result = vec4<f32>(uncompress(soft.rgb), soft.a);
     if found.usable {
         let old = safe(history_at(in.uv + found.motion));

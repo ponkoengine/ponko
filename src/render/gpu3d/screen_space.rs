@@ -32,6 +32,14 @@ pub(super) struct ScreenSpace {
     /// Whether the motion pass also draws the models a shader's `vertex`
     /// moves while they hold still (see `vertex_motion.rs`).
     pub(super) still_motion: bool,
+    /// Whether this frame skips the motion pass: nothing moved, and the
+    /// motion image (kept from frame to frame) holds only zeros.
+    pub(super) motion_kept: bool,
+    /// Whether the motion image holds only zeros: set when a motion pass
+    /// is recorded (by whether it drew anything), read by the next
+    /// `prepare`. A new image is zeros too, but counts only once a pass
+    /// cleared it.
+    pub(super) motion_clear: std::sync::atomic::AtomicBool,
     /// Ambient occlusion and contact shadows (made when first used), and
     /// whether this frame has them.
     pub(super) ao: Option<Ao>,
@@ -43,9 +51,32 @@ pub(super) struct ScreenSpace {
     /// Whether this frame's reflections trace thin objects
     /// (`Post::ssr_thin_objects`, see `ssr_thin.wgsl`).
     pub(super) ssr_thin: bool,
+    /// Tests: no mip bias while upscaling (the negative control).
+    #[cfg(test)]
+    pub(super) mip_bias_off: bool,
+    /// Tests: the motion pass runs every frame, as before it was skipped
+    /// (the control of the skipped pass's tests).
+    #[cfg(test)]
+    pub(super) motion_always: bool,
 }
 
 impl ScreenSpace {
+    /// Whether the motion pass runs even when it could be skipped (tests only).
+    pub(super) fn motion_pass_always(&self) -> bool {
+        #[cfg(test)]
+        return self.motion_always;
+        #[cfg(not(test))]
+        false
+    }
+
+    /// Whether the temporal upscaler's mip bias is off (tests only).
+    pub(super) fn no_mip_bias(&self) -> bool {
+        #[cfg(test)]
+        return self.mip_bias_off;
+        #[cfg(not(test))]
+        false
+    }
+
     /// `taa_supported`: whether the device has compute-class limits.
     pub(super) fn new(taa_supported: bool) -> Self {
         Self {
@@ -55,6 +86,12 @@ impl ScreenSpace {
             upscale_on: false,
             velocity_on: false,
             still_motion: false,
+            motion_kept: false,
+            motion_clear: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            mip_bias_off: false,
+            #[cfg(test)]
+            motion_always: false,
             ao: None,
             ao_enabled: false,
             ssr: None,

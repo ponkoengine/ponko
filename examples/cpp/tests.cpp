@@ -308,6 +308,77 @@ static void mods() {
     });
 }
 
+// Code mods from C++ (CMake option PONKO_MODS_WASM: the library was built with `--features mods-wasm`):
+// a mod function called by name with numbers, the fuel limit, and host functions that reach only what the
+// game exposed. Without the feature every call throws "unsupported".
+static void code_mods() {
+    // add(i32, i32) -> i32, half(f64) -> f64, spin() (loops forever), turn(entity, radians) -> i32
+    // (set_field "Transform2D.rotation"), spawn(x, y) -> i64 (spawn_prefab "prefabs/bat.json"), random() -> f32;
+    // crates/ponko_ffi/tests/mod_code.rs has the same module.
+    static const unsigned char module_bytes[] = {
+        0, 97, 115, 109, 1, 0, 0, 0, 1, 47, 8, 96, 4, 126, 127, 127, 124, 1, 127, 96, 4, 127, 127, 125, 125, 1, 126,
+        96, 0, 1, 125, 96, 2, 127, 127, 1, 127, 96, 1, 124, 1, 124, 96, 0, 0, 96, 2, 126, 124, 1, 127, 96, 2, 125,
+        125, 1, 126, 2, 55, 3, 5, 112, 111, 110, 107, 111, 9, 115, 101, 116, 95, 102, 105, 101, 108, 100, 0, 0, 5,
+        112, 111, 110, 107, 111, 12, 115, 112, 97, 119, 110, 95, 112, 114, 101, 102, 97, 98, 0, 1, 5, 112, 111, 110,
+        107, 111, 6, 114, 97, 110, 100, 111, 109, 0, 2, 3, 7, 6, 3, 4, 5, 6, 7, 2, 5, 3, 1, 0, 1, 7, 54, 7, 6, 109,
+        101, 109, 111, 114, 121, 2, 0, 3, 97, 100, 100, 0, 3, 4, 104, 97, 108, 102, 0, 4, 4, 115, 112, 105, 110, 0, 5,
+        4, 116, 117, 114, 110, 0, 6, 5, 115, 112, 97, 119, 110, 0, 7, 6, 114, 97, 110, 100, 111, 109, 0, 8, 10, 63, 6,
+        7, 0, 32, 0, 32, 1, 106, 11, 14, 0, 32, 0, 68, 0, 0, 0, 0, 0, 0, 224, 63, 162, 11, 7, 0, 3, 64, 12, 0, 11, 11,
+        12, 0, 32, 0, 65, 0, 65, 20, 32, 1, 16, 0, 11, 12, 0, 65, 32, 65, 16, 32, 0, 32, 1, 16, 1, 11, 4, 0, 16, 2,
+        11, 11, 47, 2, 0, 65, 0, 11, 20, 84, 114, 97, 110, 115, 102, 111, 114, 109, 50, 68, 46, 114, 111, 116, 97,
+        116, 105, 111, 110, 0, 65, 32, 11, 16, 112, 114, 101, 102, 97, 98, 115, 47, 98, 97, 116, 46, 106, 115, 111,
+        110, 0, 36, 4, 110, 97, 109, 101, 1, 21, 3, 0, 3, 115, 101, 116, 1, 5, 115, 112, 97, 119, 110, 2, 6, 114, 97,
+        110, 100, 111, 109, 3, 6, 1, 5, 1, 0, 1, 108
+    };
+    const std::string code(reinterpret_cast<const char*>(module_bytes), sizeof module_bytes);
+    const std::string bat = R"({"format":"ponko-prefab","version":1,"components":{"Transform2D":{"position":[0.0,0.0],"rotation":0.0,"scale":[1.0,1.0]}}})";
+    const auto crawler = mod_pack({{"mod.json", R"({"format":"ponko-mod","version":1,"id":"crawler","code":"code.wasm"})"}, {"code.wasm", code}, {"prefabs/bat.json", bat}});
+    ponko::game("code mods", 1, 1).run_headless(0, [&](ponko::ctx& ctx) {
+#ifdef PONKO_MODS_WASM
+        throws_kind([&] { ctx.mod_function("crawler", "add"); }, PONKO_ERROR_NOT_FOUND); // nothing mounted yet
+        ctx.mount_mods_from_memory({ponko::ctx::mod_bytes{"crawler.pack", crawler}});
+        const auto add = ctx.mod_function("crawler", "add");
+        const auto sum = ctx.call_mod(add, {ponko::mod_i32(40), ponko::mod_i32(2)});
+        CHECK(sum && sum->kind == PONKO_MOD_I32 && sum->i == 42);
+        const auto half = ctx.call_mod(ctx.mod_function("crawler", "half"), {ponko::mod_f64(5)});
+        CHECK(half && half->f == 2.5);
+        throws_kind([&] { ctx.mod_function("crawler", "fly"); }, PONKO_ERROR_NOT_FOUND);
+        // Out of fuel: an error naming the mod, and the mod stays callable.
+        bool stopped = false;
+        try { ctx.call_mod(ctx.mod_function("crawler", "spin")); } catch (const ponko::error& e) {
+            stopped = std::string(e.what()).find("fuel") != std::string::npos && std::string(e.what()).find("crawler") != std::string::npos;
+        }
+        CHECK(stopped);
+        CHECK(ctx.call_mod(add, {ponko::mod_i32(1), ponko::mod_i32(1)})->i == 2);
+        // set_field reaches only an exposed entity.
+        auto e = ctx.world().spawn(ponko::transform_at({0, 0}));
+        const auto turn = ctx.mod_function("crawler", "turn");
+        CHECK(ctx.call_mod(turn, {ponko::mod_i64(std::int64_t(e)), ponko::mod_f64(0.5)})->i == -1);
+        ctx.mod_expose(e);
+        CHECK(ctx.call_mod(turn, {ponko::mod_i64(std::int64_t(e)), ponko::mod_f64(0.5)})->i == 0);
+        CHECK(ctx.world().get<ponko::transform2d>(e).rotation == 0.5f);
+        CHECK(ctx.mod_hide(e) && !ctx.mod_hide(e));
+        CHECK(ctx.call_mod(turn, {ponko::mod_i64(std::int64_t(e)), ponko::mod_f64(1)})->i == -1);
+        // spawn_prefab reaches only an exposed prefab.
+        const auto spawn = ctx.mod_function("crawler", "spawn");
+        CHECK(ctx.call_mod(spawn, {ponko::mod_f32(3), ponko::mod_f32(4)})->i == -1);
+        ctx.mod_expose_prefab("prefabs/bat.json");
+        const auto spawned = ctx.call_mod(spawn, {ponko::mod_f32(3), ponko::mod_f32(4)})->i;
+        CHECK(spawned >= 0 && ctx.world().get<ponko::transform2d>(ponko::entity(spawned)).position.x == 3.0f);
+        // random: same seed, same sequence.
+        const auto random = ctx.mod_function("crawler", "random");
+        ctx.mod_seed_random(5);
+        const double first = ctx.call_mod(random)->f;
+        ctx.mod_seed_random(5);
+        CHECK(ctx.call_mod(random)->f == first && first >= 0 && first < 1);
+#else
+        throws_kind([&] { ctx.mod_function("crawler", "add"); }, PONKO_ERROR_UNSUPPORTED);
+        throws_kind([&] { ctx.mod_seed_random(1); }, PONKO_ERROR_UNSUPPORTED);
+        throws([&] { ctx.mount_mods_from_memory({ponko::ctx::mod_bytes{"crawler.pack", crawler}}); });
+#endif
+    });
+}
+
 static void three_d() {
     auto probes = ponko::game("probes", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
         auto e = ctx.world().spawn(ponko::transform3d_at({0, 0, 0}), ponko::reflection_probe3d_default());
@@ -3576,6 +3647,21 @@ static void native_coverage() {
             throws_kind([&] { ctx.set_image_limits(0, 4); }, PONKO_ERROR_INVALID);
             auto junk = ctx.try_decode_texture(std::vector<std::uint8_t>{1, 2, 3}, "x.png", 64, 1024);
             CHECK(!junk && junk.kind() == PONKO_ERROR_DECODE);
+
+            // A source with limits of its own: its picture is refused, the game's own loads.
+            ctx.add_asset_source(ponko::memory_source("mods").with("mod.png", pixel));
+            ctx.add_asset_source(ponko::memory_source("own").with("own.png", pixel));
+            CHECK(!ctx.source_image_limits("mods"));
+            ctx.set_source_image_limits("mods", 1, 3);
+            CHECK(ctx.source_image_limits("mods") == std::make_optional(std::make_pair(std::uint32_t{1}, std::uint64_t{3})));
+            auto modded = ctx.try_load_texture("mod.png");
+            CHECK(!modded && modded.kind() == PONKO_ERROR_LIMIT);
+            CHECK(std::string(modded.error().what()).find("asset source \"mods\"") != std::string::npos);
+            CHECK(ctx.try_load_texture("own.png"));
+            ctx.clear_source_image_limits("mods");
+            CHECK(!ctx.source_image_limits("mods"));
+            CHECK(ctx.try_load_texture("mod.png"));
+            throws_kind([&] { ctx.set_source_image_limits("", 4, 4); }, PONKO_ERROR_INVALID);
         }
 
         // Asset sources, then your own decoder.
@@ -5282,6 +5368,32 @@ static void controllers() {
     });
 }
 
+// Key labels on the player's keyboard layout (gl#237): a key's and a glyph's label, the change
+// edge and a layout set from C++, over three ticks of a headless game.
+static void key_labels() {
+    int tick = 0;
+    ponko::game("key labels", 1, 1).sim_system([&](ponko::ctx& ctx) {
+        const ponko::glyph w{PONKO_GLYPH_KEY, 0, PONKO_KEY_W};
+        if (tick == 0) {
+            CHECK(!ctx.key_labels_changed());
+            CHECK(ctx.key_label(PONKO_KEY_W) == "W" && ctx.key_label(PONKO_KEY_SPACE) == "Space");
+            ctx.set_key_labels({{PONKO_KEY_W, 'z'}, {PONKO_KEY_A, 'q'}, {PONKO_KEY_NUM_2, 0xE9}});
+            CHECK(ctx.key_labels_changed());
+            CHECK(ctx.key_label(PONKO_KEY_W) == "Z" && ctx.key_label(PONKO_KEY_NUM_2) == "\xC3\x89");
+            CHECK(ctx.layout_glyph_label(w) == "Z" && ponko::glyph_label(w) == "W");
+        } else if (tick == 1) {
+            CHECK(!ctx.key_labels_changed());
+            bool refused = false;
+            try { ctx.set_key_labels({{9999u, 'a'}}); } catch (const ponko::error&) { refused = true; }
+            CHECK(refused && ctx.key_label(PONKO_KEY_W) == "Z");
+            ctx.set_key_labels(nullptr, 0);  // a US keyboard again
+            CHECK(ctx.key_labels_changed() && ctx.key_label(PONKO_KEY_W) == "W");
+        }
+        ++tick;
+    }).run_headless(3);
+    CHECK(tick == 3);
+}
+
 // Native parity, round 5 (gl#157) through the wrapper: crash reports, touch looks and the player's
 // layout, trackpad gestures, camera targets with kept rigs, the window restored before setup,
 // spectrum seas and sliced loaders.
@@ -5681,6 +5793,7 @@ int main() {
     rollback_two_peers();
     hdr_output();
     controllers();
+    key_labels();
     required_components();
     game_states();
     draw_space_names_the_coordinates();
@@ -5700,6 +5813,7 @@ int main() {
     described_schemas_reach_capabilities();
     scenes_and_prefabs();
     mods();
+    code_mods();
     world_text();
     three_d();
     skeletons();

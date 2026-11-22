@@ -2123,6 +2123,48 @@ mod tests {
         }
 
         #[test]
+        fn a_terrain_tile_dragged_with_the_gizmo_settles_when_the_drag_ends_not_at_every_frame() {
+            use crate::terrain::{TerrainFile, TerrainTile};
+            let (egui, mut p, mut ctx, e) = editor3d();
+            let file =
+                serde_json::json!({"format": "ponko-terrain", "size": 4.0, "heights": "t-heights.png", "high": 1.0});
+            ctx.assets.add_source(
+                crate::assets::MemorySource::new("mem")
+                    .with("t.json", serde_json::to_vec(&file).unwrap())
+                    .with("t-heights.png", crate::three::encode_grey16(2, &[0; 4]).unwrap()),
+            );
+            // The entity at the origin becomes the tile of `t.json`.
+            let made = TerrainTile::spawn_from_file(&mut ctx, "t.json", Vec3::ZERO).unwrap();
+            let tile = *ctx.world.get::<TerrainTile>(made).unwrap();
+            ctx.world.despawn(made);
+            ctx.world.insert(e, tile);
+            ctx.world.insert(e, TerrainFile::new("t.json"));
+            select_it(&egui, &mut p, &mut ctx, e);
+            p.scene.gizmo.snap.on = false;
+            let corner = |ctx: &Ctx| crate::three::terrain_file::placed_corner(ctx, tile).unwrap();
+
+            let grab = on_axis(&ctx, Mode::Translate, 0, 0.7);
+            let to = screen(&ctx, vec3(along_x(&ctx, grab) + 2.0, 0.0, 0.0));
+            frame(&egui, &mut p, &mut ctx, vec![moved(grab)]);
+            frame(&egui, &mut p, &mut ctx, vec![button(grab, true)]);
+            for i in 1..=5 {
+                frame(&egui, &mut p, &mut ctx, vec![moved(grab.lerp(to, i as f32 / 5.0))]);
+                crate::three::follow_terrain_files(&mut ctx);
+                assert_eq!(corner(&ctx), Vec3::ZERO, "held while the drag goes on (frame {i})");
+            }
+            assert!(the_transform(&mut ctx).position.x > 1.5, "the gizmo moved it");
+            frame(&egui, &mut p, &mut ctx, vec![button(to, false)]);
+            crate::three::follow_terrain_files(&mut ctx);
+            let at = the_transform(&mut ctx).position;
+            assert_eq!(corner(&ctx), at, "re-placed once the drag ended");
+            assert_eq!(
+                *ctx.world.get::<TerrainTile>(e).unwrap(),
+                tile,
+                "the same tile, not made again"
+            );
+        }
+
+        #[test]
         fn the_3d_camera_centres_on_the_view_between_the_panels() {
             let (egui, mut p, mut ctx, e) = editor3d();
             let view = p
@@ -2354,6 +2396,110 @@ mod tests {
                 !shown.iter().any(|t| t == crate::inspector::scene::UNLOADED_RETRY),
                 "the panel is gone: {shown:?}"
             );
+        }
+
+        #[test]
+        fn a_gltf_scene_that_fails_to_respawn_at_stop_is_listed_in_the_panel_with_a_retry_that_works() {
+            let post_nodes = serde_json::json!([{ "name": "Post", "mesh": 0 }]);
+            let cube = crate::three::cube_gltf(&post_nodes);
+            let (yard, posts) = (
+                gltf_asset("stop-yard", &yard_nodes(-3.0)),
+                gltf_asset("stop-posts", &post_nodes),
+            );
+            let scene = TempAsset::new("stop-scene");
+            let (egui, mut p, mut ctx, e) = editor3d();
+            ctx.set_headless(true);
+            ctx.world.despawn(e);
+            let a = ctx.spawn_prefab(&yard.name, T3::default()).unwrap();
+            let b = ctx.spawn_prefab(&posts.name, T3::at(vec3(4.0, 0.0, 0.0))).unwrap();
+            ctx.track_gltf_overrides();
+            let node = |ctx: &Ctx, root: Entity, path: &str| {
+                ctx.world
+                    .get::<crate::d3::GltfRoot>(root)
+                    .unwrap()
+                    .entity(path)
+                    .unwrap()
+            };
+            let (wall, post) = (node(&ctx, a, "Wall"), node(&ctx, b, "Post"));
+            let at = *ctx.world.get::<T3>(wall).unwrap();
+            ctx.world.insert(wall, crate::attach::Attached3D::to(post));
+            crate::editor::place_world3d(&mut ctx.world, wall, at);
+            ctx.edit(|ed, ctx| ed.save_as(ctx, &scene.name, DocKind::Scene))
+                .unwrap();
+            let roots = |ctx: &mut Ctx| {
+                ctx.world
+                    .query::<(Entity, &crate::d3::GltfRoot)>()
+                    .iter()
+                    .map(|(e, r)| (e, r.path.clone()))
+                    .collect::<Vec<_>>()
+            };
+
+            // Both load when the scene opens: nothing in the panel.
+            p.open_file(&mut ctx, &scene.name);
+            assert_eq!(roots(&mut ctx).len(), 2);
+            assert!(ctx.editor.doc.unloaded.is_empty());
+            assert!(p.error.is_none(), "{:?}", p.error);
+
+            // Play, then the posts' file breaks, then Stop: the scene can't
+            // spawn again, and the panel lists it like one that failed at start.
+            ctx.edit(|ed, ctx| ed.play(ctx));
+            std::fs::write(&posts.file, "not a glTF file").unwrap();
+            p.ask_stop(&mut ctx);
+            assert!(!ctx.editor.playing());
+            assert_eq!(roots(&mut ctx).len(), 1, "the posts are left out");
+            assert_eq!(ctx.editor.doc.unloaded.len(), 1);
+            assert_eq!(ctx.editor.doc.unloaded[0].file, posts.name);
+            let why = ctx.editor.doc.unloaded[0].why.clone();
+            assert!(!why.is_empty());
+            let shown = texts(&drawn(&egui, &mut p, &mut ctx, vec![]));
+            for wanted in [&posts.name, &why, &crate::inspector::scene::UNLOADED_RETRY.to_string()] {
+                assert!(
+                    shown.iter().any(|t| t == wanted),
+                    "the panel shows {wanted:?}: {shown:?}"
+                );
+            }
+            assert!(
+                !shown.iter().any(|t| t == &yard.name),
+                "only the one that failed: {shown:?}"
+            );
+            let error = p.error.clone().unwrap_or_default();
+            assert!(error.contains(&posts.name) && !error.contains(&yard.name), "{error}");
+
+            // Still broken: Retry says why, and the row stays.
+            click_text(&egui, &mut p, &mut ctx, |t| {
+                t == crate::inspector::scene::UNLOADED_RETRY
+            });
+            assert_eq!(roots(&mut ctx).len(), 1);
+            assert_eq!(ctx.editor.doc.unloaded.len(), 1);
+            let error = p.error.clone().unwrap_or_default();
+            assert!(error.contains(&posts.name) && error.contains("still"), "{error}");
+
+            // Fixed: Retry spawns it where it was saved and the wall hangs
+            // off its post again.
+            std::fs::write(&posts.file, &cube).unwrap();
+            for _ in 0..30 {
+                frame(&egui, &mut p, &mut ctx, vec![]);
+            }
+            click_text(&egui, &mut p, &mut ctx, |t| {
+                t == crate::inspector::scene::UNLOADED_RETRY
+            });
+            assert!(p.error.is_none(), "{:?}", p.error);
+            assert_eq!(p.status.as_deref(), Some(format!("loaded {}", posts.name).as_str()));
+            assert!(ctx.editor.doc.unloaded.is_empty());
+            let now = roots(&mut ctx);
+            assert_eq!(now.len(), 2, "{now:?}");
+            let (b, _) = now.iter().find(|(_, path)| path == &posts.name).unwrap();
+            assert_eq!(ctx.world.get::<T3>(*b).unwrap().position, vec3(4.0, 0.0, 0.0));
+            let (a, _) = now.iter().find(|(_, path)| path == &yard.name).unwrap();
+            let (wall, post) = (node(&ctx, *a, "Wall"), node(&ctx, *b, "Post"));
+            let link = ctx.world.get::<crate::attach::Attached3D>(wall).map(|l| l.to);
+            assert_eq!(link, Some(post), "linked again");
+
+            // A later Stop that spawns everything clears what was listed.
+            ctx.edit(|ed, ctx| ed.play(ctx));
+            p.ask_stop(&mut ctx);
+            assert!(ctx.editor.doc.unloaded.is_empty());
+            assert_eq!(roots(&mut ctx).len(), 2);
         }
 
         #[test]

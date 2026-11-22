@@ -780,6 +780,12 @@ jobs:
       - name: Tests, C library with optional features
         if: ${{ !cancelled() }}
         run: cargo test -p ponko_ffi --no-fail-fast --features editor,system-fonts,accessibility,basis-universal --test text_shaping --test ui_access --test access --test compressed_textures
+      # Code mods from C: looking up and calling a mod's function, the
+      # entities and prefabs a mod may reach (without the feature the calls
+      # say code mods are not compiled in, which the default run covers).
+      - name: Tests, C library with code mods
+        if: ${{ !cancelled() }}
+        run: cargo test -p ponko_ffi --no-fail-fast --features mods-wasm --test mod_code
       - name: Tests, ECS with serde
         if: ${{ !cancelled() }}
         run: cargo test -p ponko_ecs --no-fail-fast --features serde --test entities
@@ -1355,6 +1361,7 @@ jobs:
           web/build.sh --features physics ember_hop
           web/build.sh lights2d
           web/build.sh --features editor web_editor_save
+          web/build.sh --features editor,3d web_editor_unloaded
           web/build.sh lockstep
           cargo build --example lockstep
           web/build.sh net_arena
@@ -1387,11 +1394,39 @@ jobs:
       # `--persist granted` and with `--persist refused` (the runner answers
       # for the browser) to check the first load asks once and the reloads,
       # which save nothing, never ask. The editor's panel of glTF scenes that
-      # didn't load, with its Retry, is the web_editor_unloaded fixture.
+      # didn't load, with its Retry, is the web_editor_unloaded fixture
+      # (its own step below).
       - name: Chromium, WebGL2, editor saves kept in the browser
         timeout-minutes: 5
         if: ${{ !cancelled() }}
         run: node web/smoke/smoke.mjs --fixture web_editor_save --browser chromium --backend webgl2
+      # The same fixture with the browser granting the request for persistent
+      # storage (the runner answers `navigator.storage.persist()`): the first
+      # load's saves ask once and get a yes, the status bar's warning that
+      # the browser may clear saves is gone, and the reloads, which save
+      # nothing, never ask again and find the storage persistent.
+      - name: Chromium, WebGL2, editor saves, persistent storage granted
+        timeout-minutes: 5
+        if: ${{ !cancelled() }}
+        run: node web/smoke/smoke.mjs --fixture web_editor_save --browser chromium --backend webgl2 --persist granted
+      # And with the browser refusing it: the first save asks once, the answer
+      # is a no, the warning stays (saves may be cleared when space runs
+      # low), and the reloads never ask again.
+      - name: Chromium, WebGL2, editor saves, persistent storage refused
+        timeout-minutes: 5
+        if: ${{ !cancelled() }}
+        run: node web/smoke/smoke.mjs --fixture web_editor_save --browser chromium --backend webgl2 --persist refused
+      # The editor's panel of glTF scenes that didn't load (examples/
+      # web_editor_unloaded, opened in edit mode on a scene whose post file
+      # was replaced by a broken copy in the browser's storage): the scene
+      # is left out and listed with why and a Retry; the runner asks the page
+      # where the Retry button is (`<html data-ponko-retry>`, so the status
+      # bar's layout can change) and clicks it; the post spawns where it was
+      # saved and the yard's wall hangs off it again.
+      - name: Chromium, WebGL2, editor, a glTF scene that didn't load and its Retry
+        timeout-minutes: 5
+        if: ${{ !cancelled() }}
+        run: node web/smoke/smoke.mjs --fixture web_editor_unloaded --browser chromium --backend webgl2
       # The complete-game reference (examples/coin_dash): its coin picture is
       # fetched and decoded, a click and keys reach it, and the screens it
       # reports follow them (play, pause, title, the retained-UI settings
@@ -1416,6 +1451,14 @@ jobs:
         timeout-minutes: 5
         if: ${{ !cancelled() }}
         run: node web/smoke/runtime-failures.mjs
+      # Key labels in a browser (web/smoke/key-labels.mjs): with a French
+      # keyboard layout map, with no map and with a refused one, the labels
+      # come from the map or are learned from key presses. Uses the web_smoke
+      # build made above.
+      - name: Chromium, key labels follow the keyboard layout map
+        timeout-minutes: 5
+        if: ${{ !cancelled() }}
+        run: node web/smoke/key-labels.mjs
       # A WebGPU device lost while playing (the device-lost case): in the new
       # headless mode, where a WebGPU canvas presents, with software Vulkan.
       # A runner without a WebGPU adapter reports it unsupported.

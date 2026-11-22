@@ -62,6 +62,7 @@ mod loaders;
 mod lobby;
 mod media;
 mod messages;
+mod mod_code;
 mod mods;
 mod morph;
 mod nav3d;
@@ -142,6 +143,8 @@ mod motion;
 // IME composition (#410).
 mod image_limits;
 mod ime;
+// Key labels on the player's keyboard layout (gl#237).
+mod key_labels;
 // Localization (#411).
 mod locale;
 // Debug drawing (#29).
@@ -189,6 +192,7 @@ pub use crowd_clips::*;
 pub use debug::*;
 pub use image_limits::*;
 pub use ime::*;
+pub use key_labels::*;
 pub use lightmap_bake::*;
 pub use locale::*;
 pub use nav_view::*;
@@ -247,6 +251,7 @@ pub use lobby::*;
 pub use lod::*;
 pub use media::*;
 pub use messages::*;
+pub use mod_code::*;
 pub use mods::*;
 pub use morph::*;
 pub use motion::*;

@@ -60,7 +60,7 @@
     "asset": "smoke/unloaded/posts.gltf",
     "min": { "failed": 1 },
     "editMode": true,
-    "clicks": ["30,565=linked:1"],
+    "clicks": ["@retry=linked:1"],
     "engineGpu": true
   },
   "lights2d": {

@@ -399,6 +399,12 @@ pub(crate) struct Renderer3D {
     /// no other model they jump over covers the same pixels (on; off
     /// draws them strictly far to near, for comparing).
     pub(crate) group_see_through: bool,
+    /// Whether that grouping uses each model's oriented box on screen
+    /// and lets models move past particles, ribbons and lines they don't
+    /// overlap (and additive ones past each other). Off: the bounding
+    /// sphere's rectangle, and every effect stops a model, as before (for
+    /// comparing).
+    pub(crate) tight_grouping: bool,
     /// The model passes' state changes since the last `take_state_changes`.
     state_counters: draw_order::StateCounters,
     /// The same for the particles, ribbons, lines and text of the main
@@ -1154,6 +1160,7 @@ impl Renderer3D {
             particles_in_blend_order: true,
             sort_strips_and_batches: true,
             group_see_through: true,
+            tight_grouping: true,
             see_through_counters: Default::default(),
             particle_counters: Default::default(),
             state_counters: Default::default(),
@@ -2226,6 +2233,26 @@ impl Renderer3D {
     #[cfg(test)]
     pub(crate) fn history_reset(&self) -> HistoryReset {
         self.history.reset
+    }
+
+    /// Turns the temporal upscaler's mip bias off (`true`): the negative
+    /// control of the mip bias tests.
+    #[cfg(test)]
+    pub(crate) fn set_mip_bias_off(&mut self, off: bool) {
+        self.screen.mip_bias_off = off;
+    }
+
+    /// Runs the motion pass every frame (`true`), as before frames where
+    /// nothing moves skipped it: the control of its tests.
+    #[cfg(test)]
+    pub(crate) fn set_motion_pass_always(&mut self, on: bool) {
+        self.screen.motion_always = on;
+    }
+
+    /// Whether the last prepared frame skips the motion pass (for tests).
+    #[cfg(test)]
+    pub(crate) fn motion_pass_skipped(&self) -> bool {
+        self.screen.motion_kept
     }
 
     /// Whether this frame is resolved by temporal antialiasing (for tests).

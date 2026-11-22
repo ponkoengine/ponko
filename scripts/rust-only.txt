@@ -15,10 +15,11 @@
 # Format: <Rust name>  <chapter>  # what C and C++ do instead
 
 Assets::scene_asset_field        asset-sources.md  # C components have no text fields to name an asset in; load it before load_scene
+Assets::image_limit_sources      security.md       # C and C++ read the limits of a source whose id they know (ponko_ctx_source_image_limits); the control endpoint lists them all
 PackSource                       asset-sources.md  # C and C++ games read the default assets.pack; a pack of their own goes through ponko_ctx_add_asset_source
 ModPack::from_files              mods.md           # C and C++ mount mod packs by path or from bytes (ponko_ctx_mount_mods, ponko_ctx_mount_mods_from_memory); ponko pack makes one from loose files
-with_code                        mods.md           # code mods (feature mods-wasm) are Rust-only: the C library is built without it and refuses a mod with code
-ModSet::code_limits              mods.md           # same
+ModSet::code_limits              mods.md           # C and C++ code mods (ponko_ctx_mod_call, feature mods-wasm) run with the default limits
+ModCode::take_log                mods.md           # C and C++ don't read the mods' log yet
 ModSet::problems                 mods.md           # ponko_ctx_mount_mods reports the first problem and mounts nothing
 Query::with_lookup               ecs.md            # generic borrows; component pointers from get don't borrow
 World::get_many_mut              ecs.md            # same
@@ -67,7 +68,7 @@ Game::debug_toggle               plugins.md        # draw behind a flag of the g
 Game::control_method             plugins.md        # the control endpoint's built-in methods only; a native game's tools read its reflected resources
 GamepadBackend                   controllers.md    # native games use the built-in gamepad backend
 FakeGamepads                     controllers.md    # native tests feed ponko_ctx_feed_input (kind 8 connects a pad) and ponko_ctx_feed_gamepad_motion
-KeyLabels                        controllers.md    # ponko_glyph_atlas_draw_prompt and _texture label the caps for the player's layout; ponko_glyph_label gives US labels
+KeyLabels::text                  controllers.md    # join ponko_ctx_glyph_label (ctx::layout_glyph_label) results with "/"
 InputScenario::connect_gamepad   controllers.md    # C and C++ scenarios are JSON: a gamepad_connected step's info object
 Assets::browser_saves            editor.md         # a C or C++ web game keeps no files in a browser yet
 Assets::revert_browser_save      editor.md         # same

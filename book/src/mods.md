@@ -197,6 +197,15 @@ A module reaches only what the engine links, imported from module `"ponko"`:
 | `log` | `(ptr: i32, len: i32)` | Text from the module's exported `memory`, for `take_log` (4096 bytes a line, 1024 lines between takes) |
 | `dt` | `() -> f32` | The tick's step in seconds |
 | `cast_ray` | `(ox, oy, dx, dy, max: f32) -> f32` | A 2D physics ray cast (feature `physics`): the distance to the first collider hit, or -1 |
+| `get_field` | `(entity: i64, path: i32, len: i32) -> f64` | A number or bool field of a reflected component of an exposed entity: `"Health.current"`, `"Transform2D.position.1"` (array items by index); NaN when refused |
+| `set_field` | `(entity: i64, path: i32, len: i32, value: f64) -> i32` | Writes that field: 0, or `-1` (entity not exposed, or gone), `-2` (no such component or field), `-3` (not a number field, or the value doesn't fit: a fraction for an integer, out of range, NaN) |
+| `spawn_prefab` | `(path: i32, len: i32, x: f32, y: f32) -> i64` | Spawns an exposed prefab at `(x, y)` (as `ctx.spawn_prefab`) and exposes its root: the root's bits, or `-1` (not exposed), `-2` (it didn't spawn) |
+| `random` | `() -> f32` | A number in `[0, 1)` from the mod's own generator, seeded by the game |
+
+Text arguments (a field path, a prefab path) are UTF-8 in the module's
+exported `memory`, at most 256 bytes; other text is refused (`-3`). Every
+refusal also adds a line starting with `refused:` to `take_log`, naming the
+call, the entity or prefab and why, so a game can show a misbehaving mod.
 
 The frost drip's crawl rule, as the sample's code mod
 (`tests/mod_sample.rs` checks it turns on exactly the ticks the game's Rust
@@ -209,6 +218,60 @@ rule does):
     ;; turn at a wall ahead or no floor ahead, else keep the heading
     ...))
 ```
+
+### Reaching the game
+
+A mod reaches only what the game hands it. The game exposes entities, by
+passing them to `code.expose(e)` and their bits to the mod as an `i64`, and
+prefabs, by path with `code.expose_prefab(path)`; `code.hide(e)` and
+`code.hide_all()` take entities back. The root of a prefab a mod spawns is
+exposed for it, so it can set up what it made. Random numbers come from a
+seed the game sets with `code.seed_random(seed)` (0 until then): the same
+seed gives the same sequence, each mod has its own (its id is mixed in), so
+one mod drawing more doesn't change another's numbers, and replays and
+lockstep peers agree.
+
+```rust
+# use ponko::prelude::*;
+# #[derive(Component)] struct FrostDrip;
+fn frost_drips_think(ctx: &mut Ctx) {
+    let drips: Vec<Entity> = ctx.world.query::<(Entity, &FrostDrip)>().iter().map(|(e, _)| e).collect();
+    let tick = ctx.time.sim_tick();
+    ponko::mods::with_code(ctx, |code| {
+        code.seed_random(tick); // a sequence per tick: replays draw the same numbers
+        code.expose_prefab("prefabs/icicle.json");
+        let Some(think) = code.function("frost-drips", "think") else { return };
+        for e in drips {
+            code.expose(e);
+            let _ = code.call(think, &[(e.to_bits() as i64).into()]);
+        }
+        for (mod_id, line) in code.take_log() {
+            eprintln!("{mod_id}: {line}");
+        }
+    });
+}
+```
+
+A mod's `think` may then read the drip's `"Transform2D.position.0"`, write
+its `"FrostDrip.speed"`, spawn `"prefabs/icicle.json"` where it hangs and draw a
+random number to decide when; it can't touch the player, or any entity or
+prefab the game didn't name.
+
+**What a mod can never do.** Whatever its code, a mod can't:
+
+- reach an entity the game didn't expose (or one that died, or a guessed id:
+  an entity's bits include its generation), nor a component the game didn't
+  reflect, nor any field that isn't a number or a bool;
+- add or remove components, despawn entities, or spawn anything but the
+  prefabs the game exposed, at a 2D position;
+- read files, the clock, the network, environment variables or other mods'
+  memory, or import anything but the host functions above (WASI included);
+  a module asking for more is refused at mount;
+- run past its fuel or grow past its memory limit, host calls included: a
+  host call costs the caller's fuel like any call;
+- run when the game doesn't call it: mods run only inside `with_code`, on the
+  game's thread, in the order the game calls them, so they can't race the
+  game or each other.
 
 **The sandbox.** A module that imports anything else (files, clocks, WASI)
 is refused at mount. Each call (and each module's start function, at mount)
@@ -237,9 +300,25 @@ average 75 to 115), two runs that agreed:
 | The game's own Rust rule (data-only mods) | Everywhere | 0.098 ms | 98 ns | 0 |
 | Code mod on wasmi (`mods-wasm`) | Everywhere, the web included | 0.204 ms | 204 ns (about 106 ns over Rust: the call, the interpreter, two host calls) | about 2.2 MB (measured below) |
 
-Both include the two physics ray casts each drip makes. A game that calls a
-mod function a few thousand times per tick spends well under a millisecond;
-one that runs a mod's whole simulation per entity should measure first.
+Both include the two physics ray casts each drip makes. A game that calls a mod function a few thousand times per tick spends well under a millisecond; one that runs a mod's whole simulation per entity should measure first.
+
+What one host call costs, from 1000 calls per tick of a mod function that
+makes one (`cargo run --release -p ponko_bench -- mods/host-call`), against
+the same function making none. Apple Silicon laptop, November 2026, busy (load
+average 55 to 90), two runs within 0.003 ms of each other:
+
+| Host call | 1000 calls per tick (median) | One host call, over the call itself |
+|---|---|---|
+| None (the call alone) | 0.046 ms | 46 ns for the call |
+| `random` | 0.060 ms | about 14 ns |
+| `get_field` (`"Transform2D.rotation"`) | 0.358 ms | about 310 ns |
+| `set_field` (`"Transform2D.rotation"`) | 0.692 ms | about 645 ns |
+
+`get_field` and `set_field` go through reflection's JSON (the component is
+read whole, and written back for a set), so they cost what `get_json` and
+`set_json` do: fine for a few thousand per tick, not for every field of
+every entity. A mod that needs many numbers per entity is better passed
+them as arguments, returning its answer.
 
 **Determinism.** wasmi runs with NaN results canonicalized, so the same
 module and inputs give the same bits on every machine; the sample's crawl is
@@ -269,9 +348,32 @@ reason in `ponko_last_error()` and the file in `ponko_last_error_path()`.
 `ctx.mount_mods_from_memory({{"a.pack", bytes}})`, `ctx.mod_ids()`,
 `ctx.mod_provider(name)`, `ctx.mod_files_under(prefix)` and
 `ctx.mods_fingerprint()`. Loose files (`ModPack::from_files`; `ponko pack`
-makes a pack of them), `ModSet::problems` and code mods are Rust-only for
-now: the C library is built without `mods-wasm` and refuses a mod with code
-like any bad mod ([Still Rust-only](c-cpp.md#still-rust-only)).
+makes a pack of them) and `ModSet::problems` are Rust-only for now
+([Still Rust-only](c-cpp.md#still-rust-only)).
+
+**Code mods from C and C++.** Build the library with the feature
+(`cargo build --release -p ponko_ffi --features mods-wasm`); mods with code
+then mount as from Rust, with the default limits (10 million fuel a call,
+16 MiB of memory). `ponko_ctx_mod_function(ctx, mod_id, name, &fn)` looks a
+function up once (`PONKO_NOT_FOUND` when no mod has code or no such
+function) and `ponko_ctx_mod_call(ctx, fn, args, count, &result,
+&has_result)` calls it with `PonkoModValue` numbers (`kind`
+`PONKO_MOD_I32`, `_I64`, `_F32`, `_F64`; integers in `i`, floats in `f`). A
+call that doesn't fit, runs out of fuel or memory or traps returns
+`PONKO_INVALID_ARGUMENT` with the mod and the reason in `ponko_last_error()`;
+the mod stays callable. `ponko_ctx_mod_expose_entity`,
+`ponko_ctx_mod_hide_entity`, `ponko_ctx_mod_expose_prefab` and
+`ponko_ctx_mod_seed_random` choose what the host functions reach. In C++:
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:code_mods}}
+```
+
+Built without the feature (the default), each of these calls returns
+`PONKO_UNSUPPORTED` ("code mods are not compiled in") and a mod with code is
+refused at mount like any bad mod (`PONKO_INVALID_ARGUMENT`); data-only mods
+work the same. Custom limits (`ModSet::code_limits`) and the mods' log
+(`ModCode::take_log`) are Rust-only for now.
 
 ## Why data-only mods first
 

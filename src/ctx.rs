@@ -550,7 +550,11 @@ impl Ctx {
         self.collect_cameras2d();
         self.flush_debug_draw();
         #[cfg(feature = "3d")]
-        self.prepare_3d();
+        {
+            // Spawned or moved since the frame began: drawn in place.
+            crate::three::follow_terrain_files(self);
+            self.prepare_3d();
+        }
         if self.gfx.renderer.is_some() {
             self.collect_lights2d();
         }
@@ -590,6 +594,7 @@ impl Ctx {
             self.perf
                 .gpu_passes_not_timed
                 .extend_from_slice(renderer.gpu_passes_not_timed());
+            (self.perf.gpu_passes_over_limit, self.perf.gpu_pass_limit) = renderer.gpu_pass_room();
             self.perf.gpu_untimed = renderer.gpu_untimed();
             self.perf.display_wait_ms = renderer.display_wait_ms();
         }
@@ -635,6 +640,9 @@ impl Ctx {
         self.pump_asset_groups();
         self.pump_streaming();
         self.audio.advance_mixer(self.time.frame_dt());
+        // Tiles for entities naming a terrain file, wherever they came from.
+        #[cfg(feature = "3d")]
+        crate::three::follow_terrain_files(self);
     }
 
     /// The 3D frame takes the sample count in `scene3d.post.msaa`, when the

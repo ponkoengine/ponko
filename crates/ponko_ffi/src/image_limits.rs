@@ -135,3 +135,104 @@ pub unsafe extern "C" fn ponko_ctx_try_decode_texture(
         })
     })
 }
+
+/// Gives asset source `source_id` image limits of its own (Rust's
+/// `assets.set_source_image_limits`): pictures read from it (a mod pack, a
+/// download cache, a folder) are decoded under `max_side` pixels a side and
+/// `max_bytes` of RGBA8, and everything else under the game's. A picture
+/// past them fails to load with `PONKO_INVALID_ARGUMENT` and
+/// `ponko_last_error_kind() == PONKO_ERROR_LIMIT`; the message names the
+/// limits and the source they belong to. The source may be added later (the
+/// mounted mods' id is `mods`); it works on worker threads too, for asset
+/// groups and streamed textures. Both limits must be above 0, the id
+/// non-empty.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_set_source_image_limits(std::ptr::null_mut(), c"mods".as_ptr(), 1024, 8 << 20) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` must be null or the live context of the running system; `source_id` NUL-terminated.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_set_source_image_limits(
+    ctx: *mut PonkoCtx,
+    source_id: *const c_char,
+    max_side: u32,
+    max_bytes: u64,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            let id = text(source_id)?;
+            if id.is_empty() {
+                return Err(invalid("an asset source needs a non-empty id"));
+            }
+            if max_side == 0 || max_bytes == 0 {
+                return Err(invalid("image limits must be above 0"));
+            }
+            c.assets
+                .set_source_image_limits(id, ImageLimits::new(max_side, max_bytes));
+            Ok(())
+        })
+    })
+}
+
+/// Takes back the image limits of source `source_id` (Rust's
+/// `assets.clear_source_image_limits`): its pictures follow the game's
+/// again. Does nothing if it had none.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_clear_source_image_limits(std::ptr::null_mut(), c"mods".as_ptr()) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` must be null or the live context of the running system; `source_id` NUL-terminated.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_clear_source_image_limits(
+    ctx: *mut PonkoCtx,
+    source_id: *const c_char,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            c.assets.clear_source_image_limits(text(source_id)?);
+            Ok(())
+        })
+    })
+}
+
+/// Reads the image limits source `source_id` has of its own (Rust's
+/// `assets.source_image_limits`): `*out_has` is whether it has any; if so
+/// `*out_max_side` and `*out_max_bytes` are written, otherwise they are
+/// unchanged (its pictures follow the game's, `ponko_ctx_image_limits`).
+/// Read only; the control endpoint's `assets.image_limits` lists every source
+/// that has limits.
+/// ```
+/// let (mut side, mut bytes, mut has) = (0u32, 0u64, false);
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_source_image_limits(std::ptr::null(), c"mods".as_ptr(), &mut side, &mut bytes, &mut has) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` must be null or the live context of the running system; `source_id`
+/// NUL-terminated; all three outputs writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_source_image_limits(
+    ctx: *const PonkoCtx,
+    source_id: *const c_char,
+    out_max_side: *mut u32,
+    out_max_bytes: *mut u64,
+    out_has: *mut bool,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            let id = text(source_id)?;
+            if out_max_side.is_null() || out_max_bytes.is_null() || out_has.is_null() {
+                return Err(invalid("output is null"));
+            }
+            match c.assets.source_image_limits(id) {
+                Some(limits) => {
+                    out(out_max_side, limits.max_side)?;
+                    out(out_max_bytes, limits.max_bytes)?;
+                    out(out_has, true)
+                }
+                None => out(out_has, false),
+            }
+        })
+    })
+}

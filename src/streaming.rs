@@ -366,7 +366,32 @@ struct TextureSlices {
     name: String,
     max: u32,
     gpu: TextureFormats,
+    /// The sources' own image limits, for the file once its source is known.
+    limits: assets::SourceLimits,
     phase: TexturePhase,
+}
+
+impl TextureSlices {
+    /// Starts decoding a texture file that was just read, under the image
+    /// limits of the source it came from.
+    fn begin(&mut self, origin: Origin, bytes: Vec<u8>) -> Result<Option<(Origin, Pyramid)>, crate::error::Error> {
+        let name = &self.name;
+        #[cfg(feature = "compressed-textures")]
+        if let Some(slices) = crate::compressed::DecodeSlices::new(&bytes, name, &origin.describe(name), self.gpu) {
+            self.phase = TexturePhase::Compressed(origin, bytes, Box::new(slices?));
+            return Ok(None);
+        }
+        let bytes = std::sync::Arc::new(bytes);
+        match assets::group::sliced::PngSlices::new(&bytes) {
+            Some(png) => self.phase = TexturePhase::Png(origin, Box::new(png)),
+            // Not a PNG it can split: in one piece, as on a worker.
+            None => {
+                let bytes = std::sync::Arc::unwrap_or_clone(bytes);
+                return decode_texture(name, origin, Ok(bytes), self.max, self.gpu).map(Some);
+            }
+        }
+        Ok(None)
+    }
 }
 
 enum TexturePhase {
@@ -385,23 +410,8 @@ impl StreamSlices<(Origin, Pyramid)> for TextureSlices {
         match std::mem::replace(&mut self.phase, TexturePhase::Taken) {
             TexturePhase::Read(read) => {
                 let (origin, bytes) = read().map_err(|e| e.with_path(name))?;
-                #[cfg(feature = "compressed-textures")]
-                if let Some(slices) =
-                    crate::compressed::DecodeSlices::new(&bytes, name, &origin.describe(name), self.gpu)
-                {
-                    self.phase = TexturePhase::Compressed(origin, bytes, Box::new(slices?));
-                    return Ok(None);
-                }
-                let bytes = std::sync::Arc::new(bytes);
-                match assets::group::sliced::PngSlices::new(&bytes) {
-                    Some(png) => self.phase = TexturePhase::Png(origin, Box::new(png)),
-                    // Not a PNG it can split: in one piece, as on a worker.
-                    None => {
-                        let bytes = std::sync::Arc::unwrap_or_clone(bytes);
-                        return decode_texture(name, origin, Ok(bytes), self.max, self.gpu).map(Some);
-                    }
-                }
-                Ok(None)
+                let limits = self.limits.clone();
+                limits.scope(&origin.clone(), || self.begin(origin, bytes))
             }
             TexturePhase::Png(origin, mut png) => {
                 let done = png.step().map_err(|e| {
@@ -1386,7 +1396,10 @@ impl crate::gfx::Graphics {
         let found = self.asset_sources.find(name)?;
         let max = self.max_texture_side();
         let gpu = self.texture_formats();
-        decode_texture(name, found.origin.clone(), found.into_bytes(), max, gpu)
+        let origin = found.origin.clone();
+        self.asset_sources.image_limits().scope(&origin, || {
+            decode_texture(name, origin.clone(), found.into_bytes(), max, gpu)
+        })
     }
 
     /// The block formats streamed textures may stay in.
@@ -1424,17 +1437,23 @@ impl crate::gfx::Graphics {
         let max = self.max_texture_side();
         let gpu = self.texture_formats();
         let name_owned = name.to_string();
+        // The worker finds the file's source only once it has read it: the
+        // job carries every source's own limits.
+        let limits = self.asset_sources.image_limits();
         let job = if self.streaming.sliced() {
             Decoded::Slices(Box::new(TextureSlices {
                 name: name_owned,
                 max,
                 gpu,
+                limits,
                 phase: TexturePhase::Read(Box::new(read)),
             }))
         } else {
             Decoded::Job(Job::spawn(move || {
                 let (origin, bytes) = read()?;
-                decode_texture(&name_owned, origin, Ok(bytes), max, gpu)
+                limits.scope(&origin.clone(), || {
+                    decode_texture(&name_owned, origin, Ok(bytes), max, gpu)
+                })
             }))
         };
         let entry = self.texture_entry(name);
@@ -1910,6 +1929,7 @@ mod tests {
                 name: "t.png".into(),
                 max,
                 gpu: formats,
+                limits: assets::SourceLimits::default(),
                 phase: TexturePhase::Read(Box::new(move || Ok((Origin::File("t.png".into()), png)))),
             };
             let ((origin, levels), _) = run(&mut slices, &sources);
@@ -1944,6 +1964,7 @@ mod tests {
                 name: "t.ktx2".into(),
                 max,
                 gpu,
+                limits: assets::SourceLimits::default(),
                 phase: TexturePhase::Read(Box::new(move || Ok((Origin::File("t.ktx2".into()), file)))),
             };
             let ((_, levels), n) = run(&mut slices, &sources);
@@ -1968,6 +1989,7 @@ mod tests {
             name: "t.png".into(),
             max: u32::MAX,
             gpu: formats(),
+            limits: assets::SourceLimits::default(),
             phase: TexturePhase::Read(Box::new(move || Ok((Origin::File("t.png".into()), png)))),
         };
         let (_, n) = run(&mut slices, &assets::SharedSources::default());
@@ -1985,6 +2007,7 @@ mod tests {
             name: "cut.png".into(),
             max: u32::MAX,
             gpu: formats(),
+            limits: assets::SourceLimits::default(),
             phase: TexturePhase::Read(Box::new(move || Ok((Origin::File("cut.png".into()), png)))),
         };
         let sources = assets::SharedSources::default();

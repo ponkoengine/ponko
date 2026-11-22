@@ -458,6 +458,26 @@ static void move_players(ponko::ctx& ctx) {
 }
 // ANCHOR_END: controllers
 
+// ANCHOR: key_labels
+static void walk_prompt(ponko::ctx& ctx, std::string& prompt) {
+    // "Press Z to walk" on a French keyboard; redrawn when the player switches layouts.
+    if (prompt.empty() || ctx.key_labels_changed()) prompt = "Press " + ctx.key_label(PONKO_KEY_W) + " to walk";
+}
+static void french_layout_option(ponko::ctx& ctx) {
+    ctx.set_key_labels({{PONKO_KEY_W, 'z'}, {PONKO_KEY_A, 'q'}, {PONKO_KEY_Q, 'a'}, {PONKO_KEY_Z, 'w'}});
+}
+// ANCHOR_END: key_labels
+static void key_labels_snippet() {
+    ponko::game("key labels", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
+        std::string prompt;
+        walk_prompt(ctx, prompt);
+        if (prompt != "Press W to walk") throw std::runtime_error("US label expected");
+        french_layout_option(ctx);
+        walk_prompt(ctx, prompt);
+        if (prompt != "Press Z to walk") throw std::runtime_error("French label expected");
+    });
+}
+
 [[maybe_unused]] static void plan_routes(ponko::ctx&) {}
 [[maybe_unused]] static void grow_food(ponko::ctx&) {}
 [[maybe_unused]] static void every() {
@@ -3914,6 +3934,19 @@ void add_intro(ponko::game& game) {
 }
 // ANCHOR_END: video_intro
 
+// ANCHOR: code_mods
+// A code mod's "think" for one frost drip (the C library built with `--features mods-wasm`).
+void frost_drip_thinks(ponko::ctx& ctx, ponko::entity drip, std::uint64_t tick) {
+    const auto think = ctx.mod_function("frost-drips", "think");  // look up once, keep it
+    ctx.mod_seed_random(tick);  // a sequence per tick: replays draw the same numbers
+    ctx.mod_expose_prefab("prefabs/icicle.json");
+    ctx.mod_expose(drip);
+    if (auto r = ctx.call_mod(think, {ponko::mod_i64(std::int64_t(drip))})) {
+        (void)r->i;  // its answer, if it returns one
+    }
+}
+// ANCHOR_END: code_mods
+
 // ANCHOR: baked
 static std::vector<std::uint8_t> bake_room(ponko::ctx& ctx) {
     // Offline (a tool, a build step): the static models and the lights.
@@ -4430,6 +4463,17 @@ static void embedded_assets(ponko::ctx& ctx) {
     // ANCHOR_END: image_limits
     if (avatar && (avatar.value().width != 1 || avatar.value().height != 1)) std::abort();
     ctx.set_image_limits(16384, 512ull << 20); // the defaults again, for what runs next
+}
+
+[[maybe_unused]] static void source_image_limits_guide(ponko::ctx& ctx) {
+    // ANCHOR: source_image_limits
+    // Pictures from the mods (source id "mods") must be small: at most 1024 pixels a side and
+    // 8 MiB of pixels. Everything else follows the game's limits. Set it before the mods are
+    // mounted; a picture past it is PONKO_ERROR_LIMIT and its message names the source.
+    ctx.set_source_image_limits("mods", 1024, 8ull << 20);
+    // ANCHOR_END: source_image_limits
+    if (!ctx.source_image_limits("mods")) std::abort();
+    ctx.clear_source_image_limits("mods"); // for what runs next
 }
 
 // ANCHOR: resource_scope
@@ -5012,6 +5056,7 @@ static void touch_setup(ponko::ctx& ctx) {
 // ANCHOR_END: touch
 
 int main() {
+    key_labels_snippet();
     ponko::game("touch guide", 960, 540).run_headless(0, [](ponko::ctx& ctx) {
         touch_setup(ctx);
         ctx.feed_touch(1, ponko::touch_phase::started, {480, 100});
@@ -5063,6 +5108,7 @@ int main() {
             137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 207, 192, 240, 31, 0, 5, 0, 1, 255, 137, 153, 61, 29, 0, 0, 0,
             0, 73, 69, 78, 68, 174, 66, 96, 130};
         image_limits_guide(ctx, pixel);
+        source_image_limits_guide(ctx);
     });
     ponko::game("filter guide", 1, 1).run_headless(0, ecs_filters);
     ponko::game("query cache guide", 1, 1).run_headless(0, ecs_query_cache);

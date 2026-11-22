@@ -42,8 +42,13 @@ order:
    load's saves ask once; the later loads save nothing and never ask).
    **Clicks** (`--click <x>,<y>=<field>:<value>`): a click at a point of the
    canvas (pixels from its top left), then the field the state must reach:
-   a button the game draws there (`web_editor_unloaded`: the editor's
-   **Retry**).
+   a button the game draws there. `--click @retry=<field>:<value>` finds
+   the editor's **Retry** button (for a glTF scene that didn't load) by
+   asking the page: the editor (web builds) sets `<html data-ponko-retry>`
+   to the places of its Retry buttons, `[[x, y], ...]` with each centre as a
+   fraction of the window's width and height, and the runner waits for it
+   (10 s) and clicks the first. A change of the status bar's layout moves
+   the button and its answer along (`web_editor_unloaded`).
 6. **Rendering**: the canvas is not blank (screenshot, or a copy of the
    canvas for WebGPU).
 
@@ -61,7 +66,7 @@ runner needs to know about each one, so `--fixture <name>` is all a run takes:
 | `web_smoke_3d` | `examples/web_smoke_3d.rs` | `3d` | `models/house.glb` fetched and parsed; a sun with shadows; at least 1 model and 100 triangles drawn |
 | `coin_dash` | `examples/coin_dash` | none | the complete game: its picture, keys and the screens they reach (see [A complete game, packaged](../../book/src/packaging.md#the-web-build)); after a reload, the settings it saved come back from the browser's storage |
 | `web_editor_save` | `examples/web_editor_save.rs` | `editor` | `crab.png` fetched and decoded 32x32; three page loads: a new scene and one over a file the build ships are saved and read back at once from the browser's storage (`read_back` 1, `listed` 2); after a reload both come back over the fetched files and the one over the build's file is reverted, read again at once (`found` `Saved`, `reverted` 1); after another reload the revert held and the other save is still there (`found` `Build`, `kept` `Loaded`). It also reports the browser's answer to its request for persistent storage (`persistent`) |
-| `web_editor_unloaded` | `examples/web_editor_unloaded.rs` | `editor`, `3d` | the page opens in edit mode (`query`: `?editor=smoke/unloaded/scene.json`, `editMode`: time is paused, so frames must keep coming instead of ticks, and the editor takes the clicks); the scene's post doesn't load (setup saved a broken copy of its file in the browser), the fixture reverts the copy, and a click on **Retry** in the editor's panel of scenes that didn't load (`clicks`, at its place in an 800x600 page) spawns it and hangs the yard's wall off it again (`failed` 1, then `linked` 1) |
+| `web_editor_unloaded` | `examples/web_editor_unloaded.rs` | `editor`, `3d` | the page opens in edit mode (`query`: `?editor=smoke/unloaded/scene.json`, `editMode`: time is paused, so frames must keep coming instead of ticks, and the editor takes the clicks); the scene's post doesn't load (setup saved a broken copy of its file in the browser), the fixture reverts the copy, and a click on **Retry** in the editor's panel of scenes that didn't load (`clicks`: `@retry`, the place the page reports) spawns it and hangs the yard's wall off it again (`failed` 1, then `linked` 1) |
 | `lights2d` | `examples/lights2d.rs` | none | `crab.png` fetched and decoded 32x32; 2D lights with stencil shadows and normal maps drawing on the page's backend (WebGL2 in CI); at least 7 lights
 
 To add one: publish the state with the helper (or the same attributes by hand),
@@ -561,3 +566,32 @@ node web/smoke/first-load.mjs --dir target/web-loose/ember-hop-0.1.0-web \
 
 The page must publish `<html data-smoke>` (the reference games and the
 fixtures do). The guide's packaging chapter has the numbers for Ember Hop.
+
+## Key labels
+
+`key-labels.mjs` checks that prompts in a browser show what is printed on
+the player's keys (the guide's [Key labels follow the keyboard
+layout](../../book/src/controllers.md#key-labels-follow-the-keyboard-layout)).
+The 2D fixture reports WASD as labelled for the player (`key_labels` in its
+state, `"W/A/S/D"` on a US keyboard). The runner gives the page a French
+(AZERTY) keyboard three ways, before the game starts:
+
+- `layout-map`: `navigator.keyboard.getLayoutMap()` answers with a French
+  map: the game shows `"Z/Q/S/D"` without a key pressed.
+- `no-layout-map`: the page has no `navigator.keyboard`, as in Firefox,
+  Safari and any page outside a secure context: `"W/A/S/D"`. In Chromium
+  the runner then presses the key at W's place typing `z` (through the
+  DevTools protocol, which can send a key whose character differs from its
+  place), and the label is learned from it: `"Z/A/S/D"`.
+- `refused`: `getLayoutMap()` rejects (a frame that may not ask): US labels,
+  and the game keeps running.
+
+```sh
+web/build.sh web_smoke
+node web/smoke/key-labels.mjs                          # all three, Chromium
+node web/smoke/key-labels.mjs --browser webkit         # no press step there
+node web/smoke/key-labels.mjs --case layout-map
+```
+
+Run on an Apple Silicon Mac: Chromium (headless shell) and WebKit pass all
+three; Playwright's Firefox does not start on that machine (see above).

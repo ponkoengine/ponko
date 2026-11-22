@@ -385,7 +385,7 @@ impl Panels {
             ctx.free(weights);
         }
         ctx.world.insert(entity, built.tile);
-        crate::three::note_terrain_tile(ctx, path, corner, built.tile);
+        crate::three::note_terrain_tile(ctx, path, corner, &built, data);
         if let Some(state) = self.terrain() {
             state.built = Some(built);
         }

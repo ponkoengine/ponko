@@ -2064,9 +2064,16 @@ mod render_test {
     /// frames (the scene turns as time goes on, so both orders are drawn
     /// from one start).
     fn see_through_counts(group: bool) -> Option<[u32; 5]> {
+        see_through_counts_with(group, true)
+    }
+
+    /// The same, with `tight` the grouping by turned boxes and past
+    /// effects (off: by bounding spheres, every effect a barrier).
+    fn see_through_counts_with(group: bool, tight: bool) -> Option<[u32; 5]> {
         let setup = SceneSetup { scale: 1.0, ..small() };
         let mut bench = open(SceneKind::AlphaHeavy, setup)?.expect("the scene fits");
         bench.renderer.group_see_through = group;
+        bench.renderer.tight_grouping = tight;
         let mut last = SceneFrame::default();
         for _ in 0..3 {
             last = bench.frame();
@@ -2090,9 +2097,28 @@ mod render_test {
         assert!(after[0] <= before[0], "no more pipelines: {line}");
     }
 
+    #[test]
+    fn the_alpha_heavy_scene_groups_more_models_by_their_boxes_than_by_their_spheres() {
+        let (Some(spheres), Some(boxes)) = (
+            see_through_counts_with(true, false),
+            see_through_counts_with(true, true),
+        ) else {
+            return;
+        };
+        let line = format!(
+            "alpha-heavy scene, see-through list [pipelines, bind groups, vertex buffers, index buffers, draws]: \
+             grouped by spheres {spheres:?}, grouped by boxes {boxes:?}"
+        );
+        eprintln!("{line}");
+        crate::render::render_test_support::record(&crate::render::render_test_support::output_dir(), &line);
+        assert!(boxes[4] < spheres[4], "fewer draws: {line}");
+        assert!(boxes[1] < spheres[1], "fewer bind groups: {line}");
+        assert!(boxes[0] <= spheres[0], "no more pipelines: {line}");
+    }
+
     /// Frame time of the alpha-heavy scene with the see-through models
-    /// grouped and strictly far to near: medians of 60 frames, three
-    /// rounds. Ignored: run explicitly in release,
+    /// strictly far to near, grouped by bounding spheres and grouped by
+    /// turned boxes: medians of 60 frames, three rounds. Ignored: run explicitly in release,
     /// `cargo test --release --lib --features 3d alpha_heavy_see_through_frame_time -- --ignored --nocapture`.
     #[test]
     #[ignore = "benchmark: run explicitly"]
@@ -2106,9 +2132,10 @@ mod render_test {
             return;
         };
         for round in 0..3 {
-            let mut medians = [0.0; 2];
-            for (i, group) in [false, true].into_iter().enumerate() {
+            let mut medians = [0.0; 3];
+            for (i, (group, tight)) in [(false, false), (true, false), (true, true)].into_iter().enumerate() {
                 bench.renderer.group_see_through = group;
+                bench.renderer.tight_grouping = tight;
                 let mut ms: Vec<f64> = (0..70)
                     .map(|_| bench.frame())
                     .skip(10)
@@ -2118,8 +2145,9 @@ mod render_test {
                 medians[i] = ms[ms.len() / 2];
             }
             eprintln!(
-                "alpha-heavy frame time round {round}: far to near {:.3} ms, grouped {:.3} ms",
-                medians[0], medians[1]
+                "alpha-heavy frame time round {round}: far to near {:.3} ms, grouped by spheres {:.3} ms, \
+                 grouped by boxes {:.3} ms",
+                medians[0], medians[1], medians[2]
             );
         }
     }

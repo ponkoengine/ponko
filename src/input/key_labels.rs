@@ -5,11 +5,32 @@
 //! key: the key in `W`'s place reads `Z` on a French keyboard. The engine
 //! keeps a table of the character keys' labels in [`Input`]: the system's
 //! current layout read when the window opens and when it gets the focus
-//! back (macOS and Windows: [`KeyLabels::system`]), corrected by every
-//! character key the player presses (all desktop systems and the web).
+//! back (macOS and Windows: [`KeyLabels::system`]; the browser's Keyboard
+//! Layout Map where it has one), the active xkb layout followed as it
+//! changes (Linux and the BSDs, X11 and Wayland: `xkb.rs`, `watch.rs`),
+//! corrected by every character key the player presses (all desktop
+//! systems and the web).
 
 use super::glyphs::{Glyph, Glyphs};
 use super::{Input, Key};
+
+/// The layout while a window is open, per system.
+#[cfg(feature = "window")]
+pub(crate) mod watch;
+/// Labels from an xkb keymap (Linux and the BSDs); tested everywhere.
+#[cfg(all(feature = "window", not(target_arch = "wasm32")))]
+#[cfg_attr(
+    not(any(
+        test,
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    )),
+    allow(dead_code)
+)]
+pub(crate) mod xkb;
 
 /// The keys whose label depends on the keyboard layout: the letters, the
 /// digit row and the punctuation keys, with their macOS virtual key code
@@ -274,10 +295,11 @@ impl KeyLabels {
     /// The system's current keyboard layout, read without a window: on
     /// macOS (the current input source, through `UCKeyTranslate`) and
     /// Windows (the thread's keyboard layout, through `MapVirtualKeyExW`).
-    /// `None` elsewhere (Linux and the web learn the labels from the keys
-    /// pressed) and when the system has no layout to give. The window reads
-    /// it into [`Input::key_labels`] when it opens and when it gets the
-    /// focus back.
+    /// `None` elsewhere and when the system has no layout to give. The
+    /// window reads it into [`Input::key_labels`] when it opens and when it
+    /// gets the focus back. (On Linux and the BSDs the window follows the
+    /// display server's xkb layout instead, and in a browser it asks the
+    /// Keyboard Layout Map; neither can be read without a window.)
     ///
     /// ```
     /// if let Some(labels) = ponko::input::KeyLabels::system() {
@@ -427,8 +449,10 @@ impl Input {
     /// What each key is labelled on the player's keyboard, for prompts: a
     /// French player's `Key::W` reads `Z`. In a window it follows the
     /// system's layout (read when the window opens and when it gets the
-    /// focus back, on macOS and Windows) and every character key pressed
-    /// (on every desktop system and the web); headless it is a US
+    /// focus back, on macOS and Windows; the browser's Keyboard Layout Map,
+    /// where it has one, likewise; the active xkb layout as it changes, on
+    /// Linux and the BSDs under X11 and Wayland) and every character key
+    /// pressed (everywhere); headless it is a US
     /// keyboard's until [`set_key_labels`](Self::set_key_labels). Draw
     /// prompts with it: [`GlyphAtlas::set_key_labels`](super::GlyphAtlas::set_key_labels),
     /// [`KeyLabels::text`].

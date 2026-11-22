@@ -74,13 +74,39 @@ What that holds:
 - **No amplification.** The challenge (41 bytes) is smaller than the
   hello that caused it (64 bytes), and a shorter hello gets no challenge;
   a reflector gains nothing, which is stricter than QUIC's threefold
-  allowance. Challenges (and refusals of another protocol version) are
-  capped at 256 a second in all, so the host can't be made to flood one
-  victim either.
+  allowance. Challenges (and refusals of another protocol version) have
+  a [budget](#the-challenge-budget), so the host can't be made to flood
+  one victim either.
 - **Always on, nothing to set up.** The check is part of UDP hosting, and
   C and C++ need no new call. Browser clients (`accept_web`), WebRTC and
   the Steam relay come over transports that have proved the address
   already, and skip it.
+
+#### The challenge budget
+
+A host answers strangers (challenges, and refusals of another protocol
+version) from two budgets, and sends an answer only when both have it:
+
+- **One per network: 16 answers a second.** A network is an IPv4 /24 or
+  an IPv6 /56 (an IPv4-mapped IPv6 address counts as IPv4), about what
+  one site or one customer of a provider holds. A flood from one network,
+  forged or real, uses up its own budget and nobody else's, so clients
+  joining from other networks still get their challenge on the first
+  hello and connect in the usual round trips.
+- **One for everyone: 256 answers a second.** Whatever the source, the
+  host never sends more than that, so it is no use against a victim.
+
+The per-network budgets live in a fixed table of 64 entries inside the
+host, allocated with it and never grown. An entry is free again one
+second after its network's last answer (its budget is full by then), so
+nothing in the table outlives a second. While all 64 are in use, a hello
+from a 65th network is answered from the global budget alone, as before
+the table existed. A stranger who forges addresses from many networks at
+once can therefore still use up the global budget and delay joins by a
+second or two (a client resends its hello); stopping that needs a
+network in front of the host that drops spoofed traffic. Both budgets
+refill continuously, and a full budget allows a burst of one second's
+worth. Nothing to set up, from Rust, C or C++.
 
 The cookie only proves an address; it isn't authentication. Who a player
 is stays the game's to decide (below).
@@ -94,7 +120,7 @@ pack, a download, a mod. A file can lie in its header about anything.
 |---|---|---|---|
 | Images (PNG, JPEG and the `image-*` formats) | Make the game allocate gigabytes from a small file, crash the decoder | The size in the header is checked before decoding: 16 384 pixels a side and 512 MiB of RGBA8 at most by default, and a game can change both (`ErrorKind::Limit`, see "Image size limits" below) | `assets.rs` tests, fuzz target `cooked_texture` |
 | Cooked and compressed textures (KTX2, DDS) | The same; a supercompressed level that unpacks to terabytes | The same size limits; every level must unpack to exactly the bytes its size needs, and unpacking stops as soon as it passes them | `compressed.rs` tests, fuzz target `cooked_texture` |
-| Video (WebM with AV1) | A picture size that allocates gigabytes before the first frame | The container's picture size is checked against the image limits; the AV1 decoder refuses larger frames itself | `video.rs` tests |
+| Video (WebM with AV1) | A picture size that allocates gigabytes before the first frame; a crafted container that crashes its reader | The container's picture size is checked against the image limits; the AV1 decoder refuses larger frames itself; a panic inside the Matroska reader (an element size that overflows its arithmetic, say) is a `Decode` error when the video loads and as it plays | `video.rs` and `video/demux.rs` tests, fuzz target `webm_audio` (the container as far as the soundtrack) |
 | glTF models (`.glb`, `.gltf`) | Crash the loader, allocate without bound from accessor counts | Accessors and buffers are bounds-checked against the file; images go through the image limits | fuzz target `gltf` |
 | Aseprite files and cooked Aseprite sheets | Huge canvases, frame and tile counts | Sheets are limited in size and in the bytes they decode to; cooked sheets are a JSON file and an image (image limits) | `ponko_aseprite` tests, fuzz target `aseprite` |
 | Levels (LDtk `.ldtk`, Tiled `.tmx` / `.tmj`) | Layers or tilesets of billions of cells from a few bytes of text; compressed layer data that unpacks to gigabytes | Tile layers of 16 777 216 cells at most, tilesets of 1 048 576 tiles, tiles and sheets within the image limits (`ErrorKind::Limit`); compressed layer data stops unpacking at the cell limit | `tests/tilemaps.rs`, `tilemap/tiled.rs` tests, fuzz target `levels` |
@@ -102,7 +128,7 @@ pack, a download, a mod. A file can lie in its header about anything.
 | Scenes, world saves and prefabs (JSON) | Crash the reader, a prefab that includes itself forever | Errors for malformed JSON and unknown types; prefab nesting depth is limited | fuzz targets `scene`, `prefab` |
 | Action maps (players' key bindings) | Crash the input system | Malformed bindings are an error; nothing else is read | fuzz target `action_map` |
 | Unity imports (`ponko_unity`) | Crash the importer with a malformed project | Every read is bounds-checked | fuzz targets `unity_yaml`, `unity_binary` |
-| Sounds: WAV (PCM and IMA or Microsoft ADPCM), AIFF, Ogg Vorbis, FLAC and MP3 (and, with `video`, the audio of a WebM file) | A sample rate, channel count or length in the header that allocates gigabytes (compressed silence can unpack to terabytes), a crafted header that crashes the decoder | The header is read before anything is decoded: a sample rate over 768 kHz, zero or more than two channels, or (for a sound decoded whole) a claimed length over 64 Mi frames (512 MiB of samples, about 25 minutes at 44.1 kHz; stream longer ones) is an error (`could not decode the sound: ...` naming the limit); a sound decoded whole stops with that error at the same length however short or missing its header's length was; a stream holds no decoded samples, so its length is not limited. A panic inside a format's reader (an overflowing size in a header, say) is an error too, not a crash | `audio/sound_file.rs` tests (one per format), fuzz target `sound` |
+| Sounds: WAV (PCM and IMA or Microsoft ADPCM), AIFF, Ogg Vorbis, FLAC and MP3 (and, with `video`, the audio of a WebM file) | A sample rate, channel count or length in the header that allocates gigabytes (compressed silence can unpack to terabytes), a crafted header that crashes the decoder | The header is read before anything is decoded: a sample rate over 768 kHz, zero or more than two channels, or (for a sound decoded whole) a claimed length over 64 Mi frames (512 MiB of samples, about 25 minutes at 44.1 kHz; stream longer ones) is an error (`could not decode the sound: ...` naming the limit); a sound decoded whole stops with that error at the same length however short or missing its header's length was; a stream holds no decoded samples, so its length is not limited. A panic inside a format's reader (an overflowing size in a header, say) is an error too, not a crash, wherever the engine decodes sound: while a stream plays, too, on the desktop (where Kira decodes it on a thread of its own, through the engine's guarded decoder) and on the web, so a decoder that crashes part-way through a file ends that sound with an error in the log, not the thread or the game; a looping stream whose packets hold no frames ends instead of looping back forever | `audio/sound_file.rs` tests (one per format), `audio/stream_decoder.rs` tests and the backend's `a_decoder_panic_while_a_stream_plays_ends_that_sound_with_an_error_not_the_game`, fuzz targets `sound` and (with `video`) `webm_audio` |
 
 ### Image size limits
 
@@ -137,6 +163,55 @@ texture limit still fails at upload, with the usual error.
 
 ```cpp
 {{#include ../../examples/cpp/guide.cpp:image_limits}}
+```
+
+</div>
+</div>
+
+#### Tighter limits for a source you don't trust
+
+The limits above are the game's. An asset source (a mod pack, a download
+cache, a folder) can carry limits of its own: pictures read from it are
+decoded under them and everything else under the game's, so a game keeps
+generous limits for its own art and gives mods tight ones. The mounted mods'
+source id is `mods` (`ponko::mods::SOURCE_ID`); the call works before a source
+exists, so set it in setup, before the mods are mounted. A source added with
+`add_source_with_image_limits` (or `add_background_source_with_image_limits`)
+has them from the start, and `clear_source_image_limits` takes them back. The
+limits go with the decode to worker threads too, so asset groups and streamed
+textures follow them. The pictures a model refers to, the layers of a texture
+array, a level's tilesets, a terrain's weight maps and the sheet of an
+Aseprite export follow the source their file came from.
+
+In C: `ponko_ctx_set_source_image_limits`,
+`ponko_ctx_clear_source_image_limits` and `ponko_ctx_source_image_limits`; in
+C++: `ctx::set_source_image_limits`, `clear_source_image_limits` and
+`source_image_limits`.
+
+A refused picture's message says which limits refused it and where they came
+from: `(1024 pixels a side, 8 MiB of pixels; the limits of asset source
+"mods")`, or `the game's limits`, or, for `try_decode_texture`, `limits given
+for this picture`.
+
+Rust can list every source that has limits (`Assets::image_limit_sources`); C
+and C++ read a source whose id they know. The limits in force are read only for
+tools: the control endpoint's
+`assets.image_limits` (and the MCP tool `image_limits`) lists the game's and
+each source's, and the inspector's asset view shows them. Nothing remote can
+raise them; they are set in code.
+
+<div class="lang-pair">
+<div>
+
+```rust
+{{#include ../../tests/image_limits_sources.rs:source_image_limits}}
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:source_image_limits}}
 ```
 
 </div>

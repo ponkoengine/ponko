@@ -323,9 +323,12 @@ impl Panels {
     pub(crate) fn unloaded_panel(&mut self, ui: &mut Ui, ctx: &mut Ctx) {
         let unloaded = ctx.editor.doc.unloaded.clone();
         if unloaded.is_empty() {
+            crate::editor::web::publish_retry_places(&[]);
             return;
         }
         let mut retry = None;
+        let mut places = Vec::new();
+        let window = ui.ctx().content_rect().size().max(egui::vec2(1.0, 1.0));
         ui.label(
             RichText::new(match unloaded.len() {
                 1 => {
@@ -339,12 +342,13 @@ impl Panels {
         );
         egui::Grid::new("ponko-unloaded-scenes").striped(true).show(ui, |ui| {
             for (i, u) in unloaded.iter().enumerate() {
-                if ui
+                let button = ui
                     .push_id(i, |ui| ui.button(UNLOADED_RETRY))
                     .inner
-                    .on_hover_text("Load the file again: the scene is spawned where it was saved")
-                    .clicked()
-                {
+                    .on_hover_text("Load the file again: the scene is spawned where it was saved");
+                let at = button.rect.center();
+                places.push([at.x / window.x, at.y / window.y]);
+                if button.clicked() {
                     retry = Some(u.file.clone());
                 }
                 ui.label(RichText::new(&u.file).monospace());
@@ -352,6 +356,8 @@ impl Panels {
                 ui.end_row();
             }
         });
+        // Where the buttons are, for a browser test that clicks one.
+        crate::editor::web::publish_retry_places(&places);
         if let Some(file) = retry {
             self.retry_unloaded(ctx, &file);
         }
@@ -1129,6 +1135,8 @@ impl Panels {
         // A drag in progress follows the mouse until the button goes up.
         if let Some((drag, _)) = &self.scene.gizmo.drag {
             if down {
+                // Terrain tiles from files settle when the drag ends.
+                ctx.gfx.assets3d.terrain_files.held = Some(ctx.gfx.frame);
                 if let Some(moved) = drag.update(&ray, self.scene.gizmo.snap) {
                     for (e, t) in moved {
                         editor::place_world3d(&mut ctx.world, e, t);
@@ -1179,6 +1187,8 @@ impl Panels {
         if let Some((_, before)) = self.scene.gizmo.drag.take() {
             ctx.edit(|ed, ctx| ed.changed(&ctx.world, before));
         }
+        // Terrain tiles it moved settle now.
+        ctx.gfx.assets3d.terrain_files.held = None;
     }
 
     /// Move, Rotate and Scale (W, E, R) pick the gizmo; Frame (F) frames
@@ -1314,8 +1324,9 @@ impl Panels {
 pub(crate) const UNLOADED_RETRY: &str = "Retry";
 
 /// The error line for glTF scenes that didn't load when the document was
-/// opened, naming each file; `None` when they all loaded.
-fn unloaded_line(unloaded: &[crate::editor::Unloaded]) -> Option<String> {
+/// opened or that didn't spawn again at Stop, naming each file; `None`
+/// when they all loaded.
+pub(super) fn unloaded_line(unloaded: &[crate::editor::Unloaded]) -> Option<String> {
     let files: Vec<String> = unloaded.iter().map(|u| format!("{} ({})", u.file, u.why)).collect();
     match files.len() {
         0 => None,

@@ -291,6 +291,30 @@ mod browser {
         PERSISTENCE.with(|p| p.set(super::Persistence::from_answer(granted)));
     }
 
+    /// Sets (or, when `show` is false, removes) the `<html>` attribute that
+    /// names the places of the Retry buttons, when it differs from what the
+    /// page has.
+    pub(super) fn publish_retry_places(value: &str, show: bool) {
+        thread_local! {
+            static LAST: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+        }
+        let now = show.then(|| value.to_string());
+        if LAST.with(|l| *l.borrow() == now) {
+            return;
+        }
+        let Some(root) = web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.document_element())
+        else {
+            return;
+        };
+        let _ = match &now {
+            Some(value) => root.set_attribute(super::RETRY_ATTRIBUTE, value),
+            None => root.remove_attribute(super::RETRY_ATTRIBUTE),
+        };
+        LAST.with(|l| *l.borrow_mut() = now);
+    }
+
     /// Calls `storage.<method>()`, which returns a promise of a boolean;
     /// `None` when there is no such method or it fails.
     async fn call(storage: &JsValue, method: &str) -> Option<bool> {
@@ -395,6 +419,33 @@ pub(crate) fn restore() {
         crate::assets::insert_web_file(name, bytes);
     }
 }
+
+/// The attribute of `<html>` that says where the editor's **Retry**
+/// buttons (for glTF scenes that didn't load) are on the page.
+#[cfg(any(test, target_arch = "wasm32"))]
+pub(crate) const RETRY_ATTRIBUTE: &str = "data-ponko-retry";
+
+/// `places` as the attribute's value: a JSON list with a `[x, y]` pair for
+/// each button, its centre as a fraction of the window's width and height
+/// from the top left (so it holds at any size or scale).
+#[cfg(any(test, target_arch = "wasm32"))]
+pub(crate) fn retry_places_json(places: &[[f32; 2]]) -> String {
+    let pairs: Vec<String> = places.iter().map(|[x, y]| format!("[{x:.4},{y:.4}]")).collect();
+    format!("[{}]", pairs.join(","))
+}
+
+/// Tells the page where the editor's **Retry** buttons are (the attribute
+/// is removed when there are none), for a browser test that clicks one: a
+/// change of the panel's layout moves the buttons and their answer along.
+/// Only a change touches the page.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn publish_retry_places(places: &[[f32; 2]]) {
+    browser::publish_retry_places(&retry_places_json(places), !places.is_empty());
+}
+
+/// Desktop builds and tests have no page to tell.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn publish_retry_places(_places: &[[f32; 2]]) {}
 
 /// The browser's answer to the request for persistent storage.
 #[cfg(target_arch = "wasm32")]
@@ -537,6 +588,17 @@ pub(crate) fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_retry_places_are_a_json_list_of_window_fractions_for_the_page() {
+        use super::{RETRY_ATTRIBUTE, retry_places_json};
+        assert_eq!(RETRY_ATTRIBUTE, "data-ponko-retry");
+        assert_eq!(retry_places_json(&[]), "[]");
+        assert_eq!(
+            retry_places_json(&[[0.03, 0.5], [0.25, 0.75]]),
+            "[[0.0300,0.5000],[0.2500,0.7500]]"
+        );
+    }
+
     use super::*;
     use std::collections::BTreeMap;
 

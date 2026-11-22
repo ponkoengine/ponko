@@ -284,8 +284,21 @@ impl Editor {
         self.redo.clear();
         self.remap = played.remap;
         #[cfg(all(feature = "editor", feature = "3d"))]
-        for (old, new) in ctx.respawn_gltf_entities(&played.gltf) {
-            self.moved(old, new);
+        {
+            let (moved, failed) = ctx.respawn_gltf_entities(&played.gltf);
+            for (old, new) in moved {
+                self.moved(old, new);
+            }
+            // The scenes that don't spawn again join the ones that didn't
+            // load when the document was opened: the same panel, the same
+            // Retry. A scene that spawned now leaves it.
+            self.doc.unloaded = failed
+                .into_iter()
+                .map(|(file, e)| Unloaded {
+                    file,
+                    why: e.message().to_string(),
+                })
+                .collect();
         }
         self.state = played.state;
         self.open = None;
@@ -582,8 +595,16 @@ impl Editor {
         }
         let _ = offset3;
         settle(&mut ctx.world);
-        self.record(Undo::Spawned(map.values().copied().collect()));
-        restore_terrain(ctx)?;
+        let spawned: Vec<Entity> = map.values().copied().collect();
+        // A copy whose terrain file doesn't load isn't left without its tile.
+        #[cfg(feature = "3d")]
+        if let Err(e) = crate::three::give_terrain_tiles(ctx, &spawned) {
+            for &copy in &spawned {
+                ctx.world.despawn(copy);
+            }
+            return Err(e);
+        }
+        self.record(Undo::Spawned(spawned));
         Ok(copies)
     }
 

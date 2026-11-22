@@ -121,18 +121,42 @@ when to redraw text prompts.
 
 Where the labels come from:
 
-| | Windows | macOS | Linux (X11, Wayland) | Web |
+| | Windows | macOS | Linux and the BSDs (X11, Wayland) | Web |
 |---|---|---|---|---|
-| The whole layout, when the window opens and when it gets the focus back | yes (`MapVirtualKeyExW`) | yes (the input source's `UCKeyTranslate`) | no | no |
+| The whole layout, from the first frame | yes (`MapVirtualKeyExW`) | yes (the input source's `UCKeyTranslate`) | yes (the active xkb layout) | where the browser has the Keyboard Layout Map |
+| Read again | when the window gets the focus back | when the window gets the focus back | as soon as the player switches layouts or the keymap changes | when the page gets the focus back |
 | Each character key the player presses | yes | yes | yes | letters only |
 
 Windows and macOS give the whole layout without a window
-(`KeyLabels::system()`), so prompts are right from the first frame. Linux
-and the web only say what a key typed when it is pressed (winit has no
-call that maps a key to the layout's character without an event), so there
-a prompt shows the US label until the player presses that key once. On the
-web the character comes with Shift applied, so only letters (whose case is
-all Shift changes) are learned. Headless runs keep US labels until
+(`KeyLabels::system()`), so prompts are right from the first frame.
+
+**Linux and the BSDs** use xkb layouts on both display servers, and the
+engine reads the keymap the way the session hands it out: on X11 from the X
+server's XKB extension (its key map, with the active layout from its state,
+and events when either changes), on Wayland from the compositor, which
+sends the keymap and the active layout to a keyboard object the engine
+keeps next to winit's. Either way it takes the first level of each
+character key in the active layout (a dead key reads as its mark, `^`), so
+a player with `us,ru` who switches to Russian sees `Ц` for `Key::W` on the
+next frame. What a person has to check on a real session (the reading of
+the keymap is unit-tested on every system, with US, French + German and
+Russian keymaps, but no test has a display): that the labels change when
+the layout is switched with the desktop's own shortcut, on GNOME and KDE
+under Wayland and on an X11 session (`setxkbmap fr,de -option
+grp:alt_shift_toggle`), and that an X11 game sees a keymap loaded while it
+runs.
+
+**In a browser** the labels come from `navigator.keyboard.getLayoutMap()`,
+asked when the page opens and when it gets the focus back. Chromium-based
+browsers have it on pages served over HTTPS or from `localhost`; Firefox,
+Safari and pages outside a secure context don't, and a page in a frame may
+be refused. There, as before, a prompt shows the US label until the
+player presses that key once; the character a browser reports comes with
+Shift applied, so only letters (whose case is all Shift changes) are
+learned. The headless browser runner `web/smoke/key-labels.mjs` checks all
+three: a layout map, none, and a refused one.
+
+Headless runs keep US labels until
 `ctx.input.set_key_labels(KeyLabels::from_layout(...))`, which is also how
 a game offers a "keyboard layout" option and how tests check a layout:
 
@@ -155,7 +179,15 @@ Game::new("t", 1, 1).run_headless(1, move |ctx| {
 
 From C and C++, `ponko_glyph_atlas_draw_prompt` and
 `ponko_glyph_atlas_texture` label the caps for the player's layout
-themselves; text labels (`ponko_glyph_label`) are the US ones for now.
+themselves. For text, `ponko_ctx_key_label` gives a key's label on the
+player's layout and `ponko_ctx_glyph_label` a glyph's (`ponko_glyph_label`
+stays the US one); `ponko_ctx_key_labels_changed` says when they changed,
+and `ponko_ctx_set_key_labels` sets a layout from an array of
+`PonkoKeyLabel { key, character }`. C++ has them on `ponko::ctx`:
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:key_labels}}
+```
 
 The reference image of the GPU test `prompt_row_render_test` shows one row
 per device kind: keyboard and mouse, then the Xbox, PlayStation, Nintendo
@@ -368,10 +400,13 @@ C: `ponko_ctx_gamepad_rumble`, `ponko_ctx_gamepad_stop_rumble`,
 and the atlas (`ponko_glyph_atlas_new`, `_free`, `_pixels`, `_region`,
 `_texture`, `_draw_prompt`). `ponko_ctx_feed_input` kind 8 connects a pad.
 C++ wraps them on `ponko::ctx` (`rumble`, `gamepad_info`, `last_device`,
-`action_glyphs`, `draw_prompt`, ...) with `ponko::glyph_atlas`.
+`action_glyphs`, `draw_prompt`, ...) with `ponko::glyph_atlas`. Key
+labels: `ponko_ctx_key_label`, `ponko_ctx_glyph_label`,
+`ponko_ctx_key_labels_changed`, `ponko_ctx_set_key_labels` (C++
+`key_label`, `layout_glyph_label`, `key_labels_changed`, `set_key_labels`).
 The SDL backend is a feature of the engine library, so a native game built
-with `gamepad-sdl` gets it too. `KeyLabels` (text labels for a layout) and
-`InputScenario::connect_gamepad` are Rust-only; C and C++ scenarios are
+with `gamepad-sdl` gets it too. `KeyLabels::text` (join the glyph labels
+yourself) and `InputScenario::connect_gamepad` are Rust-only; C and C++ scenarios are
 JSON, where a `gamepad_connected` step takes the same `info` object.
 Custom backends (`GamepadBackend`) and `FakeGamepads` are Rust-only: a
 native game uses the built-in backend, and its tests feed events.

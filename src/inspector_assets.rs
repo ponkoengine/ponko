@@ -241,6 +241,8 @@ impl Panels {
                 .filter(|(p, _)| shown(p, &panel.search, &panel.folder))
                 .count();
             ui.label(RichText::new(format!("{n} of {}", all.len())).weak());
+            let (summary, detail) = image_limits_text(&ctx.assets);
+            ui.label(RichText::new(summary).weak()).on_hover_text(detail);
             if ui
                 .small_button("List again")
                 .on_hover_text("Read assets/ again, and make the thumbnails again")
@@ -317,6 +319,26 @@ impl Panels {
             }
         }
     }
+}
+
+/// What the asset view shows of the image limits, read only: a short line
+/// (the game's) and, for the hover text, every source's own with the same
+/// words a refused picture's error uses.
+pub(crate) fn image_limits_text(assets: &crate::assets::Assets) -> (String, String) {
+    let game = assets.image_limits().describe();
+    let mut detail = format!("Image limits in force (set in code, read only): {game}, the game's limits.");
+    let sources = assets.image_limit_sources();
+    for (id, limits) in &sources {
+        detail.push_str(&format!("\nAsset source \"{id}\": {}", limits.describe()));
+    }
+    let summary = match sources.len() {
+        0 => "Image limits: the game's".to_string(),
+        n => format!(
+            "Image limits: the game's, and {n} source{}",
+            if n == 1 { "" } else { "s" }
+        ),
+    };
+    (summary, detail)
 }
 
 /// The folders under `parent`, nested.
@@ -625,4 +647,27 @@ pub(crate) fn set_rule(cook: &mut CookSettings, path: &str, rule: Option<Value>)
         return Ok(());
     }
     cook.set(path, rule)
+}
+
+#[cfg(test)]
+mod limits_tests {
+    use super::image_limits_text;
+    use crate::assets::{Assets, ImageLimits};
+
+    #[test]
+    fn the_asset_view_shows_the_games_limits_and_each_sources_own_read_only() {
+        let mut assets = Assets::default();
+        let (summary, detail) = image_limits_text(&assets);
+        assert_eq!(summary, "Image limits: the game's");
+        assert!(detail.contains("the game's limits"), "{detail}");
+        assert!(detail.contains("read only"), "{detail}");
+
+        assets.set_source_image_limits("mods", ImageLimits::new(1_024, 8 << 20));
+        let (summary, detail) = image_limits_text(&assets);
+        assert_eq!(summary, "Image limits: the game's, and 1 source");
+        assert!(
+            detail.contains("Asset source \"mods\": 1024 pixels a side, 8 MiB of pixels"),
+            "{detail}"
+        );
+    }
 }

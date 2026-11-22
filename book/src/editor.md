@@ -351,6 +351,15 @@ its file names the scene either way. A retry that still fails says why in
 the row and the error line. The panel is gone once every scene loaded,
 and opening another document starts it again.
 
+**Stop** spawns the glTF scenes again from their files too (they aren't in
+the world it puts back). One whose file broke while you played, or still
+doesn't load, is listed in the same panel, with its reason and the same
+**Retry**; a scene that spawns at Stop leaves the list, so the panel holds
+the scenes that are out of the world now. A web build also sets
+`<html data-ponko-retry>` to where the Retry buttons are (a list of
+`[x, y]` as fractions of the window), so a browser test finds the button by
+asking the page.
+
 Overrides are per component (the changed fields of each), and two more
 kinds are per node:
 
@@ -533,9 +542,18 @@ isn't saved (a save counts it under `"not_saved"`). Loading the scene, in
 the editor or with `load_scene`, makes each tile from its file; a file
 that isn't there stops the load with the world as it was. A tile still
 live from the same file at the same corner is kept rather than made again,
-so Stop, undo and loading the same level again cost nothing. Save the
+so Stop, undo and loading the same level again cost nothing (a tile of the
+same file left elsewhere is moved there instead). Save the
 terrain file with the scene (Ctrl+S saves both): the scene names the file
 on disk, not the window's unsaved edits.
+
+The same holds for a tile that arrives another way: a prefab naming a
+terrain file spawns with its tile, a duplicate gets a tile of its own, and
+an entity spawned from JSON while the game runs gets one at the next frame;
+a file that isn't there is an error naming it, with nothing left half made
+(see [Tiles from terrain files](3d.md#tiles-from-terrain-files)). Moving
+the tile with the gizmo moves its painted layers and its collider with it;
+the layers settle once, when the drag ends, not at every frame of it.
 
 A terrain file is JSON, with its images beside it, and
 `TerrainTile::spawn_from_file(ctx, path, corner)` spawns it as a [`TerrainTile`](3d.md#terrain),
@@ -693,10 +711,11 @@ over a terrain (one step), a layer added, painted and saved as PNGs that
 `TerrainTile::spawn_from_file` loads, and a terrain added to the scene,
 saved as its file and corner, and spawned again by another editor opening
 the scene (its live tile kept on a reload, a missing file refused with the
-world unchanged). Offscreen GPU tests check the previews draw: a
+world unchanged); headless tests spawn terrain from a prefab and from JSON
+while the game runs, and cast rays at a tile moved by code. Offscreen GPU tests check the previews draw: a
 material edit recolours its model, a shader edit shows and a broken one
 keeps the last good look, a painted terrain layer shows where it was
-painted, the particle preview draws particles (none without it), and the
+painted and stays under its tile when the tile moves, the particle preview draws particles (none without it), and the
 graph's preview poses its skeleton by the test value, each against the
 picture without the edit.
 

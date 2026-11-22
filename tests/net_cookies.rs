@@ -73,13 +73,15 @@ fn hellos_from_addresses_that_never_answer_leave_no_connection_and_no_memory() {
     }
     // Poll until the host has taken every hello in, counting what its
     // thread allocates meanwhile.
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let started = Instant::now();
+    let deadline = started + Duration::from_secs(10);
     ALLOCS.with(|n| n.set(0));
     TRACK.with(|t| t.set(true));
     while host.stats().packets_received < sent as u64 && Instant::now() < deadline {
         host.poll_elapsed(Duration::from_millis(1)).unwrap();
     }
     TRACK.with(|t| t.set(false));
+    let polling = started.elapsed();
     let allocations = ALLOCS.with(Cell::get);
     // Negative control: the counter does see this thread's allocations.
     TRACK.with(|t| t.set(true));
@@ -91,8 +93,9 @@ fn hellos_from_addresses_that_never_answer_leave_no_connection_and_no_memory() {
     assert_eq!(host.events().count(), 0);
     assert_eq!(allocations, 0, "no allocation for unproven addresses");
 
-    // Each answer is a challenge of 41 bytes, smaller than the hello, and
-    // there are at most 256 a second of them.
+    // Each answer is a challenge of 41 bytes, smaller than the hello. All
+    // the senders are on one network (127.0.0.0/24), which gets 16 answers
+    // a second, not the host's 256 for everyone.
     let mut buf = [0u8; 1500];
     let mut answers = 0u64;
     for s in &senders {
@@ -105,7 +108,8 @@ fn hellos_from_addresses_that_never_answer_leave_no_connection_and_no_memory() {
     }
     assert_eq!(answers, host.stats().packets_sent);
     assert!(answers > 0, "the host did answer");
-    assert!(answers <= 256 + 40, "{answers} challenges in about a second");
+    let budget = 16 * (1 + polling.as_secs() + 1);
+    assert!(answers <= budget, "{answers} challenges to one network in {polling:?}");
 }
 
 #[test]

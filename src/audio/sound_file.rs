@@ -9,11 +9,7 @@
 //! kilobytes of compressed silence can unpack to gigabytes. Every refusal
 //! is an error naming the limit.
 
-use std::io::Cursor;
-use std::sync::Arc;
-use symphonia::core::codecs::{CodecParameters, audio::AudioCodecParameters};
-use symphonia::core::formats::{TrackType, probe::Hint};
-use symphonia::core::io::{MediaSource, MediaSourceStream};
+use symphonia::core::codecs::audio::AudioCodecParameters;
 
 /// The highest sample rate a sound may have (Hz): the highest rate audio
 /// interfaces and formats are made for.
@@ -81,44 +77,23 @@ pub(crate) fn guarded<T>(f: impl FnOnce() -> Result<T, String>) -> Result<T, Str
         .unwrap_or_else(|_| Err("the file crashed the sound decoder (it is damaged or hostile)".into()))
 }
 
-/// Reads the header of `source` and checks its sample rate and channels
-/// (not its length: a stream holds no decoded samples), decoding no samples.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))] // streams from memory are native only
-fn probe(source: impl MediaSource + 'static) -> Result<(), String> {
-    guarded(|| probe_unguarded(source))
-}
-
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))] // streams from memory are native only
-fn probe_unguarded(source: impl MediaSource + 'static) -> Result<(), String> {
-    let stream = MediaSourceStream::new(Box::new(source), Default::default());
-    let reader = symphonia::default::get_probe()
-        .probe(&Hint::default(), stream, Default::default(), Default::default())
-        .map_err(|e| e.to_string())?;
-    let track = reader.default_track(TrackType::Audio).ok_or("it has no audio track")?;
-    match track.codec_params.as_ref() {
-        Some(CodecParameters::Audio(params)) => check_params(params),
-        _ => Err("it has no audio track".into()),
-    }
-}
-
-/// [`probe`] for encoded bytes held in memory.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))] // streams from memory are native only
-pub(crate) fn check_bytes(bytes: &Arc<[u8]>) -> Result<(), String> {
-    probe(Cursor::new(bytes.clone()))
-}
-
-/// [`probe`] for a sound file on disk.
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn check_file(path: &std::path::Path) -> Result<(), String> {
-    probe(std::fs::File::open(path).map_err(|e| e.to_string())?)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::assets::group::sliced::SoundSlices;
+    use crate::audio::stream_decoder::StreamDecoder;
     use crate::audio::{backend, chunked, decode_sound};
     use std::cell::Cell;
+    use std::sync::Arc;
+
+    /// What a stream checks when it opens (header only).
+    fn check_bytes(bytes: &Arc<[u8]>) -> Result<(), String> {
+        StreamDecoder::from_bytes(bytes).map(drop)
+    }
+
+    fn check_file(path: &std::path::Path) -> Result<(), String> {
+        StreamDecoder::from_file(path).map(drop)
+    }
 
     thread_local! {
         /// A lower `MAX_FRAMES` for the test of this thread.

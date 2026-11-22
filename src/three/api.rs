@@ -1032,13 +1032,20 @@ impl Graphics {
                 .clone()
         };
         let gpu = self.model_formats();
-        let loaded = gltf::load_for(
-            path,
-            bytes,
-            &mut |name| sources.read(name),
-            &|source| key_of(source).is_some_and(|key| shared.contains_key(&key)),
-            gpu,
-        )
+        // The model's pictures follow the image limits of the source it came from.
+        let in_source = |f: &mut dyn FnMut() -> Result<gltf::Loaded, String>| match sources.locate(path) {
+            Some(origin) => sources.image_limits().scope(&origin, f),
+            None => f(),
+        };
+        let loaded = in_source(&mut || {
+            gltf::load_for(
+                path,
+                bytes,
+                &mut |name| sources.read(name),
+                &|source| key_of(source).is_some_and(|key| shared.contains_key(&key)),
+                gpu,
+            )
+        })
         .map_err(|e| crate::error::Error::decode(path, e))?;
         let image_keys = loaded
             .image_sources
@@ -1089,17 +1096,22 @@ impl Graphics {
         }
         let gpu = self.model_formats();
         self.assets3d.gltf_scene_parses += 1;
-        let loaded = gltf::load_nodes(
-            path,
-            &bytes,
-            &mut |name| sources.read(name),
-            &|source| {
-                reuse.is_some()
-                    || (!refresh && SharedImage::of(sources, source).is_some_and(|key| shared.contains_key(&key)))
-            },
-            gpu,
-        )
-        .map_err(|e| crate::error::Error::decode(path, e))?;
+        let loaded = sources
+            .image_limits()
+            .scope(&file, || {
+                gltf::load_nodes(
+                    path,
+                    &bytes,
+                    &mut |name| sources.read(name),
+                    &|source| {
+                        reuse.is_some()
+                            || (!refresh
+                                && SharedImage::of(sources, source).is_some_and(|key| shared.contains_key(&key)))
+                    },
+                    gpu,
+                )
+            })
+            .map_err(|e| crate::error::Error::decode(path, e))?;
         if let Some(meshes) = reuse
             && fits(meshes, &loaded.nodes)
         {
@@ -1449,13 +1461,15 @@ impl Graphics {
     /// Game::new("t", 1, 1).run_headless(0, |ctx| assert!(wall(ctx).is_err()));
     /// ```
     pub fn try_load_mesh_data(&self, path: &str) -> Result<MeshData, crate::error::Error> {
-        let bytes = self
-            .asset_sources
-            .find(path)?
-            .into_bytes()
-            .map_err(|e| e.with_path(path))?;
+        let found = self.asset_sources.find(path)?;
+        let origin = found.origin.clone();
+        let bytes = found.into_bytes().map_err(|e| e.with_path(path))?;
         let sources = &self.asset_sources;
-        let loaded = gltf::load(path, &bytes, &mut |name| sources.read(name), &|_| true)
+        let loaded = sources
+            .image_limits()
+            .scope(&origin, || {
+                gltf::load(path, &bytes, &mut |name| sources.read(name), &|_| true)
+            })
             .map_err(|e| crate::error::Error::decode(path, e))?;
         Ok(loaded.data)
     }

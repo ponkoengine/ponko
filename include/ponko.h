@@ -472,6 +472,13 @@ typedef enum PonkoMessageEventKind {
   PONKO_MESSAGE = 2,
 } PonkoMessageEventKind;
 
+typedef enum PonkoModValueKind {
+  PONKO_MOD_I32 = 0,
+  PONKO_MOD_I64 = 1,
+  PONKO_MOD_F32 = 2,
+  PONKO_MOD_F64 = 3,
+} PonkoModValueKind;
+
 typedef enum PonkoJointMotionKind {
   PONKO_JOINT_FREE = 0,
   PONKO_JOINT_LOCKED = 1,
@@ -2127,6 +2134,16 @@ typedef struct PonkoMessageStats {
   uint64_t bytes_received;
 } PonkoMessageStats;
 
+typedef struct PonkoModFn {
+  uint32_t id;
+} PonkoModFn;
+
+typedef struct PonkoModValue {
+  enum PonkoModValueKind kind;
+  int64_t i;
+  double f;
+} PonkoModValue;
+
 typedef struct PonkoModBytes {
   const char *name;
   const uint8_t *bytes;
@@ -3434,6 +3451,11 @@ typedef struct PonkoUiComposition {
   size_t cursor_end;
   bool composing;
 } PonkoUiComposition;
+
+typedef struct PonkoKeyLabel {
+  uint32_t key;
+  uint32_t character;
+} PonkoKeyLabel;
 
 typedef struct PonkoStringArg {
   const char *name;
@@ -6246,6 +6268,28 @@ enum PonkoStatus ponko_net_messages_steam_join(uint32_t app_id,
 enum PonkoStatus ponko_net_messages_steam_peer(struct PonkoNetMessages *endpoint,
                                                uint64_t peer,
                                                uint64_t *output);
+
+enum PonkoStatus ponko_ctx_mod_function(struct PonkoCtx *ctx,
+                                        const char *mod_id,
+                                        const char *name,
+                                        struct PonkoModFn *out_fn);
+
+enum PonkoStatus ponko_ctx_mod_call(struct PonkoCtx *ctx,
+                                    struct PonkoModFn f,
+                                    const struct PonkoModValue *args,
+                                    size_t count,
+                                    struct PonkoModValue *out_result,
+                                    bool *out_has_result);
+
+enum PonkoStatus ponko_ctx_mod_expose_entity(struct PonkoCtx *ctx, uint64_t entity);
+
+enum PonkoStatus ponko_ctx_mod_hide_entity(struct PonkoCtx *ctx,
+                                           uint64_t entity,
+                                           bool *out_was_exposed);
+
+enum PonkoStatus ponko_ctx_mod_expose_prefab(struct PonkoCtx *ctx, const char *path);
+
+enum PonkoStatus ponko_ctx_mod_seed_random(struct PonkoCtx *ctx, uint64_t seed);
 
 enum PonkoStatus ponko_ctx_mount_mods(struct PonkoCtx *ctx, const char *const *paths, size_t count);
 
@@ -9481,6 +9525,19 @@ enum PonkoStatus ponko_ctx_try_decode_texture(struct PonkoCtx *ctx,
                                               uint64_t max_bytes,
                                               struct PonkoTexture *out_texture);
 
+enum PonkoStatus ponko_ctx_set_source_image_limits(struct PonkoCtx *ctx,
+                                                   const char *source_id,
+                                                   uint32_t max_side,
+                                                   uint64_t max_bytes);
+
+enum PonkoStatus ponko_ctx_clear_source_image_limits(struct PonkoCtx *ctx, const char *source_id);
+
+enum PonkoStatus ponko_ctx_source_image_limits(const struct PonkoCtx *ctx,
+                                               const char *source_id,
+                                               uint32_t *out_max_side,
+                                               uint64_t *out_max_bytes,
+                                               bool *out_has);
+
 enum PonkoStatus ponko_ctx_feed_ime(struct PonkoCtx *ctx, const struct PonkoImeEvent *event);
 
 enum PonkoStatus ponko_ctx_preedit(struct PonkoCtx *ctx,
@@ -9549,6 +9606,24 @@ enum PonkoStatus ponko_ctx_ui_frame_ime(struct PonkoCtx *ctx,
 enum PonkoStatus ponko_input_scenario_ime(struct PonkoInputScenario *scenario,
                                           uint64_t tick,
                                           const struct PonkoImeEvent *event);
+
+enum PonkoStatus ponko_ctx_key_label(struct PonkoCtx *ctx,
+                                     uint32_t key,
+                                     char *buffer,
+                                     size_t capacity,
+                                     size_t *out_len);
+
+enum PonkoStatus ponko_ctx_glyph_label(struct PonkoCtx *ctx,
+                                       struct PonkoGlyph glyph,
+                                       char *buffer,
+                                       size_t capacity,
+                                       size_t *out_len);
+
+enum PonkoStatus ponko_ctx_key_labels_changed(struct PonkoCtx *ctx, bool *out_changed);
+
+enum PonkoStatus ponko_ctx_set_key_labels(struct PonkoCtx *ctx,
+                                          const struct PonkoKeyLabel *labels,
+                                          size_t count);
 
 enum PonkoStatus ponko_ctx_load_strings(struct PonkoCtx *ctx, const char *path);
 

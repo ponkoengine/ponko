@@ -11,7 +11,7 @@
 //! for the first click, as browsers allow sound only after one. Each frame
 //! it publishes its state for the runner (see `common/web_smoke.rs`):
 //!
-//! `{"fixture":"web_smoke","ticks":120,"frames":118,"clicks":1,"size":[800,600],"asset":[32,32],"source":[4,2],"stream":true,"audio_unlocked":true,"group_ready":1,"group":"ready"}`
+//! `{"fixture":"web_smoke","ticks":120,"frames":118,"clicks":1,"size":[800,600],"asset":[32,32],"source":[4,2],"stream":true,"audio_unlocked":true,"group_ready":1,"group":"ready","key_labels":"W/A/S/D"}`
 //!
 //! Failure cases for the runner's self-tests, chosen with the page's query
 //! string: `?smoke_case=panic` panics during setup, `?smoke_case=stall`
@@ -104,6 +104,10 @@ fn frame(ticks: Rc<Cell<u64>>) -> impl FnMut(&mut Ctx) {
                 "audio_unlocked": ctx.audio.unlocked(),
                 "group_ready": u32::from(group_state == GroupState::Ready),
                 "group": group_error.unwrap_or_else(|| group_state.name().to_string()),
+                // WASD as labelled on the player's keyboard ("Z/Q/S/D" on a
+                // French one): from the browser's layout map where it has
+                // one, else learned from the keys pressed.
+                "key_labels": ctx.input.key_labels().text(&wasd()),
             }),
         );
         // The background changes with each click, so a click shows.
@@ -124,6 +128,12 @@ fn frame(ticks: Rc<Cell<u64>>) -> impl FnMut(&mut Ctx) {
             );
         }
     }
+}
+
+/// The glyphs of the WASD keys, for the `key_labels` field.
+fn wasd() -> ponko::input::Glyphs {
+    use ponko::input::{Glyph, Glyphs};
+    Glyphs::from_slice(&[Key::W, Key::A, Key::S, Key::D].map(Glyph::Key))
 }
 
 /// A `width` x `height` PNG, made in memory.

@@ -184,7 +184,7 @@ fn glyph_to_c(g: Glyph) -> PonkoGlyph {
     PonkoGlyph { kind, family, code }
 }
 
-fn glyph_from_c(g: PonkoGlyph) -> Result<Glyph, Failure> {
+pub(crate) fn glyph_from_c(g: PonkoGlyph) -> Result<Glyph, Failure> {
     let family = || family_from_c(g.family);
     let pick = |n: usize| (g.code as usize) < n;
     Ok(match g.kind {

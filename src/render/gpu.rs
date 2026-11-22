@@ -465,6 +465,12 @@ impl Renderer {
         self.timer.as_ref().map_or(&[], |t| &t.not_timed)
     }
 
+    /// Passes of the latest timed frame the timer had no room for (they
+    /// drew untimed), and how many passes a frame it can time now.
+    pub fn gpu_pass_room(&self) -> (u32, u32) {
+        self.timer.as_ref().map_or((0, 0), |t| (t.over_limit(), t.pass_limit()))
+    }
+
     /// Why the latest frame has no usable GPU time, if it has none.
     pub fn gpu_untimed(&self) -> Option<crate::perf::GpuUntimed> {
         if self.device_lost.load(std::sync::atomic::Ordering::Acquire) {

@@ -425,6 +425,65 @@ fn trail(disabled: bool, buffered: bool) -> Option<f32> {
     Some(ghost)
 }
 
+/// Per frame: whether the motion pass was skipped, and whether the box's
+/// middle had motion.
+type MotionFrames = Vec<(bool, bool)>;
+
+/// Draws a box that holds still, moves for two frames and stops again,
+/// with TAA; returns its [`MotionFrames`] and the last image.
+fn hold_move_hold(always: bool) -> Option<(MotionFrames, Vec<f32>)> {
+    let mut rig = Rig::new(SIZE, false)?;
+    if !crate::render::render_test_support::needs(&rig.device, crate::render::GpuFeature::TemporalAntialiasing) {
+        return None;
+    }
+    rig.renderer.set_motion_pass_always(always);
+    rig.ctx.scene3d.post.anti_aliasing = AntiAliasing::Taa;
+    rig.ctx.world.spawn((Transform3D::at(Vec3::ZERO), Model::new(rig.cube)));
+    let center = rig.size / 2;
+    let mut frames = Vec::new();
+    let mut last = Vec::new();
+    for n in 0..9 {
+        if (4..6).contains(&n) {
+            rig.ctx
+                .world
+                .query::<&mut Transform3D>()
+                .for_each(|t| t.position.x += 0.05);
+        }
+        last = rig.draw();
+        frames.push((
+            rig.renderer.motion_pass_skipped(),
+            motion_at(&rig, center, center).is_some(),
+        ));
+    }
+    Some((frames, last))
+}
+
+#[test]
+fn the_motion_pass_is_skipped_while_nothing_moves_and_its_image_stays_clear() {
+    let (Some((skipping, image)), Some((always, reference))) = (hold_move_hold(false), hold_move_hold(true)) else {
+        return;
+    };
+    let skipped: Vec<bool> = skipping.iter().map(|f| f.0).collect();
+    // The first frame clears the new image; frames 4 and 5 move the box;
+    // frame 6 clears its motion; the still frames around are skipped.
+    assert_eq!(
+        skipped,
+        [false, true, true, true, false, false, false, true, true],
+        "which frames skip the motion pass"
+    );
+    let moving: Vec<bool> = skipping.iter().map(|f| f.1).collect();
+    assert_eq!(
+        moving,
+        [false, false, false, false, true, true, false, false, false],
+        "the box has motion only while it moves, skipped frames included"
+    );
+    // The control runs the pass every frame and sees the same motion and
+    // the same picture.
+    assert!(always.iter().all(|f| !f.0), "the control never skips");
+    assert_eq!(moving, always.iter().map(|f| f.1).collect::<Vec<_>>());
+    assert_eq!(image, reference, "skipping the pass changes nothing on screen");
+}
+
 #[test]
 fn a_moving_box_leaves_no_ghost_behind() {
     let (Some(camera_only), Some(with_vectors)) = (trail(true, false), trail(false, false)) else {

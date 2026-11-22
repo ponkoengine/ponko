@@ -50,16 +50,41 @@ pub(crate) enum SeeThrough {
     Particles(u32, u32),
 }
 
-/// What a see-through model in the list is drawn by, before it is placed:
-/// its view depth, where it can cover the screen and whether it may be
-/// moved (see [`Renderer3D::screen_rect`]).
+/// What an item of the see-through list is drawn by, before it is
+/// placed: its view depth, where it can cover the screen and whether it
+/// may be moved (see [`Renderer3D::screen_rect`]) and blends additively.
 #[derive(Clone, Copy, Debug)]
-pub(super) struct ModelItem {
+pub(crate) struct ModelItem {
     depth: f32,
     rect: [f32; 4],
     /// The screen's 8 x 8 tiles `rect` touches, a bit each.
     tiles: u64,
     movable: bool,
+    /// Adds its light to what is drawn (an additive particle, ribbon or
+    /// line): two such draws give the same sum in either order, wherever
+    /// they overlap.
+    additive: bool,
+}
+
+impl ModelItem {
+    /// Something that covers the whole screen and stays where it is.
+    const STUCK: Self = Self {
+        depth: 0.0,
+        rect: FULL_SCREEN,
+        tiles: u64::MAX,
+        movable: false,
+        additive: false,
+    };
+
+    fn at(rect: [f32; 4], movable: bool, additive: bool) -> Self {
+        Self {
+            depth: 0.0,
+            rect,
+            tiles: tiles(rect),
+            movable,
+            additive,
+        }
+    }
 }
 
 /// One item of the merged see-through order: a model (its index in the
@@ -302,6 +327,7 @@ impl Renderer3D {
         let mut sorted = std::mem::take(&mut self.lists.blended);
         let mut keys = std::mem::take(&mut self.lists.blend_keys);
         let mut items = std::mem::take(&mut self.lists.blend_items);
+        let mut entries = std::mem::take(&mut self.lists.blend_entries);
         let mut merged = std::mem::take(&mut self.lists.blend_merged);
         let mut grouped = std::mem::take(&mut self.lists.blend_grouped);
         let mut used = std::mem::take(&mut self.lists.blend_used);
@@ -349,6 +375,7 @@ impl Renderer3D {
                 rect,
                 tiles: tiles(rect),
                 movable,
+                additive: false,
             }
         }));
         // The sources the list merges, in their order at equal depth.
@@ -382,16 +409,57 @@ impl Renderer3D {
             depth,
             &mut merged,
         );
+        // The last model or batch: the batches and crowds with no order
+        // are drawn after it, so nothing is moved across it.
+        let cut = merged
+            .iter()
+            .rposition(|e| matches!(e, Merged::Model(_) | Merged::Batch(..)));
         let order = if group {
-            group_models(&merged, &items, &keys, &mut used, &mut grouped);
+            let tight = self.tight_grouping;
+            entries.clear();
+            let mut run = 0;
+            entries.extend(merged.iter().map(|&entry| match entry {
+                Merged::Model(m) => items[m as usize],
+                Merged::Batch(..) => ModelItem::STUCK,
+                _ if !tight => ModelItem::STUCK,
+                Merged::Strip(r) => {
+                    let strip = &effects.strips.runs[r as usize];
+                    let vertices = &effects.strips.vertices;
+                    let points = vertices
+                        .get(strip.first as usize..(strip.first + strip.count) as usize)
+                        .unwrap_or(&[])
+                        .iter()
+                        .map(|v| glam::Vec3::from_array(v.position));
+                    let rect = points_rect(view_proj, points, margin).unwrap_or(FULL_SCREEN);
+                    ModelItem::at(rect, true, strip.blend == crate::d3::ParticleBlend::Additive)
+                }
+                Merged::Particle(p) => {
+                    // Particles come in order: the run holding `p` is at or
+                    // after the last one's.
+                    let runs = &effects.runs;
+                    while runs.get(run).is_some_and(|r| r.first + r.count <= p) {
+                        run += 1;
+                    }
+                    let additive = runs
+                        .get(run)
+                        .is_some_and(|r| r.blend == crate::d3::ParticleBlend::Additive);
+                    let [x, y, z, size] = effects.instances[p as usize].position_size;
+                    // A quad `size` across, turned any way: within half its
+                    // diagonal of its centre.
+                    let reach = size.max(0.0) * std::f32::consts::FRAC_1_SQRT_2;
+                    let rect = sphere_rect(view_proj, glam::Vec3::new(x, y, z), reach, margin).unwrap_or(FULL_SCREEN);
+                    ModelItem::at(rect, true, additive)
+                }
+            }));
+            self::group(&merged, &entries, &keys, cut, &mut used, &mut grouped);
             &grouped
         } else {
             &merged
         };
         // The batches and crowds with no order, after the last model or
-        // batch.
+        // batch (and what was drawn before it).
         let mut unsorted_at = 0;
-        for &entry in order.iter() {
+        for (n, &entry) in order.iter().enumerate() {
             match entry {
                 Merged::Model(item) => {
                     let (_, mesh, i) = keys[item as usize];
@@ -414,7 +482,6 @@ impl Renderer3D {
                         }
                     }
                     sorted.push(instances[i as usize]);
-                    unsorted_at = list.len();
                 }
                 Merged::Batch(b, at) => {
                     let level = batch_copies[b as usize]
@@ -435,7 +502,6 @@ impl Renderer3D {
                             count: 1,
                         }),
                     }
-                    unsorted_at = list.len();
                 }
                 Merged::Strip(r) => match list.last_mut() {
                     Some(SeeThrough::Strips(_, end)) if *end == r => *end += 1,
@@ -445,6 +511,9 @@ impl Renderer3D {
                     Some(SeeThrough::Particles(_, end)) if *end == p => *end += 1,
                     _ => list.push(SeeThrough::Particles(p, p + 1)),
                 },
+            }
+            if Some(n) == cut {
+                unsorted_at = list.len();
             }
         }
         if !joined {
@@ -485,6 +554,7 @@ impl Renderer3D {
         self.lists.blended = sorted;
         self.lists.blend_keys = keys;
         self.lists.blend_items = items;
+        self.lists.blend_entries = entries;
         self.lists.blend_merged = merged;
         self.lists.blend_grouped = grouped;
         self.lists.blend_used = used;
@@ -494,7 +564,8 @@ impl Renderer3D {
 
     /// Where a see-through model can cover the screen: a rectangle in
     /// normalized device coordinates (x0, y0, x1, y1) around its mesh's
-    /// bounding sphere, `margin` wider, and whether it may be moved in
+    /// bounding sphere and (with `tight_grouping`) its box turned and
+    /// placed by the model's matrix, where both cover, `margin` wider, and whether it may be moved in
     /// the draw order at all: a skinned model, one drawn from a GPU
     /// buffer, one whose shader moves its corners and one with more than
     /// one see-through part (whose parts are drawn part by part across a
@@ -527,11 +598,24 @@ impl Renderer3D {
             .length()
             .max(m.y_axis.truncate().length())
             .max(m.z_axis.truncate().length());
-        let rect = sphere_rect(view_proj, m.w_axis.truncate(), geometry.radius * scale, margin);
-        match rect {
-            Some(rect) => (rect, see_through == 1),
-            None => (FULL_SCREEN, false),
-        }
+        let sphere = sphere_rect(view_proj, m.w_axis.truncate(), geometry.radius * scale, margin);
+        let (low, high) = geometry.bounds;
+        let boxed = if self.tight_grouping && low.cmple(high).all() {
+            let corners = (0..8).map(|i| {
+                let pick = |bit: u32, l: f32, h: f32| if i & bit == 0 { l } else { h };
+                let corner = glam::Vec3::new(pick(1, low.x, high.x), pick(2, low.y, high.y), pick(4, low.z, high.z));
+                m.transform_point3(corner)
+            });
+            points_rect(view_proj, corners, margin)
+        } else {
+            None
+        };
+        let rect = match (sphere, boxed) {
+            (Some(a), Some(b)) => [a[0].max(b[0]), a[1].max(b[1]), a[2].min(b[2]), a[3].min(b[3])],
+            (Some(rect), None) | (None, Some(rect)) => rect,
+            (None, None) => return (FULL_SCREEN, false),
+        };
+        (rect, see_through == 1)
     }
 
     pub(crate) fn state_changes(&self) -> [u32; 5] {
@@ -658,26 +742,43 @@ fn merge<'a>(
     }
 }
 
-/// Reorders `merged` into `out` to draw models of one mesh together where
-/// blending gives the same picture: after each movable model, the next
-/// models of its mesh (within [`GROUP_WINDOW`] models) are drawn right
-/// after it, unless one of them covers pixels a model it would jump over
-/// covers too (by their rectangles, `items`). Two draws that cover no
-/// pixel in common give the same picture in either order, so the picture
-/// is that of far-to-near blending. Nothing jumps over anything but
-/// models; `keys` names each model's mesh, `used` is scratch space.
-fn group_models(
+/// Whether `next` can join the draw `last` ends: a model of the same
+/// mesh, or the next particle, ribbon or line (they draw by ranges).
+fn joins(last: Merged, next: Merged, keys: &[(f32, u32, u32)]) -> bool {
+    match (last, next) {
+        (Merged::Model(a), Merged::Model(b)) => keys[a as usize].1 == keys[b as usize].1,
+        (Merged::Particle(a), Merged::Particle(b)) | (Merged::Strip(a), Merged::Strip(b)) => b == a + 1,
+        _ => false,
+    }
+}
+
+/// Reorders `merged` into `out` to draw together what can share a draw,
+/// where blending gives the same picture: after each movable entry, the
+/// next ones that would join its draw (see [`joins`]: models of its mesh,
+/// the following particles, ribbons or lines), within [`GROUP_WINDOW`]
+/// entries, are drawn right after it, unless one of them covers pixels
+/// something it would jump over covers too (by their rectangles,
+/// `entries`), and the two are not both additive. Two draws that cover no
+/// pixel in common, or that both add their light, give the same picture
+/// in either order, so the picture is that of far-to-near blending (up to
+/// the rounding of the sums). An entry that cannot move and covers the
+/// whole screen (a batch, a model with no rectangle) stops the search,
+/// and nothing moves across `cut` (the entries up to it stay before the
+/// rest). `keys` names each model's mesh, `used` is scratch space.
+fn group(
     merged: &[Merged],
-    items: &[ModelItem],
+    entries: &[ModelItem],
     keys: &[(f32, u32, u32)],
+    cut: Option<usize>,
     used: &mut Vec<bool>,
     out: &mut Vec<Merged>,
 ) {
     out.clear();
     used.clear();
     used.resize(merged.len(), false);
-    // The models passed over so far (at most the window's), and the tiles
-    // they touch: a model whose tiles they don't touch overlaps none.
+    // The entries passed over so far (at most the window's), and the tiles
+    // they touch, all and the ones that don't add: one whose tiles they
+    // don't touch overlaps none.
     let mut passed = [0u32; GROUP_WINDOW];
     for i in 0..merged.len() {
         if used[i] {
@@ -685,38 +786,51 @@ fn group_models(
         }
         used[i] = true;
         out.push(merged[i]);
-        let Merged::Model(first) = merged[i] else { continue };
-        if !items[first as usize].movable {
+        if !entries[i].movable {
             continue;
         }
-        let mesh = keys[first as usize].1;
-        let (mut tiles, mut skipped, mut looked) = (0u64, 0, 0);
-        for j in i + 1..merged.len() {
+        let mut last = merged[i];
+        let (mut tiles, mut solid_tiles, mut skipped, mut looked) = (0u64, 0u64, 0, 0);
+        let end = match cut {
+            Some(cut) if i <= cut => cut + 1,
+            _ => merged.len(),
+        };
+        for j in i + 1..end {
             if used[j] {
                 continue;
             }
-            let Merged::Model(next) = merged[j] else { break };
             looked += 1;
             if looked > GROUP_WINDOW {
                 break;
             }
-            let item = &items[next as usize];
-            if keys[next as usize].1 == mesh
-                && item.movable
-                && (item.tiles & tiles == 0
-                    || passed[..skipped]
-                        .iter()
-                        .all(|&k| !overlap(item.rect, items[k as usize].rect)))
-            {
-                used[j] = true;
-                out.push(merged[j]);
-                continue;
+            let entry = &entries[j];
+            if entry.movable && joins(last, merged[j], keys) {
+                let blocking = if entry.additive { solid_tiles } else { tiles };
+                let free = entry.tiles & blocking == 0
+                    || passed[..skipped].iter().all(|&k| {
+                        let other = &entries[k as usize];
+                        (entry.additive && other.additive) || !overlap(entry.rect, other.rect)
+                    });
+                if free {
+                    used[j] = true;
+                    out.push(merged[j]);
+                    last = merged[j];
+                    continue;
+                }
+                if !matches!(last, Merged::Model(_)) {
+                    // Particles, ribbons and lines join in order: the
+                    // next one can't come before this one.
+                    break;
+                }
             }
-            if !item.movable && item.rect == FULL_SCREEN {
+            if !entry.movable && entry.rect == FULL_SCREEN {
                 break;
             }
-            tiles |= item.tiles;
-            passed[skipped] = next;
+            tiles |= entry.tiles;
+            if !entry.additive {
+                solid_tiles |= entry.tiles;
+            }
+            passed[skipped] = j as u32;
             skipped += 1;
         }
     }
@@ -764,6 +878,34 @@ pub(super) fn sphere_rect(
     let (y0, y1) = range(c.y, view_proj.row(1));
     let rect = [x0 - margin.x, y0 - margin.y, x1 + margin.x, y1 + margin.y];
     rect.iter().all(|v| v.is_finite()).then_some(rect)
+}
+
+/// The rectangle (as [`sphere_rect`]'s) around `points` through
+/// `view_proj`, `margin` wider: where anything inside their convex hull
+/// can be drawn, as long as all of them are in front of the camera's plane
+/// (a straight line stays straight on screen); `None` otherwise, or with
+/// no points.
+pub(super) fn points_rect(
+    view_proj: glam::Mat4,
+    points: impl Iterator<Item = glam::Vec3>,
+    margin: glam::Vec2,
+) -> Option<[f32; 4]> {
+    let mut rect = [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY];
+    for p in points {
+        let c = view_proj * p.extend(1.0);
+        if c.w.is_nan() || c.w <= 1e-4 {
+            return None;
+        }
+        let (x, y) = (c.x / c.w, c.y / c.w);
+        rect = [rect[0].min(x), rect[1].min(y), rect[2].max(x), rect[3].max(y)];
+    }
+    let rect = [
+        rect[0] - margin.x,
+        rect[1] - margin.y,
+        rect[2] + margin.x,
+        rect[3] + margin.y,
+    ];
+    (rect.iter().all(|v| v.is_finite()) && rect[0] <= rect[2]).then_some(rect)
 }
 
 impl Renderer3D {
@@ -857,6 +999,7 @@ mod see_through_tests {
             rect,
             tiles: tiles(rect),
             movable: rect != FULL_SCREEN,
+            additive: false,
         }
     }
 
@@ -912,10 +1055,155 @@ mod see_through_tests {
         meshes.iter().enumerate().map(|(i, &m)| (0.0, m, i as u32)).collect()
     }
 
+    /// `merged` grouped, the models' rectangles from `items`, anything
+    /// else covering the whole screen.
     fn grouped(items: &[ModelItem], meshes: &[u32], merged: &[Merged]) -> Vec<Merged> {
+        let entries: Vec<ModelItem> = merged
+            .iter()
+            .map(|e| match e {
+                Merged::Model(m) => items[*m as usize],
+                _ => ModelItem::STUCK,
+            })
+            .collect();
+        grouped_entries(&entries, meshes, merged, None)
+    }
+
+    fn grouped_entries(entries: &[ModelItem], meshes: &[u32], merged: &[Merged], cut: Option<usize>) -> Vec<Merged> {
         let (mut used, mut out) = (Vec::new(), Vec::new());
-        group_models(merged, items, &keys(meshes), &mut used, &mut out);
+        group(merged, entries, &keys(meshes), cut, &mut used, &mut out);
         out
+    }
+
+    fn effect(rect: [f32; 4], additive: bool) -> ModelItem {
+        ModelItem::at(rect, true, additive)
+    }
+
+    #[test]
+    fn a_model_moves_past_particles_ribbons_and_lines_it_does_not_overlap() {
+        use Merged::*;
+        let order = [Model(0), Particle(0), Strip(0), Model(1)];
+        let models = [model(3.0, LEFT), model(1.0, RIGHT)];
+        let entries = |particle: [f32; 4], additive: bool| {
+            [models[0], effect(particle, additive), effect(MIDDLE, false), models[1]]
+        };
+        // Apart: the second model joins the first, alpha or additive.
+        for additive in [false, true] {
+            assert_eq!(
+                grouped_entries(&entries(MIDDLE, additive), &[0, 0], &order, None),
+                [Model(0), Model(1), Particle(0), Strip(0)]
+            );
+        }
+        // An additive particle over it: it stays behind the particle,
+        // which it would cover (alpha over light differs from light over
+        // alpha).
+        assert_eq!(grouped_entries(&entries(RIGHT, true), &[0, 0], &order, None), order);
+    }
+
+    #[test]
+    fn additive_draws_join_past_each_other_but_not_past_what_they_overlap() {
+        use Merged::*;
+        // Two additive particles with an additive line between, all
+        // overlapping: the second particle joins the first, past the line.
+        let order = [Particle(0), Strip(0), Particle(1)];
+        let all = [effect(MIDDLE, true), effect(MIDDLE, true), effect(MIDDLE, true)];
+        assert_eq!(
+            grouped_entries(&all, &[], &order, None),
+            [Particle(0), Particle(1), Strip(0)]
+        );
+        // An alpha line between them: order matters where they overlap.
+        let alpha_line = [all[0], effect(MIDDLE, false), all[2]];
+        assert_eq!(grouped_entries(&alpha_line, &[], &order, None), order);
+        // ... and not where they don't.
+        let apart = [all[0], effect(LEFT, false), all[2]];
+        assert_eq!(
+            grouped_entries(&apart, &[], &order, None),
+            [Particle(0), Particle(1), Strip(0)]
+        );
+        // A model between two additive lines: they join only past a model
+        // they don't overlap.
+        let order = [Strip(0), Model(0), Strip(1)];
+        let over = [effect(MIDDLE, true), model(2.0, MIDDLE), effect(MIDDLE, true)];
+        assert_eq!(grouped_entries(&over, &[7], &order, None), order);
+        let beside = [effect(MIDDLE, true), model(2.0, RIGHT), effect(MIDDLE, true)];
+        assert_eq!(
+            grouped_entries(&beside, &[7], &order, None),
+            [Strip(0), Strip(1), Model(0)]
+        );
+        // Particles join only the next one: particle 2 doesn't jump
+        // particle 1, which can't move.
+        let order = [Particle(0), Model(0), Particle(1), Particle(2)];
+        let stuck = [
+            effect(LEFT, true),
+            model(2.0, MIDDLE),
+            effect(MIDDLE, true),
+            effect(RIGHT, true),
+        ];
+        assert_eq!(
+            grouped_entries(&stuck, &[7], &order, None),
+            [Particle(0), Model(0), Particle(1), Particle(2)]
+        );
+    }
+
+    #[test]
+    fn nothing_moves_across_the_cut() {
+        use Merged::*;
+        let order = [Particle(0), Model(0), Particle(1)];
+        let apart = [effect(LEFT, true), model(2.0, MIDDLE), effect(RIGHT, true)];
+        assert_eq!(
+            grouped_entries(&apart, &[7], &order, None),
+            [Particle(0), Particle(1), Model(0)]
+        );
+        assert_eq!(grouped_entries(&apart, &[7], &order, Some(1)), order);
+    }
+
+    #[test]
+    fn a_box_projects_inside_its_rectangle_and_inside_the_spheres() {
+        let mut camera = crate::d3::Camera::new(Vec2::new(160.0, 90.0));
+        camera.position = Vec3::new(1.0, 2.0, 6.0);
+        camera.look_at(Vec3::ZERO);
+        let view_proj = camera.view_proj();
+        let mut rng = crate::random::Rng::new(233);
+        let (mut tighter, mut tested) = (0, 0);
+        for _ in 0..200 {
+            let center = Vec3::new(rng.range(-4.0, 4.0), rng.range(-3.0, 3.0), rng.range(-6.0, 2.0));
+            let half = Vec3::new(rng.range(0.05, 1.5), rng.range(0.05, 0.3), rng.range(0.05, 1.5));
+            let turn = glam::Quat::from_euler(
+                glam::EulerRot::XYZ,
+                rng.range(0.0, 6.3),
+                rng.range(0.0, 6.3),
+                rng.range(0.0, 6.3),
+            );
+            let m = glam::Mat4::from_rotation_translation(turn, center);
+            let corners = (0..8).map(|i| {
+                let pick = |bit: u32, v: f32| if i & bit == 0 { -v } else { v };
+                m.transform_point3(Vec3::new(pick(1, half.x), pick(2, half.y), pick(4, half.z)))
+            });
+            let Some(rect) = points_rect(view_proj, corners, Vec2::ZERO) else {
+                continue;
+            };
+            tested += 1;
+            for _ in 0..64 {
+                let local = Vec3::new(rng.range(-1.0, 1.0), rng.range(-1.0, 1.0), rng.range(-1.0, 1.0)) * half;
+                let clip = view_proj * m.transform_point3(local).extend(1.0);
+                let (x, y) = (clip.x / clip.w, clip.y / clip.w);
+                assert!(
+                    rect[0] <= x + 1e-4 && x <= rect[2] + 1e-4 && rect[1] <= y + 1e-4 && y <= rect[3] + 1e-4,
+                    "({x}, {y}) is outside {rect:?}"
+                );
+            }
+            if let Some(sphere) = sphere_rect(view_proj, center, half.length(), Vec2::ZERO) {
+                let area = |r: [f32; 4]| (r[2] - r[0]) * (r[3] - r[1]);
+                tighter += usize::from(area(rect) < area(sphere));
+            }
+        }
+        assert!(tested > 100, "most boxes are in front of the camera ({tested})");
+        assert!(
+            tighter * 10 > tested * 9,
+            "flat boxes: the box is tighter ({tighter} of {tested})"
+        );
+        // No points, or one behind the camera: no rectangle.
+        assert_eq!(points_rect(view_proj, std::iter::empty(), Vec2::ZERO), None);
+        assert_eq!(points_rect(view_proj, [camera.position].into_iter(), Vec2::ZERO), None);
     }
 
     const LEFT: [f32; 4] = [-1.0, -1.0, -0.5, 1.0];
@@ -948,7 +1236,7 @@ mod see_through_tests {
             grouped(&between, &[0, 1, 2, 0], &four),
             [Model(0), Model(3), Model(1), Model(2)]
         );
-        // Nor does anything pass a particle.
+        // Nor does anything pass what covers the screen and can't move.
         let with_particle = [Model(0), Particle(0), Model(2)];
         assert_eq!(grouped(&apart, &[0, 1, 0], &with_particle), with_particle);
     }

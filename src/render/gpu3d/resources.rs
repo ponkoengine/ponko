@@ -661,6 +661,10 @@ impl Resources {
             } else {
                 data.positions.iter().map(|p| p.length()).fold(0.0, f32::max)
             },
+            bounds: data.positions.iter().fold(
+                (glam::Vec3::splat(f32::INFINITY), glam::Vec3::splat(f32::NEG_INFINITY)),
+                |(low, high), &p| (low.min(p), high.max(p)),
+            ),
             skin,
             gpu_buffer: None,
         };
@@ -789,6 +793,10 @@ pub(super) struct GpuMesh {
     /// (infinite when skinned: a pose moves its vertices). Where a
     /// see-through model can cover the screen (see `draw_order.rs`).
     pub(super) radius: f32,
+    /// The box around its vertices in its own space (lowest, highest
+    /// corner; inverted with none): with the model's matrix, an oriented
+    /// box on screen that is often tighter than `radius`'s sphere.
+    pub(super) bounds: (glam::Vec3, glam::Vec3),
 }
 
 pub(super) struct StorageBuffer {

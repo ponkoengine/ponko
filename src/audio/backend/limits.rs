@@ -209,9 +209,12 @@ impl Audio {
         let mut ended = std::mem::take(&mut self.limits.ended);
         ended.clear();
         for (&id, v) in &mut self.playing {
-            if let Some(real) = &v.real
+            if let Some(real) = &mut v.real
                 && real.handle.state() == PlaybackState::Stopped
             {
+                if let Some(error) = real.handle.take_error() {
+                    eprintln!("ponko: a streamed sound stopped: {error}");
+                }
                 ended.push(id);
                 continue;
             }

@@ -85,6 +85,10 @@ pub struct Perf {
     pub(crate) gpu_passes_not_timed: Vec<&'static str>,
     /// Why the latest frame has no usable GPU time, copied after every frame.
     pub(crate) gpu_untimed: Option<GpuUntimed>,
+    /// Passes of the latest timed frame the GPU timer had no room for, and
+    /// the passes a frame it can time now, copied after every frame.
+    pub(crate) gpu_passes_over_limit: u32,
+    pub(crate) gpu_pass_limit: u32,
     /// The last [`RENDER_HISTORY`] drawn frames, oldest first, for the
     /// render inspector. Filled in place: nothing is allocated per frame.
     pub(crate) render_history: std::collections::VecDeque<RenderFrame>,
@@ -197,6 +201,8 @@ impl Perf {
             gpu_passes: Vec::new(),
             gpu_passes_not_timed: Vec::new(),
             gpu_untimed: Some(GpuUntimed::NoGpu),
+            gpu_passes_over_limit: 0,
+            gpu_pass_limit: 0,
             render_history: std::collections::VecDeque::new(),
             display_wait_ms: 0.0,
             gpu_memory: None,
@@ -341,6 +347,28 @@ impl Perf {
     /// ```
     pub fn gpu_passes_not_timed(&self) -> &[&'static str] {
         &self.gpu_passes_not_timed
+    }
+
+    /// How many passes of the latest timed frame the GPU timer had no room
+    /// for: they drew untimed and are in neither
+    /// [`gpu_passes`](Self::gpu_passes) nor
+    /// [`gpu_passes_not_timed`](Self::gpu_passes_not_timed). The timer
+    /// grows to the passes a frame has, up to a limit the query sets set
+    /// (336 passes a frame), so this is 0 unless a frame has more passes
+    /// than that, and for the frame or two while the timer grows. The
+    /// overlay, [`report`](Self::report) and the HUD say it when it isn't 0.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// fn untimed(ctx: &mut Ctx) {
+    ///     if ctx.perf.gpu_passes_over_limit() > 0 {
+    ///         println!("{} passes weren't timed", ctx.perf.gpu_passes_over_limit());
+    ///     }
+    /// }
+    /// # Game::new("t", 1, 1).system(untimed).run_headless(1, |_| {});
+    /// ```
+    pub fn gpu_passes_over_limit(&self) -> u32 {
+        self.gpu_passes_over_limit
     }
 
     /// Why the latest frame has no usable GPU time, or `None` when it has:
@@ -565,6 +593,7 @@ impl Perf {
         if report.render.is_some() {
             crate::perf_report::warn_gpu_untimed(&mut report, self.gpu_untimed);
             crate::perf_report::warn_not_timed(&mut report, &self.gpu_passes_not_timed);
+            crate::perf_report::warn_passes_over_limit(&mut report, self.gpu_passes_over_limit, self.gpu_pass_limit);
         }
         report
     }
@@ -610,6 +639,7 @@ impl Perf {
         self.profiler.frame_state_changes = self.last_render_detail.and_then(|d| d.state_changes);
         self.profiler.frame_see_through_changes = self.last_render_detail.and_then(|d| d.see_through_changes);
         self.profiler.gpu_untimed = self.gpu_untimed;
+        self.profiler.gpu_over_limit = (self.gpu_passes_over_limit, self.gpu_pass_limit);
         let quit = self.profiler.record(
             sample,
             &self.timings,

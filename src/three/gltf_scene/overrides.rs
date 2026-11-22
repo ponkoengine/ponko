@@ -786,6 +786,9 @@ impl Ctx {
 #[derive(Debug, Default)]
 pub(crate) struct GltfEntities(Vec<Option<SceneEntities>>);
 
+/// A glTF scene that didn't spawn: its file and its error.
+type GltfFailure = (String, crate::error::Error);
+
 /// A scene's root and its nodes' entities by path.
 type SceneEntities = (Entity, Vec<(String, Entity)>);
 
@@ -812,11 +815,13 @@ impl Ctx {
     /// After the world was put back from a save that holds the scene
     /// records of `before` (the editor's Stop): spawns every scene again,
     /// with its overrides, and returns each entity of `before` that is
-    /// another one now, with that one. Errors are printed: a scene whose
-    /// file no longer loads stays out.
+    /// another one now, with that one. A scene whose file no longer loads
+    /// stays out: its error is printed and returned with its file (the
+    /// editor lists it in its panel of scenes that didn't load).
     #[cfg_attr(not(feature = "editor"), allow(dead_code))]
-    pub(crate) fn respawn_gltf_entities(&mut self, before: &GltfEntities) -> Vec<(Entity, Entity)> {
-        for (_, e) in self.respawn_saved_gltf() {
+    pub(crate) fn respawn_gltf_entities(&mut self, before: &GltfEntities) -> (Vec<(Entity, Entity)>, Vec<GltfFailure>) {
+        let failed = self.respawn_saved_gltf();
+        for (_, e) in &failed {
             eprintln!("ponko: {e}");
         }
         let roots: Vec<Option<Entity>> = self
@@ -840,7 +845,7 @@ impl Ctx {
             }
         }
         moved.retain(|(a, b)| a != b);
-        moved
+        (moved, failed)
     }
 
     /// An undo brought back despawned entities, as `(was, now)`: `was` the

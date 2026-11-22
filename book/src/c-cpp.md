@@ -478,9 +478,10 @@ binding arrives:
 | Rust feature | Where | From C and C++ |
 |---|---|---|
 | `Assets::scene_asset_field` | [Asset sources](asset-sources.md) | C components have no text fields to name an asset in; load what a scene needs before `load_scene` |
+| `Assets::image_limit_sources` | [Image size limits](security.md#tighter-limits-for-a-source-you-dont-trust) | C and C++ read the limits of a source whose id they know (`ponko_ctx_source_image_limits`); the control endpoint's `assets.image_limits` lists every source that has limits |
 | `PackSource` | [Asset sources](asset-sources.md#packs) | C and C++ games read the default `assets.pack` like Rust games; a pack of their own can be read through `ponko_ctx_add_asset_source` |
 | `ModPack::from_files`, `ModSet::problems` | [Mods](mods.md#in-c-and-c) | Mod packs mount by path or from bytes in memory (`ponko_ctx_mount_mods`, `ponko_ctx_mount_mods_from_memory`, `ctx.mount_mods`, `ctx.mount_mods_from_memory`; `ponko pack` makes one from loose files), and a refused set reports its first problem |
-| `with_code`, `ModSet::code_limits` | [Mods](mods.md#code-mods) | Code mods (feature `mods-wasm`) are Rust-only: the C library is built without it, and refuses a mod with code like any bad mod (`PONKO_INVALID_ARGUMENT`); data-only mods work the same |
+| `ModSet::code_limits`, `ModCode::take_log` | [Mods](mods.md#in-c-and-c) | C and C++ call code mods (`ponko_ctx_mod_function`, `ponko_ctx_mod_call`, `ctx.call_mod`; the library built with `mods-wasm`) with the default fuel and memory limits, and don't read the mods' log |
 | `Query::with_lookup`, `World::get_many_mut` | [Entities, components, queries](ecs.md#borrowing-several-things-at-once) | Generic borrows; component pointers from `get` don't borrow |
 | `World::query_ref` | [Entities, components, queries](ecs.md#read-only-queries-on-a-shared-world) | C and C++ queries read through component pointers and need no exclusive borrow of the world |
 | `SystemView` | [Declared system access](system-access.md) | C and C++ systems take the whole `ctx`, so they run alone; declare their access by name |
@@ -493,7 +494,7 @@ binding arrives:
 | `InstanceCellData` | [Streaming instance cells](3d.md#streaming-instance-cells) | The same: matrices and colours go straight to `ponko_ctx_add_instance_cell` |
 | `GamepadBackend` | [Backends and tests](controllers.md#backends-and-tests) | Native games use the built-in gamepad backend |
 | `FakeGamepads` | [Backends and tests](controllers.md#backends-and-tests) | Native tests feed `ponko_ctx_feed_input` (kind 8 connects a pad) and `ponko_ctx_feed_gamepad_motion` |
-| `KeyLabels` | [Key labels follow the keyboard layout](controllers.md#key-labels-follow-the-keyboard-layout) | `ponko_glyph_atlas_draw_prompt` and `ponko_glyph_atlas_texture` label the key caps for the player's layout themselves; `ponko_glyph_label` gives the US labels |
+| `KeyLabels::text` | [Key labels follow the keyboard layout](controllers.md#key-labels-follow-the-keyboard-layout) | Join the labels of `ponko_ctx_glyph_label` (`ctx::layout_glyph_label`) with `/`; the player's labels themselves are `ponko_ctx_key_label` |
 | `InputScenario::connect_gamepad` | [Backends and tests](controllers.md#backends-and-tests) | Scenarios are JSON in C and C++: a `gamepad_connected` step takes the same `info` object |
 | `Graphics::instance_cell_state` | [Streaming instance cells](3d.md#streaming-instance-cells) | The same: a cell added from C is on the GPU at once |
 | `Ui::set_rich`, `Ui::set_inline_image`, `Ui::set_inline_font`, `Ui::link`, `UiEvent::LinkClicked` | [Retained game UI](ui.md#rich-text) | Not bound yet: several labels side by side, each with its own paint; a button for each link |

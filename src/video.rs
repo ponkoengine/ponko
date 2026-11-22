@@ -37,6 +37,14 @@ use crate::ctx::Ctx;
 use crate::error::{Error, ErrorKind};
 use crate::texture::Texture;
 
+/// For the fuzz target `webm_audio`: what [`Video::from_bytes`] reads of
+/// a file before its soundtrack (its tracks), and the length it then gives
+/// the soundtrack; `None` when the file doesn't open.
+#[cfg(fuzzing)]
+pub(crate) fn fuzz_tracks(bytes: &Arc<[u8]>) -> Option<f64> {
+    demux::Demuxer::new(bytes.clone()).ok().map(|(_, info)| info.seconds)
+}
+
 /// In the browser, the browser's own decoder.
 #[cfg(target_arch = "wasm32")]
 use web::WebAv1 as Av1;

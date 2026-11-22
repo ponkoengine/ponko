@@ -84,6 +84,14 @@ namespace ponko {
 /// An entity id (Rust `Entity::to_bits`): generation in the high 32 bits, index in the low 32. Ids of
 /// despawned entities stay dead; never make one up.
 using entity = std::uint64_t;
+/// A number for a code mod's function (ctx::call_mod).
+inline PonkoModValue mod_i32(std::int32_t v) { return PonkoModValue{PONKO_MOD_I32, v, 0.0}; }
+/// An i64 for a code mod's function: an entity, for example.
+inline PonkoModValue mod_i64(std::int64_t v) { return PonkoModValue{PONKO_MOD_I64, v, 0.0}; }
+/// An f32 for a code mod's function.
+inline PonkoModValue mod_f32(float v) { return PonkoModValue{PONKO_MOD_F32, 0, v}; }
+/// An f64 for a code mod's function.
+inline PonkoModValue mod_f64(double v) { return PonkoModValue{PONKO_MOD_F64, 0, v}; }
 /// A 2D vector (Rust `Vec2`); in 2D worlds +Y points down the screen.
 using vec2 = PonkoVec2;
 /// An RGBA color, each channel 0..1 (Rust `Color`); see rgb, rgba and `colors`.
@@ -5964,6 +5972,9 @@ using glyph = PonkoGlyph;
 inline std::string glyph_label(glyph g) {
     return detail::read_text([&](char* b, std::size_t c, std::size_t* n) { return ponko_glyph_label(g, b, c, n); });
 }
+/// One key of a keyboard layout, for ctx::set_key_labels: `key` (a PonkoKey) and the Unicode
+/// `character` it types without a modifier (`{PONKO_KEY_W, 'z'}` on a French keyboard).
+using layout_key = PonkoKeyLabel;
 /// The glyphs of one action's binding (ctx::action_glyphs): at most four, no allocation.
 struct glyphs {
     std::array<glyph, 4> items{};
@@ -7648,6 +7659,28 @@ public:
     /// Whether the game asked for the cursor to be locked.
     bool cursor_locked() const { bool b = false; detail::check(ponko_ctx_cursor_locked(raw_, &b)); return b; }
 
+    // Key labels on the player's keyboard layout (Rust `input.key_labels()`): what is printed on the
+    // key the player presses, for prompts. They follow the system's layout while the window is open.
+    /// What key `k` is labelled on the player's keyboard: "Z" for PONKO_KEY_W on a French one,
+    /// "Space" for keys whose name doesn't depend on the layout.
+    std::string key_label(key k) const {
+        return detail::read_text([&](char* b, std::size_t c, std::size_t* l) { return ponko_ctx_key_label(raw_, k, b, c, l); });
+    }
+    /// A glyph's label on the player's layout (ponko::glyph_label gives the US one).
+    std::string layout_glyph_label(glyph g) const {
+        return detail::read_text([&](char* b, std::size_t c, std::size_t* l) { return ponko_ctx_glyph_label(raw_, g, b, c, l); });
+    }
+    /// Whether the key labels changed this frame (a layout switch, a key's label learned from a
+    /// press, or set_key_labels): redraw text prompts.
+    bool key_labels_changed() const { bool b = false; detail::check(ponko_ctx_key_labels_changed(raw_, &b)); return b; }
+    /// Replaces the key labels with a US keyboard relabelled by `labels`: a "keyboard layout"
+    /// option, or a test. Keys pressed later still correct them.
+    void set_key_labels(const layout_key* labels, std::size_t count) {
+        detail::check(ponko_ctx_set_key_labels(raw_, labels, count));
+    }
+    /// set_key_labels from a list: `ctx.set_key_labels({{PONKO_KEY_W, 'z'}, {PONKO_KEY_A, 'q'}})`.
+    void set_key_labels(std::initializer_list<layout_key> labels) { set_key_labels(labels.begin(), labels.size()); }
+
     // IME composition (Rust `input.feed_ime`, `preedit`, `set_ime_allowed`, ...). The retained UI's text
     // inputs do all of this themselves; these are for a game's own text widgets, custom hosts and tests.
     /// The text typed this frame: committed Unicode from the keyboard and from IME commits.
@@ -7936,6 +7969,21 @@ public:
         detail::check(ponko_ctx_image_limits(raw_, &side, &bytes));
         return {side, bytes};
     }
+    /// Gives asset source `source_id` image limits of its own (Rust's `set_source_image_limits`): pictures
+    /// read from it (a mod pack, a download cache, a folder) are decoded under these, everything else under
+    /// the game's. A refused picture is kind PONKO_ERROR_LIMIT and its message names the limits and the source.
+    /// The source may be added later (the mounted mods' id is "mods"). Throws if either limit is 0 or the id is empty.
+    void set_source_image_limits(const char* source_id, std::uint32_t max_side, std::uint64_t max_bytes) { detail::check(ponko_ctx_set_source_image_limits(raw_, source_id, max_side, max_bytes)); }
+    /// Takes back a source's own image limits: its pictures follow the game's again.
+    void clear_source_image_limits(const char* source_id) { detail::check(ponko_ctx_clear_source_image_limits(raw_, source_id)); }
+    /// The image limits source `source_id` has of its own, or nothing if its pictures follow the game's.
+    /// Read only; the control endpoint's `assets.image_limits` lists every source that has limits.
+    std::optional<std::pair<std::uint32_t, std::uint64_t>> source_image_limits(const char* source_id) const {
+        std::uint32_t side = 0; std::uint64_t bytes = 0; bool has = false;
+        detail::check(ponko_ctx_source_image_limits(raw_, source_id, &side, &bytes, &has));
+        if (!has) return std::nullopt;
+        return std::make_pair(side, bytes);
+    }
     /// Decodes one picture from `len` bytes (a PNG, JPEG, KTX2 or any other format this build reads) into a
     /// texture under limits of its own, not the game's (Rust's `try_decode_texture`): for a picture you
     /// don't trust. `name` is for messages. A picture past the limits is kind PONKO_ERROR_LIMIT, bytes
@@ -8020,6 +8068,32 @@ public:
     /// A hash of the mounted mods, their order and data (0 without mods):
     /// lockstep peers and replays compare it.
     std::uint64_t mods_fingerprint() { std::uint64_t f = 0; detail::check(ponko_ctx_mods_fingerprint(raw_, &f)); return f; }
+    /// A function a code mod exports (needs the library built with `mods-wasm`): look it up once,
+    /// call it with call_mod. Throws ponko::error: not found when no mod has code or no such function,
+    /// unsupported when code mods aren't compiled in.
+    PonkoModFn mod_function(const char* mod_id, const char* name) {
+        PonkoModFn f{};
+        detail::check(ponko_ctx_mod_function(raw_, mod_id, name, &f));
+        return f;
+    }
+    /// Calls a mod function with numbers (mod_i32, mod_i64, mod_f32, mod_f64), with one call's fuel; its result,
+    /// or nothing for a function without one. A call that runs out of fuel or memory or traps throws
+    /// ponko::error naming the mod; the mod stays callable.
+    std::optional<PonkoModValue> call_mod(PonkoModFn f, std::initializer_list<PonkoModValue> args = {}) {
+        PonkoModValue result{};
+        bool has = false;
+        detail::check(ponko_ctx_mod_call(raw_, f, args.begin(), args.size(), &result, &has));
+        if (!has) return std::nullopt;
+        return result;
+    }
+    /// Lets the mods' get_field and set_field reach `e`'s reflected components (hand them `e` as an i64).
+    void mod_expose(entity e) { detail::check(ponko_ctx_mod_expose_entity(raw_, e)); }
+    /// Takes `e` back from the mods; whether it was exposed.
+    bool mod_hide(entity e) { bool was = false; detail::check(ponko_ctx_mod_hide_entity(raw_, e, &was)); return was; }
+    /// Lets the mods spawn the prefab at `path` with spawn_prefab.
+    void mod_expose_prefab(const char* path) { detail::check(ponko_ctx_mod_expose_prefab(raw_, path)); }
+    /// Seeds every mod's random: same seed, same sequence.
+    void mod_seed_random(std::uint64_t seed) { detail::check(ponko_ctx_mod_seed_random(raw_, seed)); }
     /// Adds a source whose reads are `read(name)` (Rust's `AssetSource`):
     /// the bytes, or nothing if this source doesn't have `name` (the next
     /// source is asked). An exception from `read` is a read error. It runs

@@ -1406,11 +1406,15 @@ impl Ctx {
             _ => None,
         };
         let read = reader(plan, shared, i, path.clone());
+        // A picture follows the limits of the source it is read from, which
+        // the job only knows after reading: it carries every source's own.
+        let limits = self.assets.asset_sources.image_limits();
         let step = match kind {
             Kind::Texture if sliced => {
                 let (origin, bytes) = read()?;
                 let bytes = Arc::new(bytes);
-                match sliced::PngSlices::new(&bytes) {
+                // Past the limits of its source, it is decoded in one piece, which refuses it.
+                match limits.scope(&origin, || sliced::PngSlices::new(&bytes)) {
                     Some(png) => Step::Sliced(Box::new(Sliced {
                         work: SliceWork::Texture(Box::new(png)),
                         origin,
@@ -1419,7 +1423,8 @@ impl Ctx {
                         // Not a PNG it can split: in one piece, as before.
                         let gpu = texture_formats(&self.gfx);
                         let what = origin.describe(&path);
-                        Step::Decoded(Done::Texture(origin, decode_texture(&bytes, &path, &what, gpu)?))
+                        let decoded = limits.scope(&origin, || decode_texture(&bytes, &path, &what, gpu))?;
+                        Step::Decoded(Done::Texture(origin, decoded))
                     }
                 }
             }
@@ -1428,7 +1433,8 @@ impl Ctx {
                 Step::Working(Job::spawn(move || {
                     let (origin, bytes) = read()?;
                     let what = origin.describe(&path);
-                    Ok(Done::Texture(origin, decode_texture(&bytes, &path, &what, gpu)?))
+                    let decoded = limits.scope(&origin, || decode_texture(&bytes, &path, &what, gpu))?;
+                    Ok(Done::Texture(origin, decoded))
                 }))
             }
             Kind::StreamedTexture => {
@@ -1459,7 +1465,8 @@ impl Ctx {
             })),
             Kind::Value(decode) => Step::Working(Job::spawn(move || {
                 let (origin, bytes) = read()?;
-                decode(&bytes)
+                limits
+                    .scope(&origin, || decode(&bytes))
                     .map(Done::Value)
                     .map_err(|e| loader_error(e, &origin, &path))
             })),
