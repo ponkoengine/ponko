@@ -14,6 +14,14 @@
 //! that copy would read the previous frame's values. Each frame in flight
 //! writes its own range of queries for that.
 //!
+//! The timer times as many passes a frame as the frame has: it starts with
+//! room for [`START_PASSES`] and, when a timed frame had more passes than
+//! room, makes bigger query sets before the next frame (with 25 % to spare),
+//! up to [`MAX_PASSES`], what one query set of the most queries the API
+//! allows holds for every frame in flight. Frames in flight while it grows
+//! are dropped. Passes beyond the room are drawn untimed and counted
+//! ([`GpuTimer::over_limit`]), so a frame never silently loses them.
+//!
 //! A timer can time only every `n`th frame ([`GpuTimer::set_every`]):
 //! timestamp writes cost the graphics library a few heap allocations for
 //! each timed pass, so a game times every frame only while something reads
@@ -25,16 +33,18 @@ use crate::render::traffic::NewBuffer;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::profiler::{GpuPass, PassSpan};
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
 /// Frames in flight at once: drawn, finished, copied out, read back.
 const SLOTS: usize = 6;
-/// Most passes timed in one frame.
-const MAX_PASSES: u32 = 32;
-/// Queries of one frame: the slot `i` writes `i * QUERIES..(i + 1) * QUERIES`.
-const QUERIES: u32 = MAX_PASSES * 2;
-/// Bytes of one frame's timestamps (a multiple of the resolve alignment).
-const BYTES: u64 = QUERIES as u64 * 8;
+/// Passes a frame's queries have room for at first.
+const START_PASSES: u32 = 32;
+/// Room is a multiple of this many passes: 16 passes are 32 queries, 256
+/// bytes, the alignment each slot's range needs to be resolved.
+const PASS_STEP: u32 = 16;
+/// Most passes timed in one frame: a query set holds at most
+/// `QUERY_SET_MAX_QUERIES` queries, shared by the frames in flight.
+pub(crate) const MAX_PASSES: u32 = wgpu::QUERY_SET_MAX_QUERIES / (2 * SLOTS as u32) / PASS_STEP * PASS_STEP;
 const FREE: u8 = 0;
 /// Submitted; the GPU may still be writing its timestamps.
 const RUNNING: u8 = 1;
@@ -53,6 +63,8 @@ struct Slot {
     /// The name of each timed pass, in order: pass `i` wrote timestamps
     /// `2i` and `2i + 1`.
     names: Vec<&'static str>,
+    /// Passes of the frame in this slot that had no room (untimed).
+    over: u32,
     submitted: Option<(u64, web_time::Instant)>,
     /// How many frames this slot's frame stands for: the untimed frames
     /// since the timed one before it, and itself.
@@ -91,6 +103,17 @@ fn weight(frames: u32) -> f32 {
 
 pub(crate) struct GpuTimer {
     queue: wgpu::Queue,
+    /// Passes a frame's queries have room for (see the top).
+    room: u32,
+    /// Passes asked for in the frame being drawn, with or without room.
+    requested: AtomicU32,
+    /// Passes the latest timed frame asked for.
+    wanted: u32,
+    /// Passes of the latest frame read that had no room.
+    over: u32,
+    /// Making bigger query sets was refused (the query-set budget): don't
+    /// ask again.
+    grow_refused: bool,
     frame_number: u64,
     last_sample: Option<(f32, u64, web_time::Instant)>,
     queries: wgpu::QuerySet,
@@ -131,6 +154,38 @@ pub(crate) struct GpuTimer {
     _lease: super::query_sets::Lease,
 }
 
+/// The query set for `passes` passes in each of `SLOTS` frames, the buffer
+/// they are resolved into, and the readback slots.
+fn make_queries(device: &wgpu::Device, passes: u32) -> (wgpu::QuerySet, wgpu::Buffer, [Slot; SLOTS]) {
+    let per_slot = u64::from(passes) * 2 * 8;
+    let queries = device.create_query_set(&wgpu::QuerySetDescriptor {
+        label: Some("frame timestamps"),
+        ty: wgpu::QueryType::Timestamp,
+        count: passes * 2 * SLOTS as u32,
+    });
+    let resolve = device.new_buffer(&wgpu::BufferDescriptor {
+        label: Some("timestamp resolve"),
+        size: per_slot * SLOTS as u64,
+        usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+        mapped_at_creation: false,
+    });
+    let slot = || Slot {
+        buffer: device.new_buffer(&wgpu::BufferDescriptor {
+            label: Some("timestamp readback"),
+            size: per_slot,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }),
+        state: Arc::new(AtomicU8::new(FREE)),
+        written: 0,
+        names: Vec::with_capacity(passes as usize),
+        over: 0,
+        submitted: None,
+        covers: 1,
+    };
+    (queries, resolve, std::array::from_fn(|_| slot()))
+}
+
 impl GpuTimer {
     /// `None` if the GPU can't do timestamp queries, or (after one
     /// warning) if this process already holds all the timestamp query sets
@@ -140,53 +195,84 @@ impl GpuTimer {
             return None;
         }
         let lease = super::query_sets::lease(device, queue, "GPU frame timer")?;
-        let queries = device.create_query_set(&wgpu::QuerySetDescriptor {
-            label: Some("frame timestamps"),
-            ty: wgpu::QueryType::Timestamp,
-            count: QUERIES * SLOTS as u32,
-        });
-        let resolve = device.new_buffer(&wgpu::BufferDescriptor {
-            label: Some("timestamp resolve"),
-            size: BYTES * SLOTS as u64,
-            usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let slot = || Slot {
-            buffer: device.new_buffer(&wgpu::BufferDescriptor {
-                label: Some("timestamp readback"),
-                size: BYTES,
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }),
-            state: Arc::new(AtomicU8::new(FREE)),
-            written: 0,
-            names: Vec::with_capacity(MAX_PASSES as usize),
-            submitted: None,
-            covers: 1,
-        };
+        let (queries, resolve, slots) = make_queries(device, START_PASSES);
         Some(Self {
             queue: queue.clone(),
+            room: START_PASSES,
+            requested: AtomicU32::new(0),
+            wanted: 0,
+            over: 0,
+            grow_refused: false,
             frame_number: 0,
             last_sample: None,
             queries,
             resolve,
-            slots: std::array::from_fn(|_| slot()),
+            slots,
             period: f64::from(queue.get_timestamp_period()),
             current: None,
             next: 0,
-            names: Mutex::new(Vec::with_capacity(MAX_PASSES as usize)),
+            names: Mutex::new(Vec::with_capacity(START_PASSES as usize)),
             smoothed_ms: None,
             passes: Vec::new(),
-            last_frame: Vec::with_capacity(MAX_PASSES as usize),
-            not_timed: Vec::with_capacity(MAX_PASSES as usize),
+            last_frame: Vec::with_capacity(START_PASSES as usize),
+            not_timed: Vec::with_capacity(START_PASSES as usize),
             frames_read: 0,
-            scratch: Vec::with_capacity(MAX_PASSES as usize),
+            scratch: Vec::with_capacity(START_PASSES as usize),
             last_end: 0,
-            order: Vec::with_capacity(MAX_PASSES as usize),
+            order: Vec::with_capacity(START_PASSES as usize),
             cadence: Cadence::EVERY_FRAME,
             starved: false,
             _lease: lease,
         })
+    }
+
+    /// Queries of one frame's slot.
+    fn queries_per_slot(&self) -> u32 {
+        self.room * 2
+    }
+
+    /// Bytes of one frame's timestamps.
+    fn slot_bytes(&self) -> u64 {
+        u64::from(self.queries_per_slot()) * 8
+    }
+
+    /// Passes a frame can be timed for now; more grow it (see the top).
+    pub fn pass_limit(&self) -> u32 {
+        self.room
+    }
+
+    /// Passes of the latest timed frame that was read that had no room in
+    /// the timer, and so were drawn untimed.
+    pub fn over_limit(&self) -> u32 {
+        self.over
+    }
+
+    /// Makes room for `passes` a frame (a new query set, resolve buffer and
+    /// readbacks). Frames still in flight are dropped: their timestamps are
+    /// in the old ones. Does nothing, and never asks again, if the
+    /// query-set budget has no set for the new one while the old is still
+    /// held.
+    fn grow(&mut self, device: &wgpu::Device, passes: u32) {
+        let Some(lease) = super::query_sets::lease_quietly(device, &self.queue) else {
+            self.grow_refused = true;
+            return;
+        };
+        let (queries, resolve, slots) = make_queries(device, passes);
+        self.room = passes;
+        self.resolve = resolve;
+        self.slots = slots;
+        // The old set goes first, then its right to be held: that is given
+        // back once the device has let go of it.
+        drop(std::mem::replace(&mut self.queries, queries));
+        drop(std::mem::replace(&mut self._lease, lease));
+        self.current = None;
+        self.next = 0;
+        let names = self.names.get_mut().unwrap_or_else(PoisonError::into_inner);
+        names.reserve(passes as usize);
+        self.last_frame.reserve(passes as usize);
+        self.not_timed.reserve(passes as usize);
+        self.scratch.reserve(passes as usize);
+        self.order.reserve(passes as usize);
     }
 
     /// Why [`new`](Self::new) gave no timer on `device`: it has no
@@ -223,6 +309,7 @@ impl GpuTimer {
             self.passes.clear();
             self.last_frame.clear();
             self.last_sample = None;
+            self.over = 0;
         }
     }
 
@@ -274,6 +361,7 @@ impl GpuTimer {
             }
             self.last_sample = slot.submitted.map(|(frame, at)| (ms, frame, at));
             self.frames_read += 1;
+            self.over = slot.over;
             self.starved = false;
             let w = weight(slot.covers);
             self.smoothed_ms = Some(match self.smoothed_ms {
@@ -281,6 +369,14 @@ impl GpuTimer {
                 Some(avg) => avg + (ms - avg) * w,
             });
             smooth_passes(&mut self.passes, &mut self.scratch, &self.last_frame, w);
+        }
+        // The frame that couldn't be timed in full makes room for the next.
+        if self.wanted > self.room && self.room < MAX_PASSES && !self.grow_refused {
+            let wanted = self.wanted + self.wanted / 4;
+            self.grow(
+                device,
+                wanted.div_ceil(PASS_STEP).saturating_mul(PASS_STEP).min(MAX_PASSES),
+            );
         }
     }
 
@@ -311,6 +407,7 @@ impl GpuTimer {
         self.frame_number = self.frame_number.wrapping_add(1);
         let i = self.next;
         self.names.get_mut().unwrap_or_else(PoisonError::into_inner).clear();
+        *self.requested.get_mut() = 0;
         let due = self.cadence.begin();
         self.current = (due && self.slots[i].state.load(Ordering::Acquire) == FREE).then_some(i);
         if due && self.current.is_none() {
@@ -323,17 +420,19 @@ impl GpuTimer {
 
     /// The timestamp writes for the frame's next pass, called `name` in
     /// the results: `None` when this frame isn't timed or already timed
-    /// `MAX_PASSES` passes.
+    /// the room's worth of passes (see the top).
     pub fn pass(&self, name: &'static str) -> Option<wgpu::RenderPassTimestampWrites<'_>> {
         let slot = self.current?;
+        let queries = self.queries_per_slot();
         let at = {
             let mut names = self.names.lock().unwrap_or_else(PoisonError::into_inner);
+            self.requested.fetch_add(1, Ordering::Relaxed);
             let at = names.len() as u32 * 2;
-            if at + 2 > QUERIES {
+            if at + 2 > queries {
                 return None;
             }
             names.push(name);
-            slot as u32 * QUERIES + at
+            slot as u32 * queries + at
         };
         Some(wgpu::RenderPassTimestampWrites {
             query_set: &self.queries,
@@ -351,7 +450,7 @@ impl GpuTimer {
             if slot.state.load(Ordering::Acquire) != DONE {
                 continue;
             }
-            let first = i as u32 * QUERIES;
+            let first = i as u32 * self.queries_per_slot();
             let offset = u64::from(first) * 8;
             encoder.resolve_query_set(&self.queries, first..first + slot.written, &self.resolve, offset);
             encoder.copy_buffer_to_buffer(&self.resolve, offset, &slot.buffer, 0, u64::from(slot.written) * 8);
@@ -359,6 +458,7 @@ impl GpuTimer {
         }
         let names = self.names.get_mut().unwrap_or_else(PoisonError::into_inner);
         let used = names.len() as u32 * 2;
+        let requested = *self.requested.get_mut();
         if let Some(i) = self.current {
             if used == 0 {
                 self.current = None;
@@ -366,6 +466,8 @@ impl GpuTimer {
             }
             let slot = &mut self.slots[i];
             slot.written = used;
+            slot.over = requested.saturating_sub(names.len() as u32);
+            self.wanted = requested;
             slot.names.clear();
             slot.names.extend_from_slice(names);
         }
@@ -576,7 +678,7 @@ impl GpuTimer {
     /// memory (see `memory.rs`).
     pub fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
         use crate::render::memory::MemoryClass as C;
-        t.bytes(C::Other, "timestamp queries", BYTES);
+        t.bytes(C::Other, "timestamp queries", self.slot_bytes());
         t.buffer(C::Other, "timestamp resolve", &self.resolve);
         for slot in &self.slots {
             t.buffer(C::Other, "timestamp readback", &slot.buffer);
@@ -1258,5 +1360,162 @@ mod tests {
         assert_eq!(timer.frames_read, 0);
         assert!(timer.smoothed_ms.is_none());
         assert!(timer.passes.is_empty());
+    }
+    /// A frame of `count` timed clears of a small target, submitted and
+    /// waited for, drawn after the timer picked up what came back.
+    #[cfg(feature = "3d")]
+    fn frame_of_passes(device: &wgpu::Device, queue: &wgpu::Queue, timer: &mut GpuTimer, count: usize) {
+        use std::sync::OnceLock;
+        // Passes are named by `&'static str`s: one table for the tests.
+        static NAMES: OnceLock<Vec<&'static str>> = OnceLock::new();
+        let names = NAMES.get_or_init(|| {
+            (0..MAX_PASSES as usize + 128)
+                .map(|i| &*Box::leak(format!("pass {i}").into_boxed_str()))
+                .collect()
+        });
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width: 4,
+                height: 4,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let view = target.create_view(&Default::default());
+        timer.collect(device);
+        timer.begin_frame();
+        let mut encoder = device.create_command_encoder(&Default::default());
+        for name in &names[..count] {
+            drop(encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some(name),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::RED),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: timer.pass(name),
+                occlusion_query_set: None,
+                multiview_mask: None,
+            }));
+        }
+        timer.resolve(&mut encoder);
+        queue.submit([encoder.finish()]);
+        timer.submitted();
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+    }
+
+    /// Draws frames of `count` passes, enough for the timer to settle on its
+    /// room and for a frame drawn with it to come back.
+    #[cfg(feature = "3d")]
+    fn settle(device: &wgpu::Device, queue: &wgpu::Queue, timer: &mut GpuTimer, count: usize) {
+        for _ in 0..12 {
+            frame_of_passes(device, queue, timer, count);
+        }
+    }
+
+    /// A frame with more passes than the timer has room for is drawn in
+    /// full, the passes without room are counted, and the timer grows to
+    /// the passes the frame has, so the next frames keep every pass's time.
+    /// Offscreen, no window; skips without a GPU or timestamp queries.
+    #[cfg(feature = "3d")]
+    #[test]
+    fn a_timer_grows_to_the_passes_a_frame_has() {
+        let Some((device, queue)) = device(wgpu::Features::TIMESTAMP_QUERY) else {
+            return;
+        };
+        let Some(mut timer) = GpuTimer::new(&device, &queue) else {
+            crate::render::render_test_support::skip("needs timestamp queries");
+            return;
+        };
+        assert_eq!(timer.pass_limit(), START_PASSES);
+        settle(&device, &queue, &mut timer, 100);
+        assert!(
+            timer.pass_limit() >= 100 && timer.pass_limit() <= MAX_PASSES,
+            "room for the 100 passes: {}",
+            timer.pass_limit()
+        );
+        assert_eq!(timer.pass_limit() % PASS_STEP, 0);
+        assert_eq!(timer.over_limit(), 0, "once grown, every pass has room");
+        assert!(
+            timer.last_frame.len() > START_PASSES as usize,
+            "{}",
+            timer.last_frame.len()
+        );
+        assert!(
+            timer.last_frame.len() + timer.not_timed.len() >= 100 - 4,
+            "passes the GPU skipped are listed"
+        );
+        // Negative control: a frame within the room doesn't grow it.
+        let Some(mut small) = GpuTimer::new(&device, &queue) else {
+            return;
+        };
+        settle(&device, &queue, &mut small, 20);
+        assert_eq!(
+            small.pass_limit(),
+            START_PASSES,
+            "a frame within the room leaves it alone"
+        );
+        assert_eq!(small.over_limit(), 0);
+    }
+
+    /// Past what the query sets hold, the timer stops growing and the
+    /// passes without room are counted, not silently dropped. Offscreen, no
+    /// window; skips without a GPU or timestamp queries.
+    #[cfg(feature = "3d")]
+    #[test]
+    fn passes_beyond_the_query_sets_limit_are_counted_not_silently_dropped() {
+        let Some((device, queue)) = device(wgpu::Features::TIMESTAMP_QUERY) else {
+            return;
+        };
+        let Some(mut timer) = GpuTimer::new(&device, &queue) else {
+            crate::render::render_test_support::skip("needs timestamp queries");
+            return;
+        };
+        let count = MAX_PASSES as usize + 64;
+        settle(&device, &queue, &mut timer, count);
+        assert_eq!(timer.pass_limit(), MAX_PASSES);
+        assert_eq!(timer.over_limit(), 64, "the passes that don't fit are counted");
+        assert!(timer.last_frame.len() + timer.not_timed.len() <= MAX_PASSES as usize);
+        assert!(timer.last_frame.len() > START_PASSES as usize);
+        // The most the device's query sets hold.
+        assert!(MAX_PASSES * 2 * SLOTS as u32 <= wgpu::QUERY_SET_MAX_QUERIES);
+        assert_eq!(MAX_PASSES % PASS_STEP, 0);
+    }
+
+    /// Growing replaces the query set; the old one is released, so a timer
+    /// still holds the one set its lease counts. Offscreen, no window;
+    /// skips without a GPU or timestamp queries.
+    #[cfg(feature = "3d")]
+    #[test]
+    fn growing_replaces_the_query_set_instead_of_adding_one() {
+        let Some((device, queue)) = device(wgpu::Features::TIMESTAMP_QUERY) else {
+            return;
+        };
+        let held = |device: &wgpu::Device| device.get_internal_counters().hal.query_sets.read();
+        let before = held(&device);
+        let Some(mut timer) = GpuTimer::new(&device, &queue) else {
+            crate::render::render_test_support::skip("needs timestamp queries");
+            return;
+        };
+        assert_eq!(held(&device) - before, 1);
+        settle(&device, &queue, &mut timer, 100);
+        assert!(timer.pass_limit() > START_PASSES);
+        // The old set is freed once the device has seen its work finish.
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        assert_eq!(held(&device) - before, 1, "one set after growing");
+        drop(timer);
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        assert_eq!(held(&device), before, "and none after the timer");
     }
 }

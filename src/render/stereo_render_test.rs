@@ -221,6 +221,97 @@ fn both_eyes_read_one_set_of_shadow_cascades_fitted_around_both() {
     assert!(mono.ctx.gfx.frame3d.window_views.is_empty());
 }
 
+/// Effects that give every view many passes (reflections, ambient occlusion,
+/// SMAA, contact shadows): two views then pass the 32 passes the GPU timer
+/// had room for before it grew.
+fn many_passes_per_view(rig: &mut Rig) {
+    let post = &mut rig.ctx.scene3d.post;
+    post.ambient_occlusion = crate::three::AmbientOcclusion {
+        enabled: true,
+        radius: 1.0,
+        ..Default::default()
+    };
+    post.anti_aliasing = crate::three::AntiAliasing::Smaa;
+    post.ssr = 1.0;
+    post.contact_shadows = 1.0;
+}
+
+/// The GPU timer's view of the latest timed frame: passes it timed, passes
+/// listed as not timed, passes without room, and the room it has now. `None`
+/// without timestamp queries (a skip).
+fn timer_state(rig: &Rig) -> Option<(Vec<&'static str>, usize, u32, u32)> {
+    let renderer = rig.ctx.gfx.renderer.as_ref()?;
+    let (over, room) = renderer.gpu_pass_room();
+    if room == 0 {
+        super::render_test_support::skip("needs timestamp queries");
+        return None;
+    }
+    let (spans, _) = renderer.gpu_frame()?;
+    Some((
+        spans.iter().map(|s| s.name).collect(),
+        renderer.gpu_passes_not_timed().len(),
+        over,
+        room,
+    ))
+}
+
+/// Two views in one frame have more passes than the timer first had room
+/// for (32): it grows to them, so every pass of both views keeps its time,
+/// and nothing is left without room. The negative control is one view with
+/// the same effects, which fits the first room and leaves it alone.
+#[test]
+fn two_views_keep_every_gpu_pass_timing_past_the_first_32() {
+    let Some(mut rig) = Rig::new(EYE, true, false, true) else {
+        return;
+    };
+    rig.ctx.perf.set_gpu_timing(crate::perf::GpuTiming::Every(1));
+    many_passes_per_view(&mut rig);
+    for _ in 0..30 {
+        rig.frame();
+    }
+    let Some((timed, not_timed, over, room)) = timer_state(&rig) else {
+        return;
+    };
+    if timed.len() + not_timed + over as usize <= 32 {
+        // The adapter lacks the effects that make the passes.
+        super::render_test_support::skip("this adapter draws two views in 32 passes or fewer");
+        return;
+    }
+    assert!(
+        timed.len() + not_timed > 32,
+        "two views have more than 32 passes, and all of them are timed or listed: {} timed, {not_timed} not",
+        timed.len()
+    );
+    assert!(room > 32, "the timer grew to them: room for {room}");
+    assert_eq!(over, 0, "no pass of either view is left without room");
+    assert_eq!(rig.ctx.perf.gpu_passes_over_limit(), 0);
+    for name in ["opaque", "post", "GTAO horizons"] {
+        assert_eq!(
+            timed.iter().filter(|&&n| n == name).count(),
+            2,
+            "each view's `{name}` pass has its own time: {timed:?}"
+        );
+    }
+    assert!(
+        rig.ctx.perf.gpu_passes().iter().all(|p| p.ms >= 0.0),
+        "the passes of the later view are timed too"
+    );
+
+    let Some(mut mono) = Rig::new(EYE, false, false, true) else {
+        return;
+    };
+    mono.ctx.perf.set_gpu_timing(crate::perf::GpuTiming::Every(1));
+    many_passes_per_view(&mut mono);
+    for _ in 0..30 {
+        mono.frame();
+    }
+    let Some((timed, not_timed, over, room)) = timer_state(&mono) else {
+        return;
+    };
+    assert!(timed.len() + not_timed <= 32, "one view fits the first room");
+    assert_eq!((room, over), (32, 0), "so the timer didn't grow");
+}
+
 /// Frames drawn before timing, and timed per round.
 const WARM_UP: usize = 20;
 const FRAMES: usize = 60;
@@ -241,7 +332,7 @@ struct Cost {
     to_idle: f64,
     gpu: Option<f64>,
     worst_to_idle: f64,
-    /// Passes timed in the last frame (the timer holds at most 32).
+    /// Passes timed in the last frame (the timer grows to the frame's passes).
     timed: usize,
 }
 

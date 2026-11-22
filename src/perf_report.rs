@@ -926,8 +926,36 @@ impl Collector {
         }
     }
 
+    /// Forgets the frames kept, and keeps the memory reserved for them.
     pub fn clear(&mut self) {
-        *self = Self::new(self.cap);
+        self.next = 0;
+        self.frames.clear();
+        self.frame_ms.clear();
+        self.allocs.clear();
+        self.alloc_bytes.clear();
+        self.systems.clear();
+        self.scopes.clear();
+    }
+
+    /// Reserves the full history now (when profiling turns on), so the
+    /// rings fill without growing: no frame allocates for them.
+    pub fn reserve_full(&mut self) {
+        let cap = self.cap;
+        self.frames.reserve_exact(cap - self.frames.len());
+        self.frame_ms.reserve_exact(cap - self.frame_ms.len());
+        self.allocs.reserve_exact(cap - self.allocs.len());
+        self.alloc_bytes.reserve_exact(cap - self.alloc_bytes.len());
+    }
+
+    /// Capacity of the rings (tests).
+    #[cfg(test)]
+    fn capacities(&self) -> [usize; 4] {
+        [
+            self.frames.capacity(),
+            self.frame_ms.capacity(),
+            self.allocs.capacity(),
+            self.alloc_bytes.capacity(),
+        ]
     }
 
     #[cfg(test)]
@@ -1117,6 +1145,7 @@ impl PerfState {
         self.on = wanted;
         if wanted {
             scope::enable();
+            self.collector.reserve_full();
             self.scopes.rebase();
             self.mark = alloc_count::alloc_counts();
         } else {
@@ -1350,6 +1379,23 @@ pub(crate) fn warn_not_timed(report: &mut PerfReport, not_timed: &[&'static str]
     });
 }
 
+/// Adds a [`WarningKind::PassesNotTimed`] warning when the GPU timer had no
+/// room for `over` passes of the latest timed frame (`limit` is what it can
+/// time a frame now).
+pub(crate) fn warn_passes_over_limit(report: &mut PerfReport, over: u32, limit: u32) {
+    if over == 0 {
+        return;
+    }
+    report.warnings.push(PerfWarning {
+        kind: WarningKind::PassesNotTimed,
+        message: format!("{over} GPU passes not timed: the timer has room for {limit} a frame"),
+        hint: "The timer grows to the passes a frame has, up to what its query sets hold (336 a frame), so the \
+               frame has more passes than that, or it is growing now. Those passes drew untimed and are in \
+               neither the pass list nor the not-timed list; the frame's GPU time covers the timed ones only."
+            .into(),
+    });
+}
+
 /// The overlay's extra lines: scopes, allocations and the worst warnings.
 pub(crate) fn hud_lines(out: &mut String, report: &PerfReport) {
     out.clear();
@@ -1429,6 +1475,33 @@ mod tests {
         assert_eq!((worst.frame, worst.ms), (100, 30.0));
         assert_eq!(worst.top[0].name, "g::b");
         assert!(r.system("b").is_some() && r.system("g::b").is_some() && r.system("::b").is_none());
+    }
+
+    /// The history is reserved at its full size when profiling turns on:
+    /// filling it (and wrapping round) never grows it, so no frame
+    /// allocates for it, and clearing it keeps the memory.
+    #[test]
+    fn the_history_is_reserved_in_full_up_front_and_never_grows() {
+        let mut c = Collector::new(64);
+        assert_eq!(c.capacities(), [0; 4], "nothing is held while profiling is off");
+        c.reserve_full();
+        let reserved = c.capacities();
+        assert!(reserved.iter().all(|&n| n >= 64), "{reserved:?}");
+        let pointers = |c: &Collector| [c.frames.as_ptr() as usize, c.frame_ms.as_ptr() as usize];
+        let before = pointers(&c);
+        let sys = [timing("g::a", 1.0)];
+        for i in 0..200u64 {
+            c.push(i + 1, 1.0, AllocCounts::default(), &sys, &[0], (&[], &[]));
+        }
+        assert_eq!(
+            c.capacities(),
+            reserved,
+            "filling and wrapping the ring doesn't grow it"
+        );
+        assert_eq!(pointers(&c), before, "the rings never moved");
+        c.clear();
+        assert_eq!(c.len(), 0);
+        assert_eq!(c.capacities(), reserved, "clearing keeps the memory");
     }
 
     #[test]

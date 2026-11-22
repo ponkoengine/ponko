@@ -117,6 +117,9 @@ pub(crate) struct Profiler {
     pub(crate) frame_see_through_changes: Option<[u32; 5]>,
     /// Why the latest frame has no usable GPU time (the HUD says it).
     pub(crate) gpu_untimed: Option<crate::perf::GpuUntimed>,
+    /// Passes of the latest timed frame the GPU timer had no room for, and
+    /// the room it has (the HUD says it when not 0).
+    pub(crate) gpu_over_limit: (u32, u32),
     /// Frames since the game started.
     frame: u64,
     /// The GPU timer's frame count when last looked at.
@@ -144,6 +147,7 @@ impl Profiler {
             frame_state_changes: None,
             frame_see_through_changes: None,
             gpu_untimed: None,
+            gpu_over_limit: (0, 0),
             frame: 0,
             gpu_frames_seen: 0,
         }
@@ -289,6 +293,10 @@ impl Profiler {
                 self.gpu_untimed,
                 render,
             );
+            let (over, limit) = self.gpu_over_limit;
+            if over > 0 {
+                let _ = writeln!(self.hud_text, "{over} gpu passes not timed (room for {limit})");
+            }
         }
     }
 }

@@ -1071,6 +1071,18 @@ fn gpu_pass_rows(passes: &[crate::perf::GpuPass], not_timed: &[&'static str]) ->
     timed.chain(not_timed.iter().map(|&name| (name, None))).collect()
 }
 
+/// What the pass list says when the GPU timer had no room for `over`
+/// passes of the latest timed frame (`limit` is its room now); `None` when
+/// every pass had room.
+fn gpu_over_limit_text(over: u32, limit: u32) -> Option<String> {
+    (over > 0).then(|| {
+        format!(
+            "{over} more pass{} not timed: the timer has room for {limit} a frame",
+            if over == 1 { "" } else { "es" }
+        )
+    })
+}
+
 /// Each GPU pass's time; a pass that ran but couldn't be timed says
 /// "not timed". Empty until a frame's times have come back (windowed games
 /// time one frame in 16 unless profiling is on). When the latest frame has
@@ -1088,6 +1100,9 @@ fn gpu_passes(ui: &mut Ui, ctx: &Ctx) {
     }
     if let Some(why) = untimed {
         ui.label(RichText::new(format!("from an earlier frame: {why}")).weak());
+    }
+    if let Some(text) = gpu_over_limit_text(ctx.perf.gpu_passes_over_limit, ctx.perf.gpu_pass_limit) {
+        ui.label(RichText::new(text).weak());
     }
     let top = rows.iter().filter_map(|r| r.1).fold(0.001, f32::max);
     egui::Grid::new("inspector-gpu-passes").num_columns(3).show(ui, |ui| {
@@ -1525,6 +1540,21 @@ mod tests {
         let mut texts = Vec::new();
         out.shapes.iter().for_each(|c| walk(&c.shape, &mut texts));
         texts
+    }
+
+    /// Passes the timer had no room for are counted in the pass list's
+    /// header, not dropped silently; with room for all of them, it says nothing.
+    #[test]
+    fn passes_without_room_in_the_gpu_timer_are_counted() {
+        assert_eq!(gpu_over_limit_text(0, 336), None);
+        assert_eq!(
+            gpu_over_limit_text(1, 336).as_deref(),
+            Some("1 more pass not timed: the timer has room for 336 a frame")
+        );
+        assert_eq!(
+            gpu_over_limit_text(12, 336).as_deref(),
+            Some("12 more passes not timed: the timer has room for 336 a frame")
+        );
     }
 
     #[test]

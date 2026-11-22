@@ -340,6 +340,33 @@ ran. The engine's offscreen GPU test of a compute pass
 the graphics library supports there and are checked when that test runs on
 those machines.
 
+### How many passes a frame can time
+
+The timer has room for 32 passes a frame at first, and makes room for the
+passes a frame actually has: when a timed frame had more, the timer makes
+bigger query sets before the next frame (with a quarter to spare, in steps of
+16 passes), so a frame with several views, such as two eyes, keeps the timing
+of every pass. The most it times is **336 passes a frame**: the six frames in
+flight share one query set, and an API's query set holds at most 4,096
+queries. The few frames in flight while it grows are not timed.
+
+A pass beyond that is drawn untimed, and the frame says so instead of
+dropping it quietly: `ctx.perf.gpu_passes_over_limit()` is how many passes of
+the latest timed frame had no room (0 for any frame under the limit), the
+overlay's pass list starts with "N more passes not timed: the timer has room
+for 336 a frame", the HUD and `ctx.perf.report()` carry the same line, and
+the control endpoint's `perf.get` has it as `gpu_passes_over_limit`. This is
+different from [a pass that ran but wasn't timed](#which-passes-can-be-timed),
+which is listed by name. On Metal, growing takes a second query set from the
+[budget](#how-many-devices-can-be-timed) until the device lets go of the
+first; if the budget has none, the timer stays at its room and counts what it
+couldn't time. `two_views_keep_every_gpu_pass_timing_past_the_first_32` in
+`src/render/stereo_render_test.rs` is the offscreen test with two views.
+
+C and C++ don't read the pass list (`gpu_passes`), so they have no
+counterpart for the count either: a native game sees the whole-frame time
+(`ponko_ctx_gpu_timing`, `ponko_ctx_gpu_untimed`) and the control endpoint.
+
 ### How many devices can be timed
 
 Each timestamp query set the engine makes counts against a limit on Metal:

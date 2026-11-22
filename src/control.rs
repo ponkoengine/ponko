@@ -1522,6 +1522,7 @@ fn perf_json(ctx: &Ctx, meshes: usize, history: usize, allocations: usize) -> Va
         "gpu_ms": f.gpu_ms,
         "gpu_passes": passes,
         "gpu_passes_not_timed": ctx.perf.gpu_passes_not_timed(),
+        "gpu_passes_over_limit": ctx.perf.gpu_passes_over_limit(),
         "render": {
             "draw_calls": r.draw_calls,
             "sprites": r.sprites,
