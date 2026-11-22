@@ -278,16 +278,16 @@ impl<'a> Parser<'a> {
             let Token::Word(word) = t else { continue };
             match word {
                 "xkb_keycodes" => {
-                    self.to_block();
+                    self.skip_to_block();
                     self.keycodes(&mut codes, &mut aliases);
                 }
                 "xkb_symbols" => {
-                    self.to_block();
+                    self.skip_to_block();
                     self.symbols(&mut symbols, &mut aliases);
                     seen_symbols = true;
                 }
                 "xkb_types" | "xkb_compatibility" | "xkb_compat" | "xkb_geometry" => {
-                    self.to_block();
+                    self.skip_to_block();
                     self.skip_block();
                 }
                 _ => {}
@@ -314,7 +314,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Moves to a section's `{` (past its optional name).
-    fn to_block(&mut self) {
+    fn skip_to_block(&mut self) {
         while let Some(t) = self.peek() {
             if *t == Token::Punct('{') {
                 return;

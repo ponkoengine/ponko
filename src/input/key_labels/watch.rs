@@ -237,7 +237,7 @@ mod linux {
 
     /// The xkb keymap and active group of the window's display server.
     pub(super) enum Xkb {
-        X11(x11::Watch),
+        X11(Box<x11::Watch>),
         Wayland(wayland::Watch),
     }
 
@@ -245,7 +245,9 @@ mod linux {
         pub(super) fn open(window: &winit::window::Window) -> Option<Self> {
             match window.display_handle().ok()?.as_raw() {
                 RawDisplayHandle::Wayland(handle) => wayland::Watch::open(handle.display.as_ptr()).map(Self::Wayland),
-                RawDisplayHandle::Xlib(_) | RawDisplayHandle::Xcb(_) => x11::Watch::open().map(Self::X11),
+                RawDisplayHandle::Xlib(_) | RawDisplayHandle::Xcb(_) => {
+                    x11::Watch::open().map(|w| Self::X11(Box::new(w)))
+                }
                 _ => None,
             }
         }
@@ -512,6 +514,51 @@ mod linux {
                     _ => {}
                 }
             }
+        }
+    }
+
+    /// These need a desktop session (`$WAYLAND_DISPLAY`, `$DISPLAY`) and
+    /// pass without one: a person runs them on Linux (book/src/controllers.md,
+    /// "Key labels follow the keyboard layout").
+    #[cfg(test)]
+    mod tests {
+        use crate::input::Key;
+
+        fn one_letter_each(labels: &super::KeyLabels) {
+            for key in [Key::Q, Key::W, Key::A, Key::Z] {
+                assert_eq!(
+                    labels.label(key).chars().count(),
+                    1,
+                    "{key:?} reads {:?}",
+                    labels.label(key)
+                );
+            }
+        }
+
+        #[test]
+        fn a_wayland_compositor_hands_its_keymap_to_a_keyboard_of_our_own() {
+            if std::env::var_os("WAYLAND_DISPLAY").is_none() {
+                eprintln!("no Wayland session: skipped");
+                return;
+            }
+            let conn = wayland_client::Connection::connect_to_env().expect("$WAYLAND_DISPLAY is set");
+            let display = conn.backend().display_ptr();
+            let mut watch = super::wayland::Watch::open(display.cast()).expect("the compositor has a seat");
+            let labels = watch.poll().expect("the keymap comes with the keyboard");
+            one_letter_each(&labels);
+            assert_eq!(watch.poll(), None, "nothing new");
+        }
+
+        #[test]
+        fn an_x_server_gives_its_keymap_and_active_group() {
+            if std::env::var_os("DISPLAY").is_none() {
+                eprintln!("no X11 session: skipped");
+                return;
+            }
+            let mut watch = super::x11::Watch::open().expect("the X server has XKB");
+            let labels = watch.poll().expect("the map was read when opened");
+            one_letter_each(&labels);
+            assert_eq!(watch.poll(), None, "nothing new");
         }
     }
 }
