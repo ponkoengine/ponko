@@ -16,7 +16,24 @@
 //! results. `scoreboard.py` runs every group on both engines and writes the
 //! table; `README.md` has the method.
 
+// A tuned build compiles one group: the others' helpers go unused.
+#![cfg_attr(
+    not(feature = "stock"),
+    allow(
+        dead_code,
+        unused_imports,
+        unused_variables,
+        unused_assignments,
+        unreachable_code,
+        unreachable_patterns
+    )
+)]
+
+mod common;
 mod ecs;
+#[cfg(all(not(feature = "stock"), any(feature = "sprites", feature = "ui", feature = "scenes")))]
+mod finished;
+#[cfg(feature = "scenes")]
 mod scenes;
 mod workloads;
 
@@ -41,11 +58,23 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let group = args.next().unwrap_or_default();
     let filter = args.next().unwrap_or_default();
-    println!("Bevy {BEVY_VERSION}, group {group:?}");
+    let build = if cfg!(feature = "stock") {
+        "Bevy's default features"
+    } else {
+        "tuned"
+    };
+    println!("Bevy {BEVY_VERSION} ({build}), group {group:?}");
+    let built = workloads::GROUPS.iter().any(|(g, on)| *g == group && *on);
     match group.as_str() {
         "ecs" => ecs::run(&filter),
+        #[cfg(feature = "scenes")]
         "scenes" => scenes::run(&filter),
-        "sim" | "physics" | "sprites" | "ui" | "first-frame" => workloads::run(&group, &filter),
+        _ if built => workloads::run(&group, &filter),
+        #[cfg(not(feature = "stock"))]
+        "scenes" | "sim" | "physics" | "sprites" | "ui" | "first-frame" => {
+            eprintln!("this build has no {group:?} group: build it with its feature (see Cargo.toml)");
+            std::process::exit(2);
+        }
         _ => {
             eprintln!("usage: compare <ecs|scenes|sim|physics|sprites|ui|first-frame> [filter]");
             std::process::exit(2);

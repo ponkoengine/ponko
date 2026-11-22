@@ -17,6 +17,9 @@
 #
 # Times are cargo's own ("Finished ... in"). Run nothing else meanwhile, and
 # report the median and range.
+#
+# BUILD_TIMES_CARGO_ARGS adds arguments to every build (for example
+# `--features bevy/dynamic_linking` for the scoreboard's tuned Bevy builds).
 set -euo pipefail
 
 dir=${1:?usage: build-times.sh <project> [dev|release] [clean runs]}
@@ -29,6 +32,9 @@ case "$profile" in
   release) flags=(--release); out=release ;;
   *) echo "profile: dev or release" >&2; exit 2 ;;
 esac
+# Word-split on purpose: several arguments in one variable.
+# shellcheck disable=SC2206
+flags+=(${BUILD_TIMES_CARGO_ARGS:-})
 
 load() { uptime | sed 's/.*averages*: *//' | tr -s ', ' ' ' | cut -d' ' -f1; }
 finished() { grep 'Finished' | sed 's/.* in //'; }

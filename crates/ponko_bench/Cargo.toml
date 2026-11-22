@@ -39,6 +39,12 @@ audio = ["ponko/audio", "ponko/3d"]
 # The text benchmarks' shaped cases, and the ASCII case with shaping
 # compiled in (its cost must match the build without it).
 text-shaping = ["ponko/text-shaping"]
+# rapier's documented performance features (`compare/physics-10k` in the
+# scoreboard's tuned table, the same on Bevy's side). Ponko has no feature
+# of its own for them: naming rapier2d with these features, as here, turns
+# them on for the engine's rapier too (Cargo unifies a crate's features).
+rapier-parallel = ["rapier2d/parallel"]
+rapier-simd8 = ["rapier2d/simd8"]
 # The video benchmark (`video/frame`): decoding a clip named by
 # PONKO_BENCH_VIDEO.
 video = ["ponko/video"]

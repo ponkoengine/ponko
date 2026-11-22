@@ -57,6 +57,32 @@ fn sim_move(ctx: &mut Ctx) {
     ctx.world.query::<(&mut Pos, &Vel)>().for_each(|(p, v)| p.0 += v.0 * dt);
 }
 
+/// The same on all cores (`par_for_each`, the performance chapter's tip for
+/// big queries).
+fn sim_move_par(ctx: &mut Ctx) {
+    let dt = ctx.time.dt();
+    ctx.world
+        .query::<(&mut Pos, &Vel)>()
+        .par_for_each(|(p, v)| p.0 += v.0 * dt);
+}
+
+/// A choice between two documented ways of doing a workload, for the
+/// scoreboard's tuned table: `PONKO_COMPARE_<NAME>` names it (unset: the
+/// first, as the first table runs).
+fn variant(name: &str, first: &'static str, second: &'static str) -> &'static str {
+    match std::env::var(format!("PONKO_COMPARE_{name}")).as_deref() {
+        Ok(v) if v == second => second,
+        Ok(v) if v == first || v.is_empty() => first,
+        Err(_) => first,
+        Ok(v) => panic!("PONKO_COMPARE_{name}={v}: expected {first} or {second}"),
+    }
+}
+
+/// The way a row was done, printed next to its number.
+fn note_path(name: &str, path: &str) {
+    eprintln!("{name}: {path}");
+}
+
 /// The world of `compare/sim-1m`: `n` entities, each moving its own way.
 fn sim_world(ctx: &mut Ctx, n: usize) {
     ctx.world.spawn_batch((0..n).map(|i| {
@@ -70,13 +96,17 @@ fn sim(b: &mut Bench) {
     if b.skips(NAME) {
         return;
     }
-    let mut world = Game::new("sim", 1, 1)
-        .sim_system(stamp)
-        .sim_system(sim_move)
-        .run_headless((WARMUP + 300 + 1) as u64, |ctx| {
-            ctx.world.insert_resource(Stamps::default());
-            sim_world(ctx, 1_000_000);
-        });
+    let path = variant("SIM", "iter", "par");
+    note_path(NAME, path);
+    let mover = if path == "par" { sim_move_par } else { sim_move };
+    let mut world =
+        Game::new("sim", 1, 1)
+            .sim_system(stamp)
+            .sim_system(mover)
+            .run_headless((WARMUP + 300 + 1) as u64, |ctx| {
+                ctx.world.insert_resource(Stamps::default());
+                sim_world(ctx, 1_000_000);
+            });
     record(b, NAME, frame_times(&mut world));
 }
 
@@ -87,6 +117,14 @@ fn physics(b: &mut Bench) {
         return;
     }
     let (boxes, width) = crate::physics::scene(10_000);
+    note_path(
+        NAME,
+        &format!(
+            "rapier features: parallel {}, simd8 {}",
+            cfg!(feature = "rapier-parallel"),
+            cfg!(feature = "rapier-simd8")
+        ),
+    );
     let mut world = Game::new("physics", 1, 1)
         .physics(vec2(0.0, 980.0))
         .sim_system(stamp)
@@ -155,26 +193,37 @@ mod gpu {
     }
 
     /// `bunnymark`'s movement, a fixed 1/60 s a frame (y grows downward).
-    fn bounce(ctx: &mut Ctx) {
+    fn bounce_one(t: &mut Transform2D, v: &mut Bounce) {
         let dt = 1.0 / 60.0;
         let bounds = vec2(SIZE.0 as f32, SIZE.1 as f32);
-        ctx.world.query::<(&mut Transform2D, &mut Bounce)>().for_each(|(t, v)| {
-            let (p, v) = (&mut t.position, &mut v.0);
-            v.y += 600.0 * dt;
-            *p += *v * dt;
-            if p.x < 0.0 || p.x > bounds.x {
-                p.x = p.x.clamp(0.0, bounds.x);
-                v.x = -v.x;
-            }
-            if p.y > bounds.y {
-                p.y = bounds.y;
-                v.y = -v.y.abs() * 0.85;
-            }
-            if p.y < 0.0 {
-                p.y = 0.0;
-                v.y = 0.0;
-            }
-        });
+        let (p, v) = (&mut t.position, &mut v.0);
+        v.y += 600.0 * dt;
+        *p += *v * dt;
+        if p.x < 0.0 || p.x > bounds.x {
+            p.x = p.x.clamp(0.0, bounds.x);
+            v.x = -v.x;
+        }
+        if p.y > bounds.y {
+            p.y = bounds.y;
+            v.y = -v.y.abs() * 0.85;
+        }
+        if p.y < 0.0 {
+            p.y = 0.0;
+            v.y = 0.0;
+        }
+    }
+
+    fn bounce(ctx: &mut Ctx) {
+        ctx.world
+            .query::<(&mut Transform2D, &mut Bounce)>()
+            .for_each(|(t, v)| bounce_one(t, v));
+    }
+
+    /// The same on all cores (`par_for_each`).
+    fn bounce_par(ctx: &mut Ctx) {
+        ctx.world
+            .query::<(&mut Transform2D, &mut Bounce)>()
+            .par_for_each(|(t, v)| bounce_one(t, v));
     }
 
     /// What a run drew in its last frame, to check the workload.
@@ -193,11 +242,13 @@ mod gpu {
     }
 
     pub fn sprites_world(n: usize, tinted: bool, frames: usize) -> World {
+        let movement = variant("MOVE", "iter", "par");
+        let mover = if movement == "par" { bounce_par } else { bounce };
         Game::new("sprites", SIZE.0, SIZE.1)
             .bench_offscreen()
             .sim_system(stamp)
             .sim_system(note_drawn)
-            .system(bounce)
+            .system(mover)
             .run_headless((WARMUP + frames + 1) as u64, move |ctx| {
                 ctx.world.insert_resource(Stamps::default());
                 ctx.world.insert_resource(Drawn::default());
@@ -216,7 +267,12 @@ mod gpu {
             }
             let mut world = sprites_world(n, tinted, frames);
             let drawn = world.remove_resource::<Drawn>().expect("what was drawn");
-            eprintln!("{name}: {} sprites drawn a frame on {}", drawn.sprites, drawn.adapter);
+            eprintln!(
+                "{name}: {} sprites drawn a frame on {}, movement {}",
+                drawn.sprites,
+                drawn.adapter,
+                variant("MOVE", "iter", "par")
+            );
             record(b, name, frame_times(&mut world));
         }
     }
