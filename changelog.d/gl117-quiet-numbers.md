@@ -2,8 +2,9 @@
 - Numbers taken on a busy machine were measured again on an idle one
   (issue #117; Apple M4 Max, 2026-11-22, revision `9235ea05`, three runs
   each, load average recorded): the ECS baseline
-  (`crates/ponko_bench/baselines/ecs.json`, re-recorded with its documented
-  command) and `ECS.md`, `UPSCALING.md` and `INSTANCE_CELLS.md`; in the
+  (`crates/ponko_bench/baselines/ecs.json`) and the render baseline
+  (`baselines/render.json`, `render.csv`), both re-recorded with their
+  documented commands, and `ECS.md`, `UPSCALING.md` and `INSTANCE_CELLS.md`; in the
   guide, the chapters on skeletons, debug drawing, behavior trees, spatial
   search, determinism, hierarchy, attachments, replication, the lobby,
   rollback, code mods, video, streaming and loading, UI frames and group
@@ -19,3 +20,9 @@
   (WebGL2's limits) prepares and records in 0.55 ms against 0.44 ms. Memory per entity in
   the headless example (96 bytes) is explained: `Sprite` gained a 20-byte
   `region` after the 76-byte figure was taken.
+- The render baseline shows the GPU slower in all eight scenes than on
+  2026-11-20 (frames up to 27% slower, `shadow-heavy` 5.02 to 6.35 ms):
+  the `high` preset now turns on screen reflections' thin objects, whose
+  pass costs 0.34 to 2.31 ms in these scenes against about 0.2 ms over the
+  floor and rails it was measured on. Written up in `RENDER_SCENES.md` and
+  the guide; not changed here.
