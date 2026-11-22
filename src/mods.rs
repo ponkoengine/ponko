@@ -1,12 +1,13 @@
-//! Data-only mods: packs of asset files that players add to a game, mounted
-//! in a declared load order, checked before anything of them is used.
+//! Mods: packs of asset files that players add to a game, mounted in a
+//! declared load order, checked before anything of them is used; with the
+//! feature `mods-wasm`, a mod may also bring code (see [Code mods](#code-mods)).
 //!
 //! A mod is an [asset pack](crate::assets::PackSource) (or files in memory)
 //! with a `mod.json` manifest at its root. It can add files (a new enemy's
 //! prefab and sprite sheet) and replace the game's own by using the same
 //! path (`prefabs/slime.json`): the game loads assets by name as always and
-//! gets the mod's. A mod runs no code; what it can change is what the game
-//! reads from files: [prefabs and scenes](crate::assets::Assets::save_prefab)
+//! gets the mod's. A data-only mod runs no code; what it can change is what
+//! the game reads from files: [prefabs and scenes](crate::assets::Assets::save_prefab)
 //! made of [reflected](crate::reflect::WorldReflect) components, data files,
 //! art and sound.
 //!
@@ -73,12 +74,29 @@
 //! - the manifest: missing, not JSON, an id twice, a required mod missing,
 //!   mods that must load after each other in a cycle;
 //! - every `.json` file: it parses, and the prefabs and scenes in it only
-//!   use components and resources the game reflects, with fields that fit.
+//!   use components and resources the game reflects, with fields that fit;
+//! - every asset those prefabs and scenes name (textures, meshes, skeletons,
+//!   included prefabs, the game's own [asset
+//!   fields](crate::assets::Assets::scene_asset_field)) is in a mod of the set or
+//!   in the game's assets: one error lists every missing one, with the file
+//!   that names it ([`ModProblem::MissingAssets`]);
+//! - its code, if it has some: the module compiles and imports only host
+//!   functions, and starts within its limits.
 //!
 //! The game must [reflect](crate::reflect::WorldReflect::reflect) its
 //! components before it mounts mods. What is only known when the mod is
-//! used (an image that doesn't decode, a prefab that includes a missing
-//! file) fails then, with that file's error, as for the game's own files.
+//! used (an image that doesn't decode) fails then, with that file's error,
+//! as for the game's own files.
+//!
+//! # Code mods
+//!
+//! With the feature `mods-wasm`, a manifest may name a WebAssembly module
+//! (`"code": "code/frost.wasm"`). Mounting compiles and starts it in a
+//! sandbox, an interpreter with fuel and memory limits ([`CodeLimits`]) that
+//! runs on every platform the engine builds for, the web included. The game
+//! calls the functions it exports with [`with_code`]; a module reaches only
+//! the host functions listed there. Without the feature, a mod with code is
+//! refused with [`ModProblem::Code`].
 //!
 //! # Determinism
 //!
@@ -97,6 +115,17 @@ use serde_json::Value;
 use crate::assets::{AssetSource, PackSource};
 use crate::ctx::Ctx;
 use crate::reflect::ReflectError;
+
+#[cfg(feature = "mods-wasm")]
+mod code;
+#[cfg(feature = "mods-wasm")]
+pub use code::{CodeLimits, ModCode, ModFn, ModValue, with_code};
+
+/// What checking a mod's code needs: the engine it compiles with.
+#[cfg(feature = "mods-wasm")]
+type CodeEngine = wasmi::Engine;
+#[cfg(not(feature = "mods-wasm"))]
+struct CodeEngine;
 
 /// The manifest's file name, at the root of a mod.
 pub const MANIFEST: &str = "mod.json";
@@ -160,6 +189,10 @@ pub struct ModManifest {
     /// Mods that load before this one when they are mounted.
     #[serde(default)]
     pub after: Vec<String>,
+    /// The mod's WebAssembly module, a file of the mod (feature
+    /// `mods-wasm`); `None` for a data-only mod.
+    #[serde(default)]
+    pub code: Option<String>,
 }
 
 /// Where a mod's files are.
@@ -313,9 +346,9 @@ impl ModPack {
     }
 
     /// Checks the files of this mod against `limits` and `world`'s
-    /// reflection; returns the bytes of the JSON files it read, for the
-    /// fingerprint.
-    fn check(&self, world: &World, limits: &ModLimits) -> Result<Vec<CheckedFile>, ModError> {
+    /// reflection, and compiles its code; returns the bytes of the JSON and
+    /// code files it read, for the fingerprint and the asset references.
+    fn check(&self, world: &World, limits: &ModLimits, engine: &CodeEngine) -> Result<Checked, ModError> {
         let id = self.id();
         let mut names = self.files.names();
         names.sort_unstable();
@@ -357,24 +390,67 @@ impl ModPack {
                     },
                 ));
             }
-            let json = if name.ends_with(".json") && name != MANIFEST {
+            let is_code = self.manifest.code.as_deref() == Some(name);
+            let json = if (name.ends_with(".json") && name != MANIFEST) || is_code {
                 let bytes = self
                     .files
                     .read(name)
                     .map_err(|e| ModError::new(id, Some(name), ModProblem::Unreadable(e.to_string())))?;
-                check_json(world, &bytes).map_err(|problem| ModError::new(id, Some(name), problem))?;
+                if !is_code {
+                    check_json(world, &bytes).map_err(|problem| ModError::new(id, Some(name), problem))?;
+                }
                 Some(bytes)
             } else {
                 None
             };
             out.push((name.to_string(), size, json));
         }
-        Ok(out)
+        let module = self.check_code(&out, engine)?;
+        Ok(Checked { files: out, module })
+    }
+
+    /// Compiles the mod's code, if it has some.
+    #[cfg(feature = "mods-wasm")]
+    fn check_code(&self, files: &[CheckedFile], engine: &CodeEngine) -> Result<Option<wasmi::Module>, ModError> {
+        let Some(name) = self.manifest.code.as_deref() else {
+            return Ok(None);
+        };
+        let bad = |problem| ModError::new(self.id(), Some(name), problem);
+        let Some((_, _, Some(bytes))) = files.iter().find(|(n, _, _)| n == name) else {
+            return Err(bad(ModProblem::Code(
+                "the manifest names this module, and the mod has no such file".into(),
+            )));
+        };
+        code::compile(engine, bytes).map(Some).map_err(bad)
+    }
+
+    /// Without the feature `mods-wasm`, a mod with code is refused.
+    #[cfg(not(feature = "mods-wasm"))]
+    fn check_code(&self, _: &[CheckedFile], _: &CodeEngine) -> Result<Option<()>, ModError> {
+        match self.manifest.code.as_deref() {
+            None => Ok(None),
+            Some(name) => Err(ModError::new(
+                self.id(),
+                Some(name),
+                ModProblem::Code("this game was built without code mods (the feature `mods-wasm`)".into()),
+            )),
+        }
     }
 }
 
-/// A checked file of a mod: its name, its size, and its bytes if it is JSON.
+/// A checked file of a mod: its name, its size, and its bytes if it is JSON
+/// or the mod's code.
 type CheckedFile = (String, u64, Option<Vec<u8>>);
+
+/// What [`ModPack::check`] found fine: the files, and the compiled code.
+struct Checked {
+    files: Vec<CheckedFile>,
+    #[cfg(feature = "mods-wasm")]
+    module: Option<wasmi::Module>,
+    #[cfg(not(feature = "mods-wasm"))]
+    #[allow(dead_code)]
+    module: Option<()>,
+}
 
 /// 1 to 64 of `a-z`, `0-9`, `-`, `_`.
 fn valid_id(id: &str) -> bool {
@@ -438,6 +514,75 @@ fn check_json(world: &World, bytes: &[u8]) -> Result<(), ModProblem> {
     Ok(())
 }
 
+/// The assets the JSON files of a mod name that are neither in `all` (the
+/// files of the mods being mounted) nor in the game's assets, as `(file,
+/// name)`, sorted.
+fn missing_assets(ctx: &Ctx, all: &std::collections::HashSet<&str>, files: &[CheckedFile]) -> Vec<(String, String)> {
+    let mut missing = Vec::new();
+    let mut names = Vec::new();
+    for (file, _, bytes) in files {
+        let Some(bytes) = bytes.as_deref().filter(|_| file.ends_with(".json") && file != MANIFEST) else {
+            continue;
+        };
+        // It parsed when it was checked.
+        let Ok(json) = serde_json::from_slice::<Value>(bytes) else {
+            continue;
+        };
+        names.clear();
+        asset_references(ctx, &json, &mut names);
+        names.sort_unstable();
+        names.dedup();
+        for name in &names {
+            if !all.contains(name.as_str()) && ctx.assets.asset_sources.locate(name).is_none() {
+                missing.push((file.clone(), name.clone()));
+            }
+        }
+    }
+    missing
+}
+
+/// Every asset name `json` (a prefab or a scene) refers to: what spawning
+/// it loads first (textures, skeletons, meshes, collision meshes, the
+/// game's registered asset fields) and the prefabs it includes.
+fn asset_references(ctx: &Ctx, json: &Value, out: &mut Vec<String>) {
+    use crate::reflect::asset_names;
+    for (component, field) in [
+        ("Sprite", "texture"),
+        ("ParticleEmitter2D", "texture"),
+        ("Animation", "texture"),
+        ("Skeleton2D", "skeleton"),
+        ("Model", "mesh"),
+        ("ShadowMesh", "mesh"),
+        ("ModelMaterial", "texture"),
+    ] {
+        asset_names(json, component, field, out);
+    }
+    #[cfg(feature = "3d")]
+    crate::reflect::lod_mesh_names(json, out);
+    #[cfg(feature = "physics3d")]
+    {
+        let mut files = Vec::new();
+        crate::physics3d::collider_files(json, &mut files);
+        out.extend(
+            files
+                .into_iter()
+                .filter_map(|f| crate::reflect::collider_file_parts(f).0.map(String::from)),
+        );
+    }
+    crate::scene::scene_asset_field_names(&ctx.assets.scene_asset_fields, json, out);
+    included_prefabs(json, out);
+}
+
+/// The `"prefab"` names of a prefab file's entities.
+fn included_prefabs(json: &Value, out: &mut Vec<String>) {
+    if json["format"] != crate::scene::PREFAB_FORMAT {
+        return;
+    }
+    if let Ok(file) = crate::scene::PrefabFile::parse(json) {
+        out.extend(file.entries.into_iter().filter_map(|e| e.prefab));
+    }
+}
+
 fn check_component(world: &World, name: &str, value: &Value, whole: bool) -> Result<(), ModProblem> {
     let checked = if whole {
         crate::reflect::check_component(world, name, value)
@@ -493,6 +638,18 @@ pub enum ModProblem {
     },
     /// Mods were already mounted in this game.
     AlreadyMounted,
+    /// Assets the mod's prefabs and scenes name that neither a mod of the
+    /// set nor the game has: each as `(file, name)`, the file that names it
+    /// and the name, sorted. Every missing one is listed, not the first.
+    MissingAssets(Vec<(String, String)>),
+    /// The mod's code can't be used: the module the manifest names is
+    /// missing or not WebAssembly, imports something that isn't a host
+    /// function, can't start within its limits, or the game was built
+    /// without code mods (the feature `mods-wasm`).
+    Code(String),
+    /// A call into the mod's code failed: arguments that don't fit, out of
+    /// fuel, out of memory, a WebAssembly trap.
+    Trap(String),
 }
 
 impl From<ReflectError> for ModProblem {
@@ -526,6 +683,16 @@ impl fmt::Display for ModProblem {
             }
             ModProblem::BadValue { component, message } => write!(f, "\"{component}\" doesn't fit: {message}"),
             ModProblem::AlreadyMounted => write!(f, "mods were already mounted in this game"),
+            ModProblem::MissingAssets(missing) => {
+                write!(f, "{} asset(s) named that no mod and not the game has:", missing.len())?;
+                for (i, (file, name)) in missing.iter().enumerate() {
+                    let sep = if i == 0 { " " } else { ", " };
+                    write!(f, "{sep}\"{name}\" (in \"{file}\")")?;
+                }
+                Ok(())
+            }
+            ModProblem::Code(why) => write!(f, "bad code: {why}"),
+            ModProblem::Trap(why) => write!(f, "its code failed: {why}"),
         }
     }
 }
@@ -590,9 +757,10 @@ impl From<ModError> for crate::error::Error {
         use crate::error::ErrorKind;
         let kind = match &e.problem {
             ModProblem::Unreadable(_) => ErrorKind::Decode,
-            ModProblem::MissingDependency(_) | ModProblem::UnknownComponent(_) | ModProblem::UnknownResource(_) => {
-                ErrorKind::NotFound
-            }
+            ModProblem::MissingDependency(_)
+            | ModProblem::UnknownComponent(_)
+            | ModProblem::UnknownResource(_)
+            | ModProblem::MissingAssets(_) => ErrorKind::NotFound,
             ModProblem::TooLarge { .. } | ModProblem::TooManyFiles { .. } => ErrorKind::Limit,
             ModProblem::BadJson(_) | ModProblem::BadValue { .. } | ModProblem::Manifest(_) => ErrorKind::Json,
             _ => ErrorKind::Invalid,
@@ -621,6 +789,8 @@ impl From<ModError> for crate::error::Error {
 pub struct ModSet {
     packs: Vec<ModPack>,
     limits: ModLimits,
+    #[cfg(feature = "mods-wasm")]
+    code_limits: CodeLimits,
 }
 
 impl ModSet {
@@ -647,6 +817,22 @@ impl ModSet {
     pub fn limits(mut self, limits: ModLimits) -> Self {
         self.limits = limits;
         self
+    }
+
+    /// Uses `limits` for the mods' code instead of the default ones.
+    #[cfg(feature = "mods-wasm")]
+    #[must_use]
+    pub fn code_limits(mut self, limits: CodeLimits) -> Self {
+        self.code_limits = limits;
+        self
+    }
+
+    /// The engine mods' code compiles with.
+    fn code_engine() -> CodeEngine {
+        #[cfg(feature = "mods-wasm")]
+        return code::engine();
+        #[cfg(not(feature = "mods-wasm"))]
+        CodeEngine
     }
 
     /// The mods' ids in the order they load: the order they were added,
@@ -735,14 +921,17 @@ impl ModSet {
     /// Checks every mod as [`mount`](Self::mount) does, without mounting
     /// anything: for a mods menu that shows which mods can be turned on.
     /// Returns every problem found, at most one per mod, ordering problems
-    /// first; empty if the set would mount.
+    /// first; empty if the set would mount. Missing assets are checked by
+    /// [`mount`](Self::mount) only (it needs the game's assets), and code
+    /// is compiled but not started.
     pub fn problems(&self, world: &World) -> Vec<ModError> {
         let mut out = Vec::new();
         if let Err(e) = self.order_indices() {
             out.push(e);
         }
+        let engine = Self::code_engine();
         for pack in &self.packs {
-            if let Err(e) = pack.check(world, &self.limits) {
+            if let Err(e) = pack.check(world, &self.limits, &engine) {
                 out.push(e);
             }
         }
@@ -759,18 +948,55 @@ impl ModSet {
     /// loading assets the mods may replace: an asset loaded before is
     /// cached and stays as it was. Mods are mounted once per game.
     ///
+    /// With code mods (feature `mods-wasm`), every mod's module is compiled
+    /// and started before anything is mounted, and [`ModCode`] is inserted
+    /// as a resource when at least one mod has code.
+    ///
     /// # Errors
-    /// The first problem found (see [`problems`](Self::problems)); nothing
-    /// is mounted then, and the game runs as without mods.
+    /// The first problem found (see [`problems`](Self::problems)), or the
+    /// assets a mod names that are missing (all of that mod's, in one
+    /// [`ModProblem::MissingAssets`]); nothing is mounted then, and the game
+    /// runs as without mods.
     pub fn mount(self, ctx: &mut Ctx) -> Result<(), ModError> {
         if ctx.world.get_resource::<Mods>().is_some() || ctx.assets.has_source(SOURCE_ID) {
             return Err(ModError::new(SOURCE_ID, None, ModProblem::AlreadyMounted));
         }
         let order = self.order_indices()?;
+        let engine = Self::code_engine();
         let mut checked = Vec::with_capacity(self.packs.len());
         for &i in &order {
-            checked.push(self.packs[i].check(&ctx.world, &self.limits)?);
+            checked.push(self.packs[i].check(&ctx.world, &self.limits, &engine)?);
         }
+        // Every asset the mods' files name: in a mod of the set, or the game's.
+        let all: std::collections::HashSet<&str> = checked
+            .iter()
+            .flat_map(|c| c.files.iter().map(|(name, _, _)| name.as_str()))
+            .collect();
+        for (&i, files) in order.iter().zip(&checked) {
+            let missing = missing_assets(ctx, &all, &files.files);
+            if !missing.is_empty() {
+                let first = missing[0].0.clone();
+                return Err(ModError::new(
+                    self.packs[i].id(),
+                    Some(&first),
+                    ModProblem::MissingAssets(missing),
+                ));
+            }
+        }
+        #[cfg(feature = "mods-wasm")]
+        let code = {
+            let modules: Vec<(String, wasmi::Module)> = order
+                .iter()
+                .zip(&mut checked)
+                .filter_map(|(&i, c)| Some((self.packs[i].id().to_string(), c.module.take()?)))
+                .collect();
+            if modules.is_empty() {
+                None
+            } else {
+                Some(ModCode::start(&engine, modules, self.code_limits)?)
+            }
+        };
+        let checked: Vec<Vec<CheckedFile>> = checked.into_iter().map(|c| c.files).collect();
         // Everything is fine: build the source and the resource.
         // The packs in load order: each sorted by its place in `order`.
         let mut rank = vec![0; order.len()];
@@ -815,6 +1041,10 @@ impl ModSet {
         };
         ctx.assets.add_background_source(source);
         ctx.world.insert_resource(mods);
+        #[cfg(feature = "mods-wasm")]
+        if let Some(code) = code {
+            ctx.world.insert_resource(code);
+        }
         Ok(())
     }
 }

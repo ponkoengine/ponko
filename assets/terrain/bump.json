@@ -1,0 +1,8 @@
+{
+  "format": "ponko-terrain",
+  "heights": "bump-heights.png",
+  "high": 2.0,
+  "low": 0.0,
+  "size": 8.0,
+  "version": 1
+}

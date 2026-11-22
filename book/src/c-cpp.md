@@ -479,7 +479,8 @@ binding arrives:
 |---|---|---|
 | `Assets::scene_asset_field` | [Asset sources](asset-sources.md) | C components have no text fields to name an asset in; load what a scene needs before `load_scene` |
 | `PackSource` | [Asset sources](asset-sources.md#packs) | C and C++ games read the default `assets.pack` like Rust games; a pack of their own can be read through `ponko_ctx_add_asset_source` |
-| `ModPack::from_files`, `ModPack::from_pack_bytes`, `ModSet::problems` | [Mods](mods.md#in-c-and-c) | Mod packs mount by path (`ponko_ctx_mount_mods`, `ctx.mount_mods`; `ponko pack` makes one from loose files), and a refused set reports its first problem |
+| `ModPack::from_files`, `ModSet::problems` | [Mods](mods.md#in-c-and-c) | Mod packs mount by path or from bytes in memory (`ponko_ctx_mount_mods`, `ponko_ctx_mount_mods_from_memory`, `ctx.mount_mods`, `ctx.mount_mods_from_memory`; `ponko pack` makes one from loose files), and a refused set reports its first problem |
+| `with_code`, `ModSet::code_limits` | [Mods](mods.md#code-mods) | Code mods (feature `mods-wasm`) are Rust-only: the C library is built without it, and refuses a mod with code like any bad mod (`PONKO_INVALID_ARGUMENT`); data-only mods work the same |
 | `Query::with_lookup`, `World::get_many_mut` | [Entities, components, queries](ecs.md#borrowing-several-things-at-once) | Generic borrows; component pointers from `get` don't borrow |
 | `World::query_ref` | [Entities, components, queries](ecs.md#read-only-queries-on-a-shared-world) | C and C++ queries read through component pointers and need no exclusive borrow of the world |
 | `SystemView` | [Declared system access](system-access.md) | C and C++ systems take the whole `ctx`, so they run alone; declare their access by name |
@@ -497,8 +498,6 @@ binding arrives:
 | `Graphics::instance_cell_state` | [Streaming instance cells](3d.md#streaming-instance-cells) | The same: a cell added from C is on the GPU at once |
 | `Ui::set_rich`, `Ui::set_inline_image`, `Ui::set_inline_font`, `Ui::link`, `UiEvent::LinkClicked` | [Retained game UI](ui.md#rich-text) | Not bound yet: several labels side by side, each with its own paint; a button for each link |
 | `GltfScene::nav_source` | [From Blender to the game](blender.md#navigation-meshes) | Read the nodes and their places with `ponko_gltf_scene_load`, and bake from mesh data of your own (`ponko_nav_sources_add_mesh`, `ponko_ctx_bake_navmesh`) |
-| `GameRollback` | [Rollback](networking.md#rolling-back-a-whole-game) | Generic over the game's input type, which C and C++ can't name; C and C++ games use lockstep (`ponko_net_*`). A binding with fixed-size byte inputs is possible later |
-| `WorldSnapshot` | [Rollback](networking.md#rolling-back-a-whole-game) | Used through `GameRollback`; C and C++ components without a destructor are copied as bytes, so a binding can follow with it |
 | `Graphics::load_lights`, `Graphics::load_cameras` | [3D](3d.md#gltf-extensions-lights-and-cameras) | Models load with the same glTF extensions; a file's lights and cameras aren't returned yet, so place them yourself |
 | `LightBakeScene::add_world`, `LightBakeScene::add_gltf`, `Graphics::keep_bake_sources`, `Unbaked` | [Baked lighting](3d.md#baked-lighting) | C and C++ components can't be listed by mesh: add each model with `ponko_light_bake_scene_add` (`light_bake_scene::add`), and leave out the ones that shouldn't bake |
 | `BakeTexture` | [Baked lighting](3d.md#baked-lighting) | Not bound yet: give a textured model its texture's average color as its albedo |
@@ -512,7 +511,6 @@ binding arrives:
 | `RtcConfig::turn` | [Peer to peer over WebRTC](webrtc.md#stun-turn-and-nats) | TURN works in browsers only, and C and C++ web games have no WebRTC endpoint |
 | `Assets::browser_saves`, `Assets::revert_browser_save` | [Saving in a browser](editor.md#saving-in-a-browser) | A C or C++ web game keeps no files in a browser yet |
 | `Assets::browser_saves`, `Assets::revert_browser_save`, `Assets::browser_saves_persistent` | [Saving in a browser](editor.md#saving-in-a-browser) | A C or C++ web game keeps no files in a browser yet |
-| `TerrainTile::spawn_from_file` | [Terrain](editor.md#terrain) | Not bound yet: native games make the tile from heights they read (`ponko_ctx_create_terrain_tile`) |
 | `SkeletonData::add_bone`, `SpineAtlas` | [2D skeletons](skeleton2d.md#from-c-and-c) | Skeletons come from files (Ponko's format or a Spine export and its atlas) through the assets; a memory source holds files kept in memory |
 | `Plugin::dependencies` | [Plugins for other crates](plugins.md#from-c-and-c) | C plugins (`ponko_game_plugin`) have no names or dependencies and are never duplicates |
 | `Game::debug_toggle` | [Plugins for other crates](plugins.md#debug-toggles) | Draw behind a flag of the game's own; `debug.draw` turns the engine's views on and off |

@@ -126,6 +126,8 @@ src/video/av1.rs | impl Sync for Av1 | tests/video.rs::a_loaded_video_is_paused_
 src/three/gltf_ext.rs | decode_meshopt | src/three/gltf_ext.rs::meshopt_compressed_geometry_decompresses_at_load | c-library
 
 # The GPU: Metal's own memory figure (an offscreen GPU test).
+src/render/hdr_metadata.rs | send | src/render/hdr_metadata.rs::a_metal_layer_configured_for_pq_takes_hdr10_metadata | gpu
+src/render/hdr_metadata.rs | set_hdr_metadata | src/render/hdr_metadata.rs::a_dxgi_swap_chain_takes_hdr10_metadata | windows
 src/render/memory.rs | metal_allocated_bytes | src/render/gpu_memory_render_test.rs::adapter_figure_child | gpu
 
 # Screen readers: the platform adapters attach to a view (macOS) or a window
@@ -298,3 +300,4 @@ src/crash/native.rs | capture | tests/native_crash.rs::a_segmentation_fault_in_n
 # Whether the desktop has a touch screen (Windows asks the system).
 src/input/touch_desktop.rs | windows_touch_points | src/input/touch_desktop.rs::windows_says_how_many_touches_its_screens_take | windows
 src/input/touch_desktop.rs | extern block in windows_touch_points | src/input/touch_desktop.rs::windows_says_how_many_touches_its_screens_take | windows
+crates/ponko_ffi/src/rollback.rs | session | crates/ponko_ffi/tests/rollback.rs::rollback_calls_refuse_bad_arguments_and_say_when_no_session_runs | sanitizers

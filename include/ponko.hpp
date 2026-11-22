@@ -1297,10 +1297,13 @@ using query_filter_ex = PonkoQueryFilterEx;
 /// set it with `static_cast<std::uint32_t>(...)`).
 using post_ex = PonkoPostEx;
 /// HDR display output settings that can grow (PonkoHdrOutput): enabled, paper_white_nits, peak_nits
-/// (0: the display's). Off by default; see hdr_output_defaults, game::hdr_output, ctx::set_hdr_output.
+/// (0: the display's) and, from version 2, the HDR10 metadata max_content_light_nits and
+/// max_frame_average_nits (0: the peak, paper white). Off by default; see hdr_output_defaults,
+/// game::hdr_output, ctx::set_hdr_output.
 using hdr_output = PonkoHdrOutput;
 /// What the window does with the HDR settings (PonkoHdrStatus): available, active, encoding, reason,
-/// paper white, peak and headroom as used, and what the display reports (0 unknown).
+/// paper white, peak and headroom as used, what the display reports (0 unknown) and, from version 2,
+/// the HDR10 metadata the display was given (metadata_sent, then the four values).
 using hdr_status = PonkoHdrStatus;
 /// How a 3D frame drawn below the window's size (`render_scale` under 1) is brought up to it (the
 /// `upscaler` of post_ex, Rust `Upscaler`).
@@ -2119,6 +2122,33 @@ public:
     }
 };
 
+/// A copy of a world in memory (Rust `WorldSnapshot`): every entity and
+/// component, the entity allocator and the change history. Save into the
+/// same snapshot again and again: it reuses its memory.
+/// world_view::save_snapshot fills it, world_view::restore_snapshot puts it back.
+class world_snapshot {
+    PonkoWorldSnapshot* raw_;
+public:
+    /// An empty snapshot.
+    world_snapshot() : raw_(ponko_world_snapshot_new()) {}
+    ~world_snapshot() { ponko_world_snapshot_free(raw_); }
+    /// Not copyable: it owns its memory.
+    ///@{
+    world_snapshot(const world_snapshot&) = delete;
+    world_snapshot& operator=(const world_snapshot&) = delete;
+    ///@}
+    /// Entities in the snapshot.
+    std::size_t size() const { std::size_t n = 0; detail::check(ponko_world_snapshot_len(raw_, &n)); return n; }
+    /// The C handle, for ponko_world_save_snapshot and ponko_world_restore_snapshot.
+    PonkoWorldSnapshot* raw() const noexcept { return raw_; }
+};
+
+/// Settings for ctx::rollback_start for player `player` of `players`: 2 ticks of input delay, rollbacks of
+/// up to 8 ticks, world hashes compared every 60 ticks. Change the fields before starting.
+inline PonkoRollbackConfig rollback_config(std::uint32_t players, std::uint32_t player) noexcept {
+    return ponko_rollback_config_default(players, player);
+}
+
 /// The entities and their components (Rust `World`). Components are plain
 /// structs, found by their C++ type: no registration needed. A view given to
 /// a system must not escape the call.
@@ -2767,6 +2797,12 @@ public:
     /// reflected component of every entity and every reflected resource,
     /// bit for bit. Compare it between runs, peers or a replay.
     std::uint64_t hash() const { valid(); std::uint64_t h = 0; detail::check(ponko_world_hash(raw_, &h)); return h; }
+    /// Copies this world into `into` (Rust `World::save_snapshot`). Throws (and saves nothing) if a
+    /// component can't be copied: plain structs can.
+    void save_snapshot(world_snapshot& into) { valid(); detail::check(ponko_world_save_snapshot(raw_, into.raw())); }
+    /// Makes this world what it was when `from` was saved from it (Rust `World::restore_snapshot`): the same
+    /// entities with the same ids, the same ids for the next spawns. Throws for another world's snapshot.
+    void restore_snapshot(const world_snapshot& from) { valid(); detail::check(ponko_world_restore_snapshot(raw_, from.raw())); }
     /// Replaces every entity with those in `json` (from save()), with the
     /// same ids. On error (an exception) the world is unchanged.
     void load(const std::string& json) { valid(); detail::check(ponko_world_load(raw_, json.c_str())); }
@@ -7149,6 +7185,67 @@ public:
         std::memcpy(&value, data, sizeof(T));
         return value;
     }
+    // Rollback for the whole game (Rust GameRollback): see ponko_ctx_rollback_start.
+    /// Starts a rollback session in setup or a frame system: every simulation tick runs through it from
+    /// the next one on, and a late input that differs from the prediction loads the state before it and
+    /// runs the simulation systems again. Start `config` from ponko_rollback_config_default(players, player).
+    void rollback_start(const PonkoRollbackConfig& config) { detail::check(ponko_ctx_rollback_start(raw_, &config)); }
+    /// Stops the session; ticks run as before. Returns false if none ran.
+    bool rollback_stop() {
+        const PonkoStatus status = ponko_ctx_rollback_stop(raw_);
+        if (status == PONKO_NOT_FOUND) return false;
+        detail::check(status);
+        return true;
+    }
+    /// This player's input for the next tick that runs (a plain struct of at most
+    /// PONKO_ROLLBACK_INPUT_MAX bytes). It stays until set again.
+    template<class T> void rollback_set_input(const T& input) {
+        static_assert(detail::pod<T> && sizeof(T) <= PONKO_ROLLBACK_INPUT_MAX, "rollback inputs are plain structs of at most 32 bytes");
+        detail::check(ponko_ctx_rollback_set_input(raw_, &input, sizeof(T)));
+    }
+    /// In a simulation system: `player`'s input for this tick (zeros before their first one).
+    template<class T> T rollback_input(std::uint32_t player) const {
+        static_assert(detail::pod<T> && sizeof(T) <= PONKO_ROLLBACK_INPUT_MAX, "rollback inputs are plain structs of at most 32 bytes");
+        T value{};
+        detail::check(ponko_ctx_rollback_input(raw_, player, &value, sizeof(T)));
+        return value;
+    }
+    /// The packet to send to every other peer this frame, valid until the next rollback call.
+    std::pair<const std::uint8_t*, std::size_t> rollback_packet() {
+        const std::uint8_t* data = nullptr;
+        std::size_t size = 0;
+        detail::check(ponko_ctx_rollback_packet(raw_, &data, &size));
+        return {data, size};
+    }
+    /// Takes a packet from another peer; false if it isn't one of this session's.
+    bool rollback_receive(const void* data, std::size_t size) {
+        bool accepted = false;
+        detail::check(ponko_ctx_rollback_receive(raw_, data, size, &accepted));
+        return accepted;
+    }
+    /// Whether this tick runs again after a rollback: skip one-shot effects (sounds are dropped already).
+    bool rollback_resimulating() const { bool again = false; detail::check(ponko_ctx_rollback_resimulating(raw_, &again)); return again; }
+    /// The next tick the session runs, counted from its start.
+    std::uint64_t rollback_frame() const {
+        std::uint64_t frame = 0, confirmed = 0; bool has = false;
+        detail::check(ponko_ctx_rollback_frames(raw_, &frame, &has, &confirmed));
+        return frame;
+    }
+    /// The last tick every player's input is in for; none before the first.
+    std::optional<std::uint64_t> rollback_confirmed_frame() const {
+        std::uint64_t frame = 0, confirmed = 0; bool has = false;
+        detail::check(ponko_ctx_rollback_frames(raw_, &frame, &has, &confirmed));
+        if (!has) return std::nullopt;
+        return confirmed;
+    }
+    /// What the session did so far: ticks, rollbacks, ticks run again, stalls, bytes.
+    PonkoRollbackStats rollback_stats() const { PonkoRollbackStats s{}; detail::check(ponko_ctx_rollback_stats(raw_, &s)); return s; }
+    /// Whether two peers' worlds stopped matching (compared every config.checksum_every ticks).
+    bool rollback_desynced() const {
+        bool found = false; std::uint64_t frame = 0; std::uint32_t player = 0;
+        detail::check(ponko_ctx_rollback_desync(raw_, &found, &frame, &player));
+        return found;
+    }
     // Declared replication (game::messages, then ctx::replication in setup).
     /// Declares what replicates, the same on the server and every client,
     /// in setup: components with their fields, a budget in bytes per second
@@ -7830,6 +7927,28 @@ public:
     texture load_texture(const char* path) { return try_load_texture(path).value(); }
     /// Loads a texture, or says why not, without throwing (Rust's `try_load_texture`).
     result<texture> try_load_texture(const char* path) { texture t{}; const PonkoStatus status = ponko_ctx_try_load_texture(raw_, path, &t); return detail::attempt(status, t); }
+    /// Changes the image limits from now on, for the whole process (see `game::image_limits`). They stay
+    /// until set again; pictures already loaded stay as they are. Throws if either is 0.
+    void set_image_limits(std::uint32_t max_side, std::uint64_t max_bytes) { detail::check(ponko_ctx_set_image_limits(raw_, max_side, max_bytes)); }
+    /// The image limits in force: the longest side in pixels, and the most decoded bytes (RGBA8).
+    std::pair<std::uint32_t, std::uint64_t> image_limits() const {
+        std::uint32_t side = 0; std::uint64_t bytes = 0;
+        detail::check(ponko_ctx_image_limits(raw_, &side, &bytes));
+        return {side, bytes};
+    }
+    /// Decodes one picture from `len` bytes (a PNG, JPEG, KTX2 or any other format this build reads) into a
+    /// texture under limits of its own, not the game's (Rust's `try_decode_texture`): for a picture you
+    /// don't trust. `name` is for messages. A picture past the limits is kind PONKO_ERROR_LIMIT, bytes
+    /// that aren't a picture PONKO_ERROR_DECODE.
+    result<texture> try_decode_texture(const std::uint8_t* bytes, std::size_t len, const char* name, std::uint32_t max_side, std::uint64_t max_bytes) {
+        texture t{};
+        const PonkoStatus status = ponko_ctx_try_decode_texture(raw_, bytes, len, name, max_side, max_bytes, &t);
+        return detail::attempt(status, t);
+    }
+    /// `try_decode_texture` of a byte vector.
+    result<texture> try_decode_texture(const std::vector<std::uint8_t>& bytes, const char* name, std::uint32_t max_side, std::uint64_t max_bytes) {
+        return try_decode_texture(bytes.data(), bytes.size(), name, max_side, max_bytes);
+    }
 
     // Asset sources: where load_* calls find bytes besides assets/.
     /// Adds a copy of `source`; it's asked before assets/. Add sources in
@@ -7852,6 +7971,20 @@ public:
         raw.reserve(paths.size());
         for (const auto& p : paths) raw.push_back(p.c_str());
         detail::check(ponko_ctx_mount_mods(raw_, raw.data(), raw.size()));
+    }
+    /// One mod pack held in memory for mount_mods_from_memory: a name for
+    /// errors and the pack's bytes (what `ponko pack` writes).
+    struct mod_bytes {
+        std::string name;
+        std::vector<std::uint8_t> bytes;
+    };
+    /// As mount_mods, with packs held in memory (downloaded, built in): the
+    /// bytes are copied, so `mods` may go right after.
+    void mount_mods_from_memory(const std::vector<mod_bytes>& mods) {
+        std::vector<PonkoModBytes> raw;
+        raw.reserve(mods.size());
+        for (const auto& m : mods) raw.push_back(PonkoModBytes{m.name.c_str(), m.bytes.data(), m.bytes.size()});
+        detail::check(ponko_ctx_mount_mods_from_memory(raw_, raw.data(), raw.size()));
     }
     /// The mounted mods' ids, in load order (empty before mount_mods).
     std::vector<std::string> mod_ids() {
@@ -9442,11 +9575,12 @@ public:
         detail::check(ponko_ctx_hdr_output(raw_, &h));
         return h;
     }
-    /// Changes the HDR output settings: paper white and peak from the next frame; `enabled` switches
-    /// between HDR and SDR if the window opened with HDR on (game::hdr_output), else at the next start.
-    /// Throws, changing nothing, for a NaN or negative peak_nits.
+    /// Changes the HDR output settings from the next frame: `enabled` switches the window between HDR
+    /// and SDR while the game runs (no restart); paper white, peak and HDR10 metadata follow.
+    /// Throws, changing nothing, for a NaN or negative peak_nits or metadata value.
     void set_hdr_output(const ponko::hdr_output& h) { detail::check(ponko_ctx_set_hdr_output(raw_, &h)); }
-    /// What the window does with the HDR settings: active, encoding, reason, paper white and peak as used.
+    /// What the window does with the HDR settings: active, encoding, reason, paper white and peak as used,
+    /// and the HDR10 metadata sent.
     ponko::hdr_status hdr_status() const {
         ponko::hdr_status s{};
         s.struct_size = sizeof(s);
@@ -11179,7 +11313,8 @@ public:
     /// Wait for the display between frames (default on).
     game& vsync(bool on) { return check(ponko_game_vsync(raw_, on)); }
     /// HDR display output (Rust `Game::hdr_output`): with `h.enabled` the window opens in an HDR format
-    /// and color space where the display system offers one. Off by default, and then nothing changes.
+    /// and color space where the display system offers one; ctx::set_hdr_output switches it later.
+    /// Off by default, and then nothing changes.
     game& hdr_output(const ponko::hdr_output& h) { return check(ponko_game_hdr_output(raw_, &h)); }
     /// Samples per pixel of the 3D frame: 4 (default) or 2.
     game& msaa(std::uint32_t samples) { return check(ponko_game_msaa(raw_, samples)); }
@@ -11194,6 +11329,11 @@ public:
     /// Reload textures when their files change, under the same handles (on by
     /// default in debug builds of the engine; PONKO_HOT_RELOAD=1/0 overrides).
     game& hot_reload(bool on) { return check(ponko_game_hot_reload(raw_, on)); }
+    /// How big a picture the image decoders accept, for the whole process (Rust's `Game::image_limits`):
+    /// the longest side in pixels and the most bytes a decoded picture may take as RGBA8 (defaults 16384
+    /// and 512 MiB). Every decoder follows them; a picture past them fails with kind PONKO_ERROR_LIMIT.
+    /// Lower them for pictures from players or the network, raise them for large source art.
+    game& image_limits(std::uint32_t max_side, std::uint64_t max_bytes) { return check(ponko_game_image_limits(raw_, max_side, max_bytes)); }
     /// The runtime inspector, opened with the backquote key (on by default in
     /// debug builds of the engine; PONKO_INSPECTOR=1/0/open overrides).
     game& inspector(bool on) { return check(ponko_game_inspector(raw_, on)); }
@@ -11480,6 +11620,16 @@ inline entity spawn_gltf(ctx& c, const char* path, transform3d at, bool without_
     entity root = 0;
     detail::check(ponko_ctx_spawn_gltf(c.raw(), path, at, without_saved_objects, &root));
     return root;
+}
+/// Spawns the tile of terrain file `path` (`"format": "ponko-terrain"`, as
+/// the editor's terrain window saves it) with its corner at `at`: an entity
+/// with a transform3d, a terrain_tile and the TerrainFile that saves it in a
+/// scene. Throws (not found, or what's wrong with the file) and spawns
+/// nothing if the file doesn't load.
+inline entity spawn_terrain_from_file(ctx& c, const char* path, vec3 at) {
+    entity e = 0;
+    detail::check(ponko_ctx_terrain_tile_spawn_from_file(c.raw(), path, at, &e));
+    return e;
 }
 /// Despawns a scene spawned with spawn_gltf; false if `root` is not one.
 inline bool despawn_gltf(ctx& c, entity root) {

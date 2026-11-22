@@ -1378,9 +1378,16 @@ jobs:
         timeout-minutes: 5
         if: ${{ !cancelled() }}
         run: node web/smoke/smoke.mjs --fixture lights2d --browser chromium --backend webgl2
-      # Saving with the editor in a web build (examples/web_editor_save): the
-      # scene it saves is read back at once from the browser's storage, and
-      # after a reload it comes back over the fetched files.
+      # Saving with the editor in a web build (examples/web_editor_save):
+      # scenes it saves (a new one and one over a file the build ships) are
+      # read back at once from the browser's storage; after a reload they
+      # come back over the fetched files and the one over the build's file is
+      # reverted; after another reload the revert held. Persistent storage is
+      # asked for at the first save, not at start: run it once more with
+      # `--persist granted` and with `--persist refused` (the runner answers
+      # for the browser) to check the first load asks once and the reloads,
+      # which save nothing, never ask. The editor's panel of glTF scenes that
+      # didn't load, with its Retry, is the web_editor_unloaded fixture.
       - name: Chromium, WebGL2, editor saves kept in the browser
         timeout-minutes: 5
         if: ${{ !cancelled() }}

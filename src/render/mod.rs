@@ -26,6 +26,8 @@ mod gpu3d;
 mod gpu_textures;
 pub(crate) mod hdr;
 #[cfg(feature = "window")]
+mod hdr_metadata;
+#[cfg(feature = "window")]
 mod hdr_output;
 #[cfg(all(feature = "window", feature = "3d"))]
 mod lights;
@@ -105,7 +107,7 @@ pub use gpu3d::{
     LodBench, LodFrame, LodMemory, LodPath, LodScene, RecordBench, RecordScene, SceneBench, SceneFrame, SceneKind,
     SceneSetup,
 };
-pub use hdr::{HdrEncoding, HdrOffReason, HdrOutput, HdrStatus};
+pub use hdr::{HdrEncoding, HdrMetadata, HdrOffReason, HdrOutput, HdrStatus};
 /// Unstable 2D lighting benchmark driver for `ponko_bench` (feature `bench-internals`).
 #[doc(hidden)]
 #[cfg(all(
@@ -374,6 +376,10 @@ pub(crate) struct RenderDetail {
     /// their data) in ms; includes `RenderStats::collect_ms`.
     pub prepare_ms: f32,
     pub state_changes: Option<[u32; 5]>,
+    /// The part of `state_changes` the main view's see-through list
+    /// recorded (models, batches, crowds, particles, ribbons, lines and
+    /// 3D text, drawn far to near together).
+    pub see_through_changes: Option<[u32; 5]>,
     /// The newest frame whose GPU timestamps came back: its own GPU ms and
     /// how many drawn frames ago it was drawn (see
     /// `GpuTimer::latest_frame`). `None` without timestamps or before the
@@ -411,6 +417,8 @@ pub(crate) struct Screenshot {
     pub rgba: Vec<u8>,
 }
 
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod area_lights_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod atlas_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
@@ -485,6 +493,8 @@ mod regression_stage;
 mod render_target_frame_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod reverse_z_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod stereo_render_test;
 #[cfg(all(test, feature = "window", feature = "3d", feature = "video"))]
 mod video_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
@@ -516,6 +526,8 @@ mod prompt_row_render_test;
 pub(crate) mod render_test_support;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod rich_text_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod see_through_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod shadow_cache_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]

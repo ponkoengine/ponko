@@ -105,6 +105,7 @@ mod stencil;
 mod storage;
 mod stream;
 mod strips;
+mod terrain_files;
 mod text3d;
 mod three;
 // After `three`: it uses the quality struct, which the header defines there.
@@ -139,6 +140,7 @@ mod text_shaping;
 mod buffer_motion;
 mod motion;
 // IME composition (#410).
+mod image_limits;
 mod ime;
 // Localization (#411).
 mod locale;
@@ -172,6 +174,7 @@ mod sky_kit;
 mod video;
 // Native API parity, round 5 (gl#157): crash reports and sliced loaders.
 mod crash;
+mod rollback;
 mod slice_loaders;
 pub use access::*;
 pub use actions::*;
@@ -184,11 +187,13 @@ pub use controllers::*;
 pub use crash::*;
 pub use crowd_clips::*;
 pub use debug::*;
+pub use image_limits::*;
 pub use ime::*;
 pub use lightmap_bake::*;
 pub use locale::*;
 pub use nav_view::*;
 pub use replication_raw::*;
+pub use rollback::*;
 pub use scenario_touch::*;
 pub use skeleton2d::*;
 pub use sky_kit::*;
@@ -285,6 +290,7 @@ pub use storage::*;
 pub use storage_slots::*;
 pub use stream::*;
 pub use strips::*;
+pub use terrain_files::*;
 pub use text_shaping::*;
 pub use text3d::*;
 pub use three::*;
@@ -455,7 +461,7 @@ impl From<ponko::prelude::ErrorKind> for PonkoErrorKind {
 }
 
 /// The kind a failure with `status` and no `ponko::prelude::Error` behind it gets.
-fn kind_of_status(status: PonkoStatus) -> PonkoErrorKind {
+pub(crate) fn kind_of_status(status: PonkoStatus) -> PonkoErrorKind {
     match status {
         PONKO_OK => PonkoErrorKind::PONKO_ERROR_NONE,
         PONKO_INVALID_ARGUMENT => PonkoErrorKind::PONKO_ERROR_INVALID,

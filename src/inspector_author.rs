@@ -99,8 +99,10 @@ impl Tool {
 }
 
 /// Folders below `assets/` the file lists look into, at most.
+#[cfg(not(target_arch = "wasm32"))]
 const LIST_DEPTH: usize = 8;
 /// Files a list holds, at most.
+#[cfg(not(target_arch = "wasm32"))]
 const LIST_FILES: usize = 4096;
 
 /// Every file in the `assets/` folders (or a web build's manifest) ending
@@ -354,6 +356,7 @@ pub(crate) fn beside(path: &str, name: &str) -> String {
 
 /// `to` (an asset name) relative to the folder of asset `from`, as a file
 /// names another beside it.
+#[cfg(feature = "3d")]
 pub(crate) fn relative(from: &str, to: &str) -> String {
     let dir: Vec<&str> = from
         .split('/')
@@ -369,6 +372,7 @@ pub(crate) fn relative(from: &str, to: &str) -> String {
 
 /// `files` (asset names), those in the folder of asset `path` (and below
 /// it) first.
+#[cfg(feature = "3d")]
 pub(crate) fn near_first(mut files: Vec<String>, path: &str) -> Vec<String> {
     let dir = path.rsplit_once('/').map_or("", |(d, _)| d);
     files.sort_by_key(|p| (!(dir.is_empty() || p.starts_with(&format!("{dir}/"))), p.clone()));

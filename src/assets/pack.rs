@@ -32,6 +32,7 @@
 
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::assets::AssetSource;
@@ -47,6 +48,117 @@ pub(crate) const HEADER_LEN: usize = 32;
 /// folder would be (next to the program, in a macOS app's `Resources`, or
 /// next to the web page).
 pub(crate) const DEFAULT_PACK: &str = "assets.pack";
+
+/// Absolute caps on what one pack may unpack to, next to the deflate ratio
+/// check (no entry inflates more than 1032:1, which a ratio alone doesn't
+/// bound: a 100 MiB entry of zeros would unpack to about 100 GiB).
+///
+/// Three caps, all counted on what the pack makes the engine produce, not
+/// on what a damaged or hostile index claims:
+///
+/// - [`max_entry_size`](Self::max_entry_size): one file, default 1 GiB.
+///   Checked when the file is read, and while it inflates, so a file that
+///   inflates past it fails without ever holding more than the cap.
+/// - [`max_pack_size`](Self::max_pack_size): the sum of the sizes the index
+///   declares, default 16 GiB, checked when the pack is opened.
+/// - [`max_entries`](Self::max_entries): files in the index, default
+///   1,000,000, checked when the pack is opened.
+///
+/// A game that loads packs from players or the network sets them low; a
+/// game shipping a very large pack of its own raises them. Set them for the
+/// whole game with [`Game::pack_limits`](crate::game::Game::pack_limits)
+/// (they then apply to `assets.pack`, mod packs and every [`PackSource`]
+/// opened with [`open`](PackSource::open) or
+/// [`from_bytes`](PackSource::from_bytes)), or for one pack with
+/// [`PackSource::open_with_limits`] and [`PackSource::from_bytes_with_limits`].
+///
+/// ```
+/// use ponko::assets::PackLimits;
+/// // Downloaded packs: 16 MiB a file, 64 MiB and 1000 files in all.
+/// let strict = PackLimits::default()
+///     .with_max_entry_size(16 << 20)
+///     .with_max_pack_size(64 << 20)
+///     .with_max_entries(1000);
+/// assert_eq!(strict.max_entries, 1000);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct PackLimits {
+    /// The most bytes one file may unpack to.
+    pub max_entry_size: u64,
+    /// The most bytes all the files of a pack may unpack to, by the sizes
+    /// the index declares.
+    pub max_pack_size: u64,
+    /// The most files a pack's index may hold.
+    pub max_entries: u64,
+}
+
+/// The default [`PackLimits::max_entry_size`]: 1 GiB.
+const DEFAULT_MAX_ENTRY_SIZE: u64 = 1 << 30;
+/// The default [`PackLimits::max_pack_size`]: 16 GiB.
+const DEFAULT_MAX_PACK_SIZE: u64 = 16 << 30;
+/// The default [`PackLimits::max_entries`]: one million.
+const DEFAULT_MAX_ENTRIES: u64 = 1_000_000;
+
+impl Default for PackLimits {
+    fn default() -> PackLimits {
+        PackLimits {
+            max_entry_size: DEFAULT_MAX_ENTRY_SIZE,
+            max_pack_size: DEFAULT_MAX_PACK_SIZE,
+            max_entries: DEFAULT_MAX_ENTRIES,
+        }
+    }
+}
+
+/// The game-wide limits (`Game::pack_limits`), in three atomics so the
+/// packs the engine opens by itself (`assets.pack`, mods) see them.
+static GAME_MAX_ENTRY_SIZE: AtomicU64 = AtomicU64::new(DEFAULT_MAX_ENTRY_SIZE);
+static GAME_MAX_PACK_SIZE: AtomicU64 = AtomicU64::new(DEFAULT_MAX_PACK_SIZE);
+static GAME_MAX_ENTRIES: AtomicU64 = AtomicU64::new(DEFAULT_MAX_ENTRIES);
+
+impl PackLimits {
+    /// Sets [`max_entry_size`](Self::max_entry_size).
+    #[must_use]
+    pub fn with_max_entry_size(mut self, bytes: u64) -> PackLimits {
+        self.max_entry_size = bytes;
+        self
+    }
+
+    /// Sets [`max_pack_size`](Self::max_pack_size).
+    #[must_use]
+    pub fn with_max_pack_size(mut self, bytes: u64) -> PackLimits {
+        self.max_pack_size = bytes;
+        self
+    }
+
+    /// Sets [`max_entries`](Self::max_entries).
+    #[must_use]
+    pub fn with_max_entries(mut self, entries: u64) -> PackLimits {
+        self.max_entries = entries;
+        self
+    }
+
+    /// The limits of this game: what [`Game::pack_limits`](crate::game::Game::pack_limits)
+    /// set, the defaults until then. [`PackSource::open`] and
+    /// [`PackSource::from_bytes`] use them.
+    #[must_use]
+    pub fn current() -> PackLimits {
+        PackLimits {
+            max_entry_size: GAME_MAX_ENTRY_SIZE.load(Ordering::Relaxed),
+            max_pack_size: GAME_MAX_PACK_SIZE.load(Ordering::Relaxed),
+            max_entries: GAME_MAX_ENTRIES.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Makes these the limits of the whole process (`Game::pack_limits`).
+    pub(crate) fn set_current(self) {
+        GAME_MAX_ENTRY_SIZE.store(self.max_entry_size, Ordering::Relaxed);
+        GAME_MAX_PACK_SIZE.store(self.max_pack_size, Ordering::Relaxed);
+        GAME_MAX_ENTRIES.store(self.max_entries, Ordering::Relaxed);
+    }
+}
+
+const RAISE: &str = "raise it with `Game::pack_limits`, or `PackSource::open_with_limits` for one pack; `ponko cook` and `ponko pack` take --max-entry-size, --max-pack-size and --max-entries";
 
 /// How an entry's bytes are stored.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -144,7 +256,14 @@ impl<'a> Cursor<'a> {
 }
 
 /// Reads and checks the index (the `header.index_len` bytes after the header).
-fn parse_index(header: &Header, index: &[u8]) -> Result<Vec<Entry>, String> {
+fn parse_index(header: &Header, index: &[u8], limits: &PackLimits) -> Result<Vec<Entry>, String> {
+    if u64::from(header.count) > limits.max_entries {
+        return Err(format!(
+            "it holds {} entries, past the limit of {} (`PackLimits::max_entries`); {RAISE}",
+            header.count, limits.max_entries
+        ));
+    }
+    let mut declared: u64 = 0;
     let mut cursor = Cursor(index);
     // Each entry takes at least 31 bytes: no count can ask for more memory than the index has.
     let mut entries: Vec<Entry> = Vec::with_capacity((header.count as usize).min(index.len() / 31));
@@ -171,6 +290,13 @@ fn parse_index(header: &Header, index: &[u8]) -> Result<Vec<Entry>, String> {
         if codec == Codec::Stored && entry.stored_len != entry.size {
             return Err(format!("\"{name}\" is stored, but its two sizes differ"));
         }
+        declared = declared.saturating_add(entry.size);
+        if declared > limits.max_pack_size {
+            return Err(format!(
+                "the sizes its index declares add up to more than the limit of {} bytes (`PackLimits::max_pack_size`) at \"{name}\"; {RAISE}",
+                limits.max_pack_size
+            ));
+        }
         if let Some(last) = entries.last()
             && last.name.as_bytes() >= name.as_bytes()
         {
@@ -187,8 +313,25 @@ fn parse_index(header: &Header, index: &[u8]) -> Result<Vec<Entry>, String> {
 /// The most deflate expands its input: 258 bytes from each 2-bit code.
 const MAX_DEFLATE_RATIO: u64 = 1032;
 
+/// The error for a file past `PackLimits::max_entry_size`.
+fn too_large(entry: &Entry, limits: &PackLimits) -> std::io::Error {
+    invalid(format!(
+        "\"{}\" unpacks to more than the limit of {} bytes for one file (`PackLimits::max_entry_size`); {RAISE}",
+        entry.name, limits.max_entry_size
+    ))
+}
+
+/// Refuses an entry whose index declares more than the per-file cap, before
+/// any of its bytes are read.
+fn check_declared(entry: &Entry, limits: &PackLimits) -> std::io::Result<()> {
+    if entry.size > limits.max_entry_size {
+        return Err(too_large(entry, limits));
+    }
+    Ok(())
+}
+
 /// Unpacks an entry's stored bytes and checks them.
-fn unpack(entry: &Entry, stored: Vec<u8>) -> std::io::Result<Vec<u8>> {
+fn unpack(entry: &Entry, stored: Vec<u8>, limits: &PackLimits) -> std::io::Result<Vec<u8>> {
     let bytes = match entry.codec {
         Codec::Stored => stored,
         Codec::Deflate => {
@@ -196,10 +339,17 @@ fn unpack(entry: &Entry, stored: Vec<u8>) -> std::io::Result<Vec<u8>> {
             // shrinks 1032:1 at best), not what a damaged index claims.
             let most = (stored.len() as u64).saturating_mul(MAX_DEFLATE_RATIO);
             let mut out = Vec::with_capacity(usize::try_from(entry.size.min(most)).unwrap_or(0).min(1 << 30));
+            // Stop one byte past what the index declares (one more than the
+            // cap at most): the bytes the decoder makes are counted, so
+            // neither a lying index nor a bomb gets past it.
+            let stop = entry.size.min(limits.max_entry_size).saturating_add(1);
             flate2::read::DeflateDecoder::new(stored.as_slice())
-                .take(entry.size.saturating_add(1))
+                .take(stop)
                 .read_to_end(&mut out)
                 .map_err(|e| invalid(format!("\"{}\" does not inflate: {e}", entry.name)))?;
+            if out.len() as u64 > limits.max_entry_size {
+                return Err(too_large(entry, limits));
+            }
             out
         }
     };
@@ -263,6 +413,7 @@ pub struct PackSource {
     id: String,
     entries: Vec<Entry>,
     data: Data,
+    limits: PackLimits,
 }
 
 impl PackSource {
@@ -275,14 +426,25 @@ impl PackSource {
     /// builds, which have no files: use [`from_bytes`](Self::from_bytes)),
     /// [`Decode`](ErrorKind::Decode) if it isn't a pack this engine reads.
     pub fn open(path: impl AsRef<Path>) -> Result<PackSource, Error> {
+        Self::open_with_limits(path, PackLimits::current())
+    }
+
+    /// As [`open`](Self::open), with `limits` instead of the game's
+    /// ([`PackLimits`]): lower for a pack from players or the network,
+    /// higher for a very large pack of your own.
+    ///
+    /// # Errors
+    /// As [`open`](Self::open); [`Decode`](ErrorKind::Decode) too if the
+    /// index holds more files, or declares more bytes, than `limits` allow.
+    pub fn open_with_limits(path: impl AsRef<Path>, limits: PackLimits) -> Result<PackSource, Error> {
         let path = path.as_ref();
         let id = path
             .file_name()
             .map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
-        Self::open_as(path, id)
+        Self::open_as(path, id, limits)
     }
 
-    fn open_as(path: &Path, id: String) -> Result<PackSource, Error> {
+    fn open_as(path: &Path, id: String, limits: PackLimits) -> Result<PackSource, Error> {
         let shown = path.display().to_string();
         let io =
             |e: std::io::Error| Error::new(ErrorKind::Io, format!("could not read {shown}: {e}")).with_path(&shown);
@@ -307,7 +469,8 @@ impl PackSource {
         let index_len = usize::try_from(header.index_len).map_err(|_| Error::decode(&shown, "index too large"))?;
         let mut index = vec![0u8; index_len];
         file.read_exact(&mut index).map_err(io)?;
-        let entries = parse_index(&header, &index).map_err(|e| Error::decode(&shown, format!("{shown}: {e}")))?;
+        let entries =
+            parse_index(&header, &index, &limits).map_err(|e| Error::decode(&shown, format!("{shown}: {e}")))?;
         Ok(PackSource {
             id,
             entries,
@@ -315,6 +478,7 @@ impl PackSource {
                 file: Mutex::new(file),
                 start: header.data_start(),
             },
+            limits,
         })
     }
 
@@ -325,6 +489,20 @@ impl PackSource {
     /// [`Decode`](ErrorKind::Decode) if `bytes` aren't a whole pack this
     /// engine reads.
     pub fn from_bytes(id: impl Into<String>, bytes: impl Into<Arc<[u8]>>) -> Result<PackSource, Error> {
+        Self::from_bytes_with_limits(id, bytes, PackLimits::current())
+    }
+
+    /// As [`from_bytes`](Self::from_bytes), with `limits` instead of the
+    /// game's ([`PackLimits`]).
+    ///
+    /// # Errors
+    /// As [`from_bytes`](Self::from_bytes); too if the index holds more
+    /// files, or declares more bytes, than `limits` allow.
+    pub fn from_bytes_with_limits(
+        id: impl Into<String>,
+        bytes: impl Into<Arc<[u8]>>,
+        limits: PackLimits,
+    ) -> Result<PackSource, Error> {
         let id = id.into();
         let bytes: Arc<[u8]> = bytes.into();
         let fail = |e: String| Error::decode(&id, format!("asset pack \"{id}\": {e}"));
@@ -341,12 +519,19 @@ impl PackSource {
             )));
         }
         let start = usize::try_from(header.data_start()).map_err(|_| fail("too large".into()))?;
-        let entries = parse_index(&header, &bytes[HEADER_LEN..start]).map_err(fail)?;
+        let entries = parse_index(&header, &bytes[HEADER_LEN..start], &limits).map_err(fail)?;
         Ok(PackSource {
             id,
             entries,
             data: Data::Memory { bytes, start },
+            limits,
         })
+    }
+
+    /// The limits this pack was opened with.
+    #[must_use]
+    pub fn limits(&self) -> PackLimits {
+        self.limits
     }
 
     /// The names of the files in the pack, sorted.
@@ -409,7 +594,10 @@ impl AssetSource for PackSource {
                 format!("\"{name}\" is not in asset pack \"{}\"", self.id),
             ));
         };
-        unpack(entry, self.stored(entry)?)
+        // Refuse a file past the cap before reading its stored bytes (a stored
+        // file is as large as it unpacks to).
+        check_declared(entry, &self.limits)?;
+        unpack(entry, self.stored(entry)?, &self.limits)
     }
 }
 
@@ -476,7 +664,7 @@ pub(crate) fn discover(roots: &[PathBuf]) -> Vec<PackSource> {
             continue;
         }
         seen.push(canonical);
-        match PackSource::open_as(&path, path.display().to_string()) {
+        match PackSource::open_as(&path, path.display().to_string(), PackLimits::current()) {
             Ok(pack) => packs.push(pack),
             Err(e) => eprintln!("ponko: skipping asset pack: {e}"),
         }
@@ -657,6 +845,204 @@ mod tests {
         let packs = discover(&roots);
         assert_eq!(packs.len(), 1, "the game's pack, once; the broken one skipped");
         assert_eq!(packs[0].id(), game.join(DEFAULT_PACK).display().to_string());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Index and data of a one-entry pack, for entries `write_for_test` can't make
+    /// (a lying size, a made-up deflate stream).
+    fn raw_pack(entries: &[(&str, u8, &[u8], u64)]) -> Vec<u8> {
+        let mut index = Vec::new();
+        let mut data = Vec::new();
+        for (name, codec, stored, size) in entries {
+            index.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            index.extend_from_slice(name.as_bytes());
+            index.push(*codec);
+            index.extend_from_slice(&(data.len() as u64).to_le_bytes());
+            index.extend_from_slice(&(stored.len() as u64).to_le_bytes());
+            index.extend_from_slice(&size.to_le_bytes());
+            index.extend_from_slice(&0u32.to_le_bytes());
+            data.extend_from_slice(stored);
+        }
+        let mut out = MAGIC.to_vec();
+        out.extend_from_slice(&VERSION.to_le_bytes());
+        out.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(index.len() as u64).to_le_bytes());
+        out.extend_from_slice(&(data.len() as u64).to_le_bytes());
+        out.extend_from_slice(&index);
+        out.extend_from_slice(&data);
+        out
+    }
+
+    #[test]
+    fn defaults_are_one_gib_an_entry_sixteen_a_pack_and_a_million_entries() {
+        let d = PackLimits::default();
+        assert_eq!(
+            (d.max_entry_size, d.max_pack_size, d.max_entries),
+            (1 << 30, 16 << 30, 1_000_000)
+        );
+    }
+
+    #[test]
+    fn an_entry_that_inflates_past_the_cap_fails_and_the_error_says_what_to_do() {
+        let zeros = vec![0u8; 1 << 20];
+        let bytes = write_for_test(&[("zeros.bin", &zeros, true), ("small.txt", b"hi", true)]);
+        let limits = PackLimits::default().with_max_entry_size(64 << 10);
+        let pack = PackSource::from_bytes_with_limits("p", bytes.clone(), limits).unwrap();
+        let err = pack.read("zeros.bin").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        let text = err.to_string();
+        assert!(
+            text.contains("\"zeros.bin\"") && text.contains("65536") && text.contains("max_entry_size"),
+            "{text}"
+        );
+        assert!(
+            text.contains("PackSource::open_with_limits") && text.contains("--max-entry-size"),
+            "{text}"
+        );
+        assert_eq!(pack.read("small.txt").unwrap(), b"hi");
+        // The same pack under the default cap reads fine.
+        let pack = PackSource::from_bytes_with_limits("p", bytes, PackLimits::default()).unwrap();
+        assert_eq!(pack.read("zeros.bin").unwrap(), zeros);
+    }
+
+    #[test]
+    fn a_stored_entry_past_the_cap_is_refused_before_its_bytes_are_read() {
+        let bytes = write_for_test(&[("big.bin", &[7u8; 4096], false)]);
+        let limits = PackLimits::default().with_max_entry_size(4095);
+        let pack = PackSource::from_bytes_with_limits("p", bytes, limits).unwrap();
+        let err = pack.read("big.bin").unwrap_err();
+        assert!(err.to_string().contains("max_entry_size"), "{err}");
+        let exactly = PackLimits::default().with_max_entry_size(4096);
+        let bytes = write_for_test(&[("big.bin", &[7u8; 4096], false)]);
+        assert_eq!(
+            PackSource::from_bytes_with_limits("p", bytes, exactly)
+                .unwrap()
+                .read("big.bin")
+                .unwrap()
+                .len(),
+            4096
+        );
+    }
+
+    #[test]
+    fn the_cap_counts_the_bytes_the_decoder_makes_not_the_size_the_index_declares() {
+        // 1 MiB of zeros deflated, declared as 10 bytes: the decoder is stopped at the
+        // declared size (never past the cap), and the file is refused.
+        let zeros = vec![0u8; 1 << 20];
+        let honest = write_for_test(&[("z.bin", &zeros, true)]);
+        let start = HEADER_LEN + 2 + 5 + 1 + 8 + 8;
+        let mut lying = honest.clone();
+        lying[start..start + 8].copy_from_slice(&10u64.to_le_bytes());
+        let pack = PackSource::from_bytes("p", lying).unwrap();
+        let err = pack.read("z.bin").unwrap_err();
+        assert!(err.to_string().contains("not the 10 its index says"), "{err}");
+        // Declared exactly at the cap but inflating one byte past it.
+        let mut at_cap = honest;
+        at_cap[start..start + 8].copy_from_slice(&1000u64.to_le_bytes());
+        let limits = PackLimits::default().with_max_entry_size(1000);
+        let err = PackSource::from_bytes_with_limits("p", at_cap, limits)
+            .unwrap()
+            .read("z.bin")
+            .unwrap_err();
+        assert!(err.to_string().contains("max_entry_size"), "{err}");
+    }
+
+    #[test]
+    fn an_index_declaring_more_than_the_pack_cap_is_refused_at_open_naming_the_entry() {
+        let bytes = write_for_test(&[
+            ("a.bin", &[1u8; 600], false),
+            ("b.bin", &[2u8; 600], true),
+            ("c.bin", &[3u8; 600], false),
+        ]);
+        let limits = PackLimits::default().with_max_pack_size(1200);
+        let err = PackSource::from_bytes_with_limits("p", bytes.clone(), limits)
+            .err()
+            .expect("refused");
+        assert_eq!(err.kind(), ErrorKind::Decode);
+        let text = err.message();
+        assert!(
+            text.contains("\"c.bin\"") && text.contains("1200") && text.contains("max_pack_size"),
+            "{text}"
+        );
+        assert!(text.contains("Game::pack_limits"), "{text}");
+        // Exactly at the cap is fine, and so is a raised cap.
+        let limits = PackLimits::default().with_max_pack_size(1800);
+        assert_eq!(PackSource::from_bytes_with_limits("p", bytes, limits).unwrap().len(), 3);
+        // A declared size of u64::MAX is no overflow.
+        let huge = raw_pack(&[("a", 0, b"", 0), ("b", 1, b"x", u64::MAX), ("c", 1, b"x", u64::MAX)]);
+        assert!(PackSource::from_bytes("p", huge).is_err());
+    }
+
+    #[test]
+    fn an_index_with_too_many_entries_is_refused_at_open_before_it_is_parsed() {
+        let files: Vec<(String, Vec<u8>)> = (0..5).map(|i| (format!("f{i}.txt"), vec![i as u8; 4])).collect();
+        let files: Vec<(&str, &[u8], bool)> = files.iter().map(|(n, b)| (n.as_str(), b.as_slice(), false)).collect();
+        let bytes = write_for_test(&files);
+        let err = PackSource::from_bytes_with_limits("p", bytes.clone(), PackLimits::default().with_max_entries(4))
+            .err()
+            .expect("refused");
+        assert_eq!(err.kind(), ErrorKind::Decode);
+        assert!(
+            err.message().contains("5 entries")
+                && err.message().contains("limit of 4")
+                && err.message().contains("max_entries"),
+            "{}",
+            err.message()
+        );
+        assert_eq!(
+            PackSource::from_bytes_with_limits("p", bytes, PackLimits::default().with_max_entries(5))
+                .unwrap()
+                .len(),
+            5
+        );
+        // A header claiming four billion entries is refused by the count alone.
+        let mut lie = sample();
+        lie[12..16].copy_from_slice(&u32::MAX.to_le_bytes());
+        let err = PackSource::from_bytes("p", lie).err().unwrap();
+        assert!(err.message().contains("max_entries"), "{}", err.message());
+    }
+
+    #[test]
+    fn raised_caps_let_a_larger_entry_through_and_lowered_ones_refuse_the_same_pack() {
+        let data = vec![9u8; 300 << 10];
+        let bytes = write_for_test(&[("level.bin", &data, true)]);
+        let low = PackLimits::default().with_max_entry_size(100 << 10);
+        assert!(
+            PackSource::from_bytes_with_limits("p", bytes.clone(), low)
+                .unwrap()
+                .read("level.bin")
+                .is_err()
+        );
+        let raised = low.with_max_entry_size(1 << 20);
+        assert_eq!(
+            PackSource::from_bytes_with_limits("p", bytes, raised)
+                .unwrap()
+                .read("level.bin")
+                .unwrap(),
+            data
+        );
+    }
+
+    #[test]
+    fn a_pack_file_is_checked_against_the_limits_it_is_opened_with() {
+        let dir = temp("limits");
+        let path = dir.join("big.pack");
+        std::fs::write(
+            &path,
+            write_for_test(&[("a", &[0u8; 100], false), ("b", &[0u8; 100], false)]),
+        )
+        .unwrap();
+        let err = PackSource::open_with_limits(&path, PackLimits::default().with_max_entries(1))
+            .err()
+            .unwrap();
+        assert!(
+            err.message().contains("big.pack") && err.message().contains("max_entries"),
+            "{}",
+            err.message()
+        );
+        let pack = PackSource::open_with_limits(&path, PackLimits::default().with_max_entry_size(50)).unwrap();
+        assert_eq!(pack.limits().max_entry_size, 50);
+        assert!(pack.read("a").is_err());
         let _ = std::fs::remove_dir_all(dir);
     }
 }

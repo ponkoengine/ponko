@@ -80,8 +80,12 @@ embedded with `include_bytes!`, or downloaded):
 A game needn't add its own `assets.pack`: the engine reads it after the loose
 files by itself. Add a `PackSource` for packs of your own, such as
 downloadable content. Each file's CRC-32 is checked when it is read; a
-damaged file is an I/O error naming it. C and C++ have no `PackSource` yet;
-they read the default `assets.pack` like Rust games.
+damaged file is an I/O error naming it. A pack is also refused for what it
+would unpack to: caps on one file (1 GiB), a pack's declared size (16 GiB) and
+its number of files (1,000,000), settable with `Game::pack_limits` or per pack
+with `PackSource::open_with_limits` (see
+[Caps on what a pack may unpack to](packaging.md#caps-on-what-a-pack-may-unpack-to)).
+C and C++ have no `PackSource` yet; they read the default `assets.pack` like Rust games.
 
 ## The rules
 

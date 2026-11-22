@@ -173,14 +173,21 @@ A browser keeps a few megabytes per site this way; when it refuses a save
 (it is full), the error says so and Download still gives you the file.
 
 A browser may also clear a site's storage when the disk runs low, unless
-it keeps that storage *persistent*. Before setup the web editor asks for
-that (`navigator.storage.persist()`): Chromium decides from how the site
-is used (an installed or bookmarked site gets it), Firefox asks you, and
-a page served without HTTPS (other than `localhost`) can't have it. When
-the browser refuses, the status bar says **the browser may clear saves**
-(its tooltip says why) and **File > Saved in this browser** repeats it:
-download what you want to keep. `ctx.assets.browser_saves_persistent()`
-is the answer from code: `Some(true)`, `Some(false)`, or `None` until the
+it keeps that storage *persistent*. Before setup the web editor only
+looks whether it is (`navigator.storage.persisted()`, which asks you
+nothing); the first save on the page asks for it
+(`navigator.storage.persist()`), once, as saving is something you did.
+Chromium decides from how the site is used (an installed or bookmarked
+site gets it), Firefox asks you, and a page served without HTTPS (other
+than `localhost`) can't have it. Until a save asked, **File > Saved in
+this browser** says the next save asks. When the browser refuses, the
+status bar says **the browser may clear saves** (its tooltip says why)
+and **File > Saved in this browser** repeats it: download what you want
+to keep. Once it grants it the warning goes, and later visits find the
+storage persistent without asking again.
+`ctx.assets.browser_saves_persistent()` is the answer from code:
+`Some(true)` when it is persistent, `Some(false)` when it isn't (refused,
+or not asked yet as nothing was saved on the page), or `None` until the
 browser answers (and in other builds).
 
 **Open** and the asset panel list the web build's file manifest: the
@@ -331,6 +338,19 @@ file makes of it is its override, kept in the scene's saved record:
   overrides stay in the scene, for when the file is back), and the status
   bar's error line names each such file and why it didn't load.
 
+#### Scenes that didn't load
+
+Above the status bar, the editor lists each glTF scene of the open scene
+that didn't load, one row each: **Retry**, its file and why. Fix the file
+(export it again, put it back in `assets/`, revert a broken copy saved in
+the browser) and press **Retry**: the scene spawns where it was saved,
+with its overrides, and the nodes of other scenes you hung off its nodes
+hang off them again, where you put them. The row and its name in the
+error line go; the document stays as saved or as changed as it was, as
+its file names the scene either way. A retry that still fails says why in
+the row and the error line. The panel is gone once every scene loaded,
+and opening another document starts it again.
+
 Overrides are per component (the changed fields of each), and two more
 kinds are per node:
 
@@ -347,7 +367,8 @@ kinds are per node:
   linked, at once. If the other scene's file doesn't load when the scene
   is opened, the node waits on its file parent and its overrides list
   the parent as missing: **Revert** forgets the link, or fix the file and
-  the link is made when that scene spawns. Builds from before these links
+  press **Retry** in the panel of [scenes that didn't
+  load](#scenes-that-didnt-load): the link is made when that scene spawns. Builds from before these links
   read such saves too, with the node on its file parent. A parent the
   save leaves out (an entity marked not saved) can't be kept, and the
   editor says so on its console.
@@ -438,9 +459,13 @@ The **Preview** runs the graph on the skeleton with test values for its
 parameters (they aren't saved): drag a float, tick a bool or **Fire** a
 trigger, and the state playing turns green and the pose follows. A graph
 the runtime would refuse says why under the canvas, and the preview keeps
-the last one that loaded. Where the nodes sit is the editor's own; the
-file has no place for it. 3D animation graphs are built in code and have
-no file to edit.
+the last one that loaded. Where the nodes sit is saved with the graph, as
+its `layout` (each state's `[x, y]` in the canvas, which the runtime
+ignores), so they come back where you left them; moving a node is a step
+in the history like any other edit. A file without a layout (an older one,
+or one written by hand) opens with its nodes in rows of three, and only
+the nodes you move get a place. 3D animation graphs are built in code and
+have no file to edit.
 
 ### Materials and shaders
 
@@ -463,6 +488,32 @@ materials drawn with the shader, edited live. Those are set in code, with
 **Copy as Rust** copies the values as code to paste where the game makes
 its material.
 
+A glTF material can also carry its custom shader and values itself, so a
+model draws with them as it loads, with no code. The materials window's
+**Custom shader** section picks the shader (a `.wgsl` from `assets/`) and
+edits up to four values, each with a name, a type (`float`, `vec2`, `vec3`,
+`vec4` or `color`) and its numbers; the model follows every edit, and Save
+writes them into the material's `extras`, where an exporter keeps custom
+properties too:
+
+```json
+"extras": {
+  "ponko:shader": "water.wgsl",
+  "ponko:params": [
+    { "name": "tint", "type": "color", "value": [0.1, 0.4, 0.8, 1.0] },
+    { "name": "speed", "type": "float", "value": 2.0 }
+  ]
+}
+```
+
+The shader's name is relative to the glTF file. The values are
+`material.custom[0]` to `[3]` in the shader, in their order: a `float` is
+`x`, a `vec2` `xy`, a `vec3` `xyz`, a `vec4` or a `color` all four (a colour
+without an alpha has 1), and the rest is 0. The name is only a label. A
+shader that doesn't load, or extras that don't fit, are a warning in the
+console and the material draws without them; other keys of the extras
+stay the game's.
+
 ### Terrain
 
 **Author → Terrain…** opens a terrain file, or makes a new flat tile when
@@ -471,10 +522,25 @@ drag over it to **Raise**, **Lower** or **Smooth** the ground, or **Paint**
 a ground layer, under a circle of the brush's radius, at its strength.
 **+ layer** adds a layer from a PNG; each layer repeats every *size* world
 units. **Show in the view** puts the tile in the middle of the world when
-the scene has none (it isn't saved with the scene).
+the scene has none, only for shaping it (it isn't saved with the scene);
+**Add to the scene** puts it in the scene instead, as one undo step.
+
+A tile in a scene is saved as its terrain file and its place: the entity's
+`TerrainFile` (`ponko::terrain::TerrainFile`, reflected as
+`"TerrainFile": { "path": "terrain/hill.json" }`) and its `Transform3D`,
+whose position is the tile's corner. The tile itself holds GPU meshes and
+isn't saved (a save counts it under `"not_saved"`). Loading the scene, in
+the editor or with `load_scene`, makes each tile from its file; a file
+that isn't there stops the load with the world as it was. A tile still
+live from the same file at the same corner is kept rather than made again,
+so Stop, undo and loading the same level again cost nothing. Save the
+terrain file with the scene (Ctrl+S saves both): the scene names the file
+on disk, not the window's unsaved edits.
 
 A terrain file is JSON, with its images beside it, and
-`TerrainTile::spawn_from_file(ctx, path, corner)` spawns it as a [`TerrainTile`](3d.md#terrain):
+`TerrainTile::spawn_from_file(ctx, path, corner)` spawns it as a [`TerrainTile`](3d.md#terrain),
+with its `TerrainFile` (from C, `ponko_ctx_terrain_tile_spawn_from_file`;
+from C++, `ponko::spawn_terrain_from_file(ctx, path, corner)`):
 
 ```json
 {
@@ -614,13 +680,20 @@ and removed, a gradient key moved and removed, the preview running while
 paused; tiles painted from the palette along a row (one step, the level
 following), autotiled with the right frames and saved into the `.tmj`;
 a state, a transition and its condition added in the graph and saved as a
-skeleton the runtime loads, the preview following a dragged test value
+skeleton the runtime loads, a node dragged and found where it was left
+after the file is opened again, a file without a layout opening in rows,
+the preview following a dragged test value
 into the next state, a broken graph explained in place; a material's
 metallic dragged with the loaded model's material following and a PNG
-picked for its base colour; a shader error shown at its line and undone;
+picked for its base colour; a custom shader and named values set in the
+materials window, saved in the glTF's extras and loaded with the same
+values by a game that never ran the editor; a shader error shown at its line and undone;
 custom values dragged onto the shader's materials; the raise brush held
 over a terrain (one step), a layer added, painted and saved as PNGs that
-`TerrainTile::spawn_from_file` loads. Offscreen GPU tests check the previews draw: a
+`TerrainTile::spawn_from_file` loads, and a terrain added to the scene,
+saved as its file and corner, and spawned again by another editor opening
+the scene (its live tile kept on a reload, a missing file refused with the
+world unchanged). Offscreen GPU tests check the previews draw: a
 material edit recolours its model, a shader edit shows and a broken one
 keeps the last good look, a painted terrain layer shows where it was
 painted, the particle preview draws particles (none without it), and the

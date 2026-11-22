@@ -406,6 +406,8 @@ pub struct Game {
     control: bool,
     /// Reload asset and data files when they change (`PONKO_HOT_RELOAD` overrides).
     hot_reload: bool,
+    /// From `image_limits`: `None` leaves the process's limits as they are.
+    image_limits: Option<crate::assets::ImageLimits>,
     inspector: bool,
     /// From `debug_draw`: `None` keeps the build's default.
     debug_draw: Option<bool>,
@@ -609,6 +611,18 @@ impl ConfiguredGame {
     /// See [`Game::hot_reload`].
     pub fn hot_reload(mut self, on: bool) -> Self {
         self.game = self.game.hot_reload(on);
+        self
+    }
+
+    /// See [`Game::pack_limits`].
+    pub fn pack_limits(mut self, limits: crate::assets::PackLimits) -> Self {
+        self.game = self.game.pack_limits(limits);
+        self
+    }
+
+    /// See [`Game::image_limits`].
+    pub fn image_limits(mut self, limits: crate::assets::ImageLimits) -> Self {
+        self.game = self.game.image_limits(limits);
         self
     }
 
@@ -990,39 +1004,87 @@ struct RollbackRunner<'a> {
     present: u64,
 }
 
+impl RollbackRunner<'_> {
+    /// Saves everything but the physics.
+    fn save_world(&mut self, into: &mut crate::net::GameState) {
+        let ctx = &mut *self.ctx;
+        into.tick = ctx.time.sim_tick();
+        if let Err(e) = ctx.world.save_snapshot(&mut into.world) {
+            panic!("rollback: {e}");
+        }
+        let (world, now) = (ctx.world.id(), ctx.world.change_tick().to_bits());
+        into.seen.clear();
+        into.seen.extend(
+            self.systems
+                .iter()
+                .map(|s| (s.changes_seen.world == world).then(|| now - s.changes_seen.tick.to_bits())),
+        );
+        ctx.events.save_state(&mut into.events);
+    }
+
+    /// Loads everything but the physics.
+    fn load_world(&mut self, from: &crate::net::GameState) {
+        let ctx = &mut *self.ctx;
+        if let Err(e) = ctx.world.restore_snapshot(&from.world) {
+            panic!("rollback: {e}; keep the same `ctx.world` while a rollback session runs");
+        }
+        // The world's change stamps keep their age through the restore;
+        // so does what each simulation system has seen of them.
+        let (world, now) = (ctx.world.id(), ctx.world.change_tick().to_bits());
+        for (s, age) in self.systems.iter_mut().zip(&from.seen) {
+            s.changes_seen = match *age {
+                Some(age) => ChangesSeen {
+                    world,
+                    tick: ponko_ecs::Tick::from_bits(now.saturating_sub(age)),
+                },
+                None => ChangesSeen::default(),
+            };
+        }
+        let systems = &*self.systems;
+        ctx.events
+            .restore_state(&from.events, |reader| systems.iter().any(|s| s.id == reader));
+        ctx.time.set_sim_tick(from.tick);
+        ctx.events.set_tick(from.tick);
+        ctx.gfx.sim_tick = from.tick;
+    }
+}
+
 impl crate::net::Runner for RollbackRunner<'_> {
     fn tick(&self) -> u64 {
         self.ctx.time.sim_tick()
     }
 
     fn save(&mut self, into: &mut crate::net::GameState) {
-        let ctx = &mut *self.ctx;
-        into.tick = ctx.time.sim_tick();
-        if let Err(e) = ctx.world.save_snapshot(&mut into.world) {
-            panic!("rollback: {e}");
+        {
+            // The world, the events and the systems' change positions; the
+            // physics have their own scope, so profiling shows the cost and
+            // the allocations of each apart.
+            crate::profile_scope!("rollback/save");
+            self.save_world(into);
         }
-        ctx.events.save_state(&mut into.events);
-        #[cfg(feature = "physics")]
-        ctx.physics.save_state(&mut into.physics);
-        #[cfg(feature = "physics3d")]
-        ctx.physics3d.save_state(&mut into.physics3d);
+        #[cfg(any(feature = "physics", feature = "physics3d"))]
+        {
+            crate::profile_scope!("rollback/save physics");
+            #[cfg(feature = "physics")]
+            self.ctx.physics.save_state(&mut into.physics);
+            #[cfg(feature = "physics3d")]
+            self.ctx.physics3d.save_state(&mut into.physics3d);
+        }
     }
 
     fn load(&mut self, from: &crate::net::GameState) {
-        let ctx = &mut *self.ctx;
-        if let Err(e) = ctx.world.restore_snapshot(&from.world) {
-            panic!("rollback: {e}; keep the same `ctx.world` while a rollback session runs");
+        {
+            crate::profile_scope!("rollback/load");
+            self.load_world(from);
         }
-        let systems = &*self.systems;
-        ctx.events
-            .restore_state(&from.events, |reader| systems.iter().any(|s| s.id == reader));
-        #[cfg(feature = "physics")]
-        ctx.physics.restore_state(&from.physics);
-        #[cfg(feature = "physics3d")]
-        ctx.physics3d.restore_state(&from.physics3d);
-        ctx.time.set_sim_tick(from.tick);
-        ctx.events.set_tick(from.tick);
-        ctx.gfx.sim_tick = from.tick;
+        #[cfg(any(feature = "physics", feature = "physics3d"))]
+        {
+            crate::profile_scope!("rollback/load physics");
+            #[cfg(feature = "physics")]
+            self.ctx.physics.restore_state(&from.physics);
+            #[cfg(feature = "physics3d")]
+            self.ctx.physics3d.restore_state(&from.physics3d);
+        }
     }
 
     fn hash(&self) -> u64 {
@@ -1369,6 +1431,7 @@ impl Game {
             replication: None,
             control: control::env_control(),
             hot_reload: cfg!(debug_assertions),
+            image_limits: None,
             inspector: cfg!(debug_assertions),
             debug_draw: None,
             input_scenario: None,
@@ -2769,6 +2832,61 @@ impl Game {
         self
     }
 
+    /// Sets the absolute caps on what an asset pack may unpack to: the size
+    /// of one file, the sum of the sizes a pack declares, and its number of
+    /// files (defaults 1 GiB, 16 GiB and 1,000,000; see [`PackLimits`](crate::assets::PackLimits)).
+    /// They apply to the `assets.pack` the game reads by itself, to mod
+    /// packs and to every [`PackSource`](crate::assets::PackSource) opened
+    /// with `open` or `from_bytes` afterwards.
+    ///
+    /// A game that loads packs from players or the network sets them low; a
+    /// game shipping a very large pack of its own raises them. The limits
+    /// are one setting for the whole process, applied as soon as this is
+    /// called, so call it first in `main`, before packs are opened (a web
+    /// build fetches its pack right after start-up). For one pack, use
+    /// [`PackSource::open_with_limits`](crate::assets::PackSource::open_with_limits).
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// use ponko::assets::PackLimits;
+    /// // Players share packs: at most 8 MiB a file, 32 MiB and 500 files a pack.
+    /// let limits = PackLimits::default()
+    ///     .with_max_entry_size(8 << 20)
+    ///     .with_max_pack_size(32 << 20)
+    ///     .with_max_entries(500);
+    /// let _ = Game::new("Sharing", 1280, 720).pack_limits(limits);
+    /// ```
+    pub fn pack_limits(self, limits: crate::assets::PackLimits) -> Self {
+        limits.set_current();
+        self
+    }
+
+    /// Sets how big a picture the image decoders accept: the longest side
+    /// and the decoded bytes ([`ImageLimits`](crate::assets::ImageLimits);
+    /// the defaults are 16 384 pixels and 512 MiB). Every decoder reads
+    /// them, so a picture past them is refused with
+    /// [`ErrorKind::Limit`](crate::error::ErrorKind::Limit) whichever format
+    /// it is in.
+    ///
+    /// Lower them for a game that loads pictures from players or the
+    /// network; raise them for a tool that reads large source art. The
+    /// setting is for the whole process, applied when the game starts (the
+    /// same as [`Assets::set_image_limits`](crate::assets::Assets::set_image_limits)).
+    /// A game that never calls this leaves them as they are.
+    ///
+    /// ```
+    /// use ponko::assets::ImageLimits;
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).image_limits(ImageLimits::new(4_096, 64 << 20)).run_headless(0, |ctx| {
+    ///     assert_eq!(ctx.assets.image_limits().max_side, 4_096);
+    ///     # ctx.assets.set_image_limits(ImageLimits::default());
+    /// });
+    /// ```
+    pub fn image_limits(mut self, limits: crate::assets::ImageLimits) -> Self {
+        self.image_limits = Some(limits);
+        self
+    }
+
     /// Turns the runtime inspector on or off: an overlay that the backquote
     /// key (`` ` ``, left of 1) opens and closes,
     /// showing every entity and its components (reflected ones editable),
@@ -2828,6 +2946,9 @@ impl Game {
             ctx.set_headless(true);
         }
         ctx.assets.watcher.set_on(crate::hot_reload::enabled(self.hot_reload));
+        if let Some(limits) = self.image_limits {
+            ctx.assets.set_image_limits(limits);
+        }
         if let Some(on) = self.debug_draw {
             ctx.debug.set_enabled(on);
         }
@@ -3015,9 +3136,9 @@ impl Game {
     /// peak while UI and sprites stay at paper white. Where none is offered
     /// it opens in SDR as usual. Off, nothing changes and nothing extra is
     /// drawn. While the game runs, `ctx.gfx.set_hdr_output` changes paper
-    /// white and peak and switches between HDR and SDR output (only if the
-    /// window opened with HDR on), and `ctx.gfx.hdr_status()` says what the
-    /// window does. See [`HdrOutput`](crate::render::HdrOutput).
+    /// white, peak and HDR10 metadata and switches between HDR and SDR
+    /// output either way (no restart), and `ctx.gfx.hdr_status()` says what
+    /// the window does. See [`HdrOutput`](crate::render::HdrOutput).
     ///
     /// ```no_run
     /// # use ponko::prelude::*;

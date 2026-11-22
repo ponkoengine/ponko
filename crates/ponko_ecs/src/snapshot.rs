@@ -27,6 +27,7 @@ use std::marker::PhantomData;
 use std::ptr::NonNull;
 
 use crate::bundle::Component;
+use crate::change::ChangesState;
 use crate::entity::{EntitiesState, Entity};
 use crate::slots::SlotsState;
 use crate::storage::{Archetype, ComponentId, DropFn};
@@ -143,6 +144,10 @@ struct SavedColumn {
     cap: usize,
     drop: Option<DropFn>,
     clone: Option<CloneFn>,
+    /// Whether the component's changes were tracked when saved: then
+    /// `stamps` holds the rows' `added` stamps, then their `changed` stamps.
+    tracked: bool,
+    stamps: Vec<u32>,
 }
 
 impl SavedColumn {
@@ -156,6 +161,8 @@ impl SavedColumn {
             cap: 0,
             drop,
             clone,
+            tracked: false,
+            stamps: Vec::new(),
         }
     }
 
@@ -364,6 +371,8 @@ pub struct WorldSnapshot {
     tables: Vec<SavedTable>,
     entities: EntitiesState,
     resources: Vec<SavedResource>,
+    /// The change tick and removal logs.
+    changes: ChangesState,
 }
 
 // SAFETY: the saved values are components, which are `Send + Sync` (Rust
@@ -434,10 +443,13 @@ impl WorldSnapshot {
             .iter()
             .map(|t| {
                 t.entities.capacity() * std::mem::size_of::<Entity>()
-                    + t.columns.iter().map(|c| c.item.size() * c.cap).sum::<usize>()
+                    + t.columns
+                        .iter()
+                        .map(|c| c.item.size() * c.cap + c.stamps.capacity() * std::mem::size_of::<u32>())
+                        .sum::<usize>()
             })
             .sum();
-        tables + self.entities.heap_bytes() + self.slots.heap_bytes()
+        tables + self.entities.heap_bytes() + self.slots.heap_bytes() + self.changes.heap_bytes()
     }
 }
 
@@ -501,16 +513,19 @@ impl World {
             }
             table.shape_like(arch, self);
             let rows = arch.len();
-            for (c, column) in table.columns.iter_mut().zip(arch.columns.iter()) {
+            for (col, (c, column)) in table.columns.iter_mut().zip(arch.columns.iter()).enumerate() {
                 c.reserve(rows);
                 // SAFETY: the archetype's first `rows` values are initialized
                 // and copyable (checked above); the column has room.
                 unsafe { c.copy_from(column.base(), rows) };
+                c.stamps.clear();
+                c.tracked = arch.tracked() && arch.copy_stamps(col, &mut c.stamps);
             }
             table.entities.extend_from_slice(&arch.entities);
             table.len = rows;
         }
         self.entities.save_state(&mut into.entities);
+        self.changes.save_state(&mut into.changes);
         into.resources.truncate(self.snapshot_resources.len());
         for (i, r) in self.snapshot_resources.iter().enumerate() {
             if into.resources.get(i).is_none_or(|s| s.id != r.id) {
@@ -532,9 +547,15 @@ impl World {
     ///
     /// - No hooks run ([`on_add`](Self::on_add) and the others): the world
     ///   jumps to the saved state, nothing is spawned or despawned.
-    /// - For change detection, every restored value of a tracked component
-    ///   ([`track_changes`](Self::track_changes)) counts as added and
-    ///   changed now; no removals are logged.
+    /// - Change detection ([`track_changes`](Self::track_changes)) sees the
+    ///   saved history again, each entry as old as it was at the save: a
+    ///   value changed 3 ticks before the save counts as changed 3 ticks
+    ///   before now, and the removal logs are the saved ones, aged the
+    ///   same way (the change tick itself doesn't go back). A reader that
+    ///   moves its own tick by the same amount (`now - (saved_now - mine)`)
+    ///   sees exactly what it saw then; the game loop does that for
+    ///   simulation systems in a rollback. Components tracked since the save
+    ///   count as added and changed now.
     /// - Command buffers recorded before the restore can't spawn after it
     ///   (as after a [`reset`](Self::reset)): apply them first.
     /// - Resources not named with `snapshot_resource` are left alone.
@@ -576,6 +597,7 @@ impl World {
         }
         self.slots.restore_state(&from.slots);
         self.entities.restore_state(&from.entities);
+        self.changes.restore_state(&from.changes);
         for (i, saved) in from.resources.iter().enumerate() {
             let Some(&r) = self.snapshot_resources.get(i) else {
                 break;
@@ -644,6 +666,10 @@ impl World {
     /// Puts the saved rows back, slot by slot. The layout is the saved one.
     fn restore_rows(&mut self, from: &WorldSnapshot) {
         let stamp = self.changes.stamp();
+        // Stamps keep their age: one written 3 ticks before the save is
+        // 3 ticks old after the restore. (The tick never goes back: same
+        // world, and its tick only grows.)
+        let shift = self.change_tick().0.wrapping_sub(from.changes.now) as u32;
         for (arch, table) in self.archetypes.iter_mut().zip(&from.tables) {
             // Drop what is there: also when the saved rows are the same
             // entities, a clone must replace the value.
@@ -671,8 +697,15 @@ impl World {
             }
             arch.entities.extend_from_slice(&table.entities);
             if arch.tracked() {
-                for row in 0..table.len {
-                    arch.stamp_row(row, stamp);
+                for (col, saved) in table.columns.iter().enumerate() {
+                    if saved.tracked {
+                        arch.put_stamps(col, &saved.stamps, shift, stamp);
+                    } else {
+                        // Tracked since the save: added and changed now.
+                        for row in 0..table.len {
+                            arch.stamp(col, row, stamp, true);
+                        }
+                    }
                 }
             }
         }

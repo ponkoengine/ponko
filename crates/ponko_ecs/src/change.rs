@@ -36,8 +36,10 @@
 //! [`Commands`](crate::Commands)) for the ones that need it.
 //!
 //! Commands are stamped when they are applied, not when they are recorded.
-//! Stamps and removal logs aren't saved: restoring a world spawns its
-//! entities again, so everything in it counts as added.
+//! Stamps and removal logs aren't saved by `World::save`: loading a world
+//! spawns its entities again, so everything in it counts as added. A
+//! [`WorldSnapshot`](crate::WorldSnapshot) keeps them, each as old as it was
+//! when saved.
 
 use std::marker::PhantomData;
 
@@ -266,11 +268,63 @@ impl Default for Changes {
     }
 }
 
+/// The change history a [`WorldSnapshot`](crate::WorldSnapshot) keeps: the
+/// tick it was saved at and every removal log.
+#[derive(Default)]
+pub(crate) struct ChangesState {
+    /// The world's tick when saved.
+    pub(crate) now: u64,
+    /// One per removal log, in the order of `Changes::removed`.
+    logs: Vec<SavedLog>,
+}
+
+/// A saved removal log: its entities and runs, as in [`Removed`].
+type SavedLog = (Vec<Entity>, Vec<(u64, usize)>);
+
+impl ChangesState {
+    pub(crate) fn heap_bytes(&self) -> usize {
+        self.logs.capacity() * std::mem::size_of::<SavedLog>()
+            + self
+                .logs
+                .iter()
+                .map(|(e, r)| {
+                    e.capacity() * std::mem::size_of::<Entity>() + r.capacity() * std::mem::size_of::<(u64, usize)>()
+                })
+                .sum::<usize>()
+    }
+}
+
 impl Changes {
     /// The stamp of a change made now.
     #[inline(always)]
     pub(crate) fn stamp(&self) -> u32 {
         self.now as u32
+    }
+
+    /// Copies the tick and the removal logs into `into`, reusing its memory.
+    pub(crate) fn save_state(&self, into: &mut ChangesState) {
+        into.now = self.now;
+        into.logs.truncate(self.removed.len());
+        into.logs.resize_with(self.removed.len(), Default::default);
+        for (log, (entities, runs)) in self.removed.iter().zip(&mut into.logs) {
+            entities.clone_from(&log.entities);
+            runs.clone_from(&log.runs);
+        }
+    }
+
+    /// Puts the saved removal logs back, each removal as many ticks before
+    /// now as it was before the save (the tick itself doesn't go back).
+    /// Logs of components tracked since the save are emptied.
+    pub(crate) fn restore_state(&mut self, from: &ChangesState) {
+        let shift = self.now.saturating_sub(from.now);
+        for (i, log) in self.removed.iter_mut().enumerate() {
+            log.entities.clear();
+            log.runs.clear();
+            if let Some((entities, runs)) = from.logs.get(i) {
+                log.entities.extend_from_slice(entities);
+                log.runs.extend(runs.iter().map(|&(tick, first)| (tick + shift, first)));
+            }
+        }
     }
 
     /// Logs that `e` lost tracked component `id`.
@@ -822,6 +876,9 @@ impl World {
     ///   with the tick current then.
     /// - **Saving** doesn't store stamps or removal logs. A restored world
     ///   spawns its entities again, so everything in it counts as added.
+    /// - **Snapshots** ([`save_snapshot`](Self::save_snapshot)) keep them:
+    ///   after [`restore_snapshot`](Self::restore_snapshot) every stamp and
+    ///   logged removal is as many ticks old as it was at the save.
     ///
     /// ```
     /// # use ponko_ecs::*;

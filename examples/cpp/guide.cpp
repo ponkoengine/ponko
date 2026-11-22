@@ -4416,6 +4416,22 @@ static void embedded_assets(ponko::ctx& ctx) {
     }
 }
 
+[[maybe_unused]] static void image_limits_guide(ponko::ctx& ctx, const std::vector<std::uint8_t>& downloaded) {
+    // ANCHOR: image_limits
+    // Everything this game loads: at most 8192 pixels a side and 256 MiB of pixels.
+    // (Before it starts, `ponko::game(...).image_limits(8192, 256u << 20)` does the same.)
+    ctx.set_image_limits(8192, 256ull << 20);
+
+    // A picture from a player: much tighter, without touching the limits above.
+    auto avatar = ctx.try_decode_texture(downloaded, "avatar.png", 512, 1ull << 20);
+    if (!avatar && avatar.kind() == PONKO_ERROR_LIMIT) {
+        std::printf("too big: %s\n", avatar.error().what());
+    }
+    // ANCHOR_END: image_limits
+    if (avatar && (avatar.value().width != 1 || avatar.value().height != 1)) std::abort();
+    ctx.set_image_limits(16384, 512ull << 20); // the defaults again, for what runs next
+}
+
 // ANCHOR: resource_scope
 struct Total { std::uint32_t value; };
 struct Coins { std::uint32_t value; };
@@ -5040,6 +5056,14 @@ int main() {
         embedded_assets(ctx);
         if (skin_or_default(ctx).id != 0) std::abort();
     });
+    ponko::game("image limits guide", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
+        // A 1x1 PNG, within every limit above.
+        static const std::vector<std::uint8_t> pixel = {
+            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0, 31, 21, 196,
+            137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 207, 192, 240, 31, 0, 5, 0, 1, 255, 137, 153, 61, 29, 0, 0, 0,
+            0, 73, 69, 78, 68, 174, 66, 96, 130};
+        image_limits_guide(ctx, pixel);
+    });
     ponko::game("filter guide", 1, 1).run_headless(0, ecs_filters);
     ponko::game("query cache guide", 1, 1).run_headless(0, ecs_query_cache);
     plugins_run_headless();
@@ -5456,12 +5480,13 @@ int main() {
         .hdr_output(hdr)
         .run([](ponko::ctx& ctx) {
             ponko::hdr_status status = ctx.hdr_status();
-            if (status.reason == PONKO_HDR_OFF_NOT_REQUESTED) {
-                // the settings menu says "applies after a restart"
+            if (!status.available) {
+                // the settings menu greys out its HDR switch
             }
             ponko::hdr_output now = ctx.hdr_output();
-            now.peak_nits = 600.0f; // the player's slider
-            ctx.set_hdr_output(now);
+            now.peak_nits = 600.0f;              // the player's slider
+            now.max_frame_average_nits = 300.0f; // HDR10 metadata
+            ctx.set_hdr_output(now);             // takes effect next frame
         });
     // ANCHOR_END: hdr_output
 }
@@ -5562,4 +5587,28 @@ struct wall_count {
     std::int64_t kept = ponko::net_alloc_bytes() - before;
     std::printf("%lld bytes still held\n", static_cast<long long>(kept));
     // ANCHOR_END: net_allocs
+}
+[[maybe_unused]] static void rollback_guide(ponko::game& game) {
+    // ANCHOR: rollback_session
+    struct Pad { std::int8_t x; std::uint8_t jump; };   // at most PONKO_ROLLBACK_INPUT_MAX bytes
+    struct Fighter { std::uint32_t player; float x; };  // plain structs: copied as bytes
+    game.sim_system([](ponko::ctx& ctx) {
+        // Every player's input for this tick, real or predicted.
+        ctx.world().each([&](Fighter& f) { f.x += ctx.rollback_input<Pad>(f.player).x; });
+        if (!ctx.rollback_resimulating()) { /* one-shot effects: only the first time */ }
+    });
+    game.system([](ponko::ctx& ctx) {
+        ctx.rollback_set_input(Pad{1, 0});                 // this player's input
+        auto [data, size] = ctx.rollback_packet();          // send to every peer, any transport
+        (void)data; (void)size;
+        // ...and for each packet received: ctx.rollback_receive(bytes, length);
+    });
+    game.run_headless(10, [](ponko::ctx& ctx) {
+        ctx.world().spawn(Fighter{0, 0.0f});
+        ctx.world().spawn(Fighter{1, 100.0f});
+        PonkoRollbackConfig config = ponko::rollback_config(2, 0); // player 0 of 2
+        config.input_delay = 2;
+        ctx.rollback_start(config);
+    });
+    // ANCHOR_END: rollback_session
 }

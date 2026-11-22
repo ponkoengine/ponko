@@ -19,22 +19,25 @@ macro_rules! end_of {
 }
 
 /// The version of `PonkoHdrOutput` this header describes.
-pub const PONKO_HDR_OUTPUT_VERSION: u32 = 1;
+pub const PONKO_HDR_OUTPUT_VERSION: u32 = 2;
 /// The version of `PonkoHdrStatus` this header describes.
-pub const PONKO_HDR_STATUS_VERSION: u32 = 1;
+pub const PONKO_HDR_STATUS_VERSION: u32 = 2;
 
 /// HDR display output settings (Rust `HdrOutput`), in a layout that can
 /// grow: set `struct_size` and `version`, fill it with
 /// `ponko_hdr_output_defaults`, change it, and give it to
 /// `ponko_game_hdr_output` (before the window opens) or
-/// `ponko_ctx_set_hdr_output` (while the game runs).
+/// `ponko_ctx_set_hdr_output` (at any time while the game runs: it turns
+/// HDR on and off without a restart).
 ///
 /// Off by default, and then nothing changes. With `enabled` the window
-/// opens in an HDR format and color space where the display system offers
-/// one; the 3D frame's highlights reach `peak_nits` while UI and sprites
-/// stay at `paper_white_nits`.
+/// draws in an HDR format and color space where the display system offers
+/// one; the 3D frame's highlights reach `peak_nits` while UI, sprites and
+/// the inspector stay at `paper_white_nits`.
 ///
 /// Version 1: `enabled`, `paper_white_nits`, `peak_nits`.
+/// Version 2: `max_content_light_nits`, `max_frame_average_nits` (HDR10
+/// metadata).
 /// ```
 /// use ponko_ffi::*;
 /// let mut h: PonkoHdrOutput = unsafe { std::mem::zeroed() };
@@ -58,6 +61,12 @@ pub struct PonkoHdrOutput {
     /// The brightest highlight in nits; 0 (default) asks the display, or
     /// 1000 where it says nothing. Clamped to paper white and 10 000.
     pub peak_nits: f32,
+    /// HDR10 metadata: the brightest pixel (MaxCLL) in nits; 0 (default)
+    /// is the peak in use. Sent where the platform takes metadata.
+    pub max_content_light_nits: f32,
+    /// HDR10 metadata: the brightest frame average (MaxFALL) in nits; 0
+    /// (default) is paper white.
+    pub max_frame_average_nits: f32,
 }
 
 const _: () = assert!(offset_of!(PonkoHdrOutput, struct_size) == 0 && offset_of!(PonkoHdrOutput, version) == 4);
@@ -68,6 +77,7 @@ impl Versioned for PonkoHdrOutput {
     fn len_of(version: u32) -> Option<usize> {
         match version {
             1 => Some(end_of!(Self, peak_nits: f32)),
+            2 => Some(end_of!(Self, max_frame_average_nits: f32)),
             _ => None,
         }
     }
@@ -80,12 +90,28 @@ fn output_to_c(h: &HdrOutput) -> PonkoHdrOutput {
         enabled: h.enabled,
         paper_white_nits: h.paper_white_nits,
         peak_nits: h.peak_nits,
+        max_content_light_nits: h.max_content_light_nits,
+        max_frame_average_nits: h.max_frame_average_nits,
     }
 }
 
 fn output_from_c(c: &PonkoHdrOutput) -> Result<HdrOutput, Failure> {
     if c.peak_nits.is_nan() || c.peak_nits < 0.0 {
         return Err(invalid("peak_nits must be 0 (the display's) or more"));
+    }
+    for (value, message) in [
+        (
+            c.max_content_light_nits,
+            "max_content_light_nits must be 0 (the peak) or more",
+        ),
+        (
+            c.max_frame_average_nits,
+            "max_frame_average_nits must be 0 (paper white) or more",
+        ),
+    ] {
+        if value.is_nan() || value < 0.0 {
+            return Err(invalid(message));
+        }
     }
     let mut h = if c.enabled {
         HdrOutput::on()
@@ -94,6 +120,8 @@ fn output_from_c(c: &PonkoHdrOutput) -> Result<HdrOutput, Failure> {
     };
     h.paper_white_nits = c.paper_white_nits;
     h.peak_nits = c.peak_nits;
+    h.max_content_light_nits = c.max_content_light_nits;
+    h.max_frame_average_nits = c.max_frame_average_nits;
     Ok(h)
 }
 
@@ -127,8 +155,8 @@ pub enum PonkoHdrOffReason {
     PONKO_HDR_OFF_NONE = 0,
     /// No window (headless).
     PONKO_HDR_OFF_HEADLESS = 1,
-    /// HDR wasn't on before the window opened (`ponko_game_hdr_output`): it
-    /// applies at the next start.
+    /// Not reported any more (HDR switches on while the game runs; off is
+    /// `PONKO_HDR_OFF_OFF`). Kept so code naming it builds.
     PONKO_HDR_OFF_NOT_REQUESTED = 2,
     /// `enabled` is false.
     PONKO_HDR_OFF_OFF = 3,
@@ -140,7 +168,8 @@ pub enum PonkoHdrOffReason {
 /// layout that can grow: set `struct_size` and `version`, then read it with
 /// `ponko_ctx_hdr_status`.
 ///
-/// Version 1: every field below.
+/// Version 1: the fields up to `display_headroom`.
+/// Version 2: `metadata_sent` and the HDR10 metadata fields.
 /// ```
 /// use ponko_ffi::*;
 /// let mut s: PonkoHdrStatus = unsafe { std::mem::zeroed() };
@@ -174,6 +203,17 @@ pub struct PonkoHdrStatus {
     pub display_peak_nits: f32,
     /// The display's headroom over SDR white now (macOS, Windows); 0 unknown.
     pub display_headroom: f32,
+    /// The display was given HDR10 metadata (Windows; Apple with PQ). The
+    /// four values below are what it got; all 0 when false.
+    pub metadata_sent: bool,
+    /// The mastering display's black, in nits.
+    pub min_mastering_nits: f32,
+    /// The mastering display's peak, in nits.
+    pub max_mastering_nits: f32,
+    /// MaxCLL, in nits.
+    pub max_content_light_nits: f32,
+    /// MaxFALL, in nits.
+    pub max_frame_average_nits: f32,
 }
 
 const _: () = assert!(offset_of!(PonkoHdrStatus, struct_size) == 0 && offset_of!(PonkoHdrStatus, version) == 4);
@@ -184,6 +224,7 @@ impl Versioned for PonkoHdrStatus {
     fn len_of(version: u32) -> Option<usize> {
         match version {
             1 => Some(end_of!(Self, display_headroom: f32)),
+            2 => Some(end_of!(Self, max_frame_average_nits: f32)),
             _ => None,
         }
     }
@@ -213,6 +254,11 @@ fn status_to_c(s: &HdrStatus) -> PonkoHdrStatus {
         headroom: s.headroom,
         display_peak_nits: s.display_peak_nits.unwrap_or(0.0),
         display_headroom: s.display_headroom.unwrap_or(0.0),
+        metadata_sent: s.metadata.is_some(),
+        min_mastering_nits: s.metadata.map_or(0.0, |m| m.min_mastering_nits),
+        max_mastering_nits: s.metadata.map_or(0.0, |m| m.max_mastering_nits),
+        max_content_light_nits: s.metadata.map_or(0.0, |m| m.max_content_light_nits),
+        max_frame_average_nits: s.metadata.map_or(0.0, |m| m.max_frame_average_nits),
     }
 }
 
@@ -228,9 +274,9 @@ pub unsafe extern "C" fn ponko_hdr_output_defaults(out_hdr: *mut PonkoHdrOutput)
 }
 
 /// Opens the window with these HDR output settings (Rust
-/// `Game::hdr_output`). HDR can only be switched on while the game runs if
-/// the window opened with `enabled`. `PONKO_INVALID_ARGUMENT` for a NaN or
-/// negative `peak_nits`; the game is then left as it was.
+/// `Game::hdr_output`); `ponko_ctx_set_hdr_output` changes them later.
+/// `PONKO_INVALID_ARGUMENT` for a NaN or negative `peak_nits` or metadata
+/// value; the game is then left as it was.
 /// ```
 /// assert_eq!(unsafe { ponko_ffi::ponko_game_hdr_output(std::ptr::null_mut(), std::ptr::null()) } as u32, 1);
 /// ```
@@ -265,12 +311,12 @@ pub unsafe extern "C" fn ponko_ctx_hdr_output(ctx: *mut PonkoCtx, out_hdr: *mut 
     boundary(|| unsafe { ctx_access(ctx, |c| write_desc(out_hdr, &output_to_c(&c.gfx.hdr_output()))) })
 }
 
-/// Changes the HDR output settings (Rust `Graphics::set_hdr_output`):
-/// paper white and peak from the next frame; `enabled` switches between
-/// HDR and SDR output if the window opened with HDR on, otherwise it
-/// applies at the next start. Fields newer than the caller's version keep
-/// their values. `PONKO_INVALID_ARGUMENT` for a NaN or negative
-/// `peak_nits`; nothing changes then.
+/// Changes the HDR output settings (Rust `Graphics::set_hdr_output`) from
+/// the next frame: `enabled` switches the window between HDR and SDR
+/// output while the game runs (no restart), paper white, peak and HDR10
+/// metadata follow. Fields newer than the caller's version keep their
+/// values. `PONKO_INVALID_ARGUMENT` for a NaN or negative `peak_nits` or
+/// metadata value; nothing changes then.
 /// ```
 /// let s = unsafe { ponko_ffi::ponko_ctx_set_hdr_output(std::ptr::null_mut(), std::ptr::null()) };
 /// assert_eq!(s, ponko_ffi::PonkoStatus::PONKO_INVALID_ARGUMENT);

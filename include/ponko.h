@@ -127,9 +127,9 @@
 
 #define PONKO_HANDLE_NONE UINT32_MAX
 
-#define PONKO_HDR_OUTPUT_VERSION 1
+#define PONKO_HDR_OUTPUT_VERSION 2
 
-#define PONKO_HDR_STATUS_VERSION 1
+#define PONKO_HDR_STATUS_VERSION 2
 
 #define PONKO_MAX_GAMEPADS 8
 
@@ -310,6 +310,8 @@
 #define PONKO_VIDEO_STATE_VERSION 1
 
 #define PONKO_CRASH_REPORTS_VERSION 1
+
+#define PONKO_ROLLBACK_INPUT_MAX 32
 
 #define PONKO_SLICE_LOADER_VERSION 1
 
@@ -1598,6 +1600,8 @@ typedef struct PonkoVideo PonkoVideo;
 
 typedef struct PonkoWorld PonkoWorld;
 
+typedef struct PonkoWorldSnapshot PonkoWorldSnapshot;
+
 typedef struct PonkoValue {
   uint32_t component;
   const void *data;
@@ -1962,6 +1966,8 @@ typedef struct PonkoHdrOutput {
   bool enabled;
   float paper_white_nits;
   float peak_nits;
+  float max_content_light_nits;
+  float max_frame_average_nits;
 } PonkoHdrOutput;
 
 typedef struct PonkoHdrStatus {
@@ -1976,6 +1982,11 @@ typedef struct PonkoHdrStatus {
   float headroom;
   float display_peak_nits;
   float display_headroom;
+  bool metadata_sent;
+  float min_mastering_nits;
+  float max_mastering_nits;
+  float max_content_light_nits;
+  float max_frame_average_nits;
 } PonkoHdrStatus;
 
 typedef struct PonkoLevelOptions {
@@ -2115,6 +2126,12 @@ typedef struct PonkoMessageStats {
   uint64_t packets_received;
   uint64_t bytes_received;
 } PonkoMessageStats;
+
+typedef struct PonkoModBytes {
+  const char *name;
+  const uint8_t *bytes;
+  size_t len;
+} PonkoModBytes;
 
 typedef struct PonkoNavBakeSettings {
   float agent_radius;
@@ -4038,6 +4055,26 @@ typedef struct PonkoCrashReports {
   PonkoCrashHookFn on_crash;
   void *user;
 } PonkoCrashReports;
+
+typedef struct PonkoRollbackConfig {
+  uint32_t players;
+  uint32_t player;
+  uint32_t input_delay;
+  uint32_t max_prediction;
+  uint32_t checksum_every;
+} PonkoRollbackConfig;
+
+typedef struct PonkoRollbackStats {
+  uint64_t ticks;
+  uint64_t predicted;
+  uint64_t rollbacks;
+  uint64_t resimulated;
+  uint32_t deepest;
+  uint64_t stalls;
+  uint64_t packets_sent;
+  uint64_t bytes_sent;
+  uint64_t rejected;
+} PonkoRollbackStats;
 
 typedef uint32_t (*PonkoSliceStartFn)(void *user, const uint8_t *bytes, size_t len, void **out_state);
 
@@ -6212,6 +6249,10 @@ enum PonkoStatus ponko_net_messages_steam_peer(struct PonkoNetMessages *endpoint
 
 enum PonkoStatus ponko_ctx_mount_mods(struct PonkoCtx *ctx, const char *const *paths, size_t count);
 
+enum PonkoStatus ponko_ctx_mount_mods_from_memory(struct PonkoCtx *ctx,
+                                                  const struct PonkoModBytes *mods,
+                                                  size_t count);
+
 enum PonkoStatus ponko_ctx_mod_count(struct PonkoCtx *ctx, size_t *out_count);
 
 enum PonkoStatus ponko_ctx_mod_id(struct PonkoCtx *ctx,
@@ -8001,6 +8042,11 @@ enum PonkoStatus ponko_ctx_load_mesh_data(struct PonkoCtx *ctx,
                                           const char *path,
                                           struct PonkoMeshData **out_data);
 
+enum PonkoStatus ponko_ctx_terrain_tile_spawn_from_file(struct PonkoCtx *ctx,
+                                                        const char *path,
+                                                        struct PonkoVec3 at,
+                                                        uint64_t *out_entity);
+
 struct PonkoText3D ponko_text3d_default(void);
 
 enum PonkoStatus ponko_ctx_set_text3d(struct PonkoCtx *ctx,
@@ -9414,6 +9460,26 @@ enum PonkoStatus ponko_ctx_set_gpu_buffer_motion(struct PonkoCtx *ctx,
                                                  bool keep);
 
 enum PonkoStatus ponko_ctx_reset_motion(struct PonkoCtx *ctx, uint64_t entity);
+
+enum PonkoStatus ponko_game_image_limits(struct PonkoGame *game,
+                                         uint32_t max_side,
+                                         uint64_t max_bytes);
+
+enum PonkoStatus ponko_ctx_set_image_limits(struct PonkoCtx *ctx,
+                                            uint32_t max_side,
+                                            uint64_t max_bytes);
+
+enum PonkoStatus ponko_ctx_image_limits(const struct PonkoCtx *ctx,
+                                        uint32_t *out_max_side,
+                                        uint64_t *out_max_bytes);
+
+enum PonkoStatus ponko_ctx_try_decode_texture(struct PonkoCtx *ctx,
+                                              const uint8_t *bytes,
+                                              size_t len,
+                                              const char *name,
+                                              uint32_t max_side,
+                                              uint64_t max_bytes,
+                                              struct PonkoTexture *out_texture);
 
 enum PonkoStatus ponko_ctx_feed_ime(struct PonkoCtx *ctx, const struct PonkoImeEvent *event);
 
@@ -10848,6 +10914,57 @@ enum PonkoStatus ponko_ctx_saved_crash_reports(struct PonkoCtx *ctx,
                                                char *buffer,
                                                size_t capacity,
                                                size_t *out_len);
+
+struct PonkoRollbackConfig ponko_rollback_config_default(uint32_t players, uint32_t player);
+
+enum PonkoStatus ponko_ctx_rollback_start(struct PonkoCtx *ctx,
+                                          const struct PonkoRollbackConfig *config);
+
+enum PonkoStatus ponko_ctx_rollback_stop(struct PonkoCtx *ctx);
+
+enum PonkoStatus ponko_ctx_rollback_set_input(struct PonkoCtx *ctx, const void *data, size_t size);
+
+enum PonkoStatus ponko_ctx_rollback_packet(struct PonkoCtx *ctx,
+                                           const uint8_t **out_data,
+                                           size_t *out_size);
+
+enum PonkoStatus ponko_ctx_rollback_receive(struct PonkoCtx *ctx,
+                                            const void *data,
+                                            size_t size,
+                                            bool *out_accepted);
+
+enum PonkoStatus ponko_ctx_rollback_input(struct PonkoCtx *ctx,
+                                          uint32_t player,
+                                          void *out_input,
+                                          size_t size);
+
+enum PonkoStatus ponko_ctx_rollback_resimulating(struct PonkoCtx *ctx, bool *out_again);
+
+enum PonkoStatus ponko_ctx_rollback_frames(struct PonkoCtx *ctx,
+                                           uint64_t *out_frame,
+                                           bool *out_has_confirmed,
+                                           uint64_t *out_confirmed);
+
+enum PonkoStatus ponko_ctx_rollback_stats(struct PonkoCtx *ctx,
+                                          struct PonkoRollbackStats *out_stats);
+
+enum PonkoStatus ponko_ctx_rollback_desync(struct PonkoCtx *ctx,
+                                           bool *out_found,
+                                           uint64_t *out_frame,
+                                           uint32_t *out_player);
+
+struct PonkoWorldSnapshot *ponko_world_snapshot_new(void);
+
+void ponko_world_snapshot_free(struct PonkoWorldSnapshot *snapshot);
+
+enum PonkoStatus ponko_world_save_snapshot(struct PonkoWorld *world,
+                                           struct PonkoWorldSnapshot *snapshot);
+
+enum PonkoStatus ponko_world_restore_snapshot(struct PonkoWorld *world,
+                                              const struct PonkoWorldSnapshot *snapshot);
+
+enum PonkoStatus ponko_world_snapshot_len(const struct PonkoWorldSnapshot *snapshot,
+                                          size_t *out_len);
 
 enum PonkoStatus ponko_asset_group_add_sliced(struct PonkoAssetGroup *group,
                                               const char *path,

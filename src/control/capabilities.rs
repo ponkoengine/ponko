@@ -56,6 +56,7 @@ pub(super) const FEATURES: &[(&str, bool)] = &[
     ("text-shaping", cfg!(feature = "text-shaping")),
     ("system-fonts", cfg!(feature = "system-fonts")),
     ("video", cfg!(feature = "video")),
+    ("mods-wasm", cfg!(feature = "mods-wasm")),
 ];
 
 /// Why `method` would be refused by this instance right now, if it would.

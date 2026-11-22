@@ -389,6 +389,35 @@ fn cook_command_writes_a_folder_it_owns_and_a_pack() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+#[test]
+fn cook_pack_refuses_a_pack_the_engine_would_refuse_unless_told_the_caps() {
+    let dir = temp("pack-caps");
+    let assets = dir.join("assets");
+    std::fs::create_dir_all(&assets).unwrap();
+    std::fs::write(assets.join("a.txt"), vec![b'a'; 3000]).unwrap();
+    std::fs::write(assets.join("b.txt"), vec![b'b'; 3000]).unwrap();
+    let args = |extra: &[&str]| {
+        let mut args: Vec<String> = ["--pack", "target/g.pack", "--max-pack-size", "4000"]
+            .map(String::from)
+            .to_vec();
+        args.extend(extra.iter().map(|s| s.to_string()));
+        Options::parse(&args).unwrap()
+    };
+    let err = cook_command(&args(&[]), &dir).unwrap_err();
+    assert!(err.contains("cap of 4000"), "{err}");
+    assert!(
+        err.contains("--max-pack-size") && err.contains("Game::pack_limits"),
+        "{err}"
+    );
+    assert!(!dir.join("target/g.pack").exists(), "nothing is written");
+    // Told the caps, it packs.
+    let mut options = args(&[]);
+    options.limits.max_pack_size = 8000;
+    cook_command(&options, &dir).unwrap();
+    assert!(dir.join("target/g.pack").is_file());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// A `.gltf` file reading `models/<bin>` as its buffer.
 #[cfg(feature = "meshes")]
 fn gltf_with_buffer(bin: &str) -> (Vec<u8>, Vec<u8>) {

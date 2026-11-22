@@ -18,6 +18,8 @@ import {
   parseExpect,
   reloadStepsOf,
   checkAfterReload,
+  checkExpects,
+  parseClick,
   parseMin,
   parsePress,
   startWatchdog,
@@ -150,6 +152,55 @@ test("reload steps: one from afterReload, several from reloads or --reload, each
   assert.equal(checkAfterReload({ kept: "Saved" }, [kept], 2), 'after reload 2, kept is "Saved", not Loaded');
   assert.equal(checkAfterReload(undefined, [kept], 1), "after reload 1, kept is undefined, not Loaded");
   assert.equal(checkAfterReload({}, [], 3), null, "a step without fields only has to run");
+});
+
+test("clicks and the page's query come from the fixture or the command line", () => {
+  assert.deepEqual(parseClick("22,540=linked:1"), { x: 22, y: 540, field: "linked", value: "1" });
+  assert.throws(() => parseClick("22=linked:1"), /--click wants/);
+  const fixtures = parseFixtures(JSON.stringify({
+    editor: { example: "editor", query: "?editor=levels/a.json", clicks: ["10,20=retried:1"] },
+  }));
+  const args = parseArgs(["--fixture", "editor"], fixtures);
+  assert.equal(args.editMode, false, "only a fixture that says so");
+  assert.equal(parse("--fixture", "web_editor_unloaded").editMode, true, "edit mode pauses time: frames, not ticks, must advance");
+  assert.equal(args.query, "?editor=levels/a.json");
+  assert.deepEqual(args.clicks, [{ x: 10, y: 20, field: "retried", value: "1" }]);
+  assert.deepEqual(parseArgs(["--fixture", "editor", "--click", "1,2=a:b"], fixtures).clicks, [{ x: 1, y: 2, field: "a", value: "b" }]);
+  assert.equal(parseArgs(["--dir", "d"]).query, "");
+  assert.throws(() => parseArgs(["--dir", "d", "--query", "editor"]), /--query must start with \?/);
+  assert.throws(() => parseArgs(["--fixture", "editor", "--case", "panic"], fixtures), /--query and --case/);
+  assert.throws(() => parseFixtures('{"a":{"example":"a","clicks":["x"]}}'), /--click wants/);
+});
+
+test("a --persist run adds the fields of its answer to each page load", () => {
+  const fixtures = parseFixtures(JSON.stringify({
+    saves: {
+      example: "saves",
+      reloads: [["kept:Loaded"]],
+      persist: {
+        granted: [["persistent:Granted", "persist_asks:1"], ["persist_asks:0"]],
+        refused: [["persistent:Refused"], ["persistent:Refused", "persist_asks:0"]],
+      },
+    },
+  }));
+  const granted = parseArgs(["--fixture", "saves", "--persist", "granted"], fixtures);
+  assert.deepEqual(granted.firstLoad, [{ field: "persistent", value: "Granted" }, { field: "persist_asks", value: "1" }]);
+  assert.deepEqual(granted.reloads, [[{ field: "kept", value: "Loaded" }, { field: "persist_asks", value: "0" }]]);
+  assert.match(granted.out, /persist-granted$/);
+  const plain = parseArgs(["--fixture", "saves"], fixtures);
+  assert.equal(plain.persist, null);
+  assert.deepEqual(plain.firstLoad, [], "without --persist the page answers by itself: nothing checked");
+  assert.throws(() => parseArgs(["--fixture", "saves", "--persist", "maybe"], fixtures), /--persist must be one of/);
+  assert.throws(() => parseArgs(["--dir", "d", "--persist", "granted"]), /no "persist" fields/);
+  assert.throws(() => parseFixtures('{"a":{"example":"a","persist":{"granted":[["x:1"],["x:1"]]}}}'), /each of the 0 reloads/);
+  assert.throws(() => parseFixtures('{"a":{"example":"a","persist":{"maybe":[[]]}}}'), /modes are/);
+
+  assert.equal(checkExpects({ persist_asks: 1 }, [{ field: "persist_asks", value: "1" }], 0), null);
+  assert.equal(
+    checkExpects({ persist_asks: 2 }, [{ field: "persist_asks", value: "1" }], 0),
+    "on the first page load, persist_asks is 2, not 1",
+  );
+  assert.equal(checkExpects({}, [{ field: "a", value: "b" }], 2), "after reload 2, a is undefined, not b");
 });
 
 test("the engine's backend names map to the canvas's context", () => {

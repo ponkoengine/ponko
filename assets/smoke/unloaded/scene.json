@@ -1,0 +1,86 @@
+{
+  "entities": [],
+  "format": "ponko-world",
+  "not_saved": {},
+  "resources": {
+    "GltfSceneSaves": {
+      "scenes": [
+        {
+          "at": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          "id": 1,
+          "instances": {},
+          "overrides": {
+            "Wall": {
+              "scene_parent": {
+                "link": {
+                  "offset": {
+                    "position": [
+                      -7.0,
+                      0.0,
+                      -3.0
+                    ],
+                    "rotation": [
+                      0.0,
+                      0.0,
+                      0.0,
+                      1.0
+                    ],
+                    "scale": [
+                      1.0,
+                      1.0,
+                      1.0
+                    ]
+                  }
+                },
+                "node": "Post",
+                "scene": 2
+              }
+            }
+          },
+          "path": "smoke/unloaded/yard.gltf"
+        },
+        {
+          "at": {
+            "position": [
+              4.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          "id": 2,
+          "instances": {},
+          "path": "smoke/unloaded/posts.gltf"
+        }
+      ]
+    }
+  },
+  "version": 1
+}

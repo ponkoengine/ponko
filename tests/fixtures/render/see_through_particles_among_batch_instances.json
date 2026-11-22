@@ -1,0 +1,17 @@
+{
+  "name": "see_through_particles_among_batch_instances",
+  "scene": "Between two unlit see-through panes filling the view (one see-through instance batch of two instances, alpha 0.6), blue at depth 10 and green at depth 4: a big red alpha particle (4 across) at depth 7 and a small white one at depth 2, left of the middle; camera at the origin looking down -z; black background, no sun, no bloom; 128x128.",
+  "width": 128,
+  "height": 128,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 12,
+    "outliers": 0.0075,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "843a61e07737f6c8",
+  "reason": "new: see-through list (issue 226): a line and particles drawn between see-through panes"
+}

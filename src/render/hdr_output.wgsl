@@ -1,13 +1,16 @@
 // HDR output: the frame, drawn in linear BT.709 where 1.0 is SDR (paper)
-// white, encoded for the display's color space.
+// white, encoded for the display's color space. The overlay (the
+// inspector, drawn as into an sRGB window: premultiplied, read back
+// linear) is laid over it first.
 
 struct Output {
-    mode: vec4<u32>,    // x: encoding (0 SDR, 1 scRGB, 2 extended sRGB, 3 PQ)
+    mode: vec4<u32>,    // x: encoding (0 SDR, 1 scRGB, 2 extended sRGB, 3 PQ), y: overlay on
     params: vec4<f32>,  // x: scale of 1.0 (scRGB and extended sRGB), y: paper white in nits (PQ)
 };
 
 @group(0) @binding(0) var frame: texture_2d<f32>;
 @group(0) @binding(1) var<uniform> output: Output;
+@group(0) @binding(2) var overlay: texture_2d<f32>;
 
 @vertex
 fn vs_full(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
@@ -36,7 +39,11 @@ fn pq(l: vec3<f32>) -> vec3<f32> {
 
 @fragment
 fn fs_output(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
-    let c = textureLoad(frame, vec2<i32>(at.xy), 0).rgb;
+    var c = textureLoad(frame, vec2<i32>(at.xy), 0).rgb;
+    if output.mode.y != 0u {
+        let o = textureLoad(overlay, vec2<i32>(at.xy), 0);
+        c = c * (1.0 - o.a) + o.rgb;
+    }
     switch output.mode.x {
         case 1u: {
             return vec4<f32>(c * output.params.x, 1.0);

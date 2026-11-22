@@ -1274,10 +1274,21 @@ impl Renderer3D {
     /// then target cameras, then global illumination's sun shadow map and
     /// six face directions). In a window view, 0 is its camera.
     pub(super) fn draw_crowds(&self, pass: &mut wgpu::RenderPass<'_>, kind: Kind, view: usize) {
-        if kind == Kind::VelocityStill || self.crowds.crowds.is_empty() {
-            return;
-        }
+        let n = self.draw_crowds_counted(pass, kind, view);
+        self.state_counters.add(&n);
+    }
+
+    /// [`Self::draw_crowds`], returning what it recorded uncounted.
+    pub(super) fn draw_crowds_counted(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        kind: Kind,
+        view: usize,
+    ) -> super::draw_order::StateChanges {
         let mut n = super::draw_order::StateChanges::default();
+        if kind == Kind::VelocityStill || self.crowds.crowds.is_empty() {
+            return n;
+        }
         for crowd in self.crowds.crowds.iter().flatten() {
             if crowd.count == 0 {
                 continue;
@@ -1288,7 +1299,7 @@ impl Renderer3D {
                 Path::Cpu(_) => {}
             }
         }
-        self.state_counters.add(&n);
+        n
     }
 
     #[allow(clippy::too_many_arguments)]

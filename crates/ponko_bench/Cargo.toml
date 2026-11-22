@@ -14,7 +14,10 @@ homepage.workspace = true
 
 [dependencies]
 ponko_ecs = { path = "../../crates/ponko_ecs" }
-ponko = { path = "../..", default-features = false, features = ["physics", "physics3d", "navmesh", "bench-internals"] }
+ponko = { path = "../..", default-features = false, features = ["physics", "physics3d", "navmesh", "bench-internals", "mods-wasm"] }
+# The code mod benchmark writes its module as text (the version the
+# engine's tests use, on the wasmparser wasmi uses).
+wat = "=1.228.0"
 rapier2d = "0.36.1"
 rapier3d = "0.36.1"
 rayon = "1.12.0"

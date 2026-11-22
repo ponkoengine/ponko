@@ -68,6 +68,23 @@ impl ViewState {
 }
 
 impl Renderer3D {
+    /// Ends the 3D frame in `format` from now on (the window switched to
+    /// HDR output's frame image while the game runs): the passes writing
+    /// the window's image are made again; the scene's images and SMAA's,
+    /// the main view's and each window view's, with the next frame.
+    pub(crate) fn set_output_format(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
+        self.post.set_output_format(device, format);
+        for view in &mut self.extra_views {
+            view.smaa = None;
+        }
+    }
+
+    /// The format the 3D frame ends in (tests).
+    #[cfg(test)]
+    pub(crate) fn output_format(&self) -> wgpu::TextureFormat {
+        self.post.output_format()
+    }
+
     /// Trades the renderer's frame state with view `index`'s.
     fn swap_view(&mut self, index: usize) {
         let v = &mut self.extra_views[index];

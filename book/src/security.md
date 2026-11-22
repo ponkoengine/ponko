@@ -22,7 +22,10 @@ What every entry point promises, whatever the bytes:
 
 The fuzz targets in `fuzz/` (its README says how to run them) feed each
 entry point random and mutated bytes; a finding is fixed in the loader and
-kept fixed by a regression test next to it.
+kept fixed by a regression test next to it. Every target is named in the
+fuzz list, `fuzz/targets.txt`, with the seconds the weekly job runs it, and
+`python3 scripts/check-fuzz-list.py` fails for a target the list doesn't
+name.
 
 ## Network entry points
 
@@ -30,12 +33,57 @@ kept fixed by a regression test next to it.
 |---|---|---|---|---|
 | Lobby and relay server (`ponko_lobby`) | Anyone who can reach its port | Crash it, exhaust its memory or sockets, flood rooms, use the relay to flood players, speak for another member | Limits per address on requests, relay bytes and connections; caps on request size, relay payload, rooms, room size and text; idle connections and rooms closed; silent links dropped; relay frames carry the sender's id as the server knows it, never one the client wrote ([Lobbies](lobby.md#limits)) | `tests/limits.rs`, `tests/hostile.rs`, fuzz target `lobby` |
 | STUN responder (`ponko_lobby`) | Anyone, with any source address (UDP) | Use the server to flood a third party (reflection) | Binding requests only, answered at most 20 a second per IP; the address table is capped | `tests/stun.rs` |
-| Message endpoint (`NetMessages`, UDP) | Anyone who can reach the port, with forged source addresses | Crash the game, hold every client slot, make it buffer without bound, inject messages into another player's link | Datagrams of 1500 bytes at most; packets only count for a link whose address and both nonces match; messages over 1 MiB close the link; per-channel send and receive memory capped (4 MiB); undrained events capped (4096, about 5 MiB); a link silent for 10 s is dropped; at most `max_clients` (≤ 1024) links | `net/message_conformance.rs`, fuzz target `messages` |
+| Message endpoint (`NetMessages`, UDP) | Anyone who can reach the port, with forged source addresses | Crash the game, hold every client slot, make it buffer without bound, inject messages into another player's link, use the host to flood a third party (reflection) | A hello must echo a cookie proving its address first ([forged hellos](#forged-hellos)): before that, no slot and no memory, and the only answer is a challenge no larger than the hello, at most 256 a second; datagrams of 1500 bytes at most; packets only count for a link whose address and both nonces match; messages over 1 MiB close the link; per-channel send and receive memory capped (4 MiB); undrained events capped (4096, about 5 MiB); a link silent for 10 s is dropped; at most `max_clients` (≤ 1024) links | `net/message_conformance.rs`, the cookie tests in `net/messages.rs`, `tests/net_cookies.rs`, fuzz target `messages` |
 | WebSocket transport (browsers, `accept_web`) | Any web page, any TCP client | Hold sockets with slow handshakes or silent connections, send huge frames | 64 handshakes in flight, each dropped after 5 s; 1100 connections at most; a connection that sends nothing for 30 s is dropped; frames over 64 KiB refused; 1 MiB queued for a slow reader, then packets are dropped | `net/websocket.rs` tests |
 | WebRTC endpoints (feature `webrtc`) | Whoever the signaling channel lets through; then the peer | Crash the game through malformed signaling or data | Signaling text is parsed by the WebRTC stack (str0m, or the browser's); data channel messages go through the same message protocol and its limits | `net/rtc_tests.rs` |
 | Lockstep (`Net`) | The session's peers; strangers' datagrams are ignored | Desync or stall the game, crash it with malformed inputs | Datagrams from the session's peers only (others are ignored), parsed with bounds checks; state checksums catch desyncs | `net/lockstep_conformance.rs`, fuzz target `lockstep` |
 | Replication (`Replication`) | The server, for a client; any connected client, for the server | Crash or desync peers, make the server apply another player's input, grow memory with events | Snapshots read with a bounds-checked bit reader; a client's input only drives the entities it owns; events capped per tick (`OUTBOX_LIMIT`) and raw events in size; a client with other declarations is refused | `net/replication_conformance.rs`, fuzz target `replication` |
 | Steam transport (feature `steam`) | Steam friends and lobby members | As for the message endpoint | The same message protocol over Steam's relay | `net/steam_messages.rs` |
+
+### Forged hellos
+
+A UDP packet's source address is whatever the sender writes in it. If a
+host answered every hello with a welcome and a connection slot, a stranger
+forging addresses could fill its slots and its memory without ever
+receiving a packet, and could make it send its answers to a victim of
+their choice (reflection). So a UDP message host first checks that a
+client can receive at its address, the way DTLS (HelloVerifyRequest), QUIC
+(Retry) and WireGuard (cookies) do:
+
+1. The client sends a hello. Every hello is padded to 64 bytes.
+2. Without a valid cookie in it, the host answers with one challenge of
+   41 bytes carrying a cookie, and keeps nothing: no connection slot, no
+   allocation that outlives the call. The cookie is a keyed MAC
+   (SipHash-2-4 with a 128-bit tag) over the client's IP address and
+   port, the protocol version, the client's session nonce and the key
+   period.
+3. The client echoes the cookie in a second hello at once. The host
+   recomputes the MAC, compares it in constant time, and only then makes
+   the connection and welcomes the client.
+
+What that holds:
+
+- **One extra round trip on connect, none afterwards.** Packets of an
+  open connection are matched by address and nonces as before.
+- **Nothing to gain from forging.** A stranger who can't receive at the
+  address never sees the cookie, and a cookie copied from another address
+  or port, or made for another connection attempt, doesn't match.
+- **Cookies expire.** The host makes a random key when it starts and a
+  new one every 5 s, keeping the current and the previous one: a cookie
+  is good for 5 to 10 s, and a restarted host knows none of the old ones.
+- **No amplification.** The challenge (41 bytes) is smaller than the
+  hello that caused it (64 bytes), and a shorter hello gets no challenge;
+  a reflector gains nothing, which is stricter than QUIC's threefold
+  allowance. Challenges (and refusals of another protocol version) are
+  capped at 256 a second in all, so the host can't be made to flood one
+  victim either.
+- **Always on, nothing to set up.** The check is part of UDP hosting, and
+  C and C++ need no new call. Browser clients (`accept_web`), WebRTC and
+  the Steam relay come over transports that have proved the address
+  already, and skip it.
+
+The cookie only proves an address; it isn't authentication. Who a player
+is stays the game's to decide (below).
 
 ## Files
 
@@ -44,7 +92,7 @@ pack, a download, a mod. A file can lie in its header about anything.
 
 | Loader | What an attacker wants | What stops it | Checked by |
 |---|---|---|---|
-| Images (PNG, JPEG and the `image-*` formats) | Make the game allocate gigabytes from a small file, crash the decoder | The size in the header is checked before decoding: 16 384 pixels a side and 512 MiB of RGBA8 at most (`ErrorKind::Limit`) | `assets.rs` tests, fuzz target `cooked_texture` |
+| Images (PNG, JPEG and the `image-*` formats) | Make the game allocate gigabytes from a small file, crash the decoder | The size in the header is checked before decoding: 16 384 pixels a side and 512 MiB of RGBA8 at most by default, and a game can change both (`ErrorKind::Limit`, see "Image size limits" below) | `assets.rs` tests, fuzz target `cooked_texture` |
 | Cooked and compressed textures (KTX2, DDS) | The same; a supercompressed level that unpacks to terabytes | The same size limits; every level must unpack to exactly the bytes its size needs, and unpacking stops as soon as it passes them | `compressed.rs` tests, fuzz target `cooked_texture` |
 | Video (WebM with AV1) | A picture size that allocates gigabytes before the first frame | The container's picture size is checked against the image limits; the AV1 decoder refuses larger frames itself | `video.rs` tests |
 | glTF models (`.glb`, `.gltf`) | Crash the loader, allocate without bound from accessor counts | Accessors and buffers are bounds-checked against the file; images go through the image limits | fuzz target `gltf` |
@@ -54,7 +102,45 @@ pack, a download, a mod. A file can lie in its header about anything.
 | Scenes, world saves and prefabs (JSON) | Crash the reader, a prefab that includes itself forever | Errors for malformed JSON and unknown types; prefab nesting depth is limited | fuzz targets `scene`, `prefab` |
 | Action maps (players' key bindings) | Crash the input system | Malformed bindings are an error; nothing else is read | fuzz target `action_map` |
 | Unity imports (`ponko_unity`) | Crash the importer with a malformed project | Every read is bounds-checked | fuzz targets `unity_yaml`, `unity_binary` |
-| Sounds (WAV, OGG, FLAC, MP3) | Crash the decoder | Decoded by symphonia, which is fuzzed upstream | — |
+| Sounds: WAV (PCM and IMA or Microsoft ADPCM), AIFF, Ogg Vorbis, FLAC and MP3 (and, with `video`, the audio of a WebM file) | A sample rate, channel count or length in the header that allocates gigabytes (compressed silence can unpack to terabytes), a crafted header that crashes the decoder | The header is read before anything is decoded: a sample rate over 768 kHz, zero or more than two channels, or (for a sound decoded whole) a claimed length over 64 Mi frames (512 MiB of samples, about 25 minutes at 44.1 kHz; stream longer ones) is an error (`could not decode the sound: ...` naming the limit); a sound decoded whole stops with that error at the same length however short or missing its header's length was; a stream holds no decoded samples, so its length is not limited. A panic inside a format's reader (an overflowing size in a header, say) is an error too, not a crash | `audio/sound_file.rs` tests (one per format), fuzz target `sound` |
+
+### Image size limits
+
+Every image decoder reads one setting, `ImageLimits`: the longest side in
+pixels and the most bytes the decoded pixels may take (RGBA8, four bytes a
+pixel). The defaults are 16 384 pixels, what nearly every desktop GPU takes as
+a texture, and 512 MiB, past any game texture but small enough that a hostile
+file can't exhaust a normal machine. A game that loads pictures from players or
+the network (avatars, mods, user levels) should lower them for everything it
+loads, and decode each untrusted picture under tighter limits still, which
+doesn't change the game's. A tool that reads large source art (a height map, a
+panorama to slice) raises them. Set them once at startup with
+`Game::image_limits` (C: `ponko_game_image_limits`, C++: `game::image_limits`)
+or later with `Assets::set_image_limits` (`ponko_ctx_set_image_limits`,
+`ctx::set_image_limits`); they are for the whole process, not one game, and
+`Graphics::try_decode_texture` (`ponko_ctx_try_decode_texture`,
+`ctx::try_decode_texture`) takes limits of its own for one picture. A picture
+past them fails with `ErrorKind::Limit` (`PONKO_ERROR_LIMIT`) before its
+pixels are allocated, and the message names the limits in force. Raising a
+limit doesn't promise a texture: a picture wider than the device's own
+texture limit still fails at upload, with the usual error.
+
+<div class="lang-pair">
+<div>
+
+```rust
+{{#include ../../tests/image_limits.rs:image_limits}}
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:image_limits}}
+```
+
+</div>
+</div>
 
 ## The control endpoint
 
@@ -96,7 +182,8 @@ change the game and write files.
 - **Game rules.** The engine checks that a packet is well formed and
   speaks only for its own link; whether the move it describes is allowed
   is up to the game (the host's or server's simulation decides).
-- **Spoofed UDP floods.** A stranger who forges source addresses can make
-  a message endpoint open links that time out after 10 s; behind a lobby
-  each costs one of the endpoint's slots for that long. Put a public
-  server behind a firewall or provider that filters spoofed traffic.
+- **Floods of plain traffic.** Forged hellos cost a host no slots or
+  memory ([forged hellos](#forged-hellos)), but a stranger can still send
+  more packets than the link or the machine can take in. Volumetric
+  floods are for the network in front of a public server: a firewall or
+  a provider that drops spoofed and excess traffic.

@@ -13,6 +13,8 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <mutex>
+#include <condition_variable>
 #include <type_traits>
 #include <vector>
 #define CHECK(...) do { if (!(__VA_ARGS__)) { std::cerr << "failed: " #__VA_ARGS__ << " (line " << __LINE__ << ")\n"; std::abort(); } } while (false)
@@ -285,6 +287,24 @@ static void mods() {
         auto bat = ctx.spawn_prefab("prefabs/bat.json", {0, 0});
         CHECK(ctx.world().get<game::Health>(bat).value == 30);
         throws([&] { ctx.mount_mods({base}); });   // once per game
+    });
+    // The same packs from memory: a refused set names the mod and file, a good one mounts.
+    ponko::game("mods from memory", 1, 1).run_headless(0, [&](ponko::ctx& ctx) {
+        ctx.world().reflect<game::Health>({ponko::field("value", &game::Health::value)});
+        const auto in_memory = [](const char* name, std::vector<std::uint8_t> bytes) { return ponko::ctx::mod_bytes{name, std::move(bytes)}; };
+        bool refused = false;
+        try {
+            ctx.mount_mods_from_memory({in_memory("ghost.pack", mod_pack({{"mod.json", manifest("ghost", "")}, {"prefabs/ghost.json", R"({"format":"ponko-prefab","version":1,"components":{"Ghost":{}}})"}}))});
+        } catch (const ponko::error& e) {
+            refused = e.kind() == PONKO_ERROR_NOT_FOUND && e.path() == "prefabs/ghost.json";
+        }
+        CHECK(refused && ctx.mod_ids().empty());
+        ctx.mount_mods_from_memory({
+            in_memory("strong.pack", mod_pack({{"mod.json", manifest("strong", R"("base")")}, {"prefabs/bat.json", health + "30}}}"}})),
+            in_memory("base.pack", mod_pack({{"mod.json", manifest("base", "")}, {"prefabs/bat.json", health + "3}}}"}})),
+        });
+        CHECK((ctx.mod_ids() == std::vector<std::string>{"base", "strong"}));
+        CHECK(ctx.world().get<game::Health>(ctx.spawn_prefab("prefabs/bat.json", {0, 0})).value == 30);
     });
 }
 
@@ -3537,6 +3557,27 @@ static void native_coverage() {
         }
         CHECK(thrown);
 
+        // Image limits: the game's, and one picture's own.
+        {
+            const std::vector<std::uint8_t> pixel = {
+                137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0, 31, 21, 196,
+                137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 207, 192, 240, 31, 0, 5, 0, 1, 255, 137, 153, 61, 29, 0, 0, 0,
+                0, 73, 69, 78, 68, 174, 66, 96, 130};
+            CHECK(ctx.image_limits() == std::make_pair(std::uint32_t{16384}, std::uint64_t{512} << 20));
+            auto fits = ctx.try_decode_texture(pixel, "pixel.png", 1, 4);
+            CHECK(fits && fits.value().width == 1);
+            auto past = ctx.try_decode_texture(pixel, "pixel.png", 1, 3); // 4 bytes of RGBA8 against 3
+            CHECK(!past && past.kind() == PONKO_ERROR_LIMIT && past.error().path() == "pixel.png");
+            CHECK(std::string(past.error().what()).find("1 pixels a side, 3 bytes") != std::string::npos);
+            CHECK(ctx.image_limits().first == 16384); // the game's own limits are untouched
+            ctx.set_image_limits(2048, 8u << 20);
+            CHECK(ctx.image_limits() == std::make_pair(std::uint32_t{2048}, std::uint64_t{8} << 20));
+            ctx.set_image_limits(16384, std::uint64_t{512} << 20);
+            throws_kind([&] { ctx.set_image_limits(0, 4); }, PONKO_ERROR_INVALID);
+            auto junk = ctx.try_decode_texture(std::vector<std::uint8_t>{1, 2, 3}, "x.png", 64, 1024);
+            CHECK(!junk && junk.kind() == PONKO_ERROR_DECODE);
+        }
+
         // Asset sources, then your own decoder.
         ctx.add_asset_source(ponko::memory_source("embedded").with("level.txt", std::string("##.")).with("bytes.bin", {1, 2, 3}));
         CHECK(ctx.load_asset_with("bytes.bin", [](const std::uint8_t* data, std::size_t len) { return len == 3 && data[2] == 3; }));
@@ -3798,6 +3839,18 @@ static void gltf_scenes() {
         CHECK(ponko::despawn_gltf(ctx, root));
         CHECK(!ponko::despawn_gltf(ctx, root));
         CHECK(!ponko::gltf_node(ctx, root, "Start"));
+    });
+}
+
+// A terrain file (assets/terrain/bump.json) spawned as a tile with its corner where asked.
+static void terrain_files() {
+    ponko::game("c++ terrain files", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
+        const ponko::entity hill = ponko::spawn_terrain_from_file(ctx, "terrain/bump.json", {-4, 0, -4});
+        auto world = ctx.world();
+        CHECK(world.has<ponko::terrain_tile>(hill));
+        CHECK(world.get<ponko::transform3d>(hill).position.z == -4.0f);
+        throws_kind([&] { (void)ponko::spawn_terrain_from_file(ctx, "terrain/nowhere.json", {0, 0, 0}); },
+                    PONKO_ERROR_NOT_FOUND);
     });
 }
 
@@ -4747,6 +4800,14 @@ static void hdr_output() {
         now.peak_nits = -1;
         throws_kind([&] { ctx.set_hdr_output(now); }, PONKO_ERROR_INVALID);
         CHECK(ctx.hdr_output().peak_nits == 800);
+        now = ctx.hdr_output();
+        now.max_content_light_nits = 900;
+        now.max_frame_average_nits = 250;
+        ctx.set_hdr_output(now);
+        CHECK(ctx.hdr_output().max_content_light_nits == 900 && ctx.hdr_output().max_frame_average_nits == 250);
+        now.max_frame_average_nits = -1;
+        throws_kind([&] { ctx.set_hdr_output(now); }, PONKO_ERROR_INVALID);
+        CHECK(!ctx.hdr_status().metadata_sent);
     });
 }
 
@@ -5476,7 +5537,148 @@ static void native_parity_round5() {
     });
 }
 
+
+// Rollback for a whole game (ponko_ctx_rollback_*): two peers, each a headless game on its own
+// thread, trade packets that arrive late and out of order. Both end in the world an offline run with
+// the same inputs has, with many rollbacks on the way. And world snapshots on their own.
+namespace rollback_test {
+struct Pad { std::int8_t dx; std::uint8_t fire; };
+struct Racer { std::uint32_t id; float x, v; std::uint32_t shots; };
+constexpr std::uint32_t delay = 2;
+constexpr std::uint64_t active = 60, frames = 120;
+Pad pad(std::uint32_t p, std::uint64_t t) {
+    if (t >= active) return Pad{0, 0};
+    const std::uint64_t h = (t / 3 + 1) * 2654435761u + p * 40503u;
+    return Pad{std::int8_t(int(h >> 7 & 3) - 1), std::uint8_t(h >> 11 & 1)};
+}
+void race(ponko::ctx& ctx, bool online) {
+    const std::uint64_t t = ctx.sim_tick();
+    Pad pads[2];
+    for (std::uint32_t p = 0; p < 2; ++p)
+        pads[p] = online ? ctx.rollback_input<Pad>(p) : (t >= delay ? pad(p, t - delay) : Pad{0, 0});
+    ctx.world().each([&](Racer& r) {
+        r.v = r.v * 0.9f + float(pads[r.id].dx);
+        r.x += r.v / 60.0f;
+        if (pads[r.id].fire && t % 5 == 0) r.shots++;
+    });
+}
+void setup(ponko::ctx& ctx) {
+    for (std::uint32_t id = 0; id < 2; ++id) ctx.world().spawn(Racer{id, float(id) * 10.0f, 0.0f, 0});
+}
+using State = std::vector<std::uint32_t>;
+State state(ponko::world_view w) {
+    State out(8, 0);
+    w.each([&](const Racer& r) {
+        std::memcpy(&out[r.id * 4], &r, sizeof(Racer));
+    });
+    return out;
+}
+struct Wire {
+    std::mutex lock;
+    std::condition_variable turn;
+    int waiting = 0;
+    std::uint64_t generation = 0;
+    struct Packet { std::uint32_t to; std::uint64_t due, seq; std::vector<std::uint8_t> bytes; };
+    std::vector<Packet> packets;
+    // Both peers meet here once a frame, so their frame clocks agree.
+    void meet() {
+        std::unique_lock<std::mutex> l(lock);
+        const auto mine = generation;
+        if (++waiting == 2) { waiting = 0; ++generation; turn.notify_all(); return; }
+        CHECK(turn.wait_for(l, std::chrono::seconds(30), [&] { return generation != mine; }));
+    }
+};
+struct Peer { std::uint64_t tick = 0; State last; PonkoRollbackStats stats{}; bool desync = true; };
+Peer peer(std::uint32_t me, Wire& wire) {
+    Peer result;
+    std::uint64_t frame = 0, seq = 0, noise = 17 + me;
+    ponko::game("rollback peer", 1, 1)
+        .headless_frames(true)
+        .sim_system([](ponko::ctx& ctx) { race(ctx, true); }, "race")
+        .system([&](ponko::ctx& ctx) {
+            const std::uint64_t t = ctx.sim_tick();
+            result.tick = t;
+            result.last = state(ctx.world());
+            ctx.rollback_set_input(pad(me, t));
+            auto packet = ctx.rollback_packet();
+            noise = noise * 6364136223846793005ull + 1442695040888963407ull;
+            {
+                std::lock_guard<std::mutex> l(wire.lock);
+                // 1 to 5 frames late: later packets often overtake earlier ones.
+                wire.packets.push_back({1 - me, frame + 1 + (noise >> 33) % 5, ++seq,
+                                        std::vector<std::uint8_t>(packet.first, packet.first + packet.second)});
+            }
+            wire.meet();
+            ++frame;
+            std::vector<Wire::Packet> due;
+            {
+                std::lock_guard<std::mutex> l(wire.lock);
+                for (std::size_t i = 0; i < wire.packets.size();) {
+                    if (wire.packets[i].to == me && wire.packets[i].due <= frame) {
+                        due.push_back(std::move(wire.packets[i]));
+                        wire.packets.erase(wire.packets.begin() + std::ptrdiff_t(i));
+                    } else {
+                        ++i;
+                    }
+                }
+            }
+            std::sort(due.begin(), due.end(), [](const Wire::Packet& a, const Wire::Packet& b) { return a.seq > b.seq; });
+            for (auto& p : due) CHECK(ctx.rollback_receive(p.bytes.data(), p.bytes.size()));
+            result.stats = ctx.rollback_stats();
+            result.desync = ctx.rollback_desynced();
+        }, "net")
+        .run_headless(frames, [&](ponko::ctx& ctx) {
+            setup(ctx);
+            PonkoRollbackConfig config = ponko::rollback_config(2, me);
+            config.input_delay = delay;
+            config.checksum_every = 1;
+            ctx.rollback_start(config);
+            ctx.rollback_set_input(pad(me, 0));
+            CHECK(ctx.rollback_frame() == 0);
+            (void)ctx.rollback_confirmed_frame();
+        });
+    return result;
+}
+}  // namespace rollback_test
+
+static void rollback_two_peers() {
+    using namespace rollback_test;
+    // Offline: the world at the start of every tick.
+    std::vector<State> offline;
+    ponko::game("rollback offline", 1, 1)
+        .headless_frames(true)
+        .sim_system([](ponko::ctx& ctx) { race(ctx, false); }, "race")
+        .system([&](ponko::ctx& ctx) { offline.resize(ctx.sim_tick() + 1); offline[ctx.sim_tick()] = state(ctx.world()); }, "record")
+        .run_headless(frames + 1, setup);
+    Wire wire;
+    Peer peers[2];
+    std::thread second([&] { peers[1] = peer(1, wire); });
+    peers[0] = peer(0, wire);
+    second.join();
+    for (auto& p : peers) {
+        CHECK(!p.desync);
+        CHECK(p.stats.rollbacks > 0 && p.stats.resimulated >= p.stats.rollbacks);
+        CHECK(p.tick < offline.size() && p.last == offline[p.tick]);
+    }
+    CHECK(peers[0].tick == peers[1].tick && peers[0].last == peers[1].last);
+
+    // Snapshots on their own: save, change, restore.
+    ponko::world w;
+    auto a = w.spawn(Racer{0, 1.0f, 0.0f, 0});
+    ponko::world_snapshot snapshot;
+    w.save_snapshot(snapshot);
+    CHECK(snapshot.size() == 1);
+    w.set(a, Racer{0, 5.0f, 0.0f, 0});
+    auto b = w.spawn(Racer{1, 2.0f, 0.0f, 0});
+    w.restore_snapshot(snapshot);
+    CHECK(w.get<Racer>(a).x == 1.0f && !w.alive(b));
+    CHECK(w.spawn(Racer{1, 2.0f, 0.0f, 0}) == b);
+    ponko::world other;
+    throws([&] { other.restore_snapshot(snapshot); });
+}
+
 int main() {
+    rollback_two_peers();
     hdr_output();
     controllers();
     required_components();
@@ -5486,6 +5688,7 @@ int main() {
     viewports();
     levels_and_tilemaps();
     gltf_scenes();
+    terrain_files();
     abi_version_is_checked();
     declared_access();
     command_barriers();

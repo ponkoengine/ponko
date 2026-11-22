@@ -826,6 +826,30 @@ static void far_ground(PonkoCtx* ctx, void* user) {
     CHECK(ponko_ctx_physics3d_is_collider_active(ctx, 0, &active) == PONKO_OK && !active);
 }
 
+// A terrain file spawned as a tile (assets/terrain/bump.json), and one that isn't there.
+static void terrain_file_ground(PonkoCtx* ctx, void* user) {
+    (void)user;
+    PonkoWorld* w = ponko_ctx_world(ctx);
+    uint64_t hill = 0;
+    CHECK(ponko_ctx_terrain_tile_spawn_from_file(ctx, "terrain/bump.json", (PonkoVec3){-4, 0, -4}, &hill) == PONKO_OK);
+    uint32_t tile_id, transform_id;
+    CHECK(ponko_terrain_tile_component(w, &tile_id) == PONKO_OK);
+    CHECK(ponko_transform3d_component(w, &transform_id) == PONKO_OK);
+    PonkoTerrainTile tile;
+    CHECK(ponko_get(w, hill, tile_id, &tile, sizeof tile) == PONKO_OK && tile.lod_distance > 0);
+    PonkoTransform3D at;
+    CHECK(ponko_get(w, hill, transform_id, &at, sizeof at) == PONKO_OK && at.position.x == -4);
+    uint64_t none = 0;
+    CHECK(ponko_ctx_terrain_tile_spawn_from_file(ctx, "terrain/nowhere.json", (PonkoVec3){0, 0, 0}, &none) == PONKO_NOT_FOUND);
+}
+
+static void terrain_files(void) {
+    PonkoGame* game = ponko_game_new("terrain file", 1, 1); CHECK(game);
+    PonkoWorld* w = NULL;
+    CHECK(ponko_game_run_headless(game, 0, terrain_file_ground, NULL, &w) == PONKO_OK);
+    CHECK(ponko_world_free(w) == PONKO_OK);
+}
+
 static void streamed_worlds(void) {
     PonkoGame* game = ponko_game_new("far", 1, 1); CHECK(game);
     CHECK(ponko_game_physics3d(game, (PonkoVec3){0, -9.81f, 0}) == PONKO_OK);
@@ -2305,6 +2329,27 @@ static void native_setup(PonkoCtx* ctx, void* user) {
     CHECK(ponko_ctx_try_load_sound(ctx, "no/such.ogg", &sound) == PONKO_NOT_FOUND);
     CHECK(ponko_ctx_try_load_stream(ctx, "no/such.ogg", &sound) == PONKO_NOT_FOUND);
     CHECK(ponko_ctx_try_load_mesh(ctx, "no/such.glb", &mesh) == PONKO_NOT_FOUND);
+
+    /* Image limits: the game's, and one picture's own. */
+    {
+        static const uint8_t pixel[] = {
+            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0, 31, 21, 196,
+            137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 207, 192, 240, 31, 0, 5, 0, 1, 255, 137, 153, 61, 29, 0, 0, 0,
+            0, 73, 69, 78, 68, 174, 66, 96, 130};
+        uint32_t side = 0;
+        uint64_t bytes = 0;
+        PonkoTexture fits, past;
+        CHECK(ponko_ctx_image_limits(ctx, &side, &bytes) == PONKO_OK && side == 16384 && bytes == ((uint64_t)512 << 20));
+        CHECK(ponko_ctx_try_decode_texture(ctx, pixel, sizeof pixel, "pixel.png", 1, 4, &fits) == PONKO_OK && fits.width == 1);
+        CHECK(ponko_ctx_try_decode_texture(ctx, pixel, sizeof pixel, "pixel.png", 1, 3, &past) == PONKO_INVALID_ARGUMENT);
+        CHECK(ponko_last_error_kind() == PONKO_ERROR_LIMIT && strcmp(ponko_last_error_path(), "pixel.png") == 0);
+        CHECK(strstr(ponko_last_error(), "1 pixels a side, 3 bytes") != NULL);
+        CHECK(ponko_ctx_image_limits(ctx, &side, &bytes) == PONKO_OK && side == 16384); /* the game's are untouched */
+        CHECK(ponko_ctx_set_image_limits(ctx, 2048, (uint64_t)8 << 20) == PONKO_OK);
+        CHECK(ponko_ctx_image_limits(ctx, &side, &bytes) == PONKO_OK && side == 2048 && bytes == ((uint64_t)8 << 20));
+        CHECK(ponko_ctx_set_image_limits(ctx, 16384, (uint64_t)512 << 20) == PONKO_OK);
+        CHECK(ponko_ctx_set_image_limits(ctx, 0, 4) == PONKO_INVALID_ARGUMENT);
+    }
 
     /* Asset sources: memory and callbacks, then your own decoder. */
     PonkoMemorySource* memory = ponko_memory_source_new("embedded");
@@ -4127,6 +4172,7 @@ int main(void) {
     ribbons_and_decals();
     lod_helpers();
     streamed_worlds();
+    terrain_files();
     terrain_rebuild();
     model_material_overrides();
     asset_streaming();

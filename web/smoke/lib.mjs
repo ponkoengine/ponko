@@ -36,6 +36,7 @@ export const USAGE =
   "                 [--allow-unsupported]\n" +
   "                 [--asset <file under assets/>] [--asset-size <W>x<H>|none]\n" +
   "                 [--press <Key>=<field>:<value>]... [--min <field>=<number>]...\n" +
+  "                 [--click <x>,<y>=<field>:<value>]... [--query <?a=b>] [--persist granted|refused]\n" +
   "                 [--after-reload <field>:<value>]... [--reload [--after-reload <field>:<value>]...]...\n" +
   "                 [--engine-gpu required|optional] [--music required|none]\n" +
   "                 [--no-trace] [--chrome-trace]\n" +
@@ -46,6 +47,13 @@ export function parsePress(spec) {
   const match = /^([A-Za-z0-9]+)=([A-Za-z_]+):(.+)$/.exec(spec);
   if (!match) throw new UsageError(`--press wants <Key>=<field>:<value>, not "${spec}"`);
   return { key: match[1], field: match[2], value: match[3] };
+}
+
+/** `22,540=linked:1`: click the canvas at (22, 540) (pixels from its top left), then the state's `linked` must become "1". */
+export function parseClick(spec) {
+  const match = /^(\d+),(\d+)=([A-Za-z_]+):(.+)$/.exec(spec);
+  if (!match) throw new UsageError(`--click wants <x>,<y>=<field>:<value>, not "${spec}"`);
+  return { x: Number(match[1]), y: Number(match[2]), field: match[3], value: match[4] };
 }
 
 /** `settings_at_start:Loaded`: after the page is reloaded, the state's `settings_at_start` must be "Loaded". */
@@ -62,7 +70,35 @@ export function parseMin(spec) {
   return { field: match[1], min: Number(match[2]) };
 }
 
-const FIXTURE_KEYS = ["example", "features", "asset", "assetSize", "assetSource", "presses", "min", "afterReload", "reloads", "engineGpu", "music"];
+const FIXTURE_KEYS = ["example", "features", "asset", "assetSize", "assetSource", "presses", "clicks", "query", "min", "afterReload", "reloads", "persist", "editMode", "engineGpu", "music"];
+
+/** How a `--persist` run's page answers `navigator.storage.persist()`. */
+export const PERSIST_MODES = ["granted", "refused"];
+
+/**
+ * A fixture's fields per page load for a `--persist` mode: the first page
+ * load's, then each reload step's. `persist` maps each mode to such a list
+ * (`{"granted": [["persistent:Granted", "persist_asks:1"], ["persist_asks:0"]]}`).
+ */
+export function persistStepsOf(fixture, mode, reloads) {
+  const steps = fixture?.persist?.[mode];
+  if (!steps) throw new UsageError(`--persist ${mode}: the fixture gives no "persist" fields for it`);
+  if (!Array.isArray(steps) || !steps.every(Array.isArray) || steps.length !== reloads + 1) {
+    throw new UsageError(`"persist"."${mode}" lists the fields of each page load: the first and each of the ${reloads} reloads`);
+  }
+  return steps.map((step) => step.map(parseExpect));
+}
+
+/** An error message when the state misses one of `expects` on page load `load` (0: the first), else null. */
+export function checkExpects(state, expects, load) {
+  for (const { field, value } of expects) {
+    if (String(state?.[field]) !== value) {
+      const when = load === 0 ? "on the first page load" : `after reload ${load}`;
+      return `${when}, ${field} is ${JSON.stringify(state?.[field])}, not ${value}`;
+    }
+  }
+  return null;
+}
 
 /**
  * A fixture's reload steps: each one reloads the page, and the new page must
@@ -101,6 +137,11 @@ export function parseFixtures(text) {
     }
     if (typeof fixture.example !== "string") throw new UsageError(`fixtures.json: ${name} needs an "example"`);
     if (fixture.presses) fixture.presses.forEach(parsePress);
+    if (fixture.clicks) fixture.clicks.forEach(parseClick);
+    for (const mode of Object.keys(fixture.persist ?? {})) {
+      if (!PERSIST_MODES.includes(mode)) throw new UsageError(`fixtures.json: ${name}: "persist" modes are ${PERSIST_MODES.join(", ")}`);
+      persistStepsOf(fixture, mode, reloadStepsOf(fixture).length);
+    }
     reloadStepsOf(fixture);
   }
   return fixtures;
@@ -120,6 +161,10 @@ export function parseArgs(argv, fixtures = {}) {
     chromeTrace: false,
     build: false,
     presses: [],
+    clicks: [],
+    query: "",
+    persist: null,
+    firstLoad: [],
     mins: [],
     reloads: [],
   };
@@ -148,6 +193,9 @@ export function parseArgs(argv, fixtures = {}) {
       case "--engine-gpu": given.engineGpu = value(); break;
       case "--music": given.music = value(); break;
       case "--press": (given.presses ??= []).push(parsePress(value())); break;
+      case "--click": (given.clicks ??= []).push(parseClick(value())); break;
+      case "--query": given.query = value(); break;
+      case "--persist": args.persist = value(); break;
       case "--min": (given.mins ??= []).push(parseMin(value())); break;
       // Each --reload adds a reload step; --after-reload adds a field to the
       // last step (making the first one if there is none yet).
@@ -172,7 +220,19 @@ export function parseArgs(argv, fixtures = {}) {
   args.assetSize = given.assetSize ?? (fixture ? fixture.assetSize ?? "none" : "32x32");
   args.assetSource = given.assetSource ?? (fixture ? fixture.assetSource ?? "none" : "4x2");
   args.presses = given.presses ?? (fixture?.presses ?? []).map(parsePress);
+  args.clicks = given.clicks ?? (fixture?.clicks ?? []).map(parseClick);
+  // The page opens in edit mode: time is paused and the editor takes the
+  // clicks, so only frames have to keep coming and --click is the input check.
+  args.editMode = fixture?.editMode === true;
+  args.query = given.query ?? fixture?.query ?? "";
   args.reloads = given.reloads ?? reloadStepsOf(fixture);
+  if (args.persist !== null) {
+    if (!PERSIST_MODES.includes(args.persist)) fail(`--persist must be one of ${PERSIST_MODES.join(", ")}`);
+    // The fields the page reports for this answer, added to each page load's.
+    const [first, ...later] = persistStepsOf(fixture, args.persist, args.reloads.length);
+    args.firstLoad = first;
+    args.reloads = args.reloads.map((step, i) => [...step, ...later[i]]);
+  }
   args.mins = given.mins ?? Object.entries(fixture?.min ?? {}).map(([field, min]) => ({ field, min }));
   args.engineGpu = given.engineGpu ?? (fixture?.engineGpu ? "required" : "optional");
   args.music = given.music ?? (fixture?.music ? "required" : "none");
@@ -189,10 +249,14 @@ export function parseArgs(argv, fixtures = {}) {
   if (args.assetSize !== "none" && !/^\d+x\d+$/.test(args.assetSize)) fail("--asset-size must look like 32x32, or none");
   if (args.assetSource !== "none" && !/^\d+x\d+$/.test(args.assetSource)) fail("--asset-source must look like 4x2, or none");
   if (!/^[\w./-]+$/.test(args.asset)) fail("--asset must be a plain file name under assets/");
+  if (args.query && !/^\?[\w./=&-]*$/.test(args.query)) fail("--query must start with ? and hold plain words (?editor=levels/a.json)");
+  if (args.query && args.case !== "ok") fail("--query and --case can't go together (a case sets the query)");
   if (!["required", "optional"].includes(args.engineGpu)) fail("--engine-gpu must be required or optional");
   if (!["required", "none"].includes(args.music)) fail("--music must be required or none");
   const browserLabel = args.browser === "chromium" && args.chromiumMode === "new" ? "chromium-new" : args.browser;
-  args.out ??= join("target", "web-smoke", [args.fixture ?? "site", browserLabel, args.backend, args.case].join("-"));
+  const parts = [args.fixture ?? "site", browserLabel, args.backend, args.case];
+  if (args.persist) parts.push(`persist-${args.persist}`);
+  args.out ??= join("target", "web-smoke", parts.join("-"));
   return args;
 }
 

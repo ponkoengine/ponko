@@ -583,6 +583,7 @@ impl Editor {
         let _ = offset3;
         settle(&mut ctx.world);
         self.record(Undo::Spawned(map.values().copied().collect()));
+        restore_terrain(ctx)?;
         Ok(copies)
     }
 
@@ -803,6 +804,7 @@ impl Editor {
         });
         self.state = step.state;
         settle(&mut ctx.world);
+        restore_terrain(ctx)?;
         Ok(true)
     }
 
@@ -820,6 +822,7 @@ impl Editor {
         });
         self.state = step.state;
         settle(&mut ctx.world);
+        restore_terrain(ctx)?;
         Ok(true)
     }
 
@@ -1114,6 +1117,15 @@ impl Before {
         }
         Self(out)
     }
+}
+
+/// Gives entities brought back without their terrain tile (a deleted one
+/// undone, a copy) the tile of their terrain file.
+fn restore_terrain(ctx: &mut Ctx) -> Result<(), crate::error::Error> {
+    #[cfg(feature = "3d")]
+    crate::three::restore_terrain_tiles(ctx, Default::default())?;
+    let _ = ctx;
+    Ok(())
 }
 
 /// Places every attachment now (the simulation may be paused while

@@ -1,6 +1,6 @@
-//! Data-only mods from C (Rust's `ponko::mods`): mount mod packs in a load
-//! order, after checking them all, and ask which mods are on and what they
-//! added.
+//! Data-only mods from C (Rust's `ponko::mods`): mount mod packs (files, or
+//! bytes in memory) in a load order, after checking them all, and ask which
+//! mods are on and what they added.
 use std::ffi::c_char;
 
 use ponko::mods::{ModPack, ModSet, Mods};
@@ -49,6 +49,66 @@ pub unsafe extern "C" fn ponko_ctx_mount_mods(
         for i in 0..count {
             let path = text(*paths.add(i))?;
             let pack = ModPack::open(path).map_err(|e| engine_error(e.into()))?;
+            set.add(pack);
+        }
+        ctx_access(ctx, |c| set.mount(c).map_err(|e| engine_error(e.into())))
+    })
+}
+
+/// A mod pack held in memory, for [`ponko_ctx_mount_mods_from_memory`]:
+/// the bytes of a pack `ponko pack` made (downloaded, built into the game,
+/// fetched in a browser) and a name for it in errors until its manifest is
+/// read.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct PonkoModBytes {
+    /// A name for the pack in errors (`"frost-drips.pack"`), NUL-terminated.
+    pub name: *const c_char,
+    /// The pack's bytes.
+    pub bytes: *const u8,
+    /// How many bytes.
+    pub len: usize,
+}
+
+/// Mounts the mod packs in `mods` (`count` packs held in memory), in that
+/// load order: as [`ponko_ctx_mount_mods`] in every other way (the checks,
+/// the statuses, the error's mod, file and reason; Rust's
+/// `ModPack::from_pack_bytes` and `ModSet::mount`).
+///
+/// Ownership: `mods`, its names and its bytes stay the caller's; the bytes
+/// are copied during the call, so the caller may free them right after.
+///
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_mount_mods_from_memory(std::ptr::null_mut(), std::ptr::null(), 0) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `mods` readable for `count` entries (or null with
+/// `count` 0), each with a NUL-terminated `name` and `bytes` readable for
+/// `len` bytes (or null with `len` 0).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_mount_mods_from_memory(
+    ctx: *mut PonkoCtx,
+    mods: *const PonkoModBytes,
+    count: usize,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        if mods.is_null() && count != 0 {
+            return Err(invalid("mods is null"));
+        }
+        let mut set = ModSet::new();
+        for i in 0..count {
+            let m = *mods.add(i);
+            let name = text(m.name)?;
+            if m.bytes.is_null() && m.len != 0 {
+                return Err(invalid("a mod's bytes are null"));
+            }
+            let bytes: &[u8] = if m.len == 0 {
+                &[]
+            } else {
+                std::slice::from_raw_parts(m.bytes, m.len)
+            };
+            let pack = ModPack::from_pack_bytes(name, bytes).map_err(|e| engine_error(e.into()))?;
             set.add(pack);
         }
         ctx_access(ctx, |c| set.mount(c).map_err(|e| engine_error(e.into())))

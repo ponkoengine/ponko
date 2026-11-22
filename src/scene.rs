@@ -83,6 +83,7 @@ impl Ctx {
         doc = " | `SkinOf`, `AttachToJoint`, 3D joints | Reflected: the scene's, to the scene's entities. Skeletons aren't saved, so skins and joint attachments show once the game gives their entity a skeleton again. |"
     )]
     /// | [`PrefabParts`] | Reflected: the scene's prefab trees keep their parts, for [`despawn_prefab`](Self::despawn_prefab). |
+    /// | Terrain tiles from files (`TerrainFile`, with the `3d` feature) | Saved as the file and the transform's position: loading makes each tile from its file, or keeps the live tile made from the same file at the same corner. A tile made in code, with no file, isn't saved. |
     /// | glTF scenes (`GltfRoot`, with the `3d` feature) | Their roots and nodes aren't saved: gone, and the meshes, materials and textures made for them freed. Their prefab instances are saved, with a record of each scene: spawning the file again adopts them (see `GltfRoot::spawn`). |
     /// | [`Children`](crate::hierarchy::Children) | Reflected: the scene's children lists, in their saved order. |
     /// | Assets | Textures, meshes and collision files the scene names are loaded first and stay cached. Loaded assets are never unloaded by a load. |
@@ -197,11 +198,16 @@ impl Ctx {
         // Migrated first, so the assets are found under the current names.
         let save = crate::reflect::migrate_save(&self.world, save)?;
         self.load_scene_assets(&save)?;
+        #[cfg(feature = "3d")]
+        let terrain = crate::three::prepare_scene_terrain(self, &save)?;
         self.world.load(&save)?;
         self.commands = self.world.commands();
         self.scene_loads += 1;
         #[cfg(feature = "3d")]
         self.gltf_after_world_load(&save);
+        // Terrain tiles, from the files their entities name.
+        #[cfg(feature = "3d")]
+        crate::three::restore_terrain_tiles(self, terrain)?;
         #[cfg(feature = "physics")]
         self.physics.forget_bodies();
         #[cfg(feature = "physics3d")]
@@ -899,6 +905,15 @@ impl Ctx {
             }
         }
         Ok(())
+    }
+}
+
+/// The names under every registered asset field
+/// ([`Assets::scene_asset_field`](crate::assets::Assets::scene_asset_field))
+/// anywhere in `json`, for checking that they exist.
+pub(crate) fn scene_asset_field_names(fields: &[SceneAssetField], json: &Value, out: &mut Vec<String>) {
+    for f in fields {
+        field_names(json, &f.component, &f.field, out);
     }
 }
 

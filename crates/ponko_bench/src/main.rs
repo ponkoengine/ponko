@@ -23,6 +23,7 @@ mod lights2d;
 #[cfg(feature = "render")]
 mod lod_split;
 mod membership;
+mod mods;
 mod nav3d;
 mod net;
 #[allow(dead_code)] // spike: API surface kept for the M3 port
@@ -273,6 +274,7 @@ fn main() {
     println!("N = {N}, add/remove N = {ADD_REMOVE_N}\n");
     membership::run(b.filter.as_deref());
     physics::run(&mut b);
+    mods::run(&mut b);
     physics3d::run(&mut b);
     gltf_scenes::run(&mut b);
     nav3d::run(&mut b);

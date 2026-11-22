@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::{Pos, Rng, Vel};
-use ponko_ecs::{Changed, Component, Entity, SnapshotError, World, WorldSnapshot};
+use ponko_ecs::{Changed, Component, Entity, SnapshotError, Tick, World, WorldSnapshot};
 
 #[derive(Component, Clone, Debug, PartialEq)]
 struct Name(String);
@@ -350,28 +350,97 @@ fn named_resources_are_restored_and_others_left_alone() {
     assert_eq!(world.resource::<Score>(), &Score(vec![1]));
 }
 
-#[test]
-fn restored_values_of_tracked_components_count_as_changed() {
-    let mut world = World::new();
-    world.track_changes::<Hp>();
-    let e = world.spawn((Hp(1),));
-    world.spawn((Pos(0.0, 0.0),));
-    let mut snapshot = WorldSnapshot::new();
-    world.save_snapshot(&mut snapshot).unwrap();
-    let since = world.advance_change_tick();
-    assert_eq!(
-        world.query::<&Hp>().filter::<Changed<Hp>>().since(since).iter().count(),
-        0
-    );
-    world.restore_snapshot(&snapshot).unwrap();
-    let changed: Vec<Entity> = world
+/// The entities whose `Hp` changed after `seen`, in query order.
+fn changed_hp(world: &mut World, seen: Tick) -> Vec<Entity> {
+    world
         .query::<(Entity, &Hp)>()
         .filter::<Changed<Hp>>()
-        .since(since)
+        .since(seen)
         .iter()
         .map(|(e, _)| e)
+        .collect()
+}
+
+/// `tick` moved by as many ticks as the world went on since `saved_at`:
+/// what a reader that kept `tick` before a save uses after the restore.
+fn aged(world: &World, saved_at: Tick, tick: Tick) -> Tick {
+    Tick::from_bits(world.change_tick().to_bits() - (saved_at.to_bits() - tick.to_bits()))
+}
+
+#[test]
+fn restored_change_stamps_keep_their_age() {
+    let mut world = World::new();
+    world.track_changes::<Hp>();
+    let old = world.spawn((Hp(1),));
+    let fresh = world.spawn((Hp(2),));
+    // Enough rows for several summary blocks, none of them changed lately.
+    for i in 0..150 {
+        world.spawn((Hp(i),));
+    }
+    let seen = world.advance_change_tick();
+    world.get_mut::<Hp>(fresh).unwrap().0 = 3;
+    world.advance_change_tick();
+    let mut snapshot = WorldSnapshot::new();
+    world.save_snapshot(&mut snapshot).unwrap();
+    let saved_at = world.change_tick();
+    assert_eq!(changed_hp(&mut world, seen), [fresh]);
+
+    // Another history: every value changes, ticks go by.
+    world.query::<&mut Hp>().for_each(|h| h.0 += 10);
+    for _ in 0..5 {
+        world.advance_change_tick();
+    }
+
+    world.restore_snapshot(&snapshot).unwrap();
+    let seen = aged(&world, saved_at, seen);
+    assert_eq!(
+        changed_hp(&mut world, seen),
+        [fresh],
+        "only the value changed after the reader looked counts as changed, as before the restore"
+    );
+    let added: Vec<Entity> = world
+        .query::<Entity>()
+        .filter::<ponko_ecs::Added<Hp>>()
+        .since(seen)
+        .iter()
         .collect();
-    assert_eq!(changed, vec![e]);
+    assert!(added.is_empty(), "nothing counts as added again");
+    let _ = old;
+}
+
+#[test]
+fn restored_removal_logs_keep_their_age() {
+    let mut world = World::new();
+    world.track_changes::<Hp>();
+    let a = world.spawn((Hp(1),));
+    let b = world.spawn((Hp(2),));
+    let c = world.spawn((Hp(3),));
+    world.despawn(a);
+    let seen = world.advance_change_tick();
+    world.remove::<Hp>(b);
+    world.advance_change_tick();
+    let mut snapshot = WorldSnapshot::new();
+    world.save_snapshot(&mut snapshot).unwrap();
+    let saved_at = world.change_tick();
+
+    world.despawn(c); // a removal the restore takes back
+    world.advance_change_tick();
+    world.restore_snapshot(&snapshot).unwrap();
+    assert_eq!(world.removed_since::<Hp>(aged(&world, saved_at, seen)), [b]);
+    assert_eq!(world.removed_since::<Hp>(Tick::default()), [a, b]);
+}
+
+#[test]
+fn components_tracked_after_the_save_count_as_added_on_restore() {
+    let mut world = World::new();
+    let e = world.spawn((Hp(1),));
+    let mut snapshot = WorldSnapshot::new();
+    world.save_snapshot(&mut snapshot).unwrap();
+    world.track_changes::<Hp>();
+    let seen = world.advance_change_tick();
+    assert!(changed_hp(&mut world, seen).is_empty());
+    world.restore_snapshot(&snapshot).unwrap();
+    assert_eq!(changed_hp(&mut world, seen), [e]);
 }
 
 #[test]

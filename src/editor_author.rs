@@ -51,6 +51,7 @@ impl Docs {
 
     /// Starts editing `key`, a file that isn't there yet, as `value`: it
     /// counts as unsaved until saved.
+    #[cfg(feature = "3d")]
     pub(crate) fn open_new(&mut self, key: &str, value: Value, writer: Writer) {
         if !self.docs.contains_key(key) {
             self.docs.insert(

@@ -152,6 +152,7 @@ impl Shaders {
                 counters: cache.counters.clone(),
                 in_use: true,
                 reads_scene: old.reads_scene,
+                moves_vertices: old.moves_vertices,
             };
             // Keep warmed variants warm, and retain sharing between shader ids.
             for variant in ShaderVariant::ALL {
@@ -295,6 +296,7 @@ impl Shaders {
             past,
         );
         pipelines.reads_scene = reads_scene(user);
+        pipelines.moves_vertices = defines(user, "vertex");
         if self.warm_variants {
             pipelines.warm();
         }
@@ -543,6 +545,10 @@ pub(super) struct ShaderPipelines {
     /// Whether it reads the scene behind it (`scene_color`, `scene_position`,
     /// `scene_distance`): its transparent surfaces then need a copy of it.
     pub(super) reads_scene: bool,
+    /// Whether the game's code has a `vertex` function, which can move a
+    /// model's corners anywhere: its see-through models are never moved
+    /// in the draw order (see `draw_order.rs`).
+    pub(super) moves_vertices: bool,
 }
 
 impl ShaderPipelines {
@@ -1029,6 +1035,7 @@ pub(super) fn build_pipelines(
         counters: counters.clone(),
         in_use: false,
         reads_scene: false,
+        moves_vertices: false,
     }
 }
 
