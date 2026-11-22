@@ -286,6 +286,24 @@ static void mods() {
         CHECK(ctx.world().get<game::Health>(bat).value == 30);
         throws([&] { ctx.mount_mods({base}); });   // once per game
     });
+    // The same packs from memory: a refused set names the mod and file, a good one mounts.
+    ponko::game("mods from memory", 1, 1).run_headless(0, [&](ponko::ctx& ctx) {
+        ctx.world().reflect<game::Health>({ponko::field("value", &game::Health::value)});
+        const auto in_memory = [](const char* name, std::vector<std::uint8_t> bytes) { return ponko::ctx::mod_bytes{name, std::move(bytes)}; };
+        bool refused = false;
+        try {
+            ctx.mount_mods_from_memory({in_memory("ghost.pack", mod_pack({{"mod.json", manifest("ghost", "")}, {"prefabs/ghost.json", R"({"format":"ponko-prefab","version":1,"components":{"Ghost":{}}})"}}))});
+        } catch (const ponko::error& e) {
+            refused = e.kind() == PONKO_ERROR_NOT_FOUND && e.path() == "prefabs/ghost.json";
+        }
+        CHECK(refused && ctx.mod_ids().empty());
+        ctx.mount_mods_from_memory({
+            in_memory("strong.pack", mod_pack({{"mod.json", manifest("strong", R"("base")")}, {"prefabs/bat.json", health + "30}}}"}})),
+            in_memory("base.pack", mod_pack({{"mod.json", manifest("base", "")}, {"prefabs/bat.json", health + "3}}}"}})),
+        });
+        CHECK((ctx.mod_ids() == std::vector<std::string>{"base", "strong"}));
+        CHECK(ctx.world().get<game::Health>(ctx.spawn_prefab("prefabs/bat.json", {0, 0})).value == 30);
+    });
 }
 
 static void three_d() {
