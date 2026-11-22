@@ -284,8 +284,21 @@ impl Editor {
         self.redo.clear();
         self.remap = played.remap;
         #[cfg(all(feature = "editor", feature = "3d"))]
-        for (old, new) in ctx.respawn_gltf_entities(&played.gltf) {
-            self.moved(old, new);
+        {
+            let (moved, failed) = ctx.respawn_gltf_entities(&played.gltf);
+            for (old, new) in moved {
+                self.moved(old, new);
+            }
+            // The scenes that don't spawn again join the ones that didn't
+            // load when the document was opened: the same panel, the same
+            // Retry. A scene that spawned now leaves it.
+            self.doc.unloaded = failed
+                .into_iter()
+                .map(|(file, e)| Unloaded {
+                    file,
+                    why: e.message().to_string(),
+                })
+                .collect();
         }
         self.state = played.state;
         self.open = None;

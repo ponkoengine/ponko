@@ -351,6 +351,15 @@ its file names the scene either way. A retry that still fails says why in
 the row and the error line. The panel is gone once every scene loaded,
 and opening another document starts it again.
 
+**Stop** spawns the glTF scenes again from their files too (they aren't in
+the world it puts back). One whose file broke while you played, or still
+doesn't load, is listed in the same panel, with its reason and the same
+**Retry**; a scene that spawns at Stop leaves the list, so the panel holds
+the scenes that are out of the world now. A web build also sets
+`<html data-ponko-retry>` to where the Retry buttons are (a list of
+`[x, y]` as fractions of the window), so a browser test finds the button by
+asking the page.
+
 Overrides are per component (the changed fields of each), and two more
 kinds are per node:
 

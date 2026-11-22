@@ -84,7 +84,9 @@ pub(crate) struct Document {
     /// person decides between [`Editor::reload`] and [`Editor::keep_mine`].
     pub conflict: bool,
     /// The glTF scenes the scene names that didn't load when it was
-    /// opened (their files are missing or broken), for the status line.
+    /// opened, or that didn't spawn again at Stop (their files are
+    /// missing or broken): the editor's panel lists them, and its status
+    /// line names them.
     pub unloaded: Vec<Unloaded>,
 }
 

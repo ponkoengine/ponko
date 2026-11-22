@@ -7,6 +7,7 @@ use egui::{Button, Color32, DragValue, RichText, Ui};
 use super::Panels;
 use super::app::Dialog;
 use super::keys::Action;
+use super::scene::unloaded_line;
 use crate::ctx::Ctx;
 use crate::editor::play::PlayEdit;
 
@@ -114,8 +115,16 @@ impl Panels {
     }
 
     pub(crate) fn stop(&mut self, ctx: &mut Ctx, keep: &[PlayEdit]) {
+        let before = unloaded_line(&ctx.editor.doc.unloaded);
         let stopped = ctx.edit(|ed, ctx| ed.stop_keeping(ctx, keep));
         if self.report(stopped).is_some() {
+            // The glTF scenes that didn't spawn again are in the panel of
+            // scenes that didn't load; the error line names them too.
+            match unloaded_line(&ctx.editor.doc.unloaded) {
+                Some(line) => self.error = Some(line),
+                None if self.error == before => self.error = None,
+                None => {}
+            }
             self.scene.forget_drag();
             // A selected glTF node was spawned again as another entity.
             self.selected = self.selected.map(|e| ctx.editor.resolve(e));
