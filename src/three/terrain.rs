@@ -332,6 +332,18 @@ impl Graphics {
     /// });
     /// ```
     pub fn try_create_terrain_material(&mut self, desc: &TerrainMaterialDesc) -> Result<Material, crate::error::Error> {
+        let material = self.terrain_material_desc(desc)?;
+        Ok(self.create_material(material))
+    }
+
+    /// The material `desc` describes, checked, with the terrain shader made
+    /// (once): what [`try_create_terrain_material`](Self::try_create_terrain_material)
+    /// creates, and what a terrain tile's material is updated to when the
+    /// tile moves.
+    pub(crate) fn terrain_material_desc(
+        &mut self,
+        desc: &TerrainMaterialDesc,
+    ) -> Result<MaterialDesc, crate::error::Error> {
         desc.check()
             .map_err(|e| crate::error::Error::new(crate::error::ErrorKind::Invalid, e))?;
         let arrays = [Some(desc.layers), desc.normals, Some(desc.weights)];
@@ -366,13 +378,13 @@ impl Graphics {
                 1.0 / desc.weights_size.y,
             ),
         ];
-        Ok(self.create_material(MaterialDesc {
+        Ok(MaterialDesc {
             roughness: desc.roughness,
             shader: Some(shader),
             custom,
             custom_arrays: arrays,
             ..Default::default()
-        }))
+        })
     }
 
     /// Makes a [`TerrainTile`] `size` wide from a square grid of heights

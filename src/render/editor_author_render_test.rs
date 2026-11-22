@@ -227,6 +227,65 @@ fn a_painted_terrain_layer_shows_where_it_was_painted() {
 }
 
 #[test]
+fn a_moved_terrain_tile_keeps_its_painted_layer_under_it() {
+    let Some(mut ctx) = stage() else { return };
+    // A flat 16-unit tile, red ground, its middle painted green.
+    let file = json!({"format": "ponko-terrain", "size": 16.0, "heights": "t-heights.png", "low": -1.0, "high": 1.0,
+        "layers": [{"texture": "red.png"}, {"texture": "green.png"}], "weights": ["t-weights.png"], "roughness": 1.0});
+    let side = 16usize;
+    let weights: Vec<u8> = (0..side * side)
+        .flat_map(|i| {
+            let (x, y) = (i % side, i / side);
+            if (4..12).contains(&x) && (4..12).contains(&y) {
+                [0u8, 255, 0, 0]
+            } else {
+                [255, 0, 0, 0]
+            }
+        })
+        .collect();
+    ctx.assets.add_source(
+        MemorySource::new("mem")
+            .with("t.json", serde_json::to_vec(&file).unwrap())
+            .with("t-heights.png", crate::three::encode_grey16(9, &[32768; 81]).unwrap())
+            .with(
+                "t-weights.png",
+                crate::three::encode_rgba(side as u32, &weights).unwrap(),
+            )
+            .with("red.png", solid_png([220, 30, 30, 255]))
+            .with("green.png", solid_png([30, 220, 30, 255])),
+    );
+    let e = crate::three::TerrainTile::spawn_from_file(&mut ctx, "t.json", vec3(-8.0, 0.0, -8.0)).unwrap();
+    let tile = *ctx.world.get::<crate::terrain::TerrainTile>(e).unwrap();
+    // The camera looks down on where the tile goes: 40 units along +X.
+    ctx.scene3d.camera.position = vec3(40.0, 14.0, 0.001);
+    ctx.scene3d.camera.look_at(vec3(40.0, 0.0, 0.0));
+    ctx.world.get_mut::<crate::d3::Transform>(e).unwrap().position = vec3(32.0, 0.0, -8.0);
+    // Negative control: while a drag holds it, the paint stays at the old place.
+    ctx.gfx.assets3d.terrain_files.held = Some(ctx.gfx.frame);
+    shot(&mut ctx, "moved-warmup");
+    let held = middle(&shot(&mut ctx, "moved-held"));
+    assert!(
+        held[0] > held[1] + 40.0,
+        "the paint is left behind while held: {held:?}"
+    );
+    // The drag ends: the painted layer follows the tile, the same tile.
+    ctx.gfx.assets3d.terrain_files.held = None;
+    let after = shot(&mut ctx, "moved-after");
+    let centre = middle(&after);
+    assert!(
+        centre[1] > centre[0] + 40.0,
+        "green under the moved tile's middle: {centre:?}"
+    );
+    let corner = after.pixel(after.width / 16, after.height / 16);
+    assert!(corner[0] > corner[1], "red where not painted: {corner:?}");
+    assert_eq!(
+        *ctx.world.get::<crate::terrain::TerrainTile>(e).unwrap(),
+        tile,
+        "re-placed, not rebuilt"
+    );
+}
+
+#[test]
 fn the_particle_sections_live_preview_draws_particles_while_paused() {
     use crate::inspector::author_harness::{Harness, SCREEN};
     let frame = |select: bool| -> Option<Image> {

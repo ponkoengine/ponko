@@ -127,7 +127,7 @@ mod sky_kit;
 mod sky_shader;
 mod target;
 mod terrain;
-mod terrain_file;
+pub(crate) mod terrain_file;
 pub use far_terrain::FarTerrain;
 mod texture_array;
 pub(crate) mod view_model;
@@ -185,7 +185,10 @@ pub(crate) use terrain_file::{
     build as build_terrain, encode_grey16, encode_rgba, load_layers as load_terrain_layers,
     note_tile as note_terrain_tile,
 };
-pub(crate) use terrain_file::{prepare_scene as prepare_scene_terrain, restore_tiles as restore_terrain_tiles};
+pub(crate) use terrain_file::{
+    follow_files as follow_terrain_files, give_tiles as give_terrain_tiles, prepare_scene as prepare_scene_terrain,
+    restore_tiles as restore_terrain_tiles,
+};
 pub use texture_array::{TextureArray, TextureKind};
 
 use glam::{Mat3, Mat4, Quat, Vec2, Vec3, Vec4};
@@ -1396,7 +1399,7 @@ pub(crate) struct Assets3D {
     /// Whether each was made as `TextureKind::Data`, by id.
     pub array_data: Vec<bool>,
     /// Terrain tiles made from terrain files, for scenes that load them
-    /// again (see `terrain_file::restore_tiles`).
+    /// again and entities that move them (see `terrain_file::follow_files`).
     pub(crate) terrain_files: terrain_file::FileTiles,
     /// The texture array decals take their images from.
     pub decal_array: Option<TextureArray>,

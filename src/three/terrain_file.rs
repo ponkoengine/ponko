@@ -126,20 +126,62 @@ impl TerrainFile {
     }
 }
 
-/// The tiles made from terrain files, by file and corner (x and z, as
-/// bits), so a scene loaded again gets the tiles it had.
+/// A tile made from a terrain file: the file, where its corner is now,
+/// and what moving it changes.
+struct FileTile {
+    path: String,
+    corner: Vec3,
+    /// Its terrain material and what that was made from (`None`: drawn
+    /// with the default material, which doesn't depend on the corner).
+    ground: Option<(Material, TerrainMaterialDesc)>,
+    /// Its heights in world units and its size, for a collider.
+    #[cfg(feature = "physics3d")]
+    heights: std::sync::Arc<[f32]>,
+    #[cfg(feature = "physics3d")]
+    size: f32,
+}
+
+/// The tiles made from terrain files, so a scene loaded again gets the
+/// tiles it had, and a tile whose entity moved is re-placed.
 #[derive(Default)]
 pub(crate) struct FileTiles {
-    tiles: std::collections::HashMap<(String, [u32; 2]), TerrainTile>,
+    tiles: std::collections::HashMap<TerrainTile, FileTile>,
+    /// The last frame a drag in the editor moved entities: tiles are
+    /// re-placed once a frame passes without one, when the drag ended.
+    pub(crate) held: Option<u64>,
 }
 
-fn key(path: &str, corner: Vec3) -> (String, [u32; 2]) {
-    (path.to_string(), [corner.x.to_bits(), corner.z.to_bits()])
-}
-
-/// Remembers that `tile` is terrain file `path`'s tile at `corner`.
-pub(crate) fn note_tile(ctx: &mut Ctx, path: &str, corner: Vec3, tile: TerrainTile) {
-    ctx.gfx.assets3d.terrain_files.tiles.insert(key(path, corner), tile);
+/// Remembers that `built` is terrain file `path`'s tile (made from `data`)
+/// at `corner`.
+pub(crate) fn note_tile(ctx: &mut Ctx, path: &str, corner: Vec3, built: &Built, data: &TerrainData) {
+    // Tiles freed since (the editor's terrain window makes them again).
+    let dead: Vec<TerrainTile> = ctx
+        .gfx
+        .assets3d
+        .terrain_files
+        .tiles
+        .keys()
+        .filter(|t| !ctx.gfx.is_live(**t))
+        .copied()
+        .collect();
+    let files = &mut ctx.gfx.assets3d.terrain_files;
+    for t in dead {
+        files.tiles.remove(&t);
+    }
+    #[cfg(not(feature = "physics3d"))]
+    let _ = data;
+    files.tiles.insert(
+        built.tile,
+        FileTile {
+            path: path.to_string(),
+            corner,
+            ground: built.material.map(|(m, _)| m).zip(built.ground),
+            #[cfg(feature = "physics3d")]
+            heights: data.world_heights().into(),
+            #[cfg(feature = "physics3d")]
+            size: data.json.size,
+        },
+    );
 }
 
 /// The terrain files a scene names that no live tile was made from yet,
@@ -158,7 +200,7 @@ pub(crate) fn prepare_scene(ctx: &mut Ctx, save: &serde_json::Value) -> Result<P
             .terrain_files
             .tiles
             .iter()
-            .any(|((p, _), t)| *p == path && ctx.gfx.is_live(*t));
+            .any(|(t, f)| f.path == path && ctx.gfx.is_live(*t));
         if !made {
             let read = read_file(ctx, &path)?;
             out.files.insert(path, read);
@@ -183,47 +225,195 @@ fn read_file(ctx: &mut Ctx, path: &str) -> Result<(TerrainData, Option<TextureAr
     Ok((data, layers))
 }
 
-/// Gives every entity with a [`TerrainFile`] and a 3D transform but no
-/// [`TerrainTile`] its tile: the live one made from the same file at the
-/// same corner if no other entity has it, else one made from the file
-/// (from `prepared` if it was read ahead).
-///
-/// # Errors
-/// The first file that doesn't load; the entities before it have tiles.
-pub(crate) fn restore_tiles(ctx: &mut Ctx, mut prepared: Prepared) -> Result<(), Error> {
-    let wanting: Vec<(Entity, Vec3, String)> = ctx
-        .world
+/// The entities with a [`TerrainFile`] and a 3D transform but no
+/// [`TerrainTile`], with their corners and files.
+fn wanting(ctx: &mut Ctx) -> Vec<(Entity, Vec3, String)> {
+    ctx.world
         .query::<(Entity, &crate::d3::Transform, &TerrainFile)>()
         .filter::<ponko_ecs::Without<TerrainTile>>()
         .iter()
         .map(|(e, t, f)| (e, t.position, f.path.clone()))
-        .collect();
+        .collect()
+}
+
+/// Gives every entity with a [`TerrainFile`] and a 3D transform but no
+/// [`TerrainTile`] its tile (see [`give`]), from `prepared` for the files
+/// read ahead.
+///
+/// # Errors
+/// The first file that doesn't load; the entities before it have tiles.
+pub(crate) fn restore_tiles(ctx: &mut Ctx, prepared: Prepared) -> Result<(), Error> {
+    let wanting = wanting(ctx);
+    give(ctx, wanting, prepared).map_err(|(_, e)| e)
+}
+
+/// Gives those of `entities` that have a [`TerrainFile`] and a 3D
+/// transform but no [`TerrainTile`] their tiles: what a prefab spawn, an
+/// editor duplicate or undo does after spawning them.
+///
+/// # Errors
+/// The first file that doesn't load, naming it; the caller despawns what
+/// it spawned, so no entity is left without its tile.
+pub(crate) fn give_tiles(ctx: &mut Ctx, entities: &[Entity]) -> Result<(), Error> {
+    let mut wanting = Vec::new();
+    for &e in entities {
+        if ctx.world.get::<TerrainTile>(e).is_some() {
+            continue;
+        }
+        if let (Some(t), Some(f)) = (
+            ctx.world.get::<crate::d3::Transform>(e),
+            ctx.world.get::<TerrainFile>(e),
+        ) {
+            wanting.push((e, t.position, f.path.clone()));
+        }
+    }
+    give(ctx, wanting, Prepared::default()).map_err(|(_, e)| e)
+}
+
+/// Gives each of `wanting` (entity, corner, file) its tile: a live tile
+/// made from the same file that no other entity has (the one at the same
+/// corner first, else one re-placed there), else one made from the file
+/// (from `prepared` if it was read ahead). With `physics3d`, a
+/// [`TerrainCollider`](crate::d3::TerrainCollider) on the entity without a
+/// live mesh (as a scene or prefab loads it) gets the file's heightfield.
+///
+/// # Errors
+/// The entity whose file doesn't load and why; the ones before it have tiles.
+fn give(ctx: &mut Ctx, wanting: Vec<(Entity, Vec3, String)>, mut prepared: Prepared) -> Result<(), (Entity, Error)> {
     if wanting.is_empty() {
         return Ok(());
     }
     let mut taken: std::collections::HashSet<TerrainTile> = ctx.world.query::<&TerrainTile>().iter().copied().collect();
     for (e, corner, path) in wanting {
-        let k = key(&path, corner);
-        let kept = ctx.gfx.assets3d.terrain_files.tiles.get(&k).copied();
-        if let Some(tile) = kept.filter(|t| ctx.gfx.is_live(*t) && !taken.contains(t)) {
-            ctx.world.insert(e, tile);
-            taken.insert(tile);
-            continue;
-        }
-        let (data, layers) = match prepared.files.get(&path) {
-            Some((data, layers)) => (data.clone(), *layers),
+        let free = |t: &TerrainTile, f: &FileTile| f.path == path && ctx.gfx.is_live(*t) && !taken.contains(t);
+        let files = &ctx.gfx.assets3d.terrain_files.tiles;
+        let kept = files
+            .iter()
+            .find(|(t, f)| free(t, f) && f.corner == corner)
+            .or_else(|| files.iter().find(|(t, f)| free(t, f)))
+            .map(|(t, _)| *t);
+        let tile = match kept {
+            Some(tile) => {
+                re_place(ctx, tile, corner);
+                tile
+            }
             None => {
-                let read = read_file(ctx, &path)?;
-                prepared.files.insert(path.clone(), read.clone());
-                read
+                let (data, layers) = match prepared.files.get(&path) {
+                    Some((data, layers)) => (data.clone(), *layers),
+                    None => {
+                        let read = read_file(ctx, &path)
+                            .map_err(|err| (e, err.context(format_args!("terrain file \"{path}\""))))?;
+                        prepared.files.insert(path.clone(), read.clone());
+                        read
+                    }
+                };
+                let built = build(ctx, &data, Vec2::new(corner.x, corner.z), layers).map_err(|err| (e, err))?;
+                note_tile(ctx, &path, corner, &built, &data);
+                built.tile
             }
         };
-        let built = build(ctx, &data, Vec2::new(corner.x, corner.z), layers)?;
-        ctx.world.insert(e, built.tile);
-        taken.insert(built.tile);
-        ctx.gfx.assets3d.terrain_files.tiles.insert(k, built.tile);
+        ctx.world.insert(e, tile);
+        taken.insert(tile);
+        #[cfg(feature = "physics3d")]
+        give_collider(ctx, e, tile);
     }
     Ok(())
+}
+
+/// Fills `e`'s [`TerrainCollider`](crate::d3::TerrainCollider) with the
+/// heightfield of `tile`'s file if it has none that is live.
+#[cfg(feature = "physics3d")]
+fn give_collider(ctx: &mut Ctx, e: Entity, tile: TerrainTile) {
+    let Some(collider) = ctx.world.get::<crate::d3::TerrainCollider>(e).copied() else {
+        return;
+    };
+    if ctx.physics3d.is_live(collider.mesh) {
+        return;
+    }
+    let Some(file) = ctx.gfx.assets3d.terrain_files.tiles.get(&tile) else {
+        return;
+    };
+    let (heights, size) = (file.heights.clone(), file.size);
+    let mesh = ctx.physics3d.heightfield(&heights, size);
+    if let Some(c) = ctx.world.get_mut::<crate::d3::TerrainCollider>(e) {
+        c.mesh = mesh;
+    }
+}
+
+/// Where `tile`'s painted layers lie now (its corner), if it was made
+/// from a terrain file.
+#[cfg(test)]
+pub(crate) fn placed_corner(ctx: &Ctx, tile: TerrainTile) -> Option<Vec3> {
+    ctx.gfx.assets3d.terrain_files.tiles.get(&tile).map(|f| f.corner)
+}
+
+/// Moves `tile`'s painted layers to `corner`, where its entity is now: its
+/// terrain material's weight map follows. The meshes and a collider are
+/// placed by the entity's transform already.
+fn re_place(ctx: &mut Ctx, tile: TerrainTile, corner: Vec3) {
+    let Some(file) = ctx.gfx.assets3d.terrain_files.tiles.get_mut(&tile) else {
+        return;
+    };
+    if file.corner == corner {
+        return;
+    }
+    file.corner = corner;
+    let Some((material, mut desc)) = file.ground else {
+        return;
+    };
+    desc.weights_corner = Vec2::new(corner.x, corner.z);
+    if let Some((_, d)) = file.ground.as_mut() {
+        *d = desc;
+    }
+    // The description was valid when the material was made, and only its
+    // corner changed; a freed material stays freed.
+    if ctx.gfx.is_live(material)
+        && let Ok(updated) = ctx.gfx.terrain_material_desc(&desc)
+    {
+        ctx.gfx.update_material(material, updated);
+    }
+}
+
+/// The step that keeps terrain-file tiles with their entities, run at the
+/// start of every frame and before it is drawn: an entity with a
+/// [`TerrainFile`] and no tile yet (spawned from JSON, by a mod, by a
+/// system) gets one, and a tile whose entity moved has its painted layers
+/// re-placed (not while a drag in the editor is moving it: once, when it
+/// ends). An entity whose file doesn't load is despawned, with an error
+/// naming the file, rather than left without its ground.
+pub(crate) fn follow_files(ctx: &mut Ctx) {
+    let files = &ctx.gfx.assets3d.terrain_files;
+    let held = files.held.is_some_and(|f| f.saturating_add(1) >= ctx.gfx.frame);
+    let mut wants = false;
+    let mut moved = false;
+    ctx.world
+        .query::<(&crate::d3::Transform, &TerrainFile, Option<&TerrainTile>)>()
+        .for_each(|(t, _, tile)| match tile {
+            None => wants = true,
+            Some(tile) => {
+                moved |= !held && files.tiles.get(tile).is_some_and(|f| f.corner != t.position);
+            }
+        });
+    if moved {
+        let moved: Vec<(TerrainTile, Vec3)> = ctx
+            .world
+            .query::<(&crate::d3::Transform, &TerrainTile)>()
+            .filter::<ponko_ecs::With<TerrainFile>>()
+            .iter()
+            .map(|(t, tile)| (*tile, t.position))
+            .collect();
+        for (tile, corner) in moved {
+            re_place(ctx, tile, corner);
+        }
+    }
+    if wants {
+        for one in wanting(ctx) {
+            if let Err((e, err)) = give(ctx, vec![one], Prepared::default()) {
+                eprintln!("{err} (its entity {} is despawned)", e.to_bits());
+                ctx.world.despawn(e);
+            }
+        }
+    }
 }
 
 impl TerrainJson {
@@ -398,6 +588,8 @@ pub(crate) struct Built {
     /// The terrain material and its weight array; `None` without layers
     /// (the default material).
     pub material: Option<(Material, TextureArray)>,
+    /// What the terrain material was made from, to re-place it.
+    pub ground: Option<TerrainMaterialDesc>,
 }
 
 /// Makes `data`'s tile with its corner at `corner` (x, z in the world, for
@@ -422,18 +614,22 @@ pub(crate) fn build(
             let desc = TerrainMaterialDesc::new(layers, weights, corner, Vec2::splat(data.json.size))
                 .with_layer_size(layer_size)
                 .with_roughness(data.json.roughness);
-            Some((ctx.gfx.try_create_terrain_material(&desc)?, weights))
+            Some((ctx.gfx.try_create_terrain_material(&desc)?, weights, desc))
         }
         _ => None,
     };
     let ground = match material {
-        Some((m, _)) => m,
+        Some((m, _, _)) => m,
         None => ctx.gfx.default_material(),
     };
     let tile = ctx
         .gfx
         .create_terrain_tile(&data.world_heights(), data.json.size, ground);
-    Ok(Built { tile, material })
+    Ok(Built {
+        tile,
+        material: material.map(|(m, w, _)| (m, w)),
+        ground: material.map(|(_, _, d)| d),
+    })
 }
 
 /// The layer textures of `data` as one array.
@@ -481,7 +677,7 @@ impl TerrainTile {
         })?;
         let layers = load_layers(ctx, path, &data)?;
         let built = build(ctx, &data, Vec2::new(at.x, at.z), layers)?;
-        note_tile(ctx, path, at, built.tile);
+        note_tile(ctx, path, at, &built, &data);
         Ok(ctx
             .world
             .spawn((crate::d3::Transform::at(at), built.tile, TerrainFile::new(path))))

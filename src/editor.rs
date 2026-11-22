@@ -595,8 +595,16 @@ impl Editor {
         }
         let _ = offset3;
         settle(&mut ctx.world);
-        self.record(Undo::Spawned(map.values().copied().collect()));
-        restore_terrain(ctx)?;
+        let spawned: Vec<Entity> = map.values().copied().collect();
+        // A copy whose terrain file doesn't load isn't left without its tile.
+        #[cfg(feature = "3d")]
+        if let Err(e) = crate::three::give_terrain_tiles(ctx, &spawned) {
+            for &copy in &spawned {
+                ctx.world.despawn(copy);
+            }
+            return Err(e);
+        }
+        self.record(Undo::Spawned(spawned));
         Ok(copies)
     }
 
