@@ -198,7 +198,7 @@ fn a_painted_terrain_layer_shows_where_it_was_painted() {
             .with("red.png", solid_png([220, 30, 30, 255]))
             .with("green.png", solid_png([30, 220, 30, 255])),
     );
-    let e = ctx.spawn_terrain("t.json", vec3(-8.0, 0.0, -8.0)).unwrap();
+    let e = crate::three::TerrainTile::spawn_from_file(&mut ctx, "t.json", vec3(-8.0, 0.0, -8.0)).unwrap();
     shot(&mut ctx, "terrain-warmup");
     let before = middle(&shot(&mut ctx, "terrain-before"));
     assert!(before[0] > before[1] + 40.0, "red ground before: {before:?}");

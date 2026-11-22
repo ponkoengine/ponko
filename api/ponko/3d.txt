@@ -9071,8 +9071,6 @@ pub fn ponko::prelude::Ctx::set_state<S: ponko::state::States>(&mut self, S)
 pub fn ponko::prelude::Ctx::state<S: ponko::state::States>(&self) -> &S
 impl ponko::prelude::Ctx
 pub fn ponko::prelude::Ctx::quality_autotune_status(&self) -> core::option::Option<ponko::render::QualityAutotuneStatus>
-impl ponko::prelude::Ctx
-pub fn ponko::prelude::Ctx::spawn_terrain(&mut self, &str, glam::f32::vec3::Vec3) -> core::result::Result<ponko_ecs::entity::Entity, ponko::error::Error>
 impl<F: core::ops::function::FnMut(&mut ponko::prelude::Ctx) + 'static> ponko::prelude::IntoSystem<ponko::prelude::Ctx> for F
 pub fn F::access(self, ponko::access::SystemAccess) -> ponko::game::SystemConfig
 pub fn F::every(self, u32) -> ponko::game::SystemConfig
@@ -13661,6 +13659,8 @@ pub fn ponko::terrain::TerrainTile::lod(&self, f32) -> usize
 pub fn ponko::terrain::TerrainTile::lod_distance(&self) -> f32
 pub fn ponko::terrain::TerrainTile::lods(&self) -> [ponko::render::Mesh; 4]
 pub fn ponko::terrain::TerrainTile::with_lod_distance(self, f32) -> Self
+impl ponko::terrain::TerrainTile
+pub fn ponko::terrain::TerrainTile::spawn_from_file(&mut ponko::prelude::Ctx, &str, glam::f32::vec3::Vec3) -> core::result::Result<ponko_ecs::entity::Entity, ponko::error::Error>
 impl core::clone::Clone for ponko::terrain::TerrainTile
 pub fn ponko::terrain::TerrainTile::clone(&self) -> Self
 impl core::cmp::Eq for ponko::terrain::TerrainTile

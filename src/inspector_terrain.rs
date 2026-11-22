@@ -1,12 +1,12 @@
 //! The terrain window: a terrain file (`"format": "ponko-terrain"`, read by
-//! `Ctx::spawn_terrain`) shaped and painted in the 3D view. Brushes raise,
+//! `TerrainTile::spawn_from_file`) shaped and painted in the 3D view. Brushes raise,
 //! lower and smooth the ground, and paint a ground layer, under a circle
 //! that follows the mouse over the tile; each stroke is one step in the
 //! editor's history. Save writes the file, its heights (a 16-bit greyscale
 //! PNG) and its weight maps (RGBA PNGs) beside it. A name that isn't there
 //! yet makes a new flat tile.
 //!
-//! The tile shown is the one `spawn_terrain` made from the file, or, with
+//! The tile shown is the one `TerrainTile::spawn_from_file` made from the file, or, with
 //! **Show in the view**, one the editor puts in the middle of the world
 //! (not saved with the scene). Heights stay between the file's `low` and
 //! `high`.
@@ -364,7 +364,7 @@ impl Panels {
         };
         let built =
             crate::three::build_terrain(ctx, data, Vec2::new(corner.x, corner.z), layers).map_err(|e| e.to_string())?;
-        // The tile made before (the editor's, or `spawn_terrain`'s) goes.
+        // The tile made before (the editor's, or `TerrainTile::spawn_from_file`'s) goes.
         if let Some(old) = ctx.world.get::<crate::terrain::TerrainTile>(entity).copied() {
             ctx.free(old);
         }
@@ -485,7 +485,7 @@ impl Panels {
                     RichText::new(if shown {
                         "Drag over the tile in the view to use the brush"
                     } else {
-                        "The tile isn't in the world: Show in the view, or spawn it with spawn_terrain"
+                        "The tile isn't in the world: Show in the view, or spawn it with TerrainTile::spawn_from_file"
                     })
                     .weak(),
                 );
@@ -796,7 +796,7 @@ mod tests {
     }
 
     #[test]
-    fn a_layer_added_and_painted_is_saved_as_png_weights_that_spawn_terrain_loads() {
+    fn a_layer_added_and_painted_is_saved_as_png_weights_that_spawn_from_file_loads() {
         let f = Fixture::new("paint");
         let mut h = terrain_editor(&f);
         // Two layers from the "+ layer" menu.
@@ -828,7 +828,7 @@ mod tests {
         h.save();
         assert!(!h.ctx.editor.docs.unsaved(&f.path));
         // The runtime reads what was saved.
-        let e = h.ctx.spawn_terrain(&f.path, Vec3::ZERO).unwrap();
+        let e = crate::three::TerrainTile::spawn_from_file(&mut h.ctx, &f.path, Vec3::ZERO).unwrap();
         assert!(h.ctx.world.get::<crate::terrain::TerrainTile>(e).is_some());
         let text = std::fs::read_to_string(f.dir.join("hill.json")).unwrap();
         assert!(text.contains("\"ponko-terrain\""), "{text}");

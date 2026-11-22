@@ -474,7 +474,7 @@ units. **Show in the view** puts the tile in the middle of the world when
 the scene has none (it isn't saved with the scene).
 
 A terrain file is JSON, with its images beside it, and
-`ctx.spawn_terrain(path, corner)` spawns it as a [`TerrainTile`](3d.md#terrain):
+`TerrainTile::spawn_from_file(ctx, path, corner)` spawns it as a [`TerrainTile`](3d.md#terrain):
 
 ```json
 {
@@ -620,7 +620,7 @@ metallic dragged with the loaded model's material following and a PNG
 picked for its base colour; a shader error shown at its line and undone;
 custom values dragged onto the shader's materials; the raise brush held
 over a terrain (one step), a layer added, painted and saved as PNGs that
-`spawn_terrain` loads. Offscreen GPU tests check the previews draw: a
+`TerrainTile::spawn_from_file` loads. Offscreen GPU tests check the previews draw: a
 material edit recolours its model, a shader edit shows and a broken one
 keeps the last good look, a painted terrain layer shows where it was
 painted, the particle preview draws particles (none without it), and the

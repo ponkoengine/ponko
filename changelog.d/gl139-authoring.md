@@ -14,5 +14,5 @@
   - **Author → Terrain…**: raise, lower and smooth brushes and painted
     ground layers.
 - A terrain file format (`"format": "ponko-terrain"`, JSON with a 16-bit
-  height PNG and RGBA layer-weight PNGs) and `Ctx::spawn_terrain(path, at)`,
+  height PNG and RGBA layer-weight PNGs) and `TerrainTile::spawn_from_file(ctx, path, at)`,
   which spawns it as a `TerrainTile`.

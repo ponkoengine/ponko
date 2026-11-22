@@ -84,7 +84,7 @@ pub(crate) struct TerrainData {
     pub weights: Vec<Vec<u8>>,
 }
 
-/// The entity [`Ctx::spawn_terrain`] made, and the file it came from.
+/// The entity [`TerrainTile::spawn_from_file`] made, and the file it came from.
 #[derive(Clone, Debug, PartialEq, Component)]
 pub(crate) struct TerrainSource {
     pub path: String,
@@ -315,7 +315,7 @@ pub(crate) fn load_layers(ctx: &mut Ctx, path: &str, data: &TerrainData) -> Resu
     Ok(Some(ctx.gfx.try_load_texture_array(&names, TextureKind::Color)?))
 }
 
-impl Ctx {
+impl TerrainTile {
     /// Spawns the terrain tile of terrain file `path` (`"format":
     /// "ponko-terrain"`, as the editor's terrain window saves it: heights
     /// in a greyscale PNG, ground layers and their weight maps) with its
@@ -324,8 +324,9 @@ impl Ctx {
     ///
     /// ```no_run
     /// # use ponko::prelude::*;
-    /// # fn f(ctx: &mut Ctx) -> Result<(), ponko::Error> {
-    /// let hill = ctx.spawn_terrain("terrain/hill.json", vec3(-32.0, 0.0, -32.0))?;
+    /// # use ponko::terrain::TerrainTile;
+    /// # fn f(ctx: &mut Ctx) -> Result<(), ponko::error::Error> {
+    /// let hill = TerrainTile::spawn_from_file(ctx, "terrain/hill.json", vec3(-32.0, 0.0, -32.0))?;
     /// # Ok(()) }
     /// ```
     ///
@@ -335,15 +336,15 @@ impl Ctx {
     /// there (the terrain file or an image it names), and
     /// [`Decode`](crate::error::ErrorKind::Decode) for one that doesn't read
     /// (the message says what's wrong). Nothing is spawned then.
-    pub fn spawn_terrain(&mut self, path: &str, at: Vec3) -> Result<Entity, Error> {
-        let (_, text) = self.assets.read_text(path)?;
-        let sources = &self.assets.asset_sources;
+    pub fn spawn_from_file(ctx: &mut Ctx, path: &str, at: Vec3) -> Result<Entity, Error> {
+        let (_, text) = ctx.assets.read_text(path)?;
+        let sources = &ctx.assets.asset_sources;
         let data = TerrainData::read(path, &text, &mut |name| {
             sources.find(name)?.into_bytes().map_err(|e| e.with_path(name))
         })?;
-        let layers = load_layers(self, path, &data)?;
-        let built = build(self, &data, Vec2::new(at.x, at.z), layers)?;
-        Ok(self.world.spawn((
+        let layers = load_layers(ctx, path, &data)?;
+        let built = build(ctx, &data, Vec2::new(at.x, at.z), layers)?;
+        Ok(ctx.world.spawn((
             crate::d3::Transform::at(at),
             built.tile,
             TerrainSource { path: path.to_string() },
