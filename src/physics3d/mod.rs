@@ -30,6 +30,7 @@ pub use contacts::{ContactModifier3D, ContactPair3D};
 mod dominance;
 mod files;
 pub use files::CollisionMeshOptions;
+pub(crate) use files::collect as collider_files;
 mod joints;
 pub use joints::{Joint3D, JointAxis3D, JointDrive3D, JointMotion3D};
 mod query;

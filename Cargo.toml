@@ -201,6 +201,11 @@ texture2ddecoder = { version = "0.1.2", optional = true }
 # Rust with no dependencies of its own. The AV1 decoder is native only,
 # below.
 matroska-demuxer = { version = "0.8.1", optional = true }
+# Code mods (feature `mods-wasm`): a WebAssembly interpreter, pure Rust,
+# for every platform the engine builds for (the web included), with fuel
+# and memory limits. Chosen in the guide's "Mods" chapter over a JIT
+# (wasmtime: 8 MB more, no web) and scripting languages.
+wasmi = { version = "2.0.2", optional = true, default-features = false, features = ["std", "validate", "stable", "auto-dispatch", "deterministic"] }
 
 # The AV1 decoder's assembly on arm64 (feature `video`): dav1d's NEON code,
 # built with the system's C compiler, which links every build anyway. The
@@ -328,6 +333,8 @@ naga = { version = "30.0.1", features = ["wgsl-in", "glsl-out"] }
 # holds (`Device::get_internal_counters`), which wgpu only counts with this
 # feature (src/render/query_sets.rs). The wgpu the engine already uses.
 wgpu = { version = "30.0.1", features = ["counters"] }
+# The code mods' tests write their WebAssembly modules as text.
+wat = "=1.228.0"
 
 # The native accessibility test (tests/ui_access_macos.rs) asks an `NSView`
 # what a screen reader would ask it. The same objc2 versions AccessKit's
@@ -361,6 +368,9 @@ web-sys = { version = "0.3.107", features = ["Window", "Document", "Element", "L
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(ponko_web_thread_heaps)"] }
 
 [features]
+# Code mods: a mod's WebAssembly module, run sandboxed by an interpreter with
+# fuel and memory limits (`ponko::mods::call`).
+mods-wasm = ["dep:wasmi"]
 # Load loose Aseprite source files during development. Cooked exports need no decoder.
 aseprite-source = ["dep:ponko_aseprite"]
 # Unstable benchmark drivers for `crates/ponko_bench` (`ponko::render::SceneBench`,

@@ -43,7 +43,7 @@ impl Default for CollisionMeshOptions {
 }
 
 /// Every mesh description under a `"Collider3D"` in `json`.
-fn collect<'a>(json: &'a Value, out: &mut Vec<&'a Value>) {
+pub(crate) fn collect<'a>(json: &'a Value, out: &mut Vec<&'a Value>) {
     match json {
         Value::Object(map) => {
             for (k, value) in map {

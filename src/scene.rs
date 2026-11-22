@@ -902,6 +902,15 @@ impl Ctx {
     }
 }
 
+/// The names under every registered asset field
+/// ([`Assets::scene_asset_field`](crate::assets::Assets::scene_asset_field))
+/// anywhere in `json`, for checking that they exist.
+pub(crate) fn scene_asset_field_names(fields: &[SceneAssetField], json: &Value, out: &mut Vec<String>) {
+    for f in fields {
+        field_names(json, &f.component, &f.field, out);
+    }
+}
+
 /// The names (a string, or the strings of a list) under `component`
 /// objects' `field` anywhere in `json`.
 fn field_names(json: &Value, component: &str, field: &str, out: &mut Vec<String>) {
