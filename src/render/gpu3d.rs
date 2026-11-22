@@ -399,6 +399,12 @@ pub(crate) struct Renderer3D {
     /// no other model they jump over covers the same pixels (on; off
     /// draws them strictly far to near, for comparing).
     pub(crate) group_see_through: bool,
+    /// Whether that grouping uses each model's oriented box on screen
+    /// and lets models move past particles, ribbons and lines they don't
+    /// overlap (and additive ones past each other). Off: the bounding
+    /// sphere's rectangle, and every effect stops a model, as before (for
+    /// comparing).
+    pub(crate) tight_grouping: bool,
     /// The model passes' state changes since the last `take_state_changes`.
     state_counters: draw_order::StateCounters,
     /// The same for the particles, ribbons, lines and text of the main
@@ -1154,6 +1160,7 @@ impl Renderer3D {
             particles_in_blend_order: true,
             sort_strips_and_batches: true,
             group_see_through: true,
+            tight_grouping: true,
             see_through_counters: Default::default(),
             particle_counters: Default::default(),
             state_counters: Default::default(),
