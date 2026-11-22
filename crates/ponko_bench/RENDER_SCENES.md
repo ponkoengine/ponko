@@ -417,6 +417,15 @@ measurements, always with `shadow_refresh = 1`:
 - `slow-camera`: static actors, camera orbit step 0.00001 radians per frame.
 - `actors`: fixed camera, the scene's normal actor animation.
 - `thrash`: normal camera and actor motion, plus a moving sun every frame.
+- `vegetation`: as `slow-camera`, and `game-like` leaves out its skinned
+  walkers (which draw every cascade they are in every frame) and circles
+  low among the trees outside the town, so the trees' distance levels
+  (their band edge 60 units away) lie all around the camera.
+  `vegetation-moving` is the same with the camera at the usual speed.
+
+`PONKO_RENDER_SHADOW_REFRESH` (1 to 8) sets `Lighting::shadow_refresh`
+after the workload, and `PONKO_RENDER_SHADOW_LAG=1` turns on
+`Lighting::shadow_lag`: see [far cascades that may lag](SHADOW_LAG.md).
 
 Unset preserves the original baseline. The selected workload is recorded in
 `scenes[].scene.shadow_workload`. Use `static-world` for the first two,

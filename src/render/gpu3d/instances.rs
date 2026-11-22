@@ -1397,9 +1397,68 @@ impl Renderer3D {
                     let near = near_a.min(near_b) * (1.0 - 1e-3);
                     let far = far_a.max(far_b) * (1.0 + 1e-3);
                     edges(&mut |e: f32| !(e > 0.0 && e.is_finite()) || e * e < near || e * e > far)
+                        // A cell across an edge: its instances, each by the
+                        // distance the culler tests it by.
+                        || instances_hold(batch, cell, a, b, &edges)
                 })
             })
     }
+}
+
+/// Whether `batch` keeps the per-instance distances `shadow_bands_hold`
+/// tests cells across a band edge with: it casts shadows cut by distance.
+fn shadow_bands(batch: &Batch) -> bool {
+    batch.options.cast_shadows
+        && if batch.legacy_distance {
+            batch.levels.iter().any(|l| l.shadows) && batch.options.max_distance.is_finite()
+        } else {
+            batch
+                .levels
+                .iter()
+                .any(|l| l.shadows && (l.min_distance > 0.0 || l.max_distance.is_finite()))
+        }
+}
+
+/// Whether no instance of `cell` is on the other side of a band edge seen
+/// from `b` than from `a` (`edges` calls its test with every edge, and is
+/// true when every call was). Each instance's distance is the one the
+/// culler tests (`DistanceQuad`, the compute pass's `distance`), with a
+/// margin for rounding. False when the batch keeps no distances.
+fn instances_hold(
+    batch: &StaticBatch,
+    cell: &Cell,
+    a: Vec3,
+    b: Vec3,
+    edges: &dyn Fn(&mut dyn FnMut(f32) -> bool) -> bool,
+) -> bool {
+    if batch.distances.is_empty() || cell.count == 0 {
+        return false;
+    }
+    let end = cell.start + cell.count;
+    // Each lane's distance from either eye, nearest and farthest.
+    let mut lo = [f32::INFINITY; 4];
+    let mut hi = [f32::NEG_INFINITY; 4];
+    (cell.start / 4..end.div_ceil(4)).all(|quad| {
+        let Some(q) = batch.distances.get(quad as usize) else {
+            return false;
+        };
+        let (da, db) = (q.distances(a), q.distances(b));
+        let (near, far) = (da.min(db).to_array(), da.max(db).to_array());
+        for lane in 0..4 {
+            let i = quad * 4 + lane as u32;
+            (lo[lane], hi[lane]) = if (cell.start..end).contains(&i) {
+                (near[lane], far[lane])
+            } else {
+                (f32::INFINITY, f32::NEG_INFINITY)
+            };
+        }
+        // The culler measures the same distance in f32 (a few roundings
+        // of about 1e-7 each): 1e-5 of the edge keeps well clear of them.
+        edges(&mut |e: f32| {
+            let margin = e * 1e-5;
+            !(e > 0.0 && e.is_finite()) || (0..4).all(|l| e < lo[l] - margin || e > hi[l] + margin)
+        })
+    })
 }
 
 /// The squared distances from `eye` to the nearest and the farthest point
@@ -1727,7 +1786,11 @@ impl Renderer3D {
             max: batch.max,
             visible: Vec::new(),
             seen: Vec::new(),
-            distances: if cpu {
+            // The CPU path culls with them; a batch whose shadows are cut
+            // by distance keeps them on either path too, for telling
+            // whether a moved camera changes what its shadows draw (see
+            // `shadow_bands_hold`). 16 bytes an instance.
+            distances: if cpu || shadow_bands(batch) {
                 (0..batch.instances.len().div_ceil(4))
                     .map(|quad| {
                         let points: [[f32; 4]; 4] = std::array::from_fn(|lane| {

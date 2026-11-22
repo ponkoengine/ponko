@@ -1571,3 +1571,274 @@ fn held_cascades_follow_every_caster_change() {
     }
     assert!(stale > 0, "a lagging far cascade shows in the comparison");
 }
+
+/// `Lighting::shadow_lag` against exact shadows, on one scene with a caster
+/// moving every frame in the far cascade (camera still, its box held for
+/// up to 4 frames). Exact (the default): every frame matches drawing every
+/// cascade again, and the far cascade is drawn on every frame. Lagging: the
+/// held far cascade keeps its map while the caster moves (no pass), so the
+/// shadow there falls behind, by at most `shadow_refresh - 1` frames; on
+/// its turn it is drawn again and matches. The near cascade, which the
+/// caster doesn't reach, is kept in both. Once the caster stops, both match
+/// again within `shadow_refresh` frames and stay matched.
+#[test]
+fn lagging_far_cascades_trail_moving_casters_by_at_most_the_refresh() {
+    let Some(rig) = Rig::new() else {
+        crate::render::render_test_support::no_gpu("no GPU adapter or device");
+        return;
+    };
+    const REFRESH: u32 = 4;
+    for lag in [false, true] {
+        let mut ctx = Ctx::new(1.0 / 60.0, Vec2::new(SIZE as f32, SIZE as f32));
+        let matte = MaterialDesc {
+            color: Color::WHITE,
+            roughness: 1.0,
+            ..Default::default()
+        };
+        let material = ctx.gfx.create_material(matte);
+        let ground = MeshData::plane(80.0);
+        let cube = MeshData::cube(1.0);
+        let ground_mesh = ctx.gfx.create_mesh(&ground, material);
+        let cube_mesh = ctx.gfx.create_mesh(&cube, material);
+        ctx.world.spawn((Transform3D::default(), Model::new(ground_mesh)));
+        ctx.world
+            .spawn((Transform3D::at(vec3(0.0, 1.0, 0.0)), Model::new(cube_mesh)));
+        let mover = ctx.world.spawn((
+            Transform3D {
+                position: vec3(2.0, 1.5, -14.0),
+                scale: vec3(0.6, 3.0, 0.6),
+                ..Default::default()
+            },
+            Model::new(cube_mesh),
+        ));
+        ctx.scene3d.camera.position = vec3(0.0, 9.0, 9.0);
+        ctx.scene3d.camera.look_at(vec3(0.0, 0.0, -4.0));
+        ctx.scene3d.sky.atmosphere = false;
+        let lighting = &mut ctx.scene3d.lighting;
+        lighting.shadow_cascades = CASCADES;
+        lighting.shadow_resolution = 512;
+        lighting.shadow_distance = 40.0;
+        lighting.shadow_refresh = REFRESH;
+        lighting.shadow_lag = lag;
+        lighting.sun_direction = vec3(0.4, -0.8, 0.45);
+        let mut renderers = [rig.renderer(), rig.renderer()];
+        for r in &mut renderers {
+            r.create_material(&rig.device, &GpuMaterialDesc::new(&matte), &rig.textures);
+            for data in [&ground, &cube] {
+                r.create_mesh(&rig.device, data, &[(0..data.indices.len() as u32, material)], true);
+            }
+        }
+        let mut frames = [Frame3D::default(), Frame3D::default()];
+        let (near, far) = (1u32, 1u32 << (CASCADES - 1));
+        // (pixels differing from drawing every cascade, far box held,
+        // views kept, cascade passes drawn)
+        let mut draw = |ctx: &mut Ctx| {
+            let [cached, reference] = &mut renderers;
+            let [a, b] = &mut frames;
+            let image = rig.draw(cached, a, ctx);
+            reference.forget_shadows();
+            let expected = rig.draw(reference, b, ctx);
+            assert_eq!(a.sun_view_proj, b.sun_view_proj, "the same boxes");
+            assert_eq!(a.shadow_lag, lag, "the frame carries the setting");
+            let differing = image.chunks(4).zip(expected.chunks(4)).filter(|(x, y)| x != y).count();
+            (
+                differing,
+                a.redrawn & far == 0,
+                cached.shadow_views_kept(),
+                cached.shadow_cascades_redrawn(),
+                [image, expected],
+            )
+        };
+        for _ in 0..REFRESH {
+            let (differing, ..) = draw(&mut ctx);
+            assert_eq!(differing, 0, "lag {lag}: still frames match");
+        }
+        // The caster moves every frame.
+        let (mut behind, mut longest, mut run, mut held_kept) = (0, 0, 0, 0);
+        let mut worst = (0, Vec::new(), Vec::new());
+        for i in 0..4 * REFRESH {
+            ctx.world.get_mut::<Transform3D>(mover).unwrap().position.x += 0.4;
+            let (differing, held, kept, passes, [image, expected]) = draw(&mut ctx);
+            if lag && differing > worst.0 {
+                worst = (differing, expected, image);
+            }
+            assert_ne!(kept & near, 0, "lag {lag}, frame {i}: the near cascade is kept");
+            if !lag {
+                assert_eq!(differing, 0, "lag {lag}, frame {i}: exact shadows match");
+                assert_eq!((kept & far, passes), (0, 1), "frame {i}: the far cascade is drawn");
+                continue;
+            }
+            if held {
+                assert_eq!((kept & far, passes), (far, 0), "frame {i}: the held far cascade is kept");
+                held_kept += 1;
+            } else {
+                assert_eq!(differing, 0, "frame {i}: drawn on its turn, it matches");
+                assert_eq!(passes, 1, "frame {i}: its turn draws it");
+            }
+            run = if differing > 0 { run + 1 } else { 0 };
+            longest = longest.max(run);
+            behind += usize::from(differing > 0);
+        }
+        if lag {
+            keep_lag_picture(&worst.1, &worst.2);
+            assert!(held_kept >= 2 * REFRESH, "the far box was held on most frames: {held_kept}");
+            assert!(behind > 0, "the lag shows while the caster moves");
+            assert!(
+                longest < REFRESH as usize,
+                "behind for {longest} frames in a row, at most {} allowed",
+                REFRESH - 1
+            );
+        }
+        // Stopped: caught up within the refresh, then matched.
+        for _ in 0..REFRESH {
+            draw(&mut ctx);
+        }
+        for i in 0..2 * REFRESH {
+            let (differing, ..) = draw(&mut ctx);
+            assert_eq!(differing, 0, "lag {lag}, frame {i} after stopping: caught up");
+        }
+    }
+}
+
+/// With `PONKO_RENDER_TEST_IMAGES=1`, keeps a picture of what lagging
+/// shadows look like, at twice the size: exact shadows, the lagging ones on
+/// the same frame, and the pixels that differ (red, over the exact frame
+/// darkened).
+fn keep_lag_picture(exact: &[u8], lagging: &[u8]) {
+    const ZOOM: usize = 2;
+    let (w, h) = (SIZE as usize, SIZE as usize);
+    let width = w * 3 * ZOOM;
+    let mut rgba = vec![0u8; width * h * ZOOM * 4];
+    for y in 0..h * ZOOM {
+        for x in 0..w * ZOOM {
+            let at = ((y / ZOOM) * w + x / ZOOM) * 4;
+            let (e, l) = (&exact[at..at + 4], &lagging[at..at + 4]);
+            let diff: [u8; 4] = if e == l {
+                [e[0] / 3, e[1] / 3, e[2] / 3, 255]
+            } else {
+                [255, 40, 40, 255]
+            };
+            for (panel, px) in [e, l, &diff[..]].into_iter().enumerate() {
+                let out = (y * width + panel * w * ZOOM + x) * 4;
+                rgba[out..out + 4].copy_from_slice(px);
+            }
+        }
+    }
+    super::render_test_support::keep_image(&super::render_test_support::Image {
+        width: width as u32,
+        height: (h * ZOOM) as u32,
+        rgba,
+    });
+}
+
+/// An instance batch cut by distance for its shadows, in one cell that
+/// lies across the band edge (instances 4 and 20 units from the camera,
+/// the edge at 12): a camera moving a little keeps the held cascades,
+/// since no instance crosses the edge, where testing the cell alone drew
+/// them again on every move. Moving on until an instance does cross draws
+/// them again, and every frame matches drawing every cascade.
+#[test]
+fn a_cell_across_a_band_edge_keeps_held_cascades_until_an_instance_crosses() {
+    let Some(rig) = Rig::new() else {
+        crate::render::render_test_support::no_gpu("no GPU adapter or device");
+        return;
+    };
+    let mut ctx = Ctx::new(1.0 / 60.0, Vec2::splat(SIZE as f32));
+    ctx.scene3d.camera.position = vec3(0.0, 2.0, 0.0);
+    ctx.scene3d.camera.look_at(vec3(0.0, 0.0, -10.0));
+    ctx.scene3d.sky.atmosphere = false;
+    ctx.scene3d.lighting.shadow_cascades = CASCADES;
+    ctx.scene3d.lighting.shadow_resolution = 512;
+    ctx.scene3d.lighting.shadow_distance = 30.0;
+    ctx.scene3d.lighting.shadow_refresh = 8;
+    ctx.scene3d.lighting.sun_direction = vec3(0.3, -1.0, 0.2);
+    let desc = MaterialDesc {
+        color: Color::WHITE,
+        roughness: 1.0,
+        ..Default::default()
+    };
+    let material = ctx.gfx.create_material(desc);
+    let ground = MeshData::plane(80.0);
+    let cube = MeshData::cube(1.0);
+    let floor = ctx.gfx.create_mesh(&ground, material);
+    let proxy = ctx.gfx.create_mesh(&cube, material);
+    ctx.world.spawn((Transform3D::default(), Model::new(floor)));
+    // Posts 4 and 20 units ahead, and one at 13.5, half a unit past the edge.
+    let posts: Vec<Mat4> = [4.0, 13.5, 20.0]
+        .iter()
+        .map(|&z| Mat4::from_scale_rotation_translation(vec3(0.5, 3.0, 0.5), Quat::IDENTITY, vec3(0.0, 1.5, -z)))
+        .collect();
+    let batch = ctx.gfx.create_instance_batch_levels(
+        &[InstanceLevel {
+            mesh: proxy,
+            min_distance: 0.0,
+            max_distance: 12.0,
+            camera: true,
+            shadows: true,
+        }],
+        &posts,
+        &[],
+        Default::default(),
+    );
+    let cells = ctx.gfx.assets3d.instance_batches[batch.id as usize]
+        .as_ref()
+        .map_or(0, |b| b.cells.len());
+    assert_eq!(cells, 1, "the posts share one cell, across the edge");
+    let mut renderers = [rig.renderer(), rig.renderer()];
+    for r in &mut renderers {
+        r.create_material(&rig.device, &GpuMaterialDesc::new(&desc), &rig.textures);
+        r.create_mesh(
+            &rig.device,
+            &ground,
+            &[(0..ground.indices.len() as u32, material)],
+            true,
+        );
+        r.create_mesh(&rig.device, &cube, &[(0..cube.indices.len() as u32, material)], true);
+        r.set_instance_batch(
+            &rig.device,
+            &rig.queue,
+            batch.id,
+            ctx.gfx.assets3d.instance_batches[batch.id as usize].as_ref(),
+        );
+    }
+    let mut frames = [Frame3D::default(), Frame3D::default()];
+    let all = (1 << CASCADES) - 1;
+    // (held cascades, held ones kept, the picture)
+    let mut draw = |ctx: &mut Ctx, what: &str| {
+        let [cached, reference] = &mut renderers;
+        let [a, b] = &mut frames;
+        let image = rig.draw(cached, a, ctx);
+        reference.forget_shadows();
+        let expected = rig.draw(reference, b, ctx);
+        assert_eq!(a.sun_view_proj, b.sun_view_proj, "the same boxes");
+        assert!(image == expected, "{what}: kept cascades differ from drawing them");
+        let held = all & !a.redrawn;
+        (held, cached.shadow_views_kept() & held, image)
+    };
+    draw(&mut ctx, "first frame");
+    draw(&mut ctx, "still");
+    // Steps of 0.01 towards the posts: 30 of them, none reaching the edge.
+    let (mut held_frames, mut kept_frames) = (0, 0);
+    for i in 0..30 {
+        ctx.scene3d.camera.position.z -= 0.01;
+        let (held, kept, _) = draw(&mut ctx, &format!("move {i}"));
+        if held != 0 {
+            held_frames += 1;
+            kept_frames += usize::from(kept == held);
+        }
+    }
+    assert!(held_frames >= 10, "boxes were held on most frames: {held_frames}");
+    assert_eq!(
+        kept_frames, held_frames,
+        "no instance crossed the edge: every held cascade is kept"
+    );
+    // On in the same steps until the post at 13.5 comes within 12 and
+    // casts: a held cascade is drawn again then, and every frame matches.
+    let mut redrawn_held = 0;
+    for i in 0..160 {
+        ctx.scene3d.camera.position.z -= 0.01;
+        let (held, kept, _) = draw(&mut ctx, &format!("on {i}"));
+        redrawn_held += usize::from(held != 0 && kept != held);
+    }
+    assert!(redrawn_held > 0, "the crossing draws a held cascade again");
+}
