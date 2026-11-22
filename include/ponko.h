@@ -311,9 +311,9 @@
 
 #define PONKO_CRASH_REPORTS_VERSION 1
 
-#define PONKO_SLICE_LOADER_VERSION 1
-
 #define PONKO_ROLLBACK_INPUT_MAX 32
+
+#define PONKO_SLICE_LOADER_VERSION 1
 
 #define PONKO_WINDOW_NO_MONITOR UINT32_MAX
 
@@ -4056,22 +4056,6 @@ typedef struct PonkoCrashReports {
   void *user;
 } PonkoCrashReports;
 
-typedef uint32_t (*PonkoSliceStartFn)(void *user, const uint8_t *bytes, size_t len, void **out_state);
-
-typedef uint32_t (*PonkoSliceStepFn)(void *user, void *state, bool *out_done);
-
-typedef void (*PonkoSliceFreeFn)(void *user, void *state);
-
-typedef struct PonkoSliceLoader {
-  uint32_t struct_size;
-  uint32_t version;
-  PonkoSliceStartFn start;
-  PonkoSliceStepFn step;
-  PonkoSliceFreeFn free_state;
-  void *user;
-  PonkoFreeUserFn free_user;
-} PonkoSliceLoader;
-
 typedef struct PonkoRollbackConfig {
   uint32_t players;
   uint32_t player;
@@ -4091,6 +4075,22 @@ typedef struct PonkoRollbackStats {
   uint64_t bytes_sent;
   uint64_t rejected;
 } PonkoRollbackStats;
+
+typedef uint32_t (*PonkoSliceStartFn)(void *user, const uint8_t *bytes, size_t len, void **out_state);
+
+typedef uint32_t (*PonkoSliceStepFn)(void *user, void *state, bool *out_done);
+
+typedef void (*PonkoSliceFreeFn)(void *user, void *state);
+
+typedef struct PonkoSliceLoader {
+  uint32_t struct_size;
+  uint32_t version;
+  PonkoSliceStartFn start;
+  PonkoSliceStepFn step;
+  PonkoSliceFreeFn free_state;
+  void *user;
+  PonkoFreeUserFn free_user;
+} PonkoSliceLoader;
 
 typedef struct PonkoWindowVideoModeEx {
   uint32_t struct_size;
@@ -8008,11 +8008,6 @@ enum PonkoStatus ponko_far_terrain_update(struct PonkoFarTerrain *far, struct Po
 
 enum PonkoStatus ponko_far_terrain_clear(struct PonkoFarTerrain *far, struct PonkoCtx *ctx);
 
-enum PonkoStatus ponko_ctx_terrain_tile_spawn_from_file(struct PonkoCtx *ctx,
-                                                        const char *path,
-                                                        struct PonkoVec3 at,
-                                                        uint64_t *out_entity);
-
 struct PonkoTrail3D ponko_trail3d_new(float lifetime, float width);
 
 enum PonkoStatus ponko_ctx_set_trail3d(struct PonkoCtx *ctx,
@@ -8046,6 +8041,11 @@ struct PonkoMeshData *ponko_mesh_data_decal(const struct PonkoMeshData *data,
 enum PonkoStatus ponko_ctx_load_mesh_data(struct PonkoCtx *ctx,
                                           const char *path,
                                           struct PonkoMeshData **out_data);
+
+enum PonkoStatus ponko_ctx_terrain_tile_spawn_from_file(struct PonkoCtx *ctx,
+                                                        const char *path,
+                                                        struct PonkoVec3 at,
+                                                        uint64_t *out_entity);
 
 struct PonkoText3D ponko_text3d_default(void);
 
@@ -9461,6 +9461,26 @@ enum PonkoStatus ponko_ctx_set_gpu_buffer_motion(struct PonkoCtx *ctx,
 
 enum PonkoStatus ponko_ctx_reset_motion(struct PonkoCtx *ctx, uint64_t entity);
 
+enum PonkoStatus ponko_game_image_limits(struct PonkoGame *game,
+                                         uint32_t max_side,
+                                         uint64_t max_bytes);
+
+enum PonkoStatus ponko_ctx_set_image_limits(struct PonkoCtx *ctx,
+                                            uint32_t max_side,
+                                            uint64_t max_bytes);
+
+enum PonkoStatus ponko_ctx_image_limits(const struct PonkoCtx *ctx,
+                                        uint32_t *out_max_side,
+                                        uint64_t *out_max_bytes);
+
+enum PonkoStatus ponko_ctx_try_decode_texture(struct PonkoCtx *ctx,
+                                              const uint8_t *bytes,
+                                              size_t len,
+                                              const char *name,
+                                              uint32_t max_side,
+                                              uint64_t max_bytes,
+                                              struct PonkoTexture *out_texture);
+
 enum PonkoStatus ponko_ctx_feed_ime(struct PonkoCtx *ctx, const struct PonkoImeEvent *event);
 
 enum PonkoStatus ponko_ctx_preedit(struct PonkoCtx *ctx,
@@ -9529,26 +9549,6 @@ enum PonkoStatus ponko_ctx_ui_frame_ime(struct PonkoCtx *ctx,
 enum PonkoStatus ponko_input_scenario_ime(struct PonkoInputScenario *scenario,
                                           uint64_t tick,
                                           const struct PonkoImeEvent *event);
-
-enum PonkoStatus ponko_game_image_limits(struct PonkoGame *game,
-                                         uint32_t max_side,
-                                         uint64_t max_bytes);
-
-enum PonkoStatus ponko_ctx_set_image_limits(struct PonkoCtx *ctx,
-                                            uint32_t max_side,
-                                            uint64_t max_bytes);
-
-enum PonkoStatus ponko_ctx_image_limits(const struct PonkoCtx *ctx,
-                                        uint32_t *out_max_side,
-                                        uint64_t *out_max_bytes);
-
-enum PonkoStatus ponko_ctx_try_decode_texture(struct PonkoCtx *ctx,
-                                              const uint8_t *bytes,
-                                              size_t len,
-                                              const char *name,
-                                              uint32_t max_side,
-                                              uint64_t max_bytes,
-                                              struct PonkoTexture *out_texture);
 
 enum PonkoStatus ponko_ctx_load_strings(struct PonkoCtx *ctx, const char *path);
 
@@ -10915,15 +10915,6 @@ enum PonkoStatus ponko_ctx_saved_crash_reports(struct PonkoCtx *ctx,
                                                size_t capacity,
                                                size_t *out_len);
 
-enum PonkoStatus ponko_asset_group_add_sliced(struct PonkoAssetGroup *group,
-                                              const char *path,
-                                              const struct PonkoSliceLoader *loader);
-
-enum PonkoStatus ponko_ctx_take_asset_group_sliced(struct PonkoCtx *ctx,
-                                                   uint32_t id,
-                                                   const char *path,
-                                                   void **out_state);
-
 struct PonkoRollbackConfig ponko_rollback_config_default(uint32_t players, uint32_t player);
 
 enum PonkoStatus ponko_ctx_rollback_start(struct PonkoCtx *ctx,
@@ -10974,6 +10965,15 @@ enum PonkoStatus ponko_world_restore_snapshot(struct PonkoWorld *world,
 
 enum PonkoStatus ponko_world_snapshot_len(const struct PonkoWorldSnapshot *snapshot,
                                           size_t *out_len);
+
+enum PonkoStatus ponko_asset_group_add_sliced(struct PonkoAssetGroup *group,
+                                              const char *path,
+                                              const struct PonkoSliceLoader *loader);
+
+enum PonkoStatus ponko_ctx_take_asset_group_sliced(struct PonkoCtx *ctx,
+                                                   uint32_t id,
+                                                   const char *path,
+                                                   void **out_state);
 
 enum PonkoStatus ponko_window_video_mode_ex_defaults(struct PonkoWindowVideoModeEx *desc);
 

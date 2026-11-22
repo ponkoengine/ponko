@@ -718,6 +718,7 @@ fn frames_text(left: &Left, current: &[Module], resolve: &mut dyn FnMut(usize) -
 }
 
 /// A build id as hex digits.
+#[cfg_attr(not(any(target_vendor = "apple", target_os = "linux")), allow(dead_code))]
 fn hex_id(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
