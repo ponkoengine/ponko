@@ -10,7 +10,9 @@
   rollback, code mods, video, streaming and loading, UI frames and group
   fades, the sky kit and water, global illumination's culling,
   reflections and thin objects, upscaling, transparency, baked lighting,
-  area lights, stereo views, crowds and the battle showcase. Most numbers
+  area lights, stereo views, crowds, viewports, the web's time to the
+  first frame, ECS iteration and the battle showcase (frames and
+  simulation). Most numbers
   dropped to a third or less of what the busy machine gave.
 - Numbers that moved the wrong way are written as such: a code mod's call
   costs 58 ns against 46 ns measured before (it came with tying a mod's
@@ -26,3 +28,7 @@
   pass costs 0.34 to 2.31 ms in these scenes against about 0.2 ms over the
   floor and rails it was measured on. Written up in `RENDER_SCENES.md` and
   the guide; not changed here.
+- The web threads benchmark came out slower on an idle machine than on a
+  busy one, one-thread runs included (likely the headless browser on
+  efficiency cores; not confirmed); `web-threads.md` says so and keeps
+  the earlier table.

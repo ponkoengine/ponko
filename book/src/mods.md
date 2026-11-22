@@ -321,8 +321,11 @@ that moved the wrong way. Run back to back on the same idle machine, the
 earlier revision gives 0.045 to 0.046 ms and this one 0.058 ms, and this
 revision with `src/mods/code.rs` as it was before gives 0.045 to 0.046
 ms: the cost came with the change that ties a mod's game pointer to its
-`with_code` call (a per-thread call number). That runs once a tick, not
-once a call, so why it costs about 12 ns a call is not yet known.
+`with_code` call (a per-thread call number). With every function
+aligned to 128 bytes (`scripts/bench-aligned.sh`) the two still give
+0.057 and 0.046 ms, so it is not where the code landed in the binary.
+That change runs once a tick, not once a call, so why it costs about
+12 ns a call is not yet known.
 
 `get_field` and `set_field` go through reflection's JSON (the component is
 read whole, and written back for a set), so they cost what `get_json` and
