@@ -172,9 +172,8 @@ mod sky_kit;
 mod video;
 // Native API parity, round 5 (gl#157): crash reports and sliced loaders.
 mod crash;
-mod slice_loaders;
 mod rollback;
-pub use rollback::*;
+mod slice_loaders;
 pub use access::*;
 pub use actions::*;
 pub use ai::*;
@@ -191,6 +190,7 @@ pub use lightmap_bake::*;
 pub use locale::*;
 pub use nav_view::*;
 pub use replication_raw::*;
+pub use rollback::*;
 pub use scenario_touch::*;
 pub use skeleton2d::*;
 pub use sky_kit::*;

@@ -111,7 +111,8 @@ unsafe extern "C" fn race(ctx: *mut PonkoCtx, user: *mut c_void) {
                 assert_eq!(ponko_ctx_rollback_input(ctx, p, (&raw mut pad).cast(), 2), PONKO_OK);
                 pad
             } else {
-                t.checked_sub(u64::from(DELAY)).map_or(Pad::default(), |from| pad(p, from))
+                t.checked_sub(u64::from(DELAY))
+                    .map_or(Pad::default(), |from| pad(p, from))
             };
         }
         if g.online {
@@ -129,7 +130,10 @@ unsafe extern "C" fn race(ctx: *mut PonkoCtx, user: *mut c_void) {
             }
         }
         for (e, r) in g.racers.iter().zip(&now) {
-            assert_eq!(ponko_set(world, *e, g.component, (&raw const *r).cast(), size_of::<Racer>()), PONKO_OK);
+            assert_eq!(
+                ponko_set(world, *e, g.component, (&raw const *r).cast(), size_of::<Racer>()),
+                PONKO_OK
+            );
         }
     }
 }
@@ -149,11 +153,17 @@ unsafe extern "C" fn network(ctx: *mut PonkoCtx, user: *mut c_void) {
         g.seen.clear();
         g.seen.push((t, racers(ctx, g)));
         let input = pad(g.me, t);
-        assert_eq!(ponko_ctx_rollback_set_input(ctx, (&raw const input).cast(), 2), PONKO_OK);
+        assert_eq!(
+            ponko_ctx_rollback_set_input(ctx, (&raw const input).cast(), 2),
+            PONKO_OK
+        );
         let (mut data, mut size) = (null(), 0);
         assert_eq!(ponko_ctx_rollback_packet(ctx, &mut data, &mut size), PONKO_OK);
         let bytes = std::slice::from_raw_parts(data, size).to_vec();
-        g.noise = g.noise.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+        g.noise = g
+            .noise
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
         g.seq += 1;
         let wire = g.wire.clone().expect("a peer has a wire");
         // 1 to 5 frames late: later packets often overtake earlier ones.
@@ -178,12 +188,18 @@ unsafe extern "C" fn network(ctx: *mut PonkoCtx, user: *mut c_void) {
         due.sort_by_key(|p| std::cmp::Reverse(p.2));
         for p in &due {
             let mut accepted = false;
-            assert_eq!(ponko_ctx_rollback_receive(ctx, p.3.as_ptr().cast(), p.3.len(), &mut accepted), PONKO_OK);
+            assert_eq!(
+                ponko_ctx_rollback_receive(ctx, p.3.as_ptr().cast(), p.3.len(), &mut accepted),
+                PONKO_OK
+            );
             assert!(accepted);
         }
         assert_eq!(ponko_ctx_rollback_stats(ctx, &mut g.stats), PONKO_OK);
         let (mut frame, mut player) = (0, 0);
-        assert_eq!(ponko_ctx_rollback_desync(ctx, &mut g.desync, &mut frame, &mut player), PONKO_OK);
+        assert_eq!(
+            ponko_ctx_rollback_desync(ctx, &mut g.desync, &mut frame, &mut player),
+            PONKO_OK
+        );
     }
 }
 
@@ -207,9 +223,15 @@ fn play(me: u32, wire: Option<Arc<Wire>>) -> Box<Game> {
     let game = new_game();
     unsafe {
         assert_eq!(ponko_game_headless_frames(game, true), PONKO_OK);
-        assert_eq!(ponko_game_sim_system(game, c"race".as_ptr(), 1, Some(race), user), PONKO_OK);
+        assert_eq!(
+            ponko_game_sim_system(game, c"race".as_ptr(), 1, Some(race), user),
+            PONKO_OK
+        );
         let frame_system = if online { network } else { record };
-        assert_eq!(ponko_game_system(game, c"net".as_ptr(), Some(frame_system), user), PONKO_OK);
+        assert_eq!(
+            ponko_game_system(game, c"net".as_ptr(), Some(frame_system), user),
+            PONKO_OK
+        );
     }
     let ticks = if online { FRAMES } else { FRAMES + 1 };
     let world = run_game(game, ticks, |ctx| unsafe {
@@ -237,9 +259,15 @@ fn play(me: u32, wire: Option<Arc<Wire>>) -> Box<Game> {
             config.checksum_every = 1;
             assert_eq!(ponko_ctx_rollback_start(ctx, &config), PONKO_OK);
             let input = pad(g.me, 0);
-            assert_eq!(ponko_ctx_rollback_set_input(ctx, (&raw const input).cast(), 2), PONKO_OK);
+            assert_eq!(
+                ponko_ctx_rollback_set_input(ctx, (&raw const input).cast(), 2),
+                PONKO_OK
+            );
             let (mut frame, mut has, mut confirmed) = (9, true, 9);
-            assert_eq!(ponko_ctx_rollback_frames(ctx, &mut frame, &mut has, &mut confirmed), PONKO_OK);
+            assert_eq!(
+                ponko_ctx_rollback_frames(ctx, &mut frame, &mut has, &mut confirmed),
+                PONKO_OK
+            );
             assert_eq!(frame, 0, "no tick ran yet");
         }
     });
@@ -260,9 +288,16 @@ fn two_c_peers_over_a_late_reordering_link_reach_the_offline_world() {
     for (i, peer) in [&first, &second].into_iter().enumerate() {
         assert!(!peer.desync, "peer {i}: the world hashes agree");
         assert!(peer.stats.rollbacks > 0, "peer {i} rolled back");
-        assert_eq!(peer.resimulated_ticks, peer.stats.resimulated, "peer {i}: ticks run again");
+        assert_eq!(
+            peer.resimulated_ticks, peer.stats.resimulated,
+            "peer {i}: ticks run again"
+        );
         let (tick, last) = peer.seen[0];
-        let reference = offline.seen.iter().find(|s| s.0 == tick).expect("the offline run reached that tick");
+        let reference = offline
+            .seen
+            .iter()
+            .find(|s| s.0 == tick)
+            .expect("the offline run reached that tick");
         assert_eq!(last, reference.1, "peer {i}: the offline world at tick {tick}");
     }
     assert_eq!(first.seen, second.seen, "both peers end in the same world");
@@ -281,17 +316,29 @@ fn rollback_calls_refuse_bad_arguments_and_say_when_no_session_runs() {
         assert_eq!(ponko_ctx_rollback_start(ctx, null()), PONKO_INVALID_ARGUMENT);
 
         let byte = 1u8;
-        assert_eq!(ponko_ctx_rollback_set_input(ctx, (&raw const byte).cast(), 1), PONKO_NOT_FOUND);
+        assert_eq!(
+            ponko_ctx_rollback_set_input(ctx, (&raw const byte).cast(), 1),
+            PONKO_NOT_FOUND
+        );
         assert_eq!(ponko_ctx_rollback_stop(ctx), PONKO_NOT_FOUND);
         let mut out = [0u8; 4];
-        assert_eq!(ponko_ctx_rollback_input(ctx, 0, out.as_mut_ptr().cast(), 4), PONKO_NOT_FOUND);
+        assert_eq!(
+            ponko_ctx_rollback_input(ctx, 0, out.as_mut_ptr().cast(), 4),
+            PONKO_NOT_FOUND
+        );
 
         let config = ponko_rollback_config_default(2, 0);
         assert_eq!(ponko_ctx_rollback_start(ctx, &config), PONKO_OK);
         let big = [0u8; PONKO_ROLLBACK_INPUT_MAX + 1];
-        assert_eq!(ponko_ctx_rollback_set_input(ctx, big.as_ptr().cast(), big.len()), PONKO_INVALID_ARGUMENT);
+        assert_eq!(
+            ponko_ctx_rollback_set_input(ctx, big.as_ptr().cast(), big.len()),
+            PONKO_INVALID_ARGUMENT
+        );
         let mut accepted = true;
-        assert_eq!(ponko_ctx_rollback_receive(ctx, b"junk".as_ptr().cast(), 4, &mut accepted), PONKO_OK);
+        assert_eq!(
+            ponko_ctx_rollback_receive(ctx, b"junk".as_ptr().cast(), 4, &mut accepted),
+            PONKO_OK
+        );
         assert!(!accepted, "not a rollback packet");
         let mut stats = PonkoRollbackStats::default();
         assert_eq!(ponko_ctx_rollback_stats(ctx, &mut stats), PONKO_OK);
@@ -306,7 +353,10 @@ fn snapshots_restore_c_components_and_entity_ids() {
     unsafe {
         let w = ponko_world_new();
         let mut id = 0;
-        assert_eq!(ponko_component_register(w, c"racer".as_ptr(), size_of::<Racer>(), 4, &mut id), PONKO_OK);
+        assert_eq!(
+            ponko_component_register(w, c"racer".as_ptr(), size_of::<Racer>(), 4, &mut id),
+            PONKO_OK
+        );
         let spawn = |x: f32| {
             let r = Racer { x, ..Racer::default() };
             let value = PonkoValue {
@@ -324,8 +374,14 @@ fn snapshots_restore_c_components_and_entity_ids() {
         let mut n = 0;
         assert_eq!(ponko_world_snapshot_len(s, &mut n), PONKO_OK);
         assert_eq!(n, 1);
-        let moved = Racer { x: 5.0, ..Racer::default() };
-        assert_eq!(ponko_set(w, a, id, (&raw const moved).cast(), size_of::<Racer>()), PONKO_OK);
+        let moved = Racer {
+            x: 5.0,
+            ..Racer::default()
+        };
+        assert_eq!(
+            ponko_set(w, a, id, (&raw const moved).cast(), size_of::<Racer>()),
+            PONKO_OK
+        );
         let b = spawn(2.0);
         assert_eq!(ponko_world_restore_snapshot(w, s), PONKO_OK);
         let mut r = Racer::default();

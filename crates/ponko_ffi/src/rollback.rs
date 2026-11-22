@@ -165,7 +165,10 @@ unsafe fn session<R>(ctx: *mut PonkoCtx, f: impl FnOnce(&mut Session) -> Result<
 /// assert_eq!(unsafe { ponko_ffi::ponko_ctx_rollback_start(std::ptr::null_mut(), &c) } as u32, 1);
 /// ```
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ponko_ctx_rollback_start(ctx: *mut PonkoCtx, config: *const PonkoRollbackConfig) -> PonkoStatus {
+pub unsafe extern "C" fn ponko_ctx_rollback_start(
+    ctx: *mut PonkoCtx,
+    config: *const PonkoRollbackConfig,
+) -> PonkoStatus {
     boundary(|| {
         if config.is_null() {
             return Err(invalid("config is null"));
@@ -224,7 +227,11 @@ pub unsafe extern "C" fn ponko_ctx_rollback_stop(ctx: *mut PonkoCtx) -> PonkoSta
 /// assert_eq!(unsafe { ponko_ffi::ponko_ctx_rollback_set_input(std::ptr::null_mut(), std::ptr::null(), 0) } as u32, 1);
 /// ```
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ponko_ctx_rollback_set_input(ctx: *mut PonkoCtx, data: *const c_void, size: usize) -> PonkoStatus {
+pub unsafe extern "C" fn ponko_ctx_rollback_set_input(
+    ctx: *mut PonkoCtx,
+    data: *const c_void,
+    size: usize,
+) -> PonkoStatus {
     boundary(|| {
         if size > PONKO_ROLLBACK_INPUT_MAX {
             return Err(invalid("rollback input is over PONKO_ROLLBACK_INPUT_MAX bytes"));
@@ -422,7 +429,10 @@ pub unsafe extern "C" fn ponko_ctx_rollback_frames(
 /// assert_eq!(unsafe { ponko_ffi::ponko_ctx_rollback_stats(std::ptr::null_mut(), std::ptr::null_mut()) } as u32, 1);
 /// ```
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ponko_ctx_rollback_stats(ctx: *mut PonkoCtx, out_stats: *mut PonkoRollbackStats) -> PonkoStatus {
+pub unsafe extern "C" fn ponko_ctx_rollback_stats(
+    ctx: *mut PonkoCtx,
+    out_stats: *mut PonkoRollbackStats,
+) -> PonkoStatus {
     boundary(|| {
         if out_stats.is_null() {
             return Err(invalid("output is null"));
@@ -539,7 +549,10 @@ fn snapshot_failure(e: SnapshotError) -> Failure {
 /// }
 /// ```
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ponko_world_save_snapshot(world: *mut PonkoWorld, snapshot: *mut PonkoWorldSnapshot) -> PonkoStatus {
+pub unsafe extern "C" fn ponko_world_save_snapshot(
+    world: *mut PonkoWorld,
+    snapshot: *mut PonkoWorldSnapshot,
+) -> PonkoStatus {
     boundary(|| {
         if snapshot.is_null() {
             return Err(invalid("snapshot is null"));
@@ -587,7 +600,10 @@ pub unsafe extern "C" fn ponko_world_restore_snapshot(
 /// assert_eq!(n, 0);
 /// ```
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ponko_world_snapshot_len(snapshot: *const PonkoWorldSnapshot, out_len: *mut usize) -> PonkoStatus {
+pub unsafe extern "C" fn ponko_world_snapshot_len(
+    snapshot: *const PonkoWorldSnapshot,
+    out_len: *mut usize,
+) -> PonkoStatus {
     boundary(|| {
         if snapshot.is_null() {
             return Err(invalid("snapshot is null"));

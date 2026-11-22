@@ -169,12 +169,18 @@ fn a_session_allocates_nothing_per_frame_once_warm() {
 fn with_physics_the_world_part_still_allocates_nothing() {
     use ponko::d2::{Collider, RigidBody, Transform};
     let m = measure(Game::new("alloc", 1, 1).physics(vec2(0.0, 980.0)), |ctx| {
-        ctx.world
-            .spawn((Transform::at(vec2(0.0, 300.0)), RigidBody::fixed(), Collider::rect(vec2(4000.0, 20.0))));
+        ctx.world.spawn((
+            Transform::at(vec2(0.0, 300.0)),
+            RigidBody::fixed(),
+            Collider::rect(vec2(4000.0, 20.0)),
+        ));
         for i in 0..100 {
             let at = vec2((i % 20) as f32 * 11.0 - 100.0, 280.0 - (i / 20) as f32 * 11.0);
-            ctx.world
-                .spawn((Transform::at(at), RigidBody::dynamic(), Collider::rect(vec2(10.0, 10.0))));
+            ctx.world.spawn((
+                Transform::at(at),
+                RigidBody::dynamic(),
+                Collider::rect(vec2(10.0, 10.0)),
+            ));
         }
     });
     for name in ["rollback/save", "rollback/load"] {
@@ -184,6 +190,9 @@ fn with_physics_the_world_part_still_allocates_nothing() {
     }
     for name in ["rollback/save physics", "rollback/load physics"] {
         let s = scope(&m, name);
-        eprintln!("{name}: {:.0} allocations, {:.3} ms per frame", s.allocs_per_frame, s.avg_ms);
+        eprintln!(
+            "{name}: {:.0} allocations, {:.3} ms per frame",
+            s.allocs_per_frame, s.avg_ms
+        );
     }
 }

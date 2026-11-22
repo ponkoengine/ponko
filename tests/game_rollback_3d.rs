@@ -53,7 +53,10 @@ fn inputs(ctx: &Ctx) -> [Pad; 2] {
         return [i[0], i[1]];
     }
     let t = ctx.time.sim_tick();
-    let at = |p| t.checked_sub(u64::from(DELAY)).map_or(Pad::default(), |from| pad(p, from));
+    let at = |p| {
+        t.checked_sub(u64::from(DELAY))
+            .map_or(Pad::default(), |from| pad(p, from))
+    };
     [at(0), at(1)]
 }
 
@@ -78,13 +81,23 @@ fn setup(ctx: &mut Ctx) {
     // A pile of boxes the players run into.
     for i in 0..18 {
         let at = vec3((i % 3) as f32 * 0.7 - 0.7, 0.5 + (i / 3) as f32 * 1.05, 3.0);
-        ctx.world.spawn((Pos(at), Transform::at(at), RigidBody::dynamic(), Collider::cuboid(Vec3::ONE)));
+        ctx.world.spawn((
+            Pos(at),
+            Transform::at(at),
+            RigidBody::dynamic(),
+            Collider::cuboid(Vec3::ONE),
+        ));
     }
 }
 
 fn steer(ctx: &mut Ctx) {
     let pads = inputs(ctx);
-    let players: Vec<(Entity, u8)> = ctx.world.query::<(Entity, &Player)>().iter().map(|(e, p)| (e, p.0)).collect();
+    let players: Vec<(Entity, u8)> = ctx
+        .world
+        .query::<(Entity, &Player)>()
+        .iter()
+        .map(|(e, p)| (e, p.0))
+        .collect();
     for (e, id) in players {
         let pad = pads[usize::from(id)];
         let push = vec3(f32::from(pad.x), if pad.jump { 4.0 } else { 0.0 }, f32::from(pad.z)) * 0.4;
@@ -94,7 +107,9 @@ fn steer(ctx: &mut Ctx) {
 }
 
 fn follow(ctx: &mut Ctx) {
-    ctx.world.query::<(&mut Pos, &Transform)>().for_each(|(p, t)| p.0 = t.position);
+    ctx.world
+        .query::<(&mut Pos, &Transform)>()
+        .for_each(|(p, t)| p.0 = t.position);
 }
 
 fn game(name: &str) -> Game {
@@ -185,7 +200,10 @@ fn peer(me: usize, wire: Arc<Wire>) -> Peer {
             if me == 1 && HELD.contains(&frame) {
                 due = HELD.end + 1;
             }
-            wire.packets.lock().unwrap().push((1 - me, due, seq, rb.packet().to_vec()));
+            wire.packets
+                .lock()
+                .unwrap()
+                .push((1 - me, due, seq, rb.packet().to_vec()));
             wire.gate.wait();
             frame += 1;
             let mut arrived: Vec<Packet> = Vec::new();
@@ -206,7 +224,13 @@ fn peer(me: usize, wire: Arc<Wire>) -> Peer {
                 assert!(rb.receive(&p.3), "every packet is valid");
             }
             let s = rb.stats();
-            *out.lock().unwrap() = ((tick, hash), rb.confirmed_frame(), s.rollbacks, s.deepest, rb.desync().is_some());
+            *out.lock().unwrap() = (
+                (tick, hash),
+                rb.confirmed_frame(),
+                s.rollbacks,
+                s.deepest,
+                rb.desync().is_some(),
+            );
         })
         .run_headless(PASSES, move |ctx| {
             setup(ctx);
@@ -254,12 +278,23 @@ fn two_peers_with_3d_physics_and_late_reordered_inputs_end_in_the_same_world() {
             "peer {i}: every input that changed is in by the end"
         );
         let (tick, hash) = peer.last;
-        assert_eq!(Some(&hash), reference.get(&tick), "peer {i}: the offline world at tick {tick}");
+        assert_eq!(
+            Some(&hash),
+            reference.get(&tick),
+            "peer {i}: the offline world at tick {tick}"
+        );
         for (tick, hash) in &peer.confirmed {
-            assert_eq!(Some(hash), reference.get(tick), "peer {i}, tick {tick}: the offline world");
+            assert_eq!(
+                Some(hash),
+                reference.get(tick),
+                "peer {i}, tick {tick}: the offline world"
+            );
         }
     }
-    assert_eq!(peers[0].last, peers[1].last, "both peers end on the same tick with the same world hash");
+    assert_eq!(
+        peers[0].last, peers[1].last,
+        "both peers end on the same tick with the same world hash"
+    );
     // Ticks both peers saw confirmed at the time: the same world.
     let common: Vec<_> = peers[0]
         .confirmed

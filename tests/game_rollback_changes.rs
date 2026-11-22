@@ -44,7 +44,10 @@ fn inputs(ctx: &Ctx) -> [Pad; 2] {
         return [i[0], i[1]];
     }
     let t = ctx.time.sim_tick();
-    let at = |p| t.checked_sub(u64::from(DELAY)).map_or(Pad::default(), |from| pad(p, from));
+    let at = |p| {
+        t.checked_sub(u64::from(DELAY))
+            .map_or(Pad::default(), |from| pad(p, from))
+    };
     [at(0), at(1)]
 }
 
