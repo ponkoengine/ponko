@@ -17,7 +17,9 @@
 
 use std::fmt;
 
-use wasmi::{Caller, Config, Engine, Extern, Func, Instance, Linker, Module, Store, StoreLimits, StoreLimitsBuilder, Val};
+use wasmi::{
+    Caller, Config, Engine, Extern, Func, Instance, Linker, Module, Store, StoreLimits, StoreLimitsBuilder, Val,
+};
 
 use super::{ModError, ModProblem};
 use crate::ctx::Ctx;
@@ -135,7 +137,9 @@ pub struct ModFn {
 
 impl fmt::Debug for ModFn {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ModFn").field("slot", &self.slot).finish_non_exhaustive()
+        f.debug_struct("ModFn")
+            .field("slot", &self.slot)
+            .finish_non_exhaustive()
     }
 }
 
@@ -161,7 +165,8 @@ pub(super) fn engine() -> Engine {
 
 /// Compiles a mod's module and checks what it imports, without running it.
 pub(super) fn compile(engine: &Engine, bytes: &[u8]) -> Result<Module, ModProblem> {
-    let module = Module::new(engine, bytes).map_err(|e| ModProblem::Code(format!("not a valid WebAssembly module: {e}")))?;
+    let module =
+        Module::new(engine, bytes).map_err(|e| ModProblem::Code(format!("not a valid WebAssembly module: {e}")))?;
     for import in module.imports() {
         let known = import.module() == HOST_MODULE && ["log", "dt", "cast_ray"].contains(&import.name());
         if !known {
@@ -188,7 +193,8 @@ fn linker(engine: &Engine) -> Linker<Host> {
         }
         let host = caller.data_mut();
         if host.log.len() < MAX_LOG_LINES {
-            host.log.push((host.current, String::from_utf8_lossy(&buf).into_owned()));
+            host.log
+                .push((host.current, String::from_utf8_lossy(&buf).into_owned()));
         }
     };
     let dt = |caller: Caller<'_, Host>| caller.data().dt;
@@ -313,7 +319,10 @@ impl ModCode {
     pub fn call(&mut self, f: ModFn, args: &[ModValue]) -> Result<Option<ModValue>, ModError> {
         let trap = |code: &Self, why: String| ModError::new(&code.mods[f.slot].0, None, ModProblem::Trap(why));
         if args.len() > MAX_PARAMS {
-            return Err(trap(self, format!("{} arguments, more than the {MAX_PARAMS} a call takes", args.len())));
+            return Err(trap(
+                self,
+                format!("{} arguments, more than the {MAX_PARAMS} a call takes", args.len()),
+            ));
         }
         let ty = f.func.ty(&self.store);
         if ty.results().len() > 1 {
@@ -322,7 +331,8 @@ impl ModCode {
         self.args.clear();
         self.args.extend(args.iter().map(|a| a.to_val()));
         self.results.clear();
-        self.results.extend(ty.results().iter().map(|t| Val::default_for_ty(*t)));
+        self.results
+            .extend(ty.results().iter().map(|t| Val::default_for_ty(*t)));
         self.store.data_mut().current = f.slot;
         let fueled = self.store.set_fuel(self.fuel_per_call);
         debug_assert!(fueled.is_ok(), "fuel is on in `engine()`");
@@ -374,13 +384,21 @@ pub fn with_code<R>(ctx: &mut Ctx, f: impl FnOnce(&mut ModCode) -> R) -> Option<
     code.store.data_mut().dt = ctx.time.dt();
     #[cfg(feature = "physics")]
     std::mem::swap(
-        code.store.data_mut().physics.get_mut().unwrap_or_else(|e| e.into_inner()),
+        code.store
+            .data_mut()
+            .physics
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner()),
         &mut ctx.physics,
     );
     let out = f(&mut code);
     #[cfg(feature = "physics")]
     std::mem::swap(
-        code.store.data_mut().physics.get_mut().unwrap_or_else(|e| e.into_inner()),
+        code.store
+            .data_mut()
+            .physics
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner()),
         &mut ctx.physics,
     );
     ctx.world.insert_resource(code);

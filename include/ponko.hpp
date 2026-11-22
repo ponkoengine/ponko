@@ -7853,6 +7853,20 @@ public:
         for (const auto& p : paths) raw.push_back(p.c_str());
         detail::check(ponko_ctx_mount_mods(raw_, raw.data(), raw.size()));
     }
+    /// One mod pack held in memory for mount_mods_from_memory: a name for
+    /// errors and the pack's bytes (what `ponko pack` writes).
+    struct mod_bytes {
+        std::string name;
+        std::vector<std::uint8_t> bytes;
+    };
+    /// As mount_mods, with packs held in memory (downloaded, built in): the
+    /// bytes are copied, so `mods` may go right after.
+    void mount_mods_from_memory(const std::vector<mod_bytes>& mods) {
+        std::vector<PonkoModBytes> raw;
+        raw.reserve(mods.size());
+        for (const auto& m : mods) raw.push_back(PonkoModBytes{m.name.c_str(), m.bytes.data(), m.bytes.size()});
+        detail::check(ponko_ctx_mount_mods_from_memory(raw_, raw.data(), raw.size()));
+    }
     /// The mounted mods' ids, in load order (empty before mount_mods).
     std::vector<std::string> mod_ids() {
         std::size_t n = 0;

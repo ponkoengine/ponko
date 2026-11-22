@@ -1,7 +1,8 @@
 //! Data-only mods (`ponko::mods`): load order, overrides by path, and the
 //! checks that refuse a bad mod whole, naming the mod, the file and the
 //! reason, before anything of it is used. Includes hostile packs: damaged,
-//! path traversal, oversized entries, deeply nested JSON. No window.
+//! path traversal, oversized entries, deeply nested JSON; and asset
+//! references checked at mount. No window.
 
 use ponko::mods::{ModError, ModLimits, ModPack, ModProblem, ModSet, Mods};
 use ponko::prelude::*;
@@ -265,7 +266,13 @@ fn a_prefab_tree_that_changes_an_included_prefab_is_checked_by_component_name() 
     let fine = tree.replace("Ghost", "Slime");
     game(|ctx| {
         ModSet::new()
-            .with(simple("tree", &[("prefabs/king.json", &fine)]))
+            .with(simple(
+                "tree",
+                &[
+                    ("prefabs/king.json", &fine),
+                    ("prefabs/slime.json", &prefab(r#"{"Slime":{"speed":1.0,"hp":3}}"#)),
+                ],
+            ))
             .mount(ctx)
             .expect("a partial Slime in an included prefab's change is fine");
     });
@@ -507,4 +514,121 @@ fn deeply_nested_json_is_refused_not_a_stack_overflow() {
     let err = mount_err(ModSet::new().with(simple("deep", &[("deep.json", &deep)])));
     assert_eq!(err.file(), Some("deep.json"));
     assert!(err.to_string().contains("recursion limit"), "{err}");
+}
+
+// ---- asset references -------------------------------------------------------------
+
+#[test]
+fn mounting_lists_every_missing_asset_reference_in_one_error_naming_file_and_name() {
+    // Two prefabs, each naming an asset no mod and not the game has, and
+    // one naming the mod's own sheet and one of the game's files: fine.
+    let sprite = |texture: &str| {
+        prefab(&format!(
+            r#"{{"Transform2D":{{}},"Sprite":{{"texture":"{texture}"}},"Slime":{{"speed":1.0,"hp":1}}}}"#
+        ))
+    };
+    let set = || {
+        ModSet::new().with(simple(
+            "art",
+            &[
+                ("enemies/bat.json", &sprite("sprites/bat.png")),
+                ("enemies/rat.json", &sprite("sprites/rat.png")),
+                ("enemies/own.json", &sprite("sprites/own.png")),
+                ("sprites/own.png", "not decoded at mount"),
+                ("enemies/games.json", &sprite("ember_hop/sprites/drip.png")),
+            ],
+        ))
+    };
+    let err = mount_err(set());
+    assert_eq!(err.mod_id(), "art");
+    assert_eq!(
+        err.file(),
+        Some("enemies/bat.json"),
+        "the first file that names a missing one"
+    );
+    assert_eq!(
+        err.problem(),
+        &ModProblem::MissingAssets(vec![
+            ("enemies/bat.json".into(), "sprites/bat.png".into()),
+            ("enemies/rat.json".into(), "sprites/rat.png".into()),
+        ])
+    );
+    let text = err.to_string();
+    assert!(
+        text.contains(r#""sprites/bat.png" (in "enemies/bat.json")"#)
+            && text.contains(r#""sprites/rat.png" (in "enemies/rat.json")"#),
+        "{text}"
+    );
+    let engine: ponko::error::Error = err.into();
+    assert_eq!(engine.kind(), ponko::error::ErrorKind::NotFound);
+}
+
+#[test]
+fn an_asset_another_mod_of_the_set_ships_or_an_included_prefab_counts_as_there() {
+    let uses = prefab(r#"{"Transform2D":{},"Sprite":{"texture":"shared/sheet.png"}}"#);
+    let includes = r#"{"format":"ponko-prefab","version":2,"entities":[
+        {"entity":1,"prefab":"enemies/base.json","components":{}},
+        {"entity":2,"prefab":"enemies/gone.json","components":{}}]}"#;
+    game(|ctx| {
+        ModSet::new()
+            .with(simple("art", &[("shared/sheet.png", "png bytes")]))
+            .with(simple("enemies", &[("enemies/base.json", &uses)]))
+            .mount(ctx)
+            .expect("the sheet is in the other mod");
+    });
+    let err = mount_err(ModSet::new().with(simple(
+        "tree",
+        &[
+            ("enemies/king.json", includes),
+            ("enemies/base.json", &uses),
+            ("shared/sheet.png", "png"),
+        ],
+    )));
+    assert_eq!(
+        err.problem(),
+        &ModProblem::MissingAssets(vec![("enemies/king.json".into(), "enemies/gone.json".into())])
+    );
+}
+
+#[test]
+fn a_game_registered_asset_field_is_checked_too() {
+    #[derive(Component, Serialize, Deserialize)]
+    struct ShopItem {
+        icon: String,
+    }
+    let item = prefab(r#"{"ShopItem":{"icon":"icons/gone.png"}}"#);
+    let mut err = None;
+    Game::new("mods", 1, 1).run_headless(0, |ctx| {
+        ctx.world.reflect::<ShopItem>();
+        ctx.assets
+            .scene_asset_field::<ShopItem>("icon", |ctx, name| ctx.gfx.try_load_texture(name).map(|_| ()));
+        err = ModSet::new()
+            .with(simple("shop", &[("items/apple.json", &item)]))
+            .mount(ctx)
+            .err();
+    });
+    assert_eq!(
+        err.expect("refused").problem(),
+        &ModProblem::MissingAssets(vec![("items/apple.json".into(), "icons/gone.png".into())])
+    );
+}
+
+// ---- code without the feature -----------------------------------------------------
+
+#[cfg(not(feature = "mods-wasm"))]
+#[test]
+fn a_mod_with_code_is_refused_by_a_game_built_without_code_mods() {
+    let manifest = r#"{"format":"ponko-mod","version":1,"id":"coded","code":"code.wasm"}"#;
+    let wasm = wat::parse_str("(module)").unwrap();
+    let pack = ModPack::from_files(
+        "coded",
+        [("mod.json", manifest.as_bytes().to_vec()), ("code.wasm", wasm)],
+    )
+    .unwrap();
+    let err = mount_err(ModSet::new().with(pack));
+    assert_eq!(err.file(), Some("code.wasm"));
+    assert!(
+        matches!(err.problem(), ModProblem::Code(why) if why.contains("mods-wasm")),
+        "{err}"
+    );
 }

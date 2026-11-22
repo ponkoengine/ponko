@@ -417,7 +417,9 @@ impl ModPack {
         };
         let bad = |problem| ModError::new(self.id(), Some(name), problem);
         let Some((_, _, Some(bytes))) = files.iter().find(|(n, _, _)| n == name) else {
-            return Err(bad(ModProblem::Code("the manifest names this module, and the mod has no such file".into())));
+            return Err(bad(ModProblem::Code(
+                "the manifest names this module, and the mod has no such file".into(),
+            )));
         };
         code::compile(engine, bytes).map(Some).map_err(bad)
     }
@@ -561,7 +563,11 @@ fn asset_references(ctx: &Ctx, json: &Value, out: &mut Vec<String>) {
     {
         let mut files = Vec::new();
         crate::physics3d::collider_files(json, &mut files);
-        out.extend(files.into_iter().filter_map(|f| crate::reflect::collider_file_parts(f).0.map(String::from)));
+        out.extend(
+            files
+                .into_iter()
+                .filter_map(|f| crate::reflect::collider_file_parts(f).0.map(String::from)),
+        );
     }
     crate::scene::scene_asset_field_names(&ctx.assets.scene_asset_fields, json, out);
     included_prefabs(json, out);

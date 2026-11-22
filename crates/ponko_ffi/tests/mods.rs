@@ -224,3 +224,70 @@ fn a_bad_mod_is_refused_whole_naming_the_mod_the_file_and_the_reason() {
     });
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn mods_mount_from_memory_like_from_files_and_the_bytes_may_go_right_after() {
+    run_ctx(|ctx| unsafe {
+        let base = pack(&[("mod.json", &manifest("base", "")), ("rules.txt", "base")]);
+        let strong = pack(&[("mod.json", &manifest("strong", r#""base""#)), ("rules.txt", "strong")]);
+        let ghost = pack(&[
+            ("mod.json", &manifest("ghost", "")),
+            (
+                "prefabs/ghost.json",
+                r#"{"format":"ponko-prefab","version":1,"components":{"Ghost":{}}}"#,
+            ),
+        ]);
+        let entry = |name: &'static std::ffi::CStr, bytes: &[u8]| PonkoModBytes {
+            name: name.as_ptr(),
+            bytes: bytes.as_ptr(),
+            len: bytes.len(),
+        };
+        // A refused set: the error names the mod and the file, nothing is mounted.
+        let refused = [entry(c"base.pack", &base), entry(c"ghost.pack", &ghost)];
+        assert_eq!(
+            ponko_ctx_mount_mods_from_memory(ctx, refused.as_ptr(), 2),
+            PONKO_NOT_FOUND
+        );
+        assert!(
+            last_error().starts_with("mod \"ghost\", file \"prefabs/ghost.json\""),
+            "{}",
+            last_error()
+        );
+        assert_eq!(last_path(), "prefabs/ghost.json");
+        // Not a pack: named by the name given.
+        let junk = [entry(c"junk.pack", b"not a pack")];
+        assert_ne!(ponko_ctx_mount_mods_from_memory(ctx, junk.as_ptr(), 1), PONKO_OK);
+        assert!(last_error().starts_with("mod \"junk.pack\""), "{}", last_error());
+        // Null arguments.
+        assert_eq!(ponko_ctx_mount_mods_from_memory(ctx, null(), 1), PONKO_INVALID_ARGUMENT);
+        let null_bytes = [PonkoModBytes {
+            name: c"x".as_ptr(),
+            bytes: null(),
+            len: 3,
+        }];
+        assert_eq!(
+            ponko_ctx_mount_mods_from_memory(ctx, null_bytes.as_ptr(), 1),
+            PONKO_INVALID_ARGUMENT
+        );
+
+        let (strong_copy, base_copy) = (strong.clone(), base.clone());
+        let good = [entry(c"strong.pack", &strong_copy), entry(c"base.pack", &base_copy)];
+        assert_eq!(
+            ponko_ctx_mount_mods_from_memory(ctx, good.as_ptr(), 2),
+            PONKO_OK,
+            "{}",
+            last_error()
+        );
+        drop((strong_copy, base_copy)); // copied: the mods don't need them
+        let ids: Vec<String> = (0..2)
+            .map(|i| read(|b, c, l| ponko_ctx_mod_id(ctx, i, b, c, l)).unwrap())
+            .collect();
+        assert_eq!(ids, ["base", "strong"]);
+        let mut bytes: Vec<u8> = Vec::new();
+        assert_eq!(
+            ponko_ctx_load_asset_with(ctx, c"rules.txt".as_ptr(), Some(keep), (&raw mut bytes).cast()),
+            PONKO_OK
+        );
+        assert_eq!(bytes, b"strong");
+    });
+}

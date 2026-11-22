@@ -174,3 +174,113 @@ fn a_frost_drip_naming_a_component_the_game_lacks_is_refused_and_the_game_plays_
     let speeds: Vec<f32> = world.query::<&Drip>().iter().map(|d| d.speed).collect();
     assert_eq!(speeds, [28.0; 3], "the game's own drips");
 }
+
+/// The frost drip's crawl as a code mod (feature `mods-wasm`): turn at
+/// walls and ledges, written in WebAssembly against the host's ray cast.
+#[cfg(feature = "mods-wasm")]
+const CRAWL: &str = r#"(module
+  (import "ponko" "cast_ray" (func $ray (param f32 f32 f32 f32 f32) (result f32)))
+  ;; crawl(x, y, heading) -> the heading to move with
+  (func (export "crawl") (param $x f32) (param $y f32) (param $h f32) (result f32)
+    (local $wall i32) (local $floor i32)
+    (local.set $wall (f32.ge (call $ray (local.get $x) (f32.add (local.get $y) (f32.const 4))
+                                        (local.get $h) (f32.const 0) (f32.const 8)) (f32.const 0)))
+    (local.set $floor (f32.ge (call $ray (f32.add (local.get $x) (f32.mul (local.get $h) (f32.const 7)))
+                                         (f32.add (local.get $y) (f32.const 4))
+                                         (f32.const 0) (f32.const 1) (f32.const 8)) (f32.const 0)))
+    (if (result f32) (i32.or (local.get $wall) (i32.eqz (local.get $floor)))
+      (then (f32.neg (local.get $h)))
+      (else (local.get $h)))))"#;
+
+#[cfg(feature = "mods-wasm")]
+#[test]
+fn a_code_mod_crawls_the_frost_drip_and_turns_where_the_games_own_rule_would() {
+    use ponko::d2::QueryFilter;
+    use ponko::mods::{ModValue, with_code};
+    // The frost drip without the game's Drip: the mod's code moves it.
+    let manifest = r#"{"format":"ponko-mod","version":1,"id":"frost-code","code":"frost/crawl.wasm"}"#;
+    let sheet = std::fs::read("assets/ember_hop/sprites/drip.png").expect("the game's drip sheet");
+    let prefab = frost_prefab(r#""Transform2D": {}"#);
+    let pack = ModPack::from_files(
+        "frost-code.pack",
+        [
+            ("mod.json".to_string(), manifest.as_bytes().to_vec()),
+            (FROST.to_string(), prefab.into_bytes()),
+            ("ember_hop/sprites/frost_drip.png".to_string(), sheet),
+            ("frost/crawl.wasm".to_string(), wat::parse_str(CRAWL).unwrap()),
+        ],
+    )
+    .unwrap();
+    let state = Rc::new(RefCell::new((None::<Entity>, 1.0f32, Vec::new())));
+    let seen = state.clone();
+    let dir = data_dir("code");
+    let mut set = Some(ModSet::new().with(pack));
+    Game::new("mod sample", 960, 540)
+        .data_dir(&dir)
+        .seed(SEED)
+        .sim_system(move |ctx: &mut Ctx| {
+            let tick = ctx.time.sim_tick();
+            if tick == 1 {
+                new_run(ctx);
+            }
+            let mut s = seen.borrow_mut();
+            if tick == 2 {
+                let at = ctx
+                    .world
+                    .query::<(&Transform, &Drip)>()
+                    .iter()
+                    .map(|(t, _)| t.position)
+                    .next()
+                    .expect("a drip");
+                s.0 = Some(ctx.spawn_prefab(FROST, at).expect("the mod's prefab"));
+                return;
+            }
+            let Some(frost) = s.0 else { return };
+            let Some(at) = ctx.world.get::<Transform>(frost).map(|t| t.position) else {
+                return;
+            };
+            let heading = s.1;
+            // The game's own rule, for comparison.
+            let filter = QueryFilter::default();
+            let wall = ctx
+                .physics
+                .cast_ray(at + vec2(0.0, 4.0), vec2(heading, 0.0), 8.0, filter)
+                .is_some();
+            let floor = ctx
+                .physics
+                .cast_ray(at + vec2(heading * 7.0, 4.0), vec2(0.0, 1.0), 8.0, filter)
+                .is_some();
+            let rust = if wall || !floor { -heading } else { heading };
+            let moddy = with_code(ctx, |code| {
+                let crawl = code.function("frost-code", "crawl").expect("exported");
+                code.call(crawl, &[at.x.into(), at.y.into(), heading.into()])
+            })
+            .expect("the mod has code")
+            .expect("the call ran")
+            .and_then(ModValue::as_f32)
+            .expect("a heading");
+            s.2.push((at, rust, moddy));
+            s.1 = moddy;
+            let dt = ctx.time.dt();
+            if let Some(t) = ctx.world.get_mut::<Transform>(frost) {
+                t.position.x += moddy * 56.0 * dt;
+            }
+        })
+        .plugin(EmberHop)
+        .run_headless(400, |ctx| set.take().unwrap().mount(ctx).expect("the mod mounts"));
+    let _ = std::fs::remove_dir_all(dir);
+    let s = state.borrow();
+    let steps = &s.2;
+    assert!(steps.len() > 300, "{} ticks", steps.len());
+    for (at, rust, moddy) in steps {
+        assert_eq!(
+            rust.to_bits(),
+            moddy.to_bits(),
+            "at {at}: the mod turned where the rule didn't"
+        );
+    }
+    let turns = steps.windows(2).filter(|w| w[0].2 != w[1].2).count();
+    assert!(turns >= 2, "turned {turns} times: at the ledge's ends");
+    let y = steps[0].0.y;
+    assert!(steps.iter().all(|(at, _, _)| at.y == y), "stays on its ledge");
+}
