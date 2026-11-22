@@ -421,7 +421,7 @@ fn a_malformed_pack_is_refused_not_a_crash() {
     for (bytes, needle) in [
         (garbage, "not an asset pack"),
         (cut, "cut short"),
-        (huge_count, "ends in the middle"),
+        (huge_count, "max_entries"), // past the pack cap on entries, before the index is read
     ] {
         let err = ModPack::from_pack_bytes("evil.pack", bytes).unwrap_err();
         assert_eq!(err.mod_id(), "evil.pack");
@@ -464,10 +464,11 @@ fn names_that_could_leave_the_games_assets_are_refused() {
 #[test]
 fn oversized_entries_are_refused_before_they_are_read() {
     let big = manifest("big", &[], &[]);
-    // A deflated entry whose index claims a terabyte: refused on its size alone.
+    // A deflated entry whose index claims 8 GiB: refused on its size alone
+    // (a terabyte would already be refused when the pack opens, by the 16 GiB pack cap).
     let bomb = pack_raw(&[
         ("mod.json", big.as_bytes(), 0, big.len() as u64),
-        ("bomb.json", &[0x03, 0x00], 1, 1 << 40),
+        ("bomb.json", &[0x03, 0x00], 1, 8 << 30),
     ]);
     let pack = ModPack::from_pack_bytes("big.pack", bomb).expect("the index is fine");
     let err = mount_err(ModSet::new().with(pack));
@@ -475,7 +476,7 @@ fn oversized_entries_are_refused_before_they_are_read() {
     assert_eq!(
         err.problem(),
         &ModProblem::TooLarge {
-            size: 1 << 40,
+            size: 8 << 30,
             limit: 64 << 20
         }
     );
