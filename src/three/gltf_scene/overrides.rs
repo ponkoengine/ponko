@@ -786,6 +786,9 @@ impl Ctx {
 #[derive(Debug, Default)]
 pub(crate) struct GltfEntities(Vec<Option<SceneEntities>>);
 
+/// A glTF scene that didn't spawn: its file and its error.
+type GltfFailure = (String, crate::error::Error);
+
 /// A scene's root and its nodes' entities by path.
 type SceneEntities = (Entity, Vec<(String, Entity)>);
 
@@ -816,10 +819,7 @@ impl Ctx {
     /// stays out: its error is printed and returned with its file (the
     /// editor lists it in its panel of scenes that didn't load).
     #[cfg_attr(not(feature = "editor"), allow(dead_code))]
-    pub(crate) fn respawn_gltf_entities(
-        &mut self,
-        before: &GltfEntities,
-    ) -> (Vec<(Entity, Entity)>, Vec<(String, crate::error::Error)>) {
+    pub(crate) fn respawn_gltf_entities(&mut self, before: &GltfEntities) -> (Vec<(Entity, Entity)>, Vec<GltfFailure>) {
         let failed = self.respawn_saved_gltf();
         for (_, e) in &failed {
             eprintln!("ponko: {e}");
