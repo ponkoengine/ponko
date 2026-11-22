@@ -319,6 +319,7 @@ impl Panels {
     /// where it was saved, with its overrides, and hangs the nodes of other
     /// scenes saved on its nodes off them again; one that fails says why
     /// in its row. Shows nothing when they all loaded.
+    #[cfg(feature = "editor")]
     pub(crate) fn unloaded_panel(&mut self, ui: &mut Ui, ctx: &mut Ctx) {
         let unloaded = ctx.editor.doc.unloaded.clone();
         if unloaded.is_empty() {
@@ -360,6 +361,7 @@ impl Panels {
     /// [`unloaded_panel`](Self::unloaded_panel)): the status line says it
     /// loaded, and the error line naming the scenes that didn't load names
     /// only those left.
+    #[cfg(feature = "editor")]
     pub(crate) fn retry_unloaded(&mut self, ctx: &mut Ctx, file: &str) {
         let before = unloaded_line(&ctx.editor.doc.unloaded);
         let still = format!("{file} still doesn't load: ");
@@ -1308,6 +1310,7 @@ impl Panels {
 }
 
 /// The button that tries a glTF scene that didn't load again.
+#[cfg(feature = "editor")]
 pub(crate) const UNLOADED_RETRY: &str = "Retry";
 
 /// The error line for glTF scenes that didn't load when the document was

@@ -670,6 +670,10 @@ name = "web_editor_save"
 required-features = ["editor"]
 
 [[example]]
+name = "web_editor_unloaded"
+required-features = ["editor", "3d"]
+
+[[example]]
 name = "web_video"
 required-features = ["video"]
 

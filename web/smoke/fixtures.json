@@ -53,6 +53,15 @@
     },
     "engineGpu": true
   },
+  "web_editor_unloaded": {
+    "example": "web_editor_unloaded",
+    "features": ["editor", "3d"],
+    "query": "?editor=smoke/unloaded/scene.json",
+    "asset": "smoke/unloaded/posts.gltf",
+    "min": { "failed": 1 },
+    "clicks": ["20,520=linked:1"],
+    "engineGpu": true
+  },
   "lights2d": {
     "example": "lights2d",
     "asset": "crab.png",
