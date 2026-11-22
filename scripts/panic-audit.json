@@ -1103,12 +1103,6 @@
     "reason": "Internal invariant: chunk uses the length returned by the bounded pipe read.",
     "site": "src/logs.rs:183"
   },
-  "src/mods/code.rs:064141025ca1653c": {
-    "classification": "invariant",
-    "construction": "debug_assert!(defined.is_ok(), \"host functions defined twice\")",
-    "reason": "The three host function names are fixed and distinct, and the closures' types fit; defining them can't fail.",
-    "site": "src/mods/code.rs:224"
-  },
   "src/mods/code.rs:0e657603073e43f3": {
     "classification": "invariant",
     "construction": "debug_assert!(fueled.is_ok(), \"fuel is on in `engine()`\")",
@@ -1120,6 +1114,12 @@
     "construction": "debug_assert!(fueled.is_ok(), \"fuel is on in `engine()`\")",
     "reason": "engine() always turns fuel on, the only reason set_fuel fails.",
     "site": "src/mods/code.rs:273"
+  },
+  "src/mods/code.rs:5865bb911cfad250": {
+    "classification": "invariant",
+    "construction": "debug_assert!(defined.is_ok(), \"host functions defined twice\")",
+    "reason": "The host function names are fixed and distinct, and each closure's signature is one wasmi links: defining them can't fail.",
+    "site": "src/mods/code.rs:490"
   },
   "src/nav3d/carve.rs:4f13d23fe4bd6445": {
     "classification": "invariant",

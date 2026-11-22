@@ -7,6 +7,7 @@
 
 ponko/control-env test Only lets a release build honor PONKO_CONTROL=1; the native job builds the C library with it and drives a release C++ game over the control endpoint (the validation bundle step)
 ponko_ffi/control-env test As ponko/control-env: the native job builds the C library with it for the validation bundle
+ponko_ffi/mods-wasm test cargo test -p ponko_ffi --features mods-wasm --test mod_code and the C++ tests built with -DPONKO_MODS_WASM=ON check it; it has no ci.yml line yet (to add with the CI list)
 ponko_bench/render test Benchmark drivers are not tests (AGENTS.md); the unit tests the crate has run in cargo test --workspace, and the clippy lines build every driver
 ponko_bench/audio test As ponko_bench/render: the driver needs an audio device, clippy builds it
 ponko_bench/text-shaping test As ponko_bench/render

@@ -56,6 +56,12 @@ if(PONKO_WEBRTC)
     target_compile_definitions(ponko_c_tests PRIVATE PONKO_WEBRTC=1)
     target_compile_definitions(ponko_cpp_tests PRIVATE PONKO_WEBRTC=1)
 endif()
+# Say so when the library was built with `--features mods-wasm`: the tests then
+# call code mods, not check the error they give without it.
+option(PONKO_MODS_WASM "ponko_ffi was built with the mods-wasm feature" OFF)
+if(PONKO_MODS_WASM)
+    target_compile_definitions(ponko_cpp_tests PRIVATE PONKO_MODS_WASM=1)
+endif()
 ponko_native(ponko_cpp_bench bench.cpp)
 ponko_native(ponko_cpp_boids boids.cpp)
 ponko_native(ponko_cpp_guide guide.cpp)

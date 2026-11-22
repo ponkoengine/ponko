@@ -46,6 +46,7 @@ fn crawl_rust(ctx: &Ctx, at: Vec2, heading: f32) -> f32 {
 }
 
 pub fn run(b: &mut Bench) {
+    host_calls(b);
     for (name, code) in [("mods/crawl-1k/rust", false), ("mods/crawl-1k/wasmi", true)] {
         if b.skips(name) {
             continue;
@@ -114,6 +115,66 @@ pub fn run(b: &mut Bench) {
         let mut times = times.borrow_mut();
         let mut measured: Vec<Duration> = times.drain(..).skip(WARMUP).collect();
         let record = report::Record::new(name, report::Kind::Steady, WARMUP, &mut measured);
+        b.report(record);
+    }
+}
+
+/// One host call: 1000 calls per tick of a mod function that makes none
+/// (`none`), or one host call (`random`, `get_field`, `set_field` of an
+/// exposed entity's `Transform2D.rotation`). A host call costs its row
+/// minus `none`, divided by 1000.
+const HOST: &str = r#"(module
+  (import "ponko" "random" (func $random (result f32)))
+  (import "ponko" "get_field" (func $get (param i64 i32 i32) (result f64)))
+  (import "ponko" "set_field" (func $set (param i64 i32 i32 f64) (result i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 0) "Transform2D.rotation")
+  (func (export "none") (param i64) (result f64) f64.const 0)
+  (func (export "random") (param i64) (result f64) call $random f64.promote_f32)
+  (func (export "get_field") (param i64) (result f64) local.get 0 i32.const 0 i32.const 20 call $get)
+  (func (export "set_field") (param i64) (result f64)
+    local.get 0 i32.const 0 i32.const 20 f64.const 0.25 call $set f64.convert_i32_s))"#;
+
+fn host_calls(b: &mut Bench) {
+    for function in ["none", "random", "get_field", "set_field"] {
+        let name = format!("mods/host-call-1k/{function}");
+        if b.skips(&name) {
+            continue;
+        }
+        let times = Rc::new(RefCell::new(Vec::<Duration>::with_capacity(RUNS)));
+        let timed = times.clone();
+        let manifest = r#"{"format":"ponko-mod","version":1,"id":"host","code":"host.wasm"}"#;
+        let wasm = wat::parse_str(HOST).expect("valid WebAssembly text");
+        let pack = ModPack::from_files(
+            "host",
+            [("mod.json", manifest.as_bytes().to_vec()), ("host.wasm", wasm)],
+        )
+        .expect("a valid manifest");
+        let mut set = Some(ModSet::new().with(pack));
+        let mut target = None;
+        Game::new("bench", 1, 1)
+            .sim_system(move |ctx: &mut Ctx| {
+                let e = *target.get_or_insert_with(|| ctx.world.spawn((Transform2D::default(),)));
+                let t = Instant::now();
+                with_code(ctx, |mods| {
+                    mods.expose(e);
+                    let f = mods.function("host", function).expect("exported");
+                    let arg = [ModValue::I64(e.to_bits() as i64)];
+                    for _ in 0..DRIPS {
+                        let out = mods.call(f, &arg);
+                        debug_assert!(matches!(out, Ok(Some(_))));
+                    }
+                });
+                timed.borrow_mut().push(t.elapsed());
+            })
+            .run_headless((WARMUP + RUNS) as u64, |ctx| {
+                if let Some(set) = set.take() {
+                    set.mount(ctx).expect("the mod mounts");
+                }
+            });
+        let mut times = times.borrow_mut();
+        let mut measured: Vec<Duration> = times.drain(..).skip(WARMUP).collect();
+        let record = report::Record::new(&name, report::Kind::Steady, WARMUP, &mut measured);
         b.report(record);
     }
 }

@@ -472,6 +472,13 @@ typedef enum PonkoMessageEventKind {
   PONKO_MESSAGE = 2,
 } PonkoMessageEventKind;
 
+typedef enum PonkoModValueKind {
+  PONKO_MOD_I32 = 0,
+  PONKO_MOD_I64 = 1,
+  PONKO_MOD_F32 = 2,
+  PONKO_MOD_F64 = 3,
+} PonkoModValueKind;
+
 typedef enum PonkoJointMotionKind {
   PONKO_JOINT_FREE = 0,
   PONKO_JOINT_LOCKED = 1,
@@ -2126,6 +2133,16 @@ typedef struct PonkoMessageStats {
   uint64_t packets_received;
   uint64_t bytes_received;
 } PonkoMessageStats;
+
+typedef struct PonkoModFn {
+  uint32_t id;
+} PonkoModFn;
+
+typedef struct PonkoModValue {
+  enum PonkoModValueKind kind;
+  int64_t i;
+  double f;
+} PonkoModValue;
 
 typedef struct PonkoModBytes {
   const char *name;
@@ -6251,6 +6268,28 @@ enum PonkoStatus ponko_net_messages_steam_join(uint32_t app_id,
 enum PonkoStatus ponko_net_messages_steam_peer(struct PonkoNetMessages *endpoint,
                                                uint64_t peer,
                                                uint64_t *output);
+
+enum PonkoStatus ponko_ctx_mod_function(struct PonkoCtx *ctx,
+                                        const char *mod_id,
+                                        const char *name,
+                                        struct PonkoModFn *out_fn);
+
+enum PonkoStatus ponko_ctx_mod_call(struct PonkoCtx *ctx,
+                                    struct PonkoModFn f,
+                                    const struct PonkoModValue *args,
+                                    size_t count,
+                                    struct PonkoModValue *out_result,
+                                    bool *out_has_result);
+
+enum PonkoStatus ponko_ctx_mod_expose_entity(struct PonkoCtx *ctx, uint64_t entity);
+
+enum PonkoStatus ponko_ctx_mod_hide_entity(struct PonkoCtx *ctx,
+                                           uint64_t entity,
+                                           bool *out_was_exposed);
+
+enum PonkoStatus ponko_ctx_mod_expose_prefab(struct PonkoCtx *ctx, const char *path);
+
+enum PonkoStatus ponko_ctx_mod_seed_random(struct PonkoCtx *ctx, uint64_t seed);
 
 enum PonkoStatus ponko_ctx_mount_mods(struct PonkoCtx *ctx, const char *const *paths, size_t count);
 
