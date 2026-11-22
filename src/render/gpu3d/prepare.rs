@@ -29,6 +29,10 @@ struct FrameView {
     unjittered: Mat4,
     view_proj: Mat4,
     jitter: [f32; 2],
+    /// The mip bias material textures are sampled with: `log2` of the
+    /// render scale while the temporal upscaler runs (it rebuilds the
+    /// window's resolution, so textures are sampled at its mip level), else 0.
+    mip_bias: f32,
     /// Whether ambient occlusion is on, and the contact shadows' length (0: off).
     ao_on: bool,
     contact: f32,
@@ -408,6 +412,13 @@ impl Renderer3D {
             ssr.use_thin(device);
         }
         self.screen.velocity_on = self.screen.taa_on || (self.screen.ao_enabled && post.ao_temporal && ao_on);
+        // Without the temporal upscaler (the stretch, or TAA at the render
+        // size) a sharper mip level would shimmer: nothing accumulates it.
+        let mip_bias = if self.screen.upscale_on && !self.screen.no_mip_bias() {
+            (size.0 as f32 / window.0.max(1) as f32).log2().min(0.0)
+        } else {
+            0.0
+        };
         FrameView {
             size,
             upscaled,
@@ -415,6 +426,7 @@ impl Renderer3D {
             unjittered,
             view_proj,
             jitter,
+            mip_bias,
             ao_on,
             contact,
         }
@@ -1014,6 +1026,7 @@ impl Renderer3D {
             unjittered,
             view_proj,
             jitter,
+            mip_bias,
             ..
         } = *view;
         let scaled = |c, k: f32| {
@@ -1053,7 +1066,7 @@ impl Renderer3D {
             unjittered_view_proj: unjittered.to_cols_array_2d(),
             previous_view_proj: previous_view_proj.to_cols_array_2d(),
             reprojection: previous_view_proj.to_cols_array_2d(),
-            jitter: [jitter[0], jitter[1], 0.0, 0.0],
+            jitter: [jitter[0], jitter[1], mip_bias, 0.0],
             sun_view_proj: frame.sun_view_proj.map(|m| m.to_cols_array_2d()),
             caster_view_proj: Mat4::IDENTITY.to_cols_array_2d(),
             camera: camera.extend(1.0).to_array(),
@@ -1286,6 +1299,8 @@ impl Renderer3D {
         // Copy 0 also serves the sky texture's pass. `camera.w` 0 tells
         // material shaders they're drawing a shadow map (`drawing_shadows`).
         uniform.camera[3] = 0.0;
+        // Shadow maps keep their own resolution: no mip bias.
+        uniform.jitter[2] = 0.0;
         for i in 0..frame.cascades.max(1) {
             uniform.caster_view_proj = uniform.sun_view_proj[i.min(MAX_CASCADES - 1)];
             let mirror = &mut self.shadows.mirrors[i];

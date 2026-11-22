@@ -1,7 +1,8 @@
 //! Offscreen GPU tests of the temporal upscaler (`Upscaler::Temporal`):
 //! it rebuilds detail closer to the native picture than the stretch, leaves
 //! no trail behind what moves, and runs only with TAA and a render scale
-//! below 1. They skip without a GPU adapter.
+//! below 1. Material textures are sampled at the window's mip level while
+//! it runs (the mip bias), and only then. They skip without a GPU adapter.
 //!
 //! The same scenes drive the evaluation behind the guide's numbers (ignored
 //! tests, run by hand): `upscaling_evaluation` compares the stretch and the
@@ -518,6 +519,212 @@ fn changing_the_scale_or_the_upscaler_at_runtime_remakes_its_images() {
 }
 
 /// Where the evaluation writes its images and table.
+/// A checkered texture of 2-texel squares, 1024 texels square, with the mip
+/// chain 3D materials get (its far levels average to grey), added to the
+/// rig's textures.
+fn checker_texture(rig: &mut BatchRig) -> crate::texture::Texture {
+    const SIDE: u32 = 1024;
+    let mut rgba = Vec::with_capacity((SIDE * SIDE * 4) as usize);
+    for y in 0..SIDE {
+        for x in 0..SIDE {
+            let v = if (x / 2 + y / 2) % 2 == 0 { 235 } else { 20 };
+            rgba.extend_from_slice(&[v, v, v, 255]);
+        }
+    }
+    let device = &rig.gpu.device;
+    let size = wgpu::Extent3d {
+        width: SIDE,
+        height: SIDE,
+        depth_or_array_layers: 1,
+    };
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("checker"),
+        size,
+        mip_level_count: super::mips::levels(SIDE, SIDE),
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_DST
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
+    });
+    rig.gpu.queue.write_texture(
+        texture.as_image_copy(),
+        &rgba,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4 * SIDE),
+            rows_per_image: None,
+        },
+        size,
+    );
+    let mut encoder = device.create_command_encoder(&Default::default());
+    super::mips::MipMaker::new(device).generate(device, &mut encoder, &texture, false);
+    rig.gpu.queue.submit([encoder.finish()]);
+    let id = rig.textures.len() as u32;
+    // 3D materials bind the texture itself; the sprite bind group is unused.
+    let bind_group = rig.textures[0].bind_group.clone();
+    rig.textures.push(super::gpu::GpuTexture {
+        bind_group,
+        texture,
+        nearest: false,
+        mips: Some(false),
+    });
+    crate::texture::Texture::new(id, SIDE, SIDE)
+}
+
+/// Shows the material's texture as it is, unlit.
+const TEXTURED: &str = "fn surface(s: Surface) -> Surface {
+    var o = s;
+    o.emissive = s.albedo;
+    o.unlit = true;
+    return o;
+}";
+
+/// A rig drawing a textured ground plane running off toward the horizon,
+/// with `method`; `bias`: whether the upscaler's mip bias applies.
+fn ground_rig(method: Method, bias: bool) -> Option<BatchRig> {
+    let mut rig = BatchRig::new(RigSetup {
+        size: GROUND_SIZE,
+        ..Default::default()
+    })?;
+    if !support::needs(&rig.gpu.device, GpuFeature::TemporalAntialiasing) {
+        return None;
+    }
+    method.apply(&mut rig.ctx.scene3d.post);
+    rig.renderer.set_mip_bias_off(!bias);
+    let texture = checker_texture(&mut rig);
+    let shader = rig.ctx.gfx.create_shader("textured", TEXTURED);
+    rig.renderer
+        .create_shader(&rig.gpu.device, "textured", TEXTURED)
+        .unwrap();
+    let ground = rig.mesh(
+        &MeshData::plane(1.0),
+        MaterialDesc {
+            color: Color::WHITE,
+            texture: Some(texture),
+            shader: Some(shader),
+            ..Default::default()
+        },
+    );
+    rig.ctx.world.spawn((
+        Transform3D {
+            position: vec3(0.0, 0.0, -6.0),
+            scale: vec3(16.0, 1.0, 16.0),
+            ..Default::default()
+        },
+        Model::new(ground),
+    ));
+    let camera = &mut rig.ctx.scene3d.camera;
+    camera.far = 50.0;
+    camera.position = vec3(0.0, 1.2, 2.0);
+    camera.look_at(vec3(0.0, 0.0, -6.0));
+    Some(rig)
+}
+
+const GROUND_SIZE: (u32, u32) = (192, 128);
+
+/// The mean absolute difference between neighbouring pixels (in 0..1, of
+/// the green channel, sRGB): how much of the checker's detail shows.
+fn detail(image: &Image) -> f32 {
+    let (w, h) = (image.width as usize, image.height as usize);
+    let at = |x: usize, y: usize| f32::from(image.rgba[(y * w + x) * 4 + 1]) / 255.0;
+    let mut sum = 0.0;
+    let mut n = 0;
+    for y in 0..h {
+        for x in 0..w - 1 {
+            sum += (at(x, y) - at(x + 1, y)).abs()
+                + if y + 1 < h {
+                    (at(x, y) - at(x, y + 1)).abs()
+                } else {
+                    0.0
+                };
+            n += 1;
+        }
+    }
+    sum / n as f32
+}
+
+/// The mean absolute difference of two images, per channel, in 0..1.
+fn mean_error(a: &Image, b: &Image) -> f32 {
+    let e = errors(a, b);
+    e.iter().sum::<f32>() / e.len() as f32
+}
+
+/// Draws `rig` still for `frames` frames; returns the last image and the
+/// mean change from frame to frame over the last eight (shimmer).
+fn settle(rig: &mut BatchRig, frames: usize) -> (Image, f32) {
+    let mut last: Option<Image> = None;
+    let mut change = 0.0;
+    for n in 0..frames {
+        let image = rig.image();
+        if n + 8 >= frames
+            && let Some(before) = &last
+        {
+            change += mean_error(&image, before) / 8.0;
+        }
+        last = Some(image);
+    }
+    (last.unwrap(), change)
+}
+
+#[test]
+fn textures_upscaled_with_the_mip_bias_keep_the_detail_of_native_resolution() {
+    let Some(mut native) = ground_rig(Method::NativeTaa, true) else {
+        return;
+    };
+    let mut biased = ground_rig(Method::Temporal(0.5), true).unwrap();
+    let mut unbiased = ground_rig(Method::Temporal(0.5), false).unwrap();
+    let (native, native_shimmer) = settle(&mut native, 48);
+    let (with, with_shimmer) = settle(&mut biased, 48);
+    let (without, _) = settle(&mut unbiased, 48);
+    for image in [&native, &with, &without] {
+        support::keep_image(image);
+    }
+    let (d_native, d_with, d_without) = (detail(&native), detail(&with), detail(&without));
+    eprintln!(
+        "detail: native {d_native}, with {d_with}, without {d_without}; error to native: with {}, without {}; shimmer: native {native_shimmer}, with {with_shimmer}",
+        mean_error(&with, &native),
+        mean_error(&without, &native)
+    );
+    // Without the bias the far ground reads a mip level too coarse: greyer.
+    assert!(
+        d_with > d_without * 1.1,
+        "the bias keeps detail the coarser mip level loses: {d_with} against {d_without} (native {d_native})"
+    );
+    assert!(
+        mean_error(&with, &native) < mean_error(&without, &native),
+        "with the bias the picture is closer to native: {} against {}",
+        mean_error(&with, &native),
+        mean_error(&without, &native)
+    );
+    // No sharper than native, and it holds still as native does.
+    assert!(
+        d_with < d_native * 1.15,
+        "not sharper than native: {d_with} against {d_native}"
+    );
+    assert!(
+        with_shimmer < native_shimmer * 1.5 + 0.004,
+        "a still picture stays still: it changes by {with_shimmer} a frame, native by {native_shimmer}"
+    );
+}
+
+#[test]
+fn the_mip_bias_applies_only_while_the_temporal_upscaler_runs() {
+    // At a scale of 1 (and with the stretch) the bias is 0: the same picture.
+    for method in [Method::NativeTaa, Method::TaaStretch(0.5)] {
+        let Some(mut a) = ground_rig(method, true) else {
+            return;
+        };
+        let mut b = ground_rig(method, false).unwrap();
+        let (a, _) = settle(&mut a, 6);
+        let (b, _) = settle(&mut b, 6);
+        assert_eq!(a.rgba, b.rgba, "{method:?} draws the same with and without the bias");
+    }
+}
+
 fn evaluation_dir() -> std::path::PathBuf {
     std::env::var_os("PONKO_UPSCALE_EVAL_OUT")
         .map(std::path::PathBuf::from)

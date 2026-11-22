@@ -2228,6 +2228,13 @@ impl Renderer3D {
         self.history.reset
     }
 
+    /// Turns the temporal upscaler's mip bias off (`true`): the negative
+    /// control of the mip bias tests.
+    #[cfg(test)]
+    pub(crate) fn set_mip_bias_off(&mut self, off: bool) {
+        self.screen.mip_bias_off = off;
+    }
+
     /// Whether this frame is resolved by temporal antialiasing (for tests).
     #[cfg(test)]
     pub(crate) fn taa_active(&self) -> bool {

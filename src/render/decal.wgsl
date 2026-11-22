@@ -58,8 +58,9 @@ fn apply_decals(s_in: Surface, geometric: vec3<f32>, layers: u32, dp_x: vec3<f32
         let low = min(rect.xy, rect.zw) + texel;
         let high = max(rect.xy, rect.zw) - texel;
         let uv_at = clamp(uv, low, max(low, high));
-        let slope_x = vec2<f32>(dot(r0.xyz, dp_x), -dot(r1.xyz, dp_x)) * size;
-        let slope_y = vec2<f32>(dot(r0.xyz, dp_y), -dot(r1.xyz, dp_y)) * size;
+        // Scaled by the mip bias, as the material's own textures are.
+        let slope_x = vec2<f32>(dot(r0.xyz, dp_x), -dot(r1.xyz, dp_x)) * size * exp2(texture_mip_bias());
+        let slope_y = vec2<f32>(dot(r0.xyz, dp_y), -dot(r1.xyz, dp_y)) * size * exp2(texture_mip_bias());
         var color = vec3<f32>(1.0);
         var alpha = 1.0;
         if images.x >= 0.0 {

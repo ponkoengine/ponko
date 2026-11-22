@@ -67,7 +67,7 @@ struct Frame {
     // `previous_view_proj` for the world; the view model's held items take
     // the main camera's reprojection of the depth sliver they are drawn in.
     reprojection: mat4x4<f32>,
-    jitter: vec4<f32>,     // xy: this frame's jitter in pixels (0 without TAA)
+    jitter: vec4<f32>,     // xy: this frame's jitter in pixels (0 without TAA); z: the mip bias (see texture_mip_bias)
     gi: array<vec4<f32>, 3>, // global illumination's probe grid (see gi.wgsl)
     sky_params: array<vec4<f32>, 4>, // a sky shader's values (`Sky::shader_params`)
     sky_kit: array<vec4<f32>, 6>, // the sky kit's clouds, moon and cloud shadows (zero without it)
@@ -141,6 +141,14 @@ struct Surface {
 // Whether this draw is into a shadow map (seen from the sun), not for a camera.
 fn drawing_shadows() -> bool {
     return frame.camera.w == 0.0;
+}
+
+// The mip bias to sample material textures with: while the temporal
+// upscaler draws the frame smaller than the window, `log2` of the render
+// scale (negative), so textures are as sharp as at the window's resolution;
+// otherwise 0. For `textureSampleBias(t, material_sampler, uv, texture_mip_bias())`.
+fn texture_mip_bias() -> f32 {
+    return frame.jitter.z;
 }
 
 // The motion pass (temporal antialiasing, temporal AO) runs `vertex` a

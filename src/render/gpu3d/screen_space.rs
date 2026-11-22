@@ -43,9 +43,20 @@ pub(super) struct ScreenSpace {
     /// Whether this frame's reflections trace thin objects
     /// (`Post::ssr_thin_objects`, see `ssr_thin.wgsl`).
     pub(super) ssr_thin: bool,
+    /// Tests: no mip bias while upscaling (the negative control).
+    #[cfg(test)]
+    pub(super) mip_bias_off: bool,
 }
 
 impl ScreenSpace {
+    /// Whether the temporal upscaler's mip bias is off (tests only).
+    pub(super) fn no_mip_bias(&self) -> bool {
+        #[cfg(test)]
+        return self.mip_bias_off;
+        #[cfg(not(test))]
+        false
+    }
+
     /// `taa_supported`: whether the device has compute-class limits.
     pub(super) fn new(taa_supported: bool) -> Self {
         Self {
@@ -55,6 +66,8 @@ impl ScreenSpace {
             upscale_on: false,
             velocity_on: false,
             still_motion: false,
+            #[cfg(test)]
+            mip_bias_off: false,
             ao: None,
             ao_enabled: false,
             ssr: None,
