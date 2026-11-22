@@ -73,7 +73,7 @@ mod pack;
 pub use group::{
     AssetGroup, DEFAULT_GROUP_FRAME_BUDGET_MS, GroupId, GroupProgress, GroupState, GroupStats, SliceLoader,
 };
-pub use pack::PackSource;
+pub use pack::{PackLimits, PackSource};
 #[cfg(all(target_arch = "wasm32", feature = "window"))]
 pub(crate) use pack::{parse_header as parse_pack_header, set_web_pack};
 
