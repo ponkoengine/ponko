@@ -54,6 +54,14 @@ const COOKIE_PERIOD: u64 = 5;
 /// At most this many challenges and version refusals a second, all
 /// strangers together, so that a host can't be made to flood one victim.
 const STRANGER_ANSWERS_PER_SECOND: u32 = 256;
+/// At most this many of them a second to one network (an IPv4 /24 or an
+/// IPv6 /56), so that a flood from one network doesn't use up the answers
+/// meant for joins from others.
+const NETWORK_ANSWERS_PER_SECOND: u32 = 16;
+/// Networks with a budget of their own at once. A network's entry is free
+/// again one second after its last answer (its budget is full by then);
+/// while every entry is in use, a new network has only the global budget.
+const NETWORK_BUDGETS: usize = 64;
 const INTERVAL: Duration = Duration::from_millis(100);
 const EVENT_LIMIT: usize = 4096;
 /// Renet channels of the engine's internal lanes (replication).
@@ -363,6 +371,90 @@ impl Cookies {
         Self::tag(key, addr, client_nonce, period).ct_eq(&cookie[4..]).into()
     }
 }
+/// Token buckets for answers to strangers (book/src/security.md, "The
+/// challenge budget"): one for all of them, and one per network in a
+/// fixed table, so that a flood from one network can't use up the answers
+/// meant for others. Nothing in it allocates or outlives a second.
+struct StrangerBudget {
+    global: Bucket,
+    networks: [(u64, Bucket); NETWORK_BUDGETS],
+}
+/// Time's worth of answers, refilled with protocol time up to one second.
+#[derive(Clone, Copy)]
+struct Bucket {
+    allowance: Duration,
+    at: Duration,
+}
+impl Bucket {
+    const FULL: Self = Self {
+        allowance: Duration::from_secs(1),
+        at: Duration::ZERO,
+    };
+    fn refill(&mut self, now: Duration) {
+        let since = now.saturating_sub(self.at);
+        self.at = now;
+        self.allowance = (self.allowance + since).min(Duration::from_secs(1));
+    }
+}
+impl StrangerBudget {
+    fn new() -> Self {
+        Self {
+            global: Bucket::FULL,
+            networks: [(0, Bucket::FULL); NETWORK_BUDGETS],
+        }
+    }
+    /// The network of `addr`: its IPv4 /24 or IPv6 /56, tagged with the
+    /// family; never zero (zero marks a free entry).
+    fn network(addr: SocketAddr) -> u64 {
+        match addr.ip().to_canonical() {
+            std::net::IpAddr::V4(ip) => (u64::from(u32::from(ip) & 0xFFFF_FF00) << 8) | 4,
+            std::net::IpAddr::V6(ip) => (((u128::from(ip) >> 64) as u64) & !0xFF) | 6,
+        }
+    }
+    /// Whether an entry still holds anything: one that last answered a
+    /// second or more ago has a full budget again, so it is free.
+    fn live(entry: &(u64, Bucket), now: Duration) -> bool {
+        entry.0 != 0 && now.saturating_sub(entry.1.at) < Duration::from_secs(1)
+    }
+    /// Takes one answer to `addr` from its network's budget and the global
+    /// one, if both have it. Without a free entry for a new network, only
+    /// the global budget counts.
+    fn take(&mut self, now: Duration, addr: SocketAddr) -> bool {
+        let network = Self::network(addr);
+        let entry = match self.networks.iter().position(|e| e.0 == network) {
+            Some(i) => Some(i),
+            None => self.networks.iter().position(|e| !Self::live(e, now)),
+        };
+        let network_cost = Duration::from_secs(1) / NETWORK_ANSWERS_PER_SECOND;
+        if let Some(i) = entry {
+            let (key, bucket) = &mut self.networks[i];
+            if *key != network {
+                *key = network;
+                *bucket = Bucket::FULL;
+            }
+            bucket.refill(now);
+            if bucket.allowance < network_cost {
+                return false;
+            }
+        }
+        let cost = Duration::from_secs(1) / STRANGER_ANSWERS_PER_SECOND;
+        self.global.refill(now);
+        if self.global.allowance < cost {
+            return false;
+        }
+        self.global.allowance -= cost;
+        if let Some(i) = entry {
+            self.networks[i].1.allowance -= network_cost;
+        }
+        true
+    }
+    /// Networks with an entry in use at `now`.
+    #[cfg(test)]
+    fn live_networks(&self, now: Duration) -> usize {
+        self.networks.iter().filter(|e| Self::live(e, now)).count()
+    }
+}
+
 /// A cookie key: from the OS's secure random source where there is one.
 fn secret() -> [u8; 16] {
     let mut key = [0; 16];
@@ -669,10 +761,9 @@ pub struct NetMessages {
     scratch: Vec<u8>,
     /// A UDP host's address check (`None` on other transports).
     cookies: Option<Cookies>,
-    /// Allowance for answers to strangers (challenges, version refusals),
-    /// refilled at `STRANGER_ANSWERS_PER_SECOND`, at most one second's worth.
-    stranger_allowance: Duration,
-    stranger_at: Duration,
+    /// How many answers to strangers (challenges, version refusals) may
+    /// still be sent, in all and per network.
+    stranger_budget: StrangerBudget,
 }
 impl NetMessages {
     #[cfg(any(test, feature = "steam", feature = "webrtc"))]
@@ -725,8 +816,7 @@ impl NetMessages {
             stats: MessageStats::default(),
             scratch: Vec::with_capacity(1500),
             cookies: None,
-            stranger_allowance: Duration::from_secs(1),
-            stranger_at: Duration::ZERO,
+            stranger_budget: StrangerBudget::new(),
         }
     }
     /// Bind a nonblocking UDP host. `max_clients` is 1..=1024, excluding host.
@@ -1241,17 +1331,10 @@ impl NetMessages {
                 _ => true,
             }
     }
-    /// Takes one answer to a stranger from the allowance, if there is one.
-    fn may_answer_stranger(&mut self) -> bool {
-        let cost = Duration::from_secs(1) / STRANGER_ANSWERS_PER_SECOND;
-        let since = self.now.saturating_sub(self.stranger_at);
-        self.stranger_at = self.now;
-        self.stranger_allowance = (self.stranger_allowance + since).min(Duration::from_secs(1));
-        if self.stranger_allowance < cost {
-            return false;
-        }
-        self.stranger_allowance -= cost;
-        true
+    /// Takes one answer to `addr`, a stranger, from the budgets, if they
+    /// allow one.
+    fn may_answer_stranger(&mut self, addr: SocketAddr) -> bool {
+        self.stranger_budget.take(self.now, addr)
     }
     fn receive(&mut self, addr: SocketAddr, data: &[u8]) -> io::Result<()> {
         if data.len() < HEADER || &data[..3] != MAGIC_FAMILY {
@@ -1284,7 +1367,7 @@ impl NetMessages {
                     return Ok(());
                 };
                 if !cookies.check(self.now, addr, cn, cookie) {
-                    if self.may_answer_stranger()
+                    if self.may_answer_stranger(addr)
                         && let Some(cookies) = self.cookies.as_mut()
                     {
                         let cookie = cookies.issue(self.now, addr, cn);
@@ -1357,7 +1440,7 @@ impl NetMessages {
     /// a joining client takes a host's refusal as the end of the join.
     fn receive_other_version(&mut self, addr: SocketAddr, digit: u8, kind: u8, cn: u64) -> io::Result<()> {
         if self.hosting {
-            if kind == HELLO && cn != 0 && self.may_answer_stranger() {
+            if kind == HELLO && cn != 0 && self.may_answer_stranger(addr) {
                 return self.send_raw(addr, WRONG_VERSION, cn, 0, &[]);
             }
             return Ok(());
@@ -1806,6 +1889,99 @@ mod tests {
             nets[side].poll_elapsed(Duration::ZERO).unwrap();
         }
         assert_eq!(nets[1].connected_peers(), 1);
+    }
+
+    /// Polls a cookie host (`nets[0]`) and a joining client (`nets[1]`)
+    /// in turn, protocol time standing still, for at most `limit` hops;
+    /// returns the hops it took the client to connect.
+    fn hops_to_connect(nets: &mut [NetMessages], limit: usize) -> Option<usize> {
+        for (i, side) in [1, 0].into_iter().cycle().take(limit).enumerate() {
+            nets[side].poll_elapsed(Duration::ZERO).unwrap();
+            if nets[1].connected_peers() == 1 {
+                return Some(i + 1);
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn a_flood_from_one_network_leaves_challenges_for_joins_from_others() {
+        let flood = |host: &mut NetMessages, addr: fn(u32) -> SocketAddr| {
+            for i in 0..10_000u32 {
+                host.receive(addr(i), &hello(u64::from(i) + 1, &[0; COOKIE])).unwrap();
+            }
+        };
+        // Every hello from one /24 (10.0.0.0/24), on many ports.
+        let one_network = |i: u32| SocketAddr::from(([10, 0, 0, i as u8], 40_000 + (i % 1000) as u16));
+        let mut nets = NetMessages::loopback(2);
+        let mut host = nets.remove(0).require_cookies();
+        host.poll_elapsed(Duration::ZERO).unwrap();
+        flood(&mut host, one_network);
+        assert_eq!(
+            host.stats().packets_sent,
+            u64::from(NETWORK_ANSWERS_PER_SECOND),
+            "the flooding network gets its own budget and no more"
+        );
+        nets.insert(0, host);
+        // The client (127.0.0.1) connects in the usual five hops: hello,
+        // challenge, hello with the cookie, welcome, connected.
+        assert_eq!(hops_to_connect(&mut nets, 9), Some(5));
+
+        // Negative control: a flood spread over many networks does use up
+        // the global budget, and the same join then gets no challenge.
+        let mut nets = NetMessages::loopback(2);
+        let mut host = nets.remove(0).require_cookies();
+        host.poll_elapsed(Duration::ZERO).unwrap();
+        flood(&mut host, forged);
+        assert_eq!(host.stats().packets_sent, u64::from(STRANGER_ANSWERS_PER_SECOND));
+        nets.insert(0, host);
+        assert_eq!(hops_to_connect(&mut nets, 9), None);
+    }
+
+    #[test]
+    fn the_network_budget_table_cannot_grow_and_forgets_within_a_second() {
+        let mut host = cookie_host();
+        // 10 000 hellos, each from a /24 of its own.
+        for i in 0..10_000u32 {
+            let addr = SocketAddr::from(([10, (i >> 8) as u8, i as u8, 1], 40_000));
+            host.receive(addr, &hello(u64::from(i) + 1, &[0; COOKIE])).unwrap();
+            assert!(host.stranger_budget.live_networks(host.now) <= NETWORK_BUDGETS);
+        }
+        assert_eq!(host.stranger_budget.live_networks(host.now), NETWORK_BUDGETS);
+        assert_eq!(
+            host.stats().packets_sent,
+            u64::from(STRANGER_ANSWERS_PER_SECOND),
+            "networks without an entry still count against the global budget"
+        );
+        assert_eq!(
+            std::mem::size_of::<StrangerBudget>(),
+            std::mem::size_of::<Bucket>() + NETWORK_BUDGETS * std::mem::size_of::<(u64, Bucket)>(),
+            "the table is inline, with nothing behind a pointer"
+        );
+        host.poll_elapsed(Duration::from_millis(999)).unwrap();
+        assert_eq!(host.stranger_budget.live_networks(host.now), NETWORK_BUDGETS);
+        host.poll_elapsed(Duration::from_millis(1)).unwrap();
+        assert_eq!(
+            host.stranger_budget.live_networks(host.now),
+            0,
+            "nothing outlives a second"
+        );
+    }
+
+    #[test]
+    fn networks_are_ipv4_slash_24_and_ipv6_slash_56() {
+        let net = |s: &str| StrangerBudget::network(SocketAddr::new(s.parse().unwrap(), 1));
+        assert_eq!(net("192.0.2.1"), net("192.0.2.254"));
+        assert_ne!(net("192.0.2.1"), net("192.0.3.1"));
+        assert_eq!(net("2001:db8:0:ff::1"), net("2001:db8:0:1::2"));
+        assert_ne!(net("2001:db8:0:100::1"), net("2001:db8:0:ff::1"));
+        assert_eq!(
+            net("::ffff:192.0.2.9"),
+            net("192.0.2.1"),
+            "IPv4-mapped addresses are IPv4"
+        );
+        assert_ne!(net("::"), net("0.0.0.0"), "the families never share a network");
+        assert_ne!(net("0.0.0.0"), 0, "zero marks a free entry");
     }
 
     #[test]

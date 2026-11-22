@@ -74,13 +74,39 @@ What that holds:
 - **No amplification.** The challenge (41 bytes) is smaller than the
   hello that caused it (64 bytes), and a shorter hello gets no challenge;
   a reflector gains nothing, which is stricter than QUIC's threefold
-  allowance. Challenges (and refusals of another protocol version) are
-  capped at 256 a second in all, so the host can't be made to flood one
-  victim either.
+  allowance. Challenges (and refusals of another protocol version) have
+  a [budget](#the-challenge-budget), so the host can't be made to flood
+  one victim either.
 - **Always on, nothing to set up.** The check is part of UDP hosting, and
   C and C++ need no new call. Browser clients (`accept_web`), WebRTC and
   the Steam relay come over transports that have proved the address
   already, and skip it.
+
+#### The challenge budget
+
+A host answers strangers (challenges, and refusals of another protocol
+version) from two budgets, and sends an answer only when both have it:
+
+- **One per network: 16 answers a second.** A network is an IPv4 /24 or
+  an IPv6 /56 (an IPv4-mapped IPv6 address counts as IPv4), about what
+  one site or one customer of a provider holds. A flood from one network,
+  forged or real, uses up its own budget and nobody else's, so clients
+  joining from other networks still get their challenge on the first
+  hello and connect in the usual round trips.
+- **One for everyone: 256 answers a second.** Whatever the source, the
+  host never sends more than that, so it is no use against a victim.
+
+The per-network budgets live in a fixed table of 64 entries inside the
+host, allocated with it and never grown. An entry is free again one
+second after its network's last answer (its budget is full by then), so
+nothing in the table outlives a second. While all 64 are in use, a hello
+from a 65th network is answered from the global budget alone, as before
+the table existed. A stranger who forges addresses from many networks at
+once can therefore still use up the global budget and delay joins by a
+second or two (a client resends its hello); stopping that needs a
+network in front of the host that drops spoofed traffic. Both budgets
+refill continuously, and a full budget allows a burst of one second's
+worth. Nothing to set up, from Rust, C or C++.
 
 The cookie only proves an address; it isn't authentication. Who a player
 is stays the game's to decide (below).
