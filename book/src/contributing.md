@@ -147,6 +147,11 @@ ctx.world.despawn(enemy);
   include for anything longer than a few lines.
 - ` ```rust,ignore ` is a last resort (at most three in the whole book) and
   needs a reason in a comment, ideally hidden: `# // ignore: needs a GPU`.
+- Rust code for another engine (the Bevy half of [Coming from Bevy](from-bevy.md))
+  goes in ` ```rs ` blocks: mdBook highlights them as Rust and the checker
+  leaves them alone. Include it from a file that compiles against that engine
+  (`bench/compare/tests/from_bevy.rs`, checked with `cargo check --tests` in
+  `bench/compare`) instead of writing it inline, and keep `ignore` for Ponko code.
 - The check enables the `3d`, `physics`, `physics3d`, `navmesh` and `steam`
   features, so snippets for those compile without extra setup.
 
