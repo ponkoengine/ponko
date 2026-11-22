@@ -425,10 +425,13 @@ fn trail(disabled: bool, buffered: bool) -> Option<f32> {
     Some(ghost)
 }
 
+/// Per frame: whether the motion pass was skipped, and whether the box's
+/// middle had motion.
+type MotionFrames = Vec<(bool, bool)>;
+
 /// Draws a box that holds still, moves for two frames and stops again,
-/// with TAA; returns, per frame, whether the motion pass was skipped and
-/// whether the box's middle had motion, and the last image.
-fn hold_move_hold(always: bool) -> Option<(Vec<(bool, bool)>, Vec<f32>)> {
+/// with TAA; returns its [`MotionFrames`] and the last image.
+fn hold_move_hold(always: bool) -> Option<(MotionFrames, Vec<f32>)> {
     let mut rig = Rig::new(SIZE, false)?;
     if !crate::render::render_test_support::needs(&rig.device, crate::render::GpuFeature::TemporalAntialiasing) {
         return None;
