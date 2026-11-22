@@ -113,6 +113,8 @@ pub(crate) struct Profiler {
     trace: Option<Trace>,
     bench: Option<Bench>,
     pub(crate) frame_state_changes: Option<[u32; 5]>,
+    /// The see-through list's part of them (see `RenderDetail`).
+    pub(crate) frame_see_through_changes: Option<[u32; 5]>,
     /// Why the latest frame has no usable GPU time (the HUD says it).
     pub(crate) gpu_untimed: Option<crate::perf::GpuUntimed>,
     /// Frames since the game started.
@@ -140,6 +142,7 @@ impl Profiler {
             trace: None,
             bench: None,
             frame_state_changes: None,
+            frame_see_through_changes: None,
             gpu_untimed: None,
             frame: 0,
             gpu_frames_seen: 0,
@@ -257,7 +260,7 @@ impl Profiler {
         if let Some(bench) = &mut self.bench
             && bench.record(self.frame, &sample, systems, new_gpu)
         {
-            bench.finish(render, self.frame_state_changes);
+            bench.finish(render, self.frame_state_changes, self.frame_see_through_changes);
             self.bench = None;
             quit = true;
         }
@@ -586,7 +589,7 @@ impl Bench {
         self.samples.len() >= self.frames
     }
 
-    fn finish(&mut self, render: RenderStats, state_changes: Option<[u32; 5]>) {
+    fn finish(&mut self, render: RenderStats, state_changes: Option<[u32; 5]>, see_through: Option<[u32; 5]>) {
         let mut sorted = Vec::with_capacity(self.samples.len());
         let s = summarize(&self.samples, &mut sorted);
         let n = self.samples.len() as f64;
@@ -623,8 +626,9 @@ impl Bench {
         );
         let _ = writeln!(
             report,
-            "model state changes (last frame): {}",
-            crate::render::state_changes_json(state_changes)
+            "model state changes (last frame): {}\nof which the see-through list: {}",
+            crate::render::state_changes_json(state_changes),
+            crate::render::state_changes_json(see_through)
         );
         let u = render.uploads;
         let _ = writeln!(
@@ -657,6 +661,7 @@ impl Bench {
                 "cpu_ms": { "systems": s.systems_ms, "render": s.render_cpu_ms, "display_wait": s.display_wait_ms },
                 "gpu_ms": s.gpu_ms,
                 "state_changes": crate::render::state_changes_json(state_changes),
+                "see_through_changes": crate::render::state_changes_json(see_through),
                 "draw_calls": render.draw_calls,
                 "instances": render.instances,
                 "triangles": render.triangles,

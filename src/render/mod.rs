@@ -376,6 +376,10 @@ pub(crate) struct RenderDetail {
     /// their data) in ms; includes `RenderStats::collect_ms`.
     pub prepare_ms: f32,
     pub state_changes: Option<[u32; 5]>,
+    /// The part of `state_changes` the main view's see-through list
+    /// recorded (models, batches, crowds, particles, ribbons, lines and
+    /// 3D text, drawn far to near together).
+    pub see_through_changes: Option<[u32; 5]>,
     /// The newest frame whose GPU timestamps came back: its own GPU ms and
     /// how many drawn frames ago it was drawn (see
     /// `GpuTimer::latest_frame`). `None` without timestamps or before the
@@ -522,6 +526,8 @@ mod prompt_row_render_test;
 pub(crate) mod render_test_support;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod rich_text_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod see_through_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod shadow_cache_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]

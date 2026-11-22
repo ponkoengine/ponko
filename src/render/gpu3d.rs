@@ -123,6 +123,8 @@ mod views;
 use super::capabilities::GpuLimits;
 use crate::handle::{INDEX_MASK, write_slot};
 use crate::render::traffic::{self, Counted, MAX_WRITES, MIRRORED, Mirror, NewBuffer, Synced, Upload};
+#[cfg(test)]
+pub(crate) use draw_order::SeeThrough;
 pub(crate) use draw_order::StateChanges;
 #[cfg(test)]
 pub(super) use draw_order::place_particles;
@@ -388,11 +390,23 @@ pub(crate) struct Renderer3D {
     /// models, far to near (on; off draws them after all of them, for
     /// comparing).
     pub(crate) particles_in_blend_order: bool,
+    /// Whether the main view's ribbons, lines and see-through batches
+    /// drawn far to near join that order too (on; off draws the batches
+    /// after the models and the ribbons and lines after both, for
+    /// comparing).
+    pub(crate) sort_strips_and_batches: bool,
+    /// Whether see-through models of one mesh are drawn together where
+    /// no other model they jump over covers the same pixels (on; off
+    /// draws them strictly far to near, for comparing).
+    pub(crate) group_see_through: bool,
     /// The model passes' state changes since the last `take_state_changes`.
     state_counters: draw_order::StateCounters,
     /// The same for the particles, ribbons, lines and text of the main
     /// view (see `take_particle_changes`).
     particle_counters: draw_order::StateCounters,
+    /// The main view's see-through list's, every frame (see
+    /// `see_through_changes`).
+    see_through_counters: draw_order::StateCounters,
 
     // ---- Kept from frame to frame ----
     /// What the temporal effects keep (see `history.rs`).
@@ -1138,6 +1152,9 @@ impl Renderer3D {
             defer_checks: false,
             group_draws: true,
             particles_in_blend_order: true,
+            sort_strips_and_batches: true,
+            group_see_through: true,
+            see_through_counters: Default::default(),
             particle_counters: Default::default(),
             state_counters: Default::default(),
             shadow_cache: ShadowCache::default(),
@@ -2064,7 +2081,12 @@ impl Renderer3D {
             + (parts + view_parts) * 2
             + held_parts
             + self.lists.views.len() * usize::from(self.atmosphere)
-            + self.particles.draw_count(self.lists.blend_steps.iter().map(|s| s.1))
+            + self
+                .particles
+                .draw_count(self.lists.see_through.iter().filter_map(|e| match e {
+                    draw_order::SeeThrough::Particles(_, end) => Some(*end),
+                    _ => None,
+                }))
             + self.debug_lines.as_ref().map_or(0, |l| l.draw_count())
             + self.effects.frame.len()
             + self.effects.target_frame.len()

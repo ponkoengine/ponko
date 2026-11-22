@@ -608,6 +608,7 @@ impl Perf {
         gpu_frame: Option<(&[crate::profiler::PassSpan], u64)>,
     ) -> bool {
         self.profiler.frame_state_changes = self.last_render_detail.and_then(|d| d.state_changes);
+        self.profiler.frame_see_through_changes = self.last_render_detail.and_then(|d| d.see_through_changes);
         self.profiler.gpu_untimed = self.gpu_untimed;
         let quit = self.profiler.record(
             sample,

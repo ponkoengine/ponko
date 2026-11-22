@@ -497,6 +497,19 @@ fn far_first(depth: f32) -> u32 {
     !ordered
 }
 impl ParticleFrame {
+    /// The camera's forward direction the depths are measured along
+    /// (from `right` and `up`).
+    pub fn forward(&self) -> Vec3 {
+        Vec3::from_slice(&self.up[..3]).cross(Vec3::from_slice(&self.right[..3]))
+    }
+
+    /// Takes `camera`'s axes: what [`Self::forward`] says, also when no
+    /// particles are collected.
+    pub fn set_camera(&mut self, camera: &Camera3D) {
+        self.right = (camera.rotation * Vec3::X).extend(0.0).to_array();
+        self.up = (camera.rotation * Vec3::Y).extend(0.0).to_array();
+    }
+
     /// Nothing to draw (keeping the storage).
     pub fn clear(&mut self) {
         self.instances.clear();
@@ -521,8 +534,7 @@ impl ParticleFrame {
         self.keys.clear();
         self.soft = false;
         self.strips.collect(world, camera);
-        self.right = (camera.rotation * Vec3::X).extend(0.0).to_array();
-        self.up = (camera.rotation * Vec3::Y).extend(0.0).to_array();
+        self.set_camera(camera);
         let (eye, forward) = (camera.position, camera.forward());
         let depth = |p: Vec3| (p - eye).dot(forward);
         let (staged, emitters, items, keys) = (&mut self.staged, &mut self.emitters, &mut self.items, &mut self.keys);

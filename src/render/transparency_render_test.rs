@@ -499,11 +499,20 @@ fn particles_among_glass_draw_in_one_stretch_per_gap() {
         particles.draws, 5,
         "one stretch in front of, between and behind the four panes"
     );
-    // Each stretch binds the particle camera and its image; each pane
-    // after a stretch rebinds the frame.
-    assert_eq!(particles.bind_groups, particles_before.bind_groups + 4 * 2 + 4);
-    assert_eq!(models_before.draws, 1, "the four panes of one mesh: one instanced draw");
-    assert_eq!(models.draws, 4, "with particles between them, a draw each");
+    // Each stretch binds the particle camera and its image (each pane
+    // after a stretch rebinds the frame, counted with the models).
+    assert_eq!(particles.bind_groups, particles_before.bind_groups + 4 * 2);
+    // The frame's counts include the particles' (the models' are the rest).
+    assert_eq!(
+        models_before.draws - particles_before.draws,
+        1,
+        "the four panes of one mesh: one instanced draw"
+    );
+    assert_eq!(
+        models.draws - particles.draws,
+        4,
+        "with particles between them, a draw each"
+    );
 }
 
 /// GPU time of the pass that draws the see-through models and particles

@@ -250,6 +250,7 @@ fn measure(kind: SceneKind, settings: &Settings) -> Result<(SceneReport, SceneBe
             ("views_skipped", u64::from(b.views_skipped)),
         ],
         state_changes: last.state_changes.map(u64::from),
+        see_through_changes: last.see_through_changes.map(u64::from),
         command_buffers: last.command_buffers as u64,
         submits: last.submits as u64,
         allocs_per_frame: allocs.count as f64 / count,

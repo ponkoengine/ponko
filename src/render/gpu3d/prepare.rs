@@ -791,7 +791,13 @@ impl Renderer3D {
         // main frame, for every view).
         if extra {
             self.order_runs();
-            self.sort_blended(&frame.instances, camera, total as u32, &frame.particles);
+            self.sort_blended(
+                &frame.instances,
+                camera,
+                total as u32,
+                &frame.particles,
+                frame.view_proj,
+            );
             self.order_solid_parts(&frame.instances, camera);
             return total + self.lists.blended.len();
         }
@@ -835,7 +841,13 @@ impl Renderer3D {
         self.order_runs();
         // Blended models are drawn from sorted copies of their instances,
         // which follow all the others.
-        self.sort_blended(&frame.instances, camera, total as u32, &frame.particles);
+        self.sort_blended(
+            &frame.instances,
+            camera,
+            total as u32,
+            &frame.particles,
+            frame.view_proj,
+        );
         self.order_solid_parts(&frame.instances, camera);
         total + self.lists.blended.len()
     }

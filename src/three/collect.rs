@@ -419,6 +419,7 @@ impl Frame3D {
             self.particles.collect(world, camera);
         } else {
             self.particles.clear();
+            self.particles.set_camera(camera);
         }
         self.shadow_size = lighting.shadow_size(self.size_limit);
         self.light_shadow_size = lighting.light_shadow_size(self.size_limit);

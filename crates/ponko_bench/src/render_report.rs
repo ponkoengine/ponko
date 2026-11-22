@@ -129,6 +129,9 @@ pub struct SceneReport {
     pub instance_batches: Vec<(&'static str, u64)>,
     /// Pipelines, bind groups, vertex and index buffers set in the last frame.
     pub state_changes: [u64; 4],
+    /// The part of them the see-through list set, and the draws it
+    /// recorded, in the last frame.
+    pub see_through_changes: [u64; 5],
     pub command_buffers: u64,
     /// `Queue::submit` calls in the last frame.
     pub submits: u64,
@@ -213,6 +216,13 @@ impl SceneReport {
             .map(|&(key, value)| (key.to_owned(), json!(value)))
             .collect();
         let [pipelines, bind_groups, vertex_buffers, index_buffers] = self.state_changes;
+        let [
+            see_pipelines,
+            see_bind_groups,
+            see_vertex_buffers,
+            see_index_buffers,
+            see_draws,
+        ] = self.see_through_changes;
         json!({
             "name": self.name,
             "scene": parsed(&self.scene_json),
@@ -232,6 +242,13 @@ impl SceneReport {
                 "bind_groups": bind_groups,
                 "vertex_buffers": vertex_buffers,
                 "index_buffers": index_buffers,
+            },
+            "see_through_changes": {
+                "pipelines": see_pipelines,
+                "bind_groups": see_bind_groups,
+                "vertex_buffers": see_vertex_buffers,
+                "index_buffers": see_index_buffers,
+                "draws": see_draws,
             },
             "command_buffers": self.command_buffers,
             "submits": self.submits,
@@ -645,6 +662,7 @@ mod tests {
             uploads_per_frame: vec![("instances", 128.0), ("uniforms", 64.5)],
             instance_batches: vec![("batches", 2)],
             state_changes: [1, 2, 3, 4],
+            see_through_changes: [1, 1, 1, 0, 2],
             command_buffers: 7,
             submits: 1,
             allocs_per_frame: 1.5,
@@ -714,6 +732,7 @@ mod tests {
         assert_eq!(s["gpu_ms"]["unavailable"], Value::Null);
         assert_eq!(s["counts"]["triangles"]["p50"], 1200.0);
         assert_eq!(s["state_changes"]["bind_groups"], 2);
+        assert_eq!(s["see_through_changes"]["draws"], 2);
         assert_eq!(s["upload_bytes_per_frame"]["uniforms"], 64.5);
         assert_eq!(s["memory"]["mesh_bytes"], 1024);
         assert_eq!(s["allocations_per_frame"], 1.5);
