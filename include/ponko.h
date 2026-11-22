@@ -2116,6 +2116,12 @@ typedef struct PonkoMessageStats {
   uint64_t bytes_received;
 } PonkoMessageStats;
 
+typedef struct PonkoModBytes {
+  const char *name;
+  const uint8_t *bytes;
+  size_t len;
+} PonkoModBytes;
+
 typedef struct PonkoNavBakeSettings {
   float agent_radius;
   float agent_height;
@@ -6211,6 +6217,10 @@ enum PonkoStatus ponko_net_messages_steam_peer(struct PonkoNetMessages *endpoint
                                                uint64_t *output);
 
 enum PonkoStatus ponko_ctx_mount_mods(struct PonkoCtx *ctx, const char *const *paths, size_t count);
+
+enum PonkoStatus ponko_ctx_mount_mods_from_memory(struct PonkoCtx *ctx,
+                                                  const struct PonkoModBytes *mods,
+                                                  size_t count);
 
 enum PonkoStatus ponko_ctx_mod_count(struct PonkoCtx *ctx, size_t *out_count);
 
