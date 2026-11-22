@@ -613,6 +613,8 @@ fn restart_emitter(ctx: &mut Ctx, e: Entity) {
 }
 
 /// The emitter before a change, to carry its particles over.
+// One short-lived value on the stack: boxing the emitter would only add an allocation.
+#[allow(clippy::large_enum_variant)]
 enum Old {
     None,
     D2(ParticleEmitter2D),
