@@ -106,6 +106,16 @@ reflections, skinned instance batches, a binary save format, C and C++ on
 the web, HDR output, web build inspection. Ray tracing and mesh shaders were
 evaluated for 0.1.0 and stay research.
 
+VR and XR (#143) are decided: **later**, not a goal of any release yet.
+The renderer already draws two eyes as two views (shadows, skinning and
+global illumination are shared; culling and every camera pass run per eye,
+so the CPU side of a stereo frame costs about twice one eye's). A headset
+still needs per-eye off-axis projections, drawing into a runtime's
+swapchain images, the runtime's frame pacing, and tracked input through
+OpenXR; that work moves into a release when a game needs it. The report,
+the prototype's numbers and the steps are in the guide's "VR and XR"
+chapter (`book/src/xr.md`).
+
 ## How work is chosen
 
 - Complete games decide. A gap found by a reference game or by a game built

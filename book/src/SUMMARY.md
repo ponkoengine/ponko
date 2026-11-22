@@ -48,6 +48,7 @@
 - [Drawing](drawing.md)
 - [Camera, text and UI](camera-ui.md)
 - [Several cameras: split screen and minimaps](viewports.md)
+  - [VR and XR: where the engine stands](xr.md)
 - [Retained game UI](ui.md)
   - [Widget gallery](ui-widgets.md)
   - [UI animation](ui-animation.md)
