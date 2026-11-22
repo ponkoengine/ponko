@@ -85,6 +85,11 @@ pub(super) const POST_CHAIN: [&str; 9] = [
 pub(super) struct PostChain {
     /// The format of the image the chain ends in (the window's).
     output_format: wgpu::TextureFormat,
+    /// What the pipelines ending in `output_format` are made from, to make
+    /// them again when it changes ([`set_output_format`](Self::set_output_format)).
+    shader: wgpu::ShaderModule,
+    post_pipeline_layout: wgpu::PipelineLayout,
+    bloom_pipeline_layout: wgpu::PipelineLayout,
     layout: wgpu::BindGroupLayout,
     pipeline: wgpu::RenderPipeline,
     fxaa: wgpu::RenderPipeline,
@@ -117,6 +122,8 @@ pub(super) struct PostChain {
 
 /// The post chain's images, of the scene's size.
 pub(super) struct PostTargets {
+    /// The chain's output format when these were made.
+    format: wgpu::TextureFormat,
     /// With FXAA: the tone mapped frame before it, and the bind group FXAA
     /// reads it by.
     ldr: Option<wgpu::TextureView>,
@@ -148,7 +155,9 @@ impl PostTargets {
     /// scaling pass's) switched on or off. The scene's images are then
     /// made again, these with them.
     pub(super) fn stale(&self, chain: &PostChain, upscaled: bool) -> bool {
-        self.ldr.is_some() != (chain.aa == AntiAliasing::Fxaa) || self.upscale.is_some() != upscaled
+        self.ldr.is_some() != (chain.aa == AntiAliasing::Fxaa)
+            || self.upscale.is_some() != upscaled
+            || self.format != chain.output_format
     }
 
     /// The first (largest) bloom image, the tone mapped frame FXAA reads
@@ -191,6 +200,24 @@ impl PostChain {
     /// The format of the image the chain ends in.
     pub(super) fn output_format(&self) -> wgpu::TextureFormat {
         self.output_format
+    }
+
+    /// Ends the chain in `format` from now on (the window switched to HDR
+    /// output's frame image): the passes writing it are made again, SMAA's
+    /// with the next frame, and the chain's images go stale
+    /// ([`PostTargets::stale`]).
+    pub(super) fn set_output_format(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
+        if format == self.output_format {
+            return;
+        }
+        [self.pipeline, self.fxaa, self.upscale] = output_pipelines(
+            device,
+            &self.shader,
+            (&self.post_pipeline_layout, &self.bloom_pipeline_layout),
+            format,
+        );
+        self.output_format = format;
+        self.smaa = None;
     }
 
     /// Which of the chain's optional links this frame records, as the
@@ -305,9 +332,12 @@ impl PostChain {
                 cache: None,
             })
         };
-        let post_pipeline = full_screen("3d post pipeline", &post_pipeline_layout, "fs_tonemap", format, None);
-        let fxaa_pipeline = full_screen("FXAA", &bloom_pipeline_layout, "fs_fxaa", format, None);
-        let upscale_pipeline = full_screen("3d upscale", &bloom_pipeline_layout, "fs_upscale", format, None);
+        let [post_pipeline, fxaa_pipeline, upscale_pipeline] = output_pipelines(
+            device,
+            &post_shader,
+            (&post_pipeline_layout, &bloom_pipeline_layout),
+            format,
+        );
         let bloom_prefilter = full_screen(
             "3d bloom prefilter",
             &bloom_pipeline_layout,
@@ -369,6 +399,9 @@ impl PostChain {
             .create_view(&Default::default());
         Self {
             output_format: format,
+            shader: post_shader,
+            post_pipeline_layout,
+            bloom_pipeline_layout,
             layout: post_layout,
             pipeline: post_pipeline,
             fxaa: fxaa_pipeline,
@@ -624,6 +657,7 @@ impl PostChain {
         let upscale_group = upscale.as_ref().map(|u| group(u, &self.black));
         let n = bloom_mips.len();
         PostTargets {
+            format: self.output_format,
             ldr,
             aa_group,
             upscale,
@@ -885,6 +919,48 @@ impl PostTargets {
             t.view(C::FrameTargets, "3d upscale", view);
         }
     }
+}
+
+/// The passes writing the chain's output in `format`: tone mapping, FXAA
+/// and scaling (`post.wgsl`), with the post and bloom pipeline layouts.
+fn output_pipelines(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    (post_layout, bloom_layout): (&wgpu::PipelineLayout, &wgpu::PipelineLayout),
+    format: wgpu::TextureFormat,
+) -> [wgpu::RenderPipeline; 3] {
+    let make = |label, layout, entry_point| {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
+                module: shader,
+                entry_point: Some("vs_full"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: shader,
+                entry_point: Some(entry_point),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        })
+    };
+    [
+        make("3d post pipeline", post_layout, "fs_tonemap"),
+        make("FXAA", bloom_layout, "fs_fxaa"),
+        make("3d upscale", bloom_layout, "fs_upscale"),
+    ]
 }
 
 #[cfg(test)]

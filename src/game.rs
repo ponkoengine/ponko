@@ -3088,9 +3088,9 @@ impl Game {
     /// peak while UI and sprites stay at paper white. Where none is offered
     /// it opens in SDR as usual. Off, nothing changes and nothing extra is
     /// drawn. While the game runs, `ctx.gfx.set_hdr_output` changes paper
-    /// white and peak and switches between HDR and SDR output (only if the
-    /// window opened with HDR on), and `ctx.gfx.hdr_status()` says what the
-    /// window does. See [`HdrOutput`](crate::render::HdrOutput).
+    /// white, peak and HDR10 metadata and switches between HDR and SDR
+    /// output either way (no restart), and `ctx.gfx.hdr_status()` says what
+    /// the window does. See [`HdrOutput`](crate::render::HdrOutput).
     ///
     /// ```no_run
     /// # use ponko::prelude::*;

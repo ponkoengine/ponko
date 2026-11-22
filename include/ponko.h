@@ -127,9 +127,9 @@
 
 #define PONKO_HANDLE_NONE UINT32_MAX
 
-#define PONKO_HDR_OUTPUT_VERSION 1
+#define PONKO_HDR_OUTPUT_VERSION 2
 
-#define PONKO_HDR_STATUS_VERSION 1
+#define PONKO_HDR_STATUS_VERSION 2
 
 #define PONKO_MAX_GAMEPADS 8
 
@@ -1962,6 +1962,8 @@ typedef struct PonkoHdrOutput {
   bool enabled;
   float paper_white_nits;
   float peak_nits;
+  float max_content_light_nits;
+  float max_frame_average_nits;
 } PonkoHdrOutput;
 
 typedef struct PonkoHdrStatus {
@@ -1976,6 +1978,11 @@ typedef struct PonkoHdrStatus {
   float headroom;
   float display_peak_nits;
   float display_headroom;
+  bool metadata_sent;
+  float min_mastering_nits;
+  float max_mastering_nits;
+  float max_content_light_nits;
+  float max_frame_average_nits;
 } PonkoHdrStatus;
 
 typedef struct PonkoLevelOptions {

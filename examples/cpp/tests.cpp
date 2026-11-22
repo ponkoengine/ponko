@@ -4786,6 +4786,14 @@ static void hdr_output() {
         now.peak_nits = -1;
         throws_kind([&] { ctx.set_hdr_output(now); }, PONKO_ERROR_INVALID);
         CHECK(ctx.hdr_output().peak_nits == 800);
+        now = ctx.hdr_output();
+        now.max_content_light_nits = 900;
+        now.max_frame_average_nits = 250;
+        ctx.set_hdr_output(now);
+        CHECK(ctx.hdr_output().max_content_light_nits == 900 && ctx.hdr_output().max_frame_average_nits == 250);
+        now.max_frame_average_nits = -1;
+        throws_kind([&] { ctx.set_hdr_output(now); }, PONKO_ERROR_INVALID);
+        CHECK(!ctx.hdr_status().metadata_sent);
     });
 }
 

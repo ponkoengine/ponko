@@ -5480,12 +5480,13 @@ int main() {
         .hdr_output(hdr)
         .run([](ponko::ctx& ctx) {
             ponko::hdr_status status = ctx.hdr_status();
-            if (status.reason == PONKO_HDR_OFF_NOT_REQUESTED) {
-                // the settings menu says "applies after a restart"
+            if (!status.available) {
+                // the settings menu greys out its HDR switch
             }
             ponko::hdr_output now = ctx.hdr_output();
-            now.peak_nits = 600.0f; // the player's slider
-            ctx.set_hdr_output(now);
+            now.peak_nits = 600.0f;              // the player's slider
+            now.max_frame_average_nits = 300.0f; // HDR10 metadata
+            ctx.set_hdr_output(now);             // takes effect next frame
         });
     // ANCHOR_END: hdr_output
 }

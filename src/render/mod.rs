@@ -26,6 +26,8 @@ mod gpu3d;
 mod gpu_textures;
 pub(crate) mod hdr;
 #[cfg(feature = "window")]
+mod hdr_metadata;
+#[cfg(feature = "window")]
 mod hdr_output;
 #[cfg(all(feature = "window", feature = "3d"))]
 mod lights;
@@ -105,7 +107,7 @@ pub use gpu3d::{
     LodBench, LodFrame, LodMemory, LodPath, LodScene, RecordBench, RecordScene, SceneBench, SceneFrame, SceneKind,
     SceneSetup,
 };
-pub use hdr::{HdrEncoding, HdrOffReason, HdrOutput, HdrStatus};
+pub use hdr::{HdrEncoding, HdrMetadata, HdrOffReason, HdrOutput, HdrStatus};
 /// Unstable 2D lighting benchmark driver for `ponko_bench` (feature `bench-internals`).
 #[doc(hidden)]
 #[cfg(all(
