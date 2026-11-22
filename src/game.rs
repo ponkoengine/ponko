@@ -406,6 +406,8 @@ pub struct Game {
     control: bool,
     /// Reload asset and data files when they change (`PONKO_HOT_RELOAD` overrides).
     hot_reload: bool,
+    /// From `image_limits`: `None` leaves the process's limits as they are.
+    image_limits: Option<crate::assets::ImageLimits>,
     inspector: bool,
     /// From `debug_draw`: `None` keeps the build's default.
     debug_draw: Option<bool>,
@@ -609,6 +611,12 @@ impl ConfiguredGame {
     /// See [`Game::hot_reload`].
     pub fn hot_reload(mut self, on: bool) -> Self {
         self.game = self.game.hot_reload(on);
+        self
+    }
+
+    /// See [`Game::image_limits`].
+    pub fn image_limits(mut self, limits: crate::assets::ImageLimits) -> Self {
+        self.game = self.game.image_limits(limits);
         self
     }
 
@@ -1369,6 +1377,7 @@ impl Game {
             replication: None,
             control: control::env_control(),
             hot_reload: cfg!(debug_assertions),
+            image_limits: None,
             inspector: cfg!(debug_assertions),
             debug_draw: None,
             input_scenario: None,
@@ -2769,6 +2778,33 @@ impl Game {
         self
     }
 
+    /// Sets how big a picture the image decoders accept: the longest side
+    /// and the decoded bytes ([`ImageLimits`](crate::assets::ImageLimits);
+    /// the defaults are 16 384 pixels and 512 MiB). Every decoder reads
+    /// them, so a picture past them is refused with
+    /// [`ErrorKind::Limit`](crate::error::ErrorKind::Limit) whichever format
+    /// it is in.
+    ///
+    /// Lower them for a game that loads pictures from players or the
+    /// network; raise them for a tool that reads large source art. The
+    /// setting is for the whole process, applied when the game starts (the
+    /// same as [`Assets::set_image_limits`](crate::assets::Assets::set_image_limits)).
+    /// A game that never calls this leaves them as they are.
+    ///
+    /// ```
+    /// use ponko::assets::ImageLimits;
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).image_limits(ImageLimits::new(4_096, 64 << 20)).run_headless(0, |ctx| {
+    ///     assert_eq!(ctx.assets.image_limits().max_side, 4_096);
+    ///     # ctx.assets.set_image_limits(ImageLimits::default());
+    /// });
+    /// ```
+    #[must_use]
+    pub fn image_limits(mut self, limits: crate::assets::ImageLimits) -> Self {
+        self.image_limits = Some(limits);
+        self
+    }
+
     /// Turns the runtime inspector on or off: an overlay that the backquote
     /// key (`` ` ``, left of 1) opens and closes,
     /// showing every entity and its components (reflected ones editable),
@@ -2828,6 +2864,9 @@ impl Game {
             ctx.set_headless(true);
         }
         ctx.assets.watcher.set_on(crate::hot_reload::enabled(self.hot_reload));
+        if let Some(limits) = self.image_limits {
+            ctx.assets.set_image_limits(limits);
+        }
         if let Some(on) = self.debug_draw {
             ctx.debug.set_enabled(on);
         }
