@@ -315,9 +315,14 @@ medians agreed within 0.004 ms, 0.045 ms for `get_field`):
 | `get_field` (`"Transform2D.rotation"`) | 0.359 ms | about 300 ns |
 | `set_field` (`"Transform2D.rotation"`) | 0.679 ms | about 620 ns |
 
-The call alone measured 0.046 ms on a busy machine before; 0.058 ms here
-is slower by more than the runs' spread (0.054 to 0.058 ms), the one
-number in this section that moved the wrong way.
+The call alone measured 0.046 ms before; 0.058 ms here is slower by more
+than the runs' spread (0.054 to 0.058 ms), the one number in this section
+that moved the wrong way. Run back to back on the same idle machine, the
+earlier revision gives 0.045 to 0.046 ms and this one 0.058 ms, and this
+revision with `src/mods/code.rs` as it was before gives 0.045 to 0.046
+ms: the cost came with the change that ties a mod's game pointer to its
+`with_code` call (a per-thread call number). That runs once a tick, not
+once a call, so why it costs about 12 ns a call is not yet known.
 
 `get_field` and `set_field` go through reflection's JSON (the component is
 read whole, and written back for a set), so they cost what `get_json` and

@@ -12,7 +12,8 @@
   area lights, stereo views, crowds and the battle showcase. Most numbers
   dropped to a third or less of what the busy machine gave.
 - Numbers that moved the wrong way are written as such: a code mod's call
-  costs 58 ns against 46 ns measured before, the lobby load test peaks at
+  costs 58 ns against 46 ns measured before (it came with tying a mod's
+  game pointer to its `with_code` call), the lobby load test peaks at
   122 MiB against 104 MiB, and the thin-objects trace in `High` at 1440p
   takes 0.21 to 0.24 ms against its 0.2 ms target, and a crowd's CPU path
   (WebGL2's limits) prepares and records in 0.55 ms against 0.44 ms. Memory per entity in

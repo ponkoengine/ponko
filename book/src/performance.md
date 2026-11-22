@@ -18,15 +18,18 @@ measurement scope.
 
 | Benchmark (1M entities) | Ponko | bevy_ecs | hecs |
 |---|---|---|---|
-| iterate `(&mut Pos, &Vel)` | 0.17 ms | 0.39 ms | 0.71 ms |
+| iterate `(&mut Pos, &Vel)` | 0.16 ms | 0.36 ms | 0.70 ms |
 
-hecs here is its plain `for` loop; with the `fold` fast path the ECS matrix
-below measures 0.19 ms (Ponko 0.17, bevy_ecs 0.41).
+Medians of three runs on an idle machine on 2026-11-22 (revision
+`9235ea05`, 1-minute load 2.2 to 2.3; Ponko 0.151 to 0.164 ms, bevy_ecs
+0.362, hecs 0.697 to 0.699). hecs here is its plain `for` loop; with the
+`fold` fast path the ECS matrix below measures 0.18 ms (Ponko 0.17,
+bevy_ecs 0.37).
 
 `par_for_each` on a heavy per-entity workload, 10M entities: 8.1 ms on all
 cores vs 57.6 ms on one (measured 2026-11-02, not run again). The steering
 workload of the ECS matrix below, at 1M entities, measured again on
-2026-11-20: 0.61 ms on all cores against 5.2 ms on one.
+2026-11-22: 0.56 ms on all cores against 4.9 ms on one.
 
 The full ECS matrix (1k/100k/1M entities: iteration, parallel scaling,
 spawning, spawn/despawn and add/remove churn, optional and filtered queries,
