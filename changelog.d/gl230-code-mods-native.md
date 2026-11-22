@@ -10,7 +10,9 @@
   `ModCode::seed_random` (same seed, same sequence). Refusals return
   `REFUSED_ENTITY`, `REFUSED_FIELD` or `REFUSED_VALUE` (NaN from
   `get_field`) and add a `refused:` line to `ModCode::take_log`. Measured
-  (`ponko_bench -- mods/host-call`): see the guide's "Code mods".
+  (`ponko_bench -- mods/host-call`, a busy laptop): a call alone 46 ns,
+  `random` about 14 ns more, `get_field` about 310 ns and `set_field`
+  about 645 ns (they go through reflection's JSON).
 - C and C++ call code mods: `ponko_ffi`'s new feature `mods-wasm`,
   `ponko_ctx_mod_function` and `ponko_ctx_mod_call` (`PonkoModFn`,
   `PonkoModValue`), `ponko_ctx_mod_expose_entity`,

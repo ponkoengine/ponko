@@ -300,9 +300,25 @@ average 75 to 115), two runs that agreed:
 | The game's own Rust rule (data-only mods) | Everywhere | 0.098 ms | 98 ns | 0 |
 | Code mod on wasmi (`mods-wasm`) | Everywhere, the web included | 0.204 ms | 204 ns (about 106 ns over Rust: the call, the interpreter, two host calls) | about 2.2 MB (measured below) |
 
-Both include the two physics ray casts each drip makes. A game that calls a
-mod function a few thousand times per tick spends well under a millisecond;
-one that runs a mod's whole simulation per entity should measure first.
+Both include the two physics ray casts each drip makes. A game that calls a mod function a few thousand times per tick spends well under a millisecond; one that runs a mod's whole simulation per entity should measure first.
+
+What one host call costs, from 1000 calls per tick of a mod function that
+makes one (`cargo run --release -p ponko_bench -- mods/host-call`), against
+the same function making none. Apple Silicon laptop, November 2026, busy (load
+average 55 to 90), two runs within 0.003 ms of each other:
+
+| Host call | 1000 calls per tick (median) | One host call, over the call itself |
+|---|---|---|
+| None (the call alone) | 0.046 ms | 46 ns for the call |
+| `random` | 0.060 ms | about 14 ns |
+| `get_field` (`"Transform2D.rotation"`) | 0.358 ms | about 310 ns |
+| `set_field` (`"Transform2D.rotation"`) | 0.692 ms | about 645 ns |
+
+`get_field` and `set_field` go through reflection's JSON (the component is
+read whole, and written back for a set), so they cost what `get_json` and
+`set_json` do: fine for a few thousand per tick, not for every field of
+every entity. A mod that needs many numbers per entity is better passed
+them as arguments, returning its answer.
 
 **Determinism.** wasmi runs with NaN results canonicalized, so the same
 module and inputs give the same bits on every machine; the sample's crawl is
