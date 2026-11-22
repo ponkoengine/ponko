@@ -283,11 +283,17 @@ accesskit_macos = { version = "0.27.2", optional = true }
 # The release wgpu's Metal backend already uses: nothing new is built.
 [target.'cfg(target_vendor = "apple")'.dependencies]
 objc2-metal = { version = "0.3.2", optional = true, default-features = false, features = ["std", "MTLDevice"] }
+# HDR10 metadata on the window's layer (`CAMetalLayer.EDRMetadata`) for PQ
+# output. The release wgpu's Metal backend already uses: nothing new is built.
+objc2-quartz-core = { version = "0.3.2", optional = true, default-features = false, features = ["std", "CALayer", "CAMetalLayer", "CAEDRMetadata", "objc2-metal"] }
 
 # Windows: UI Automation (Narrator, NVDA, JAWS) on the window's HWND. Its
 # `windows` crate is the release wgpu already brings in.
 [target.'cfg(target_os = "windows")'.dependencies]
 accesskit_windows = { version = "0.35.2", optional = true }
+# HDR10 metadata on the window's swap chain (`IDXGISwapChain4::SetHDRMetaData`).
+# The `windows` release wgpu's DX12 backend already uses.
+windows = { version = "0.62.2", optional = true, default-features = false, features = ["Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common"] }
 
 # Linux and the BSDs: AT-SPI over D-Bus (Orca). Pure Rust (zbus); it runs
 # its own small executor thread, so the engine needs no async runtime.
@@ -372,7 +378,7 @@ navmesh = ["3d", "dep:navmesh-rs", "dep:libm"]
 default = ["audio", "window", "inspector", "gamepad", "image-jpeg"]
 # A window and GPU rendering (winit + wgpu). Off: `Game::run_headless` only,
 # for simulation servers and CI; drawing calls do nothing, `Game::run` panics.
-window = ["dep:arboard", "dep:wgpu", "dep:winit", "dep:pollster", "dep:objc2-metal"]
+window = ["dep:arboard", "dep:wgpu", "dep:winit", "dep:pollster", "dep:objc2-metal", "dep:objc2-quartz-core", "dep:windows"]
 # Sound with kira. Off: the sound API stays and is silent (for servers).
 audio = ["dep:kira", "dep:cpal", "dep:symphonia"]
 # The runtime inspector (egui overlay, toggled with the ` key): entities and their

@@ -1171,8 +1171,12 @@ mod reference_workflow {
     }
 
     /// The files that may open a GPU device themselves, and why.
-    const OWN_DEVICE: [(&str, &str); 10] = [
+    const OWN_DEVICE: [(&str, &str); 11] = [
         ("src/render/gpu.rs", "the engine's own device"),
+        (
+            "src/render/hdr_metadata.rs",
+            "a surface on a bare CAMetalLayer needs an adapter compatible with it; no adapter goes through no_gpu",
+        ),
         ("src/render/render_test_support.rs", "the shared helpers"),
         (
             "src/render/capabilities_render_test.rs",

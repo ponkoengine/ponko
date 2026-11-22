@@ -22,12 +22,13 @@ pub(crate) const SCRGB_NITS: f32 = 80.0;
 /// white (the UI, sprites) at a comfortable paper white.
 ///
 /// **Off by default**, and then nothing changes: the frame is drawn exactly
-/// as before. Turn it on before the window opens with
-/// [`Game::hdr_output`](crate::game::Game::hdr_output); the window then picks
-/// an HDR format and color space where the display system offers one (see
-/// [`HdrStatus`]). While the game runs, `ctx.gfx.set_hdr_output` changes the
-/// paper white and the peak, and switches between HDR and SDR output (a
-/// player's settings menu), for as long as the window was opened with HDR.
+/// as before. Turn it on with
+/// [`Game::hdr_output`](crate::game::Game::hdr_output) before the window
+/// opens, or at any time with `ctx.gfx.set_hdr_output` (a player's settings
+/// menu): the window then picks an HDR format and color space where the
+/// display system offers one (see [`HdrStatus`]). While the game runs,
+/// `set_hdr_output` also changes the paper white, the peak and the HDR10
+/// metadata, and switches back to SDR output, without a restart.
 ///
 /// With HDR on, everything is drawn into a floating-point image where 1.0 is
 /// SDR white, and one extra full-screen pass encodes it for the display.
@@ -57,6 +58,13 @@ pub struct HdrOutput {
     /// its reported peak, or 1000 nits where it reports none. Clamped to
     /// paper white at least and 10 000 at most.
     pub peak_nits: f32,
+    /// HDR10 metadata: the brightest pixel the game shows (MaxCLL), in
+    /// nits. 0 (the default) is the peak in use. Sent to the display where
+    /// the platform takes metadata ([`HdrStatus::metadata`]).
+    pub max_content_light_nits: f32,
+    /// HDR10 metadata: the brightest a whole frame is on average (MaxFALL),
+    /// in nits. 0 (the default) is paper white.
+    pub max_frame_average_nits: f32,
 }
 
 impl Default for HdrOutput {
@@ -65,6 +73,8 @@ impl Default for HdrOutput {
             enabled: false,
             paper_white_nits: DEFAULT_PAPER_WHITE_NITS,
             peak_nits: 0.0,
+            max_content_light_nits: 0.0,
+            max_frame_average_nits: 0.0,
         }
     }
 }
@@ -119,6 +129,62 @@ pub enum HdrEncoding {
     Pq = 3,
 }
 
+/// HDR10 static metadata (SMPTE ST 2086 and CTA-861.3) as the window sends
+/// it to the display ([`HdrStatus::metadata`]). A display tone maps PQ
+/// output with it: it learns the brightest the game ever gets, so it
+/// needn't guess.
+///
+/// Made from [`HdrOutput`]: the mastering display's peak is the peak in
+/// use, its black 0, MaxCLL [`HdrOutput::max_content_light_nits`] (or the
+/// peak), MaxFALL [`HdrOutput::max_frame_average_nits`] (or paper white),
+/// each at most the mastering peak. The primaries are the encoding's:
+/// BT.2020 for PQ, BT.709 for scRGB; white is D65.
+/// ```
+/// use ponko::render::{HdrMetadata, HdrOutput};
+/// let mut hdr = HdrOutput::on();
+/// hdr.peak_nits = 1000.0;
+/// let m = HdrMetadata::for_output(&hdr, 1000.0);
+/// assert_eq!((m.max_mastering_nits, m.max_content_light_nits, m.max_frame_average_nits), (1000.0, 1000.0, 200.0));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub struct HdrMetadata {
+    /// The mastering display's black, in nits.
+    pub min_mastering_nits: f32,
+    /// The mastering display's peak, in nits: the peak in use.
+    pub max_mastering_nits: f32,
+    /// MaxCLL: the brightest pixel, in nits.
+    pub max_content_light_nits: f32,
+    /// MaxFALL: the brightest frame average, in nits.
+    pub max_frame_average_nits: f32,
+}
+
+impl HdrMetadata {
+    /// The metadata for `settings` with the peak at `peak_nits` (the
+    /// peak in use, [`HdrStatus::peak_nits`]).
+    #[must_use]
+    pub fn for_output(settings: &HdrOutput, peak_nits: f32) -> Self {
+        let peak = if peak_nits.is_finite() && peak_nits > 0.0 {
+            peak_nits.min(MAX_NITS)
+        } else {
+            DEFAULT_PEAK_NITS
+        };
+        let or = |asked: f32, default: f32| {
+            if asked.is_finite() && asked > 0.0 {
+                asked.min(peak)
+            } else {
+                default.min(peak)
+            }
+        };
+        Self {
+            min_mastering_nits: 0.0,
+            max_mastering_nits: peak,
+            max_content_light_nits: or(settings.max_content_light_nits, peak),
+            max_frame_average_nits: or(settings.max_frame_average_nits, settings.paper_white()),
+        }
+    }
+}
+
 /// What the window does with [`HdrOutput`] (`ctx.gfx.hdr_status()`).
 /// ```
 /// use ponko::prelude::*;
@@ -156,6 +222,11 @@ pub struct HdrStatus {
     pub display_headroom: Option<f32>,
     /// Why HDR isn't active, when it isn't.
     pub reason: Option<HdrOffReason>,
+    /// The HDR10 metadata the display was given, where the platform takes
+    /// it: Windows (DXGI, scRGB and PQ) and Apple's PQ layers. `None` in
+    /// SDR and where there is no API for it (Vulkan through wgpu, browsers,
+    /// macOS's scRGB, which is relative to the system's SDR white).
+    pub metadata: Option<HdrMetadata>,
 }
 
 impl HdrStatus {
@@ -171,6 +242,7 @@ impl HdrStatus {
             display_peak_nits: None,
             display_headroom: None,
             reason: Some(reason),
+            metadata: None,
         }
     }
 }
@@ -178,7 +250,7 @@ impl HdrStatus {
 /// Why HDR isn't active ([`HdrStatus::reason`]).
 /// ```
 /// use ponko::render::HdrOffReason;
-/// assert!(HdrOffReason::NotRequested.describe().contains("Game::hdr_output"));
+/// assert!(HdrOffReason::Off.describe().contains("HdrOutput::enabled"));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -186,9 +258,10 @@ impl HdrStatus {
 pub enum HdrOffReason {
     /// No window: headless runs draw nothing.
     Headless = 1,
-    /// HDR output wasn't turned on before the window opened
-    /// ([`Game::hdr_output`](crate::game::Game::hdr_output)); turning it on
-    /// now applies at the next start. A settings menu says "restart".
+    /// HDR output isn't turned on and never was since the window opened.
+    /// It isn't reported any more: [`HdrOutput::enabled`] false is
+    /// [`Off`](Self::Off), and turning it on while the game runs takes
+    /// effect from the next frame. Kept so code matching on it builds.
     NotRequested = 2,
     /// [`HdrOutput::enabled`] is false.
     Off = 3,
@@ -204,9 +277,7 @@ impl HdrOffReason {
     pub fn describe(self) -> &'static str {
         match self {
             Self::Headless => "no window: headless runs draw nothing",
-            Self::NotRequested => {
-                "HDR output was not turned on before the window opened (Game::hdr_output); it applies at the next start"
-            }
+            Self::NotRequested => "HDR output was not turned on (Game::hdr_output or Graphics::set_hdr_output)",
             Self::Off => "HDR output is turned off (HdrOutput::enabled)",
             Self::Unsupported => {
                 "the window's display system offers no HDR color space this renderer can encode \
@@ -318,12 +389,14 @@ impl Graphics {
         self.hdr_output
     }
 
-    /// Changes the HDR output settings. Paper white and peak apply from
-    /// the next frame. Switching `enabled` while the game runs switches
-    /// between HDR and SDR output if the window was opened with HDR on
-    /// ([`Game::hdr_output`](crate::game::Game::hdr_output)); otherwise the
-    /// window stays SDR until the next start, and
-    /// [`hdr_status`](Self::hdr_status) says so.
+    /// Changes the HDR output settings from the next frame: paper white,
+    /// peak and HDR10 metadata, and `enabled` switches the window between
+    /// HDR and SDR output while the game runs, with no restart and nothing
+    /// of the game made again. The first switch to HDR of a window opened
+    /// in SDR moves the frame into the HDR frame image (the renderer's
+    /// pipelines for the window's format are made again, once); from then
+    /// on switching costs a surface configuration.
+    /// [`hdr_status`](Self::hdr_status) says what the window does.
     /// ```
     /// use ponko::prelude::*;
     /// Game::new("hdr", 64, 64).run_headless(1, |ctx| {

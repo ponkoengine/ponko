@@ -412,8 +412,9 @@ impl Renderer {
         let (width, height) = (self.config.width, self.config.height);
         let format = self.output_format();
         // With HDR output it can be read back (the GPU tests check what the
-        // output pass wrote); its format follows HDR switched on and off.
-        let usage = if self.hdr.pass.is_some() {
+        // output pass wrote; the plain frame too, in tests, to compare
+        // with); its format follows HDR switched on and off.
+        let usage = if self.hdr.pass.is_some() || cfg!(test) {
             wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC
         } else {
             wgpu::TextureUsages::RENDER_ATTACHMENT
@@ -824,6 +825,21 @@ impl Renderer {
         renderer.config.color_space = choice.color_space;
         let sdr = wgpu::TextureFormat::Rgba8UnormSrgb;
         renderer.with_hdr(super::hdr_output::Hdr::plain(settings, Some(choice), sdr), true)
+    }
+
+    /// Tests: [`offscreen`](Self::offscreen) as a window offering `choice`
+    /// for HDR output but opened without it (drawn the plain way), so
+    /// `set_hdr_output` switches it on while the game runs.
+    #[cfg(all(test, feature = "3d"))]
+    pub(super) fn offscreen_offering_hdr(
+        gpu: super::render_test_support::TestGpu,
+        size: (u32, u32),
+        choice: super::hdr_output::OutputChoice,
+    ) -> Self {
+        let mut renderer = Self::offscreen(gpu, size);
+        let sdr = renderer.config.format;
+        renderer.hdr = super::hdr_output::Hdr::plain(super::HdrOutput::default(), Some(choice), sdr);
+        renderer
     }
 
     /// Tests: the last offscreen frame's format and bytes as drawn (with
@@ -1601,6 +1617,14 @@ impl Renderer {
         {
             t.texture(C::FrameTargets, "hdr frame", frame);
         }
+        if let Some(overlay) = self
+            .hdr
+            .pass
+            .as_ref()
+            .and_then(super::hdr_output::HdrPass::overlay_texture)
+        {
+            t.texture(C::FrameTargets, "hdr overlay", overlay);
+        }
         t.buffer(C::InstanceBatches, "sprite instances", &self.instance_buffer);
         for buffer in [&self.camera_buffer, &self.ui_camera_buffer]
             .into_iter()
@@ -2242,9 +2266,11 @@ impl Renderer {
         self.hdr.frames_to_query = 0;
     }
 
-    fn configure_surface(&self) {
+    fn configure_surface(&mut self) {
         if let Some(window_surface) = &self.window_surface {
             window_surface.surface.configure(&self.device, &self.config);
+            // A new swap chain may start without HDR metadata.
+            self.hdr.resend = true;
         }
     }
 
@@ -2258,13 +2284,17 @@ impl Renderer {
         }
     }
 
-    /// Changes the HDR output settings (`Graphics::set_hdr_output`). With
-    /// the window opened for HDR, switching it on or off configures the
-    /// surface for HDR or SDR output; nothing else is made again.
+    /// Changes the HDR output settings (`Graphics::set_hdr_output`).
+    /// Switching it on or off configures the surface for HDR or SDR
+    /// output. The first switch to HDR of a window drawn the plain way
+    /// moves its drawing into the frame image first ([`open_hdr`](Self::open_hdr)).
     pub fn set_hdr_output(&mut self, settings: super::HdrOutput) {
         self.hdr.settings = settings;
         if self.hdr.pass.is_none() {
-            return;
+            if !(settings.enabled && self.hdr.choice.is_some()) {
+                return;
+            }
+            self.open_hdr();
         }
         let (format, color_space, view) = self.hdr.surface_target();
         if (format, color_space) != (self.config.format, self.config.color_space) {
@@ -2275,6 +2305,71 @@ impl Renderer {
                 self.configure_surface();
             }
         }
+    }
+
+    /// Moves a window drawn the plain way to HDR output while the game
+    /// runs: everything is drawn into the frame image from the next frame,
+    /// as for a window opened with HDR. What was made for the window's
+    /// format is made again for the frame image's: the sprite pipeline and
+    /// the passes ending the 3D frame now, the 2D lights with their next
+    /// frame; pipelines kept per format (sprite materials, views, fading UI
+    /// layers, the temporal upscaler) make theirs on first use. Textures,
+    /// meshes and every other resource of the game stay as they are. The
+    /// inspector already draws in the overlay's format (the window's SDR
+    /// format), so it keeps its renderer and textures.
+    fn open_hdr(&mut self) {
+        let format = super::hdr_output::FRAME_FORMAT;
+        self.hdr.pass = Some(super::hdr_output::HdrPass::new(&self.device, &self.queue));
+        self.view_format = format;
+        self.pipeline = sprite_pipeline(&self.device, &self.sprite_layout, &self.sprite_shader, format);
+        self.lights2d = None;
+        #[cfg(feature = "3d")]
+        if let Some(three) = &mut self.three {
+            three.set_output_format(&self.device, format);
+        }
+        self.query_display();
+    }
+
+    /// Gives the display the HDR10 metadata the settings call for, when it
+    /// changed or the swap chain may be new (`hdr_metadata.rs`). Where the
+    /// platform takes none, nothing is sent and the status says `None`.
+    fn send_hdr_metadata(&mut self) {
+        let want = self.hdr.metadata();
+        if want == self.hdr.sent && !self.hdr.resend {
+            return;
+        }
+        self.hdr.resend = false;
+        let sent = match (want, self.hdr.choice, &self.window_surface) {
+            (Some(metadata), Some(choice), Some(window_surface)) => super::hdr_metadata::send(
+                &window_surface.surface,
+                window_surface.adapter.get_info().backend,
+                choice.encoding,
+                &metadata,
+            )
+            .then_some(metadata),
+            _ => None,
+        };
+        self.hdr.sent = sent;
+    }
+
+    /// Tests: HDR metadata as a window that takes it would hold it.
+    #[cfg(all(test, feature = "3d"))]
+    pub(super) fn hdr_metadata_wanted(&self) -> Option<super::HdrMetadata> {
+        self.hdr.metadata()
+    }
+
+    /// Tests: the formats drawn into now: the window's view format (the
+    /// frame image's with HDR), the 3D frame's output, and the image the
+    /// window gets (the surface's).
+    #[cfg(all(test, feature = "3d"))]
+    pub(super) fn formats_for_test(
+        &self,
+    ) -> (wgpu::TextureFormat, Option<wgpu::TextureFormat>, wgpu::TextureFormat) {
+        (
+            self.view_format,
+            self.three.as_ref().map(super::gpu3d::Renderer3D::output_format),
+            self.output_format(),
+        )
     }
 
     /// What the window does with the HDR settings (`Graphics::hdr_status`).
@@ -2312,12 +2407,14 @@ impl Renderer {
         lights: &crate::light2d::Lighting2D,
         cameras2d: &[crate::camera::views::Camera2DFrame],
     ) -> FrameStatus {
-        // HDR output: the display's peak and headroom, asked now and then.
+        // HDR output: the display's peak and headroom, asked now and then,
+        // and the HDR10 metadata that follows from them.
         if self.hdr.pass.is_some() {
             match self.hdr.frames_to_query.checked_sub(1) {
                 Some(left) => self.hdr.frames_to_query = left,
                 None => self.query_display(),
             }
+            self.send_hdr_metadata();
         }
         // `None` when the window can't be drawn to right now; a requested
         // screenshot is still drawn (offscreen), so it never waits on the
@@ -2728,7 +2825,15 @@ impl Renderer {
         // HDR output: everything is drawn into the frame image, which the
         // output pass then encodes into the window's image (`hdr_target`),
         // and a screenshot reads in SDR.
-        let (output, uniform) = (self.hdr.surface_target().2, self.hdr.uniform());
+        // The inspector is laid over the frame by the output pass.
+        #[cfg(feature = "inspector")]
+        let overlaid = self.overlay.is_some();
+        #[cfg(not(feature = "inspector"))]
+        let overlaid = false;
+        let (output, uniform) = (
+            self.hdr.surface_target().2,
+            self.hdr.uniform().with_overlay(overlaid),
+        );
         let (view, hdr_target) = match self.hdr.pass.as_mut() {
             Some(pass) => {
                 pass.write(&self.queue, uniform);
@@ -2873,6 +2978,18 @@ impl Renderer {
         let Some(overlay) = self.overlay.take() else {
             return Vec::new();
         };
+        // With HDR output the inspector draws into the overlay image, in
+        // the window's SDR format, as it would into an SDR window; the
+        // output pass lays it over the frame. Its format is the plain
+        // window's view format either way, so its renderer stays.
+        let format = self.hdr.overlay_format();
+        let (view, load) = match self.hdr.pass.as_mut() {
+            Some(pass) => match pass.overlay_view(&self.device, format) {
+                Some(overlay_view) => (overlay_view, wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)),
+                None => return Vec::new(),
+            },
+            None => (view.clone(), wgpu::LoadOp::Load),
+        };
         let renderer = self.egui.get_or_insert_with(|| {
             let options = egui_wgpu::RendererOptions {
                 msaa_samples: 1,
@@ -2880,7 +2997,7 @@ impl Renderer {
                 dithering: true,
                 predictable_texture_filtering: false,
             };
-            egui_wgpu::Renderer::new(&self.device, self.view_format, options)
+            egui_wgpu::Renderer::new(&self.device, format, options)
         });
         for id in self.egui_free.drain(..) {
             renderer.free_texture(&id);
@@ -2900,11 +3017,11 @@ impl Renderer {
             .begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("inspector"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
+                    view: &view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
+                        load,
                         store: wgpu::StoreOp::Store,
                     },
                 })],

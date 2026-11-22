@@ -648,3 +648,291 @@ fn hdr_settings_change_no_byte_of_a_frame_drawn_without_hdr() {
     assert!(before == after, "the SDR frame is byte for byte the same");
     assert_eq!(before.pixel(UI.0, UI.1), [255; 4]);
 }
+
+/// sRGB-encoded (as an 8-bit sRGB image reads back) to linear.
+fn linear(c: f32) -> f32 {
+    if c <= 0.040_45 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// A frame of `ctx` in linear light where 1.0 is SDR (paper) white: an
+/// 8-bit sRGB frame decoded, or relative scRGB as it is.
+fn linear_output(ctx: &mut crate::ctx::Ctx) -> (wgpu::TextureFormat, Vec<[f32; 4]>) {
+    let (format, pixels) = output(ctx);
+    let pixels = match format {
+        wgpu::TextureFormat::Rgba8UnormSrgb => pixels
+            .into_iter()
+            .map(|p| [linear(p[0]), linear(p[1]), linear(p[2]), p[3]])
+            .collect(),
+        _ => pixels,
+    };
+    (format, pixels)
+}
+
+/// Relative scRGB (Apple's extended dynamic range): the output pass writes
+/// the frame image as it is, 1.0 = paper white.
+fn relative() -> OutputChoice {
+    choice(HdrEncoding::ScRgb, true)
+}
+
+/// What a game draws authored in SDR, on a black background: UI squares
+/// (white, grey, orange), `ctx.debug` lines in 3D (green, grey, and magenta
+/// on top) and in 2D (orange). Drawn again each frame (debug drawing lasts
+/// one frame).
+fn sdr_authored(ctx: &mut crate::ctx::Ctx) {
+    ctx.scene3d.sky.atmosphere = false;
+    ctx.scene3d.lighting.shadows = false;
+    ctx.scene3d.post.bloom = 0.0;
+    ctx.gfx.clear_color = Color::BLACK;
+    ctx.scene3d.camera.position = vec3(0.0, 0.0, 3.0);
+    ctx.scene3d.camera.look_at(Vec3::ZERO);
+    let debug = &mut ctx.debug;
+    debug.set_enabled(true);
+    debug.line(vec3(-2.0, -0.6, 0.0), vec3(2.0, -0.6, 0.0), Color::GREEN).width(6.0);
+    debug
+        .line(vec3(-2.0, -0.2, 0.0), vec3(2.0, -0.2, 0.0), Color::rgb(0.5, 0.5, 0.5))
+        .width(6.0);
+    debug
+        .line(vec3(-2.0, 0.2, 0.0), vec3(2.0, 0.2, 0.0), Color::rgb(1.0, 0.0, 1.0))
+        .width(6.0)
+        .on_top();
+    debug
+        .line(vec2(-30.0, -28.0), vec2(30.0, -28.0), Color::rgb(1.0, 0.5, 0.0))
+        .width(3.0);
+    let (w, h) = (SIZE.0 as f32, SIZE.1 as f32);
+    let ui = &mut ctx.ui;
+    for (i, color) in [Color::WHITE, Color::rgb(0.5, 0.5, 0.5), Color::rgb(1.0, 0.5, 0.0)]
+        .into_iter()
+        .enumerate()
+    {
+        let root = ui
+            .root()
+            .layout(crate::ui::UiLayout::anchored(0.0, i as f32 * 14.0 / h, 12.0 / w, 12.0 / h))
+            .background(color)
+            .border_width(0.0)
+            .id();
+        ui.push_modeless(root);
+    }
+    let still = crate::ui::UiInput {
+        pointer: vec2(-10.0, -10.0),
+        ..Default::default()
+    };
+    ctx.ui.frame(vec2(w, h), &still);
+    ctx.hand_over_debug_draw();
+}
+
+/// The inspector's drawing for the next frame: an opaque mid-grey panel
+/// and, below it, half-transparent white over the black background, at
+/// the top right (x 40..60).
+#[cfg(feature = "inspector")]
+fn inspector_overlay(ctx: &mut crate::ctx::Ctx) {
+    let egui = egui::Context::default();
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(SIZE.0 as f32, SIZE.1 as f32),
+        )),
+        ..Default::default()
+    };
+    let out = egui.run_ui(input, |ui| {
+        let painter = ui.painter();
+        let rect = |y: f32| egui::Rect::from_min_size(egui::pos2(40.0, y), egui::vec2(20.0, 10.0));
+        painter.rect_filled(rect(2.0), 0.0, egui::Color32::from_gray(128));
+        painter.rect_filled(rect(14.0), 0.0, egui::Color32::from_white_alpha(128));
+    });
+    let primitives = egui.tessellate(out.shapes, out.pixels_per_point);
+    ctx.gfx.renderer.as_mut().unwrap().set_overlay(crate::inspector::Overlay {
+        primitives,
+        textures: out.textures_delta,
+        pixels_per_point: out.pixels_per_point,
+    });
+}
+
+/// The largest difference between two linear frames, and where.
+fn largest_difference(a: &[[f32; 4]], b: &[[f32; 4]]) -> (f32, (u32, u32), [f32; 4], [f32; 4]) {
+    let mut worst = (0.0, (0, 0), [0.0; 4], [0.0; 4]);
+    for (i, (p, q)) in a.iter().zip(b).enumerate() {
+        // A tolerance for 8-bit sRGB steps: absolute in the darks,
+        // relative in the lights.
+        let d = (0..3)
+            .map(|c| (p[c] - q[c]).abs() / (0.004 + 0.03 * q[c].abs()))
+            .fold(0.0, f32::max);
+        if d > worst.0 {
+            let at = (i as u32 % SIZE.0, i as u32 / SIZE.0);
+            worst = (d, at, *p, *q);
+        }
+    }
+    worst
+}
+
+#[test]
+fn the_inspector_debug_drawing_and_ui_keep_their_sdr_colours_with_hdr_output() {
+    let (Some(mut sdr), Some(mut hdr)) = (offscreen_ctx(SIZE), hdr_ctx(relative(), settings())) else {
+        return;
+    };
+    let mut frames = Vec::new();
+    for ctx in [&mut sdr, &mut hdr] {
+        sdr_authored(ctx);
+        // The lines reach the GPU with the first frame drawn.
+        ctx.render_frame();
+        sdr_authored(ctx);
+        #[cfg(feature = "inspector")]
+        inspector_overlay(ctx);
+        frames.push(linear_output(ctx));
+    }
+    let (sdr_frame, hdr_frame) = (&frames[0], &frames[1]);
+    assert_eq!(
+        (sdr_frame.0, hdr_frame.0),
+        (wgpu::TextureFormat::Rgba8UnormSrgb, wgpu::TextureFormat::Rgba16Float)
+    );
+    // Each part is there (not a black frame matching a black frame).
+    let px = |f: &[[f32; 4]], at| at_px(f, at);
+    assert_eq!(px(&sdr_frame.1, UI)[..3], [1.0; 3], "UI white");
+    let lit = sdr_frame.1.iter().filter(|p| p[1] > 0.2 && p[0] < 0.05).count();
+    assert!(lit > 50, "the green line is drawn: {lit} pixels");
+    #[cfg(feature = "inspector")]
+    {
+        // egui's grey 128 is sRGB: linear 0.216 (0.5 would be drawing its
+        // sRGB value into the linear frame image, too light).
+        let panel = px(&hdr_frame.1, (50, 6));
+        assert!(close(panel[0], 0.216, 0.05, 0.004), "inspector grey in HDR: {panel:?}");
+        assert!(close(px(&sdr_frame.1, (50, 6))[0], 0.216, 0.05, 0.004));
+    }
+    let (worst, at, got, want) = largest_difference(&hdr_frame.1, &sdr_frame.1);
+    eprintln!("largest HDR/SDR difference: {worst:.3} tolerances at {at:?} ({got:?} vs {want:?})");
+    assert!(
+        worst <= 1.0,
+        "HDR output keeps SDR-authored colours: at {at:?} HDR {got:?} vs SDR {want:?} ({worst} tolerances)"
+    );
+
+    // The negative control: a 3D highlight is meant to differ, and the
+    // comparison sees it.
+    for ctx in [&mut sdr, &mut hdr] {
+        let material = ctx.gfx.create_material(
+            crate::render::MaterialDesc::color(Color::BLACK).with_emissive(Color::rgb(6.0, 6.0, 6.0)),
+        );
+        let cube = ctx.gfx.create_mesh(&crate::render::MeshData::cube(0.5), material);
+        ctx.world
+            .spawn((crate::d3::Transform::default(), crate::render::Model::new(cube)));
+        sdr_authored(ctx);
+        ctx.render_frame();
+        sdr_authored(ctx);
+    }
+    let (_, with_box_sdr) = linear_output(&mut sdr);
+    let (_, with_box_hdr) = linear_output(&mut hdr);
+    let (worst, _, got, want) = largest_difference(&with_box_hdr, &with_box_sdr);
+    assert!(
+        worst > 10.0 && got[0] > 2.0 * want[0],
+        "the highlight goes above paper white in HDR only: {got:?} vs {want:?}"
+    );
+}
+
+fn at_px(pixels: &[[f32; 4]], (x, y): (u32, u32)) -> [f32; 4] {
+    pixels[(y * SIZE.0 + x) as usize]
+}
+
+#[test]
+fn hdr_switches_on_and_off_while_running_in_a_window_opened_in_sdr() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let mut ctx = crate::ctx::Ctx::new(1.0 / 60.0, vec2(SIZE.0 as f32, SIZE.1 as f32));
+    ctx.audio.headless = true;
+    let scrgb = choice(HdrEncoding::ScRgb, false);
+    ctx.gfx.renderer = Some(super::gpu::Renderer::offscreen_offering_hdr(gpu, SIZE, scrgb));
+    scene(&mut ctx);
+    let formats = |ctx: &crate::ctx::Ctx| ctx.gfx.renderer.as_ref().unwrap().formats_for_test();
+    use wgpu::TextureFormat::{Rgba8UnormSrgb as Srgb, Rgba16Float as Float};
+
+    // Opened in SDR: drawn the plain way, HDR available but off.
+    let status = ctx.gfx.hdr_status();
+    assert!(status.available && !status.active, "{status:?}");
+    assert_eq!(status.reason, Some(crate::render::HdrOffReason::Off));
+    assert_eq!(formats(&ctx), (Srgb, Some(Srgb), Srgb), "the plain drawing");
+    let (_, plain) = output(&mut ctx);
+    let plain_shot = shot(&mut ctx);
+
+    let mut on_frame = None;
+    let mut off_frame = None;
+    for round in 0..3 {
+        // On: everything goes into the frame image, the window takes scRGB.
+        ctx.gfx.set_hdr_output(settings());
+        let status = ctx.gfx.hdr_status();
+        assert!(status.active, "round {round}: {status:?}");
+        assert_eq!((status.encoding, status.headroom), (HdrEncoding::ScRgb, 5.0));
+        assert_eq!(
+            formats(&ctx),
+            (Float, Some(Float), Float),
+            "round {round}: sprites, the 3D frame's end and the window in HDR formats"
+        );
+        let (format, hdr) = output(&mut ctx);
+        assert_eq!(format, Float);
+        let ui = at(&hdr, UI);
+        assert!(close(ui[0], 2.5, 2e-3, 0.0), "round {round}: UI at paper white: {ui:?}");
+        assert!(at(&hdr, BOX)[0] > 2.0 * ui[0], "round {round}: the highlight above it");
+        match &on_frame {
+            None => on_frame = Some(hdr),
+            Some(first) => assert_eq!(&hdr, first, "round {round}: the same HDR frame each time"),
+        }
+        // A screenshot is still SDR, and the same as before HDR.
+        let image = shot(&mut ctx);
+        assert_eq!(image.pixel(UI.0, UI.1), plain_shot.pixel(UI.0, UI.1));
+
+        // Off: the window takes SDR again, through the output pass.
+        let mut off = settings();
+        off.enabled = false;
+        ctx.gfx.set_hdr_output(off);
+        let status = ctx.gfx.hdr_status();
+        assert!(!status.active && status.available);
+        assert_eq!(status.reason, Some(crate::render::HdrOffReason::Off));
+        assert_eq!(status.metadata, None, "no metadata in SDR");
+        let (format, sdr) = output(&mut ctx);
+        assert_eq!(format, Srgb, "round {round}: the window in SDR");
+        assert_eq!(at(&sdr, UI), [1.0; 4]);
+        for (i, (p, q)) in sdr.iter().zip(&plain).enumerate() {
+            for c in 0..3 {
+                assert!(
+                    (p[c] - q[c]).abs() <= 1.5 / 255.0,
+                    "round {round}: SDR after HDR looks as the plain SDR frame at pixel {i}: {p:?} vs {q:?}"
+                );
+            }
+        }
+        match &off_frame {
+            None => off_frame = Some(sdr),
+            Some(first) => assert_eq!(&sdr, first, "round {round}: the same SDR frame each time"),
+        }
+    }
+}
+
+#[test]
+fn hdr10_metadata_follows_the_peak_while_hdr_is_active() {
+    let mut hdr = settings();
+    hdr.max_frame_average_nits = 300.0;
+    let Some(mut ctx) = hdr_ctx(choice(HdrEncoding::Pq, false), hdr) else {
+        return;
+    };
+    scene(&mut ctx);
+    let wanted = |ctx: &crate::ctx::Ctx| ctx.gfx.renderer.as_ref().unwrap().hdr_metadata_wanted();
+    let m = wanted(&ctx).expect("PQ output takes metadata");
+    assert_eq!(
+        (m.max_mastering_nits, m.max_content_light_nits, m.max_frame_average_nits),
+        (1000.0, 1000.0, 300.0)
+    );
+    // An offscreen window has no swap chain or layer to take it: the
+    // status says none was sent.
+    assert_eq!(ctx.gfx.hdr_status().metadata, None);
+    hdr.peak_nits = 600.0;
+    ctx.gfx.set_hdr_output(hdr);
+    assert_eq!(wanted(&ctx).map(|m| m.max_mastering_nits), Some(600.0), "the peak moves it");
+    hdr.enabled = false;
+    ctx.gfx.set_hdr_output(hdr);
+    assert_eq!(wanted(&ctx), None, "SDR takes none");
+    // Relative scRGB (macOS) has no absolute brightness to describe.
+    let Some(mac) = hdr_ctx(relative(), settings()) else {
+        return;
+    };
+    assert_eq!(mac.gfx.renderer.as_ref().unwrap().hdr_metadata_wanted(), None);
+}

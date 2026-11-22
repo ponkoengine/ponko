@@ -13,10 +13,19 @@
 //! and the layer's color space, DXGI's `SetColorSpace1`, Vulkan's
 //! `VkColorSpaceKHR` and the canvas's `toneMapping` from
 //! `SurfaceConfiguration::color_space`, and reports the display's peak or
-//! headroom (`Surface::display_hdr_info`). It writes no HDR metadata
-//! (`vkSetHdrMetadataEXT`, DXGI `SetHDRMetaData`), so PQ output carries none.
+//! headroom (`Surface::display_hdr_info`). It writes no HDR metadata; the
+//! engine sets it itself where the platform API is in reach
+//! (`hdr_metadata.rs`).
+//!
+//! The inspector (egui) is authored for an sRGB window: it blends in linear
+//! light into an sRGB image. With HDR output it draws into an image of the
+//! window's SDR format instead (the overlay), which the output pass lays
+//! over the frame before encoding it, so it looks as it does in SDR, at
+//! paper white.
 
-use super::hdr::{DisplayReport, HdrEncoding, HdrOffReason, HdrOutput, HdrStatus, SCRGB_NITS, brightness};
+use super::hdr::{
+    DisplayReport, HdrEncoding, HdrMetadata, HdrOffReason, HdrOutput, HdrStatus, SCRGB_NITS, brightness,
+};
 
 /// The surface format and color space HDR output takes on a window, and
 /// how the frame is encoded for them.
@@ -105,7 +114,8 @@ pub(crate) fn display_report(info: &wgpu::DisplayHdrInfo) -> DisplayReport {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct OutputUniform {
-    /// x: the encoding ([`HdrEncoding`] as a number).
+    /// x: the encoding ([`HdrEncoding`] as a number); y: 1 when the
+    /// overlay (the inspector) is laid over the frame.
     pub mode: [u32; 4],
     /// x: what 1.0 becomes before scRGB or extended sRGB encoding; y: paper
     /// white in nits (PQ).
@@ -127,6 +137,13 @@ impl OutputUniform {
             params: [scale, paper, 0.0, 0.0],
         }
     }
+
+    /// With the overlay laid over the frame, or not.
+    #[must_use]
+    pub fn with_overlay(mut self, on: bool) -> Self {
+        self.mode[1] = u32::from(on);
+        self
+    }
 }
 
 /// The window's HDR state: the settings, what the surface offered, and
@@ -142,6 +159,11 @@ pub(crate) struct Hdr {
     /// What the display reported last, and frames until it is asked again.
     pub display: DisplayReport,
     pub frames_to_query: u32,
+    /// The HDR10 metadata the display was given last (`hdr_metadata.rs`),
+    /// and whether the surface was configured since (wgpu may make a new
+    /// swap chain then, which starts without).
+    pub sent: Option<HdrMetadata>,
+    pub resend: bool,
 }
 
 /// The display is asked again every this many frames (it moves between
@@ -158,7 +180,24 @@ impl Hdr {
             pass: None,
             display: DisplayReport::default(),
             frames_to_query: 0,
+            sent: None,
+            resend: false,
         }
+    }
+
+    /// The overlay's format: the window's SDR format as an sRGB view
+    /// draws it, the format the inspector draws in without HDR output.
+    pub fn overlay_format(&self) -> wgpu::TextureFormat {
+        self.sdr_format.add_srgb_suffix()
+    }
+
+    /// The HDR10 metadata the display should have now: while HDR is active
+    /// in an encoding with absolute brightness (PQ, and scRGB where 1.0 is
+    /// 80 nits); `None` otherwise.
+    pub fn metadata(&self) -> Option<HdrMetadata> {
+        let choice = self.choice.filter(|_| self.active())?;
+        let absolute = matches!(choice.encoding, HdrEncoding::Pq) || !choice.relative;
+        absolute.then(|| HdrMetadata::for_output(&self.settings, self.brightness().1))
     }
 
     /// Frames go out in HDR now.
@@ -204,10 +243,11 @@ impl Hdr {
         let available = self.choice.is_some();
         let reason = if self.choice.is_none() {
             Some(HdrOffReason::Unsupported)
-        } else if self.pass.is_none() {
-            Some(HdrOffReason::NotRequested)
         } else if !self.settings.enabled {
             Some(HdrOffReason::Off)
+        } else if self.pass.is_none() {
+            // Only between the settings and the renderer taking them.
+            Some(HdrOffReason::NotRequested)
         } else {
             None
         };
@@ -224,6 +264,7 @@ impl Hdr {
                 display_peak_nits: None,
                 display_headroom: None,
                 reason: None,
+                metadata: self.sent,
             },
         };
         status.display_peak_nits = self.display.peak_nits;
@@ -244,6 +285,8 @@ pub(crate) struct HdrPass {
     sdr_uniform: wgpu::Buffer,
     /// What `uniform` holds.
     written: Option<OutputUniform>,
+    /// Bound as the overlay where there is none: one transparent pixel.
+    no_overlay: wgpu::TextureView,
     /// The frame image and the bind groups reading it (window, screenshot).
     frame: Option<FrameImage>,
 }
@@ -251,6 +294,8 @@ pub(crate) struct HdrPass {
 struct FrameImage {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
+    /// The inspector's image, made the first time it draws.
+    overlay: Option<(wgpu::Texture, wgpu::TextureView)>,
     window: wgpu::BindGroup,
     sdr: wgpu::BindGroup,
 }
@@ -285,6 +330,16 @@ impl HdrPass {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -304,6 +359,22 @@ impl HdrPass {
         let uniform = buffer("hdr output settings");
         let sdr_uniform = buffer("hdr output settings (sdr)");
         queue.write_buffer(&sdr_uniform, 0, bytemuck::bytes_of(&OutputUniform::SDR));
+        let no_overlay = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("hdr output: no overlay"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor::default());
         Self {
             layout,
             pipeline_layout,
@@ -312,6 +383,7 @@ impl HdrPass {
             uniform,
             sdr_uniform,
             written: None,
+            no_overlay,
             frame: None,
         }
     }
@@ -380,30 +452,80 @@ impl HdrPass {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let group = |buffer: &wgpu::Buffer| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("hdr output"),
-                layout: &self.layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: buffer.as_entire_binding(),
-                    },
-                ],
-            })
-        };
-        let (window, sdr) = (group(&self.uniform), group(&self.sdr_uniform));
+        let window = self.group(device, &view, &self.uniform, &self.no_overlay);
+        let sdr = self.group(device, &view, &self.sdr_uniform, &self.no_overlay);
         self.frame = Some(FrameImage {
             texture,
             view: view.clone(),
+            overlay: None,
             window,
             sdr,
         });
         view
+    }
+
+    /// A bind group reading `frame` with the settings in `buffer` and
+    /// `overlay` laid over it.
+    fn group(
+        &self,
+        device: &wgpu::Device,
+        frame: &wgpu::TextureView,
+        buffer: &wgpu::Buffer,
+        overlay: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("hdr output"),
+            layout: &self.layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(frame),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(overlay),
+                },
+            ],
+        })
+    }
+
+    /// The overlay image (in `format`, the frame image's size) the
+    /// inspector draws into, made the first time; `None` before the frame
+    /// image exists. The window's output pass lays it over the frame while
+    /// its settings say so ([`OutputUniform::with_overlay`]); screenshots
+    /// never show it.
+    pub fn overlay_view(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) -> Option<wgpu::TextureView> {
+        let frame = self.frame.as_ref()?;
+        if let Some((texture, view)) = &frame.overlay
+            && texture.format() == format
+        {
+            return Some(view.clone());
+        }
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("hdr overlay"),
+            size: frame.texture.size(),
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let window = self.group(device, &frame.view, &self.uniform, &view);
+        let frame = self.frame.as_mut()?;
+        frame.window = window;
+        frame.overlay = Some((texture, view.clone()));
+        Some(view)
+    }
+
+    /// The overlay image, once made (the memory report).
+    pub fn overlay_texture(&self) -> Option<&wgpu::Texture> {
+        self.frame.as_ref()?.overlay.as_ref().map(|(t, _)| t)
     }
 
     /// Records the pass drawing the frame image into `target` (of `format`,
@@ -585,6 +707,13 @@ mod tests {
         assert!(status.available && !status.active);
         assert_eq!(status.reason, Some(HdrOffReason::NotRequested));
         assert_eq!(plain.tonemap_headroom(), None, "SDR tone mapping");
+        let mut off = HdrOutput::on();
+        off.enabled = false;
+        assert_eq!(
+            Hdr::plain(off, windows, F::Bgra8UnormSrgb).status().reason,
+            Some(HdrOffReason::Off),
+            "off is off, whether or not the window ever was in HDR"
+        );
         let none = Hdr::plain(HdrOutput::on(), None, F::Bgra8UnormSrgb);
         assert_eq!(none.status().reason, Some(HdrOffReason::Unsupported));
         assert_eq!(
