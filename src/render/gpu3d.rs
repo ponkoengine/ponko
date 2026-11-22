@@ -2235,6 +2235,19 @@ impl Renderer3D {
         self.screen.mip_bias_off = off;
     }
 
+    /// Runs the motion pass every frame (`true`), as before frames where
+    /// nothing moves skipped it: the control of its tests.
+    #[cfg(test)]
+    pub(crate) fn set_motion_pass_always(&mut self, on: bool) {
+        self.screen.motion_always = on;
+    }
+
+    /// Whether the last prepared frame skips the motion pass (for tests).
+    #[cfg(test)]
+    pub(crate) fn motion_pass_skipped(&self) -> bool {
+        self.screen.motion_kept
+    }
+
     /// Whether this frame is resolved by temporal antialiasing (for tests).
     #[cfg(test)]
     pub(crate) fn taa_active(&self) -> bool {

@@ -747,8 +747,15 @@ impl Renderer3D {
                     self.record_occlusion(encoder, frame);
                 }
                 if self.screen.velocity_on
+                    && !self.screen.motion_kept
                     && let Some(taa) = &targets.velocity
                 {
+                    // What the image holds after this pass (and the held
+                    // items' motion, drawn over it later): the next frame
+                    // skips the pass if nothing moves and it is all zeros.
+                    self.screen
+                        .motion_clear
+                        .store(!self.motion_draws(), std::sync::atomic::Ordering::Relaxed);
                     // Motion of the models that moved, over the final depth
                     // (read-only); everything else moves with the camera.
                     passes::mark("motion vectors");

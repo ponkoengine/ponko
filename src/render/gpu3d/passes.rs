@@ -349,7 +349,8 @@ impl Resource {
                 ..desc("effect scratch", Frame, F::Hdr, One)
             },
             Resource::VelocityColor => desc("motion vector color", Frame, F::Velocity, Scene),
-            Resource::Velocity => desc("motion vectors", Frame, F::Velocity, One),
+            // Kept: a frame where nothing moved reads the zeros of the last.
+            Resource::Velocity => desc("motion vectors", Persistent, F::Velocity, One),
             Resource::AoRaw => desc("raw ambient occlusion", Frame, F::Occlusion, One),
             Resource::AoHistory => desc("ambient occlusion history", Persistent, F::Hdr, One),
             Resource::AmbientOcclusion => desc("ambient occlusion", Frame, F::Occlusion, One),
@@ -506,6 +507,9 @@ features! {
     /// frame is jittered and has motion vectors, but TAA's resolve doesn't
     /// run; the tone mapped frame is accumulated into a window-sized history.
     TEMPORAL_UPSCALE = 47, "temporal upscale";
+    /// Nothing moved, and the motion vectors (kept from frame to frame)
+    /// hold none since the last motion pass cleared them: it is skipped.
+    MOTION_KEPT = 48, "motion vectors kept";
 }
 
 impl Features {
@@ -532,6 +536,7 @@ impl Features {
         (Features::GI_UPDATE, Features::GI),
         (Features::TEMPORAL_UPSCALE, Features::UPSCALE),
         (Features::TEMPORAL_UPSCALE, Features::VELOCITY),
+        (Features::MOTION_KEPT, Features::VELOCITY),
     ];
 
     /// No frame has both.
@@ -542,6 +547,8 @@ impl Features {
         (Features::TEMPORAL_UPSCALE, Features::TAA),
         (Features::TEMPORAL_UPSCALE, Features::FXAA),
         (Features::TEMPORAL_UPSCALE, Features::SMAA),
+        // The held items draw their motion over the motion pass's image.
+        (Features::MOTION_KEPT, Features::VIEW_MODEL_MOTION),
     ];
 
     pub(crate) const fn with(self, other: Features) -> Features {
@@ -1077,9 +1084,14 @@ pub(crate) const FRAME_PASSES: [Pass; 8] = [
                 on(F::OCCLUSION.with(F::SOLID_PREPASS)),
                 OCCLUSION_USES,
             ),
+            // Skipped while nothing moved and the image still holds the
+            // zeros an earlier frame's motion pass left.
             step(
                 "motion vectors",
-                on(F::VELOCITY),
+                When {
+                    all: F::VELOCITY,
+                    none: F::MOTION_KEPT,
+                },
                 models![
                     u(VelocityColor, A::Color),
                     u(Velocity, A::Resolve),
@@ -1991,14 +2003,24 @@ pub(crate) fn check_passes(table: &[Pass]) -> Result<(), PassError> {
             let before = runs_after(table, w, r);
             for (_, _, written, write_when) in writer.uses().filter(|(_, _, u, _)| u.access.writes()) {
                 let resource = written.resource;
-                for (_, _, read, read_when) in reader.uses().filter(|(_, _, u, _)| u.resource == resource) {
+                for (at, _, read, read_when) in reader.uses().filter(|(_, _, u, _)| u.resource == resource) {
                     if read_when.and(write_when).impossible() {
                         continue;
                     }
                     // What lasts a frame may be written again once it was
                     // read (the frame's image, by each pass in turn); what
-                    // is kept across frames is read as this frame wrote it.
-                    let ordered = after || before && resource.lifetime() == Lifetime::Frame;
+                    // is kept across frames is read as this frame wrote it,
+                    // or as an earlier step of the reader's own pass did in
+                    // every frame the later writer writes it too.
+                    let rewritten = || {
+                        let earlier: Vec<When> = reader
+                            .uses()
+                            .filter(|(w_at, _, w, _)| *w_at < at && w.resource == resource && w.access.writes())
+                            .map(|(_, _, _, when)| when)
+                            .collect();
+                        before && covered(read_when.and(write_when), &earlier).is_ok()
+                    };
+                    let ordered = after || before && resource.lifetime() == Lifetime::Frame || rewritten();
                     if read.access.reads() && !ordered {
                         return Err(PassError::UndeclaredRead {
                             pass: reader.name,

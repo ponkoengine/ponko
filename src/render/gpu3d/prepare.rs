@@ -113,6 +113,7 @@ impl Renderer3D {
             return;
         }
         self.prepare_crowds(device, queue, frame, scene.time, (scene.occlusion, scene.camera));
+        self.decide_motion_pass();
         self.prepare_shadows_and_lights(device, queue, frame, camera);
         self.upload_uniforms(device, queue, scene, &view, previous_view_proj, gi_frame);
         self.prepare_targets(device, &view, rebuild);
@@ -156,6 +157,7 @@ impl Renderer3D {
         self.finish_static(device, queue);
         // The crowds, for this view's camera at the main frame's time.
         self.prepare_crowds(device, queue, frame, scene.time, (false, scene.camera));
+        self.decide_motion_pass();
         let rebind = self.bind_decal_array(frame.decal_array);
         if self.lights.upload(device, queue, &frame.lights, &frame.decals) || rebind {
             self.frame_bind_group = self.frame_sources.bind_group(device, &self.frame_buffer, &self.lights);
@@ -951,6 +953,26 @@ impl Renderer3D {
         }
         self.upload_view_model_motion(device, queue, frame);
         true
+    }
+
+    /// Whether this frame skips the motion pass (after the crowds, which
+    /// draw their own motion there): nothing draws into the motion image,
+    /// and it holds only the zeros the last motion pass left.
+    fn decide_motion_pass(&mut self) {
+        self.screen.motion_kept = self.screen.velocity_on
+            && !self.motion_draws()
+            && self.screen.motion_clear.load(std::sync::atomic::Ordering::Relaxed)
+            && !self.screen.motion_pass_always();
+    }
+
+    /// Whether anything draws into the motion image this frame: moved
+    /// models, models a shader's `vertex` moves, crowds (on the GPU path:
+    /// counted whenever there are any) and the held items.
+    pub(super) fn motion_draws(&self) -> bool {
+        !self.lists.moved_runs.is_empty()
+            || self.screen.still_motion
+            || self.crowds.has_draws()
+            || self.view_model_motion()
     }
 
     /// Step 7: the shadow maps for this frame's sizes, which shadow views
