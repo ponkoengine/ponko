@@ -167,8 +167,10 @@ mod mixer_render_tests;
 mod tracks;
 // Streams decoded a packet at a time, for the web (tested natively), and
 // for a video's soundtrack (feature `video`).
-#[cfg(all(feature = "audio", any(target_arch = "wasm32", test, feature = "video")))]
+#[cfg(all(feature = "audio", any(target_arch = "wasm32", test, feature = "video", fuzzing)))]
 mod chunked;
+#[cfg(feature = "audio")]
+pub(crate) mod sound_file;
 #[cfg(feature = "audio")]
 mod unlock;
 
@@ -378,10 +380,17 @@ mod backend {
     }
     #[cfg(not(target_arch = "wasm32"))]
     impl StreamFrom {
-        fn open(&self) -> Result<StreamingSoundData<FromFileError>, FromFileError> {
+        fn open(&self) -> Result<StreamingSoundData<FromFileError>, String> {
             match self {
-                Self::File(path) => StreamingSoundData::from_file(path),
-                Self::Memory(bytes) => StreamingSoundData::from_cursor(std::io::Cursor::new(bytes.clone())),
+                Self::File(path) => {
+                    // The file may have changed since it was first checked.
+                    super::sound_file::check_file(path)?;
+                    StreamingSoundData::from_file(path).map_err(|e| e.to_string())
+                }
+                Self::Memory(bytes) => {
+                    super::sound_file::check_bytes(bytes)?;
+                    StreamingSoundData::from_cursor(std::io::Cursor::new(bytes.clone())).map_err(|e| e.to_string())
+                }
             }
         }
     }
@@ -527,15 +536,12 @@ mod backend {
                 .iter()
                 .position(|clip| matches!(clip, Clip::Stream(StreamFrom::File(p)) if *p == path))
             {
-                let seconds = StreamingSoundData::from_file(&path)
-                    .map_err(|e| e.to_string())?
-                    .duration()
-                    .as_secs_f32();
+                let seconds = StreamFrom::File(path).open()?.duration().as_secs_f32();
                 return Ok((self.ids.id_in(index), seconds));
             }
-            let data = StreamingSoundData::from_file(&path).map_err(|e| e.to_string())?;
-            let seconds = data.duration().as_secs_f32();
-            Ok((self.push(Clip::Stream(StreamFrom::File(path)), seconds), seconds))
+            let from = StreamFrom::File(path);
+            let seconds = from.open()?.duration().as_secs_f32();
+            Ok((self.push(Clip::Stream(from), seconds), seconds))
         }
         /// A sound streamed from encoded `bytes` held in memory (an asset
         /// source's): only the header is decoded now, the samples as it plays.
@@ -893,9 +899,13 @@ mod backend {
         }
         start + (position - start) % (end - start)
     }
+    /// Decodes a whole sound, refusing a header that claims a sample rate,
+    /// channels or length over the limits of [`sound_file`](super::sound_file)
+    /// and stopping at the length limit however short the header said it was.
     fn decode(bytes: Vec<u8>) -> Result<StaticSoundData, String> {
-        StaticSoundData::from_cursor(std::io::Cursor::new(bytes))
-            .map_err(|e| format!("could not decode the sound: {e}"))
+        let mut slices = crate::assets::group::sliced::SoundSlices::new(bytes)?;
+        while !slices.step()? {}
+        Ok(*slices.finish())
     }
     /// A decoded sound, made on any thread (asset groups decode on workers).
     pub type Decoded = Box<StaticSoundData>;
@@ -1246,6 +1256,23 @@ pub struct Audio {
     pub(crate) chosen_device: Option<String>,
     /// Loop points by sound id ([`Audio::set_loop`]).
     pub(crate) loops: std::collections::HashMap<u32, (f32, Option<f32>)>,
+}
+
+/// What the fuzz target `sound` does with the bytes of a sound file: every
+/// way the engine reads one (decoded whole, in slices, streamed from memory
+/// and as a video's soundtrack is) must refuse it with an error or accept
+/// it, never crash, hang or allocate without bound. Returns the frames and
+/// sample rate of the whole decode when it accepted the file; the target
+/// checks them against the limits of `sound_file`.
+#[cfg(all(fuzzing, feature = "audio"))]
+#[doc(hidden)]
+pub fn fuzz_sound(bytes: &[u8]) -> Option<(u64, u32)> {
+    let decoded = backend::decode_detached(bytes.to_vec())
+        .ok()
+        .map(|sound| (sound.frames.len() as u64, sound.sample_rate));
+    let _ = backend::Audio::default().stream_bytes(bytes.to_vec());
+    chunked::fuzz_stream(bytes);
+    decoded
 }
 
 /// A sound decoded on a worker thread, for [`Audio::adopt_decoded`].

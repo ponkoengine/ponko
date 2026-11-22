@@ -265,6 +265,8 @@ pub mod net;
 #[doc(hidden)]
 pub mod __fuzz {
     pub use crate::assets::fuzz_texture as texture;
+    #[cfg(feature = "audio")]
+    pub use crate::audio::fuzz_sound as sound;
     pub use crate::control::fuzz_requests as control_requests;
     pub use crate::net::fuzz::{lockstep_packets, message_packets, replication_packets};
 }
