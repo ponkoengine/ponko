@@ -199,23 +199,27 @@ the reference image `tests/fixtures/render/legions_battle.png`.
 
 ## Numbers
 
-Measured on an Apple M4 Max (14 cores) while other jobs kept the machine
-busy (load average 100 to 150): the engine's `battle` demo, whose documented
-time for 20,000 units is 0.57 ms per tick, ran at 9.2 to 14.3 ms per tick
-during these runs, so the times below are many times what a quiet machine
-gives. They are an upper bound, not a benchmark result. Release build,
+Measured on an idle Apple M4 Max (14 cores) on 2026-11-22, revision
+`9235ea05`, three runs each (1-minute load 1.9 to 2.8). Release build,
 headless, seed 1, `legions --headless --units N --ticks 600`; the first 600
 ticks are the march and the first clash:
 
 | Units | Map (cells) | Sim tick, all cores (mean of a run, 3 runs) | p95 | CPU work per tick, one thread |
 |---:|---|---|---|---:|
-| 10,000 | 400 x 225 | 11.9, 12.0, 15.6 ms | 41 ms | 2.3 to 2.7 ms |
-| 100,000 | 894 x 503 | 23.0, 25.7, 28.2 ms | 58 to 63 ms | 16.6 ms (300 ticks) |
-| 250,000 | 1414 x 795 | 43.4, 52.9, 58.4 ms | 83 to 99 ms | not measured (over the time limit) |
+| 10,000 | 400 x 225 | 0.50, 0.50, 0.52 ms | 0.75 to 0.76 ms | 1.65 ms |
+| 100,000 | 894 x 503 | 2.53, 2.55, 2.56 ms | 3.76 to 3.82 ms | 13.4 ms |
+| 250,000 | 1414 x 795 | 5.52, 5.56, 5.76 ms | 8.0 to 8.2 ms | 30.0 ms |
+
+The same runs on a machine busy with other jobs (load average 100 to 150)
+took 12 to 16, 23 to 28 and 43 to 58 ms a tick on all cores, and 2.3 to
+2.7 and 16.6 ms of CPU work.
 
 "CPU work" is the process's CPU time per tick with `--threads 1`, less a
-run of no ticks: the work itself, which load changes far less than wall time.
-`fight` is about 95% of every tick. `--headless` prints the tick-time
+run of no ticks (the three runs agreed within 1%): the work itself, which
+load changes far less than wall time. On all cores 100,000 and 250,000
+units take about a fifth of the one-thread work.
+`fight` is 70 to 85% of a tick (85% at 10,000 units, 70% at 250,000, where
+`aim` and `resolve` take 0.8 ms each). `--headless` prints the tick-time
 percentiles and each system's share.
 
 **Frame time.** Opening a window is not part of these runs, so the frame
