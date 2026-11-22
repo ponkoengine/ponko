@@ -281,7 +281,8 @@ impl Ctx {
         {
             // One entity: spawned whole, as files from before trees were.
             let components = Value::Object(single.components.clone());
-            return spawn_at(&mut self.world, components, at.into()).map_err(in_prefab);
+            let e = spawn_at(&mut self.world, components, at.into()).map_err(in_prefab)?;
+            return self.prefab_terrain(e).map_err(in_prefab);
         }
         let mut tree = Tree::default();
         let spawned = self
@@ -294,12 +295,33 @@ impl Ctx {
                 }
                 Ok(root)
             });
-        spawned.map_err(|e| {
+        let root = spawned.map_err(|e| {
             for &e in &tree.spawned {
                 self.world.despawn(e);
             }
             in_prefab(e)
-        })
+        })?;
+        self.prefab_terrain(root).map_err(in_prefab)
+    }
+
+    /// Gives the entities of the prefab just spawned at `root` that name a
+    /// terrain file their tiles, placed where the prefab put them; if a file
+    /// doesn't load, the prefab goes again and the error names the file.
+    fn prefab_terrain(&mut self, root: Entity) -> Result<Entity, crate::error::Error> {
+        #[cfg(feature = "3d")]
+        {
+            let mut members = vec![root];
+            if let Some(parts) = self.world.get::<PrefabParts>(root) {
+                members.extend(parts.0.iter().copied());
+            }
+            if let Err(e) = crate::three::give_terrain_tiles(self, &members) {
+                for e in members {
+                    self.world.despawn(e);
+                }
+                return Err(e);
+            }
+        }
+        Ok(root)
     }
 
     /// Despawns `root` and the [`PrefabParts`] that

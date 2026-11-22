@@ -1129,6 +1129,8 @@ impl Panels {
         // A drag in progress follows the mouse until the button goes up.
         if let Some((drag, _)) = &self.scene.gizmo.drag {
             if down {
+                // Terrain tiles from files settle when the drag ends.
+                ctx.gfx.assets3d.terrain_files.held = Some(ctx.gfx.frame);
                 if let Some(moved) = drag.update(&ray, self.scene.gizmo.snap) {
                     for (e, t) in moved {
                         editor::place_world3d(&mut ctx.world, e, t);
