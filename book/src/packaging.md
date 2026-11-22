@@ -139,6 +139,52 @@ pack in answer to the first. C and C++ games get the default `assets.pack`
 the same way; `PackSource` itself has no C or C++ binding yet (a C game can
 read a pack of its own through `ponko_ctx_add_asset_source`).
 
+### Caps on what a pack may unpack to
+
+A deflate stream can expand about a thousandfold, so a ratio check alone
+doesn't bound a pack: 100 MiB of zeros inside it would unpack to about 100 GiB.
+The engine adds three absolute caps, counted on the bytes it actually
+produces and not on what the index claims:
+
+| Cap | Default | Checked |
+|---|---|---|
+| `max_entry_size`: one file | 1 GiB | when the file is read, and while it inflates: it stops at the cap and never holds more |
+| `max_pack_size`: the sizes the index declares, added up | 16 GiB | when the pack is opened |
+| `max_entries`: files in the index | 1,000,000 | when the pack is opened |
+
+An error names the file, the cap and how to raise it. A game that loads
+packs from players or the network sets them low, a game shipping a very large
+pack of its own raises them, with the other settings on `Game` (they cover
+`assets.pack`, mod packs and every `PackSource::open` and `from_bytes`), or for
+one pack on its own:
+
+```rust
+# use ponko::prelude::*;
+use ponko::assets::{PackLimits, PackSource};
+
+# fn main() -> Result<(), ponko::prelude::Error> {
+// Packs from players: 8 MiB a file, 32 MiB and 500 files a pack.
+let strict = PackLimits::default()
+    .with_max_entry_size(8 << 20)
+    .with_max_pack_size(32 << 20)
+    .with_max_entries(500);
+let game = Game::new("Sharing", 1280, 720).pack_limits(strict);
+
+// Or one pack alone, with its own caps:
+# let bytes: Vec<u8> = Vec::new();
+let pack = PackSource::from_bytes_with_limits("download", bytes, PackLimits::default().with_max_entries(100));
+# let _ = (game, pack);
+# Ok(())
+# }
+```
+
+The tools keep to the same defaults: `ponko pack`, `ponko cook --pack` and
+`ponko package` refuse to write a pack that the engine's defaults would refuse
+to read, naming the file and the cap. A game that really needs more gives the
+caps to the tool (`--max-entry-size`, `--max-pack-size` in bytes or with
+`KiB`, `MiB`, `GiB`, and `--max-entries`) and raises them in the game with
+`Game::pack_limits`; `ponko cook --pack art --max-pack-size 32GiB`.
+
 What a pack saves on the web, measured on Ember Hop's web package (26 asset
 files, 248 KiB loose, 170 KiB packed), five runs each in headless Chromium on
 an emulated network with `node web/smoke/first-load.mjs` (HTTP/1.1, cache
