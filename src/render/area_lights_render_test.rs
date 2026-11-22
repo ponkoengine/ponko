@@ -438,9 +438,14 @@ fn rectangle_light_diffuse_matches_the_sampled_reference() {
     let rig = Rig::new(gpu, SMALL);
     let lights = panel();
     let reference = rig.shade(Method::Reference, &lights, true, 48, 0.0);
-    for (method, within) in [(Method::RectPoint, 0.02), (Method::RectLtc, 0.08)] {
+    for (method, within) in [(Method::RectPoint, 0.02), (Method::RectLtc, 0.04)] {
         let got = rig.shade(method, &lights, true, 0, 0.0);
         let (mean, off) = error(&got, &reference);
+        eprintln!(
+            "{method:?} diffuse: mean error {:.1} %, {:.1} % of pixels off by 10 %",
+            mean * 100.0,
+            off * 100.0
+        );
         assert!(
             mean < within && off < 0.02,
             "{method:?}: mean error {mean}, {off} of pixels off by 10 %"
@@ -478,6 +483,12 @@ fn tube_light_diffuse_is_close_beside_the_tube_and_bright_off_its_ends() {
     let at = |x: f32, z: f32| (((z + 4.5) / 9.0 * 90.0) as usize) * 160 + ((x + 8.0) / 16.0 * 160.0) as usize;
     let (under, off_end) = (at(1.0, 0.5), at(-3.5, 0.0));
     let ratio = |i: usize| got[i][1] / reference[i][1];
+    eprintln!(
+        "tube diffuse: mean error {:.1} %, beside the middle x{:.3}, off the end x{:.2}",
+        mean * 100.0,
+        ratio(under),
+        ratio(off_end)
+    );
     assert!((ratio(under) - 1.0).abs() < 0.1, "beside the middle: {}", ratio(under));
     assert!(
         ratio(off_end) > 1.5,
@@ -529,7 +540,7 @@ fn area_light_shaders_draw_the_same_with_webgl2_limits() {
 /// GPU time of a full-screen pass at 1920x1080 shading every pixel with
 /// 0, 8 and 32 lights of each kind (a froxel's list), with the engine's GPU
 /// pass timer: the median of the frames timed after 8 warm-up frames, and
-/// the cost of one more light. Also the error of each method against the
+/// the cost of one more light (from 8 to 32). Also the error of each method against the
 /// sampled reference, in full (diffuse and specular), at three roughnesses.
 /// Ignored: run explicitly. It measures GPU timestamps only, so a debug
 /// build gives the same numbers as a release one.
@@ -590,12 +601,15 @@ fn area_light_gpu_cost_benchmark() {
         assert!(times.len() >= 30, "{} frames timed", times.len());
         times[times.len() / 2]
     };
+    // The GPU ramps its clocks up over the first busy frames: warm it up
+    // so the first method timed isn't slowed by it.
+    time(Method::RectLtc, 32);
     for method in [Method::Point, Method::RectLtc, Method::RectPoint, Method::Tube] {
         let [none, eight, many] = [0, 8, 32].map(|n| time(method, n));
         eprintln!(
             "area lights gpu {:<10} 0: {none:6.3} ms, 8: {eight:6.3} ms, 32: {many:6.3} ms; one light {:6.4} ms",
             format!("{method:?}"),
-            (many - none) / 32.0
+            (many - eight) / 24.0
         );
     }
     drop(time);
