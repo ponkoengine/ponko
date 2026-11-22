@@ -366,7 +366,12 @@ impl Graphics {
         let found = self.asset_sources.find(&image_path)?;
         let image_source = found.origin.clone();
         let image_bytes = found.into_bytes().map_err(|err| err.with_path(&image_path))?;
-        let image = crate::assets::decode_image(&image_bytes, &image_path, &image_path)?;
+        let image = self
+            .asset_sources
+            .image_limits()
+            .scope(&image_source, || {
+                crate::assets::decode_image(&image_bytes, &image_path, &image_path)
+            })?;
         Ok((export, image, vec![source, image_source]))
     }
 }

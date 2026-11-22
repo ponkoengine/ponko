@@ -912,6 +912,13 @@ fn tools() -> Vec<Tool> {
             required: &[],
         },
         Tool {
+            name: "image_limits",
+            description: "The image size limits in force, read only: the game's (longest side in pixels, most decoded RGBA8 bytes) and the asset sources (mod packs, download caches, folders) that have limits of their own. A picture past them fails to load with an error naming them. They can't be changed from here.",
+            writes: false,
+            params: no_params,
+            required: &[],
+        },
+        Tool {
             name: "place_asset",
             description: "Drop an asset into the scene as the editor's asset browser does, as one undo step: a glTF mesh becomes a model, a prefab is spawned with its parts. At a world point, or where a window point's ray meets the ground, optionally snapped to the grid. Returns the entity and its prefab parts.",
             writes: true,
@@ -1082,6 +1089,7 @@ fn tool_methods(name: &str) -> Option<&'static [&'static str]> {
         "set_parent" => &["editor.parent"],
         "scene_hierarchy" => &["editor.hierarchy"],
         "list_assets" => &["editor.assets"],
+        "image_limits" => &["assets.image_limits"],
         "place_asset" => &["editor.place"],
         "paint_material" => &["editor.material"],
         "delete_entities" => &["editor.delete"],
@@ -1406,6 +1414,7 @@ impl Server {
             "set_parent" => self.instance(args)?.call("editor.parent", pass(&["entity", "parent"])),
             "scene_hierarchy" => self.instance(args)?.call("editor.hierarchy", json!({})),
             "list_assets" => self.instance(args)?.call("editor.assets", json!({})),
+            "image_limits" => self.instance(args)?.call("assets.image_limits", json!({})),
             "place_asset" => self
                 .instance(args)?
                 .call("editor.place", pass(&["path", "at", "screen", "snap"])),

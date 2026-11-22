@@ -225,20 +225,25 @@ impl Graphics {
         let mut images = Vec::with_capacity(paths.len());
         #[cfg(feature = "compressed-textures")]
         let mut blocks = Vec::new();
+        let limits = self.asset_sources.image_limits();
         for path in paths {
             let found = self.asset_sources.find(path)?;
             let origin = found.origin.clone();
             let bytes = found.into_bytes().map_err(|e| e.with_path(*path))?;
             let what = origin.describe(path);
             #[cfg(feature = "compressed-textures")]
-            if let Some(decoded) = crate::compressed::decode(&bytes, path, &what, self.compressed_formats()) {
+            let compressed = limits.scope(&origin, || {
+                crate::compressed::decode(&bytes, path, &what, self.compressed_formats())
+            });
+            #[cfg(feature = "compressed-textures")]
+            if let Some(decoded) = compressed {
                 match decoded? {
                     crate::compressed::Decoded::Rgba(image) => images.push(image),
                     crate::compressed::Decoded::Blocks(image) => blocks.push((images.len(), image)),
                 }
                 continue;
             }
-            images.push(assets::decode_image(&bytes, path, &what)?);
+            images.push(limits.scope(&origin, || assets::decode_image(&bytes, path, &what))?);
         }
         #[cfg(feature = "compressed-textures")]
         if !blocks.is_empty() {

@@ -610,8 +610,14 @@ impl Level {
                 format!("{path}: not a level file Ponko reads (.tmx, .tmj, .json or .ldtk)"),
             )),
         };
+        // Its tilesets' pictures follow the limits of the source the level file came from.
+        let limits = assets.asset_sources.image_limits();
+        let in_source = |f: &dyn Fn() -> Result<(), Error>| match assets.asset_sources.locate(path) {
+            Some(origin) => limits.scope(&origin, f),
+            None => f(),
+        };
         let mut level = level
-            .and_then(|level| level.check_sizes().map(|()| level))
+            .and_then(|level| in_source(&|| level.check_sizes()).map(|()| level))
             .map_err(|e| e.context(path).with_path(path))?;
         level.files = reader.files.iter().map(|(n, _)| n.clone()).collect();
         Ok((level, reader.files))

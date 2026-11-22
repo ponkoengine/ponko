@@ -173,12 +173,20 @@ pub(crate) struct Prepared {
     files: std::collections::HashMap<String, (TerrainData, Option<TextureArray>)>,
 }
 
-fn read_file(ctx: &mut Ctx, path: &str) -> Result<(TerrainData, Option<TextureArray>), Error> {
-    let (_, text) = ctx.assets.read_text(path)?;
+/// Reads terrain file `path` and its weight pictures, which follow the image
+/// limits of the source the file came from.
+fn read_data(ctx: &Ctx, path: &str) -> Result<TerrainData, Error> {
+    let (origin, text) = ctx.assets.read_text(path)?;
     let sources = &ctx.assets.asset_sources;
-    let data = TerrainData::read(path, &text, &mut |name| {
-        sources.find(name)?.into_bytes().map_err(|e| e.with_path(name))
-    })?;
+    sources.image_limits().scope(&origin, || {
+        TerrainData::read(path, &text, &mut |name| {
+            sources.find(name)?.into_bytes().map_err(|e| e.with_path(name))
+        })
+    })
+}
+
+fn read_file(ctx: &mut Ctx, path: &str) -> Result<(TerrainData, Option<TextureArray>), Error> {
+    let data = read_data(ctx, path)?;
     let layers = load_layers(ctx, path, &data)?;
     Ok((data, layers))
 }
@@ -474,11 +482,7 @@ impl TerrainTile {
     /// [`Decode`](crate::error::ErrorKind::Decode) for one that doesn't read
     /// (the message says what's wrong). Nothing is spawned then.
     pub fn spawn_from_file(ctx: &mut Ctx, path: &str, at: Vec3) -> Result<Entity, Error> {
-        let (_, text) = ctx.assets.read_text(path)?;
-        let sources = &ctx.assets.asset_sources;
-        let data = TerrainData::read(path, &text, &mut |name| {
-            sources.find(name)?.into_bytes().map_err(|e| e.with_path(name))
-        })?;
+        let data = read_data(ctx, path)?;
         let layers = load_layers(ctx, path, &data)?;
         let built = build(ctx, &data, Vec2::new(at.x, at.z), layers)?;
         note_tile(ctx, path, at, built.tile);

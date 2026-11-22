@@ -377,6 +377,9 @@ impl std::ops::Deref for Packs {
 #[derive(Default)]
 pub(crate) struct Sources {
     list: Vec<Slot>,
+    /// The image limits sources have of their own, by source id (also for
+    /// the packs, and for sources not added yet).
+    limits: SourceLimits,
     /// The packs read after the loose files, in place of the default ones
     /// (`assets.pack` beside the asset folders): for tests.
     #[cfg(test)]
@@ -408,6 +411,7 @@ impl Sources {
     pub(crate) fn with_packs(packs: Vec<PackSource>) -> Sources {
         Sources {
             list: Vec::new(),
+            limits: SourceLimits::default(),
             packs: Some(Arc::new(packs)),
         }
     }
@@ -415,6 +419,16 @@ impl Sources {
     /// Whether a source with this id was added.
     pub(crate) fn has(&self, id: &str) -> bool {
         self.list.iter().any(|s| s.get().id() == id)
+    }
+
+    /// The sources' own image limits, to hand to a decode job.
+    pub(crate) fn image_limits(&self) -> SourceLimits {
+        self.limits.clone()
+    }
+
+    /// Sets (or with `None` clears) the image limits of source `id`.
+    pub(crate) fn set_image_limits(&mut self, id: &str, limits: Option<ImageLimits>) {
+        self.limits.set(id, limits);
     }
 
     /// Whether no source was added (only the default one is searched).
@@ -778,6 +792,16 @@ impl SharedSources {
     /// As [`Sources::has`].
     pub(crate) fn has(&self, id: &str) -> bool {
         self.0.borrow().has(id)
+    }
+
+    /// As [`Sources::image_limits`].
+    pub(crate) fn image_limits(&self) -> SourceLimits {
+        self.0.borrow().image_limits()
+    }
+
+    /// As [`Sources::set_image_limits`].
+    pub(crate) fn set_image_limits(&self, id: &str, limits: Option<ImageLimits>) {
+        self.0.borrow_mut().set_image_limits(id, limits);
     }
 
     /// As [`Sources::is_empty`].
@@ -1257,7 +1281,7 @@ impl ImageLimits {
     }
 
     /// The limits as the messages say them: `4096 pixels a side, 64 MiB of pixels`.
-    fn describe(self) -> String {
+    pub(crate) fn describe(self) -> String {
         if self.max_bytes.is_multiple_of(1 << 20) {
             format!(
                 "{} pixels a side, {} MiB of pixels",
@@ -1280,18 +1304,47 @@ impl Default for ImageLimits {
 /// of every thread read: asset groups and streams decode on workers.
 static GLOBAL_IMAGE_LIMITS: std::sync::RwLock<ImageLimits> = std::sync::RwLock::new(ImageLimits::DEFAULT);
 
+/// Where the image limits in force came from, for the message of a refused picture.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum LimitsFrom {
+    /// The game's: [`Game::image_limits`](crate::game::Game::image_limits) or the defaults.
+    Game,
+    /// An asset source's own, by its id.
+    Source(String),
+    /// Limits given for one call ([`Graphics::try_decode_texture`](crate::gfx::Graphics::try_decode_texture)).
+    Call,
+}
+
+impl LimitsFrom {
+    /// `the game's limits`, `the limits of asset source "mods"`, ...
+    fn describe(&self) -> String {
+        match self {
+            LimitsFrom::Game => "the game's limits".to_string(),
+            LimitsFrom::Source(id) => format!("the limits of asset source \"{id}\""),
+            LimitsFrom::Call => "limits given for this picture".to_string(),
+        }
+    }
+}
+
 thread_local! {
     /// Limits for one call on this thread (`with_image_limits`), asked before the global ones.
-    static SCOPED_IMAGE_LIMITS: std::cell::Cell<Option<ImageLimits>> = const { std::cell::Cell::new(None) };
+    static SCOPED_IMAGE_LIMITS: std::cell::RefCell<Option<(ImageLimits, LimitsFrom)>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// The limits in force on this thread: those of the enclosing
 /// [`with_image_limits`] call, else the process's.
 pub(crate) fn image_limits() -> ImageLimits {
-    SCOPED_IMAGE_LIMITS.get().unwrap_or_else(|| {
-        *GLOBAL_IMAGE_LIMITS
+    image_limits_from().0
+}
+
+/// [`image_limits`] and where they came from.
+pub(crate) fn image_limits_from() -> (ImageLimits, LimitsFrom) {
+    SCOPED_IMAGE_LIMITS.with_borrow(Clone::clone).unwrap_or_else(|| {
+        let global = *GLOBAL_IMAGE_LIMITS
             .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (global, LimitsFrom::Game)
     })
 }
 
@@ -1306,14 +1359,71 @@ pub(crate) fn set_global_image_limits(limits: ImageLimits) {
 /// whatever it decodes meanwhile; the previous ones come back afterwards,
 /// even if `f` panics.
 pub(crate) fn with_image_limits<T>(limits: ImageLimits, f: impl FnOnce() -> T) -> T {
-    struct Restore(Option<ImageLimits>);
+    with_limits_from(limits, LimitsFrom::Call, f)
+}
+
+/// [`with_image_limits`], naming where the limits came from.
+fn with_limits_from<T>(limits: ImageLimits, from: LimitsFrom, f: impl FnOnce() -> T) -> T {
+    struct Restore(Option<(ImageLimits, LimitsFrom)>);
     impl Drop for Restore {
         fn drop(&mut self) {
-            SCOPED_IMAGE_LIMITS.set(self.0);
+            SCOPED_IMAGE_LIMITS.set(self.0.take());
         }
     }
-    let _restore = Restore(SCOPED_IMAGE_LIMITS.replace(Some(limits)));
+    let _restore = Restore(SCOPED_IMAGE_LIMITS.replace(Some((limits, from))));
     f()
+}
+
+/// The image limits of the asset sources that have their own, by source id.
+/// A cheap handle a decode job carries to its worker thread (the game's
+/// limits are a process-wide setting, but a source's belong to one picture's
+/// origin, which only the job knows once it has read the file).
+#[derive(Clone, Default, Debug)]
+pub(crate) struct SourceLimits(Arc<HashMap<String, ImageLimits>>);
+
+impl SourceLimits {
+    /// Sets (or with `None` removes) the limits of source `id`.
+    pub(crate) fn set(&mut self, id: &str, limits: Option<ImageLimits>) {
+        let map = Arc::make_mut(&mut self.0);
+        match limits {
+            Some(limits) => {
+                map.insert(id.to_string(), limits);
+            }
+            None => {
+                map.remove(id);
+            }
+        }
+    }
+
+    /// The limits of source `id`, if it has its own.
+    pub(crate) fn get(&self, id: &str) -> Option<ImageLimits> {
+        self.0.get(id).copied()
+    }
+
+    /// Every source that has limits of its own, sorted by id.
+    pub(crate) fn list(&self) -> Vec<(String, ImageLimits)> {
+        let mut all: Vec<_> = self.0.iter().map(|(id, l)| (id.clone(), *l)).collect();
+        all.sort_by(|a, b| a.0.cmp(&b.0));
+        all
+    }
+
+    /// Runs `f` (a decode of a file found at `origin`) under the limits of
+    /// the source it came from, if that source has its own; otherwise as it
+    /// is (the game's, or those of an enclosing scope).
+    pub(crate) fn scope<T>(&self, origin: &Origin, f: impl FnOnce() -> T) -> T {
+        match origin {
+            Origin::Source { source, .. } => self.scope_source(source, f),
+            Origin::File(_) => f(),
+        }
+    }
+
+    /// [`scope`](Self::scope) for a source named by its id.
+    pub(crate) fn scope_source<T>(&self, id: &str, f: impl FnOnce() -> T) -> T {
+        match self.get(id) {
+            Some(limits) => with_limits_from(limits, LimitsFrom::Source(id.to_string()), f),
+            None => f(),
+        }
+    }
 }
 
 /// Fails with [`ErrorKind::Limit`](crate::error::ErrorKind::Limit) when a
@@ -1321,14 +1431,15 @@ pub(crate) fn with_image_limits<T>(limits: ImageLimits, f: impl FnOnce() -> T) -
 /// longest side, or as RGBA8 the bytes. The decoders call it with the size a
 /// file's header claims, before allocating anything for it.
 pub(crate) fn check_image_size(width: u64, height: u64, path: &str, what: &str) -> Result<(), crate::error::Error> {
-    let limits = image_limits();
+    let (limits, from) = image_limits_from();
     let side = u64::from(limits.max_side);
     if width > side || height > side || width.saturating_mul(height).saturating_mul(4) > limits.max_bytes {
         return Err(crate::error::Error::new(
             crate::error::ErrorKind::Limit,
             format!(
-                "{what} is {width} x {height} pixels, larger than the engine loads ({})",
-                limits.describe()
+                "{what} is {width} x {height} pixels, larger than the engine loads ({}; {})",
+                limits.describe(),
+                from.describe()
             ),
         )
         .with_path(path));
@@ -1377,7 +1488,7 @@ pub(crate) fn decode_image(bytes: &[u8], path: &str, what: &str) -> Result<Image
     }
     // The size in the header first: a few bytes can claim an image of
     // gigabytes, which is refused before anything is allocated.
-    let in_force = image_limits();
+    let (in_force, from) = image_limits_from();
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(in_force.max_side);
     limits.max_image_height = Some(in_force.max_side);
@@ -1386,7 +1497,11 @@ pub(crate) fn decode_image(bytes: &[u8], path: &str, what: &str) -> Result<Image
     let decoded = reader.decode().map_err(|e| match e {
         image::ImageError::Limits(_) => crate::error::Error::new(
             crate::error::ErrorKind::Limit,
-            format!("{what} is larger than the engine loads ({}): {e}", in_force.describe()),
+            format!(
+                "{what} is larger than the engine loads ({}; {}): {e}",
+                in_force.describe(),
+                from.describe()
+            ),
         )
         .with_path(path),
         e => crate::error::Error::decode(path, format!("{what} is not a valid image: {e}")),
@@ -1527,6 +1642,114 @@ impl Assets {
         set_global_image_limits(limits);
     }
 
+    /// Gives asset source `id` image limits of its own: pictures read from
+    /// it (a mod pack, a download cache, a folder) are decoded under
+    /// `limits`, and everything else under the game's
+    /// ([`image_limits`](Self::image_limits)). Tighten a source you don't
+    /// trust, raise one that holds large source art. A picture refused
+    /// because of them says so: the message names the limits and the source
+    /// they belong to.
+    ///
+    /// The source need not be added yet, so a mod source the engine mounts
+    /// later can be limited in setup (the mounted mods' id is
+    /// `"mods"`, `ponko::mods::SOURCE_ID`). The limits apply to what is loaded from now on, on
+    /// worker threads too (asset groups, streamed textures); what is
+    /// already loaded stays. A model's pictures are decoded under the limits
+    /// of the source the model came from.
+    ///
+    /// ```
+    /// use ponko::assets::{ImageLimits, MemorySource};
+    /// use ponko::error::ErrorKind;
+    /// # use ponko::prelude::*;
+    /// # fn png(side: u32) -> Vec<u8> {
+    /// #     let mut bytes = Vec::new();
+    /// #     image::RgbaImage::new(side, side)
+    /// #         .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png).unwrap();
+    /// #     bytes
+    /// # }
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     ctx.assets.add_source(MemorySource::new("downloads").with("avatar.png", png(64)));
+    ///     ctx.assets.add_source(MemorySource::new("built-in").with("logo.png", png(64)));
+    ///     ctx.assets.set_source_image_limits("downloads", ImageLimits::new(32, 1 << 20));
+    ///     let err = ctx.gfx.try_load_texture("avatar.png").unwrap_err();
+    ///     assert_eq!(err.kind(), ErrorKind::Limit);
+    ///     assert!(ctx.gfx.try_load_texture("logo.png").is_ok()); // the game's limits
+    /// });
+    /// ```
+    pub fn set_source_image_limits(&mut self, id: &str, limits: ImageLimits) {
+        self.asset_sources.set_image_limits(id, Some(limits));
+    }
+
+    /// Takes back the image limits of source `id`: its pictures follow the
+    /// game's again. Does nothing if it had none.
+    pub fn clear_source_image_limits(&mut self, id: &str) {
+        self.asset_sources.set_image_limits(id, None);
+    }
+
+    /// The image limits source `id` has of its own, or `None` if its
+    /// pictures follow the game's ([`image_limits`](Self::image_limits)).
+    ///
+    /// ```
+    /// use ponko::assets::{ImageLimits, MemorySource};
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     assert_eq!(ctx.assets.source_image_limits("mods"), None);
+    ///     ctx.assets.set_source_image_limits("mods", ImageLimits::new(1_024, 8 << 20));
+    ///     assert_eq!(ctx.assets.source_image_limits("mods"), Some(ImageLimits::new(1_024, 8 << 20)));
+    /// });
+    /// ```
+    #[must_use]
+    pub fn source_image_limits(&self, id: &str) -> Option<ImageLimits> {
+        self.asset_sources.image_limits().get(id)
+    }
+
+    /// Every source that has image limits of its own, as (source id,
+    /// limits), sorted by id: what the control endpoint and the inspector
+    /// show next to the game's.
+    #[must_use]
+    pub fn image_limit_sources(&self) -> Vec<(String, ImageLimits)> {
+        self.asset_sources.image_limits().list()
+    }
+
+    /// The image limits in force, as the control endpoint (`assets.image_limits`)
+    /// shows them: the game's, and each source's own.
+    pub(crate) fn image_limits_json(&self) -> Value {
+        let limits = |l: ImageLimits| json!({ "max_side": l.max_side, "max_bytes": l.max_bytes });
+        let sources: Vec<Value> = self
+            .image_limit_sources()
+            .into_iter()
+            .map(|(id, l)| json!({ "source": id, "max_side": l.max_side, "max_bytes": l.max_bytes }))
+            .collect();
+        json!({ "game": limits(self.image_limits()), "sources": sources })
+    }
+
+    /// [`add_source`](Self::add_source) with image limits of its own for
+    /// the pictures it provides, as
+    /// [`set_source_image_limits`](Self::set_source_image_limits) does.
+    ///
+    /// # Panics
+    /// As [`add_source`](Self::add_source).
+    pub fn add_source_with_image_limits(&mut self, source: impl crate::assets::AssetSource, limits: ImageLimits) {
+        let id = source.id().to_string();
+        self.add_source(source);
+        self.set_source_image_limits(&id, limits);
+    }
+
+    /// [`add_background_source`](Self::add_background_source) with image
+    /// limits of its own for the pictures it provides.
+    ///
+    /// # Panics
+    /// As [`add_background_source`](Self::add_background_source).
+    pub fn add_background_source_with_image_limits(
+        &mut self,
+        source: impl crate::assets::AssetSource + Send + Sync,
+        limits: ImageLimits,
+    ) {
+        let id = source.id().to_string();
+        self.add_background_source(source);
+        self.set_source_image_limits(&id, limits);
+    }
+
     /// Adds a place to load named assets from. Added sources are asked in
     /// the order they were added, all before the `assets/` folder.
     ///
@@ -1656,7 +1879,9 @@ impl Assets {
         let found = self.asset_sources.find(name)?;
         let origin = found.origin.clone();
         let bytes = found.into_bytes().map_err(|e| e.with_path(name))?;
-        decode(&bytes).map_err(|e| {
+        // Pictures it decodes follow the limits of the source the file came from.
+        let limits = self.asset_sources.image_limits();
+        limits.scope(&origin, || decode(&bytes)).map_err(|e| {
             e.context(format!("{} could not be decoded", origin.describe(name)))
                 .with_path(name)
         })
@@ -2412,6 +2637,55 @@ mod tests {
         });
         assert_eq!(image_limits(), outer);
         assert!(decode_image(&png, "a.png", "\"a.png\"").is_ok());
+    }
+
+    #[test]
+    fn load_with_decodes_under_the_limits_of_the_source_the_file_came_from() {
+        let mut png = Vec::new();
+        image::RgbaImage::new(40, 20)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let mut assets = Assets::default();
+        assets.add_source_with_image_limits(
+            MemorySource::new("mods").with("mod.png", png.clone()),
+            ImageLimits::new(32, 1 << 20),
+        );
+        assets.add_source(MemorySource::new("own").with("own.png", png));
+        let decode = |bytes: &[u8]| decode_image(bytes, "x.png", "\"x.png\"").map(|i| i.width);
+        let err = assets.load_with("mod.png", decode).unwrap_err();
+        assert_eq!(err.kind(), crate::error::ErrorKind::Limit, "{}", err.message());
+        assert!(err.message().contains("asset source \"mods\""), "{}", err.message());
+        assert_eq!(assets.load_with("own.png", decode).unwrap(), 40);
+    }
+
+    #[test]
+    fn an_error_names_where_the_limits_came_from() {
+        let png = {
+            let mut png = Vec::new();
+            image::RgbaImage::new(40, 20)
+                .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+                .unwrap();
+            png
+        };
+        let tight = ImageLimits::new(32, 1 << 20);
+        let sources = SourceLimits({
+            let mut map = HashMap::new();
+            map.insert("mods".to_string(), tight);
+            Arc::new(map)
+        });
+        let origin = |id: &str| Origin::Source {
+            source: id.to_string(),
+            name: "a.png".to_string(),
+        };
+        let from_source = sources
+            .scope(&origin("mods"), || decode_image(&png, "a.png", "\"a.png\""))
+            .unwrap_err();
+        assert!(from_source.message().contains("the limits of asset source \"mods\""), "{}", from_source.message());
+        let from_call = with_image_limits(tight, || decode_image(&png, "a.png", "\"a.png\"")).unwrap_err();
+        assert!(from_call.message().contains("limits given for this picture"), "{}", from_call.message());
+        // A source without limits of its own, and a loose file, follow the game's.
+        assert!(sources.scope(&origin("other"), || decode_image(&png, "a.png", "a")).is_ok());
+        assert!(sources.scope(&Origin::File("a.png".into()), || decode_image(&png, "a.png", "a")).is_ok());
     }
 
     #[test]

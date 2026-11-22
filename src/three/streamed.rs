@@ -194,12 +194,16 @@ impl crate::gfx::Graphics {
             return;
         }
         let name = path.to_string();
+        // The worker finds the model's source only once it has read it: the
+        // job carries every source's own image limits.
+        let limits = self.asset_sources.image_limits();
         let job = Decoded::Job(Job::spawn(move || {
             let (origin, bytes, others) = read()?;
             Ok(match others {
                 Some(others) => {
                     let mut read = |file: &str| others.read_other(file);
-                    let loaded = gltf::load(&name, &bytes, &mut read, &|_| false)
+                    let loaded = limits
+                        .scope(&origin, || gltf::load(&name, &bytes, &mut read, &|_| false))
                         .map_err(|e| crate::error::Error::decode(&name, e))?;
                     (origin, LoadedFile::Parsed(Box::new(loaded)))
                 }
