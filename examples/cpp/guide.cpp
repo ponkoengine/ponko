@@ -3914,6 +3914,19 @@ void add_intro(ponko::game& game) {
 }
 // ANCHOR_END: video_intro
 
+// ANCHOR: code_mods
+// A code mod's "think" for one frost drip (the C library built with `--features mods-wasm`).
+void frost_drip_thinks(ponko::ctx& ctx, ponko::entity drip, std::uint64_t tick) {
+    const auto think = ctx.mod_function("frost-drips", "think");  // look up once, keep it
+    ctx.mod_seed_random(tick);  // a sequence per tick: replays draw the same numbers
+    ctx.mod_expose_prefab("prefabs/icicle.json");
+    ctx.mod_expose(drip);
+    if (auto r = ctx.call_mod(think, {ponko::mod_i64(std::int64_t(drip))})) {
+        (void)r->i;  // its answer, if it returns one
+    }
+}
+// ANCHOR_END: code_mods
+
 // ANCHOR: baked
 static std::vector<std::uint8_t> bake_room(ponko::ctx& ctx) {
     // Offline (a tool, a build step): the static models and the lights.

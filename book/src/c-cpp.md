@@ -480,7 +480,7 @@ binding arrives:
 | `Assets::scene_asset_field` | [Asset sources](asset-sources.md) | C components have no text fields to name an asset in; load what a scene needs before `load_scene` |
 | `PackSource` | [Asset sources](asset-sources.md#packs) | C and C++ games read the default `assets.pack` like Rust games; a pack of their own can be read through `ponko_ctx_add_asset_source` |
 | `ModPack::from_files`, `ModSet::problems` | [Mods](mods.md#in-c-and-c) | Mod packs mount by path or from bytes in memory (`ponko_ctx_mount_mods`, `ponko_ctx_mount_mods_from_memory`, `ctx.mount_mods`, `ctx.mount_mods_from_memory`; `ponko pack` makes one from loose files), and a refused set reports its first problem |
-| `with_code`, `ModSet::code_limits` | [Mods](mods.md#code-mods) | Code mods (feature `mods-wasm`) are Rust-only: the C library is built without it, and refuses a mod with code like any bad mod (`PONKO_INVALID_ARGUMENT`); data-only mods work the same |
+| `ModSet::code_limits`, `ModCode::take_log` | [Mods](mods.md#in-c-and-c) | C and C++ call code mods (`ponko_ctx_mod_function`, `ponko_ctx_mod_call`, `ctx.call_mod`; the library built with `mods-wasm`) with the default fuel and memory limits, and don't read the mods' log |
 | `Query::with_lookup`, `World::get_many_mut` | [Entities, components, queries](ecs.md#borrowing-several-things-at-once) | Generic borrows; component pointers from `get` don't borrow |
 | `World::query_ref` | [Entities, components, queries](ecs.md#read-only-queries-on-a-shared-world) | C and C++ queries read through component pointers and need no exclusive borrow of the world |
 | `SystemView` | [Declared system access](system-access.md) | C and C++ systems take the whole `ctx`, so they run alone; declare their access by name |
