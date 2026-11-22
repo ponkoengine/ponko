@@ -1669,7 +1669,11 @@ fn lagging_far_cascades_trail_moving_casters_by_at_most_the_refresh() {
                 continue;
             }
             if held {
-                assert_eq!((kept & far, passes), (far, 0), "frame {i}: the held far cascade is kept");
+                assert_eq!(
+                    (kept & far, passes),
+                    (far, 0),
+                    "frame {i}: the held far cascade is kept"
+                );
                 held_kept += 1;
             } else {
                 assert_eq!(differing, 0, "frame {i}: drawn on its turn, it matches");
@@ -1681,7 +1685,10 @@ fn lagging_far_cascades_trail_moving_casters_by_at_most_the_refresh() {
         }
         if lag {
             keep_lag_picture(&worst.1, &worst.2);
-            assert!(held_kept >= 2 * REFRESH, "the far box was held on most frames: {held_kept}");
+            assert!(
+                held_kept >= 2 * REFRESH,
+                "the far box was held on most frames: {held_kept}"
+            );
             assert!(behind > 0, "the lag shows while the caster moves");
             assert!(
                 longest < REFRESH as usize,

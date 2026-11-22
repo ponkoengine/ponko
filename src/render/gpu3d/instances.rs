@@ -1419,6 +1419,9 @@ fn shadow_bands(batch: &Batch) -> bool {
         }
 }
 
+/// Calls its test with every band edge of a batch; true when every call was.
+type BandEdges<'a> = dyn Fn(&mut dyn FnMut(f32) -> bool) -> bool + 'a;
+
 /// Whether no instance of `cell` is on the other side of a band edge seen
 /// from `b` than from `a` (`edges` calls its test with every edge, and is
 /// true when every call was). Each instance's distance is the one the
@@ -1429,7 +1432,7 @@ fn instances_hold(
     cell: &Cell,
     a: Vec3,
     b: Vec3,
-    edges: &dyn Fn(&mut dyn FnMut(f32) -> bool) -> bool,
+    edges: &BandEdges<'_>,
 ) -> bool {
     if batch.distances.is_empty() || cell.count == 0 {
         return false;
