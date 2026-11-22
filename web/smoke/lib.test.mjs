@@ -20,6 +20,7 @@ import {
   checkAfterReload,
   checkExpects,
   parseClick,
+  parseRetryPlace,
   parseMin,
   parsePress,
   startWatchdog,
@@ -157,6 +158,8 @@ test("reload steps: one from afterReload, several from reloads or --reload, each
 test("clicks and the page's query come from the fixture or the command line", () => {
   assert.deepEqual(parseClick("22,540=linked:1"), { x: 22, y: 540, field: "linked", value: "1" });
   assert.throws(() => parseClick("22=linked:1"), /--click wants/);
+  assert.deepEqual(parseClick("@retry=linked:1"), { retry: true, field: "linked", value: "1" });
+  assert.throws(() => parseClick("@retry=linked"), /--click wants/);
   const fixtures = parseFixtures(JSON.stringify({
     editor: { example: "editor", query: "?editor=levels/a.json", clicks: ["10,20=retried:1"] },
   }));
@@ -339,4 +342,12 @@ test("a hang's message ends with the browser's last lines", () => {
   const lines = Array.from({ length: 50 }, (_, i) => `line ${i}`);
   const tail = logTail(lines, 3).split("\n");
   assert.deepEqual(tail, ["  | line 47", "  | line 48", "  | line 49"]);
+});
+
+test("the editor's Retry button is found by the place the page reports, not a fixed point", () => {
+  assert.deepEqual(parseRetryPlace("[[0.25,0.5],[0.25,0.6]]"), [0.25, 0.5]);
+  assert.deepEqual(parseRetryPlace('[[2,0.5],[0.1,0.9]]'), [0.1, 0.9], "a pair outside the window is skipped");
+  for (const bad of [null, undefined, "", "[]", "not json", '{"x":1}', "[[0.1]]", '[["a","b"]]']) {
+    assert.equal(parseRetryPlace(bad), null, String(bad));
+  }
 });

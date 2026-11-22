@@ -2357,6 +2357,110 @@ mod tests {
         }
 
         #[test]
+        fn a_gltf_scene_that_fails_to_respawn_at_stop_is_listed_in_the_panel_with_a_retry_that_works() {
+            let post_nodes = serde_json::json!([{ "name": "Post", "mesh": 0 }]);
+            let cube = crate::three::cube_gltf(&post_nodes);
+            let (yard, posts) = (
+                gltf_asset("stop-yard", &yard_nodes(-3.0)),
+                gltf_asset("stop-posts", &post_nodes),
+            );
+            let scene = TempAsset::new("stop-scene");
+            let (egui, mut p, mut ctx, e) = editor3d();
+            ctx.set_headless(true);
+            ctx.world.despawn(e);
+            let a = ctx.spawn_prefab(&yard.name, T3::default()).unwrap();
+            let b = ctx.spawn_prefab(&posts.name, T3::at(vec3(4.0, 0.0, 0.0))).unwrap();
+            ctx.track_gltf_overrides();
+            let node = |ctx: &Ctx, root: Entity, path: &str| {
+                ctx.world
+                    .get::<crate::d3::GltfRoot>(root)
+                    .unwrap()
+                    .entity(path)
+                    .unwrap()
+            };
+            let (wall, post) = (node(&ctx, a, "Wall"), node(&ctx, b, "Post"));
+            let at = *ctx.world.get::<T3>(wall).unwrap();
+            ctx.world.insert(wall, crate::attach::Attached3D::to(post));
+            crate::editor::place_world3d(&mut ctx.world, wall, at);
+            ctx.edit(|ed, ctx| ed.save_as(ctx, &scene.name, DocKind::Scene))
+                .unwrap();
+            let roots = |ctx: &mut Ctx| {
+                ctx.world
+                    .query::<(Entity, &crate::d3::GltfRoot)>()
+                    .iter()
+                    .map(|(e, r)| (e, r.path.clone()))
+                    .collect::<Vec<_>>()
+            };
+
+            // Both load when the scene opens: nothing in the panel.
+            p.open_file(&mut ctx, &scene.name);
+            assert_eq!(roots(&mut ctx).len(), 2);
+            assert!(ctx.editor.doc.unloaded.is_empty());
+            assert!(p.error.is_none(), "{:?}", p.error);
+
+            // Play, then the posts' file breaks, then Stop: the scene can't
+            // spawn again, and the panel lists it like one that failed at start.
+            ctx.edit(|ed, ctx| ed.play(ctx));
+            std::fs::write(&posts.file, "not a glTF file").unwrap();
+            p.ask_stop(&mut ctx);
+            assert!(!ctx.editor.playing());
+            assert_eq!(roots(&mut ctx).len(), 1, "the posts are left out");
+            assert_eq!(ctx.editor.doc.unloaded.len(), 1);
+            assert_eq!(ctx.editor.doc.unloaded[0].file, posts.name);
+            let why = ctx.editor.doc.unloaded[0].why.clone();
+            assert!(!why.is_empty());
+            let shown = texts(&drawn(&egui, &mut p, &mut ctx, vec![]));
+            for wanted in [&posts.name, &why, &crate::inspector::scene::UNLOADED_RETRY.to_string()] {
+                assert!(
+                    shown.iter().any(|t| t == wanted),
+                    "the panel shows {wanted:?}: {shown:?}"
+                );
+            }
+            assert!(
+                !shown.iter().any(|t| t == &yard.name),
+                "only the one that failed: {shown:?}"
+            );
+            let error = p.error.clone().unwrap_or_default();
+            assert!(error.contains(&posts.name) && !error.contains(&yard.name), "{error}");
+
+            // Still broken: Retry says why, and the row stays.
+            click_text(&egui, &mut p, &mut ctx, |t| {
+                t == crate::inspector::scene::UNLOADED_RETRY
+            });
+            assert_eq!(roots(&mut ctx).len(), 1);
+            assert_eq!(ctx.editor.doc.unloaded.len(), 1);
+            let error = p.error.clone().unwrap_or_default();
+            assert!(error.contains(&posts.name) && error.contains("still"), "{error}");
+
+            // Fixed: Retry spawns it where it was saved and the wall hangs
+            // off its post again.
+            std::fs::write(&posts.file, &cube).unwrap();
+            for _ in 0..30 {
+                frame(&egui, &mut p, &mut ctx, vec![]);
+            }
+            click_text(&egui, &mut p, &mut ctx, |t| {
+                t == crate::inspector::scene::UNLOADED_RETRY
+            });
+            assert!(p.error.is_none(), "{:?}", p.error);
+            assert_eq!(p.status.as_deref(), Some(format!("loaded {}", posts.name).as_str()));
+            assert!(ctx.editor.doc.unloaded.is_empty());
+            let now = roots(&mut ctx);
+            assert_eq!(now.len(), 2, "{now:?}");
+            let (b, _) = now.iter().find(|(_, path)| path == &posts.name).unwrap();
+            assert_eq!(ctx.world.get::<T3>(*b).unwrap().position, vec3(4.0, 0.0, 0.0));
+            let (a, _) = now.iter().find(|(_, path)| path == &yard.name).unwrap();
+            let (wall, post) = (node(&ctx, *a, "Wall"), node(&ctx, *b, "Post"));
+            let link = ctx.world.get::<crate::attach::Attached3D>(wall).map(|l| l.to);
+            assert_eq!(link, Some(post), "linked again");
+
+            // A later Stop that spawns everything clears what was listed.
+            ctx.edit(|ed, ctx| ed.play(ctx));
+            p.ask_stop(&mut ctx);
+            assert!(ctx.editor.doc.unloaded.is_empty());
+            assert_eq!(roots(&mut ctx).len(), 2);
+        }
+
+        #[test]
         fn a_gltf_scene_keeps_a_node_moved_in_the_view_through_a_reexport_and_a_reopen() {
             let yard = |hp: f32, wall_x: f32| {
                 crate::three::cube_gltf(&serde_json::json!([

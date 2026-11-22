@@ -36,7 +36,7 @@ export const USAGE =
   "                 [--allow-unsupported]\n" +
   "                 [--asset <file under assets/>] [--asset-size <W>x<H>|none]\n" +
   "                 [--press <Key>=<field>:<value>]... [--min <field>=<number>]...\n" +
-  "                 [--click <x>,<y>=<field>:<value>]... [--query <?a=b>] [--persist granted|refused]\n" +
+  "                 [--click <x>,<y>=<field>:<value> | @retry=<field>:<value>]... [--query <?a=b>] [--persist granted|refused]\n" +
   "                 [--after-reload <field>:<value>]... [--reload [--after-reload <field>:<value>]...]...\n" +
   "                 [--engine-gpu required|optional] [--music required|none]\n" +
   "                 [--no-trace] [--chrome-trace]\n" +
@@ -51,9 +51,31 @@ export function parsePress(spec) {
 
 /** `22,540=linked:1`: click the canvas at (22, 540) (pixels from its top left), then the state's `linked` must become "1". */
 export function parseClick(spec) {
+  const retry = /^@retry=([A-Za-z_]+):(.+)$/.exec(spec);
+  if (retry) return { retry: true, field: retry[1], value: retry[2] };
   const match = /^(\d+),(\d+)=([A-Za-z_]+):(.+)$/.exec(spec);
-  if (!match) throw new UsageError(`--click wants <x>,<y>=<field>:<value>, not "${spec}"`);
+  if (!match) throw new UsageError(`--click wants <x>,<y>=<field>:<value> or @retry=<field>:<value>, not "${spec}"`);
   return { x: Number(match[1]), y: Number(match[2]), field: match[3], value: match[4] };
+}
+
+/** The attribute of `<html>` where the editor says where its Retry buttons (glTF scenes that didn't load) are. */
+export const RETRY_ATTRIBUTE = "data-ponko-retry";
+
+/**
+ * The place the editor reports for its first Retry button: `[x, y]` as
+ * fractions of the window's width and height from the top left, or `null`
+ * when the attribute is missing, isn't a list or has no usable pair.
+ */
+export function parseRetryPlace(text) {
+  let places;
+  try {
+    places = JSON.parse(text ?? "");
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(places)) return null;
+  const first = places.find((p) => Array.isArray(p) && p.length === 2 && p.every((n) => Number.isFinite(n) && n >= 0 && n <= 1));
+  return first ?? null;
 }
 
 /** `settings_at_start:Loaded`: after the page is reloaded, the state's `settings_at_start` must be "Loaded". */

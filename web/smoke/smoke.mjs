@@ -36,6 +36,7 @@ import {
   CASES,
   EXIT,
   MIN_PROGRESS_TICKS,
+  RETRY_ATTRIBUTE,
   USAGE,
   UsageError,
   backendAvailable,
@@ -49,6 +50,7 @@ import {
   musicAfterClick,
   parseArgs,
   parseFixtures,
+  parseRetryPlace,
   startWatchdog,
   unsupportedReason,
   withDeadline,
@@ -781,9 +783,29 @@ async function main() {
 
     // 4e. Clicks at a point of the canvas (--click): a button the game
     //     draws there (the editor's Retry), then the state it changes.
-    for (const { x, y, field, value } of args.clicks) {
-      step = `clicking the canvas at ${x},${y}`;
+    for (const click of args.clicks) {
+      const { field, value } = click;
+      let { x, y } = click;
       const canvas = await call(page.locator(GAME_CANVAS).boundingBox());
+      if (click.retry) {
+        // The button's place comes from the page: the editor says where it
+        // drew its Retry, so a new layout of the status bar changes nothing.
+        step = "asking the page where the editor's Retry button is";
+        const placeDeadline = Date.now() + 10_000;
+        let place = null;
+        for (;;) {
+          place = parseRetryPlace(await call(page.evaluate((name) => document.documentElement.getAttribute(name), RETRY_ATTRIBUTE)));
+          if (place) break;
+          snapshot = await call(smokeState(page));
+          failure = appFailure(snapshot.status);
+          if (failure) throw await settled(failure);
+          if (Date.now() > placeDeadline) throw new Failure("input", `the page never said where the editor's Retry button is (<html ${RETRY_ATTRIBUTE}>)`);
+          await sleep(100);
+        }
+        x = place[0] * canvas.width;
+        y = place[1] * canvas.height;
+      }
+      step = `clicking the canvas at ${Math.round(x)},${Math.round(y)}`;
       await call(page.mouse.move(canvas.x + x, canvas.y + y));
       await sleep(200);
       await call(page.mouse.down());
@@ -796,11 +818,11 @@ async function main() {
         if (failure) throw await settled(failure);
         if (String(snapshot.state[field]) === value) break;
         if (Date.now() > clickedDeadline) {
-          throw new Failure("input", `after the click at ${x},${y}, ${field} is ${JSON.stringify(snapshot.state[field])}, not ${value}`);
+          throw new Failure("input", `after the click at ${Math.round(x)},${Math.round(y)}, ${field} is ${JSON.stringify(snapshot.state[field])}, not ${value}`);
         }
         await sleep(100);
       }
-      log(`click at ${x},${y} seen: ${field} is ${value}`);
+      log(`click at ${Math.round(x)},${Math.round(y)} seen: ${field} is ${value}`);
     }
 
     // 4d. Storage (--after-reload, --reload): once the game says its writes
