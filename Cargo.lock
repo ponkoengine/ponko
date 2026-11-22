@@ -4223,6 +4223,7 @@ dependencies = [
  "ponko_ecs",
  "ponko_lobby",
  "rayon",
+ "serde",
  "serde_json",
  "wasm-bindgen",
 ]

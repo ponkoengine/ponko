@@ -173,6 +173,8 @@ mod video;
 // Native API parity, round 5 (gl#157): crash reports and sliced loaders.
 mod crash;
 mod slice_loaders;
+mod rollback;
+pub use rollback::*;
 pub use access::*;
 pub use actions::*;
 pub use ai::*;
@@ -455,7 +457,7 @@ impl From<ponko::prelude::ErrorKind> for PonkoErrorKind {
 }
 
 /// The kind a failure with `status` and no `ponko::prelude::Error` behind it gets.
-fn kind_of_status(status: PonkoStatus) -> PonkoErrorKind {
+pub(crate) fn kind_of_status(status: PonkoStatus) -> PonkoErrorKind {
     match status {
         PONKO_OK => PonkoErrorKind::PONKO_ERROR_NONE,
         PONKO_INVALID_ARGUMENT => PonkoErrorKind::PONKO_ERROR_INVALID,

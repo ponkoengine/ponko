@@ -2119,6 +2119,33 @@ public:
     }
 };
 
+/// A copy of a world in memory (Rust `WorldSnapshot`): every entity and
+/// component, the entity allocator and the change history. Save into the
+/// same snapshot again and again: it reuses its memory.
+/// world_view::save_snapshot fills it, world_view::restore_snapshot puts it back.
+class world_snapshot {
+    PonkoWorldSnapshot* raw_;
+public:
+    /// An empty snapshot.
+    world_snapshot() : raw_(ponko_world_snapshot_new()) {}
+    ~world_snapshot() { ponko_world_snapshot_free(raw_); }
+    /// Not copyable: it owns its memory.
+    ///@{
+    world_snapshot(const world_snapshot&) = delete;
+    world_snapshot& operator=(const world_snapshot&) = delete;
+    ///@}
+    /// Entities in the snapshot.
+    std::size_t size() const { std::size_t n = 0; detail::check(ponko_world_snapshot_len(raw_, &n)); return n; }
+    /// The C handle, for ponko_world_save_snapshot and ponko_world_restore_snapshot.
+    PonkoWorldSnapshot* raw() const noexcept { return raw_; }
+};
+
+/// Settings for ctx::rollback_start for player `player` of `players`: 2 ticks of input delay, rollbacks of
+/// up to 8 ticks, world hashes compared every 60 ticks. Change the fields before starting.
+inline PonkoRollbackConfig rollback_config(std::uint32_t players, std::uint32_t player) noexcept {
+    return ponko_rollback_config_default(players, player);
+}
+
 /// The entities and their components (Rust `World`). Components are plain
 /// structs, found by their C++ type: no registration needed. A view given to
 /// a system must not escape the call.
@@ -2767,6 +2794,12 @@ public:
     /// reflected component of every entity and every reflected resource,
     /// bit for bit. Compare it between runs, peers or a replay.
     std::uint64_t hash() const { valid(); std::uint64_t h = 0; detail::check(ponko_world_hash(raw_, &h)); return h; }
+    /// Copies this world into `into` (Rust `World::save_snapshot`). Throws (and saves nothing) if a
+    /// component can't be copied: plain structs can.
+    void save_snapshot(world_snapshot& into) { valid(); detail::check(ponko_world_save_snapshot(raw_, into.raw())); }
+    /// Makes this world what it was when `from` was saved from it (Rust `World::restore_snapshot`): the same
+    /// entities with the same ids, the same ids for the next spawns. Throws for another world's snapshot.
+    void restore_snapshot(const world_snapshot& from) { valid(); detail::check(ponko_world_restore_snapshot(raw_, from.raw())); }
     /// Replaces every entity with those in `json` (from save()), with the
     /// same ids. On error (an exception) the world is unchanged.
     void load(const std::string& json) { valid(); detail::check(ponko_world_load(raw_, json.c_str())); }
@@ -7148,6 +7181,67 @@ public:
         T value;
         std::memcpy(&value, data, sizeof(T));
         return value;
+    }
+    // Rollback for the whole game (Rust GameRollback): see ponko_ctx_rollback_start.
+    /// Starts a rollback session in setup or a frame system: every simulation tick runs through it from
+    /// the next one on, and a late input that differs from the prediction loads the state before it and
+    /// runs the simulation systems again. Start `config` from ponko_rollback_config_default(players, player).
+    void rollback_start(const PonkoRollbackConfig& config) { detail::check(ponko_ctx_rollback_start(raw_, &config)); }
+    /// Stops the session; ticks run as before. Returns false if none ran.
+    bool rollback_stop() {
+        const PonkoStatus status = ponko_ctx_rollback_stop(raw_);
+        if (status == PONKO_NOT_FOUND) return false;
+        detail::check(status);
+        return true;
+    }
+    /// This player's input for the next tick that runs (a plain struct of at most
+    /// PONKO_ROLLBACK_INPUT_MAX bytes). It stays until set again.
+    template<class T> void rollback_set_input(const T& input) {
+        static_assert(detail::pod<T> && sizeof(T) <= PONKO_ROLLBACK_INPUT_MAX, "rollback inputs are plain structs of at most 32 bytes");
+        detail::check(ponko_ctx_rollback_set_input(raw_, &input, sizeof(T)));
+    }
+    /// In a simulation system: `player`'s input for this tick (zeros before their first one).
+    template<class T> T rollback_input(std::uint32_t player) const {
+        static_assert(detail::pod<T> && sizeof(T) <= PONKO_ROLLBACK_INPUT_MAX, "rollback inputs are plain structs of at most 32 bytes");
+        T value{};
+        detail::check(ponko_ctx_rollback_input(raw_, player, &value, sizeof(T)));
+        return value;
+    }
+    /// The packet to send to every other peer this frame, valid until the next rollback call.
+    std::pair<const std::uint8_t*, std::size_t> rollback_packet() {
+        const std::uint8_t* data = nullptr;
+        std::size_t size = 0;
+        detail::check(ponko_ctx_rollback_packet(raw_, &data, &size));
+        return {data, size};
+    }
+    /// Takes a packet from another peer; false if it isn't one of this session's.
+    bool rollback_receive(const void* data, std::size_t size) {
+        bool accepted = false;
+        detail::check(ponko_ctx_rollback_receive(raw_, data, size, &accepted));
+        return accepted;
+    }
+    /// Whether this tick runs again after a rollback: skip one-shot effects (sounds are dropped already).
+    bool rollback_resimulating() const { bool again = false; detail::check(ponko_ctx_rollback_resimulating(raw_, &again)); return again; }
+    /// The next tick the session runs, counted from its start.
+    std::uint64_t rollback_frame() const {
+        std::uint64_t frame = 0, confirmed = 0; bool has = false;
+        detail::check(ponko_ctx_rollback_frames(raw_, &frame, &has, &confirmed));
+        return frame;
+    }
+    /// The last tick every player's input is in for; none before the first.
+    std::optional<std::uint64_t> rollback_confirmed_frame() const {
+        std::uint64_t frame = 0, confirmed = 0; bool has = false;
+        detail::check(ponko_ctx_rollback_frames(raw_, &frame, &has, &confirmed));
+        if (!has) return std::nullopt;
+        return confirmed;
+    }
+    /// What the session did so far: ticks, rollbacks, ticks run again, stalls, bytes.
+    PonkoRollbackStats rollback_stats() const { PonkoRollbackStats s{}; detail::check(ponko_ctx_rollback_stats(raw_, &s)); return s; }
+    /// Whether two peers' worlds stopped matching (compared every config.checksum_every ticks).
+    bool rollback_desynced() const {
+        bool found = false; std::uint64_t frame = 0; std::uint32_t player = 0;
+        detail::check(ponko_ctx_rollback_desync(raw_, &found, &frame, &player));
+        return found;
     }
     // Declared replication (game::messages, then ctx::replication in setup).
     /// Declares what replicates, the same on the server and every client,

@@ -313,6 +313,8 @@
 
 #define PONKO_SLICE_LOADER_VERSION 1
 
+#define PONKO_ROLLBACK_INPUT_MAX 32
+
 #define PONKO_WINDOW_NO_MONITOR UINT32_MAX
 
 #define PONKO_WINDOW_VIDEO_MODE_EX_VERSION 1
@@ -1597,6 +1599,8 @@ typedef struct PonkoUiAccess PonkoUiAccess;
 typedef struct PonkoVideo PonkoVideo;
 
 typedef struct PonkoWorld PonkoWorld;
+
+typedef struct PonkoWorldSnapshot PonkoWorldSnapshot;
 
 typedef struct PonkoValue {
   uint32_t component;
@@ -4054,6 +4058,26 @@ typedef struct PonkoSliceLoader {
   void *user;
   PonkoFreeUserFn free_user;
 } PonkoSliceLoader;
+
+typedef struct PonkoRollbackConfig {
+  uint32_t players;
+  uint32_t player;
+  uint32_t input_delay;
+  uint32_t max_prediction;
+  uint32_t checksum_every;
+} PonkoRollbackConfig;
+
+typedef struct PonkoRollbackStats {
+  uint64_t ticks;
+  uint64_t predicted;
+  uint64_t rollbacks;
+  uint64_t resimulated;
+  uint32_t deepest;
+  uint64_t stalls;
+  uint64_t packets_sent;
+  uint64_t bytes_sent;
+  uint64_t rejected;
+} PonkoRollbackStats;
 
 typedef struct PonkoWindowVideoModeEx {
   uint32_t struct_size;
@@ -10857,6 +10881,57 @@ enum PonkoStatus ponko_ctx_take_asset_group_sliced(struct PonkoCtx *ctx,
                                                    uint32_t id,
                                                    const char *path,
                                                    void **out_state);
+
+struct PonkoRollbackConfig ponko_rollback_config_default(uint32_t players, uint32_t player);
+
+enum PonkoStatus ponko_ctx_rollback_start(struct PonkoCtx *ctx,
+                                          const struct PonkoRollbackConfig *config);
+
+enum PonkoStatus ponko_ctx_rollback_stop(struct PonkoCtx *ctx);
+
+enum PonkoStatus ponko_ctx_rollback_set_input(struct PonkoCtx *ctx, const void *data, size_t size);
+
+enum PonkoStatus ponko_ctx_rollback_packet(struct PonkoCtx *ctx,
+                                           const uint8_t **out_data,
+                                           size_t *out_size);
+
+enum PonkoStatus ponko_ctx_rollback_receive(struct PonkoCtx *ctx,
+                                            const void *data,
+                                            size_t size,
+                                            bool *out_accepted);
+
+enum PonkoStatus ponko_ctx_rollback_input(struct PonkoCtx *ctx,
+                                          uint32_t player,
+                                          void *out_input,
+                                          size_t size);
+
+enum PonkoStatus ponko_ctx_rollback_resimulating(struct PonkoCtx *ctx, bool *out_again);
+
+enum PonkoStatus ponko_ctx_rollback_frames(struct PonkoCtx *ctx,
+                                           uint64_t *out_frame,
+                                           bool *out_has_confirmed,
+                                           uint64_t *out_confirmed);
+
+enum PonkoStatus ponko_ctx_rollback_stats(struct PonkoCtx *ctx,
+                                          struct PonkoRollbackStats *out_stats);
+
+enum PonkoStatus ponko_ctx_rollback_desync(struct PonkoCtx *ctx,
+                                           bool *out_found,
+                                           uint64_t *out_frame,
+                                           uint32_t *out_player);
+
+struct PonkoWorldSnapshot *ponko_world_snapshot_new(void);
+
+void ponko_world_snapshot_free(struct PonkoWorldSnapshot *snapshot);
+
+enum PonkoStatus ponko_world_save_snapshot(struct PonkoWorld *world,
+                                           struct PonkoWorldSnapshot *snapshot);
+
+enum PonkoStatus ponko_world_restore_snapshot(struct PonkoWorld *world,
+                                              const struct PonkoWorldSnapshot *snapshot);
+
+enum PonkoStatus ponko_world_snapshot_len(const struct PonkoWorldSnapshot *snapshot,
+                                          size_t *out_len);
 
 enum PonkoStatus ponko_window_video_mode_ex_defaults(struct PonkoWindowVideoModeEx *desc);
 

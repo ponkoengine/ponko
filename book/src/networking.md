@@ -442,11 +442,15 @@ The session's settings, packets, stalls and stats are `Rollback`'s
   joints, contacts, islands, the broad phase and the links to entities. A
   loaded world steps bit for bit like the original; a load builds a fresh
   rapier pipeline, as the joint solver keeps indices there.
-- **Not restored:** `Changed` filters see every restored component as
-  changed on the next run (rebuild derived data from them, don't count
-  them as game events); despawns undone by a load aren't reported to
-  `removed`; component hooks don't run on a load. The UI, the camera and
-  everything frame systems keep are not part of the state.
+- **Change detection:** a load restores every change stamp and removal
+  log as old as it was at the save, and moves what each simulation system
+  has seen by the same amount, so `Added` and `Changed` filters and
+  `removed` show a tick that runs again exactly what they showed it the
+  first time (`tests/game_rollback_changes.rs` counts them through many
+  rollbacks against an offline run). Frame systems keep what they have
+  seen: after a load they may be shown values the load put back as changed.
+- **Not restored:** component hooks don't run on a load. The UI, the
+  camera and everything frame systems keep are not part of the state.
 - **Desyncs:** checksums are `world_hash`es (every reflected component and
   resource) of the saved worlds, taken only on the ticks the session
   compares (`checksum_every`).
@@ -459,7 +463,35 @@ that the peers stall): the game spawns and despawns through commands,
 sends events read a tick later, plays sounds and draws from
 `ctx.random()`. Every per-tick checksum agrees, and each peer's world at
 the end has the world hash of an offline run at that tick, with and
-without 2D physics.
+without 2D physics. `tests/game_rollback_3d.rs` does the same with 3D
+physics (players pushing a pile of boxes), packets 1 to 5 frames late and
+handed over newest first, and one peer's packets held back for 7 frames,
+which forces rollbacks of several ticks at once.
+
+### From C and C++
+
+The same session runs in a C or C++ game, with each player's input as a
+plain struct of at most `PONKO_ROLLBACK_INPUT_MAX` (32) bytes:
+`ponko_ctx_rollback_start` with a `PonkoRollbackConfig` (from
+`ponko_rollback_config_default(players, player)`), then
+`ponko_ctx_rollback_set_input`, `_packet` and `_receive` in a frame system
+and `ponko_ctx_rollback_input` in simulation systems;
+`_resimulating`, `_frames` (the frame and the confirmed frame), `_stats`,
+`_desync` and `_stop` as in Rust. The C++ wrapper names them
+`ctx::rollback_*`:
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:rollback_session}}
+```
+
+Components must be copyable: C and C++ components without a destructor
+are copied as bytes. World snapshots work on their own too:
+`ponko_world_snapshot_new`, `ponko_world_save_snapshot`,
+`ponko_world_restore_snapshot` (C++ `ponko::world_snapshot` with
+`world.save_snapshot` and `world.restore_snapshot`). The C++ test
+`rollback_two_peers` (`examples/cpp/tests.cpp`) runs two peers on two
+threads over a link that delivers late and out of order; both end in the
+world an offline run has.
 
 ### What a rollback must capture
 

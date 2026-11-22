@@ -5563,3 +5563,27 @@ struct wall_count {
     std::printf("%lld bytes still held\n", static_cast<long long>(kept));
     // ANCHOR_END: net_allocs
 }
+[[maybe_unused]] static void rollback_guide(ponko::game& game) {
+    // ANCHOR: rollback_session
+    struct Pad { std::int8_t x; std::uint8_t jump; };   // at most PONKO_ROLLBACK_INPUT_MAX bytes
+    struct Fighter { std::uint32_t player; float x; };  // plain structs: copied as bytes
+    game.sim_system([](ponko::ctx& ctx) {
+        // Every player's input for this tick, real or predicted.
+        ctx.world().each([&](Fighter& f) { f.x += ctx.rollback_input<Pad>(f.player).x; });
+        if (!ctx.rollback_resimulating()) { /* one-shot effects: only the first time */ }
+    });
+    game.system([](ponko::ctx& ctx) {
+        ctx.rollback_set_input(Pad{1, 0});                 // this player's input
+        auto [data, size] = ctx.rollback_packet();          // send to every peer, any transport
+        (void)data; (void)size;
+        // ...and for each packet received: ctx.rollback_receive(bytes, length);
+    });
+    game.run_headless(10, [](ponko::ctx& ctx) {
+        ctx.world().spawn(Fighter{0, 0.0f});
+        ctx.world().spawn(Fighter{1, 100.0f});
+        PonkoRollbackConfig config = ponko::rollback_config(2, 0); // player 0 of 2
+        config.input_delay = 2;
+        ctx.rollback_start(config);
+    });
+    // ANCHOR_END: rollback_session
+}

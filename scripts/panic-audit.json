@@ -323,6 +323,12 @@
     "reason": "Internal invariant: /// `added`. Does nothing for an untracked column.     #[inline]     pub(crate) fn stamp(&self, col: usize, row: usize, stamp: u32, added: bool) {         debug_assert!(row < self.cap());",
     "site": "crates/ponko_ecs/src/storage.rs:757"
   },
+  "crates/ponko_ecs/src/storage.rs:9d7002403b61410d": {
+    "classification": "invariant",
+    "construction": "debug_assert!(rows <= self.len())",
+    "reason": "put_stamps is called by restore_rows right after the rows were copied in: the saved table's row count is the archetype's length",
+    "site": "crates/ponko_ecs/src/storage.rs:1049"
+  },
   "crates/ponko_ecs/src/storage.rs:be3e2253e3e7b20e": {
     "classification": "invariant",
     "construction": "assert_eq!(perm.len(), self.len())",
