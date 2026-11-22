@@ -6306,9 +6306,11 @@ pub ponko::mods::ModProblem::BadName(alloc::string::String)
 pub ponko::mods::ModProblem::BadValue
 pub ponko::mods::ModProblem::BadValue::component: alloc::string::String
 pub ponko::mods::ModProblem::BadValue::message: alloc::string::String
+pub ponko::mods::ModProblem::Code(alloc::string::String)
 pub ponko::mods::ModProblem::Cycle(alloc::vec::Vec<alloc::string::String>)
 pub ponko::mods::ModProblem::DuplicateId(alloc::string::String)
 pub ponko::mods::ModProblem::Manifest(alloc::string::String)
+pub ponko::mods::ModProblem::MissingAssets(alloc::vec::Vec<(alloc::string::String, alloc::string::String)>)
 pub ponko::mods::ModProblem::MissingDependency(alloc::string::String)
 pub ponko::mods::ModProblem::TooLarge
 pub ponko::mods::ModProblem::TooLarge::limit: u64
@@ -6316,6 +6318,7 @@ pub ponko::mods::ModProblem::TooLarge::size: u64
 pub ponko::mods::ModProblem::TooManyFiles
 pub ponko::mods::ModProblem::TooManyFiles::count: usize
 pub ponko::mods::ModProblem::TooManyFiles::limit: usize
+pub ponko::mods::ModProblem::Trap(alloc::string::String)
 pub ponko::mods::ModProblem::UnknownComponent(alloc::string::String)
 pub ponko::mods::ModProblem::UnknownResource(alloc::string::String)
 pub ponko::mods::ModProblem::Unreadable(alloc::string::String)
@@ -6331,6 +6334,54 @@ pub fn ponko::mods::ModProblem::fmt(&self, &mut core::fmt::Formatter<'_>) -> cor
 impl core::fmt::Display for ponko::mods::ModProblem
 pub fn ponko::mods::ModProblem::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for ponko::mods::ModProblem
+pub enum ponko::mods::ModValue
+pub ponko::mods::ModValue::F32(f32)
+pub ponko::mods::ModValue::F64(f64)
+pub ponko::mods::ModValue::I32(i32)
+pub ponko::mods::ModValue::I64(i64)
+impl ponko::mods::ModValue
+pub fn ponko::mods::ModValue::as_f32(self) -> core::option::Option<f32>
+pub fn ponko::mods::ModValue::as_i32(self) -> core::option::Option<i32>
+impl core::clone::Clone for ponko::mods::ModValue
+pub fn ponko::mods::ModValue::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::mods::ModValue
+pub fn ponko::mods::ModValue::eq(&self, &Self) -> bool
+impl core::convert::From<f32> for ponko::mods::ModValue
+pub fn ponko::mods::ModValue::from(f32) -> Self
+impl core::convert::From<f64> for ponko::mods::ModValue
+pub fn ponko::mods::ModValue::from(f64) -> Self
+impl core::convert::From<i32> for ponko::mods::ModValue
+pub fn ponko::mods::ModValue::from(i32) -> Self
+impl core::convert::From<i64> for ponko::mods::ModValue
+pub fn ponko::mods::ModValue::from(i64) -> Self
+impl core::fmt::Debug for ponko::mods::ModValue
+pub fn ponko::mods::ModValue::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::mods::ModValue
+impl core::marker::StructuralPartialEq for ponko::mods::ModValue
+pub struct ponko::mods::CodeLimits
+pub ponko::mods::CodeLimits::fuel_per_call: u64
+pub ponko::mods::CodeLimits::memory_bytes: u64
+impl core::clone::Clone for ponko::mods::CodeLimits
+pub fn ponko::mods::CodeLimits::clone(&self) -> Self
+impl core::cmp::Eq for ponko::mods::CodeLimits
+impl core::cmp::PartialEq for ponko::mods::CodeLimits
+pub fn ponko::mods::CodeLimits::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::mods::CodeLimits
+pub fn ponko::mods::CodeLimits::default() -> Self
+impl core::fmt::Debug for ponko::mods::CodeLimits
+pub fn ponko::mods::CodeLimits::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::mods::CodeLimits
+impl core::marker::StructuralPartialEq for ponko::mods::CodeLimits
+pub struct ponko::mods::ModCode
+impl ponko::mods::ModCode
+pub fn ponko::mods::ModCode::call(&mut self, ponko::mods::ModFn, &[ponko::mods::ModValue]) -> core::result::Result<core::option::Option<ponko::mods::ModValue>, ponko::mods::ModError>
+pub fn ponko::mods::ModCode::exporting<'a>(&'a self, &'a str) -> impl core::iter::traits::iterator::Iterator<Item = (&'a str, ponko::mods::ModFn)> + 'a
+pub fn ponko::mods::ModCode::fuel_left(&self) -> u64
+pub fn ponko::mods::ModCode::function(&self, &str, &str) -> core::option::Option<ponko::mods::ModFn>
+pub fn ponko::mods::ModCode::mods(&self) -> impl core::iter::traits::iterator::Iterator<Item = &str>
+pub fn ponko::mods::ModCode::take_log(&mut self) -> alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
+impl core::fmt::Debug for ponko::mods::ModCode
+pub fn ponko::mods::ModCode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct ponko::mods::ModError
 impl ponko::mods::ModError
 pub fn ponko::mods::ModError::file(&self) -> core::option::Option<&str>
@@ -6349,6 +6400,12 @@ pub fn ponko::mods::ModError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core:
 impl core::fmt::Display for ponko::mods::ModError
 pub fn ponko::mods::ModError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for ponko::mods::ModError
+pub struct ponko::mods::ModFn
+impl core::clone::Clone for ponko::mods::ModFn
+pub fn ponko::mods::ModFn::clone(&self) -> Self
+impl core::fmt::Debug for ponko::mods::ModFn
+pub fn ponko::mods::ModFn::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::mods::ModFn
 #[non_exhaustive] pub struct ponko::mods::ModInfo
 pub ponko::mods::ModInfo::files: usize
 pub ponko::mods::ModInfo::id: alloc::string::String
@@ -6380,6 +6437,7 @@ impl core::marker::Copy for ponko::mods::ModLimits
 impl core::marker::StructuralPartialEq for ponko::mods::ModLimits
 #[non_exhaustive] pub struct ponko::mods::ModManifest
 pub ponko::mods::ModManifest::after: alloc::vec::Vec<alloc::string::String>
+pub ponko::mods::ModManifest::code: core::option::Option<alloc::string::String>
 pub ponko::mods::ModManifest::id: alloc::string::String
 pub ponko::mods::ModManifest::mod_version: alloc::string::String
 pub ponko::mods::ModManifest::name: alloc::string::String
@@ -6406,6 +6464,7 @@ pub fn ponko::mods::ModPack::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::
 pub struct ponko::mods::ModSet
 impl ponko::mods::ModSet
 pub fn ponko::mods::ModSet::add(&mut self, ponko::mods::ModPack) -> &mut Self
+pub fn ponko::mods::ModSet::code_limits(self, ponko::mods::CodeLimits) -> Self
 pub fn ponko::mods::ModSet::limits(self, ponko::mods::ModLimits) -> Self
 pub fn ponko::mods::ModSet::mount(self, &mut ponko::prelude::Ctx) -> core::result::Result<(), ponko::mods::ModError>
 pub fn ponko::mods::ModSet::new() -> Self
@@ -6428,6 +6487,7 @@ impl core::fmt::Debug for ponko::mods::Mods
 pub fn ponko::mods::Mods::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub const ponko::mods::MANIFEST: &str
 pub const ponko::mods::SOURCE_ID: &str
+pub fn ponko::mods::with_code<R>(&mut ponko::prelude::Ctx, impl core::ops::function::FnOnce(&mut ponko::mods::ModCode) -> R) -> core::option::Option<R>
 pub mod ponko::nav
 pub struct ponko::nav::NavBakeError(_)
 impl core::convert::From<ponko::nav::NavBakeError> for ponko::error::Error
@@ -13414,8 +13474,25 @@ impl core::fmt::Debug for ponko::render::GpuUploads
 pub fn ponko::render::GpuUploads::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::render::GpuUploads
 impl core::marker::StructuralPartialEq for ponko::render::GpuUploads
+#[non_exhaustive] pub struct ponko::render::HdrMetadata
+pub ponko::render::HdrMetadata::max_content_light_nits: f32
+pub ponko::render::HdrMetadata::max_frame_average_nits: f32
+pub ponko::render::HdrMetadata::max_mastering_nits: f32
+pub ponko::render::HdrMetadata::min_mastering_nits: f32
+impl ponko::render::HdrMetadata
+pub fn ponko::render::HdrMetadata::for_output(&ponko::render::HdrOutput, f32) -> Self
+impl core::clone::Clone for ponko::render::HdrMetadata
+pub fn ponko::render::HdrMetadata::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::render::HdrMetadata
+pub fn ponko::render::HdrMetadata::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::render::HdrMetadata
+pub fn ponko::render::HdrMetadata::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::render::HdrMetadata
+impl core::marker::StructuralPartialEq for ponko::render::HdrMetadata
 #[non_exhaustive] pub struct ponko::render::HdrOutput
 pub ponko::render::HdrOutput::enabled: bool
+pub ponko::render::HdrOutput::max_content_light_nits: f32
+pub ponko::render::HdrOutput::max_frame_average_nits: f32
 pub ponko::render::HdrOutput::paper_white_nits: f32
 pub ponko::render::HdrOutput::peak_nits: f32
 impl ponko::render::HdrOutput
@@ -13438,6 +13515,7 @@ pub ponko::render::HdrStatus::display_headroom: core::option::Option<f32>
 pub ponko::render::HdrStatus::display_peak_nits: core::option::Option<f32>
 pub ponko::render::HdrStatus::encoding: ponko::render::HdrEncoding
 pub ponko::render::HdrStatus::headroom: f32
+pub ponko::render::HdrStatus::metadata: core::option::Option<ponko::render::HdrMetadata>
 pub ponko::render::HdrStatus::paper_white_nits: f32
 pub ponko::render::HdrStatus::peak_nits: f32
 pub ponko::render::HdrStatus::reason: core::option::Option<ponko::render::HdrOffReason>
@@ -15999,6 +16077,23 @@ pub fn ponko::terrain::Heightfield::eq(&self, &Self) -> bool
 impl core::fmt::Debug for ponko::terrain::Heightfield
 pub fn ponko::terrain::Heightfield::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for ponko::terrain::Heightfield
+#[non_exhaustive] pub struct ponko::terrain::TerrainFile
+pub ponko::terrain::TerrainFile::path: alloc::string::String
+impl ponko::terrain::TerrainFile
+pub fn ponko::terrain::TerrainFile::new(impl core::convert::Into<alloc::string::String>) -> Self
+impl core::clone::Clone for ponko::terrain::TerrainFile
+pub fn ponko::terrain::TerrainFile::clone(&self) -> Self
+impl core::cmp::Eq for ponko::terrain::TerrainFile
+impl core::cmp::PartialEq for ponko::terrain::TerrainFile
+pub fn ponko::terrain::TerrainFile::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::terrain::TerrainFile
+pub fn ponko::terrain::TerrainFile::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::terrain::TerrainFile
+impl ponko_ecs::bundle::Component for ponko::terrain::TerrainFile
+impl serde_core::ser::Serialize for ponko::terrain::TerrainFile
+pub fn ponko::terrain::TerrainFile::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::terrain::TerrainFile
+pub fn ponko::terrain::TerrainFile::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 #[non_exhaustive] pub struct ponko::terrain::TerrainMaterialDesc
 pub ponko::terrain::TerrainMaterialDesc::layer_size: [f32; 8]
 pub ponko::terrain::TerrainMaterialDesc::layers: ponko::terrain::TextureArray

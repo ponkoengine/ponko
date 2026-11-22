@@ -4001,9 +4001,11 @@ pub ponko::mods::ModProblem::BadName(alloc::string::String)
 pub ponko::mods::ModProblem::BadValue
 pub ponko::mods::ModProblem::BadValue::component: alloc::string::String
 pub ponko::mods::ModProblem::BadValue::message: alloc::string::String
+pub ponko::mods::ModProblem::Code(alloc::string::String)
 pub ponko::mods::ModProblem::Cycle(alloc::vec::Vec<alloc::string::String>)
 pub ponko::mods::ModProblem::DuplicateId(alloc::string::String)
 pub ponko::mods::ModProblem::Manifest(alloc::string::String)
+pub ponko::mods::ModProblem::MissingAssets(alloc::vec::Vec<(alloc::string::String, alloc::string::String)>)
 pub ponko::mods::ModProblem::MissingDependency(alloc::string::String)
 pub ponko::mods::ModProblem::TooLarge
 pub ponko::mods::ModProblem::TooLarge::limit: u64
@@ -4011,6 +4013,7 @@ pub ponko::mods::ModProblem::TooLarge::size: u64
 pub ponko::mods::ModProblem::TooManyFiles
 pub ponko::mods::ModProblem::TooManyFiles::count: usize
 pub ponko::mods::ModProblem::TooManyFiles::limit: usize
+pub ponko::mods::ModProblem::Trap(alloc::string::String)
 pub ponko::mods::ModProblem::UnknownComponent(alloc::string::String)
 pub ponko::mods::ModProblem::UnknownResource(alloc::string::String)
 pub ponko::mods::ModProblem::Unreadable(alloc::string::String)
@@ -4075,6 +4078,7 @@ impl core::marker::Copy for ponko::mods::ModLimits
 impl core::marker::StructuralPartialEq for ponko::mods::ModLimits
 #[non_exhaustive] pub struct ponko::mods::ModManifest
 pub ponko::mods::ModManifest::after: alloc::vec::Vec<alloc::string::String>
+pub ponko::mods::ModManifest::code: core::option::Option<alloc::string::String>
 pub ponko::mods::ModManifest::id: alloc::string::String
 pub ponko::mods::ModManifest::mod_version: alloc::string::String
 pub ponko::mods::ModManifest::name: alloc::string::String
@@ -8364,8 +8368,25 @@ impl core::fmt::Debug for ponko::render::GpuUploads
 pub fn ponko::render::GpuUploads::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::render::GpuUploads
 impl core::marker::StructuralPartialEq for ponko::render::GpuUploads
+#[non_exhaustive] pub struct ponko::render::HdrMetadata
+pub ponko::render::HdrMetadata::max_content_light_nits: f32
+pub ponko::render::HdrMetadata::max_frame_average_nits: f32
+pub ponko::render::HdrMetadata::max_mastering_nits: f32
+pub ponko::render::HdrMetadata::min_mastering_nits: f32
+impl ponko::render::HdrMetadata
+pub fn ponko::render::HdrMetadata::for_output(&ponko::render::HdrOutput, f32) -> Self
+impl core::clone::Clone for ponko::render::HdrMetadata
+pub fn ponko::render::HdrMetadata::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::render::HdrMetadata
+pub fn ponko::render::HdrMetadata::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::render::HdrMetadata
+pub fn ponko::render::HdrMetadata::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::render::HdrMetadata
+impl core::marker::StructuralPartialEq for ponko::render::HdrMetadata
 #[non_exhaustive] pub struct ponko::render::HdrOutput
 pub ponko::render::HdrOutput::enabled: bool
+pub ponko::render::HdrOutput::max_content_light_nits: f32
+pub ponko::render::HdrOutput::max_frame_average_nits: f32
 pub ponko::render::HdrOutput::paper_white_nits: f32
 pub ponko::render::HdrOutput::peak_nits: f32
 impl ponko::render::HdrOutput
@@ -8388,6 +8409,7 @@ pub ponko::render::HdrStatus::display_headroom: core::option::Option<f32>
 pub ponko::render::HdrStatus::display_peak_nits: core::option::Option<f32>
 pub ponko::render::HdrStatus::encoding: ponko::render::HdrEncoding
 pub ponko::render::HdrStatus::headroom: f32
+pub ponko::render::HdrStatus::metadata: core::option::Option<ponko::render::HdrMetadata>
 pub ponko::render::HdrStatus::paper_white_nits: f32
 pub ponko::render::HdrStatus::peak_nits: f32
 pub ponko::render::HdrStatus::reason: core::option::Option<ponko::render::HdrOffReason>
