@@ -19,9 +19,38 @@ serde = { version = "1", features = ["derive"] }
 
 # Fast debug builds: your code with light optimization, the engine and the
 # other dependencies fully optimized. Games and tests run many times faster
-# than a plain debug build; edit -> build stays quick, debug info stays.
+# than a plain debug build, edit -> build stays quick, and your own code
+# keeps full debug info.
 [profile.dev]
 opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+# Backtraces still name files and lines in the engine; full debug info for
+# the optimized dependencies would make a clean build a fifth slower and
+# the target folder gigabytes bigger.
+debug = "line-tables-only"
+
+# syn runs only while building, inside derive macros: optimizing it costs
+# more time than it saves (release builds don't optimize it either).
+[profile.dev.package.syn]
+opt-level = 0
+
+# Smaller downloads for players: `ponko package --profile dist`. One
+# whole-program optimization pass (fat LTO, one codegen unit) and no symbols:
+# about 25% smaller than a stripped release build, and minutes to build
+# instead of seconds, so use it for what you ship, not while you work.
+[profile.dist]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+strip = true
+
+# The same for the web: `ponko package --web --profile dist-web`. Optimized
+# for size, which shrinks the .wasm by a third. No `strip`: wasm-bindgen
+# needs the section it removes and drops the names itself.
+[profile.dist-web]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+opt-level = "s"

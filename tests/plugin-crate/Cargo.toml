@@ -23,6 +23,15 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+# Backtraces still name files and lines in the engine; full debug info for
+# the optimized dependencies would make a clean build a fifth slower and
+# the target folder gigabytes bigger.
+debug = "line-tables-only"
+
+# syn runs only while building, inside derive macros: optimizing it costs
+# more time than it saves (release builds don't optimize it either).
+[profile.dev.package.syn]
+opt-level = 0
 
 # Only in the engine's copy: its own workspace, outside the engine's.
 [workspace]

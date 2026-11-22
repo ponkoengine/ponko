@@ -1,0 +1,24 @@
+# Build settings for a fast edit -> run loop. The guide's "Build times and
+# download sizes" has the numbers:
+# https://ponko.dev/guide/performance.html#build-times-and-download-sizes
+#
+# The optimization levels live in Cargo.toml ([profile.dev]), so they also
+# apply when cargo runs from another folder. This file is for the linker,
+# which is the only per-system choice. Everything here is optional: with the
+# lines below commented out, cargo uses its defaults, which already link
+# quickly on macOS and on x86-64 Linux (Rust 1.90 and later link with the
+# bundled rust-lld there).
+
+# Linux on ARM, or older Rust: link with mold (`apt install mold clang`) or
+# lld (`apt install lld clang`). Uncomment the lines for your machine:
+# [target.x86_64-unknown-linux-gnu]
+# linker = "clang"
+# rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+# [target.aarch64-unknown-linux-gnu]
+# linker = "clang"
+# rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+# Windows (MSVC): rust-lld comes with Rust and links large programs faster
+# than Microsoft's link.exe.
+# [target.x86_64-pc-windows-msvc]
+# linker = "rust-lld.exe"
