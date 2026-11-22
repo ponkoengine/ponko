@@ -188,10 +188,7 @@ fn update_hud(score: Res<Score>, mut text: Single<&mut Text, With<ScoreText>>) {
 // ANCHOR: sound
 fn play_sounds(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.spawn(AudioPlayer::new(asset_server.load("hit.ogg")));
-    commands.spawn((
-        AudioPlayer::new(asset_server.load("theme.ogg")),
-        PlaybackSettings::LOOP,
-    ));
+    commands.spawn((AudioPlayer::new(asset_server.load("theme.ogg")), PlaybackSettings::LOOP));
 }
 // ANCHOR_END: sound
 

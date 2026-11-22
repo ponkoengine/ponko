@@ -40,6 +40,7 @@ HEADER = ROOT / 'include' / 'ponko.h'
 NOT_FEATURES = {
     'contributing.md': 'contribution policy',
     'ember-hop.md': 'the second reference game is written in Rust',
+    'from-bevy.md': 'a guide for people moving from another Rust engine, which has no C or C++ API',
     'legions.md': 'the showcase is written in Rust and adds no engine API',
     'packaging.md': 'the reference game is written in Rust',
     'render-tests.md': 'the GPU tests are written in Rust',
