@@ -1261,24 +1261,18 @@ pub struct Audio {
 /// What the fuzz target `sound` does with the bytes of a sound file: every
 /// way the engine reads one (decoded whole, in slices, streamed from memory
 /// and as a video's soundtrack is) must refuse it with an error or accept
-/// it within the limits of `sound_file`, never crash, hang or allocate
-/// without bound.
+/// it, never crash, hang or allocate without bound. Returns the frames and
+/// sample rate of the whole decode when it accepted the file; the target
+/// checks them against the limits of `sound_file`.
 #[cfg(all(fuzzing, feature = "audio"))]
 #[doc(hidden)]
-pub fn fuzz_sound(bytes: &[u8]) {
-    use sound_file::{MAX_FRAMES, MAX_SAMPLE_RATE};
-    if let Ok(sound) = backend::decode_detached(bytes.to_vec()) {
-        assert!(
-            sound.frames.len() as u64 <= MAX_FRAMES,
-            "a sound over the length limit loaded"
-        );
-        assert!(
-            (1..=MAX_SAMPLE_RATE).contains(&sound.sample_rate),
-            "a sound over the sample rate limit loaded"
-        );
-    }
+pub fn fuzz_sound(bytes: &[u8]) -> Option<(u64, u32)> {
+    let decoded = backend::decode_detached(bytes.to_vec())
+        .ok()
+        .map(|sound| (sound.frames.len() as u64, sound.sample_rate));
     let _ = backend::Audio::default().stream_bytes(bytes.to_vec());
     chunked::fuzz_stream(bytes);
+    decoded
 }
 
 /// A sound decoded on a worker thread, for [`Audio::adopt_decoded`].

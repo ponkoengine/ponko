@@ -22,7 +22,10 @@ What every entry point promises, whatever the bytes:
 
 The fuzz targets in `fuzz/` (its README says how to run them) feed each
 entry point random and mutated bytes; a finding is fixed in the loader and
-kept fixed by a regression test next to it.
+kept fixed by a regression test next to it. Every target is named in the
+fuzz list, `fuzz/targets.txt`, with the seconds the weekly job runs it, and
+`python3 scripts/check-fuzz-list.py` fails for a target the list doesn't
+name.
 
 ## Network entry points
 
@@ -54,7 +57,7 @@ pack, a download, a mod. A file can lie in its header about anything.
 | Scenes, world saves and prefabs (JSON) | Crash the reader, a prefab that includes itself forever | Errors for malformed JSON and unknown types; prefab nesting depth is limited | fuzz targets `scene`, `prefab` |
 | Action maps (players' key bindings) | Crash the input system | Malformed bindings are an error; nothing else is read | fuzz target `action_map` |
 | Unity imports (`ponko_unity`) | Crash the importer with a malformed project | Every read is bounds-checked | fuzz targets `unity_yaml`, `unity_binary` |
-| Sounds (WAV, OGG, FLAC, MP3) | Crash the decoder | Decoded by symphonia, which is fuzzed upstream | — |
+| Sounds: WAV (PCM and IMA or Microsoft ADPCM), AIFF, Ogg Vorbis, FLAC and MP3 (and, with `video`, the audio of a WebM file) | A sample rate, channel count or length in the header that allocates gigabytes (compressed silence can unpack to terabytes), a crafted header that crashes the decoder | The header is read before anything is decoded: a sample rate over 768 kHz, zero or more than two channels, or (for a sound decoded whole) a claimed length over 64 Mi frames (512 MiB of samples, about 25 minutes at 44.1 kHz; stream longer ones) is an error (`could not decode the sound: ...` naming the limit); a sound decoded whole stops with that error at the same length however short or missing its header's length was; a stream holds no decoded samples, so its length is not limited. A panic inside a format's reader (an overflowing size in a header, say) is an error too, not a crash | `audio/sound_file.rs` tests (one per format), fuzz target `sound` |
 
 ## The control endpoint
 

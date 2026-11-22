@@ -264,7 +264,7 @@ mod tests {
             .err()
             .expect("the slice decoder refuses it at open");
         assert!(error.contains(limit), "{error}");
-        let error = decode_sound(bytes.to_vec()).err().expect("the whole decode refuses it");
+        let error = decode_sound(bytes.to_vec()).expect_err("the whole decode refuses it");
         assert!(error.contains(limit), "{error}");
         if stream_too {
             let shared: Arc<[u8]> = bytes.into();
@@ -360,7 +360,7 @@ mod tests {
         LIMIT.with(|limit| limit.set(Some(2000)));
         // Four MP3 frames of 1152 samples and nothing in the header about it.
         let silent = mp3(None, 4);
-        let error = decode_sound(silent.clone()).err().expect("refused while decoding");
+        let error = decode_sound(silent.clone()).expect_err("refused while decoding");
         assert!(error.contains(LENGTH), "{error}");
         // Within the limit it loads, so the limit is what refused it.
         LIMIT.with(|limit| limit.set(Some(5000)));

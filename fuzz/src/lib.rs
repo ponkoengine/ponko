@@ -314,5 +314,24 @@ pub fn cooked_texture(data: &[u8]) {
 /// played as a stream, which must refuse absurd headers and stop at the
 /// length limit.
 pub fn sound(data: &[u8]) {
-    ponko::__fuzz::sound(data);
+    // The engine turns a panic inside a format's reader into an error
+    // (`audio::sound_file::guarded`), but cargo-fuzz's panic hook aborts at
+    // the first panic, caught or not, so the same upstream bug would end
+    // every run. The hook is replaced with one that only prints the first
+    // few; a panic the engine doesn't catch unwinds out of the target
+    // (a function the fuzzer calls) and aborts it all the same.
+    static HOOK: std::sync::Once = std::sync::Once::new();
+    HOOK.call_once(|| {
+        static SEEN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        std::panic::set_hook(Box::new(|info| {
+            if SEEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 10 {
+                eprintln!("a decoder panicked, caught by the engine: {info}");
+            }
+        }));
+    });
+    // What the engine's limits promise for any sound it decoded whole.
+    if let Some((frames, rate)) = ponko::__fuzz::sound(data) {
+        assert!(frames <= 64 * 1024 * 1024, "a sound over the length limit loaded");
+        assert!((1..=768_000).contains(&rate), "a sound over the sample rate limit loaded");
+    }
 }

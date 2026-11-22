@@ -8,6 +8,11 @@ bound. Errors are fine. Where the input is accepted, the target also checks
 what must hold for it (a loaded scene saves and loads again, an action map
 reads back).
 
+The list of targets, with the seconds the weekly job runs each, is
+`fuzz/targets.txt` (one target per line). A new target needs its file in
+`fuzz_targets/`, its `[[bin]]` in `Cargo.toml`, its line there and its row
+in this table; `python3 scripts/check-fuzz-list.py` fails when one is missing.
+
 | Target | What it reads |
 |---|---|
 | `scene` | A scene or world save (`ctx.load_scene`, the `World::load` format), then two ticks of the engine's systems |
@@ -39,6 +44,11 @@ dispatcher and the texture decoders are internal), with unit tests in
 temporary folder of its own, since requests may write files below the
 folder the game runs in.
 
+The `sound` target reaches the sound decoders through `ponko::__fuzz` too
+(a whole decode, the slice-by-slice decode asset groups use, a stream opened
+from memory and a stream played a little). On Linux its build needs the
+audio output library's headers (`libasound2-dev`).
+
 FBX models are not fuzzed here: the importer hands them to ufbx, a C library
 fuzzed upstream, which `cargo fuzz` can't instrument.
 
@@ -58,7 +68,8 @@ cargo +nightly fuzz run gltf corpus/gltf -- -max_total_time=600 -rss_limit_mb=20
 Or every target in turn, with the flags the weekly job uses:
 
 ```sh
-fuzz/run-all.sh 600        # ten minutes each; findings in fuzz/findings.tsv
+fuzz/run-all.sh            # as long as targets.txt says; findings in fuzz/findings.tsv
+fuzz/run-all.sh 600        # ten minutes each
 fuzz/run-all.sh 3600 scene # an hour of one target
 ```
 
