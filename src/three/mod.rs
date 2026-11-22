@@ -80,6 +80,7 @@ pub use retarget::{HumanBone, HumanoidMap, RetargetError, Retargeter};
 pub(crate) mod lights;
 #[cfg(feature = "editor")]
 mod material_edit;
+pub(crate) mod material_extras;
 mod material_variant;
 mod stencil;
 pub use stencil::{Stencil, StencilCompare, StencilFace, StencilOp};

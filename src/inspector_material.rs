@@ -16,6 +16,11 @@
 //! (`material.custom[0]` to `[3]`) and custom textures are edited live too;
 //! those are set in code (`MaterialDesc::with_custom`), so Save writes the
 //! `.wgsl` alone, and **Copy as Rust** copies the values to paste there.
+//!
+//! A glTF material can name its custom shader and values itself, in its
+//! `extras` (see `three::material_extras`): the materials window's
+//! **Custom shader** section edits them there, by name and type, and they
+//! load with the file.
 
 use egui::{Color32, RichText, Ui};
 use glam::Vec4;
@@ -227,6 +232,7 @@ impl Panels {
         }
         let unsaved = ctx.editor.docs.unsaved(&path);
         let pngs = near_first(self.asset_files("png"), &path);
+        let shaders = near_first(self.asset_files("wgsl"), &path);
         let mut open = true;
         let mut save = false;
         let mut edited = None;
@@ -278,6 +284,8 @@ impl Panels {
                             ui.end_row();
                         }
                     });
+                ui.separator();
+                custom_section(ui, &mut g["materials"][state.selected], &path, &shaders);
                 if let Some(e) = &state.error {
                     ui.colored_label(Color32::LIGHT_RED, e);
                 }
@@ -547,6 +555,106 @@ fn code_editor(ui: &mut Ui, doc: &mut Value, error: Option<u32>) {
 }
 
 /// The value fields of a glTF material, as grid rows.
+/// The material's custom shader and its values, kept in its `extras`
+/// (`ponko:shader`, `ponko:params`; see `three::material_extras`).
+fn custom_section(ui: &mut Ui, m: &mut Value, path: &str, shaders: &[String]) {
+    use crate::three::material_extras::{CustomExtras, Param, ParamKind};
+    ui.label(RichText::new("Custom shader").strong()).on_hover_text(
+        "Saved in the material's extras: the shader draws it when the file loads, with these values as material.custom[0] to [3]",
+    );
+    let read = CustomExtras::read(&m["extras"]);
+    let mut c = match read {
+        Ok(c) => c.unwrap_or_default(),
+        Err(e) => {
+            ui.colored_label(Color32::LIGHT_RED, e);
+            return;
+        }
+    };
+    let before = c.clone();
+    let mut remove = None;
+    egui::Grid::new("ponko-materials-custom").num_columns(2).show(ui, |ui| {
+        ui.label("Shader");
+        let shown = c.shader.clone().unwrap_or_else(|| "built-in".into());
+        egui::ComboBox::from_id_salt("ponko-materials-shader")
+            .selected_text(shown)
+            .show_ui(ui, |ui| {
+                if ui.selectable_label(c.shader.is_none(), "built-in").clicked() {
+                    c.shader = None;
+                }
+                for file in shaders {
+                    let name = relative(path, file);
+                    if ui.selectable_label(c.shader.as_deref() == Some(&name), file).clicked() {
+                        c.shader = Some(name);
+                    }
+                }
+            });
+        ui.end_row();
+        for (i, p) in c.params.iter_mut().enumerate() {
+            ui.label(format!("custom[{i}]"));
+            ui.horizontal(|ui| {
+                for k in 0..p.kind.len() {
+                    ui.add(egui::DragValue::new(&mut p.value[k]).speed(0.01));
+                }
+                if p.kind == ParamKind::Color {
+                    let mut rgba = p.value.to_array();
+                    if ui.color_edit_button_rgba_unmultiplied(&mut rgba).changed() {
+                        p.value = Vec4::from_array(rgba);
+                    }
+                }
+                egui::ComboBox::from_id_salt(("ponko-materials-param-type", i))
+                    .selected_text(p.kind.name())
+                    .width(60.0)
+                    .show_ui(ui, |ui| {
+                        for kind in ParamKind::ALL {
+                            if ui.selectable_label(p.kind == kind, kind.name()).clicked() && p.kind != kind {
+                                p.kind = kind;
+                                // The numbers past the new length are 0 (a colour's alpha 1).
+                                for k in kind.len()..4 {
+                                    p.value[k] = 0.0;
+                                }
+                                if kind == ParamKind::Color && p.value.w == 0.0 {
+                                    p.value.w = 1.0;
+                                }
+                            }
+                        }
+                    });
+                let mut name = p.name.clone();
+                let field = ui.add(
+                    egui::TextEdit::singleline(&mut name)
+                        .desired_width(80.0)
+                        .hint_text("name"),
+                );
+                if field.changed() {
+                    p.name = name;
+                }
+                if ui.small_button("×").clicked() {
+                    remove = Some(i);
+                }
+            });
+            ui.end_row();
+        }
+    });
+    if let Some(i) = remove {
+        c.params.remove(i);
+    }
+    if c.params.len() < 4 && ui.button("+ value").clicked() {
+        let i = c.params.len();
+        c.params.push(Param {
+            name: format!("value{i}"),
+            kind: ParamKind::Float,
+            value: Vec4::ZERO,
+        });
+    }
+    if c != before {
+        c.write(&mut m["extras"]);
+        if m["extras"].as_object().is_some_and(serde_json::Map::is_empty)
+            && let Some(o) = m.as_object_mut()
+        {
+            o.remove("extras");
+        }
+    }
+}
+
 fn material_fields(ui: &mut Ui, m: &mut Value) {
     ui.label("Name");
     let mut name = m["name"].as_str().unwrap_or("").to_string();
@@ -907,6 +1015,56 @@ mod tests {
         assert_eq!(h.ctx.gfx.material_desc(m).unwrap().custom[0].x, 0.0);
         let snippet = rust_snippet(&f.shader, h.ctx.editor.docs.get(&f.shader).unwrap());
         assert!(snippet.contains("with_custom([vec4(0.0"), "{snippet}");
+    }
+
+    #[test]
+    fn custom_values_set_in_the_materials_window_survive_saving_and_loading_the_gltf() {
+        let f = Fixture::new("extras");
+        let mut h = Harness::new();
+        h.ctx.gfx.try_load_mesh(&f.gltf).unwrap();
+        let paint = h.ctx.gfx.file_material_handles(&f.gltf).unwrap()[0];
+        open(&mut h, "Materials…", &f.gltf);
+        // A shader, and two values: a colour "tint" and a float.
+        h.click_text(|t| t == "built-in");
+        h.click_last_text(|t| t == f.shader);
+        h.click_text(|t| t == "+ value");
+        h.click_text(|t| t == "+ value");
+        h.click_text(|t| t == "value0");
+        h.type_text("tint");
+        h.click_text(|t| t == "float");
+        h.click_last_text(|t| t == "color");
+        let field = field_right_of(&h.frame(vec![]), "custom[1]");
+        h.drag(field, field + glam::vec2(50.0, 0.0), 4);
+        let extras = material(&h, &f)["extras"].clone();
+        assert_eq!(extras["ponko:shader"], "tint.wgsl", "relative to the file");
+        assert_eq!(
+            extras["ponko:params"][0],
+            json!({"name": "tint", "type": "color", "value": [0.0, 0.0, 0.0, 1.0]})
+        );
+        let speed = number(&extras["ponko:params"][1]["value"], 0.0);
+        assert!(speed > 0.2, "{extras}");
+        // The model's material follows at once.
+        h.frame(vec![]);
+        let shader = h.ctx.gfx.loaded_shader(&f.shader).expect("the shader was loaded");
+        let live = h.ctx.gfx.material_desc(paint).unwrap();
+        assert_eq!(live.shader, Some(shader));
+        assert!((live.custom[1].x - speed).abs() < 1e-4, "{:?}", live.custom);
+        assert_eq!(live.custom[0], Vec4::new(0.0, 0.0, 0.0, 1.0));
+        h.save();
+        let disk = f.on_disk();
+        assert_eq!(disk["materials"][0]["extras"], extras, "saved in the glTF");
+        // Loaded by a game that never saw the editor: the same values.
+        let mut game = Harness::new();
+        game.ctx.gfx.try_load_mesh(&f.gltf).unwrap();
+        let loaded = game.ctx.gfx.file_material_handles(&f.gltf).unwrap()[0];
+        let desc = game.ctx.gfx.material_desc(loaded).unwrap();
+        assert_eq!(desc.shader, game.ctx.gfx.loaded_shader(&f.shader));
+        assert!(desc.shader.is_some());
+        assert_eq!(desc.custom[0], Vec4::new(0.0, 0.0, 0.0, 1.0));
+        assert!((desc.custom[1].x - speed).abs() < 1e-4);
+        // And the window reads them back with their names and types.
+        open(&mut game, "Materials…", &f.gltf);
+        assert!(game.find(|t| t == "tint").is_some() && game.find(|t| t == "color").is_some());
     }
 
     #[test]
