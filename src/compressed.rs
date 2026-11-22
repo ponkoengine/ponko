@@ -1346,6 +1346,38 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn lowered_image_limits_refuse_ktx2_and_dds_naming_them() {
+        use crate::assets::{ImageLimits, with_image_limits};
+        let level = vec![solid_bc1(4, 4, RED_565)];
+        let ktx = ktx2_file(Some(ktx2::Format::BC1_RGBA_UNORM_BLOCK), 12, 4, &level, true);
+        let dds = dds(b"DXT1", 4, 12, &level);
+        let tight = ImageLimits::new(8, 1 << 20);
+        for (name, file) in [("a.ktx2", &ktx), ("a.dds", &dds)] {
+            let Some(Err(e)) = with_image_limits(tight, || decode(file, name, "a", GpuFormats::ALL)) else {
+                panic!("{name}: a picture 12 pixels on a side loaded under 8");
+            };
+            assert_eq!(e.kind(), ErrorKind::Limit, "{name}: {}", e.message());
+            assert!(
+                e.message().contains("8 pixels a side, 1 MiB"),
+                "{name}: {}",
+                e.message()
+            );
+            // The same file is past the limit only because of the limit.
+            let Some(Err(e)) = decode(file, name, "a", GpuFormats::ALL) else {
+                continue; // it loads: not a hostile file at all
+            };
+            assert_ne!(e.kind(), ErrorKind::Limit, "{name}: {}", e.message());
+        }
+        // Bytes: 12 x 4 RGBA8 is 192.
+        let few = ImageLimits::new(64, 191);
+        let Some(Err(e)) = with_image_limits(few, || decode(&ktx, "a.ktx2", "a", GpuFormats::ALL)) else {
+            panic!("192 bytes of pixels loaded under 191");
+        };
+        assert_eq!(e.kind(), ErrorKind::Limit, "{}", e.message());
+        assert!(e.message().contains("191 bytes"), "{}", e.message());
+    }
+
+    #[test]
     fn a_texel_block_dimension_the_ktx2_crate_would_overflow_is_refused() {
         // Found by the `cooked_texture` fuzz target: the `ktx2` crate adds
         // one to each texel block dimension byte in a `u8` and panics on 255.

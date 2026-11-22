@@ -9484,6 +9484,26 @@ enum PonkoStatus ponko_input_scenario_ime(struct PonkoInputScenario *scenario,
                                           uint64_t tick,
                                           const struct PonkoImeEvent *event);
 
+enum PonkoStatus ponko_game_image_limits(struct PonkoGame *game,
+                                         uint32_t max_side,
+                                         uint64_t max_bytes);
+
+enum PonkoStatus ponko_ctx_set_image_limits(struct PonkoCtx *ctx,
+                                            uint32_t max_side,
+                                            uint64_t max_bytes);
+
+enum PonkoStatus ponko_ctx_image_limits(const struct PonkoCtx *ctx,
+                                        uint32_t *out_max_side,
+                                        uint64_t *out_max_bytes);
+
+enum PonkoStatus ponko_ctx_try_decode_texture(struct PonkoCtx *ctx,
+                                              const uint8_t *bytes,
+                                              size_t len,
+                                              const char *name,
+                                              uint32_t max_side,
+                                              uint64_t max_bytes,
+                                              struct PonkoTexture *out_texture);
+
 enum PonkoStatus ponko_ctx_load_strings(struct PonkoCtx *ctx, const char *path);
 
 enum PonkoStatus ponko_ctx_strings_insert_json(struct PonkoCtx *ctx, const char *json);

@@ -4416,6 +4416,22 @@ static void embedded_assets(ponko::ctx& ctx) {
     }
 }
 
+[[maybe_unused]] static void image_limits_guide(ponko::ctx& ctx, const std::vector<std::uint8_t>& downloaded) {
+    // ANCHOR: image_limits
+    // Everything this game loads: at most 8192 pixels a side and 256 MiB of pixels.
+    // (Before it starts, `ponko::game(...).image_limits(8192, 256u << 20)` does the same.)
+    ctx.set_image_limits(8192, 256ull << 20);
+
+    // A picture from a player: much tighter, without touching the limits above.
+    auto avatar = ctx.try_decode_texture(downloaded, "avatar.png", 512, 1ull << 20);
+    if (!avatar && avatar.kind() == PONKO_ERROR_LIMIT) {
+        std::printf("too big: %s\n", avatar.error().what());
+    }
+    // ANCHOR_END: image_limits
+    if (avatar && (avatar.value().width != 1 || avatar.value().height != 1)) std::abort();
+    ctx.set_image_limits(16384, 512ull << 20); // the defaults again, for what runs next
+}
+
 // ANCHOR: resource_scope
 struct Total { std::uint32_t value; };
 struct Coins { std::uint32_t value; };
@@ -5039,6 +5055,14 @@ int main() {
     ponko::game("asset source guide", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
         embedded_assets(ctx);
         if (skin_or_default(ctx).id != 0) std::abort();
+    });
+    ponko::game("image limits guide", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
+        // A 1x1 PNG, within every limit above.
+        static const std::vector<std::uint8_t> pixel = {
+            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0, 31, 21, 196,
+            137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 207, 192, 240, 31, 0, 5, 0, 1, 255, 137, 153, 61, 29, 0, 0, 0,
+            0, 73, 69, 78, 68, 174, 66, 96, 130};
+        image_limits_guide(ctx, pixel);
     });
     ponko::game("filter guide", 1, 1).run_headless(0, ecs_filters);
     ponko::game("query cache guide", 1, 1).run_headless(0, ecs_query_cache);

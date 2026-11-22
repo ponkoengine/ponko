@@ -2306,6 +2306,27 @@ static void native_setup(PonkoCtx* ctx, void* user) {
     CHECK(ponko_ctx_try_load_stream(ctx, "no/such.ogg", &sound) == PONKO_NOT_FOUND);
     CHECK(ponko_ctx_try_load_mesh(ctx, "no/such.glb", &mesh) == PONKO_NOT_FOUND);
 
+    /* Image limits: the game's, and one picture's own. */
+    {
+        static const uint8_t pixel[] = {
+            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0, 31, 21, 196,
+            137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 207, 192, 240, 31, 0, 5, 0, 1, 255, 137, 153, 61, 29, 0, 0, 0,
+            0, 73, 69, 78, 68, 174, 66, 96, 130};
+        uint32_t side = 0;
+        uint64_t bytes = 0;
+        PonkoTexture fits, past;
+        CHECK(ponko_ctx_image_limits(ctx, &side, &bytes) == PONKO_OK && side == 16384 && bytes == ((uint64_t)512 << 20));
+        CHECK(ponko_ctx_try_decode_texture(ctx, pixel, sizeof pixel, "pixel.png", 1, 4, &fits) == PONKO_OK && fits.width == 1);
+        CHECK(ponko_ctx_try_decode_texture(ctx, pixel, sizeof pixel, "pixel.png", 1, 3, &past) == PONKO_INVALID_ARGUMENT);
+        CHECK(ponko_last_error_kind() == PONKO_ERROR_LIMIT && strcmp(ponko_last_error_path(), "pixel.png") == 0);
+        CHECK(strstr(ponko_last_error(), "1 pixels a side, 3 bytes") != NULL);
+        CHECK(ponko_ctx_image_limits(ctx, &side, &bytes) == PONKO_OK && side == 16384); /* the game's are untouched */
+        CHECK(ponko_ctx_set_image_limits(ctx, 2048, (uint64_t)8 << 20) == PONKO_OK);
+        CHECK(ponko_ctx_image_limits(ctx, &side, &bytes) == PONKO_OK && side == 2048 && bytes == ((uint64_t)8 << 20));
+        CHECK(ponko_ctx_set_image_limits(ctx, 16384, (uint64_t)512 << 20) == PONKO_OK);
+        CHECK(ponko_ctx_set_image_limits(ctx, 0, 4) == PONKO_INVALID_ARGUMENT);
+    }
+
     /* Asset sources: memory and callbacks, then your own decoder. */
     PonkoMemorySource* memory = ponko_memory_source_new("embedded");
     CHECK(memory && ponko_memory_source_insert(memory, "level.txt", (const uint8_t*)"##.", 3) == PONKO_OK);

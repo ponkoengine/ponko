@@ -7830,6 +7830,28 @@ public:
     texture load_texture(const char* path) { return try_load_texture(path).value(); }
     /// Loads a texture, or says why not, without throwing (Rust's `try_load_texture`).
     result<texture> try_load_texture(const char* path) { texture t{}; const PonkoStatus status = ponko_ctx_try_load_texture(raw_, path, &t); return detail::attempt(status, t); }
+    /// Changes the image limits from now on, for the whole process (see `game::image_limits`). They stay
+    /// until set again; pictures already loaded stay as they are. Throws if either is 0.
+    void set_image_limits(std::uint32_t max_side, std::uint64_t max_bytes) { detail::check(ponko_ctx_set_image_limits(raw_, max_side, max_bytes)); }
+    /// The image limits in force: the longest side in pixels, and the most decoded bytes (RGBA8).
+    std::pair<std::uint32_t, std::uint64_t> image_limits() const {
+        std::uint32_t side = 0; std::uint64_t bytes = 0;
+        detail::check(ponko_ctx_image_limits(raw_, &side, &bytes));
+        return {side, bytes};
+    }
+    /// Decodes one picture from `len` bytes (a PNG, JPEG, KTX2 or any other format this build reads) into a
+    /// texture under limits of its own, not the game's (Rust's `try_decode_texture`): for a picture you
+    /// don't trust. `name` is for messages. A picture past the limits is kind PONKO_ERROR_LIMIT, bytes
+    /// that aren't a picture PONKO_ERROR_DECODE.
+    result<texture> try_decode_texture(const std::uint8_t* bytes, std::size_t len, const char* name, std::uint32_t max_side, std::uint64_t max_bytes) {
+        texture t{};
+        const PonkoStatus status = ponko_ctx_try_decode_texture(raw_, bytes, len, name, max_side, max_bytes, &t);
+        return detail::attempt(status, t);
+    }
+    /// `try_decode_texture` of a byte vector.
+    result<texture> try_decode_texture(const std::vector<std::uint8_t>& bytes, const char* name, std::uint32_t max_side, std::uint64_t max_bytes) {
+        return try_decode_texture(bytes.data(), bytes.size(), name, max_side, max_bytes);
+    }
 
     // Asset sources: where load_* calls find bytes besides assets/.
     /// Adds a copy of `source`; it's asked before assets/. Add sources in
@@ -11194,6 +11216,11 @@ public:
     /// Reload textures when their files change, under the same handles (on by
     /// default in debug builds of the engine; PONKO_HOT_RELOAD=1/0 overrides).
     game& hot_reload(bool on) { return check(ponko_game_hot_reload(raw_, on)); }
+    /// How big a picture the image decoders accept, for the whole process (Rust's `Game::image_limits`):
+    /// the longest side in pixels and the most bytes a decoded picture may take as RGBA8 (defaults 16384
+    /// and 512 MiB). Every decoder follows them; a picture past them fails with kind PONKO_ERROR_LIMIT.
+    /// Lower them for pictures from players or the network, raise them for large source art.
+    game& image_limits(std::uint32_t max_side, std::uint64_t max_bytes) { return check(ponko_game_image_limits(raw_, max_side, max_bytes)); }
     /// The runtime inspector, opened with the backquote key (on by default in
     /// debug builds of the engine; PONKO_INSPECTOR=1/0/open overrides).
     game& inspector(bool on) { return check(ponko_game_inspector(raw_, on)); }

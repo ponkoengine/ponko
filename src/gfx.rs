@@ -786,6 +786,53 @@ impl Graphics {
         Ok(texture)
     }
 
+    /// Decodes one picture from `bytes` (a PNG, JPEG, KTX2 or any other
+    /// format this build reads, found from the first bytes) into a texture,
+    /// under `limits` instead of the game's
+    /// [`ImageLimits`](crate::assets::ImageLimits): for a picture you don't
+    /// trust, such as a player's avatar, without changing the limits every
+    /// other load follows. `name` is for messages. The texture isn't named or
+    /// watched, as for [`create_texture`](Self::create_texture).
+    ///
+    /// A picture past `limits` is refused with
+    /// [`ErrorKind::Limit`](crate::error::ErrorKind::Limit) before its pixels
+    /// are allocated, and the message names the limits. Bytes that aren't a
+    /// readable picture fail with [`Decode`](crate::error::ErrorKind::Decode),
+    /// a format this build leaves out with
+    /// [`Unsupported`](crate::error::ErrorKind::Unsupported).
+    ///
+    /// Limits above the game's are allowed too (one big source picture), but
+    /// don't promise a texture: one wider than the GPU's own texture limit
+    /// panics at upload, as [`create_texture`](Self::create_texture) does.
+    ///
+    /// ```
+    /// use ponko::assets::ImageLimits;
+    /// use ponko::error::ErrorKind;
+    /// # use ponko::prelude::*;
+    /// # fn avatar_bytes() -> Vec<u8> {
+    /// #     let mut bytes = Vec::new();
+    /// #     image::RgbaImage::new(64, 64)
+    /// #         .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png).unwrap();
+    /// #     bytes
+    /// # }
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     let bytes = avatar_bytes();
+    ///     // Players' pictures: at most 32 pixels a side.
+    ///     let err = ctx.gfx.try_decode_texture(&bytes, "avatar.png", ImageLimits::new(32, 1 << 20)).unwrap_err();
+    ///     assert_eq!(err.kind(), ErrorKind::Limit);
+    ///     assert!(ctx.gfx.try_decode_texture(&bytes, "avatar.png", ImageLimits::new(64, 1 << 20)).is_ok());
+    /// });
+    /// ```
+    pub fn try_decode_texture(
+        &mut self,
+        bytes: &[u8],
+        name: &str,
+        limits: crate::assets::ImageLimits,
+    ) -> Result<Texture, crate::error::Error> {
+        let what = format!("\"{name}\"");
+        crate::assets::with_image_limits(limits, || self.texture_from_file(bytes, name, &what))
+    }
+
     /// Decodes a texture file's bytes and makes a game texture of it: a
     /// block-compressed one for KTX2 and DDS files the GPU samples (feature
     /// `compressed-textures`), RGBA8 otherwise.

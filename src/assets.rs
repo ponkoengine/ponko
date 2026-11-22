@@ -1187,27 +1187,144 @@ fn format_unavailable(format: image::ImageFormat, what: &str, path: &str, by_mag
 }
 
 /// The widest or tallest image (or texture, or video picture) the
-/// decoders accept, in pixels: what GPUs sample at most. A file whose
-/// header claims more is refused before its pixels are allocated.
+/// decoders accept by default, in pixels: what GPUs sample at most. A file
+/// whose header claims more is refused before its pixels are allocated.
+/// A game can change it with [`ImageLimits`].
 pub(crate) const MAX_IMAGE_SIDE: u32 = 16_384;
 
-/// The most bytes one decoded image may take as RGBA8 (512 MiB, a
-/// 16384 x 8192 picture): a file can't make a decoder allocate more.
+/// The most bytes one decoded image may take as RGBA8 by default (512 MiB,
+/// a 16384 x 8192 picture): a file can't make a decoder allocate more.
+/// A game can change it with [`ImageLimits`].
 pub(crate) const MAX_IMAGE_BYTES: u64 = 512 << 20;
 
+/// How big a picture the decoders accept: the longest side in pixels and the
+/// most bytes the decoded pixels may take (as RGBA8, four bytes a pixel).
+///
+/// Every image decoder (PNG, JPEG and the other `image-*` formats, KTX2 and
+/// DDS, the pictures of glTF models, tilesets and sprite sheets, the frames of
+/// a video) reads the same limits and refuses a picture past them with
+/// [`ErrorKind::Limit`](crate::error::ErrorKind::Limit), before it allocates
+/// the pixels. The message names the limits in force.
+///
+/// The defaults are 16 384 pixels a side (what nearly every desktop GPU takes
+/// as a texture) and 512 MiB. A game that loads pictures from players or the
+/// network sets lower ones; a tool that reads large source art (a height map,
+/// a panorama to slice) sets higher ones. Change them for the whole game with
+/// [`Game::image_limits`](crate::game::Game::image_limits) or
+/// [`Assets::set_image_limits`], or for one picture with
+/// [`Graphics::try_decode_texture`](crate::gfx::Graphics::try_decode_texture).
+///
+/// `max_bytes` is held to the picture's size exactly (width x height x 4); a
+/// decoder that needs working memory beyond the pixels (TIFF, say) may
+/// refuse a picture a little under it, so leave headroom for the largest
+/// picture you mean to accept.
+///
+/// Raising a limit doesn't promise a texture: a picture wider than the
+/// device's own texture limit still decodes but fails at upload, with the
+/// usual error.
+///
+/// ```
+/// use ponko::assets::ImageLimits;
+/// # use ponko::prelude::*;
+/// // A game that loads players' avatars: small pictures only.
+/// let limits = ImageLimits::new(4_096, 64 << 20);
+/// assert_eq!(limits.max_side, 4_096);
+/// assert_eq!(ImageLimits::default().max_side, 16_384);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ImageLimits {
+    /// The most pixels a picture may have along either side.
+    pub max_side: u32,
+    /// The most bytes a picture may take decoded, as RGBA8 (width x height x 4).
+    pub max_bytes: u64,
+}
+
+impl ImageLimits {
+    /// The engine's defaults: 16 384 pixels a side, 512 MiB.
+    pub const DEFAULT: Self = Self {
+        max_side: MAX_IMAGE_SIDE,
+        max_bytes: MAX_IMAGE_BYTES,
+    };
+
+    /// Limits of `max_side` pixels and `max_bytes` decoded bytes.
+    #[must_use]
+    pub const fn new(max_side: u32, max_bytes: u64) -> Self {
+        Self { max_side, max_bytes }
+    }
+
+    /// The limits as the messages say them: `4096 pixels a side, 64 MiB of pixels`.
+    fn describe(self) -> String {
+        if self.max_bytes.is_multiple_of(1 << 20) {
+            format!(
+                "{} pixels a side, {} MiB of pixels",
+                self.max_side,
+                self.max_bytes >> 20
+            )
+        } else {
+            format!("{} pixels a side, {} bytes of pixels", self.max_side, self.max_bytes)
+        }
+    }
+}
+
+impl Default for ImageLimits {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+/// The limits for the whole process (set at startup), which the decoders
+/// of every thread read: asset groups and streams decode on workers.
+static GLOBAL_IMAGE_LIMITS: std::sync::RwLock<ImageLimits> = std::sync::RwLock::new(ImageLimits::DEFAULT);
+
+thread_local! {
+    /// Limits for one call on this thread (`with_image_limits`), asked before the global ones.
+    static SCOPED_IMAGE_LIMITS: std::cell::Cell<Option<ImageLimits>> = const { std::cell::Cell::new(None) };
+}
+
+/// The limits in force on this thread: those of the enclosing
+/// [`with_image_limits`] call, else the process's.
+pub(crate) fn image_limits() -> ImageLimits {
+    SCOPED_IMAGE_LIMITS.get().unwrap_or_else(|| {
+        *GLOBAL_IMAGE_LIMITS
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    })
+}
+
+/// Sets the limits for the whole process.
+pub(crate) fn set_global_image_limits(limits: ImageLimits) {
+    *GLOBAL_IMAGE_LIMITS
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = limits;
+}
+
+/// Runs `f` with `limits` in force on this thread instead of the process's,
+/// whatever it decodes meanwhile; the previous ones come back afterwards,
+/// even if `f` panics.
+pub(crate) fn with_image_limits<T>(limits: ImageLimits, f: impl FnOnce() -> T) -> T {
+    struct Restore(Option<ImageLimits>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SCOPED_IMAGE_LIMITS.set(self.0);
+        }
+    }
+    let _restore = Restore(SCOPED_IMAGE_LIMITS.replace(Some(limits)));
+    f()
+}
+
 /// Fails with [`ErrorKind::Limit`](crate::error::ErrorKind::Limit) when a
-/// `width` x `height` picture is past [`MAX_IMAGE_SIDE`] or, as RGBA8,
-/// [`MAX_IMAGE_BYTES`]. The decoders call it with the size a file's header
-/// claims, before allocating anything for it.
+/// `width` x `height` picture is past the [`ImageLimits`] in force: the
+/// longest side, or as RGBA8 the bytes. The decoders call it with the size a
+/// file's header claims, before allocating anything for it.
 pub(crate) fn check_image_size(width: u64, height: u64, path: &str, what: &str) -> Result<(), crate::error::Error> {
-    let side = u64::from(MAX_IMAGE_SIDE);
-    if width > side || height > side || width.saturating_mul(height).saturating_mul(4) > MAX_IMAGE_BYTES {
+    let limits = image_limits();
+    let side = u64::from(limits.max_side);
+    if width > side || height > side || width.saturating_mul(height).saturating_mul(4) > limits.max_bytes {
         return Err(crate::error::Error::new(
             crate::error::ErrorKind::Limit,
             format!(
-                "{what} is {width} x {height} pixels, larger than the engine loads \
-                 ({MAX_IMAGE_SIDE} pixels a side, {} MiB of pixels)",
-                MAX_IMAGE_BYTES >> 20
+                "{what} is {width} x {height} pixels, larger than the engine loads ({})",
+                limits.describe()
             ),
         )
         .with_path(path));
@@ -1256,18 +1373,16 @@ pub(crate) fn decode_image(bytes: &[u8], path: &str, what: &str) -> Result<Image
     }
     // The size in the header first: a few bytes can claim an image of
     // gigabytes, which is refused before anything is allocated.
+    let in_force = image_limits();
     let mut limits = image::Limits::default();
-    limits.max_image_width = Some(MAX_IMAGE_SIDE);
-    limits.max_image_height = Some(MAX_IMAGE_SIDE);
-    limits.max_alloc = Some(MAX_IMAGE_BYTES);
+    limits.max_image_width = Some(in_force.max_side);
+    limits.max_image_height = Some(in_force.max_side);
+    limits.max_alloc = Some(in_force.max_bytes);
     reader.limits(limits);
     let decoded = reader.decode().map_err(|e| match e {
         image::ImageError::Limits(_) => crate::error::Error::new(
             crate::error::ErrorKind::Limit,
-            format!(
-                "{what} is larger than the engine loads ({MAX_IMAGE_SIDE} pixels a side, {} MiB of pixels): {e}",
-                MAX_IMAGE_BYTES >> 20
-            ),
+            format!("{what} is larger than the engine loads ({}): {e}", in_force.describe()),
         )
         .with_path(path),
         e => crate::error::Error::decode(path, format!("{what} is not a valid image: {e}")),
@@ -1366,6 +1481,46 @@ impl Assets {
     #[must_use]
     pub fn hot_reload(&self) -> bool {
         self.watcher.on()
+    }
+
+    /// The [`ImageLimits`] the image decoders apply now (the defaults
+    /// unless [`Game::image_limits`](crate::game::Game::image_limits) or
+    /// [`set_image_limits`](Self::set_image_limits) changed them).
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     assert_eq!(ctx.assets.image_limits(), ponko::assets::ImageLimits::default());
+    /// });
+    /// ```
+    #[must_use]
+    pub fn image_limits(&self) -> ImageLimits {
+        image_limits()
+    }
+
+    /// Changes the [`ImageLimits`] for every image decoder from now on:
+    /// call it once in setup (or use
+    /// [`Game::image_limits`](crate::game::Game::image_limits) before the
+    /// game starts). Pictures already loaded stay as they are.
+    ///
+    /// The limits are for the whole process, not for this game: they stay
+    /// until set again, so a test that lowers them puts the defaults
+    /// ([`ImageLimits::default`]) back afterwards. To decode a single
+    /// untrusted picture under tighter limits without touching these, use
+    /// [`Graphics::try_decode_texture`](crate::gfx::Graphics::try_decode_texture).
+    ///
+    /// ```
+    /// use ponko::assets::ImageLimits;
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     // Avatars from players: nothing past 2 048 pixels or 16 MiB.
+    ///     ctx.assets.set_image_limits(ImageLimits::new(2_048, 16 << 20));
+    ///     assert_eq!(ctx.assets.image_limits().max_side, 2_048);
+    ///     ctx.assets.set_image_limits(ImageLimits::default());
+    /// });
+    /// ```
+    pub fn set_image_limits(&mut self, limits: ImageLimits) {
+        set_global_image_limits(limits);
     }
 
     /// Adds a place to load named assets from. Added sources are asked in
@@ -2219,6 +2374,90 @@ mod tests {
         }
         assert!(check_image_size(16_384, 8_192, "a", "a").is_ok());
         assert!(check_image_size(16_384, 8_193, "a", "a").is_err());
+    }
+
+    #[test]
+    fn scoped_limits_apply_to_the_decoder_and_end_with_the_call() {
+        let mut png = Vec::new();
+        image::RgbaImage::new(40, 20)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let tight = ImageLimits::new(32, 1 << 20);
+        let err = with_image_limits(tight, || decode_image(&png, "a.png", "\"a.png\""))
+            .err()
+            .unwrap();
+        assert_eq!(err.kind(), crate::error::ErrorKind::Limit, "{}", err.message());
+        assert!(err.message().contains("32 pixels a side, 1 MiB"), "{}", err.message());
+        // Bytes: 40 x 20 x 4 is 3 200.
+        let few = ImageLimits::new(64, 3_199);
+        let err = with_image_limits(few, || decode_image(&png, "a.png", "\"a.png\""))
+            .err()
+            .unwrap();
+        assert_eq!(err.kind(), crate::error::ErrorKind::Limit, "{}", err.message());
+        assert!(err.message().contains("3199 bytes"), "{}", err.message());
+        let exact = ImageLimits::new(64, 3_200);
+        assert!(with_image_limits(exact, || decode_image(&png, "a.png", "\"a.png\"")).is_ok());
+        // Afterwards the limits in force are the process's again (nested calls restore too).
+        let outer = image_limits();
+        with_image_limits(tight, || {
+            with_image_limits(few, || assert_eq!(image_limits(), few));
+            assert_eq!(image_limits(), tight);
+        });
+        assert_eq!(image_limits(), outer);
+        assert!(decode_image(&png, "a.png", "\"a.png\"").is_ok());
+    }
+
+    #[test]
+    fn scoped_limits_are_restored_when_the_call_panics() {
+        let outer = image_limits();
+        let result = std::panic::catch_unwind(|| with_image_limits(ImageLimits::new(1, 4), || panic!("boom")));
+        assert!(result.is_err());
+        assert_eq!(image_limits(), outer);
+    }
+
+    #[test]
+    fn scoped_limits_are_per_thread() {
+        let tight = ImageLimits::new(1, 4);
+        with_image_limits(tight, || {
+            let elsewhere = std::thread::spawn(image_limits).join().unwrap();
+            assert_ne!(elsewhere, tight, "another thread still reads the process's limits");
+        });
+    }
+
+    #[test]
+    fn raised_bytes_let_a_header_past_the_default_bytes_through() {
+        // 12000 x 12000 RGBA is 576 000 000 bytes: within the side, past 512 MiB.
+        let header = png_header(12_000, 12_000);
+        let err = decode_image(&header, "b.png", "\"b.png\"").err().unwrap();
+        assert_eq!(err.kind(), crate::error::ErrorKind::Limit, "{}", err.message());
+        let raised = ImageLimits::new(16_384, 1 << 30);
+        let err = with_image_limits(raised, || decode_image(&header, "b.png", "\"b.png\""))
+            .err()
+            .unwrap();
+        assert_ne!(
+            err.kind(),
+            crate::error::ErrorKind::Limit,
+            "the size is within the raised limits (the file has no pixels): {}",
+            err.message()
+        );
+        assert!(with_image_limits(raised, || check_image_size(12_000, 12_000, "b", "b")).is_ok());
+    }
+
+    #[test]
+    fn the_size_check_names_the_limits_in_force() {
+        let limits = ImageLimits::new(100, 4_000);
+        with_image_limits(limits, || {
+            assert!(check_image_size(100, 10, "a", "a").is_ok());
+            let wide = check_image_size(101, 1, "a", "a").unwrap_err();
+            assert_eq!(wide.kind(), crate::error::ErrorKind::Limit);
+            assert!(
+                wide.message().contains("100 pixels a side, 4000 bytes"),
+                "{}",
+                wide.message()
+            );
+            assert!(check_image_size(100, 11, "a", "a").is_err(), "4 400 bytes");
+        });
+        assert!(check_image_size(100, 11, "a", "a").is_ok());
     }
 
     #[test]
