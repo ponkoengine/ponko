@@ -59,6 +59,15 @@ seeds in `fuzz/seeds/webm_audio/` are the video fixtures cut down to their
 headers and the sound of their first cluster; `seed-corpus.sh` adds the
 whole fixtures too.
 
+The first two-minute run of `webm_audio` found a hang in the engine: a
+looping soundtrack whose packets decode to no frames went back to its start
+forever. It is fixed in `src/audio/chunked.rs`, and the input is the
+regression test's `tests/fixtures/video/no-frames-soundtrack.webm`. The
+second run found a panic in the Matroska reader (`matroska-demuxer`: a
+block group's size overflows its position arithmetic), which the engine now
+turns into an error at its boundary (`src/video/demux.rs`; input
+`tests/fixtures/video/huge-block-group.webm`).
+
 Both targets catch the decoders' panics the way the engine does (a panic
 inside a sound decoder is an error) and print the first few: the run goes
 on. On Linux the fuzz crate's build needs the audio output library's headers
