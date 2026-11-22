@@ -178,11 +178,14 @@ pub(crate) use sky_kit::CLOUD_SHADOW_TEXELS;
 pub use sky_kit::{CloudQuality, Clouds, DayNight, Moon, SkyKit};
 pub use target::{RenderTarget, TargetCamera};
 pub use terrain::{Heightfield, TERRAIN_LODS, TerrainMaterialDesc, TerrainTile, TerrainTileData};
+pub use terrain_file::TerrainFile;
 #[cfg_attr(not(feature = "editor"), allow(unused_imports))]
 pub(crate) use terrain_file::{
-    Built as TerrainBuilt, LayerJson as TerrainLayerJson, TERRAIN_FORMAT, TerrainData, TerrainJson, TerrainSource,
+    Built as TerrainBuilt, LayerJson as TerrainLayerJson, TERRAIN_FORMAT, TerrainData, TerrainJson,
     build as build_terrain, encode_grey16, encode_rgba, load_layers as load_terrain_layers,
+    note_tile as note_terrain_tile,
 };
+pub(crate) use terrain_file::{prepare_scene as prepare_scene_terrain, restore_tiles as restore_terrain_tiles};
 pub use texture_array::{TextureArray, TextureKind};
 
 use glam::{Mat3, Mat4, Quat, Vec2, Vec3, Vec4};
@@ -1392,6 +1395,9 @@ pub(crate) struct Assets3D {
     pub arrays: Vec<TextureArray>,
     /// Whether each was made as `TextureKind::Data`, by id.
     pub array_data: Vec<bool>,
+    /// Terrain tiles made from terrain files, for scenes that load them
+    /// again (see `terrain_file::restore_tiles`).
+    pub(crate) terrain_files: terrain_file::FileTiles,
     /// The texture array decals take their images from.
     pub decal_array: Option<TextureArray>,
     /// Whether the renderer can draw projected decals (its GPU has a spare

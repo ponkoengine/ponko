@@ -438,6 +438,7 @@ impl Ctx {
             crate::reflect::WorldReflect::reflect::<crate::anim::AttachToJoint>(&mut world);
             crate::reflect::WorldReflect::reflect::<crate::attach::Attached3D>(&mut world);
             crate::reflect::WorldReflect::reflect::<crate::three::HeldItem>(&mut world);
+            crate::reflect::WorldReflect::reflect::<crate::three::TerrainFile>(&mut world);
         }
         crate::reflect::WorldReflect::reflect::<RenderLayers>(&mut world);
         crate::reflect::WorldReflect::reflect::<crate::camera::CameraTarget>(&mut world);

@@ -84,10 +84,146 @@ pub(crate) struct TerrainData {
     pub weights: Vec<Vec<u8>>,
 }
 
-/// The entity [`TerrainTile::spawn_from_file`] made, and the file it came from.
-#[derive(Clone, Debug, PartialEq, Component)]
-pub(crate) struct TerrainSource {
+/// The terrain file an entity's [`TerrainTile`] is made from (`"format":
+/// "ponko-terrain"`, see [`TerrainTile::spawn_from_file`], which adds it).
+///
+/// Scenes save it in place of the tile, which holds GPU meshes: the
+/// entity's [`d3::Transform`](crate::d3::Transform) places the tile's
+/// corner, and loading the scene makes the tile from the file again (an
+/// entity whose tile is still live at the same corner keeps it, so the
+/// editor's Stop and undo don't remake it). It is reflected as
+/// `"TerrainFile"`:
+///
+/// ```json
+/// { "Transform3D": { "position": [-32, 0, -32] }, "TerrainFile": { "path": "terrain/hill.json" } }
+/// ```
+///
+/// The tile itself isn't reflected, so a save counts it under
+/// `"not_saved"`.
+///
+/// ```no_run
+/// # use ponko::prelude::*;
+/// # use ponko::terrain::{TerrainFile, TerrainTile};
+/// # fn f(ctx: &mut Ctx) -> Result<(), ponko::error::Error> {
+/// let hill = TerrainTile::spawn_from_file(ctx, "terrain/hill.json", vec3(-32.0, 0.0, -32.0))?;
+/// assert_eq!(ctx.world.get::<TerrainFile>(hill).unwrap().path, "terrain/hill.json");
+/// ctx.assets.save_scene(&ctx.world, "levels/one.json")?; // the hill is in it
+/// # Ok(()) }
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, Component, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct TerrainFile {
+    /// The terrain file, an asset name.
     pub path: String,
+}
+
+impl TerrainFile {
+    /// The tile of terrain file `path`.
+    #[must_use]
+    pub fn new(path: impl Into<String>) -> Self {
+        Self { path: path.into() }
+    }
+}
+
+/// The tiles made from terrain files, by file and corner (x and z, as
+/// bits), so a scene loaded again gets the tiles it had.
+#[derive(Default)]
+pub(crate) struct FileTiles {
+    tiles: std::collections::HashMap<(String, [u32; 2]), TerrainTile>,
+}
+
+fn key(path: &str, corner: Vec3) -> (String, [u32; 2]) {
+    (path.to_string(), [corner.x.to_bits(), corner.z.to_bits()])
+}
+
+/// Remembers that `tile` is terrain file `path`'s tile at `corner`.
+pub(crate) fn note_tile(ctx: &mut Ctx, path: &str, corner: Vec3, tile: TerrainTile) {
+    ctx.gfx.assets3d.terrain_files.tiles.insert(key(path, corner), tile);
+}
+
+/// The terrain files a scene names that no live tile was made from yet,
+/// read with their layer textures before the scene replaces the world, so
+/// a file that doesn't load stops the load with the world unchanged.
+pub(crate) fn prepare_scene(ctx: &mut Ctx, save: &serde_json::Value) -> Result<Prepared, Error> {
+    let mut names = Vec::new();
+    crate::reflect::asset_names(save, "TerrainFile", "path", &mut names);
+    names.sort_unstable();
+    names.dedup();
+    let mut out = Prepared::default();
+    for path in names {
+        let made = ctx
+            .gfx
+            .assets3d
+            .terrain_files
+            .tiles
+            .iter()
+            .any(|((p, _), t)| *p == path && ctx.gfx.is_live(*t));
+        if !made {
+            let read = read_file(ctx, &path)?;
+            out.files.insert(path, read);
+        }
+    }
+    Ok(out)
+}
+
+/// Terrain files read ahead of a scene load: data and layer textures, by path.
+#[derive(Default)]
+pub(crate) struct Prepared {
+    files: std::collections::HashMap<String, (TerrainData, Option<TextureArray>)>,
+}
+
+fn read_file(ctx: &mut Ctx, path: &str) -> Result<(TerrainData, Option<TextureArray>), Error> {
+    let (_, text) = ctx.assets.read_text(path)?;
+    let sources = &ctx.assets.asset_sources;
+    let data = TerrainData::read(path, &text, &mut |name| {
+        sources.find(name)?.into_bytes().map_err(|e| e.with_path(name))
+    })?;
+    let layers = load_layers(ctx, path, &data)?;
+    Ok((data, layers))
+}
+
+/// Gives every entity with a [`TerrainFile`] and a 3D transform but no
+/// [`TerrainTile`] its tile: the live one made from the same file at the
+/// same corner if no other entity has it, else one made from the file
+/// (from `prepared` if it was read ahead).
+///
+/// # Errors
+/// The first file that doesn't load; the entities before it have tiles.
+pub(crate) fn restore_tiles(ctx: &mut Ctx, mut prepared: Prepared) -> Result<(), Error> {
+    let wanting: Vec<(Entity, Vec3, String)> = ctx
+        .world
+        .query::<(Entity, &crate::d3::Transform, &TerrainFile)>()
+        .filter::<ponko_ecs::Without<TerrainTile>>()
+        .iter()
+        .map(|(e, t, f)| (e, t.position, f.path.clone()))
+        .collect();
+    if wanting.is_empty() {
+        return Ok(());
+    }
+    let mut taken: std::collections::HashSet<TerrainTile> = ctx.world.query::<&TerrainTile>().iter().copied().collect();
+    for (e, corner, path) in wanting {
+        let k = key(&path, corner);
+        let kept = ctx.gfx.assets3d.terrain_files.tiles.get(&k).copied();
+        if let Some(tile) = kept.filter(|t| ctx.gfx.is_live(*t) && !taken.contains(t)) {
+            ctx.world.insert(e, tile);
+            taken.insert(tile);
+            continue;
+        }
+        let (data, layers) = match prepared.files.get(&path) {
+            Some((data, layers)) => (data.clone(), *layers),
+            None => {
+                let read = read_file(ctx, &path)?;
+                prepared.files.insert(path.clone(), read.clone());
+                read
+            }
+        };
+        let built = build(ctx, &data, Vec2::new(corner.x, corner.z), layers)?;
+        ctx.world.insert(e, built.tile);
+        taken.insert(built.tile);
+        ctx.gfx.assets3d.terrain_files.tiles.insert(k, built.tile);
+    }
+    Ok(())
 }
 
 impl TerrainJson {
@@ -320,7 +456,8 @@ impl TerrainTile {
     /// "ponko-terrain"`, as the editor's terrain window saves it: heights
     /// in a greyscale PNG, ground layers and their weight maps) with its
     /// corner at `at`: an entity with a [`d3::Transform`](crate::d3::Transform)
-    /// and a [`TerrainTile`]. See the book's editor chapter for the format.
+    /// and a [`TerrainTile`], with the [`TerrainFile`] that saves it in a
+    /// scene. See the book's editor chapter for the format.
     ///
     /// ```no_run
     /// # use ponko::prelude::*;
@@ -344,11 +481,10 @@ impl TerrainTile {
         })?;
         let layers = load_layers(ctx, path, &data)?;
         let built = build(ctx, &data, Vec2::new(at.x, at.z), layers)?;
-        Ok(ctx.world.spawn((
-            crate::d3::Transform::at(at),
-            built.tile,
-            TerrainSource { path: path.to_string() },
-        )))
+        note_tile(ctx, path, at, built.tile);
+        Ok(ctx
+            .world
+            .spawn((crate::d3::Transform::at(at), built.tile, TerrainFile::new(path))))
     }
 }
 
