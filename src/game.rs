@@ -1001,6 +1001,13 @@ impl crate::net::Runner for RollbackRunner<'_> {
         if let Err(e) = ctx.world.save_snapshot(&mut into.world) {
             panic!("rollback: {e}");
         }
+        let (world, now) = (ctx.world.id(), ctx.world.change_tick().to_bits());
+        into.seen.clear();
+        into.seen.extend(
+            self.systems
+                .iter()
+                .map(|s| (s.changes_seen.world == world).then(|| now - s.changes_seen.tick.to_bits())),
+        );
         ctx.events.save_state(&mut into.events);
         #[cfg(feature = "physics")]
         ctx.physics.save_state(&mut into.physics);
@@ -1012,6 +1019,18 @@ impl crate::net::Runner for RollbackRunner<'_> {
         let ctx = &mut *self.ctx;
         if let Err(e) = ctx.world.restore_snapshot(&from.world) {
             panic!("rollback: {e}; keep the same `ctx.world` while a rollback session runs");
+        }
+        // The world's change stamps keep their age through the restore;
+        // so does what each simulation system has seen of them.
+        let (world, now) = (ctx.world.id(), ctx.world.change_tick().to_bits());
+        for (s, age) in self.systems.iter_mut().zip(&from.seen) {
+            s.changes_seen = match *age {
+                Some(age) => ChangesSeen {
+                    world,
+                    tick: ponko_ecs::Tick::from_bits(now.saturating_sub(age)),
+                },
+                None => ChangesSeen::default(),
+            };
         }
         let systems = &*self.systems;
         ctx.events

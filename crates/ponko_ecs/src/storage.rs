@@ -1021,6 +1021,55 @@ impl Archetype {
     /// Ages stamps so they stay comparable after the tick counter's low 32
     /// bits wrap: any stamp older than `max_age` ticks becomes exactly
     /// `max_age` ticks old. `now` is the current tick's low 32 bits.
+    /// Appends the `added` stamps of column `col`'s live rows to `into`,
+    /// then their `changed` stamps. Returns `false` (and appends nothing)
+    /// if the column keeps no stamps.
+    pub(crate) fn copy_stamps(&self, col: usize, into: &mut Vec<u32>) -> bool {
+        let (len, cap) = (self.len(), self.cap());
+        let Some((added, changed)) = self.columns[col].stamps(cap) else {
+            return false;
+        };
+        // SAFETY: both arrays hold a stamp for every live row.
+        unsafe {
+            into.extend_from_slice(std::slice::from_raw_parts(added, len));
+            into.extend_from_slice(std::slice::from_raw_parts(changed, len));
+        }
+        true
+    }
+
+    /// Writes stamps saved by [`copy_stamps`](Self::copy_stamps) into
+    /// column `col` of the live rows (as many as `saved` covers, half
+    /// `added`, half `changed`), each moved `shift` ticks later, and makes
+    /// the block summaries of those rows the newest of their `changed`
+    /// stamps. `now` is the current tick's low 32 bits. Does nothing for an
+    /// untracked column.
+    pub(crate) fn put_stamps(&mut self, col: usize, saved: &[u32], shift: u32, now: u32) {
+        let rows = saved.len() / 2;
+        let cap = self.cap();
+        debug_assert!(rows <= self.len());
+        let Some((added, changed)) = self.columns[col].stamps(cap) else {
+            return;
+        };
+        let (saved_added, saved_changed) = saved.split_at(rows);
+        // SAFETY: `rows` are live rows, each with one stamp per array; the
+        // summary follows both arrays and holds a stamp per block of `cap`
+        // rows. `&mut self`: nothing else reads or writes them meanwhile.
+        unsafe {
+            let summary = std::slice::from_raw_parts_mut(added.add(2 * cap), blocks(rows));
+            let added = std::slice::from_raw_parts_mut(added, rows);
+            let changed = std::slice::from_raw_parts_mut(changed, rows);
+            for (to, &from) in added.iter_mut().zip(saved_added) {
+                *to = from.wrapping_add(shift);
+            }
+            for (to, &from) in changed.iter_mut().zip(saved_changed) {
+                *to = from.wrapping_add(shift);
+            }
+            for (block, here) in summary.iter_mut().zip(changed.chunks(CHANGE_BLOCK)) {
+                *block = here.iter().fold(here[0], |a, &b| newest(a, b, now));
+            }
+        }
+    }
+
     pub(crate) fn age_stamps(&self, now: u32, max_age: u32) {
         let (len, cap) = (self.len(), self.cap());
         for c in self.columns.iter() {
