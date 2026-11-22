@@ -441,7 +441,16 @@ The session's settings, packets, stalls and stats are `Rollback`'s
   (`save_state` / `restore_state`, also callable yourself): bodies, colliders,
   joints, contacts, islands, the broad phase and the links to entities. A
   loaded world steps bit for bit like the original; a load builds a fresh
-  rapier pipeline, as the joint solver keeps indices there.
+  rapier pipeline, as the joint solver keeps indices there. The world, the
+  events and the change positions reuse their memory: once warm, saving and
+  loading them allocates nothing (`tests/game_rollback_alloc.rs`). The
+  physics don't yet: rapier (0.36) can only copy its world with `clone`,
+  which allocates for every body, collider and contact pair, about 5.8
+  allocations per body for each save and each load (580 at 100 boxes,
+  7,950 at 1,000; 0.037 ms and 0.59 ms per save on an M4 Max, the machine
+  busy), and a few even for an empty world when a physics feature is
+  compiled in. Profiling shows them apart, in the `rollback/save physics`
+  and `rollback/load physics` scopes.
 - **Change detection:** a load restores every change stamp and removal
   log as old as it was at the save, and moves what each simulation system
   has seen by the same amount, so `Added` and `Changed` filters and

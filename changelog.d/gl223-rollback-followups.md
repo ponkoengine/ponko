@@ -10,6 +10,9 @@
   `ponko_world_snapshot_len` and `ponko_world_snapshot_free` (C++
   `ponko::world_snapshot`, `world.save_snapshot`, `world.restore_snapshot`).
   See the guide's "Rollback", "From C and C++".
+- Profile scopes for a `GameRollback`'s work: `rollback/save` and
+  `rollback/load` (the world, the events, the change positions) and
+  `rollback/save physics` and `rollback/load physics`.
 
 ### Changed
 - `World::restore_snapshot` puts back the change stamps and removal logs
