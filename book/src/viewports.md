@@ -245,14 +245,20 @@ its own.
 The scene benchmark measures it (`PONKO_RENDER_VIEWS=2`, `4` or `minimap`,
 see `crates/ponko_bench/RENDER_SCENES.md`). On an Apple M4 Max at
 1280 x 720, high quality, with GPU pass timing on, its town scene made
-these heap allocations per frame (whole process):
+these heap allocations per frame (whole process; 2026-11-22, revision
+`9235ea05`, three runs on an idle machine, identical counts; CPU time and
+frame are medians, the runs within 0.03 ms):
 
-| Cameras | Allocations | Each view adds |
-|---|---|---|
-| 1 | 767 | |
-| 2 (halves) | 1262 | 495 |
-| 4 (quarters) | 2094 | 442 |
-| 1 and a minimap (a quarter-sized corner view with bloom, ambient occlusion and screen-space reflections off, FXAA) | 926 | 159 |
+| Cameras | Allocations | Each view adds | CPU ms | Frame ms |
+|---|---|---|---|---|
+| 1 | 772 | | 0.61 | 3.37 |
+| 2 (halves) | 1335 | 562 | 1.22 | 5.06 |
+| 4 (quarters) | 2302 | 510 | 2.42 | 8.68 |
+| 1 and a minimap (a quarter-sized corner view with bloom, ambient occlusion and screen-space reflections off, FXAA) | 953 | 180 | 0.95 | 4.88 |
+
+Earlier counts (767, 1262, 2094 and 926) were made before `high` turned on
+screen reflections' thin objects, which records two more compute passes
+for each view that has screen reflections.
 
 Collecting a view, preparing it and recording its passes allocate nothing
 in the engine once its buffers have grown. Almost all of the rest is made
@@ -276,16 +282,18 @@ same benchmark with `PONKO_RENDER_GPU_EVERY=16` against every frame
 
 | Cameras | Every frame timed | One frame in 16 timed |
 |---|---|---|
-| 1 | 753 | 676 |
-| 2 (halves) | 1262 | 1184 |
+| 1 | 772 | 695 |
+| 2 (halves) | 1335 | 1226 |
 
-With one camera, about 53 of the 77 saved are the timed passes' query
+(2026-11-22; before, 753 and 676, 1262 and 1184.) With one camera, about
+53 of the 77 saved are the timed passes' query
 bookkeeping; the rest is the benchmark's separate command buffer that
 resolves the timestamps (a game resolves them in its frame's own).
 
 CPU time grows by roughly what the main camera's collecting and recording
-cost at the view's size. Times measured on a busy machine vary too much to
-quote; measure your own scene with the benchmark.
+cost at the view's size: in the table above each split-screen view adds
+about 0.6 ms of CPU, and the minimap 0.34 ms. Measure your own scene with
+the benchmark.
 
 The `split_screen` example (`cargo run --release --example split_screen
 --features 3d`) has two or four players, a minimap and picking.
