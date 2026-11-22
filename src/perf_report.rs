@@ -1379,6 +1379,23 @@ pub(crate) fn warn_not_timed(report: &mut PerfReport, not_timed: &[&'static str]
     });
 }
 
+/// Adds a [`WarningKind::PassesNotTimed`] warning when the GPU timer had no
+/// room for `over` passes of the latest timed frame (`limit` is what it can
+/// time a frame now).
+pub(crate) fn warn_passes_over_limit(report: &mut PerfReport, over: u32, limit: u32) {
+    if over == 0 {
+        return;
+    }
+    report.warnings.push(PerfWarning {
+        kind: WarningKind::PassesNotTimed,
+        message: format!("{over} GPU passes not timed: the timer has room for {limit} a frame"),
+        hint: "The timer grows to the passes a frame has, up to what its query sets hold (336 a frame), so the \
+               frame has more passes than that, or it is growing now. Those passes drew untimed and are in \
+               neither the pass list nor the not-timed list; the frame's GPU time covers the timed ones only."
+            .into(),
+    });
+}
+
 /// The overlay's extra lines: scopes, allocations and the worst warnings.
 pub(crate) fn hud_lines(out: &mut String, report: &PerfReport) {
     out.clear();
@@ -1476,7 +1493,11 @@ mod tests {
         for i in 0..200u64 {
             c.push(i + 1, 1.0, AllocCounts::default(), &sys, &[0], (&[], &[]));
         }
-        assert_eq!(c.capacities(), reserved, "filling and wrapping the ring doesn't grow it");
+        assert_eq!(
+            c.capacities(),
+            reserved,
+            "filling and wrapping the ring doesn't grow it"
+        );
         assert_eq!(pointers(&c), before, "the rings never moved");
         c.clear();
         assert_eq!(c.len(), 0);

@@ -188,6 +188,16 @@ thread_local! {
 /// one warning, when the process already holds as many as the backend
 /// allows: the caller makes no set and goes without timing.
 pub(crate) fn lease(device: &wgpu::Device, queue: &wgpu::Queue, what: &str) -> Option<Lease> {
+    lease_with(device, queue, Some(what))
+}
+
+/// [`lease`] for a caller that has a fallback and says nothing when
+/// refused: a timer asking for a second set to replace its own.
+pub(crate) fn lease_quietly(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Lease> {
+    lease_with(device, queue, None)
+}
+
+fn lease_with(device: &wgpu::Device, queue: &wgpu::Queue, what: Option<&str>) -> Option<Lease> {
     let mut lease = if device.adapter_info().backend == wgpu::Backend::Metal {
         let poll = || {
             let _ = device.poll(wgpu::PollType::Poll);
@@ -195,6 +205,7 @@ pub(crate) fn lease(device: &wgpu::Device, queue: &wgpu::Queue, what: &str) -> O
         match METAL.take(wait(), poll) {
             Ok(lease) => lease,
             Err(held) => {
+                let what = what?;
                 eprintln!(
                     "ponko: {what}: GPU timing is off for this device. This process already holds {held} timestamp \
                      query sets, the most the engine takes on Metal ({ENGINE_SETS} of the {METAL_SETS} a process may \

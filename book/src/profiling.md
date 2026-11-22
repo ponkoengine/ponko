@@ -81,6 +81,12 @@ allocations are counted too; `PONKO_COUNT_CPP_ALLOCATIONS` adds your `new`
 calls. (A C game can call `ponko_note_allocation(bytes)` from its own
 allocator.)
 
+The profiler's own frame history is reserved in full when profiling turns on
+(1,800 frames in a window, 50,000 in a headless profiling run), so filling it
+never allocates: no frame counts an allocation for the profiler itself. A
+system or scope the profiler sees for the first time, such as a scope that
+only runs after a rollback, adds its own small entry once.
+
 The counting allocator also counts what is freed, so
 `perf::net_alloc_bytes()` (bytes allocated minus bytes freed while
 profiling is on) tells how much of what a stretch of play allocated is

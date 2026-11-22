@@ -35,6 +35,9 @@ impl Renderer {
     pub fn gpu_passes_not_timed(&self) -> &[&'static str] {
         match *self {}
     }
+    pub fn gpu_pass_room(&self) -> (u32, u32) {
+        match *self {}
+    }
     pub fn gpu_untimed(&self) -> Option<crate::perf::GpuUntimed> {
         match *self {}
     }

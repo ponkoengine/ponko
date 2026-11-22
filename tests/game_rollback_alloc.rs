@@ -1,19 +1,20 @@
 //! A `GameRollback` session allocates nothing per frame once warm: the
 //! saved states (with change stamps), the event store and the inputs reuse
-//! their memory, also on frames that roll back. (Its own test binary: it
-//! counts every allocation of the process.)
+//! their memory, also on frames that roll back. (Its own test binary.)
 //!
 //! The counting allocator counts only while profiling is on. Profiling
 //! reserves its whole frame history when it turns on, so no frame is
 //! excluded: every frame from `WARM` on is checked, and the history fills
 //! (and would have doubled, at 64, 128 and 256 frames) inside that window.
-//! The engine's rollback work is also measured on its own, through its
-//! profile scopes (`rollback/save`, `rollback/load`).
+//! Allocations are counted on the thread that runs the game: the test
+//! harness's own thread allocates now and then while it waits for the test,
+//! and that is not the session's. The engine's rollback work is also measured
+//! on its own, through its profile scopes (`rollback/save`, `rollback/load`).
 
 use std::sync::{Arc, Mutex};
 
 use ponko::net::{GameRollback, Rollback, RollbackGame};
-use ponko::perf::{CountingAllocator, ScopeReport, alloc_counts};
+use ponko::perf::{CountingAllocator, ScopeReport, thread_alloc_counts};
 use ponko::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -80,7 +81,7 @@ fn measure(game: Game, setup: impl FnOnce(&mut Ctx) + 'static) -> Measured {
             ctx.world.query::<&mut Pos>().for_each(|p| p.0 += d);
         })
         .system(move |ctx: &mut Ctx| {
-            let now = alloc_counts().count;
+            let now = thread_alloc_counts().count;
             let mut out = out.lock().unwrap();
             if let Some(before) = last {
                 out.per_frame.push(now - before);
@@ -116,7 +117,7 @@ fn measure(game: Game, setup: impl FnOnce(&mut Ctx) + 'static) -> Measured {
             }
             frame += 1;
             drop(out);
-            last = Some(alloc_counts().count);
+            last = Some(thread_alloc_counts().count);
         })
         .run_headless(400, move |ctx| {
             ctx.world.track_changes::<Pos>();

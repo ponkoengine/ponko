@@ -108,8 +108,10 @@ What holds across the runs:
   eye adds its pixels, its own fixed passes and a submission of its own.
   The noise on this machine is too large to split that further.
 - GPU pass times are not quoted: on this adapter only 4 to 6 of the frame's
-  passes come back timed, and the timer holds 32 passes a frame, which two
-  full views can pass.
+  passes come back timed. (The timer held 32 passes a frame when these runs
+  were made, which two full views can pass; it now grows to the frame's
+  passes, up to 336, see [How many passes a frame can
+  time](performance.md#how-many-passes-a-frame-can-time).)
 
 The grove is a small level; on a heavy scene the doubled CPU work (culling
 and recording per eye) is what multiview and shared culling would save.

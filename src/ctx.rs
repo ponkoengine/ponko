@@ -590,6 +590,7 @@ impl Ctx {
             self.perf
                 .gpu_passes_not_timed
                 .extend_from_slice(renderer.gpu_passes_not_timed());
+            (self.perf.gpu_passes_over_limit, self.perf.gpu_pass_limit) = renderer.gpu_pass_room();
             self.perf.gpu_untimed = renderer.gpu_untimed();
             self.perf.display_wait_ms = renderer.display_wait_ms();
         }
