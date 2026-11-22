@@ -3435,6 +3435,11 @@ typedef struct PonkoUiComposition {
   bool composing;
 } PonkoUiComposition;
 
+typedef struct PonkoKeyLabel {
+  uint32_t key;
+  uint32_t character;
+} PonkoKeyLabel;
+
 typedef struct PonkoStringArg {
   const char *name;
   PonkoStringArgKind kind;
@@ -9549,6 +9554,24 @@ enum PonkoStatus ponko_ctx_ui_frame_ime(struct PonkoCtx *ctx,
 enum PonkoStatus ponko_input_scenario_ime(struct PonkoInputScenario *scenario,
                                           uint64_t tick,
                                           const struct PonkoImeEvent *event);
+
+enum PonkoStatus ponko_ctx_key_label(struct PonkoCtx *ctx,
+                                     uint32_t key,
+                                     char *buffer,
+                                     size_t capacity,
+                                     size_t *out_len);
+
+enum PonkoStatus ponko_ctx_glyph_label(struct PonkoCtx *ctx,
+                                       struct PonkoGlyph glyph,
+                                       char *buffer,
+                                       size_t capacity,
+                                       size_t *out_len);
+
+enum PonkoStatus ponko_ctx_key_labels_changed(struct PonkoCtx *ctx, bool *out_changed);
+
+enum PonkoStatus ponko_ctx_set_key_labels(struct PonkoCtx *ctx,
+                                          const struct PonkoKeyLabel *labels,
+                                          size_t count);
 
 enum PonkoStatus ponko_ctx_load_strings(struct PonkoCtx *ctx, const char *path);
 

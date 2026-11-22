@@ -5282,6 +5282,32 @@ static void controllers() {
     });
 }
 
+// Key labels on the player's keyboard layout (gl#237): a key's and a glyph's label, the change
+// edge and a layout set from C++, over three ticks of a headless game.
+static void key_labels() {
+    int tick = 0;
+    ponko::game("key labels", 1, 1).sim_system([&](ponko::ctx& ctx) {
+        const ponko::glyph w{PONKO_GLYPH_KEY, 0, PONKO_KEY_W};
+        if (tick == 0) {
+            CHECK(!ctx.key_labels_changed());
+            CHECK(ctx.key_label(PONKO_KEY_W) == "W" && ctx.key_label(PONKO_KEY_SPACE) == "Space");
+            ctx.set_key_labels({{PONKO_KEY_W, 'z'}, {PONKO_KEY_A, 'q'}, {PONKO_KEY_NUM_2, 0xE9}});
+            CHECK(ctx.key_labels_changed());
+            CHECK(ctx.key_label(PONKO_KEY_W) == "Z" && ctx.key_label(PONKO_KEY_NUM_2) == "\xC3\x89");
+            CHECK(ctx.layout_glyph_label(w) == "Z" && ponko::glyph_label(w) == "W");
+        } else if (tick == 1) {
+            CHECK(!ctx.key_labels_changed());
+            bool refused = false;
+            try { ctx.set_key_labels({{9999u, 'a'}}); } catch (const ponko::error&) { refused = true; }
+            CHECK(refused && ctx.key_label(PONKO_KEY_W) == "Z");
+            ctx.set_key_labels(nullptr, 0);  // a US keyboard again
+            CHECK(ctx.key_labels_changed() && ctx.key_label(PONKO_KEY_W) == "W");
+        }
+        ++tick;
+    }).run_headless(3);
+    CHECK(tick == 3);
+}
+
 // Native parity, round 5 (gl#157) through the wrapper: crash reports, touch looks and the player's
 // layout, trackpad gestures, camera targets with kept rigs, the window restored before setup,
 // spectrum seas and sliced loaders.
@@ -5681,6 +5707,7 @@ int main() {
     rollback_two_peers();
     hdr_output();
     controllers();
+    key_labels();
     required_components();
     game_states();
     draw_space_names_the_coordinates();
