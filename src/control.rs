@@ -1213,6 +1213,10 @@ pub(crate) const METHODS: &[(&str, &str)] = &[
         "every entity as a tree: each node's parent and how it hangs off it (attached, attached3d, joint, skin, prefab_part), depth, children, whether it is a prefab instance's root, and its component names; roots first, each followed by its subtree",
     ),
     (
+        "assets.image_limits",
+        "the image size limits in force, read only (a game sets them in code: no call raises them): `game` (max_side in pixels, max_bytes of decoded RGBA8) for everything loaded, and `sources`, each asset source (a mod pack, a download cache, a folder) that has limits of its own: its id, max_side and max_bytes. A picture from such a source is decoded under them, and one past them is refused with an error that names the limits and where they came from",
+    ),
+    (
         "editor.assets",
         "what the editor's asset browser lists: glTF meshes, prefabs and scenes in assets/, and the materials of the mesh files loaded so far (mesh, index, name)",
     ),
@@ -1936,6 +1940,7 @@ pub(crate) fn handle(ctx: &mut Ctx, method: &str, params: &Value) -> Result<Valu
         "editor.drag" => editor::drag(ctx, params)?,
         "editor.parent" => editor::parent(ctx, params)?,
         "editor.hierarchy" => editor::hierarchy(ctx),
+        "assets.image_limits" => ctx.assets.image_limits_json(),
         "editor.assets" => editor::assets(ctx),
         "editor.place" => editor::place(ctx, params)?,
         "editor.material" => editor::material(ctx, params)?,

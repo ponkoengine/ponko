@@ -7936,6 +7936,21 @@ public:
         detail::check(ponko_ctx_image_limits(raw_, &side, &bytes));
         return {side, bytes};
     }
+    /// Gives asset source `source_id` image limits of its own (Rust's `set_source_image_limits`): pictures
+    /// read from it (a mod pack, a download cache, a folder) are decoded under these, everything else under
+    /// the game's. A refused picture is kind PONKO_ERROR_LIMIT and its message names the limits and the source.
+    /// The source may be added later (the mounted mods' id is "mods"). Throws if either limit is 0 or the id is empty.
+    void set_source_image_limits(const char* source_id, std::uint32_t max_side, std::uint64_t max_bytes) { detail::check(ponko_ctx_set_source_image_limits(raw_, source_id, max_side, max_bytes)); }
+    /// Takes back a source's own image limits: its pictures follow the game's again.
+    void clear_source_image_limits(const char* source_id) { detail::check(ponko_ctx_clear_source_image_limits(raw_, source_id)); }
+    /// The image limits source `source_id` has of its own, or nothing if its pictures follow the game's.
+    /// Read only; the control endpoint's `assets.image_limits` lists every source that has limits.
+    std::optional<std::pair<std::uint32_t, std::uint64_t>> source_image_limits(const char* source_id) const {
+        std::uint32_t side = 0; std::uint64_t bytes = 0; bool has = false;
+        detail::check(ponko_ctx_source_image_limits(raw_, source_id, &side, &bytes, &has));
+        if (!has) return std::nullopt;
+        return std::make_pair(side, bytes);
+    }
     /// Decodes one picture from `len` bytes (a PNG, JPEG, KTX2 or any other format this build reads) into a
     /// texture under limits of its own, not the game's (Rust's `try_decode_texture`): for a picture you
     /// don't trust. `name` is for messages. A picture past the limits is kind PONKO_ERROR_LIMIT, bytes

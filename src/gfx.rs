@@ -772,7 +772,8 @@ impl Graphics {
                 // Acquire, decode (CPU only), then create on the GPU (game thread).
                 let origin = found.origin.clone();
                 let bytes = found.into_bytes().map_err(|e| e.with_path(path))?;
-                let texture = self.texture_from_file(&bytes, path, &origin.describe(path))?;
+                let limits = self.asset_sources.image_limits();
+                let texture = limits.scope(&origin, || self.texture_from_file(&bytes, path, &origin.describe(path)))?;
                 self.asset_ledger
                     .own(crate::inventory::AssetClass::Texture, texture.id, path);
                 self.loaded_textures.insert(origin.clone(), AssetKind::Texture, texture);

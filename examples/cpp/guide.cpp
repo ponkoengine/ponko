@@ -4432,6 +4432,17 @@ static void embedded_assets(ponko::ctx& ctx) {
     ctx.set_image_limits(16384, 512ull << 20); // the defaults again, for what runs next
 }
 
+[[maybe_unused]] static void source_image_limits_guide(ponko::ctx& ctx) {
+    // ANCHOR: source_image_limits
+    // Pictures from the mods (source id "mods") must be small: at most 1024 pixels a side and
+    // 8 MiB of pixels. Everything else follows the game's limits. Set it before the mods are
+    // mounted; a picture past it is PONKO_ERROR_LIMIT and its message names the source.
+    ctx.set_source_image_limits("mods", 1024, 8ull << 20);
+    // ANCHOR_END: source_image_limits
+    if (!ctx.source_image_limits("mods")) std::abort();
+    ctx.clear_source_image_limits("mods"); // for what runs next
+}
+
 // ANCHOR: resource_scope
 struct Total { std::uint32_t value; };
 struct Coins { std::uint32_t value; };
@@ -5063,6 +5074,7 @@ int main() {
             137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 207, 192, 240, 31, 0, 5, 0, 1, 255, 137, 153, 61, 29, 0, 0, 0,
             0, 73, 69, 78, 68, 174, 66, 96, 130};
         image_limits_guide(ctx, pixel);
+        source_image_limits_guide(ctx);
     });
     ponko::game("filter guide", 1, 1).run_headless(0, ecs_filters);
     ponko::game("query cache guide", 1, 1).run_headless(0, ecs_query_cache);

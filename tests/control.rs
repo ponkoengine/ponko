@@ -1133,3 +1133,48 @@ fn quality_set_over_tcp_matches_what_capabilities_reports() {
     c.call("game.quit", json!({})).unwrap();
     game.join().unwrap();
 }
+
+#[test]
+fn the_image_limits_in_force_are_readable_over_the_endpoint_and_cannot_be_raised_there() {
+    use ponko::assets::ImageLimits;
+    let (tx, rx) = mpsc::channel();
+    let game = thread::spawn(move || {
+        Game::new("image limits", 1, 1)
+            .control_endpoint(true)
+            .run_headless(u64::MAX, move |ctx| {
+                ctx.time.pause();
+                ctx.assets
+                    .set_source_image_limits("mods", ImageLimits::new(1_024, 8 << 20));
+                tx.send(ctx.control_addr().unwrap()).unwrap();
+            })
+    });
+    let addr = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    let mut c = connect(addr);
+    let limits = c.call("assets.image_limits", json!({})).unwrap();
+    assert_eq!(limits["game"]["max_side"], 16_384, "{limits}");
+    assert_eq!(limits["game"]["max_bytes"], 512u64 << 20, "{limits}");
+    assert_eq!(
+        limits["sources"],
+        json!([{ "source": "mods", "max_side": 1_024, "max_bytes": 8u64 << 20 }])
+    );
+    // Parameters change nothing: it only reads.
+    let again = c
+        .call(
+            "assets.image_limits",
+            json!({ "max_side": 65_535, "game": { "max_side": 65_535 } }),
+        )
+        .unwrap();
+    assert_eq!(again, limits);
+    // Nothing in the method list writes them.
+    let caps = c.call("capabilities", json!({})).unwrap();
+    let names: Vec<&str> = caps["methods"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|m| m["name"].as_str())
+        .filter(|n| n.contains("image_limits"))
+        .collect();
+    assert_eq!(names, ["assets.image_limits"]);
+    c.call("game.quit", json!({})).unwrap();
+    game.join().unwrap();
+}

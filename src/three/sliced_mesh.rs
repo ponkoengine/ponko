@@ -135,6 +135,8 @@ impl MeshSlices {
 impl crate::streaming::StreamSlices<(Origin, LoadedFile)> for MeshSlices {
     fn step(&mut self, sources: &SharedSources) -> Result<Option<(Origin, LoadedFile)>, Error> {
         let mut read = |file: &str| sources.read(file);
+        // A model's pictures follow the image limits of the source the model came from.
+        let limits = sources.image_limits();
         match std::mem::replace(&mut self.phase, Phase::Taken) {
             Phase::Read(read) => {
                 let (origin, bytes) = read().map_err(|e| e.with_path(&self.name))?;
@@ -157,10 +159,12 @@ impl crate::streaming::StreamSlices<(Origin, LoadedFile)> for MeshSlices {
                 if images.current.is_none()
                     && let Some((index, bytes)) = images.todo.pop()
                 {
-                    images.current = ImageSlices::new(&self.name, index, bytes, self.gpu).map(|i| (index, i));
+                    images.current = limits
+                        .scope(&images.origin, || ImageSlices::new(&self.name, index, bytes, self.gpu))
+                        .map(|i| (index, i));
                 }
                 if let Some((index, image)) = images.current.take() {
-                    match image.step(self.gpu) {
+                    match limits.scope(&images.origin, || image.step(self.gpu)) {
                         Some(Err(rest)) => images.current = Some((index, rest)),
                         Some(Ok(decoded)) => {
                             images.done.insert(index, decoded);
@@ -184,8 +188,8 @@ impl crate::streaming::StreamSlices<(Origin, LoadedFile)> for MeshSlices {
                 Ok(None)
             }
             Phase::Parse(origin, mut parse) => {
-                match parse
-                    .step(&mut read, &|_| false, SLICE_BYTES)
+                match limits
+                    .scope(&origin, || parse.step(&mut read, &|_| false, SLICE_BYTES))
                     .map_err(|e| Error::decode(&self.name, e))?
                 {
                     Some(loaded) => Ok(Some((origin, LoadedFile::Parsed(Box::new(loaded))))),
