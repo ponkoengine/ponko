@@ -691,7 +691,9 @@ fn sdr_authored(ctx: &mut crate::ctx::Ctx) {
     ctx.scene3d.camera.look_at(Vec3::ZERO);
     let debug = &mut ctx.debug;
     debug.set_enabled(true);
-    debug.line(vec3(-2.0, -0.6, 0.0), vec3(2.0, -0.6, 0.0), Color::GREEN).width(6.0);
+    debug
+        .line(vec3(-2.0, -0.6, 0.0), vec3(2.0, -0.6, 0.0), Color::GREEN)
+        .width(6.0);
     debug
         .line(vec3(-2.0, -0.2, 0.0), vec3(2.0, -0.2, 0.0), Color::rgb(0.5, 0.5, 0.5))
         .width(6.0);
@@ -710,7 +712,12 @@ fn sdr_authored(ctx: &mut crate::ctx::Ctx) {
     {
         let root = ui
             .root()
-            .layout(crate::ui::UiLayout::anchored(0.0, i as f32 * 14.0 / h, 12.0 / w, 12.0 / h))
+            .layout(crate::ui::UiLayout::anchored(
+                0.0,
+                i as f32 * 14.0 / h,
+                12.0 / w,
+                12.0 / h,
+            ))
             .background(color)
             .border_width(0.0)
             .id();
@@ -744,11 +751,15 @@ fn inspector_overlay(ctx: &mut crate::ctx::Ctx) {
         painter.rect_filled(rect(14.0), 0.0, egui::Color32::from_white_alpha(128));
     });
     let primitives = egui.tessellate(out.shapes, out.pixels_per_point);
-    ctx.gfx.renderer.as_mut().unwrap().set_overlay(crate::inspector::Overlay {
-        primitives,
-        textures: out.textures_delta,
-        pixels_per_point: out.pixels_per_point,
-    });
+    ctx.gfx
+        .renderer
+        .as_mut()
+        .unwrap()
+        .set_overlay(crate::inspector::Overlay {
+            primitives,
+            textures: out.textures_delta,
+            pixels_per_point: out.pixels_per_point,
+        });
 }
 
 /// The largest difference between two linear frames, and where.
@@ -811,9 +822,9 @@ fn the_inspector_debug_drawing_and_ui_keep_their_sdr_colours_with_hdr_output() {
     // The negative control: a 3D highlight is meant to differ, and the
     // comparison sees it.
     for ctx in [&mut sdr, &mut hdr] {
-        let material = ctx.gfx.create_material(
-            crate::render::MaterialDesc::color(Color::BLACK).with_emissive(Color::rgb(6.0, 6.0, 6.0)),
-        );
+        let material = ctx
+            .gfx
+            .create_material(crate::render::MaterialDesc::color(Color::BLACK).with_emissive(Color::rgb(6.0, 6.0, 6.0)));
         let cube = ctx.gfx.create_mesh(&crate::render::MeshData::cube(0.5), material);
         ctx.world
             .spawn((crate::d3::Transform::default(), crate::render::Model::new(cube)));
@@ -926,7 +937,11 @@ fn hdr10_metadata_follows_the_peak_while_hdr_is_active() {
     assert_eq!(ctx.gfx.hdr_status().metadata, None);
     hdr.peak_nits = 600.0;
     ctx.gfx.set_hdr_output(hdr);
-    assert_eq!(wanted(&ctx).map(|m| m.max_mastering_nits), Some(600.0), "the peak moves it");
+    assert_eq!(
+        wanted(&ctx).map(|m| m.max_mastering_nits),
+        Some(600.0),
+        "the peak moves it"
+    );
     hdr.enabled = false;
     ctx.gfx.set_hdr_output(hdr);
     assert_eq!(wanted(&ctx), None, "SDR takes none");

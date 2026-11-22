@@ -89,3 +89,42 @@ fn an_unknown_version_is_refused() {
     // SAFETY: a writable descriptor.
     assert_eq!(unsafe { ponko_hdr_output_defaults(&mut h) }, PONKO_INVALID_ARGUMENT);
 }
+
+#[test]
+fn hdr10_metadata_settings_round_trip_and_bad_values_are_refused() {
+    let h = defaults();
+    assert_eq!((h.max_content_light_nits, h.max_frame_average_nits), (0.0, 0.0));
+    run_ctx(|ctx| unsafe {
+        let mut now = read(ctx);
+        now.enabled = true;
+        now.max_content_light_nits = 900.0;
+        now.max_frame_average_nits = 250.0;
+        // SAFETY: a live context and readable descriptors.
+        assert_eq!(ponko_ctx_set_hdr_output(ctx, &now), PONKO_OK);
+        let back = read(ctx);
+        assert_eq!(
+            (back.enabled, back.max_content_light_nits, back.max_frame_average_nits),
+            (true, 900.0, 250.0)
+        );
+        for bad in [f32::NAN, -1.0] {
+            let mut wrong = now;
+            wrong.max_frame_average_nits = bad;
+            assert_eq!(ponko_ctx_set_hdr_output(ctx, &wrong), PONKO_INVALID_ARGUMENT);
+            assert_eq!(read(ctx).max_frame_average_nits, 250.0, "unchanged");
+        }
+        // A version 1 caller (no metadata fields) keeps the metadata as set.
+        let mut v1 = now;
+        v1.version = 1;
+        v1.peak_nits = 700.0;
+        v1.max_content_light_nits = -99.0; // past its version: not read
+        assert_eq!(ponko_ctx_set_hdr_output(ctx, &v1), PONKO_OK);
+        let back = read(ctx);
+        assert_eq!((back.peak_nits, back.max_content_light_nits), (700.0, 900.0));
+        // Headless: nothing was sent to a display.
+        let mut status: PonkoHdrStatus = std::mem::zeroed();
+        (status.struct_size, status.version) = (size_of::<PonkoHdrStatus>() as u32, PONKO_HDR_STATUS_VERSION);
+        assert_eq!(ponko_ctx_hdr_status(ctx, &mut status), PONKO_OK);
+        assert!(!status.metadata_sent);
+        assert_eq!((status.max_mastering_nits, status.max_content_light_nits), (0.0, 0.0));
+    });
+}

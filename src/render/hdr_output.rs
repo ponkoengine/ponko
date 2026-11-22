@@ -23,9 +23,7 @@
 //! over the frame before encoding it, so it looks as it does in SDR, at
 //! paper white.
 
-use super::hdr::{
-    DisplayReport, HdrEncoding, HdrMetadata, HdrOffReason, HdrOutput, HdrStatus, SCRGB_NITS, brightness,
-};
+use super::hdr::{DisplayReport, HdrEncoding, HdrMetadata, HdrOffReason, HdrOutput, HdrStatus, SCRGB_NITS, brightness};
 
 /// The surface format and color space HDR output takes on a window, and
 /// how the frame is encoded for them.

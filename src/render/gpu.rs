@@ -2362,9 +2362,7 @@ impl Renderer {
     /// frame image's with HDR), the 3D frame's output, and the image the
     /// window gets (the surface's).
     #[cfg(all(test, feature = "3d"))]
-    pub(super) fn formats_for_test(
-        &self,
-    ) -> (wgpu::TextureFormat, Option<wgpu::TextureFormat>, wgpu::TextureFormat) {
+    pub(super) fn formats_for_test(&self) -> (wgpu::TextureFormat, Option<wgpu::TextureFormat>, wgpu::TextureFormat) {
         (
             self.view_format,
             self.three.as_ref().map(super::gpu3d::Renderer3D::output_format),
@@ -2830,10 +2828,7 @@ impl Renderer {
         let overlaid = self.overlay.is_some();
         #[cfg(not(feature = "inspector"))]
         let overlaid = false;
-        let (output, uniform) = (
-            self.hdr.surface_target().2,
-            self.hdr.uniform().with_overlay(overlaid),
-        );
+        let (output, uniform) = (self.hdr.surface_target().2, self.hdr.uniform().with_overlay(overlaid));
         let (view, hdr_target) = match self.hdr.pass.as_mut() {
             Some(pass) => {
                 pass.write(&self.queue, uniform);

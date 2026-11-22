@@ -332,8 +332,12 @@ impl PostChain {
                 cache: None,
             })
         };
-        let [post_pipeline, fxaa_pipeline, upscale_pipeline] =
-            output_pipelines(device, &post_shader, (&post_pipeline_layout, &bloom_pipeline_layout), format);
+        let [post_pipeline, fxaa_pipeline, upscale_pipeline] = output_pipelines(
+            device,
+            &post_shader,
+            (&post_pipeline_layout, &bloom_pipeline_layout),
+            format,
+        );
         let bloom_prefilter = full_screen(
             "3d bloom prefilter",
             &bloom_pipeline_layout,
@@ -916,7 +920,6 @@ impl PostTargets {
         }
     }
 }
-
 
 /// The passes writing the chain's output in `format`: tone mapping, FXAA
 /// and scaling (`post.wgsl`), with the post and bloom pipeline layouts.

@@ -83,7 +83,7 @@ pub(crate) fn send(
 ) -> bool {
     match backend {
         #[cfg(windows)]
-        wgpu::Backend::Dx12 => dxgi::send(surface, &Hdr10::new(encoding, metadata)),
+        wgpu::Backend::Dx12 => dxgi::set_hdr_metadata(surface, &Hdr10::new(encoding, metadata)),
         #[cfg(target_vendor = "apple")]
         wgpu::Backend::Metal => encoding == HdrEncoding::Pq && apple::send(surface, metadata),
         _ => {
@@ -99,7 +99,7 @@ mod dxgi {
     use windows::core::Interface as _;
 
     /// `SetHDRMetaData` on the swap chain wgpu made for `surface`.
-    pub(super) fn send(surface: &wgpu::Surface<'_>, metadata: &super::Hdr10) -> bool {
+    pub(super) fn set_hdr_metadata(surface: &wgpu::Surface<'_>, metadata: &super::Hdr10) -> bool {
         let bytes = metadata.dxgi_bytes();
         // SAFETY: the swap chain is wgpu's DX12 surface's own, borrowed
         // only for this call (the guard is dropped before wgpu is used
@@ -189,7 +189,11 @@ mod tests {
         let m = Hdr10::new(HdrEncoding::Pq, &metadata());
         let bytes = m.dxgi_bytes();
         assert_eq!(u16::from_le_bytes([bytes[0], bytes[1]]), 35400, "red x first");
-        assert_eq!(u16::from_le_bytes([bytes[14], bytes[15]]), 16450, "white y last of the primaries");
+        assert_eq!(
+            u16::from_le_bytes([bytes[14], bytes[15]]),
+            16450,
+            "white y last of the primaries"
+        );
         assert_eq!(u32::from_le_bytes(bytes[16..20].try_into().unwrap()), 1000);
         assert_eq!(u16::from_le_bytes([bytes[24], bytes[25]]), 1000);
         assert_eq!(u16::from_le_bytes([bytes[26], bytes[27]]), 400);
@@ -255,5 +259,48 @@ mod tests {
         assert!(apple::layer_has_metadata(&surface), "the layer holds it");
         drop(surface);
         drop(layer);
+    }
+
+    /// The DXGI path on a real DX12 swap chain, for a hidden window (it is
+    /// never shown): configured for scRGB, the swap chain takes the
+    /// metadata. Runs on Windows only.
+    #[cfg(all(windows, feature = "3d"))]
+    #[test]
+    fn a_dxgi_swap_chain_takes_hdr10_metadata() {
+        use winit::platform::windows::EventLoopBuilderExtWindows as _;
+        let event_loop = winit::event_loop::EventLoop::builder()
+            .with_any_thread(true)
+            .build()
+            .expect("an event loop");
+        #[allow(deprecated)]
+        let window = event_loop
+            .create_window(winit::window::Window::default_attributes().with_visible(false))
+            .expect("a hidden window");
+        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+        descriptor.backends = wgpu::Backends::DX12;
+        let instance = wgpu::Instance::new(descriptor);
+        let surface = instance.create_surface(&window).expect("a DX12 surface");
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            compatible_surface: Some(&surface),
+            ..Default::default()
+        })) else {
+            crate::render::render_test_support::no_gpu(format_args!("no DX12 adapter"));
+            return;
+        };
+        let (device, _queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).expect("a device");
+        let caps = surface.get_capabilities(&adapter);
+        let choice = crate::render::hdr_output::choose_output(wgpu::Backend::Dx12, &caps.format_capabilities)
+            .expect("DXGI offers scRGB");
+        let mut config = surface
+            .get_default_config(&adapter, 16, 16)
+            .expect("the window takes a configuration");
+        config.format = choice.format;
+        config.color_space = choice.color_space;
+        surface.configure(&device, &config);
+        assert!(
+            send(&surface, wgpu::Backend::Dx12, choice.encoding, &metadata()),
+            "SetHDRMetaData took it"
+        );
     }
 }

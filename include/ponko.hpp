@@ -1297,10 +1297,13 @@ using query_filter_ex = PonkoQueryFilterEx;
 /// set it with `static_cast<std::uint32_t>(...)`).
 using post_ex = PonkoPostEx;
 /// HDR display output settings that can grow (PonkoHdrOutput): enabled, paper_white_nits, peak_nits
-/// (0: the display's). Off by default; see hdr_output_defaults, game::hdr_output, ctx::set_hdr_output.
+/// (0: the display's) and, from version 2, the HDR10 metadata max_content_light_nits and
+/// max_frame_average_nits (0: the peak, paper white). Off by default; see hdr_output_defaults,
+/// game::hdr_output, ctx::set_hdr_output.
 using hdr_output = PonkoHdrOutput;
 /// What the window does with the HDR settings (PonkoHdrStatus): available, active, encoding, reason,
-/// paper white, peak and headroom as used, and what the display reports (0 unknown).
+/// paper white, peak and headroom as used, what the display reports (0 unknown) and, from version 2,
+/// the HDR10 metadata the display was given (metadata_sent, then the four values).
 using hdr_status = PonkoHdrStatus;
 /// How a 3D frame drawn below the window's size (`render_scale` under 1) is brought up to it (the
 /// `upscaler` of post_ex, Rust `Upscaler`).
@@ -9442,11 +9445,12 @@ public:
         detail::check(ponko_ctx_hdr_output(raw_, &h));
         return h;
     }
-    /// Changes the HDR output settings: paper white and peak from the next frame; `enabled` switches
-    /// between HDR and SDR if the window opened with HDR on (game::hdr_output), else at the next start.
-    /// Throws, changing nothing, for a NaN or negative peak_nits.
+    /// Changes the HDR output settings from the next frame: `enabled` switches the window between HDR
+    /// and SDR while the game runs (no restart); paper white, peak and HDR10 metadata follow.
+    /// Throws, changing nothing, for a NaN or negative peak_nits or metadata value.
     void set_hdr_output(const ponko::hdr_output& h) { detail::check(ponko_ctx_set_hdr_output(raw_, &h)); }
-    /// What the window does with the HDR settings: active, encoding, reason, paper white and peak as used.
+    /// What the window does with the HDR settings: active, encoding, reason, paper white and peak as used,
+    /// and the HDR10 metadata sent.
     ponko::hdr_status hdr_status() const {
         ponko::hdr_status s{};
         s.struct_size = sizeof(s);
@@ -11179,7 +11183,8 @@ public:
     /// Wait for the display between frames (default on).
     game& vsync(bool on) { return check(ponko_game_vsync(raw_, on)); }
     /// HDR display output (Rust `Game::hdr_output`): with `h.enabled` the window opens in an HDR format
-    /// and color space where the display system offers one. Off by default, and then nothing changes.
+    /// and color space where the display system offers one; ctx::set_hdr_output switches it later.
+    /// Off by default, and then nothing changes.
     game& hdr_output(const ponko::hdr_output& h) { return check(ponko_game_hdr_output(raw_, &h)); }
     /// Samples per pixel of the 3D frame: 4 (default) or 2.
     game& msaa(std::uint32_t samples) { return check(ponko_game_msaa(raw_, samples)); }
