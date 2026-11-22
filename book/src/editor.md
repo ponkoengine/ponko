@@ -173,14 +173,21 @@ A browser keeps a few megabytes per site this way; when it refuses a save
 (it is full), the error says so and Download still gives you the file.
 
 A browser may also clear a site's storage when the disk runs low, unless
-it keeps that storage *persistent*. Before setup the web editor asks for
-that (`navigator.storage.persist()`): Chromium decides from how the site
-is used (an installed or bookmarked site gets it), Firefox asks you, and
-a page served without HTTPS (other than `localhost`) can't have it. When
-the browser refuses, the status bar says **the browser may clear saves**
-(its tooltip says why) and **File > Saved in this browser** repeats it:
-download what you want to keep. `ctx.assets.browser_saves_persistent()`
-is the answer from code: `Some(true)`, `Some(false)`, or `None` until the
+it keeps that storage *persistent*. Before setup the web editor only
+looks whether it is (`navigator.storage.persisted()`, which asks you
+nothing); the first save on the page asks for it
+(`navigator.storage.persist()`), once, as saving is something you did.
+Chromium decides from how the site is used (an installed or bookmarked
+site gets it), Firefox asks you, and a page served without HTTPS (other
+than `localhost`) can't have it. Until a save asked, **File > Saved in
+this browser** says the next save asks. When the browser refuses, the
+status bar says **the browser may clear saves** (its tooltip says why)
+and **File > Saved in this browser** repeats it: download what you want
+to keep. Once it grants it the warning goes, and later visits find the
+storage persistent without asking again.
+`ctx.assets.browser_saves_persistent()` is the answer from code:
+`Some(true)` when it is persistent, `Some(false)` when it isn't (refused,
+or not asked yet as nothing was saved on the page), or `None` until the
 browser answers (and in other builds).
 
 **Open** and the asset panel list the web build's file manifest: the
@@ -331,6 +338,19 @@ file makes of it is its override, kept in the scene's saved record:
   overrides stay in the scene, for when the file is back), and the status
   bar's error line names each such file and why it didn't load.
 
+#### Scenes that didn't load
+
+Above the status bar, the editor lists each glTF scene of the open scene
+that didn't load, one row each: **Retry**, its file and why. Fix the file
+(export it again, put it back in `assets/`, revert a broken copy saved in
+the browser) and press **Retry**: the scene spawns where it was saved,
+with its overrides, and the nodes of other scenes you hung off its nodes
+hang off them again, where you put them. The row and its name in the
+error line go; the document stays as saved or as changed as it was, as
+its file names the scene either way. A retry that still fails says why in
+the row and the error line. The panel is gone once every scene loaded,
+and opening another document starts it again.
+
 Overrides are per component (the changed fields of each), and two more
 kinds are per node:
 
@@ -347,7 +367,8 @@ kinds are per node:
   linked, at once. If the other scene's file doesn't load when the scene
   is opened, the node waits on its file parent and its overrides list
   the parent as missing: **Revert** forgets the link, or fix the file and
-  the link is made when that scene spawns. Builds from before these links
+  press **Retry** in the panel of [scenes that didn't
+  load](#scenes-that-didnt-load): the link is made when that scene spawns. Builds from before these links
   read such saves too, with the node on its file parent. A parent the
   save leaves out (an entity marked not saved) can't be kept, and the
   editor says so on its console.

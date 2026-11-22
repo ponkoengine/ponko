@@ -39,6 +39,28 @@
       ["found:Saved", "kept:Loaded", "reverted:1", "shipped:Build"],
       ["found:Build", "kept:Loaded", "reverted:0", "shipped:Build"]
     ],
+    "persist": {
+      "granted": [
+        ["persistent:Granted", "persist_asks:1"],
+        ["persistent:Granted", "persist_asks:0"],
+        ["persistent:Granted", "persist_asks:0"]
+      ],
+      "refused": [
+        ["persistent:Refused", "persist_asks:1"],
+        ["persistent:Refused", "persist_asks:0"],
+        ["persistent:Refused", "persist_asks:0"]
+      ]
+    },
+    "engineGpu": true
+  },
+  "web_editor_unloaded": {
+    "example": "web_editor_unloaded",
+    "features": ["editor", "3d"],
+    "query": "?editor=smoke/unloaded/scene.json",
+    "asset": "smoke/unloaded/posts.gltf",
+    "min": { "failed": 1 },
+    "editMode": true,
+    "clicks": ["30,565=linked:1"],
     "engineGpu": true
   },
   "lights2d": {

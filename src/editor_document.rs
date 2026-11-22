@@ -207,6 +207,45 @@ impl Editor {
         Ok(kind)
     }
 
+    /// Tries again to spawn glTF scene file `file`, which didn't load when
+    /// the document was opened (see [`Document::unloaded`]): every record
+    /// of it in the scene that has no scene spawned, where it was saved,
+    /// with its overrides. Nodes of other scenes saved on its nodes hang
+    /// off them again. On success its entries leave
+    /// [`Document::unloaded`]; the document stays as clean or changed as
+    /// it was, as its file names the scene either way.
+    ///
+    /// # Errors
+    ///
+    /// The scene's error when it still doesn't load (its entry then says
+    /// why); `NotFound` for a file that isn't waiting to load.
+    #[cfg_attr(not(feature = "editor"), allow(dead_code))]
+    pub fn retry_unloaded(&mut self, ctx: &mut Ctx, file: &str) -> Result<(), Error> {
+        if !self.doc.unloaded.iter().any(|u| u.file == file) {
+            return Err(Error::new(
+                ErrorKind::NotFound,
+                format!("{file} isn't a glTF scene of this scene that didn't load"),
+            )
+            .with_path(file));
+        }
+        #[cfg(feature = "3d")]
+        {
+            if let Some((_, e)) = ctx.respawn_saved_gltf_of(Some(file)).into_iter().next() {
+                for u in self.doc.unloaded.iter_mut().filter(|u| u.file == file) {
+                    u.why = e.message().to_string();
+                }
+                return Err(e);
+            }
+            self.doc.unloaded.retain(|u| u.file != file);
+            Ok(())
+        }
+        #[cfg(not(feature = "3d"))]
+        {
+            let _ = ctx;
+            Err(Error::new(ErrorKind::Unsupported, "glTF scenes need the `3d` feature").with_path(file))
+        }
+    }
+
     /// Opens the document's file again, dropping unsaved changes.
     pub fn reload(&mut self, ctx: &mut Ctx) -> Result<(), Error> {
         let Some(path) = self.doc.path.clone() else {
