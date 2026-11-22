@@ -11,3 +11,7 @@
 }
 .lang-pair > div:nth-child(1)::before { content: "Rust"; }
 .lang-pair > div:nth-child(2)::before { content: "C++"; }
+/* Another engine next to Ponko (the "Coming from Bevy" chapter):
+   <div class="lang-pair from-bevy"><div>```rs …```</div><div>```rust …```</div></div> */
+.lang-pair.from-bevy > div:nth-child(1)::before { content: "Bevy 0.20.1"; }
+.lang-pair.from-bevy > div:nth-child(2)::before { content: "Ponko"; }
