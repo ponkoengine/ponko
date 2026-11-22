@@ -374,11 +374,7 @@ struct TextureSlices {
 impl TextureSlices {
     /// Starts decoding a texture file that was just read, under the image
     /// limits of the source it came from.
-    fn begin(
-        &mut self,
-        origin: Origin,
-        bytes: Vec<u8>,
-    ) -> Result<Option<(Origin, Pyramid)>, crate::error::Error> {
+    fn begin(&mut self, origin: Origin, bytes: Vec<u8>) -> Result<Option<(Origin, Pyramid)>, crate::error::Error> {
         let name = &self.name;
         #[cfg(feature = "compressed-textures")]
         if let Some(slices) = crate::compressed::DecodeSlices::new(&bytes, name, &origin.describe(name), self.gpu) {
@@ -1401,9 +1397,9 @@ impl crate::gfx::Graphics {
         let max = self.max_texture_side();
         let gpu = self.texture_formats();
         let origin = found.origin.clone();
-        self.asset_sources
-            .image_limits()
-            .scope(&origin, || decode_texture(name, origin.clone(), found.into_bytes(), max, gpu))
+        self.asset_sources.image_limits().scope(&origin, || {
+            decode_texture(name, origin.clone(), found.into_bytes(), max, gpu)
+        })
     }
 
     /// The block formats streamed textures may stay in.
@@ -1455,7 +1451,9 @@ impl crate::gfx::Graphics {
         } else {
             Decoded::Job(Job::spawn(move || {
                 let (origin, bytes) = read()?;
-                limits.scope(&origin.clone(), || decode_texture(&name_owned, origin, Ok(bytes), max, gpu))
+                limits.scope(&origin.clone(), || {
+                    decode_texture(&name_owned, origin, Ok(bytes), max, gpu)
+                })
             }))
         };
         let entry = self.texture_entry(name);

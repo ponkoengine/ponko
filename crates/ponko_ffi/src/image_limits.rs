@@ -184,7 +184,10 @@ pub unsafe extern "C" fn ponko_ctx_set_source_image_limits(
 /// # Safety
 /// `ctx` must be null or the live context of the running system; `source_id` NUL-terminated.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ponko_ctx_clear_source_image_limits(ctx: *mut PonkoCtx, source_id: *const c_char) -> PonkoStatus {
+pub unsafe extern "C" fn ponko_ctx_clear_source_image_limits(
+    ctx: *mut PonkoCtx,
+    source_id: *const c_char,
+) -> PonkoStatus {
     // SAFETY: forwarded caller contract.
     boundary(|| unsafe {
         ctx_access(ctx, |c| {

@@ -9481,6 +9481,19 @@ enum PonkoStatus ponko_ctx_try_decode_texture(struct PonkoCtx *ctx,
                                               uint64_t max_bytes,
                                               struct PonkoTexture *out_texture);
 
+enum PonkoStatus ponko_ctx_set_source_image_limits(struct PonkoCtx *ctx,
+                                                   const char *source_id,
+                                                   uint32_t max_side,
+                                                   uint64_t max_bytes);
+
+enum PonkoStatus ponko_ctx_clear_source_image_limits(struct PonkoCtx *ctx, const char *source_id);
+
+enum PonkoStatus ponko_ctx_source_image_limits(const struct PonkoCtx *ctx,
+                                               const char *source_id,
+                                               uint32_t *out_max_side,
+                                               uint64_t *out_max_bytes,
+                                               bool *out_has);
+
 enum PonkoStatus ponko_ctx_feed_ime(struct PonkoCtx *ctx, const struct PonkoImeEvent *event);
 
 enum PonkoStatus ponko_ctx_preedit(struct PonkoCtx *ctx,

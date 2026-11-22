@@ -2681,14 +2681,30 @@ mod tests {
             .scope(&origin("mods"), || decode_image(&png, "a.png", "\"a.png\""))
             .err()
             .unwrap();
-        assert!(from_source.message().contains("the limits of asset source \"mods\""), "{}", from_source.message());
+        assert!(
+            from_source.message().contains("the limits of asset source \"mods\""),
+            "{}",
+            from_source.message()
+        );
         let from_call = with_image_limits(tight, || decode_image(&png, "a.png", "\"a.png\""))
             .err()
             .unwrap();
-        assert!(from_call.message().contains("limits given for this picture"), "{}", from_call.message());
+        assert!(
+            from_call.message().contains("limits given for this picture"),
+            "{}",
+            from_call.message()
+        );
         // A source without limits of its own, and a loose file, follow the game's.
-        assert!(sources.scope(&origin("other"), || decode_image(&png, "a.png", "a")).is_ok());
-        assert!(sources.scope(&Origin::File("a.png".into()), || decode_image(&png, "a.png", "a")).is_ok());
+        assert!(
+            sources
+                .scope(&origin("other"), || decode_image(&png, "a.png", "a"))
+                .is_ok()
+        );
+        assert!(
+            sources
+                .scope(&Origin::File("a.png".into()), || decode_image(&png, "a.png", "a"))
+                .is_ok()
+        );
     }
 
     #[test]

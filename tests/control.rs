@@ -1143,7 +1143,8 @@ fn the_image_limits_in_force_are_readable_over_the_endpoint_and_cannot_be_raised
             .control_endpoint(true)
             .run_headless(u64::MAX, move |ctx| {
                 ctx.time.pause();
-                ctx.assets.set_source_image_limits("mods", ImageLimits::new(1_024, 8 << 20));
+                ctx.assets
+                    .set_source_image_limits("mods", ImageLimits::new(1_024, 8 << 20));
                 tx.send(ctx.control_addr().unwrap()).unwrap();
             })
     });
@@ -1158,7 +1159,10 @@ fn the_image_limits_in_force_are_readable_over_the_endpoint_and_cannot_be_raised
     );
     // Parameters change nothing: it only reads.
     let again = c
-        .call("assets.image_limits", json!({ "max_side": 65_535, "game": { "max_side": 65_535 } }))
+        .call(
+            "assets.image_limits",
+            json!({ "max_side": 65_535, "game": { "max_side": 65_535 } }),
+        )
         .unwrap();
     assert_eq!(again, limits);
     // Nothing in the method list writes them.

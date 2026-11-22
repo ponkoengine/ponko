@@ -333,7 +333,10 @@ pub(crate) fn image_limits_text(assets: &crate::assets::Assets) -> (String, Stri
     }
     let summary = match sources.len() {
         0 => "Image limits: the game's".to_string(),
-        n => format!("Image limits: the game's, and {n} source{}", if n == 1 { "" } else { "s" }),
+        n => format!(
+            "Image limits: the game's, and {n} source{}",
+            if n == 1 { "" } else { "s" }
+        ),
     };
     (summary, detail)
 }

@@ -79,7 +79,11 @@ fn a_picture_past_the_games_limits_says_they_are_the_games() {
         assert_eq!(err.kind(), ErrorKind::Limit, "{}", err.message());
         assert!(err.message().contains("48 pixels a side"), "{}", err.message());
         assert!(err.message().contains("the game's limits"), "{}", err.message());
-        assert!(!err.message().contains("the limits of asset source"), "{}", err.message());
+        assert!(
+            !err.message().contains("the limits of asset source"),
+            "{}",
+            err.message()
+        );
     });
 }
 
@@ -91,12 +95,8 @@ fn limits_can_be_set_before_the_source_is_added_and_taken_back() {
         ctx.assets.set_source_image_limits("late", TIGHT);
         assert_eq!(ctx.assets.source_image_limits("late"), Some(TIGHT));
         assert_eq!(ctx.assets.source_image_limits("other"), None);
-        ctx.assets
-            .add_source(MemorySource::new("late").with("a.png", png(64)));
-        assert_eq!(
-            ctx.gfx.try_load_texture("a.png").unwrap_err().kind(),
-            ErrorKind::Limit
-        );
+        ctx.assets.add_source(MemorySource::new("late").with("a.png", png(64)));
+        assert_eq!(ctx.gfx.try_load_texture("a.png").unwrap_err().kind(), ErrorKind::Limit);
         ctx.assets.clear_source_image_limits("late");
         assert_eq!(ctx.assets.source_image_limits("late"), None);
         assert!(ctx.gfx.try_load_texture("a.png").is_ok(), "follows the game's again");
@@ -108,7 +108,8 @@ fn the_limits_in_force_list_the_games_and_each_sources_own() {
     let _own = own();
     game().run_headless(0, |ctx| {
         assert!(ctx.assets.image_limit_sources().is_empty());
-        ctx.assets.set_source_image_limits("zeta", ImageLimits::new(64, 4 << 20));
+        ctx.assets
+            .set_source_image_limits("zeta", ImageLimits::new(64, 4 << 20));
         ctx.assets.set_source_image_limits("alpha", TIGHT);
         assert_eq!(
             ctx.assets.image_limit_sources(),
@@ -199,7 +200,10 @@ fn a_game_gives_its_mods_tight_limits_and_reads_what_is_in_force() {
         ctx.assets
             .set_source_image_limits(ponko::mods::SOURCE_ID, ImageLimits::new(1_024, 8 << 20));
         // ANCHOR_END: source_image_limits
-        assert_eq!(ctx.assets.source_image_limits("mods"), Some(ImageLimits::new(1_024, 8 << 20)));
+        assert_eq!(
+            ctx.assets.source_image_limits("mods"),
+            Some(ImageLimits::new(1_024, 8 << 20))
+        );
         ctx.assets.clear_source_image_limits("mods");
     });
 }

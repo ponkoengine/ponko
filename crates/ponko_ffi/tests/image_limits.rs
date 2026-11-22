@@ -312,7 +312,10 @@ fn a_source_with_limits_of_its_own_refuses_its_picture_while_the_games_own_loads
             PONKO_OK
         );
         assert!(!has, "no limits of its own yet");
-        assert_eq!(ponko_ctx_set_source_image_limits(ctx, c"mods".as_ptr(), 32, 1 << 20), PONKO_OK);
+        assert_eq!(
+            ponko_ctx_set_source_image_limits(ctx, c"mods".as_ptr(), 32, 1 << 20),
+            PONKO_OK
+        );
         assert_eq!(
             ponko_ctx_source_image_limits(ctx, c"mods".as_ptr(), &mut side, &mut bytes, &mut has),
             PONKO_OK
@@ -364,10 +367,22 @@ fn source_limits_refuse_nulls_zeros_and_an_empty_id() {
         );
     }
     run_ctx(|ctx| unsafe {
-        assert_eq!(ponko_ctx_set_source_image_limits(ctx, c"mods".as_ptr(), 0, 64), PONKO_INVALID_ARGUMENT);
-        assert_eq!(ponko_ctx_set_source_image_limits(ctx, c"mods".as_ptr(), 64, 0), PONKO_INVALID_ARGUMENT);
-        assert_eq!(ponko_ctx_set_source_image_limits(ctx, c"".as_ptr(), 64, 64), PONKO_INVALID_ARGUMENT);
-        assert_eq!(ponko_ctx_set_source_image_limits(ctx, std::ptr::null(), 64, 64), PONKO_INVALID_ARGUMENT);
+        assert_eq!(
+            ponko_ctx_set_source_image_limits(ctx, c"mods".as_ptr(), 0, 64),
+            PONKO_INVALID_ARGUMENT
+        );
+        assert_eq!(
+            ponko_ctx_set_source_image_limits(ctx, c"mods".as_ptr(), 64, 0),
+            PONKO_INVALID_ARGUMENT
+        );
+        assert_eq!(
+            ponko_ctx_set_source_image_limits(ctx, c"".as_ptr(), 64, 64),
+            PONKO_INVALID_ARGUMENT
+        );
+        assert_eq!(
+            ponko_ctx_set_source_image_limits(ctx, std::ptr::null(), 64, 64),
+            PONKO_INVALID_ARGUMENT
+        );
         let (mut side, mut bytes, mut has) = (0u32, 0u64, false);
         assert_eq!(
             ponko_ctx_source_image_limits(ctx, c"mods".as_ptr(), std::ptr::null_mut(), &mut bytes, &mut has),

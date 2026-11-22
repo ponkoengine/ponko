@@ -1467,7 +1467,9 @@ impl Graphics {
         let sources = &self.asset_sources;
         let loaded = sources
             .image_limits()
-            .scope(&origin, || gltf::load(path, &bytes, &mut |name| sources.read(name), &|_| true))
+            .scope(&origin, || {
+                gltf::load(path, &bytes, &mut |name| sources.read(name), &|_| true)
+            })
             .map_err(|e| crate::error::Error::decode(path, e))?;
         Ok(loaded.data)
     }
