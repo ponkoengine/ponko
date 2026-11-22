@@ -164,9 +164,11 @@ Where it is worked out:
   the next moments are worked out with it from the start, so each is still
   worked out once, until a moment so worked out goes unasked. A frame
   of a WebGL2 sea with something floating at 128 cells costs 0.21 ms of
-  CPU field instead of 0.35 ms (0.93 instead of 1.55 ms at 256 cells;
-  `upload_and_buoyancy_frame_cost`, release, one thread, the medians of
-  seven runs alternating before and after on the busy machine below). A
+  CPU field instead of 0.31 ms (0.82 to 0.87 instead of 1.35 to 1.42 ms
+  at 256 cells; `upload_and_buoyancy_frame_cost`, release, one thread,
+  medians of five rounds alternating before and after, three runs on an
+  idle Apple M4 Max on 2026-11-22; on a busy machine it gave 0.21 against
+  0.35 ms and 0.93 against 1.55 ms). A
   GPU test reads the drawn surface back and compares it with `height_at`: 9.9 mm worst
   with the GPU's FFT, 9.1 mm with the CPU's upload, on a 1.5 m sea; the
   GPU's field matches the CPU's to 6 mm (it runs in half floats).
@@ -207,21 +209,25 @@ Where it is worked out:
   bodies it blends only when that costs no more moments than drawing the
   frame's own (two once, to start), so frames faster than the steps work
   out one moment a step instead of one a frame. Measured with `variable_frame_rate_cost` (release, one thread's CPU
-  time, the medians of five runs alternating before and after, load
-  average about 100 to 170, so a run with the same moments either way
-  still moved by up to a fifth): with something floating, 50 steps a second
+  time, rounds alternating before and after, three runs on an idle
+  machine on 2026-11-22, which agreed within 2 %; both columns include the
+  faster half-float upload below): with something floating, 50 steps a second
   and frames varying by a quarter, the moments worked out a frame fall
   from 1.35 to 0.35 at 144 frames a second, 1.83 to 0.83 at 60 and 2.67 to
   1.67 at 30.
 
   | Cells | 144 Hz | 60 Hz | 30 Hz |
   |---|---|---|---|
-  | 128 | 0.35 → 0.21 ms | 0.41 → 0.31 ms | 0.68 → 0.60 ms |
-  | 256 | 1.59 → 1.14 ms | 2.06 → 1.50 ms | 3.14 → 2.61 ms |
+  | 64 | 0.045 → 0.019 ms | 0.067 → 0.040 ms | 0.104 → 0.077 ms |
+  | 128 | 0.195 → 0.079 ms | 0.287 → 0.171 ms | 0.445 → 0.330 ms |
+  | 256 | 0.84 → 0.34 ms | 1.25 → 0.74 ms | 1.94 → 1.43 ms |
 
-  Without floating bodies at 144 frames a second, 0.23 → 0.20 ms at 128
-  cells and 1.05 → 0.89 ms at 256; at 60 and 30 the difference was within
-  the noise, as was every case at 64 cells (under 0.2 ms either way).
+  Without floating bodies, 0.128 → 0.056 ms at 128 cells and 0.56 → 0.24
+  ms at 256 at 144 frames a second, 0.128 → 0.114 and 0.56 → 0.49 ms at
+  60; at 30 the same moments either way, and the same cost. (On a busy
+  machine, load average 100 to 170, before the faster upload, the floating
+  rows were 0.35 → 0.21, 0.41 → 0.31 and 0.68 → 0.60 ms at 128 cells and
+  1.59 → 1.14, 2.06 → 1.50 and 3.14 → 2.61 ms at 256.)
 - **The upload's half floats.** The field goes up as half floats, a
   conversion of every one of its numbers each frame, which on its own
   cost about as much as a moment of the field at 128 cells. Where the CPU
@@ -233,32 +239,33 @@ Where it is worked out:
   (`every_float_converts_as_the_reference`, run by hand; the test suite
   checks zeros, subnormals, infinities, NaNs and rounding ties). Measured
   alone with `half_upload_cost` (release, one thread's CPU time per
-  upload, medians of five runs of 100, two sets on an Apple M4 Max at a
-  load average of 70 to 130), against 0.13 ms (128 cells) and 0.59 to
-  0.62 ms (256) for a moment of the field:
+  upload, medians of five runs of 100, three sets on an idle Apple M4 Max
+  on 2026-11-22), against 0.124 ms (128 cells) and 0.53 to 0.54 ms (256)
+  for a moment of the field:
 
   | Cells | Upload of one moment | Upload blending two |
   |---|---|---|
-  | 128 | 0.083 to 0.089 → 0.007 ms | 0.114 to 0.151 → 0.013 to 0.014 ms |
-  | 256 | 0.356 to 0.363 → 0.029 ms | 0.491 to 0.543 → 0.054 to 0.055 ms |
+  | 128 | 0.083 to 0.089 → 0.0067 ms | 0.107 → 0.0128 ms |
+  | 256 | 0.333 to 0.354 → 0.0265 ms | 0.427 to 0.428 → 0.051 to 0.052 ms |
 
-  With both, `variable_frame_rate_cost` (medians of five, same machine)
-  gives a WebGL2 frame with something floating 0.09 ms of CPU field at
-  128 cells and 144 frames a second (0.19 ms at 60, 0.46 ms at 30), and
-  0.37, 0.97 and 1.84 ms at 256 cells; the browser's conversion was not
-  measured.
+  With both, a WebGL2 frame with something floating costs the "after"
+  column of the table above: 0.08 ms of CPU field at 128 cells and 144
+  frames a second (0.17 ms at 60, 0.33 ms at 30), and 0.34, 0.74 and
+  1.43 ms at 256 cells; the browser's conversion was not measured.
 
-Cost, measured on an Apple M4 Max (Metal) while the machine was busy
-with other work (load average 70 to 116). The GPU column is from
-`spectrum_waves_cost` in the engine's tests, over eleven runs in three
-sessions; the CPU columns from `cpu_field_cost`, the median of 15 new
-moments in each of five runs, one thread:
+Cost, measured on an idle Apple M4 Max (Metal) on 2026-11-22, three runs
+(1-minute load 1.3 to 1.8). The GPU column is from `spectrum_waves_cost`
+in the engine's tests; the CPU columns from `cpu_field_cost`, the median
+of 15 new moments in each of five rounds, one thread:
 
 | Cells | GPU time over a Gerstner sea (1280x720) | One CPU field | With the sway's speed (buoyancy) |
 |---|---|---|---|
-| 64 | 0.57 to 0.76 ms | 0.03 to 0.08 ms | 0.05 to 0.06 ms |
-| 128 (default) | 0.74 to 0.89 ms | 0.13 to 0.38 ms | 0.21 to 0.54 ms |
-| 256 | 0.88 to 1.02 ms | 0.58 ms | 0.9 to 1.2 ms |
+| 64 | 0.15 to 0.19 ms | 0.028 to 0.029 ms | 0.044 to 0.046 ms |
+| 128 (default) | 0.18 to 0.23 ms | 0.121 to 0.124 ms | 0.190 to 0.195 ms |
+| 256 | 0.22 to 0.27 ms | 0.53 to 0.54 ms | 0.82 to 0.84 ms |
+
+On a machine busy with other work (load average 70 to 116) the GPU
+column read 0.57 to 1.02 ms and the CPU columns up to three times these.
 
 The GPU column is the whole frame's GPU time against the same sea with
 `Waves::sea` (the copies between FFT passes aren't timed). The CPU
@@ -267,9 +274,9 @@ upload, a query, a floating body), once per moment however many points
 are asked; the underwater check skips the query while the camera is
 clearly above or below every wave. The CPU's field used to be a plain
 radix-2 FFT, worked out output by output as the GPU's passes do: in the
-same runs it took 0.14 to 0.42 ms at 64 cells, 0.63 to 0.80 ms at 128 and
-2.9 ms at 256 (4.3 to 9 ms with the sway's speed): the field is now
-about five times cheaper. Splitting it across worker threads was
+same runs it takes 0.13 ms at 64 cells, 0.61 ms at 128 and 2.8 to
+2.9 ms at 256 (4.2 ms with the sway's speed): the field is now about
+five times cheaper. Splitting it across worker threads was
 tried and left out: on a busy machine waiting for the threads cost more
 than the whole field (0.4 to 40 ms at 256 cells).
 
