@@ -11481,6 +11481,16 @@ inline entity spawn_gltf(ctx& c, const char* path, transform3d at, bool without_
     detail::check(ponko_ctx_spawn_gltf(c.raw(), path, at, without_saved_objects, &root));
     return root;
 }
+/// Spawns the tile of terrain file `path` (`"format": "ponko-terrain"`, as
+/// the editor's terrain window saves it) with its corner at `at`: an entity
+/// with a transform3d, a terrain_tile and the TerrainFile that saves it in a
+/// scene. Throws (not found, or what's wrong with the file) and spawns
+/// nothing if the file doesn't load.
+inline entity spawn_terrain_from_file(ctx& c, const char* path, vec3 at) {
+    entity e = 0;
+    detail::check(ponko_ctx_terrain_tile_spawn_from_file(c.raw(), path, at, &e));
+    return e;
+}
 /// Despawns a scene spawned with spawn_gltf; false if `root` is not one.
 inline bool despawn_gltf(ctx& c, entity root) {
     const PonkoStatus s = ponko_ctx_despawn_gltf(c.raw(), root);

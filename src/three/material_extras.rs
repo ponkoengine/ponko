@@ -123,6 +123,7 @@ impl CustomExtras {
 
     /// Writes them into `extras` (an object, made one if it isn't),
     /// keeping its other keys; with no shader and no values both keys go.
+    #[cfg_attr(not(feature = "editor"), allow(dead_code))]
     pub(crate) fn write(&self, extras: &mut Value) {
         if !extras.is_object() {
             *extras = json!({});
@@ -188,6 +189,7 @@ impl Param {
         Ok(Self { name, kind, value })
     }
 
+    #[cfg_attr(not(feature = "editor"), allow(dead_code))]
     fn to_json(&self) -> Value {
         let numbers = &self.value.to_array()[..self.kind.len()];
         let value = match self.kind {

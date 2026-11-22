@@ -7967,6 +7967,11 @@ enum PonkoStatus ponko_far_terrain_update(struct PonkoFarTerrain *far, struct Po
 
 enum PonkoStatus ponko_far_terrain_clear(struct PonkoFarTerrain *far, struct PonkoCtx *ctx);
 
+enum PonkoStatus ponko_ctx_terrain_tile_spawn_from_file(struct PonkoCtx *ctx,
+                                                        const char *path,
+                                                        struct PonkoVec3 at,
+                                                        uint64_t *out_entity);
+
 struct PonkoTrail3D ponko_trail3d_new(float lifetime, float width);
 
 enum PonkoStatus ponko_ctx_set_trail3d(struct PonkoCtx *ctx,

@@ -105,6 +105,7 @@ mod stencil;
 mod storage;
 mod stream;
 mod strips;
+mod terrain_files;
 mod text3d;
 mod three;
 // After `three`: it uses the quality struct, which the header defines there.
@@ -285,6 +286,7 @@ pub use storage::*;
 pub use storage_slots::*;
 pub use stream::*;
 pub use strips::*;
+pub use terrain_files::*;
 pub use text_shaping::*;
 pub use text3d::*;
 pub use three::*;
