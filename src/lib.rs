@@ -267,6 +267,8 @@ pub mod __fuzz {
     pub use crate::assets::fuzz_texture as texture;
     #[cfg(feature = "audio")]
     pub use crate::audio::fuzz_sound as sound;
+    #[cfg(all(feature = "audio", feature = "video"))]
+    pub use crate::audio::fuzz_webm_audio as webm_audio;
     pub use crate::control::fuzz_requests as control_requests;
     pub use crate::net::fuzz::{lockstep_packets, message_packets, replication_packets};
 }

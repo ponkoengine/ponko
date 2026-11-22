@@ -25,6 +25,7 @@ add aseprite tests/fixtures/aseprite/*.json tests/fixtures/aseprite-linked/*.ase
 add levels tests/fixtures/tilemaps/*.ldtk tests/fixtures/tilemaps/*.tmj tests/fixtures/tilemaps/*.tmx tests/fixtures/tilemaps/*.tsx
 add cooked_texture tests/fixtures/textures/*.ktx2 tests/fixtures/textures/*.png tests/fixtures/images/*
 add sound assets/*/sounds/*.wav assets/*/*.wav assets/*/music/*.ogg
+add webm_audio tests/fixtures/video/*.webm
 for dir in fuzz/seeds/*/; do
     add "$(basename "$dir")" "$dir"*
 done

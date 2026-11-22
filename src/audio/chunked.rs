@@ -509,7 +509,11 @@ impl ChunkedSound {
     }
 
     /// Reads and decodes the next packet into `samples`; `None` when there
-    /// is no decoder any more.
+    /// is no decoder any more. `reopened` says whether the frame being
+    /// looked for already went back to the loop start: it is never cleared
+    /// here, since a packet that decodes to nothing, or to frames before a
+    /// seek's target, is no progress (clearing it then let such a file loop
+    /// back to its start forever, rebuilding the decoder each time).
     fn read_packet(&mut self, reopened: &mut bool) -> Option<()> {
         let decoding = self.decoding.as_mut()?;
         match decoding.reader.next_packet() {
@@ -518,7 +522,6 @@ impl ChunkedSound {
                     self.channels = buffer.num_planes().max(1);
                     buffer.copy_to_vec_interleaved(&mut self.samples);
                     self.next = 0;
-                    *reopened = false;
                     if let Some(target) = self.align {
                         let start = decoding.time_base.and_then(|tb| tb.calc_time(packet.pts));
                         let start = start.map(|t| (t.as_secs_f64() * f64::from(self.sample_rate)).round() as i64);
@@ -803,6 +806,40 @@ mod tests {
         assert_eq!(handle.state(), PlaybackState::Playing);
         assert_eq!(out[0].left, out[100].left);
         assert_eq!(out[37].left, out[937].left);
+    }
+
+    #[test]
+    fn a_looping_stream_whose_loop_start_is_past_its_end_ends_instead_of_looping_forever() {
+        // Every packet after the loop start's seek is before its target:
+        // no frame to play, so going back again is no progress.
+        let bytes = wav(8000, &ramp(100));
+        let data = ChunkedData::new(bytes, 1.0, 1.0, true).loop_points(1.0, None);
+        let (mut sound, _) = ChunkedSound::new(data).unwrap();
+        let out = run(&mut sound, 1000, 1.0 / 8000.0);
+        assert!(out[..90].iter().any(|f| f.left != 0.0), "it plays once");
+        assert!(sound.finished(), "then ends");
+    }
+
+    /// What the fuzz target `webm_audio` found in its first run: a video's
+    /// soundtrack whose packets decode to no frames, played looping from
+    /// half a second in, went back to the start forever, rebuilding the
+    /// decoder each time.
+    #[cfg(feature = "video")]
+    #[test]
+    fn a_looping_soundtrack_whose_packets_hold_no_frames_ends_instead_of_looping_forever() {
+        let bytes: Arc<[u8]> = include_bytes!("../../tests/fixtures/video/no-frames-soundtrack.webm")
+            .as_slice()
+            .into();
+        let started = std::time::Instant::now();
+        let data = ChunkedData::new(bytes, 1.0, 1.0, true).start_position(0.5);
+        let (mut sound, _) = ChunkedSound::new(data).expect("its header is fine");
+        run(&mut sound, 1024, 1.0 / 44_100.0);
+        assert!(sound.finished(), "it ends");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
     }
 
     #[test]

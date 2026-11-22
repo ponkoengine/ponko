@@ -21,3 +21,4 @@ aseprite 180
 levels 180
 cooked_texture 180
 sound 180
+webm_audio 180

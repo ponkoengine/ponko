@@ -15,9 +15,10 @@ libfuzzer-sys = "0.4"
 # No window, audio or gamepad: the loaders only. `3d` brings the glTF
 # loader, `gltf-meshopt` its decoder of compressed geometry, `lobby` the
 # lobby protocol, `aseprite-source` the Aseprite file reader and
-# `compressed-textures` the KTX2 and DDS readers and `audio` the sound
+# `compressed-textures` the KTX2 and DDS readers, `audio` the sound
 # decoders (on Linux it builds the audio output library too: the apt package
-# `libasound2-dev`).
+# `libasound2-dev`) and `video` the WebM reader and its Vorbis soundtrack
+# (its AV1 decoder's x86 assembly needs `nasm` to build).
 ponko = { path = "..", default-features = false, features = [
     "3d",
     "gltf-meshopt",
@@ -25,6 +26,7 @@ ponko = { path = "..", default-features = false, features = [
     "aseprite-source",
     "compressed-textures",
     "audio",
+    "video",
 ] }
 ponko_lobby = { path = "../crates/ponko_lobby" }
 ponko_unity = { path = "../crates/ponko_unity" }
@@ -145,6 +147,13 @@ bench = false
 [[bin]]
 name = "sound"
 path = "fuzz_targets/sound.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "webm_audio"
+path = "fuzz_targets/webm_audio.rs"
 test = false
 doc = false
 bench = false

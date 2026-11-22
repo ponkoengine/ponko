@@ -45,10 +45,19 @@ pub(crate) struct Demuxer {
     /// Seconds per Matroska timestamp tick.
     tick: f64,
     frame: Frame,
+    /// The reader panicked: its state is suspect until [`Demuxer::restart`].
+    crashed: bool,
 }
 
+/// What the Matroska reader panicking on a file says: a crafted file must
+/// not take the game down through a bug in the reader (an element size
+/// that overflows its arithmetic panics it in builds with overflow checks).
+const CRASHED: &str = "its data is damaged (it crashed the WebM reader)";
+
 fn open(bytes: &Arc<[u8]>) -> Result<File, String> {
-    MatroskaFile::open(Cursor::new(bytes.clone())).map_err(|e| format!("it is not a WebM or Matroska file ({e})"))
+    std::panic::catch_unwind(|| MatroskaFile::open(Cursor::new(bytes.clone())))
+        .map_err(|_| CRASHED.to_string())?
+        .map_err(|e| format!("it is not a WebM or Matroska file ({e})"))
 }
 
 impl Demuxer {
@@ -87,6 +96,7 @@ impl Demuxer {
             track,
             tick,
             frame: Frame::default(),
+            crashed: false,
         };
         let mut frames = Vec::new();
         let mut sequence_header = private.filter(|p| !p.is_empty()).unwrap_or_default();
@@ -129,7 +139,15 @@ impl Demuxer {
     /// it as a keyframe, and its data. `None` at the end of the file.
     pub fn next(&mut self) -> Result<Option<Unit<'_>>, String> {
         loop {
-            match self.file.next_frame(&mut self.frame) {
+            if self.crashed {
+                return Err(CRASHED.into());
+            }
+            let (file, frame) = (&mut self.file, &mut self.frame);
+            let Ok(read) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| file.next_frame(frame))) else {
+                self.crashed = true;
+                return Err(CRASHED.into());
+            };
+            match read {
                 Ok(true) if self.frame.track == self.track => {
                     let at = self.frame.timestamp as f64 * self.tick;
                     // Simple blocks say whether they are keyframes; other
@@ -147,6 +165,7 @@ impl Demuxer {
     /// Back to the first frame.
     pub fn restart(&mut self) -> Result<(), String> {
         self.file = open(&self.bytes)?;
+        self.crashed = false;
         Ok(())
     }
 
@@ -207,6 +226,18 @@ fn leb128(bytes: &[u8]) -> Option<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What the fuzz target `webm_audio` found: a block group whose size
+    /// overflows the Matroska reader's position arithmetic (a panic inside
+    /// it in builds with overflow checks, as tests are).
+    #[test]
+    fn a_webm_file_that_crashes_the_matroska_reader_is_an_error_not_a_panic() {
+        let bytes: Arc<[u8]> = include_bytes!("../../tests/fixtures/video/huge-block-group.webm")
+            .as_slice()
+            .into();
+        let error = Demuxer::new(bytes).err().expect("refused");
+        assert!(error.contains("damaged"), "{error}");
+    }
 
     #[test]
     fn sequence_headers_are_picked_out_of_a_temporal_unit() {

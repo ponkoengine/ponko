@@ -30,7 +30,8 @@ in this table; `python3 scripts/check-fuzz-list.py` fails when one is missing.
 | `aseprite` | An Aseprite file (`aseprite-source`) and a cooked Aseprite sheet, every frame, layer and animation |
 | `levels` | An LDtk project and a Tiled map (JSON and XML), loaded, merged into solid rectangles and spawned |
 | `cooked_texture` | A texture as `ponko cook` ships it (KTX2, DDS) or any image file, decoded for GPUs with and without block formats, and streamed |
-| `sound` | A sound file in any compiled format (WAV, AIFF, ADPCM, OGG Vorbis, FLAC, MP3): decoded whole, decoded in slices, streamed from memory and played as a stream, which must refuse absurd headers and stop at the length limit |
+| `sound` | A sound file in any compiled format (WAV, AIFF, ADPCM, OGG Vorbis, FLAC, MP3): decoded whole, decoded in slices, streamed from memory, run through the desktop's streaming decoder (decoding and seeking, as Kira's decoder thread does) and played as the web streams it, which must refuse absurd headers and stop at the length limit |
+| `webm_audio` | The sound of a WebM file (feature `video`): the tracks a video reads first, then its soundtrack's header and a little of it played, with seeks and a loop, as a video plays it |
 
 The network targets reach the packet parsers behind a connected session
 through `ponko::__fuzz`, which only exists in builds with `--cfg fuzzing`
@@ -46,8 +47,32 @@ folder the game runs in.
 
 The `sound` target reaches the sound decoders through `ponko::__fuzz` too
 (a whole decode, the slice-by-slice decode asset groups use, a stream opened
-from memory and a stream played a little). On Linux its build needs the
-audio output library's headers (`libasound2-dev`).
+from memory, the decoder a desktop stream plays through and the web's
+packet-at-a-time stream). None of them opens an audio device: the desktop's
+streaming decoder is the engine's own (`src/audio/stream_decoder.rs`),
+which Kira's decoder thread runs, so the target calls it directly. The
+`webm_audio` target does the same for a video's soundtrack, which the
+`video` feature reads from the WebM file with the Matroska reader; it runs
+the soundtrack even when the file's picture track would be refused, so the
+fuzzer reaches the audio without building a valid AV1 track first. Its
+seeds in `fuzz/seeds/webm_audio/` are the video fixtures cut down to their
+headers and the sound of their first cluster; `seed-corpus.sh` adds the
+whole fixtures too.
+
+The first two-minute run of `webm_audio` found a hang in the engine: a
+looping soundtrack whose packets decode to no frames went back to its start
+forever. It is fixed in `src/audio/chunked.rs`, and the input is the
+regression test's `tests/fixtures/video/no-frames-soundtrack.webm`. The
+second run found a panic in the Matroska reader (`matroska-demuxer`: a
+block group's size overflows its position arithmetic), which the engine now
+turns into an error at its boundary (`src/video/demux.rs`; input
+`tests/fixtures/video/huge-block-group.webm`).
+
+Both targets catch the decoders' panics the way the engine does (a panic
+inside a sound decoder is an error) and print the first few: the run goes
+on. On Linux the fuzz crate's build needs the audio output library's headers
+(`libasound2-dev`) and, for the AV1 decoder's x86 assembly that `video`
+brings, `nasm`.
 
 FBX models are not fuzzed here: the importer hands them to ufbx, a C library
 fuzzed upstream, which `cargo fuzz` can't instrument.
