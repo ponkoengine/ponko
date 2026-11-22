@@ -1427,13 +1427,7 @@ type BandEdges<'a> = dyn Fn(&mut dyn FnMut(f32) -> bool) -> bool + 'a;
 /// true when every call was). Each instance's distance is the one the
 /// culler tests (`DistanceQuad`, the compute pass's `distance`), with a
 /// margin for rounding. False when the batch keeps no distances.
-fn instances_hold(
-    batch: &StaticBatch,
-    cell: &Cell,
-    a: Vec3,
-    b: Vec3,
-    edges: &BandEdges<'_>,
-) -> bool {
+fn instances_hold(batch: &StaticBatch, cell: &Cell, a: Vec3, b: Vec3, edges: &BandEdges<'_>) -> bool {
     if batch.distances.is_empty() || cell.count == 0 {
         return false;
     }
