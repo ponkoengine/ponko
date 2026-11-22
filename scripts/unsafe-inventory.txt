@@ -112,6 +112,7 @@ src/gamepad_sdl_sys.rs | Sdl::now_ms | src/gamepad_sdl_sys.rs::tests::a_virtual_
 # UCKeyTranslate; Windows: user32's MapVirtualKeyExW).
 src/input/key_labels.rs | extern block in mod system | src/input/key_labels.rs::tests::the_systems_layout_gives_every_letter_key_a_label | c-library
 src/input/key_labels.rs | layout | src/input/key_labels.rs::tests::the_systems_layout_gives_every_letter_key_a_label | c-library
+src/input/key_labels/watch.rs | Watch::open | src/input/key_labels/watch.rs::a_wayland_compositor_hands_its_keymap_to_a_keyboard_of_our_own | window
 
 # C libraries: dav1d (AV1 video), meshoptimizer (compressed glTF).
 src/video/av1.rs | Av1::new | tests/video.rs::a_loaded_video_is_paused_on_its_first_frame | c-library

@@ -5964,6 +5964,9 @@ using glyph = PonkoGlyph;
 inline std::string glyph_label(glyph g) {
     return detail::read_text([&](char* b, std::size_t c, std::size_t* n) { return ponko_glyph_label(g, b, c, n); });
 }
+/// One key of a keyboard layout, for ctx::set_key_labels: `key` (a PonkoKey) and the Unicode
+/// `character` it types without a modifier (`{PONKO_KEY_W, 'z'}` on a French keyboard).
+using layout_key = PonkoKeyLabel;
 /// The glyphs of one action's binding (ctx::action_glyphs): at most four, no allocation.
 struct glyphs {
     std::array<glyph, 4> items{};
@@ -7647,6 +7650,28 @@ public:
     void set_cursor_locked(bool locked) { detail::check(ponko_ctx_set_cursor_locked(raw_, locked)); }
     /// Whether the game asked for the cursor to be locked.
     bool cursor_locked() const { bool b = false; detail::check(ponko_ctx_cursor_locked(raw_, &b)); return b; }
+
+    // Key labels on the player's keyboard layout (Rust `input.key_labels()`): what is printed on the
+    // key the player presses, for prompts. They follow the system's layout while the window is open.
+    /// What key `k` is labelled on the player's keyboard: "Z" for PONKO_KEY_W on a French one,
+    /// "Space" for keys whose name doesn't depend on the layout.
+    std::string key_label(key k) const {
+        return detail::read_text([&](char* b, std::size_t c, std::size_t* l) { return ponko_ctx_key_label(raw_, k, b, c, l); });
+    }
+    /// A glyph's label on the player's layout (ponko::glyph_label gives the US one).
+    std::string layout_glyph_label(glyph g) const {
+        return detail::read_text([&](char* b, std::size_t c, std::size_t* l) { return ponko_ctx_glyph_label(raw_, g, b, c, l); });
+    }
+    /// Whether the key labels changed this frame (a layout switch, a key's label learned from a
+    /// press, or set_key_labels): redraw text prompts.
+    bool key_labels_changed() const { bool b = false; detail::check(ponko_ctx_key_labels_changed(raw_, &b)); return b; }
+    /// Replaces the key labels with a US keyboard relabelled by `labels`: a "keyboard layout"
+    /// option, or a test. Keys pressed later still correct them.
+    void set_key_labels(const layout_key* labels, std::size_t count) {
+        detail::check(ponko_ctx_set_key_labels(raw_, labels, count));
+    }
+    /// set_key_labels from a list: `ctx.set_key_labels({{PONKO_KEY_W, 'z'}, {PONKO_KEY_A, 'q'}})`.
+    void set_key_labels(std::initializer_list<layout_key> labels) { set_key_labels(labels.begin(), labels.size()); }
 
     // IME composition (Rust `input.feed_ime`, `preedit`, `set_ime_allowed`, ...). The retained UI's text
     // inputs do all of this themselves; these are for a game's own text widgets, custom hosts and tests.

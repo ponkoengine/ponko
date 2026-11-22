@@ -566,3 +566,32 @@ node web/smoke/first-load.mjs --dir target/web-loose/ember-hop-0.1.0-web \
 
 The page must publish `<html data-smoke>` (the reference games and the
 fixtures do). The guide's packaging chapter has the numbers for Ember Hop.
+
+## Key labels
+
+`key-labels.mjs` checks that prompts in a browser show what is printed on
+the player's keys (the guide's [Key labels follow the keyboard
+layout](../../book/src/controllers.md#key-labels-follow-the-keyboard-layout)).
+The 2D fixture reports WASD as labelled for the player (`key_labels` in its
+state, `"W/A/S/D"` on a US keyboard). The runner gives the page a French
+(AZERTY) keyboard three ways, before the game starts:
+
+- `layout-map`: `navigator.keyboard.getLayoutMap()` answers with a French
+  map: the game shows `"Z/Q/S/D"` without a key pressed.
+- `no-layout-map`: the page has no `navigator.keyboard`, as in Firefox,
+  Safari and any page outside a secure context: `"W/A/S/D"`. In Chromium
+  the runner then presses the key at W's place typing `z` (through the
+  DevTools protocol, which can send a key whose character differs from its
+  place), and the label is learned from it: `"Z/A/S/D"`.
+- `refused`: `getLayoutMap()` rejects (a frame that may not ask): US labels,
+  and the game keeps running.
+
+```sh
+web/build.sh web_smoke
+node web/smoke/key-labels.mjs                          # all three, Chromium
+node web/smoke/key-labels.mjs --browser webkit         # no press step there
+node web/smoke/key-labels.mjs --case layout-map
+```
+
+Run on an Apple Silicon Mac: Chromium (headless shell) and WebKit pass all
+three; Playwright's Firefox does not start on that machine (see above).

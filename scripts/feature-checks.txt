@@ -14,3 +14,4 @@ ponko_bench/video test As ponko_bench/render: the driver needs a clip, clippy bu
 
 # Browser runners (web/smoke, web/gallery) that CI does not run, `runner <path> <reason>`.
 runner web/smoke/first-load.mjs A measurement tool for the first-load cost of a build (requests, bytes, time on an emulated network), not a pass or fail check
+runner web/smoke/key-labels.mjs Not in ci.yml yet (issue agents may not edit CI): run by hand after web/build.sh web_smoke; a ci.yml step next to runtime-failures.mjs should replace this line
