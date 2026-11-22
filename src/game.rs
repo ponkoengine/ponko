@@ -2799,7 +2799,6 @@ impl Game {
     ///     # ctx.assets.set_image_limits(ImageLimits::default());
     /// });
     /// ```
-    #[must_use]
     pub fn image_limits(mut self, limits: crate::assets::ImageLimits) -> Self {
         self.image_limits = Some(limits);
         self

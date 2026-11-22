@@ -1254,7 +1254,7 @@ impl ImageLimits {
 
     /// The limits as the messages say them: `4096 pixels a side, 64 MiB of pixels`.
     fn describe(self) -> String {
-        if self.max_bytes % (1 << 20) == 0 {
+        if self.max_bytes.is_multiple_of(1 << 20) {
             format!(
                 "{} pixels a side, {} MiB of pixels",
                 self.max_side,
