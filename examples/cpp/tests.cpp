@@ -5587,6 +5587,7 @@ static void rollback_two_peers() {
     // Offline: the world at the start of every tick.
     std::vector<State> offline;
     ponko::game("rollback offline", 1, 1)
+        .headless_frames(true)
         .sim_system([](ponko::ctx& ctx) { race(ctx, false); }, "race")
         .system([&](ponko::ctx& ctx) { offline.resize(ctx.sim_tick() + 1); offline[ctx.sim_tick()] = state(ctx.world()); }, "record")
         .run_headless(frames + 1, setup);
