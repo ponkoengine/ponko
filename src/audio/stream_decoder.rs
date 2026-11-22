@@ -137,7 +137,7 @@ fn frames(buffer: &GenericAudioBufferRef) -> Result<Vec<Frame>, String> {
     buffer.copy_to_vec_interleaved(&mut samples);
     match planes {
         1 => Ok(samples.into_iter().map(Frame::from_mono).collect()),
-        2 => Ok(samples.chunks_exact(2).map(|lr| Frame::new(lr[0], lr[1])).collect()),
+        2 => Ok(samples.as_chunks::<2>().0.iter().map(|&[l, r]| Frame::new(l, r)).collect()),
         n => Err(format!(
             "a packet has {n} channels and only 1 or {} are supported",
             super::sound_file::MAX_CHANNELS
