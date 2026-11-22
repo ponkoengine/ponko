@@ -2568,8 +2568,12 @@ impl Renderer3D {
         if kind == Kind::Transparent {
             for (b, batch) in self.static_batches.iter().enumerate() {
                 // The main view draws a see-through batch far to near.
-                if view == 0 && batch.as_ref().is_some_and(|b| b.sorted_see_through()) {
-                    let order = batch.as_ref().and_then(|b| b.blend.as_ref()).expect("checked above");
+                if view == 0
+                    && let Some(order) = batch
+                        .as_ref()
+                        .filter(|b| b.sorted_see_through())
+                        .and_then(|b| b.blend.as_ref())
+                {
                     if sorted {
                         for &(level, start, count) in &order.runs {
                             let sorted = Some((start, count));

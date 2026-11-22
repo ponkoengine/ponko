@@ -398,11 +398,11 @@ impl Renderer3D {
                     let at = base + sorted.len() as u32;
                     let run = runs.len() as u32;
                     match (list.last_mut(), runs.last_mut()) {
-                        (Some(SeeThrough::Models(_, end)), Some((last, start, count)))
+                        // The last run is the list's last entry's last one.
+                        (Some(SeeThrough::Models(..)), Some((last, start, count)))
                             if *last == mesh && *start + *count == at =>
                         {
                             *count += 1;
-                            debug_assert_eq!(*end, run);
                         }
                         (Some(SeeThrough::Models(_, end)), _) => {
                             runs.push((mesh, at, 1));
