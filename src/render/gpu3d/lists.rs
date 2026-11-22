@@ -45,6 +45,9 @@ pub(super) struct FrameLists {
     /// (see `Renderer3D::sort_blended`), and its scratch space.
     pub(super) see_through: Vec<super::draw_order::SeeThrough>,
     pub(super) blend_items: Vec<super::draw_order::ModelItem>,
+    /// Where each entry of `blend_merged` covers the screen and how it
+    /// may move (see `draw_order::group`).
+    pub(super) blend_entries: Vec<super::draw_order::ModelItem>,
     pub(super) blend_merged: Vec<super::draw_order::Merged>,
     pub(super) blend_grouped: Vec<super::draw_order::Merged>,
     pub(super) blend_used: Vec<bool>,
@@ -103,6 +106,7 @@ impl Default for FrameLists {
             blend_keys: Vec::new(),
             see_through: Vec::new(),
             blend_items: Vec::new(),
+            blend_entries: Vec::new(),
             blend_merged: Vec::new(),
             blend_grouped: Vec::new(),
             blend_used: Vec::new(),
