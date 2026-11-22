@@ -119,7 +119,7 @@ use crate::reflect::ReflectError;
 #[cfg(feature = "mods-wasm")]
 mod code;
 #[cfg(feature = "mods-wasm")]
-pub use code::{CodeLimits, ModCode, ModFn, ModValue, with_code};
+pub use code::{CodeLimits, ModCode, ModFn, ModValue, REFUSED_ENTITY, REFUSED_FIELD, REFUSED_VALUE, with_code};
 
 /// What checking a mod's code needs: the engine it compiles with.
 #[cfg(feature = "mods-wasm")]
