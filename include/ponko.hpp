@@ -12280,9 +12280,15 @@ template<class... Ts, class F> void each(ctx& c, F&& fn) {
 
 namespace ponko::detail {
 // PONKO_COUNT_CPP_ALLOCATIONS's operator new and delete: each block keeps its size in front of it (one
-// max_align_t, so what new returns stays aligned), so delete can report the free too and
-// net_alloc_bytes sees what the program gives back.
-inline constexpr std::size_t counted_header = alignof(std::max_align_t);
+// alignment of operator new, so what new returns stays aligned), so delete can report the free too
+// and net_alloc_bytes sees what the program gives back. That alignment is the larger of max_align_t's
+// and __STDCPP_DEFAULT_NEW_ALIGNMENT__: on Apple silicon max_align_t is 8 bytes while new promises 16.
+inline constexpr std::size_t counted_header =
+#ifdef __STDCPP_DEFAULT_NEW_ALIGNMENT__
+    alignof(std::max_align_t) > __STDCPP_DEFAULT_NEW_ALIGNMENT__ ? alignof(std::max_align_t) : __STDCPP_DEFAULT_NEW_ALIGNMENT__;
+#else
+    alignof(std::max_align_t);
+#endif
 inline void* counted_new(std::size_t n) {
     if (n > std::numeric_limits<std::size_t>::max() - counted_header) throw std::bad_alloc();
     void* block = std::malloc(n + counted_header);
