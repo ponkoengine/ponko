@@ -990,12 +990,9 @@ struct RollbackRunner<'a> {
     present: u64,
 }
 
-impl crate::net::Runner for RollbackRunner<'_> {
-    fn tick(&self) -> u64 {
-        self.ctx.time.sim_tick()
-    }
-
-    fn save(&mut self, into: &mut crate::net::GameState) {
+impl RollbackRunner<'_> {
+    /// Saves everything but the physics.
+    fn save_world(&mut self, into: &mut crate::net::GameState) {
         let ctx = &mut *self.ctx;
         into.tick = ctx.time.sim_tick();
         if let Err(e) = ctx.world.save_snapshot(&mut into.world) {
@@ -1009,13 +1006,10 @@ impl crate::net::Runner for RollbackRunner<'_> {
                 .map(|s| (s.changes_seen.world == world).then(|| now - s.changes_seen.tick.to_bits())),
         );
         ctx.events.save_state(&mut into.events);
-        #[cfg(feature = "physics")]
-        ctx.physics.save_state(&mut into.physics);
-        #[cfg(feature = "physics3d")]
-        ctx.physics3d.save_state(&mut into.physics3d);
     }
 
-    fn load(&mut self, from: &crate::net::GameState) {
+    /// Loads everything but the physics.
+    fn load_world(&mut self, from: &crate::net::GameState) {
         let ctx = &mut *self.ctx;
         if let Err(e) = ctx.world.restore_snapshot(&from.world) {
             panic!("rollback: {e}; keep the same `ctx.world` while a rollback session runs");
@@ -1035,13 +1029,48 @@ impl crate::net::Runner for RollbackRunner<'_> {
         let systems = &*self.systems;
         ctx.events
             .restore_state(&from.events, |reader| systems.iter().any(|s| s.id == reader));
-        #[cfg(feature = "physics")]
-        ctx.physics.restore_state(&from.physics);
-        #[cfg(feature = "physics3d")]
-        ctx.physics3d.restore_state(&from.physics3d);
         ctx.time.set_sim_tick(from.tick);
         ctx.events.set_tick(from.tick);
         ctx.gfx.sim_tick = from.tick;
+    }
+}
+
+impl crate::net::Runner for RollbackRunner<'_> {
+    fn tick(&self) -> u64 {
+        self.ctx.time.sim_tick()
+    }
+
+    fn save(&mut self, into: &mut crate::net::GameState) {
+        {
+            // The world, the events and the systems' change positions; the
+            // physics have their own scope, so profiling shows the cost and
+            // the allocations of each apart.
+            crate::profile_scope!("rollback/save");
+            self.save_world(into);
+        }
+        #[cfg(any(feature = "physics", feature = "physics3d"))]
+        {
+            crate::profile_scope!("rollback/save physics");
+            #[cfg(feature = "physics")]
+            self.ctx.physics.save_state(&mut into.physics);
+            #[cfg(feature = "physics3d")]
+            self.ctx.physics3d.save_state(&mut into.physics3d);
+        }
+    }
+
+    fn load(&mut self, from: &crate::net::GameState) {
+        {
+            crate::profile_scope!("rollback/load");
+            self.load_world(from);
+        }
+        #[cfg(any(feature = "physics", feature = "physics3d"))]
+        {
+            crate::profile_scope!("rollback/load physics");
+            #[cfg(feature = "physics")]
+            self.ctx.physics.restore_state(&from.physics);
+            #[cfg(feature = "physics3d")]
+            self.ctx.physics3d.restore_state(&from.physics3d);
+        }
     }
 
     fn hash(&self) -> u64 {
