@@ -50,7 +50,15 @@ const MAX_PARAMS: usize = 16;
 /// The longest field path or prefab path a host function takes, in bytes.
 const MAX_PATH_BYTES: usize = 256;
 /// The host functions a module may import from `"ponko"`.
-const HOST_FUNCTIONS: [&str; 7] = ["log", "dt", "cast_ray", "get_field", "set_field", "spawn_prefab", "random"];
+const HOST_FUNCTIONS: [&str; 7] = [
+    "log",
+    "dt",
+    "cast_ray",
+    "get_field",
+    "set_field",
+    "spawn_prefab",
+    "random",
+];
 
 /// `set_field` and `spawn_prefab`'s answer when the entity isn't one the game
 /// [exposed](ModCode::expose), or is dead (for `spawn_prefab`: the prefab
@@ -226,9 +234,9 @@ impl Host {
 /// A seed mixed with a mod's id: each mod has its own sequence.
 fn rng_for(seed: u64, id: &str) -> Rng {
     // FNV-1a: stable on every machine and in every build.
-    let hash = id
-        .bytes()
-        .fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3));
+    let hash = id.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+    });
     Rng::new(seed ^ hash)
 }
 
@@ -331,7 +339,9 @@ fn set_field(
                 Json::from(value as u64)
             }
         }
-        Json::Number(_) => serde_json::Number::from_f64(value).map(Json::Number).ok_or(FieldRefusal::Value)?,
+        Json::Number(_) => serde_json::Number::from_f64(value)
+            .map(Json::Number)
+            .ok_or(FieldRefusal::Value)?,
         _ => return Err(FieldRefusal::Value),
     };
     let top = rest[0];
@@ -402,7 +412,9 @@ fn linker(engine: &Engine) -> Linker<Host> {
     };
     let get = |mut caller: Caller<'_, Host>, entity: i64, ptr: i32, len: i32| -> f64 {
         let Some(path) = read_text(&caller, ptr, len) else {
-            caller.data_mut().refuse("get_field: the path isn't UTF-8 text of at most 256 bytes".into());
+            caller
+                .data_mut()
+                .refuse("get_field: the path isn't UTF-8 text of at most 256 bytes".into());
             return f64::NAN;
         };
         let host = caller.data_mut();
@@ -417,7 +429,9 @@ fn linker(engine: &Engine) -> Linker<Host> {
     };
     let set = |mut caller: Caller<'_, Host>, entity: i64, ptr: i32, len: i32, value: f64| -> i32 {
         let Some(path) = read_text(&caller, ptr, len) else {
-            caller.data_mut().refuse("set_field: the path isn't UTF-8 text of at most 256 bytes".into());
+            caller
+                .data_mut()
+                .refuse("set_field: the path isn't UTF-8 text of at most 256 bytes".into());
             return REFUSED_VALUE;
         };
         let host = caller.data_mut();
@@ -432,13 +446,18 @@ fn linker(engine: &Engine) -> Linker<Host> {
     };
     let spawn = |mut caller: Caller<'_, Host>, ptr: i32, len: i32, x: f32, y: f32| -> i64 {
         let Some(path) = read_text(&caller, ptr, len) else {
-            caller.data_mut().refuse("spawn_prefab: the path isn't UTF-8 text of at most 256 bytes".into());
+            caller
+                .data_mut()
+                .refuse("spawn_prefab: the path isn't UTF-8 text of at most 256 bytes".into());
             return REFUSED_VALUE.into();
         };
         let host = caller.data_mut();
         let spawned = host.with_ctx(|ctx, exposed, prefabs| {
             if !prefabs.contains(&path) {
-                return Err((REFUSED_ENTITY, format!("spawn_prefab: \"{path}\" isn't a prefab the game exposed")));
+                return Err((
+                    REFUSED_ENTITY,
+                    format!("spawn_prefab: \"{path}\" isn't a prefab the game exposed"),
+                ));
             }
             let root = ctx
                 .spawn_prefab(&path, vec2(x, y))
@@ -478,7 +497,9 @@ fn field_refusal(call: &str, bits: i64, path: &str, why: &FieldRefusal) -> Strin
     match why {
         FieldRefusal::Entity => format!("{call}: entity {e:?} isn't one the game exposed, or is gone"),
         FieldRefusal::Field => format!("{call}: entity {e:?} has no reflected field \"{path}\""),
-        FieldRefusal::Value => format!("{call}: \"{path}\" of entity {e:?} isn't a number field, or the value doesn't fit it"),
+        FieldRefusal::Value => {
+            format!("{call}: \"{path}\" of entity {e:?} isn't a number field, or the value doesn't fit it")
+        }
     }
 }
 
@@ -686,4 +707,44 @@ pub fn with_code<R>(ctx: &mut Ctx, f: impl FnOnce(&mut ModCode) -> R) -> Option<
     code.store.data_mut().ctx = CtxPtr(None);
     ctx.world.insert_resource(code);
     Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The host functions reach the game only through `with_code`'s pointer:
+    /// a mod writes an exposed entity's field, and the code is back in the
+    /// world, its pointer cleared, after the call. (Miri runs this.)
+    #[test]
+    fn host_functions_reach_the_game_only_during_with_code() {
+        let wasm = wat::parse_str(
+            r#"(module
+                (import "ponko" "set_field" (func $set (param i64 i32 i32 f64) (result i32)))
+                (memory (export "memory") 1)
+                (data (i32.const 0) "Transform2D.rotation")
+                (func (export "turn") (param i64) (result i32)
+                    local.get 0 i32.const 0 i32.const 20 f64.const 0.5 call $set))"#,
+        )
+        .expect("valid WebAssembly text");
+        let engine = engine();
+        let module = compile(&engine, &wasm).expect("compiles");
+        let code = ModCode::start(&engine, vec![("turner".into(), module)], CodeLimits::default()).expect("starts");
+        let mut ctx = Ctx::new(1.0 / 60.0, glam::Vec2::new(8.0, 8.0));
+        ctx.world.reflect::<crate::d2::Transform>();
+        ctx.world.insert_resource(code);
+        let e = ctx.world.spawn((crate::d2::Transform::default(),));
+        let answer = with_code(&mut ctx, |code| {
+            code.expose(e);
+            let turn = code.function("turner", "turn").expect("exported");
+            code.call(turn, &[ModValue::I64(e.to_bits() as i64)])
+        });
+        assert_eq!(answer, Some(Ok(Some(ModValue::I32(0)))));
+        assert_eq!(ctx.world.get::<crate::d2::Transform>(e).map(|t| t.rotation), Some(0.5));
+        let code = ctx.world.get_resource::<ModCode>().expect("back in the world");
+        assert!(code.store.data().ctx.0.is_none(), "no pointer kept after the call");
+        // ModCode is a resource: Send and Sync.
+        fn shared<T: Send + Sync>(_: &T) {}
+        shared(code);
+    }
 }

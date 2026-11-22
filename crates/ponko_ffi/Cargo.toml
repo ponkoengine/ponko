@@ -81,6 +81,12 @@ webrtc = ["ponko/webrtc"]
 # PONKO_UNSUPPORTED.
 video = ["ponko/video"]
 
+# Code mods: a mod's WebAssembly module, run by an interpreter in a sandbox
+# (ponko_ctx_mod_function, ponko_ctx_mod_call and the host functions' expose
+# calls). Off by default: it adds the interpreter (about 2 MB). Off: those
+# calls report PONKO_UNSUPPORTED and a mod with code is refused at mount.
+mods-wasm = ["ponko/mods-wasm"]
+
 # The WebRTC test needs the feature (C calls against a lobby server).
 [[test]]
 name = "rtc"

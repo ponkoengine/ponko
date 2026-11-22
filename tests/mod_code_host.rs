@@ -195,7 +195,10 @@ fn a_mod_cannot_reach_an_entity_the_game_did_not_expose() {
             assert_eq!(set(code, shown, CURRENT, 0.0), REFUSED_ENTITY);
             let lines = refusals(code);
             assert_eq!(lines.len(), 4, "{lines:?}");
-            assert!(lines[0].contains("get_field") && lines[0].contains("isn't one the game exposed"), "{lines:?}");
+            assert!(
+                lines[0].contains("get_field") && lines[0].contains("isn't one the game exposed"),
+                "{lines:?}"
+            );
         })
         .expect("a mod has code");
         ctx.world.despawn(gone);
@@ -219,7 +222,11 @@ fn fields_that_are_missing_or_not_numbers_are_refused_and_nothing_changes() {
             assert_eq!(set(code, e, POSITION_Y, 1.0), REFUSED_FIELD, "no Transform2D");
             assert!(get(code, e, UNKNOWN_FIELD).is_nan());
             assert_eq!(set(code, e, MAX, 2.5), REFUSED_VALUE, "a fraction for an integer");
-            assert_eq!(set(code, e, MAX, -1.0), REFUSED_VALUE, "out of an unsigned field's range");
+            assert_eq!(
+                set(code, e, MAX, -1.0),
+                REFUSED_VALUE,
+                "out of an unsigned field's range"
+            );
             assert_eq!(set(code, e, CURRENT, f64::NAN), REFUSED_VALUE);
             assert_eq!(set(code, e, NOT_UTF8, 1.0), REFUSED_VALUE, "text that isn't UTF-8");
             let lines = refusals(code);
@@ -238,8 +245,16 @@ fn a_mod_spawns_only_the_prefabs_the_game_exposed_and_can_change_what_it_spawned
             assert_eq!(spawn(code, DRIP, vec2(5.0, 6.0)), i64::from(REFUSED_ENTITY));
             code.expose_prefab("prefabs/drip.json");
             code.expose_prefab("prefabs/none.json");
-            assert_eq!(spawn(code, BOSS, vec2(0.0, 0.0)), i64::from(REFUSED_ENTITY), "boss isn't exposed");
-            assert_eq!(spawn(code, MISSING, vec2(0.0, 0.0)), i64::from(REFUSED_FIELD), "exposed, but no file");
+            assert_eq!(
+                spawn(code, BOSS, vec2(0.0, 0.0)),
+                i64::from(REFUSED_ENTITY),
+                "boss isn't exposed"
+            );
+            assert_eq!(
+                spawn(code, MISSING, vec2(0.0, 0.0)),
+                i64::from(REFUSED_FIELD),
+                "exposed, but no file"
+            );
             let root = spawn(code, DRIP, vec2(5.0, 6.0));
             assert!(root >= 0);
             let root = Entity::from_bits(root as u64);

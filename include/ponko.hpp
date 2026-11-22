@@ -84,6 +84,14 @@ namespace ponko {
 /// An entity id (Rust `Entity::to_bits`): generation in the high 32 bits, index in the low 32. Ids of
 /// despawned entities stay dead; never make one up.
 using entity = std::uint64_t;
+/// A number for a code mod's function (ctx::call_mod).
+inline PonkoModValue mod_i32(std::int32_t v) { return PonkoModValue{PONKO_MOD_I32, v, 0.0}; }
+/// An i64 for a code mod's function: an entity, for example.
+inline PonkoModValue mod_i64(std::int64_t v) { return PonkoModValue{PONKO_MOD_I64, v, 0.0}; }
+/// An f32 for a code mod's function.
+inline PonkoModValue mod_f32(float v) { return PonkoModValue{PONKO_MOD_F32, 0, v}; }
+/// An f64 for a code mod's function.
+inline PonkoModValue mod_f64(double v) { return PonkoModValue{PONKO_MOD_F64, 0, v}; }
 /// A 2D vector (Rust `Vec2`); in 2D worlds +Y points down the screen.
 using vec2 = PonkoVec2;
 /// An RGBA color, each channel 0..1 (Rust `Color`); see rgb, rgba and `colors`.
@@ -8020,6 +8028,32 @@ public:
     /// A hash of the mounted mods, their order and data (0 without mods):
     /// lockstep peers and replays compare it.
     std::uint64_t mods_fingerprint() { std::uint64_t f = 0; detail::check(ponko_ctx_mods_fingerprint(raw_, &f)); return f; }
+    /// A function a code mod exports (needs the library built with `mods-wasm`): look it up once,
+    /// call it with call_mod. Throws ponko::error: not found when no mod has code or no such function,
+    /// unsupported when code mods aren't compiled in.
+    PonkoModFn mod_function(const char* mod_id, const char* name) {
+        PonkoModFn f{};
+        detail::check(ponko_ctx_mod_function(raw_, mod_id, name, &f));
+        return f;
+    }
+    /// Calls a mod function with numbers (mod_i32, mod_i64, mod_f32, mod_f64), with one call's fuel; its result,
+    /// or nothing for a function without one. A call that runs out of fuel or memory or traps throws
+    /// ponko::error naming the mod; the mod stays callable.
+    std::optional<PonkoModValue> call_mod(PonkoModFn f, std::initializer_list<PonkoModValue> args = {}) {
+        PonkoModValue result{};
+        bool has = false;
+        detail::check(ponko_ctx_mod_call(raw_, f, args.begin(), args.size(), &result, &has));
+        if (!has) return std::nullopt;
+        return result;
+    }
+    /// Lets the mods' get_field and set_field reach `e`'s reflected components (hand them `e` as an i64).
+    void mod_expose(entity e) { detail::check(ponko_ctx_mod_expose_entity(raw_, e)); }
+    /// Takes `e` back from the mods; whether it was exposed.
+    bool mod_hide(entity e) { bool was = false; detail::check(ponko_ctx_mod_hide_entity(raw_, e, &was)); return was; }
+    /// Lets the mods spawn the prefab at `path` with spawn_prefab.
+    void mod_expose_prefab(const char* path) { detail::check(ponko_ctx_mod_expose_prefab(raw_, path)); }
+    /// Seeds every mod's random: same seed, same sequence.
+    void mod_seed_random(std::uint64_t seed) { detail::check(ponko_ctx_mod_seed_random(raw_, seed)); }
     /// Adds a source whose reads are `read(name)` (Rust's `AssetSource`):
     /// the bytes, or nothing if this source doesn't have `name` (the next
     /// source is asked). An exception from `read` is a read error. It runs
