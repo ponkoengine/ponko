@@ -398,7 +398,7 @@ fn base64(s: &str) -> Result<Vec<u8>, String> {
 
 /// A layer's or chunk's gids from `data` (numbers, or base64 with the
 /// layer's compression).
-fn gids(layer: &Value, data: &Value, path: &str) -> Result<Vec<u32>, Error> {
+pub(crate) fn gids(layer: &Value, data: &Value, path: &str) -> Result<Vec<u32>, Error> {
     match data {
         Value::Array(list) => Ok(list.iter().map(|v| v.as_u64().unwrap_or(0) as u32).collect()),
         Value::String(s) => {

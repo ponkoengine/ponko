@@ -4779,12 +4779,14 @@ static void versioned_render_descriptors() {
         p.msaa = 3;
         throws_kind([&] { ctx.set_post(p); }, PONKO_ERROR_INVALID);
         CHECK(ctx.post_ex().msaa == 4);
-        // Version 2: thin objects in reflections, off by default, on in the ultra preset.
+        // Version 2: thin objects in reflections, off by default, on in the high and ultra presets.
         CHECK(!ctx.post_ex().ssr_thin_objects);
         ctx.set_graphics_quality(ponko::graphics_quality_preset(ponko::quality_level::ultra));
         CHECK(ctx.post_ex().ssr_thin_objects);
         CHECK(ponko::graphics_quality_level(ctx.graphics_quality()) == ponko::quality_level::ultra);
         ctx.set_graphics_quality(ponko::graphics_quality_preset(ponko::quality_level::high));
+        CHECK(ctx.post_ex().ssr_thin_objects);
+        ctx.set_graphics_quality(ponko::graphics_quality_preset(ponko::quality_level::medium));
         CHECK(!ctx.post_ex().ssr_thin_objects);
 
         auto e = ctx.world().spawn(ponko::transform3d_at({0, 1, 0}));
@@ -5370,6 +5372,9 @@ static void native_parity_round5() {
         float spread = 0;
         for (int i = 0; i < 4; ++i) spread += std::fabs(ctx.water_height(sea, {i * 17.0f, i * -9.0f}, i * 0.7f));
         CHECK(spread > 0.001f);
+        CHECK(ctx.water_drawn_time(sea) == static_cast<float>(ctx.sim_time()));
+        const ponko::entity dry = ctx.world().spawn();
+        throws([&] { ctx.water_drawn_time(dry); });
         spectrum.tile = 0;
         throws_invalid([&] { ctx.spawn_water(ponko::water_desc::sea(0, {12, 4}, 2).with_spectrum(spectrum)); }, "tile");
     });

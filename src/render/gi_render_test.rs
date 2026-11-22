@@ -1693,22 +1693,39 @@ fn probe_light_in_a_bright_closed_room_settles_within_400_frames() {
 /// outer walls. Probes every 2 units, so at 0 the wall runs through a
 /// plane of probes. Returns the rig and the image after `frames`.
 fn lit_and_dark_rooms(x: f32, wall: bool, frames: usize) -> Option<(Rig, Vec<u8>)> {
+    let whole = [(vec2(-0.5, -3.0), vec2(4.5, 3.0))];
+    split_rooms(x, -0.5, if wall { &whole } else { &[] }, frames).map(|(rig, pixels, _)| (rig, pixels))
+}
+
+/// [`lit_and_dark_rooms`] with the floor's top at `floor` (the outer walls
+/// still reach 4.5) and the wall between the rooms made of `pieces`, each
+/// from (y, z) `lo` to `hi`: one that stops short of the floor, or leaves
+/// a doorway. Also returns the white boxes, from `lo` to `hi`, for the
+/// path tracer.
+#[allow(clippy::type_complexity)]
+fn split_rooms(
+    x: f32,
+    floor: f32,
+    pieces: &[(Vec2, Vec2)],
+    frames: usize,
+) -> Option<(Rig, Vec<u8>, Vec<(Vec3, Vec3)>)> {
     let mut rig = Rig::new(true)?;
     let white = rig.mesh(
         &MeshData::cube(1.0),
         MaterialDesc::color(Color::WHITE).with_roughness(1.0),
     );
     let (lo, hi, t) = (-6.0, 6.0, 0.4);
-    let mut walls = vec![
-        (white, vec3(lo - t, -0.9, -3.0 - t), vec3(hi + t, -0.5, 3.0 + t)), // floor
-        (white, vec3(lo - t, -0.5, -3.0 - t), vec3(lo, 4.5, 3.0 + t)),      // west
-        (white, vec3(hi, -0.5, -3.0 - t), vec3(hi + t, 4.5, 3.0 + t)),      // east
-        (white, vec3(lo, -0.5, -3.0 - t), vec3(hi, 4.5, -3.0)),             // north
-        (white, vec3(lo, -0.5, 3.0), vec3(hi, 4.5, 3.0 + t)),               // south
+    let mut boxes = vec![
+        (vec3(lo - t, floor - 0.4, -3.0 - t), vec3(hi + t, floor, 3.0 + t)), // floor
+        (vec3(lo - t, floor, -3.0 - t), vec3(lo, 4.5, 3.0 + t)),             // west
+        (vec3(hi, floor, -3.0 - t), vec3(hi + t, 4.5, 3.0 + t)),             // east
+        (vec3(lo, floor, -3.0 - t), vec3(hi, 4.5, -3.0)),                    // north
+        (vec3(lo, floor, 3.0), vec3(hi, 4.5, 3.0 + t)),                      // south
     ];
-    if wall {
-        walls.push((white, vec3(x - 0.05, -0.5, -3.0), vec3(x + 0.05, 4.5, 3.0)));
+    for &(a, b) in pieces {
+        boxes.push((vec3(x - 0.05, a.x, a.y), vec3(x + 0.05, b.x, b.y)));
     }
+    let walls: Vec<_> = boxes.iter().map(|&(a, b)| (white, a, b)).collect();
     rig.blocks(&walls, Build::Models);
     rig.ctx.world.spawn((
         Transform3D::at(vec3(x - 3.0, 1.0, 0.0)),
@@ -1733,7 +1750,108 @@ fn lit_and_dark_rooms(x: f32, wall: bool, frames: usize) -> Option<(Rig, Vec<u8>
     rig.ctx.scene3d.camera.look_at(vec3(x, -0.5, 0.0));
     rig.ctx.scene3d.camera.fov_y = 100f32.to_radians();
     let pixels = rig.draw(frames);
-    Some((rig, pixels))
+    Some((rig, pixels, boxes))
+}
+
+/// The white `boxes` and the lamps of `rig`'s world as its camera sees
+/// them, path traced (`samples` rays a pixel) with light bounced until it
+/// has all but run out (256 times): what realtime global illumination
+/// settles on. Linear color, row by row from the top.
+fn path_traced(rig: &mut Rig, boxes: &[(Vec3, Vec3)], samples: u32) -> Vec<Vec3> {
+    use crate::render::{BakeModel, LightBakeScene};
+    let mut scene = LightBakeScene::new(&rig.ctx.scene3d.lighting, &rig.ctx.scene3d.sky);
+    let cube = MeshData::cube(1.0);
+    let white = MaterialDesc::color(Color::WHITE);
+    for &(lo, hi) in boxes {
+        let place = Mat4::from_scale_rotation_translation(hi - lo, Quat::IDENTITY, (lo + hi) * 0.5);
+        scene.add(BakeModel::new(&cube, place).with_material(&white));
+    }
+    scene.add_lights_from(&mut rig.ctx.world);
+    let camera = &rig.ctx.scene3d.camera;
+    crate::three::bake::reference_image(&scene, camera.position, camera.view_proj(), (SIZE, SIZE), samples, 256)
+}
+
+/// sRGB (0..255) to linear.
+fn linear_of(c: u8) -> f32 {
+    let c = f32::from(c) / 255.0;
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// Linear to sRGB (0..255, clamped).
+fn srgb_of(c: f32) -> f32 {
+    let c = c.clamp(0.0, 1.0);
+    255.0
+        * if c <= 0.003_130_8 {
+            c * 12.92
+        } else {
+            1.055 * c.powf(1.0 / 2.4) - 0.055
+        }
+}
+
+/// How bright the floor is at `p` in the drawn `pixels` and in the path
+/// traced `truth`: the mean linear color of the 3 x 3 pixels around it
+/// (the path tracer's noise mostly averages out), as the sum of its red,
+/// green and blue in 8-bit sRGB, as [`floor_east_of`] measures.
+fn drawn_and_traced(rig: &Rig, pixels: &[u8], truth: &[Vec3], p: Vec3) -> (f32, f32) {
+    let c = rig.ctx.scene3d.camera.view_proj() * p.extend(1.0);
+    let ndc = c.truncate() / c.w;
+    let x = ((ndc.x * 0.5 + 0.5) * SIZE as f32) as i32;
+    let y = ((0.5 - ndc.y * 0.5) * SIZE as f32) as i32;
+    let (mut a, mut b) = (Vec3::ZERO, Vec3::ZERO);
+    for dy in -1..=1 {
+        for dx in -1..=1 {
+            let (px, py) = ((x + dx).clamp(0, SIZE as i32 - 1), (y + dy).clamp(0, SIZE as i32 - 1));
+            let i = (py * SIZE as i32 + px) as usize;
+            a += Vec3::new(
+                linear_of(pixels[i * 4]),
+                linear_of(pixels[i * 4 + 1]),
+                linear_of(pixels[i * 4 + 2]),
+            );
+            b += truth[i];
+        }
+    }
+    let sum = |v: Vec3| srgb_of(v.x / 9.0) + srgb_of(v.y / 9.0) + srgb_of(v.z / 9.0);
+    (sum(a), sum(b))
+}
+
+/// The probes on the plane x = `x` whose spot lies within `y` and `z`
+/// (lo, hi), and whether the update found each buried in a wall: from the
+/// probe slots' codes, read back.
+fn probes_on_plane(rig: &Rig, x: f32, y: (f32, f32), z: (f32, f32)) -> Vec<(Vec3, bool)> {
+    use crate::three::gi::GiGrid;
+    let gi = &rig.ctx.scene3d.lighting.gi;
+    let counts = glam::UVec3::from_array(gi.probe_counts());
+    let spacing = gi.spacing;
+    let center = (rig.ctx.scene3d.camera.position / spacing).round().as_ivec3();
+    let grid = GiGrid {
+        counts,
+        spacing,
+        origin: center - (counts.as_ivec3() - 1) / 2,
+    };
+    let codes = rig
+        .renderer
+        .gi_probe_codes(&rig.device, &rig.queue)
+        .expect("global illumination is on");
+    let mut found = Vec::new();
+    for k in 0..grid.total() {
+        let cell = grid.cell(k);
+        let p = grid.position(cell);
+        let inside = |v: f32, (lo, hi): (f32, f32)| v > lo && v < hi;
+        if (p.x - x).abs() < 1e-3 && inside(p.y, y) && inside(p.z, z) {
+            let code = codes[grid.slot(cell)];
+            assert!(
+                (code.abs() - grid.code(cell)).abs() < 0.25,
+                "probe {p} has looked around: slot code {code}"
+            );
+            found.push((p, code < 0.0));
+        }
+    }
+    found.sort_by(|a, b| a.0.to_array().partial_cmp(&b.0.to_array()).unwrap());
+    found
 }
 
 /// How bright the floor is (the sum of red, green and blue) at `points`
@@ -1800,6 +1918,124 @@ fn a_thin_wall_on_a_plane_of_coarse_probes_keeps_the_dark_room_dark() {
          the west room only; 200 frames of probe updates at 16 a frame, camera at (0, 6.5, 0.01) looking straight \
          down, 100 degree field of view; 128x128, 4x multisampling, no tonemapping.",
         &rig.info,
+    );
+}
+
+/// A probe looked at from its neighbours along x: in a wall with one edge
+/// close to it, part of their cones passes the edge, so it hangs on how
+/// much of them stops at the wall. How much the dark room's floor at
+/// `points` east of the wall (8-bit sums, as [`floor_east_of`]) is over
+/// the path traced one, at worst, as a share of the lit room's floor a
+/// unit west of the wall; and the drawn floor at those points.
+fn over_the_truth(rig: &mut Rig, pixels: &[u8], boxes: &[(Vec3, Vec3)], floor: f32) -> (f32, Vec<f32>) {
+    let truth = path_traced(rig, boxes, 64);
+    let (lit, _) = drawn_and_traced(rig, pixels, &truth, vec3(-1.0, floor, 0.0));
+    let mut worst = f32::MIN;
+    let mut drawn = Vec::new();
+    for d in [0.3, 0.6, 1.0, 2.0, 3.0] {
+        for z in [-2.5, -1.5, 0.0, 1.5, 2.5] {
+            let (a, b) = drawn_and_traced(rig, pixels, &truth, vec3(d, floor, z));
+            worst = worst.max((a - b) / lit);
+            drawn.push(a);
+        }
+    }
+    (worst, drawn)
+}
+
+/// A 10 cm wall that stops short of the floor (the gap under it lets the
+/// lamp's light through), or hangs from above, its bottom edge 0.1 below
+/// a row of probes in it: every probe in the wall is found buried, so the
+/// dark room's floor is nowhere brighter than the path tracer's (by more
+/// than 2% of the lit floor; it is darker: what comes through a gap
+/// narrower than the spacing the probes hardly carry). Near a wall's top
+/// the neighbours' cones that tell a probe is buried lean over the edge;
+/// near its bottom they lean away. With no wall, no probe on that plane
+/// is taken for buried.
+#[test]
+fn a_raised_partition_buries_the_probes_just_inside_its_bottom_edge() {
+    let Some((open, _, _)) = split_rooms(0.0, -0.5, &[], 200) else {
+        return;
+    };
+    let unwalled = probes_on_plane(&open, 0.0, (-0.5, 4.5), (-3.0, 3.0));
+    assert!(
+        unwalled.len() == 9 && unwalled.iter().all(|p| !p.1),
+        "negative control: in open air no probe is buried: {unwalled:?}"
+    );
+    // Probes are at y 0, 2 and 4: the floor at -0.9 and the wall from
+    // -0.1 up, or the wall from 1.9 up over a floor at -0.5.
+    for (floor, edge) in [(-0.9, -0.1), (-0.5, 1.9)] {
+        let pieces = [(vec2(edge, -3.0), vec2(4.5, 3.0))];
+        let (mut rig, pixels, boxes) = split_rooms(0.0, floor, &pieces, 200).unwrap();
+        let inside = probes_on_plane(&rig, 0.0, (edge, 4.5), (-3.0, 3.0));
+        let (over, drawn) = over_the_truth(&mut rig, &pixels, &boxes, floor);
+        eprintln!(
+            "wall from {edge} up: probes in it (buried?) {inside:?}; dark floor {drawn:?}, at worst {:.1}% of the lit \
+             floor over the path tracer's",
+            over * 100.0
+        );
+        assert!(
+            !inside.is_empty() && inside.iter().all(|p| p.1),
+            "every probe in the wall is buried: {inside:?}"
+        );
+        assert!(over <= 0.02, "no light through the wall: {:.1}%", over * 100.0);
+    }
+}
+
+/// Probes in open air 0.1 under a wall's bottom edge see the gap they are
+/// in and stay lit: they are not taken for buried, and the floor beside
+/// the gap is as bright as the path tracer's (within a fifth; 8-bit sums).
+/// Before, the cone each neighbour's distance tile kept for that way
+/// leaned up into the wall, and they were: the floor took about half the
+/// light.
+#[test]
+fn probes_in_open_air_just_under_a_walls_bottom_edge_are_not_taken_for_buried() {
+    let pieces = [(vec2(0.1, -3.0), vec2(4.5, 3.0))];
+    let Some((mut rig, pixels, boxes)) = split_rooms(0.0, -0.9, &pieces, 200) else {
+        return;
+    };
+    let under = probes_on_plane(&rig, 0.0, (-0.9, 0.1), (-3.0, 3.0));
+    let truth = path_traced(&mut rig, &boxes, 64);
+    let near: Vec<_> = [0.3, 0.6]
+        .iter()
+        .flat_map(|&d| [-1.5, 0.0, 1.5].map(|z| drawn_and_traced(&rig, &pixels, &truth, vec3(d, -0.9, z))))
+        .collect();
+    eprintln!("probes under the wall (buried?) {under:?}; floor beside the gap, drawn and traced: {near:?}");
+    assert!(
+        !under.is_empty() && under.iter().all(|p| !p.1),
+        "probes in the gap stay lit: {under:?}"
+    );
+    assert!(
+        near.iter().all(|&(a, b)| a >= b * 0.8),
+        "the floor beside the gap is lit: {near:?}"
+    );
+}
+
+/// At a doorway, a probe in the wall 0.1 from the door's frame isn't found
+/// (half of its neighbours' cones pass the frame), but it lights the next
+/// room no more than a probe 0.1 outside the frame, in the doorway, does
+/// (by 2% of the lit floor at most, at any point): what reaches the dark
+/// room past the door is the doorway's own light, which probes 2 units
+/// apart spread a unit or more around the door.
+#[test]
+fn a_probe_in_a_doorways_frame_lights_the_next_room_no_more_than_one_in_the_doorway() {
+    let frame = |end: f32| [(vec2(-0.5, -3.0), vec2(4.5, end))];
+    let Some((inside, inside_pixels, _)) = split_rooms(0.0, -0.5, &frame(2.1), 200) else {
+        return;
+    };
+    let (outside, outside_pixels, _) = split_rooms(0.0, -0.5, &frame(1.9), 200).unwrap();
+    let points = [0.3, 0.6, 1.0, 2.0, 3.0];
+    let lit = floor_east_of(&inside, &inside_pixels, -2.0, &[1.0])[0];
+    let floor = |rig: &Rig, pixels: &[u8]| {
+        [-2.5, -1.5, 0.0, 1.5, 2.5]
+            .iter()
+            .flat_map(|&z| points.map(|d| rig.at(pixels, vec3(d, -0.5, z)).iter().sum::<i32>()))
+            .collect::<Vec<_>>()
+    };
+    let (a, b) = (floor(&inside, &inside_pixels), floor(&outside, &outside_pixels));
+    eprintln!("dark room's floor with the probe in the frame {a:?}, in the doorway {b:?}, lit floor {lit}");
+    assert!(
+        a.iter().zip(&b).all(|(&a, &b)| (a - b) * 50 <= lit),
+        "no more light than through the door: {a:?} vs {b:?}"
     );
 }
 

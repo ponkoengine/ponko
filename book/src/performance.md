@@ -360,7 +360,40 @@ device past that keeps working without GPU times, and the engine prints
 one line saying so (`ponko: GPU frame timer: GPU timing is off for this
 device...`); dropping another device's renderer makes room again
 (`ctx.perf.gpu_untimed()` is then `Some(GpuUntimed::QuerySetBudget)`).
-Other backends have no such limit known, and every device is timed.
+
+A dropped set isn't freed at once: `wgpu` keeps it until its device has
+seen the GPU finish the work that used it (at the next poll or
+submission), and until then it still counts against Metal's 32. So the
+engine counts a timer's set until then too, not until the timer is
+dropped. A renderer dropped and made again while its frames are still on
+the GPU would otherwise hold more sets than the engine counts: an
+offscreen test that drops and makes frame and upload timers 60 times in a
+row, on one device and on three, found up to 4 and 6 sets still alive
+after their timers were dropped, which the count before left out (with
+the engine's 28 taken, that passes the 32 and loses a device). Counted
+until freed, no timer was refused and no device lost
+(`a_quick_drop_and_create_cycle_never_holds_more_sets_than_it_counts` in
+`src/render/query_sets.rs`). When the budget is full, the device asking
+for a set is polled once first, which frees its own dropped sets whose
+work is done; a game never waits for one.
+
+Other backends have no such limit known, and every device is timed. What
+was read (wgpu 30.0.1's source, and each platform's documentation for
+making a query set):
+
+| Backend | What a timestamp query set is there | A limit on how many? |
+|---|---|---|
+| Metal | a counter sample buffer (`MTLCounterSampleBuffer`) | 32 per process, measured; Apple's documentation only says making one fails when the driver has run out of them |
+| Vulkan | a query pool (`vkCreateQueryPool`) | none in wgpu or in Vulkan's documentation, which names only running out of memory |
+| DirectX 12 | a query heap (`CreateQueryHeap`) | none in wgpu (which refuses a heap that would pass a memory budget, when one is set) or in Direct3D's documentation, which names only running out of memory |
+| WebGPU in a browser | the browser's own `createQuerySet`, which wgpu calls as it is | none in the WebGPU API, which limits a set to 4,096 queries, not how many sets there are |
+
+Still needs a machine: a run of the cycle test on Vulkan and DirectX 12
+(no count is known there, so the engine doesn't count them, and a limit
+would show as a lost device), and in browsers on macOS, whose WebGPU runs
+on Metal underneath: a page can't see the browser's own sets, and whether
+Metal's 32 per process reach a page's timers there is not known. Vulkan
+on a Mac through a translation layer to Metal likewise isn't counted.
 
 ### No GPU time
 

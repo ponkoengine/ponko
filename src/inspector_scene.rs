@@ -1052,6 +1052,11 @@ impl Panels {
         if scroll != 0.0 && !over_ui {
             fly(camera, Vec2::ZERO, glam::Vec3::new(0.0, 0.0, scroll * 0.02));
         }
+        // A brush of an authoring window (terrain) paints instead.
+        #[cfg(feature = "editor")]
+        if !self.scene.flying && self.author_viewport(ui, ctx, pos) {
+            return;
+        }
         let camera = ctx.scene3d.camera;
         let ray = Ray::from_screen(&camera, pos);
 

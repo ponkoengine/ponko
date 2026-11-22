@@ -56,15 +56,30 @@ pub(super) fn offscreen(size: (u32, u32), tier: Option<GpuTier>, timestamps: boo
     Some(ctx)
 }
 
-/// One frame as a game runs it: the clock moves on a 60th of a second,
-/// the water kit's update runs, the frame is drawn.
+/// One frame as a headless game runs it: the clock moves on a 60th of a
+/// second, one fixed step, the water kit's update runs, the frame is drawn.
 pub(super) fn frame(ctx: &mut Ctx) {
     ctx.begin_frame(FrameTiming {
         dt: 1.0 / 60.0,
         seconds: 1.0 / 60.0,
-        fixed_steps: 0,
+        fixed_steps: 1,
         alpha: 0.0,
     });
+    ctx.time.advance_tick();
+    crate::water::update_water(ctx);
+    assert_eq!(ctx.render_frame(), FrameStatus::Offscreen, "the frame was drawn");
+}
+
+/// One frame of `dt` seconds on the engine's clock at the game's speed
+/// (`ctx.time.pause`, `resume`, `set_speed`, as `game::frame_timing`
+/// feeds it): its fixed steps, the water kit's update, the frame drawn.
+fn clocked_frame(ctx: &mut Ctx, clock: &mut crate::time::Clock, dt: f64) {
+    let mut timing = clock.advance(dt, ctx.time.effective_sim_speed());
+    timing.fixed_steps += ctx.time.take_pending_steps();
+    ctx.begin_frame(timing);
+    for _ in 0..timing.fixed_steps {
+        ctx.time.advance_tick();
+    }
     crate::water::update_water(ctx);
     assert_eq!(ctx.render_frame(), FrameStatus::Offscreen, "the frame was drawn");
 }
@@ -146,7 +161,7 @@ fn spectrum_field(tier: Option<GpuTier>, frames: usize) -> Option<([f32; 3], [f3
     for _ in 0..frames {
         frame(&mut ctx);
     }
-    let t = ctx.time.elapsed() as f32;
+    let t = ctx.world.get::<Water>(e).unwrap().drawn_time(&ctx.time);
     let (target, on_gpu) = field_of(&ctx, e);
     let gpu = read_target(&ctx, target);
     let water = ctx.world.get::<Water>(e).unwrap();
@@ -190,6 +205,63 @@ fn without_compute_shaders_the_cpu_uploads_the_same_field() {
     assert!(highest > 0.6, "the uploaded field has waves: up to {highest} m");
     assert!(now.iter().all(|e| *e < 0.005), "only half floats' rounding: {now:?}");
     assert!(later[0] > 0.2, "a second later the waves have moved on: {later:?}");
+}
+
+#[test]
+fn a_paused_or_sped_up_sea_is_drawn_on_the_simulations_clock() {
+    // Floating bodies ride the waves at the simulation's time: after a
+    // pause and at double speed the field drawn (by the GPU's FFT, or
+    // uploaded by the CPU from the steps' moments) is still the CPU's at
+    // the drawn time, not at the frame's.
+    for tier in [None, Some(GpuTier::WebGl2)] {
+        let Some(mut ctx) = offscreen((64, 64), tier, false) else {
+            return;
+        };
+        ctx.scene3d.camera.position = vec3(0.0, 6.0, 10.0);
+        ctx.scene3d.camera.look_at(Vec3::ZERO);
+        let e = Water::spawn(&mut ctx, spectrum_sea());
+        let mut clock = crate::time::Clock::new(60);
+        let dt = |i: u32| (0.75 + 0.5 * f64::from((i * 7919) % 101) / 100.0) / 90.0;
+        let check = |ctx: &Ctx, when: &str| {
+            let water = ctx.world.get::<Water>(e).unwrap();
+            let t = water.drawn_time(&ctx.time);
+            let (target, on_gpu) = field_of(ctx, e);
+            let gpu = read_target(ctx, target);
+            let (now, frame_clock) = (
+                field_error(&gpu, water, t),
+                field_error(&gpu, water, ctx.time.elapsed() as f32),
+            );
+            eprintln!(
+                "{tier:?} {when}: drawn at {t} s, frame clock {} s: off {now:?} m (at the frame's time: {frame_clock:?} m)",
+                ctx.time.elapsed()
+            );
+            assert_eq!(on_gpu, tier.is_none());
+            // The GPU's half-float FFT (as `the_gpu_fft_works_out_the_field_the_cpu_does`),
+            // or the upload's blend of two steps (a few mm) and half floats.
+            assert!(
+                now.iter().all(|e| *e < 0.02),
+                "{tier:?} {when}: the field drawn is the CPU's at the drawn time: {now:?}"
+            );
+            assert!(
+                frame_clock[0] > 0.2,
+                "{tier:?} {when}: not the frame clock's waves: {frame_clock:?}"
+            );
+        };
+        for i in 0..20 {
+            clocked_frame(&mut ctx, &mut clock, dt(i));
+        }
+        ctx.time.pause();
+        for _ in 0..6 {
+            clocked_frame(&mut ctx, &mut clock, 0.2);
+        }
+        check(&ctx, "paused 1.2 s");
+        ctx.time.resume();
+        ctx.time.set_speed(2.0);
+        for i in 20..50 {
+            clocked_frame(&mut ctx, &mut clock, dt(i));
+        }
+        check(&ctx, "resumed at double speed");
+    }
 }
 
 /// The probe's surface: each drawn point writes where it is, unlit and
@@ -252,7 +324,7 @@ fn the_drawn_spectrum_waves_are_where_the_cpu_height_query_says() {
         for _ in 0..4 {
             frame(&mut ctx);
         }
-        let t = ctx.time.elapsed() as f32;
+        let t = ctx.world.get::<Water>(e).unwrap().drawn_time(&ctx.time);
         let drawn: Vec<(Vec2, f32)> = read_target(&ctx, target)
             .iter()
             .filter(|p| p[1] > 0.5)

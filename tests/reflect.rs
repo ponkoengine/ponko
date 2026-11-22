@@ -223,6 +223,7 @@ fn games_reflect_the_builtin_components_by_default() {
             "ShadowOnly",
             "SpotLight3D",
             "HeldItem",
+            "ParticleEmitter3D",
         ]);
         expected.sort();
     }

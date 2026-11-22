@@ -1031,6 +1031,36 @@
     "reason": "The engine's built-in font (epaint's Hack) is compiled in and always parses; moved into paint_cells, which also repaints caps for a keyboard layout.",
     "site": "src/input/glyphs.rs:591"
   },
+  "src/inspector_author_harness.rs:0e4508aacc1fa7f3": {
+    "classification": "invariant",
+    "construction": "panic!(\"nothing was drawn under {id:?}\")",
+    "reason": "Test-only harness: the module is compiled only under cfg(test); a failed lookup is a failed test.",
+    "site": "src/inspector_author_harness.rs:149"
+  },
+  "src/inspector_author_harness.rs:2690cab06ba9acfe": {
+    "classification": "invariant",
+    "construction": "panic!(\"{label:?} is drawn\")",
+    "reason": "Test-only harness: the module is compiled only under cfg(test); a failed lookup is a failed test.",
+    "site": "src/inspector_author_harness.rs:216"
+  },
+  "src/inspector_author_harness.rs:4e53f8a89954620c": {
+    "classification": "invariant",
+    "construction": ".expect(\"the text is drawn\")",
+    "reason": "Test-only harness: the module is compiled only under cfg(test); a failed lookup is a failed test.",
+    "site": "src/inspector_author_harness.rs:168"
+  },
+  "src/inspector_author_harness.rs:57a00dd4e80fbde8": {
+    "classification": "invariant",
+    "construction": "panic!(\"a field right of {label:?}\")",
+    "reason": "Test-only harness: the module is compiled only under cfg(test); a failed lookup is a failed test.",
+    "site": "src/inspector_author_harness.rs:222"
+  },
+  "src/inspector_author_harness.rs:9558d624e86464ac": {
+    "classification": "invariant",
+    "construction": ".expect(\"the text is drawn\")",
+    "reason": "Test-only harness: the module is compiled only under cfg(test); a failed lookup is a failed test.",
+    "site": "src/inspector_author_harness.rs:174"
+  },
   "src/jobs.rs:16b9dc620cca7123": {
     "classification": "caller-contract",
     "construction": "panic!(\"ponko: a job's work panicked; fix the panic in the closure passed to Job::spawn\")",
@@ -3263,29 +3293,11 @@
     "reason": "The renderer's read-back, its only caller, passes exactly w * h depths (view[..w*h*4] cast to f32); moved here from new() unchanged.",
     "site": "src/three/occlusion.rs:51"
   },
-  "src/three/particles.rs:124d497a4c0592ac": {
-    "classification": "caller-contract",
-    "construction": "assert!( angle.is_finite(), \"particle cone: angle must be finite; replace NaN or infinity\" )",
-    "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. radius.is_finite(),                 \"particle sphere: radius must be finite; replace NaN or infinity\"             ),             ParticleShape3D::Cone { angle } => assert!(",
-    "site": "src/three/particles.rs:323"
-  },
-  "src/three/particles.rs:15e97fcd37f5a4ba": {
+  "src/three/particles.rs:f741cd04b6f346f6": {
     "classification": "forwarded-error",
     "construction": "panic!(\"{e}\")",
-    "reason": "Preserves setup/runtime policy; displays the checked operation error. s.gravity.is_finite(),             s.sheet,         )         .unwrap_or_else(|e| panic!(\"{e}\"));",
-    "site": "src/three/particles.rs:317"
-  },
-  "src/three/particles.rs:6e1c0491584b8082": {
-    "classification": "caller-contract",
-    "construction": "assert!( radius.is_finite(), \"particle sphere: radius must be finite; replace NaN or infinity\" )",
-    "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. )         .unwrap_or_else(|e| panic!(\"{e}\"));         match s.shape {             ParticleShape3D::Sphere { radius } => assert!(",
-    "site": "src/three/particles.rs:319"
-  },
-  "src/three/particles.rs:e26aaf5e63f6b612": {
-    "classification": "caller-contract",
-    "construction": "assert!( half_extents.is_finite(), \"particle box: half_extents must be finite; replace NaN or infinity\" )",
-    "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. angle.is_finite(),                 \"particle cone: angle must be finite; replace NaN or infinity\"             ),             ParticleShape3D::Box { half_extents } => assert!(",
-    "site": "src/three/particles.rs:327"
+    "reason": "Preserves setup/runtime policy; displays the checked settings error (validate plus finite shape).",
+    "site": "src/three/particles.rs:308"
   },
   "src/three/post.rs:ca854b5d77ec04cc": {
     "classification": "caller-contract",

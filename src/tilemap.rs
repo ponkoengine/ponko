@@ -28,6 +28,8 @@ pub use level::{
     Layer, LayerKind, Level, LevelLayer, LevelObject, LevelOptions, LevelRoot, ObjectShape, PlacedTile, Properties,
     TileInfo, TileLayer, Tileset,
 };
+#[cfg(feature = "editor")]
+pub(crate) use tiled::gids as tile_layer_gids;
 
 use std::cell::RefCell;
 

@@ -24,7 +24,7 @@
 //!
 //! With `Post::ssr_thin_objects` (see `ssr_thin.wgsl`), a compute pass
 //! makes a coarse depth from the copy before the trace, and the trace is
-//! another pipeline that reads it along its long steps. Its pipelines are
+//! another pipeline that walks its blocks (a Hi-Z march). Its pipelines are
 //! made when first used, and without it the trace is exactly the one
 //! without them.
 use crate::render::traffic::{Counted, Upload};

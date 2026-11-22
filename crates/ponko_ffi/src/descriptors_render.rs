@@ -97,10 +97,10 @@ pub struct PonkoPostEx {
     /// runs (the 3D targets and pipelines are made again).
     pub msaa: u32,
     /// Version 2. Screen-space reflections keep thin things (rails, cables,
-    /// poles) whole without temporal antialiasing: the trace also reads a
-    /// coarse depth along its long steps, for about a millisecond more at
-    /// 1920x1080 on a fast GPU (Rust `Post::ssr_thin_objects`). Default
-    /// false; `PONKO_GRAPHICS_QUALITY_ULTRA` turns it on. Only matters where
+    /// poles) whole without temporal antialiasing: the trace walks a coarse
+    /// depth instead of its long steps, for about 0.2 ms more at 2560x1440
+    /// on a fast GPU (Rust `Post::ssr_thin_objects`). Default false; the
+    /// high and ultra presets turn it on. Only matters where
     /// `post.ssr` is above 0.
     pub ssr_thin_objects: bool,
     /// Version 3. How a `post.render_scale` below 1 is brought up to the

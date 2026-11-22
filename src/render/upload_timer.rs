@@ -96,7 +96,7 @@ impl UploadTimer {
         if !device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
             return None;
         }
-        let lease = super::query_sets::lease(device, "GPU upload timer")?;
+        let lease = super::query_sets::lease(device, queue, "GPU upload timer")?;
         let queries = device.create_query_set(&wgpu::QuerySetDescriptor {
             label: Some("upload timestamps"),
             ty: wgpu::QueryType::Timestamp,

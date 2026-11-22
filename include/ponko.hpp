@@ -1292,9 +1292,9 @@ using query_filter_ex = PonkoQueryFilterEx;
 /// Post-processing that can grow (PonkoPostEx): `post` is ponko::post, plus split toning
 /// (split_toning_shadows, split_toning_highlights, split_toning_balance), depth of field (dof_enabled,
 /// dof_focus_distance, dof_focus_range, dof_blur), the sample count (msaa) and, from version 2, thin
-/// objects in screen-space reflections (ssr_thin_objects: whole without TAA, about a millisecond more at
-/// 1920x1080; the ultra preset turns it on) and, from version 3, the upscaler (a ponko::upscaler; set it
-/// with `static_cast<std::uint32_t>(...)`).
+/// objects in screen-space reflections (ssr_thin_objects: whole without TAA, about 0.2 ms more at
+/// 2560x1440; the high and ultra presets turn it on) and, from version 3, the upscaler (a ponko::upscaler;
+/// set it with `static_cast<std::uint32_t>(...)`).
 using post_ex = PonkoPostEx;
 /// HDR display output settings that can grow (PonkoHdrOutput): enabled, paper_white_nits, peak_nits
 /// (0: the display's). Off by default; see hdr_output_defaults, game::hdr_output, ctx::set_hdr_output.
@@ -8582,6 +8582,13 @@ public:
         if (status == PONKO_NOT_FOUND) return false;
         detail::check(status);
         return true;
+    }
+    /// The time `water` is drawn at this frame (seconds), for water_sample and water_height: the
+    /// simulation's clock for waves from a spectrum (it stops while paused), the frame's otherwise.
+    float water_drawn_time(entity water) const {
+        float t = 0;
+        detail::check(ponko_ctx_water_drawn_time(raw_, water, &t));
+        return t;
     }
     /// The water's surface at ground point `at` (x, z) and time `t` (seconds): height, normal, velocity.
     PonkoWaterSample water_sample(entity water, vec2 at, float t) {

@@ -33,6 +33,12 @@ pub(crate) mod app;
 #[cfg(feature = "editor")]
 #[path = "inspector_assets.rs"]
 mod assets_panel;
+#[cfg(feature = "editor")]
+#[path = "inspector_author.rs"]
+pub(crate) mod author;
+#[cfg(all(test, feature = "editor"))]
+#[path = "inspector_author_harness.rs"]
+pub(crate) mod author_harness;
 #[path = "inspector_debug.rs"]
 mod debug_panel;
 #[cfg(feature = "editor")]
@@ -41,8 +47,17 @@ mod file_picker;
 #[cfg(all(feature = "editor", feature = "3d"))]
 #[path = "inspector_gltf.rs"]
 mod gltf_panel;
+#[cfg(feature = "editor")]
+#[path = "inspector_graph.rs"]
+pub(crate) mod graph_panel;
 #[path = "inspector_keys.rs"]
 pub(crate) mod keys;
+#[cfg(all(feature = "editor", feature = "3d"))]
+#[path = "inspector_material.rs"]
+pub(crate) mod material_panel;
+#[cfg(feature = "editor")]
+#[path = "inspector_particles.rs"]
+pub(crate) mod particles_panel;
 #[cfg(feature = "editor")]
 #[path = "inspector_play.rs"]
 mod play;
@@ -57,6 +72,12 @@ mod scene;
 #[cfg(feature = "editor")]
 #[path = "inspector_settings.rs"]
 pub(crate) mod settings;
+#[cfg(all(feature = "editor", feature = "3d"))]
+#[path = "inspector_terrain.rs"]
+pub(crate) mod terrain_panel;
+#[cfg(feature = "editor")]
+#[path = "inspector_tilemap.rs"]
+pub(crate) mod tilemap_panel;
 
 /// Environment variable that turns the inspector on (`1`) or off (`0`),
 /// overriding [`Game::inspector`](crate::game::Game::inspector).
@@ -370,6 +391,11 @@ impl Panels {
             if scroll != 0.0 {
                 ctx.camera.zoom_at(pos, 1.1f32.powf(scroll / 50.0));
             }
+        }
+        // A brush of an authoring window (tiles) paints instead.
+        #[cfg(feature = "editor")]
+        if self.author_viewport(ui, ctx, pos) {
+            return;
         }
         // A drag in progress follows the mouse until the button goes up.
         if self.scene.gizmo2.drag.is_some() {

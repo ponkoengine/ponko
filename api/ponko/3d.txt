@@ -13659,6 +13659,8 @@ pub fn ponko::terrain::TerrainTile::lod(&self, f32) -> usize
 pub fn ponko::terrain::TerrainTile::lod_distance(&self) -> f32
 pub fn ponko::terrain::TerrainTile::lods(&self) -> [ponko::render::Mesh; 4]
 pub fn ponko::terrain::TerrainTile::with_lod_distance(self, f32) -> Self
+impl ponko::terrain::TerrainTile
+pub fn ponko::terrain::TerrainTile::spawn_from_file(&mut ponko::prelude::Ctx, &str, glam::f32::vec3::Vec3) -> core::result::Result<ponko_ecs::entity::Entity, ponko::error::Error>
 impl core::clone::Clone for ponko::terrain::TerrainTile
 pub fn ponko::terrain::TerrainTile::clone(&self) -> Self
 impl core::cmp::Eq for ponko::terrain::TerrainTile
@@ -15149,6 +15151,7 @@ impl ponko::water::Water
 pub fn ponko::water::Water::contacts_started(&self) -> u64
 pub fn ponko::water::Water::contains(&self, glam::f32::vec2::Vec2) -> bool
 pub fn ponko::water::Water::desc(&self) -> &ponko::water::WaterDesc
+pub fn ponko::water::Water::drawn_time(&self, &ponko::prelude::Time) -> f32
 pub fn ponko::water::Water::free(&mut self, &mut ponko::prelude::Ctx)
 pub fn ponko::water::Water::height_at(&self, glam::f32::vec2::Vec2, f32) -> f32
 pub fn ponko::water::Water::is_under(&self, glam::f32::vec3::Vec3, f32) -> bool
