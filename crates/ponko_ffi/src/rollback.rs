@@ -53,7 +53,7 @@ impl<'de> Deserialize<'de> for RollbackInput {
             }
             fn visit_str<E: de::Error>(self, v: &str) -> Result<RollbackInput, E> {
                 let digits = v.as_bytes();
-                if digits.len() % 2 != 0 || digits.len() > 2 * PONKO_ROLLBACK_INPUT_MAX {
+                if !digits.len().is_multiple_of(2) || digits.len() > 2 * PONKO_ROLLBACK_INPUT_MAX {
                     return Err(E::invalid_length(digits.len(), &self));
                 }
                 let digit = |c: u8| {
@@ -63,7 +63,7 @@ impl<'de> Deserialize<'de> for RollbackInput {
                         .ok_or_else(|| E::invalid_value(de::Unexpected::Str(v), &self))
                 };
                 let mut input = RollbackInput::default();
-                for (i, pair) in digits.chunks_exact(2).enumerate() {
+                for (i, pair) in digits.as_chunks::<2>().0.iter().enumerate() {
                     input.0[i] = (digit(pair[0])? << 4) | digit(pair[1])?;
                 }
                 Ok(input)

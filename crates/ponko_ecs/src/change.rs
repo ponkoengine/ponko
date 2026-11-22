@@ -275,12 +275,15 @@ pub(crate) struct ChangesState {
     /// The world's tick when saved.
     pub(crate) now: u64,
     /// One per removal log, in the order of `Changes::removed`.
-    logs: Vec<(Vec<Entity>, Vec<(u64, usize)>)>,
+    logs: Vec<SavedLog>,
 }
+
+/// A saved removal log: its entities and runs, as in [`Removed`].
+type SavedLog = (Vec<Entity>, Vec<(u64, usize)>);
 
 impl ChangesState {
     pub(crate) fn heap_bytes(&self) -> usize {
-        self.logs.capacity() * std::mem::size_of::<(Vec<Entity>, Vec<(u64, usize)>)>()
+        self.logs.capacity() * std::mem::size_of::<SavedLog>()
             + self
                 .logs
                 .iter()

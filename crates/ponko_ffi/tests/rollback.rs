@@ -46,13 +46,15 @@ fn pad(p: u32, t: u64) -> Pad {
     }
 }
 
+/// `(to, due frame, sequence, bytes)`.
+type Packet = (u32, u64, u64, Vec<u8>);
+
 /// Both peers meet here once a frame.
 #[derive(Default)]
 struct Wire {
     gate: Mutex<(u32, u64)>,
     turn: Condvar,
-    /// `(to, due frame, sequence, bytes)`.
-    packets: Mutex<Vec<(u32, u64, u64, Vec<u8>)>>,
+    packets: Mutex<Vec<Packet>>,
 }
 
 impl Wire {
