@@ -60,6 +60,7 @@ where
         error: None,
         window: None,
         cursor_sources: Default::default(),
+        layout: None,
         ctx,
         clock,
         last_frame: Instant::now(),
@@ -157,6 +158,8 @@ struct App<S> {
     error: Option<Error>,
     window: Option<Arc<Window>>,
     cursor_sources: super::window_service::CursorQueue,
+    /// Follows the player's keyboard layout, for key labels.
+    layout: Option<crate::input::key_labels::watch::LayoutWatch>,
     ctx: Ctx,
     clock: Clock,
     last_frame: Instant,
@@ -214,6 +217,10 @@ where
         puffin::GlobalProfiler::lock().new_frame();
         let timing = frame_timing(&mut self.clock, &mut self.ctx, frame_dt);
         self.ctx.begin_frame(timing);
+        // A layout switched or answered since the last frame relabels the keys.
+        if let Some(labels) = self.layout.as_mut().and_then(|l| l.poll()) {
+            self.ctx.input.set_key_labels(labels);
+        }
         // In a browser, what the hidden IME text box saw since the last frame.
         #[cfg(target_arch = "wasm32")]
         crate::web::ime::drain(&mut self.ctx.input);
@@ -395,10 +402,13 @@ where
             }
         }
 
-        // The keys' labels on the system's layout, for prompts.
-        if let Some(labels) = crate::input::KeyLabels::system() {
+        // The keys' labels on the system's layout, for prompts, followed
+        // while the window is open.
+        let mut layout = crate::input::key_labels::watch::LayoutWatch::new(&window);
+        if let Some(labels) = layout.poll() {
             self.ctx.input.set_key_labels(labels);
         }
+        self.layout = Some(layout);
 
         // The built-in controllers, unless the game brought its own backend
         // (setup can still replace them with `set_gamepad_backend`): SDL's
@@ -730,8 +740,8 @@ where
                     apply_cursor_lock(&window, true);
                 }
                 // The player may have switched keyboard layouts meanwhile.
-                if let Some(labels) = crate::input::KeyLabels::system() {
-                    self.ctx.input.set_key_labels(labels);
+                if let Some(layout) = &mut self.layout {
+                    layout.refresh();
                 }
             }
 

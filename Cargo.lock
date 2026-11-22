@@ -4159,11 +4159,15 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasmi",
  "wat",
+ "wayland-backend",
+ "wayland-client",
  "web-sys",
  "web-time",
  "wgpu",
  "windows",
  "winit",
+ "x11rb",
+ "xkeysym",
  "zbus",
 ]
 
