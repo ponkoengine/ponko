@@ -13,9 +13,10 @@
 //! - `compare/physics-10k`: one tick of 10,000 dynamic 10 px boxes falling
 //!   into a pile between walls (`Game::physics`, rapier underneath).
 //! - `compare/sprites-100k`, `compare/sprites-1m`: one frame of 100,000 or
-//!   1,000,000 bouncing 32 x 32 sprites of one texture (the `bunnymark`
-//!   movement), drawn.
-//! - `compare/ui-10k`: one frame of a retained UI of 10,000 colored boxes in
+//!   1,000,000 bouncing 32 x 32 white sprites of one texture (the `bunnymark`
+//!   movement), drawn. `compare/sprites-100k-tinted`: the 100,000 with a
+//!   different tint each.
+//! - `compare/ui-10k-still`: one frame of a retained UI of 10,000 colored boxes in
 //!   a 100 x 100 grid that doesn't change, drawn. `compare/ui-10k-recolor`:
 //!   every box gets a new color every frame.
 
@@ -131,9 +132,10 @@ mod gpu {
         (*seed >> 40) as f32 / (1u64 << 24) as f32
     }
 
-    /// `n` sprites of one 32 x 32 white texture, tinted, at random places
-    /// with random velocities: the same sequence as the Bevy side.
-    pub fn spawn_sprites(ctx: &mut Ctx, n: usize) {
+    /// `n` sprites of one 32 x 32 white texture at random places with
+    /// random velocities, each tinted if `tinted` (white otherwise): the same
+    /// sequence as the Bevy side.
+    pub fn spawn_sprites(ctx: &mut Ctx, n: usize, tinted: bool) {
         let texture = ctx.gfx.create_texture(32, 32, &[255; 32 * 32 * 4]);
         let mut seed = 0x9E37_79B9_7F4A_7C15;
         let sprites: Vec<_> = (0..n)
@@ -145,6 +147,7 @@ mod gpu {
                     0.6 + rand(&mut seed) * 0.4,
                     0.6 + rand(&mut seed) * 0.4,
                 );
+                let color = if tinted { color } else { Color::WHITE };
                 (Transform2D::at(at), Sprite::new(texture).with_color(color), Bounce(vel))
             })
             .collect();
@@ -189,7 +192,7 @@ mod gpu {
         drawn.adapter = adapter;
     }
 
-    pub fn sprites_world(n: usize, frames: usize) -> World {
+    pub fn sprites_world(n: usize, tinted: bool, frames: usize) -> World {
         Game::new("sprites", SIZE.0, SIZE.1)
             .bench_offscreen()
             .sim_system(stamp)
@@ -198,19 +201,20 @@ mod gpu {
             .run_headless((WARMUP + frames + 1) as u64, move |ctx| {
                 ctx.world.insert_resource(Stamps::default());
                 ctx.world.insert_resource(Drawn::default());
-                spawn_sprites(ctx, n);
+                spawn_sprites(ctx, n, tinted);
             })
     }
 
     pub fn sprites(b: &mut Bench) {
-        for (name, n, frames) in [
-            ("compare/sprites-100k", 100_000, 300),
-            ("compare/sprites-1m", 1_000_000, 120),
+        for (name, n, tinted, frames) in [
+            ("compare/sprites-100k", 100_000, false, 300),
+            ("compare/sprites-100k-tinted", 100_000, true, 300),
+            ("compare/sprites-1m", 1_000_000, false, 120),
         ] {
             if b.skips(name) {
                 continue;
             }
-            let mut world = sprites_world(n, frames);
+            let mut world = sprites_world(n, tinted, frames);
             let drawn = world.remove_resource::<Drawn>().expect("what was drawn");
             eprintln!("{name}: {} sprites drawn a frame on {}", drawn.sprites, drawn.adapter);
             record(b, name, frame_times(&mut world));
@@ -268,7 +272,7 @@ mod gpu {
     }
 
     pub fn ui(b: &mut Bench) {
-        for (name, recolors) in [("compare/ui-10k", false), ("compare/ui-10k-recolor", true)] {
+        for (name, recolors) in [("compare/ui-10k-still", false), ("compare/ui-10k-recolor", true)] {
             if b.skips(name) {
                 continue;
             }
@@ -323,7 +327,7 @@ mod tests {
     #[cfg(feature = "render")]
     #[test]
     fn offscreen_frames_draw_every_sprite() {
-        let mut world = match std::panic::catch_unwind(|| gpu::sprites_world(500, 2)) {
+        let mut world = match std::panic::catch_unwind(|| gpu::sprites_world(500, true, 2)) {
             Ok(world) => world,
             Err(_) if std::env::var_os("PONKO_REQUIRE_GPU").is_none() => {
                 eprintln!("no GPU: offscreen sprite frames not checked");

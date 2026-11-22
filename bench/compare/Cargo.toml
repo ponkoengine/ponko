@@ -1,30 +1,24 @@
 [package]
-name = "ponko_bevy_scenes"
+name = "ponko_compare"
 version = "0.0.0"
 edition = "2024"
 publish = false
+description = "The other engine's side of Ponko's cross-engine scoreboard (not part of the engine's workspace)."
 
 [dependencies]
-bevy = { version = "=0.20.1", default-features = false, features = [
-    "std",
-    "async_executor",
-    "multi_threaded",
-    "bevy_asset",
-    "bevy_log",
-    "bevy_window",
-    "bevy_color",
-    "bevy_image",
-    "bevy_mesh",
-    "bevy_camera",
-    "bevy_light",
-    "bevy_render",
-    "bevy_core_pipeline",
-    "bevy_pbr",
-    "bevy_anti_alias",
-    "tonemapping_luts",
-    "zstd_rust",
-    "png",
-] }
+# Bevy with its default features, as a Bevy game starts. Pinned exactly: the
+# version is printed with every result (`BEVY_VERSION` in src/main.rs).
+bevy = { version = "=0.20.1" }
+# Bevy has no physics of its own: rapier's official Bevy plugin, the same
+# solver (rapier2d 0.36) Ponko's `Game::physics` drives.
+bevy_rapier2d = { version = "=0.37.0", default-features = false, features = ["dim2"] }
+# The ECS matrix: the same workload files as crates/ponko_bench.
+ponko_ecs = { path = "../../crates/ponko_ecs" }
+hecs = "0.11.2"
+rayon = "1.12.0"
 serde_json = "1.0.154"
+
+# The same release settings as the engine's workspace (the default profile).
+[profile.release]
 
 [workspace]

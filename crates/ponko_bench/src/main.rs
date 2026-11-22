@@ -258,8 +258,15 @@ fn own_dynamic_step(w: &mut own::World, ids: [own::ComponentId; 2], dt: f32) {
 }
 
 /// `name` contains one of the `|`-separated parts of `filter`.
+/// A filter is parts split by `|`; a name matches if it contains one. A part
+/// naming a scoreboard row (`compare/...`) matches only that row, so
+/// `compare/sprites-100k` doesn't also run `compare/sprites-100k-tinted`
+/// (`compare/` alone still runs them all).
 fn matches_filter(filter: &str, name: &str) -> bool {
-    filter.split('|').any(|part| name.contains(part))
+    filter.split('|').any(|part| match part.strip_prefix("compare/") {
+        Some(row) if !row.is_empty() => name == part,
+        _ => name.contains(part),
+    })
 }
 
 fn ms(d: Duration) -> f64 {
@@ -1598,5 +1605,12 @@ mod tests {
         assert!(matches_filter("iter", "ecs/iter-1k/ponko"));
         assert!(matches_filter("ecs/|archetypes-1024", "archetypes-1024/hecs"));
         assert!(!matches_filter("ecs/|archetypes-1024", "spawn/hecs"));
+    }
+
+    #[test]
+    fn a_scoreboard_row_filter_runs_only_that_row() {
+        assert!(matches_filter("compare/sprites-100k", "compare/sprites-100k"));
+        assert!(!matches_filter("compare/sprites-100k", "compare/sprites-100k-tinted"));
+        assert!(matches_filter("compare/", "compare/sprites-100k-tinted"));
     }
 }

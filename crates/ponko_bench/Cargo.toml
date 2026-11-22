@@ -49,6 +49,11 @@ path = "src/bin/instances.rs"
 required-features = ["render"]
 
 [[bin]]
+name = "first_frame"
+path = "src/bin/first_frame.rs"
+required-features = ["render"]
+
+[[bin]]
 name = "characters"
 path = "src/bin/characters.rs"
 

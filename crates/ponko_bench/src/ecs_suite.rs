@@ -299,6 +299,57 @@ pub fn add_remove_hecs(c: &mut HecsChurn) {
     remove_hecs(c);
 }
 
+/// Replaces the `k` oldest entities with new ones through ponko's deferred
+/// command buffer (`World::commands`, kept and reused), then applies it.
+pub fn replace_commands_ponko(c: &mut PonkoChurn, cmds: &mut ponko_ecs::Commands, k: usize) {
+    for _ in 0..k {
+        let e = c.live.pop_front().expect("churn world is empty");
+        cmds.despawn(e);
+        c.live.push_back(cmds.spawn(ent(c.next)));
+        c.next += 1;
+    }
+    c.w.apply(cmds);
+}
+
+/// The same through hecs's `CommandBuffer` (kept and reused): ids reserved
+/// with `reserve_entity`, as its documentation does for ids needed early.
+pub fn replace_commands_hecs(c: &mut HecsChurn, cmds: &mut hecs::CommandBuffer, k: usize) {
+    for _ in 0..k {
+        let e = c.live.pop_front().expect("churn world is empty");
+        cmds.despawn(e);
+        let new = c.w.reserve_entity();
+        cmds.insert(new, ent(c.next));
+        c.live.push_back(new);
+        c.next += 1;
+    }
+    cmds.run_on(&mut c.w);
+}
+
+/// `ecs/commands-<n>`: `spawn-despawn` recorded into each library's
+/// deferred command buffer and applied, as a system that spawns and
+/// despawns while it iterates has to.
+fn commands(b: &mut Bench, n: usize) {
+    let l = label(n);
+    let k = (n / 10).max(1);
+    let r = runs(n, 500, 50, 10);
+    b.steady(
+        &format!("ecs/commands-{l}/ponko"),
+        r,
+        || {
+            let c = ponko_churn(n);
+            let cmds = c.w.commands();
+            (c, cmds)
+        },
+        |(c, cmds)| replace_commands_ponko(c, cmds, k),
+    );
+    b.steady(
+        &format!("ecs/commands-{l}/hecs"),
+        r,
+        || (hecs_churn(n), hecs::CommandBuffer::new()),
+        |(c, cmds)| replace_commands_hecs(c, cmds, k),
+    );
+}
+
 fn churn(b: &mut Bench, n: usize) {
     let l = label(n);
     let k = (n / 10).max(1);
@@ -719,6 +770,7 @@ pub fn run(b: &mut Bench) {
         parallel(b, n);
         spawning(b, n);
         churn(b, n);
+        commands(b, n);
         queries(b, n);
     }
     for n in GAME_SIZES {
@@ -847,6 +899,27 @@ mod tests {
         };
         assert_eq!(xs(ponko_pos(&mut p.w)), expected);
         assert_eq!(xs(hecs_pos(&mut h.w)), expected);
+    }
+
+    #[test]
+    fn commands_replace_the_oldest_entities_like_direct_calls() {
+        let k = SMALL / 10;
+        let mut direct = ponko_churn(SMALL);
+        let mut p = ponko_churn(SMALL);
+        let mut cmds = p.w.commands();
+        let mut h = hecs_churn(SMALL);
+        let mut hcmds = hecs::CommandBuffer::new();
+        for _ in 0..3 {
+            replace_ponko(&mut direct, k);
+            replace_commands_ponko(&mut p, &mut cmds, k);
+            replace_commands_hecs(&mut h, &mut hcmds, k);
+        }
+        assert_eq!(p.w.len(), SMALL);
+        assert_eq!(h.w.len() as usize, SMALL);
+        assert!(p.live.iter().all(|&e| p.w.is_alive(e)));
+        assert!(h.live.iter().all(|&e| h.w.contains(e)));
+        assert_eq!(ponko_pos(&mut p.w), ponko_pos(&mut direct.w));
+        assert_eq!(ponko_pos(&mut p.w), hecs_pos(&mut h.w));
     }
 
     #[test]
