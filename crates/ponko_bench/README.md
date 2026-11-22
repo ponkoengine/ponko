@@ -1,6 +1,6 @@
 # Benchmarks
 
-Started as the M3 ECS spike: it compares a minimal archetype ECS of our own (`src/own.rs`, the spike that became `ponko_ecs`) with `bevy_ecs` 0.20 and `hecs` 0.11. It answers two questions:
+Started as the M3 ECS spike: it compares a minimal archetype ECS of our own (`src/own.rs`, the spike that became `ponko_ecs`) with `bevy_ecs` 0.20 and `hecs` 0.11 (the bevy rows now run in [`bench/compare`](../../bench/compare/README.md), outside the engine's dependency tree). It answers two questions:
 
 1. Which ECS do we build the engine on?
 2. **D12 condition:** does routing every component through runtime registration (needed for the C/C++ API) cost the Rust path anything?
@@ -283,8 +283,14 @@ What recording a 3D frame's passes into command buffers costs, offscreen:
 The rendering baseline: seven offscreen 3D scenes (static, dynamic,
 multi-material, shadow-heavy, alpha-heavy, animated, game-like) with CPU
 steps, GPU passes, draw calls, memory and frame-time distributions, as JSON
-and CSV, and three of them side by side with Bevy:
+and CSV, and four of them side by side with Bevy:
 [RENDER_SCENES.md](RENDER_SCENES.md) (`--features render -- render/scene`).
+
+The cross-engine scoreboard (ECS, sprites, 3D scenes, skinned characters,
+2D physics, UI, a headless sim tick, time to first frame, build times and
+sizes, against Bevy): `compare/...` rows here, Bevy's side and the one
+command in [`bench/compare`](../../bench/compare/README.md)
+(`python3 bench/compare/scoreboard.py`).
 
 Whether mesh shaders are worth adopting (issue #164): the support matrix
 from wgpu and naga, a meshlet prototype measured against indexed indirect

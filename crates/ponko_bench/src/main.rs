@@ -1,5 +1,5 @@
-//! Benchmarks: ponko_ecs and the M3 spike ECS vs bevy_ecs vs hecs, plus
-//! simulation at scale.
+//! Benchmarks: ponko_ecs and the M3 spike ECS vs hecs, plus
+//! simulation at scale (bevy_ecs and Bevy: `bench/compare`, its own workspace).
 //!
 //! Run with: cargo run --release -p ponko_bench [-- filter]
 //! Each benchmark builds its state untimed, then times one operation; we report
@@ -45,6 +45,7 @@ mod report;
 mod required;
 mod rollback;
 mod schedule;
+mod scoreboard;
 mod skeleton2d;
 mod sparse_set;
 mod sprites;
@@ -56,7 +57,6 @@ mod ui_list;
 #[cfg(feature = "video")]
 mod video;
 
-use bevy_ecs::component::Component;
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
@@ -68,34 +68,34 @@ const N: usize = 1_000_000;
 const ADD_REMOVE_N: usize = 100_000;
 const DT: f32 = 1.0 / 60.0;
 
-#[derive(Component, Clone, Copy, Default, ponko_ecs::Component)]
+#[derive(Clone, Copy, Default, ponko_ecs::Component)]
 struct Pos {
     x: f32,
     y: f32,
 }
-#[derive(Component, Clone, Copy, Default, ponko_ecs::Component)]
+#[derive(Clone, Copy, Default, ponko_ecs::Component)]
 struct Vel {
     x: f32,
     y: f32,
 }
 /// Stand-in for a sprite component: texture id + tint.
-#[derive(Component, Clone, Copy, Default, ponko_ecs::Component)]
+#[derive(Clone, Copy, Default, ponko_ecs::Component)]
 struct Spr {
     _tex: u32,
     _tint: [f32; 4],
 }
-#[derive(Component, Clone, Copy, Default, ponko_ecs::Component)]
+#[derive(Clone, Copy, Default, ponko_ecs::Component)]
 struct Tag;
 /// A link to another entity (the last shot of a gun).
 #[derive(Clone, Copy, ponko_ecs::Component)]
 struct Shot(#[allow(dead_code)] ponko_ecs::Entity);
-#[derive(Component, Clone, Copy, Default, ponko_ecs::Component)]
+#[derive(Clone, Copy, Default, ponko_ecs::Component)]
 struct M0;
-#[derive(Component, Clone, Copy, Default, ponko_ecs::Component)]
+#[derive(Clone, Copy, Default, ponko_ecs::Component)]
 struct M1;
-#[derive(Component, Clone, Copy, Default, ponko_ecs::Component)]
+#[derive(Clone, Copy, Default, ponko_ecs::Component)]
 struct M2;
-#[derive(Component, Clone, Copy, Default, ponko_ecs::Component)]
+#[derive(Clone, Copy, Default, ponko_ecs::Component)]
 struct M3;
 
 fn ent(i: usize) -> (Pos, Vel, Spr) {
@@ -258,8 +258,15 @@ fn own_dynamic_step(w: &mut own::World, ids: [own::ComponentId; 2], dt: f32) {
 }
 
 /// `name` contains one of the `|`-separated parts of `filter`.
+/// A filter is parts split by `|`; a name matches if it contains one. A part
+/// naming a scoreboard row (`compare/...`) matches only that row, so
+/// `compare/sprites-100k` doesn't also run `compare/sprites-100k-tinted`
+/// (`compare/` alone still runs them all).
 fn matches_filter(filter: &str, name: &str) -> bool {
-    filter.split('|').any(|part| name.contains(part))
+    filter.split('|').any(|part| match part.strip_prefix("compare/") {
+        Some(row) if !row.is_empty() => name == part,
+        _ => name.contains(part),
+    })
 }
 
 fn ms(d: Duration) -> f64 {
@@ -288,6 +295,7 @@ fn main() {
     query_filters::run(&mut b);
     query_policy::run(&mut b);
     par_archetypes::run(&mut b);
+    scoreboard::run(&mut b);
     #[cfg(feature = "render")]
     record::run(&mut b);
     #[cfg(feature = "render")]
@@ -664,14 +672,6 @@ fn main() {
     b.run("spawn/hecs-batch", 10, hecs::World::new, |w| {
         w.spawn_batch((0..N).map(ent));
     });
-    b.run("spawn/bevy", 10, bevy_ecs::world::World::new, |w| {
-        for i in 0..N {
-            w.spawn(ent(i));
-        }
-    });
-    b.run("spawn/bevy-batch", 10, bevy_ecs::world::World::new, |w| {
-        w.spawn_batch((0..N).map(ent));
-    });
 
     // ---- deferred commands: record, then apply (one reused Commands) ---------
     // A system that queues a component change for many entities every frame.
@@ -1027,23 +1027,6 @@ fn main() {
             }
         },
     );
-    b.steady(
-        "iter/bevy",
-        200,
-        || {
-            let mut w = bevy_ecs::world::World::new();
-            w.spawn_batch((0..N).map(ent));
-            let q = w.query::<(&mut Pos, &Vel)>();
-            (w, q)
-        },
-        |(w, q)| {
-            let dt = black_box(DT);
-            q.iter_mut(w).for_each(|(mut p, v)| {
-                p.x += v.x * dt;
-                p.y += v.y * dt;
-            });
-        },
-    );
 
     // ---- fragmented iterate: same 1M spread over 16 archetypes ----------------
     fn markers(i: usize) -> [bool; 4] {
@@ -1111,38 +1094,6 @@ fn main() {
             }
         },
     );
-    b.steady(
-        "iter-frag16/bevy",
-        200,
-        || {
-            let mut w = bevy_ecs::world::World::new();
-            for i in 0..N {
-                let mut e = w.spawn(ent(i));
-                let m = markers(i);
-                if m[0] {
-                    e.insert(M0);
-                }
-                if m[1] {
-                    e.insert(M1);
-                }
-                if m[2] {
-                    e.insert(M2);
-                }
-                if m[3] {
-                    e.insert(M3);
-                }
-            }
-            let q = w.query::<(&mut Pos, &Vel)>();
-            (w, q)
-        },
-        |(w, q)| {
-            let dt = black_box(DT);
-            q.iter_mut(w).for_each(|(mut p, v)| {
-                p.x += v.x * dt;
-                p.y += v.y * dt;
-            });
-        },
-    );
 
     // ---- random access: get<Pos> for 1M entities in shuffled order ----------------
     let order = shuffled(N);
@@ -1193,23 +1144,6 @@ fn main() {
             let mut s = 0.0;
             for &e in es.iter() {
                 s += w.get::<&Pos>(e).unwrap().x;
-            }
-            black_box(s);
-        },
-    );
-    b.run(
-        "get-random/bevy",
-        10,
-        || {
-            let mut w = bevy_ecs::world::World::new();
-            let es: Vec<_> = (0..N).map(|i| w.spawn(ent(i)).id()).collect();
-            let es: Vec<_> = order.iter().map(|&i| es[i]).collect();
-            (w, es)
-        },
-        |(w, es)| {
-            let mut s = 0.0;
-            for &e in es.iter() {
-                s += w.get::<Pos>(e).unwrap().x;
             }
             black_box(s);
         },
@@ -1267,23 +1201,6 @@ fn main() {
             }
         },
     );
-    b.run(
-        "add-remove/bevy",
-        10,
-        || {
-            let mut w = bevy_ecs::world::World::new();
-            let es: Vec<_> = (0..ADD_REMOVE_N).map(|i| w.spawn(ent(i)).id()).collect();
-            (w, es)
-        },
-        |(w, es)| {
-            for &e in es.iter() {
-                w.entity_mut(e).insert(Tag);
-            }
-            for &e in es.iter() {
-                w.entity_mut(e).remove::<Tag>();
-            }
-        },
-    );
 
     // ---- despawn 1M -----------------------------------------------------------------
     b.run(
@@ -1325,20 +1242,6 @@ fn main() {
         |(w, es)| {
             for &e in es.iter() {
                 w.despawn(e).unwrap();
-            }
-        },
-    );
-    b.run(
-        "despawn/bevy",
-        10,
-        || {
-            let mut w = bevy_ecs::world::World::new();
-            let es: Vec<_> = (0..N).map(|i| w.spawn(ent(i)).id()).collect();
-            (w, es)
-        },
-        |(w, es)| {
-            for &e in es.iter() {
-                w.despawn(e);
             }
         },
     );
@@ -1701,7 +1604,13 @@ mod tests {
     fn filters_match_any_alternative() {
         assert!(matches_filter("iter", "ecs/iter-1k/ponko"));
         assert!(matches_filter("ecs/|archetypes-1024", "archetypes-1024/hecs"));
-        assert!(matches_filter("ecs/|archetypes-1024", "ecs/game-10k/bevy"));
         assert!(!matches_filter("ecs/|archetypes-1024", "spawn/hecs"));
+    }
+
+    #[test]
+    fn a_scoreboard_row_filter_runs_only_that_row() {
+        assert!(matches_filter("compare/sprites-100k", "compare/sprites-100k"));
+        assert!(!matches_filter("compare/sprites-100k", "compare/sprites-100k-tinted"));
+        assert!(matches_filter("compare/", "compare/sprites-100k-tinted"));
     }
 }

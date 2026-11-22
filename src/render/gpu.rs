@@ -819,6 +819,83 @@ impl Renderer {
         renderer
     }
 
+    /// Benchmarks: the window's renderer drawing every frame into an
+    /// offscreen `size` target on the high-performance adapter, with the
+    /// device features and limits a window asks for, 4x multisampling, and
+    /// no surface or present. What [`Game::bench_offscreen`](crate::Game::bench_offscreen)
+    /// draws with. `Err` says why there is no GPU. Unstable (`bench-internals`).
+    #[cfg(all(feature = "3d", feature = "bench-internals", not(target_arch = "wasm32")))]
+    pub(crate) fn offscreen_bench(size: (u32, u32)) -> Result<Self, String> {
+        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+        descriptor.flags = wgpu::InstanceFlags::from_env_or_default();
+        let instance = wgpu::Instance::new(descriptor);
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            ..Default::default()
+        }))
+        .map_err(|e| format!("no GPU adapter ({e})"))?;
+        let info = adapter.get_info();
+        // As `new_async` opens the window's device (without a forced tier).
+        let descriptor = wgpu::DeviceDescriptor {
+            label: Some("ponko bench device"),
+            required_features: adapter.features()
+                & (wgpu::Features::TIMESTAMP_QUERY
+                    | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
+                    | wgpu::Features::INDIRECT_FIRST_INSTANCE),
+            required_limits: wgpu::Limits {
+                max_sampled_textures_per_shader_stage: adapter
+                    .limits()
+                    .max_sampled_textures_per_shader_stage
+                    .clamp(16, 24),
+                ..wgpu::Limits::default()
+            },
+            ..Default::default()
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&descriptor))
+            .map_err(|e| format!("no GPU device on {} ({e})", info.name))?;
+        let msaa = 4;
+        let capabilities = super::capabilities::of_device(&info, &device, (msaa, msaa));
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            color_space: wgpu::SurfaceColorSpace::Auto,
+            width: size.0,
+            height: size.1,
+            present_mode: wgpu::PresentMode::Fifo,
+            desired_maximum_frame_latency: 2,
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            view_formats: Vec::new(),
+        };
+        let mut renderer = Self::from_device(
+            None,
+            (device, queue),
+            config,
+            capabilities,
+            &[],
+            Render3DSettings {
+                msaa,
+                requested_msaa: msaa,
+                supports_msaa2: false,
+                tiled: info.backend == wgpu::Backend::Metal,
+            },
+        );
+        renderer.set_draw_hidden(true, true);
+        Ok(renderer)
+    }
+
+    /// Benchmarks: blocks until the GPU has finished everything submitted.
+    #[cfg(all(feature = "3d", feature = "bench-internals", not(target_arch = "wasm32")))]
+    pub(crate) fn bench_wait(&self) {
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+    }
+
+    /// Benchmarks: the adapter's name and backend.
+    #[cfg(all(feature = "3d", feature = "bench-internals", not(target_arch = "wasm32")))]
+    pub(crate) fn bench_adapter(&self) -> String {
+        let info = self.device.adapter_info();
+        format!("{} ({:?})", info.name, info.backend)
+    }
+
     /// Tests: [`offscreen`](Self::offscreen) opened for HDR output as a
     /// window offering `choice` would be, with `settings`. The output pass
     /// draws into the offscreen frame, which [`read_output`](Self::read_output)
