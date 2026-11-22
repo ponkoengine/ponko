@@ -19,6 +19,17 @@ Keys are named by their **position** on a US keyboard: `Key::W` is the key
 above `S` on every layout, so WASD controls stay in place for AZERTY and
 Dvorak players too. In C++: `ctx.key_down(PONKO_KEY_RIGHT)`.
 
+Prompts should show what is printed on the key instead: `Key::W` reads `Z`
+on a French keyboard. `ctx.input.key_labels().label(Key::W)` gives that
+label and `ctx.input.key_labels_changed()` says when to redraw. The labels
+follow the player's layout on Windows and macOS, on Linux under X11 and
+Wayland (the active xkb layout, as the player switches), and in browsers
+with the Keyboard Layout Map (Chromium-based, secure pages); elsewhere in a
+browser they are learned from the keys pressed. From C:
+`ponko_ctx_key_label`; C++: `ctx.key_label(PONKO_KEY_W)`. The controllers
+chapter has the details: [Key labels follow the keyboard
+layout](controllers.md#key-labels-follow-the-keyboard-layout).
+
 ## Mouse
 
 - `ctx.input.mouse_pos()`: in window pixels; `ctx.mouse_world()`: through the

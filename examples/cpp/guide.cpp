@@ -458,6 +458,26 @@ static void move_players(ponko::ctx& ctx) {
 }
 // ANCHOR_END: controllers
 
+// ANCHOR: key_labels
+static void walk_prompt(ponko::ctx& ctx, std::string& prompt) {
+    // "Press Z to walk" on a French keyboard; redrawn when the player switches layouts.
+    if (prompt.empty() || ctx.key_labels_changed()) prompt = "Press " + ctx.key_label(PONKO_KEY_W) + " to walk";
+}
+static void french_layout_option(ponko::ctx& ctx) {
+    ctx.set_key_labels({{PONKO_KEY_W, 'z'}, {PONKO_KEY_A, 'q'}, {PONKO_KEY_Q, 'a'}, {PONKO_KEY_Z, 'w'}});
+}
+// ANCHOR_END: key_labels
+static void key_labels_snippet() {
+    ponko::game("key labels", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
+        std::string prompt;
+        walk_prompt(ctx, prompt);
+        if (prompt != "Press W to walk") throw std::runtime_error("US label expected");
+        french_layout_option(ctx);
+        walk_prompt(ctx, prompt);
+        if (prompt != "Press Z to walk") throw std::runtime_error("French label expected");
+    });
+}
+
 [[maybe_unused]] static void plan_routes(ponko::ctx&) {}
 [[maybe_unused]] static void grow_food(ponko::ctx&) {}
 [[maybe_unused]] static void every() {
@@ -5012,6 +5032,7 @@ static void touch_setup(ponko::ctx& ctx) {
 // ANCHOR_END: touch
 
 int main() {
+    key_labels_snippet();
     ponko::game("touch guide", 960, 540).run_headless(0, [](ponko::ctx& ctx) {
         touch_setup(ctx);
         ctx.feed_touch(1, ponko::touch_phase::started, {480, 100});
