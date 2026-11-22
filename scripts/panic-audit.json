@@ -323,6 +323,12 @@
     "reason": "Internal invariant: /// `added`. Does nothing for an untracked column.     #[inline]     pub(crate) fn stamp(&self, col: usize, row: usize, stamp: u32, added: bool) {         debug_assert!(row < self.cap());",
     "site": "crates/ponko_ecs/src/storage.rs:757"
   },
+  "crates/ponko_ecs/src/storage.rs:9d7002403b61410d": {
+    "classification": "invariant",
+    "construction": "debug_assert!(rows <= self.len())",
+    "reason": "put_stamps is called by restore_rows right after the rows were copied in: the saved table's row count is the archetype's length",
+    "site": "crates/ponko_ecs/src/storage.rs:1049"
+  },
   "crates/ponko_ecs/src/storage.rs:be3e2253e3e7b20e": {
     "classification": "invariant",
     "construction": "assert_eq!(perm.len(), self.len())",
@@ -887,6 +893,12 @@
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. // A view system that declares nothing can reach nothing.                 let access = with_conditions(access.unwrap_or_default());                 if let Some(problem) = access.view_problem() {                     panic!(\"Game::add: view system `{name}` {problem}\");",
     "site": "src/game.rs:942"
   },
+  "src/game.rs:7555d753251fce24": {
+    "classification": "caller-contract",
+    "construction": "panic!(\"rollback: {e}; keep the same `ctx.world` while a rollback session runs\")",
+    "reason": "Tells the caller to keep the same ctx.world while a rollback session runs; unchanged from #74, moved into load_world",
+    "site": "src/game.rs:1015"
+  },
   "src/game.rs:8086a7e148c93aad": {
     "classification": "caller-contract",
     "construction": "assert!(hz > 0, \"Game::fixed_hz: the rate must be at least 1 Hz\")",
@@ -898,18 +910,6 @@
     "construction": ".expect(\"a batch gives its systems back\")",
     "reason": "Internal invariant: }     match &mut s.run {         Run::Ctx(f) => f(ctx),         Run::View(runner) => runner.as_mut().expect(\"a batch gives its systems back\").run_alone(ctx),",
     "site": "src/game.rs:889"
-  },
-  "src/game.rs:8bb769f9f2ab983f": {
-    "classification": "caller-contract",
-    "construction": "panic!(\"rollback: {e}; keep the same `ctx.world` while a rollback session runs\")",
-    "reason": "The game replaced ctx.world during a rollback session; the message names the fix.",
-    "site": "src/game.rs:1006"
-  },
-  "src/game.rs:97bdd455a0208cec": {
-    "classification": "forwarded-error",
-    "construction": "panic!(\"rollback: {e}\")",
-    "reason": "Displays SnapshotError, which names the component and the fix (derive Clone or World::register_clone).",
-    "site": "src/game.rs:994"
   },
   "src/game.rs:a461c8f275ee9ca4": {
     "classification": "forwarded-error",
@@ -928,6 +928,12 @@
     "construction": "assert!( config.every == 1 || phase <= Phase::SimLast, \"Game::add: system `{}` has an interval, and only fixed-tick phases take one\", config.name )",
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. #[track_caller]     fn add_config(&mut self, phase: Phase, config: SystemConfig) -> SystemId {         assert!(",
     "site": "src/game.rs:1230"
+  },
+  "src/game.rs:cd62d8ce0756c864": {
+    "classification": "caller-contract",
+    "construction": "panic!(\"rollback: {e}\")",
+    "reason": "Names the component that can't be copied and the fix (derive Clone or register_clone); unchanged from #74, moved into save_world",
+    "site": "src/game.rs:999"
   },
   "src/game.rs:f9fd6c0057a92dc0": {
     "classification": "caller-contract",

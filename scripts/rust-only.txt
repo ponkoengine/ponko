@@ -72,5 +72,3 @@ InputScenario::connect_gamepad   controllers.md    # C and C++ scenarios are JSO
 Assets::browser_saves            editor.md         # a C or C++ web game keeps no files in a browser yet
 Assets::revert_browser_save      editor.md         # same
 Assets::browser_saves_persistent editor.md         # same
-GameRollback                     networking.md     # generic over the game's input type, which C can't name; C games use lockstep
-WorldSnapshot                    networking.md     # used through GameRollback; C components (no destructor) are copied as bytes, so a binding can follow

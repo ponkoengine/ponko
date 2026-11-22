@@ -81,6 +81,10 @@ pub(crate) struct GameState {
     pub(crate) physics3d: crate::physics3d::Physics3DState,
     /// The world's hash, on the ticks checksums compare.
     pub(crate) hash: Option<u64>,
+    /// How many change ticks before the save each simulation system last
+    /// finished (`None`: not yet in this world), so that a tick run again
+    /// shows its change filters what they saw the first time.
+    pub(crate) seen: Vec<Option<u64>>,
 }
 
 impl GameState {

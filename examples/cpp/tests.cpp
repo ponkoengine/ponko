@@ -13,6 +13,8 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <mutex>
+#include <condition_variable>
 #include <type_traits>
 #include <vector>
 #define CHECK(...) do { if (!(__VA_ARGS__)) { std::cerr << "failed: " #__VA_ARGS__ << " (line " << __LINE__ << ")\n"; std::abort(); } } while (false)
@@ -5535,7 +5537,148 @@ static void native_parity_round5() {
     });
 }
 
+
+// Rollback for a whole game (ponko_ctx_rollback_*): two peers, each a headless game on its own
+// thread, trade packets that arrive late and out of order. Both end in the world an offline run with
+// the same inputs has, with many rollbacks on the way. And world snapshots on their own.
+namespace rollback_test {
+struct Pad { std::int8_t dx; std::uint8_t fire; };
+struct Racer { std::uint32_t id; float x, v; std::uint32_t shots; };
+constexpr std::uint32_t delay = 2;
+constexpr std::uint64_t active = 60, frames = 120;
+Pad pad(std::uint32_t p, std::uint64_t t) {
+    if (t >= active) return Pad{0, 0};
+    const std::uint64_t h = (t / 3 + 1) * 2654435761u + p * 40503u;
+    return Pad{std::int8_t(int(h >> 7 & 3) - 1), std::uint8_t(h >> 11 & 1)};
+}
+void race(ponko::ctx& ctx, bool online) {
+    const std::uint64_t t = ctx.sim_tick();
+    Pad pads[2];
+    for (std::uint32_t p = 0; p < 2; ++p)
+        pads[p] = online ? ctx.rollback_input<Pad>(p) : (t >= delay ? pad(p, t - delay) : Pad{0, 0});
+    ctx.world().each([&](Racer& r) {
+        r.v = r.v * 0.9f + float(pads[r.id].dx);
+        r.x += r.v / 60.0f;
+        if (pads[r.id].fire && t % 5 == 0) r.shots++;
+    });
+}
+void setup(ponko::ctx& ctx) {
+    for (std::uint32_t id = 0; id < 2; ++id) ctx.world().spawn(Racer{id, float(id) * 10.0f, 0.0f, 0});
+}
+using State = std::vector<std::uint32_t>;
+State state(ponko::world_view w) {
+    State out(8, 0);
+    w.each([&](const Racer& r) {
+        std::memcpy(&out[r.id * 4], &r, sizeof(Racer));
+    });
+    return out;
+}
+struct Wire {
+    std::mutex lock;
+    std::condition_variable turn;
+    int waiting = 0;
+    std::uint64_t generation = 0;
+    struct Packet { std::uint32_t to; std::uint64_t due, seq; std::vector<std::uint8_t> bytes; };
+    std::vector<Packet> packets;
+    // Both peers meet here once a frame, so their frame clocks agree.
+    void meet() {
+        std::unique_lock<std::mutex> l(lock);
+        const auto mine = generation;
+        if (++waiting == 2) { waiting = 0; ++generation; turn.notify_all(); return; }
+        CHECK(turn.wait_for(l, std::chrono::seconds(30), [&] { return generation != mine; }));
+    }
+};
+struct Peer { std::uint64_t tick = 0; State last; PonkoRollbackStats stats{}; bool desync = true; };
+Peer peer(std::uint32_t me, Wire& wire) {
+    Peer result;
+    std::uint64_t frame = 0, seq = 0, noise = 17 + me;
+    ponko::game("rollback peer", 1, 1)
+        .headless_frames(true)
+        .sim_system([](ponko::ctx& ctx) { race(ctx, true); }, "race")
+        .system([&](ponko::ctx& ctx) {
+            const std::uint64_t t = ctx.sim_tick();
+            result.tick = t;
+            result.last = state(ctx.world());
+            ctx.rollback_set_input(pad(me, t));
+            auto packet = ctx.rollback_packet();
+            noise = noise * 6364136223846793005ull + 1442695040888963407ull;
+            {
+                std::lock_guard<std::mutex> l(wire.lock);
+                // 1 to 5 frames late: later packets often overtake earlier ones.
+                wire.packets.push_back({1 - me, frame + 1 + (noise >> 33) % 5, ++seq,
+                                        std::vector<std::uint8_t>(packet.first, packet.first + packet.second)});
+            }
+            wire.meet();
+            ++frame;
+            std::vector<Wire::Packet> due;
+            {
+                std::lock_guard<std::mutex> l(wire.lock);
+                for (std::size_t i = 0; i < wire.packets.size();) {
+                    if (wire.packets[i].to == me && wire.packets[i].due <= frame) {
+                        due.push_back(std::move(wire.packets[i]));
+                        wire.packets.erase(wire.packets.begin() + std::ptrdiff_t(i));
+                    } else {
+                        ++i;
+                    }
+                }
+            }
+            std::sort(due.begin(), due.end(), [](const Wire::Packet& a, const Wire::Packet& b) { return a.seq > b.seq; });
+            for (auto& p : due) CHECK(ctx.rollback_receive(p.bytes.data(), p.bytes.size()));
+            result.stats = ctx.rollback_stats();
+            result.desync = ctx.rollback_desynced();
+        }, "net")
+        .run_headless(frames, [&](ponko::ctx& ctx) {
+            setup(ctx);
+            PonkoRollbackConfig config = ponko::rollback_config(2, me);
+            config.input_delay = delay;
+            config.checksum_every = 1;
+            ctx.rollback_start(config);
+            ctx.rollback_set_input(pad(me, 0));
+            CHECK(ctx.rollback_frame() == 0);
+            (void)ctx.rollback_confirmed_frame();
+        });
+    return result;
+}
+}  // namespace rollback_test
+
+static void rollback_two_peers() {
+    using namespace rollback_test;
+    // Offline: the world at the start of every tick.
+    std::vector<State> offline;
+    ponko::game("rollback offline", 1, 1)
+        .headless_frames(true)
+        .sim_system([](ponko::ctx& ctx) { race(ctx, false); }, "race")
+        .system([&](ponko::ctx& ctx) { offline.resize(ctx.sim_tick() + 1); offline[ctx.sim_tick()] = state(ctx.world()); }, "record")
+        .run_headless(frames + 1, setup);
+    Wire wire;
+    Peer peers[2];
+    std::thread second([&] { peers[1] = peer(1, wire); });
+    peers[0] = peer(0, wire);
+    second.join();
+    for (auto& p : peers) {
+        CHECK(!p.desync);
+        CHECK(p.stats.rollbacks > 0 && p.stats.resimulated >= p.stats.rollbacks);
+        CHECK(p.tick < offline.size() && p.last == offline[p.tick]);
+    }
+    CHECK(peers[0].tick == peers[1].tick && peers[0].last == peers[1].last);
+
+    // Snapshots on their own: save, change, restore.
+    ponko::world w;
+    auto a = w.spawn(Racer{0, 1.0f, 0.0f, 0});
+    ponko::world_snapshot snapshot;
+    w.save_snapshot(snapshot);
+    CHECK(snapshot.size() == 1);
+    w.set(a, Racer{0, 5.0f, 0.0f, 0});
+    auto b = w.spawn(Racer{1, 2.0f, 0.0f, 0});
+    w.restore_snapshot(snapshot);
+    CHECK(w.get<Racer>(a).x == 1.0f && !w.alive(b));
+    CHECK(w.spawn(Racer{1, 2.0f, 0.0f, 0}) == b);
+    ponko::world other;
+    throws([&] { other.restore_snapshot(snapshot); });
+}
+
 int main() {
+    rollback_two_peers();
     hdr_output();
     controllers();
     required_components();
