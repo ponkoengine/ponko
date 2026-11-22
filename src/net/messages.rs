@@ -21,13 +21,35 @@ use serde::{Serialize, de::DeserializeOwned};
 pub const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 const CHANNEL_MEMORY: usize = 4 * MAX_MESSAGE_BYTES;
 const HEADER: usize = 21;
-const MAGIC: &[u8; 4] = b"CRM1";
+/// Every version's packets start with `CRM` and the version's digit.
+const MAGIC_FAMILY: &[u8; 3] = b"CRM";
+/// Version 2: hellos are padded and UDP hosts check address cookies.
+const MAGIC: &[u8; 4] = b"CRM2";
 const HELLO: u8 = 1;
 const WELCOME: u8 = 2;
 const DATA: u8 = 3;
 const BYE: u8 = 4;
 const FULL: u8 = 5;
 const HEARTBEAT: u8 = 6;
+/// A UDP host's answer to a hello without a valid cookie: the cookie to
+/// echo, and nothing else kept.
+const CHALLENGE: u8 = 7;
+/// A host's answer to a hello of another protocol version. Its layout
+/// (family magic and the host's digit, kind, the client's nonce, zero) must
+/// stay the same in every version, so that any client can read it.
+const WRONG_VERSION: u8 = 8;
+/// A cookie: the key period it was made in (`u32`), then the 128-bit tag.
+const COOKIE: usize = 20;
+/// Every hello is padded to this size, so that the challenge it can cause
+/// (`HEADER + COOKIE` bytes) is never larger: a host can't be used to
+/// amplify a flood towards a forged address.
+const HELLO_BYTES: usize = 64;
+/// Cookie keys change this often; the current and the previous key are
+/// kept, so a cookie is good for 5 to 10 s.
+const COOKIE_PERIOD: u64 = 5;
+/// At most this many challenges and version refusals a second, all
+/// strangers together, so that a host can't be made to flood one victim.
+const STRANGER_ANSWERS_PER_SECOND: u32 = 256;
 const INTERVAL: Duration = Duration::from_millis(100);
 const EVENT_LIMIT: usize = 4096;
 /// Renet channels of the engine's internal lanes (replication).
@@ -203,6 +225,8 @@ struct Link {
     renet: RenetClient,
     next_unreliable: u64,
     received_unreliable: Option<u64>,
+    /// A joining client's cookie from the host's challenge (zeros before).
+    cookie: [u8; COOKIE],
 }
 impl Link {
     fn new(addr: SocketAddr, client_nonce: u64, server_nonce: u64, now: Duration) -> Self {
@@ -253,8 +277,98 @@ impl Link {
             renet,
             next_unreliable: 0,
             received_unreliable: None,
+            cookie: [0; COOKIE],
         }
     }
+    /// A hello's payload: the cookie, then zeros up to `HELLO_BYTES`.
+    fn hello(&self) -> [u8; HELLO_BYTES - HEADER] {
+        let mut payload = [0; HELLO_BYTES - HEADER];
+        payload[..COOKIE].copy_from_slice(&self.cookie);
+        payload
+    }
+}
+
+/// The stateless address check of a UDP host (book/src/security.md,
+/// "Forged hellos"). A hello without a valid cookie gets a challenge with
+/// one and nothing else; the cookie is a keyed MAC over the client's
+/// address and port, the protocol version, the client's nonce and the key
+/// period, so the host keeps nothing per stranger and a cookie seen from
+/// another address, or an old one, is worthless.
+struct Cookies {
+    current: [u8; 16],
+    previous: [u8; 16],
+    /// The key period of `current`: protocol seconds / `COOKIE_PERIOD`.
+    period: u64,
+}
+impl Cookies {
+    fn new() -> Self {
+        Self {
+            current: secret(),
+            previous: secret(),
+            period: 0,
+        }
+    }
+    /// Moves to the key period of `now`: the current key becomes the
+    /// previous one (or both are new after a longer gap).
+    fn rotate(&mut self, now: Duration) {
+        let period = now.as_secs() / COOKIE_PERIOD;
+        if period == self.period {
+            return;
+        }
+        self.previous = if period == self.period + 1 {
+            self.current
+        } else {
+            secret()
+        };
+        self.current = secret();
+        self.period = period;
+    }
+    fn tag(key: &[u8; 16], addr: SocketAddr, client_nonce: u64, period: u32) -> [u8; 16] {
+        use siphasher::sip128::Hasher128;
+        let mut mac = siphasher::sip128::SipHasher24::new_with_key(key);
+        let ip = match addr.ip() {
+            std::net::IpAddr::V4(ip) => ip.to_ipv6_mapped(),
+            std::net::IpAddr::V6(ip) => ip,
+        };
+        mac.write(&[MAGIC[3]]);
+        mac.write(&ip.octets());
+        mac.write(&addr.port().to_le_bytes());
+        mac.write(&client_nonce.to_le_bytes());
+        mac.write(&period.to_le_bytes());
+        mac.finish128().as_bytes()
+    }
+    fn issue(&mut self, now: Duration, addr: SocketAddr, client_nonce: u64) -> [u8; COOKIE] {
+        self.rotate(now);
+        let period = self.period as u32;
+        let mut cookie = [0; COOKIE];
+        cookie[..4].copy_from_slice(&period.to_le_bytes());
+        cookie[4..].copy_from_slice(&Self::tag(&self.current, addr, client_nonce, period));
+        cookie
+    }
+    fn check(&mut self, now: Duration, addr: SocketAddr, client_nonce: u64, cookie: &[u8; COOKIE]) -> bool {
+        use subtle::ConstantTimeEq;
+        self.rotate(now);
+        let period = u32::from_le_bytes([cookie[0], cookie[1], cookie[2], cookie[3]]);
+        let key = if u64::from(period) == self.period {
+            &self.current
+        } else if u64::from(period) + 1 == self.period {
+            &self.previous
+        } else {
+            return false;
+        };
+        Self::tag(key, addr, client_nonce, period).ct_eq(&cookie[4..]).into()
+    }
+}
+/// A cookie key: from the OS's secure random source where there is one.
+fn secret() -> [u8; 16] {
+    let mut key = [0; 16];
+    #[cfg(any(unix, windows))]
+    if getrandom::fill(&mut key).is_ok() {
+        return key;
+    }
+    key[..8].copy_from_slice(&nonce().to_le_bytes());
+    key[8..].copy_from_slice(&nonce().to_le_bytes());
+    key
 }
 /// Datagrams waiting for an in-memory endpoint: sender, bytes, and the
 /// time they may arrive (zero: at once).
@@ -549,6 +663,12 @@ pub struct NetMessages {
     internal: VecDeque<(PeerId, bool, renet::Bytes)>,
     stats: MessageStats,
     scratch: Vec<u8>,
+    /// A UDP host's address check (`None` on other transports).
+    cookies: Option<Cookies>,
+    /// Allowance for answers to strangers (challenges, version refusals),
+    /// refilled at `STRANGER_ANSWERS_PER_SECOND`, at most one second's worth.
+    stranger_allowance: Duration,
+    stranger_at: Duration,
 }
 impl NetMessages {
     #[cfg(any(test, feature = "steam", feature = "webrtc"))]
@@ -600,6 +720,9 @@ impl NetMessages {
             internal: VecDeque::new(),
             stats: MessageStats::default(),
             scratch: Vec::with_capacity(1500),
+            cookies: None,
+            stranger_allowance: Duration::from_secs(1),
+            stranger_at: Duration::ZERO,
         }
     }
     /// Bind a nonblocking UDP host. `max_clients` is 1..=1024, excluding host.
@@ -619,7 +742,9 @@ impl NetMessages {
         }
         let socket = UdpSocket::bind(addr)?;
         socket.set_nonblocking(true)?;
-        Ok(Self::new(Wire::Udp(socket), true, max_clients))
+        let mut net = Self::new(Wire::Udp(socket), true, max_clients);
+        net.cookies = Some(Cookies::new());
+        Ok(net)
     }
     /// Start joining a UDP host. Poll both sides until `Connected` or
     /// `Disconnected`.
@@ -1068,7 +1193,11 @@ impl NetMessages {
                     .last_sent
                     .is_none_or(|sent| self.now.saturating_sub(sent) >= INTERVAL)
                 {
-                    self.transmit(link, if link.connected { HEARTBEAT } else { HELLO }, &[])?;
+                    if link.connected {
+                        self.transmit(link, HEARTBEAT, &[])?;
+                    } else {
+                        self.transmit(link, HELLO, &link.hello())?;
+                    }
                     link.last_sent = Some(self.now);
                 }
             }
@@ -1079,25 +1208,57 @@ impl NetMessages {
         result
     }
     fn transmit(&mut self, link: &Link, kind: u8, data: &[u8]) -> io::Result<()> {
+        self.send_raw(link.addr, kind, link.client_nonce, link.server_nonce, data)
+    }
+    /// Frames and sends one datagram without a link (answers to strangers
+    /// use only the reused scratch buffer, no allocation).
+    fn send_raw(&mut self, addr: SocketAddr, kind: u8, cn: u64, sn: u64, data: &[u8]) -> io::Result<()> {
         self.scratch.clear();
         self.scratch.extend_from_slice(MAGIC);
         self.scratch.push(kind);
-        self.scratch.extend_from_slice(&link.client_nonce.to_le_bytes());
-        self.scratch.extend_from_slice(&link.server_nonce.to_le_bytes());
+        self.scratch.extend_from_slice(&cn.to_le_bytes());
+        self.scratch.extend_from_slice(&sn.to_le_bytes());
         self.scratch.extend_from_slice(data);
-        if self.wire.send(link.addr, &self.scratch)? {
+        if self.wire.send(addr, &self.scratch)? {
             self.stats.packets_sent += 1;
             self.stats.bytes_sent += self.scratch.len() as u64;
         }
         Ok(())
     }
+    /// Whether a hello from `addr` has to carry a cookie: on a UDP host,
+    /// for UDP addresses (browser clients come over a TCP connection, which
+    /// proved the address already).
+    fn needs_cookie(&self, addr: SocketAddr) -> bool {
+        let _ = addr;
+        self.cookies.is_some()
+            && match &self.wire {
+                #[cfg(not(target_arch = "wasm32"))]
+                Wire::UdpWeb(..) => !super::websocket::WebListener::owns(addr),
+                _ => true,
+            }
+    }
+    /// Takes one answer to a stranger from the allowance, if there is one.
+    fn may_answer_stranger(&mut self) -> bool {
+        let cost = Duration::from_secs(1) / STRANGER_ANSWERS_PER_SECOND;
+        let since = self.now.saturating_sub(self.stranger_at);
+        self.stranger_at = self.now;
+        self.stranger_allowance = (self.stranger_allowance + since).min(Duration::from_secs(1));
+        if self.stranger_allowance < cost {
+            return false;
+        }
+        self.stranger_allowance -= cost;
+        true
+    }
     fn receive(&mut self, addr: SocketAddr, data: &[u8]) -> io::Result<()> {
-        if data.len() < HEADER || &data[..4] != MAGIC {
+        if data.len() < HEADER || &data[..3] != MAGIC_FAMILY {
             return Ok(());
         }
         let kind = data[4];
         let cn = u64::from_le_bytes(data[5..13].try_into().expect("nonce"));
         let sn = u64::from_le_bytes(data[13..21].try_into().expect("nonce"));
+        if &data[..4] != MAGIC {
+            return self.receive_other_version(addr, data[3], kind, cn);
+        }
         if self.hosting && kind == HELLO && cn != 0 && sn == 0 {
             if let Some((&peer, link)) = self.links.iter().find(|(_, l)| l.addr == addr) {
                 if link.client_nonce == cn {
@@ -1109,12 +1270,30 @@ impl NetMessages {
                 }
                 return Ok(());
             }
-            let link = Link::new(addr, cn, nonce(), self.now);
+            if self.needs_cookie(addr) {
+                // An unpadded hello could make the challenge an amplifier.
+                let Some(cookie) = data.get(HEADER..HEADER + COOKIE).filter(|_| data.len() >= HELLO_BYTES) else {
+                    return Ok(());
+                };
+                let cookie: &[u8; COOKIE] = cookie.try_into().expect("cookie length");
+                let Some(cookies) = self.cookies.as_mut() else {
+                    return Ok(());
+                };
+                if !cookies.check(self.now, addr, cn, cookie) {
+                    if self.may_answer_stranger()
+                        && let Some(cookies) = self.cookies.as_mut()
+                    {
+                        let cookie = cookies.issue(self.now, addr, cn);
+                        return self.send_raw(addr, CHALLENGE, cn, 0, &cookie);
+                    }
+                    return Ok(());
+                }
+            }
             if self.links.len() >= self.max_clients {
                 // FULL uses the nonce the client already knows.
-                let rejected = Link::new(addr, cn, 0, self.now);
-                return self.transmit(&rejected, FULL, &[]);
+                return self.send_raw(addr, FULL, cn, 0, &[]);
             }
+            let link = Link::new(addr, cn, nonce(), self.now);
             let peer = PeerId(self.next_peer);
             self.next_peer = self
                 .next_peer
@@ -1129,6 +1308,17 @@ impl NetMessages {
             return Ok(());
         };
         let link = self.links.get_mut(&peer).expect("link");
+        if !self.hosting && !link.connected && kind == CHALLENGE && sn == 0 {
+            // Echo the cookie at once: one extra round trip, no more.
+            let Some(cookie) = data.get(HEADER..HEADER + COOKIE) else {
+                return Ok(());
+            };
+            link.cookie.copy_from_slice(cookie);
+            link.last_sent = Some(self.now);
+            let payload = link.hello();
+            let (cn, sn, to) = (link.client_nonce, link.server_nonce, link.addr);
+            return self.send_raw(to, HELLO, cn, sn, &payload);
+        }
         if !self.hosting && !link.connected && kind == FULL && sn == 0 {
             self.links.remove(&peer);
             self.events
@@ -1156,6 +1346,35 @@ impl NetMessages {
             }
             _ => {}
         }
+        Ok(())
+    }
+    /// A datagram of another protocol version (`digit` after the family
+    /// magic). A host answers a hello with one refusal no larger than it;
+    /// a joining client takes a host's refusal as the end of the join.
+    fn receive_other_version(&mut self, addr: SocketAddr, digit: u8, kind: u8, cn: u64) -> io::Result<()> {
+        if self.hosting {
+            if kind == HELLO && cn != 0 && self.may_answer_stranger() {
+                return self.send_raw(addr, WRONG_VERSION, cn, 0, &[]);
+            }
+            return Ok(());
+        }
+        if kind != WRONG_VERSION {
+            return Ok(());
+        }
+        let Some((&peer, _)) = self
+            .links
+            .iter()
+            .find(|(_, l)| l.addr == addr && l.client_nonce == cn && !l.connected)
+        else {
+            return Ok(());
+        };
+        self.links.remove(&peer);
+        let theirs = char::from(digit);
+        let ours = char::from(MAGIC[3]);
+        self.events.push_back(MessageEvent::Disconnected(
+            peer,
+            format!("version mismatch: the host speaks message protocol {theirs}, this endpoint {ours}"),
+        ));
         Ok(())
     }
     /// Takes the oldest event, if any: [`events`](Self::events) one at a time
@@ -1310,6 +1529,14 @@ impl NetMessages {
         local_addr(index)
     }
 
+    /// Makes an in-memory host check address cookies, as a UDP host does.
+    pub(super) fn require_cookies(mut self) -> Self {
+        if self.hosting {
+            self.cookies = Some(Cookies::new());
+        }
+        self
+    }
+
     /// Takes `packet` as a datagram from `from`. With `header`, `packet`
     /// starts with a kind byte, and the magic and the nonces of the link
     /// to `from` (made-up ones when there is none) go around it.
@@ -1414,6 +1641,218 @@ mod tests {
 
         assert!(matches!(nets[0].next_event(), Some(MessageEvent::Connected(_))));
         assert_eq!(nets[1].next_event(), Some(MessageEvent::Connected(PeerId::HOST)));
+    }
+
+    /// A version-2 hello from a client with nonce `cn`, carrying `cookie`.
+    fn hello(cn: u64, cookie: &[u8; COOKIE]) -> Vec<u8> {
+        let mut packet = MAGIC.to_vec();
+        packet.push(HELLO);
+        packet.extend_from_slice(&cn.to_le_bytes());
+        packet.extend_from_slice(&0u64.to_le_bytes());
+        packet.extend_from_slice(cookie);
+        packet.resize(HELLO_BYTES, 0);
+        packet
+    }
+
+    /// A loopback host that checks cookies, polled once (its clock runs).
+    fn cookie_host() -> NetMessages {
+        let mut host = NetMessages::loopback(2).remove(0).require_cookies();
+        host.poll_elapsed(Duration::ZERO).unwrap();
+        host
+    }
+
+    /// An address no loopback endpoint has: what it is sent goes nowhere.
+    fn forged(i: u32) -> SocketAddr {
+        SocketAddr::from((
+            [10, (i >> 16) as u8, (i >> 8) as u8, i as u8],
+            40_000 + (i % 1000) as u16,
+        ))
+    }
+
+    #[test]
+    fn forged_hellos_get_a_small_challenge_and_leave_no_state() {
+        let mut host = cookie_host();
+        let capacity = host.scratch.capacity();
+        for i in 0..10_000u32 {
+            let packet = hello(u64::from(i) + 1, &[0; COOKIE]);
+            host.receive(forged(i), &packet).unwrap();
+            // Garbage in the cookie field is no better than none.
+            host.receive(forged(i), &hello(u64::from(i) + 1, &[0xAB; COOKIE]))
+                .unwrap();
+        }
+        assert!(host.links.is_empty(), "no connection slot for an unproven address");
+        assert_eq!(host.next_event(), None);
+        assert_eq!(host.scratch.capacity(), capacity, "answers reuse the scratch buffer");
+        let stats = host.stats();
+        assert_eq!(
+            stats.packets_sent,
+            u64::from(STRANGER_ANSWERS_PER_SECOND),
+            "challenges are capped per second"
+        );
+        assert_eq!(stats.bytes_sent, stats.packets_sent * (HEADER + COOKIE) as u64);
+        assert!(
+            HEADER + COOKIE <= HELLO_BYTES,
+            "a challenge is never larger than its hello"
+        );
+        // The allowance refills with time.
+        host.poll_elapsed(Duration::from_secs(1)).unwrap();
+        host.receive(forged(1), &hello(2, &[0; COOKIE])).unwrap();
+        assert_eq!(host.stats().packets_sent, stats.packets_sent + 1);
+    }
+
+    #[test]
+    fn short_hellos_get_no_challenge_from_a_cookie_host() {
+        let mut host = cookie_host();
+        let mut short = hello(7, &[0; COOKIE]);
+        short.truncate(HEADER + COOKIE);
+        host.receive(forged(1), &short).unwrap();
+        short.truncate(HEADER);
+        host.receive(forged(1), &short).unwrap();
+        assert_eq!(
+            host.stats().packets_sent,
+            0,
+            "an answer could outgrow an unpadded hello"
+        );
+        assert!(host.links.is_empty());
+    }
+
+    #[test]
+    fn a_valid_cookie_opens_the_connection() {
+        let mut host = cookie_host();
+        let addr = forged(5);
+        let cookie = host.cookies.as_mut().unwrap().issue(host.now, addr, 9);
+        host.receive(addr, &hello(9, &cookie)).unwrap();
+        assert!(matches!(host.next_event(), Some(MessageEvent::Connected(_))));
+        assert_eq!(host.links.len(), 1);
+    }
+
+    #[test]
+    fn a_cookie_replayed_from_another_address_is_refused() {
+        let mut host = cookie_host();
+        let cookie = host.cookies.as_mut().unwrap().issue(host.now, forged(5), 9);
+        let mut other_port = forged(5);
+        other_port.set_port(other_port.port() + 1);
+        for addr in [forged(6), other_port] {
+            host.receive(addr, &hello(9, &cookie)).unwrap();
+        }
+        // Another client nonce from the right address: a different connection attempt.
+        host.receive(forged(5), &hello(10, &cookie)).unwrap();
+        // A changed tag.
+        let mut tampered = cookie;
+        tampered[COOKIE - 1] ^= 1;
+        host.receive(forged(5), &hello(9, &tampered)).unwrap();
+        assert!(host.links.is_empty());
+        assert_eq!(host.next_event(), None);
+        assert_eq!(host.stats().packets_sent, 4, "each got a fresh challenge instead");
+    }
+
+    #[test]
+    fn a_cookie_is_good_for_one_key_period_after_its_own_and_no_longer() {
+        let addr = forged(5);
+        // Still good 9.9 s later: made at the start of a period, used at
+        // the end of the next.
+        let mut host = cookie_host();
+        host.poll_elapsed(Duration::from_secs(5)).unwrap();
+        let cookie = host.cookies.as_mut().unwrap().issue(host.now, addr, 9);
+        for _ in 0..2 {
+            host.poll_elapsed(Duration::from_millis(4_950)).unwrap();
+        }
+        host.receive(addr, &hello(9, &cookie)).unwrap();
+        assert_eq!(host.links.len(), 1, "a cookie from the previous period is good");
+
+        // Expired after two key changes (at most 10 s).
+        let mut host = cookie_host();
+        let cookie = host.cookies.as_mut().unwrap().issue(host.now, addr, 9);
+        for _ in 0..2 {
+            host.poll_elapsed(Duration::from_secs(5)).unwrap();
+        }
+        host.receive(addr, &hello(9, &cookie)).unwrap();
+        assert!(host.links.is_empty(), "an expired cookie is refused");
+        assert_eq!(host.stats().packets_sent, 1, "and answered with a new challenge");
+    }
+
+    #[test]
+    fn a_cookie_of_a_restarted_host_is_refused() {
+        let mut first = cookie_host();
+        let cookie = first.cookies.as_mut().unwrap().issue(first.now, forged(5), 9);
+        let mut second = cookie_host();
+        second.receive(forged(5), &hello(9, &cookie)).unwrap();
+        assert!(second.links.is_empty(), "keys are made at start");
+    }
+
+    #[test]
+    fn a_cookie_client_connects_in_one_extra_round_trip() {
+        let mut nets = NetMessages::loopback(2);
+        let host = nets.remove(0).require_cookies();
+        nets.insert(0, host);
+        let mut hops = 0;
+        // Client hello, host challenge, client hello with the cookie, host
+        // welcome, client connected: two hops more than without cookies.
+        for (i, side) in [1, 0, 1, 0, 1].into_iter().enumerate() {
+            nets[side].poll_elapsed(Duration::ZERO).unwrap();
+            hops = i + 1;
+            if nets[1].connected_peers() == 1 {
+                break;
+            }
+        }
+        assert_eq!(hops, 5);
+        assert_eq!(nets[1].next_event(), Some(MessageEvent::Connected(PeerId::HOST)));
+        assert!(matches!(nets[0].next_event(), Some(MessageEvent::Connected(_))));
+        assert_eq!((nets[0].stats().packets_sent, nets[1].stats().packets_sent), (2, 2));
+
+        // Negative control: without cookies it takes three hops.
+        let mut nets = NetMessages::loopback(2);
+        for side in [1, 0, 1] {
+            nets[side].poll_elapsed(Duration::ZERO).unwrap();
+        }
+        assert_eq!(nets[1].connected_peers(), 1);
+    }
+
+    #[test]
+    fn a_hello_of_another_version_gets_one_refusal_no_larger_than_it() {
+        let mut host = cookie_host();
+        let mut old = b"CRM1".to_vec();
+        old.push(HELLO);
+        old.extend_from_slice(&3u64.to_le_bytes());
+        old.extend_from_slice(&0u64.to_le_bytes());
+        host.receive(forged(1), &old).unwrap();
+        assert!(host.links.is_empty());
+        assert_eq!(host.stats().packets_sent, 1);
+        assert_eq!(host.stats().bytes_sent, old.len() as u64);
+        // Other kinds of another version get nothing; neither does a foreign magic.
+        old[4] = DATA;
+        host.receive(forged(1), &old).unwrap();
+        old[..4].copy_from_slice(b"XXXX");
+        old[4] = HELLO;
+        host.receive(forged(1), &old).unwrap();
+        assert_eq!(host.stats().packets_sent, 1);
+    }
+
+    #[test]
+    fn a_joining_client_reports_a_hosts_version_refusal() {
+        let mut client = NetMessages::loopback(2).remove(1);
+        client.poll_elapsed(Duration::ZERO).unwrap();
+        let cn = client.links[&PeerId::HOST].client_nonce;
+        let mut refusal = b"CRM3".to_vec();
+        refusal.push(WRONG_VERSION);
+        refusal.extend_from_slice(&(cn + 1).to_le_bytes());
+        refusal.extend_from_slice(&0u64.to_le_bytes());
+        client.receive(local_addr(0), &refusal).unwrap();
+        assert_eq!(
+            client.next_event(),
+            None,
+            "another connection attempt's refusal is ignored"
+        );
+        refusal[5..13].copy_from_slice(&cn.to_le_bytes());
+        client.receive(local_addr(0), &refusal).unwrap();
+        match client.next_event() {
+            Some(MessageEvent::Disconnected(PeerId::HOST, reason)) => {
+                assert!(reason.starts_with("version mismatch"), "{reason}");
+                assert!(reason.contains("protocol 3"), "{reason}");
+            }
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+        assert!(client.links.is_empty());
     }
 
     #[test]
