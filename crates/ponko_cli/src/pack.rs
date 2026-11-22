@@ -23,6 +23,7 @@ ponko pack: pack a folder of assets into one asset pack
 Usage:
   ponko pack [<folder>] [--out <file>] [--exclude <pattern>]... [--textures]
              [--cook [--platform <name>]] [--no-compress]
+             [--max-entry-size <bytes>] [--max-pack-size <bytes>] [--max-entries <n>]
   ponko pack --list <file>
 
 Packs every file in <folder> (default: assets) and its subfolders, hidden
@@ -51,6 +52,15 @@ you. The same files always give the same pack, byte for byte.
                         deflated when that makes it at least 10% smaller;
                         PNG, JPEG, Ogg and other compressed formats are
                         stored)
+  --max-entry-size <bytes>, --max-pack-size <bytes>, --max-entries <n>
+                        The caps the engine puts on what a pack may unpack
+                        to: one file (default 1 GiB), all files together
+                        (16 GiB) and the number of files (1000000).
+                        Packing refuses a pack that the engine's defaults
+                        would refuse to read, unless you give higher caps
+                        here, and then the game must raise them too
+                        (`Game::pack_limits`). Sizes take KiB, MiB or GiB:
+                        `--max-pack-size 32GiB`.
   --list <file>         Print what a pack holds instead";
 
 /// The format version written.
@@ -71,6 +81,8 @@ pub struct Options {
     pub list: Option<PathBuf>,
     /// Cook the files first, for this platform.
     pub cook: Option<crate::cook::Platform>,
+    /// The caps the pack must stay within.
+    pub limits: Limits,
 }
 
 impl Options {
@@ -91,6 +103,9 @@ impl Options {
                 "--textures" => o.textures = true,
                 "--no-compress" => o.no_compress = true,
                 "--list" => o.list = Some(value("--list")?.into()),
+                "--max-entry-size" | "--max-pack-size" | "--max-entries" => {
+                    o.limits.set(arg, &value(arg)?)?;
+                }
                 "--cook" => {
                     o.cook.get_or_insert_default();
                 }
@@ -111,6 +126,100 @@ impl Options {
         }
         Ok(o)
     }
+}
+
+/// The caps the engine puts on what a pack may unpack to
+/// (`ponko::assets::PackLimits`; the defaults are the same). A pack the
+/// engine's defaults would refuse to read is refused here too, unless the
+/// caps are raised (`--max-entry-size`, `--max-pack-size`, `--max-entries`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Limits {
+    /// The most bytes one file may have.
+    pub max_entry_size: u64,
+    /// The most bytes all files may have together.
+    pub max_pack_size: u64,
+    /// The most files.
+    pub max_entries: u64,
+}
+
+impl Default for Limits {
+    fn default() -> Limits {
+        Limits {
+            max_entry_size: 1 << 30,
+            max_pack_size: 16 << 30,
+            max_entries: 1_000_000,
+        }
+    }
+}
+
+impl Limits {
+    /// Sets the cap a flag (`--max-entry-size`, `--max-pack-size` or
+    /// `--max-entries`) names to `value`.
+    pub fn set(&mut self, flag: &str, value: &str) -> Result<(), String> {
+        let n = parse_count(value).ok_or_else(|| {
+            format!("{flag} takes a number (bytes; or with KiB, MiB or GiB, such as 32GiB), not `{value}`")
+        })?;
+        match flag {
+            "--max-entry-size" => self.max_entry_size = n,
+            "--max-pack-size" => self.max_pack_size = n,
+            _ => self.max_entries = n,
+        }
+        Ok(())
+    }
+
+    /// Checks files of these sizes (in name order) against the caps.
+    fn check(&self, sizes: &[(&[u8], u64)]) -> Result<(), String> {
+        let hint = |flag: &str, cap: &str| {
+            format!(
+                "the engine refuses to read such a pack by default: pass {flag} <n> to write it anyway, and raise the cap in the game with `Game::pack_limits` ({cap})"
+            )
+        };
+        if sizes.len() as u64 > self.max_entries {
+            return Err(format!(
+                "the pack would hold {} files, past the cap of {} files; {}",
+                sizes.len(),
+                self.max_entries,
+                hint("--max-entries", "`PackLimits::max_entries`")
+            ));
+        }
+        let mut total: u64 = 0;
+        for (name, size) in sizes {
+            let name = String::from_utf8_lossy(name);
+            if *size > self.max_entry_size {
+                return Err(format!(
+                    "\"{name}\" is {} bytes, past the cap of {} bytes for one file; {}",
+                    size,
+                    self.max_entry_size,
+                    hint("--max-entry-size", "`PackLimits::max_entry_size`")
+                ));
+            }
+            total = total.saturating_add(*size);
+            if total > self.max_pack_size {
+                return Err(format!(
+                    "the files add up to more than the cap of {} bytes for one pack, at \"{name}\"; {}",
+                    self.max_pack_size,
+                    hint("--max-pack-size", "`PackLimits::max_pack_size`")
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A count of bytes or files: digits, then optionally `KiB`, `MiB` or `GiB`
+/// (or `K`, `M`, `G`, any case).
+fn parse_count(text: &str) -> Option<u64> {
+    let text = text.trim();
+    let digits = text.find(|c: char| !c.is_ascii_digit()).unwrap_or(text.len());
+    let (number, unit) = text.split_at(digits);
+    let factor: u64 = match unit.trim().to_ascii_lowercase().as_str() {
+        "" | "b" => 1,
+        "k" | "kib" => 1 << 10,
+        "m" | "mib" => 1 << 20,
+        "g" | "gib" => 1 << 30,
+        _ => return None,
+    };
+    number.parse::<u64>().ok()?.checked_mul(factor)
 }
 
 /// How an entry is stored.
@@ -177,7 +286,17 @@ pub fn check_name(name: &str) -> Result<(), String> {
 /// Makes a pack of `files` (name, bytes). Each is deflated when `compress`
 /// and that saves at least a tenth; identical files share their bytes.
 /// Names are sorted, so the order of `files` doesn't matter.
+///
+/// Refuses files the engine's default caps would refuse to read; see
+/// [`write_with`] to give other caps.
+#[cfg(test)]
 pub fn write(files: Vec<(String, Vec<u8>)>, compress: bool) -> Result<Packed, String> {
+    write_with(files, compress, &Limits::default())
+}
+
+/// [`write`] within the caps `limits`: a pack past them is an error that names
+/// the file, the cap and how to raise it, and nothing is deflated first.
+pub fn write_with(files: Vec<(String, Vec<u8>)>, compress: bool, limits: &Limits) -> Result<Packed, String> {
     let mut sorted: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();
     for (name, bytes) in files {
         check_name(&name)?;
@@ -185,6 +304,11 @@ pub fn write(files: Vec<(String, Vec<u8>)>, compress: bool) -> Result<Packed, St
             return Err(format!("two files would be \"{name}\" in the pack"));
         }
     }
+    let sizes: Vec<(&[u8], u64)> = sorted
+        .iter()
+        .map(|(name, bytes)| (name.as_slice(), bytes.len() as u64))
+        .collect();
+    limits.check(&sizes)?;
     let mut index = Vec::new();
     let mut data: Vec<u8> = Vec::new();
     // Identical stored bytes are kept once: (codec, crc, stored) -> offset.
@@ -317,7 +441,10 @@ pub fn unpack(pack: &[u8], data_start: usize, entry: &IndexEntry) -> Result<Vec<
         Codec::Stored => stored.to_vec(),
         Codec::Deflate => {
             let mut out = Vec::new();
+            // Never more than the index says, plus one byte to notice a lie: a
+            // pack from anywhere may be read with `--list`.
             flate2::read::DeflateDecoder::new(stored)
+                .take(entry.size.saturating_add(1))
                 .read_to_end(&mut out)
                 .map_err(|e| format!("\"{}\": {e}", entry.name))?;
             out
@@ -387,6 +514,8 @@ pub struct Settings<'a> {
     pub compress: bool,
     /// Cook the files (`ponko cook`) before packing them.
     pub cook: Option<crate::cook::Settings>,
+    /// The caps the pack must stay within.
+    pub limits: Limits,
 }
 
 /// Packs `files` (name in the pack, path on disk): leaves out the excluded
@@ -432,7 +561,7 @@ pub fn pack_files(
         }
         None => contents.into_iter().collect(),
     };
-    let packed = write(files, settings.compress)?;
+    let packed = write_with(files, settings.compress, &settings.limits)?;
     Ok((packed, converted, summary))
 }
 
@@ -502,6 +631,7 @@ pub fn pack_command(options: &Options, dir: &Path) -> Result<String, String> {
             reads: crate::cook::Reads::ALL,
             cache: Some(dir.join("target").join("cook-cache")),
         }),
+        limits: options.limits,
     };
     let (packed, converted, cooked) = pack_files(&files, &folder, &settings)?;
     if let Some(parent) = out.parent() {
@@ -773,5 +903,100 @@ mod tests {
         assert!(!glob(b"*.psd", b"raw/art.psd"));
         assert!(glob(b"**/*.psd", b"raw/deep/art.psd"));
         assert!(glob(b"raw/**", b"raw/a/b.png"));
+    }
+
+    fn files_of(sizes: &[(&str, usize)]) -> Vec<(String, Vec<u8>)> {
+        sizes.iter().map(|(n, len)| (n.to_string(), vec![0u8; *len])).collect()
+    }
+
+    #[test]
+    fn a_pack_the_engines_default_caps_would_refuse_is_not_written() {
+        // Too many files: the cap is lowered here to keep the test small.
+        let few = Limits {
+            max_entries: 2,
+            ..Limits::default()
+        };
+        let err = write_with(files_of(&[("a", 1), ("b", 1), ("c", 1)]), false, &few).unwrap_err();
+        assert!(
+            err.contains("3 files") && err.contains("cap of 2") && err.contains("--max-entries"),
+            "{err}"
+        );
+        assert!(err.contains("Game::pack_limits"), "{err}");
+
+        let small = Limits {
+            max_entry_size: 100,
+            ..Limits::default()
+        };
+        let err = write_with(files_of(&[("ok", 100), ("sprites/huge.bin", 101)]), true, &small).unwrap_err();
+        assert!(
+            err.contains("\"sprites/huge.bin\"") && err.contains("101 bytes") && err.contains("100 bytes"),
+            "{err}"
+        );
+        assert!(err.contains("--max-entry-size"), "{err}");
+
+        let small = Limits {
+            max_pack_size: 150,
+            ..Limits::default()
+        };
+        let err = write_with(files_of(&[("a", 100), ("b", 100)]), true, &small).unwrap_err();
+        assert!(
+            err.contains("\"b\"") && err.contains("150") && err.contains("--max-pack-size"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn caps_given_on_the_command_line_let_a_bigger_pack_through() {
+        let files = files_of(&[("a", 100), ("b", 100)]);
+        let mut limits = Limits {
+            max_pack_size: 150,
+            ..Limits::default()
+        };
+        assert!(write_with(files.clone(), true, &limits).is_err());
+        limits.set("--max-pack-size", "1KiB").unwrap();
+        assert_eq!(limits.max_pack_size, 1024);
+        assert_eq!(write_with(files, true, &limits).unwrap().files, 2);
+        // The defaults are the engine's.
+        assert_eq!(
+            Limits::default(),
+            Limits {
+                max_entry_size: 1 << 30,
+                max_pack_size: 16 << 30,
+                max_entries: 1_000_000
+            }
+        );
+    }
+
+    #[test]
+    fn caps_parse_as_bytes_with_binary_units_and_reject_the_rest() {
+        let args = |a: &[&str]| Options::parse(&a.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        let o = args(&[
+            "--max-entry-size",
+            "2GiB",
+            "--max-pack-size",
+            "32g",
+            "--max-entries",
+            "5000000",
+        ])
+        .unwrap();
+        assert_eq!(o.limits.max_entry_size, 2 << 30);
+        assert_eq!(o.limits.max_pack_size, 32 << 30);
+        assert_eq!(o.limits.max_entries, 5_000_000);
+        for bad in ["lots", "-1", "12 parsecs", "99999999999999999999GiB"] {
+            let err = args(&["--max-pack-size", bad]).unwrap_err();
+            assert!(err.contains("--max-pack-size takes a number"), "{bad}: {err}");
+        }
+    }
+
+    #[test]
+    fn listing_a_pack_never_inflates_past_what_its_index_declares() {
+        // 1 MiB of zeros, but the index says 10 bytes.
+        let zeros = vec![0u8; 1 << 20];
+        let packed = write(vec![("z.bin".into(), zeros)], true).unwrap();
+        let (mut entries, start) = read_index(&packed.bytes).unwrap();
+        assert_eq!(entries[0].codec, Codec::Deflate);
+        entries[0].size = 10;
+        let err = unpack(&packed.bytes, start, &entries[0]).unwrap_err();
+        assert!(err.contains("damaged"), "{err}");
     }
 }

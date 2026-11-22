@@ -53,6 +53,7 @@ ponko cook: turn source assets into runtime-ready ones
 Usage:
   ponko cook [<folder>] [--out <folder> | --pack <file>] [--platform <name>]
              [--cache <folder> | --no-cache]
+             [--max-entry-size <bytes>] [--max-pack-size <bytes>] [--max-entries <n>]
 
 Cooks every file in <folder> (default: assets) into --out (default:
 target/cooked/<platform>), under the same names, so the game loads the
@@ -79,6 +80,13 @@ cooks into the game's asset pack.
   --out <folder>     Write the cooked files here (emptied first; it must be
                      empty or a folder ponko cook made)
   --pack <file>      Write one asset pack of them instead (as `ponko pack`)
+  --max-entry-size <bytes>, --max-pack-size <bytes>, --max-entries <n>
+                     With --pack: the caps the engine puts on what a pack
+                     unpacks to (default 1 GiB a file, 16 GiB in all,
+                     1000000 files; sizes take KiB, MiB, GiB). A pack the
+                     defaults would refuse to read is refused here unless
+                     you raise the caps, and then the game must too
+                     (`Game::pack_limits`).
   --platform <name>  desktop (default) or web: BC7/BC5/BC4 textures;
                      mobile: Basis Universal UASTC, transcoded at load to
                      ASTC or ETC2 (needs the engine's `basis-universal`)
@@ -211,6 +219,8 @@ pub struct Options {
     pub cache: Option<PathBuf>,
     /// Cook without the cache.
     pub no_cache: bool,
+    /// The caps a pack written with `--pack` must stay within.
+    pub limits: crate::pack::Limits,
 }
 
 impl Options {
@@ -228,6 +238,9 @@ impl Options {
             match arg.as_str() {
                 "--out" => o.out = Some(value("--out")?.into()),
                 "--pack" => o.pack = Some(value("--pack")?.into()),
+                "--max-entry-size" | "--max-pack-size" | "--max-entries" => {
+                    o.limits.set(arg, &value(arg)?)?;
+                }
                 "--platform" => o.platform = Platform::parse(&value("--platform")?)?,
                 "--cache" => o.cache = Some(value("--cache")?.into()),
                 "--no-cache" => o.no_cache = true,
@@ -1574,7 +1587,7 @@ pub fn cook_command(options: &Options, dir: &Path) -> Result<String, String> {
     let mut report = cooked.report();
     if let Some(pack) = &options.pack {
         let path = dir.join(pack);
-        let packed = crate::pack::write(cooked.files, true)?;
+        let packed = crate::pack::write_with(cooked.files, true, &options.limits)?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("can't make {}: {e}", parent.display()))?;
         }

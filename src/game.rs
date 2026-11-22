@@ -612,6 +612,12 @@ impl ConfiguredGame {
         self
     }
 
+    /// See [`Game::pack_limits`].
+    pub fn pack_limits(mut self, limits: crate::assets::PackLimits) -> Self {
+        self.game = self.game.pack_limits(limits);
+        self
+    }
+
     /// See [`Game::inspector`].
     pub fn inspector(mut self, on: bool) -> Self {
         self.game = self.game.inspector(on);
@@ -2766,6 +2772,35 @@ impl Game {
     /// ```
     pub fn hot_reload(mut self, on: bool) -> Self {
         self.hot_reload = on;
+        self
+    }
+
+    /// Sets the absolute caps on what an asset pack may unpack to: the size
+    /// of one file, the sum of the sizes a pack declares, and its number of
+    /// files (defaults 1 GiB, 16 GiB and 1,000,000; see [`PackLimits`](crate::assets::PackLimits)).
+    /// They apply to the `assets.pack` the game reads by itself, to mod
+    /// packs and to every [`PackSource`](crate::assets::PackSource) opened
+    /// with `open` or `from_bytes` afterwards.
+    ///
+    /// A game that loads packs from players or the network sets them low; a
+    /// game shipping a very large pack of its own raises them. The limits
+    /// are one setting for the whole process, applied as soon as this is
+    /// called, so call it first in `main`, before packs are opened (a web
+    /// build fetches its pack right after start-up). For one pack, use
+    /// [`PackSource::open_with_limits`](crate::assets::PackSource::open_with_limits).
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// use ponko::assets::PackLimits;
+    /// // Players share packs: at most 8 MiB a file, 32 MiB and 500 files a pack.
+    /// let limits = PackLimits::default()
+    ///     .with_max_entry_size(8 << 20)
+    ///     .with_max_pack_size(32 << 20)
+    ///     .with_max_entries(500);
+    /// let _ = Game::new("Sharing", 1280, 720).pack_limits(limits);
+    /// ```
+    pub fn pack_limits(self, limits: crate::assets::PackLimits) -> Self {
+        limits.set_current();
         self
     }
 

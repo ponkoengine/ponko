@@ -69,6 +69,13 @@ Options:
   --no-pack                       Ship the assets as loose files in assets/
                                   instead of one assets.pack (cooked too)
   --no-cook                       Ship the source files as they are
+  --max-entry-size <bytes>, --max-pack-size <bytes>, --max-entries <n>
+                                  The caps on what assets.pack may unpack to
+                                  (default 1 GiB a file, 16 GiB in all,
+                                  1000000 files; sizes take KiB, MiB, GiB).
+                                  A pack the engine's defaults would refuse to
+                                  read is refused unless you raise them, and
+                                  then the game must too (`Game::pack_limits`)
   --format <list>                 folder, zip, tar.gz, dmg (comma-separated);
                                   `folder` alone: the plain folder, no archive
                                   and no app bundle
@@ -121,6 +128,8 @@ pub struct Options {
     pub smoke_ticks: Option<u64>,
     pub smoke_timeout: Option<u64>,
     pub sign: Option<PathBuf>,
+    /// The caps the game's asset pack must stay within.
+    pub limits: crate::pack::Limits,
     /// `ponko notices` only.
     pub title: Option<String>,
 }
@@ -168,6 +177,7 @@ impl Options {
                 "--smoke-ticks" => o.smoke_ticks = Some(number(value()?)?.max(1)),
                 "--smoke-timeout" => o.smoke_timeout = Some(number(value()?)?.max(1)),
                 "--sign" => o.sign = Some(value()?.into()),
+                "--max-entry-size" | "--max-pack-size" | "--max-entries" => o.limits.set(flag, &value()?)?,
                 "--title" => o.title = Some(value()?),
                 other => return Err(format!("unknown argument `{other}`\n\n{usage}")),
             }
@@ -512,6 +522,7 @@ fn pack_assets(
     dir: &Path,
     meta: &PackMeta,
     cook: Option<crate::cook::Settings>,
+    limits: crate::pack::Limits,
 ) -> Result<Option<(Vec<u8>, String)>, String> {
     let files = files_under_assets(game);
     if files.is_empty() {
@@ -522,6 +533,7 @@ fn pack_assets(
         textures: meta.textures,
         compress: true,
         cook,
+        limits,
     };
     let (packed, converted, cooked) = crate::pack::pack_files(&files, &dir.join("assets"), &settings)?;
     let mut line = format!(
@@ -1029,7 +1041,7 @@ pub fn package_command(options: &Options, cwd: &Path) -> Result<String, String> 
     let mut loose_line = None;
     let pack = if pack_meta.enabled && !options.no_pack {
         let dir = project.manifest.parent().unwrap_or(Path::new("."));
-        pack_assets(&game, dir, &pack_meta, cook)?
+        pack_assets(&game, dir, &pack_meta, cook, options.limits)?
     } else {
         if let Some(cook) = &cook {
             let folder = format!("{}-{}", game.slug, platform.label());
