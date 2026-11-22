@@ -120,3 +120,14 @@ test("the_isolation_worker_is_only_for_threaded_builds", () => {
   assert.equal(run.status, 2);
   assert.match(run.stderr, /--isolation-worker is for --threads/);
 });
+
+test("a_cargo_profile_replaces_release_only_when_given", () => {
+  assert.deepEqual(printEnv({}, []), { toolchain: "default" }, "release is the default and prints nothing");
+  assert.deepEqual(printEnv({}, ["--profile", "dist-web"]), { toolchain: "default", profile: "dist-web" });
+});
+
+test("a_profile_flag_needs_a_name", () => {
+  const run = spawnSync("bash", [BUILD, "--profile"], { encoding: "utf8" });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /--profile needs a name/);
+});

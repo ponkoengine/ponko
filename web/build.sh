@@ -7,6 +7,7 @@
 #   web/build.sh --features 3d web_smoke_3d   # with Cargo features (comma-separated)
 #   web/build.sh --threads battle        # with threads (nightly; see below)
 #   web/build.sh --simd --features 3d my_game   # with WASM SIMD (see below)
+#   web/build.sh --profile dist-web --bin my_game   # a Cargo profile other than release
 #   web/build.sh --threads --print-env   # what a threaded build would set, no build
 #   web/build.sh --threads --clippy      # nightly clippy on the threaded configuration, no build
 #   web/build.sh --threads --isolation-worker battle   # threads on hosts that can't send headers
@@ -30,6 +31,10 @@
 # Cross-Origin-Opener-Policy: same-origin and Cross-Origin-Embedder-Policy:
 # require-corp for the threads to start; without them the game runs on one
 # thread (python3 -m http.server sends neither).
+#
+# --profile <name> builds with that Cargo profile instead of `release`, such
+# as the `dist-web` profile of the project templates (optimized for size;
+# the guide's "Build times and download sizes").
 #
 # --isolation-worker (with --threads) adds ponko-isolate.js and its script
 # tag to index.html: on a host that can't send those headers, a service
@@ -56,6 +61,7 @@ simd=
 print_env=
 clippy=
 isolation_worker=
+profile=release
 while [ $# -gt 0 ]; do
   case "$1" in
     --bin) kind=bin; shift ;;
@@ -65,6 +71,7 @@ while [ $# -gt 0 ]; do
     --print-env) print_env=1; shift ;;
     --clippy) clippy=1; shift ;;
     --isolation-worker) isolation_worker=1; shift ;;
+    --profile) profile=${2:?--profile needs a name}; shift 2 ;;
     *) break ;;
   esac
 done
@@ -121,6 +128,9 @@ if [ -n "$print_env" ]; then
   if [ -n "$simd" ]; then
     echo "features=$features"
   fi
+  if [ "$profile" != release ]; then
+    echo "profile=$profile"
+  fi
   if [ -n "$clippy" ]; then
     echo "clippy=cargo +$toolchain clippy ${clippy_args[*]} -- -D warnings"
   fi
@@ -140,16 +150,21 @@ if [ -n "$features" ]; then
 fi
 if [ -n "$threads" ]; then
   env "$flags_var=$flags_value" cargo "+$toolchain" build -Zbuild-std=panic_abort,std \
-    --release --target wasm32-unknown-unknown "--$kind" "$name" ${feature_args[@]+"${feature_args[@]}"}
+    --profile "$profile" --target wasm32-unknown-unknown "--$kind" "$name" ${feature_args[@]+"${feature_args[@]}"}
 elif [ -n "$flags" ]; then
-  env "$flags_var=$flags_value" cargo build --release --target wasm32-unknown-unknown "--$kind" "$name" ${feature_args[@]+"${feature_args[@]}"}
+  env "$flags_var=$flags_value" cargo build --profile "$profile" --target wasm32-unknown-unknown "--$kind" "$name" ${feature_args[@]+"${feature_args[@]}"}
 else
-  cargo build --release --target wasm32-unknown-unknown "--$kind" "$name" ${feature_args[@]+"${feature_args[@]}"}
+  cargo build --profile "$profile" --target wasm32-unknown-unknown "--$kind" "$name" ${feature_args[@]+"${feature_args[@]}"}
+fi
+# Cargo puts the dev profile in debug/, every other in a folder of its name.
+profile_dir=$profile
+if [ "$profile" = dev ]; then
+  profile_dir=debug
 fi
 if [ "$kind" = example ]; then
-  wasm="$target/wasm32-unknown-unknown/release/examples/$name.wasm"
+  wasm="$target/wasm32-unknown-unknown/$profile_dir/examples/$name.wasm"
 else
-  wasm="$target/wasm32-unknown-unknown/release/$name.wasm"
+  wasm="$target/wasm32-unknown-unknown/$profile_dir/$name.wasm"
 fi
 
 rm -rf "$out"

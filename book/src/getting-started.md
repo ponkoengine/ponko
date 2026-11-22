@@ -92,13 +92,24 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+debug = "line-tables-only"
+
+[profile.dev.package.syn]
+opt-level = 0
 ```
 
 Your own code gets light optimization, and the engine and every other
 dependency full optimization, which they get once and keep: games and tests
 run many times faster than in a plain debug build, rebuilding after an edit
-stays quick, and debug info and debug checks stay on. Add it to a project you
-made by hand too.
+stays quick, and your code keeps full debug info and debug checks. The
+dependencies keep line tables only, enough for backtraces with files and
+lines, and `syn` (which only runs inside derive macros while building) isn't
+optimized: together that makes a clean debug build about a quarter faster.
+Add it to a project you made by hand too. The templates also have a
+`.cargo/config.toml` with faster linkers for Linux and Windows to switch on,
+and `dist` and `dist-web` profiles for smaller downloads; [Build times and
+download sizes](performance.md#build-times-and-download-sizes) has the
+numbers.
 
 ## Your first game
 

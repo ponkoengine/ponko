@@ -42,8 +42,24 @@ faster CPU wave spectrum for the water; see the water guide's "On the
 web"), for browsers that have it.
 
 The output folder is a static site: put it on any web host (GitHub Pages,
-itch.io, your own server). It holds the page, the game (`game_bg.wasm`, about
-3 MB compressed) and a copy of `assets/`.
+itch.io, your own server). It holds the page, the game (`game_bg.wasm`) and
+a copy of `assets/`.
+
+For the version players download, build with the templates' size profile:
+`web/build.sh --profile dist-web --bin my_game` (or `ponko package --web
+--profile dist-web`). For the 2D template, `game_bg.wasm` is 15.1 MB in a
+release build (3.4 MB as hosts send it, brotli-compressed) and 10.2 MB with
+`dist-web` (2.8 MB), at about a minute and a half of build time instead of 39 s; [Build
+times and download sizes](performance.md#download-sizes) has the
+measurements. A project made by hand adds the profile to its `Cargo.toml`:
+
+```toml
+[profile.dist-web]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+opt-level = "s"
+```
 
 ## The gallery of examples
 

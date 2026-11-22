@@ -64,6 +64,10 @@ macro_rules! template {
                 include_str!(concat!("../templates/", $dir, "/.gitignore")),
             ),
             (".mcp.json", include_str!(concat!("../templates/", $dir, "/.mcp.json"))),
+            (
+                ".cargo/config.toml",
+                include_str!(concat!("../templates/", $dir, "/.cargo/config.toml")),
+            ),
             ("AGENTS.md", include_str!(concat!("../templates/", $dir, "/AGENTS.md"))),
             ("CLAUDE.md", include_str!(concat!("../templates/", $dir, "/CLAUDE.md"))),
             ("README.md", include_str!(concat!("../templates/", $dir, "/README.md"))),
@@ -271,6 +275,70 @@ mod tests {
             assert!(
                 !text.contains(".run()") && !text.contains(".run(|"),
                 "{name} opens no window"
+            );
+        }
+    }
+
+    /// The build settings the guide's "Build times and download sizes"
+    /// measured: optimized dependencies with line tables only, syn left
+    /// unoptimized, and the linker notes in `.cargo/config.toml`, which set
+    /// nothing until a line is uncommented (so a project builds the same on
+    /// every system out of the box).
+    #[test]
+    fn game_templates_have_the_measured_fast_build_settings() {
+        for kind in [Kind::TwoD, Kind::ThreeD, Kind::Headless, Kind::Server] {
+            let manifest = kind.files()[0].1;
+            assert!(
+                manifest.contains("[profile.dev.package.\"*\"]\nopt-level = 3\n"),
+                "templates/{}: dependencies optimized",
+                kind.folder()
+            );
+            assert!(
+                manifest.contains("debug = \"line-tables-only\""),
+                "templates/{}",
+                kind.folder()
+            );
+            assert!(
+                manifest.contains("[profile.dev.package.syn]\nopt-level = 0\n"),
+                "templates/{}: syn unoptimized",
+                kind.folder()
+            );
+            let config = kind
+                .files()
+                .iter()
+                .find(|(n, _)| *n == ".cargo/config.toml")
+                .unwrap_or_else(|| panic!("templates/{} has no .cargo/config.toml", kind.folder()))
+                .1;
+            for line in config.lines() {
+                assert!(
+                    line.is_empty() || line.starts_with('#'),
+                    "templates/{}/.cargo/config.toml sets `{line}` for every system",
+                    kind.folder()
+                );
+            }
+        }
+    }
+
+    /// The size profiles the packaging and web chapters name.
+    #[test]
+    fn window_templates_have_the_size_profiles_for_downloads() {
+        for kind in [Kind::TwoD, Kind::ThreeD] {
+            let manifest = kind.files()[0].1;
+            let dist = "[profile.dist]\ninherits = \"release\"\nlto = \"fat\"\ncodegen-units = 1\nstrip = true\n";
+            assert!(manifest.contains(dist), "templates/{}: [profile.dist]", kind.folder());
+            let web =
+                "[profile.dist-web]\ninherits = \"release\"\nlto = \"fat\"\ncodegen-units = 1\nopt-level = \"s\"\n";
+            assert!(
+                manifest.contains(web),
+                "templates/{}: [profile.dist-web]",
+                kind.folder()
+            );
+            // wasm-bindgen reads the target_features section `strip` removes.
+            let web_profile = &manifest[manifest.find("[profile.dist-web]").unwrap()..];
+            assert!(
+                !web_profile.contains("strip"),
+                "templates/{}: dist-web must not strip",
+                kind.folder()
             );
         }
     }

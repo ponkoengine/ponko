@@ -91,6 +91,39 @@ workspace, `--manifest-path`, `--features`, `--no-default-features`,
 package what is already built (honouring `CARGO_BUILD_TARGET`). `ponko help
 package` lists them all.
 
+### Smaller downloads: the `dist` profiles
+
+`--profile <name>` builds with another Cargo profile than `release`. The
+templates have two made for downloads: `dist` (fat LTO, one codegen unit,
+symbols stripped; still `opt-level = 3`) and `dist-web` (the same optimized
+for size, without `strip`, which wasm-bindgen needs):
+
+```sh
+ponko package --profile dist                # desktop
+ponko package --web --profile dist-web      # the web folder
+```
+
+For the 2D template on macOS, `dist` makes the program 14.8 MB instead of
+24.5 MB (19.4 MB stripped) and takes 2 min 18 s to build instead of 36 s;
+`dist-web` makes the `.wasm` 10.2 MB instead of 15.1 MB. The numbers and the
+other settings that were tried are in [Build times and download
+sizes](performance.md#download-sizes). A project made by hand adds the
+profiles to its `Cargo.toml`:
+
+```toml
+[profile.dist]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+strip = true
+
+[profile.dist-web]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+opt-level = "s"
+```
+
 ### Assets in one pack: `ponko pack`
 
 A shipped game reads its assets from one **asset pack**, `assets.pack`, where

@@ -953,6 +953,141 @@ and `Archetype::bytes_per_entity()` is what one more entity of that exact
 component set costs. Agents get both from the control endpoint's
 `world.summary` (the MCP `world_summary` tool).
 
+## Build times and download sizes
+
+How long a game made with `ponko new` takes to build, and how big it is.
+Measured on 2026-11-22 at revision `0a012240` (the `dev` branch) plus the
+template changes below, on the MacBook Pro of this chapter (Apple M4 Max,
+10 performance and 4 efficiency cores, 36 GB, macOS 27.2.1, on power),
+Rust 1.100.0, nothing else building. Each project was made from the
+templates with the engine by path (`ponko new --path`) and built in its own
+target folder. Times are cargo's own ("Finished ... in"), the median of
+three clean builds and of four rebuilds; the runs of each row were within
+4% of each other (clean builds) or 0.05 s (rebuilds and links). The
+"3D tutorial" is [`examples/tutorial_3d`](../../examples/tutorial_3d) in a
+`--3d` project (`src/lib.rs` is its `game.rs`, with `physics3d`).
+`scripts/build-times.sh <project> [dev|release]` repeats every row.
+
+| | 2D template | 3D tutorial |
+|---|---|---|
+| Clean debug build (the templates' profile) | 45.8 s | 63 s |
+| Clean debug build, the profile before 2026-11-22 | 60.0 s | 84 s |
+| Clean release build | 36.1 s | 55.7 s |
+| Debug rebuild after a one-line change in `src/lib.rs` | 0.46 s | 0.49 s |
+| ... in `src/main.rs` | 0.32 s | 0.35 s |
+| Release rebuild after a one-line change in `src/lib.rs` | 1.00 s | 0.92 s |
+| ... in `src/main.rs` | 0.47 s | 0.52 s |
+| Link (rustc's `link_binary`), debug / release | 0.15 / 0.20 s | 0.16 / 0.25 s |
+| Debug binary | 33.4 MB | 46.6 MB |
+| Release binary / stripped | 24.5 / 19.4 MB | 35.1 / 28.2 MB |
+| Target folder, debug / release | 2.4 / 0.9 GB | 3.3 / 1.2 GB |
+
+The edit-to-binary loop is well under the 2 s this project aims for, so
+nothing about the engine had to change for it: a change to your code
+rebuilds only your crate (incrementally: with `CARGO_INCREMENTAL=0` the
+2D debug rebuild takes 1.09 s instead of 0.46 s), and the link is a third
+of that time. The engine crate and its dependencies are built once.
+
+### Where a clean build goes
+
+`cargo build --timings` writes a report (`target/cargo-timings/`) of every
+crate's build. For the 2D template's clean debug build (the old profile,
+304 build units, 354 s of CPU time on 14 cores in 60 s):
+
+| Crate | Time | |
+|---|---|---|
+| `ponko` (the engine) | 26.9 s | starts at 32 s, when the last of its dependencies is done, and ends the build |
+| `naga` (wgpu's shader compiler) | 13.9 s | |
+| `syn` 3 and `syn` 2 | 12.5 s, 11.8 s | built first and optimized: the chain `syn` -> `serde_derive` -> `serde` -> ... starts the engine late |
+| `wgpu-core` | 10.7 s | |
+| `egui` (the inspector) | 10.6 s | |
+| `read-fonts`, `skrifa`, `harfrust` (text) | 8.9 s, 7.9 s, 6.6 s | |
+| `image`, `moxcms`, `pxfm` (image decoding) | 7.9 s, 6.8 s, 6.4 s | |
+
+Two changes to the templates' debug profile, both in `Cargo.toml`, cut the
+clean debug build by a quarter (60.0 to 45.8 s for the 2D template, 84 to
+63 s for the 3D tutorial) and its target folder from 3.9 to 2.4 GB, and
+leave rebuilds as they were:
+
+- `debug = "line-tables-only"` for the dependencies (they were built with
+  full debug info at `opt-level = 3`): 60.0 to 47.5 s. Backtraces still
+  name the file and line in the engine; a debugger no longer shows the
+  engine's local variables, which full optimization mostly removed anyway.
+- `opt-level = 0` for `syn`: 47.5 to 45.8 s. The `"*"` override optimized
+  every dependency, also the ones that only run while building, inside
+  derive macros (`[profile.dev.build-override]` can't undo it: a
+  `package` override wins). Release builds already build them this way.
+
+What was looked at and not changed, with the measurement:
+
+- **Generics instantiated per call site.** `cargo llvm-lines -p ponko
+  --lib` (default features): 2.53 million lines of LLVM IR in 84,500
+  functions, and no hot spot: the largest function is 0.3% of the total.
+  Serde's generated code is 21% of it, spread over hundreds of types
+  (the largest family, the scenario steps' (de)serializers, is 2.1%); by
+  module the 2D skeletons are 11% and the UI 8%. A game's own code instantiates
+  the engine's generics (systems, queries), and that is part of the 0.46 s
+  rebuild. Making large modules optional features would be the next step;
+  that changes the default features and is left for a separate issue.
+- **Proc macros.** Besides `syn`'s optimization (cut above), two major
+  versions of `syn` are built. Moving `ponko_macros` to `syn` 3 would not
+  remove `syn` 2: `zerocopy-derive` (through `half` and `ppv-lite86`) still
+  needs it.
+- **Default features.** The inspector (`egui`, `egui-wgpu`, `egui-winit`)
+  is one large default feature: a 2D template with `default-features =
+  false, features = ["audio", "window", "gamepad", "image-jpeg"]` builds
+  clean in 41.6 s instead of 45.8 s (9% less). It stays a default (the backquote
+  key opens it in any game); a game that doesn't want it can leave it out.
+- **Dynamic linking of the engine** (as Bevy's `dynamic_linking`): the link
+  is 0.15 s of the 0.46 s rebuild, so linking the engine as a shared
+  library could save at most that. It would need a separate `dylib` crate
+  wrapping the engine and a shared library shipped next to the game, so it
+  isn't offered.
+
+### Linkers
+
+On macOS the system linker is fast already (0.15 s above). Rust 1.90 and
+later link with the bundled `rust-lld` on x86-64 Linux by default. The
+templates' `.cargo/config.toml` has commented-out lines for the other
+cases: mold or lld on Linux (ARM, or older Rust), and `rust-lld.exe` for
+Windows with the MSVC toolchain. They are what the projects of those tools
+document; they were not run for this page, which has macOS numbers only.
+Uncomment the block for your machine.
+
+### Download sizes
+
+The 2D template, one clean build each. The templates have two size
+profiles: `dist` for desktop downloads (`ponko package --profile dist`) and
+`dist-web` for the web (`ponko package --web --profile dist-web`, or
+`web/build.sh --profile dist-web --bin <game>`):
+
+| Desktop (macOS, arm64) | Build | Binary | gzip -9 |
+|---|---|---|---|
+| `release` | 36 s | 24.5 MB (19.4 MB stripped) | 8.2 MB (stripped) |
+| `release` + `lto = "thin"`, `strip = true` | 38 s | 19.8 MB | 8.3 MB |
+| `dist`: `lto = "fat"`, `codegen-units = 1`, `strip = true` | 2 min 18 s | **14.8 MB** | 7.1 MB |
+| `dist` + `opt-level = "s"` | 1 min 39 s | 12.1 MB | 5.8 MB |
+
+| Web (`wasm32-unknown-unknown`, after wasm-bindgen) | Build | `.wasm` | gzip -9 | brotli -q 11 |
+|---|---|---|---|---|
+| `release` | 39 s | 15.1 MB | 5.2 MB | 3.4 MB |
+| `release` + fat LTO, one codegen unit | 1 min 58 s | 14.0 MB | 4.8 MB | 3.3 MB |
+| `dist-web`: the same + `opt-level = "s"` | 1 min 36 s (with wasm-bindgen) | **10.2 MB** | 3.8 MB | 2.8 MB |
+| the same with `opt-level = "z"` | 1 min 20 s | 10.2 MB | 3.6 MB | 2.7 MB |
+
+`dist` keeps `opt-level = 3`, because a game wants its speed, and is a
+quarter smaller than a stripped release build. On the web the download
+matters more, so `dist-web` optimizes for size: a third smaller than
+`release`, 18% smaller after brotli. `"z"` gains under 3% more after
+compression. `dist-web` doesn't `strip`: wasm-bindgen reads the section
+it would remove (it warns), and drops the names itself
+(`--remove-name-section`). `wasm-opt` (binaryen) wasn't installed on the
+measuring machine and isn't in these numbers. Panics keep unwinding in
+both profiles: the engine catches a panicking job or system batch.
+
+C and C++ games link the prebuilt `ponko_ffi` library; this section covers
+Rust projects only.
+
 ## Rules the engine follows
 
 - No heap allocation per frame in steady state on hot paths.
