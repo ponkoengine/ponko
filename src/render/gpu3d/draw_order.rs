@@ -753,7 +753,7 @@ pub(super) fn sphere_rect(
     let c = view_proj * center.extend(1.0);
     let reach = |row: glam::Vec4| radius * row.truncate().length();
     let (wl, wh) = (c.w - reach(view_proj.row(3)), c.w + reach(view_proj.row(3)));
-    if !(wl > 1e-4) || !wh.is_finite() {
+    if wl.is_nan() || wl <= 1e-4 || !wh.is_finite() {
         return None;
     }
     let range = |v: f32, row: glam::Vec4| {
