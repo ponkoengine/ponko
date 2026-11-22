@@ -1199,6 +1199,7 @@ pub fn ponko::assets::Assets::browser_saves(&self) -> alloc::vec::Vec<alloc::str
 pub fn ponko::assets::Assets::browser_saves_persistent(&self) -> core::option::Option<bool>
 pub fn ponko::assets::Assets::has_source(&self, &str) -> bool
 pub fn ponko::assets::Assets::hot_reload(&self) -> bool
+pub fn ponko::assets::Assets::image_limits(&self) -> ponko::assets::ImageLimits
 pub fn ponko::assets::Assets::load_reflected_component_json<T: 'static>(&mut self, &mut ponko_ecs::world::World, &str, ponko_ecs::entity::Entity) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::assets::Assets::load_reflected_resource_json<T: 'static>(&mut self, &mut ponko_ecs::world::World, &str) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::assets::Assets::load_resource<R: core::marker::Send + core::marker::Sync + 'static + serde_core::de::DeserializeOwned>(&mut self, &mut ponko_ecs::world::World, &str)
@@ -1209,6 +1210,7 @@ pub fn ponko::assets::Assets::reloaded_textures(&self) -> &[ponko::texture::Text
 pub fn ponko::assets::Assets::revert_browser_save(&self, &str) -> core::result::Result<bool, ponko::error::Error>
 pub fn ponko::assets::Assets::save_prefab(&mut self, &ponko_ecs::world::World, ponko_ecs::entity::Entity, &str) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::assets::Assets::save_scene(&self, &ponko_ecs::world::World, &str) -> core::result::Result<(), ponko::error::Error>
+pub fn ponko::assets::Assets::set_image_limits(&mut self, ponko::assets::ImageLimits)
 pub fn ponko::assets::Assets::try_load_resource<R: core::marker::Send + core::marker::Sync + 'static + serde_core::de::DeserializeOwned>(&mut self, &mut ponko_ecs::world::World, &str) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::assets::Assets::try_load_strings(&mut self, &mut ponko_ecs::world::World, &str) -> core::result::Result<(), ponko::error::Error>
 impl ponko::assets::Assets
@@ -1292,6 +1294,23 @@ impl core::fmt::Debug for ponko::assets::GroupStats
 pub fn ponko::assets::GroupStats::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::assets::GroupStats
 impl core::marker::StructuralPartialEq for ponko::assets::GroupStats
+pub struct ponko::assets::ImageLimits
+pub ponko::assets::ImageLimits::max_bytes: u64
+pub ponko::assets::ImageLimits::max_side: u32
+impl ponko::assets::ImageLimits
+pub const ponko::assets::ImageLimits::DEFAULT: Self
+pub const fn ponko::assets::ImageLimits::new(u32, u64) -> Self
+impl core::clone::Clone for ponko::assets::ImageLimits
+pub fn ponko::assets::ImageLimits::clone(&self) -> Self
+impl core::cmp::Eq for ponko::assets::ImageLimits
+impl core::cmp::PartialEq for ponko::assets::ImageLimits
+pub fn ponko::assets::ImageLimits::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::assets::ImageLimits
+pub fn ponko::assets::ImageLimits::default() -> Self
+impl core::fmt::Debug for ponko::assets::ImageLimits
+pub fn ponko::assets::ImageLimits::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::assets::ImageLimits
+impl core::marker::StructuralPartialEq for ponko::assets::ImageLimits
 pub struct ponko::assets::MemorySource
 impl ponko::assets::MemorySource
 pub fn ponko::assets::MemorySource::insert(&mut self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::vec::Vec<u8>>)
@@ -1306,13 +1325,36 @@ pub fn ponko::assets::MemorySource::contains(&self, &str) -> bool
 pub fn ponko::assets::MemorySource::id(&self) -> &str
 pub fn ponko::assets::MemorySource::read(&self, &str) -> core::io::error::Result<alloc::vec::Vec<u8>>
 pub fn ponko::assets::MemorySource::size(&self, &str) -> core::option::Option<u64>
+#[non_exhaustive] pub struct ponko::assets::PackLimits
+pub ponko::assets::PackLimits::max_entries: u64
+pub ponko::assets::PackLimits::max_entry_size: u64
+pub ponko::assets::PackLimits::max_pack_size: u64
+impl ponko::assets::PackLimits
+pub fn ponko::assets::PackLimits::current() -> ponko::assets::PackLimits
+pub fn ponko::assets::PackLimits::with_max_entries(self, u64) -> ponko::assets::PackLimits
+pub fn ponko::assets::PackLimits::with_max_entry_size(self, u64) -> ponko::assets::PackLimits
+pub fn ponko::assets::PackLimits::with_max_pack_size(self, u64) -> ponko::assets::PackLimits
+impl core::clone::Clone for ponko::assets::PackLimits
+pub fn ponko::assets::PackLimits::clone(&self) -> Self
+impl core::cmp::Eq for ponko::assets::PackLimits
+impl core::cmp::PartialEq for ponko::assets::PackLimits
+pub fn ponko::assets::PackLimits::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::assets::PackLimits
+pub fn ponko::assets::PackLimits::default() -> ponko::assets::PackLimits
+impl core::fmt::Debug for ponko::assets::PackLimits
+pub fn ponko::assets::PackLimits::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::assets::PackLimits
+impl core::marker::StructuralPartialEq for ponko::assets::PackLimits
 pub struct ponko::assets::PackSource
 impl ponko::assets::PackSource
 pub fn ponko::assets::PackSource::from_bytes(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::rcs::arc::Arc<[u8]>>) -> core::result::Result<ponko::assets::PackSource, ponko::error::Error>
+pub fn ponko::assets::PackSource::from_bytes_with_limits(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::rcs::arc::Arc<[u8]>>, ponko::assets::PackLimits) -> core::result::Result<ponko::assets::PackSource, ponko::error::Error>
 pub fn ponko::assets::PackSource::is_empty(&self) -> bool
 pub fn ponko::assets::PackSource::len(&self) -> usize
+pub fn ponko::assets::PackSource::limits(&self) -> ponko::assets::PackLimits
 pub fn ponko::assets::PackSource::names(&self) -> impl core::iter::traits::iterator::Iterator<Item = &str>
 pub fn ponko::assets::PackSource::open(impl core::convert::AsRef<std::path::Path>) -> core::result::Result<ponko::assets::PackSource, ponko::error::Error>
+pub fn ponko::assets::PackSource::open_with_limits(impl core::convert::AsRef<std::path::Path>, ponko::assets::PackLimits) -> core::result::Result<ponko::assets::PackSource, ponko::error::Error>
 impl ponko::assets::AssetSource for ponko::assets::PackSource
 pub fn ponko::assets::PackSource::contains(&self, &str) -> bool
 pub fn ponko::assets::PackSource::id(&self) -> &str
@@ -4593,6 +4635,7 @@ pub fn ponko::game::ConfiguredGame::has_plugin(&self, &str) -> bool
 pub fn ponko::game::ConfiguredGame::hdr_output(self, ponko::render::HdrOutput) -> Self
 pub fn ponko::game::ConfiguredGame::headless_frames(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::hot_reload(self, bool) -> Self
+pub fn ponko::game::ConfiguredGame::image_limits(self, ponko::assets::ImageLimits) -> Self
 pub fn ponko::game::ConfiguredGame::input_injection(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::input_scenario(self, ponko::scenario::InputScenario) -> Self
 pub fn ponko::game::ConfiguredGame::inspector(self, bool) -> Self
@@ -4601,6 +4644,7 @@ pub fn ponko::game::ConfiguredGame::messages(self, ponko::net::NetMessages) -> S
 pub fn ponko::game::ConfiguredGame::on_enter<S: ponko::state::States>(self, S, impl core::ops::function::FnMut(&mut ponko::prelude::Ctx) + 'static) -> Self
 pub fn ponko::game::ConfiguredGame::on_exit<S: ponko::state::States>(self, S, impl core::ops::function::FnMut(&mut ponko::prelude::Ctx) + 'static) -> Self
 pub fn ponko::game::ConfiguredGame::order(self, ponko::game::SystemId, ponko::game::SystemId) -> Self
+pub fn ponko::game::ConfiguredGame::pack_limits(self, ponko::assets::PackLimits) -> Self
 pub fn ponko::game::ConfiguredGame::parallel_systems(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::parallel_systems_env(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::parallel_threshold(self, core::time::Duration) -> Self
@@ -4651,6 +4695,7 @@ pub fn ponko::game::Game::has_state<S: ponko::state::States>(&self) -> bool
 pub fn ponko::game::Game::hdr_output(self, ponko::render::HdrOutput) -> Self
 pub fn ponko::game::Game::headless_frames(self, bool) -> Self
 pub fn ponko::game::Game::hot_reload(self, bool) -> Self
+pub fn ponko::game::Game::image_limits(self, ponko::assets::ImageLimits) -> Self
 pub fn ponko::game::Game::input_injection(self, bool) -> Self
 pub fn ponko::game::Game::input_scenario(self, ponko::scenario::InputScenario) -> Self
 pub fn ponko::game::Game::inspector(self, bool) -> Self
@@ -4660,6 +4705,7 @@ pub fn ponko::game::Game::new(impl core::convert::Into<alloc::string::String>, u
 pub fn ponko::game::Game::on_enter<S: ponko::state::States>(self, S, impl core::ops::function::FnMut(&mut ponko::prelude::Ctx) + 'static) -> Self
 pub fn ponko::game::Game::on_exit<S: ponko::state::States>(self, S, impl core::ops::function::FnMut(&mut ponko::prelude::Ctx) + 'static) -> Self
 pub fn ponko::game::Game::order(self, ponko::game::SystemId, ponko::game::SystemId) -> Self
+pub fn ponko::game::Game::pack_limits(self, ponko::assets::PackLimits) -> Self
 pub fn ponko::game::Game::parallel_systems(self, bool) -> Self
 pub fn ponko::game::Game::parallel_threshold(self, core::time::Duration) -> Self
 pub fn ponko::game::Game::physics(self, glam::f32::vec2::Vec2) -> Self
@@ -4821,6 +4867,7 @@ pub fn ponko::gfx::Graphics::set_text_shaping(&mut self, ponko::text::TextShapin
 pub fn ponko::gfx::Graphics::set_texture_filter(&mut self, ponko::texture::Texture, ponko::texture::TextureFilter)
 pub fn ponko::gfx::Graphics::sprite_count(&self) -> usize
 pub fn ponko::gfx::Graphics::text_shaping(&self) -> ponko::text::TextShaping
+pub fn ponko::gfx::Graphics::try_decode_texture(&mut self, &[u8], &str, ponko::assets::ImageLimits) -> core::result::Result<ponko::texture::Texture, ponko::error::Error>
 pub fn ponko::gfx::Graphics::try_load_font(&mut self, &str) -> core::result::Result<ponko::text::Font, ponko::error::Error>
 pub fn ponko::gfx::Graphics::try_load_system_font(&mut self, &str) -> core::result::Result<ponko::text::Font, ponko::error::Error>
 pub fn ponko::gfx::Graphics::try_load_texture(&mut self, &str) -> core::result::Result<ponko::texture::Texture, ponko::error::Error>
@@ -11110,6 +11157,7 @@ pub fn ponko::assets::Assets::browser_saves(&self) -> alloc::vec::Vec<alloc::str
 pub fn ponko::assets::Assets::browser_saves_persistent(&self) -> core::option::Option<bool>
 pub fn ponko::assets::Assets::has_source(&self, &str) -> bool
 pub fn ponko::assets::Assets::hot_reload(&self) -> bool
+pub fn ponko::assets::Assets::image_limits(&self) -> ponko::assets::ImageLimits
 pub fn ponko::assets::Assets::load_reflected_component_json<T: 'static>(&mut self, &mut ponko_ecs::world::World, &str, ponko_ecs::entity::Entity) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::assets::Assets::load_reflected_resource_json<T: 'static>(&mut self, &mut ponko_ecs::world::World, &str) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::assets::Assets::load_resource<R: core::marker::Send + core::marker::Sync + 'static + serde_core::de::DeserializeOwned>(&mut self, &mut ponko_ecs::world::World, &str)
@@ -11120,6 +11168,7 @@ pub fn ponko::assets::Assets::reloaded_textures(&self) -> &[ponko::texture::Text
 pub fn ponko::assets::Assets::revert_browser_save(&self, &str) -> core::result::Result<bool, ponko::error::Error>
 pub fn ponko::assets::Assets::save_prefab(&mut self, &ponko_ecs::world::World, ponko_ecs::entity::Entity, &str) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::assets::Assets::save_scene(&self, &ponko_ecs::world::World, &str) -> core::result::Result<(), ponko::error::Error>
+pub fn ponko::assets::Assets::set_image_limits(&mut self, ponko::assets::ImageLimits)
 pub fn ponko::assets::Assets::try_load_resource<R: core::marker::Send + core::marker::Sync + 'static + serde_core::de::DeserializeOwned>(&mut self, &mut ponko_ecs::world::World, &str) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::assets::Assets::try_load_strings(&mut self, &mut ponko_ecs::world::World, &str) -> core::result::Result<(), ponko::error::Error>
 impl ponko::assets::Assets
@@ -11252,6 +11301,7 @@ pub fn ponko::game::ConfiguredGame::has_plugin(&self, &str) -> bool
 pub fn ponko::game::ConfiguredGame::hdr_output(self, ponko::render::HdrOutput) -> Self
 pub fn ponko::game::ConfiguredGame::headless_frames(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::hot_reload(self, bool) -> Self
+pub fn ponko::game::ConfiguredGame::image_limits(self, ponko::assets::ImageLimits) -> Self
 pub fn ponko::game::ConfiguredGame::input_injection(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::input_scenario(self, ponko::scenario::InputScenario) -> Self
 pub fn ponko::game::ConfiguredGame::inspector(self, bool) -> Self
@@ -11260,6 +11310,7 @@ pub fn ponko::game::ConfiguredGame::messages(self, ponko::net::NetMessages) -> S
 pub fn ponko::game::ConfiguredGame::on_enter<S: ponko::state::States>(self, S, impl core::ops::function::FnMut(&mut ponko::prelude::Ctx) + 'static) -> Self
 pub fn ponko::game::ConfiguredGame::on_exit<S: ponko::state::States>(self, S, impl core::ops::function::FnMut(&mut ponko::prelude::Ctx) + 'static) -> Self
 pub fn ponko::game::ConfiguredGame::order(self, ponko::game::SystemId, ponko::game::SystemId) -> Self
+pub fn ponko::game::ConfiguredGame::pack_limits(self, ponko::assets::PackLimits) -> Self
 pub fn ponko::game::ConfiguredGame::parallel_systems(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::parallel_systems_env(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::parallel_threshold(self, core::time::Duration) -> Self
@@ -11493,6 +11544,7 @@ pub fn ponko::game::Game::has_state<S: ponko::state::States>(&self) -> bool
 pub fn ponko::game::Game::hdr_output(self, ponko::render::HdrOutput) -> Self
 pub fn ponko::game::Game::headless_frames(self, bool) -> Self
 pub fn ponko::game::Game::hot_reload(self, bool) -> Self
+pub fn ponko::game::Game::image_limits(self, ponko::assets::ImageLimits) -> Self
 pub fn ponko::game::Game::input_injection(self, bool) -> Self
 pub fn ponko::game::Game::input_scenario(self, ponko::scenario::InputScenario) -> Self
 pub fn ponko::game::Game::inspector(self, bool) -> Self
@@ -11502,6 +11554,7 @@ pub fn ponko::game::Game::new(impl core::convert::Into<alloc::string::String>, u
 pub fn ponko::game::Game::on_enter<S: ponko::state::States>(self, S, impl core::ops::function::FnMut(&mut ponko::prelude::Ctx) + 'static) -> Self
 pub fn ponko::game::Game::on_exit<S: ponko::state::States>(self, S, impl core::ops::function::FnMut(&mut ponko::prelude::Ctx) + 'static) -> Self
 pub fn ponko::game::Game::order(self, ponko::game::SystemId, ponko::game::SystemId) -> Self
+pub fn ponko::game::Game::pack_limits(self, ponko::assets::PackLimits) -> Self
 pub fn ponko::game::Game::parallel_systems(self, bool) -> Self
 pub fn ponko::game::Game::parallel_threshold(self, core::time::Duration) -> Self
 pub fn ponko::game::Game::physics(self, glam::f32::vec2::Vec2) -> Self
