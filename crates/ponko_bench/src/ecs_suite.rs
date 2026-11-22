@@ -1,5 +1,7 @@
-//! The ECS benchmark matrix: the same operations in ponko_ecs, bevy_ecs and
-//! hecs at 1k, 100k and 1M entities. Methodology, limits of each comparison
+//! The ECS benchmark matrix: the same operations in ponko_ecs and hecs at
+//! 1k, 100k and 1M entities. The bevy_ecs rows are in `bench/compare`, a
+//! workspace of its own (so no other engine enters this one's dependency
+//! tree), which compiles this file as it is and adds them. Methodology, limits of each comparison
 //! and the recorded baselines are in `ECS.md`; run it with
 //! `cargo run --release -p ponko_bench -- ecs/`.
 //!
@@ -31,8 +33,6 @@
 //! Correctness of every workload is checked apart from timing by the tests
 //! at the bottom (`cargo test -p ponko_bench`), on small sizes.
 
-use bevy_ecs::component::Component;
-use bevy_ecs::query::{QueryState, With, Without};
 use std::collections::VecDeque;
 use std::hint::black_box;
 
@@ -43,13 +43,13 @@ pub const SIZES: [usize; 3] = [1_000, 100_000, 1_000_000];
 /// Entity counts of the game-like workload.
 pub const GAME_SIZES: [usize; 2] = [10_000, 100_000];
 
-#[derive(Component, Clone, Copy, Debug, PartialEq, ponko_ecs::Component)]
+#[derive(Clone, Copy, Debug, PartialEq, ponko_ecs::Component)]
 pub struct Boost(pub f32);
-#[derive(Component, Clone, Copy, Debug, PartialEq, ponko_ecs::Component)]
+#[derive(Clone, Copy, Debug, PartialEq, ponko_ecs::Component)]
 pub struct Hp(pub i32);
-#[derive(Component, Clone, Copy, Debug, PartialEq, ponko_ecs::Component)]
+#[derive(Clone, Copy, Debug, PartialEq, ponko_ecs::Component)]
 pub struct Life(pub u32);
-#[derive(Component, Clone, Copy, Debug, PartialEq, ponko_ecs::Component)]
+#[derive(Clone, Copy, Debug, PartialEq, ponko_ecs::Component)]
 pub struct Ai {
     pub phase: f32,
 }
@@ -66,7 +66,7 @@ pub fn label(n: usize) -> String {
 }
 
 /// Timed runs for a case whose work grows with `n`.
-fn runs(n: usize, small: usize, mid: usize, large: usize) -> usize {
+pub fn runs(n: usize, small: usize, mid: usize, large: usize) -> usize {
     if n <= 10_000 {
         small
     } else if n <= 100_000 {
@@ -78,16 +78,8 @@ fn runs(n: usize, small: usize, mid: usize, large: usize) -> usize {
 
 // ---- homogeneous iteration ---------------------------------------------------
 
-type BevyMove = QueryState<(&'static mut Pos, &'static Vel)>;
-
 pub fn ponko_homogeneous(n: usize) -> ponko_ecs::World {
     let mut w = ponko_ecs::World::new();
-    w.spawn_batch((0..n).map(ent));
-    w
-}
-
-pub fn bevy_homogeneous(n: usize) -> bevy_ecs::world::World {
-    let mut w = bevy_ecs::world::World::new();
     w.spawn_batch((0..n).map(ent));
     w
 }
@@ -100,13 +92,6 @@ pub fn hecs_homogeneous(n: usize) -> hecs::World {
 
 pub fn move_ponko(w: &mut ponko_ecs::World, dt: f32) {
     w.query::<(&mut Pos, &Vel)>().for_each(|(p, v)| {
-        p.x += v.x * dt;
-        p.y += v.y * dt;
-    });
-}
-
-pub fn move_bevy(w: &mut bevy_ecs::world::World, q: &mut BevyMove, dt: f32) {
-    q.iter_mut(w).for_each(|(mut p, v)| {
         p.x += v.x * dt;
         p.y += v.y * dt;
     });
@@ -130,16 +115,6 @@ fn iteration(b: &mut Bench, n: usize) {
         |w| Some(w.allocated_bytes()),
     );
     b.steady(
-        &format!("ecs/iter-{l}/bevy"),
-        r,
-        || {
-            let mut w = bevy_homogeneous(n);
-            let q = w.query::<(&mut Pos, &Vel)>();
-            (w, q)
-        },
-        |(w, q)| move_bevy(w, q, black_box(DT)),
-    );
-    b.steady(
         &format!("ecs/iter-{l}/hecs"),
         r,
         || hecs_homogeneous(n),
@@ -161,8 +136,6 @@ pub fn steer(p: &mut Pos, v: &mut Vel, dt: f32) {
     p.y = (p.y + v.y * dt).rem_euclid(4096.0);
 }
 
-type BevySteer = QueryState<(&'static mut Pos, &'static mut Vel)>;
-
 pub fn steer_ponko(w: &mut ponko_ecs::World, dt: f32) {
     w.query::<(&mut Pos, &mut Vel)>().for_each(|(p, v)| steer(p, v, dt));
 }
@@ -171,23 +144,10 @@ pub fn par_steer_ponko(w: &mut ponko_ecs::World, dt: f32) {
     w.query::<(&mut Pos, &mut Vel)>().par_for_each(|(p, v)| steer(p, v, dt));
 }
 
-pub fn steer_bevy(w: &mut bevy_ecs::world::World, q: &mut BevySteer, dt: f32) {
-    q.iter_mut(w).for_each(|(mut p, mut v)| steer(&mut p, &mut v, dt));
-}
-
-pub fn par_steer_bevy(w: &mut bevy_ecs::world::World, q: &mut BevySteer, dt: f32) {
-    q.par_iter_mut(w).for_each(|(mut p, mut v)| steer(&mut p, &mut v, dt));
-}
-
 pub fn steer_hecs(w: &mut hecs::World, dt: f32) {
     w.query_mut::<(&mut Pos, &mut Vel)>()
         .into_iter()
         .for_each(|(p, v)| steer(p, v, dt));
-}
-
-/// Starts bevy's compute pool (all logical cores, its default) once.
-pub fn bevy_pool() {
-    bevy_tasks::ComputeTaskPool::get_or_init(bevy_tasks::TaskPool::default);
 }
 
 /// Thread counts for the ponko scaling curve: 1, 2, 4, 8 below the core
@@ -228,27 +188,6 @@ fn parallel(b: &mut Bench, n: usize) {
         |w| par_steer_ponko(w, black_box(DT)),
     );
     b.steady(
-        &format!("ecs/par-{l}/bevy-serial"),
-        r,
-        || {
-            let mut w = bevy_homogeneous(n);
-            let q = w.query::<(&mut Pos, &mut Vel)>();
-            (w, q)
-        },
-        |(w, q)| steer_bevy(w, q, black_box(DT)),
-    );
-    b.steady(
-        &format!("ecs/par-{l}/bevy-par"),
-        r,
-        || {
-            bevy_pool();
-            let mut w = bevy_homogeneous(n);
-            let q = w.query::<(&mut Pos, &mut Vel)>();
-            (w, q)
-        },
-        |(w, q)| par_steer_bevy(w, q, black_box(DT)),
-    );
-    b.steady(
         &format!("ecs/par-{l}/hecs-serial"),
         r,
         || hecs_homogeneous(n),
@@ -269,24 +208,6 @@ fn spawning(b: &mut Bench, n: usize) {
     b.run(&format!("ecs/spawn-batch-{l}/ponko"), r, ponko_ecs::World::new, |w| {
         w.spawn_batch((0..n).map(ent))
     });
-    b.run(
-        &format!("ecs/spawn-loop-{l}/bevy"),
-        r,
-        bevy_ecs::world::World::new,
-        |w| {
-            for i in 0..n {
-                w.spawn(ent(i));
-            }
-        },
-    );
-    b.run(
-        &format!("ecs/spawn-batch-{l}/bevy"),
-        r,
-        bevy_ecs::world::World::new,
-        |w| {
-            w.spawn_batch((0..n).map(ent));
-        },
-    );
     b.run(&format!("ecs/spawn-loop-{l}/hecs"), r, hecs::World::new, |w| {
         for i in 0..n {
             w.spawn(ent(i));
@@ -306,7 +227,7 @@ pub struct Churn<W, E> {
 }
 
 impl<W, E> Churn<W, E> {
-    fn new(n: usize, mut w: W, mut spawn: impl FnMut(&mut W, usize) -> E) -> Self {
+    pub fn new(n: usize, mut w: W, mut spawn: impl FnMut(&mut W, usize) -> E) -> Self {
         let mut live = VecDeque::with_capacity(n);
         for i in 0..n {
             live.push_back(spawn(&mut w, i));
@@ -315,7 +236,7 @@ impl<W, E> Churn<W, E> {
     }
 
     /// Replaces the `k` oldest entities with new ones.
-    fn replace(&mut self, k: usize, mut despawn: impl FnMut(&mut W, E), mut spawn: impl FnMut(&mut W, usize) -> E) {
+    pub fn replace(&mut self, k: usize, mut despawn: impl FnMut(&mut W, E), mut spawn: impl FnMut(&mut W, usize) -> E) {
         for _ in 0..k {
             let e = self.live.pop_front().expect("churn world is empty");
             despawn(&mut self.w, e);
@@ -326,14 +247,10 @@ impl<W, E> Churn<W, E> {
 }
 
 pub type PonkoChurn = Churn<ponko_ecs::World, ponko_ecs::Entity>;
-pub type BevyChurn = Churn<bevy_ecs::world::World, bevy_ecs::entity::Entity>;
 pub type HecsChurn = Churn<hecs::World, hecs::Entity>;
 
 pub fn ponko_churn(n: usize) -> PonkoChurn {
     Churn::new(n, ponko_ecs::World::new(), |w, i| w.spawn(ent(i)))
-}
-pub fn bevy_churn(n: usize) -> BevyChurn {
-    Churn::new(n, bevy_ecs::world::World::new(), |w, i| w.spawn(ent(i)).id())
 }
 pub fn hecs_churn(n: usize) -> HecsChurn {
     Churn::new(n, hecs::World::new(), |w, i| w.spawn(ent(i)))
@@ -346,15 +263,6 @@ pub fn replace_ponko(c: &mut PonkoChurn, k: usize) {
             assert!(w.despawn(e));
         },
         |w, i| w.spawn(ent(i)),
-    );
-}
-pub fn replace_bevy(c: &mut BevyChurn, k: usize) {
-    c.replace(
-        k,
-        |w, e| {
-            assert!(w.despawn(e));
-        },
-        |w, i| w.spawn(ent(i)).id(),
     );
 }
 pub fn replace_hecs(c: &mut HecsChurn, k: usize) {
@@ -375,20 +283,6 @@ pub fn remove_ponko(c: &mut PonkoChurn) {
 pub fn add_remove_ponko(c: &mut PonkoChurn) {
     add_ponko(c);
     remove_ponko(c);
-}
-pub fn add_bevy(c: &mut BevyChurn) {
-    for &e in &c.live {
-        c.w.entity_mut(e).insert(Tag);
-    }
-}
-pub fn remove_bevy(c: &mut BevyChurn) {
-    for &e in &c.live {
-        c.w.entity_mut(e).remove::<Tag>();
-    }
-}
-pub fn add_remove_bevy(c: &mut BevyChurn) {
-    add_bevy(c);
-    remove_bevy(c);
 }
 pub fn add_hecs(c: &mut HecsChurn) {
     for &e in &c.live {
@@ -417,12 +311,6 @@ fn churn(b: &mut Bench, n: usize) {
         |c| Some(c.w.allocated_bytes()),
     );
     b.steady(
-        &format!("ecs/spawn-despawn-{l}/bevy"),
-        r,
-        || bevy_churn(n),
-        |c| replace_bevy(c, k),
-    );
-    b.steady(
         &format!("ecs/spawn-despawn-{l}/hecs"),
         r,
         || hecs_churn(n),
@@ -436,12 +324,6 @@ fn churn(b: &mut Bench, n: usize) {
         |c| Some(c.w.allocated_bytes()),
     );
     b.steady(
-        &format!("ecs/add-remove-{l}/bevy"),
-        r,
-        || bevy_churn(n),
-        add_remove_bevy,
-    );
-    b.steady(
         &format!("ecs/add-remove-{l}/hecs"),
         r,
         || hecs_churn(n),
@@ -453,26 +335,12 @@ fn churn(b: &mut Bench, n: usize) {
 
 /// Entity `i` has `Tag` when `i % 2 == 0` and `Boost` when `i % 4 < 2`: four
 /// archetypes of equal size, interleaved by spawn order.
-fn split(i: usize) -> (bool, bool) {
+pub fn split(i: usize) -> (bool, bool) {
     (i.is_multiple_of(2), i % 4 < 2)
 }
 
 pub fn ponko_split(n: usize) -> ponko_ecs::World {
     let mut w = ponko_ecs::World::new();
-    for i in 0..n {
-        let base = ent(i);
-        match split(i) {
-            (true, true) => w.spawn((base.0, base.1, base.2, Tag, Boost(2.0))),
-            (true, false) => w.spawn((base.0, base.1, base.2, Tag)),
-            (false, true) => w.spawn((base.0, base.1, base.2, Boost(2.0))),
-            (false, false) => w.spawn(base),
-        };
-    }
-    w
-}
-
-pub fn bevy_split(n: usize) -> bevy_ecs::world::World {
-    let mut w = bevy_ecs::world::World::new();
     for i in 0..n {
         let base = ent(i);
         match split(i) {
@@ -500,15 +368,11 @@ pub fn hecs_split(n: usize) -> hecs::World {
 }
 
 #[inline]
-fn boosted(p: &mut Pos, v: &Vel, boost: Option<&Boost>, dt: f32) {
+pub fn boosted(p: &mut Pos, v: &Vel, boost: Option<&Boost>, dt: f32) {
     let s = boost.map_or(1.0, |b| b.0) * dt;
     p.x += v.x * s;
     p.y += v.y * s;
 }
-
-type BevyOptional = QueryState<(&'static mut Pos, &'static Vel, Option<&'static Boost>)>;
-type BevyWith = QueryState<(&'static mut Pos, &'static Vel), With<Tag>>;
-type BevyWithout = QueryState<(&'static mut Pos, &'static Vel), Without<Tag>>;
 
 pub fn optional_ponko(w: &mut ponko_ecs::World, dt: f32) {
     w.query::<(&mut Pos, &Vel, Option<&Boost>)>()
@@ -518,9 +382,6 @@ pub fn optional_ponko(w: &mut ponko_ecs::World, dt: f32) {
 pub fn optional_par_ponko(w: &mut ponko_ecs::World, dt: f32) {
     w.query::<(&mut Pos, &Vel, Option<&Boost>)>()
         .par_for_each(|(p, v, b)| boosted(p, v, b, dt));
-}
-pub fn optional_bevy(w: &mut bevy_ecs::world::World, q: &mut BevyOptional, dt: f32) {
-    q.iter_mut(w).for_each(|(mut p, v, b)| boosted(&mut p, v, b, dt));
 }
 pub fn optional_hecs(w: &mut hecs::World, dt: f32) {
     w.query_mut::<(&mut Pos, &Vel, Option<&Boost>)>()
@@ -535,12 +396,6 @@ pub fn with_ponko(w: &mut ponko_ecs::World, dt: f32) {
             p.x += v.x * dt;
             p.y += v.y * dt;
         });
-}
-pub fn with_bevy(w: &mut bevy_ecs::world::World, q: &mut BevyWith, dt: f32) {
-    q.iter_mut(w).for_each(|(mut p, v)| {
-        p.x += v.x * dt;
-        p.y += v.y * dt;
-    });
 }
 pub fn with_hecs(w: &mut hecs::World, dt: f32) {
     w.query_mut::<(&mut Pos, &Vel)>()
@@ -560,12 +415,6 @@ pub fn without_ponko(w: &mut ponko_ecs::World, dt: f32) {
             p.y += v.y * dt;
         });
 }
-pub fn without_bevy(w: &mut bevy_ecs::world::World, q: &mut BevyWithout, dt: f32) {
-    q.iter_mut(w).for_each(|(mut p, v)| {
-        p.x += v.x * dt;
-        p.y += v.y * dt;
-    });
-}
 pub fn without_hecs(w: &mut hecs::World, dt: f32) {
     w.query_mut::<(&mut Pos, &Vel)>()
         .without::<&Tag>()
@@ -584,16 +433,6 @@ fn queries(b: &mut Bench, n: usize) {
         r,
         || ponko_split(n),
         |w| optional_ponko(w, black_box(DT)),
-    );
-    b.steady(
-        &format!("ecs/optional-{l}/bevy"),
-        r,
-        || {
-            let mut w = bevy_split(n);
-            let q = w.query::<(&mut Pos, &Vel, Option<&Boost>)>();
-            (w, q)
-        },
-        |(w, q)| optional_bevy(w, q, black_box(DT)),
     );
     b.steady(
         &format!("ecs/optional-{l}/hecs"),
@@ -625,16 +464,6 @@ fn queries(b: &mut Bench, n: usize) {
         |w| with_ponko(w, black_box(DT)),
     );
     b.steady(
-        &format!("ecs/with-{l}/bevy"),
-        r,
-        || {
-            let mut w = bevy_split(n);
-            let q = w.query_filtered::<(&mut Pos, &Vel), With<Tag>>();
-            (w, q)
-        },
-        |(w, q)| with_bevy(w, q, black_box(DT)),
-    );
-    b.steady(
         &format!("ecs/with-{l}/hecs"),
         r,
         || hecs_split(n),
@@ -645,16 +474,6 @@ fn queries(b: &mut Bench, n: usize) {
         r,
         || ponko_split(n),
         |w| without_ponko(w, black_box(DT)),
-    );
-    b.steady(
-        &format!("ecs/without-{l}/bevy"),
-        r,
-        || {
-            let mut w = bevy_split(n);
-            let q = w.query_filtered::<(&mut Pos, &Vel), Without<Tag>>();
-            (w, q)
-        },
-        |(w, q)| without_bevy(w, q, black_box(DT)),
     );
     b.steady(
         &format!("ecs/without-{l}/hecs"),
@@ -689,7 +508,7 @@ pub fn role(i: usize) -> Role {
 /// Ticks a newly spawned projectile lives.
 pub const PROJECTILE_LIFE: u32 = 60;
 
-fn mob(i: usize) -> (Pos, Vel, Hp, Ai) {
+pub fn mob(i: usize) -> (Pos, Vel, Hp, Ai) {
     (
         Pos {
             x: i as f32,
@@ -705,7 +524,7 @@ fn mob(i: usize) -> (Pos, Vel, Hp, Ai) {
 
 /// Projectile number `c`; the starting ones have staggered lifetimes so a
 /// steady trickle expires every tick.
-fn projectile(c: usize, life: u32) -> (Pos, Vel, Life) {
+pub fn projectile(c: usize, life: u32) -> (Pos, Vel, Life) {
     (
         Pos {
             x: (c % 1000) as f32,
@@ -716,11 +535,11 @@ fn projectile(c: usize, life: u32) -> (Pos, Vel, Life) {
     )
 }
 
-fn start_life(i: usize) -> u32 {
+pub fn start_life(i: usize) -> u32 {
     1 + (i % PROJECTILE_LIFE as usize) as u32
 }
 
-fn prop(i: usize) -> (Pos, Spr) {
+pub fn prop(i: usize) -> (Pos, Spr) {
     (
         Pos {
             x: (i % 512) as f32,
@@ -734,7 +553,7 @@ fn prop(i: usize) -> (Pos, Spr) {
 }
 
 #[inline]
-fn think(ai: &mut Ai, v: &mut Vel, p: &Pos, dt: f32) {
+pub fn think(ai: &mut Ai, v: &mut Vel, p: &Pos, dt: f32) {
     ai.phase += dt;
     let (s, c) = (ai.phase + p.x * 0.001).sin_cos();
     v.x = c * 2.0;
@@ -742,7 +561,7 @@ fn think(ai: &mut Ai, v: &mut Vel, p: &Pos, dt: f32) {
 }
 
 #[inline]
-fn wear(hp: &mut Hp, v: &Vel) {
+pub fn wear(hp: &mut Hp, v: &Vel) {
     hp.0 -= (v.x > 0.0) as i32;
     if hp.0 <= 0 {
         hp.0 = 100;
@@ -751,7 +570,7 @@ fn wear(hp: &mut Hp, v: &Vel) {
 
 /// Folds a drawn sprite into the order-independent frame checksum.
 #[inline]
-fn draw(acc: u64, p: &Pos, s: &Spr) -> u64 {
+pub fn draw(acc: u64, p: &Pos, s: &Spr) -> u64 {
     acc.wrapping_add(u64::from(s._tex) ^ u64::from(p.x.to_bits()))
 }
 
@@ -759,12 +578,15 @@ fn draw(acc: u64, p: &Pos, s: &Spr) -> u64 {
 pub struct Game<W, E, Q> {
     pub w: W,
     /// Expired projectiles of this tick, reused so a tick doesn't allocate.
-    dead: Vec<E>,
+    pub dead: Vec<E>,
     /// Number of the next projectile to spawn.
-    next: usize,
+    pub next: usize,
     /// The draw system's checksum of the last tick.
     pub drawn: u64,
-    queries: Q,
+    /// Kept queries, for the libraries that keep them (bevy_ecs in
+    /// `bench/compare`); `()` here.
+    #[allow(dead_code)]
+    pub queries: Q,
 }
 
 pub type PonkoGame = Game<ponko_ecs::World, ponko_ecs::Entity, ()>;
@@ -817,67 +639,6 @@ pub fn tick_ponko(g: &mut PonkoGame, dt: f32) {
         .filter::<ponko_ecs::Without<Tag>>()
         .for_each(|(p, s)| acc = draw(acc, p, s));
     g.drawn = acc;
-}
-
-pub struct BevyQueries {
-    think: QueryState<(&'static mut Ai, &'static mut Vel, &'static Pos)>,
-    moves: BevyMove,
-    wear: QueryState<(&'static mut Hp, &'static Vel)>,
-    life: QueryState<(bevy_ecs::entity::Entity, &'static mut Life)>,
-    draw: QueryState<(&'static Pos, &'static Spr), Without<Tag>>,
-}
-
-pub type BevyGame = Game<bevy_ecs::world::World, bevy_ecs::entity::Entity, BevyQueries>;
-
-pub fn bevy_game(n: usize) -> BevyGame {
-    let mut w = bevy_ecs::world::World::new();
-    for i in 0..n {
-        match role(i) {
-            Role::Mob => w.spawn(mob(i)),
-            Role::Projectile => w.spawn(projectile(i, start_life(i))),
-            Role::Prop => w.spawn(prop(i)),
-            Role::Pickup => {
-                let (p, s) = prop(i);
-                w.spawn((p, s, Tag))
-            }
-        };
-    }
-    let queries = BevyQueries {
-        think: w.query(),
-        moves: w.query(),
-        wear: w.query(),
-        life: w.query(),
-        draw: w.query_filtered(),
-    };
-    Game {
-        w,
-        dead: Vec::new(),
-        next: n,
-        drawn: 0,
-        queries,
-    }
-}
-
-pub fn tick_bevy(g: &mut BevyGame, dt: f32) {
-    let (w, q) = (&mut g.w, &mut g.queries);
-    q.think
-        .iter_mut(w)
-        .for_each(|(mut ai, mut v, p)| think(&mut ai, &mut v, p, dt));
-    move_bevy(w, &mut q.moves, dt);
-    q.wear.iter_mut(w).for_each(|(mut hp, v)| wear(&mut hp, v));
-    let dead = &mut g.dead;
-    q.life.iter_mut(w).for_each(|(e, mut life)| {
-        life.0 -= 1;
-        if life.0 == 0 {
-            dead.push(e);
-        }
-    });
-    for e in g.dead.drain(..) {
-        w.despawn(e);
-        w.spawn(projectile(g.next, PROJECTILE_LIFE));
-        g.next += 1;
-    }
-    g.drawn = q.draw.iter(w).fold(0, |acc, (p, s)| draw(acc, p, s));
 }
 
 pub type HecsGame = Game<hecs::World, hecs::Entity, ()>;
@@ -945,12 +706,6 @@ fn game(b: &mut Bench, n: usize) {
         |g| Some(g.w.allocated_bytes()),
     );
     b.steady(
-        &format!("ecs/game-{l}/bevy"),
-        r,
-        || bevy_game(n),
-        |g| tick_bevy(g, black_box(DT)),
-    );
-    b.steady(
         &format!("ecs/game-{l}/hecs"),
         r,
         || hecs_game(n),
@@ -993,9 +748,6 @@ mod tests {
     fn ponko_pos(w: &mut ponko_ecs::World) -> Bits {
         sorted(w.query::<&Pos>().iter().map(bits).collect())
     }
-    fn bevy_pos(w: &mut bevy_ecs::world::World) -> Bits {
-        sorted(w.query::<&Pos>().iter(w).map(bits).collect())
-    }
     fn hecs_pos(w: &mut hecs::World) -> Bits {
         sorted(w.query_mut::<&Pos>().into_iter().map(bits).collect())
     }
@@ -1025,18 +777,14 @@ mod tests {
     #[test]
     fn homogeneous_iteration_moves_every_entity_the_same() {
         let mut pw = ponko_homogeneous(SMALL);
-        let mut bw = bevy_homogeneous(SMALL);
-        let mut q = bw.query::<(&mut Pos, &Vel)>();
         let mut hw = hecs_homogeneous(SMALL);
         for _ in 0..3 {
             move_ponko(&mut pw, DT);
-            move_bevy(&mut bw, &mut q, DT);
             move_hecs(&mut hw, DT);
         }
         let p = ponko_pos(&mut pw);
         assert_eq!(p.len(), SMALL);
         assert_eq!(moved(&p), SMALL);
-        assert_eq!(p, bevy_pos(&mut bw));
         assert_eq!(p, hecs_pos(&mut hw));
     }
 
@@ -1044,30 +792,21 @@ mod tests {
     fn parallel_steering_matches_the_serial_loop_in_every_library() {
         // Big enough for ponko to really split the work over threads.
         let n = 50_000;
-        bevy_pool();
         let mut serial = ponko_homogeneous(n);
         let mut par = ponko_homogeneous(n);
         let mut global = ponko_homogeneous(n);
         let pool = rayon::ThreadPoolBuilder::new().num_threads(4).build().unwrap();
-        let mut bevy_serial = bevy_homogeneous(n);
-        let mut qs = bevy_serial.query::<(&mut Pos, &mut Vel)>();
-        let mut bevy_par = bevy_homogeneous(n);
-        let mut qp = bevy_par.query::<(&mut Pos, &mut Vel)>();
         let mut hw = hecs_homogeneous(n);
         for _ in 0..3 {
             steer_ponko(&mut serial, DT);
             pool.install(|| par_steer_ponko(&mut par, DT));
             par_steer_ponko(&mut global, DT);
-            steer_bevy(&mut bevy_serial, &mut qs, DT);
-            par_steer_bevy(&mut bevy_par, &mut qp, DT);
             steer_hecs(&mut hw, DT);
         }
         let expected = ponko_pos(&mut serial);
         assert_eq!(moved(&expected), n);
         assert_eq!(expected, ponko_pos(&mut par));
         assert_eq!(expected, ponko_pos(&mut global));
-        assert_eq!(expected, bevy_pos(&mut bevy_serial));
-        assert_eq!(expected, bevy_pos(&mut bevy_par));
         assert_eq!(expected, hecs_pos(&mut hw));
     }
 
@@ -1080,7 +819,6 @@ mod tests {
         let mut batch = ponko_homogeneous(SMALL);
         assert_eq!(lp.len(), SMALL);
         assert_eq!(ponko_pos(&mut lp), ponko_pos(&mut batch));
-        assert_eq!(ponko_pos(&mut batch), bevy_pos(&mut bevy_homogeneous(SMALL)));
         assert_eq!(ponko_pos(&mut batch), hecs_pos(&mut hecs_homogeneous(SMALL)));
     }
 
@@ -1088,18 +826,15 @@ mod tests {
     fn churn_keeps_the_size_and_replaces_the_oldest_entities() {
         let k = SMALL / 10;
         let mut p = ponko_churn(SMALL);
-        let mut b = bevy_churn(SMALL);
         let mut h = hecs_churn(SMALL);
         let first_p: Vec<_> = p.live.iter().take(2 * k).copied().collect();
         let first_h: Vec<_> = h.live.iter().take(2 * k).copied().collect();
         for _ in 0..2 {
             replace_ponko(&mut p, k);
-            replace_bevy(&mut b, k);
             replace_hecs(&mut h, k);
         }
         assert_eq!(p.w.len(), SMALL);
         assert_eq!(h.w.len() as usize, SMALL);
-        assert_eq!(b.w.query::<&Pos>().iter(&b.w).len(), SMALL);
         assert!(first_p.iter().all(|&e| !p.w.is_alive(e)));
         assert!(first_h.iter().all(|&e| !h.w.contains(e)));
         assert!(p.live.iter().all(|&e| p.w.is_alive(e)));
@@ -1111,25 +846,20 @@ mod tests {
             x
         };
         assert_eq!(xs(ponko_pos(&mut p.w)), expected);
-        assert_eq!(xs(bevy_pos(&mut b.w)), expected);
         assert_eq!(xs(hecs_pos(&mut h.w)), expected);
     }
 
     #[test]
     fn add_remove_leaves_every_entity_without_the_marker() {
         let mut p = ponko_churn(SMALL);
-        let mut b = bevy_churn(SMALL);
         let mut h = hecs_churn(SMALL);
         // Each run moves every entity there and back, so repeated runs work.
         for _ in 0..2 {
             add_remove_ponko(&mut p);
-            add_remove_bevy(&mut b);
             add_remove_hecs(&mut h);
         }
         assert_eq!(p.w.query::<&Tag>().count(), 0);
         assert_eq!(p.w.query::<&Pos>().count(), SMALL);
-        assert_eq!(b.w.query::<&Tag>().iter(&b.w).len(), 0);
-        assert_eq!(b.w.query::<&Pos>().iter(&b.w).len(), SMALL);
         assert_eq!(h.w.query_mut::<&Tag>().into_iter().count(), 0);
         assert_eq!(h.w.query_mut::<&Pos>().into_iter().count(), SMALL);
         assert!(p.live.iter().all(|&e| p.w.get::<Pos>(e).is_some()));
@@ -1138,19 +868,14 @@ mod tests {
     #[test]
     fn the_add_half_gives_every_entity_the_marker() {
         let mut p = ponko_churn(SMALL);
-        let mut b = bevy_churn(SMALL);
         let mut h = hecs_churn(SMALL);
         add_ponko(&mut p);
-        add_bevy(&mut b);
         add_hecs(&mut h);
         assert_eq!(p.w.query::<(&Pos, &Tag)>().count(), SMALL);
-        assert_eq!(b.w.query::<(&Pos, &Tag)>().iter(&b.w).len(), SMALL);
         assert_eq!(h.w.query_mut::<(&Pos, &Tag)>().into_iter().count(), SMALL);
         remove_ponko(&mut p);
-        remove_bevy(&mut b);
         remove_hecs(&mut h);
         assert_eq!(p.w.query::<&Tag>().count(), 0);
-        assert_eq!(b.w.query::<&Tag>().iter(&b.w).len(), 0);
         assert_eq!(h.w.query_mut::<&Tag>().into_iter().count(), 0);
     }
 
@@ -1160,8 +885,6 @@ mod tests {
         assert_eq!(w.query::<&Tag>().count(), SMALL / 2);
         assert_eq!(w.query::<&Boost>().count(), SMALL / 2);
         assert_eq!(w.query::<(&Tag, &Boost)>().count(), SMALL / 4);
-        let mut b = bevy_split(SMALL);
-        assert_eq!(b.query::<(&Tag, &Boost)>().iter(&b).len(), SMALL / 4);
         let mut h = hecs_split(SMALL);
         assert_eq!(h.query_mut::<(&Tag, &Boost)>().into_iter().count(), SMALL / 4);
     }
@@ -1169,11 +892,8 @@ mod tests {
     #[test]
     fn optional_queries_visit_every_entity_and_boost_half() {
         let mut pw = ponko_split(SMALL);
-        let mut bw = bevy_split(SMALL);
-        let mut q = bw.query::<(&mut Pos, &Vel, Option<&Boost>)>();
         let mut hw = hecs_split(SMALL);
         optional_ponko(&mut pw, DT);
-        optional_bevy(&mut bw, &mut q, DT);
         optional_hecs(&mut hw, DT);
         let mut par = ponko_split(SMALL);
         optional_par_ponko(&mut par, DT);
@@ -1182,36 +902,27 @@ mod tests {
         assert_eq!(moved(&p), SMALL);
         let boosted_y = (0.5 * (2.0 * DT)).to_bits();
         assert_eq!(p.iter().filter(|&&(_, y)| y == boosted_y).count(), SMALL / 2);
-        assert_eq!(p, bevy_pos(&mut bw));
         assert_eq!(p, hecs_pos(&mut hw));
     }
 
     #[test]
     fn filtered_queries_visit_exactly_the_tagged_or_untagged_half() {
         let mut pw = ponko_split(SMALL);
-        let mut bw = bevy_split(SMALL);
-        let mut q = bw.query_filtered::<(&mut Pos, &Vel), With<Tag>>();
         let mut hw = hecs_split(SMALL);
         with_ponko(&mut pw, DT);
-        with_bevy(&mut bw, &mut q, DT);
         with_hecs(&mut hw, DT);
         let p = ponko_pos(&mut pw);
         assert_eq!(moved(&p), SMALL / 2);
-        assert_eq!(p, bevy_pos(&mut bw));
         assert_eq!(p, hecs_pos(&mut hw));
         // The tagged entities are the even ones.
         assert_eq!(pw.query::<(&Pos, &Tag)>().iter().filter(|(p, _)| p.y == 0.0).count(), 0);
 
         let mut pw = ponko_split(SMALL);
-        let mut bw = bevy_split(SMALL);
-        let mut q = bw.query_filtered::<(&mut Pos, &Vel), Without<Tag>>();
         let mut hw = hecs_split(SMALL);
         without_ponko(&mut pw, DT);
-        without_bevy(&mut bw, &mut q, DT);
         without_hecs(&mut hw, DT);
         let p = ponko_pos(&mut pw);
         assert_eq!(moved(&p), SMALL / 2);
-        assert_eq!(p, bevy_pos(&mut bw));
         assert_eq!(p, hecs_pos(&mut hw));
         assert_eq!(pw.query::<(&Pos, &Tag)>().iter().filter(|(p, _)| p.y != 0.0).count(), 0);
     }
@@ -1242,23 +953,6 @@ mod tests {
         }
     }
 
-    fn bevy_state(g: &mut BevyGame) -> GameState {
-        let w = &mut g.w;
-        let mut hp: Vec<_> = w.query::<&Hp>().iter(w).map(|h| h.0).collect();
-        let mut life: Vec<_> = w.query::<&Life>().iter(w).map(|l| l.0).collect();
-        hp.sort_unstable();
-        life.sort_unstable();
-        let entities = w.query::<&Pos>().iter(w).len();
-        GameState {
-            pos: bevy_pos(w),
-            hp,
-            life,
-            drawn: g.drawn,
-            next: g.next,
-            entities,
-        }
-    }
-
     fn hecs_state(g: &mut HecsGame) -> GameState {
         let w = &mut g.w;
         let mut hp: Vec<_> = w.query_mut::<&Hp>().into_iter().map(|h| h.0).collect();
@@ -1280,11 +974,9 @@ mod tests {
         let n = 2000;
         let ticks = 2 * PROJECTILE_LIFE as usize + 5;
         let mut p = ponko_game(n);
-        let mut b = bevy_game(n);
         let mut h = hecs_game(n);
         for _ in 0..ticks {
             tick_ponko(&mut p, DT);
-            tick_bevy(&mut b, DT);
             tick_hecs(&mut h, DT);
         }
         let state = ponko_state(&mut p);
@@ -1295,7 +987,6 @@ mod tests {
         assert!(state.life.iter().all(|&l| (1..=PROJECTILE_LIFE).contains(&l)));
         assert_eq!(state.hp.len(), n / 2);
         assert_ne!(state.drawn, 0);
-        assert_eq!(state, bevy_state(&mut b));
         assert_eq!(state, hecs_state(&mut h));
     }
 

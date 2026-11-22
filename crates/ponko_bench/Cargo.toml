@@ -4,7 +4,7 @@ default-run = "ponko_bench"
 version = "0.1.0"
 # A workspace tool, not a library: never published.
 publish = false
-description = "Benchmarks: ponko_ecs vs bevy_ecs vs hecs, and simulation at scale."
+description = "Benchmarks: ponko_ecs vs hecs, and simulation at scale (other engines: bench/compare)."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -21,9 +21,6 @@ wat = "=1.228.0"
 rapier2d = "0.36.1"
 rapier3d = "0.36.1"
 rayon = "1.12.0"
-# `multi_threaded` for `par_iter_mut`; `bevy_tasks` to start its thread pool.
-bevy_ecs = { version = "0.20.1", features = ["multi_threaded"] }
-bevy_tasks = { version = "0.20.1", features = ["multi_threaded"] }
 hecs = "0.11.2"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 # The rendering baseline's report (the engine already depends on it).
