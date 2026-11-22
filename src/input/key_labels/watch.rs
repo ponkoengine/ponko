@@ -538,7 +538,7 @@ mod linux {
         #[test]
         fn a_wayland_compositor_hands_its_keymap_to_a_keyboard_of_our_own() {
             if std::env::var_os("WAYLAND_DISPLAY").is_none() {
-                eprintln!("no Wayland session: skipped");
+                eprintln!("skipped, no Wayland session");
                 return;
             }
             let conn = wayland_client::Connection::connect_to_env().expect("$WAYLAND_DISPLAY is set");
@@ -552,7 +552,7 @@ mod linux {
         #[test]
         fn an_x_server_gives_its_keymap_and_active_group() {
             if std::env::var_os("DISPLAY").is_none() {
-                eprintln!("no X11 session: skipped");
+                eprintln!("skipped, no X11 session");
                 return;
             }
             let mut watch = super::x11::Watch::open().expect("the X server has XKB");

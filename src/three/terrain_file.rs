@@ -350,7 +350,7 @@ fn give_collider(ctx: &mut Ctx, e: Entity, tile: TerrainTile) {
 
 /// Where `tile`'s painted layers lie now (its corner), if it was made
 /// from a terrain file.
-#[cfg(test)]
+#[cfg(all(test, feature = "editor"))]
 pub(crate) fn placed_corner(ctx: &Ctx, tile: TerrainTile) -> Option<Vec3> {
     ctx.gfx.assets3d.terrain_files.tiles.get(&tile).map(|f| f.corner)
 }

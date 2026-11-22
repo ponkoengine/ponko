@@ -200,13 +200,41 @@ struct Host {
     rngs: Vec<(String, Rng)>,
 }
 
-/// The game, reachable from the host functions while [`with_code`] runs.
-struct CtxPtr(Option<NonNull<Ctx>>);
+/// The game, reachable from the host functions while [`with_code`] runs:
+/// the pointer and the number of the `with_code` call that set it.
+struct CtxPtr(Option<(NonNull<Ctx>, u64)>);
+
+thread_local! {
+    /// The number of the `with_code` call running on this thread, 0 for none.
+    /// A pointer is followed only while the call that set it runs, so a
+    /// `ModCode` swapped out of its call (it is handed out as `&mut`) or left
+    /// behind by a panic holds a pointer nothing follows.
+    static RUNNING: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Marks a `with_code` call as the one running on this thread until dropped
+/// (also when the call unwinds), then puts back the call around it.
+struct Running(u64);
+
+impl Running {
+    fn start() -> (Self, u64) {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let call = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        (Self(RUNNING.replace(call)), call)
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        RUNNING.set(self.0);
+    }
+}
 
 // SAFETY: the pointer is set only for the length of a `with_code` call, on the
 // thread that holds the `&mut Ctx` it came from, and dereferenced only on that
-// thread inside that call (a host function runs inside `ModCode::call`).
-// Sending or sharing `ModCode` while it is `None` shares nothing.
+// thread inside that call (`RUNNING` is per thread and names that call; a host
+// function runs inside `ModCode::call`). Sending or sharing `ModCode` outside
+// that call shares a pointer nothing follows.
 unsafe impl Send for CtxPtr {}
 // SAFETY: as for `Send`.
 unsafe impl Sync for CtxPtr {}
@@ -214,11 +242,16 @@ unsafe impl Sync for CtxPtr {}
 impl Host {
     /// Runs `f` with the game, or returns `None` outside [`with_code`].
     fn with_ctx<R>(&mut self, f: impl FnOnce(&mut Ctx, &mut HashSet<Entity>, &HashSet<String>) -> R) -> Option<R> {
-        let mut ptr = self.ctx.0?;
-        // SAFETY: `with_code` set the pointer from its `&mut Ctx` and clears it
-        // before using `ctx` again; the `ModCode` this `Host` lives in was
-        // taken out of `ctx.world`, so the game and the host don't overlap, and
-        // nothing else touches `ctx` while the mod's call runs.
+        let (mut ptr, call) = self.ctx.0?;
+        if RUNNING.get() != call {
+            return None;
+        }
+        // SAFETY: the `with_code` call that set the pointer from its `&mut Ctx`
+        // is still running on this thread (checked above), and it doesn't use
+        // `ctx` again before it has stopped being the running call; the
+        // `ModCode` this `Host` lives in was taken out of `ctx.world`, so the
+        // game and the host don't overlap, and nothing else touches `ctx`
+        // while the mod's call runs.
         let ctx = unsafe { ptr.as_mut() };
         Some(f(ctx, &mut self.exposed, &self.prefabs))
     }
@@ -702,8 +735,10 @@ impl ModCode {
 pub fn with_code<R>(ctx: &mut Ctx, f: impl FnOnce(&mut ModCode) -> R) -> Option<R> {
     let mut code = ctx.world.remove_resource::<ModCode>()?;
     code.store.data_mut().dt = ctx.time.dt();
-    code.store.data_mut().ctx = CtxPtr(Some(NonNull::from(&mut *ctx)));
+    let (running, call) = Running::start();
+    code.store.data_mut().ctx = CtxPtr(Some((NonNull::from(&mut *ctx), call)));
     let out = f(&mut code);
+    drop(running);
     code.store.data_mut().ctx = CtxPtr(None);
     ctx.world.insert_resource(code);
     Some(out)
@@ -746,5 +781,40 @@ mod tests {
         // ModCode is a resource: Send and Sync.
         fn shared<T: Send + Sync>(_: &T) {}
         shared(code);
+    }
+
+    /// `with_code` hands the code out as `&mut`, so a game can swap another
+    /// `ModCode` in and keep the one that holds the pointer: its host
+    /// functions must not follow the pointer once that call is over.
+    #[test]
+    fn code_swapped_out_of_with_code_cannot_reach_the_game_afterwards() {
+        let wasm = wat::parse_str(
+            r#"(module
+                (import "ponko" "set_field" (func $set (param i64 i32 i32 f64) (result i32)))
+                (memory (export "memory") 1)
+                (data (i32.const 0) "Transform2D.rotation")
+                (func (export "turn") (param i64) (result i32)
+                    local.get 0 i32.const 0 i32.const 20 f64.const 0.5 call $set))"#,
+        )
+        .expect("valid WebAssembly text");
+        let engine = engine();
+        let start = || {
+            let module = compile(&engine, &wasm).expect("compiles");
+            ModCode::start(&engine, vec![("turner".into(), module)], CodeLimits::default()).expect("starts")
+        };
+        let mut ctx = Ctx::new(1.0 / 60.0, glam::Vec2::new(8.0, 8.0));
+        ctx.world.reflect::<crate::d2::Transform>();
+        ctx.world.insert_resource(start());
+        let e = ctx.world.spawn((crate::d2::Transform::default(),));
+        let mut kept = start();
+        with_code(&mut ctx, |code| {
+            code.expose(e);
+            std::mem::swap(code, &mut kept);
+        });
+        // `kept` is the code the call gave its pointer to.
+        let turn = kept.function("turner", "turn").expect("exported");
+        let answer = kept.call(turn, &[ModValue::I64(e.to_bits() as i64)]);
+        assert_ne!(answer, Ok(Some(ModValue::I32(0))), "the write was refused");
+        assert_eq!(ctx.world.get::<crate::d2::Transform>(e).map(|t| t.rotation), Some(0.0));
     }
 }
