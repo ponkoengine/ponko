@@ -185,6 +185,7 @@ impl Hdr {
 
     /// The overlay's format: the window's SDR format as an sRGB view
     /// draws it, the format the inspector draws in without HDR output.
+    #[cfg_attr(not(feature = "inspector"), allow(dead_code))]
     pub fn overlay_format(&self) -> wgpu::TextureFormat {
         self.sdr_format.add_srgb_suffix()
     }
@@ -496,6 +497,7 @@ impl HdrPass {
     /// image exists. The window's output pass lays it over the frame while
     /// its settings say so ([`OutputUniform::with_overlay`]); screenshots
     /// never show it.
+    #[cfg_attr(not(feature = "inspector"), allow(dead_code))]
     pub fn overlay_view(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) -> Option<wgpu::TextureView> {
         let frame = self.frame.as_ref()?;
         if let Some((texture, view)) = &frame.overlay

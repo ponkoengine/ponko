@@ -780,6 +780,12 @@ jobs:
       - name: Tests, C library with optional features
         if: ${{ !cancelled() }}
         run: cargo test -p ponko_ffi --no-fail-fast --features editor,system-fonts,accessibility,basis-universal --test text_shaping --test ui_access --test access --test compressed_textures
+      # Code mods from C: looking up and calling a mod's function, the
+      # entities and prefabs a mod may reach (without the feature the calls
+      # say code mods are not compiled in, which the default run covers).
+      - name: Tests, C library with code mods
+        if: ${{ !cancelled() }}
+        run: cargo test -p ponko_ffi --no-fail-fast --features mods-wasm --test mod_code
       - name: Tests, ECS with serde
         if: ${{ !cancelled() }}
         run: cargo test -p ponko_ecs --no-fail-fast --features serde --test entities
@@ -1445,6 +1451,14 @@ jobs:
         timeout-minutes: 5
         if: ${{ !cancelled() }}
         run: node web/smoke/runtime-failures.mjs
+      # Key labels in a browser (web/smoke/key-labels.mjs): with a French
+      # keyboard layout map, with no map and with a refused one, the labels
+      # come from the map or are learned from key presses. Uses the web_smoke
+      # build made above.
+      - name: Chromium, key labels follow the keyboard layout map
+        timeout-minutes: 5
+        if: ${{ !cancelled() }}
+        run: node web/smoke/key-labels.mjs
       # A WebGPU device lost while playing (the device-lost case): in the new
       # headless mode, where a WebGPU canvas presents, with software Vulkan.
       # A runner without a WebGPU adapter reports it unsupported.
