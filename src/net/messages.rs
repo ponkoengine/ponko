@@ -44,6 +44,10 @@ const COOKIE: usize = 20;
 /// (`HEADER + COOKIE` bytes) is never larger: a host can't be used to
 /// amplify a flood towards a forged address.
 const HELLO_BYTES: usize = 64;
+const _: () = assert!(
+    HEADER + COOKIE <= HELLO_BYTES,
+    "a challenge is never larger than its hello"
+);
 /// Cookie keys change this often; the current and the previous key are
 /// kept, so a cookie is good for 5 to 10 s.
 const COOKIE_PERIOD: u64 = 5;
@@ -1690,10 +1694,6 @@ mod tests {
             "challenges are capped per second"
         );
         assert_eq!(stats.bytes_sent, stats.packets_sent * (HEADER + COOKIE) as u64);
-        assert!(
-            HEADER + COOKIE <= HELLO_BYTES,
-            "a challenge is never larger than its hello"
-        );
         // The allowance refills with time.
         host.poll_elapsed(Duration::from_secs(1)).unwrap();
         host.receive(forged(1), &hello(2, &[0; COOKIE])).unwrap();

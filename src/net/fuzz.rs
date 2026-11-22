@@ -363,7 +363,7 @@ mod tests {
     #[test]
     fn messages_survive_garbage_and_forged_headers() {
         let mut data = Vec::new();
-        for digit in [b'1', b'2', b'3'] {
+        for &digit in b"123" {
             for kind in 0..=8u8 {
                 for flags in 0..8u8 {
                     let mut bytes = vec![b'C', b'R', b'M', digit, kind];
