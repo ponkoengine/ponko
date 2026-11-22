@@ -229,6 +229,12 @@ def runtime(runs, only):
                 log(f"  {side}: {value:.3f} ms (load {state['load']})")
         if not only or "first-frame" in only:
             title = "Time to first frame (process start to first offscreen frame done, process exit included)"
+            if i == 0:
+                # One untimed launch each first: the first launch after a
+                # build reads the binary from disk and fills the driver's
+                # shader cache, which a player's second launch doesn't pay.
+                sh([FIRST_FRAME], cwd=ROOT)
+                sh([COMPARE, "first-frame"], cwd=HERE)
             for side, cmd, cwd in [("ponko", [FIRST_FRAME], ROOT), ("bevy", [COMPARE, "first-frame"], HERE)]:
                 value, state = first_frame(cmd, cwd)
                 add(title, side, value, state)
@@ -260,11 +266,13 @@ def make_project(name, work):
         os.unlink(liquid)
         for f in ("src/lib.rs", "src/main.rs"):
             p = os.path.join(dest, f)
-            open(p, "w").write(open(p).read().replace("{{project-name}}", name).replace("{{crate_name}}", "ponko_small"))
+            text = open(p).read().replace("{{project-name}}", name).replace("{{crate_name}}", "ponko_small")
+            open(p, "w").write(text)
     else:
         shutil.copytree(os.path.join(HERE, "projects", name), dest)
         toml = os.path.join(dest, "Cargo.toml")
-        open(toml, "w").write(open(toml).read().replace("PONKO_PATH", ROOT))
+        text = open(toml).read().replace("PONKO_PATH", ROOT)
+        open(toml, "w").write(text)
     return dest
 
 
@@ -338,9 +346,19 @@ def table(doc):
     m = doc["machine"]
     lines.append(
         f"Measured {m['date']} at `{m['ponko_rev']}`{' (with uncommitted changes)' if m['ponko_dirty'] else ''} "
-        f"on {m['cpu']} ({m['cores']} cores, {m['memory_gb']} GB), {m['os']}, {m['power']}, {m['rustc']}, "
+        f"on {m['cpu']} ({m['cores']} cores, {m['memory_gb']} GB), {m['os']}, {m['rustc']}, "
         f"Bevy {m['bevy']}; release builds, {doc['runs']} runs per engine, one process at a time.\n"
     )
+    by_source = {}
+    for part, source in doc.get("power", {}).items():
+        by_source.setdefault(source, []).append(part)
+    if len(by_source) == 1:
+        lines.append(f"Power: {next(iter(by_source))}.\n")
+    elif by_source:
+        # The machine changed power source between runs: say which rows ran on which.
+        main = max(by_source, key=lambda src: len(by_source[src]))
+        rest = "; ".join(f"{', '.join(parts)} on {src}" for src, parts in by_source.items() if src != main)
+        lines.append(f"Power: {main}, except {rest}.\n")
     if doc.get("runtime"):
         lines.append("| Workload | Ponko (ms) | Bevy (ms) | Bevy / Ponko | |")
         lines.append("|---|---:|---:|---:|---|")
@@ -387,13 +405,17 @@ def main():
     doc = json.load(open(path)) if os.path.exists(path) else {}
     doc["machine"] = machine()
     doc["runs"] = args.runs
+    power = doc.setdefault("power", {})
     if not args.builds:
         build()
         fresh = runtime(args.runs, only)
         doc["runtime"] = {**doc.get("runtime", {}), **fresh} if only else fresh
+        for title in fresh:
+            power[title] = doc["machine"]["power"]
     if not args.runtime and not only:
         os.makedirs(args.work, exist_ok=True)
         doc["builds"] = builds(args.work)
+        power["builds"] = doc["machine"]["power"]
     with open(path, "w") as f:
         json.dump(doc, f, indent=2)
         f.write("\n")

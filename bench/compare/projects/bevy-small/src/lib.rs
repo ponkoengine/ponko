@@ -57,7 +57,7 @@ fn setup(mut commands: Commands) {
     commands.spawn((
         Text::new("Arrow keys or WASD to move, Escape to quit"),
         TextFont {
-            font_size: 20.0,
+            font_size: FontSize::Px(20.0),
             ..default()
         },
         Node {

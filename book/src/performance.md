@@ -14,7 +14,9 @@ measurement scope.
 
 ## ECS iteration
 
-`cargo run --release -p ponko_bench`
+`cargo run --release -p ponko_bench` (Ponko and hecs); the bevy_ecs column
+comes from `cd bench/compare && cargo run --release -- ecs`, which runs all
+three (see [the scoreboard](#ponko-vs-bevy-the-scoreboard)).
 
 | Benchmark (1M entities) | Ponko | bevy_ecs | hecs |
 |---|---|---|---|
@@ -872,6 +874,114 @@ buffer takes per frame:
 Run it with
 `cargo test --release --lib --features 3d upload_bench -- --ignored --nocapture`;
 it also prints what writes cost on the machine it runs on.
+
+## Ponko vs Bevy: the scoreboard
+
+The same workloads written as an ordinary Ponko game and as an ordinary Bevy
+app, timed the same way on the same machine. One command runs everything:
+
+```sh
+python3 bench/compare/scoreboard.py              # everything
+python3 bench/compare/scoreboard.py --runtime    # only the run-time rows (about 10 minutes)
+python3 bench/compare/scoreboard.py --builds     # only build times and sizes
+```
+
+It builds both sides in release, runs each workload three times per engine,
+one process at a time, changing which engine goes first, and waits for a
+1-minute load under 3 before each run. It writes
+`bench/compare/results/scoreboard.json` (every run, with its load) and the
+table below. Bevy lives in its own crate, `bench/compare`, with its own lock
+file, so it is not in the engine's dependency tree. Its version is pinned
+there and printed in every result. `bench/compare/README.md` names the Bevy
+API each workload uses (its recommended fast path, with links) and lists
+everything that is and is not the same on both sides.
+
+**Machine and build.** MacBook Pro, Apple M4 Max (10 performance + 4
+efficiency cores, 36 GB), macOS 27.2.1, rustc 1.100.0, Ponko at
+`5e5af4ee` plus this change, Bevy 0.20.1 (bevy_rapier2d 0.37.0, rapier
+0.36.1 on both sides). Release builds with Cargo's default release profile
+on both sides (`opt-level = 3`, no LTO), native target. GPU rows draw into an
+offscreen 1280 x 720 target with Metal, and every frame waits for the GPU.
+Measured 2026-11-22. The run-time rows ran on AC power with a 1-minute load
+of 1.5 to 2.3. The time-to-first-frame row ran on battery (load 2.7).
+
+**Run time.** The median of three runs (each run's own number is the median
+frame or tick of 300, after 60 warm-up frames), with the range in brackets.
+"Within noise" would mean the two ranges overlap; none do.
+
+| Workload | Ponko (ms) | Bevy (ms) | Bevy / Ponko | |
+|---|---:|---:|---:|---|
+| ECS: spawn and despawn 100k in a world of 1M | 1.76 (1.73–1.92) | 4.27 (4.22–4.33) | 2.4× | Ponko faster |
+| ECS: iterate 1M (one archetype) | 0.165 (0.164–0.166) | 0.390 (0.362–0.405) | 2.4× | Ponko faster |
+| ECS: iterate 16k fragmented over 1,024 archetypes | 0.005 (0.005–0.006) | 0.010 (0.009–0.011) | 1.9× | Ponko faster |
+| ECS: add and remove a component, 1M entities | 42.8 (41.6–43.1) | 98.9 (97.5–101.9) | 2.3× | Ponko faster |
+| ECS: parallel iterate 1M (all cores) | 0.560 (0.551–0.627) | 0.741 (0.740–0.783) | 1.3× | Ponko faster |
+| ECS: commands, 100k spawns and despawns in a world of 1M | 2.40 (2.38–2.45) | 5.39 (5.29–5.42) | 2.2× | Ponko faster |
+| Sprites: 100k moving, one frame drawn | 1.10 (1.09–1.13) | 11.6 (11.1–15.0) | 10× | Ponko faster |
+| Sprites: 100k moving, a different tint each | 1.09 (1.09–1.09) | 44.8 (42.9–45.1) | 41× | Ponko faster |
+| Sprites: 1M moving, one frame drawn | 8.32 (8.18–8.35) | 105.7 (104.4–106.5) | 13× | Ponko faster |
+| 3D: 100k moving meshes (16 kinds) with a 4-cascade sun shadow | 4.63 (4.61–4.64) | 15.8 (15.8–15.9) | 3.4× | Ponko faster |
+| 3D: 1,000 skinned characters (16 joints) with a sun shadow | 6.06 (6.02–6.11) | 3.86 (3.86–5.51) | 0.64× | **Bevy faster** |
+| 2D physics: 10k boxes falling into a pile, one tick | 6.39 (6.37–6.49) | 8.11 (8.00–8.28) | 1.3× | Ponko faster |
+| UI: 10k nodes, still, one frame drawn | 1.63 (1.25–2.09) | 4.58 (4.57–4.81) | 2.8× | Ponko faster |
+| UI: 10k nodes, all recolored every frame | 2.49 (2.47–2.55) | 6.73 (6.70–6.93) | 2.7× | Ponko faster |
+| Headless sim: 1M entities, one tick | 0.166 (0.165–0.167) | 0.407 (0.406–0.443) | 2.5× | Ponko faster |
+| Time to first frame (process start to first frame done on the GPU, exit included) | 28.9 (27.7–41.2) | 198.7 (197.9–244.6) | 6.9× | Ponko faster |
+
+How to read it:
+
+- **Bevy is faster at skinned characters**: 3.86 ms against 6.06 ms a frame
+  for 1,000 figures of 16 joints with a sun shadow. One of Bevy's three runs
+  took 5.51 ms, still under Ponko's fastest. Bevy is the faster engine on
+  this workload.
+- **Sprites.** Bevy 0.20 draws each `Sprite` as a 2D mesh with a material,
+  and equal sprites share one material. One color is therefore Bevy's fast
+  path. A different tint for every sprite gives every sprite its own
+  material, and Bevy's frame grows from 11.6 to 44.8 ms. Ponko batches tinted
+  and untinted sprites the same way. The 2D rows draw with 4x MSAA on Ponko
+  and none on Bevy (its cheapest setting).
+- **Pipelined rendering is off for Bevy.** Ponko has no pipelined renderer,
+  so both engines simulate and render on one thread and finish each frame
+  before the next. With pipelining on, Bevy can overlap a frame's simulation
+  with the previous frame's rendering on a multi-core machine.
+- **Time to first frame** counts one launch after a warm-up launch, so the
+  OS file cache and the driver's shader cache are warm for both. The very
+  first launch after a build took Ponko 487 ms. Bevy exits with
+  `process::exit` right after its frame. Ponko returns from `main` and drops
+  its world.
+- These are specific workloads on one machine. They are not a ranking of
+  the engines (see [the engine comparison](comparison.md)).
+
+**Builds and sizes.** A hello world (an empty window) and a small game (Ponko's
+2D template: a square moved with the keys, a text hint, settings) on each
+side, each copied to a fresh folder outside the checkout. Debug times come
+from `scripts/build-times.sh` (the method of
+[Build times and download sizes](#build-times-and-download-sizes)): the median of three
+clean builds, and of four rebuilds after a one-line change. Both
+templates use the same dev profile (your code at `opt-level = 1`, the
+dependencies at 3). Release: one clean build. wasm: `wasm32-unknown-unknown`
+release, as Cargo writes it (before `wasm-bindgen` and `wasm-opt`). Default
+features on both sides. Measured on battery; the 1-minute load during the
+builds (3.5 to 14) is the builds' own.
+
+| | Ponko hello | Bevy hello | Ponko small game | Bevy small game |
+|---|---:|---:|---:|---:|
+| Clean debug build (s) | 46.4 (46.2–46.5) | 117 (117–118) | 45.2 (45.2–45.5) | 118 (117–119) |
+| Debug rebuild, one-line change in `src/lib.rs` (s) | 0.50 | 0.74 | 0.47 | 0.83 |
+| ... in `src/main.rs` (s) | 0.39 | 0.62 | 0.32 | 0.64 |
+| Clean release build (s, one run) | 36.2 | 90.0 | 35.7 | 91.0 |
+| Release binary / stripped | 24.8 / 19.6 MB | 134.2 / 82.2 MB | 24.5 / 19.4 MB | 134.4 / 82.4 MB |
+| wasm, release / gzipped | 20.7 / 5.8 MB | 120.5 / 21.4 MB | 20.7 / 5.8 MB | 120.7 / 21.5 MB |
+
+The rebuild ranges are within 0.03 s of the medians. Bevy's default features
+include much more than either program uses (3D, glTF, audio formats,
+animation, picking and more). A Bevy game that turns off what it doesn't use
+builds faster and smaller, and so does a Ponko game that turns off default
+features it doesn't use (the inspector, audio, gamepads).
+
+The scoreboard compares the Rust APIs. The C and C++ API calls the same
+engine, but it has no rows here: a C or C++ program of these workloads has
+not been written yet.
 
 ## 3D: Ponko vs Unity
 

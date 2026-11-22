@@ -302,7 +302,7 @@ mod tests {
             sim_world(ctx, 1000);
         });
         let mut moved = 0;
-        world.query::<&Pos>().iter().enumerate().for_each(|(_, p)| {
+        world.query::<&Pos>().iter().for_each(|p| {
             if p.0.x != 0.0 || p.0.y != 0.0 {
                 moved += 1;
             }

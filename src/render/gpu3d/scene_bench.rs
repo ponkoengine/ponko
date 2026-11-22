@@ -131,7 +131,7 @@ pub struct SceneSetup {
     /// Draw only what another engine's copy of the scene can draw too: a
     /// plain sky instead of the atmosphere, no bloom, ambient occlusion or
     /// screen-space reflections, FXAA, and every shadow cascade redrawn
-    /// every frame. For the side-by-side scenes in `bench/bevy_scenes`.
+    /// every frame. For the side-by-side scenes in `bench/compare`.
     pub matched: bool,
     /// Time the GPU passes of every this many frames (1: every frame, the
     /// default; a game outside profiling times one frame in 16).
