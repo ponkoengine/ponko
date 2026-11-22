@@ -1016,7 +1016,11 @@ pub(crate) fn write_asset(name: &str, bytes: &[u8]) -> Result<(), crate::error::
     };
     write(name, bytes)
         .map(|_| ())
-        .map_err(|e| crate::error::Error::new(kind, e).with_path(name))
+        .map_err(|e| crate::error::Error::new(kind, e).with_path(name))?;
+    // The first save of a web build asks to keep the browser's storage.
+    #[cfg(feature = "editor")]
+    crate::editor::web::saved_a_file();
+    Ok(())
 }
 
 /// Reads an asset file found by [`resolve`] as UTF-8 text.
@@ -1765,10 +1769,13 @@ impl Assets {
 
     /// Whether the browser keeps the editor's saves (see
     /// [`browser_saves`](Self::browser_saves)) when it runs low on space:
-    /// in web builds with the `editor` feature the page asks for persistent
-    /// storage before setup. `Some(true)` when the browser granted it,
-    /// `Some(false)` when it refused (the saves may be cleared; the editor
-    /// says so), `None` until it answers, and always in other builds.
+    /// in web builds with the `editor` feature the page looks before setup
+    /// whether its storage is persistent, and the first save on the page
+    /// asks the browser for that. `Some(true)` when it is (granted now or
+    /// on an earlier visit), `Some(false)` when it isn't (not asked yet, as
+    /// nothing was saved on this page, or refused: the saves may be
+    /// cleared, and the editor says so), `None` until the browser answers,
+    /// and always in other builds.
     ///
     /// ```
     /// # use ponko::prelude::*;
@@ -1782,7 +1789,7 @@ impl Assets {
         return match crate::editor::web::persistence() {
             crate::editor::web::Persistence::Unknown => None,
             crate::editor::web::Persistence::Granted => Some(true),
-            crate::editor::web::Persistence::Refused => Some(false),
+            crate::editor::web::Persistence::Refused | crate::editor::web::Persistence::NotAsked => Some(false),
         };
         #[cfg(not(feature = "editor"))]
         None

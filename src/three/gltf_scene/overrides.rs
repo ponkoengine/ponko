@@ -747,13 +747,22 @@ impl Ctx {
     /// and its error.
     #[cfg_attr(not(feature = "editor"), allow(dead_code))]
     pub(crate) fn respawn_saved_gltf(&mut self) -> Vec<(String, crate::error::Error)> {
+        self.respawn_saved_gltf_of(None)
+    }
+
+    /// [`respawn_saved_gltf`](Self::respawn_saved_gltf) for the records of
+    /// file `only` alone (`None`: every file), as the editor's Retry does
+    /// for a scene that didn't load. Each scene that spawns hangs the
+    /// nodes of other scenes saved on its nodes off them again.
+    #[cfg_attr(not(feature = "editor"), allow(dead_code))]
+    pub(crate) fn respawn_saved_gltf_of(&mut self, only: Option<&str>) -> Vec<(String, crate::error::Error)> {
         let orphans: Vec<(String, Transform3D)> = self
             .world
             .get_resource::<GltfSceneSaves>()
             .map(|s| {
                 s.scenes
                     .iter()
-                    .filter(|s| s.root.is_none())
+                    .filter(|s| s.root.is_none() && only.is_none_or(|f| f == s.path))
                     .map(|s| (s.path.clone(), s.at))
                     .collect()
             })

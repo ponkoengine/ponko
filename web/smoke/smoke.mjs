@@ -39,7 +39,7 @@ import {
   USAGE,
   UsageError,
   backendAvailable,
-  checkAfterReload,
+  checkExpects,
   checkEngineGpu,
   checkMinimums,
   checkMusicBeforeClick,
@@ -237,11 +237,58 @@ async function smokeState(page) {
     const raw = document.documentElement.getAttribute("data-smoke");
     const status = document.getElementById("status");
     const gpu = document.documentElement.getAttribute("data-smoke-gpu");
+    const state = raw ? JSON.parse(raw) : null;
+    // A --persist run: how many times this page asked for persistent storage.
+    if (state && window.__smokePersistAsks !== undefined) state.persist_asks = window.__smokePersistAsks;
     return {
-      state: raw ? JSON.parse(raw) : null,
+      state,
       gpu: gpu ? JSON.parse(gpu) : null,
       status: status && status.className === "error" ? status.textContent : null,
     };
+  });
+}
+
+/**
+ * Waits up to 10 s for the state to report every field of `expects` on page
+ * load `load` (0: the first); fails as "storage" with the first one missed.
+ */
+async function waitForExpects(page, call, appFailure, settled, expects, load) {
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    const snapshot = await call(smokeState(page));
+    const failure = appFailure(snapshot.status);
+    if (failure) throw await settled(failure);
+    const wrong = checkExpects(snapshot.state, expects, load);
+    if (!wrong) return snapshot;
+    if (Date.now() > deadline) throw new Failure("storage", wrong);
+    await sleep(100);
+  }
+}
+
+/**
+ * An init script for --persist runs: `navigator.storage.persisted()` says
+ * whether an earlier page load of the site was granted persistent storage,
+ * and `persist()` answers `mode` ("granted" or "refused"), counting the asks
+ * of this page load in `window.__smokePersistAsks`. Headless browsers answer
+ * by themselves (Chromium refuses, Firefox would ask), so the runner answers.
+ */
+function fakePersistence(mode) {
+  const key = "smoke-persisted";
+  window.__smokePersistAsks = 0;
+  const manager = globalThis.StorageManager?.prototype;
+  if (!manager) return;
+  Object.defineProperty(manager, "persisted", {
+    configurable: true,
+    value: async () => localStorage.getItem(key) === "1",
+  });
+  Object.defineProperty(manager, "persist", {
+    configurable: true,
+    value: async () => {
+      window.__smokePersistAsks += 1;
+      if (mode !== "granted") return false;
+      localStorage.setItem(key, "1");
+      return true;
+    },
   });
 }
 
@@ -483,6 +530,7 @@ async function main() {
       });
     }
     if (args.music === "required") await context.addInitScript(watchAudio);
+    if (args.persist) await context.addInitScript(fakePersistence, args.persist);
     if (args.case === "missing-asset") {
       await context.route(`**/assets/${args.asset}`, (route) => route.fulfill({ status: 404, body: "gone" }));
     }
@@ -514,7 +562,7 @@ async function main() {
       chromeTracing = true;
     }
 
-    const query = args.case === "panic" || args.case === "stall" ? `?smoke_case=${args.case}` : "";
+    const query = args.case === "panic" || args.case === "stall" ? `?smoke_case=${args.case}` : args.query;
     log(`loading ${url}${query}`);
     step = "loading the page";
     await call(page.goto(url + query));
@@ -720,6 +768,38 @@ async function main() {
     const tooLow = checkMinimums(snapshot.state, args.mins);
     if (tooLow) throw new Failure("state", tooLow);
 
+    // 4d. Fields of the first page load (--persist): what the browser
+    //     answered when the page asked to keep its storage.
+    if (args.firstLoad.length) {
+      step = "checking the first page load's fields";
+      snapshot = await waitForExpects(page, call, appFailure, settled, args.firstLoad, 0);
+      log(`first page load: ${args.firstLoad.map(({ field, value }) => `${field} is ${value}`).join(", ")}`);
+    }
+
+    // 4e. Clicks at a point of the canvas (--click): a button the game
+    //     draws there (the editor's Retry), then the state it changes.
+    for (const { x, y, field, value } of args.clicks) {
+      step = `clicking the canvas at ${x},${y}`;
+      const canvas = await call(page.locator(GAME_CANVAS).boundingBox());
+      await call(page.mouse.move(canvas.x + x, canvas.y + y));
+      await sleep(200);
+      await call(page.mouse.down());
+      await sleep(100);
+      await call(page.mouse.up());
+      const clickedDeadline = Date.now() + 10_000;
+      for (;;) {
+        snapshot = await call(smokeState(page));
+        failure = appFailure(snapshot.status);
+        if (failure) throw await settled(failure);
+        if (String(snapshot.state[field]) === value) break;
+        if (Date.now() > clickedDeadline) {
+          throw new Failure("input", `after the click at ${x},${y}, ${field} is ${JSON.stringify(snapshot.state[field])}, not ${value}`);
+        }
+        await sleep(100);
+      }
+      log(`click at ${x},${y} seen: ${field} is ${value}`);
+    }
+
     // 4d. Storage (--after-reload, --reload): once the game says its writes
     //     are stored (`saving` false), reload the page; the new page must
     //     find what the old one saved in the browser's storage (coin_dash's
@@ -743,8 +823,9 @@ async function main() {
         if (Date.now() > reloadDeadline) throw new Failure("startup-timeout", `no running frame after reload ${n}`);
         await sleep(100);
       }
-      const wrong = checkAfterReload(snapshot.state, expects, n);
-      if (wrong) throw new Failure("storage", wrong);
+      // An answer the page waits for (the browser's, about its storage)
+      // may come a few frames after the first.
+      snapshot = await waitForExpects(page, call, appFailure, settled, expects, n);
       (report.reloads ??= []).push(snapshot.state);
       log(`after reload ${n}: ${expects.map(({ field, value }) => `${field} is ${value}`).join(", ") || "running"}`);
     }

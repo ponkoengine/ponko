@@ -314,6 +314,70 @@ impl Panels {
         }
     }
 
+    /// The glTF scenes the document names that didn't load, one row each:
+    /// **Retry**, the file and why. A retry that loads it spawns the scene
+    /// where it was saved, with its overrides, and hangs the nodes of other
+    /// scenes saved on its nodes off them again; one that fails says why
+    /// in its row. Shows nothing when they all loaded.
+    pub(crate) fn unloaded_panel(&mut self, ui: &mut Ui, ctx: &mut Ctx) {
+        let unloaded = ctx.editor.doc.unloaded.clone();
+        if unloaded.is_empty() {
+            return;
+        }
+        let mut retry = None;
+        ui.label(
+            RichText::new(match unloaded.len() {
+                1 => {
+                    "A glTF scene didn't load: it is left out of the world, and the scene keeps its record".to_string()
+                }
+                n => format!(
+                    "{n} glTF scenes didn't load: they are left out of the world, and the scene keeps their records"
+                ),
+            })
+            .color(Color32::LIGHT_RED),
+        );
+        egui::Grid::new("ponko-unloaded-scenes").striped(true).show(ui, |ui| {
+            for (i, u) in unloaded.iter().enumerate() {
+                if ui
+                    .push_id(i, |ui| ui.button(UNLOADED_RETRY))
+                    .inner
+                    .on_hover_text("Load the file again: the scene is spawned where it was saved")
+                    .clicked()
+                {
+                    retry = Some(u.file.clone());
+                }
+                ui.label(RichText::new(&u.file).monospace());
+                ui.label(RichText::new(&u.why).weak());
+                ui.end_row();
+            }
+        });
+        if let Some(file) = retry {
+            self.retry_unloaded(ctx, &file);
+        }
+    }
+
+    /// Retry for glTF scene file `file` that didn't load (see
+    /// [`unloaded_panel`](Self::unloaded_panel)): the status line says it
+    /// loaded, and the error line naming the scenes that didn't load names
+    /// only those left.
+    pub(crate) fn retry_unloaded(&mut self, ctx: &mut Ctx, file: &str) {
+        let before = unloaded_line(&ctx.editor.doc.unloaded);
+        let still = format!("{file} still doesn't load: ");
+        match ctx.edit(|ed, ctx| ed.retry_unloaded(ctx, file)) {
+            Ok(()) => {
+                // The error line was about the scenes that didn't load, or
+                // an earlier retry of this one: it names those left now.
+                if self.error.is_some()
+                    && (self.error == before || self.error.as_deref().is_some_and(|e| e.starts_with(&still)))
+                {
+                    self.error = unloaded_line(&ctx.editor.doc.unloaded);
+                }
+                self.status = Some(format!("loaded {file}"));
+            }
+            Err(e) => self.error = Some(format!("{still}{}", e.message())),
+        }
+    }
+
     /// The selection: the primary entity first, then the others.
     pub(crate) fn selection(&self) -> Vec<Entity> {
         let mut out: Vec<Entity> = self.selected.into_iter().collect();
@@ -1242,6 +1306,9 @@ impl Panels {
     pub(super) fn highlight_3d(&self, _: &Ui, _: &Ctx) {}
     pub(super) fn end_gizmo_drag(&mut self, _: &mut Ctx) {}
 }
+
+/// The button that tries a glTF scene that didn't load again.
+pub(crate) const UNLOADED_RETRY: &str = "Retry";
 
 /// The error line for glTF scenes that didn't load when the document was
 /// opened, naming each file; `None` when they all loaded.

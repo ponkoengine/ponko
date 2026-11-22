@@ -638,6 +638,7 @@ impl Panels {
     /// The document and whether it's saved, what happened last, and the
     /// question when the file changed on disk under unsaved changes.
     fn status_bar(&mut self, ui: &mut Ui, ctx: &mut Ctx) {
+        self.unloaded_panel(ui, ctx);
         if ctx.editor.doc.conflict {
             ui.horizontal(|ui| {
                 ui.colored_label(
@@ -913,8 +914,11 @@ impl Panels {
     fn browser_saves_dialog(&mut self, ui: &mut Ui, ctx: &mut Ctx) -> bool {
         let saved = crate::editor::web::saved();
         let mut revert = None;
-        if let Some(warning) = crate::editor::web::persistence().warning() {
+        let persistence = crate::editor::web::persistence();
+        if let Some(warning) = persistence.warning() {
             ui.colored_label(Color32::from_rgb(255, 190, 60), warning);
+        } else if persistence == crate::editor::web::Persistence::NotAsked {
+            ui.label(RichText::new(BROWSER_ASKS_AT_SAVE).weak());
         }
         if saved.is_empty() {
             ui.label("Nothing is saved in this browser: the game reads the build's files.");
@@ -980,6 +984,9 @@ impl Panels {
 /// The status bar's note when the browser refused persistent storage (its
 /// hover text says the rest).
 const BROWSER_MAY_CLEAR: &str = "the browser may clear saves";
+/// File > Saved in this browser before the browser was asked to keep them.
+const BROWSER_ASKS_AT_SAVE: &str =
+    "The browser wasn't asked yet to keep this site's storage when it runs low on space: the next save asks.";
 
 /// A one-line path field that has the keyboard while its dialog is open.
 fn path_field(ui: &mut Ui, path: &mut String) {
@@ -1712,6 +1719,44 @@ mod tests {
     }
 
     #[test]
+    fn the_web_editor_asks_to_keep_its_saves_at_the_first_save_not_at_start() {
+        use crate::editor::web::{Persistence, test_browser};
+        let may_clear = |shown: &[String]| shown.iter().any(|t| t == super::BROWSER_MAY_CLEAR);
+        for grant in [true, false] {
+            let file = TempAsset::new(&format!("web-persist-{grant}"));
+            let (egui, mut p, mut ctx) = web_editor();
+            // The page found its storage isn't persistent: nothing asked yet,
+            // so nothing to warn about, and the saves window says a save asks.
+            test_browser::not_asked_yet(grant);
+            let shown = texts(&drawn(&egui, &mut p, &mut ctx, vec![]));
+            assert!(!may_clear(&shown), "not asked yet: {shown:?}");
+            assert_eq!(test_browser::asks(), 0, "starting asks nothing");
+            assert_eq!(ctx.assets.browser_saves_persistent(), Some(false));
+            click_text(&egui, &mut p, &mut ctx, |t| t == "File");
+            click_text(&egui, &mut p, &mut ctx, |t| t == "Saved in this browser…");
+            frame(&egui, &mut p, &mut ctx, vec![]);
+            let shown = texts(&drawn(&egui, &mut p, &mut ctx, vec![]));
+            assert!(shown.iter().any(|t| t == super::BROWSER_ASKS_AT_SAVE), "{shown:?}");
+            click_text(&egui, &mut p, &mut ctx, |t| t == "Close");
+
+            // The first save asks, once; the answer decides the warning.
+            frame(&egui, &mut p, &mut ctx, vec![command(Key::S)]);
+            answer_path_field(&egui, &mut p, &mut ctx, Some(&file.name));
+            assert!(p.error.is_none(), "{:?}", p.error);
+            assert_eq!(test_browser::asks(), 1, "the first save asks");
+            assert_eq!(ctx.assets.browser_saves_persistent(), Some(grant));
+            let shown = texts(&drawn(&egui, &mut p, &mut ctx, vec![]));
+            assert_eq!(may_clear(&shown), !grant, "granted: {grant}: {shown:?}");
+            let e = the_entity(&mut ctx);
+            ctx.edit(|ed, ctx| ed.rename(ctx, e, "Again")).unwrap();
+            frame(&egui, &mut p, &mut ctx, vec![command(Key::S)]);
+            assert!(p.error.is_none(), "{:?}", p.error);
+            assert_eq!(test_browser::asks(), 1, "asked once per page");
+            test_browser::answer(Persistence::Unknown);
+        }
+    }
+
+    #[test]
     fn the_web_editor_saves_in_the_browser_and_download_hands_over_the_file() {
         let file = TempAsset::new("web-download");
         let (egui, mut p, mut ctx) = web_editor();
@@ -2205,6 +2250,110 @@ mod tests {
             assert!(p.error.is_none(), "{:?}", p.error);
             assert_eq!(roots(&mut ctx), 2);
             assert!(ctx.editor.doc.unloaded.is_empty());
+        }
+
+        #[test]
+        fn a_retry_in_the_panel_of_scenes_that_failed_to_load_spawns_it_and_links_its_children_again() {
+            let post_nodes = serde_json::json!([{ "name": "Post", "mesh": 0 }]);
+            let cube = crate::three::cube_gltf(&post_nodes);
+            let (yard, posts) = (
+                gltf_asset("retry-yard", &yard_nodes(-3.0)),
+                gltf_asset("retry-posts", &post_nodes),
+            );
+            let scene = TempAsset::new("retry-scene");
+            let (egui, mut p, mut ctx, e) = editor3d();
+            ctx.set_headless(true);
+            ctx.world.despawn(e);
+            let a = ctx.spawn_prefab(&yard.name, T3::default()).unwrap();
+            let b = ctx.spawn_prefab(&posts.name, T3::at(vec3(4.0, 0.0, 0.0))).unwrap();
+            ctx.track_gltf_overrides();
+            let node = |ctx: &Ctx, root: Entity, path: &str| {
+                ctx.world
+                    .get::<crate::d3::GltfRoot>(root)
+                    .unwrap()
+                    .entity(path)
+                    .unwrap()
+            };
+            // The yard's wall hangs off the other scene's post, where it stands.
+            let (wall, post) = (node(&ctx, a, "Wall"), node(&ctx, b, "Post"));
+            let at = *ctx.world.get::<T3>(wall).unwrap();
+            ctx.world.insert(wall, crate::attach::Attached3D::to(post));
+            crate::editor::place_world3d(&mut ctx.world, wall, at);
+            ctx.edit(|ed, ctx| ed.save_as(ctx, &scene.name, DocKind::Scene))
+                .unwrap();
+            let roots = |ctx: &mut Ctx| {
+                ctx.world
+                    .query::<(Entity, &crate::d3::GltfRoot)>()
+                    .iter()
+                    .map(|(e, r)| (e, r.path.clone()))
+                    .collect::<Vec<_>>()
+            };
+
+            // The posts' file is broken: the panel lists it with why and a Retry.
+            std::fs::write(&posts.file, "not a glTF file").unwrap();
+            p.open_file(&mut ctx, &scene.name);
+            assert_eq!(roots(&mut ctx).len(), 1, "the posts are left out");
+            assert_eq!(ctx.editor.doc.unloaded.len(), 1);
+            let why = ctx.editor.doc.unloaded[0].why.clone();
+            let shown = texts(&drawn(&egui, &mut p, &mut ctx, vec![]));
+            for wanted in [&posts.name, &why, &crate::inspector::scene::UNLOADED_RETRY.to_string()] {
+                assert!(
+                    shown.iter().any(|t| t == wanted),
+                    "the panel shows {wanted:?}: {shown:?}"
+                );
+            }
+            assert!(
+                !shown.iter().any(|t| t == &yard.name),
+                "only the one that failed: {shown:?}"
+            );
+            let yard_root = roots(&mut ctx)[0].0;
+            let wall = node(&ctx, yard_root, "Wall");
+            let on = ctx.world.get::<crate::attach::Attached3D>(wall).map(|l| l.to);
+            assert_eq!(
+                on,
+                Some(yard_root),
+                "on its file's parent: the post's scene isn't there"
+            );
+
+            // Still broken: Retry says why, and the row stays.
+            click_text(&egui, &mut p, &mut ctx, |t| {
+                t == crate::inspector::scene::UNLOADED_RETRY
+            });
+            assert_eq!(roots(&mut ctx).len(), 1);
+            assert_eq!(ctx.editor.doc.unloaded.len(), 1);
+            let error = p.error.clone().unwrap_or_default();
+            assert!(error.contains(&posts.name) && error.contains("still"), "{error}");
+
+            // Fixed: Retry spawns it where it was saved, and the wall hangs
+            // off its post again, where it stood.
+            std::fs::write(&posts.file, &cube).unwrap();
+            // Half a second later (egui's frames step 1/60 s), so this is a
+            // click of its own, not the second click of a double click.
+            for _ in 0..30 {
+                frame(&egui, &mut p, &mut ctx, vec![]);
+            }
+            click_text(&egui, &mut p, &mut ctx, |t| {
+                t == crate::inspector::scene::UNLOADED_RETRY
+            });
+            assert!(p.error.is_none(), "{:?}", p.error);
+            assert_eq!(p.status.as_deref(), Some(format!("loaded {}", posts.name).as_str()));
+            assert!(ctx.editor.doc.unloaded.is_empty());
+            assert!(!ctx.editor.dirty(), "the scene's file names it either way");
+            let now = roots(&mut ctx);
+            assert_eq!(now.len(), 2, "{now:?}");
+            let (b, _) = now.iter().find(|(_, path)| path == &posts.name).unwrap();
+            assert_eq!(ctx.world.get::<T3>(*b).unwrap().position, vec3(4.0, 0.0, 0.0));
+            let (a, _) = now.iter().find(|(_, path)| path == &yard.name).unwrap();
+            let (wall, post) = (node(&ctx, *a, "Wall"), node(&ctx, *b, "Post"));
+            let link = ctx.world.get::<crate::attach::Attached3D>(wall).map(|l| l.to);
+            assert_eq!(link, Some(post), "linked again");
+            let moved = ctx.world.get::<T3>(wall).unwrap().position;
+            assert!((moved - at.position).length() < 1e-4, "{moved}");
+            let shown = texts(&drawn(&egui, &mut p, &mut ctx, vec![]));
+            assert!(
+                !shown.iter().any(|t| t == crate::inspector::scene::UNLOADED_RETRY),
+                "the panel is gone: {shown:?}"
+            );
         }
 
         #[test]

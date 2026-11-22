@@ -19,9 +19,12 @@
 //! do the same from code.
 //!
 //! Browsers may clear a site's storage when space runs low, unless the
-//! site's storage is persistent. Before setup the editor asks for that
-//! (`navigator.storage.persist()`); [`persistence`] is the answer, and the
-//! status bar and File > Saved in this browser say when it was refused.
+//! site's storage is persistent. Before setup the page only looks whether
+//! it is (`navigator.storage.persisted()`, which asks the person nothing);
+//! the first save on the page asks for it (`navigator.storage.persist()`),
+//! as saving is something the person did. [`persistence`] is the answer,
+//! and the status bar and File > Saved in this browser say when it was
+//! refused.
 //!
 //! The parts that don't need a browser (the keys, what is kept and put
 //! back) are written against [`Store`], so tests run them on a map.
@@ -63,9 +66,12 @@ impl Store for std::collections::BTreeMap<String, String> {
 /// space: the answer to the editor's request for persistent storage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum Persistence {
-    /// Not asked (not a browser), or the browser hasn't answered yet.
+    /// Not a browser, or the browser hasn't said yet whether the
+    /// storage is persistent.
     #[default]
     Unknown,
+    /// Not persistent, and not asked yet: the first save asks.
+    NotAsked,
     /// Persistent: saves stay until the person clears the site's data.
     Granted,
     /// Refused, or the browser can't keep storage persistent (no
@@ -81,6 +87,23 @@ impl Persistence {
             Some(true) => Self::Granted,
             Some(false) | None => Self::Refused,
         }
+    }
+
+    /// What the page knows before setup from `navigator.storage.persisted()`
+    /// (`None`: the browser has no `navigator.storage`, so nothing can keep
+    /// it): persistent already, not yet (the first save asks), or never.
+    pub(crate) fn at_start(persisted: Option<bool>) -> Self {
+        match persisted {
+            Some(true) => Self::Granted,
+            Some(false) => Self::NotAsked,
+            None => Self::Refused,
+        }
+    }
+
+    /// Whether a save asks the browser for persistent storage: only while
+    /// it isn't persistent and wasn't asked on this page yet.
+    pub(crate) fn asked_at_save(self) -> bool {
+        self == Self::NotAsked
     }
 
     /// What the editor shows for it, if anything: a warning when saves
@@ -210,30 +233,62 @@ mod browser {
     thread_local! {
         /// The build's files that saves replaced (see `remember_shipped`).
         pub(super) static SHIPPED: std::cell::RefCell<super::Shipped> = Default::default();
-        /// The browser's answer to the request for persistent storage.
+        /// Whether this site's storage is persistent: what the page found
+        /// before setup, then the browser's answer to the first save's ask.
         pub(super) static PERSISTENCE: std::cell::Cell<super::Persistence> = Default::default();
+        /// The page asked for persistent storage (once per page load), or
+        /// a save came before the browser said whether it is persistent
+        /// and the ask waits for that answer.
+        static ASKED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     }
 
-    /// Asks the browser to keep this site's storage when space runs low
-    /// (`navigator.storage.persist()`, after `persisted()` says whether it
-    /// does already); the answer lands in `PERSISTENCE`. Chromium answers
-    /// from how the site is used, Firefox asks the person, and a page
-    /// without `navigator.storage` (not a secure context) is refused.
-    pub(super) fn ask_persistence() {
-        let Some(storage) = web_sys::window()
+    /// The page's `navigator.storage`, if the browser has one (not in a
+    /// page that isn't a secure context).
+    fn storage() -> Option<JsValue> {
+        web_sys::window()
             .and_then(|w| js_sys::Reflect::get(&w.navigator(), &"storage".into()).ok())
             .filter(|s| s.is_object())
-        else {
-            PERSISTENCE.with(|p| p.set(super::Persistence::from_answer(None)));
+    }
+
+    /// Before setup: looks whether this site's storage is persistent
+    /// already (`navigator.storage.persisted()`, which asks the person
+    /// nothing); the answer lands in `PERSISTENCE`. A save made before the
+    /// answer asks once it comes.
+    pub(super) fn check_persistence() {
+        let Some(storage) = storage() else {
+            PERSISTENCE.with(|p| p.set(super::Persistence::at_start(None)));
             return;
         };
         wasm_bindgen_futures::spawn_local(async move {
-            let granted = match call(&storage, "persisted").await {
-                Some(true) => Some(true),
-                _ => call(&storage, "persist").await,
-            };
-            PERSISTENCE.with(|p| p.set(super::Persistence::from_answer(granted)));
+            // A browser without the call can't make storage persistent.
+            let now = super::Persistence::at_start(call(&storage, "persisted").await);
+            PERSISTENCE.with(|p| p.set(now));
+            if now.asked_at_save() && ASKED.with(std::cell::Cell::get) {
+                ask(storage).await;
+            }
         });
+    }
+
+    /// A file was saved in the browser: the first save on the page asks
+    /// the browser to keep this site's storage when space runs low
+    /// (`navigator.storage.persist()`). Chromium answers from how the site
+    /// is used, Firefox asks the person; the answer lands in `PERSISTENCE`.
+    pub(super) fn ask_persistence_at_save() {
+        if ASKED.with(|a| a.replace(true)) {
+            return;
+        }
+        // Not answered yet: `check_persistence` asks when it is.
+        if PERSISTENCE.with(std::cell::Cell::get).asked_at_save()
+            && let Some(storage) = storage()
+        {
+            wasm_bindgen_futures::spawn_local(ask(storage));
+        }
+    }
+
+    /// Calls `storage.persist()` and keeps the answer.
+    async fn ask(storage: JsValue) {
+        let granted = call(&storage, "persist").await;
+        PERSISTENCE.with(|p| p.set(super::Persistence::from_answer(granted)));
     }
 
     /// Calls `storage.<method>()`, which returns a promise of a boolean;
@@ -324,11 +379,12 @@ pub(crate) fn keep(name: &str, bytes: &[u8]) -> Result<(), String> {
 }
 
 /// Puts the assets saved on this page back, over the fetched ones (kept
-/// aside, to revert to), and asks for persistent storage. Runs before
-/// setup, after the assets were fetched.
+/// aside, to revert to), and looks whether the site's storage is
+/// persistent (the first save asks for it). Runs before setup, after the
+/// assets were fetched.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn restore() {
-    browser::ask_persistence();
+    browser::check_persistence();
     let Ok((store, page)) = browser::local() else { return };
     for (name, bytes) in kept_in(&store, &page) {
         if let Some(fetched) = crate::assets::read_web_asset(&name) {
@@ -344,6 +400,13 @@ pub(crate) fn restore() {
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn persistence() -> Persistence {
     browser::PERSISTENCE.with(std::cell::Cell::get)
+}
+
+/// A file was saved: the first save on the page asks the browser for
+/// persistent storage (see the module docs).
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn saved_a_file() {
+    browser::ask_persistence_at_save();
 }
 
 /// The files saved in this browser for this page, sorted by name.
@@ -382,11 +445,26 @@ pub(crate) mod test_browser {
         pub(crate) static STORE: RefCell<BTreeMap<String, String>> = RefCell::default();
         pub(crate) static SHIPPED: RefCell<super::Shipped> = RefCell::default();
         pub(crate) static PERSISTENCE: std::cell::Cell<super::Persistence> = std::cell::Cell::default();
+        /// What the browser answers when a save asks for persistent
+        /// storage, and how many times it was asked.
+        pub(crate) static ASKS: std::cell::Cell<(bool, u32)> = const { std::cell::Cell::new((false, 0)) };
     }
 
     /// The browser's answer to the request for persistent storage.
     pub(crate) fn answer(persistence: super::Persistence) {
         PERSISTENCE.with(|p| p.set(persistence));
+    }
+
+    /// The page starts with storage that isn't persistent, and the
+    /// browser answers `grant` when the first save asks.
+    pub(crate) fn not_asked_yet(grant: bool) {
+        answer(super::Persistence::NotAsked);
+        ASKS.with(|a| a.set((grant, 0)));
+    }
+
+    /// How many times a save asked for persistent storage.
+    pub(crate) fn asks() -> u32 {
+        ASKS.with(|a| a.get().1)
     }
 
     /// Keeps `text` as asset `name` in the browser; `shipped` is the
@@ -412,6 +490,17 @@ pub(crate) fn persistence() -> Persistence {
     test_browser::PERSISTENCE.with(std::cell::Cell::get)
 }
 
+/// A file was saved: in native tests, the first save asks
+/// `test_browser`'s browser for persistent storage.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(crate) fn saved_a_file() {
+    if persistence().asked_at_save() {
+        let (grant, n) = test_browser::ASKS.with(std::cell::Cell::get);
+        test_browser::ASKS.with(|a| a.set((grant, n + 1)));
+        test_browser::answer(Persistence::from_answer(Some(grant)));
+    }
+}
+
 /// Reverts asset `name`: in native tests, in `test_browser`'s storage.
 #[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) fn forget(name: &str) -> Result<bool, String> {
@@ -429,6 +518,10 @@ pub(crate) fn saved() -> Vec<Saved> {
 pub(crate) fn persistence() -> Persistence {
     Persistence::Unknown
 }
+
+/// Desktop builds ask no browser for persistent storage.
+#[cfg(not(any(test, target_arch = "wasm32")))]
+pub(crate) fn saved_a_file() {}
 
 /// Desktop builds keep nothing in a browser: nothing to revert.
 #[cfg(not(any(test, target_arch = "wasm32")))]
@@ -545,9 +638,25 @@ mod tests {
             "no navigator.storage: nothing keeps it"
         );
         assert_eq!(Persistence::Granted.warning(), None);
+        assert_eq!(Persistence::NotAsked.warning(), None, "the first save asks");
         assert_eq!(Persistence::Unknown.warning(), None, "not answered yet");
         let warning = Persistence::Refused.warning().unwrap();
         assert!(warning.contains("clear") && warning.contains("Download"), "{warning}");
+    }
+
+    #[test]
+    fn the_page_looks_at_start_and_only_a_save_asks_for_persistent_storage() {
+        assert_eq!(Persistence::at_start(Some(true)), Persistence::Granted);
+        assert_eq!(Persistence::at_start(Some(false)), Persistence::NotAsked);
+        assert_eq!(
+            Persistence::at_start(None),
+            Persistence::Refused,
+            "no navigator.storage: nothing to ask"
+        );
+        assert!(Persistence::NotAsked.asked_at_save());
+        for answered in [Persistence::Unknown, Persistence::Granted, Persistence::Refused] {
+            assert!(!answered.asked_at_save(), "{answered:?}");
+        }
     }
 
     #[test]

@@ -29,8 +29,13 @@
 //! the load that reverted the saved-over scene and read the build's file
 //! again at once. `shipped` is what `levels/beach.json` is at the end of
 //! setup, in the same words as `found`, else what is wrong. `persistent`
-//! is the browser's answer to the request for persistent storage:
-//! `Granted`, `Refused` (headless Chromium) or `Asking`. On the desktop
+//! is whether the browser keeps the page's storage: `Granted`, `Refused`
+//! (headless Chromium refuses; also before the page asked, which only a
+//! save does, so on the later loads unless an earlier one was granted)
+//! or `Asking` (no answer yet). The runner's `--persist granted|refused`
+//! answers for the browser and counts the asks (`persist_asks`): the
+//! first load's saves ask once, the later loads save nothing and never
+//! ask. On the desktop
 //! it writes `assets/smoke/editor-kept.json`, which a second run finds;
 //! the shipped file is left alone there.
 
