@@ -5,14 +5,24 @@ operations at 1k, 100k and 1M entities, plus many small archetypes, query
 construction and one game-like tick. The code is
 [`src/ecs_suite.rs`](src/ecs_suite.rs) and [`src/archetypes.rs`](src/archetypes.rs).
 
+`ponko_bench` runs the `ponko_ecs` and `hecs` rows. The `bevy_ecs` rows run
+in [`bench/compare`](../../bench/compare/README.md), which compiles these
+two files as they are and adds bevy's halves, so bevy is not in the engine's
+dependency tree: `cd bench/compare && cargo run --release -- ecs` prints and
+records all three libraries' rows (`PONKO_BENCH_JSON=...` as below). The
+committed baselines were recorded before the move, in one process, as that
+command still does.
+
 ## The command
 
 ```sh
-PONKO_BENCH_JSON=crates/ponko_bench/baselines/ecs.json \
-  cargo run --release -p ponko_bench -- 'ecs/|archetypes-1024|query-build'
+cd bench/compare
+PONKO_BENCH_JSON=../../crates/ponko_bench/baselines/ecs.json \
+  cargo run --release -- ecs 'ecs/|archetypes-1024|query-build'
 ```
 
-It prints one line per result and writes every result, with the build and
+(`cargo run --release -p ponko_bench -- 'ecs/|archetypes-1024|query-build'`
+from the root runs the same rows without bevy's.) It prints one line per result and writes every result, with the build and
 machine context, to [`baselines/ecs.json`](baselines/ecs.json) (schema in the
 [README](README.md#machine-readable-results)). Re-recording the baselines is
 this one command on a clean, committed checkout (so `git_dirty` is `false`),
@@ -76,8 +86,8 @@ a read-only draw pass over `(Pos, Spr)` without `Tag`.
 - **Load**: `load_average` in the JSON is read when the runner starts.
 - **Build**: release profile of the workspace, `ponko_ecs` with its default
   features (`parallel`), `bevy_ecs` 0.20.1 with `default` and
-  `multi_threaded`, `hecs` 0.11.2 with its defaults. All versions are pinned
-  by the workspace `Cargo.lock`; the JSON's `env` records them, the
+  `multi_threaded`, `hecs` 0.11.2 with its defaults. The versions are pinned
+  by the workspace `Cargo.lock` and, for bevy, `bench/compare/Cargo.lock`; the JSON's `env` records them, the
   toolchain, CPU, core count, rayon threads and the load average.
 - **Threads**: everything runs on the calling thread except the `par` rows.
   ponko's `t<k>` rows run `par_for_each` inside a rayon pool of `k` threads

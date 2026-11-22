@@ -1,6 +1,6 @@
-//! Three of the rendering baseline's scenes (`static-world`,
-//! `dynamic-world`, `multi-material`) built again with Bevy, for a
-//! side-by-side run with `PONKO_RENDER_MATCHED=1`. The meshes, colors,
+//! Four of the rendering baseline's scenes (`static-world`,
+//! `dynamic-world`, `multi-material`, `animated`) built again with Bevy, for
+//! a side-by-side run with `PONKO_RENDER_MATCHED=1`. The meshes, colors,
 //! textures, placement, camera path and sun are the same code as in
 //! `src/render/gpu3d/scene_bench.rs`; `crates/ponko_bench/RENDER_SCENES.md`
 //! lists what is matched and what is not.
@@ -8,8 +8,8 @@
 //! Draws offscreen, opens no window:
 //!
 //! ```sh
-//! cd bench/bevy_scenes
-//! PONKO_RENDER_CSV=bevy.csv PONKO_BENCH_JSON=bevy.json cargo run --release
+//! cd bench/compare
+//! PONKO_RENDER_CSV=bevy.csv PONKO_BENCH_JSON=bevy.json cargo run --release -- scenes
 //! ```
 //!
 //! Settings, as the ponko run reads them: `PONKO_RENDER_FRAMES` (600),
@@ -28,11 +28,13 @@ use bevy::{
     core_pipeline::tonemapping::Tonemapping,
     image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor},
     light::{CascadeShadowConfigBuilder, DirectionalLightShadowMap, GlobalAmbientLight},
-    mesh::{Indices, PrimitiveTopology},
+    mesh::{
+        Indices, PrimitiveTopology, VertexAttributeValues,
+        skinning::{SkinnedMesh, SkinnedMeshInverseBindposes},
+    },
     prelude::*,
     render::{
         RenderPlugin,
-        pipelined_rendering::PipelinedRenderingPlugin,
         render_resource::{Extent3d, PollType, TextureDimension, TextureFormat},
         renderer::{RenderAdapterInfo, RenderDevice},
         view::screenshot::{Screenshot, save_to_disk},
@@ -41,10 +43,17 @@ use bevy::{
 };
 use serde_json::{Value, json};
 
-/// The version `Cargo.toml` pins.
-const BEVY_VERSION: &str = "0.20.1";
+#[cfg(feature = "stock")]
+use bevy::render::pipelined_rendering::PipelinedRenderingPlugin;
 
-const SCENES: [&str; 3] = ["static-world", "dynamic-world", "multi-material"];
+use crate::BEVY_VERSION;
+use crate::common::{Dist, command_line, load_average, write};
+
+/// Joints per skinned figure, and its height.
+const JOINTS: usize = 16;
+const FIGURE_HEIGHT: f32 = 1.8;
+
+const SCENES: [&str; 4] = ["static-world", "dynamic-world", "multi-material", "animated"];
 
 /// The bounds of the scenes' random angles: about half a turn and a turn.
 /// Any bound would do; these are the ones the recorded baselines were placed
@@ -277,6 +286,14 @@ struct Mover {
     speed: f32,
 }
 
+/// A joint of a skinned figure, swaying from its figure's phase as ponko's
+/// `animated` scene poses its skeletons.
+#[derive(Component)]
+struct Sway {
+    phase: f32,
+    joint: usize,
+}
+
 /// What a scene holds and how its camera circles it.
 #[derive(Default)]
 struct Built {
@@ -285,6 +302,7 @@ struct Built {
     meshes: usize,
     materials: usize,
     textures: usize,
+    skinned_models: usize,
     /// Center, distance and height of the camera's circle.
     orbit: (Vec3, f32, f32),
 }
@@ -347,6 +365,103 @@ impl Builder<'_> {
                 (self.mesh(shape), material)
             })
             .collect()
+    }
+
+    /// Ponko's skinned figure (`scene_bench.rs`, `figure`): a column 1.8
+    /// tall of 17 rings on a chain of 16 joints, each corner following its
+    /// ring's joint (0.7) and the one below (0.3).
+    fn figure(
+        &mut self,
+        color: Color,
+    ) -> (
+        Handle<Mesh>,
+        Handle<StandardMaterial>,
+        Handle<SkinnedMeshInverseBindposes>,
+    ) {
+        const SIDES: u32 = 12;
+        let rings = JOINTS as u32 + 1;
+        let (mut positions, mut normals, mut uvs, mut joints, mut weights, mut indices) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        for ring in 0..rings {
+            let along = ring as f32 / (rings - 1) as f32;
+            let radius = 0.12 + 0.14 * (along * std::f32::consts::PI).sin();
+            let joint = (ring as usize).min(JOINTS - 1) as u16;
+            let below = joint.saturating_sub(1);
+            for side in 0..SIDES {
+                let angle = side as f32 / SIDES as f32 * std::f32::consts::TAU;
+                let out = Vec3::new(angle.cos(), 0.0, angle.sin());
+                positions.push(out * radius + Vec3::Y * along * FIGURE_HEIGHT);
+                normals.push(out);
+                uvs.push(Vec2::new(side as f32 / SIDES as f32, along));
+                joints.push([joint, below, 0, 0]);
+                weights.push([0.7f32, 0.3, 0.0, 0.0]);
+            }
+        }
+        for ring in 0..rings - 1 {
+            for side in 0..SIDES {
+                let (a, b) = (ring * SIDES + side, ring * SIDES + (side + 1) % SIDES);
+                let (c, d) = (a + SIDES, b + SIDES);
+                indices.extend_from_slice(&[a, c, b, b, c, d]);
+            }
+        }
+        let mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+            .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+            .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+            .with_inserted_attribute(Mesh::ATTRIBUTE_JOINT_INDEX, VertexAttributeValues::Uint16x4(joints))
+            .with_inserted_attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT, weights)
+            .with_inserted_indices(Indices::U32(indices));
+        self.built.meshes += 1;
+        let mesh = self.world.resource_mut::<Assets<Mesh>>().add(mesh);
+        let material = self.material(StandardMaterial {
+            base_color: color,
+            perceptual_roughness: 0.6,
+            ..default()
+        });
+        // Joint j rests j steps up the column.
+        let bindposes: Vec<Mat4> = (0..JOINTS)
+            .map(|j| Mat4::from_translation(Vec3::Y * j as f32 * FIGURE_HEIGHT / JOINTS as f32).inverse())
+            .collect();
+        let bindposes = self
+            .world
+            .resource_mut::<Assets<SkinnedMeshInverseBindposes>>()
+            .add(SkinnedMeshInverseBindposes::from(bindposes));
+        (mesh, material, bindposes)
+    }
+
+    /// A figure standing at `at` with its 16 joint entities, as Bevy's
+    /// skinned meshes are posed (each joint a child of the one below).
+    fn walker(
+        &mut self,
+        (mesh, material, bindposes): (
+            Handle<Mesh>,
+            Handle<StandardMaterial>,
+            Handle<SkinnedMeshInverseBindposes>,
+        ),
+        at: Vec3,
+        phase: f32,
+    ) {
+        let figure = self.model(&(mesh, material), Transform::from_translation(at)).id();
+        let mut joints = Vec::with_capacity(JOINTS);
+        let mut parent = figure;
+        for joint in 0..JOINTS {
+            let rest = if joint == 0 { 0.0 } else { FIGURE_HEIGHT / JOINTS as f32 };
+            let id = self
+                .world
+                .spawn((
+                    Transform::from_translation(Vec3::Y * rest),
+                    Sway { phase, joint },
+                    ChildOf(parent),
+                ))
+                .id();
+            joints.push(id);
+            parent = id;
+        }
+        self.world.entity_mut(figure).insert(SkinnedMesh {
+            inverse_bindposes: bindposes,
+            joints,
+        });
+        self.built.skinned_models += 1;
     }
 
     fn build(&mut self, scene: &str) {
@@ -463,6 +578,30 @@ impl Builder<'_> {
                 let reach = side as f32 * 0.55;
                 self.built.orbit = (Vec3::ZERO, reach * 0.9 + 5.0, reach * 0.5 + 4.0);
             }
+            "animated" => {
+                self.ground(160.0, Color::srgb(0.36, 0.36, 0.3));
+                let figures: Vec<_> = [
+                    Color::srgb(0.85, 0.5, 0.35),
+                    Color::srgb(0.4, 0.65, 0.85),
+                    Color::srgb(0.6, 0.8, 0.45),
+                ]
+                .into_iter()
+                .map(|color| self.figure(color))
+                .collect();
+                let count = self.count(400, 2);
+                let side = (count as f32).sqrt().ceil() as usize;
+                for i in 0..count {
+                    let at = Vec3::new(
+                        (i % side) as f32 * 1.6 - side as f32 * 0.8,
+                        0.0,
+                        (i / side) as f32 * 1.6 - side as f32 * 0.8,
+                    );
+                    let figure = figures[i % figures.len()].clone();
+                    self.walker(figure, at, seq.next() * TURN);
+                }
+                let reach = side as f32 * 0.8;
+                self.built.orbit = (Vec3::new(0.0, 1.0, 0.0), reach + 5.0, reach * 0.4 + 3.0);
+            }
             other => unreachable!("no scene named {other}"),
         }
     }
@@ -518,47 +657,6 @@ fn settings() -> Result<Settings, String> {
     })
 }
 
-/// Nearest-rank percentiles, as the ponko report computes them.
-#[derive(Clone, Copy)]
-struct Dist {
-    samples: usize,
-    min: f64,
-    p50: f64,
-    p95: f64,
-    p99: f64,
-    max: f64,
-    mean: f64,
-}
-
-impl Dist {
-    fn of(values: &mut [f64]) -> Dist {
-        values.sort_by(f64::total_cmp);
-        let rank = |pct: usize| values[(pct * values.len()).div_ceil(100).max(1) - 1];
-        Dist {
-            samples: values.len(),
-            min: values[0],
-            p50: rank(50),
-            p95: rank(95),
-            p99: rank(99),
-            max: values[values.len() - 1],
-            mean: values.iter().sum::<f64>() / values.len() as f64,
-        }
-    }
-
-    fn json(&self) -> Value {
-        let round = |v: f64| (v * 1e6).round() / 1e6;
-        json!({
-            "samples": self.samples,
-            "min": round(self.min),
-            "p50": round(self.p50),
-            "p95": round(self.p95),
-            "p99": round(self.p99),
-            "max": round(self.max),
-            "mean": round(self.mean),
-        })
-    }
-}
-
 struct Measured {
     name: &'static str,
     built: Built,
@@ -580,20 +678,26 @@ fn measure(name: &'static str, settings: &Settings, png: Option<&std::path::Path
         plugins = plugins.disable::<bevy::log::LogPlugin>();
     }
     let mut app = App::new();
-    app.add_plugins(
-        plugins
-            .set(WindowPlugin {
-                primary_window: None,
-                exit_condition: ExitCondition::DontExit,
-                ..default()
-            })
-            .set(RenderPlugin {
-                synchronous_pipeline_compilation: true,
-                ..default()
-            })
-            // One thread simulates and renders, as in the ponko run.
-            .disable::<PipelinedRenderingPlugin>(),
-    );
+    let plugins = plugins
+        .set(WindowPlugin {
+            primary_window: None,
+            exit_condition: ExitCondition::DontExit,
+            ..default()
+        })
+        .set(RenderPlugin {
+            synchronous_pipeline_compilation: true,
+            ..default()
+        });
+    // The first table: one thread simulates and renders, as in the ponko
+    // run. Tuned: Bevy's default, pipelined rendering (`finished.rs`).
+    #[cfg(feature = "stock")]
+    let plugins = plugins
+        .disable::<PipelinedRenderingPlugin>()
+        // No window, so no event loop (one per process at most).
+        .disable::<bevy::winit::WinitPlugin>();
+    app.add_plugins(plugins);
+    #[cfg(not(feature = "stock"))]
+    let finished = crate::finished::Finished::install(&mut app);
     // The sun and the ambient light of ponko's default `Lighting`, in
     // ponko's units (the camera's exposure stands in for the tone curve).
     let rgb = |hex: u32| Color::srgb_u8((hex >> 16) as u8, (hex >> 8) as u8, hex as u8);
@@ -659,6 +763,7 @@ fn measure(name: &'static str, settings: &Settings, png: Option<&std::path::Path
         ))
         .id();
     let mut movers = world.query::<(&mut Transform, &Mover)>();
+    let mut sways = world.query::<(&mut Transform, &Sway)>();
 
     let (mut update, mut cpu, mut frame) = (Vec::new(), Vec::new(), Vec::new());
     for index in 0..settings.warmup + settings.frames {
@@ -674,11 +779,28 @@ fn measure(name: &'static str, settings: &Settings, png: Option<&std::path::Path
             transform.translation = mover.origin + Vec3::Y * at.sin() * mover.radius;
             transform.rotation = Quat::from_rotation_y(at);
         }
+        // Ponko's `animated` pose: every joint but the root sways about z.
+        for (mut transform, sway) in sways.iter_mut(world) {
+            if sway.joint > 0 {
+                transform.rotation =
+                    Quat::from_rotation_z((time * 2.0 + sway.phase + sway.joint as f32 * 0.4).sin() * 0.12);
+            }
+        }
         let updated = Instant::now();
         // Every schedule of the main world, then extraction and the render
-        // world up to the submit.
+        // world up to the submit (tuned: the render world's part runs on
+        // the render thread, and `frame` is taken from its stamps below).
         apps.update();
         let submitted = Instant::now();
+        #[cfg(not(feature = "stock"))]
+        {
+            if index >= settings.warmup {
+                update.push((updated - started).as_secs_f64() * 1e3);
+                cpu.push((submitted - updated).as_secs_f64() * 1e3);
+            }
+            continue;
+        }
+        #[cfg(feature = "stock")]
         apps.main
             .world()
             .resource::<RenderDevice>()
@@ -694,6 +816,14 @@ fn measure(name: &'static str, settings: &Settings, png: Option<&std::path::Path
             cpu.push((submitted - updated).as_secs_f64() * 1e3);
             frame.push((done - updated).as_secs_f64() * 1e3);
         }
+    }
+    #[cfg(not(feature = "stock"))]
+    {
+        let updates = settings.warmup + settings.frames;
+        // One more frame closes the last measured one.
+        apps.update();
+        finished.wait_for(updates + 1);
+        frame = finished.times(settings.warmup);
     }
     if let Some(dir) = png {
         let path = dir.join(format!("{name}.png"));
@@ -734,45 +864,8 @@ fn measure(name: &'static str, settings: &Settings, png: Option<&std::path::Path
     }
 }
 
-/// First line of a command's output, or `"unknown"`.
-fn command_line(cmd: &str, args: &[&str]) -> String {
-    std::process::Command::new(cmd)
-        .args(args)
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .and_then(|s| s.lines().next().map(|l| l.trim().to_owned()))
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "unknown".to_owned())
-}
-
-/// The 1, 5 and 15 minute load averages (how busy the machine is), as the
-/// ponko run records them, or `"unknown"`.
-fn load_average() -> String {
-    if cfg!(target_os = "macos") {
-        let s = command_line("sysctl", &["-n", "vm.loadavg"]);
-        return s.trim_matches(|c| c == '{' || c == '}' || c == ' ').to_owned();
-    }
-    std::fs::read_to_string("/proc/loadavg")
-        .ok()
-        .map(|s| s.split_whitespace().take(3).collect::<Vec<_>>().join(" "))
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "unknown".to_owned())
-}
-
-fn write(path: &std::ffi::OsStr, what: &str, text: String) {
-    match std::fs::write(path, text) {
-        Ok(()) => println!("{what} written to {}", path.to_string_lossy()),
-        Err(e) => {
-            eprintln!("could not write {}: {e}", path.to_string_lossy());
-            std::process::exit(1);
-        }
-    }
-}
-
-fn main() {
-    let filter = std::env::args().nth(1).unwrap_or_default();
+pub fn run(filter: &str) {
+    let filter = filter.to_owned();
     let settings = match settings() {
         Ok(settings) => settings,
         Err(problem) => {
@@ -836,6 +929,7 @@ fn main() {
                     "meshes": m.built.meshes,
                     "materials": m.built.materials,
                     "textures": m.built.textures,
+                    "skinned_models": m.built.skinned_models,
                 },
                 "timings_ms": {
                     "update": m.update.json(),

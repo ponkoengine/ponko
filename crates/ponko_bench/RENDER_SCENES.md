@@ -279,20 +279,23 @@ named as uncounted.
 
 ## Side by side with Bevy (optional)
 
-`bench/bevy_scenes` builds three of the scenes again with Bevy 0.20.1:
-`static-world`, `dynamic-world` and `multi-material`. It is a crate of its
-own with its own workspace and lock file: Bevy is not a dependency of the
-engine, the bench or any default build, and the crate is not published.
+`bench/compare` (the cross-engine scoreboard, see its README) builds four
+of the scenes again with Bevy 0.20.1: `static-world`, `dynamic-world`,
+`multi-material` and `animated` (1,000 skinned figures of 16 joints, each
+joint an entity, posed every frame). It is a crate of its own with its own
+workspace and lock file: Bevy is not a dependency of the engine, the bench
+or any default build, and the crate is not published.
 
 ```sh
 # Ponko, drawing only what the Bevy copies draw too:
 PONKO_RENDER_MATCHED=1 PONKO_BENCH_JSON=ponko.json PONKO_RENDER_CSV=ponko.csv \
   cargo run --release -p ponko_bench --features render -- \
-  'render/scene static-world|render/scene dynamic-world|render/scene multi-material'
+  'render/scene static-world|render/scene dynamic-world|render/scene multi-material|render/scene animated'
 
-# Bevy (reads the same PONKO_RENDER_FRAMES, WARMUP, SIZE, SCALE and PNG):
-cd bench/bevy_scenes
-PONKO_BENCH_JSON=bevy.json PONKO_RENDER_CSV=bevy.csv cargo run --release
+# Bevy (reads the same PONKO_RENDER_FRAMES, WARMUP, SIZE, SCALE and PNG;
+# a scene name after `scenes` runs only that scene):
+cd bench/compare
+PONKO_BENCH_JSON=bevy.json PONKO_RENDER_CSV=bevy.csv cargo run --release -- scenes
 ```
 
 Both write the same CSV columns, so the rows can be put in one sheet.
@@ -300,7 +303,9 @@ Both write the same CSV columns, so the rows can be put in one sheet.
 **Matched** (the same code or the same numbers on both sides):
 
 - Meshes: the vertices and triangles of `MeshData::cube`, `sphere` and
-  `plane`, ported line for line, so both draw the same triangles.
+  `plane`, ported line for line, so both draw the same triangles. The
+  animated figure: the same column of 17 rings of 12 sides, the same joint
+  weights (0.7 and 0.3 to the two nearest joints), the same sway per joint.
 - Placement, sizes, rotations and motion: the same sequence and formulas.
 - Materials: base color, roughness, metallic, emissive, cut-out at 0.5,
   double-sided; the same generated textures with a full mip chain, linear
@@ -318,6 +323,10 @@ Both write the same CSV columns, so the rows can be put in one sheet.
 
 **Not matched** (read the numbers with these in mind):
 
+- **Skinning.** Ponko poses a figure by writing its joints' rotations into
+  the pose of one `Skeleton` component; Bevy's figure is 16 joint entities in a parent chain whose
+  `Transform`s a system sets each frame, and Bevy propagates them, which is
+  how Bevy skins (`SkinnedMesh`). The poses are the same.
 - **Static instances.** Ponko's `static-world` uses its static instance
   batch API: 8 batches. Bevy has no such API; its copy is 200,000 entities
   that Bevy batches itself each frame. This is the largest difference and

@@ -1,0 +1,58 @@
+[package]
+name = "ponko_compare"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "The other engine's side of Ponko's cross-engine scoreboard (not part of the engine's workspace)."
+
+[dependencies]
+# Bevy, pinned exactly: the version is printed with every result
+# (`BEVY_VERSION` in src/main.rs). Its features come from this crate's
+# features below: `stock` (the default) is Bevy's default features, as a
+# Bevy game starts; the tuned builds name only what one group of workloads
+# needs.
+bevy = { version = "=0.20.1", default-features = false }
+# Bevy has no physics of its own: rapier's official Bevy plugin, the same
+# solver (rapier2d 0.36) Ponko's `Game::physics` drives.
+bevy_rapier2d = { version = "=0.37.0", default-features = false, features = ["dim2"], optional = true }
+# The ECS matrix: the same workload files as crates/ponko_bench.
+ponko_ecs = { path = "../../crates/ponko_ecs" }
+hecs = "0.11.2"
+rayon = "1.12.0"
+serde_json = "1.0.154"
+
+[features]
+# The first table ("as a new project starts"): Bevy's default features and
+# every workload in one program.
+default = ["stock"]
+stock = ["bevy/default", "headless", "sprites", "ui", "scenes"]
+# The workload groups. Built alone (`--no-default-features --features
+# <group>`), each is a tuned program with only the Bevy features its
+# workloads need: `scoreboard.py --tuned` builds the four. The features
+# are Bevy's own collections where one fits (`2d_bevy_render`,
+# `ui_bevy_render`, `default_app`; see Bevy's `docs/cargo_features.md`).
+headless = ["bevy/std", "bevy/multi_threaded", "bevy/async_executor", "dep:bevy_rapier2d"]
+sprites = ["bevy/2d_bevy_render", "bevy/default_app", "bevy/std", "bevy/multi_threaded"]
+ui = ["bevy/ui_bevy_render", "bevy/default_app", "bevy/std", "bevy/multi_threaded"]
+scenes = [
+    "bevy/common_api", "bevy/bevy_light", "bevy/bevy_render", "bevy/bevy_core_pipeline",
+    "bevy/bevy_pbr", "bevy/bevy_anti_alias", "bevy/default_app", "bevy/std", "bevy/multi_threaded",
+]
+# rapier's documented performance features, on both sides of the tuned
+# physics row (Ponko's through `crates/ponko_bench`'s feature of the same
+# name). rapier 0.36 has no `simd-stable`; `simd8` is its wide-SIMD switch.
+rapier-parallel = ["bevy_rapier2d?/parallel"]
+rapier-simd8 = ["bevy_rapier2d?/simd8"]
+
+# The same release settings as the engine's workspace (the default profile).
+[profile.release]
+
+# The tuned rows' shipping profile, the same on both sides: scoreboard.py
+# passes it to the engine's workspace with `--config` (see its `SHIP`).
+[profile.ship]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+
+[workspace]

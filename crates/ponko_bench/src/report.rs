@@ -10,13 +10,11 @@ use std::time::Duration;
 /// Bumped when a field changes meaning or disappears. New fields don't bump it.
 pub const SCHEMA_VERSION: u32 = 1;
 
-/// Versions of the comparison crates, as locked in the workspace `Cargo.lock`.
-pub const BEVY_ECS_VERSION: &str = "0.20.1";
+/// The version of hecs, as locked in the workspace `Cargo.lock`;
+/// `dependency_versions_match_cargo_toml` keeps it in step with `Cargo.toml`.
+/// (bevy_ecs is no longer a dependency of this crate: its rows are in
+/// `bench/compare`, so `env.bevy_ecs` is `null`.)
 pub const HECS_VERSION: &str = "0.11.2";
-/// The bevy_ecs features `ponko_bench`'s `Cargo.toml` turns on (with its
-/// defaults). `dependency_versions_and_features_match_cargo_toml` keeps the
-/// three constants in step with `Cargo.toml`.
-pub const BEVY_ECS_FEATURES: &[&str] = &["default", "multi_threaded"];
 
 /// How a benchmark was timed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -232,9 +230,9 @@ pub fn to_json(env: &Env, records: &[Record], render: Option<&str>) -> String {
         s,
         "    \"ponko_features\": [\"physics\", \"physics3d\", \"navmesh\"{window}],"
     );
-    let _ = writeln!(s, "    \"bevy_ecs\": {},", json_str(BEVY_ECS_VERSION));
-    let features: Vec<String> = BEVY_ECS_FEATURES.iter().map(|f| json_str(f)).collect();
-    let _ = writeln!(s, "    \"bevy_ecs_features\": [{}],", features.join(", "));
+    // Kept for older readers: bevy_ecs runs in `bench/compare` now.
+    let _ = writeln!(s, "    \"bevy_ecs\": null,");
+    let _ = writeln!(s, "    \"bevy_ecs_features\": [],");
     let _ = writeln!(s, "    \"hecs\": {},", json_str(HECS_VERSION));
     let filter = env.filter.as_deref().map_or_else(|| "null".to_owned(), json_str);
     let _ = writeln!(s, "    \"filter\": {filter},");
@@ -334,7 +332,7 @@ mod tests {
     }
 
     #[test]
-    fn dependency_versions_and_features_match_cargo_toml() {
+    fn dependency_versions_match_cargo_toml() {
         let manifest = include_str!("../Cargo.toml");
         let line = |name: &str| {
             manifest
@@ -342,17 +340,9 @@ mod tests {
                 .find(|l| l.starts_with(&format!("{name} =")))
                 .unwrap_or_else(|| panic!("{name} is a dependency"))
         };
-        let bevy = line("bevy_ecs");
-        assert!(bevy.contains(&format!("version = \"{BEVY_ECS_VERSION}\"")), "{bevy}");
-        // Every feature turned on is listed, and `default` stays on.
-        let extra: Vec<String> = BEVY_ECS_FEATURES
-            .iter()
-            .filter(|&&f| f != "default")
-            .map(|f| format!("\"{f}\""))
-            .collect();
-        assert!(bevy.contains(&format!("features = [{}]", extra.join(", "))), "{bevy}");
-        assert!(!bevy.contains("default-features = false"), "{bevy}");
         assert_eq!(line("hecs"), format!("hecs = \"{HECS_VERSION}\""));
+        // No other engine in this workspace's dependency tree.
+        assert!(!manifest.contains("bevy"), "bevy belongs in bench/compare");
     }
 
     #[test]

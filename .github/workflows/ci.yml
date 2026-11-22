@@ -140,8 +140,8 @@ jobs:
       # The Bevy comparison scenes are a crate of their own, outside the
       # workspace. Only their formatting is checked: building them pulls in
       # all of Bevy.
-      - name: Format of bench/bevy_scenes
-        run: cargo fmt --check --manifest-path bench/bevy_scenes/Cargo.toml
+      - name: Format of bench/compare
+        run: cargo fmt --check --manifest-path bench/compare/Cargo.toml
 
   # The render tests' reference images (tests/fixtures/render) change only
   # through a test run with PONKO_UPDATE_REFERENCES=1, and only with a

@@ -246,7 +246,10 @@ are decisive. Its modular packages and high-performance data-oriented path
 should be evaluated alongside its familiar GameObject workflow.
 
 Use [the performance chapter](performance.md) as a record of specific
-reproducible workloads, not a league table of engines. Match workloads,
+reproducible workloads, not a league table of engines. Its
+[scoreboard against Bevy](performance.md#ponko-vs-bevy-the-scoreboard) runs
+the same workloads on both engines with one command, and lists where Bevy is
+faster as plainly as where Ponko is. Match workloads,
 resolution, quality, build configuration and target hardware before drawing
 conclusions. Consult [the roadmap](../../ROADMAP.md)
 for unresolved foundations; it is directional and has no promised dates.

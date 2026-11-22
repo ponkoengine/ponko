@@ -1012,6 +1012,20 @@ impl Ctx {
         }
     }
 
+    /// The GPU a [`Game::bench_offscreen`](crate::Game::bench_offscreen) run
+    /// draws on (name and backend), or `None` without a renderer. Unstable
+    /// (`bench-internals`).
+    #[doc(hidden)]
+    #[cfg(all(
+        feature = "bench-internals",
+        feature = "window",
+        feature = "3d",
+        not(target_arch = "wasm32")
+    ))]
+    pub fn bench_adapter(&self) -> Option<String> {
+        self.gfx.renderer.as_ref().map(crate::render::Renderer::bench_adapter)
+    }
+
     /// One frame of the built-in sprite drawing without a GPU, for
     /// `ponko_bench`: collects every `Sprite` entity as `draw_sprites` does,
     /// orders and batches them as the renderer does, and forgets them.

@@ -417,6 +417,14 @@ pub struct Game {
     input_injection: bool,
     /// From `headless_frames`: headless runs also run frames and the UI.
     headless_frames: bool,
+    /// From `bench_offscreen`: headless frames are drawn offscreen.
+    #[cfg(all(
+        feature = "bench-internals",
+        feature = "window",
+        feature = "3d",
+        not(target_arch = "wasm32")
+    ))]
+    bench_offscreen: bool,
     /// From `parallel_systems`: batches of view systems may use other threads.
     parallel: bool,
     /// From `parallel_threshold`.
@@ -852,6 +860,19 @@ impl ConfiguredGame {
     /// [`Game::headless_frames`].
     pub fn headless_frames(mut self, on: bool) -> Self {
         self.game = self.game.headless_frames(on);
+        self
+    }
+
+    /// Benchmarks: [`Game::bench_offscreen`]. Unstable (`bench-internals`).
+    #[doc(hidden)]
+    #[cfg(all(
+        feature = "bench-internals",
+        feature = "window",
+        feature = "3d",
+        not(target_arch = "wasm32")
+    ))]
+    pub fn bench_offscreen(mut self) -> Self {
+        self.game = self.game.bench_offscreen();
         self
     }
 
@@ -1437,6 +1458,13 @@ impl Game {
             input_scenario: None,
             input_injection: false,
             headless_frames: false,
+            #[cfg(all(
+                feature = "bench-internals",
+                feature = "window",
+                feature = "3d",
+                not(target_arch = "wasm32")
+            ))]
+            bench_offscreen: false,
             parallel: false,
             parallel_threshold: None,
             parallel_env: true,
@@ -2734,6 +2762,27 @@ impl Game {
         self
     }
 
+    /// Benchmarks: a headless run that runs whole frames
+    /// ([`headless_frames`](Self::headless_frames)) and draws each one with
+    /// the window's renderer into an offscreen target of the game's size
+    /// (4x multisampling, no present), waiting for the GPU before the next
+    /// frame. The cross-engine benchmarks in `bench/compare` measure games
+    /// this way. Without a GPU the run fails (`run_headless` panics with the
+    /// reason, `try_run_headless` returns it). Unstable
+    /// (`bench-internals`).
+    #[doc(hidden)]
+    #[cfg(all(
+        feature = "bench-internals",
+        feature = "window",
+        feature = "3d",
+        not(target_arch = "wasm32")
+    ))]
+    pub fn bench_offscreen(mut self) -> Self {
+        self.headless_frames = true;
+        self.bench_offscreen = true;
+        self
+    }
+
     /// Runs `scenario` headlessly for its [`ticks`](crate::scenario::InputScenario::ticks)
     /// and returns the world with the scenario's report: the bounded runner
     /// for tests and CI. A failed check ends the run at that tick and the
@@ -3654,6 +3703,24 @@ impl Game {
         connect_hotpatch();
         let fixed_dt = Clock::new(self.fixed_hz).fixed_dt();
         let mut ctx = self.build_ctx(true);
+        #[cfg(all(
+            feature = "bench-internals",
+            feature = "window",
+            feature = "3d",
+            not(target_arch = "wasm32")
+        ))]
+        if self.bench_offscreen {
+            let size = (self.width.max(1), self.height.max(1));
+            match crate::render::Renderer::offscreen_bench(size) {
+                Ok(renderer) => ctx.gfx.renderer = Some(renderer),
+                Err(why) => {
+                    return Err(crate::error::Error::new(
+                        crate::error::ErrorKind::Unsupported,
+                        format!("bench_offscreen: {why}"),
+                    ));
+                }
+            }
+        }
         if self.restore_window {
             let settings = self.first_window_settings(&ctx.storage, &ctx.window.monitors());
             ctx.set_window_size(settings.size);
@@ -3723,6 +3790,18 @@ impl Game {
                 end_timings(&mut ctx);
                 // Only simulation systems run here, so only they hold removals back.
                 forget_seen_removals(&mut ctx, self.sim_systems.iter());
+            }
+            #[cfg(all(
+                feature = "bench-internals",
+                feature = "window",
+                feature = "3d",
+                not(target_arch = "wasm32")
+            ))]
+            if self.bench_offscreen {
+                ctx.render_frame();
+                if let Some(renderer) = &ctx.gfx.renderer {
+                    renderer.bench_wait();
+                }
             }
             ctx.gfx.discard_draws();
             ctx.input.end_frame();
