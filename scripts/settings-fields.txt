@@ -53,6 +53,7 @@ TargetCamera.clip_plane           has_clip_plane         # has_clip_plane and th
 
 struct Lighting Lighting src/three/mod.rs PonkoLighting,PonkoLightingEx
 Lighting.gi                       gi_enabled             # GlobalIllumination's fields are the gi_* fields
+Lighting.shadow_lag               -                      # not bound yet: C far cascades are exact, the default
 
 struct GlobalIllumination GlobalIllumination src/three/gi.rs PonkoLighting
 GlobalIllumination.enabled          gi_enabled           # prefixed in the flat C struct

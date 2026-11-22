@@ -125,6 +125,10 @@ pub(crate) struct Frame3D {
     /// way; the renderer keeps a cascade's map while it is placed the same
     /// and its casters are unchanged (see `shadow_generations`).
     pub redrawn: u32,
+    /// `Lighting::shadow_lag` with far cascades held (`shadow_refresh`
+    /// above 1): the renderer keeps a held cascade's map whatever its
+    /// casters do (the cascades not in `redrawn`).
+    pub shadow_lag: bool,
     /// Per shadow view, a number that changes whenever the casters it lists
     /// change (another instance, mesh or material override) and never comes
     /// back: the renderer keeps a view whose number is the one it drew it
@@ -485,6 +489,7 @@ impl Frame3D {
         };
         self.frame_number = self.frame_number.wrapping_add(1);
         self.redrawn = 0;
+        self.shadow_lag = lighting.shadow_lag && refresh > 1;
         let mut sun_planes = [[Vec4::ZERO; 5]; MAX_CASCADES];
         for i in 0..self.cascades {
             let near = if i == 0 { camera.near } else { splits[i - 1] };

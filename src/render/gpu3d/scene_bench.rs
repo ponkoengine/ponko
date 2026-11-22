@@ -494,6 +494,17 @@ impl SceneBench {
         if bench.shadow_workload.is_some() {
             bench.ctx.scene3d.lighting.shadow_refresh = 1;
         }
+        // The far cascades' refresh (1 to 8) and whether they may lag their
+        // casters (`Lighting::shadow_lag`), for comparing the two.
+        if let Some(refresh) = std::env::var("PONKO_RENDER_SHADOW_REFRESH")
+            .ok()
+            .and_then(|v| v.trim().parse::<u32>().ok())
+        {
+            bench.ctx.scene3d.lighting.shadow_refresh = refresh.clamp(1, 8);
+        }
+        if std::env::var("PONKO_RENDER_SHADOW_LAG").is_ok_and(|v| v.trim() == "1") {
+            bench.ctx.scene3d.lighting.shadow_lag = true;
+        }
         // TAA, for what motion vectors cost (no preset turns it on).
         if std::env::var("PONKO_RENDER_TAA").is_ok_and(|v| v.trim() == "1") {
             bench.ctx.scene3d.post.anti_aliasing = crate::render::AntiAliasing::Taa;
@@ -1295,11 +1306,16 @@ impl SceneBench {
             );
         }
 
-        // Walkers on the streets.
+        // Walkers on the streets (none for the `vegetation` shadow
+        // workload: skinned casters redraw every cascade they are in).
         let (figure, skeleton) = self.figure(Color::rgb(0.8, 0.6, 0.5));
         for _ in 0..self.count(80, 2) {
             let (at, _) = street(seq);
-            self.walker(figure, &skeleton, at, seq.next() * TURN);
+            if !self.vegetation() {
+                self.walker(figure, &skeleton, at, seq.next() * TURN);
+            } else {
+                seq.next();
+            }
         }
 
         // Street lamps: the first two cast shadows, as do four spot lights.
@@ -1343,18 +1359,32 @@ impl SceneBench {
         self.ctx.scene3d.post.bloom = 0.3;
         self.ctx.scene3d.camera.occlusion_culling = true;
         self.ctx.scene3d.lighting.shadow_distance = 100.0;
-        self.orbit = (Vec3::new(0.0, 3.0, 0.0), town * 0.55 + 12.0, 26.0);
+        self.orbit = if self.vegetation() {
+            // Low, out in the trees: band edges all around the camera.
+            (Vec3::new(0.0, 3.0, 0.0), (town + HALF) * 0.5, 6.0)
+        } else {
+            (Vec3::new(0.0, 3.0, 0.0), town * 0.55 + 12.0, 26.0)
+        };
     }
 
     // -------------------------------------------------------------- frames
 
     /// Puts the camera where this frame sees the scene from: on a slow
     /// circle around it, so every frame's view differs a little.
+    /// The `vegetation` shadow workloads: the town without walkers, seen
+    /// from low among its trees.
+    fn vegetation(&self) -> bool {
+        matches!(
+            self.shadow_workload.as_deref(),
+            Some("vegetation" | "vegetation-moving")
+        )
+    }
+
     fn place_camera(&mut self) {
         let (center, distance, height) = self.orbit;
         let step = match self.shadow_workload.as_deref() {
             Some("static" | "actors") => 0.0,
-            Some("slow-camera") => 0.00001,
+            Some("slow-camera" | "vegetation") => 0.00001,
             _ => 0.004,
         };
         let angle = 0.6 + self.frames as f32 * step;
@@ -1378,7 +1408,10 @@ impl SceneBench {
     fn animate(&mut self) {
         let time = self.frames as f32 / 60.0;
         self.place_camera();
-        if matches!(self.shadow_workload.as_deref(), Some("static" | "slow-camera")) {
+        if matches!(
+            self.shadow_workload.as_deref(),
+            Some("static" | "slow-camera" | "vegetation" | "vegetation-moving")
+        ) {
             return;
         }
         if self.shadow_workload.as_deref() == Some("thrash") {
@@ -1768,6 +1801,7 @@ impl SceneBench {
                 "shadow_cascades": l.shadow_cascades,
                 "shadow_resolution": l.shadow_resolution,
                 "shadow_refresh": l.shadow_refresh,
+                "shadow_lag": l.shadow_lag,
                 "shadow_filter": l.shadow_filter as u32,
                 "shadow_sun_size": l.shadow_sun_size,
                 "light_shadow_views": l.light_shadow_views,

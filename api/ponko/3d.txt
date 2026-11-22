@@ -11325,6 +11325,7 @@ pub ponko::render::Lighting::light_shadow_views: u32
 pub ponko::render::Lighting::shadow_cascades: u32
 pub ponko::render::Lighting::shadow_distance: f32
 pub ponko::render::Lighting::shadow_filter: ponko::render::ShadowFilter
+pub ponko::render::Lighting::shadow_lag: bool
 pub ponko::render::Lighting::shadow_refresh: u32
 pub ponko::render::Lighting::shadow_resolution: u32
 pub ponko::render::Lighting::shadow_sun_size: f32
