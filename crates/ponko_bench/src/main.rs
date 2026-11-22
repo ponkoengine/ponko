@@ -45,6 +45,7 @@ mod report;
 mod required;
 mod rollback;
 mod schedule;
+mod scoreboard;
 mod skeleton2d;
 mod sparse_set;
 mod sprites;
@@ -287,6 +288,7 @@ fn main() {
     query_filters::run(&mut b);
     query_policy::run(&mut b);
     par_archetypes::run(&mut b);
+    scoreboard::run(&mut b);
     #[cfg(feature = "render")]
     record::run(&mut b);
     #[cfg(feature = "render")]
