@@ -11,6 +11,8 @@ ponko_bench/render test Benchmark drivers are not tests (AGENTS.md); the unit te
 ponko_bench/audio test As ponko_bench/render: the driver needs an audio device, clippy builds it
 ponko_bench/text-shaping test As ponko_bench/render
 ponko_bench/video test As ponko_bench/render: the driver needs a clip, clippy builds it
+ponko_bench/rapier-parallel test Only turns on rapier2d's own feature for the scoreboard's tuned physics row; clippy builds it, rapier tests it
+ponko_bench/rapier-simd8 test As ponko_bench/rapier-parallel
 
 # Browser runners (web/smoke, web/gallery) that CI does not run, `runner <path> <reason>`.
 runner web/smoke/first-load.mjs A measurement tool for the first-load cost of a build (requests, bytes, time on an emulated network), not a pass or fail check

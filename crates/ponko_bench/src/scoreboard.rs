@@ -367,6 +367,19 @@ mod tests {
     }
 
     #[test]
+    fn the_parallel_sim_moves_every_entity_as_the_sequential_one_does() {
+        let positions = |mover: fn(&mut Ctx)| {
+            let mut world = Game::new("sim", 1, 1).sim_system(mover).run_headless(3, |ctx| {
+                sim_world(ctx, 5000);
+            });
+            let mut all = Vec::new();
+            world.query::<&Pos>().iter().for_each(|p| all.push(p.0));
+            all
+        };
+        assert_eq!(positions(sim_move), positions(sim_move_par));
+    }
+
+    #[test]
     fn frame_times_skip_the_warm_up() {
         let mut world = World::new();
         let start = Instant::now();
