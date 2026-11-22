@@ -243,6 +243,10 @@ impl SoundSlices {
     /// Opens `bytes` as Kira's loader does (the same probe and codecs),
     /// decoding no samples yet.
     pub fn new(bytes: Vec<u8>) -> Result<Self, String> {
+        crate::audio::sound_file::guarded(|| Self::open(bytes))
+    }
+
+    fn open(bytes: Vec<u8>) -> Result<Self, String> {
         use symphonia::core::codecs::CodecParameters;
         use symphonia::core::formats::TrackType;
         use symphonia::core::io::MediaSourceStream;
@@ -257,6 +261,8 @@ impl SoundSlices {
             return Err(no_track());
         };
         let sample_rate = params.sample_rate.ok_or_else(|| fail(&"the sample rate is unknown"))?;
+        crate::audio::sound_file::check_params(params).map_err(|e| fail(&e))?;
+        crate::audio::sound_file::check_length(track.num_frames).map_err(|e| fail(&e))?;
         let decoder = symphonia::default::get_codecs()
             .make_audio_decoder(params, &Default::default())
             .map_err(|e| fail(&e))?;
@@ -273,6 +279,10 @@ impl SoundSlices {
 
     /// Decodes the next few packets; `Ok(true)` at the end of the sound.
     pub fn step(&mut self) -> Result<bool, String> {
+        crate::audio::sound_file::guarded(|| self.decode_packets())
+    }
+
+    fn decode_packets(&mut self) -> Result<bool, String> {
         let fail = |e: &dyn std::fmt::Display| format!("could not decode the sound: {e}");
         let goal = self.frames.len() + SLICE_BYTES / std::mem::size_of::<kira::Frame>();
         while self.frames.len() < goal {
@@ -287,6 +297,9 @@ impl SoundSlices {
             let buffer = self.decoder.decode(&packet).map_err(|e| fail(&e))?;
             let channels = buffer.num_planes();
             buffer.copy_to_vec_interleaved(&mut self.samples);
+            // The header may have said nothing, or lied: stop at the limit.
+            let frames = (self.frames.len() + self.samples.len() / channels.max(1)) as u64;
+            crate::audio::sound_file::check_length(Some(frames)).map_err(|e| fail(&e))?;
             match channels {
                 1 => self
                     .frames

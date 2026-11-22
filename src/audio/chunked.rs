@@ -59,6 +59,10 @@ struct Decoding {
 }
 
 fn open(bytes: &Arc<[u8]>) -> Result<(Decoding, Header), String> {
+    super::sound_file::guarded(|| open_unguarded(bytes))
+}
+
+fn open_unguarded(bytes: &Arc<[u8]>) -> Result<(Decoding, Header), String> {
     let source = MediaSourceStream::new(Box::new(Cursor::new(bytes.clone())), Default::default());
     let reader = symphonia::default::get_probe()
         .probe(&Hint::default(), source, Default::default(), Default::default())
@@ -71,6 +75,7 @@ fn open(bytes: &Arc<[u8]>) -> Result<(Decoding, Header), String> {
         .sample_rate
         .filter(|&rate| rate > 0)
         .ok_or("its sample rate is unknown")?;
+    super::sound_file::check_params(params)?;
     let header = Header {
         sample_rate,
         frames: track.num_frames,
@@ -434,15 +439,18 @@ impl ChunkedSound {
             && let Some(d) = self.decoding.as_mut()
             && d.time_base.is_some()
             && let Some(time) = Time::try_from_secs_f64(early)
-            && d.reader
-                .seek(
-                    SeekMode::Accurate,
-                    SeekTo::Time {
-                        time,
-                        track_id: Some(d.track),
-                    },
-                )
-                .is_ok()
+            && std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                d.reader
+                    .seek(
+                        SeekMode::Accurate,
+                        SeekTo::Time {
+                            time,
+                            track_id: Some(d.track),
+                        },
+                    )
+                    .is_ok()
+            }))
+            .unwrap_or(false)
         {
             d.decoder.reset();
             self.align = Some(frame);
@@ -479,29 +487,14 @@ impl ChunkedSound {
                 self.skip -= dropped as u64;
                 continue;
             }
-            let decoding = self.decoding.as_mut()?;
-            match decoding.reader.next_packet() {
-                Ok(Some(packet)) if packet.track_id == decoding.track => match decoding.decoder.decode(&packet) {
-                    Ok(buffer) => {
-                        self.channels = buffer.num_planes().max(1);
-                        buffer.copy_to_vec_interleaved(&mut self.samples);
-                        self.next = 0;
-                        reopened = false;
-                        if let Some(target) = self.align {
-                            let start = decoding.time_base.and_then(|tb| tb.calc_time(packet.pts));
-                            let start = start.map(|t| (t.as_secs_f64() * f64::from(self.sample_rate)).round() as i64);
-                            self.next = aligned(start, self.samples.len() / self.channels, target);
-                            if self.next < self.samples.len() / self.channels {
-                                self.align = None;
-                            }
-                        }
-                    }
-                    // A damaged packet: skip it, as players do.
-                    Err(DecodeError::DecodeError(_)) => {}
-                    Err(_) => self.end(&mut reopened),
-                },
-                Ok(Some(_)) => {}
-                Ok(None) | Err(_) => self.end(&mut reopened),
+            // A panic inside a decoder ends the sound instead of the game.
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.read_packet(&mut reopened))) {
+                Ok(Some(())) => {}
+                Ok(None) => return None,
+                Err(_) => {
+                    self.decoding = None;
+                    return None;
+                }
             }
         }
         let at = self.next * self.channels;
@@ -513,6 +506,36 @@ impl ChunkedSound {
         } else {
             Frame::new(left, self.samples[at + 1])
         })
+    }
+
+    /// Reads and decodes the next packet into `samples`; `None` when there
+    /// is no decoder any more.
+    fn read_packet(&mut self, reopened: &mut bool) -> Option<()> {
+        let decoding = self.decoding.as_mut()?;
+        match decoding.reader.next_packet() {
+            Ok(Some(packet)) if packet.track_id == decoding.track => match decoding.decoder.decode(&packet) {
+                Ok(buffer) => {
+                    self.channels = buffer.num_planes().max(1);
+                    buffer.copy_to_vec_interleaved(&mut self.samples);
+                    self.next = 0;
+                    *reopened = false;
+                    if let Some(target) = self.align {
+                        let start = decoding.time_base.and_then(|tb| tb.calc_time(packet.pts));
+                        let start = start.map(|t| (t.as_secs_f64() * f64::from(self.sample_rate)).round() as i64);
+                        self.next = aligned(start, self.samples.len() / self.channels, target);
+                        if self.next < self.samples.len() / self.channels {
+                            self.align = None;
+                        }
+                    }
+                }
+                // A damaged packet: skip it, as players do.
+                Err(DecodeError::DecodeError(_)) => {}
+                Err(_) => self.end(reopened),
+            },
+            Ok(Some(_)) => {}
+            Ok(None) | Err(_) => self.end(reopened),
+        }
+        Some(())
     }
 
     /// The decoder reached the end: back to the loop start when looping
@@ -671,6 +694,27 @@ impl Sound for ChunkedSound {
 
     fn finished(&self) -> bool {
         self.done()
+    }
+}
+
+/// For the fuzz target `sound`: opens `bytes` as a stream and plays a
+/// little of it, seeking a few times. Whatever the file says, it must be
+/// an error or play without crashing.
+#[cfg(fuzzing)]
+pub(crate) fn fuzz_stream(bytes: &[u8]) {
+    let bytes: Arc<[u8]> = bytes.into();
+    let _ = header(&bytes);
+    for (looping, from) in [(false, 0.0), (true, 0.5)] {
+        let data = ChunkedData::new(bytes.clone(), 1.0, 1.0, looping).start_position(from);
+        let Ok((mut sound, _handle)) = ChunkedSound::new(data) else {
+            continue;
+        };
+        let info = kira::info::MockInfoBuilder::new().build();
+        let mut block = [Frame::ZERO; 256];
+        for _ in 0..64 {
+            sound.on_start_processing();
+            sound.process(&mut block, 1.0 / 44_100.0, &info);
+        }
     }
 }
 

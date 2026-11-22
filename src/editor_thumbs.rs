@@ -360,8 +360,7 @@ fn map(json: &Value, prefab: bool) -> Thumb {
 
 #[cfg(feature = "audio")]
 fn sound(bytes: &[u8]) -> Result<Thumb, String> {
-    let data = kira::sound::static_sound::StaticSoundData::from_cursor(std::io::Cursor::new(bytes.to_vec()))
-        .map_err(|e| format!("can't decode it: {e}"))?;
+    let data = crate::audio::decode_sound(bytes.to_vec()).map_err(|e| format!("can't decode it: {e}"))?;
     let frames = &data.frames;
     let (w, h) = (SIZE, SIZE / 2);
     let mut t = Thumb::blank(w, h);

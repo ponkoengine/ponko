@@ -1,0 +1,23 @@
+# The written fuzz list: every fuzz target, one per line, with the seconds
+# the weekly job runs it (fuzz/run-all.sh uses them when it is given no
+# seconds of its own). A target has a file in fuzz/fuzz_targets/, a [[bin]]
+# in fuzz/Cargo.toml, a line here and a row in the table of fuzz/README.md;
+# `python3 scripts/check-fuzz-list.py` fails when any of them is missing.
+#
+# <target> <seconds>
+scene 180
+prefab 180
+gltf 180
+unity_yaml 180
+unity_binary 180
+action_map 180
+asset_pack 180
+lockstep 180
+messages 180
+replication 180
+lobby 180
+control 180
+aseprite 180
+levels 180
+cooked_texture 180
+sound 180

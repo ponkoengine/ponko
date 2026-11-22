@@ -25,6 +25,7 @@ reads back).
 | `aseprite` | An Aseprite file (`aseprite-source`) and a cooked Aseprite sheet, every frame, layer and animation |
 | `levels` | An LDtk project and a Tiled map (JSON and XML), loaded, merged into solid rectangles and spawned |
 | `cooked_texture` | A texture as `ponko cook` ships it (KTX2, DDS) or any image file, decoded for GPUs with and without block formats, and streamed |
+| `sound` | A sound file in any compiled format (WAV, AIFF, ADPCM, OGG Vorbis, FLAC, MP3): decoded whole, decoded in slices, streamed from memory and played as a stream, which must refuse absurd headers and stop at the length limit |
 
 The network targets reach the packet parsers behind a connected session
 through `ponko::__fuzz`, which only exists in builds with `--cfg fuzzing`

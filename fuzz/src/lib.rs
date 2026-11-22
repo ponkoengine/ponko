@@ -308,3 +308,11 @@ pub fn levels(data: &[u8]) {
 pub fn cooked_texture(data: &[u8]) {
     ponko::__fuzz::texture(data);
 }
+
+/// A sound file in any format the engine plays (WAV, AIFF, ADPCM, OGG
+/// Vorbis, FLAC, MP3): decoded whole, in slices, streamed from memory and
+/// played as a stream, which must refuse absurd headers and stop at the
+/// length limit.
+pub fn sound(data: &[u8]) {
+    ponko::__fuzz::sound(data);
+}
