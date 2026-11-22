@@ -30,12 +30,57 @@ kept fixed by a regression test next to it.
 |---|---|---|---|---|
 | Lobby and relay server (`ponko_lobby`) | Anyone who can reach its port | Crash it, exhaust its memory or sockets, flood rooms, use the relay to flood players, speak for another member | Limits per address on requests, relay bytes and connections; caps on request size, relay payload, rooms, room size and text; idle connections and rooms closed; silent links dropped; relay frames carry the sender's id as the server knows it, never one the client wrote ([Lobbies](lobby.md#limits)) | `tests/limits.rs`, `tests/hostile.rs`, fuzz target `lobby` |
 | STUN responder (`ponko_lobby`) | Anyone, with any source address (UDP) | Use the server to flood a third party (reflection) | Binding requests only, answered at most 20 a second per IP; the address table is capped | `tests/stun.rs` |
-| Message endpoint (`NetMessages`, UDP) | Anyone who can reach the port, with forged source addresses | Crash the game, hold every client slot, make it buffer without bound, inject messages into another player's link | Datagrams of 1500 bytes at most; packets only count for a link whose address and both nonces match; messages over 1 MiB close the link; per-channel send and receive memory capped (4 MiB); undrained events capped (4096, about 5 MiB); a link silent for 10 s is dropped; at most `max_clients` (≤ 1024) links | `net/message_conformance.rs`, fuzz target `messages` |
+| Message endpoint (`NetMessages`, UDP) | Anyone who can reach the port, with forged source addresses | Crash the game, hold every client slot, make it buffer without bound, inject messages into another player's link, use the host to flood a third party (reflection) | A hello must echo a cookie proving its address first ([forged hellos](#forged-hellos)): before that, no slot and no memory, and the only answer is a challenge no larger than the hello, at most 256 a second; datagrams of 1500 bytes at most; packets only count for a link whose address and both nonces match; messages over 1 MiB close the link; per-channel send and receive memory capped (4 MiB); undrained events capped (4096, about 5 MiB); a link silent for 10 s is dropped; at most `max_clients` (≤ 1024) links | `net/message_conformance.rs`, the cookie tests in `net/messages.rs`, `tests/net_cookies.rs`, fuzz target `messages` |
 | WebSocket transport (browsers, `accept_web`) | Any web page, any TCP client | Hold sockets with slow handshakes or silent connections, send huge frames | 64 handshakes in flight, each dropped after 5 s; 1100 connections at most; a connection that sends nothing for 30 s is dropped; frames over 64 KiB refused; 1 MiB queued for a slow reader, then packets are dropped | `net/websocket.rs` tests |
 | WebRTC endpoints (feature `webrtc`) | Whoever the signaling channel lets through; then the peer | Crash the game through malformed signaling or data | Signaling text is parsed by the WebRTC stack (str0m, or the browser's); data channel messages go through the same message protocol and its limits | `net/rtc_tests.rs` |
 | Lockstep (`Net`) | The session's peers; strangers' datagrams are ignored | Desync or stall the game, crash it with malformed inputs | Datagrams from the session's peers only (others are ignored), parsed with bounds checks; state checksums catch desyncs | `net/lockstep_conformance.rs`, fuzz target `lockstep` |
 | Replication (`Replication`) | The server, for a client; any connected client, for the server | Crash or desync peers, make the server apply another player's input, grow memory with events | Snapshots read with a bounds-checked bit reader; a client's input only drives the entities it owns; events capped per tick (`OUTBOX_LIMIT`) and raw events in size; a client with other declarations is refused | `net/replication_conformance.rs`, fuzz target `replication` |
 | Steam transport (feature `steam`) | Steam friends and lobby members | As for the message endpoint | The same message protocol over Steam's relay | `net/steam_messages.rs` |
+
+### Forged hellos
+
+A UDP packet's source address is whatever the sender writes in it. If a
+host answered every hello with a welcome and a connection slot, a stranger
+forging addresses could fill its slots and its memory without ever
+receiving a packet, and could make it send its answers to a victim of
+their choice (reflection). So a UDP message host first checks that a
+client can receive at its address, the way DTLS (HelloVerifyRequest), QUIC
+(Retry) and WireGuard (cookies) do:
+
+1. The client sends a hello. Every hello is padded to 64 bytes.
+2. Without a valid cookie in it, the host answers with one challenge of
+   41 bytes carrying a cookie, and keeps nothing: no connection slot, no
+   allocation that outlives the call. The cookie is a keyed MAC
+   (SipHash-2-4 with a 128-bit tag) over the client's IP address and
+   port, the protocol version, the client's session nonce and the key
+   period.
+3. The client echoes the cookie in a second hello at once. The host
+   recomputes the MAC, compares it in constant time, and only then makes
+   the connection and welcomes the client.
+
+What that holds:
+
+- **One extra round trip on connect, none afterwards.** Packets of an
+  open connection are matched by address and nonces as before.
+- **Nothing to gain from forging.** A stranger who can't receive at the
+  address never sees the cookie, and a cookie copied from another address
+  or port, or made for another connection attempt, doesn't match.
+- **Cookies expire.** The host makes a random key when it starts and a
+  new one every 5 s, keeping the current and the previous one: a cookie
+  is good for 5 to 10 s, and a restarted host knows none of the old ones.
+- **No amplification.** The challenge (41 bytes) is smaller than the
+  hello that caused it (64 bytes), and a shorter hello gets no challenge;
+  a reflector gains nothing, which is stricter than QUIC's threefold
+  allowance. Challenges (and refusals of another protocol version) are
+  capped at 256 a second in all, so the host can't be made to flood one
+  victim either.
+- **Always on, nothing to set up.** The check is part of UDP hosting, and
+  C and C++ need no new call. Browser clients (`accept_web`), WebRTC and
+  the Steam relay come over transports that have proved the address
+  already, and skip it.
+
+The cookie only proves an address; it isn't authentication. Who a player
+is stays the game's to decide (below).
 
 ## Files
 
@@ -96,7 +141,8 @@ change the game and write files.
 - **Game rules.** The engine checks that a packet is well formed and
   speaks only for its own link; whether the move it describes is allowed
   is up to the game (the host's or server's simulation decides).
-- **Spoofed UDP floods.** A stranger who forges source addresses can make
-  a message endpoint open links that time out after 10 s; behind a lobby
-  each costs one of the endpoint's slots for that long. Put a public
-  server behind a firewall or provider that filters spoofed traffic.
+- **Floods of plain traffic.** Forged hellos cost a host no slots or
+  memory ([forged hellos](#forged-hellos)), but a stranger can still send
+  more packets than the link or the machine can take in. Volumetric
+  floods are for the network in front of a public server: a firewall or
+  a provider that drops spoofed and excess traffic.

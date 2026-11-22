@@ -111,6 +111,9 @@ pub fn lockstep_packets(data: &[u8]) {
 /// [`MessageEvent::decode`](super::MessageEvent::decode) does for games.
 pub fn message_packets(data: &[u8]) {
     let mut nets = NetMessages::loopback(2);
+    // The host checks address cookies, as a UDP host does.
+    let host = nets.remove(0).require_cookies();
+    nets.insert(0, host);
     // Returns how many connections it saw.
     let drain = |nets: &mut [NetMessages]| {
         let mut connected = 0;
@@ -360,12 +363,14 @@ mod tests {
     #[test]
     fn messages_survive_garbage_and_forged_headers() {
         let mut data = Vec::new();
-        for kind in 0..=8u8 {
-            for flags in 0..8u8 {
-                let mut bytes = vec![b'C', b'R', b'M', b'1', kind];
-                bytes.extend([0xab; 30]);
-                data.extend(record(flags, &bytes));
-                data.extend(record(flags, &[kind; 3]));
+        for digit in [b'1', b'2', b'3'] {
+            for kind in 0..=8u8 {
+                for flags in 0..8u8 {
+                    let mut bytes = vec![b'C', b'R', b'M', digit, kind];
+                    bytes.extend([0xab; 60]);
+                    data.extend(record(flags, &bytes));
+                    data.extend(record(flags, &[kind; 3]));
+                }
             }
         }
         message_packets(&data);

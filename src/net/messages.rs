@@ -1272,10 +1272,10 @@ impl NetMessages {
             }
             if self.needs_cookie(addr) {
                 // An unpadded hello could make the challenge an amplifier.
-                let Some(cookie) = data.get(HEADER..HEADER + COOKIE).filter(|_| data.len() >= HELLO_BYTES) else {
+                let cookie = data.get(HEADER..HEADER + COOKIE).filter(|_| data.len() >= HELLO_BYTES);
+                let Some(cookie) = cookie.and_then(|c| <&[u8; COOKIE]>::try_from(c).ok()) else {
                     return Ok(());
                 };
-                let cookie: &[u8; COOKIE] = cookie.try_into().expect("cookie length");
                 let Some(cookies) = self.cookies.as_mut() else {
                     return Ok(());
                 };

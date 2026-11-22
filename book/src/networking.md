@@ -655,7 +655,17 @@ across polls still times out.
 `disconnect(peer)` discards pending messages, sends three best-effort leave
 notifications and reports a local event. If those notifications are lost,
 the remote detects the timeout. Dropping an endpoint is detected by timeout.
-A full host refuses new connections with a disconnection event.
+A full host refuses new connections with a disconnection event, and so
+does a host of another protocol version (the reason starts with "version
+mismatch"; hosts and clients from before message protocol 2 can't send
+or read that refusal, and the join times out instead).
+
+A UDP host checks that a joining client can receive at its address before
+it gives the client anything: the first hello gets a small challenge with
+a cookie, the client echoes it at once, and only then does the host make
+the connection. That is one extra round trip on connect and none
+afterwards; it is always on, and forged source addresses cost the host no
+slot and no memory ([forged hellos](security.md#forged-hellos)).
 
 Each Renet lane has a 4 MiB budget per direction per peer; a full send queue
 returns `WouldBlock` so the application can retry or drop its update.
@@ -681,7 +691,8 @@ its resends and timeouts happen (see [testing replication](replication.md#test-i
 UDP sessions use nonblocking `std::net::UdpSocket` on the calling thread;
 there is no async runtime or worker thread. They are **unauthenticated and
 unencrypted**. Session nonces reject delayed traffic from earlier connections,
-but do not authenticate users. Use a trusted network or a secure tunnel;
+and the address cookie proves only that a client receives at its address;
+neither authenticates users. Use a trusted network or a secure tunnel;
 public Internet authentication, encryption and admission policy belong in a
 secure transport. This message API currently supports UDP and memory only.
 With feature `steam`, `NetMessages` uses Steam Networking Messages on a
