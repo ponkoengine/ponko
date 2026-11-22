@@ -2211,6 +2211,13 @@ impl Renderer3D {
     pub(crate) fn taa_active(&self) -> bool {
         self.screen.taa_on
     }
+
+    /// The probe slots' codes, negative where a probe is buried in a wall
+    /// (see `Gi::probe_codes`); `None` without global illumination.
+    #[cfg(test)]
+    pub(crate) fn gi_probe_codes(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Vec<f32>> {
+        self.gi.as_ref().map(|gi| gi.probe_codes(device, queue))
+    }
 }
 
 #[cfg(test)]
