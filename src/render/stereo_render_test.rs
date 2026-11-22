@@ -241,6 +241,8 @@ struct Cost {
     to_idle: f64,
     gpu: Option<f64>,
     worst_to_idle: f64,
+    /// Passes timed in the last frame (the timer holds at most 32).
+    timed: usize,
 }
 
 fn measure(eye: (u32, u32), stereo: bool, wide: bool) -> Option<Cost> {
@@ -252,6 +254,7 @@ fn measure(eye: (u32, u32), stereo: bool, wide: bool) -> Option<Cost> {
             rig.frame();
         }
         let (mut cpu, mut to_idle, mut gpu) = (Vec::new(), Vec::new(), Vec::new());
+        let mut timed = 0;
         for i in 0..FRAMES {
             // The head turns a little, as a real one does.
             let yaw = (i as f32 * 0.05).sin() * 0.02;
@@ -263,6 +266,7 @@ fn measure(eye: (u32, u32), stereo: bool, wide: bool) -> Option<Cost> {
             let _ = rig.device.poll(wgpu::PollType::wait_indefinitely());
             to_idle.push(start.elapsed().as_secs_f64() * 1e3);
             let passes = rig.ctx.perf.gpu_passes();
+            timed = passes.len();
             if !passes.is_empty() {
                 gpu.push(passes.iter().map(|p| f64::from(p.ms)).sum());
             }
@@ -272,6 +276,7 @@ fn measure(eye: (u32, u32), stereo: bool, wide: bool) -> Option<Cost> {
             to_idle: median(&mut to_idle),
             gpu: (!gpu.is_empty()).then(|| median(&mut gpu)),
             worst_to_idle: to_idle.iter().copied().fold(0.0, f64::max),
+            timed,
         };
         best = Some(match best {
             None => round,
@@ -283,6 +288,7 @@ fn measure(eye: (u32, u32), stereo: bool, wide: bool) -> Option<Cost> {
                     (x, y) => x.or(y),
                 },
                 worst_to_idle: b.worst_to_idle.max(round.worst_to_idle),
+                timed: round.timed,
             },
         });
     }
@@ -302,14 +308,16 @@ fn stereo_frame_cost_against_one_view() {
             "\neye {}x{} (medians, ms; best of {ROUNDS} rounds of {FRAMES} frames)",
             eye.0, eye.1
         );
-        println!("| Frame | CPU | until GPU idle | GPU passes | worst until idle |");
+        println!("| Frame | CPU | until GPU idle | GPU passes (timed) | worst until idle |");
         println!("|---|---|---|---|---|");
         for (name, c) in [
             ("one view, one eye's size", mono),
             ("one view, both eyes' size", wide),
             ("stereo: two views, one per eye", stereo),
         ] {
-            let gpu = c.gpu.map_or("not timed".to_owned(), |g| format!("{g:.2}"));
+            let gpu = c
+                .gpu
+                .map_or("not timed".to_owned(), |g| format!("{g:.2} ({})", c.timed));
             println!(
                 "| {name} | {:.2} | {:.2} | {gpu} | {:.2} |",
                 c.cpu, c.to_idle, c.worst_to_idle
