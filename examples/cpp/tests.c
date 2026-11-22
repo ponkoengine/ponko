@@ -826,6 +826,30 @@ static void far_ground(PonkoCtx* ctx, void* user) {
     CHECK(ponko_ctx_physics3d_is_collider_active(ctx, 0, &active) == PONKO_OK && !active);
 }
 
+// A terrain file spawned as a tile (assets/terrain/bump.json), and one that isn't there.
+static void terrain_file_ground(PonkoCtx* ctx, void* user) {
+    (void)user;
+    PonkoWorld* w = ponko_ctx_world(ctx);
+    uint64_t hill = 0;
+    CHECK(ponko_ctx_terrain_tile_spawn_from_file(ctx, "terrain/bump.json", (PonkoVec3){-4, 0, -4}, &hill) == PONKO_OK);
+    uint32_t tile_id, transform_id;
+    CHECK(ponko_terrain_tile_component(w, &tile_id) == PONKO_OK);
+    CHECK(ponko_transform3d_component(w, &transform_id) == PONKO_OK);
+    PonkoTerrainTile tile;
+    CHECK(ponko_get(w, hill, tile_id, &tile, sizeof tile) == PONKO_OK && tile.lod_distance > 0);
+    PonkoTransform3D at;
+    CHECK(ponko_get(w, hill, transform_id, &at, sizeof at) == PONKO_OK && at.position.x == -4);
+    uint64_t none = 0;
+    CHECK(ponko_ctx_terrain_tile_spawn_from_file(ctx, "terrain/nowhere.json", (PonkoVec3){0, 0, 0}, &none) == PONKO_NOT_FOUND);
+}
+
+static void terrain_files(void) {
+    PonkoGame* game = ponko_game_new("terrain file", 1, 1); CHECK(game);
+    PonkoWorld* w = NULL;
+    CHECK(ponko_game_run_headless(game, 0, terrain_file_ground, NULL, &w) == PONKO_OK);
+    CHECK(ponko_world_free(w) == PONKO_OK);
+}
+
 static void streamed_worlds(void) {
     PonkoGame* game = ponko_game_new("far", 1, 1); CHECK(game);
     CHECK(ponko_game_physics3d(game, (PonkoVec3){0, -9.81f, 0}) == PONKO_OK);
@@ -4148,6 +4172,7 @@ int main(void) {
     ribbons_and_decals();
     lod_helpers();
     streamed_worlds();
+    terrain_files();
     terrain_rebuild();
     model_material_overrides();
     asset_streaming();

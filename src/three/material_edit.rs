@@ -86,6 +86,16 @@ impl Graphics {
                     double_sided: m.double_sided,
                     ..before
                 };
+                // Custom values and shader from the extras; a material
+                // without them keeps what the game gave it.
+                let desc = match m.custom {
+                    Some(custom) => MaterialDesc {
+                        custom,
+                        shader: self.extras_shader(path, m),
+                        ..desc
+                    },
+                    None => desc,
+                };
                 self.update_material(*material, desc);
             }
             return Ok(true);

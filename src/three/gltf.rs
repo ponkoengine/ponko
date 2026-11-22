@@ -169,6 +169,11 @@ pub(crate) struct LoadedMaterial {
     /// glTF's alpha mode: OPAQUE, MASK (cut out) or BLEND (transparent).
     pub blend: Blend,
     pub double_sided: bool,
+    /// The custom shader's values from the material's extras
+    /// (`ponko:params`), if it has them (see `material_extras`).
+    pub custom: Option<[glam::Vec4; 4]>,
+    /// The custom shader its extras name (`ponko:shader`), as an asset name.
+    pub shader: Option<String>,
 }
 
 impl LoadedMaterial {
@@ -186,6 +191,8 @@ impl LoadedMaterial {
             emissive_map: None,
             blend: Blend::Opaque,
             double_sided: false,
+            custom: None,
+            shader: None,
         }
     }
 }
@@ -1052,6 +1059,24 @@ fn read_materials(
             gltf::material::AlphaMode::Mask => Blend::Cutout,
             gltf::material::AlphaMode::Blend => Blend::Transparent,
         };
+        // A custom shader and its values, from the extras.
+        let extras = material
+            .index()
+            .map_or(&serde_json::Value::Null, |i| &json["materials"][i]["extras"]);
+        let (custom, shader) = match super::material_extras::CustomExtras::read(extras) {
+            Ok(Some(c)) => (
+                Some(c.custom()),
+                c.shader.map(|s| crate::tilemap::resolve_relative_asset(name, &s)),
+            ),
+            Ok(None) => (None, None),
+            Err(e) => {
+                warnings.push(format!(
+                    "{name}: material \"{}\": {e}; it is drawn without its custom values",
+                    material.name().unwrap_or("")
+                ));
+                (None, None)
+            }
+        };
         materials.push(LoadedMaterial {
             name: material.name().unwrap_or("").to_string(),
             color: Color::rgba(to_srgb(r), to_srgb(g), to_srgb(b), a * (1.0 - transmission)),
@@ -1065,6 +1090,8 @@ fn read_materials(
             emissive_map,
             blend,
             double_sided: material.double_sided(),
+            custom,
+            shader,
         });
     }
     Ok(FileMaterials {

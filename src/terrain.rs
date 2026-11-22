@@ -2,5 +2,5 @@
 
 #![deny(missing_docs)]
 pub use crate::three::{
-    FarTerrain, Heightfield, TerrainMaterialDesc, TerrainTile, TerrainTileData, TextureArray, TextureKind,
+    FarTerrain, Heightfield, TerrainFile, TerrainMaterialDesc, TerrainTile, TerrainTileData, TextureArray, TextureKind,
 };

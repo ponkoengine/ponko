@@ -1169,6 +1169,22 @@ impl Graphics {
     /// [`unload_mesh`](Self::unload_mesh) does, unless
     /// [`load_mesh`](Self::load_mesh) holds a mesh of the same file (which
     /// draws with them): the last scene spawned from the file is gone.
+    /// The custom shader material `m` of glTF file `path` names in its
+    /// extras, loaded; `None` (with a warning) if it doesn't load.
+    pub(super) fn extras_shader(&mut self, path: &str, m: &gltf::LoadedMaterial) -> Option<Shader> {
+        let name = m.shader.as_deref()?;
+        match self.try_load_shader(name) {
+            Ok(shader) => Some(shader),
+            Err(e) => {
+                super::gltf_ext::warn(&format!(
+                    "{path}: material \"{}\": its shader didn't load, it is drawn with the built-in one: {e}",
+                    m.name
+                ));
+                None
+            }
+        }
+    }
+
     pub(crate) fn release_file_materials(&mut self, path: &str) {
         let held = self
             .asset_sources
@@ -1324,6 +1340,8 @@ impl Graphics {
                     emissive_map: texture(m.emissive_map),
                     blend: m.blend,
                     double_sided: m.double_sided,
+                    custom: m.custom.unwrap_or_default(),
+                    shader: self.extras_shader(path, m),
                     ..Default::default()
                 };
                 if let Some(old) = old {

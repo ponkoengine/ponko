@@ -8,8 +8,10 @@
 //!
 //! The tile shown is the one `TerrainTile::spawn_from_file` made from the file, or, with
 //! **Show in the view**, one the editor puts in the middle of the world
-//! (not saved with the scene). Heights stay between the file's `low` and
-//! `high`.
+//! (not saved with the scene). **Add to the scene** puts it in the scene
+//! instead (an undo step): the scene saves its `TerrainFile` and place, and
+//! loading the scene makes the tile from the file. Heights stay between
+//! the file's `low` and `high`.
 
 use egui::{Color32, RichText, Ui};
 use glam::{Vec2, Vec3};
@@ -20,7 +22,7 @@ use super::Panels;
 use super::author::{beside, near_first, read_text, relative};
 use crate::ctx::Ctx;
 use crate::terrain::TextureArray;
-use crate::three::{TERRAIN_FORMAT, TerrainBuilt, TerrainData, TerrainJson, TerrainLayerJson, TerrainSource};
+use crate::three::{TERRAIN_FORMAT, TerrainBuilt, TerrainData, TerrainFile, TerrainJson, TerrainLayerJson};
 
 /// What the brush does.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -172,10 +174,20 @@ fn new_terrain(path: &str) -> TerrainData {
     }
 }
 
+/// Whether the scene has a tile of `path` it saves (not only one shown
+/// for shaping).
+fn in_scene(ctx: &mut Ctx, path: &str) -> bool {
+    ctx.world
+        .query::<&TerrainFile>()
+        .filter::<ponko_ecs::Without<crate::reflect::NotSaved>>()
+        .iter()
+        .any(|f| f.path == path)
+}
+
 /// The terrain entity of `path` in the world, and its corner.
 fn tile_of(ctx: &mut Ctx, path: &str) -> Option<(Entity, Vec3)> {
     ctx.world
-        .query::<(Entity, &crate::d3::Transform, &TerrainSource)>()
+        .query::<(Entity, &crate::d3::Transform, &TerrainFile)>()
         .iter()
         .find(|(_, _, s)| s.path == path)
         .map(|(e, t, _)| (e, t.position))
@@ -373,6 +385,7 @@ impl Panels {
             ctx.free(weights);
         }
         ctx.world.insert(entity, built.tile);
+        crate::three::note_terrain_tile(ctx, path, corner, built.tile);
         if let Some(state) = self.terrain() {
             state.built = Some(built);
         }
@@ -400,11 +413,13 @@ impl Panels {
             }
         }
         let shown = tile_of(ctx, &path).is_some();
+        let in_scene = in_scene(ctx, &path);
         let unsaved = ctx.editor.docs.unsaved(&path);
         let pngs = near_first(self.asset_files("png"), &path);
         let mut open = true;
         let mut save = false;
         let mut show = false;
+        let mut add = false;
         let mut edited = None;
         egui::Window::new(format!("Terrain — {path}{}", if unsaved { " *" } else { "" }))
             .id(egui::Id::unique("ponko-terrain-window"))
@@ -428,6 +443,14 @@ impl Panels {
                             .button("Show in the view")
                             .on_hover_text(
                                 "Put the tile in the middle of the world to shape it (not saved with the scene)",
+                            )
+                            .clicked();
+                    }
+                    if !in_scene {
+                        add = ui
+                            .button("Add to the scene")
+                            .on_hover_text(
+                                "Put the tile in the scene, saved with it as its terrain file and place (an undo step)",
                             )
                             .clicked();
                     }
@@ -485,7 +508,7 @@ impl Panels {
                     RichText::new(if shown {
                         "Drag over the tile in the view to use the brush"
                     } else {
-                        "The tile isn't in the world: Show in the view, or spawn it with TerrainTile::spawn_from_file"
+                        "The tile isn't in the world: Show in the view, Add to the scene, or spawn it with TerrainTile::spawn_from_file"
                     })
                     .weak(),
                 );
@@ -551,9 +574,33 @@ impl Panels {
             let at = Vec3::new(-d.json.size / 2.0, 0.0, -d.json.size / 2.0);
             ctx.world.spawn((
                 crate::d3::Transform::at(at),
-                TerrainSource { path: path.clone() },
+                TerrainFile::new(path.clone()),
                 crate::reflect::NotSaved,
             ));
+            if let Some(state) = self.terrain() {
+                state.applied = u64::MAX;
+            }
+        }
+        if add && let Ok(d) = &data {
+            // The tile shown only for shaping goes; the scene's takes its place.
+            let previews: Vec<(Entity, Vec3)> = ctx
+                .world
+                .query::<(Entity, &crate::d3::Transform, &TerrainFile, &crate::reflect::NotSaved)>()
+                .iter()
+                .filter(|(_, _, f, _)| f.path == path)
+                .map(|(e, t, _, _)| (e, t.position))
+                .collect();
+            let at = previews
+                .first()
+                .map_or(Vec3::new(-d.json.size / 2.0, 0.0, -d.json.size / 2.0), |p| p.1);
+            for (e, _) in previews {
+                if let Some(tile) = ctx.world.get::<crate::terrain::TerrainTile>(e).copied() {
+                    ctx.free(tile);
+                }
+                ctx.world.despawn(e);
+            }
+            let e = ctx.edit(|ed, ctx| ed.spawn_empty3d(ctx, crate::d3::Transform::at(at)));
+            ctx.world.insert(e, TerrainFile::new(path.clone()));
             if let Some(state) = self.terrain() {
                 state.applied = u64::MAX;
             }
@@ -783,6 +830,108 @@ mod tests {
             data(&h, &f).world_heights().iter().all(|y| y.abs() < 1e-3),
             "the stroke was one step"
         );
+    }
+
+    /// The terrain entities of `path` the scene saves, with their corners
+    /// and tiles.
+    fn scene_tiles(h: &mut Harness, path: &str) -> Vec<(Entity, Vec3, Option<crate::terrain::TerrainTile>)> {
+        h.ctx
+            .world
+            .query::<(
+                Entity,
+                &crate::d3::Transform,
+                &TerrainFile,
+                Option<&crate::terrain::TerrainTile>,
+            )>()
+            .filter::<ponko_ecs::Without<crate::reflect::NotSaved>>()
+            .iter()
+            .filter(|(_, _, f, _)| f.path == path)
+            .map(|(e, t, _, tile)| (e, t.position, tile.copied()))
+            .collect()
+    }
+
+    #[test]
+    fn a_terrain_added_to_the_scene_is_saved_as_its_file_and_place_and_loading_spawns_it() {
+        let f = Fixture::new("scene");
+        let mut h = terrain_editor(&f);
+        let at = middle(&h);
+        hold(&mut h, at, 20);
+        h.ctx.editor.docs.save(&f.path).unwrap();
+        h.click_text(|t| t == "Add to the scene");
+        h.frame(vec![]);
+        let tiles = scene_tiles(&mut h, &f.path);
+        assert_eq!(tiles.len(), 1, "one tile in the scene");
+        let (_, corner, tile) = tiles[0];
+        assert_eq!(corner, Vec3::new(-32.0, 0.0, -32.0), "where the shown tile was");
+        assert!(tile.is_some_and(|t| h.ctx.gfx.is_live(t)));
+        let previews = h.ctx.world.query::<&crate::reflect::NotSaved>().iter().count();
+        assert_eq!(previews, 0, "the tile shown for shaping made way");
+        assert!(h.find(|t| t == "Add to the scene").is_none());
+        // Undo takes it out, redo puts it back with its tile.
+        h.undo();
+        assert!(scene_tiles(&mut h, &f.path).is_empty());
+        h.redo();
+        let again = scene_tiles(&mut h, &f.path);
+        assert_eq!(again.len(), 1);
+        assert!(again[0].2.is_some(), "the tile came back with the entity");
+
+        // Saved: the file and the place, not the tile.
+        let scene = f.path.replace("hill.json", "level.json");
+        h.ctx
+            .edit(|ed, ctx| ed.save_as(ctx, &scene, crate::editor::DocKind::Scene))
+            .unwrap();
+        let text = std::fs::read_to_string(f.dir.join("level.json")).unwrap();
+        let saved: Value = serde_json::from_str(&text).unwrap();
+        let entity = saved["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["components"].get("TerrainFile").is_some())
+            .expect("the terrain entity is saved");
+        assert_eq!(entity["components"]["TerrainFile"], json!({ "path": f.path }));
+        assert_eq!(
+            entity["components"]["Transform3D"]["position"],
+            json!([-32.0, 0.0, -32.0])
+        );
+
+        // A new editor opening the scene: the tile is made from the file.
+        let mut fresh = Harness::new();
+        fresh.ctx.edit(|ed, ctx| ed.open(ctx, &scene)).unwrap();
+        let loaded = scene_tiles(&mut fresh, &f.path);
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].1, Vec3::new(-32.0, 0.0, -32.0));
+        let tile = loaded[0].2.expect("loading spawned the tile");
+        assert!(fresh.ctx.gfx.is_live(tile));
+        // Its ground is the saved one: higher in the middle than at a corner.
+        let data = TerrainData::read(
+            &f.path,
+            &std::fs::read_to_string(f.dir.join("hill.json")).unwrap(),
+            &mut |n| Ok(std::fs::read(f.dir.join(n.rsplit('/').next().unwrap())).unwrap()),
+        )
+        .unwrap();
+        let heights = data.world_heights();
+        assert!(heights[32 * 65 + 32] > heights[0] + 0.5);
+        // Loading the scene again (Stop, undo) keeps the live tile.
+        let save = crate::reflect::WorldReflect::save(&fresh.ctx.world);
+        fresh.ctx.replace_world(&save).unwrap();
+        assert_eq!(scene_tiles(&mut fresh, &f.path)[0].2, Some(tile), "not made again");
+    }
+
+    #[test]
+    fn a_scene_naming_a_terrain_file_that_isnt_there_doesnt_load_and_keeps_the_world() {
+        let mut h = Harness::new();
+        let keep = h.ctx.world.spawn((crate::d3::Transform::default(),));
+        let scene = json!({
+            "format": "ponko-world", "version": 1,
+            "entities": [{"entity": 0, "components": {
+                "Transform3D": {"position": [0.0, 0.0, 0.0]},
+                "TerrainFile": {"path": "ponko-test-no-such-terrain.json"}
+            }}],
+            "resources": {}
+        });
+        let err = h.ctx.replace_world(&scene).unwrap_err();
+        assert!(err.to_string().contains("ponko-test-no-such-terrain.json"), "{err}");
+        assert!(h.ctx.world.is_alive(keep), "the world is as it was");
     }
 
     #[test]

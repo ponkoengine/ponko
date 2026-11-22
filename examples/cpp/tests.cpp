@@ -3840,6 +3840,18 @@ static void gltf_scenes() {
     });
 }
 
+// A terrain file (assets/terrain/bump.json) spawned as a tile with its corner where asked.
+static void terrain_files() {
+    ponko::game("c++ terrain files", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
+        const ponko::entity hill = ponko::spawn_terrain_from_file(ctx, "terrain/bump.json", {-4, 0, -4});
+        auto world = ctx.world();
+        CHECK(world.has<ponko::terrain_tile>(hill));
+        CHECK(world.get<ponko::transform3d>(hill).position.z == -4.0f);
+        throws_kind([&] { (void)ponko::spawn_terrain_from_file(ctx, "terrain/nowhere.json", {0, 0, 0}); },
+                    PONKO_ERROR_NOT_FOUND);
+    });
+}
+
 // The bindings of 0.2 that were Rust-only (#387): action read-back and set_action, built-ins and their
 // declarations, LOD hysteresis and instance levels, scene compute passes and target effects, keyed audio
 // curves, save slots, the immediate UI's font, border and scale, and the ECS diagnostics.
@@ -5533,6 +5545,7 @@ int main() {
     viewports();
     levels_and_tilemaps();
     gltf_scenes();
+    terrain_files();
     abi_version_is_checked();
     declared_access();
     command_barriers();

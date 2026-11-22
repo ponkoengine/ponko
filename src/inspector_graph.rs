@@ -14,8 +14,10 @@
 //! state that isn't there, a blend tree on a bool) shows why under the
 //! canvas, and the preview keeps the last graph that loaded.
 //!
-//! Where the states sit in the canvas is the editor's own: the file format
-//! has no place for it.
+//! Where the states sit in the canvas is saved with the graph, as its
+//! `layout` (state name to `[x, y]`), which the runtime ignores; a state
+//! without a place (an older file, a state added by hand) is laid out in
+//! rows of three. Moving a node is an edit of the file like any other.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -52,8 +54,6 @@ enum Test {
 pub(crate) struct GraphState {
     pub path: Option<String>,
     pub selected: Option<Selected>,
-    /// Where each state's node is in the canvas, from its top-left corner.
-    pos: HashMap<String, EVec2>,
     /// Test values by parameter name, and triggers fired for the next step.
     test: HashMap<String, Test>,
     fire: Vec<String>,
@@ -303,16 +303,42 @@ fn step(g: &mut GraphState, dt: f32) {
     g.test = tests;
 }
 
-/// The node of each state (and "Any state"), laid out in rows of three
-/// until moved.
-fn layout(g: &mut GraphState, states: &[String]) -> Vec<(String, EVec2)> {
-    let mut out = vec![(
-        ANY.to_string(),
-        *g.pos.entry(ANY.into()).or_insert(EVec2::new(8.0, 8.0)),
-    )];
+/// Where the file's `layout` puts node `name`, if it does.
+fn saved_place(f: &Value, name: &str) -> Option<EVec2> {
+    let at = &f["graph"]["layout"][name];
+    Some(EVec2::new(at[0].as_f64()? as f32, at[1].as_f64()? as f32))
+}
+
+/// Puts node `name` at `at` in the file's `layout`, rounded to a tenth.
+fn set_place(f: &mut Value, name: &str, at: EVec2) {
+    let round = |x: f32| (f64::from(x) * 10.0).round() / 10.0;
+    if !f["graph"]["layout"].is_object() {
+        f["graph"]["layout"] = json!({});
+    }
+    f["graph"]["layout"][name] = json!([round(at.x), round(at.y)]);
+}
+
+/// Takes node `name` out of the file's `layout` (and the layout out when
+/// that empties it).
+fn forget_place(f: &mut Value, name: &str) {
+    let Some(graph) = f["graph"].as_object_mut() else {
+        return;
+    };
+    if let Some(layout) = graph.get_mut("layout").and_then(Value::as_object_mut) {
+        layout.remove(name);
+        if layout.is_empty() {
+            graph.remove("layout");
+        }
+    }
+}
+
+/// The node of each state (and "Any state"): where the file's `layout`
+/// puts it, else in rows of three by its place in the list.
+fn layout(f: &Value, states: &[String]) -> Vec<(String, EVec2)> {
+    let mut out = vec![(ANY.to_string(), saved_place(f, ANY).unwrap_or(EVec2::new(8.0, 8.0)))];
     for (i, s) in states.iter().enumerate() {
         let default = EVec2::new(140.0 + (i % 3) as f32 * 130.0, 20.0 + (i / 3) as f32 * 70.0);
-        out.push((s.clone(), *g.pos.entry(s.clone()).or_insert(default)));
+        out.push((s.clone(), saved_place(f, s).unwrap_or(default)));
     }
     out
 }
@@ -327,7 +353,7 @@ fn canvas(ui: &mut Ui, g: &mut GraphState, f: &mut Value) {
         .or_else(|| states.first().cloned());
     let (rect, response) = ui.allocate_exact_size(EVec2::new(540.0, 260.0), Sense::click_and_drag());
     ui.data_mut(|d| d.insert_temp(canvas_id(), rect));
-    let nodes = layout(g, &states);
+    let nodes = layout(f, &states);
     let node_rect = |name: &str| {
         nodes
             .iter()
@@ -382,10 +408,16 @@ fn canvas(ui: &mut Ui, g: &mut GraphState, f: &mut Value) {
         && primary
         && let Some(n) = ui.data(|d| d.get_temp::<String>(canvas_id().with("drag")))
     {
-        let at = g.pos.entry(n).or_insert(EVec2::ZERO);
-        *at += response.drag_delta();
+        let from = nodes
+            .iter()
+            .find(|(name, _)| *name == n)
+            .map_or(EVec2::ZERO, |(_, at)| *at);
+        let mut at = from + response.drag_delta();
         at.x = at.x.clamp(0.0, rect.width() - NODE.x);
         at.y = at.y.clamp(0.0, rect.height() - NODE.y);
+        if at != from {
+            set_place(f, &n, at);
+        }
     }
     if response.drag_stopped() {
         ui.data_mut(|d| d.remove::<String>(canvas_id().with("drag")));
@@ -667,12 +699,10 @@ fn state_editor(ui: &mut Ui, g: &mut GraphState, f: &mut Value, name: &str) {
         {
             obj.remove("initial");
         }
+        forget_place(f, name);
         g.selected = None;
     } else if renamed != name {
         rename_state(f, name, &renamed);
-        if let Some(at) = g.pos.remove(name) {
-            g.pos.insert(renamed.clone(), at);
-        }
         g.selected = Some(Selected::State(renamed));
     }
 }
@@ -693,6 +723,10 @@ fn rename_state(f: &mut Value, from: &str, to: &str) {
     }
     if f["graph"]["initial"] == from {
         f["graph"]["initial"] = json!(to);
+    }
+    if let Some(at) = saved_place(f, from) {
+        forget_place(f, from);
+        set_place(f, to, at);
     }
 }
 
@@ -1097,6 +1131,61 @@ mod tests {
         h.undo();
         h.frame(vec![]);
         assert!(state(&h).error.is_none());
+    }
+
+    #[test]
+    fn a_dragged_node_is_saved_with_the_graph_and_comes_back_where_it_was_left() {
+        let f = Fixture::new("layout");
+        let mut h = graph_editor(&f);
+        let before = h.rect(node_id("idle"));
+        h.drag(centre(before), centre(before) + glam::vec2(80.0, 40.0), 6);
+        let moved = h.rect(node_id("idle"));
+        assert!(
+            (moved.min - before.min).length() > 30.0,
+            "the node moved: {before:?} -> {moved:?}"
+        );
+        let place = graph(&h, &f)["layout"]["idle"].clone();
+        assert!(place[0].as_f64().unwrap() > 140.0, "{place}");
+        h.save();
+        assert_eq!(f.on_disk()["graph"]["layout"]["idle"], place, "saved with the graph");
+        SkeletonData::from_json(&f.on_disk().to_string(), &f.path).expect("the runtime reads past the layout");
+        // Closed and opened again: the node is where it was left.
+        drop(h);
+        let mut h = graph_editor(&f);
+        h.frame(vec![]);
+        let reopened = h.rect(node_id("idle"));
+        assert!((reopened.min - moved.min).length() < 1.0, "{reopened:?} vs {moved:?}");
+        // A renamed state keeps its place.
+        let mut file = h.ctx.editor.docs.get(&f.path).unwrap().clone();
+        rename_state(&mut file, "idle", "rest");
+        assert_eq!(file["graph"]["layout"]["rest"], place);
+        assert!(file["graph"]["layout"].get("idle").is_none());
+    }
+
+    #[test]
+    fn a_graph_saved_without_a_layout_loads_with_its_nodes_in_rows() {
+        let f = Fixture::new("no-layout");
+        let mut h = graph_editor(&f);
+        let mut file = h.ctx.editor.docs.get(&f.path).unwrap().clone();
+        for name in ["walk", "run", "jump"] {
+            push(&mut file["graph"]["states"], json!({"name": name, "clip": "wave"}));
+        }
+        h.ctx.editor.set_doc(&f.path, file);
+        h.frame(vec![]);
+        assert!(
+            graph(&h, &f).get("layout").is_none(),
+            "nothing is written until a node moves"
+        );
+        let at = |h: &Harness, n: &str| h.rect(node_id(n)).min;
+        let canvas = h.rect(canvas_id()).min;
+        assert_eq!(at(&h, "idle") - canvas, EVec2::new(140.0, 20.0));
+        assert_eq!(at(&h, "walk") - canvas, EVec2::new(270.0, 20.0));
+        assert_eq!(
+            at(&h, "jump") - canvas,
+            EVec2::new(140.0, 90.0),
+            "the fourth starts a new row"
+        );
+        assert_eq!(at(&h, ANY) - canvas, EVec2::new(8.0, 8.0));
     }
 
     #[test]

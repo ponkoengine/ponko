@@ -483,7 +483,9 @@ of `{ "greater": [parameter, value] }`, `{ "less": [...] }`,
 `{ "bool": [parameter, value] }` or `{ "trigger": parameter }`, all of
 which must hold), `exit_time` (the source's normalized time it waits for),
 `duration` (crossfade seconds) and `offset` (the next state's starting
-normalized time).
+normalized time). `layout` is the editor's: where its graph window draws
+each state (`{ "idle": [140, 20], "Any state": [8, 8] }`); the runtime
+ignores it, and `to_json` leaves it out.
 
 `SkeletonData::to_json(path)` writes a skeleton in this format, to be
 saved as asset `path` (images are written relative to its folder). It

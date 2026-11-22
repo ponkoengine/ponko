@@ -650,6 +650,12 @@ struct GraphJson {
     transitions: Vec<TransitionJson>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     initial: Option<String>,
+    /// Where the editor's graph window draws each state's node (and "Any
+    /// state"), by name: `[x, y]` from the canvas's top-left corner. The
+    /// runtime reads past it; states without one are laid out in rows.
+    #[serde(default, skip_serializing)]
+    #[allow(dead_code)]
+    layout: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -1949,5 +1955,6 @@ fn graph_json(data: &SkeletonData, g: &SkeletonGraph) -> GraphJson {
             })
             .collect(),
         initial: (g.initial != 0).then(|| g.states[g.initial].name.to_string()),
+        layout: None,
     }
 }
