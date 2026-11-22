@@ -3,11 +3,12 @@
 //! their memory, also on frames that roll back. (Its own test binary: it
 //! counts every allocation of the process.)
 //!
-//! The counting allocator counts only while profiling is on, and profiling
-//! keeps a history of frames that grows (by doubling) on the frames whose
-//! number since profiling began is a power of two: those frames may show the
-//! history's own allocations. The engine's rollback work is also measured on
-//! its own, through its profile scopes (`rollback/save`, `rollback/load`).
+//! The counting allocator counts only while profiling is on. Profiling
+//! reserves its whole frame history when it turns on, so no frame is
+//! excluded: every frame from `WARM` on is checked, and the history fills
+//! (and would have doubled, at 64, 128 and 256 frames) inside that window.
+//! The engine's rollback work is also measured on its own, through its
+//! profile scopes (`rollback/save`, `rollback/load`).
 
 use std::sync::{Arc, Mutex};
 
@@ -40,8 +41,12 @@ fn pad(p: usize, t: u64) -> Pad {
     Pad(((t / 4 + p as u64) % 3) as i8 - 1)
 }
 
-/// The frame from which allocations are counted.
+/// The frame from which allocations are checked.
 const WARM: u64 = 100;
+/// The frame that turns profiling (and so counting) on: early enough that the
+/// profiler has seen every system and scope the session runs (a scope's
+/// first appearance allocates its place in the report, once) before `WARM`.
+const PROFILE_FROM: u64 = 50;
 
 struct Measured {
     /// Allocations between the ends of two frame systems: a frame's tick
@@ -96,8 +101,8 @@ fn measure(game: Game, setup: impl FnOnce(&mut Ctx) + 'static) -> Measured {
                 }
             }
             out.rollbacks = local.stats().rollbacks;
-            if frame == WARM {
-                // Warm: counted, and in the report, from here on.
+            if frame == PROFILE_FROM {
+                // Counted, and in the report, from here on.
                 ctx.perf.set_profiling(true);
             }
             if frame == 399 {
@@ -152,9 +157,8 @@ fn a_session_allocates_nothing_per_frame_once_warm() {
         .per_frame
         .iter()
         .enumerate()
-        // Frame `WARM` turns profiling on (it sets its history up), and its
-        // history doubles when it holds a power of two of frames.
-        .filter(|&(i, &n)| n > 0 && i as u64 > WARM && !(i as u64 - WARM).is_power_of_two())
+        // Every frame after `WARM` is checked, none excluded.
+        .filter(|&(i, &n)| n > 0 && i as u64 > WARM)
         .map(|(i, &n)| (i, n))
         .collect();
     assert!(warm.is_empty(), "frames that allocated once warm: {warm:?}");
