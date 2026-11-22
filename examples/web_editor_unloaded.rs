@@ -76,10 +76,7 @@ fn linked(ctx: &mut Ctx, roots: &[(Entity, String)]) -> bool {
         let (root, _) = roots.iter().find(|(_, f)| f == file)?;
         ctx.world.get::<GltfRoot>(*root)?.entity(path)
     };
-    let (Some(wall), Some(post)) = (
-        node(ctx, "smoke/unloaded/yard.gltf", "Wall"),
-        node(ctx, POSTS, "Post"),
-    ) else {
+    let (Some(wall), Some(post)) = (node(ctx, "smoke/unloaded/yard.gltf", "Wall"), node(ctx, POSTS, "Post")) else {
         return false;
     };
     ctx.world

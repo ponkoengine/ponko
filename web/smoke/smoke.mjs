@@ -697,7 +697,7 @@ async function main() {
     if (snapshot.state.frames <= before.frames) {
       throw new Failure("stall", `frames stopped at ${before.frames}`);
     }
-    if (snapshot.state.ticks < before.ticks + MIN_PROGRESS_TICKS) {
+    if (!args.editMode && snapshot.state.ticks < before.ticks + MIN_PROGRESS_TICKS) {
       throw new Failure("stall", `the simulation stalled: ${before.ticks} -> ${snapshot.state.ticks} ticks in 3s`);
     }
 
@@ -710,7 +710,9 @@ async function main() {
       if (early) throw new Failure("audio", early);
     }
 
-    // 4. Input: a click on the canvas reaches the game.
+    // 4. Input: a click on the canvas reaches the game (in edit mode the
+    //    editor takes clicks: the --click steps below check those).
+    if (!args.editMode) {
     step = "clicking the canvas (a game's first click also opens its audio)";
     const box = await call(page.locator(GAME_CANVAS).boundingBox());
     await call(page.mouse.click(box.x + box.width / 2, box.y + box.height / 2));
@@ -725,6 +727,7 @@ async function main() {
       await sleep(100);
     }
     log(`click seen: ${JSON.stringify(snapshot.state)}`);
+    }
 
     // 4a. The click lets the page make sound, and the music that waited
     //     for it plays.

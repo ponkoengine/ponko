@@ -161,6 +161,8 @@ test("clicks and the page's query come from the fixture or the command line", ()
     editor: { example: "editor", query: "?editor=levels/a.json", clicks: ["10,20=retried:1"] },
   }));
   const args = parseArgs(["--fixture", "editor"], fixtures);
+  assert.equal(args.editMode, false, "only a fixture that says so");
+  assert.equal(parse("--fixture", "web_editor_unloaded").editMode, true, "edit mode pauses time: frames, not ticks, must advance");
   assert.equal(args.query, "?editor=levels/a.json");
   assert.deepEqual(args.clicks, [{ x: 10, y: 20, field: "retried", value: "1" }]);
   assert.deepEqual(parseArgs(["--fixture", "editor", "--click", "1,2=a:b"], fixtures).clicks, [{ x: 1, y: 2, field: "a", value: "b" }]);

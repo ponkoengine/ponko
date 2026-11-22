@@ -59,7 +59,8 @@
     "query": "?editor=smoke/unloaded/scene.json",
     "asset": "smoke/unloaded/posts.gltf",
     "min": { "failed": 1 },
-    "clicks": ["20,520=linked:1"],
+    "editMode": true,
+    "clicks": ["30,565=linked:1"],
     "engineGpu": true
   },
   "lights2d": {

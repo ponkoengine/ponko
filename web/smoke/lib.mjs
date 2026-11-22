@@ -70,7 +70,7 @@ export function parseMin(spec) {
   return { field: match[1], min: Number(match[2]) };
 }
 
-const FIXTURE_KEYS = ["example", "features", "asset", "assetSize", "assetSource", "presses", "clicks", "query", "min", "afterReload", "reloads", "persist", "engineGpu", "music"];
+const FIXTURE_KEYS = ["example", "features", "asset", "assetSize", "assetSource", "presses", "clicks", "query", "min", "afterReload", "reloads", "persist", "editMode", "engineGpu", "music"];
 
 /** How a `--persist` run's page answers `navigator.storage.persist()`. */
 export const PERSIST_MODES = ["granted", "refused"];
@@ -221,6 +221,9 @@ export function parseArgs(argv, fixtures = {}) {
   args.assetSource = given.assetSource ?? (fixture ? fixture.assetSource ?? "none" : "4x2");
   args.presses = given.presses ?? (fixture?.presses ?? []).map(parsePress);
   args.clicks = given.clicks ?? (fixture?.clicks ?? []).map(parseClick);
+  // The page opens in edit mode: time is paused and the editor takes the
+  // clicks, so only frames have to keep coming and --click is the input check.
+  args.editMode = fixture?.editMode === true;
   args.query = given.query ?? fixture?.query ?? "";
   args.reloads = given.reloads ?? reloadStepsOf(fixture);
   if (args.persist !== null) {
