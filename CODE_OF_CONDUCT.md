@@ -35,9 +35,9 @@ and when someone represents the project in public.
 
 ## Reporting
 
-Report unacceptable behavior to the maintainers privately through a
-[confidential issue](https://gitlab.com/ponkoengine/ponko/-/issues/new?issue%5Bconfidential%5D=true)
-marking it as a conduct report. Every report is reviewed promptly and
+Report unacceptable behavior to the maintainers privately through GitHub's
+[private vulnerability reporting](https://github.com/ponkoengine/ponko/security/advisories/new)
+form, marking it as a conduct report. Every report is reviewed promptly and
 handled confidentially.
 
 Maintainers may remove, edit or reject comments, commits, code, issues and

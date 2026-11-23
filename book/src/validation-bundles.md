@@ -207,24 +207,24 @@ cargo run --example validation_bundle -- --out target/bundles/battle \
 `scripts/validation-bundle-native.sh` runs exactly this, and then the same
 game against a check it can't meet.
 
-## In CI
+## In the list of checks
 
 `scripts/validation-bundles.sh` makes the reference bundles (broken and
 corrected, in-process and launched), verifies each, requires the launched
 trace to equal the in-process one and two launched runs to compare as the
-same, and writes the broken-against-corrected comparison. The
-`Validation bundles` job runs it headless on Linux and publishes the
-directory as the `validation-bundles` artifact. The native job runs
+same, and writes the broken-against-corrected comparison (by default to
+`target/validation-bundles`). The list of checks (`scripts/checks.yml`) runs
+it headless on Linux in its `validation-bundles` job, and its native job runs
 `scripts/validation-bundle-native.sh` against the C++ battle on Linux and
 macOS.
 
 ## Limits
 
-- CI runs headless, so it publishes no screenshot. The windowed path needs
+- The listed check runs headless, so it makes no screenshot. The windowed path needs
   a machine with a display. It was run by hand on macOS: the window opened,
   the checks passed with the same trace as the headless run, and the kept
   frame was inspected and recorded as described above.
-- The native script is not run on Windows in CI.
+- The list of checks does not run the native script on Windows.
 - A launched run needs the game to open the control endpoint
   (`PONKO_CONTROL=1`, which `launch` sets and which a release build honors
   only with the `control-env` feature); a release game built without it

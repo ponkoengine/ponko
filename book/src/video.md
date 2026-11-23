@@ -239,7 +239,7 @@ is decoded. What differs:
 
 `web/smoke/video.mjs` plays the engine's test clip this way in headless
 Chromium and checks every frame shown against its time (the
-[browser smoke test](https://gitlab.com/ponkoengine/ponko/-/tree/main/web/smoke)'s
+[browser smoke test](https://github.com/ponkoengine/ponko/tree/main/web/smoke)'s
 "Video").
 
 ## C and C++

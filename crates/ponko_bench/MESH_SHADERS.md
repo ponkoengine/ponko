@@ -412,7 +412,7 @@ contract, and the repository's rule is that every `unsafe` needs a test. The pro
 `unsafe` blocks (the token and the unchecked shader module), exercised by
 every test and the benchmark.
 
-**Testing on hosted runners.** `ci.yml`: Linux runners have no GPU and use
+**Testing on hosted runners.** (As the list of checks, now `scripts/checks.yml`, was run then.) Linux runners have no GPU and use
 lavapipe (software Vulkan, from Mesa), which wgpu documents as failing to run
 naga's mesh shader output, though a newer Mesa may advertise the extension;
 macOS runners are virtual Apple devices, and wgpu turns the feature off for
@@ -460,7 +460,7 @@ above) on the new hardware and read the same tables:
    one WGSL source could serve the web build too. Today the web build
    can't use them.
 5. **Hosted runners can run them** (a GPU runner, or a software driver that
-   passes), so a mesh path can be tested in CI.
+   passes), so a mesh path can be tested on hosted machines.
 
 The gap between the engine's frame and the prototype's (5 to 8 times) is
 mostly work a mesh shader doesn't change (shading, the depth prepass,

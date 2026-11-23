@@ -422,7 +422,7 @@ is where an agent sees the slowness. The UI task checks what the player sees
 through the UI tree in a headless game with frames
 (`Game::headless_frames`), so it needs no window or GPU.
 
-### Deterministic mode: in CI, no model
+### Deterministic mode: in tests, no model
 
 ```sh
 cargo test -p ponko_mcp --test agent_suite
@@ -457,7 +457,7 @@ real agent is recorded here yet; the next section is how to make one.
 
 ### Trying a real agent
 
-This is opt-in and never runs in CI. It needs no keys and contacts
+This is opt-in and never runs with the tests. It needs no keys and contacts
 nothing: the agent is whatever MCP client you start, with its own account.
 `agent_suite mcp TASK` is an MCP server over stdio that prepares the task's
 folder, starts its game headless and paused in a child process, and offers
@@ -512,10 +512,10 @@ guide:
 ### Limits
 
 - The tasks change data files, scenes and shaders. None asks for Rust code
-  changes: rebuilding a game per attempt takes minutes, too slow for CI;
+  changes: rebuilding a game per attempt takes minutes, too slow for the test suite;
   code tasks for real agents are future work.
 - Screenshots need a window and a GPU; the suite checks what is shown
-  through the UI tree instead, so it runs in CI.
+  through the UI tree instead, so it runs headless with the tests.
 - A checker is only as strict as its checks: the negative controls are
   what keeps them honest.
 - The suite drives games through MCP, so it is the same for games written in

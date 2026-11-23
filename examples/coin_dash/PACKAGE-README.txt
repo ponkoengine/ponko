@@ -1,7 +1,7 @@
 Coin Dash
 =========
 
-A small game made with the Ponko engine (https://gitlab.com/ponkoengine/ponko).
+A small game made with the Ponko engine (https://github.com/ponkoengine/ponko).
 Collect every coin before the clock runs out.
 
 Run it

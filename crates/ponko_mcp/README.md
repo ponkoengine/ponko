@@ -1,7 +1,7 @@
 # ponko_mcp
 
 An [MCP](https://modelcontextprotocol.io/) server that lets AI agents launch,
-inspect and drive running [Ponko](https://gitlab.com/ponkoengine/ponko) games:
+inspect and drive running [Ponko](https://github.com/ponkoengine/ponko) games:
 start a game headless and paused, read the world and reflected components,
 step exact ticks, inject input, take screenshots, and read performance
 reports and traces.

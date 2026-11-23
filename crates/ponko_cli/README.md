@@ -1,6 +1,6 @@
 # ponko_cli
 
-The `ponko` command for [Ponko](https://gitlab.com/ponkoengine/ponko) games.
+The `ponko` command for [Ponko](https://github.com/ponkoengine/ponko) games.
 
 ```sh
 cargo install ponko_cli
@@ -36,7 +36,7 @@ The templates are also usable with
 [cargo-generate](https://github.com/cargo-generate/cargo-generate):
 
 ```sh
-cargo generate --git https://gitlab.com/ponkoengine/ponko crates/ponko_cli/templates/2d
+cargo generate --git https://github.com/ponkoengine/ponko crates/ponko_cli/templates/2d
 ```
 
 - Getting started: <https://ponko.dev/guide/getting-started.html>

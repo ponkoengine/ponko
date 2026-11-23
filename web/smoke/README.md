@@ -67,7 +67,7 @@ runner needs to know about each one, so `--fixture <name>` is all a run takes:
 | `coin_dash` | `examples/coin_dash` | none | the complete game: its picture, keys and the screens they reach (see [A complete game, packaged](../../book/src/packaging.md#the-web-build)); after a reload, the settings it saved come back from the browser's storage |
 | `web_editor_save` | `examples/web_editor_save.rs` | `editor` | `crab.png` fetched and decoded 32x32; three page loads: a new scene and one over a file the build ships are saved and read back at once from the browser's storage (`read_back` 1, `listed` 2); after a reload both come back over the fetched files and the one over the build's file is reverted, read again at once (`found` `Saved`, `reverted` 1); after another reload the revert held and the other save is still there (`found` `Build`, `kept` `Loaded`). It also reports the browser's answer to its request for persistent storage (`persistent`) |
 | `web_editor_unloaded` | `examples/web_editor_unloaded.rs` | `editor`, `3d` | the page opens in edit mode (`query`: `?editor=smoke/unloaded/scene.json`, `editMode`: time is paused, so frames must keep coming instead of ticks, and the editor takes the clicks); the scene's post doesn't load (setup saved a broken copy of its file in the browser), the fixture reverts the copy, and a click on **Retry** in the editor's panel of scenes that didn't load (`clicks`: `@retry`, the place the page reports) spawns it and hangs the yard's wall off it again (`failed` 1, then `linked` 1) |
-| `lights2d` | `examples/lights2d.rs` | none | `crab.png` fetched and decoded 32x32; 2D lights with stencil shadows and normal maps drawing on the page's backend (WebGL2 in CI); at least 7 lights
+| `lights2d` | `examples/lights2d.rs` | none | `crab.png` fetched and decoded 32x32; 2D lights with stencil shadows and normal maps drawing on the page's backend (WebGL2 in the listed check); at least 7 lights
 
 To add one: publish the state with the helper (or the same attributes by hand),
 add an entry to `fixtures.json` (`example`, `features`, `asset`, `assetSize`
@@ -75,7 +75,7 @@ or none, `assetSource` or none, `presses`, `min`, `afterReload` (one reload)
 or `reloads` (several: a list of steps, each a list of `<field>:<value>`),
 `persist` (per `--persist` answer, the fields of the first page load and of
 each reload), `clicks`, `query` (the page's address after `/`, like
-`?editor=levels/a.json`), `editMode`, `engineGpu`, `music`), and name it in the CI job. Every
+`?editor=levels/a.json`), `editMode`, `engineGpu`, `music`), and name it in the `web-smoke` job of `scripts/checks.yml`. Every
 fixture needs `?smoke_case=panic` and `?smoke_case=stall` handled if it is to
 run the self-tests; the helper does that.
 
@@ -475,7 +475,7 @@ not start), **2** unsupported (the browser isn't installed, or lacks the
 backend asked for), **3** bad arguments or no build. "Unsupported" is decided
 without the engine: WebGPU counts as available only if a plain WebGPU canvas,
 cleared to red by the runner itself and read back in the same task, is red.
-It is never a pass without a reason: the last line, `report.json` and the CI
+It is never a pass without a reason: the last line, `report.json` and the
 summary table all say `UNSUPPORTED` and why (no `navigator.gpu`, no adapter,
 no canvas), even under `--allow-unsupported`.
 
@@ -485,8 +485,8 @@ every browser call (reading the state, a click, a key, a screenshot) has a
 (`browser-crash`), and the whole run has `--run-timeout`. A hang fails as
 `browser-hang` with the step it was on and the last lines of `browser.log`.
 A hung run is not retried: so far every hang has been a real, repeatable
-failure, and a retry would hide the next one. CI also gives each browser step
-a `timeout-minutes` of a few minutes.
+failure, and a retry would hide the next one. The list of checks also gives
+each browser step a `timeout-minutes` of a few minutes.
 
 WebKit on Linux needs a sound server and a channel count. It opens its audio
 output through GStreamer and reads an AudioContext's output channels
@@ -496,8 +496,8 @@ the engine does when it opens its audio at a game's first click (the log
 shows GStreamer's PulseAudio device provider failing to connect, then
 "double free or corruption"). With one, the list can still come back empty,
 the count is 0, and the engine's audio output refuses to open (the report's
-`audio` shows a running context with 0 output channels and 0 buffers). CI
-starts PulseAudio with a null sink and sets
+`audio` shows a running context with 0 output channels and 0 buffers). The
+listed check starts PulseAudio with a null sink and sets
 `WEBKIT_GST_MAX_NUMBER_OF_AUDIO_OUTPUT_CHANNELS=2` for the WebKit runs; do
 the same on a headless Linux machine
 (`pulseaudio --daemonize=yes --exit-idle-time=-1`, then
@@ -525,15 +525,15 @@ Each run writes to its `--out` folder:
 - `canvas.png`: the canvas after the click; `page.png`: the page on failure.
 
 `node web/smoke/summary.mjs target/web-smoke` prints every run's report as a
-table (and appends it to a GitHub job summary).
+table.
 
 ## What runs where
 
 | Where | Browser | WebGL2 (forced) | WebGPU |
 |---|---|---|---|
-| CI (`web-smoke` job, `main` and `full-ci`, ubuntu-latest, no GPU) | Chromium (headless shell and full browser), Firefox, WebKit from Playwright | Must pass in Chromium and WebKit, for the 2D and 3D fixtures (software GL); `coin_dash` and the multiplayer check (`multiplayer.mjs`) in Chromium. Firefox is tried and reported: headless Firefox has no WebGL2 on that runner, so it reads "unsupported" | Tried; passes as "unsupported", with the reason, where the browser can't show a WebGPU canvas; where it can, the game must draw through it |
-| CI, every pull request (`web-smoke-runner`) | none | the runner's own tests only (and the gallery's) | |
-| Release workflow (`gallery` job, ubuntu-latest, no GPU) | Chromium headless shell | Every gallery page must pass (software GL) | Not tried; the demos that need WebGPU must show their message |
+| The list of checks (`web-smoke` job, Ubuntu, no GPU) | Chromium (headless shell and full browser), Firefox, WebKit from Playwright | Must pass in Chromium and WebKit, for the 2D and 3D fixtures (software GL); `coin_dash` and the multiplayer check (`multiplayer.mjs`) in Chromium. Firefox is tried and reported: headless Firefox has no WebGL2 on that machine, so it reads "unsupported" | Tried; passes as "unsupported", with the reason, where the browser can't show a WebGPU canvas; where it can, the game must draw through it |
+| The list of checks (`web-smoke-runner`) | none | the runner's own tests only (and the gallery's) | |
+| A release (the gallery check, Ubuntu, no GPU) | Chromium headless shell | Every gallery page must pass (software GL) | Not tried; the demos that need WebGPU must show their message |
 | Apple Silicon Mac, the gallery (`gallery.mjs`) | Chromium 156 | Every page passes in the headless shell; the 2 demos that need WebGPU (compute passes) show their message | Every page passes in new headless mode on the Metal adapter |
 | Apple Silicon Mac, Chromium new headless mode | Chromium 156 | Passes (ANGLE on Metal) | **Passes** on the Metal adapter: the engine reports `webgpu`, the canvas draws |
 | Apple Silicon Mac, `webgpu-fallback.mjs` (3D fixture) | Chromium 156 new headless mode | Each of the four faked failures ends on WebGL2 and draws the scene, with its one console line | Passes on the Metal adapter: the same scene, `ponko: drawing with WebGPU` |
@@ -544,9 +544,9 @@ table (and appends it to a GitHub job summary).
 | Apple Silicon Mac, `threads.mjs` | Chromium 156 headless shell | Passes on whichever backend the page picks (the check is about threads, not drawing): workers on the isolated page, one thread without the headers, the same world; a worker's panic stops the game | Not tried on its own |
 
 Not covered yet: Firefox on a Mac with its Playwright build here (it would
-not start on the development machine, and on CI's Linux runner it has no
+not start on the development machine, and on a GPU-less Linux machine it has no
 WebGL2, so Firefox has not drawn a frame anywhere yet), WebGPU on a
-GPU-less Linux runner (the CI job tries it and reports), and mobile
+GPU-less Linux machine (the `web-smoke` job tries it and reports), and mobile
 browsers.
 
 ## First-load cost

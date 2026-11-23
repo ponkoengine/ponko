@@ -60,7 +60,7 @@ With `PONKO_BENCH_JSON=<path>`, the runner writes every result it ran (after the
 - `rustc` is the `rustc` on `PATH` when the runner starts, which matches the build when run through `cargo run`. Unknown values are `"unknown"` or `null`.
 - `schema_version` changes only when a field changes meaning or is removed.
 
-The numbers depend on the machine and its load: compare runs from the same machine and build, and never use them as pass/fail thresholds in CI. The workloads' correctness is checked separately by `cargo test -p ponko_bench`, which builds each new workload in both libraries and checks they contain and update the same entities.
+The numbers depend on the machine and its load: compare runs from the same machine and build, and never use them as pass/fail thresholds in automated checks. The workloads' correctness is checked separately by `cargo test -p ponko_bench`, which builds each new workload in both libraries and checks they contain and update the same entities.
 
 ## Tracking results over time
 
@@ -74,7 +74,7 @@ number:
   and despawning (`ecs/spawn/10k`, `ecs/despawn/10k`), a headless game tick
   (`sim/tick/10k`) and collecting a 3D frame (`render/collect/10k`). A
   count doesn't depend on what else the machine is doing, so it is stable on
-  shared CI runners, where wall-clock times are not. Each workload runs once
+  shared or busy machines, where wall-clock times are not. Each workload runs once
   with its operation and once without (same setup, same warm-up, same
   loop), and the difference divided by the iterations is the cost of one
   operation. A count is not a time: memory traffic and parallelism don't
@@ -138,7 +138,7 @@ stays as it is. The binary records it as `env.code_align` (128, or `null`
 for an ordinary build), and `compare` warns when the two sides differ in it.
 The aligned build is about 6% larger and every crate is rebuilt when
 `RUSTFLAGS` changes, which is why each side's binary is copied. Instruction
-counts (`bench_track counts`, CI) don't need it: padding between functions
+counts (`bench_track counts`) don't need it: padding between functions
 is never run.
 
 What it does, measured on one build of the same code twice, the second with
@@ -162,30 +162,19 @@ the aligned ones by up to 1.8% (mean 0.8%): in the direction the alignment
 should push, but within this machine's noise. Repeat it on an idle machine
 before quoting the layout's share.
 
-**In CI** (`.github/workflows/bench.yml`, not part of the required check):
+**For a pull request** (nothing runs them by itself; the project has no CI):
+a change that touches the engine, the ECS or the benchmarks is counted
+against its base on the same machine, with the same workloads (copy the
+change's `bench_track` onto the base checkout), 3 runs each, and
+`bench_track compare` of the two sides goes into the pull request when a
+benchmark moved beyond noise.
 
-- A pull request that touches the engine, the ECS or the benchmarks gets
-  its merge commit and its base counted on the same runner, with the same
-  workloads (the pull request's `bench_track` is copied onto the base), 3
-  runs each. The table goes to the job summary, and
-  `bench-comment.yml` comments it on the pull request when a benchmark moved
-  beyond noise, naming the benchmark, or updates its earlier comment.
-- Every commit on `main` is counted and recorded on the **`bench-history`
-  branch** as `<machine>/<commit>.json` (machine `github-ubuntu-24.04-x64`),
-  and the branch's README is regenerated: a table per machine, newest commit
-  first, with ▲ and ▼ where a benchmark moved beyond noise against the
-  commit before. The branch shares no history with `main`; read it on
-  GitHub or with `git fetch origin bench-history`. It needs only the
-  workflow's own token, no service or secret.
-- A version tag is recorded as `releases/<tag>/<machine>.json` on the same
-  branch, and the README lists the releases in their own table.
-- `gh workflow run bench.yml -f ref=<revision>` measures an older revision
-  with the current workloads (they use only APIs 0.1.0 already had), and
-  records it as a release when the revision is a tag. Run it once with
-  `ref=v0.1.0` to give 0.1.0 its counts.
-
-`bench_track history <folder>` prints the same README from a local copy of
-the branch (`--write` saves it as `README.md`).
+**The `bench-history` branch** holds counts recorded by earlier automated
+runs, as `<machine>/<commit>.json` (machine `github-ubuntu-24.04-x64`) and
+`releases/<tag>/<machine>.json`, with a README of a table per machine. It
+shares no history with `main` (`git fetch origin bench-history`), and
+nothing adds to it any more. `bench_track history <folder>` prints that
+README from a local copy of the branch (`--write` saves it as `README.md`).
 
 **Release baselines on a named machine.** Instruction counts can't see
 everything, so every release also records a wall-clock baseline in

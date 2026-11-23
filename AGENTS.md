@@ -6,21 +6,20 @@ Rules for any coding agent (Claude Code, Codex, Cursor, ...) working in this rep
 
 1. **Never work directly on `main`.** Before changing anything, create a branch from an up-to-date `main`:
    - `git switch main && git pull && git switch -c <type>/<short-name>`
+   - There is also an integration branch, `dev`: agent work is based on `origin/dev`, and maintainers bring `dev` into `main` through a pull request.
    - Branch names: `m<N>/<topic>` for roadmap milestone work (e.g. `m3/ecs-crate`), `fix/<topic>`, `chore/<topic>`, `docs/<topic>`.
    - One branch per task. Start unrelated work on its own branch (use `git worktree` if another branch is in progress).
 2. **Commit and push along the way**, not only at the end. Make a commit at every meaningful, working step (it builds, and tests pass) and push it right away (`git push -u origin <branch>` the first time).
    - Commit messages: short imperative subject line, then a body listing what changed.
    - Never commit `docs/`, which holds local planning notes and is git-ignored. Never commit `.DS_Store`, build output or secrets.
-   - Run `scripts/leak-check.sh install` once per checkout. It checks every commit (and CI checks every PR) against a private list of words that must stay out of this public repo. If it stops a commit, take the private details out and describe the change generically. Don't weaken or skip the check.
+   - Run `scripts/leak-check.sh install` once per checkout. The hook checks every commit against a private list of words that must stay out of this public repo (check a PR's title and description with `scripts/leak-check.sh text <file>`). If it stops a commit, take the private details out and describe the change generically. Don't weaken or skip the check.
 3. **Everything reaches `main` through a pull request.** Never push to `main` and never merge locally into `main`.
-   - **One PR per big chunk of work**, not per small feature or fix: keep committing and pushing on the branch, and open the PR when a whole part is done (for example a milestone's worth: reflection + control endpoint + MCP server). Don't stack many small PRs and wait on CI for each.
-   - Open the PR with `gh pr create --base main`. The body says what changed and how it was verified (commands run, benchmark numbers).
-   - Run the tests on your own machine before opening the PR (see [Integration checks](#integration-checks)); PR CI doesn't run tests at all.
-   - Merge with `gh pr merge --squash --delete-branch` once **CI passed** is green (or `gh pr merge --auto --squash --delete-branch` to merge as soon as it is), then `git switch main && git pull`. A PR doesn't have to be rebased on the newest `main` to merge.
-   - `main` is protected: merging needs the **CI passed** check (it requires every CI job) and keeps history linear. Wait for CI (`gh pr checks <n> --watch`), then merge. Never bypass protection, even as admin.
-   - CI on a pull request runs only quick Linux checks (leaks, format, clippy, feature contracts, docs, book) and **no tests**. The full matrix (tests on Linux, macOS and Windows, feature tests, Miri, MSRV, C/C++, web) runs on `main` after the merge. For risky platform changes, add the `full-ci` label to the PR to run the full matrix on it before merging. Other labels and title or description edits don't restart CI; an edit re-runs only the PR text leak check, and if that finds a leak it turns the PR back into a draft (labelled `text-leak`) until an edit takes the leak out.
-   - If CI on `main` fails after a merge, fixing it comes first: open a fix PR right away.
-   - If CI fails, fix it on the branch and push again; don't merge red.
+   - **One PR per big chunk of work**, not per small feature or fix: keep committing and pushing on the branch, and open the PR when a whole part is done (for example a milestone's worth: reflection + control endpoint + MCP server). Don't stack many small PRs.
+   - Open the PR with `gh pr create --base main`. The body says what changed and how it was verified (commands run, on which OS, benchmark numbers).
+   - **There is no CI.** Nothing runs on a pull request or on `main` by itself: you run the checks on your own machine before the PR is merged. The quick ones are in [Integration checks](#integration-checks); the full list, with the platform and toolchain each needs, is `scripts/checks.yml` (a document nothing executes). For risky platform changes, run the affected jobs on macOS, Windows and Linux, or ask a maintainer who has the machine.
+   - Merge with `gh pr merge --squash --delete-branch` once the checks pass, then `git switch main && git pull`. A PR doesn't have to be rebased on the newest `main` to merge.
+   - `main` is protected: a pull request is required and history stays linear (squash merges). Never bypass protection, even as admin.
+   - If a check fails, fix it on the branch and push again; don't merge red. If something on `main` is found broken, fixing it comes first: open a fix PR right away.
    - **Don't edit `CHANGELOG.md` in a PR.** Add a fragment, `changelog.d/<pr-or-topic>.md`, with `### Added` / `### Changed` / `### Fixed` sections and bullets (see `changelog.d/README.md`). The release folds them in with `python3 scripts/changelog.py`.
 4. Don't rewrite published history (`push --force` on shared branches, rebasing `main`).
 
@@ -38,7 +37,7 @@ Where tests live:
 | Performance | `crates/ponko_bench` (`cargo run --release -p ponko_bench [-- filter]`) | `iter/ponko` |
 
 Rules:
-- New public behavior gets a test in the matching area file. A new area is just a new file: CI's `test` job runs `cargo test --workspace` (on every OS on `main`, not on a PR: run it locally), so it picks the file up. Only a new feature combination needs its own step in `.github/workflows/ci.yml`.
+- New public behavior gets a test in the matching area file. A new area is just a new file: `cargo test --workspace` picks it up. Only a new feature combination needs its own step in `scripts/checks.yml`.
 - Test names say what must hold: `stale_handles_stay_dead`, not `test_entity_2`.
 - Panics that are part of the API get `#[should_panic(expected = "...")]` tests, so the message stays helpful.
 - Benchmarks are not tests: never assert on timings in tests, except for coarse bounds such as "≥ 6 ms for three 2 ms steps".
@@ -62,13 +61,13 @@ cargo build --workspace --examples
 cargo test --workspace
 cargo clippy --workspace --all-targets
 python3 scripts/collect-panics.py --check   # every panic site has a reviewed decision
-python3 scripts/check-feature-coverage.py   # every cargo feature has clippy and test lines in ci.yml
+python3 scripts/check-feature-coverage.py   # every cargo feature has clippy and test lines in checks.yml
 python3 scripts/check-unsafe.py             # every unsafe item outside the ECS has a test
 python3 scripts/check-ffi-ownership.py      # every C function says who owns its pointers
 ```
 
 If you add or change a cargo feature, or a web smoke runner, give it its lines
-in `.github/workflows/ci.yml` (the list of checks) and run the last command;
+in `scripts/checks.yml` (the list of checks) and run the last command;
 CONTRIBUTING.md, "Adding or changing a cargo feature", has the details. Also
 run the feature's own lines locally, for example
 `cargo clippy -p ponko --features video` and
@@ -119,7 +118,7 @@ and sanitizers".
   behavior. A standalone Rust PR need not add a guide chapter, a doctest for
   every public item, native bindings or paired guide examples.
 - When writing a paired guide example, use `<div class="lang-pair">` and pull
-  the C++ snippet from `examples/cpp/guide.cpp` so native CI compiles it. A
+  the C++ snippet from `examples/cpp/guide.cpp` so the native check compiles it. A
   Rust-only guide example is acceptable; label native coverage gaps honestly.
 - Preserve existing Rust/C/C++ compatibility. If a change touches existing
   bindings or layouts, maintainers must verify them before merging. New Rust
@@ -128,7 +127,7 @@ and sanitizers".
   clearly note the limitation, with maintainer-owned follow-up for broader
   guide coverage. Run `mdbook build book` when editing the guide. Reuse tested
   examples through `{{#include}}` anchors where practical.
-- Inline Rust snippets in the book compile in CI (run
+- Inline Rust snippets in the book must compile (run
   `python3 scripts/check-book-snippets.py` when you edit the guide). Give a
   snippet the context it needs on hidden `# ` lines; `ignore` is a last resort
   (at most three in the book) and needs a `// ignore: <reason>` comment. See
@@ -211,6 +210,6 @@ evidence. Do not describe proposed tools or planned scheduler features as shippe
 Agents follow the same review, tests, privacy and leak checks as human contributors.
 Inspect generated changes, identify documentation/binding follow-ups, and
 report exact checks, failures, skips and remaining limitations. Never claim a build,
-visual result, CI success or completed issue without observing the evidence. Keep
+visual result, passing check or completed issue without observing the evidence. Keep
 private projects, assets, screenshots and identifying details out of public changes,
 issue text, benchmark artifacts and external services.

@@ -46,7 +46,7 @@ PONKO_BENCH_JSON=crates/ponko_bench/baselines/ecs.json \
 `crates/ponko_bench/ECS.md` has the methodology, the limits of each
 comparison and the committed baselines. `cargo test -p ponko_bench` checks
 that every workload does the same work in all three libraries; timings are
-never checked in CI.
+never checked in tests.
 
 ### What ECS features cost
 
@@ -482,22 +482,19 @@ Run it at a fixed camera before and after a change, and compare.
 
 ### Tracking benchmarks over time
 
-A slow drift between releases is easy to miss in single pull requests, so CI
-keeps a history. `bench_track`, a tool in `crates/ponko_bench`, counts the
+A slow drift between releases is easy to miss in single pull requests, so the
+benchmarks can be tracked over time. `bench_track`, a tool in `crates/ponko_bench`, counts the
 instructions of seven small workloads under cachegrind: ECS iteration, a
 filtered query, lookups, spawning, despawning, a headless game tick and
 collecting a 3D frame. Instruction counts hardly move with the load of a
-shared CI machine, where times jump around; they don't show memory or
+shared or busy machine, where times jump around; they don't show memory or
 parallel effects, which the wall-clock benchmarks still measure.
 
 - **Pull requests** that touch the engine are counted against their base
-  (three runs each, with the same workloads), and a comment names every
-  benchmark that moved beyond noise.
-- **Every commit on `main`** is recorded on the `bench-history` branch, one
-  file per commit and machine; its README shows each benchmark over time,
-  marking the commits that moved one.
-- **Releases** are recorded there too, and each release adds a wall-clock
-  baseline from one named machine, so two releases can be compared from
+  by the author or a maintainer (three runs each, with the same workloads),
+  and the pull request names every benchmark that moved beyond noise.
+- **Releases** add a wall-clock baseline from one named machine
+  (`crates/ponko_bench/releases/`), so two releases can be compared from
   files.
 
 A change counts when the medians differ by more than the threshold: the
@@ -512,7 +509,7 @@ cargo run --release -p ponko_bench --bin bench_track -- compare before/ after/
 ```
 
 The `ponko_bench` README, "Tracking results over time", has the details:
-the workloads, the file formats and the CI workflow.
+the workloads, the file formats and how a pull request compares them.
 
 ### The rendering baseline
 

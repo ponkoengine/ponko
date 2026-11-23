@@ -269,10 +269,10 @@ with crash-safe writes, kept in the browser's storage on the web (see
 [Saves and settings](storage.md)). Do not infer a complete production asset
 pipeline from a successful import of one asset.
 
-The project's check list (`.github/workflows/ci.yml`) runs the tests on
-Linux, macOS and Windows, builds the browser target (WebGPU with a WebGL2
-fallback) and runs small web builds in headless Chromium, Firefox and
-WebKit (see [Web builds](web.md)). That does not mean that every desktop
+The project's list of checks (`scripts/checks.yml`, which maintainers run
+locally; there is no CI) covers the tests on Linux, macOS and Windows, the
+browser target (WebGPU with a WebGL2 fallback) and small web builds in
+headless Chromium, Firefox and WebKit (see [Web builds](web.md)). That does not mean that every desktop
 feature works on every browser. Mobile and
 consoles are not currently validated release targets.
 [STABILITY.md](../../STABILITY.md)

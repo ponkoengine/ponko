@@ -81,8 +81,8 @@ test("required features are read from every [[example]] of a Cargo.toml", () => 
 });
 
 test("source links point at the ref: a file as a blob, a folder as a tree", () => {
-  assert.equal(sourceUrl("examples/battle.rs", "v0.2.0"), "https://gitlab.com/ponkoengine/ponko/-/blob/v0.2.0/examples/battle.rs");
-  assert.equal(sourceUrl("examples/coin_dash/", "main"), "https://gitlab.com/ponkoengine/ponko/-/tree/main/examples/coin_dash");
+  assert.equal(sourceUrl("examples/battle.rs", "v0.2.0"), "https://github.com/ponkoengine/ponko/blob/v0.2.0/examples/battle.rs");
+  assert.equal(sourceUrl("examples/coin_dash/", "main"), "https://github.com/ponkoengine/ponko/tree/main/examples/coin_dash");
   assert.equal(versionOf("v0.2.0"), "0.2.0");
   assert.equal(versionOf("v0.2.0-rc.1"), "0.2.0-rc.1");
   assert.equal(versionOf("main"), null);
@@ -96,7 +96,7 @@ test("an example's page has the demo, what it shows, its controls, its WebGPU ne
   assert.match(html, /Two armies\./);
   assert.match(html, /Controls:<\/strong> Click\./);
   assert.match(html, /WebGPU or WebGL2/);
-  assert.match(html, /href="https:\/\/gitlab.com\/ponkoengine\/ponko\/-\/blob\/v0.2.0\/examples\/battle.rs"/);
+  assert.match(html, /href="https:\/\/github.com\/ponkoengine\/ponko\/blob\/v0.2.0\/examples\/battle.rs"/);
   assert.match(html, /cargo run --release --example battle --features physics/);
   assert.match(html, /<title>Battle · Ponko 0\.2\.0 examples<\/title>/);
   assert.match(html, /src="\.\.\/play\.js"/);

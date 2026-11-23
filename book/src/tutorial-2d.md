@@ -12,7 +12,7 @@ no C++ version yet.
 
 Every piece of code below is pulled from the finished game,
 [`examples/tutorial_2d`](../../examples/tutorial_2d)
-in the engine's repository, which CI compiles and
+in the engine's repository, which `cargo build --workspace --examples` compiles and
 [`tests/tutorial_2d.rs`](../../tests/tutorial_2d.rs)
 plays. If something doesn't work for you, compare with those files.
 
@@ -35,7 +35,7 @@ cargo run
 
 A window opens with an orange square you can move with the arrow keys.
 This tutorial needs Ponko 0.2; until it's released, make the project with
-`ponko new crab_cove --git https://gitlab.com/ponkoengine/ponko`, which
+`ponko new crab_cove --git https://github.com/ponkoengine/ponko`, which
 depends on the engine's `main` branch.
 
 The crab falls and collides, so turn on 2D physics in `Cargo.toml`:

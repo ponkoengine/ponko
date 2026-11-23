@@ -9,7 +9,7 @@ headers for sound and gamepads: `sudo apt-get install libasound2-dev libudev-dev
 Clone the repository and run any example:
 
 ```sh
-git clone https://gitlab.com/ponkoengine/ponko
+git clone https://github.com/ponkoengine/ponko
 cd ponko
 cargo run --release --example boids
 ```
@@ -46,7 +46,7 @@ ponko cook               # runtime-ready assets under the same names (package do
 ```
 
 `ponko_cli` is new in 0.2; until that release, install it from the
-repository: `cargo install ponko_cli --git https://gitlab.com/ponkoengine/ponko`.
+repository: `cargo install ponko_cli --git https://github.com/ponkoengine/ponko`.
 
 | Template | Engine features | What's in it |
 |---|---|---|
@@ -79,7 +79,7 @@ instead (for features that are only on `main` so far, see below).
 
 The same templates work with
 [cargo-generate](https://github.com/cargo-generate/cargo-generate), if you
-have it: `cargo generate --git https://gitlab.com/ponkoengine/ponko
+have it: `cargo generate --git https://github.com/ponkoengine/ponko
 crates/ponko_cli/templates/2d` (or `3d`, `headless`).
 
 ### The fast debug profile
@@ -132,8 +132,8 @@ guide matches the `main` branch, the unreleased 0.2**, not 0.1.0: a page can
 describe an API that is only on `main` so far (the note under each page's
 title says so), and the tutorials need 0.2. To use those, depend on `main`
 instead:
-`ponko = { git = "https://gitlab.com/ponkoengine/ponko" }` (or
-`cargo add ponko --git https://gitlab.com/ponkoengine/ponko`). The
+`ponko = { git = "https://github.com/ponkoengine/ponko" }` (or
+`cargo add ponko --git https://github.com/ponkoengine/ponko`). The
 [changelog](../../CHANGELOG.md) lists
 what each release added. [The API reference](api.md#which-version-the-guide-matches)
 says how to build the reference for `main` locally, with the features the

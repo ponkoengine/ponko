@@ -1,7 +1,7 @@
 Legions
 =======
 
-A battle of 100,000 units made with the Ponko engine (https://gitlab.com/ponkoengine/ponko).
+A battle of 100,000 units made with the Ponko engine (https://github.com/ponkoengine/ponko).
 Two armies of soldiers and archers march across a map of rocks, lakes and
 mud and fight until one is gone. You command red; blue attacks. Every
 battle can be recorded and played again, bit for bit.

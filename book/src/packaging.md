@@ -544,7 +544,7 @@ Mac. What the command doesn't do yet:
   a fresh `ponko new` project and on Coin Dash for every format, the archives
   unpacked with the system's tools, the extracted app's seal verified and the
   program started. The Windows and Linux layouts and archives are checked by
-  unit tests on every OS (`cargo test -p ponko_cli`) and CI packages Coin Dash
+  unit tests on every OS (`cargo test -p ponko_cli`) and the list of checks packages Coin Dash
   with the command on Linux, macOS and Windows, but no Windows or Linux
   package made by it has been opened by a person yet.
 - **No installers**: no `.msi`, `.pkg`, Flatpak or AppImage (an AppImage
@@ -572,7 +572,7 @@ From a fresh checkout, with a Rust toolchain (on Linux also the ALSA and udev
 development headers, as for any example):
 
 ```sh
-git clone https://gitlab.com/ponkoengine/ponko && cd ponko
+git clone https://github.com/ponkoengine/ponko && cd ponko
 cargo run --release --example coin_dash --features text-shaping   # play it
 cargo test --test coin_dash                  # the whole game, headlessly
 ```
@@ -658,19 +658,18 @@ check failed, 2 unsupported (no display or GPU, only without
 `--allow-unsupported`), 3 no package. "Unsupported" means the engine's own
 message that it found no GPU or could not open a window ("ponko: no compatible
 GPU found" and the like); any other crash, such as a platform error, is a
-failure, and under GitHub Actions a skipped window run prints a warning
-annotation.
+failure.
 
-CI (`package-smoke`, on `main` and with the `full-ci` label) runs both
+The list of checks (`package-smoke` in `scripts/checks.yml`) runs both
 modes on Linux, macOS and Windows, and the window run must open a window on
 all three: Linux under a virtual display with software Vulkan, Windows with
-DirectX 12 only (WARP, the software renderer) where the runner has no GPU. It
+DirectX 12 only (WARP, the software renderer) on a machine without a GPU. It
 packages the dev
-profile (same layout and notices, and the dependencies the other jobs already
+profile (same layout and notices, and the dependencies the other checks already
 built); a release package is the command above. Locally, the window mode needs
 a display, and the headless mode is what runs anywhere. On Linux under X11
 a window also needs the system's X11 libraries at run time, among them
-`libxkbcommon-x11` (a minimal install, like CI's runner, may lack it).
+`libxkbcommon-x11` (a minimal install may lack it).
 
 ## Your files
 
@@ -703,7 +702,7 @@ builds the same game for the browser: the coin picture is fetched with the
 asset list, the retained settings screen and the keys work as on the desktop.
 Progress and settings are kept in the browser's storage through the same
 `ctx.storage` calls ([Saves and settings](storage.md#in-the-browser)); it has
-no quit command. The `web-smoke` CI job (the
+no quit command. The `web-smoke` check (the
 browser runner of `web/smoke`, issue
 #173) builds it after
 the fixture and runs it in headless Chromium on WebGL2: it checks that the

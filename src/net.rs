@@ -3,15 +3,15 @@
 //!
 //! | Pick | For | Start with | Example |
 //! |---|---|---|---|
-//! | **Lockstep** ([`Net`]) | Deterministic simulations with 2–8 players (strategy, fighting, co-op puzzles): every peer runs the same ticks from the same inputs, so only inputs cross the network | [`Game::lockstep`](crate::game::Game::lockstep), then `ctx.net.set_input` / `ctx.net.input` | [`examples/lockstep.rs`](https://gitlab.com/ponkoengine/ponko/-/blob/main/examples/lockstep.rs) |
-//! | **Messages** ([`NetMessages`]) | Everything else: your own packets on reliable and unreliable lanes between a host and its clients (chat, lobbies, events, your own replication) | [`Game::messages`](crate::game::Game::messages), then `ctx.net.messages` | [`examples/net_messages.rs`](https://gitlab.com/ponkoengine/ponko/-/blob/main/examples/net_messages.rs) |
-//! | **Snapshots** ([`NetSnapshots`], [`SnapshotStream`], [`Interest`], [`Authority`]) | Server-authoritative worlds on top of messages: the owner sends timestamped states, everyone else shows them a little in the past | `ctx.net.snapshots` and `ctx.net.interest` | [`examples/net_replication.rs`](https://gitlab.com/ponkoengine/ponko/-/blob/main/examples/net_replication.rs) |
+//! | **Lockstep** ([`Net`]) | Deterministic simulations with 2–8 players (strategy, fighting, co-op puzzles): every peer runs the same ticks from the same inputs, so only inputs cross the network | [`Game::lockstep`](crate::game::Game::lockstep), then `ctx.net.set_input` / `ctx.net.input` | [`examples/lockstep.rs`](https://github.com/ponkoengine/ponko/blob/main/examples/lockstep.rs) |
+//! | **Messages** ([`NetMessages`]) | Everything else: your own packets on reliable and unreliable lanes between a host and its clients (chat, lobbies, events, your own replication) | [`Game::messages`](crate::game::Game::messages), then `ctx.net.messages` | [`examples/net_messages.rs`](https://github.com/ponkoengine/ponko/blob/main/examples/net_messages.rs) |
+//! | **Snapshots** ([`NetSnapshots`], [`SnapshotStream`], [`Interest`], [`Authority`]) | Server-authoritative worlds on top of messages: the owner sends timestamped states, everyone else shows them a little in the past | `ctx.net.snapshots` and `ctx.net.interest` | [`examples/net_replication.rs`](https://github.com/ponkoengine/ponko/blob/main/examples/net_replication.rs) |
 //!
 //! The player's own entity in a server-authoritative game is **predicted**:
 //! [`Prediction`] applies the local input at once and replays the inputs the
 //! server hasn't confirmed when its state disagrees, [`InputQueue`] is the
 //! server's side, and [`Smoothing`] hides the corrections
-//! ([`examples/net_prediction.rs`](https://gitlab.com/ponkoengine/ponko/-/blob/main/examples/net_prediction.rs)).
+//! ([`examples/net_prediction.rs`](https://github.com/ponkoengine/ponko/blob/main/examples/net_prediction.rs)).
 //!
 //! Small deterministic games that can save and load their whole state
 //! cheaply (fighting, racing, arena games) can use **rollback** instead of

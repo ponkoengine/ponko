@@ -5,7 +5,8 @@ The detailed maintainer/agent integration checklist is in
 [`AGENTS.md`](../../AGENTS.md).
 In short:
 
-- Work on a branch, open a pull request to `main`, wait for CI.
+- Work on a branch, open a pull request to `main`, and run the checks your
+  change needs locally (there is no CI).
 - Add relevant tests for changed behavior and helpful nearby API comments.
   You do not need a doctest for every item or unrelated local toolchains.
 - Performance claims need release-build numbers in the PR.
@@ -16,7 +17,8 @@ In short:
 ## Adding a cargo feature
 
 Every feature needs a clippy line, a test line and, when docs.rs builds the
-crate with it, a doc line in `.github/workflows/ci.yml` (the list of checks).
+crate with it, a doc line in `scripts/checks.yml` (the list of checks, which
+maintainers run locally).
 `python3 scripts/check-feature-coverage.py` fails for one without; see
 `CONTRIBUTING.md`, "Adding or changing a cargo feature".
 
@@ -33,7 +35,7 @@ which adapter they ran on and what was skipped.
 Every function the C library exports (`extern "C" fn` in `crates/ponko_ffi/src`)
 needs a test that calls it, in `crates/ponko_ffi/tests/` or a native suite in
 `examples/cpp/`: a doctest that passes a null pointer proves argument checking,
-not that the function works. CI runs `python3 scripts/check-ffi-coverage.py`,
+not that the function works. `python3 scripts/check-ffi-coverage.py`
 which fails for an export no test calls. The only exceptions are listed, each
 with the reason it can't run on a machine without a window or a Steam client,
 in `scripts/ffi-coverage-allowlist.txt`. Test the function instead of adding to
@@ -98,13 +100,13 @@ unsaid, and says what to write.
 `include/ponko.hpp` wraps every C function, or the function is on the short
 C-only list, `scripts/cpp-c-only.txt`, with the reason. When you add a C
 function, add its C++ wrapper with a `///` comment (what it does, units,
-ownership, what it throws) and a test in `examples/cpp/tests.cpp`. CI runs
-`python3 scripts/check-cpp-api.py`, which fails for a C function without a
+ownership, what it throws) and a test in `examples/cpp/tests.cpp`.
+`python3 scripts/check-cpp-api.py` fails for a C function without a
 wrapper, a public C++ declaration without a doc comment, and a C or C++ block
 in this book that isn't an `\{{#include}}` of a compiled file. Put a guide's
 C++ example in `examples/cpp/guide.cpp` (C in `guide.c`) between
 `// ANCHOR: name` and `// ANCHOR_END: name` lines and include it by its anchor;
-the native CI build compiles and runs both.
+the native check compiles and runs both.
 
 ## Editing this book
 
@@ -120,8 +122,8 @@ Every page has an edit button (top right) that opens the file in the project's r
 
 ### Rust snippets compile
 
-CI compiles every ` ```rust ` block in the book (`scripts/check-book-snippets.py`,
-one `cargo check` for all of them), so a rename can't silently break the guide.
+`scripts/check-book-snippets.py` compiles every ` ```rust ` block in the book
+(one `cargo check` for all of them), so a rename can't silently break the guide.
 Run it before pushing a chapter change:
 
 ```sh

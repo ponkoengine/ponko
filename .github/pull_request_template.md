@@ -4,7 +4,7 @@
 
 ## How it was checked
 
-<!-- Commands you ran, tests added, and for performance changes release-build numbers before and after. -->
+<!-- There is no CI: nothing runs on this pull request by itself. List the commands you ran (and on which OS), tests added, and for performance changes release-build numbers before and after. The full list of checks is scripts/checks.yml. -->
 
 - [ ] `cargo fmt --all --check`, `cargo clippy --workspace --all-targets` and `cargo test --workspace` pass
 - [ ] New public behavior has tests and doctests

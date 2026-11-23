@@ -92,7 +92,7 @@
 //!   benchmark crate. Not part of the API; they change in any release.
 //!
 //! What a 0.x release may change, and what it keeps, is in
-//! [STABILITY.md](https://gitlab.com/ponkoengine/ponko/-/blob/main/STABILITY.md).
+//! [STABILITY.md](https://github.com/ponkoengine/ponko/blob/main/STABILITY.md).
 
 #![warn(missing_docs)]
 // docs.rs: "Available on crate feature X only" on feature-gated items.

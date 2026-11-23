@@ -82,7 +82,7 @@ Run both before a pull request that touches the renderer. This forces
 | The rendering baseline's scenes draw and report on any device | `gpu3d::scene_bench::render_test` |
 
 Not covered, so say so when a change touches it: no test runs on a second
-*hardware* GPU (CI's adapter is a software rasteriser), none runs the real
+*hardware* GPU (the listed Windows lane's adapter is a software rasteriser), none runs the real
 WebGL2 or browser WebGPU backends (the web smoke test starts a game there
 without comparing pixels). Motion vectors of skinned and morphing models
 are tested on one character-like bar; a real imported character is not.
@@ -266,26 +266,16 @@ PONKO_REFERENCE_REASON="Sun shadows use the new filter kernel (#1234)." \
 5. Commit the PNG and the JSON together and put the before and after images
    in the pull request's description.
 
-On the pull request, the **Reference images** job checks every reference
-against its metadata, lists the changed ones in its summary and uploads
-their before and after images as the `reference-image-evidence` artifact
-(open its `index.html`). The job fails, and holds the merge, until a
-maintainer has looked at that artifact and added the `references-reviewed`
-label; re-running the job then passes. A changed image with an unchanged
-reason, or a changed image with unchanged metadata, fails outright.
+The **Reference images** check (`scripts/check-reference-images.py`) checks
+every reference against its metadata and, with `--changed`, lists the changed
+ones and writes their before and after images to an evidence folder (open
+its `index.html`). A changed image with an unchanged reason, or a changed
+image with unchanged metadata, fails outright. A pull request that changes
+references merges only after a maintainer has looked at the before and after
+images and added the `references-reviewed` label; a later push that changes
+the references again needs a new look.
 
-The label stands for the images the maintainer saw:
-
-- A later push that changes the references again takes the label off, and
-  the job fails until the new images are reviewed. A push that leaves the
-  references alone keeps it.
-- A label put on when the pull request is opened, before any evidence
-  exists, doesn't count either.
-- The full run that the `full-ci` label starts on the branch asks for the
-  same label: it looks up the branch's pull request. Only `main`, where
-  the change has merged, is checked against the metadata alone.
-
-To check the same things locally:
+Run it before opening the pull request:
 
 ```sh
 python3 scripts/check-reference-images.py
@@ -327,23 +317,22 @@ A passing run proves what it ran on. A pull request that changes rendering
 says which adapter, backend and driver its tests ran on, which tiers were
 forced, and what was skipped.
 
-## In CI
+## In the list of checks
 
-Pull request runs don't run tests; run them locally. After a merge (or with
-the `full-ci` label):
+There is no CI: the render tests run where a maintainer or contributor runs
+them. The list of checks (`scripts/checks.yml`) describes these lanes:
 
 | Lane | Adapter | Missing GPU |
 |---|---|---|
 | Windows unit shards | Software rasteriser (WARP, DirectX 12) | Fails (`PONKO_REQUIRE_GPU=1`) |
-| Windows GPU tiers (`baseline`, `webgl2`) | The same, with forced limits | Fails, and the job checks that devices were opened on the tier |
-| Linux, macOS | Whatever the runner has | Tests skip with a logged reason |
+| Windows GPU tiers (`baseline`, `webgl2`) | The same, with forced limits | Fails, and the check makes sure devices were opened on the tier |
+| Linux, macOS | Whatever the machine has | Tests skip with a logged reason |
 
 Windows is the lane where the render tests are required to run. When an
-image comparison fails in any lane, the job uploads
-`target/render-test-output` (the `render-test-output-*` artifact) with the
-frame and the difference image. Every lane that runs tests also prints the
-comparisons' measured differences in its "Margins of the image comparisons"
-step, passed or failed.
+image comparison fails in any lane, `target/render-test-output` holds the
+frame and the difference image; attach them to the pull request. The
+"Margins of the image comparisons" step of those lanes prints the
+comparisons' measured differences, passed or failed.
 
 ### Testing a renderer-backed context
 

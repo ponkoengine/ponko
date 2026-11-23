@@ -75,8 +75,7 @@ python3 -m http.server -d target/web/gallery 8000
 A demo marked `"webgpu": "required"` there needs WebGPU; on a browser without
 it, its page says so and what to try instead of starting it. The others run
 with WebGPU or, where the browser lacks it, WebGL2. Each release builds the
-gallery for its version and publishes it (the release workflow,
-`.github/workflows/release.yml`). Adding an example is one line in
+gallery for its version and publishes it (CONTRIBUTING.md, "Releasing"). Adding an example is one line in
 `examples.json`; the gallery's
 [README](../../web/gallery/README.md)
 has the fields, and how to check every page in a headless browser.
@@ -402,8 +401,8 @@ checks that it agrees with the canvas, so a page that fell back to WebGL2
 can't pass as WebGPU. A 2D fixture, a 3D fixture (built with `--features 3d`:
 a glTF model fetched and parsed in the browser, with a sun and shadows) and
 the complete-game reference `coin_dash` ([A complete game,
-packaged](packaging.md#the-web-build)) are built and checked there. CI runs
-WebGL2 in all three browsers on `main`; WebGPU is tried too, and a
+packaged](packaging.md#the-web-build)) are built and checked there. The
+list of checks runs WebGL2 in all three browsers; WebGPU is tried too, and a
 browser that can't show a WebGPU canvas is reported as unsupported, with the
 reason, never as a pass. The 2D fixture's startup failure cases check both
 the callback's error and the message shown on the page. Each run leaves a
