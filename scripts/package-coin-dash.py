@@ -8,7 +8,7 @@
 
 Packaging is the generic `ponko package` command (crates/ponko_cli), which any
 game uses; this script is the reference game's own entry point to it, kept for
-CI and the release workflow. `package` runs
+the list of checks (scripts/checks.yml) and the release. `package` runs
 `ponko package --example coin_dash --format folder --no-smoke`, which lays out
 the plain folder (the program, its assets in one `assets.pack`, the licenses,
 CONTENT-NOTICES.txt, README.txt and THIRD-PARTY-NOTICES.txt) as
@@ -29,7 +29,7 @@ mode found no display or no GPU, and --allow-unsupported was not given),
 
 `notices` runs `ponko notices`: only THIRD-PARTY-NOTICES.txt, for another
 workspace crate's library (with its default features, for this platform). The
-release workflow ships it in the C library archives (`--crate ponko_ffi`).
+release ships it in the C library archives (`--crate ponko_ffi`).
 """
 
 import argparse
@@ -273,9 +273,6 @@ def smoke_window(package, work, timeout, allow_unsupported):
     if code != 0 and not report.exists() and is_unsupported(err):
         if allow_unsupported:
             reason = next(line for line in err.splitlines() if is_unsupported(line))[:200]
-            if os.environ.get("GITHUB_ACTIONS"):
-                # Shows on the run's summary, so a skipped window is never silent.
-                print(f"::warning title=coin_dash window smoke skipped::{reason}")
             raise Unsupported("no display or GPU here: " + reason)
         raise Failure("the window could not open (use --allow-unsupported where that is expected):\n" + err)
     check(code == 0, f"the window run exited {code}:\n{err}{out}")

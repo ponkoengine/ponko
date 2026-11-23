@@ -14,7 +14,7 @@ re-exports common items as the same items; `#[deprecated]` aliases (their own
 items, kept for one minor); and items of the ECS crate, whose one way in is
 `ponko::ecs_core` (plus the prelude). The walk reads rustdoc's JSON of the
 crate with the docs.rs features, built with the nightly that
-scripts/api-snapshots.py pins (CI runs it in the API snapshots job).
+scripts/api-snapshots.py pins (the API snapshots check uses it).
 """
 import json
 import os

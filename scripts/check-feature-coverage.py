@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Fail when a cargo feature of the workspace has no check line in ci.yml.
+"""Fail when a cargo feature of the workspace has no check line in checks.yml.
 
-The list of checks is .github/workflows/ci.yml. A feature added without a
-line there can break without any listed command noticing, so every feature
-of every workspace crate needs, in ci.yml,
+The list of checks is scripts/checks.yml, which maintainers run locally. A
+feature added without a line there can break without any listed command
+noticing, so every feature of every workspace crate needs, in checks.yml,
 
   - a clippy line that turns it on (`cargo clippy ... --features f`),
   - a test line that turns it on (`cargo test` or `cargo miri test`), and
@@ -16,7 +16,7 @@ when the feature is a default one and `--no-default-features` is not given, or
 when a feature that is on lists it (`image-formats` turns on `image-bmp`).
 A line's package is its `-p` (all of them); with `--workspace` every member;
 with neither, the root package. Matrix entries (`scope`, `args`) are read
-as the commands they make. Nothing is run: ci.yml is read as text.
+as the commands they make. Nothing is run: checks.yml is read as text.
 
 What is allowed to lack a line goes in scripts/feature-checks.txt, one
 `crate/feature kind reason` per line, `kind` being clippy, test or doc. The
@@ -24,7 +24,7 @@ check also fails when such an entry is not needed any more (the line exists
 now) or names a feature that is gone, so the list only shrinks.
 
 The same goes for the browser smoke runners: a program in web/smoke or
-web/gallery (a first line of `#!/usr/bin/env node`) must be named in ci.yml,
+web/gallery (a first line of `#!/usr/bin/env node`) must be named in checks.yml,
 or be listed as `runner <path> <reason>` in the same file.
 
     python3 scripts/check-feature-coverage.py            # check
@@ -38,7 +38,7 @@ import sys
 import tomllib
 
 ROOT = Path(__file__).resolve().parent.parent
-CI = ROOT / '.github' / 'workflows' / 'ci.yml'
+CI = ROOT / 'scripts' / 'checks.yml'
 EXEMPT = ROOT / 'scripts' / 'feature-checks.txt'
 KINDS = ('clippy', 'test', 'doc')
 ROOT_PACKAGE = 'ponko'
@@ -80,7 +80,7 @@ def load_crates(root):
     return crates
 
 
-# ---- ci.yml as commands ----------------------------------------------------
+# ---- checks.yml as commands ----------------------------------------------------
 
 JOB = re.compile(r'^  [A-Za-z0-9_-]+:\s*$')
 FIELD = re.compile(r'^(\s*)(- )?([A-Za-z_]+):\s*(.*?)\s*$')
@@ -123,7 +123,7 @@ def substitute(command, entry):
 
 
 def commands(text):
-    """Every `cargo ...` command of ci.yml, matrix entries expanded."""
+    """Every `cargo ...` command of checks.yml, matrix entries expanded."""
     jobs, current = [], []
     for line in text.splitlines():
         if JOB.match(line) and current:
@@ -318,7 +318,7 @@ def check(crates, text, exemptions):
             if entry in exemptions:
                 used.add(entry)
                 continue
-            problems.append(f'{name}/{feature}: no {kind} line in ci.yml (add one, or give a reason in {EXEMPT.name})')
+            problems.append(f'{name}/{feature}: no {kind} line in checks.yml (add one, or give a reason in {EXEMPT.name})')
     known = {f'{c}/{f}' for c, f in covered}
     for (feature, kind), reason in exemptions.items():
         if feature == 'runner':
@@ -344,9 +344,9 @@ def check_runners(found, text, exemptions):
         named = runner in text
         entry = ('runner', runner)
         if not named and entry not in exemptions:
-            problems.append(f'{runner}: not run in ci.yml (add a step, or `runner {runner} <reason>` to {EXEMPT.name})')
+            problems.append(f'{runner}: not run in checks.yml (add a step, or `runner {runner} <reason>` to {EXEMPT.name})')
         if named and entry in exemptions:
-            problems.append(f'{EXEMPT.name}: {runner} is run in ci.yml now: remove the entry')
+            problems.append(f'{EXEMPT.name}: {runner} is run in checks.yml now: remove the entry')
     for kind, name in exemptions:
         if kind == 'runner' and name not in found:
             problems.append(f'{EXEMPT.name}: {name} is not a runner any more: remove the entry')
@@ -475,7 +475,7 @@ def main(argv):
     problems += check(crates, text, exemptions)
     problems += check_runners(runners(ROOT), text, exemptions)
     if problems:
-        print('Missing check lines (.github/workflows/ci.yml is the list of checks):', file=sys.stderr)
+        print('Missing check lines (scripts/checks.yml is the list of checks):', file=sys.stderr)
         for problem in problems:
             print(f'  {problem}', file=sys.stderr)
         return 1

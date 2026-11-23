@@ -2,7 +2,7 @@
 # Makes the reference validation bundles and checks that the tool behaves:
 # the deliberately broken game fails, the corrected one passes, a launched
 # game observes what the in-process run observes, and two runs of one setup
-# compare as the same. CI publishes the result as an artifact.
+# compare as the same.
 #
 #   scripts/validation-bundles.sh [OUT_DIR]     (default: target/validation-bundles)
 #

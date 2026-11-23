@@ -4,7 +4,7 @@
     python3 scripts/changelog.py           # fold the fragments in and delete them
                                            # (--version X.Y.Z when any breaks)
     python3 scripts/changelog.py --dry-run # print what would be written, change nothing
-    python3 scripts/changelog.py --check   # validate the fragments (CI runs this)
+    python3 scripts/changelog.py --check   # validate the fragments
     python3 scripts/changelog.py --breaking FILE...
                                            # which of the fragments announce a
                                            # breaking change (semver-checks.py
@@ -460,7 +460,7 @@ def main():
         sys.exit(str(error))
 
 
-# The rules, checked with made-up input (CI runs `--selftest`).
+# The rules, checked with made-up input (`--selftest`).
 
 GOOD = '''\
 ### Breaking changes

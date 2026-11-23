@@ -1,73 +1,32 @@
-# One failure never hides another: matrices don't fail fast, test steps run
-# even after an earlier step failed, and --no-fail-fast runs every suite.
+# The list of checks: every check the project has, written down in one place.
 #
-# Two tiers keep pull requests fast and runners free:
-# - pull_request: only quick Linux checks (leaks, format, clippy, feature
-#   contracts, reference images, docs, book), no tests. Authors run the
-#   tests on their own machine before opening the pull request.
-# - push to main or to a release-* branch (the patch branches, STABILITY.md,
-#   CONTRIBUTING.md "Releasing") and workflow_dispatch: the full matrix
-#   (macOS, Windows, feature tests, Miri, MSRV, C/C++, web), after the merge.
-#   The gate is `github.event_name != 'pull_request'`, not the branch name, so
-#   a patch release is tagged on a commit that ran the same matrix as one on
-#   main. There is no merge queue (no `merge_group` trigger): pull requests
-#   into a release-* branch run the quick tier like any other.
-# The API snapshots job is a quick check as well: it fails when api/ (the
-# committed listing of the public API) differs from the code
-# (scripts/api-snapshots.py, CONTRIBUTING.md "API snapshots").
-# The Semver job is one of the quick checks: it runs in every tier, compares
-# the published crates' API with the last crates.io release, and reads the
-# `breaking` label when it runs (scripts/semver-checks.py, CONTRIBUTING.md
-# "Semver checks"; a re-run sees a label added later, as the Reference images
-# job does).
-# A pull request labelled `full-ci` runs the full matrix too (for risky
-# platform changes). Full-tier-only jobs carry
-# `if: github.event_name != 'pull_request' || <full-ci label>`.
+# Maintainers and contributors run these checks on their own machines; no
+# service runs this file (the project has no CI). It keeps the job-and-step
+# layout it was written in, so each check names the platform, toolchain and
+# commands it needs: read a job, then run its `run:` lines locally. The
+# `runs-on`, `uses`, `if:` and `${{ ... }}` lines are notes on where and when a
+# check applies, not something to execute.
 #
-# Only events that change the code start this workflow. Labels and title or
-# description edits go to pr-events.yml instead: GitHub can't filter
-# `labeled` by label name, so here every area label would start (and, via
-# the concurrency group, cancel) a whole run, and a lighter run publishing
-# its own "CI passed" on the same commit could stand in for a failed one.
-# pr-events.yml re-checks edited PR text for leaks (a leak turns the pull
-# request back into a draft, which can't merge) and, when `full-ci` is
-# added, starts this workflow on the branch with workflow_dispatch.
+# scripts/check-feature-coverage.py reads this file as text: every cargo
+# feature needs clippy, test and (for docs.rs) doc lines here, and every
+# browser smoke runner in web/smoke and web/gallery needs a step that names
+# it (CONTRIBUTING.md, "Adding or changing a cargo feature"). The quick
+# checks most changes need are listed in AGENTS.md, "Integration checks".
 #
-# Build caches are saved only by runs on main (`save-if`). Every other run
-# (release-* branches too) can restore those. Saving elsewhere fills the
-# repository's 10 GB cache quota, and GitHub then evicts main's caches: the
-# next runs rebuild every dependency.
-
-name: CI
-
-on:
-  push:
-    # release-*: the patch branches (STABILITY.md); the Semver job fails any
-    # break there.
-    branches: [main, 'release-*']
-  pull_request:
-    # Not `edited` or `labeled`: see the header and pr-events.yml.
-    types: [opened, synchronize, reopened]
-  workflow_dispatch:
-
-# A new push to a pull request cancels its older run; every commit on main
-# or on a release-* branch keeps its own full run.
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
+# The environment the commands expect:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
   RUSTDOCFLAGS: -D warnings
-  # CI never reads debug info, and it makes linking (slow on Windows) and
-  # the caches much bigger.
+  # The checks never read debug info, and it makes linking (slow on
+  # Windows) and the build folders much bigger.
   CARGO_PROFILE_DEV_DEBUG: "0"
 
 jobs:
   # Words from private projects that use the engine must never land here.
-  # The list is the LEAK_WORDS secret (so it isn't in this repo either);
-  # pull requests from forks don't get secrets, and skip it.
+  # The word list is never in this repo: scripts/leak-check.sh reads it from
+  # $LEAK_WORDS or a local file. `scripts/leak-check.sh install` runs the
+  # file check before every local commit.
   leaks:
     name: Leak check
     runs-on: ubuntu-latest
@@ -233,21 +192,8 @@ jobs:
           name: reference-image-evidence
           path: evidence
           retention-days: 30
-      - name: A maintainer has looked at the changed images
-        if: steps.pr.outputs.number != '' && steps.changes.outputs.changed != '0'
-        shell: bash
-        env:
-          PR: ${{ steps.pr.outputs.number }}
-          CHANGED: ${{ steps.changes.outputs.changed }}
-          EVENT: ${{ github.event_name }}
-          ACTION: ${{ github.event.action }}
-          BEFORE: ${{ github.event.before }}
-          AFTER: ${{ github.event.pull_request.head.sha }}
-        run: |
-          python3 scripts/check-reference-images.py --review \
-            --repo "$REPO" --pr "$PR" --label "$LABEL" --changed-count "$CHANGED" \
-            --event "$EVENT" --action "$ACTION" --before "$BEFORE" --after "$AFTER" \
-            --run-id "$GITHUB_RUN_ID"
+      # A maintainer looks at evidence/index.html and adds the
+      # references-reviewed label to the pull request (book/src/render-tests.md).
 
   # Reduced builds lint one package (`scope`), not the workspace: Cargo
   # unifies features across every package it builds, and other members turn
@@ -386,7 +332,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: Install ALSA and udev headers (audio, gamepads)
         if: runner.os == 'Linux'
-        run: bash scripts/ci-apt-install.sh libasound2-dev libudev-dev
+        run: sudo apt-get install -y libasound2-dev libudev-dev
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -413,12 +359,11 @@ jobs:
   # The oldest supported Rust (rust-version in Cargo.toml) still builds everything.
   msrv:
     name: MSRV (Rust 1.95)
-    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - name: Install ALSA and udev headers (audio, gamepads)
-        run: bash scripts/ci-apt-install.sh libasound2-dev libudev-dev
+        run: sudo apt-get install -y libasound2-dev libudev-dev
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.95"
@@ -434,7 +379,6 @@ jobs:
     name: Test (${{ matrix.os }})
     # Full tier only: authors run the tests locally before the pull request.
     # (Most of this job is building and linking ~155 test binaries.)
-    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -444,7 +388,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: Install ALSA and udev headers (audio, gamepads)
         if: runner.os == 'Linux'
-        run: bash scripts/ci-apt-install.sh libasound2-dev libudev-dev
+        run: sudo apt-get install -y libasound2-dev libudev-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: ./.github/actions/windows-linker
         if: runner.os == 'Windows'
@@ -501,7 +445,6 @@ jobs:
 
   windows-unit-build:
     name: Compile unit and render tests (windows-latest)
-    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -635,7 +578,6 @@ jobs:
 
   windows-examples:
     name: Examples and library tests (windows-latest)
-    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -655,7 +597,6 @@ jobs:
   # its critical path with five more serial engine builds on every OS.
   test-features:
     name: Feature tests (${{ matrix.os }})
-    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -665,7 +606,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: Install ALSA and udev headers (audio, gamepads)
         if: runner.os == 'Linux'
-        run: bash scripts/ci-apt-install.sh libasound2-dev libudev-dev
+        run: sudo apt-get install -y libasound2-dev libudev-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: ./.github/actions/windows-linker
         if: runner.os == 'Windows'
@@ -849,7 +790,7 @@ jobs:
         env:
           PONKO_ACCESS_ATSPI: 1
         run: |
-          bash scripts/ci-apt-install.sh at-spi2-core dbus
+          sudo apt-get install -y at-spi2-core dbus
           dbus-run-session -- cargo test -p ponko --no-fail-fast --features accessibility --test ui_access_platforms -- --nocapture
       # The macOS and Windows adapters are compiled only in these jobs: lint
       # them here (the clippy job lints the Linux one).
@@ -866,7 +807,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: Install ALSA and udev headers (audio, gamepads)
         if: runner.os == 'Linux'
-        run: bash scripts/ci-apt-install.sh libasound2-dev libudev-dev
+        run: sudo apt-get install -y libasound2-dev libudev-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -907,14 +848,6 @@ jobs:
       # must not fail the build.
       RUSTFLAGS: ""
       RUSTDOCFLAGS: ""
-      GH_TOKEN: ${{ github.token }}
-      EVENT: ${{ github.event_name }}
-      BASE_REF: ${{ github.base_ref }}
-      REF_NAME: ${{ github.ref_name }}
-      BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-      PR: ${{ github.event.pull_request.number }}
-      SHA: ${{ github.sha }}
-      REPO: ${{ github.repository }}
     steps:
       # Full history: the comparison with the commit a change is based on.
       - uses: actions/checkout@v7
@@ -923,7 +856,7 @@ jobs:
       - name: The script's own checks
         run: python3 scripts/semver-checks.py selftest
       - name: Install ALSA and udev headers (audio, gamepads)
-        run: bash scripts/ci-apt-install.sh libasound2-dev libudev-dev
+        run: sudo apt-get install -y libasound2-dev libudev-dev
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.99.1"
@@ -943,6 +876,8 @@ jobs:
           tool: cargo-semver-checks@${{ env.SEMVER_CHECKS_VERSION }}
       - run: cargo semver-checks --version
       - name: Check the API of every published crate
+        # Add --breaking when the pull request has the `breaking` label;
+        # --base release-X.Y for a pull request into a release branch.
         run: python3 scripts/semver-checks.py run
 
   # The public API of every published crate, listed in api/ (scripts/api-snapshots.py,
@@ -968,7 +903,7 @@ jobs:
           python3 scripts/api-snapshots.py selftest
           python3 scripts/api-snapshots.py pins >> "$GITHUB_ENV"
       - name: Install ALSA and udev headers (audio, gamepads)
-        run: bash scripts/ci-apt-install.sh libasound2-dev libudev-dev
+        run: sudo apt-get install -y libasound2-dev libudev-dev
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.API_NIGHTLY }}
@@ -1026,7 +961,7 @@ jobs:
       # The guide's inline Rust snippets: one `cargo check` of every block as a
       # module of a scratch crate (see book/src/contributing.md).
       - name: Install ALSA and udev headers (audio, gamepads)
-        run: bash scripts/ci-apt-install.sh libasound2-dev libudev-dev
+        run: sudo apt-get install -y libasound2-dev libudev-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -1037,7 +972,6 @@ jobs:
 
   miri:
     name: Miri (${{ matrix.name }})
-    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
     runs-on: ubuntu-latest
     # Miri interprets every instruction; tests shrink their sizes under
     # cfg(miri). The timeout catches a hang instead of blocking CI. The
@@ -1128,7 +1062,6 @@ jobs:
 
   native:
     name: C and C++ (${{ matrix.os }})
-    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -1138,7 +1071,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: Install ALSA and udev headers (audio, gamepads)
         if: runner.os == 'Linux'
-        run: bash scripts/ci-apt-install.sh libasound2-dev libudev-dev
+        run: sudo apt-get install -y libasound2-dev libudev-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: ./.github/actions/windows-linker
         if: runner.os == 'Windows'
@@ -1200,7 +1133,6 @@ jobs:
   # Apple silicon, where the commands were checked.
   sanitizers:
     name: C API sanitizers
-    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
     runs-on: macos-latest
     timeout-minutes: 60
     steps:
@@ -1224,7 +1156,6 @@ jobs:
   # demo the way the docs site does.
   web:
     name: Web build
-    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -1318,7 +1249,6 @@ jobs:
   # as a quiet pass; one that can must actually draw it.
   web-smoke:
     name: Web smoke test (headless browsers)
-    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -1345,12 +1275,12 @@ jobs:
         run: |
           node --version
           npm ci --prefix web/smoke --no-audit --no-fund
-          bash scripts/ci-retry.sh node web/smoke/node_modules/playwright-core/cli.js install --with-deps chromium firefox webkit
+          node web/smoke/node_modules/playwright-core/cli.js install --with-deps chromium firefox webkit
       - name: Runner tests
         run: node --test web/smoke/*.test.mjs web/gallery/*.test.mjs
       # The native lockstep players of the multiplayer step need ALSA and udev.
       - name: Install ALSA and udev headers (the native lockstep example)
-        run: bash scripts/ci-apt-install.sh libasound2-dev libudev-dev
+        run: sudo apt-get install -y libasound2-dev libudev-dev
       # The platformer (examples/ember_hop) publishes its state like
       # coin_dash; its browser run is the web gallery's page check.
       - name: Build the fixtures (2D, 3D with --features 3d, the complete games)
@@ -1606,7 +1536,7 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 10
         run: |
-          bash scripts/ci-retry.sh sudo apt-get install -y --no-install-recommends pulseaudio pulseaudio-utils
+          sudo apt-get install -y --no-install-recommends pulseaudio pulseaudio-utils
           pulseaudio --check || pulseaudio --daemonize=yes --exit-idle-time=-1
           pactl load-module module-null-sink sink_name=ci_null
           pactl set-default-sink ci_null
@@ -1693,7 +1623,6 @@ jobs:
   # the dependencies are the ones the test jobs already built.
   package-smoke:
     name: Packaged game (${{ matrix.os }})
-    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     strategy:
@@ -1704,7 +1633,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: Install ALSA and udev headers (audio, gamepads), a virtual display with the X11 libraries a window loads, and software Vulkan
         if: runner.os == 'Linux'
-        run: bash scripts/ci-apt-install.sh libasound2-dev libudev-dev xvfb mesa-vulkan-drivers libvulkan1 libegl1 libgl1-mesa-dri libxkbcommon-x11-0 libxcursor1 libxi6 libxrandr2 libxinerama1 libx11-xcb1
+        run: sudo apt-get install -y libasound2-dev libudev-dev xvfb mesa-vulkan-drivers libvulkan1 libegl1 libgl1-mesa-dri libxkbcommon-x11-0 libxcursor1 libxi6 libxrandr2 libxinerama1 libx11-xcb1
       - uses: dtolnay/rust-toolchain@stable
       - uses: ./.github/actions/windows-linker
         if: runner.os == 'Windows'
@@ -1791,13 +1720,12 @@ jobs:
   # published so a reviewer can open what a run observed. Headless.
   validation-bundles:
     name: Validation bundles
-    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - name: Install ALSA and udev headers (audio, gamepads)
-        run: bash scripts/ci-apt-install.sh libasound2-dev libudev-dev
+        run: sudo apt-get install -y libasound2-dev libudev-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -1845,7 +1773,7 @@ jobs:
           fi
       - name: Install ALSA and udev headers (audio, gamepads)
         if: steps.changed.outputs.run == 'true'
-        run: bash scripts/ci-apt-install.sh libasound2-dev libudev-dev
+        run: sudo apt-get install -y libasound2-dev libudev-dev
       - uses: dtolnay/rust-toolchain@stable
         if: steps.changed.outputs.run == 'true'
       - uses: Swatinem/rust-cache@v2
@@ -1940,30 +1868,3 @@ jobs:
           code=$(docker inspect -f '{{.State.ExitCode}}' game-server)
           echo "exit code: $code"
           test "$code" = 0
-
-  # Single check for branch protection: passes only if
-  # every job above passed. Requiring one job keeps the rule valid when jobs
-  # are added or renamed. Jobs a plain pull request skips (fast tier) are
-  # fine; in the full tier a skipped job is a failure. Keep the name
-  # "CI passed": branch protection matches it.
-  ci-passed:
-    name: CI passed
-    if: always()
-    needs: [leaks, fmt, reference-images, clippy, feature-deps, msrv, test, windows-unit-build, windows-unit, windows-gpu-tiers, windows-examples, test-features, docs, semver, api-snapshots, book, miri, native, sanitizers, web, web-smoke-runner, web-smoke, package-smoke, validation-bundles, templates, server-container]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check every job
-        env:
-          NEEDS: ${{ toJSON(needs) }}
-          FAILED: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
-          SKIPPED: ${{ contains(needs.*.result, 'skipped') }}
-          FULL: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
-        run: |
-          echo "$NEEDS"
-          if [ "$FAILED" = "true" ]; then
-            echo "Some jobs failed or were cancelled." && exit 1
-          fi
-          if [ "$FULL" = "true" ] && [ "$SKIPPED" = "true" ]; then
-            echo "Some jobs were skipped in a full run." && exit 1
-          fi
-          echo "Every job this event runs passed."
