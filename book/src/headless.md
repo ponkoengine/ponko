@@ -357,7 +357,8 @@ cargo build --release -p ponko_ffi \
 That C build needs 168 crates instead of 360. It always keeps 3D models and
 navigation, because the C API exports those functions in every build. The
 Rust engine alone is smaller still: 72 crates with no default features, 143
-with only `audio`, and 312 with the defaults. CI checks that these reduced
+with only `audio`, and 312 with the defaults. The `feature-deps` check makes
+sure these reduced
 builds never pull in the renderer, an audio device, the inspector, glTF,
 physics or navigation by accident, and that builds without the default
 features carry no JPEG or other image decoder (`scripts/feature-deps.sh`). Everything in

@@ -20,7 +20,7 @@ Two checks on include/ponko.hpp:
 
 3. Book snippets. Every ```c and ```cpp block in book/src holds only
    `{{#include}}` lines of files in examples/cpp (guide.cpp and guide.c hold the
-   guide's own), by an anchor that exists there, so CI's native build
+   guide's own), by an anchor that exists there, so the native check
    compiles and runs every C and C++ example the guide shows.
 
     python3 scripts/check-cpp-api.py          # check

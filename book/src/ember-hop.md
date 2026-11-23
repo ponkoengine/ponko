@@ -7,7 +7,7 @@ levels made in the [Tiled](https://www.mapeditor.org/) map editor, prefabs, a
 scene file, 2D physics, animated sprite sheets, particles, sound files and
 streamed music, a camera that follows the hero, saves in save slots, and the
 keyboard and a gamepad through named actions. It packages with `ponko
-package` and builds for the web, and CI plays it from its package.
+package` and builds for the web, and the list of checks plays it from its package.
 
 You carry an ember spirit through two caves: collect sparks, burn drips with
 a flare or stomp them, light braziers (each one saves the run) and reach the
@@ -208,7 +208,7 @@ the first cave with the autopilot, a pause and back to the title in the
 second cave, "continue", the rest of the run, and the end screen. It writes
 what it saw as JSON and exits with 0 only if it got to the end.
 
-CI's `package-smoke` job does this on Linux, macOS and Windows: it packages
+The `package-smoke` job of the list of checks (`scripts/checks.yml`) does this on Linux, macOS and Windows: it packages
 the game, unpacks it in a folder elsewhere, and runs the walk-through from
 the package without a window and in one (under `xvfb-run` on Linux),
 checking the report (both caves cleared, the saved run loaded, one run
@@ -221,7 +221,7 @@ headless tests on every OS with the physics feature (`physics-determinism`).
 web/build.sh --features physics ember_hop && python3 -m http.server -d target/web/ember_hop 8000
 ```
 
-builds it for the browser, and CI builds it in the `web-smoke` job. Like
+builds it for the browser, and the list of checks builds it in the `web-smoke` job. Like
 Coin Dash, the game publishes its state on `<html data-smoke>` (ticks,
 frames, the hero picture's size, the screen, the cave, the sparks, the
 storage), so the browser runner of `web/smoke` can drive and check it, and

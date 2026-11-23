@@ -84,7 +84,7 @@ compiling in its patch releases. So do what a plugin adds through:
 | Release | When | Contains |
 |---|---|---|
 | Patch (0.1.1, 0.1.2, ...) | As needed: within days for a regression or a security fix, otherwise when there are fixes to ship | Bug fixes and additions. Nothing that breaks code written for the same minor. |
-| Minor (0.2.0, 0.3.0, ...) | When the P1 scope of its [milestone](https://gitlab.com/ponkoengine/ponko/-/milestones) is done, roughly every 8 to 12 weeks | New features and breaking changes, each break with its migration entry. |
+| Minor (0.2.0, 0.3.0, ...) | When the P1 scope of its [milestone](https://github.com/ponkoengine/ponko/milestones) is done, roughly every 8 to 12 weeks | New features and breaking changes, each break with its migration entry. |
 | 1.0 | When the readiness checklist (#432) is complete | The last 0.x release with the compatibility promise attached. It breaks nothing. |
 
 - **A release is scope, not a date.** P1 issues define a minor; what is not
@@ -135,8 +135,8 @@ Not covered by the versions, and allowed to change in any release:
 - Error message text, log output, the inspector's look, and the exact
   frames rendered: tests should check behavior, not strings or pixels.
 - Performance. Regressions are bugs, and benchmark numbers go in PRs, but
-  timings are not part of the API. CI tracks the instruction counts of a few
-  workloads per commit and comments on pull requests that move them
+  timings are not part of the API. A pull request that touches the engine
+  compares the instruction counts of a few workloads with its base
   (`crates/ponko_bench/README.md`, "Tracking results over time").
 
 ## Errors and panics
@@ -232,7 +232,7 @@ and import modules as needed; `use ponko::*;` brings in the modules, not the
 prelude.
 `ponko::ecs_core` is the one way into the ECS crate beyond the prelude, and
 `d2`/`d3` are the one path of the types named after a dimension.
-`scripts/check-naming.py --paths` fails CI on an item with a second public
+`scripts/check-naming.py --paths` fails on an item with a second public
 path; a `#[deprecated]` alias of a moved item stays for one minor.
 
 The prelude's contents are API too: removing a name breaks code that used
@@ -286,7 +286,7 @@ documented there. Ponko picks the version:
 ## Minimum Rust version (MSRV)
 
 Ponko builds with **Rust 1.95** and newer (`rust-version` in Cargo.toml;
-CI checks it). The MSRV may rise in a minor release (0.y.0), never in a
+the `msrv` job of `scripts/checks.yml` checks it). The MSRV may rise in a minor release (0.y.0), never in a
 patch release, and the CHANGELOG says so. It follows the dependencies
 (wgpu, egui, rapier) and stays at least a few releases behind stable.
 
@@ -469,12 +469,12 @@ What gives the same world from the same seed and inputs:
 
 ## Platforms
 
-Tested in CI on every change: Linux x86-64, macOS (Apple Silicon) and
-Windows x86-64. Built in CI on every change: the web (wasm32, WebGPU with a
-WebGL2 fallback); small web builds (2D, 3D and the complete-game reference)
-are also run in headless Chromium and WebKit with WebGL2 in the merge
-queue (`web/smoke/`; Firefox is tried there too, but the runner's headless
-Firefox has no WebGL2, so it is reported, not verified). WebGPU is tried
-there too and reported, but a runner without a GPU usually can't show it, so
-WebGPU is verified on real GPUs by hand, not gated in CI. Other targets that
-wgpu and winit support usually work but aren't tested.
+The list of checks (`scripts/checks.yml`, run locally by maintainers; there
+is no CI) covers Linux x86-64, macOS (Apple Silicon) and Windows x86-64, and
+builds the web (wasm32, WebGPU with a WebGL2 fallback); small web builds (2D,
+3D and the complete-game reference) are also run in headless Chromium and
+WebKit with WebGL2 (`web/smoke/`; Firefox is tried there too, but headless
+Firefox on a GPU-less Linux machine has no WebGL2, so it is reported, not
+verified). WebGPU is tried there too and reported, but a machine without a
+GPU usually can't show it, so WebGPU is verified on real GPUs by hand. Other
+targets that wgpu and winit support usually work but aren't tested.

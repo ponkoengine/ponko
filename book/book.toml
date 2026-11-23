@@ -7,8 +7,8 @@ src = "src"
 
 [output.html]
 additional-css = ["theme/lang-pair.css"]
-git-repository-url = "https://gitlab.com/ponkoengine/ponko"
-edit-url-template = "https://gitlab.com/ponkoengine/ponko/-/edit/main/book/{path}"
+git-repository-url = "https://github.com/ponkoengine/ponko"
+edit-url-template = "https://github.com/ponkoengine/ponko/edit/main/book/{path}"
 # The website builds the guide into /guide/ (it overrides this).
 site-url = "/guide/"
 

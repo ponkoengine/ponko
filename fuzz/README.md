@@ -8,7 +8,7 @@ bound. Errors are fine. Where the input is accepted, the target also checks
 what must hold for it (a loaded scene saves and loads again, an action map
 reads back).
 
-The list of targets, with the seconds the weekly job runs each, is
+The list of targets, with the seconds a full run gives each, is
 `fuzz/targets.txt` (one target per line). A new target needs its file in
 `fuzz_targets/`, its `[[bin]]` in `Cargo.toml`, its line there and its row
 in this table; `python3 scripts/check-fuzz-list.py` fails when one is missing.
@@ -90,7 +90,7 @@ cd fuzz
 cargo +nightly fuzz run gltf corpus/gltf -- -max_total_time=600 -rss_limit_mb=2048 -timeout=10
 ```
 
-Or every target in turn, with the flags the weekly job uses:
+Or every target in turn, with the seconds of the list:
 
 ```sh
 fuzz/run-all.sh            # as long as targets.txt says; findings in fuzz/findings.tsv
@@ -117,12 +117,11 @@ loader's other tests, named after what must hold (for example
 only when it is small (a few kilobytes) and reaches code the existing seeds
 don't.
 
-## The weekly job
+## Full runs
 
-`.github/workflows/fuzz.yml` runs every target for three minutes each Monday
-on `main` (or by hand, with the seconds per target), from the committed seeds
-and the fixtures. A finding fails the run and opens an issue,
-"Fuzzing: `<target>` (`<kind>`)", or comments on the open one; the inputs
-are in the run's `fuzz-findings` artifact. Nothing runs on pull requests:
-run the target of a loader you change for a few minutes before you open
-one.
+Nothing runs the fuzz targets by itself (the project has no CI). Run the
+target of a loader you change for a few minutes before you open a pull
+request. Maintainers run every target from time to time on `main`
+(`fuzz/seed-corpus.sh`, then `fuzz/run-all.sh`), from the committed seeds and
+the fixtures, and open an issue, "Fuzzing: `<target>` (`<kind>`)", for a
+finding, with the input attached.

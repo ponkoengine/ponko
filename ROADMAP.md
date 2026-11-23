@@ -23,8 +23,8 @@ This roadmap is directional. Ordering changes with correctness evidence, measure
 | Multiplayer, synchronization and servers | Partial | [lockstep](src/net.rs), [snapshots](src/net/snapshots.rs), [messages](src/net/messages.rs), [replication tests](tests/net_replication.rs), headless runner. Live transport/relay behavior and a complete deployment/authority workflow require verification. |
 | Save/load and serialization | Implemented | [reflection](src/reflect.rs), [scenes](src/scene.rs), [stability contract](STABILITY.md). [Ember Hop](examples/ember_hop) saves and loads its runs as world save slots ([tests](tests/ember_hop.rs)). Applications own custom component migrations and external service persistence. |
 | GPU compute and custom graphics | Partial | [compute](src/three/compute.rs), [effects](src/three/effect.rs), [shader example](examples/shaders.rs). Named-stage custom passes shipped in 0.1.0. Stencil on materials (#397) and a custom sky hook (#398) are open. |
-| Build tooling, packaging and deployment | Partial | [Cargo manifest](Cargo.toml), [web tooling](web), [release workflow](.github/workflows/release.yml). CI/release scripts are not proof that a complete reference game has shipped through every path. |
-| Desktop and browser portability | Requires verification | Target-specific implementation and [CI configuration](.github/workflows/ci.yml) exist; see [platform policy](STABILITY.md#platforms). Full visual/runtime parity and individual GPU feature fallbacks need adapter evidence; mobile is not a validated product commitment. |
+| Build tooling, packaging and deployment | Partial | [Cargo manifest](Cargo.toml), [web tooling](web), [release steps](CONTRIBUTING.md#releasing). The release steps and scripts are not proof that a complete reference game has shipped through every path. |
+| Desktop and browser portability | Requires verification | Target-specific implementation and the [list of checks](scripts/checks.yml) exist; see [platform policy](STABILITY.md#platforms). Full visual/runtime parity and individual GPU feature fallbacks need adapter evidence; mobile is not a validated product commitment. |
 | Debugging, profiling and automated testing | Implemented | [tests](tests), [GPU tests](src/render), [performance reports](src/perf_report.rs), [inspector](src/inspector.rs). Broader reproducible matrices and diagnostics remain below. |
 | AI development and runtime control | Partial | [MCP](crates/ponko_mcp/src/lib.rs), [control](src/control.rs), [agent guide](book/src/agents.md): state, stepping, launch, screenshots, logs and profiling exist. Reliable autonomous complete-game production is not established. |
 | End-to-end shipping reference workflow | Partial | Two packaged, smoke-tested 2D reference games. [Coin Dash](examples/coin_dash): menus, rebinding, sound and its own saves ([packaging](book/src/packaging.md)). [Ember Hop](examples/ember_hop), a platformer: Tiled levels with autotiled ground and tile colliders, 2D physics with sensors as its rules, prefabs with children, a title scene, world save slots at checkpoints, sound files and streamed music, particles, a following camera, keyboard and gamepad ([its chapter](book/src/ember-hop.md)). Both are packaged by `ponko package`, and CI plays each package on Linux, macOS and Windows; both build for the web. [Shard Grove](examples/shard_grove), the 3D reference: a glTF level that is drawn, solid and baked into a navigation mesh, skinned glTF characters with animation state machines, a character controller, enemies on the navmesh, positional sound, menus, a world-space sign, quality presets and saves ([its chapter](book/src/shard-grove.md)); it packages and builds for the web, CI doesn't play its package yet. Open: the web gallery that publishes them (#373), the gaps the 3D reference found (#375), and the gaps the platformer found (#437–#440). |
@@ -64,7 +64,7 @@ scene editing in 3D.
 | Content | Compressed textures #403; glTF extensions #404; asset packs #405; animation retargeting #408 |
 | Rendering | Motion vectors for animated meshes #391; and for custom vertex functions #392; GI coverage #394; stencil #397; custom sky #398; probe refresh #399; transparency and particles #400; post effects #401; instance batch streaming #396; GPU memory reports #393; 2D lighting #380 |
 | Text and UI | Shaping, fallback and right-to-left #409; IME #410; localization #411; rich text #412; screen readers on Windows and Linux #413 |
-| Tools | 3D scene editing #415; a 3D reference game #375; WebGPU gated in CI #427 |
+| Tools | 3D scene editing #415; a 3D reference game #375; WebGPU checked on real GPUs #427 |
 | API and simulation | Third-party types in the API #385; dependency-based system batches #388; save migrations #368; navmesh carving #407 |
 
 ### 0.4.0: multiplayer and platforms
@@ -91,7 +91,7 @@ what is captured are in the guide's "Rollback" section
 1.0 is declared when the readiness checklist #432 is complete, not
 on a date: the API has gone two minor releases with only mechanical breaks,
 reference games in 2D and 3D and games by other people have shipped on it,
-every named platform is gated in CI, and the compatibility policy for after
+every named platform passes the list of checks, and the compatibility policy for after
 1.0 is written. Before it come the API freeze review #389 and the
 C ABI decision #390. The last 0.x release carries every remaining
 break; 1.0.0 breaks nothing.
@@ -99,7 +99,7 @@ break; 1.0.0 breaks nothing.
 ### Later
 
 Research and lower-priority work in the
-[Later milestone](https://gitlab.com/ponkoengine/ponko/-/milestones) moves
+[Later milestone](https://github.com/ponkoengine/ponko/milestones) moves
 into a release when a real game needs it: fuzzing, more C library targets,
 2D skeletal animation, contact-hardening shadows, better screen-space
 reflections, skinned instance batches, a binary save format, C and C++ on

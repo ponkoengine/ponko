@@ -23,7 +23,7 @@ What every entry point promises, whatever the bytes:
 The fuzz targets in `fuzz/` (its README says how to run them) feed each
 entry point random and mutated bytes; a finding is fixed in the loader and
 kept fixed by a regression test next to it. Every target is named in the
-fuzz list, `fuzz/targets.txt`, with the seconds the weekly job runs it, and
+fuzz list, `fuzz/targets.txt`, with the seconds a full run gives it, and
 `python3 scripts/check-fuzz-list.py` fails for a target the list doesn't
 name.
 

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Fails if this public repo would carry a word from a private list (names of
 # private projects that use the engine). The list itself never lives here: it
-# comes from $LEAK_WORDS, one word per line (CI sets it from a secret), or the
+# comes from $LEAK_WORDS, one word per line, or the
 # file ~/.config/crabby/leak-words.txt. Without either it does nothing.
 #
 # Hits are reported by place only (file:line), never the text, so logs don't

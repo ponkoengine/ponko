@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Check the published crates for semver breaks (the `Semver` job of ci.yml).
+"""Check the published crates for semver breaks (the `semver` job of checks.yml).
 
-    semver-checks.py run        # what CI does; reads the environment below
+    semver-checks.py run [--base BRANCH] [--breaking]
     semver-checks.py selftest   # check the decisions with made-up input
 
 `cargo semver-checks` compares the public API of each published crate with
@@ -24,16 +24,17 @@ Which packages and features are checked comes from Cargo: every package
 that can be published (not `publish = false`), with the features it builds on
 docs.rs (`[package.metadata.docs.rs]`), so a new crate is covered without
 touching this file. Crates the tool can't read (proc-macro crates, binaries)
-are listed in the job summary.
+are listed in the report.
 
-The environment (ci.yml sets it): EVENT (github.event_name), BASE_REF
-(github.base_ref), REF_NAME (github.ref_name), BASE_SHA (the pull request's
-base commit, or a push's `before`), PR (a pull request's number), SHA,
-REPO and GH_TOKEN (for `gh`).
+`run` checks the current checkout as a change for the branch BRANCH (default
+`main`; a `release-*` branch, or a checkout on one, is release mode): the
+change is compared with `git merge-base origin/BRANCH HEAD`, so fetch first.
+`--breaking` says the pull request carries (or will carry) the `breaking`
+label; without it a break this change adds fails, and with it a
+`### Breaking changes` fragment is required. Nothing is read from a server.
 """
 from fnmatch import fnmatch
 import json
-import os
 from pathlib import Path
 import re
 import subprocess
@@ -103,7 +104,8 @@ def verdict(mode, breaks, new_breaks, errors, labeled, fragment):
     lines.append(f'This change breaks the API of {", ".join(new_breaks)}.')
     missing = []
     if not labeled:
-        missing.append(f'the `{LABEL}` label on the pull request (add it, then re-run this job)')
+        missing.append(f'the `{LABEL}` label on the pull request (add it, then run this again '
+                       'with --breaking)')
     if not fragment:
         missing.append(f'a changelog fragment with a `### {HEADING}` section naming the replacement')
     if missing:
@@ -126,7 +128,7 @@ def label_verdict(mode, labeled, fragment):
     if labeled and not fragment:
         return False, [f'The `{LABEL}` label needs a migration note: add a changelog fragment with a '
                        f'`### {HEADING}` entry (what changed, what to write instead, a before/after '
-                       'snippet; changelog.d/README.md), then re-run this job. Or remove the label '
+                       'snippet; changelog.d/README.md), then run this again. Or remove the label '
                        'if nothing breaks.']
     if fragment and not labeled:
         return True, [f'This change has a `### {HEADING}` fragment but no `{LABEL}` label: a '
@@ -149,12 +151,7 @@ def packages():
 
 
 def group(title):
-    print(f'::group::{title}' if os.environ.get('GITHUB_ACTIONS') else f'--- {title}', flush=True)
-
-
-def endgroup():
-    if os.environ.get('GITHUB_ACTIONS'):
-        print('::endgroup::', flush=True)
+    print(f'--- {title}', flush=True)
 
 
 def check(package, release_type, baseline, label):
@@ -164,58 +161,25 @@ def check(package, release_type, baseline, label):
     group(f'{label}: {package["name"]} ({" ".join(cmd[5:])})')
     done = run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     print(done.stdout, end='')
-    endgroup()
     package['output'] = done.stdout
     if done.returncode == 0:
         return 'ok'
     if done.returncode == BREAK_EXIT:
         return 'break'
     if 'not found in registry' in done.stdout:
-        print(f'::notice::{package["name"]} is not on crates.io yet: nothing to compare with.')
+        print(f'{package["name"]} is not on crates.io yet: nothing to compare with.')
         return 'unpublished'
     return 'error'
 
 
-def gh(*args):
-    done = run(['gh', *args], capture_output=True)
-    if done.returncode != 0:
-        sys.exit(f'gh {" ".join(args)} failed: {done.stderr.strip()}')
-    return done.stdout.strip()
+def current_branch():
+    return run(['git', 'branch', '--show-current'], capture_output=True, check=True).stdout.strip()
 
 
-def pull_request_for(env):
-    """(number, base branch) of the pull request this run speaks for, or (None, None)."""
-    event, repo = env['EVENT'], env.get('REPO', '')
-    if event == 'pull_request':
-        return env.get('PR') or None, env['BASE_REF']
-    if event == 'push':
-        # The merged pull request of a commit on main.
-        number = gh('api', f'repos/{repo}/commits/{env["SHA"]}/pulls', '--jq', '.[0].number // empty')
-        return (number or None), None
-    # workflow_dispatch (the `full-ci` label): the branch's open pull request.
-    found = gh('pr', 'list', '--repo', repo, '--head', env['REF_NAME'], '--state', 'open',
-               '--json', 'number,baseRefName', '--jq', '.[0] // empty | "\\(.number) \\(.baseRefName)"')
-    return tuple(found.split()) if found else (None, None)
-
-
-def base_commit(env, target):
+def base_commit(target):
     """The commit the change is compared with: the one it is based on."""
-    before = env.get('BASE_SHA', '')
-    if env['EVENT'] == 'workflow_dispatch' or not before or set(before) == {'0'}:
-        if env['EVENT'] == 'push':
-            return run(['git', 'rev-parse', 'HEAD^'], capture_output=True, check=True).stdout.strip()
-        branch = target or 'main'
-        return run(['git', 'merge-base', f'origin/{branch}', 'HEAD'],
-                   capture_output=True, check=True).stdout.strip()
-    return before
-
-
-def labeled(env, pr):
-    if not pr:
-        print('::notice::No pull request found: there is no label to read.')
-        return False
-    names = gh('pr', 'view', pr, '--repo', env['REPO'], '--json', 'labels', '--jq', '.labels[].name')
-    return LABEL in names.split()
+    return run(['git', 'merge-base', f'origin/{target}', 'HEAD'],
+               capture_output=True, check=True).stdout.strip()
 
 
 def breaking_fragment(base):
@@ -230,12 +194,12 @@ def breaking_fragment(base):
 
 
 def failures(package):
-    """The lint sections of a failed run, for the job summary."""
+    """The lint sections of a failed run, for the report."""
     match = re.search(r'--- failure.*?(?=\n\s*Summary)', package.get('output', ''), re.S)
     return match.group(0).strip() if match else package.get('output', '').strip()[-2000:]
 
 
-def summary(path, mode, checked, skipped, results, ok, lines):
+def summary(mode, checked, skipped, results, lines):
     out = [f'## Semver checks ({mode} mode)', '', *lines, '',
            '| Crate | Against the last release | Added by this change |', '|---|---|---|']
     for p in checked:
@@ -248,16 +212,19 @@ def summary(path, mode, checked, skipped, results, ok, lines):
             if results[p['name']].get(key) == 'break':
                 out += ['', f'### `{p["name"]}`', '```', failures(p), '```']
                 break
-    text = '\n'.join(out) + '\n'
-    if path:
-        with open(path, 'a') as f:
-            f.write(text)
+    print('\n'.join(out))
 
 
-def main_run():
-    env = os.environ
-    pr, target = pull_request_for(env)
-    mode = decide_mode(target or env.get('BASE_REF'), env.get('REF_NAME'))
+def main_run(args):
+    branch = current_branch()
+    target = branch if fnmatch(branch, RELEASE_BRANCHES) else 'main'
+    if '--base' in args:
+        index = args.index('--base')
+        if index + 1 >= len(args):
+            sys.exit('--base needs a branch name')
+        target = args[index + 1]
+    is_labeled = '--breaking' in args
+    mode = decide_mode(target, branch)
     pkgs = packages()
     checked = [p for p in pkgs if not skip_reason(p)]
     skipped = [p for p in pkgs if skip_reason(p)]
@@ -274,10 +241,9 @@ def main_run():
     breaks = [n for n, r in results.items() if r['registry'] == 'break']
     errors = [n for n, r in results.items() if r['registry'] == 'error']
 
+    base = base_commit(target)
     new_breaks = None
-    is_labeled = has_fragment = False
     if mode == 'main' and breaks and not errors:
-        base = base_commit(env, target)
         print(f'Breaks since the last release: {", ".join(breaks)}. Comparing with {base[:10]} '
               'to see which this change adds.')
         for p in checked:
@@ -285,22 +251,13 @@ def main_run():
                 results[p['name']]['new'] = check(p, 'minor', ['--baseline-rev', base], 'before this change')
         errors += [n for n, r in results.items() if r.get('new') == 'error']
         new_breaks = [n for n, r in results.items() if r.get('new') == 'break']
-        if new_breaks:
-            is_labeled = labeled(env, pr)
-            has_fragment = breaking_fragment(base)
+    has_fragment = breaking_fragment(base)
 
     ok, lines = verdict(mode, breaks, new_breaks, errors, is_labeled, has_fragment)
-    if pr:
-        if not new_breaks:
-            # Not read above: the label and fragment of a change the tool found no break in.
-            is_labeled = labeled(env, pr)
-            has_fragment = breaking_fragment(base_commit(env, target))
-        label_ok, label_lines = label_verdict(mode, is_labeled, has_fragment)
-        ok, lines = ok and label_ok, lines + label_lines
+    label_ok, label_lines = label_verdict(mode, is_labeled, has_fragment)
+    ok, lines = ok and label_ok, lines + label_lines
     print()
-    for line in lines:
-        print(f'::{"notice" if ok else "error"}::{line}' if os.environ.get('GITHUB_ACTIONS') else line)
-    summary(env.get('GITHUB_STEP_SUMMARY'), mode, checked, skipped, results, ok, lines)
+    summary(mode, checked, skipped, results, lines)
     sys.exit(0 if ok else 1)
 
 
@@ -352,7 +309,7 @@ def selftest():
 if __name__ == '__main__':
     command = sys.argv[1] if len(sys.argv) > 1 else ''
     if command == 'run':
-        main_run()
+        main_run(sys.argv[2:])
     elif command == 'selftest':
         selftest()
     else:

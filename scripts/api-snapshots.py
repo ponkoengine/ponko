@@ -2,8 +2,8 @@
 """Keep a listing of every published crate's public API in `api/`.
 
     api-snapshots.py update    # regenerate api/: run this after changing public API
-    api-snapshots.py check     # what CI does: regenerate, fail with a diff if api/ differs
-    api-snapshots.py pins      # print TOOL_VERSION=... and NIGHTLY=... (CI reads them)
+    api-snapshots.py check     # regenerate, fail with a diff if api/ differs
+    api-snapshots.py pins      # print TOOL_VERSION=... and NIGHTLY=... (the pinned tools)
     api-snapshots.py selftest  # check the planning and diffing with made-up input
 
 A pull request can add, rename or widen public items without anyone noticing
@@ -39,10 +39,10 @@ docs.rs target: x86_64 Linux. The listing differs by platform in two ways
 macOS the script builds for `x86_64-apple-darwin` (same CPU, no Linux system
 libraries needed), removes the macOS-only items, MACOS_ONLY_ITEMS, and puts
 the Linux-only ones, LINUX_ONLY_ITEMS, in their place. On any
-other host it stops and says to use the files CI uploads. The result is the
-same text as on the Linux runner; CI has the last word. A new public item
-behind `cfg(target_os = ...)` shows up as a diff in CI: add it to
-MACOS_ONLY_ITEMS (or take the regenerated files from the CI run).
+other host it stops and says to regenerate the files on Linux or macOS. The
+result is the same text as on x86_64 Linux, which has the last word. A new
+public item behind `cfg(target_os = ...)` shows up as a diff between the two:
+add it to MACOS_ONLY_ITEMS (or regenerate the files on Linux).
 
 Relation to scripts/semver-checks.py: the snapshot shows *every* change to the
 public API, growth included, so a reviewer decides whether the surface is meant.
@@ -82,7 +82,7 @@ MACOS_ONLY_ITEMS = ['pub unsafe fn ponko::ui::UiAccessAdapter::for_ns_view(']
 LINUX_ONLY_ITEMS = {
     'pub unsafe fn ponko::ui::UiAccessAdapter::for_ns_view(': ['pub fn ponko::ui::UiAccessAdapter::for_atspi(&str) -> Self'],
 }
-# How many lines of one file's diff the job summary shows.
+# How many lines of one file's diff the summary shows.
 SUMMARY_DIFF_LINES = 300
 
 # The macOS host builds for the same CPU as the Linux runner.
@@ -128,8 +128,8 @@ def host_plan(system, machine):
     if system == 'Darwin':
         return ['--target', MACOS_TARGET], MACOS_ONLY_ITEMS, None
     return [], [], (f'The listing is made on x86_64 Linux or macOS, not on {system} {machine}. '
-                    'Take the regenerated files from the "api-regenerated" artifact of the '
-                    'failed CI run (API snapshots job) and copy them into api/.')
+                    'Regenerate them there (`api-snapshots.py update`, or `check` with '
+                    'API_SNAPSHOTS_REGENERATED=<dir>) and copy them into api/.')
 
 
 def drop_lines(text, prefixes, replacements=None):
@@ -177,7 +177,7 @@ def diff_files(expected, actual):
 
 
 def failure_message(changes):
-    """The text a failing check prints (and puts in the job summary)."""
+    """The text a failing check prints."""
     files = ', '.join(f'`api/{path}` ({kind})' for path, kind, _ in changes)
     return [
         'The public API of this change differs from the snapshot in `api/`.',
@@ -223,12 +223,11 @@ def packages():
 
 
 def group(title):
-    print(f'::group::{title}' if os.environ.get('GITHUB_ACTIONS') else f'--- {title}', flush=True)
+    print(f'--- {title}', flush=True)
 
 
 def endgroup():
-    if os.environ.get('GITHUB_ACTIONS'):
-        print('::endgroup::', flush=True)
+    pass
 
 
 def require_tools():
@@ -251,7 +250,7 @@ def require_tools():
                         capture_output=True).stdout.split()
         if MACOS_TARGET not in installed:
             problems.append(f'The {MACOS_TARGET} standard library is needed on macOS (the listing '
-                            f'is made for x86_64, like CI):\n'
+                            f'is made for x86_64):\n'
                             f'    rustup target add {MACOS_TARGET} --toolchain {NIGHTLY}')
     if problems:
         sys.exit('\n\n'.join(problems))
@@ -333,15 +332,8 @@ def main_check():
     for _, _, lines in changes:
         print('\n'.join(lines))
     print()
-    ci = os.environ.get('GITHUB_ACTIONS')
-    if ci:
-        print(f'::error title=Public API differs from api/::Run `{UPDATE_COMMAND}` and commit api/.')
-    path = os.environ.get('GITHUB_STEP_SUMMARY')
-    if path:
-        with open(path, 'a') as f:
-            f.write(summary_text(changes))
-    # The regenerated files, for the job to upload: a contributor who cannot
-    # run the tool (Windows, say) takes them from the run's artifacts.
+    # The regenerated files, written elsewhere when asked: a contributor who
+    # cannot run the tool (Windows, say) can take them from a maintainer.
     out = os.environ.get('API_SNAPSHOTS_REGENERATED')
     if out:
         for rel, text in files.items():

@@ -1,19 +1,16 @@
 #!/usr/bin/env python3
 """Refuse a release whose tag, crate versions and CHANGELOG section disagree.
 
-    release-check.py check TAG      TAG is vX.Y.Z or vX.Y.Z-rc.N; the release
-                                    workflow runs this before it builds or
-                                    publishes anything
-    release-check.py ci TAG         fail unless CI succeeded on the tagged commit,
-                                    on main or its release branch (asks the
-                                    Actions API with GITHUB_TOKEN)
+    release-check.py check TAG      TAG is vX.Y.Z or vX.Y.Z-rc.N; the maintainer
+                                    runs this before building or publishing
+                                    anything
     release-check.py notes TAG FILE
                                     write that version's CHANGELOG section,
                                     the GitHub release's notes, to FILE (a
                                     release's notes end with a link to the
                                     web gallery of the examples)
     release-check.py published      every version of our crates on crates.io
-                                    has a git tag (a scheduled workflow runs it)
+                                    has a git tag
     release-check.py selftest       check the decisions with made-up input
 
 `check` fails unless all of these hold:
@@ -40,18 +37,12 @@
   the same name, as soon as its section lists a break (testers need it most);
 - every publishable crate under crates/ carries copies of the root
   LICENSE-MIT, LICENSE-APACHE and NOTICE (crates.io gets each crate's own
-  folder), identical to the root ones; `selftest` checks this too, in CI;
+  folder), identical to the root ones; `selftest` checks this too;
 - with `--on-branch`: the tagged commit is an ancestor of origin/main or of
   origin/release-X.Y (the patch branch of the tag's minor: v0.1.1 on
   release-0.1, never on release-0.2), i.e. it was merged through a pull
-  request (the workflow checks out the full history for this). Whether CI
-  passed on it is not looked at here, but by `ci`:
-
-`ci` fails unless a run of ci.yml on that exact commit, on `main` or on the
-tag's own `release-X.Y`, finished successfully (a pull request's run is of its
-head, not of the merge, so it does not count). A run still going gets its own
-message ("wait, then re-run this job"), so does a failed or cancelled one and
-a commit CI never ran on.
+  request (it needs the full history). Whether the checks passed on it is
+  the maintainer's job: run scripts/checks.yml on the tagged commit first.
 
 `published` asks the crates.io API (one read request per crate) and compares
 with `git tag`; it needs no token.
@@ -59,7 +50,6 @@ with `git tag`; it needs no token.
 See "Releasing" in CONTRIBUTING.md for the whole procedure.
 """
 import json
-import os
 import re
 import subprocess
 import sys
@@ -159,8 +149,8 @@ def candidate_preamble(version):
             "unchanged if no regression turns up.\n\n")
 
 
-# The web gallery of the examples (web/gallery/README.md), which the release
-# workflow publishes for a release that is the newest version.
+# The web gallery of the examples (web/gallery/README.md), which the
+# maintainer publishes for a release that is the newest version.
 GALLERY_URL = "https://ponkoengine.github.io/ponko/"
 
 
@@ -308,83 +298,6 @@ def branch_problems(tag, repo=ROOT):
     return []
 
 
-def ci_problems(tag, sha, runs):
-    """Why `tag`'s commit does not have a green CI run on main or its release branch, as messages.
-
-    runs: the workflow runs of ci.yml for that commit, as the Actions API
-    lists them (dicts with head_sha, head_branch, event, status, conclusion
-    and html_url). Only a run of a push (or a manual run) on `main` or on
-    the tag's own release-X.Y counts: a pull request's run is of the pull
-    request's head, not of the merge. One successful run is enough; a run
-    that is still going (or being re-run) is reported before a failed one,
-    because it may still turn green.
-    """
-    found = TAG.match(tag)
-    if not found:
-        return [f"`{tag}` is not {TAG_HELP}"]
-    branch = release_branch(found.group(1))
-    counted = [r for r in runs
-               if r.get("head_sha") == sha and r.get("event") != "pull_request"
-               and r.get("head_branch") in ("main", branch)]
-    if any(r.get("status") == "completed" and r.get("conclusion") == "success" for r in counted):
-        return []
-    short = sha[:10]
-    pending = [r for r in counted if r.get("status") != "completed"]
-    if pending:
-        return [f"CI is still running on {short} ({pending[0].get('html_url', 'no link')}): "
-                f"{tag} may only be released once it succeeded. Wait for it to finish, then "
-                "re-run this job (Actions, the Release run, \"Re-run failed jobs\")."]
-    if counted:
-        shown = "; ".join(f"{r.get('head_branch')}: {r.get('conclusion')} ({r.get('html_url', 'no link')})"
-                          for r in counted[:3])
-        return [f"CI did not succeed on {short}, the commit of {tag} ({shown}). Fix it on main "
-                "(or the release branch) through a pull request and tag the fixed commit; if the run "
-                "only failed by chance or was cancelled, re-run it first (\"Re-run failed jobs\") and "
-                "then re-run this job."]
-    return [f"no CI run of {short}, the commit of {tag}, was found on main or {branch}: CI runs on "
-            f"every push to them, so tag a commit that was merged to one of them (a pull request's "
-            "own run does not count)"]
-
-
-def fetch_ci_runs(repo, sha, token, api="https://api.github.com"):
-    """The ci.yml runs of commit `sha` (needs `actions: read`); exits with a message if the API fails."""
-    url = f"{api}/repos/{repo}/actions/workflows/ci.yml/runs?head_sha={sha}&per_page=100"
-    request = urllib.request.Request(url, headers={
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "ponko-release-check",
-    })
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            return json.load(response)["workflow_runs"]
-    except urllib.error.HTTPError as error:
-        sys.exit(f"GitHub answered {error.code} when asking for the CI runs of {sha[:10]}; "
-                 "the job needs `actions: read`. Try again later")
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, KeyError) as error:
-        sys.exit(f"could not ask GitHub for the CI runs of {sha[:10]}: {error}")
-
-
-def ci(tag):
-    """Fails unless CI succeeded on the tagged commit (GITHUB_TOKEN and GITHUB_REPOSITORY are read)."""
-    if not TAG.match(tag):
-        sys.exit(f"`{tag}` is not {TAG_HELP}")
-    token, repo = os.environ.get("GITHUB_TOKEN"), os.environ.get("GITHUB_REPOSITORY")
-    if not token or not repo:
-        sys.exit("release-check.py ci needs GITHUB_TOKEN and GITHUB_REPOSITORY (the release workflow sets them)")
-    sha = git("rev-parse", "--verify", "--quiet", f"{tag}^{{commit}}").stdout.strip()
-    if not sha:
-        sys.exit(f"{tag} does not exist in this checkout")
-    found = ci_problems(tag, sha, fetch_ci_runs(repo, sha, token, os.environ.get("GITHUB_API_URL", "https://api.github.com")))
-    if found:
-        print(f"Not releasing {tag}:")
-        for message in found:
-            print(f"  - {message}")
-        return 1
-    print(f"{tag}: CI succeeded on {sha[:10]}.")
-    return 0
-
-
 def check(tag, on_branch):
     fragments = [p.name for p in (ROOT / "changelog.d").glob("*.md") if p.name != "README.md"]
     found = TAG.match(tag)
@@ -511,44 +424,6 @@ def on_branch_selftest():
         assert "could not fetch" in branch_problems("v0.1.0", work)[0], "no main to compare with is refused"
 
 
-def ci_selftest():
-    sha = "a" * 40
-
-    def run(branch="main", status="completed", conclusion="success", event="push", head=sha):
-        return {"head_sha": head, "head_branch": branch, "event": event, "status": status,
-                "conclusion": conclusion, "html_url": f"https://example.com/{branch}/{status}"}
-
-    assert ci_problems("v0.2.0", sha, [run()]) == [], "a green run on main passes"
-    assert ci_problems("v0.2.0-rc.1", sha, [run()]) == [], "so does a candidate's"
-    assert ci_problems("v0.1.1", sha, [run("release-0.1")]) == [], "a green run on the tag's release branch passes"
-    assert ci_problems("v0.1.1", sha, [run("main", event="workflow_dispatch")]) == [], "a manual run on main counts"
-    assert ci_problems("v0.2.0", sha, [run(conclusion="failure"), run()]) == [], "one green run is enough"
-    assert ci_problems("v0.2.0", sha, [run(conclusion="failure")])[0].startswith("CI did not succeed on aaaaaaaaaa"), (
-        "a failed run stops the release"
-    )
-    assert "re-run" in ci_problems("v0.2.0", sha, [run(conclusion="cancelled")])[0], "a cancelled run says how to go on"
-    found = ci_problems("v0.2.0", sha, [run(status="in_progress", conclusion=None)])
-    assert len(found) == 1 and found[0].startswith("CI is still running on aaaaaaaaaa") and "re-run this job" in found[0], (
-        "a run still in progress is reported as such, not as a failure"
-    )
-    assert "still running" in ci_problems("v0.2.0", sha, [run(conclusion="failure"), run(status="queued", conclusion=None)])[0], (
-        "a run in progress is named before an older failure of the same commit"
-    )
-    assert "no CI run" in ci_problems("v0.2.0", sha, [])[0], "a commit CI never ran on is refused"
-    assert "no CI run" in ci_problems("v0.2.0", sha, [run(event="pull_request")])[0], (
-        "a pull request's run is not the merge commit's CI"
-    )
-    assert "no CI run" in ci_problems("v0.2.0", sha, [run(head="b" * 40)])[0], "a run of another commit does not count"
-    assert "no CI run" in ci_problems("v0.2.0", sha, [run("release-0.1")])[0], (
-        "release-0.1 is not the branch for a 0.2 tag"
-    )
-    assert "no CI run" in ci_problems("v0.2.0", sha, [run("feature")])[0], "a run on another branch does not count"
-    assert ci_problems("v0.2.0", sha, [run("feature", conclusion="failure"), run()]) == [], (
-        "a failure on an unrelated branch does not matter"
-    )
-    assert ci_problems("0.2.0", sha, [run()]) == [f"`0.2.0` is not {TAG_HELP}"]
-
-
 def selftest():
     def toml(name, version, deps=""):
         return tomllib.loads(f'[package]\nname = "{name}"\nversion = "{version}"\n[dependencies]\n{deps}')
@@ -673,7 +548,6 @@ def selftest():
         ("ponko", "0.0.2")
     ], "a published version needs its tag"
     assert untagged({"ponko": ["0.0.1"]}, {"v0.0.1", "v1.0.0"}) == []
-    ci_selftest()
     on_branch_selftest()
     with tempfile.TemporaryDirectory(prefix="release-check-") as tmp:
         tmp = Path(tmp)
@@ -698,8 +572,6 @@ def main():
     command = sys.argv[1] if len(sys.argv) > 1 else ""
     if command == "check" and len(sys.argv) > 2:
         return check(sys.argv[2], "--on-branch" in sys.argv)
-    if command == "ci" and len(sys.argv) > 2:
-        return ci(sys.argv[2])
     if command == "notes" and len(sys.argv) > 3:
         return notes(sys.argv[2], sys.argv[3])
     if command == "published":

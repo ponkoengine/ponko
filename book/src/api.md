@@ -18,7 +18,7 @@ To read the reference that goes with the guide, build it from a checkout of
 have):
 
 ```sh
-git clone https://gitlab.com/ponkoengine/ponko
+git clone https://github.com/ponkoengine/ponko
 cd ponko
 cargo doc -p ponko --no-deps --features "3d,physics,physics3d,navmesh" --open
 ```

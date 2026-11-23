@@ -16,14 +16,8 @@ book's "GPU regression tests").
         (added, changed or removed). Each must come with changed metadata
         and a reason. With --evidence, writes the before and after images
         and a page showing them side by side to DIR; with --summary,
-        appends a Markdown table to FILE (a CI job summary). Prints
-        `changed=<n>` last.
-
-    check-reference-images.py --review --repo R --pr N --label L ...
-        CI's review gate for a pull request that changes references: passes
-        when the pull request carries the label and the label is not older
-        than the push that last changed them. A stale label is taken off.
-        Needs the gh CLI and a token (GH_TOKEN).
+        appends a Markdown table to FILE (for the pull request's
+        description). Prints `changed=<n>` last.
 
     check-reference-images.py --self-test
         Runs the script's own checks on made-up folders.
@@ -302,7 +296,7 @@ def summary(changes, problems):
         lines.append(f"| `{name}` | {kind(before, after)} | {reason} | {describe(before)} | {describe(after)} |")
     lines += [
         "",
-        "The before and after images are in this run's `reference-image-evidence` artifact (open `index.html`).",
+        "The before and after images are in the evidence folder (open `index.html`); attach them to the pull request.",
         "",
     ]
     lines += [f"- :x: {problem}" for problem in problems]
@@ -331,123 +325,8 @@ def run(root: Path, base, evidence, summary_file):
     return 1 if problems else 0
 
 
-def references_differ(root: Path, before: str, after: str):
-    """Whether the references differ between two commits; True when git
-    can't tell (a force push whose old head is gone)."""
-    if not before or not after or set(before) == {"0"}:
-        return True
-    for revision in (before, after):
-        if git(root, "cat-file", "-e", f"{revision}^{{commit}}") is None:
-            git(root, "fetch", "--quiet", "origin", revision)
-            if git(root, "cat-file", "-e", f"{revision}^{{commit}}") is None:
-                return True
-    result = subprocess.run(["git", "-C", str(root), "diff", "--quiet", before, after, "--", FIXTURES])
-    return result.returncode != 0
-
-
-def review_state(labeled_at, run_created_at, event, action, pushed_references):
-    """What the review label says about the references as they are now.
-
-    `labeled_at`: when the label was last added (ISO 8601, UTC), None when
-    the pull request doesn't carry it. `run_created_at`: when this workflow
-    run was created, which is when the event that started it happened (a
-    re-run keeps it). `pushed_references`: for a `synchronize` event,
-    whether that push changed the references.
-
-    A label older than a pull_request run that brought new reference
-    content (the pull request opened or reopened, or a push that changed
-    them) was given to other images: "stale". A label added after the run
-    was created was given with this content there to look at, so a re-run
-    of the same run finds it "reviewed". A push that leaves the references
-    alone keeps the review; so does a workflow_dispatch run, which brings
-    no content of its own (every push has its pull_request run, and that
-    takes a stale label off).
-    """
-    if labeled_at is None:
-        return "missing"
-    new_content = event == "pull_request" and (action in ("opened", "reopened") or pushed_references)
-    if new_content and labeled_at <= run_created_at:
-        return "stale"
-    return "reviewed"
-
-
-def gh(*args):
-    result = subprocess.run(["gh", *args], capture_output=True, text=True)
-    if result.returncode != 0:
-        raise SystemExit(f"gh {' '.join(args)} failed: {result.stderr.strip()}")
-    return result.stdout
-
-
-def review(args):
-    """CI's gate: 0 when the changed references were reviewed."""
-    labels = gh("pr", "view", args.pr, "--repo", args.repo, "--json", "labels", "--jq", ".labels[].name").split("\n")
-    labeled_at = None
-    if args.label in labels:
-        # The issue events hold when each label was added; timestamps in
-        # one format and zone compare as text.
-        added = gh(
-            "api",
-            "--paginate",
-            f"repos/{args.repo}/issues/{args.pr}/events",
-            "--jq",
-            f'.[] | select(.event == "labeled" and .label.name == "{args.label}") | .created_at',
-        ).split()
-        # Carried but never recorded as added: treat as older than anything.
-        labeled_at = max(added, default="")
-    created = gh("api", f"repos/{args.repo}/actions/runs/{args.run_id}", "--jq", ".created_at").strip()
-    pushed = args.event == "pull_request" and args.action == "synchronize" and references_differ(
-        ROOT, args.before, args.after
-    )
-    state = review_state(labeled_at, created, args.event, args.action, pushed)
-    how = (
-        "A maintainer opens the reference-image-evidence artifact of this run, checks every change is "
-        f"intended, adds the {args.label} label and re-runs this job."
-    )
-    if state == "reviewed":
-        print(f"{args.changed_count} reference image change(s), reviewed (the {args.label} label, added {labeled_at}).")
-        return 0
-    if state == "stale":
-        print(
-            f"::error::The {args.label} label (added {labeled_at or 'before the record'}) is older than the "
-            f"reference images this run checks (run created {created}): it is taken off. {how}"
-        )
-        removed = subprocess.run(
-            ["gh", "pr", "edit", args.pr, "--repo", args.repo, "--remove-label", args.label],
-            capture_output=True,
-            text=True,
-        )
-        if removed.returncode != 0:
-            print(f"::error::The stale label could not be taken off ({removed.stderr.strip()}): remove it by hand.")
-        return 1
-    print(f"::error::This pull request changes {args.changed_count} render reference image(s). {how}")
-    return 1
-
-
 def self_test():
     """The checks above, on folders made here."""
-    # The review gate's decision.
-    push, opened, dispatch = ("pull_request", "synchronize"), ("pull_request", "opened"), ("workflow_dispatch", "")
-    early, created, late = "2026-01-01T10:00:00Z", "2026-01-01T11:00:00Z", "2026-01-01T12:00:00Z"
-    for labeled_at, (event, action), pushed, expected in [
-        (None, push, True, "missing"),
-        (None, dispatch, False, "missing"),
-        # Labelled before the push that changed the references again.
-        (early, push, True, "stale"),
-        (created, push, True, "stale"),
-        ("", push, True, "stale"),
-        # Labelled after it: the re-run passes.
-        (late, push, True, "reviewed"),
-        # A push that left the references alone keeps the review.
-        (early, push, False, "reviewed"),
-        # Labels given when the pull request was opened saw no evidence.
-        (early, opened, False, "stale"),
-        (late, opened, False, "reviewed"),
-        (early, ("pull_request", "reopened"), False, "stale"),
-        # The full-ci run on the branch asks for the label too.
-        (early, dispatch, False, "reviewed"),
-    ]:
-        got = review_state(labeled_at, created, event, action, pushed)
-        assert got == expected, (labeled_at, event, action, pushed, got, expected)
     png = (
         b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + struct.pack(">II", 4, 4) + b"\x08\x06\x00\x00\x00" + b"\x00" * 16
     )
@@ -548,14 +427,6 @@ def self_test():
         (folder / "sample.json").unlink()
         kinds = {n: kind(b, a) for n, b, a in changed_references(root, "HEAD")}
         assert kinds == {"new": "added", "sample": "removed"}, kinds
-        # Whether a push changed the references, for the review gate.
-        commit("second")
-        head = git(root, "rev-parse", "HEAD").strip()
-        assert references_differ(root, f"{head}~1", head)
-        (root / "elsewhere.txt").write_text("x")
-        commit("third")
-        assert not references_differ(root, head, "HEAD")
-        assert references_differ(root, "0" * 40, "HEAD") and references_differ(root, "1" * 40, "HEAD")
         # The whole run: its exit code and last line.
         assert run(root, "HEAD", None, None) == 0
         shutil.rmtree(root / "evidence")
@@ -569,14 +440,9 @@ def main():
     parser.add_argument("--evidence", metavar="DIR", help="write before/after images and index.html here")
     parser.add_argument("--summary", metavar="FILE", help="append a Markdown summary of the changes to this file")
     parser.add_argument("--self-test", action="store_true")
-    parser.add_argument("--review", action="store_true", help="CI's review gate (see above)")
-    for option in ("repo", "pr", "label", "changed-count", "event", "action", "before", "after", "run-id"):
-        parser.add_argument(f"--{option}", default="", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.self_test:
         return self_test()
-    if args.review:
-        return review(args)
     return run(ROOT, args.changed, args.evidence, args.summary)
 
 

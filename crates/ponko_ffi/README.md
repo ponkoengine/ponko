@@ -1,12 +1,12 @@
 # ponko_ffi
 
-The C ABI of [Ponko](https://gitlab.com/ponkoengine/ponko): the library that
+The C ABI of [Ponko](https://github.com/ponkoengine/ponko): the library that
 C and C++ games link. Its Rust docs, on <https://docs.rs/ponko_ffi/>,
 describe the safety contract of every function.
 
 The headers are not in this crate. Get them, with prebuilt static and shared
 libraries for Linux, macOS and Windows, from the
-[release](https://gitlab.com/ponkoengine/ponko/-/releases) of the same
+[release](https://github.com/ponkoengine/ponko/releases) of the same
 version, or from the repository:
 
 - `include/ponko.h`: the C API, generated from this crate with cbindgen;

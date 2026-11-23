@@ -32,7 +32,7 @@ promised; it does not show that any earlier binary release is covered.
     shifted enum value fails and names the item.
   - `ponko_abi_version()` still equals the baseline's version, the number
     programs check at startup.
-- `examples/cpp/abi_baseline.c` (native CI job, `ctest -R c_abi_baseline`): a C
+- `examples/cpp/abi_baseline.c` (the native check, `ctest -R c_abi_baseline`): a C
   client compiled against `ponko_abi2.h` only, linked to the current library.
   It checks the startup version, a query over `PonkoChunk`, a built-in
   component in `PonkoTransform2D`, structs passed and returned by value, and a
@@ -41,7 +41,7 @@ promised; it does not show that any earlier binary release is covered.
 
 Limits, stated plainly: the layout check covers 64-bit targets only; the C
 client covers a small slice of the ~620 functions (the header comparison covers
-all of their signatures); calling-convention changes on a platform that CI does
+all of their signatures); calling-convention changes on a platform that the list of checks does
 not build are not seen.
 
 ## Rules

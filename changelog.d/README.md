@@ -13,7 +13,7 @@ change, and the release folds them in.
   larger change may use its own heading. Continuation lines are indented
   by two spaces, as in `CHANGELOG.md`.
 - A change that breaks a published crate's API needs a `### Breaking changes`
-  section, and the pull request the `breaking` label: the Semver checks job
+  section, and the pull request the `breaking` label: the Semver check
   fails a break it finds without both, and fails the label without the
   section (CONTRIBUTING.md, "Breaking changes: the migration note").
 
@@ -70,7 +70,8 @@ Where it is cheap, don't break at once: keep the old item for one minor as
 Only a minor release (0.y.0) carries breaking entries; the release checks refuse
 them in a patch release.
 
-CI validates the fragments with `python3 scripts/changelog.py --check`.
+Validate the fragments with `python3 scripts/changelog.py --check` before
+opening the pull request.
 
 ## At release time
 

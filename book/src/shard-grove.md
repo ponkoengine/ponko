@@ -214,7 +214,7 @@ What the game found missing or awkward, and what is not covered yet:
 | 3D physics had no pause like the 2D `ctx.physics.set_paused`; the game held the warden's velocity at zero on menus. | Fixed by `ctx.physics3d.set_paused` (#452) |
 | `NavAgent` had private fields, so it couldn't be built with `..Default::default()`; the game set fields on a default. | Fixed: its progress moved into `NavAgent::state`, so it builds with struct-update syntax (#453) |
 | A frame-rate performance baseline per GPU tier (`PONKO_BENCH`) needs runs on real GPUs with a window. | Open |
-| CI doesn't package and play it on every OS yet, as it does Ember Hop; its headless tests run in the test job on Linux, macOS and Windows. | Open |
+| The list of checks doesn't package and play it on every OS yet, as it does Ember Hop; its headless tests run in the test job on Linux, macOS and Windows. | Open |
 | One level: level streaming isn't part of the game. | Open |
 | Rust only; no C or C++ counterpart. | No native port planned yet |
 

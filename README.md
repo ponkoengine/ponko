@@ -68,7 +68,7 @@ cargo add ponko
 ```
 
 Put a picture named `crab.png` in the project's `assets/` folder (for example
-[the engine's own](https://gitlab.com/ponkoengine/ponko/-/raw/main/assets/crab.png)),
+[the engine's own](https://raw.githubusercontent.com/ponkoengine/ponko/main/assets/crab.png)),
 then use this in `src/main.rs`:
 
 ```rust
@@ -143,8 +143,8 @@ see [the contract](STABILITY.md#determinism).
 - **Iteration:** runtime inspection, reflected state, asset reload, optional
   code hot patching, structured control endpoints, traces and profiling.
 - **Build choices:** Cargo features select windowing, audio, inspection,
-  gamepads, 3D, physics and other optional integrations. Desktop CI covers
-  Windows, macOS and Linux; web builds target WebGPU/WebGL2 with feature limits.
+  gamepads, 3D, physics and other optional integrations. The list of checks
+  covers Windows, macOS and Linux; web builds target WebGPU/WebGL2 with feature limits.
 
 The renderer already exists. Clearer resource, pipeline, scene and pass
 boundaries, incremental updates, and broader validation are planned evolution,
@@ -199,7 +199,7 @@ Most of them run in a browser too, without installing anything: the
 examples, and the project's website lists the newest release's.
 
 ```sh
-git clone https://gitlab.com/ponkoengine/ponko
+git clone https://github.com/ponkoengine/ponko
 cd ponko
 cargo run --release --example window
 cargo run --release --example terrain --features 3d

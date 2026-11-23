@@ -11,7 +11,7 @@ no C++ version yet.
 
 Every piece of code below is pulled from the finished game,
 [`examples/tutorial_3d`](../../examples/tutorial_3d)
-in the engine's repository, which CI compiles and
+in the engine's repository, which `cargo build --workspace --examples` compiles and
 [`tests/tutorial_3d.rs`](../../tests/tutorial_3d.rs)
 walks. As in the [2D tutorial](tutorial-2d.md), each step is one
 [plugin](systems.md#plugins) and only adds code, so the game builds and runs
@@ -27,7 +27,7 @@ cargo run
 ```
 
 A window opens with a spinning cube. This tutorial needs Ponko 0.2; until
-it's released, add `--git https://gitlab.com/ponkoengine/ponko` to `ponko
+it's released, add `--git https://github.com/ponkoengine/ponko` to `ponko
 new`, which depends on the engine's `main` branch.
 
 The game uses 3D physics, which includes 3D. In `Cargo.toml`:

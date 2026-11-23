@@ -1,12 +1,11 @@
 #!/usr/bin/env node
 // Lists every smoke run under a folder (their report.json files) as a
-// Markdown table, appended to the GitHub job summary when there is one:
+// Markdown table:
 //
 //   node web/smoke/summary.mjs target/web-smoke
 //
 // Exits 1 when the folder holds no report, so a step that never ran can't
 // pass unnoticed; each run's own exit code already decided whether it failed.
-import { appendFileSync } from "node:fs";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { summaryMarkdown, summaryRow } from "./lib.mjs";
@@ -33,4 +32,3 @@ if (rows.length === 0) {
 }
 const markdown = summaryMarkdown(rows);
 console.log(markdown);
-if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `### Browser smoke runs\n\n${markdown}\n`);

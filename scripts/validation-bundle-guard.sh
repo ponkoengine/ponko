@@ -25,8 +25,6 @@ add() {
 }
 add "${HOME:-}"
 add "${TMPDIR:-}"
-add "${RUNNER_TEMP:-}"
-add "${GITHUB_WORKSPACE:-}"
 add "$(pwd -P)"
 # The temporary directory as the system resolves it (macOS: /private/var/...).
 if [ -n "${TMPDIR:-}" ] && [ -d "$TMPDIR" ]; then

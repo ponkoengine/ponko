@@ -870,20 +870,20 @@ How it is checked:
   until a screen reader asks, the whole tree first and after a restart,
   requests from other threads), in `ui::access_native`.
 - **macOS without a window** (`tests/ui_access_macos.rs`, every run, and
-  CI's macOS leg): the adapter is attached to a view that has no window and
+  the list of checks' macOS leg): the adapter is attached to a view that has no window and
   asked what VoiceOver asks (children, role, title, value, help, enabled,
   focused, modal; press, increment, decrement, set value, set focus),
   through this menu from Play to the Quit dialog.
 - **Windows through UI Automation** (`tests/ui_access_platforms.rs`, every
-  run on Windows, and CI's Windows leg): the menu runs with the adapter on a
+  run on Windows, and the list of checks' Windows leg): the menu runs with the adapter on a
   window that is never shown, and a UI Automation client in the same
   process reads names, control types, descriptions, values and toggle
   states, then invokes Play, sets the slider and the name, moves focus,
   toggles Music and opens and closes the Quit dialog, checking each result
   through UI Automation.
 - **Linux through AT-SPI** (the same file, with `PONKO_ACCESS_ATSPI=1`
-  under `dbus-run-session` with `at-spi2-core` installed; CI's Linux leg
-  runs it): the adapter registers with a private accessibility bus, and a
+  under `dbus-run-session` with `at-spi2-core` installed; the list of
+  checks' Linux leg runs it): the adapter registers with a private accessibility bus, and a
   client finds the window through the AT-SPI registry as Orca does, reads
   roles, names, descriptions, values and states, operates the menu through
   the Action, Value and Component interfaces, and turns accessibility off
@@ -900,7 +900,7 @@ How it is checked:
   engine_window`): the game runs with `Game::run`, which attaches the
   adapter to the window's content view; a system of the game asks that view
   the same questions and operates the menu through it. It opens a window
-  for about a second, so CI doesn't run it.
+  for about a second, so the list of checks doesn't run it.
 - **From another process and with VoiceOver** (by hand, on a machine where
   the terminal has the Accessibility permission and VoiceOver may be
   scripted): the menu was read and operated through the system accessibility
@@ -1035,4 +1035,4 @@ IME composition has the same calls in C: `ponko_ctx_ui_set_ime_allowed`,
 `Ui::frame`, which is how the C and C++ tests click buttons without a window.
 
 This chapter's Rust and C++ examples build the same shop: the C++ one is
-`examples/cpp/guide.cpp`, compiled and run headless in CI.
+`examples/cpp/guide.cpp`, compiled and run headless by the native check.

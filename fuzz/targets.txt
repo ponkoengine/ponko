@@ -1,5 +1,5 @@
 # The written fuzz list: every fuzz target, one per line, with the seconds
-# the weekly job runs it (fuzz/run-all.sh uses them when it is given no
+# a full run gives it (fuzz/run-all.sh uses them when it is given no
 # seconds of its own). A target has a file in fuzz/fuzz_targets/, a [[bin]]
 # in fuzz/Cargo.toml, a line here and a row in the table of fuzz/README.md;
 # `python3 scripts/check-fuzz-list.py` fails when any of them is missing.

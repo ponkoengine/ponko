@@ -65,7 +65,7 @@ controller, which the headless check can't plug in), the smoke-test fixtures
 `compute` and `scene_compute` are about compute passes, which WebGL2 lacks.
 The demos that read the scene depth (`terrain`, `shaders`, `target_effect`)
 run on WebGL2 through the renderer's GL path for it (see the book's shader
-section), and CI checks them there.
+section), and the gallery check runs them there.
 
 ## The pages
 
@@ -104,11 +104,11 @@ pointer, so the check makes `requestPointerLock` succeed without locking.
 
 ## Publishing
 
-The release workflow (`.github/workflows/release.yml`) builds the gallery for
-the tag (`--ref vX.Y.Z`) and checks every page in headless Chromium on WebGL2
-(job `gallery`, which publishes nothing). After the release is published, job
-`gallery-pages` deploys it to the repository's GitHub Pages with the built-in
-`GITHUB_TOKEN`, for a release (not a candidate) that is the newest version, so a
-patch release of an older minor doesn't replace the newer gallery. GitHub
-Pages must be set up once by a maintainer (CONTRIBUTING.md, "One-time
-setup"); until then the job says so and skips the deployment.
+The maintainer who makes a release builds the gallery for the tag
+(`--ref vX.Y.Z`) and checks every page in headless Chromium on WebGL2 (the
+commands are in CONTRIBUTING.md, "Releasing"). After the release is
+published, they put the built folder on the repository's `gh-pages` branch,
+which GitHub Pages serves, for a release (not a candidate) that is the newest
+version, so a patch release of an older minor doesn't replace the newer
+gallery. GitHub Pages is set up once by a maintainer (CONTRIBUTING.md,
+"One-time setup").

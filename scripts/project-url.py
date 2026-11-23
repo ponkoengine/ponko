@@ -22,7 +22,7 @@ PROJECT_URL. Moving the project is therefore one command:
     project-url.py preprocess      the mdBook preprocessor (see book/book.toml)
     project-url.py selftest        check the link rewriting with made-up input
 
-If the host's URL layout differs from GitLab's (`/-/blob/main/...`), change
+If the host's URL layout differs from GitHub's (`/blob/main/...`), change
 BLOB and TREE below.
 
 Companion repositories (COMPANIONS, such as the plugins repository) live
@@ -43,17 +43,17 @@ BOOK_SRC = ROOT / "book" / "src"
 URL_FILE = ROOT / "PROJECT_URL"
 
 # Where a file or a folder of the default branch lives on the project's host.
-BLOB = "/-/blob/main/"
-TREE = "/-/tree/main/"
+BLOB = "/blob/main/"
+TREE = "/tree/main/"
 
 # Repositories that live beside the engine's, in the same group.
 COMPANIONS = ("ponko-extras",)
 
 # Strings of the hosts the project left; no doc may name them.
-DEAD = ("github.com/ponkoengine", "ponkoengine.github.io", "raw.githubusercontent.com/ponkoengine")
+DEAD = ("gitlab.com/ponkoengine",)
 
 # Files that talk about hosts on purpose (release tooling, the gallery's own
-# build, the CI workflows) and this script.
+# build, the GitHub templates) and this script.
 EXCLUDED_PREFIXES = (".github/", "web/", "api/", "target/")
 EXCLUDED_FILES = {"scripts/project-url.py", "scripts/release-check.py", "Cargo.lock"}
 DOC_SUFFIXES = (".md", ".txt", ".toml", ".liquid", ".rs")

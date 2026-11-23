@@ -42,7 +42,7 @@ on them; a game that grows past a few values replicates instead
 The template's engine dependency is
 `ponko = { version = "...", default-features = false }`: no window, GPU,
 audio, gamepad or inspector, and none of their system libraries, so the
-binary runs in a minimal image. CI checks this: the "server template"
+binary runs in a minimal image. The "server template"
 contract of `scripts/feature-deps.sh` reads the engine features from the
 template's manifest and fails if its dependency graph contains the
 renderer, audio, input devices, glTF, physics, navigation, dev tools,
@@ -224,8 +224,8 @@ same time, over 21 seconds with four bot clients:
 | Tick time | mean 0.02 ms, p99 0.09 ms, max 2.1 ms (the joins) |
 | Peak resident memory | 3.7 MB |
 
-The image adds the distroless base to the package. CI's "Server container"
-job builds the image on Linux from the package, starts it, joins it with
+The image adds the distroless base to the package. The "Server container"
+job of the list of checks (`scripts/checks.yml`) builds the image on Linux from the package, starts it, joins it with
 the example client and stops it with `docker stop`; it prints the image's
 size and the container's memory with every run. Your game's numbers grow
 with its world: measure them with the tick report under a realistic load.

@@ -1,6 +1,6 @@
 # ponko_ecs
 
-The entity-component-system behind [Ponko](https://gitlab.com/ponkoengine/ponko),
+The entity-component-system behind [Ponko](https://github.com/ponkoengine/ponko),
 built for simulations with millions of entities: archetype storage, queries
 that run as fast as a loop over arrays (and on all cores with the default
 `parallel` feature), resources, commands, change detection and

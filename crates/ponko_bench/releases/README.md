@@ -18,4 +18,5 @@ cargo run --release -p ponko_bench --bin bench_track -- \
 it (`git show v0.1.0:crates/ponko_bench/baselines/ecs.json`; the file in the
 working tree has been recorded again since; see the crate README, "Tracking
 results over time"). The instruction counts of every
-release are on the `bench-history` branch, under `releases/<tag>/`.
+release recorded before the project dropped CI are on the `bench-history`
+branch, under `releases/<tag>/`.

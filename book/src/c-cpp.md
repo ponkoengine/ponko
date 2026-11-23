@@ -455,13 +455,13 @@ where C++ does the same thing another way:
 | `ponko_ctx_set_touch_controls` | `ctx::set_touch_controls` calls `ponko_ctx_set_touch_controls_ex`, which also takes the controls' styles and places |
 | `ponko_ctx_ui_next_event` | `ui::tree::next_event` calls `ponko_ctx_ui_next_event_ex`, which also gives the widget set's events (`chosen`, `dropped`, `rows_shown`) |
 
-`scripts/check-cpp-api.py` keeps this true: CI fails when a C function has no
+`scripts/check-cpp-api.py` keeps this true: it fails when a C function has no
 C++ wrapper and isn't on this list (`scripts/cpp-c-only.txt`, with the reasons).
 The same check requires a `///` doc comment on every public declaration in
 `ponko.hpp`, which is the C++ API reference: what each call does, its units,
 who owns what, and what it throws. The C and C++ snippets in this guide come
-from `examples/cpp` (`guide.cpp`, `guide.c` and the examples), which CI builds
-and runs.
+from `examples/cpp` (`guide.cpp`, `guide.c` and the examples), which the native
+check builds and runs.
 
 ## Still Rust-only
 

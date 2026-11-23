@@ -32,7 +32,7 @@ Regenerate the C header with:
 cbindgen --config crates/ponko_ffi/cbindgen.toml crates/ponko_ffi > include/ponko.h
 ```
 
-CI regenerates it and fails if the committed copy differs, checks every
+The native check regenerates it and fails if the committed copy differs, checks every
 dynamic export, and runs the retained ABI-2 baseline header and layouts (see
 `crates/ponko_ffi/tests/fixtures/abi/README.md`).
 
@@ -193,7 +193,7 @@ same items, and `ponko::ecs_core` is the one way into the ECS crate
 (`ponko_ecs`) beyond the prelude. A `#[deprecated]` alias of a moved item is
 its own item and lasts one minor. `python3 scripts/check-naming.py --paths`
 walks rustdoc's JSON of the crate and fails on an item with a second path;
-CI runs it in the API snapshots job.
+the API snapshots check runs it.
 
 ## Prelude and service imports
 
