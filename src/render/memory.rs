@@ -149,10 +149,15 @@ impl MemoryTally {
 
     /// What the counted textures and buffers take when an allocator places
     /// each one on its own range, in whole pages of `page` bytes (test
-    /// hook, for comparing with such an allocator's figure).
+    /// hook, for comparing with such an allocator's figure). `placed` gives
+    /// a texture's size where the caller knows the driver lays it out
+    /// differently (a multisampled texture on Direct3D 12).
     #[cfg(test)]
-    pub fn placed_bytes(&self, page: u64) -> u64 {
-        let textures = self.textures.iter().map(super::gpu::texture_bytes);
+    pub fn placed_bytes(&self, page: u64, mut placed: impl FnMut(&wgpu::Texture) -> Option<u64>) -> u64 {
+        let textures = self
+            .textures
+            .iter()
+            .map(|t| placed(t).unwrap_or_else(|| super::gpu::texture_bytes(t)));
         let buffers = self.buffers.iter().map(wgpu::Buffer::size);
         textures.chain(buffers).map(|b| b.next_multiple_of(page)).sum()
     }

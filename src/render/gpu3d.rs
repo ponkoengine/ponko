@@ -247,6 +247,8 @@ pub(crate) struct Renderer3D {
     scene_layout: wgpu::BindGroupLayout,
     /// The scene bind group of passes that can't see the scene.
     no_scene: wgpu::BindGroup,
+    /// `no_scene`'s colour stand-in, kept for the GPU memory report.
+    no_scene_color: wgpu::TextureView,
     /// The global illumination atlas's stand-in while it's off.
     no_gi: wgpu::TextureView,
     dummy_depth: wgpu::TextureView,
@@ -551,7 +553,7 @@ impl Renderer3D {
             immediate_size: 0,
         });
         // Passes that can't see the scene bind a 1x1 stand-in (black, far).
-        let (no_scene, dummy_depth) = {
+        let (no_scene, no_scene_color, dummy_depth) = {
             let tiny = |label, format, samples, usage| {
                 device
                     .create_texture(&wgpu::TextureDescriptor {
@@ -579,6 +581,7 @@ impl Renderer3D {
             );
             (
                 scene_bind_group(device, &scene_layout, &color, &depth, scene_depth_sampler.as_ref()),
+                color,
                 depth,
             )
         };
@@ -949,6 +952,7 @@ impl Renderer3D {
             shaders,
             scene_layout,
             no_scene,
+            no_scene_color,
             history: History::default(),
             post,
             effects: Effects::default(),
@@ -1350,6 +1354,7 @@ impl Renderer3D {
         for (label, view) in [
             ("sky view lookup", &self.sky_view),
             ("probe stand-in", &self.no_gi),
+            ("scene color stand-in", &self.no_scene_color),
             ("depth stand-in", &self.dummy_depth),
             ("decal stand-in", &self.no_decal_view),
         ] {
