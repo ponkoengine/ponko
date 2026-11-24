@@ -161,6 +161,12 @@
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. );             }         }         assert!(",
     "site": "crates/ponko_ecs/src/query.rs:242"
   },
+  "crates/ponko_ecs/src/query.rs:6037d2b4ea8ce2fe": {
+    "classification": "invariant",
+    "construction": "debug_assert_eq!(arch.component_ids()[index], id)",
+    "reason": "Column hints are computed from the matching live layout and refreshed before a reclaimed slot is reused.",
+    "site": "crates/ponko_ecs/src/query.rs:762"
+  },
   "crates/ponko_ecs/src/query.rs:7187f25f93d95392": {
     "classification": "invariant",
     "construction": ".expect(\"just added\")",
@@ -179,17 +185,17 @@
     "reason": "Internal invariant: initialized.len += rest.len;                 rest.len = 0;             }             debug_assert_eq!(initialized.len, n);",
     "site": "crates/ponko_ecs/src/query.rs:1492"
   },
+  "crates/ponko_ecs/src/query.rs:bd68fb01b1979428": {
+    "classification": "invariant",
+    "construction": ".expect(\"a planned archetype matches the query while it runs\")",
+    "reason": "A parallel task is planned from matching archetypes, and the world borrow keeps the layout and column hints stable until all tasks finish.",
+    "site": "crates/ponko_ecs/src/query.rs:1112"
+  },
   "crates/ponko_ecs/src/query.rs:c025e0943da2dc9e": {
     "classification": "caller-contract",
     "construction": "assert!( (self.n_with as usize) < MAX_WITH, \"at most {MAX_WITH} `with` filters per query\" )",
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. if self.with[..self.n_with as usize].contains(&id) {             return;         }         assert!(",
     "site": "crates/ponko_ecs/src/query.rs:334"
-  },
-  "crates/ponko_ecs/src/query.rs:d33de16c53bc5840": {
-    "classification": "invariant",
-    "construction": ".expect(\"a planned archetype matches the query while it runs\")",
-    "reason": "Internal invariant: while pos < hi {             let task = self.tasks[t];             let state = Q::state(&self.archetypes[task.arch], &self.ids)                 .expect(\"a planned archetype matches the query while it runs\");",
-    "site": "crates/ponko_ecs/src/query.rs:713"
   },
   "crates/ponko_ecs/src/query.rs:d38a564478a90eda": {
     "classification": "caller-contract",

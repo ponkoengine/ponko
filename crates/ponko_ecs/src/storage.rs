@@ -750,6 +750,11 @@ impl Archetype {
         self.column_index(id).map(|i| self.columns[i].base())
     }
 
+    #[inline]
+    pub(crate) fn column_base_at(&self, column: usize) -> Option<*mut u8> {
+        self.columns.get(column).map(|column| column.base())
+    }
+
     /// Reorders all rows: new row `i` gets old row `perm[i]`. `perm` must be
     /// a permutation of `0..len()`. The caller updates entity locations.
     /// `now` is the current tick's low 32 bits.

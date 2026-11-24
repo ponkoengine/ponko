@@ -980,26 +980,15 @@ impl<'v, Q: QueryData> ViewQuery<'v, Q> {
     fn archetypes(&self) -> Archetypes<'v> {
         let world = self.world;
         if self.empty {
-            return Archetypes {
-                all: &[],
-                indices: None,
-                next: 0,
-            };
+            return Archetypes::new(&[], None, 0, None);
         }
         let index = &world.query_matches;
-        let indices = if self.cache == QueryCache::Never || world.archetypes.len() < index.min_archetypes() {
-            None
-        } else {
-            let key = signature::<Q>(&self.ids, &self.filters);
-            index.shared_candidates(&world.archetypes, &key, self.cache)
-        };
-        // Or the archetypes with entities, if the world lists them.
-        let indices = indices.or(world.slots.shared_scan());
-        Archetypes {
-            all: &world.archetypes,
-            indices: indices.map(<[u32]>::iter),
-            next: 0,
+        let scan = world.slots.shared_scan();
+        if self.cache == QueryCache::Never || world.archetypes.len() < index.min_archetypes() {
+            return Archetypes::new(&world.archetypes, scan, 0, None);
         }
+        let key = signature::<Q>(&self.ids, &self.filters);
+        index.shared_archetypes(&world.archetypes, &key, self.cache, scan)
     }
 
     /// The window of this query's change stamps: writes are stamped with
@@ -1029,12 +1018,13 @@ impl<'v, Q: QueryData> ViewQuery<'v, Q> {
         let filters = self.filters;
         let tracking = self.world.tracks_changes();
         let mut runs = change::Runs::new(self.clock());
-        for arch in self.archetypes() {
+        let mut archetypes = self.archetypes();
+        while let Some((arch, columns)) = archetypes.next_with_columns() {
             let len = arch.len();
             if len == 0 || !filters.matches(arch) {
                 continue;
             }
-            let Some(state) = Q::state(arch, &self.ids) else {
+            let Some(state) = crate::query::state_with_hints::<Q>(arch, &self.ids, columns) else {
                 continue;
             };
             // Stamps only go to the columns `Q` may write: columns this
@@ -1162,11 +1152,7 @@ impl<'v, Q: QueryData> ViewQuery<'v, Q> {
         // a second match; then the item from the one archetype that has it.
         let index = single_archetype::<Q>(self.archetypes(), &self.ids, &self.filters, tracking, clock)?;
         let mut matches = QueryIter::<'v, Q> {
-            archetypes: Archetypes {
-                all: &self.world.archetypes,
-                indices: None,
-                next: index,
-            },
+            archetypes: Archetypes::new(&self.world.archetypes, None, index, None),
             ids: self.ids,
             filters: self.filters,
             state: None,
