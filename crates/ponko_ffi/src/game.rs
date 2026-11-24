@@ -235,6 +235,21 @@ pub unsafe extern "C" fn ponko_game_control_endpoint(game: *mut PonkoGame, on: b
     unsafe { build(game, |g| ok(g.control_endpoint(on))) }
 }
 
+/// Registers a named debug switch with its initial value. Invalid and
+/// duplicate names are reported at startup, as in Rust's `Game::debug_toggle`.
+/// # Safety
+/// `game` null or live; `toggle` points to a NUL-terminated UTF-8 string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_game_debug_toggle(game: *mut PonkoGame, toggle: *const c_char, on: bool) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        build(game, |game| match crate::ctx::text(toggle) {
+            Ok(toggle) => ok(game.debug_toggle(toggle, on)),
+            Err(err) => (game, Err(err)),
+        })
+    }
+}
+
 /// Reloads textures from `assets/` when their files change, under the same
 /// handles. On by default in debug builds of the engine, off in release;
 /// `PONKO_HOT_RELOAD=1` or `0` overrides. See `ponko_ctx_reloaded_textures`.

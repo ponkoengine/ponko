@@ -6616,6 +6616,14 @@ public:
     void show(debug_view view, bool on) { detail::check(ponko_ctx_debug_show(raw_, view, on)); }
     /// Whether a built-in view is on.
     bool showing(debug_view view) const { bool on = false; detail::check(ponko_ctx_debug_showing(raw_, view, &on)); return on; }
+    /// Whether a named toggle is active while debug drawing is enabled.
+    bool toggled(const char* name) const {
+        bool on = false;
+        detail::check(ponko_ctx_debug_toggled(raw_, name, &on));
+        return on;
+    }
+    /// Sets the stored value of a named debug toggle.
+    void set_toggle(const char* name, bool on) { detail::check(ponko_ctx_debug_set_toggle(raw_, name, on)); }
     /// Lines and labels drawn now (the built-in views not counted).
     debug_stats stats() const { debug_stats s{}; detail::check(ponko_ctx_debug_stats(raw_, &s)); return s; }
 
@@ -11437,6 +11445,8 @@ public:
     /// Opens the control endpoint for tools and agents (ponko-mcp); also on with PONKO_CONTROL=1 in a debug
     /// build of the library.
     game& control_endpoint(bool on) { return check(ponko_game_control_endpoint(raw_, on)); }
+    /// Registers a named debug toggle and its initial value.
+    game& debug_toggle(const char* name, bool on) { return check(ponko_game_debug_toggle(raw_, name, on)); }
     /// Reload textures when their files change, under the same handles (on by
     /// default in debug builds of the engine; PONKO_HOT_RELOAD=1/0 overrides).
     game& hot_reload(bool on) { return check(ponko_game_hot_reload(raw_, on)); }

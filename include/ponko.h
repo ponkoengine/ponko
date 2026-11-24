@@ -5690,6 +5690,8 @@ enum PonkoStatus ponko_game_camera_controls(struct PonkoGame *game);
 
 enum PonkoStatus ponko_game_control_endpoint(struct PonkoGame *game, bool on);
 
+enum PonkoStatus ponko_game_debug_toggle(struct PonkoGame *game, const char *toggle, bool on);
+
 enum PonkoStatus ponko_game_hot_reload(struct PonkoGame *game, bool on);
 
 enum PonkoStatus ponko_game_inspector(struct PonkoGame *game, bool on);
@@ -9748,6 +9750,10 @@ enum PonkoStatus ponko_ctx_debug_clear(struct PonkoCtx *ctx);
 enum PonkoStatus ponko_ctx_debug_show(struct PonkoCtx *ctx, uint32_t view, bool on);
 
 enum PonkoStatus ponko_ctx_debug_showing(struct PonkoCtx *ctx, uint32_t view, bool *out_on);
+
+enum PonkoStatus ponko_ctx_debug_toggled(struct PonkoCtx *ctx, const char *name, bool *out_on);
+
+enum PonkoStatus ponko_ctx_debug_set_toggle(struct PonkoCtx *ctx, const char *name, bool on);
 
 enum PonkoStatus ponko_ctx_debug_set_collider_distance(struct PonkoCtx *ctx, float distance);
 

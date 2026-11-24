@@ -15,7 +15,7 @@ use crate::ctx::{ctx_access, debug_draw, out, text};
 use crate::descriptors::{Versioned, read_desc, write_desc};
 use crate::three::{PonkoCamera3D, PonkoQuat, PonkoVec3, camera_from_c, quat_from_c};
 use crate::types::{PonkoColor, PonkoDrawSpace, PonkoVec2, to_c};
-use crate::{Failure, PonkoCtx, PonkoStatus, boundary, invalid};
+use crate::{Failure, PonkoCtx, PonkoStatus, boundary, engine_error, invalid};
 
 /// How a shape is drawn (Rust `DebugShape`'s settings). Start from
 /// `ponko_debug_style_default()`; pass null for the defaults.
@@ -307,6 +307,36 @@ pub unsafe extern "C" fn ponko_ctx_debug_show(ctx: *mut PonkoCtx, view: u32, on:
 pub unsafe extern "C" fn ponko_ctx_debug_showing(ctx: *mut PonkoCtx, view: u32, out_on: *mut bool) -> PonkoStatus {
     // SAFETY: forwarded caller contract.
     boundary(|| unsafe { ctx_access(ctx, |c| out(out_on, c.debug.showing(view_from_c(view)?))) })
+}
+
+/// Reads the effective value of a named debug toggle. A disabled drawing
+/// system or an unknown name reads as false.
+/// # Safety
+/// `ctx` null or live; `name` NUL-terminated; `out_on` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_debug_toggled(
+    ctx: *mut PonkoCtx,
+    name: *const c_char,
+    out_on: *mut bool,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        let name = text(name)?;
+        ctx_access(ctx, |c| out(out_on, c.debug.toggled(name)))
+    })
+}
+
+/// Sets a named debug toggle independently of the drawing system's overall
+/// state. Returns `PONKO_NOT_FOUND` for an unknown name.
+/// # Safety
+/// `ctx` null or live; `name` NUL-terminated.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_debug_set_toggle(ctx: *mut PonkoCtx, name: *const c_char, on: bool) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        let name = text(name)?;
+        ctx_access(ctx, |c| c.debug.set_toggle(name, on).map_err(engine_error))
+    })
 }
 
 /// Sets how far from the 3D camera (world units) the colliders view draws

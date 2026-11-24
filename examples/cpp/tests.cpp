@@ -1695,7 +1695,7 @@ static void model_material_overrides() {
 }
 
 static void asset_streaming() {
-    ponko::game("streaming", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
+    ponko::game("streaming", 1, 1).debug_toggle("debug.paths", true).run_headless(0, [](ponko::ctx& ctx) {
         ctx.set_deterministic_uploads(true);
         ctx.set_upload_budget(std::nullopt);
         CHECK(!ctx.stream_texture("crab.png"));
@@ -1734,6 +1734,9 @@ static void asset_streaming() {
 
         auto debug = ctx.debug();
         debug.set_enabled(true);
+        CHECK(debug.toggled("debug.paths"));
+        debug.set_toggle("debug.paths", false);
+        CHECK(!debug.toggled("debug.paths"));
         auto style = ponko::debug_draw::style_ex(ponko::draw_space::screen);
         CHECK(style.space == PONKO_DRAW_SPACE_SCREEN);
         debug.line_ex({0, 0}, {10, 10}, ponko::colors::white, style);
