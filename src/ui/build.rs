@@ -45,22 +45,30 @@ impl Default for UiLayout {
     }
 }
 
-fn column_style() -> Style {
+// Preset containers establish the containing block for anchored children.
+fn flow_style() -> Style {
     Style {
-        flex_direction: FlexDirection::Column,
+        position: Position::Relative,
         ..Default::default()
     }
 }
 
+fn column_style() -> Style {
+    Style {
+        flex_direction: FlexDirection::Column,
+        ..flow_style()
+    }
+}
+
 impl UiLayout {
-    /// Sized by its content (text, children); Taffy's default style.
+    /// Sized by its content (text, children). Anchored children use this node's box.
     /// ```
     /// use ponko::prelude::*;
     /// let style = ponko::ui::UiLayout::auto().into_unstable_style();
-    /// assert_eq!(style, ponko::ui::unstable_taffy::Style::default());
+    /// assert_eq!(style.position, ponko::ui::unstable_taffy::Position::Relative);
     /// ```
     pub fn auto() -> Self {
-        Self(Style::default())
+        Self(flow_style())
     }
     /// Any Taffy style, for flex and grid settings the presets don't cover.
     ///
@@ -99,7 +107,7 @@ impl UiLayout {
                 height: length(height),
             },
             flex_shrink: 0.0,
-            ..Default::default()
+            ..flow_style()
         })
     }
     /// A vertical strip: `width` wide, the parent's full height, never
@@ -246,7 +254,7 @@ impl UiLayout {
             grid_template_columns: vec![fr(1.0); columns],
             grid_auto_rows: vec![length(row_height)],
             flex_shrink: 0.0,
-            ..Default::default()
+            ..flow_style()
         })
     }
 

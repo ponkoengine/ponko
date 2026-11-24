@@ -1,6 +1,8 @@
 use ponko::prelude::*;
 use ponko::ui::unstable_taffy::prelude::length;
-use ponko::ui::unstable_taffy::{Dimension, Display, FlexDirection, LengthPercentage, Rect as Edges, Size, Style};
+use ponko::ui::unstable_taffy::{
+    Dimension, Display, FlexDirection, LengthPercentage, Position, Rect as Edges, Size, Style,
+};
 #[allow(unused_imports)]
 use ponko::ui::{Ui, UiEvent, UiId, UiInput, UiLayout, UiPaint, UiStyle, UiTheme, UiWidget};
 
@@ -351,6 +353,43 @@ fn navigation_reveals_clipped_buttons_and_skips_disabled_subtrees() {
     assert_eq!(ui.scroll(scroll).unwrap().y, 100.0);
     assert_eq!(ui.hit_test(vec2(30.0, 20.0)), Some(c));
 }
+#[test]
+fn removing_the_only_absolute_child_allows_another_layout() {
+    let (mut ui, root) = scene();
+    let parent = ui.add_child(root, UiWidget::Panel, UiLayout::unstable_custom(sized(120.0, 80.0)));
+    let mut style = sized(20.0, 30.0);
+    style.position = Position::Absolute;
+    let child = ui.add_child(parent, UiWidget::Button, UiLayout::unstable_custom(style));
+    let viewport = vec2(800.0, 600.0);
+    ui.layout(viewport);
+    assert_eq!(ui.rect(child).unwrap().size(), vec2(20.0, 30.0));
+
+    ui.remove(child);
+    ui.layout(viewport);
+    assert!(ui.rect(child).is_none());
+    assert_eq!(ui.rect(parent).unwrap().size(), vec2(120.0, 80.0));
+
+    // Also force a fresh calculation after removing the child.
+    ui.set_scale(2.0);
+    ui.layout(viewport);
+    assert_eq!(ui.rect(parent).unwrap().size(), vec2(240.0, 160.0));
+}
+
+#[test]
+fn absolute_child_percentages_use_the_flex_items_box() {
+    let (mut ui, root) = scene();
+    let parent = ui.add_child(root, UiWidget::Panel, UiLayout::fixed(120.0, 80.0));
+    let child = ui.add_child(parent, UiWidget::Button, UiLayout::anchored(0.25, 0.25, 0.5, 0.5));
+
+    ui.layout(vec2(800.0, 600.0));
+
+    let parent = ui.rect(parent).unwrap();
+    let child = ui.rect(child).unwrap();
+    assert_eq!(parent.size(), vec2(120.0, 80.0));
+    assert_eq!(child.size(), vec2(60.0, 40.0));
+    assert_eq!(child.min - parent.min, vec2(30.0, 20.0));
+}
+
 #[test]
 fn stale_ids_scaling_and_absolute_constraints() {
     let (mut ui, root) = scene();

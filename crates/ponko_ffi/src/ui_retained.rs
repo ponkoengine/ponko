@@ -84,7 +84,7 @@ const DISPLAYS: [Display; 3] = [Display::Flex, Display::Grid, Display::None];
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
 pub enum PonkoUiPosition {
-    /// In normal flow; `inset` has no effect (the default).
+    /// In normal flow; `inset` has no effect.
     PONKO_UI_POSITION_STATIC,
     /// In normal flow, then nudged by `inset` without moving its siblings. A
     /// relative node is also what its absolute children are placed inside.
@@ -655,8 +655,8 @@ const NO_LINE: PonkoUiGridLine = PonkoUiGridLine {
     value: 0,
 };
 
-/// The default layout: a flex row, static, automatic size, no spacing (same
-/// as Rust's `Style::default()`).
+/// The default layout: a relative flex row, automatic size, no spacing
+/// (Rust `UiLayout::auto()`).
 /// ```
 /// let l = ponko_ffi::ponko_ui_layout_default();
 /// assert_eq!(l.display, ponko_ffi::PonkoUiDisplay::PONKO_UI_DISPLAY_FLEX as u32);
@@ -665,7 +665,7 @@ const NO_LINE: PonkoUiGridLine = PonkoUiGridLine {
 pub extern "C" fn ponko_ui_layout_default() -> PonkoUiLayout {
     PonkoUiLayout {
         display: PonkoUiDisplay::PONKO_UI_DISPLAY_FLEX as u32,
-        position: PonkoUiPosition::PONKO_UI_POSITION_STATIC as u32,
+        position: PonkoUiPosition::PONKO_UI_POSITION_RELATIVE as u32,
         flex_direction: PonkoUiFlexDirection::PONKO_UI_FLEX_ROW as u32,
         flex_wrap: PonkoUiFlexWrap::PONKO_UI_FLEX_NO_WRAP as u32,
         flex_grow: 0.0,
@@ -2948,6 +2948,7 @@ mod tests {
     #[test]
     fn layout_presets_are_the_rust_presets() {
         let pairs = [
+            (ponko_ui_layout_default(), UiLayout::auto()),
             (ponko_ui_layout_row(20.0), UiLayout::row(20.0)),
             (ponko_ui_layout_column(150.0), UiLayout::column(150.0)),
             (ponko_ui_layout_fill(), UiLayout::fill()),
