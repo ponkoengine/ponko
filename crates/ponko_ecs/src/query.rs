@@ -64,6 +64,17 @@ pub unsafe trait QueryData {
     fn access(ids: &Self::Ids, f: &mut impl FnMut(ComponentId, bool, bool));
     #[doc(hidden)]
     fn state(arch: &Archetype, ids: &Self::Ids) -> Option<Self::State>;
+    /// Builds state using column numbers for this archetype. The lookup
+    /// must identify the requested component in this archetype.
+    #[doc(hidden)]
+    fn state_with_columns(
+        arch: &Archetype,
+        ids: &Self::Ids,
+        column: &mut impl FnMut(ComponentId) -> Option<usize>,
+    ) -> Option<Self::State> {
+        let _ = column;
+        Self::state(arch, ids)
+    }
     #[doc(hidden)]
     unsafe fn fetch<'a>(state: Self::State, row: usize) -> Self::Item<'a>;
     /// How many `Option` fetches this has. Loops split on which of their
@@ -183,6 +194,17 @@ unsafe impl<T: Component> QueryData for &T {
     fn state(arch: &Archetype, id: &ComponentId) -> Option<*const T> {
         arch.column_base(*id).map(|p| p as *const T)
     }
+    #[inline]
+    fn state_with_columns(
+        arch: &Archetype,
+        id: &ComponentId,
+        column: &mut impl FnMut(ComponentId) -> Option<usize>,
+    ) -> Option<*const T> {
+        column(*id)
+            .and_then(|index| arch.column_base_at(index))
+            .map(<*mut u8>::cast_const)
+            .map(<*const u8>::cast::<T>)
+    }
     #[inline(always)]
     unsafe fn fetch<'a>(state: *const T, row: usize) -> &'a T {
         unsafe { &*state.add(row) }
@@ -207,6 +229,16 @@ unsafe impl<T: Component> QueryData for &mut T {
     fn state(arch: &Archetype, id: &ComponentId) -> Option<*mut T> {
         arch.column_base(*id).map(|p| p as *mut T)
     }
+    #[inline]
+    fn state_with_columns(
+        arch: &Archetype,
+        id: &ComponentId,
+        column: &mut impl FnMut(ComponentId) -> Option<usize>,
+    ) -> Option<*mut T> {
+        column(*id)
+            .and_then(|index| arch.column_base_at(index))
+            .map(<*mut u8>::cast::<T>)
+    }
     #[inline(always)]
     unsafe fn fetch<'a>(state: *mut T, row: usize) -> &'a mut T {
         unsafe { &mut *state.add(row) }
@@ -230,6 +262,19 @@ unsafe impl<T: Component> QueryData for Option<&T> {
     #[inline]
     fn state(arch: &Archetype, id: &ComponentId) -> Option<Option<*const T>> {
         Some(arch.column_base(*id).map(|p| p as *const T))
+    }
+    #[inline]
+    fn state_with_columns(
+        arch: &Archetype,
+        id: &ComponentId,
+        column: &mut impl FnMut(ComponentId) -> Option<usize>,
+    ) -> Option<Option<*const T>> {
+        Some(
+            column(*id)
+                .and_then(|index| arch.column_base_at(index))
+                .map(<*mut u8>::cast_const)
+                .map(<*const u8>::cast::<T>),
+        )
     }
     #[inline(always)]
     unsafe fn fetch<'a>(state: Option<*const T>, row: usize) -> Option<&'a T> {
@@ -276,6 +321,18 @@ unsafe impl<T: Component> QueryData for Option<&mut T> {
     #[inline]
     fn state(arch: &Archetype, id: &ComponentId) -> Option<Option<*mut T>> {
         Some(arch.column_base(*id).map(|p| p as *mut T))
+    }
+    #[inline]
+    fn state_with_columns(
+        arch: &Archetype,
+        id: &ComponentId,
+        column: &mut impl FnMut(ComponentId) -> Option<usize>,
+    ) -> Option<Option<*mut T>> {
+        Some(
+            column(*id)
+                .and_then(|index| arch.column_base_at(index))
+                .map(<*mut u8>::cast::<T>),
+        )
     }
     #[inline(always)]
     unsafe fn fetch<'a>(state: Option<*mut T>, row: usize) -> Option<&'a mut T> {
@@ -344,6 +401,14 @@ macro_rules! query_tuple {
             #[inline]
             fn state(arch: &Archetype, ids: &Self::Ids) -> Option<Self::State> {
                 Some(($($t::state(arch, &ids.$i)?,)*))
+            }
+            #[inline]
+            fn state_with_columns(
+                arch: &Archetype,
+                ids: &Self::Ids,
+                column: &mut impl FnMut(ComponentId) -> Option<usize>,
+            ) -> Option<Self::State> {
+                Some(($($t::state_with_columns(arch, &ids.$i, column)?,)*))
             }
             #[inline(always)]
             unsafe fn fetch<'a>(state: Self::State, row: usize) -> Self::Item<'a> {
@@ -685,16 +750,43 @@ impl Filters {
     }
 }
 
-pub(crate) struct Archetypes<'a> {
-    pub(crate) all: &'a [Archetype],
-    pub(crate) indices: Option<std::slice::Iter<'a, u32>>,
-    pub(crate) next: usize,
+/// Resolve a hinted column under the live archetype borrow. A component
+/// outside the signature (for example an optional fetch) uses the scan.
+#[inline]
+pub(crate) fn column_with_hint(
+    arch: &Archetype,
+    hints: Option<cache::ColumnHints<'_>>,
+    id: ComponentId,
+) -> Option<usize> {
+    if let Some(index) = hints.and_then(|hints| hints.get(id)) {
+        debug_assert_eq!(arch.component_ids()[index], id);
+        Some(index)
+    } else {
+        arch.column_index(id)
+    }
 }
 
-impl<'a> Archetypes<'a> {
-    /// The next archetype and its index in the world's archetype list.
+#[inline]
+pub(crate) fn state_with_hints<Q: QueryData>(
+    arch: &Archetype,
+    ids: &Q::Ids,
+    hints: Option<cache::ColumnHints<'_>>,
+) -> Option<Q::State> {
+    match hints {
+        Some(hints) => Q::state_with_columns(arch, ids, &mut |id| column_with_hint(arch, Some(hints), id)),
+        None => Q::state(arch, ids),
+    }
+}
+
+struct ArchetypeScan<'a> {
+    all: &'a [Archetype],
+    indices: Option<std::slice::Iter<'a, u32>>,
+    next: usize,
+}
+
+impl<'a> ArchetypeScan<'a> {
     #[inline]
-    pub(crate) fn next_indexed(&mut self) -> Option<(usize, &'a Archetype)> {
+    fn next_indexed(&mut self) -> Option<(usize, &'a Archetype)> {
         let index = if let Some(indices) = &mut self.indices {
             *indices.next()? as usize
         } else {
@@ -703,6 +795,55 @@ impl<'a> Archetypes<'a> {
             index
         };
         Some((index, self.all.get(index)?))
+    }
+}
+
+impl<'a> Iterator for ArchetypeScan<'a> {
+    type Item = &'a Archetype;
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        self.next_indexed().map(|(_, arch)| arch)
+    }
+}
+
+pub(crate) struct Archetypes<'a> {
+    scan: ArchetypeScan<'a>,
+    pub(crate) columns: Option<&'a cache::ColumnRows>,
+    next_column: usize,
+}
+
+impl<'a> Archetypes<'a> {
+    #[inline]
+    pub(crate) fn new(
+        all: &'a [Archetype],
+        indices: Option<&'a [u32]>,
+        next: usize,
+        columns: Option<&'a cache::ColumnRows>,
+    ) -> Self {
+        Self {
+            scan: ArchetypeScan {
+                all,
+                indices: indices.map(<[u32]>::iter),
+                next,
+            },
+            columns,
+            next_column: 0,
+        }
+    }
+
+    /// The next archetype and its index in the world's archetype list.
+    #[inline]
+    pub(crate) fn next_indexed(&mut self) -> Option<(usize, &'a Archetype)> {
+        let matched = self.scan.next_indexed()?;
+        self.next_column += 1;
+        Some(matched)
+    }
+
+    #[inline]
+    pub(crate) fn next_with_columns(&mut self) -> Option<(&'a Archetype, Option<cache::ColumnHints<'a>>)> {
+        let row = self.next_column;
+        let (_, arch) = self.next_indexed()?;
+        Some((arch, self.columns.map(|columns| columns.row(row))))
     }
 }
 
@@ -720,6 +861,7 @@ impl<'a> Iterator for Archetypes<'a> {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ParTask {
     arch: usize,
+    match_ordinal: usize,
     start: usize,
     end: usize,
     base: usize,
@@ -820,6 +962,7 @@ const PAR_PROBE_RESOLUTION_NS: u128 = 250;
 #[cfg(feature = "parallel")]
 struct Plan {
     tasks: Vec<ParTask>,
+    cached_columns: bool,
     total: usize,
     chunk: Option<usize>,
     probe: bool,
@@ -886,6 +1029,7 @@ impl Plan {
 struct ParWork<'a, Q: QueryData> {
     archetypes: &'a [Archetype],
     tasks: &'a [ParTask],
+    columns: Option<&'a cache::ColumnRows>,
     ids: Q::Ids,
 }
 
@@ -961,7 +1105,8 @@ impl<Q: QueryData> ParWork<'_, Q> {
         let mut pos = lo;
         while pos < hi {
             let task = self.tasks[t];
-            let state = Q::state(&self.archetypes[task.arch], &self.ids)
+            let columns = self.columns.map(|rows| rows.row(task.match_ordinal));
+            let state = state_with_hints::<Q>(&self.archetypes[task.arch], &self.ids, columns)
                 .expect("a planned archetype matches the query while it runs");
             let first = task.start + (pos - task.base);
             let last = task.end.min(task.start + (hi - task.base));
@@ -1233,11 +1378,7 @@ impl<'w, Q: QueryData> Query<'w, Q> {
         // those with entities (`World::slots`).
         let scan = self.world.slots.scan();
         if self.cache == QueryCache::Never || self.world.archetypes.len() < self.world.query_matches.min_archetypes() {
-            return Archetypes {
-                all: &self.world.archetypes,
-                indices: scan.map(<[u32]>::iter),
-                next: 0,
-            };
+            return Archetypes::new(&self.world.archetypes, scan, 0, None);
         }
         let key = cache::signature::<Q>(&self.ids, &self.filters);
         self.world
@@ -1388,7 +1529,12 @@ impl<'w, Q: QueryData> Query<'w, Q> {
             // detection.
             let ids = self.ids;
             let filters = self.filters;
-            for arch in self.archetypes() {
+            let archetypes = self.archetypes();
+            if archetypes.columns.is_some() {
+                return Self::for_each_cached_columns(archetypes, ids, filters, f);
+            }
+            // Preserve the small, inlined scan loop for narrow layouts.
+            for arch in archetypes.scan {
                 let len = arch.len();
                 if len == 0 || !filters.matches(arch) {
                     continue;
@@ -1396,13 +1542,34 @@ impl<'w, Q: QueryData> Query<'w, Q> {
                 let Some(state) = Q::state(arch, &ids) else {
                     continue;
                 };
-                // SAFETY: the rows of a matching archetype, under the
-                // query's validated borrow.
+                // SAFETY: the rows match under the validated query borrow.
                 unsafe { for_rows::<Q>(state, 0..len, &mut f) };
             }
             return;
         }
         self.for_each_tracked(f);
+    }
+
+    /// Keep the column-cache loop outside the untracked scan loop so its
+    /// extra state does not change the register pressure of narrow queries.
+    #[inline(never)]
+    fn for_each_cached_columns(
+        mut archetypes: Archetypes<'_>,
+        ids: Q::Ids,
+        filters: Filters,
+        mut f: impl FnMut(Q::Item<'_>),
+    ) {
+        while let Some((arch, columns)) = archetypes.next_with_columns() {
+            let len = arch.len();
+            if len == 0 || !filters.matches(arch) {
+                continue;
+            }
+            let Some(state) = state_with_hints::<Q>(arch, &ids, columns) else {
+                continue;
+            };
+            // SAFETY: the rows match under the validated query borrow.
+            unsafe { for_rows::<Q>(state, 0..len, &mut f) };
+        }
     }
 
     /// [`for_each`](Self::for_each) in a world that tracks changes: a
@@ -1417,12 +1584,13 @@ impl<'w, Q: QueryData> Query<'w, Q> {
         let ids = self.ids;
         let filters = self.filters;
         let mut runs = change::Runs::new(self.clock());
-        for arch in self.archetypes() {
+        let mut archetypes = self.archetypes();
+        while let Some((arch, columns)) = archetypes.next_with_columns() {
             let len = arch.len();
             if len == 0 || !filters.matches_tracked(arch) {
                 continue;
             }
-            let Some(state) = Q::state(arch, &ids) else {
+            let Some(state) = state_with_hints::<Q>(arch, &ids, columns) else {
                 continue;
             };
             let in_runs = arch.tracked() && change::visit::<Q>(arch, &ids, &filters, &mut runs);
@@ -1527,6 +1695,7 @@ impl<'w, Q: QueryData> Query<'w, Q> {
         let tracking = self.tracking();
         let (mut total, mut longest) = (0, 0);
         let mut archetypes = self.archetypes();
+        let cached_columns = archetypes.columns.is_some();
         while let Some((arch_index, arch)) = archetypes.next_indexed() {
             let len = arch.len();
             if len == 0 || !filters.matches(arch) {
@@ -1535,14 +1704,18 @@ impl<'w, Q: QueryData> Query<'w, Q> {
             // `Q::state` is `Some` exactly when every required component is
             // here (`QueryData`'s contract): check that without resolving
             // columns, which `ParWork::visit` does once per chunk.
-            let mut has_required = true;
-            Q::access(&ids, &mut |id, _, required| has_required &= !required || arch.has(id));
-            if !has_required {
-                continue;
+            if !cached_columns {
+                let mut has_required = true;
+                Q::access(&ids, &mut |id, _, required| has_required &= !required || arch.has(id));
+                if !has_required {
+                    continue;
+                }
             }
+            let match_ordinal = archetypes.next_column - 1;
             let mut push = |start: usize, end: usize| {
                 tasks.push(ParTask {
                     arch: arch_index,
+                    match_ordinal,
                     start,
                     end,
                     base: total,
@@ -1573,9 +1746,27 @@ impl<'w, Q: QueryData> Query<'w, Q> {
         let serial = total <= chunk || (web && longest <= PAR_MIN_CHUNK);
         Plan {
             tasks,
+            cached_columns,
             total,
             chunk: (!serial).then_some(chunk),
             probe: !web,
+        }
+    }
+
+    #[cfg(feature = "parallel")]
+    fn par_work<'p>(&'p self, plan: &'p Plan) -> ParWork<'p, Q> {
+        // No archetype or cache entry changes between planning and running.
+        let columns = if plan.cached_columns {
+            let key = cache::signature::<Q>(&self.ids, &self.filters);
+            self.world.query_matches.column_rows(&key)
+        } else {
+            None
+        };
+        ParWork {
+            archetypes: &self.world.archetypes,
+            tasks: &plan.tasks,
+            columns,
+            ids: self.ids,
         }
     }
 
@@ -1584,11 +1775,7 @@ impl<'w, Q: QueryData> Query<'w, Q> {
     #[cfg(feature = "parallel")]
     fn par_run(&mut self, plan: Plan, f: impl Fn(usize, Q::Item<'_>) + Send + Sync) {
         use rayon::prelude::*;
-        let work = ParWork::<Q> {
-            archetypes: &self.world.archetypes,
-            tasks: &plan.tasks,
-            ids: self.ids,
-        };
+        let work = self.par_work(&plan);
         let total = plan.total;
         // SAFETY: the plan was built under this query's world borrow, whose
         // access was validated; the serial part runs before the parallel one.
@@ -1710,11 +1897,7 @@ impl<'w, Q: QueryData> Query<'w, Q> {
                 }
             }
 
-            let work = ParWork::<Q> {
-                archetypes: &self.world.archetypes,
-                tasks: &plan.tasks,
-                ids: self.ids,
-            };
+            let work = self.par_work(&plan);
             let leaf = |lo: usize, hi: usize, initialized: &mut Initialized<R>| {
                 // SAFETY: the plan was built under this query's world borrow,
                 // whose access was validated; the serial part and `fill` hand
@@ -1862,11 +2045,7 @@ impl<'w, Q: QueryData> Query<'w, Q> {
         // item, read from the one archetype that holds it.
         let world: &'w World = self.world;
         let mut matches = QueryIter::<'w, Q> {
-            archetypes: Archetypes {
-                all: &world.archetypes,
-                indices: None,
-                next: index,
-            },
+            archetypes: Archetypes::new(&world.archetypes, None, index, None),
             ids,
             filters,
             state: None,
@@ -1974,11 +2153,11 @@ impl<'a, Q: QueryData> Iterator for QueryIter<'a, Q> {
                     None => self.filtered = None,
                 }
             }
-            let arch = self.archetypes.next()?;
+            let (arch, columns) = self.archetypes.next_with_columns()?;
             self.state = if arch.is_empty() || !self.filters.matches(arch) {
                 None
             } else {
-                Q::state(arch, &self.ids)
+                state_with_hints::<Q>(arch, &self.ids, columns)
             };
             self.row = 0;
             self.len = arch.len();
@@ -2003,6 +2182,49 @@ mod par_plan_tests {
     #[derive(Component)]
     struct Value(u32);
 
+    #[test]
+    fn workers_resolve_cached_columns_under_the_live_world_borrow() {
+        #[derive(Component)]
+        struct Tag<const N: u8>;
+
+        let mut world = World::new();
+        let mut policy = QueryCachePolicy::new();
+        policy.min_archetypes = 1;
+        world.set_query_cache_policy(policy);
+        let mut entities = Vec::new();
+        for i in 0..8 {
+            let entity = world.spawn((
+                Tag::<0>, Tag::<1>, Tag::<2>, Tag::<3>, Tag::<4>, Tag::<5>, Tag::<6>, Tag::<7>, Tag::<8>, Tag::<9>,
+                Tag::<10>, Tag::<11>,
+            ));
+            world.insert(entity, Tag::<12>);
+            world.insert(entity, Tag::<13>);
+            world.insert(entity, Tag::<14>);
+            world.insert(entity, Tag::<15>);
+            world.insert(entity, Value(i));
+            entities.push(entity);
+        }
+
+        let mut query = world.query::<&mut Value>().cached();
+        let mut plan = query.par_plan();
+        assert!(plan.cached_columns);
+        // Bypass wall-clock sampling so the worker path runs even for this
+        // small fixture and under an instrumented build.
+        plan.chunk = Some(1);
+        plan.probe = false;
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(2).build().unwrap();
+        pool.install(|| {
+            query.par_run(plan, |i, value| {
+                assert!(rayon::current_thread_index().is_some());
+                assert_eq!(value.0, i as u32);
+                value.0 += 10;
+            })
+        });
+        for (i, entity) in entities.into_iter().enumerate() {
+            assert_eq!(world.get::<Value>(entity).unwrap().0, i as u32 + 10);
+        }
+    }
+
     /// A tracked world where every other row changed since the returned
     /// tick: a `Changed` query plans one entry per changed row.
     fn many_runs(rows: u32) -> (World, Tick) {
@@ -2023,6 +2245,7 @@ mod par_plan_tests {
     fn serial_part(total: usize, ns: impl Fn(usize) -> u128) -> (usize, Option<usize>) {
         let plan = Plan {
             tasks: Vec::new(),
+            cached_columns: false,
             total,
             chunk: Some(PAR_MIN_CHUNK),
             probe: true,

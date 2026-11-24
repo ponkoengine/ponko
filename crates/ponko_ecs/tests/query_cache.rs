@@ -893,3 +893,129 @@ fn single_reads_through_the_index() {
         assert_eq!(several.err(), Some(SingleError::MultipleEntities));
     });
 }
+
+#[test]
+fn late_columns_agree_across_cached_query_entry_points() {
+    #[derive(Component)]
+    struct Other(u32);
+    #[derive(Component)]
+    struct Extra(u16);
+
+    let mut world = World::new();
+    let mut policy = QueryCachePolicy::new();
+    policy.min_archetypes = 1;
+    world.set_query_cache_policy(policy);
+    for value in 0..2 {
+        let entity = world.spawn((
+            Marker::<0>,
+            Marker::<1>,
+            Marker::<2>,
+            Marker::<3>,
+            Marker::<4>,
+            Marker::<5>,
+            Marker::<6>,
+            Marker::<7>,
+            Marker::<8>,
+            Marker::<9>,
+            Marker::<10>,
+            Marker::<11>,
+        ));
+        world.insert(entity, Marker::<12>);
+        world.insert(entity, Marker::<13>);
+        world.insert(entity, Marker::<14>);
+        world.insert(entity, Marker::<15>);
+        world.insert(entity, Marker::<16>);
+        world.insert(entity, Value(40 + value));
+        world.insert(entity, Other(260 + value as u32));
+        if value == 1 {
+            world.insert(entity, Extra(7));
+        }
+    }
+    let project =
+        |(other, value, extra): (&Other, &Value, Option<&Extra>)| (other.0, value.0, extra.map(|extra| extra.0));
+    let expected: Vec<_> = world
+        .query::<(&Other, &Value, Option<&Extra>)>()
+        .uncached()
+        .iter()
+        .map(project)
+        .collect();
+    assert_eq!(expected, [(260, 40, None), (261, 41, Some(7))]);
+
+    let expected_pairs: Vec<_> = expected.iter().map(|&(other, value, _)| (other, value)).collect();
+    let mut each = Vec::new();
+    world
+        .query::<(&Other, &Value, Option<&Extra>)>()
+        .cached()
+        .for_each(|item| each.push(project(item)));
+    assert_eq!(each, expected);
+    let iter: Vec<_> = world
+        .query::<(&Other, &Value, Option<&Extra>)>()
+        .cached()
+        .iter()
+        .map(project)
+        .collect();
+    assert_eq!(iter, expected);
+
+    let mut state = ViewState::new().read::<Value>().read::<Other>().read::<Extra>();
+    state.run(&mut world, |mut view| {
+        let mut seen = Vec::new();
+        view.query::<(&Other, &Value, Option<&Extra>)>()
+            .cached()
+            .for_each(|item| seen.push(project(item)));
+        assert_eq!(seen, expected);
+    });
+
+    let ids = [
+        world.component_id::<Other>().unwrap(),
+        world.component_id::<Value>().unwrap(),
+    ];
+    let mut chunks = Vec::new();
+    let mut collect_chunk = |chunk: Chunk<'_>| {
+        for row in 0..chunk.len() {
+            // SAFETY: the requested columns in their declared order, each
+            // live for every row in the chunk.
+            let (other, value) = unsafe {
+                (
+                    &*chunk.columns[0].cast::<Other>().add(row),
+                    &*chunk.columns[1].cast::<Value>().add(row),
+                )
+            };
+            chunks.push((other.0, value.0));
+        }
+    };
+    world
+        .raw()
+        .query_chunks(ChunkQuery::new(&ids).cache(QueryCache::Always), &mut collect_chunk);
+    world.raw().for_each_chunk(&ids, &mut collect_chunk);
+    assert_eq!(&chunks[..2], expected_pairs);
+    assert_eq!(&chunks[2..], expected_pairs);
+    assert_eq!(world.query_cache_stats().signatures, 1);
+
+    #[cfg(feature = "parallel")]
+    {
+        let mut parallel = Vec::new();
+        world
+            .query::<(&Other, &Value, Option<&Extra>)>()
+            .cached()
+            .par_collect_into(&mut parallel, project);
+        assert_eq!(parallel, expected);
+    }
+    world.track_changes::<Value>();
+    let seen = world.advance_change_tick();
+    world
+        .query::<(&Other, &mut Value)>()
+        .cached()
+        .for_each(|(other, value)| {
+            assert_eq!(other.0 as usize - value.0, 220);
+            value.0 += 1;
+        });
+    let changed: Vec<_> = world
+        .query::<(&Other, &Value)>()
+        .filter::<Changed<Value>>()
+        .cached()
+        .since(seen)
+        .iter()
+        .map(|(other, value)| (other.0, value.0))
+        .collect();
+    assert_eq!(changed, [(260, 41), (261, 42)]);
+}

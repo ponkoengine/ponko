@@ -867,6 +867,18 @@ fn query_level(filter: Option<&str>) {
                     }),
                 ),
                 (
+                    "for_each(&mut P,&V).cached()",
+                    Box::new(|| {
+                        let mut w = w.borrow_mut();
+                        let mut n = 0;
+                        w.query::<(&mut P, &V)>().cached().for_each(|(a, b)| {
+                            a.0 += b.0;
+                            n += 1;
+                        });
+                        n
+                    }),
+                ),
+                (
                     "lookup-linear",
                     Box::new(|| {
                         let w = w.borrow();

@@ -2,12 +2,10 @@
 //! query signature matches, so a query in a world with many archetypes visits
 //! its candidates instead of testing every archetype.
 //!
-//! What is kept between queries is archetype indices only, never column
-//! pointers or `QueryData::State`: column buffers and the archetype `Vec` may
-//! move between queries. Every loop still tests its own filters and resolves
-//! its columns for each candidate under the live world borrow, so the index
-//! can only narrow which archetypes are looked at, in the same ascending
-//! order a scan uses.
+//! The index holds archetype numbers and, for expensive lookups, column
+//! numbers. Pointers and `QueryData::State` are rebuilt while the world is
+//! borrowed because column buffers can move between queries. Matches stay
+//! in the same ascending order a scan uses.
 //!
 //! Archetype slots are never removed, and an entry only has to match the
 //! slots created since it last looked. An empty archetype may be reclaimed
@@ -102,7 +100,9 @@ pub struct QueryCachePolicy {
     /// signatures than fit, and drops ones it still uses now and then.
     pub max_signatures: usize,
     /// Most bytes of archetype indices kept, over all signatures (4 bytes
-    /// per matching archetype). A signature that doesn't fit scans.
+    /// per matching archetype). A signature that doesn't fit scans. Live
+    /// column numbers use a separate allowance of the same size. Allocated
+    /// capacity is reported by [`QueryCacheStats::bytes`].
     pub max_index_bytes: usize,
 }
 
@@ -153,8 +153,8 @@ pub struct QueryCacheStats {
     pub indexed: usize,
     /// Archetype indices held, over all signatures.
     pub indices: usize,
-    /// Heap bytes the index owns: the signature table and the index lists,
-    /// with their spare capacity.
+    /// Heap bytes the index owns, including the signature table, index
+    /// lists and cached columns, with their spare capacity.
     pub bytes: usize,
     /// Queries answered from an index so far, not counting the queries of
     /// a [`WorldView`](crate::WorldView) (they only read the index).
@@ -498,6 +498,75 @@ enum State {
     Scanning { recheck: usize },
 }
 
+/// Early component IDs are cheap to scan in the membership benchmark.
+const FIRST_EXPENSIVE_COLUMN: usize = 16;
+
+pub(crate) struct ColumnRows {
+    ids: Box<[ComponentId]>,
+    /// One row per matching archetype and one cell per required component.
+    /// The maximum value falls back to lookup for extremely wide layouts.
+    cells: Vec<u16>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct ColumnHints<'a> {
+    ids: &'a [ComponentId],
+    cells: &'a [u16],
+}
+
+impl ColumnHints<'_> {
+    #[inline]
+    pub(crate) fn get(self, id: ComponentId) -> Option<usize> {
+        let slot = self.ids.iter().position(|&candidate| candidate == id)?;
+        let column = self.cells[slot];
+        (column != u16::MAX).then_some(usize::from(column))
+    }
+}
+
+impl ColumnRows {
+    #[inline]
+    pub(crate) fn row(&self, index: usize) -> ColumnHints<'_> {
+        let stride = self.ids.len();
+        ColumnHints {
+            ids: &self.ids,
+            cells: &self.cells[index * stride..(index + 1) * stride],
+        }
+    }
+
+    fn index(arch: &Archetype, id: ComponentId) -> u16 {
+        arch.column_index(id)
+            .and_then(|index| u16::try_from(index).ok())
+            .unwrap_or(u16::MAX)
+    }
+
+    fn append(&mut self, arch: &Archetype) {
+        self.cells.extend(self.ids.iter().map(|&id| Self::index(arch, id)));
+    }
+
+    fn insert(&mut self, row: usize, arch: &Archetype) {
+        let start = row * self.ids.len();
+        self.cells
+            .splice(start..start, self.ids.iter().map(|&id| Self::index(arch, id)));
+    }
+
+    fn refresh(&mut self, row: usize, arch: &Archetype) {
+        let start = row * self.ids.len();
+        let row = &mut self.cells[start..start + self.ids.len()];
+        for (column, &id) in row.iter_mut().zip(&self.ids) {
+            *column = Self::index(arch, id);
+        }
+    }
+
+    fn remove(&mut self, row: usize) {
+        let stride = self.ids.len();
+        self.cells.drain(row * stride..(row + 1) * stride);
+    }
+
+    fn bytes(&self) -> usize {
+        self.ids.len() * size_of::<ComponentId>() + self.cells.capacity() * size_of::<u16>()
+    }
+}
+
 struct MatchEntry {
     state: State,
     /// Archetype slots are never removed: their count is a non-wrapping
@@ -506,12 +575,56 @@ struct MatchEntry {
     generation: usize,
     /// Ascending, so candidates come in scan order.
     indices: Vec<u32>,
+    columns: Option<Box<ColumnRows>>,
     uses: u32,
     /// The index's query count at the last use. Atomic because view
     /// queries, which share the world, record their use too.
     last_used: AtomicU64,
     /// A query asked for this signature with [`QueryCache::Always`].
     pinned: bool,
+}
+
+impl MatchEntry {
+    fn drop_columns(&mut self, cells: &mut usize) {
+        if let Some(columns) = self.columns.take() {
+            *cells -= columns.cells.len();
+        }
+    }
+
+    fn extend_columns(&mut self, all: &[Archetype], key: &MatchKey, added_at: usize, budget: usize, cells: &mut usize) {
+        let ids = &key.has[..usize::from(key.n_has)];
+        let start = if self.columns.is_some() {
+            added_at
+        } else {
+            let expensive = |arch: &Archetype| {
+                ids.iter()
+                    .any(|&id| arch.column_index(id).is_some_and(|i| i >= FIRST_EXPENSIVE_COLUMN))
+            };
+            if !self.indices[added_at..]
+                .iter()
+                .any(|&index| expensive(&all[index as usize]))
+            {
+                return;
+            }
+            0
+        };
+        let added = ids.len().saturating_mul(self.indices.len() - start);
+        if added > budget.saturating_sub(*cells) {
+            self.drop_columns(cells);
+            return;
+        }
+        let columns = self.columns.get_or_insert_with(|| {
+            Box::new(ColumnRows {
+                ids: ids.into(),
+                cells: Vec::new(),
+            })
+        });
+        columns.cells.reserve(added);
+        for &index in &self.indices[start..] {
+            columns.append(&all[index as usize]);
+        }
+        *cells += added;
+    }
 }
 
 /// The index of one world. See the module docs.
@@ -542,6 +655,7 @@ pub(crate) struct MatchCache {
     pending: AtomicBool,
     /// Indices held over all entries.
     indices: usize,
+    column_cells: usize,
     hits: u64,
     evictions: u64,
 }
@@ -559,6 +673,7 @@ impl Default for MatchCache {
             wanted: Mutex::new(Vec::new()),
             pending: AtomicBool::new(false),
             indices: 0,
+            column_cells: 0,
             hits: 0,
             evictions: 0,
         }
@@ -584,11 +699,14 @@ impl MatchCache {
         hint: QueryCache,
         scan: Option<&'a [u32]>,
     ) -> Archetypes<'a> {
-        Archetypes {
+        self.settle(all);
+        let entry = self.lookup(all, key, hint);
+        Archetypes::new(
             all,
-            indices: self.candidates(all, key, hint).or(scan).map(<[u32]>::iter),
-            next: 0,
-        }
+            entry.map(|entry| entry.indices.as_slice()).or(scan),
+            0,
+            entry.and_then(|entry| entry.columns.as_deref()),
+        )
     }
 
     /// The archetypes to visit for a chunk query: those with every one of
@@ -603,11 +721,7 @@ impl MatchCache {
         scan: Option<&'a [u32]>,
     ) -> Archetypes<'a> {
         if hint == QueryCache::Never || all.len() < self.min_archetypes() {
-            return Archetypes {
-                all,
-                indices: scan.map(<[u32]>::iter),
-                next: 0,
-            };
+            return Archetypes::new(all, scan, 0, None);
         }
         let key = MatchKey::new(|require| ids.iter().for_each(|&id| require(id)), filter);
         self.archetypes(all, &key, hint, scan)
@@ -616,13 +730,14 @@ impl MatchCache {
     /// The indices of the archetypes `key` matches, if the policy indexes
     /// it; `None` to scan. Allocates only when it remembers a signature for
     /// the first time, builds an index, or lists archetypes created since.
-    #[inline(never)]
-    pub(crate) fn candidates(&mut self, all: &[Archetype], key: &MatchKey, hint: QueryCache) -> Option<&[u32]> {
+    #[cfg(test)]
+    fn candidates(&mut self, all: &[Archetype], key: &MatchKey, hint: QueryCache) -> Option<&[u32]> {
         self.settle(all);
-        self.lookup(all, key, hint)
+        self.lookup(all, key, hint).map(|entry| entry.indices.as_slice())
     }
 
-    fn lookup(&mut self, all: &[Archetype], key: &MatchKey, hint: QueryCache) -> Option<&[u32]> {
+    #[inline(never)]
+    fn lookup(&mut self, all: &[Archetype], key: &MatchKey, hint: QueryCache) -> Option<&MatchEntry> {
         let always = hint == QueryCache::Always;
         self.clock += 1;
         let clock = self.clock;
@@ -646,6 +761,7 @@ impl MatchCache {
             state: State::Counting,
             generation: 0,
             indices: Vec::new(),
+            columns: None,
             uses: 0,
             last_used: AtomicU64::new(clock),
             pinned: false,
@@ -694,14 +810,28 @@ impl MatchCache {
                 // Over the memory bound: this signature scans from now on.
                 self.indices -= entry.indices.len();
                 entry.indices = Vec::new();
+                entry.drop_columns(&mut self.column_cells);
                 entry.state = State::Scanning {
                     recheck: all.len().saturating_mul(2),
                 };
                 return None;
             }
+            entry.extend_columns(
+                all,
+                key,
+                before,
+                policy.max_index_bytes / size_of::<u16>(),
+                &mut self.column_cells,
+            );
         }
         self.hits += 1;
-        Some(&entry.indices)
+        Some(entry)
+    }
+
+    /// A parallel query uses the same immutable index in planning and execution.
+    #[cfg(any(test, feature = "parallel"))]
+    pub(crate) fn column_rows(&self, key: &MatchKey) -> Option<&ColumnRows> {
+        self.map.get(key)?.columns.as_deref()
     }
 
     /// Forgets every indexed signature: the world's archetypes were laid
@@ -710,6 +840,7 @@ impl MatchCache {
     pub(crate) fn forget_layout(&mut self) {
         self.map.clear();
         self.indices = 0;
+        self.column_cells = 0;
         self.misses = 0;
         *self.full.get_mut() = false;
         self.wanted
@@ -726,6 +857,7 @@ impl MatchCache {
     pub(crate) fn reused(&mut self, slot: usize, all: &[Archetype]) {
         let arch = &all[slot];
         let budget = self.policy.max_index_bytes / size_of::<u32>();
+        let column_budget = self.policy.max_index_bytes / size_of::<u16>();
         for (key, entry) in &mut self.map {
             if entry.state != State::Indexed || slot >= entry.generation {
                 continue;
@@ -736,17 +868,40 @@ impl MatchCache {
                         // Over the memory bound: this signature scans from now on.
                         self.indices -= entry.indices.len();
                         entry.indices = Vec::new();
+                        entry.drop_columns(&mut self.column_cells);
                         entry.state = State::Scanning {
                             recheck: all.len().saturating_mul(2),
                         };
                     } else {
                         entry.indices.insert(at, slot as u32);
                         self.indices += 1;
+                        if let Some(columns) = &mut entry.columns {
+                            let stride = columns.ids.len();
+                            if stride <= column_budget.saturating_sub(self.column_cells) {
+                                columns.insert(at, arch);
+                                self.column_cells += stride;
+                            } else {
+                                entry.drop_columns(&mut self.column_cells);
+                            }
+                        } else {
+                            entry.extend_columns(all, key, at, column_budget, &mut self.column_cells);
+                        }
+                    }
+                }
+                (true, Ok(at)) => {
+                    if let Some(columns) = &mut entry.columns {
+                        columns.refresh(at, arch);
+                    } else {
+                        entry.extend_columns(all, key, at, column_budget, &mut self.column_cells);
                     }
                 }
                 (false, Ok(at)) => {
                     entry.indices.remove(at);
                     self.indices -= 1;
+                    if let Some(columns) = &mut entry.columns {
+                        columns.remove(at);
+                        self.column_cells -= columns.ids.len();
+                    }
                 }
                 _ => {}
             }
@@ -758,8 +913,30 @@ impl MatchCache {
     /// created since. Reads the index without a lock, so any number of
     /// threads may ask at once. A signature that isn't usable yet, but
     /// could be, is noted for [`settle`](Self::settle).
+    #[inline]
+    pub(crate) fn shared_archetypes<'a>(
+        &'a self,
+        all: &'a [Archetype],
+        key: &MatchKey,
+        hint: QueryCache,
+        scan: Option<&'a [u32]>,
+    ) -> Archetypes<'a> {
+        let entry = self.shared_lookup(all, key, hint);
+        Archetypes::new(
+            all,
+            entry.map(|entry| entry.indices.as_slice()).or(scan),
+            0,
+            entry.and_then(|entry| entry.columns.as_deref()),
+        )
+    }
+
+    #[cfg(test)]
+    fn shared_candidates(&self, all: &[Archetype], key: &MatchKey, hint: QueryCache) -> Option<&[u32]> {
+        self.shared_lookup(all, key, hint).map(|entry| entry.indices.as_slice())
+    }
+
     #[inline(never)]
-    pub(crate) fn shared_candidates(&self, all: &[Archetype], key: &MatchKey, hint: QueryCache) -> Option<&[u32]> {
+    fn shared_lookup(&self, all: &[Archetype], key: &MatchKey, hint: QueryCache) -> Option<&MatchEntry> {
         let always = hint == QueryCache::Always;
         if let Some(entry) = self.map.get(key) {
             match entry.state {
@@ -770,7 +947,7 @@ impl MatchCache {
                     if entry.last_used.load(Ordering::Relaxed) != self.clock {
                         entry.last_used.store(self.clock, Ordering::Relaxed);
                     }
-                    return Some(&entry.indices);
+                    return Some(entry);
                 }
                 // Decided: scanned until the world has grown, or a hint asks.
                 State::Scanning { recheck } if all.len() < recheck && !(always && !entry.pinned) => return None,
@@ -856,11 +1033,13 @@ impl MatchCache {
     fn sweep(&mut self) {
         let swept_at = self.swept_at;
         let (mut dropped, mut freed) = (0, 0);
+        let cells = &mut self.column_cells;
         self.map.retain(|_, entry| {
             let keep = *entry.last_used.get_mut() > swept_at;
             if !keep {
                 dropped += 1;
                 freed += entry.indices.len();
+                entry.drop_columns(cells);
             }
             keep
         });
@@ -893,7 +1072,16 @@ impl MatchCache {
 
     fn stats(&self) -> QueryCacheStats {
         let table = self.map.capacity() * (size_of::<MatchKey>() + size_of::<MatchEntry>() + 1);
-        let lists: usize = self.map.values().map(|e| e.indices.capacity() * size_of::<u32>()).sum();
+        let lists: usize = self
+            .map
+            .values()
+            .map(|e| {
+                e.indices.capacity() * size_of::<u32>()
+                    + e.columns
+                        .as_deref()
+                        .map_or(0, |columns| size_of::<ColumnRows>() + columns.bytes())
+            })
+            .sum();
         QueryCacheStats {
             signatures: self.map.len(),
             indexed: self.map.values().filter(|e| e.state == State::Indexed).count(),
@@ -1239,6 +1427,65 @@ mod tests {
                 .shared_candidates(&archetypes, &with(3), QueryCache::Auto)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn cached_columns_follow_growth_and_reused_slots() {
+        let mut world = World::new();
+        let ids = [
+            world.register::<Marker<0>>(),
+            world.register::<Marker<1>>(),
+            world.register::<Marker<2>>(),
+            world.register::<Marker<3>>(),
+            world.register::<Marker<4>>(),
+            world.register::<Marker<5>>(),
+            world.register::<Marker<6>>(),
+            world.register::<Marker<7>>(),
+            world.register::<Marker<8>>(),
+            world.register::<Marker<9>>(),
+            world.register::<Marker<10>>(),
+            world.register::<Marker<11>>(),
+            world.register::<Marker<12>>(),
+            world.register::<Marker<13>>(),
+            world.register::<Marker<14>>(),
+            world.register::<Marker<15>>(),
+            world.register::<Marker<16>>(),
+            world.register::<Marker<17>>(),
+        ];
+        let mut archetypes = vec![Archetype::new(ids.to_vec().into(), &world.infos)];
+        let signature = with(ids[17].0);
+        let mut cache = MatchCache::default();
+        cache.set_policy(policy(1));
+        assert_eq!(
+            cache.candidates(&archetypes, &signature, QueryCache::Always).unwrap(),
+            [0]
+        );
+        assert_eq!(cache.column_rows(&signature).unwrap().row(0).get(ids[17]), Some(17));
+
+        // The slot still matches, but its requested column moved.
+        archetypes[0] = Archetype::new(ids[1..].to_vec().into(), &world.infos);
+        cache.reused(0, &archetypes);
+        assert_eq!(cache.column_rows(&signature).unwrap().row(0).get(ids[17]), Some(16));
+
+        // A newly matching layout adds a row in the same order as the indices.
+        archetypes.push(Archetype::new(vec![ids[17]].into(), &world.infos));
+        assert_eq!(
+            cache.candidates(&archetypes, &signature, QueryCache::Always).unwrap(),
+            [0, 1]
+        );
+        assert_eq!(cache.column_rows(&signature).unwrap().row(1).get(ids[17]), Some(0));
+        let mut matches = cache.archetypes(&archetypes, &signature, QueryCache::Always, None);
+        assert_eq!(matches.next().unwrap().component_ids().len(), 17);
+        let (_, hints) = matches.next_with_columns().unwrap();
+        assert_eq!(hints.unwrap().get(ids[17]), Some(0));
+
+        archetypes[0] = Archetype::new(ids[..17].to_vec().into(), &world.infos);
+        cache.reused(0, &archetypes);
+        assert_eq!(
+            cache.candidates(&archetypes, &signature, QueryCache::Always).unwrap(),
+            [1]
+        );
+        assert_eq!(cache.column_rows(&signature).unwrap().row(0).get(ids[17]), Some(0));
     }
 
     #[test]

@@ -1118,15 +1118,15 @@ impl World {
         let mut cols = [0; MAX];
         let mut ptrs = [std::ptr::null_mut(); MAX];
         let mut runs = Runs::new(clock);
-        let archetypes = self
-            .query_matches
-            .chunk_archetypes(&self.archetypes, ids, filter, cache, self.slots.scan());
-        'arch: for arch in archetypes {
+        let mut archetypes =
+            self.query_matches
+                .chunk_archetypes(&self.archetypes, ids, filter, cache, self.slots.scan());
+        'arch: while let Some((arch, columns)) = archetypes.next_with_columns() {
             if arch.is_empty() || filter.is_some_and(|filter| !filter.matches(arch)) {
                 continue;
             }
             for (i, &id) in ids.iter().enumerate() {
-                match arch.column_index(id) {
+                match crate::query::column_with_hint(arch, columns, id) {
                     Some(col) => cols[i] = col,
                     None => continue 'arch,
                 }
