@@ -188,7 +188,7 @@ fn assert_backtrace_of_the_segfault(report: &CrashReport) {
         "frame 0 is the crashing function, named at the next start:\n{backtrace}"
     );
     assert!(
-        frame_0.contains("in <game>/native_crash"),
+        frame_0.contains("in <game>/native_crash") || frame_0.contains(r"in <game>\native_crash"),
         "with its module and offset:\n{backtrace}"
     );
     if walks_the_whole_chain() {
