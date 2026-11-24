@@ -60,7 +60,6 @@ fn a_panic_writes_a_report_into_the_games_data_folder() {
         "Space Crab crash report",
         "kind: panic",
         "message: the crab fell off the map",
-        "location: tests/crash_reports.rs:",
         "game version: 1.2.3",
         &format!("engine version: {}", env!("CARGO_PKG_VERSION")),
         &format!("os: {}", std::env::consts::OS),
@@ -70,6 +69,13 @@ fn a_panic_writes_a_report_into_the_games_data_folder() {
     ] {
         assert!(text.contains(line), "the report has {line:?}:\n{text}");
     }
+    assert!(
+        text.lines().any(|line| {
+            line.starts_with("location: tests/crash_reports.rs:")
+                || line.starts_with(r"location: tests\crash_reports.rs:")
+        }),
+        "the report locates the panic in this test:\n{text}"
+    );
     let backtrace = text.split("backtrace:\n").nth(1).unwrap();
     assert!(backtrace.lines().count() > 3, "a backtrace with frames:\n{text}");
     let _ = std::fs::remove_dir_all(dir);

@@ -146,7 +146,8 @@ name in `ctx.storage`) and `signal`.
 folder becomes `<data>`, the program's folder `<game>`, the working folder
 `<cwd>` and the home folder `~`; any other user's home folder (a library's
 source path in a backtrace, `/Users/<name>`, `/home/<name>`,
-`C:\Users\<name>`) becomes `~` too. What the game prints is its own business:
+`C:\Users\<name>`) becomes `~` too. On Windows, panic locations and backtraces can contain
+both `\` and `/` path separators. What the game prints is its own business:
 the log holds whatever the game wrote, so a game that prints a player's name
 or e-mail address puts it in its reports.
 
