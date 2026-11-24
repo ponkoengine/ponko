@@ -172,6 +172,62 @@ fn ldtk_options_pick_the_level_and_name_solid_values() {
 }
 
 #[test]
+fn ldtk_level_listing_keeps_world_order_and_resolves_placements() {
+    type Level = (String, String, String, PonkoVec2, u32, u32, i32);
+    unsafe extern "C" fn record(user: *mut std::ffi::c_void, level: *const PonkoLdtkLevelInfo) {
+        // SAFETY: the visitor borrows the descriptor and all its strings until it returns.
+        unsafe {
+            let rows = &mut *user.cast::<Vec<Level>>();
+            let level = &*level;
+            let read = |text: PonkoLdtkText| {
+                String::from_utf8_lossy(std::slice::from_raw_parts(text.bytes.cast::<u8>(), text.len)).into_owned()
+            };
+            rows.push((
+                read(level.world),
+                read(level.identifier),
+                read(level.iid),
+                level.position,
+                level.width,
+                level.height,
+                level.depth,
+            ));
+        }
+    }
+
+    let mut rows = Vec::<Level>::new();
+    unsafe {
+        let game = ponko_game_new(c"list levels".as_ptr(), 64, 64);
+        let path = fixture("layout.ldtk");
+        let world = run_game(game, 0, |ctx| {
+            assert_eq!(
+                ponko_ctx_visit_ldtk_levels(ctx, path.as_ptr(), None, null_mut()),
+                PONKO_INVALID_ARGUMENT
+            );
+            assert_eq!(
+                ponko_ctx_visit_ldtk_levels(ctx, path.as_ptr(), Some(record), (&raw mut rows).cast()),
+                PONKO_OK
+            );
+        });
+        ponko_world_free(world);
+    }
+    assert_eq!(rows.len(), 3);
+    assert_eq!(
+        rows[0],
+        (
+            "Hub".into(),
+            "Room".into(),
+            "hub-room".into(),
+            PonkoVec2 { x: -48.0, y: 80.0 },
+            64,
+            32,
+            2
+        )
+    );
+    assert_eq!((rows[1].0.as_str(), rows[1].2.as_str()), ("Trail", "trail-start"));
+    assert_eq!((rows[2].2.as_str(), rows[2].3.y), ("trail-end", 48.0));
+}
+
+#[test]
 fn despawning_a_level_removes_everything_it_spawned() {
     let mut run = Run {
         path: Some(fixture("level.tmx")),

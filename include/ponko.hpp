@@ -11855,6 +11855,39 @@ inline entity spawn_ldtk_level(ctx& c, const char* path, vec2 world_origin,
     detail::check(ponko_ctx_spawn_ldtk_level(c.raw(), path, world_origin, &ldtk, &root));
     return root;
 }
+/// The name, stable IDs and placement of one level in an LDtk project.
+struct ldtk_level_info {
+    std::string world; ///< World name, empty for a legacy project.
+    std::string world_iid; ///< Stable world instance ID.
+    std::string identifier; ///< Level name.
+    std::string iid; ///< Stable level instance ID.
+    vec2 position; ///< Top-left position in world pixels.
+    std::uint32_t width; ///< Width in pixels.
+    std::uint32_t height; ///< Height in pixels.
+    std::int32_t depth; ///< Authored world depth.
+};
+
+/// Reads an LDtk project's level placements in world and level order.
+inline std::vector<ldtk_level_info> ldtk_levels(ctx& c, const char* path) {
+    struct collector {
+        std::vector<ldtk_level_info> levels;
+        std::exception_ptr error;
+    } state;
+    detail::check(ponko_ctx_visit_ldtk_levels(c.raw(), path, [](void* user, const PonkoLdtkLevelInfo* level) {
+        auto& data = *static_cast<collector*>(user);
+        if (data.error) return;
+        try {
+            const auto str = [](PonkoLdtkText text) { return std::string(text.bytes, text.len); };
+            data.levels.push_back({str(level->world), str(level->world_iid), str(level->identifier),
+                                   str(level->iid), level->position, level->width, level->height, level->depth});
+        } catch (...) {
+            data.error = std::current_exception();
+        }
+    }, &state));
+    if (state.error) std::rethrow_exception(state.error);
+    return std::move(state.levels);
+}
+
 /// Despawns a level and everything it spawned; false if `root` was gone.
 inline bool despawn_level(ctx& c, entity root) {
     const PonkoStatus s = ponko_ctx_despawn_level(c.raw(), root);

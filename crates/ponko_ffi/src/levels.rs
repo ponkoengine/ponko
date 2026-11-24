@@ -1,7 +1,7 @@
 //! Levels from level editors (Tiled, LDtk) and the tilemap extras: parallax,
 //! animated and flipped tiles, autotiling and colliders from tiles. See
 //! `Ctx::spawn_level` and `ponko::tilemap` in Rust.
-use std::ffi::c_char;
+use std::ffi::{c_char, c_void};
 
 use ponko::prelude::Vec2;
 use ponko::tilemap::{AutoTile, LevelLayer, LevelObject, LevelOptions, LevelRoot, ObjectShape, TileMap};
@@ -237,6 +237,92 @@ pub unsafe extern "C" fn ponko_ctx_spawn_ldtk_level(
                 out(out_root, root.to_bits())
             })
         }
+    })
+}
+
+/// A borrowed UTF-8 name in an LDtk visitor. The bytes need not end in NUL.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct PonkoLdtkText {
+    /// Start of the UTF-8 text.
+    pub bytes: *const c_char,
+    /// Number of bytes.
+    pub len: usize,
+}
+
+impl PonkoLdtkText {
+    fn from_str(value: &str) -> Self {
+        Self {
+            bytes: value.as_ptr().cast(),
+            len: value.len(),
+        }
+    }
+}
+
+/// The name, stable identifier and placement of one level in an LDtk world.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct PonkoLdtkLevelInfo {
+    /// Name of the world. Empty for a legacy single-world project.
+    pub world: PonkoLdtkText,
+    /// Stable identifier of the world, when present.
+    pub world_iid: PonkoLdtkText,
+    /// Name of the level.
+    pub identifier: PonkoLdtkText,
+    /// Stable identifier of the level, usable in `PonkoLevelOptions`.
+    pub iid: PonkoLdtkText,
+    /// Top-left position in world pixels.
+    pub position: PonkoVec2,
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
+    /// Authored world depth.
+    pub depth: i32,
+}
+
+/// Receives one level and the caller's user pointer.
+pub type PonkoLdtkLevelVisitor = Option<unsafe extern "C" fn(user: *mut c_void, info: *const PonkoLdtkLevelInfo)>;
+
+/// Visits the project's levels in world and level order without loading
+/// external levels or spawning entities. Calls the visitor on the calling
+/// thread after releasing the context borrow.
+///
+/// Ownership: `info` and its UTF-8 views are borrowed for one visitor call.
+/// `user` stays the caller's and is passed through only during this call.
+///
+/// # Safety
+/// Live context, NUL-terminated `path`, and a visitor valid for `user`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_visit_ldtk_levels(
+    ctx: *mut PonkoCtx,
+    path: *const c_char,
+    visitor: PonkoLdtkLevelVisitor,
+    user: *mut c_void,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract. Descriptors and text stay alive throughout each visitor call.
+    boundary(|| unsafe {
+        let visitor = visitor.ok_or_else(|| invalid("LDtk level visitor is null"))?;
+        let path = text(path)?;
+        let worlds = ctx_access(ctx, |c| c.assets.load_ldtk_worlds(path).map_err(engine_error))?;
+        for world in worlds {
+            for level in world.levels {
+                visitor(
+                    user,
+                    &PonkoLdtkLevelInfo {
+                        world: PonkoLdtkText::from_str(&world.identifier),
+                        world_iid: PonkoLdtkText::from_str(&world.iid),
+                        identifier: PonkoLdtkText::from_str(&level.identifier),
+                        iid: PonkoLdtkText::from_str(&level.iid),
+                        position: crate::types::to_c(level.position),
+                        width: level.size.x,
+                        height: level.size.y,
+                        depth: level.depth,
+                    },
+                );
+            }
+        }
+        Ok(())
     })
 }
 

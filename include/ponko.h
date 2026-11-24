@@ -2016,6 +2016,24 @@ typedef struct PonkoLdtkOptions {
   size_t mapping_count;
 } PonkoLdtkOptions;
 
+typedef struct PonkoLdtkText {
+  const char *bytes;
+  size_t len;
+} PonkoLdtkText;
+
+typedef struct PonkoLdtkLevelInfo {
+  struct PonkoLdtkText world;
+  struct PonkoLdtkText world_iid;
+  struct PonkoLdtkText identifier;
+  struct PonkoLdtkText iid;
+  struct PonkoVec2 position;
+  uint32_t width;
+  uint32_t height;
+  int32_t depth;
+} PonkoLdtkLevelInfo;
+
+typedef void (*PonkoLdtkLevelVisitor)(void *user, const struct PonkoLdtkLevelInfo *info);
+
 typedef struct PonkoLevelObject {
   uint64_t id;
   struct PonkoVec2 position;
@@ -5911,6 +5929,11 @@ enum PonkoStatus ponko_ctx_spawn_ldtk_level(struct PonkoCtx *ctx,
                                             struct PonkoVec2 at,
                                             const struct PonkoLdtkOptions *ldtk,
                                             uint64_t *out_root);
+
+enum PonkoStatus ponko_ctx_visit_ldtk_levels(struct PonkoCtx *ctx,
+                                             const char *path,
+                                             PonkoLdtkLevelVisitor visitor,
+                                             void *user);
 
 enum PonkoStatus ponko_ctx_despawn_level(struct PonkoCtx *ctx, uint64_t root);
 

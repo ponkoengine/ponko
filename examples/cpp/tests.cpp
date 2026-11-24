@@ -3857,7 +3857,11 @@ static void headless_frames_ui() {
 }
 
 static void levels_and_tilemaps() {
-    ponko::game("c++ levels", 1, 1).physics({0, 700}).run_headless(0, [](ponko::ctx& ctx) {
+    const auto file = std::filesystem::temp_directory_path() / "ponko-cpp-level-list.ldtk";
+    std::ofstream(file) << R"({"jsonVersion":"1.5.3","levels":[{"identifier":"Start","iid":"start-id","worldX":12,"worldY":20,"pxWid":40,"pxHei":60}]})";
+    ponko::game("c++ levels", 1, 1).physics({0, 700}).run_headless(0, [&](ponko::ctx& ctx) {
+        const auto levels = ponko::ldtk_levels(ctx, file.string().c_str());
+        CHECK(levels.size() == 1 && levels[0].iid == "start-id" && levels[0].width == 40);
         ponko::level_options options;
         options.solid = {"Ground"};
         options.z = 2.0f;
@@ -3918,6 +3922,7 @@ static void levels_and_tilemaps() {
         CHECK(!ponko::despawn_level(ctx, root));
         throws([&] { (void)ponko::spawn_level(ctx, "levels/nowhere.tmx", {0, 0}); });
     });
+    std::filesystem::remove(file);
 }
 
 static void gltf_scenes() {
