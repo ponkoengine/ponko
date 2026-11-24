@@ -407,3 +407,46 @@ fn a_retained_label_draws_missing_glyphs_with_its_fallback_font() {
     // should match drawing the same glyphs with the fallback font directly.
     assert_eq!(relative(&fallback), relative(&quads(&mut ctx, ATLAS)));
 }
+
+#[test]
+fn named_rich_faces_and_synthetic_bold_reach_the_draw_list() {
+    let mut ctx = ctx(1.0);
+    let font = ctx.gfx.load_font("fonts/NotoSansJP-Subset.otf");
+    ctx.ui.set_inline_font("italic", font);
+    let id = label(&mut ctx, vec2(10.0, 20.0), 200.0, "[font=italic]日本語[/font]", true);
+    let named = quads(&mut ctx, ATLAS);
+    let sizes = |quads: &[(Vec2, Vec2)]| quads.iter().map(|&(_, size)| size).collect::<Vec<_>>();
+
+    ctx.ui.set_rich(id, false);
+    ctx.ui.set_text(id, "日本語");
+    ctx.ui.node_mut(id).unwrap().paint.font = font;
+    ctx.draw_retained_ui();
+    assert_eq!(sizes(&named), sizes(&quads(&mut ctx, ATLAS)));
+
+    ctx.ui.node_mut(id).unwrap().paint.font = Font::DEFAULT;
+    ctx.ui.set_text(id, "Wave");
+    ctx.draw_retained_ui();
+    let plain = quads(&mut ctx, ATLAS);
+    ctx.ui.set_text(id, "[b]Wave[/b]");
+    ctx.ui.set_rich(id, true);
+    ctx.draw_retained_ui();
+    let bold = quads(&mut ctx, ATLAS);
+    assert!(!plain.is_empty());
+    assert_eq!(bold.len(), 2 * plain.len());
+}
+
+#[test]
+fn a_vertically_centered_label_centers_text_taller_than_its_clip() {
+    let mut ctx = ctx(1.0);
+    let id = label(&mut ctx, vec2(10.0, 20.0), 100.0, "Tall", false);
+    quads(&mut ctx, ATLAS);
+    ctx.ui.set_layout(id, UiLayout::fixed(100.0, 8.0).top(20.0).left(10.0));
+    ctx.draw_retained_ui();
+    let top_aligned = quads(&mut ctx, ATLAS);
+
+    ctx.ui.set_label_vertical_center(id, true);
+    ctx.draw_retained_ui();
+    let centered = quads(&mut ctx, ATLAS);
+    assert_eq!(top_aligned.len(), centered.len());
+    assert!(centered[0].0.y < top_aligned[0].0.y);
+}

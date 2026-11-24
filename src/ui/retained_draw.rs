@@ -500,7 +500,8 @@ impl Ctx {
         let directional = !is_input;
         let flags = (n.paint.wrap, directional);
         let plain_label = n.widget == UiWidget::Label && n.rich().is_none();
-        let centred = (framed || (plain_label && n.label_vertical_center)) && n.rich().is_none();
+        let center_label = plain_label && n.label_vertical_center;
+        let centred = (framed || center_label) && n.rich().is_none();
         let fit = n.label_fit.filter(|_| plain_label).map(|min_size| LabelFit {
             min_size: min_size * scale,
             room: text_rect.size().max(Vec2::ZERO),
@@ -558,7 +559,7 @@ impl Ctx {
             self.push_rich(rich, &n.paint, glyphs, text_rect, scale, params.z);
         } else {
             params.size = glyphs.fitted_size.unwrap_or(font_size);
-            let mut origin = glyphs.origin(text_rect, centred);
+            let mut origin = glyphs.origin(text_rect, centred, center_label);
             if let Some(at) = at.filter(|_| focused) {
                 self.draw_text_field_marks(n, text, at, &mut origin, text_rect, (scale, z));
             }
@@ -1202,7 +1203,7 @@ impl Glyphs {
     /// Where plain text laid out for `rect` starts: its top left corner,
     /// or for `centred` text (a control's) lower, to sit in the middle of
     /// its height.
-    fn origin(&self, rect: Rect, centred: bool) -> Vec2 {
+    fn origin(&self, rect: Rect, centred: bool, center_overflow: bool) -> Vec2 {
         let mut origin = rect.min;
         if centred {
             let mut y = origin.y;
@@ -1210,7 +1211,7 @@ impl Glyphs {
                 y += line.size.y;
             }
             let height = y - origin.y;
-            if height < rect.size().y {
+            if center_overflow || height < rect.size().y {
                 origin.y = rect.center().y - height * 0.5;
             }
         }
