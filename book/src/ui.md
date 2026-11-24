@@ -60,8 +60,11 @@ inventories, refined with `gap`, `padding`, `grow`, `horizontal`/`vertical` and
 centered dialog near the top: `UiLayout::centered(360.0, 180.0).top(180.0)`).
 `hidden()` takes a node and its subtree out of layout, drawing, input and the
 accessibility tree; set the layout again without it to show the node.
-Children stack top to bottom, except in a row. For a Taffy setting the
-presets don't cover (named grid lines, templates), the escape hatch is
+Preset containers anchor absolute children to their own box. When providing
+a custom Taffy style for a container, use `Position::Relative` to give its
+absolute children the same behavior. Children stack top to bottom, except in
+a row. For a Taffy setting the presets don't cover (named grid lines,
+templates), the escape hatch is
 `UiLayout::unstable_custom(style)`, which wraps a `ui::unstable_taffy::Style`,
 with `unstable_style()`, `unstable_style_mut()` and `into_unstable_style()` to
 read and edit one. That module is the Taffy crate itself, and the `unstable_`
