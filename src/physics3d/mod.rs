@@ -41,7 +41,7 @@ mod streaming;
 mod vehicle;
 pub use ragdoll::{Ragdoll3D, RagdollBone};
 pub(crate) use ragdoll::{blend_back, pose_ragdolls};
-pub use streaming::{ColliderFocus, CollisionMeshData, TerrainCollider};
+pub use streaming::{ColliderFocus, CollisionMeshData, SquareColliderFocus, TerrainCollider};
 
 pub use character::Character3D;
 pub use query::{Hit3D, Penetration3D, PointHit3D, QueryFilter3D};
@@ -273,6 +273,19 @@ pub enum Shape3D {
 }
 
 impl Shape3D {
+    fn primitive_shape(self) -> Option<rp::SharedShape> {
+        let tiny = f32::EPSILON;
+        Some(match self {
+            Self::Sphere { radius } => rp::SharedShape::ball(radius.max(tiny)),
+            Self::Cuboid { size } => {
+                let half = (size * 0.5).max(Vec3::splat(tiny));
+                rp::SharedShape::cuboid(half.x, half.y, half.z)
+            }
+            Self::Capsule { height, radius } => rp::SharedShape::capsule_y((height * 0.5).max(0.0), radius.max(tiny)),
+            Self::Mesh(_) | Self::ScaledMesh { .. } => return None,
+        })
+    }
+
     /// The collision mesh of a mesh shape.
     pub(crate) fn collision_mesh(&self) -> Option<CollisionMesh> {
         match *self {
@@ -909,6 +922,21 @@ impl Physics3D {
         self.world.bodies.len()
     }
 
+    /// Whether the entity has a dynamic body that is asleep. Returns false
+    /// before a new body joins the physics world and after it is removed.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let physics = ponko::d3::Physics::default();
+    /// assert!(!physics.is_body_sleeping(Entity::from_bits(0)));
+    /// ```
+    #[must_use]
+    pub fn is_body_sleeping(&self, entity: Entity) -> bool {
+        self.link(entity)
+            .and_then(|link| self.world.bodies.get(link.body))
+            .is_some_and(|body| body.is_dynamic() && body.is_sleeping())
+    }
+
     fn entity_of(&self, collider: rp::ColliderHandle) -> Option<Entity> {
         self.world
             .colliders
@@ -1294,34 +1322,16 @@ impl Physics3D {
 
     /// A rapier collider for `c` (a speck touching nothing for a freed mesh).
     fn collider_of(&mut self, c: &Collider3D, e: Entity) -> rp::Collider {
-        let tiny = f32::EPSILON;
-        let mut dead = false;
-        let (shape, offset) = match c.shape {
-            Shape3D::Sphere { radius } => (rp::SharedShape::ball(radius.max(tiny)), Vec3::ZERO),
-            Shape3D::Cuboid { size } => {
-                let h = (size * 0.5).max(Vec3::splat(tiny));
-                (rp::SharedShape::cuboid(h.x, h.y, h.z), Vec3::ZERO)
-            }
-            Shape3D::Capsule { height, radius } => (
-                rp::SharedShape::capsule_y((height * 0.5).max(0.0), radius.max(tiny)),
-                Vec3::ZERO,
-            ),
-            Shape3D::Mesh(m) => match self.mesh(m) {
-                Some(slot) => (slot.shape.clone().expect("live slot"), slot.offset),
-                // A freed mesh: a speck that touches nothing.
-                None => {
-                    dead = true;
-                    (rp::SharedShape::ball(tiny), Vec3::ZERO)
-                }
-            },
-            Shape3D::ScaledMesh { mesh, scale } => match self.scaled_mesh_kept(mesh, scale) {
-                Some(placed) => placed,
-                None => {
-                    dead = true;
-                    (rp::SharedShape::ball(tiny), Vec3::ZERO)
-                }
-            },
+        let resolved = match c.shape {
+            Shape3D::Mesh(mesh) => self
+                .mesh(mesh)
+                .and_then(|slot| slot.shape.clone().map(|shape| (shape, slot.offset))),
+            Shape3D::ScaledMesh { mesh, scale } => self.scaled_mesh_kept(mesh, scale),
+            primitive => primitive.primitive_shape().map(|shape| (shape, Vec3::ZERO)),
         };
+        let dead = resolved.is_none();
+        // A freed mesh leaves a speck that touches nothing.
+        let (shape, offset) = resolved.unwrap_or_else(|| (rp::SharedShape::ball(f32::EPSILON), Vec3::ZERO));
         let mut types = rp::ActiveCollisionTypes::default();
         if c.sensor {
             // Characters are kinematic: let them set off fixed triggers.
@@ -1510,6 +1520,7 @@ pub(crate) fn start(ctx: &mut Ctx, gravity: Vec3) {
     ctx.world.reflect::<Character3D>();
     ctx.world.reflect::<Vehicle3D>();
     ctx.world.reflect::<ColliderFocus>();
+    ctx.world.reflect::<SquareColliderFocus>();
     ctx.world.reflect::<TerrainCollider>();
     ctx.world.reflect::<Joint3D>();
 }
@@ -1567,6 +1578,7 @@ pub fn step_physics3d_access() -> crate::access::SystemAccess {
         .read::<ContactModifier3D>()
         .read::<TerrainCollider>()
         .read::<ColliderFocus>()
+        .read::<SquareColliderFocus>()
         .read_resource::<crate::reflect::WorldLoads>()
         .write::<Ragdoll3D>()
         .write::<crate::anim::Skeleton>()

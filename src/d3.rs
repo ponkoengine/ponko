@@ -109,7 +109,7 @@ pub use crate::physics3d::{
     Hit3D as Hit, Joint3D as Joint, JointAxis3D as JointAxis, JointDrive3D as JointDrive, JointMotion3D as JointMotion,
     Penetration3D as Penetration, Physics3D as Physics, Physics3DState as PhysicsState, PointHit3D as PointHit,
     QueryFilter3D as QueryFilter, Ragdoll3D as Ragdoll, RagdollBone, RigidBody3D as RigidBody, Shape3D as Shape,
-    TerrainCollider, Vehicle3D as Vehicle, Velocity3D as Velocity, Wheel3D as Wheel,
+    SquareColliderFocus, TerrainCollider, Vehicle3D as Vehicle, Velocity3D as Velocity, Wheel3D as Wheel,
 };
 #[doc(inline)]
 pub use crate::ui::panel3d::UiPanel3D as UiPanel;

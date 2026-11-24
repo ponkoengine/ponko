@@ -47,7 +47,9 @@ so motion stays smooth at any frame rate. Simulation systems after the step
 see the stepped pose; to read a body's exact physics position from a frame
 system, or from a simulation system that runs before the step, use
 `ctx.physics3d.position(e)`. [Who runs when](systems.md#physics-navigation-characters-and-interpolation-who-runs-when)
-has the whole order.
+has the whole order. In Rust, `ctx.physics3d.is_body_sleeping(e)` tells you
+whether the entity has a dynamic body that is currently asleep. Bodies
+join the physics world on the next step.
 
 ## Bodies, colliders and terrain
 
@@ -91,6 +93,13 @@ is what you see:
 | `.offset(v)`, `.groups(g)` | `.offset`, `.groups` | shape moved from the entity; who it touches |
 | `d3::RigidBody::dynamic().mass(kg)` | `ponko::with_mass(body, kg)` | a mass of its own instead of density × volume |
 | `.center_of_mass(v)` | `ponko::with_center_of_mass(body, v)` | center of mass in the body's frame (low for cars) |
+
+In Rust, use `d3::CollisionMeshData::compound` to build one fixed collider
+from several spheres, boxes or capsules. Give each piece a local offset,
+rotation and shape. Register the data with `ctx.physics3d.add_mesh` and
+attach it with `d3::Collider::mesh`. The pieces share the collider's
+surface settings and groups. A compound built in code uses a runtime
+handle, so recreate it when loading a world.
 
 Collision meshes are made once and shared by any number of colliders:
 
@@ -646,7 +655,10 @@ vehicles. `ctx.physics3d.stream_colliders(Some(max_new))` (C++
 `ctx.stream_colliders(max_new)`) turns that on. From then, the colliders of
 fixed bodies and `TerrainCollider`s are only in the physics world near
 entities with a **`ColliderFocus`** (C++ `ponko::focus_colliders(radius,
-keep_radius)`):
+keep_radius)`) or a Rust `d3::SquareColliderFocus`. Square foci measure
+distance on the X and Z axes independently, so a collider near a square's
+corner can load even if it lies outside a circular focus of the same size.
+The radii of a square focus are its half-widths.
 
 - A collider within a focus's `radius` (measured on the ground, to the
   nearest point of the collider) comes in, nearest first, at most

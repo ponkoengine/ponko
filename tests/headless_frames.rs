@@ -302,3 +302,40 @@ fn ui_steps_and_checks_round_trip_through_json() {
     let error = InputScenario::from_json(empty).unwrap_err().to_string();
     assert!(error.contains("`expect_ui` needs at least one of"), "{error}");
 }
+
+#[test]
+fn headless_frames_advance_elapsed_time_at_the_fixed_rate_by_default() {
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let frames = seen.clone();
+    Game::new("headless time", 1, 1)
+        .fixed_hz(50)
+        .headless_frames(true)
+        .system(move |ctx: &mut Ctx| {
+            frames
+                .borrow_mut()
+                .push((ctx.time.frame(), ctx.time.frame_dt(), ctx.time.elapsed()));
+        })
+        .run_headless(2, |_| {});
+    assert_eq!(*seen.borrow(), [(1, 0.02, 0.02), (2, 0.02, 0.04)]);
+}
+
+#[test]
+fn headless_frame_duration_advances_the_frame_clock_without_changing_simulation_dt() {
+    use std::time::Duration;
+
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let frames = seen.clone();
+    Game::new("custom headless time", 1, 1)
+        .fixed_hz(50)
+        .headless_frame_duration(Duration::from_millis(125))
+        .system(move |ctx: &mut Ctx| {
+            frames.borrow_mut().push((
+                ctx.time.frame_dt(),
+                ctx.time.elapsed(),
+                ctx.time.sim_dt(),
+                ctx.time.sim_tick(),
+            ));
+        })
+        .run_headless(2, |_| {});
+    assert_eq!(*seen.borrow(), [(0.125, 0.125, 0.02, 1), (0.125, 0.25, 0.02, 2)]);
+}
