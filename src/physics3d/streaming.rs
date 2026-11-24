@@ -47,8 +47,9 @@ impl CollisionMeshData {
     /// share the collider's material and collision groups. Returns `None`
     /// for an empty list, a mesh part or a part without finite bounds.
     /// Register the result with [`Physics3D::add_mesh`] and attach it with
-    /// [`Collider3D::mesh`](super::Collider3D::mesh). Set the dimensions
-    /// of each primitive when building the compound.
+    /// [`Collider3D::mesh`](super::Collider3D::mesh). Set each primitive's
+    /// dimensions at build time. Scaled mesh colliders require unit scale
+    /// for compounds.
     ///
     /// ```
     /// use ponko::d3::{Collider, CollisionMeshData, Shape, Transform};
@@ -569,6 +570,10 @@ pub(super) fn scaled_copy(shape: &rp::SharedShape, scale: Vec3) -> Option<rp::Sh
         rp::SharedShape::convex_hull(&points)
     } else if let Some(field) = shape.as_heightfield() {
         Some(rp::SharedShape::new(scaled_field(field, scale)))
+    } else if shape.as_compound().is_some() {
+        // Primitive sizes are baked into a compound. Non-unit scale would
+        // have to transform each part, including rotated local geometry.
+        None
     } else {
         Some(shape.clone())
     }

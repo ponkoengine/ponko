@@ -474,7 +474,8 @@ impl Collider3D {
     /// Y takes the size only, so its ground still faces up). Colliders of one mesh at any number of sizes share the mesh;
     /// each collider gets its scaled copy when it enters the physics world,
     /// and colliders at the same scale share that copy too. A mesh loaded
-    /// from a file is saved by its file and this scale.
+    /// from a file is saved by its file and this scale. Compound geometry
+    /// is available only at unit scale; build its parts at the intended size.
     ///
     /// ```
     /// use ponko::prelude::*;

@@ -1299,3 +1299,27 @@ fn a_compound_of_primitives_collides_as_one_fixed_body() {
 }
 
 struct CompoundTestBody(Entity);
+
+#[test]
+fn a_scaled_compound_does_not_leave_unscaled_collision_geometry() {
+    use ponko::d3::{CollisionMeshData, Shape};
+
+    Game::new("compound scale", 1, 1)
+        .physics3d(Vec3::ZERO)
+        .sim_system(|ctx: &mut Ctx| {
+            assert!(
+                ctx.physics3d
+                    .cast_ray(vec3(2.0, 3.0, 0.0), -Vec3::Y, 10.0, QueryFilter3D::default())
+                    .is_none()
+            );
+        })
+        .run_headless(1, |ctx| {
+            let data =
+                CollisionMeshData::compound(&[(Vec3::X * 2.0, Quat::IDENTITY, Shape::Sphere { radius: 0.5 })]).unwrap();
+            let mesh = ctx.physics3d.add_mesh(&data);
+            ctx.world.spawn((
+                Transform3D::default(),
+                Collider3D::scaled_mesh(mesh, vec3(2.0, 1.0, 1.0)),
+            ));
+        });
+}

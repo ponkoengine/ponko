@@ -98,8 +98,10 @@ In Rust, use `d3::CollisionMeshData::compound` to build one fixed collider
 from several spheres, boxes or capsules. Give each piece a local offset,
 rotation and shape. Register the data with `ctx.physics3d.add_mesh` and
 attach it with `d3::Collider::mesh`. The pieces share the collider's
-surface settings and groups. A compound built in code uses a runtime
-handle, so recreate it when loading a world.
+surface settings and groups. Give the primitives their final dimensions
+when creating the compound. Its runtime handle must be recreated when
+loading a world. The collider debug overlay currently draws individual
+primitive colliders and regular meshes.
 
 Collision meshes are made once and shared by any number of colliders:
 
