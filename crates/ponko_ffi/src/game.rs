@@ -235,6 +235,109 @@ pub unsafe extern "C" fn ponko_game_control_endpoint(game: *mut PonkoGame, on: b
     unsafe { build(game, |g| ok(g.control_endpoint(on))) }
 }
 
+/// A reply slot lent to a native control method until that method returns.
+pub struct PonkoControlReply(Option<Result<serde_json::Value, ponko::error::Error>>);
+
+/// Called on the game thread with the request's JSON parameters. `ctx`,
+/// `params_json` and `reply` are valid only for this callback.
+pub type PonkoControlMethodFn = Option<
+    unsafe extern "C" fn(
+        ctx: *mut PonkoCtx,
+        params_json: *const c_char,
+        reply: *mut PonkoControlReply,
+        user: *mut c_void,
+    ),
+>;
+
+/// Registers a method on the authenticated loopback control endpoint.
+/// Respond with `ponko_control_reply_json` or `ponko_control_reply_error`.
+/// Names obey the same namespace rules as Rust's `Game::control_method`.
+///
+/// Ownership: the registration copies `method` and `about`. The callback
+/// and `user` stay the caller's and must remain valid until the game ends.
+///
+/// # Safety
+/// `game` null or live; names are NUL-terminated UTF-8; callback valid for `user`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_game_control_method(
+    game: *mut PonkoGame,
+    method: *const c_char,
+    about: *const c_char,
+    callback: PonkoControlMethodFn,
+    user: *mut c_void,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract. The callback receives a temporary context, request and reply.
+    unsafe {
+        build(game, |game| {
+            let (method, about, callback) = match (name(method), name(about), callback) {
+                (Ok(method), Ok(about), Some(callback)) => (method, about, callback),
+                (Err(err), _, _) | (_, Err(err), _) => return (game, Err(err)),
+                _ => return reject(game, "control method callback is null"),
+            };
+            ok(game.control_method(method, about, move |ctx, params| {
+                use ponko::error::{Error, ErrorKind};
+                let params = std::ffi::CString::new(params.to_string())
+                    .map_err(|err| Error::new(ErrorKind::Invalid, err.to_string()))?;
+                let mut reply = PonkoControlReply(None);
+                with_ctx(ctx, |ctx| callback(ctx, params.as_ptr(), &mut reply, user));
+                reply
+                    .0
+                    .unwrap_or_else(|| Err(Error::new(ErrorKind::Invalid, "native control method did not reply")))
+            }))
+        })
+    }
+}
+
+/// Copies a JSON value into a native control method's reply slot.
+/// # Safety
+/// `reply` live for the callback; `json` NUL-terminated UTF-8.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_control_reply_json(reply: *mut PonkoControlReply, json: *const c_char) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        let reply = reply.as_mut().ok_or_else(|| invalid("reply is null"))?;
+        let value = serde_json::from_str(name(json)?).map_err(|err| crate::invalid_owned(err.to_string()))?;
+        reply.0 = Some(Ok(value));
+        Ok(())
+    })
+}
+
+/// Copies the error message to return to the control client.
+/// # Safety
+/// `reply` live for the callback; `message` NUL-terminated UTF-8.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_control_reply_error(
+    reply: *mut PonkoControlReply,
+    message: *const c_char,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        let reply = reply.as_mut().ok_or_else(|| invalid("reply is null"))?;
+        reply.0 = Some(Err(ponko::error::Error::new(
+            ponko::error::ErrorKind::Invalid,
+            name(message)?.to_owned(),
+        )));
+        Ok(())
+    })
+}
+
+/// Reads the control endpoint's loopback port, or returns `PONKO_NOT_FOUND`
+/// when the endpoint is off.
+/// # Safety
+/// `ctx` null or live; `out_port` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_control_port(ctx: *mut PonkoCtx, out_port: *mut u16) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        crate::ctx::ctx_access(ctx, |c| {
+            let addr = c
+                .control_addr()
+                .ok_or_else(|| error(PonkoStatus::PONKO_NOT_FOUND, "control endpoint is off"))?;
+            crate::ctx::out(out_port, addr.port())
+        })
+    })
+}
+
 /// Registers a named debug switch with its initial value. Invalid and
 /// duplicate names are reported at startup, as in Rust's `Game::debug_toggle`.
 /// # Safety

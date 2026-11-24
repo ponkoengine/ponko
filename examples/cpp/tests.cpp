@@ -1694,6 +1694,19 @@ static void model_material_overrides() {
     });
 }
 
+static void native_control_method() {
+    auto echo = [](ponko::ctx&, std::string_view params) { return std::string(params); };
+    ponko::game("c++ control", 1, 1)
+        .control_endpoint(true)
+        .control_method("example.echo", "Echo parameters", echo)
+        .run_headless(0, [](ponko::ctx& ctx) { CHECK(ctx.control_port().value_or(0) != 0); });
+    throws_kind([&] {
+        ponko::game("c++ reserved method", 1, 1)
+            .control_method("debug.custom", "Reserved", echo)
+            .run_headless(0, [](ponko::ctx&) {});
+    }, PONKO_ERROR_INVALID);
+}
+
 static void asset_streaming() {
     ponko::game("streaming", 1, 1).debug_toggle("debug.paths", true).run_headless(0, [](ponko::ctx& ctx) {
         ctx.set_deterministic_uploads(true);
@@ -5868,6 +5881,7 @@ int main() {
     model_material_overrides();
     handle_lifecycle();
     asset_streaming();
+    native_control_method();
     parallel_queries();
     change_detection();
     presence_filters();

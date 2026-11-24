@@ -1541,6 +1541,8 @@ typedef struct PonkoCollisionMeshData PonkoCollisionMeshData;
 
 typedef struct PonkoContactPair3D PonkoContactPair3D;
 
+typedef struct PonkoControlReply PonkoControlReply;
+
 typedef struct PonkoCrowdAnimation PonkoCrowdAnimation;
 
 typedef struct PonkoCtx PonkoCtx;
@@ -1907,6 +1909,11 @@ typedef struct PonkoFlowView {
   struct PonkoVec2 origin;
   float cell_size;
 } PonkoFlowView;
+
+typedef void (*PonkoControlMethodFn)(struct PonkoCtx *ctx,
+                                     const char *params_json,
+                                     struct PonkoControlReply *reply,
+                                     void *user);
 
 typedef void (*PonkoPluginBuildFn)(struct PonkoGame *game, void *user);
 
@@ -5700,6 +5707,18 @@ enum PonkoStatus ponko_game_spatial_grid(struct PonkoGame *game, float cell_size
 enum PonkoStatus ponko_game_camera_controls(struct PonkoGame *game);
 
 enum PonkoStatus ponko_game_control_endpoint(struct PonkoGame *game, bool on);
+
+enum PonkoStatus ponko_game_control_method(struct PonkoGame *game,
+                                           const char *method,
+                                           const char *about,
+                                           PonkoControlMethodFn callback,
+                                           void *user);
+
+enum PonkoStatus ponko_control_reply_json(struct PonkoControlReply *reply, const char *json);
+
+enum PonkoStatus ponko_control_reply_error(struct PonkoControlReply *reply, const char *message);
+
+enum PonkoStatus ponko_ctx_control_port(struct PonkoCtx *ctx, uint16_t *out_port);
 
 enum PonkoStatus ponko_game_debug_toggle(struct PonkoGame *game, const char *toggle, bool on);
 

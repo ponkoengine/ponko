@@ -30,6 +30,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <initializer_list>
 #include <limits>
 #include <tuple>
@@ -8252,6 +8253,14 @@ public:
         if (!found) return std::nullopt;
         return e;
     }
+    /// The authenticated control endpoint's loopback port, when enabled.
+    std::optional<std::uint16_t> control_port() const {
+        std::uint16_t port = 0;
+        auto status = ponko_ctx_control_port(raw_, &port);
+        if (status == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(status);
+        return port;
+    }
     /// The engine's default lens and render layer for held items.
     static PonkoViewModel view_model_defaults() {
         PonkoViewModel model{};
@@ -11359,7 +11368,26 @@ class game {
         shared_state* st;
     };
     std::vector<std::unique_ptr<group_holder>> groups_;
+    struct control_holder {
+        std::function<std::string(ctx&, std::string_view)> fn;
+        shared_state* st;
+    };
+    std::vector<std::unique_ptr<control_holder>> control_methods_;
     std::unique_ptr<std::function<void(const crash_report&)>> crash_hook_;
+
+    static void control_trampoline(PonkoCtx* raw, const char* params, PonkoControlReply* reply, void* user) noexcept {
+        auto& h = *static_cast<control_holder*>(user);
+        try {
+            ctx c(raw, h.st->owner);
+            const auto answer = h.fn(c, params);
+            c.run_after_system();
+            detail::check(ponko_control_reply_json(reply, answer.c_str()));
+        } catch (const std::exception& e) {
+            (void)ponko_control_reply_error(reply, e.what());
+        } catch (...) {
+            (void)ponko_control_reply_error(reply, "native control method threw an exception");
+        }
+    }
 
     // A loading state's group builder: adds nothing once the game has failed.
     static void group_trampoline(PonkoCtx* raw, PonkoAssetGroup* group, void* user) noexcept {
@@ -11479,6 +11507,15 @@ public:
     /// Opens the control endpoint for tools and agents (ponko-mcp); also on with PONKO_CONTROL=1 in a debug
     /// build of the library.
     game& control_endpoint(bool on) { return check(ponko_game_control_endpoint(raw_, on)); }
+    /// Registers a control method. The callback receives wire JSON and returns a JSON value.
+    /// An exception becomes the control client's error reply.
+    game& control_method(const char* name, const char* about,
+                         std::function<std::string(ctx&, std::string_view)> method) {
+        control_methods_.push_back(std::make_unique<control_holder>(control_holder{std::move(method), state_.get()}));
+        const auto status = ponko_game_control_method(raw_, name, about, control_trampoline, control_methods_.back().get());
+        if (status != PONKO_OK) control_methods_.pop_back();
+        return check(status);
+    }
     /// Registers a named debug toggle and its initial value.
     game& debug_toggle(const char* name, bool on) { return check(ponko_game_debug_toggle(raw_, name, on)); }
     /// Reload textures when their files change, under the same handles (on by
