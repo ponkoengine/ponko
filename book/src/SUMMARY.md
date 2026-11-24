@@ -104,3 +104,4 @@
 - [Security: what reads untrusted bytes](security.md)
 - [API reference](api.md)
 - [Contributing](contributing.md)
+  - [Workspace test coverage](test-coverage.md)

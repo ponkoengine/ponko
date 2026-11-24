@@ -617,6 +617,12 @@ release branch (`v0.1.1` on `release-0.1`, see
    try a real agent on it ("The agent acceptance suite" in the guide's agents
    chapter) and put the scores in the pull request.
 
+   For every release, including candidates and patches, run the
+   [workspace coverage measurement](book/src/test-coverage.md) on the
+   release revision. Record the executed and mapped line counts, coverage
+   percentage, OS, GPU adapter and Rust toolchain in the release notes.
+   Coverage is recorded without a percentage gate.
+
    For a minor release (and its first candidate), record the wall-clock
    baseline on the named benchmark machine, idle, and add it to the pull
    request:
