@@ -7,13 +7,13 @@ use rapier3d::parry::utils::Array2;
 use rapier3d::prelude as rp;
 use serde::{Deserialize, Serialize};
 
-use super::{CollisionGroups, CollisionMesh, Physics3D, pose_to_rp, to_rp};
+use super::{CollisionGroups, CollisionMesh, Physics3D, Shape3D, pose_to_rp, to_rp};
 use crate::d3::Transform as Transform3D;
-use glam::{Vec2, Vec3};
+use glam::{Quat, Vec2, Vec3};
 use ponko_ecs::{Component, Entity, World};
 
-/// A convex hull, triangle mesh or heightfield built on the CPU, on any
-/// thread: the slow half of [`Physics3D::heightfield`] and friends. Build
+/// A convex hull, triangle mesh, heightfield or compound shape built on the
+/// CPU, on any thread: the slow half of [`Physics3D::heightfield`] and friends. Build
 /// it in a [`Job`](crate::streaming::Job) with the rest of a streamed cell, then hand
 /// it to [`Physics3D::add_mesh`] on the game's thread, which is quick.
 ///
@@ -42,6 +42,50 @@ impl std::fmt::Debug for CollisionMeshData {
 }
 
 impl CollisionMeshData {
+    /// Several primitive shapes as one collider. Each part gives a local
+    /// offset, local rotation and sphere, cuboid or capsule. All parts
+    /// share the collider's material and collision groups. Returns `None`
+    /// for an empty list, a mesh part or a part without finite bounds.
+    /// Register the result with [`Physics3D::add_mesh`] and attach it with
+    /// [`Collider3D::mesh`](super::Collider3D::mesh). Set each primitive's
+    /// dimensions at build time. Scaled mesh colliders require unit scale
+    /// for compounds.
+    ///
+    /// ```
+    /// use ponko::d3::{Collider, CollisionMeshData, Shape, Transform};
+    /// use ponko::prelude::*;
+    /// Game::new("compound", 1, 1).physics3d(Vec3::ZERO).run_headless(1, |ctx| {
+    ///     let parts = [
+    ///         (Vec3::NEG_X, Quat::IDENTITY, Shape::Sphere { radius: 0.5 }),
+    ///         (Vec3::X, Quat::IDENTITY, Shape::Cuboid { size: Vec3::ONE }),
+    ///     ];
+    ///     let data = CollisionMeshData::compound(&parts).unwrap();
+    ///     let mesh = ctx.physics3d.add_mesh(&data);
+    ///     // A collider without a body component gets a fixed body.
+    ///     ctx.world.spawn((Transform::default(), Collider::mesh(mesh)));
+    /// });
+    /// ```
+    #[must_use]
+    pub fn compound(parts: &[(Vec3, Quat, Shape3D)]) -> Option<Self> {
+        if parts.is_empty() {
+            return None;
+        }
+        let mut shapes = Vec::with_capacity(parts.len());
+        for &(offset, rotation, shape) in parts {
+            let shape = shape.primitive_shape()?;
+            let pose = pose_to_rp(offset, rotation);
+            let bounds = shape.compute_aabb(&pose);
+            if !bounds.mins.is_finite() || !bounds.maxs.is_finite() {
+                return None;
+            }
+            shapes.push((pose, shape));
+        }
+        Some(Self {
+            shape: rp::SharedShape::compound(shapes),
+            offset: Vec3::ZERO,
+        })
+    }
+
     /// Ground for a terrain tile, from the same n × n heights and size as
     /// [`TerrainTileData::new`](crate::terrain::TerrainTileData::new) (row after row
     /// along +Z, NaN for a hole), as [`Physics3D::heightfield`] makes it.
@@ -334,14 +378,56 @@ impl ColliderFocus {
     }
 }
 
+/// An axis-aligned square region for collider streaming, centered on the
+/// entity's position in XZ. Each radius is the distance from the center
+/// to a side. Multiple circular and square foci can be active together.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Component)]
+pub struct SquareColliderFocus {
+    /// Half-width of the square that loads colliders.
+    pub radius: f32,
+    /// Half-width of the square that keeps colliders loaded. At least `radius`.
+    pub keep_radius: f32,
+}
+
+impl SquareColliderFocus {
+    /// A square that brings colliders in at `radius` and keeps them loaded
+    /// within `keep_radius`.
+    #[must_use]
+    pub fn new(radius: f32, keep_radius: f32) -> Self {
+        Self { radius, keep_radius }
+    }
+}
+
 /// A rectangle on the ground: min X, min Z, max X, max Z.
 pub(super) type Rect = [f32; 4];
 
-/// How far `p` is from the nearest point of `r`, on the ground.
-fn away(r: Rect, p: Vec2) -> f32 {
-    let dx = (r[0] - p.x).max(p.x - r[2]).max(0.0);
-    let dz = (r[1] - p.y).max(p.y - r[3]).max(0.0);
-    (dx * dx + dz * dz).sqrt()
+struct Focus {
+    at: Vec2,
+    radius: f32,
+    keep_radius: f32,
+    square: bool,
+}
+
+impl Focus {
+    fn new(position: Vec3, radius: f32, keep_radius: f32, square: bool) -> Self {
+        Self {
+            at: Vec2::new(position.x, position.z),
+            radius,
+            keep_radius: keep_radius.max(radius),
+            square,
+        }
+    }
+
+    /// Distance from the focus to the nearest point on the collider's XZ bounds.
+    fn distance(&self, rect: Rect) -> f32 {
+        let dx = (rect[0] - self.at.x).max(self.at.x - rect[2]).max(0.0);
+        let dz = (rect[1] - self.at.y).max(self.at.y - rect[3]).max(0.0);
+        if self.square {
+            dx.max(dz)
+        } else {
+            (dx * dx + dz * dz).sqrt()
+        }
+    }
 }
 
 fn overlaps(a: Rect, b: Rect) -> bool {
@@ -355,8 +441,7 @@ const HOLD_MARGIN: f32 = 1.0;
 /// Reused memory for [`stream`].
 #[derive(Default)]
 pub(super) struct Scratch {
-    /// Each focus: where it is, its radius and its keep radius.
-    focus: Vec<(Vec2, f32, f32)>,
+    focus: Vec<Focus>,
     /// The ground under each moving body, widened by [`HOLD_MARGIN`].
     holders: Vec<Rect>,
     /// Static colliders in reach and not in: distance, link index.
@@ -366,7 +451,8 @@ pub(super) struct Scratch {
 impl Physics3D {
     /// Turns collider streaming on: from the next step, the colliders of
     /// fixed bodies and [`TerrainCollider`]s are only in the physics world
-    /// near entities with a [`ColliderFocus`] (and a [`d3::Transform`](crate::d3::Transform)), at
+    /// near entities with a [`ColliderFocus`] or [`SquareColliderFocus`] and
+    /// a [`d3::Transform`](crate::d3::Transform), at
     /// most `max_new` more each step, nearest first, so a big world's
     /// colliders come in over a few steps. `None` turns it off: every
     /// collider comes back at the next step. Drawing isn't affected, so
@@ -484,6 +570,10 @@ pub(super) fn scaled_copy(shape: &rp::SharedShape, scale: Vec3) -> Option<rp::Sh
         rp::SharedShape::convex_hull(&points)
     } else if let Some(field) = shape.as_heightfield() {
         Some(rp::SharedShape::new(scaled_field(field, scale)))
+    } else if shape.as_compound().is_some() {
+        // Primitive sizes are baked into a compound. Non-unit scale would
+        // have to transform each part, including rotated local geometry.
+        None
     } else {
         Some(shape.clone())
     }
@@ -577,16 +667,28 @@ pub(super) fn stream(physics: &mut Physics3D, world: &mut World) {
     let mut scratch = std::mem::take(&mut physics.stream_scratch);
     scratch.focus.clear();
     world.query::<(&Transform3D, &ColliderFocus)>().for_each(|(t, f)| {
-        let at = Vec2::new(t.position.x, t.position.z);
-        scratch.focus.push((at, f.radius, f.keep_radius.max(f.radius)));
+        scratch
+            .focus
+            .push(Focus::new(t.position, f.radius, f.keep_radius, false));
     });
+    world
+        .query::<(&Transform3D, &SquareColliderFocus)>()
+        .for_each(|(t, f)| {
+            scratch
+                .focus
+                .push(Focus::new(t.position, f.radius, f.keep_radius, true));
+        });
     scratch.wanted.clear();
     let mut holders_found = false;
     for k in 0..physics.statics.len() {
         let i = physics.statics[k];
         let link = *physics.links.at(i as usize);
         if link.active {
-            if scratch.focus.iter().any(|&(at, _, keep)| away(link.rect, at) <= keep) {
+            if scratch
+                .focus
+                .iter()
+                .any(|focus| focus.distance(link.rect) <= focus.keep_radius)
+            {
                 continue;
             }
             if !holders_found {
@@ -601,7 +703,7 @@ pub(super) fn stream(physics: &mut Physics3D, world: &mut World) {
             let nearest = scratch
                 .focus
                 .iter()
-                .map(|&(at, radius, _)| (away(link.rect, at), radius))
+                .map(|focus| (focus.distance(link.rect), focus.radius))
                 .filter(|&(d, radius)| d <= radius)
                 .map(|(d, _)| d)
                 .reduce(f32::min);

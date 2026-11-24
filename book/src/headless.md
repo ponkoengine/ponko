@@ -146,6 +146,12 @@ played, and no window or GPU is opened, so it runs in plain `cargo test` on
 a CI machine. `run_headless`, `run_headless_scenario` and `profile_headless`
 all follow the setting.
 
+The frame clock advances by the fixed-step interval each frame. In Rust,
+`Game::headless_frame_duration(Duration::from_millis(125))` turns on headless
+frames and advances the frame clock by 125 ms per frame, useful for driving
+a timer deterministically. The simulation still runs one tick per frame
+at the rate selected with `fixed_hz`.
+
 [Input scenarios](actions.md#input-scenarios) then reach the UI:
 
 - **Keys, buttons and sticks** of a tick are fed before the UI takes the

@@ -808,3 +808,44 @@ fn the_guide_tiles_are_solid_only_near_the_player_and_the_car() {
     // The player's 150 m reaches tiles 0 and 1; the car's 300 m tiles 4 to 7.
     assert_eq!(active, [true, true, false, false, true, true, true, true]);
 }
+
+#[test]
+fn square_focus_loads_and_keeps_diagonal_colliders_by_axis_distance() {
+    use ponko::d3::SquareColliderFocus;
+
+    let readings = Rc::new(RefCell::new(Vec::new()));
+    let out = readings.clone();
+    Game::new("square focus", 1, 1)
+        .physics3d(Vec3::ZERO)
+        .sim_system(move |ctx: &mut Ctx| {
+            let [focus, inside_corner, keep_corner, outside] = ctx.world.resource::<FocusTestEntities>().0;
+            let active = |entity| ctx.physics3d.is_collider_active(entity);
+            out.borrow_mut()
+                .push([active(inside_corner), active(keep_corner), active(outside)]);
+            match ctx.time.sim_tick() {
+                0 => ctx.world.get_mut::<Transform>(focus).unwrap().position = vec3(2.0, 0.0, 2.0),
+                1 => ctx.world.get_mut::<Transform>(focus).unwrap().position = Vec3::ZERO,
+                2 => ctx.world.get_mut::<Transform>(focus).unwrap().position = Vec3::splat(-20.0),
+                _ => {}
+            }
+        })
+        .run_headless(4, |ctx| {
+            ctx.physics3d.stream_colliders(Some(8));
+            let focus = ctx
+                .world
+                .spawn((Transform::default(), SquareColliderFocus::new(5.0, 7.0)));
+            let mut tile = |at| ctx.world.spawn((Transform::at(at), Collider::cuboid(Vec3::splat(0.2))));
+            let inside_corner = tile(vec3(4.0, 0.0, 4.0));
+            let keep_corner = tile(vec3(6.0, 0.0, 6.0));
+            let outside = tile(vec3(12.0, 0.0, 3.0));
+            ctx.world
+                .insert_resource(FocusTestEntities([focus, inside_corner, keep_corner, outside]));
+        });
+    let seen = readings.borrow();
+    assert_eq!(seen[0], [true, false, false]);
+    assert_eq!(seen[1], [true, true, false]);
+    assert_eq!(seen[2], [true, true, false]);
+    assert_eq!(seen[3], [false, false, false]);
+}
+
+struct FocusTestEntities([Entity; 4]);

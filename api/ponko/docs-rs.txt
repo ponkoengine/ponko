@@ -3102,6 +3102,7 @@ impl ponko::handle::Handle for ponko::d3::CollisionMesh
 pub const ponko::d3::CollisionMesh::NONE: Self
 pub struct ponko::d3::CollisionMeshData
 impl ponko::d3::CollisionMeshData
+pub fn ponko::d3::CollisionMeshData::compound(&[(glam::f32::vec3::Vec3, glam::f32::sse2::quat::Quat, ponko::d3::Shape)]) -> core::option::Option<Self>
 pub fn ponko::d3::CollisionMeshData::convex_hull(&[glam::f32::vec3::Vec3]) -> core::option::Option<Self>
 pub fn ponko::d3::CollisionMeshData::heightfield(&[f32], f32) -> Self
 pub fn ponko::d3::CollisionMeshData::trimesh(&[glam::f32::vec3::Vec3], &[[u32; 3]]) -> core::option::Option<Self>
@@ -3618,6 +3619,7 @@ pub fn ponko::d3::Physics::convex_hull(&mut self, &[glam::f32::vec3::Vec3]) -> c
 pub fn ponko::d3::Physics::free(&mut self, ponko::d3::CollisionMesh)
 pub fn ponko::d3::Physics::gravity(&self) -> glam::f32::vec3::Vec3
 pub fn ponko::d3::Physics::heightfield(&mut self, &[f32], f32) -> ponko::d3::CollisionMesh
+pub fn ponko::d3::Physics::is_body_sleeping(&self, ponko_ecs::entity::Entity) -> bool
 pub fn ponko::d3::Physics::is_live(&self, ponko::d3::CollisionMesh) -> bool
 pub fn ponko::d3::Physics::is_paused(&self) -> bool
 pub fn ponko::d3::Physics::mass(&self, ponko_ecs::entity::Entity) -> core::option::Option<f32>
@@ -3858,6 +3860,24 @@ impl serde_core::ser::Serialize for ponko::d3::SpotLight
 pub fn ponko::d3::SpotLight::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for ponko::d3::SpotLight where ponko::d3::SpotLight: core::default::Default
 pub fn ponko::d3::SpotLight::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct ponko::d3::SquareColliderFocus
+pub ponko::d3::SquareColliderFocus::keep_radius: f32
+pub ponko::d3::SquareColliderFocus::radius: f32
+impl ponko::d3::SquareColliderFocus
+pub fn ponko::d3::SquareColliderFocus::new(f32, f32) -> Self
+impl core::clone::Clone for ponko::d3::SquareColliderFocus
+pub fn ponko::d3::SquareColliderFocus::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::d3::SquareColliderFocus
+pub fn ponko::d3::SquareColliderFocus::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::d3::SquareColliderFocus
+pub fn ponko::d3::SquareColliderFocus::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::d3::SquareColliderFocus
+impl core::marker::StructuralPartialEq for ponko::d3::SquareColliderFocus
+impl ponko_ecs::bundle::Component for ponko::d3::SquareColliderFocus
+impl serde_core::ser::Serialize for ponko::d3::SquareColliderFocus
+pub fn ponko::d3::SquareColliderFocus::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::d3::SquareColliderFocus
+pub fn ponko::d3::SquareColliderFocus::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct ponko::d3::TerrainCollider
 pub ponko::d3::TerrainCollider::friction: f32
 pub ponko::d3::TerrainCollider::groups: ponko::d3::CollisionGroups
@@ -4639,6 +4659,7 @@ pub fn ponko::game::ConfiguredGame::fullscreen(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::gamepad_backend(self, impl ponko::input::GamepadBackend) -> Self
 pub fn ponko::game::ConfiguredGame::has_plugin(&self, &str) -> bool
 pub fn ponko::game::ConfiguredGame::hdr_output(self, ponko::render::HdrOutput) -> Self
+pub fn ponko::game::ConfiguredGame::headless_frame_duration(self, core::time::Duration) -> Self
 pub fn ponko::game::ConfiguredGame::headless_frames(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::hot_reload(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::image_limits(self, ponko::assets::ImageLimits) -> Self
@@ -4699,6 +4720,7 @@ pub fn ponko::game::Game::gamepad_backend(self, impl ponko::input::GamepadBacken
 pub fn ponko::game::Game::has_plugin(&self, &str) -> bool
 pub fn ponko::game::Game::has_state<S: ponko::state::States>(&self) -> bool
 pub fn ponko::game::Game::hdr_output(self, ponko::render::HdrOutput) -> Self
+pub fn ponko::game::Game::headless_frame_duration(self, core::time::Duration) -> Self
 pub fn ponko::game::Game::headless_frames(self, bool) -> Self
 pub fn ponko::game::Game::hot_reload(self, bool) -> Self
 pub fn ponko::game::Game::image_limits(self, ponko::assets::ImageLimits) -> Self
@@ -9660,6 +9682,7 @@ impl ponko::handle::Handle for ponko::d3::CollisionMesh
 pub const ponko::d3::CollisionMesh::NONE: Self
 pub struct ponko::prelude::d3::CollisionMeshData
 impl ponko::d3::CollisionMeshData
+pub fn ponko::d3::CollisionMeshData::compound(&[(glam::f32::vec3::Vec3, glam::f32::sse2::quat::Quat, ponko::d3::Shape)]) -> core::option::Option<Self>
 pub fn ponko::d3::CollisionMeshData::convex_hull(&[glam::f32::vec3::Vec3]) -> core::option::Option<Self>
 pub fn ponko::d3::CollisionMeshData::heightfield(&[f32], f32) -> Self
 pub fn ponko::d3::CollisionMeshData::trimesh(&[glam::f32::vec3::Vec3], &[[u32; 3]]) -> core::option::Option<Self>
@@ -10176,6 +10199,7 @@ pub fn ponko::d3::Physics::convex_hull(&mut self, &[glam::f32::vec3::Vec3]) -> c
 pub fn ponko::d3::Physics::free(&mut self, ponko::d3::CollisionMesh)
 pub fn ponko::d3::Physics::gravity(&self) -> glam::f32::vec3::Vec3
 pub fn ponko::d3::Physics::heightfield(&mut self, &[f32], f32) -> ponko::d3::CollisionMesh
+pub fn ponko::d3::Physics::is_body_sleeping(&self, ponko_ecs::entity::Entity) -> bool
 pub fn ponko::d3::Physics::is_live(&self, ponko::d3::CollisionMesh) -> bool
 pub fn ponko::d3::Physics::is_paused(&self) -> bool
 pub fn ponko::d3::Physics::mass(&self, ponko_ecs::entity::Entity) -> core::option::Option<f32>
@@ -10416,6 +10440,24 @@ impl serde_core::ser::Serialize for ponko::d3::SpotLight
 pub fn ponko::d3::SpotLight::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for ponko::d3::SpotLight where ponko::d3::SpotLight: core::default::Default
 pub fn ponko::d3::SpotLight::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct ponko::prelude::d3::SquareColliderFocus
+pub ponko::prelude::d3::SquareColliderFocus::keep_radius: f32
+pub ponko::prelude::d3::SquareColliderFocus::radius: f32
+impl ponko::d3::SquareColliderFocus
+pub fn ponko::d3::SquareColliderFocus::new(f32, f32) -> Self
+impl core::clone::Clone for ponko::d3::SquareColliderFocus
+pub fn ponko::d3::SquareColliderFocus::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::d3::SquareColliderFocus
+pub fn ponko::d3::SquareColliderFocus::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::d3::SquareColliderFocus
+pub fn ponko::d3::SquareColliderFocus::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::d3::SquareColliderFocus
+impl core::marker::StructuralPartialEq for ponko::d3::SquareColliderFocus
+impl ponko_ecs::bundle::Component for ponko::d3::SquareColliderFocus
+impl serde_core::ser::Serialize for ponko::d3::SquareColliderFocus
+pub fn ponko::d3::SquareColliderFocus::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::d3::SquareColliderFocus
+pub fn ponko::d3::SquareColliderFocus::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct ponko::prelude::d3::TerrainCollider
 pub ponko::prelude::d3::TerrainCollider::friction: f32
 pub ponko::prelude::d3::TerrainCollider::groups: ponko::d3::CollisionGroups
@@ -11381,6 +11423,7 @@ pub fn ponko::game::ConfiguredGame::fullscreen(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::gamepad_backend(self, impl ponko::input::GamepadBackend) -> Self
 pub fn ponko::game::ConfiguredGame::has_plugin(&self, &str) -> bool
 pub fn ponko::game::ConfiguredGame::hdr_output(self, ponko::render::HdrOutput) -> Self
+pub fn ponko::game::ConfiguredGame::headless_frame_duration(self, core::time::Duration) -> Self
 pub fn ponko::game::ConfiguredGame::headless_frames(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::hot_reload(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::image_limits(self, ponko::assets::ImageLimits) -> Self
@@ -11624,6 +11667,7 @@ pub fn ponko::game::Game::gamepad_backend(self, impl ponko::input::GamepadBacken
 pub fn ponko::game::Game::has_plugin(&self, &str) -> bool
 pub fn ponko::game::Game::has_state<S: ponko::state::States>(&self) -> bool
 pub fn ponko::game::Game::hdr_output(self, ponko::render::HdrOutput) -> Self
+pub fn ponko::game::Game::headless_frame_duration(self, core::time::Duration) -> Self
 pub fn ponko::game::Game::headless_frames(self, bool) -> Self
 pub fn ponko::game::Game::hot_reload(self, bool) -> Self
 pub fn ponko::game::Game::image_limits(self, ponko::assets::ImageLimits) -> Self

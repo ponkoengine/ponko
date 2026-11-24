@@ -417,6 +417,7 @@ pub struct Game {
     input_injection: bool,
     /// From `headless_frames`: headless runs also run frames and the UI.
     headless_frames: bool,
+    headless_frame_duration: Option<Duration>,
     /// From `bench_offscreen`: headless frames are drawn offscreen.
     #[cfg(all(
         feature = "bench-internals",
@@ -860,6 +861,12 @@ impl ConfiguredGame {
     /// [`Game::headless_frames`].
     pub fn headless_frames(mut self, on: bool) -> Self {
         self.game = self.game.headless_frames(on);
+        self
+    }
+
+    /// See [`Game::headless_frame_duration`].
+    pub fn headless_frame_duration(mut self, duration: Duration) -> Self {
+        self.game = self.game.headless_frame_duration(duration);
         self
     }
 
@@ -1458,6 +1465,7 @@ impl Game {
             input_scenario: None,
             input_injection: false,
             headless_frames: false,
+            headless_frame_duration: None,
             #[cfg(all(
                 feature = "bench-internals",
                 feature = "window",
@@ -2762,6 +2770,25 @@ impl Game {
         self
     }
 
+    /// Run whole local headless frames with this frame-clock delta. The default
+    /// is one fixed-step interval per frame. With an explicit duration,
+    /// frame time advances by that duration and the simulation still runs
+    /// one tick per frame at the rate set by [`Game::fixed_hz`].
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// use std::time::Duration;
+    /// Game::new("frame clock", 1, 1)
+    ///     .headless_frame_duration(Duration::from_millis(125))
+    ///     .system(|ctx: &mut Ctx| assert_eq!(ctx.time.frame_dt(), 0.125))
+    ///     .run_headless(1, |_| {});
+    /// ```
+    pub fn headless_frame_duration(mut self, duration: Duration) -> Self {
+        self.headless_frames = true;
+        self.headless_frame_duration = Some(duration);
+        self
+    }
+
     /// Benchmarks: a headless run that runs whole frames
     /// ([`headless_frames`](Self::headless_frames)) and draws each one with
     /// the window's renderer into an offscreen target of the game's size
@@ -3740,9 +3767,13 @@ impl Game {
         ctx.apply_commands();
         ctx.gfx.discard_draws();
 
+        let frame_seconds = self
+            .headless_frame_duration
+            .filter(|_| self.headless_frames)
+            .map_or(fixed_dt, |duration| duration.as_secs_f64());
         let timing = FrameTiming {
-            dt: fixed_dt as f32,
-            seconds: fixed_dt,
+            dt: frame_seconds as f32,
+            seconds: frame_seconds,
             fixed_steps: 1,
             alpha: 0.0,
         };

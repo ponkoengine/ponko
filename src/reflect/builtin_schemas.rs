@@ -405,7 +405,9 @@ pub(super) fn builtin<T: 'static>() -> Option<ValueSchema> {
         return Some(vehicle3d());
     }
     #[cfg(feature = "physics3d")]
-    if id == std::any::TypeId::of::<crate::physics3d::ColliderFocus>() {
+    if id == std::any::TypeId::of::<crate::physics3d::ColliderFocus>()
+        || id == std::any::TypeId::of::<crate::physics3d::SquareColliderFocus>()
+    {
         return Some(colliderfocus());
     }
     #[cfg(feature = "physics3d")]

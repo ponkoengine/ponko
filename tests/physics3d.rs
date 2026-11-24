@@ -1227,3 +1227,99 @@ fn characters_planned_on_the_frame_pool_move_as_on_one_thread() {
     );
     assert!(shared.iter().all(|(_, grounded)| *grounded));
 }
+
+#[test]
+fn sleeping_queries_track_the_body_and_report_false_for_missing_bodies() {
+    let world = Game::new("sleeping body", 1, 1)
+        .physics3d(Vec3::ZERO)
+        .sim_system(|ctx: &mut Ctx| {
+            let entity = ctx.world.resource::<SleepingTestBody>().0;
+            if ctx.physics3d.is_body_sleeping(entity) {
+                assert!(ctx.physics3d.apply_impulse(entity, Vec3::X));
+                assert!(!ctx.physics3d.is_body_sleeping(entity));
+                ctx.world.resource_mut::<SleepingTestBody>().1 = true;
+            }
+        })
+        .run_headless(160, |ctx| {
+            let entity = ctx
+                .world
+                .spawn((Transform3D::default(), RigidBody3D::dynamic(), Collider3D::sphere(0.5)));
+            assert!(!ctx.physics3d.is_body_sleeping(entity));
+            ctx.world.insert_resource(SleepingTestBody(entity, false));
+        });
+    assert!(world.resource::<SleepingTestBody>().1);
+}
+
+struct SleepingTestBody(Entity, bool);
+
+#[test]
+fn a_compound_of_primitives_collides_as_one_fixed_body() {
+    Game::new("compound", 1, 1)
+        .physics3d(Vec3::ZERO)
+        .sim_system(|ctx: &mut Ctx| {
+            let body = ctx.world.resource::<CompoundTestBody>().0;
+            assert_eq!(ctx.physics3d.body_count(), 1);
+            // The box only reaches 2.75 after its local rotation.
+            for x in [-2.0, 2.75] {
+                let hit = ctx
+                    .physics3d
+                    .cast_ray(vec3(x, 3.0, 0.0), -Vec3::Y, 10.0, QueryFilter3D::default());
+                assert_eq!(hit.unwrap().entity, body);
+            }
+            assert!(
+                ctx.physics3d
+                    .cast_ray(vec3(0.0, 3.0, 0.0), -Vec3::Y, 10.0, QueryFilter3D::default())
+                    .is_none()
+            );
+        })
+        .run_headless(2, |ctx| {
+            use ponko::d3::{CollisionMeshData, Shape};
+            assert!(CollisionMeshData::compound(&[]).is_none());
+            assert!(
+                CollisionMeshData::compound(&[(Vec3::ZERO, Quat::IDENTITY, Shape::Mesh(CollisionMesh::NONE)),])
+                    .is_none()
+            );
+            let shape = CollisionMeshData::compound(&[
+                (vec3(-2.0, 0.0, 0.0), Quat::IDENTITY, Shape::Sphere { radius: 0.5 }),
+                (
+                    vec3(2.0, 0.0, 0.0),
+                    Quat::from_rotation_y(std::f32::consts::FRAC_PI_2),
+                    Shape::Cuboid {
+                        size: vec3(0.3, 1.0, 2.0),
+                    },
+                ),
+            ])
+            .unwrap();
+            let mesh = ctx.physics3d.add_mesh(&shape);
+            let body = ctx
+                .world
+                .spawn((Transform3D::default(), RigidBody3D::fixed(), Collider3D::mesh(mesh)));
+            ctx.world.insert_resource(CompoundTestBody(body));
+        });
+}
+
+struct CompoundTestBody(Entity);
+
+#[test]
+fn a_scaled_compound_does_not_leave_unscaled_collision_geometry() {
+    use ponko::d3::{CollisionMeshData, Shape};
+
+    Game::new("compound scale", 1, 1)
+        .physics3d(Vec3::ZERO)
+        .sim_system(|ctx: &mut Ctx| {
+            assert!(
+                ctx.physics3d
+                    .cast_ray(vec3(2.0, 3.0, 0.0), -Vec3::Y, 10.0, QueryFilter3D::default())
+                    .is_none()
+            );
+        })
+        .run_headless(1, |ctx| {
+            let data =
+                CollisionMeshData::compound(&[(Vec3::X * 2.0, Quat::IDENTITY, Shape::Sphere { radius: 0.5 })]).unwrap();
+            let mesh = ctx.physics3d.add_mesh(&data);
+            ctx.world.spawn((
+                Transform3D::default(),
+                Collider3D::scaled_mesh(mesh, vec3(2.0, 1.0, 1.0)),
+            ));
+        });
+}

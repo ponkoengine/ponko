@@ -2507,6 +2507,7 @@ pub fn ponko::game::ConfiguredGame::fullscreen(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::gamepad_backend(self, impl ponko::input::GamepadBackend) -> Self
 pub fn ponko::game::ConfiguredGame::has_plugin(&self, &str) -> bool
 pub fn ponko::game::ConfiguredGame::hdr_output(self, ponko::render::HdrOutput) -> Self
+pub fn ponko::game::ConfiguredGame::headless_frame_duration(self, core::time::Duration) -> Self
 pub fn ponko::game::ConfiguredGame::headless_frames(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::hot_reload(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::image_limits(self, ponko::assets::ImageLimits) -> Self
@@ -2565,6 +2566,7 @@ pub fn ponko::game::Game::gamepad_backend(self, impl ponko::input::GamepadBacken
 pub fn ponko::game::Game::has_plugin(&self, &str) -> bool
 pub fn ponko::game::Game::has_state<S: ponko::state::States>(&self) -> bool
 pub fn ponko::game::Game::hdr_output(self, ponko::render::HdrOutput) -> Self
+pub fn ponko::game::Game::headless_frame_duration(self, core::time::Duration) -> Self
 pub fn ponko::game::Game::headless_frames(self, bool) -> Self
 pub fn ponko::game::Game::hot_reload(self, bool) -> Self
 pub fn ponko::game::Game::image_limits(self, ponko::assets::ImageLimits) -> Self
@@ -6939,6 +6941,7 @@ pub fn ponko::game::ConfiguredGame::fullscreen(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::gamepad_backend(self, impl ponko::input::GamepadBackend) -> Self
 pub fn ponko::game::ConfiguredGame::has_plugin(&self, &str) -> bool
 pub fn ponko::game::ConfiguredGame::hdr_output(self, ponko::render::HdrOutput) -> Self
+pub fn ponko::game::ConfiguredGame::headless_frame_duration(self, core::time::Duration) -> Self
 pub fn ponko::game::ConfiguredGame::headless_frames(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::hot_reload(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::image_limits(self, ponko::assets::ImageLimits) -> Self
@@ -7163,6 +7166,7 @@ pub fn ponko::game::Game::gamepad_backend(self, impl ponko::input::GamepadBacken
 pub fn ponko::game::Game::has_plugin(&self, &str) -> bool
 pub fn ponko::game::Game::has_state<S: ponko::state::States>(&self) -> bool
 pub fn ponko::game::Game::hdr_output(self, ponko::render::HdrOutput) -> Self
+pub fn ponko::game::Game::headless_frame_duration(self, core::time::Duration) -> Self
 pub fn ponko::game::Game::headless_frames(self, bool) -> Self
 pub fn ponko::game::Game::hot_reload(self, bool) -> Self
 pub fn ponko::game::Game::image_limits(self, ponko::assets::ImageLimits) -> Self
