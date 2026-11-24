@@ -1,3 +1,6 @@
+# Keep embedded shaders, documentation and other text consistent across checkouts.
+* text=auto eol=lf
+
 # Reference images of the render tests: never text-converted or merged as text.
 tests/fixtures/render/*.png binary
 # Binary world saves: compared byte for byte, never text-converted.

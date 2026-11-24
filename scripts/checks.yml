@@ -63,6 +63,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
+      - name: Checkout line endings
+        run: python3 scripts/check-line-endings.py
       - name: Naming inventory
         run: python3 scripts/check-naming.py
       # The fragments (a breaking entry needs what to write instead and a
