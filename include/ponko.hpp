@@ -8252,6 +8252,40 @@ public:
         if (!found) return std::nullopt;
         return e;
     }
+    /// The engine's default lens and render layer for held items.
+    static PonkoViewModel view_model_defaults() {
+        PonkoViewModel model{};
+        model.struct_size = sizeof(model);
+        model.version = PONKO_VIEW_MODEL_VERSION;
+        detail::check(ponko_view_model_defaults(&model));
+        return model;
+    }
+    /// Configures the held-item pass. No value disables the pass.
+    void set_view_model(std::optional<PonkoViewModel> model) {
+        detail::check(ponko_ctx_set_view_model(raw_, model ? &*model : nullptr));
+    }
+    /// The held-item pass configuration when enabled.
+    std::optional<PonkoViewModel> view_model() const {
+        PonkoViewModel model{};
+        model.struct_size = sizeof(model);
+        model.version = PONKO_VIEW_MODEL_VERSION;
+        const auto status = ponko_ctx_view_model(raw_, &model);
+        if (status == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(status);
+        return model;
+    }
+    /// Sets the camera-space offset for an entity. No value removes the held-item mark.
+    void set_held_item(entity e, std::optional<transform3d> offset) {
+        detail::check(ponko_ctx_set_held_item(raw_, e, offset ? &*offset : nullptr));
+    }
+    /// An entity's held-item offset, if present.
+    std::optional<transform3d> held_item(entity e) const {
+        transform3d offset{};
+        const auto status = ponko_ctx_held_item(raw_, e, &offset);
+        if (status == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(status);
+        return offset;
+    }
     /// Multiplies the 2D zoom by `factor`, keeping the world point under window pixel `screen` where it is
     /// (Rust `Camera::zoom_at`): zooming at the pointer. Throws ponko::error unless `factor` is positive.
     void camera_zoom_at(vec2 screen, float factor) { detail::check(ponko_ctx_camera_zoom_at(raw_, screen, factor)); }

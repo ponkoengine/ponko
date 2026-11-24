@@ -5536,6 +5536,18 @@ static void native_parity_round5() {
             at.scale = {1, 1};
             hero = ctx.world().spawn(at);
             ctx.set_camera_target(hero);
+            CHECK(!ctx.view_model());
+            auto lens = ctx.view_model_defaults();
+            lens.fov_y = 0.8f;
+            ctx.set_view_model(lens);
+            CHECK(ctx.view_model()->fov_y == 0.8f);
+            const auto item = ctx.world().spawn(ponko::transform3d_at({0, 0, 0}));
+            CHECK(!ctx.held_item(item));
+            ctx.set_held_item(item, ponko::transform3d_at({0.5f, 0, -1}));
+            CHECK(ctx.held_item(item)->position.z == -1.0f);
+            ctx.set_held_item(item, std::nullopt);
+            ctx.set_view_model(std::nullopt);
+            CHECK(!ctx.held_item(item) && !ctx.view_model());
             CHECK(!ponko::orbit_camera::kept(ctx));
             ponko::orbit_camera().keep(ctx);
             ponko::orbit_camera::remove_kept(ctx);

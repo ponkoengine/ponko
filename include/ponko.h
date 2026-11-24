@@ -273,6 +273,8 @@
 
 #define PONKO_THIRD_PERSON_CAMERA_VERSION 1
 
+#define PONKO_VIEW_MODEL_VERSION 1
+
 #define PONKO_RENDER_LAYERS_DEFAULT 1
 
 #define PONKO_RENDER_LAYERS_ALL UINT32_MAX
@@ -3715,6 +3717,15 @@ typedef struct PonkoThirdPersonCamera {
   struct PonkoVec3 last_pivot;
   bool started;
 } PonkoThirdPersonCamera;
+
+typedef struct PonkoViewModel {
+  uint32_t struct_size;
+  uint32_t version;
+  float fov_y;
+  float near;
+  float far;
+  uint32_t layers;
+} PonkoViewModel;
 
 typedef struct PonkoViewport {
   float x;
@@ -10449,6 +10460,20 @@ enum PonkoStatus ponko_third_person_camera_update_physics(struct PonkoThirdPerso
                                                           struct PonkoVec3 target,
                                                           const struct PonkoQueryFilterEx *filter,
                                                           float dt);
+
+enum PonkoStatus ponko_view_model_defaults(struct PonkoViewModel *model);
+
+enum PonkoStatus ponko_ctx_set_view_model(struct PonkoCtx *ctx, const struct PonkoViewModel *model);
+
+enum PonkoStatus ponko_ctx_view_model(struct PonkoCtx *ctx, struct PonkoViewModel *model);
+
+enum PonkoStatus ponko_ctx_set_held_item(struct PonkoCtx *ctx,
+                                         uint64_t entity,
+                                         const struct PonkoTransform3D *offset);
+
+enum PonkoStatus ponko_ctx_held_item(struct PonkoCtx *ctx,
+                                     uint64_t entity,
+                                     struct PonkoTransform3D *out_offset);
 
 enum PonkoStatus ponko_ctx_set_camera_target(struct PonkoCtx *ctx, uint64_t entity, bool on);
 

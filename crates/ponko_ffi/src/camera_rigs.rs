@@ -21,7 +21,7 @@ use std::mem::{offset_of, size_of};
 
 use ponko::camera::{CameraShake, CameraTarget, damp, damp_angle, smooth_damp};
 use ponko::d2::{FollowCamera, PixelPerfect};
-use ponko::d3::{FirstPersonCamera, OrbitCamera, ThirdPersonCamera};
+use ponko::d3::{FirstPersonCamera, HeldItem, OrbitCamera, ThirdPersonCamera, ViewModel};
 use ponko::prelude::{Rect, Vec2, Vec3};
 
 use crate::ctx::{ctx_access, out};
@@ -1251,6 +1251,155 @@ unsafe fn physics_update(
 }
 
 // ---- rigs the engine updates: CameraTarget ------------------------------------
+
+/// Version of `PonkoViewModel`.
+pub const PONKO_VIEW_MODEL_VERSION: u32 = 1;
+
+/// Lens and layer mask for the camera-space held-item pass.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct PonkoViewModel {
+    /// Size of this descriptor in bytes.
+    pub struct_size: u32,
+    /// Set to `PONKO_VIEW_MODEL_VERSION`.
+    pub version: u32,
+    /// Vertical field of view in radians.
+    pub fov_y: f32,
+    /// Near clipping distance.
+    pub near: f32,
+    /// Far clipping distance.
+    pub far: f32,
+    /// Render-layer bitmask reserved for held items.
+    pub layers: u32,
+}
+
+versioned_v1!(PonkoViewModel, "PonkoViewModel", PONKO_VIEW_MODEL_VERSION, layers: u32);
+
+fn view_model_to_c(model: ViewModel) -> PonkoViewModel {
+    PonkoViewModel {
+        struct_size: size_of::<PonkoViewModel>() as u32,
+        version: PONKO_VIEW_MODEL_VERSION,
+        fov_y: model.fov_y,
+        near: model.near,
+        far: model.far,
+        layers: model.layers.0,
+    }
+}
+
+/// Writes the default held-item lens into an initialized descriptor.
+/// # Safety
+/// `model` writable with its header initialized.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_view_model_defaults(model: *mut PonkoViewModel) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe { write_desc(model, &view_model_to_c(ViewModel::default())) })
+}
+
+/// Configures the held-item pass, or disables it when `model` is null.
+/// # Safety
+/// `ctx` null or live; `model` null or a readable descriptor.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_set_view_model(ctx: *mut PonkoCtx, model: *const PonkoViewModel) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        let model = if model.is_null() {
+            None
+        } else {
+            let data = read_desc(model, view_model_to_c(ViewModel::default()))?;
+            if !data.fov_y.is_finite()
+                || !data.near.is_finite()
+                || !data.far.is_finite()
+                || data.fov_y <= 0.0
+                || data.near <= 0.0
+                || data.far <= data.near
+            {
+                return Err(invalid(
+                    "view-model lens needs a positive field of view and ordered positive clip planes",
+                ));
+            }
+            let mut model = ViewModel::default();
+            model.fov_y = data.fov_y;
+            model.near = data.near;
+            model.far = data.far;
+            model.layers = ponko::camera::RenderLayers(data.layers);
+            Some(model)
+        };
+        ctx_access(ctx, |c| {
+            c.scene3d.view_model = model;
+            Ok(())
+        })
+    })
+}
+
+/// Reads the held-item pass configuration, or returns `PONKO_NOT_FOUND`
+/// when it is disabled.
+/// # Safety
+/// `ctx` null or live; `model` writable with its header initialized.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_view_model(ctx: *mut PonkoCtx, model: *mut PonkoViewModel) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            let view = c
+                .scene3d
+                .view_model
+                .ok_or_else(|| error(PonkoStatus::PONKO_NOT_FOUND, "view model is off"))?;
+            write_desc(model, &view_model_to_c(view))
+        })
+    })
+}
+
+/// Marks an entity as a held item with a camera-space offset. A null offset
+/// removes the mark. The entity must be alive.
+/// # Safety
+/// `ctx` null or live; `offset` null or readable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_set_held_item(
+    ctx: *mut PonkoCtx,
+    entity: u64,
+    offset: *const PonkoTransform3D,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        let offset = offset.as_ref().map(|&t| crate::three::transform_from_c(t));
+        if offset.is_some_and(|t| !(t.position.is_finite() && t.rotation.is_finite() && t.scale.is_finite())) {
+            return Err(invalid("held-item offset must be finite"));
+        }
+        ctx_access(ctx, |c| {
+            let entity = ponko_ecs::Entity::from_bits(entity);
+            if !c.world.is_alive(entity) {
+                return Err(error(PonkoStatus::PONKO_NOT_FOUND, "entity is not alive"));
+            }
+            if let Some(offset) = offset {
+                c.world.insert(entity, HeldItem { offset });
+            } else {
+                c.world.remove::<HeldItem>(entity);
+            }
+            Ok(())
+        })
+    })
+}
+
+/// Reads an entity's held-item offset, or returns `PONKO_NOT_FOUND` when absent.
+/// # Safety
+/// `ctx` null or live; `out_offset` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_held_item(
+    ctx: *mut PonkoCtx,
+    entity: u64,
+    out_offset: *mut PonkoTransform3D,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            let held = c
+                .world
+                .get::<HeldItem>(ponko_ecs::Entity::from_bits(entity))
+                .ok_or_else(|| error(PonkoStatus::PONKO_NOT_FOUND, "entity has no held-item offset"))?;
+            out(out_offset, crate::three::transform_to_c(held.offset))
+        })
+    })
+}
 
 /// Marks entity `entity` as the one the camera rigs follow (Rust
 /// `ponko::camera::CameraTarget`), or takes the mark off (`on` false). Every
