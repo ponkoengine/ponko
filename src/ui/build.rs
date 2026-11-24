@@ -854,6 +854,36 @@ impl UiBuilder<'_> {
         self.ui.set_text_key(self.id, key, &[]);
         self
     }
+    /// Clip descendants for drawing and hit tests. See [`Ui::set_clip_children`].
+    pub fn clip_children(self, clip: bool) -> Self {
+        self.ui.set_clip_children(self.id, clip);
+        self
+    }
+
+    /// Include this node in pointer hit tests. See [`Ui::set_pointer_events`].
+    pub fn pointer_events(self, enabled: bool) -> Self {
+        self.ui.set_pointer_events(self.id, enabled);
+        self
+    }
+
+    /// Tint the texture by the node's state color. See [`Ui::set_texture_state_tint`].
+    pub fn texture_state_tint(self, enabled: bool) -> Self {
+        self.ui.set_texture_state_tint(self.id, enabled);
+        self
+    }
+
+    /// Let a plain label shrink to fit. See [`Ui::set_label_fit`].
+    pub fn label_fit(self, min_size: f32) -> Self {
+        self.ui.set_label_fit(self.id, Some(min_size));
+        self
+    }
+
+    /// Center a plain label vertically. See [`Ui::set_label_vertical_center`].
+    pub fn label_vertical_center(self, centered: bool) -> Self {
+        self.ui.set_label_vertical_center(self.id, centered);
+        self
+    }
+
     /// Its text (or keyed text) is rich-text markup: colors, bold, fonts,
     /// sizes, inline images and links; see [`Ui::set_rich`].
     /// ```

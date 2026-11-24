@@ -1082,6 +1082,15 @@ mod tests {
     }
 
     #[test]
+    fn an_italic_span_can_select_an_italic_font() {
+        let mut assets = RichAssets::default();
+        assets.set_font("italic", Font(3));
+        let rich = parse("one [font=italic]two[/font] three", &assets);
+        let fonts: Vec<_> = rich.spans.iter().map(|span| span.style.font).collect();
+        assert_eq!(fonts, [None, Some(Font(3)), None]);
+    }
+
+    #[test]
     fn links_are_numbered_in_order_and_underlined() {
         let rich = parse("[link=a]one[/link] [link=b]two[/link]", &RichAssets::default());
         assert_eq!(rich.links, ["a", "b"]);

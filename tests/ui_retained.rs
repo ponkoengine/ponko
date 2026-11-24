@@ -1327,3 +1327,52 @@ fn removed_nodes_give_their_slots_back_and_stale_ids_stay_dead() {
     assert!(slots.len() <= 2, "the menu's slots are reused: {} used", slots.len());
     assert!(ui.rect(hud).is_some(), "the HUD is untouched");
 }
+
+#[test]
+fn a_panel_can_clip_children_without_scrolling() {
+    let (mut ui, root) = scene();
+    let panel = ui.panel(root).layout(UiLayout::fixed(40.0, 40.0)).id();
+    let child = ui.button(panel, "").layout(UiLayout::fixed(80.0, 25.0)).id();
+    let viewport = vec2(300.0, 200.0);
+
+    ui.layout(viewport);
+    assert_eq!(ui.hit_test(vec2(60.0, 10.0)), Some(child));
+
+    ui.set_clip_children(panel, true);
+    ui.layout(viewport);
+    assert_eq!(ui.rect(child).unwrap().size(), vec2(80.0, 25.0));
+    assert_eq!(ui.hit_test(vec2(20.0, 10.0)), Some(child));
+    assert_eq!(ui.hit_test(vec2(60.0, 10.0)), Some(root));
+
+    ui.set_clip_children(panel, false);
+    ui.layout(viewport);
+    assert_eq!(ui.hit_test(vec2(60.0, 10.0)), Some(child));
+}
+
+#[test]
+fn pointer_passthrough_keeps_descendants_and_keyboard_interactive() {
+    let (mut ui, root) = scene();
+    let button = ui.button(root, "Behind").layout(UiLayout::fixed(80.0, 40.0)).id();
+    let overlay = ui
+        .button(button, "Overlay")
+        .layout(UiLayout::anchored(0.0, 0.0, 1.0, 1.0))
+        .id();
+    let action = ui.button(overlay, "Action").layout(UiLayout::fixed(20.0, 20.0)).id();
+    let viewport = vec2(300.0, 200.0);
+
+    ui.layout(viewport);
+    assert_eq!(ui.hit_test(vec2(50.0, 10.0)), Some(overlay));
+    ui.set_pointer_events(overlay, false);
+    assert_eq!(ui.hit_test(vec2(50.0, 10.0)), Some(button));
+    assert_eq!(ui.hit_test(vec2(10.0, 10.0)), Some(action));
+
+    ui.set_focus(overlay);
+    ui.frame(
+        viewport,
+        &UiInput {
+            confirm: true,
+            ..Default::default()
+        },
+    );
+    assert!(ui.events().any(|event| event == UiEvent::Clicked(overlay)));
+}

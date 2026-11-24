@@ -12050,18 +12050,23 @@ pub fn ponko::prelude::Ui::remove(&mut self, ponko::prelude::UiId)
 pub fn ponko::prelude::Ui::safe_area(&self) -> core::option::Option<ponko::camera::Rect>
 pub fn ponko::prelude::Ui::screen_mode(&self, ponko::prelude::UiId) -> core::option::Option<ponko::ui::ScreenMode>
 pub fn ponko::prelude::Ui::scroll(&self, ponko::prelude::UiId) -> core::option::Option<glam::f32::vec2::Vec2>
+pub fn ponko::prelude::Ui::set_clip_children(&mut self, ponko::prelude::UiId, bool)
 pub fn ponko::prelude::Ui::set_closes_screen(&mut self, ponko::prelude::UiId, bool)
 pub fn ponko::prelude::Ui::set_enabled(&mut self, ponko::prelude::UiId, bool)
 pub fn ponko::prelude::Ui::set_focus(&mut self, ponko::prelude::UiId) -> bool
 pub fn ponko::prelude::Ui::set_initial_focus(&mut self, ponko::prelude::UiId, bool)
 pub fn ponko::prelude::Ui::set_inside_safe_area(&mut self, ponko::prelude::UiId, bool)
+pub fn ponko::prelude::Ui::set_label_fit(&mut self, ponko::prelude::UiId, core::option::Option<f32>)
+pub fn ponko::prelude::Ui::set_label_vertical_center(&mut self, ponko::prelude::UiId, bool)
 pub fn ponko::prelude::Ui::set_layout(&mut self, ponko::prelude::UiId, ponko::prelude::UiLayout)
 pub fn ponko::prelude::Ui::set_paint(&mut self, ponko::prelude::UiId, ponko::ui::UiPaint)
+pub fn ponko::prelude::Ui::set_pointer_events(&mut self, ponko::prelude::UiId, bool)
 pub fn ponko::prelude::Ui::set_pointer_ray(&mut self, core::option::Option<(glam::f32::vec3::Vec3, glam::f32::vec3::Vec3)>)
 pub fn ponko::prelude::Ui::set_safe_area(&mut self, core::option::Option<ponko::camera::Rect>)
 pub fn ponko::prelude::Ui::set_scale(&mut self, f32)
 pub fn ponko::prelude::Ui::set_scroll(&mut self, ponko::prelude::UiId, glam::f32::vec2::Vec2)
 pub fn ponko::prelude::Ui::set_text(&mut self, ponko::prelude::UiId, impl core::convert::AsRef<str>)
+pub fn ponko::prelude::Ui::set_texture_state_tint(&mut self, ponko::prelude::UiId, bool)
 pub fn ponko::prelude::Ui::set_value(&mut self, ponko::prelude::UiId, f32)
 pub fn ponko::prelude::Ui::show_hud(&mut self, ponko::prelude::UiId)
 pub fn ponko::prelude::Ui::text(&self, ponko::prelude::UiId) -> core::option::Option<&str>
@@ -17117,18 +17122,23 @@ pub fn ponko::prelude::Ui::remove(&mut self, ponko::prelude::UiId)
 pub fn ponko::prelude::Ui::safe_area(&self) -> core::option::Option<ponko::camera::Rect>
 pub fn ponko::prelude::Ui::screen_mode(&self, ponko::prelude::UiId) -> core::option::Option<ponko::ui::ScreenMode>
 pub fn ponko::prelude::Ui::scroll(&self, ponko::prelude::UiId) -> core::option::Option<glam::f32::vec2::Vec2>
+pub fn ponko::prelude::Ui::set_clip_children(&mut self, ponko::prelude::UiId, bool)
 pub fn ponko::prelude::Ui::set_closes_screen(&mut self, ponko::prelude::UiId, bool)
 pub fn ponko::prelude::Ui::set_enabled(&mut self, ponko::prelude::UiId, bool)
 pub fn ponko::prelude::Ui::set_focus(&mut self, ponko::prelude::UiId) -> bool
 pub fn ponko::prelude::Ui::set_initial_focus(&mut self, ponko::prelude::UiId, bool)
 pub fn ponko::prelude::Ui::set_inside_safe_area(&mut self, ponko::prelude::UiId, bool)
+pub fn ponko::prelude::Ui::set_label_fit(&mut self, ponko::prelude::UiId, core::option::Option<f32>)
+pub fn ponko::prelude::Ui::set_label_vertical_center(&mut self, ponko::prelude::UiId, bool)
 pub fn ponko::prelude::Ui::set_layout(&mut self, ponko::prelude::UiId, ponko::prelude::UiLayout)
 pub fn ponko::prelude::Ui::set_paint(&mut self, ponko::prelude::UiId, ponko::ui::UiPaint)
+pub fn ponko::prelude::Ui::set_pointer_events(&mut self, ponko::prelude::UiId, bool)
 pub fn ponko::prelude::Ui::set_pointer_ray(&mut self, core::option::Option<(glam::f32::vec3::Vec3, glam::f32::vec3::Vec3)>)
 pub fn ponko::prelude::Ui::set_safe_area(&mut self, core::option::Option<ponko::camera::Rect>)
 pub fn ponko::prelude::Ui::set_scale(&mut self, f32)
 pub fn ponko::prelude::Ui::set_scroll(&mut self, ponko::prelude::UiId, glam::f32::vec2::Vec2)
 pub fn ponko::prelude::Ui::set_text(&mut self, ponko::prelude::UiId, impl core::convert::AsRef<str>)
+pub fn ponko::prelude::Ui::set_texture_state_tint(&mut self, ponko::prelude::UiId, bool)
 pub fn ponko::prelude::Ui::set_value(&mut self, ponko::prelude::UiId, f32)
 pub fn ponko::prelude::Ui::show_hud(&mut self, ponko::prelude::UiId)
 pub fn ponko::prelude::Ui::text(&self, ponko::prelude::UiId) -> core::option::Option<&str>
@@ -17328,6 +17338,7 @@ pub fn ponko::ui::UiBuilder<'_>::align(self, ponko::ui::UiTextAlign) -> Self
 pub fn ponko::ui::UiBuilder<'_>::background(self, ponko::color::Color) -> Self
 pub fn ponko::ui::UiBuilder<'_>::border(self, ponko::color::Color, f32) -> Self
 pub fn ponko::ui::UiBuilder<'_>::border_width(self, f32) -> Self
+pub fn ponko::ui::UiBuilder<'_>::clip_children(self, bool) -> Self
 pub fn ponko::ui::UiBuilder<'_>::closes_screen(self) -> Self
 pub fn ponko::ui::UiBuilder<'_>::color(self, ponko::color::Color) -> Self
 pub fn ponko::ui::UiBuilder<'_>::enabled(self, bool) -> Self
@@ -17337,15 +17348,19 @@ pub fn ponko::ui::UiBuilder<'_>::font(self, ponko::text::Font) -> Self
 pub fn ponko::ui::UiBuilder<'_>::id(self) -> ponko::prelude::UiId
 pub fn ponko::ui::UiBuilder<'_>::ime_allowed(self, bool) -> Self
 pub fn ponko::ui::UiBuilder<'_>::inside_safe_area(self) -> Self
+pub fn ponko::ui::UiBuilder<'_>::label_fit(self, f32) -> Self
+pub fn ponko::ui::UiBuilder<'_>::label_vertical_center(self, bool) -> Self
 pub fn ponko::ui::UiBuilder<'_>::layout(self, ponko::prelude::UiLayout) -> Self
 pub fn ponko::ui::UiBuilder<'_>::live_region(self, ponko::ui::UiLive) -> Self
 pub fn ponko::ui::UiBuilder<'_>::name(self, impl core::convert::AsRef<str>) -> Self
 pub fn ponko::ui::UiBuilder<'_>::paint(self, ponko::ui::UiPaint) -> Self
+pub fn ponko::ui::UiBuilder<'_>::pointer_events(self, bool) -> Self
 pub fn ponko::ui::UiBuilder<'_>::rich(self) -> Self
 pub fn ponko::ui::UiBuilder<'_>::size(self, f32) -> Self
 pub fn ponko::ui::UiBuilder<'_>::text(self, impl core::convert::AsRef<str>) -> Self
 pub fn ponko::ui::UiBuilder<'_>::text_key(self, &str) -> Self
 pub fn ponko::ui::UiBuilder<'_>::texture(self, ponko::texture::Texture, f32) -> Self
+pub fn ponko::ui::UiBuilder<'_>::texture_state_tint(self, bool) -> Self
 pub fn ponko::ui::UiBuilder<'_>::value(self, f32) -> Self
 pub fn ponko::ui::UiBuilder<'_>::wrap(self) -> Self
 impl ponko::ui::UiBuilder<'_>

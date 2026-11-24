@@ -71,11 +71,30 @@ read and edit one. That module is the Taffy crate itself, and the `unstable_`
 in each name says what STABILITY.md promises: nothing. These change when ponko
 upgrades Taffy; use the presets in code that must keep compiling. (The old
 names `custom`, `style`, `style_mut` and `into_style` still work, deprecated.)
+To crop a panel's children to its rectangle, use the Rust builder
+`.clip_children(true)`. It clips both drawing and pointer hit tests
+while leaving the children's layout and positions intact. For decoration
+over an interactive control, use `.pointer_events(false)` so the node is
+skipped in pointer hit tests. Its descendants and keyboard interaction
+remain available.
+
 Give a scroll view a bounded size; `fill()` shrinks to the space its siblings
 leave. `UiWidget::Scroll` clips descendants and supports wheel scrolling,
 content dragging and a vertical scrollbar. `set_scroll` uses unscaled layout
 units and clamps offsets during layout. Nested scroll views intersect clips.
 Navigation scrolls the focused widget into view.
+
+Set the theme's `radius` for rounded panel and button fills. For a Rust
+textured button whose image should show hover or pressed colors, enable
+`.texture_state_tint(true)`. The state color multiplies the texture's
+normal tint, including alpha, and follows the theme's state transition.
+
+On a plain Rust label, `.label_fit(10.0)` allows the font to shrink as
+needed for its content box, down to 10 logical units. If the minimum still
+overflows, the existing text clip applies. `.label_vertical_center(true)`
+centers its lines vertically and composes with horizontal alignment.
+Use a bounded layout such as `UiLayout::fixed(w, h)` when the label needs
+to fit within specific dimensions.
 
 Colors and text defaults come from the tree's theme:
 `ui.set_theme(UiTheme { panel, control, accent, text, title, text_size, title_size, .. })`.
@@ -503,6 +522,12 @@ align and shape together as one paragraph:
 | `[link=target]…[/link]` | a clickable range, underlined |
 | `[img=name]`, `[img=name alt="A"]` | an image named with `ui.set_inline_image(name, texture)`, as tall as the text; a screen reader reads `alt` (else the name) |
 | `[[` | a `[` |
+
+For italic rich text, register an italic face with
+`ui.set_inline_font("italic", italic_font)` and write
+`[font=italic]…[/font]`. To supply missing symbols for a plain or rich label,
+register a fallback chain with `ctx.gfx.set_font_fallbacks(label_font, &[symbol_font])`.
+An ordinary label uses `Font::DEFAULT` unless you selected another font.
 
 Tags nest and close with `[/name]`. Anything in brackets that isn't markup
 (`[A]`, a color it can't read) is shown as it is, and an image that has no
