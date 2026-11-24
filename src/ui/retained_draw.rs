@@ -398,14 +398,11 @@ impl Ctx {
         let rect = n.rect.expand(-width);
         self.gfx.ui_fill_rounded(rect, fill, z + 0.1, (radius - width).max(0.0));
         if let Some(texture) = n.paint.texture {
-            self.retained_image(
-                texture,
-                rect,
-                n.paint.slice * scale,
-                n.paint.slice,
-                n.paint.color,
-                z + 0.2,
-            );
+            let mut tint = n.paint.color;
+            if n.texture_state_tint {
+                tint = Color::rgba(tint.r * fill.r, tint.g * fill.g, tint.b * fill.b, tint.a * fill.a);
+            }
+            self.retained_image(texture, rect, n.paint.slice * scale, n.paint.slice, tint, z + 0.2);
         }
         self.gfx
             .ui_list
@@ -491,7 +488,7 @@ impl Ctx {
         } else {
             &n.text
         };
-        let params = TextParams {
+        let mut params = TextParams {
             font: n.paint.font,
             size: font_size,
             color: n.paint.color,
@@ -502,7 +499,12 @@ impl Ctx {
         // right-to-left paragraphs from the right.
         let directional = !is_input;
         let flags = (n.paint.wrap, directional);
-        let centred = framed && n.rich().is_none();
+        let plain_label = n.widget == UiWidget::Label && n.rich().is_none();
+        let centred = (framed || (plain_label && n.label_vertical_center)) && n.rich().is_none();
+        let fit = n.label_fit.filter(|_| plain_label).map(|min_size| LabelFit {
+            min_size: min_size * scale,
+            room: text_rect.size().max(Vec2::ZERO),
+        });
         // The text keeps its glyphs from its last drawing while what they
         // are laid out from holds: only where they go (snapped to physical
         // pixels again), their depth, clip and color change. A node that
@@ -524,6 +526,7 @@ impl Ctx {
             directional,
             align: n.paint.align,
             centred,
+            fit,
             rich: n.rich.as_deref().map(|r| r.parsed),
         });
         // The width as its wrapping compares widths: rich text's in window
@@ -541,13 +544,20 @@ impl Ctx {
             fresh.clear();
             match n.rich() {
                 Some(rich) => self.lay_out_rich(rich, &n.paint, width, scale, &mut fresh),
-                None => self.lay_out_plain(text, width, params, flags, &mut fresh),
+                None => {
+                    if let Some(fit) = fit {
+                        params.size = self.fitted_label_size(text, params, fit, n.paint.wrap);
+                        fresh.fitted_size = Some(params.size);
+                    }
+                    self.lay_out_plain(text, width, params, flags, &mut fresh);
+                }
             }
         }
         let glyphs = kept.unwrap_or(&fresh);
         if let Some(rich) = n.rich() {
             self.push_rich(rich, &n.paint, glyphs, text_rect, scale, params.z);
         } else {
+            params.size = glyphs.fitted_size.unwrap_or(font_size);
             let mut origin = glyphs.origin(text_rect, centred);
             if let Some(at) = at.filter(|_| focused) {
                 self.draw_text_field_marks(n, text, at, &mut origin, text_rect, (scale, z));
@@ -655,6 +665,52 @@ impl Ctx {
                 z + 0.9,
             );
         }
+    }
+
+    fn fitted_label_size(&mut self, text: &str, params: TextParams, fit: LabelFit, wrap: bool) -> f32 {
+        let pixels = self.gfx.scale_factor;
+        let mut fits = |size| {
+            let mut room = crate::text::WrapRoom::new(fit.room.x * pixels);
+            let mut height = 0.0;
+            for paragraph in text.split('\n') {
+                let mut rest = paragraph;
+                loop {
+                    let end = if wrap {
+                        wrap_end(&mut self.gfx.text, rest, params.font, size * pixels, &mut room)
+                    } else {
+                        rest.len()
+                    };
+                    let bounds = self.gfx.measure_text_ex(&rest[..end], params.font, size);
+                    height += bounds.y;
+                    if bounds.x > fit.room.x || height > fit.room.y {
+                        return false;
+                    }
+                    if end == rest.len() {
+                        break;
+                    }
+                    rest = rest[end..].trim_start();
+                }
+            }
+            true
+        };
+        let mut upper = params.size;
+        let mut lower = fit.min_size.min(upper);
+        if upper <= lower || fits(upper) {
+            return upper;
+        }
+        if !fits(lower) {
+            return lower;
+        }
+        // Subpixel precision is enough because glyphs snap to physical pixels.
+        for _ in 0..10 {
+            let middle = lower + (upper - lower) * 0.5;
+            if fits(middle) {
+                lower = middle;
+            } else {
+                upper = middle;
+            }
+        }
+        lower
     }
 
     /// Lays plain `text` out into `out` (emptied) in lines `width` wide:
@@ -915,6 +971,9 @@ pub(super) struct DrawKey {
     focused: bool,
     capturing: bool,
     paint: crate::ui::UiPaint,
+    texture_state_tint: bool,
+    label_fit: Option<f32>,
+    label_vertical_center: bool,
     widget: UiWidget,
     /// Its padding and border, from the layout: where its content sits.
     edges: [f32; 8],
@@ -945,6 +1004,9 @@ impl DrawKey {
             focused: ui.focus == Some(id),
             capturing: ui.is_capturing(id),
             paint: n.paint,
+            texture_state_tint: n.texture_state_tint,
+            label_fit: n.label_fit,
+            label_vertical_center: n.label_vertical_center,
             widget: n.widget,
             edges,
             value: n.value,
@@ -1037,6 +1099,12 @@ impl Drawn {
 /// keeps: the last one and two before it.
 const GLYPH_LAYOUTS: usize = 3;
 
+#[derive(Clone, Copy, PartialEq)]
+struct LabelFit {
+    min_size: f32,
+    room: Vec2,
+}
+
 /// What a node's text is laid out from, besides the text itself, the
 /// [`FrameKey`] and the width wrapped text wraps in ([`Glyphs::room`]).
 /// Where the node is is not part of it, nor its color or where its
@@ -1054,6 +1122,7 @@ struct GlyphKey {
     align: UiTextAlign,
     /// Centred in the height of a control.
     centred: bool,
+    fit: Option<LabelFit>,
     /// The revision a rich node's markup was parsed with.
     rich: Option<u64>,
 }
@@ -1085,6 +1154,7 @@ pub(crate) struct Glyphs {
     quads: Vec<crate::gfx::GlyphQuad>,
     /// Plain text: its lines, top to bottom.
     lines: Vec<Line>,
+    fitted_size: Option<f32>,
     /// Rich text: its runs and images as placed in its box, and each one's
     /// glyphs in `quads`.
     items: Vec<(super::rich::Item, [u32; 2])>,
@@ -1118,6 +1188,7 @@ impl Glyphs {
         self.key = None;
         self.quads.clear();
         self.lines.clear();
+        self.fitted_size = None;
         self.items.clear();
         self.room = crate::text::WrapRoom::default();
         self.fresh = false;

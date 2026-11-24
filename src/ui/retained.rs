@@ -618,6 +618,11 @@ pub(super) struct Node {
     pub text: String,
     pub paint: UiPaint,
     pub enabled: bool,
+    pub clip_children: bool,
+    pub pointer_events: bool,
+    pub texture_state_tint: bool,
+    pub label_fit: Option<f32>,
+    pub label_vertical_center: bool,
     pub rect: Rect,
     pub clip: Rect,
     pub scroll: Vec2,
@@ -894,6 +899,11 @@ impl Ui {
             text: String::new(),
             paint,
             enabled: true,
+            clip_children: false,
+            pointer_events: true,
+            texture_state_tint: false,
+            label_fit: None,
+            label_vertical_center: false,
             rect: Rect::default(),
             clip: Rect::default(),
             scroll: Vec2::ZERO,
@@ -1072,6 +1082,60 @@ impl Ui {
             n.enabled = enabled;
         }
     }
+    /// Clip descendants to this node's rectangle for drawing and hit tests.
+    /// Scroll widgets already clip their descendants.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let mut ui = Ui::default();
+    /// let panel = ui.root().id();
+    /// ui.set_clip_children(panel, true);
+    /// ```
+    pub fn set_clip_children(&mut self, id: UiId, clip: bool) {
+        if let Some(node) = self.node_mut(id) {
+            node.clip_children = clip;
+        }
+    }
+
+    /// Set whether this node participates in pointer hit tests. Its children
+    /// and keyboard interaction still work when pointer events pass through.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let mut ui = Ui::default();
+    /// let panel = ui.root().id();
+    /// ui.set_pointer_events(panel, false);
+    /// ```
+    pub fn set_pointer_events(&mut self, id: UiId, enabled: bool) {
+        if let Some(node) = self.node_mut(id) {
+            node.pointer_events = enabled;
+        }
+    }
+
+    /// Multiply a node's texture tint by its animated background color
+    /// for its current state. Off by default.
+    pub fn set_texture_state_tint(&mut self, id: UiId, enabled: bool) {
+        if let Some(node) = self.node_mut(id) {
+            node.texture_state_tint = enabled;
+        }
+    }
+
+    /// Allow a plain label to shrink its text to fit its content box.
+    /// `min_size` is the smallest permitted font size in logical units.
+    /// `None` or a nonpositive or non-finite minimum disables fitting.
+    pub fn set_label_fit(&mut self, id: UiId, min_size: Option<f32>) {
+        if let Some(node) = self.node_mut(id) {
+            node.label_fit = min_size.filter(|size| size.is_finite() && *size > 0.0);
+        }
+    }
+
+    /// Center a plain label's text vertically in its content box.
+    pub fn set_label_vertical_center(&mut self, id: UiId, centered: bool) {
+        if let Some(node) = self.node_mut(id) {
+            node.label_vertical_center = centered;
+        }
+    }
+
     /// Slider value (0..1), or toggle value (zero/off, one/on).
     /// ```
     /// use ponko::prelude::*;
@@ -1729,7 +1793,8 @@ impl Ui {
         self.visible.iter().rev().copied().find(|&id| {
             self.interactive(id)
                 && self.node(id).is_some_and(|n| {
-                    n.rect.size().cmpgt(Vec2::ZERO).all()
+                    n.pointer_events
+                        && n.rect.size().cmpgt(Vec2::ZERO).all()
                         && n.rect.contains(point)
                         && n.clip.contains(point)
                         && n.clip.size().cmpgt(Vec2::ZERO).all()
@@ -1974,10 +2039,12 @@ impl Ui {
         };
         n.scroll = n.scroll.clamp(Vec2::ZERO, n.max_scroll);
         let scroll = n.scroll * scale;
+        let clip_children = scrollable || n.clip_children;
+        let has_scrollbar = scrollable && n.max_scroll.y > 0.0;
         self.visible.push(id);
-        let (child_clip, child_shown) = if scrollable {
+        let (child_clip, child_shown) = if clip_children {
             let mut inner = rect;
-            if self.node(id).unwrap().max_scroll.y > 0.0 {
+            if has_scrollbar {
                 inner.max.x = (inner.max.x - 12.0 * scale).max(inner.min.x);
             }
             (intersect(clip, inner), intersect(shown.1, xf.map_rect(inner)))
