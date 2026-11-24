@@ -9006,6 +9006,11 @@ enum PonkoStatus ponko_ctx_ui_scroll(struct PonkoCtx *ctx,
                                      uint64_t id,
                                      struct PonkoVec2 *out_offset);
 
+enum PonkoStatus ponko_ctx_ui_screen_mode(struct PonkoCtx *ctx,
+                                          uint64_t target,
+                                          uint64_t root,
+                                          uint32_t *out_mode);
+
 enum PonkoStatus ponko_ctx_ui_push_screen_with_mode(struct PonkoCtx *ctx,
                                                     uint64_t target,
                                                     uint64_t root,
@@ -9228,6 +9233,13 @@ enum PonkoStatus ponko_ctx_ui_number(struct PonkoCtx *ctx,
                                      uint64_t id,
                                      double *out_value);
 
+enum PonkoStatus ponko_ctx_ui_number_range(struct PonkoCtx *ctx,
+                                           uint64_t target,
+                                           uint64_t id,
+                                           double *out_min,
+                                           double *out_max,
+                                           double *out_step);
+
 enum PonkoStatus ponko_ctx_ui_set_number(struct PonkoCtx *ctx,
                                          uint64_t target,
                                          uint64_t id,
@@ -9249,6 +9261,11 @@ enum PonkoStatus ponko_ctx_ui_list_item(struct PonkoCtx *ctx,
                                         uint64_t target,
                                         uint64_t row,
                                         uint64_t *out_index);
+
+enum PonkoStatus ponko_ctx_ui_list_len(struct PonkoCtx *ctx,
+                                       uint64_t target,
+                                       uint64_t id,
+                                       uint64_t *out_len);
 
 enum PonkoStatus ponko_ctx_ui_scroll_to_item(struct PonkoCtx *ctx,
                                              uint64_t target,
@@ -9275,6 +9292,13 @@ enum PonkoStatus ponko_ctx_ui_set_tooltip(struct PonkoCtx *ctx,
                                           uint64_t target,
                                           uint64_t id,
                                           const char *text);
+
+enum PonkoStatus ponko_ctx_ui_tooltip(struct PonkoCtx *ctx,
+                                      uint64_t target,
+                                      uint64_t id,
+                                      char *buffer,
+                                      size_t capacity,
+                                      size_t *out_len);
 
 enum PonkoStatus ponko_ctx_ui_shown_tooltip(struct PonkoCtx *ctx,
                                             uint64_t target,

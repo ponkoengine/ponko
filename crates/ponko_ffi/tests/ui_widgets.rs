@@ -255,6 +255,13 @@ unsafe fn values_lists_and_splits(ctx: Ctx) {
 
         let field = id_of(|o| ponko_ctx_ui_add_number_field(ctx, S, root, 5.0, &fixed(120.0, 28.0), o));
         ok(ponko_ctx_ui_set_number_range(ctx, S, field, 0.0, 10.0, 2.0));
+        let (mut min, mut max, mut step) = (1.0, 1.0, 1.0);
+        ok(ponko_ctx_ui_number_range(ctx, S, field, &mut min, &mut max, &mut step));
+        assert_eq!((min, max, step), (0.0, 10.0, 2.0));
+        assert_eq!(
+            ponko_ctx_ui_number_range(ctx, S, field, &mut min, null_mut(), &mut step),
+            PONKO_INVALID_ARGUMENT
+        );
         ok(ponko_ctx_ui_set_number(ctx, S, field, 40.0));
         let mut n = 0.0;
         ok(ponko_ctx_ui_number(ctx, S, field, &mut n));
@@ -268,6 +275,10 @@ unsafe fn values_lists_and_splits(ctx: Ctx) {
         // A list of a million items keeps nodes only for its visible rows.
         let list = id_of(|o| ponko_ctx_ui_add_list(ctx, S, root, 1, 24.0, &fixed(300.0, 240.0), o));
         ok(ponko_ctx_ui_set_list_len(ctx, S, list, 1_000_000));
+        let mut len = 0;
+        ok(ponko_ctx_ui_list_len(ctx, S, list, &mut len));
+        assert_eq!(len, 1_000_000);
+        assert_eq!(ponko_ctx_ui_list_len(ctx, S, field, &mut len), PONKO_INVALID_ARGUMENT);
         frame(ctx, &input_ex());
         let access = ponko_ui_access_new();
         let mut changes = std::mem::zeroed::<PonkoUiAccessChanges>();
@@ -382,7 +393,24 @@ unsafe fn bindings_tooltips_menus_and_drags(ctx: Ctx) {
 
         // A tooltip shows after the pointer rests for the theme's delay.
         let button = id_of(|o| ponko_ctx_ui_add_button(ctx, S, root, c"Save".as_ptr(), &layout, o));
+        let mut tooltip = [0 as c_char; 32];
+        let mut tooltip_len = 0;
+        assert_eq!(
+            ponko_ctx_ui_tooltip(ctx, S, button, null_mut(), 0, &mut tooltip_len),
+            PONKO_NOT_FOUND
+        );
         ok(ponko_ctx_ui_set_tooltip(ctx, S, button, c"Saves the game".as_ptr()));
+        ok(ponko_ctx_ui_tooltip(ctx, S, button, null_mut(), 0, &mut tooltip_len));
+        assert_eq!(tooltip_len, c"Saves the game".to_bytes().len());
+        ok(ponko_ctx_ui_tooltip(
+            ctx,
+            S,
+            button,
+            tooltip.as_mut_ptr(),
+            tooltip.len(),
+            &mut tooltip_len,
+        ));
+        assert_eq!(CStr::from_ptr(tooltip.as_ptr()), c"Saves the game");
         let mut shown = (0, PonkoRect::default());
         assert_eq!(
             ponko_ctx_ui_shown_tooltip(ctx, S, &mut shown.0, &mut shown.1),

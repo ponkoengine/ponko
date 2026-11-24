@@ -4945,8 +4945,26 @@ public:
     void set_number(id node, double value) { detail::check(ponko_ctx_ui_set_number(raw_, target_, node, value)); }
     /// A number field's range and step.
     void set_number_range(id node, double min, double max, double step) { detail::check(ponko_ctx_ui_set_number_range(raw_, target_, node, min, max, step)); }
+    /// A number field's limits and step.
+    struct number_limits {
+        double min; ///< Minimum accepted value.
+        double max; ///< Maximum accepted value.
+        double step; ///< Value increment.
+    };
+    /// Reads a number field's limits and step.
+    number_limits number_range(id node) const {
+        number_limits range{};
+        detail::check(ponko_ctx_ui_number_range(raw_, target_, node, &range.min, &range.max, &range.step));
+        return range;
+    }
     /// How many items a list has, for rows drawn without text.
     void set_list_len(id node, std::uint64_t len) { detail::check(ponko_ctx_ui_set_list_len(raw_, target_, node, len)); }
+    /// The total number of items, including those outside the viewport.
+    std::uint64_t list_len(id node) const {
+        std::uint64_t n = 0;
+        detail::check(ponko_ctx_ui_list_len(raw_, target_, node, &n));
+        return n;
+    }
     /// The item a list row shows now, if any (rows are reused: look again after `rows_shown`).
     std::optional<std::uint64_t> list_item(id row) const {
         std::uint64_t i = no_index; detail::check(ponko_ctx_ui_list_item(raw_, target_, row, &i));
@@ -4965,6 +4983,17 @@ public:
     bool is_capturing(id node) const { bool b = false; detail::check(ponko_ctx_ui_is_capturing(raw_, target_, node, &b)); return b; }
     /// A node's tooltip (empty for none): shown on hover after the theme's delay, at once on key focus.
     void set_tooltip(id node, const char* text) { detail::check(ponko_ctx_ui_set_tooltip(raw_, target_, node, text)); }
+    /// The tooltip assigned to a node, if present.
+    std::optional<std::string> tooltip(id node) const {
+        std::size_t len = 0;
+        auto status = ponko_ctx_ui_tooltip(raw_, target_, node, nullptr, 0, &len);
+        if (status == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(status);
+        std::string text(len + 1, '\0');
+        detail::check(ponko_ctx_ui_tooltip(raw_, target_, node, text.data(), text.size(), &len));
+        text.resize(len);
+        return text;
+    }
     /// The node whose tooltip shows now, and where.
     std::optional<std::pair<id, ponko::rect>> shown_tooltip() const {
         id n = none; ponko::rect r{}; const PonkoStatus status = ponko_ctx_ui_shown_tooltip(raw_, target_, &n, &r);
@@ -5041,6 +5070,14 @@ public:
     std::optional<id> pop_screen() { id n = none; detail::check(ponko_ctx_ui_pop_screen(raw_, target_, &n)); return maybe(n); }
     /// The top screen's root, if a screen is open.
     std::optional<id> top_screen() const { id n = none; detail::check(ponko_ctx_ui_top_screen(raw_, target_, &n)); return maybe(n); }
+    /// The mode `root` was pushed with, if it is on the screen stack.
+    std::optional<screen_mode> mode_of_screen(id root) const {
+        std::uint32_t mode = 0;
+        auto status = ponko_ctx_ui_screen_mode(raw_, target_, root, &mode);
+        if (status == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(status);
+        return static_cast<screen_mode>(mode);
+    }
     /// Whether `node` is shown: on a screen of the stack, neither it nor a node above it hidden.
     bool is_shown(id node) const { bool s = false; detail::check(ponko_ctx_ui_is_shown(raw_, target_, node, &s)); return s; }
     /// How many times the tree has been laid out (`Ui::layout_passes`): a layout runs only when something changed since the last one, so the count stays the same over a still screen's frames.

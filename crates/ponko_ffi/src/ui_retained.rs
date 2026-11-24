@@ -2028,6 +2028,45 @@ pub(crate) fn screen_mode(mode: u32) -> Option<ScreenMode> {
     }
 }
 
+/// Writes the `PonkoUiScreenMode` of `root`. Returns `PONKO_NOT_FOUND`
+/// when the root is missing or is outside the screen stack.
+/// ```
+/// let mut mode = 0;
+/// let status = unsafe { ponko_ffi::ponko_ctx_ui_screen_mode(std::ptr::null_mut(), ponko_ffi::PONKO_UI_SCREEN, 0, &mut mode) };
+/// assert_eq!(status as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `out_mode` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_ui_screen_mode(
+    ctx: *mut PonkoCtx,
+    target: u64,
+    root: u64,
+    out_mode: *mut u32,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        if out_mode.is_null() {
+            return Err(invalid("output is null"));
+        }
+        with_ui(ctx, target, |ui| {
+            let root = existing(ui, root)?;
+            let mode = match ui.screen_mode(root) {
+                Some(ScreenMode::Modeless) => PonkoUiScreenMode::PONKO_UI_SCREEN_MODE_MODELESS,
+                Some(ScreenMode::Modal) => PonkoUiScreenMode::PONKO_UI_SCREEN_MODE_MODAL,
+                Some(_) => return Err(invalid("unsupported UI screen mode")),
+                None => {
+                    return Err(error(
+                        PonkoStatus::PONKO_NOT_FOUND,
+                        "UI node is outside the screen stack",
+                    ));
+                }
+            };
+            out(out_mode, mode as u32)
+        })
+    })
+}
+
 /// Both push entry points; `None` is an unknown mode.
 /// # Safety
 /// `ctx` null or live.

@@ -2946,6 +2946,16 @@ static void retained_ui() {
         auto gift = ui.add_toggle(root, "Gift", false, u::layout().size(100, 20).shrink(0));
         auto volume = ui.add_slider(root, 0.25f, u::layout().size(200, 20).shrink(0));
         auto note = ui.add_text_input(root, "hi", u::layout().size(200, 30).shrink(0));
+        auto number = ui.add_number_field(u::none, 5.0, u::layout());
+        ui.set_number_range(number, 0.0, 10.0, 2.0);
+        auto limits = ui.number_range(number);
+        CHECK(limits.min == 0.0 && limits.max == 10.0 && limits.step == 2.0);
+        auto list = ui.add_list(u::none, 20.0f, 4, u::layout());
+        ui.set_list_len(list, 100);
+        CHECK(ui.list_len(list) == 100);
+        CHECK(!ui.tooltip(number));
+        ui.set_tooltip(number, "Continue");
+        CHECK(ui.tooltip(number) == "Continue");
         CHECK(!ui.top_screen() && !ui.wants_keyboard());
         ui.push_screen(root);
         CHECK(ui.top_screen() == root && ui.wants_keyboard());
@@ -2998,8 +3008,10 @@ static void retained_ui() {
 
         // Modal screens stack, and Cancel pops the top one.
         auto dialog = ui.add_panel(u::none, u::layout().size(100, 100));
+        CHECK(!ui.mode_of_screen(dialog));
         ui.push_modal(dialog);
         CHECK(ui.top_screen() == dialog && ui.wants_pointer());
+        CHECK(ui.mode_of_screen(dialog) == u::screen_mode::modal);
         input = u::default_input();
         input.cancel = true;
         ui.frame(window, input);
@@ -3007,7 +3019,9 @@ static void retained_ui() {
         CHECK(events.size() == 1 && events[0].kind == u::event_kind::screen_popped && events[0].node == dialog);
         CHECK(ui.top_screen() == root);
         ui.push_screen(dialog);
+        CHECK(ui.mode_of_screen(dialog) == u::screen_mode::modeless);
         CHECK(ui.pop_screen() == dialog);
+        CHECK(!ui.mode_of_screen(dialog));
         ui.push_screen(dialog, u::screen_mode::modal);  // the mode as a value
         CHECK(ui.top_screen() == dialog && ui.wants_pointer());
         CHECK(ui.pop_screen() == dialog);
