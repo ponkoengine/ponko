@@ -1158,7 +1158,7 @@ pub(crate) unsafe fn style_or_default(layout: *const PonkoUiLayout) -> Result<St
     // SAFETY: caller contract.
     match unsafe { layout.as_ref() } {
         Some(layout) => unsafe { layout_style(layout) },
-        None => Ok(Style::default()),
+        None => Ok(UiLayout::auto().into_unstable_style()),
     }
 }
 
@@ -2865,7 +2865,10 @@ mod tests {
     fn default_layout_is_the_rust_default() {
         // SAFETY: the default layout has null track pointers.
         let style = unsafe { layout_style(&ponko_ui_layout_default()) }.ok().unwrap();
-        assert_eq!(style, Style::default());
+        assert_eq!(style, UiLayout::auto().into_unstable_style());
+        // SAFETY: null selects the default style.
+        let implicit = unsafe { style_or_default(std::ptr::null()) }.ok().unwrap();
+        assert_eq!(implicit, style);
     }
 
     #[test]
@@ -2948,7 +2951,6 @@ mod tests {
     #[test]
     fn layout_presets_are_the_rust_presets() {
         let pairs = [
-            (ponko_ui_layout_default(), UiLayout::auto()),
             (ponko_ui_layout_row(20.0), UiLayout::row(20.0)),
             (ponko_ui_layout_column(150.0), UiLayout::column(150.0)),
             (ponko_ui_layout_fill(), UiLayout::fill()),
