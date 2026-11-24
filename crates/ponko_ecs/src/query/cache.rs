@@ -499,7 +499,7 @@ enum State {
 }
 
 /// Early component IDs are cheap to scan in the membership benchmark.
-const FIRST_EXPENSIVE_COLUMN: usize = 16;
+const FIRST_EXPENSIVE_COLUMN: usize = 6;
 
 pub(crate) struct ColumnRows {
     ids: Box<[ComponentId]>,

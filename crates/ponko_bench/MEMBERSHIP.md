@@ -345,3 +345,137 @@ with reclaiming, 1.51 M with this change.
   because the engine's lookup is unchanged.
 - C/C++: the destructor-remove change is inside the engine and needs no
   binding change; no native benchmark was run.
+
+## Cached query column indices (#350)
+
+An indexed match list can also hold the column numbers of the components
+required by its canonical signature. Cached numbers are resolved against the
+current archetype under the live world borrow. The cache updates the numbers
+when the world adds an archetype or reuses a slot, and drops them when it
+evicts the signature.
+
+Column rows consume two bytes per required component per cached match. In the
+4096-archetype benchmark, two components take 16 KiB of column payload, plus
+column-row metadata and the two component IDs. The existing
+archetype indices take another 16 KiB. The column payload has its own budget
+equal to `QueryCachePolicy::max_index_bytes`. `query_cache_stats().bytes`
+includes spare capacity and bookkeeping. An indexed signature only allocates
+columns when a required component is at position 6 or later (zero-based).
+Earlier components in signatures without cached rows, budget overflow,
+optional components outside the signature and column numbers outside the
+compact representation use the existing lookup. Queries with
+`QueryCachePolicy::off()` keep scanning.
+
+Release builds on an Apple M4 Max, macOS 27.2.1, rustc 1.100.0, AC power,
+2026-11-24. The baseline engine is `f057605b`. Both builds use the same
+benchmark source per comparison and alternate launch order over five pairs.
+Each membership result is the median of five run medians, in ns per
+archetype. Each run times 200 hot and 25 cold iterations after warmup.
+The `.cached()` rows force an index. The automatic policy scans the dense
+world in this benchmark, so its rows measure the fallback. All timed
+iteration rows in the original protocol report zero heap allocations.
+
+### Initial cutoff of 16
+
+The original cold protocol writes through 128 MiB immediately before each
+timed sample. The one-minute system load ranged from 3.73 to 4.74 during
+the five pairs. The cached late-ID rows under that protocol were:
+
+| Columns | Hot before → after | Cold before → after |
+|---:|---:|---:|
+| 4 | 3.57 → 3.53 | 10.87 → 11.12 |
+| 8 | 5.49 → 5.49 | 17.29 → 24.43 |
+| 16 | 10.69 → 10.92 | 29.77 → 31.33 |
+| 32 | 18.87 → 3.73 | 30.49 → 19.77 |
+| 64 | 35.81 → 3.94 | 57.26 → 23.79 |
+
+A separate five-pair run of the eight-column case returned 15.85 → 24.27 ns
+cold with a forced index and 15.59 → 22.87 ns cold in automatic mode. Both
+eight-column modes scan for column numbers. The read-only eviction pass
+below reads the same amount of memory and avoids dirty writeback from the
+flush buffer.
+
+| Columns, late IDs | Hot before → after | Cold before → after |
+|---:|---:|---:|
+| 4 | 3.56 → 3.58 | 9.96 → 8.71 |
+| 8 | 5.56 → 5.49 | 14.86 → 18.32 |
+| 16 | 10.74 → 11.16 | 24.66 → 22.15 |
+| 32 | 18.88 → 3.84 | 27.11 → 16.58 |
+| 64 | 37.03 → 4.45 | 67.38 → 17.92 |
+
+The eight-column cold difference also appeared in sixteen isolated runs.
+Each round ran the candidate and two copies of the same baseline binary.
+With `.cached()`, the candidate median was 19.74 ns against baseline
+medians of 14.34 and 14.91 ns. The candidate was slower than the mean of
+the two baselines in 14 of 16 rounds. The two baselines themselves differed
+by a median of 2.68 ns, with a largest difference of 10.78 ns. The standalone
+linear column lookup measured 7.25 and 7.22 ns for the baselines and 6.89 ns
+for the candidate.
+
+Dense iteration controls using the read-only run's `iter/` output, in ms
+per run (median / p95, each the median across five runs):
+
+| Benchmark | Before | After |
+|---|---:|---:|
+| `iter/ponko` | 0.165 / 0.181 | 0.164 / 0.179 |
+| `iter/ponko-iter` | 0.750 / 0.797 | 0.751 / 0.790 |
+| `iter/own-dynamic-chunk` | 0.164 / 0.184 | 0.164 / 0.177 |
+
+Using just the same world construction, allocator instrumentation and typed
+query loops in an ECS-only binary, twelve alternating pairs gave cold
+medians of 16.94 → 13.93 ns for the cached case. The full benchmark used to
+set up worlds and allocate scratch memory for other membership groups even
+when `membership/query` was the only requested group. That difference is a
+reason to isolate the setup when comparing cold timings.
+
+### Final cutoff of 6
+
+Explicit `membership/query` runs now skip other membership groups. Both
+revisions use this filter behavior and the read-only flush. The final cutoff
+keeps early-ID and four-column layouts on the scan and also caches late IDs
+in eight- and sixteen-column layouts. One-minute system load was 3.62 to
+4.79 for this five-pair series. Hot / cold latency, in ns per archetype:
+
+| Columns | Early IDs before | Early IDs after | Late IDs before | Late IDs after |
+|---:|---:|---:|---:|---:|
+| 4 | 2.56 / 8.21 | 2.53 / 8.32 | 3.53 / 8.61 | 3.52 / 8.69 |
+| 8 | 2.76 / 10.10 | 2.98 / 11.37 | 5.49 / 12.81 | 3.65 / 13.47 |
+| 16 | 3.34 / 13.18 | 3.10 / 13.78 | 10.43 / 21.87 | 3.85 / 17.34 |
+| 32 | 3.41 / 13.14 | 3.39 / 12.66 | 19.40 / 29.60 | 3.83 / 16.20 |
+| 64 | 5.18 / 14.80 | 4.80 / 14.62 | 35.38 / 57.14 | 6.04 / 19.68 |
+
+The table uses `.cached()` to force an index. Cached late-ID times at
+32 and 64 columns fell in every pair, hot and cold. Conventional dense
+iteration stayed close to baseline. The corresponding `iter/` output,
+in ms per iteration (median / p95):
+
+| Benchmark | Before | After |
+|---|---:|---:|
+| `iter/ponko` | 0.164 / 0.180 | 0.165 / 0.176 |
+| `iter/ponko-iter` | 0.748 / 0.786 | 0.754 / 0.786 |
+| `iter/own-dynamic-chunk` | 0.164 / 0.176 | 0.164 / 0.179 |
+
+The full run still showed a higher cold median in the eight-column
+automatic case (13.07 → 15.65 ns), and higher hot and cold medians in
+the 64-column automatic case (37.15 / 57.06 → 45.57 / 69.99 ns). To
+check each case without the preceding widths, another twelve pairs ran
+one width and ID placement per process. The four-column and eight-column
+automatic cases stayed close to baseline. Early-ID narrow hot and cold
+medians varied by up to 0.36 and 1.50 ns respectively. In the isolated
+64-column automatic case the larger full-series difference did not
+reproduce. Selected medians from the twelve-pair runs:
+
+| Case | Before hot / cold | After hot / cold |
+|---|---:|---:|
+| 4 early, automatic | 2.55 / 7.76 | 2.52 / 7.79 |
+| 8 late, automatic | 5.47 / 11.82 | 5.49 / 12.30 |
+| 8 late, cached | 5.79 / 11.79 | 3.56 / 11.40 |
+| 16 early, cached | 3.15 / 15.25 | 3.42 / 15.72 |
+| 64 late, automatic | 35.79 / 61.44 | 36.69 / 63.08 |
+| 64 late, automatic with `Without<Tag>` | 43.45 / 81.83 | 42.86 / 67.50 |
+| 64 late, cached | 35.55 / 63.48 | 4.29 / 18.30 |
+
+All final membership timing rows reported zero steady-state allocations.
+The results measure query latency on this Mac. Cold timings across width
+order and process setup still vary, and the timed runs do not measure a
+whole game frame.

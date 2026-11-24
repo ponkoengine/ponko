@@ -1522,7 +1522,7 @@ impl<'w, Q: QueryData> Query<'w, Q> {
 
     /// Runs `f` for every matching entity. The fastest way to loop.
     #[inline]
-    pub fn for_each(&mut self, mut f: impl FnMut(Q::Item<'_>)) {
+    pub fn for_each(&mut self, f: impl FnMut(Q::Item<'_>)) {
         if !self.tracking() {
             // The loop of a world that tracks nothing: kept apart from the
             // tracked one, so it is compiled as it would be without change
@@ -1533,21 +1533,31 @@ impl<'w, Q: QueryData> Query<'w, Q> {
             if archetypes.columns.is_some() {
                 return Self::for_each_cached_columns(archetypes, ids, filters, f);
             }
-            // Preserve the small, inlined scan loop for narrow layouts.
-            for arch in archetypes.scan {
-                let len = arch.len();
-                if len == 0 || !filters.matches(arch) {
-                    continue;
-                }
-                let Some(state) = Q::state(arch, &ids) else {
-                    continue;
-                };
-                // SAFETY: the rows match under the validated query borrow.
-                unsafe { for_rows::<Q>(state, 0..len, &mut f) };
-            }
-            return;
+            return Self::for_each_scanned_columns(archetypes.scan, ids, filters, f);
         }
         self.for_each_tracked(f);
+    }
+
+    /// Give the scan loop its own body so the cached branch does not affect
+    /// how LLVM allocates registers in the loop over narrow archetypes.
+    #[inline(never)]
+    fn for_each_scanned_columns(
+        archetypes: ArchetypeScan<'_>,
+        ids: Q::Ids,
+        filters: Filters,
+        mut f: impl FnMut(Q::Item<'_>),
+    ) {
+        for arch in archetypes {
+            let len = arch.len();
+            if len == 0 || !filters.matches(arch) {
+                continue;
+            }
+            let Some(state) = Q::state(arch, &ids) else {
+                continue;
+            };
+            // SAFETY: the rows match under the validated query borrow.
+            unsafe { for_rows::<Q>(state, 0..len, &mut f) };
+        }
     }
 
     /// Keep the column-cache loop outside the untracked scan loop so its

@@ -825,13 +825,12 @@ fn time_each(samples: usize, mut prepare: impl FnMut(), mut f: impl FnMut() -> u
 
 /// A real query over 4096 archetypes: per archetype it matches the filters
 /// (`has`) and finds two columns (`column_index`), then visits 4 rows. Hot:
-/// back-to-back runs. Cold: 128 MiB written before every run, the first frame
-/// after the world was out of cache. `lookup-*` rows are the two column
-/// lookups alone over the same archetypes (no rows visited), with the engine's
-/// linear scan and with binary search, to show the share of the lookup.
+/// back-to-back runs. Cold: 128 MiB read before every run, representing a
+/// frame after the world was out of cache without dirtying the flush buffer.
+/// `lookup-*` rows are the two column lookups alone over the same archetypes
+/// (no rows visited), to show the share of the lookup.
 fn query_level(filter: Option<&str>) {
-    let mut flush = vec![0u64; FLUSH_BYTES / 8];
-    let mut generation = 0u64;
+    let flush = vec![1u64; FLUSH_BYTES / 8];
     for place in [Place::First, Place::Last] {
         for width in QUERY_WIDTHS {
             let tag = format!("n{width}-{}", place.name());
@@ -954,11 +953,11 @@ fn query_level(filter: Option<&str>) {
                 let cold = time_each(
                     25,
                     || {
-                        generation += 1;
-                        for x in flush.iter_mut().step_by(8) {
-                            *x = x.wrapping_add(generation);
-                        }
-                        black_box(&flush);
+                        let checksum = black_box(&flush)
+                            .iter()
+                            .step_by(8)
+                            .fold(0u64, |sum, &sample| sum.wrapping_add(sample));
+                        black_box(checksum);
                     },
                     &mut f,
                 );
@@ -977,6 +976,13 @@ fn query_level(filter: Option<&str>) {
 }
 
 pub fn run(filter: Option<&str>) {
+    // An explicit query filter should avoid setting up the other groups.
+    // Their temporary worlds and buffers affect the allocator before the
+    // cache-cold query workload constructs its world.
+    if filter.is_some_and(|filter| filter.starts_with("membership/query")) {
+        query_level(filter);
+        return;
+    }
     memory(filter);
     lookups(filter);
     colmap(filter);
