@@ -106,11 +106,31 @@ unsafe extern "C" fn watch(ctx: *mut PonkoCtx, user: *mut c_void) {
                 PONKO_OK
             );
             ids.hit = found.then_some(hit);
+            let exclude_floor = PonkoQueryFilter2D {
+                exclude: true,
+                exclude_entity: ids.floor,
+                ..Default::default()
+            };
+            assert_eq!(
+                ponko_ctx_cast_ray_filtered(ctx, from, down, 1000.0, exclude_floor, &mut found, &mut hit),
+                PONKO_OK
+            );
+            assert!(!found);
             let mut buf = [PonkoEntity::default(); 1];
             let mut n = 0;
             let p = PonkoVec2 { x: 150.0, y: 300.0 };
             assert_eq!(ponko_ctx_physics_at(ctx, p, buf.as_mut_ptr(), 1, &mut n), PONKO_OK);
             ids.at_floor = buf[..n.min(1)].iter().map(|e| bits(*e)).collect();
+            assert_eq!(
+                ponko_ctx_overlap_ball(ctx, p, 1.0, Default::default(), null_mut(), 0, &mut n),
+                PONKO_OK
+            );
+            assert_eq!(n, 1);
+            assert_eq!(
+                ponko_ctx_overlap_ball(ctx, p, 1.0, exclude_floor, buf.as_mut_ptr(), 1, &mut n),
+                PONKO_OK
+            );
+            assert_eq!(n, 0);
             assert_eq!(ponko_ctx_body_mass(ctx, ids.ball, &mut ids.mass), PONKO_OK);
             let mut none = 0.0;
             assert_eq!(ponko_ctx_body_mass(ctx, 12345, &mut none), PONKO_NOT_FOUND);
