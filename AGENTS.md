@@ -66,6 +66,12 @@ python3 scripts/check-unsafe.py             # every unsafe item outside the ECS 
 python3 scripts/check-ffi-ownership.py      # every C function says who owns its pointers
 ```
 
+On Windows, `cargo fmt --all --check` can stop with "The filename or
+extension is too long (os error 206)" (one `rustfmt` command for every
+target in the workspace); run it per package there (`cargo fmt -p <package>
+--check` for each workspace package). Run the Python checks with `python`
+where `python3` is the Microsoft Store stub.
+
 If you add or change a cargo feature, or a web smoke runner, give it its lines
 in `scripts/checks.yml` (the list of checks) and run the last command;
 CONTRIBUTING.md, "Adding or changing a cargo feature", has the details. Also

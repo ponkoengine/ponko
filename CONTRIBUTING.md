@@ -116,6 +116,12 @@ cargo test -p ponko_ecs --test queries  # an ECS query change
 cargo test -p ponko --test headless    # a headless simulation change
 ```
 
+On Windows, `cargo fmt --all` can fail with "The filename or extension is
+too long (os error 206)": it hands every target's file of the workspace to
+one `rustfmt` command, past Windows' command-line limit. Check one package
+at a time there instead (`cargo fmt -p ponko --check`, and so on for each
+package `cargo metadata --no-deps` lists).
+
 For guide changes, run `mdbook build book` if mdBook is available. You do not
 need a C++ toolchain for an unrelated Rust change. Report checks you could not
 run; maintainers cover the broader matrix before merging.

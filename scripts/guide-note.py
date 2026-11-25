@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 # The project's home is the one line in PROJECT_URL (see scripts/project-url.py).
-REPO_URL = (Path(__file__).resolve().parent.parent / "PROJECT_URL").read_text().strip()
+REPO_URL = (Path(__file__).resolve().parent.parent / "PROJECT_URL").read_text(encoding='utf-8').strip()
 NOTE = (
     "**Which version?** This guide follows the `main` branch, so it can "
     "describe APIs that the latest crates.io release does not have yet. "
