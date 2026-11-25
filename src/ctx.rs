@@ -433,6 +433,7 @@ impl Ctx {
             crate::reflect::WorldReflect::reflect::<crate::d3::Decal>(&mut world);
             crate::reflect::WorldReflect::reflect::<crate::render::ReceivesDecals>(&mut world);
             crate::reflect::WorldReflect::reflect::<crate::render::LodHysteresis>(&mut world);
+            crate::reflect::WorldReflect::reflect::<crate::render::LodFadeTime>(&mut world);
             crate::reflect::WorldReflect::reflect::<crate::render::ShadowOnly>(&mut world);
             crate::reflect::WorldReflect::reflect::<crate::anim::SkinOf>(&mut world);
             crate::reflect::WorldReflect::reflect::<crate::anim::AttachToJoint>(&mut world);

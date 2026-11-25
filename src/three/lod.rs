@@ -272,6 +272,36 @@ pub enum LodPick {
 #[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize, Component)]
 pub struct LodHysteresis(pub f32);
 
+/// Crossfades over time for the [`LodGroup`] on the same entity: when the
+/// level it shows changes, the old level fades into the new one over this
+/// many seconds, whatever the camera does meanwhile, instead of over a band
+/// of screen heights. The levels' [`fade_width`](LodLevel::fade_width)s are
+/// then not used: each level switches at its threshold, and the switch is
+/// what fades. Fading out past the last level and back in works the same.
+///
+/// A fade that is overtaken (the camera turns back halfway) runs back from
+/// where it is; one to a third level starts from whichever of the two shows
+/// more. With [`LodSettings::crossfade`] off, or a time of 0, levels switch
+/// at once. A [`LodHysteresis`] on the same entity still holds levels near
+/// their thresholds, so a camera resting at one doesn't start fade after
+/// fade.
+///
+/// Each camera (the main one, and each render target's) fades on its own
+/// clock, the frame time ([`Time::frame_dt`](crate::time::Time::frame_dt)).
+/// Views collected without one (light probe captures) switch at once.
+///
+/// In scene files it's `"LodFadeTime": 0.5`.
+///
+/// ```
+/// # use ponko::prelude::*;
+/// let mut world = World::new();
+/// let group = ponko::render::LodGroup::new(4.0, vec![ponko::render::LodLevel::new(0.2, vec![])]);
+/// // Every change of level fades over half a second.
+/// world.spawn((ponko::d3::Transform::default(), group, ponko::render::LodFadeTime(0.5)));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize, Component)]
+pub struct LodFadeTime(pub f32);
+
 /// Levels of detail: the meshes this entity draws depend on how much of the
 /// screen it covers. Goes on an entity with a [`d3::Transform`](crate::d3::Transform) (and no
 /// [`Model`](crate::render::Model): the group draws instead).
@@ -600,6 +630,92 @@ impl LodGroup {
             previous
         } else {
             raw
+        }
+    }
+
+    /// The level a group covering `height` of the screen switches to with
+    /// no band crossfade: what a [`LodFadeTime`] fades towards.
+    fn pick_switched(&self, height: f32, settings: &LodSettings) -> LodPick {
+        self.pick(
+            height,
+            &LodSettings {
+                crossfade: false,
+                ..*settings
+            },
+        )
+    }
+
+    /// The pick of a group with a [`LodFadeTime`] of `seconds`, `dt`
+    /// seconds after it showed `previous`, now that it covers `height` of
+    /// the screen (before bias); `band` is its [`LodHysteresis`] (0 for
+    /// none). The level it switches to (`pick` without band fades) is the
+    /// target; a fade moves its blend towards whichever of its two ends is
+    /// the target by `dt / seconds`.
+    pub(crate) fn pick_timed(
+        &self,
+        height: f32,
+        settings: &LodSettings,
+        (seconds, dt): (f32, f32),
+        band: f32,
+        previous: LodPick,
+    ) -> LodPick {
+        let n = self.levels.len();
+        let steady = |p: LodPick| match p {
+            LodPick::Level(i) if i < n => Some(Some(i)),
+            LodPick::Culled => Some(None),
+            _ => None,
+        };
+        // Where the group would switch to now, held near its thresholds
+        // like any group with hysteresis (fades don't hold).
+        let mut target = self.pick_switched(height, settings);
+        if band > 0.0 && steady(previous).is_some() {
+            let plain = LodSettings {
+                crossfade: false,
+                ..*settings
+            };
+            target = self.pick_held(height, &plain, band, previous);
+        }
+        let Some(target) = steady(target) else {
+            return target;
+        };
+        // No fading: switch at once.
+        let step = if settings.crossfade && seconds > 0.0 && seconds.is_finite() {
+            if dt.is_finite() { dt.max(0.0) / seconds } else { 1.0 }
+        } else {
+            return target.map_or(LodPick::Culled, LodPick::Level);
+        };
+        let pick = |level: Option<usize>| level.map_or(LodPick::Culled, LodPick::Level);
+        // A fade from level `from` towards `to` (None: nothing) at `blend`,
+        // or one fading in from nothing: from `to`, towards None, run back.
+        let fade = |from: Option<usize>, to: Option<usize>, blend: f32| -> LodPick {
+            match (from, to) {
+                _ if blend >= 1.0 => pick(to),
+                _ if blend <= 0.0 => pick(from),
+                (Some(from), to) => LodPick::Fade { from, to, blend },
+                (None, Some(to)) => LodPick::Fade {
+                    from: to,
+                    to: None,
+                    blend: 1.0 - blend,
+                },
+                (None, None) => LodPick::Culled,
+            }
+        };
+        match previous {
+            LodPick::Fade { from, to, blend } if from < n && to.is_none_or(|t| t < n) => {
+                if target == to {
+                    fade(Some(from), to, blend + step)
+                } else if target == Some(from) {
+                    fade(Some(from), to, blend - step)
+                } else {
+                    // A third level: from whichever end shows more.
+                    let shown = if blend < 0.5 { Some(from) } else { to };
+                    fade(shown, target, step)
+                }
+            }
+            _ => match steady(previous) {
+                Some(shown) if shown != target => fade(shown, target, step),
+                _ => pick(target),
+            },
         }
     }
 
@@ -1102,5 +1218,118 @@ mod tests {
                 assert_eq!(band_level(&levels, distance), Some(2), "bias {bias}, {distance} m");
             }
         }
+    }
+
+    /// Steps a group with a fade time of `seconds` through `heights`, one
+    /// frame of `dt` each, from `start`.
+    fn timed(g: &LodGroup, seconds: f32, dt: f32, start: LodPick, heights: &[f32]) -> Vec<LodPick> {
+        let s = LodSettings::default();
+        let mut pick = start;
+        heights
+            .iter()
+            .map(|&h| {
+                pick = g.pick_timed(h, &s, (seconds, dt), 0.0, pick);
+                pick
+            })
+            .collect()
+    }
+
+    fn blend_of(p: LodPick) -> Option<(usize, Option<usize>, f32)> {
+        match p {
+            LodPick::Fade { from, to, blend } => Some((from, to, blend)),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn timed_fades_run_over_their_time_not_the_band() {
+        // Band widths are not used: level 1 starts at 0.2 exactly.
+        let g = group(0.5);
+        // Crossing from level 0 to level 1, then holding still: four frames
+        // of 0.1 s fade over 0.4 s.
+        let picks = timed(&g, 0.4, 0.1, LodPick::Level(0), &[0.3; 5]);
+        let blends: Vec<_> = picks[..3].iter().map(|p| blend_of(*p).expect("fading")).collect();
+        for (k, (from, to, b)) in blends.iter().enumerate() {
+            assert_eq!((*from, *to), (0, Some(1)));
+            assert!((b - 0.25 * (k + 1) as f32).abs() < 1e-5, "{b}");
+        }
+        assert_eq!(picks[3], LodPick::Level(1));
+        assert_eq!(picks[4], LodPick::Level(1));
+        // No history: the level at once.
+        assert_eq!(timed(&g, 0.4, 0.1, LodPick::Level(1), &[0.3]), [LodPick::Level(1)]);
+    }
+
+    #[test]
+    fn a_timed_fade_turns_back_when_the_camera_does() {
+        let g = group(0.0);
+        let picks = timed(&g, 1.0, 0.25, LodPick::Level(0), &[0.3, 0.3, 0.6, 0.6, 0.6]);
+        assert!((blend_of(picks[1]).unwrap().2 - 0.5).abs() < 1e-5);
+        // Back above level 0's threshold: the same fade runs back.
+        let (from, to, b) = blend_of(picks[2]).unwrap();
+        assert_eq!((from, to), (0, Some(1)));
+        assert!((b - 0.25).abs() < 1e-5, "{b}");
+        assert_eq!(picks[3], LodPick::Level(0));
+        assert_eq!(picks[4], LodPick::Level(0));
+    }
+
+    #[test]
+    fn a_timed_fade_to_a_third_level_starts_from_the_one_that_shows_more() {
+        let g = group(0.0);
+        // 0 -> 1 three quarters done, then the group drops to level 2.
+        let picks = timed(&g, 1.0, 0.25, LodPick::Level(0), &[0.3, 0.3, 0.3, 0.1]);
+        let (from, to, b) = blend_of(picks[3]).unwrap();
+        assert_eq!((from, to), (1, Some(2)));
+        assert!((b - 0.25).abs() < 1e-5, "{b}");
+    }
+
+    #[test]
+    fn timed_fades_fade_out_past_the_last_level_and_back_in() {
+        let g = group(0.0);
+        let out = timed(&g, 0.5, 0.25, LodPick::Level(2), &[0.01, 0.01]);
+        assert_eq!(blend_of(out[0]), Some((2, None, 0.5)));
+        assert_eq!(out[1], LodPick::Culled);
+        // Coming back in from nothing: the last level, fading in.
+        let back = timed(&g, 0.5, 0.25, LodPick::Culled, &[0.1, 0.1]);
+        assert_eq!(blend_of(back[0]), Some((2, None, 0.5)));
+        assert_eq!(back[1], LodPick::Level(2));
+        // Culled, then culled: nothing to fade.
+        assert_eq!(timed(&g, 0.5, 0.25, LodPick::Culled, &[0.01]), [LodPick::Culled]);
+    }
+
+    #[test]
+    fn timed_fades_switch_at_once_without_time_or_crossfade() {
+        let g = group(0.0);
+        assert_eq!(timed(&g, 0.0, 0.1, LodPick::Level(0), &[0.3]), [LodPick::Level(1)]);
+        let off = LodSettings {
+            crossfade: false,
+            ..Default::default()
+        };
+        assert_eq!(
+            g.pick_timed(0.3, &off, (0.5, 0.1), 0.0, LodPick::Level(0)),
+            LodPick::Level(1)
+        );
+        // A frame with no clock (an infinite step) finishes the fade.
+        assert_eq!(
+            g.pick_timed(
+                0.3,
+                &LodSettings::default(),
+                (0.5, f32::INFINITY),
+                0.0,
+                LodPick::Level(0)
+            ),
+            LodPick::Level(1)
+        );
+    }
+
+    #[test]
+    fn timed_fades_keep_hysteresis() {
+        let g = group(0.0);
+        let s = LodSettings::default();
+        // 0.19 is within 10% below level 1's 0.2: held, no fade starts.
+        assert_eq!(
+            g.pick_timed(0.19, &s, (0.5, 0.1), 0.1, LodPick::Level(1)),
+            LodPick::Level(1)
+        );
+        assert!(blend_of(g.pick_timed(0.15, &s, (0.5, 0.1), 0.1, LodPick::Level(1))).is_some());
     }
 }

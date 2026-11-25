@@ -6,8 +6,8 @@ use glam::{Mat4, Vec3, Vec4};
 use super::lights::MAX_LIGHT_SHADOW_VIEWS;
 use super::retained::{self, Lists, OverrideIds, Tracked, Transients};
 use super::{
-    Assets3D, Camera3D, Lighting, LodGroup, LodHysteresis, LodPick, LodRenderer, LodSettings, LodShadow, Model,
-    ModelMaterial, ModelMaterials, ReceivesDecals, ShadowMesh, ShadowOnly, SkinFrame, TERRAIN_LODS, TerrainTile,
+    Assets3D, Camera3D, Lighting, LodFadeTime, LodGroup, LodHysteresis, LodPick, LodRenderer, LodSettings, LodShadow,
+    Model, ModelMaterial, ModelMaterials, ReceivesDecals, ShadowMesh, ShadowOnly, SkinFrame, TERRAIN_LODS, TerrainTile,
     Transform3D, linear,
 };
 use ponko_ecs::{Or, With, Without, World};
@@ -223,6 +223,10 @@ pub(crate) struct Frame3D {
     /// last frame, for [`LodHysteresis`]. Each frame (main camera, render
     /// target) keeps its own.
     lod_held: Vec<(Option<ponko_ecs::Entity>, LodPick)>,
+    /// Seconds since this frame was last collected, for groups with a
+    /// [`LodFadeTime`] (set by the engine each frame). `None`: no clock,
+    /// so they switch at once.
+    pub lod_dt: Option<f32>,
 }
 
 /// A mesh drawn with other materials than its own.
@@ -797,6 +801,7 @@ impl Frame3D {
             });
         let mut at = 0;
         let held = &mut self.lod_held;
+        let lod_dt = self.lod_dt;
         // Most frames have no posed group: no lookup per group then.
         let any_posed = skins.any_lod_draws();
         held.resize(picks.len(), (None, LodPick::Culled));
@@ -806,14 +811,14 @@ impl Frame3D {
                 &Transform3D,
                 &LodGroup,
                 Option<&ReceivesDecals>,
-                Option<&LodHysteresis>,
+                (Option<&LodHysteresis>, Option<&LodFadeTime>),
                 Option<&ModelMaterial>,
                 Option<&ModelMaterials>,
                 Option<&crate::camera::RenderLayers>,
                 Option<&super::Lightmapped>,
             )>()
             .for_each(
-                |(entity, t, g, decals, hysteresis, material, parts, layers, lightmap)| {
+                |(entity, t, g, decals, (hysteresis, fade_time), material, parts, layers, lightmap)| {
                     // On none of the camera's layers: only its shadows are drawn.
                     let keep = if layers.copied().unwrap_or_default().0 & camera.layers.0 == 0 {
                         !1
@@ -827,7 +832,29 @@ impl Frame3D {
                     // instead while near its thresholds (the same entity at the
                     // same place in the query, else it's new or the query
                     // changed: no history this frame).
-                    if let Some(&LodHysteresis(band)) = hysteresis {
+                    // Timed crossfades: from last frame's pick on this
+                    // frame's clock (none: the level at once, as with no
+                    // history).
+                    if let Some(&LodFadeTime(seconds)) = fade_time {
+                        let (e, previous) = held[at];
+                        let band = hysteresis.map_or(0.0, |h| h.0);
+                        let (previous, dt) = if e == Some(entity) {
+                            (previous, lod_dt.unwrap_or(f32::INFINITY))
+                        } else {
+                            (LodPick::Culled, f32::INFINITY)
+                        };
+                        let timed = g.pick_timed(g.screen_height(t, camera), &lod, (seconds, dt), band, previous);
+                        if timed != pick {
+                            pick = timed;
+                            (seen, hidden) = (0, 0);
+                            lod_draws(g, pick, false, |r, drawn, casts, _, _| {
+                                let f = lod_flags(t, r, drawn, casts).map_or(0, |(_, f)| f);
+                                seen |= f & !OCCLUDED;
+                                hidden += u32::from(f & OCCLUDED != 0);
+                            });
+                        }
+                        held[at] = (Some(entity), pick);
+                    } else if let Some(&LodHysteresis(band)) = hysteresis {
                         let (e, previous) = held[at];
                         if e == Some(entity) && previous != pick {
                             let kept = g.pick_held(g.screen_height(t, camera), &lod, band, previous);
@@ -1489,6 +1516,46 @@ mod tests {
         assert!(frame.shadow_runs.iter().all(Vec::is_empty));
         let xs: Vec<f32> = frame.instances.iter().map(|i| i.model[3][0]).collect();
         assert_eq!(xs, vec![1.0, 4.0, 0.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn groups_with_a_fade_time_crossfade_over_frames_not_distance() {
+        use crate::render::{LodFadeTime, LodLevel, LodRenderer};
+        let mut world = World::new();
+        let assets = Assets3D {
+            bounds: vec![(Vec3::ZERO, 1.0); 2],
+            ..Default::default()
+        };
+        let level = |h, id| LodLevel::new(h, vec![LodRenderer::new(Mesh { id })]).with_fade(0.9);
+        // Two levels: mesh 0 while 2 m covers 20% of the screen, then mesh 1.
+        let group = LodGroup::new(2.0, vec![level(0.2, 0), level(0.01, 1)]);
+        world.spawn((Transform3D::default(), group, LodFadeTime(0.5)));
+        let lighting = Lighting {
+            shadows: false,
+            ..Default::default()
+        };
+        let mut frame = Frame3D {
+            lod_dt: Some(0.25),
+            ..Default::default()
+        };
+        let mut at = |frame: &mut Frame3D, z: f32| {
+            let mut camera = camera();
+            camera.position = Vec3::new(0.0, 0.0, z);
+            camera.look_at(Vec3::ZERO);
+            frame.collect(&mut world, &assets, &SkinFrame::default(), &camera, &lighting);
+            let mut meshes: Vec<(u32, bool)> = frame.runs.iter().map(|r| (r.0 & !FADED, r.0 & FADED != 0)).collect();
+            meshes.sort_unstable();
+            meshes
+        };
+        // Near: level 0 alone (the band fade width is not used).
+        assert_eq!(at(&mut frame, 4.0), [(0, false)]);
+        // Past the threshold: both, dithered, for 0.5 s of frames...
+        assert_eq!(at(&mut frame, 20.0), [(0, true), (1, true)]);
+        // ... then level 1 alone, the camera having stayed put.
+        assert_eq!(at(&mut frame, 20.0), [(1, false)]);
+        // A frame without a clock switches at once.
+        frame.lod_dt = None;
+        assert_eq!(at(&mut frame, 4.0), [(0, false)]);
     }
 
     #[test]
