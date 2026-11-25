@@ -118,8 +118,12 @@ coturn and hosted services use), with Send and Data indications; `turns:`
 peer also connects to a browser that uses its own TURN server, since a
 relayed address is just one more address to try. `RtcConfig::relay_only()`
 offers relayed addresses only, never the machine's own, like a browser's
-`iceTransportPolicy: "relay"` (desktop only for now; a browser ignores it). [Putting a game online](online.md) sets up
-coturn. Players who can't use TURN can fall back to a
+`iceTransportPolicy: "relay"` (desktop only for now; a browser ignores it).
+A TURN server that refuses the credentials or doesn't answer within
+7.5 seconds is an error from the endpoint's `poll`, once, naming the
+server (`TURN server 192.0.2.10:3478: the TURN server refused the
+credentials (401)`); the endpoint goes on with its other paths.
+[Putting a game online](online.md) sets up coturn and checks it. Players who can't use TURN can fall back to a
 [relay session](lobby.md#game-sessions-through-the-relay) through the
 lobby, which works through any NAT.
 

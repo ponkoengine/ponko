@@ -353,7 +353,10 @@ impl Net {
     /// relays less than 1504 bytes at once.
     pub fn join_relay(lobby: LobbyClient) -> io::Result<Net> {
         let transport = RelayTransport::new(lobby, false)?;
-        let host = transport.host_addr().expect("a joining relay transport has a host");
+        // A joining transport always has the room's host.
+        let host = transport
+            .host_addr()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "the lobby room has no host"))?;
         Ok(Self::with(Session::new(Box::new(transport), Role::Client(host)), 0, 0))
     }
 

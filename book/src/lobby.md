@@ -213,11 +213,18 @@ as over UDP. What that costs:
 - **Leaving the room** or losing the lobby connection ends the session at
   once: a lockstep session is lost with the reason, and a message
   endpoint's `poll` returns `ConnectionAborted`.
+- **Packet size**: a session sends up to 1504 bytes at once through the
+  relay, so the server's `max_relay_bytes` must be at least that (4096 by
+  default); below it, `host_relay` and `join_relay` return `InvalidInput`.
 
 Tested through the real server with in-memory links that delay, reorder
-and lose packets, and over UDP on this machine:
-`crates/ponko_lobby/tests/relay_sessions.rs`; replication's conformance
-run through a relay is `replicates_over_the_lobby_relay_through_loss_and_latency`.
+and lose packets, and over UDP on this machine
+(`crates/ponko_lobby/tests/relay_sessions.rs`). The scripted latency and
+loss tests of both protocols (`net/lockstep_conformance.rs`,
+`net/message_conformance.rs`) run directly and through a relay, with the
+same API; replication's conformance run through a relay is
+`replicates_over_the_lobby_relay_through_loss_and_latency`.
+[Putting a game online](online.md) checks a relay with two terminals.
 
 ## Your own rules
 

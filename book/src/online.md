@@ -6,11 +6,91 @@ so browsers can reach it over `wss://`, and a TURN server so
 [WebRTC](webrtc.md) peers connect even from behind strict NATs. Follow it
 as it is, then change what your game needs.
 
+Start on one machine: the lobby, its relay and a TURN server on your own
+computer, checked with two terminals. Then the same programs go on a
+server.
+
+## On one machine first
+
+Three terminals in the engine's repository, plus a fourth for the TURN
+server. First the lobby server, on its default UDP port 7700:
+
+```sh
+cargo run -p ponko_lobby --bin ponko-lobby
+```
+
+Its first line is `lobby_listening` with `"udp":"0.0.0.0:7700"`. Then the
+check, `crates/ponko_lobby/examples/online_check.rs`: a host that makes a
+room, and a second player that joins its code and
+says hello through the lobby's relay:
+
+```sh
+cargo run -p ponko_lobby --features webrtc --example online_check -- host relay
+```
+
+It prints `room X2E9GV: in another terminal, run this example with: join
+X2E9GV relay` (the code differs each time). In the second terminal:
+
+```sh
+cargo run -p ponko_lobby --features webrtc --example online_check -- join X2E9GV relay
+```
+
+```text
+connected to the host through the relay
+received "hello back": it works
+```
+
+and the host prints `received "hello"` and `the other player left (peer
+disconnected): it works`. That was a message endpoint through the relay:
+`NetMessages::host_relay` and `join_relay`, the same calls a game makes.
+
+Now TURN. Run coturn on the loopback interface, with one user (`game`,
+password `secret`) and loopback peers allowed (they are refused by
+default, and on one machine both players are loopback peers). On Linux,
+with Docker:
+
+```sh
+docker run --rm --network host coturn/coturn -n \
+  --listening-ip=127.0.0.1 --relay-ip=127.0.0.1 --listening-port=3478 \
+  --min-port=49152 --max-port=49200 \
+  --lt-cred-mech --user=game:secret --realm=localhost \
+  --allow-loopback-peers --no-cli
+```
+
+On macOS and Windows, Docker runs containers in a virtual machine whose
+loopback interface isn't your computer's: install coturn there instead
+(`brew install coturn` on macOS) and run `turnserver` with the options
+that follow the image name above. Then the check again, with
+`turn` instead of `relay`:
+
+```sh
+cargo run -p ponko_lobby --features webrtc --example online_check -- host turn
+cargo run -p ponko_lobby --features webrtc --example online_check -- join X2E9GV turn
+```
+
+`turn` connects over WebRTC with `RtcConfig::relay_only`: neither player
+offers its own address, so the only way through is a relayed address on
+the TURN server, and `it works` means TURN works. The lobby only carries
+the WebRTC signaling here. Without a TURN server, or with the wrong
+password, both sides stop within ten seconds and say why:
+
+```text
+online_check: TURN server 127.0.0.1:3478: the TURN server didn't answer
+```
+
+The example reads `LOBBY` (default `127.0.0.1:7700`), `TURN`
+(`turn:127.0.0.1:3478`), `TURN_USER` and `TURN_PASSWORD` from the
+environment: the same two commands check the real server once it runs,
+from two machines on different networks
+(`LOBBY=lobby.example.org:7700 TURN=turn:lobby.example.org:3478`).
+
+## On a server
+
 The names and addresses are placeholders: `lobby.example.org` for your
 domain, `203.0.113.10` for the server's public IPv4 address (from the
 documentation range), `CHANGE-ME` for a password. Use your own.
 
-## What runs where
+### What runs where
 
 One Linux machine with a public address runs three programs:
 
@@ -41,7 +121,7 @@ ufw allow 3478/udp          # coturn: STUN and TURN
 ufw allow 49152:49999/udp   # coturn: relayed addresses
 ```
 
-## 1. The lobby
+### 1. The lobby
 
 Build the container image from the root of the engine's repository (see
 [In a container](lobby.md#in-a-container)) and run it on the host's
@@ -70,7 +150,7 @@ then count per player's IP address, as for desktop players
 ([Limits](lobby.md#limits)). Name only proxies you run: a trusted proxy
 can claim any client address.
 
-## 2. Caddy, for `wss://`
+### 2. Caddy, for `wss://`
 
 A page served over `https://` may only open `wss://` connections. Caddy
 terminates TLS, gets and renews the certificate, and forwards the
@@ -96,7 +176,7 @@ With nginx instead, the location needs
 `proxy_set_header Connection "upgrade";` and
 `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`.
 
-## 3. coturn, for STUN and TURN
+### 3. coturn, for STUN and TURN
 
 coturn answers STUN requests and relays for WebRTC peers that can't reach
 each other. It also answers STUN, so the lobby's own STUN responder
@@ -141,7 +221,7 @@ player short-lived credentials instead: coturn's `use-auth-secret` with a
 (an expiry time) and a password (an HMAC of it). The engine takes any
 user name and password, so nothing changes in the game.
 
-## 4. The game
+### 4. The game
 
 The game joins the lobby, gets into a room, then starts its session. A
 desktop build joins over UDP, a web build over `wss://`:
@@ -182,19 +262,22 @@ Let the room's host decide which, and say it in the room's text
 (`set_meta("transport=relay")`), so every member starts the same kind of
 session.
 
-## Check it end to end
+### Check it end to end
 
 1. `docker logs lobby` shows `lobby_listening`; every 10 seconds a
    `lobby_report` line counts connections, rooms and relayed bytes.
-2. Start the game on two desktop machines on different networks: one
+2. Run `online_check` from two machines on different networks, as on one
+   machine, with `LOBBY` and `TURN` set to the server: `relay`, then
+   `turn` (with `TURN_USER=game TURN_PASSWORD=CHANGE-ME`).
+3. Start the game on two desktop machines on different networks: one
    creates a room, the other joins its code. `lobby_report` shows
    `rooms: 1`.
-3. Start a relayed session: `relay_in` and `relay_out` climb in
+4. Start a relayed session: `relay_in` and `relay_out` climb in
    `lobby_report` while the match runs.
-4. Start a WebRTC session with one player behind a mobile hotspot (often
+5. Start a WebRTC session with one player behind a mobile hotspot (often
    a strict NAT): it connects, and coturn's log shows an allocation for
    that player.
-5. Open the web build from `https://` and join: the browser's lobby
+6. Open the web build from `https://` and join: the browser's lobby
    connection goes through Caddy. Two browsers behind one home router
    share that router's limits, as two desktop players do.
 
@@ -203,11 +286,14 @@ session.
 The engine's tests run every piece of this setup on one machine, without
 the internet: relay sessions through the real lobby server with scripted
 latency, reordering and loss (`crates/ponko_lobby/tests/relay_sessions.rs`),
+the transport conformance tests of both session protocols run directly
+and through a relay (`net::lockstep_conformance`, `net::message_conformance`),
 the proxy header through a small reverse proxy in the test
 (`crates/ponko_lobby/tests/proxy.rs`), and two desktop peers behind
 simulated strict NATs connecting through a TURN server that runs inside
 the test, in memory and over UDP on loopback
-(`net::rtc_tests` and `net::turn`). **Not tested**: this exact
-deployment on a real server, Caddy, coturn itself (the tests' TURN
-server is a small one of the engine's own, speaking the same RFC 8656
-messages), and real NATs. Run the checks above before you rely on it.
+(`net::rtc_tests` and `net::turn`). The `relay` check above was run as
+written, on macOS. **Not tested**: the `turn` check against coturn (the
+tests' TURN server is a small one of the engine's own, speaking the same
+RFC 8656 messages), the server deployment, Caddy, and real NATs. Run the
+checks above before you rely on it.
