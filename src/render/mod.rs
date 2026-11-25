@@ -429,6 +429,8 @@ mod area_lights_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod atlas_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
+mod auto_exposure_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
 mod baked_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod buffer_render_test;
@@ -637,12 +639,12 @@ pub use crate::three::Upscaler;
 pub use crate::three::bake_lighting_gpu;
 #[cfg(feature = "3d")]
 pub use crate::three::{
-    AmbientOcclusion, AntiAliasing, BatchCulling, Blend, Compute, ComputePass, Crowd, CrowdAnimation, CrowdClip,
-    CrowdInstance, CrowdLevel, CrowdOptions, DepthOfField, Effect, GlobalIllumination, GpuBuffer, GraphicsQuality,
-    InstanceBatch, InstanceBatchOptions, InstanceLevel, Lighting, LodGroup, LodHysteresis, LodLevel, LodPick,
-    LodRenderer, LodSettings, LodShadow, MAX_CROWD_INSTANCES, MAX_CROWD_LEVELS, Material, MaterialDesc, Mesh, MeshCost,
-    MeshData, Model, ModelCamera, ModelLight, ModelLightKind, ModelMaterial, ModelMaterials, ModelProjection, Post,
-    PostVolume, ReceivesDecals, RenderPasses, RenderTarget, SceneSettings, ScreenEffect, Shader, ShadowFilter,
+    AmbientOcclusion, AntiAliasing, AutoExposure, BatchCulling, Blend, Compute, ComputePass, Crowd, CrowdAnimation,
+    CrowdClip, CrowdInstance, CrowdLevel, CrowdOptions, DepthOfField, Effect, GlobalIllumination, GpuBuffer,
+    GraphicsQuality, InstanceBatch, InstanceBatchOptions, InstanceLevel, Lighting, LodGroup, LodHysteresis, LodLevel,
+    LodPick, LodRenderer, LodSettings, LodShadow, MAX_CROWD_INSTANCES, MAX_CROWD_LEVELS, Material, MaterialDesc, Mesh,
+    MeshCost, MeshData, Model, ModelCamera, ModelLight, ModelLightKind, ModelMaterial, ModelMaterials, ModelProjection,
+    Post, PostVolume, ReceivesDecals, RenderPasses, RenderTarget, SceneSettings, ScreenEffect, Shader, ShadowFilter,
     ShadowMesh, ShadowOnly, Sky, SkyShader, SplitToning, Stencil, StencilCompare, StencilFace, StencilOp, StreamedLod,
     TargetCamera, TargetEffect, Tonemap,
 };
