@@ -2,6 +2,12 @@
 //! settings, kept in the per-user data folder on the desktop and in the
 //! browser's storage on the web.
 //!
+//! **Maturity: proven**, from the guide chapter `storage.md`. Game: Coin Dash and Ember Hop,
+//! packaged and played on Linux, macOS and Windows (their saves and progress files, from the
+//! package). Tests: `tests/storage.rs`. Platforms: Linux, macOS and Windows, headless (the
+//! workspace tests in the list of checks). Graphics: not involved. Missing: browser storage is not
+//! part of a recorded browser run.
+//!
 //! The folder comes from the game's app id ([`Game::app_id`](crate::game::Game::app_id)):
 //!
 //! | System | Folder |

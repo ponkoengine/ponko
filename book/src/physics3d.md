@@ -1,5 +1,12 @@
 # 3D physics: bodies, terrain, characters and vehicles
 
+> **Maturity: [tested](maturity.md).** Game: Shard Grove (character
+> controller), headless only. Tests: `tests/physics3d*.rs`,
+> `tests/vehicle3d.rs`, `tests/joints3d.rs`, `tests/ragdoll3d.rs`. Platforms:
+> Linux, macOS and Windows, headless (the workspace tests in the list of
+> checks). Graphics: not involved. Missing: Shard Grove's package played on
+> each OS.
+
 Crates that tumble down a hill, a first-person character that walks up
 slopes and stairs, a car that drives over the terrain, rays that find what
 the player is looking at: 3D

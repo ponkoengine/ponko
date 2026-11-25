@@ -4,6 +4,12 @@
 //! [`Audio`](crate::audio::Audio) for sounds, `Physics3D` for collision
 //! meshes) and on [`Ctx`] for any kind.
 //!
+//! **Maturity: tested**, from the guide chapter `handles.md`. Game: none. Tests:
+//! `tests/handles.rs`, `tests/handle_layout.rs`, `tests/handle_compat.rs`, `handle_render_test.rs`.
+//! Platforms: Linux, macOS and Windows, headless (the workspace tests in the list of checks).
+//! Graphics: offscreen render tests, required on Windows (DirectX 12 on the WARP software adapter)
+//! and run on Linux and macOS only where a GPU is found. Missing: a reference game that uses it.
+//!
 //! A handle is a small `Copy` value naming something the engine holds for
 //! the game: a texture, a mesh, a sound. Pass it by value. Every kind is
 //! its own type, so a mesh can't be passed where a texture is wanted. Only the engine

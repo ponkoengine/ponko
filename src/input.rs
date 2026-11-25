@@ -1,6 +1,12 @@
 //! [`Input`], the input service at `ctx.input`: keyboard, mouse, gamepads,
 //! named actions, typed text and the cursor lock.
 //!
+//! **Maturity: tested**, from the guide chapter `input.md`. Game: Coin Dash and Ember Hop read
+//! keys, the mouse and gamepads, with scripted input. Tests: `tests/input_recording.rs`,
+//! `tests/pressed_this_frame.rs`, `tests/ui_fed_input.rs`. Platforms: Linux, macOS and Windows,
+//! headless (the workspace tests in the list of checks). Graphics: not involved. Missing: a
+//! recorded run with real devices: the smoke runs script their input.
+//!
 //! **What lives here:** what is held (`key_down`, `mouse_down`,
 //! `gamepad_down`), what changed this frame (`*_pressed`, `*_released`),
 //! pointer position and movement, gamepad axes, the

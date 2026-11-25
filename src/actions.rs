@@ -1,4 +1,9 @@
 //! Named, rebindable input. Configuration allocates; evaluating input does not.
+//!
+//! **Maturity: proven**, from the guide chapter `actions.md`. Game: Coin Dash and Ember Hop,
+//! packaged and played on Linux, macOS and Windows (Coin Dash rebinds its controls). Tests:
+//! `tests/actions.rs`, `tests/action_ids.rs`, `tests/input_scenario.rs`. Platforms: Linux, macOS
+//! and Windows, headless (the workspace tests in the list of checks). Graphics: not involved.
 
 #![deny(missing_docs)]
 

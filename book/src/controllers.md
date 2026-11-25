@@ -1,5 +1,12 @@
 # Controllers: rumble, prompts, motion, players
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests:
+> `tests/controllers.rs`; the SDL gamepad backend against SDL's virtual
+> gamepads on macOS only. Platforms: Linux, macOS and Windows, headless (the
+> workspace tests in the list of checks). Graphics: not involved. Missing:
+> real controllers: rumble, motion and prompts on a device are checked by
+> hand.
+
 [Input](input.md) covers reading buttons and sticks. This chapter covers the
 rest of what a game does with controllers: shaking them, showing the right
 button in a prompt, reading a gyro, and sorting out who is player two. All

@@ -1,5 +1,12 @@
 # Legions: 100,000 units that replay bit for bit
 
+> **Maturity: [tested](maturity.md).** Game: Legions, a showcase rather than a
+> reference game. Tests: `tests/legions.rs`, `legions_render_test.rs`.
+> Platforms: Linux, macOS and Windows, headless (the workspace tests in the
+> list of checks). Graphics: offscreen render tests, required on Windows
+> (DirectX 12 on the WARP software adapter) and run on Linux and macOS only
+> where a GPU is found. Missing: a reference game that uses it.
+
 [`examples/legions`](../../examples/legions) is the engine's simulation
 showcase. Two armies of 50,000 soldiers and archers march across a map of
 rocks, lakes and mud on shared flow fields, find their enemies with spatial

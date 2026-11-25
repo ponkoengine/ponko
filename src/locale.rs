@@ -1,6 +1,11 @@
 //! Localization: string tables, arguments, plural rules and switching the
 //! language while the game runs.
 //!
+//! **Maturity: proven**, from the guide chapter `localization.md`. Game: Coin Dash, packaged and
+//! played on Linux, macOS and Windows. Tests: `tests/locale.rs`, `tests/coin_dash_languages.rs`.
+//! Platforms: Linux, macOS and Windows, headless (the workspace tests in the list of checks).
+//! Graphics: not involved.
+//!
 //! **What lives here.** [`Strings`], a resource holding one [`StringTable`]
 //! per language: keyed lookup ([`Strings::get`]), arguments and plural forms
 //! ([`Strings::format`]), the current language and a font per language, a

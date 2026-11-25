@@ -959,6 +959,12 @@ jobs:
         with:
           tool: mdbook@0.5.4
       - run: mdbook --version
+      # Every chapter and top-level module says how proven it is, and the
+      # generated list of levels (book/src/maturity.md) is up to date.
+      - name: Maturity levels
+        run: |
+          python3 scripts/maturity.py
+          python3 scripts/maturity.py --selftest
       - run: mdbook build book
       # The guide's inline Rust snippets: one `cargo check` of every block as a
       # module of a scratch crate (see book/src/contributing.md).

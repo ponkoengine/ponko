@@ -1,5 +1,9 @@
 //! Flow fields: one shortest-path computation that every agent shares.
 //!
+//! **Maturity: tested**, from the guide chapter `pathfinding.md`. Game: none (the Legions showcase
+//! uses it). Tests: `tests/flow.rs`. Platforms: Linux, macOS and Windows, headless (the workspace
+//! tests in the list of checks). Graphics: not involved. Missing: a reference game that uses it.
+//!
 //! A [`FlowField`] holds, for every cell of a [`NavGrid`], the way to the
 //! nearest goal. Computing it costs about as much as one pathfinding search
 //! over the whole map; after that, each of a million agents asks

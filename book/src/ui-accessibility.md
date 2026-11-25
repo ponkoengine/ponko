@@ -1,5 +1,12 @@
 # Screen reader records
 
+> **Maturity: [tested](maturity.md).** Game: Coin Dash names its controls for
+> screen readers. Tests: `tests/ui_access*.rs`: AccessKit data on every OS,
+> the macOS adapter, UI Automation on Windows, AT-SPI on Linux. Platforms:
+> Linux, macOS and Windows, headless (the workspace tests in the list of
+> checks). Graphics: not involved. Missing: the records with a real screen
+> reader were made on macOS only; none yet for Windows or Linux.
+
 What was read from, and heard about, the sample menu
 (`examples/ui_menu.rs`, built with the `accessibility` feature) on macOS.
 The [accessibility section](ui.md#accessibility-semantics) of the UI chapter

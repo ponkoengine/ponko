@@ -1,6 +1,11 @@
 //! [`Audio`], the sound service at `ctx.audio`: sound effects and music,
 //! played with `kira`.
 //!
+//! **Maturity: tested**, from the guide chapter `audio.md`. Game: Coin Dash, Ember Hop and Shard
+//! Grove play sounds and music. Tests: `tests/audio.rs`, `tests/audio_mixer.rs`. Platforms: Linux,
+//! macOS and Windows, headless (the workspace tests in the list of checks). Graphics: not involved.
+//! Missing: sound out of a real device: the runs in the list of checks hear nothing.
+//!
 //! **What lives here:** loading and creating sounds ([`Audio::load`],
 //! [`Audio::create`], [`Audio::load_stream`]), playing them
 //! ([`Audio::play`], [`Audio::play_ex`], [`Audio::play_on`], and

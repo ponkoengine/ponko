@@ -1,5 +1,10 @@
 # Time and timers
 
+> **Maturity: [tested](../maturity.md).** Game: none. Tests:
+> `tests/cookbook_time.rs` runs every recipe. Platforms: Linux, macOS and
+> Windows, headless (the workspace tests in the list of checks). Graphics: not
+> involved.
+
 Fuses, repeating work, easing, a clock for the day and slow motion. Every one of them counts simulation time, not wall-clock time, so they behave the same on a slow machine, in a replay and in a test.
 
 ## A fuse that goes off

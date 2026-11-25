@@ -1,5 +1,11 @@
 # Saves and settings
 
+> **Maturity: [proven](maturity.md).** Game: Coin Dash and Ember Hop, packaged
+> and played on Linux, macOS and Windows (their saves and progress files, from
+> the package). Tests: `tests/storage.rs`. Platforms: Linux, macOS and
+> Windows, headless (the workspace tests in the list of checks). Graphics: not
+> involved. Missing: browser storage is not part of a recorded browser run.
+
 `ctx.storage` keeps the player's own files: settings, progress, save games.
 On the desktop they live in the player's data folder; in a web build, in the
 browser's storage. The calls are the same on both, and every write is safe

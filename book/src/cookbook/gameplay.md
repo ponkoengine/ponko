@@ -1,5 +1,10 @@
 # Fighting and collecting
 
+> **Maturity: [tested](../maturity.md).** Game: none. Tests:
+> `tests/cookbook_gameplay.rs` runs every recipe. Platforms: Linux, macOS and
+> Windows, headless (the workspace tests in the list of checks). Graphics: not
+> involved.
+
 Bullets, coins, damage, health bars, waves, enemies and loot. These are plain components and systems; nothing needs physics.
 
 ## Shoot bullets

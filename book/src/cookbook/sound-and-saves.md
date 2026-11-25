@@ -1,5 +1,10 @@
 # Sound and saves
 
+> **Maturity: [tested](../maturity.md).** Game: none. Tests:
+> `tests/cookbook_sound_and_saves.rs` runs every recipe. Platforms: Linux,
+> macOS and Windows, headless (the workspace tests in the list of checks).
+> Graphics: not involved.
+
 Footsteps, a sound for an event, saving and loading a game, settings and a best score, and saving on quit. A headless run opens no audio device, but it still lists the sounds each tick started (`ctx.audio.started()`, `ctx.sounds_started()` in C++), so the tests check what was played; `ctx.quit_requested()` says whether the game asked to quit. The saves go to a folder of the test's own.
 
 ## Footsteps

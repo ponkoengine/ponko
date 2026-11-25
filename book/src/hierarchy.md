@@ -1,5 +1,10 @@
 # The entity hierarchy
 
+> **Maturity: [proven](maturity.md).** Game: Coin Dash and Ember Hop, packaged
+> and played on Linux, macOS and Windows (Ember Hop's prefabs with children).
+> Tests: `tests/hierarchy.rs`. Platforms: Linux, macOS and Windows, headless
+> (the workspace tests in the list of checks). Graphics: not involved.
+
 A body with an arm and a hand on the arm, a cart with its wheels, a level's
 props grouped under one entity: entities that hang off other entities and
 move with them. The hierarchy is built on [attachments](attachments.md): a

@@ -6,7 +6,7 @@ This roadmap is directional. Ordering changes with correctness evidence, measure
 
 ## Current capability inventory
 
-**Implemented** means the mechanism exists in source, not that every use case is production proven. **Partial** means useful building blocks exist with important integration or coverage gaps. **Missing** means the named workflow was not found in the inspected implementation. **Requires verification** marks claims needing platform/runtime evidence beyond source inspection. This documentation change did not execute runtime or GPU validation.
+**Implemented** means the mechanism exists in source, not that every use case is production proven. **Partial** means useful building blocks exist with important integration or coverage gaps. **Missing** means the named workflow was not found in the inspected implementation. **Requires verification** marks claims needing platform/runtime evidence beyond source inspection. This documentation change did not execute runtime or GPU validation. Per feature, the guide's [maturity levels](book/src/maturity.md) say how proven each one is (proven, tested or experimental, as [STABILITY.md](STABILITY.md#maturity-levels) defines them).
 
 | Complete-game area | Status | Evidence and remaining work |
 |---|---|---|

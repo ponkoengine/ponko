@@ -1,6 +1,11 @@
 //! The schedule of a game's systems: which run alone and which share a
 //! batch, and why. From [`Game::schedule_plan`](crate::game::Game::schedule_plan).
 //!
+//! **Maturity: tested**, from the guide chapter `parallel-systems.md`. Game: none. Tests:
+//! `tests/system_schedule.rs`, and a run of the net and determinism tests with the scheduler forced
+//! on. Platforms: Linux, macOS and Windows, headless (the workspace tests in the list of checks).
+//! Graphics: not involved. Missing: a reference game that uses it.
+//!
 //! Systems run phase after phase, and inside a phase in registration order.
 //! The plan puts them into **stages**: a stage is either one system that
 //! runs alone, or a **batch** of view systems (systems that take

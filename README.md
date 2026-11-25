@@ -22,19 +22,22 @@ maps the old names to the new ones. Ponko is at 0.x: read
 
 The difference is the combination of choices and workflow. Individual features
 such as parallel ECS queries, inspection, or AI integration are not exclusive.
+The words in **bold** are [maturity levels](book/src/maturity.md): **proven**
+(a reference game played on Linux, macOS and Windows uses it), **tested**
+(automated tests, no such game yet) and **experimental** ([STABILITY.md](STABILITY.md#maturity-levels)).
 
 | Area | Ponko today and direction | Bevy | Unity |
 |---|---|---|---|
-| Primary language and API | Rust `Game`/`Ctx`; C ABI and C++17 wrapper | Rust, ECS-oriented `App` and systems | C# gameplay API; native engine |
+| Primary language and API | Rust `Game`/`Ctx` (**proven**); C ABI and C++17 wrapper (**tested**) | Rust, ECS-oriented `App` and systems | C# gameplay API; native engine |
 | Architectural philosophy | Integrated defaults; modular internals with gradual boundary improvements planned | Modular plugins with standard defaults | Integrated editor and modular packages |
-| ECS and scheduling | Archetype ECS, parallel queries; opt-in parallel scheduling of systems that declare their access | ECS with automatic scheduling of compatible systems in parallel | GameObjects and optional high-performance Entities/DOTS |
-| Rendering | Custom wgpu 2D/3D renderer; ongoing maintenance and capability work | Extensible 2D/3D renderer and render graph | Multiple render pipelines and extensive graphics tooling |
-| Workflow and editor | Code-first; optional runtime inspector and external asset tools | Code-first; no large editor required | Primarily visual-editor-centered, with code and CLI workflows |
-| AI-assisted development | MCP for launch, state, stepping, screenshots and diagnostics | Remote protocol can support external tools and agents | Official Assistant and CLI MCP integration |
-| Inspection and debugging | Reflected components, runtime inspector, logs, traces and profiling | Remote ECS inspection and mutation, diagnostics | Editor inspection, debugging and profiling tools |
-| Headless simulation | Fixed-tick runs without a window or GPU; optional dependencies | Headless applications supported | Dedicated Server and batch workflows |
-| Networking | Built-in lockstep and message APIs; application-specific validation required | Ecosystem networking integrations | Official multiplayer packages and services |
-| Extensibility | Gameplay systems, WGSL materials and compute; narrower rendering boundaries planned | Plugins, systems, shaders and render extensions | Packages, scripting, native plugins and render extensions |
+| ECS and scheduling | Archetype ECS (**proven**), parallel queries; opt-in parallel scheduling of systems that declare their access (**tested**) | ECS with automatic scheduling of compatible systems in parallel | GameObjects and optional high-performance Entities/DOTS |
+| Rendering | Custom wgpu renderer: 2D **proven**, 3D **tested**; ongoing maintenance and capability work | Extensible 2D/3D renderer and render graph | Multiple render pipelines and extensive graphics tooling |
+| Workflow and editor | Code-first; optional runtime inspector, editor and external asset tools (**tested**) | Code-first; no large editor required | Primarily visual-editor-centered, with code and CLI workflows |
+| AI-assisted development | MCP for launch, state, stepping, screenshots and diagnostics (**tested**) | Remote protocol can support external tools and agents | Official Assistant and CLI MCP integration |
+| Inspection and debugging | Reflected components, runtime inspector, logs, traces and profiling (**tested**) | Remote ECS inspection and mutation, diagnostics | Editor inspection, debugging and profiling tools |
+| Headless simulation | Fixed-tick runs without a window or GPU; optional dependencies (**proven**) | Headless applications supported | Dedicated Server and batch workflows |
+| Networking | Built-in lockstep, rollback, replication and message APIs (**tested**, on loopback); WebRTC **experimental**; application-specific validation required | Ecosystem networking integrations | Official multiplayer packages and services |
+| Extensibility | Gameplay systems (**proven**), WGSL materials and compute (**tested**); narrower rendering boundaries planned | Plugins, systems, shaders and render extensions | Packages, scripting, native plugins and render extensions |
 | Ecosystem maturity | Smaller contributor base and integration surface; verify your game's requirements | Larger Rust ecosystem and community | Much broader platform, asset, tooling and shipped-game experience |
 
 Choose Ponko when its `Game`/`Ctx` model, integrated simulation tools, C++ API,
@@ -127,21 +130,31 @@ fn main() {
 
 Use `default-features = false` for a minimal headless dependency. Running
 headless alone does not disable compiled dependencies. Parallel query iteration
-is implemented, and systems that declare their access can opt into parallel
+is tested, and systems that declare their access can opt into parallel
 scheduling (`Game::parallel_systems`); `&mut Ctx` systems stay sequential. Determinism depends on game code, build/version, math and physics settings:
 see [the contract](STABILITY.md#determinism).
 
 ## Current capabilities
 
-- **2D and 3D:** sprites, tilemaps, text, cameras, PBR meshes, glTF, animation,
-  custom WGSL materials, shadows, clustered lights, terrain and post effects.
-  Enable `3d` for 3D and `physics`/`physics3d` for Rapier integration.
-- **Game systems:** fixed-step simulation, resources, events, scenes and
-  prefabs, save/load, input/action maps, UI, audio, physics and networking.
-  These are available building blocks; complete genre and platform readiness
-  still needs validation for each game.
-- **Iteration:** runtime inspection, reflected state, asset reload, optional
-  code hot patching, structured control endpoints, traces and profiling.
+Each feature's level is at the top of its guide chapter, and the
+[maturity levels](book/src/maturity.md) page lists them all.
+
+- **Proven** (a reference game that the list of checks plays on Linux, macOS
+  and Windows uses it): the ECS, systems, game states, the fixed-step clock,
+  events, 2D drawing, sprite sheets and Tiled tilemaps, text and the camera,
+  retained UI, named input actions, 2D physics (`physics`), scenes and
+  prefabs, saves, localization, headless runs and packaging.
+- **Tested** (automated tests in the list of checks; no reference game on all
+  three systems yet): 3D (`3d`: PBR meshes, glTF, animation, custom WGSL
+  materials, shadows, clustered lights, terrain, water, post effects), 3D
+  physics and navigation meshes, sound, input devices, controllers and touch,
+  networking (lockstep, rollback, replication, servers and lobbies, on
+  loopback), web builds (WebGL2 in headless Chromium and WebKit), streaming,
+  data files and asset reload,
+  the inspector and editor, reflection, the control endpoint and MCP,
+  profiling, and the C and C++ API.
+- **Experimental:** HDR output, WebRTC, code hot patching, threaded web builds,
+  and VR/XR (a report and a prototype).
 - **Build choices:** Cargo features select windowing, audio, inspection,
   gamepads, 3D, physics and other optional integrations. The list of checks
   covers Windows, macOS and Linux; web builds target WebGPU/WebGL2 with feature limits.

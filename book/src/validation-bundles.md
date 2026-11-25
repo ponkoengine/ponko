@@ -1,5 +1,10 @@
 # Validation bundles
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests:
+> `tests/validation_bundle.rs` and the `validation-bundles` job. Platforms:
+> Linux, headless. Graphics: not involved. Missing: a reference game that uses
+> it.
+
 A validation bundle is one directory that says what a run of a game
 observed, and with what: the engine version, commit, compiler and features,
 the scenario and seed, every command that was run, the outcome of each

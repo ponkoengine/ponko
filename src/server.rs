@@ -3,6 +3,11 @@
 //! [`fixed_hz`](crate::game::Game::fixed_hz), until the process is asked to
 //! stop.
 //!
+//! **Maturity: tested**, from the guide chapter `servers.md`. Game: none. Tests: `tests/server.rs`,
+//! `tests/server_signals.rs`; the server container is built in the list of checks. Platforms:
+//! Linux, macOS and Windows, headless (the workspace tests in the list of checks); the container on
+//! Linux. Graphics: not involved. Missing: a reference game and a deployed server.
+//!
 //! What it adds to a [headless run](crate::game::Game::run_headless):
 //!
 //! - **Pacing**: one tick every `1 / fixed_hz` seconds of wall time. A tick

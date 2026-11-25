@@ -2,6 +2,11 @@
 //! through the real input and action path, for reproducible gameplay tests
 //! and for tools that drive a running game.
 //!
+//! **Maturity: tested**, no guide chapter. Game: none directly; the reference games' tests script
+//! their input. Tests: `tests/input_scenario.rs`, `tests/scenario_safe_insets.rs`. Platforms:
+//! Linux, macOS and Windows, headless (the workspace tests in the list of checks). Graphics: not
+//! involved. Missing: a reference game that uses it.
+//!
 //! A scenario is a list of steps keyed by simulation tick. Input steps feed
 //! an [`InputEvent`] before that tick's simulation systems run; check steps
 //! look at the game after they ran. A run reports its outcome in a

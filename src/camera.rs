@@ -3,6 +3,12 @@
 //! [`d2::View`](crate::d2::View) and `d3::View`), and what every camera rig shares: [`CameraShake`] and the smoothing
 //! helpers [`smooth_damp`], [`damp`] and [`damp_angle`].
 //!
+//! **Maturity: tested**, from the guide chapter `viewports.md`. Game: none. Tests:
+//! `tests/viewports.rs`, `views_render_test.rs`, `views2d_render_test.rs`. Platforms: Linux, macOS
+//! and Windows, headless (the workspace tests in the list of checks). Graphics: offscreen render
+//! tests, required on Windows (DirectX 12 on the WARP software adapter) and run on Linux and macOS
+//! only where a GPU is found. Missing: a reference game that uses it.
+//!
 //! The rigs themselves are in the dimension modules: 2D
 //! [`d2::FollowCamera`](crate::d2::FollowCamera) and
 //! [`d2::PixelPerfect`](crate::d2::PixelPerfect); 3D (feature `3d`)

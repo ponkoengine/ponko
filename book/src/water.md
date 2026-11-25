@@ -1,5 +1,12 @@
 # Water: lakes, rivers and seas
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests: `tests/water.rs`,
+> `water_render_test.rs`, `water_kit_render_test.rs`. Platforms: Linux, macOS
+> and Windows, headless (the workspace tests in the list of checks). Graphics:
+> offscreen render tests, required on Windows (DirectX 12 on the WARP software
+> adapter) and run on Linux and macOS only where a GPU is found. Missing: a
+> reference game that uses it.
+
 `ponko::water` (the `3d` feature) draws water and floats things on it.
 Pick a preset (`WaterDesc::lake`, `river` or `sea`), change what you like
 and spawn it: the kit builds the mesh, the material and any passes the

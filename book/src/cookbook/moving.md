@@ -1,5 +1,10 @@
 # Moving things
 
+> **Maturity: [tested](../maturity.md).** Game: none. Tests:
+> `tests/cookbook_moving.rs` runs every recipe. Platforms: Linux, macOS and
+> Windows, headless (the workspace tests in the list of checks). Graphics: not
+> involved.
+
 Walking, jumping, dashing, clicking to move, dragging and rebinding keys. Each recipe is a system you add with `.sim_system` (or `.system` for frame-rate work); the player is any entity with a `Transform`.
 
 ## Walk with the keyboard

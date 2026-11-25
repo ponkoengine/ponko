@@ -340,6 +340,11 @@ mod web_alloc;
 /// The whole ECS crate ([`ponko_ecs`]), for advanced use: component ids,
 /// read-only world views, the dynamic and C path ([`World::raw`](ponko_ecs::World::raw)), chunks
 /// and archetypes. Games normally need only the ECS types in the prelude.
+///
+/// **Maturity: proven**, from the guide chapter `ecs.md`. Game: Coin Dash and Ember Hop, packaged
+/// and played on Linux, macOS and Windows. Tests: `crates/ponko_ecs/tests`, and its unsafe code
+/// under Miri. Platforms: Linux, macOS and Windows, headless (the workspace tests in the list of
+/// checks). Graphics: not involved.
 pub mod ecs_core {
     #[doc(no_inline)]
     pub use ponko_ecs::*;

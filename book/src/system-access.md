@@ -1,5 +1,10 @@
 # Declared system access
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests:
+> `tests/system_access.rs`, `tests/system_views.rs`. Platforms: Linux, macOS
+> and Windows, headless (the workspace tests in the list of checks). Graphics:
+> not involved. Missing: a reference game that uses it.
+
 Every system you have seen so far takes `&mut Ctx`: it may touch anything,
 so the engine runs systems one at a time. A system can also **declare** what
 it reads and writes. The declaration is checked, shows up in the access

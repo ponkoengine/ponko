@@ -1,5 +1,10 @@
 # Importing from Unity
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests: the `ponko_unity`
+> crate's tests. Platforms: Linux, macOS and Windows, headless (the workspace
+> tests in the list of checks). Graphics: not involved. Missing: a game built
+> from an imported project.
+
 `ponko_unity` reads a Unity project and turns its scenes and prefabs into
 Ponko [scenes](scenes.md): every drawn mesh becomes a `.glb` with its
 materials, its textures become PNGs, and the scene is a `ponko-world`

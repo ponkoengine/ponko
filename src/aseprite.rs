@@ -1,5 +1,10 @@
 //! Aseprite sprite atlases with variable-time animations.
 //!
+//! **Maturity: tested**, no guide chapter. Game: none. Tests: `tests/aseprite.rs`, and with
+//! `aseprite-source` the loose source files. Platforms: Linux, macOS and Windows, headless (the
+//! workspace tests in the list of checks). Graphics: not involved. Missing: a reference game that
+//! uses it.
+//!
 //! Load one with [`Graphics::try_load_aseprite`]. Composited and split-layer exports
 //! use the same atlas and animation APIs.
 

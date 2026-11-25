@@ -1,5 +1,12 @@
 # Performance and profiling
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests:
+> `tests/profiling.rs`, `tests/perf_report.rs`, `pass_timing_render_test.rs`.
+> Platforms: Linux, macOS and Windows, headless (the workspace tests in the
+> list of checks). Graphics: offscreen render tests, required on Windows
+> (DirectX 12 on the WARP software adapter) and run on Linux and macOS only
+> where a GPU is found. Missing: a reference game that uses it.
+
 Fast code starts with measuring. This chapter is the loop to follow when a
 game is slow, or before you've decided whether it is: **measure, read the
 report, fix the one biggest thing, measure again.** Everything here is built
