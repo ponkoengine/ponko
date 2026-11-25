@@ -1672,6 +1672,59 @@ jobs:
           path: target/web-smoke
           retention-days: 7
 
+  # WebGPU gated on a real GPU (web/smoke/README.md, "On a real GPU"; the
+  # web guide's "Frame times"). The web-smoke job above runs where there may
+  # be no GPU, so its WebGPU steps may pass as "unsupported". There is no CI:
+  # this job is the gate, run in the local check run on a maintainer's Mac,
+  # where headless Chromium (the full browser's new headless mode) draws
+  # with the machine's GPU through Metal. Every step here FAILS when WebGPU
+  # is unsupported, when the browser or the engine is on a software renderer
+  # (SwiftShader) or a fallback adapter, or when the engine fell back to
+  # WebGL2 (`--require-gpu`, which also leaves out the software fallbacks).
+  # The frame-times step reports the 3D fixture's frame times on WebGPU and
+  # WebGL2 (median and 95th percentile; one load each here, the guide's
+  # numbers are three) and fails on the same conditions.
+  web-gpu:
+    local-tags: [web, gpu]
+    local-requires: [node, npm, wasm-bindgen]
+    name: Web on a real GPU (headless Chromium, WebGPU and WebGL2)
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Install the runner and Chromium
+        local-skip: Install the browsers and npm dependencies before the run (see CONTRIBUTING.md).
+        run: |
+          npm ci --prefix web/smoke --no-audit --no-fund
+          node web/smoke/node_modules/playwright-core/cli.js install chromium
+      - name: Build the fixtures (2D, 3D with --features 3d)
+        run: |
+          web/build.sh web_smoke
+          web/build.sh --features 3d web_smoke_3d
+      - name: Chromium, WebGPU on the GPU (2D and 3D fixtures, new headless mode)
+        timeout-minutes: 8
+        if: ${{ !cancelled() }}
+        run: |
+          status=0
+          for fixture in web_smoke web_smoke_3d; do
+            node web/smoke/smoke.mjs --fixture "$fixture" --browser chromium --chromium-mode new --backend webgpu \
+              --require-gpu --out "target/web-smoke/gpu-$fixture-webgpu" || status=1
+          done
+          exit $status
+      - name: Chromium, WebGL2 on the GPU (3D fixture, new headless mode)
+        timeout-minutes: 5
+        if: ${{ !cancelled() }}
+        run: >-
+          node web/smoke/smoke.mjs --fixture web_smoke_3d --browser chromium --chromium-mode new --backend webgl2
+          --require-gpu --out target/web-smoke/gpu-web_smoke_3d-webgl2
+      - name: Frame times of the 3D fixture on the GPU (WebGPU and WebGL2)
+        timeout-minutes: 5
+        if: ${{ !cancelled() }}
+        run: node web/smoke/frame-times.mjs --repeat 1
+
   # The complete-game reference, packaged the way a player gets it and played
   # from an unrelated folder (`ponko package`, through
   # scripts/package-coin-dash.py for the walk-through; book/src/packaging.md):
