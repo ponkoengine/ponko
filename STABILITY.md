@@ -131,11 +131,18 @@ compiling in its patch releases. So do what a plugin adds through:
 | Release | When | Contains |
 |---|---|---|
 | Patch (0.1.1, 0.1.2, ...) | As needed: within days for a regression or a security fix, otherwise when there are fixes to ship | Bug fixes and additions. Nothing that breaks code written for the same minor. |
-| Minor (0.2.0, 0.3.0, ...) | When the P1 scope of its [milestone](https://github.com/ponkoengine/ponko/milestones) is done, roughly every 8 to 12 weeks | New features and breaking changes, each break with its migration entry. |
-| 1.0 | When the readiness checklist (#432) is complete | The last 0.x release with the compatibility promise attached. It breaks nothing. |
+| Minor (0.2.0, 0.3.0, ...) | When the P1 scope of its [milestone](https://github.com/ponkoengine/ponko/milestones) is done, roughly every 8 to 12 weeks. 0.2.0 is the exception: it is a larger release and has no fixed interval | New features and breaking changes, each break with its migration entry. |
+| 1.0 | When the readiness checklist (#480) is complete | The last 0.x release with the compatibility promise attached. It breaks nothing. |
 
 - **A release is scope, not a date.** P1 issues define a minor; what is not
   ready moves to the next one instead of delaying or rushing the release.
+- **What each minor holds.** 0.2.0 carries everything planned after 0.1.0
+  (2D, 3D production and text, multiplayer and platforms, and the research
+  that was waiting) except the 1.0 freeze work: the roadmap
+  ([ROADMAP.md](ROADMAP.md)) names its scope by outcome, and the milestone
+  `0.2.0` has the live list. 0.3.0 starts as the release that removes what
+  0.2.0 deprecates, and gets its further scope when 0.2.0 is out. 0.2.0
+  keeps the right to change the API; the freeze review comes after it.
 - **Release candidates.** From 0.2.0 on, a minor is published as
   `0.y.0-rc.1` at least a week before the release. Cargo never selects a
   release candidate unless the version is written out

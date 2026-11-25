@@ -609,6 +609,13 @@ release branch (`v0.1.1` on `release-0.1`, see
    `crates/*/Cargo.toml` (`ponko_bench` is `publish = false`), including the
    `version = "..."` requirements the crates put on each other, and refresh
    `Cargo.lock` (`cargo check --workspace`).
+   Also update the dependency lines the guide and the project templates
+   show (`ponko = "X.Y"` in `book/src/getting-started.md`, both tutorials and
+   `crates/ponko_cli/templates/*/Cargo.toml.liquid`); the check in step 3 names
+   any that is left. The "Which version?" note under every guide title needs no
+   edit: `scripts/guide-note.py` reads the version from the root `Cargo.toml`
+   and counts the fragments left in `changelog.d/`, so once this step is merged
+   the guide says it documents exactly that release.
 3. `python3 scripts/release-check.py check vX.Y.Z` lists what still disagrees
    (it does not need the tag to exist), and `cargo publish --workspace
    --dry-run` packages and builds every crate the way crates.io will. Re-run
