@@ -19,6 +19,8 @@ import tempfile
 import textwrap
 import time
 
+from nightly_report import publish_status, write_text_atomic
+
 ROOT = Path(__file__).resolve().parents[1]
 SYSTEMS = {"Darwin": "macOS", "Linux": "Linux", "Windows": "Windows"}
 RUNNERS = {"ubuntu": "Linux", "macos": "macOS", "windows": "Windows"}
@@ -514,9 +516,7 @@ def summary(report):
 def write_report(report, directory):
     directory.mkdir(parents=True, exist_ok=True)
     for name, content in (("results.json", json.dumps(report, indent=2) + "\n"), ("summary.txt", summary(report))):
-        with tempfile.NamedTemporaryFile(mode="w", dir=directory, encoding="utf-8", delete=False) as handle:
-            handle.write(content)
-        Path(handle.name).replace(directory / name)
+        write_text_atomic(directory / name, content)
 
 
 def main():
@@ -527,10 +527,12 @@ def main():
     parser.add_argument("--list", action="store_true", help="show the plan and skip reasons")
     parser.add_argument("--include-windowed", action="store_true", help="allow jobs to open windows")
     parser.add_argument("--out", type=Path, default=ROOT / "target/check-results", help="report directory")
+    parser.add_argument("--publish", type=Path, help="write public status files for this OS to a directory")
     parser.add_argument("--selftest", action="store_true", help="run synthetic runner tests")
     args = parser.parse_args()
     if args.selftest:
-        return subprocess.call([sys.executable, str(ROOT / "scripts/test_run_checks.py")])
+        return subprocess.call([sys.executable, "-m", "unittest", "discover",
+                                "-s", str(ROOT / "scripts"), "-p", "test_*checks.py"])
     system = SYSTEMS.get(platform.system())
     if not system:
         parser.error(f"unsupported operating system: {platform.system()}")
@@ -562,6 +564,13 @@ def main():
     write_report(report, args.out)
     print(summary(report), end="")
     print(f'Reports: {args.out / "results.json"}, {args.out / "summary.txt"}')
+    if args.publish is not None:
+        try:
+            publish_status(report, args.publish)
+        except (OSError, ValueError) as error:
+            print(f"run-checks: cannot publish status: {error}", file=sys.stderr)
+            return 2
+        print(f"Public status: {args.publish}")
     return report["exit_code"]
 
 

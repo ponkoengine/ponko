@@ -166,41 +166,91 @@ maintainers need additional checks.
 #### Nightly runs on maintainer machines
 
 Use a dedicated `main` checkout on each macOS, Windows, and Linux test
-machine. Provision the tools under the account that will run the job.
-Schedule one invocation per machine per night, with the report directory
-outside the checkout. For example, put this in a Bash script and customize the
-paths. A fast-forward-only pull keeps the checkout on the current revision
-of `main`.
+machine. Provision the tools under the scheduler account and configure
+authenticated `gh` with permission to manage issues in this repository.
+Schedule one invocation per OS and keep the report directories outside the
+checkout.
+
+`--publish DIRECTORY` replaces the OS's latest status files in that directory
+after each completed run. The file pairs are `macos.json` and `macos.md`,
+`windows.json` and `windows.md`, and `linux.json` and `linux.md`. Copy these
+files to the website's static assets for its status page. Use the Markdown
+table for the README or link to the status page from the README. Use the
+UTC completion time to show the age of the result. Keep the raw
+`results.json` and `summary.txt` in the machine's private report directory.
+
+`python3 scripts/nightly-issue.py /path/to/results.json` previews the issue
+action using the scheduler account's GitHub access. Add `--apply` to
+create or update the open issue titled “Nightly checks failing on <OS>”,
+or close it when a run passes. A run that executes zero checks publishes
+an incomplete status and leaves issues alone. Use full nightly reports for
+issue updates.
+
+On macOS and Linux, point the scheduler at a Bash script like this one.
+It sends a fresh report to the issue updater even when a check fails.
 
 ```sh
 #!/usr/bin/env bash
 set -euo pipefail
 cd /path/to/ponko
 test "$(git branch --show-current)" = main
-test -z "$(git status --porcelain)"
+dirty=$(git status --porcelain)
+test -z "$dirty"
 git pull --ff-only origin main
-/path/to/python3 scripts/run-checks.py --out /path/to/reports/ponko-latest
+
+python=/path/to/python3
+reports=/path/to/private/ponko-latest
+status=/path/to/public-status-staging
+rm -f "$reports/results.json"
+result=0
+"$python" scripts/run-checks.py --out "$reports" --publish "$status" || result=$?
+if test -f "$reports/results.json"; then
+  "$python" scripts/nightly-issue.py "$reports/results.json" --apply
+fi
+exit "$result"
 ```
 
-Configure the scheduler with an explicit tool `PATH` if the tools are
-normally added by an interactive shell. Keep the scheduler's stdout and
-stderr so that a failed checkout update can be distinguished from a check
-failure. On a dedicated machine with an active graphical session, enable
-`--include-windowed` if you want the windowed lanes in its report.
+On Windows, use a wrapper that initializes the Visual Studio developer
+environment, then runs a PowerShell script like this one.
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $false
+Set-Location 'C:/path/to/ponko'
+$branch = git branch --show-current
+if ($LASTEXITCODE -ne 0 -or $branch -ne 'main') { exit 2 }
+$dirty = git status --porcelain
+if ($LASTEXITCODE -ne 0 -or $dirty) { exit 2 }
+git pull --ff-only origin main
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+$reports = 'C:/path/to/private/ponko-latest'
+$status = 'C:/path/to/public-status-staging'
+$report = Join-Path $reports 'results.json'
+if (Test-Path -LiteralPath $report) { Remove-Item -LiteralPath $report }
+py -3 scripts/run-checks.py --out $reports --publish $status
+$result = $LASTEXITCODE
+if (Test-Path -LiteralPath $report) {
+  py -3 scripts/nightly-issue.py $report --apply
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+exit $result
+```
+
+Configure the scheduler with the needed tool `PATH` and keep stdout and
+stderr to diagnose checkout or reporting errors. On a dedicated test host
+with an active graphical session, add `--include-windowed` to the runner
+invocation to include the windowed lanes.
 
 | Scheduler | Nightly setup |
 | --- | --- |
 | macOS launchd | Create a per-user LaunchAgent in `~/Library/LaunchAgents`. Set `ProgramArguments` to the absolute Bash and script paths, `StartCalendarInterval` to hour 2 and minute 0, and `StandardOutPath` and `StandardErrorPath` to log files. Load it with `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.ponko.checks.plist`. |
 | Linux systemd | Create a user service in `~/.config/systemd/user/ponko-checks.service` with `Type=oneshot` and `ExecStart=/bin/bash /absolute/path/to/script`. Create `ponko-checks.timer` with `OnCalendar=*-*-* 02:00:00` and `Persistent=true` in `[Timer]` and `WantedBy=timers.target` in `[Install]`. Run `systemctl --user enable --now ponko-checks.timer`. Use a system service or enable user lingering if it must run after logout. |
-| Windows Task Scheduler | Create a daily trigger at 02:00. Use a wrapper that calls the Visual Studio developer environment setup batch file, enters the checkout, verifies a clean `main`, runs `git pull --ff-only origin main`, then runs `py -3 scripts/run-checks.py --out C:/path/to/ponko-latest`. Stop on an error and propagate the runner's exit code. Select “Do not start a new instance” when an invocation overlaps another. |
+| Windows Task Scheduler | Create a daily trigger at 02:00 and use the Visual Studio environment wrapper as the action. Have the wrapper pass through the PowerShell script's exit code. Select “Do not start a new instance” when an invocation overlaps another. |
 
-Check the first scheduled invocation on each machine for the expected
-revision, environment and skip reasons. For a public status update, use the
-latest report per machine and include its revision, completion time and
-passed, failed and skipped steps. Review logs for local paths and secrets
-before sharing excerpts. For a check regression, use one issue per affected
-machine and update that issue with the current revision and failing step
-names until the run recovers.
+For the first invocation on each machine, omit `--apply` to check the
+revision, environment, skip reasons, public files, and proposed issue
+action. Enable issue updates once those match the expected schedule.
 
 ### Adding or changing a cargo feature
 

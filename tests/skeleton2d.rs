@@ -1023,3 +1023,46 @@ fn transform_constraints_cant_follow_their_own_bone() {
     let mut data = arm();
     data.add_transform_constraint(TransformConstraint::new("self", &[1], 1));
 }
+
+#[test]
+fn clip_ids_play_like_names_and_a_typo_lists_the_clips() {
+    let mut data = arm();
+    let keys = vec![Key::new(0.0, 0.0), Key::new(1.0, 1.0)];
+    data.add_clip(Clip::new("idle", 1.0));
+    data.add_clip(Clip::new("swing", 1.0).with_bone_track(rotate(1, keys)));
+    let data = Arc::new(data);
+    let mut s = Skeleton::new(data.clone());
+    let swing = s.clip_id("swing").unwrap();
+    assert_eq!(swing, data.clip_id("swing").unwrap());
+    assert_eq!(swing, ponko::skeleton2d::ClipId(1));
+    assert!(s.play(swing));
+    s.update(0.25);
+    near(s.bone_pose(1).rotation, 0.25);
+    assert_eq!(s.clip(), Some("swing"));
+    assert!(s.play_once(swing) && s.crossfade(swing, 0.1));
+    assert!(
+        !s.play(ponko::skeleton2d::ClipId(2)),
+        "an index past the clips changes nothing"
+    );
+    let name = String::from("idle");
+    assert!(s.play(&name), "a String's name plays as well");
+    let err = s.clip_id("swnig").unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::NotFound);
+    assert_eq!(err.message(), r#"unknown animation clip "swnig" (known: idle, swing)"#);
+}
+
+#[test]
+fn checked_parameter_and_state_lookups_list_the_names_there_are() {
+    let mut data = arm();
+    let graph = blend_graph(&mut data);
+    assert_eq!(graph.try_state("move").unwrap(), StateId(0));
+    assert_eq!(graph.try_parameter("speed").unwrap(), ParamId(0));
+    let err = graph.try_state("mvoe").unwrap_err();
+    assert_eq!(err.message(), r#"unknown animation state "mvoe" (known: move)"#);
+    data.set_graph(graph).unwrap();
+    let s = Skeleton::new(Arc::new(data));
+    assert_eq!(s.try_parameter_id("speed").unwrap(), ParamId(0));
+    let err = s.try_parameter_id("sped").unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::NotFound);
+    assert_eq!(err.message(), r#"unknown animation parameter "sped" (known: speed)"#);
+}

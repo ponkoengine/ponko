@@ -25,6 +25,10 @@ fn hold(scenario: InputScenario, key: Key, from: u64, to: u64) -> InputScenario 
         .at(to, InputEvent::Key(key, false))
 }
 
+/// The `move` action, resolved once (as in the guide's first recipe).
+#[derive(Clone, Copy)]
+struct Move(ActionId);
+
 fn bind_move(ctx: &mut Ctx) {
     ctx.input.set_action(
         "move",
@@ -35,6 +39,8 @@ fn bind_move(ctx: &mut Ctx) {
             down: Key::S,
         }]),
     );
+    let movement = ctx.input.action_id("move");
+    ctx.world.insert_resource(Move(movement));
 }
 
 // ANCHOR: contact_damage
@@ -249,7 +255,8 @@ fn clicking_a_body_selects_it_and_clicking_the_ground_deselects() {
 // ANCHOR: platformer
 /// Runs before the physics step, so the new speed is what the step uses.
 fn platformer_controls(ctx: &mut Ctx) {
-    let run = ctx.input.action_axis2("move").x;
+    let Move(movement) = *ctx.world.resource::<Move>(); // the `move` action's id
+    let run = ctx.input.action_axis2(movement).x;
     let jump = ctx.input.key_pressed(Key::Space);
     ctx.world
         .query::<(Entity, &Player, &Transform, &mut Velocity)>()
