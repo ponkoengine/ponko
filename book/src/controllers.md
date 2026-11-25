@@ -387,6 +387,62 @@ actuators record what they are asked.
 For trigger rumble or motion on the desktop, turn on `gamepad-sdl`; for a
 platform SDK of your own, install a `GamepadBackend` that reads it.
 
+## Wheels, pedals and joysticks
+
+Steering wheels, pedals, shifters, flight sticks, throttles and button
+boxes don't fit a gamepad's layout, so they are read as **joysticks**: by
+axis, button and hat number, in their own slots (`ctx.input.joysticks()`,
+up to `MAX_JOYSTICKS`). `joystick_info` says what each is
+(`JoystickKind::Wheel`, `FlightStick`, `Throttle`, ...), how many axes,
+buttons and hats it has, and which force-feedback effects it can play.
+Axes read `-1..=1` as the device reports them, with no dead zone: a pedal
+often rests at -1 and reads 1 pressed. Which axis is which differs between
+models (steering is usually axis 0), so a game offers a setup screen or
+picks a layout by `vendor_id` / `product_id`.
+
+Force feedback is a set of effects that play until changed:
+`set_force_feedback(joystick, ForceFeedback { .. })`, sent to the device
+only when it changes, the way rumble is. A constant push (a slide, the
+wind), a spring that pulls to a centre (the self-aligning pull at speed),
+a damper (weight), friction (grip), a vibration (the road, the engine) and
+the wheel's own centring spring, all at once:
+
+```rust
+# use ponko::prelude::*;
+use ponko::input::{ForceFeedback, JoystickKind};
+
+fn drive(ctx: &mut Ctx) {
+    let wheel = ctx.input.joysticks().iter().copied().find(|&j| {
+        ctx.input.joystick_info(j).is_some_and(|info| info.kind == JoystickKind::Wheel)
+    });
+    let Some(wheel) = wheel else { return };
+    let steer = ctx.input.joystick_axis(wheel, 0); // -1 left to 1 right
+    let throttle = (ctx.input.joystick_axis(wheel, 1) + 1.0) / 2.0; // rests at -1
+    let speed = 20.0_f32; // the car's, in m/s
+    ctx.input.set_force_feedback(
+        wheel,
+        ForceFeedback { spring: (speed / 40.0).min(1.0), damper: 0.2, ..ForceFeedback::OFF }
+            .vibration(0.05, 30.0),
+    );
+#     let _ = (steer, throttle);
+}
+# Game::new("t", 1, 1).sim_system(drive).run_headless(1, |_| {});
+```
+
+Effects the device can't play are left out; `ForceFeedback::OFF` stops
+them all, and a joystick that disconnects forgets them.
+
+The SDL backend (`gamepad-sdl`, above) reads joysticks: wheels, flight
+sticks and throttles always (even when SDL also has a gamepad layout for
+them), and any other device SDL can't read as a gamepad. It plays force
+feedback through SDL's haptic API, on the steering axis: on Windows
+(DirectInput), Linux (evdev force feedback) and macOS (IOKit's force
+feedback), where the wheel's driver supports it. gilrs, the default, reads
+no joysticks. `FakeGamepads::connect_joystick` scripts one in tests.
+
+Not yet: binding joystick axes and buttons in an `ActionMap`, recording
+them in input scenarios, joysticks on the web, and the C API (#525).
+
 ## From C and C++
 
 C: `ponko_ctx_gamepad_rumble`, `ponko_ctx_gamepad_stop_rumble`,

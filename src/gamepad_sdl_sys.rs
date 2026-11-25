@@ -11,15 +11,85 @@ use sdl3_sys::gamepad::{
     SDL_GetGamepads, SDL_OpenGamepad, SDL_PROP_GAMEPAD_CAP_RUMBLE_BOOLEAN, SDL_PROP_GAMEPAD_CAP_TRIGGER_RUMBLE_BOOLEAN,
     SDL_RumbleGamepad, SDL_RumbleGamepadTriggers, SDL_SetGamepadSensorEnabled,
 };
-use sdl3_sys::init::{SDL_INIT_GAMEPAD, SDL_InitSubSystem, SDL_QuitSubSystem};
+use sdl3_sys::haptic::{
+    SDL_CloseHaptic, SDL_CreateHapticEffect, SDL_GetHapticFeatures, SDL_HAPTIC_CONSTANT, SDL_HAPTIC_DAMPER,
+    SDL_HAPTIC_FRICTION, SDL_HAPTIC_INFINITY, SDL_HAPTIC_SINE, SDL_HAPTIC_SPRING, SDL_HAPTIC_STEERING_AXIS, SDL_Haptic,
+    SDL_HapticCondition, SDL_HapticConstant, SDL_HapticDirection, SDL_HapticEffect, SDL_HapticEffectID,
+    SDL_HapticPeriodic, SDL_IsJoystickHaptic, SDL_OpenHapticFromJoystick, SDL_RunHapticEffect, SDL_SetHapticAutocenter,
+    SDL_SetHapticGain, SDL_StopHapticEffect, SDL_UpdateHapticEffect,
+};
+use sdl3_sys::init::{SDL_INIT_GAMEPAD, SDL_INIT_HAPTIC, SDL_InitSubSystem, SDL_QuitSubSystem};
+use sdl3_sys::joystick::{
+    SDL_CloseJoystick, SDL_GetJoystickGUID, SDL_GetJoystickName, SDL_GetJoystickProduct, SDL_GetJoystickSerial,
+    SDL_GetJoystickType, SDL_GetJoystickTypeForID, SDL_GetJoystickVendor, SDL_GetJoysticks, SDL_GetNumJoystickAxes,
+    SDL_GetNumJoystickButtons, SDL_GetNumJoystickHats, SDL_Joystick, SDL_JoystickID, SDL_OpenJoystick,
+};
 use sdl3_sys::properties::SDL_GetBooleanProperty;
 use sdl3_sys::sensor::{SDL_SENSOR_ACCEL, SDL_SENSOR_GYRO};
 
-use crate::gamepad_sdl::{Opened, PadEvent, PadSystem};
+use crate::gamepad_sdl::{EFFECT_SLOTS, Effect, Opened, OpenedJoystick, PadEvent, PadSystem, raw};
 
-/// SDL's gamepad subsystem, and the pads opened through it.
+/// A joystick opened through SDL, its force-feedback device, and the
+/// effect in each slot (SDL's id, and whether it is playing).
+struct OpenJoystick {
+    id: u32,
+    joystick: NonNull<SDL_Joystick>,
+    haptic: Option<NonNull<SDL_Haptic>>,
+    effects: [Option<(SDL_HapticEffectID, bool)>; EFFECT_SLOTS],
+}
+
+/// SDL's gamepad subsystem, and the pads and joysticks opened through it.
 pub(crate) struct Sdl {
     open: Vec<(u32, NonNull<SDL_Gamepad>)>,
+    joysticks: Vec<OpenJoystick>,
+    /// Whether the haptic subsystem started (force feedback works without
+    /// it only in that nothing plays).
+    haptic: bool,
+}
+
+/// `effect` as SDL's: along the steering axis, playing until stopped.
+pub(crate) fn sdl_effect(effect: Effect) -> SDL_HapticEffect {
+    let direction = SDL_HapticDirection {
+        r#type: SDL_HAPTIC_STEERING_AXIS,
+        dir: [0; 3],
+    };
+    let condition = |kind, coeff: i16, center: i16| SDL_HapticEffect {
+        condition: SDL_HapticCondition {
+            r#type: kind,
+            direction,
+            length: SDL_HAPTIC_INFINITY,
+            right_sat: [u16::MAX; 3],
+            left_sat: [u16::MAX; 3],
+            right_coeff: [coeff; 3],
+            left_coeff: [coeff; 3],
+            center: [center; 3],
+            ..SDL_HapticCondition::default()
+        },
+    };
+    match effect {
+        Effect::Constant { level } => SDL_HapticEffect {
+            constant: SDL_HapticConstant {
+                r#type: SDL_HAPTIC_CONSTANT,
+                direction,
+                length: SDL_HAPTIC_INFINITY,
+                level,
+                ..SDL_HapticConstant::default()
+            },
+        },
+        Effect::Spring { coeff, center } => condition(SDL_HAPTIC_SPRING, coeff, center),
+        Effect::Damper { coeff } => condition(SDL_HAPTIC_DAMPER, coeff, 0),
+        Effect::Friction { coeff } => condition(SDL_HAPTIC_FRICTION, coeff, 0),
+        Effect::Sine { magnitude, period_ms } => SDL_HapticEffect {
+            periodic: SDL_HapticPeriodic {
+                r#type: SDL_HAPTIC_SINE,
+                direction,
+                length: SDL_HAPTIC_INFINITY,
+                period: period_ms,
+                magnitude,
+                ..SDL_HapticPeriodic::default()
+            },
+        },
+    }
 }
 
 // SAFETY: SDL's gamepad functions lock SDL's joystick lock themselves, so
@@ -57,15 +127,35 @@ impl Sdl {
             sdl3_sys::hints::SDL_SetHint(sdl3_sys::hints::SDL_HINT_NO_SIGNAL_HANDLERS, c"1".as_ptr());
             SDL_InitSubSystem(SDL_INIT_GAMEPAD)
         };
-        if ok {
-            Ok(Self { open: Vec::new() })
-        } else {
-            Err(error())
+        if !ok {
+            return Err(error());
         }
+        // SAFETY: as above. Without it joysticks still read; no effect plays.
+        let haptic = unsafe { SDL_InitSubSystem(SDL_INIT_HAPTIC) };
+        Ok(Self {
+            open: Vec::new(),
+            joysticks: Vec::new(),
+            haptic,
+        })
+    }
+
+    fn joystick(&mut self, id: u32) -> Option<&mut OpenJoystick> {
+        self.joysticks.iter_mut().find(|j| j.id == id)
     }
 
     fn pad(&self, id: u32) -> Option<*mut SDL_Gamepad> {
         self.open.iter().find(|(i, _)| *i == id).map(|(_, p)| p.as_ptr())
+    }
+}
+
+/// Closes a joystick and its force-feedback device (which ends its effects).
+fn close_joystick(j: OpenJoystick) {
+    // SAFETY: both were opened by `open_joystick` and are closed once, here.
+    unsafe {
+        if let Some(h) = j.haptic {
+            SDL_CloseHaptic(h.as_ptr());
+        }
+        SDL_CloseJoystick(j.joystick.as_ptr());
     }
 }
 
@@ -75,8 +165,16 @@ impl Drop for Sdl {
             // SAFETY: opened by `open` and not closed since.
             unsafe { SDL_CloseGamepad(pad.as_ptr()) };
         }
-        // SAFETY: balances the `SDL_InitSubSystem` of `start`.
-        unsafe { SDL_QuitSubSystem(SDL_INIT_GAMEPAD) };
+        for j in self.joysticks.drain(..) {
+            close_joystick(j);
+        }
+        // SAFETY: balances the `SDL_InitSubSystem` calls of `start`.
+        unsafe {
+            if self.haptic {
+                SDL_QuitSubSystem(SDL_INIT_HAPTIC);
+            }
+            SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
+        }
     }
 }
 
@@ -108,7 +206,19 @@ impl PadSystem for Sdl {
                     SDL_EventType::GAMEPAD_SENSOR_UPDATE => {
                         PadEvent::Sensor(event.gsensor.which.0, event.gsensor.sensor, event.gsensor.data)
                     }
-                    // Joystick events (the same pads, raw) and the rest.
+                    SDL_EventType::JOYSTICK_ADDED => PadEvent::JoyAdded(event.jdevice.which.0),
+                    SDL_EventType::JOYSTICK_REMOVED => PadEvent::JoyRemoved(event.jdevice.which.0),
+                    SDL_EventType::JOYSTICK_AXIS_MOTION => {
+                        PadEvent::JoyAxis(event.jaxis.which.0, i32::from(event.jaxis.axis), event.jaxis.value)
+                    }
+                    SDL_EventType::JOYSTICK_BUTTON_DOWN | SDL_EventType::JOYSTICK_BUTTON_UP => PadEvent::JoyButton(
+                        event.jbutton.which.0,
+                        i32::from(event.jbutton.button),
+                        event.jbutton.down,
+                    ),
+                    SDL_EventType::JOYSTICK_HAT_MOTION => {
+                        PadEvent::JoyHat(event.jhat.which.0, i32::from(event.jhat.hat), event.jhat.value)
+                    }
                     _ => continue,
                 }
             };
@@ -200,6 +310,124 @@ impl PadSystem for Sdl {
         // SAFETY: a plain clock read, valid once SDL is initialised.
         unsafe { sdl3_sys::timer::SDL_GetTicks() }
     }
+
+    fn present_joysticks(&mut self, into: &mut Vec<u32>) {
+        let mut count = 0;
+        // SAFETY: SDL returns an array of `count` ids (or null), which
+        // the caller frees with SDL_free.
+        unsafe {
+            let ids = SDL_GetJoysticks(&mut count);
+            if ids.is_null() {
+                return;
+            }
+            let n = usize::try_from(count).unwrap_or(0);
+            into.extend(std::slice::from_raw_parts(ids, n).iter().map(|id| id.0));
+            sdl3_sys::stdinc::SDL_free(ids.cast());
+        }
+    }
+
+    fn is_gamepad(&mut self, id: u32) -> bool {
+        // SAFETY: a query by id; an unknown id reads false.
+        unsafe { sdl3_sys::gamepad::SDL_IsGamepad(SDL_JoystickID(id)) }
+    }
+
+    fn joystick_type(&mut self, id: u32) -> i32 {
+        // SAFETY: a query by id; an unknown id reads as unknown.
+        unsafe { SDL_GetJoystickTypeForID(SDL_JoystickID(id)).0 }
+    }
+
+    fn open_joystick(&mut self, id: u32) -> Option<OpenedJoystick> {
+        // SAFETY: opening by an id SDL reported; a null result is handled.
+        let joystick = NonNull::new(unsafe { SDL_OpenJoystick(SDL_JoystickID(id)) })?;
+        let j = joystick.as_ptr();
+        let count = |n: std::ffi::c_int| usize::try_from(n).unwrap_or(0);
+        // SAFETY: `j` is an open joystick; a haptic device that won't open
+        // is left out, and one that does is closed with the joystick.
+        let (opened, haptic) = unsafe {
+            let mut identity: String = SDL_GetJoystickGUID(j).data.iter().map(|b| format!("{b:02x}")).collect();
+            let serial = text(SDL_GetJoystickSerial(j));
+            if !serial.is_empty() {
+                identity.push('/');
+                identity.push_str(&serial);
+            }
+            let haptic = if self.haptic && SDL_IsJoystickHaptic(j) {
+                NonNull::new(SDL_OpenHapticFromJoystick(j))
+            } else {
+                None
+            };
+            let features = haptic.map_or(0, |h| SDL_GetHapticFeatures(h.as_ptr()));
+            if let Some(h) = haptic
+                && features & raw::HAPTIC_GAIN != 0
+            {
+                SDL_SetHapticGain(h.as_ptr(), 100);
+            }
+            let opened = OpenedJoystick {
+                name: text(SDL_GetJoystickName(j)),
+                vendor_id: SDL_GetJoystickVendor(j),
+                product_id: SDL_GetJoystickProduct(j),
+                kind: SDL_GetJoystickType(j).0,
+                identity,
+                axes: count(SDL_GetNumJoystickAxes(j)),
+                buttons: count(SDL_GetNumJoystickButtons(j)),
+                hats: count(SDL_GetNumJoystickHats(j)),
+                haptic: features,
+            };
+            (opened, haptic)
+        };
+        self.joysticks.push(OpenJoystick {
+            id,
+            joystick,
+            haptic,
+            effects: [None; EFFECT_SLOTS],
+        });
+        Some(opened)
+    }
+
+    fn close_joystick(&mut self, id: u32) {
+        if let Some(at) = self.joysticks.iter().position(|j| j.id == id) {
+            close_joystick(self.joysticks.swap_remove(at));
+        }
+    }
+
+    fn haptic_effect(&mut self, id: u32, slot: usize, effect: Option<Effect>) {
+        let Some(j) = self.joystick(id) else { return };
+        let (Some(h), Some(current)) = (j.haptic, j.effects.get_mut(slot)) else {
+            return;
+        };
+        let h = h.as_ptr();
+        // SAFETY: `h` is the open haptic device of an open joystick, and
+        // the effect ids were made on it.
+        unsafe {
+            match (effect, current.as_mut()) {
+                (None, Some((effect_id, playing))) => {
+                    if *playing {
+                        SDL_StopHapticEffect(h, *effect_id);
+                        *playing = false;
+                    }
+                }
+                (None, None) => {}
+                (Some(effect), Some((effect_id, playing))) => {
+                    SDL_UpdateHapticEffect(h, *effect_id, &sdl_effect(effect));
+                    if !*playing {
+                        *playing = SDL_RunHapticEffect(h, *effect_id, 1);
+                    }
+                }
+                (Some(effect), None) => {
+                    let effect_id = SDL_CreateHapticEffect(h, &sdl_effect(effect));
+                    if effect_id.0 >= 0 {
+                        *current = Some((effect_id, SDL_RunHapticEffect(h, effect_id, 1)));
+                    }
+                }
+            }
+        }
+    }
+
+    fn haptic_autocenter(&mut self, id: u32, level: u8) {
+        if let Some(h) = self.joystick(id).and_then(|j| j.haptic) {
+            // SAFETY: `h` is the open haptic device of an open joystick.
+            unsafe { SDL_SetHapticAutocenter(h.as_ptr(), std::ffi::c_int::from(level.min(100))) };
+        }
+    }
 }
 
 #[cfg(test)]
@@ -209,6 +437,7 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     use sdl3_sys::gamepad::*;
+    use sdl3_sys::haptic::*;
     use sdl3_sys::hints::{SDL_HINT_JOYSTICK_HIDAPI, SDL_SetHint};
     use sdl3_sys::joystick::*;
     use sdl3_sys::sensor::*;
@@ -249,6 +478,64 @@ mod tests {
         assert_eq!(SDL_GAMEPAD_TYPE_GAMECUBE.0, raw::TYPE_GAMECUBE);
         assert_eq!(SDL_SENSOR_ACCEL.0, raw::SENSOR_ACCEL);
         assert_eq!(SDL_SENSOR_GYRO.0, raw::SENSOR_GYRO);
+        assert_eq!(SDL_JOYSTICK_TYPE_UNKNOWN.0, raw::JOYSTICK_UNKNOWN);
+        assert_eq!(SDL_JOYSTICK_TYPE_GAMEPAD.0, raw::JOYSTICK_GAMEPAD);
+        assert_eq!(SDL_JOYSTICK_TYPE_WHEEL.0, raw::JOYSTICK_WHEEL);
+        assert_eq!(SDL_JOYSTICK_TYPE_ARCADE_STICK.0, raw::JOYSTICK_ARCADE_STICK);
+        assert_eq!(SDL_JOYSTICK_TYPE_FLIGHT_STICK.0, raw::JOYSTICK_FLIGHT_STICK);
+        assert_eq!(SDL_JOYSTICK_TYPE_DANCE_PAD.0, raw::JOYSTICK_DANCE_PAD);
+        assert_eq!(SDL_JOYSTICK_TYPE_GUITAR.0, raw::JOYSTICK_GUITAR);
+        assert_eq!(SDL_JOYSTICK_TYPE_DRUM_KIT.0, raw::JOYSTICK_DRUM_KIT);
+        assert_eq!(SDL_JOYSTICK_TYPE_ARCADE_PAD.0, raw::JOYSTICK_ARCADE_PAD);
+        assert_eq!(SDL_JOYSTICK_TYPE_THROTTLE.0, raw::JOYSTICK_THROTTLE);
+        assert_eq!(u32::from(SDL_HAPTIC_CONSTANT.0), raw::HAPTIC_CONSTANT);
+        assert_eq!(u32::from(SDL_HAPTIC_SINE.0), raw::HAPTIC_SINE);
+        assert_eq!(u32::from(SDL_HAPTIC_SPRING.0), raw::HAPTIC_SPRING);
+        assert_eq!(u32::from(SDL_HAPTIC_DAMPER.0), raw::HAPTIC_DAMPER);
+        assert_eq!(u32::from(SDL_HAPTIC_FRICTION.0), raw::HAPTIC_FRICTION);
+        assert_eq!(SDL_HAT_UP | SDL_HAT_RIGHT | SDL_HAT_DOWN | SDL_HAT_LEFT, 0b1111);
+        assert_eq!(
+            crate::input::hat_from_bits(SDL_HAT_LEFTUP),
+            glam::IVec2::new(-1, -1),
+            "SDL's bits are the ones hat_from_bits reads"
+        );
+    }
+
+    #[test]
+    fn effects_become_sdl_effects_on_the_steering_axis_that_play_until_stopped() {
+        use crate::gamepad_sdl::Effect;
+        let spring = super::sdl_effect(Effect::Spring {
+            coeff: 100,
+            center: -200,
+        });
+        // SAFETY: reading the union by the variant `sdl_effect` wrote.
+        unsafe {
+            assert_eq!(spring.r#type.0, SDL_HAPTIC_SPRING.0);
+            assert_eq!(spring.condition.direction.r#type.0, SDL_HAPTIC_STEERING_AXIS.0);
+            assert_eq!(spring.condition.length, SDL_HAPTIC_INFINITY);
+            assert_eq!(spring.condition.right_coeff, [100; 3]);
+            assert_eq!(spring.condition.left_coeff, [100; 3]);
+            assert_eq!(spring.condition.center, [-200; 3]);
+            assert_eq!(spring.condition.right_sat, [u16::MAX; 3]);
+            let push = super::sdl_effect(Effect::Constant { level: -5 });
+            assert_eq!(push.r#type.0, SDL_HAPTIC_CONSTANT.0);
+            assert_eq!(push.constant.level, -5);
+            assert_eq!(push.constant.length, SDL_HAPTIC_INFINITY);
+            let shake = super::sdl_effect(Effect::Sine {
+                magnitude: 7,
+                period_ms: 25,
+            });
+            assert_eq!(shake.r#type.0, SDL_HAPTIC_SINE.0);
+            assert_eq!((shake.periodic.magnitude, shake.periodic.period), (7, 25));
+            for (effect, kind) in [
+                (Effect::Damper { coeff: 1 }, SDL_HAPTIC_DAMPER),
+                (Effect::Friction { coeff: 1 }, SDL_HAPTIC_FRICTION),
+            ] {
+                let e = super::sdl_effect(effect);
+                assert_eq!(e.r#type.0, kind.0);
+                assert_eq!(e.condition.center, [0; 3]);
+            }
+        }
     }
 
     /// A virtual Xbox-style pad with a gyro, an accelerometer, body and
@@ -342,6 +629,79 @@ mod tests {
             SDL_DetachVirtualJoystick(id);
             ctx.poll_gamepads(1.0 / 60.0);
             assert!(ctx.input.gamepads().is_empty(), "removed");
+
+            // A virtual wheel: a joystick, with its axes, buttons and hat.
+            // Virtual devices have no force feedback, so effects are
+            // accepted and play nothing.
+            let desc = SDL_VirtualJoystickDesc {
+                r#type: SDL_JOYSTICK_TYPE_WHEEL.0 as u16,
+                vendor_id: 0x046d,
+                product_id: 0xc24f,
+                naxes: 4,
+                nbuttons: 20,
+                nhats: 1,
+                name: c"Virtual Test Wheel".as_ptr(),
+                ..SDL_VirtualJoystickDesc::default()
+            };
+            let id = SDL_AttachVirtualJoystick(&desc);
+            assert_ne!(id.0, 0, "attached");
+            let joystick = SDL_OpenJoystick(id);
+            assert!(!joystick.is_null());
+            ctx.poll_gamepads(1.0 / 60.0);
+            assert!(ctx.input.gamepads().is_empty(), "not a gamepad");
+            let wheels = ctx.input.joysticks().to_vec();
+            assert_eq!(wheels.len(), 1, "a joystick");
+            let wheel = wheels[0];
+            let info = ctx.input.joystick_info(wheel).unwrap().clone();
+            assert_eq!(info.name, "Virtual Test Wheel");
+            assert_eq!(info.kind, crate::input::JoystickKind::Wheel);
+            assert_eq!((info.axes, info.buttons, info.hats), (4, 20, 1));
+            assert_eq!(info.vendor_id, Some(0x046d));
+            assert!(!info.force_feedback.any(), "a virtual wheel has none");
+
+            SDL_SetJoystickVirtualAxis(joystick, 0, i16::MIN);
+            SDL_SetJoystickVirtualAxis(joystick, 2, i16::MAX);
+            SDL_SetJoystickVirtualButton(joystick, 19, true);
+            SDL_SetJoystickVirtualHat(joystick, 0, SDL_HAT_RIGHTDOWN);
+            ctx.input.begin_frame(0.0);
+            ctx.poll_gamepads(1.0 / 60.0);
+            assert_eq!(ctx.input.joystick_axis(wheel, 0), -1.0);
+            assert_eq!(ctx.input.joystick_axis(wheel, 2), 1.0);
+            assert!(ctx.input.joystick_down(wheel, 19));
+            assert_eq!(ctx.input.joystick_hat(wheel, 0), glam::IVec2::new(1, 1));
+            ctx.input.set_force_feedback(
+                wheel,
+                crate::input::ForceFeedback {
+                    spring: 1.0,
+                    ..crate::input::ForceFeedback::OFF
+                },
+            );
+            ctx.poll_gamepads(1.0 / 60.0);
+
+            // The device layer on its own: a joystick opens and closes, and
+            // effects on one without force feedback are accepted and play nothing.
+            let mut layer = Sdl::start().expect("a second user of SDL starts too");
+            let mut present = Vec::new();
+            layer.present_joysticks(&mut present);
+            assert!(present.contains(&id.0));
+            assert!(!layer.is_gamepad(id.0));
+            assert_eq!(layer.joystick_type(id.0), raw::JOYSTICK_WHEEL);
+            let opened = layer.open_joystick(id.0).expect("opens");
+            assert_eq!(opened.haptic, 0);
+            layer.haptic_effect(
+                id.0,
+                1,
+                Some(crate::gamepad_sdl::Effect::Spring { coeff: 1, center: 0 }),
+            );
+            layer.haptic_effect(id.0, 1, None);
+            layer.haptic_autocenter(id.0, 50);
+            layer.close_joystick(id.0);
+            drop(layer);
+
+            SDL_CloseJoystick(joystick);
+            SDL_DetachVirtualJoystick(id);
+            ctx.poll_gamepads(1.0 / 60.0);
+            assert!(ctx.input.joysticks().is_empty(), "removed");
         }
     }
 }
