@@ -1630,6 +1630,11 @@ struct SpriteJson {
     z: f32,
     pivot: glam::Vec2,
     region: Option<crate::camera::Rect>,
+    /// Written only when set, so unflipped sprites save as before.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    flip_x: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    flip_y: bool,
 }
 
 impl Default for SpriteJson {
@@ -1640,6 +1645,8 @@ impl Default for SpriteJson {
             z: 0.0,
             pivot: glam::Vec2::splat(0.5),
             region: None,
+            flip_x: false,
+            flip_y: false,
         }
     }
 }
@@ -1654,6 +1661,8 @@ fn sprite_json(world: &World, s: &crate::d2::Sprite) -> Option<Result<Value, Str
         z: s.z,
         pivot: s.pivot,
         region: s.region,
+        flip_x: s.flip_x,
+        flip_y: s.flip_y,
     };
     Some(serde_json::to_value(json).map_err(|err| err.to_string()))
 }
@@ -1673,6 +1682,8 @@ fn sprite_from_json(world: &World, value: Value) -> Result<crate::d2::Sprite, St
         z: json.z,
         pivot: json.pivot,
         region: json.region,
+        flip_x: json.flip_x,
+        flip_y: json.flip_y,
     })
 }
 

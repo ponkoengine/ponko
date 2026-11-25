@@ -195,6 +195,40 @@ fn sprites_are_saved_by_their_image_name_and_load_it() {
 }
 
 #[test]
+fn prefabs_and_saves_keep_a_sprites_flip() {
+    let file = TempAsset::new("test-prefab-flipped-crab.json");
+    let scene = TempAsset::new("test-scene-flipped-crab.json");
+    game().run_headless(0, |ctx| {
+        let crab = ctx.gfx.load_texture("crab.png");
+        let flipped = Sprite::new(crab).with_flip_x(true).with_flip_y(true);
+        let hero = ctx.world.spawn((Transform2D::default(), flipped.with_flip_y(false)));
+        let plain = ctx.world.spawn((Transform2D::default(), Sprite::new(crab)));
+        ctx.assets.save_prefab(&ctx.world, hero, file.name()).unwrap();
+        // Unflipped sprites save as before: no flip fields at all.
+        let json = ctx.world.entity_json(plain).unwrap();
+        assert!(json["Sprite"].get("flip_x").is_none(), "{json}");
+        // A scene keeps both flips.
+        ctx.world.despawn(plain);
+        ctx.world.despawn(hero);
+        ctx.world.spawn((Transform2D::default(), flipped));
+        ctx.assets.save_scene(&ctx.world, scene.name()).unwrap();
+    });
+    let text = file.read();
+    assert!(text.contains(r#""flip_x": true"#), "{text}");
+    game().run_headless(0, |ctx| {
+        let e = ctx.spawn_prefab(file.name(), vec2(5.0, 5.0)).unwrap();
+        let sprite = *ctx.world.get::<Sprite>(e).unwrap();
+        assert!(sprite.flip_x && !sprite.flip_y, "{sprite:?}");
+    });
+    let mut world = game().run_headless(0, |ctx| {
+        ctx.gfx.load_texture("crab.png");
+        ctx.load_scene(scene.name()).unwrap();
+    });
+    let flips: Vec<_> = world.query::<&Sprite>().iter().map(|s| (s.flip_x, s.flip_y)).collect();
+    assert_eq!(flips, [(true, true)]);
+}
+
+#[test]
 fn sprites_of_textures_made_in_code_are_left_out_of_saves() {
     game().run_headless(0, |ctx| {
         let made = ctx.gfx.create_texture(1, 1, &[255; 4]);

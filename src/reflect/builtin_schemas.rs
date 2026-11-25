@@ -424,6 +424,8 @@ pub(super) fn sprite() -> ValueSchema {
         ("z", Number),
         ("pivot", Vec2),
         ("region", ValueSchema::optional(rect())),
+        ("flip_x", Bool),
+        ("flip_y", Bool),
     ])
 }
 #[cfg(feature = "3d")]
