@@ -1,0 +1,23 @@
+Ponko (formerly Crabby Engine)
+Copyright 2026 Leon Mamić
+
+Created and maintained by Leon Mamić, with contributions from the
+Ponko contributors.
+https://github.com/ponkoengine/ponko
+
+Third-party code
+----------------
+
+The `ponko` crate contains the SMAA anti-aliasing shader and its lookup
+tables (src/render/smaa/), adapted from the smaa-rs crate:
+
+  SMAA: Copyright (C) 2013 Jorge Jimenez, Jose I. Echevarria, Belen Masia,
+  Fernando Navarro and Diego Gutierrez. MIT license; the full notice is in
+  the header of src/render/smaa/SMAA.hlsl.
+
+  smaa-rs: Copyright (c) 2018 Jonathan Behrens. MIT license; see
+  src/render/smaa/LICENSE.
+
+Libraries that Ponko depends on are under their own licenses. The C library
+archives of each release list them, with their license texts, in
+THIRD-PARTY-NOTICES.txt.
