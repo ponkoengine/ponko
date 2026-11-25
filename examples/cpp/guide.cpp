@@ -3547,21 +3547,24 @@ static void build_shop(ponko::ctx& ctx) {
 
 // ANCHOR: shop_events
 static void shop_events(ponko::ctx& ctx) {
-    // The UI ran before this system. Nodes are found by name.
+    // The UI ran before this system. Names are looked up only when something
+    // was clicked, not every frame; try_find(..).value() throws, listing the
+    // names, for one that isn't there.
     auto tree = ctx.ui_retained();
-    auto clicked = tree.take_click();
-    const std::string name = clicked ? tree.name(*clicked) : "";
-    const ui::id buy = *tree.find("buy");
-    if (name.rfind("item.", 0) == 0) {
-        const std::string item = name.substr(5);
-        tree.set_enabled(buy, true);
-        tree.set_text(buy, ("Buy item " + item).c_str());
-        tree.set_text(*tree.find("message"), ("Buy item " + item + "?").c_str());
-    } else if (name == "buy") {
-        tree.push_modal(*tree.find("dialog"));
-    } else if (name == "confirm" || name == "cancel") {
-        tree.pop_screen();
-        if (name == "confirm") tree.set_text(*tree.find("title"), "Purchase complete!");
+    if (const auto clicked = tree.take_click()) {
+        const std::string name = tree.name(*clicked);
+        const ui::id buy = tree.try_find("buy").value();
+        if (name.rfind("item.", 0) == 0) {
+            const std::string item = name.substr(5);
+            tree.set_enabled(buy, true);
+            tree.set_text(buy, ("Buy item " + item).c_str());
+            tree.set_text(tree.try_find("message").value(), ("Buy item " + item + "?").c_str());
+        } else if (name == "buy") {
+            tree.push_modal(tree.try_find("dialog").value());
+        } else if (name == "confirm" || name == "cancel") {
+            tree.pop_screen();
+            if (name == "confirm") tree.set_text(tree.try_find("title").value(), "Purchase complete!");
+        }
     }
     // Tab/arrows or d-pad navigate; Enter/South confirms; Escape/East pops the
     // top screen. A modal screen also owns the pointer outside it.
@@ -5151,6 +5154,13 @@ int main() {
         load_mixer_settings(ctx, saved);
         if (ctx.audio_bus_volume(world) != 0.4f || ctx.audio_bus_gain(world) != 0.4f) std::abort();
         if (ctx.start_audio_snapshot("missing", 0.0f) || ctx.audio_snapshot_weight("underwater") != 0.0f) std::abort();
+        // Resolved once, then used by handle and id; a typo says which names exist.
+        if (ctx.find_audio_bus("world").value().index != world.index) std::abort();
+        if (const auto typo = ctx.find_audio_bus("wrold"); typo || std::string(typo.error().what()).find("known: ") == std::string::npos) std::abort();
+        const ponko::audio_snapshot_id underwater = ctx.audio_snapshot_id("underwater").value();
+        if (!ctx.start_audio_snapshot(underwater, 0.0f) || ctx.audio_snapshot_weight(underwater) != 1.0f) std::abort();
+        ctx.stop_audio_snapshot(underwater, 0.0f);
+        if (ctx.audio_snapshot_weight(underwater) != 0.0f || ctx.audio_snapshot_id("underwatr")) std::abort();
         ctx.apply_audio_mixer_json(R"({"buses": [{"name": "voices", "parent": "master"}]})");
         if (ctx.audio_bus_muted(ctx.audio_bus("voices"))) std::abort();
     });
@@ -5417,6 +5427,11 @@ int main() {
     ctx.set_skeleton2d(puppet, "hero/hero.json");
     ctx.skeleton2d_play(puppet, "walk");
     // ANCHOR_END: skeleton2d_play
+    // ANCHOR: skeleton2d_clip_ids
+    const std::size_t run = ctx.skeleton2d_clip_index(puppet, "run"); // once: throws, listing the clips, for a typo
+    ctx.skeleton2d_crossfade_index(puppet, run, 0.2f);                // no lookup
+    ctx.skeleton2d_play_index(puppet, run);
+    // ANCHOR_END: skeleton2d_clip_ids
     // ANCHOR: skeleton2d_events
     while (auto event = ctx.skeleton2d_next_event(puppet)) {
         if (*event == "step") {

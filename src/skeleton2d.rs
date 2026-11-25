@@ -89,8 +89,8 @@ pub use clip::{
     SlotTrack, TransformTrack,
 };
 pub use data::{
-    Attachment, Bone, BonePose, ClippingMask, IkConstraint, MeshVertex, SkeletonData, SkeletonError, SkinnedMesh, Slot,
-    SpritePart, TransformConstraint,
+    Attachment, Bone, BonePose, ClipId, ClipRef, ClippingMask, IkConstraint, MeshVertex, SkeletonData, SkeletonError,
+    SkinnedMesh, Slot, SpritePart, TransformConstraint,
 };
 pub(crate) use draw::draw_skeletons;
 pub use graph::{SkeletonGraph, SkeletonMotion, SkeletonState};

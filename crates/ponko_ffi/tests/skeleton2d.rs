@@ -204,6 +204,7 @@ fn clips_play_crossfade_and_finish() {
             ponko_ctx_skeleton2d_play(ctx, e, c"fly".as_ptr(), true),
             PONKO_NOT_FOUND
         );
+        assert_eq!(last_error(), r#"unknown animation clip "fly" (known: idle, wave)"#);
         assert_eq!(
             ponko_ctx_skeleton2d_crossfade(ctx, e, c"idle".as_ptr(), -1.0),
             PONKO_INVALID_ARGUMENT
@@ -241,6 +242,15 @@ fn the_state_machine_takes_checked_parameters_and_states() {
         assert_eq!(
             ponko_ctx_skeleton2d_state_index(ctx, e, c"swim".as_ptr(), &mut i),
             PONKO_NOT_FOUND
+        );
+        assert_eq!(last_error(), r#"unknown animation state "swim" (known: idle, wave)"#);
+        assert_eq!(
+            ponko_ctx_skeleton2d_parameter_index(ctx, e, c"sped".as_ptr(), &mut i),
+            PONKO_NOT_FOUND
+        );
+        assert_eq!(
+            last_error(),
+            r#"unknown animation parameter "sped" (known: grounded, jump, speed)"#
         );
 
         assert_eq!(ponko_ctx_skeleton2d_set_float(ctx, e, speed, 2.0), PONKO_OK);
@@ -473,5 +483,40 @@ fn entities_without_a_skeleton_are_not_found() {
             PONKO_INVALID_ARGUMENT
         );
         assert_eq!(ponko_ctx_remove_skeleton2d(ctx, dead), PONKO_INVALID_ARGUMENT);
+    });
+}
+
+#[test]
+fn clips_resolved_once_play_by_index() {
+    run_ctx(|ctx| unsafe {
+        files(ctx);
+        let e = rigged(ctx);
+        let wave = index(ponko_ctx_skeleton2d_clip_index, ctx, e, c"wave");
+        let idle = index(ponko_ctx_skeleton2d_clip_index, ctx, e, c"idle");
+        assert_eq!((idle, wave), (0, 1));
+        assert_eq!(ponko_ctx_skeleton2d_play_index(ctx, e, wave, false), PONKO_OK);
+        assert_eq!(ponko_ctx_skeleton2d_update(ctx, e, 0.5), PONKO_OK);
+        near(bone(ctx, e, 0).0.x, 5.0);
+        assert_eq!(ponko_ctx_skeleton2d_update(ctx, e, 0.6), PONKO_OK);
+        assert!(state(ctx, e).2, "played once, finished");
+        assert_eq!(ponko_ctx_skeleton2d_crossfade_index(ctx, e, idle, 0.5), PONKO_OK);
+        assert_eq!(ponko_ctx_skeleton2d_update(ctx, e, 0.25), PONKO_OK);
+        near(bone(ctx, e, 0).0.x, 5.0);
+        assert_eq!(ponko_ctx_skeleton2d_play_index(ctx, e, 7, true), PONKO_NOT_FOUND);
+        assert_eq!(ponko_ctx_skeleton2d_crossfade_index(ctx, e, 7, 0.1), PONKO_NOT_FOUND);
+        assert_eq!(
+            ponko_ctx_skeleton2d_crossfade_index(ctx, e, idle, -1.0),
+            PONKO_INVALID_ARGUMENT
+        );
+        let mut i = 0;
+        assert_eq!(
+            ponko_ctx_skeleton2d_clip_index(ctx, e, c"wve".as_ptr(), &mut i),
+            PONKO_NOT_FOUND
+        );
+        assert_eq!(last_error(), r#"unknown animation clip "wve" (known: idle, wave)"#);
+        assert_eq!(
+            ponko_ctx_skeleton2d_clip_index(ctx, e, c"wave".as_ptr(), null_mut()),
+            PONKO_INVALID_ARGUMENT
+        );
     });
 }

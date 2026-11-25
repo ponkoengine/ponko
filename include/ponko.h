@@ -4995,6 +4995,10 @@ enum PonkoStatus ponko_ctx_audio_bus(struct PonkoCtx *ctx,
                                      const char *name,
                                      struct PonkoAudioBus *out_bus);
 
+enum PonkoStatus ponko_ctx_audio_find_bus(struct PonkoCtx *ctx,
+                                          const char *name,
+                                          struct PonkoAudioBus *out_bus);
+
 enum PonkoStatus ponko_ctx_set_audio_bus_volume(struct PonkoCtx *ctx,
                                                 struct PonkoAudioBus bus,
                                                 float volume);
@@ -5096,6 +5100,18 @@ enum PonkoStatus ponko_ctx_stop_audio_snapshot(struct PonkoCtx *ctx, const char 
 enum PonkoStatus ponko_ctx_audio_snapshot_weight(struct PonkoCtx *ctx,
                                                  const char *name,
                                                  float *out_weight);
+
+enum PonkoStatus ponko_ctx_audio_snapshot_id(struct PonkoCtx *ctx,
+                                             const char *name,
+                                             uint32_t *out_id);
+
+enum PonkoStatus ponko_ctx_start_audio_snapshot_id(struct PonkoCtx *ctx, uint32_t id, float fade);
+
+enum PonkoStatus ponko_ctx_stop_audio_snapshot_id(struct PonkoCtx *ctx, uint32_t id, float fade);
+
+enum PonkoStatus ponko_ctx_audio_snapshot_weight_id(struct PonkoCtx *ctx,
+                                                    uint32_t id,
+                                                    float *out_weight);
 
 enum PonkoStatus ponko_ctx_load_audio_mixer(struct PonkoCtx *ctx, const char *path);
 
@@ -7647,6 +7663,21 @@ enum PonkoStatus ponko_ctx_skeleton2d_crossfade(struct PonkoCtx *ctx,
                                                 const char *clip,
                                                 float duration);
 
+enum PonkoStatus ponko_ctx_skeleton2d_clip_index(struct PonkoCtx *ctx,
+                                                 uint64_t entity_bits,
+                                                 const char *name,
+                                                 size_t *out_clip);
+
+enum PonkoStatus ponko_ctx_skeleton2d_play_index(struct PonkoCtx *ctx,
+                                                 uint64_t entity_bits,
+                                                 size_t clip,
+                                                 bool looping);
+
+enum PonkoStatus ponko_ctx_skeleton2d_crossfade_index(struct PonkoCtx *ctx,
+                                                      uint64_t entity_bits,
+                                                      size_t clip,
+                                                      float duration);
+
 enum PonkoStatus ponko_ctx_skeleton2d_crossfade_state(struct PonkoCtx *ctx,
                                                       uint64_t entity_bits,
                                                       size_t state,
@@ -9163,6 +9194,11 @@ enum PonkoStatus ponko_ctx_ui_find(struct PonkoCtx *ctx,
                                    const char *name,
                                    uint64_t *out_id);
 
+enum PonkoStatus ponko_ctx_ui_try_find(struct PonkoCtx *ctx,
+                                       uint64_t target,
+                                       const char *name,
+                                       uint64_t *out_id);
+
 enum PonkoStatus ponko_ctx_ui_name(struct PonkoCtx *ctx,
                                    uint64_t target,
                                    uint64_t id,
@@ -10661,6 +10697,14 @@ enum PonkoStatus ponko_ctx_set_touch_control_shown(struct PonkoCtx *ctx,
 enum PonkoStatus ponko_ctx_touch_control_center(struct PonkoCtx *ctx,
                                                 const char *action,
                                                 struct PonkoVec2 *out_center);
+
+enum PonkoStatus ponko_ctx_set_touch_control_shown_id(struct PonkoCtx *ctx,
+                                                      uint32_t action,
+                                                      bool shown);
+
+enum PonkoStatus ponko_ctx_touch_control_center_id(struct PonkoCtx *ctx,
+                                                   uint32_t action,
+                                                   struct PonkoVec2 *out_center);
 
 enum PonkoStatus ponko_input_scenario_touch(struct PonkoInputScenario *scenario,
                                             uint64_t tick,

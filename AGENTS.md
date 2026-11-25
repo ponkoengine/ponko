@@ -16,7 +16,7 @@ Rules for any coding agent (Claude Code, Codex, Cursor, ...) working in this rep
 3. **Everything reaches `main` through a pull request.** Never push to `main` and never merge locally into `main`.
    - **One PR per big chunk of work**, not per small feature or fix: keep committing and pushing on the branch, and open the PR when a whole part is done (for example a milestone's worth: reflection + control endpoint + MCP server). Don't stack many small PRs.
    - Open the PR with `gh pr create --base main`. The body says what changed and how it was verified (commands run, on which OS, benchmark numbers).
-   - **There is no CI.** Nothing runs on a pull request or on `main` by itself: you run the checks on your own machine before the PR is merged. The quick ones are in [Integration checks](#integration-checks); the full list, with the platform and toolchain each needs, is `scripts/checks.yml` (a document nothing executes). For risky platform changes, run the affected jobs on macOS, Windows and Linux, or ask a maintainer who has the machine.
+   - **There is no CI.** Nothing runs on a pull request or on `main` by itself: you run the checks on your own machine before the PR is merged. The quick ones are in [Integration checks](#integration-checks); run the applicable jobs from `scripts/checks.yml` with `python3 scripts/run-checks.py`. For risky platform changes, run the affected jobs on macOS, Windows and Linux, or ask a maintainer who has the machine.
    - Merge with `gh pr merge --squash --delete-branch` once the checks pass, then `git switch main && git pull`. A PR doesn't have to be rebased on the newest `main` to merge.
    - `main` is protected: a pull request is required and history stays linear (squash merges). Never bypass protection, even as admin.
    - If a check fails, fix it on the branch and push again; don't merge red. If something on `main` is found broken, fixing it comes first: open a fix PR right away.
@@ -53,26 +53,26 @@ For docs-only changes, check Markdown, links and the book when affected; no
 workspace rebuild is needed unless executable examples or code changed.
 
 For code changes, maintainers and coding agents run the relevant full checks
-before declaring the PR ready to merge (not before every intermediate commit):
+before declaring the PR ready to merge. Use the local inventory runner.
 
 ```sh
-cargo fmt --all --check
-cargo build --workspace --examples
-cargo test --workspace
-cargo clippy --workspace --all-targets
-python3 scripts/collect-panics.py --check   # every panic site has a reviewed decision
-python3 scripts/maturity.py                 # every guide chapter and top-level module has a maturity level
-python3 scripts/check-feature-coverage.py   # every cargo feature has clippy and test lines in checks.yml
-python3 scripts/check-unsafe.py             # every unsafe item outside the ECS has a test
-python3 scripts/check-ffi-ownership.py      # every C function says who owns its pointers
+python3 scripts/run-checks.py --list
+python3 scripts/run-checks.py --quick
+python3 scripts/run-checks.py --job test --job test-features
+python3 scripts/run-checks.py
 ```
 
-If you add or change a cargo feature, or a web smoke runner, give it its lines
-in `scripts/checks.yml` (the list of checks) and run the last command;
-CONTRIBUTING.md, "Adding or changing a cargo feature", has the details. Also
-run the feature's own lines locally, for example
-`cargo clippy -p ponko --features video` and
-`cargo test -p ponko --features video --test video`.
+Review skipped checks and failures in `target/check-results/summary.txt`. The
+full failure output is in `results.json` alongside it. Windowed checks require
+explicit opt-in. See [Local checks](CONTRIBUTING.md#local-checks) for tools and
+nightly scheduling.
+
+If you add or change a Cargo feature or a web smoke runner, give it its lines
+in `scripts/checks.yml` and run `python3 scripts/check-feature-coverage.py`.
+Run the feature's own commands locally. CONTRIBUTING.md, "Adding or changing
+a cargo feature", has the details. Use the relevant inventory checks for
+changes to the panic audit, maturity levels, unsafe code and C pointer
+ownership.
 
 `collect-panics.py --check` fails for a new or changed `panic!`, `assert!`,
 `unwrap` or `expect` in the engine or ECS production code. Review the site

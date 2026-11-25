@@ -465,7 +465,8 @@ physics = ["dep:rapier2d"]
 # queries, a character controller. Off: no rapier3d in the build.
 physics3d = ["3d", "dep:rapier3d"]
 # Networking over Steam (`Net` and `NetMessages`): Steam's relays
-# and lobbies, so friends join from the overlay. Re-exports `steamworks`.
+# and lobbies, so friends join from the overlay. Ponko's own Steam types;
+# the raw `steamworks` crate is `net::unstable_steamworks` (unstable).
 # Ship the Steamworks redistributable (libsteam_api) next to the game.
 steam = ["dep:steamworks"]
 # Physics that gives bit-identical results on every platform (for lockstep
