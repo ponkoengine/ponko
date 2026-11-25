@@ -16,3 +16,5 @@
 - The docs step of `scripts/checks.yml` documents `ponko` with `mods-wasm`,
   as docs.rs does; without it the code mod links in `ponko::mods` failed
   the step.
+- The C++ wrapper test of allocation counts passes in a Release build: clang
+  removed its `new`/`delete` pair there, so nothing was counted.
