@@ -51,6 +51,8 @@ UNSTABLE_NOTE = '/* Unstable:'
 SECTION = re.compile(r'^\[([\w./-]+\.md)\]\s+(\S.*)$')
 ATTRS = re.compile(r'^(?:#\[[^\]]*(?:\[[^\]]*\][^\]]*)*\]\s*)+')
 PATH = re.compile(r'(?<![\w:])([a-z_][a-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)+)')
+KEYWORDS = {'pub', 'fn', 'const', 'unsafe', 'async', 'extern', 'c', '"C"', 'struct', 'enum',
+            'union', 'trait', 'type', 'static', 'mut', 'macro', 'mod', 'use', 'auto'}
 TYPE_KINDS = ('struct', 'enum', 'mod', 'trait', 'type', 'union')
 
 
@@ -140,8 +142,16 @@ def line_path(line):
                 top.append(i)
         if top:
             rest = rest[top[-1] + 5:]
-    match = PATH.search(line if not line.startswith('impl') else rest)
-    return match.group(1) if match else None
+    if line.startswith('impl'):
+        match = PATH.search(rest)
+        return match.group(1) if match else None
+    match = PATH.search(line)
+    # The item's own path comes right after the keywords; a path further in
+    # is a parameter (`pub fn F::run_if(self, ponko::x::Y)` is a method of a
+    # generic type, not of `ponko::x::Y`).
+    if not match or any(w not in KEYWORDS for w in line[:match.start()].split()):
+        return None
+    return match.group(1)
 
 
 def covers(entry, path):
@@ -432,6 +442,8 @@ def selftest():
     assert line_path('#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_hdr_status(*mut ponko_ffi::PonkoCtx)') \
         == 'ponko_ffi::ponko_ctx_hdr_status'
     assert line_path('pub mod ponko') is None
+    assert line_path('pub fn F::run_if<W>(self, impl ponko::render::HdrOutput) -> Self') is None, \
+        'a parameter is not the item'
 
     entries = ['ponko::render::HdrOutput', 'ponko::net::rtc', 'ponko::game::Game::hdr_output']
     listing = ('pub fn ponko::game::Game::hdr_output(self, ponko::render::HdrOutput) -> Self\n'
