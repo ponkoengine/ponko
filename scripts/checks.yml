@@ -99,6 +99,8 @@ jobs:
         run: python3 scripts/check-cpp-api.py
       - name: Check runner self-tests
         run: python3 scripts/run-checks.py --selftest
+      - name: Public API by use
+        run: python3 scripts/api-usage.py selftest && python3 scripts/api-usage.py check
       - name: Workspace Rust formatting
         run: cargo fmt --all --check
       # The Bevy comparison scenes are a crate of their own, outside the

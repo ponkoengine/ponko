@@ -1,0 +1,102 @@
+# What was decided for each public item that nothing calls (#508), read by
+# `scripts/api-usage.py report` into scripts/api-usage.md.
+#
+# One line per item: `<path> <decision>`. A module path decides for every
+# item of the module without a line of its own. The decision starts with
+# **use**, **unstable**, **remove** or **keep**:
+#   use       a real use was added (a test, recipe or game calls it now);
+#             the item then drops out of the list, so few lines say it
+#   unstable  renamed `unstable_` (the old name deprecated for one minor)
+#   remove    gone, with a `**Breaking:**` changelog entry and a migration note
+#   keep      part of a type's shape that callers need even if no one calls
+#             it by name yet; the reason says what it is for
+#
+# Items the first pass gave a real use (tests that call them by name now):
+# controllers and joysticks, snapshot buffers, clock sync, latest-wins
+# filters, prediction numbering, replicated i8 and quaternion fields, AI
+# trees and considerations, plural tables, value schemas, world hash parts,
+# tile animations, waves and currents, camera shake, rigs and pixel
+# snapping, 2D skeleton graphs, rest slots, shear and constraint lookups,
+# the UI's read-back and cut, touch control places and styles, frame
+# budgets and collider streaming.
+
+# ---- constants: limits, defaults and every-value lists --------------------
+ponko::anim::HumanBone::ALL **keep**: every humanoid bone, for retargeting tools that walk them all
+ponko::assets::DEFAULT_GROUP_FRAME_BUDGET_MS **keep**: the documented default a game's own budget is compared with
+ponko::audio::DEFAULT_PRIORITY **keep**: the documented default of `Audio::set_priority`
+ponko::camera::RenderLayers::NONE **keep**: the empty layer set, the identity for building masks
+ponko::d2::Camera::ZOOM_LIMITS **keep**: the zoom range the camera clamps to, for a game's zoom slider
+ponko::d3::NavConvexPolygon::MAX_POINTS **keep**: a documented limit callers check before building a polygon
+ponko::d3::NodeBody::ALL **keep**: every glTF body kind, in the guide's order, for exporters and editors
+ponko::d3::NodeCollider::ALL **keep**: every glTF collider shape, in the guide's order, for exporters and editors
+ponko::d3::VIEW_MODEL_LAYER **keep**: the layer `ViewModel::default` draws on, so a game keeps its own layers off it
+ponko::d3::Vehicle::MAX_WHEELS **keep**: a documented limit callers check before adding wheels
+ponko::game::Systems::UPDATE_CAMERA_RIGS **keep**: names a built-in system so a game can order its own around it
+ponko::input::MAX_JOYSTICK_AXES **keep**: a documented limit of the joystick state
+ponko::mods::MANIFEST **keep**: the manifest's file name, for mod tools that write one
+ponko::render::Crowd::NONE **keep**: the empty handle, like every other handle's `NONE`
+ponko::render::ReceivesDecals::ALL **keep**: the default (every decal), named for a game that sets it back
+ponko::render::SkyShader::NONE **keep**: the empty handle, like every other handle's `NONE`
+ponko::schedule::DEFAULT_PARALLEL_THRESHOLD **keep**: the documented default of `Game::parallel_threshold`
+ponko::storage::ENV_DATA_DIR **keep**: the environment variable's name, for launchers and tests that set it
+ponko::streaming::ResidencyKind::ALL **keep**: every kind in a fixed order, for budget tables
+ponko::tilemap::AutoTile::NW **keep**: one of the eight-neighbour bits; its siblings are used, the set is the shape
+ponko::tilemap::AutoTile::S8 **keep**: one of the eight-neighbour bits; its siblings are used, the set is the shape
+ponko::tilemap::AutoTile::SW **keep**: one of the eight-neighbour bits; its siblings are used, the set is the shape
+ponko::tilemap::AutoTile::W8 **keep**: one of the eight-neighbour bits; its siblings are used, the set is the shape
+
+# ---- accessors that read back what a called setter or builder set --------
+ponko::anim::Animator::layer_count **keep**: reads back `add_layer`
+ponko::audio::Audio::bus_name **keep**: reads back `bus`, for a mixer screen
+ponko::audio::Audio::chosen_output_device **keep**: reads back `set_output_device`, for a settings screen
+ponko::audio::Song::beats_per_bar **keep**: reads back the song's builder, for music-synced gameplay
+ponko::audio::Song::bpm **keep**: reads back the song's builder, for music-synced gameplay
+ponko::audio::Song::song_volume **keep**: reads back the song's builder
+ponko::crash::CrashReports::is_on **keep**: reads back whether reports are on, for a privacy screen
+ponko::d3::Physics::velocity_at **keep**: a body's point velocity, the counterpart of the called `velocity`; water floats bodies with it
+ponko::debug::DebugView::from_name **keep**: the inverse of the called `name`, for console commands
+ponko::mods::ModValue::as_i32 **keep**: one of the `as_*` family, the others are called
+ponko::net::NetMessages::is_on_game_clock **keep**: reads back `game_clock`
+ponko::net::Replicated::is_global **keep**: reads back `global`
+ponko::perf::Budget::frame_max_ms **keep**: one of the budget limits; a worst-frame limit makes a flaky test on a shared machine, so the guide shows the average and p99 ones
+ponko::perf::GpuMemory::total_mb **keep**: the total the GPU budget compares, for a game's own overlay
+ponko::prelude::Ui::set_label_fit **keep**: the setter of the called `UiBuilder::label_fit`, for a node built earlier
+ponko::prelude::Ui::set_label_vertical_center **keep**: the setter of the called `UiBuilder::label_vertical_center`
+ponko::prelude::Ui::set_texture_state_tint **keep**: the setter of the called `UiBuilder::texture_state_tint`
+ponko::render::CrowdAnimation::clip_count **keep**: reads back the baked clips
+ponko::render::CrowdAnimation::try_clip **keep**: the error-returning form of the called `clip`, like every `try_*`
+ponko::render::GpuFeature::is_3d **keep**: groups the tier report's features, for a game's own GPU screen
+ponko::render::GpuTier::forced **keep**: reads the `PONKO_GPU_TIER` override, for a game that shows it
+ponko::render::InstanceCellData::with_colors **keep**: per-instance colours of an instance cell, the builder the called ones complete
+ponko::render::PipelineStats::hit_rate **keep**: the summary of the called pipeline stats, for overlays
+ponko::server::StopHandle::is_stopping **keep**: reads back `stop`, for a server's own loop
+ponko::ui::UiTimeline::repeats **keep**: reads back the timeline's repeat setting
+ponko::gfx::Graphics::try_load_cameras **keep**: the error-returning form of the called `load_cameras`, like every `try_*`
+ponko::gfx::Graphics::try_load_sky_shader **keep**: the error-returning form of the called `load_sky_shader`, like every `try_*`
+ponko::gfx::Graphics::load_system_font **keep**: the panicking form of the called `try_load_system_font` (behind `system-fonts`), like every `load_*`
+
+# ---- parts of a feature's shape -------------------------------------------
+ponko::d3::Physics::collider_streaming **keep**: reads back `stream_colliders`; the collider streaming test calls it
+ponko::net::Replication::to_client **keep**: the one-client form of the called `to_clients`; the server's reply to one player
+ponko::net::SteamClient::run_callbacks **keep**: the Steam pump, for a game that drives Steam itself (#385 area)
+ponko::water::Buoyancy::forces **keep**: the per-body step `float_bodies` runs, for a game with physics of its own
+ponko::water::float_bodies **keep**: the system the water plugin schedules, named so a game can order around it
+ponko::window::HeadlessWindow **keep**: the inert window backend, for a game's own `WindowBackend` tests
+ponko::ui::UiAccessAdapter::set_window_bounds **keep**: AT-SPI on Linux needs the window's place; the window glue calls it, a game with its own window does too
+
+# ---- net protocol constants (relay, STUN): their area is #486 ------------
+ponko::net::lobby::protocol::CONTROL **keep**: the relay's wire format, for a relay of the game's own (#486 area)
+ponko::net::lobby::protocol::RELAY_HEADER **keep**: the relay's wire format, for a relay of the game's own (#486 area)
+ponko::net::stun::DEFAULT_PORT **keep**: STUN's wire format, for a server sharing its port (#486 area)
+ponko::net::stun::MAGIC_COOKIE **keep**: STUN's wire format, for a server sharing its port (#486 area)
+ponko::net::stun::is_binding_request **keep**: lets a game server answer STUN on its own port (#486 area)
+ponko::net::stun::is_stun **keep**: lets a game server tell STUN from game packets on one port (#486 area)
+
+# ---- the C ABI: constants and enums C callers use -------------------------
+ponko_ffi **keep**: a constant or enum of the C header that the C examples and the C++ wrapper don't name (they pass the values); C games use them through `ponko.h`
+
+# ---- other crates ----------------------------------------------------------
+ponko_lobby::FillBySize **keep**: the default matchmaking rule, named so a server can wrap or replace it (#486 area)
+ponko_mcp::default_instances_dir **keep**: where games register, for tools that list them without the server
+ponko_unity::Project::guid_of **keep**: the reverse of the called GUID lookup, for importer tools (#431 area)
+ponko_unity::Value::as_map **keep**: one of the `as_*` family, the others are called (#431 area)

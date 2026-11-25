@@ -4,11 +4,14 @@
     api-usage.py report            # write scripts/api-usage.md (the list by module)
     api-usage.py report --stdout   # print it instead
     api-usage.py item <path>       # where one item is called, file by file
+    api-usage.py check             # every decision names an item, with a known word
     api-usage.py selftest          # the parsing and matching, with made-up input
 
 The freeze review (#478) looks at names and shapes. This looks at use: an
 item that no example, reference game, cookbook recipe, guide snippet, test
-or binding calls is unproven, and after 1.0 it has to be kept anyway.
+or binding calls is unproven, and after 1.0 it has to be kept anyway. What
+was decided for each one (a use added, renamed `unstable_`, removed, or kept
+with a reason) is in scripts/api-usage-decisions.txt, and the report shows it.
 
 Items come from the API snapshots in api/ (scripts/api-snapshots.py), the
 covered API of every published crate: types, traits, functions, methods,
@@ -555,8 +558,9 @@ def render(results, apart, decisions):
         out.append('')
     out += ['## Ambiguous', '',
             'Their name is called somewhere, but only on a type it may not be (several types have',
-            'a member of that name, and the file never names this one). Checked by hand when',
-            'deciding; listed so a reviewer can check again.', '']
+            'a member of that name, and the file never names this one). Most are called through a',
+            'value whose type the file doesn\'t spell out; not checked one by one, so the freeze',
+            'review can look at any it doubts with `api-usage.py item <path>`.', '']
     modules = defaultdict(list)
     for path in by_status['ambiguous']:
         modules[module_of(path)].append(path)
@@ -567,18 +571,38 @@ def render(results, apart, decisions):
     return '\n'.join(out) + '\n'
 
 
-def load_decisions():
-    path = ROOT / 'scripts' / 'api-usage-decisions.txt'
+DECISIONS = ROOT / 'scripts' / 'api-usage-decisions.txt'
+DECISION_WORDS = ('**use**', '**unstable**', '**remove**', '**keep**')
+
+
+def parse_decisions(text):
+    """{item or module path: decision} from the decisions file's text."""
     decisions = {}
-    if not path.exists():
-        return decisions
-    for line in path.read_text(encoding='utf-8').splitlines():
+    for line in text.splitlines():
         line = line.strip()
         if not line or line.startswith('#'):
             continue
-        item, _, text = line.partition(' ')
-        decisions[item] = text.strip()
+        item, _, decision = line.partition(' ')
+        decisions[item] = decision.strip()
     return decisions
+
+
+def load_decisions():
+    return parse_decisions(DECISIONS.read_text(encoding='utf-8')) if DECISIONS.exists() else {}
+
+
+def decision_errors(decisions, paths):
+    """What is wrong with `decisions` for the covered item `paths`: a key
+    that is neither an item nor a module of one, or a decision without a
+    known first word."""
+    modules = {module_of(p) for p in paths}
+    errors = []
+    for key, decision in decisions.items():
+        if key not in paths and key not in modules:
+            errors.append(f'{key}: not a covered item or module (renamed, removed or experimental?)')
+        if not decision.startswith(DECISION_WORDS):
+            errors.append(f'{key}: the decision starts with one of {", ".join(DECISION_WORDS)}')
+    return errors
 
 
 def main(argv):
@@ -602,6 +626,15 @@ def main(argv):
         for f, k in sorted(files.items()):
             print(f'  {k:8} {f}')
         return 0
+    if command == 'check':
+        covered, _, _ = load_items()
+        paths = {p for items in covered.values() for p in items}
+        errors = decision_errors(load_decisions(), paths)
+        for e in errors:
+            print(f'api-usage.py: {DECISIONS.relative_to(ROOT)}: {e}')
+        if not errors:
+            print(f'api-usage.py: {len(load_decisions())} decisions, each for a covered item or module')
+        return 1 if errors else 0
     if command == 'selftest':
         return selftest()
     print(__doc__)
@@ -609,6 +642,11 @@ def main(argv):
 
 
 def selftest():
+    decisions = parse_decisions('# a comment\n\nponko::a::B::c **keep**: why\nponko_ffi **use**\nponko::x::y oops\n')
+    assert decisions == {'ponko::a::B::c': '**keep**: why', 'ponko_ffi': '**use**', 'ponko::x::y': 'oops'}
+    errors = decision_errors(decisions, {'ponko::a::B::c', 'ponko_ffi::PONKO_X'})
+    assert errors == ['ponko::x::y: not a covered item or module (renamed, removed or experimental?)',
+                      'ponko::x::y: the decision starts with one of **use**, **unstable**, **remove**, **keep**'], errors
     assert parse_line('pub fn ponko::game::Game::new() -> Self') == ('fn', 'ponko::game::Game::new')
     assert parse_line('#[non_exhaustive] pub struct ponko::render::Camera') == ('type', 'ponko::render::Camera')
     assert parse_line('pub ponko::render::Camera::fov: f32') == ('field', 'ponko::render::Camera::fov')
