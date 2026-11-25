@@ -198,6 +198,11 @@ pub(super) enum Kind {
     /// The view model's see-through held items: as `Transparent`, but
     /// always writing the stencil, for they draw where it can be written.
     ViewModelBlended,
+    /// Screen-space reflections' normals: what the opaque pass draws, over
+    /// the prepass depth, writing each pixel's normal and roughness (see
+    /// `fs_normals`). Crowds and solid stencil materials are left out:
+    /// their pixels keep the depth's normal.
+    Normals,
 }
 
 impl Kind {
@@ -212,6 +217,7 @@ impl Kind {
             Kind::Capture => Pass::Capture,
             Kind::ViewModel => Pass::Opaque,
             Kind::ViewModelBlended => Pass::Transparent,
+            Kind::Normals => Pass::Opaque,
         }
     }
 }
@@ -244,7 +250,7 @@ impl Renderer3D {
             // holes (see `draw_pipeline`).
             return (!m.transparent).then_some(PipelineRole::OpaqueSolid);
         }
-        if stencil_solid && matches!(kind, Kind::Velocity | Kind::VelocityStill) {
+        if stencil_solid && matches!(kind, Kind::Velocity | Kind::VelocityStill | Kind::Normals) {
             return None;
         }
         PipelineRole::for_pass(
@@ -267,6 +273,9 @@ impl Renderer3D {
         kind: Kind,
         role: PipelineRole,
     ) -> Option<&'a wgpu::RenderPipeline> {
+        if kind == Kind::Normals {
+            return Some(shader.normals(variant));
+        }
         if kind == Kind::ViewModel && self.resources.material(id).cutout {
             return Some(match self.stencil.view_model_cutout(id, variant.instancing) {
                 Some(pipeline) => pipeline,
@@ -742,6 +751,43 @@ impl Renderer3D {
                     &self.lists.solid_runs,
                     Some(0),
                 );
+                // The reflections' normals, over the finished depth (see
+                // `fs_normals`): the trace's rays leave by them.
+                if self.screen.ssr.is_some()
+                    && let Some(images) = &targets.ssr
+                {
+                    passes::mark("reflection normals");
+                    let (view, resolve) = images.normals();
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("3d reflection normals"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view,
+                            depth_slice: None,
+                            resolve_target: resolve,
+                            ops: wgpu::Operations {
+                                // A zero normal: no surface (the sky,
+                                // crowds, solid stencil materials).
+                                load: wgpu::LoadOp::Clear(crate::render::ssr::NO_NORMAL),
+                                store: if resolve.is_some() {
+                                    wgpu::StoreOp::Discard
+                                } else {
+                                    wgpu::StoreOp::Store
+                                },
+                            },
+                        })],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &targets.depth,
+                            depth_ops: None,
+                            stencil_ops: None,
+                        }),
+                        timestamp_writes: time("reflection normals"),
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    pass.set_bind_group(0, &self.frame_bind_group, &[]);
+                    pass.set_bind_group(2, &self.no_scene, &[]);
+                    self.draw_solid(&mut pass, Kind::Normals);
+                }
                 // With every solid surface in it, the depth is complete here.
                 if self.solid_prepass {
                     self.record_occlusion(encoder, frame);

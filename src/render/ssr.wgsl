@@ -4,8 +4,9 @@
 // frame's opaque image, reprojected (this frame's isn't lit yet: the opaque
 // pass mixes the result into its reflection of the environment, by the
 // surface's roughness and with its Fresnel, see environment_light in
-// mesh.wgsl). Normals come from the depth, as there is no normal buffer: flat
-// faces, so normal maps don't bend these reflections.
+// mesh.wgsl). Rays leave by the normal the opaque pass lights the pixel
+// with (`surface_normals`, which follows normal maps); the depth's own shape, its
+// faces' normal, places their start and stands in where that is missing.
 //
 // How blurred a reflection is depends on the surface's roughness and on
 // how far the ray went: the reflected light comes from a cone, which is
@@ -84,6 +85,39 @@ fn scene_w(p: vec2<i32>, z: f32) -> f32 {
 }
 fn safe_normalize(v: vec3<f32>, fallback: vec3<f32>) -> vec3<f32> {
     return select(fallback, v / max(length(v), 0.00001), dot(v, v) > 0.00000001);
+}
+// The reflections' normals (see `reflection_normal` in mesh_main.wgsl):
+// the normal the opaque pass lights each pixel with where a normal map
+// (or the material's `surface`, or a decal) tilts it, and whether the
+// surface is glossy enough to show reflections, written by a pass over
+// the prepass depth.
+@group(0) @binding(18) var surface_normals: texture_2d<f32>;
+// The surface at pixel `p`: its normal, and in w 1 where it is too rough
+// for the opaque pass to show a reflection. The stored normal where
+// something tilted it from the mesh's; elsewhere, where nothing was
+// drawn, and where a pixel's samples hold two surfaces (their average is
+// shorter than 1), `fallback`: the depth's normal, which the march is
+// tuned on.
+fn surface_normal(p: vec2<i32>, fallback: vec3<f32>) -> vec4<f32> {
+    let e = textureLoad(surface_normals, coordinate(p), 0);
+    // Alpha, in two bits: 0 too rough, 2/3 glossy, 1 glossy and tilted.
+    let rough = select(0.0, 1.0, e.a < 0.17);
+    let n = (e.xyz * 1023.0 - 512.0) / 511.0;
+    let size = length(n);
+    if e.a < 0.83 || size < 0.997 { return vec4<f32>(fallback, rough); }
+    return vec4<f32>(n / size, rough);
+}
+// The ray reflected off a surface whose shape faces `normal` (the depth's)
+// and whose light faces `facing` (its normal map's), seen along `view`
+// (toward the camera): kept just above the surface, where a normal map
+// tilts it into it.
+fn reflected(view: vec3<f32>, normal: vec3<f32>, facing: vec3<f32>) -> vec3<f32> {
+    var ray = reflect(-view, facing);
+    let above = dot(ray, normal);
+    if above < 0.01 {
+        ray = safe_normalize(ray + normal * (0.01 - above), reflect(-view, normal));
+    }
+    return ray;
 }
 fn to_uv(clip: vec4<f32>) -> vec2<f32> {
     return clip.xy / clip.w * vec2<f32>(0.5, -0.5) + 0.5;
@@ -250,7 +284,11 @@ struct Traced { @location(0) color: vec4<f32>, @location(1) hit: vec2<f32> };
     // product of two short steps would fall under `safe_normalize`'s floor.
     var normal = safe_normalize(cross(safe_normalize(dx, view), safe_normalize(dy, view)), view);
     normal *= select(-1.0, 1.0, dot(normal, view) >= 0.0);
-    let ray = reflect(-view, normal);
+    let surface = surface_normal(p, normal);
+    // Too rough for the opaque pass to show a reflection
+    // (`environment_light` in mesh.wgsl fades them out by 0.7): no ray.
+    if surface.w > 0.5 { return missed; }
+    let ray = reflected(view, normal, surface.xyz);
     // Off the surface a little, so the ray doesn't find where it starts; the
     // depth buffer's precision falls with distance, and so does the offset.
     let eye = distance(center, settings.camera.xyz);

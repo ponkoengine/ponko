@@ -256,6 +256,52 @@ fn fs_fade(in: VertexOut) {
     }
 }
 
+// ---- Screen-space reflections' normals ----
+// With reflections on, solid surfaces are drawn once more over the
+// finished prepass depth (equal depths only, so each pixel once) to say
+// which way each faces: the normal the opaque pass lights it with, normal
+// maps, `surface` and decals included, so the trace's rays leave as the
+// opaque pass reflects (see ssr.wgsl). Red, green and blue: the normal,
+// each axis -1 to 1 in 10 bits with 0 exact. Multisampling averages a
+// pixel's samples: two surfaces' normals, or one and the clear value (all
+// 0), average to shorter than 1, which the trace can tell. Alpha, in two
+// bits: 0 where the surface is too rough to show reflections (roughness
+// 0.7 and up, where `environment_light` has faded them out), 1 where it is
+// glossy and something tilted its normal from the mesh's (`geometric`),
+// 2/3 where it is glossy and nothing did: the trace keeps the depth's
+// normal there, as without this pass.
+fn reflection_normal(n: vec3<f32>, geometric: vec3<f32>, roughness: f32) -> vec4<f32> {
+    let tilted = dot(n, geometric) < 0.99996;
+    let alpha = select(select(2.0 / 3.0, 1.0, tilted), 0.0, roughness >= 0.7);
+    return vec4<f32>((n * 511.0 + 512.0) / 1023.0, alpha);
+}
+
+fn reflection_surface(in: VertexOut, front: bool, dp_x: vec3<f32>, dp_y: vec3<f32>) -> vec4<f32> {
+    var s = surface_at(in, front);
+    var geometric = normalize(in.normal);
+    if !front {
+        geometric = -geometric;
+    }
+    s = apply_decals(s, geometric, in.decal_layers, dp_x, dp_y);
+    return reflection_normal(s.normal, geometric, clamp(s.roughness, 0.03, 1.0));
+}
+
+@fragment
+fn fs_normals(in: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    return reflection_surface(in, front, dpdx(in.world), dpdy(in.world));
+}
+
+@fragment
+fn fs_normals_fade(in: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    let dp_x = dpdx(in.world);
+    let dp_y = dpdy(in.world);
+    let n = reflection_surface(in, front, dp_x, dp_y);
+    if !fade_keeps(in.fade, in.clip.xy) {
+        discard;
+    }
+    return n;
+}
+
 // The opaque pass's contact shadow at this pixel (see opaque_color).
 var<private> contact_shadow: f32 = 0.0;
 
