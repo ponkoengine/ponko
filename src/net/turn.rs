@@ -55,7 +55,9 @@ const UDP: u8 = 17;
 const DEFAULT_LIFETIME: Duration = Duration::from_secs(600);
 /// Permissions last five minutes; renew them after four.
 const PERMISSION_RENEW: Duration = Duration::from_secs(240);
-/// Tries per request (the first, then resends after 0.5, 1, 2 and 4 s).
+/// Tries per request: the first, then resends 0.5, 1, 2 and 2 s apart,
+/// given up 2 s after the last (7.5 s in all), so a silent TURN server is
+/// reported before a joining endpoint's 10 s timeout ends.
 const TRIES: u32 = 5;
 /// Authentication answers in a row before the credentials count as wrong.
 const AUTH_TRIES: u32 = 3;
@@ -488,7 +490,7 @@ impl TurnClient {
                 continue;
             }
             out.push(p.bytes.clone());
-            p.next = now + Duration::from_millis(500 << p.sent);
+            p.next = now + Duration::from_millis(500 << p.sent.min(2));
             p.sent += 1;
         }
         match gave_up {
@@ -1044,10 +1046,13 @@ mod tests {
     fn a_silent_server_is_given_up_after_its_resends() {
         let mut client = TurnClient::with_random(SERVER.parse().unwrap(), "alice", "secret", counter);
         let mut out = Vec::new();
-        for ms in (0..20_000).step_by(100) {
+        for ms in (0..=7_400).step_by(100) {
             client.poll(Duration::from_millis(ms), &mut out);
         }
         assert_eq!(out.len(), TRIES as usize, "the request and its resends");
+        assert_eq!(client.next_event(), None, "still waiting for the last answer");
+        // Given up within a joining endpoint's 10 s timeout.
+        client.poll(Duration::from_millis(7_500), &mut out);
         assert!(matches!(client.next_event(), Some(TurnEvent::Failed(_))));
     }
 }

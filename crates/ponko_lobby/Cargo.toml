@@ -42,6 +42,12 @@ webrtc = ["ponko/webrtc"]
 name = "webrtc"
 required-features = ["webrtc"]
 
+# The guide's end-to-end check of a setup ("Putting a game online"): its
+# `turn` path is a WebRTC endpoint.
+[[example]]
+name = "online_check"
+required-features = ["webrtc"]
+
 [dependencies]
 # The engine without a window, GPU, sound or gamepads (a server needs none of
 # them), with the lobby protocol and client (`lobby`).
