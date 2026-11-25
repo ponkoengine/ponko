@@ -560,6 +560,11 @@ impl PacketTransport for RtcTransport {
     }
 
     fn recv(&mut self, buf: &mut [u8]) -> io::Result<Option<(SocketAddr, usize)>> {
+        // Reported from `poll`, once; the endpoint goes on (other paths,
+        // other servers).
+        if let Some(why) = self.agent.take_error() {
+            return Err(io::Error::other(why));
+        }
         while let Some((conn, n)) = self.agent.recv(buf) {
             if let Some(c) = self.conns.get_mut(&conn) {
                 c.last_heard = self.now;

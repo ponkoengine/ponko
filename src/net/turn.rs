@@ -521,10 +521,14 @@ impl TurnClient {
         let Some(i) = self.pending.iter().position(|p| p.tx == m.tx) else {
             return true; // A late answer to a request already answered.
         };
-        // An answer to a signed request must be signed by the server too.
+        // A success answer to a signed request must be signed by the server
+        // too (RFC 8489, section 9.2.4); a forged one is ignored. Error
+        // answers may come unsigned (a 438 carries the new nonce), but a
+        // signature that doesn't verify is never taken.
+        let signed = m.get(MESSAGE_INTEGRITY).is_some();
         if self
             .key
-            .is_some_and(|key| m.get(MESSAGE_INTEGRITY).is_some() && !m.verify(&key))
+            .is_some_and(|key| (signed && !m.verify(&key)) || (!signed && m.class == Class::Success))
         {
             return true;
         }
@@ -964,6 +968,67 @@ mod tests {
             client.relayed().is_some(),
             "refreshed: still allocated after the first lifetime"
         );
+    }
+
+    #[test]
+    fn an_unsigned_or_forged_answer_to_a_signed_request_is_ignored() {
+        let server_addr: SocketAddr = SERVER.parse().unwrap();
+        let mut client = TurnClient::with_random(server_addr, "alice", "secret", counter);
+        let mut out = Vec::new();
+        client.poll(Duration::ZERO, &mut out);
+        // The server asks for credentials; the client signs its request.
+        let first = parse(&out[0]).unwrap().tx;
+        let mut w = Writer::new(ALLOCATE, Class::Error, first);
+        w.attr(ERROR_CODE, &[0, 0, 4, 1]);
+        w.attr(REALM, REALM_NAME.as_bytes()).attr(NONCE, b"n");
+        assert!(client.receive(&w.finish(), Duration::ZERO));
+        out.clear();
+        client.poll(Duration::ZERO, &mut out);
+        let signed = parse(&out[0]).unwrap().tx;
+        let forged = "203.0.113.66:4000".parse().unwrap();
+        // Unsigned, and signed with another password: both ignored.
+        let mut w = Writer::new(ALLOCATE, Class::Success, signed);
+        w.xor_addr(XOR_RELAYED_ADDRESS, forged);
+        assert!(client.receive(&w.finish(), Duration::ZERO));
+        let mut w = Writer::new(ALLOCATE, Class::Success, signed);
+        w.xor_addr(XOR_RELAYED_ADDRESS, forged);
+        let wrong = w.sign(&long_term_key("alice", REALM_NAME, "guess"));
+        assert!(client.receive(&wrong, Duration::ZERO));
+        assert_eq!(client.relayed(), None);
+        // The real answer still counts.
+        let mut w = Writer::new(ALLOCATE, Class::Success, signed);
+        w.xor_addr(XOR_RELAYED_ADDRESS, RELAY.parse().unwrap());
+        let real = w.sign(&long_term_key("alice", REALM_NAME, "secret"));
+        assert!(client.receive(&real, Duration::ZERO));
+        assert_eq!(client.relayed(), Some(RELAY.parse().unwrap()));
+    }
+
+    #[test]
+    fn permissions_are_renewed_before_they_expire() {
+        let mut server = server("secret");
+        let mut client = TurnClient::with_random(SERVER.parse().unwrap(), "alice", "secret", counter);
+        exchange(&mut client, &mut server, Duration::ZERO);
+        let peer: SocketAddr = PEER.parse().unwrap();
+        let mut out = Vec::new();
+        client.send(peer, b"ping", Duration::ZERO, &mut out);
+        let permission = |bytes: &Vec<u8>| parse(bytes).is_some_and(|m| m.method == CREATE_PERMISSION);
+        assert_eq!(out.iter().filter(|b| permission(b)).count(), 1);
+        for o in &out {
+            let mut answers = Vec::new();
+            server.on_client_packet(CLIENT.parse().unwrap(), o, &mut answers);
+            for a in answers {
+                if let Out::ToClient(_, bytes) = a {
+                    client.receive(&bytes, Duration::ZERO);
+                }
+            }
+        }
+        // Permissions last five minutes (RFC 8656); the client renews them
+        // a minute early, and not before.
+        out.clear();
+        client.poll(PERMISSION_RENEW - Duration::from_secs(1), &mut out);
+        assert!(!out.iter().any(permission));
+        client.poll(PERMISSION_RENEW, &mut out);
+        assert_eq!(out.iter().filter(|b| permission(b)).count(), 1);
     }
 
     #[test]

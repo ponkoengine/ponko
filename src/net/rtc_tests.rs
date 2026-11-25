@@ -233,6 +233,8 @@ struct Session {
     nets: Vec<Option<NetMessages>>,
     signaling: Vec<Signaling>,
     logs: Vec<Vec<MessageEvent>>,
+    /// Per endpoint: the TURN failures `poll` reported.
+    turn_errors: Vec<Vec<String>>,
     /// Signaling messages carried, for assertions.
     signals: usize,
 }
@@ -259,6 +261,7 @@ impl Session {
             nets,
             signaling,
             logs,
+            turn_errors: addrs.iter().map(|_| Vec::new()).collect(),
             signals: 0,
         }
     }
@@ -277,7 +280,11 @@ impl Session {
         for _ in 0..steps {
             for i in 0..self.nets.len() {
                 if let Some(net) = &mut self.nets[i] {
-                    net.poll_elapsed(STEP).unwrap();
+                    if let Err(e) = net.poll_elapsed(STEP) {
+                        let why = e.to_string();
+                        assert!(why.starts_with("TURN server"), "endpoint {i}: {why}");
+                        self.turn_errors[i].push(why);
+                    }
                     self.logs[i].extend(net.events());
                 }
             }
@@ -467,6 +474,7 @@ fn peers_behind_two_symmetric_nats_connect_through_a_turn_server() {
         turn.relayed_to_clients
     );
     assert_eq!(turn.relays().count(), 2, "each peer allocated a relayed address");
+    assert!(s.turn_errors.iter().all(Vec::is_empty), "{:?}", s.turn_errors);
 }
 
 #[test]
@@ -477,6 +485,11 @@ fn wrong_turn_credentials_leave_two_symmetric_nats_unconnected() {
     let turn = n.turn.as_ref().unwrap();
     assert_eq!(turn.relays().count(), 0, "no allocation without the right password");
     assert!(turn.refused >= 2, "both were refused");
+    // Each endpoint's poll said why, once.
+    for errors in &s.turn_errors {
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("refused the credentials"), "{errors:?}");
+    }
 }
 
 #[test]

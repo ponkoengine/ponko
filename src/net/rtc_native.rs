@@ -102,6 +102,8 @@ pub(in crate::net) struct Agent {
     relay_only: bool,
     /// Datagrams for a TURN server, reused.
     turn_out: Vec<Vec<u8>>,
+    /// TURN allocations that failed, for `poll` to report.
+    errors: VecDeque<String>,
 }
 
 impl Agent {
@@ -185,6 +187,7 @@ impl Agent {
             turn: Vec::new(),
             relay_only: false,
             turn_out: Vec::new(),
+            errors: VecDeque::new(),
         })
     }
 
@@ -362,8 +365,9 @@ impl Agent {
                         self.deliver(peer, relayed, &bytes);
                     }
                 }
-                // Without its relayed address, ICE uses the other pairs.
-                TurnEvent::Failed(_) => {}
+                // Without its relayed address, ICE uses the other pairs;
+                // the game hears why from `poll`.
+                TurnEvent::Failed(why) => self.errors.push_back(format!("TURN server {server}: {why}")),
             }
         }
     }
@@ -504,6 +508,12 @@ impl Agent {
         }
         self.peers.insert(conn, peer);
         sent
+    }
+
+    /// A failure of the agent's own: a TURN allocation that failed
+    /// (refused credentials, a server that never answered), once each.
+    pub(in crate::net) fn take_error(&mut self) -> Option<String> {
+        self.errors.pop_front()
     }
 
     pub(in crate::net) fn recv(&mut self, buf: &mut [u8]) -> Option<(u64, usize)> {
