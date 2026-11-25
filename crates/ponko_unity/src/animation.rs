@@ -10,10 +10,12 @@ use std::collections::{HashMap, HashSet};
 /// second of 400 curves.
 const MAX_SAMPLES: usize = 1 << 24;
 
-/// A Unity `.anim` clip (text or binary serialized) with transform and
-/// blend-shape curves. Editor curves are used when present; a clip with only
-/// baked runtime data (streamed, dense, constant or compressed curves) is
-/// decoded from that. Humanoid-only clips are rejected.
+/// A Unity `.anim` clip (text or binary serialized) with transform,
+/// blend-shape and humanoid curves. Editor curves are used when present; a
+/// clip with only baked runtime data (streamed, dense, constant or
+/// compressed curves) is decoded from that. Humanoid muscle and body curves
+/// become bone rotations through a [`HumanoidAvatar`](crate::HumanoidAvatar)
+/// ([`append_to_skin_with_avatar`](Self::append_to_skin_with_avatar)).
 #[derive(Debug, Clone)]
 pub struct AnimationClip {
     name: String,
@@ -24,6 +26,8 @@ pub struct AnimationClip {
     curves: Vec<Curve>,
     skipped: Vec<String>,
     morphs: Vec<Morph>,
+    /// Humanoid curves (class 95) by attribute: muscles, `RootT.x`, ...
+    humanoid: Vec<(String, Vec<SKey>)>,
 }
 /// What a curve targets: a transform path by name, or by Unity's CRC-32.
 #[derive(Debug, Clone, PartialEq)]
@@ -64,7 +68,7 @@ fn number(v: &Value) -> f32 {
 fn vector(v: &Value) -> [f32; 4] {
     ["x", "y", "z", "w"].map(|k| number(&v[k]))
 }
-const HUMANOID_ONLY: &str = "animation clip holds only humanoid muscle curves; humanoid retargeting is not supported";
+const HUMANOID_ONLY: &str = "animation clip holds only baked humanoid muscle curves, which name their muscles by index: resave it from the editor so it keeps its muscle curves by name";
 
 impl AnimationClip {
     /// Parses a text YAML `.anim`; weighted tangents are approximated as
@@ -154,8 +158,12 @@ impl AnimationClip {
                 });
             }
         }
+        // Humanoid curves by attribute (the editor lists them twice too).
+        let mut humanoid: Vec<(String, Vec<SKey>)> = Vec::new();
         for entry in m["m_FloatCurves"].as_seq().unwrap_or_default() {
-            if !blend_shape_curve(entry, &mut morphs, &mut morph_names, &mut skipped)? {
+            if !blend_shape_curve(entry, &mut morphs, &mut morph_names, &mut skipped)?
+                && !humanoid_curve(entry, &mut humanoid, &mut skipped)?
+            {
                 skipped.push("skipped m_FloatCurves property".into());
             }
         }
@@ -164,7 +172,9 @@ impl AnimationClip {
         let mut group_of: HashMap<(String, usize), usize> = HashMap::new();
         for field in ["m_EditorCurves", "m_EulerEditorCurves"] {
             for entry in m[field].as_seq().unwrap_or_default() {
-                if blend_shape_curve(entry, &mut morphs, &mut morph_names, &mut skipped)? {
+                if blend_shape_curve(entry, &mut morphs, &mut morph_names, &mut skipped)?
+                    || humanoid_curve(entry, &mut humanoid, &mut skipped)?
+                {
                     continue;
                 }
                 let attribute = entry["attribute"].as_str().unwrap_or("");
@@ -209,9 +219,11 @@ impl AnimationClip {
         }
         // Only a clip without any curve of its own falls back to the baked
         // runtime data; with them, Unity's baked copy is redundant.
-        if curves.is_empty() && morphs.is_empty() {
+        if curves.is_empty() && morphs.is_empty() && humanoid.is_empty() {
             baked_curves(m, &mut curves, &mut morphs, &mut skipped)?;
         }
+        // Each humanoid curve is sampled once per bone it turns: about one.
+        let human_keys = humanoid.iter().flat_map(|(_, keys)| keys.iter().map(|k| k.time));
         let settings = [&m["m_AnimationClipSettings"], &m["m_MuscleClip"]]
             .into_iter()
             .find(|s| !s["m_StopTime"].is_null())
@@ -222,6 +234,7 @@ impl AnimationClip {
                 .iter()
                 .chain(morphs.iter().map(|m| &m.curve))
                 .flat_map(|c| c.keys.iter().map(|k| k.time))
+                .chain(human_keys.clone())
                 .fold(start, f32::max)
         });
         let rate = m["m_SampleRate"].as_f32().unwrap_or(60.0);
@@ -246,20 +259,21 @@ impl AnimationClip {
         let mut key_times: Vec<u32> = curves
             .iter()
             .chain(morphs.iter().map(|m| &m.curve))
-            .flat_map(|c| c.keys.iter())
-            .filter(|k| k.time >= start && k.time <= stop)
+            .flat_map(|c| c.keys.iter().map(|k| k.time))
+            .chain(human_keys)
+            .filter(|&t| t >= start && t <= stop)
             // `+ 0.0` makes -0 the same time as 0.
-            .map(|k| k.time - start + 0.0)
+            .map(|t| t - start + 0.0)
             .filter(|&t| !on_frame(t))
             .map(f32::to_bits)
             .collect();
         key_times.sort_unstable();
         key_times.dedup();
-        let samples = (frames + key_times.len()).saturating_mul(curves.len() + morphs.len());
+        let count = curves.len() + morphs.len() + humanoid.len();
+        let samples = (frames + key_times.len()).saturating_mul(count);
         if samples > MAX_SAMPLES {
             return Err(Error::invalid(format!(
-                "animation clip too long to sample: {} curves over {frames} frames and {} key times (at most {MAX_SAMPLES} samples)",
-                curves.len() + morphs.len(),
+                "animation clip too long to sample: {count} curves over {frames} frames and {} key times (at most {MAX_SAMPLES} samples)",
                 key_times.len()
             )));
         }
@@ -272,6 +286,7 @@ impl AnimationClip {
             curves,
             skipped,
             morphs,
+            humanoid,
         })
     }
 
@@ -332,6 +347,47 @@ impl AnimationClip {
     /// let diagnostics = clip.append_to_skin(&mut skin, 0);
     /// ```
     pub fn append_to_skin(&self, skin: &mut MeshSkin, root: usize) -> Vec<String> {
+        self.append(skin, root, None)
+    }
+
+    /// Whether the clip has humanoid curves (muscles, body position and
+    /// rotation): it then needs an avatar,
+    /// [`append_to_skin_with_avatar`](Self::append_to_skin_with_avatar).
+    ///
+    /// ```
+    /// # use ponko_unity::AnimationClip;
+    /// let clip = AnimationClip::parse("--- !u!74 &1\nAnimationClip: {}\n").unwrap();
+    /// assert!(!clip.is_humanoid());
+    /// ```
+    #[must_use]
+    pub fn is_humanoid(&self) -> bool {
+        !self.humanoid.is_empty()
+    }
+
+    /// [`append_to_skin`](Self::append_to_skin), turning the clip's humanoid
+    /// curves into rotations of the bones `avatar` names (and the hips'
+    /// position): each muscle's value between its limits, measured from
+    /// the rest pose (taken as a T-pose), about axes the rest pose gives.
+    /// Muscles without a curve are 0, as in Unity, which isn't the rest
+    /// pose for every bone. Transform curves on the same nodes win.
+    ///
+    /// ```
+    /// # use ponko_unity::{AnimationClip, HumanoidAvatar, MeshSkin};
+    /// # let clip = AnimationClip::parse("--- !u!74 &1\nAnimationClip: {}\n").unwrap();
+    /// let mut skin = MeshSkin::default();
+    /// let avatar = HumanoidAvatar::detect(&skin);
+    /// let diagnostics = clip.append_to_skin_with_avatar(&mut skin, 0, &avatar);
+    /// ```
+    pub fn append_to_skin_with_avatar(
+        &self,
+        skin: &mut MeshSkin,
+        root: usize,
+        avatar: &crate::HumanoidAvatar,
+    ) -> Vec<String> {
+        self.append(skin, root, Some(avatar))
+    }
+
+    fn append(&self, skin: &mut MeshSkin, root: usize, avatar: Option<&crate::HumanoidAvatar>) -> Vec<String> {
         let mut diagnostics = self.skipped.clone();
         let count = ((self.stop - self.start) * self.rate).ceil() as usize;
         let mut times: Vec<_> = (0..=count)
@@ -342,9 +398,10 @@ impl AnimationClip {
             self.curves
                 .iter()
                 .chain(self.morphs.iter().map(|m| &m.curve))
-                .flat_map(|c| c.keys.iter())
-                .filter(|k| k.time >= self.start && k.time <= self.stop)
-                .map(|k| k.time - self.start),
+                .flat_map(|c| c.keys.iter().map(|k| k.time))
+                .chain(self.humanoid.iter().flat_map(|(_, keys)| keys.iter().map(|k| k.time)))
+                .filter(|&t| t >= self.start && t <= self.stop)
+                .map(|t| t - self.start),
         );
         times.sort_by(f32::total_cmp);
         times.dedup();
@@ -451,12 +508,92 @@ impl AnimationClip {
                 animation.nodes[node].push(Mat4::from_scale_rotation_translation(s, r, t).to_cols_array());
             }
         }
+        if !self.humanoid.is_empty() {
+            self.append_humanoid(skin, avatar, &mut animation, &mut diagnostics);
+        }
         if !animation.morphs.is_empty() || animation.nodes.iter().any(|n| !n.is_empty()) {
             skin.animations.push(animation);
         }
         diagnostics.sort();
         diagnostics.dedup();
         diagnostics
+    }
+
+    /// Samples the humanoid curves into `animation` through `avatar`: every
+    /// mapped bone gets a track, except nodes transform curves animate.
+    fn append_humanoid(
+        &self,
+        skin: &MeshSkin,
+        avatar: Option<&crate::HumanoidAvatar>,
+        animation: &mut SkinAnimation,
+        diagnostics: &mut Vec<String>,
+    ) {
+        let Some(avatar) = avatar else {
+            diagnostics.push(format!(
+                "{}: humanoid curves need an avatar (the model's Rig set to Humanoid, or Importer::humanoid_avatar)",
+                self.name
+            ));
+            return;
+        };
+        let missing = avatar.missing();
+        let bound = avatar.bind(skin);
+        let unbound: Vec<&str> = missing
+            .iter()
+            .copied()
+            .chain(
+                crate::humanoid::REQUIRED
+                    .into_iter()
+                    .filter(|b| avatar.bone(b).is_some_and(|n| !skin.nodes.iter().any(|x| x.name == n))),
+            )
+            .collect();
+        if !unbound.is_empty() {
+            diagnostics.push(format!(
+                "{}: humanoid curves need the avatar's {} on the skeleton",
+                self.name,
+                unbound.join(", ")
+            ));
+            return;
+        }
+        let find = |name: &str| self.humanoid.iter().find(|(n, _)| n == name).map(|(_, k)| k.as_slice());
+        let value = |keys: Option<&[SKey]>, time: f32| keys.map(|k| scalar_at(k, time).0);
+        let root_t = ["RootT.x", "RootT.y", "RootT.z"].map(find);
+        let root_q = ["RootQ.x", "RootQ.y", "RootQ.z", "RootQ.w"].map(find);
+        let muscles: Vec<(&str, &[SKey])> = bound
+            .muscles
+            .iter()
+            .filter_map(|m| find(&m.name).map(|k| (m.name.as_str(), k)))
+            .collect();
+        let taken: HashSet<usize> = (0..animation.nodes.len())
+            .filter(|&n| !animation.nodes[n].is_empty())
+            .collect();
+        let mut pose = Vec::new();
+        for &time in &animation.times {
+            let t = time + self.start;
+            let position = root_t
+                .iter()
+                .any(Option::is_some)
+                .then(|| glam::Vec3::from(root_t.map(|k| value(k, t).unwrap_or(0.0))));
+            let rotation = root_q.iter().any(Option::is_some).then(|| {
+                let q = Quat::from_array(root_q.map(|k| value(k, t).unwrap_or(0.0)));
+                if q.length_squared() > 1e-8 {
+                    q.normalize()
+                } else {
+                    Quat::IDENTITY
+                }
+            });
+            let muscle = |name: &str| {
+                muscles
+                    .iter()
+                    .find(|(n, _)| *n == name)
+                    .map_or(0.0, |(_, keys)| scalar_at(keys, t).0)
+            };
+            bound.pose(muscle, (position, rotation), &mut pose);
+            for &(node, matrix) in &pose {
+                if !taken.contains(&node) {
+                    animation.nodes[node].push(matrix.to_cols_array());
+                }
+            }
+        }
     }
 
     /// Nodes under `root` by the CRC-32 of their slash-separated path, when
@@ -629,6 +766,29 @@ fn blend_shape_curve(
     }
     Ok(true)
 }
+/// Takes a humanoid curve (class 95: a muscle, or the body's `RootT` and
+/// `RootQ`) into `humanoid` by attribute. IK goal, motion and translation
+/// curves are skipped and reported. Returns whether the entry was one.
+fn humanoid_curve(
+    entry: &Value,
+    humanoid: &mut Vec<(String, Vec<SKey>)>,
+    skipped: &mut Vec<String>,
+) -> Result<bool, Error> {
+    if entry["classID"].as_i64() != Some(95) {
+        return Ok(false);
+    }
+    let attribute = entry["attribute"].as_str().unwrap_or("");
+    let body = ["RootT.", "RootQ."].iter().any(|p| attribute.starts_with(p));
+    if !body && !crate::humanoid::is_muscle(attribute) {
+        skipped.push("skipped humanoid IK goal, motion and translation curves".into());
+        return Ok(true);
+    }
+    let keys = scalar_keys(&entry["curve"], skipped)?;
+    if !keys.is_empty() && !humanoid.iter().any(|(n, _)| n == attribute) {
+        humanoid.push((attribute.to_owned(), keys));
+    }
+    Ok(true)
+}
 fn percent_curve(path: PathRef, keys: &[SKey]) -> Curve {
     Curve {
         path,
@@ -798,7 +958,7 @@ fn baked_curves(
         if curves.is_empty() && morphs.is_empty() {
             return Err(Error::unsupported(HUMANOID_ONLY));
         }
-        skipped.push("skipped humanoid muscle curves (retargeting is not supported)".into());
+        skipped.push("skipped baked humanoid muscle curves (named by index; resave the clip from the editor)".into());
     }
     Ok(())
 }
