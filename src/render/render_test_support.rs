@@ -168,11 +168,10 @@ pub(super) fn gpu_adjusted(
     describe: impl FnOnce(&wgpu::Adapter) -> Result<wgpu::DeviceDescriptor<'static>, String>,
     adjust: impl FnOnce(&mut wgpu::DeviceDescriptor<'static>),
 ) -> Option<TestGpu> {
-    // Like the engine's own instance, its flags follow wgpu's environment
-    // variables (`WGPU_VALIDATION_INDIRECT_CALL=0` and the like).
-    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-    descriptor.flags = wgpu::InstanceFlags::from_env_or_default();
-    let instance = wgpu::Instance::new(descriptor);
+    // Like the engine's own instance, it follows wgpu's environment
+    // variables: `WGPU_BACKEND=dx12` (or `vulkan`, `metal`, `gl`) picks the
+    // backend, `WGPU_VALIDATION_INDIRECT_CALL=0` and the like set its flags.
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
     let adapter = match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) {
         Ok(adapter) => adapter,
         Err(e) => {

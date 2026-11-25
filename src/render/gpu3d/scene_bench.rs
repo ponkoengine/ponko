@@ -371,9 +371,7 @@ impl SceneBench {
     /// Tests open their device through `render_test_support` and use
     /// [`SceneBench::on_device`].
     pub fn new(kind: SceneKind, setup: SceneSetup) -> Result<Self, String> {
-        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-        descriptor.flags = wgpu::InstanceFlags::from_env_or_default();
-        let instance = wgpu::Instance::new(descriptor);
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             ..Default::default()
