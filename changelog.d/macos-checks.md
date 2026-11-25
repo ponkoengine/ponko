@@ -24,3 +24,7 @@
 - The C lobby test `a_c_game_makes_joins_and_plays_in_a_room` waits for the
   leaving client's own `PONKO_LOBBY_LEFT` before reading it; under
   AddressSanitizer it could arrive after the others' host change.
+- The "Clippy, wasm-simd with simd128" step of `scripts/checks.yml` passes
+  `+simd128` in `RUSTFLAGS`: with the list's own `RUSTFLAGS` set, Cargo
+  ignored `CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS` and the feature
+  refused to build.
