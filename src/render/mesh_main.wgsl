@@ -416,7 +416,90 @@ fn transparent_color(in: VertexOut, front: bool) -> vec4<f32> {
     let s = surface_at(in, front);
     baked_entry = in.lightmap;
     baked_face = select(-1.0, 1.0, front) * normalize(in.normal);
+    if frame.reflections.x > 0.0 && s.roughness < 0.7 {
+        screen_reflection = transparent_reflection(s);
+    }
     return vec4<f32>(fog(shade(s), s.world) * s.alpha, s.alpha);
+}
+
+// ---- Screen-space reflections on transparent surfaces ----
+// With `Post::ssr_transparent` (frame.reflections: x the strength, y how far
+// a ray looks), a glossy transparent surface such as water or glass marches
+// its reflected ray across the opaque scene behind it: the depth and color
+// the split transparent pass copies (see scene_color). 32 steps in screen
+// space, a step that went behind something closer than its own length is a
+// hit, then 4 halvings find the surface. It shows the opaque scene of this
+// frame, sharp (no cone blur: `environment_light` fades reflections out on
+// rough surfaces anyway), fading out toward the screen's edges and the end
+// of the ray. Other transparent surfaces are not in it.
+fn transparent_reflection(s: Surface) -> vec4<f32> {
+    let ray = reflect(-s.view, s.normal);
+    var reach = frame.reflections.y;
+    let start = frame.view_proj * vec4<f32>(s.world, 1.0);
+    var end = frame.view_proj * vec4<f32>(s.world + ray * reach, 1.0);
+    // A ray toward the camera stops before it passes the near plane.
+    let nearest = start.w * 0.1;
+    if end.w < nearest {
+        let t = (start.w - nearest) / (start.w - end.w);
+        reach *= t;
+        end = mix(start, end, t);
+    }
+    let size = frame.screen.xy;
+    let a = vec3<f32>(start.xy / start.w * vec2<f32>(0.5, -0.5) + 0.5, start.z / start.w);
+    let b = vec3<f32>(end.xy / end.w * vec2<f32>(0.5, -0.5) + 0.5, end.z / end.w);
+    let far = s.world + ray * reach;
+    // Positions over w and 1 / w change linearly across the screen.
+    let world_a = vec4<f32>(s.world, 1.0) / start.w;
+    let world_b = vec4<f32>(far, 1.0) / end.w;
+    let jitter = hash2(s.screen);
+    var before = 0.0;
+    var hit = -1.0;
+    var previous = s.world;
+    for (var i = 0u; i < 32u; i++) {
+        let k = (f32(i) + jitter) / 32.0;
+        let p = mix(a, b, k);
+        if any(p.xy < vec2<f32>(0.0)) || any(p.xy > vec2<f32>(1.0)) {
+            break;
+        }
+        let h = mix(world_a, world_b, k);
+        let point = h.xyz / h.w;
+        // Reversed depth: the opaque scene is nearer than the ray where its
+        // depth is greater.
+        if opaque_depth_at(p.xy * size) > p.z {
+            let gap = distance(point, scene_position(p.xy * size));
+            if gap < max(2.0 * distance(point, previous), 0.05) {
+                hit = k;
+                break;
+            }
+        }
+        before = k;
+        previous = point;
+    }
+    if hit < 0.0 {
+        return vec4<f32>(0.0);
+    }
+    var low = before;
+    for (var j = 0; j < 4; j++) {
+        let k = 0.5 * (low + hit);
+        let p = mix(a, b, k);
+        if opaque_depth_at(p.xy * size) > p.z {
+            hit = k;
+        } else {
+            low = k;
+        }
+    }
+    let p = mix(a, b, hit);
+    let h = mix(world_a, world_b, hit);
+    let travelled = distance(h.xyz / h.w, s.world) / max(reach, 0.0001);
+    let edge = max(abs(p.x - 0.5), abs(p.y - 0.5)) * 2.0;
+    let fade = (1.0 - smoothstep(0.9, 1.0, edge)) * (1.0 - smoothstep(0.8, 1.0, travelled));
+    return vec4<f32>(scene_color(p.xy * size), fade * min(frame.reflections.x, 1.0));
+}
+
+// The opaque scene's depth at a pixel (reversed: 0 is the far plane).
+fn opaque_depth_at(screen: vec2<f32>) -> f32 {
+    let at = min(vec2<i32>(screen), vec2<i32>(textureDimensions(scene_depth_texture)) - 1);
+    return textureLoad(scene_depth_texture, at, 0);
 }
 
 // ---- Motion vectors (temporal antialiasing) ----

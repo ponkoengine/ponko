@@ -81,6 +81,11 @@ pub(super) struct FrameUniform {
     pub(super) sky_params: [[f32; 4]; 4],
     /// The sky kit's settings (see `SkyKit::frame_params`); zero without it.
     pub(super) sky_kit: [[f32; 4]; 6],
+    /// Screen-space reflections on transparent surfaces
+    /// (`Post::ssr_transparent`): x the strength (0: off), y how far a ray
+    /// looks. Only the main view's: zero for the view model, target cameras
+    /// and probe views, which don't draw over the main view's scene depth.
+    pub(super) reflections: [f32; 4],
 }
 
 /// Splits elapsed time before rounding the subsecond part to shader precision.
@@ -201,6 +206,7 @@ mod tests {
             gi,
             sky_params,
             sky_kit,
+            reflections,
         );
         let names: Vec<&str> = rust.iter().map(|(name, _)| *name).collect();
         assert_eq!(names, declared_fields(), "every field of FrameUniform is listed here");

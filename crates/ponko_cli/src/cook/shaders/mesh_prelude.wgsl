@@ -71,6 +71,7 @@ struct Frame {
     gi: array<vec4<f32>, 3>, // global illumination's probe grid (see gi.wgsl)
     sky_params: array<vec4<f32>, 4>, // a sky shader's values (`Sky::shader_params`)
     sky_kit: array<vec4<f32>, 6>, // the sky kit's clouds, moon and cloud shadows (zero without it)
+    reflections: vec4<f32>, // screen-space reflections on transparent surfaces: x strength (0: off), y how far a ray looks
 };
 
 struct MaterialData {

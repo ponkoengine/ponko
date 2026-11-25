@@ -1321,7 +1321,8 @@ impl Renderer3D {
                     .enumerate()
                     .any(|(part, &(_, m))| {
                         let m = self.resources.material(self.part_material(mesh, part, m));
-                        m.transparent && self.shaders.sets[m.shader as usize].reads_scene
+                        m.transparent
+                            && (self.screen.ssr_transparent || self.shaders.sets[m.shader as usize].reads_scene)
                     })
             })
     }

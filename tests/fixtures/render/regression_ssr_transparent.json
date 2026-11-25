@@ -1,0 +1,17 @@
+{
+  "name": "regression_ssr_transparent",
+  "scene": "A glowing red 3x1x1 bar (emissive 4, 0, 0) standing on a half see-through white metal mirror pane (alpha 0.5, roughness 0) 1 unit above a dark grey floor; nothing lit, exposure -5, screen-space reflections at 1.0 on transparent surfaces too, fourth frame; camera at (0, 2, 6) looking at (0, 0.5, 0); 128x128, 4x multisampling, no tonemapping.",
+  "width": 128,
+  "height": 128,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 16,
+    "outliers": 0.015,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "59e2c39791466bb7",
+  "reason": "New reference: screen-space reflections on transparent surfaces (Post::ssr_transparent)"
+}

@@ -2494,3 +2494,131 @@ fn a_normal_map_bends_the_reflection_as_a_turned_floor_does() {
     );
     stage.finish();
 }
+
+/// A mirror pane over a dark floor, under a glowing red bar.
+#[derive(Clone, Copy, PartialEq)]
+enum Pane {
+    /// Solid.
+    Opaque,
+    /// Half see-through, with or without reflections on transparent surfaces.
+    Transparent(bool),
+}
+
+/// What a mirror pane shows of the glowing red bar above it: the frame with
+/// reflections at 1.0, the red of the bar's reflection (linear, over the
+/// pane below the bar's foot) and its center on screen, and the frame
+/// without reflections.
+fn reflection_in_a_pane(pane: Pane) -> Option<(Image, f32, Vec2, Image, Stage)> {
+    let mut stage = Stage::new()?;
+    if !crate::render::render_test_support::needs(&stage.device, GpuFeature::ScreenSpaceReflections) {
+        return None;
+    }
+    let (alpha, blend) = match pane {
+        Pane::Opaque => (1.0, crate::render::Blend::Opaque),
+        Pane::Transparent(_) => (0.5, crate::render::Blend::Transparent),
+    };
+    let mirror = stage.mesh(
+        &MeshData::cube(1.0),
+        MaterialDesc {
+            color: Color::rgba(1.0, 1.0, 1.0, alpha),
+            roughness: 0.0,
+            metallic: 1.0,
+            blend,
+            ..Default::default()
+        },
+    );
+    let ground = stage.mesh(
+        &MeshData::cube(1.0),
+        MaterialDesc {
+            color: Color::rgb(0.2, 0.2, 0.2),
+            roughness: 1.0,
+            ..Default::default()
+        },
+    );
+    let glow = stage.mesh(
+        &MeshData::cube(1.0),
+        MaterialDesc {
+            color: Color::BLACK,
+            emissive: Color::rgb(4.0, 0.0, 0.0),
+            ..Default::default()
+        },
+    );
+    stage.block(mirror, vec3(-10.0, -0.1, -10.0), vec3(10.0, 0.0, 10.0));
+    stage.block(ground, vec3(-10.0, -1.5, -10.0), vec3(10.0, -1.0, 10.0));
+    stage.block(glow, vec3(-1.5, 0.5, -0.5), vec3(1.5, 1.5, 0.5));
+    stage.ctx.scene3d.lighting.sun_intensity = 0.0;
+    stage.ctx.scene3d.lighting.ambient_intensity = 0.0;
+    stage.ctx.scene3d.post.exposure = -5.0;
+    stage.ctx.scene3d.camera.position = vec3(0.0, 2.0, 6.0);
+    stage.ctx.scene3d.camera.look_at(vec3(0.0, 0.5, 0.0));
+    let off = stage.settled(2);
+    stage.ctx.scene3d.post.ssr = 1.0;
+    stage.ctx.scene3d.post.ssr_transparent = pane == Pane::Transparent(true);
+    let on = stage.settled(4);
+    crate::render::render_test_support::keep_image(&on);
+    let (_, foot) = stage.pixel(vec3(0.0, 0.5, 0.5));
+    let (mut red, mut at) = (0.0, Vec2::ZERO);
+    for y in foot + 2..on.height {
+        for x in 0..on.width {
+            let linear = |image: &Image| (f32::from(image.pixel(x, y)[0]) / 255.0).powf(2.2);
+            let more = (linear(&on) - linear(&off)).max(0.0);
+            red += more;
+            at += more * vec2(x as f32, y as f32);
+        }
+    }
+    Some((on, red, at / red.max(1e-6), off, stage))
+}
+
+/// Transparent surfaces reflect the scene on screen only with
+/// `Post::ssr_transparent`: a half see-through mirror pane shows the red bar
+/// with it, where a solid mirror pane shows it, and without it shows
+/// exactly what it shows without reflections (nothing: no sky, no ambient
+/// light).
+#[test]
+fn transparent_surfaces_reflect_the_scene_with_ssr_transparent() {
+    let Some((without, red_without, _, off, stage)) = reflection_in_a_pane(Pane::Transparent(false)) else {
+        return;
+    };
+    stage.finish();
+    let (_, _, mirror_at, _, stage) = reflection_in_a_pane(Pane::Opaque).unwrap();
+    stage.finish();
+    let (with, red, at, _, stage) = reflection_in_a_pane(Pane::Transparent(true)).unwrap();
+    eprintln!(
+        "reflection in a transparent pane (red): without {red_without:.1}, with {red:.1} at {at}; solid mirror's \
+         at {mirror_at}"
+    );
+    assert!(red_without < 0.5, "no reflection without the setting: {red_without}");
+    let mut most = 0;
+    for y in 0..off.height {
+        for x in 0..off.width {
+            let (a, b) = (without.pixel(x, y), off.pixel(x, y));
+            most = (0..3).map(|c| a[c].abs_diff(b[c])).fold(most, u8::max);
+        }
+    }
+    assert!(
+        most <= 1,
+        "the setting off, the pane draws as without reflections: {most} apart"
+    );
+    assert!(red > 5.0, "the bar is reflected in the pane: {red}");
+    assert!(
+        at.distance(mirror_at) < 1.5,
+        "where a solid mirror reflects it: {at} against {mirror_at}"
+    );
+    check_reference(
+        "regression_ssr_transparent",
+        &with,
+        EFFECT_REFERENCE,
+        "A glowing red 3x1x1 bar (emissive 4, 0, 0) standing on a half see-through white metal mirror pane \
+         (alpha 0.5, roughness 0) 1 unit above a dark grey floor; nothing lit, exposure -5, screen-space \
+         reflections at 1.0 on transparent surfaces too, fourth frame; camera at (0, 2, 6) looking at (0, 0.5, \
+         0); 128x128, 4x multisampling, no tonemapping.",
+        &stage.info,
+    );
+    reference_rejects(
+        "regression_ssr_transparent",
+        &without,
+        EFFECT_REFERENCE,
+        "the pane without reflections on transparent surfaces",
+    );
+    stage.finish();
+}
