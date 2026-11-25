@@ -157,6 +157,14 @@ on the tree; C:
 `ponko_ctx_ui_set_name`, `ponko_ctx_ui_find`, `ponko_ctx_ui_name`,
 `ponko_ctx_ui_take_click`.
 
+A lookup by name hashes the string, so don't do it every frame: look names
+up when an event arrives (as the shop below does), or once after building
+the screen, keeping the ids. `ui.try_find(name)` is `find` for a node that
+must be there: a name no node has is an error that lists the names there
+are, so a typo shows where it was made instead of as a `None` later (C++:
+`tree.try_find(name)`, a `ponko::result`; C: `ponko_ctx_ui_try_find`,
+`PONKO_NOT_FOUND` with the names in `ponko_last_error`).
+
 `UiPaint` supplies background colors for normal/hover/pressed/disabled states,
 borders, font, line height, text color, wrapping and horizontal alignment.
 Controls (buttons, checkboxes, text fields, ...) draw their text in the

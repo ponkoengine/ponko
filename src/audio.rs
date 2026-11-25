@@ -160,7 +160,9 @@ pub use device::{AudioDevice, AudioDeviceEvent};
 use mixer::BusRegistry;
 pub use mixer::{AudioBus, AudioEffects};
 pub use music::{Quantize, Song};
-pub use snapshots::{BusSnapshot, EffectOverride, MixerSnapshot, MixerState, SavedBus, SavedSnapshot};
+pub use snapshots::{
+    BusSnapshot, EffectOverride, MixerSnapshot, MixerState, SavedBus, SavedSnapshot, SnapshotId, SnapshotRef,
+};
 pub use voices::{DEFAULT_PRIORITY, VoiceCount};
 #[cfg(all(test, feature = "audio"))]
 mod completeness_render_tests;

@@ -172,6 +172,30 @@ impl SkeletonGraph {
         self.states.iter().position(|s| &*s.name == name).map(StateId)
     }
 
+    /// [`parameter`](Self::parameter) for a name that must be there:
+    /// resolve it once and keep the id.
+    ///
+    /// # Errors
+    /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) for a name
+    /// no parameter has; its message lists the parameters.
+    pub fn try_parameter(&self, name: &str) -> Result<ParamId, crate::error::Error> {
+        self.parameter(name).ok_or_else(|| {
+            crate::error::Error::unknown_name("animation parameter", name, self.names.iter().map(|n| &**n))
+        })
+    }
+
+    /// [`state`](Self::state) for a name that must be there: resolve it
+    /// once and keep the id.
+    ///
+    /// # Errors
+    /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) for a name
+    /// no state has; its message lists the states.
+    pub fn try_state(&self, name: &str) -> Result<StateId, crate::error::Error> {
+        self.state(name).ok_or_else(|| {
+            crate::error::Error::unknown_name("animation state", name, self.states.iter().map(|s| &*s.name))
+        })
+    }
+
     /// Its states.
     #[must_use]
     pub fn states(&self) -> &[SkeletonState] {

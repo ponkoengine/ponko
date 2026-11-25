@@ -20,6 +20,11 @@ pub const TICKS: u64 = 120;
 /// (tick, pressed) steps of the "jump" key.
 pub const STEPS: [(u64, bool); 2] = [(10, true), (110, false)];
 
+/// The "jump" action, resolved once in setup: the systems query it by id,
+/// with no name lookup each tick.
+#[derive(Clone, Copy)]
+struct Jump(ActionId);
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Variant {
     /// Jumps on the pressed edge of the action.
@@ -101,9 +106,10 @@ fn game(
     game.sim_system(move |ctx: &mut Ctx| {
         let dt = ctx.time.dt();
         let tick = ctx.time.sim_tick();
+        let Jump(jump) = *ctx.world.resource::<Jump>();
         let want_jump = match variant {
-            Variant::Fixed => ctx.input.action_pressed("jump"),
-            Variant::Buggy => ctx.input.action_down("jump"),
+            Variant::Fixed => ctx.input.action_pressed(jump),
+            Variant::Buggy => ctx.input.action_down(jump),
         };
         let drift = ctx.random().stream(0).range(-0.01, 0.01);
         ctx.world.query::<&mut Body>().for_each(|b| {
@@ -118,7 +124,8 @@ fn game(
     })
     .sim_system(|ctx: &mut Ctx| {
         let tick = ctx.time.sim_tick();
-        let (pressed, down) = (ctx.input.action_pressed("jump"), ctx.input.action_down("jump"));
+        let Jump(jump) = *ctx.world.resource::<Jump>();
+        let (pressed, down) = (ctx.input.action_pressed(jump), ctx.input.action_down(jump));
         let body = *ctx.world.query::<&Body>().iter().next().expect("the body exists");
         ctx.world.resource_mut::<Trace>().rows.push(Row {
             tick,
@@ -146,6 +153,8 @@ fn game(
         let mut map = ActionMap::default();
         map.set("jump", Action::Button(vec![ButtonBinding::Key(Key::Space)]));
         ctx.input.set_actions(map);
+        let jump = ctx.input.action_id("jump");
+        ctx.world.insert_resource(Jump(jump));
         ctx.world.reflect_resource::<Trace>();
         ctx.world.insert_resource(Trace::default());
         ctx.world.spawn((Body {

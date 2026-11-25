@@ -1952,7 +1952,7 @@
   "src/render/gpu.rs:c16d6516135a0bb4": {
     "classification": "invariant",
     "construction": "debug_assert_eq!(rgba.len(), (size[0] * size[1] * 4) as usize)",
-    "reason": "Internal invariant: /// Replaces a `width` \u00d7 `height` block of texture `id` at `(x, y)`.     pub fn update_texture_region(&mut self, id: u32, at: [u32; 2], size: [u32; 2], rgba: &[u8]) {         debug_assert_eq!(rgba.len(), (size[0] * size[1] * 4) as usize);",
+    "reason": "Internal invariant: /// Replaces a `width` × `height` block of texture `id` at `(x, y)`.     pub fn update_texture_region(&mut self, id: u32, at: [u32; 2], size: [u32; 2], rgba: &[u8]) {         debug_assert_eq!(rgba.len(), (size[0] * size[1] * 4) as usize);",
     "site": "src/render/gpu.rs:1620"
   },
   "src/render/gpu.rs:d1896731d4ec1f49": {
@@ -2573,17 +2573,17 @@
     "reason": "Playing::State exists only while the skeleton has a graph (set by play_state/crossfade_state, which require one), as at the other graph lookups.",
     "site": "src/skeleton2d/skeleton.rs:1057"
   },
+  "src/skeleton2d/skeleton.rs:7619a93e78d61260": {
+    "classification": "caller-contract",
+    "construction": "assert!( duration.is_finite() && duration >= 0.0, \"ponko: a crossfade's duration must be 0 or more\" )",
+    "reason": "Documented # Panics of play_once and crossfade: the message names the misuse (a negative or non-number duration) and the rule; unchanged, only the clip argument became generic.",
+    "site": "src/skeleton2d/skeleton.rs:338"
+  },
   "src/skeleton2d/skeleton.rs:8c79feb4e3015212": {
     "classification": "invariant",
     "construction": ".expect(\"a graph\")",
     "reason": "Internal invariant: match what {             Playing::Clip(c) => (self.data.clips[c].duration, self.speed),             Playing::State(s) => {                 let state = &self.graph.as_ref().expect(\"a graph\").states[s];",
     "site": "src/skeleton2d/skeleton.rs:819"
-  },
-  "src/skeleton2d/skeleton.rs:9b3016933d81eb8d": {
-    "classification": "caller-contract",
-    "construction": "assert!( duration.is_finite() && duration >= 0.0, \"ponko: a crossfade's duration must be 0 or more\" )",
-    "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. }      fn command(&mut self, name: &str, duration: f32, looping: bool) -> bool {         assert!(",
-    "site": "src/skeleton2d/skeleton.rs:267"
   },
   "src/skeleton2d/skeleton.rs:a77c688d742406c3": {
     "classification": "caller-contract",
@@ -3518,7 +3518,7 @@
   "src/three/terrain.rs:37902fbeda39796f": {
     "classification": "caller-contract",
     "construction": "assert!( size > 0.0 && size.is_finite(), \"ponko: create_terrain_tile: size must be above 0 (got {size})\" )",
-    "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. /// If `heights` isn't a square grid of at least 2 \u00d7 2 or `size` isn't above 0.     #[must_use]     pub fn new(heights: &[f32], size: f32) -> Self {         assert!(",
+    "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. /// If `heights` isn't a square grid of at least 2 × 2 or `size` isn't above 0.     #[must_use]     pub fn new(heights: &[f32], size: f32) -> Self {         assert!(",
     "site": "src/three/terrain.rs:456"
   },
   "src/three/terrain.rs:38fbb25474135ec8": {
