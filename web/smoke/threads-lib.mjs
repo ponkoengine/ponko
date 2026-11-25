@@ -18,7 +18,7 @@ export const FALLBACK_WARNING = "it runs on the page's thread alone";
 export const STOP_MESSAGE = "the game stops";
 
 /** The fixture's benchmark workloads (examples/web_threads.rs). */
-export const WORKLOADS = ["par", "sweep", "interleaved", "jobs"];
+export const WORKLOADS = ["par", "sweep", "interleaved", "jobs", "boids"];
 
 /** Ticks a check waits for: past the checksum (tick 120) and a few jobs. */
 export const CHECK_TICKS = 150;
@@ -78,7 +78,7 @@ export const PASSES = [
 export const USAGE =
   "usage: threads.mjs [--dir <site>] [--build] [--browser chromium|firefox|webkit]\n" +
   "                   [--check] [--case worker-panic|gamepads|gamepads-plain|service-worker|warning|thresholds|allocator]\n" +
-  "                   [--bench [--workloads par,sweep,interleaved,jobs] [--threads 1,<n>] [--repeat <r>]]\n" +
+  "                   [--bench [--workloads par,sweep,interleaved,jobs,boids] [--threads 1,<n>] [--repeat <r>]]\n" +
   "                   [--out <dir>] [--timeout <s>]";
 
 export function parseArgs(argv) {

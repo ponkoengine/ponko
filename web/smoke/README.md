@@ -297,7 +297,8 @@ More modes:
   console must say `the game stops`, the page must still answer, and the
   ticks must stop.
 - `--bench` times the fixture's workloads (`par`, `sweep`, `interleaved`,
-  `jobs`: those of `crates/ponko_bench`) with `?threads=1` and with the
+  `jobs`: those of `crates/ponko_bench`; `boids`: one tick of
+  `examples/boids.rs`, 20,000 boids) with `?threads=1` and with the
   default, three page loads each (`--repeat`). It prints the medians, their
   spread, and each speed-up, saying whether it is beyond the noise.
   `--dir <an ordinary build> --threads 1` times a build without threads.
