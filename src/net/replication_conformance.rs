@@ -46,6 +46,7 @@
 //! | Loopback that loses and reorders (`loopback_link`) | `replicates_over_a_loopback_that_loses_and_reorders` |
 //! | UDP, and WebSocket (what browsers use; a native client here) | `replicates_over_udp_and_websocket` |
 //! | Steam relay (fake Steam API, `--features steam`) | `replicates_over_the_steam_relay` in `net/steam_messages.rs` |
+//! | Lobby relay (a relay server in memory, links that lose and reorder, `--features lobby`) | `replicates_over_the_lobby_relay_through_loss_and_latency` in `net/lobby/relay.rs` |
 //!
 //! A browser joining a server is checked by `web/smoke/replication.mjs` (a
 //! headless tab of the web build and a native dedicated server). Playing in
@@ -69,7 +70,7 @@ use crate::net::{
 };
 
 pub(super) const HZ: f64 = 60.0;
-const STEP: Duration = Duration::from_micros(16_667);
+pub(super) const STEP: Duration = Duration::from_micros(16_667);
 
 /// A plain replicated position, interpolated on clients.
 #[derive(Component, Replicate, Clone, Copy, Default, PartialEq, Debug)]
@@ -168,6 +169,9 @@ pub(super) struct Session {
     pub(super) sides: Vec<Side>,
     /// Real sockets: give packets a moment each tick.
     real: bool,
+    /// Runs before the sides each tick: a server the transport goes
+    /// through (the lobby relay's).
+    pub(super) before: Option<Box<dyn FnMut()>>,
 }
 
 impl Session {
@@ -194,6 +198,7 @@ impl Session {
             net: None,
             sides: nets.into_iter().map(|n| Side::new(Some(n), rep())).collect(),
             real,
+            before: None,
         }
     }
 
@@ -204,6 +209,9 @@ impl Session {
         }
         if self.real {
             std::thread::sleep(Duration::from_millis(2));
+        }
+        if let Some(before) = &mut self.before {
+            before();
         }
         for (i, side) in self.sides.iter_mut().enumerate() {
             side.tick(|s| game(i, s));
