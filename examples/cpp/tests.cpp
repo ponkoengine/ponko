@@ -1700,11 +1700,15 @@ static void native_control_method() {
         .control_endpoint(true)
         .control_method("example.echo", "Echo parameters", echo)
         .run_headless(0, [](ponko::ctx& ctx) { CHECK(ctx.control_port().value_or(0) != 0); });
-    throws_kind([&] {
+    bool refused = false;
+    try {
         ponko::game("c++ reserved method", 1, 1)
             .control_method("debug.custom", "Reserved", echo)
-            .run_headless(0, [](ponko::ctx&) {});
-    }, PONKO_ERROR_INVALID);
+            .run_headless(0, [](ponko::ctx&) { CHECK(false); });
+    } catch (const ponko::error& error) {
+        refused = std::string_view(error.what()).find("one of the engine's namespaces") != std::string_view::npos;
+    }
+    CHECK(refused);
 }
 
 static void asset_streaming() {
@@ -2962,11 +2966,12 @@ static void retained_ui() {
         auto gift = ui.add_toggle(root, "Gift", false, u::layout().size(100, 20).shrink(0));
         auto volume = ui.add_slider(root, 0.25f, u::layout().size(200, 20).shrink(0));
         auto note = ui.add_text_input(root, "hi", u::layout().size(200, 30).shrink(0));
-        auto number = ui.add_number_field(u::none, 5.0, u::layout());
+        auto widgets = ui.add_panel(u::none, u::layout());
+        auto number = ui.add_number_field(widgets, 5.0, u::layout());
         ui.set_number_range(number, 0.0, 10.0, 2.0);
         auto limits = ui.number_range(number);
         CHECK(limits.min == 0.0 && limits.max == 10.0 && limits.step == 2.0);
-        auto list = ui.add_list(u::none, 20.0f, 4, u::layout());
+        auto list = ui.add_list(widgets, 20.0f, 4, u::layout());
         ui.set_list_len(list, 100);
         CHECK(ui.list_len(list) == 100);
         CHECK(!ui.tooltip(number));

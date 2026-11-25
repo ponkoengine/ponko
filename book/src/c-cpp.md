@@ -467,8 +467,8 @@ check builds and runs.
 
 - Camera rigs expose the active target, an entity's held-item offset, and the
   view-model lens. These are optional in C++; pass an empty option to clear a
-  held item or lens. In C, initialize a lens with `ponko_view_model_defaults`
-  before changing its fields, and pass a null descriptor to clear it.
+  held item or lens. In C, set the lens descriptor’s size and version before
+  calling `ponko_view_model_defaults`. Pass a null descriptor to clear it.
 - Retained UI exposes the screen's mode, the number field's range and step,
   the list's total length, and the tooltip text. Read individual visible
   rows with the list-item accessor after a rows-shown event.
