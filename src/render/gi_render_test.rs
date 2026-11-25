@@ -2118,8 +2118,12 @@ fn settles_at(curve: &[f32], settled: f32, within: f32) -> usize {
 /// after a lamp comes on in a closed room the roof stays within 5% of
 /// where it settles from 600 frames on, because the probes whose light is
 /// still changing (those in the room) take more of the turns. Taking
-/// turns by age and distance alone, it is still more than 5% off at 900
-/// frames (it took 1200 when measured).
+/// turns by age and distance alone (the negative control) misses that
+/// bound and takes at least twice as long: 1200 frames on an Apple GPU,
+/// 800 against 400 on a Radeon RX Vega (Vulkan and Direct3D 12 alike).
+/// The roof's brightness comes in 8-bit steps, and there the control's
+/// curve reached 0.950 of the settled value at 900 frames, exactly on the
+/// 5% line, so "still off at 900" held on one GPU and not the other.
 #[test]
 fn probes_whose_light_changes_take_more_turns_so_a_lamp_settles_sooner() {
     let Some(boosted) = lamp_on_in_a_default_grid(100, 15, false) else {
@@ -2146,8 +2150,8 @@ fn probes_whose_light_changes_take_more_turns_so_a_lamp_settles_sooner() {
     assert!(boosted[0] > 0.0, "the lamp lights the roof: {}", print(&boosted));
     assert!(fast <= 600, "settles within 600 frames: {}", print(&boosted));
     assert!(
-        slow > 900,
-        "negative control: by age alone it is still off at 900 frames: {}",
+        slow > 600 && slow >= 2 * fast,
+        "negative control: by age alone it is still off at 600 frames and takes twice as long ({slow} against {fast}): {}",
         print(&unboosted)
     );
 }

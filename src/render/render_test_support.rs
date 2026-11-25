@@ -79,6 +79,78 @@ pub(crate) struct TestGpu {
     pub queue: wgpu::Queue,
 }
 
+/// Direct3D 12 devices of a test that panicked are never dropped. wgpu's
+/// queue waits for the GPU to finish with no time limit when it is dropped,
+/// so a test that panics while its GPU work is stuck (after a failed
+/// pipeline, say) would wait in its unwinding forever and the test binary
+/// would never exit. A clone of each Direct3D 12 device and queue a test
+/// opens is kept here; once the test's thread has ended, the next test to
+/// open one drops them, or leaves them alive if the thread panicked (a
+/// leak in a run that already failed). Other backends are left alone:
+/// Metal's timestamp query sets are given back when their queue goes (see
+/// `query_sets`), so keeping queues there could run out.
+mod kept {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex, PoisonError, Weak};
+
+    /// A test thread: alive while `alive` upgrades, and whether it panicked.
+    struct Owner {
+        alive: Weak<()>,
+        panicked: Arc<AtomicBool>,
+    }
+
+    thread_local! {
+        static OWNER: (Arc<()>, Arc<AtomicBool>) = (Arc::new(()), Arc::new(AtomicBool::new(false)));
+    }
+
+    static KEPT: Mutex<Vec<(Owner, wgpu::Device, wgpu::Queue)>> = Mutex::new(Vec::new());
+
+    /// Installs, once, the panic hook that marks a thread that panicked
+    /// (then runs the hook that was there).
+    pub(super) fn watch() {
+        static HOOK: std::sync::Once = std::sync::Once::new();
+        HOOK.call_once(|| {
+            let previous = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                let _ = OWNER.try_with(|o| o.1.store(true, Ordering::Relaxed));
+                previous(info);
+            }));
+        });
+    }
+
+    /// Keeps `device` and `queue` past this test's thread, and lets go of
+    /// those of threads that have ended.
+    pub(super) fn keep(device: &wgpu::Device, queue: &wgpu::Queue) {
+        watch();
+        let Ok(owner) = OWNER.try_with(|o| Owner {
+            alive: Arc::downgrade(&o.0),
+            panicked: o.1.clone(),
+        }) else {
+            return;
+        };
+        let ended = {
+            let mut kept = KEPT.lock().unwrap_or_else(PoisonError::into_inner);
+            let (ended, running) = std::mem::take(&mut *kept)
+                .into_iter()
+                .partition::<Vec<_>, _>(|(o, ..)| o.alive.strong_count() == 0);
+            *kept = running;
+            kept.push((owner, device.clone(), queue.clone()));
+            ended
+        };
+        // Not under the lock: dropping a queue waits for its GPU work.
+        for entry in ended {
+            if entry.0.panicked.load(Ordering::Relaxed) {
+                std::mem::forget(entry);
+            }
+        }
+    }
+
+    /// Whether this thread panicked, so its devices are left alive.
+    pub(super) fn panicked() -> bool {
+        OWNER.with(|o| o.1.load(Ordering::Relaxed))
+    }
+}
+
 /// The running test's name (libtest names each test's thread after it).
 fn test_name() -> String {
     std::thread::current().name().unwrap_or("unnamed test").to_owned()
@@ -196,6 +268,9 @@ pub(super) fn gpu_adjusted(
             return None;
         }
     };
+    if info.backend == wgpu::Backend::Dx12 {
+        kept::keep(&device, &queue);
+    }
     match forced_tier() {
         Some(tier) => eprintln!(
             "render test ran [{}] on {} as the {tier} tier",
@@ -948,6 +1023,20 @@ fn semantic_regions_report_the_fraction_that_holds() {
     };
     assert_eq!(image.fraction(0..2, 0..1, |p| p[0] > 128), 0.5);
     assert_region(&image, 0..1, 0..1, 1.0, "the left pixel is red", |p| p[0] > 128);
+}
+
+#[test]
+fn a_test_thread_that_panics_is_marked_so_its_devices_are_left_alive() {
+    kept::watch();
+    let marked = std::thread::spawn(|| {
+        let before = kept::panicked();
+        let _ = std::panic::catch_unwind(|| panic!("a failing test (expected in this test's output)"));
+        (before, kept::panicked())
+    })
+    .join()
+    .unwrap();
+    assert_eq!(marked, (false, true), "unmarked before, marked after the panic");
+    assert!(!kept::panicked(), "other threads stay unmarked");
 }
 
 /// A 4x4 grey image, and what a workflow test checks references with.
