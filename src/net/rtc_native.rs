@@ -11,8 +11,11 @@
 //! binding request to each configured server finds the address a NAT maps
 //! the socket to, offered as a server-reflexive candidate. ICE then tries
 //! every pair, which punches holes through both NATs when they map a socket
-//! to the same address for every destination (most home routers). There is
-//! no TURN client: two peers behind strict (symmetric) NATs can't connect.
+//! to the same address for every destination (most home routers). Two peers
+//! behind strict (symmetric) NATs can't punch through: with a TURN server
+//! configured, each allocates a relayed address there (`turn.rs`), offered
+//! as a relayed candidate, the last pair ICE tries. Its packets go to and
+//! come from the TURN server on the same socket.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::io;
@@ -27,6 +30,7 @@ use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc};
 
 use super::rtc::{CHANNEL_LABEL, RtcConfig, Signal};
 use super::stun;
+use super::turn::{TurnClient, TurnEvent};
 
 /// Datagrams one advance reads at most.
 const READS: usize = 1024;
@@ -92,6 +96,14 @@ pub(in crate::net) struct Agent {
     now: Duration,
     signals: VecDeque<(u64, Signal)>,
     inbox: VecDeque<(u64, Vec<u8>)>,
+    /// One allocation per TURN server.
+    turn: Vec<TurnClient>,
+    /// Offer relayed candidates only.
+    relay_only: bool,
+    /// Datagrams for a TURN server, reused.
+    turn_out: Vec<Vec<u8>>,
+    /// TURN allocations that failed, for `poll` to report.
+    errors: VecDeque<String>,
 }
 
 impl Agent {
@@ -109,7 +121,31 @@ impl Agent {
         for url in config.stun_urls() {
             servers.extend(resolve_stun(url, ip.is_ipv4())?);
         }
-        Self::with_socket(Box::new(socket), SocketAddr::new(ip, local.port()), &servers)
+        let mut turn = Vec::new();
+        for (url, username, credential) in config.turn_servers() {
+            for addr in resolve_turn(url, ip.is_ipv4())? {
+                turn.push((addr, username.to_owned(), credential.to_owned()));
+            }
+        }
+        Ok(
+            Self::with_socket(Box::new(socket), SocketAddr::new(ip, local.port()), &servers)?
+                .with_turn(&turn, config.relay_only),
+        )
+    }
+
+    /// Adds TURN servers (address, user name, password); with
+    /// `relay_only`, the relayed candidates are the only ones offered.
+    pub(super) fn with_turn(mut self, servers: &[(SocketAddr, String, String)], relay_only: bool) -> Self {
+        self.turn = servers
+            .iter()
+            .map(|(addr, user, password)| TurnClient::new(*addr, user, password))
+            .collect();
+        self.relay_only = relay_only;
+        if relay_only {
+            self.local.clear();
+            self.stun.clear();
+        }
+        self
     }
 
     /// An agent on `socket`, whose packets come from `base`, asking the STUN
@@ -148,6 +184,10 @@ impl Agent {
             now: Duration::ZERO,
             signals: VecDeque::new(),
             inbox: VecDeque::new(),
+            turn: Vec::new(),
+            relay_only: false,
+            turn_out: Vec::new(),
+            errors: VecDeque::new(),
         })
     }
 
@@ -257,7 +297,11 @@ impl Agent {
     pub(in crate::net) fn advance(&mut self, now: Duration) {
         self.now = self.now.max(now);
         self.ask_stun();
-        let mut buf = [0u8; 2048];
+        for i in 0..self.turn.len() {
+            self.turn[i].poll(self.now, &mut self.turn_out);
+            self.flush_turn(i);
+        }
+        let mut buf = [0u8; 4096];
         for _ in 0..READS {
             let Ok(Some((n, from))) = self.socket.recv_from(&mut buf) else {
                 break;
@@ -300,7 +344,41 @@ impl Agent {
         }
     }
 
+    /// Sends what TURN client `i` wants sent, and acts on what it says.
+    fn flush_turn(&mut self, i: usize) {
+        let server = self.turn[i].server();
+        for datagram in self.turn_out.drain(..) {
+            let _ = self.socket.send_to(&datagram, server);
+        }
+        while let Some(event) = self.turn[i].next_event() {
+            match event {
+                TurnEvent::Allocated { relayed, mapped } => {
+                    if let Some(mapped) = mapped.filter(|_| !self.relay_only) {
+                        self.reflexive(mapped);
+                    }
+                    if let Ok(candidate) = Candidate::relayed(relayed, self.base, "udp") {
+                        self.add_local(candidate);
+                    }
+                }
+                TurnEvent::Data { peer, bytes } => {
+                    if let Some(relayed) = self.turn[i].relayed() {
+                        self.deliver(peer, relayed, &bytes);
+                    }
+                }
+                // Without its relayed address, ICE uses the other pairs;
+                // the game hears why from `poll`.
+                TurnEvent::Failed(why) => self.errors.push_back(format!("TURN server {server}: {why}")),
+            }
+        }
+    }
+
     fn receive(&mut self, from: SocketAddr, packet: &[u8]) {
+        if let Some(i) = self.turn.iter().position(|t| t.server() == from)
+            && self.turn[i].receive(packet, self.now)
+        {
+            self.flush_turn(i);
+            return;
+        }
         if stun::is_stun(packet)
             && let Some(q) = self.stun.iter_mut().find(|q| q.server == from && !q.done)
             && let Some(mapped) = stun::mapped_address(packet, q.transaction)
@@ -309,7 +387,16 @@ impl Agent {
             self.reflexive(mapped);
             return;
         }
-        let Ok(receive) = Receive::new(Protocol::Udp, from, self.base, packet) else {
+        if self.relay_only {
+            return; // Nothing but the relayed path, even if a peer finds us.
+        }
+        self.deliver(from, self.base, packet);
+    }
+
+    /// A packet from `from` to our candidate at `to` (the socket's
+    /// address, or a relayed one), for the connection it belongs to.
+    fn deliver(&mut self, from: SocketAddr, to: SocketAddr, packet: &[u8]) {
+        let Ok(receive) = Receive::new(Protocol::Udp, from, to, packet) else {
             return;
         };
         let input = Input::Receive(self.instant(), receive);
@@ -328,12 +415,20 @@ impl Agent {
 
     /// The NAT maps the socket to `mapped`: offer it on every connection.
     fn reflexive(&mut self, mapped: SocketAddr) {
-        if mapped == self.base || self.local.iter().any(|c| c.addr() == mapped) {
+        if mapped == self.base {
             return;
         }
-        let Ok(candidate) = Candidate::server_reflexive(mapped, self.base, "udp") else {
+        if let Ok(candidate) = Candidate::server_reflexive(mapped, self.base, "udp") {
+            self.add_local(candidate);
+        }
+    }
+
+    /// Offers one more local candidate on every connection (and on every
+    /// later one).
+    fn add_local(&mut self, candidate: Candidate) {
+        if self.local.iter().any(|c| c.addr() == candidate.addr()) {
             return;
-        };
+        }
         self.local.push(candidate.clone());
         let ids: Vec<u64> = self.peers.keys().copied().collect();
         for conn in ids {
@@ -360,7 +455,16 @@ impl Agent {
             match peer.rtc.poll_output() {
                 Ok(Output::Timeout(_)) => break,
                 Ok(Output::Transmit(t)) => {
-                    let _ = self.socket.send_to(&t.contents, t.destination);
+                    // From a relayed candidate: through its TURN server.
+                    match self.turn.iter().position(|c| c.relayed() == Some(t.source)) {
+                        Some(i) => {
+                            self.turn[i].send(t.destination, &t.contents, self.now, &mut self.turn_out);
+                            self.flush_turn(i);
+                        }
+                        None => {
+                            let _ = self.socket.send_to(&t.contents, t.destination);
+                        }
+                    }
                 }
                 Ok(Output::Event(event)) => match event {
                     Event::ChannelOpen(id, _) => {
@@ -404,6 +508,12 @@ impl Agent {
         }
         self.peers.insert(conn, peer);
         sent
+    }
+
+    /// A failure of the agent's own: a TURN allocation that failed
+    /// (refused credentials, a server that never answered), once each.
+    pub(in crate::net) fn take_error(&mut self) -> Option<String> {
+        self.errors.pop_front()
     }
 
     pub(in crate::net) fn recv(&mut self, buf: &mut [u8]) -> Option<(u64, usize)> {
@@ -479,13 +589,37 @@ fn primary_ip(v4: bool) -> IpAddr {
 }
 
 /// The addresses of a `stun:host[:port]` URL in the socket's family; other
-/// schemes (TURN) are for browsers and give none.
+/// schemes (TURN) give none.
 fn resolve_stun(url: &str, v4: bool) -> io::Result<Vec<SocketAddr>> {
-    let invalid = |why: &str| io::Error::new(io::ErrorKind::InvalidInput, format!("{url}: {why}"));
     if url.starts_with("turn:") || url.starts_with("turns:") {
         return Ok(Vec::new());
     }
+    let invalid = |why: &str| io::Error::new(io::ErrorKind::InvalidInput, format!("{url}: {why}"));
     let rest = url.strip_prefix("stun:").ok_or_else(|| invalid("not a stun: URL"))?;
+    resolve(url, rest, v4)
+}
+
+/// The addresses of a `turn:host[:port]` URL in the socket's family; TLS
+/// (`turns:`) and TCP (`?transport=tcp`) servers are for browsers and give
+/// none.
+fn resolve_turn(url: &str, v4: bool) -> io::Result<Vec<SocketAddr>> {
+    if url.starts_with("turns:") {
+        return Ok(Vec::new());
+    }
+    let invalid = |why: &str| io::Error::new(io::ErrorKind::InvalidInput, format!("{url}: {why}"));
+    let rest = url.strip_prefix("turn:").ok_or_else(|| invalid("not a turn: URL"))?;
+    if let Some((_, query)) = rest.split_once('?')
+        && query.split('&').any(|kv| kv.eq_ignore_ascii_case("transport=tcp"))
+    {
+        return Ok(Vec::new());
+    }
+    resolve(url, rest, v4)
+}
+
+/// `host[:port][?query]` of an ICE server URL (port 3478 when left out),
+/// looked up in the socket's family.
+fn resolve(url: &str, rest: &str, v4: bool) -> io::Result<Vec<SocketAddr>> {
+    let invalid = |why: &str| io::Error::new(io::ErrorKind::InvalidInput, format!("{url}: {why}"));
     let rest = rest.split('?').next().unwrap_or_default();
     let (host, port) = if let Some(v6) = rest.strip_prefix('[') {
         let (ip, after) = v6.split_once(']').ok_or_else(|| invalid("unclosed IPv6 address"))?;
@@ -529,6 +663,13 @@ mod tests {
             "other family"
         );
         assert!(resolve_stun("turn:192.0.2.10:3478", true).unwrap().is_empty());
+        assert_eq!(
+            resolve_turn("turn:192.0.2.10?transport=udp", true).unwrap(),
+            ["192.0.2.10:3478".parse().unwrap()]
+        );
+        assert!(resolve_turn("turn:192.0.2.10?transport=tcp", true).unwrap().is_empty());
+        assert!(resolve_turn("turns:192.0.2.10:5349", true).unwrap().is_empty());
+        assert!(resolve_turn("stun:192.0.2.10", true).is_err());
         for bad in ["http://x", "stun:", "stun:host:port"] {
             assert_eq!(
                 resolve_stun(bad, true).unwrap_err().kind(),

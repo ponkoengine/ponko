@@ -1,8 +1,10 @@
 //! Transport conformance tests for the message protocol ([`NetMessages`]).
 //!
 //! The message protocol (session handshake + renet lanes) sits on a packet
-//! transport: UDP, the in-memory loopback, or the Steam relay through the
-//! internal `PacketTransport` seam. These tests drive that seam with a
+//! transport: UDP, the in-memory loopback, the Steam relay or the lobby
+//! server's relay (feature `lobby`) through the internal `PacketTransport`
+//! seam. The tests that loop over `EVERY_VIA` also run through an
+//! in-memory lobby relay server, with the same API as directly. These tests drive that seam with a
 //! deterministic scripted transport and simulated time (`poll_elapsed`), so they
 //! need no sockets, no Steam installation and no renderer, and they pin what
 //! the protocol does when the transport delays, loses, duplicates, reorders,
@@ -13,21 +15,21 @@
 //! What a packet transport must do, and what each existing transport does.
 //! "Scripted" is the test transport below; it does each of these on request.
 //!
-//! | Contract | UDP | Loopback (`loopback_lossy`) | Steam relay | Scripted |
-//! |---|---|---|---|---|
-//! | `recv` never blocks; `Ok(None)` means no packet | `WouldBlock` → `None` | yes | yes | yes |
-//! | Other errors are returned from `poll` and don't end sessions | socket errors | never errors | lobby/protocol-mismatch errors | one-shot injection |
-//! | `send` `Ok(false)` = not submitted, treated as loss | `WouldBlock` | never (a full inbox drops silently) | peer not (yet) a lobby member | refusal window |
-//! | Never deliver more than the receive buffer (1500 bytes) | OS-dependent | no check; only engine packets enter | drops > 1500 | drops > 1500 |
-//! | Reject outgoing datagrams above 1500 bytes | OS limit | no | `InvalidInput` | `InvalidInput` |
-//! | May reorder | yes | always (newest first) | per Steam | on request |
-//! | May lose / duplicate | yes / yes | every nth send / no | per Steam | on request |
-//! | Address identity | socket address | `127.0.0.1:(i + 1)` | synthetic address per Steam ID; non-members filtered | synthetic |
-//! | Clock | none; protocol time comes from `poll`/`poll_elapsed` | same | same | same |
-//! | Disconnect | none; protocol `BYE` + silence timeout | same | same (lobby leave is separate) | link cut on request |
-//! | `local_addr()` | `Some` | `None` | `None` | `None` |
-//! | Covered on CI by | `tests/net_messages.rs` (localhost) | `tests/net_messages.rs` | fake Steam API (`--features steam`) | this module |
-//! | Replication on top, covered by | `net/replication_conformance.rs` (with WebSocket) | `net/replication_conformance.rs` | `net/steam_messages.rs` (`--features steam`) | `net/replication_conformance.rs` |
+//! | Contract | UDP | Loopback (`loopback_lossy`) | Steam relay | Lobby relay | Scripted |
+//! |---|---|---|---|---|---|
+//! | `recv` never blocks; `Ok(None)` means no packet | `WouldBlock` → `None` | yes | yes | yes (reads the lobby's inbox) | yes |
+//! | Other errors are returned from `poll` and don't end sessions | socket errors | never errors | lobby/protocol-mismatch errors | a failed or closed lobby connection, or leaving the room, once | one-shot injection |
+//! | `send` `Ok(false)` = not submitted, treated as loss | `WouldBlock` | never (a full inbox drops silently) | peer not (yet) a lobby member | out of the room or the lobby lane is full | refusal window |
+//! | Never deliver more than the receive buffer (1500 bytes) | OS-dependent | no check; only engine packets enter | drops > 1500 | whole relay frames; refused at creation if the server relays less than 1504 bytes | drops > 1500 |
+//! | Reject outgoing datagrams above 1500 bytes | OS limit | no | `InvalidInput` | the server's `max_relay_bytes` | `InvalidInput` |
+//! | May reorder | yes | always (newest first) | per Steam | per the lobby's links | on request |
+//! | May lose / duplicate | yes / yes | every nth send / no | per Steam | yes / no (the lobby's unreliable lane drops duplicates) | on request |
+//! | Address identity | socket address | `127.0.0.1:(i + 1)` | synthetic address per Steam ID; non-members filtered | synthetic IPv6 per member id; a client only hears its host | synthetic |
+//! | Clock | none; protocol time comes from `poll`/`poll_elapsed` | same | same | the lobby follows the protocol time (`advance`) | same |
+//! | Disconnect | none; protocol `BYE` + silence timeout | same | same (lobby leave is separate) | same (leaving the room is an error from `poll`) | link cut on request |
+//! | `local_addr()` | `Some` | `None` | `None` | `None` | `None` |
+//! | Covered on CI by | `tests/net_messages.rs` (localhost) | `tests/net_messages.rs` | fake Steam API (`--features steam`) | this module (`Via::Relay`), `net/lobby/relay.rs`, `ponko_lobby`'s `tests/relay_sessions.rs` | this module |
+//! | Replication on top, covered by | `net/replication_conformance.rs` (with WebSocket) | `net/replication_conformance.rs` | `net/steam_messages.rs` (`--features steam`) | `net/lobby/relay.rs` | `net/replication_conformance.rs` |
 //!
 //! Protocol guarantees pinned here, given any transport that keeps the
 //! contract above:
@@ -36,6 +38,7 @@
 //! |---|---|
 //! | Delivery with latency, every lane | `delivers_every_lane_through_latency` |
 //! | Reliable lanes: exactly once (ordered lane in order) under loss, duplication and reordering; unreliable: never stale or duplicated | `reliable_lanes_survive_loss_duplication_and_reordering` |
+//! | Several clients each get every reliable message through random loss and jitter | `several_clients_get_every_reliable_message_through_random_loss_and_jitter` |
 //! | Transport refusal (`Ok(false)`) is loss: not counted as sent, recovered by resends | `refused_sends_count_as_loss_and_recover` |
 //! | Transport errors surface from `poll` once and keep the session | `transport_errors_surface_once_and_keep_the_session` |
 //! | `disconnect` is reported once on both sides, even when sending fails | `explicit_disconnect_is_reported_once_on_each_side`, `disconnect_reports_locally_even_when_the_transport_fails` |
@@ -61,20 +64,48 @@ use std::io;
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use super::scripted::{MTU, Network, Port, Shared, addr, port};
+use super::scripted::{EVERY_VIA, MTU, Network, Port, Shared, Via, addr, port};
 use crate::net::{Lane, MAX_MESSAGE_BYTES, MessageEvent, NetMessages, PeerId};
 
 /// One scripted step: the network advances one tick, then every endpoint polls.
 const STEP: Duration = Duration::from_millis(10);
 
 /// A host (`nets[0]`, address `addr(0)`) and clients (`addr(1)`, ...), with
-/// every event drained into `logs` after each poll.
+/// every event drained into `logs` after each poll. Through a relay, the
+/// server is `addr(0)` and the host and clients `addr(1)`, ...
 struct Session {
     net: Shared,
     nets: Vec<NetMessages>,
     logs: Vec<Vec<MessageEvent>>,
+    /// The relay server, polled at every step, for endpoints through one.
+    #[cfg(feature = "lobby")]
+    relay: Option<super::lobby::relay::testing::RelayServer>,
 }
 impl Session {
+    /// [`new`](Self::new), with the endpoints reaching each other `via` that.
+    fn via(via: Via, clients: usize, max_clients: usize, script: impl FnOnce(&mut Network)) -> Self {
+        match via {
+            Via::Direct => Self::new(clients, max_clients, script),
+            #[cfg(feature = "lobby")]
+            Via::Relay => {
+                // The room forms first, on the network already shaped by
+                // `script`; then the room's host hosts the endpoint.
+                let net: Shared = Default::default();
+                script(&mut net.lock().unwrap());
+                let (server, lobbies) = super::lobby::relay::testing::scripted_room(&net, clients + 1, STEP);
+                let mut lobbies = lobbies.into_iter();
+                let mut nets = vec![NetMessages::host_relay(lobbies.next().unwrap(), max_clients).unwrap()];
+                nets.extend(lobbies.map(|l| NetMessages::join_relay(l).unwrap()));
+                let logs = nets.iter().map(|_| Vec::new()).collect();
+                Self {
+                    net,
+                    nets,
+                    logs,
+                    relay: Some(server),
+                }
+            }
+        }
+    }
     fn new(clients: usize, max_clients: usize, script: impl FnOnce(&mut Network)) -> Self {
         let net: Shared = Default::default();
         script(&mut net.lock().unwrap());
@@ -89,7 +120,13 @@ impl Session {
             nets.push(NetMessages::transported(port(i), Some(addr(0)), 1));
         }
         let logs = nets.iter().map(|_| Vec::new()).collect();
-        Self { net, nets, logs }
+        Self {
+            net,
+            nets,
+            logs,
+            #[cfg(feature = "lobby")]
+            relay: None,
+        }
     }
     fn script(&self, f: impl FnOnce(&mut Network)) {
         f(&mut self.net.lock().unwrap());
@@ -97,6 +134,10 @@ impl Session {
     fn step(&mut self, steps: usize) {
         for _ in 0..steps {
             self.net.lock().unwrap().tick += 1;
+            #[cfg(feature = "lobby")]
+            if let Some(relay) = &mut self.relay {
+                relay.poll(STEP);
+            }
             for i in 0..self.nets.len() {
                 self.poll(i).unwrap();
             }
@@ -159,57 +200,101 @@ fn is_strictly_increasing(v: &[u32]) -> bool {
 
 #[test]
 fn delivers_every_lane_through_latency() {
-    let instant = Session::new(1, 1, |_| {}).connect();
-    let mut s = Session::new(1, 1, |n| n.delay = 5);
-    // The handshake is one round trip: two one-way delays. Without delay the
-    // host already polls one step after the client (poll order), hence 9.
-    assert_eq!(s.connect(), instant + 9);
-    s.take(1);
-    let peer = PeerId::from_bits(1);
-    for i in 0u32..50 {
-        for lane in [Lane::Reliable, Lane::ReliableUnordered, Lane::Unreliable] {
-            s.nets[0].send(peer, lane, &i.to_le_bytes()).unwrap();
+    for via in EVERY_VIA {
+        let instant = Session::via(via, 1, 1, |_| {}).connect();
+        let mut s = Session::via(via, 1, 1, |n| n.delay = 5);
+        let delayed = s.connect();
+        if via == Via::Direct {
+            // The handshake is one round trip: two one-way delays. Without
+            // delay the host already polls one step after the client (poll
+            // order), hence 9.
+            assert_eq!(delayed, instant + 9);
+        } else {
+            // Through the relay each way is two hops.
+            assert!(delayed >= instant + 18, "{via:?}: {delayed} vs {instant}");
         }
-        s.step(1);
+        s.take(1);
+        let peer = PeerId::from_bits(1);
+        for i in 0u32..50 {
+            for lane in [Lane::Reliable, Lane::ReliableUnordered, Lane::Unreliable] {
+                s.nets[0].send(peer, lane, &i.to_le_bytes()).unwrap();
+            }
+            s.step(1);
+        }
+        s.step(30);
+        let got = s.take(1);
+        let all: Vec<u32> = (0..50).collect();
+        assert_eq!(messages(&got, Lane::Reliable), all, "{via:?}");
+        assert_eq!(messages(&got, Lane::ReliableUnordered), all, "{via:?}");
+        assert_eq!(messages(&got, Lane::Unreliable), all, "{via:?}");
+        assert!(disconnects(&got).is_empty());
     }
-    s.step(20);
-    let got = s.take(1);
-    let all: Vec<u32> = (0..50).collect();
-    assert_eq!(messages(&got, Lane::Reliable), all);
-    assert_eq!(messages(&got, Lane::ReliableUnordered), all);
-    assert_eq!(messages(&got, Lane::Unreliable), all);
-    assert!(disconnects(&got).is_empty());
 }
 
 #[test]
 fn reliable_lanes_survive_loss_duplication_and_reordering() {
-    let mut s = Session::new(1, 1, |n| {
-        n.delay = 2;
-        n.drop_every = 3;
-        n.duplicate = true;
-        n.newest_first = true;
-    });
-    s.connect();
-    s.take(1);
-    let peer = PeerId::from_bits(1);
-    for i in 0u32..200 {
-        for lane in [Lane::Reliable, Lane::ReliableUnordered, Lane::Unreliable] {
-            s.nets[0].send(peer, lane, &i.to_le_bytes()).unwrap();
+    for via in EVERY_VIA {
+        let mut s = Session::via(via, 1, 1, |n| {
+            n.delay = 2;
+            via.drop_one_in(n, 3);
+            n.duplicate = true;
+            n.newest_first = true;
+        });
+        s.connect();
+        s.take(1);
+        let peer = PeerId::from_bits(1);
+        for i in 0u32..200 {
+            for lane in [Lane::Reliable, Lane::ReliableUnordered, Lane::Unreliable] {
+                s.nets[0].send(peer, lane, &i.to_le_bytes()).unwrap();
+            }
+            if i % 4 == 0 {
+                s.step(1);
+            }
         }
-        if i % 4 == 0 {
+        s.step(300);
+        let got = s.take(1);
+        assert_eq!(messages(&got, Lane::Reliable), (0..200).collect::<Vec<_>>(), "{via:?}");
+        let mut unordered = messages(&got, Lane::ReliableUnordered);
+        unordered.sort_unstable();
+        assert_eq!(unordered, (0..200).collect::<Vec<_>>(), "exactly once");
+        let unreliable = messages(&got, Lane::Unreliable);
+        assert!(!unreliable.is_empty());
+        assert!(is_strictly_increasing(&unreliable), "never stale or duplicated");
+        assert!(disconnects(&got).is_empty());
+    }
+}
+
+#[test]
+fn several_clients_get_every_reliable_message_through_random_loss_and_jitter() {
+    for via in EVERY_VIA {
+        let mut s = Session::via(via, 3, 3, |n| {
+            n.delay = 3;
+            n.jitter = 5;
+            n.loss_per_mille = 100;
+        });
+        s.connect();
+        for i in 1..=3 {
+            s.take(i);
+        }
+        for i in 0u32..100 {
+            for c in 1..=3 {
+                s.nets[0]
+                    .send(PeerId::from_bits(c), Lane::Reliable, &i.to_le_bytes())
+                    .unwrap();
+            }
             s.step(1);
         }
+        s.step(200);
+        for c in 1..=3 {
+            let got = s.take(c);
+            assert_eq!(
+                messages(&got, Lane::Reliable),
+                (0..100).collect::<Vec<_>>(),
+                "{via:?}, client {c}"
+            );
+            assert!(disconnects(&got).is_empty());
+        }
     }
-    s.step(300);
-    let got = s.take(1);
-    assert_eq!(messages(&got, Lane::Reliable), (0..200).collect::<Vec<_>>());
-    let mut unordered = messages(&got, Lane::ReliableUnordered);
-    unordered.sort_unstable();
-    assert_eq!(unordered, (0..200).collect::<Vec<_>>(), "exactly once");
-    let unreliable = messages(&got, Lane::Unreliable);
-    assert!(!unreliable.is_empty());
-    assert!(is_strictly_increasing(&unreliable), "never stale or duplicated");
-    assert!(disconnects(&got).is_empty());
 }
 
 #[test]
@@ -323,6 +408,8 @@ fn hello_retries_keep_the_host_link_alive_until_welcome_arrives() {
             NetMessages::transported(port(&net, 1), Some(addr(0)), 1),
         ],
         logs: vec![Vec::new(), Vec::new()],
+        #[cfg(feature = "lobby")]
+        relay: None,
         net,
     };
     s.script(|n| {
@@ -379,6 +466,8 @@ fn silent_link_times_out_both_sides_in_simulated_time() {
         net,
         logs: vec![Vec::new(), Vec::new()],
         nets,
+        #[cfg(feature = "lobby")]
+        relay: None,
     };
     s.connect();
     s.take(0);
@@ -573,25 +662,27 @@ fn peer_ids_follow_handshake_order_and_full_hosts_refuse() {
 
 #[test]
 fn same_script_gives_the_same_traffic() {
-    let run = || {
-        let mut s = Session::new(1, 1, |n| {
-            n.delay = 1;
-            n.drop_every = 4;
-            n.newest_first = true;
-        });
-        s.connect();
-        for i in 0u32..100 {
-            s.nets[0]
-                .send(PeerId::from_bits(1), Lane::Unreliable, &i.to_le_bytes())
-                .unwrap();
-            s.nets[0]
-                .send(PeerId::from_bits(1), Lane::Reliable, &i.to_le_bytes())
-                .unwrap();
-            s.step(1);
-        }
-        s.step(50);
-        let stats = (s.nets[0].stats(), s.nets[1].stats());
-        (s.take(0), s.take(1), stats)
-    };
-    assert_eq!(run(), run());
+    for via in EVERY_VIA {
+        let run = || {
+            let mut s = Session::via(via, 1, 1, |n| {
+                n.delay = 1;
+                via.drop_one_in(n, 4);
+                n.newest_first = true;
+            });
+            s.connect();
+            for i in 0u32..100 {
+                s.nets[0]
+                    .send(PeerId::from_bits(1), Lane::Unreliable, &i.to_le_bytes())
+                    .unwrap();
+                s.nets[0]
+                    .send(PeerId::from_bits(1), Lane::Reliable, &i.to_le_bytes())
+                    .unwrap();
+                s.step(1);
+            }
+            s.step(50);
+            let stats = (s.nets[0].stats(), s.nets[1].stats());
+            (s.take(0), s.take(1), stats)
+        };
+        assert_eq!(run(), run(), "{via:?}");
+    }
 }

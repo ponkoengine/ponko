@@ -34,7 +34,9 @@ How to choose, in three questions:
    design: send [messages](networking.md#application-messages-rust).
 
 The models share the transports: plain UDP, WebSocket for players in a
-browser, and Steam relays ([which transport](networking.md#which-transport)).
+browser, Steam relays, and the [lobby server's relay](lobby.md#game-sessions-through-the-relay)
+for players who can't reach each other ([which transport](networking.md#which-transport)).
+[Putting a game online](online.md) is one complete setup.
 They also share the testing approach: a scripted network that loses,
 delays, reorders and duplicates packets on a deterministic clock, so a
 multiplayer test runs in milliseconds and the same way every time.
