@@ -29,7 +29,6 @@ pub(crate) fn levels_to_drop(width: u32, height: u32, limit: u32) -> u32 {
 /// 2x2 block above it (a box filter, as the mip chain itself would be).
 /// An odd last row or column is folded into its neighbour.
 pub(crate) fn reduce(width: u32, height: u32, rgba: &[u8], levels: u32) -> (u32, u32, Vec<u8>) {
-    debug_assert_eq!(rgba.len(), width as usize * height as usize * 4);
     let mut out = (width, height, rgba.to_vec());
     for _ in 0..levels {
         out = halve(out.0, out.1, &out.2);

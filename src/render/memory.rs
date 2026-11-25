@@ -350,6 +350,54 @@ pub(crate) fn adapter_bytes(device: &wgpu::Device) -> (Option<u64>, &'static str
     )
 }
 
+/// What the system says about the GPU's own memory for this process
+/// (see [`VideoMemory`](crate::perf::VideoMemory)): DXGI on Windows, for
+/// whichever backend wgpu runs on, else `None`.
+pub(crate) fn video_memory(info: &wgpu::AdapterInfo) -> Option<crate::perf::VideoMemory> {
+    #[cfg(windows)]
+    return dxgi_video_memory(info.vendor, info.device);
+    #[cfg(not(windows))]
+    {
+        let _ = info;
+        None
+    }
+}
+
+/// `QueryVideoMemoryInfo` (the local segment: the GPU's own memory) of the
+/// DXGI adapter with PCI ids `vendor` and `device`, the one wgpu draws on.
+#[cfg(windows)]
+fn dxgi_video_memory(vendor: u32, device: u32) -> Option<crate::perf::VideoMemory> {
+    use windows::Win32::Graphics::Dxgi::{
+        CreateDXGIFactory1, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, DXGI_QUERY_VIDEO_MEMORY_INFO, IDXGIAdapter3, IDXGIFactory1,
+    };
+    use windows::core::Interface as _;
+    // SAFETY: a factory and adapters of our own, released when dropped;
+    // each call writes only the description or info struct passed to it,
+    // and nothing wgpu keeps track of is touched.
+    unsafe {
+        let factory: IDXGIFactory1 = CreateDXGIFactory1().ok()?;
+        // Ends with DXGI_ERROR_NOT_FOUND past the last adapter.
+        for index in 0.. {
+            let adapter = factory.EnumAdapters1(index).ok()?;
+            let desc = adapter.GetDesc1().ok()?;
+            if desc.VendorId != vendor || desc.DeviceId != device {
+                continue;
+            }
+            let adapter: IDXGIAdapter3 = adapter.cast().ok()?;
+            let mut info = DXGI_QUERY_VIDEO_MEMORY_INFO::default();
+            adapter
+                .QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &mut info)
+                .ok()?;
+            return Some(crate::perf::VideoMemory {
+                total: desc.DedicatedVideoMemory as u64,
+                budget: info.Budget,
+                used: info.CurrentUsage,
+            });
+        }
+        None
+    }
+}
+
 /// Metal's `currentAllocatedSize` for `device`, on the Metal backend.
 #[cfg(target_vendor = "apple")]
 fn metal_allocated_bytes(device: &wgpu::Device) -> Option<u64> {
@@ -366,6 +414,28 @@ fn metal_allocated_bytes(device: &wgpu::Device) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn dxgi_reports_the_video_memory_of_a_real_adapter() {
+        use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
+        // The first adapter DXGI lists (on a machine without a GPU, its
+        // software rasterizer), found by its ids as wgpu's would be.
+        // SAFETY: a factory of our own; GetDesc1 fills the struct it returns.
+        let desc = unsafe {
+            let factory: IDXGIFactory1 = CreateDXGIFactory1().expect("DXGI");
+            factory
+                .EnumAdapters1(0)
+                .expect("an adapter")
+                .GetDesc1()
+                .expect("its description")
+        };
+        let memory = dxgi_video_memory(desc.VendorId, desc.DeviceId).expect("its memory");
+        assert_eq!(memory.total, desc.DedicatedVideoMemory as u64);
+        assert!(memory.budget > 0, "{memory:?}");
+        // No adapter has these ids.
+        assert_eq!(dxgi_video_memory(0xFFFF, 0xFFFF), None);
+    }
 
     #[test]
     fn classes_add_up_to_the_total() {

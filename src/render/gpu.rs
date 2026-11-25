@@ -1776,6 +1776,12 @@ impl Renderer {
         Some(self.gpu_memory_listed(false).0)
     }
 
+    /// What the system says about this GPU's own memory for the game (see
+    /// `memory::video_memory`). Asks the system each call.
+    pub fn video_memory(&self) -> Option<crate::perf::VideoMemory> {
+        super::memory::video_memory(&self.device.adapter_info())
+    }
+
     /// [`gpu_memory`](Self::gpu_memory), and with `list`, every texture and
     /// buffer it counted, largest first (`perf.get`'s `gpu_allocations`).
     pub(crate) fn gpu_memory_listed(&self, list: bool) -> (crate::perf::GpuMemory, Vec<super::memory::GpuAllocation>) {
