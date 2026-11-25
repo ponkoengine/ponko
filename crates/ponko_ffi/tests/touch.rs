@@ -251,6 +251,27 @@ fn onscreen_controls_from_c_drive_their_actions() {
         );
         feed(ctx, 3, PonkoTouchPhase::PONKO_TOUCH_STARTED, jump.x, jump.y);
         assert!(!flag(ponko_ctx_action_down, ctx, c"jump"));
+        feed(ctx, 3, PonkoTouchPhase::PONKO_TOUCH_ENDED, jump.x, jump.y);
+
+        // The same by an action id, resolved once: no name lookup.
+        let mut jump_id = PONKO_ACTION_NONE;
+        assert_eq!(ponko_ctx_action_id(ctx, c"jump".as_ptr(), &mut jump_id), PONKO_OK);
+        let mut at = PonkoVec2::default();
+        assert_eq!(ponko_ctx_touch_control_center_id(ctx, jump_id, &mut at), PONKO_OK);
+        assert_eq!((at.x, at.y), (jump.x, jump.y));
+        assert_eq!(ponko_ctx_set_touch_control_shown_id(ctx, jump_id, true), PONKO_OK);
+        feed(ctx, 4, PonkoTouchPhase::PONKO_TOUCH_STARTED, jump.x, jump.y);
+        assert!(flag(ponko_ctx_action_down, ctx, c"jump"), "shown again by id");
+        feed(ctx, 4, PonkoTouchPhase::PONKO_TOUCH_ENDED, jump.x, jump.y);
+        assert_eq!(ponko_ctx_set_touch_control_shown_id(ctx, jump_id, false), PONKO_OK);
+        assert_eq!(
+            ponko_ctx_touch_control_center_id(ctx, PONKO_ACTION_NONE, &mut at),
+            PONKO_NOT_FOUND
+        );
+        assert_eq!(
+            ponko_ctx_set_touch_control_shown_id(ctx, PONKO_ACTION_NONE, true),
+            PONKO_NOT_FOUND
+        );
 
         // Bad descriptions change nothing; removing takes them away.
         let bad = [PonkoTouchControl {

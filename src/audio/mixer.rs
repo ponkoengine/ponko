@@ -318,6 +318,40 @@ impl Audio {
         self.backend.buses.named(name)
     }
 
+    /// The bus called `name` that already exists (from a mixer file, an
+    /// earlier [`bus`](Self::bus) call, or restored settings), without
+    /// making one: resolve it once at setup and keep the handle. A typo
+    /// is an error that lists the buses there are, where
+    /// [`bus`](Self::bus) would make a new, silent-to-nobody bus of the
+    /// typo. `"sfx"`, the default bus, always exists.
+    ///
+    /// # Errors
+    /// [`ErrorKind::NotFound`] for a name no bus has; its message lists
+    /// the bus names.
+    /// ```
+    /// use ponko::prelude::*;
+    /// Game::new("audio", 1, 1).run_headless(0, |ctx| {
+    ///     let music = ctx.audio.bus("music");
+    ///     assert_eq!(ctx.audio.find_bus("music").unwrap(), music);
+    ///     assert_eq!(ctx.audio.find_bus("sfx").unwrap(), AudioBus::default());
+    ///     let err = ctx.audio.find_bus("musci").unwrap_err();
+    ///     assert_eq!(err.to_string(), r#"ponko: unknown audio bus "musci" (known: music, sfx)"#);
+    /// });
+    /// ```
+    pub fn find_bus(&self, name: &str) -> Result<AudioBus, Error> {
+        let buses = &self.backend.buses;
+        match buses.find(name) {
+            Some(bus) => Ok(bus),
+            // The default bus is made on first use; it exists all along.
+            None if buses.entries.is_empty() && name == "sfx" => Ok(AudioBus::default()),
+            None => {
+                let names = buses.entries.iter().map(|b| b.name.as_str());
+                let default = buses.entries.is_empty().then_some("sfx");
+                Err(Error::unknown_name("audio bus", name, names.chain(default)))
+            }
+        }
+    }
+
     /// Changes a bus's linear gain, preserving its mute state. Negative or
     /// nonfinite values become silence. Finished reverb tails decay naturally.
     /// ```

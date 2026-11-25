@@ -208,6 +208,19 @@ Each frame the example plays, ducks and switches:
 Build it with `cargo build --example audio_mixer`; running it opens a window
 and plays sound.
 
+The example looks names up once, in setup, and keeps handles for the frame.
+`ctx.audio.bus(name)` makes a bus the first time it is asked for, so a typo
+there makes a new, unheard bus; for buses a mixer file declares,
+`ctx.audio.find_bus(name)` finds only an existing one, and a name no bus has
+is an error that lists the buses there are. Snapshots work the same way:
+`ctx.audio.snapshot_id(name)` resolves one into a `SnapshotId` (an error
+listing the snapshots for a typo), and `start_snapshot`, `stop_snapshot` and
+`snapshot_weight` take that id, with no lookup, as well as the name, for
+tools and one-off calls. An id stays valid when the snapshot is replaced by
+a reloaded mixer file. In C++, `ctx.find_audio_bus(name)` and
+`ctx.audio_snapshot_id(name)` return a `ponko::result`; the snapshot calls
+take the id too.
+
 ### The bus tree
 
 `ctx.audio.set_bus_parent(bus, Some(parent))` puts one bus under another

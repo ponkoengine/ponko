@@ -4423,6 +4423,10 @@ static void touch_input() {
         ctx.feed_touch(4, ponko::touch_phase::moved, {stick->x + 300, stick->y});
         CHECK(ctx.action_down("jump") && ctx.action_axis2("move").x > 0.99f);
         CHECK(ctx.set_touch_control_shown("pause", false));
+        // The same by an action id, resolved once.
+        const ponko::action_id jump_id = ctx.action_id("jump");
+        CHECK(ctx.touch_control_center(jump_id) && ctx.touch_control_center(jump_id)->x == jump->x);
+        CHECK(ctx.set_touch_control_shown(jump_id, true) && !ctx.touch_control_center(ponko::action_id::none()));
         ctx.set_touch_controls_show(ponko::touch_show::never);
         ctx.remove_touch_controls();
         CHECK(!ctx.touch_control_center("move"));

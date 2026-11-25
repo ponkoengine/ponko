@@ -29,6 +29,9 @@ const HOME: Vec2 = vec2(400.0, 380.0);
 /// The puppet and what the screen shows about it.
 struct Puppet {
     entity: Entity,
+    /// The state machine's parameters, resolved once in setup.
+    speed_parameter: ParamId,
+    jump_trigger: ParamId,
     speed: f32,
     last_event: String,
 }
@@ -233,9 +236,15 @@ fn puppet(ctx: &mut Ctx) -> SkeletonData {
 fn setup(ctx: &mut Ctx) {
     ctx.gfx.clear(Color::rgb(0.16, 0.18, 0.22));
     let data = Arc::new(puppet(ctx));
-    let entity = ctx.world.spawn((Transform::at(HOME), Skeleton::new(data)));
+    let skeleton = Skeleton::new(data);
+    // A misspelt name stops here, listing the parameters the graph has.
+    let resolve = |name: &str| skeleton.try_parameter_id(name).unwrap_or_else(|e| panic!("{e}"));
+    let (speed_parameter, jump_trigger) = (resolve("speed"), resolve("jump"));
+    let entity = ctx.world.spawn((Transform::at(HOME), skeleton));
     ctx.world.insert_resource(Puppet {
         entity,
+        speed_parameter,
+        jump_trigger,
         speed: 0.0,
         last_event: String::new(),
     });
@@ -257,11 +266,9 @@ fn controls(ctx: &mut Ctx) {
     let reaching = ctx.input.mouse_down(MouseButton::Left);
     let jump = ctx.input.key_pressed(Key::Space);
     if let Some(s) = ctx.world.get_mut::<Skeleton>(puppet.entity) {
-        let speed = s.parameter_id("speed").expect("the parameter");
-        s.set_float(speed, puppet.speed);
+        s.set_float(puppet.speed_parameter, puppet.speed);
         if jump {
-            let trigger = s.parameter_id("jump").expect("the parameter");
-            s.set_trigger(trigger, true);
+            s.set_trigger(puppet.jump_trigger, true);
         }
         // IK targets are in the skeleton's space: the entity's position is
         // its origin here (no rotation or scale).

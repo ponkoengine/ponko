@@ -351,7 +351,7 @@ fn steam_session(args: &[String]) -> Option<Net> {
         return None;
     }
     // 480 is Valve's test app; a real game uses its own app id.
-    let client = steamworks::Client::init_app(480).expect("Steam must be running and logged in");
+    let client = ponko::net::SteamClient::init_app(480).expect("Steam must be running and logged in");
     if let Some(lobby) = invited {
         return Some(Net::steam_join(&client, lobby));
     }

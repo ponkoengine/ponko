@@ -1625,11 +1625,11 @@
     "reason": "Internal invariant: }      fn lobby(&self) -> Option<LobbyId> {         self.lobby.lock().expect(\"lobby\").id",
     "site": "src/net/steam.rs:92"
   },
-  "src/net/steam.rs:19039e83666c8fa9": {
+  "src/net/steam.rs:1d1400fe494479ad": {
     "classification": "invariant",
-    "construction": ".expect(\"invite\")",
-    "reason": "Internal invariant: let accepted = Arc::new(Mutex::new(None));     let seen = accepted.clone();     let _listening = client.register_callback(move |r: steamworks::GameLobbyJoinRequested| {         *seen.lock().expect(\"invite\") = Some(r.lobby_steam_id);",
-    "site": "src/net/steam.rs:276"
+    "construction": ".expect(\"lobby\")",
+    "reason": "Internal invariant: the lobby mutex is only held for a field write; it is poisoned only if one of these closures panicked. Unchanged, the join now takes a SteamLobbyId.",
+    "site": "src/net/steam.rs:229"
   },
   "src/net/steam.rs:414976b1a33eb14e": {
     "classification": "invariant",
@@ -1637,23 +1637,23 @@
     "reason": "Internal invariant: client             .matchmaking()             .create_lobby(LobbyType::FriendsOnly, players as u32, move |result| {                 let mut l = lobby.lock().expect(\"lobby\");",
     "site": "src/net/steam.rs:191"
   },
+  "src/net/steam.rs:7d03df5bd9c030f5": {
+    "classification": "invariant",
+    "construction": ".expect(\"invite\")",
+    "reason": "Internal invariant: the invite mutex is only held for a field write in the callback; poisoned only after a panic there. Unchanged, the callback now runs on SteamClient's inner client.",
+    "site": "src/net/steam.rs:292"
+  },
   "src/net/steam.rs:824b70ee858cf6fa": {
     "classification": "invariant",
     "construction": ".expect(\"lobby\")",
     "reason": "Internal invariant: if self.reported {             return None;         }         let e = self.lobby.lock().expect(\"lobby\").error.take();",
     "site": "src/net/steam.rs:142"
   },
-  "src/net/steam.rs:82da2393cc69dd97": {
+  "src/net/steam.rs:a51c668b81a036df": {
     "classification": "caller-contract",
     "construction": "assert!( (2..=super::MAX_PLAYERS).contains(&players), \"Steam: expected 2 to 8 players; pass a player count in that range\" )",
-    "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. /// Unless `players` is 2 to 8.     #[must_use]     pub fn steam_host(client: &Client, players: usize) -> Net {         assert!(",
-    "site": "src/net/steam.rs:182"
-  },
-  "src/net/steam.rs:8a328568dcfb92d6": {
-    "classification": "invariant",
-    "construction": ".expect(\"lobby\")",
-    "reason": "Internal invariant: let steam = Steam::new(client, false);         let joined = steam.lobby.clone();         client.matchmaking().join_lobby(lobby, move |result| {             let mut l = joined.lock().expect(\"lobby\");",
-    "site": "src/net/steam.rs:218"
+    "reason": "Unchanged from before the Steam types were wrapped: the message names the 2-8 player range and the fix; documented under Panics.",
+    "site": "src/net/steam.rs:189"
   },
   "src/net/steam.rs:c637f8c8ca52d60b": {
     "classification": "invariant",
@@ -1673,10 +1673,10 @@
     "reason": "Internal invariant: }         self.pending             .lock()             .expect(\"lobby result\")",
     "site": "src/net/steam_messages.rs:232"
   },
-  "src/net/steam_messages.rs:9ad4ea6a21724f89": {
+  "src/net/steam_messages.rs:d5d4e654cd2a458b": {
     "classification": "invariant",
     "construction": ".expect(\"lobby result\")",
-    "reason": "Internal invariant: type Pending = Arc<Mutex<LobbyResult>>;  fn complete(pending: &Pending, value: Result<LobbyId, String>, leave: impl FnOnce(LobbyId)) {     let mut pending = pending.lock().expect(\"lobby result\");",
+    "reason": "Internal invariant: the lobby-result mutex is only held for short field updates; poisoned only after a panic inside one. Unchanged, the result now holds a SteamLobbyId.",
     "site": "src/net/steam_messages.rs:25"
   },
   "src/net/steam_messages.rs:ee3bd9eadc087773": {
@@ -1744,12 +1744,6 @@
     "construction": "panic!(\"{e}\")",
     "reason": "Preserves setup/runtime policy; displays the checked operation error. /// # }     /// ```     pub fn load_collision_mesh(&mut self, path: &str) -> CollisionMesh {         self.try_load_collision_mesh(path).unwrap_or_else(|e| panic!(\"{e}\"))",
     "site": "src/physics3d/files.rs:92"
-  },
-  "src/physics3d/mod.rs:60360e84506e1514": {
-    "classification": "invariant",
-    "construction": ".expect(\"live slot\")",
-    "reason": "Internal invariant: Physics3D::mesh returns only slots of live meshes, whose shape is set.",
-    "site": "src/physics3d/mod.rs:1300"
   },
   "src/physics3d/query.rs:96d8397a15f3de54": {
     "classification": "invariant",
@@ -1952,7 +1946,7 @@
   "src/render/gpu.rs:c16d6516135a0bb4": {
     "classification": "invariant",
     "construction": "debug_assert_eq!(rgba.len(), (size[0] * size[1] * 4) as usize)",
-    "reason": "Internal invariant: /// Replaces a `width` \u00d7 `height` block of texture `id` at `(x, y)`.     pub fn update_texture_region(&mut self, id: u32, at: [u32; 2], size: [u32; 2], rgba: &[u8]) {         debug_assert_eq!(rgba.len(), (size[0] * size[1] * 4) as usize);",
+    "reason": "Internal invariant: /// Replaces a `width` × `height` block of texture `id` at `(x, y)`.     pub fn update_texture_region(&mut self, id: u32, at: [u32; 2], size: [u32; 2], rgba: &[u8]) {         debug_assert_eq!(rgba.len(), (size[0] * size[1] * 4) as usize);",
     "site": "src/render/gpu.rs:1620"
   },
   "src/render/gpu.rs:d1896731d4ec1f49": {
@@ -2573,17 +2567,17 @@
     "reason": "Playing::State exists only while the skeleton has a graph (set by play_state/crossfade_state, which require one), as at the other graph lookups.",
     "site": "src/skeleton2d/skeleton.rs:1057"
   },
+  "src/skeleton2d/skeleton.rs:7619a93e78d61260": {
+    "classification": "caller-contract",
+    "construction": "assert!( duration.is_finite() && duration >= 0.0, \"ponko: a crossfade's duration must be 0 or more\" )",
+    "reason": "Documented # Panics of play_once and crossfade: the message names the misuse (a negative or non-number duration) and the rule; unchanged, only the clip argument became generic.",
+    "site": "src/skeleton2d/skeleton.rs:338"
+  },
   "src/skeleton2d/skeleton.rs:8c79feb4e3015212": {
     "classification": "invariant",
     "construction": ".expect(\"a graph\")",
     "reason": "Internal invariant: match what {             Playing::Clip(c) => (self.data.clips[c].duration, self.speed),             Playing::State(s) => {                 let state = &self.graph.as_ref().expect(\"a graph\").states[s];",
     "site": "src/skeleton2d/skeleton.rs:819"
-  },
-  "src/skeleton2d/skeleton.rs:9b3016933d81eb8d": {
-    "classification": "caller-contract",
-    "construction": "assert!( duration.is_finite() && duration >= 0.0, \"ponko: a crossfade's duration must be 0 or more\" )",
-    "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. }      fn command(&mut self, name: &str, duration: f32, looping: bool) -> bool {         assert!(",
-    "site": "src/skeleton2d/skeleton.rs:267"
   },
   "src/skeleton2d/skeleton.rs:a77c688d742406c3": {
     "classification": "caller-contract",
@@ -3518,7 +3512,7 @@
   "src/three/terrain.rs:37902fbeda39796f": {
     "classification": "caller-contract",
     "construction": "assert!( size > 0.0 && size.is_finite(), \"ponko: create_terrain_tile: size must be above 0 (got {size})\" )",
-    "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. /// If `heights` isn't a square grid of at least 2 \u00d7 2 or `size` isn't above 0.     #[must_use]     pub fn new(heights: &[f32], size: f32) -> Self {         assert!(",
+    "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. /// If `heights` isn't a square grid of at least 2 × 2 or `size` isn't above 0.     #[must_use]     pub fn new(heights: &[f32], size: f32) -> Self {         assert!(",
     "site": "src/three/terrain.rs:456"
   },
   "src/three/terrain.rs:38fbb25474135ec8": {
@@ -3730,12 +3724,6 @@
     "construction": ".unwrap()",
     "reason": "place: ids come from the screen stack or a placed parent's children, all live nodes with Taffy nodes",
     "site": "src/ui/retained.rs:1792"
-  },
-  "src/ui/retained.rs:5e9eec72fe6b3ad0": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "place: the node was read at the top of place and is still live",
-    "site": "src/ui/retained.rs:1820"
   },
   "src/ui/retained.rs:6cfa692536f31f16": {
     "classification": "invariant",

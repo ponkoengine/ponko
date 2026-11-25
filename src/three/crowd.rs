@@ -177,6 +177,27 @@ impl CrowdAnimation {
         self.0.clips.iter().position(|c| c.name == name).map(|i| i as u16)
     }
 
+    /// [`clip`](Self::clip) for a name that must be there: resolve it once
+    /// and keep the index.
+    ///
+    /// # Errors
+    /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) for a name
+    /// no clip has; its message lists the clips.
+    /// ```
+    /// # use ponko::anim::{AnimationClip, Skeleton};
+    /// # use ponko::render::CrowdAnimation;
+    /// let s = Skeleton::new(vec![]);
+    /// let a = CrowdAnimation::bake(&s, &[AnimationClip::new("idle", &s, vec![]).into()], 30.0);
+    /// assert_eq!(a.try_clip("idle").unwrap(), 0);
+    /// let err = a.try_clip("walk").unwrap_err();
+    /// assert_eq!(err.to_string(), r#"ponko: unknown animation clip "walk" (known: idle)"#);
+    /// ```
+    pub fn try_clip(&self, name: &str) -> Result<u16, crate::error::Error> {
+        self.clip(name).ok_or_else(|| {
+            crate::error::Error::unknown_name("animation clip", name, self.0.clips.iter().map(|c| &*c.name))
+        })
+    }
+
     /// How many clips it has.
     #[must_use]
     pub fn clip_count(&self) -> usize {
