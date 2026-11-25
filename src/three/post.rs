@@ -379,7 +379,7 @@ impl AutoExposure {
     /// use ponko::render::AutoExposure;
     /// let auto = AutoExposure { enabled: true, ..Default::default() };
     /// assert_eq!(auto.target(0.18), 0.0, "middle grey already");
-    /// assert_eq!(auto.target(0.045), 2.0, "two stops too dark: brightened by two");
+    /// assert!((auto.target(0.045) - 2.0).abs() < 1e-5, "two stops too dark: brightened by two");
     /// assert_eq!(auto.target(0.001), 4.0, "held at max");
     /// let brighter = AutoExposure { compensation: 1.0, ..auto };
     /// assert_eq!(brighter.target(0.18), 1.0);
@@ -1451,6 +1451,121 @@ mod tests {
             diagonal < corner.weight(Vec3::new(2.0, 1.0, 1.0)),
             "distance to the box, not per axis"
         );
+    }
+
+    #[test]
+    fn auto_exposure_is_off_in_the_uniform_until_enabled() {
+        let off = PostUniform::new(&Post::default(), None).adapt(&Post::default(), 0.5, true);
+        assert_eq!((off.meter, off.adapt, off.auto), ([0.0; 4], [0.0; 4], [0; 4]));
+        let mut post = Post::default();
+        post.auto_exposure = AutoExposure {
+            enabled: true,
+            min: -2.0,
+            max: f32::NAN,
+            compensation: 0.5,
+            center_weight: 3.0,
+            ..Default::default()
+        };
+        let u = PostUniform::new(&post, None).adapt(&post, 0.5, false);
+        assert_eq!(
+            u.meter,
+            [-2.0, 4.0, 0.5, 1.0],
+            "a NaN max is the default, the weight clamped"
+        );
+        assert_eq!(u.adapt, [0.5, 1.5, 0.0, 0.0], "half a second at 1 and 3 stops a second");
+        assert_eq!(u.auto, [1, 0, 0, 0]);
+        assert_eq!(
+            PostUniform::new(&post, None).adapt(&post, 0.5, true).auto[1],
+            1,
+            "a jump"
+        );
+        post.auto_exposure.max = -5.0;
+        assert_eq!(PostUniform::new(&post, None).meter[1], -2.0, "a max below min is min");
+    }
+
+    #[test]
+    fn auto_exposure_steps_hold_at_zero_and_jump_at_infinity() {
+        let steps = |brighten, darken, dt| {
+            AutoExposure {
+                brighten_speed: brighten,
+                darken_speed: darken,
+                ..Default::default()
+            }
+            .steps(dt)
+        };
+        assert_eq!(steps(2.0, 4.0, 0.25), [0.5, 1.0]);
+        assert_eq!(steps(0.0, -1.0, 0.25), [0.0, 0.0], "0 or below holds");
+        assert_eq!(
+            steps(f32::NAN, 1.0, f32::NAN),
+            [0.0, 0.0],
+            "NaN holds; a NaN frame moves nothing"
+        );
+        assert_eq!(
+            steps(f32::INFINITY, 1.0, 0.0),
+            [f32::MAX, 0.0],
+            "infinite jumps, even at dt 0"
+        );
+        assert_eq!(steps(1.0, 1.0, -1.0), [0.0, 0.0], "time doesn't run backwards");
+    }
+
+    #[test]
+    fn auto_exposure_targets_middle_grey_within_its_range() {
+        let auto = AutoExposure {
+            enabled: true,
+            ..Default::default()
+        };
+        assert!((auto.target(0.09) - 1.0).abs() < 1e-5);
+        assert!((auto.target(0.36) + 1.0).abs() < 1e-5);
+        assert_eq!(auto.target(0.0), 4.0, "black: held at max");
+        assert_eq!(auto.target(1e9), -4.0, "blinding: held at min");
+        let wide = AutoExposure {
+            min: -40.0,
+            max: 40.0,
+            ..auto
+        };
+        assert!(wide.target(0.0).is_finite(), "the meter is held within its stops");
+    }
+
+    #[test]
+    fn lerp_fades_auto_exposure_in_by_its_range() {
+        let off = Post::default();
+        let on = Post {
+            auto_exposure: AutoExposure {
+                enabled: true,
+                min: -2.0,
+                max: 6.0,
+                brighten_speed: f32::INFINITY,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let q = off.lerp(&on, 0.25);
+        assert!(q.auto_exposure.enabled, "on through the blend");
+        assert_eq!(
+            (q.auto_exposure.min, q.auto_exposure.max),
+            (-0.5, 1.5),
+            "a quarter of the range"
+        );
+        assert_eq!(q.auto_exposure.darken_speed, 3.0, "the settings of the end that has it");
+        assert_eq!(
+            q.auto_exposure.brighten_speed,
+            f32::INFINITY,
+            "an infinite speed isn't blended"
+        );
+        let back = on.lerp(&off, 0.75);
+        assert_eq!(back.auto_exposure, q.auto_exposure, "the same either way");
+        assert_eq!(off.lerp(&on, 0.0), off, "fully off at its own end");
+        let half = on.lerp(
+            &Post {
+                auto_exposure: AutoExposure {
+                    brighten_speed: 1.0,
+                    ..on.auto_exposure
+                },
+                ..on
+            },
+            0.5,
+        );
+        assert_eq!(half.auto_exposure.brighten_speed, 1.0, "switched halfway");
     }
 
     #[test]
