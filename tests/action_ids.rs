@@ -185,6 +185,9 @@ fn names_held_in_any_string_type_query_like_str() {
         let cow: std::borrow::Cow<str> = "jump".into();
         ctx.input.feed(InputEvent::Key(Key::Space, true));
         assert!(ctx.input.action_down(&held) && ctx.input.action_down(&boxed) && ctx.input.action_down(&cow));
-        assert!(ctx.input.action_down(&&*held), "a reference to a &str");
+        let name: &str = &held;
+        #[allow(clippy::needless_borrows_for_generic_args)]
+        let by_double_reference = ctx.input.action_down(&name);
+        assert!(by_double_reference, "a reference to a &str");
     });
 }
