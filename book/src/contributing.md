@@ -16,6 +16,13 @@ In short:
   required from every contributor. Maintainers coordinate that coverage and
   own follow-ups. Preserve existing compatibility and describe behavior and tests.
 
+## Running local checks
+
+`python3 scripts/run-checks.py --list` shows which inventory jobs can run on
+your machine. Use `--quick` for the quick subset or `--job NAME` for a particular
+job. See [Local checks](../../CONTRIBUTING.md#local-checks) for report files,
+provisioning and nightly scheduling.
+
 ## Adding a cargo feature
 
 Every feature needs a clippy line, a test line and, when docs.rs builds the
