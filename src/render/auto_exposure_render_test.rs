@@ -524,3 +524,79 @@ fn off_it_makes_no_pass_or_image_and_changes_no_pixel() {
     assert_eq!(diff(&off, &again, 0).max_channel, 0, "off changes no pixel");
     stage.finish();
 }
+
+/// What auto exposure costs on the GPU at 1920x1080 and 2560x1440, from
+/// timestamp queries: its passes (meter, reductions, adaptation) and the
+/// tone mapping pass with it off and on. For numbers, not a check:
+/// `cargo test --release --lib --features 3d auto_exposure_cost -- --ignored --nocapture`
+#[test]
+#[ignore = "requires a GPU with timestamps; run explicitly for numbers"]
+fn auto_exposure_cost() {
+    use crate::d3::Transform as Transform3D;
+    use crate::render::static_batch_render_test::{BatchRig, RigSetup};
+    use crate::render::{AntiAliasing, Model};
+    for size in [(1920, 1080), (2560, 1440)] {
+        let Some(mut rig) = BatchRig::new(RigSetup {
+            size,
+            timestamps: true,
+            ..Default::default()
+        }) else {
+            return;
+        };
+        if rig.timer.is_none() {
+            skip("no timestamp queries");
+            return;
+        }
+        rig.ctx.scene3d.camera.position = Vec3::ZERO;
+        rig.ctx.scene3d.camera.rotation = Quat::IDENTITY;
+        rig.ctx.scene3d.post.anti_aliasing = AntiAliasing::None;
+        rig.ctx.scene3d.post.bloom = 0.0;
+        for i in 0..60 {
+            let at = vec3((i % 10) as f32 - 4.5, (i / 10) as f32 - 2.5, -3.0 - i as f32 * 0.5);
+            let level = 0.2 + (i % 5) as f32 * 0.2;
+            let mesh = rig.mesh(&MeshData::cube(0.6), glow(level));
+            rig.ctx.world.spawn((Transform3D::at(at), Model::new(mesh)));
+        }
+        println!("adapter: {}", describe_adapter(&rig.gpu.info));
+        let measure = |rig: &mut BatchRig, pass: &str| {
+            let mut times = Vec::new();
+            let mut read = rig.timer.as_ref().unwrap().frames_read;
+            for frame in 0..120 {
+                rig.frame();
+                let timer = rig.timer.as_ref().unwrap();
+                if frame >= 30 && timer.frames_read != read {
+                    read = timer.frames_read;
+                    times.push(
+                        timer
+                            .last_frame
+                            .iter()
+                            .filter(|p| p.name == pass)
+                            .map(|p| p.ms)
+                            .sum::<f32>(),
+                    );
+                }
+            }
+            times.sort_by(f32::total_cmp);
+            times[times.len() / 2]
+        };
+        // Other work on a shared machine only adds time: the best of a few
+        // runs' medians.
+        let measure = |rig: &mut BatchRig, pass: &str| (0..3).map(|_| measure(rig, pass)).fold(f32::MAX, f32::min);
+        let tonemap_off = measure(&mut rig, "post");
+        rig.ctx.scene3d.post.auto_exposure.enabled = true;
+        let passes = measure(&mut rig, "auto exposure");
+        let tonemap_on = measure(&mut rig, "post");
+        let timer = rig.timer.as_ref().unwrap();
+        let each: Vec<String> = timer
+            .last_frame
+            .iter()
+            .filter(|p| p.name == "auto exposure")
+            .map(|p| format!("{:.3}", p.ms))
+            .collect();
+        println!("each auto exposure pass of the last frame: {}", each.join(", "));
+        println!(
+            "{}x{}: auto exposure passes {passes:.3} ms; tone mapping {tonemap_off:.3} ms off, {tonemap_on:.3} ms on",
+            size.0, size.1
+        );
+    }
+}

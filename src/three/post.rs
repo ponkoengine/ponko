@@ -309,9 +309,10 @@ impl DepthOfField {
 /// **Cost:** off, nothing: no pass, no image, and one skipped branch in the
 /// tone mapping pass. On, a metering pass over an eighth of the frame's
 /// width and height, a few tiny passes that reduce it to one value and one
-/// that adapts it (about 0.03 ms at 1920x1080 and 2560x1440 on an Apple M4
-/// Max; the guide has the numbers). It works on every GPU tier, WebGL2
-/// included: it uses render passes only.
+/// that adapts it: about 0.2 to 0.4 ms of GPU time at 1920x1080 and
+/// 2560x1440 on an Apple M4 Max, mostly the metering pass and the fixed cost
+/// of each small pass (the guide has the numbers). It works on every GPU
+/// tier, WebGL2 included: it uses render passes only.
 /// ```
 /// use ponko::render::{AutoExposure, Post};
 /// let mut post = Post::default();

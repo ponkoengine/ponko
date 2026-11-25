@@ -2215,7 +2215,7 @@ static void temporal_upscaling(ponko::ctx& ctx) {
 static void eye_adaptation(ponko::ctx& ctx) {
     auto post = ctx.post_ex(); // version 4 has auto exposure
     post.auto_exposure = true;
-    post.auto_exposure_min = -2;           // stops: at most 4x darker than exposure 1...
+    post.auto_exposure_min = -2;           // stops: at most 4x darker than without it...
     post.auto_exposure_max = 3;            // ...and 8x brighter
     post.auto_exposure_compensation = .5f; // a little brighter than middle grey
     post.auto_exposure_brighten_speed = 1; // stops a second
