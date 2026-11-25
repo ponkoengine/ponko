@@ -1298,10 +1298,9 @@ unsafe fn presets_theme_titles_and_names(ctx: Ctx) {
             ponko_ctx_ui_try_find(ctx, PONKO_UI_SCREEN, c"map".as_ptr(), &mut found),
             PONKO_NOT_FOUND
         );
-        assert!(
-            last_error().starts_with(r#"unknown UI node "map" (known: "#),
-            "{}",
-            last_error()
+        assert_eq!(
+            last_error(),
+            r#"unknown UI node name "map" (there are no UI node names)"#
         );
         assert_eq!(
             ponko_ctx_ui_set_name(ctx, PONKO_UI_SCREEN, buy, c"map".as_ptr()),

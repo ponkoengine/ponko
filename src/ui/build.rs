@@ -1432,11 +1432,12 @@ impl Ui {
     /// let buy = ui.button(root, "Buy").name("shop.buy").id();
     /// assert_eq!(ui.try_find("shop.buy").unwrap(), buy);
     /// let err = ui.try_find("shop.bye").unwrap_err();
-    /// assert_eq!(err.to_string(), r#"ponko: unknown UI node "shop.bye" (known: shop, shop.buy)"#);
+    /// assert_eq!(err.to_string(), r#"ponko: unknown UI node name "shop.bye" (known: shop, shop.buy)"#);
     /// ```
     pub fn try_find(&self, name: &str) -> Result<UiId, crate::error::Error> {
-        self.find(name)
-            .ok_or_else(|| crate::error::Error::unknown_name("UI node", name, self.names.keys().map(String::as_str)))
+        self.find(name).ok_or_else(|| {
+            crate::error::Error::unknown_name("UI node name", name, self.names.keys().map(String::as_str))
+        })
     }
     /// A node's name, or `None` without one (or for a stale id).
     /// ```

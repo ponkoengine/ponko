@@ -1385,10 +1385,13 @@ fn try_find_resolves_a_name_once_and_lists_the_names_on_a_typo() {
     assert_eq!(ui.try_find("menu.play").unwrap(), play);
     let err = ui.try_find("menu.pley").unwrap_err();
     assert_eq!(err.kind(), ErrorKind::NotFound);
-    assert_eq!(err.message(), r#"unknown UI node "menu.pley" (known: menu, menu.play)"#);
+    assert_eq!(
+        err.message(),
+        r#"unknown UI node name "menu.pley" (known: menu, menu.play)"#
+    );
     ui.remove(root);
     assert_eq!(
         ui.try_find("menu").unwrap_err().message(),
-        r#"unknown UI node "menu" (there are no UI nodes)"#
+        r#"unknown UI node name "menu" (there are no UI node names)"#
     );
 }

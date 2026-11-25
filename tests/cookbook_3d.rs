@@ -108,6 +108,10 @@ fn clicking_marks_what_the_pointer_is_over() {
 #[derive(Component)]
 struct Hero;
 
+/// The `move` action, resolved once when it is bound.
+#[derive(Clone, Copy)]
+struct Move(ActionId);
+
 fn bind_walk(ctx: &mut Ctx) {
     ctx.input.set_action(
         "move",
@@ -118,13 +122,16 @@ fn bind_walk(ctx: &mut Ctx) {
             down: Key::S,
         }]),
     );
+    let movement = ctx.input.action_id("move");
+    ctx.world.insert_resource(Move(movement));
 }
 
 /// A frame system: walk relative to the camera, which follows from behind
 /// and comes in front of walls.
 fn walk_and_follow(ctx: &mut Ctx) {
     let dt = ctx.time.frame_dt();
-    let stick = ctx.input.action_axis2("move"); // y is down: W is -1
+    let Move(movement) = *ctx.world.resource::<Move>();
+    let stick = ctx.input.action_axis2(movement); // y is down: W is -1
     ctx.world.resource_scope(|world, rig: &mut ThirdPersonCamera| {
         world.query::<(Entity, &Hero, &mut Transform)>().for_each(|(me, _, t)| {
             t.position += (rig.flat_forward() * -stick.y + rig.flat_right() * stick.x) * 5.0 * dt;
