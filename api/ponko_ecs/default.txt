@@ -487,6 +487,7 @@ pub fn ponko_ecs::World::get_resource_mut<R: core::marker::Send + core::marker::
 pub fn ponko_ecs::World::has<T: ponko_ecs::Component>(&self, ponko_ecs::Entity) -> bool
 pub fn ponko_ecs::World::id(&self) -> u64
 pub fn ponko_ecs::World::insert<T: ponko_ecs::Component>(&mut self, ponko_ecs::Entity, T) -> bool
+pub fn ponko_ecs::World::insert_many<T: ponko_ecs::Component + core::clone::Clone>(&mut self, &[ponko_ecs::Entity], T) -> usize
 pub fn ponko_ecs::World::insert_resource<R: core::marker::Send + core::marker::Sync + 'static>(&mut self, R)
 pub fn ponko_ecs::World::is_alive(&self, ponko_ecs::Entity) -> bool
 pub fn ponko_ecs::World::is_empty(&self) -> bool
@@ -498,6 +499,7 @@ pub fn ponko_ecs::World::record_access(&mut self)
 pub fn ponko_ecs::World::record_access_into(&mut self, ponko_ecs::AccessLog)
 pub fn ponko_ecs::World::register<T: ponko_ecs::Component>(&mut self) -> ponko_ecs::ComponentId
 pub fn ponko_ecs::World::remove<T: ponko_ecs::Component>(&mut self, ponko_ecs::Entity) -> core::option::Option<T>
+pub fn ponko_ecs::World::remove_many<T: ponko_ecs::Component>(&mut self, &[ponko_ecs::Entity]) -> usize
 pub fn ponko_ecs::World::remove_resource<R: core::marker::Send + core::marker::Sync + 'static>(&mut self) -> core::option::Option<R>
 pub fn ponko_ecs::World::reset(&mut self)
 pub fn ponko_ecs::World::resource<R: core::marker::Send + core::marker::Sync + 'static>(&self) -> &R
