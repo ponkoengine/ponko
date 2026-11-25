@@ -11,7 +11,7 @@ use std::time::Duration;
 use ponko::net::NetMessages;
 use ponko::prelude::*;
 use ponko::server::{LogLevel, ServerConfig, ServerStatus, log};
-use ponko_lobby::{LobbyLimits, LobbyServer, StunResponder};
+use ponko_lobby::{LobbyLimits, LobbyServer, StunResponder, TrustedProxy};
 use serde_json::json;
 
 const HELP: &str = "\
@@ -22,6 +22,10 @@ Settings, from the environment:
   LOBBY_WEB=0.0.0.0:7701      browser clients over WebSocket (ws://); empty: off (default)
   LOBBY_STUN=0.0.0.0:3478     answer STUN binding requests (UDP), for WebRTC
                               peers' NAT traversal; empty: off (default)
+  LOBBY_TRUSTED_PROXIES=127.0.0.1,10.0.0.0/8
+                              reverse proxies in front of LOBBY_WEB whose
+                              X-Forwarded-For header is believed, so limits
+                              count per browser; empty: none (default)
   LOBBY_MAX_CLIENTS=1024      clients the UDP endpoint takes (1..=1024)
   LOBBY_HZ=100                polls per second (each one moves every packet waiting)
   LOBBY_REPORT_SECS=10        how often to log a lobby_report line; 0: never
@@ -54,6 +58,8 @@ fn open() -> Result<(LobbyServer, Option<StunResponder>, u32, Duration), String>
     let udp = setting("LOBBY_UDP", "0.0.0.0:7700");
     let web = setting("LOBBY_WEB", "");
     let stun = setting("LOBBY_STUN", "");
+    let proxies = setting("LOBBY_TRUSTED_PROXIES", "");
+    let trusted_proxies = TrustedProxy::parse_list(&proxies).map_err(|e| format!("LOBBY_TRUSTED_PROXIES: {e}"))?;
     let max_clients: usize = number("LOBBY_MAX_CLIENTS", "1024")?;
     let hz: u32 = number("LOBBY_HZ", "100")?;
     let report: u64 = number("LOBBY_REPORT_SECS", "10")?;
@@ -74,7 +80,10 @@ fn open() -> Result<(LobbyServer, Option<StunResponder>, u32, Duration), String>
         Some(StunResponder::bind(stun.as_str()).map_err(|e| format!("LOBBY_STUN={stun}: {e}"))?)
     };
     let stun_addr = stun.as_ref().and_then(|s| s.local_addr().ok());
-    let mut server = LobbyServer::new(LobbyLimits::default());
+    let proxy_list: Vec<String> = trusted_proxies.iter().map(ToString::to_string).collect();
+    let mut limits = LobbyLimits::default();
+    limits.trusted_proxies = trusted_proxies;
+    let mut server = LobbyServer::new(limits);
     server.listen(endpoint);
     log(
         LogLevel::Info,
@@ -83,6 +92,7 @@ fn open() -> Result<(LobbyServer, Option<StunResponder>, u32, Duration), String>
             "udp": udp_addr.map(|a| a.to_string()),
             "web": web_addr.map(|a| a.to_string()),
             "stun": stun_addr.map(|a| a.to_string()),
+            "trusted_proxies": proxy_list,
             "max_clients": max_clients,
             "hz": hz,
         }),

@@ -23,6 +23,39 @@ pub(super) struct Datagram {
     pub(super) due: u64,
 }
 
+/// How the endpoints of a conformance test reach each other.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Via {
+    /// Datagrams straight between peers (UDP's shape).
+    Direct,
+    /// Through an in-memory lobby relay server (`Net::host_relay`,
+    /// `Net::join_relay`): every datagram crosses the scripted network
+    /// twice, to the server and on, inside the lobby's own protocol.
+    #[cfg(feature = "lobby")]
+    Relay,
+}
+
+impl Via {
+    /// Drop about one datagram in `n`. Directly, every `n`th: the protocol
+    /// must survive the worst steady pattern. Through the relay, picked by
+    /// the script's hash instead: the lobby protocol under the relay sends
+    /// the same number of datagrams every step, so dropping every `n`th
+    /// would cut one flow for good, which no real network does.
+    pub(super) fn drop_one_in(self, network: &mut Network, n: u64) {
+        match self {
+            Via::Direct => network.drop_every = n,
+            #[cfg(feature = "lobby")]
+            Via::Relay => network.loss_per_mille = 1000 / n,
+        }
+    }
+}
+
+/// Every way of reaching peers, for the tests that must hold on each.
+#[cfg(feature = "lobby")]
+pub(super) const EVERY_VIA: [Via; 2] = [Via::Direct, Via::Relay];
+#[cfg(not(feature = "lobby"))]
+pub(super) const EVERY_VIA: [Via; 1] = [Via::Direct];
+
 /// The scripted network shared by every endpoint of one test.
 #[derive(Default)]
 pub(super) struct Network {
