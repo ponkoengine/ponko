@@ -1630,10 +1630,8 @@ struct SpriteJson {
     z: f32,
     pivot: glam::Vec2,
     region: Option<crate::camera::Rect>,
-    /// Written only when set, so unflipped sprites save as before.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    /// Saves made before the flips existed load unflipped (`default`).
     flip_x: bool,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
     flip_y: bool,
 }
 

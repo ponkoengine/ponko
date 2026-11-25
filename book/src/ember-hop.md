@@ -233,7 +233,6 @@ at the player's first click or key press ([Audio](audio.md#in-a-browser)).
 
 | Gap | Where it is tracked |
 |---|---|
-| Sprites have no flip; the hero uses a negative scale. | #440 |
 | Rust only; no C or C++ counterpart. | No native port planned yet |
 
 ## Assets and licenses

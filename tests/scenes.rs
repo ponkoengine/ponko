@@ -204,9 +204,13 @@ fn prefabs_and_saves_keep_a_sprites_flip() {
         let hero = ctx.world.spawn((Transform2D::default(), flipped.with_flip_y(false)));
         let plain = ctx.world.spawn((Transform2D::default(), Sprite::new(crab)));
         ctx.assets.save_prefab(&ctx.world, hero, file.name()).unwrap();
-        // Unflipped sprites save as before: no flip fields at all.
         let json = ctx.world.entity_json(plain).unwrap();
-        assert!(json["Sprite"].get("flip_x").is_none(), "{json}");
+        assert_eq!(json["Sprite"]["flip_x"], false, "{json}");
+        // A sprite saved before the flips existed loads unflipped.
+        let old = serde_json::json!({ "texture": "crab.png", "z": 1 });
+        ctx.world.set_json(plain, "Sprite", old).unwrap();
+        let sprite = *ctx.world.get::<Sprite>(plain).unwrap();
+        assert!(!sprite.flip_x && !sprite.flip_y && sprite.z == 1.0, "{sprite:?}");
         // A scene keeps both flips.
         ctx.world.despawn(plain);
         ctx.world.despawn(hero);
