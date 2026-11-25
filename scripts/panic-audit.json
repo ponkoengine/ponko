@@ -503,6 +503,12 @@
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. let mut sorted = ids.clone();         sorted.sort_unstable();         sorted.dedup();         assert_eq!(",
     "site": "crates/ponko_ecs/src/world.rs:1681"
   },
+  "crates/ponko_ecs/src/world.rs:0a9acb0971659c8d": {
+    "classification": "invariant",
+    "construction": "debug_assert!(!s.tracked())",
+    "reason": "move_all is called only after whole_archetype, which requires an untracked source",
+    "site": "crates/ponko_ecs/src/world.rs:1163"
+  },
   "crates/ponko_ecs/src/world.rs:0ae6333b0c88d77f": {
     "classification": "caller-contract",
     "construction": "panic!(\"{caller}: resource `{name}` is named twice; each resource can be borrowed once\")",
@@ -610,6 +616,12 @@
     "construction": ".unwrap()",
     "reason": "Internal invariant: self.note_resource::<R>(false);         self.resources             .get(&TypeId::of::<R>())             .map(|r| r.downcast_ref().unwrap())",
     "site": "crates/ponko_ecs/src/world.rs:902"
+  },
+  "crates/ponko_ecs/src/world.rs:d38bc0934a961f19": {
+    "classification": "invariant",
+    "construction": ".expect(\"invariant: the archetype that adding `id` leads to has `id`\")",
+    "reason": "archetype_adding returns the archetype of src's ids plus id (the cached edge was recorded for it)",
+    "site": "crates/ponko_ecs/src/world.rs:1002"
   },
   "crates/ponko_ecs/src/world.rs:d55f1d61cf16836e": {
     "classification": "caller-contract",
