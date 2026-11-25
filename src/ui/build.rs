@@ -1418,6 +1418,26 @@ impl Ui {
     pub fn find(&self, name: &str) -> Option<UiId> {
         self.names.get(name).copied()
     }
+    /// [`find`](Self::find) for a node that must be there: resolve its
+    /// name once (after building the screen) and keep the [`UiId`], so the
+    /// systems that run every frame don't look names up.
+    ///
+    /// # Errors
+    /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) for a name
+    /// no node has; its message lists the node names.
+    /// ```
+    /// use ponko::prelude::*;
+    /// let mut ui = ponko::ui::Ui::default();
+    /// let root = ui.root().name("shop").id();
+    /// let buy = ui.button(root, "Buy").name("shop.buy").id();
+    /// assert_eq!(ui.try_find("shop.buy").unwrap(), buy);
+    /// let err = ui.try_find("shop.bye").unwrap_err();
+    /// assert_eq!(err.to_string(), r#"ponko: unknown UI node "shop.bye" (known: shop, shop.buy)"#);
+    /// ```
+    pub fn try_find(&self, name: &str) -> Result<UiId, crate::error::Error> {
+        self.find(name)
+            .ok_or_else(|| crate::error::Error::unknown_name("UI node", name, self.names.keys().map(String::as_str)))
+    }
     /// A node's name, or `None` without one (or for a stale id).
     /// ```
     /// use ponko::prelude::*;

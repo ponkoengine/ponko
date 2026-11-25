@@ -79,6 +79,22 @@ entity applies to every part, and `puppet.color` tints them all.
 `speed` scales the clock. Set `manual = true` to advance a skeleton
 yourself with `update(dt)`.
 
+A clip is named by its name or by a `ClipId`. The name looks the clip up
+on every call and a typo just returns `false`; a system that switches clips
+every frame resolves them once with `clip_id`, which is an error listing
+the clips there are for a name that isn't one:
+
+```rust
+# use ponko::skeleton2d::Skeleton;
+# let hero = ctx.load_skeleton2d("hero/hero.json");
+# let mut puppet = Skeleton::new(hero);
+let run = puppet.clip_id("run").expect("the file has a run clip");
+puppet.crossfade(run, 0.2); // no lookup
+```
+
+In C and C++, `skeleton2d_clip_index` resolves a name and
+`skeleton2d_play_index` and `skeleton2d_crossfade_index` play it.
+
 Events keyed in clips (footsteps, the frame a sword hits) are collected
 while the skeleton advances; read them from a system:
 
@@ -126,9 +142,11 @@ offset into the next state. Triggers reset when a transition uses them.
 # use ponko::skeleton2d::Skeleton;
 # let hero = ctx.load_skeleton2d("hero/hero.json");
 let mut puppet = Skeleton::new(hero);
-let speed = puppet.parameter_id("speed").expect("the file declares it");
+// Once, at setup: a misspelt name is an error that lists the parameters.
+let speed = puppet.try_parameter_id("speed")?;
+let hit = puppet.try_parameter_id("hit")?;
+// Every frame, by id:
 puppet.set_float(speed, 0.5);
-let hit = puppet.parameter_id("hit").expect("the file declares it");
 puppet.set_trigger(hit, true);
 ```
 

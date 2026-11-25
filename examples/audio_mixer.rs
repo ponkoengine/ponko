@@ -4,7 +4,7 @@
 //!
 //! D plays a line of "dialogue", U toggles underwater, M mutes the music.
 //! The mixer state is saved with the settings and restored at the next start.
-use ponko::audio::MixerState;
+use ponko::audio::{MixerState, SnapshotId};
 use ponko::prelude::*;
 
 /// What the example keeps between frames.
@@ -14,6 +14,7 @@ struct Mixer {
     music: AudioBus,
     voice: AudioBus,
     world: AudioBus,
+    underwater_mix: SnapshotId,
     underwater: bool,
 }
 
@@ -39,11 +40,11 @@ fn setup(ctx: &mut Ctx) -> Mixer {
     if let Ok(saved) = ctx.storage.read_json::<MixerState>("mixer.json") {
         ctx.audio.restore_mixer_state(&saved);
     }
-    let (music, voice, world) = (
-        ctx.audio.bus("music"),
-        ctx.audio.bus("dialogue"),
-        ctx.audio.bus("world"),
-    );
+    // Names are resolved once, here; the frame uses the handles. A typo
+    // stops the example with the list of names the file has.
+    let bus = |ctx: &Ctx, name: &str| ctx.audio.find_bus(name).unwrap_or_else(|e| panic!("{e}"));
+    let (music, voice, world) = (bus(ctx, "music"), bus(ctx, "dialogue"), bus(ctx, "world"));
+    let underwater_mix = ctx.audio.snapshot_id("underwater").unwrap_or_else(|e| panic!("{e}"));
 
     let rate = 44_100;
     let song = ctx.audio.create(rate, &tone(rate, 4.0, &[220.0, 277.2, 329.6], 0.3));
@@ -60,7 +61,8 @@ fn setup(ctx: &mut Ctx) -> Mixer {
         music,
         voice,
         world,
-        underwater: ctx.audio.snapshot_weight("underwater") > 0.0,
+        underwater_mix,
+        underwater: ctx.audio.snapshot_weight(underwater_mix) > 0.0,
     }
 }
 // ANCHOR_END: mixer_setup
@@ -75,9 +77,9 @@ fn frame(ctx: &mut Ctx, m: &mut Mixer) {
     if ctx.input.key_pressed(Key::U) {
         m.underwater = !m.underwater;
         if m.underwater {
-            ctx.audio.start_snapshot("underwater", 1.0);
+            ctx.audio.start_snapshot(m.underwater_mix, 1.0);
         } else {
-            ctx.audio.stop_snapshot("underwater", 1.0);
+            ctx.audio.stop_snapshot(m.underwater_mix, 1.0);
         }
     }
     if ctx.input.key_pressed(Key::M) {
@@ -96,7 +98,7 @@ fn frame(ctx: &mut Ctx, m: &mut Mixer) {
         "D: dialogue (ducks the music)   U: underwater   M: mute music".to_string(),
         format!("music {:.2}", ctx.audio.bus_gain(m.music)),
         format!("world {:.2}", ctx.audio.bus_gain(m.world)),
-        format!("underwater {:.2}", ctx.audio.snapshot_weight("underwater")),
+        format!("underwater {:.2}", ctx.audio.snapshot_weight(m.underwater_mix)),
     ];
     for (i, line) in lines.iter().enumerate() {
         ctx.gfx

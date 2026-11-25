@@ -3547,21 +3547,24 @@ static void build_shop(ponko::ctx& ctx) {
 
 // ANCHOR: shop_events
 static void shop_events(ponko::ctx& ctx) {
-    // The UI ran before this system. Nodes are found by name.
+    // The UI ran before this system. Names are looked up only when something
+    // was clicked, not every frame; try_find(..).value() throws, listing the
+    // names, for one that isn't there.
     auto tree = ctx.ui_retained();
-    auto clicked = tree.take_click();
-    const std::string name = clicked ? tree.name(*clicked) : "";
-    const ui::id buy = *tree.find("buy");
-    if (name.rfind("item.", 0) == 0) {
-        const std::string item = name.substr(5);
-        tree.set_enabled(buy, true);
-        tree.set_text(buy, ("Buy item " + item).c_str());
-        tree.set_text(*tree.find("message"), ("Buy item " + item + "?").c_str());
-    } else if (name == "buy") {
-        tree.push_modal(*tree.find("dialog"));
-    } else if (name == "confirm" || name == "cancel") {
-        tree.pop_screen();
-        if (name == "confirm") tree.set_text(*tree.find("title"), "Purchase complete!");
+    if (const auto clicked = tree.take_click()) {
+        const std::string name = tree.name(*clicked);
+        const ui::id buy = tree.try_find("buy").value();
+        if (name.rfind("item.", 0) == 0) {
+            const std::string item = name.substr(5);
+            tree.set_enabled(buy, true);
+            tree.set_text(buy, ("Buy item " + item).c_str());
+            tree.set_text(tree.try_find("message").value(), ("Buy item " + item + "?").c_str());
+        } else if (name == "buy") {
+            tree.push_modal(tree.try_find("dialog").value());
+        } else if (name == "confirm" || name == "cancel") {
+            tree.pop_screen();
+            if (name == "confirm") tree.set_text(tree.try_find("title").value(), "Purchase complete!");
+        }
     }
     // Tab/arrows or d-pad navigate; Enter/South confirms; Escape/East pops the
     // top screen. A modal screen also owns the pointer outside it.

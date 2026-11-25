@@ -4802,6 +4802,11 @@ public:
     void set_name(id node, const char* name) { detail::check(ponko_ctx_ui_set_name(raw_, target_, node, name)); }
     /// The node with this name, if any.
     std::optional<id> find(const char* name) const { id n = none; detail::check(ponko_ctx_ui_find(raw_, target_, name, &n)); return maybe(n); }
+    /// The node with this name, for one that must be there (Rust's `Ui::try_find`): resolve it once after
+    /// building and keep the id. A name no node has fails, and the error lists the node names; `.value()` throws it.
+    result<id> try_find(const char* name) const {
+        id n = none; const PonkoStatus status = ponko_ctx_ui_try_find(raw_, target_, name, &n); return detail::attempt(status, n);
+    }
     /// A node's name (empty without one).
     std::string name(id node) const {
         std::size_t len = 0;
@@ -6189,6 +6194,19 @@ struct action_id {
     ///@{
     friend constexpr bool operator==(action_id a, action_id b) noexcept { return a.bits == b.bits; }
     friend constexpr bool operator!=(action_id a, action_id b) noexcept { return a.bits != b.bits; }
+    ///@}
+};
+
+/// A mixer snapshot resolved once (Rust's `SnapshotId`), from
+/// `ctx::audio_snapshot_id`. The snapshot calls that take it skip the name
+/// lookup. It belongs to the game it came from and stays valid when the
+/// snapshot is replaced.
+struct audio_snapshot_id {
+    std::uint32_t bits = UINT32_MAX;
+    /// Two ids are equal when they name the same snapshot.
+    ///@{
+    friend constexpr bool operator==(audio_snapshot_id a, audio_snapshot_id b) noexcept { return a.bits == b.bits; }
+    friend constexpr bool operator!=(audio_snapshot_id a, audio_snapshot_id b) noexcept { return a.bits != b.bits; }
     ///@}
 };
 
@@ -7608,10 +7626,25 @@ public:
         detail::check(status);
         return true;
     }
+    /// The same by an id from action_id(), with no name lookup: the form for a system that runs every frame.
+    bool set_touch_control_shown(ponko::action_id action, bool shown) {
+        PonkoStatus status = ponko_ctx_set_touch_control_shown_id(raw_, action.bits, shown);
+        if (status == PONKO_NOT_FOUND) return false;
+        detail::check(status);
+        return true;
+    }
     /// Where the control for `action` is, in window pixels (what a test touches), if there is one.
     std::optional<vec2> touch_control_center(const char* action) const {
         vec2 at{};
         PonkoStatus status = ponko_ctx_touch_control_center(raw_, action, &at);
+        if (status == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(status);
+        return at;
+    }
+    /// The same by an id from action_id().
+    std::optional<vec2> touch_control_center(ponko::action_id action) const {
+        vec2 at{};
+        PonkoStatus status = ponko_ctx_touch_control_center_id(raw_, action.bits, &at);
         if (status == PONKO_NOT_FOUND) return std::nullopt;
         detail::check(status);
         return at;
@@ -9222,6 +9255,21 @@ public:
     void skeleton2d_crossfade(entity e, const char* clip, float duration) {
         detail::check(ponko_ctx_skeleton2d_crossfade(raw_, e, clip, duration));
     }
+    /// The index of the clip named `name` of `e`'s skeleton (Rust's `Skeleton::clip_id`): resolve it once and
+    /// play it with skeleton2d_play_index. Throws for a name no clip has; the message lists the clips.
+    std::size_t skeleton2d_clip_index(entity e, const char* name) {
+        std::size_t i = 0;
+        detail::check(ponko_ctx_skeleton2d_clip_index(raw_, e, name, &i));
+        return i;
+    }
+    /// skeleton2d_play by an index from skeleton2d_clip_index, with no name lookup.
+    void skeleton2d_play_index(entity e, std::size_t clip, bool looping = true) {
+        detail::check(ponko_ctx_skeleton2d_play_index(raw_, e, clip, looping));
+    }
+    /// skeleton2d_crossfade by an index from skeleton2d_clip_index, with no name lookup.
+    void skeleton2d_crossfade_index(entity e, std::size_t clip, float duration) {
+        detail::check(ponko_ctx_skeleton2d_crossfade_index(raw_, e, clip, duration));
+    }
     /// Switches the state machine of `e`'s skeleton to state `state`, starting at normalized time `offset`,
     /// fading over `duration` seconds (0 jumps). Throws for a state not in it or a bad duration or offset.
     void skeleton2d_crossfade_state(entity e, std::size_t state, float duration, float offset = 0) {
@@ -9252,13 +9300,14 @@ public:
         detail::check(ponko_ctx_skeleton2d_state(raw_, e, nullptr, nullptr, &done));
         return done;
     }
-    /// The index of the state machine's state named `name` (throws if there is none).
+    /// The index of the state machine's state named `name` (throws if there is none; the message lists the states).
     std::size_t skeleton2d_state_index(entity e, const char* name) {
         std::size_t i = 0;
         detail::check(ponko_ctx_skeleton2d_state_index(raw_, e, name, &i));
         return i;
     }
-    /// The index of the state machine's parameter named `name` (throws if there is none).
+    /// The index of the state machine's parameter named `name` (throws if there is none; the message lists the
+    /// parameters).
     std::size_t skeleton2d_parameter_index(entity e, const char* name) {
         std::size_t i = 0;
         detail::check(ponko_ctx_skeleton2d_parameter_index(raw_, e, name, &i));
@@ -10046,6 +10095,11 @@ public:
     result<sound> try_load_stream(const char* path) { sound s{}; const PonkoStatus status = ponko_ctx_try_load_stream(raw_, path, &s); return detail::attempt(status, s); }
     /// The bus named `name`, made the first time; keep the handle.
     PonkoAudioBus audio_bus(const char* name) { PonkoAudioBus b{}; detail::check(ponko_ctx_audio_bus(raw_, name, &b)); return b; }
+    /// The bus named `name` that already exists, without making one (Rust's `Audio::find_bus`); a name no bus
+    /// has fails, and the error lists the buses. `.value()` throws it.
+    result<PonkoAudioBus> find_audio_bus(const char* name) {
+        PonkoAudioBus b{}; const PonkoStatus status = ponko_ctx_audio_find_bus(raw_, name, &b); return detail::attempt(status, b);
+    }
     /// Sets bus `b`'s volume, 0 (silent) to 1 (as recorded) or more.
     void set_audio_bus_volume(PonkoAudioBus b, float volume) { detail::check(ponko_ctx_set_audio_bus_volume(raw_, b, volume)); }
     /// Mutes or unmutes bus `b`, keeping its volume.
@@ -10109,6 +10163,25 @@ public:
     /// How much of snapshot `name` is heard, 0 to 1.
     float audio_snapshot_weight(const char* name) {
         float w = 0; detail::check(ponko_ctx_audio_snapshot_weight(raw_, name, &w)); return w;
+    }
+    /// Resolves a snapshot's name once (Rust's `Audio::snapshot_id`), for the snapshot calls below, which then
+    /// skip the lookup. A name no snapshot has fails, and the error lists the snapshots; `.value()` throws it.
+    result<ponko::audio_snapshot_id> audio_snapshot_id(const char* name) {
+        ponko::audio_snapshot_id id; const PonkoStatus status = ponko_ctx_audio_snapshot_id(raw_, name, &id.bits);
+        return detail::attempt(status, id);
+    }
+    /// start_audio_snapshot by an id from audio_snapshot_id; false for an id that names no snapshot.
+    bool start_audio_snapshot(ponko::audio_snapshot_id id, float fade) {
+        const PonkoStatus status = ponko_ctx_start_audio_snapshot_id(raw_, id.bits, fade);
+        if (status == PONKO_NOT_FOUND) return false;
+        detail::check(status);
+        return true;
+    }
+    /// stop_audio_snapshot by an id from audio_snapshot_id.
+    void stop_audio_snapshot(ponko::audio_snapshot_id id, float fade) { detail::check(ponko_ctx_stop_audio_snapshot_id(raw_, id.bits, fade)); }
+    /// audio_snapshot_weight by an id from audio_snapshot_id.
+    float audio_snapshot_weight(ponko::audio_snapshot_id id) {
+        float w = 0; detail::check(ponko_ctx_audio_snapshot_weight_id(raw_, id.bits, &w)); return w;
     }
     /// Loads the mixer (buses, effects, ducking, snapshots) from a JSON file in the assets; it hot reloads.
     void load_audio_mixer(const char* path) { detail::check(ponko_ctx_load_audio_mixer(raw_, path)); }

@@ -1293,6 +1293,29 @@ unsafe fn presets_theme_titles_and_names(ctx: Ctx) {
             ponko_ctx_ui_find(ctx, PONKO_UI_SCREEN, null(), &mut popped),
             PONKO_INVALID_ARGUMENT
         );
+        let mut found = 0;
+        assert_eq!(
+            ponko_ctx_ui_try_find(ctx, PONKO_UI_SCREEN, c"map".as_ptr(), &mut found),
+            PONKO_NOT_FOUND
+        );
+        assert!(
+            last_error().starts_with(r#"unknown UI node "map" (known: "#),
+            "{}",
+            last_error()
+        );
+        assert_eq!(
+            ponko_ctx_ui_set_name(ctx, PONKO_UI_SCREEN, buy, c"map".as_ptr()),
+            PONKO_OK
+        );
+        assert_eq!(
+            ponko_ctx_ui_try_find(ctx, PONKO_UI_SCREEN, c"map".as_ptr(), &mut found),
+            PONKO_OK
+        );
+        assert_eq!(found, buy);
+        assert_eq!(
+            ponko_ctx_ui_try_find(ctx, PONKO_UI_SCREEN, c"map".as_ptr(), null_mut()),
+            PONKO_INVALID_ARGUMENT
+        );
 
         // take_click: the last click once, other events dropped.
         assert_eq!(
