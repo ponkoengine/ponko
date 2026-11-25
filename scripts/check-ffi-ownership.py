@@ -44,7 +44,7 @@ EXPORT = re.compile(r'extern\s+"C"\s+fn\s+(ponko_\w+)\s*\(')
 
 def opaque_types():
     """The `Ponko*` types C sees only through pointers (`typedef struct X X;`)."""
-    return set(re.findall(r'^typedef struct (Ponko\w+) \1;', HEADER.read_text(), re.MULTILINE))
+    return set(re.findall(r'^typedef struct (Ponko\w+) \1;', HEADER.read_text(encoding="utf-8"), re.MULTILINE))
 
 
 def split_params(text):
@@ -116,7 +116,7 @@ def exports():
     """[(name, file, params [(name, type)], return type, body, doc prose)]."""
     found = []
     for f in sorted(SRC.rglob('*.rs')):
-        text = f.read_text()
+        text = f.read_text(encoding="utf-8")
         for m in EXPORT.finditer(text):
             line_start = text.rfind('\n', 0, m.start()) + 1
             if text[line_start:m.start()].lstrip().startswith('//'):
@@ -139,7 +139,7 @@ def consuming_helpers():
     one takes that handle over."""
     found = set()
     for f in sorted(SRC.rglob('*.rs')):
-        text = f.read_text()
+        text = f.read_text(encoding="utf-8")
         for m in re.finditer(r'\bfn\s+(\w+)\s*(?:<[^>]*>)?\(\s*(\w+)\s*:', text):
             if m.group(1).startswith('ponko_'):
                 continue

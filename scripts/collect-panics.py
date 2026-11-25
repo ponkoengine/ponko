@@ -66,7 +66,7 @@ def production(text):
 def collect(include_tests=False):
     for base in ("src", "crates/ponko_ecs/src"):
         for path in sorted((ROOT / base).rglob("*.rs")):
-            text = path.read_text()
+            text = path.read_text(encoding="utf-8")
             if not include_tests:
                 if re.search(r"(?:_test|_tests|/tests|_conformance|_bench|/fuzz|/scripted|render_test_support|regression_stage)\.rs$", path.as_posix()):
                     continue
@@ -76,7 +76,7 @@ def collect(include_tests=False):
                 opening = match.end() - 1 if match.group().endswith("(") else re.search(r"[({\[]", code[match.end():]).start() + match.end()
                 end = closing(code, opening)
                 construction = " ".join(text[match.start():end].split())
-                name = str(path.relative_to(ROOT))
+                name = path.relative_to(ROOT).as_posix()
                 prefix = code[:match.start()]
                 functions = list(re.finditer(r"\bfn\s+(\w+)", prefix))
                 function = functions[-1].group(1) if functions else "module"
@@ -115,7 +115,7 @@ def main():
                         help="record a reviewed decision for the site at path:line (repeatable)")
     args = parser.parse_args()
     audit_path = ROOT / "scripts/panic-audit.json"
-    audit = json.loads(audit_path.read_text()) if audit_path.exists() else {}
+    audit = json.loads(audit_path.read_text(encoding="utf-8")) if audit_path.exists() else {}
     if args.record:
         audit = record(audit, args.record)
         audit_path.write_text(json.dumps(audit, indent=2, sort_keys=True) + "\n")

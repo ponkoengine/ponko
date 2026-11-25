@@ -71,10 +71,10 @@ class Crate:
 
 
 def load_crates(root):
-    top = tomllib.loads((root / 'Cargo.toml').read_text())
+    top = tomllib.loads((root / 'Cargo.toml').read_text(encoding="utf-8"))
     crates = {}
     for member in top['workspace']['members']:
-        manifest = tomllib.loads((root / member / 'Cargo.toml').read_text())
+        manifest = tomllib.loads((root / member / 'Cargo.toml').read_text(encoding="utf-8"))
         crate = Crate(manifest)
         crates[crate.name] = crate
     return crates
@@ -283,7 +283,7 @@ def load_exemptions(path):
     entries, problems = {}, []
     if not path.exists():
         return entries, problems
-    for number, line in enumerate(path.read_text().splitlines(), 1):
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         if not line.strip() or line.lstrip().startswith('#'):
             continue
         parts = line.split(None, 2)
@@ -333,7 +333,7 @@ def runners(root):
     found = []
     for folder in ('web/smoke', 'web/gallery'):
         for path in sorted((root / folder).glob('*.mjs')):
-            if path.read_text().startswith('#!/usr/bin/env node'):
+            if path.read_text(encoding="utf-8").startswith('#!/usr/bin/env node'):
                 found.append(f'{folder}/{path.name}')
     return found
 
@@ -467,7 +467,7 @@ def main(argv):
             print('check-feature-coverage selftest: ok')
         return status
     crates = load_crates(ROOT)
-    text = CI.read_text()
+    text = CI.read_text(encoding="utf-8")
     if '--list' in argv:
         print(table(crates, text))
         return 0
