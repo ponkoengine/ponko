@@ -1,11 +1,12 @@
 # The list of checks: every check the project has, written down in one place.
 #
-# Maintainers and contributors run these checks on their own machines; no
-# service runs this file (the project has no CI). It keeps the job-and-step
-# layout it was written in, so each check names the platform, toolchain and
-# commands it needs: read a job, then run its `run:` lines locally. The
-# `runs-on`, `uses`, `if:` and `${{ ... }}` lines are notes on where and when a
-# check applies, not something to execute.
+# Run with python3 scripts/run-checks.py. These checks run on maintainer
+# machines. The runner reads the job-and-step layout below. It expands OS
+# and matrix fields, uses installed Rust toolchains, and skips hosted setup.
+# Local metadata: local-os and local-tags are bracketed lists. Use
+# local-requires for tools or env:NAME, pkg:NAME, rust:CHANNEL,
+# component:CHANNEL/NAME or target:CHANNEL/TRIPLE. Add local-skip with a
+# reason for a hosted-only step. The step tag windowed requires explicit opt-in.
 #
 # scripts/check-feature-coverage.py reads this file as text: every cargo
 # feature needs clippy, test and (for docs.rs) doc lines here, and every
@@ -15,7 +16,7 @@
 #
 # The environment the commands expect:
 env:
-  CARGO_TERM_COLOR: always
+  CARGO_TERM_COLOR: never
   RUSTFLAGS: -D warnings
   RUSTDOCFLAGS: -D warnings
   # The checks never read debug info, and it makes linking (slow on
@@ -28,6 +29,7 @@ jobs:
   # $LEAK_WORDS or a local file. `scripts/leak-check.sh install` runs the
   # file check before every local commit.
   leaks:
+    local-os: [Linux, macOS, Windows]
     name: Leak check
     runs-on: ubuntu-latest
     permissions:
@@ -37,15 +39,11 @@ jobs:
         with:
           fetch-depth: 0
       - name: Files
-        env:
-          LEAK_WORDS: ${{ secrets.LEAK_WORDS }}
         run: scripts/leak-check.sh files
       - name: Commit messages
-        env:
-          LEAK_WORDS: ${{ secrets.LEAK_WORDS }}
-          RANGE: ${{ github.event_name == 'pull_request' && format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || format('{0}~1..{0}', github.sha) }}
-        run: scripts/leak-check.sh messages "$RANGE"
+        run: scripts/leak-check.sh messages "${RANGE:-HEAD~1..HEAD}"
       - name: Pull request title and description
+        local-skip: Check PR text separately using scripts/leak-check.sh text.
         if: github.event_name == 'pull_request'
         env:
           LEAK_WORDS: ${{ secrets.LEAK_WORDS }}
@@ -56,6 +54,8 @@ jobs:
           scripts/leak-check.sh text "$RUNNER_TEMP/pr.txt"
 
   fmt:
+    local-os: [Linux, macOS, Windows]
+    local-tags: [quick, lint]
     name: Format
     runs-on: ubuntu-latest
     steps:
@@ -97,7 +97,10 @@ jobs:
       # book is an include of a file the native build compiles.
       - name: C++ wrapper coverage and docs
         run: python3 scripts/check-cpp-api.py
-      - run: cargo fmt --all --check
+      - name: Check runner self-tests
+        run: python3 scripts/run-checks.py --selftest
+      - name: Workspace Rust formatting
+        run: cargo fmt --all --check
       # The Bevy comparison scenes are a crate of their own, outside the
       # workspace. Only their formatting is checked: building them pulls in
       # all of Bevy.
@@ -126,6 +129,8 @@ jobs:
   # label is older than this run, which the push started); a re-run after
   # the label was added again keeps it.
   reference-images:
+    local-os: [Linux, macOS, Windows]
+    local-tags: [quick, lint]
     name: Reference images
     runs-on: ubuntu-latest
     permissions:
@@ -148,6 +153,7 @@ jobs:
       # Which pull request this run speaks for, and the commit its
       # references are compared with.
       - name: Find the pull request
+        local-skip: Requires a pull request and hosted review metadata.
         id: pr
         shell: bash
         env:
@@ -178,6 +184,7 @@ jobs:
             fi
           fi
       - name: Reference images this branch changes
+        local-skip: Requires a pull request and hosted review metadata.
         id: changes
         if: steps.pr.outputs.base != ''
         shell: bash
@@ -202,6 +209,7 @@ jobs:
   # engine features on (the C library enables 3d and navmesh; the MCP
   # server's tests, the defaults).
   clippy:
+    local-tags: [lint]
     name: Clippy (${{ matrix.name }})
     runs-on: ubuntu-latest
     strategy:
@@ -333,6 +341,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install ALSA and udev headers (audio, gamepads)
+        local-skip: Install system headers before the run (see CONTRIBUTING.md).
         if: runner.os == 'Linux'
         run: sudo apt-get install -y libasound2-dev libudev-dev
       - uses: dtolnay/rust-toolchain@stable
@@ -348,6 +357,8 @@ jobs:
   # audio devices, inspector, glTF, physics, navigation, dev tools); see the
   # script for each build's contract. It only resolves the dependency graph.
   feature-deps:
+    local-os: [Linux, macOS, Windows]
+    local-tags: [lint]
     name: Feature dependency contracts
     runs-on: ubuntu-latest
     steps:
@@ -360,11 +371,13 @@ jobs:
 
   # The oldest supported Rust (rust-version in Cargo.toml) still builds everything.
   msrv:
+    local-tags: [lint]
     name: MSRV (Rust 1.95)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - name: Install ALSA and udev headers (audio, gamepads)
+        local-skip: Install system headers before the run (see CONTRIBUTING.md).
         run: sudo apt-get install -y libasound2-dev libudev-dev
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -378,6 +391,7 @@ jobs:
   # Linux/macOS keep suites together. Windows integration tests, examples,
   # and archived unit-test shards run separately to shorten the critical path.
   test:
+    local-tags: [test, gpu]
     name: Test (${{ matrix.os }})
     # Full tier only: authors run the tests locally before the pull request.
     # (Most of this job is building and linking ~155 test binaries.)
@@ -389,6 +403,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install ALSA and udev headers (audio, gamepads)
+        local-skip: Install system headers before the run (see CONTRIBUTING.md).
         if: runner.os == 'Linux'
         run: sudo apt-get install -y libasound2-dev libudev-dev
       - uses: dtolnay/rust-toolchain@stable
@@ -446,6 +461,7 @@ jobs:
           retention-days: 14
 
   windows-unit-build:
+    local-requires: [cargo-nextest]
     name: Compile unit and render tests (windows-latest)
     runs-on: windows-latest
     steps:
@@ -474,6 +490,8 @@ jobs:
           if-no-files-found: error
 
   windows-unit:
+    local-requires: [cargo-nextest]
+    local-tags: [test, gpu]
     name: Unit and render tests (Windows shard ${{ matrix.shard }}/6)
     needs: windows-unit-build
     runs-on: windows-latest
@@ -500,7 +518,7 @@ jobs:
         env:
           PONKO_REQUIRE_GPU: 1
         run: >-
-          cargo nextest run --archive-file target/ci-unit/windows-unit.tar.zst
+          cargo nextest run --archive-file target/windows-unit.tar.zst
           --workspace-remap . --partition slice:${{ matrix.shard }}/6
           --test-threads 2 --no-fail-fast
       # What a failed image comparison drew, and where it differs.
@@ -521,6 +539,8 @@ jobs:
           retention-days: 14
 
   windows-gpu-tiers:
+    local-requires: [cargo-nextest]
+    local-tags: [test, gpu]
     name: Render tests on the ${{ matrix.tier }} GPU tier (windows-latest, ${{ matrix.shard }}/2)
     needs: windows-unit-build
     runs-on: windows-latest
@@ -549,7 +569,7 @@ jobs:
           PONKO_REQUIRE_GPU: 1
         run: |
           set +e
-          cargo nextest run --archive-file target/ci-unit/windows-unit.tar.zst \
+          cargo nextest run --archive-file target/windows-unit.tar.zst \
             --workspace-remap . --partition slice:${{ matrix.shard }}/2 \
             --test-threads 2 --no-fail-fast --success-output final \
             -E '(test(render_test) & !test(capabilities_render_test)) | test(skinning::tests) | test(particles::tests) | test(mips::tests) | test(timer::tests)' \
@@ -579,6 +599,7 @@ jobs:
           retention-days: 14
 
   windows-examples:
+    local-tags: [test]
     name: Examples and library tests (windows-latest)
     runs-on: windows-latest
     steps:
@@ -598,6 +619,7 @@ jobs:
   # Feature variants run beside the default suite, rather than extending
   # its critical path with five more serial engine builds on every OS.
   test-features:
+    local-tags: [test, gpu]
     name: Feature tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -607,6 +629,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install ALSA and udev headers (audio, gamepads)
+        local-skip: Install system headers before the run (see CONTRIBUTING.md).
         if: runner.os == 'Linux'
         run: sudo apt-get install -y libasound2-dev libudev-dev
       - uses: dtolnay/rust-toolchain@stable
@@ -695,9 +718,9 @@ jobs:
       # gamepads (no device, no window) and a scripted device layer. It
       # links SDL 3, which Homebrew has (Ubuntu's LTS release doesn't yet).
       - name: Tests, SDL gamepad backend
+        local-requires: [pkg:sdl3]
         if: ${{ !cancelled() && runner.os == 'macOS' }}
         run: |
-          brew install sdl3
           cargo test -p ponko --no-fail-fast --features gamepad-sdl --lib gamepad_sdl
       # WebM files with AV1 pictures and Vorbis sound (desktop only: on the
       # web loading a video reports `Unsupported`).
@@ -788,26 +811,28 @@ jobs:
       # accessibility bus launcher (at-spi2-core), read and operated over
       # D-Bus as Orca does. No display is needed.
       - name: Tests, accessibility adapter over AT-SPI (Linux)
+        local-requires: [dbus-run-session]
         if: ${{ !cancelled() && runner.os == 'Linux' }}
         env:
           PONKO_ACCESS_ATSPI: 1
         run: |
-          sudo apt-get install -y at-spi2-core dbus
           dbus-run-session -- cargo test -p ponko --no-fail-fast --features accessibility --test ui_access_platforms -- --nocapture
       # The macOS and Windows adapters are compiled only in these jobs: lint
       # them here (the clippy job lints the Linux one).
       - name: Clippy, accessibility adapter (macOS, Windows)
+        local-requires: [component:stable/clippy]
         if: ${{ !cancelled() && runner.os != 'Linux' }}
         run: |
-          rustup component add clippy
           cargo clippy -p ponko --all-targets --features accessibility
 
   docs:
+    local-tags: [docs]
     name: Docs
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - name: Install ALSA and udev headers (audio, gamepads)
+        local-skip: Install system headers before the run (see CONTRIBUTING.md).
         if: runner.os == 'Linux'
         run: sudo apt-get install -y libasound2-dev libudev-dev
       - uses: dtolnay/rust-toolchain@stable
@@ -839,6 +864,8 @@ jobs:
   # No pull_request_target: the labels are read through the API with a
   # read-only token, and the code that runs is the pull request's own.
   semver:
+    local-tags: [api]
+    local-requires: [cargo-semver-checks]
     name: Semver checks
     runs-on: ubuntu-latest
     permissions:
@@ -858,6 +885,7 @@ jobs:
       - name: The script's own checks
         run: python3 scripts/semver-checks.py selftest
       - name: Install ALSA and udev headers (audio, gamepads)
+        local-skip: Install system headers before the run (see CONTRIBUTING.md).
         run: sudo apt-get install -y libasound2-dev libudev-dev
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -891,6 +919,8 @@ jobs:
   # tool and the nightly are pinned together in the script (the pins step
   # hands them to the steps below). Nothing here runs tests.
   api-snapshots:
+    local-tags: [api]
+    local-requires: [cargo-public-api]
     name: API snapshots
     runs-on: ubuntu-latest
     env:
@@ -905,6 +935,7 @@ jobs:
           python3 scripts/api-snapshots.py selftest
           python3 scripts/api-snapshots.py pins >> "$GITHUB_ENV"
       - name: Install ALSA and udev headers (audio, gamepads)
+        local-skip: Install system headers before the run (see CONTRIBUTING.md).
         run: sudo apt-get install -y libasound2-dev libudev-dev
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -925,11 +956,13 @@ jobs:
           tool: cargo-public-api@${{ env.API_TOOL_VERSION }}
       - run: cargo public-api --version
       - name: Regenerate the listing and compare it with api/
+        local-requires: [rust:$API_NIGHTLY]
         run: python3 scripts/api-snapshots.py check
       # Every public item of `ponko` has one path besides the prelude
       # (STABILITY.md, "The crate root and globs"): walks rustdoc's JSON,
       # built with the same nightly.
       - name: One public path per item
+        local-requires: [rust:$API_NIGHTLY]
         run: |
           python3 scripts/check-naming.py --selftest
           python3 scripts/check-naming.py --paths
@@ -944,6 +977,8 @@ jobs:
           if-no-files-found: ignore
 
   book:
+    local-os: [Linux, macOS, Windows]
+    local-tags: [docs]
     name: Book
     runs-on: ubuntu-latest
     steps:
@@ -959,6 +994,7 @@ jobs:
         with:
           tool: mdbook@0.5.4
       - run: mdbook --version
+        local-requires: [mdbook]
       # Every chapter and top-level module says how proven it is, and the
       # generated list of levels (book/src/maturity.md) is up to date.
       - name: Maturity levels
@@ -966,9 +1002,11 @@ jobs:
           python3 scripts/maturity.py
           python3 scripts/maturity.py --selftest
       - run: mdbook build book
+        local-requires: [mdbook]
       # The guide's inline Rust snippets: one `cargo check` of every block as a
       # module of a scratch crate (see book/src/contributing.md).
       - name: Install ALSA and udev headers (audio, gamepads)
+        local-skip: Install system headers before the run (see CONTRIBUTING.md).
         run: sudo apt-get install -y libasound2-dev libudev-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -979,6 +1017,7 @@ jobs:
         run: python3 scripts/check-book-snippets.py
 
   miri:
+    local-tags: [miri]
     name: Miri (${{ matrix.name }})
     runs-on: ubuntu-latest
     # Miri interprets every instruction; tests shrink their sizes under
@@ -1069,6 +1108,8 @@ jobs:
           cargo miri test -p ponko_ecs --no-fail-fast $ARGS "${targets[@]}"
 
   native:
+    local-tags: [native]
+    local-requires: [cmake, ctest, cbindgen]
     name: C and C++ (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -1078,6 +1119,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install ALSA and udev headers (audio, gamepads)
+        local-skip: Install system headers before the run (see CONTRIBUTING.md).
         if: runner.os == 'Linux'
         run: sudo apt-get install -y libasound2-dev libudev-dev
       - uses: dtolnay/rust-toolchain@stable
@@ -1125,7 +1167,7 @@ jobs:
             *) library=target/release/libponko_ffi.so ;;
           esac
           python3 scripts/test-native-symbols.py "$library"
-      - run: cmake -S examples/cpp -B target/native -DCMAKE_BUILD_TYPE=Release -DPONKO_WEBRTC=ON -DPONKO_LIBRARY_DIR=${{ github.workspace }}/target/release
+      - run: cmake -S examples/cpp -B target/native -DCMAKE_BUILD_TYPE=Release -DPONKO_WEBRTC=ON "-DPONKO_LIBRARY_DIR=${{ github.workspace }}/target/release"
       - run: cmake --build target/native --config Release
       - run: ctest --test-dir target/native -C Release --output-on-failure
       # A C++ game through the validation bundle tool: started headless,
@@ -1140,6 +1182,8 @@ jobs:
   # (CONTRIBUTING.md, "Unsafe code and sanitizers"). One platform: macOS on
   # Apple silicon, where the commands were checked.
   sanitizers:
+    local-tags: [native]
+    local-requires: [cmake, ctest, target:nightly/aarch64-apple-darwin]
     name: C API sanitizers
     runs-on: macos-latest
     timeout-minutes: 60
@@ -1147,7 +1191,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
       - run: cargo build -p ponko_ffi --features control-env,webrtc
-      - run: cmake -S examples/cpp -B target/native-asan -DCMAKE_BUILD_TYPE=Debug -DPONKO_SANITIZE=ON -DPONKO_WEBRTC=ON -DPONKO_LIBRARY_DIR=${{ github.workspace }}/target/debug
+      - run: cmake -S examples/cpp -B target/native-asan -DCMAKE_BUILD_TYPE=Debug -DPONKO_SANITIZE=ON -DPONKO_WEBRTC=ON "-DPONKO_LIBRARY_DIR=${{ github.workspace }}/target/debug"
       - run: cmake --build target/native-asan
       - name: C and C++ test programs, ASan and UBSan
         env:
@@ -1163,6 +1207,7 @@ jobs:
   # The web build (wasm32): lint the browser-only code, and build the battle
   # demo the way the docs site does.
   web:
+    local-tags: [web]
     name: Web build
     runs-on: ubuntu-latest
     steps:
@@ -1218,23 +1263,30 @@ jobs:
       # compiled with atomics. `web/build.sh --threads --clippy` lints the
       # engine and the threads fixture with the flags a threaded build uses.
       - name: Nightly Rust for the threaded web build
+        local-skip: Install nightly with rust-src and the wasm target before the run.
         run: rustup toolchain install nightly --profile minimal --component rust-src,clippy --target wasm32-unknown-unknown
       - run: web/build.sh --threads --clippy
+        local-requires: [component:nightly/rust-src, component:nightly/clippy, target:nightly/wasm32-unknown-unknown, wasm-bindgen]
       # The threaded fixture as the browser runner builds it (3D and the
       # benchmark internals), whose code only compiles with both.
       - run: web/build.sh --threads --clippy --features 3d,bench-internals
+        local-requires: [component:nightly/rust-src, component:nightly/clippy, target:nightly/wasm32-unknown-unknown, wasm-bindgen]
       - name: Find the wasm-bindgen version in Cargo.lock
         run: echo "WASM_BINDGEN=$(awk '/^name = "wasm-bindgen"$/ { getline; gsub(/version = |"/, ""); print }' Cargo.lock)" >> "$GITHUB_ENV"
       - uses: taiki-e/install-action@v2
         with:
           tool: wasm-bindgen@${{ env.WASM_BINDGEN }}
       - run: web/build.sh battle
+        local-requires: [wasm-bindgen]
 
   # The browser runner's own tests (web/smoke/*.test.mjs): argument and
   # fixture handling, the supported/unsupported decisions, and that a browser
   # that can't start is reported as unsupported with its reason. No browser or
   # wasm build, so it runs on every pull request.
   web-smoke-runner:
+    local-os: [Linux, macOS, Windows]
+    local-tags: [web]
+    local-requires: [node, npm]
     name: Web smoke runner tests
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1256,6 +1308,8 @@ jobs:
   # "unsupported" with the reason in its report and in the job summary, never
   # as a quiet pass; one that can must actually draw it.
   web-smoke:
+    local-tags: [web]
+    local-requires: [node, npm, wasm-bindgen]
     name: Web smoke test (headless browsers)
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -1280,6 +1334,7 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('web/smoke/package-lock.json') }}
       - name: Install the runner and the browsers (Chromium with its headless shell, Firefox, WebKit)
+        local-skip: Install the browsers and npm dependencies before the run (see CONTRIBUTING.md).
         run: |
           node --version
           npm ci --prefix web/smoke --no-audit --no-fund
@@ -1288,6 +1343,7 @@ jobs:
         run: node --test web/smoke/*.test.mjs web/gallery/*.test.mjs
       # The native lockstep players of the multiplayer step need ALSA and udev.
       - name: Install ALSA and udev headers (the native lockstep example)
+        local-skip: Install system headers before the run (see CONTRIBUTING.md).
         run: sudo apt-get install -y libasound2-dev libudev-dev
       # The platformer (examples/ember_hop) publishes its state like
       # coin_dash; its browser run is the web gallery's page check.
@@ -1443,11 +1499,13 @@ jobs:
       # and move its crab while ArrowRight is held. The report has the module's size
       # and the startup time.
       - name: The WASI SDK (C and C++ for the web)
+        local-skip: Install the WASI SDK before the run and set WASI_SDK_PATH.
         if: ${{ !cancelled() }}
         run: |
           curl -sSfL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz | tar xz -C "$RUNNER_TEMP"
           echo "WASI_SDK_PATH=$RUNNER_TEMP/wasi-sdk-34.0-x86_64-linux" >> "$GITHUB_ENV"
       - name: Chromium, the guide's C++ game (web/build-cpp.sh)
+        local-requires: [env:WASI_SDK_PATH]
         timeout-minutes: 30
         if: ${{ !cancelled() }}
         run: node web/smoke/cpp.mjs --build
@@ -1472,9 +1530,11 @@ jobs:
       # `--cfg ponko_web_thread_heaps` one heap per thread, each saving the
       # same JSON on the workers as on the page's thread (`--case allocator`).
       - name: Nightly Rust for the threaded web build
+        local-skip: Install nightly with rust-src and the wasm target before the run.
         if: ${{ !cancelled() }}
         run: rustup toolchain install nightly --profile minimal --component rust-src --target wasm32-unknown-unknown
       - name: Chromium, threaded web build (workers, the fallback without headers)
+        local-requires: [component:nightly/rust-src, target:nightly/wasm32-unknown-unknown]
         timeout-minutes: 25
         if: ${{ !cancelled() }}
         run: |
@@ -1541,6 +1601,7 @@ jobs:
       # (src/audio/unlock.rs). A PulseAudio server with a null sink is the
       # runner's sound card, so the fixtures' music plays in WebKit too.
       - name: A sound server for WebKit (PulseAudio with a null sink)
+        local-skip: Configure a PulseAudio null sink on the dedicated test host.
         if: ${{ !cancelled() }}
         timeout-minutes: 10
         run: |
@@ -1630,6 +1691,7 @@ jobs:
   # The dev profile is packaged: the layout and notices are the release's, and
   # the dependencies are the ones the test jobs already built.
   package-smoke:
+    local-tags: [test]
     name: Packaged game (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
@@ -1640,6 +1702,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install ALSA and udev headers (audio, gamepads), a virtual display with the X11 libraries a window loads, and software Vulkan
+        local-skip: Install system headers before the run (see CONTRIBUTING.md).
         if: runner.os == 'Linux'
         run: sudo apt-get install -y libasound2-dev libudev-dev xvfb mesa-vulkan-drivers libvulkan1 libegl1 libgl1-mesa-dri libxkbcommon-x11-0 libxcursor1 libxi6 libxrandr2 libxinerama1 libx11-xcb1
       - uses: dtolnay/rust-toolchain@stable
@@ -1669,6 +1732,7 @@ jobs:
       # enabled, the one adapter left on a runner without a GPU is WARP, the
       # software renderer, which the engine accepts.
       - name: Windows without a GPU, use the software renderer (WARP) through DirectX 12
+        local-skip: For hosts that need WARP, set WGPU_BACKEND=dx12 before running.
         if: ${{ runner.os == 'Windows' && !cancelled() }}
         shell: pwsh
         run: |
@@ -1679,6 +1743,7 @@ jobs:
             Write-Host "No GPU on this runner: DirectX 12 only, so wgpu picks WARP"
           }
       - name: Smoke test, in a window
+        local-tags: [windowed]
         if: ${{ !cancelled() }}
         shell: bash
         run: |
@@ -1697,6 +1762,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: cargo run -p ponko_cli -- package --example ember_hop --features physics --profile dev --out target/package-ember
       - name: The platformer's walk-through from its package (headless, then in a window)
+        local-tags: [windowed]
         if: ${{ !cancelled() }}
         shell: bash
         run: |
@@ -1727,12 +1793,14 @@ jobs:
   # launched game driven through the MCP tools, verified and compared, then
   # published so a reviewer can open what a run observed. Headless.
   validation-bundles:
+    local-tags: [test]
     name: Validation bundles
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - name: Install ALSA and udev headers (audio, gamepads)
+        local-skip: Install system headers before the run (see CONTRIBUTING.md).
         run: sudo apt-get install -y libasound2-dev libudev-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -1753,51 +1821,33 @@ jobs:
   # The `ponko new` templates (crates/ponko_cli/templates) against this
   # engine: the CLI's unit tests, then each template generated with
   # `--path .`, type-checked (the CLI's end-to-end test) and its own tests
-  # run. Linux only. A pull request runs it only when it changes the CLI or
-  # its templates; the full tier always does (an engine change can break a
-  # template too).
+  # run. Linux only. Template builds also catch changes to the engine itself.
   templates:
+    local-tags: [test]
     name: Project templates
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
-      FULL: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
-      BASE_SHA: ${{ github.event.pull_request.base.sha }}
-      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-      # Every generated project builds into this one folder, so the engine
-      # and its dependencies build once per feature set.
       CARGO_TARGET_DIR: ${{ github.workspace }}/target/templates
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Did the CLI or its templates change?
-        id: changed
-        run: |
-          if [ "$FULL" = "true" ] || git diff --name-only "$BASE_SHA" "$HEAD_SHA" | grep -q '^crates/ponko_cli/'; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "Nothing under crates/ponko_cli changed: skipping the template builds."
-          fi
       - name: Install ALSA and udev headers (audio, gamepads)
-        if: steps.changed.outputs.run == 'true'
+        local-skip: Install system headers before the run (see CONTRIBUTING.md).
         run: sudo apt-get install -y libasound2-dev libudev-dev
       - uses: dtolnay/rust-toolchain@stable
-        if: steps.changed.outputs.run == 'true'
       - uses: Swatinem/rust-cache@v2
-        if: steps.changed.outputs.run == 'true'
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           key: templates
       - name: The CLI's unit tests, each template generated and checked, and a new project packaged
-        if: steps.changed.outputs.run == 'true'
         run: |
           cargo test -p ponko_cli
           cargo test -p ponko_cli --test new -- --ignored
           cargo test -p ponko_cli --test package -- --ignored
           cargo test -p ponko_cli --test server -- --ignored
       - name: Each template's own tests
-        if: steps.changed.outputs.run == 'true'
         run: |
           cargo build -p ponko_cli
           cd "$RUNNER_TEMP"
@@ -1811,38 +1861,23 @@ jobs:
   # `ponko package` against this engine, the image built from that package
   # (`PACKAGE_FROM=prebuilt`), started, joined by the example client, and
   # stopped with `docker stop`, which must end in a clean exit after the
-  # goodbyes. Prints the image's size and the container's memory. A pull
-  # request runs it only when it changes the CLI or the server loop; the
-  # full tier always does.
+  # goodbyes. Prints the image's size and the container's memory.
   server-container:
+    local-tags: [test]
+    local-requires: [docker]
     name: Server container
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    env:
-      FULL: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
-      BASE_SHA: ${{ github.event.pull_request.base.sha }}
-      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Did the CLI or the server loop change?
-        id: changed
-        run: |
-          if [ "$FULL" = "true" ] || git diff --name-only "$BASE_SHA" "$HEAD_SHA" | grep -qE '^(crates/ponko_cli/|src/server\.rs|src/game/server\.rs)'; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "Neither the CLI nor the server loop changed: skipping the container."
-          fi
       - uses: dtolnay/rust-toolchain@stable
-        if: steps.changed.outputs.run == 'true'
       - uses: Swatinem/rust-cache@v2
-        if: steps.changed.outputs.run == 'true'
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           key: server-container
       - name: Generate the server project and lint its Dockerfile
-        if: steps.changed.outputs.run == 'true'
         run: |
           cargo build -p ponko_cli --no-default-features
           echo "PONKO=$GITHUB_WORKSPACE/target/debug/ponko" >> "$GITHUB_ENV"
@@ -1850,7 +1885,6 @@ jobs:
           "$GITHUB_WORKSPACE/target/debug/ponko" new game-server --server --path "$GITHUB_WORKSPACE"
           docker run --rm -i hadolint/hadolint:v2.12.0 < game-server/Dockerfile
       - name: Package the server and build its image
-        if: steps.changed.outputs.run == 'true'
         working-directory: ${{ runner.temp }}/game-server
         run: |
           "$PONKO" package --format folder --out target/server-package
@@ -1859,20 +1893,20 @@ jobs:
           docker build --build-arg PACKAGE_FROM=prebuilt -t game-server .
           docker image ls game-server --format 'image size: {{.Size}}'
       - name: Run it, join it with the example client, stop it
-        if: steps.changed.outputs.run == 'true'
         working-directory: ${{ runner.temp }}/game-server
         run: |
-          docker run -d --name game-server -p 7777:7777/udp game-server
+          container=$(docker run -d -p 7777:7777/udp game-server)
+          trap 'docker rm -f "$container" >/dev/null' EXIT
           for _ in $(seq 50); do
-            docker logs game-server 2>&1 | grep -q '"event":"server_start"' && break
+            docker logs "$container" 2>&1 | grep -q '"event":"server_start"' && break
             sleep 0.2
           done
           TICKS=90 target/debug/examples/client 127.0.0.1:7777
-          docker stats --no-stream --format 'container memory: {{.MemUsage}}' game-server
-          docker stop game-server
-          docker logs game-server
-          docker logs game-server | grep -q '"event":"player_joined"'
-          docker logs game-server | grep '"event":"server_stopped"' | grep -q '"reason":"terminate"'
-          code=$(docker inspect -f '{{.State.ExitCode}}' game-server)
+          docker stats --no-stream --format 'container memory: {{.MemUsage}}' "$container"
+          docker stop "$container"
+          docker logs "$container"
+          docker logs "$container" | grep -q '"event":"player_joined"'
+          docker logs "$container" | grep '"event":"server_stopped"' | grep -q '"reason":"terminate"'
+          code=$(docker inspect -f '{{.State.ExitCode}}' "$container")
           echo "exit code: $code"
           test "$code" = 0

@@ -115,9 +115,10 @@ fn build_title(ctx: &mut Ctx) {
 
 /// A frame system: what the buttons do. Clicks are events, read once.
 fn title_buttons(ctx: &mut Ctx) {
-    let (play, quit) = (ctx.ui.find("title.play"), ctx.ui.find("title.quit"));
     let clicks: Vec<UiId> = ctx.ui.events().filter_map(UiEvent::clicked).collect();
     for click in clicks {
+        // Names are looked up when something was clicked, not every frame.
+        let (play, quit) = (ctx.ui.find("title.play"), ctx.ui.find("title.quit"));
         if Some(click) == play {
             ctx.ui.pop_screen(); // close the title
             ctx.set_state(Page::InGame);
@@ -230,10 +231,15 @@ fn losing_every_life_ends_the_round_and_enter_starts_a_new_one() {
 }
 
 // ANCHOR: hud
+/// The score label, kept when the HUD is built: the frame system uses it
+/// without looking its name up.
+struct ScoreLabel(UiId);
+
 fn build_hud(ctx: &mut Ctx) {
     let corner = ctx.ui.root().layout(UiLayout::fill().padding(16.0)).id();
-    ctx.ui.label(corner, "Score: 0").name("hud.score");
+    let label = ctx.ui.label(corner, "Score: 0").name("hud.score").id();
     ctx.ui.show_hud(corner); // always shown, never takes clicks
+    ctx.world.insert_resource(ScoreLabel(label));
 }
 
 #[derive(Default)]
@@ -241,9 +247,8 @@ struct Score(u32);
 
 fn update_hud(ctx: &mut Ctx) {
     let text = format!("Score: {}", ctx.world.resource::<Score>().0);
-    if let Some(label) = ctx.ui.find("hud.score")
-        && ctx.ui.text(label) != Some(&text)
-    {
+    let label = ctx.world.resource::<ScoreLabel>().0;
+    if ctx.ui.text(label) != Some(&text) {
         ctx.ui.set_text(label, text);
     }
 }
@@ -273,6 +278,7 @@ fn the_hud_label_follows_the_score() {
 
 // ANCHOR: volume_slider
 struct MusicBus(AudioBus);
+struct VolumeSlider(UiId);
 
 fn build_volume_slider(ctx: &mut Ctx) {
     let panel = ctx
@@ -280,21 +286,22 @@ fn build_volume_slider(ctx: &mut Ctx) {
         .root()
         .layout(UiLayout::anchored(0.0, 0.0, 0.3, 0.1).padding(8.0))
         .id();
-    ctx.ui
+    let slider = ctx
+        .ui
         .slider(panel)
         .layout(UiLayout::row(24.0))
         .value(0.8)
-        .name("options.volume");
+        .name("options.volume")
+        .id();
     ctx.ui.push_modeless(panel);
+    ctx.world.insert_resource(VolumeSlider(slider));
     let music = ctx.audio.bus("music"); // a named bus: everything played on it shares one volume
     ctx.world.insert_resource(MusicBus(music));
 }
 
 /// A frame system: the slider's value (0 to 1) is the bus's volume.
 fn apply_volume(ctx: &mut Ctx) {
-    let Some(slider) = ctx.ui.find("options.volume") else {
-        return;
-    };
+    let slider = ctx.world.resource::<VolumeSlider>().0;
     let volume = ctx.ui.value(slider).unwrap_or(1.0);
     let music = ctx.world.resource::<MusicBus>().0;
     ctx.audio.set_bus_volume(music, volume);
@@ -334,6 +341,7 @@ fn the_slider_sets_the_music_bus_volume() {
 // ANCHOR: slide_in
 #[derive(Default)]
 struct SlideIn(f32); // seconds since the panel was asked to appear
+struct SidePanel(UiId);
 
 fn build_side_panel(ctx: &mut Ctx) {
     let panel = ctx
@@ -344,6 +352,7 @@ fn build_side_panel(ctx: &mut Ctx) {
     ctx.ui.label(panel, "Inventory").name("side.title");
     ctx.ui.set_name(panel, "side.panel");
     ctx.ui.show_hud(panel);
+    ctx.world.insert_resource(SidePanel(panel));
 }
 
 /// A frame system: 0.4 seconds to slide in from off the left edge, easing out.
@@ -352,7 +361,7 @@ fn slide_in_panel(ctx: &mut Ctx) {
     *seconds += ctx.time.frame_dt();
     let t = (*seconds / 0.4).min(1.0);
     let x = -240.0 * (1.0 - t).powi(3); // from -240 to 0, slowing down
-    let panel = ctx.ui.find("side.panel").unwrap();
+    let panel = ctx.world.resource::<SidePanel>().0;
     ctx.ui
         .set_layout(panel, UiLayout::fixed(240.0, 160.0).top(40.0).left(x));
 }

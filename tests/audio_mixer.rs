@@ -106,3 +106,53 @@ fn mixer_state_is_saved_and_restored_with_the_settings() {
     });
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn find_bus_resolves_only_existing_buses_and_names_them_on_a_typo() {
+    Game::new("buses", 1, 1).run_headless(0, |ctx| {
+        assert_eq!(
+            ctx.audio.find_bus("sfx").unwrap(),
+            AudioBus::default(),
+            "the default bus exists from the start"
+        );
+        ctx.audio
+            .apply_mixer_json(r#"{"buses": [{"name": "master"}, {"name": "music", "parent": "master"}]}"#)
+            .unwrap();
+        let music = ctx.audio.find_bus("music").unwrap();
+        assert_eq!(music, ctx.audio.bus("music"));
+        let err = ctx.audio.find_bus("musci").unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::NotFound);
+        assert_eq!(
+            err.message(),
+            r#"unknown audio bus "musci" (known: master, music, sfx)"#
+        );
+        assert!(ctx.audio.find_bus("musci").is_err(), "finding never makes a bus");
+    });
+}
+
+#[test]
+fn snapshot_ids_act_like_names_and_survive_the_snapshot_being_replaced() {
+    use ponko::audio::{MixerSnapshot, SnapshotId};
+    Game::new("snapshots", 1, 1).run_headless(0, |ctx| {
+        ctx.audio.add_snapshot("paused", MixerSnapshot::default());
+        ctx.audio.add_snapshot("underwater", MixerSnapshot::default());
+        let underwater = ctx.audio.snapshot_id("underwater").unwrap();
+        assert!(ctx.audio.start_snapshot(underwater, 0.0));
+        assert_eq!(ctx.audio.snapshot_weight(underwater), 1.0);
+        assert_eq!(ctx.audio.snapshot_weight("underwater"), 1.0);
+        assert_eq!(ctx.audio.snapshot_weight("paused"), 0.0);
+        // Replaced (a reloaded mixer file does the same): the id still names it.
+        ctx.audio.add_snapshot("underwater", MixerSnapshot::default());
+        assert_eq!(ctx.audio.snapshot_id("underwater").unwrap(), underwater);
+        ctx.audio.stop_snapshot(underwater, 0.0);
+        assert_eq!(ctx.audio.snapshot_weight(underwater), 0.0);
+        assert!(!ctx.audio.start_snapshot(SnapshotId::NONE, 0.0));
+        assert_eq!(ctx.audio.snapshot_weight(SnapshotId::default()), 0.0);
+        let err = ctx.audio.snapshot_id("under water").unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::NotFound);
+        assert_eq!(
+            err.message(),
+            r#"unknown audio snapshot "under water" (known: paused, underwater)"#
+        );
+    });
+}

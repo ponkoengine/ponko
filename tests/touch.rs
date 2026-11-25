@@ -445,3 +445,29 @@ fn onscreen_controls_step_aside_while_a_menu_screen_is_open() {
     assert_eq!(seen[3], (false, false), "under the menu the finger is the menu's");
     assert_eq!(seen[6], (true, true), "the menu closed: the button is back");
 }
+
+#[test]
+fn onscreen_controls_take_action_ids_also_set_before_the_actions() {
+    Game::new("touch ids", 960, 540).run_headless(0, |ctx| {
+        // The controls come first; the action map installs after them.
+        ctx.input
+            .set_touch_controls(TouchControls::new().corner_button("menu", "II").show(TouchShow::Always));
+        ctx.input.set_actions(map());
+        let menu = ctx.input.action_id("menu");
+        let at = ctx.input.touch_control_center(menu).expect("the control by id");
+        assert_eq!(Some(at), ctx.input.touch_control_center("menu"));
+        assert_eq!(
+            ctx.input.touch_control_center(ctx.input.action_id("jump")),
+            None,
+            "no control drives jump"
+        );
+        assert_eq!(ctx.input.touch_control_center(ponko::actions::ActionId::NONE), None);
+        ctx.input.set_touch_control_shown(menu, false);
+        ctx.input.feed(InputEvent::touch_start(1, at));
+        assert!(!ctx.input.action_down(menu), "hidden by id: no touch");
+        ctx.input.feed(InputEvent::touch_end(1, at));
+        ctx.input.set_touch_control_shown(menu, true);
+        ctx.input.feed(InputEvent::touch_start(2, at));
+        assert!(ctx.input.action_down(menu));
+    });
+}

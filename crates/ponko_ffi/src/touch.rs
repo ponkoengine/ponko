@@ -7,7 +7,7 @@
 //! sources of `PonkoActionBinding`.
 use std::ffi::c_char;
 
-use ponko::actions::InputEvent;
+use ponko::actions::{ActionId, InputEvent};
 use ponko::input::{Gesture, GestureAxis, GestureSettings, TouchPhase};
 use ponko::scenario::InputScenario;
 use ponko::ui::touch::{TouchControls, TouchShow};
@@ -680,6 +680,62 @@ pub unsafe extern "C" fn ponko_ctx_touch_control_center(
             let at = c
                 .input
                 .touch_control_center(text(action)?)
+                .ok_or_else(|| error(PonkoStatus::PONKO_NOT_FOUND, "no on-screen control for that action"))?;
+            out(out_center, to_c(at))
+        })
+    })
+}
+
+/// `ponko_ctx_set_touch_control_shown` by an action id from
+/// `ponko_ctx_action_id` (no name lookup: for a system that runs every
+/// frame). No such control: `PONKO_NOT_FOUND`.
+/// ```
+/// assert_ne!(unsafe { ponko_ffi::ponko_ctx_set_touch_control_shown_id(std::ptr::null_mut(), 0, false) } as u32, 0);
+/// ```
+/// # Safety
+/// Context live or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_set_touch_control_shown_id(
+    ctx: *mut PonkoCtx,
+    action: u32,
+    shown: bool,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            let action = ActionId::from_bits(action);
+            if c.input.touch_control_center(action).is_none() {
+                return Err(error(
+                    PonkoStatus::PONKO_NOT_FOUND,
+                    "no on-screen control for that action",
+                ));
+            }
+            c.input.set_touch_control_shown(action, shown);
+            Ok(())
+        })
+    })
+}
+
+/// `ponko_ctx_touch_control_center` by an action id from
+/// `ponko_ctx_action_id`. No such control: `PONKO_NOT_FOUND`.
+/// ```
+/// let mut at = ponko_ffi::PonkoVec2::default();
+/// assert_ne!(unsafe { ponko_ffi::ponko_ctx_touch_control_center_id(std::ptr::null_mut(), 0, &mut at) } as u32, 0);
+/// ```
+/// # Safety
+/// Context live or null; `out_center` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_touch_control_center_id(
+    ctx: *mut PonkoCtx,
+    action: u32,
+    out_center: *mut PonkoVec2,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            let at = c
+                .input
+                .touch_control_center(ActionId::from_bits(action))
                 .ok_or_else(|| error(PonkoStatus::PONKO_NOT_FOUND, "no on-screen control for that action"))?;
             out(out_center, to_c(at))
         })

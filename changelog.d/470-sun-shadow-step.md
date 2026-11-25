@@ -6,4 +6,4 @@
   makes every shadow edge shimmer, and far cascades stay cached between
   steps. Lighting keeps the exact direction. The hold has hysteresis, so a
   sun wobbling across a step boundary doesn't flip the shadows back and
-  forth. Not in the C API yet.
+  forth. From C and C++ it is `shadow_sun_step` of `PonkoLightingEx`.

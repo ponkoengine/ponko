@@ -120,16 +120,137 @@ For guide changes, run `mdbook build book` if mdBook is available. You do not
 need a C++ toolchain for an unrelated Rust change. Report checks you could not
 run; maintainers cover the broader matrix before merging.
 
-Maintainers/agents use the full integration commands in
-[AGENTS.md](AGENTS.md#integration-checks), including workspace builds, tests,
-Clippy, relevant native checks and Miri for affected unsafe ECS code. There is
-no CI: nothing runs on a pull request by itself, so the checks a change needs
-are run locally before it merges, and focused local checks do not waive
-compatibility, correctness, privacy or leak checks. The exact
-platform/feature matrix is written down in
-[scripts/checks.yml](scripts/checks.yml), the list of checks: each job names
-its platform and the commands to run. Maintainers run the parts a change
-touches (on macOS, Windows or Linux as needed) before merging it.
+### Local checks
+
+Run the applicable checks from [scripts/checks.yml](scripts/checks.yml) with
+Python 3.10 or later, Git, and Bash. On Windows use Git for Windows and start
+from a Visual Studio Developer PowerShell with the C++ linker and SDK on
+`PATH`. Replace `python3` with `py -3` if needed. The runner uses the same
+Python interpreter for its steps. Install the required Rust toolchains and
+tools before the run.
+
+```sh
+python3 scripts/run-checks.py --list
+python3 scripts/run-checks.py --quick
+python3 scripts/run-checks.py --job test --job test-features
+python3 scripts/run-checks.py --tag lint
+python3 scripts/run-checks.py
+```
+
+`--job` and `--tag` can each be repeated. Combine them to select jobs that
+match both filters. `--list` prints the plan with prerequisites and skip
+reasons. The default runs the current OS lanes without opening windows.
+On a test machine with a display, add `--include-windowed` to include packaged
+game playback and other steps tagged `windowed`. Offscreen GPU tests can run
+in either mode.
+
+Setup actions (tool installers, system packages, caches and artifact uploads)
+are for machine provisioning. Use the versions and requirements in the
+inventory. On Linux install the ALSA and udev development headers before any
+native builds and AT-SPI plus D-Bus for the Linux accessibility lane. For the
+Linux browser job, install the pinned wasm-bindgen
+CLI, run `npm ci --prefix web/smoke`, and provision the Playwright browsers and
+OS dependencies listed in that job. The C++ browser check requires
+`WASI_SDK_PATH`. The WebKit audio checks expect a PulseAudio null sink on the
+test host.
+
+The runner prints each step's result and time and writes `results.json` and
+`summary.txt` to `target/check-results/` by default. Use `--out DIRECTORY` to
+save a report elsewhere. Reports include the checked revision, time, OS,
+Rust versions, skipped checks, and adapter and driver details when offscreen
+tests report them. The JSON also includes failed step output. Exit code 1
+means a check failed, and exit code 2 means a usage error or zero checks ran.
+The [integration instructions](AGENTS.md#integration-checks) describe when
+maintainers need additional checks.
+
+#### Nightly runs on maintainer machines
+
+Use a dedicated `main` checkout on each macOS, Windows, and Linux test
+machine. Provision the tools under the scheduler account and configure
+authenticated `gh` with permission to manage issues in this repository.
+Schedule one invocation per OS and keep the report directories outside the
+checkout.
+
+`--publish DIRECTORY` replaces the OS's latest status files in that directory
+after each completed run. The file pairs are `macos.json` and `macos.md`,
+`windows.json` and `windows.md`, and `linux.json` and `linux.md`. Copy these
+files to the website's static assets for its status page. Use the Markdown
+table for the README or link to the status page from the README. Use the
+UTC completion time to show the age of the result. Keep the raw
+`results.json` and `summary.txt` in the machine's private report directory.
+
+`python3 scripts/nightly-issue.py /path/to/results.json` previews the issue
+action using the scheduler account's GitHub access. Add `--apply` to
+create or update the open issue titled “Nightly checks failing on <OS>”,
+or close it when a run passes. A run that executes zero checks publishes
+an incomplete status and leaves issues alone. Use full nightly reports for
+issue updates.
+
+On macOS and Linux, point the scheduler at a Bash script like this one.
+It sends a fresh report to the issue updater even when a check fails.
+
+```sh
+#!/usr/bin/env bash
+set -euo pipefail
+cd /path/to/ponko
+test "$(git branch --show-current)" = main
+dirty=$(git status --porcelain)
+test -z "$dirty"
+git pull --ff-only origin main
+
+python=/path/to/python3
+reports=/path/to/private/ponko-latest
+status=/path/to/public-status-staging
+rm -f "$reports/results.json"
+result=0
+"$python" scripts/run-checks.py --out "$reports" --publish "$status" || result=$?
+if test -f "$reports/results.json"; then
+  "$python" scripts/nightly-issue.py "$reports/results.json" --apply
+fi
+exit "$result"
+```
+
+On Windows, use a wrapper that initializes the Visual Studio developer
+environment, then runs a PowerShell script like this one.
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $false
+Set-Location 'C:/path/to/ponko'
+$branch = git branch --show-current
+if ($LASTEXITCODE -ne 0 -or $branch -ne 'main') { exit 2 }
+$dirty = git status --porcelain
+if ($LASTEXITCODE -ne 0 -or $dirty) { exit 2 }
+git pull --ff-only origin main
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+$reports = 'C:/path/to/private/ponko-latest'
+$status = 'C:/path/to/public-status-staging'
+$report = Join-Path $reports 'results.json'
+if (Test-Path -LiteralPath $report) { Remove-Item -LiteralPath $report }
+py -3 scripts/run-checks.py --out $reports --publish $status
+$result = $LASTEXITCODE
+if (Test-Path -LiteralPath $report) {
+  py -3 scripts/nightly-issue.py $report --apply
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+exit $result
+```
+
+Configure the scheduler with the needed tool `PATH` and keep stdout and
+stderr to diagnose checkout or reporting errors. On a dedicated test host
+with an active graphical session, add `--include-windowed` to the runner
+invocation to include the windowed lanes.
+
+| Scheduler | Nightly setup |
+| --- | --- |
+| macOS launchd | Create a per-user LaunchAgent in `~/Library/LaunchAgents`. Set `ProgramArguments` to the absolute Bash and script paths, `StartCalendarInterval` to hour 2 and minute 0, and `StandardOutPath` and `StandardErrorPath` to log files. Load it with `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.ponko.checks.plist`. |
+| Linux systemd | Create a user service in `~/.config/systemd/user/ponko-checks.service` with `Type=oneshot` and `ExecStart=/bin/bash /absolute/path/to/script`. Create `ponko-checks.timer` with `OnCalendar=*-*-* 02:00:00` and `Persistent=true` in `[Timer]` and `WantedBy=timers.target` in `[Install]`. Run `systemctl --user enable --now ponko-checks.timer`. Use a system service or enable user lingering if it must run after logout. |
+| Windows Task Scheduler | Create a daily trigger at 02:00 and use the Visual Studio environment wrapper as the action. Have the wrapper pass through the PowerShell script's exit code. Select “Do not start a new instance” when an invocation overlaps another. |
+
+For the first invocation on each machine, omit `--apply` to check the
+revision, environment, skip reasons, public files, and proposed issue
+action. Enable issue updates once those match the expected schedule.
 
 ### Adding or changing a cargo feature
 

@@ -132,10 +132,14 @@ pub use snapshots::{
 };
 
 #[cfg(feature = "steam")]
+mod steam_client;
+#[cfg(feature = "steam")]
 mod steam_messages;
 #[cfg(feature = "steam")]
 #[path = "net/steam.rs"]
 mod steam_transport;
+#[cfg(feature = "steam")]
+pub use steam_client::{SteamClient, SteamLobbyId, SteamUserId};
 #[cfg(feature = "steam")]
 pub use steam_messages::{SteamLobby, SteamLobbyVisibility};
 #[cfg(feature = "steam")]
@@ -1377,7 +1381,7 @@ trait Transport: Send {
     }
     /// The Steam client and lobby, for Steam sessions.
     #[cfg(feature = "steam")]
-    fn steam(&self) -> Option<(&steamworks::Client, Option<steamworks::LobbyId>)> {
+    fn steam(&self) -> Option<(&SteamClient, Option<SteamLobbyId>)> {
         None
     }
     /// Starts taking browser players over WebSocket on `addr` (hosts).
@@ -1536,9 +1540,16 @@ impl Transport for Local {
     }
 }
 
-/// Steamworks SDK used by Steam transports.
+/// The `steamworks` crate behind the Steam transports, for the parts of Steam
+/// that Ponko doesn't wrap (feature `steam`).
+///
+/// **Unstable**: a Ponko release may move to another `steamworks` version,
+/// patch releases too, so code that names these types may stop compiling.
+/// Ponko's own Steam API ([`SteamClient`], [`SteamLobbyId`], [`SteamUserId`],
+/// [`SteamLobby`]) doesn't change with it. Reach the client underneath with
+/// [`SteamClient::unstable_steamworks`].
 #[cfg(feature = "steam")]
-pub use steamworks as steam;
+pub use steamworks as unstable_steamworks;
 
 #[cfg(test)]
 mod tests {

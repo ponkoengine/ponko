@@ -13,6 +13,43 @@ use crate::camera::Rect;
 use crate::color::Color;
 use crate::texture::Texture;
 
+/// A clip of a [`SkeletonData`], resolved once from its name with
+/// [`SkeletonData::clip_id`] or [`Skeleton::clip_id`](super::Skeleton::clip_id):
+/// its position in the clip list, from 0.
+/// [`Skeleton::play`](super::Skeleton::play), `play_once` and `crossfade`
+/// take it (no lookup) or the name (a lookup per call).
+/// ```
+/// let walk = ponko::skeleton2d::ClipId(1);
+/// assert_eq!(walk.0, 1);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ClipId(pub usize);
+
+/// What names a clip in [`Skeleton::play`](super::Skeleton::play),
+/// `play_once` and `crossfade`: a [`ClipId`] (resolved once) or a name
+/// (`&str`, `&String`, ...: a lookup per call, for tools and data files).
+pub trait ClipRef: sealed::Sealed + Copy {
+    #[doc(hidden)]
+    fn clip_index(self, data: &SkeletonData) -> Option<usize>;
+}
+mod sealed {
+    pub trait Sealed {}
+    impl Sealed for super::ClipId {}
+    impl<T: AsRef<str> + ?Sized> Sealed for &T {}
+}
+impl ClipRef for ClipId {
+    #[inline]
+    fn clip_index(self, data: &SkeletonData) -> Option<usize> {
+        (self.0 < data.clips.len()).then_some(self.0)
+    }
+}
+impl<T: AsRef<str> + ?Sized> ClipRef for &T {
+    #[inline]
+    fn clip_index(self, data: &SkeletonData) -> Option<usize> {
+        data.clip(self.as_ref())
+    }
+}
+
 /// A bone's transform relative to its parent: translation, then rotation
 /// (radians, clockwise on screen like [`Transform2D`](crate::d2::Transform)),
 /// then scale, with an optional shear. A bone points along its local +x axis.
@@ -1290,6 +1327,27 @@ impl SkeletonData {
     #[must_use]
     pub fn clip(&self, name: &str) -> Option<usize> {
         self.clips.iter().position(|c| &*c.name == name)
+    }
+
+    /// The clip named `name` as a [`ClipId`], for
+    /// [`Skeleton::play`](super::Skeleton::play) and its kin: resolve it
+    /// once and keep the id, and playing it skips the lookup.
+    ///
+    /// # Errors
+    /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) for a name
+    /// no clip has; its message lists the clips.
+    /// ```
+    /// use ponko::skeleton2d::{Clip, SkeletonData};
+    /// let mut data = SkeletonData::new();
+    /// data.add_clip(Clip::new("walk", 1.0));
+    /// assert_eq!(data.clip_id("walk").unwrap().0, 0);
+    /// let err = data.clip_id("wlak").unwrap_err();
+    /// assert_eq!(err.to_string(), r#"ponko: unknown animation clip "wlak" (known: walk)"#);
+    /// ```
+    pub fn clip_id(&self, name: &str) -> Result<ClipId, crate::error::Error> {
+        self.clip(name).map(ClipId).ok_or_else(|| {
+            crate::error::Error::unknown_name("animation clip", name, self.clips.iter().map(|c| &*c.name))
+        })
     }
 
     /// The index of the skin named `name`.

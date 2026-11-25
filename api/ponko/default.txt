@@ -318,9 +318,8 @@ impl core::marker::StructuralPartialEq for ponko::actions::UnknownAction
 pub const ponko::actions::DEFAULT_DEADZONE: f32
 pub const ponko::actions::PRESS_THRESHOLD: f32
 pub trait ponko::actions::ActionRef: ponko::actions::sealed::Sealed + core::marker::Copy
-impl ponko::actions::ActionRef for &alloc::string::String
-impl ponko::actions::ActionRef for &str
 impl ponko::actions::ActionRef for ponko::actions::ActionId
+impl<T: core::convert::AsRef<str> + ?core::marker::Sized> ponko::actions::ActionRef for &T
 pub mod ponko::ai
 pub enum ponko::ai::Curve
 pub ponko::ai::Curve::Cubic
@@ -1048,9 +1047,10 @@ impl ponko::audio::Audio
 pub fn ponko::audio::Audio::add_snapshot(&mut self, &str, ponko::audio::MixerSnapshot)
 pub fn ponko::audio::Audio::mixer_state(&self) -> ponko::audio::MixerState
 pub fn ponko::audio::Audio::restore_mixer_state(&mut self, &ponko::audio::MixerState)
-pub fn ponko::audio::Audio::snapshot_weight(&self, &str) -> f32
-pub fn ponko::audio::Audio::start_snapshot(&mut self, &str, f32) -> bool
-pub fn ponko::audio::Audio::stop_snapshot(&mut self, &str, f32)
+pub fn ponko::audio::Audio::snapshot_id(&self, &str) -> core::result::Result<ponko::audio::SnapshotId, ponko::error::Error>
+pub fn ponko::audio::Audio::snapshot_weight(&self, impl ponko::audio::SnapshotRef) -> f32
+pub fn ponko::audio::Audio::start_snapshot(&mut self, impl ponko::audio::SnapshotRef, f32) -> bool
+pub fn ponko::audio::Audio::stop_snapshot(&mut self, impl ponko::audio::SnapshotRef, f32)
 impl ponko::audio::Audio
 pub fn ponko::audio::Audio::apply_mixer_json(&mut self, &str) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::audio::Audio::load_mixer(&mut self, &str)
@@ -1068,6 +1068,7 @@ pub fn ponko::audio::Audio::bus_muted(&self, ponko::prelude::AudioBus) -> bool
 pub fn ponko::audio::Audio::bus_name(&self, ponko::prelude::AudioBus) -> core::option::Option<&str>
 pub fn ponko::audio::Audio::bus_parent(&self, ponko::prelude::AudioBus) -> core::option::Option<ponko::prelude::AudioBus>
 pub fn ponko::audio::Audio::bus_volume(&self, ponko::prelude::AudioBus) -> f32
+pub fn ponko::audio::Audio::find_bus(&self, &str) -> core::result::Result<ponko::prelude::AudioBus, ponko::error::Error>
 pub fn ponko::audio::Audio::load_stream(&mut self, &str) -> ponko::audio::Sound
 pub fn ponko::audio::Audio::mute_bus(&mut self, ponko::prelude::AudioBus, bool)
 pub fn ponko::audio::Audio::play_on(&mut self, ponko::audio::Sound, ponko::audio::SoundParams, ponko::prelude::AudioBus, ponko::audio::AudioEffects) -> ponko::audio::Playing
@@ -1379,6 +1380,23 @@ impl serde_core::ser::Serialize for ponko::audio::SavedSnapshot
 pub fn ponko::audio::SavedSnapshot::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for ponko::audio::SavedSnapshot
 pub fn ponko::audio::SavedSnapshot::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct ponko::audio::SnapshotId(_)
+impl ponko::audio::SnapshotId
+pub const ponko::audio::SnapshotId::NONE: ponko::audio::SnapshotId
+impl core::clone::Clone for ponko::audio::SnapshotId
+pub fn ponko::audio::SnapshotId::clone(&self) -> Self
+impl core::cmp::Eq for ponko::audio::SnapshotId
+impl core::cmp::PartialEq for ponko::audio::SnapshotId
+pub fn ponko::audio::SnapshotId::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::audio::SnapshotId
+pub fn ponko::audio::SnapshotId::default() -> Self
+impl core::fmt::Debug for ponko::audio::SnapshotId
+pub fn ponko::audio::SnapshotId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for ponko::audio::SnapshotId
+pub fn ponko::audio::SnapshotId::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for ponko::audio::SnapshotId
+impl core::marker::StructuralPartialEq for ponko::audio::SnapshotId
+impl ponko::audio::SnapshotRef for ponko::audio::SnapshotId
 pub struct ponko::audio::Song
 impl ponko::audio::Song
 pub fn ponko::audio::Song::beats_per_bar(&self) -> u32
@@ -1459,6 +1477,9 @@ pub fn ponko::audio::VoiceCount::hash<__H: core::hash::Hasher>(&self, &mut __H)
 impl core::marker::Copy for ponko::audio::VoiceCount
 impl core::marker::StructuralPartialEq for ponko::audio::VoiceCount
 pub const ponko::audio::DEFAULT_PRIORITY: u8
+pub trait ponko::audio::SnapshotRef: ponko::audio::snapshots::sealed::Sealed + core::marker::Copy
+impl ponko::audio::SnapshotRef for ponko::audio::SnapshotId
+impl<T: core::convert::AsRef<str> + ?core::marker::Sized> ponko::audio::SnapshotRef for &T
 pub mod ponko::camera
 #[non_exhaustive] pub struct ponko::camera::CameraShake
 pub ponko::camera::CameraShake::decay: f32
@@ -3340,7 +3361,6 @@ impl ponko::input::GamepadBackend for ponko::input::FakeGamepads
 pub fn ponko::input::FakeGamepads::poll(&mut self, &mut ponko::input::GamepadEvents<'_>)
 pub fn ponko::input::FakeGamepads::set_force_feedback(&mut self, ponko::input::DeviceKey, ponko::input::ForceFeedback)
 pub fn ponko::input::FakeGamepads::set_rumble(&mut self, ponko::input::DeviceKey, ponko::input::MotorLevels)
-pub fn ponko::input::hat_from_bits(u8) -> glam::i32::ivec2::IVec2
 pub struct ponko::input::ForceFeedback
 pub ponko::input::ForceFeedback::autocenter: f32
 pub ponko::input::ForceFeedback::constant: f32
@@ -3545,15 +3565,6 @@ impl core::marker::Copy for ponko::input::Glyphs
 impl core::marker::StructuralPartialEq for ponko::input::Glyphs
 pub struct ponko::input::Input
 impl ponko::input::Input
-pub fn ponko::input::Input::force_feedback(&self, ponko::input::Joystick) -> ponko::input::ForceFeedback
-pub fn ponko::input::Input::joystick_axis(&self, ponko::input::Joystick, usize) -> f32
-pub fn ponko::input::Input::joystick_down(&self, ponko::input::Joystick, usize) -> bool
-pub fn ponko::input::Input::joystick_hat(&self, ponko::input::Joystick, usize) -> glam::i32::ivec2::IVec2
-pub fn ponko::input::Input::joystick_info(&self, ponko::input::Joystick) -> core::option::Option<&ponko::input::JoystickInfo>
-pub fn ponko::input::Input::joystick_pressed(&self, ponko::input::Joystick, usize) -> bool
-pub fn ponko::input::Input::joystick_released(&self, ponko::input::Joystick, usize) -> bool
-pub fn ponko::input::Input::joysticks(&self) -> &[ponko::input::Joystick]
-pub fn ponko::input::Input::set_force_feedback(&mut self, ponko::input::Joystick, ponko::input::ForceFeedback)
 pub fn ponko::input::Input::action_axis(&self, impl ponko::actions::ActionRef) -> f32
 pub fn ponko::input::Input::action_axis2(&self, impl ponko::actions::ActionRef) -> glam::f32::vec2::Vec2
 pub fn ponko::input::Input::action_down(&self, impl ponko::actions::ActionRef) -> bool
@@ -3585,12 +3596,12 @@ pub fn ponko::input::Input::restore_touch_layout(&mut self, &ponko::storage::Sto
 pub fn ponko::input::Input::rotation_delta(&self) -> f32
 pub fn ponko::input::Input::save_touch_layout(&self, &mut ponko::storage::Storage) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::input::Input::set_gesture_settings(&mut self, ponko::input::GestureSettings)
-pub fn ponko::input::Input::set_touch_control_shown(&mut self, &str, bool)
+pub fn ponko::input::Input::set_touch_control_shown(&mut self, impl ponko::actions::ActionRef, bool)
 pub fn ponko::input::Input::set_touch_controls(&mut self, ponko::ui::touch::TouchControls)
 pub fn ponko::input::Input::set_touch_controls_show(&mut self, ponko::ui::touch::TouchShow)
 pub fn ponko::input::Input::set_touch_device(&mut self, bool)
 pub fn ponko::input::Input::set_touch_layout(&mut self, ponko::ui::touch::TouchLayout)
-pub fn ponko::input::Input::touch_control_center(&self, &str) -> core::option::Option<glam::f32::vec2::Vec2>
+pub fn ponko::input::Input::touch_control_center(&self, impl ponko::actions::ActionRef) -> core::option::Option<glam::f32::vec2::Vec2>
 pub fn ponko::input::Input::touch_controls_shown(&self) -> bool
 pub fn ponko::input::Input::touch_device(&self) -> bool
 pub fn ponko::input::Input::touch_layout(&self) -> &ponko::ui::touch::TouchLayout
@@ -3629,6 +3640,16 @@ pub fn ponko::input::Input::cancel_scenario(&mut self, &mut ponko_ecs::world::Wo
 pub fn ponko::input::Input::injection_allowed(&self) -> bool
 pub fn ponko::input::Input::scenario_report<'w>(&self, &'w ponko_ecs::world::World) -> core::option::Option<&'w ponko::scenario::ScenarioReport>
 pub fn ponko::input::Input::start_scenario(&mut self, &mut ponko_ecs::world::World, &mut ponko::prelude::Time, ponko::scenario::InputScenario)
+impl ponko::input::Input
+pub fn ponko::input::Input::force_feedback(&self, ponko::input::Joystick) -> ponko::input::ForceFeedback
+pub fn ponko::input::Input::joystick_axis(&self, ponko::input::Joystick, usize) -> f32
+pub fn ponko::input::Input::joystick_down(&self, ponko::input::Joystick, usize) -> bool
+pub fn ponko::input::Input::joystick_hat(&self, ponko::input::Joystick, usize) -> glam::i32::ivec2::IVec2
+pub fn ponko::input::Input::joystick_info(&self, ponko::input::Joystick) -> core::option::Option<&ponko::input::JoystickInfo>
+pub fn ponko::input::Input::joystick_pressed(&self, ponko::input::Joystick, usize) -> bool
+pub fn ponko::input::Input::joystick_released(&self, ponko::input::Joystick, usize) -> bool
+pub fn ponko::input::Input::joysticks(&self) -> &[ponko::input::Joystick]
+pub fn ponko::input::Input::set_force_feedback(&mut self, ponko::input::Joystick, ponko::input::ForceFeedback)
 impl ponko::input::Input
 pub fn ponko::input::Input::gamepad_axis(&self, ponko::input::Gamepad, ponko::input::GamepadAxis) -> f32
 pub fn ponko::input::Input::gamepad_down(&self, ponko::input::Gamepad, ponko::input::GamepadButton) -> bool
@@ -3801,7 +3822,9 @@ pub fn ponko::input::GamepadBackend::set_force_feedback(&mut self, ponko::input:
 pub fn ponko::input::GamepadBackend::set_rumble(&mut self, ponko::input::DeviceKey, ponko::input::MotorLevels)
 impl ponko::input::GamepadBackend for ponko::input::FakeGamepads
 pub fn ponko::input::FakeGamepads::poll(&mut self, &mut ponko::input::GamepadEvents<'_>)
+pub fn ponko::input::FakeGamepads::set_force_feedback(&mut self, ponko::input::DeviceKey, ponko::input::ForceFeedback)
 pub fn ponko::input::FakeGamepads::set_rumble(&mut self, ponko::input::DeviceKey, ponko::input::MotorLevels)
+pub fn ponko::input::hat_from_bits(u8) -> glam::i32::ivec2::IVec2
 pub mod ponko::inventory
 #[non_exhaustive] pub enum ponko::inventory::AssetClass
 pub ponko::inventory::AssetClass::Compute
@@ -6138,9 +6161,8 @@ impl core::marker::StructuralPartialEq for ponko::actions::UnknownAction
 pub const ponko::prelude::actions::DEFAULT_DEADZONE: f32
 pub const ponko::prelude::actions::PRESS_THRESHOLD: f32
 pub trait ponko::prelude::actions::ActionRef: ponko::actions::sealed::Sealed + core::marker::Copy
-impl ponko::actions::ActionRef for &alloc::string::String
-impl ponko::actions::ActionRef for &str
 impl ponko::actions::ActionRef for ponko::actions::ActionId
+impl<T: core::convert::AsRef<str> + ?core::marker::Sized> ponko::actions::ActionRef for &T
 pub mod ponko::prelude::d2
 #[non_exhaustive] pub enum ponko::prelude::d2::ParticleShape
 pub ponko::prelude::d2::ParticleShape::Circle
@@ -7782,6 +7804,7 @@ pub fn ponko::prelude::Ui::text_input(&mut self, ponko::prelude::UiId) -> ponko:
 pub fn ponko::prelude::Ui::theme(&self) -> &ponko::ui::UiTheme
 pub fn ponko::prelude::Ui::title(&mut self, ponko::prelude::UiId, impl core::convert::AsRef<str>) -> ponko::ui::UiBuilder<'_>
 pub fn ponko::prelude::Ui::toggle(&mut self, ponko::prelude::UiId, impl core::convert::AsRef<str>) -> ponko::ui::UiBuilder<'_>
+pub fn ponko::prelude::Ui::try_find(&self, &str) -> core::result::Result<ponko::prelude::UiId, ponko::error::Error>
 impl ponko::prelude::Ui
 pub fn ponko::prelude::Ui::composition_interrupted(&self) -> bool
 pub fn ponko::prelude::Ui::ime_allowed(&self, ponko::prelude::UiId) -> bool
@@ -7867,9 +7890,8 @@ impl core::fmt::Debug for ponko::prelude::UiLayout
 pub fn ponko::prelude::UiLayout::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for ponko::prelude::UiLayout
 pub trait ponko::prelude::ActionRef: ponko::actions::sealed::Sealed + core::marker::Copy
-impl ponko::actions::ActionRef for &alloc::string::String
-impl ponko::actions::ActionRef for &str
 impl ponko::actions::ActionRef for ponko::actions::ActionId
+impl<T: core::convert::AsRef<str> + ?core::marker::Sized> ponko::actions::ActionRef for &T
 pub trait ponko::prelude::CommandsHierarchy
 pub fn ponko::prelude::CommandsHierarchy::despawn_recursive(&mut self, ponko_ecs::entity::Entity)
 impl ponko::hierarchy::CommandsHierarchy for ponko_ecs::commands::Commands
@@ -9387,6 +9409,23 @@ pub fn ponko::skeleton2d::Clip::eq(&self, &Self) -> bool
 impl core::fmt::Debug for ponko::skeleton2d::Clip
 pub fn ponko::skeleton2d::Clip::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for ponko::skeleton2d::Clip
+pub struct ponko::skeleton2d::ClipId(pub usize)
+impl core::clone::Clone for ponko::skeleton2d::ClipId
+pub fn ponko::skeleton2d::ClipId::clone(&self) -> Self
+impl core::cmp::Eq for ponko::skeleton2d::ClipId
+impl core::cmp::Ord for ponko::skeleton2d::ClipId
+pub fn ponko::skeleton2d::ClipId::cmp(&self, &Self) -> core::cmp::Ordering
+impl core::cmp::PartialEq for ponko::skeleton2d::ClipId
+pub fn ponko::skeleton2d::ClipId::eq(&self, &Self) -> bool
+impl core::cmp::PartialOrd for ponko::skeleton2d::ClipId
+pub fn ponko::skeleton2d::ClipId::partial_cmp(&self, &Self) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for ponko::skeleton2d::ClipId
+pub fn ponko::skeleton2d::ClipId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for ponko::skeleton2d::ClipId
+pub fn ponko::skeleton2d::ClipId::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for ponko::skeleton2d::ClipId
+impl core::marker::StructuralPartialEq for ponko::skeleton2d::ClipId
+impl ponko::skeleton2d::ClipRef for ponko::skeleton2d::ClipId
 #[non_exhaustive] pub struct ponko::skeleton2d::ClippingMask
 pub ponko::skeleton2d::ClippingMask::end: core::option::Option<usize>
 pub ponko::skeleton2d::ClippingMask::vertices: alloc::vec::Vec<ponko::skeleton2d::MeshVertex>
@@ -9592,7 +9631,8 @@ pub fn ponko::skeleton2d::Skeleton::bone_pose(&self, usize) -> ponko::skeleton2d
 pub fn ponko::skeleton2d::Skeleton::bone_position(&self, usize) -> glam::f32::vec2::Vec2
 pub fn ponko::skeleton2d::Skeleton::bone_rotation(&self, usize) -> f32
 pub fn ponko::skeleton2d::Skeleton::clip(&self) -> core::option::Option<&str>
-pub fn ponko::skeleton2d::Skeleton::crossfade(&mut self, &str, f32) -> bool
+pub fn ponko::skeleton2d::Skeleton::clip_id(&self, &str) -> core::result::Result<ponko::skeleton2d::ClipId, ponko::error::Error>
+pub fn ponko::skeleton2d::Skeleton::crossfade(&mut self, impl ponko::skeleton2d::ClipRef, f32) -> bool
 pub fn ponko::skeleton2d::Skeleton::crossfade_state(&mut self, ponko::anim::StateId, f32, f32)
 pub fn ponko::skeleton2d::Skeleton::data(&self) -> &alloc::rcs::arc::Arc<ponko::skeleton2d::SkeletonData>
 pub fn ponko::skeleton2d::Skeleton::drain_events(&mut self) -> impl core::iter::traits::iterator::Iterator<Item = alloc::rcs::arc::Arc<str>> + '_
@@ -9607,8 +9647,8 @@ pub fn ponko::skeleton2d::Skeleton::normalized_time(&self) -> f32
 pub fn ponko::skeleton2d::Skeleton::normalized_time_f64(&self) -> f64
 pub fn ponko::skeleton2d::Skeleton::parameter(&self, ponko::anim::ParamId) -> core::option::Option<ponko::anim::AnimationParameter>
 pub fn ponko::skeleton2d::Skeleton::parameter_id(&self, &str) -> core::option::Option<ponko::anim::ParamId>
-pub fn ponko::skeleton2d::Skeleton::play(&mut self, &str) -> bool
-pub fn ponko::skeleton2d::Skeleton::play_once(&mut self, &str) -> bool
+pub fn ponko::skeleton2d::Skeleton::play(&mut self, impl ponko::skeleton2d::ClipRef) -> bool
+pub fn ponko::skeleton2d::Skeleton::play_once(&mut self, impl ponko::skeleton2d::ClipRef) -> bool
 pub fn ponko::skeleton2d::Skeleton::reset_physics(&mut self)
 pub fn ponko::skeleton2d::Skeleton::set_attachment(&mut self, usize, core::option::Option<core::option::Option<&str>>)
 pub fn ponko::skeleton2d::Skeleton::set_bone_pose(&mut self, usize, ponko::skeleton2d::BonePose)
@@ -9622,6 +9662,7 @@ pub fn ponko::skeleton2d::Skeleton::set_trigger(&mut self, ponko::anim::ParamId,
 pub fn ponko::skeleton2d::Skeleton::skin(&self) -> &str
 pub fn ponko::skeleton2d::Skeleton::state(&self) -> core::option::Option<ponko::anim::StateId>
 pub fn ponko::skeleton2d::Skeleton::try_crossfade_state(&mut self, ponko::anim::StateId, f32, f32) -> core::result::Result<(), ponko::anim::AnimationGraphError>
+pub fn ponko::skeleton2d::Skeleton::try_parameter_id(&self, &str) -> core::result::Result<ponko::anim::ParamId, ponko::error::Error>
 pub fn ponko::skeleton2d::Skeleton::try_play_state(&mut self, ponko::anim::StateId, f32) -> core::result::Result<(), ponko::anim::AnimationGraphError>
 pub fn ponko::skeleton2d::Skeleton::try_set_bool(&mut self, ponko::anim::ParamId, bool) -> core::result::Result<(), ponko::anim::AnimationGraphError>
 pub fn ponko::skeleton2d::Skeleton::try_set_float(&mut self, ponko::anim::ParamId, f32) -> core::result::Result<(), ponko::anim::AnimationGraphError>
@@ -9649,6 +9690,7 @@ pub fn ponko::skeleton2d::SkeletonData::attachment(&self, usize, usize, &str) ->
 pub fn ponko::skeleton2d::SkeletonData::bone(&self, &str) -> core::option::Option<usize>
 pub fn ponko::skeleton2d::SkeletonData::bones(&self) -> &[ponko::skeleton2d::Bone]
 pub fn ponko::skeleton2d::SkeletonData::clip(&self, &str) -> core::option::Option<usize>
+pub fn ponko::skeleton2d::SkeletonData::clip_id(&self, &str) -> core::result::Result<ponko::skeleton2d::ClipId, ponko::error::Error>
 pub fn ponko::skeleton2d::SkeletonData::clips(&self) -> &[ponko::skeleton2d::Clip]
 pub fn ponko::skeleton2d::SkeletonData::graph(&self) -> core::option::Option<&alloc::rcs::arc::Arc<ponko::skeleton2d::SkeletonGraph>>
 pub fn ponko::skeleton2d::SkeletonData::ik_constraint(&self, &str) -> core::option::Option<usize>
@@ -9704,6 +9746,8 @@ pub fn ponko::skeleton2d::SkeletonGraph::parameter(&self, &str) -> core::option:
 pub fn ponko::skeleton2d::SkeletonGraph::parameter_names(&self) -> &[alloc::rcs::arc::Arc<str>]
 pub fn ponko::skeleton2d::SkeletonGraph::state(&self, &str) -> core::option::Option<ponko::anim::StateId>
 pub fn ponko::skeleton2d::SkeletonGraph::states(&self) -> &[ponko::skeleton2d::SkeletonState]
+pub fn ponko::skeleton2d::SkeletonGraph::try_parameter(&self, &str) -> core::result::Result<ponko::anim::ParamId, ponko::error::Error>
+pub fn ponko::skeleton2d::SkeletonGraph::try_state(&self, &str) -> core::result::Result<ponko::anim::StateId, ponko::error::Error>
 impl core::clone::Clone for ponko::skeleton2d::SkeletonGraph
 pub fn ponko::skeleton2d::SkeletonGraph::clone(&self) -> Self
 impl core::fmt::Debug for ponko::skeleton2d::SkeletonGraph
@@ -9847,6 +9891,9 @@ pub fn ponko::skeleton2d::TransformTrack::default() -> Self
 impl core::fmt::Debug for ponko::skeleton2d::TransformTrack
 pub fn ponko::skeleton2d::TransformTrack::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for ponko::skeleton2d::TransformTrack
+pub trait ponko::skeleton2d::ClipRef: ponko::skeleton2d::data::sealed::Sealed + core::marker::Copy
+impl ponko::skeleton2d::ClipRef for ponko::skeleton2d::ClipId
+impl<T: core::convert::AsRef<str> + ?core::marker::Sized> ponko::skeleton2d::ClipRef for &T
 pub mod ponko::spatial
 #[repr(C)] pub struct ponko::spatial::GridEntry<T>
 pub ponko::spatial::GridEntry::data: T
@@ -11121,6 +11168,7 @@ pub fn ponko::prelude::Ui::text_input(&mut self, ponko::prelude::UiId) -> ponko:
 pub fn ponko::prelude::Ui::theme(&self) -> &ponko::ui::UiTheme
 pub fn ponko::prelude::Ui::title(&mut self, ponko::prelude::UiId, impl core::convert::AsRef<str>) -> ponko::ui::UiBuilder<'_>
 pub fn ponko::prelude::Ui::toggle(&mut self, ponko::prelude::UiId, impl core::convert::AsRef<str>) -> ponko::ui::UiBuilder<'_>
+pub fn ponko::prelude::Ui::try_find(&self, &str) -> core::result::Result<ponko::prelude::UiId, ponko::error::Error>
 impl ponko::prelude::Ui
 pub fn ponko::prelude::Ui::composition_interrupted(&self) -> bool
 pub fn ponko::prelude::Ui::ime_allowed(&self, ponko::prelude::UiId) -> bool
