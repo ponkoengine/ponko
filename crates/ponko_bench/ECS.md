@@ -52,6 +52,8 @@ Names are `ecs/<case>-<size>/<library>[-<variant>]`. Entities are
 | `spawn-batch` | the same with `spawn_batch` | fresh |
 | `spawn-despawn` | despawn the oldest `n/10` entities and spawn `n/10` new ones | steady |
 | `add-remove` | insert a marker into all `n` entities, then remove it from all | steady |
+| `add-remove` `ponko-many` | the same with `insert_many` / `remove_many` over the entities in row order | steady |
+| `add-remove` `ponko-scattered`, `ponko-many-scattered` | single moves and batches in a scattered order (added in it, removed in its reverse) | steady |
 | `optional` | `(&mut Pos, &Vel, Option<&Boost>)`, four archetypes, half with `Boost` | steady |
 | `with` / `without` | `(&mut Pos, &Vel)` filtered by a marker half the entities have | steady |
 | `game` | one tick: 4 layouts, 5 systems, projectiles expire and respawn | steady |
@@ -617,3 +619,33 @@ code, now that every combination's loop is vectorized: the probe's
 11548 (three) and 11380 to 17332 (four), the parallel chunk function from
 1244 to 1904 bytes (two). About half the cycles for 1–6 KB per loop that
 uses them: kept.
+
+## Batched moves between two archetypes (#349)
+
+`World::insert_many(&entities, value)` and `World::remove_many::<T>(&entities)`
+leave the world that `insert` and `remove` on each entity in turn leave
+(`crates/ponko_ecs/tests/batch_moves.rs` compares values, rows, change
+ticks and removal logs). A run of entities in the same archetype looks the
+archetype change up once. When the run is a whole archetype in its row
+order (what a query or `Archetype::entities` yields, and what a batch
+leaves behind) and the archetype keeps no change stamps, its columns are
+copied in one piece instead of one row at a time.
+
+`cargo run --release -p ponko_bench -- ecs/add-remove`, on Windows 11, an
+AMD Ryzen 5 2600 (6 cores), 16 GB, Rust 1.96.1, default features, the
+branch at its first commit; medians of the usual warm-up and runs. The
+machine was not quiet, so read differences under about 10 % as noise:
+
+| Size | single moves | `ponko-many` (whole archetype) | `ponko-scattered` (single) | `ponko-many-scattered` |
+|---|---:|---:|---:|---:|
+| 1k | 0.102 ms | 0.008 ms | 0.087 ms | 0.048 ms |
+| 100k | 10.2 ms | 1.58 ms | 9.09 ms | 5.50 ms |
+| 1M | 102 ms | 16.2 ms | 114 ms | 88.9 ms |
+
+A whole archetype moves 6 to 13 times faster than one entity at a time.
+Scattered batches move row by row, like single moves, and gain 1.2 to 1.8
+times from looking the change up once and skipping the per-call checks;
+the gain shrinks at 1M, where the scattered row accesses miss the cache
+either way. A tracked archetype (`track_changes`) and components with
+hooks or requirements take the row-by-row and one-at-a-time paths
+respectively, so their batches are no slower than single moves.

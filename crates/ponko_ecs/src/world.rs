@@ -950,6 +950,259 @@ impl World {
         value
     }
 
+    /// Gives every entity in `entities` a clone of `value`, replacing any
+    /// `T` it has, and returns how many were alive. The result is the same
+    /// as [`insert`](Self::insert) on each entity in turn, but entities that
+    /// move between the same two archetypes move together: the archetype
+    /// change is looked up once, and when the batch is a whole archetype in
+    /// its row order (the order a query visits it, or
+    /// [`Archetype::entities`](crate::Archetype::entities) lists it), its
+    /// columns are copied in one piece. Dead entities are skipped.
+    ///
+    /// ```
+    /// use ponko_ecs::{Component, Entity, World};
+    /// #[derive(Component)]
+    /// struct Enemy;
+    /// #[derive(Component, Clone)]
+    /// struct Burning;
+    /// let mut world = World::new();
+    /// let enemies: Vec<Entity> = (0..100).map(|_| world.spawn((Enemy,))).collect();
+    /// assert_eq!(world.insert_many(&enemies, Burning), 100);
+    /// assert_eq!(world.query::<&Burning>().iter().count(), 100);
+    /// ```
+    pub fn insert_many<T: Component + Clone>(&mut self, entities: &[Entity], value: T) -> usize {
+        self.recorder.note(|l| l.structural = true);
+        let id = self.register::<T>();
+        if self.hooked
+            && (self.hooks.requires_component(id) || self.hooks.adds_component(id) || self.hooks.replaces_component(id))
+        {
+            // Hooks run per entity, between moves: one at a time.
+            return entities.iter().filter(|&&e| self.insert(e, value.clone())).count();
+        }
+        let mut alive = 0;
+        let mut i = 0;
+        while i < entities.len() {
+            let e = entities[i];
+            let Some(loc) = self.entities.get(e) else {
+                i += 1;
+                continue;
+            };
+            let src = loc.archetype as usize;
+            if self.archetypes[src].column_index(id).is_some() {
+                self.insert(e, value.clone());
+                alive += 1;
+                i += 1;
+                continue;
+            }
+            // The run: the entities from `i` on that are in `src` now.
+            let run = i + self.run_in(&entities[i..], src);
+            let dst = self.archetype_adding(src, id);
+            let col = self.archetypes[dst]
+                .column_index(id)
+                .expect("invariant: the archetype that adding `id` leads to has `id`");
+            let stamp = self.changes.stamp();
+            if self.whole_archetype(src, &entities[i..run]) {
+                // The clones first, into room past the end of `dst`: a
+                // `clone` that panics drops those made (`Written`) and
+                // leaves the world as it was.
+                let n = self.archetypes[src].len();
+                let d = &mut self.archetypes[dst];
+                d.reserve(n, &mut self.slots.buffers);
+                let base = d.len();
+                let mut written = Written::<T> {
+                    first: d.columns[col].ptr(base).cast(),
+                    count: 0,
+                };
+                while written.count < n {
+                    // SAFETY: column `col` holds `T`, and its rows from
+                    // `base` to `base + n` are reserved spare capacity,
+                    // which `move_all` makes live below.
+                    unsafe { written.first.add(written.count).write(value.clone()) };
+                    written.count += 1;
+                }
+                std::mem::forget(written);
+                self.move_all(src, dst);
+                let d = &self.archetypes[dst];
+                if d.tracked() {
+                    for row in base..base + n {
+                        d.stamp(col, row, stamp, true);
+                    }
+                }
+                self.reclaim_if_over();
+            } else {
+                for &e in &entities[i..run] {
+                    match self.entities.get(e) {
+                        Some(loc) if loc.archetype as usize == src => {
+                            let v = value.clone();
+                            let row = self.move_row(e, loc, dst);
+                            self.put(dst, col, row, v, stamp);
+                        }
+                        // Named twice in the run: it has `T` by now.
+                        _ => {
+                            self.insert(e, value.clone());
+                        }
+                    }
+                }
+            }
+            alive += run - i;
+            i = run;
+        }
+        alive
+    }
+
+    /// Takes component `T` off every entity in `entities` that has it,
+    /// dropping the values, and returns how many had it. The result is the
+    /// same as [`remove`](Self::remove) on each entity in turn; entities
+    /// move together as in [`insert_many`](Self::insert_many).
+    ///
+    /// ```
+    /// use ponko_ecs::{Component, Entity, World};
+    /// #[derive(Component)]
+    /// struct Enemy;
+    /// #[derive(Component, Clone)]
+    /// struct Burning;
+    /// let mut world = World::new();
+    /// let enemies: Vec<Entity> = (0..100).map(|_| world.spawn((Enemy, Burning))).collect();
+    /// assert_eq!(world.remove_many::<Burning>(&enemies[..40]), 40);
+    /// assert_eq!(world.query::<&Burning>().iter().count(), 60);
+    /// assert_eq!(world.remove_many::<Burning>(&enemies), 60); // the rest
+    /// ```
+    pub fn remove_many<T: Component>(&mut self, entities: &[Entity]) -> usize {
+        self.recorder.note(|l| l.structural = true);
+        let Some(id) = self.component_id::<T>() else {
+            return 0;
+        };
+        if self.hooked && self.hooks.removes_component(id) {
+            return entities.iter().filter(|&&e| self.remove::<T>(e).is_some()).count();
+        }
+        let tracked = self.infos[id.index()].tracked;
+        let mut removed = 0;
+        let mut i = 0;
+        while i < entities.len() {
+            let Some(loc) = self.entities.get(entities[i]) else {
+                i += 1;
+                continue;
+            };
+            let src = loc.archetype as usize;
+            let Some(col) = self.archetypes[src].column_index(id) else {
+                i += 1;
+                continue;
+            };
+            let run = i + self.run_in(&entities[i..], src);
+            let dst = self.archetype_removing(src, id);
+            if self.whole_archetype(src, &entities[i..run]) {
+                let n = self.archetypes[src].len();
+                self.move_all(src, dst);
+                // The values stay in `src`'s column, which no row owns now
+                // and nothing reclaimed yet: dropped once each after the
+                // move, so a `drop` that panics leaks the rest and leaves
+                // the world sound.
+                let c = &self.archetypes[src].columns[col];
+                for row in 0..n {
+                    // SAFETY: column `col` holds `T`; row `row` held a live
+                    // value that the move forgot.
+                    drop(unsafe { c.ptr(row).cast::<T>().read() });
+                }
+                self.reclaim_if_over();
+                removed += n;
+            } else {
+                for &e in &entities[i..run] {
+                    // Named twice in the run: it lacks `T` by now.
+                    let Some(loc) = self.entities.get(e).filter(|l| l.archetype as usize == src) else {
+                        continue;
+                    };
+                    if tracked && self.archetypes[src].tracked() {
+                        self.changes.log_removal(id, e);
+                    }
+                    let c = &self.archetypes[src].columns[col];
+                    // SAFETY: `e`'s value of `T`, owned once: the move forgets it.
+                    let value = unsafe { c.ptr(loc.row as usize).cast::<T>().read() };
+                    self.move_row(e, loc, dst);
+                    drop(value);
+                    removed += 1;
+                }
+            }
+            i = run;
+        }
+        removed
+    }
+
+    /// How many entities at the start of `entities` are alive in archetype
+    /// `src` (at least one: the caller found the first there).
+    fn run_in(&self, entities: &[Entity], src: usize) -> usize {
+        entities
+            .iter()
+            .position(|&e| self.entities.get(e).is_none_or(|l| l.archetype as usize != src))
+            .unwrap_or(entities.len())
+    }
+
+    /// Whether `run` is every entity of archetype `src` in its row order,
+    /// and `src` keeps no change stamps: then [`move_all`](Self::move_all)
+    /// leaves the rows that moving them one by one would.
+    fn whole_archetype(&self, src: usize, run: &[Entity]) -> bool {
+        let arch = &self.archetypes[src];
+        !arch.tracked() && arch.entities == run
+    }
+
+    /// Writes `value` into row `row` of column `col` of archetype `a`, a
+    /// row a move left uninitialized, and stamps it as added.
+    #[inline]
+    fn put<T: Component>(&self, a: usize, col: usize, row: usize, value: T, stamp: u32) {
+        let arch = &self.archetypes[a];
+        // SAFETY: column `col` holds `T` (the caller found it by `T`'s id),
+        // and its row `row` is uninitialized: the value is moved in once.
+        unsafe { arch.columns[col].ptr(row).cast::<T>().write(value) };
+        if arch.tracked() {
+            arch.stamp(col, row, stamp, true);
+        }
+    }
+
+    /// Moves every entity of archetype `src`, which keeps no change stamps,
+    /// to the end of `dst`, in row order: the rows that moving them one by
+    /// one in that order would leave. Shared columns are copied whole; the
+    /// rest are forgotten, so the caller must have dropped or read them.
+    /// Columns of `dst` that `src` lacks are left uninitialized for the
+    /// caller to fill. Returns the first new row. `src`, now empty, is not
+    /// reclaimed: the caller calls [`reclaim_if_over`](Self::reclaim_if_over)
+    /// once done with its columns.
+    fn move_all(&mut self, src: usize, dst: usize) -> usize {
+        let (s, d) = two_mut(&mut self.archetypes, src, dst);
+        debug_assert!(!s.tracked());
+        let n = s.len();
+        d.reserve(n, &mut self.slots.buffers);
+        let base = d.len();
+        let mut j = 0;
+        for (i, col) in s.columns.iter().enumerate() {
+            let id = s.ids[i];
+            while j < d.ids.len() && d.ids[j] < id {
+                j += 1;
+            }
+            if j < d.ids.len() && d.ids[j] == id {
+                // SAFETY: rows `0..n` are live here; `dst` has room for `n`
+                // more rows from `base`. The two buffers are different.
+                unsafe { std::ptr::copy_nonoverlapping(col.ptr(0), d.columns[j].ptr(base), n * col.size()) };
+            }
+        }
+        for (k, &e) in s.entities.iter().enumerate() {
+            self.entities.set(
+                e,
+                Location {
+                    archetype: dst as u32,
+                    row: (base + k) as u32,
+                },
+            );
+        }
+        d.entities.extend_from_slice(&s.entities);
+        s.entities.clear();
+        if n > 0 {
+            if base == 0 {
+                self.slots.filled(dst);
+            }
+            self.slots.emptied(src);
+        }
+        base
+    }
+
     // ---- queries -------------------------------------------------------------
 
     /// Loops over every entity that has the components in `Q`.
@@ -1879,24 +2132,7 @@ impl World {
             // SAFETY: forwarded caller contract; `e` lacks `id`.
             return unsafe { self.insert_arriving(e, loc, id, value) };
         }
-        let dst = match self.archetypes[src]
-            .add_edges
-            .get(&id)
-            .and_then(|&e| self.slots.leads(e))
-        {
-            Some(d) => d,
-            None => {
-                let mut ids = std::mem::take(&mut self.scratch_ids);
-                ids.clear();
-                ids.extend_from_slice(&self.archetypes[src].ids);
-                ids.push(id);
-                ids.sort_unstable();
-                let d = self.archetype_for(&ids);
-                self.scratch_ids = ids;
-                self.add_edge(src, id, d);
-                d
-            }
-        };
+        let dst = self.archetype_adding(src, id);
         let row = self.move_row(e, loc, dst);
         let arch = &self.archetypes[dst];
         let col = arch.column_index(id).unwrap();
@@ -2296,23 +2532,49 @@ impl World {
         if self.archetypes[src].tracked() && self.infos[id.index()].tracked {
             self.changes.log_removal(id, e);
         }
-        let dst = match self.archetypes[src]
+        let dst = self.archetype_removing(src, id);
+        self.move_row(e, loc, dst);
+    }
+
+    /// The archetype `src` leads to when component `id`, which it lacks,
+    /// arrives: the cached edge, or the archetype found or made (and the
+    /// edge recorded). Creating an archetype can reclaim none: indices stay.
+    fn archetype_adding(&mut self, src: usize, id: ComponentId) -> usize {
+        if let Some(d) = self.archetypes[src]
+            .add_edges
+            .get(&id)
+            .and_then(|&e| self.slots.leads(e))
+        {
+            return d;
+        }
+        let mut ids = std::mem::take(&mut self.scratch_ids);
+        ids.clear();
+        ids.extend_from_slice(&self.archetypes[src].ids);
+        ids.push(id);
+        ids.sort_unstable();
+        let d = self.archetype_for(&ids);
+        self.scratch_ids = ids;
+        self.add_edge(src, id, d);
+        d
+    }
+
+    /// The archetype `src` leads to when component `id`, which it has,
+    /// goes: as [`archetype_adding`](Self::archetype_adding), the other way.
+    fn archetype_removing(&mut self, src: usize, id: ComponentId) -> usize {
+        if let Some(d) = self.archetypes[src]
             .remove_edges
             .get(&id)
             .and_then(|&e| self.slots.leads(e))
         {
-            Some(d) => d,
-            None => {
-                let mut ids = std::mem::take(&mut self.scratch_ids);
-                ids.clear();
-                ids.extend(self.archetypes[src].ids.iter().copied().filter(|&c| c != id));
-                let d = self.archetype_for(&ids);
-                self.scratch_ids = ids;
-                self.add_edge(d, id, src);
-                d
-            }
-        };
-        self.move_row(e, loc, dst);
+            return d;
+        }
+        let mut ids = std::mem::take(&mut self.scratch_ids);
+        ids.clear();
+        ids.extend(self.archetypes[src].ids.iter().copied().filter(|&c| c != id));
+        let d = self.archetype_for(&ids);
+        self.scratch_ids = ids;
+        self.add_edge(d, id, src);
+        d
     }
 
     /// Moves `e`'s row to archetype `dst`, copying shared columns and
@@ -2407,6 +2669,23 @@ fn two_mut<T>(v: &mut [T], a: usize, b: usize) -> (&mut T, &mut T) {
     } else {
         let (l, r) = v.split_at_mut(a);
         (&mut r[0], &mut l[b])
+    }
+}
+
+/// The first `count` values from `first`, written into spare capacity of
+/// a column: dropped if dropped, so a `clone` that panics while
+/// [`World::insert_many`] fills them doesn't leak those made.
+/// Forgotten once the rows are live.
+struct Written<T> {
+    first: *mut T,
+    count: usize,
+}
+
+impl<T> Drop for Written<T> {
+    fn drop(&mut self) {
+        // SAFETY: the first `count` values from `first` were written and
+        // are owned by nothing else: no row holds them yet.
+        unsafe { std::ptr::drop_in_place(std::ptr::slice_from_raw_parts_mut(self.first, self.count)) };
     }
 }
 

@@ -506,4 +506,5 @@ Not done in this investigation (no default storage changes here):
   reads about 40,000 archetype structs (128 bytes each) to find 13,000 with
   entities. Done in #348 (above).
 - **Batch structural changes** that move many entities between the same
-  two archetypes (`add-remove` above: 100,000 single moves).
+  two archetypes (`add-remove` above: 100,000 single moves). Done in #349:
+  `World::insert_many` / `remove_many` (`ECS.md`, "Batched moves").
