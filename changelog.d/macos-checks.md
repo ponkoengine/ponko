@@ -21,3 +21,6 @@
 - `ponko` builds with `-D warnings` on current nightly Rust (the sanitizer
   job): the crate raises its recursion limit, which proving the renderer's
   texture tables `Send + Sync` through wgpu's types exceeds.
+- The C lobby test `a_c_game_makes_joins_and_plays_in_a_room` waits for the
+  leaving client's own `PONKO_LOBBY_LEFT` before reading it; under
+  AddressSanitizer it could arrive after the others' host change.
