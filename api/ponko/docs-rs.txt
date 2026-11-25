@@ -13326,6 +13326,27 @@ impl core::fmt::Debug for ponko::render::AmbientOcclusion
 pub fn ponko::render::AmbientOcclusion::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::render::AmbientOcclusion
 impl core::marker::StructuralPartialEq for ponko::render::AmbientOcclusion
+pub struct ponko::render::AutoExposure
+pub ponko::render::AutoExposure::brighten_speed: f32
+pub ponko::render::AutoExposure::center_weight: f32
+pub ponko::render::AutoExposure::compensation: f32
+pub ponko::render::AutoExposure::darken_speed: f32
+pub ponko::render::AutoExposure::enabled: bool
+pub ponko::render::AutoExposure::mask: core::option::Option<ponko::texture::Texture>
+pub ponko::render::AutoExposure::max: f32
+pub ponko::render::AutoExposure::min: f32
+impl ponko::render::AutoExposure
+pub fn ponko::render::AutoExposure::target(&self, f32) -> f32
+impl core::clone::Clone for ponko::render::AutoExposure
+pub fn ponko::render::AutoExposure::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::render::AutoExposure
+pub fn ponko::render::AutoExposure::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::render::AutoExposure
+pub fn ponko::render::AutoExposure::default() -> Self
+impl core::fmt::Debug for ponko::render::AutoExposure
+pub fn ponko::render::AutoExposure::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::render::AutoExposure
+impl core::marker::StructuralPartialEq for ponko::render::AutoExposure
 #[non_exhaustive] pub struct ponko::render::BakeModel
 pub ponko::render::BakeModel::albedo: ponko::color::Color
 pub ponko::render::BakeModel::double_sided: bool
@@ -14357,6 +14378,7 @@ pub ponko::render::Post::ambient_occlusion: ponko::render::AmbientOcclusion
 pub ponko::render::Post::anti_aliasing: ponko::render::AntiAliasing
 pub ponko::render::Post::ao_half_resolution: bool
 pub ponko::render::Post::ao_temporal: bool
+pub ponko::render::Post::auto_exposure: ponko::render::AutoExposure
 pub ponko::render::Post::bloom: f32
 pub ponko::render::Post::bloom_threshold: f32
 pub ponko::render::Post::chromatic_aberration: f32
