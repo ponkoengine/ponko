@@ -120,16 +120,87 @@ For guide changes, run `mdbook build book` if mdBook is available. You do not
 need a C++ toolchain for an unrelated Rust change. Report checks you could not
 run; maintainers cover the broader matrix before merging.
 
-Maintainers/agents use the full integration commands in
-[AGENTS.md](AGENTS.md#integration-checks), including workspace builds, tests,
-Clippy, relevant native checks and Miri for affected unsafe ECS code. There is
-no CI: nothing runs on a pull request by itself, so the checks a change needs
-are run locally before it merges, and focused local checks do not waive
-compatibility, correctness, privacy or leak checks. The exact
-platform/feature matrix is written down in
-[scripts/checks.yml](scripts/checks.yml), the list of checks: each job names
-its platform and the commands to run. Maintainers run the parts a change
-touches (on macOS, Windows or Linux as needed) before merging it.
+### Local checks
+
+Run the applicable checks from [scripts/checks.yml](scripts/checks.yml) with
+Python 3.10 or later, Git, and Bash. On Windows use Git for Windows and start
+from a Visual Studio Developer PowerShell with the C++ linker and SDK on
+`PATH`. Replace `python3` with `py -3` if needed. The runner uses the same
+Python interpreter for its steps. Install the required Rust toolchains and
+tools before the run.
+
+```sh
+python3 scripts/run-checks.py --list
+python3 scripts/run-checks.py --quick
+python3 scripts/run-checks.py --job test --job test-features
+python3 scripts/run-checks.py --tag lint
+python3 scripts/run-checks.py
+```
+
+`--job` and `--tag` can each be repeated. Combine them to select jobs that
+match both filters. `--list` prints the plan with prerequisites and skip
+reasons. The default runs the current OS lanes without opening windows.
+On a test machine with a display, add `--include-windowed` to include packaged
+game playback and other steps tagged `windowed`. Offscreen GPU tests can run
+in either mode.
+
+Setup actions (tool installers, system packages, caches and artifact uploads)
+are for machine provisioning. Use the versions and requirements in the
+inventory. On Linux install the ALSA and udev development headers before any
+native builds and AT-SPI plus D-Bus for the Linux accessibility lane. For the
+Linux browser job, install the pinned wasm-bindgen
+CLI, run `npm ci --prefix web/smoke`, and provision the Playwright browsers and
+OS dependencies listed in that job. The C++ browser check requires
+`WASI_SDK_PATH`. The WebKit audio checks expect a PulseAudio null sink on the
+test host.
+
+The runner prints each step's result and time and writes `results.json` and
+`summary.txt` to `target/check-results/` by default. Use `--out DIRECTORY` to
+save a report elsewhere. Reports include the checked revision, time, OS,
+Rust versions, skipped checks, and adapter and driver details when offscreen
+tests report them. The JSON also includes failed step output. Exit code 1
+means a check failed, and exit code 2 means a usage error or zero checks ran.
+The [integration instructions](AGENTS.md#integration-checks) describe when
+maintainers need additional checks.
+
+#### Nightly runs on maintainer machines
+
+Use a dedicated `main` checkout on each macOS, Windows, and Linux test
+machine. Provision the tools under the account that will run the job.
+Schedule one invocation per machine per night, with the report directory
+outside the checkout. For example, put this in a Bash script and customize the
+paths. A fast-forward-only pull keeps the checkout on the current revision
+of `main`.
+
+```sh
+#!/usr/bin/env bash
+set -euo pipefail
+cd /path/to/ponko
+test "$(git branch --show-current)" = main
+test -z "$(git status --porcelain)"
+git pull --ff-only origin main
+/path/to/python3 scripts/run-checks.py --out /path/to/reports/ponko-latest
+```
+
+Configure the scheduler with an explicit tool `PATH` if the tools are
+normally added by an interactive shell. Keep the scheduler's stdout and
+stderr so that a failed checkout update can be distinguished from a check
+failure. On a dedicated machine with an active graphical session, enable
+`--include-windowed` if you want the windowed lanes in its report.
+
+| Scheduler | Nightly setup |
+| --- | --- |
+| macOS launchd | Create a per-user LaunchAgent in `~/Library/LaunchAgents`. Set `ProgramArguments` to the absolute Bash and script paths, `StartCalendarInterval` to hour 2 and minute 0, and `StandardOutPath` and `StandardErrorPath` to log files. Load it with `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.ponko.checks.plist`. |
+| Linux systemd | Create a user service in `~/.config/systemd/user/ponko-checks.service` with `Type=oneshot` and `ExecStart=/bin/bash /absolute/path/to/script`. Create `ponko-checks.timer` with `OnCalendar=*-*-* 02:00:00` and `Persistent=true` in `[Timer]` and `WantedBy=timers.target` in `[Install]`. Run `systemctl --user enable --now ponko-checks.timer`. Use a system service or enable user lingering if it must run after logout. |
+| Windows Task Scheduler | Create a daily trigger at 02:00. Use a wrapper that calls the Visual Studio developer environment setup batch file, enters the checkout, verifies a clean `main`, runs `git pull --ff-only origin main`, then runs `py -3 scripts/run-checks.py --out C:/path/to/ponko-latest`. Stop on an error and propagate the runner's exit code. Select “Do not start a new instance” when an invocation overlaps another. |
+
+Check the first scheduled invocation on each machine for the expected
+revision, environment and skip reasons. For a public status update, use the
+latest report per machine and include its revision, completion time and
+passed, failed and skipped steps. Review logs for local paths and secrets
+before sharing excerpts. For a check regression, use one issue per affected
+machine and update that issue with the current revision and failing step
+names until the run recovers.
 
 ### Adding or changing a cargo feature
 
@@ -609,6 +680,13 @@ release branch (`v0.1.1` on `release-0.1`, see
    `crates/*/Cargo.toml` (`ponko_bench` is `publish = false`), including the
    `version = "..."` requirements the crates put on each other, and refresh
    `Cargo.lock` (`cargo check --workspace`).
+   Also update the dependency lines the guide and the project templates
+   show (`ponko = "X.Y"` in `book/src/getting-started.md`, both tutorials and
+   `crates/ponko_cli/templates/*/Cargo.toml.liquid`); the check in step 3 names
+   any that is left. The "Which version?" note under every guide title needs no
+   edit: `scripts/guide-note.py` reads the version from the root `Cargo.toml`
+   and counts the fragments left in `changelog.d/`, so once this step is merged
+   the guide says it documents exactly that release.
 3. `python3 scripts/release-check.py check vX.Y.Z` lists what still disagrees
    (it does not need the tag to exist), and `cargo publish --workspace
    --dry-run` packages and builds every crate the way crates.io will. Re-run
