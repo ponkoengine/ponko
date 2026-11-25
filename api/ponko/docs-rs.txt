@@ -5665,7 +5665,6 @@ impl ponko::input::GamepadBackend for ponko::input::FakeGamepads
 pub fn ponko::input::FakeGamepads::poll(&mut self, &mut ponko::input::GamepadEvents<'_>)
 pub fn ponko::input::FakeGamepads::set_force_feedback(&mut self, ponko::input::DeviceKey, ponko::input::ForceFeedback)
 pub fn ponko::input::FakeGamepads::set_rumble(&mut self, ponko::input::DeviceKey, ponko::input::MotorLevels)
-pub fn ponko::input::hat_from_bits(u8) -> glam::i32::ivec2::IVec2
 pub struct ponko::input::ForceFeedback
 pub ponko::input::ForceFeedback::autocenter: f32
 pub ponko::input::ForceFeedback::constant: f32
@@ -5870,15 +5869,6 @@ impl core::marker::Copy for ponko::input::Glyphs
 impl core::marker::StructuralPartialEq for ponko::input::Glyphs
 pub struct ponko::input::Input
 impl ponko::input::Input
-pub fn ponko::input::Input::force_feedback(&self, ponko::input::Joystick) -> ponko::input::ForceFeedback
-pub fn ponko::input::Input::joystick_axis(&self, ponko::input::Joystick, usize) -> f32
-pub fn ponko::input::Input::joystick_down(&self, ponko::input::Joystick, usize) -> bool
-pub fn ponko::input::Input::joystick_hat(&self, ponko::input::Joystick, usize) -> glam::i32::ivec2::IVec2
-pub fn ponko::input::Input::joystick_info(&self, ponko::input::Joystick) -> core::option::Option<&ponko::input::JoystickInfo>
-pub fn ponko::input::Input::joystick_pressed(&self, ponko::input::Joystick, usize) -> bool
-pub fn ponko::input::Input::joystick_released(&self, ponko::input::Joystick, usize) -> bool
-pub fn ponko::input::Input::joysticks(&self) -> &[ponko::input::Joystick]
-pub fn ponko::input::Input::set_force_feedback(&mut self, ponko::input::Joystick, ponko::input::ForceFeedback)
 pub fn ponko::input::Input::action_axis(&self, impl ponko::actions::ActionRef) -> f32
 pub fn ponko::input::Input::action_axis2(&self, impl ponko::actions::ActionRef) -> glam::f32::vec2::Vec2
 pub fn ponko::input::Input::action_down(&self, impl ponko::actions::ActionRef) -> bool
@@ -5954,6 +5944,16 @@ pub fn ponko::input::Input::cancel_scenario(&mut self, &mut ponko_ecs::world::Wo
 pub fn ponko::input::Input::injection_allowed(&self) -> bool
 pub fn ponko::input::Input::scenario_report<'w>(&self, &'w ponko_ecs::world::World) -> core::option::Option<&'w ponko::scenario::ScenarioReport>
 pub fn ponko::input::Input::start_scenario(&mut self, &mut ponko_ecs::world::World, &mut ponko::prelude::Time, ponko::scenario::InputScenario)
+impl ponko::input::Input
+pub fn ponko::input::Input::force_feedback(&self, ponko::input::Joystick) -> ponko::input::ForceFeedback
+pub fn ponko::input::Input::joystick_axis(&self, ponko::input::Joystick, usize) -> f32
+pub fn ponko::input::Input::joystick_down(&self, ponko::input::Joystick, usize) -> bool
+pub fn ponko::input::Input::joystick_hat(&self, ponko::input::Joystick, usize) -> glam::i32::ivec2::IVec2
+pub fn ponko::input::Input::joystick_info(&self, ponko::input::Joystick) -> core::option::Option<&ponko::input::JoystickInfo>
+pub fn ponko::input::Input::joystick_pressed(&self, ponko::input::Joystick, usize) -> bool
+pub fn ponko::input::Input::joystick_released(&self, ponko::input::Joystick, usize) -> bool
+pub fn ponko::input::Input::joysticks(&self) -> &[ponko::input::Joystick]
+pub fn ponko::input::Input::set_force_feedback(&mut self, ponko::input::Joystick, ponko::input::ForceFeedback)
 impl ponko::input::Input
 pub fn ponko::input::Input::gamepad_axis(&self, ponko::input::Gamepad, ponko::input::GamepadAxis) -> f32
 pub fn ponko::input::Input::gamepad_down(&self, ponko::input::Gamepad, ponko::input::GamepadButton) -> bool
@@ -6126,7 +6126,9 @@ pub fn ponko::input::GamepadBackend::set_force_feedback(&mut self, ponko::input:
 pub fn ponko::input::GamepadBackend::set_rumble(&mut self, ponko::input::DeviceKey, ponko::input::MotorLevels)
 impl ponko::input::GamepadBackend for ponko::input::FakeGamepads
 pub fn ponko::input::FakeGamepads::poll(&mut self, &mut ponko::input::GamepadEvents<'_>)
+pub fn ponko::input::FakeGamepads::set_force_feedback(&mut self, ponko::input::DeviceKey, ponko::input::ForceFeedback)
 pub fn ponko::input::FakeGamepads::set_rumble(&mut self, ponko::input::DeviceKey, ponko::input::MotorLevels)
+pub fn ponko::input::hat_from_bits(u8) -> glam::i32::ivec2::IVec2
 pub mod ponko::inventory
 #[non_exhaustive] pub enum ponko::inventory::AssetClass
 pub ponko::inventory::AssetClass::Compute
@@ -6729,7 +6731,7 @@ impl core::fmt::Debug for ponko::nav::NavSource
 pub fn ponko::nav::NavSource::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub mod ponko::net
 pub use ponko::net::Replicate
-pub use ponko::net::steam
+pub use ponko::net::unstable_steamworks
 pub mod ponko::net::lobby
 pub mod ponko::net::lobby::protocol
 pub enum ponko::net::lobby::protocol::Frame<'a, T>
@@ -7526,10 +7528,10 @@ pub fn ponko::net::Net::stats(&self) -> ponko::net::NetStats
 pub fn ponko::net::Net::timeout(self, core::time::Duration) -> Self
 pub fn ponko::net::Net::web_addr(&self) -> core::option::Option<core::net::socket_addr::SocketAddr>
 impl ponko::net::Net
-pub fn ponko::net::Net::steam_host(&steamworks::Client, usize) -> ponko::net::Net
+pub fn ponko::net::Net::steam_host(&ponko::net::SteamClient, usize) -> ponko::net::Net
 pub fn ponko::net::Net::steam_invite(&self)
-pub fn ponko::net::Net::steam_join(&steamworks::Client, steamworks::matchmaking::LobbyId) -> ponko::net::Net
-pub fn ponko::net::Net::steam_lobby(&self) -> core::option::Option<steamworks::matchmaking::LobbyId>
+pub fn ponko::net::Net::steam_join(&ponko::net::SteamClient, ponko::net::SteamLobbyId) -> ponko::net::Net
+pub fn ponko::net::Net::steam_lobby(&self) -> core::option::Option<ponko::net::SteamLobbyId>
 impl core::convert::From<ponko::net::Net> for ponko::net::Networking
 pub fn ponko::net::Networking::from(ponko::net::Net) -> Self
 impl core::default::Default for ponko::net::Net
@@ -7607,10 +7609,10 @@ pub fn ponko::net::NetMessages::host_rtc(ponko::net::rtc::Signaling, ponko::net:
 pub fn ponko::net::NetMessages::join_rtc(ponko::net::rtc::Signaling, u64, ponko::net::rtc::RtcConfig) -> core::io::error::Result<Self>
 pub fn ponko::net::NetMessages::rtc_signal_peer(&self, ponko::net::PeerId) -> core::option::Option<u64>
 impl ponko::net::NetMessages
-pub fn ponko::net::NetMessages::steam_host(&steamworks::Client, usize) -> core::io::error::Result<Self>
-pub fn ponko::net::NetMessages::steam_join(&steamworks::Client, steamworks::matchmaking::LobbyId) -> core::io::error::Result<Self>
+pub fn ponko::net::NetMessages::steam_host(&ponko::net::SteamClient, usize) -> core::io::error::Result<Self>
+pub fn ponko::net::NetMessages::steam_join(&ponko::net::SteamClient, ponko::net::SteamLobbyId) -> core::io::error::Result<Self>
 pub fn ponko::net::NetMessages::steam_lobby(&self) -> core::option::Option<&ponko::net::SteamLobby>
-pub fn ponko::net::NetMessages::steam_peer(&self, ponko::net::PeerId) -> core::option::Option<steamworks::SteamId>
+pub fn ponko::net::NetMessages::steam_peer(&self, ponko::net::PeerId) -> core::option::Option<ponko::net::SteamUserId>
 pub struct ponko::net::NetPose
 pub ponko::net::NetPose::stream: ponko::net::SnapshotStream<ponko::net::Pose>
 impl core::clone::Clone for ponko::net::NetPose
@@ -8055,19 +8057,80 @@ impl<T: core::fmt::Debug + ponko::net::Interpolate> core::fmt::Debug for ponko::
 pub fn ponko::net::SnapshotStream<T>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<T: ponko::net::Interpolate> core::default::Default for ponko::net::SnapshotStream<T>
 pub fn ponko::net::SnapshotStream<T>::default() -> Self
+pub struct ponko::net::SteamClient
+impl ponko::net::SteamClient
+pub fn ponko::net::SteamClient::app_id(&self) -> u32
+pub fn ponko::net::SteamClient::from_unstable_steamworks(steamworks::Client) -> ponko::net::SteamClient
+pub fn ponko::net::SteamClient::init() -> core::io::error::Result<ponko::net::SteamClient>
+pub fn ponko::net::SteamClient::init_app(u32) -> core::io::error::Result<ponko::net::SteamClient>
+pub fn ponko::net::SteamClient::run_callbacks(&self)
+pub fn ponko::net::SteamClient::unstable_steamworks(&self) -> &steamworks::Client
+pub fn ponko::net::SteamClient::user(&self) -> ponko::net::SteamUserId
+impl core::clone::Clone for ponko::net::SteamClient
+pub fn ponko::net::SteamClient::clone(&self) -> Self
+impl core::fmt::Debug for ponko::net::SteamClient
+pub fn ponko::net::SteamClient::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct ponko::net::SteamLobby
 impl ponko::net::SteamLobby
-pub fn ponko::net::SteamLobby::create(&steamworks::Client, ponko::net::SteamLobbyVisibility, u32) -> core::io::error::Result<Self>
-pub fn ponko::net::SteamLobby::id(&self) -> core::option::Option<steamworks::matchmaking::LobbyId>
+pub fn ponko::net::SteamLobby::create(&ponko::net::SteamClient, ponko::net::SteamLobbyVisibility, u32) -> core::io::error::Result<Self>
+pub fn ponko::net::SteamLobby::id(&self) -> core::option::Option<ponko::net::SteamLobbyId>
 pub fn ponko::net::SteamLobby::invite(&self) -> core::io::error::Result<()>
-pub fn ponko::net::SteamLobby::join(&steamworks::Client, steamworks::matchmaking::LobbyId) -> core::io::error::Result<Self>
+pub fn ponko::net::SteamLobby::join(&ponko::net::SteamClient, ponko::net::SteamLobbyId) -> core::io::error::Result<Self>
 pub fn ponko::net::SteamLobby::leave(&mut self) -> core::io::error::Result<()>
-pub fn ponko::net::SteamLobby::members(&self) -> alloc::vec::Vec<steamworks::SteamId>
+pub fn ponko::net::SteamLobby::members(&self) -> alloc::vec::Vec<ponko::net::SteamUserId>
 pub fn ponko::net::SteamLobby::metadata(&self, &str) -> core::option::Option<alloc::string::String>
 pub fn ponko::net::SteamLobby::poll(&self) -> core::io::error::Result<()>
 pub fn ponko::net::SteamLobby::set_metadata(&self, &str, &str) -> core::io::error::Result<()>
 impl core::ops::drop::Drop for ponko::net::SteamLobby
 pub fn ponko::net::SteamLobby::drop(&mut self)
+pub struct ponko::net::SteamLobbyId(_)
+impl ponko::net::SteamLobbyId
+pub const fn ponko::net::SteamLobbyId::from_raw(u64) -> Self
+pub const fn ponko::net::SteamLobbyId::raw(self) -> u64
+impl core::clone::Clone for ponko::net::SteamLobbyId
+pub fn ponko::net::SteamLobbyId::clone(&self) -> Self
+impl core::cmp::Eq for ponko::net::SteamLobbyId
+impl core::cmp::Ord for ponko::net::SteamLobbyId
+pub fn ponko::net::SteamLobbyId::cmp(&self, &Self) -> core::cmp::Ordering
+impl core::cmp::PartialEq for ponko::net::SteamLobbyId
+pub fn ponko::net::SteamLobbyId::eq(&self, &Self) -> bool
+impl core::cmp::PartialOrd for ponko::net::SteamLobbyId
+pub fn ponko::net::SteamLobbyId::partial_cmp(&self, &Self) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for ponko::net::SteamLobbyId
+pub fn ponko::net::SteamLobbyId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for ponko::net::SteamLobbyId
+pub fn ponko::net::SteamLobbyId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for ponko::net::SteamLobbyId
+pub fn ponko::net::SteamLobbyId::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for ponko::net::SteamLobbyId
+impl core::marker::StructuralPartialEq for ponko::net::SteamLobbyId
+impl core::str::traits::FromStr for ponko::net::SteamLobbyId
+pub type ponko::net::SteamLobbyId::Err = core::num::error::ParseIntError
+pub fn ponko::net::SteamLobbyId::from_str(&str) -> core::result::Result<Self, Self::Err>
+pub struct ponko::net::SteamUserId(_)
+impl ponko::net::SteamUserId
+pub const fn ponko::net::SteamUserId::from_raw(u64) -> Self
+pub const fn ponko::net::SteamUserId::raw(self) -> u64
+impl core::clone::Clone for ponko::net::SteamUserId
+pub fn ponko::net::SteamUserId::clone(&self) -> Self
+impl core::cmp::Eq for ponko::net::SteamUserId
+impl core::cmp::Ord for ponko::net::SteamUserId
+pub fn ponko::net::SteamUserId::cmp(&self, &Self) -> core::cmp::Ordering
+impl core::cmp::PartialEq for ponko::net::SteamUserId
+pub fn ponko::net::SteamUserId::eq(&self, &Self) -> bool
+impl core::cmp::PartialOrd for ponko::net::SteamUserId
+pub fn ponko::net::SteamUserId::partial_cmp(&self, &Self) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for ponko::net::SteamUserId
+pub fn ponko::net::SteamUserId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for ponko::net::SteamUserId
+pub fn ponko::net::SteamUserId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for ponko::net::SteamUserId
+pub fn ponko::net::SteamUserId::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for ponko::net::SteamUserId
+impl core::marker::StructuralPartialEq for ponko::net::SteamUserId
+impl core::str::traits::FromStr for ponko::net::SteamUserId
+pub type ponko::net::SteamUserId::Err = core::num::error::ParseIntError
+pub fn ponko::net::SteamUserId::from_str(&str) -> core::result::Result<Self, Self::Err>
 pub struct ponko::net::UpdateStamp
 pub ponko::net::UpdateStamp::epoch: u16
 pub ponko::net::UpdateStamp::seq: u16
@@ -8181,8 +8244,8 @@ pub fn ponko::net::Pose::offset_size(&Self) -> f32
 pub fn ponko::net::replicated_bits<T: ponko::net::Replicate>() -> u32
 pub const fn ponko::net::seq_diff(u16, u16) -> i16
 pub const fn ponko::net::seq_newer(u16, u16) -> bool
-pub fn ponko::net::steam_lobby_from_args() -> core::option::Option<steamworks::matchmaking::LobbyId>
-pub fn ponko::net::steam_wait_for_invite(&steamworks::Client, core::time::Duration) -> core::option::Option<steamworks::matchmaking::LobbyId>
+pub fn ponko::net::steam_lobby_from_args() -> core::option::Option<ponko::net::SteamLobbyId>
+pub fn ponko::net::steam_wait_for_invite(&ponko::net::SteamClient, core::time::Duration) -> core::option::Option<ponko::net::SteamLobbyId>
 pub mod ponko::particles
 pub enum ponko::particles::ParticleSpace
 pub ponko::particles::ParticleSpace::Local

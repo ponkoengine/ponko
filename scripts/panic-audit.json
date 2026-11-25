@@ -1625,11 +1625,11 @@
     "reason": "Internal invariant: }      fn lobby(&self) -> Option<LobbyId> {         self.lobby.lock().expect(\"lobby\").id",
     "site": "src/net/steam.rs:92"
   },
-  "src/net/steam.rs:19039e83666c8fa9": {
+  "src/net/steam.rs:1d1400fe494479ad": {
     "classification": "invariant",
-    "construction": ".expect(\"invite\")",
-    "reason": "Internal invariant: let accepted = Arc::new(Mutex::new(None));     let seen = accepted.clone();     let _listening = client.register_callback(move |r: steamworks::GameLobbyJoinRequested| {         *seen.lock().expect(\"invite\") = Some(r.lobby_steam_id);",
-    "site": "src/net/steam.rs:276"
+    "construction": ".expect(\"lobby\")",
+    "reason": "Internal invariant: the lobby mutex is only held for a field write; it is poisoned only if one of these closures panicked. Unchanged, the join now takes a SteamLobbyId.",
+    "site": "src/net/steam.rs:229"
   },
   "src/net/steam.rs:414976b1a33eb14e": {
     "classification": "invariant",
@@ -1637,23 +1637,23 @@
     "reason": "Internal invariant: client             .matchmaking()             .create_lobby(LobbyType::FriendsOnly, players as u32, move |result| {                 let mut l = lobby.lock().expect(\"lobby\");",
     "site": "src/net/steam.rs:191"
   },
+  "src/net/steam.rs:7d03df5bd9c030f5": {
+    "classification": "invariant",
+    "construction": ".expect(\"invite\")",
+    "reason": "Internal invariant: the invite mutex is only held for a field write in the callback; poisoned only after a panic there. Unchanged, the callback now runs on SteamClient's inner client.",
+    "site": "src/net/steam.rs:292"
+  },
   "src/net/steam.rs:824b70ee858cf6fa": {
     "classification": "invariant",
     "construction": ".expect(\"lobby\")",
     "reason": "Internal invariant: if self.reported {             return None;         }         let e = self.lobby.lock().expect(\"lobby\").error.take();",
     "site": "src/net/steam.rs:142"
   },
-  "src/net/steam.rs:82da2393cc69dd97": {
+  "src/net/steam.rs:a51c668b81a036df": {
     "classification": "caller-contract",
     "construction": "assert!( (2..=super::MAX_PLAYERS).contains(&players), \"Steam: expected 2 to 8 players; pass a player count in that range\" )",
-    "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. /// Unless `players` is 2 to 8.     #[must_use]     pub fn steam_host(client: &Client, players: usize) -> Net {         assert!(",
-    "site": "src/net/steam.rs:182"
-  },
-  "src/net/steam.rs:8a328568dcfb92d6": {
-    "classification": "invariant",
-    "construction": ".expect(\"lobby\")",
-    "reason": "Internal invariant: let steam = Steam::new(client, false);         let joined = steam.lobby.clone();         client.matchmaking().join_lobby(lobby, move |result| {             let mut l = joined.lock().expect(\"lobby\");",
-    "site": "src/net/steam.rs:218"
+    "reason": "Unchanged from before the Steam types were wrapped: the message names the 2-8 player range and the fix; documented under Panics.",
+    "site": "src/net/steam.rs:189"
   },
   "src/net/steam.rs:c637f8c8ca52d60b": {
     "classification": "invariant",
@@ -1673,10 +1673,10 @@
     "reason": "Internal invariant: }         self.pending             .lock()             .expect(\"lobby result\")",
     "site": "src/net/steam_messages.rs:232"
   },
-  "src/net/steam_messages.rs:9ad4ea6a21724f89": {
+  "src/net/steam_messages.rs:d5d4e654cd2a458b": {
     "classification": "invariant",
     "construction": ".expect(\"lobby result\")",
-    "reason": "Internal invariant: type Pending = Arc<Mutex<LobbyResult>>;  fn complete(pending: &Pending, value: Result<LobbyId, String>, leave: impl FnOnce(LobbyId)) {     let mut pending = pending.lock().expect(\"lobby result\");",
+    "reason": "Internal invariant: the lobby-result mutex is only held for short field updates; poisoned only after a panic inside one. Unchanged, the result now holds a SteamLobbyId.",
     "site": "src/net/steam_messages.rs:25"
   },
   "src/net/steam_messages.rs:ee3bd9eadc087773": {
@@ -1744,12 +1744,6 @@
     "construction": "panic!(\"{e}\")",
     "reason": "Preserves setup/runtime policy; displays the checked operation error. /// # }     /// ```     pub fn load_collision_mesh(&mut self, path: &str) -> CollisionMesh {         self.try_load_collision_mesh(path).unwrap_or_else(|e| panic!(\"{e}\"))",
     "site": "src/physics3d/files.rs:92"
-  },
-  "src/physics3d/mod.rs:60360e84506e1514": {
-    "classification": "invariant",
-    "construction": ".expect(\"live slot\")",
-    "reason": "Internal invariant: Physics3D::mesh returns only slots of live meshes, whose shape is set.",
-    "site": "src/physics3d/mod.rs:1300"
   },
   "src/physics3d/query.rs:96d8397a15f3de54": {
     "classification": "invariant",
@@ -3730,12 +3724,6 @@
     "construction": ".unwrap()",
     "reason": "place: ids come from the screen stack or a placed parent's children, all live nodes with Taffy nodes",
     "site": "src/ui/retained.rs:1792"
-  },
-  "src/ui/retained.rs:5e9eec72fe6b3ad0": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "place: the node was read at the top of place and is still live",
-    "site": "src/ui/retained.rs:1820"
   },
   "src/ui/retained.rs:6cfa692536f31f16": {
     "classification": "invariant",
