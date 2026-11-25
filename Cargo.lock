@@ -3813,7 +3813,6 @@ dependencies = [
  "backtrace",
  "basis-universal",
  "bytemuck",
- "cpal",
  "dioxus-devtools",
  "egui",
  "egui-wgpu",
