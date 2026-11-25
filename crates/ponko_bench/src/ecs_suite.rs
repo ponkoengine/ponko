@@ -284,6 +284,40 @@ pub fn add_remove_ponko(c: &mut PonkoChurn) {
     add_ponko(c);
     remove_ponko(c);
 }
+/// `add-remove` with `World::insert_many` / `remove_many` over the live
+/// entities in spawn order, which is every entity of the archetype in row
+/// order: the whole-archetype copy.
+pub fn add_remove_many_ponko(c: &mut PonkoChurn) {
+    let live = c.live.make_contiguous();
+    assert_eq!(c.w.insert_many(live, Tag), live.len());
+    assert_eq!(c.w.remove_many::<Tag>(live), live.len());
+}
+
+/// The same entities in a scattered order (`scatter`), added in that order
+/// and removed in its reverse, so neither batch is ever an archetype in
+/// row order (a batch leaves its entities in its own order): the batch
+/// moves them one by one, with the archetype change looked up once.
+pub fn add_remove_many_scattered_ponko(c: &mut (PonkoChurn, Vec<ponko_ecs::Entity>, Vec<ponko_ecs::Entity>)) {
+    let (c, order, back) = c;
+    assert_eq!(c.w.insert_many(order, Tag), order.len());
+    assert_eq!(c.w.remove_many::<Tag>(back), back.len());
+}
+
+/// [`scatter`] and its reverse, the orders of the scattered cases.
+pub fn scattered(c: PonkoChurn) -> (PonkoChurn, Vec<ponko_ecs::Entity>, Vec<ponko_ecs::Entity>) {
+    let order = scatter(&c.live);
+    let back = order.iter().rev().copied().collect();
+    (c, order, back)
+}
+
+/// `live` in a fixed scattered order: index `i * 7919 mod n` (a prime
+/// stride, so every entity once when `n` isn't a multiple of it).
+pub fn scatter(live: &VecDeque<ponko_ecs::Entity>) -> Vec<ponko_ecs::Entity> {
+    let n = live.len();
+    assert!(!n.is_multiple_of(7919), "the stride must visit every entity");
+    (0..n).map(|i| live[(i * 7919) % n]).collect()
+}
+
 pub fn add_hecs(c: &mut HecsChurn) {
     for &e in &c.live {
         c.w.insert_one(e, Tag).unwrap();
@@ -379,6 +413,32 @@ fn churn(b: &mut Bench, n: usize) {
         r,
         || hecs_churn(n),
         add_remove_hecs,
+    );
+    b.steady(
+        &format!("ecs/add-remove-{l}/ponko-many"),
+        r,
+        || ponko_churn(n),
+        add_remove_many_ponko,
+    );
+    b.steady(
+        &format!("ecs/add-remove-{l}/ponko-scattered"),
+        r,
+        || scattered(ponko_churn(n)),
+        |c| {
+            let (churn, order, back) = c;
+            for &e in order.iter() {
+                assert!(churn.w.insert(e, Tag));
+            }
+            for &e in back.iter() {
+                assert!(churn.w.remove::<Tag>(e).is_some());
+            }
+        },
+    );
+    b.steady(
+        &format!("ecs/add-remove-{l}/ponko-many-scattered"),
+        r,
+        || scattered(ponko_churn(n)),
+        add_remove_many_scattered_ponko,
     );
 }
 
@@ -936,6 +996,22 @@ mod tests {
         assert_eq!(h.w.query_mut::<&Tag>().into_iter().count(), 0);
         assert_eq!(h.w.query_mut::<&Pos>().into_iter().count(), SMALL);
         assert!(p.live.iter().all(|&e| p.w.get::<Pos>(e).is_some()));
+    }
+
+    #[test]
+    fn batched_add_remove_leaves_the_world_single_moves_leave() {
+        let mut single = ponko_churn(SMALL);
+        let mut many = ponko_churn(SMALL);
+        let mut scattered = scattered(ponko_churn(SMALL));
+        for _ in 0..2 {
+            add_remove_ponko(&mut single);
+            add_remove_many_ponko(&mut many);
+            add_remove_many_scattered_ponko(&mut scattered);
+        }
+        assert_eq!(many.w.query::<&Tag>().count(), 0);
+        assert_eq!(scattered.0.w.query::<&Tag>().count(), 0);
+        assert_eq!(ponko_pos(&mut many.w), ponko_pos(&mut single.w));
+        assert_eq!(ponko_pos(&mut scattered.0.w), ponko_pos(&mut single.w));
     }
 
     #[test]
