@@ -1,7 +1,7 @@
 # Threads on the web
 
 > **Maturity: [experimental](maturity.md).** Game: none. Tests: the threaded
-> build is linted on nightly Rust. Platforms: the web, nightly Rust only.
+> build is linted on nightly Rust. Platforms: the web, with nightly Rust.
 > Graphics: WebGL2 and WebGPU. Missing: the chapter calls it experimental; the
 > thread-heaps build has not run in a browser since its last fix.
 
