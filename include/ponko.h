@@ -273,6 +273,8 @@
 
 #define PONKO_THIRD_PERSON_CAMERA_VERSION 1
 
+#define PONKO_VIEW_MODEL_VERSION 1
+
 #define PONKO_RENDER_LAYERS_DEFAULT 1
 
 #define PONKO_RENDER_LAYERS_ALL UINT32_MAX
@@ -1539,6 +1541,8 @@ typedef struct PonkoCollisionMeshData PonkoCollisionMeshData;
 
 typedef struct PonkoContactPair3D PonkoContactPair3D;
 
+typedef struct PonkoControlReply PonkoControlReply;
+
 typedef struct PonkoCrowdAnimation PonkoCrowdAnimation;
 
 typedef struct PonkoCtx PonkoCtx;
@@ -1906,6 +1910,11 @@ typedef struct PonkoFlowView {
   float cell_size;
 } PonkoFlowView;
 
+typedef void (*PonkoControlMethodFn)(struct PonkoCtx *ctx,
+                                     const char *params_json,
+                                     struct PonkoControlReply *reply,
+                                     void *user);
+
 typedef void (*PonkoPluginBuildFn)(struct PonkoGame *game, void *user);
 
 typedef struct PonkoGridItem {
@@ -2015,6 +2024,24 @@ typedef struct PonkoLdtkOptions {
   const char *const *components;
   size_t mapping_count;
 } PonkoLdtkOptions;
+
+typedef struct PonkoLdtkText {
+  const char *bytes;
+  size_t len;
+} PonkoLdtkText;
+
+typedef struct PonkoLdtkLevelInfo {
+  struct PonkoLdtkText world;
+  struct PonkoLdtkText world_iid;
+  struct PonkoLdtkText identifier;
+  struct PonkoLdtkText iid;
+  struct PonkoVec2 position;
+  uint32_t width;
+  uint32_t height;
+  int32_t depth;
+} PonkoLdtkLevelInfo;
+
+typedef void (*PonkoLdtkLevelVisitor)(void *user, const struct PonkoLdtkLevelInfo *info);
 
 typedef struct PonkoLevelObject {
   uint64_t id;
@@ -3697,6 +3724,15 @@ typedef struct PonkoThirdPersonCamera {
   struct PonkoVec3 last_pivot;
   bool started;
 } PonkoThirdPersonCamera;
+
+typedef struct PonkoViewModel {
+  uint32_t struct_size;
+  uint32_t version;
+  float fov_y;
+  float near;
+  float far;
+  uint32_t layers;
+} PonkoViewModel;
 
 typedef struct PonkoViewport {
   float x;
@@ -5672,6 +5708,20 @@ enum PonkoStatus ponko_game_camera_controls(struct PonkoGame *game);
 
 enum PonkoStatus ponko_game_control_endpoint(struct PonkoGame *game, bool on);
 
+enum PonkoStatus ponko_game_control_method(struct PonkoGame *game,
+                                           const char *method,
+                                           const char *about,
+                                           PonkoControlMethodFn callback,
+                                           void *user);
+
+enum PonkoStatus ponko_control_reply_json(struct PonkoControlReply *reply, const char *json);
+
+enum PonkoStatus ponko_control_reply_error(struct PonkoControlReply *reply, const char *message);
+
+enum PonkoStatus ponko_ctx_control_port(struct PonkoCtx *ctx, uint16_t *out_port);
+
+enum PonkoStatus ponko_game_debug_toggle(struct PonkoGame *game, const char *toggle, bool on);
+
 enum PonkoStatus ponko_game_hot_reload(struct PonkoGame *game, bool on);
 
 enum PonkoStatus ponko_game_inspector(struct PonkoGame *game, bool on);
@@ -5911,6 +5961,11 @@ enum PonkoStatus ponko_ctx_spawn_ldtk_level(struct PonkoCtx *ctx,
                                             struct PonkoVec2 at,
                                             const struct PonkoLdtkOptions *ldtk,
                                             uint64_t *out_root);
+
+enum PonkoStatus ponko_ctx_visit_ldtk_levels(struct PonkoCtx *ctx,
+                                             const char *path,
+                                             PonkoLdtkLevelVisitor visitor,
+                                             void *user);
 
 enum PonkoStatus ponko_ctx_despawn_level(struct PonkoCtx *ctx, uint64_t root);
 
@@ -9006,6 +9061,11 @@ enum PonkoStatus ponko_ctx_ui_scroll(struct PonkoCtx *ctx,
                                      uint64_t id,
                                      struct PonkoVec2 *out_offset);
 
+enum PonkoStatus ponko_ctx_ui_screen_mode(struct PonkoCtx *ctx,
+                                          uint64_t target,
+                                          uint64_t root,
+                                          uint32_t *out_mode);
+
 enum PonkoStatus ponko_ctx_ui_push_screen_with_mode(struct PonkoCtx *ctx,
                                                     uint64_t target,
                                                     uint64_t root,
@@ -9228,6 +9288,13 @@ enum PonkoStatus ponko_ctx_ui_number(struct PonkoCtx *ctx,
                                      uint64_t id,
                                      double *out_value);
 
+enum PonkoStatus ponko_ctx_ui_number_range(struct PonkoCtx *ctx,
+                                           uint64_t target,
+                                           uint64_t id,
+                                           double *out_min,
+                                           double *out_max,
+                                           double *out_step);
+
 enum PonkoStatus ponko_ctx_ui_set_number(struct PonkoCtx *ctx,
                                          uint64_t target,
                                          uint64_t id,
@@ -9249,6 +9316,11 @@ enum PonkoStatus ponko_ctx_ui_list_item(struct PonkoCtx *ctx,
                                         uint64_t target,
                                         uint64_t row,
                                         uint64_t *out_index);
+
+enum PonkoStatus ponko_ctx_ui_list_len(struct PonkoCtx *ctx,
+                                       uint64_t target,
+                                       uint64_t id,
+                                       uint64_t *out_len);
 
 enum PonkoStatus ponko_ctx_ui_scroll_to_item(struct PonkoCtx *ctx,
                                              uint64_t target,
@@ -9275,6 +9347,13 @@ enum PonkoStatus ponko_ctx_ui_set_tooltip(struct PonkoCtx *ctx,
                                           uint64_t target,
                                           uint64_t id,
                                           const char *text);
+
+enum PonkoStatus ponko_ctx_ui_tooltip(struct PonkoCtx *ctx,
+                                      uint64_t target,
+                                      uint64_t id,
+                                      char *buffer,
+                                      size_t capacity,
+                                      size_t *out_len);
 
 enum PonkoStatus ponko_ctx_ui_shown_tooltip(struct PonkoCtx *ctx,
                                             uint64_t target,
@@ -9701,6 +9780,10 @@ enum PonkoStatus ponko_ctx_debug_clear(struct PonkoCtx *ctx);
 enum PonkoStatus ponko_ctx_debug_show(struct PonkoCtx *ctx, uint32_t view, bool on);
 
 enum PonkoStatus ponko_ctx_debug_showing(struct PonkoCtx *ctx, uint32_t view, bool *out_on);
+
+enum PonkoStatus ponko_ctx_debug_toggled(struct PonkoCtx *ctx, const char *name, bool *out_on);
+
+enum PonkoStatus ponko_ctx_debug_set_toggle(struct PonkoCtx *ctx, const char *name, bool on);
 
 enum PonkoStatus ponko_ctx_debug_set_collider_distance(struct PonkoCtx *ctx, float distance);
 
@@ -10397,6 +10480,20 @@ enum PonkoStatus ponko_third_person_camera_update_physics(struct PonkoThirdPerso
                                                           const struct PonkoQueryFilterEx *filter,
                                                           float dt);
 
+enum PonkoStatus ponko_view_model_defaults(struct PonkoViewModel *model);
+
+enum PonkoStatus ponko_ctx_set_view_model(struct PonkoCtx *ctx, const struct PonkoViewModel *model);
+
+enum PonkoStatus ponko_ctx_view_model(struct PonkoCtx *ctx, struct PonkoViewModel *model);
+
+enum PonkoStatus ponko_ctx_set_held_item(struct PonkoCtx *ctx,
+                                         uint64_t entity,
+                                         const struct PonkoTransform3D *offset);
+
+enum PonkoStatus ponko_ctx_held_item(struct PonkoCtx *ctx,
+                                     uint64_t entity,
+                                     struct PonkoTransform3D *out_offset);
+
 enum PonkoStatus ponko_ctx_set_camera_target(struct PonkoCtx *ctx, uint64_t entity, bool on);
 
 enum PonkoStatus ponko_ctx_camera_target(struct PonkoCtx *ctx,
@@ -11045,10 +11142,19 @@ enum PonkoStatus ponko_asset_group_add_sliced(struct PonkoAssetGroup *group,
                                               const char *path,
                                               const struct PonkoSliceLoader *loader);
 
+enum PonkoStatus ponko_asset_group_add_decoder(struct PonkoAssetGroup *group,
+                                               const char *path,
+                                               const struct PonkoSliceLoader *loader);
+
 enum PonkoStatus ponko_ctx_take_asset_group_sliced(struct PonkoCtx *ctx,
                                                    uint32_t id,
                                                    const char *path,
                                                    void **out_state);
+
+enum PonkoStatus ponko_ctx_take_asset_group_decoded(struct PonkoCtx *ctx,
+                                                    uint32_t id,
+                                                    const char *path,
+                                                    void **out_state);
 
 enum PonkoStatus ponko_window_video_mode_ex_defaults(struct PonkoWindowVideoModeEx *desc);
 

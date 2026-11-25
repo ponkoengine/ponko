@@ -505,6 +505,12 @@ unsafe fn screen_modes(ctx: Ctx) {
         let dialog = panel(ctx, PONKO_UI_NONE, &size(300.0, 200.0));
         let child = button(ctx, dialog, c"Ok", &size(80.0, 30.0));
         let mut pointer = true;
+        let mut mode = u32::MAX;
+        assert_eq!(
+            ponko_ctx_ui_screen_mode(ctx, PONKO_UI_SCREEN, dialog, &mut mode),
+            PONKO_NOT_FOUND
+        );
+        assert_eq!(mode, u32::MAX);
         assert_eq!(
             ponko_ctx_ui_push_screen_with_mode(ctx, PONKO_UI_SCREEN, base, PONKO_UI_SCREEN_MODE_MODELESS as u32),
             PONKO_OK
@@ -514,6 +520,11 @@ unsafe fn screen_modes(ctx: Ctx) {
             ponko_ctx_ui_push_screen_with_mode(ctx, PONKO_UI_SCREEN, dialog, PONKO_UI_SCREEN_MODE_MODELESS as u32),
             PONKO_OK
         );
+        assert_eq!(
+            ponko_ctx_ui_screen_mode(ctx, PONKO_UI_SCREEN, dialog, &mut mode),
+            PONKO_OK
+        );
+        assert_eq!(mode, PONKO_UI_SCREEN_MODE_MODELESS as u32);
         frame(
             ctx,
             PonkoUiInput {
@@ -533,6 +544,15 @@ unsafe fn screen_modes(ctx: Ctx) {
         ] as [unsafe fn(Ctx, u64) -> PonkoStatus; 2]
         {
             assert_eq!(push(ctx, dialog), PONKO_OK);
+            assert_eq!(
+                ponko_ctx_ui_screen_mode(ctx, PONKO_UI_SCREEN, dialog, &mut mode),
+                PONKO_OK
+            );
+            assert_eq!(mode, PONKO_UI_SCREEN_MODE_MODAL as u32);
+            assert_eq!(
+                ponko_ctx_ui_screen_mode(ctx, PONKO_UI_SCREEN, dialog, null_mut()),
+                PONKO_INVALID_ARGUMENT
+            );
             frame(
                 ctx,
                 PonkoUiInput {

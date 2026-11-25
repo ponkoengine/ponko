@@ -3,7 +3,7 @@
 //! round-trip, and bad input is refused without drawing.
 mod common;
 
-use common::run_ctx;
+use common::{run_ctx, run_game};
 use ponko_ffi::PonkoStatus::*;
 use ponko_ffi::*;
 use std::ptr::{null, null_mut};
@@ -27,6 +27,33 @@ unsafe fn stats(ctx: *mut PonkoCtx) -> PonkoDebugStats {
     let mut s = PonkoDebugStats::default();
     assert_eq!(unsafe { ponko_ctx_debug_stats(ctx, &mut s) }, PONKO_OK);
     s
+}
+
+#[test]
+fn named_debug_toggles_respect_global_drawing_and_report_unknown_names() {
+    unsafe {
+        let game = ponko_game_new(c"toggles".as_ptr(), 64, 64);
+        assert_eq!(ponko_game_debug_toggle(game, c"debug.paths".as_ptr(), true), PONKO_OK);
+        let world = run_game(game, 0, |ctx| {
+            let mut enabled = false;
+            let name = c"debug.paths".as_ptr();
+            assert_eq!(ponko_ctx_debug_set_enabled(ctx, true), PONKO_OK);
+            assert_eq!(ponko_ctx_debug_toggled(ctx, name, &mut enabled), PONKO_OK);
+            assert!(enabled);
+            assert_eq!(ponko_ctx_debug_set_enabled(ctx, false), PONKO_OK);
+            assert_eq!(ponko_ctx_debug_toggled(ctx, name, &mut enabled), PONKO_OK);
+            assert!(!enabled);
+            assert_eq!(ponko_ctx_debug_set_toggle(ctx, name, false), PONKO_OK);
+            assert_eq!(ponko_ctx_debug_set_enabled(ctx, true), PONKO_OK);
+            assert_eq!(ponko_ctx_debug_toggled(ctx, name, &mut enabled), PONKO_OK);
+            assert!(!enabled);
+            assert_eq!(
+                ponko_ctx_debug_set_toggle(ctx, c"absent".as_ptr(), true),
+                PONKO_NOT_FOUND
+            );
+        });
+        ponko_world_free(world);
+    }
 }
 
 #[test]

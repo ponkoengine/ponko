@@ -668,6 +668,35 @@ pub unsafe extern "C" fn ponko_ctx_ui_number(
     })
 }
 
+/// Writes the minimum, maximum and step of a number field.
+/// # Safety
+/// `ctx` null or live; all three outputs writable and non-null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_ui_number_range(
+    ctx: *mut PonkoCtx,
+    target: u64,
+    id: u64,
+    out_min: *mut f64,
+    out_max: *mut f64,
+    out_step: *mut f64,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        if out_min.is_null() || out_max.is_null() || out_step.is_null() {
+            return Err(invalid("output is null"));
+        }
+        with_ui(ctx, target, |ui| {
+            let id = of_kind(ui, id, UiWidget::NumberField, "a number field")?;
+            let (min, max, step) = ui
+                .number_range(id)
+                .ok_or_else(|| invalid("number field has no range"))?;
+            out(out_min, min)?;
+            out(out_max, max)?;
+            out(out_step, step)
+        })
+    })
+}
+
 /// Sets a number field's value, kept in its range, without queuing an
 /// event.
 /// ```
@@ -757,6 +786,26 @@ pub unsafe extern "C" fn ponko_ctx_ui_list_item(
         with_ui(ctx, target, |ui| {
             let row = existing(ui, row)?;
             out(out_index, index_to_c(ui.list_item(row)))
+        })
+    })
+}
+
+/// Writes the total item count of a list, including rows outside the viewport.
+/// # Safety
+/// `ctx` null or live; `out_len` writable and non-null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_ui_list_len(
+    ctx: *mut PonkoCtx,
+    target: u64,
+    id: u64,
+    out_len: *mut u64,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        with_ui(ctx, target, |ui| {
+            let id = existing(ui, id)?;
+            let len = ui.list_len(id).ok_or_else(|| invalid("UI node is not a list"))?;
+            out(out_len, len as u64)
         })
     })
 }
@@ -887,6 +936,34 @@ pub unsafe extern "C" fn ponko_ctx_ui_set_tooltip(
             let id = existing(ui, id)?;
             ui.set_tooltip(id, text);
             Ok(())
+        })
+    })
+}
+
+/// Copies a node's tooltip as a NUL-terminated UTF-8 string and reports its
+/// byte length excluding the terminator. Returns `PONKO_NOT_FOUND` when
+/// the node has no tooltip. Pass null and zero capacity to query the length.
+/// # Safety
+/// `ctx` null or live; `buffer` writable for `capacity` bytes (or null with
+/// capacity 0); `out_len` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_ui_tooltip(
+    ctx: *mut PonkoCtx,
+    target: u64,
+    id: u64,
+    buffer: *mut c_char,
+    capacity: usize,
+    out_len: *mut usize,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        check_output(buffer, capacity, out_len)?;
+        with_ui(ctx, target, |ui| {
+            let id = existing(ui, id)?;
+            let tooltip = ui
+                .tooltip(id)
+                .ok_or_else(|| error(PonkoStatus::PONKO_NOT_FOUND, "UI node has no tooltip"))?;
+            copy_string(tooltip, buffer, capacity, out_len)
         })
     })
 }

@@ -116,6 +116,50 @@ unsafe fn group_state(ctx: *mut PonkoCtx, id: u32) -> u32 {
 }
 
 #[test]
+fn one_shot_decoder_hands_over_the_value_without_running_a_slice() {
+    let counts = Counts::default();
+    run_ctx(|ctx| unsafe {
+        let files = ponko_memory_source_new(c"one shot".as_ptr());
+        let bytes = numbers();
+        assert_eq!(
+            ponko_memory_source_insert(files, c"numbers.txt".as_ptr(), bytes.as_ptr(), bytes.len()),
+            PONKO_OK
+        );
+        assert_eq!(ponko_ctx_add_background_memory_source(ctx, files), PONKO_OK);
+        ponko_memory_source_free(files);
+        let group = ponko_asset_group_new(c"one shot".as_ptr());
+        let desc = PonkoSliceLoader {
+            step: None,
+            ..loader(&counts)
+        };
+        assert_eq!(
+            ponko_asset_group_add_decoder(group, c"numbers.txt".as_ptr(), &desc),
+            PONKO_OK
+        );
+        let mut id = 0;
+        assert_eq!(ponko_ctx_start_asset_group(ctx, group, &mut id), PONKO_OK);
+        assert_eq!(ponko_ctx_finish_uploads(ctx), PONKO_OK);
+        let mut value = null_mut();
+        assert_eq!(
+            ponko_ctx_take_asset_group_decoded(ctx, id, c"numbers.txt".as_ptr(), &mut value),
+            PONKO_OK
+        );
+        let value = Box::from_raw(value.cast::<Sum>());
+        assert_eq!(value.lines.len(), 2500);
+        assert_eq!(value.lines.last(), Some(&2500));
+        let mut absent = null_mut();
+        assert_eq!(
+            ponko_ctx_take_asset_group_decoded(ctx, id, c"numbers.txt".as_ptr(), &mut absent),
+            PONKO_NOT_FOUND
+        );
+    });
+    assert_eq!(counts.starts.load(SeqCst), 1);
+    assert_eq!(counts.steps.load(SeqCst), 0);
+    assert_eq!(counts.freed_states.load(SeqCst), 0);
+    assert_eq!(counts.freed_users.load(SeqCst), 1);
+}
+
+#[test]
 fn a_sliced_c_loader_works_in_pieces_and_hands_over_its_state_once() {
     let counts = Counts::default();
     run_ctx(|ctx| unsafe {

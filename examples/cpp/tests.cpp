@@ -1694,8 +1694,25 @@ static void model_material_overrides() {
     });
 }
 
+static void native_control_method() {
+    auto echo = [](ponko::ctx&, std::string_view params) { return std::string(params); };
+    ponko::game("c++ control", 1, 1)
+        .control_endpoint(true)
+        .control_method("example.echo", "Echo parameters", echo)
+        .run_headless(0, [](ponko::ctx& ctx) { CHECK(ctx.control_port().value_or(0) != 0); });
+    bool refused = false;
+    try {
+        ponko::game("c++ reserved method", 1, 1)
+            .control_method("debug.custom", "Reserved", echo)
+            .run_headless(0, [](ponko::ctx&) { CHECK(false); });
+    } catch (const ponko::error& error) {
+        refused = std::string_view(error.what()).find("one of the engine's namespaces") != std::string_view::npos;
+    }
+    CHECK(refused);
+}
+
 static void asset_streaming() {
-    ponko::game("streaming", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
+    ponko::game("streaming", 1, 1).debug_toggle("debug.paths", true).run_headless(0, [](ponko::ctx& ctx) {
         ctx.set_deterministic_uploads(true);
         ctx.set_upload_budget(std::nullopt);
         CHECK(!ctx.stream_texture("crab.png"));
@@ -1734,6 +1751,9 @@ static void asset_streaming() {
 
         auto debug = ctx.debug();
         debug.set_enabled(true);
+        CHECK(debug.toggled("debug.paths"));
+        debug.set_toggle("debug.paths", false);
+        CHECK(!debug.toggled("debug.paths"));
         auto style = ponko::debug_draw::style_ex(ponko::draw_space::screen);
         CHECK(style.space == PONKO_DRAW_SPACE_SCREEN);
         debug.line_ex({0, 0}, {10, 10}, ponko::colors::white, style);
@@ -2946,6 +2966,17 @@ static void retained_ui() {
         auto gift = ui.add_toggle(root, "Gift", false, u::layout().size(100, 20).shrink(0));
         auto volume = ui.add_slider(root, 0.25f, u::layout().size(200, 20).shrink(0));
         auto note = ui.add_text_input(root, "hi", u::layout().size(200, 30).shrink(0));
+        auto widgets = ui.add_panel(u::none, u::layout());
+        auto number = ui.add_number_field(widgets, 5.0, u::layout());
+        ui.set_number_range(number, 0.0, 10.0, 2.0);
+        auto limits = ui.number_range(number);
+        CHECK(limits.min == 0.0 && limits.max == 10.0 && limits.step == 2.0);
+        auto list = ui.add_list(widgets, 20.0f, 4, u::layout());
+        ui.set_list_len(list, 100);
+        CHECK(ui.list_len(list) == 100);
+        CHECK(!ui.tooltip(number));
+        ui.set_tooltip(number, "Continue");
+        CHECK(ui.tooltip(number) == "Continue");
         CHECK(!ui.top_screen() && !ui.wants_keyboard());
         ui.push_screen(root);
         CHECK(ui.top_screen() == root && ui.wants_keyboard());
@@ -2998,8 +3029,10 @@ static void retained_ui() {
 
         // Modal screens stack, and Cancel pops the top one.
         auto dialog = ui.add_panel(u::none, u::layout().size(100, 100));
+        CHECK(!ui.mode_of_screen(dialog));
         ui.push_modal(dialog);
         CHECK(ui.top_screen() == dialog && ui.wants_pointer());
+        CHECK(ui.mode_of_screen(dialog) == u::screen_mode::modal);
         input = u::default_input();
         input.cancel = true;
         ui.frame(window, input);
@@ -3007,7 +3040,9 @@ static void retained_ui() {
         CHECK(events.size() == 1 && events[0].kind == u::event_kind::screen_popped && events[0].node == dialog);
         CHECK(ui.top_screen() == root);
         ui.push_screen(dialog);
+        CHECK(ui.mode_of_screen(dialog) == u::screen_mode::modeless);
         CHECK(ui.pop_screen() == dialog);
+        CHECK(!ui.mode_of_screen(dialog));
         ui.push_screen(dialog, u::screen_mode::modal);  // the mode as a value
         CHECK(ui.top_screen() == dialog && ui.wants_pointer());
         CHECK(ui.pop_screen() == dialog);
@@ -3843,7 +3878,11 @@ static void headless_frames_ui() {
 }
 
 static void levels_and_tilemaps() {
-    ponko::game("c++ levels", 1, 1).physics({0, 700}).run_headless(0, [](ponko::ctx& ctx) {
+    const auto file = std::filesystem::temp_directory_path() / "ponko-cpp-level-list.ldtk";
+    std::ofstream(file) << R"({"jsonVersion":"1.5.3","levels":[{"identifier":"Start","iid":"start-id","worldX":12,"worldY":20,"pxWid":40,"pxHei":60}]})";
+    ponko::game("c++ levels", 1, 1).physics({0, 700}).run_headless(0, [&](ponko::ctx& ctx) {
+        const auto levels = ponko::ldtk_levels(ctx, file.string().c_str());
+        CHECK(levels.size() == 1 && levels[0].iid == "start-id" && levels[0].width == 40);
         ponko::level_options options;
         options.solid = {"Ground"};
         options.z = 2.0f;
@@ -3904,6 +3943,7 @@ static void levels_and_tilemaps() {
         CHECK(!ponko::despawn_level(ctx, root));
         throws([&] { (void)ponko::spawn_level(ctx, "levels/nowhere.tmx", {0, 0}); });
     });
+    std::filesystem::remove(file);
 }
 
 static void gltf_scenes() {
@@ -5514,6 +5554,18 @@ static void native_parity_round5() {
             at.scale = {1, 1};
             hero = ctx.world().spawn(at);
             ctx.set_camera_target(hero);
+            CHECK(!ctx.view_model());
+            auto lens = ctx.view_model_defaults();
+            lens.fov_y = 0.8f;
+            ctx.set_view_model(lens);
+            CHECK(ctx.view_model()->fov_y == 0.8f);
+            const auto item = ctx.world().spawn(ponko::transform3d_at({0, 0, 0}));
+            CHECK(!ctx.held_item(item));
+            ctx.set_held_item(item, ponko::transform3d_at({0.5f, 0, -1}));
+            CHECK(ctx.held_item(item)->position.z == -1.0f);
+            ctx.set_held_item(item, std::nullopt);
+            ctx.set_view_model(std::nullopt);
+            CHECK(!ctx.held_item(item) && !ctx.view_model());
             CHECK(!ponko::orbit_camera::kept(ctx));
             ponko::orbit_camera().keep(ctx);
             ponko::orbit_camera::remove_kept(ctx);
@@ -5646,6 +5698,18 @@ static void native_parity_round5() {
         const auto walls = ctx.take_asset_group_sliced<round5::walls>(id, "walls.txt");
         CHECK(walls && walls->count == 50 && walls->at == 200);
         throws_kind([&] { ctx.take_asset_group_sliced<round5::walls>(id, "walls.txt"); }, PONKO_ERROR_NOT_FOUND);
+
+        ponko::asset_group decoded("one-shot level");
+        decoded.decoded("walls.txt", [](const std::uint8_t* data, std::size_t len) {
+            return std::string(data, data + len);
+        });
+        const auto decoded_id = ctx.start_asset_group(std::move(decoded));
+        ctx.finish_uploads();
+        CHECK(ctx.asset_group_state(decoded_id) == ponko::group_state::ready);
+        const auto value = ctx.take_asset_group_decoded<std::string>(decoded_id, "walls.txt");
+        CHECK(value && *value == level);
+        throws_kind([&] { ctx.take_asset_group_decoded<std::string>(decoded_id, "walls.txt"); },
+                    PONKO_ERROR_NOT_FOUND);
     });
 }
 
@@ -5834,6 +5898,7 @@ int main() {
     model_material_overrides();
     handle_lifecycle();
     asset_streaming();
+    native_control_method();
     parallel_queries();
     change_detection();
     presence_filters();

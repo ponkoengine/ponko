@@ -30,6 +30,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <initializer_list>
 #include <limits>
 #include <tuple>
@@ -4945,8 +4946,26 @@ public:
     void set_number(id node, double value) { detail::check(ponko_ctx_ui_set_number(raw_, target_, node, value)); }
     /// A number field's range and step.
     void set_number_range(id node, double min, double max, double step) { detail::check(ponko_ctx_ui_set_number_range(raw_, target_, node, min, max, step)); }
+    /// A number field's limits and step.
+    struct number_limits {
+        double min; ///< Minimum accepted value.
+        double max; ///< Maximum accepted value.
+        double step; ///< Value increment.
+    };
+    /// Reads a number field's limits and step.
+    number_limits number_range(id node) const {
+        number_limits range{};
+        detail::check(ponko_ctx_ui_number_range(raw_, target_, node, &range.min, &range.max, &range.step));
+        return range;
+    }
     /// How many items a list has, for rows drawn without text.
     void set_list_len(id node, std::uint64_t len) { detail::check(ponko_ctx_ui_set_list_len(raw_, target_, node, len)); }
+    /// The total number of items, including those outside the viewport.
+    std::uint64_t list_len(id node) const {
+        std::uint64_t n = 0;
+        detail::check(ponko_ctx_ui_list_len(raw_, target_, node, &n));
+        return n;
+    }
     /// The item a list row shows now, if any (rows are reused: look again after `rows_shown`).
     std::optional<std::uint64_t> list_item(id row) const {
         std::uint64_t i = no_index; detail::check(ponko_ctx_ui_list_item(raw_, target_, row, &i));
@@ -4965,6 +4984,17 @@ public:
     bool is_capturing(id node) const { bool b = false; detail::check(ponko_ctx_ui_is_capturing(raw_, target_, node, &b)); return b; }
     /// A node's tooltip (empty for none): shown on hover after the theme's delay, at once on key focus.
     void set_tooltip(id node, const char* text) { detail::check(ponko_ctx_ui_set_tooltip(raw_, target_, node, text)); }
+    /// The tooltip assigned to a node, if present.
+    std::optional<std::string> tooltip(id node) const {
+        std::size_t len = 0;
+        auto status = ponko_ctx_ui_tooltip(raw_, target_, node, nullptr, 0, &len);
+        if (status == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(status);
+        std::string text(len + 1, '\0');
+        detail::check(ponko_ctx_ui_tooltip(raw_, target_, node, text.data(), text.size(), &len));
+        text.resize(len);
+        return text;
+    }
     /// The node whose tooltip shows now, and where.
     std::optional<std::pair<id, ponko::rect>> shown_tooltip() const {
         id n = none; ponko::rect r{}; const PonkoStatus status = ponko_ctx_ui_shown_tooltip(raw_, target_, &n, &r);
@@ -5041,6 +5071,14 @@ public:
     std::optional<id> pop_screen() { id n = none; detail::check(ponko_ctx_ui_pop_screen(raw_, target_, &n)); return maybe(n); }
     /// The top screen's root, if a screen is open.
     std::optional<id> top_screen() const { id n = none; detail::check(ponko_ctx_ui_top_screen(raw_, target_, &n)); return maybe(n); }
+    /// The mode `root` was pushed with, if it is on the screen stack.
+    std::optional<screen_mode> mode_of_screen(id root) const {
+        std::uint32_t mode = 0;
+        auto status = ponko_ctx_ui_screen_mode(raw_, target_, root, &mode);
+        if (status == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(status);
+        return static_cast<screen_mode>(mode);
+    }
     /// Whether `node` is shown: on a screen of the stack, neither it nor a node above it hidden.
     bool is_shown(id node) const { bool s = false; detail::check(ponko_ctx_ui_is_shown(raw_, target_, node, &s)); return s; }
     /// How many times the tree has been laid out (`Ui::layout_passes`): a layout runs only when something changed since the last one, so the count stays the same over a still screen's frames.
@@ -6435,6 +6473,26 @@ public:
         if (status != PONKO_OK) { delete h; detail::check(status); }
         return *this;
     }
+    /// Decodes a file in a single call, on a worker when available. The callable
+    /// receives bytes valid for that call and returns the value by type. It must
+    /// not access the game context. Take the result with ctx::take_asset_group_decoded.
+    template<class F> asset_group& decoded(const char* path, F decode) {
+        using T = std::decay_t<decltype(decode(std::declval<const std::uint8_t*>(), std::size_t{}))>;
+        auto callback = std::make_unique<F>(std::move(decode));
+        PonkoSliceLoader loader{};
+        loader.struct_size = sizeof loader;
+        loader.version = PONKO_SLICE_LOADER_VERSION;
+        loader.user = callback.get();
+        loader.start = [](void* user, const std::uint8_t* data, std::size_t len, void** out) noexcept -> std::uint32_t {
+            try { *out = new T((*static_cast<F*>(user))(data, len)); return PONKO_OK; }
+            catch (...) { return PONKO_INVALID_ARGUMENT; }
+        };
+        loader.free_state = [](void*, void* state) noexcept { delete static_cast<T*>(state); };
+        loader.free_user = [](void* user) noexcept { delete static_cast<F*>(user); };
+        detail::check(ponko_asset_group_add_decoder(raw_, path, &loader));
+        callback.release();
+        return *this;
+    }
     /// Gives up ownership of the C group (to start it). Null afterwards.
     PonkoAssetGroup* release() noexcept { return std::exchange(raw_, nullptr); }
 private:
@@ -6579,6 +6637,14 @@ public:
     void show(debug_view view, bool on) { detail::check(ponko_ctx_debug_show(raw_, view, on)); }
     /// Whether a built-in view is on.
     bool showing(debug_view view) const { bool on = false; detail::check(ponko_ctx_debug_showing(raw_, view, &on)); return on; }
+    /// Whether a named toggle is active while debug drawing is enabled.
+    bool toggled(const char* name) const {
+        bool on = false;
+        detail::check(ponko_ctx_debug_toggled(raw_, name, &on));
+        return on;
+    }
+    /// Sets the stored value of a named debug toggle.
+    void set_toggle(const char* name, bool on) { detail::check(ponko_ctx_debug_set_toggle(raw_, name, on)); }
     /// Lines and labels drawn now (the built-in views not counted).
     debug_stats stats() const { debug_stats s{}; detail::check(ponko_ctx_debug_stats(raw_, &s)); return s; }
 
@@ -8207,6 +8273,48 @@ public:
         if (!found) return std::nullopt;
         return e;
     }
+    /// The authenticated control endpoint's loopback port, when enabled.
+    std::optional<std::uint16_t> control_port() const {
+        std::uint16_t port = 0;
+        auto status = ponko_ctx_control_port(raw_, &port);
+        if (status == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(status);
+        return port;
+    }
+    /// The engine's default lens and render layer for held items.
+    static PonkoViewModel view_model_defaults() {
+        PonkoViewModel model{};
+        model.struct_size = sizeof(model);
+        model.version = PONKO_VIEW_MODEL_VERSION;
+        detail::check(ponko_view_model_defaults(&model));
+        return model;
+    }
+    /// Configures the held-item pass. No value disables the pass.
+    void set_view_model(std::optional<PonkoViewModel> model) {
+        detail::check(ponko_ctx_set_view_model(raw_, model ? &*model : nullptr));
+    }
+    /// The held-item pass configuration when enabled.
+    std::optional<PonkoViewModel> view_model() const {
+        PonkoViewModel model{};
+        model.struct_size = sizeof(model);
+        model.version = PONKO_VIEW_MODEL_VERSION;
+        const auto status = ponko_ctx_view_model(raw_, &model);
+        if (status == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(status);
+        return model;
+    }
+    /// Sets the camera-space offset for an entity. No value removes the held-item mark.
+    void set_held_item(entity e, std::optional<transform3d> offset) {
+        detail::check(ponko_ctx_set_held_item(raw_, e, offset ? &*offset : nullptr));
+    }
+    /// An entity's held-item offset, if present.
+    std::optional<transform3d> held_item(entity e) const {
+        transform3d offset{};
+        const auto status = ponko_ctx_held_item(raw_, e, &offset);
+        if (status == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(status);
+        return offset;
+    }
     /// Multiplies the 2D zoom by `factor`, keeping the world point under window pixel `screen` where it is
     /// (Rust `Camera::zoom_at`): zooming at the pointer. Throws ponko::error unless `factor` is positive.
     void camera_zoom_at(vec2 screen, float factor) { detail::check(ponko_ctx_camera_zoom_at(raw_, screen, factor)); }
@@ -9472,6 +9580,13 @@ public:
         void* state = nullptr;
         detail::check(ponko_ctx_take_asset_group_sliced(raw_, id, path, &state));
         return std::unique_ptr<L>(static_cast<L*>(state));
+    }
+    /// Takes a finished value registered with asset_group::decoded, once.
+    /// T is the return type of the decoder. Throws if the value is unavailable.
+    template<class T> std::unique_ptr<T> take_asset_group_decoded(std::uint32_t id, const char* path) {
+        void* state = nullptr;
+        detail::check(ponko_ctx_take_asset_group_decoded(raw_, id, path, &state));
+        return std::unique_ptr<T>(static_cast<T*>(state));
     }
     /// How long the game thread may spend on asset groups each frame, in milliseconds (default 4).
     void set_asset_group_frame_budget(float milliseconds) {
@@ -11280,7 +11395,26 @@ class game {
         shared_state* st;
     };
     std::vector<std::unique_ptr<group_holder>> groups_;
+    struct control_holder {
+        std::function<std::string(ctx&, std::string_view)> fn;
+        shared_state* st;
+    };
+    std::vector<std::unique_ptr<control_holder>> control_methods_;
     std::unique_ptr<std::function<void(const crash_report&)>> crash_hook_;
+
+    static void control_trampoline(PonkoCtx* raw, const char* params, PonkoControlReply* reply, void* user) noexcept {
+        auto& h = *static_cast<control_holder*>(user);
+        try {
+            ctx c(raw, h.st->owner);
+            const auto answer = h.fn(c, params);
+            c.run_after_system();
+            detail::check(ponko_control_reply_json(reply, answer.c_str()));
+        } catch (const std::exception& e) {
+            (void)ponko_control_reply_error(reply, e.what());
+        } catch (...) {
+            (void)ponko_control_reply_error(reply, "native control method threw an exception");
+        }
+    }
 
     // A loading state's group builder: adds nothing once the game has failed.
     static void group_trampoline(PonkoCtx* raw, PonkoAssetGroup* group, void* user) noexcept {
@@ -11400,6 +11534,17 @@ public:
     /// Opens the control endpoint for tools and agents (ponko-mcp); also on with PONKO_CONTROL=1 in a debug
     /// build of the library.
     game& control_endpoint(bool on) { return check(ponko_game_control_endpoint(raw_, on)); }
+    /// Registers a control method. The callback receives wire JSON and returns a JSON value.
+    /// An exception becomes the control client's error reply.
+    game& control_method(const char* name, const char* about,
+                         std::function<std::string(ctx&, std::string_view)> method) {
+        control_methods_.push_back(std::make_unique<control_holder>(control_holder{std::move(method), state_.get()}));
+        const auto status = ponko_game_control_method(raw_, name, about, control_trampoline, control_methods_.back().get());
+        if (status != PONKO_OK) control_methods_.pop_back();
+        return check(status);
+    }
+    /// Registers a named debug toggle and its initial value.
+    game& debug_toggle(const char* name, bool on) { return check(ponko_game_debug_toggle(raw_, name, on)); }
     /// Reload textures when their files change, under the same handles (on by
     /// default in debug builds of the engine; PONKO_HOT_RELOAD=1/0 overrides).
     game& hot_reload(bool on) { return check(ponko_game_hot_reload(raw_, on)); }
@@ -11818,6 +11963,39 @@ inline entity spawn_ldtk_level(ctx& c, const char* path, vec2 world_origin,
     detail::check(ponko_ctx_spawn_ldtk_level(c.raw(), path, world_origin, &ldtk, &root));
     return root;
 }
+/// The name, stable IDs and placement of one level in an LDtk project.
+struct ldtk_level_info {
+    std::string world; ///< World name, empty for a legacy project.
+    std::string world_iid; ///< Stable world instance ID.
+    std::string identifier; ///< Level name.
+    std::string iid; ///< Stable level instance ID.
+    vec2 position; ///< Top-left position in world pixels.
+    std::uint32_t width; ///< Width in pixels.
+    std::uint32_t height; ///< Height in pixels.
+    std::int32_t depth; ///< Authored world depth.
+};
+
+/// Reads an LDtk project's level placements in world and level order.
+inline std::vector<ldtk_level_info> ldtk_levels(ctx& c, const char* path) {
+    struct collector {
+        std::vector<ldtk_level_info> levels;
+        std::exception_ptr error;
+    } state;
+    detail::check(ponko_ctx_visit_ldtk_levels(c.raw(), path, [](void* user, const PonkoLdtkLevelInfo* level) {
+        auto& data = *static_cast<collector*>(user);
+        if (data.error) return;
+        try {
+            const auto str = [](PonkoLdtkText text) { return std::string(text.bytes, text.len); };
+            data.levels.push_back({str(level->world), str(level->world_iid), str(level->identifier),
+                                   str(level->iid), level->position, level->width, level->height, level->depth});
+        } catch (...) {
+            data.error = std::current_exception();
+        }
+    }, &state));
+    if (state.error) std::rethrow_exception(state.error);
+    return std::move(state.levels);
+}
+
 /// Despawns a level and everything it spawned; false if `root` was gone.
 inline bool despawn_level(ctx& c, entity root) {
     const PonkoStatus s = ponko_ctx_despawn_level(c.raw(), root);

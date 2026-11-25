@@ -68,6 +68,41 @@ macro_rules! desc {
     }};
 }
 
+#[test]
+fn view_model_and_held_item_round_trip_and_can_be_removed() {
+    with_ctx(
+        |_| {},
+        |ctx| unsafe {
+            let mut lens = desc!(PonkoViewModel, PONKO_VIEW_MODEL_VERSION);
+            assert_eq!(ponko_view_model_defaults(&mut lens), PONKO_OK);
+            assert_eq!(ponko_ctx_view_model(ctx, &mut lens), PONKO_NOT_FOUND);
+            lens.fov_y = 0.7;
+            lens.layers = 1 << 12;
+            assert_eq!(ponko_ctx_set_view_model(ctx, &lens), PONKO_OK);
+            let mut read = desc!(PonkoViewModel, PONKO_VIEW_MODEL_VERSION);
+            assert_eq!(ponko_ctx_view_model(ctx, &mut read), PONKO_OK);
+            assert_eq!((read.fov_y, read.layers), (0.7, 1 << 12));
+            lens.fov_y = f32::NAN;
+            assert_eq!(ponko_ctx_set_view_model(ctx, &lens), PONKO_INVALID_ARGUMENT);
+            assert_eq!(ponko_ctx_view_model(ctx, &mut read), PONKO_OK);
+            assert_eq!(read.fov_y, 0.7);
+
+            let mut entity = 0;
+            assert_eq!(ponko_spawn(ponko_ctx_world(ctx), null(), 0, &mut entity), PONKO_OK);
+            let offset = ponko_transform3d_at(v3(0.25, -0.5, -1.0));
+            let mut current = ponko_transform3d_at(v3(0.0, 0.0, 0.0));
+            assert_eq!(ponko_ctx_held_item(ctx, entity, &mut current), PONKO_NOT_FOUND);
+            assert_eq!(ponko_ctx_set_held_item(ctx, entity, &offset), PONKO_OK);
+            assert_eq!(ponko_ctx_held_item(ctx, entity, &mut current), PONKO_OK);
+            assert_eq!(current, offset);
+            assert_eq!(ponko_ctx_set_held_item(ctx, entity, null()), PONKO_OK);
+            assert_eq!(ponko_ctx_held_item(ctx, entity, &mut current), PONKO_NOT_FOUND);
+            assert_eq!(ponko_ctx_set_view_model(ctx, null()), PONKO_OK);
+            assert_eq!(ponko_ctx_view_model(ctx, &mut read), PONKO_NOT_FOUND);
+        },
+    );
+}
+
 /// The 2D camera's center.
 unsafe fn center(ctx: *mut PonkoCtx) -> PonkoVec2 {
     let mut cam = PonkoCamera {
