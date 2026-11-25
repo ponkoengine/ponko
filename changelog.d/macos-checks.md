@@ -7,3 +7,6 @@
 - The API listing in `api/` names `World::insert_many` and
   `World::remove_many`, and lists the joystick and force feedback items in
   the order `scripts/api-snapshots.py` writes them, so its check passes.
+- The asset group test `without_workers_other_assets_load_as_before` passes
+  with the `image-gif` feature (and `image-formats`): it expected a GIF to be
+  unsupported, which it is only without the decoder.
