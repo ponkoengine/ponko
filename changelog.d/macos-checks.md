@@ -13,3 +13,6 @@
 - The macOS screen-reader checks (`tests/ui_access_macos.rs`) count a check
   that didn't run (the window check, without `PONKO_ACCESS_WINDOW=1`) as
   skipped in their summary, not as passed.
+- The docs step of `scripts/checks.yml` documents `ponko` with `mods-wasm`,
+  as docs.rs does; without it the code mod links in `ponko::mods` failed
+  the step.

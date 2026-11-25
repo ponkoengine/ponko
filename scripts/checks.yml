@@ -820,7 +820,7 @@ jobs:
       # (RUSTDOCFLAGS denies them).
       - name: Docs with every public feature
         run: |
-          cargo doc -p ponko --no-deps --features physics,physics3d,physics-determinism,steam,3d,navmesh,accessibility,control-env,profiling,video,lobby,webrtc,editor
+          cargo doc -p ponko --no-deps --features physics,physics3d,physics-determinism,steam,3d,navmesh,accessibility,control-env,profiling,video,lobby,webrtc,mods-wasm,editor
           cargo doc -p ponko_ecs -p ponko_ffi --no-deps --all-features
 
   # The API of the published crates against the last crates.io release, with
