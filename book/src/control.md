@@ -72,6 +72,9 @@ The fragment contains a session credential, so keep it local. A bridge
 accepts one tab at a time. Run another bridge for another tab. Closing
 the tab removes its instance, and reloading reconnects it to the same
 bridge while the bridge is running.
+The tab answers between frames, so keep it visible: a browser stops
+drawing a hidden tab, and its calls then fail after the bridge's
+30-second timeout.
 
 Use the regular [stdio MCP server](agents.md) with the same
 `PONKO_INSTANCES_DIR` as the bridge (or leave it unset for both). Select

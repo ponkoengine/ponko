@@ -12,12 +12,17 @@ use crate::ctx::Ctx;
 const MAX_REQUEST: usize = 4 * 1024 * 1024;
 // Leave room for the JSON envelope under the bridge's 32 MiB message limit.
 const MAX_PNG_BASE64: usize = 31 * 1024 * 1024;
+// A screenshot waits this many frames for one the browser presents.
+const SCREENSHOT_FRAMES: u32 = 60;
 
 /// One tab has one bridge, with at most one request outstanding. The JS
 /// callback queues it; only the normal frame loop has access to the game.
 pub(crate) struct BrowserControl {
     socket: WebSocket,
     pending: Rc<RefCell<Option<String>>>,
+    /// A screenshot request (id, max size, frames waited) waiting for a
+    /// presented frame.
+    screenshot: RefCell<Option<(Value, u32, u32)>>,
     _on_message: Closure<dyn FnMut(MessageEvent)>,
 }
 
@@ -67,44 +72,65 @@ impl BrowserControl {
         Some(Self {
             socket,
             pending,
+            screenshot: RefCell::new(None),
             _on_message: on_message,
         })
     }
 
-    /// Dispatch between frames. A screenshot is answered after this frame
-    /// is drawn, before returning the canvas to the browser compositor.
-    pub(crate) fn poll(&self, ctx: &mut Ctx) -> Option<(Value, u32)> {
-        let line = self.pending.borrow_mut().take()?;
+    /// Dispatch between frames. A screenshot is answered by
+    /// [`Self::after_frame`] once a frame is drawn, before the canvas goes
+    /// back to the browser compositor.
+    pub(crate) fn poll(&self, ctx: &mut Ctx) {
+        if self.screenshot.borrow().is_some() {
+            return;
+        }
+        let Some(line) = self.pending.borrow_mut().take() else {
+            return;
+        };
         let req: Value = match serde_json::from_str(&line) {
             Ok(req) => req,
             Err(e) => {
                 self.reply(&Value::Null, Err(format!("invalid JSON: {e}")));
-                return None;
+                return;
             }
         };
         let id = &req["id"];
         let params = &req["params"];
         if req["method"] == "screenshot" {
-            match params.get("max_size").filter(|v| !v.is_null()) {
-                None => return Some((id.clone(), 0)),
-                Some(value) => {
-                    if let Some(max) = value.as_u64().and_then(|n| u32::try_from(n).ok()) {
-                        return Some((id.clone(), max));
-                    }
-                    self.reply(id, Err("`max_size` must be a non-negative 32-bit integer".into()));
-                    return None;
-                }
+            let max_size = match params.get("max_size").filter(|v| !v.is_null()) {
+                None => Some(0),
+                Some(value) => value.as_u64().and_then(|n| u32::try_from(n).ok()),
+            };
+            match max_size {
+                Some(max) => *self.screenshot.borrow_mut() = Some((id.clone(), max, 0)),
+                None => self.reply(id, Err("`max_size` must be a non-negative 32-bit integer".into())),
             }
+            return;
         }
         self.reply(id, dispatch(ctx, req["method"].as_str(), params));
-        None
     }
 
-    pub(crate) fn screenshot(&self, id: &Value, max_size: u32, canvas: Option<HtmlCanvasElement>) {
-        let result = canvas
-            .ok_or_else(|| "the game has no canvas to capture".to_owned())
-            .and_then(|canvas| capture(canvas, max_size));
-        self.reply(id, result);
+    /// Answers a waiting screenshot with the canvas of this frame if the
+    /// browser presented it; a skipped frame leaves the request waiting for
+    /// the next one, up to [`SCREENSHOT_FRAMES`].
+    pub(crate) fn after_frame(&self, canvas: impl FnOnce() -> Option<HtmlCanvasElement>, presented: bool) {
+        let mut waiting = self.screenshot.borrow_mut();
+        let Some((id, max_size, frames)) = waiting.take() else {
+            return;
+        };
+        if !presented && frames + 1 < SCREENSHOT_FRAMES {
+            *waiting = Some((id, max_size, frames + 1));
+            return;
+        }
+        drop(waiting);
+        let result = if presented {
+            canvas()
+                .ok_or_else(|| "the game has no canvas to capture".to_owned())
+                .and_then(|canvas| capture(canvas, max_size))
+        } else {
+            Err(format!("no frame was presented in {SCREENSHOT_FRAMES} frames"))
+        };
+        self.reply(&id, result);
     }
 
     fn reply(&self, id: &Value, response: Result<Value, String>) {

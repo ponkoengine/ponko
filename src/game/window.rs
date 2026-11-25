@@ -213,10 +213,9 @@ where
             control.poll(&mut self.ctx);
         }
         #[cfg(all(target_arch = "wasm32", feature = "web-control"))]
-        let screenshot = self
-            .browser_control
-            .as_ref()
-            .and_then(|control| control.poll(&mut self.ctx));
+        if let Some(control) = &self.browser_control {
+            control.poll(&mut self.ctx);
+        }
         let now = Instant::now();
         let frame_dt = now.duration_since(self.last_frame).as_secs_f64();
         self.last_frame = now;
@@ -277,12 +276,10 @@ where
         let status = self.ctx.render_frame();
         let render_ms = render_start.elapsed().as_secs_f32() * 1000.0;
         #[cfg(all(target_arch = "wasm32", feature = "web-control"))]
-        if let (Some(control), Some((id, max_size))) = (&self.browser_control, screenshot) {
+        if let Some(control) = &self.browser_control {
             use winit::platform::web::WindowExtWebSys;
-            let canvas = (status == FrameStatus::Presented)
-                .then(|| self.window.as_ref().and_then(|window| window.canvas()))
-                .flatten();
-            control.screenshot(&id, max_size, canvas);
+            let canvas = || self.window.as_ref().and_then(|window| window.canvas());
+            control.after_frame(canvas, status == FrameStatus::Presented);
         }
         match status {
             FrameStatus::Presented | FrameStatus::Skipped | FrameStatus::Offscreen => self.occluded = false,
