@@ -1066,3 +1066,56 @@ fn checked_parameter_and_state_lookups_list_the_names_there_are() {
     assert_eq!(err.kind(), ErrorKind::NotFound);
     assert_eq!(err.message(), r#"unknown animation parameter "sped" (known: speed)"#);
 }
+
+#[test]
+fn a_rig_built_in_code_sets_its_rest_slots_and_shears() {
+    let mut data = arm();
+    // The hand shows nothing at rest until an animation keys it on.
+    let hand = data.slot("hand").unwrap();
+    data.set_slot_rest(hand, None, Color::WHITE);
+    // A cape whose +y axis leans an eighth of a turn; +x stays along the bone.
+    let lean = BonePose::at(vec2(0.0, 5.0)).with_shear(vec2(0.0, std::f32::consts::FRAC_PI_4));
+    let cape = data.add_bone("cape", Some(0), lean, 10.0);
+    data.add_clip(Clip::new("still", 1.0));
+    let mut s = Skeleton::new(Arc::new(data));
+    s.play("still");
+    s.update(0.0);
+    assert_eq!(s.attachment(hand), None);
+    assert_eq!(s.attachment(s.data().slot("arm").unwrap()), Some("arm"));
+    near2(s.bone_point(cape, vec2(1.0, 0.0)), vec2(1.0, 5.0));
+    let up = s.bone_point(cape, vec2(0.0, 1.0)) - vec2(0.0, 5.0);
+    near(up.length(), 1.0);
+    near(up.x.abs(), std::f32::consts::FRAC_1_SQRT_2);
+}
+
+#[test]
+fn a_graph_lists_its_parameters_and_states_and_can_be_switched_by_hand() {
+    let mut data = arm();
+    let idle = data.add_clip(Clip::new("idle", 1.0));
+    let wave = data.add_clip(Clip::new("wave", 1.0).with_bone_track(rotate(1, vec![Key::new(0.0, 1.0)])));
+    let graph = SkeletonGraph::new(
+        vec![("happy", AnimationParameter::Bool(false))],
+        vec![
+            SkeletonState::new("idle", SkeletonMotion::Clip(idle)),
+            SkeletonState::new("wave", SkeletonMotion::Clip(wave)),
+        ],
+        vec![],
+        StateId(0),
+    )
+    .unwrap();
+    // A debug panel names the parameters and the starting state.
+    assert_eq!(
+        graph.parameter_names().iter().map(|n| &**n).collect::<Vec<_>>(),
+        ["happy"]
+    );
+    assert_eq!(graph.initial(), StateId(0));
+    data.set_graph(graph).unwrap();
+    let mut s = Skeleton::new(Arc::new(data));
+    s.update(0.0);
+    // A cutscene switches state directly, halfway into the wave.
+    s.crossfade_state(StateId(1), 0.2, 0.5);
+    s.update(0.2);
+    assert_eq!(s.state(), Some(StateId(1)));
+    assert_eq!(s.clip(), Some("wave"));
+    near(s.bone_pose(1).rotation, 1.0);
+}
