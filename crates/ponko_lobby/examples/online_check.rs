@@ -51,7 +51,6 @@ fn run() -> io::Result<()> {
         return Err(fail(USAGE));
     }
     let mut lobby = LobbyClient::join(setting("LOBBY", "127.0.0.1:7700"))?;
-    // ANCHOR: room
     // Into a room for two: the host makes it, the other player joins its code.
     match code {
         None => lobby.create_room(2)?,
@@ -63,7 +62,10 @@ fn run() -> io::Result<()> {
         while let Some(event) = lobby.next_event() {
             match event {
                 LobbyEvent::Joined(room) if code.is_none() => {
-                    println!("room {}: in another terminal, run this example with: join {} {path}", room.code, room.code);
+                    println!(
+                        "room {}: in another terminal, run this example with: join {} {path}",
+                        room.code, room.code
+                    );
                 }
                 LobbyEvent::Refused(error) => return Err(fail(format!("the lobby refused: {error:?}"))),
                 _ => {}
@@ -74,8 +76,6 @@ fn run() -> io::Result<()> {
         }
         sleep(Duration::from_millis(5));
     }
-    // ANCHOR_END: room
-    // ANCHOR: session
     let host = lobby.room().map(|room| room.host).expect("in a room");
     let hosting = lobby.is_host();
     let (mut endpoint, mut signaling_lobby) = if path == "relay" {
@@ -90,7 +90,11 @@ fn run() -> io::Result<()> {
         // WebRTC through the TURN server only; the lobby carries the
         // signaling, so the game keeps polling it.
         let config = RtcConfig::new()
-            .turn(&setting("TURN", "turn:127.0.0.1:3478"), &setting("TURN_USER", "game"), &setting("TURN_PASSWORD", "secret"))
+            .turn(
+                &setting("TURN", "turn:127.0.0.1:3478"),
+                &setting("TURN_USER", "game"),
+                &setting("TURN_PASSWORD", "secret"),
+            )
             .relay_only();
         let endpoint = if hosting {
             NetMessages::host_rtc(lobby.signaling(), config, 1)?
@@ -99,7 +103,6 @@ fn run() -> io::Result<()> {
         };
         (endpoint, Some(lobby))
     };
-    // ANCHOR_END: session
     // The other player says hello, the host answers, and both are done.
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
