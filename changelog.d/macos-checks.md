@@ -10,3 +10,6 @@
 - The asset group test `without_workers_other_assets_load_as_before` passes
   with the `image-gif` feature (and `image-formats`): it expected a GIF to be
   unsupported, which it is only without the decoder.
+- The macOS screen-reader checks (`tests/ui_access_macos.rs`) count a check
+  that didn't run (the window check, without `PONKO_ACCESS_WINDOW=1`) as
+  skipped in their summary, not as passed.
