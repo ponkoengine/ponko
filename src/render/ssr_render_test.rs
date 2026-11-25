@@ -2277,3 +2277,220 @@ fn thin_objects_gpu_cost_over_rails_at_1440p() {
     );
     stage.finish();
 }
+
+/// A 1x1 normal map (linear, three channels) that tilts every normal by
+/// `degrees` toward the surface's +u: on a cube's top face, +x.
+fn tilting_normal_map(stage: &mut Stage, degrees: f32) -> crate::texture::Texture {
+    let (sin, cos) = degrees.to_radians().sin_cos();
+    let unorm = |v: f32| ((v * 0.5 + 0.5) * 255.0).round() as u8;
+    let texture = stage.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("tilting normal map"),
+        size: wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    stage.queue.write_texture(
+        texture.as_image_copy(),
+        &[unorm(sin), 128, unorm(cos), 255],
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4),
+            rows_per_image: None,
+        },
+        texture.size(),
+    );
+    let id = stage.textures.len() as u32;
+    let bind_group = stage.textures[0].bind_group.clone();
+    stage.textures.push(GpuTexture {
+        texture,
+        nearest: false,
+        mips: None,
+        bind_group,
+    });
+    crate::texture::Texture::new(id, 1, 1)
+}
+
+/// How a mirror floor's normal leans toward +x, in degrees.
+#[derive(Clone, Copy)]
+enum Tilt {
+    Flat,
+    /// Flat, with a normal map that says this much toward +u (+x).
+    Map(f32),
+    /// Flat, with a material `surface` that sets the normal.
+    Surface(f32),
+    /// The floor itself turned.
+    Turned(f32),
+}
+
+/// What a mirror floor shows of a glowing red box above it, with
+/// reflections on: the red of the reflection (on minus off, linear) over
+/// the floor below the box, its total and its center of mass on screen.
+fn reflection_on_a_tilted_floor(tilt: Tilt) -> Option<(f32, Vec2, Image, Stage)> {
+    let mut stage = Stage::new()?;
+    if !crate::render::render_test_support::needs(&stage.device, GpuFeature::ScreenSpaceReflections) {
+        return None;
+    }
+    let (normal_map, shader, turn) = match tilt {
+        Tilt::Flat => (None, None, 0.0),
+        Tilt::Map(degrees) => (Some(tilting_normal_map(&mut stage, degrees)), None, 0.0),
+        Tilt::Surface(degrees) => {
+            let (sin, cos) = degrees.to_radians().sin_cos();
+            let source = format!(
+                "fn surface(s: Surface) -> Surface {{ var o = s; o.normal = normalize(vec3<f32>({sin}, {cos}, \
+                 0.0)); return o; }}"
+            );
+            (None, Some(stage.shader("tilted", &source).0), 0.0)
+        }
+        Tilt::Turned(degrees) => (None, None, degrees),
+    };
+    let floor = stage.mesh(
+        &MeshData::cube(1.0),
+        MaterialDesc {
+            color: Color::WHITE,
+            roughness: 0.0,
+            metallic: 1.0,
+            normal_map,
+            shader,
+            ..Default::default()
+        },
+    );
+    let glow = stage.mesh(
+        &MeshData::cube(1.0),
+        MaterialDesc {
+            color: Color::BLACK,
+            emissive: Color::rgb(4.0, 0.0, 0.0),
+            ..Default::default()
+        },
+    );
+    // Turned about the top's center, so the top still passes through the
+    // origin.
+    let rotation = Quat::from_rotation_z(-turn.to_radians());
+    stage.ctx.world.spawn((
+        Transform3D {
+            position: rotation * vec3(0.0, -0.5, 0.0),
+            rotation,
+            scale: vec3(20.0, 1.0, 20.0),
+        },
+        Model::new(floor),
+    ));
+    stage.block(glow, vec3(-0.5, 0.5, -0.5), vec3(0.5, 1.5, 0.5));
+    stage.ctx.scene3d.lighting.sun_intensity = 0.0;
+    stage.ctx.scene3d.lighting.ambient_intensity = 0.0;
+    stage.ctx.scene3d.post.exposure = -5.0;
+    stage.ctx.scene3d.camera.position = vec3(0.0, 2.0, 6.0);
+    stage.ctx.scene3d.camera.look_at(vec3(0.0, 0.5, 0.0));
+    let off = stage.settled(2);
+    stage.ctx.scene3d.post.ssr = 1.0;
+    let on = stage.settled(4);
+    crate::render::render_test_support::keep_image(&on);
+    // Below the box's foot on screen: only the floor.
+    let (_, foot) = stage.pixel(vec3(0.0, 0.5, 0.5));
+    let (mut total, mut at) = (0.0, Vec2::ZERO);
+    for y in foot + 2..on.height {
+        for x in 0..on.width {
+            let linear = |image: &Image| (f32::from(image.pixel(x, y)[0]) / 255.0).powf(2.2);
+            let red = (linear(&on) - linear(&off)).max(0.0);
+            total += red;
+            at += red * vec2(x as f32, y as f32);
+        }
+    }
+    Some((total, at / total.max(1e-6), on, stage))
+}
+
+/// A normal bends the reflection as it bends the light: a flat mirror
+/// floor whose material's `surface` tilts its normal 10 degrees toward +x
+/// reflects the box where a floor really turned 10 degrees toward +x does,
+/// and not where the flat floor does. The trace used the depth's normal
+/// before, so only the turned floor's reflection moved.
+#[test]
+fn a_tilted_normal_bends_the_reflection_as_a_turned_floor_does() {
+    let Some((flat, flat_at, _, stage)) = reflection_on_a_tilted_floor(Tilt::Flat) else {
+        return;
+    };
+    stage.finish();
+    let (tilted, tilted_at, _, stage) = reflection_on_a_tilted_floor(Tilt::Surface(10.0)).unwrap();
+    stage.finish();
+    let (turned, turned_at, _, stage) = reflection_on_a_tilted_floor(Tilt::Turned(10.0)).unwrap();
+    stage.finish();
+    eprintln!(
+        "reflection (red, center): flat {flat:.1} at {flat_at}, tilted normal {tilted:.1} at {tilted_at}, turned \
+         floor {turned:.1} at {turned_at}"
+    );
+    assert!(
+        flat > 5.0 && tilted > 5.0 && turned > 5.0,
+        "the box is reflected in all three"
+    );
+    assert!(
+        (turned_at.x - flat_at.x).abs() > 4.0,
+        "turning the floor moves the reflection: {flat_at} -> {turned_at}"
+    );
+    assert!(
+        // Across: turning the floor also moves its surface up and down a
+        // little.
+        (tilted_at.x - turned_at.x).abs() < 1.5,
+        "the tilted normal moves it there too: {tilted_at} against {turned_at}"
+    );
+}
+
+/// The same with a normal map, which every glTF model's floors and walls
+/// carry: the reflection moves as on a floor turned 15 degrees. (Which way
+/// a normal map's red turns a surface is the material shader's business,
+/// and lighting agrees with it; this checks the reflection follows it.)
+#[test]
+fn a_normal_map_bends_the_reflection_as_a_turned_floor_does() {
+    let Some((flat, flat_at, flat_image, stage)) = reflection_on_a_tilted_floor(Tilt::Flat) else {
+        return;
+    };
+    stage.finish();
+    let (mapped, mapped_at, image, stage) = reflection_on_a_tilted_floor(Tilt::Map(15.0)).unwrap();
+    let turned: Vec<_> = [15.0, -15.0]
+        .map(|degrees| {
+            let (_, at, _, stage) = reflection_on_a_tilted_floor(Tilt::Turned(degrees)).unwrap();
+            stage.finish();
+            at
+        })
+        .into();
+    // Across: turning the floor also moves its surface up and down a little.
+    let nearest = turned
+        .iter()
+        .map(|at| (mapped_at.x - at.x).abs())
+        .fold(f32::MAX, f32::min);
+    eprintln!(
+        "reflection (red, center): flat {flat:.1} at {flat_at}, normal map {mapped:.1} at {mapped_at}, turned \
+         floors at {turned:?}"
+    );
+    assert!(mapped > 5.0, "the box is reflected");
+    assert!(
+        (mapped_at.x - flat_at.x).abs() > 4.0,
+        "the normal map moves the reflection: {flat_at} -> {mapped_at}"
+    );
+    assert!(
+        nearest < 1.5,
+        "to where a turned floor puts it: {mapped_at} against {turned:?}"
+    );
+    check_reference(
+        "regression_ssr_normal_map",
+        &image,
+        EFFECT_REFERENCE,
+        "A glowing red unit box (emissive 4, 0, 0) standing on a white metal mirror floor (roughness 0) whose 1x1 \
+         normal map (rgb 160, 128, 251) tilts every normal 15 degrees; nothing lit, exposure -5, screen-space \
+         reflections at 1.0, fourth frame; camera at (0, 2, 6) looking at (0, 0.5, 0); 128x128, 4x multisampling, \
+         no tonemapping.",
+        &stage.info,
+    );
+    reference_rejects(
+        "regression_ssr_normal_map",
+        &flat_image,
+        EFFECT_REFERENCE,
+        "the floor without its normal map",
+    );
+    stage.finish();
+}
