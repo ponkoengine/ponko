@@ -9,7 +9,8 @@
 
 const DOCS_RS_API: &str = include_str!("../api/ponko/docs-rs.txt");
 
-/// Crates whose types may appear only on `unstable_` items, and the stable
+/// Crates whose types may appear only on items with `unstable_` in their name
+/// (`unstable_taffy`, `UiLayout::into_unstable_style`), and the stable
 /// items that still name them (with the reason).
 const WRAPPED: &[(&str, &[&str])] = &[
     ("steamworks::", &[]),
@@ -33,8 +34,21 @@ fn item(line: &str) -> Option<&str> {
     loop {
         let before = rest;
         for keyword in [
-            "pub ", "unsafe ", "const ", "async ", "extern \"C\" ", "fn ", "struct ", "enum ", "union ", "use ",
-            "type ", "trait ", "mod ", "static ", "macro ",
+            "pub ",
+            "unsafe ",
+            "const ",
+            "async ",
+            "extern \"C\" ",
+            "fn ",
+            "struct ",
+            "enum ",
+            "union ",
+            "use ",
+            "type ",
+            "trait ",
+            "mod ",
+            "static ",
+            "macro ",
         ] {
             rest = rest.strip_prefix(keyword).unwrap_or(rest);
         }
@@ -60,7 +74,7 @@ fn leaks(listing: &str) -> Vec<String> {
                 continue;
             }
             let ok = item(line)
-                .is_some_and(|name| name.split("::").any(|s| s.starts_with("unstable_")) || allowed.contains(&name));
+                .is_some_and(|name| name.split("::").any(|s| s.contains("unstable_")) || allowed.contains(&name));
             if !ok {
                 found.push(line.to_owned());
             }
