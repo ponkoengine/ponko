@@ -315,9 +315,9 @@ pub struct LodFadeTime(pub f32);
 ///
 /// Levels can crossfade: both are drawn for a short stretch, each through
 /// a dither pattern that fills in what the other leaves out, so the swap
-/// is not seen. The shadow maps use the main camera's choice (and fade
-/// the same way). Cameras drawing into render targets choose for
-/// themselves. Levels that switch at once can be held near their
+/// is not seen. A [`LodFadeTime`] fades each change of level over time
+/// instead. The shadow maps use the main camera's choice (and fade the same
+/// way). Cameras drawing into render targets choose for themselves. Levels that switch at once can be held near their
 /// thresholds with a [`LodHysteresis`], so a camera resting at one doesn't
 /// flicker between two.
 ///
@@ -511,10 +511,11 @@ impl LodGroup {
     ///
     /// What a batch doesn't do, so a group needing it stays an entity:
     /// crossfades (levels switch at once, as with
-    /// [`LodSettings::crossfade`] off), [`LodHysteresis`], a level per
-    /// render-target camera, a light's shadow picking by the main camera
-    /// (a batch measures a light's shadow from the light), and following
-    /// changes to the field of view or bias (make the batch again).
+    /// [`LodSettings::crossfade`] off), [`LodHysteresis`], [`LodFadeTime`],
+    /// a level per render-target camera, a light's shadow picking by the
+    /// main camera (a batch measures a light's shadow from the light), and
+    /// following changes to the field of view or bias (make the batch
+    /// again).
     ///
     /// `None` when the group can't be a batch: its [`center`](Self::center)
     /// is away from the origin (a batch measures to each copy's origin), a

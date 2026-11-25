@@ -452,7 +452,7 @@ fn import_character(
     // Character (Animator) > Body (the renderer), Character > Armature >
     // the bones. Transforms are `id + 1`; bone k is object 100 + 10 k.
     let mut prefab = String::from("%YAML 1.1\n");
-    let mut object = |prefab: &mut String, id: usize, name: &str, parent: usize, at: Vec3| {
+    let object = |prefab: &mut String, id: usize, name: &str, parent: usize, at: Vec3| {
         prefab.push_str(&format!(
             "--- !u!1 &{id}\nGameObject:\n  m_Name: {name}\n  m_IsActive: 1\n--- !u!4 &{}\nTransform:\n  m_GameObject: {{fileID: {id}}}\n  m_Father: {{fileID: {parent}}}\n  m_LocalRotation: {{x: 0, y: 0, z: 0, w: 1}}\n  m_LocalPosition: {{x: {}, y: {}, z: {}}}\n  m_LocalScale: {{x: 1, y: 1, z: 1}}\n",
             id + 1,

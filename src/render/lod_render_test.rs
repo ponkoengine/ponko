@@ -566,7 +566,7 @@ fn a_fade_time_crossfades_over_frames_wherever_the_camera_stops() {
         .unwrap();
     rig.frame.lod_dt = Some(0.125);
     // (red, blue) pixels of each frame.
-    let mut frame = |rig: &mut Rig, height: f32| {
+    let frame = |rig: &mut Rig, height: f32| {
         camera_at(&mut rig.ctx, distance_for(height));
         let c = count(&rig.draw());
         (c.red, c.blue)

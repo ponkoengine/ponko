@@ -5665,7 +5665,6 @@ impl ponko::input::GamepadBackend for ponko::input::FakeGamepads
 pub fn ponko::input::FakeGamepads::poll(&mut self, &mut ponko::input::GamepadEvents<'_>)
 pub fn ponko::input::FakeGamepads::set_force_feedback(&mut self, ponko::input::DeviceKey, ponko::input::ForceFeedback)
 pub fn ponko::input::FakeGamepads::set_rumble(&mut self, ponko::input::DeviceKey, ponko::input::MotorLevels)
-pub fn ponko::input::hat_from_bits(u8) -> glam::i32::ivec2::IVec2
 pub struct ponko::input::ForceFeedback
 pub ponko::input::ForceFeedback::autocenter: f32
 pub ponko::input::ForceFeedback::constant: f32
@@ -5870,15 +5869,6 @@ impl core::marker::Copy for ponko::input::Glyphs
 impl core::marker::StructuralPartialEq for ponko::input::Glyphs
 pub struct ponko::input::Input
 impl ponko::input::Input
-pub fn ponko::input::Input::force_feedback(&self, ponko::input::Joystick) -> ponko::input::ForceFeedback
-pub fn ponko::input::Input::joystick_axis(&self, ponko::input::Joystick, usize) -> f32
-pub fn ponko::input::Input::joystick_down(&self, ponko::input::Joystick, usize) -> bool
-pub fn ponko::input::Input::joystick_hat(&self, ponko::input::Joystick, usize) -> glam::i32::ivec2::IVec2
-pub fn ponko::input::Input::joystick_info(&self, ponko::input::Joystick) -> core::option::Option<&ponko::input::JoystickInfo>
-pub fn ponko::input::Input::joystick_pressed(&self, ponko::input::Joystick, usize) -> bool
-pub fn ponko::input::Input::joystick_released(&self, ponko::input::Joystick, usize) -> bool
-pub fn ponko::input::Input::joysticks(&self) -> &[ponko::input::Joystick]
-pub fn ponko::input::Input::set_force_feedback(&mut self, ponko::input::Joystick, ponko::input::ForceFeedback)
 pub fn ponko::input::Input::action_axis(&self, impl ponko::actions::ActionRef) -> f32
 pub fn ponko::input::Input::action_axis2(&self, impl ponko::actions::ActionRef) -> glam::f32::vec2::Vec2
 pub fn ponko::input::Input::action_down(&self, impl ponko::actions::ActionRef) -> bool
@@ -5954,6 +5944,16 @@ pub fn ponko::input::Input::cancel_scenario(&mut self, &mut ponko_ecs::world::Wo
 pub fn ponko::input::Input::injection_allowed(&self) -> bool
 pub fn ponko::input::Input::scenario_report<'w>(&self, &'w ponko_ecs::world::World) -> core::option::Option<&'w ponko::scenario::ScenarioReport>
 pub fn ponko::input::Input::start_scenario(&mut self, &mut ponko_ecs::world::World, &mut ponko::prelude::Time, ponko::scenario::InputScenario)
+impl ponko::input::Input
+pub fn ponko::input::Input::force_feedback(&self, ponko::input::Joystick) -> ponko::input::ForceFeedback
+pub fn ponko::input::Input::joystick_axis(&self, ponko::input::Joystick, usize) -> f32
+pub fn ponko::input::Input::joystick_down(&self, ponko::input::Joystick, usize) -> bool
+pub fn ponko::input::Input::joystick_hat(&self, ponko::input::Joystick, usize) -> glam::i32::ivec2::IVec2
+pub fn ponko::input::Input::joystick_info(&self, ponko::input::Joystick) -> core::option::Option<&ponko::input::JoystickInfo>
+pub fn ponko::input::Input::joystick_pressed(&self, ponko::input::Joystick, usize) -> bool
+pub fn ponko::input::Input::joystick_released(&self, ponko::input::Joystick, usize) -> bool
+pub fn ponko::input::Input::joysticks(&self) -> &[ponko::input::Joystick]
+pub fn ponko::input::Input::set_force_feedback(&mut self, ponko::input::Joystick, ponko::input::ForceFeedback)
 impl ponko::input::Input
 pub fn ponko::input::Input::gamepad_axis(&self, ponko::input::Gamepad, ponko::input::GamepadAxis) -> f32
 pub fn ponko::input::Input::gamepad_down(&self, ponko::input::Gamepad, ponko::input::GamepadButton) -> bool
@@ -6126,7 +6126,9 @@ pub fn ponko::input::GamepadBackend::set_force_feedback(&mut self, ponko::input:
 pub fn ponko::input::GamepadBackend::set_rumble(&mut self, ponko::input::DeviceKey, ponko::input::MotorLevels)
 impl ponko::input::GamepadBackend for ponko::input::FakeGamepads
 pub fn ponko::input::FakeGamepads::poll(&mut self, &mut ponko::input::GamepadEvents<'_>)
+pub fn ponko::input::FakeGamepads::set_force_feedback(&mut self, ponko::input::DeviceKey, ponko::input::ForceFeedback)
 pub fn ponko::input::FakeGamepads::set_rumble(&mut self, ponko::input::DeviceKey, ponko::input::MotorLevels)
+pub fn ponko::input::hat_from_bits(u8) -> glam::i32::ivec2::IVec2
 pub mod ponko::inventory
 #[non_exhaustive] pub enum ponko::inventory::AssetClass
 pub ponko::inventory::AssetClass::Compute
@@ -13945,6 +13947,22 @@ pub fn ponko::render::Lightmapped::fmt(&self, &mut core::fmt::Formatter<'_>) -> 
 impl core::marker::Copy for ponko::render::Lightmapped
 impl core::marker::StructuralPartialEq for ponko::render::Lightmapped
 impl ponko_ecs::bundle::Component for ponko::render::Lightmapped
+pub struct ponko::render::LodFadeTime(pub f32)
+impl core::clone::Clone for ponko::render::LodFadeTime
+pub fn ponko::render::LodFadeTime::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::render::LodFadeTime
+pub fn ponko::render::LodFadeTime::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::render::LodFadeTime
+pub fn ponko::render::LodFadeTime::default() -> Self
+impl core::fmt::Debug for ponko::render::LodFadeTime
+pub fn ponko::render::LodFadeTime::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::render::LodFadeTime
+impl core::marker::StructuralPartialEq for ponko::render::LodFadeTime
+impl ponko_ecs::bundle::Component for ponko::render::LodFadeTime
+impl serde_core::ser::Serialize for ponko::render::LodFadeTime
+pub fn ponko::render::LodFadeTime::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::render::LodFadeTime
+pub fn ponko::render::LodFadeTime::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct ponko::render::LodGroup
 pub ponko::render::LodGroup::center: glam::f32::vec3::Vec3
 pub ponko::render::LodGroup::levels: alloc::vec::Vec<ponko::render::LodLevel>
