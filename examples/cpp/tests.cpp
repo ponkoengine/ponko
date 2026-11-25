@@ -5693,6 +5693,18 @@ static void native_parity_round5() {
         const auto walls = ctx.take_asset_group_sliced<round5::walls>(id, "walls.txt");
         CHECK(walls && walls->count == 50 && walls->at == 200);
         throws_kind([&] { ctx.take_asset_group_sliced<round5::walls>(id, "walls.txt"); }, PONKO_ERROR_NOT_FOUND);
+
+        ponko::asset_group decoded("one-shot level");
+        decoded.decoded("walls.txt", [](const std::uint8_t* data, std::size_t len) {
+            return std::string(data, data + len);
+        });
+        const auto decoded_id = ctx.start_asset_group(std::move(decoded));
+        ctx.finish_uploads();
+        CHECK(ctx.asset_group_state(decoded_id) == ponko::group_state::ready);
+        const auto value = ctx.take_asset_group_decoded<std::string>(decoded_id, "walls.txt");
+        CHECK(value && *value == level);
+        throws_kind([&] { ctx.take_asset_group_decoded<std::string>(decoded_id, "walls.txt"); },
+                    PONKO_ERROR_NOT_FOUND);
     });
 }
 

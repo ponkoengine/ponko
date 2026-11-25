@@ -11142,10 +11142,19 @@ enum PonkoStatus ponko_asset_group_add_sliced(struct PonkoAssetGroup *group,
                                               const char *path,
                                               const struct PonkoSliceLoader *loader);
 
+enum PonkoStatus ponko_asset_group_add_decoder(struct PonkoAssetGroup *group,
+                                               const char *path,
+                                               const struct PonkoSliceLoader *loader);
+
 enum PonkoStatus ponko_ctx_take_asset_group_sliced(struct PonkoCtx *ctx,
                                                    uint32_t id,
                                                    const char *path,
                                                    void **out_state);
+
+enum PonkoStatus ponko_ctx_take_asset_group_decoded(struct PonkoCtx *ctx,
+                                                    uint32_t id,
+                                                    const char *path,
+                                                    void **out_state);
 
 enum PonkoStatus ponko_window_video_mode_ex_defaults(struct PonkoWindowVideoModeEx *desc);
 

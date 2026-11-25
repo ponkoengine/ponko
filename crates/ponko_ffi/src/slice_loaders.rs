@@ -79,9 +79,9 @@ pub type PonkoSliceStepFn =
 /// ```
 pub type PonkoSliceFreeFn = Option<unsafe extern "C" fn(user: *mut c_void, state: *mut c_void)>;
 
-/// A loader that works in slices (Rust `SliceLoader`), for
-/// `ponko_asset_group_add_sliced`. A versioned descriptor: set
-/// `struct_size` and `version`. `start` and `step` are required.
+/// A versioned loader descriptor for `ponko_asset_group_add_sliced` or
+/// `ponko_asset_group_add_decoder`. Set `struct_size`, `version`, and `start`.
+/// Set `step` for a sliced loader and leave it null for a one-shot decoder.
 ///
 /// Version 1: every field below.
 #[repr(C)]
@@ -93,7 +93,7 @@ pub struct PonkoSliceLoader {
     pub version: u32,
     /// Makes the state from the file's bytes.
     pub start: PonkoSliceStartFn,
-    /// Does the next piece of the work.
+    /// Does the next piece of sliced work. Null for a one-shot decoder.
     pub step: PonkoSliceStepFn,
     /// Frees a state nobody took; null if states need no freeing.
     pub free_state: PonkoSliceFreeFn,
@@ -118,19 +118,40 @@ impl Versioned for PonkoSliceLoader {
 /// The callbacks and `user` of one added asset, shared by its loads.
 struct Callbacks {
     start: unsafe extern "C" fn(*mut c_void, *const u8, usize, *mut *mut c_void) -> u32,
-    step: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut bool) -> u32,
+    step: PonkoSliceStepFn,
     free_state: PonkoSliceFreeFn,
     user: *mut c_void,
     free_user: PonkoFreeUserFn,
 }
 
-// SAFETY: the caller of `ponko_asset_group_add_sliced` promises the
-// callbacks may run on any thread with `user` (its Ownership paragraph).
+// SAFETY: the caller registering a loader promises the callbacks may run
+// on any thread with `user` (see the registration's Ownership paragraph).
 unsafe impl Send for Callbacks {}
 // SAFETY: as above; the engine never runs two calls of one asset at once.
 unsafe impl Sync for Callbacks {}
 
 impl Callbacks {
+    fn start(self: &Arc<Self>, bytes: &[u8]) -> Result<State, Error> {
+        let mut ptr = std::ptr::null_mut();
+        // SAFETY: the caller's callback uses these bytes only during this call.
+        let status = unsafe { (self.start)(self.user, bytes.as_ptr(), bytes.len(), &mut ptr) };
+        let state = State {
+            ptr,
+            callbacks: Arc::clone(self),
+        };
+        if status != PonkoStatus::PONKO_OK as u32 {
+            return Err(if self.step.is_some() {
+                failed("start", status)
+            } else {
+                Error::new(
+                    ErrorKind::Decode,
+                    format!("the one-shot decoder returned status {status}"),
+                )
+            });
+        }
+        Ok(state)
+    }
+
     fn free(&self, state: *mut c_void) {
         if let (Some(free), false) = (self.free_state, state.is_null()) {
             // SAFETY: the caller's free function, with a state its `start` made.
@@ -167,6 +188,7 @@ impl Drop for State {
 
 /// A finished state, waiting for `ponko_ctx_take_asset_group_sliced`.
 struct SlicedValue(State);
+struct DecodedValue(State);
 
 fn failed(what: &str, status: u32) -> Error {
     Error::new(
@@ -180,8 +202,12 @@ impl SliceLoader for State {
 
     fn step(&mut self) -> Result<bool, Error> {
         let mut done = false;
+        let step = self
+            .callbacks
+            .step
+            .ok_or_else(|| Error::new(ErrorKind::Invalid, "a sliced loader needs step"))?;
         // SAFETY: the caller's step, with its own user and state.
-        let status = unsafe { (self.callbacks.step)(self.callbacks.user, self.ptr, &mut done) };
+        let status = unsafe { step(self.callbacks.user, self.ptr, &mut done) };
         if status != PonkoStatus::PONKO_OK as u32 {
             return Err(failed("step", status));
         }
@@ -221,6 +247,38 @@ pub unsafe extern "C" fn ponko_asset_group_add_sliced(
     path: *const c_char,
     loader: *const PonkoSliceLoader,
 ) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { add_loader(group, path, loader, true) }
+}
+
+/// Adds a custom, one-shot decoder (Rust `AssetGroup::with`). Set `start`
+/// and leave `step` null. Take the decoded value with
+/// `ponko_ctx_take_asset_group_decoded`.
+///
+/// Ownership: the descriptor and path are read during this call. On success
+/// the group owns `user` until it calls `free_user`, if set. It calls
+/// `free_state` for a returned state nobody takes, including failure or
+/// cancellation. Callbacks can run on any thread and must not call `ponko_ctx_*`.
+///
+/// # Safety
+/// `group` null or live; `path` NUL-terminated; `loader` a readable descriptor;
+/// its callbacks safe to call with `user` from any thread.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_asset_group_add_decoder(
+    group: *mut PonkoAssetGroup,
+    path: *const c_char,
+    loader: *const PonkoSliceLoader,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { add_loader(group, path, loader, false) }
+}
+
+unsafe fn add_loader(
+    group: *mut PonkoAssetGroup,
+    path: *const c_char,
+    loader: *const PonkoSliceLoader,
+    sliced: bool,
+) -> PonkoStatus {
     boundary(|| {
         // SAFETY: caller contract.
         let group = unsafe { group.as_mut() }.ok_or_else(|| invalid("asset group is null"))?;
@@ -241,34 +299,30 @@ pub unsafe extern "C" fn ponko_asset_group_add_sliced(
                 },
             )?
         };
-        let (Some(start), Some(step)) = (d.start, d.step) else {
-            return Err(invalid("a sliced loader needs start and step"));
-        };
+        let start = d.start.ok_or_else(|| invalid("an asset loader needs start"))?;
+        if sliced != d.step.is_some() {
+            return Err(invalid(if sliced {
+                "a sliced loader needs step"
+            } else {
+                "a one-shot decoder must leave step null"
+            }));
+        }
         let declared = group
             .0
             .take()
             .ok_or_else(|| invalid("asset group was already started"))?;
         let callbacks = Arc::new(Callbacks {
             start,
-            step,
+            step: d.step,
             free_state: d.free_state,
             user: d.user,
             free_user: d.free_user,
         });
-        group.0 = Some(declared.with_sliced(path, move |bytes| {
-            let mut state = std::ptr::null_mut();
-            // SAFETY: the caller's start, with its own user; the bytes live
-            // through the call.
-            let status = unsafe { (callbacks.start)(callbacks.user, bytes.as_ptr(), bytes.len(), &mut state) };
-            let state = State {
-                ptr: state,
-                callbacks: Arc::clone(&callbacks),
-            };
-            if status != PonkoStatus::PONKO_OK as u32 {
-                return Err(failed("start", status));
-            }
-            Ok(state)
-        }));
+        group.0 = Some(if sliced {
+            declared.with_sliced(path, move |bytes| callbacks.start(&bytes))
+        } else {
+            declared.with(path, move |bytes| callbacks.start(bytes).map(DecodedValue))
+        });
         Ok(())
     })
 }
@@ -294,23 +348,55 @@ pub unsafe extern "C" fn ponko_ctx_take_asset_group_sliced(
     out_state: *mut *mut c_void,
 ) -> PonkoStatus {
     // SAFETY: forwarded caller contract.
+    unsafe { take_value(ctx, id, path, out_state, "sliced", |SlicedValue(state)| state) }
+}
+
+/// Takes the finished one-shot decoder value. Returns `PONKO_NOT_FOUND`
+/// when the value is not ready or has already been taken.
+///
+/// Ownership: on success `out_state` receives a value the caller must free.
+/// The engine stops managing that value.
+///
+/// # Safety
+/// `ctx` null or live; `path` NUL-terminated; `out_state` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_take_asset_group_decoded(
+    ctx: *mut PonkoCtx,
+    id: u32,
+    path: *const c_char,
+    out_state: *mut *mut c_void,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { take_value(ctx, id, path, out_state, "decoded", |DecodedValue(state)| state) }
+}
+
+unsafe fn take_value<T: Send + 'static>(
+    ctx: *mut PonkoCtx,
+    id: u32,
+    path: *const c_char,
+    out_state: *mut *mut c_void,
+    kind: &str,
+    unwrap: impl FnOnce(T) -> State,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
     boundary(|| unsafe {
         let path = text(path)?;
         if out_state.is_null() {
             return Err(invalid("out_state is null"));
         }
-        let SlicedValue(mut state) = ctx_access(ctx, |c| {
+        let value = ctx_access(ctx, |c| {
             let id = group_id(c, id)?;
-            c.assets.take_group_value::<SlicedValue>(id, path).ok_or_else(|| {
+            c.assets.take_group_value::<T>(id, path).ok_or_else(|| {
                 engine_error(
                     Error::new(
                         ErrorKind::NotFound,
-                        format!("asset group {} has no finished sliced value for \"{path}\" (not loaded yet, already taken, or not added with ponko_asset_group_add_sliced)", id.index()),
+                        format!("asset group {} has no finished {kind} value for \"{path}\" (not loaded yet, already taken, or a different loader)", id.index()),
                     )
                     .with_path(path),
                 )
             })
         })?;
+        let mut state = unwrap(value);
         out(out_state, std::mem::replace(&mut state.ptr, std::ptr::null_mut()))
     })
 }

@@ -6473,6 +6473,26 @@ public:
         if (status != PONKO_OK) { delete h; detail::check(status); }
         return *this;
     }
+    /// Decodes a file in a single call, on a worker when available. The callable
+    /// receives bytes valid for that call and returns the value by type. It must
+    /// not access the game context. Take the result with ctx::take_asset_group_decoded.
+    template<class F> asset_group& decoded(const char* path, F decode) {
+        using T = std::decay_t<decltype(decode(std::declval<const std::uint8_t*>(), std::size_t{}))>;
+        auto callback = std::make_unique<F>(std::move(decode));
+        PonkoSliceLoader loader{};
+        loader.struct_size = sizeof loader;
+        loader.version = PONKO_SLICE_LOADER_VERSION;
+        loader.user = callback.get();
+        loader.start = [](void* user, const std::uint8_t* data, std::size_t len, void** out) noexcept -> std::uint32_t {
+            try { *out = new T((*static_cast<F*>(user))(data, len)); return PONKO_OK; }
+            catch (...) { return PONKO_INVALID_ARGUMENT; }
+        };
+        loader.free_state = [](void*, void* state) noexcept { delete static_cast<T*>(state); };
+        loader.free_user = [](void* user) noexcept { delete static_cast<F*>(user); };
+        detail::check(ponko_asset_group_add_decoder(raw_, path, &loader));
+        callback.release();
+        return *this;
+    }
     /// Gives up ownership of the C group (to start it). Null afterwards.
     PonkoAssetGroup* release() noexcept { return std::exchange(raw_, nullptr); }
 private:
@@ -9560,6 +9580,13 @@ public:
         void* state = nullptr;
         detail::check(ponko_ctx_take_asset_group_sliced(raw_, id, path, &state));
         return std::unique_ptr<L>(static_cast<L*>(state));
+    }
+    /// Takes a finished value registered with asset_group::decoded, once.
+    /// T is the return type of the decoder. Throws if the value is unavailable.
+    template<class T> std::unique_ptr<T> take_asset_group_decoded(std::uint32_t id, const char* path) {
+        void* state = nullptr;
+        detail::check(ponko_ctx_take_asset_group_decoded(raw_, id, path, &state));
+        return std::unique_ptr<T>(static_cast<T*>(state));
     }
     /// How long the game thread may spend on asset groups each frame, in milliseconds (default 4).
     void set_asset_group_frame_budget(float milliseconds) {

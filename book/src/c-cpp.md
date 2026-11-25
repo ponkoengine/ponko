@@ -463,6 +463,33 @@ who owns what, and what it throws. The C and C++ snippets in this guide come
 from `examples/cpp` (`guide.cpp`, `guide.c` and the examples), which the native
 check builds and runs.
 
+## Reading game state and extending loading
+
+- Camera rigs expose the active target, an entity's held-item offset, and the
+  view-model lens. These are optional in C++; pass an empty option to clear a
+  held item or lens. In C, initialize a lens with `ponko_view_model_defaults`
+  before changing its fields, and pass a null descriptor to clear it.
+- Retained UI exposes the screen's mode, the number field's range and step,
+  the list's total length, and the tooltip text. Read individual visible
+  rows with the list-item accessor after a rows-shown event.
+- Register named draw flags on the game builder. Read or change a registered
+  flag from the debug context. A flag is effective only when debug drawing
+  is enabled.
+- Use `ponko_ctx_visit_ldtk_levels` to read each level's world, position, and
+  pixel dimensions. Copy text you need after the callback returns.
+  The C++ `ponko::ldtk_levels` helper returns a vector with owning strings.
+- Register custom methods on the control endpoint with
+  `ponko_game_control_method` or C++ `game::control_method`. The callback
+  runs through the existing authenticated endpoint and receives JSON-RPC
+  parameters for the duration of the call. It can return a result or report
+  an error for that request.
+- Register a one-shot asset decoder with `ponko_asset_group_add_decoder`.
+  Supply a `PonkoSliceLoader` with `start` and a null `step`. The loader
+  receives temporary bytes and may run on a worker. A successful call to
+  `ponko_ctx_take_asset_group_decoded` transfers ownership of the result.
+  In C++, use `asset_group::decoded` and
+  `ctx::take_asset_group_decoded<T>` to take it as a unique pointer.
+
 ## Still Rust-only
 
 C and C++ resources and components are plain structs (no `std::string`
@@ -515,8 +542,6 @@ binding arrives:
 | `Assets::browser_saves`, `Assets::revert_browser_save`, `Assets::browser_saves_persistent` | [Saving in a browser](editor.md#saving-in-a-browser) | A C or C++ web game keeps no files in a browser yet |
 | `SkeletonData::add_bone`, `SpineAtlas` | [2D skeletons](skeleton2d.md#from-c-and-c) | Skeletons come from files (Ponko's format or a Spine export and its atlas) through the assets; a memory source holds files kept in memory |
 | `Plugin::dependencies` | [Plugins for other crates](plugins.md#from-c-and-c) | C plugins (`ponko_game_plugin`) have no names or dependencies and are never duplicates |
-| `Game::debug_toggle` | [Plugins for other crates](plugins.md#debug-toggles) | Draw behind a flag of the game's own; `debug.draw` turns the engine's views on and off |
-| `Game::control_method` | [Plugins for other crates](plugins.md#control-methods) | The control endpoint's built-in methods only; a native game's tools read its reflected resources |
 
 System phases, system ids, setup callbacks and plugins are not on this
 list. They have C and C++ calls, described in
