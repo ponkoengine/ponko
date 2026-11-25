@@ -2812,6 +2812,35 @@ pub unsafe extern "C" fn ponko_ctx_ui_find(
     })
 }
 
+/// Writes the node named `name` to `out_id` (Rust `Ui::try_find`): for a
+/// node that must be there, resolved once after building the screen. A
+/// name no node has is `PONKO_NOT_FOUND`, and `ponko_last_error` lists the
+/// node names.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_ui_try_find(std::ptr::null_mut(), ponko_ffi::PONKO_UI_SCREEN, c"shop.buy".as_ptr(), &mut 0) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `name` NUL-terminated; `out_id` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_ui_try_find(
+    ctx: *mut PonkoCtx,
+    target: u64,
+    name: *const c_char,
+    out_id: *mut u64,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        let name = text(name)?;
+        if out_id.is_null() {
+            return Err(invalid("output is null"));
+        }
+        with_ui(ctx, target, |ui| {
+            let id = ui.try_find(name).map_err(crate::engine_error)?;
+            out(out_id, id_to_c(Some(id)))
+        })
+    })
+}
+
 /// Reads a node's name into `buffer` the way `ponko_ctx_ui_text` reads its
 /// text; a node without a name gives an empty string.
 /// ```

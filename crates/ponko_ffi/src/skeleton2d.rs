@@ -10,7 +10,7 @@ use std::ffi::c_char;
 
 use ponko::anim::{AnimationGraphError, ParamId, StateId};
 use ponko::prelude::{Ctx, Entity, Vec2};
-use ponko::skeleton2d::Skeleton;
+use ponko::skeleton2d::{ClipId, Skeleton};
 
 use crate::ctx::{ctx_access, out, text};
 use crate::types::{PonkoColor, PonkoVec2};
@@ -56,6 +56,29 @@ unsafe fn lookup(
             }
             let s = skeleton(c, entity_bits)?;
             let index = find(s, name).ok_or_else(|| not_found(missing))?;
+            out(out_index, index)
+        })
+    })
+}
+
+/// [`lookup`] for names a typo of which should say what there is: the
+/// error of `find` (`PONKO_NOT_FOUND`, its message listing the names).
+unsafe fn resolve(
+    ctx: *mut PonkoCtx,
+    entity_bits: u64,
+    name: *const c_char,
+    out_index: *mut usize,
+    find: impl FnOnce(&Skeleton, &str) -> Result<usize, ponko::prelude::Error>,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            let name = text(name)?;
+            if out_index.is_null() {
+                return Err(invalid("output is null"));
+            }
+            let s = skeleton(c, entity_bits)?;
+            let index = find(s, name).map_err(engine_error)?;
             out(out_index, index)
         })
     })
@@ -179,7 +202,10 @@ pub unsafe extern "C" fn ponko_ctx_remove_skeleton2d(ctx: *mut PonkoCtx, entity_
 
 /// Plays clip `clip` on `entity`'s skeleton from its start, cutting off what
 /// played: looping, or once (then holding its last pose). Takes effect at
-/// its next update. `PONKO_NOT_FOUND` if there is no such clip.
+/// its next update. `PONKO_NOT_FOUND` if there is no such clip
+/// (`ponko_last_error` lists the clips). A system that plays clips every
+/// frame resolves them once with `ponko_ctx_skeleton2d_clip_index` and uses
+/// `ponko_ctx_skeleton2d_play_index`.
 /// ```
 /// assert_eq!(unsafe { ponko_ffi::ponko_ctx_skeleton2d_play(std::ptr::null_mut(), 0, std::ptr::null(), true) } as u32, 1);
 /// ```
@@ -197,18 +223,20 @@ pub unsafe extern "C" fn ponko_ctx_skeleton2d_play(
         ctx_access(ctx, |c| {
             let clip = text(clip)?;
             let s = skeleton(c, entity_bits)?;
-            let found = if looping { s.play(clip) } else { s.play_once(clip) };
-            if found {
-                Ok(())
+            let clip = s.clip_id(clip).map_err(engine_error)?;
+            if looping {
+                s.play(clip)
             } else {
-                Err(not_found("no clip by that name"))
-            }
+                s.play_once(clip)
+            };
+            Ok(())
         })
     })
 }
 
 /// Fades `entity`'s skeleton from what plays now to clip `clip` (looping)
-/// over `duration` seconds. `PONKO_NOT_FOUND` if there is no such clip.
+/// over `duration` seconds. `PONKO_NOT_FOUND` if there is no such clip
+/// (`ponko_last_error` lists the clips).
 /// ```
 /// assert_eq!(unsafe { ponko_ffi::ponko_ctx_skeleton2d_crossfade(std::ptr::null_mut(), 0, std::ptr::null(), 0.2) } as u32, 1);
 /// ```
@@ -229,10 +257,90 @@ pub unsafe extern "C" fn ponko_ctx_skeleton2d_crossfade(
                 return Err(invalid("crossfade duration must be finite and not negative"));
             }
             let s = skeleton(c, entity_bits)?;
-            if s.crossfade(clip, duration) {
+            let clip = s.clip_id(clip).map_err(engine_error)?;
+            s.crossfade(clip, duration);
+            Ok(())
+        })
+    })
+}
+
+/// The index of the clip named `name` of `entity`'s skeleton (Rust
+/// `Skeleton::clip_id`), for `ponko_ctx_skeleton2d_play_index` and
+/// `ponko_ctx_skeleton2d_crossfade_index`, which then skip the name lookup:
+/// resolve it once and keep it. `PONKO_NOT_FOUND` if there is none;
+/// `ponko_last_error` then lists the clips.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_skeleton2d_clip_index(std::ptr::null_mut(), 0, std::ptr::null(), std::ptr::null_mut()) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `name` a NUL-terminated string; `out_clip` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_skeleton2d_clip_index(
+    ctx: *mut PonkoCtx,
+    entity_bits: u64,
+    name: *const c_char,
+    out_clip: *mut usize,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { resolve(ctx, entity_bits, name, out_clip, |s, name| s.clip_id(name).map(|c| c.0)) }
+}
+
+/// `ponko_ctx_skeleton2d_play` by a clip index from
+/// `ponko_ctx_skeleton2d_clip_index`. `PONKO_NOT_FOUND` if there is no such
+/// clip.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_skeleton2d_play_index(std::ptr::null_mut(), 0, 0, true) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_skeleton2d_play_index(
+    ctx: *mut PonkoCtx,
+    entity_bits: u64,
+    clip: usize,
+    looping: bool,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            let s = skeleton(c, entity_bits)?;
+            let clip = ClipId(clip);
+            let found = if looping { s.play(clip) } else { s.play_once(clip) };
+            if found {
                 Ok(())
             } else {
-                Err(not_found("no clip by that name"))
+                Err(not_found("no clip with that index"))
+            }
+        })
+    })
+}
+
+/// `ponko_ctx_skeleton2d_crossfade` by a clip index from
+/// `ponko_ctx_skeleton2d_clip_index`. `PONKO_NOT_FOUND` if there is no such
+/// clip.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_skeleton2d_crossfade_index(std::ptr::null_mut(), 0, 0, 0.2) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_skeleton2d_crossfade_index(
+    ctx: *mut PonkoCtx,
+    entity_bits: u64,
+    clip: usize,
+    duration: f32,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            if !(duration.is_finite() && duration >= 0.0) {
+                return Err(invalid("crossfade duration must be finite and not negative"));
+            }
+            let s = skeleton(c, entity_bits)?;
+            if s.crossfade(ClipId(clip), duration) {
+                Ok(())
+            } else {
+                Err(not_found("no clip with that index"))
             }
         })
     })
@@ -327,7 +435,7 @@ pub unsafe extern "C" fn ponko_ctx_skeleton2d_normalized_time_f64(
 
 /// The index of the state machine's state named `name`, for
 /// `ponko_ctx_skeleton2d_crossfade_state`. `PONKO_NOT_FOUND` if there is
-/// none (or no state machine).
+/// none (or no state machine); `ponko_last_error` then lists the states.
 /// ```
 /// assert_eq!(unsafe { ponko_ffi::ponko_ctx_skeleton2d_state_index(std::ptr::null_mut(), 0, std::ptr::null(), std::ptr::null_mut()) } as u32, 1);
 /// ```
@@ -342,8 +450,12 @@ pub unsafe extern "C" fn ponko_ctx_skeleton2d_state_index(
 ) -> PonkoStatus {
     // SAFETY: forwarded caller contract.
     unsafe {
-        lookup(ctx, entity_bits, name, out_state, "no state by that name", |s, name| {
-            s.data().graph()?.state(name).map(|s| s.0)
+        resolve(ctx, entity_bits, name, out_state, |s, name| match s.data().graph() {
+            Some(graph) => graph.try_state(name).map(|s| s.0),
+            None => Err(ponko::prelude::Error::new(
+                ponko::prelude::ErrorKind::NotFound,
+                format!("unknown animation state {name:?} (the skeleton has no state machine)"),
+            )),
         })
     }
 }
@@ -351,7 +463,8 @@ pub unsafe extern "C" fn ponko_ctx_skeleton2d_state_index(
 // ---- parameters -----------------------------------------------------------------------
 
 /// The index of the state machine's parameter named `name`, for the
-/// `ponko_ctx_skeleton2d_set_*` calls. `PONKO_NOT_FOUND` if there is none.
+/// `ponko_ctx_skeleton2d_set_*` calls. `PONKO_NOT_FOUND` if there is none;
+/// `ponko_last_error` then lists the parameters.
 /// ```
 /// assert_eq!(unsafe { ponko_ffi::ponko_ctx_skeleton2d_parameter_index(std::ptr::null_mut(), 0, std::ptr::null(), std::ptr::null_mut()) } as u32, 1);
 /// ```
@@ -366,14 +479,9 @@ pub unsafe extern "C" fn ponko_ctx_skeleton2d_parameter_index(
 ) -> PonkoStatus {
     // SAFETY: forwarded caller contract.
     unsafe {
-        lookup(
-            ctx,
-            entity_bits,
-            name,
-            out_parameter,
-            "no parameter by that name",
-            |s, name| s.parameter_id(name).map(|p| p.0),
-        )
+        resolve(ctx, entity_bits, name, out_parameter, |s, name| {
+            s.try_parameter_id(name).map(|p| p.0)
+        })
     }
 }
 

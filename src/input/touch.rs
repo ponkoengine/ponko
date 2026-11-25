@@ -1247,9 +1247,11 @@ impl Input {
         self.refresh_actions();
     }
 
-    /// The middle of the on-screen control bound to `action`
-    /// ([`set_touch_controls`](Self::set_touch_controls)), in window pixels: where a test's finger presses it. `None` when no
-    /// control drives that action.
+    /// The middle of the on-screen control bound to `action` (an
+    /// [`ActionId`](crate::actions::ActionId) or the action's name;
+    /// [`set_touch_controls`](Self::set_touch_controls)), in window pixels:
+    /// where a test's finger presses it. `None` when no control drives that
+    /// action.
     ///
     /// ```
     /// use ponko::prelude::*;
@@ -1265,8 +1267,13 @@ impl Input {
     /// });
     /// ```
     #[must_use]
-    pub fn touch_control_center(&self, action: &str) -> Option<Vec2> {
-        self.touch.zones.iter().find(|z| z.action == action).map(|z| z.center)
+    pub fn touch_control_center(&self, action: impl crate::actions::ActionRef) -> Option<Vec2> {
+        let map = &self.actions;
+        self.touch
+            .zones
+            .iter()
+            .find(|z| action.names(map, &z.action, z.slot))
+            .map(|z| z.center)
     }
 
     /// Whether the on-screen controls are up now and take touches: there
@@ -1301,7 +1308,9 @@ impl Input {
     /// that mean something on some screens only: a pause button hidden on
     /// the title. A hidden control takes no new touches at once (a finger
     /// already on it keeps it until it lifts) and goes from the screen from
-    /// the next frame.
+    /// the next frame. `action` is an [`ActionId`](crate::actions::ActionId)
+    /// (no lookup: the form for a system that runs every frame) or the
+    /// action's name.
     ///
     /// ```
     /// use ponko::prelude::*;
@@ -1310,14 +1319,22 @@ impl Input {
     /// Game::new("touch", 960, 540).run_headless(0, |ctx| {
     ///     ctx.input.set_action("pause", Action::Button(vec![]));
     ///     ctx.input.set_touch_controls(TouchControls::new().corner_button("pause", "II").show(TouchShow::Always));
-    ///     let at = ctx.input.touch_control_center("pause").unwrap();
-    ///     ctx.input.set_touch_control_shown("pause", false);
+    ///     let pause = ctx.input.action_id("pause");
+    ///     let at = ctx.input.touch_control_center(pause).unwrap();
+    ///     ctx.input.set_touch_control_shown(pause, false);
     ///     ctx.input.feed(InputEvent::touch_start(1, at));
-    ///     assert!(!ctx.input.action_down("pause"));
+    ///     assert!(!ctx.input.action_down(pause));
+    ///     ctx.input.set_touch_control_shown("pause", true); // the name works too
     /// });
     /// ```
-    pub fn set_touch_control_shown(&mut self, action: &str, shown: bool) {
-        for zone in self.touch.zones.iter_mut().filter(|z| z.action == action) {
+    pub fn set_touch_control_shown(&mut self, action: impl crate::actions::ActionRef, shown: bool) {
+        let map = &self.actions;
+        for zone in self
+            .touch
+            .zones
+            .iter_mut()
+            .filter(|z| action.names(map, &z.action, z.slot))
+        {
             zone.shown = shown;
         }
     }

@@ -4,7 +4,83 @@
 
 use super::mixer::{ActiveSnapshot, finite};
 use super::{Audio, AudioBus, BusEffect};
+use crate::error::Error;
 use serde::{Deserialize, Serialize};
+
+/// A mixer snapshot resolved once with [`Audio::snapshot_id`]: pass it to
+/// [`start_snapshot`](Audio::start_snapshot),
+/// [`stop_snapshot`](Audio::stop_snapshot) and
+/// [`snapshot_weight`](Audio::snapshot_weight) instead of the name, and
+/// they skip the lookup. It stays valid when the snapshot is replaced, and
+/// belongs to the context it came from. [`SnapshotId::NONE`] names none
+/// (those calls do nothing and read 0).
+/// ```
+/// use ponko::prelude::*;
+/// use ponko::audio::SnapshotId;
+/// Game::new("t", 1, 1).run_headless(0, |ctx| {
+///     ctx.audio.add_snapshot("underwater", Default::default());
+///     let underwater: SnapshotId = ctx.audio.snapshot_id("underwater").unwrap();
+///     ctx.audio.start_snapshot(underwater, 0.0);
+///     assert_eq!(ctx.audio.snapshot_weight(underwater), 1.0);
+///     assert_eq!(ctx.audio.snapshot_weight(SnapshotId::NONE), 0.0);
+/// });
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SnapshotId(usize);
+impl SnapshotId {
+    /// The id of no snapshot: starting it does nothing, its weight reads 0.
+    pub const NONE: SnapshotId = SnapshotId(usize::MAX);
+    /// The id as a number, for the C ABI. Not a stable format.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn to_bits(self) -> u32 {
+        u32::try_from(self.0).unwrap_or(u32::MAX)
+    }
+    /// An id from [`to_bits`](Self::to_bits). A number that names no
+    /// snapshot of the context acts like [`NONE`](Self::NONE).
+    #[doc(hidden)]
+    #[must_use]
+    pub fn from_bits(bits: u32) -> Self {
+        if bits == u32::MAX {
+            Self::NONE
+        } else {
+            Self(bits as usize)
+        }
+    }
+}
+impl Default for SnapshotId {
+    fn default() -> Self {
+        Self::NONE
+    }
+}
+
+/// What names a mixer snapshot in [`Audio::start_snapshot`],
+/// [`stop_snapshot`](Audio::stop_snapshot) and
+/// [`snapshot_weight`](Audio::snapshot_weight): a [`SnapshotId`] (resolved
+/// once, no lookup) or a name (`&str`, `&String`, ...: a lookup per call,
+/// for tools and one-off calls).
+pub trait SnapshotRef: sealed::Sealed + Copy {
+    #[doc(hidden)]
+    fn index(self, audio: &Audio) -> Option<usize>;
+}
+mod sealed {
+    pub trait Sealed {}
+    impl Sealed for super::SnapshotId {}
+    impl<T: AsRef<str> + ?Sized> Sealed for &T {}
+}
+impl SnapshotRef for SnapshotId {
+    #[inline]
+    fn index(self, audio: &Audio) -> Option<usize> {
+        (self.0 < audio.backend.buses.snapshots.len()).then_some(self.0)
+    }
+}
+impl<T: AsRef<str> + ?Sized> SnapshotRef for &T {
+    #[inline]
+    fn index(self, audio: &Audio) -> Option<usize> {
+        let name = self.as_ref();
+        audio.backend.buses.snapshots.iter().position(|(n, _)| n == name)
+    }
+}
 
 /// A named mix to blend to: underwater, paused, a cave. It overrides some
 /// buses' volumes and effect settings; everything it leaves out keeps its
@@ -140,11 +216,45 @@ impl Audio {
         self.backend.sync_buses();
     }
 
-    /// Starts blending to snapshot `name` over `fade` seconds (0: at once),
+    /// Resolves a snapshot's name once, for the calls that take a
+    /// [`SnapshotRef`]: keep the id and pass it each frame instead of the
+    /// name. The id stays valid when the snapshot is replaced (by
+    /// [`add_snapshot`](Self::add_snapshot) or a reloaded mixer file).
+    ///
+    /// # Errors
+    /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) for a name
+    /// no snapshot has; its message lists the snapshots there are.
+    /// ```
+    /// use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     ctx.audio.add_snapshot("paused", Default::default());
+    ///     let paused = ctx.audio.snapshot_id("paused").unwrap();
+    ///     assert!(ctx.audio.start_snapshot(paused, 0.0));
+    ///     assert_eq!(ctx.audio.snapshot_weight(paused), 1.0);
+    ///     let err = ctx.audio.snapshot_id("pasued").unwrap_err();
+    ///     assert_eq!(err.to_string(), r#"ponko: unknown audio snapshot "pasued" (known: paused)"#);
+    /// });
+    /// ```
+    pub fn snapshot_id(&self, name: &str) -> Result<SnapshotId, Error> {
+        let snapshots = &self.backend.buses.snapshots;
+        match snapshots.iter().position(|(n, _)| n == name) {
+            Some(index) => Ok(SnapshotId(index)),
+            None => Err(Error::unknown_name(
+                "audio snapshot",
+                name,
+                snapshots.iter().map(|(n, _)| n.as_str()),
+            )),
+        }
+    }
+
+    /// Starts blending to a snapshot over `fade` seconds (0: at once),
     /// from wherever it is. It stays on until stopped; starting it again
     /// moves it last, so it wins over the others. Returns `false` (and
-    /// does nothing) for an unknown name. Fades run on the frame clock, so
-    /// they carry on while the game is paused.
+    /// does nothing) for an unknown name or id. Fades run on the frame
+    /// clock, so they carry on while the game is paused.
+    ///
+    /// `snapshot` is a [`SnapshotId`] from [`snapshot_id`](Self::snapshot_id)
+    /// (no lookup: the form for code that runs every frame) or the name.
     /// ```
     /// use ponko::prelude::*;
     /// Game::new("t", 1, 1).run_headless(0, |ctx| {
@@ -153,12 +263,15 @@ impl Audio {
     ///     assert!(!ctx.audio.start_snapshot("missing", 0.5));
     /// });
     /// ```
-    pub fn start_snapshot(&mut self, name: &str, fade: f32) -> bool {
-        self.fade_snapshot(name, 1.0, fade)
+    pub fn start_snapshot(&mut self, snapshot: impl SnapshotRef, fade: f32) -> bool {
+        match snapshot.index(self) {
+            Some(index) => self.fade_snapshot(index, 1.0, fade),
+            None => false,
+        }
     }
 
-    /// Blends snapshot `name` back out over `fade` seconds (0: at once).
-    /// Does nothing if it isn't on.
+    /// Blends a snapshot (its [`SnapshotId`] or name) back out over `fade`
+    /// seconds (0: at once). Does nothing if it isn't on.
     /// ```
     /// use ponko::prelude::*;
     /// Game::new("t", 1, 1).run_headless(0, |ctx| {
@@ -168,14 +281,17 @@ impl Audio {
     ///     assert_eq!(ctx.audio.snapshot_weight("paused"), 0.0);
     /// });
     /// ```
-    pub fn stop_snapshot(&mut self, name: &str, fade: f32) {
-        if self.snapshot_weight(name) > 0.0 || self.snapshot_target(name) > 0.0 {
-            self.fade_snapshot(name, 0.0, fade);
+    pub fn stop_snapshot(&mut self, snapshot: impl SnapshotRef, fade: f32) {
+        let Some(index) = snapshot.index(self) else {
+            return;
+        };
+        if self.active(index).is_some_and(|a| a.weight > 0.0 || a.target > 0.0) {
+            self.fade_snapshot(index, 0.0, fade);
         }
     }
 
-    /// How much of snapshot `name` is heard: 0 off, 1 fully on, between
-    /// while it fades.
+    /// How much of a snapshot (its [`SnapshotId`] or name) is heard: 0 off,
+    /// 1 fully on, between while it fades.
     /// ```
     /// use ponko::prelude::*;
     /// Game::new("t", 1, 1).run_headless(0, |ctx| {
@@ -185,25 +301,19 @@ impl Audio {
     /// });
     /// ```
     #[must_use]
-    pub fn snapshot_weight(&self, name: &str) -> f32 {
-        self.active(name).map_or(0.0, |a| a.weight)
+    pub fn snapshot_weight(&self, snapshot: impl SnapshotRef) -> f32 {
+        snapshot
+            .index(self)
+            .and_then(|index| self.active(index))
+            .map_or(0.0, |a| a.weight)
     }
 
-    fn snapshot_target(&self, name: &str) -> f32 {
-        self.active(name).map_or(0.0, |a| a.target)
+    fn active(&self, index: usize) -> Option<&ActiveSnapshot> {
+        self.backend.buses.active.iter().find(|a| a.index == index)
     }
 
-    fn active(&self, name: &str) -> Option<&ActiveSnapshot> {
-        let buses = &self.backend.buses;
-        let index = buses.snapshots.iter().position(|(n, _)| n == name)?;
-        buses.active.iter().find(|a| a.index == index)
-    }
-
-    fn fade_snapshot(&mut self, name: &str, target: f32, fade: f32) -> bool {
+    fn fade_snapshot(&mut self, index: usize, target: f32, fade: f32) -> bool {
         let buses = &mut self.backend.buses;
-        let Some(index) = buses.snapshots.iter().position(|(n, _)| n == name) else {
-            return false;
-        };
         let weight = buses
             .active
             .iter()
