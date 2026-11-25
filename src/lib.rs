@@ -99,6 +99,10 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 // Without a window, the code that only the window loop calls is unused.
 #![cfg_attr(not(feature = "window"), allow(dead_code))]
+// Whether the renderer's texture tables are `Send + Sync` is proven through
+// wgpu's internals, deeper than the default limit of 128 (newer compilers
+// warn about it: `recursion_depth_exceeding_limit`).
+#![recursion_limit = "256"]
 
 // `#[derive(Component)]` names the trait `::ponko::prelude::Component`, in
 // this crate too; tests also include example files as they are.

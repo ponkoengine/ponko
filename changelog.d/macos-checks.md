@@ -18,3 +18,6 @@
   the step.
 - The C++ wrapper test of allocation counts passes in a Release build: clang
   removed its `new`/`delete` pair there, so nothing was counted.
+- `ponko` builds with `-D warnings` on current nightly Rust (the sanitizer
+  job): the crate raises its recursion limit, which proving the renderer's
+  texture tables `Send + Sync` through wgpu's types exceeds.
