@@ -682,7 +682,7 @@ pub unsafe extern "C" fn ponko_net_messages_steam_join(
         #[cfg(feature = "steam")]
         {
             let client = crate::steam::client::get(app_id)?;
-            let net = NetMessages::steam_join(&client, ponko::net::steam::LobbyId::from_raw(lobby)).map_err(io)?;
+            let net = NetMessages::steam_join(&client, ponko::net::SteamLobbyId::from_raw(lobby)).map_err(io)?;
             // SAFETY: forwarded caller contract.
             unsafe { out(out_endpoint, wrap(net)) }
         }
