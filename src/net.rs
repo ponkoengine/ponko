@@ -716,7 +716,7 @@ impl Net {
             return self.lose(e);
         }
         if !s.started {
-            s.transport.flush();
+            s.transport.flush(now);
             return false;
         }
         self.state = NetState::Running;
@@ -730,7 +730,7 @@ impl Net {
             self.pending.clear();
         }
         s.flush(now, self.player, self.players);
-        s.transport.flush();
+        s.transport.flush(now);
         if let Some(quiet) = s.silent_peer(now, self.timeout) {
             return self.lose(format!("player {quiet} stopped answering"));
         }
@@ -759,8 +759,8 @@ impl Net {
             return;
         }
         let check = Check::of(world, tick);
+        // Queued on a relay transport until the next tick's poll.
         s.send_check(&check);
-        s.transport.flush();
         if self.desync.is_none() {
             self.desync = s.compare_stored(&check);
             if let Some(d) = &self.desync {
@@ -824,11 +824,11 @@ impl Net {
                 let addr = s.peers[i].addr;
                 s.send_simple(addr, BYE);
             }
-            s.transport.flush();
+            s.transport.flush(now);
             return true;
         }
         s.flush(now, self.player, self.players);
-        s.transport.flush();
+        s.transport.flush(now);
         false
     }
 }
@@ -1406,9 +1406,12 @@ trait Transport: Send {
     fn web_addr(&self) -> Option<SocketAddr> {
         None
     }
-    /// After the session's sends of one poll: for transports that queue
-    /// packets for a carrier of their own (the lobby relay).
-    fn flush(&mut self) {}
+    /// After the session's sends of one poll, at the session's `now`: for
+    /// transports that queue packets for a carrier of their own (the lobby
+    /// relay), which follows the session's clock.
+    fn flush(&mut self, now: Instant) {
+        let _ = now;
+    }
     /// The lobby connection under a relay session.
     #[cfg(feature = "lobby")]
     fn lobby_mut(&mut self) -> Option<&mut lobby::LobbyClient> {

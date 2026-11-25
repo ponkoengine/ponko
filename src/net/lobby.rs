@@ -38,7 +38,7 @@
 #![deny(missing_docs)]
 
 pub mod protocol;
-mod relay;
+pub(in crate::net) mod relay;
 
 use std::collections::VecDeque;
 use std::io;

@@ -24,10 +24,15 @@ use std::time::Duration;
 use super::super::messages::PacketTransport;
 use super::super::{Lane, MAX_PLAYERS, Net, NetMessages, Role, Session, Transport};
 use super::{LobbyClient, MemberId};
+use crate::perf::Instant;
 
 /// Every session datagram starts with these bytes ("ponko relay session",
 /// version 1), so a game's own relayed bytes never reach a session.
 pub(super) const MAGIC: &[u8; 4] = b"PRS\x01";
+/// The largest relay payload a session sends: its largest datagram (the
+/// message protocol's 1500 bytes, more than lockstep's 1400) behind
+/// [`MAGIC`]. The server's `max_relay_bytes` must allow it (4096 by default).
+pub(super) const LARGEST: usize = MAGIC.len() + 1500;
 /// Session datagrams waiting for the session at most; more are dropped (the
 /// session protocols resend what matters).
 pub(super) const INBOX: usize = 4096;
@@ -68,13 +73,24 @@ fn member_of(addr: SocketAddr) -> Option<MemberId> {
     Some(MemberId::from_bits(u32::from(s[6]) << 16 | u32::from(s[7])))
 }
 
-/// How the transport reads the lobby's clock.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Clock {
-    /// Lockstep: the lobby polls on the wall clock.
-    Wall,
-    /// Messages: the endpoint's protocol time, from `advance`.
-    Protocol,
+/// A reading of the session's clock.
+#[derive(Clone, Copy)]
+enum SessionClock {
+    /// Lockstep's `now`.
+    Wall(Instant),
+    /// A message endpoint's protocol time.
+    Protocol(Duration),
+}
+
+impl SessionClock {
+    /// The time from `then` to this reading; zero across kinds or backwards.
+    fn since(self, then: Self) -> Duration {
+        match (self, then) {
+            (Self::Wall(now), Self::Wall(then)) => now.saturating_duration_since(then),
+            (Self::Protocol(now), Self::Protocol(then)) => now.saturating_sub(then),
+            _ => Duration::ZERO,
+        }
+    }
 }
 
 /// A session's packets through the lobby relay; owns the lobby client.
@@ -83,11 +99,13 @@ pub(in crate::net) struct RelayTransport {
     me: MemberId,
     /// A client's host; `None` on a host.
     host: Option<MemberId>,
-    clock: Clock,
     /// Lockstep: the lobby was polled for the current drain of `recv`.
     polled: bool,
-    /// Messages: the protocol time of the last `advance`.
-    now: Option<Duration>,
+    /// The session's clock at the last pump that advanced the lobby:
+    /// lockstep's `now` (from `flush`) or the endpoint's protocol time
+    /// (from `advance`). The lobby follows it, so a session on a clock of
+    /// its own (a scripted test) moves the lobby's timers with it.
+    clock: Option<SessionClock>,
     /// A lobby failure (`poll`'s error, a lost connection, leaving the
     /// room), reported to the session once.
     error: Option<String>,
@@ -98,13 +116,23 @@ pub(in crate::net) struct RelayTransport {
 
 impl RelayTransport {
     /// A transport over `lobby` (in a room), hosting or joining the room's host.
-    fn new(mut lobby: LobbyClient, hosting: bool, clock: Clock) -> io::Result<Self> {
+    fn new(mut lobby: LobbyClient, hosting: bool) -> io::Result<Self> {
         let (Some(me), Some(room)) = (lobby.me(), lobby.room()) else {
             return Err(io::Error::new(
                 io::ErrorKind::NotConnected,
                 "a relay session needs a lobby client in a room: wait for LobbyEvent::Joined",
             ));
         };
+        let limit = lobby.server_limits().max_relay_bytes as usize;
+        if limit < LARGEST {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "the lobby server relays at most {limit} bytes at once; a relay session needs {LARGEST}: \
+                     raise the server's max_relay_bytes"
+                ),
+            ));
+        }
         let host = if hosting {
             None
         } else if room.host == me {
@@ -120,9 +148,8 @@ impl RelayTransport {
             lobby,
             me,
             host,
-            clock,
             polled: false,
-            now: None,
+            clock: None,
             error: None,
             told: false,
             scratch: Vec::new(),
@@ -136,11 +163,7 @@ impl RelayTransport {
     /// Moves the lobby's packets: the relay frames the session queued go
     /// out, relayed ones come in.
     fn pump(&mut self, elapsed: Duration) {
-        let result = match self.clock {
-            Clock::Wall => self.lobby.poll(),
-            Clock::Protocol => self.lobby.poll_elapsed(elapsed),
-        };
-        if let Err(e) = result
+        if let Err(e) = self.lobby.poll_elapsed(elapsed)
             && e.kind() != io::ErrorKind::WouldBlock
         {
             self.error
@@ -181,6 +204,13 @@ impl RelayTransport {
             Err(e) if matches!(e.kind(), io::ErrorKind::NotConnected | io::ErrorKind::WouldBlock) => Ok(false),
             Err(e) => Err(e),
         }
+    }
+
+    /// Pumps with the time that passed since the last clock reading.
+    fn pump_at(&mut self, now: SessionClock) {
+        let elapsed = self.clock.map_or(Duration::ZERO, |then| now.since(then));
+        self.clock = Some(now);
+        self.pump(elapsed);
     }
 
     fn take_error(&mut self) -> Option<String> {
@@ -230,8 +260,8 @@ impl Transport for RelayTransport {
         self.take_error()
     }
 
-    fn flush(&mut self) {
-        self.pump(Duration::ZERO);
+    fn flush(&mut self, now: Instant) {
+        self.pump_at(SessionClock::Wall(now));
     }
 
     fn lobby_mut(&mut self) -> Option<&mut LobbyClient> {
@@ -253,9 +283,7 @@ impl PacketTransport for RelayTransport {
     }
 
     fn advance(&mut self, now: Duration) {
-        let elapsed = self.now.map_or(Duration::ZERO, |then| now.saturating_sub(then));
-        self.now = Some(now);
-        self.pump(elapsed);
+        self.pump_at(SessionClock::Protocol(now));
     }
 
     fn flush(&mut self) {
@@ -292,7 +320,8 @@ impl Net {
     /// # Errors
     ///
     /// `InvalidInput` unless `players` is 2 to 8; `NotConnected` if the
-    /// lobby client isn't in a room.
+    /// lobby client isn't in a room; `InvalidInput` if the server relays
+    /// less than 1504 bytes at once (its `max_relay_bytes`).
     pub fn host_relay(lobby: LobbyClient, players: usize) -> io::Result<Net> {
         if !(2..=MAX_PLAYERS).contains(&players) {
             return Err(io::Error::new(
@@ -300,7 +329,7 @@ impl Net {
                 "Net: expected 2 to 8 players; pass a player count in that range",
             ));
         }
-        let transport = RelayTransport::new(lobby, true, Clock::Wall)?;
+        let transport = RelayTransport::new(lobby, true)?;
         Ok(Self::with(Session::new(Box::new(transport), Role::Host), 0, players))
     }
 
@@ -320,9 +349,10 @@ impl Net {
     /// # Errors
     ///
     /// `NotConnected` if the lobby client isn't in a room; `InvalidInput`
-    /// if it hosts the room (host the session instead).
+    /// if it hosts the room (host the session instead) or the server
+    /// relays less than 1504 bytes at once.
     pub fn join_relay(lobby: LobbyClient) -> io::Result<Net> {
-        let transport = RelayTransport::new(lobby, false, Clock::Wall)?;
+        let transport = RelayTransport::new(lobby, false)?;
         let host = transport.host_addr().expect("a joining relay transport has a host");
         Ok(Self::with(Session::new(Box::new(transport), Role::Client(host)), 0, 0))
     }
@@ -363,7 +393,8 @@ impl NetMessages {
     /// # Errors
     ///
     /// `InvalidInput` for `max_clients` outside 1..=1024; `NotConnected`
-    /// if the lobby client isn't in a room.
+    /// if the lobby client isn't in a room; `InvalidInput` if the server
+    /// relays less than 1504 bytes at once (its `max_relay_bytes`).
     pub fn host_relay(lobby: LobbyClient, max_clients: usize) -> io::Result<Self> {
         if !(1..=1024).contains(&max_clients) {
             return Err(io::Error::new(
@@ -371,7 +402,7 @@ impl NetMessages {
                 "max_clients must be 1..=1024",
             ));
         }
-        let transport = RelayTransport::new(lobby, true, Clock::Protocol)?;
+        let transport = RelayTransport::new(lobby, true)?;
         Ok(Self::transported(Box::new(transport), None, max_clients))
     }
 
@@ -390,9 +421,10 @@ impl NetMessages {
     /// # Errors
     ///
     /// `NotConnected` if the lobby client isn't in a room; `InvalidInput`
-    /// if it hosts the room (host the endpoint instead).
+    /// if it hosts the room (host the endpoint instead) or the server
+    /// relays less than 1504 bytes at once.
     pub fn join_relay(lobby: LobbyClient) -> io::Result<Self> {
-        let transport = RelayTransport::new(lobby, false, Clock::Protocol)?;
+        let transport = RelayTransport::new(lobby, false)?;
         let host = transport.host_addr();
         Ok(Self::transported(Box::new(transport), host, 1))
     }
@@ -410,41 +442,29 @@ impl NetMessages {
     }
 }
 
+/// A relay server in memory for the tests here and the transport
+/// conformance suites (`net/lockstep_conformance.rs`,
+/// `net/message_conformance.rs`), which run their scripted latency and loss
+/// tests through it.
 #[cfg(test)]
-mod tests {
+pub(in crate::net) mod testing {
     use std::collections::BTreeMap;
-    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     use super::super::protocol::{self, Frame, Reply, Request, ServerLimits};
-    use super::super::{LobbyEvent, RoomInfo};
-    use super::*;
-    use crate::net::replication_conformance::{STEP, Session, declarations, exercise};
-    use crate::net::{LoopbackLink, MessageEvent, PeerId};
-
-    #[test]
-    fn member_addresses_round_trip_and_stay_apart_from_other_transports() {
-        for bits in [1, 2, 0xffff, 0x1_0000, u32::MAX] {
-            let member = MemberId::from_bits(bits);
-            assert_eq!(member_of(member_addr(member)), Some(member));
-        }
-        assert_eq!(member_of(super::super::super::websocket::HOST), None);
-        assert_eq!(member_of("127.0.0.1:9".parse().unwrap()), None);
-    }
-
-    #[test]
-    fn only_prefixed_payloads_are_session_packets() {
-        assert_eq!(session_packet(b"PRS\x01abc"), Some(&b"abc"[..]));
-        assert_eq!(session_packet(b"PRS\x02abc"), None);
-        assert_eq!(session_packet(b"position 3 4"), None);
-    }
+    use super::super::{LobbyClient, MemberId, RoomInfo};
+    use crate::net::scripted::{Shared, addr, port};
+    use crate::net::{Lane, MessageEvent, NetMessages, PeerId};
 
     /// A lobby server in memory that speaks the real protocol, as much of
     /// it as a relay session needs: it welcomes every client, puts them all
     /// in one room once `size` are connected (the first one hosts), and
     /// forwards relay frames on the lane they came on. The `ponko_lobby`
     /// crate's tests run the sessions through the real server.
-    struct RelayServer {
-        net: NetMessages,
+    pub(in crate::net) struct RelayServer {
+        pub(in crate::net) net: NetMessages,
+        /// The relay limit the server announces (4096, as `ponko-lobby`'s).
+        pub(in crate::net) max_relay_bytes: u32,
         size: usize,
         members: BTreeMap<PeerId, MemberId>,
         order: Vec<MemberId>,
@@ -452,7 +472,19 @@ mod tests {
     }
 
     impl RelayServer {
-        fn poll(&mut self, elapsed: Duration) {
+        /// A server on `net` that puts the first `size` clients in one room.
+        pub(in crate::net) fn new(net: NetMessages, size: usize) -> Self {
+            Self {
+                net,
+                max_relay_bytes: 4096,
+                size,
+                members: BTreeMap::new(),
+                order: Vec::new(),
+                scratch: Vec::new(),
+            }
+        }
+
+        pub(in crate::net) fn poll(&mut self, elapsed: Duration) {
             let _ = self.net.poll_elapsed(elapsed);
             while let Some(event) = self.net.next_event() {
                 match event {
@@ -460,7 +492,7 @@ mod tests {
                         let member = MemberId::from_bits(u32::try_from(peer.to_bits()).unwrap());
                         self.members.insert(peer, member);
                         self.order.push(member);
-                        let limits = ServerLimits::new(4096, 16, 256, 60_000);
+                        let limits = ServerLimits::new(self.max_relay_bytes, 16, 256, 60_000);
                         let welcome = Reply::Welcome {
                             version: protocol::VERSION,
                             member,
@@ -505,18 +537,68 @@ mod tests {
         }
     }
 
+    /// A relay server at the scripted `addr(0)` and `clients` lobby
+    /// clients at `addr(1)`, ... in its one room (the first one hosts),
+    /// stepping `net` by one tick and `step` of time until they are in.
+    pub(in crate::net) fn scripted_room(
+        net: &Shared,
+        clients: usize,
+        step: Duration,
+    ) -> (RelayServer, Vec<LobbyClient>) {
+        let mut server = RelayServer::new(NetMessages::transported(port(net, 0), None, clients), clients);
+        let mut lobbies: Vec<LobbyClient> = (1..=clients)
+            .map(|i| LobbyClient::new(NetMessages::transported(port(net, i), Some(addr(0)), 1)))
+            .collect();
+        for _ in 0..2000 {
+            net.lock().unwrap().tick += 1;
+            server.poll(step);
+            for lobby in &mut lobbies {
+                lobby.poll_elapsed(step).unwrap();
+            }
+            if lobbies.iter().all(|l| l.room().is_some()) {
+                lobbies.sort_by_key(|l| !l.is_host());
+                for lobby in &mut lobbies {
+                    while lobby.next_event().is_some() {}
+                }
+                return (server, lobbies);
+            }
+        }
+        panic!("the clients never got into the room");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use super::super::LobbyEvent;
+    use super::testing::RelayServer;
+    use super::*;
+    use crate::net::replication_conformance::{STEP, Session, declarations, exercise};
+    use crate::net::{LoopbackLink, MessageEvent, PeerId};
+
+    #[test]
+    fn member_addresses_round_trip_and_stay_apart_from_other_transports() {
+        for bits in [1, 2, 0xffff, 0x1_0000, u32::MAX] {
+            let member = MemberId::from_bits(bits);
+            assert_eq!(member_of(member_addr(member)), Some(member));
+        }
+        assert_eq!(member_of(super::super::super::websocket::HOST), None);
+        assert_eq!(member_of("127.0.0.1:9".parse().unwrap()), None);
+    }
+
+    #[test]
+    fn only_prefixed_payloads_are_session_packets() {
+        assert_eq!(session_packet(b"PRS\x01abc"), Some(&b"abc"[..]));
+        assert_eq!(session_packet(b"PRS\x02abc"), None);
+        assert_eq!(session_packet(b"position 3 4"), None);
+    }
+
     /// The relay server and `clients` lobby clients in its one room, over
     /// in-memory links shaped by `link`, the room's host first.
     fn room(clients: usize, link: LoopbackLink) -> (Arc<Mutex<RelayServer>>, Vec<LobbyClient>) {
         let mut endpoints = NetMessages::loopback_link(clients + 1, link);
-        let server = RelayServer {
-            net: endpoints.remove(0),
-            size: clients,
-            members: BTreeMap::new(),
-            order: Vec::new(),
-            scratch: Vec::new(),
-        };
-        let server = Arc::new(Mutex::new(server));
+        let server = Arc::new(Mutex::new(RelayServer::new(endpoints.remove(0), clients)));
         let mut lobbies: Vec<LobbyClient> = endpoints.into_iter().map(LobbyClient::new).collect();
         for _ in 0..600 {
             server.lock().unwrap().poll(STEP);
@@ -643,6 +725,28 @@ mod tests {
         let error = error.expect("poll reports the lost lobby");
         assert_eq!(error.kind(), io::ErrorKind::ConnectionAborted);
         assert!(error.to_string().contains("lobby"), "{error}");
+    }
+
+    #[test]
+    fn a_server_that_relays_too_little_for_a_session_is_refused() {
+        let mut endpoints = NetMessages::loopback(3);
+        let mut server = RelayServer::new(endpoints.remove(0), 2);
+        server.max_relay_bytes = 1000;
+        let mut lobbies: Vec<LobbyClient> = endpoints.into_iter().map(LobbyClient::new).collect();
+        for _ in 0..100 {
+            server.poll(STEP);
+            for lobby in &mut lobbies {
+                lobby.poll_elapsed(STEP).unwrap();
+            }
+        }
+        lobbies.sort_by_key(|l| !l.is_host());
+        let guest = lobbies.pop().unwrap();
+        let error = NetMessages::host_relay(lobbies.pop().unwrap(), 1)
+            .err()
+            .expect("refused");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(error.to_string().contains("max_relay_bytes"), "{error}");
+        assert!(Net::join_relay(guest).is_err());
     }
 
     #[test]
