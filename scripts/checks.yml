@@ -99,6 +99,13 @@ jobs:
         run: python3 scripts/check-cpp-api.py
       - name: Check runner self-tests
         run: python3 scripts/run-checks.py --selftest
+      # The experimental items outside the versions' promise
+      # (scripts/experimental-api.txt) match the guide's levels, api/ and the
+      # Unstable notes of the C header and the C++ wrapper.
+      - name: Experimental items
+        run: |
+          python3 scripts/experimental-api.py check
+          python3 scripts/experimental-api.py selftest
       - name: Workspace Rust formatting
         run: cargo fmt --all --check
       # The Bevy comparison scenes are a crate of their own, outside the

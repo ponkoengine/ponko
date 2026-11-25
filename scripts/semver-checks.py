@@ -20,6 +20,13 @@ the last release on crates.io. What a break means depends on the branch:
              break: the label promises a migration note, and the tool does
              not see every break (behaviour, defaults).
 
+Experimental items (scripts/experimental-api.txt) are outside the promise: a
+crate whose every `Failed in:` line names a listed item (or a listed cargo
+feature) counts as `experimental`, not as a break, and the report says so.
+One failure on a covered item makes it a break again, reported with only the
+covered failures. A name the tool prints that a covered item shares never
+excuses a failure (scripts/experimental-api.py, `short_names`).
+
 Which packages and features are checked comes from Cargo: every package
 that can be published (not `publish = false`), with the features it builds on
 docs.rs (`[package.metadata.docs.rs]`), so a new crate is covered without
@@ -34,6 +41,7 @@ label; without it a break this change adds fails, and with it a
 `### Breaking changes` fragment is required. Nothing is read from a server.
 """
 from fnmatch import fnmatch
+import importlib.util
 import json
 from pathlib import Path
 import re
@@ -136,6 +144,21 @@ def label_verdict(mode, labeled, fragment):
     return True, []
 
 
+def outcome(returncode, output, classify):
+    """'ok', 'break', 'experimental' or 'error' for one run of the tool.
+
+    classify(output) returns (covered failures, experimental failures). A
+    break with no covered failure, and at least one experimental one, is
+    `experimental`: allowed in any release.
+    """
+    if returncode == 0:
+        return 'ok'
+    if returncode != BREAK_EXIT:
+        return 'error'
+    covered, experimental = classify(output)
+    return 'experimental' if experimental and not covered else 'break'
+
+
 # Side effects: cargo, git and gh.
 
 def run(cmd, **kw):
@@ -154,22 +177,48 @@ def group(title):
     print(f'--- {title}', flush=True)
 
 
+def experimental_api():
+    spec = importlib.util.spec_from_file_location('experimental_api', ROOT / 'scripts' / 'experimental-api.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def experimental_classifier():
+    """classify(output) for the listed experimental items, from the list and api/."""
+    experimental = experimental_api()
+    sections = experimental.load_list()
+    files = experimental.snapshot_files()
+    unstable = [l for sets in files.values() for l in sets.get('experimental', [])]
+    covered = [l for sets in files.values() for name, lines in sets.items()
+               if name != 'experimental' for l in lines]
+    names = experimental.short_names(experimental.item_paths(sections), unstable, covered)
+    feature_names = experimental.features(sections)
+    return lambda output: experimental.classify(output, names, feature_names)
+
+
+CLASSIFY = None
+
+
 def check(package, release_type, baseline, label):
-    """Run the tool on one package: 'ok', 'break', 'unpublished' or 'error'."""
+    """Run the tool on one package: 'ok', 'break', 'experimental', 'unpublished' or 'error'."""
+    global CLASSIFY
+    if CLASSIFY is None:
+        CLASSIFY = experimental_classifier()
     cmd = ['cargo', 'semver-checks', 'check-release', '-p', package['name'],
            *feature_args(package), '--release-type', release_type, *baseline]
     group(f'{label}: {package["name"]} ({" ".join(cmd[5:])})')
     done = run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     print(done.stdout, end='')
     package['output'] = done.stdout
-    if done.returncode == 0:
-        return 'ok'
-    if done.returncode == BREAK_EXIT:
-        return 'break'
-    if 'not found in registry' in done.stdout:
+    result = outcome(done.returncode, done.stdout, CLASSIFY)
+    if result == 'experimental':
+        print(f'{package["name"]}: every failure is an experimental item (scripts/experimental-api.txt): '
+              'not a break.')
+    if result == 'error' and 'not found in registry' in done.stdout:
         print(f'{package["name"]} is not on crates.io yet: nothing to compare with.')
         return 'unpublished'
-    return 'error'
+    return result
 
 
 def current_branch():
@@ -195,6 +244,10 @@ def breaking_fragment(base):
 
 def failures(package):
     """The lint sections of a failed run, for the report."""
+    if CLASSIFY is not None:
+        covered, _ = CLASSIFY(package.get('output', ''))
+        if covered:
+            return '\n'.join(f'{lint}: {line}' for lint, line in covered)
     match = re.search(r'--- failure.*?(?=\n\s*Summary)', package.get('output', ''), re.S)
     return match.group(0).strip() if match else package.get('output', '').strip()[-2000:]
 
@@ -303,6 +356,20 @@ def selftest():
     assert label_verdict('main', False, True)[0] and 'label' in ' '.join(label_verdict('main', False, True)[1])
     assert not label_verdict('release', True, True)[0], 'no break goes into a patch release'
     assert label_verdict('release', False, False) == (True, [])
+
+    # Experimental items: a break of listed items only is not a break.
+    only_experimental = lambda output: ([], [('x', 'HdrOutput')])
+    mixed = lambda output: ([('y', 'Game::new')], [('x', 'HdrOutput')])
+    assert outcome(0, '', mixed) == 'ok'
+    assert outcome(BREAK_EXIT, '', only_experimental) == 'experimental'
+    assert outcome(BREAK_EXIT, '', mixed) == 'break'
+    assert outcome(BREAK_EXIT, '', lambda output: ([], [])) == 'break', 'nothing parsed: still a break'
+    assert outcome(1, '', only_experimental) == 'error'
+    # The classifier reads the real list and api/.
+    classify = experimental_classifier()
+    sample = 'Failed in:\n  struct ponko::render::HdrOutput, previously in file src/x.rs:1\n'
+    assert classify(sample)[1] and not classify(sample)[0], 'HdrOutput is on the list'
+    assert classify(sample.replace('HdrOutput', 'Camera'))[0], 'a covered type is a break'
     print('semver-checks.py: self-test passed')
 
 

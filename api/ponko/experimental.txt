@@ -1,0 +1,128 @@
+#[non_exhaustive] #[repr(u32)] pub enum ponko::render::HdrEncoding
+#[non_exhaustive] #[repr(u32)] pub enum ponko::render::HdrOffReason
+#[non_exhaustive] pub struct ponko::render::HdrMetadata
+#[non_exhaustive] pub struct ponko::render::HdrOutput
+#[non_exhaustive] pub struct ponko::render::HdrStatus
+impl core::clone::Clone for ponko::net::rtc::RtcConfig
+impl core::clone::Clone for ponko::net::rtc::Signaling
+impl core::clone::Clone for ponko::render::HdrEncoding
+impl core::clone::Clone for ponko::render::HdrMetadata
+impl core::clone::Clone for ponko::render::HdrOffReason
+impl core::clone::Clone for ponko::render::HdrOutput
+impl core::clone::Clone for ponko::render::HdrStatus
+impl core::cmp::Eq for ponko::net::rtc::RtcConfig
+impl core::cmp::Eq for ponko::render::HdrEncoding
+impl core::cmp::Eq for ponko::render::HdrOffReason
+impl core::cmp::PartialEq for ponko::net::rtc::RtcConfig
+impl core::cmp::PartialEq for ponko::render::HdrEncoding
+impl core::cmp::PartialEq for ponko::render::HdrMetadata
+impl core::cmp::PartialEq for ponko::render::HdrOffReason
+impl core::cmp::PartialEq for ponko::render::HdrOutput
+impl core::cmp::PartialEq for ponko::render::HdrStatus
+impl core::default::Default for ponko::net::rtc::RtcConfig
+impl core::default::Default for ponko::net::rtc::Signaling
+impl core::default::Default for ponko::render::HdrEncoding
+impl core::default::Default for ponko::render::HdrOutput
+impl core::fmt::Debug for ponko::net::rtc::RtcConfig
+impl core::fmt::Debug for ponko::net::rtc::Signaling
+impl core::fmt::Debug for ponko::render::HdrEncoding
+impl core::fmt::Debug for ponko::render::HdrMetadata
+impl core::fmt::Debug for ponko::render::HdrOffReason
+impl core::fmt::Debug for ponko::render::HdrOutput
+impl core::fmt::Debug for ponko::render::HdrStatus
+impl core::fmt::Display for ponko::render::HdrOffReason
+impl core::marker::Copy for ponko::render::HdrEncoding
+impl core::marker::Copy for ponko::render::HdrMetadata
+impl core::marker::Copy for ponko::render::HdrOffReason
+impl core::marker::Copy for ponko::render::HdrOutput
+impl core::marker::Copy for ponko::render::HdrStatus
+impl core::marker::StructuralPartialEq for ponko::net::rtc::RtcConfig
+impl core::marker::StructuralPartialEq for ponko::render::HdrEncoding
+impl core::marker::StructuralPartialEq for ponko::render::HdrMetadata
+impl core::marker::StructuralPartialEq for ponko::render::HdrOffReason
+impl core::marker::StructuralPartialEq for ponko::render::HdrOutput
+impl core::marker::StructuralPartialEq for ponko::render::HdrStatus
+impl ponko::net::rtc::RtcConfig
+impl ponko::net::rtc::Signaling
+impl ponko::render::HdrMetadata
+impl ponko::render::HdrOffReason
+impl ponko::render::HdrOutput
+pub fn ponko::game::ConfiguredGame::hdr_output(self, ponko::render::HdrOutput) -> Self
+pub fn ponko::game::ConfiguredGame::web_threads(self, usize) -> Self
+pub fn ponko::game::Game::hdr_output(self, ponko::render::HdrOutput) -> Self
+pub fn ponko::game::Game::web_threads(self, usize) -> Self
+pub fn ponko::gfx::Graphics::hdr_output(&self) -> ponko::render::HdrOutput
+pub fn ponko::gfx::Graphics::hdr_status(&self) -> ponko::render::HdrStatus
+pub fn ponko::gfx::Graphics::set_hdr_output(&mut self, ponko::render::HdrOutput)
+pub fn ponko::net::NetMessages::host_rtc(ponko::net::rtc::Signaling, ponko::net::rtc::RtcConfig, usize) -> core::io::error::Result<Self>
+pub fn ponko::net::NetMessages::join_rtc(ponko::net::rtc::Signaling, u64, ponko::net::rtc::RtcConfig) -> core::io::error::Result<Self>
+pub fn ponko::net::NetMessages::rtc_signal_peer(&self, ponko::net::PeerId) -> core::option::Option<u64>
+pub fn ponko::net::lobby::LobbyClient::signaling(&mut self) -> ponko::net::rtc::Signaling
+pub fn ponko::net::rtc::RtcConfig::bind(self, core::net::socket_addr::SocketAddr) -> Self
+pub fn ponko::net::rtc::RtcConfig::clone(&self) -> Self
+pub fn ponko::net::rtc::RtcConfig::default() -> Self
+pub fn ponko::net::rtc::RtcConfig::eq(&self, &Self) -> bool
+pub fn ponko::net::rtc::RtcConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn ponko::net::rtc::RtcConfig::host_address(self, core::net::ip_addr::IpAddr) -> Self
+pub fn ponko::net::rtc::RtcConfig::new() -> Self
+pub fn ponko::net::rtc::RtcConfig::stun(self, &str) -> Self
+pub fn ponko::net::rtc::RtcConfig::stun_urls(&self) -> impl core::iter::traits::iterator::Iterator<Item = &str>
+pub fn ponko::net::rtc::RtcConfig::turn(self, &str, &str, &str) -> Self
+pub fn ponko::net::rtc::Signaling::clone(&self) -> Self
+pub fn ponko::net::rtc::Signaling::default() -> Self
+pub fn ponko::net::rtc::Signaling::deliver(&self, u64, &[u8]) -> bool
+pub fn ponko::net::rtc::Signaling::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn ponko::net::rtc::Signaling::is_signal(&[u8]) -> bool
+pub fn ponko::net::rtc::Signaling::new() -> Self
+pub fn ponko::net::rtc::Signaling::next_outgoing(&self) -> core::option::Option<(u64, alloc::vec::Vec<u8>)>
+pub fn ponko::render::HdrEncoding::clone(&self) -> Self
+pub fn ponko::render::HdrEncoding::default() -> Self
+pub fn ponko::render::HdrEncoding::eq(&self, &Self) -> bool
+pub fn ponko::render::HdrEncoding::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn ponko::render::HdrMetadata::clone(&self) -> Self
+pub fn ponko::render::HdrMetadata::eq(&self, &Self) -> bool
+pub fn ponko::render::HdrMetadata::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn ponko::render::HdrMetadata::for_output(&ponko::render::HdrOutput, f32) -> Self
+pub fn ponko::render::HdrOffReason::clone(&self) -> Self
+pub fn ponko::render::HdrOffReason::describe(self) -> &'static str
+pub fn ponko::render::HdrOffReason::eq(&self, &Self) -> bool
+pub fn ponko::render::HdrOffReason::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn ponko::render::HdrOutput::clone(&self) -> Self
+pub fn ponko::render::HdrOutput::default() -> Self
+pub fn ponko::render::HdrOutput::eq(&self, &Self) -> bool
+pub fn ponko::render::HdrOutput::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn ponko::render::HdrOutput::on() -> Self
+pub fn ponko::render::HdrOutput::paper_white(&self) -> f32
+pub fn ponko::render::HdrStatus::clone(&self) -> Self
+pub fn ponko::render::HdrStatus::eq(&self, &Self) -> bool
+pub fn ponko::render::HdrStatus::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub mod ponko::net::rtc
+pub ponko::render::HdrEncoding::ExtendedSrgb = 2
+pub ponko::render::HdrEncoding::Pq = 3
+pub ponko::render::HdrEncoding::ScRgb = 1
+pub ponko::render::HdrEncoding::Sdr = 0
+pub ponko::render::HdrMetadata::max_content_light_nits: f32
+pub ponko::render::HdrMetadata::max_frame_average_nits: f32
+pub ponko::render::HdrMetadata::max_mastering_nits: f32
+pub ponko::render::HdrMetadata::min_mastering_nits: f32
+pub ponko::render::HdrOffReason::Headless = 1
+pub ponko::render::HdrOffReason::NotRequested = 2
+pub ponko::render::HdrOffReason::Off = 3
+pub ponko::render::HdrOffReason::Unsupported = 4
+pub ponko::render::HdrOutput::enabled: bool
+pub ponko::render::HdrOutput::max_content_light_nits: f32
+pub ponko::render::HdrOutput::max_frame_average_nits: f32
+pub ponko::render::HdrOutput::paper_white_nits: f32
+pub ponko::render::HdrOutput::peak_nits: f32
+pub ponko::render::HdrStatus::active: bool
+pub ponko::render::HdrStatus::available: bool
+pub ponko::render::HdrStatus::display_headroom: core::option::Option<f32>
+pub ponko::render::HdrStatus::display_peak_nits: core::option::Option<f32>
+pub ponko::render::HdrStatus::encoding: ponko::render::HdrEncoding
+pub ponko::render::HdrStatus::headroom: f32
+pub ponko::render::HdrStatus::metadata: core::option::Option<ponko::render::HdrMetadata>
+pub ponko::render::HdrStatus::paper_white_nits: f32
+pub ponko::render::HdrStatus::peak_nits: f32
+pub ponko::render::HdrStatus::reason: core::option::Option<ponko::render::HdrOffReason>
+pub struct ponko::net::rtc::RtcConfig
+pub struct ponko::net::rtc::Signaling(_)

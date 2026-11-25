@@ -14,7 +14,7 @@ are written in `STABILITY.md`; here they are again:
 |---|---|---|
 | **proven** | A reference game uses it, and the list of checks (`scripts/checks.yml`) plays that game on Linux, macOS and Windows: today Coin Dash and Ember Hop, from their packages, headless and in a window. The feature also has automated tests of its own there. | Everything the versions promise, and the reference games' runs guard it: a regression that breaks them shows up in the list of checks before a release. |
 | **tested** | Automated tests in the list of checks (headless, or the offscreen GPU tests) cover it, on at least one platform, but no reference game played on all three systems rests on it yet. | Everything the versions promise. What is missing is evidence, not a promise: it may fail in a game, on a platform or a GPU its tests don't reach, and such a failure is a bug. |
-| **experimental** | Its chapter calls it a prototype, a report or experimental, or the part that matters was never checked (on a device, a display, in a browser), whatever tests it has. | Less: it may change or be removed in any minor release, without a deprecated step first. Rely on it only with the gaps its chapter names in mind. |
+| **experimental** | Its chapter calls it a prototype, a report or experimental, or the part that matters was never checked (on a device, a display, in a browser), whatever tests it has. | Less: its public items are outside the versions' promise (STABILITY.md, "Unstable"): they may change or be removed in any release, without a deprecated step first. Rely on it only with the gaps its chapter names in mind. |
 
 - A level is assigned from what the repository records: the tests in the list
   of checks, which reference games use the feature, and the platforms and
