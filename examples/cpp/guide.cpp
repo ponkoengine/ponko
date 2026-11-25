@@ -5154,6 +5154,13 @@ int main() {
         load_mixer_settings(ctx, saved);
         if (ctx.audio_bus_volume(world) != 0.4f || ctx.audio_bus_gain(world) != 0.4f) std::abort();
         if (ctx.start_audio_snapshot("missing", 0.0f) || ctx.audio_snapshot_weight("underwater") != 0.0f) std::abort();
+        // Resolved once, then used by handle and id; a typo says which names exist.
+        if (ctx.find_audio_bus("world").value().index != world.index) std::abort();
+        if (const auto typo = ctx.find_audio_bus("wrold"); typo || std::string(typo.error().what()).find("known: ") == std::string::npos) std::abort();
+        const ponko::audio_snapshot_id underwater = ctx.audio_snapshot_id("underwater").value();
+        if (!ctx.start_audio_snapshot(underwater, 0.0f) || ctx.audio_snapshot_weight(underwater) != 1.0f) std::abort();
+        ctx.stop_audio_snapshot(underwater, 0.0f);
+        if (ctx.audio_snapshot_weight(underwater) != 0.0f || ctx.audio_snapshot_id("underwatr")) std::abort();
         ctx.apply_audio_mixer_json(R"({"buses": [{"name": "voices", "parent": "master"}]})");
         if (ctx.audio_bus_muted(ctx.audio_bus("voices"))) std::abort();
     });
@@ -5420,6 +5427,11 @@ int main() {
     ctx.set_skeleton2d(puppet, "hero/hero.json");
     ctx.skeleton2d_play(puppet, "walk");
     // ANCHOR_END: skeleton2d_play
+    // ANCHOR: skeleton2d_clip_ids
+    const std::size_t run = ctx.skeleton2d_clip_index(puppet, "run"); // once: throws, listing the clips, for a typo
+    ctx.skeleton2d_crossfade_index(puppet, run, 0.2f);                // no lookup
+    ctx.skeleton2d_play_index(puppet, run);
+    // ANCHOR_END: skeleton2d_clip_ids
     // ANCHOR: skeleton2d_events
     while (auto event = ctx.skeleton2d_next_event(puppet)) {
         if (*event == "step") {

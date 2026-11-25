@@ -84,16 +84,31 @@ on every call and a typo just returns `false`; a system that switches clips
 every frame resolves them once with `clip_id`, which is an error listing
 the clips there are for a name that isn't one:
 
+<div class="lang-pair">
+<div>
+
 ```rust
 # use ponko::skeleton2d::Skeleton;
 # let hero = ctx.load_skeleton2d("hero/hero.json");
 # let mut puppet = Skeleton::new(hero);
-let run = puppet.clip_id("run").expect("the file has a run clip");
+let run = puppet.clip_id("run")?; // once: an error listing the clips for a typo
 puppet.crossfade(run, 0.2); // no lookup
+puppet.play(run);
 ```
 
-In C and C++, `skeleton2d_clip_index` resolves a name and
-`skeleton2d_play_index` and `skeleton2d_crossfade_index` play it.
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:skeleton2d_clip_ids}}
+```
+
+</div>
+</div>
+
+In C, `ponko_ctx_skeleton2d_clip_index` resolves a name and
+`ponko_ctx_skeleton2d_play_index` and `ponko_ctx_skeleton2d_crossfade_index`
+play it.
 
 Events keyed in clips (footsteps, the frame a sword hits) are collected
 while the skeleton advances; read them from a system:
