@@ -8,9 +8,46 @@
 //! one on the GPU. Where the GPU can't copy a buffer (index buffers on
 //! WebGL2, which can't be copy sources), that arena keeps a CPU mirror and
 //! growth uploads it instead.
+//!
+//! A buffer grows to a quarter more than it needs (see [`planned_size`]), not
+//! to the next power of two, which could leave half of it empty: in a large
+//! world that was hundreds of megabytes of unused GPU memory. Freeing the
+//! meshes at the end of an arena lowers its high-water mark, and a buffer
+//! left far larger than its contents shrinks again.
 use super::resources::Vertex;
 use crate::render::traffic::{self, Counted, NewBuffer, Upload};
 use std::ops::Range;
+
+/// The spare room a growing buffer gets, as a fraction of what it needs:
+/// a quarter, so a stream of small uploads grows it a logarithmic number of
+/// times (each growth copies the buffer), while at most a fifth of it
+/// stands empty.
+const SLACK_DIVISOR: u64 = 4;
+
+/// `needed` bytes and a quarter more, aligned for copies, at most `limit`.
+fn grown_size(needed: u64, limit: u64) -> u64 {
+    let align = wgpu::COPY_BUFFER_ALIGNMENT;
+    (needed + needed / SLACK_DIVISOR)
+        .next_multiple_of(align)
+        .min(limit / align * align)
+        .max(needed)
+}
+
+/// The size an arena buffer of `current` bytes (0 without one) should have
+/// to hold `needed`: grown with slack when too small; shrunk to that when
+/// more than the slack twice over is empty (so streaming around one size
+/// doesn't shrink and grow it again every few frames); else kept.
+fn planned_size(current: u64, needed: u64, limit: u64) -> u64 {
+    if needed == 0 {
+        return current;
+    }
+    let grown = grown_size(needed, limit);
+    if current < needed || current > grown_size(grown, limit) {
+        grown
+    } else {
+        current
+    }
+}
 
 #[derive(Clone)]
 pub(super) struct Allocation {
@@ -70,6 +107,17 @@ impl<T: bytemuck::Pod + bytemuck::Zeroable> Arena<T> {
                 i += 1;
             }
         }
+        // Free room at the end lowers the high-water mark, so the next
+        // flush can shrink the buffer.
+        if let Some(last) = self.free.last()
+            && last.end == self.len
+        {
+            self.len = last.start;
+            self.free.pop();
+            if let Some(mirror) = &mut self.mirror {
+                mirror.truncate(self.len as usize);
+            }
+        }
     }
 
     fn write(&mut self, range: Range<u32>, data: impl IntoIterator<Item = T>) {
@@ -91,14 +139,15 @@ impl<T: bytemuck::Pod + bytemuck::Zeroable> Arena<T> {
     }
 
     fn flush(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, usage: wgpu::BufferUsages) {
-        if self.dirty.is_empty() {
+        // Four-byte alignment holds for both Vertex and u32, including
+        // queue writes and copies.
+        let needed = u64::from(self.len) * size_of::<T>() as u64;
+        let current = self.buffer.as_ref().map_or(0, wgpu::Buffer::size);
+        let size = planned_size(current, needed, device.limits().max_buffer_size);
+        if self.dirty.is_empty() && size == current {
             return;
         }
-        let needed = u64::from(self.len) * size_of::<T>() as u64;
-        if self.buffer.as_ref().is_none_or(|b| b.size() < needed) {
-            // Geometric growth capped by the device limit. Four-byte alignment
-            // holds for both Vertex and u32, including queue writes and copies.
-            let size = needed.next_power_of_two().min(device.limits().max_buffer_size);
+        if size != current {
             let copies = self.mirror.is_none() || cfg!(test);
             let buffer = device.new_buffer(&wgpu::BufferDescriptor {
                 label: Some("shared mesh arena"),
@@ -124,17 +173,30 @@ impl<T: bytemuck::Pod + bytemuck::Zeroable> Arena<T> {
                 (None, Some(old)) => {
                     // Submitted now, so the queue writes below (applied at the
                     // next submission) land after the copy, not under it.
-                    traffic::submit_copy(device, queue, Some("grow shared mesh arena"), |encoder| {
-                        encoder.copy_buffer_to_buffer(&old, 0, &buffer, 0, old.size());
+                    // Growing copies the whole old buffer, shrinking what's
+                    // still in use.
+                    traffic::submit_copy(device, queue, Some("resize shared mesh arena"), |encoder| {
+                        encoder.copy_buffer_to_buffer(&old, 0, &buffer, 0, old.size().min(needed));
                     });
                 }
                 (None, None) => {}
             }
             self.buffer = Some(buffer);
         }
-        let buffer = self.buffer.as_ref().unwrap();
+        let (Some(buffer), high) = (self.buffer.as_ref(), self.len) else {
+            // Nothing live to write (every write was freed again).
+            self.staged = Vec::new();
+            self.dirty = Vec::new();
+            return;
+        };
         let upload = |range: &Range<u32>, offset: usize| {
-            let len = (range.end - range.start) as usize;
+            // A write freed at the end of the arena since lies past the
+            // high-water mark, and maybe past a shrunk buffer: skipped.
+            let end = range.end.min(high);
+            if range.start >= end {
+                return;
+            }
+            let len = (end - range.start) as usize;
             queue.uploading(Upload::Meshes).write_buffer(
                 buffer,
                 u64::from(range.start) * size_of::<T>() as u64,
@@ -281,6 +343,194 @@ mod tests {
         assert!(arena.allocate(u32::MAX, 32).is_none());
     }
     #[test]
+    fn freeing_the_end_lowers_the_high_water_mark() {
+        let mut arena = Arena::<u32>::default();
+        let a = arena.allocate(3, 64).unwrap();
+        let b = arena.allocate(5, 64).unwrap();
+        let c = arena.allocate(2, 64).unwrap();
+        arena.release(b);
+        assert_eq!(arena.len, 10, "a hole in the middle stays in the free list");
+        arena.release(c);
+        assert_eq!(arena.len, 3, "the end and the hole before it go");
+        assert!(arena.free.is_empty());
+        assert_eq!(
+            arena.allocate(7, 64),
+            Some(3..10),
+            "new meshes continue from the lower mark"
+        );
+        arena.release(a);
+        assert_eq!((arena.free.len(), arena.free.first()), (1, Some(&(0..3))));
+    }
+
+    #[test]
+    fn arena_buffers_grow_with_a_quarter_spare_and_shrink_with_hysteresis() {
+        const MIB: u64 = 1 << 20;
+        let limit = 256 * MIB;
+        // Growth: never too small, at most a quarter over (plus alignment),
+        // never past the limit.
+        for needed in [4, 1000, 44 * 1001, 129 * MIB + 4, 200 * MIB, limit - 44, limit] {
+            let size = planned_size(0, needed, limit);
+            assert!(size >= needed && size <= limit, "{needed} -> {size}");
+            assert!(size <= needed + needed / 4 + 4, "{needed} -> {size}");
+            assert_eq!(size % wgpu::COPY_BUFFER_ALIGNMENT, 0);
+        }
+        // A power of two would have been 256 MiB.
+        assert_eq!(planned_size(0, 129 * MIB, limit), 129 * MIB + 129 * MIB / 4);
+        // Kept while it fits and isn't far too large.
+        let size = planned_size(0, 100 * MIB, limit);
+        assert_eq!(planned_size(size, 100 * MIB + 1024, limit), size);
+        assert_eq!(
+            planned_size(size, 85 * MIB, limit),
+            size,
+            "a little less doesn't shrink it"
+        );
+        // Shrunk once much of it is empty, to the size it would grow to.
+        assert_eq!(planned_size(size, 40 * MIB, limit), grown_size(40 * MIB, limit));
+        // Nothing live: kept (the mesh arena drops its buffers then).
+        assert_eq!(planned_size(size, 0, limit), size);
+        // Growing one mesh at a time copies the buffer a logarithmic number
+        // of times: about 40 growths from one mesh to 100 MiB.
+        let (mut size, mut growths) = (0, 0);
+        for meshes in 1..=100 * MIB / 44_000 {
+            let next = planned_size(size, meshes * 44_000, limit);
+            growths += u32::from(next != size);
+            size = next;
+        }
+        assert!(growths < 50, "{growths} growths");
+    }
+
+    /// A mesh arena's buffer sizes without a GPU: what `flush` would make
+    /// them, and what the power-of-two growth it replaced would have (from
+    /// the peak high-water mark, as the old arena never lowered it).
+    struct Simulated {
+        vertices: Arena<Vertex>,
+        indices: Arena<u32>,
+        live: std::collections::VecDeque<Option<(Range<u32>, Range<u32>)>>,
+        /// Vertex then index buffer bytes.
+        sizes: [u64; 2],
+        power_of_two: [u64; 2],
+        peak: [u64; 2],
+        /// Geometry that didn't fit under the limit (own buffers).
+        dedicated: u64,
+    }
+
+    const LIMIT: u64 = 256 << 20;
+
+    impl Simulated {
+        fn new() -> Self {
+            Self {
+                vertices: Arena::default(),
+                indices: Arena::default(),
+                live: Default::default(),
+                sizes: [0; 2],
+                power_of_two: [0; 2],
+                peak: [0; 2],
+                dedicated: 0,
+            }
+        }
+        fn used(&self) -> [u64; 2] {
+            [
+                u64::from(self.vertices.len) * size_of::<Vertex>() as u64,
+                u64::from(self.indices.len) * 4,
+            ]
+        }
+        fn flush(&mut self) {
+            for (k, needed) in self.used().into_iter().enumerate() {
+                self.sizes[k] = planned_size(self.sizes[k], needed, LIMIT);
+                self.peak[k] = self.peak[k].max(needed);
+                if self.power_of_two[k] < self.peak[k] {
+                    self.power_of_two[k] = self.peak[k].next_power_of_two().min(LIMIT);
+                }
+            }
+        }
+        /// Loads `meshes` (corners, indices), flushing every 50 as a
+        /// streamed world's bursts do.
+        fn load(&mut self, meshes: &[(u32, u32)]) {
+            for (n, &(v, i)) in meshes.iter().enumerate() {
+                let placed = self.vertices.allocate(v, LIMIT).and_then(|vr| {
+                    let ir = self.indices.allocate(i, LIMIT);
+                    if ir.is_none() {
+                        self.vertices.release(vr.clone());
+                    }
+                    Some((vr, ir?))
+                });
+                if placed.is_none() {
+                    self.dedicated += u64::from(v) * size_of::<Vertex>() as u64 + u64::from(i) * 4;
+                }
+                self.live.push_back(placed);
+                if n % 50 == 49 {
+                    self.flush();
+                }
+            }
+            self.flush();
+        }
+        fn unload_oldest(&mut self, count: usize) {
+            for (v, i) in self.live.drain(..count).flatten() {
+                self.vertices.release(v);
+                self.indices.release(i);
+            }
+        }
+    }
+
+    /// Buildings and props of 64 to 6000 corners with a triangle per corner.
+    fn props(count: usize, seed: &mut u32) -> Vec<(u32, u32)> {
+        (0..count)
+            .map(|_| {
+                *seed ^= *seed << 13;
+                *seed ^= *seed >> 17;
+                *seed ^= *seed << 5;
+                let corners = 64 + *seed % 5936;
+                (corners, corners * 3)
+            })
+            .collect()
+    }
+
+    /// The arena's GPU bytes for synthetic streamed worlds of many sizes:
+    /// terrain tiles of 129 x 129 heights at four details and props loaded
+    /// in bursts, then ten times the oldest tenth out and a new tenth in.
+    /// One size can happen to fit a power of two well; over many the slack
+    /// is smaller. Prints the totals (`--nocapture`).
+    #[test]
+    fn streamed_worlds_leave_less_of_the_arena_empty() {
+        const MIB: f64 = 1048576.0;
+        let (mut used, mut new, mut old, mut worlds) = (0.0, 0.0, 0.0, 0);
+        for size in 1..=16u32 {
+            let mut seed = 0x2545_f491 + size;
+            let mut world = Simulated::new();
+            let terrain: Vec<(u32, u32)> = (0..size)
+                .flat_map(|_| [129u32, 65, 33, 17].map(|side| (side * side, (side - 1) * (side - 1) * 6)))
+                .collect();
+            world.load(&terrain);
+            world.load(&props(100 * size as usize, &mut seed));
+            for _ in 0..10 {
+                let out = world.live.len() / 10;
+                world.unload_oldest(out);
+                world.load(&props(out, &mut seed));
+            }
+            let in_use = world.used().iter().sum::<u64>() as f64;
+            let sized = world.sizes.iter().sum::<u64>() as f64;
+            assert!(
+                sized >= in_use && sized <= in_use * 1.57,
+                "world {size}: {sized} bytes for {in_use}"
+            );
+            used += in_use;
+            new += sized;
+            old += world.power_of_two.iter().sum::<u64>() as f64;
+            worlds += 1;
+        }
+        println!(
+            "{worlds} streamed worlds, {:.1} MiB of geometry in their arenas: buffers of {:.1} MiB ({:.0}% spare), \
+             with power-of-two growth {:.1} MiB ({:.0}% spare)",
+            used / MIB,
+            new / MIB,
+            (new / used - 1.0) * 100.0,
+            old / MIB,
+            (old / used - 1.0) * 100.0,
+        );
+        assert!(new < old, "less spare room than with power-of-two growth");
+    }
+
+    #[test]
     fn gpu_arena_upload_reuse_and_growth_preserve_live_geometry() {
         upload_reuse_and_growth(false);
     }
@@ -351,8 +601,27 @@ mod tests {
         arena.flush(device, queue);
         check(&arena, &b, &[0, 0, 1]);
         check(&arena, &reused, &[1, 2, 0]);
+        // Freeing the two big meshes at the end shrinks the buffers to what
+        // the small ones need, keeping their geometry.
+        let grown = arena.bytes();
         arena.release(bigger);
         arena.release(big);
+        arena.flush(device, queue);
+        assert!(
+            arena.bytes() * 100 < grown,
+            "shrunk: {grown} -> {} bytes",
+            arena.bytes()
+        );
+        check(&arena, &b, &[0, 0, 1]);
+        check(&arena, &reused, &[1, 2, 0]);
+        // A mesh freed at the end before the flush that writes it is
+        // skipped, not written past the buffer.
+        let late = arena.upload(device, &vertices, &[2, 2, 2]).unwrap();
+        let after_late = arena.upload(device, &vertices, &[1, 1, 1]).unwrap();
+        arena.release(after_late);
+        arena.flush(device, queue);
+        check(&arena, &late, &[2, 2, 2]);
+        arena.release(late);
         arena.release(b);
         arena.release(reused);
         assert_eq!(arena.bytes(), 0);
