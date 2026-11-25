@@ -264,9 +264,10 @@ fn a_clone_that_panics_leaves_the_world_sound() {
         assert_eq!(w.raw_ref().archetypes().iter().map(|a| a.len()).sum::<usize>(), 50);
         budget.store(usize::MAX, Ordering::SeqCst);
         drop(w);
-        // The world dropped what it held; nothing dropped twice.
-        assert!(drops.load(Ordering::SeqCst) <= 11);
-        assert!(drops.load(Ordering::SeqCst) > with);
+        // The value passed in and the ten clones made, each dropped once:
+        // by the world if an entity got it, else as the batch unwound.
+        assert_eq!(drops.load(Ordering::SeqCst), 11);
+        assert_eq!(with, if whole { 0 } else { 10 });
     }
 }
 

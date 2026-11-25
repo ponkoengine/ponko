@@ -1003,17 +1003,24 @@ impl World {
             let stamp = self.changes.stamp();
             if self.whole_archetype(src, &entities[i..run]) {
                 // The clones first, into room past the end of `dst`: a
-                // `clone` that panics leaks those made and leaves the world
-                // as it was.
+                // `clone` that panics drops those made (`Written`) and
+                // leaves the world as it was.
                 let n = self.archetypes[src].len();
                 let d = &mut self.archetypes[dst];
                 d.reserve(n, &mut self.slots.buffers);
                 let base = d.len();
-                for row in base..base + n {
-                    // SAFETY: column `col` holds `T`, and `row` is spare
-                    // capacity that `move_all` makes live below.
-                    unsafe { d.columns[col].ptr(row).cast::<T>().write(value.clone()) };
+                let mut written = Written::<T> {
+                    first: d.columns[col].ptr(base).cast(),
+                    count: 0,
+                };
+                while written.count < n {
+                    // SAFETY: column `col` holds `T`, and its rows from
+                    // `base` to `base + n` are reserved spare capacity,
+                    // which `move_all` makes live below.
+                    unsafe { written.first.add(written.count).write(value.clone()) };
+                    written.count += 1;
                 }
+                std::mem::forget(written);
                 self.move_all(src, dst);
                 let d = &self.archetypes[dst];
                 if d.tracked() {
@@ -2662,6 +2669,23 @@ fn two_mut<T>(v: &mut [T], a: usize, b: usize) -> (&mut T, &mut T) {
     } else {
         let (l, r) = v.split_at_mut(a);
         (&mut r[0], &mut l[b])
+    }
+}
+
+/// The first `count` values from `first`, written into spare capacity of
+/// a column: dropped if dropped, so a `clone` that panics while
+/// [`World::insert_many`] fills them doesn't leak those made.
+/// Forgotten once the rows are live.
+struct Written<T> {
+    first: *mut T,
+    count: usize,
+}
+
+impl<T> Drop for Written<T> {
+    fn drop(&mut self) {
+        // SAFETY: the first `count` values from `first` were written and
+        // are owned by nothing else: no row holds them yet.
+        unsafe { std::ptr::drop_in_place(std::ptr::slice_from_raw_parts_mut(self.first, self.count)) };
     }
 }
 
