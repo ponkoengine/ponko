@@ -359,3 +359,31 @@ fn the_cursor_following_a_finger_leaves_the_finger_the_uis_pointer() {
         });
     assert_eq!(*clicks.borrow(), [4]);
 }
+
+#[test]
+fn a_controls_editor_reads_back_and_re_anchors_places() {
+    let red = TouchStyle {
+        button: Color::rgba(1.0, 0.1, 0.1, 0.5),
+        ..TouchStyle::default()
+    };
+    let fire = TouchPlace::new(vec2(1.0, 1.0), vec2(-80.0, -80.0));
+    let controls = TouchControls::new()
+        .stick("move")
+        .button("fire", "B")
+        .button("jump", "A")
+        .control_style("fire", red)
+        .place("fire", fire);
+    // The editor shows each control as the game set it up.
+    assert_eq!(controls.style_of("fire").button, red.button);
+    assert_eq!(controls.style_of("jump").button, TouchStyle::default().button);
+    assert_eq!(controls.place_of("fire"), Some(fire));
+    assert_eq!(controls.place_of("jump"), None, "laid out by the engine");
+    // The player drops the fire button at (100, 400) on a 960 x 540 view:
+    // it is kept anchored to the bottom-left corner, so it stays put on
+    // another screen size.
+    let view = vec2(960.0, 540.0);
+    let dropped = TouchPlace::nearest_corner(vec2(100.0, 400.0), view);
+    assert_eq!(dropped.anchor, vec2(0.0, 1.0));
+    assert_eq!(dropped.centre(view), vec2(100.0, 400.0));
+    assert_eq!(dropped.centre(vec2(1280.0, 720.0)), vec2(100.0, 580.0));
+}
