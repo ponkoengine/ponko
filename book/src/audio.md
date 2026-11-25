@@ -1,5 +1,11 @@
 # Sound
 
+> **Maturity: [tested](maturity.md).** Game: Coin Dash, Ember Hop and Shard
+> Grove play sounds and music. Tests: `tests/audio.rs`,
+> `tests/audio_mixer.rs`. Platforms: Linux, macOS and Windows, headless (the
+> workspace tests in the list of checks). Graphics: not involved. Missing:
+> sound out of a real device: the runs in the list of checks hear nothing.
+
 <div class="lang-pair">
 <div>
 

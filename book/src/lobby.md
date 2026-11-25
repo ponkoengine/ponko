@@ -1,5 +1,10 @@
 # Lobbies, matchmaking and relays
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests: the lobby client and
+> server tests, on loopback. Platforms: Linux, macOS and Windows, headless
+> (the workspace tests in the list of checks). Graphics: not involved.
+> Missing: a reference game and a public deployment.
+
 Players who want to play together first have to find each other. Ponko has
 a reference lobby server for that, in three pieces:
 

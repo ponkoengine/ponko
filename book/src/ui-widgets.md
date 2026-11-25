@@ -1,5 +1,12 @@
 # Widget gallery
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests:
+> `tests/ui_widgets.rs`, `ui_widgets_render_test.rs`. Platforms: Linux, macOS
+> and Windows, headless (the workspace tests in the list of checks). Graphics:
+> offscreen render tests, required on Windows (DirectX 12 on the WARP software
+> adapter) and run on Linux and macOS only where a GPU is found. Missing: a
+> reference game that uses it.
+
 The retained UI ([Retained game UI](ui.md)) has a set of widgets beyond
 buttons, labels, toggles and sliders: everything a settings menu, a shop
 and an inventory need. Each one is a node like any other. It takes a

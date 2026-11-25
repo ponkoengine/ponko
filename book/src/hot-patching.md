@@ -1,5 +1,11 @@
 # Changing code while the game runs
 
+> **Maturity: [experimental](maturity.md).** Game: none. Tests: the `hotpatch`
+> feature's run of the headless, determinism and events tests through
+> subsecond's jump table, with no patch applied. Platforms: Linux, macOS and
+> Windows, headless (the workspace tests in the list of checks). Graphics: not
+> involved. Missing: a patch applied by `dx` in the list of checks.
+
 Edit a system, save, and the running game uses the new code from the next
 frame on. Nothing restarts: every entity, resource, the camera and the
 tick count stay where they were. With a battle half fought, you can retune

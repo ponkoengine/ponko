@@ -1,5 +1,10 @@
 # Menus and screens
 
+> **Maturity: [tested](../maturity.md).** Game: none. Tests:
+> `tests/cookbook_menus.rs` runs every recipe. Platforms: Linux, macOS and
+> Windows, headless (the workspace tests in the list of checks). Graphics: not
+> involved.
+
 A pause menu, a title screen, game over, a heads-up display, a volume slider and a panel that slides in. All of them are retained UI (`ctx.ui`) plus game states; the tests click the buttons with an input scenario.
 
 ## A pause menu

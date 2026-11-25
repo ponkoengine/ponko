@@ -1,5 +1,10 @@
 //! The engine's one error type, [`Error`], and what kind of failure it is,
 //! [`ErrorKind`].
+//!
+//! **Maturity: tested**, from the guide chapter `errors.md`. Game: none. Tests: `tests/errors.rs`,
+//! `tests/error_messages.rs`, `tests/startup_errors.rs`, `tests/loader_convention.rs`. Platforms:
+//! Linux, macOS and Windows, headless (the workspace tests in the list of checks). Graphics: not
+//! involved. Missing: a reference game that uses it.
 #![deny(missing_docs)]
 
 use std::fmt;

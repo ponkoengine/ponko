@@ -2,6 +2,11 @@
 //! error, a text file in the player's data folder says what happened, so
 //! the player can send it and the developer can fix it.
 //!
+//! **Maturity: tested**, from the guide chapter `crash-reports.md`. Game: none. Tests:
+//! `tests/crash_reports.rs`, `tests/native_crash.rs`. Platforms: Linux, macOS and Windows, headless
+//! (the workspace tests in the list of checks). Graphics: not involved. Missing: a reference game
+//! that uses it.
+//!
 //! A report holds the panic's message, where it happened and the
 //! backtrace, the game's and the engine's versions, the operating system,
 //! the GPU and its driver, the graphics settings, and the last lines the

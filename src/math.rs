@@ -1,5 +1,10 @@
 //! Math types: vectors, quaternions and matrices, with their constructors.
 //!
+//! **Maturity: tested**, no guide chapter. Game: every reference game uses these types. Tests: the
+//! engine's tests use them throughout; the types and their methods are the `glam` crate's, tested
+//! there. Platforms: Linux, macOS and Windows, headless (the workspace tests in the list of
+//! checks). Graphics: not involved.
+//!
 //! These are the [`glam`](https://docs.rs/glam) crate's own types, re-exported
 //! as they are: `ponko::math::Vec2` *is* `glam::Vec2`, so values pass between
 //! Ponko and other glam code without conversion, and their methods

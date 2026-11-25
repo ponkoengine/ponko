@@ -1,5 +1,13 @@
 # Ember Hop: a platformer, start to finish
 
+> **Maturity: [proven](maturity.md).** Game: Ember Hop itself, packaged and
+> played on Linux, macOS and Windows. Tests: `tests/ember_hop.rs`, and its
+> walk-through from the package. Platforms: Linux, macOS and Windows, headless
+> (the workspace tests in the list of checks); the package also in a window.
+> Graphics: the packaged games run in a window on Linux (software Vulkan under
+> Xvfb), macOS and Windows (DirectX 12, WARP when there is no GPU); Coin Dash
+> also runs in headless Chromium and WebKit on WebGL2.
+
 [`examples/ember_hop`](../../examples/ember_hop)
 is the engine's second reference game. [Coin Dash](packaging.md) draws
 everything in code; Ember Hop is built from the engine's content features:

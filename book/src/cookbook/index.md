@@ -1,5 +1,8 @@
 # Cookbook
 
+> **Maturity: not a feature.** An index of recipes; each recipe page carries
+> its level.
+
 Fifty small recipes for the things most games do. Each one is a few lines to copy, and each is compiled and run by a test (headless, for a few ticks, with an assertion that it did its job), so none of them can go out of date without a test failing. The text on these pages is included from those tests, not retyped.
 
 Every recipe is shown in Rust and C++ side by side. The C++ halves are in `examples/cpp/cookbook.cpp`, and the native check builds and runs them.

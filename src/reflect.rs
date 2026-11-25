@@ -1,5 +1,9 @@
 //! Reflection: read and write components and resources by name, as JSON.
 //!
+//! **Maturity: tested**, from the guide chapter `reflection.md`. Game: none. Tests:
+//! `tests/reflect.rs`. Platforms: Linux, macOS and Windows, headless (the workspace tests in the
+//! list of checks). Graphics: not involved. Missing: a reference game that uses it.
+//!
 //! Reflection is opt-in per component type and uses serde, so any type with
 //! `#[derive(Serialize, Deserialize)]` can be reflected. It is what tools use
 //! to look inside a running game: the agent (MCP) bridge, the inspector, and

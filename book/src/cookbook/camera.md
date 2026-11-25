@@ -1,5 +1,10 @@
 # Cameras
 
+> **Maturity: [tested](../maturity.md).** Game: none. Tests:
+> `tests/cookbook_camera.rs` runs every recipe. Platforms: Linux, macOS and
+> Windows, headless (the workspace tests in the list of checks). Graphics: not
+> involved.
+
 Following the player, shaking the screen, zooming toward the cursor, pixel art and a minimap. The tests run with frames (`headless_frames(true)`), because cameras are updated every frame.
 
 ## Follow the player

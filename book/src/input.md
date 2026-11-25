@@ -1,5 +1,12 @@
 # Input: keyboard, mouse, gamepads
 
+> **Maturity: [tested](maturity.md).** Game: Coin Dash and Ember Hop read
+> keys, the mouse and gamepads, with scripted input. Tests:
+> `tests/input_recording.rs`, `tests/pressed_this_frame.rs`,
+> `tests/ui_fed_input.rs`. Platforms: Linux, macOS and Windows, headless (the
+> workspace tests in the list of checks). Graphics: not involved. Missing: a
+> recorded run with real devices: the smoke runs script their input.
+
 Input is read from `ctx` in any system. Every kind works the same way:
 `_down` while held, `_pressed` on the frame it went down, `_released` on the
 frame it came up. A tap shorter than a frame still shows up as pressed and

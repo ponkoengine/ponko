@@ -1,5 +1,13 @@
 # Window service
 
+> **Maturity: [proven](maturity.md).** Game: Coin Dash and Ember Hop, packaged
+> and played on Linux, macOS and Windows, in a window. Tests:
+> `tests/window_service.rs`. Platforms: Linux, macOS and Windows, headless
+> (the workspace tests in the list of checks); the packaged games also open a
+> real window on each. Graphics: the packaged games run in a window on Linux
+> (software Vulkan under Xvfb), macOS and Windows (DirectX 12, WARP when there
+> is no GPU); Coin Dash also runs in headless Chromium and WebKit on WebGL2.
+
 `Game::new("Play", 800, 600).run(...)` opens the ordinary window; nothing on this
 page is needed for that. When a game wants an options menu (fullscreen, a mode
 list, a custom cursor) or the clipboard, it calls `ctx.window`. Every call works

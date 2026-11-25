@@ -1,5 +1,10 @@
 # Tutorial: a first 3D game
 
+> **Maturity: [tested](maturity.md).** Game: none (the tutorial's own game).
+> Tests: `tests/tutorial_3d.rs`. Platforms: Linux, macOS and Windows, headless
+> (the workspace tests in the list of checks); the web build is linted for
+> `wasm32`. Graphics: not involved. Missing: a reference game that uses it.
+
 This tutorial builds **Lantern Yard** from an empty project: a walled yard
 loaded from a glTF file, a character you walk around it with a camera behind
 it, lanterns that light up when you reach them, crates to push, and a HUD.

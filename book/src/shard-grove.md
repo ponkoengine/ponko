@@ -1,5 +1,10 @@
 # Shard Grove: a 3D game, start to finish
 
+> **Maturity: [tested](maturity.md).** Game: Shard Grove itself, played
+> headless. Tests: `tests/shard_grove.rs`. Platforms: Linux, macOS and
+> Windows, headless (the workspace tests in the list of checks). Graphics: not
+> involved. Missing: its package played on each OS.
+
 [`examples/shard_grove`](../../examples/shard_grove)
 is the engine's 3D reference game. The other 3D examples each show one
 system; Shard Grove puts them together in one small third-person game: a

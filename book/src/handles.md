@@ -1,5 +1,12 @@
 # Handles: freeing what you made
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests: `tests/handles.rs`,
+> `tests/handle_layout.rs`, `tests/handle_compat.rs`, `handle_render_test.rs`.
+> Platforms: Linux, macOS and Windows, headless (the workspace tests in the
+> list of checks). Graphics: offscreen render tests, required on Windows
+> (DirectX 12 on the WARP software adapter) and run on Linux and macOS only
+> where a GPU is found. Missing: a reference game that uses it.
+
 Textures, meshes, materials, sounds and the other things the engine keeps
 for your game come back as small handles: plain `Copy` values, passed by
 value (`ctx.gfx.draw(crab, pos)`, `ctx.audio.play(hit)`). Only the engine makes

@@ -1,4 +1,11 @@
 //! Sprite sheets (many frames in one texture) and frame animation.
+//!
+//! **Maturity: proven**, from the guide chapter `tiles.md`. Game: Ember Hop's Tiled levels,
+//! autotiled ground and tile colliders, packaged and played on Linux, macOS and Windows. Tests:
+//! `tests/tilemaps.rs`, `tests/tiles.rs`, `tests/tilemap_physics.rs`. Platforms: Linux, macOS and
+//! Windows, headless (the workspace tests in the list of checks). Graphics: the packaged games run
+//! in a window on Linux (software Vulkan under Xvfb), macOS and Windows (DirectX 12, WARP when
+//! there is no GPU); Coin Dash also runs in headless Chromium and WebKit on WebGL2.
 
 #![deny(missing_docs)]
 

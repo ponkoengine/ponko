@@ -61,6 +61,7 @@ cargo build --workspace --examples
 cargo test --workspace
 cargo clippy --workspace --all-targets
 python3 scripts/collect-panics.py --check   # every panic site has a reviewed decision
+python3 scripts/maturity.py                 # every guide chapter and top-level module has a maturity level
 python3 scripts/check-feature-coverage.py   # every cargo feature has clippy and test lines in checks.yml
 python3 scripts/check-unsafe.py             # every unsafe item outside the ECS has a test
 python3 scripts/check-ffi-ownership.py      # every C function says who owns its pointers

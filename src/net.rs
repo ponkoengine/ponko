@@ -1,6 +1,11 @@
 //! Networking: three ways to keep players in step, behind one entry,
 //! [`ctx.net`](crate::ctx::Ctx::net) ([`Networking`]).
 //!
+//! **Maturity: tested**, from the guide chapter `multiplayer.md`. Game: none. Tests:
+//! `tests/net.rs`, `tests/net_replication.rs`, `tests/net_messages.rs`, `tests/net_rollback.rs`, on
+//! loopback. Platforms: Linux, macOS and Windows, headless (the workspace tests in the list of
+//! checks). Graphics: not involved. Missing: a reference game and a run over a real network.
+//!
 //! | Pick | For | Start with | Example |
 //! |---|---|---|---|
 //! | **Lockstep** ([`Net`]) | Deterministic simulations with 2–8 players (strategy, fighting, co-op puzzles): every peer runs the same ticks from the same inputs, so only inputs cross the network | [`Game::lockstep`](crate::game::Game::lockstep), then `ctx.net.set_input` / `ctx.net.input` | [`examples/lockstep.rs`](https://github.com/ponkoengine/ponko/blob/main/examples/lockstep.rs) |

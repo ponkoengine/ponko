@@ -1,5 +1,8 @@
 # Performance and benchmarks
 
+> **Maturity: not a feature.** Benchmarks and how they were measured; the
+> features measured carry their own levels.
+
 Numbers from a MacBook Pro (M4 Max), release builds. Reproduce them yourself;
 every number here has a command next to it.
 

@@ -1,5 +1,11 @@
 # Localization
 
+> **Maturity: [proven](maturity.md).** Game: Coin Dash, packaged and played on
+> Linux, macOS and Windows. Tests: `tests/locale.rs`,
+> `tests/coin_dash_languages.rs`. Platforms: Linux, macOS and Windows,
+> headless (the workspace tests in the list of checks). Graphics: not
+> involved.
+
 A game translated into other languages keeps its text in **string tables**,
 one file per language, and asks for it by key. `ponko::locale` holds them in
 a resource, [`Strings`](https://docs.rs/ponko/latest/ponko/locale/struct.Strings.html):

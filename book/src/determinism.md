@@ -1,5 +1,11 @@
 # Randomness, determinism and saving
 
+> **Maturity: [proven](maturity.md).** Game: Ember Hop's autopilot gives the
+> same result on Linux, macOS and Windows with `physics-determinism`. Tests:
+> `tests/determinism.rs`, `tests/world_hash.rs`, `tests/physics.rs`.
+> Platforms: Linux, macOS and Windows, headless (the workspace tests in the
+> list of checks). Graphics: not involved.
+
 A simulation that comes out the same every time it runs with the same
 inputs is easy to debug, test and compare: replay a bug, check a balance
 change against the old version, let an agent run experiments. Ponko

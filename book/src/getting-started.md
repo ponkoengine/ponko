@@ -1,5 +1,8 @@
 # Getting started
 
+> **Maturity: not a feature.** Setup steps; the features it uses carry their
+> own levels.
+
 You need a recent stable Rust (`rustup update stable`). On Linux, also the
 headers for sound and gamepads: `sudo apt-get install libasound2-dev libudev-dev`
 (Debian, Ubuntu).

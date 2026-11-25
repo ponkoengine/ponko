@@ -1,5 +1,13 @@
 # Touch: gestures and on-screen controls
 
+> **Maturity: [tested](maturity.md).** Game: Coin Dash and Ember Hop have
+> touch controls; a test plays Coin Dash by touch. Tests: `tests/touch.rs` and
+> the other `tests/touch_*.rs`, `touch_controls_render_test.rs`. Platforms:
+> Linux, macOS and Windows, headless (the workspace tests in the list of
+> checks). Graphics: offscreen render tests, required on Windows (DirectX 12
+> on the WARP software adapter) and run on Linux and macOS only where a GPU is
+> found. Missing: a run on a touch device: mobile is not a validated platform.
+
 Fingers are input like keys and buttons. On a phone, a tablet or a touch
 screen in the browser, the window feeds every finger to `ctx.input`; a
 headless test feeds the same events by hand or from an

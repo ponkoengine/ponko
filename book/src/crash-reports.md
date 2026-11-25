@@ -1,5 +1,10 @@
 # Crash reports
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests:
+> `tests/crash_reports.rs`, `tests/native_crash.rs`. Platforms: Linux, macOS
+> and Windows, headless (the workspace tests in the list of checks). Graphics:
+> not involved. Missing: a reference game that uses it.
+
 When a shipped game panics on a player's machine, the panic message goes to a
 terminal nobody looks at. With crash reports, the game leaves a text file in
 the player's data folder that says what happened, on which system and GPU,

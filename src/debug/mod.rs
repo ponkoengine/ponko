@@ -1,6 +1,12 @@
 //! Debug drawing: lines, shapes and text labels in the 2D world, the 3D
 //! world or on the screen, from any system, through [`ctx.debug`](crate::ctx::Ctx::debug).
 //!
+//! **Maturity: tested**, from the guide chapter `debug-draw.md`. Game: none. Tests:
+//! `tests/debug_draw.rs`, `debug_lines_render_test.rs`. Platforms: Linux, macOS and Windows,
+//! headless (the workspace tests in the list of checks). Graphics: offscreen render tests, required
+//! on Windows (DirectX 12 on the WARP software adapter) and run on Linux and macOS only where a GPU
+//! is found. Missing: a reference game that uses it.
+//!
 //! ```
 //! use ponko::prelude::*;
 //! fn show(ctx: &mut Ctx) {
