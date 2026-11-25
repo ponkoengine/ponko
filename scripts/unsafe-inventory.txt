@@ -107,6 +107,13 @@ src/gamepad_sdl_sys.rs | Sdl::enable_motion | src/gamepad_sdl_sys.rs::tests::a_v
 src/gamepad_sdl_sys.rs | Sdl::rumble | src/gamepad_sdl_sys.rs::tests::a_virtual_sdl_pad_reaches_the_engine_with_motion_and_both_kinds_of_rumble | c-library
 src/gamepad_sdl_sys.rs | Sdl::rumble_triggers | src/gamepad_sdl_sys.rs::tests::a_virtual_sdl_pad_reaches_the_engine_with_motion_and_both_kinds_of_rumble | c-library
 src/gamepad_sdl_sys.rs | Sdl::now_ms | src/gamepad_sdl_sys.rs::tests::a_virtual_sdl_pad_reaches_the_engine_with_motion_and_both_kinds_of_rumble | c-library
+src/gamepad_sdl_sys.rs | close_joystick | src/gamepad_sdl_sys.rs::tests::a_virtual_sdl_pad_reaches_the_engine_with_motion_and_both_kinds_of_rumble | c-library
+src/gamepad_sdl_sys.rs | Sdl::present_joysticks | src/gamepad_sdl_sys.rs::tests::a_virtual_sdl_pad_reaches_the_engine_with_motion_and_both_kinds_of_rumble | c-library
+src/gamepad_sdl_sys.rs | Sdl::is_gamepad | src/gamepad_sdl_sys.rs::tests::a_virtual_sdl_pad_reaches_the_engine_with_motion_and_both_kinds_of_rumble | c-library
+src/gamepad_sdl_sys.rs | Sdl::joystick_type | src/gamepad_sdl_sys.rs::tests::a_virtual_sdl_pad_reaches_the_engine_with_motion_and_both_kinds_of_rumble | c-library
+src/gamepad_sdl_sys.rs | Sdl::open_joystick | src/gamepad_sdl_sys.rs::tests::a_virtual_sdl_pad_reaches_the_engine_with_motion_and_both_kinds_of_rumble | c-library
+src/gamepad_sdl_sys.rs | Sdl::haptic_effect | src/gamepad_sdl_sys.rs::tests::a_virtual_sdl_pad_reaches_the_engine_with_motion_and_both_kinds_of_rumble | c-library
+src/gamepad_sdl_sys.rs | Sdl::haptic_autocenter | src/gamepad_sdl_sys.rs::tests::a_virtual_sdl_pad_reaches_the_engine_with_motion_and_both_kinds_of_rumble | c-library
 
 # The system's keyboard layout, for key labels (macOS: Carbon's
 # UCKeyTranslate; Windows: user32's MapVirtualKeyExW).

@@ -1,5 +1,10 @@
 # Tutorial: a first 2D game
 
+> **Maturity: [tested](maturity.md).** Game: none (the tutorial's own game).
+> Tests: `tests/tutorial_2d.rs`. Platforms: Linux, macOS and Windows, headless
+> (the workspace tests in the list of checks); the web build is linted for
+> `wasm32`. Graphics: not involved. Missing: a reference game that uses it.
+
 This tutorial builds **Crab Cove**, a small platformer, from an empty
 project: a crab walks and jumps through a level made in a level editor,
 collects coins with a sound, reaches a flag, and the game remembers its best

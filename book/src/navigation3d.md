@@ -1,5 +1,11 @@
 # 3D navigation meshes
 
+> **Maturity: [tested](maturity.md).** Game: Shard Grove (crawlers on the
+> navmesh), headless only. Tests: `tests/navmesh3d.rs`,
+> `tests/navmesh3d_large.rs`. Platforms: Linux, macOS and Windows, headless
+> (the workspace tests in the list of checks). Graphics: not involved.
+> Missing: Shard Grove's package played on each OS.
+
 Enable `navmesh` for pure Rust Recast baking and Detour pathfinding. It implies
 `3d`, but needs no window, GPU, physics, Bevy or async runtime. Servers can build
 with `--no-default-features --features navmesh`. The existing 2D `NavGrid` and

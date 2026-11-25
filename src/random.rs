@@ -1,4 +1,9 @@
 //! Random numbers that keep simulations reproducible, even on all cores.
+//!
+//! **Maturity: proven**, from the guide chapter `determinism.md`. Game: Ember Hop's autopilot gives
+//! the same result on Linux, macOS and Windows with `physics-determinism`. Tests:
+//! `tests/determinism.rs`, `tests/world_hash.rs`, `tests/physics.rs`. Platforms: Linux, macOS and
+//! Windows, headless (the workspace tests in the list of checks). Graphics: not involved.
 
 use glam::Vec2;
 use ponko_ecs::Entity;

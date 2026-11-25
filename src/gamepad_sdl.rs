@@ -19,8 +19,9 @@
 
 use crate::input::backend::{stick_dead_zone, trigger_dead_zone};
 use crate::input::{
-    ControllerFamily, DeviceKey, GamepadAxis, GamepadBackend, GamepadButton, GamepadCapabilities, GamepadEvents,
-    GamepadInfo, GamepadMotion, MotorLevels,
+    ControllerFamily, DeviceKey, ForceFeedback, ForceFeedbackSupport, GamepadAxis, GamepadBackend, GamepadButton,
+    GamepadCapabilities, GamepadEvents, GamepadInfo, GamepadMotion, JoystickInfo, JoystickKind, MotorLevels,
+    hat_from_bits,
 };
 
 /// SDL's numbers for gamepad buttons, axes, types and sensors
@@ -65,6 +66,29 @@ pub(crate) mod raw {
 
     pub(crate) const SENSOR_ACCEL: i32 = 1;
     pub(crate) const SENSOR_GYRO: i32 = 2;
+
+    // Joystick types (`SDL_joystick.h`).
+    pub(crate) const JOYSTICK_UNKNOWN: i32 = 0;
+    pub(crate) const JOYSTICK_GAMEPAD: i32 = 1;
+    pub(crate) const JOYSTICK_WHEEL: i32 = 2;
+    pub(crate) const JOYSTICK_ARCADE_STICK: i32 = 3;
+    pub(crate) const JOYSTICK_FLIGHT_STICK: i32 = 4;
+    pub(crate) const JOYSTICK_DANCE_PAD: i32 = 5;
+    pub(crate) const JOYSTICK_GUITAR: i32 = 6;
+    pub(crate) const JOYSTICK_DRUM_KIT: i32 = 7;
+    pub(crate) const JOYSTICK_ARCADE_PAD: i32 = 8;
+    pub(crate) const JOYSTICK_THROTTLE: i32 = 9;
+
+    // What `SDL_GetHapticFeatures` sets (`SDL_haptic.h`). The gain and
+    // autocenter bits don't fit sdl3-sys's 16-bit effect type, so they are
+    // spelled here.
+    pub(crate) const HAPTIC_CONSTANT: u32 = 1 << 0;
+    pub(crate) const HAPTIC_SINE: u32 = 1 << 1;
+    pub(crate) const HAPTIC_SPRING: u32 = 1 << 7;
+    pub(crate) const HAPTIC_DAMPER: u32 = 1 << 8;
+    pub(crate) const HAPTIC_FRICTION: u32 = 1 << 10;
+    pub(crate) const HAPTIC_GAIN: u32 = 1 << 16;
+    pub(crate) const HAPTIC_AUTOCENTER: u32 = 1 << 17;
 }
 
 /// One event from SDL's queue, as plain numbers: the pad's SDL instance id
@@ -79,7 +103,63 @@ pub(crate) enum PadEvent {
     /// Gyro in rad/s or accelerometer in m/s², on the pad's axes (x right,
     /// y up, z toward the player): the engine's own convention.
     Sensor(u32, i32, [f32; 3]),
+    /// A joystick (any device, gamepads too) was plugged in or out.
+    JoyAdded(u32),
+    JoyRemoved(u32),
+    /// A joystick's axis, `-32768..=32767`.
+    JoyAxis(u32, i32, i16),
+    JoyButton(u32, i32, bool),
+    /// A joystick's hat, as SDL's bits (up 1, right 2, down 4, left 8).
+    JoyHat(u32, i32, u8),
 }
+
+/// What SDL says about a joystick when it is opened.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct OpenedJoystick {
+    pub(crate) name: String,
+    pub(crate) vendor_id: u16,
+    pub(crate) product_id: u16,
+    /// SDL's joystick type (`raw::JOYSTICK_*`).
+    pub(crate) kind: i32,
+    /// The same for the same device when it comes back.
+    pub(crate) identity: String,
+    pub(crate) axes: usize,
+    pub(crate) buttons: usize,
+    pub(crate) hats: usize,
+    /// Its force-feedback effects (`raw::HAPTIC_*` bits), 0 for none.
+    pub(crate) haptic: u32,
+}
+
+/// One force-feedback effect as plain numbers, SDL's ranges: what the
+/// device layer turns into an `SDL_HapticEffect`, all of them along the
+/// steering axis and playing until stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Effect {
+    /// A steady push, `-32767..=32767` (positive right).
+    Constant {
+        level: i16,
+    },
+    /// A spring toward `center`, both `-32767..=32767` (`coeff` `0..`).
+    Spring {
+        coeff: i16,
+        center: i16,
+    },
+    Damper {
+        coeff: i16,
+    },
+    Friction {
+        coeff: i16,
+    },
+    /// A sine wave of `magnitude` (`0..=32767`) every `period_ms`.
+    Sine {
+        magnitude: i16,
+        period_ms: u16,
+    },
+}
+
+/// The effects a joystick plays at once, one per slot:
+/// constant, spring, damper, friction, vibration.
+pub(crate) const EFFECT_SLOTS: usize = 5;
 
 /// What SDL says about a pad when it is opened.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -116,6 +196,87 @@ pub(crate) trait PadSystem: Send + 'static {
     fn rumble_triggers(&mut self, id: u32, left: u16, right: u16, ms: u32);
     /// Milliseconds since some fixed start.
     fn now_ms(&self) -> u64;
+
+    /// The joysticks already there when the backend starts (gamepads too).
+    fn present_joysticks(&mut self, into: &mut Vec<u32>);
+    /// Whether SDL reads joystick `id` as a gamepad.
+    fn is_gamepad(&mut self, id: u32) -> bool;
+    /// SDL's type for joystick `id` (`raw::JOYSTICK_*`).
+    fn joystick_type(&mut self, id: u32) -> i32;
+    /// Opens a joystick for reading and force feedback; `None` when it can't be.
+    fn open_joystick(&mut self, id: u32) -> Option<OpenedJoystick>;
+    /// Closes it, stopping its effects.
+    fn close_joystick(&mut self, id: u32);
+    /// Plays `effect` in slot `slot` (`0..EFFECT_SLOTS`) of joystick `id`
+    /// until changed, or stops that slot (`None`).
+    fn haptic_effect(&mut self, id: u32, slot: usize, effect: Option<Effect>);
+    /// Sets the device's own centring spring, `0..=100`.
+    fn haptic_autocenter(&mut self, id: u32, level: u8);
+}
+
+/// Whether a device of SDL joystick type `kind` is read as a joystick even
+/// when SDL has a gamepad layout for it: its other axes and its force
+/// feedback matter more than the layout.
+pub(crate) fn joystick_first(kind: i32) -> bool {
+    matches!(
+        kind,
+        raw::JOYSTICK_WHEEL | raw::JOYSTICK_FLIGHT_STICK | raw::JOYSTICK_THROTTLE
+    )
+}
+
+/// The engine's name for SDL joystick type `kind`.
+pub(crate) fn joystick_kind(kind: i32) -> JoystickKind {
+    match kind {
+        raw::JOYSTICK_GAMEPAD => JoystickKind::Gamepad,
+        raw::JOYSTICK_WHEEL => JoystickKind::Wheel,
+        raw::JOYSTICK_ARCADE_STICK => JoystickKind::ArcadeStick,
+        raw::JOYSTICK_FLIGHT_STICK => JoystickKind::FlightStick,
+        raw::JOYSTICK_DANCE_PAD => JoystickKind::DancePad,
+        raw::JOYSTICK_GUITAR => JoystickKind::Guitar,
+        raw::JOYSTICK_DRUM_KIT => JoystickKind::DrumKit,
+        raw::JOYSTICK_ARCADE_PAD => JoystickKind::ArcadePad,
+        raw::JOYSTICK_THROTTLE => JoystickKind::Throttle,
+        _ => JoystickKind::Unknown,
+    }
+}
+
+/// The effects SDL's feature bits `haptic` say a joystick can play.
+pub(crate) fn support_of(haptic: u32) -> ForceFeedbackSupport {
+    let has = |bit: u32| haptic & bit != 0;
+    ForceFeedbackSupport {
+        constant: has(raw::HAPTIC_CONSTANT),
+        spring: has(raw::HAPTIC_SPRING),
+        damper: has(raw::HAPTIC_DAMPER),
+        friction: has(raw::HAPTIC_FRICTION),
+        vibration: has(raw::HAPTIC_SINE),
+        autocenter: has(raw::HAPTIC_AUTOCENTER),
+    }
+}
+
+/// The SDL effects `ff` (clamped) plays in each slot on a joystick that
+/// supports `support`: `None` for an effect that is off or unsupported.
+pub(crate) fn effects_of(ff: &ForceFeedback, support: ForceFeedbackSupport) -> [Option<Effect>; EFFECT_SLOTS] {
+    let level = |v: f32| (v * 32767.0).round() as i16;
+    let on = |supported: bool, v: f32| supported && v != 0.0;
+    [
+        on(support.constant, ff.constant).then(|| Effect::Constant {
+            level: level(ff.constant),
+        }),
+        on(support.spring, ff.spring).then(|| Effect::Spring {
+            coeff: level(ff.spring),
+            center: level(ff.spring_center),
+        }),
+        on(support.damper, ff.damper).then(|| Effect::Damper {
+            coeff: level(ff.damper),
+        }),
+        on(support.friction, ff.friction).then(|| Effect::Friction {
+            coeff: level(ff.friction),
+        }),
+        (support.vibration && !ff.vibration.is_off()).then(|| Effect::Sine {
+            magnitude: level(ff.vibration.strength),
+            period_ms: (1000.0 / ff.vibration.hz).round().clamp(1.0, 65535.0) as u16,
+        }),
+    ]
 }
 
 /// The longest effect SDL plays (`SDL_MAX_RUMBLE_DURATION_MS`).
@@ -201,11 +362,27 @@ struct Pad {
     sent_at: u64,
 }
 
-/// The [`GamepadBackend`] over SDL's gamepads (or a scripted [`PadSystem`]).
+/// A joystick the backend has reported connected.
+#[derive(Debug)]
+struct Joy {
+    id: u32,
+    key: DeviceKey,
+    support: ForceFeedbackSupport,
+    /// The effect last sent to each slot.
+    sent: [Option<Effect>; EFFECT_SLOTS],
+    /// The autocenter level last sent, if any.
+    autocenter: Option<u8>,
+}
+
+/// The [`GamepadBackend`] over SDL's gamepads and joysticks (or a scripted
+/// [`PadSystem`]). Wheels, flight sticks and throttles are joysticks even
+/// when SDL has a gamepad layout for them; other devices are gamepads when
+/// SDL can read them as one, joysticks otherwise.
 pub(crate) struct SdlGamepads<S: PadSystem> {
     system: S,
     started: bool,
     pads: Vec<Pad>,
+    joysticks: Vec<Joy>,
     /// Every device seen: its identity, its key, and whether it is here now.
     /// A device that comes back gets its key (and so its slot) again.
     known: Vec<(String, DeviceKey, bool)>,
@@ -220,6 +397,7 @@ impl<S: PadSystem> SdlGamepads<S> {
             system,
             started: false,
             pads: Vec::new(),
+            joysticks: Vec::new(),
             known: Vec::new(),
             next_key: 0,
             scratch: Vec::new(),
@@ -246,6 +424,10 @@ impl<S: PadSystem> SdlGamepads<S> {
     fn added(&mut self, id: u32, events: &mut GamepadEvents<'_>) {
         if self.pads.iter().any(|p| p.id == id) {
             return;
+        }
+        let kind = self.system.joystick_type(id);
+        if joystick_first(kind) {
+            return; // read as a joystick (`joystick_added`)
         }
         let Some(opened) = self.system.open(id) else { return };
         let motion = (opened.gyro || opened.accel) && self.system.enable_motion(id, opened.gyro, opened.accel);
@@ -296,6 +478,58 @@ impl<S: PadSystem> SdlGamepads<S> {
             entry.2 = false;
         }
         events.disconnected(pad.key);
+    }
+
+    fn joystick_added(&mut self, id: u32, events: &mut GamepadEvents<'_>) {
+        if self.joysticks.iter().any(|j| j.id == id) {
+            return;
+        }
+        let kind = self.system.joystick_type(id);
+        if !joystick_first(kind) && self.system.is_gamepad(id) {
+            return; // read as a gamepad (`added`)
+        }
+        let Some(opened) = self.system.open_joystick(id) else {
+            return;
+        };
+        let support = support_of(opened.haptic);
+        let mut info = JoystickInfo::new(opened.name)
+            .kind(joystick_kind(opened.kind))
+            .layout(opened.axes, opened.buttons, opened.hats)
+            .force_feedback(support);
+        info.vendor_id = (opened.vendor_id != 0).then_some(opened.vendor_id);
+        info.product_id = (opened.product_id != 0).then_some(opened.product_id);
+        // Apart from the gamepads' identities: a device is one or the other.
+        let key = self.key_for(format!("joystick/{}", opened.identity));
+        if events.joystick_connected(key, info).is_none() {
+            self.system.close_joystick(id);
+            if let Some(entry) = self.known.iter_mut().find(|(_, k, _)| *k == key) {
+                entry.2 = false;
+            }
+            return;
+        }
+        self.joysticks.push(Joy {
+            id,
+            key,
+            support,
+            sent: [None; EFFECT_SLOTS],
+            autocenter: None,
+        });
+    }
+
+    fn joystick_removed(&mut self, id: u32, events: &mut GamepadEvents<'_>) {
+        let Some(at) = self.joysticks.iter().position(|j| j.id == id) else {
+            return;
+        };
+        let joy = self.joysticks.swap_remove(at);
+        self.system.close_joystick(id);
+        if let Some(entry) = self.known.iter_mut().find(|(_, k, _)| *k == joy.key) {
+            entry.2 = false;
+        }
+        events.joystick_disconnected(joy.key);
+    }
+
+    fn joystick_key(&self, id: u32) -> Option<DeviceKey> {
+        self.joysticks.iter().find(|j| j.id == id).map(|j| j.key)
     }
 
     fn axis(pad: &mut Pad, axis: i32, value: i16, events: &mut GamepadEvents<'_>) {
@@ -357,6 +591,11 @@ impl<S: PadSystem> GamepadBackend for SdlGamepads<S> {
                 self.added(id, events);
             }
             present.clear();
+            self.system.present_joysticks(&mut present);
+            for &id in &present {
+                self.joystick_added(id, events);
+            }
+            present.clear();
             self.scratch = present;
         }
         for _ in 0..MAX_EVENTS_PER_POLL {
@@ -385,6 +624,23 @@ impl<S: PadSystem> GamepadBackend for SdlGamepads<S> {
                         pad.motion_new = true;
                     }
                 }
+                PadEvent::JoyAdded(id) => self.joystick_added(id, events),
+                PadEvent::JoyRemoved(id) => self.joystick_removed(id, events),
+                PadEvent::JoyAxis(id, axis, value) => {
+                    if let (Some(key), Ok(axis)) = (self.joystick_key(id), usize::try_from(axis)) {
+                        events.joystick_axis(key, axis, (f32::from(value) / 32767.0).clamp(-1.0, 1.0));
+                    }
+                }
+                PadEvent::JoyButton(id, button, down) => {
+                    if let (Some(key), Ok(button)) = (self.joystick_key(id), usize::try_from(button)) {
+                        events.joystick_button(key, button, down);
+                    }
+                }
+                PadEvent::JoyHat(id, hat, bits) => {
+                    if let (Some(key), Ok(hat)) = (self.joystick_key(id), usize::try_from(hat)) {
+                        events.joystick_hat(key, hat, hat_from_bits(bits));
+                    }
+                }
             }
         }
         // One reading a frame, the gyro's and accelerometer's latest together.
@@ -410,13 +666,42 @@ impl<S: PadSystem> GamepadBackend for SdlGamepads<S> {
         pad.levels = levels;
         Self::play(&mut self.system, pad);
     }
+
+    fn set_force_feedback(&mut self, device: DeviceKey, effects: ForceFeedback) {
+        let Some(joy) = self.joysticks.iter_mut().find(|j| j.key == device) else {
+            return;
+        };
+        let want = effects_of(&effects, joy.support);
+        for (slot, effect) in want.into_iter().enumerate() {
+            if effect != joy.sent[slot] {
+                joy.sent[slot] = effect;
+                self.system.haptic_effect(joy.id, slot, effect);
+            }
+        }
+        // The device's own spring: left alone until the game sets any
+        // effect, and off while the game's spring plays.
+        if joy.support.autocenter && (joy.autocenter.is_some() || !effects.is_off()) {
+            let level = if effects.spring > 0.0 {
+                0
+            } else {
+                (effects.autocenter * 100.0).round() as u8
+            };
+            if joy.autocenter != Some(level) {
+                joy.autocenter = Some(level);
+                self.system.haptic_autocenter(joy.id, level);
+            }
+        }
+    }
 }
 
 impl<S: PadSystem> Drop for SdlGamepads<S> {
-    /// Closing a pad stops its rumble.
+    /// Closing a pad stops its rumble, and a joystick its effects.
     fn drop(&mut self) {
         for pad in self.pads.drain(..) {
             self.system.close(pad.id);
+        }
+        for joy in self.joysticks.drain(..) {
+            self.system.close_joystick(joy.id);
         }
     }
 }
@@ -441,6 +726,14 @@ mod tests {
         rumble: Vec<(u32, u16, u16)>,
         triggers: Vec<(u32, u16, u16)>,
         now: u64,
+        /// Joysticks: their types, which SDL reads as gamepads, what opening says.
+        types: Vec<(u32, i32)>,
+        gamepads: Vec<u32>,
+        joysticks: Vec<(u32, OpenedJoystick)>,
+        present_joysticks: Vec<u32>,
+        open_joysticks: Vec<u32>,
+        effects: Vec<(u32, usize, Option<Effect>)>,
+        autocenter: Vec<(u32, u8)>,
     }
 
     #[derive(Debug, Clone, Default)]
@@ -485,6 +778,231 @@ mod tests {
         fn now_ms(&self) -> u64 {
             self.0.lock().unwrap().now
         }
+        fn present_joysticks(&mut self, into: &mut Vec<u32>) {
+            self.with(|s| into.extend(&s.present_joysticks));
+        }
+        fn is_gamepad(&mut self, id: u32) -> bool {
+            self.with(|s| s.gamepads.contains(&id) || s.pads.iter().any(|(i, _)| *i == id))
+        }
+        fn joystick_type(&mut self, id: u32) -> i32 {
+            self.with(|s| {
+                s.types
+                    .iter()
+                    .find(|(i, _)| *i == id)
+                    .map_or(raw::JOYSTICK_UNKNOWN, |(_, t)| *t)
+            })
+        }
+        fn open_joystick(&mut self, id: u32) -> Option<OpenedJoystick> {
+            self.with(|s| {
+                let opened = s.joysticks.iter().find(|(i, _)| *i == id)?.1.clone();
+                s.open_joysticks.push(id);
+                Some(opened)
+            })
+        }
+        fn close_joystick(&mut self, id: u32) {
+            self.with(|s| s.open_joysticks.retain(|&i| i != id));
+        }
+        fn haptic_effect(&mut self, id: u32, slot: usize, effect: Option<Effect>) {
+            self.with(|s| s.effects.push((id, slot, effect)));
+        }
+        fn haptic_autocenter(&mut self, id: u32, level: u8) {
+            self.with(|s| s.autocenter.push((id, level)));
+        }
+    }
+
+    /// A wheel with three pedals, a hat, 20 buttons and every effect.
+    fn wheel() -> OpenedJoystick {
+        OpenedJoystick {
+            name: "Racing Wheel".into(),
+            vendor_id: 0x046d,
+            product_id: 0xc24f,
+            kind: raw::JOYSTICK_WHEEL,
+            identity: "wheel-guid".into(),
+            axes: 4,
+            buttons: 20,
+            hats: 1,
+            haptic: raw::HAPTIC_CONSTANT
+                | raw::HAPTIC_SPRING
+                | raw::HAPTIC_DAMPER
+                | raw::HAPTIC_FRICTION
+                | raw::HAPTIC_SINE
+                | raw::HAPTIC_GAIN
+                | raw::HAPTIC_AUTOCENTER,
+        }
+    }
+
+    #[test]
+    fn a_wheel_is_a_joystick_even_with_a_gamepad_layout_and_its_inputs_arrive() {
+        let fake = Fake::default();
+        fake.with(|s| {
+            // SDL has a gamepad layout for the wheel too: it stays a joystick.
+            s.types = vec![(3, raw::JOYSTICK_WHEEL), (7, raw::JOYSTICK_GAMEPAD)];
+            s.gamepads = vec![3];
+            s.joysticks = vec![(3, wheel()), (7, OpenedJoystick::default())];
+            s.pads = vec![(3, xbox()), (7, dualsense())];
+            s.present = vec![3, 7];
+            s.present_joysticks = vec![3, 7];
+        });
+        let mut ctx = Ctx::new(1.0 / 60.0, glam::Vec2::ONE);
+        ctx.set_gamepad_backend(SdlGamepads::new(fake.clone()));
+        assert_eq!(ctx.input.gamepads().len(), 1, "the DualSense, not the wheel");
+        assert_eq!(ctx.input.joysticks().len(), 1, "the wheel, not the DualSense");
+        let w = ctx.input.joysticks()[0];
+        let info = ctx.input.joystick_info(w).unwrap().clone();
+        assert_eq!(info.name, "Racing Wheel");
+        assert_eq!(info.kind, JoystickKind::Wheel);
+        assert_eq!((info.axes, info.buttons, info.hats), (4, 20, 1));
+        assert_eq!(info.vendor_id, Some(0x046d));
+        assert!(info.force_feedback.constant && info.force_feedback.autocenter);
+        assert_eq!(fake.with(|s| s.open_joysticks.clone()), [3]);
+        assert_eq!(fake.with(|s| s.open.clone()), [7]);
+
+        fake.send(PadEvent::JoyAxis(3, 0, -16384));
+        fake.send(PadEvent::JoyAxis(3, 2, i16::MAX));
+        fake.send(PadEvent::JoyAxis(3, 3, i16::MIN));
+        fake.send(PadEvent::JoyButton(3, 12, true));
+        fake.send(PadEvent::JoyHat(3, 0, 0b0110)); // right and down
+        fake.send(PadEvent::JoyButton(7, 1, true)); // the DualSense's joystick: not ours
+        frame(&mut ctx);
+        assert!((ctx.input.joystick_axis(w, 0) + 0.5).abs() < 1e-4);
+        assert_eq!(ctx.input.joystick_axis(w, 2), 1.0);
+        assert_eq!(ctx.input.joystick_axis(w, 3), -1.0, "clamped");
+        assert!(ctx.input.joystick_pressed(w, 12));
+        assert_eq!(ctx.input.joystick_hat(w, 0), glam::IVec2::new(1, 1));
+
+        fake.send(PadEvent::JoyRemoved(3));
+        frame(&mut ctx);
+        assert!(ctx.input.joysticks().is_empty());
+        assert!(fake.with(|s| s.open_joysticks.is_empty()), "closed");
+        fake.send(PadEvent::JoyAdded(3));
+        frame(&mut ctx);
+        assert_eq!(ctx.input.joysticks(), [w], "back in its slot");
+    }
+
+    #[test]
+    fn a_device_sdl_cant_read_as_a_gamepad_is_a_joystick() {
+        let fake = Fake::default();
+        fake.with(|s| {
+            s.joysticks = vec![(
+                4,
+                OpenedJoystick {
+                    name: "Button Box".into(),
+                    buttons: 32,
+                    ..OpenedJoystick::default()
+                },
+            )];
+        });
+        let mut ctx = Ctx::new(1.0 / 60.0, glam::Vec2::ONE);
+        ctx.set_gamepad_backend(SdlGamepads::new(fake.clone()));
+        fake.send(PadEvent::JoyAdded(4));
+        fake.send(PadEvent::JoyButton(4, 31, true));
+        frame(&mut ctx);
+        let j = ctx.input.joysticks()[0];
+        assert_eq!(ctx.input.joystick_info(j).unwrap().kind, JoystickKind::Unknown);
+        assert!(ctx.input.joystick_down(j, 31));
+    }
+
+    #[test]
+    fn force_feedback_becomes_sdl_effects_sent_only_when_they_change() {
+        let fake = Fake::default();
+        fake.with(|s| {
+            s.types = vec![(3, raw::JOYSTICK_WHEEL)];
+            s.joysticks = vec![(3, wheel())];
+            s.present_joysticks = vec![3];
+        });
+        let mut ctx = Ctx::new(1.0 / 60.0, glam::Vec2::ONE);
+        ctx.set_gamepad_backend(SdlGamepads::new(fake.clone()));
+        let w = ctx.input.joysticks()[0];
+        let road = ForceFeedback {
+            constant: 0.5,
+            damper: 1.0,
+            ..ForceFeedback::OFF
+        }
+        .vibration(0.25, 40.0);
+        ctx.input.set_force_feedback(w, road);
+        frame(&mut ctx);
+        assert_eq!(
+            fake.with(|s| std::mem::take(&mut s.effects)),
+            [
+                (3, 0, Some(Effect::Constant { level: 16384 })),
+                (3, 2, Some(Effect::Damper { coeff: 32767 })),
+                (
+                    3,
+                    4,
+                    Some(Effect::Sine {
+                        magnitude: 8192,
+                        period_ms: 25
+                    })
+                ),
+            ]
+        );
+        assert_eq!(fake.with(|s| std::mem::take(&mut s.autocenter)), [(3, 0)]);
+        frame(&mut ctx);
+        assert!(fake.with(|s| s.effects.is_empty()), "nothing changed");
+
+        // The game's spring instead of the push: one slot stops, one starts.
+        ctx.input.set_force_feedback(
+            w,
+            ForceFeedback {
+                spring: 0.5,
+                spring_center: -0.5,
+                damper: 1.0,
+                ..ForceFeedback::OFF
+            }
+            .vibration(0.25, 40.0),
+        );
+        frame(&mut ctx);
+        assert_eq!(
+            fake.with(|s| std::mem::take(&mut s.effects)),
+            [
+                (3, 0, None),
+                (
+                    3,
+                    1,
+                    Some(Effect::Spring {
+                        coeff: 16384,
+                        center: -16384
+                    })
+                ),
+            ]
+        );
+        ctx.input.set_force_feedback(
+            w,
+            ForceFeedback {
+                autocenter: 0.4,
+                ..ForceFeedback::OFF
+            },
+        );
+        frame(&mut ctx);
+        assert_eq!(fake.with(|s| s.effects.len()), 3, "spring, damper and vibration stop");
+        assert_eq!(fake.with(|s| std::mem::take(&mut s.autocenter)), [(3, 40)]);
+    }
+
+    #[test]
+    fn effects_a_joystick_lacks_are_left_out() {
+        let support = ForceFeedbackSupport {
+            constant: true,
+            ..Default::default()
+        };
+        let ff = ForceFeedback {
+            constant: -1.0,
+            spring: 1.0,
+            ..ForceFeedback::OFF
+        };
+        assert_eq!(
+            effects_of(&ff, support),
+            [Some(Effect::Constant { level: -32767 }), None, None, None, None]
+        );
+        assert_eq!(effects_of(&ForceFeedback::OFF, support), [None; EFFECT_SLOTS]);
+        let slow = effects_of(&ForceFeedback::OFF.vibration(1.0, 0.001), support_of(raw::HAPTIC_SINE));
+        assert_eq!(
+            slow[4],
+            Some(Effect::Sine {
+                magnitude: 32767,
+                period_ms: 65535
+            }),
+            "the longest period SDL takes"
+        );
     }
 
     fn dualsense() -> Opened {

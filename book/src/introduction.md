@@ -1,5 +1,8 @@
 # Ponko
 
+> **Maturity: not a feature.** This page introduces the guide; each feature
+> chapter carries its own level.
+
 Ponko is a general-purpose 2D/3D game engine in Rust, with C and C++ bindings.
 It aims to combine serious game-engine capabilities, measured performance,
 clear code-first APIs and practical AI-assisted development. Large simulations

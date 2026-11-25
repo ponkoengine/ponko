@@ -1,5 +1,10 @@
 //! Game AI: behaviour trees and utility scoring, as data.
 //!
+//! **Maturity: tested**, from the guide chapter `ai.md`. Game: none: the reference games keep their
+//! AI state by hand. Tests: `tests/ai.rs`, `tests/ai_guards.rs`. Platforms: Linux, macOS and
+//! Windows, headless (the workspace tests in the list of checks). Graphics: not involved. Missing:
+//! a reference game that uses it.
+//!
 //! An optional kit: nothing in the engine runs it, and a game that doesn't
 //! use it pays nothing. Plain systems with a `match` on an enum are the
 //! simplest AI and stay the first choice for an enemy with two or three

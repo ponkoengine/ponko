@@ -1,5 +1,10 @@
 # Reflection: components and resources as JSON
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests: `tests/reflect.rs`.
+> Platforms: Linux, macOS and Windows, headless (the workspace tests in the
+> list of checks). Graphics: not involved. Missing: a reference game that uses
+> it.
+
 Reflection lets code that doesn't know your types read and change them by
 name: the agent bridge (MCP), the inspector, and save/load all use it. It's
 opt-in per type and built on [serde](https://serde.rs).

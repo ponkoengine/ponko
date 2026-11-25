@@ -1,5 +1,10 @@
 # Asset sources: assets that don't live in `assets/`
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests:
+> `tests/asset_sources.rs`, `tests/asset_packs.rs`. Platforms: Linux, macOS
+> and Windows, headless (the workspace tests in the list of checks). Graphics:
+> not involved. Missing: a reference game that uses it.
+
 By default a named asset (`"sprites/crab.png"`, `"rules.json"`) is a file in
 the `assets/` folder (on the web, a file listed in `assets/index.json`), else
 in the `assets.pack` beside that folder (on the web, the page's pack). An

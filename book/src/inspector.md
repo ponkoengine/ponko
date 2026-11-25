@@ -1,5 +1,10 @@
 # The inspector: look inside a running game
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests: the inspector's unit
+> tests, with and without the editor. Platforms: Linux, macOS and Windows,
+> headless (the workspace tests in the list of checks). Graphics: not
+> involved. Missing: a recorded run of the overlay in a window.
+
 Press the backquote key (`` ` ``, left of 1) in a debug build and a panel
 opens on the right of the window. It shows the game as it runs:
 

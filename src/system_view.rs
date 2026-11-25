@@ -1,6 +1,11 @@
 //! The restricted view a declared system gets instead of `&mut Ctx`:
 //! [`SystemView`], for systems that take it ([`Game::add`](crate::game::Game::add)).
 //!
+//! **Maturity: tested**, from the guide chapter `system-access.md`. Game: none. Tests:
+//! `tests/system_access.rs`, `tests/system_views.rs`. Platforms: Linux, macOS and Windows, headless
+//! (the workspace tests in the list of checks). Graphics: not involved. Missing: a reference game
+//! that uses it.
+//!
 //! A view system can reach only what its [`SystemAccess`] declares. The
 //! world part is a [`WorldView`] (declared components and resources, no
 //! structural changes). Events, commands and services are fields with the

@@ -4,6 +4,12 @@
 //! are fetched over HTTP before setup runs: the page's asset pack (named by
 //! the canvas's `data-pack`, fetched with range requests), or the loose
 //! files listed in `assets/index.json`.
+//!
+//! **Maturity: tested**, from the guide chapter `web.md`. Game: Coin Dash in headless Chromium and
+//! WebKit; Ember Hop builds for the web. Tests: the browser smoke runs (`web/smoke`). Platforms:
+//! the web, through headless Chromium and WebKit. Graphics: WebGL2 in both browsers; WebGPU is
+//! tried but verified only by hand on real GPUs. Missing: WebGPU in a recorded run, and Firefox
+//! (its headless build has no WebGL2).
 
 mod failure;
 pub(crate) mod ime;

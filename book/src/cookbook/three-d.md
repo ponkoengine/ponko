@@ -1,5 +1,10 @@
 # In 3D
 
+> **Maturity: [tested](../maturity.md).** Game: none. Tests:
+> `tests/cookbook_3d.rs` runs every recipe. Platforms: Linux, macOS and
+> Windows, headless (the workspace tests in the list of checks). Graphics: not
+> involved.
+
 Clicking a 3D object and walking a character with a third-person camera, with 3D physics (`Game::physics3d`).
 
 ## Click a 3D object

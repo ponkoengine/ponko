@@ -1,5 +1,15 @@
 //! [`Ui`]: the screen's UI, as `ctx.ui`.
 //!
+//! **Maturity: proven**, from the guide chapter `ui.md`. Game: Coin Dash and Ember Hop, packaged
+//! and played on Linux, macOS and Windows (Coin Dash's menus and settings). Tests:
+//! `tests/ui_retained.rs`, `tests/ui.rs`, `tests/coin_dash_menus.rs`, `ui_render_test.rs`.
+//! Platforms: Linux, macOS and Windows, headless (the workspace tests in the list of checks).
+//! Graphics: the packaged games run in a window on Linux (software Vulkan under Xvfb), macOS and
+//! Windows (DirectX 12, WARP when there is no GPU); Coin Dash also runs in headless Chromium and
+//! WebKit on WebGL2; offscreen render tests, required on Windows (DirectX 12 on the WARP software
+//! adapter) and run on Linux and macOS only where a GPU is found. Missing: screen readers are
+//! checked by hand (Screen reader records).
+//!
 //! **What lives here.** The retained widget tree with its screen stack,
 //! focus and queued events ([`Ui`]); who has the pointer and the keyboard
 //! ([`Ui::wants_pointer`], [`Ui::wants_keyboard`]); and the immediate

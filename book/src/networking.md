@@ -1,5 +1,11 @@
 # Lockstep, rollback and your own protocol
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests: `tests/net.rs`,
+> `tests/net_messages.rs`, `tests/net_rollback.rs`, `tests/game_rollback.rs`,
+> on loopback. Platforms: Linux, macOS and Windows, headless (the workspace
+> tests in the list of checks). Graphics: not involved. Missing: a reference
+> game and a run over a real network.
+
 This chapter is for games that don't take the default path,
 [replication](replication.md) (see [pick a model](multiplayer.md)):
 deterministic **lockstep** and **rollback**, and **application messages**

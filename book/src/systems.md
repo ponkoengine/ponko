@@ -1,5 +1,11 @@
 # Systems and the frame
 
+> **Maturity: [proven](maturity.md).** Game: Coin Dash and Ember Hop, packaged
+> and played on Linux, macOS and Windows. Tests:
+> `tests/system_registration.rs`, `tests/phases.rs`,
+> `tests/schedule_barriers.rs`. Platforms: Linux, macOS and Windows, headless
+> (the workspace tests in the list of checks). Graphics: not involved.
+
 A **system** is a function `fn(&mut Ctx)` (or a closure); in C++, anything
 callable as `void(ponko::ctx&)`, with an optional name for timings and tools.
 A game is built from two things:

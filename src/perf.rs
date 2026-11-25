@@ -1,6 +1,12 @@
 //! [`Perf`], the performance service at `ctx.perf`: where a frame's time
 //! and allocations go.
 //!
+//! **Maturity: tested**, from the guide chapter `profiling.md`. Game: none. Tests:
+//! `tests/profiling.rs`, `tests/perf_report.rs`, `pass_timing_render_test.rs`. Platforms: Linux,
+//! macOS and Windows, headless (the workspace tests in the list of checks). Graphics: offscreen
+//! render tests, required on Windows (DirectX 12 on the WARP software adapter) and run on Linux and
+//! macOS only where a GPU is found. Missing: a reference game that uses it.
+//!
 //! **What lives here:** each system's time ([`Perf::system_timings`]), the
 //! last frame's drawing cost ([`Perf::render_stats`], [`Perf::gpu_passes`]),
 //! frame-time statistics ([`Perf::frame_stats`]), the on-screen HUD

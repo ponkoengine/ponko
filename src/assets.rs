@@ -1,5 +1,10 @@
 //! [`Assets`]: asset files, as `ctx.assets`.
 //!
+//! **Maturity: tested**, from the guide chapter `asset-sources.md`. Game: none. Tests:
+//! `tests/asset_sources.rs`, `tests/asset_packs.rs`. Platforms: Linux, macOS and Windows, headless
+//! (the workspace tests in the list of checks). Graphics: not involved. Missing: a reference game
+//! that uses it.
+//!
 //! **What lives here.** Where named assets are read from
 //! ([`Assets::add_source`], [`AssetSource`], [`MemorySource`]), your own
 //! asset types ([`Assets::load_with`]), data files that fill resources and

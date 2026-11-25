@@ -1,5 +1,11 @@
 # Dedicated servers
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests: `tests/server.rs`,
+> `tests/server_signals.rs`; the server container is built in the list of
+> checks. Platforms: Linux, macOS and Windows, headless (the workspace tests
+> in the list of checks); the container on Linux. Graphics: not involved.
+> Missing: a reference game and a deployed server.
+
 A dedicated server is the game's simulation on a machine with no player at
 it: no window, GPU or sound, a fixed tick rate, running until an operator or
 an orchestrator (Docker, Kubernetes, systemd) stops it. Ponko has three

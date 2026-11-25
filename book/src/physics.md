@@ -1,5 +1,12 @@
 # Physics: bodies that fall, stack and bounce
 
+> **Maturity: [proven](maturity.md).** Game: Ember Hop, packaged and played on
+> Linux, macOS and Windows. Tests: `tests/physics.rs`,
+> `tests/physics2d_queries.rs`, `tests/tilemap_physics.rs`; with
+> `physics-determinism` the same pile and Ember Hop's autopilot give the same
+> result on each OS. Platforms: Linux, macOS and Windows, headless (the
+> workspace tests in the list of checks). Graphics: not involved.
+
 Crates that tumble, balls that bounce, doors that push things, triggers that
 notice who walked in: 2D rigid-body physics, built on
 [rapier](https://rapier.rs). It's behind the `physics` feature:

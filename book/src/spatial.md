@@ -1,5 +1,10 @@
 # Spatial queries
 
+> **Maturity: [tested](maturity.md).** Game: none (the Legions showcase uses
+> it). Tests: `tests/spatial.rs`. Platforms: Linux, macOS and Windows,
+> headless (the workspace tests in the list of checks). Graphics: not
+> involved. Missing: a reference game that uses it.
+
 "Who is near me?" is the core question of most simulations. Checking every
 pair is O(n²); a **spatial grid** answers it by looking only at nearby cells.
 

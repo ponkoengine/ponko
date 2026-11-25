@@ -1,5 +1,11 @@
 # The simulation clock
 
+> **Maturity: [proven](maturity.md).** Game: Coin Dash and Ember Hop, packaged
+> and played on Linux, macOS and Windows (fixed-step rules). Tests:
+> `tests/long_session_time.rs`, `tests/step_inputs.rs`,
+> `tests/determinism.rs`. Platforms: Linux, macOS and Windows, headless (the
+> workspace tests in the list of checks). Graphics: not involved.
+
 Simulation systems run on their own clock, separate from the frame rate. The
 game can pause, step and fast-forward the sim while rendering and input keep
 running normally.

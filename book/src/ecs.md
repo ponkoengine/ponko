@@ -1,5 +1,10 @@
 # Entities, components, queries
 
+> **Maturity: [proven](maturity.md).** Game: Coin Dash and Ember Hop, packaged
+> and played on Linux, macOS and Windows. Tests: `crates/ponko_ecs/tests`, and
+> its unsafe code under Miri. Platforms: Linux, macOS and Windows, headless
+> (the workspace tests in the list of checks). Graphics: not involved.
+
 The game world lives in `ctx.world`, an entity-component system (ECS).
 
 - An **entity** is an id (`Entity`). It has no data of its own.

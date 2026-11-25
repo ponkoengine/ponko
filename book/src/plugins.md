@@ -1,5 +1,10 @@
 # Plugins for other crates
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests: `tests/plugins.rs`,
+> `tests/plugin_crate.rs`. Platforms: Linux, macOS and Windows, headless (the
+> workspace tests in the list of checks). Graphics: not involved. Missing: a
+> reference game that uses it.
+
 A [`Plugin`](systems.md#plugins) is one module of a game: `build` adds its
 systems, `setup` does its startup work. The same trait is how a crate
 extends games it has never seen: a weather system, an AI kit or a debug

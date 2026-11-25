@@ -1,5 +1,11 @@
 # Parallel systems
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests:
+> `tests/system_schedule.rs`, and a run of the net and determinism tests with
+> the scheduler forced on. Platforms: Linux, macOS and Windows, headless (the
+> workspace tests in the list of checks). Graphics: not involved. Missing: a
+> reference game that uses it.
+
 Systems run one at a time unless you ask for more. With
 `Game::parallel_systems(true)`, [view systems](system-access.md) whose
 declarations don't conflict run at the same time, on several threads. It is

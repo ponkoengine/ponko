@@ -1,5 +1,10 @@
 # Events: messages between systems
 
+> **Maturity: [proven](maturity.md).** Game: Coin Dash and Ember Hop, packaged
+> and played on Linux, macOS and Windows. Tests: `tests/events.rs`. Platforms:
+> Linux, macOS and Windows, headless (the workspace tests in the list of
+> checks). Graphics: not involved.
+
 A system often needs to tell other systems that something happened: a unit
 died, a building finished, the player scored. Send an event and let whoever
 cares read it, instead of having systems call each other or poll flags.

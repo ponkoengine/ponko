@@ -1,5 +1,12 @@
 # The editor: build scenes and prefabs
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests: the editor's unit
+> tests without a window, `editor_render_test.rs`. Platforms: Linux, macOS and
+> Windows, headless (the workspace tests in the list of checks); the web build
+> is linted. Graphics: offscreen render tests, required on Windows (DirectX 12
+> on the WARP software adapter) and run on Linux and macOS only where a GPU is
+> found. Missing: a reference game that uses it.
+
 The editor is your game, opened in edit mode. Its window becomes a level
 editor: a scene tree on the left, the selected entity's components on the
 right, the world in the middle with gizmos to move, turn and scale things,

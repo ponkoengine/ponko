@@ -1,5 +1,10 @@
 # Ctx and its services
 
+> **Maturity: [proven](maturity.md).** Game: Coin Dash and Ember Hop, packaged
+> and played on Linux, macOS and Windows. Tests: `tests/services.rs`,
+> `tests/service_phases.rs`. Platforms: Linux, macOS and Windows, headless
+> (the workspace tests in the list of checks). Graphics: not involved.
+
 Every system gets one argument, `ctx: &mut Ctx`. `Ctx` is a set of public
 fields, one per area of the engine. Each area is a plain struct with its own
 methods, so you find a call by asking "which area is this?" and typing

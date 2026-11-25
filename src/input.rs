@@ -1,6 +1,12 @@
 //! [`Input`], the input service at `ctx.input`: keyboard, mouse, gamepads,
 //! named actions, typed text and the cursor lock.
 //!
+//! **Maturity: tested**, from the guide chapter `input.md`. Game: Coin Dash and Ember Hop read
+//! keys, the mouse and gamepads, with scripted input. Tests: `tests/input_recording.rs`,
+//! `tests/pressed_this_frame.rs`, `tests/ui_fed_input.rs`. Platforms: Linux, macOS and Windows,
+//! headless (the workspace tests in the list of checks). Graphics: not involved. Missing: a
+//! recorded run with real devices: the smoke runs script their input.
+//!
 //! **What lives here:** what is held (`key_down`, `mouse_down`,
 //! `gamepad_down`), what changed this frame (`*_pressed`, `*_released`),
 //! pointer position and movement, gamepad axes, the
@@ -30,6 +36,7 @@ pub(crate) mod backend;
 pub(crate) mod controller;
 pub(crate) mod glyphs;
 pub(crate) mod ime;
+pub(crate) mod joystick;
 pub(crate) mod key_labels;
 pub use backend::{DeviceKey, FakeGamepads, GamepadBackend, GamepadEvents};
 pub use controller::{
@@ -37,6 +44,10 @@ pub use controller::{
 };
 pub use glyphs::{Glyph, GlyphAtlas, Glyphs};
 pub use ime::ImeEvent;
+pub use joystick::{
+    ForceFeedback, ForceFeedbackSupport, Joystick, JoystickInfo, JoystickKind, MAX_JOYSTICK_AXES, MAX_JOYSTICK_BUTTONS,
+    MAX_JOYSTICK_HATS, MAX_JOYSTICKS, Vibration, hat_from_bits,
+};
 pub use key_labels::KeyLabels;
 pub(crate) mod touch;
 mod touch_desktop;
@@ -517,6 +528,8 @@ pub struct Input {
     pub(crate) ime: ime::ImeState,
     /// Controller identity, rumble, motion, last used device, players.
     pub(crate) controllers: controller::Controllers,
+    /// Wheels, flight sticks and other joysticks, and their force feedback.
+    pub(crate) joysticks: joystick::Joysticks,
     /// Touches, gestures and the on-screen controls' zones.
     pub(crate) touch: touch::TouchState,
     /// What the retained UI took of this frame's input.
@@ -543,6 +556,7 @@ impl Input {
             scenarios: Default::default(),
             ime: Default::default(),
             controllers: Default::default(),
+            joysticks: Default::default(),
             touch: Default::default(),
             ui_seen: Default::default(),
             key_labels: Default::default(),
@@ -739,6 +753,7 @@ impl Input {
         self.typed_text.clear();
         self.ime.end_frame();
         self.controllers.end_frame();
+        self.joysticks.end_frame();
         self.key_labels.end_frame();
         self.mouse_wheel = Vec2::ZERO;
         self.mouse_motion = Vec2::ZERO;

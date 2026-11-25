@@ -1,5 +1,10 @@
 # Tools and agents: the control endpoint
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests: `tests/control.rs`.
+> Platforms: Linux, macOS and Windows, headless (the workspace tests in the
+> list of checks). Graphics: not involved. Missing: a reference game that uses
+> it.
+
 A running game, windowed or headless, can open a **control endpoint** that
 tools use to look inside it and drive it: AI agents (through
 [`ponko-mcp`](agents.md)), the inspector, test scripts. Several instances can run

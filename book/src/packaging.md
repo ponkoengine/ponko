@@ -1,5 +1,13 @@
 # A complete game, packaged
 
+> **Maturity: [proven](maturity.md).** Game: Coin Dash and Ember Hop, packaged
+> and played on Linux, macOS and Windows; Shard Grove packages, but its
+> package is not played. Tests: `scripts/package-coin-dash.py selftest` and
+> the package smoke runs. Platforms: Linux, macOS and Windows (the
+> `package-smoke` job). Graphics: the packaged games run in a window on Linux
+> (software Vulkan under Xvfb), macOS and Windows (DirectX 12, WARP when there
+> is no GPU); Coin Dash also runs in headless Chromium and WebKit on WebGL2.
+
 [`examples/coin_dash`](../../examples/coin_dash)
 is the engine's reference for a small *finished* game: title screen, settings,
 rounds with a win and a loss, pause, restart, result screens, sound, saved

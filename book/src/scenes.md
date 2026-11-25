@@ -1,5 +1,12 @@
 # Scenes and prefabs
 
+> **Maturity: [proven](maturity.md).** Game: Coin Dash and Ember Hop, packaged
+> and played on Linux, macOS and Windows (Ember Hop's prefabs, title scene and
+> world save slots). Tests: `tests/scenes.rs`, `tests/scene_lifecycle.rs`,
+> `tests/save_compat.rs`, `tests/prefab_compat.rs`. Platforms: Linux, macOS
+> and Windows, headless (the workspace tests in the list of checks). Graphics:
+> not involved.
+
 A **scene** is a whole world kept in a file: a level, a menu, a test
 setup. A **prefab** is an entity (or a [tree of them](#prefabs-with-children)),
 kept in a file and spawned as many times as you like: a tree, an enemy, a

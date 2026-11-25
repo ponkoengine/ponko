@@ -1,4 +1,8 @@
 //! [`SpatialGrid`]: fast "who is near this point?" queries for huge numbers of entities.
+//!
+//! **Maturity: tested**, from the guide chapter `spatial.md`. Game: none (the Legions showcase uses
+//! it). Tests: `tests/spatial.rs`. Platforms: Linux, macOS and Windows, headless (the workspace
+//! tests in the list of checks). Graphics: not involved. Missing: a reference game that uses it.
 
 use glam::Vec2;
 use ponko_ecs::{Entity, World};

@@ -1,5 +1,10 @@
 # Levels and objects
 
+> **Maturity: [tested](../maturity.md).** Game: none. Tests:
+> `tests/cookbook_world.rs` runs every recipe. Platforms: Linux, macOS and
+> Windows, headless (the workspace tests in the list of checks). Graphics: not
+> involved.
+
 Loading a level, spawning a prefab, attaching one entity to another and drawing debug shapes.
 
 ## Load a level from a Tiled map

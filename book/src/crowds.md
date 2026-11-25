@@ -1,5 +1,12 @@
 # Crowds: thousands of animated characters
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests: `tests/crowds.rs`,
+> `crowd_render_test.rs`. Platforms: Linux, macOS and Windows, headless (the
+> workspace tests in the list of checks). Graphics: offscreen render tests,
+> required on Windows (DirectX 12 on the WARP software adapter) and run on
+> Linux and macOS only where a GPU is found. Missing: a reference game that
+> uses it.
+
 A stadium, a market square, an army on the march: thousands of characters
 that share a skeleton, a few meshes and a few clips. As entities, each would
 be posed on the CPU, skinned on its own and drawn on its own: 10,000 of them

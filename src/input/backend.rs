@@ -10,7 +10,10 @@
 
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use glam::IVec2;
+
 use super::controller::{GamepadInfo, GamepadMotion, MotorLevels};
+use super::joystick::{ForceFeedback, Joystick, JoystickInfo, MAX_JOYSTICKS};
 use super::{Gamepad, GamepadAxis, GamepadButton, Input, MAX_GAMEPADS};
 use crate::ctx::Ctx;
 
@@ -87,13 +90,22 @@ pub trait GamepadBackend: Send + 'static {
     /// ([`MotorLevels::OFF`] stops). Motors the device or backend lacks are
     /// ignored.
     fn set_rumble(&mut self, device: DeviceKey, levels: MotorLevels);
+
+    /// Plays these force-feedback effects on joystick `device` until told
+    /// otherwise ([`ForceFeedback::OFF`] stops them), sent when they change
+    /// (at most once per joystick per frame), already clamped. Effects the
+    /// device or backend can't play are ignored; by default, all of them.
+    fn set_force_feedback(&mut self, device: DeviceKey, effects: ForceFeedback) {
+        let _ = (device, effects);
+    }
 }
 
 /// What a [`GamepadBackend`] reports during [`poll`](GamepadBackend::poll).
 /// Events for a device that isn't connected are ignored.
 pub struct GamepadEvents<'a> {
     input: &'a mut Input,
-    slots: &'a mut Slots,
+    slots: &'a mut Slots<MAX_GAMEPADS>,
+    joystick_slots: &'a mut Slots<MAX_JOYSTICKS>,
 }
 
 impl GamepadEvents<'_> {
@@ -102,10 +114,11 @@ impl GamepadEvents<'_> {
     /// slot, or `None` when all [`MAX_GAMEPADS`] are taken. Reporting a
     /// connected device again only updates its info.
     pub fn connected(&mut self, device: DeviceKey, info: GamepadInfo) -> Option<Gamepad> {
-        let pad = match self.slots.slot_of(device) {
-            Some(pad) => pad,
+        let slot = match self.slots.slot_of(device) {
+            Some(slot) => slot,
             None => self.slots.take(device)?,
         };
+        let pad = Gamepad(slot as u8);
         self.input.connect_gamepad_at(pad, info);
         Some(pad)
     }
@@ -113,55 +126,117 @@ impl GamepadEvents<'_> {
     /// `device` disconnected: its held buttons read as released this frame,
     /// and its slot waits for it to come back.
     pub fn disconnected(&mut self, device: DeviceKey) {
-        if let Some(pad) = self.slots.release(device) {
-            self.input.disconnect_gamepad(pad);
+        if let Some(slot) = self.slots.release(device) {
+            self.input.disconnect_gamepad(Gamepad(slot as u8));
         }
     }
 
     /// A button of `device` went down (`true`) or up.
     pub fn button(&mut self, device: DeviceKey, button: GamepadButton, down: bool) {
-        if let Some(pad) = self.slots.slot_of(device) {
+        if let Some(pad) = self.pad(device) {
             self.input.set_gamepad_button(pad, button, down);
         }
     }
 
     /// An axis of `device` moved: sticks `-1..=1` with y down, triggers `0..=1`.
     pub fn axis(&mut self, device: DeviceKey, axis: GamepadAxis, value: f32) {
-        if let Some(pad) = self.slots.slot_of(device) {
+        if let Some(pad) = self.pad(device) {
             self.input.set_gamepad_axis(pad, axis, value);
         }
     }
 
     /// A new gyro and accelerometer reading of `device`.
     pub fn motion(&mut self, device: DeviceKey, motion: GamepadMotion) {
-        if let Some(pad) = self.slots.slot_of(device) {
+        if let Some(pad) = self.pad(device) {
             self.input.set_gamepad_motion(pad, motion);
+        }
+    }
+
+    fn pad(&self, device: DeviceKey) -> Option<Gamepad> {
+        self.slots.slot_of(device).map(|s| Gamepad(s as u8))
+    }
+
+    fn joystick(&self, device: DeviceKey) -> Option<Joystick> {
+        self.joystick_slots.slot_of(device).map(|s| Joystick(s as u8))
+    }
+
+    /// Joystick `device` connected (a wheel, a flight stick, anything read
+    /// by axis and button number): it takes a joystick slot, its old one if
+    /// it was here before. Returns the slot, or `None` when all
+    /// [`MAX_JOYSTICKS`] are taken. Reporting it again only updates its info.
+    /// Joysticks have their own slots and keys, apart from gamepads'.
+    pub fn joystick_connected(&mut self, device: DeviceKey, info: JoystickInfo) -> Option<Joystick> {
+        let slot = match self.joystick_slots.slot_of(device) {
+            Some(slot) => slot,
+            None => self.joystick_slots.take(device)?,
+        };
+        let joystick = Joystick(slot as u8);
+        self.input.connect_joystick_at(joystick, info);
+        Some(joystick)
+    }
+
+    /// Joystick `device` disconnected: its held buttons read as released
+    /// this frame, and its slot waits for it to come back.
+    pub fn joystick_disconnected(&mut self, device: DeviceKey) {
+        if let Some(slot) = self.joystick_slots.release(device) {
+            self.input.disconnect_joystick(Joystick(slot as u8));
+        }
+    }
+
+    /// Axis number `axis` of joystick `device` moved to `value`, `-1..=1`.
+    pub fn joystick_axis(&mut self, device: DeviceKey, axis: usize, value: f32) {
+        if let Some(j) = self.joystick(device) {
+            self.input.set_joystick_axis(j, axis, value);
+        }
+    }
+
+    /// Button number `button` of joystick `device` went down (`true`) or up.
+    pub fn joystick_button(&mut self, device: DeviceKey, button: usize, down: bool) {
+        if let Some(j) = self.joystick(device) {
+            self.input.set_joystick_button(j, button, down);
+        }
+    }
+
+    /// Hat number `hat` of joystick `device` moved: `x` left -1 to right 1,
+    /// `y` up -1 to down 1 ([`hat_from_bits`](crate::input::hat_from_bits)
+    /// reads the usual bit form).
+    pub fn joystick_hat(&mut self, device: DeviceKey, hat: usize, value: IVec2) {
+        if let Some(j) = self.joystick(device) {
+            self.input.set_joystick_hat(j, hat, value);
         }
     }
 }
 
 /// Which device holds each slot, and which device each empty slot waits
 /// for (the one unplugged from it last).
-#[derive(Debug, Default)]
-struct Slots {
-    held: [Option<DeviceKey>; MAX_GAMEPADS],
-    waiting: [Option<DeviceKey>; MAX_GAMEPADS],
+#[derive(Debug)]
+struct Slots<const N: usize> {
+    held: [Option<DeviceKey>; N],
+    waiting: [Option<DeviceKey>; N],
 }
 
-impl Slots {
-    fn slot_of(&self, device: DeviceKey) -> Option<Gamepad> {
-        let slot = self.held.iter().position(|&d| d == Some(device))?;
-        Some(Gamepad(slot as u8))
+impl<const N: usize> Default for Slots<N> {
+    fn default() -> Self {
+        Self {
+            held: [None; N],
+            waiting: [None; N],
+        }
+    }
+}
+
+impl<const N: usize> Slots<N> {
+    fn slot_of(&self, device: DeviceKey) -> Option<usize> {
+        self.held.iter().position(|&d| d == Some(device))
     }
 
     /// A slot for a device connecting: the one it left, else the lowest free
     /// slot nobody waits for, else the lowest free slot.
-    fn take(&mut self, device: DeviceKey) -> Option<Gamepad> {
+    fn take(&mut self, device: DeviceKey) -> Option<usize> {
         let free = |s: usize| self.held[s].is_none();
-        let slot = (0..MAX_GAMEPADS)
+        let slot = (0..N)
             .find(|&s| free(s) && self.waiting[s] == Some(device))
-            .or_else(|| (0..MAX_GAMEPADS).find(|&s| free(s) && self.waiting[s].is_none()))
-            .or_else(|| (0..MAX_GAMEPADS).find(|&s| free(s)))?;
+            .or_else(|| (0..N).find(|&s| free(s) && self.waiting[s].is_none()))
+            .or_else(|| (0..N).find(|&s| free(s)))?;
         self.held[slot] = Some(device);
         self.waiting[slot] = None;
         // A device waits for one slot only.
@@ -170,14 +245,14 @@ impl Slots {
                 *w = None;
             }
         }
-        Some(Gamepad(slot as u8))
+        Some(slot)
     }
 
-    fn release(&mut self, device: DeviceKey) -> Option<Gamepad> {
-        let pad = self.slot_of(device)?;
-        self.held[pad.slot()] = None;
-        self.waiting[pad.slot()] = Some(device);
-        Some(pad)
+    fn release(&mut self, device: DeviceKey) -> Option<usize> {
+        let slot = self.slot_of(device)?;
+        self.held[slot] = None;
+        self.waiting[slot] = Some(device);
+        Some(slot)
     }
 }
 
@@ -188,8 +263,11 @@ pub(crate) struct GamepadDriver {
     // In a Mutex so `Ctx` stays `Sync` with a backend that is only `Send`
     // (never contended: only the game's thread touches it).
     backend: Option<Mutex<Box<dyn GamepadBackend>>>,
-    slots: Slots,
+    slots: Slots<MAX_GAMEPADS>,
     sent: [MotorLevels; MAX_GAMEPADS],
+    joystick_slots: Slots<MAX_JOYSTICKS>,
+    /// The force feedback last sent to each joystick.
+    sent_force_feedback: [ForceFeedback; MAX_JOYSTICKS],
 }
 
 impl std::fmt::Debug for GamepadDriver {
@@ -197,6 +275,7 @@ impl std::fmt::Debug for GamepadDriver {
         f.debug_struct("GamepadDriver")
             .field("installed", &self.backend.is_some())
             .field("slots", &self.slots)
+            .field("joystick_slots", &self.joystick_slots)
             .finish()
     }
 }
@@ -225,8 +304,18 @@ impl GamepadDriver {
                 input.disconnect_gamepad(Gamepad(slot as u8));
             }
         }
+        for slot in 0..MAX_JOYSTICKS {
+            if let Some(device) = self.joystick_slots.held[slot] {
+                if !self.sent_force_feedback[slot].is_off() {
+                    old.set_force_feedback(device, ForceFeedback::OFF);
+                }
+                input.disconnect_joystick(Joystick(slot as u8));
+            }
+        }
         self.slots = Slots::default();
         self.sent = [MotorLevels::OFF; MAX_GAMEPADS];
+        self.joystick_slots = Slots::default();
+        self.sent_force_feedback = [ForceFeedback::OFF; MAX_JOYSTICKS];
     }
 
     /// Once per frame: counts rumble down by `dt` real seconds, sends the
@@ -237,6 +326,7 @@ impl GamepadDriver {
             return;
         }
         self.send_rumble(input);
+        self.send_force_feedback(input);
         self.poll(input);
     }
 
@@ -261,12 +351,29 @@ impl GamepadDriver {
         }
     }
 
+    fn send_force_feedback(&mut self, input: &Input) {
+        for slot in 0..MAX_JOYSTICKS {
+            let Some(device) = self.joystick_slots.held[slot] else {
+                self.sent_force_feedback[slot] = ForceFeedback::OFF;
+                continue;
+            };
+            let want = input.joysticks.force_feedback[slot];
+            if want != self.sent_force_feedback[slot] {
+                self.sent_force_feedback[slot] = want;
+                if let Some(mut backend) = self.backend() {
+                    backend.set_force_feedback(device, want);
+                }
+            }
+        }
+    }
+
     fn poll(&mut self, input: &mut Input) {
         let Some(backend) = self.backend.as_ref() else { return };
         let mut backend = backend.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut events = GamepadEvents {
             input,
             slots: &mut self.slots,
+            joystick_slots: &mut self.joystick_slots,
         };
         backend.poll(&mut events);
     }
@@ -339,18 +446,30 @@ struct FakeState {
 #[derive(Debug)]
 struct FakeDevice {
     key: DeviceKey,
-    info: GamepadInfo,
+    kind: FakeKind,
     rumble: MotorLevels,
     rumble_changes: usize,
+    force_feedback: ForceFeedback,
+    force_feedback_changes: usize,
+}
+
+#[derive(Debug, Clone)]
+enum FakeKind {
+    Pad(GamepadInfo),
+    Joystick(JoystickInfo),
 }
 
 #[derive(Debug)]
 enum FakeEvent {
-    Connected(DeviceKey, GamepadInfo),
-    Disconnected(DeviceKey),
+    Connected(DeviceKey, FakeKind),
+    /// The device, and whether it is a joystick.
+    Disconnected(DeviceKey, bool),
     Button(DeviceKey, GamepadButton, bool),
     Axis(DeviceKey, GamepadAxis, f32),
     Motion(DeviceKey, GamepadMotion),
+    JoystickAxis(DeviceKey, usize, f32),
+    JoystickButton(DeviceKey, usize, bool),
+    JoystickHat(DeviceKey, usize, IVec2),
 }
 
 impl FakeGamepads {
@@ -377,16 +496,35 @@ impl FakeGamepads {
     /// assert_ne!(a, b);
     /// ```
     pub fn connect(&self, info: GamepadInfo) -> DeviceKey {
+        self.plug(FakeKind::Pad(info))
+    }
+
+    /// Plugs in a new joystick (a wheel, a flight stick) described by
+    /// `info`; returns its key. [`disconnect`](Self::disconnect) and
+    /// [`reconnect`](Self::reconnect) work on it as on a pad.
+    ///
+    /// ```
+    /// use ponko::input::{FakeGamepads, JoystickInfo, JoystickKind};
+    /// let fake = FakeGamepads::new();
+    /// let wheel = fake.connect_joystick(JoystickInfo::new("Wheel").kind(JoystickKind::Wheel));
+    /// ```
+    pub fn connect_joystick(&self, info: JoystickInfo) -> DeviceKey {
+        self.plug(FakeKind::Joystick(info))
+    }
+
+    fn plug(&self, kind: FakeKind) -> DeviceKey {
         let mut state = self.state();
         let key = DeviceKey(state.next_key);
         state.next_key += 1;
         state.devices.push(FakeDevice {
             key,
-            info: info.clone(),
+            kind: kind.clone(),
             rumble: MotorLevels::OFF,
             rumble_changes: 0,
+            force_feedback: ForceFeedback::OFF,
+            force_feedback_changes: 0,
         });
-        state.queue.push(FakeEvent::Connected(key, info));
+        state.queue.push(FakeEvent::Connected(key, kind));
         key
     }
 
@@ -401,8 +539,8 @@ impl FakeGamepads {
     /// ```
     pub fn reconnect(&self, device: DeviceKey) {
         let mut state = self.state();
-        if let Some(info) = state.devices.iter().find(|d| d.key == device).map(|d| d.info.clone()) {
-            state.queue.push(FakeEvent::Connected(device, info));
+        if let Some(kind) = state.devices.iter().find(|d| d.key == device).map(|d| d.kind.clone()) {
+            state.queue.push(FakeEvent::Connected(device, kind));
         }
     }
 
@@ -414,7 +552,12 @@ impl FakeGamepads {
     /// fake.disconnect(pad);
     /// ```
     pub fn disconnect(&self, device: DeviceKey) {
-        self.state().queue.push(FakeEvent::Disconnected(device));
+        let mut state = self.state();
+        let joystick = state
+            .devices
+            .iter()
+            .any(|d| d.key == device && matches!(d.kind, FakeKind::Joystick(_)));
+        state.queue.push(FakeEvent::Disconnected(device, joystick));
     }
 
     /// Presses `button` on `device` (held until [`release`](Self::release)).
@@ -461,6 +604,72 @@ impl FakeGamepads {
         self.state().queue.push(FakeEvent::Motion(device, motion));
     }
 
+    /// Moves axis number `axis` of joystick `device` to `value`.
+    ///
+    /// ```
+    /// # let fake = ponko::input::FakeGamepads::new();
+    /// # let wheel = fake.connect_joystick(ponko::input::JoystickInfo::new("W"));
+    /// fake.set_joystick_axis(wheel, 0, 0.5); // steered half right
+    /// ```
+    pub fn set_joystick_axis(&self, device: DeviceKey, axis: usize, value: f32) {
+        self.state().queue.push(FakeEvent::JoystickAxis(device, axis, value));
+    }
+
+    /// Presses (`true`) or releases button number `button` of joystick `device`.
+    ///
+    /// ```
+    /// # let fake = ponko::input::FakeGamepads::new();
+    /// # let wheel = fake.connect_joystick(ponko::input::JoystickInfo::new("W"));
+    /// fake.set_joystick_button(wheel, 4, true);
+    /// ```
+    pub fn set_joystick_button(&self, device: DeviceKey, button: usize, down: bool) {
+        self.state().queue.push(FakeEvent::JoystickButton(device, button, down));
+    }
+
+    /// Moves hat number `hat` of joystick `device` (`x` left -1 to right 1, `y` up -1 to down 1).
+    ///
+    /// ```
+    /// # let fake = ponko::input::FakeGamepads::new();
+    /// # let stick = fake.connect_joystick(ponko::input::JoystickInfo::new("S"));
+    /// fake.set_joystick_hat(stick, 0, glam::IVec2::new(0, -1)); // up
+    /// ```
+    pub fn set_joystick_hat(&self, device: DeviceKey, hat: usize, value: IVec2) {
+        self.state().queue.push(FakeEvent::JoystickHat(device, hat, value));
+    }
+
+    /// The force feedback the engine last told joystick `device` to play
+    /// ([`ForceFeedback::OFF`] for an unknown device).
+    ///
+    /// ```
+    /// let fake = ponko::input::FakeGamepads::new();
+    /// let wheel = fake.connect_joystick(ponko::input::JoystickInfo::new("W"));
+    /// assert!(fake.force_feedback(wheel).is_off());
+    /// ```
+    #[must_use]
+    pub fn force_feedback(&self, device: DeviceKey) -> ForceFeedback {
+        self.state()
+            .devices
+            .iter()
+            .find(|d| d.key == device)
+            .map_or(ForceFeedback::OFF, |d| d.force_feedback)
+    }
+
+    /// How many times the engine changed joystick `device`'s force feedback.
+    ///
+    /// ```
+    /// let fake = ponko::input::FakeGamepads::new();
+    /// let wheel = fake.connect_joystick(ponko::input::JoystickInfo::new("W"));
+    /// assert_eq!(fake.force_feedback_changes(wheel), 0);
+    /// ```
+    #[must_use]
+    pub fn force_feedback_changes(&self, device: DeviceKey) -> usize {
+        self.state()
+            .devices
+            .iter()
+            .find(|d| d.key == device)
+            .map_or(0, |d| d.force_feedback_changes)
+    }
+
     /// The motor levels the engine last told `device` to play
     /// ([`MotorLevels::OFF`] for an unknown device).
     ///
@@ -501,13 +710,20 @@ impl GamepadBackend for FakeGamepads {
         let queue = std::mem::take(&mut self.state().queue);
         for event in queue {
             match event {
-                FakeEvent::Connected(key, info) => {
+                FakeEvent::Connected(key, FakeKind::Pad(info)) => {
                     events.connected(key, info);
                 }
-                FakeEvent::Disconnected(key) => events.disconnected(key),
+                FakeEvent::Connected(key, FakeKind::Joystick(info)) => {
+                    events.joystick_connected(key, info);
+                }
+                FakeEvent::Disconnected(key, false) => events.disconnected(key),
+                FakeEvent::Disconnected(key, true) => events.joystick_disconnected(key),
                 FakeEvent::Button(key, button, down) => events.button(key, button, down),
                 FakeEvent::Axis(key, axis, value) => events.axis(key, axis, value),
                 FakeEvent::Motion(key, motion) => events.motion(key, motion),
+                FakeEvent::JoystickAxis(key, axis, value) => events.joystick_axis(key, axis, value),
+                FakeEvent::JoystickButton(key, button, down) => events.joystick_button(key, button, down),
+                FakeEvent::JoystickHat(key, hat, value) => events.joystick_hat(key, hat, value),
             }
         }
     }
@@ -516,6 +732,13 @@ impl GamepadBackend for FakeGamepads {
         if let Some(d) = self.state().devices.iter_mut().find(|d| d.key == device) {
             d.rumble = levels;
             d.rumble_changes += 1;
+        }
+    }
+
+    fn set_force_feedback(&mut self, device: DeviceKey, effects: ForceFeedback) {
+        if let Some(d) = self.state().devices.iter_mut().find(|d| d.key == device) {
+            d.force_feedback = effects;
+            d.force_feedback_changes += 1;
         }
     }
 }
@@ -545,5 +768,74 @@ mod tests {
         assert!(old.rumble(device).is_off(), "the old pad stops");
         assert_eq!(ctx.input.gamepads(), [pad]);
         assert_eq!(ctx.input.gamepad_info(pad).unwrap().name, "New");
+    }
+
+    #[test]
+    fn a_wheel_keeps_its_slot_across_a_reconnect_and_its_inputs_arrive() {
+        let mut ctx = Ctx::new(1.0 / 60.0, glam::Vec2::ONE);
+        let fake = FakeGamepads::new();
+        let pad = fake.connect(GamepadInfo::new("Pad"));
+        let stick = fake.connect_joystick(JoystickInfo::new("Stick"));
+        let wheel = fake.connect_joystick(JoystickInfo::new("Wheel").layout(3, 20, 1));
+        ctx.set_gamepad_backend(fake.clone());
+        assert_eq!(ctx.input.gamepads().len(), 1, "joysticks take no gamepad slot");
+        assert_eq!(ctx.input.joysticks(), [Joystick(0), Joystick(1)]);
+        let w = Joystick(1);
+        fake.set_joystick_axis(wheel, 0, -0.5);
+        fake.set_joystick_axis(wheel, 2, 1.0);
+        fake.set_joystick_button(wheel, 19, true);
+        fake.set_joystick_hat(wheel, 0, IVec2::new(-1, 1));
+        fake.press(pad, GamepadButton::South);
+        ctx.poll_gamepads(1.0 / 60.0);
+        assert_eq!(ctx.input.joystick_axis(w, 0), -0.5);
+        assert_eq!(ctx.input.joystick_axis(w, 2), 1.0);
+        assert!(ctx.input.joystick_pressed(w, 19));
+        assert_eq!(ctx.input.joystick_hat(w, 0), IVec2::new(-1, 1));
+        assert!(!ctx.input.joystick_down(Joystick(0), 19), "the other joystick");
+
+        fake.disconnect(stick);
+        fake.disconnect(wheel);
+        ctx.poll_gamepads(1.0 / 60.0);
+        assert!(ctx.input.joysticks().is_empty());
+        assert_eq!(ctx.input.gamepads().len(), 1, "the pad stays");
+        let other = fake.connect_joystick(JoystickInfo::new("Other"));
+        fake.reconnect(wheel);
+        ctx.poll_gamepads(1.0 / 60.0);
+        assert_eq!(ctx.input.joystick_info(w).unwrap().name, "Wheel", "back in its slot");
+        fake.set_joystick_button(other, 0, true);
+        ctx.poll_gamepads(1.0 / 60.0);
+        assert!(
+            ctx.input.joystick_down(Joystick(2), 0),
+            "a new device takes a slot nobody waits for"
+        );
+    }
+
+    #[test]
+    fn force_feedback_is_sent_on_change_and_stopped_when_the_backend_is_replaced() {
+        let mut ctx = Ctx::new(1.0 / 60.0, glam::Vec2::ONE);
+        let old = FakeGamepads::new();
+        let wheel = old.connect_joystick(JoystickInfo::new("Wheel"));
+        ctx.set_gamepad_backend(old.clone());
+        let w = ctx.input.joysticks()[0];
+        let ff = ForceFeedback {
+            constant: -0.25,
+            spring: 0.75,
+            ..ForceFeedback::OFF
+        };
+        ctx.input.set_force_feedback(w, ff);
+        ctx.poll_gamepads(1.0 / 60.0);
+        ctx.poll_gamepads(1.0 / 60.0);
+        assert_eq!(old.force_feedback(wheel), ff);
+        assert_eq!(old.force_feedback_changes(wheel), 1);
+        ctx.input.set_force_feedback(w, ForceFeedback::OFF);
+        ctx.poll_gamepads(1.0 / 60.0);
+        assert!(old.force_feedback(wheel).is_off());
+        assert_eq!(old.force_feedback_changes(wheel), 2);
+
+        ctx.input.set_force_feedback(w, ff);
+        ctx.poll_gamepads(1.0 / 60.0);
+        ctx.set_gamepad_backend(FakeGamepads::new());
+        assert!(old.force_feedback(wheel).is_off(), "the old wheel stops");
+        assert!(ctx.input.joysticks().is_empty());
     }
 }

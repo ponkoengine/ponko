@@ -1,5 +1,11 @@
 # Named input actions
 
+> **Maturity: [proven](maturity.md).** Game: Coin Dash and Ember Hop, packaged
+> and played on Linux, macOS and Windows (Coin Dash rebinds its controls).
+> Tests: `tests/actions.rs`, `tests/action_ids.rs`, `tests/input_scenario.rs`.
+> Platforms: Linux, macOS and Windows, headless (the workspace tests in the
+> list of checks). Graphics: not involved.
+
 Bind physical inputs to names once, then query those names in game systems.
 An action is a button, a scalar axis, or a vector axis. Several sources can
 control the same action; this makes keyboard and controller support share
