@@ -384,3 +384,212 @@ fn transform_curves_win_over_muscles_on_the_same_node() {
     let chest = skin.nodes.iter().position(|n| n.name == "Chest").unwrap();
     assert!(!skin.animations[0].nodes[chest].is_empty());
 }
+
+// --- Through the importer ---
+
+/// The human bones of `skeleton`, parents first, with their parent and
+/// local position (Unity's names).
+fn bone_list() -> Vec<(String, Option<usize>, Vec3)> {
+    let skin = unity_names();
+    skin.nodes
+        .iter()
+        .skip(1)
+        .map(|n| {
+            let parent = n.parent.filter(|&p| p > 0).map(|p| p - 1);
+            (
+                n.name.clone(),
+                parent,
+                Mat4::from_cols_array(&n.matrix).w_axis.truncate(),
+            )
+        })
+        .collect()
+}
+
+/// The bone names of the imported characters: `bone_<Unity's name in
+/// lower case>`.
+fn node(human: &str) -> String {
+    format!("bone_{}", human.to_lowercase())
+}
+
+/// What the importer writes for a prefab of a character whose bones are
+/// named by `node` (or Unity's names, `unity_names`), with `clips`. Its
+/// Animator uses the avatar of `Rig.fbx` (Rig set to Humanoid, the
+/// `.meta` mapping `node` names) if `animator_avatar`. Returns the
+/// `.glb`'s bytes and the report's entries.
+fn import_character(
+    name: &str,
+    animator_avatar: bool,
+    unity_names: bool,
+    configure: impl FnOnce(&mut ponko_unity::Importer),
+) -> (Vec<u8>, Vec<String>) {
+    use ponko_unity::{Hierarchy, Importer, Project, UnityFile};
+    let dir = std::env::temp_dir().join(format!("ponko_unity_humanoid_{name}_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let assets = dir.join("Assets");
+    std::fs::create_dir_all(&assets).unwrap();
+    let bones = bone_list();
+    let named = |human: &str| if unity_names { human.to_owned() } else { node(human) };
+    // The body: a mesh asset skinned to every bone, all on the first.
+    let mut mesh = include_str!("fixtures/quad.asset").to_owned();
+    mesh.push_str("\n  m_BindPose:\n");
+    for _ in &bones {
+        mesh.push_str("  - {e00: 1, e11: 1, e22: 1, e33: 1}\n");
+    }
+    mesh.push_str("  m_Skin:\n");
+    for _ in 0..5 {
+        mesh.push_str("  - {weight0: 1, boneIndex0: 0}\n");
+    }
+    std::fs::write(assets.join("Body.asset"), mesh).unwrap();
+    std::fs::write(assets.join("Body.asset.meta"), "guid: body0000\n").unwrap();
+    // The model the avatar comes from (its mesh isn't used).
+    std::fs::write(assets.join("Rig.fbx"), include_bytes!("fixtures/skinned.fbx")).unwrap();
+    let mut meta =
+        String::from("guid: rig00000\nModelImporter:\n  animationType: 3\n  humanDescription:\n    human:\n");
+    for (human, ..) in &bones {
+        meta.push_str(&format!("    - boneName: {}\n      humanName: {human}\n", node(human)));
+    }
+    std::fs::write(assets.join("Rig.fbx.meta"), &meta).unwrap();
+    // Character (Animator) > Body (the renderer), Character > Armature >
+    // the bones. Transforms are `id + 1`; bone k is object 100 + 10 k.
+    let mut prefab = String::from("%YAML 1.1\n");
+    let mut object = |prefab: &mut String, id: usize, name: &str, parent: usize, at: Vec3| {
+        prefab.push_str(&format!(
+            "--- !u!1 &{id}\nGameObject:\n  m_Name: {name}\n  m_IsActive: 1\n--- !u!4 &{}\nTransform:\n  m_GameObject: {{fileID: {id}}}\n  m_Father: {{fileID: {parent}}}\n  m_LocalRotation: {{x: 0, y: 0, z: 0, w: 1}}\n  m_LocalPosition: {{x: {}, y: {}, z: {}}}\n  m_LocalScale: {{x: 1, y: 1, z: 1}}\n",
+            id + 1,
+            at.x,
+            at.y,
+            at.z
+        ));
+    };
+    object(&mut prefab, 1, "Character", 0, Vec3::ZERO);
+    object(&mut prefab, 11, "Body", 2, Vec3::ZERO);
+    object(&mut prefab, 21, "Armature", 2, Vec3::ZERO);
+    for (k, (human, parent, at)) in bones.iter().enumerate() {
+        let parent = parent.map_or(22, |p| 100 + 10 * p + 1);
+        object(&mut prefab, 100 + 10 * k, &named(human), parent, *at);
+    }
+    prefab.push_str("--- !u!95 &3\nAnimator:\n  m_GameObject: {fileID: 1}\n  m_Enabled: 1\n");
+    if animator_avatar {
+        prefab.push_str("  m_Avatar: {fileID: 9000000, guid: rig00000, type: 3}\n");
+    }
+    let refs: Vec<String> = (0..bones.len())
+        .map(|k| format!("{{fileID: {}}}", 100 + 10 * k + 1))
+        .collect();
+    prefab.push_str(&format!(
+        "--- !u!137 &13\nSkinnedMeshRenderer:\n  m_GameObject: {{fileID: 11}}\n  m_Enabled: 1\n  m_Mesh: {{fileID: 4300000, guid: body0000, type: 2}}\n  m_Bones: [{}]\n  m_RootBone: {{fileID: 101}}\n  m_Materials: []\n",
+        refs.join(", ")
+    ));
+    let project = Project::open(&dir).unwrap();
+    let hierarchy = Hierarchy::build(&UnityFile::parse(&prefab).unwrap(), &project).unwrap();
+    let out = dir.join("out");
+    let mut importer = Importer::new(&project, &out, "");
+    importer.animation_clips([wave()]);
+    configure(&mut importer);
+    let scene = importer.scene(&hierarchy).unwrap();
+    let report = importer.finish().unwrap();
+    let path = scene["entities"][0]["components"]["Model"]["mesh"].as_str().unwrap();
+    let bytes = std::fs::read(out.join(path)).unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+    (bytes, report.skipped.keys().cloned().collect())
+}
+
+/// A node's model-space place in a `.glb` at the last sample of animation
+/// `clip` (rest where it isn't animated).
+fn glb_place(bytes: &[u8], clip: &str, name: &str) -> Vec3 {
+    let gltf = gltf::Gltf::from_slice(bytes).unwrap();
+    let blob = gltf.blob.as_deref();
+    let animation = gltf.animations().find(|a| a.name() == Some(clip)).unwrap();
+    let mut local: Vec<(Vec3, Quat, Vec3)> = gltf
+        .nodes()
+        .map(|n| {
+            let (t, r, s) = n.transform().decomposed();
+            (Vec3::from(t), Quat::from_array(r), Vec3::from(s))
+        })
+        .collect();
+    for channel in animation.channels() {
+        let i = channel.target().node().index();
+        match channel.reader(|_| blob).read_outputs().unwrap() {
+            gltf::animation::util::ReadOutputs::Translations(v) => local[i].0 = Vec3::from(v.last().unwrap()),
+            gltf::animation::util::ReadOutputs::Rotations(v) => {
+                local[i].1 = Quat::from_array(v.into_f32().last().unwrap());
+            }
+            _ => {}
+        }
+    }
+    let mut parent = vec![None; local.len()];
+    for n in gltf.nodes() {
+        for c in n.children() {
+            parent[c.index()] = Some(n.index());
+        }
+    }
+    let target = gltf.nodes().find(|n| n.name() == Some(name)).unwrap().index();
+    let mut m = Mat4::IDENTITY;
+    let mut at = Some(target);
+    while let Some(i) = at {
+        let (t, r, s) = local[i];
+        m = Mat4::from_scale_rotation_translation(s, r, t) * m;
+        at = parent[i];
+    }
+    m.transform_point3(Vec3::ZERO)
+}
+
+fn wave() -> AnimationClip {
+    with_t_pose(&[("Left Arm Down-Up", &[(0.0, 0.4), (1.0, 1.0)])])
+}
+
+#[test]
+fn the_importer_takes_the_avatar_of_the_model_the_animator_names() {
+    let (bytes, skipped) = import_character("animator", true, false, |_| {});
+    assert!(skipped.is_empty(), "{skipped:?}");
+    // In Ponko's space (Z mirrored): the left arm 60 degrees up.
+    let up = (glb_place(&bytes, "Wave", "bone_lefthand") - glb_place(&bytes, "Wave", "bone_leftupperarm")).normalize();
+    assert!((up.y - 60f32.to_radians().sin()).abs() < 1e-3, "{up}");
+    let level = glb_place(&bytes, "Wave", "bone_righthand").y - glb_place(&bytes, "Wave", "bone_rightupperarm").y;
+    assert!(level.abs() < 1e-4, "{level}");
+    // The engine's play test reads this file: keep it current with
+    // `PONKO_UPDATE_UNITY_FIXTURES=1 cargo test -p ponko_unity --test humanoid`.
+    let fixture = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/unity/humanoid_wave.glb"
+    );
+    if std::env::var_os("PONKO_UPDATE_UNITY_FIXTURES").is_some() {
+        std::fs::create_dir_all(std::path::Path::new(fixture).parent().unwrap()).unwrap();
+        std::fs::write(fixture, &bytes).unwrap();
+    }
+    let saved = std::fs::read(fixture).expect("tests/fixtures/unity/humanoid_wave.glb");
+    for bone in [
+        "bone_lefthand",
+        "bone_righthand",
+        "bone_head",
+        "bone_leftfoot",
+        "bone_hips",
+    ] {
+        let (now, then) = (glb_place(&bytes, "Wave", bone), glb_place(&saved, "Wave", bone));
+        assert!(
+            now.abs_diff_eq(then, 1e-4),
+            "{bone}: {now} vs the saved {then}; update the fixture"
+        );
+    }
+}
+
+#[test]
+fn without_an_animator_avatar_the_importer_uses_its_own_or_finds_the_bones() {
+    // Names it can't guess, and no avatar: reported, nothing turned.
+    let (bytes, skipped) = import_character("none", false, false, |_| {});
+    assert!(skipped.iter().any(|s| s.contains("need an avatar")), "{skipped:?}");
+    let gltf = gltf::Gltf::from_slice(&bytes).unwrap();
+    assert!(gltf.animations().next().is_none());
+    // The same names through `humanoid_avatar`.
+    let mut meta = String::from("ModelImporter:\n  humanDescription:\n    human:\n");
+    for (human, ..) in bone_list() {
+        meta.push_str(&format!("    - boneName: {}\n      humanName: {human}\n", node(&human)));
+    }
+    let avatar = HumanoidAvatar::from_meta(&meta).unwrap().unwrap();
+    let (bytes, skipped) = import_character("given", false, false, |i| i.humanoid_avatar(avatar));
+    assert!(skipped.is_empty(), "{skipped:?}");
+    assert!(glb_place(&bytes, "Wave", "bone_lefthand").y > 1.7);
+    // Unity's own bone names: found without any avatar.
+    let (bytes, skipped) = import_character("found", false, true, |_| {});
+    assert!(skipped.is_empty(), "{skipped:?}");
+    assert!(glb_place(&bytes, "Wave", "LeftHand").y > 1.7);
+}

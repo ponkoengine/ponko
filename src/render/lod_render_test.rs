@@ -553,6 +553,45 @@ fn hysteresis_keeps_the_level_while_the_camera_wobbles_at_a_threshold() {
 }
 
 #[test]
+fn a_fade_time_crossfades_over_frames_wherever_the_camera_stops() {
+    let Some(mut rig) = Rig::new(true) else {
+        return;
+    };
+    instant_scene(&mut rig, false);
+    // As a scene file (an imported animated cross-fade) gives it.
+    let group = rig.ctx.world.query::<(Entity, &LodGroup)>().iter().next().unwrap().0;
+    rig.ctx
+        .world
+        .set_json(group, "LodFadeTime", serde_json::json!(0.5))
+        .unwrap();
+    rig.frame.lod_dt = Some(0.125);
+    // (red, blue) pixels of each frame.
+    let mut frame = |rig: &mut Rig, height: f32| {
+        camera_at(&mut rig.ctx, distance_for(height));
+        let c = count(&rig.draw());
+        (c.red, c.blue)
+    };
+    assert_eq!(frame(&mut rig, 0.9).1, 0, "close: red alone");
+    // Just past the threshold, and still: 0.5 s of 0.125 s frames fade,
+    // the red share shrinking and the blue growing, then blue alone.
+    let fade: Vec<(usize, usize)> = (0..5).map(|_| frame(&mut rig, 0.25)).collect();
+    for k in 0..3 {
+        assert!(fade[k].0 > 0 && fade[k].1 > 0, "both, dithered: {fade:?}");
+    }
+    assert!(fade[0].0 > fade[1].0 && fade[1].0 > fade[2].0, "{fade:?}");
+    assert!(fade[0].1 < fade[1].1 && fade[1].1 < fade[2].1, "{fade:?}");
+    assert!(fade[3].0 == 0 && fade[4].0 == 0 && fade[4].1 > fade[2].1, "{fade:?}");
+    // Back close for half a fade, then out again: it runs back from
+    // there (two frames back to blue alone), not from the start.
+    let back: Vec<(usize, usize)> = [0.9, 0.9, 0.25, 0.25, 0.25]
+        .iter()
+        .map(|&h| frame(&mut rig, h))
+        .collect();
+    assert!(back[1].0 > 0 && back[2].0 > 0 && back[2].0 < back[1].0, "{back:?}");
+    assert!(back[3].0 == 0 && back[4].0 == 0, "{back:?}");
+}
+
+#[test]
 fn dollying_out_never_leaves_a_frame_without_the_group() {
     for solid_prepass in [true, false] {
         let Some(mut rig) = Rig::new(solid_prepass) else {
