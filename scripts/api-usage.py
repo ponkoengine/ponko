@@ -496,15 +496,6 @@ def analyse():
         exclude = own_files(crate, index)
         for path, kind in items.items():
             status, files = where_called(path, kind, index, owners, names, exclude, index.aliases)
-            if status != 'called' and kind == 'type' and crate == 'ponko_ffi':
-                # A C enum is used through its constants (`PONKO_CURSOR_GRAB_LOCKED`).
-                for line in sigs.get(path, ()):
-                    parsed = parse_line(line)
-                    if parsed and parsed[0] == 'variant':
-                        users = index.words.get(parsed[1].rsplit('::', 1)[1], set()) - exclude
-                        if users:
-                            status, files = 'called', {f: index.kind[f] for f in users}
-                            break
             results[path] = (crate, kind, status, files)
     reach_through_signatures(results, sigs)
     return results, apart

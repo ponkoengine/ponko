@@ -465,6 +465,61 @@ fn net_pose_moves_a_transform_from_buffered_snapshots() {
     assert!(t.rotation.angle_between(Quat::from_rotation_y(1.0)) < 1e-4);
 }
 
+#[test]
+fn a_receiver_maps_the_senders_clock_and_keeps_only_newer_updates() {
+    use ponko::net::{ClockSync, SnapshotBuffer};
+    // The sender's clock runs `CLOCK_SKEW` ahead; packets spend 50 ms on the way.
+    let sent = |seq: u16| CLOCK_SKEW + f64::from(seq) * 0.1;
+    let arrived = |seq: u16| f64::from(seq) * 0.1 + 0.05;
+    let mut clock = ClockSync::new();
+    let mut buffer = SnapshotBuffer::<f32>::new();
+    let mut filter = LatestWins::new();
+    for seq in 0..10u16 {
+        clock.observe(sent(seq), arrived(seq));
+        assert!(filter.accept_seq(7u64, seq));
+        buffer.push(sent(seq), f32::from(seq));
+    }
+    assert!(!filter.accept_seq(7, 3), "a late update is dropped");
+    assert_eq!(filter.latest(&7).map(|s| s.seq), Some(9));
+
+    let local = clock.to_local(sent(9)).unwrap();
+    assert!((local - arrived(9)).abs() < 1e-9, "{local}");
+    assert!((clock.to_remote(local).unwrap() - sent(9)).abs() < 1e-9);
+
+    assert_eq!(buffer.oldest_time(), Some(sent(0)));
+    assert_eq!(buffer.latest_time(), Some(sent(9)));
+    // Halfway between two snapshots, on the sender's timeline.
+    let mid = buffer.sample_at((sent(4) + sent(5)) / 2.0).unwrap();
+    assert_eq!(mid.state, SnapshotState::Interpolated);
+    assert!((mid.value - 4.5).abs() < 1e-3, "{}", mid.value);
+    // Once the view has passed snapshot 5, older ones can go.
+    buffer.trim_before(sent(5) + 0.01);
+    assert_eq!(buffer.oldest_time(), Some(sent(5)));
+
+    // A stream does the clock mapping itself.
+    let mut stream = SnapshotStream::<f32>::new();
+    stream.push(sent(0), arrived(0), 0.0);
+    assert!((stream.latest_local_time().unwrap() - arrived(0)).abs() < 1e-9);
+}
+
+#[test]
+fn small_integers_and_rotations_replicate_at_their_declared_size() {
+    use ponko::net::{Fields, Quantize, Replicate, replicated_bits};
+    #[derive(Clone, Default)]
+    struct Turret {
+        heat: i8,
+        aim: Quat,
+    }
+    impl Replicate for Turret {
+        fn fields(&mut self, f: &mut Fields<'_>) {
+            f.i8("heat", &mut self.heat, Quantize::Exact);
+            f.quat("aim", &mut self.aim, Quantize::Bits(9));
+        }
+    }
+    // 8 bits of heat; a rotation as its three smallest parts plus which was dropped.
+    assert_eq!(replicated_bits::<Turret>(), 8 + 29);
+}
+
 /// Declared replication refuses misuse with a message that names the fix.
 mod declared_replication_misuse {
 
