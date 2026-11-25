@@ -442,6 +442,8 @@ gamepad-sdl = ["window", "dep:sdl3-sys"]
 # release build opens the control endpoint only if the game asks for it with
 # `Game::control_endpoint(true)`, so a shipped game never opens a port.
 control-env = []
+# Browser tools attach only when the developer passes a local bridge URL.
+web-control = ["window", "web-sys/CanvasRenderingContext2d"]
 # Frame profiler: per-system scopes, viewable live with `puffin_viewer`
 # (cargo install puffin_viewer; connects to 127.0.0.1:8585).
 profiling = ["dep:puffin", "dep:puffin_http"]

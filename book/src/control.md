@@ -5,7 +5,7 @@
 > list of checks). Graphics: not involved. Missing: a reference game that uses
 > it.
 
-A running game, windowed or headless, can open a **control endpoint** that
+A running game, windowed, headless or in a browser tab, can open a **control endpoint** that
 tools use to look inside it and drive it: AI agents (through
 [`ponko-mcp`](agents.md)), the inspector, test scripts. Several instances can run
 at once; each gets its own endpoint.
@@ -49,6 +49,46 @@ on for the whole build when any crate in it asks for it, so check
 `cargo tree -e features -i ponko` if you're unsure.
 `PONKO_START_PAUSED=1` starts the simulation paused, so a tool can set
 things up and step it tick by tick.
+
+## Controlling a browser tab
+
+Build the game with Ponko's `web-control` feature and serve it over HTTP
+on loopback. The feature is off by default, and even a build with the
+feature only connects when the page URL contains a bridge address. To try
+it with the engine's 2D example, run these in separate terminals:
+
+```sh
+web/build.sh --features web-control web_smoke
+python3 -m http.server --bind 127.0.0.1 -d target/web/web_smoke 8000
+```
+
+```sh
+ponko-mcp --web-bridge
+```
+
+Append the entire `#ponko-control=ws://127.0.0.1:…/…` fragment printed by
+the bridge to `http://127.0.0.1:8000/` and open the result in a browser tab.
+The fragment contains a session credential, so keep it local. A bridge
+accepts one tab at a time. Run another bridge for another tab. Closing
+the tab removes its instance, and reloading reconnects it to the same
+bridge while the bridge is running.
+
+Use the regular [stdio MCP server](agents.md) with the same
+`PONKO_INSTANCES_DIR` as the bridge (or leave it unset for both). Select
+the **Browser game** in `list_instances` by its instance ID. Use
+`instance_capabilities` to see which methods the tab supports, and
+`world_summary`, `list_entities` or `list_resources` to inspect its
+state. Call `pause` followed by `run_ticks` to advance by an exact number
+of ticks, then use `screenshot` to get a PNG of the next drawn canvas
+frame. The bridge saves the PNG in a temporary file on the host and
+supports `max_size`. Omit `path` for browser captures.
+
+The bridge translates the same control JSON objects between WebSocket
+frames and the local TCP endpoint. It accepts WebSocket connections from
+loopback pages with the bridge credential, and the TCP endpoint still
+checks the registry token. Browser tabs support inspection, pause,
+resume, stepping and screenshots. File editing, input injection and hot
+reload are unavailable through this transport.
 
 ## Finding instances
 
