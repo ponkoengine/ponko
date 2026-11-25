@@ -1605,16 +1605,38 @@ const SPRITES_PARALLEL_MIN: usize = if cfg!(miri) { 48 } else { 20_000 };
 
 /// What the renderer draws for a sprite entity.
 #[inline]
-fn sprite_instance(t: &Transform2D, s: &Sprite) -> SpriteInstance {
+pub(crate) fn sprite_instance(t: &Transform2D, s: &Sprite) -> SpriteInstance {
     let (size, uv) = region(s.texture, s.region);
+    let (size, pivot) = flipped(size * t.scale, s.pivot, s.flip_x, s.flip_y);
     SpriteInstance::new(
         t.position.into(),
-        (size * t.scale).into(),
-        s.pivot.into(),
+        size.into(),
+        pivot.into(),
         t.rotation,
         s.color.to_rgba8(),
     )
     .with_uv(uv)
+}
+
+/// `size` and `pivot` of a sprite mirrored in place along x and/or y.
+///
+/// The instance's UV rectangle is unsigned, so a flipped region is drawn as
+/// a quad of negated size around the mirrored pivot (`1 - pivot`): every
+/// corner lands where the opposite corner was, so the quad covers the same
+/// pixels and its texture coordinates run backwards, exactly as if the
+/// region's UVs were swapped. 2D lights read the negated size, so normal
+/// maps of flipped sprites shade the right way too.
+#[inline]
+fn flipped(mut size: Vec2, mut pivot: Vec2, flip_x: bool, flip_y: bool) -> (Vec2, Vec2) {
+    if flip_x {
+        size.x = -size.x;
+        pivot.x = 1.0 - pivot.x;
+    }
+    if flip_y {
+        size.y = -size.y;
+        pivot.y = 1.0 - pivot.y;
+    }
+    (size, pivot)
 }
 
 /// The drawn size (texture pixels) and UV of `region` of `texture`.
@@ -1882,5 +1904,65 @@ mod tests {
         assert!(!ctx.quit_requested());
         ctx.quit();
         assert!(ctx.quit_requested());
+    }
+
+    /// Where each corner of a sprite instance lands (unrotated), with the
+    /// texture coordinate it shows: what the sprite shader computes.
+    fn corners(i: &SpriteInstance) -> Vec<([f32; 2], [f32; 2])> {
+        let pivot = [
+            crate::render::batch::f16_value(i.pivot[0]),
+            crate::render::batch::f16_value(i.pivot[1]),
+        ];
+        let uv = i.uv.map(|q| f32::from(q) / 65535.0);
+        [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]
+            .iter()
+            .map(|c: &[f32; 2]| {
+                let at = [0, 1].map(|k| i.pos[k] + (c[k] - pivot[k]) * i.size[k]);
+                let tex = [0, 1].map(|k| uv[k] + c[k] * uv[k + 2]);
+                (at, tex)
+            })
+            .collect()
+    }
+
+    /// The texture coordinate shown at world point `at` (a corner).
+    fn shown_at(i: &SpriteInstance, at: [f32; 2]) -> [f32; 2] {
+        corners(i)
+            .into_iter()
+            .find(|(p, _)| (p[0] - at[0]).abs() < 1e-3 && (p[1] - at[1]).abs() < 1e-3)
+            .unwrap_or_else(|| panic!("no corner at {at:?}: {:?}", corners(i)))
+            .1
+    }
+
+    #[test]
+    fn flipped_sprites_cover_the_same_quad_with_mirrored_texture_coordinates() {
+        let texture = Texture::new(1, 64, 32);
+        // Frame (16, 0)..(32, 16) of the sheet, with an off-center pivot.
+        let base = Sprite::new(texture)
+            .with_region(Rect::new(16.0, 0.0, 16.0, 16.0))
+            .with_pivot(glam::vec2(0.25, 1.0));
+        let t = Transform2D::at(glam::vec2(100.0, 50.0)).scaled(glam::vec2(2.0, 3.0));
+        let plain = sprite_instance(&t, &base);
+        let (u0, u1, v0, v1) = (0.25, 0.5, 0.0, 0.5);
+        // The quad: x from 100 - 0.25 * 32 = 92 to 124, y from 50 - 48 = 2 to 50.
+        let (left, right, top, bottom) = (92.0, 124.0, 2.0, 50.0);
+        let near = |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).abs() < 1e-4 && (a[1] - b[1]).abs() < 1e-4;
+        let check = |s: &Sprite, want: [[f32; 2]; 2]| {
+            let i = sprite_instance(&t, s);
+            let tl = shown_at(&i, [left, top]);
+            let br = shown_at(&i, [right, bottom]);
+            assert!(
+                near(tl, want[0]) && near(br, want[1]),
+                "{s:?}: top-left {tl:?}, bottom-right {br:?}"
+            );
+        };
+        // Control: unflipped, the region's top-left shows at the top-left.
+        check(&base, [[u0, v0], [u1, v1]]);
+        check(&base.with_flip_x(true), [[u1, v0], [u0, v1]]);
+        check(&base.with_flip_y(true), [[u0, v1], [u1, v0]]);
+        check(&base.with_flip_x(true).with_flip_y(true), [[u1, v1], [u0, v0]]);
+        // The region's UV rectangle itself is unchanged: only its direction.
+        let flipped = sprite_instance(&t, &base.with_flip_x(true));
+        assert_eq!(flipped.uv, plain.uv);
+        assert_ne!(flipped, plain, "the flip changes the instance");
     }
 }

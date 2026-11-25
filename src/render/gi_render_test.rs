@@ -1139,22 +1139,30 @@ fn without_the_texture_slot_bounced_light_is_skipped() {
 /// point light by the camera. Run in release (`cargo test --release --lib
 /// --features 3d -- --ignored --nocapture gi_cost`); prints the GPU frame
 /// time and the GI passes' times from the engine's timestamp profiler, and
-/// the CPU time to collect a frame. Then again with a glass pane in front
-/// of every building: transparent (the probes skip it), and the same panes
+/// the CPU time to collect a frame. Then the town without the bushes and
+/// with the lamp's shadow left out of the probes (what instance batches
+/// and light shadows in the probes' views cost), and with a glass pane in
+/// front of every building: transparent (the probes skip it), and the same panes
 /// opaque (drawn in the probes' views): the difference is what drawing
 /// see-through surfaces in the probes would at least cost.
 #[test]
 #[ignore = "benchmark: run in release"]
 fn gi_cost() {
-    gi_cost_in(None, true);
+    gi_cost_in(None, true, false);
     // What the bushes cost: before instance batches were in the probes'
     // views, the town cost them about this much.
-    gi_cost_in(None, false);
-    gi_cost_in(Some(crate::render::Blend::Transparent), true);
-    gi_cost_in(Some(crate::render::Blend::Opaque), true);
+    gi_cost_in(None, false, false);
+    // What the lamp's shadow costs the probes: their views as before they
+    // read point and spot light shadows.
+    gi_cost_in(None, true, true);
+    gi_cost_in(Some(crate::render::Blend::Transparent), true, false);
+    gi_cost_in(Some(crate::render::Blend::Opaque), true, false);
 }
 
-fn gi_cost_in(glass: Option<crate::render::Blend>, with_bushes: bool) {
+/// One scene of [`gi_cost`]: `glass` panes in front of the buildings, the
+/// bushes or not, and `unshadowed`: the probes' views light with the lamp
+/// as if nothing stood in its way.
+fn gi_cost_in(glass: Option<crate::render::Blend>, with_bushes: bool, unshadowed: bool) {
     let Some(mut rig) = Rig::sized(true, (1920, 1080)) else {
         return;
     };
@@ -1227,6 +1235,7 @@ fn gi_cost_in(glass: Option<crate::render::Blend>, with_bushes: bool) {
     rig.ctx.scene3d.camera.position = vec3(1.0, 1.7, 1.0);
     rig.ctx.scene3d.camera.look_at(vec3(20.0, 3.0, 12.0));
     rig.ctx.scene3d.camera.far = 200.0;
+    rig.ctx.gfx.frame3d.gi_leave_out.light_shadows = unshadowed;
     // Rounds of every setting, each setting's best round kept: this runs
     // on machines doing other things too.
     let all = [
@@ -1240,7 +1249,7 @@ fn gi_cost_in(glass: Option<crate::render::Blend>, with_bushes: bool) {
             Some(crate::render::GlobalIllumination::MAX_PROBES_PER_FRAME),
         ),
     ];
-    let settings = if glass.is_some() || !with_bushes {
+    let settings = if glass.is_some() || !with_bushes || unshadowed {
         &all[..2]
     } else {
         &all[..]
@@ -1304,6 +1313,7 @@ fn gi_cost_in(glass: Option<crate::render::Blend>, with_bushes: bool) {
     }
     let scene = match glass {
         None if !with_bushes => "town without the bushes",
+        None if unshadowed => "town, the lamp's shadow left out of the probes",
         None => "town",
         Some(crate::render::Blend::Transparent) => "town, transparent panes",
         Some(_) => "town, the panes opaque",
@@ -2150,4 +2160,235 @@ fn probes_whose_light_changes_take_more_turns_so_a_lamp_settles_sooner() {
         "negative control: by age alone it is still off at 900 frames: {}",
         print(&unboosted)
     );
+}
+
+/// The frame `rig` drew last, as an image (kept with
+/// `PONKO_RENDER_TEST_IMAGES=1`).
+fn kept(rig: &Rig, pixels: Vec<u8>) -> crate::render::render_test_support::Image {
+    let image = crate::render::render_test_support::Image {
+        width: rig.size.0,
+        height: rig.size.1,
+        rgba: pixels,
+    };
+    crate::render::render_test_support::keep_image(&image);
+    image
+}
+
+/// Two closed-off rooms side by side under a black sky, no roof, seen from
+/// straight above: a 40 cm wall between them from x 0.8 to 1.2 (between
+/// two planes of probes 2 units apart), and in the west room a shadowed
+/// spot light 3.5 up, aimed east and down at that wall, its cone wide
+/// enough to reach the east room's floor past it. The camera's own view
+/// has the light's shadow, so no direct light gets into the east room;
+/// `unshadowed`: the probes' views light their surfaces as if the wall
+/// weren't there (as they did before they read that shadow). After
+/// `frames` frames.
+fn spot_rooms(unshadowed: bool, frames: usize) -> Option<(Rig, Vec<u8>)> {
+    let mut rig = Rig::new(true)?;
+    let white = rig.mesh(
+        &MeshData::cube(1.0),
+        MaterialDesc::color(Color::WHITE).with_roughness(1.0),
+    );
+    let (lo, hi, t, floor) = (-6.0, 6.0, 0.4, -0.5);
+    let walls = [
+        (white, vec3(lo - t, floor - 0.4, -3.0 - t), vec3(hi + t, floor, 3.0 + t)), // floor
+        (white, vec3(lo - t, floor, -3.0 - t), vec3(lo, 4.5, 3.0 + t)),             // west
+        (white, vec3(hi, floor, -3.0 - t), vec3(hi + t, 4.5, 3.0 + t)),             // east
+        (white, vec3(lo, floor, -3.0 - t), vec3(hi, 4.5, -3.0)),                    // north
+        (white, vec3(lo, floor, 3.0), vec3(hi, 4.5, 3.0 + t)),                      // south
+        (white, vec3(0.8, floor, -3.0), vec3(1.2, 4.5, 3.0)),                       // between
+    ];
+    rig.blocks(&walls, Build::Models);
+    let at = vec3(-2.0, 3.5, 0.0);
+    rig.ctx.world.spawn((
+        Transform3D::at(at).looking_at(at + vec3(1.0, -0.6, 0.0)),
+        crate::d3::SpotLight {
+            intensity: 6.0,
+            range: 14.0,
+            inner_angle: 0.35,
+            outer_angle: 0.6,
+            shadows: true,
+            ..Default::default()
+        },
+    ));
+    dark_world(&mut rig);
+    rig.ctx.scene3d.lighting.gi = GlobalIllumination {
+        enabled: true,
+        extent: vec3(16.0, 14.0, 10.0),
+        spacing: 2.0,
+        probes_per_frame: crate::render::GlobalIllumination::MAX_PROBES_PER_FRAME,
+        intensity: 1.0,
+    };
+    rig.ctx.gfx.frame3d.gi_leave_out.light_shadows = unshadowed;
+    rig.ctx.scene3d.camera.position = vec3(1.0, 6.5, 0.01);
+    rig.ctx.scene3d.camera.look_at(vec3(1.0, -0.5, 0.0));
+    rig.ctx.scene3d.camera.fov_y = 100f32.to_radians();
+    let pixels = rig.draw(frames);
+    Some((rig, pixels))
+}
+
+/// An interior lit by a shadowed spot light: the probes see the light's
+/// shadow, so the room on the far side of the wall it shines at stays
+/// dark. Negative control: probes that light their views as if the wall
+/// weren't there (as before they read point and spot light shadows) put
+/// the light that never gets past the wall on the dark room's floor.
+#[test]
+fn a_shadowed_spot_light_bounces_no_light_past_the_wall_it_shines_at() {
+    let points = [1.0, 2.0, 3.0, 4.0];
+    let Some((rig, pixels)) = spot_rooms(false, 200) else {
+        return;
+    };
+    let dark = floor_east_of(&rig, &pixels, 1.2, &points);
+    let lit = floor_east_of(&rig, &pixels, -4.0, &[0.0, 2.0, 3.0]);
+    let after = kept(&rig, pixels);
+    let (old_rig, old_pixels) = spot_rooms(true, 200).unwrap();
+    let leaked = floor_east_of(&old_rig, &old_pixels, 1.2, &points);
+    let before = kept(&old_rig, old_pixels);
+    eprintln!(
+        "east room's floor 1 to 4 units past the wall: {dark:?} with the spot light's shadow in the probes, \
+         {leaked:?} without; west room's floor {lit:?}"
+    );
+    let lit = *lit.iter().max().unwrap();
+    assert!(lit > 60, "the spot light's bounce lights the west room: {lit}");
+    assert!(
+        dark.iter().all(|&d| d * 20 <= lit),
+        "the east room stays dark: {dark:?} vs {lit}"
+    );
+    assert!(
+        leaked.iter().max().unwrap() * 2 > lit,
+        "negative control: probes without the shadow light the east room: {leaked:?} vs {lit}"
+    );
+    use crate::render::render_test_support::{check_reference, reference_rejects};
+    let tolerance = crate::render::regression_stage::EFFECT_REFERENCE;
+    check_reference(
+        "gi_spot_interior",
+        &after,
+        tolerance,
+        "Two white rooms 12 x 6 units without a roof under a black sky, no sun or ambient light, split by a 40 cm \
+         white wall from x = 0.8 to 1.2 between planes of probes 2 units apart; a shadowed spot light at \
+         (-2, 3.5, 0) aimed along (1, -0.6, 0), cone 0.35 to 0.6 radians, lights the west room's side of the \
+         wall; 200 frames of probe updates at 16 a frame, camera at (1, 6.5, 0.01) looking straight down, 100 \
+         degree field of view; 128x128, 4x multisampling, no tonemapping.",
+        &rig.info,
+    );
+    reference_rejects(
+        "gi_spot_interior",
+        &before,
+        tolerance,
+        "the probes lit without the spot light's shadow",
+    );
+}
+
+/// A room built of instance batches, lit through a roof opening onto its
+/// red wall: the probes see the batches, so the floor by the red wall
+/// turns red and the roof keeps the sky out. Negative control: probes
+/// that leave the batches out (as before they drew them) see only the
+/// sky through the room, and the floor takes grey sky light, untinted.
+#[test]
+fn instance_batches_in_the_probes_views_tint_a_batch_room() {
+    for path in [BatchPath::Gpu, BatchPath::Cpu] {
+        let Some(mut rig) = Rig::red_wall_room_of(true, true, Build::Batch(path)) else {
+            return;
+        };
+        let pixels = rig.draw(80);
+        let mut old = Rig::red_wall_room_of(true, true, Build::Batch(path)).unwrap();
+        old.ctx.gfx.frame3d.gi_leave_out.instance_batches = true;
+        let old_pixels = old.draw(80);
+        let near_red = vec3(-3.0, -0.5, -0.8);
+        let (n, o) = (rig.at(&pixels, near_red), old.at(&old_pixels, near_red));
+        let far_side = vec3(-0.5, -0.5, -0.8);
+        let (f, fo) = (rig.at(&pixels, far_side), old.at(&old_pixels, far_side));
+        eprintln!(
+            "{path:?}: floor by the red wall {n:?} with batches in the probes, {o:?} without; \
+             further from it {f:?} and {fo:?}"
+        );
+        let after = kept(&rig, pixels);
+        let before = kept(&old, old_pixels);
+        assert!(
+            n[0] > n[1] + 20,
+            "{path:?}: red bounce light from the batch wall: {n:?}"
+        );
+        assert!(
+            (o[0] - o[1]).abs() <= 6,
+            "{path:?}: negative control: without the batches the probes see no red wall: {o:?}"
+        );
+        // Both paths against one image: they draw the same room.
+        use crate::render::render_test_support::{check_reference, reference_rejects};
+        let tolerance = crate::render::regression_stage::EFFECT_REFERENCE;
+        check_reference(
+            "gi_instanced_room",
+            &after,
+            tolerance,
+            "A closed white room 7 x 4 x 7 units inside, walls 0.4 thick, its west wall red, built of two \
+             instance batches (white and red boxes); the sun (intensity 4) shines in from the upper east through \
+             a 2 x 3 opening in the roof onto the red wall; grey sky and ground, ambient 0.3; probes every unit \
+             over 12 x 4 x 8, 80 frames at 16 a frame; camera at (2, 1.3, 0.3) looking at (-3.5, -0.2, 0); \
+             128x128, 4x multisampling.",
+            &rig.info,
+        );
+        reference_rejects(
+            "gi_instanced_room",
+            &before,
+            tolerance,
+            &format!("the probes without the instance batches ({path:?} path)"),
+        );
+    }
+}
+
+/// A closed white room with no light but a glowing panel on its floor: the
+/// probes see the panel as they see any surface, so its light reaches the
+/// roof. Negative control: without global illumination the roof is black
+/// (an emissive surface lights nothing directly).
+#[test]
+fn a_glowing_panel_lights_a_closed_room_through_the_probes() {
+    let roof = |gi: bool| -> Option<i32> {
+        let mut rig = Rig::new(true)?;
+        let white = rig.mesh(&MeshData::cube(1.0), MaterialDesc::color(Color::WHITE));
+        let glow = rig.mesh(
+            &MeshData::cube(1.0),
+            MaterialDesc {
+                emissive: Color::rgb(1.0, 0.6, 0.2),
+                ..MaterialDesc::color(Color::BLACK)
+            },
+        );
+        let (inner, outer) = (3.5, 3.9);
+        let walls = [
+            (white, vec3(-outer, -0.9, -outer), vec3(outer, -0.5, outer)), // floor
+            (white, vec3(-outer, 3.5, -outer), vec3(outer, 3.9, outer)),   // roof
+            (white, vec3(-outer, -0.5, -outer), vec3(-inner, 3.5, outer)), // west
+            (white, vec3(inner, -0.5, -outer), vec3(outer, 3.5, outer)),   // east
+            (white, vec3(-inner, -0.5, -outer), vec3(inner, 3.5, -inner)), // north
+            (white, vec3(-inner, -0.5, inner), vec3(inner, 3.5, outer)),   // south
+            (glow, vec3(-1.5, -0.5, -1.5), vec3(1.5, -0.4, 1.5)),          // panel
+        ];
+        rig.blocks(&walls, Build::Models);
+        dark_world(&mut rig);
+        rig.ctx.scene3d.lighting.gi = GlobalIllumination {
+            enabled: gi,
+            extent: vec3(12.0, 6.0, 12.0),
+            spacing: 1.0,
+            probes_per_frame: crate::render::GlobalIllumination::MAX_PROBES_PER_FRAME,
+            intensity: 1.0,
+        };
+        rig.ctx.scene3d.camera.position = vec3(-2.5, 0.5, 0.3);
+        rig.ctx.scene3d.camera.look_at(vec3(0.5, 3.5, 0.0));
+        let pixels = rig.draw(if gi { 120 } else { 1 });
+        let points = [vec3(0.5, 3.5, 0.0), vec3(-0.5, 3.5, 1.0), vec3(1.0, 3.5, -1.0)];
+        let lit = points
+            .iter()
+            .map(|&p| rig.at(&pixels, p))
+            .max_by_key(|c| c.iter().sum::<i32>());
+        let lit = lit.unwrap();
+        let _image = kept(&rig, pixels);
+        eprintln!("roof over the glowing panel, global illumination {gi}: {lit:?}");
+        // Warm like the panel.
+        assert!(!gi || lit[0] > lit[2], "the bounce has the panel's color: {lit:?}");
+        Some(lit.iter().sum())
+    };
+    let Some(dark) = roof(false) else {
+        return;
+    };
+    let lit = roof(true).unwrap();
+    assert!(dark <= 6, "negative control: nothing lights the roof directly: {dark}");
+    assert!(lit > 60, "the panel's light bounces onto the roof: {lit}");
 }

@@ -1,0 +1,17 @@
+{
+  "name": "gi_spot_interior",
+  "scene": "Two white rooms 12 x 6 units without a roof under a black sky, no sun or ambient light, split by a 40 cm white wall from x = 0.8 to 1.2 between planes of probes 2 units apart; a shadowed spot light at (-2, 3.5, 0) aimed along (1, -0.6, 0), cone 0.35 to 0.6 radians, lights the west room's side of the wall; 200 frames of probe updates at 16 a frame, camera at (1, 6.5, 0.01) looking straight down, 100 degree field of view; 128x128, 4x multisampling, no tonemapping.",
+  "width": 128,
+  "height": 128,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 16,
+    "outliers": 0.015,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "12c06f16981f4a71",
+  "reason": "New references: an interior lit by a shadowed spot light and a room of instance batches, each with global illumination; their negative controls are the probes without light shadows and without instance batches (#394)"
+}

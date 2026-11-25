@@ -428,6 +428,9 @@ pub(super) fn sprite() -> ValueSchema {
         ("z", Number),
         ("pivot", Vec2),
         ("region", ValueSchema::optional(rect())),
+        // Written only when `true`: optional, so not `required`.
+        ("flip_x", ValueSchema::optional(Bool)),
+        ("flip_y", ValueSchema::optional(Bool)),
     ])
 }
 #[cfg(feature = "3d")]
@@ -539,15 +542,20 @@ pub(in crate::reflect) mod tests {
     use serde_json::{Value, json};
 
     /// Panics unless `value` has exactly the shape `schema` describes: every
-    /// field present and of its type, no field more.
+    /// field present (an optional one may be left out) and of its type, no
+    /// field more.
     pub(in crate::reflect) fn validate(schema: &ValueSchema, value: &Value) {
         match schema {
             Object(fields) | StrictObject(fields) => {
                 let object = value.as_object().unwrap_or_else(|| panic!("object: {value}"));
-                assert_eq!(fields.len(), object.len(), "field drift: {value}");
+                for key in object.keys() {
+                    assert!(fields.iter().any(|(n, _)| n == key), "field drift: `{key}` in {value}");
+                }
                 for (name, shape) in fields {
-                    let field = object.get(name).unwrap_or_else(|| panic!("no `{name}` in {value}"));
-                    validate(shape, field);
+                    match object.get(name) {
+                        Some(field) => validate(shape, field),
+                        None => assert!(matches!(shape, Optional(_)), "no `{name}` in {value}"),
+                    }
                 }
             }
             Tuple(items) => {
@@ -634,8 +642,12 @@ pub(in crate::reflect) mod tests {
                 min: glam::Vec2::ZERO,
                 max: glam::Vec2::ONE,
             }),
+            flip_x: true,
+            flip_y: true,
             ..SpriteJson::default()
         };
+        assert!(json_of(&filled)["flip_x"] == true, "a flip is saved when set");
+        assert!(json_of(SpriteJson::default()).get("flip_x").is_none(), "and only then");
         assert!(fills_an_optional(&sprite(), &json_of(&filled)));
         validate(&sprite(), &json_of(filled));
         #[cfg(feature = "3d")]

@@ -75,6 +75,7 @@ pub ponko_lobby::LobbyLimits::relay_bytes_per_second: f64
 pub ponko_lobby::LobbyLimits::request_burst: f64
 pub ponko_lobby::LobbyLimits::requests_per_second: f64
 pub ponko_lobby::LobbyLimits::room_idle_timeout: core::time::Duration
+pub ponko_lobby::LobbyLimits::trusted_proxies: alloc::vec::Vec<ponko_lobby::TrustedProxy>
 impl core::clone::Clone for ponko_lobby::LobbyLimits
 pub fn ponko_lobby::LobbyLimits::clone(&self) -> Self
 impl core::default::Default for ponko_lobby::LobbyLimits
@@ -151,6 +152,27 @@ impl core::fmt::Debug for ponko_lobby::StunStats
 pub fn ponko_lobby::StunStats::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_lobby::StunStats
 impl core::marker::StructuralPartialEq for ponko_lobby::StunStats
+pub struct ponko_lobby::TrustedProxy
+impl ponko_lobby::TrustedProxy
+pub fn ponko_lobby::TrustedProxy::contains(&self, core::net::ip_addr::IpAddr) -> bool
+pub fn ponko_lobby::TrustedProxy::new(core::net::ip_addr::IpAddr, u8) -> core::result::Result<Self, alloc::string::String>
+pub fn ponko_lobby::TrustedProxy::parse_list(&str) -> core::result::Result<alloc::vec::Vec<Self>, alloc::string::String>
+impl core::clone::Clone for ponko_lobby::TrustedProxy
+pub fn ponko_lobby::TrustedProxy::clone(&self) -> Self
+impl core::cmp::Eq for ponko_lobby::TrustedProxy
+impl core::cmp::PartialEq for ponko_lobby::TrustedProxy
+pub fn ponko_lobby::TrustedProxy::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko_lobby::TrustedProxy
+pub fn ponko_lobby::TrustedProxy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for ponko_lobby::TrustedProxy
+pub fn ponko_lobby::TrustedProxy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for ponko_lobby::TrustedProxy
+pub fn ponko_lobby::TrustedProxy::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for ponko_lobby::TrustedProxy
+impl core::marker::StructuralPartialEq for ponko_lobby::TrustedProxy
+impl core::str::traits::FromStr for ponko_lobby::TrustedProxy
+pub type ponko_lobby::TrustedProxy::Err = alloc::string::String
+pub fn ponko_lobby::TrustedProxy::from_str(&str) -> core::result::Result<Self, alloc::string::String>
 pub struct ponko_lobby::Waiting
 pub ponko_lobby::Waiting::member: ponko::net::lobby::MemberId
 pub ponko_lobby::Waiting::rating: i32
