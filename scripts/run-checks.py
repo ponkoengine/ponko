@@ -417,7 +417,7 @@ def run_checks(plan, root, system):
             env = {
                 **os.environ, "GITHUB_WORKSPACE": root.as_posix(),
                 "RUNNER_OS": system, "RUNNER_TEMP": tmp.as_posix(),
-                "PONKO_CHECK_PYTHON": Path(sys.executable).as_posix(),
+                "PONKO_CHECK_PYTHON": Path(sys.executable).as_posix(), "PYTHONUTF8": "1",
             }
             for key, value in job["env"].items():
                 env[key] = value.replace("$GITHUB_WORKSPACE", env["GITHUB_WORKSPACE"]).replace(

@@ -810,7 +810,7 @@ jobs:
       # accessibility bus launcher (at-spi2-core), read and operated over
       # D-Bus as Orca does. No display is needed.
       - name: Tests, accessibility adapter over AT-SPI (Linux)
-        local-requires: [dbus-run-session, at-spi-bus-launcher]
+        local-requires: [dbus-run-session]
         if: ${{ !cancelled() && runner.os == 'Linux' }}
         env:
           PONKO_ACCESS_ATSPI: 1
@@ -1894,17 +1894,18 @@ jobs:
       - name: Run it, join it with the example client, stop it
         working-directory: ${{ runner.temp }}/game-server
         run: |
-          docker run -d --name game-server -p 7777:7777/udp game-server
+          container=$(docker run -d -p 7777:7777/udp game-server)
+          trap 'docker rm -f "$container" >/dev/null' EXIT
           for _ in $(seq 50); do
-            docker logs game-server 2>&1 | grep -q '"event":"server_start"' && break
+            docker logs "$container" 2>&1 | grep -q '"event":"server_start"' && break
             sleep 0.2
           done
           TICKS=90 target/debug/examples/client 127.0.0.1:7777
-          docker stats --no-stream --format 'container memory: {{.MemUsage}}' game-server
-          docker stop game-server
-          docker logs game-server
-          docker logs game-server | grep -q '"event":"player_joined"'
-          docker logs game-server | grep '"event":"server_stopped"' | grep -q '"reason":"terminate"'
-          code=$(docker inspect -f '{{.State.ExitCode}}' game-server)
+          docker stats --no-stream --format 'container memory: {{.MemUsage}}' "$container"
+          docker stop "$container"
+          docker logs "$container"
+          docker logs "$container" | grep -q '"event":"player_joined"'
+          docker logs "$container" | grep '"event":"server_stopped"' | grep -q '"reason":"terminate"'
+          code=$(docker inspect -f '{{.State.ExitCode}}' "$container")
           echo "exit code: $code"
           test "$code" = 0

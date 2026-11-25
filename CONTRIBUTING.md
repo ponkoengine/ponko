@@ -147,7 +147,8 @@ in either mode.
 Setup actions (tool installers, system packages, caches and artifact uploads)
 are for machine provisioning. Use the versions and requirements in the
 inventory. On Linux install the ALSA and udev development headers before any
-native builds. For the Linux browser job, install the pinned wasm-bindgen
+native builds and AT-SPI plus D-Bus for the Linux accessibility lane. For the
+Linux browser job, install the pinned wasm-bindgen
 CLI, run `npm ci --prefix web/smoke`, and provision the Playwright browsers and
 OS dependencies listed in that job. The C++ browser check requires
 `WASI_SDK_PATH`. The WebKit audio checks expect a PulseAudio null sink on the
