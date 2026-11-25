@@ -1911,14 +1911,10 @@ mod tests {
         assert!(frames_text(&Left::default(), &[], &mut |_| Vec::new()).starts_with("no frames"));
     }
 
-    /// Its body is its own: MSVC's linker folds functions whose code is
-    /// identical (`/OPT:ICF`, on in optimized builds), and a bare
-    /// `black_box(7)` was folded into another small function, whose name
-    /// its address then resolved to.
     #[cfg(any(unix, windows))]
     #[inline(never)]
     fn a_function_to_find() -> usize {
-        std::hint::black_box(0x5eed_a11c_e0f7_c0de_u64 as usize ^ std::hint::black_box(7))
+        std::hint::black_box(7)
     }
 
     #[cfg(any(unix, windows))]
