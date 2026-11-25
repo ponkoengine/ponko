@@ -1005,3 +1005,21 @@ fn a_field_described_resource_cannot_take_a_rust_resources_name() {
     // SAFETY: never read; the call panics.
     unsafe { w.reflect_resource_fields("Score", std::alloc::Layout::new::<u32>(), &[]) };
 }
+
+#[test]
+fn a_hand_written_schema_becomes_json_schema() {
+    use ponko::reflect::ValueSchema;
+    // A component the game serializes by hand describes its own shape, for
+    // editors and the level tools.
+    let schema = ValueSchema::object([
+        ("mood", ValueSchema::enum_of(["calm", "angry"])),
+        ("target", ValueSchema::optional(ValueSchema::Entity)),
+        ("reach", ValueSchema::any_of([ValueSchema::Number, ValueSchema::Vec2])),
+    ]);
+    let json = schema.to_json_schema();
+    assert_eq!(json["properties"]["mood"]["enum"], serde_json::json!(["calm", "angry"]));
+    assert_eq!(json["properties"]["target"]["anyOf"][1]["type"], "null");
+    assert_eq!(json["properties"]["reach"]["anyOf"][0]["type"], "number");
+    let required = json["required"].as_array().unwrap();
+    assert!(required.iter().any(|r| r == "mood") && !required.iter().any(|r| r == "target"));
+}

@@ -582,7 +582,11 @@ fn wheel() -> ponko::input::JoystickInfo {
     JoystickInfo::new("Wheel")
         .kind(JoystickKind::Wheel)
         .layout(3, 12, 1)
-        .force_feedback(ForceFeedbackSupport { spring: true, damper: true, ..Default::default() })
+        .force_feedback(ForceFeedbackSupport {
+            spring: true,
+            damper: true,
+            ..Default::default()
+        })
 }
 
 #[test]
@@ -605,7 +609,11 @@ fn a_wheel_reads_its_buttons_and_hat_by_number_and_edges_last_one_frame() {
             }
             1 => {
                 assert!(ctx.input.joystick_pressed(wheel, 3) && ctx.input.joystick_down(wheel, 3));
-                assert_eq!(ctx.input.joystick_hat(wheel, 0), glam::IVec2::new(1, -1), "up and right");
+                assert_eq!(
+                    ctx.input.joystick_hat(wheel, 0),
+                    glam::IVec2::new(1, -1),
+                    "up and right"
+                );
                 assert_eq!(ctx.input.joystick_axis(wheel, 0), 0.5);
                 assert!(!ctx.input.joystick_down(wheel, MAX_JOYSTICK_BUTTONS));
                 assert_eq!(ctx.input.joystick_hat(wheel, MAX_JOYSTICK_HATS), glam::IVec2::ZERO);
@@ -621,7 +629,11 @@ fn a_wheel_reads_its_buttons_and_hat_by_number_and_edges_last_one_frame() {
             }
             _ => {
                 assert!(ctx.input.joysticks().is_empty());
-                assert_eq!(ctx.input.joystick_hat(wheel, 0), glam::IVec2::ZERO, "rests when unplugged");
+                assert_eq!(
+                    ctx.input.joystick_hat(wheel, 0),
+                    glam::IVec2::ZERO,
+                    "rests when unplugged"
+                );
             }
         }
     });
@@ -634,7 +646,11 @@ fn force_feedback_reaches_the_wheel_once_per_change() {
     let fake = FakeGamepads::new();
     let device = fake.connect_joystick(wheel());
     let script = fake.clone();
-    let effects = ForceFeedback { spring: 0.5, damper: 0.2, ..ForceFeedback::OFF };
+    let effects = ForceFeedback {
+        spring: 0.5,
+        damper: 0.2,
+        ..ForceFeedback::OFF
+    };
     run(&fake, 5, move |ctx, frame| {
         let wheel = Joystick::from_slot(0).unwrap();
         match frame {
@@ -646,7 +662,11 @@ fn force_feedback_reaches_the_wheel_once_per_change() {
             1 | 2 => ctx.input.set_force_feedback(wheel, effects),
             3 => {
                 assert_eq!(script.force_feedback(device), effects);
-                assert_eq!(script.force_feedback_changes(device), 1, "the same effects again aren't resent");
+                assert_eq!(
+                    script.force_feedback_changes(device),
+                    1,
+                    "the same effects again aren't resent"
+                );
                 ctx.input.set_force_feedback(wheel, ForceFeedback::OFF);
             }
             _ => {
@@ -681,7 +701,8 @@ impl ponko::input::GamepadBackend for Scripted {
         match self.frame {
             0 => {
                 events.connected(DeviceKey(1), rumbling());
-                let stick = events.joystick_connected(DeviceKey(2), JoystickInfo::new("Stick").kind(JoystickKind::FlightStick));
+                let stick =
+                    events.joystick_connected(DeviceKey(2), JoystickInfo::new("Stick").kind(JoystickKind::FlightStick));
                 assert!(stick.is_some());
             }
             1 => {
@@ -707,7 +728,10 @@ impl ponko::input::GamepadBackend for Scripted {
 fn a_backend_of_its_own_reports_pads_and_joysticks_through_its_events() {
     use ponko::input::Joystick;
     let rumble = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let backend = Scripted { frame: 0, rumble: rumble.clone() };
+    let backend = Scripted {
+        frame: 0,
+        rumble: rumble.clone(),
+    };
     // What each frame saw: pads, joysticks, button 0 pressed, hat 0, axis 1.
     let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let log = seen.clone();
@@ -730,12 +754,20 @@ fn a_backend_of_its_own_reports_pads_and_joysticks_through_its_events() {
     let seen = seen.lock().unwrap();
     assert_eq!((seen[0].0, seen[0].1), (1, 1), "connected: {seen:?}");
     assert!(
-        seen.iter().any(|&(_, _, pressed, hat, axis)| pressed && hat == glam::IVec2::new(-1, 0) && axis == -1.0),
+        seen.iter()
+            .any(|&(_, _, pressed, hat, axis)| pressed && hat == glam::IVec2::new(-1, 0) && axis == -1.0),
         "{seen:?}"
     );
-    assert_eq!((seen.last().unwrap().0, seen.last().unwrap().1), (0, 0), "both gone: {seen:?}");
+    assert_eq!(
+        (seen.last().unwrap().0, seen.last().unwrap().1),
+        (0, 0),
+        "both gone: {seen:?}"
+    );
     let sent = rumble.lock().unwrap();
-    assert!(sent.iter().any(|l| l.strong == 0.5), "rumble went to the backend: {sent:?}");
+    assert!(
+        sent.iter().any(|l| l.strong == 0.5),
+        "rumble went to the backend: {sent:?}"
+    );
 }
 
 #[test]
