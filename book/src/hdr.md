@@ -1,5 +1,12 @@
 # HDR displays
 
+> **Maturity: [experimental](maturity.md).** Game: none. Tests: unit tests of
+> the choice logic and offscreen encoding tests (`hdr_render_test.rs`).
+> Platforms: the encoding was checked offscreen on Apple M-series (Metal); the
+> other backends by reading wgpu's code. Graphics: Metal offscreen; DirectX 12
+> and Vulkan only from source. Missing: no HDR display has been looked at on
+> any system (the chapter's platform matrix).
+
 On an HDR display a game can show highlights (the sun on metal, a fire, a
 lamp) several times brighter than white, while its UI stays at a comfortable
 brightness. HDR output is **off by default**, and then nothing changes: the

@@ -1,5 +1,10 @@
 # Pathfinding with flow fields
 
+> **Maturity: [tested](maturity.md).** Game: none (the Legions showcase uses
+> it). Tests: `tests/flow.rs`. Platforms: Linux, macOS and Windows, headless
+> (the workspace tests in the list of checks). Graphics: not involved.
+> Missing: a reference game that uses it.
+
 When thousands of units head for the same place (a rally point, the
 player, the nearest food), searching a path for each of them is wasteful.
 A **flow field** does one search from the goal outward and stores, for

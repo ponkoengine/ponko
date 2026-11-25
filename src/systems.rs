@@ -1,5 +1,10 @@
 //! The engine's built-in systems, as plain functions.
 //!
+//! **Maturity: proven**, from the guide chapter `systems.md`. Game: Coin Dash and Ember Hop,
+//! packaged and played on Linux, macOS and Windows. Tests: `tests/system_registration.rs`,
+//! `tests/phases.rs`, `tests/schedule_barriers.rs`. Platforms: Linux, macOS and Windows, headless
+//! (the workspace tests in the list of checks). Graphics: not involved.
+//!
 //! What lives here: every step the engine runs by itself, or adds when you
 //! turn a feature on (`Game::physics`, `Game::spatial_grid`), is an ordinary
 //! system `fn(&mut Ctx)`. A game doesn't normally call these: [`Game`] adds

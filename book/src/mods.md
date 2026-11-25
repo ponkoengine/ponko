@@ -1,5 +1,11 @@
 # Mods: what players can add and change
 
+> **Maturity: [tested](maturity.md).** Game: a sample mod for Ember Hop, run
+> by `tests/mod_sample.rs`. Tests: `tests/mods.rs`, `tests/mod_code.rs`,
+> `tests/mod_code_host.rs`. Platforms: Linux, macOS and Windows, headless (the
+> workspace tests in the list of checks). Graphics: not involved. Missing: a
+> shipped game that loads players' mods.
+
 A mod is something a player adds to a game that the game's makers didn't
 ship: a new enemy, harder levels, other art. Ponko supports **data-only
 mods**: packs of asset files, mounted in a load order the player picks,

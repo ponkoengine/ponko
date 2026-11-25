@@ -7,7 +7,7 @@ use std::ffi::c_char;
 
 use ponko::audio::{
     BusEffect, BusSnapshot, CompressorEffect, DelayEffect, Ducking, EffectOverride, FilterEffect, FilterMode,
-    MixerSnapshot, MixerState, PitchShiftEffect, ReverbEffect,
+    MixerSnapshot, MixerState, PitchShiftEffect, ReverbEffect, SnapshotId,
 };
 
 use crate::audio3d::{PonkoAudioBus, bus_from_c, bus_to_c};
@@ -638,6 +638,98 @@ pub unsafe extern "C" fn ponko_ctx_audio_snapshot_weight(
 ) -> PonkoStatus {
     // SAFETY: forwarded caller contract.
     boundary(|| unsafe { ctx_access(ctx, |c| out(out_weight, c.audio.snapshot_weight(text(name)?))) })
+}
+
+/// The id of snapshot `name` (Rust `Audio::snapshot_id`), for the `_id`
+/// snapshot calls, which then skip the name lookup: resolve it once and
+/// keep it. It stays valid when the snapshot is replaced. A name no
+/// snapshot has is `PONKO_NOT_FOUND`, and `ponko_last_error` lists the
+/// snapshots there are.
+/// ```
+/// let mut id = 0;
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_audio_snapshot_id(std::ptr::null_mut(), c"x".as_ptr(), &mut id) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `name` NUL-terminated; `out_id` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_audio_snapshot_id(
+    ctx: *mut PonkoCtx,
+    name: *const c_char,
+    out_id: *mut u32,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            let name = text(name)?;
+            if out_id.is_null() {
+                return Err(invalid("output is null"));
+            }
+            let id = c.audio.snapshot_id(name).map_err(engine_error)?;
+            out(out_id, id.to_bits())
+        })
+    })
+}
+
+/// `ponko_ctx_start_audio_snapshot` by an id from
+/// `ponko_ctx_audio_snapshot_id`. An id that names no snapshot is
+/// `PONKO_NOT_FOUND`.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_start_audio_snapshot_id(std::ptr::null_mut(), 0, 1.0) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_start_audio_snapshot_id(ctx: *mut PonkoCtx, id: u32, fade: f32) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            if c.audio.start_snapshot(SnapshotId::from_bits(id), fade) {
+                Ok(())
+            } else {
+                Err(error(PonkoStatus::PONKO_NOT_FOUND, "no snapshot with that id"))
+            }
+        })
+    })
+}
+
+/// `ponko_ctx_stop_audio_snapshot` by an id from
+/// `ponko_ctx_audio_snapshot_id`; nothing if it isn't on.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_stop_audio_snapshot_id(std::ptr::null_mut(), 0, 1.0) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_stop_audio_snapshot_id(ctx: *mut PonkoCtx, id: u32, fade: f32) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            c.audio.stop_snapshot(SnapshotId::from_bits(id), fade);
+            Ok(())
+        })
+    })
+}
+
+/// `ponko_ctx_audio_snapshot_weight` by an id from
+/// `ponko_ctx_audio_snapshot_id`: 0 for an id that names no snapshot.
+/// ```
+/// let mut w = 0.0;
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_audio_snapshot_weight_id(std::ptr::null_mut(), 0, &mut w) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `out_weight` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_audio_snapshot_weight_id(
+    ctx: *mut PonkoCtx,
+    id: u32,
+    out_weight: *mut f32,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            out(out_weight, c.audio.snapshot_weight(SnapshotId::from_bits(id)))
+        })
+    })
 }
 
 /// Loads the mixer from a JSON file in the assets (Rust

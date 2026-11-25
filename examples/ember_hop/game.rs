@@ -461,8 +461,8 @@ pub fn touch_controls() -> ponko::ui::touch::TouchControls {
 pub fn read_input(ctx: &mut Ctx) {
     // Pause on the title would quit: the touch button is there in a run only.
     let in_run = matches!(screen(&ctx.world), Screen::Playing | Screen::Paused);
-    ctx.input.set_touch_control_shown("pause", in_run);
     let act = *ctx.world.resource::<Act>();
+    ctx.input.set_touch_control_shown(act.pause, in_run);
     let input = &ctx.input;
     let dpad =
         f32::from(u8::from(input.action_down(act.dpad_right))) - f32::from(u8::from(input.action_down(act.dpad_left)));

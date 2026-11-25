@@ -1,4 +1,11 @@
 //! Heightfields, tiled terrain and streaming helpers.
+//!
+//! **Maturity: tested**, from the guide chapter `3d.md`. Game: Shard Grove, played headless by
+//! `tests/shard_grove.rs`; its package is not played in the list of checks. Tests:
+//! `tests/three.rs`, `tests/lights.rs`, `tests/morph3d.rs` and the 3D render tests. Platforms:
+//! Linux, macOS and Windows, headless (the workspace tests in the list of checks). Graphics:
+//! offscreen render tests, required on Windows (DirectX 12 on the WARP software adapter) and run on
+//! Linux and macOS only where a GPU is found. Missing: Shard Grove's package played on each OS.
 
 #![deny(missing_docs)]
 pub use crate::three::{

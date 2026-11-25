@@ -2,6 +2,12 @@
 //! parts and bends 2D meshes, animated by clips, crossfades, 1D blends and
 //! a state machine, with two-bone IK and look-at.
 //!
+//! **Maturity: tested**, from the guide chapter `skeleton2d.md`. Game: none. Tests:
+//! `tests/skeleton2d*.rs`, `skeleton2d_render_test.rs`. Platforms: Linux, macOS and Windows,
+//! headless (the workspace tests in the list of checks). Graphics: offscreen render tests, required
+//! on Windows (DirectX 12 on the WARP software adapter) and run on Linux and macOS only where a GPU
+//! is found. Missing: a reference game that uses it.
+//!
 //! - [`SkeletonData`]: the shared description: [`Bone`]s with their rest
 //!   [`BonePose`], [`Slot`]s that show one [`Attachment`] at a time (a rigid
 //!   [`SpritePart`] or a [`SkinnedMesh`] whose vertices follow up to four
@@ -83,8 +89,8 @@ pub use clip::{
     SlotTrack, TransformTrack,
 };
 pub use data::{
-    Attachment, Bone, BonePose, ClippingMask, IkConstraint, MeshVertex, SkeletonData, SkeletonError, SkinnedMesh, Slot,
-    SpritePart, TransformConstraint,
+    Attachment, Bone, BonePose, ClipId, ClipRef, ClippingMask, IkConstraint, MeshVertex, SkeletonData, SkeletonError,
+    SkinnedMesh, Slot, SpritePart, TransformConstraint,
 };
 pub(crate) use draw::draw_skeletons;
 pub use graph::{SkeletonGraph, SkeletonMotion, SkeletonState};

@@ -1,5 +1,12 @@
 # Video: intros and screens in the world
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests: `tests/video.rs`,
+> `video_render_test.rs`, with the `video` feature. Platforms: Linux, macOS
+> and Windows (the `video` lines of the list of checks); desktop only, the web
+> reports `Unsupported`. Graphics: offscreen render tests, required on Windows
+> (DirectX 12 on the WARP software adapter) and run on Linux and macOS only
+> where a GPU is found. Missing: a reference game that uses it.
+
 With the `video` feature (off by default), a game plays WebM files into a
 texture: a studio logo before the menu, a cutscene, a looping clip on a
 television in the world. The pictures are AV1, decoded on the desktop by

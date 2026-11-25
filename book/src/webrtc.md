@@ -1,5 +1,12 @@
 # Peer to peer over WebRTC
 
+> **Maturity: [experimental](maturity.md).** Game: none. Tests: native
+> endpoints on loopback and simulated NATs (`ponko_lobby` and `ponko_ffi`
+> tests). Platforms: Linux, macOS and Windows, headless (the workspace tests
+> in the list of checks) for the native side. Graphics: not involved. Missing:
+> the browser side never ran in a browser, and no real NAT, public STUN or
+> TURN server was used (the chapter's "Not checked").
+
 A [message endpoint](networking.md#application-messages-rust) normally
 runs over UDP, or over WebSocket for browsers. With the engine's `webrtc`
 feature it can also run over **WebRTC data channels**: browser to browser,

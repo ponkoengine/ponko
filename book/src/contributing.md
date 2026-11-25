@@ -1,5 +1,7 @@
 # Contributing
 
+> **Maturity: not a feature.** How to contribute.
+
 Start with [`CONTRIBUTING.md`](../../CONTRIBUTING.md).
 The detailed maintainer/agent integration checklist is in
 [`AGENTS.md`](../../AGENTS.md).
@@ -13,6 +15,13 @@ In short:
 - Rust-only changes are welcome; guide chapters and C/C++ bindings are not
   required from every contributor. Maintainers coordinate that coverage and
   own follow-ups. Preserve existing compatibility and describe behavior and tests.
+
+## Running local checks
+
+`python3 scripts/run-checks.py --list` shows which inventory jobs can run on
+your machine. Use `--quick` for the quick subset or `--job NAME` for a particular
+job. See [Local checks](../../CONTRIBUTING.md#local-checks) for report files,
+provisioning and nightly scheduling.
 
 ## Adding a cargo feature
 
@@ -119,6 +128,33 @@ mdbook serve book --open
 ```
 
 Every page has an edit button (top right) that opens the file in the project's repository.
+
+### Every chapter has a maturity level
+
+Every chapter opens, right under its title, with its maturity level and what
+the level rests on: the reference game that uses the feature, the tests and
+platforms in the list of checks, and the graphics backends they reach
+(`STABILITY.md`, "Maturity levels", defines the levels and how to pick one).
+The rustdoc of every top-level module of `ponko` repeats its chapter's
+level. A new chapter starts like this:
+
+```md
+# My feature
+
+> **Maturity: [tested](maturity.md).** Game: none. Tests: `tests/my_feature.rs`.
+> Platforms: Linux, macOS and Windows, headless (the workspace tests in the
+> list of checks). Graphics: not involved. Missing: a reference game that uses it.
+```
+
+Claim only what the repository records, and choose the lower level when in
+doubt. A page that describes no feature says `**Maturity: not a feature.**`
+and why. The [list of levels](maturity.md) is generated, and so are the
+module paragraphs that name a chapter:
+
+```sh
+python3 scripts/maturity.py           # fails for a chapter or module without a level
+python3 scripts/maturity.py --write   # regenerates maturity.md and the module docs
+```
 
 ### Rust snippets compile
 

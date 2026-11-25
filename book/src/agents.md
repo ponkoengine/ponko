@@ -1,5 +1,11 @@
 # Working with AI agents (MCP)
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests: the `ponko_mcp`
+> contract tests and the validation bundles. Platforms: Linux, macOS and
+> Windows, headless (the workspace tests in the list of checks); the
+> validation bundles on Linux. Graphics: not involved. Missing: a complete
+> game produced with the tools.
+
 `ponko-mcp` is a [Model Context Protocol](https://modelcontextprotocol.io)
 server. It lets an AI coding agent (Claude Code, Cursor, Codex, ...) start
 your game, look inside it while it runs, change it, and step the simulation,

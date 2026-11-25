@@ -1,5 +1,10 @@
 //! The engine's one error type, [`Error`], and what kind of failure it is,
 //! [`ErrorKind`].
+//!
+//! **Maturity: tested**, from the guide chapter `errors.md`. Game: none. Tests: `tests/errors.rs`,
+//! `tests/error_messages.rs`, `tests/startup_errors.rs`, `tests/loader_convention.rs`. Platforms:
+//! Linux, macOS and Windows, headless (the workspace tests in the list of checks). Graphics: not
+//! involved. Missing: a reference game that uses it.
 #![deny(missing_docs)]
 
 use std::fmt;
@@ -139,6 +144,32 @@ impl Error {
         Self::new(ErrorKind::NotFound, message).with_path(path)
     }
 
+    /// No `what` is called `name`: a [`NotFound`](ErrorKind::NotFound) whose
+    /// message lists the names there are (sorted, at most 32), so a typo
+    /// shows at the call that resolves the name. The `try_` resolvers that
+    /// turn a name into an id once (`Audio::find_bus`, `Ui::try_find`, ...)
+    /// return it.
+    pub(crate) fn unknown_name<'a>(what: &str, name: &str, known: impl IntoIterator<Item = &'a str>) -> Self {
+        const SHOWN: usize = 32;
+        let mut known: Vec<&str> = known.into_iter().collect();
+        known.sort_unstable();
+        known.dedup();
+        let mut message = format!("unknown {what} {name:?}");
+        if known.is_empty() {
+            let plural = if what.ends_with('s') { "es" } else { "s" };
+            message.push_str(&format!(" (there are no {what}{plural})"));
+        } else {
+            let more = known.len().saturating_sub(SHOWN);
+            message.push_str(" (known: ");
+            message.push_str(&known[..known.len().min(SHOWN)].join(", "));
+            if more > 0 {
+                message.push_str(&format!(", and {more} more"));
+            }
+            message.push(')');
+        }
+        Self::new(ErrorKind::NotFound, message)
+    }
+
     /// The bytes of `path` didn't decode.
     pub(crate) fn decode(path: &str, message: impl Into<String>) -> Self {
         Self::new(ErrorKind::Decode, message).with_path(path)
@@ -217,5 +248,17 @@ mod tests {
         }
         .into();
         assert_eq!(e.kind(), ErrorKind::Json);
+    }
+
+    #[test]
+    fn unknown_names_list_the_known_ones_sorted_and_capped() {
+        let e = Error::unknown_name("bus", "musci", ["sfx", "music", "sfx"]);
+        assert_eq!(e.kind(), ErrorKind::NotFound);
+        assert_eq!(e.message(), r#"unknown bus "musci" (known: music, sfx)"#);
+        let e = Error::unknown_name("bus", "x", []);
+        assert_eq!(e.message(), r#"unknown bus "x" (there are no buses)"#);
+        let many: Vec<String> = (0..40).map(|i| format!("n{i:02}")).collect();
+        let e = Error::unknown_name("node", "x", many.iter().map(String::as_str));
+        assert!(e.message().ends_with("n31, and 8 more)"), "{}", e.message());
     }
 }

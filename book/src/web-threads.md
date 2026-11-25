@@ -1,5 +1,10 @@
 # Threads on the web
 
+> **Maturity: [experimental](maturity.md).** Game: none. Tests: the threaded
+> build is linted on nightly Rust. Platforms: the web, built with nightly Rust.
+> Graphics: WebGL2 and WebGPU. Missing: the chapter calls it experimental; the
+> thread-heaps build has not run in a browser since its last fix.
+
 A web build can use more than one core. The frame's parallel work runs on
 Web Workers that share the game's memory, as it does on threads natively:
 - parallel queries (`par_for_each` and the other `par_*` calls);

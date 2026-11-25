@@ -1,5 +1,12 @@
 # Debug drawing
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests:
+> `tests/debug_draw.rs`, `debug_lines_render_test.rs`. Platforms: Linux, macOS
+> and Windows, headless (the workspace tests in the list of checks). Graphics:
+> offscreen render tests, required on Windows (DirectX 12 on the WARP software
+> adapter) and run on Linux and macOS only where a GPU is found. Missing: a
+> reference game that uses it.
+
 `ctx.debug` draws lines, shapes and text labels over the game, in 2D or 3D,
 from any system, to show what code is thinking: a ray cast, an AI's target,
 a trigger's reach, a path. It is meant for development: it is on in debug

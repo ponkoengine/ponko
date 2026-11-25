@@ -50,6 +50,53 @@ is a default feature, and `3d` turns on `image-jpeg`, `image-hdr` and
 `image-exr`. PNG is always built in. A new format arrives as a new feature,
 never as a change to what the existing ones turn on.
 
+## Maturity levels
+
+The versions say what a release may change. A maturity level says how much
+evidence stands behind a feature: every chapter of the guide opens with its
+level and what the level rests on (which reference game, platforms and
+graphics backends), the rustdoc of every top-level module repeats it, and
+the guide's "Maturity levels" page lists them all. The levels are defined
+here, once:
+
+<!-- maturity-levels:start -->
+| Level | Criteria | What it promises |
+|---|---|---|
+| **proven** | A reference game uses it, and the list of checks (`scripts/checks.yml`) plays that game on Linux, macOS and Windows: today Coin Dash and Ember Hop, from their packages, headless and in a window. The feature also has automated tests of its own there. | Everything the versions promise, and the reference games' runs guard it: a regression that breaks them shows up in the list of checks before a release. |
+| **tested** | Automated tests in the list of checks (headless, or the offscreen GPU tests) cover it, on at least one platform, but no reference game played on all three systems rests on it yet. | Everything the versions promise. What is missing is evidence, not a promise: it may fail in a game, on a platform or a GPU its tests don't reach, and such a failure is a bug. |
+| **experimental** | Its chapter calls it a prototype, a report or experimental, or the part that matters was never checked (on a device, a display, in a browser), whatever tests it has. | Less: it may change or be removed in any minor release, without a deprecated step first. Rely on it only with the gaps its chapter names in mind. |
+
+- A level is assigned from what the repository records: the tests in the list
+  of checks, which reference games use the feature, and the platforms and
+  backends those runs cover. A platform or backend no run covers is not
+  claimed; when the evidence is unclear, the lower level is chosen and the
+  chapter says what is missing.
+- A page that describes no feature of its own (the introduction, a
+  migration guide, the contributing notes) says it is not a feature.
+- A level changes in a pull request that adds the evidence (a test, a
+  reference game that uses the feature, a platform in the list of checks) or
+  finds it missing, and edits the chapter's first lines.
+  `python3 scripts/maturity.py` fails when a chapter or a top-level module
+  has no level, and regenerates the list and the module docs (`--write`).
+<!-- maturity-levels:end -->
+
+Experimental items still have their ordinary names, so for now the versions
+cover them like every other public item: a patch release doesn't break them.
+Renaming them `unstable_`, or leaving them out of the semver checks, is an
+API change of its own (#529); from then on they belong under
+[Unstable](#unstable). They are:
+
+- HDR output (the guide's "HDR displays"): `Game::hdr_output`,
+  `ponko::render::HdrOutput`, `HdrStatus`, `HdrEncoding`, `HdrOffReason`,
+  `HdrMetadata`, `Graphics::hdr_output` and `hdr_status`, and their C
+  functions (`ponko_*hdr_output*`, `ponko_ctx_hdr_status`).
+- WebRTC (the `webrtc` feature, "Peer to peer over WebRTC"):
+  `ponko::net::rtc`, `NetMessages::host_rtc` and `join_rtc`, and
+  `ponko_net_messages_rtc_host`, `_join` and `_peer`.
+- Hot patching (the `hotpatch` feature) and the threaded web build
+  ("Threads on the web"); neither has an API of its own.
+- VR and XR is a report and an offscreen prototype, with no public API.
+
 ## Plugins
 
 The `Plugin` trait is the extension point for other people's crates, and
@@ -84,11 +131,18 @@ compiling in its patch releases. So do what a plugin adds through:
 | Release | When | Contains |
 |---|---|---|
 | Patch (0.1.1, 0.1.2, ...) | As needed: within days for a regression or a security fix, otherwise when there are fixes to ship | Bug fixes and additions. Nothing that breaks code written for the same minor. |
-| Minor (0.2.0, 0.3.0, ...) | When the P1 scope of its [milestone](https://github.com/ponkoengine/ponko/milestones) is done, roughly every 8 to 12 weeks | New features and breaking changes, each break with its migration entry. |
-| 1.0 | When the readiness checklist (#432) is complete | The last 0.x release with the compatibility promise attached. It breaks nothing. |
+| Minor (0.2.0, 0.3.0, ...) | When the P1 scope of its [milestone](https://github.com/ponkoengine/ponko/milestones) is done, roughly every 8 to 12 weeks. 0.2.0 is the exception: it is a larger release and has no fixed interval | New features and breaking changes, each break with its migration entry. |
+| 1.0 | When the readiness checklist (#480) is complete | The last 0.x release with the compatibility promise attached. It breaks nothing. |
 
 - **A release is scope, not a date.** P1 issues define a minor; what is not
   ready moves to the next one instead of delaying or rushing the release.
+- **What each minor holds.** 0.2.0 carries everything planned after 0.1.0
+  (2D, 3D production and text, multiplayer and platforms, and the research
+  that was waiting) except the 1.0 freeze work: the roadmap
+  ([ROADMAP.md](ROADMAP.md)) names its scope by outcome, and the milestone
+  `0.2.0` has the live list. 0.3.0 starts as the release that removes what
+  0.2.0 deprecates, and gets its further scope when 0.2.0 is out. 0.2.0
+  keeps the right to change the API; the freeze review comes after it.
 - **Release candidates.** From 0.2.0 on, a minor is published as
   `0.y.0-rc.1` at least a week before the release. Cargo never selects a
   release candidate unless the version is written out
@@ -129,8 +183,14 @@ Not covered by the versions, and allowed to change in any release:
   presets (`UiLayout::row`, `column`, ...), but their signatures follow
   Taffy's, so a Ponko release may change them, and the Taffy version behind
   them, when Taffy changes. Use the presets in code that must keep compiling.
-- **Which version of a re-exported crate** (`glam`, `serde_json`,
-  `steamworks`) stands behind Ponko's names, before 1.0: see
+- `ponko::net::unstable_steamworks`, a re-export of the `steamworks` crate
+  (feature `steam`), and the two `SteamClient` methods that hand out or take
+  its client: `SteamClient::unstable_steamworks` and
+  `SteamClient::from_unstable_steamworks`. Ponko's own Steam types
+  (`SteamClient`, `SteamLobbyId`, `SteamUserId`, `SteamLobby`, ...) are
+  stable and don't change with it.
+- **Which version of a re-exported crate** (`glam`, `serde_json`) stands
+  behind Ponko's names, before 1.0: see
   [Re-exported crates](#re-exported-crates).
 - Error message text, log output, the inspector's look, and the exact
   frames rendered: tests should check behavior, not strings or pixels.
@@ -253,35 +313,57 @@ every root module a release adds.
 ## Re-exported crates
 
 Some of Ponko's API is another crate's types, re-exported as they are, so
-values pass between Ponko and code that uses the crate directly:
+values pass between Ponko and code that uses the crate directly. Each such
+crate has one of two places, decided for 1.0:
 
-| Crate | Ponko's names |
-|---|---|
-| `glam` | `ponko::math` (`Vec2`, `Vec3`, `Vec4`, `Quat`, `Mat4`, `UVec2`, `EulerRot` and the constructors `vec2`, ...), its home; the prelude re-exports the common ones as the same items |
-| `serde_json` | `ponko::reflect::JsonValue` and `JsonMap` (its `Value` and `Map<String, Value>`), `ponko::reflect::json` (the crate), `json!` in the prelude; `ponko_mcp::JsonValue`, `JsonMap` and `json!` |
-| `steamworks` | `ponko::net::steam` (feature `steam`) |
+| Crate | Ponko's names | Decision |
+|---|---|---|
+| `glam` | `ponko::math` (`Vec2`, `Vec3`, `Vec4`, `Quat`, `Mat4`, `UVec2`, `EulerRot` and the constructors `vec2`, ...), its home; the prelude re-exports the common ones as the same items | kept and pinned |
+| `serde_json` | `ponko::reflect::JsonValue` and `JsonMap` (its `Value` and `Map<String, Value>`), `ponko::reflect::json` (the crate), `json!` in the prelude; `ponko_mcp::JsonValue`, `JsonMap` and `json!` | kept and pinned |
+| `steamworks` | `ponko::net::unstable_steamworks` (feature `steam`); the stable Steam API is Ponko's own types | wrapped, raw crate [unstable](#unstable) |
+| `taffy` | `ponko::ui::unstable_taffy`; the stable layout API is `UiLayout`'s presets | wrapped, raw crate [unstable](#unstable) |
 
-Ponko promises that these names are those crates' types, not the types'
-behavior: their methods and trait implementations (`Vec2::length`,
-`Quat::from_euler`, `JsonValue::as_object`, ...) are the crate's and are
-documented there. Ponko picks the version:
+**Kept and pinned** (`glam`, `serde_json`). Ponko promises that these names
+are those crates' types, not the types' behavior: their methods and trait
+implementations (`Vec2::length`, `Quat::from_euler`, `JsonValue::as_object`,
+...) are the crate's and are documented there. Ponko picks the version:
 
 - **A compatible release** of the crate, one Cargo may select by itself, can
   come with any Ponko release, patch releases too. It may add methods and
   trait implementations, which can rarely make a method call ambiguous with
   a game's own extension trait, as any dependency update can.
 - **An incompatible release** (glam 0.34 to 0.35, serde_json 1 to 2) is a
-  breaking change. Before 1.0, a Ponko minor release may make it for any of
-  the three, and the CHANGELOG lists it under Breaking changes. From 1.0 on,
-  an incompatible `glam` or `serde_json` comes only with a Ponko major
-  release; `steamworks` follows the Steam SDK, and its rule after 1.0 is
-  written here before 1.0.
+  breaking change. Before 1.0, a Ponko minor release may make it, and the
+  CHANGELOG lists it under Breaking changes. **From 1.0 on, an incompatible
+  `glam` or `serde_json` comes only with a Ponko major release.** The
+  dependency's major version becomes part of Ponko's.
 - A game that also depends on the crate directly names the same version
   range as Ponko (`cargo tree -i glam` shows it), or uses Ponko's names and
   no direct dependency at all.
 - The re-export decides only the Rust types: saved worlds and other files
   keep their own compatibility rules ([Saved worlds](#saved-worlds)),
   whatever version of `serde_json` writes them.
+
+Why these two stay: math types are in every game's code, and glam's are the
+ones the Rust game ecosystem passes around (physics, audio, mesh and
+animation crates). Own math types would cost every game that interop, with a
+conversion at each boundary, for no runtime gain: Ponko's types would be the
+same `f32` lanes and SIMD as glam's. The cost of keeping glam is an API
+question, not a speed one, so it was decided without a benchmark. `serde_json`
+has been on 1.x for years, and `JsonValue` is the common currency of JSON in
+Rust.
+
+**Wrapped** (`steamworks`, `taffy`). Ponko's stable API names only Ponko's
+types. For Steam those are `SteamClient` (started with
+`SteamClient::init_app`), `SteamLobbyId`, `SteamUserId`, `SteamLobby` and
+`SteamLobbyVisibility`, taken and returned by `Net::steam_*`,
+`NetMessages::steam_*` and the invite helpers; ids pass to and from the raw
+crate as `u64` (`from_raw`, `raw`). The raw crate stays reachable at an
+`unstable_` path for what Ponko doesn't wrap (achievements, stats), so a new
+`steamworks` or `taffy` release, compatible or not, can come with any Ponko
+release without breaking the stable API. `tests/third_party_api.rs` checks
+the API listing (`api/ponko/docs-rs.txt`) for `steamworks` and `taffy` types
+on items without an `unstable_` name.
 
 ## Minimum Rust version (MSRV)
 

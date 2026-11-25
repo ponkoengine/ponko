@@ -209,6 +209,35 @@ pub unsafe extern "C" fn ponko_ctx_audio_bus(
     })
 }
 
+/// The bus named `name` that already exists (Rust `Audio::find_bus`),
+/// without making one: resolve it once and keep the handle. A name no bus
+/// has is `PONKO_NOT_FOUND`, and `ponko_last_error` lists the buses there
+/// are; `"sfx"`, the default bus, always exists.
+/// ```
+/// let mut bus = ponko_ffi::PonkoAudioBus::default();
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_audio_find_bus(std::ptr::null_mut(), c"music".as_ptr(), &mut bus) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `name` NUL-terminated; `out_bus` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_audio_find_bus(
+    ctx: *mut PonkoCtx,
+    name: *const c_char,
+    out_bus: *mut PonkoAudioBus,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            let name = text(name)?;
+            if out_bus.is_null() {
+                return Err(invalid("output is null"));
+            }
+            let bus = c.audio.find_bus(name).map_err(crate::engine_error)?;
+            out(out_bus, bus_to_c(bus))
+        })
+    })
+}
+
 /// Sets a bus's volume, 0 (silent) to 1 (as recorded) or more.
 /// ```
 /// assert_eq!(unsafe { ponko_ffi::ponko_ctx_set_audio_bus_volume(std::ptr::null_mut(), Default::default(), 0.5) } as u32, 1);

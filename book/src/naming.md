@@ -1,5 +1,8 @@
 # Ponko naming and compatibility
 
+> **Maturity: not a feature.** Naming rules and the map of old names; nothing
+> to rate.
+
 Ponko was formerly Crabby Engine. Ponko is the only spelling in Rust, C, C++,
 tools, saved files and settings. The old `Crabby*`, `crabby_*` and `CRABBY_*`
 names, the deprecated Rust aliases and the flat `Ctx` forwarders were **removed
@@ -224,7 +227,7 @@ each with its reason, so the list can't grow unnoticed.
 | Area | Canonical module |
 |---|---|
 | Vectors, quaternions, matrices | `math` (glam's types; the common ones are in the prelude; C and C++ have their own `PonkoVec2`, `ponko::vec2`, ...) |
-| Networking, replication, interest, Steam | `net` (`net::steam` is the SDK) |
+| Networking, replication, interest, Steam | `net` (`SteamClient`, `SteamLobbyId`, ...; the raw SDK is `net::unstable_steamworks`) |
 | Frame/per-system reports, budgets, scopes | `perf` |
 | Materials, effects, compute, targets, quality | `render` |
 | Clips, graphs, skeletal animation, IK | `anim` |
@@ -265,7 +268,7 @@ lists every removed name with its replacement. Moving off them:
 - Crates and helpers: `serde_json` is `reflect::json` (its `Value` and
   `Map` are named `reflect::JsonValue` and `reflect::JsonMap`; `json!` stays
   in the prelude), glam's types are in `math`, `steamworks` is
-  `net::steam`, `ui_layout` is `ui::unstable_taffy` (prefer `ui::UiLayout`), `QueryFilter` and `ViewQuery`
+  `net::unstable_steamworks` (prefer `net::SteamClient` and the other Steam types), `ui_layout` is `ui::unstable_taffy` (prefer `ui::UiLayout`), `QueryFilter` and `ViewQuery`
   (the ECS ones) are in `ecs_core`, `Interpolate` is `net::Interpolate`,
   `FieldType` and `ValueSchema` are in `reflect`, `RawFlowView` is
   `flow::RawFlowView`, `RawGridView` is `spatial::RawGridView`.

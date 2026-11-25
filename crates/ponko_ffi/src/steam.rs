@@ -15,10 +15,10 @@ pub(crate) mod client {
     use super::*;
     use std::sync::Mutex;
 
-    static CLIENT: Mutex<Option<(u32, ponko::net::steam::Client)>> = Mutex::new(None);
+    static CLIENT: Mutex<Option<(u32, ponko::net::SteamClient)>> = Mutex::new(None);
 
     /// The process's Steam client for `app_id`, started on first use.
-    pub(crate) fn get(app_id: u32) -> Result<ponko::net::steam::Client, Failure> {
+    pub(crate) fn get(app_id: u32) -> Result<ponko::net::SteamClient, Failure> {
         let mut c = CLIENT.lock().map_err(|_| invalid("steam client lock poisoned"))?;
         if let Some((id, client)) = c.as_ref() {
             if *id != app_id {
@@ -28,8 +28,7 @@ pub(crate) mod client {
             }
             return Ok(client.clone());
         }
-        let client = ponko::net::steam::Client::init_app(app_id)
-            .map_err(|e| invalid_owned(format!("could not start Steam (is it running and logged in?): {e}")))?;
+        let client = ponko::net::SteamClient::init_app(app_id).map_err(|e| invalid_owned(e.to_string()))?;
         *c = Some((app_id, client.clone()));
         Ok(client)
     }
@@ -110,7 +109,7 @@ pub unsafe extern "C" fn ponko_game_lockstep_steam_join(game: *mut PonkoGame, ap
         #[cfg(feature = "steam")]
         {
             let client = client::get(app_id)?;
-            let lobby = ponko::net::steam::LobbyId::from_raw(lobby);
+            let lobby = ponko::net::SteamLobbyId::from_raw(lobby);
             net = Some(ponko::net::Net::steam_join(&client, lobby));
             Ok(())
         }

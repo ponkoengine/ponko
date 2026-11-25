@@ -1,10 +1,15 @@
 # Moving things
 
+> **Maturity: [tested](../maturity.md).** Game: none. Tests:
+> `tests/cookbook_moving.rs` runs every recipe. Platforms: Linux, macOS and
+> Windows, headless (the workspace tests in the list of checks). Graphics: not
+> involved.
+
 Walking, jumping, dashing, clicking to move, dragging and rebinding keys. Each recipe is a system you add with `.sim_system` (or `.system` for frame-rate work); the player is any entity with a `Transform`.
 
 ## Walk with the keyboard
 
-Bind WASD and the arrow keys to one action, `move`, once. The walking system reads the action, never a key, so it works unchanged with anything you bind later. Two keys together make a vector longer than 1, so it is capped: diagonals are not faster.
+Bind WASD and the arrow keys to one action, `move`, once, and resolve its name once into an `ActionId` kept in a resource: the systems that run every tick read the action by id, without a name lookup (an unknown name is logged when it is resolved, not missed every tick; see [Actions](../actions.md)). The walking system reads the action, never a key, so it works unchanged with anything you bind later. Two keys together make a vector longer than 1, so it is capped: diagonals are not faster.
 
 <div class="lang-pair">
 <div>

@@ -1,6 +1,10 @@
 //! ECS diagnostics for tools and agents: archetype layouts, component
 //! storage and the system schedule, as stable, machine-readable data.
 //!
+//! **Maturity: tested**, from the guide chapter `control.md`. Game: none. Tests:
+//! `tests/control.rs`. Platforms: Linux, macOS and Windows, headless (the workspace tests in the
+//! list of checks). Graphics: not involved. Missing: a reference game that uses it.
+//!
 //! [`Ctx::ecs_diagnostics`] builds a snapshot from the world and the
 //! schedule only when asked (by game code, a test, or the control
 //! endpoint's `ecs.diagnostics`): the schedule plan, the declared accesses

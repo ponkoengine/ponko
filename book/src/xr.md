@@ -1,5 +1,11 @@
 # VR and XR: where the engine stands
 
+> **Maturity: [experimental](maturity.md).** Game: none; a stereo prototype
+> draws Shard Grove's level offscreen. Tests: `stereo_render_test.rs`.
+> Platforms: measured on one Apple machine (Metal). Graphics: Metal,
+> offscreen. Missing: a headset: no OpenXR runtime, per-eye projections or
+> tracked input yet; XR is not a goal of any release.
+
 Ponko has no headset support. This chapter is the evaluation behind that
 answer: what drawing for a headset asks of the renderer, of the frame loop
 and of input, what a stereo prototype costs today, which platforms could be

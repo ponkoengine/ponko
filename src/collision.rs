@@ -1,6 +1,12 @@
 //! What 2D and 3D physics share: how a body moves, and collision events.
 //! With the `physics` or `physics3d` feature.
 //!
+//! **Maturity: tested**, from the guide chapter `physics3d.md`. Game: Shard Grove (character
+//! controller), headless only. Tests: `tests/physics3d*.rs`, `tests/vehicle3d.rs`,
+//! `tests/joints3d.rs`, `tests/ragdoll3d.rs`. Platforms: Linux, macOS and Windows, headless (the
+//! workspace tests in the list of checks). Graphics: not involved. Missing: Shard Grove's package
+//! played on each OS.
+//!
 #![cfg_attr(
     feature = "3d",
     doc = " These types are documented here; [`d2`](crate::d2), [`d3`](crate::d3)"

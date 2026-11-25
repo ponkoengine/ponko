@@ -1,5 +1,11 @@
 //! The water kit: lakes, rivers and seas, ready to use (feature `3d`).
 //!
+//! **Maturity: tested**, from the guide chapter `water.md`. Game: none. Tests: `tests/water.rs`,
+//! `water_render_test.rs`, `water_kit_render_test.rs`. Platforms: Linux, macOS and Windows,
+//! headless (the workspace tests in the list of checks). Graphics: offscreen render tests, required
+//! on Windows (DirectX 12 on the WARP software adapter) and run on Linux and macOS only where a GPU
+//! is found. Missing: a reference game that uses it.
+//!
 //! A [`Water`] is one body of water: a mesh with a ready-made material on
 //! the engine's custom shader hooks, and the passes it asks for. Make one
 //! with [`Water::spawn`] from a [`WaterDesc`] ([`WaterDesc::lake`],

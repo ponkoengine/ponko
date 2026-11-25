@@ -1,5 +1,10 @@
 # Menus and screens
 
+> **Maturity: [tested](../maturity.md).** Game: none. Tests:
+> `tests/cookbook_menus.rs` runs every recipe. Platforms: Linux, macOS and
+> Windows, headless (the workspace tests in the list of checks). Graphics: not
+> involved.
+
 A pause menu, a title screen, game over, a heads-up display, a volume slider and a panel that slides in. All of them are retained UI (`ctx.ui`) plus game states; the tests click the buttons with an input scenario.
 
 ## A pause menu
@@ -25,7 +30,7 @@ Escape pushes the `Paused` state, which stops the simulation systems that run on
 
 ## A title screen
 
-A column of buttons. Clicks are events, read once per frame; a button's name is how a system and a test find it.
+A column of buttons. Clicks are events, read once per frame; a button's name is how a system and a test find it, looked up when a click arrives rather than every frame.
 
 <div class="lang-pair">
 <div>
@@ -67,7 +72,7 @@ Losing the last life changes the state to `GameOver`; Enter changes it to `Playi
 
 ## A heads-up display
 
-Labels that are built once and shown with `show_hud` (always on screen, never takes clicks). The text is set only when it changed.
+Labels that are built once and shown with `show_hud` (always on screen, never takes clicks). The text is set only when it changed. The label's id is kept when it is built, so the system that runs every frame looks no name up.
 
 <div class="lang-pair">
 <div>

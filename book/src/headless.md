@@ -1,5 +1,11 @@
 # Headless runs and testing
 
+> **Maturity: [proven](maturity.md).** Game: Coin Dash and Ember Hop, packaged
+> and played on Linux, macOS and Windows, headless from their packages. Tests:
+> `tests/headless.rs`, `tests/headless_frames.rs`, `tests/input_scenario.rs`.
+> Platforms: Linux, macOS and Windows, headless (the workspace tests in the
+> list of checks). Graphics: not involved.
+
 `run_headless(ticks)` after [`Game::setup`](getting-started.md#setup-on-the-builder),
 or `Game::run_headless(ticks, setup)` in one call (C++: `ponko::game::run_headless`,
 both forms), runs the simulation with no window and no

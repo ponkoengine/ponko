@@ -1,5 +1,16 @@
 # Retained game UI
 
+> **Maturity: [proven](maturity.md).** Game: Coin Dash and Ember Hop, packaged
+> and played on Linux, macOS and Windows (Coin Dash's menus and settings).
+> Tests: `tests/ui_retained.rs`, `tests/ui.rs`, `tests/coin_dash_menus.rs`,
+> `ui_render_test.rs`. Platforms: Linux, macOS and Windows, headless (the
+> workspace tests in the list of checks). Graphics: the packaged games run in
+> a window on Linux (software Vulkan under Xvfb), macOS and Windows (DirectX
+> 12, WARP when there is no GPU); Coin Dash also runs in headless Chromium and
+> WebKit on WebGL2; offscreen render tests, required on Windows (DirectX 12 on
+> the WARP software adapter) and run on Linux and macOS only where a GPU is
+> found. Missing: screen readers are checked by hand (Screen reader records).
+
 Build a tree once in `ctx.ui`, then update its text, values and styles.
 The engine handles layout/input before frame systems and draws the tree above
 scene sprites. The retained tree is the game's UI: menus, HUDs, shops, dialogs.
@@ -145,6 +156,14 @@ have `take_click`, which does that). C++: `set_name`, `find`, `name`, `take_clic
 on the tree; C:
 `ponko_ctx_ui_set_name`, `ponko_ctx_ui_find`, `ponko_ctx_ui_name`,
 `ponko_ctx_ui_take_click`.
+
+A lookup by name hashes the string, so don't do it every frame: look names
+up when an event arrives (as the shop below does), or once after building
+the screen, keeping the ids. `ui.try_find(name)` is `find` for a node that
+must be there: a name no node has is an error that lists the names there
+are, so a typo shows where it was made instead of as a `None` later (C++:
+`tree.try_find(name)`, a `ponko::result`; C: `ponko_ctx_ui_try_find`,
+`PONKO_NOT_FOUND` with the names in `ponko_last_error`).
 
 `UiPaint` supplies background colors for normal/hover/pressed/disabled states,
 borders, font, line height, text color, wrapping and horizontal alignment.

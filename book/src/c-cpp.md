@@ -1,5 +1,10 @@
 # C and C++
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests: the C and C++ test
+> programs (`native` job) and the `ponko_ffi` tests. Platforms: Linux, macOS
+> and Windows (the `native` job). Graphics: not involved. Missing: a reference
+> game written in C or C++.
+
 Games can be written in C++ (or plain C) as well as Rust. They use the same
 engine: the same ECS, game loop, renderer, spatial grid and control endpoint
 for agents. Wherever a feature exists in the C API, the chapters of this guide

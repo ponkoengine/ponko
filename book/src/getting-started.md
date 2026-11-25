@@ -1,5 +1,8 @@
 # Getting started
 
+> **Maturity: not a feature.** Setup steps; the features it uses carry their
+> own levels.
+
 You need a recent stable Rust (`rustup update stable`). On Linux, also the
 headers for sound and gamepads: `sudo apt-get install libasound2-dev libudev-dev`
 (Debian, Ubuntu).
@@ -127,14 +130,15 @@ In `Cargo.toml` that is:
 ponko = "0.1"
 ```
 
-Its API reference is [on docs.rs](https://docs.rs/ponko/0.1/ponko/). **This
-guide matches the `main` branch, the unreleased 0.2**, not 0.1.0: a page can
-describe an API that is only on `main` so far (the note under each page's
-title says so), and the tutorials need 0.2. To use those, depend on `main`
-instead:
+Its API reference is [on docs.rs](https://docs.rs/ponko/latest/ponko/).
+**This guide matches the `main` branch**, which can be ahead of the release on
+crates.io: the note under every page's title names the version `main` is at and
+says how many changes it has that no release has yet. A page can describe an API
+that is only on `main`, and the tutorials need the newest release (or `main`).
+To use `main`, depend on it instead:
 `ponko = { git = "https://github.com/ponkoengine/ponko" }` (or
-`cargo add ponko --git https://github.com/ponkoengine/ponko`). The
-[changelog](../../CHANGELOG.md) lists
+`cargo add ponko --git https://github.com/ponkoengine/ponko`); the guide's
+examples compile against that line. The [changelog](../../CHANGELOG.md) lists
 what each release added. [The API reference](api.md#which-version-the-guide-matches)
 says how to build the reference for `main` locally, with the features the
 3D, physics and navigation chapters need.

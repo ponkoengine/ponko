@@ -152,10 +152,64 @@ unsafe fn snapshots(ctx: *mut PonkoCtx) {
         );
         assert_eq!(weight(ctx, c"underwater"), 0.0);
         assert_eq!(gain(ctx, world), 1.0);
+        resolved_once(ctx, world);
         // A fade runs on the frame clock: started here, checked next tick.
         assert_eq!(
             ponko_ctx_start_audio_snapshot(ctx, c"underwater".as_ptr(), 1.0),
             PONKO_OK
+        );
+    }
+}
+
+fn last_error() -> String {
+    unsafe { std::ffi::CStr::from_ptr(ponko_last_error()) }
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// Buses and snapshots resolved once by name, then used by handle and id;
+/// a typo lists the names there are.
+unsafe fn resolved_once(ctx: *mut PonkoCtx, world: PonkoAudioBus) {
+    unsafe {
+        let mut found = PonkoAudioBus::default();
+        assert_eq!(ponko_ctx_audio_find_bus(ctx, c"world".as_ptr(), &mut found), PONKO_OK);
+        assert_eq!(found, world);
+        assert_eq!(
+            ponko_ctx_audio_find_bus(ctx, c"wrold".as_ptr(), &mut found),
+            PONKO_NOT_FOUND
+        );
+        assert!(
+            last_error().contains(r#"unknown audio bus "wrold" (known: "#),
+            "{}",
+            last_error()
+        );
+        assert!(last_error().contains("world"));
+        assert_eq!(
+            ponko_ctx_audio_find_bus(ctx, c"world".as_ptr(), null_mut()),
+            PONKO_INVALID_ARGUMENT
+        );
+
+        let mut id = 0;
+        assert_eq!(
+            ponko_ctx_audio_snapshot_id(ctx, c"underwater".as_ptr(), &mut id),
+            PONKO_OK
+        );
+        assert_eq!(ponko_ctx_start_audio_snapshot_id(ctx, id, 0.0), PONKO_OK);
+        let mut w = 0.0;
+        assert_eq!(ponko_ctx_audio_snapshot_weight_id(ctx, id, &mut w), PONKO_OK);
+        assert_eq!(w, 1.0);
+        assert_eq!(ponko_ctx_stop_audio_snapshot_id(ctx, id, 0.0), PONKO_OK);
+        assert_eq!(weight(ctx, c"underwater"), 0.0);
+        assert_eq!(ponko_ctx_start_audio_snapshot_id(ctx, 999, 0.0), PONKO_NOT_FOUND);
+        assert_eq!(ponko_ctx_audio_snapshot_weight_id(ctx, 999, &mut w), PONKO_OK);
+        assert_eq!(w, 0.0);
+        assert_eq!(
+            ponko_ctx_audio_snapshot_id(ctx, c"underwatr".as_ptr(), &mut id),
+            PONKO_NOT_FOUND
+        );
+        assert_eq!(
+            last_error(),
+            r#"unknown audio snapshot "underwatr" (known: underwater)"#
         );
     }
 }

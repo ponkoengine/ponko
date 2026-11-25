@@ -1,5 +1,13 @@
 # Touch: gestures and on-screen controls
 
+> **Maturity: [tested](maturity.md).** Game: Coin Dash and Ember Hop have
+> touch controls; a test plays Coin Dash by touch. Tests: `tests/touch.rs` and
+> the other `tests/touch_*.rs`, `touch_controls_render_test.rs`. Platforms:
+> Linux, macOS and Windows, headless (the workspace tests in the list of
+> checks). Graphics: offscreen render tests, required on Windows (DirectX 12
+> on the WARP software adapter) and run on Linux and macOS only where a GPU is
+> found. Missing: a run on a touch device: mobile is not a validated platform.
+
 Fingers are input like keys and buttons. On a phone, a tablet or a touch
 screen in the browser, the window feeds every finger to `ctx.input`; a
 headless test feeds the same events by hand or from an
@@ -114,7 +122,11 @@ is Coin Dash's set:
   so its buttons take taps (unless `over_screens(true)`); the first free
   finger presses UI buttons as the mouse does. A control that makes sense
   only on some screens is hidden with `ctx.input.set_touch_control_shown`: Coin
-  Dash shows its pause button only during a round.
+  Dash shows its pause button only during a round. It and
+  `touch_control_center` take the action's `ActionId` (no lookup, for a
+  system that runs every frame) or its name (C:
+  `ponko_ctx_set_touch_control_shown_id` and
+  `ponko_ctx_touch_control_center_id`; C++ takes a `ponko::action_id`).
 - **Assistive technology** sees each button as a button named by its label
   and each stick as a group named after its action, in the
   [accessibility tree](ui-accessibility.md).

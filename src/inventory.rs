@@ -1,6 +1,12 @@
 //! What the game holds right now: live textures, meshes, materials,
 //! sounds and other asset handles, with estimated bytes ([`Ctx::asset_inventory`]).
 //!
+//! **Maturity: tested**, from the guide chapter `handles.md`. Game: none. Tests:
+//! `tests/handles.rs`, `tests/handle_layout.rs`, `tests/handle_compat.rs`, `handle_render_test.rs`.
+//! Platforms: Linux, macOS and Windows, headless (the workspace tests in the list of checks).
+//! Graphics: offscreen render tests, required on Windows (DirectX 12 on the WARP software adapter)
+//! and run on Linux and macOS only where a GPU is found. Missing: a reference game that uses it.
+//!
 //! Counts come from the engine's own handle tables, the same ones that
 //! decide whether a handle is live ([`Ctx::is_live`], [`Ctx::live_counts`]),
 //! so they also work in headless runs. Every class agrees with

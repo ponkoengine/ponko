@@ -1,5 +1,12 @@
 # Loading screens: asset groups with progress
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests:
+> `tests/asset_groups.rs`, `asset_group_render_test.rs`. Platforms: Linux,
+> macOS and Windows, headless (the workspace tests in the list of checks).
+> Graphics: offscreen render tests, required on Windows (DirectX 12 on the
+> WARP software adapter) and run on Linux and macOS only where a GPU is found.
+> Missing: a reference game that uses it.
+
 A level needs its tiles, sounds and data before it can start, and a loading
 screen should keep drawing while they arrive. Ponko already has the pieces
 for loading one asset at a time:

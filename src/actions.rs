@@ -1,4 +1,9 @@
 //! Named, rebindable input. Configuration allocates; evaluating input does not.
+//!
+//! **Maturity: proven**, from the guide chapter `actions.md`. Game: Coin Dash and Ember Hop,
+//! packaged and played on Linux, macOS and Windows (Coin Dash rebinds its controls). Tests:
+//! `tests/actions.rs`, `tests/action_ids.rs`, `tests/input_scenario.rs`. Platforms: Linux, macOS
+//! and Windows, headless (the workspace tests in the list of checks). Graphics: not involved.
 
 #![deny(missing_docs)]
 
@@ -399,17 +404,22 @@ impl std::fmt::Display for UnknownAction {
 impl std::error::Error for UnknownAction {}
 
 /// Something that names an action in a query: an [`ActionId`] (resolved once,
-/// the fast form) or a `&str` name (a lookup per call). Implemented for
-/// both so `ctx.input.action_down("jump")` and `ctx.input.action_down(jump)` work.
+/// the fast form) or a name (`&str`, `&String`, `&Arc<str>`, ...: a lookup
+/// per call). Implemented for both so `ctx.input.action_down("jump")` and
+/// `ctx.input.action_down(jump)` work.
 pub trait ActionRef: sealed::Sealed + Copy {
     #[doc(hidden)]
     fn slot(self, map: &ActionMap) -> Option<usize>;
+    /// Whether this names the action `name` whose state slot is `slot`
+    /// (`None` before the map has it), for things kept by action name, such
+    /// as on-screen controls.
+    #[doc(hidden)]
+    fn names(self, map: &ActionMap, name: &str, slot: Option<u32>) -> bool;
 }
 mod sealed {
     pub trait Sealed {}
     impl Sealed for super::ActionId {}
-    impl Sealed for &str {}
-    impl Sealed for &String {}
+    impl<T: AsRef<str> + ?Sized> Sealed for &T {}
 }
 impl ActionRef for ActionId {
     #[inline]
@@ -417,17 +427,19 @@ impl ActionRef for ActionId {
         let i = self.0 as usize;
         (i < map.states.len()).then_some(i)
     }
-}
-impl ActionRef for &str {
     #[inline]
-    fn slot(self, map: &ActionMap) -> Option<usize> {
-        map.slots.get(self).map(|&i| i as usize)
+    fn names(self, map: &ActionMap, name: &str, slot: Option<u32>) -> bool {
+        !self.is_none() && slot.or_else(|| map.slots.get(name).copied()) == Some(self.0)
     }
 }
-impl ActionRef for &String {
+impl<T: AsRef<str> + ?Sized> ActionRef for &T {
     #[inline]
     fn slot(self, map: &ActionMap) -> Option<usize> {
-        self.as_str().slot(map)
+        map.slots.get(self.as_ref()).map(|&i| i as usize)
+    }
+    #[inline]
+    fn names(self, _: &ActionMap, name: &str, _: Option<u32>) -> bool {
+        self.as_ref() == name
     }
 }
 

@@ -1,5 +1,8 @@
 # Security: what reads untrusted bytes
 
+> **Maturity: not a feature.** Which code reads untrusted bytes and how it is
+> guarded; the features it names carry their own levels.
+
 A game reads bytes it didn't write: packets from other players and from
 strangers, files a player, a mod or a download brings, and requests from
 tools. This chapter lists every place in the engine that does, who can send

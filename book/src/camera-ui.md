@@ -1,5 +1,16 @@
 # Camera, text and UI
 
+> **Maturity: [proven](maturity.md).** Game: Coin Dash and Ember Hop, packaged
+> and played on Linux, macOS and Windows (Ember Hop's following camera, both
+> games' text). Tests: `tests/camera_rigs.rs`, `tests/ui.rs`,
+> `text_shaping_render_test.rs`. Platforms: Linux, macOS and Windows, headless
+> (the workspace tests in the list of checks). Graphics: the packaged games
+> run in a window on Linux (software Vulkan under Xvfb), macOS and Windows
+> (DirectX 12, WARP when there is no GPU); Coin Dash also runs in headless
+> Chromium and WebKit on WebGL2; offscreen render tests, required on Windows
+> (DirectX 12 on the WARP software adapter) and run on Linux and macOS only
+> where a GPU is found.
+
 Big worlds need a camera, and games need words on screen. Everything here is
 drawn with sprites, so it batches with the rest of the frame.
 
@@ -390,7 +401,7 @@ Hebrew run right to left. Those need the **`text-shaping`** cargo feature
 (on by default in the C library):
 
 ```toml
-ponko = { version = "0.3", features = ["text-shaping"] }
+ponko = { version = "0.2", features = ["text-shaping"] }
 ```
 
 With it, every string that isn't plain ASCII goes through

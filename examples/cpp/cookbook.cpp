@@ -46,6 +46,9 @@ public:
 // ---- Moving things --------------------------------------------------------------
 // ANCHOR: wasd
 struct Player {};
+// The `move` action, resolved once when it is bound: systems read it by id,
+// without looking its name up every tick.
+struct Move { ponko::action_id id; };
 
 static void bind_move(ponko::ctx& ctx) {
     ponko::action_map bindings;
@@ -53,11 +56,12 @@ static void bind_move(ponko::ctx& ctx) {
         ponko::action_binding::keys2(PONKO_KEY_A, PONKO_KEY_D, PONKO_KEY_W, PONKO_KEY_S),
         ponko::action_binding::keys2(PONKO_KEY_LEFT, PONKO_KEY_RIGHT, PONKO_KEY_UP, PONKO_KEY_DOWN)}));
     ctx.set_actions(bindings);
+    ctx.world().set_resource(Move{ctx.action_id("move")});
 }
 
 // Diagonals must not be faster: a stick or two keys, at most length 1.
 static void walk(ponko::ctx& ctx) {
-    ponko::vec2 stick = ctx.action_axis2("move");
+    ponko::vec2 stick = ctx.action_axis2(ctx.world().resource<Move>().id);
     if (ponko::length(stick) > 1) stick = ponko::normalize_or(stick, {0, 0});
     ctx.world().each([&](ponko::transform2d& t, const Player&) { t.position += stick * 200.0f * ctx.dt(); });
 }
@@ -86,6 +90,7 @@ static void bind_move_with_a_stick(ponko::ctx& ctx) {
         ponko::action_binding::keys2(PONKO_KEY_A, PONKO_KEY_D, PONKO_KEY_W, PONKO_KEY_S),
         ponko::action_binding::stick({0}, ponko::stick::left, 0.2f)})); // pad 0, 20% dead zone
     ctx.set_actions(bindings);
+    ctx.world().set_resource(Move{ctx.action_id("move")});
 }
 // ANCHOR_END: gamepad
 
@@ -806,7 +811,7 @@ struct Dash { double ready_at; }; // simulation time, in seconds
 static void dash(ponko::ctx& ctx) {
     if (!ctx.key_pressed(PONKO_KEY_LEFT_SHIFT)) return;
     const double now = ctx.sim_time();
-    const ponko::vec2 aim = ponko::normalize_or(ctx.action_axis2("move"), {0, 0});
+    const ponko::vec2 aim = ponko::normalize_or(ctx.action_axis2(ctx.world().resource<Move>().id), {0, 0});
     ctx.world().each([&](Dash& d, ponko::transform2d& t) {
         if (now < d.ready_at) return;
         t.position += aim * 120.0f;
@@ -1244,9 +1249,10 @@ static void build_title(ponko::ctx& ctx) {
 static void title_buttons(ponko::ctx& ctx) {
     namespace u = ponko::ui;
     auto ui = ctx.ui_retained();
-    const auto play = ui.find("title.play"), quit = ui.find("title.quit");
     for (const auto& e : ui.events()) {
         if (e.kind != u::event_kind::clicked) continue;
+        // Names are looked up when something was clicked, not every frame.
+        const auto play = ui.find("title.play"), quit = ui.find("title.quit");
         if (play && e.node == *play) {
             ui.pop_screen(); // close the title
             ctx.set_state(page::in_game);
@@ -1334,12 +1340,18 @@ static void losing_every_life_ends_the_round_and_enter_starts_a_new_one() {
 }
 
 // ANCHOR: hud
+// The score label, kept when the HUD is built: the frame system uses it
+// without looking its name up.
+struct ScoreLabel { ponko::ui::id label; };
+
 static void build_hud(ponko::ctx& ctx) {
     namespace u = ponko::ui;
     auto ui = ctx.ui_retained();
     const auto corner = ui.add_panel(u::none, u::fill().padding(16));
-    ui.set_name(ui.add_label(corner, "Score: 0"), "hud.score");
+    const auto label = ui.add_label(corner, "Score: 0");
+    ui.set_name(label, "hud.score");
     ui.show_hud(corner); // always shown, never takes clicks
+    ctx.world().set_resource(ScoreLabel{label});
 }
 
 struct Score { std::uint32_t points; };
@@ -1347,7 +1359,8 @@ struct Score { std::uint32_t points; };
 static void update_hud(ponko::ctx& ctx) {
     auto ui = ctx.ui_retained();
     const std::string text = "Score: " + std::to_string(ctx.world().resource<Score>().points);
-    if (const auto label = ui.find("hud.score"); label && ui.text(*label) != text) ui.set_text(*label, text.c_str());
+    const auto label = ctx.world().resource<ScoreLabel>().label;
+    if (ui.text(label) != text) ui.set_text(label, text.c_str());
 }
 // ANCHOR_END: hud
 
@@ -1370,13 +1383,16 @@ static void the_hud_label_follows_the_score() {
 
 // ANCHOR: volume_slider
 struct MusicBus { ponko::audio_bus bus; };
+struct VolumeSlider { ponko::ui::id slider; };
 
 static void build_volume_slider(ponko::ctx& ctx) {
     namespace u = ponko::ui;
     auto ui = ctx.ui_retained();
     const auto panel = ui.add_panel(u::none, u::anchored(0, 0, 0.3f, 0.1f).padding(8));
-    ui.set_name(ui.add_slider(panel, 0.8f, u::row(24)), "options.volume");
+    const auto slider = ui.add_slider(panel, 0.8f, u::row(24));
+    ui.set_name(slider, "options.volume");
     ui.push_modeless(panel);
+    ctx.world().set_resource(VolumeSlider{slider});
     // A named bus: everything played on it shares one volume.
     ctx.world().set_resource(MusicBus{ctx.audio_bus("music")});
 }
@@ -1384,8 +1400,8 @@ static void build_volume_slider(ponko::ctx& ctx) {
 // A frame system: the slider's value (0 to 1) is the bus's volume.
 static void apply_volume(ponko::ctx& ctx) {
     auto ui = ctx.ui_retained();
-    if (const auto slider = ui.find("options.volume"))
-        ctx.set_audio_bus_volume(ctx.world().resource<MusicBus>().bus, ui.value(*slider));
+    const auto slider = ctx.world().resource<VolumeSlider>().slider;
+    ctx.set_audio_bus_volume(ctx.world().resource<MusicBus>().bus, ui.value(slider));
 }
 // ANCHOR_END: volume_slider
 
@@ -1405,6 +1421,7 @@ static void the_slider_sets_the_music_bus_volume() {
 
 // ANCHOR: slide_in
 struct SlideIn { float seconds; }; // since the panel was asked to appear
+struct SidePanel { ponko::ui::id panel; };
 
 static void build_side_panel(ponko::ctx& ctx) {
     namespace u = ponko::ui;
@@ -1413,6 +1430,7 @@ static void build_side_panel(ponko::ctx& ctx) {
     ui.set_name(ui.add_label(panel, "Inventory"), "side.title");
     ui.set_name(panel, "side.panel");
     ui.show_hud(panel);
+    ctx.world().set_resource(SidePanel{panel});
 }
 
 // A frame system: 0.4 seconds to slide in from off the left edge, easing out.
@@ -1424,7 +1442,7 @@ static void slide_in_panel(ponko::ctx& ctx) {
     const float t = std::fmin(slide.seconds / 0.4f, 1.0f);
     const float x = -240.0f * std::pow(1.0f - t, 3.0f); // from -240 to 0, slowing down
     auto ui = ctx.ui_retained();
-    ui.set_layout(*ui.find("side.panel"), u::fixed(240, 160).top(40).left(x));
+    ui.set_layout(ctx.world().resource<SidePanel>().panel, u::fixed(240, 160).top(40).left(x));
 }
 // ANCHOR_END: slide_in
 
@@ -1505,7 +1523,7 @@ static void units_land_on_the_minimap_in_proportion_and_the_map_draws_in_a_frame
 // ANCHOR: platformer
 // Runs before the physics step, so the new speed is what the step uses.
 static void platformer_controls(ponko::ctx& ctx) {
-    const float run = ctx.action_axis2("move").x;
+    const float run = ctx.action_axis2(ctx.world().resource<Move>().id).x; // `move`, resolved once
     const bool jump = ctx.key_pressed(PONKO_KEY_SPACE);
     ctx.world().each([&](ponko::entity me, const Player&, const ponko::transform2d& t, ponko::velocity& v) {
         v.linear.x = run * 200.0f; // gravity keeps handling y
@@ -1622,7 +1640,7 @@ static void clicking_marks_what_the_pointer_is_over() {
 // relative to the camera, which follows from behind and comes in front of walls.
 static void walk_and_follow(ponko::ctx& ctx, ponko::third_person_camera& rig) {
     const float dt = ctx.dt();
-    const ponko::vec2 stick = ctx.action_axis2("move"); // y is down: W is -1
+    const ponko::vec2 stick = ctx.action_axis2(ctx.world().resource<Move>().id); // y is down: W is -1
     ctx.world().each([&](ponko::entity me, const Hero&, ponko::transform3d& t) {
         t.position += (rig.flat_forward() * -stick.y + rig.flat_right() * stick.x) * 5.0f * dt;
         auto not_me = ponko::query_filter_ex_defaults();

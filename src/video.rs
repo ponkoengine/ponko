@@ -1,6 +1,12 @@
 //! [`Video`]: a video file played into a texture, its sound through the
 //! mixer (feature `video`).
 //!
+//! **Maturity: tested**, from the guide chapter `video.md`. Game: none. Tests: `tests/video.rs`,
+//! `video_render_test.rs`, with the `video` feature. Platforms: Linux, macOS and Windows (the
+//! `video` lines of the list of checks); desktop only, the web reports `Unsupported`. Graphics:
+//! offscreen render tests, required on Windows (DirectX 12 on the WARP software adapter) and run on
+//! Linux and macOS only where a GPU is found. Missing: a reference game that uses it.
+//!
 //! **What lives here:** loading a WebM file with AV1 pictures and Vorbis
 //! sound ([`Video::load`], [`Video::from_bytes`]), playing, pausing,
 //! seeking and looping it, and the [`Texture`] it shows, to draw as a
