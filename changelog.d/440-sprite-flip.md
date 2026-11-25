@@ -4,9 +4,9 @@
   same pivot, and attached children and their offsets are left alone, unlike
   a negative `Transform` scale. Works with regions, sheets, blend modes,
   materials, render layers and normal-mapped 2D lighting. Prefabs, scenes,
-  saves and the world hash keep the flips (saved as `"flip_x"` and
-  `"flip_y"`); saves and prefabs written before load unflipped, and an
-  unflipped sprite hashes exactly as before.
+  saves and the world hash keep the flips (saved as `"flip_x": true` and
+  `"flip_y": true`, only when set); an unflipped sprite saves and hashes
+  exactly as before, and saves and prefabs written before load unflipped.
 - Known gap: the C ABI's `PonkoSprite` has no flip fields yet (its layout is
   fixed), so a sprite read and written back through the C API comes back
   unflipped.

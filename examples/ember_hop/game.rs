@@ -1124,7 +1124,10 @@ fn crawl_drips(ctx: &mut Ctx, dt: f32) {
         let step = drip.heading * drip.speed * dt;
         if let Some(t) = ctx.world.get_mut::<Transform>(e) {
             t.position.x += step;
-            t.scale.x = -drip.heading;
+        }
+        // The sheet faces left: mirror it when the drip walks right.
+        if let Some(sprite) = ctx.world.get_mut::<Sprite>(e) {
+            sprite.flip_x = drip.heading > 0.0;
         }
         ctx.world.insert(e, drip);
     }
