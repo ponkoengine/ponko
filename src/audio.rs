@@ -448,17 +448,15 @@ mod backend {
     }
     impl Audio {
         pub fn unlocked(&self) -> bool {
-            if self.gate.is_locked() {
-                return false;
-            }
+            let unlocked = !self.gate.is_locked();
             #[cfg(target_arch = "wasm32")]
-            return self
-                .manager
-                .as_ref()
-                .and_then(Option::as_ref)
-                .is_some_and(Manager::ready);
-            #[cfg(not(target_arch = "wasm32"))]
-            true
+            let unlocked = unlocked
+                && self
+                    .manager
+                    .as_ref()
+                    .and_then(Option::as_ref)
+                    .is_some_and(Manager::ready);
+            unlocked
         }
         /// A click, tap or key press: on the web the first one opens the
         /// output (browsers allow it now) and starts the voices that waited.
