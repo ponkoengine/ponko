@@ -211,6 +211,10 @@ pub struct Graphics {
     /// two-channel normal map keeps its X and Y (materials rebuild Z).
     #[cfg(feature = "compressed-textures")]
     pub(crate) compressed: std::collections::HashMap<u32, crate::compressed::NormalChannels>,
+    /// How many of their largest mip levels 3D textures loaded from now on
+    /// drop (`set_texture_mip_limit`).
+    #[cfg(feature = "3d")]
+    pub(crate) texture_mip_limit: u32,
 }
 
 impl Graphics {
@@ -267,7 +271,42 @@ impl Graphics {
             autotune: None,
             #[cfg(feature = "compressed-textures")]
             compressed: Default::default(),
+            #[cfg(feature = "3d")]
+            texture_mip_limit: 0,
         }
+    }
+
+    /// Makes 3D textures loaded from now on drop their `levels` largest mip
+    /// levels before they reach the GPU, as Unity's texture mipmap limit
+    /// does: each level halves their width and height and quarters their
+    /// video memory. Use it on GPUs with little video memory, where a world
+    /// that doesn't fit spills into system memory and every frame waits on
+    /// it. 0 (the default) keeps full resolution; at most 4.
+    ///
+    /// It applies to the images of model files (`load_mesh`, scenes and
+    /// their materials) and to texture arrays (`create_texture_array`,
+    /// `load_texture_array`), RGBA and block-compressed alike. Textures keep
+    /// at least 32 pixels on each side, so small masks and lookup strips
+    /// don't change. Textures loaded with `load_texture` (sprites, UI) and
+    /// render targets never do. Already loaded textures keep their size:
+    /// set it before loading the world, or reload what should change.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     ctx.gfx.set_texture_mip_limit(1); // half resolution, a quarter of the memory
+    ///     assert_eq!(ctx.gfx.texture_mip_limit(), 1);
+    /// });
+    /// ```
+    #[cfg(feature = "3d")]
+    pub fn set_texture_mip_limit(&mut self, levels: u32) {
+        self.texture_mip_limit = levels.min(crate::mip_limit::MAX_LIMIT);
+    }
+
+    /// The limit [`set_texture_mip_limit`](Self::set_texture_mip_limit) set.
+    #[cfg(feature = "3d")]
+    pub fn texture_mip_limit(&self) -> u32 {
+        self.texture_mip_limit
     }
 
     /// Sets the background color. It stays until you change it. In 3D it
