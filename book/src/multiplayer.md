@@ -1,5 +1,11 @@
 # Multiplayer: pick a model, then follow it
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests: `tests/net.rs`,
+> `tests/net_replication.rs`, `tests/net_messages.rs`,
+> `tests/net_rollback.rs`, on loopback. Platforms: Linux, macOS and Windows,
+> headless (the workspace tests in the list of checks). Graphics: not
+> involved. Missing: a reference game and a run over a real network.
+
 Every multiplayer game answers one question first: **what crosses the
 network?** Ponko has an answer for each common one. Pick the model that
 fits your game, then follow its chapters in order; you rarely need the

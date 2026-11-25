@@ -1,5 +1,12 @@
 # Web builds: games in the browser
 
+> **Maturity: [tested](maturity.md).** Game: Coin Dash in headless Chromium
+> and WebKit; Ember Hop builds for the web. Tests: the browser smoke runs
+> (`web/smoke`). Platforms: the web, through headless Chromium and WebKit.
+> Graphics: WebGL2 in both browsers; WebGPU is tried but verified only by hand
+> on real GPUs. Missing: WebGPU in a recorded run, and Firefox (its headless
+> build has no WebGL2).
+
 The same game code runs in a browser tab. **Try it:** the examples build
 into a gallery (below), with a page for each: what it shows, its controls,
 whether it needs WebGPU and its source at that release. Among them:

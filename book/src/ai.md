@@ -1,5 +1,11 @@
 # Game AI: behaviour trees and utility scoring
 
+> **Maturity: [tested](maturity.md).** Game: none: the reference games keep
+> their AI state by hand. Tests: `tests/ai.rs`, `tests/ai_guards.rs`.
+> Platforms: Linux, macOS and Windows, headless (the workspace tests in the
+> list of checks). Graphics: not involved. Missing: a reference game that uses
+> it.
+
 Most enemies need no AI library. A crawler that walks its route, chases the
 player it sees and stops when stunned is an `enum` (or a `bool`) and a
 `match` in a sim system, and that stays the best way to write it. For agents

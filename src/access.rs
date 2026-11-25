@@ -1,6 +1,12 @@
 //! Declared system access: what a system reads and writes, and which
 //! declared systems could run together.
 //!
+//! **Maturity: tested**, from the guide chapter `ui-accessibility.md`. Game: Coin Dash names its
+//! controls for screen readers. Tests: `tests/ui_access*.rs`: AccessKit data on every OS, the macOS
+//! adapter, UI Automation on Windows, AT-SPI on Linux. Platforms: Linux, macOS and Windows,
+//! headless (the workspace tests in the list of checks). Graphics: not involved. Missing: the
+//! records with a real screen reader were made on macOS only; none yet for Windows or Linux.
+//!
 //! Systems run one after another, in phase and registration order, unless
 //! [`Game::parallel_systems`](crate::game::Game::parallel_systems) is on: then
 //! view systems whose declarations don't conflict run at the same time

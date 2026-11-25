@@ -1,5 +1,11 @@
 # Data files: tune without restarting
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests:
+> `tests/typed_json_loaders.rs`, `tests/hot_reload.rs`,
+> `tests/data_loader_convention.rs`. Platforms: Linux, macOS and Windows,
+> headless (the workspace tests in the list of checks). Graphics: not
+> involved. Missing: a reference game that uses it.
+
 Keep the numbers you tweak (speeds, damage, costs, wave sizes) in a JSON
 file in `assets/` instead of in code. With [hot reload](drawing.md#hot-reload)
 on (the default in debug builds), saving the file changes them in the

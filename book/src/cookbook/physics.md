@@ -1,5 +1,10 @@
 # Bodies and collisions
 
+> **Maturity: [tested](../maturity.md).** Game: none. Tests:
+> `tests/cookbook_physics.rs` runs every recipe. Platforms: Linux, macOS and
+> Windows, headless (the workspace tests in the list of checks). Graphics: not
+> involved.
+
 Damage on contact, a knockback, line of sight, clicking a body and a platformer's walk and jump, with 2D physics (`Game::physics`).
 
 ## Damage on contact

@@ -2,6 +2,10 @@
 //! selection rings, carried things), in 2D ([`Attached`]) and 3D
 //! (`Attached3D`, with the `3d` feature): the parent and child links of a
 //! scene's hierarchy.
+//!
+//! **Maturity: tested**, from the guide chapter `attachments.md`. Game: none. Tests:
+//! `tests/attach.rs`. Platforms: Linux, macOS and Windows, headless (the workspace tests in the
+//! list of checks). Graphics: not involved. Missing: a reference game that uses it.
 
 use crate::ctx::Ctx;
 #[cfg(test)]

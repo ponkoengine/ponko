@@ -1,5 +1,10 @@
 # Attachments: things that follow things
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests: `tests/attach.rs`.
+> Platforms: Linux, macOS and Windows, headless (the workspace tests in the
+> list of checks). Graphics: not involved. Missing: a reference game that uses
+> it.
+
 Health bars over units, turrets on tanks, selection rings, a carried flag:
 entities that should stay at some place relative to another entity. Give
 them an `Attached` component and add the built-in `systems::follow_attachments`

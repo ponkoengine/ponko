@@ -2,6 +2,11 @@
 //! declared load order, checked before anything of them is used; with the
 //! feature `mods-wasm`, a mod may also bring code (see [Code mods](#code-mods)).
 //!
+//! **Maturity: tested**, from the guide chapter `mods.md`. Game: a sample mod for Ember Hop, run by
+//! `tests/mod_sample.rs`. Tests: `tests/mods.rs`, `tests/mod_code.rs`, `tests/mod_code_host.rs`.
+//! Platforms: Linux, macOS and Windows, headless (the workspace tests in the list of checks).
+//! Graphics: not involved. Missing: a shipped game that loads players' mods.
+//!
 //! A mod is an [asset pack](crate::assets::PackSource) (or files in memory)
 //! with a `mod.json` manifest at its root. It can add files (a new enemy's
 //! prefab and sprite sheet) and replace the game's own by using the same

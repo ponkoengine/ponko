@@ -50,6 +50,53 @@ is a default feature, and `3d` turns on `image-jpeg`, `image-hdr` and
 `image-exr`. PNG is always built in. A new format arrives as a new feature,
 never as a change to what the existing ones turn on.
 
+## Maturity levels
+
+The versions say what a release may change. A maturity level says how much
+evidence stands behind a feature: every chapter of the guide opens with its
+level and what the level rests on (which reference game, platforms and
+graphics backends), the rustdoc of every top-level module repeats it, and
+the guide's "Maturity levels" page lists them all. The levels are defined
+here, once:
+
+<!-- maturity-levels:start -->
+| Level | Criteria | What it promises |
+|---|---|---|
+| **proven** | A reference game uses it, and the list of checks (`scripts/checks.yml`) plays that game on Linux, macOS and Windows: today Coin Dash and Ember Hop, from their packages, headless and in a window. The feature also has automated tests of its own there. | Everything the versions promise, and the reference games' runs guard it: a regression that breaks them shows up in the list of checks before a release. |
+| **tested** | Automated tests in the list of checks (headless, or the offscreen GPU tests) cover it, on at least one platform, but no reference game played on all three systems rests on it yet. | Everything the versions promise. What is missing is evidence, not a promise: it may fail in a game, on a platform or a GPU its tests don't reach, and such a failure is a bug. |
+| **experimental** | Its chapter calls it a prototype, a report or experimental, or the part that matters was never checked (on a device, a display, in a browser), whatever tests it has. | Less: it may change or be removed in any minor release, without a deprecated step first. Rely on it only with the gaps its chapter names in mind. |
+
+- A level is assigned from what the repository records: the tests in the list
+  of checks, which reference games use the feature, and the platforms and
+  backends those runs cover. A platform or backend no run covers is not
+  claimed; when the evidence is unclear, the lower level is chosen and the
+  chapter says what is missing.
+- A page that describes no feature of its own (the introduction, a
+  migration guide, the contributing notes) says it is not a feature.
+- A level changes in a pull request that adds the evidence (a test, a
+  reference game that uses the feature, a platform in the list of checks) or
+  finds it missing, and edits the chapter's first lines.
+  `python3 scripts/maturity.py` fails when a chapter or a top-level module
+  has no level, and regenerates the list and the module docs (`--write`).
+<!-- maturity-levels:end -->
+
+Experimental items still have their ordinary names, so for now the versions
+cover them like every other public item: a patch release doesn't break them.
+Renaming them `unstable_`, or leaving them out of the semver checks, is an
+API change of its own (#529); from then on they belong under
+[Unstable](#unstable). They are:
+
+- HDR output (the guide's "HDR displays"): `Game::hdr_output`,
+  `ponko::render::HdrOutput`, `HdrStatus`, `HdrEncoding`, `HdrOffReason`,
+  `HdrMetadata`, `Graphics::hdr_output` and `hdr_status`, and their C
+  functions (`ponko_*hdr_output*`, `ponko_ctx_hdr_status`).
+- WebRTC (the `webrtc` feature, "Peer to peer over WebRTC"):
+  `ponko::net::rtc`, `NetMessages::host_rtc` and `join_rtc`, and
+  `ponko_net_messages_rtc_host`, `_join` and `_peer`.
+- Hot patching (the `hotpatch` feature) and the threaded web build
+  ("Threads on the web"); neither has an API of its own.
+- VR and XR is a report and an offscreen prototype, with no public API.
+
 ## Plugins
 
 The `Plugin` trait is the extension point for other people's crates, and
@@ -84,11 +131,18 @@ compiling in its patch releases. So do what a plugin adds through:
 | Release | When | Contains |
 |---|---|---|
 | Patch (0.1.1, 0.1.2, ...) | As needed: within days for a regression or a security fix, otherwise when there are fixes to ship | Bug fixes and additions. Nothing that breaks code written for the same minor. |
-| Minor (0.2.0, 0.3.0, ...) | When the P1 scope of its [milestone](https://github.com/ponkoengine/ponko/milestones) is done, roughly every 8 to 12 weeks | New features and breaking changes, each break with its migration entry. |
-| 1.0 | When the readiness checklist (#432) is complete | The last 0.x release with the compatibility promise attached. It breaks nothing. |
+| Minor (0.2.0, 0.3.0, ...) | When the P1 scope of its [milestone](https://github.com/ponkoengine/ponko/milestones) is done, roughly every 8 to 12 weeks. 0.2.0 is the exception: it is a larger release and has no fixed interval | New features and breaking changes, each break with its migration entry. |
+| 1.0 | When the readiness checklist (#480) is complete | The last 0.x release with the compatibility promise attached. It breaks nothing. |
 
 - **A release is scope, not a date.** P1 issues define a minor; what is not
   ready moves to the next one instead of delaying or rushing the release.
+- **What each minor holds.** 0.2.0 carries everything planned after 0.1.0
+  (2D, 3D production and text, multiplayer and platforms, and the research
+  that was waiting) except the 1.0 freeze work: the roadmap
+  ([ROADMAP.md](ROADMAP.md)) names its scope by outcome, and the milestone
+  `0.2.0` has the live list. 0.3.0 starts as the release that removes what
+  0.2.0 deprecates, and gets its further scope when 0.2.0 is out. 0.2.0
+  keeps the right to change the API; the freeze review comes after it.
 - **Release candidates.** From 0.2.0 on, a minor is published as
   `0.y.0-rc.1` at least a week before the release. Cargo never selects a
   release candidate unless the version is written out

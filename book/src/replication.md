@@ -1,5 +1,10 @@
 # Replication: the server owns the world
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests:
+> `tests/net_replication.rs`, on loopback. Platforms: Linux, macOS and
+> Windows, headless (the workspace tests in the list of checks). Graphics: not
+> involved. Missing: a reference game and a run over a real network.
+
 With replication, one game is the **server**: it runs the rules and owns
 every entity. The others are **clients**: they send their controls, and
 the engine keeps their worlds in step with the server's. You don't write

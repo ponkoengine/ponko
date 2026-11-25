@@ -1,5 +1,11 @@
 # When something fails: reading the message
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests: `tests/errors.rs`,
+> `tests/error_messages.rs`, `tests/startup_errors.rs`,
+> `tests/loader_convention.rs`. Platforms: Linux, macOS and Windows, headless
+> (the workspace tests in the list of checks). Graphics: not involved.
+> Missing: a reference game that uses it.
+
 Every failure the engine reports says two things: what your code did, and
 what to change. This chapter shows the messages for the mistakes people make
 in their first hour, and how to choose between a panic and an `Error`.

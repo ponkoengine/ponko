@@ -1,5 +1,10 @@
 # Game states: menus, loading, playing, paused
 
+> **Maturity: [proven](maturity.md).** Game: Coin Dash and Ember Hop, packaged
+> and played on Linux, macOS and Windows (title, play, pause and end screens).
+> Tests: `tests/states.rs`. Platforms: Linux, macOS and Windows, headless (the
+> workspace tests in the list of checks). Graphics: not involved.
+
 Most games have screens: a title, a loading screen, the game itself, a
 pause menu over it, a results screen. Ponko keeps that in a **state
 machine**: an `enum` the game defines, the work to do when a state starts

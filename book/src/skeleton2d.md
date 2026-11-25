@@ -1,5 +1,12 @@
 # 2D skeletons: bones, skinned sprites and blending
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests:
+> `tests/skeleton2d*.rs`, `skeleton2d_render_test.rs`. Platforms: Linux, macOS
+> and Windows, headless (the workspace tests in the list of checks). Graphics:
+> offscreen render tests, required on Windows (DirectX 12 on the WARP software
+> adapter) and run on Linux and macOS only where a GPU is found. Missing: a
+> reference game that uses it.
+
 Frame-by-frame animation (see [Sprite sheets, animation,
 tilemaps](tiles.md)) draws every pose. A 2D skeleton draws the parts once
 and moves them: a hierarchy of bones carries rigid sprite parts (an arm, a

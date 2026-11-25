@@ -1,5 +1,12 @@
 # Several cameras: split screen, minimaps, picture in picture
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests:
+> `tests/viewports.rs`, `views_render_test.rs`, `views2d_render_test.rs`.
+> Platforms: Linux, macOS and Windows, headless (the workspace tests in the
+> list of checks). Graphics: offscreen render tests, required on Windows
+> (DirectX 12 on the WARP software adapter) and run on Linux and macOS only
+> where a GPU is found. Missing: a reference game that uses it.
+
 A window can show the world through several cameras at once: two or four
 players side by side, a minimap in a corner, a rear-view mirror, a
 security monitor. Each camera draws into its own rectangle of the window,

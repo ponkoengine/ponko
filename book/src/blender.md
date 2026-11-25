@@ -1,5 +1,11 @@
 # From Blender to the game
 
+> **Maturity: [tested](maturity.md).** Game: Shard Grove's glTF level and
+> characters, headless only. Tests: `tests/gltf_scenes.rs`,
+> `tests/gltf_extensions.rs`. Platforms: Linux, macOS and Windows, headless
+> (the workspace tests in the list of checks). Graphics: not involved.
+> Missing: Shard Grove's package played on each OS.
+
 Build a level in Blender, give its objects a few custom properties, export
 it as glTF, and spawn it: every object becomes an entity in its place, with
 its look, its light, its collider and your own components, read from the

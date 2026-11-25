@@ -1,5 +1,7 @@
 # Workspace test coverage
 
+> **Maturity: not a feature.** How test coverage is measured.
+
 Coverage records which Rust source lines the tests execute. It includes the
 headless and offscreen GPU tests in the default workspace suite and the
 doctests. Run it on a machine where the offscreen tests can acquire a GPU

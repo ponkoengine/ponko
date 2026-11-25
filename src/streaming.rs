@@ -2,6 +2,12 @@
 //! with a per-frame upload budget, deterministic asset states, and textures
 //! that stream in from a small stand-in up to full resolution.
 //!
+//! **Maturity: tested**, from the guide chapter `streaming.md`. Game: none. Tests:
+//! `tests/streaming.rs`, `tests/residency.rs`, `residency_render_test.rs`. Platforms: Linux, macOS
+//! and Windows, headless (the workspace tests in the list of checks). Graphics: offscreen render
+//! tests, required on Windows (DirectX 12 on the WARP software adapter) and run on Linux and macOS
+//! only where a GPU is found. Missing: a reference game that uses it.
+//!
 //! [`Graphics`](crate::gfx::Graphics) (`ctx.gfx`) is the one service that
 //! owns GPU assets. Which loader to use:
 //!

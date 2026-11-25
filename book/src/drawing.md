@@ -1,5 +1,16 @@
 # Drawing
 
+> **Maturity: [proven](maturity.md).** Game: Coin Dash and Ember Hop, packaged
+> and played on Linux, macOS and Windows. Tests: the 2D render tests
+> (`draw_order_render_test.rs`, `views2d_render_test.rs`,
+> `atlas_render_test.rs`, ...). Platforms: Linux, macOS and Windows, headless
+> (the workspace tests in the list of checks). Graphics: the packaged games
+> run in a window on Linux (software Vulkan under Xvfb), macOS and Windows
+> (DirectX 12, WARP when there is no GPU); Coin Dash also runs in headless
+> Chromium and WebKit on WebGL2; offscreen render tests, required on Windows
+> (DirectX 12 on the WARP software adapter) and run on Linux and macOS only
+> where a GPU is found.
+
 There are two ways to put things on screen. Both end up in the same batched
 renderer.
 

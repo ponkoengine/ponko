@@ -1,5 +1,12 @@
 # UI animation
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests:
+> `tests/ui_animation.rs`, `ui_animation_render_test.rs`. Platforms: Linux,
+> macOS and Windows, headless (the workspace tests in the list of checks).
+> Graphics: offscreen render tests, required on Windows (DirectX 12 on the
+> WARP software adapter) and run on Linux and macOS only where a GPU is found.
+> Missing: a reference game that uses it.
+
 The retained UI ([Retained game UI](ui.md)) animates in three ways, all
 optional and all off until you ask for them:
 
