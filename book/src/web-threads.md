@@ -492,7 +492,7 @@ fixture's `boids` workload spawns the flock, runs the system in the
 fixed-step simulation (60 Hz) and times each call; the first 20 ticks are
 not counted, the next 60 are.
 
-Measured on 2026-11-26 (revision `4974be75`), headless Chromium 156 (the
+Measured on 2026-11-26 (revision `e319e566`), headless Chromium 156 (the
 headless shell, as the bench always runs), an Apple M4 Max with 14 cores,
 **busy**: other agents were building, with a 1-minute load average of 46
 to 62 during the runs. Each flavor three page loads; the table gives the
