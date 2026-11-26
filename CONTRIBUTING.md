@@ -3,6 +3,28 @@
 Thanks for your interest! Bug reports, benchmarks on your hardware, docs
 fixes, examples and code are all welcome.
 
+## Quick start
+
+1. **Clone** and check that your machine builds the engine (stable Rust; on
+   Linux also `sudo apt-get install libasound2-dev libudev-dev`):
+   ```sh
+   git clone https://github.com/ponkoengine/ponko && cd ponko
+   python3 scripts/run-checks.py --quick
+   ```
+2. **Pick** an issue labelled
+   [`good first issue`](https://github.com/ponkoengine/ponko/labels/good%20first%20issue)
+   (each names the files to read and how to test the change), and comment on it
+   so nobody else starts the same work. Not sure what to pick? Ask in
+   [Discussions](https://github.com/ponkoengine/ponko/discussions).
+3. **Branch** from `main` (`git switch -c fix/<topic>`), make one focused change
+   with a test, and run the checks it needs ([Checks: start with your
+   change](#checks-start-with-your-change)).
+4. **Open a pull request** to `main` (`gh pr create --base main`, or the
+   button on GitHub). Say what changed and which checks you ran; a draft is
+   fine. Maintainers answer within a week.
+
+The rest of this file is reference: read the part you need when you need it.
+
 ## Start with what you know
 
 **Rust-only pull requests are welcome.** You do not need to know C or C++,
@@ -25,16 +47,24 @@ integration checklist; you only need the parts relevant to your contribution.
 
 ## Questions, bugs and ideas
 
-- **Questions:** ask in the [issue tracker](https://github.com/ponkoengine/ponko/issues)
-  and say it is a question, so the answer stays findable for the next person.
+[GitHub Discussions](https://github.com/ponkoengine/ponko/discussions) is the
+place to talk: there is no separate chat room for now. Maintainers answer new
+issues and new discussions within a week; a pull request from outside gets a
+first answer in the same time.
+
+- **Questions:** ask in [Q&A](https://github.com/ponkoengine/ponko/discussions/categories/q-a),
+  so the answer stays findable for the next person.
 - **Bugs:** open an [issue](https://github.com/ponkoengine/ponko/issues/new)
   with the smallest code that shows the problem, your OS and GPU, and what
   you expected.
-- **Ideas and features:** open an issue describing the idea (or, if you already have a concrete design, the design), so we can agree on
+- **Ideas and features:** start in [Ideas](https://github.com/ponkoengine/ponko/discussions/categories/ideas)
+  (or open an issue if you already have a concrete design), so we can agree on
   the shape before you write the code. The engine aims for one obvious way to
   do each thing, so a new API gets discussed before it's built.
-- **Made something?** Tell us in an [issue](https://github.com/ponkoengine/ponko/issues).
+- **Made something?** Show it in [Show and tell](https://github.com/ponkoengine/ponko/discussions/categories/show-and-tell).
 - **Security issues:** don't open a public issue; see [SECURITY.md](SECURITY.md).
+
+How decisions are made, and who can merge, is in [GOVERNANCE.md](GOVERNANCE.md).
 
 ## Finding a manageable contribution
 
@@ -43,20 +73,23 @@ example or clarify a guide page. Start with one reproducible behavior and its te
 Browse the [open issues](https://github.com/ponkoengine/ponko/issues), check for an
 existing assignee or active PR, and comment with the slice you want to tackle.
 
-The ECS/rendering backlog (#132–#166) uses `help wanted`, `priority: P0` through
-`priority: P3`, subsystem labels such as `area: ecs`, `area: rendering`,
-`area: shaders`, `area: assets`, and `type:` labels. P0 establishes foundations;
-P1 addresses high-impact limitations, P2 is useful lower-urgency work, and P3 is research. Priority is not difficulty:
-this backlog has no difficulty labels. Read acceptance criteria and dependencies,
-and ask for a bounded first step if the scope is unclear.
+- [`good first issue`](https://github.com/ponkoengine/ponko/labels/good%20first%20issue)
+  marks work sized for a few evenings. Each names the files to read and how to
+  test the change, and is kept for outside contributors.
+- [`help wanted`](https://github.com/ponkoengine/ponko/labels/help%20wanted) marks
+  larger work where a maintainer would welcome help; ask for a bounded first
+  step if the scope is unclear.
 
-For example, #133 covers ECS
-correctness tests and #135
-covers visual regressions; a focused reproducer or test case can contribute toward
-either without claiming the entire issue. Performance work starts with the baselines
-in #132 and
-#134.
-[ROADMAP.md](ROADMAP.md) explains the sequence; verify live issue status before starting.
+The backlog also uses `priority: P0` through `priority: P3`, subsystem labels
+such as `area: ecs`, `area: rendering`, `area: shaders`, `area: assets` and
+`area: ui`, and `type:` labels. P0 establishes foundations; P1 addresses
+high-impact limitations, P2 is useful lower-urgency work, and P3 is research.
+Priority is not difficulty, and the backlog has no difficulty labels: read the
+acceptance criteria and dependencies. A focused reproducer or test case can
+contribute toward a large issue without claiming all of it.
+[ROADMAP.md](ROADMAP.md) explains the sequence; verify live issue status before
+starting. The 0.2.0 release is tracked in
+[#528](https://github.com/ponkoengine/ponko/issues/528).
 
 ## Setting up
 
@@ -168,6 +201,14 @@ tests report them. The JSON also includes failed step output. Exit code 1
 means a check failed, and exit code 2 means a usage error or zero checks ran.
 The [integration instructions](AGENTS.md#integration-checks) describe when
 maintainers need additional checks.
+
+#### Checks that need a person
+
+Some checks need a real machine, display or device. [scripts/checklists/](scripts/checklists/README.md)
+has a checklist and record sheet for each (hardware checks per OS, a
+newcomer test, input methods and screen readers, low-end hardware and the
+Steam Deck, the whole list on Linux), with scripts that make the runs quick.
+If you have the hardware, pick one and report on its issue.
 
 #### Nightly runs on maintainer machines
 
@@ -725,7 +766,9 @@ out of public submissions and external services.
 For maintainers. A release is a version tag, and a maintainer builds and
 publishes it from that tag on their own machine, so the tag, the crates on
 crates.io and the CHANGELOG section always come from one commit. There is no
-release service: the steps below are the whole procedure. There are
+release service: the steps below are the whole procedure, written so a second
+maintainer can do a release from them alone ([GOVERNANCE.md](GOVERNANCE.md#continuity)
+says why that matters and what is still missing). There are
 three kinds of tag, all in the steps below: a release from `main`
 (`v0.2.0`), a release candidate before a minor (`v0.2.0-rc.1`, see
 [Release candidates](#release-candidates)), and a patch release from a

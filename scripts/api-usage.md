@@ -7,15 +7,15 @@ test, binding or other crate. The freeze review (#478) reads it next to the name
 shapes. `scripts/api-usage.py`'s docstring says what counts as a call; matching is by
 name, so the list errs on the side of "called".
 
-6757 covered items (types, traits, functions, methods, constants, statics, macros;
+6857 covered items (types, traits, functions, methods, constants, statics, macros;
 not fields, variants or trait impls' methods):
 
 | Status | Items |
 |---|---|
-| called | 6364 |
-| reached: a type or trait no one names, but a called item takes or returns it | 124 |
+| called | 6458 |
+| reached: a type or trait no one names, but a called item takes or returns it | 126 |
 | a trait's method: part of its trait, which is called or reached | 11 |
-| ambiguous: only a name other types share is called | 177 |
+| ambiguous: only a name other types share is called | 181 |
 | not called | 81 |
 
 Items called from each kind of place (an item can count in several):
@@ -24,10 +24,10 @@ Items called from each kind of place (an item can count in several):
 |---|---|
 | game | 460 |
 | example | 1552 |
-| cookbook | 382 |
-| guide | 3499 |
-| test | 5889 |
-| binding | 4947 |
+| cookbook | 387 |
+| guide | 3530 |
+| test | 5985 |
+| binding | 5016 |
 | tool | 1242 |
 
 54 more items are outside the promise already (experimental, or named `unstable_`) and are not listed.
@@ -283,7 +283,7 @@ review can look at any it doubts with `api-usage.py item <path>`.
 - `ponko::d2`: `Collider::requires`, `Physics::restore_state`, `Physics::save_state`, `RigidBody::requires`
 - `ponko::d3`: `Collider::requires`, `GltfRoot::entities`, `NavConvexPolygon::new`, `NavConvexPolygon::points`, `NodeBody::name`, `NodeBody::parse`, `NodeCollider::name`, `NodeCollider::parse`, `NodeProperties::read`, `Physics::restore_state`, `Physics::save_state`, `PhysicsState`, `RigidBody::requires`
 - `ponko::debug`: `DebugDraw::new`, `DebugView::name`
-- `ponko::game`: `ConfiguredGame::barrier`, `ConfiguredGame::control_method`, `ConfiguredGame::crash_reports`, `ConfiguredGame::debug_toggle`, `ConfiguredGame::gamepad_backend`, `ConfiguredGame::headless_frame_duration`, `ConfiguredGame::image_limits`, `ConfiguredGame::lockstep`, `ConfiguredGame::messages`, `ConfiguredGame::on_exit`, `ConfiguredGame::order`, `ConfiguredGame::pack_limits`, `ConfiguredGame::replication`, `ConfiguredGame::restore_window_settings`, `ConfiguredGame::run_server`
+- `ponko::game`: `ConfiguredGame::barrier`, `ConfiguredGame::console_command`, `ConfiguredGame::console_key`, `ConfiguredGame::console_variable`, `ConfiguredGame::control_method`, `ConfiguredGame::crash_reports`, `ConfiguredGame::debug_toggle`, `ConfiguredGame::developer_console`, `ConfiguredGame::gamepad_backend`, `ConfiguredGame::headless_frame_duration`, `ConfiguredGame::image_limits`, `ConfiguredGame::lockstep`, `ConfiguredGame::messages`, `ConfiguredGame::on_exit`, `ConfiguredGame::order`, `ConfiguredGame::pack_limits`, `ConfiguredGame::replication`, `ConfiguredGame::restore_window_settings`, `ConfiguredGame::run_server`
 - `ponko::hierarchy`: `EntityName::new`, `PrefabInstance::new`
 - `ponko::input`: `GamepadEvents::axis`, `GamepadEvents::button`, `Input::force_feedback`, `Input::joystick_axis`, `Input::joystick_hat`, `Input::set_force_feedback`, `Joystick::slot`, `Vibration::is_off`
 - `ponko::inventory`: `AssetInventory::get`

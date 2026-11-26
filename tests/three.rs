@@ -1719,6 +1719,21 @@ fn screen_space_reflections_are_off_until_turned_on() {
         assert_eq!(ctx.scene3d.quality(), Some(GraphicsQuality::Ultra));
         ctx.scene3d.post.ssr_thin_objects = false;
         assert_eq!(ctx.scene3d.quality(), None, "custom without them");
+        ctx.scene3d.set_quality(GraphicsQuality::Ultra);
+        assert!(!ctx.scene3d.post.ssr_transparent, "no preset turns them on");
+        // ANCHOR: ssr_transparent
+        // Water and glass reflect the scene too (each such pixel marches its own ray).
+        ctx.scene3d.post.ssr_transparent = true;
+        let pond = MaterialDesc::color(Color::rgba(0.2, 0.35, 0.4, 0.6))
+            .with_roughness(0.05)
+            .with_blend(Blend::Transparent);
+        // ANCHOR_END: ssr_transparent
+        assert_eq!(pond.blend, Blend::Transparent);
+        assert_eq!(
+            ctx.scene3d.quality(),
+            Some(GraphicsQuality::Ultra),
+            "a preset leaves them as they are"
+        );
     });
 }
 

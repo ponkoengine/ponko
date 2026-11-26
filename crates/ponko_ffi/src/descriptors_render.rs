@@ -41,12 +41,13 @@ macro_rules! assert_header {
 // ---- post-processing --------------------------------------------------------
 
 /// The version of `PonkoPostEx` this header describes.
-pub const PONKO_POST_EX_VERSION: u32 = 4;
+pub const PONKO_POST_EX_VERSION: u32 = 5;
 
 /// What happens to the lit 3D frame on its way to the screen, in a layout
 /// that can grow (Rust `ctx.scene3d.post`): `PonkoPost` plus the fields it
 /// couldn't hold, split toning, depth of field, the sample count, thin
-/// objects in reflections, the upscaler and auto exposure. Read it
+/// objects in reflections, the upscaler, auto exposure and reflections on
+/// transparent surfaces. Read it
 /// with `ponko_ctx_post_ex` (set `struct_size` and `version` first), change
 /// it, and give it back with `ponko_ctx_set_post_ex`.
 ///
@@ -56,7 +57,7 @@ pub const PONKO_POST_EX_VERSION: u32 = 4;
 /// `PonkoUpscaler`); an older caller leaves it as it is. Version 4 adds
 /// `auto_exposure` and its `auto_exposure_*` settings; an older caller
 /// leaves them as they are (off, unless Rust or a newer caller turned it
-/// on).
+/// on). Version 5 adds `ssr_transparent`; an older caller leaves it as it is.
 /// ```
 /// use ponko_ffi::*;
 /// let mut p: PonkoPostEx = unsafe { std::mem::zeroed() };
@@ -67,6 +68,7 @@ pub const PONKO_POST_EX_VERSION: u32 = 4;
 /// assert_eq!(p.upscaler, PonkoUpscaler::PONKO_UPSCALER_BILINEAR as u32);
 /// assert!(!p.auto_exposure);
 /// assert_eq!((p.auto_exposure_min, p.auto_exposure_max), (-4.0, 4.0));
+/// assert!(!p.ssr_transparent);
 /// ```
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -145,6 +147,12 @@ pub struct PonkoPostEx {
     /// A metering mask stretched over the picture: its red channel says how
     /// much each part counts (white fully, black not at all).
     pub auto_exposure_mask: PonkoTexture,
+    /// Version 5. Screen-space reflections on transparent surfaces too:
+    /// glossy water and glass reflect the opaque scene on screen, each pixel
+    /// marching its ray in its own shader (Rust `Post::ssr_transparent`).
+    /// Default false, in every preset too. Only matters where `post.ssr` is
+    /// above 0.
+    pub ssr_transparent: bool,
 }
 assert_header!(PonkoPostEx);
 
@@ -187,6 +195,7 @@ impl Versioned for PonkoPostEx {
             2 => Some(end_of!(Self, ssr_thin_objects: bool)),
             3 => Some(end_of!(Self, upscaler: u32)),
             4 => Some(end_of!(Self, auto_exposure_mask: PonkoTexture)),
+            5 => Some(end_of!(Self, ssr_transparent: bool)),
             _ => None,
         }
     }
@@ -221,6 +230,7 @@ fn post_ex_of(p: &Post) -> PonkoPostEx {
             width: 0,
             height: 0,
         }),
+        ssr_transparent: p.ssr_transparent,
     }
 }
 
@@ -297,6 +307,7 @@ fn post_of_ex(base: Post, ex: &PonkoPostEx) -> Result<Post, Failure> {
     post.msaa = ex.msaa;
     post.ssr_thin_objects = ex.ssr_thin_objects;
     post.upscaler = upscaler;
+    post.ssr_transparent = ex.ssr_transparent;
     Ok(post)
 }
 
@@ -967,7 +978,11 @@ mod tests {
             PonkoPostEx::len_of(4),
             Some(offset_of!(PonkoPostEx, auto_exposure_mask) + size_of::<PonkoTexture>())
         );
-        assert_eq!(PonkoPostEx::len_of(5), None);
+        assert_eq!(
+            PonkoPostEx::len_of(5),
+            Some(offset_of!(PonkoPostEx, ssr_transparent) + 1)
+        );
+        assert_eq!(PonkoPostEx::len_of(6), None);
     }
 
     /// A descriptor with its header set for version 1.

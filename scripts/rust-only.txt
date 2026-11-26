@@ -83,3 +83,5 @@ InputScenario::connect_gamepad   controllers.md    # C and C++ scenarios are JSO
 Assets::browser_saves            editor.md         # a C or C++ web game keeps no files in a browser yet
 Assets::revert_browser_save      editor.md         # same
 Assets::browser_saves_persistent editor.md         # same
+
+Console::run                     control.md        # direct execution would re-enter native code with an already borrowed context; use overlay or control dispatch

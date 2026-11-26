@@ -1330,6 +1330,14 @@ pub(crate) const METHODS: &[(&str, &str)] = &[
         "show or hide the on-screen performance overlay; params: on (bool)",
     ),
     (
+        "debug.console.help",
+        "list registered developer console commands and variables with their argument types",
+    ),
+    (
+        "debug.console.run",
+        "run a developer console command or read/set a variable; params: line (string); returns output (string)",
+    ),
+    (
         "debug.draw",
         "debug drawing (the game's ctx.debug lines, shapes and labels) and the engine's own debug views: turn them on or off and see what is drawn; params: on? (bool: debug drawing on or off), views? (object of view name to bool; views: colliders, navmesh, bounds, lights, hierarchy), clear? (true drops everything drawn, timed shapes too). Returns on, views (each view's state) and drawn (lines_2d, lines_3d, labels the next frame shows, before the views add theirs)",
     ),
@@ -2096,6 +2104,11 @@ pub(crate) fn handle(ctx: &mut Ctx, method: &str, params: &Value) -> Result<Valu
             ctx.perf.set_hud(on);
             json!(on)
         }
+        "debug.console.help" => json!({ "help": crate::console::Console::run(ctx, "help").map_err(String::from)? }),
+        "debug.console.run" => {
+            let line = param(params, "line")?.as_str().ok_or("`line` must be a string")?;
+            json!({ "output": crate::console::Console::run(ctx, line).map_err(String::from)? })
+        }
         "debug.draw" => crate::debug::control::handle(ctx, params)?,
         "quality.set" => quality_set(ctx, params)?,
         "game.quit" => {
@@ -2327,6 +2340,8 @@ mod tests {
     #[test]
     fn every_listed_method_is_handled() {
         let mut ctx = ctx();
+        // Exercise the console handlers. The capabilities tests cover their disabled replies.
+        ctx.console.enabled = Some(true);
         for (name, _) in METHODS {
             if *name == "game.quit" || *name == "screenshot" {
                 continue;
