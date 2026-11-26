@@ -1,7 +1,7 @@
 ### Changed
-- **Breaking:** three types keep one public path each. None of the removed
-  paths was in a release (they were added and dropped on the development
-  branch before 0.3.0), so only code written against that branch changes:
+- Three types keep one public path each. None of the removed paths was in
+  a release (they were added and dropped on the development branch before
+  this release), so only code written against that branch changes:
   `ponko::texture::DrawSpace` is `ponko::debug::DrawSpace` (also in the
   prelude); `ponko::input::TouchShow` is `ponko::ui::touch::TouchShow`;
   `ponko::ui::Bezier` is `ponko::skeleton2d::Bezier`, the one easing curve of

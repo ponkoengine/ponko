@@ -18,12 +18,6 @@
 - Caller-reachable panics across the engine and ECS (queries, views,
   resources, reflection, jobs, UI, animation, networking, instances, GPU
   buffers, 2D skeletons) now say how to fix the call, not only what failed.
-- **Breaking:** `ponko_image_diff::{compare, heatmap, compare_files}` return
-  `ponko_image_diff::Error` instead of `String`. Match `ErrorKind` through
-  `kind()`, use `path()` and `message()` for context, and
-  `std::error::Error::source()` for file and codec causes. String-returning
-  frontends still use `?` through `From<Error> for String`; an explicit
-  `Result<_, String>` tail expression needs `.map_err(String::from)`.
 
 ### Breaking changes
 - `ponko_image_diff::compare`, `heatmap` and `compare_files` return `ponko_image_diff::Error`.

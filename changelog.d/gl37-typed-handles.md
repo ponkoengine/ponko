@@ -5,10 +5,7 @@
 - C++: `ponko::render_target`, a `PonkoTexture` that converts to `ponko::texture` and has `texture()`; `ctx.render_target_of(texture)` checks that a texture read back from the engine is a render target and throws `ponko::error` if not. `ponko::is_live`/`free` take it with the render target kind.
 
 ### Changed
-- **Breaking:** `Graphics::create_render_target` and `try_create_render_target` return a `RenderTarget` instead of a `Texture`. `TargetCamera::new`, `TargetCamera::reflection`, `ComputePass::new`, `TargetEffect::new` and `d3::UiPanel::new` take a `RenderTarget`, and their `target` fields are one. Pass `target.texture()` where the target is read as a texture.
-- **Breaking:** `d3::UiPanel`'s `texture: Texture` field is `target: RenderTarget`.
-- **Breaking:** `ComputePass::for_buffer` sets `target` to `RenderTarget::NONE` (it was a zero-sized `Texture` with id 0).
-- **Breaking:** C++: `ctx.create_render_target` and `ctx.create_ui_panel` return a `ponko::render_target`; `target_camera_of`, `compute_pass_of`, `target_effect_of` and `ctx.reflection_camera` take one and no longer accept a `ponko::texture`.
+- `ComputePass::for_buffer` sets `target` to `RenderTarget::NONE` (it was a zero-sized `Texture` with id 0).
 - C: `ponko_ctx_reflection_camera` refuses a texture that isn't a render target of the game (`PONKO_INVALID_ARGUMENT`), as the target camera, compute pass and target effect lists already did when set.
 
 ### Breaking changes

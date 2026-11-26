@@ -21,19 +21,13 @@
   incompatible `glam` or `serde_json` comes only with a Ponko major
   release), and that the prelude's contents change only in minor releases.
 
-### Changed
-- **Breaking:** the prelude no longer exports `AssetSource`, `MemorySource`,
-  `PackSource` (import them from `ponko::assets`) or the doc-hidden
-  `SetupResult` (`ponko::game::SetupResult`). Calling `read` or `contains`
-  on a source needs the `AssetSource` trait in scope. A game's own type named
-  `UiEvent`, `UiLayout`, `Gamepad`, `GamepadAxis`, `GamepadButton` or
-  `GamepadStick` that it glob-imports next to the prelude is now ambiguous:
-  import it by name, or use the engine's.
-
 ### Breaking changes
 - The prelude no longer exports `AssetSource`, `MemorySource`, `PackSource` and `SetupResult`.
   They are what a game names only when it adds an asset source or writes a
-  bound on fallible setup, so they stay in their modules.
+  bound on fallible setup, so they stay in their modules. A game's own type
+  named `UiEvent`, `UiLayout`, `Gamepad`, `GamepadAxis`, `GamepadButton` or
+  `GamepadStick` that it glob-imports next to the prelude is now ambiguous:
+  import it by name, or use the engine's.
   Instead: import them from `ponko::assets` (`ponko::game::SetupResult`);
   `source.read(name)` needs `AssetSource` in scope.
   Before:

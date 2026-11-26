@@ -1,10 +1,3 @@
-### Changed
-- **Breaking:** `ButtonBinding`, `AxisBinding`, `Axis2Binding`, `Action` and
-  `InputEvent` are non-exhaustive; add `_` arms to external matches.
-- **Breaking:** `ActionMap::from_json` and `to_json` return the engine `Error`;
-  use `ErrorKind::Json` to classify failures. Decode messages retain location
-  and action-map context. Serde traits and JSON format remain unchanged.
-
 ### Added
 - `ButtonState::{Released, Held}` and `InputEvent::key`, `mouse` and
   `gamepad_button` constructors name synthetic held state. Boolean variants
@@ -13,7 +6,7 @@
   equality compares persistent bindings, ignoring runtime state.
 
 ### Breaking changes
-- Action and binding enums require wildcard match arms.
+- `ButtonBinding`, `AxisBinding`, `Axis2Binding`, `Action` and `InputEvent` are `#[non_exhaustive]`: a `match` on one needs a `_` arm.
   Instead: handle unknown variants with a `_` arm.
   Before:
   ```rust
@@ -25,7 +18,9 @@
   # let action: Action = todo!();
   match action { Action::Button(_) => 0, Action::Axis(_) => 1, Action::Axis2(_) => 2, _ => 3 }
   ```
-- Action-map JSON methods return engine errors.
+- `ActionMap::from_json` and `to_json` return the engine's `ponko::error::Error`.
+  Decode messages keep the location and the action map's context; the serde
+  traits and the JSON format are unchanged.
   Instead: use `ponko::error::Error` and classify with `ErrorKind::Json`.
   Before:
   ```rust

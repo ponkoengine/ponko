@@ -156,11 +156,6 @@
   section.
 
 ### Changed
-- **Breaking:** `AnimationState`, `MotionChild`, `AnimationEvent`, `Joint`,
-  `JointAnimation`, `MorphAnimation`, `MorphTarget`, `AttachToJoint` and the
-  `Motion::Blend1D`/`Blend2D` variants are `#[non_exhaustive]`; build them
-  with `new` (or `Motion::blend_1d`/`blend_2d`) and the `with_*` methods
-  (see the migration entries above).
 - The animator's panicking setters and `play`/`crossfade` name the method,
   the id and the reason in their panic message (for example
   `Animator::set_float: parameter 9 is not a float parameter`).

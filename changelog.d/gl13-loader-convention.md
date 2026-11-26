@@ -4,11 +4,6 @@
 - C++: `ctx.try_load_strings`, `ctx.try_load_collision_mesh` and `ctx.try_load_json<T>` return a `ponko::result` instead of throwing, and `ponko::result<void>` exists for loaders that return nothing. C already returns a status with `ponko_last_error_kind()` and the path for these calls.
 - A table of every `load_*` and what it does on failure in STABILITY.md and the data-files chapter, and a test (`tests/loader_convention.rs`) that walks the API snapshots and fails when a new `load_*` has no `try_` twin (or is a `Result`-returning plain name that is not a documented runtime operation), or is missing from the table.
 
-### Changed
-- **Breaking:** `Ctx::load_collision_mesh` and `load_collision_mesh_with` panic on failure (message starting with `ponko:`) and return the `CollisionMesh` itself; use `try_load_collision_mesh` and `try_load_collision_mesh_with` to get the `Result`.
-- **Breaking:** `Assets::load_strings` panics on failure and returns `()`; use `try_load_strings` to get the `Result`.
-- **Breaking:** `Assets::load_resource_json` and `load_component_json` are renamed `load_reflected_resource_json` and `load_reflected_component_json`, one name per loader. They still return `Result` and merge a file's fields into the reflected value; `load_resource` replaces the whole resource. The old names are removed without a deprecated alias, because 0.2.0 already breaks.
-
 ### Breaking changes
 - The plain collision-mesh loaders panic instead of returning a `Result`.
   Instead: call `try_load_collision_mesh` or `try_load_collision_mesh_with` where you handled the error, or drop the `.unwrap()` / `.expect(..)` where a missing file is a bug.
@@ -35,7 +30,10 @@
   // or, for a table that may be missing:
   ctx.assets.try_load_strings(&mut ctx.world, "lang/fr.json")?;
   ```
-- The reflected JSON loaders have new names.
+- `Assets::load_resource_json` and `load_component_json` are `load_reflected_resource_json` and `load_reflected_component_json`.
+  One name per loader: they still return a `Result` and merge a file's
+  fields into the reflected value, where `load_resource` replaces the whole
+  resource. The old names are removed without a deprecated alias.
   Instead: rename the calls; arguments and results are the same.
   Before:
   ```rust

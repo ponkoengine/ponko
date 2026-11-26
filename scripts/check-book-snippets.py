@@ -348,12 +348,15 @@ def rust_module(start, body, out):
 def native_source(lang, md, start, body):
     """A C or C++ `After:` block as a translation unit; `#line` keeps the markdown's file and line.
 
-    The block is the body of a function given the context (`PonkoCtx *ctx` in C,
-    `ponko::ctx& ctx` in C++), the way a game's callback gets it."""
+    The block is the body of a function given what a game's code has at hand:
+    in C `PonkoCtx *ctx`, `PonkoGame *game` and `PonkoSystemFn setup`, in C++
+    `ponko::ctx& ctx` and `ponko::game& game`; the standard I/O header is included."""
     if lang == "c":
-        head = ['#include "ponko.h"', "#include <stddef.h>", "#include <stdint.h>", "void snippet(PonkoCtx *ctx) {"]
+        head = ['#include "ponko.h"', "#include <stddef.h>", "#include <stdint.h>", "#include <stdio.h>",
+                "void snippet(PonkoCtx *ctx, PonkoGame *game, PonkoSystemFn setup) {"]
     else:
-        head = ['#include "ponko.hpp"', "#include <vector>", "#include <string>", "void snippet(ponko::ctx& ctx) {"]
+        head = ['#include "ponko.hpp"', "#include <cstdio>", "#include <string>", "#include <vector>",
+                "void snippet(ponko::ctx& ctx, ponko::game& game) {"]
     return "\n".join([*head, f'#line {start + 1} "{label(md)}"', *body, "}", ""])
 
 
