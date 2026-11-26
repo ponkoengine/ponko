@@ -2,11 +2,12 @@
 //! cloud saves kept in step with [`Storage`], rich presence, the overlay's
 //! state, and the text input of Steam Deck and Big Picture.
 //!
-//! **Maturity: tested**, from the guide chapter `steam.md`. Game: none. Tests: `tests/steam_services.rs` and
-//! the module's own tests, against the fake backend; the real Steam calls are a check a person runs
-//! with two accounts. Platforms: Linux, macOS and Windows, headless (the Steam job in the list of
-//! checks). Graphics: not involved. Missing: a recorded run against a real Steam client and a
-//! released game that uses it.
+//! **Maturity: tested**, from the guide chapter `steam.md`. Game: none. Tests:
+//! `tests/steam_services.rs` and `crates/ponko_ffi/tests/steam_services.rs`, against the fake
+//! backend and without Steam; the real Steam calls are a check a person runs with two accounts.
+//! Platforms: Linux, macOS and Windows, headless (the Steam job in the list of checks). Graphics:
+//! not involved. Missing: a recorded run against a real Steam client, and a released game that uses
+//! it.
 //!
 //! One [`Steam`] value is the way in. It works the same whether Steam is
 //! there or not: [`Steam::start`] returns a working one when the Steam client

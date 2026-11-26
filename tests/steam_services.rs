@@ -177,9 +177,9 @@ fn the_text_input_opens_on_a_deck_or_big_picture_and_returns_the_text() {
     );
     steam.update();
     assert_eq!(steam.take_text_input(), None, "still open");
-    fake.close_text_input(Some("Crabby"));
+    fake.close_text_input(Some("Sandy"));
     steam.update();
-    assert_eq!(steam.take_text_input(), Some(SteamText::Submitted("Crabby".into())));
+    assert_eq!(steam.take_text_input(), Some(SteamText::Submitted("Sandy".into())));
     assert_eq!(steam.take_text_input(), None, "taken once");
     assert!(steam.show_text_input(SteamTextMode::Password, "Password", "", 32));
     fake.close_text_input(None);
@@ -318,4 +318,43 @@ fn clones_share_one_steam() {
     other.update();
     assert!(steam.overlay_open());
     let _ = format!("{steam:?} {fake:?}");
+}
+
+#[test]
+fn the_guide_game_syncs_saves_tracks_the_overlay_and_unlocks() {
+    let dir = folder("guide");
+    let (steam, fake) = Steam::fake();
+    fake.define_achievements(&["FIRST_WIN"]);
+    fake.define_stats(&["wins"]);
+    fake.put_cloud_file("saves/slot1.json", b"{}", SystemTime::now());
+    let game = Game::new("Crabs", 1280, 720).data_dir(&dir).headless_frames(true);
+    // ANCHOR: steam_services
+    // let steam = ponko::steam::Steam::start(480); // at launch; absent without Steam
+    let at_launch = steam.clone();
+    let game = game
+        .setup(move |ctx| {
+            // Another computer may have played since: the newest copy wins.
+            let _ = at_launch.sync_cloud(&mut ctx.storage, &["saves/"]);
+        })
+        .system(move |ctx| {
+            steam.update(); // once a frame: the overlay's state, the text input
+            if steam.overlay_open() {
+                ctx.time.pause();
+            }
+            steam.set_rich_presence("status", "Level 3");
+            if ctx.time.frame() == 2 {
+                // The player won.
+                steam.unlock_achievement("FIRST_WIN");
+                steam.set_stat_i32("wins", steam.stat_i32("wins").unwrap_or(0) + 1);
+                steam.store_stats();
+            }
+        });
+    // ANCHOR_END: steam_services
+    game.run_headless(4);
+    assert!(Storage::in_folder(&dir).exists("saves/slot1.json"));
+    assert!(fake.achieved("FIRST_WIN"));
+    assert_eq!(fake.stat("wins"), Some(1.0));
+    assert_eq!(fake.stores(), 1);
+    assert_eq!(fake.rich_presence("status").as_deref(), Some("Level 3"));
+    let _ = std::fs::remove_dir_all(dir);
 }

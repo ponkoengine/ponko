@@ -29,7 +29,7 @@ are written in `STABILITY.md`; here they are again:
   `python3 scripts/maturity.py` fails when a chapter or a top-level module
   has no level, and regenerates the list and the module docs (`--write`).
 
-Chapters: 21 proven, 60 tested, 5 experimental.
+Chapters: 21 proven, 61 tested, 5 experimental.
 
 ## Chapters
 
@@ -105,6 +105,7 @@ Chapters: 21 proven, 60 tested, 5 experimental.
 | [Headless runs and testing](headless.md) | **proven** | Coin Dash and Ember Hop, packaged and played on Linux, macOS and Windows, headless from their packages | — |
 | [When something fails: reading the message](errors.md) | **tested** | none | a reference game that uses it |
 | [A complete game, packaged](packaging.md) | **proven** | Coin Dash and Ember Hop, packaged and played on Linux, macOS and Windows; Shard Grove packages, but its package is not played | — |
+| [Shipping on Steam](steam.md) | **tested** | none | a recorded run against a real Steam client, and a released game that uses it |
 | [Crash reports](crash-reports.md) | **tested** | none | a reference game that uses it |
 | [Ember Hop: a platformer, start to finish](ember-hop.md) | **proven** | Ember Hop itself, packaged and played on Linux, macOS and Windows | — |
 | [Shard Grove: a 3D game, start to finish](shard-grove.md) | **tested** | Shard Grove itself, played headless | its package played on each OS |
@@ -171,6 +172,7 @@ The level each top-level module of `ponko` gives in its rustdoc.
 | `ponko::skeleton2d` | **tested** | [2D skeletons: bones, skinned sprites and blending](skeleton2d.md) |
 | `ponko::spatial` | **tested** | [Spatial queries](spatial.md) |
 | `ponko::state` | **proven** | [Game states: menus, loading, playing, paused](states.md) |
+| `ponko::steam` | **tested** | [Shipping on Steam](steam.md) |
 | `ponko::storage` | **proven** | [Saves and settings](storage.md) |
 | `ponko::streaming` | **tested** | [Streaming: memory budgets and loading without waiting](streaming.md) |
 | `ponko::system_view` | **tested** | [Declared system access](system-access.md) |
