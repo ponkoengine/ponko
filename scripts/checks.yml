@@ -799,12 +799,15 @@ jobs:
         if: ${{ !cancelled() }}
         run: cargo test -p ponko --no-fail-fast --features physics-determinism --test physics --test ember_hop
       # Steam itself isn't on the runners: this checks that the Steam library
-      # links and loads on each OS, and the address mapping.
-      - name: Tests, Steam transport
+      # links and loads on each OS, the address mapping, and the store
+      # services (achievements, cloud saves, ...) against the fake and absent.
+      - name: Tests, Steam transport and services
         if: ${{ !cancelled() }}
         run: |
           cargo test -p ponko --no-fail-fast --features steam --lib net::steam
-          cargo test -p ponko_ffi --no-fail-fast --features steam --test steam_messages
+          cargo test -p ponko --no-fail-fast --features steam --lib steam::tests
+          cargo test -p ponko --no-fail-fast --features steam --test steam_services
+          cargo test -p ponko_ffi --no-fail-fast --features steam --test steam_messages --test steam_services
       # The screen-reader adapters (opt-in). Every OS: the UI's semantics as
       # AccessKit data, the adapter's own logic, and that the feature builds.
       # macOS: an `NSView` is asked what a screen reader asks, on the main

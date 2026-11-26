@@ -16076,6 +16076,103 @@ pub trait ponko::state::States: core::clone::Clone + core::cmp::PartialEq + core
 impl<T: core::clone::Clone + core::cmp::PartialEq + core::fmt::Debug + core::marker::Send + core::marker::Sync + serde_core::ser::Serialize + serde_core::de::DeserializeOwned + 'static> ponko::state::States for T
 pub fn ponko::state::in_stack<S: ponko::state::States>(S) -> ponko::state::Condition
 pub fn ponko::state::in_state<S: ponko::state::States>(S) -> ponko::state::Condition
+pub mod ponko::steam
+pub enum ponko::steam::SteamText
+pub ponko::steam::SteamText::Cancelled
+pub ponko::steam::SteamText::Submitted(alloc::string::String)
+impl core::clone::Clone for ponko::steam::SteamText
+pub fn ponko::steam::SteamText::clone(&self) -> Self
+impl core::cmp::Eq for ponko::steam::SteamText
+impl core::cmp::PartialEq for ponko::steam::SteamText
+pub fn ponko::steam::SteamText::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::steam::SteamText
+pub fn ponko::steam::SteamText::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::steam::SteamText
+pub enum ponko::steam::SteamTextMode
+pub ponko::steam::SteamTextMode::Email
+pub ponko::steam::SteamTextMode::MultiLine
+pub ponko::steam::SteamTextMode::Numeric
+pub ponko::steam::SteamTextMode::Password
+pub ponko::steam::SteamTextMode::SingleLine
+impl core::clone::Clone for ponko::steam::SteamTextMode
+pub fn ponko::steam::SteamTextMode::clone(&self) -> Self
+impl core::cmp::Eq for ponko::steam::SteamTextMode
+impl core::cmp::PartialEq for ponko::steam::SteamTextMode
+pub fn ponko::steam::SteamTextMode::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::steam::SteamTextMode
+pub fn ponko::steam::SteamTextMode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for ponko::steam::SteamTextMode
+pub fn ponko::steam::SteamTextMode::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for ponko::steam::SteamTextMode
+impl core::marker::StructuralPartialEq for ponko::steam::SteamTextMode
+pub struct ponko::steam::CloudSync
+pub ponko::steam::CloudSync::downloaded: alloc::vec::Vec<alloc::string::String>
+pub ponko::steam::CloudSync::uploaded: alloc::vec::Vec<alloc::string::String>
+impl core::clone::Clone for ponko::steam::CloudSync
+pub fn ponko::steam::CloudSync::clone(&self) -> Self
+impl core::cmp::Eq for ponko::steam::CloudSync
+impl core::cmp::PartialEq for ponko::steam::CloudSync
+pub fn ponko::steam::CloudSync::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::steam::CloudSync
+pub fn ponko::steam::CloudSync::default() -> Self
+impl core::fmt::Debug for ponko::steam::CloudSync
+pub fn ponko::steam::CloudSync::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::steam::CloudSync
+pub struct ponko::steam::FakeSteam
+impl ponko::steam::FakeSteam
+pub fn ponko::steam::FakeSteam::achieved(&self, &str) -> bool
+pub fn ponko::steam::FakeSteam::close_text_input(&self, core::option::Option<&str>)
+pub fn ponko::steam::FakeSteam::cloud_file(&self, &str) -> core::option::Option<alloc::vec::Vec<u8>>
+pub fn ponko::steam::FakeSteam::define_achievements(&self, &[&str])
+pub fn ponko::steam::FakeSteam::define_stats(&self, &[&str])
+pub fn ponko::steam::FakeSteam::keyboard_open(&self) -> bool
+pub fn ponko::steam::FakeSteam::put_cloud_file(&self, &str, &[u8], std::time::SystemTime)
+pub fn ponko::steam::FakeSteam::rich_presence(&self, &str) -> core::option::Option<alloc::string::String>
+pub fn ponko::steam::FakeSteam::set_big_picture(&self, bool)
+pub fn ponko::steam::FakeSteam::set_cloud_enabled(&self, bool)
+pub fn ponko::steam::FakeSteam::set_cloud_full(&self, bool)
+pub fn ponko::steam::FakeSteam::set_overlay(&self, bool)
+pub fn ponko::steam::FakeSteam::set_steam_deck(&self, bool)
+pub fn ponko::steam::FakeSteam::stat(&self, &str) -> core::option::Option<f64>
+pub fn ponko::steam::FakeSteam::stores(&self) -> u32
+pub fn ponko::steam::FakeSteam::text_input_open(&self) -> bool
+impl core::clone::Clone for ponko::steam::FakeSteam
+pub fn ponko::steam::FakeSteam::clone(&self) -> Self
+impl core::fmt::Debug for ponko::steam::FakeSteam
+pub fn ponko::steam::FakeSteam::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct ponko::steam::Steam
+impl ponko::steam::Steam
+pub fn ponko::steam::Steam::absent() -> ponko::steam::Steam
+pub fn ponko::steam::Steam::achievement(&self, &str) -> core::option::Option<bool>
+pub fn ponko::steam::Steam::clear_achievement(&self, &str) -> bool
+pub fn ponko::steam::Steam::clear_rich_presence(&self)
+pub fn ponko::steam::Steam::client(&self) -> core::option::Option<&ponko::net::SteamClient>
+pub fn ponko::steam::Steam::cloud_enabled(&self) -> bool
+pub fn ponko::steam::Steam::delete_cloud_file(&self, &mut ponko::storage::Storage, &str) -> core::result::Result<(), ponko::error::Error>
+pub fn ponko::steam::Steam::fake() -> (ponko::steam::Steam, ponko::steam::FakeSteam)
+pub fn ponko::steam::Steam::is_big_picture(&self) -> bool
+pub fn ponko::steam::Steam::is_running(&self) -> bool
+pub fn ponko::steam::Steam::is_steam_deck(&self) -> bool
+pub fn ponko::steam::Steam::overlay_open(&self) -> bool
+pub fn ponko::steam::Steam::set_rich_presence(&self, &str, &str) -> bool
+pub fn ponko::steam::Steam::set_stat_f32(&self, &str, f32) -> bool
+pub fn ponko::steam::Steam::set_stat_i32(&self, &str, i32) -> bool
+pub fn ponko::steam::Steam::show_floating_keyboard(&self, ponko::steam::SteamTextMode, i32, i32, i32, i32) -> bool
+pub fn ponko::steam::Steam::show_text_input(&self, ponko::steam::SteamTextMode, &str, &str, u32) -> bool
+pub fn ponko::steam::Steam::start(u32) -> ponko::steam::Steam
+pub fn ponko::steam::Steam::start_launched() -> ponko::steam::Steam
+pub fn ponko::steam::Steam::stat_f32(&self, &str) -> core::option::Option<f32>
+pub fn ponko::steam::Steam::stat_i32(&self, &str) -> core::option::Option<i32>
+pub fn ponko::steam::Steam::store_stats(&self) -> bool
+pub fn ponko::steam::Steam::sync_cloud(&self, &mut ponko::storage::Storage, &[&str]) -> core::result::Result<ponko::steam::CloudSync, ponko::error::Error>
+pub fn ponko::steam::Steam::take_text_input(&self) -> core::option::Option<ponko::steam::SteamText>
+pub fn ponko::steam::Steam::unlock_achievement(&self, &str) -> bool
+pub fn ponko::steam::Steam::update(&self)
+pub fn ponko::steam::Steam::with_client(&ponko::net::SteamClient) -> ponko::steam::Steam
+impl core::clone::Clone for ponko::steam::Steam
+pub fn ponko::steam::Steam::clone(&self) -> Self
+impl core::fmt::Debug for ponko::steam::Steam
+pub fn ponko::steam::Steam::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub mod ponko::storage
 pub struct ponko::storage::Storage
 impl ponko::storage::Storage

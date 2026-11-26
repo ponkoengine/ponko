@@ -6249,6 +6249,9 @@ pub const ponko_ffi::PONKO_SINCE_LAST_RUN: u64
 pub const ponko_ffi::PONKO_SKY_KIT_VERSION: u32
 pub const ponko_ffi::PONKO_SLICE_LOADER_VERSION: u32
 pub const ponko_ffi::PONKO_SOUND_STARTED_VERSION: u32
+pub const ponko_ffi::PONKO_STEAM_TEXT_CANCELLED: u32
+pub const ponko_ffi::PONKO_STEAM_TEXT_NONE: u32
+pub const ponko_ffi::PONKO_STEAM_TEXT_SUBMITTED: u32
 pub const ponko_ffi::PONKO_SYSTEM_ANIMATE_SPRITES: u32
 pub const ponko_ffi::PONKO_SYSTEM_DRAW_PARTICLES: u32
 pub const ponko_ffi::PONKO_SYSTEM_DRAW_SPRITES: u32
@@ -7246,8 +7249,10 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_state(*mut ponko_ffi::PonkoCtx, *mut u32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_state_in_stack(*mut ponko_ffi::PonkoCtx, u32, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_state_ticks(*mut ponko_ffi::PonkoCtx, *mut u64) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_steam_delete_cloud_file(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_steam_invite(*mut ponko_ffi::PonkoCtx) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_steam_lobby(*mut ponko_ffi::PonkoCtx, *mut u64) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_steam_sync_cloud(*mut ponko_ffi::PonkoCtx, *const *const core::ffi::primitives::c_char, usize, *mut u32, *mut u32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_step(*mut ponko_ffi::PonkoCtx) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_stop_audio_snapshot(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, f32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_stop_audio_snapshot_id(*mut ponko_ffi::PonkoCtx, u32, f32) -> ponko_ffi::PonkoStatus
@@ -7952,6 +7957,12 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_sprite_sheet(ponko_ffi::PonkoTexture, u32, u32, *mut ponko_ffi::PonkoSpriteSheet) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub c fn ponko_ffi::ponko_sprite_sheet_frame(ponko_ffi::PonkoSpriteSheet, u32) -> ponko_ffi::PonkoRect
 #[no_mangle] pub c fn ponko_ffi::ponko_stamp_newer(ponko_ffi::PonkoUpdateStamp, ponko_ffi::PonkoUpdateStamp) -> bool
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_steam_achievement(*const core::ffi::primitives::c_char) -> i32
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_steam_clear_achievement(*const core::ffi::primitives::c_char) -> bool
+#[no_mangle] pub c fn ponko_ffi::ponko_steam_clear_rich_presence()
+#[no_mangle] pub c fn ponko_ffi::ponko_steam_cloud_enabled() -> bool
+#[no_mangle] pub c fn ponko_ffi::ponko_steam_is_big_picture() -> bool
+#[no_mangle] pub c fn ponko_ffi::ponko_steam_is_steam_deck() -> bool
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_steam_lobby_create(u32, u32, u32, *mut *mut ponko_ffi::PonkoSteamLobby) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_steam_lobby_free(*mut ponko_ffi::PonkoSteamLobby)
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_steam_lobby_from_args(*mut u64) -> ponko_ffi::PonkoStatus
@@ -7963,6 +7974,20 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_steam_lobby_metadata(*mut ponko_ffi::PonkoSteamLobby, *const core::ffi::primitives::c_char, *mut core::ffi::primitives::c_char, usize, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_steam_lobby_poll(*mut ponko_ffi::PonkoSteamLobby) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_steam_lobby_set_metadata(*mut ponko_ffi::PonkoSteamLobby, *const core::ffi::primitives::c_char, *const core::ffi::primitives::c_char) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub c fn ponko_ffi::ponko_steam_overlay_open() -> bool
+#[no_mangle] pub c fn ponko_ffi::ponko_steam_running() -> bool
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_steam_set_rich_presence(*const core::ffi::primitives::c_char, *const core::ffi::primitives::c_char) -> bool
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_steam_set_stat_f32(*const core::ffi::primitives::c_char, f32) -> bool
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_steam_set_stat_i32(*const core::ffi::primitives::c_char, i32) -> bool
+#[no_mangle] pub c fn ponko_ffi::ponko_steam_show_floating_keyboard(u32, i32, i32, i32, i32) -> bool
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_steam_show_text_input(u32, *const core::ffi::primitives::c_char, *const core::ffi::primitives::c_char, u32) -> bool
+#[no_mangle] pub c fn ponko_ffi::ponko_steam_start(u32) -> bool
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_steam_stat_f32(*const core::ffi::primitives::c_char, *mut f32) -> bool
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_steam_stat_i32(*const core::ffi::primitives::c_char, *mut i32) -> bool
+#[no_mangle] pub c fn ponko_ffi::ponko_steam_store_stats() -> bool
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_steam_take_text_input(*mut u32, *mut core::ffi::primitives::c_char, usize, *mut usize) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_steam_unlock_achievement(*const core::ffi::primitives::c_char) -> bool
+#[no_mangle] pub c fn ponko_ffi::ponko_steam_update()
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_steam_wait_for_invite(u32, u32, *mut u64) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub c fn ponko_ffi::ponko_stencil_default() -> ponko_ffi::PonkoStencil
 #[no_mangle] pub c fn ponko_ffi::ponko_stencil_inside(u8) -> ponko_ffi::PonkoStencil

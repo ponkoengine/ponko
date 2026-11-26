@@ -5436,6 +5436,22 @@ int main() {
     // ANCHOR_END: general_steam_lobby
 }
 
+// Compiled for the guide's "Shipping on Steam" chapter.
+[[maybe_unused]] static void steam_services(ponko::ctx& ctx) {
+    // ANCHOR: steam_services
+    ponko::steam::start(480);                   // at launch; false without Steam
+    ctx.steam_sync_cloud({"saves/"});           // at launch and after saving
+    // Each frame:
+    ponko::steam::update();
+    if (ponko::steam::overlay_open()) ctx.pause();
+    ponko::steam::set_rich_presence("status", "Level 3");
+    // When the player wins:
+    ponko::steam::unlock_achievement("FIRST_WIN");
+    ponko::steam::set_stat("wins", std::int32_t{1});
+    ponko::steam::store_stats();
+    // ANCHOR_END: steam_services
+}
+
 // Compiled for the guide's 2D skeleton chapter; a game calls these from its
 // setup and systems.
 [[maybe_unused]] static void skeleton2d_guide(ponko::ctx& ctx, ponko::vec2 mouse, ponko::vec2 origin) {
