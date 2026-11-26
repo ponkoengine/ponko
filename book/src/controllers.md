@@ -135,7 +135,10 @@ Where the labels come from:
 | Each character key the player presses | yes | yes | yes | letters only |
 
 Windows and macOS give the whole layout without a window
-(`KeyLabels::system()`), so prompts are right from the first frame.
+(`KeyLabels::system()`), so prompts are right from the first frame. On
+macOS that takes the `window` feature: reading the layout links Carbon,
+which a headless build (a server) would map at start for nothing, so there
+`KeyLabels::system()` is `None`.
 
 **Linux and the BSDs** use xkb layouts on both display servers, and the
 engine reads the keymap the way the session hands it out: on X11 from the X

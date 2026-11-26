@@ -54,6 +54,7 @@ fn walls(width: f32) -> [(Vec3, Vec3); 5] {
 
 pub fn run(b: &mut Bench) {
     queries(b);
+    heightfield_copies(b);
     for n in [1_000, 10_000] {
         let (boxes, width) = scene(n);
         b.run(
@@ -460,4 +461,61 @@ fn queries(b: &mut Bench) {
         }
         std::hint::black_box(found);
     });
+}
+
+/// Copies of a heightfield collider's mesh: one 257 x 257 heightfield (a
+/// terrain tile) put on a fixed body every other tick and taken off on the
+/// next, `COPIES` times, at four scales. At scale 1 the collider shares
+/// the mesh (`shared`); `stretched` (2, 1, 2) gets a scaled copy (a plain
+/// clone); `mirrored-x` (-1, 1, 1) and `mirrored-xz` (-1, 1, -1) get one
+/// built again with heights, holes and diagonals flipped. The last
+/// collider to use a copy takes it along, so every entry makes a new one.
+/// What one copy costs is its row minus `shared`, divided by `COPIES`.
+fn heightfield_copies(b: &mut Bench) {
+    const COPIES: u64 = 20;
+    const CELLS: usize = 257;
+    let heights: Vec<f32> = (0..CELLS * CELLS)
+        .map(|i| {
+            let (x, z) = ((i % CELLS) as f32, (i / CELLS) as f32);
+            (x * 0.05).sin() * 4.0 + (z * 0.07).cos() * 3.0
+        })
+        .collect();
+    for (name, scale) in [
+        ("shared", Vec3::ONE),
+        ("stretched", vec3(2.0, 1.0, 2.0)),
+        ("mirrored-x", vec3(-1.0, 1.0, 1.0)),
+        ("mirrored-xz", vec3(-1.0, 1.0, -1.0)),
+    ] {
+        b.run(
+            &format!("physics3d/heightfield-257-copy-x{COPIES}/{name}"),
+            10,
+            || (),
+            |_| {
+                let mesh = Rc::new(RefCell::new(None));
+                let made = mesh.clone();
+                let mut on = None;
+                let world = Game::new("bench", 1, 1)
+                    .physics3d(vec3(0.0, -9.81, 0.0))
+                    .sim_system(move |ctx: &mut Ctx| {
+                        let Some(mesh) = *made.borrow() else { return };
+                        match on.take() {
+                            Some(tile) => {
+                                ctx.world.despawn(tile);
+                            }
+                            None => {
+                                on = Some(ctx.world.spawn((
+                                    Transform3D::at(vec3(-128.0, 0.0, -128.0)),
+                                    RigidBody3D::fixed(),
+                                    Collider3D::scaled_mesh(mesh, scale),
+                                )));
+                            }
+                        }
+                    })
+                    .run_headless(2 * COPIES, |ctx| {
+                        *mesh.borrow_mut() = Some(ctx.physics3d.heightfield(&heights, 256.0));
+                    });
+                std::hint::black_box(world);
+            },
+        );
+    }
 }

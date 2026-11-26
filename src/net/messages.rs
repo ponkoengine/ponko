@@ -374,7 +374,10 @@ impl Cookies {
 /// Token buckets for answers to strangers (book/src/security.md, "The
 /// challenge budget"): one for all of them, and one per network in a
 /// fixed table, so that a flood from one network can't use up the answers
-/// meant for others. Nothing in it allocates or outlives a second.
+/// meant for others. Nothing in it allocates or outlives a second. An
+/// endpoint makes its budget (2.6 KB, boxed) when it first answers a
+/// stranger: a client never does, and thousands of them in one process
+/// (the lobby's load test) would otherwise carry one each.
 struct StrangerBudget {
     global: Bucket,
     networks: [(u64, Bucket); NETWORK_BUDGETS],
@@ -770,8 +773,10 @@ pub struct NetMessages {
     /// A UDP host's address check (`None` on other transports).
     cookies: Option<Cookies>,
     /// How many answers to strangers (challenges, version refusals) may
-    /// still be sent, in all and per network.
-    stranger_budget: StrangerBudget,
+    /// still be sent, in all and per network. Only a host answers them, so
+    /// only a host has one (2.6 KB, made with it): a client endpoint is a
+    /// fraction of that.
+    stranger_budget: Option<Box<StrangerBudget>>,
 }
 impl NetMessages {
     #[cfg(any(test, feature = "steam", feature = "webrtc", feature = "lobby"))]
@@ -831,7 +836,7 @@ impl NetMessages {
             stats: MessageStats::default(),
             scratch: Vec::with_capacity(1500),
             cookies: None,
-            stranger_budget: StrangerBudget::new(),
+            stranger_budget: hosting.then(|| Box::new(StrangerBudget::new())),
         }
     }
     /// Bind a nonblocking UDP host. `max_clients` is 1..=1024, excluding host.
@@ -1351,9 +1356,10 @@ impl NetMessages {
             }
     }
     /// Takes one answer to `addr`, a stranger, from the budgets, if they
-    /// allow one.
+    /// allow one (a host's; an endpoint that isn't one answers none).
     fn may_answer_stranger(&mut self, addr: SocketAddr) -> bool {
-        self.stranger_budget.take(self.now, addr)
+        let now = self.now;
+        self.stranger_budget.as_mut().is_some_and(|b| b.take(now, addr))
     }
     fn receive(&mut self, addr: SocketAddr, data: &[u8]) -> io::Result<()> {
         if data.len() < HEADER || &data[..3] != MAGIC_FAMILY {
@@ -1983,9 +1989,12 @@ mod tests {
         for i in 0..10_000u32 {
             let addr = SocketAddr::from(([10, (i >> 8) as u8, i as u8, 1], 40_000));
             host.receive(addr, &hello(u64::from(i) + 1, &[0; COOKIE])).unwrap();
-            assert!(host.stranger_budget.live_networks(host.now) <= NETWORK_BUDGETS);
+            assert!(host.stranger_budget.as_ref().map_or(0, |b| b.live_networks(host.now)) <= NETWORK_BUDGETS);
         }
-        assert_eq!(host.stranger_budget.live_networks(host.now), NETWORK_BUDGETS);
+        assert_eq!(
+            host.stranger_budget.as_ref().map_or(0, |b| b.live_networks(host.now)),
+            NETWORK_BUDGETS
+        );
         assert_eq!(
             host.stats().packets_sent,
             u64::from(STRANGER_ANSWERS_PER_SECOND),
@@ -1997,13 +2006,35 @@ mod tests {
             "the table is inline, with nothing behind a pointer"
         );
         host.poll_elapsed(Duration::from_millis(999)).unwrap();
-        assert_eq!(host.stranger_budget.live_networks(host.now), NETWORK_BUDGETS);
+        assert_eq!(
+            host.stranger_budget.as_ref().map_or(0, |b| b.live_networks(host.now)),
+            NETWORK_BUDGETS
+        );
         host.poll_elapsed(Duration::from_millis(1)).unwrap();
         assert_eq!(
-            host.stranger_budget.live_networks(host.now),
+            host.stranger_budget.as_ref().map_or(0, |b| b.live_networks(host.now)),
             0,
             "nothing outlives a second"
         );
+    }
+
+    /// Only a host, the one endpoint that answers strangers, holds the
+    /// budget: its clients never have one, and an endpoint without it is a
+    /// fraction of its size.
+    #[test]
+    fn only_a_host_holds_a_stranger_budget() {
+        let mut nets = NetMessages::loopback(2);
+        assert!(hops_to_connect(&mut nets, 9).is_some(), "the client connects");
+        assert!(nets[0].stranger_budget.is_some(), "the host has its budget");
+        assert!(
+            nets[1..].iter().all(|n| n.stranger_budget.is_none()),
+            "a client answers no stranger"
+        );
+        assert!(std::mem::size_of::<NetMessages>() < std::mem::size_of::<StrangerBudget>());
+        let mut host = cookie_host();
+        host.receive(SocketAddr::from(([10, 0, 0, 1], 40_000)), &hello(1, &[0; COOKIE]))
+            .unwrap();
+        assert_eq!(host.stats().packets_sent, 1, "a UDP host answers a stranger's hello");
     }
 
     #[test]

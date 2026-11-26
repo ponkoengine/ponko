@@ -334,7 +334,7 @@ Measured on an Apple M4 Max (macOS, release build) on an idle machine
 | Rooms by code (create, then two joins each) | 16,100–16,600 rooms a second |
 | Relay | 240,000–244,000 messages a second delivered, 14.7–14.9 MiB/s of payload, 132,000 of 132,000 delivered |
 | Host migrations | 1100 of 1100 seen by every member |
-| Peak memory | 122–124 MiB for the process: the server and all 3300 clients |
+| Peak memory | 108–111 MiB for the process: the server and all 3300 clients (122–124 MiB before the change below) |
 
 The rates are of the process, which runs the clients too: the server alone
 is faster. With rooms of 8 (8800 clients, `load_test 1000 8`) the run took
@@ -342,8 +342,18 @@ is faster. With rooms of 8 (8800 clients, `load_test 1000 8`) the run took
 peaked at 334–336 MiB. Earlier figures on this page were taken on a laptop
 busy with other builds (4.6–6.4 s wall and 1.1–1.2 s CPU for the first
 run), where the process mostly waited; the peak memory was 104–105 MiB
-then, 18 MiB less than now, a change load doesn't explain and that is not
-yet looked into. The same test with 40
+then. It grew to 122–124 MiB, and load had no part in it (the same on a
+busy machine): 4 MiB were Carbon, which the engine linked to read the
+keyboard layout (`KeyLabels::system`) and macOS mapped at start even with
+no window (6.0 MiB at start, 1.9 MiB without it); 8 MiB were every
+endpoint's 2.6 KB budget for answering unknown addresses, which a client
+never uses (an endpoint was 2,976 bytes). Carbon is now linked only with the `window`
+feature and only a host holds the budget (a client's endpoint is 392
+bytes): 108–111 MiB in three runs (2026-11-26, load average
+50–77; the heap's peak, counted, 99.5 → 91.3 MiB). Of the 4–6 MiB left
+over 104–105 MiB, 2 MiB of heap are what the cookie handshake added to
+every link and endpoint (an endpoint 272 → 392 bytes); the rest was not
+split further. The same test with 40
 rooms runs in `cargo test` (`the_load_test_fills_every_room_and_delivers_every_relay_message`).
 
 ### Hostile clients
