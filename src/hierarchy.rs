@@ -1359,9 +1359,9 @@ enum Flat {
     No,
     /// A flat update, every child of a moved root placed.
     Placed,
-    /// A flat update with too few moved roots for a pass over every
-    /// attached entity: the moved roots (their [`Children::moved`]) go on
-    /// as the first level.
+    /// A flat update with too few moved children for a pass over every
+    /// attached entity, or with more than four children per moved root:
+    /// the moved roots (their [`Children::moved`]) go on as the first level.
     Few,
 }
 
@@ -1443,7 +1443,12 @@ fn place_flat(world: &mut World, s: &mut State) -> Flat {
     if kids == 0 {
         return Flat::Placed;
     }
-    if kids * 4 < attached {
+    // A pass over every attached entity pays when many roots moved, each
+    // with a few children. Few moved children, or a few roots with many
+    // (one root with 100k children), are placed faster as runs of children
+    // from the moved roots.
+    let roots = s.moved_kids.iter().filter(|&&k| k > 0).count();
+    if kids * 4 < attached || roots * 4 < kids {
         return Flat::Few;
     }
     // 2D: where each child goes, then written in the same query order.
@@ -1967,6 +1972,40 @@ mod tests {
             .unwrap();
         flat.get_mut::<T2>(child).unwrap().position.y += 1.0;
         assert!(transforms(&mut flat) != transforms(&mut levels));
+    }
+
+    /// One moved root with many children isn't a flat update by passes
+    /// over every attached entity: its children are placed as one run
+    /// from the root, as the levels place them.
+    #[test]
+    fn one_root_with_many_children_is_placed_from_the_root() {
+        let wide = || {
+            let mut world = World::new();
+            let root = world.spawn((T2::default(),));
+            for i in 0..3 * LINEAR {
+                world.spawn((T2::default(), Attached::to(root).offset(vec2(i as f32, 1.0))));
+            }
+            world.update_hierarchy();
+            (world, root)
+        };
+        let (mut flat, root) = wide();
+        let (mut levels, _) = wide();
+        for world in [&mut flat, &mut levels] {
+            world.get_mut::<T2>(root).unwrap().position.x += 2.0;
+        }
+        FLAT.with(|f| f.set((false, 0)));
+        flat.update_hierarchy();
+        assert_eq!(FLAT.with(|f| f.get().1), 0, "placed from the root, not by passes");
+        FLAT.with(|f| f.set((true, 0)));
+        levels.update_hierarchy();
+        FLAT.with(|f| f.set((false, 0)));
+        assert!(transforms(&mut flat) == transforms(&mut levels));
+        let moved = flat
+            .query::<(&T2, &Attached)>()
+            .iter()
+            .filter(|(t, _)| t.position.x >= 2.0)
+            .count();
+        assert_eq!(moved, 3 * LINEAR, "every child followed the root");
     }
 
     #[test]
