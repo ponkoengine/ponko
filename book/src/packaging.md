@@ -12,9 +12,13 @@
 is the engine's reference for a small *finished* game: title screen, settings,
 rounds with a win and a loss, pause, restart, result screens, sound, saved
 progress, keyboard and gamepad, and a download you can unzip anywhere. It uses
-only the public `Game`/`Ctx` API and content made for it: one 32 x 32 picture
-(`assets/coin_dash/coin.png`), a disc and the sound effects generated in code,
-and the engine's built-in fonts. Rules and tests are described in
+only the public `Game`/`Ctx` API, three pictures (`assets/coin_dash/coin.png`,
+`player.png` and `field.png`, tiles from Kenney's Tiny Town and Tiny Dungeon),
+sound effects from Kenney's sound packs, a chiptune by Juhani Junkala (all
+CC0), and the engine's built-in fonts.
+
+![Coin Dash: the player on a grass field, four coins left to collect](images/coin-dash.jpg)
+ Rules and tests are described in
 [Headless runs and testing](headless.md#a-complete-game-tested-headlessly);
 this chapter is about getting it to players and what it shows, starting with
 the command that packages any game.
@@ -396,40 +400,42 @@ others they stay PNG and JPEG. The web gets BC textures, as the desktop does
 `pack = { cook = false }` packs the source files; `--no-pack` ships the
 cooked files loose under their names (`--no-cook` with it: the source
 files). A `.gltf` file's `.bin` buffers stay out of the cooked files, and
-the cook's line counts them as left out. The report has the cook's line; Shard Grove's,
-packaged a second time:
+the cook's line counts them as left out. The report has the cook's line, the
+same as `ponko cook` prints; Shard Grove's, cooked a second time:
 
 ```text
-assets: 11 files (254.2 KiB) in assets.pack (198.1 KiB, 4 deflated)
-assets cooked 0 files, 11 from the cache, 0 copied, 0 left out: 413.8 KiB -> 254.2 KiB in 0.00 s
-smoke run: passed, 120 ticks headless from an unrelated folder in 0.7 s
+cooked 0 files, 3 from the cache, 9 copied, 0 left out: 3.7 MiB -> 8.7 MiB in 0.01 s; textures: 7.0 MiB of video memory instead of 28.0 MiB
 ```
 
-**Measured.** Shard Grove, the 3D reference game (three models, eight
-sounds, no image textures), cooked with a release `ponko` on an Apple
-laptop that was compiling other work at the same time (load average about
-70), so the times are rough:
+**Measured.** Shard Grove, the 3D reference game (three models, the level's
+twelve JPEG texture maps inside its GLB, eight sounds and the music in Ogg
+Vorbis), cooked with a release `ponko` on an Apple laptop that was compiling
+other work at the same time (load average 37–79), so the times are rough:
 
 | | Source | Cooked |
 |---|---|---|
-| Asset bytes | 413.8 KiB | 254.2 KiB (sounds 345.7 KiB -> 188.8 KiB in FLAC) |
-| `assets.pack` in its package | 349.6 KiB | 198.1 KiB (and its smoke run passes on it) |
-| Cook, cold / warm | | 0.01–0.24 s / 0.01 s (11 files from the cache) |
-| Setup loads (its 3 `load_mesh`, 1 `load_mesh_data`, 8 `audio.load`; median of 31 headless runs, release) | 0.56 ms | 1.02–1.10 ms |
-| Models alone cooked (sounds left as WAV) | 0.56 ms | 0.56 ms |
-| Video memory | same | same: no textures; the engine builds its own vertex buffers, and the level mesh has the same 398 corners and 594 indices |
+| Asset bytes | 3.7 MiB | 8.7 MiB: the level 1.8 MiB -> 6.8 MiB (its images become KTX2), the warden 1.2 -> 1.1 MiB, the crawler 176.2 -> 167.4 KiB; the Ogg Vorbis files are copied |
+| Asset pack (`ponko pack`, `ponko cook --pack`) | 2.7 MiB | 7.7 MiB |
+| Cook, cold (3 runs) / warm | | 2.82–4.29 s / 0.01 s (3 files from the cache) |
+| Setup loads (its 3 `load_mesh`, 1 `load_mesh_data`, 8 `audio.load`; 31 headless runs, release, 3 times) | medians 53.8–141.3 ms, fastest 53.3–54.0 ms | medians 57.1–99.5 ms, fastest 56.3–70.0 ms |
+| Video memory of the textures | 28.0 MiB (RGBA8 with mipmaps) | 7.0 MiB (BC7, and BC5 for the normal maps) |
 
-Its meshes are low-poly with flat shading, so the vertex cache reorder finds
-nothing to gain (2.00 cache misses per triangle before and after), and
-quantization saves a few percent (the level is 47 m across, past the bound
-for 16-bit positions, and the characters are skinned, so positions stay
-floats). FLAC decoding costs about half a millisecond more for its 8 seconds
-of sound (mono, 22 kHz) than reading WAV: a smaller download for a little
-load time. Set `"audio": "keep"` for sounds whose load time matters more.
+KTX2 trades a bigger download for a quarter of the video memory. `ponko package` makes KTX2 only for a game built with the
+`compressed-textures` feature, so `ponko package --example shard_grove
+--features navmesh,physics3d` ships the JPEG maps (the 2.7 MiB pack) and
+`--features navmesh,physics3d,compressed-textures` the KTX2 ones. The level
+is low-poly, so the vertex cache reorder finds nothing to gain there (2.01
+cache misses per triangle before and after) and saves the crawler a third
+(1.27 -> 0.76). The level is 47 m across, past the bound for 16-bit
+positions, so it gets a range per primitive, and the characters are skinned,
+so their positions stay floats. Ogg Vorbis sounds are kept as they are; the
+cook makes FLAC only of PCM WAV files. Set `"audio": "keep"` for WAV sounds
+whose load time matters more.
 
 Short sounds stay FLAC by default. Each sound loaded alone (read from memory
 and decoded), WAV and FLAC alternating, 41 rounds, three runs of a release
-build on the same busy machine (load average 136–141); the median in
+build on the same busy machine (load average 136–141), with the WAV sounds
+Shard Grove had before its Ogg Vorbis ones; the median in
 microseconds and the run's quartiles of the third run (the other two agree
 within 2.5 µs):
 
@@ -610,11 +616,13 @@ files on every desktop:
 |---|---|
 | `coin_dash` (`coin_dash.exe`) | The program |
 | `assets.pack` | The game's assets in one asset pack, found next to the program: |
-| `coin_dash/coin.png` in it | The coin picture |
+| `coin_dash/coin.png`, `player.png`, `field.png` in it | The pictures: the coin, the player and the grass field |
+| `coin_dash/sounds/`, `coin_dash/music/` in it | The sound effects and the music (Ogg Vorbis) |
 | `coin_dash/lang/en.json`, `ar.json` in it | The game's text in English and Arabic ([Localization](localization.md)) |
 | `coin_dash/fonts/` in it | The Arabic font, a subset of Noto Sans Arabic, with its license (`OFL.txt`) |
 | `LICENSE-MIT`, `LICENSE-APACHE`, `NOTICE` | The engine's and the game's license |
-| `CONTENT-NOTICES.txt` | What the game ships: the picture's and the tables' author and license, the font's license, "no sound files" |
+| `CC0-1.0.txt` | The text of CC0 1.0, the pictures', sounds' and music's license |
+| `CONTENT-NOTICES.txt` | What the game ships: each picture's, sound's and the music's pack, author, link and license, the tables' author and license, the font's license |
 | `THIRD-PARTY-NOTICES.txt` | Every library linked into the program, with its declared license and the license texts its source ships |
 | `README.txt` | How to run it, the controls, where it saves |
 
