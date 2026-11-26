@@ -113,6 +113,9 @@ pub(super) struct Ssr {
     depth_pipeline: wgpu::RenderPipeline,
     /// Without GTAO: the first level's mark and the cone's spread.
     mark_pipeline: wgpu::RenderPipeline,
+    /// Without GTAO, with a slot for the spread image: the first level's
+    /// mark alone, drawn once.
+    first_mark_pipeline: wgpu::RenderPipeline,
     blur_layout: wgpu::BindGroupLayout,
     blur_pipeline: wgpu::ComputePipeline,
     uniform: wgpu::Buffer,
@@ -172,8 +175,8 @@ pub(super) struct SsrTargets {
     /// pass writes the first level each frame.
     mark: bool,
     /// Without GTAO, with a slot for the spread image: the first level
-    /// only says that the reflections are there, so the first frame clears
-    /// it to that once (in the trace's step, which writes the image).
+    /// only says that the reflections are there, so the first frame draws
+    /// that into it once (in the trace's step, which writes the image).
     unmarked: AtomicBool,
     trace_group: wgpu::BindGroup,
     copy_group: wgpu::BindGroup,
@@ -371,6 +374,7 @@ impl Ssr {
         let fill_pipeline = own("fs_fill", &fill_layout, SPREAD_FORMAT);
         let depth_pipeline = own("fs_depth", &depth_layout, DEPTH_COPY_FORMAT);
         let mark_pipeline = pipeline("fs_mark", &[target(SCREEN_FORMAT)]);
+        let first_mark_pipeline = pipeline("fs_first_mark", &[target(SCREEN_FORMAT)]);
         let compute = |binding, ty| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::COMPUTE,
@@ -463,6 +467,7 @@ impl Ssr {
             depth_layout,
             depth_pipeline,
             mark_pipeline,
+            first_mark_pipeline,
             blur_layout,
             blur_pipeline,
             uniform,
@@ -1022,24 +1027,18 @@ impl Ssr {
         super::gpu3d::mark_step("reflections");
         if targets.unmarked.swap(false, Ordering::Relaxed) {
             // Blue 1: the reflections are there (see `SsrTargets::unmarked`).
-            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("3d screen reflections first mark"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &targets.ao,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.0,
-                            g: 0.0,
-                            b: 1.0,
-                            a: 0.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                ..Default::default()
-            });
+            // Drawn, not cleared to: a clear to that color may only be
+            // recorded in the target's compression metadata, and on Direct3D
+            // 12 on a Radeon RX Vega the opaque pass then read the first
+            // level of a target larger than 128x128 as zero: no reflections.
+            self.full_screen(
+                encoder,
+                "3d screen reflections first mark",
+                &self.first_mark_pipeline,
+                &targets.mark_group,
+                &targets.ao,
+                None,
+            );
         }
         {
             let attachment = |view| {
