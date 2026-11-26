@@ -235,6 +235,103 @@ fn damage_lowers_health_and_the_last_point_removes_the_entity() {
     assert_eq!(world.resource::<Funerals>().0.len(), 1, "one death was announced, once");
 }
 
+// ANCHOR: invincibility
+const INVINCIBLE_SECS: f32 = 1.0; // how long a hit protects
+const BLINK_SECS: f32 = 0.1; // how long each blink phase lasts
+
+/// On an entity that was just hurt: the seconds of protection left.
+#[derive(Component)]
+struct Invincible {
+    left: f32,
+}
+
+/// Like `apply_damage`, but a protected entity ignores the hit, and a hit that lands protects.
+fn hurt(ctx: &mut Ctx) {
+    for hit in ctx.events.read::<Damage>() {
+        if ctx.world.get::<Invincible>(hit.target).is_some() {
+            continue; // still protected
+        }
+        let Some(health) = ctx.world.get_mut::<Health>(hit.target) else {
+            continue;
+        };
+        health.hp = (health.hp - hit.amount).max(0);
+        ctx.world.insert(hit.target, Invincible { left: INVINCIBLE_SECS });
+    }
+}
+
+/// Counts the protection down and blinks the sprite while it lasts.
+fn blink(ctx: &mut Ctx) {
+    let dt = ctx.time.dt();
+    ctx.world
+        .query::<(Entity, &mut Invincible, &mut Sprite)>()
+        .for_each(|(e, protection, sprite)| {
+            protection.left -= dt;
+            if protection.left <= 0.0 {
+                sprite.color.a = 1.0;
+                ctx.commands.remove::<Invincible>(e); // hurtable again
+            } else {
+                // Faint in every other phase of BLINK_SECS.
+                let phase = (protection.left / BLINK_SECS) as u32;
+                sprite.color.a = if phase % 2 == 0 { 1.0 } else { 0.25 };
+            }
+        });
+}
+// ANCHOR_END: invincibility
+
+#[test]
+fn a_hit_protects_for_a_second_the_sprite_blinks_and_the_next_hit_lands_after() {
+    #[derive(Default)]
+    struct Seen {
+        hp: Vec<i32>,
+        alpha: Vec<f32>,
+        protected: Vec<bool>,
+    }
+    let world = Game::new("invincibility", 640, 480)
+        .setup(|ctx| {
+            ctx.world.insert_resource(Seen::default());
+            ctx.world
+                .spawn((Health { hp: 10, max: 10 }, Sprite::new(Texture::NONE)));
+        })
+        .sim_system(|ctx: &mut Ctx| {
+            // Three hits: at the start, while protected, and after it ended.
+            if [0, 10, 80].contains(&ctx.time.sim_tick()) {
+                let target = ctx.world.query::<Entity>().iter().next().unwrap();
+                ctx.events.send(Damage { target, amount: 3 });
+            }
+        })
+        .sim_system(hurt)
+        .sim_system(blink)
+        .sim_system(|ctx: &mut Ctx| {
+            let mut now = (0, 0.0);
+            ctx.world.query::<(&Health, &Sprite)>().for_each(|(health, sprite)| {
+                now = (health.hp, sprite.color.a);
+            });
+            let (hp, alpha) = now;
+            let protected = ctx.world.query::<&Invincible>().count() == 1;
+            let seen = ctx.world.resource_mut::<Seen>();
+            seen.hp.push(hp);
+            seen.alpha.push(alpha);
+            seen.protected.push(protected);
+        })
+        .run_headless(100);
+    let seen = world.resource::<Seen>();
+    assert_eq!(seen.hp[5], 7, "the first hit landed");
+    assert_eq!(seen.hp[40], 7, "the hit during the protection was ignored");
+    assert_eq!(seen.hp[99], 4, "the hit after it ended landed, and nothing else did");
+    assert!(
+        seen.protected[5] && !seen.protected[70],
+        "protected for about a second, then not"
+    );
+    let blinking = &seen.alpha[1..50];
+    assert!(
+        blinking.contains(&1.0) && blinking.contains(&0.25),
+        "the sprite alternates while it lasts"
+    );
+    let flips = blinking.windows(2).filter(|w| w[0] != w[1]).count();
+    assert!(flips >= 6, "it blinks every few ticks, not once: {flips} flips");
+    assert!(seen.alpha[70] == 1.0, "back to normal when it ends");
+}
+
 // ANCHOR: health_bar
 /// The empty bar and the full part of it, above a unit at `at`.
 fn bar_rects(at: Vec2, health: &Health) -> (Rect, Rect) {
