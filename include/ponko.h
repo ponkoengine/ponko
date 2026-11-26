@@ -257,7 +257,7 @@
 
 #define PONKO_LIGHTING_EX_VERSION 1
 
-#define PONKO_POST_EX_VERSION 4
+#define PONKO_POST_EX_VERSION 5
 
 #define PONKO_PARTICLE_SETTINGS3D_EX_VERSION 1
 
@@ -3616,6 +3616,7 @@ typedef struct PonkoPostEx {
   float auto_exposure_center_weight;
   bool auto_exposure_has_mask;
   struct PonkoTexture auto_exposure_mask;
+  bool ssr_transparent;
 } PonkoPostEx;
 
 typedef struct PonkoPostVolume {

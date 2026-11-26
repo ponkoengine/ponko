@@ -47,8 +47,12 @@ pub(super) struct FrameUniform {
     pub(super) sky_light: [f32; 4],
     /// x: fog density per unit, y: fog height, z: 1 / falloff.
     pub(super) fog: [f32; 4],
+    /// rgb: the fog's color, linear; w: the strength of screen-space
+    /// reflections on transparent surfaces (`Post::ssr_transparent`, 0: off).
+    /// Only the main view's: zero for the view model, target cameras and
+    /// probe views, which don't draw over the main view's scene depth.
     pub(super) fog_color: [f32; 4],
-    /// Light at night.
+    /// rgb: light at night; w: how far those reflections look.
     pub(super) night: [f32; 4],
     /// x: distance fog start, y: its end (0: none), z: sun glow, w: sun focus.
     pub(super) fog_far: [f32; 4],

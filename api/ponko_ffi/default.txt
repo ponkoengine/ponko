@@ -4145,6 +4145,7 @@ pub ponko_ffi::PonkoPostEx::split_toning_balance: f32
 pub ponko_ffi::PonkoPostEx::split_toning_highlights: ponko_ffi::PonkoColor
 pub ponko_ffi::PonkoPostEx::split_toning_shadows: ponko_ffi::PonkoColor
 pub ponko_ffi::PonkoPostEx::ssr_thin_objects: bool
+pub ponko_ffi::PonkoPostEx::ssr_transparent: bool
 pub ponko_ffi::PonkoPostEx::struct_size: u32
 pub ponko_ffi::PonkoPostEx::upscaler: u32
 pub ponko_ffi::PonkoPostEx::version: u32
