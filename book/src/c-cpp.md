@@ -658,6 +658,8 @@ binding arrives:
 | `Lighting::shadow_lag` | [3D](3d.md#light-and-shadows) | Not bound yet: C and C++ far cascades are always exact (the default); `PonkoLightingEx` will carry it |
 | `LightBakeScene::add_world`, `LightBakeScene::add_gltf`, `Graphics::keep_bake_sources`, `Unbaked` | [Baked lighting](3d.md#baked-lighting) | C and C++ components can't be listed by mesh: add each model with `ponko_light_bake_scene_add` (`light_bake_scene::add`), and leave out the ones that shouldn't bake |
 | `BakeTexture` | [Baked lighting](3d.md#baked-lighting) | Not bound yet: give a textured model its texture's average color as its albedo |
+| `Material::texture_transform`, `Material::alpha_cutoff` | [Meshes and materials](3d.md#gltf-extensions-lights-and-cameras) | Not bound yet: a file's texture transforms and alpha cutoff (and their animation) work from C; `PonkoMaterialDescEx` will carry them |
+| `AnimationClip::with_property_tracks` | [Animated visibility and materials](3d.md#animated-visibility-and-materials) | Not bound yet: clips loaded from files play their visibility and material tracks from C, but C can't build or read them |
 | `bake_lighting_gpu` | [Baked lighting](3d.md#baked-lighting) | Not bound yet: `ponko_bake_lighting` bakes the same light on the CPU |
 | `LightBakeSettings::compress` | [Baked lighting](3d.md#baked-lighting) | Not bound yet: C and C++ bakes are compressed, the default |
 | `Smoothing` | [Client prediction](networking.md#your-own-player-at-once-client-prediction) | Generic over what is drawn; prediction and the input queue are bound (`ponko::prediction`), so fade the correction offset (`reconciled::before`) yourself |
