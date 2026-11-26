@@ -114,6 +114,7 @@ fn draw(profile: &Profile) -> Option<Outcome> {
 
 /// [`draw`], with `setup` changing the scene's settings before the frames.
 fn draw_with(profile: &Profile, size: (u32, u32), setup: impl Fn(&mut Ctx)) -> Option<Outcome> {
+    crate::render::render_test_support::take_gpu_place();
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
         crate::render::render_test_support::no_gpu(format_args!("{}: no GPU adapter", profile.name));

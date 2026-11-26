@@ -364,6 +364,14 @@ pub(super) fn needs(device: &wgpu::Device, feature: crate::render::GpuFeature) -
     false
 }
 
+/// Takes the running test's place among the tests that hold a GPU device
+/// at once (see [`at_once`]), until the test ends. [`gpu`] and the other
+/// helpers take it themselves; code that opens its own device (the files
+/// allowed to, and the engine's own devices in a test) calls this first.
+pub(crate) fn take_gpu_place() {
+    at_once::enter(&at_once::PROCESS, at_once::limit(), std::time::Duration::from_secs(300));
+}
+
 /// A device with default limits and no optional features, or `None` (the
 /// test returns early; see the module docs).
 pub(crate) fn gpu() -> Option<TestGpu> {
@@ -386,7 +394,7 @@ pub(super) fn gpu_adjusted(
     describe: impl FnOnce(&wgpu::Adapter) -> Result<wgpu::DeviceDescriptor<'static>, String>,
     adjust: impl FnOnce(&mut wgpu::DeviceDescriptor<'static>),
 ) -> Option<TestGpu> {
-    at_once::enter(&at_once::PROCESS, at_once::limit(), std::time::Duration::from_secs(300));
+    take_gpu_place();
     // Like the engine's own instance, it follows wgpu's environment
     // variables: `WGPU_BACKEND=dx12` (or `vulkan`, `metal`, `gl`) picks the
     // backend, `WGPU_VALIDATION_INDIRECT_CALL=0` and the like set its flags.
@@ -1179,7 +1187,11 @@ fn a_test_thread_that_panics_is_marked_so_its_devices_are_left_alive() {
 
 #[test]
 fn a_test_without_a_device_fails_once_the_run_has_opened_one_or_one_is_required() {
-    assert_eq!(no_gpu_outcome(false, false), NoGpu::Skip, "a machine without a GPU skips");
+    assert_eq!(
+        no_gpu_outcome(false, false),
+        NoGpu::Skip,
+        "a machine without a GPU skips"
+    );
     assert!(
         matches!(no_gpu_outcome(false, true), NoGpu::Fail(why) if why.contains("lost")),
         "a device lost mid-run fails instead of passing silently"
@@ -1195,7 +1207,11 @@ fn every_skip_is_appended_to_the_log_a_run_counts() {
     append(&output, "skips.log", "render test SKIPPED [a]: no GPU adapter");
     append(&output, "skips.log", "render test SKIPPED [b]: needs Compute");
     let log = std::fs::read_to_string(output.join("skips.log")).unwrap();
-    assert_eq!(log.lines().filter(|l| l.starts_with("render test SKIPPED [")).count(), 2, "{log}");
+    assert_eq!(
+        log.lines().filter(|l| l.starts_with("render test SKIPPED [")).count(),
+        2,
+        "{log}"
+    );
     let _ = std::fs::remove_dir_all(&output);
 }
 
@@ -1222,7 +1238,10 @@ fn no_more_tests_than_the_limit_hold_a_device_at_once() {
     for t in threads {
         t.join().unwrap();
     }
-    assert!(MOST.load(Ordering::SeqCst) <= 2, "eight threads, two places: at most two at once");
+    assert!(
+        MOST.load(Ordering::SeqCst) <= 2,
+        "eight threads, two places: at most two at once"
+    );
     assert_eq!(LIMITER.held(), 0, "every place is given back");
 }
 
@@ -1247,7 +1266,10 @@ fn a_test_that_waits_on_itself_opens_late_instead_of_hanging() {
     let first = LIMITER.take(1, Duration::from_secs(60));
     let started = Instant::now();
     let second = LIMITER.take(1, Duration::from_millis(50));
-    assert!(started.elapsed() >= Duration::from_millis(50), "it waited its patience out first");
+    assert!(
+        started.elapsed() >= Duration::from_millis(50),
+        "it waited its patience out first"
+    );
     assert_eq!(LIMITER.held(), 2);
     drop((first, second));
     assert_eq!(LIMITER.held(), 0);
@@ -1529,6 +1551,17 @@ mod reference_workflow {
             assert!(
                 text.contains("request_adapter"),
                 "{name} ({why}) opens no device any more: take it off the list"
+            );
+        }
+        for (name, why) in OWN_DEVICE {
+            if name == "src/render/browser_gpu.rs" || name == "src/render/render_test_support.rs" {
+                continue; // the browser's device (no native tests), and the helpers
+            }
+            let text = &files.iter().find(|(file, _)| file == name).unwrap().1;
+            assert_eq!(
+                text.matches("wgpu::Instance::new(").count(),
+                text.matches("render_test_support::take_gpu_place();").count(),
+                "{name} ({why}) opens a device without taking a place among the GPU tests first:                  call render_test_support::take_gpu_place() before each wgpu::Instance::new"
             );
         }
         let capabilities = &files.iter().find(|(file, _)| file == OWN_DEVICE[2].0).unwrap().1;

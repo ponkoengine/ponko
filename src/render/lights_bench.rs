@@ -13,6 +13,9 @@ mod scene {
 #[test]
 #[ignore = "requires a GPU; run explicitly in release for timings"]
 fn offscreen_light_benchmark() {
+    // A test takes one of the places GPU tests share (render_test_support).
+    #[cfg(all(test, feature = "window", feature = "3d"))]
+    crate::render::render_test_support::take_gpu_place();
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).expect("GPU adapter");

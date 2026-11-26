@@ -465,6 +465,9 @@ pub fn bake_lighting_gpu(scene: &LightBakeScene, settings: &LightBakeSettings) -
     let unsupported = |why: String| Error::new(ErrorKind::Unsupported, format!("bake_lighting_gpu: {why}"));
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
     descriptor.flags = wgpu::InstanceFlags::from_env_or_default();
+    // A test takes one of the places GPU tests share (render_test_support).
+    #[cfg(all(test, feature = "window", feature = "3d"))]
+    crate::render::render_test_support::take_gpu_place();
     let instance = wgpu::Instance::new(descriptor);
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
