@@ -86,8 +86,32 @@ fn zones(mode: u8, strengths: [u8; 10]) -> [u8; 11] {
 mod tests {
     use super::*;
 
-    /// Model the framing done by SDL 3.4's PS5 HID driver using SDL's
-    /// own CRC function. The virtual driver does not run that HID code.
+    /// The standard reflected CRC-32 (polynomial 0xEDB88320) that SDL's
+    /// `SDL_crc32` and zlib compute, written out so the expected reports
+    /// do not depend on the code under test.
+    fn crc32(mut crc: u32, bytes: &[u8]) -> u32 {
+        crc = !crc;
+        for &byte in bytes {
+            crc ^= u32::from(byte);
+            for _ in 0..8 {
+                crc = if crc & 1 == 1 {
+                    (crc >> 1) ^ 0xedb8_8320
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        !crc
+    }
+
+    #[test]
+    fn crc32_matches_the_standard_check_value() {
+        assert_eq!(crc32(0, b"123456789"), 0xcbf4_3926);
+    }
+
+    /// Model the framing done by SDL 3.4's PS5 HID driver
+    /// (`HIDAPI_DriverPS5_InternalSendJoystickEffect`). The virtual driver
+    /// does not run that HID code.
     fn check_wire(payload: Payload, expected_usb: &[u8; 48], expected_bt: &[u8; 78]) {
         let mut usb = [0; 48];
         usb[0] = 0x02;
@@ -97,11 +121,8 @@ mod tests {
         let mut bt = [0; 78];
         bt[..3].copy_from_slice(&[0x31, 0x00, 0x10]);
         bt[3..3 + PAYLOAD_SIZE].copy_from_slice(&payload);
-        // SAFETY: SDL reads the one-byte prefix and first 74 bytes of bt.
-        let crc = unsafe {
-            let crc = sdl3_sys::stdinc::SDL_crc32(0, [0xa2_u8].as_ptr().cast(), 1);
-            sdl3_sys::stdinc::SDL_crc32(crc, bt.as_ptr().cast(), 74)
-        };
+        // The HID header byte 0xA2 is part of the checksum, as in SDL.
+        let crc = crc32(crc32(0, &[0xa2]), &bt[..74]);
         bt[74..].copy_from_slice(&crc.to_le_bytes());
         assert_eq!(&bt, expected_bt);
     }
