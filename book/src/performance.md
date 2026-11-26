@@ -1228,7 +1228,10 @@ What changed, on both sides at once unless named (`bench/compare/README.md`,
 at `784d7a2b` (the run-time rows were taken from that code before it was
 committed; the result file names its parent), Bevy 0.20.1, bevy_rapier2d
 0.37.0, rapier 0.36.1. Measured 2026-11-22 with a 1-minute load of 1.7 to
-2.9.
+2.9. The two 3D rows were measured again on 2026-11-26 at `1488ba81`
+(after skinning was batched), idle (1-minute load under 3, no compiler
+running), with `scoreboard.py --tuned --only scenes`; their last column
+compares them with the first table's rows of the same day.
 
 | Workload | Ponko (ms) | Bevy (ms) | Bevy / Ponko | | Time against the first table |
 |---|---:|---:|---:|---|---|
@@ -1241,8 +1244,8 @@ committed; the result file names its parent), Bevy 0.20.1, bevy_rapier2d
 | Sprites: 100k moving, one frame drawn | 1.02 (0.99–1.03) | 6.74 (6.71–6.84) | 6.6× | Ponko faster | Bevy −42%, Ponko −7% (was 10×) |
 | Sprites: 100k moving, a different tint each | 0.99 (0.98–0.99) | 37.4 (36.5–37.9) | 38× | Ponko faster | Bevy −17%, Ponko −10% |
 | Sprites: 1M moving, one frame drawn | 7.62 (7.35–7.74) | 58.9 (58.8–59.1) | 7.7× | Ponko faster | Bevy −44%, Ponko −8% (was 13×) |
-| 3D: 100k moving meshes (16 kinds) with a 4-cascade sun shadow | 4.68 (4.66–4.72) | 14.1 (14.0–14.1) | 3.0× | Ponko faster | Bevy −11%, Ponko +1% |
-| 3D: 1,000 skinned characters (16 joints) with a sun shadow | 6.06 (5.96–6.06) | 3.12 (3.07–3.23) | 0.51× | **Bevy faster** | Bevy −19%, Ponko within noise (was 0.64×) |
+| 3D: 100k moving meshes (16 kinds) with a 4-cascade sun shadow | 4.66 (4.64–4.69) | 13.7 (13.4–13.7) | 2.9× | Ponko faster | Bevy −14%, Ponko within noise |
+| 3D: 1,000 skinned characters (16 joints) with a sun shadow | 2.36 (2.34–2.37) | 3.04 (3.03–3.06) | 1.3× | Ponko faster | Bevy −21%, Ponko −1% (was 1.6×) |
 | 2D physics: 10k boxes falling into a pile, one tick | 3.25 (3.17–3.40) | 4.50 (4.48–4.76) | 1.4× | Ponko faster | Ponko −49%, Bevy −45% (rapier `parallel`) |
 | UI: 10k nodes, still, one frame drawn | 1.24 (1.20–1.26) | 2.71 (2.62–2.73) | 2.2× | Ponko faster | Bevy −41%, Ponko within noise |
 | UI: 10k nodes, all recolored every frame | 1.66 (1.62–1.83) | 4.60 (4.51–4.67) | 2.8× | Ponko faster | Ponko −33%, Bevy −32% |
@@ -1251,17 +1254,21 @@ committed; the result file names its parent), Bevy 0.20.1, bevy_rapier2d
 
 How to read it, row by row:
 
-- **No row changed sides.** Ponko is faster on every row but the skinned
-  characters, where Bevy is faster and its lead grows (3.12 against
-  6.06 ms, 0.51×; it was 0.64×).
+- **No row changed sides.** Ponko is faster on every row. The skinned
+  characters are the closest: tuning takes Bevy's frame from 3.83 to
+  3.04 ms (pipelining and the leaner build; which of the two gives it was
+  not separated) and
+  Ponko's from 2.38 to 2.36 ms, so Ponko's lead shrinks from 1.6× to 1.3×.
+  Before skinning was batched (2026-11-22) Bevy won this row, 3.12
+  against 6.06 ms.
 - **Bevy's GPU rows moved most**, from pipelining and the leaner builds:
   100k sprites 11.6 to 6.74 ms, 1M sprites 105.7 to 58.9 ms, the still UI
-  4.58 to 2.71 ms, the moving 3D world 15.8 to 14.1 ms. Ponko is still
-  6.6 to 7.7 times faster on sprites, 3.0 times on the 3D world and 2.2 to
-  2.8 times on the UI. Ponko's GPU rows moved little: its sprite rows are
-  7 to 10% faster with the movement on all cores, its still UI and first frame
-  are within noise, and its 3D world is 1% slower (4.68 against 4.63 ms,
-  just outside both ranges).
+  4.58 to 2.71 ms, the moving 3D world 15.9 to 13.7 ms (2026-11-26).
+  Ponko is still 6.6 to 7.7 times faster on sprites, 2.9 times on the 3D
+  world and 2.2 to 2.8 times on the UI. Ponko's GPU rows moved little: its
+  sprite rows are 7 to 10% faster with the movement on all cores, its
+  still UI, first frame and 3D world are within noise (4.66 against
+  4.65 ms).
 - **Tinted sprites** stay Bevy's slow path (37.4 ms; `Mesh2d` was the
   faster of its two ways), 38 times Ponko's 0.99 ms.
 - **Physics**: rapier's `parallel` feature halves the tick on both sides

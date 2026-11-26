@@ -5,11 +5,12 @@
     "memory_gb": 36,
     "os": "macOS 27.2.1",
     "power": "AC Power",
+    "backend": "default",
     "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
-    "ponko_rev": "784d7a2b",
+    "ponko_rev": "1488ba81",
     "ponko_dirty": false,
     "bevy": "0.20.1",
-    "date": "2026-11-22"
+    "date": "2026-11-26"
   },
   "runs": 3,
   "tuned": {
@@ -147,7 +148,12 @@
           "load": 2.78,
           "under_load": false
         }
-      ]
+      ],
+      "measured": {
+        "date": "2026-11-22",
+        "ponko_rev": "784d7a2b",
+        "ponko_dirty": false
+      }
     },
     "ECS: iterate 1M (one archetype)": {
       "unit": "ms",
@@ -202,7 +208,12 @@
           "load": 2.78,
           "under_load": false
         }
-      ]
+      ],
+      "measured": {
+        "date": "2026-11-22",
+        "ponko_rev": "784d7a2b",
+        "ponko_dirty": false
+      }
     },
     "ECS: iterate 16k fragmented over 1,024 archetypes": {
       "unit": "ms",
@@ -257,7 +268,12 @@
           "load": 2.78,
           "under_load": false
         }
-      ]
+      ],
+      "measured": {
+        "date": "2026-11-22",
+        "ponko_rev": "784d7a2b",
+        "ponko_dirty": false
+      }
     },
     "ECS: add and remove a component, 1M entities": {
       "unit": "ms",
@@ -312,7 +328,12 @@
           "load": 2.78,
           "under_load": false
         }
-      ]
+      ],
+      "measured": {
+        "date": "2026-11-22",
+        "ponko_rev": "784d7a2b",
+        "ponko_dirty": false
+      }
     },
     "ECS: parallel iterate 1M (all cores)": {
       "unit": "ms",
@@ -367,7 +388,12 @@
           "load": 2.78,
           "under_load": false
         }
-      ]
+      ],
+      "measured": {
+        "date": "2026-11-22",
+        "ponko_rev": "784d7a2b",
+        "ponko_dirty": false
+      }
     },
     "ECS: commands, 100k spawns and despawns in a world of 1M": {
       "unit": "ms",
@@ -422,7 +448,12 @@
           "load": 2.78,
           "under_load": false
         }
-      ]
+      ],
+      "measured": {
+        "date": "2026-11-22",
+        "ponko_rev": "784d7a2b",
+        "ponko_dirty": false
+      }
     },
     "Sprites: 100k moving, one frame drawn": {
       "unit": "ms",
@@ -477,7 +508,12 @@
           "load": 1.89,
           "under_load": false
         }
-      ]
+      ],
+      "measured": {
+        "date": "2026-11-22",
+        "ponko_rev": "784d7a2b",
+        "ponko_dirty": false
+      }
     },
     "Sprites: 100k moving, a different tint each, one frame drawn": {
       "unit": "ms",
@@ -532,7 +568,12 @@
           "load": 1.89,
           "under_load": false
         }
-      ]
+      ],
+      "measured": {
+        "date": "2026-11-22",
+        "ponko_rev": "784d7a2b",
+        "ponko_dirty": false
+      }
     },
     "Sprites: 1M moving, one frame drawn": {
       "unit": "ms",
@@ -587,117 +628,132 @@
           "load": 1.76,
           "under_load": false
         }
-      ]
+      ],
+      "measured": {
+        "date": "2026-11-22",
+        "ponko_rev": "784d7a2b",
+        "ponko_dirty": false
+      }
     },
     "3D: 100k moving meshes (16 kinds, instanced) with a 4-cascade sun shadow": {
       "unit": "ms",
       "ponko": {
-        "median": 4.680917,
-        "min": 4.661834,
-        "max": 4.719584,
+        "median": 4.662333,
+        "min": 4.643834,
+        "max": 4.688042,
         "runs": [
-          4.680917,
-          4.719584,
-          4.661834
+          4.643834,
+          4.662333,
+          4.688042
         ]
       },
       "bevy": {
-        "median": 14.055541,
-        "min": 13.984458,
-        "max": 14.109583,
+        "median": 13.654916,
+        "min": 13.433708,
+        "max": 13.671459,
         "runs": [
-          13.984458,
-          14.055541,
-          14.109583
+          13.433708,
+          13.671459,
+          13.654916
         ]
       },
       "loads": [
         {
           "side": "ponko",
-          "load": 2.84,
+          "load": 1.52,
           "under_load": false
         },
         {
           "side": "bevy",
-          "load": 2.69,
+          "load": 1.48,
           "under_load": false
         },
         {
           "side": "bevy",
-          "load": 2.8,
+          "load": 1.81,
           "under_load": false
         },
         {
           "side": "ponko",
-          "load": 2.58,
+          "load": 1.82,
           "under_load": false
         },
         {
           "side": "ponko",
-          "load": 1.73,
+          "load": 2.16,
           "under_load": false
         },
         {
           "side": "bevy",
-          "load": 1.73,
+          "load": 2.14,
           "under_load": false
         }
-      ]
+      ],
+      "measured": {
+        "date": "2026-11-26",
+        "ponko_rev": "1488ba81",
+        "ponko_dirty": false
+      }
     },
     "3D: 1,000 skinned characters (16 joints) with a sun shadow": {
       "unit": "ms",
       "ponko": {
-        "median": 6.059958,
-        "min": 5.95925,
-        "max": 6.060875,
+        "median": 2.364084,
+        "min": 2.33725,
+        "max": 2.370084,
         "runs": [
-          5.95925,
-          6.059958,
-          6.060875
+          2.370084,
+          2.364084,
+          2.33725
         ]
       },
       "bevy": {
-        "median": 3.116167,
-        "min": 3.065834,
-        "max": 3.225792,
+        "median": 3.04375,
+        "min": 3.030292,
+        "max": 3.056834,
         "runs": [
-          3.065834,
-          3.116167,
-          3.225792
+          3.056834,
+          3.030292,
+          3.04375
         ]
       },
       "loads": [
         {
           "side": "ponko",
-          "load": 2.85,
+          "load": 1.81,
           "under_load": false
         },
         {
           "side": "bevy",
-          "load": 2.85,
+          "load": 1.81,
           "under_load": false
         },
         {
           "side": "bevy",
-          "load": 2.45,
+          "load": 2.16,
           "under_load": false
         },
         {
           "side": "ponko",
-          "load": 2.45,
+          "load": 2.16,
           "under_load": false
         },
         {
           "side": "ponko",
-          "load": 2.07,
+          "load": 2.21,
           "under_load": false
         },
         {
           "side": "bevy",
-          "load": 2.07,
+          "load": 2.21,
           "under_load": false
         }
-      ]
+      ],
+      "measured": {
+        "date": "2026-11-26",
+        "ponko_rev": "1488ba81",
+        "ponko_dirty": false
+      }
     },
     "2D physics: 10k boxes falling into a pile, one tick": {
       "unit": "ms",
@@ -752,7 +808,12 @@
           "load": 2.07,
           "under_load": false
         }
-      ]
+      ],
+      "measured": {
+        "date": "2026-11-22",
+        "ponko_rev": "784d7a2b",
+        "ponko_dirty": false
+      }
     },
     "UI: 10k nodes, still, one frame drawn": {
       "unit": "ms",
@@ -807,7 +868,12 @@
           "load": 2.46,
           "under_load": false
         }
-      ]
+      ],
+      "measured": {
+        "date": "2026-11-22",
+        "ponko_rev": "784d7a2b",
+        "ponko_dirty": false
+      }
     },
     "UI: 10k nodes, all recolored every frame, one frame drawn": {
       "unit": "ms",
@@ -862,7 +928,12 @@
           "load": 2.46,
           "under_load": false
         }
-      ]
+      ],
+      "measured": {
+        "date": "2026-11-22",
+        "ponko_rev": "784d7a2b",
+        "ponko_dirty": false
+      }
     },
     "Headless sim: 1M entities, one tick": {
       "unit": "ms",
@@ -917,7 +988,12 @@
           "load": 2.46,
           "under_load": false
         }
-      ]
+      ],
+      "measured": {
+        "date": "2026-11-22",
+        "ponko_rev": "784d7a2b",
+        "ponko_dirty": false
+      }
     },
     "Time to first frame (process start to first offscreen frame done, process exit included)": {
       "unit": "ms",
@@ -972,7 +1048,12 @@
           "load": 2.74,
           "under_load": false
         }
-      ]
+      ],
+      "measured": {
+        "date": "2026-11-22",
+        "ponko_rev": "784d7a2b",
+        "ponko_dirty": false
+      }
     }
   },
   "builds": {
@@ -1068,5 +1149,14 @@
       "wasm_bytes": 57517152,
       "wasm_gzip_bytes": 11940074
     }
+  },
+  "adapters": [
+    "{\"backend\": \"metal\", \"device_type\": \"integrated_gpu\", \"driver\": \"\", \"driver_info\": \"\", \"name\": \"Apple M4 Max\"}",
+    "{\"backend\": \"metal\", \"device_type\": \"integratedgpu\", \"driver\": \"\", \"driver_info\": \"\", \"name\": \"Apple M4 Max\"}"
+  ],
+  "builds_measured": {
+    "date": "2026-11-22",
+    "ponko_rev": "784d7a2b",
+    "ponko_dirty": false
   }
 }
