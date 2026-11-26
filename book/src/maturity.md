@@ -29,7 +29,7 @@ are written in `STABILITY.md`; here they are again:
   `python3 scripts/maturity.py` fails when a chapter or a top-level module
   has no level, and regenerates the list and the module docs (`--write`).
 
-Chapters: 21 proven, 61 tested, 5 experimental.
+Chapters: 21 proven, 62 tested, 5 experimental.
 
 ## Chapters
 
@@ -73,6 +73,7 @@ Chapters: 21 proven, 61 tested, 5 experimental.
 | [Dedicated servers](servers.md) | **tested** | none | a reference game and a deployed server |
 | [Lobbies, matchmaking and relays](lobby.md) | **tested** | none | a reference game and a public deployment |
 | [Peer to peer over WebRTC](webrtc.md) | **experimental** | none | the browser side never ran in a browser, and no real NAT, public STUN or TURN server was used (the chapter's "Not checked") |
+| [Putting a game online](online.md) | **tested** | none | a reference game and a public deployment |
 | [Drawing](drawing.md) | **proven** | Coin Dash and Ember Hop, packaged and played on Linux, macOS and Windows | — |
 | [Camera, text and UI](camera-ui.md) | **proven** | Coin Dash and Ember Hop, packaged and played on Linux, macOS and Windows (Ember Hop's following camera, both games' text) | — |
 | [Several cameras: split screen and minimaps](viewports.md) | **tested** | none | a reference game that uses it |
