@@ -1,0 +1,6 @@
+{"backend": "dx12", "run": 1, "exit": 0, "load_before": 0.69, "load_after": 0.09, "date": "2026-11-26"}
+{"backend": "vulkan", "run": 1, "exit": 0, "load_before": 0.09, "load_after": 0.63, "date": "2026-11-26"}
+{"backend": "dx12", "run": 2, "exit": 0, "load_before": 0.2, "load_after": 0.19, "date": "2026-11-26"}
+{"backend": "vulkan", "run": 2, "exit": 0, "load_before": 0.07, "load_after": 0.15, "date": "2026-11-26"}
+{"backend": "dx12", "run": 3, "exit": 0, "load_before": 0.1, "load_after": 0.09, "date": "2026-11-26"}
+{"backend": "vulkan", "run": 3, "exit": 0, "load_before": 0.18, "load_after": 0.06, "date": "2026-11-26"}
