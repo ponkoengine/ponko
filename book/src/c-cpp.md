@@ -1,9 +1,11 @@
 # C and C++
 
-> **Maturity: [tested](maturity.md).** Game: none. Tests: the C and C++ test
-> programs (`native` job) and the `ponko_ffi` tests. Platforms: Linux, macOS
-> and Windows (the `native` job). Graphics: not involved. Missing: a reference
-> game written in C or C++.
+> **Maturity: [tested](maturity.md).** Game: Coin Dash in C++
+> (`examples/cpp/coin_dash`), played headlessly by its scenario test. Tests:
+> the C and C++ test programs (`native` job) and the `ponko_ffi` tests.
+> Platforms: Linux, macOS and Windows (the `native` job). Graphics: not
+> involved. Missing: the C++ game is not packaged or played in a window by a
+> check.
 
 Games can be written in C++ (or plain C) as well as Rust. They use the same
 engine: the same ECS, game loop, renderer, spatial grid and control endpoint
@@ -534,6 +536,83 @@ check builds and runs.
   `ponko_ctx_take_asset_group_decoded` transfers ownership of the result.
   In C++, use `asset_group::decoded` and
   `ctx::take_asset_group_decoded<T>` to take it as a unique pointer.
+
+## A complete game: Coin Dash in C++
+
+`examples/cpp/coin_dash` is the reference game
+[Coin Dash](packaging.md) written again on `ponko.hpp`, with the same rules,
+screens, controls, settings, saves and sounds: a title screen, a settings
+screen on the retained UI (UI scale, volume, rebinding, language), rounds
+against the clock, a pause, a result screen and a saved best time, in English
+and Arabic. It is three files:
+
+- `game.hpp`: the whole game, in the same layers as the Rust one, each a
+  plugin: `PlayerInput` (keys, pad and touch to an `Intent` resource),
+  `Rules` (the game, on the fixed tick, reading only `Intent` and the world),
+  `Drawing` (sprites, text, sounds) and `SettingsScreen`.
+- `main.cpp`: the program. Without arguments it opens a window;
+  `--smoke headless` plays itself from the title screen through the settings
+  and a won round and prints a JSON report of what it saw.
+- `scenarios.cpp`: the tests, run by `ctest` with no window and no GPU.
+
+The rules plugin shows the pattern the port follows: the screens are game
+states (a `uint32_t` enum), every resource is a plain struct, and the two
+resources tools care about are reflected, so the control endpoint and
+scenario checks read them by name:
+
+```cpp
+{{#include ../../examples/cpp/coin_dash/game.hpp:rules_plugin}}
+```
+
+The whole game is the four plugins; `build` adds the seed and the app id (the
+saves go in the player's data folder, `PONKO_DATA_DIR` moves it):
+
+```cpp
+{{#include ../../examples/cpp/coin_dash/game.hpp:whole_game}}
+```
+
+### The same tests as the Rust game
+
+The Rust game's menu and key-press tests (`tests/coin_dash_menus.rs`,
+`tests/coin_dash.rs`) keep their [input scenarios](actions.md#input-scenarios)
+in `examples/coin_dash/scenarios/*.json` and check, on every run, that the
+scenario they built is still the one in the file (`PONKO_UPDATE_SCENARIOS=1`
+rewrites the files after a deliberate change). The C++ test reads the same
+files through `ponko::input_scenario::from_json`, plays them headlessly and
+makes the same assertions, so both games are held to one script:
+
+```cpp
+{{#include ../../examples/cpp/coin_dash/scenarios.cpp:scenario_file}}
+```
+
+`headless_frames(true)` runs the frame systems and the retained UI on every
+tick, so the scenario's `expect_ui` steps see the settings screen. A scenario
+built in C++ can check the reflected resources by their C++ names:
+
+```cpp
+{{#include ../../examples/cpp/coin_dash/scenarios.cpp:resource_checks}}
+```
+
+The `native` job builds both programs and runs `cpp_coin_dash_scenarios`
+and `cpp_coin_dash_smoke` with the other C and C++ tests.
+
+### Where the port differs
+
+- The chosen keys and buttons are saved in their own file, `controls.json`,
+  in the engine's action-map JSON (`action_map::to_json`); the Rust game keeps
+  them in `settings.json` by its enum names.
+- Keys are shown by the engine's key labels (`ctx.key_label`), which follow
+  the keyboard layout.
+- Its files go in their own folder (app id `coin-dash-cpp`), so the two
+  builds never read each other's settings.
+- The library is built with text shaping, so Arabic is always offered.
+
+Writing the port added the C functions it was missing:
+`ponko_world_clear` (`world_view::clear`), `ponko_world_state`
+(`world_view::state<S>()`, the state of a world a headless run returned),
+`ponko_ctx_strings_number` (`ctx::format_number`),
+`ponko_ctx_strings_revision` (`ctx::strings_revision`) and
+`ponko_ctx_storage_is_available` (`ctx::storage_is_available`).
 
 ## Still Rust-only
 

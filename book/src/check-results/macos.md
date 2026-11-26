@@ -19,6 +19,58 @@ jobs written for macOS; the platform-neutral jobs written for `ubuntu-latest`
 (clippy, docs, Miri, the web build and the browser runs, templates and more)
 ran on this Mac by hand, as recorded below.
 
+## 2026-11-26: the three failing web steps again (#546)
+
+The web steps that failed on 2026-11-25, run again on the branch that fixes
+#546 (`main` at `20c5329c` plus the fix), on the same machine, toolchains and
+browsers (Playwright 1.64.1: Chromium 156.0.8078.4, firefox-1555). The
+machine was busy (load average 35 to 90 on 14 cores).
+
+| Check | Command | Result |
+|---|---|---|
+| `web-smoke`: Chromium, whatever the engine picks | `node web/smoke/smoke.mjs --fixture web_smoke --browser chromium --backend auto --allow-unsupported` | **Passes** (3 runs of 3) on WebGL2. The headless shell's SwiftShader fallback adapter opens a device but can't present; the engine's test frame now catches it (`ponko: falling back to WebGL2: a canvas can't show WebGPU frames: a test frame failed: [Invalid Texture] is invalid due to a previous error.`) and the game draws with WebGL2. |
+| `web-smoke`: Chromium, WebGPU first and each way back to WebGL2 | as written (new headless mode, SwiftShader), and on the Metal adapter | **Passes**, both: `webgpu` draws with WebGPU, the five failure cases (with the new `no-present`) end on WebGL2 with their one line. The engine before the fix fails `no-present` (it stays on WebGPU and the canvas is blank). |
+| `web-smoke`: Chromium, WebGPU, new headless mode, 3D fixture | `node web/smoke/smoke.mjs --fixture web_smoke_3d --browser chromium --chromium-mode new --backend webgpu --browser-arg --use-webgpu-adapter=swiftshader --allow-unsupported` | **Expected to fail on macOS** (`stall`); the step in `scripts/checks.yml` accepts this one failure there and nothing else, and passes (the 2D fixture passes). Not the engine's: see below. |
+| `web-smoke`: Firefox, WebGL2 and WebGPU | `node web/smoke/smoke.mjs --fixture web_smoke --browser firefox --backend webgl2 --allow-unsupported` (and the others) | **Fails to launch**, as before. Cause: the Firefox build of the pinned Playwright, see below. |
+| `web-gpu` (#568): WebGPU on the GPU, 2D and 3D; WebGL2 on the GPU, 3D; frame times | the job's three steps | **Pass**: both fixtures draw with WebGPU on the Apple M4 Max (`--require-gpu`), the 3D fixture with WebGL2 on ANGLE's Metal renderer, and `frame-times.mjs --repeat 1` (median frame 0.20 ms on WebGPU, 1.11 ms on WebGL2, uncapped, at load 56). |
+| `web`: Clippy for wasm32 | `cargo clippy -p ponko --target wasm32-unknown-unknown --examples`; `--lib --example web_smoke -- -D warnings`; `--features 3d --examples`; `--features editor,3d -- -D warnings` (with `RUSTFLAGS=-D warnings`) | pass |
+
+**Why the 3D fixture stalls on SwiftShader.** The engine is not stuck. Over
+25 s the page's main thread is blocked for 5 to 20 s after the first 4
+frames (a `page.evaluate` takes that long to answer), then the game runs on
+at about 3 frames a second with the simulation ticking. The block is
+shorter on a second load in the same browser (19, 8, then 4.5 s) and
+varies with the machine's load. A page without the engine that draws an
+800 × 600 canvas each animation frame on the same adapter does the same once
+its frames are slow (a fragment shader that keeps SwiftShader busy for
+about a second a frame): 3 frames, then a 4.5 s block. With a light shader
+it runs at 30 frames a second with no block. So it is SwiftShader, a CPU
+renderer, on a machine with other builds running, and Chromium holding the
+page while the GPU process is behind on the first 3D frames. The runner
+reads that as a stalled simulation. The same step passes on the Metal
+adapter. The engine's pacing is the same on both: in a browser it draws
+only when winit asks for a redraw, which is the browser's
+`requestAnimationFrame` (`src/game/window.rs`, `unpaced` is never true on
+wasm32).
+
+**Why Playwright's Firefox doesn't start.** Playwright 1.64.1's Firefox
+(Firefox 157.0 Nightly, `firefox-1555`) exits at once on macOS 27.2.1 with
+"Could not find profile folder." for every profile folder it is given: new
+or used, absolute or relative, inside or outside the agent's command sandbox,
+with or without Playwright. The installed Firefox 159.0 starts headless with
+the same arguments. Playwright 1.65.1's Firefox (159.0, `firefox-1572`)
+starts too: run through `smoke.mjs` with it installed, the 2D and 3D
+fixtures pass on WebGL2, `--backend auto` passes on WebGL2 and WebGPU is
+reported unsupported (no adapter in headless Firefox). The runner is fine;
+moving the lockfile to 1.65.1 also moves Chromium and WebKit, so it needs
+the whole `web-smoke` job run again and is left to its own issue (#601).
+
+**Start-up cost of the test frame.** From the device opening to the game's
+canvas getting its context (3D fixture, new headless mode, two runs of seven
+fresh loads, load 55 to 65): Metal 11 ms before, 11 to 12 ms after;
+SwiftShader 10 to 11 ms before, 16 ms after. Times to the first frame moved
+by more between loads of the same build than that.
+
 ## 2026-11-25: `main` at `de9557f5`
 
 **Machine.** Apple M4 Max (14 CPU cores, 32 GPU cores, 36 GB), macOS 27.2.1

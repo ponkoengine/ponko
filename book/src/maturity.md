@@ -114,7 +114,7 @@ Chapters: 21 proven, 62 tested, 6 experimental.
 | [Web builds: games in the browser](web.md) | **tested** | Coin Dash in headless Chromium and WebKit; Ember Hop builds for the web | WebGPU on Windows and Linux GPUs in a recorded run, and Firefox (its headless build has no WebGL2) |
 | [iOS: games on iPhone and iPad](ios.md) | **experimental** | none (the phone check, `examples/phone.rs`, is a test app) | a run on a device (touch, typing, interruptions, the silent switch, memory warnings, performance and power), signing, and the App Store |
 | [Threads on the web](web-threads.md) | **experimental** | none | the chapter calls it experimental; the thread-heaps build has not run in a browser since its last fix |
-| [C and C++](c-cpp.md) | **tested** | none | a reference game written in C or C++ |
+| [C and C++](c-cpp.md) | **tested** | Coin Dash in C++ (`examples/cpp/coin_dash`), played headlessly by its scenario test | the C++ game is not packaged or played in a window by a check |
 | [Reflection: components as JSON](reflection.md) | **tested** | none | a reference game that uses it |
 | [The inspector: look inside a running game](inspector.md) | **tested** | none | a recorded run of the overlay in a window |
 | [The editor: build scenes and prefabs](editor.md) | **tested** | none | a reference game that uses it |
@@ -201,6 +201,7 @@ The level each top-level module of `ponko` gives in its rustdoc.
 - [Migrating from 0.0.1 to 0.1.0](migrating-to-0.1.md): A migration guide for one release.
 - [Performance and benchmarks](performance.md): Benchmarks and how they were measured; the features measured carry their own levels.
 - [GPU regression tests](render-tests.md): How the GPU regression tests are written and run.
+- [Well-known content](known-content.md): How the 3D loader and renderer are checked against content other people made.
 - [Security: what reads untrusted bytes](security.md): Which code reads untrusted bytes and how it is guarded; the features it names carry their own levels.
 - [API reference](api.md): Where the API reference is.
 - [Contributing](contributing.md): How to contribute.
