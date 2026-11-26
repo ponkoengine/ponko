@@ -1295,7 +1295,8 @@ inline bool report_crash(const char* message) {
 // add fields at the end. The helpers below fill both header fields for this header's version and the
 // defaults; change the fields you need and pass the struct by reference.
 
-/// A material description that can grow (PonkoMaterialDescEx): `desc` is material_desc, plus a stencil.
+/// A material description that can grow (PonkoMaterialDescEx): `desc` is material_desc, plus a stencil and,
+/// from version 2, masked_tint (the model's colour tints only where the vertex colour's alpha is 1).
 using material_desc_ex = PonkoMaterialDescEx;
 /// Navmesh bake settings that can grow (PonkoNavBakeSettingsEx): `settings` is nav_bake_settings.
 using nav_bake_settings_ex = PonkoNavBakeSettingsEx;
