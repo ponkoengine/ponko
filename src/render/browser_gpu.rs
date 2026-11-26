@@ -317,6 +317,14 @@ mod tests {
                 "lost as it opened: Device was destroyed.",
             ),
             (WebGpuFallback::Surface(String::new()), "the browser gave no reason"),
+            // Chromium's words when a canvas can't present (its headless
+            // shell on macOS): the first line only.
+            (
+                WebGpuFallback::Surface(
+                    "a test frame failed: [Invalid Texture] is invalid due to a previous error.\n - While calling [Invalid Texture].CreateView([TextureViewDescriptor]).\n".into(),
+                ),
+                "a canvas can't show WebGPU frames: a test frame failed: [Invalid Texture] is invalid due to a previous error.",
+            ),
         ];
         for (fallback, reason) in cases {
             let line = fallback.log_line();
