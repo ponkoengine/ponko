@@ -656,3 +656,66 @@ fn lists_grids_and_a_dragged_item_draw_where_they_belong() {
     );
     reference_rejects("ui_widgets_drag", &still, REFERENCE, "the same screen before the drag");
 }
+
+#[test]
+fn developer_console_draws_and_clips_scrollback_above_the_game_ui() {
+    use crate::input::Key;
+
+    let Some(painter) = Painter::new() else { return };
+    let size = vec2(480.0, 280.0);
+    let mut screen = painter.screen(size);
+    let root = screen
+        .ctx
+        .ui
+        .root()
+        .layout(UiLayout::fill())
+        .background(crate::color::Color::rgb(0.7, 0.1, 0.1))
+        .pointer_events(false)
+        .id();
+    screen.ctx.ui.push_modeless(root);
+
+    screen.ctx.update_retained_ui();
+    let before = draw(&painter, &mut screen, size);
+    let ctx = &mut screen.ctx;
+    ctx.console.enabled = Some(true);
+    ctx.console
+        .command("dump".into(), "Print a report".into(), &[], |_, _| {
+            Ok((0..20)
+                .map(|i| format!("Report line {i}"))
+                .collect::<Vec<_>>()
+                .join("\n"))
+        })
+        .unwrap();
+    ctx.input.set_key(Key::Backquote, true);
+    ctx.update_retained_ui();
+    ctx.input.end_frame();
+    ctx.input.insert_text("dump");
+    ctx.input.set_key(Key::Enter, true);
+    ctx.update_retained_ui();
+    ctx.input.end_frame();
+    ctx.update_retained_ui();
+    let scroll = ctx.ui.find("ponko.console.scroll").unwrap();
+    let scroll_rect = ctx.ui.rect(scroll).unwrap();
+    assert!(ctx.ui.scroll(scroll).unwrap().y > scroll_rect.size().y);
+    let opened = draw(&painter, &mut screen, size);
+    let panel = opened.pixel(4, 4);
+    assert_ne!(panel, before.pixel(4, 4));
+    assert!(
+        panel[2] > panel[0],
+        "the console shows its blue panel above the game UI"
+    );
+    let below = opened.pixel(20, 255);
+    assert!(below[0] > below[2], "scrollback stays above the bottom of the console");
+    assert!(
+        (scroll_rect.min.y as u32..scroll_rect.max.y as u32).any(|y| (12..130).any(|x| opened.pixel(x, y)[0] > 190)),
+        "scrolled output draws readable text inside the clip",
+    );
+
+    let ctx = &mut screen.ctx;
+    ctx.input.set_key(Key::PageUp, true);
+    let at_bottom = ctx.ui.scroll(scroll).unwrap().y;
+    ctx.update_retained_ui();
+    assert!(ctx.ui.scroll(scroll).unwrap().y < at_bottom);
+    let earlier = draw(&painter, &mut screen, size);
+    assert_ne!(earlier.rgba, opened.rgba);
+}

@@ -34,7 +34,7 @@
  * for that panel's UI.
  *
  * Enums (PonkoKey, PonkoMouseButton, PonkoGamepadButton, PonkoGamepadAxis,
- * PonkoControllerFamily, PonkoDeviceKind, PonkoGlyphKind,
+ * PonkoControllerFamily, PonkoDeviceKind, PonkoGlyphKind, PonkoConsoleType,
  * PonkoTextAlign3D, PonkoBodyKind, PonkoShapeKind, PonkoShape3DKind, PonkoNetState, PonkoPhase, PonkoService, PonkoHandleKind, PonkoAssetClass, PonkoAssetOwner, PonkoResidencyKind, PonkoAssetState, PonkoAssetGroupState, PonkoAssetGroupKind, PonkoGpuTier, PonkoGpuFeature, PonkoScenarioStatus, PonkoWaterQuality, PonkoWaterReflection, PonkoHookKind, PonkoCloudQuality, PonkoJointChannel, PonkoEventTarget, PonkoCrashReportsMode, PonkoCrashKind, and the
  * PonkoUi* layout and paint enums) are passed as uint32_t.
  * Last-error text is thread-local, borrowed until the next failed call;
@@ -1519,6 +1519,13 @@ typedef enum PonkoUpscaler {
   PONKO_UPSCALER_TEMPORAL = 1,
 } PonkoUpscaler;
 
+typedef enum PonkoConsoleType {
+  PONKO_CONSOLE_TEXT,
+  PONKO_CONSOLE_INTEGER,
+  PONKO_CONSOLE_FLOAT,
+  PONKO_CONSOLE_BOOL,
+} PonkoConsoleType;
+
 typedef struct PonkoAccess PonkoAccess;
 
 typedef struct PonkoActionMap PonkoActionMap;
@@ -1544,6 +1551,8 @@ typedef struct PonkoCellStreamer PonkoCellStreamer;
 typedef struct PonkoClip PonkoClip;
 
 typedef struct PonkoCollisionMeshData PonkoCollisionMeshData;
+
+typedef struct PonkoConsoleReply PonkoConsoleReply;
 
 typedef struct PonkoContactPair3D PonkoContactPair3D;
 
@@ -1794,6 +1803,28 @@ typedef struct PonkoQueryOptions {
   bool parallel;
   uint64_t since;
 } PonkoQueryOptions;
+
+typedef struct PonkoConsoleArg {
+  const char *name;
+  uint32_t kind;
+} PonkoConsoleArg;
+
+typedef struct PonkoConsoleValue {
+  uint32_t kind;
+  int64_t integer;
+  double number;
+  bool flag;
+  const char *text;
+  size_t text_len;
+} PonkoConsoleValue;
+
+typedef void (*PonkoConsoleFn)(struct PonkoCtx *ctx,
+                               const struct PonkoConsoleValue *args,
+                               size_t count,
+                               struct PonkoConsoleReply *reply,
+                               void *user);
+
+typedef void (*PonkoConsoleValueFn)(const struct PonkoConsoleValue *value, void *user);
 
 typedef struct PonkoContactModifier3D {
   bool has_one_way;
@@ -5290,6 +5321,33 @@ enum PonkoStatus ponko_query_with(struct PonkoWorld *world,
                                   const struct PonkoQueryOptions *options,
                                   PonkoQueryFn callback,
                                   void *user);
+
+enum PonkoStatus ponko_game_developer_console(struct PonkoGame *game, bool on);
+
+enum PonkoStatus ponko_game_console_key(struct PonkoGame *game, uint32_t key);
+
+enum PonkoStatus ponko_game_console_command(struct PonkoGame *game,
+                                            const char *command,
+                                            const char *help,
+                                            const struct PonkoConsoleArg *args,
+                                            size_t count,
+                                            PonkoConsoleFn callback,
+                                            void *user);
+
+enum PonkoStatus ponko_console_reply_text(struct PonkoConsoleReply *reply,
+                                          const char *text,
+                                          size_t len,
+                                          bool failed);
+
+enum PonkoStatus ponko_game_console_variable(struct PonkoGame *game,
+                                             const char *variable,
+                                             const char *help,
+                                             const struct PonkoConsoleValue *initial);
+
+enum PonkoStatus ponko_ctx_console_value(struct PonkoCtx *ctx,
+                                         const char *variable,
+                                         PonkoConsoleValueFn callback,
+                                         void *user);
 
 struct PonkoContactModifier3D ponko_contact_modifier3d_default(void);
 

@@ -664,6 +664,9 @@ jobs:
       - name: Tests, engine with no default features
         if: ${{ !cancelled() }}
         run: cargo test -p ponko --tests --no-fail-fast --no-default-features
+      - name: Tests, developer console release opt-in
+        if: ${{ !cancelled() }}
+        run: cargo test -p ponko --release --no-default-features --test console
       # The command line tool's feature subsets: its unit tests (the cook and
       # texture code) with each of its features alone, and the three without
       # Aseprite.
