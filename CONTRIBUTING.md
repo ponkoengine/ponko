@@ -853,23 +853,21 @@ release branch (`v0.1.1` on `release-0.1`, see
       summary and holding every entry, the sub-crates carry the root license
       files and no fragment is left over). Make sure the checks passed on
       this exact commit.
-   2. **Build the C library** on each OS (Linux x86_64, macOS arm64, Windows
-      x86_64): `cargo build --release -p ponko_ffi`, then a folder
-      `ponko-vX.Y.Z-<os>-<arch>` with `include/ponko.h` and
-      `include/ponko.hpp` in `include/`, `LICENSE-MIT`, `LICENSE-APACHE` and
-      `NOTICE`, the libraries from `target/release` (`libponko_ffi.a`,
-      `.so`, `.dylib`, or `ponko_ffi.lib`, `.dll`, `.dll.lib`) in `lib/`, and
-      `THIRD-PARTY-NOTICES.txt` for every library linked into it
-      (`python3 scripts/package-coin-dash.py notices --crate ponko_ffi
-      --title "the Ponko C library" --out <folder>/THIRD-PARTY-NOTICES.txt`).
-      Pack it as `.tar.gz` (`.zip` on Windows).
+   2. **Build the six C library archives** (see
+      [The C library archives](#the-c-library-archives)):
+      `linux-x86_64`, `linux-arm64`, `macos-arm64`, `macos-x86_64`,
+      `windows-x86_64` and `windows-arm64`, with
+      `python3 scripts/c-library.py build --target <triple>`, and check
+      each with `python3 scripts/c-library.py smoke <archive>`.
    3. **Package the crates**: `cargo publish --workspace --dry-run`.
    4. **Create the GitHub release** from the CHANGELOG section, with the
-      archives:
+      six archives gathered in one folder (`dist/`, from each machine's
+      `target/c-library/`):
 
       ```sh
       python3 scripts/release-check.py notes vX.Y.Z notes.md
-      gh release create vX.Y.Z ponko-vX.Y.Z-* --title "Ponko X.Y.Z" --notes-file notes.md
+      ls dist   # ponko-vX.Y.Z-{linux,macos}-{x86_64,arm64}.tar.gz, ponko-vX.Y.Z-windows-{x86_64,arm64}.zip
+      gh release create vX.Y.Z dist/ponko-vX.Y.Z-* --title "Ponko X.Y.Z" --notes-file notes.md
       ```
 
       Add `--prerelease` for a candidate (`vX.Y.0-rc.N`).
@@ -895,6 +893,94 @@ release branch (`v0.1.1` on `release-0.1`, see
       ```
 
       A failed page stops only the gallery, not the release.
+
+### The C library archives
+
+`scripts/c-library.py` makes each archive from the tag's checkout. It builds
+`ponko_ffi` with its default features (`cargo build --release --locked
+--target <triple>`) and packs a folder `ponko-vX.Y.Z-<os>-<arch>` holding
+`include/ponko.h` and `include/ponko.hpp`, the shared and static libraries
+in `lib/` (`libponko_ffi.so` and `.a`, `libponko_ffi.dylib` and `.a`, or
+`ponko_ffi.dll`, its import library `ponko_ffi.dll.lib` and
+`ponko_ffi.lib`), `LICENSE-MIT`, `LICENSE-APACHE`, `NOTICE`, and
+`THIRD-PARTY-NOTICES.txt` for every library linked into it on that target.
+It refuses a library built for the wrong CPU and gives the macOS library the
+install name `@rpath/libponko_ffi.dylib` (the linker writes the path it was
+built at). The archive goes to `target/c-library/` as `.tar.gz` (`.zip` for
+Windows). `targets` lists the six, `--dry-run` shows the commands and the
+layout, and `--help` has the rest.
+
+`smoke <archive>` unpacks it elsewhere, builds `examples/cpp` against its
+`include/` and `lib/` the way the C/C++ chapter tells users to, and runs the
+C and C++ tests with ctest. Where the programs can't run on the machine it
+only builds them, and says so. Each `--target` is a whole extra release
+build: delete `target/<triple>` once its archive is uploaded.
+
+**macOS (Apple silicon): `macos-arm64` and `macos-x86_64`.** The two are
+separate archives: the arm64 one keeps its 0.1.0 name and contents, and
+each download is half the size of a universal one (users who want one join
+them with `lipo -create`).
+
+```sh
+rustup target add x86_64-apple-darwin
+python3 scripts/c-library.py build --target aarch64-apple-darwin
+python3 scripts/c-library.py build --target x86_64-apple-darwin
+python3 scripts/c-library.py smoke target/c-library/ponko-vX.Y.Z-macos-arm64.tar.gz
+python3 scripts/c-library.py smoke target/c-library/ponko-vX.Y.Z-macos-x86_64.tar.gz
+```
+
+The Intel programs run under Rosetta (`softwareupdate --install-rosetta`);
+without it the smoke only builds them.
+
+**Linux x86_64: `linux-x86_64`**, on the Linux machine, with
+`sudo apt install libasound2-dev libudev-dev cmake g++`:
+`python3 scripts/c-library.py build`, then `smoke` it. The library needs the
+glibc of that machine or newer.
+
+**Linux arm64: `linux-arm64`**, cross-built from the Mac (or the Linux
+machine) with zig as the linker, for glibc 2.28:
+
+```sh
+brew install zig                 # or zig from ziglang.org on Linux
+cargo install cargo-zigbuild --locked
+rustup target add aarch64-unknown-linux-gnu
+```
+
+The linker needs the target's ALSA and udev libraries. Download the arm64
+packages `libasound2`, `libasound2-dev`, `libudev1` and `libudev-dev` of a
+Debian release (packages.debian.org, "arm64", or `apt-get download
+<package>:arm64` on Debian/Ubuntu with the arm64 architecture added), then:
+
+```sh
+python3 scripts/c-library.py sysroot --out target/sysroot-arm64 <the four .deb files>
+python3 scripts/c-library.py build --target aarch64-unknown-linux-gnu --zig --sysroot target/sysroot-arm64
+python3 scripts/c-library.py smoke target/c-library/ponko-vX.Y.Z-linux-arm64.tar.gz --zig
+```
+
+The smoke compiles and links the C and C++ programs for arm64 with zig; it
+runs them only on an arm64 Linux machine (copy the archive there, install
+`cmake g++ libasound2 libudev1` and run `smoke` without `--zig`).
+
+**Windows x64: `windows-x86_64` and `windows-arm64`**, in PowerShell, with
+Python, CMake and Visual Studio 2022 (or its Build Tools) with the "Desktop
+development with C++" workload. The arm64 archive also needs the component
+"MSVC v143 - VS 2022 C++ ARM64/ARM64EC build tools (Latest)" (Visual Studio
+Installer, Modify, Individual components; or `vs_installer.exe modify
+--installPath <the Visual Studio folder> --add
+Microsoft.VisualStudio.Component.VC.Tools.ARM64`). rustc finds the ARM64
+linker by itself; nothing in `ponko_ffi` compiles C for Windows.
+
+```powershell
+rustup target add aarch64-pc-windows-msvc
+python scripts/c-library.py build --target x86_64-pc-windows-msvc
+python scripts/c-library.py build --target aarch64-pc-windows-msvc
+python scripts/c-library.py smoke target/c-library/ponko-vX.Y.Z-windows-x86_64.zip
+python scripts/c-library.py smoke target/c-library/ponko-vX.Y.Z-windows-arm64.zip
+```
+
+On an x64 machine the arm64 smoke builds the programs (`cmake -A ARM64`,
+the Visual Studio generator) without running them; on a Windows on Arm
+machine the same command runs them.
 
 ### One-time setup (a maintainer, in settings)
 
