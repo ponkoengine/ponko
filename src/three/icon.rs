@@ -158,14 +158,9 @@ pub(crate) struct PendingIcon {
     pub(crate) exposure: f32,
     /// Handed to the renderer this frame.
     pub(crate) sent: bool,
-    /// Frames that drew it.
-    pub(crate) frames: u8,
+    /// A frame drew it: its target holds the picture.
+    pub(crate) drawn: bool,
 }
-
-/// Frames an icon is drawn in. Two, not one: the renderer's very first
-/// frame draws no target camera's picture, and an icon asked for before
-/// it (in a game's setup) would stay empty.
-pub(crate) const ICON_FRAMES: u8 = 2;
 
 /// The tone mapping curves of the main view's post pass, renamed so no
 /// effect prelude name clashes with them.
@@ -209,13 +204,11 @@ pub(crate) fn icon_material(exposure: f32, tonemap: super::Tonemap) -> MaterialD
 }
 
 impl Graphics {
-    /// After a frame: icons handed to the renderer count it if it was drawn
+    /// After a frame: icons handed to the renderer are done if it was drawn
     /// (one that wasn't hands them to the next frame).
     pub(crate) fn settle_icons(&mut self, drawn: bool) {
         for icon in &mut self.icons {
-            if std::mem::take(&mut icon.sent) && drawn {
-                icon.frames += 1;
-            }
+            icon.drawn |= std::mem::take(&mut icon.sent) && drawn;
         }
     }
 }
@@ -234,11 +227,11 @@ impl Graphics {
     /// its own.
     ///
     /// It is drawn with the next frame, before the UI, so the UI can show
-    /// it that frame, and once more in the frame after (the renderer's very
-    /// first frame draws no target's picture); then the target keeps the
-    /// picture until it is freed ([`Graphics::free`]).
-    /// It costs one small target camera's view in those two frames and
-    /// nothing after. Without a GPU
+    /// it that frame (also the game's first frame, for an icon asked for in
+    /// setup); then the target keeps the picture until it is freed
+    /// ([`Graphics::free`]).
+    /// It costs one small target camera's view in that frame and nothing
+    /// after. Without a GPU
     /// (headless) the target is made and stays empty.
     ///
     /// ```no_run
@@ -340,7 +333,7 @@ impl Graphics {
             material,
             exposure: icon.exposure,
             sent: false,
-            frames: 0,
+            drawn: false,
         });
         Ok(target)
     }

@@ -426,16 +426,16 @@ fn tools() -> Vec<Tool> {
         },
         Tool {
             name: "entity_stats",
-            description: "Summarize reflected fields over all matching entities without listing them: count, min, max and mean for numbers (per axis for vectors), counts per value for names and enums (e.g. how many units per team). Works on millions of entities.",
+            description: "Summarize reflected fields over all matching entities without listing them: count, min, max and mean for numbers (per axis for vectors), counts per value for names and enums (e.g. how many units per team). Without `fields`, just counts the entities that match `with` and `where`. Works on millions of entities.",
             writes: false,
             params: || {
                 json!({
-                    "fields": { "type": "array", "items": { "type": "string" }, "description": "Field paths, e.g. [\"Health.current\", \"Transform2D.position\", \"Team\"] (a bare component name means its whole value)" },
+                    "fields": { "type": "array", "items": { "type": "string" }, "description": "Field paths, e.g. [\"Health.current\", \"Transform2D.position\", \"Team\"] (a bare component name means its whole value); omit to only count" },
                     "with": { "type": "array", "items": { "type": "string" }, "description": "Only entities that have all these components" },
                     "where": { "type": "array", "items": { "type": "string" }, "description": "Only entities passing all of these, e.g. [\"Team == Red\"]" }
                 })
             },
-            required: &["fields"],
+            required: &[],
         },
         Tool {
             name: "get_entity",
@@ -701,7 +701,7 @@ fn tools() -> Vec<Tool> {
                 json!({
                     "scenario": {
                         "type": "object",
-                        "description": "{\"version\": 1, \"id\"?, \"duration\"?, \"release_when_done\"?, \"steps\": [{\"tick\": 10, \"type\": \"key\", \"key\": \"Space\", \"down\": true}, {\"tick\": 10, \"type\": \"expect_action\", \"action\": \"jump\", \"pressed\": true}, {\"tick\": 12, \"type\": \"expect_resource\", \"resource\": \"Score\", \"pointer\": \"/points\", \"equals\": 3}, {\"tick\": 12, \"type\": \"expect_count\", \"component\": \"Coin\", \"equals\": 2}]}"
+                        "description": "{\"version\": 1, \"id\"?, \"duration\"?, \"release_when_done\"?, \"steps\": [{\"tick\": 10, \"type\": \"key\", \"key\": \"Space\", \"down\": true}, {\"tick\": 10, \"type\": \"expect_action\", \"action\": \"jump\", \"pressed\": true}, {\"tick\": 12, \"type\": \"expect_resource\", \"resource\": \"Score\", \"pointer\": \"/points\", \"equals\": 3}, {\"tick\": 12, \"type\": \"expect_count\", \"component\": \"Coin\", \"equals\": 2}, {\"tick\": 12, \"type\": \"expect_ui\", \"node\": \"hud.score\", \"shown\": true, \"text\": \"Score: 3\"}]}. Key names: A-Z, Num0-Num9, F1-F12, Up, Down, Left, Right (not ArrowRight), Space, Enter, Escape, Tab, LeftShift, ... (an unknown name's error lists them all). expect_ui also takes exists and focused"
                     },
                     "max_ticks": { "type": "integer", "minimum": 1, "description": "Refuse scenarios longer than this (default 100000), before the running one is touched" },
                     "keep_input_when_done": { "type": "boolean", "description": "Leave the keys the scenario holds pressed when it ends (default: release them). They stay owned by the scenario: cancel_input_scenario releases them" },

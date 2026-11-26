@@ -19,6 +19,122 @@ jobs written for macOS; the platform-neutral jobs written for `ubuntu-latest`
 (clippy, docs, Miri, the web build and the browser runs, templates and more)
 ran on this Mac by hand, as recorded below.
 
+## 2026-11-26: the agent acceptance suite, replayed and tried by a real agent (#528, section 7)
+
+A rehearsal of the cut's step ("The agent acceptance suite", "At a
+release", in [Working with AI agents](../agents.md)), on `main` at
+`4957c566`, on the same Mac (Apple M4 Max, macOS 27.2.1), debug build
+(`cargo build -p ponko_mcp --example agent_suite`), busy (load average 12
+to 30 on 14 cores: other agents were compiling).
+
+**Replay.** `cargo run -p ponko_mcp --example agent_suite -- replay`: 6/6
+tasks solved, 18/18 checks, 22/22 negative controls caught, equal to the
+0.2.0 baseline (34 s). `cargo test -p ponko_mcp --test agent_suite`: passed
+(35 s). Nothing had to be fixed: no tool change since the suite was
+written broke a scripted solution.
+
+**A real agent.** An AI coding agent (a CLI coding agent with a shell, no
+MCP client of its own) did each task through `agent_suite mcp TASK`,
+driven with `scripts/mcp-session.py`, headless, no window. It read each
+task's goal from the server's instructions only, and opened the scripted
+solutions only after all six were scored. Seconds are wall-clock from
+starting the server to the submission, the agent's own thinking included.
+
+| Task | Solved | Checks | Tool calls | Tool errors | Submissions | Seconds | Scripted steps |
+|---|---|---|---|---|---|---|---|
+| `tune-speed` | yes | 3/3 | 18 | 1 | 1 | 28 | 7 |
+| `coin-level` | yes | 4/4 | 13 | 1 | 1 | 24 | 11 |
+| `immortal-enemy` | yes | 3/3 | 15 | 0 | 1 | 28 | 14 |
+| `slow-crowd` | yes | 4/4 | 9 | 0 | 1 | 16 | 8 |
+| `broken-shader` | yes | 2/2 | 3 | 0 | 1 | 14 | 5 |
+| `hidden-score` | yes | 2/2 | 9 | 0 | 1 | 17 | 6 |
+| **total** | **6/6** | **18/18** | 67 | 2 | 6 | 127 | 51 |
+
+Where it got stuck, and what changed for it in the same pull request:
+
+- `tune-speed`: its first scenario held `ArrowRight`, the browser's key
+  name; the error listed the engine's names and the next call used
+  `Right`. The `run_input_scenario` schema now lists the key names. Eight
+  of its 18 calls were a hot-reload poll that went on after the value had
+  changed (the agent's loop, not a tool).
+- `coin-level`: `entity_stats` with only `with`, to count the coins,
+  was refused for a missing `fields`. `fields` is optional now: without it
+  the tool counts the matches.
+- `hidden-score`: `expect_ui`'s fields (`node`, `shown`, `text`) were not
+  in the tool's schema; the agent guessed them right from the guide. The
+  schema now shows an `expect_ui` step.
+- `broken-shader`: `shader_status` gave the right line, column and source
+  line, but naga's message names IR handles, not types ("the `return`
+  expression Some([10]) does not match the declared return type
+  Some([5])"); the agent fixed it from the source line. Filed as #629.
+- `immortal-enemy`, `slow-crowd`: no friction.
+
+Compared with the scripted solutions, the agent made the same fix in every
+task, mostly with the same values (speed 350 where the script writes 340;
+the same five coin positions, armor 0.25, cell size 24, shader and HUD
+fixes). The agent is the same kind of model that wrote the tasks and had
+read the suite's chapter before it started, so this run shows the tasks can
+be finished with the tools as documented; it is weak evidence of how hard
+they are. Harder tasks are #630.
+
+## 2026-11-26: every web example and Shard Grove in the browser (#528, sections 1, 5 and 6a)
+
+`main` at `b7ca3382` plus the branch that adds the `web-examples` job, the
+same Mac (Apple M4 Max, macOS 27.2.1, Node 26.13.1, wasm-bindgen 0.2.130,
+playwright-core 1.65.1: Chromium 159.0.8154.6, WebKit 27.2). The machine was
+busy throughout (load average 30 to 86 on 14 cores: other agents were
+compiling). "On the GPU" is Chromium's new headless mode: WebGPU on the
+Metal adapter (`apple`, `metal-3`, not a fallback), WebGL2 on ANGLE's Metal
+renderer for the Apple M4 Max. "Software" is the headless shell: WebGL2 on
+ANGLE over SwiftShader. Every run was headless; no window opened.
+
+**What claims the web.** The gallery's list (`web/gallery/examples.json`,
+49 examples after this branch adds 12) and the `web/smoke` fixtures and
+examples (`web_smoke`, `web_smoke_3d`, `coin_dash`, `lights2d`, the editor
+fixtures, `lockstep`, `net_arena`, `web_threads`, `web_spectrum`,
+`web_video`), which the `web-smoke` job runs; its runs of 2026-11-26 are
+recorded below. The
+gallery's README names every other example and why it isn't on the web, and
+`node --test web/gallery` now fails for one that is neither.
+
+| Step (`web-examples` job) | Result | Time |
+|---|---|---|
+| Build: `node web/gallery/build.mjs` (49 examples) and `web/build.sh --features navmesh,physics3d shard_grove` | pass (release wasm: 1.1 GB of sites in `target/web/gallery`, 4.5 GB of build output in `target/wasm32-unknown-unknown`, deleted afterwards) | |
+| Every gallery page, Chromium, WebGL2 on the GPU | **pass**, 49 of 49 (47 run on WebGL2, the 2 compute demos show their WebGPU message) | 85 s |
+| Every gallery page, Chromium, WebGPU on the GPU | **pass**, 49 of 49, all on WebGPU | 90 s |
+| Every gallery page, WebKit (its own choice: WebGPU) | **pass**, 49 of 49 | 97 s |
+| Every gallery page, Chromium, WebGL2 (software) | 48 of 49 in the job's run: `shaders` timed out reading the canvas box (30 s) while its software-GL frames held the page, with a native test build running beside it; it passed alone twice (23 s, 35 s), and the check now allows 60 s, as for its screenshot | 543 s |
+| Shard Grove, keys (`--fixture shard_grove`, `--require-gpu`): Tab, Enter, Escape, Enter, Escape | **pass** on WebGPU and on WebGL2 | 5 s, 6 s |
+| Shard Grove, the whole walk-through (`--fixture shard_grove_walkthrough`, `--require-gpu`) | **pass** on WebGPU (36.7 s, 1,999 ticks, 2,394 frames) and on WebGL2 (36.7 s, 1,999 ticks, 2,393 frames): 6 shards, 1 save, 1 load, 2 pulses, 2 stuns, 1 win, no hit or loss | 46 s, 52 s |
+| Also run: the walk-through in the headless shell (software WebGL2) and in WebKit | **pass**: 36.1 s, 787 frames (about 22 a second on SwiftShader); WebKit 36.4 s on WebGPU | 53 s, 49 s |
+| Regression: the 3D fixture (`web_smoke_3d`, sun shadows) on the GPU | pass on WebGPU and WebGL2 | 12 s, 4 s |
+
+**Found and fixed on the branch:**
+
+- `lights` drew nothing on WebGL2 (a blank canvas on the GPU, and the
+  console full of `GL_INVALID_OPERATION: glDrawElementsInstanced: Mismatch
+  between texture format and sampler type`). With shadows off, the sun's
+  shadow map is a 1x1 texture of one layer; wgpu's GL backend makes a
+  one-layer texture a `TEXTURE_2D`, and the shaders read it through an array
+  sampler, so the browser refused every draw. With shadows on (two or more
+  cascades) the same build drew. Fixed: on GL the map and the 1x1 array
+  stand-ins get a second layer (as texture arrays already did). After the
+  fix `lights` on WebGL2 draws the same picture as on WebGPU, with no GL
+  error. The Metal render tests of shadows and memory (16) pass unchanged.
+- The software-GL gallery run had passed `lights` all the same: its
+  screenshot was 0.12% off the background, just above the blank threshold.
+  The gallery check now fails a page whose browser logged a WebGL error;
+  the unfixed build fails with it, the fixed one passes.
+- Shard Grove's web build only published its state. It now plays its
+  walk-through in the page with `?smoke=walkthrough`, and the runner's
+  `--until` waits for it.
+- 12 examples with a picture weren't in the gallery although its README said
+  every one was: `skeleton2d`, `ai_guards`, `prefabs`, `move_sprite`,
+  `ui_widgets`, `sky_kit`, `stylized_sky`, `reflection_refresh`,
+  `post_volumes`, `split_screen`, `crowd`, `water`. Each built and passed on
+  WebGPU and WebGL2 on the GPU before it was added, and in all four runs
+  above after.
+
 ## 2026-11-26: the ten-minute reference-game soaks (#509)
 
 The `soak` job's command, run once per workload, sequentially, from the

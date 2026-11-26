@@ -293,9 +293,11 @@ impl KeyLabels {
     }
 
     /// The system's current keyboard layout, read without a window: on
-    /// macOS (the current input source, through `UCKeyTranslate`) and
-    /// Windows (the thread's keyboard layout, through `MapVirtualKeyExW`).
-    /// `None` elsewhere and when the system has no layout to give. The
+    /// macOS (the current input source, through `UCKeyTranslate`; with the
+    /// `window` feature, as reading it links Carbon, which a headless
+    /// process would map at start for nothing, 4 MB) and Windows (the
+    /// thread's keyboard layout, through `MapVirtualKeyExW`). `None`
+    /// elsewhere and when the system has no layout to give. The
     /// window reads it into [`Input::key_labels`] when it opens and when it
     /// gets the focus back. (On Linux and the BSDs the window follows the
     /// display server's xkb layout instead, and in a browser it asks the
@@ -321,7 +323,7 @@ impl KeyLabels {
 }
 
 /// The system's layout: the character each of [`LAYOUT_KEYS`] types.
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "window"))]
 mod system {
     use std::ffi::c_void;
 
@@ -437,8 +439,9 @@ mod system {
     }
 }
 
-/// No system query here: labels come from the keys pressed.
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+/// No system query here: labels come from the keys pressed (and no
+/// window on macOS: see [`KeyLabels::system`]).
+#[cfg(not(any(all(target_os = "macos", feature = "window"), target_os = "windows")))]
 mod system {
     pub(super) fn layout() -> Option<[Option<char>; 47]> {
         None
@@ -663,7 +666,7 @@ mod tests {
 
     /// On macOS and Windows the system's layout is read without a window;
     /// whatever layout this machine has, every letter key gets one letter.
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(any(all(target_os = "macos", feature = "window"), target_os = "windows"))]
     #[test]
     fn the_systems_layout_gives_every_letter_key_a_label() {
         let labels = KeyLabels::system().expect("the system has a keyboard layout");

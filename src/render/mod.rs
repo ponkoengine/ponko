@@ -458,6 +458,8 @@ mod effect_shadow_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod far_terrain_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
+mod first_frame_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
 mod frame_bench;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod gi_render_test;

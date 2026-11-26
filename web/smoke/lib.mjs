@@ -36,6 +36,7 @@ export const USAGE =
   "                 [--allow-unsupported | --require-gpu]\n" +
   "                 [--asset <file under assets/>] [--asset-size <W>x<H>|none]\n" +
   "                 [--press <Key>=<field>:<value>]... [--min <field>=<number>]...\n" +
+  "                 [--until <field>:<value>]... [--until-timeout <seconds>]\n" +
   "                 [--click <x>,<y>=<field>:<value> | @retry=<field>:<value>]... [--query <?a=b>] [--persist granted|refused]\n" +
   "                 [--after-reload <field>:<value>]... [--reload [--after-reload <field>:<value>]...]...\n" +
   "                 [--engine-gpu required|optional] [--music required|none]\n" +
@@ -80,9 +81,9 @@ export function parseRetryPlace(text) {
 }
 
 /** `settings_at_start:Loaded`: after the page is reloaded, the state's `settings_at_start` must be "Loaded". */
-export function parseExpect(spec) {
+export function parseExpect(spec, flag = "--after-reload") {
   const match = /^([A-Za-z_]+):(.+)$/.exec(spec);
-  if (!match) throw new UsageError(`--after-reload wants <field>:<value>, not "${spec}"`);
+  if (!match) throw new UsageError(`${flag} wants <field>:<value>, not "${spec}"`);
   return { field: match[1], value: match[2] };
 }
 
@@ -93,7 +94,10 @@ export function parseMin(spec) {
   return { field: match[1], min: Number(match[2]) };
 }
 
-const FIXTURE_KEYS = ["example", "features", "asset", "assetSize", "assetSource", "presses", "clicks", "query", "min", "afterReload", "reloads", "persist", "editMode", "engineGpu", "music"];
+const FIXTURE_KEYS = ["example", "features", "asset", "assetSize", "assetSource", "presses", "clicks", "query", "min", "until", "untilSeconds", "afterReload", "reloads", "persist", "editMode", "engineGpu", "music"];
+
+/** How long `--until` waits by default: a game that plays itself through (Shard Grove's walk-through, about 40 s of play). */
+export const UNTIL_SECONDS = 180;
 
 /** How a `--persist` run's page answers `navigator.storage.persist()`. */
 export const PERSIST_MODES = ["granted", "refused"];
@@ -109,7 +113,7 @@ export function persistStepsOf(fixture, mode, reloads) {
   if (!Array.isArray(steps) || !steps.every(Array.isArray) || steps.length !== reloads + 1) {
     throw new UsageError(`"persist"."${mode}" lists the fields of each page load: the first and each of the ${reloads} reloads`);
   }
-  return steps.map((step) => step.map(parseExpect));
+  return steps.map((step) => step.map((spec) => parseExpect(spec)));
 }
 
 /** An error message when the state misses one of `expects` on page load `load` (0: the first), else null. */
@@ -136,9 +140,19 @@ export function reloadStepsOf(fixture) {
     if (!Array.isArray(fixture.reloads) || !fixture.reloads.every(Array.isArray)) {
       throw new UsageError('"reloads" is a list of steps, each a list of "<field>:<value>"');
     }
-    return fixture.reloads.map((step) => step.map(parseExpect));
+    return fixture.reloads.map((step) => step.map((spec) => parseExpect(spec)));
   }
-  return fixture?.afterReload ? [fixture.afterReload.map(parseExpect)] : [];
+  return fixture?.afterReload ? [fixture.afterReload.map((spec) => parseExpect(spec))] : [];
+}
+
+/** Why the state hasn't reached the `--until` fields yet (the first one it misses), or null when it has. */
+export function checkUntil(state, expects) {
+  for (const { field, value } of expects) {
+    if (String(state?.[field]) !== value) {
+      return `${field} is ${JSON.stringify(state?.[field])}, not ${value}`;
+    }
+  }
+  return null;
 }
 
 /** Why the page loaded by reload step `step` (from 1) doesn't report `expects`, or null when it does. */
@@ -161,6 +175,10 @@ export function parseFixtures(text) {
     if (typeof fixture.example !== "string") throw new UsageError(`fixtures.json: ${name} needs an "example"`);
     if (fixture.presses) fixture.presses.forEach(parsePress);
     if (fixture.clicks) fixture.clicks.forEach(parseClick);
+    if (fixture.until) fixture.until.forEach((spec) => parseExpect(spec, "--until"));
+    if (fixture.untilSeconds !== undefined && !(fixture.untilSeconds > 0)) {
+      throw new UsageError(`fixtures.json: ${name}: "untilSeconds" is a positive number of seconds`);
+    }
     for (const mode of Object.keys(fixture.persist ?? {})) {
       if (!PERSIST_MODES.includes(mode)) throw new UsageError(`fixtures.json: ${name}: "persist" modes are ${PERSIST_MODES.join(", ")}`);
       persistStepsOf(fixture, mode, reloadStepsOf(fixture).length);
@@ -191,6 +209,8 @@ export function parseArgs(argv, fixtures = {}) {
     persist: null,
     firstLoad: [],
     mins: [],
+    until: [],
+    untilSeconds: UNTIL_SECONDS,
     reloads: [],
   };
   const given = {};
@@ -224,6 +244,8 @@ export function parseArgs(argv, fixtures = {}) {
       case "--query": given.query = value(); break;
       case "--persist": args.persist = value(); break;
       case "--min": (given.mins ??= []).push(parseMin(value())); break;
+      case "--until": (given.until ??= []).push(parseExpect(value(), "--until")); break;
+      case "--until-timeout": given.untilSeconds = Number(value()); break;
       // Each --reload adds a reload step; --after-reload adds a field to the
       // last step (making the first one if there is none yet).
       case "--reload": (given.reloads ??= []).push([]); break;
@@ -261,6 +283,9 @@ export function parseArgs(argv, fixtures = {}) {
     args.reloads = args.reloads.map((step, i) => [...step, ...later[i]]);
   }
   args.mins = given.mins ?? Object.entries(fixture?.min ?? {}).map(([field, min]) => ({ field, min }));
+  // A play-through: fields the state must reach, given longer than a key's 10 s.
+  args.until = given.until ?? (fixture?.until ?? []).map((spec) => parseExpect(spec, "--until"));
+  args.untilSeconds = given.untilSeconds ?? fixture?.untilSeconds ?? UNTIL_SECONDS;
   args.engineGpu = given.engineGpu ?? (fixture?.engineGpu ? "required" : "optional");
   args.music = given.music ?? (fixture?.music ? "required" : "none");
   args.dir ??= args.example ? join("target", "web", args.example) : undefined;
@@ -275,6 +300,10 @@ export function parseArgs(argv, fixtures = {}) {
   if (args.requireGpu && (args.browser !== "chromium" || args.case !== "ok")) fail("--require-gpu is for a Chromium run of --case ok");
   if (!(args.timeout > 0)) fail("--timeout must be a positive number of seconds");
   if (!(args.runTimeout > 0)) fail("--run-timeout must be a positive number of seconds");
+  if (!(args.untilSeconds > 0)) fail("--until-timeout must be a positive number of seconds");
+  if (args.until.length && args.untilSeconds >= args.runTimeout) {
+    fail(`--until-timeout (${args.untilSeconds}s) must be shorter than --run-timeout (${args.runTimeout}s), which covers the whole run`);
+  }
   if (args.assetSize !== "none" && !/^\d+x\d+$/.test(args.assetSize)) fail("--asset-size must look like 32x32, or none");
   if (args.assetSource !== "none" && !/^\d+x\d+$/.test(args.assetSource)) fail("--asset-source must look like 4x2, or none");
   if (!/^[\w./-]+$/.test(args.asset)) fail("--asset must be a plain file name under assets/");

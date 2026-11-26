@@ -159,6 +159,9 @@ fn the_mcp_proxy_serves_a_task_and_scores_submissions(root: &Path, instances: &P
         "{result}"
     );
     assert_eq!(result["calls"][0]["tool"], "quit_instance");
+    // Wall time: when each call came, and when the last submission did.
+    assert!(result["calls"][0]["at"].is_number(), "{result}");
+    assert!(result["seconds"].as_f64().is_some_and(|s| s >= 0.0), "{result}");
     session.finish();
 }
 
