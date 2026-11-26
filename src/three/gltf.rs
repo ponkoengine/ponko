@@ -37,6 +37,13 @@ pub(crate) struct Loaded {
     /// index (each slot's joint and inverse bind matrix).
     pub skin: Option<LoadedSkin>,
     pub clips: Vec<super::AnimationClip>,
+    /// Per clip: the material values it animates (`KHR_animation_pointer`),
+    /// by material index, for the caller to resolve to the materials it
+    /// makes ([`AnimationClip::with_property_tracks`](super::AnimationClip::with_property_tracks)).
+    pub clip_materials: Vec<Vec<(usize, super::MaterialProperty, super::AnimationTrack)>>,
+    /// What the file says of each material a clip animates beyond its
+    /// description (by material index).
+    pub material_factors: Vec<(usize, super::animated_material::MaterialFactors)>,
     /// The weights `data.morph_targets` show by default (glTF's mesh
     /// weights), one per target.
     pub morph_defaults: Vec<f32>,
@@ -68,7 +75,7 @@ struct Rig {
 }
 
 impl Rig {
-    fn new(gltf: &gltf::Document, scene: &gltf::Scene, name: &str) -> Result<Self, String> {
+    fn new(gltf: &gltf::Document, json: &serde_json::Value, scene: &gltf::Scene, name: &str) -> Result<Self, String> {
         let mut rig = Self {
             joints: Vec::new(),
             of_node: vec![u16::MAX; gltf.nodes().len()],
@@ -97,7 +104,8 @@ impl Rig {
                         .map_or_else(|| format!("node {}", node.index()), str::to_string),
                     parent,
                 )
-                .with_rest(rest),
+                .with_rest(rest)
+                .with_visible(gltf_ext::visible(json, node.index())),
             );
             let children: Vec<_> = node.children().collect();
             stack.extend(children.into_iter().rev().map(|c| (c, Some(at))));
@@ -181,6 +189,10 @@ pub(crate) struct LoadedMaterial {
     /// The layers' maps, as indices into `Loaded::images`, in the shader's
     /// order (`MapKind`).
     pub layer_maps: [Option<usize>; super::MAP_KINDS],
+    /// `KHR_texture_transform` of the texture its maps follow.
+    pub texture_transform: super::TextureTransform,
+    /// glTF's `alphaCutoff` (0.5 by default).
+    pub alpha_cutoff: f32,
 }
 
 impl LoadedMaterial {
@@ -203,6 +215,8 @@ impl LoadedMaterial {
             unlit: false,
             layers: super::MaterialLayers::NONE,
             layer_maps: [None; super::MAP_KINDS],
+            texture_transform: super::TextureTransform::IDENTITY,
+            alpha_cutoff: 0.5,
         }
     }
 }
@@ -295,6 +309,9 @@ struct Walk {
     defaults: Vec<(String, f32)>,
     lights: Vec<ModelLight>,
     cameras: Vec<ModelCamera>,
+    /// Per node: whether a clip animates its visibility, so it loads
+    /// even while hidden at rest (its skeleton hides it).
+    animated_visibility: Vec<bool>,
     /// Nodes still to visit, by index, with their parents' matrix.
     stack: Vec<(usize, Mat4)>,
     /// The node whose primitives are being added.
@@ -440,11 +457,22 @@ impl Walk {
             .or_else(|| gltf.scenes().next())
             .ok_or_else(|| format!("{name}: has no scene"))?;
         let rig = if gltf.skins().len() > 0 || gltf.animations().len() > 0 {
-            Some(Rig::new(gltf, &scene, name)?)
+            Some(Rig::new(gltf, &prepared.json, &scene, name)?)
         } else {
             None
         };
         let stack = scene.nodes().map(|n| (n.index(), Mat4::IDENTITY)).collect();
+        let mut animated_visibility = vec![false; gltf.nodes().len()];
+        if rig.is_some() {
+            for channel in &prepared.pointers {
+                if let Ok(gltf_ext::PointerTarget::Node(n, gltf_ext::NodeValue::Visible)) =
+                    gltf_ext::pointer_target(&prepared.json, &channel.pointer)
+                    && let Some(slot) = animated_visibility.get_mut(n)
+                {
+                    *slot = true;
+                }
+            }
+        }
         Ok(Self {
             prepared,
             materials,
@@ -459,6 +487,7 @@ impl Walk {
             defaults: Vec::new(),
             lights: Vec::new(),
             cameras: Vec::new(),
+            animated_visibility,
             stack,
             node: None,
         })
@@ -536,17 +565,21 @@ impl Walk {
             .nodes()
             .nth(index)
             .ok_or_else(|| format!("{name}: a node isn't in the file"))?;
-        if !gltf_ext::visible(&self.prepared.json, index) {
-            return Ok(()); // it and everything under it is hidden
+        if !gltf_ext::visible(&self.prepared.json, index) && !self.animated_visibility[index] {
+            return Ok(()); // it and everything under it is hidden for good
         }
         let mut matrix = parent * Mat4::from_cols_array_2d(&node.transform().matrix());
         let children = matrix;
-        self.lights.extend(gltf_ext::light_of(
-            &self.prepared.json,
-            node.index(),
-            matrix,
-            node.name(),
-        ));
+        let joint = self
+            .rig
+            .as_ref()
+            .map(|rig| rig.of_node[index])
+            .filter(|j| *j != u16::MAX)
+            .map(usize::from);
+        self.lights.extend(
+            gltf_ext::light_of(&self.prepared.json, node.index(), matrix, node.name())
+                .map(|light| ModelLight { joint, ..light }),
+        );
         self.cameras.extend(gltf_ext::camera_of(&node, matrix));
         let Some(mesh) = node.mesh() else {
             self.stack.extend(node.children().map(|c| (c.index(), children)));
@@ -624,7 +657,9 @@ impl Walk {
         let gltf_ext::Prepared {
             document: gltf,
             buffers,
-            warnings,
+            json,
+            pointers,
+            mut warnings,
             ..
         } = prepared;
         if by_material.is_empty() {
@@ -679,10 +714,23 @@ impl Walk {
             .iter()
             .map(|t| defaults.iter().find(|(n, _)| *n == t.name).map_or(0.0, |d| d.1))
             .collect();
-        let clips = match &rig {
-            Some(rig) => read_clips(&gltf, &buffers, rig, &data)?,
-            None => Vec::new(),
+        let (clips, clip_materials) = match &rig {
+            Some(rig) => {
+                let pointers = Pointers {
+                    json: &json,
+                    channels: &pointers,
+                };
+                read_clips(&gltf, &buffers, rig, &data, &pointers, (name, &mut warnings))?
+            }
+            None => (Vec::new(), Vec::new()),
         };
+        let mut animated: Vec<usize> = clip_materials.iter().flatten().map(|(m, _, _)| *m).collect();
+        animated.sort_unstable();
+        animated.dedup();
+        let material_factors = animated
+            .into_iter()
+            .map(|m| (m, gltf_ext::material_factors(&json, m)))
+            .collect();
         let skin = rig.map(|rig| LoadedSkin {
             joints: clips
                 .first()
@@ -702,6 +750,8 @@ impl Walk {
             image_sources,
             skin,
             clips,
+            clip_materials,
+            material_factors,
             morph_defaults,
             lights,
             cameras,
@@ -843,6 +893,7 @@ pub(crate) fn load_nodes(
         json,
         preferred_image,
         dequantize,
+        pointers: _,
         mut warnings,
     } = {
         let mut fetch = |file: &str| {
@@ -1153,6 +1204,10 @@ fn read_materials(
             unlit,
             layers,
             layer_maps,
+            texture_transform: mappings
+                .last()
+                .map_or(super::TextureTransform::IDENTITY, |m| m.transform),
+            alpha_cutoff: material.alpha_cutoff().unwrap_or(0.5),
         });
     }
     Ok(FileMaterials {
@@ -1269,20 +1324,112 @@ fn merge_targets(into: &mut Vec<MorphTarget>, before: usize, new: Vec<MorphTarge
     }
 }
 
+/// The file's `KHR_animation_pointer` channels, with its JSON to read them.
+struct Pointers<'a> {
+    json: &'a serde_json::Value,
+    channels: &'a [gltf_ext::PointerChannel],
+}
+
+/// The material values a clip animates: material index, value, keys.
+type ClipMaterials = Vec<(usize, super::MaterialProperty, super::AnimationTrack)>;
+
+/// The file's animations as clips on the rig's skeleton, and the
+/// material values each animates (`KHR_animation_pointer`), to resolve
+/// once the materials are made. A pointer channel the engine doesn't play
+/// is left out with a warning (into `warnings`, naming file `name`).
 fn read_clips(
     document: &gltf::Document,
     buffers: &[Vec<u8>],
     rig: &Rig,
     data: &MeshData,
-) -> Result<Vec<super::AnimationClip>, String> {
-    use super::{AnimationClip, AnimationTrack, Interpolation, JointAnimation, Skeleton};
+    pointers: &Pointers<'_>,
+    (name, warnings): (&str, &mut Vec<String>),
+) -> Result<(Vec<super::AnimationClip>, Vec<ClipMaterials>), String> {
+    use super::{
+        AnimatedProperty, AnimationClip, AnimationTrack, Interpolation, JointAnimation, PropertyAnimation, Skeleton,
+    };
     use gltf::animation::util::ReadOutputs;
     let source = Skeleton::try_new(rig.joints.clone())?;
-    document
+    let mut materials_of = Vec::new();
+    let clips = document
         .animations()
         .map(|animation| {
             let mut tracks: Vec<JointAnimation> = Vec::new();
             let mut morphs = Vec::new();
+            let mut properties: Vec<PropertyAnimation> = Vec::new();
+            let mut materials: ClipMaterials = Vec::new();
+            for channel in pointers.channels.iter().filter(|c| c.animation == animation.index()) {
+                let target = match gltf_ext::pointer_target(pointers.json, &channel.pointer) {
+                    Ok(target) => target,
+                    Err(why) => {
+                        warnings.push(format!(
+                            "{name}: animation {}: doesn't play its KHR_animation_pointer channel {}: {why}",
+                            animation.index(),
+                            channel.pointer
+                        ));
+                        continue;
+                    }
+                };
+                let components = target.components();
+                let read = |index| gltf_ext::accessor_values(pointers.json, buffers, index, components);
+                let (Some(times), Some(values)) = (
+                    gltf_ext::accessor_values(pointers.json, buffers, channel.input, 1),
+                    read(channel.output),
+                ) else {
+                    warnings.push(format!(
+                        "{name}: animation {}: doesn't play its KHR_animation_pointer channel {}: \
+                         its keys aren't {components}-component numbers this loader reads",
+                        animation.index(),
+                        channel.pointer
+                    ));
+                    continue;
+                };
+                let values: Vec<glam::Vec4> = values
+                    .chunks_exact(components)
+                    .map(|v| {
+                        let mut out = glam::Vec4::ZERO;
+                        for (i, c) in v.iter().enumerate() {
+                            out[i] = *c;
+                        }
+                        out
+                    })
+                    .collect();
+                match target {
+                    gltf_ext::PointerTarget::Node(node, value) => {
+                        let joint = rig.of_node.get(node).copied().unwrap_or(u16::MAX);
+                        if joint == u16::MAX {
+                            continue; // not in the scene
+                        }
+                        let joint = usize::from(joint);
+                        if value == gltf_ext::NodeValue::Visible {
+                            // A boolean: anything but 0 shows.
+                            let values = values
+                                .into_iter()
+                                .map(|v| if v.x != 0.0 { glam::Vec4::X } else { glam::Vec4::ZERO })
+                                .collect();
+                            let track = AnimationTrack::try_new(times, values, channel.interpolation)?;
+                            properties.retain(|p| p.target != AnimatedProperty::JointVisible(joint));
+                            properties.push(PropertyAnimation::new(AnimatedProperty::JointVisible(joint), track));
+                            continue;
+                        }
+                        let track = AnimationTrack::try_new(times, values, channel.interpolation)?;
+                        let at = tracks.iter().position(|t| t.joint == joint).unwrap_or_else(|| {
+                            tracks.push(JointAnimation::new(joint, rig.joints[joint].name.clone()));
+                            tracks.len() - 1
+                        });
+                        match value {
+                            gltf_ext::NodeValue::Translation => tracks[at].translation = Some(track),
+                            gltf_ext::NodeValue::Rotation => tracks[at].rotation = Some(track),
+                            _ => tracks[at].scale = Some(track),
+                        }
+                    }
+                    gltf_ext::PointerTarget::Material(material, property) => {
+                        let track = AnimationTrack::try_new(times, values, channel.interpolation)?;
+                        materials.retain(|(m, p, _)| (*m, *p) != (material, property));
+                        materials.push((material, property, track));
+                    }
+                }
+            }
             let extras = animation
                 .extras()
                 .as_ref()
@@ -1370,6 +1517,7 @@ fn read_clips(
                     _ => tracks[at].scale = Some(track),
                 }
             }
+            materials_of.push(materials);
             Ok(AnimationClip::try_new(
                 animation
                     .name()
@@ -1377,9 +1525,11 @@ fn read_clips(
                 &source,
                 tracks,
             )?
-            .try_with_morph_tracks(morphs)?)
+            .try_with_morph_tracks(morphs)?
+            .try_with_property_tracks(properties)?)
         })
-        .collect()
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok((clips, materials_of))
 }
 
 /// A morph target's offsets: none, or one per corner.
@@ -1475,7 +1625,7 @@ fn append(
         normals: floats3(&gltf::Semantic::Normals)?
             .map(|n| n.into_iter().map(|n| n.normalize_or(Vec3::Y)).collect())
             .unwrap_or_default(),
-        uvs: uvs(mapping.set)?.into_iter().map(|uv| mapping.apply(uv)).collect(),
+        uvs: uvs(mapping.set)?,
         indices,
         // glTF's colors are linear; Color is sRGB.
         colors: reader

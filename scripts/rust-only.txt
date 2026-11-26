@@ -89,3 +89,6 @@ Assets::browser_saves_persistent editor.md         # same
 Console::run                     control.md        # direct execution would re-enter native code with an already borrowed context; use overlay or control dispatch
 Color::hex_rgba                  drawing.md        # PonkoColor is four floats; C and C++ games set the channels themselves
 Color::lerp                      drawing.md        # same: mix the four floats yourself
+Material::texture_transform      3d.md             # not bound yet: a file's texture transforms (and their animation) play from C; PonkoMaterialDescEx will carry it
+Material::alpha_cutoff           3d.md             # not bound yet: C cutout materials cut at the file's alphaCutoff, or at 0.5
+AnimationClip::with_property_tracks  3d.md         # not bound yet: clips loaded from files play their visibility and material tracks from C; C can't build or read them

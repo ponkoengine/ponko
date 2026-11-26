@@ -13,7 +13,7 @@
 //! (`KHR_mesh_quantization`), texture transforms, emissive strength,
 //! transmission, lights and cameras.
 
-use glam::{Mat3, Mat4, Vec2, Vec3};
+use glam::{Mat4, Vec2, Vec3};
 use serde_json::Value;
 
 use super::{MAP_KINDS, MaterialLayers, PointLight3D, SpotLight3D, Transform3D};
@@ -55,6 +55,7 @@ fn support(extension: &str) -> Option<Support> {
         | "KHR_materials_anisotropy"
         | "KHR_materials_iridescence"
         | "KHR_node_visibility"
+        | "KHR_animation_pointer"
         | SPECULAR_GLOSSINESS
         | INSTANCING
         | QUANTIZED_POSITIONS => Support::Always,
@@ -106,6 +107,9 @@ pub(super) struct Prepared {
     /// quantization nodes were folded into its parent: a primitive's
     /// positions go through its matrix first. Empty for other meshes.
     pub dequantize: Vec<Vec<Mat4>>,
+    /// The file's `KHR_animation_pointer` channels, taken out of `json`
+    /// (the `gltf` crate refuses them).
+    pub pointers: Vec<PointerChannel>,
     pub warnings: Vec<String>,
 }
 
@@ -287,6 +291,7 @@ impl Start {
                  transforms aren't readable (a sparse accessor, or a type the extension doesn't allow)"
             ));
         }
+        let pointers = pointer_channels(&json);
         drop_channels_without_nodes(&mut json);
 
         // The `gltf` crate checks required extensions against its own list,
@@ -302,6 +307,7 @@ impl Start {
             json,
             preferred_image,
             dequantize,
+            pointers,
             warnings,
         })
     }
@@ -464,10 +470,9 @@ fn accessor_floats(json: &Value, buffers: &[Vec<u8>], index: &Value, components:
 
 /// Takes out the animation channels that animate no node: those of
 /// `KHR_animation_pointer` (a material's color, a texture's offset), whose
-/// target has a pointer instead of a node. The engine doesn't play them
-/// (the extension is optional, so loading it warned already), and the
-/// `gltf` crate refuses a target without a node, which would fail the
-/// whole file. The node channels play as they would without the others.
+/// target has a pointer instead of a node. They are read apart
+/// ([`pointer_channels`]): the `gltf` crate refuses a target without a
+/// node, which would fail the whole file.
 pub(super) fn drop_channels_without_nodes(json: &mut Value) {
     let Some(animations) = json.get_mut("animations").and_then(Value::as_array_mut) else {
         return;
@@ -483,6 +488,249 @@ pub(super) fn drop_channels_without_nodes(json: &mut Value) {
             });
         }
     }
+}
+
+/// One `KHR_animation_pointer` channel: its animation, its pointer, and
+/// its sampler's key times, values and interpolation.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct PointerChannel {
+    pub animation: usize,
+    pub pointer: String,
+    /// Accessor indices.
+    pub input: usize,
+    pub output: usize,
+    pub interpolation: crate::three::Interpolation,
+}
+
+/// The file's `KHR_animation_pointer` channels (a target with a pointer
+/// and no node). A channel whose sampler doesn't exist is left out.
+pub(super) fn pointer_channels(json: &Value) -> Vec<PointerChannel> {
+    use crate::three::Interpolation;
+    let mut out = Vec::new();
+    for (a, animation) in json["animations"].as_array().into_iter().flatten().enumerate() {
+        for channel in animation["channels"].as_array().into_iter().flatten() {
+            let target = &channel["target"];
+            if target["node"].is_u64() {
+                continue;
+            }
+            let Some(pointer) = extension(target, "KHR_animation_pointer").and_then(|p| p["pointer"].as_str()) else {
+                continue;
+            };
+            let sampler = channel["sampler"]
+                .as_u64()
+                .and_then(|i| animation["samplers"].get(usize::try_from(i).ok()?));
+            let Some(sampler) = sampler else {
+                continue;
+            };
+            let index = |key: &str| sampler[key].as_u64().and_then(|i| usize::try_from(i).ok());
+            let (Some(input), Some(output)) = (index("input"), index("output")) else {
+                continue;
+            };
+            out.push(PointerChannel {
+                animation: a,
+                pointer: pointer.to_string(),
+                input,
+                output,
+                interpolation: match sampler["interpolation"].as_str() {
+                    Some("STEP") => Interpolation::Step,
+                    Some("CUBICSPLINE") => Interpolation::CubicSpline,
+                    _ => Interpolation::Linear,
+                },
+            });
+        }
+    }
+    out
+}
+
+/// What a node's pointer channel animates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum NodeValue {
+    Translation,
+    Rotation,
+    Scale,
+    /// `KHR_node_visibility`'s `visible`.
+    Visible,
+}
+
+/// What a `KHR_animation_pointer` pointer animates, as the engine plays it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PointerTarget {
+    /// Node `.0`'s value.
+    Node(usize, NodeValue),
+    /// Material `.0`'s value.
+    Material(usize, crate::three::MaterialProperty),
+}
+
+impl PointerTarget {
+    /// How many components each key has (glTF's accessor type).
+    pub fn components(&self) -> usize {
+        use crate::three::MaterialProperty as P;
+        match self {
+            Self::Node(_, NodeValue::Translation | NodeValue::Scale) => 3,
+            Self::Node(_, NodeValue::Rotation) => 4,
+            Self::Node(_, NodeValue::Visible) => 1,
+            Self::Material(_, P::Color) => 4,
+            Self::Material(_, P::Emissive | P::SheenColor | P::SpecularColor) => 3,
+            Self::Material(_, P::TextureOffset | P::TextureScale) => 2,
+            Self::Material(..) => 1,
+        }
+    }
+}
+
+/// The JSON paths of a material's textures whose transform its maps can
+/// follow, in the order the first present one is picked
+/// ([`material_extensions`]).
+const MAPPED_TEXTURES: [&str; 22] = [
+    "pbrMetallicRoughness/baseColorTexture",
+    "emissiveTexture",
+    "normalTexture",
+    "pbrMetallicRoughness/metallicRoughnessTexture",
+    "occlusionTexture",
+    "extensions/KHR_materials_clearcoat/clearcoatTexture",
+    "extensions/KHR_materials_clearcoat/clearcoatRoughnessTexture",
+    "extensions/KHR_materials_clearcoat/clearcoatNormalTexture",
+    "extensions/KHR_materials_sheen/sheenColorTexture",
+    "extensions/KHR_materials_sheen/sheenRoughnessTexture",
+    "extensions/KHR_materials_specular/specularTexture",
+    "extensions/KHR_materials_specular/specularColorTexture",
+    "extensions/KHR_materials_anisotropy/anisotropyTexture",
+    "extensions/KHR_materials_iridescence/iridescenceTexture",
+    "extensions/KHR_materials_iridescence/iridescenceThicknessTexture",
+    "extensions/KHR_materials_transmission/transmissionTexture",
+    "extensions/KHR_materials_volume/thicknessTexture",
+    "extensions/KHR_materials_diffuse_transmission/diffuseTransmissionColorTexture",
+    "extensions/KHR_materials_diffuse_transmission/diffuseTransmissionTexture",
+    "extensions/KHR_materials_scatter/multiscatterColorTexture",
+    "extensions/KHR_materials_volume_scatter/multiscatterColorTexture",
+    "extensions/KHR_materials_scatter/scatterStrengthTexture",
+];
+
+/// The texture (its path in [`MAPPED_TEXTURES`]) whose mapping material
+/// `material` (its JSON) follows: its first present one.
+fn mapped_texture(material: &Value) -> Option<&'static str> {
+    MAPPED_TEXTURES
+        .iter()
+        .copied()
+        .find(|path| path.split('/').fold(material, |v, key| &v[key]).is_object())
+}
+
+/// What `pointer` (a JSON pointer into the file) animates, or why the
+/// engine doesn't play it. Node indices and material indices are checked
+/// against the file.
+pub(super) fn pointer_target(json: &Value, pointer: &str) -> Result<PointerTarget, &'static str> {
+    use crate::three::MaterialProperty as P;
+    let parts: Vec<&str> = pointer.strip_prefix('/').unwrap_or(pointer).split('/').collect();
+    let index = |kind: &str| -> Result<usize, &'static str> {
+        let i: usize = parts
+            .get(1)
+            .and_then(|i| i.parse().ok())
+            .ok_or("its index isn't a number")?;
+        if json[kind].get(i).is_none() {
+            return Err("it points past the file's list");
+        }
+        Ok(i)
+    };
+    match parts.first().copied() {
+        Some("nodes") => {
+            let node = index("nodes")?;
+            let value = match &parts[2..] {
+                ["translation"] => NodeValue::Translation,
+                ["rotation"] => NodeValue::Rotation,
+                ["scale"] => NodeValue::Scale,
+                ["extensions", "KHR_node_visibility", "visible"] => NodeValue::Visible,
+                ["weights"] => return Err("morph weights animated through a pointer aren't played"),
+                _ => return Err("that value of a node isn't animated"),
+            };
+            Ok(PointerTarget::Node(node, value))
+        }
+        Some("materials") => {
+            let m = index("materials")?;
+            let rest = &parts[2..];
+            let property = match rest {
+                ["pbrMetallicRoughness", "baseColorFactor"] => P::Color,
+                ["pbrMetallicRoughness", "metallicFactor"] => P::Metallic,
+                ["pbrMetallicRoughness", "roughnessFactor"] => P::Roughness,
+                ["emissiveFactor"] => P::Emissive,
+                ["alphaCutoff"] => P::AlphaCutoff,
+                ["normalTexture", "scale"] => P::NormalStrength,
+                ["extensions", "KHR_materials_emissive_strength", "emissiveStrength"] => P::EmissiveStrength,
+                ["extensions", "KHR_materials_clearcoat", "clearcoatFactor"] => P::Clearcoat,
+                ["extensions", "KHR_materials_clearcoat", "clearcoatRoughnessFactor"] => P::ClearcoatRoughness,
+                ["extensions", "KHR_materials_sheen", "sheenColorFactor"] => P::SheenColor,
+                ["extensions", "KHR_materials_sheen", "sheenRoughnessFactor"] => P::SheenRoughness,
+                ["extensions", "KHR_materials_specular", "specularFactor"] => P::Specular,
+                ["extensions", "KHR_materials_specular", "specularColorFactor"] => P::SpecularColor,
+                ["extensions", "KHR_materials_ior", "ior"] => P::Ior,
+                ["extensions", "KHR_materials_anisotropy", "anisotropyStrength"] => P::Anisotropy,
+                ["extensions", "KHR_materials_anisotropy", "anisotropyRotation"] => P::AnisotropyRotation,
+                ["extensions", "KHR_materials_iridescence", "iridescenceFactor"] => P::Iridescence,
+                ["extensions", "KHR_materials_iridescence", "iridescenceIor"] => P::IridescenceIor,
+                ["extensions", "KHR_materials_iridescence", "iridescenceThicknessMinimum"] => P::IridescenceThinnest,
+                ["extensions", "KHR_materials_iridescence", "iridescenceThicknessMaximum"] => P::IridescenceThickest,
+                [texture @ .., "extensions", "KHR_texture_transform", field] => {
+                    let path = texture.join("/");
+                    if !MAPPED_TEXTURES.contains(&path.as_str()) {
+                        return Err("that texture isn't read");
+                    }
+                    if mapped_texture(&json["materials"][m]) != Some(path.as_str()) {
+                        return Err("the material's maps follow its first texture's transform, not this texture's");
+                    }
+                    match *field {
+                        "offset" => P::TextureOffset,
+                        "rotation" => P::TextureRotation,
+                        "scale" => P::TextureScale,
+                        _ => return Err("that value of a texture transform isn't animated"),
+                    }
+                }
+                _ => return Err("that value of a material isn't animated"),
+            };
+            Ok(PointerTarget::Material(m, property))
+        }
+        _ => Err("only nodes and materials are animated"),
+    }
+}
+
+/// The key values of accessor `index`, `components` per key, as floats:
+/// float components as they are, integer ones as numbers (scaled to 0..1
+/// or -1..1 when the accessor is normalized). `None` when it can't be read
+/// here: another type, sparse, or pointing past its buffer.
+pub(super) fn accessor_values(json: &Value, buffers: &[Vec<u8>], index: usize, components: usize) -> Option<Vec<f32>> {
+    let accessor = json["accessors"].get(index)?;
+    let ty = ["", "SCALAR", "VEC2", "VEC3", "VEC4"].get(components)?;
+    if accessor["type"] != *ty || accessor.get("sparse").is_some() {
+        return None;
+    }
+    let field = |value: &Value, key: &str| value[key].as_u64().and_then(|v| usize::try_from(v).ok());
+    let count = field(accessor, "count")?;
+    let normalized = accessor["normalized"].as_bool() == Some(true);
+    let view = &json["bufferViews"][field(accessor, "bufferView")?];
+    let data = buffers.get(field(view, "buffer")?)?;
+    /// A component's size in bytes, how to read one, and what
+    /// normalizing divides by.
+    type Component = (usize, fn(&[u8]) -> f32, f32);
+    let (size, read, scale): Component = match accessor["componentType"].as_u64()? {
+        5126 => (4, |b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]), 1.0),
+        5120 => (1, |b| f32::from(b[0] as i8), 127.0),
+        5121 => (1, |b| f32::from(b[0]), 255.0),
+        5122 => (2, |b| f32::from(i16::from_le_bytes([b[0], b[1]])), 32767.0),
+        5123 => (2, |b| f32::from(u16::from_le_bytes([b[0], b[1]])), 65535.0),
+        _ => return None,
+    };
+    let start = field(view, "byteOffset").unwrap_or(0) + field(accessor, "byteOffset").unwrap_or(0);
+    let stride = field(view, "byteStride").unwrap_or(size * components);
+    let mut out = Vec::with_capacity(count * components);
+    for i in 0..count {
+        for c in 0..components {
+            let at = start + i * stride + c * size;
+            let v = read(data.get(at..at + size)?);
+            out.push(if normalized && size < 4 {
+                (v / scale).max(-1.0)
+            } else {
+                v
+            });
+        }
+    }
+    Some(out)
 }
 
 /// The extension `ponko cook` marks the node a quantized mesh hangs from
@@ -948,41 +1196,36 @@ fn view_bytes<'b>(view: &gltf::buffer::View, buffers: &'b [Vec<u8>]) -> Option<&
 }
 
 /// How a material's textures are laid on its meshes: which texture
-/// coordinate set, moved by `KHR_texture_transform`. The renderer samples
-/// every map of a material with one set of coordinates, so the transform
-/// is applied to the coordinates when the file loads.
+/// coordinate set, and how `KHR_texture_transform` moves it. The renderer
+/// reads every map of a material with one set of coordinates: the set is
+/// picked when the file loads, the transform is the material's
+/// [`TextureTransform`](super::TextureTransform), applied as it draws (so
+/// it can be animated).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct UvMapping {
     pub set: u32,
-    pub transform: Option<Mat3>,
+    pub transform: super::TextureTransform,
 }
 
 impl UvMapping {
     pub const PLAIN: Self = Self {
         set: 0,
-        transform: None,
+        transform: super::TextureTransform::IDENTITY,
     };
-
-    pub fn apply(&self, uv: Vec2) -> Vec2 {
-        self.transform.map_or(uv, |m| m.transform_point2(uv))
-    }
 }
 
 /// The mapping of one texture reference (`textureInfo` JSON).
 fn mapping_of(info: &Value) -> UvMapping {
     let mut set = info["texCoord"].as_u64().unwrap_or(0) as u32;
-    let transform = extension(info, "KHR_texture_transform").map(|t| {
-        let offset = vec2_of(&t["offset"]).unwrap_or(Vec2::ZERO);
-        let rotation = t["rotation"].as_f64().unwrap_or(0.0) as f32;
-        let scale = vec2_of(&t["scale"]).unwrap_or(Vec2::ONE);
+    let transform = extension(info, "KHR_texture_transform").map_or(super::TextureTransform::IDENTITY, |t| {
         if let Some(s) = t["texCoord"].as_u64() {
             set = s as u32;
         }
-        // The extension's matrix: translation * rotation * scale, with
-        // rotation counter-clockwise in UV space ([cos sin; -sin cos] by rows).
-        let (sin, cos) = rotation.sin_cos();
-        let rotate = Mat3::from_cols(Vec3::new(cos, -sin, 0.0), Vec3::new(sin, cos, 0.0), Vec3::Z);
-        Mat3::from_translation(offset) * rotate * Mat3::from_scale(scale)
+        super::TextureTransform {
+            offset: vec2_of(&t["offset"]).unwrap_or(Vec2::ZERO),
+            rotation: t["rotation"].as_f64().unwrap_or(0.0) as f32,
+            scale: vec2_of(&t["scale"]).unwrap_or(Vec2::ONE),
+        }
     });
     UvMapping { set, transform }
 }
@@ -1179,10 +1422,33 @@ pub(super) fn material_extensions(
     }
 }
 
+/// What material `index` says beyond its description that animated values
+/// combine with: its emissive factor (linear) and strength apart, and
+/// what transmission leaves of its alpha.
+pub(super) fn material_factors(json: &Value, index: usize) -> super::animated_material::MaterialFactors {
+    let material = &json["materials"][index];
+    let factor = &material["emissiveFactor"];
+    let channel = |i: usize| factor.get(i).and_then(Value::as_f64).map_or(0.0, |c| c as f32);
+    let transmission = number(
+        extension(material, "KHR_materials_transmission"),
+        "transmissionFactor",
+        0.0,
+    );
+    super::animated_material::MaterialFactors {
+        emissive: [channel(0), channel(1), channel(2)],
+        emissive_strength: number(
+            extension(material, "KHR_materials_emissive_strength"),
+            "emissiveStrength",
+            1.0,
+        ),
+        alpha_scale: 1.0 - transmission.clamp(0.0, 1.0),
+    }
+}
+
 /// Whether node `node` is visible (`KHR_node_visibility`): a node marked
 /// invisible hides itself and everything under it, meshes and lights.
-/// Visibility animated through `KHR_animation_pointer` isn't read (#620); the
-/// file's initial visibility stays.
+/// This is its visibility at rest; clips may animate it
+/// (`KHR_animation_pointer`).
 pub(super) fn visible(json: &Value, node: usize) -> bool {
     extension(&json["nodes"][node], "KHR_node_visibility").and_then(|v| v["visible"].as_bool()) != Some(false)
 }
@@ -1241,6 +1507,7 @@ pub enum ModelLightKind {
 ///     name: "lamp".into(),
 ///     transform: ponko::d3::Transform::at(vec3(0.0, 2.0, 0.0)),
 ///     kind: ModelLightKind::Point(ponko::d3::PointLight::default()),
+///     joint: None,
 /// };
 /// let mut world = World::new();
 /// let house = ponko::d3::Transform::at(vec3(10.0, 0.0, 0.0));
@@ -1256,6 +1523,13 @@ pub struct ModelLight {
     pub transform: Transform3D,
     /// What kind of light it is, with its color, intensity and reach.
     pub kind: ModelLightKind,
+    /// The joint of the file's [`Skeleton`](crate::anim::Skeleton) its node
+    /// is, in a file with skins or animations; `None` otherwise. Attach the
+    /// light's entity there with
+    /// [`AttachToJoint`](crate::anim::AttachToJoint) (at no offset) and it
+    /// follows its node's animation, and goes out while its node is hidden
+    /// (glTF's `KHR_node_visibility`, maybe animated).
+    pub joint: Option<usize>,
 }
 
 impl ModelLight {
@@ -1489,6 +1763,7 @@ pub(super) fn light_of(json: &Value, node: usize, world: Mat4, node_name: Option
         name,
         transform: transform_of(world),
         kind,
+        joint: None,
     })
 }
 
@@ -1861,7 +2136,11 @@ mod tests {
             let (u, v) = (u * 2.0, v * 3.0);
             Vec2::new(c * u + s * v + 0.5, -s * u + c * v + 0.25)
         };
-        let uv = &loaded.data.uvs;
+        // The coordinates load as the file has them; the material moves
+        // them as it draws.
+        assert!(close(loaded.data.uvs[1], Vec2::new(1.0, 0.0)), "{:?}", loaded.data.uvs);
+        let transform = loaded.materials[0].texture_transform;
+        let uv: Vec<Vec2> = loaded.data.uvs.iter().map(|uv| transform.apply(*uv)).collect();
         assert!(
             close(uv[0], expect(0.0, 0.0)) && close(uv[1], expect(1.0, 0.0)) && close(uv[2], expect(0.0, 1.0)),
             "{uv:?}"
@@ -1886,8 +2165,10 @@ mod tests {
             }),
         );
         let loaded = load_str("second.gltf", &text).unwrap();
-        // TEXCOORD_1 is ten times TEXCOORD_0, halved.
-        assert!(close(loaded.data.uvs[1], Vec2::new(5.0, 0.0)), "{:?}", loaded.data.uvs);
+        // TEXCOORD_1 is ten times TEXCOORD_0, halved by the material.
+        assert!(close(loaded.data.uvs[1], Vec2::new(10.0, 0.0)), "{:?}", loaded.data.uvs);
+        let transform = loaded.materials[0].texture_transform;
+        assert!(close(transform.apply(loaded.data.uvs[1]), Vec2::new(5.0, 0.0)));
     }
 
     #[test]
@@ -1907,7 +2188,8 @@ mod tests {
             }),
         );
         let loaded = load_str("mixed.gltf", &text).unwrap();
-        assert!(close(loaded.data.uvs[1], Vec2::new(4.0, 0.0)));
+        let transform = loaded.materials[0].texture_transform;
+        assert!(close(transform.apply(loaded.data.uvs[1]), Vec2::new(4.0, 0.0)));
         assert!(
             loaded
                 .warnings
@@ -2187,11 +2469,12 @@ mod tests {
     }
 
     #[test]
-    fn animation_pointer_channels_are_left_out_and_node_channels_still_load() {
+    fn animation_pointer_channels_load_beside_node_channels() {
         let mut file = File::default();
-        // One key: at time 0, the node at the origin.
+        // One key: at time 0, the node at the origin and the material red.
         let times = file.floats(&[0.0], 1);
         let places = file.floats(&[0.0, 0.0, 0.0], 3);
+        let red = file.floats(&[1.0, 0.0, 0.0, 1.0], 4);
         let text = triangle(
             &mut file,
             None,
@@ -2199,10 +2482,10 @@ mod tests {
                 "extensionsUsed": ["KHR_animation_pointer"],
                 "animations": [{
                     "name": "pulse",
-                    "samplers": [{ "input": times, "output": places }],
+                    "samplers": [{ "input": times, "output": places }, { "input": times, "output": red }],
                     "channels": [
                         { "sampler": 0, "target": { "node": 0, "path": "translation" } },
-                        { "sampler": 0, "target": { "path": "pointer", "extensions": { "KHR_animation_pointer":
+                        { "sampler": 1, "target": { "path": "pointer", "extensions": { "KHR_animation_pointer":
                             { "pointer": "/materials/0/pbrMetallicRoughness/baseColorFactor" } } } }
                     ]
                 }],
@@ -2214,17 +2497,276 @@ mod tests {
         assert_eq!(
             channels["animations"][0]["channels"].as_array().map(Vec::len),
             Some(1),
-            "only the node's channel is kept"
+            "only the node's channel goes to the gltf crate"
         );
-        assert_eq!(channels["animations"][0]["channels"][0]["target"]["node"], 0);
+        assert_eq!(
+            pointer_channels(&value),
+            vec![PointerChannel {
+                animation: 0,
+                pointer: "/materials/0/pbrMetallicRoughness/baseColorFactor".into(),
+                input: times,
+                output: red,
+                interpolation: crate::three::Interpolation::Linear,
+            }]
+        );
         // The whole file loads (the gltf crate refuses a target without a
-        // node), and says it ignores the extension.
+        // node), with both channels and no warning.
         let loaded = load_str("pointer.gltf", &value.to_string()).unwrap();
-        assert!(
-            loaded.warnings.iter().any(|w| w.contains("KHR_animation_pointer")),
-            "{:?}",
-            loaded.warnings
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+        assert_eq!(loaded.clips[0].tracks().len(), 1);
+        let (m, property, track) = &loaded.clip_materials[0][0];
+        assert_eq!((*m, *property), (0, crate::three::MaterialProperty::Color));
+        assert_eq!(track.values(), &[glam::Vec4::new(1.0, 0.0, 0.0, 1.0)]);
+    }
+
+    #[test]
+    fn the_mapped_textures_are_in_the_order_the_loader_picks_from() {
+        // For each texture, a material with it and every texture after it
+        // (each on its own set) maps as that texture does: the list names
+        // every texture the loader takes a mapping from, in its order.
+        // The two scatter drafts are alternatives, never mixed.
+        for (i, first) in MAPPED_TEXTURES.iter().enumerate() {
+            let mut material = json!({});
+            for (j, path) in MAPPED_TEXTURES.iter().enumerate().skip(i) {
+                let scatter = |p: &str| p.contains("KHR_materials_scatter");
+                let volume_scatter = |p: &str| p.contains("KHR_materials_volume_scatter");
+                if j > i && (volume_scatter(path) || (volume_scatter(first) && scatter(path))) {
+                    continue;
+                }
+                let at = path.split('/').fold(&mut material, |v, key| &mut v[key]);
+                *at = json!({ "index": 0, "texCoord": j });
+            }
+            let json = json!({ "materials": [material] });
+            let mut warnings = Vec::new();
+            let mapped = material_extensions(&json, 0, "test.gltf", &mut warnings).mapping;
+            assert_eq!(mapped.set, i as u32, "{first}");
+            assert_eq!(mapped_texture(&json["materials"][0]), Some(*first));
+        }
+    }
+
+    #[test]
+    fn pointers_resolve_to_what_the_engine_plays_or_say_why_not() {
+        use crate::three::MaterialProperty as P;
+        let json = json!({
+            "nodes": [{}, {}],
+            "materials": [
+                { "pbrMetallicRoughness": { "baseColorTexture": { "index": 0 } }, "normalTexture": { "index": 0 } },
+                { "occlusionTexture": { "index": 0 } },
+                {},
+                { "extensions": { "KHR_materials_volume": { "thicknessTexture": { "index": 0 } } } },
+            ],
+        });
+        let ok = |pointer: &str| pointer_target(&json, pointer).unwrap();
+        assert_eq!(
+            ok("/nodes/1/translation"),
+            PointerTarget::Node(1, NodeValue::Translation)
         );
+        assert_eq!(ok("/nodes/0/rotation"), PointerTarget::Node(0, NodeValue::Rotation));
+        assert_eq!(ok("/nodes/0/scale"), PointerTarget::Node(0, NodeValue::Scale));
+        assert_eq!(
+            ok("/nodes/1/extensions/KHR_node_visibility/visible"),
+            PointerTarget::Node(1, NodeValue::Visible)
+        );
+        for (pointer, property) in [
+            ("pbrMetallicRoughness/baseColorFactor", P::Color),
+            ("pbrMetallicRoughness/metallicFactor", P::Metallic),
+            ("pbrMetallicRoughness/roughnessFactor", P::Roughness),
+            ("emissiveFactor", P::Emissive),
+            ("alphaCutoff", P::AlphaCutoff),
+            ("normalTexture/scale", P::NormalStrength),
+            (
+                "extensions/KHR_materials_emissive_strength/emissiveStrength",
+                P::EmissiveStrength,
+            ),
+            ("extensions/KHR_materials_clearcoat/clearcoatFactor", P::Clearcoat),
+            (
+                "extensions/KHR_materials_clearcoat/clearcoatRoughnessFactor",
+                P::ClearcoatRoughness,
+            ),
+            ("extensions/KHR_materials_sheen/sheenColorFactor", P::SheenColor),
+            ("extensions/KHR_materials_sheen/sheenRoughnessFactor", P::SheenRoughness),
+            ("extensions/KHR_materials_specular/specularFactor", P::Specular),
+            (
+                "extensions/KHR_materials_specular/specularColorFactor",
+                P::SpecularColor,
+            ),
+            ("extensions/KHR_materials_ior/ior", P::Ior),
+            ("extensions/KHR_materials_anisotropy/anisotropyStrength", P::Anisotropy),
+            (
+                "extensions/KHR_materials_anisotropy/anisotropyRotation",
+                P::AnisotropyRotation,
+            ),
+            ("extensions/KHR_materials_iridescence/iridescenceFactor", P::Iridescence),
+            ("extensions/KHR_materials_iridescence/iridescenceIor", P::IridescenceIor),
+            (
+                "extensions/KHR_materials_iridescence/iridescenceThicknessMinimum",
+                P::IridescenceThinnest,
+            ),
+            (
+                "extensions/KHR_materials_iridescence/iridescenceThicknessMaximum",
+                P::IridescenceThickest,
+            ),
+            (
+                "pbrMetallicRoughness/baseColorTexture/extensions/KHR_texture_transform/offset",
+                P::TextureOffset,
+            ),
+            (
+                "pbrMetallicRoughness/baseColorTexture/extensions/KHR_texture_transform/rotation",
+                P::TextureRotation,
+            ),
+            (
+                "pbrMetallicRoughness/baseColorTexture/extensions/KHR_texture_transform/scale",
+                P::TextureScale,
+            ),
+        ] {
+            assert_eq!(
+                ok(&format!("/materials/0/{pointer}")),
+                PointerTarget::Material(0, property),
+                "{pointer}"
+            );
+        }
+        // A material whose only texture is its occlusion follows that one.
+        assert_eq!(
+            ok("/materials/1/occlusionTexture/extensions/KHR_texture_transform/scale"),
+            PointerTarget::Material(1, P::TextureScale)
+        );
+        // ...and one whose only texture is a layer's follows that one.
+        assert_eq!(
+            ok(
+                "/materials/3/extensions/KHR_materials_volume/thicknessTexture/extensions/KHR_texture_transform/rotation"
+            ),
+            PointerTarget::Material(3, P::TextureRotation)
+        );
+        assert_eq!(ok("/materials/0/emissiveFactor").components(), 3);
+        assert_eq!(ok("/materials/0/pbrMetallicRoughness/baseColorFactor").components(), 4);
+        // What isn't played, and why.
+        let why = |pointer: &str| pointer_target(&json, pointer).unwrap_err();
+        assert!(why("/materials/0/normalTexture/extensions/KHR_texture_transform/offset").contains("first texture"));
+        assert!(
+            why("/materials/2/extensions/EXT_unknown/unknownTexture/extensions/KHR_texture_transform/offset")
+                .contains("isn't read")
+        );
+        assert!(why("/materials/0/extensions/KHR_materials_transmission/transmissionFactor").contains("material"));
+        assert!(why("/nodes/0/weights").contains("morph"));
+        assert!(why("/nodes/2/translation").contains("past"));
+        assert!(why("/nodes/x/translation").contains("number"));
+        assert!(why("/cameras/0/perspective/yfov").contains("only nodes and materials"));
+    }
+
+    #[test]
+    fn pointer_channels_become_visibility_and_material_tracks() {
+        let mut file = File::default();
+        let times = file.floats(&[0.0, 1.0], 1);
+        // Visibility as glTF has it: unsigned bytes, not normalized.
+        let flags = file.view(&[1, 0], None);
+        let flags = file.accessor(Some(flags), 5121, false, 2, "SCALAR", json!({}));
+        let offsets = file.floats(&[0.0, 0.0, 0.5, 0.25], 2);
+        let strength = file.floats(&[1.0, 4.0], 1);
+        let three = file.floats(&[0.0, 1.0, 2.0], 1);
+        let position = file.floats(&TRIANGLE, 3);
+        let uv = file.floats(&[0.0, 0.0, 1.0, 0.0, 0.0, 1.0], 2);
+        let pointer =
+            |p: &str| json!({ "path": "pointer", "extensions": { "KHR_animation_pointer": { "pointer": p } } });
+        let doc = json!({
+            "extensionsUsed": ["KHR_animation_pointer", "KHR_node_visibility", "KHR_lights_punctual"],
+            "extensions": { "KHR_lights_punctual": { "lights": [{ "type": "point" }] } },
+            "scene": 0,
+            "scenes": [{ "nodes": [0, 1, 2] }],
+            "nodes": [
+                { "mesh": 0, "name": "shown" },
+                // Hidden at rest, shown by the animation: it loads.
+                { "mesh": 0, "name": "blinking", "translation": [5.0, 0.0, 0.0],
+                  "extensions": { "KHR_node_visibility": { "visible": false }, "KHR_lights_punctual": { "light": 0 } } },
+                // Hidden for good: it doesn't.
+                { "mesh": 0, "name": "gone", "translation": [9.0, 0.0, 0.0],
+                  "extensions": { "KHR_node_visibility": { "visible": false } } },
+            ],
+            "meshes": [{ "primitives": [{ "attributes": { "POSITION": position, "TEXCOORD_0": uv }, "material": 0 }] }],
+            "materials": [{
+                "emissiveFactor": [1.0, 0.5, 0.0],
+                "pbrMetallicRoughness": { "baseColorTexture": { "index": 0 } },
+                "extensions": { "KHR_materials_emissive_strength": { "emissiveStrength": 2.0 } },
+            }],
+            "textures": [{ "source": 0 }],
+            "images": [{ "uri": png([255, 255, 255, 255]) }],
+            "animations": [{
+                "name": "blink",
+                "samplers": [
+                    { "input": times, "output": flags, "interpolation": "STEP" },
+                    { "input": times, "output": offsets },
+                    { "input": times, "output": strength },
+                    { "input": times, "output": three },
+                ],
+                "channels": [
+                    { "sampler": 0, "target": pointer("/nodes/1/extensions/KHR_node_visibility/visible") },
+                    { "sampler": 1, "target": pointer("/materials/0/pbrMetallicRoughness/baseColorTexture/extensions/KHR_texture_transform/offset") },
+                    { "sampler": 2, "target": pointer("/materials/0/extensions/KHR_materials_emissive_strength/emissiveStrength") },
+                    // Not played: a camera's field of view; and keys of the wrong size.
+                    { "sampler": 2, "target": pointer("/cameras/0/perspective/yfov") },
+                    { "sampler": 3, "target": pointer("/materials/0/emissiveFactor") },
+                ]
+            }],
+        });
+        let loaded = load_str("blink.gltf", &file.gltf(doc)).unwrap();
+        // Two of the three nodes' triangles: the animated one loads hidden.
+        assert_eq!(loaded.data.positions.len(), 6, "{:?}", loaded.data.positions);
+        let skin = loaded.skin.as_ref().unwrap();
+        let blinking = skin.joints.iter().position(|j| j.name == "blinking").unwrap();
+        assert!(!skin.joints[blinking].visible && skin.joints[0].visible);
+        assert!(!skin.joints.iter().find(|j| j.name == "gone").unwrap().visible);
+        // Its light hangs from its joint.
+        assert_eq!(loaded.lights.len(), 1);
+        assert_eq!(loaded.lights[0].joint, Some(blinking));
+        // The visibility is a property track of the clip, 1 then 0.
+        let clip = &loaded.clips[0];
+        let visible = &clip.property_tracks()[0];
+        assert_eq!(visible.target, crate::three::AnimatedProperty::JointVisible(blinking));
+        assert_eq!(visible.track.values(), &[glam::Vec4::X, glam::Vec4::ZERO]);
+        assert_eq!(visible.track.interpolation(), crate::three::Interpolation::Step);
+        assert_eq!(clip.duration(), 1.0);
+        // The material values wait for the materials to be made.
+        use crate::three::MaterialProperty as P;
+        let animated: Vec<_> = loaded.clip_materials[0].iter().map(|(m, p, _)| (*m, *p)).collect();
+        assert_eq!(animated, vec![(0, P::TextureOffset), (0, P::EmissiveStrength)]);
+        assert_eq!(
+            loaded.clip_materials[0][0].2.values()[1],
+            glam::Vec4::new(0.5, 0.25, 0.0, 0.0)
+        );
+        let (m, factors) = loaded.material_factors[0];
+        assert_eq!(
+            (m, factors.emissive, factors.emissive_strength),
+            (0, [1.0, 0.5, 0.0], 2.0)
+        );
+        // What isn't played says so.
+        for why in ["yfov", "emissiveFactor"] {
+            assert!(
+                loaded
+                    .warnings
+                    .iter()
+                    .any(|w| w.contains("blink.gltf") && w.contains(why)),
+                "{why}: {:?}",
+                loaded.warnings
+            );
+        }
+        assert_eq!(loaded.warnings.len(), 2, "{:?}", loaded.warnings);
+    }
+
+    #[test]
+    fn a_file_without_animations_leaves_hidden_nodes_out() {
+        let mut file = File::default();
+        let position = file.floats(&TRIANGLE, 3);
+        let doc = json!({
+            "scene": 0,
+            "scenes": [{ "nodes": [0, 1] }],
+            "nodes": [
+                { "mesh": 0 },
+                { "mesh": 0, "extensions": { "KHR_node_visibility": { "visible": false } } },
+            ],
+            "meshes": [{ "primitives": [{ "attributes": { "POSITION": position } }] }],
+        });
+        let loaded = load_str("still.gltf", &file.gltf(doc)).unwrap();
+        assert_eq!(loaded.data.positions.len(), 3);
+        assert!(loaded.skin.is_none() && loaded.clips.is_empty());
     }
 
     #[test]
@@ -2521,8 +3063,12 @@ mod tests {
         let sun = loaded.lights.iter().find(|l| l.name == "Sun").unwrap();
         assert!(matches!(sun.kind, ModelLightKind::Sun { intensity, .. } if intensity == 3.0));
         assert!((sun.transform.forward() - Vec3::new(0.0, -0.8660254, -0.5)).length() < 1e-5);
-        // The mapping node's transform is on the coordinates.
-        assert!(close(loaded.data.uvs[1], Vec2::new(2.25, -1.0)) && close(loaded.data.uvs[2], Vec2::new(0.25, 1.0)));
+        // The mapping node's transform is the material's.
+        let t = loaded.materials[0].texture_transform;
+        assert!(
+            close(t.apply(loaded.data.uvs[1]), Vec2::new(2.25, -1.0))
+                && close(t.apply(loaded.data.uvs[2]), Vec2::new(0.25, 1.0))
+        );
         assert!(loaded.materials[0].image.is_some());
     }
 

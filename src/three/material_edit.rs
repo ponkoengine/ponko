@@ -9,12 +9,6 @@ use crate::gfx::Graphics;
 use crate::render::ShaderDiagnostic;
 
 impl Graphics {
-    /// Remembers what `material` was last made or updated with, for the
-    /// editor.
-    pub(crate) fn note_material_desc(&mut self, material: Material, desc: &MaterialDesc) {
-        self.assets3d.material_descs.insert(material.id, *desc);
-    }
-
     /// What live `material` was last made or updated with.
     pub(crate) fn material_desc(&self, material: Material) -> Option<MaterialDesc> {
         if !self.assets3d.materials_live.contains(material.id) {
@@ -86,6 +80,8 @@ impl Graphics {
                     double_sided: m.double_sided,
                     unlit: m.unlit,
                     layers: m.layers.with_maps(m.layer_maps.map(texture)),
+                    texture_transform: m.texture_transform,
+                    alpha_cutoff: m.alpha_cutoff.max(0.0),
                     ..before
                 };
                 // Custom values and shader from the extras; a material

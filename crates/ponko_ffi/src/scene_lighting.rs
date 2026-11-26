@@ -95,6 +95,7 @@ fn model_light_from_c(light: &PonkoModelLight) -> ModelLight {
         name: String::new(),
         transform,
         kind,
+        joint: None,
     }
 }
 

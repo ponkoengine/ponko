@@ -572,6 +572,20 @@ pub fn ponko::ai::lod_period(f32, &[(f32, u32)], u32) -> u32
 pub fn ponko::ai::normalize(f32, f32, f32) -> f32
 pub fn ponko::ai::think(&mut ponko::prelude::Ctx)
 pub mod ponko::anim
+#[non_exhaustive] pub enum ponko::anim::AnimatedProperty
+pub ponko::anim::AnimatedProperty::JointVisible(usize)
+pub ponko::anim::AnimatedProperty::Material(ponko::render::Material, ponko::anim::MaterialProperty)
+impl core::clone::Clone for ponko::anim::AnimatedProperty
+pub fn ponko::anim::AnimatedProperty::clone(&self) -> Self
+impl core::cmp::Eq for ponko::anim::AnimatedProperty
+impl core::cmp::PartialEq for ponko::anim::AnimatedProperty
+pub fn ponko::anim::AnimatedProperty::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::anim::AnimatedProperty
+pub fn ponko::anim::AnimatedProperty::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for ponko::anim::AnimatedProperty
+pub fn ponko::anim::AnimatedProperty::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for ponko::anim::AnimatedProperty
+impl core::marker::StructuralPartialEq for ponko::anim::AnimatedProperty
 #[non_exhaustive] pub enum ponko::anim::AnimationCondition
 pub ponko::anim::AnimationCondition::Bool(ponko::anim::ParamId, bool)
 pub ponko::anim::AnimationCondition::Greater(ponko::anim::ParamId, f32)
@@ -719,6 +733,41 @@ impl core::fmt::Debug for ponko::anim::LayerBlend
 pub fn ponko::anim::LayerBlend::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::anim::LayerBlend
 impl core::marker::StructuralPartialEq for ponko::anim::LayerBlend
+#[non_exhaustive] pub enum ponko::anim::MaterialProperty
+pub ponko::anim::MaterialProperty::AlphaCutoff
+pub ponko::anim::MaterialProperty::Anisotropy
+pub ponko::anim::MaterialProperty::AnisotropyRotation
+pub ponko::anim::MaterialProperty::Clearcoat
+pub ponko::anim::MaterialProperty::ClearcoatRoughness
+pub ponko::anim::MaterialProperty::Color
+pub ponko::anim::MaterialProperty::Emissive
+pub ponko::anim::MaterialProperty::EmissiveStrength
+pub ponko::anim::MaterialProperty::Ior
+pub ponko::anim::MaterialProperty::Iridescence
+pub ponko::anim::MaterialProperty::IridescenceIor
+pub ponko::anim::MaterialProperty::IridescenceThickest
+pub ponko::anim::MaterialProperty::IridescenceThinnest
+pub ponko::anim::MaterialProperty::Metallic
+pub ponko::anim::MaterialProperty::NormalStrength
+pub ponko::anim::MaterialProperty::Roughness
+pub ponko::anim::MaterialProperty::SheenColor
+pub ponko::anim::MaterialProperty::SheenRoughness
+pub ponko::anim::MaterialProperty::Specular
+pub ponko::anim::MaterialProperty::SpecularColor
+pub ponko::anim::MaterialProperty::TextureOffset
+pub ponko::anim::MaterialProperty::TextureRotation
+pub ponko::anim::MaterialProperty::TextureScale
+impl core::clone::Clone for ponko::anim::MaterialProperty
+pub fn ponko::anim::MaterialProperty::clone(&self) -> Self
+impl core::cmp::Eq for ponko::anim::MaterialProperty
+impl core::cmp::PartialEq for ponko::anim::MaterialProperty
+pub fn ponko::anim::MaterialProperty::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::anim::MaterialProperty
+pub fn ponko::anim::MaterialProperty::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for ponko::anim::MaterialProperty
+pub fn ponko::anim::MaterialProperty::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for ponko::anim::MaterialProperty
+impl core::marker::StructuralPartialEq for ponko::anim::MaterialProperty
 #[non_exhaustive] pub enum ponko::anim::Motion
 #[non_exhaustive] pub ponko::anim::Motion::Blend1D
 pub ponko::anim::Motion::Blend1D::children: alloc::vec::Vec<(f32, ponko::anim::MotionChild)>
@@ -760,12 +809,15 @@ pub fn ponko::anim::AnimationClip::duration(&self) -> f32
 pub fn ponko::anim::AnimationClip::morph_tracks(&self) -> &[ponko::anim::MorphAnimation]
 pub fn ponko::anim::AnimationClip::name(&self) -> &str
 pub fn ponko::anim::AnimationClip::new(impl core::convert::Into<alloc::string::String>, &ponko::anim::Skeleton, alloc::vec::Vec<ponko::anim::JointAnimation>) -> Self
+pub fn ponko::anim::AnimationClip::property_tracks(&self) -> &[ponko::anim::PropertyAnimation]
 pub fn ponko::anim::AnimationClip::sample(&self, f32, &mut ponko::anim::Skeleton)
 pub fn ponko::anim::AnimationClip::sample_blended(&self, f32, f32, &mut ponko::anim::Skeleton)
 pub fn ponko::anim::AnimationClip::tracks(&self) -> &[ponko::anim::JointAnimation]
 pub fn ponko::anim::AnimationClip::try_new(impl core::convert::Into<alloc::string::String>, &ponko::anim::Skeleton, alloc::vec::Vec<ponko::anim::JointAnimation>) -> core::result::Result<Self, ponko::error::Error>
 pub fn ponko::anim::AnimationClip::try_with_morph_tracks(self, alloc::vec::Vec<ponko::anim::MorphAnimation>) -> core::result::Result<Self, ponko::error::Error>
+pub fn ponko::anim::AnimationClip::try_with_property_tracks(self, alloc::vec::Vec<ponko::anim::PropertyAnimation>) -> core::result::Result<Self, ponko::error::Error>
 pub fn ponko::anim::AnimationClip::with_morph_tracks(self, alloc::vec::Vec<ponko::anim::MorphAnimation>) -> Self
+pub fn ponko::anim::AnimationClip::with_property_tracks(self, alloc::vec::Vec<ponko::anim::PropertyAnimation>) -> Self
 impl core::clone::Clone for ponko::anim::AnimationClip
 pub fn ponko::anim::AnimationClip::clone(&self) -> Self
 impl core::convert::From<ponko::anim::AnimationClip> for ponko::render::CrowdClip
@@ -924,9 +976,11 @@ impl core::marker::StructuralPartialEq for ponko::anim::HumanoidMap
 pub ponko::anim::Joint::name: alloc::string::String
 pub ponko::anim::Joint::parent: core::option::Option<usize>
 pub ponko::anim::Joint::rest: ponko::d3::Transform
+pub ponko::anim::Joint::visible: bool
 impl ponko::anim::Joint
 pub fn ponko::anim::Joint::new(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<core::option::Option<usize>>) -> Self
 pub fn ponko::anim::Joint::with_rest(self, ponko::d3::Transform) -> Self
+pub fn ponko::anim::Joint::with_visible(self, bool) -> Self
 impl core::clone::Clone for ponko::anim::Joint
 pub fn ponko::anim::Joint::clone(&self) -> Self
 impl core::cmp::PartialEq for ponko::anim::Joint
@@ -1051,6 +1105,15 @@ impl core::hash::Hash for ponko::anim::ParamId
 pub fn ponko::anim::ParamId::hash<__H: core::hash::Hasher>(&self, &mut __H)
 impl core::marker::Copy for ponko::anim::ParamId
 impl core::marker::StructuralPartialEq for ponko::anim::ParamId
+#[non_exhaustive] pub struct ponko::anim::PropertyAnimation
+pub ponko::anim::PropertyAnimation::target: ponko::anim::AnimatedProperty
+pub ponko::anim::PropertyAnimation::track: ponko::anim::AnimationTrack
+impl ponko::anim::PropertyAnimation
+pub fn ponko::anim::PropertyAnimation::new(ponko::anim::AnimatedProperty, ponko::anim::AnimationTrack) -> Self
+impl core::clone::Clone for ponko::anim::PropertyAnimation
+pub fn ponko::anim::PropertyAnimation::clone(&self) -> Self
+impl core::fmt::Debug for ponko::anim::PropertyAnimation
+pub fn ponko::anim::PropertyAnimation::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct ponko::anim::Retargeter
 pub ponko::anim::Retargeter::foot_ik: bool
 pub ponko::anim::Retargeter::sample_rate: f32
@@ -1078,9 +1141,12 @@ pub ponko::anim::Skeleton::pose: alloc::vec::Vec<ponko::d3::Transform>
 impl ponko::anim::Skeleton
 pub fn ponko::anim::Skeleton::find(&self, &str) -> core::option::Option<usize>
 pub fn ponko::anim::Skeleton::joint_matrix(&self, usize) -> glam::f32::sse2::mat4::Mat4
+pub fn ponko::anim::Skeleton::joint_visible(&self, usize) -> bool
 pub fn ponko::anim::Skeleton::joints(&self) -> &[ponko::anim::Joint]
 pub fn ponko::anim::Skeleton::new(alloc::vec::Vec<ponko::anim::Joint>) -> Self
+pub fn ponko::anim::Skeleton::property(&self, ponko::anim::AnimatedProperty) -> core::option::Option<glam::f32::sse2::vec4::Vec4>
 pub fn ponko::anim::Skeleton::reset_pose(&mut self)
+pub fn ponko::anim::Skeleton::set_property(&mut self, ponko::anim::AnimatedProperty, glam::f32::sse2::vec4::Vec4)
 pub fn ponko::anim::Skeleton::try_new(alloc::vec::Vec<ponko::anim::Joint>) -> core::result::Result<Self, ponko::error::Error>
 pub fn ponko::anim::Skeleton::write_morph_weights(&self, &[alloc::string::String], &mut ponko::anim::MorphWeights)
 impl core::clone::Clone for ponko::anim::Skeleton
@@ -11993,6 +12059,7 @@ impl ponko::handle::GfxHandle for ponko::render::Material
 impl ponko::handle::Handle for ponko::render::Material
 pub const ponko::render::Material::NONE: Self
 #[non_exhaustive] pub struct ponko::render::MaterialDesc
+pub ponko::render::MaterialDesc::alpha_cutoff: f32
 pub ponko::render::MaterialDesc::blend: ponko::render::Blend
 pub ponko::render::MaterialDesc::color: ponko::color::Color
 pub ponko::render::MaterialDesc::custom: [glam::f32::sse2::vec4::Vec4; 4]
@@ -12011,9 +12078,11 @@ pub ponko::render::MaterialDesc::roughness: f32
 pub ponko::render::MaterialDesc::shader: core::option::Option<ponko::render::Shader>
 pub ponko::render::MaterialDesc::stencil: core::option::Option<ponko::render::Stencil>
 pub ponko::render::MaterialDesc::texture: core::option::Option<ponko::texture::Texture>
+pub ponko::render::MaterialDesc::texture_transform: ponko::render::TextureTransform
 pub ponko::render::MaterialDesc::unlit: bool
 impl ponko::render::MaterialDesc
 pub fn ponko::render::MaterialDesc::color(ponko::color::Color) -> Self
+pub fn ponko::render::MaterialDesc::with_alpha_cutoff(self, f32) -> Self
 pub fn ponko::render::MaterialDesc::with_blend(self, ponko::render::Blend) -> Self
 pub fn ponko::render::MaterialDesc::with_color(self, ponko::color::Color) -> Self
 pub fn ponko::render::MaterialDesc::with_custom(self, [glam::f32::sse2::vec4::Vec4; 4]) -> Self
@@ -12032,6 +12101,7 @@ pub fn ponko::render::MaterialDesc::with_roughness(self, f32) -> Self
 pub fn ponko::render::MaterialDesc::with_shader(self, impl core::convert::Into<core::option::Option<ponko::render::Shader>>) -> Self
 pub fn ponko::render::MaterialDesc::with_stencil(self, impl core::convert::Into<core::option::Option<ponko::render::Stencil>>) -> Self
 pub fn ponko::render::MaterialDesc::with_texture(self, impl core::convert::Into<core::option::Option<ponko::texture::Texture>>) -> Self
+pub fn ponko::render::MaterialDesc::with_texture_transform(self, ponko::render::TextureTransform) -> Self
 pub fn ponko::render::MaterialDesc::with_unlit(self, bool) -> Self
 impl core::clone::Clone for ponko::render::MaterialDesc
 pub fn ponko::render::MaterialDesc::clone(&self) -> Self
@@ -12190,6 +12260,7 @@ impl core::fmt::Debug for ponko::render::ModelCamera
 pub fn ponko::render::ModelCamera::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for ponko::render::ModelCamera
 pub struct ponko::render::ModelLight
+pub ponko::render::ModelLight::joint: core::option::Option<usize>
 pub ponko::render::ModelLight::kind: ponko::render::ModelLightKind
 pub ponko::render::ModelLight::name: alloc::string::String
 pub ponko::render::ModelLight::transform: ponko::d3::Transform
@@ -12835,6 +12906,27 @@ impl core::fmt::Debug for ponko::render::TargetEffect
 pub fn ponko::render::TargetEffect::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::render::TargetEffect
 impl core::marker::StructuralPartialEq for ponko::render::TargetEffect
+#[non_exhaustive] pub struct ponko::render::TextureTransform
+pub ponko::render::TextureTransform::offset: glam::f32::vec2::Vec2
+pub ponko::render::TextureTransform::rotation: f32
+pub ponko::render::TextureTransform::scale: glam::f32::vec2::Vec2
+impl ponko::render::TextureTransform
+pub const ponko::render::TextureTransform::IDENTITY: Self
+pub fn ponko::render::TextureTransform::apply(&self, glam::f32::vec2::Vec2) -> glam::f32::vec2::Vec2
+pub fn ponko::render::TextureTransform::matrix(&self) -> glam::f32::mat3::Mat3
+pub fn ponko::render::TextureTransform::with_offset(self, glam::f32::vec2::Vec2) -> Self
+pub fn ponko::render::TextureTransform::with_rotation(self, f32) -> Self
+pub fn ponko::render::TextureTransform::with_scale(self, glam::f32::vec2::Vec2) -> Self
+impl core::clone::Clone for ponko::render::TextureTransform
+pub fn ponko::render::TextureTransform::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::render::TextureTransform
+pub fn ponko::render::TextureTransform::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::render::TextureTransform
+pub fn ponko::render::TextureTransform::default() -> Self
+impl core::fmt::Debug for ponko::render::TextureTransform
+pub fn ponko::render::TextureTransform::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::render::TextureTransform
+impl core::marker::StructuralPartialEq for ponko::render::TextureTransform
 #[non_exhaustive] pub struct ponko::render::Transmission
 pub ponko::render::Transmission::attenuation_color: ponko::color::Color
 pub ponko::render::Transmission::attenuation_distance: f32
