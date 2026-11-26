@@ -588,6 +588,9 @@ impl Ctx {
             .assets3d
             .probes
             .settle(!matches!(status, FrameStatus::Occluded | FrameStatus::Skipped));
+        #[cfg(feature = "3d")]
+        self.gfx
+            .settle_icons(!matches!(status, FrameStatus::Occluded | FrameStatus::Skipped));
         self.perf.last_render_stats = self.gfx.renderer.as_ref().map(Renderer::stats).unwrap_or_default();
         self.perf.last_render_detail = self.gfx.renderer.as_ref().map(Renderer::detail);
         if self.gfx.renderer.is_some() && status.drew() {
