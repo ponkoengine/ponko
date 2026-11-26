@@ -129,7 +129,7 @@ mod sky_kit;
 mod sky_shader;
 mod target;
 pub use icon::Icon;
-pub(crate) use icon::{ICON_FRAMES, PendingIcon};
+pub(crate) use icon::PendingIcon;
 mod terrain;
 pub(crate) mod terrain_file;
 pub use far_terrain::FarTerrain;
