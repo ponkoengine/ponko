@@ -565,7 +565,9 @@ pub struct MaterialDesc {
 
 /// How a material's texture coordinates are moved before its maps are
 /// read ([`MaterialDesc::texture_transform`]): scaled first, then turned,
-/// then moved, as glTF's `KHR_texture_transform` has it.
+/// then moved, as glTF's `KHR_texture_transform` has it. New fields may be
+/// added in any release: build one from [`IDENTITY`](Self::IDENTITY) with
+/// the `with_*` methods.
 ///
 /// ```
 /// # use ponko::prelude::*;
@@ -574,6 +576,7 @@ pub struct MaterialDesc {
 /// assert_eq!(scrolled.apply(vec2(0.25, 0.25)), vec2(0.75, 0.25));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct TextureTransform {
     /// Added to the coordinates last.
     pub offset: Vec2,

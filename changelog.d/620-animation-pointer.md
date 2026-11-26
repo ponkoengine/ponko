@@ -45,6 +45,7 @@
   ```
   After:
   ```rust
+  # use ponko::render::{ModelLight, ModelLightKind};
   let lamp = ModelLight {
       name: "lamp".into(),
       transform: ponko::d3::Transform::at(vec3(0.0, 2.0, 0.0)),
