@@ -60,7 +60,7 @@ LOCAL_ATTRS = ("no_run", "should_panic", "ignore", "compile_fail")
 
 def extract(path):
     """Yield (open_line, close_line, attrs, code_lines) per Rust block (1-based lines)."""
-    lines = path.read_text().split("\n")
+    lines = path.read_text(encoding='utf-8').split("\n")
     i = 0
     while i < len(lines):
         m = FENCE.match(lines[i])
@@ -155,7 +155,7 @@ def check_prose(md):
     """Inline code in the prose doesn't use the root glob."""
     problems = []
     in_fence = None
-    for n, line in enumerate(md.read_text().split("\n"), 1):
+    for n, line in enumerate(md.read_text(encoding='utf-8').split("\n"), 1):
         m = FENCE.match(line)
         if m:
             in_fence = None if in_fence else m.group(2)[0]
@@ -184,7 +184,7 @@ def load_api_paths():
     """
     names, prefixes = set(), []
     for listing in sorted(API_DIR.glob("*.txt")):
-        for line in listing.read_text().split("\n"):
+        for line in listing.read_text(encoding='utf-8').split("\n"):
             if not line or line.startswith("impl "):
                 continue
             m = ITEM_PATH.search(line)
@@ -248,7 +248,7 @@ def included_text(md, line):
     target = (md.parent / m.group(1)).resolve()
     if not target.is_file():
         return None
-    lines = target.read_text().split("\n")
+    lines = target.read_text(encoding='utf-8').split("\n")
     spec = [x for x in m.group(2).split(":")[1:]]
     if len(spec) == 1 and not re.fullmatch(r"\d*", spec[0]):
         name, region, on = spec[0], [], False
@@ -326,7 +326,7 @@ def generate(out_src, features):
             checked += 1
             modules.append((chapter_stem(md), md.name))
         if out:
-            (out_src / f"{chapter_stem(md)}.rs").write_text("\n".join(out) + "\n")
+            (out_src / f"{chapter_stem(md)}.rs").write_text("\n".join(out) + "\n", encoding='utf-8', newline='\n')
     if len(ignored) > MAX_IGNORED:
         problems.append(f"{len(ignored)} `ignore` blocks ({', '.join(ignored)}); at most {MAX_IGNORED} are allowed")
     stems = sorted({stem for stem, _ in modules})
@@ -334,7 +334,7 @@ def generate(out_src, features):
     for stem in stems:
         ident = re.sub(r"\W", "_", stem).lower()
         lib.append(f'#[path = "{stem}.rs"] mod c_{ident};')
-    (out_src / "lib.rs").write_text("\n".join(lib) + "\n")
+    (out_src / "lib.rs").write_text("\n".join(lib) + "\n", encoding='utf-8', newline='\n')
     return checked, skipped, ignored, problems
 
 
@@ -389,12 +389,12 @@ serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
 
 [workspace]
-"""
+""", encoding='utf-8', newline='\n'
     )
     # The same dependency versions as the workspace, so the build cache is shared.
     lock = ROOT / "Cargo.lock"
     if lock.exists():
-        (crate / "Cargo.lock").write_text(lock.read_text())
+        (crate / "Cargo.lock").write_text(lock.read_text(encoding='utf-8'), encoding='utf-8', newline='\n')
 
     print(f"guide snippets: {checked} to compile, {skipped} included from real files, {len(ignored)} ignored")
     for p in problems:
@@ -405,7 +405,7 @@ serde_json = "1"
         return 0
 
     cmd = ["cargo", "check", "--manifest-path", str(crate / "Cargo.toml"), "--target-dir", str(target), "--color", "never"]
-    result = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+    result = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, encoding='utf-8')
     if result.returncode == 0:
         sys.stderr.write(result.stderr.splitlines()[-1] + "\n" if result.stderr else "")
         print("all guide snippets compile")

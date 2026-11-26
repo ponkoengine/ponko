@@ -64,45 +64,58 @@ fn crowd_row(frame: f32, slot: u32, row: u32) -> vec4<f32> {
     return crowd_anim[crowd_level.section + (u32(frame) * crowd_level.slots + slot) * 3u + row];
 }
 
+// Word `i` of the records: this frame's (`items`), or the last frame's
+// (`crowd_past`) in the motion pass's second run.
+fn crowd_record(past: bool, i: u32) -> vec4<f32> {
+    if past {
+        return crowd_past[i];
+    }
+    return items[i];
+}
+
+// Nothing here writes to a local array or vector at an index known only
+// at run time: FXC (Direct3D 12's default shader compiler) rejects such a
+// write in a loop it can't unroll ("array reference cannot be used as an
+// l-value"). So the record is six values, the sorting network swaps named
+// scalars, and the weights past `influences` are masked with a `select`.
 fn static_instance(v: VertexIn) -> VertexIn {
     // The motion pass runs this a second time as of the last frame.
     let past = motion_past_time;
     let base = (crowd_entry(v.instance_index) & 0x3fffffu) * 6u;
-    var r: array<vec4<f32>, 6>;
-    if past {
-        for (var k = 0u; k < 6u; k++) {
-            r[k] = crowd_past[base + k];
-        }
-    } else {
-        for (var k = 0u; k < 6u; k++) {
-            r[k] = items[base + k];
-        }
-    }
-    let anim = bitcast<vec4<u32>>(r[5]);
+    let m0 = crowd_record(past, base);
+    let m1 = crowd_record(past, base + 1u);
+    let m2 = crowd_record(past, base + 2u);
+    let m3 = crowd_record(past, base + 3u);
+    let tint = crowd_record(past, base + 4u);
+    let anim = bitcast<vec4<u32>>(crowd_record(past, base + 5u));
     let blend = f32(anim.w & 0xffffu) / 65535.0;
     let speed = f32(bitcast<i32>(anim.w) >> 16u) / 256.0;
     let elapsed = select(crowd_level.elapsed, crowd_level.past_elapsed, past);
     let a = crowd_frames(anim.x & 0xffffu, bitcast<f32>(anim.y) + speed * elapsed);
     let b = crowd_frames(anim.x >> 16u, bitcast<f32>(anim.z) + speed * elapsed);
     // The strongest `influences` joints of the corner, their weights scaled
-    // back to a whole (a sorting network over the four).
-    var j = v.crowd_joints;
-    var w = v.crowd_weights;
-    for (var round = 0u; round < 3u; round++) {
-        for (var k = 0u; k < 3u - round; k++) {
-            if w[k + 1u] > w[k] {
-                let tw = w[k];
-                w[k] = w[k + 1u];
-                w[k + 1u] = tw;
-                let tj = j[k];
-                j[k] = j[k + 1u];
-                j[k + 1u] = tj;
-            }
-        }
-    }
-    for (var k = crowd_level.influences; k < 4u; k++) {
-        w[k] = 0.0;
-    }
+    // back to a whole (a sorting network over the four: a bubble sort,
+    // heaviest first, equal weights keeping their order).
+    var w0 = v.crowd_weights.x;
+    var w1 = v.crowd_weights.y;
+    var w2 = v.crowd_weights.z;
+    var w3 = v.crowd_weights.w;
+    var j0 = v.crowd_joints.x;
+    var j1 = v.crowd_joints.y;
+    var j2 = v.crowd_joints.z;
+    var j3 = v.crowd_joints.w;
+    var tw = 0.0;
+    var tj = 0u;
+    // First round: (0, 1), (1, 2), (2, 3); then (0, 1), (1, 2); then (0, 1).
+    if w1 > w0 { tw = w0; w0 = w1; w1 = tw; tj = j0; j0 = j1; j1 = tj; }
+    if w2 > w1 { tw = w1; w1 = w2; w2 = tw; tj = j1; j1 = j2; j2 = tj; }
+    if w3 > w2 { tw = w2; w2 = w3; w3 = tw; tj = j2; j2 = j3; j3 = tj; }
+    if w1 > w0 { tw = w0; w0 = w1; w1 = tw; tj = j0; j0 = j1; j1 = tj; }
+    if w2 > w1 { tw = w1; w1 = w2; w2 = tw; tj = j1; j1 = j2; j2 = tj; }
+    if w1 > w0 { tw = w0; w0 = w1; w1 = tw; tj = j0; j0 = j1; j1 = tj; }
+    let kept = vec4<u32>(0u, 1u, 2u, 3u) < vec4<u32>(crowd_level.influences);
+    let w = select(vec4<f32>(0.0), vec4<f32>(w0, w1, w2, w3), kept);
+    let j = vec4<u32>(j0, j1, j2, j3);
     let total = w.x + w.y + w.z + w.w;
     var r0 = vec4<f32>(1.0, 0.0, 0.0, 0.0);
     var r1 = vec4<f32>(0.0, 1.0, 0.0, 0.0);
@@ -119,7 +132,7 @@ fn static_instance(v: VertexIn) -> VertexIn {
             }
             let slot = min(j[k], last);
             // Clip a between its frames, clip b between its, then blended.
-            var parts = array<vec2<f32>, 4>(
+            let parts = array<vec2<f32>, 4>(
                 vec2<f32>(a.x, weight * (1.0 - blend) * (1.0 - a.z)),
                 vec2<f32>(a.y, weight * (1.0 - blend) * a.z),
                 vec2<f32>(b.x, weight * blend * (1.0 - b.z)),
@@ -140,10 +153,10 @@ fn static_instance(v: VertexIn) -> VertexIn {
     out.position = vec3<f32>(dot(r0, p), dot(r1, p), dot(r2, p));
     let n = vec3<f32>(dot(r0.xyz, v.normal), dot(r1.xyz, v.normal), dot(r2.xyz, v.normal));
     out.normal = select(vec3<f32>(0.0, 1.0, 0.0), normalize(n), dot(n, n) > 1e-20);
-    out.m0 = r[0];
-    out.m1 = r[1];
-    out.m2 = r[2];
-    out.m3 = r[3];
-    out.color = r[4];
+    out.m0 = m0;
+    out.m1 = m1;
+    out.m2 = m2;
+    out.m3 = m3;
+    out.color = tint;
     return out;
 }
