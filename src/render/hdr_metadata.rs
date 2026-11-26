@@ -222,6 +222,9 @@ mod tests {
         use objc2_quartz_core::CAMetalLayer;
         let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         descriptor.backends = wgpu::Backends::METAL;
+        // A test takes one of the places GPU tests share (render_test_support).
+        #[cfg(all(test, feature = "window", feature = "3d"))]
+        crate::render::render_test_support::take_gpu_place();
         let instance = wgpu::Instance::new(descriptor);
         let layer = CAMetalLayer::new();
         // SAFETY: the layer outlives the surface (dropped at the end).
@@ -278,6 +281,9 @@ mod tests {
             .expect("a hidden window");
         let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         descriptor.backends = wgpu::Backends::DX12;
+        // A test takes one of the places GPU tests share (render_test_support).
+        #[cfg(all(test, feature = "window", feature = "3d"))]
+        crate::render::render_test_support::take_gpu_place();
         let instance = wgpu::Instance::new(descriptor);
         let surface = instance.create_surface(&window).expect("a DX12 surface");
         let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {

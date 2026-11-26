@@ -5053,7 +5053,12 @@ pub fn ponko_ffi::PonkoTargetCamera::fmt(&self, &mut core::fmt::Formatter<'_>) -
 impl core::marker::Copy for ponko_ffi::PonkoTargetCamera
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoTargetCamera
 #[repr(C)] pub struct ponko_ffi::PonkoTargetCameraEx
+pub ponko_ffi::PonkoTargetCameraEx::clear: ponko_ffi::PonkoColor
+pub ponko_ffi::PonkoTargetCameraEx::cull_box_max: ponko_ffi::PonkoVec3
+pub ponko_ffi::PonkoTargetCameraEx::cull_box_min: ponko_ffi::PonkoVec3
 pub ponko_ffi::PonkoTargetCameraEx::debug_draw: u32
+pub ponko_ffi::PonkoTargetCameraEx::has_clear: bool
+pub ponko_ffi::PonkoTargetCameraEx::has_cull_box: bool
 pub ponko_ffi::PonkoTargetCameraEx::particles: bool
 pub ponko_ffi::PonkoTargetCameraEx::struct_size: u32
 pub ponko_ffi::PonkoTargetCameraEx::target_camera: ponko_ffi::PonkoTargetCamera
@@ -6777,6 +6782,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_create_material_ex(*mut ponko_ffi::PonkoCtx, *const ponko_ffi::PonkoMaterialDescEx, *mut ponko_ffi::PonkoMaterial) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_create_material_with_stencil(*mut ponko_ffi::PonkoCtx, *const ponko_ffi::PonkoMaterialDesc, *const ponko_ffi::PonkoStencil, *mut ponko_ffi::PonkoMaterial) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_create_mesh(*mut ponko_ffi::PonkoCtx, *const ponko_ffi::PonkoMeshData, ponko_ffi::PonkoMaterial, *mut ponko_ffi::PonkoMesh) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_create_mipmapped_render_target(*mut ponko_ffi::PonkoCtx, u32, u32, *mut ponko_ffi::PonkoTexture) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_create_plain_mesh(*mut ponko_ffi::PonkoCtx, *const ponko_ffi::PonkoMeshData, *mut ponko_ffi::PonkoMesh) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_create_render_target(*mut ponko_ffi::PonkoCtx, u32, u32, *mut ponko_ffi::PonkoTexture) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_create_retargeter(*mut ponko_ffi::PonkoCtx, u64, *const ponko_ffi::PonkoHumanoidMap, u64, *const ponko_ffi::PonkoHumanoidMap, *mut *mut ponko_ffi::PonkoRetargeter) -> ponko_ffi::PonkoStatus
@@ -7266,6 +7272,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_state(*mut ponko_ffi::PonkoCtx, u32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_streamed_lod(*mut ponko_ffi::PonkoCtx, u64, *const *const core::ffi::primitives::c_char, usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_system_font_fallback(*mut ponko_ffi::PonkoCtx, bool, *mut bool) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_target_camera_effects(*mut ponko_ffi::PonkoCtx, usize, *const ponko_ffi::PonkoScreenEffect, usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_target_cameras(*mut ponko_ffi::PonkoCtx, *const ponko_ffi::PonkoTargetCamera, usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_target_cameras_ex(*mut ponko_ffi::PonkoCtx, *const *const ponko_ffi::PonkoTargetCameraEx, usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_target_effects(*mut ponko_ffi::PonkoCtx, *const ponko_ffi::PonkoTargetEffect, usize) -> ponko_ffi::PonkoStatus
@@ -7403,6 +7410,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_take_asset_group_bytes(*mut ponko_ffi::PonkoCtx, u32, *const core::ffi::primitives::c_char, ponko_ffi::PonkoAssetDecodeFn, *mut core::ffi::c_void) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_take_asset_group_decoded(*mut ponko_ffi::PonkoCtx, u32, *const core::ffi::primitives::c_char, *mut *mut core::ffi::c_void) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_take_asset_group_sliced(*mut ponko_ffi::PonkoCtx, u32, *const core::ffi::primitives::c_char, *mut *mut core::ffi::c_void) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_target_camera_effects(*mut ponko_ffi::PonkoCtx, usize, *mut ponko_ffi::PonkoScreenEffect, usize, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_target_camera_ex(*mut ponko_ffi::PonkoCtx, usize, *mut ponko_ffi::PonkoTargetCameraEx) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_target_cameras(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoTargetCamera, usize, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_target_effects(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoTargetEffect, usize, *mut usize) -> ponko_ffi::PonkoStatus

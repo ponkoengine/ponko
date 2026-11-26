@@ -1919,12 +1919,6 @@
     "reason": "The window surface recovery path already owns a valid window and GPU instance. Failure to recreate its lost surface remains a fatal renderer error.",
     "site": "src/render/gpu.rs:1901"
   },
-  "src/render/gpu.rs:5d10f1e3685d1eef": {
-    "classification": "invariant",
-    "construction": ".expect(\"a live panel target\")",
-    "reason": "Internal invariant: panels whose target texture is freed are filtered out when the frame is collected.",
-    "site": "src/render/gpu.rs:2072"
-  },
   "src/render/gpu.rs:67b05819054d3a49": {
     "classification": "invariant",
     "construction": ".expect(\"just made\")",
@@ -1946,7 +1940,7 @@
   "src/render/gpu.rs:c16d6516135a0bb4": {
     "classification": "invariant",
     "construction": "debug_assert_eq!(rgba.len(), (size[0] * size[1] * 4) as usize)",
-    "reason": "Internal invariant: /// Replaces a `width` × `height` block of texture `id` at `(x, y)`.     pub fn update_texture_region(&mut self, id: u32, at: [u32; 2], size: [u32; 2], rgba: &[u8]) {         debug_assert_eq!(rgba.len(), (size[0] * size[1] * 4) as usize);",
+    "reason": "Internal invariant: /// Replaces a `width` \u00d7 `height` block of texture `id` at `(x, y)`.     pub fn update_texture_region(&mut self, id: u32, at: [u32; 2], size: [u32; 2], rgba: &[u8]) {         debug_assert_eq!(rgba.len(), (size[0] * size[1] * 4) as usize);",
     "site": "src/render/gpu.rs:1620"
   },
   "src/render/gpu.rs:d1896731d4ec1f49": {
@@ -1960,6 +1954,12 @@
     "construction": ".expect(\"just made\")",
     "reason": "Internal invariant: renderer             });         }         self.three.as_mut().expect(\"just made\")",
     "site": "src/render/gpu.rs:826"
+  },
+  "src/render/gpu.rs:dad7a464af84ec91": {
+    "classification": "invariant",
+    "construction": ".expect(\"a live panel target\")",
+    "reason": "Internal invariant: panels whose target texture is freed are filtered out when the frame is collected.",
+    "site": "src/render/gpu.rs:2891"
   },
   "src/render/gpu.rs:ee7d86c88907e389": {
     "classification": "invariant",
@@ -3509,10 +3509,16 @@
     "reason": "Preserves setup/runtime policy; displays the checked operation error (try_create_render_target's message); only the return type became RenderTarget.",
     "site": "src/three/target.rs:270"
   },
+  "src/three/target.rs:8e044ce19ce3e40f": {
+    "classification": "forwarded-error",
+    "construction": "panic!(\"{e}\")",
+    "reason": "create_mipmapped_render_target displays try_create_mipmapped_render_target's error (zero or too large a size); the try_ form returns it.",
+    "site": "src/three/target.rs:444"
+  },
   "src/three/terrain.rs:37902fbeda39796f": {
     "classification": "caller-contract",
     "construction": "assert!( size > 0.0 && size.is_finite(), \"ponko: create_terrain_tile: size must be above 0 (got {size})\" )",
-    "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. /// If `heights` isn't a square grid of at least 2 × 2 or `size` isn't above 0.     #[must_use]     pub fn new(heights: &[f32], size: f32) -> Self {         assert!(",
+    "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. /// If `heights` isn't a square grid of at least 2 \u00d7 2 or `size` isn't above 0.     #[must_use]     pub fn new(heights: &[f32], size: f32) -> Self {         assert!(",
     "site": "src/three/terrain.rs:456"
   },
   "src/three/terrain.rs:38fbb25474135ec8": {

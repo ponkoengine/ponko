@@ -175,7 +175,7 @@ const SH_PARTS: u32 = 6u * SH_BANDS;
     let v = vec3<f32>(sqrt(1.0 - nv * nv), 0.0, nv); var result = vec2<f32>(0.0);
     for (var i = 0u; i < 64u; i++) {
         let h = ggx(sequence(i), r); let l = reflect(-v, h);
-        let nl = max(l.z, 0.0); let nh = max(h.z, 0.001); let vh = max(dot(v, h), 0.0);
+        let nl = max(l.z, 0.0); let nh = max(h.z, 0.001); let vh = clamp(dot(v, h), 0.0, 1.0);
         if nl > 0.0 {
             let k = r * r * 0.5;
             let g = nv / (nv * (1.0 - k) + k) * nl / (nl * (1.0 - k) + k);

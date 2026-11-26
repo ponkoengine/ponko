@@ -505,6 +505,8 @@ mod render_target_frame_render_test;
 mod reverse_z_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod stereo_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod target_camera_render_test;
 #[cfg(all(test, feature = "window", feature = "3d", feature = "video"))]
 mod video_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
@@ -532,6 +534,8 @@ mod instance_cells_bench;
 mod instance_cells_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod known_content_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod normal_map_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod prompt_row_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
