@@ -488,7 +488,12 @@ mod tests {
         let names: Vec<&str> = icons.iter().map(|(n, _)| *n).collect();
         assert_eq!(
             names,
-            ["AppIcon60x60@2x.png", "AppIcon60x60@3x.png", "AppIcon76x76@2x~ipad.png", "AppIcon83.5x83.5@2x~ipad.png"]
+            [
+                "AppIcon60x60@2x.png",
+                "AppIcon60x60@3x.png",
+                "AppIcon76x76@2x~ipad.png",
+                "AppIcon83.5x83.5@2x~ipad.png"
+            ]
         );
         for ((_, bytes), size) in icons.iter().zip([120, 180, 152, 167]) {
             let icon = image::load_from_memory(bytes).unwrap();

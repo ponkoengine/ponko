@@ -256,7 +256,9 @@ impl Orientation {
             "any" => Ok(Orientation::Any),
             "landscape" => Ok(Orientation::Landscape),
             "portrait" => Ok(Orientation::Portrait),
-            other => Err(format!("unknown orientation `{other}` (use any, landscape or portrait)")),
+            other => Err(format!(
+                "unknown orientation `{other}` (use any, landscape or portrait)"
+            )),
         }
     }
 
@@ -271,7 +273,10 @@ impl Orientation {
             }
         }
         if self != Orientation::Portrait {
-            out.extend(["UIInterfaceOrientationLandscapeLeft", "UIInterfaceOrientationLandscapeRight"]);
+            out.extend([
+                "UIInterfaceOrientationLandscapeLeft",
+                "UIInterfaceOrientationLandscapeRight",
+            ]);
         }
         out
     }
@@ -317,7 +322,16 @@ impl Default for PackMeta {
     }
 }
 
-const KEYS: &[&str] = &["name", "id", "icon", "assets", "files", "pack", "orientation", "examples"];
+const KEYS: &[&str] = &[
+    "name",
+    "id",
+    "icon",
+    "assets",
+    "files",
+    "pack",
+    "orientation",
+    "examples",
+];
 
 impl Metadata {
     /// Reads the package's `metadata` value (from `cargo metadata`): the
@@ -991,9 +1005,10 @@ pub fn ios_info_plist(game: &Game, platform: &Platform, icon: bool) -> String {
                     "UISceneConfigurations",
                     Plist::Dict(vec![(
                         "UIWindowSceneSessionRoleApplication",
-                        Plist::Array(vec![Plist::Dict(vec![
-                            ("UISceneConfigurationName", Plist::text("Default")),
-                        ])]),
+                        Plist::Array(vec![Plist::Dict(vec![(
+                            "UISceneConfigurationName",
+                            Plist::text("Default"),
+                        )])]),
                     )]),
                 ),
             ]),
@@ -1003,8 +1018,14 @@ pub fn ios_info_plist(game: &Game, platform: &Platform, icon: bool) -> String {
         ("UIRequiredDeviceCapabilities", strings(vec!["arm64", "metal"])),
         ("UIRequiresFullScreen", Plist::Bool(true)),
         ("UIStatusBarHidden", Plist::Bool(true)),
-        ("UISupportedInterfaceOrientations", strings(game.orientation.ios_values(false))),
-        ("UISupportedInterfaceOrientations~ipad", strings(game.orientation.ios_values(true))),
+        (
+            "UISupportedInterfaceOrientations",
+            strings(game.orientation.ios_values(false)),
+        ),
+        (
+            "UISupportedInterfaceOrientations~ipad",
+            strings(game.orientation.ios_values(true)),
+        ),
     ];
     if icon {
         let names = |sizes: &[&str]| strings(sizes.iter().map(|s| *s).collect());
@@ -1199,7 +1220,11 @@ mod tests {
             let p = platform(triple);
             assert_eq!((p.os, p.label().as_str()), (os, label), "{triple}");
         }
-        for unsupported in ["aarch64-linux-android", "thumbv7em-none-eabihf", "aarch64-apple-ios-macabi"] {
+        for unsupported in [
+            "aarch64-linux-android",
+            "thumbv7em-none-eabihf",
+            "aarch64-apple-ios-macabi",
+        ] {
             assert!(Platform::from_triple(unsupported).is_err(), "{unsupported}");
         }
     }
@@ -1791,10 +1816,17 @@ mod tests {
         assert_eq!(Format::parse_list("ipa").unwrap(), [Format::Ipa]);
         let device = platform("aarch64-apple-ios");
         let simulator = platform("aarch64-apple-ios-sim");
-        assert_eq!(check_formats(&device, &[Format::Ipa]).unwrap(), (true, vec![Format::Ipa]));
+        assert_eq!(
+            check_formats(&device, &[Format::Ipa]).unwrap(),
+            (true, vec![Format::Ipa])
+        );
         // `folder` keeps the folder: an iOS app is still a bundle in it.
         assert_eq!(check_formats(&simulator, &[Format::Folder]).unwrap(), (true, vec![]));
-        assert!(check_formats(&simulator, &[Format::Ipa]).unwrap_err().contains("simulator"));
+        assert!(
+            check_formats(&simulator, &[Format::Ipa])
+                .unwrap_err()
+                .contains("simulator")
+        );
         assert!(check_formats(&platform("aarch64-apple-darwin"), &[Format::Ipa]).is_err());
         assert!(check_formats(&device, &[Format::TarGz]).is_err());
         assert!(check_formats(&device, &[Format::Dmg]).is_err());
@@ -1862,7 +1894,10 @@ mod tests {
         let device = ios_info_plist(&game(), &platform("aarch64-apple-ios"), true);
         assert!(device.contains("<string>iPhoneOS</string>"));
         assert!(device.contains("<string>iphoneos</string>"));
-        assert!(device.contains("<string>UIInterfaceOrientationPortraitUpsideDown</string>"), "iPads, any way up");
+        assert!(
+            device.contains("<string>UIInterfaceOrientationPortraitUpsideDown</string>"),
+            "iPads, any way up"
+        );
         assert!(device.contains("<key>CFBundleIcons~ipad</key>"));
         assert!(device.contains("<string>AppIcon83.5x83.5</string>"));
     }
@@ -1870,9 +1905,16 @@ mod tests {
     #[test]
     fn the_orientation_key_is_read_and_checked() {
         let meta = |v: serde_json::Value| Metadata::from_cargo(&json!({ "ponko": v }), None);
-        assert_eq!(meta(json!({"orientation": "portrait"})).unwrap().orientation, Some(Orientation::Portrait));
+        assert_eq!(
+            meta(json!({"orientation": "portrait"})).unwrap().orientation,
+            Some(Orientation::Portrait)
+        );
         assert_eq!(meta(json!({})).unwrap().orientation, None);
-        assert!(meta(json!({"orientation": "sideways"})).unwrap_err().contains("orientation"));
+        assert!(
+            meta(json!({"orientation": "sideways"}))
+                .unwrap_err()
+                .contains("orientation")
+        );
     }
 
     #[test]

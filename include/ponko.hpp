@@ -6879,6 +6879,16 @@ enum class window_event_kind : std::uint32_t {
     close_requested = PONKO_WINDOW_EVENT_CLOSE_REQUESTED,            ///< The OS asked to close the window.
     file_dropped = PONKO_WINDOW_EVENT_FILE_DROPPED,                  ///< A file was dropped (`path`).
     scale_factor_changed = PONKO_WINDOW_EVENT_SCALE_FACTOR_CHANGED,  ///< The DPI scale changed (`scale_factor`).
+    suspended = PONKO_WINDOW_EVENT_SUSPENDED,                        ///< The app lost the screen (a phone's background): save now.
+    resumed = PONKO_WINDOW_EVENT_RESUMED,                            ///< The app is in front again after a suspend.
+    low_memory = PONKO_WINDOW_EVENT_LOW_MEMORY,                      ///< The system is short of memory: free what can be reloaded.
+};
+/// How the game's sound shares the device with other apps and a phone's silent switch (Rust
+/// `AudioSessionCategory`): iOS's audio session categories; kept and without effect elsewhere.
+enum class audio_session_category : std::uint32_t {
+    solo_ambient = PONKO_AUDIO_SESSION_SOLO_AMBIENT,  ///< The default: stops other apps' audio; the silent switch mutes the game.
+    ambient = PONKO_AUDIO_SESSION_AMBIENT,            ///< Mixes with other apps' audio; the silent switch mutes the game.
+    playback = PONKO_AUDIO_SESSION_PLAYBACK,          ///< Heard with the silent switch on; stops other apps' audio.
 };
 /// One window event of this frame (Rust `WindowEvent`).
 struct window_event {
@@ -7235,6 +7245,19 @@ public:
     /// Feeds the safe area insets a phone would report (Rust `window.feed_safe_insets()`), as a test does; a
     /// negative or not finite inset counts as 0. The UI lays out with them from the next frame.
     void window_feed_safe_insets(safe_insets insets) { detail::check(ponko_ctx_window_feed_safe_insets(raw_, insets)); }
+    /// Whether the app is suspended (Rust `window.suspended()`): between window_event_kind::suspended and
+    /// resumed; always false on desktops and the web.
+    bool window_suspended() const { bool v = false; detail::check(ponko_ctx_window_suspended(raw_, &v)); return v; }
+    /// Feeds a phone's lifecycle event (suspended, resumed or low_memory) as the platform reports it, as a
+    /// test does; a repeated suspend or resume changes nothing and sends nothing.
+    void window_feed_lifecycle(window_event_kind kind) {
+        detail::check(ponko_ctx_window_feed_lifecycle(raw_, static_cast<std::uint32_t>(kind)));
+    }
+    /// How far up from the window's bottom edge the on-screen keyboard covers it, in logical pixels (Rust
+    /// `window.keyboard_inset()`); 0 while it is hidden or floating, and on desktops.
+    float window_keyboard_inset() const { float v = 0; detail::check(ponko_ctx_window_keyboard_inset(raw_, &v)); return v; }
+    /// Feeds the keyboard's inset (Rust `window.feed_keyboard_inset()`), as a test does; negative or not finite is 0.
+    void window_feed_keyboard_inset(float inset) { detail::check(ponko_ctx_window_feed_keyboard_inset(raw_, inset)); }
     /// Copies UTF-8 text to the clipboard.
     void clipboard_write(const char* value) { detail::check(ponko_ctx_clipboard_write(raw_, value)); }
     /// The clipboard's text; unset headless, with no text, or while a browser read is pending.
@@ -10343,6 +10366,18 @@ public:
     /// The volume layer `layer` of the playing song is set to.
     float music_layer_volume(std::size_t layer) {
         float v = 0; detail::check(ponko_ctx_music_layer_volume(raw_, layer, &v)); return v;
+    }
+
+    // The audio session (iOS).
+    /// Sets the audio session's category from now on (Rust `audio.set_session_category()`); throws if the
+    /// system refuses it, and the old one stays.
+    void set_audio_session_category(ponko::audio_session_category category) {
+        detail::check(ponko_ctx_audio_set_session_category(raw_, static_cast<std::uint32_t>(category)));
+    }
+    /// The audio session's category (Rust `audio.session_category()`).
+    ponko::audio_session_category audio_session_category() const {
+        std::uint32_t v = 0; detail::check(ponko_ctx_audio_session_category(raw_, &v));
+        return static_cast<ponko::audio_session_category>(v);
     }
 
     // Output devices and the offline mix.

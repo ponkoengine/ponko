@@ -2,6 +2,7 @@
 # The iOS simulator check (book/src/ios.md, "Checking on the simulator"):
 # packages the phone check (`examples/phone.rs`) for the simulator, makes a
 # fresh simulated iPhone, and on it
+#   0. runs the engine's iOS unit tests (`src/platform/ios.rs`),
 #   1. runs the app headless for 120 ticks (`PONKO_SMOKE`),
 #   2. starts it with its window: it must draw frames, read the safe area,
 #      be suspended when another app comes to the front and resumed after,
@@ -55,6 +56,18 @@ echo "ios-simulator: booting a $device_type ($udid)"
 xcrun simctl boot "$udid"
 xcrun simctl bootstatus "$udid" -b >/dev/null
 xcrun simctl install "$udid" "$app"
+
+echo "ios-simulator: 0. the engine's iOS unit tests"
+tests=$(cargo test -q -p ponko --lib --target aarch64-apple-ios-sim --no-run --message-format=json 2>/dev/null |
+    python3 -c 'import json,sys
+for line in sys.stdin:
+    m = json.loads(line)
+    if m.get("reason") == "compiler-artifact" and m.get("executable") and m["target"]["name"] == "ponko":
+        print(m["executable"])')
+[ -n "$tests" ] || fail "the library's tests did not build for the simulator"
+case $tests in /*) ;; *) tests=$PWD/$tests ;; esac
+xcrun simctl spawn "$udid" "$tests" platform::ios >"$out/unit.log" 2>&1 || fail "unit tests: $(cat "$out/unit.log")"
+grep -q "test result: ok. [1-9]" "$out/unit.log" || fail "no unit test ran: $(cat "$out/unit.log")"
 
 # Starts the app with its output in $1 (extra variables after it).
 start() {

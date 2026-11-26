@@ -237,8 +237,11 @@ where
                 Vec2::new(s.width as f32, s.height as f32),
             )
         };
-        let insets =
-            crate::window::insets_of_frame(frame(outer, outer_size), frame(inner, inner_size), window.scale_factor() as f32);
+        let insets = crate::window::insets_of_frame(
+            frame(outer, outer_size),
+            frame(inner, inner_size),
+            window.scale_factor() as f32,
+        );
         self.ctx.window.feed_platform_safe_insets(insets);
     }
 

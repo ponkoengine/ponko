@@ -169,7 +169,9 @@ fn keyboard_end_frame(note: &objc2_foundation::NSNotification) -> Option<(f64, f
 /// shown since the app started.
 #[cfg(feature = "window")]
 pub(crate) fn keyboard_frame() -> Option<(f32, f32)> {
-    KEYBOARD.with(|k| k.get()).map(|(top, height)| (top as f32, height as f32))
+    KEYBOARD
+        .with(|k| k.get())
+        .map(|(top, height)| (top as f32, height as f32))
 }
 
 /// Sets the audio session's category: how the game's sound mixes with
@@ -193,5 +195,59 @@ pub(crate) fn set_audio_category(category: crate::audio::AudioSessionCategory) -
     .ok_or("this iOS has no such audio session category")?;
     // SAFETY: the shared session is a process-wide singleton, safe to use
     // from any thread; `setCategory:error:` takes a category constant.
-    unsafe { AVAudioSession::sharedInstance().setCategory_error(name) }.map_err(|e| e.localizedDescription().to_string())
+    unsafe { AVAudioSession::sharedInstance().setCategory_error(name) }
+        .map_err(|e| e.localizedDescription().to_string())
+}
+
+// These run on the iOS simulator, not on the Mac: `scripts/ios-simulator.sh`
+// builds the library's tests for it and runs this module's in a simulated
+// iPhone (`xcrun simctl spawn`). The pasteboard and the scene need an app:
+// the same script checks them in the phone check.
+#[cfg(all(test, feature = "window"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_keyboard_frame_follows_its_notifications_and_hiding_keeps_only_its_top() {
+        use objc2_06::rc::Retained;
+        use objc2_06::runtime::AnyObject;
+        use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+        use objc2_foundation::{NSDictionary, NSNotificationCenter, NSValue};
+        use objc2_ui_kit::NSValueUIGeometryExtensions as _;
+        watch_keyboard();
+        watch_keyboard(); // a second call adds no second observer
+        let rect = CGRect::new(CGPoint::new(0.0, 573.0), CGSize::new(402.0, 301.0));
+        // SAFETY: boxes a plain CGRect.
+        let frame = unsafe { NSValue::valueWithCGRect(rect) };
+        // SAFETY: UIKit's constant key; a dictionary of NSString to NSValue
+        // is one of AnyObject to AnyObject.
+        let info: Retained<NSDictionary> = unsafe {
+            let key: &objc2_foundation::NSString = objc2_ui_kit::UIKeyboardFrameEndUserInfoKey;
+            let typed = NSDictionary::from_slices(&[key], &[&*frame]);
+            Retained::cast_unchecked::<NSDictionary<AnyObject, AnyObject>>(typed)
+        };
+        let center = NSNotificationCenter::defaultCenter();
+        // SAFETY: UIKit's notification names; the observers run on this
+        // thread, during the post.
+        unsafe {
+            center.postNotificationName_object_userInfo(
+                objc2_ui_kit::UIKeyboardWillChangeFrameNotification,
+                None,
+                Some(&info),
+            );
+        }
+        assert_eq!(keyboard_frame(), Some((573.0, 301.0)));
+        // SAFETY: as above.
+        unsafe { center.postNotificationName_object(objc2_ui_kit::UIKeyboardWillHideNotification, None) };
+        assert_eq!(keyboard_frame(), Some((573.0, 0.0)));
+    }
+
+    #[cfg(feature = "audio")]
+    #[test]
+    fn every_audio_session_category_is_accepted_by_the_system() {
+        use crate::audio::AudioSessionCategory as C;
+        for category in [C::Ambient, C::Playback, C::SoloAmbient] {
+            assert_eq!(set_audio_category(category), Ok(()), "{category:?}");
+        }
+    }
 }

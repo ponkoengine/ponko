@@ -1124,11 +1124,17 @@ mod safe_area_tests {
         // 59 points below the top (the island) and 34 above the bottom.
         let outer = (Vec2::ZERO, Vec2::new(1179.0, 2556.0));
         let inner = (Vec2::new(0.0, 177.0), Vec2::new(1179.0, 2556.0 - 177.0 - 102.0));
-        assert_eq!(insets_of_frame(outer, inner, 3.0), SafeInsets::new(59.0, 0.0, 34.0, 0.0));
+        assert_eq!(
+            insets_of_frame(outer, inner, 3.0),
+            SafeInsets::new(59.0, 0.0, 34.0, 0.0)
+        );
         // Sideways: the island on the left, the corners on both sides.
         let outer = (Vec2::ZERO, Vec2::new(2556.0, 1179.0));
         let inner = (Vec2::new(177.0, 0.0), Vec2::new(2556.0 - 354.0, 1179.0 - 63.0));
-        assert_eq!(insets_of_frame(outer, inner, 3.0), SafeInsets::new(0.0, 59.0, 21.0, 59.0));
+        assert_eq!(
+            insets_of_frame(outer, inner, 3.0),
+            SafeInsets::new(0.0, 59.0, 21.0, 59.0)
+        );
     }
 
     #[test]
@@ -1161,11 +1167,17 @@ mod safe_area_tests {
     fn suspended_and_resumed_change_the_state_once_each() {
         let mut window = WindowService::default();
         assert!(!window.suspended());
-        assert!(!window.feed_event(&WindowEvent::Resumed), "a first resume is the launch");
+        assert!(
+            !window.feed_event(&WindowEvent::Resumed),
+            "a first resume is the launch"
+        );
         assert!(window.feed_event(&WindowEvent::Suspended));
         assert!(!window.feed_event(&WindowEvent::Suspended), "already suspended");
         assert!(window.suspended());
-        assert!(window.feed_event(&WindowEvent::LowMemory), "every memory warning counts");
+        assert!(
+            window.feed_event(&WindowEvent::LowMemory),
+            "every memory warning counts"
+        );
         assert!(window.feed_event(&WindowEvent::LowMemory));
         assert!(window.feed_event(&WindowEvent::Resumed));
         assert!(!window.suspended());

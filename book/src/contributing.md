@@ -83,6 +83,12 @@ In `scripts/unsafe-inventory.txt` such a check is named like any test, with
 the harness (`harness = false`, for code that needs the main thread) is
 named by its function: `tests/ui_access_window.rs::the_engine_window_...`.
 
+Code that only runs on iOS is checked on the simulator, on a Mac with Xcode:
+`scripts/ios-simulator.sh` runs the engine's iOS unit tests in a simulated
+iPhone and then an app that needs a real scene (see [iOS](ios.md)). Its
+lines name such a test, or the script itself for what only an app reaches,
+with `ios` for why it can't run under Miri.
+
 The C API is one long unsafe boundary, so its tests also run under
 AddressSanitizer and UndefinedBehaviorSanitizer: the C and C++ test programs
 (`-DPONKO_SANITIZE=ON` in `examples/cpp`) and the `ponko_ffi` tests. The

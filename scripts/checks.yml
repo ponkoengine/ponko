@@ -1810,6 +1810,35 @@ jobs:
             cd "$GITHUB_WORKSPACE"
           done
 
+  # iOS (book/src/ios.md): the engine and the C library linted for devices
+  # and the simulator, then the phone check packaged with `ponko package
+  # --target ios-sim` and run on a fresh simulated iPhone: headless, with
+  # its window (frames, safe area, suspend and resume, the clipboard) and
+  # with the keyboard open. A Mac with Xcode only; the simulator runs
+  # without Simulator.app, so no window opens. What needs a real device and
+  # a person is the guide's verification matrix.
+  ios:
+    local-os: [macOS]
+    local-tags: [test, lint]
+    name: iOS (device and simulator builds, the simulator check)
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+      - name: Clippy for iOS devices
+        local-requires: [xcrun, target:stable/aarch64-apple-ios]
+        run: cargo clippy -p ponko -p ponko_ffi --target aarch64-apple-ios --all-targets
+      - name: Clippy for the iOS simulator
+        local-requires: [xcrun, target:stable/aarch64-apple-ios-sim]
+        run: cargo clippy -p ponko -p ponko_ffi --target aarch64-apple-ios-sim --all-targets
+      - name: The simulator check (needs Xcode and its iOS simulator runtime)
+        local-requires: [xcrun, target:stable/aarch64-apple-ios-sim]
+        run: scripts/ios-simulator.sh target/ios-simulator
+
   # The reference validation bundles (book/src/validation-bundles.md): the
   # deliberately broken game and the corrected one, run in-process and as a
   # launched game driven through the MCP tools, verified and compared, then

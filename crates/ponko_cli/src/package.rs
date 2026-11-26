@@ -1420,8 +1420,14 @@ mod tests {
 
     #[test]
     fn ios_and_ios_sim_stand_for_the_device_and_simulator_triples() {
-        assert_eq!(parse(&["--target", "ios"]).unwrap().target.as_deref(), Some("aarch64-apple-ios"));
-        assert_eq!(parse(&["--target=ios-sim"]).unwrap().target.as_deref(), Some("aarch64-apple-ios-sim"));
+        assert_eq!(
+            parse(&["--target", "ios"]).unwrap().target.as_deref(),
+            Some("aarch64-apple-ios")
+        );
+        assert_eq!(
+            parse(&["--target=ios-sim"]).unwrap().target.as_deref(),
+            Some("aarch64-apple-ios-sim")
+        );
         assert_eq!(
             parse(&["--target", "x86_64-apple-ios"]).unwrap().target.as_deref(),
             Some("x86_64-apple-ios")
@@ -1429,8 +1435,14 @@ mod tests {
         let device = Platform::from_triple("aarch64-apple-ios").unwrap();
         let simulator = Platform::from_triple("aarch64-apple-ios-sim").unwrap();
         let path = Path::new("/t");
-        assert_eq!(cook_settings(&device, None, path).platform, crate::cook::Platform::Mobile);
-        assert_eq!(cook_settings(&simulator, None, path).platform, crate::cook::Platform::Mobile);
+        assert_eq!(
+            cook_settings(&device, None, path).platform,
+            crate::cook::Platform::Mobile
+        );
+        assert_eq!(
+            cook_settings(&simulator, None, path).platform,
+            crate::cook::Platform::Mobile
+        );
     }
 
     #[test]
