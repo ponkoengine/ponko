@@ -1928,6 +1928,20 @@ static std::vector<ponko::entity> townsfolk(ponko::ctx& ctx, const ponko::mesh_d
 }
 // ANCHOR_END: masked_tint
 
+// ANCHOR: glass
+/// A green-tinted glass: clear transmission through a thick, tinted volume.
+static ponko::material green_glass(ponko::ctx& ctx) {
+    auto desc = ponko::material_desc_ex_of(ponko::material_of(ponko::colors::white));
+    desc.desc.roughness = 0.12f;
+    desc.layers.ior = 1.45f;
+    desc.transmission.factor = 1.0f;
+    desc.transmission.thickness = 0.15f;
+    desc.transmission.attenuation_distance = 3.0f;
+    desc.transmission.attenuation_color = ponko::rgb(0.7f, 0.9f, 0.8f);
+    return ctx.create_material(desc);
+}
+// ANCHOR_END: glass
+
 // ANCHOR: stencil
 /// Crossing glass strips that blend once where they overlap, and a crate
 /// with an outline only around it.
@@ -2696,6 +2710,10 @@ static void the_village_has_five_spinning_houses() {
         yard(ctx, tuft, tuft, tuft, tuft, tuft);
         recolored(ctx, tuft, ctx.create_material(ponko::material_of(ponko::colors::white)), ctx.default_material());
         stencil_effects(ctx);
+        {
+            auto glass = green_glass(ctx);
+            if (glass.id == ctx.default_material().id) { std::fprintf(stderr, "glass\n"); std::abort(); }
+        }
         {
             std::vector<ponko::entity> models;
             ctx.world().each([&](ponko::entity e, const ponko::model&) { models.push_back(e); });

@@ -4750,6 +4750,27 @@ static void versioned_descriptors_retargeting_and_prediction() {
         ctx.update_material(m, d);
         d.layers.anisotropy = 2.0f;
         throws_kind([&] { ctx.update_material(m, d); }, PONKO_ERROR_INVALID);
+        // Version 4: glass with a volume, dispersion, diffuse transmission and scatter; out of range refused.
+        d = ponko::material_desc_ex_of(ponko::material_of(ponko::colors::white));
+        CHECK(d.transmission.factor == 0.0f && std::isinf(d.transmission.attenuation_distance));
+        d.transmission.factor = 1.0f;
+        d.transmission.thickness = 0.15f;
+        d.transmission.attenuation_distance = 3.0f;
+        d.transmission.attenuation_color = {0.7f, 0.9f, 0.8f, 1.0f};
+        d.transmission.dispersion = 0.5f;
+        d.transmission.diffuse = 0.25f;
+        d.transmission.scatter = 0.5f;
+        d.transmission.scatter_anisotropy = -0.5f;
+        ctx.update_material(m, d);
+        const std::uint8_t white_px[4] = {255, 255, 255, 255};
+        const auto image = ctx.create_texture(1, 1, white_px, sizeof white_px);
+        d.transmission.has_map = true;
+        d.transmission.map = image;
+        d.transmission.has_diffuse_color_map = true;
+        d.transmission.diffuse_color_map = image;
+        ctx.update_material(m, d);
+        d.transmission.scatter_anisotropy = 2.0f;
+        throws_kind([&] { ctx.update_material(m, d); }, PONKO_ERROR_INVALID);
         // A collider and its groups in one call.
         auto world = ctx.world();
         auto e = world.spawn(ponko::transform_at({0, 0}), ponko::fixed_body());

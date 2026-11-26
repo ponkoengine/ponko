@@ -198,6 +198,19 @@ static void versioned_descriptors(PonkoCtx* ctx) {
     CHECK(ponko_ctx_create_material_ex(ctx, &glass, &material) == PONKO_OK);
     // ANCHOR_END: versioned_descriptor
 
+    // ANCHOR: glass_c
+    PonkoMaterialDescEx green_glass = {.struct_size = sizeof green_glass, .version = PONKO_MATERIAL_DESC_EX_VERSION};
+    CHECK(ponko_material_desc_ex_defaults(&green_glass) == PONKO_OK);
+    green_glass.desc.roughness = 0.12f;
+    green_glass.layers.ior = 1.45f;
+    green_glass.transmission.factor = 1.0f;
+    green_glass.transmission.thickness = 0.15f;
+    green_glass.transmission.attenuation_distance = 3.0f;
+    green_glass.transmission.attenuation_color = (PonkoColor){0.7f, 0.9f, 0.8f, 1};
+    PonkoMaterial glass_material;
+    CHECK(ponko_ctx_create_material_ex(ctx, &green_glass, &glass_material) == PONKO_OK);
+    // ANCHOR_END: glass_c
+
     // ANCHOR: versioned_post
     PonkoPostEx post = {.struct_size = sizeof post, .version = PONKO_POST_EX_VERSION};
     CHECK(ponko_ctx_post_ex(ctx, &post) == PONKO_OK);

@@ -116,6 +116,25 @@ fn defaults_match_the_abi_2_defaults() {
         assert_eq!((l.specular, l.ior, l.iridescence_ior), (1.0, 1.5, 1.3));
         assert_eq!(l.iridescence_thickness, [100.0, 400.0]);
         assert!(!l.has_clearcoat_map && !l.has_anisotropy_map);
+        // Version 4: no transmission, a clear medium, white tints.
+        let t = m.transmission;
+        assert_eq!(
+            (t.factor, t.thickness, t.dispersion, t.diffuse, t.scatter),
+            (0.0, 0.0, 0.0, 0.0, 0.0)
+        );
+        assert_eq!((t.attenuation_distance, t.scatter_anisotropy), (f32::INFINITY, 0.0));
+        assert_eq!(
+            (t.attenuation_color, t.diffuse_color, t.scatter_color),
+            (white, white, white)
+        );
+        assert!(!t.has_map && !t.has_thickness_map && !t.has_diffuse_map && !t.has_scatter_color_map);
+        // A version 3 caller's smaller struct: no transmission written.
+        let mut v3: PonkoMaterialDescEx = header(3);
+        v3.struct_size = std::mem::offset_of!(PonkoMaterialDescEx, transmission) as u32;
+        v3.transmission.factor = 0.5;
+        assert_eq!(ponko_material_desc_ex_defaults(&mut v3), PONKO_OK);
+        assert_eq!(v3.layers.ior, 1.5);
+        assert_eq!(v3.transmission.factor, 0.5, "fields past version 3 are not written");
         // A version 2 caller's smaller struct: its fields only.
         let mut v2: PonkoMaterialDescEx = header(2);
         v2.struct_size = std::mem::offset_of!(PonkoMaterialDescEx, unlit) as u32;
@@ -266,6 +285,58 @@ unsafe extern "C" fn three_d(ctx: *mut PonkoCtx, user: *mut c_void) {
             PONKO_INVALID_ARGUMENT
         );
         d.layers.ior = 1.5;
+        // Version 4: glass with a volume, dispersion and scatter (refused out of range).
+        expect!(seen, ponko_material_desc_ex_defaults(&mut d), PONKO_OK);
+        d.unlit = false;
+        let mut glass = PonkoMaterial::default();
+        d.transmission.factor = 1.0;
+        d.transmission.thickness = 0.15;
+        d.transmission.attenuation_distance = 3.0;
+        d.transmission.dispersion = 0.5;
+        d.transmission.diffuse = 0.25;
+        d.transmission.scatter = 0.5;
+        d.transmission.scatter_anisotropy = -0.5;
+        expect!(seen, ponko_ctx_create_material_ex(ctx, &d, &mut glass), PONKO_OK);
+        d.transmission.factor = 1.5;
+        expect!(
+            seen,
+            ponko_ctx_update_material_ex(ctx, glass, &d),
+            PONKO_INVALID_ARGUMENT
+        );
+        d.transmission.factor = 1.0;
+        d.transmission.attenuation_distance = 0.0;
+        expect!(
+            seen,
+            ponko_ctx_update_material_ex(ctx, glass, &d),
+            PONKO_INVALID_ARGUMENT
+        );
+        d.transmission.attenuation_distance = f32::INFINITY;
+        // The maps are layer images: two distinct ones are fine, three are refused.
+        let mut images = [PonkoTexture {
+            id: 0,
+            width: 0,
+            height: 0,
+        }; 3];
+        for image in &mut images {
+            let pixels = [255u8; 4];
+            expect!(
+                seen,
+                ponko_ctx_create_texture(ctx, 1, 1, pixels.as_ptr(), pixels.len(), image),
+                PONKO_OK
+            );
+        }
+        d.transmission.has_map = true;
+        d.transmission.map = images[0];
+        d.transmission.has_thickness_map = true;
+        d.transmission.thickness_map = images[1];
+        expect!(seen, ponko_ctx_update_material_ex(ctx, glass, &d), PONKO_OK);
+        d.transmission.has_scatter_map = true;
+        d.transmission.scatter_map = images[2];
+        expect!(
+            seen,
+            ponko_ctx_update_material_ex(ctx, glass, &d),
+            PONKO_INVALID_ARGUMENT
+        );
         let foreign = PonkoMaterial { id: 9999 };
         expect!(
             seen,

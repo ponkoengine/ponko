@@ -251,7 +251,7 @@
 
 #define PONKO_QUERY_FILTER_EX_VERSION 1
 
-#define PONKO_MATERIAL_DESC_EX_VERSION 3
+#define PONKO_MATERIAL_DESC_EX_VERSION 4
 
 #define PONKO_NAV_BAKE_SETTINGS_EX_VERSION 1
 
@@ -3674,6 +3674,31 @@ typedef struct PonkoMaterialLayers {
   struct PonkoTexture iridescence_thickness_map;
 } PonkoMaterialLayers;
 
+typedef struct PonkoMaterialTransmission {
+  float factor;
+  bool has_map;
+  struct PonkoTexture map;
+  float thickness;
+  bool has_thickness_map;
+  struct PonkoTexture thickness_map;
+  float attenuation_distance;
+  struct PonkoColor attenuation_color;
+  float dispersion;
+  float diffuse;
+  bool has_diffuse_map;
+  struct PonkoTexture diffuse_map;
+  struct PonkoColor diffuse_color;
+  bool has_diffuse_color_map;
+  struct PonkoTexture diffuse_color_map;
+  float scatter;
+  bool has_scatter_map;
+  struct PonkoTexture scatter_map;
+  struct PonkoColor scatter_color;
+  bool has_scatter_color_map;
+  struct PonkoTexture scatter_color_map;
+  float scatter_anisotropy;
+} PonkoMaterialTransmission;
+
 typedef struct PonkoMaterialDescEx {
   uint32_t struct_size;
   uint32_t version;
@@ -3683,6 +3708,7 @@ typedef struct PonkoMaterialDescEx {
   bool masked_tint;
   bool unlit;
   struct PonkoMaterialLayers layers;
+  struct PonkoMaterialTransmission transmission;
 } PonkoMaterialDescEx;
 
 typedef struct PonkoNavBakeSettingsEx {
