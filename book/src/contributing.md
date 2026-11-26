@@ -12,7 +12,10 @@ In short:
 
 - Talk in [GitHub Discussions](https://github.com/ponkoengine/ponko/discussions)
   (there is no chat room for now); maintainers answer new issues and
-  discussions within a week.
+  discussions within a week. Everyone is welcome, and no question or
+  contribution is too small.
+- To take an issue, comment on it; a maintainer assigns it to you and nobody
+  else takes it ("Claiming an issue" in `CONTRIBUTING.md`).
 - Work on a branch from `main` (there is no other integration branch), open a
   pull request to `main`, and run the checks your change needs locally (there
   is no CI).
