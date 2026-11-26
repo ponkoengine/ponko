@@ -88,6 +88,7 @@
 - [C and C++](c-cpp.md)
 - [Naming and compatibility](naming.md)
 - [Migrating from 0.0.1 to 0.1.0](migrating-to-0.1.md)
+- [Migrating from 0.1 to 0.2](migrating-to-0.2.md)
 - [Reflection: components as JSON](reflection.md)
 - [The inspector: look inside a running game](inspector.md)
 - [The editor: build scenes and prefabs](editor.md)

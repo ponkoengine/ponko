@@ -403,6 +403,8 @@ pub enum PonkoGamepadButton {
     PONKO_GAMEPAD_DPAD_LEFT,
     /// D-pad right.
     PONKO_GAMEPAD_DPAD_RIGHT,
+    /// Clicking a gamepad touchpad.
+    PONKO_GAMEPAD_TOUCHPAD,
 }
 
 /// A gamepad axis: sticks `-1..1` (y down is positive), triggers `0..1`.
@@ -435,7 +437,7 @@ pub const PONKO_MAX_GAMEPADS: u32 = 8;
 const _: () = assert!(PONKO_MAX_GAMEPADS as usize == ponko::input::MAX_GAMEPADS);
 
 /// The Rust buttons in `PonkoGamepadButton` order.
-const GAMEPAD_BUTTONS: [GamepadButton; 16] = {
+const GAMEPAD_BUTTONS: [GamepadButton; 17] = {
     use GamepadButton::*;
     [
         South,
@@ -454,6 +456,7 @@ const GAMEPAD_BUTTONS: [GamepadButton; 16] = {
         DPadDown,
         DPadLeft,
         DPadRight,
+        Touchpad,
     ]
 };
 
@@ -496,7 +499,11 @@ mod tests {
             gamepad_button_from_c(PONKO_GAMEPAD_DPAD_RIGHT as u32),
             Some(GamepadButton::DPadRight)
         );
-        assert_eq!(gamepad_button_from_c(PONKO_GAMEPAD_DPAD_RIGHT as u32 + 1), None);
+        assert_eq!(
+            gamepad_button_from_c(PONKO_GAMEPAD_TOUCHPAD as u32),
+            Some(GamepadButton::Touchpad)
+        );
+        assert_eq!(gamepad_button_from_c(PONKO_GAMEPAD_TOUCHPAD as u32 + 1), None);
         use PonkoGamepadAxis::*;
         assert_eq!(
             gamepad_axis_from_c(PONKO_GAMEPAD_RIGHT_STICK_Y as u32),

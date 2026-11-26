@@ -219,6 +219,7 @@ fn dualsense() -> ponko::input::GamepadInfo {
             rumble: true,
             trigger_rumble: false,
             motion: true,
+            ..Default::default()
         })
 }
 
@@ -371,4 +372,47 @@ fn a_gamepad_connected_step_without_info_connects_a_generic_pad_and_writes_no_in
         .is_err(),
         "a misspelt info field is an error"
     );
+}
+
+#[test]
+fn gamepad_touchpad_contacts_and_capabilities_survive_recording_and_replay() {
+    use ponko::input::{FakeGamepads, GamepadButton, GamepadTouchpadFinger};
+
+    let pad = Gamepad::from_slot(0).unwrap();
+    let first = GamepadTouchpadFinger {
+        x: 0.2,
+        y: 0.5,
+        pressure: 0.8,
+        down: true,
+    };
+    let second = GamepadTouchpadFinger { x: 0.7, ..first };
+    let fake = FakeGamepads::new();
+    let mut info = dualsense();
+    info.capabilities.touchpad = true;
+    info.capabilities.adaptive_triggers = true;
+    fake.connect(info);
+    let world = Game::new("t", 1, 1)
+        .gamepad_backend(fake)
+        .sim_system(move |ctx: &mut Ctx| {
+            ctx.input.feed(InputEvent::GamepadTouchpad(pad, 0, first));
+            ctx.input.feed(InputEvent::GamepadTouchpad(pad, 1, second));
+            ctx.input
+                .feed(InputEvent::GamepadButton(pad, GamepadButton::Touchpad, true));
+            ctx.world.insert_resource(Recorded(ctx.input.stop_recording()));
+        })
+        .run_headless(1, |ctx| ctx.input.start_recording());
+    let scenario = world.resource::<Recorded>().0.as_ref().unwrap().to_json();
+    let scenario = InputScenario::from_value(&scenario).unwrap();
+    let (_, report) = Game::new("t", 1, 1)
+        .sim_system(move |ctx: &mut Ctx| {
+            assert!(ctx.input.gamepad_info(pad).unwrap().capabilities.adaptive_triggers);
+            assert!(ctx.input.gamepad_pressed(pad, GamepadButton::Touchpad));
+            assert_eq!(ctx.input.gamepad_touchpad(pad), Some([first, second]));
+            assert_eq!(
+                ctx.input.gamepad_touchpad_events(),
+                &[(pad, 0, first), (pad, 1, second)]
+            );
+        })
+        .run_headless_scenario(scenario, |_| {});
+    report.assert_passed();
 }

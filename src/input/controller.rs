@@ -8,6 +8,7 @@
 
 use glam::{Vec2, Vec3};
 
+use super::gamepad_extras::{GamepadOutput, GamepadTouchpadFinger};
 use super::{Gamepad, GamepadAxis, GamepadButton, Input, MAX_GAMEPADS};
 use crate::actions::PRESS_THRESHOLD;
 
@@ -113,6 +114,14 @@ pub struct GamepadCapabilities {
     /// Gyro and accelerometer readings arrive
     /// ([`Input::gamepad_motion`]).
     pub motion: bool,
+    /// The RGB light bar can be set.
+    pub light: bool,
+    /// The player indicator LEDs can be set.
+    pub player_leds: bool,
+    /// The controller reports touchpad contacts.
+    pub touchpad: bool,
+    /// The controller accepts adaptive trigger effects.
+    pub adaptive_triggers: bool,
 }
 
 /// One connected controller, as its backend described it when it connected:
@@ -417,6 +426,9 @@ pub(crate) struct Controllers {
     pub(crate) info: [Option<GamepadInfo>; MAX_GAMEPADS],
     pub(crate) motion: [Option<GamepadMotion>; MAX_GAMEPADS],
     pub(crate) rumble: [ActiveRumble; MAX_GAMEPADS],
+    pub(crate) output: [GamepadOutput; MAX_GAMEPADS],
+    pub(crate) touchpad: [[GamepadTouchpadFinger; 2]; MAX_GAMEPADS],
+    pub(crate) touchpad_events: Vec<(Gamepad, u8, GamepadTouchpadFinger)>,
     players: [Option<InputDevice>; MAX_PLAYERS],
     last_device: InputDevice,
     last_device_changed: bool,
@@ -427,6 +439,7 @@ pub(crate) struct Controllers {
 impl Controllers {
     pub(super) fn end_frame(&mut self) {
         self.last_device_changed = false;
+        self.touchpad_events.clear();
         self.connected_now = [false; MAX_GAMEPADS];
         self.disconnected_now = [false; MAX_GAMEPADS];
     }
@@ -443,6 +456,8 @@ impl Controllers {
         self.info[slot] = Some(info);
         self.motion[slot] = None;
         self.rumble[slot] = ActiveRumble::default();
+        self.output[slot] = GamepadOutput::default();
+        self.touchpad[slot] = Default::default();
         self.connected_now[slot] = true;
     }
 
@@ -451,6 +466,8 @@ impl Controllers {
         self.info[slot] = None;
         self.motion[slot] = None;
         self.rumble[slot] = ActiveRumble::default();
+        self.output[slot] = GamepadOutput::default();
+        self.touchpad[slot] = Default::default();
         self.disconnected_now[slot] = true;
     }
 

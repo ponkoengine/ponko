@@ -36,6 +36,7 @@ fn rumbling() -> GamepadInfo {
         rumble: true,
         trigger_rumble: true,
         motion: true,
+        ..Default::default()
     })
 }
 

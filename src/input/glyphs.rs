@@ -313,6 +313,7 @@ fn button_label(f: ControllerFamily, b: GamepadButton) -> (&'static str, &'stati
         (_, B::DPadDown) => ("D-Pad Down", ""),
         (_, B::DPadLeft) => ("D-Pad Left", ""),
         (_, B::DPadRight) => ("D-Pad Right", ""),
+        (_, B::Touchpad) => ("Touchpad", ""),
     }
 }
 
@@ -1193,6 +1194,11 @@ fn paint_button(canvas: &mut Canvas, font: &fontdue::Font, f: ControllerFamily, 
         B::LeftStick | B::RightStick => {
             paint_stick(canvas, font, text);
             canvas.fill(ink::ACCENT, arrow_head(v(0.5, 0.86), v(0.0, 1.0), 0.07));
+        }
+        B::Touchpad => {
+            canvas.fill(ink::BODY_EDGE, rounded(CENTER, v(0.42, 0.27), 0.09));
+            canvas.fill(ink::BODY, rounded(CENTER, v(0.37, 0.22), 0.07));
+            canvas.fill(ink::ACCENT, circle(CENTER, 0.08));
         }
         B::DPadUp | B::DPadDown | B::DPadLeft | B::DPadRight => {
             let plus = |w: f32, l: f32| {
