@@ -1251,10 +1251,11 @@ impl Renderer {
     /// The 3D pass, made on first use (with its white texture).
     #[cfg(feature = "3d")]
     fn three(&mut self) -> &mut super::gpu3d::Renderer3D {
-        if self.three.is_none() {
-            self.three = Some(self.make_three());
-        }
-        self.three.as_mut().expect("just made")
+        let three = match self.three.take() {
+            Some(three) => three,
+            None => self.make_three(),
+        };
+        self.three.insert(three)
     }
 
     /// Makes the 3D pass on the heap. Out of line and cold: its frame holds
