@@ -200,7 +200,16 @@ impl Gi {
             layout: Some(&pipeline_layout),
             module: &module,
             entry_point: Some("cs_update"),
-            compilation_options: Default::default(),
+            // The shader writes every workgroup value before reading it (see
+            // `gi_update.wgsl`), so it doesn't need wgpu to zero them first.
+            // Direct3D 12's FXC took 18 to 30 s to compile that zeroing (one
+            // thread storing the 1,536 texels of the views) in a debug build,
+            // and over 8 minutes with a release build's optimizations; without
+            // it, 1 and 4 s.
+            compilation_options: wgpu::PipelineCompilationOptions {
+                zero_initialize_workgroup_memory: false,
+                ..Default::default()
+            },
             cache: None,
         });
         let uniform = device.new_buffer(&wgpu::BufferDescriptor {

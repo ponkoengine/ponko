@@ -102,6 +102,10 @@ fn gi_inside(p: vec2<i32>, size: i32) -> vec2<i32> {
 const GI_VIEW: u32 = 16u;
 const GI_TEXELS: u32 = 6u * GI_VIEW * GI_VIEW;
 
+// Every workgroup value below is written before it is read: gi.rs builds
+// this pipeline without zeroing workgroup memory first (on Direct3D 12 that
+// zeroing took FXC minutes to compile). Keep it so when changing them.
+//
 // The probe's six views, loaded once per workgroup: rg and b of the light
 // seen that way, and the distance to it, as half floats.
 var<workgroup> gi_seen: array<vec2<u32>, GI_TEXELS>;

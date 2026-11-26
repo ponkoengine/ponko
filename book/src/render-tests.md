@@ -84,6 +84,24 @@ PONKO_GPU_TESTS_AT_ONCE=4 cargo test -p ponko --lib --features 3d render_test
 The places are counted in one test process. A runner that starts a process
 per test (`cargo nextest`) limits GPU tests with its own `--test-threads`.
 
+### Direct3D 12 compiles every device's shaders on the CPU
+
+Each test makes its own device, and wgpu keeps compiled shaders per
+device, so every test compiles the 3D renderer's shaders again. Vulkan and
+Metal hand them to the driver; Direct3D 12 first compiles HLSL on the CPU,
+with FXC (part of Windows) unless DXC is found. On a Ryzen 5 3600 with a
+Radeon RX Vega, in the debug test build, a water test that starts three
+renderers took 27 to 48 s with FXC, 10 s with DXC and 3 to 6 s on Vulkan;
+almost all of that was compiling. A run of every render test there, one at
+a time, takes hours with FXC.
+
+wgpu takes DXC by itself when `dxcompiler.dll` is on `PATH` or next to the
+test binary (it comes with Microsoft's DirectXShaderCompiler releases);
+`WGPU_DX12_COMPILER=fxc` or `=dxc` picks one. Games compile with FXC
+unless they ship `dxcompiler.dll`, so a test that is slow only with FXC is
+worth a look: one shader once took FXC 20 s here (over 8 minutes with a
+release build's optimizations) for a construct DXC compiled at once.
+
 ### A card with little memory
 
 By default `cargo test` runs as many tests at once as the machine has
