@@ -12,7 +12,10 @@
 //!   is typed shows at the top of the safe area.
 //! - Suspend, resume and memory warnings are listed and printed.
 //! - `PONKO_PHONE_KEYBOARD=1` opens the keyboard at the start.
-//! - A file is written to the game's storage and read back.
+//! - A file is written to the game's storage and read back, and the
+//!   clipboard written and read; `PONKO_PHONE_CLIPBOARD=0` leaves the
+//!   clipboard alone (Android shows its own panel over the game for it,
+//!   which a screenshot compare doesn't want).
 //! - A quiet tone plays, mixed with other apps' audio (the Ambient
 //!   session); `PONKO_PHONE_AUDIO=solo` or `playback` stops theirs (on
 //!   Android, it takes the audio focus).
@@ -35,9 +38,12 @@ fn main() {
             Ok(()) => println!("phone: audio session {:?}", ctx.audio.session_category()),
             Err(e) => println!("phone: audio session not set: {e}"),
         }
-        match ctx.window.clipboard_write("ponko phone check") {
-            Ok(()) => println!("phone: clipboard written"),
-            Err(e) => println!("phone: clipboard not written: {e}"),
+        let use_clipboard = std::env::var("PONKO_PHONE_CLIPBOARD").map_or(true, |v| v != "0");
+        if use_clipboard {
+            match ctx.window.clipboard_write("ponko phone check") {
+                Ok(()) => println!("phone: clipboard written"),
+                Err(e) => println!("phone: clipboard not written: {e}"),
+            }
         }
         let stored = ctx.storage.write("check.txt", b"kept").and_then(|()| ctx.storage.read("check.txt"));
         match stored {
@@ -65,7 +71,7 @@ fn main() {
         let mut log: Vec<String> = Vec::new();
         let mut typed = String::new();
         let mut shown = (SafeInsets::NONE, -1.0_f32, Vec2::ZERO);
-        let mut clipboard_read = false;
+        let mut clipboard_read = !use_clipboard;
 
         if let Some(gpu) = ctx.gfx.gpu_capabilities() {
             let a = &gpu.adapter;
