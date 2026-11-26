@@ -29,12 +29,15 @@ fn main() {
     use game::smoke::*;
     // `?smoke=walkthrough` in the address: the game plays the walk-through
     // by itself (the web smoke test's `shard_grove_walkthrough` fixture).
-    let game = if web_walkthrough_asked() {
-        build_smoke().setup(|ctx: &mut ponko::prelude::Ctx| setup_smoke(ctx, None, "web"))
+    let walkthrough = web_walkthrough_asked();
+    let game = if walkthrough { build_smoke() } else { game::build() };
+    let game = game.add(ponko::prelude::Phase::Frame, publish_web_state);
+    if walkthrough {
+        game.setup(|ctx: &mut ponko::prelude::Ctx| setup_smoke(ctx, None, "web"))
+            .run();
     } else {
-        game::build()
-    };
-    game.add(ponko::prelude::Phase::Frame, publish_web_state).configured().run();
+        game.configured().run();
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]

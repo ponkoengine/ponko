@@ -311,7 +311,12 @@ pub fn build_smoke() -> Game {
 pub fn web_walkthrough_asked() -> bool {
     web_sys::window()
         .and_then(|w| w.location().search().ok())
-        .is_some_and(|search| search.trim_start_matches('?').split('&').any(|p| p == "smoke=walkthrough"))
+        .is_some_and(|search| {
+            search
+                .trim_start_matches('?')
+                .split('&')
+                .any(|p| p == "smoke=walkthrough")
+        })
 }
 
 /// Frame system for the web build: the state on `<html data-smoke>`, in the
@@ -332,14 +337,16 @@ pub fn publish_web_state(ctx: &mut Ctx) {
     if ctx.input.mouse_pressed(MouseButton::Left) {
         published.clicks += 1;
     }
-    let document = web_sys::window().and_then(|w| w.document()).and_then(|d| d.document_element());
-    if !published.gpu {
-        if let Some(gpu) = ctx.gfx.gpu_capabilities() {
-            if let Some(root) = &document {
-                let _ = root.set_attribute("data-smoke-gpu", &serde_json::to_string(gpu).unwrap_or_default());
-            }
-            published.gpu = true;
+    let document = web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.document_element());
+    if !published.gpu
+        && let Some(gpu) = ctx.gfx.gpu_capabilities()
+    {
+        if let Some(root) = &document {
+            let _ = root.set_attribute("data-smoke-gpu", &serde_json::to_string(gpu).unwrap_or_default());
         }
+        published.gpu = true;
     }
     let joints = ctx.world.resource::<GroveAssets>().warden_skeleton.joints().len();
     let size = ctx.window_size();
