@@ -939,6 +939,20 @@ where
         }
     }
 
+    /// winit 0.30's iOS loop drops a redraw asked for while it delivers
+    /// redraws (each frame's own request for the next, and requests made
+    /// in `about_to_wait`): ask for the frame as each pass of the polling
+    /// loop starts instead, where it is kept.
+    #[cfg(target_os = "ios")]
+    fn new_events(&mut self, _event_loop: &ActiveEventLoop, _cause: winit::event::StartCause) {
+        if self.started
+            && !self.ctx.window.suspended()
+            && let Some(window) = &self.window
+        {
+            window.request_redraw();
+        }
+    }
+
     fn memory_warning(&mut self, _event_loop: &ActiveEventLoop) {
         self.lifecycle(crate::window::WindowEvent::LowMemory);
         if let Some(window) = &self.window {
@@ -983,6 +997,11 @@ where
         } else if self.unpaced() && self.started {
             event_loop.set_control_flow(ControlFlow::Poll);
             self.run_frame(event_loop);
+        } else if cfg!(target_os = "ios") && self.started {
+            // On iOS each frame is asked for as a pass of the loop starts
+            // (`new_events`): poll, so passes keep coming. Presenting waits
+            // for the display's next drawable, so frames stay paced by vsync.
+            event_loop.set_control_flow(ControlFlow::Poll);
         } else {
             event_loop.set_control_flow(ControlFlow::Wait);
         }

@@ -38,7 +38,15 @@ fn main() {
         let mut shown = (SafeInsets::NONE, -1.0_f32, Vec2::ZERO);
         let mut clipboard_read = false;
 
+        let mut frames = 0_u64;
+        let mut next_report = 5.0_f64;
         move |ctx: &mut Ctx| {
+            // How many frames ran: a check that they keep coming.
+            frames += 1;
+            if ctx.time.elapsed() >= next_report {
+                next_report += 5.0;
+                println!("phone: {frames} frames in {:.1} s", ctx.time.elapsed());
+            }
             if !clipboard_read {
                 clipboard_read = true;
                 match ctx.window.clipboard_read() {
