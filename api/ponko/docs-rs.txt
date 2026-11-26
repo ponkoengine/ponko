@@ -5149,6 +5149,9 @@ impl ponko::gfx::Graphics
 pub fn ponko::gfx::Graphics::shader_status(&self) -> &[ponko::render::ShaderStatus]
 impl ponko::gfx::Graphics
 pub fn ponko::gfx::Graphics::stream_mesh(&mut self, &str) -> core::option::Option<ponko::render::Mesh>
+impl ponko::gfx::Graphics
+pub fn ponko::gfx::Graphics::try_load_environment(&self, &str) -> core::result::Result<ponko::render::EnvironmentMap, ponko::error::Error>
+pub fn ponko::gfx::Graphics::try_load_environment_cube(&self, [&str; 6]) -> core::result::Result<ponko::render::EnvironmentMap, ponko::error::Error>
 pub mod ponko::handle
 #[non_exhaustive] pub struct ponko::handle::LiveCounts
 pub ponko::handle::LiveCounts::collision_meshes: usize
@@ -11928,6 +11931,8 @@ pub fn ponko::prelude::Ctx::quality_autotune_status(&self) -> core::option::Opti
 impl ponko::prelude::Ctx
 pub fn ponko::prelude::Ctx::start_ragdoll(&mut self, ponko_ecs::entity::Entity, &[ponko::d3::RagdollBone]) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::prelude::Ctx::stop_ragdoll(&mut self, ponko_ecs::entity::Entity, f32)
+impl ponko::prelude::Ctx
+pub fn ponko::prelude::Ctx::try_light_gltf(&mut self, &str, &ponko::d3::Transform, f32) -> core::result::Result<alloc::vec::Vec<ponko_ecs::entity::Entity>, ponko::error::Error>
 impl<F: core::ops::function::FnMut(&mut ponko::prelude::Ctx) + 'static> ponko::prelude::IntoSystem<ponko::prelude::Ctx> for F
 pub fn F::access(self, ponko::access::SystemAccess) -> ponko::game::SystemConfig
 pub fn F::every(self, u32) -> ponko::game::SystemConfig
@@ -13398,6 +13403,7 @@ impl core::marker::StructuralPartialEq for ponko::render::StencilOp
 #[non_exhaustive] #[repr(u32)] pub enum ponko::render::Tonemap
 pub ponko::render::Tonemap::Aces = 0
 pub ponko::render::Tonemap::AgX = 1
+pub ponko::render::Tonemap::HuePreserving = 4
 pub ponko::render::Tonemap::Neutral = 2
 pub ponko::render::Tonemap::None = 3
 impl core::clone::Clone for ponko::render::Tonemap
@@ -13736,6 +13742,13 @@ impl core::marker::StructuralPartialEq for ponko::render::Effect
 impl ponko::handle::GfxHandle for ponko::render::Effect
 impl ponko::handle::Handle for ponko::render::Effect
 pub const ponko::render::Effect::NONE: Self
+pub struct ponko::render::EnvironmentMap(_)
+impl ponko::render::EnvironmentMap
+pub fn ponko::render::EnvironmentMap::studio() -> Self
+impl core::clone::Clone for ponko::render::EnvironmentMap
+pub fn ponko::render::EnvironmentMap::clone(&self) -> Self
+impl core::fmt::Debug for ponko::render::EnvironmentMap
+pub fn ponko::render::EnvironmentMap::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct ponko::render::GlobalIllumination
 pub ponko::render::GlobalIllumination::enabled: bool
 pub ponko::render::GlobalIllumination::extent: glam::f32::vec3::Vec3
@@ -14368,6 +14381,7 @@ pub ponko::render::ModelLight::name: alloc::string::String
 pub ponko::render::ModelLight::transform: ponko::d3::Transform
 impl ponko::render::ModelLight
 pub const ponko::render::ModelLight::CANDELA_PER_UNIT: f32
+pub fn ponko::render::ModelLight::place_exposed(&self, &mut ponko_ecs::world::World, &mut ponko::render::Lighting, &ponko::d3::Transform, f32) -> core::option::Option<ponko_ecs::entity::Entity>
 pub fn ponko::render::ModelLight::placed(&self, &ponko::d3::Transform) -> ponko::d3::Transform
 pub fn ponko::render::ModelLight::spawn(&self, &mut ponko_ecs::world::World, &ponko::d3::Transform) -> core::option::Option<ponko_ecs::entity::Entity>
 impl core::clone::Clone for ponko::render::ModelLight
@@ -14644,6 +14658,7 @@ impl ponko::handle::Handle for ponko::render::RenderTarget
 pub const ponko::render::RenderTarget::NONE: Self
 pub struct ponko::render::SceneSettings
 pub ponko::render::SceneSettings::camera: ponko::d3::Camera
+pub ponko::render::SceneSettings::environment: core::option::Option<ponko::render::EnvironmentMap>
 pub ponko::render::SceneSettings::lighting: ponko::render::Lighting
 pub ponko::render::SceneSettings::lod: ponko::render::LodSettings
 pub ponko::render::SceneSettings::passes: ponko::render::RenderPasses
