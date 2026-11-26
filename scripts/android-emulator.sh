@@ -80,7 +80,7 @@ export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${CARGO_TARGET_AARCH64_LINUX_AN
 if [ "$clippy" = yes ]; then
     # Android's thread locals are emulated, so clippy asks for `const`
     # initializers that are already there: that lint is off here.
-    exec cargo clippy -p ponko -p ponko_ffi --target aarch64-linux-android --all-targets "$@" -- \
+    exec cargo clippy -p ponko -p ponko_ffi --target aarch64-linux-android --all-targets "$@" -- -D warnings \
         -A clippy::missing_const_for_thread_local
 fi
 [ -x "$adb" ] || fail "no adb: \`sdkmanager platform-tools\`"
