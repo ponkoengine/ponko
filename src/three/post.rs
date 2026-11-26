@@ -1458,14 +1458,16 @@ mod tests {
     fn auto_exposure_is_off_in_the_uniform_until_enabled() {
         let off = PostUniform::new(&Post::default(), None).adapt(&Post::default(), 0.5, true);
         assert_eq!((off.meter, off.adapt, off.auto), ([0.0; 4], [0.0; 4], [0; 4]));
-        let mut post = Post::default();
-        post.auto_exposure = AutoExposure {
-            enabled: true,
-            min: -2.0,
-            max: f32::NAN,
-            compensation: 0.5,
-            center_weight: 3.0,
-            ..Default::default()
+        let mut post = Post {
+            auto_exposure: AutoExposure {
+                enabled: true,
+                min: -2.0,
+                max: f32::NAN,
+                compensation: 0.5,
+                center_weight: 3.0,
+                ..Default::default()
+            },
+            ..Post::default()
         };
         let u = PostUniform::new(&post, None).adapt(&post, 0.5, false);
         assert_eq!(
