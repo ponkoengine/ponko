@@ -136,10 +136,16 @@ that way in the native check.
 On iOS the [safe area](touch.md#notches-home-bars-and-rounded-corners) comes
 from the system: the game's window covers the whole screen, and the part
 the notch or Dynamic Island, the home indicator and the rounded corners
-leave is read when the app starts and whenever the window changes (turning
-the phone). On the simulated iPhone 18 Pro, held upright, that is 62 points
-at the top and 34 at the bottom. UI roots made with `.inside_safe_area()`
-and the engine's touch controls keep to it.
+leave is read once a frame, so it follows the phone as it turns. On the
+simulated iPhone 18 Pro that is 62 points at the top and 34 at the bottom
+held upright, and 62 on each side and 20 at the bottom turned either way
+(top, right, bottom, left: `62 0 34 0` and `0 62 20 62`). UI roots made
+with `.inside_safe_area()` and the engine's touch controls keep to it.
+
+winit makes its window before the app's scene exists, and UIKit keeps such
+a window at its upright safe area. The engine therefore reads the safe area
+from a second, empty window made in the scene and kept under the game's;
+it is never seen and takes no touches.
 
 ## Sound: the audio session
 
@@ -158,10 +164,15 @@ The category is kept and has no effect on other systems, so a game sets it
 once at setup everywhere. A category the system refuses is an
 `ErrorKind::Unsupported` error and the old one stays.
 
+While the app is suspended (`WindowEvent::Suspended`, when it loses the
+screen) the engine closes the audio output, as on Android: nothing plays
+over the home screen or another app, and no audio stream runs. On
+`WindowEvent::Resumed` it opens again, and every sound and the music go on
+from where they were.
+
 Interruptions (a call, an alarm, Siri) are the audio backend's: it stops the
 output while one lasts and starts it again after. The game's mix keeps its
-state, and its clock doesn't run on while the app is suspended. A game that
-wants to pause its music for a call pauses it on `WindowEvent::Suspended`.
+state, and its clock doesn't run on while the app is suspended.
 
 ## Files and the clipboard
 
@@ -192,18 +203,30 @@ fresh simulated iPhone, and:
    the safe area read from the system, the clipboard round trip, a file kept
    in the storage folder, and a suspend and a resume when another app comes
    to the front and the game is opened again;
-3. starts it with the keyboard open and requires its inset.
+3. starts it turned to landscape (`PONKO_IOS_ORIENTATION=landscape`, which
+   asks the app's scene to turn as the game starts) and requires the safe
+   area to follow: a window wider than tall, with insets at its sides;
+4. starts it with the keyboard open and requires its inset.
 
-The simulated iPhone is shut down and deleted at the end, also when a step
-fails. By hand:
+Every run is muted with `PONKO_MUTE=1`. The simulated iPhone is shut down
+and deleted at the end, also when a step fails. By hand:
 
 ```sh
 xcrun simctl boot "iPhone 18 Pro"
 xcrun simctl install booted "target/package/<name>-<version>-ios-simulator-aarch64/<Name>.app"
-SIMCTL_CHILD_PONKO_SMOKE=120 xcrun simctl launch --console-pty booted <app id>
+SIMCTL_CHILD_PONKO_MUTE=1 SIMCTL_CHILD_PONKO_SMOKE=120 xcrun simctl launch --console-pty booted <app id>
 xcrun simctl io booted screenshot game.png
 xcrun simctl shutdown booted
 ```
+
+**Muting a check.** `PONKO_MUTE=1` makes the audio output play silence
+(see [Audio](audio.md#muting-automated-runs-ponko_mute)), so a check doesn't
+play through the speakers of the Mac it runs on. `simctl launch` passes it as
+`SIMCTL_CHILD_PONKO_MUTE=1`. For apps started any other way (from the home
+screen, or by a UI-testing tool that taps and turns the simulator), set it in
+the simulator's own environment once after booting:
+`xcrun simctl spawn booted launchctl setenv PONKO_MUTE 1` (and
+`launchctl unsetenv PONKO_MUTE` to hear the game again).
 
 ## On a device: signing
 
@@ -274,15 +297,16 @@ Cargo targets only.
 | The package and its `Info.plist` | yes | unit tests (`cargo test -p ponko_cli`), and iOS installs and starts it on the simulator |
 | Metal rendering, full screen | simulator | the phone check draws its frame around the safe area; screenshot |
 | Steady frames | simulator | about 60 frames a second for 25 seconds |
-| Safe area | simulator | 62 / 0 / 34 / 0 points on an iPhone 18 Pro, upright |
+| Safe area | simulator | 62 / 0 / 34 / 0 points on an iPhone 18 Pro upright, 0 / 62 / 20 / 62 turned either way, also when started turned |
 | Suspend and resume | simulator | another app in front, then the game again: one event each, no frames between |
+| Sound while away | simulator | at the home screen the game's audio render thread stops (process samples), and it runs again on return |
 | On-screen keyboard and its inset | simulator | opened by the game; 301 points |
 | Clipboard, storage folder | simulator | round trips in the phone check |
 | Audio session categories | simulator | each one set on the system's session |
 | Touches, gestures, typing | **needs a device and a person** | the simulator can't be touched headlessly; the shared touch code is tested on the desktop and the web |
 | Memory warnings | **needs a person** | Simulator.app's Debug menu, or a device |
 | Interruptions (a call, an alarm), the silent switch | **needs a device and a person** | |
-| Turning the phone | **needs a person** | the safe area is read on each resize; not driven headlessly |
+| Turning the phone | simulator | turned both ways and back by a UI-testing tool, and started turned (step 3 of the check); still to confirm on a device |
 | Signing, install on a device | **needs the developer account** | the steps above |
 | Performance, power, heat | **needs a device** | the simulator's numbers say nothing about a phone |
 

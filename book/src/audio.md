@@ -675,6 +675,19 @@ Game::new("t", 1, 1).run_headless(0, |ctx| {
 The engine moves fades, music and voice limits once a frame; render a
 frame's time between frames, as a game's frames would.
 
+### Muting automated runs (`PONKO_MUTE`)
+
+A check that runs the real game with its window (a soak run, a device check
+on a simulator or a phone) still plays its sound through the speakers of
+the machine it runs on. With the environment variable `PONKO_MUTE=1` (any
+value but empty or `0`) the device output plays silence; the engine prints
+`ponko: PONKO_MUTE is set: the audio output plays silence` once when it
+opens. Everything else runs as usual: the audio stream, the mixer, meters,
+voice limits and the music's clock, so the run behaves as it does with
+sound. `render_offline` is not muted. The phone chapters say how to set it
+there: [iOS](ios.md#checking-on-the-simulator) and
+[Android](android.md#checking-on-the-emulator).
+
 From C, all of the above is in `ponko.h` under the same names:
 `ponko_ctx_set_sound_loop`, `ponko_ctx_set_sound_volume`,
 `ponko_ctx_set_sound_speed`, `ponko_ctx_fade_out_sound`,

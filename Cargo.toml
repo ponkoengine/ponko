@@ -339,7 +339,7 @@ objc2-quartz-core = { version = "0.3.2", optional = true, default-features = fal
 objc2_06 = { package = "objc2", version = "0.6.3", optional = true }
 block2 = { version = "0.6.2", optional = true }
 objc2-core-foundation = { version = "0.3.2", optional = true, default-features = false, features = ["std", "CFCGTypes"] }
-objc2-foundation = { version = "0.3.2", optional = true, default-features = false, features = ["std", "block2", "NSDictionary", "NSError", "NSNotification", "NSOperation", "NSSet", "NSString", "NSValue"] }
+objc2-foundation = { version = "0.3.2", optional = true, default-features = false, features = ["std", "block2", "NSDictionary", "NSNotification", "NSOperation", "NSSet", "NSString", "NSValue"] }
 objc2-ui-kit = { version = "0.3.2", optional = true, default-features = false, features = ["std", "block2", "objc2-core-foundation", "UIApplication", "UIGeometry", "UIOrientation", "UIPasteboard", "UIResponder", "UIScene", "UIScreen", "UIView", "UIViewController", "UIWindow", "UIWindowScene", "UIWindowSceneGeometryPreferences", "UIWindowSceneGeometryPreferencesIOS"] }
 objc2-avf-audio = { version = "0.3.2", optional = true, default-features = false, features = ["std", "AVAudioSession", "AVAudioSessionTypes"] }
 

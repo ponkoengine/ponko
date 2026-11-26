@@ -102,12 +102,12 @@ thread_local! {
 #[cfg(feature = "window")]
 fn make_insets_probe(scene: &objc2_ui_kit::UIWindowScene) {
     use objc2_06::MainThreadOnly;
-    use objc2_ui_kit::{UIViewController, UIWindow, UIWindowLevelNormal};
+    use objc2_ui_kit::{UIViewController, UIWindow};
     let mtm = scene.mtm();
     let probe = UIWindow::initWithWindowScene(UIWindow::alloc(mtm), scene);
     probe.setRootViewController(Some(&UIViewController::new(mtm)));
-    // SAFETY: a UIKit constant, read on the main thread.
-    probe.setWindowLevel(unsafe { UIWindowLevelNormal } - 1.0);
+    // Under the game's window, at `UIWindowLevelNormal` (0).
+    probe.setWindowLevel(-1.0);
     probe.setUserInteractionEnabled(false);
     // A hidden window doesn't turn.
     probe.setHidden(false);
@@ -142,14 +142,8 @@ fn turn_for_check(scene: &objc2_ui_kit::UIWindowScene) {
         UIWindowSceneGeometryPreferencesIOS::alloc(),
         mask,
     );
-    let failed = block2::RcBlock::new(|error: std::ptr::NonNull<objc2_foundation::NSError>| {
-        // SAFETY: UIKit passes a live error for the call.
-        eprintln!(
-            "ponko: PONKO_IOS_ORIENTATION: {}",
-            unsafe { error.as_ref() }.localizedDescription()
-        );
-    });
-    scene.requestGeometryUpdateWithPreferences_errorHandler(&preferences, Some(&failed));
+    // A refused turn leaves the check's turned step failing.
+    scene.requestGeometryUpdateWithPreferences_errorHandler(&preferences, None);
 }
 
 /// The general pasteboard's text, if it holds text.
