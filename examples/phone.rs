@@ -71,7 +71,8 @@ fn main() {
         let mut log: Vec<String> = Vec::new();
         let mut typed = String::new();
         let mut shown = (SafeInsets::NONE, -1.0_f32, Vec2::ZERO);
-        let mut clipboard_read = !use_clipboard;
+        // When to read the clipboard next (`None`: done).
+        let mut clipboard_read_at = use_clipboard.then_some(1.0_f64);
 
         if let Some(gpu) = ctx.gfx.gpu_capabilities() {
             let a = &gpu.adapter;
@@ -88,12 +89,19 @@ fn main() {
                 println!("phone: {frames} frames in {:.1} s", ctx.time.elapsed());
             }
             // Android lets only the app in front, with the input focus,
-            // read the clipboard: not before its window has it.
-            if !clipboard_read && ctx.time.elapsed() >= 1.0 {
-                clipboard_read = true;
-                match ctx.window.clipboard_read() {
-                    Ok(text) => println!("phone: clipboard holds {text:?}"),
-                    Err(e) => println!("phone: clipboard not read: {e}"),
+            // read the clipboard: not before its window has it, which may
+            // take seconds on a busy machine. Asked once a second until it
+            // answers, for 10 seconds.
+            if let Some(at) = clipboard_read_at
+                && ctx.time.elapsed() >= at
+            {
+                let read = ctx.window.clipboard_read();
+                clipboard_read_at = (matches!(read, Ok(None)) && at < 10.0).then_some(at + 1.0);
+                if clipboard_read_at.is_none() {
+                    match read {
+                        Ok(text) => println!("phone: clipboard holds {text:?}"),
+                        Err(e) => println!("phone: clipboard not read: {e}"),
+                    }
                 }
             }
             for event in ctx.events.read::<WindowEvent>() {

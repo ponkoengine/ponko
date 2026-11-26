@@ -411,7 +411,7 @@ tried.
 | The project template and a reference game (Coin Dash) | emulator | packaged, installed and started; Coin Dash draws its coins from the apk's pack, and a swipe on its on-screen stick moves the player |
 | The engine's unit tests | emulator | 1156 pass on Android (18 skipped: they read the checkout's files) |
 | Vulkan rendering, full screen | emulator | the phone check draws its frame around the safe area; screenshots |
-| OpenGL ES | emulator | with `WGPU_BACKEND=gl`: the same colors as Vulkan, through the encode pass (a screenshot compare in the check: mean channel difference 0.001 of 255, against 26 before) |
+| OpenGL ES | emulator | with `WGPU_BACKEND=gl`: the same colors as Vulkan, through the encode pass. Screenshots compared: identical with `-gpu swiftshader_indirect` (the check); with `-gpu auto`, a mean channel difference of 0.001 of 255 (text edges), against 26 before the pass |
 | Steady frames | emulator | 30 to 50 frames a second on the CPU renderer |
 | Safe area, rotation | emulator | 52 / 0 / 24 / 0 upright on a Pixel 7; turned, 52 on the left |
 | Suspend and resume, the surface made again | emulator | home, then the game again: one event each, frames go on |
