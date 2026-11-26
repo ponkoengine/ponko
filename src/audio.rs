@@ -149,6 +149,7 @@ mod mixer;
 mod mixer_file;
 pub(crate) mod music;
 mod pause;
+mod session;
 mod snapshots;
 mod voices;
 #[cfg(feature = "audio")]
@@ -160,6 +161,7 @@ pub use device::{AudioDevice, AudioDeviceEvent};
 use mixer::BusRegistry;
 pub use mixer::{AudioBus, AudioEffects};
 pub use music::{Quantize, Song};
+pub use session::AudioSessionCategory;
 pub use snapshots::{
     BusSnapshot, EffectOverride, MixerSnapshot, MixerState, SavedBus, SavedSnapshot, SnapshotId, SnapshotRef,
 };

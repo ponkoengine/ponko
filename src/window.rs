@@ -338,6 +338,21 @@ pub enum WindowEvent {
     FileDropped(std::path::PathBuf),
     /// DPI multiplier changed.
     ScaleFactorChanged(f32),
+    /// The app lost the screen to the system: it went to the background,
+    /// a call or an alert came in, the player opened the app switcher or
+    /// Control Center. Systems see it in the frame right after (which still
+    /// draws); then no frames run, the screen isn't drawn and the
+    /// simulation waits until [`Resumed`](Self::Resumed). Save what must
+    /// not be lost here: the system may end a suspended app without
+    /// another event. Sent on iOS (and Android); never on desktops or the web.
+    Suspended,
+    /// The app is in front again after [`Suspended`](Self::Suspended):
+    /// frames run again, the first with a clamped frame time.
+    Resumed,
+    /// The system is short of memory (iOS's memory warning, Android's
+    /// `onTrimMemory`): free what can be loaded again, such as cached
+    /// sounds and textures not on screen, or the system may end the app.
+    LowMemory,
 }
 /// Last observed display state (requests are not proof the OS accepted them).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -422,6 +437,10 @@ pub struct WindowService {
     scenario_insets: bool,
     /// What the platform reported while a scenario held the insets.
     platform_insets: Option<SafeInsets>,
+    /// Between [`WindowEvent::Suspended`] and [`WindowEvent::Resumed`].
+    suspended: bool,
+    /// How far up from the bottom the on-screen keyboard covers the window.
+    keyboard_inset: f32,
 }
 impl Default for WindowService {
     fn default() -> Self {
@@ -443,6 +462,8 @@ impl WindowService {
             safe_insets: SafeInsets::NONE,
             scenario_insets: false,
             platform_insets: None,
+            suspended: false,
+            keyboard_inset: 0.0,
         }
     }
     /// Replace the inert backend with an already-created window adapter.
@@ -494,8 +515,34 @@ impl WindowService {
     pub fn clipboard_write(&mut self, text: &str) -> Result<(), Error> {
         self.backend.clipboard_write(text)
     }
-    /// Feed an OS/fake lifecycle event. The game loop also emits it through Events.
+    /// Feed an OS/fake lifecycle event. The game loop also emits it through
+    /// Events. Returns whether it changed anything: a repeated focus,
+    /// minimized, suspended or resumed state returns `false`.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::window::WindowEvent;
+    /// Game::new("phone", 390, 844).run_headless(0, |ctx| {
+    ///     assert!(!ctx.window.suspended());
+    ///     assert!(!ctx.window.feed_event(&WindowEvent::Resumed), "already in front");
+    ///     assert!(ctx.window.feed_event(&WindowEvent::Suspended));
+    ///     assert!(ctx.window.suspended());
+    ///     assert!(ctx.window.feed_event(&WindowEvent::Resumed));
+    ///     assert!(!ctx.window.suspended());
+    /// });
+    /// ```
     pub fn feed_event(&mut self, event: &WindowEvent) -> bool {
+        match event {
+            WindowEvent::Suspended | WindowEvent::Resumed => {
+                let suspended = matches!(event, WindowEvent::Suspended);
+                if self.suspended == suspended {
+                    return false;
+                }
+                self.suspended = suspended;
+                return true;
+            }
+            _ => {}
+        }
         let last = match event {
             WindowEvent::Focused(_) => Some(&mut self.last_focus),
             WindowEvent::Minimized(_) => Some(&mut self.last_minimized),
@@ -551,10 +598,39 @@ impl WindowService {
     pub fn feed_safe_insets(&mut self, insets: SafeInsets) {
         self.safe_insets = insets.sanitized();
     }
+    /// Whether the app is suspended: between [`WindowEvent::Suspended`] and
+    /// [`WindowEvent::Resumed`]. Always `false` on desktops and the web.
+    pub fn suspended(&self) -> bool {
+        self.suspended
+    }
+    /// How far up from the window's bottom edge the on-screen keyboard
+    /// covers it, in logical pixels; 0 while it is hidden, undocked or
+    /// floating, and on desktops. The keyboard opens while text input is
+    /// allowed ([`Input::set_ime_allowed`](crate::input::Input::set_ime_allowed),
+    /// which a focused text field does); keep what the player types above it.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// Game::new("phone", 390, 844).run_headless(0, |ctx| {
+    ///     // As iOS reports its keyboard over a text field near the bottom.
+    ///     ctx.window.feed_keyboard_inset(336.0);
+    ///     let field_bottom = ctx.window.safe_area().max.y.min(844.0 - ctx.window.keyboard_inset());
+    ///     assert_eq!(field_bottom, 508.0);
+    /// });
+    /// ```
+    pub fn keyboard_inset(&self) -> f32 {
+        self.keyboard_inset
+    }
+    /// Feeds [`keyboard_inset`](Self::keyboard_inset), as the platform
+    /// reports it (the engine does on iOS); for tests. Negative or not
+    /// finite counts as 0.
+    pub fn feed_keyboard_inset(&mut self, inset: f32) {
+        self.keyboard_inset = if inset.is_finite() { inset.max(0.0) } else { 0.0 };
+    }
     /// The insets the engine read from the platform (the page, on each
     /// resize). While a scenario's step holds the insets they wait, and
     /// apply once the scenario ends: a resize doesn't undo the step.
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(any(target_arch = "wasm32", target_os = "ios", target_os = "android", test))]
     pub(crate) fn feed_platform_safe_insets(&mut self, insets: SafeInsets) {
         if self.scenario_insets {
             self.platform_insets = Some(insets.sanitized());
@@ -923,6 +999,55 @@ impl SafeInsets {
     }
 }
 
+/// The size of the window's drawable area in physical pixels: the whole
+/// window. winit's `inner_size` is that everywhere but iOS, where it is the
+/// safe area's (the outer size is the screen's, which the view fills).
+#[cfg(feature = "window")]
+pub(crate) fn surface_size(window: &winit::window::Window) -> winit::dpi::PhysicalSize<u32> {
+    #[cfg(target_os = "ios")]
+    return window.outer_size();
+    #[cfg(not(target_os = "ios"))]
+    window.inner_size()
+}
+
+/// The insets of the part of the window nothing covers (`inner`, as an
+/// origin and size in physical pixels) inside the whole window (`outer`),
+/// in logical pixels: how iOS reports its safe area through winit (the
+/// window's inner position and size are the safe area's, the outer ones
+/// the screen's). `scale` is the window's scale factor.
+#[cfg_attr(not(any(test, target_os = "ios", target_os = "android")), allow(dead_code))]
+pub(crate) fn insets_of_frame(outer: (Vec2, Vec2), inner: (Vec2, Vec2), scale: f32) -> SafeInsets {
+    let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
+    let (outer_min, outer_max) = (outer.0, outer.0 + outer.1);
+    let (inner_min, inner_max) = (inner.0, inner.0 + inner.1);
+    SafeInsets::new(
+        (inner_min.y - outer_min.y) / scale,
+        (outer_max.x - inner_max.x) / scale,
+        (outer_max.y - inner_max.y) / scale,
+        (inner_min.x - outer_min.x) / scale,
+    )
+    .sanitized()
+}
+
+/// How far up from its bottom edge a window (its top and height) is
+/// covered by an on-screen keyboard (its top and height), all in the same
+/// units: 0 when the keyboard is hidden, off the window, or floating (it
+/// doesn't reach the window's bottom edge, as an undocked or split iPad
+/// keyboard).
+#[cfg_attr(not(any(test, target_os = "ios", target_os = "android")), allow(dead_code))]
+pub(crate) fn keyboard_cover(window_top: f32, window_height: f32, keyboard_top: f32, keyboard_height: f32) -> f32 {
+    let values = [window_top, window_height, keyboard_top, keyboard_height];
+    if values.iter().any(|v| !v.is_finite()) || keyboard_height <= 0.0 || window_height <= 0.0 {
+        return 0.0;
+    }
+    let window_bottom = window_top + window_height;
+    // Half a point of slack for rounding between the two frames.
+    if keyboard_top + keyboard_height < window_bottom - 0.5 {
+        return 0.0;
+    }
+    (window_bottom - keyboard_top).clamp(0.0, window_height)
+}
+
 /// `"47px"` (a computed CSS length) as 47.
 #[cfg(any(test, all(target_arch = "wasm32", feature = "window")))]
 fn css_pixels(value: &str) -> Option<f32> {
@@ -992,6 +1117,65 @@ pub(crate) fn web_safe_insets(window: &winit::window::Window) -> SafeInsets {
 #[cfg(test)]
 mod safe_area_tests {
     use super::*;
+
+    #[test]
+    fn a_phones_safe_frame_becomes_its_insets_in_logical_pixels() {
+        // An iPhone held upright at 3x: 1179 x 2556 pixels, the safe area
+        // 59 points below the top (the island) and 34 above the bottom.
+        let outer = (Vec2::ZERO, Vec2::new(1179.0, 2556.0));
+        let inner = (Vec2::new(0.0, 177.0), Vec2::new(1179.0, 2556.0 - 177.0 - 102.0));
+        assert_eq!(insets_of_frame(outer, inner, 3.0), SafeInsets::new(59.0, 0.0, 34.0, 0.0));
+        // Sideways: the island on the left, the corners on both sides.
+        let outer = (Vec2::ZERO, Vec2::new(2556.0, 1179.0));
+        let inner = (Vec2::new(177.0, 0.0), Vec2::new(2556.0 - 354.0, 1179.0 - 63.0));
+        assert_eq!(insets_of_frame(outer, inner, 3.0), SafeInsets::new(0.0, 59.0, 21.0, 59.0));
+    }
+
+    #[test]
+    fn a_frame_that_covers_nothing_or_makes_no_sense_gives_no_insets() {
+        let whole = (Vec2::new(10.0, 20.0), Vec2::new(800.0, 600.0));
+        assert_eq!(insets_of_frame(whole, whole, 2.0), SafeInsets::NONE);
+        // An inner frame outside the outer one, or a broken scale.
+        let outside = (Vec2::new(-5.0, -5.0), Vec2::new(900.0, 700.0));
+        assert_eq!(insets_of_frame(whole, outside, 2.0), SafeInsets::NONE);
+        let inner = (Vec2::new(12.0, 20.0), Vec2::new(798.0, 600.0));
+        assert_eq!(insets_of_frame(whole, inner, 0.0), SafeInsets::new(0.0, 0.0, 0.0, 2.0));
+        assert_eq!(insets_of_frame(whole, inner, f32::NAN).left, 2.0);
+    }
+
+    #[test]
+    fn a_docked_keyboard_covers_the_window_from_its_bottom_edge() {
+        // An 844-point window, a 336-point keyboard docked at the bottom.
+        assert_eq!(keyboard_cover(0.0, 844.0, 508.0, 336.0), 336.0);
+        // Hidden: a zero-height frame, or one moved below the screen.
+        assert_eq!(keyboard_cover(0.0, 844.0, 844.0, 0.0), 0.0);
+        assert_eq!(keyboard_cover(0.0, 844.0, 844.0, 336.0), 0.0);
+        // An undocked iPad keyboard floats above the bottom edge: nothing.
+        assert_eq!(keyboard_cover(0.0, 1180.0, 500.0, 300.0), 0.0);
+        // Taller than the window: all of it.
+        assert_eq!(keyboard_cover(100.0, 300.0, 0.0, 500.0), 300.0);
+        assert_eq!(keyboard_cover(0.0, 844.0, f32::NAN, 336.0), 0.0);
+    }
+
+    #[test]
+    fn suspended_and_resumed_change_the_state_once_each() {
+        let mut window = WindowService::default();
+        assert!(!window.suspended());
+        assert!(!window.feed_event(&WindowEvent::Resumed), "a first resume is the launch");
+        assert!(window.feed_event(&WindowEvent::Suspended));
+        assert!(!window.feed_event(&WindowEvent::Suspended), "already suspended");
+        assert!(window.suspended());
+        assert!(window.feed_event(&WindowEvent::LowMemory), "every memory warning counts");
+        assert!(window.feed_event(&WindowEvent::LowMemory));
+        assert!(window.feed_event(&WindowEvent::Resumed));
+        assert!(!window.suspended());
+        window.feed_keyboard_inset(-3.0);
+        assert_eq!(window.keyboard_inset(), 0.0);
+        window.feed_keyboard_inset(f32::INFINITY);
+        assert_eq!(window.keyboard_inset(), 0.0);
+        window.feed_keyboard_inset(300.0);
+        assert_eq!(window.keyboard_inset(), 300.0);
+    }
 
     #[test]
     fn safe_insets_leave_the_middle_of_the_window() {

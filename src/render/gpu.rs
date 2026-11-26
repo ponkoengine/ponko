@@ -698,7 +698,7 @@ impl Renderer {
         #[cfg(feature = "3d")]
         let tiled = adapter.get_info().backend == wgpu::Backend::Metal;
 
-        let size = window.inner_size();
+        let size = crate::window::surface_size(&window);
         let mut config = startup::config(surface.get_default_config(&adapter, size.width.max(1), size.height.max(1)))?;
         // Prefer an sRGB target so blending happens in linear light.
         let caps = surface.get_capabilities(&adapter);

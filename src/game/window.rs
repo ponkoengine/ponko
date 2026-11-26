@@ -193,7 +193,7 @@ where
     U: SetupResult,
 {
     fn logical_window_size(window: &Window) -> Vec2 {
-        let size: LogicalSize<f32> = window.inner_size().to_logical(window.scale_factor());
+        let size: LogicalSize<f32> = crate::window::surface_size(window).to_logical(window.scale_factor());
         Vec2::new(size.width, size.height)
     }
 
@@ -204,10 +204,64 @@ where
         !self.config.vsync && cfg!(not(target_arch = "wasm32"))
     }
 
+    /// A frame, unless the app is suspended (no drawing in the background).
     fn run_frame(&mut self, event_loop: &ActiveEventLoop) {
+        if self.ctx.window.suspended() {
+            return;
+        }
+        self.frame(event_loop);
+    }
+
+    /// A lifecycle event from the system ([`crate::window::WindowEvent::Suspended`],
+    /// `Resumed`, `LowMemory`): recorded and sent to the game's systems.
+    /// Whether it changed anything (a repeated resume doesn't).
+    fn lifecycle(&mut self, event: crate::window::WindowEvent) -> bool {
+        if !self.ctx.window.feed_event(&event) {
+            return false;
+        }
+        self.ctx.events.send(event);
+        true
+    }
+
+    /// iOS reports its safe area as the window's inner frame (the outer
+    /// one is the screen's).
+    #[cfg(target_os = "ios")]
+    fn follow_ios_insets(&mut self, window: &Window) {
+        let (Ok(outer), Ok(inner)) = (window.outer_position(), window.inner_position()) else {
+            return;
+        };
+        let (outer_size, inner_size) = (window.outer_size(), window.inner_size());
+        let frame = |p: PhysicalPosition<i32>, s: winit::dpi::PhysicalSize<u32>| {
+            (
+                Vec2::new(p.x as f32, p.y as f32),
+                Vec2::new(s.width as f32, s.height as f32),
+            )
+        };
+        let insets =
+            crate::window::insets_of_frame(frame(outer, outer_size), frame(inner, inner_size), window.scale_factor() as f32);
+        self.ctx.window.feed_platform_safe_insets(insets);
+    }
+
+    /// How much of the window the on-screen keyboard covers, from its last
+    /// frame (both in screen points).
+    #[cfg(target_os = "ios")]
+    fn follow_ios_keyboard(&mut self) {
+        let (Some(window), Some((top, height))) = (&self.window, crate::platform::ios::keyboard_frame()) else {
+            return;
+        };
+        let scale = window.scale_factor();
+        let at = window.outer_position().unwrap_or_default().to_logical::<f32>(scale);
+        let size = window.outer_size().to_logical::<f32>(scale);
+        let cover = crate::window::keyboard_cover(at.y, size.height, top, height);
+        self.ctx.window.feed_keyboard_inset(cover);
+    }
+
+    fn frame(&mut self, event_loop: &ActiveEventLoop) {
         if !self.started {
             return;
         }
+        #[cfg(target_os = "ios")]
+        self.follow_ios_keyboard();
 
         if let Some(control) = &self.control {
             control.poll(&mut self.ctx);
@@ -497,10 +551,16 @@ where
             event_loop.exit();
             return;
         }
-        if let Some(window) = &self.window {
+        if let Some(window) = self.window.clone() {
+            // Back in front (iOS and Android; the first resume is the
+            // launch and changes nothing).
+            #[cfg(not(target_arch = "wasm32"))]
+            self.lifecycle(crate::window::WindowEvent::Resumed);
+            #[cfg(target_os = "ios")]
+            self.follow_ios_insets(&window);
             if let Some(renderer) = &mut self.ctx.gfx.renderer {
                 renderer.surface_event(crate::render::surface_lifecycle::SurfaceEvent::Suspended(false));
-                let size = window.inner_size();
+                let size = crate::window::surface_size(&window);
                 renderer.resize(size.width, size.height);
             }
             window.request_redraw();
@@ -508,6 +568,12 @@ where
         }
 
         let attributes = Window::default_attributes().with_title(self.config.title.clone());
+        // A game has the whole screen: no status bar over it.
+        #[cfg(target_os = "ios")]
+        let attributes = {
+            use winit::platform::ios::WindowAttributesExtIOS;
+            attributes.with_prefers_status_bar_hidden(true)
+        };
         // The first window opens with its final settings (the saved ones with
         // `restore_window_settings`), so no default-sized window shows first.
         // The web reads its storage after the canvas exists (see `start`).
@@ -563,6 +629,11 @@ where
         self.ctx
             .input
             .set_platform_touch(crate::input::touch::platform_has_touch());
+        #[cfg(target_os = "ios")]
+        {
+            self.follow_ios_insets(&window);
+            crate::platform::ios::watch_keyboard();
+        }
         #[cfg(target_arch = "wasm32")]
         crate::input::touch::prepare_canvas(&window);
         let display = event_loop.owned_display_handle();
@@ -621,7 +692,17 @@ where
         }
     }
 
-    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+    fn suspended(&mut self, event_loop: &ActiveEventLoop) {
+        // The app is losing the screen (iOS: about to go inactive; Android:
+        // its surface is going). One more frame while it still may draw,
+        // so the game's systems see `Suspended` (and can save); then none
+        // until it resumes. The web's page hide is left as it was.
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.lifecycle(crate::window::WindowEvent::Suspended) {
+            self.frame(event_loop);
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = event_loop;
         if let Some(renderer) = &mut self.ctx.gfx.renderer {
             renderer.surface_event(crate::render::surface_lifecycle::SurfaceEvent::Suspended(true));
         }
@@ -723,7 +804,7 @@ where
             WindowEvent::RedrawRequested => self.run_frame(event_loop),
 
             WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
-                let size = window.inner_size();
+                let size = crate::window::surface_size(&window);
                 if let Some(renderer) = self.ctx.gfx.renderer.as_mut() {
                     renderer.resize(size.width, size.height);
                 }
@@ -736,6 +817,8 @@ where
                 self.ctx
                     .window
                     .feed_platform_safe_insets(crate::window::web_safe_insets(&window));
+                #[cfg(target_os = "ios")]
+                self.follow_ios_insets(&window);
                 window.request_redraw();
             }
 
@@ -855,7 +938,27 @@ where
         }
     }
 
+    fn memory_warning(&mut self, _event_loop: &ActiveEventLoop) {
+        self.lifecycle(crate::window::WindowEvent::LowMemory);
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
+
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // iOS ignores `exit`: an app may not quit itself. A failed start
+        // there ends the process instead of showing a blank screen.
+        #[cfg(target_os = "ios")]
+        if let Some(error) = &self.error {
+            eprintln!("{error}");
+            crate::crash::report_error(error);
+            std::process::exit(1);
+        }
+        // Suspended: nothing to draw or simulate until the system resumes it.
+        if self.ctx.window.suspended() {
+            event_loop.set_control_flow(ControlFlow::Wait);
+            return;
+        }
         // Between two frames while a screen reader is asking: stay idle
         // (answering it) until the pause is over, then ask for the frame.
         #[cfg(feature = "accessibility")]
