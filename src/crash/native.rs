@@ -723,14 +723,14 @@ fn frames_text(left: &Left, current: &[Module], resolve: &mut dyn FnMut(usize) -
 }
 
 /// A build id as hex digits.
-#[cfg_attr(not(any(target_vendor = "apple", target_os = "linux")), allow(dead_code))]
+#[cfg_attr(not(any(target_vendor = "apple", target_os = "linux", target_os = "android")), allow(dead_code))]
 fn hex_id(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// For a module without a build id: its file's size and modification time,
 /// or `-` (never the same) when the file can't be read.
-#[cfg_attr(not(any(target_vendor = "apple", target_os = "linux", windows)), allow(dead_code))]
+#[cfg_attr(not(any(target_vendor = "apple", target_os = "linux", target_os = "android", windows)), allow(dead_code))]
 fn file_id(path: &str) -> String {
     let Ok(meta) = std::fs::metadata(path) else {
         return "-".to_string();
@@ -1053,7 +1053,7 @@ mod sys {
     }
 
     /// The loaded modules' signature: how many were loaded and unloaded.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     pub(super) fn module_signature() -> u64 {
         unsafe extern "C" fn first(
             info: *mut libc::dl_phdr_info,
@@ -1075,7 +1075,7 @@ mod sys {
 
     /// The loaded modules: `dl_iterate_phdr`'s objects, each from its
     /// program headers (its `PT_LOAD` segments' range, its GNU build id).
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     pub(super) fn modules() -> Vec<Module> {
         unsafe extern "C" fn each(
             info: *mut libc::dl_phdr_info,
@@ -1134,7 +1134,7 @@ mod sys {
     }
 
     /// The GNU build id in an ELF note segment.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     fn gnu_build_id(mut notes: &[u8]) -> Option<Vec<u8>> {
         const NT_GNU_BUILD_ID: u32 = 3;
         let word = |b: &[u8], at: usize| {
@@ -1155,12 +1155,12 @@ mod sys {
         None
     }
 
-    #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
+    #[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
     pub(super) fn module_signature() -> u64 {
         0
     }
 
-    #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
+    #[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
     pub(super) fn modules() -> Vec<Module> {
         Vec::new()
     }
