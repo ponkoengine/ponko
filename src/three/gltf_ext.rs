@@ -690,7 +690,10 @@ pub(super) fn accessor_values(json: &Value, buffers: &[Vec<u8>], index: usize, c
     let normalized = accessor["normalized"].as_bool() == Some(true);
     let view = &json["bufferViews"][field(accessor, "bufferView")?];
     let data = buffers.get(field(view, "buffer")?)?;
-    let (size, read, scale): (usize, fn(&[u8]) -> f32, f32) = match accessor["componentType"].as_u64()? {
+    /// A component's size in bytes, how to read one, and what
+    /// normalizing divides by.
+    type Component = (usize, fn(&[u8]) -> f32, f32);
+    let (size, read, scale): Component = match accessor["componentType"].as_u64()? {
         5126 => (4, |b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]), 1.0),
         5120 => (1, |b| f32::from(b[0] as i8), 127.0),
         5121 => (1, |b| f32::from(b[0]), 255.0),
