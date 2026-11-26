@@ -1,6 +1,7 @@
 # Tools and agents: the control endpoint
 
-> **Maturity: [tested](maturity.md).** Game: none. Tests: `tests/control.rs`.
+> **Maturity: [tested](maturity.md).** Game: none. Tests: `tests/control.rs`,
+> `tests/console.rs`.
 > Platforms: Linux, macOS and Windows, headless (the workspace tests in the
 > list of checks). Graphics: not involved. Missing: a reference game that uses
 > it.

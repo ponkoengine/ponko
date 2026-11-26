@@ -134,6 +134,13 @@ impl Input {
             if let Some(motion) = self.controllers.motion[pad.slot()] {
                 recording.push(InputEvent::GamepadMotion(pad, motion));
             }
+            if let Some([first, second]) = self.gamepad_touchpad(pad) {
+                for (finger, contact) in [(0, first), (1, second)] {
+                    if contact != Default::default() {
+                        recording.push(InputEvent::GamepadTouchpad(pad, finger, contact));
+                    }
+                }
+            }
         }
         self.scenarios.recording = Some(Box::new(recording));
     }

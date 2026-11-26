@@ -33,9 +33,27 @@ pub(super) enum Via {
     /// twice, to the server and on, inside the lobby's own protocol.
     #[cfg(feature = "lobby")]
     Relay,
+    /// Message protocol only: Steam lobbies with the Networking Messages
+    /// carrier (`NetMessages::steam_host`), on a fake Steam whose packets
+    /// cross the scripted network once, as directly.
+    #[cfg(feature = "steam")]
+    SteamMessages,
+    /// Message protocol only: the Networking Sockets carrier
+    /// (`NetMessages::steam_sockets_host`), connections accepted from lobby
+    /// members, the same one hop.
+    #[cfg(feature = "steam")]
+    SteamSockets,
 }
 
 impl Via {
+    /// Network crossings per one-way packet.
+    pub(super) fn hops(self) -> u64 {
+        match self {
+            #[cfg(feature = "lobby")]
+            Via::Relay => 2,
+            _ => 1,
+        }
+    }
     /// Drop about one datagram in `n`. Directly, every `n`th: the protocol
     /// must survive the worst steady pattern. Through the relay, picked by
     /// the script's hash instead: the lobby protocol under the relay sends
@@ -44,6 +62,8 @@ impl Via {
     pub(super) fn drop_one_in(self, network: &mut Network, n: u64) {
         match self {
             Via::Direct => network.drop_every = n,
+            #[cfg(feature = "steam")]
+            Via::SteamMessages | Via::SteamSockets => network.drop_every = n,
             #[cfg(feature = "lobby")]
             Via::Relay => network.loss_per_mille = 1000 / n,
         }
@@ -55,6 +75,18 @@ impl Via {
 pub(super) const EVERY_VIA: [Via; 2] = [Via::Direct, Via::Relay];
 #[cfg(not(feature = "lobby"))]
 pub(super) const EVERY_VIA: [Via; 1] = [Via::Direct];
+
+/// Every way of reaching peers for the message protocol: [`EVERY_VIA`] and
+/// the Steam carriers.
+pub(super) const EVERY_MESSAGE_VIA: &[Via] = &[
+    Via::Direct,
+    #[cfg(feature = "lobby")]
+    Via::Relay,
+    #[cfg(feature = "steam")]
+    Via::SteamMessages,
+    #[cfg(feature = "steam")]
+    Via::SteamSockets,
+];
 
 /// The scripted network shared by every endpoint of one test.
 #[derive(Default)]

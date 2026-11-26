@@ -27,10 +27,22 @@ boundary, and `each_par` runs them on all cores.
 
 ## Get the library
 
-**From a release.** Each release, starting with 0.1.0, has an archive
-per platform: `ponko-v0.1.0-linux-x86_64.tar.gz`,
-`ponko-v0.1.0-macos-arm64.tar.gz` and `ponko-v0.1.0-windows-x86_64.zip`.
-Each holds
+**From a release.** Each release has an archive per platform. 0.1.0 had
+the first three; from 0.2.0 on there are six, named like
+`ponko-v0.2.0-linux-x86_64.tar.gz`:
+
+| Archive | Rust target | Runs on |
+|---|---|---|
+| `linux-x86_64.tar.gz` | `x86_64-unknown-linux-gnu` | 64-bit Intel and AMD Linux |
+| `linux-arm64.tar.gz` | `aarch64-unknown-linux-gnu` | 64-bit Arm Linux, glibc 2.28 or newer |
+| `macos-arm64.tar.gz` | `aarch64-apple-darwin` | Apple silicon Macs |
+| `macos-x86_64.tar.gz` | `x86_64-apple-darwin` | Intel Macs |
+| `windows-x86_64.zip` | `x86_64-pc-windows-msvc` | 64-bit Intel and AMD Windows |
+| `windows-arm64.zip` | `aarch64-pc-windows-msvc` | Windows on Arm |
+
+The Linux libraries also need ALSA (`libasound2`) and udev (`libudev1`),
+which desktop distributions have. The two macOS archives are separate: for a
+universal library, join them with `lipo -create`. Each archive holds
 
 - `include/`: `ponko.h` and `ponko.hpp`, matching the library next to them;
 - `lib/`: `ponko_ffi` as a shared library (`libponko_ffi.so`,
@@ -77,7 +89,11 @@ For your own game, copy the recipe in `examples/cpp/CMakeLists.txt`: include
 the two headers, link `ponko_ffi`, ship its shared library next to your
 executable, and put your textures in an `assets/` folder next to it (the
 example copies the repository's `assets/`). Rebuild against the matching
-header when you update the engine.
+header when you update the engine. Windows finds the library next to the
+executable by itself. On macOS and Linux, give the program an rpath to it:
+`-Wl,-rpath,@executable_path` on macOS (the release libraries' install name
+is `@rpath/libponko_ffi.dylib`) and `-Wl,-rpath,'$ORIGIN'` on Linux, or
+CMake's `INSTALL_RPATH`.
 
 ### The ABI version
 
@@ -397,7 +413,7 @@ to it. The full rule is in
 | `PonkoPostEx` | `ponko_ctx_post_ex`, `ponko_ctx_set_post_ex`, `ponko_post_ex_lerp`, `ponko_post_blend_volumes` | split toning, depth of field and the sample count (`msaa`); version 2: `ssr_thin_objects` (thin things whole in reflections); version 3: `upscaler` (a `PonkoUpscaler`: the stretch or temporal upscaling); version 4: `auto_exposure` and its `auto_exposure_*` settings; version 5: `ssr_transparent` (reflections on transparent surfaces); blending two looks, and post volumes (`PonkoPostVolume` boxes) |
 | `PonkoParticleSettings3DEx` | `ponko_particle_settings3d_ex_defaults`, `ponko_ctx_set_particle_emitter3d_ex` | `softness`: soft particles |
 | `PonkoCamera3DEx` | `ponko_ctx_camera3d_ex`, `ponko_ctx_set_camera3d_ex`, `ponko_camera3d_ex_from` | `occlusion_culling` and `particles` (whether it draws particles, trails and lines) |
-| `PonkoTargetCameraEx` | `ponko_ctx_set_target_cameras_ex`, `ponko_ctx_target_camera_ex`, `ponko_target_camera_ex_from` | `particles`, per target camera |
+| `PonkoTargetCameraEx` | `ponko_ctx_set_target_cameras_ex`, `ponko_ctx_target_camera_ex`, `ponko_target_camera_ex_from` | `particles`, `debug_draw`, culling box and background (version 3), per target camera |
 | `PonkoWindowModeEx`, `PonkoWindowVideoModeEx` | `ponko_ctx_window_mode_ex`, `ponko_ctx_window_set_mode_ex`, `ponko_ctx_window_video_mode_ex` | new in this release (no ABI 2 struct): the [window](window.md#c-and-c) mode and a monitor's exclusive modes |
 | `PonkoWindowPropertiesEx`, `PonkoWindowStateEx`, `PonkoWindowMonitorEx`, `PonkoWindowImageEx`, `PonkoWindowEventEx` | `ponko_ctx_window_properties_ex`, `ponko_ctx_window_state_ex`, `ponko_ctx_window_monitor_ex`, `ponko_ctx_window_set_icon_ex`, `ponko_ctx_window_set_cursor_image_ex`, `ponko_ctx_window_event_ex` | new in this release: requested and reported window state, monitors, icon and cursor images, window events |
 | `PonkoCrashReports`, `PonkoTouchControlsDesc`, `PonkoSliceLoader` | `ponko_game_crash_reports`, `ponko_ctx_set_touch_controls_ex`, `ponko_asset_group_add_sliced` | new in this release: [crash report](crash-reports.md#c-and-c) settings and hook, touch controls with their [styles and places](touch.md#c-and-c), [sliced loaders](loading.md#sliced-loaders-from-c) |

@@ -309,7 +309,7 @@ impl BatchRig {
             &ctx.scene3d.lighting,
         );
         ctx.gfx.frame3d.views = std::mem::take(&mut frame.views);
-        ctx.collect_views(&skins);
+        ctx.collect_views(&skins, None);
         frame.views = std::mem::take(&mut ctx.gfx.frame3d.views);
         if self.skins {
             frame.skins = skins;
