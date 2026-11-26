@@ -1,7 +1,9 @@
 //! Transport conformance tests for the lockstep protocol ([`Net`]).
 //!
 //! Lockstep sits on the private `Transport` trait in `net.rs`: UDP, the
-//! in-memory loopback, or the Steam relay. These tests drive that seam with
+//! in-memory loopback, the Steam relay or the lobby server's relay
+//! (feature `lobby`; the tests marked with `EVERY_VIA` run through an
+//! in-memory relay server too). These tests drive that seam with
 //! the scripted network in `net/scripted.rs` and a simulated clock
 //! (`Net::ready_at`), so they need no sockets, no threads, no Steam
 //! installation and no renderer, and they pin what the protocol does when
@@ -13,19 +15,19 @@
 //! What a lockstep transport must do, and what each existing one does.
 //! "Scripted" is the test transport; it does each of these on request.
 //!
-//! | Contract | UDP | Loopback (`loopback_lossy`) | Steam relay | Scripted |
-//! |---|---|---|---|---|
-//! | `recv` never blocks; `None` means no packet for this poll | `WouldBlock` → `None` | yes | drains Steam's queue into an inbox | yes |
-//! | Receive errors are not reported; the protocol only sees silence | skipped, at most 64 in a row per poll | never errors | messages without a Steam id are skipped | skipped (one-shot injection) |
-//! | `send` is fire-and-forget: no result, a packet that can't go out is lost | result ignored (a full buffer is a lost packet) | unknown address or closed peer: dropped | result ignored; dropped until the lobby owner is known | refusal and failure both drop |
-//! | A failure the transport finds on its own comes from `error()`, once, and ends the session | never | never | lobby could not be created or joined | on request |
-//! | Deliver whole packets; the protocol sends at most 1400 bytes | OS-dependent | truncates to the 64 KiB receive buffer | truncates to the 64 KiB receive buffer | drops > 1500 |
-//! | May reorder / lose / duplicate | yes / yes / yes | no / about one in n / no | per Steam | each on request |
-//! | Address identity: one stable address per peer for the session | socket address | `127.0.0.1:(i + 1)` | synthetic IPv6 per Steam id; the lobby owner is one fixed address | synthetic |
-//! | Clock | none: every timer is measured against the `now` passed to the session | same | same | same |
-//! | Disconnect | none; protocol `BYE` and the silence timeout | same | same (leaving the lobby is separate) | link cut on request |
-//! | `local_addr()` | the bound socket | synthetic | synthetic | synthetic |
-//! | Covered on CI by | `tests/net.rs` (localhost) | `tests/net.rs` | compiled with `--features steam`; no live relay run | this module |
+//! | Contract | UDP | Loopback (`loopback_lossy`) | Steam relay | Lobby relay | Scripted |
+//! |---|---|---|---|---|---|
+//! | `recv` never blocks; `None` means no packet for this poll | `WouldBlock` → `None` | yes | drains Steam's queue into an inbox | polls the lobby once per drain, then reads its inbox | yes |
+//! | Receive errors are not reported; the protocol only sees silence | skipped, at most 64 in a row per poll | never errors | messages without a Steam id are skipped | lobby failures come from `error()` instead | skipped (one-shot injection) |
+//! | `send` is fire-and-forget: no result, a packet that can't go out is lost | result ignored (a full buffer is a lost packet) | unknown address or closed peer: dropped | result ignored; dropped until the lobby owner is known | out of the room or a full lane: dropped | refusal and failure both drop |
+//! | A failure the transport finds on its own comes from `error()`, once, and ends the session | never | never | lobby could not be created or joined | the lobby connection failed or closed, or the client left the room | on request |
+//! | Deliver whole packets; the protocol sends at most 1400 bytes | OS-dependent | truncates to the 64 KiB receive buffer | truncates to the 64 KiB receive buffer | whole relay frames; refused at creation if the server relays less than 1504 bytes | drops > 1500 |
+//! | May reorder / lose / duplicate | yes / yes / yes | no / about one in n / no | per Steam | per the lobby's links; its unreliable lane drops stale and duplicate frames | each on request |
+//! | Address identity: one stable address per peer for the session | socket address | `127.0.0.1:(i + 1)` | synthetic IPv6 per Steam id; the lobby owner is one fixed address | synthetic IPv6 per member id; a client only hears its host | synthetic |
+//! | Clock | none: every timer is measured against the `now` passed to the session | same | same | the lobby follows the session's `now` (`flush`) | same |
+//! | Disconnect | none; protocol `BYE` and the silence timeout | same | same (leaving the lobby is separate) | same (leaving the room ends the session) | link cut on request |
+//! | `local_addr()` | the bound socket | synthetic | synthetic | synthetic | synthetic |
+//! | Covered on CI by | `tests/net.rs` (localhost) | `tests/net.rs` | compiled with `--features steam`; no live relay run | this module (`Via::Relay`) and `ponko_lobby`'s `tests/relay_sessions.rs` (the real server) | this module |
 //!
 //! Protocol guarantees pinned here, given any transport that keeps the
 //! contract above:
@@ -75,7 +77,7 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use super::scripted::{Datagram, Network, Shared, addr, port};
+use super::scripted::{Datagram, EVERY_VIA, Network, Shared, Via, addr, port};
 use super::{GONE, INPUTS, MAGIC, MAX_INPUT_BYTES, Net, NetState, PACKET, VERSION};
 use crate::{perf::Instant, reflect::WorldReflect};
 use ponko_ecs::World;
@@ -86,9 +88,13 @@ const STEP: Duration = Duration::from_millis(10);
 const SEED: u64 = 7;
 
 /// A host (`nets[0]`, `addr(0)`) and guests (`addr(1)`, ...), each trying
-/// one simulation tick per step.
+/// one simulation tick per step. Through a relay, the server is `addr(0)`
+/// and the host and guests `addr(1)`, ...
 struct Session {
     net: Shared,
+    /// The relay server, polled at every step, for sessions through one.
+    #[cfg(feature = "lobby")]
+    relay: Option<super::lobby::relay::testing::RelayServer>,
     nets: Vec<Net>,
     start: Instant,
     now: Duration,
@@ -114,6 +120,48 @@ impl Session {
     fn new(players: usize, tune: impl Fn(Net) -> Net, script: impl FnOnce(&mut Network)) -> Self {
         Self::with_seeds(players, &vec![SEED; players], tune, script)
     }
+    /// [`new`](Self::new), with the peers reaching each other `via` that.
+    fn via(via: Via, players: usize, tune: impl Fn(Net) -> Net, script: impl FnOnce(&mut Network)) -> Self {
+        match via {
+            Via::Direct => Self::new(players, tune, script),
+            #[cfg(feature = "lobby")]
+            Via::Relay => Self::relayed(players, tune, script),
+        }
+    }
+    /// `players` peers through a relay server: the room forms first (on
+    /// the scripted network, already shaped by `script`), then the room's
+    /// host hosts the session and the others join it.
+    #[cfg(feature = "lobby")]
+    fn relayed(players: usize, tune: impl Fn(Net) -> Net, script: impl FnOnce(&mut Network)) -> Self {
+        let net: Shared = Default::default();
+        script(&mut net.lock().unwrap());
+        let (server, lobbies) = super::lobby::relay::testing::scripted_room(&net, players, STEP);
+        let nets: Vec<Net> = lobbies
+            .into_iter()
+            .enumerate()
+            .map(|(i, lobby)| {
+                let n = if i == 0 {
+                    Net::host_relay(lobby, players)
+                } else {
+                    Net::join_relay(lobby)
+                };
+                let mut n = tune(n.expect("in the room"));
+                n.begin(SEED);
+                n
+            })
+            .collect();
+        Self {
+            net,
+            relay: Some(server),
+            start: Instant::now(),
+            now: Duration::ZERO,
+            ticks: vec![0; nets.len()],
+            seen: vec![Vec::new(); nets.len()],
+            input_len: 0,
+            worlds: nets.iter().map(|_| None).collect(),
+            nets,
+        }
+    }
     /// One endpoint per seed; the host expects `players` (so more seeds than
     /// players is one joiner too many).
     fn with_seeds(players: usize, seeds: &[u64], tune: impl Fn(Net) -> Net, script: impl FnOnce(&mut Network)) -> Self {
@@ -131,6 +179,8 @@ impl Session {
             .collect();
         Self {
             net,
+            #[cfg(feature = "lobby")]
+            relay: None,
             start: Instant::now(),
             now: Duration::ZERO,
             ticks: vec![0; nets.len()],
@@ -149,6 +199,10 @@ impl Session {
     fn tick_clock(&mut self) {
         self.net.lock().unwrap().tick += 1;
         self.now += STEP;
+        #[cfg(feature = "lobby")]
+        if let Some(relay) = &mut self.relay {
+            relay.poll(STEP);
+        }
     }
     /// Peer `i` tries its next tick. True if it ran.
     fn advance(&mut self, i: usize) -> bool {
@@ -239,36 +293,65 @@ fn forged_inputs(players: usize, stream: u8, tick: u64, data: &[u8]) -> Vec<u8> 
 
 #[test]
 fn every_peer_sees_the_same_inputs_through_latency() {
-    let instant = Session::new(3, |n| n, |_| {}).run_to(40);
-    let mut s = Session::new(3, |n| n, |n| n.delay = 4);
-    let delayed = s.run_to(40);
-    assert!(delayed > instant, "latency costs steps: {delayed} vs {instant}");
-    s.assert_inputs(3);
-    assert_eq!(s.states(), [NetState::Running; 3]);
-    assert_eq!((s.nets[1].player(), s.nets[2].player()), (1, 2));
-    assert_eq!(s.nets[2].players(), 3, "the host decides the player count");
+    for via in EVERY_VIA {
+        let instant = Session::via(via, 3, |n| n, |_| {}).run_to(40);
+        let mut s = Session::via(via, 3, |n| n, |n| n.delay = 4);
+        let delayed = s.run_to(40);
+        assert!(
+            delayed > instant,
+            "{via:?}: latency costs steps: {delayed} vs {instant}"
+        );
+        s.assert_inputs(3);
+        assert_eq!(s.states(), [NetState::Running; 3]);
+        let mut players = [s.nets[1].player(), s.nets[2].player()];
+        players.sort_unstable();
+        assert_eq!(players, [1, 2], "{via:?}");
+        assert_eq!(s.nets[2].players(), 3, "the host decides the player count");
 
-    // The host's settings reach the joiners.
-    let mut s = Session::new(2, |n| n.input_delay(6), |_| {});
-    s.run_to(20);
-    s.assert_inputs(6);
+        // The host's settings reach the joiners.
+        let mut s = Session::via(via, 2, |n| n.input_delay(6), |_| {});
+        s.run_to(20);
+        s.assert_inputs(6);
+    }
 }
 
 #[test]
 fn loss_duplication_and_reordering_cost_only_time() {
-    let mut s = Session::new(
-        3,
-        |n| n,
-        |n| {
-            n.delay = 2;
-            n.drop_every = 3;
-            n.duplicate = true;
-            n.newest_first = true;
-        },
-    );
-    s.run_to(200);
-    s.assert_inputs(3);
-    assert_eq!(s.states(), [NetState::Running; 3]);
+    for via in EVERY_VIA {
+        let mut s = Session::via(
+            via,
+            3,
+            |n| n,
+            |n| {
+                n.delay = 2;
+                via.drop_one_in(n, 3);
+                n.duplicate = true;
+                n.newest_first = true;
+            },
+        );
+        s.run_to(200);
+        s.assert_inputs(3);
+        assert_eq!(s.states(), [NetState::Running; 3], "{via:?}");
+    }
+}
+
+#[test]
+fn random_loss_and_jitter_cost_only_time() {
+    for via in EVERY_VIA {
+        let mut s = Session::via(
+            via,
+            4,
+            |n| n,
+            |n| {
+                n.delay = 3;
+                n.jitter = 5;
+                n.loss_per_mille = 100;
+            },
+        );
+        s.run_to(150);
+        s.assert_inputs(3);
+        assert_eq!(s.states(), [NetState::Running; 4], "{via:?}");
+    }
 }
 
 #[test]
@@ -325,25 +408,27 @@ fn a_transport_failure_ends_the_session_with_its_message() {
 
 #[test]
 fn a_silent_peer_is_lost_after_the_timeout_in_simulated_time() {
-    let timeout = Duration::from_millis(500);
-    let mut s = Session::new(2, |n| n.timeout(timeout), |_| {});
-    s.run_to(10);
-    s.script(|n| n.cut = true);
-    let cut_at = s.now;
-    // Silence shorter than the timeout only stalls.
-    while s.now - cut_at + STEP <= timeout {
-        s.step(1);
-        assert_eq!(s.states(), [NetState::Running; 2], "after {:?}", s.now - cut_at);
+    for via in EVERY_VIA {
+        let timeout = Duration::from_millis(500);
+        let mut s = Session::via(via, 2, |n| n.timeout(timeout), |_| {});
+        s.run_to(10);
+        s.script(|n| n.cut = true);
+        let cut_at = s.now;
+        // Silence shorter than the timeout only stalls.
+        while s.now - cut_at + STEP <= timeout {
+            s.step(1);
+            assert_eq!(s.states(), [NetState::Running; 2], "{via:?} after {:?}", s.now - cut_at);
+        }
+        s.step(3);
+        assert_eq!(s.states(), [NetState::Lost; 2], "{via:?}");
+        assert_eq!(s.nets[0].error(), Some("player 1 stopped answering"));
+        assert_eq!(s.nets[1].error(), Some("player 0 stopped answering"));
+        // The link coming back doesn't revive it.
+        s.script(|n| n.cut = false);
+        let stopped = s.ticks.clone();
+        s.step(20);
+        assert_eq!(s.ticks, stopped);
     }
-    s.step(3);
-    assert_eq!(s.states(), [NetState::Lost; 2]);
-    assert_eq!(s.nets[0].error(), Some("player 1 stopped answering"));
-    assert_eq!(s.nets[1].error(), Some("player 0 stopped answering"));
-    // The link coming back doesn't revive it.
-    s.script(|n| n.cut = false);
-    let stopped = s.ticks.clone();
-    s.step(20);
-    assert_eq!(s.ticks, stopped);
 }
 
 #[test]
@@ -439,6 +524,25 @@ fn packets_fit_the_limit_with_the_largest_inputs() {
     }
 }
 
+/// Through the relay, the largest lockstep packets travel inside the lobby
+/// protocol's datagrams, which stay within the transport's MTU.
+#[cfg(feature = "lobby")]
+#[test]
+fn relayed_packets_with_the_largest_inputs_fit_the_mtu() {
+    for players in [2, 8] {
+        let mut s = Session::relayed(players, |n| n, |n| Via::Relay.drop_one_in(n, 5));
+        s.input_len = MAX_INPUT_BYTES;
+        s.run_to(40);
+        s.assert_inputs(3);
+        assert_eq!(s.states(), vec![NetState::Running; players]);
+        let largest = s.net.lock().unwrap().largest;
+        assert!(
+            largest > MAX_INPUT_BYTES && largest <= super::scripted::MTU,
+            "{players} players: largest datagram {largest}"
+        );
+    }
+}
+
 #[test]
 fn a_full_host_and_a_different_seed_refuse_the_joiner() {
     // Three endpoints, a host for two: the second joiner is one too many.
@@ -469,19 +573,23 @@ fn different_worlds_are_reported_on_both_sides() {
     same.run_to(40);
     assert!(same.nets.iter().all(|n| n.desync().is_none()));
 
-    let mut s = Session::new(2, |n| n.checksum_every(4), |n| n.delay = 2);
-    s.worlds = vec![world(1.0), world(2.0)];
-    s.run_to(40);
-    for (i, net) in s.nets.iter().enumerate() {
-        let d = net.desync().unwrap_or_else(|| panic!("peer {i} noticed nothing"));
-        assert_eq!(
-            (d.tick, d.player),
-            (3, 1 - i),
-            "the first checked tick, the other player"
-        );
-        assert_eq!(d.components, ["Transform2D"]);
+    for via in EVERY_VIA {
+        let mut s = Session::via(via, 2, |n| n.checksum_every(4), |n| n.delay = 2);
+        s.worlds = vec![world(1.0), world(2.0)];
+        s.run_to(40);
+        for (i, net) in s.nets.iter().enumerate() {
+            let d = net
+                .desync()
+                .unwrap_or_else(|| panic!("{via:?}: peer {i} noticed nothing"));
+            assert_eq!(
+                (d.tick, d.player),
+                (3, 1 - i),
+                "the first checked tick, the other player"
+            );
+            assert_eq!(d.components, ["Transform2D"]);
+        }
+        assert_eq!(s.states(), [NetState::Running; 2], "a desync is reported, not fatal");
     }
-    assert_eq!(s.states(), [NetState::Running; 2], "a desync is reported, not fatal");
 }
 
 #[test]
@@ -544,13 +652,23 @@ fn a_leaving_peer_gives_up_on_a_quiet_peer() {
 
 #[test]
 fn the_same_script_gives_the_same_traffic() {
+    for via in EVERY_VIA {
+        same_traffic(via);
+    }
+}
+
+/// Two runs of one script send the same datagrams. Through the relay, the
+/// lobby connections start with random nonces, so the datagrams compare
+/// by sender, receiver, size and due tick.
+fn same_traffic(via: Via) {
     let run = || -> Vec<Datagram> {
-        let mut s = Session::new(
+        let mut s = Session::via(
+            via,
             3,
             |n| n,
             |n| {
                 n.delay = 1;
-                n.drop_every = 4;
+                via.drop_one_in(n, 4);
                 n.duplicate = true;
             },
         );
@@ -559,5 +677,10 @@ fn the_same_script_gives_the_same_traffic() {
     };
     let (a, b) = (run(), run());
     assert!(a.len() > 100);
-    assert_eq!(a, b);
+    if via == Via::Direct {
+        assert_eq!(a, b);
+    } else {
+        let shape = |log: &[Datagram]| -> Vec<_> { log.iter().map(|d| (d.from, d.to, d.bytes.len(), d.due)).collect() };
+        assert_eq!(shape(&a), shape(&b), "{via:?}");
+    }
 }

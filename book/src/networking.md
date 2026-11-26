@@ -634,6 +634,13 @@ Everything networking is behind `ctx.net` (and in the `ponko::net` module):
 Lockstep and messages are independent and can run side by side. A
 single-player game has an offline lockstep session and nothing else.
 
+Both run over UDP (`Net::host`, `NetMessages::host`), WebSocket for
+browsers (`accept_web`, `join_web`), Steam, or the lobby server's relay
+for players who can't reach each other (`Net::host_relay`,
+`NetMessages::host_relay`, see [Game sessions through the
+relay](lobby.md#game-sessions-through-the-relay)); messages also over
+[WebRTC](webrtc.md). The session works the same on each.
+
 ## Application messages (Rust)
 
 For client/server games with their own packet format, give the game a

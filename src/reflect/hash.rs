@@ -132,6 +132,10 @@ pub(super) fn of_sprites() -> HashFn {
                     h.value(&r);
                 }
             }
+            // Only flipped sprites add a word, so unflipped worlds hash as before.
+            if s.flip_x || s.flip_y {
+                h.word(2 | u64::from(s.flip_x) << 2 | u64::from(s.flip_y) << 3);
+            }
             sum = sum.wrapping_add(h.finish());
         });
         sum
