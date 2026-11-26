@@ -164,22 +164,22 @@ Overlap and ΔE are after registration; a dash: not drawn.
 | Asset | Loaded | Picture | Overlap | ΔE | Difference |
 |---|---|---|---:|---:|---|
 | ABeautifulGame | yes | differs | 0.12 | 18.7 | view: the screenshot looks across the board from a low corner; the framing rule sees it edge-on |
-| AlphaBlendModeTest | yes | matches | 0.93 | 8.4 |  |
+| AlphaBlendModeTest | yes | matches | 0.93 | 8.5 |  |
 | AnimatedColorsCube | yes | differs | 0.91 | 24.0 | its colors are animated with `KHR_animation_pointer`, which doesn't play ([#596](https://github.com/ponkoengine/ponko/issues/596)) |
 | AnimatedCube | yes | matches | 0.79 | 18.6 |  |
 | AnimatedMorphCube | yes | differs | 0.90 | 49.9 | light: lit from the front, the screenshot shows its shaded side mid-morph |
 | AnimatedTriangle | yes | differs | 0.33 | 50.5 | anim: the screenshot shows it turned mid-animation; drawn at rest |
 | AnimationPointerUVs | skipped: needs `KHR_materials_unlit` | — | | | not drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)) |
-| AnisotropyBarnLamp | yes | differs | 0.47 | 19.6 | anisotropy isn't drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)); view |
+| AnisotropyBarnLamp | yes | differs | 0.47 | 19.7 | anisotropy isn't drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)); view |
 | AnisotropyDiscTest | yes | matches | 0.81 | 12.0 |  |
 | AnisotropyRotationTest | yes | differs | 0.63 | 26.1 | anisotropy isn't drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)) |
 | AnisotropyStrengthTest | yes | differs | 0.36 | 20.6 | anisotropy isn't drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)) |
-| AntiqueCamera | yes | differs | 0.44 | 9.9 | view: the screenshot is from three quarters, the rule from the front |
+| AntiqueCamera | yes | differs | 0.44 | 9.8 | view: the screenshot is from three quarters, the rule from the front |
 | AttenuationTest | yes | differs | 0.06 | 19.3 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
 | Avocado | yes | differs | 0.80 | 31.3 | light: brighter, the sun lights the side the camera sees |
-| BarramundiFish | yes | differs | 0.45 | 18.0 | view: drawn head-on, the screenshot is from the side |
-| BoomBox | yes | matches | 0.78 | 12.7 |  |
-| BoomBoxWithAxes | yes | matches | 0.75 | 11.5 |  |
+| BarramundiFish | yes | differs | 0.45 | 17.9 | view: drawn head-on, the screenshot is from the side |
+| BoomBox | yes | matches | 0.77 | 12.9 |  |
+| BoomBoxWithAxes | yes | matches | 0.75 | 11.4 |  |
 | Box | yes | differs | 0.75 | 43.5 | view: the screenshot looks at a corner from above, the rule at one face |
 | Box With Spaces | yes | matches | 0.74 | 19.5 |  |
 | BoxAnimated | yes | differs | 0.82 | 46.2 | anim: the screenshot shows a moved frame; drawn at rest |
@@ -190,10 +190,10 @@ Overlap and ΔE are after registration; a dash: not drawn.
 | BrainStem | yes | differs | 0.30 | 12.4 | anim: drawn in its rest pose, the screenshot shows a pose of its animation |
 | Cameras | yes | differs | 0.97 | 34.1 | light: the file's camera frames it as the screenshot, but it is lit fully where the screenshot shades it |
 | CarbonFibre | yes | matches | 0.78 | 17.9 |  |
-| CarConcept | yes | differs | 0.54 | 25.7 | environment: the paint and chrome reflect a flat studio sky ([#597](https://github.com/ponkoengine/ponko/issues/597)); clear coat isn't drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)) |
+| CarConcept | yes | differs | 0.54 | 25.5 | environment: the paint and chrome reflect a flat studio sky ([#597](https://github.com/ponkoengine/ponko/issues/597)); clear coat isn't drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)) |
 | CesiumMan | yes | differs | 0.42 | 15.2 | anim: rest pose against a walking pose |
 | CesiumMilkTruck | yes | differs | 0.71 | 26.6 | view: the screenshot is from three quarters |
-| ChairDamaskPurplegold | yes | differs | 0.74 | 30.0 | sheen isn't drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)): the fabric's colors are off |
+| ChairDamaskPurplegold | yes | differs | 0.74 | 30.2 | sheen isn't drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)): the fabric's colors are off |
 | ChronographWatch | yes | differs | 0.70 | 23.4 | crop: the screenshot is a close-up of the dial |
 | ClearCoatCarPaint | skipped: needs `KHR_materials_clearcoat` | — | | | not drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)) |
 | ClearCoatTest | yes | differs | 0.54 | 18.9 | clear coat isn't drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)); the labels are smaller |
@@ -211,15 +211,15 @@ Overlap and ΔE are after registration; a dash: not drawn.
 | CompareMetallic | yes | matches | 0.95 | 16.2 |  |
 | CompareNormal | yes | matches | 0.98 | 15.0 |  |
 | CompareRoughness | yes | matches | 0.96 | 13.0 |  |
-| CompareSheen | yes | differs | 0.96 | 24.3 | sheen isn't drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)): darker |
+| CompareSheen | yes | differs | 0.96 | 24.6 | sheen isn't drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)): darker |
 | CompareSpecular | yes | matches | 0.95 | 14.5 |  |
 | CompareTransmission | yes | differs | 0.44 | 11.1 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
 | CompareVolume | yes | differs | 0.48 | 13.5 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
-| Corset | yes | matches | 0.84 | 17.4 |  |
+| Corset | yes | matches | 0.84 | 17.5 |  |
 | Cube | yes | matches | 0.79 | 18.2 |  |
 | CubeVisibility | skipped: needs `KHR_node_visibility` | — | | | not drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)) |
-| DamagedHelmet | yes | differs | 0.43 | 18.2 | view: the screenshot is from three quarters |
-| DiffuseTransmissionPlant | yes | differs | 0.41 | 27.3 | the file's camera isn't the screenshot's; diffuse transmission isn't drawn ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
+| DamagedHelmet | yes | differs | 0.43 | 18.1 | view: the screenshot is from three quarters |
+| DiffuseTransmissionPlant | yes | differs | 0.41 | 27.4 | the file's camera isn't the screenshot's; diffuse transmission isn't drawn ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
 | DiffuseTransmissionTeacup | yes | differs | 0.33 | 14.1 | view; diffuse transmission isn't drawn ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
 | DiffuseTransmissionTest | skipped: needs `KHR_materials_unlit` | — | | | not drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)) |
 | DirectionalLight | yes | differs | 0.15 | 31.3 | light units: the file's sun (in lux) is drawn as engine intensity ([#597](https://github.com/ponkoengine/ponko/issues/597)) |
@@ -231,22 +231,22 @@ Overlap and ΔE are after registration; a dash: not drawn.
 | EnvironmentTest | yes | differs | 0.13 | 13.4 | environment: the spheres reflect a flat sky, no environment map ([#597](https://github.com/ponkoengine/ponko/issues/597)) |
 | FlightHelmet | yes | differs | 0.36 | 19.6 | crop: the screenshot is a close-up |
 | Fox | yes | differs | 0.21 | 36.7 | view: drawn from the front, the screenshot is from the side |
-| GlamVelvetSofa | yes | matches | 0.94 | 15.4 |  |
+| GlamVelvetSofa | yes | matches | 0.94 | 15.2 |  |
 | GlassBrokenWindow | yes | differs | 0.28 | 19.5 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
 | GlassHurricaneCandleHolder | yes | differs | 0.39 | 18.5 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
-| GlassVaseFlowers | yes | differs | 0.16 | 18.6 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
+| GlassVaseFlowers | yes | differs | 0.16 | 18.7 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
 | InterpolationTest | yes | matches | 0.93 | 9.1 |  |
 | IORTestGrid | yes | differs | 0.80 | 20.7 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)): the grid is dark |
-| IridescenceAbalone | yes | matches | 0.97 | 14.0 |  |
+| IridescenceAbalone | yes | matches | 0.97 | 13.8 |  |
 | IridescenceDielectricSpheres | yes | differs | 0.15 | 8.1 | iridescence isn't drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)); view |
 | IridescenceLamp | yes | differs | 0.71 | 20.8 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)); iridescence isn't drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)) |
 | IridescenceMetallicSpheres | yes | differs | 0.31 | 11.1 | iridescence isn't drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)); view |
 | IridescenceSuzanne | skipped: needs `KHR_materials_iridescence` | — | | | not drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)) |
-| IridescentDishWithOlives | yes | differs | 0.51 | 37.3 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)): the jug is missing (file camera) |
+| IridescentDishWithOlives | yes | differs | 0.51 | 37.1 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)): the jug is missing (file camera) |
 | Lantern | yes | differs | 0.55 | 11.2 | view: the screenshot is from three quarters |
-| LightsPunctualLamp | yes | differs | 0.35 | 28.4 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)): the shade is missing; light units ([#597](https://github.com/ponkoengine/ponko/issues/597)) |
+| LightsPunctualLamp | yes | differs | 0.35 | 28.5 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)): the shade is missing; light units ([#597](https://github.com/ponkoengine/ponko/issues/597)) |
 | LightVisibility | skipped: needs `KHR_node_visibility` | — | | | not drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)) |
-| MandarinOrange | yes | matches | 0.91 | 15.5 |  |
+| MandarinOrange | yes | matches | 0.91 | 15.6 |  |
 | MaterialsVariantsShoe | yes | differs | 0.56 | 26.0 | view: the screenshot is from the side, above |
 | MeshoptCubeTest | yes | differs | 0.11 | 20.7 | view: the cubes are drawn, the screenshot looks from above |
 | MeshPrimitiveModes | yes | differs | 0.16 | 46.3 | points and lines aren't drawn (strips and fans are) |
@@ -254,14 +254,14 @@ Overlap and ΔE are after registration; a dash: not drawn.
 | MetalRoughSpheresNoTextures | yes | matches | 0.81 | 6.9 |  |
 | MorphPrimitivesTest | yes | differs | 0.14 | 22.6 | view: both primitives and the morph are right, the screenshot is from an angle |
 | MorphStressTest | yes | differs | 0.29 | 30.1 | anim: the screenshot shows other morph weights |
-| MosquitoInAmber | yes | differs | 0.36 | 24.3 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)): the amber is missing |
+| MosquitoInAmber | yes | differs | 0.36 | 24.0 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)): the amber is missing |
 | MultipleScenes | yes | matches | 0.75 | 17.8 |  |
 | MultiUVTest | yes | matches | 0.74 | 18.7 |  |
 | NegativeScaleTest | yes | differs | 0.91 | 22.7 | light: lighter; the mirrored shapes are right |
 | NodePerformanceTest | yes | differs | 0.28 | 21.3 | light: brighter (file camera) |
 | NodeVisibilityTest | yes | differs | 0.63 | 22.5 | `KHR_node_visibility` isn't read ([#596](https://github.com/ponkoengine/ponko/issues/596)): hidden nodes are drawn |
-| NormalTangentMirrorTest | yes | matches | 0.77 | 12.3 |  |
-| NormalTangentTest | yes | matches | 0.91 | 8.8 |  |
+| NormalTangentMirrorTest | yes | matches | 0.77 | 11.6 |  |
+| NormalTangentTest | yes | matches | 0.91 | 8.6 |  |
 | OrientationTest | yes | differs | 0.72 | 31.4 | view: the screenshot is from an angle |
 | PlaysetLightTest | yes | differs | 0.78 | 55.9 | light units: the file's 512 lux sun blows the picture out ([#597](https://github.com/ponkoengine/ponko/issues/597)) |
 | PointLightIntensityTest | yes | differs | 0.60 | 35.0 | light units: the file's candela lights are near black next to the rig's sun ([#597](https://github.com/ponkoengine/ponko/issues/597)) |
@@ -275,11 +275,11 @@ Overlap and ΔE are after registration; a dash: not drawn.
 | ScatteringSkull | yes | differs | 0.00 | 26.8 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)): nothing is drawn |
 | ScatterPlant | yes | differs | 0.28 | 25.2 | the file's camera is far from the screenshot's: drawn small |
 | ScatterTest | yes | differs | 0.39 | 24.5 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
-| SciFiHelmet | yes | differs | 0.45 | 19.7 | background: the screenshot has a photograph behind it, so the outlines don't line up; view |
-| SheenChair | yes | differs | 0.51 | 28.0 | sheen isn't drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)); view |
+| SciFiHelmet | yes | differs | 0.46 | 19.9 | background: the screenshot has a photograph behind it, so the outlines don't line up; view |
+| SheenChair | yes | differs | 0.51 | 28.1 | sheen isn't drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)); view |
 | SheenCloth | yes | differs | 0.56 | 19.6 | sheen isn't drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)): bluer and lighter |
 | SheenTestGrid | skipped: needs `KHR_materials_sheen` | — | | | not drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)) |
-| SheenWoodLeatherSofa | yes | differs | 0.66 | 11.5 | sheen isn't drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)); crop |
+| SheenWoodLeatherSofa | yes | differs | 0.59 | 11.4 | sheen isn't drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)); crop |
 | SimpleInstancing | yes | differs | 0.71 | 22.6 | view: all 125 instances are drawn (since this change), the screenshot is from an angle |
 | SimpleMaterial | yes | differs | 0.44 | 20.5 | view |
 | SimpleMeshes | yes | differs | 0.93 | 24.4 | light: lighter; both triangles are right |
@@ -290,7 +290,7 @@ Overlap and ΔE are after registration; a dash: not drawn.
 | SpecGlossVsMetalRough | yes | matches | 0.97 | 14.9 |  |
 | SpecularSilkPouf | skipped: needs `KHR_materials_specular` | — | | | not drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)) |
 | SpecularTest | yes | matches | 0.87 | 6.3 |  |
-| Sponza | yes | differs | 0.21 | 17.8 | view: the rule frames the building from outside, the screenshot is inside the atrium |
+| Sponza | yes | differs | 0.20 | 17.8 | view: the rule frames the building from outside, the screenshot is inside the atrium |
 | StainedGlassLamp | yes | differs | 0.49 | 23.6 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)): the glass shade is missing |
 | SunglassesKhronos | yes | differs | 0.09 | 30.6 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)): the lenses are missing; iridescence isn't drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)) |
 | Suzanne | yes | differs | 0.54 | 16.5 | background: the screenshot has a photograph behind it |
@@ -298,7 +298,7 @@ Overlap and ΔE are after registration; a dash: not drawn.
 | TextureEncodingTest | yes | differs | 0.31 | 23.5 | crop: the screenshot shows part of the panel |
 | TextureLinearInterpolationTest | yes | differs | 0.30 | 38.8 | view |
 | TextureSettingsTest | yes | matches | 0.96 | 14.8 |  |
-| TextureTransformMultiTest | yes | matches | 0.91 | 20.0 |  |
+| TextureTransformMultiTest | yes | matches | 0.91 | 19.9 |  |
 | TextureTransformTest | yes | differs | 0.78 | 21.3 | light: darker; the transforms are right |
 | ToyCar | yes | differs | 0.74 | 42.6 | the file's camera is closer than the screenshot's; clear coat and sheen aren't drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)) |
 | TrafficCone | yes | differs | 0.57 | 25.2 | background: the screenshot has a photographed floor (file camera) |
@@ -314,7 +314,7 @@ Overlap and ΔE are after registration; a dash: not drawn.
 | USDShaderBallForGltf | yes | differs | 0.35 | 35.6 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)): the glass ball is missing; environment ([#597](https://github.com/ponkoengine/ponko/issues/597)) |
 | VertexColorTest | yes | matches | 0.82 | 14.9 |  |
 | VirtualCity | yes | differs | 0.26 | 46.4 | light: the screenshot's sunset light and sky ([#597](https://github.com/ponkoengine/ponko/issues/597)) (file camera) |
-| WaterBottle | yes | differs | 0.35 | 25.2 | background: the screenshot has a backdrop behind it; view |
+| WaterBottle | yes | differs | 0.35 | 25.3 | background: the screenshot has a backdrop behind it; view |
 | XmpMetadataRoundedCube | yes | differs | 0.27 | 27.4 | view; light |
 
 ## The two scenes
