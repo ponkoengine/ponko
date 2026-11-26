@@ -765,21 +765,20 @@ const POINTER_SAMPLES: [(&str, [f32; 3], usize); 5] = [
     ("PotOfCoalsAnimationPointer", [0.0, 1.0, 2.0], 0),
 ];
 
-/// The description of the file's material `material` after its clips are
-/// sampled at `time`, in a game without a GPU.
-fn animated_material(file: &str, material: &str, time: f32) -> crate::render::MaterialDesc {
+/// The materials and tracks after sampling the file's clips in a headless game.
+fn animated_materials(file: &str, time: f32) -> (Ctx, Vec<crate::anim::AnimationClip>) {
     let mut ctx = Ctx::new(1.0 / 60.0, Vec2::ONE);
     ctx.gfx.headless = true;
     ctx.assets.add_source(Folder(cache()));
     let mesh = ctx.gfx.load_mesh(file);
     let mut skeleton = ctx.gfx.load_skeleton(file);
-    for clip in ctx.gfx.load_clips(file) {
+    let clips = ctx.gfx.load_clips(file);
+    for clip in &clips {
         clip.sample(time.min(clip.duration()), &mut skeleton);
     }
     ctx.world.spawn((Transform3D::default(), Model::new(mesh), skeleton));
     ctx.gfx.apply_animated_materials(&mut ctx.world);
-    let (id, _) = ctx.gfx.loaded_materials(material)[0];
-    ctx.gfx.assets3d.material_descs[&id.id]
+    (ctx, clips)
 }
 
 /// How far apart two pictures of one size are: the mean difference of
@@ -933,22 +932,51 @@ fn known_pointer_animations_play() {
                 );
             }
             "AnimationPointerUVs" => {
-                // The three boxes whose base color textures are keyed: their
-                // material's transform takes the keyed offset, scale and
-                // rotation (the other channels key textures a material's
-                // one transform doesn't follow, and warn).
-                let transform =
-                    |material: &str, i: usize| animated_material(file, material, times[i]).texture_transform;
+                use crate::anim::{AnimatedProperty, MaterialProperty as P};
+                use crate::render::TextureMap;
                 for (i, k) in [(1, 0.5f32), (2, 1.0)] {
-                    let offset = transform("Material #60", i).offset;
-                    let scale = transform("Material #61", i).scale;
-                    let rotation = transform("Material #62", i).rotation;
-                    check(
-                        offset.abs_diff_eq(vec2(-k, k), 1e-4)
-                            && scale.abs_diff_eq(Vec2::splat(1.0 + 2.0 * k), 1e-4)
-                            && (rotation - std::f32::consts::FRAC_PI_2 * k).abs() < 1e-4,
-                        format!("{}: offset {offset}, scale {scale}, rotation {rotation}", times[i]),
-                    );
+                    let (ctx, clips) = animated_materials(file, times[i]);
+                    let mut maps = std::collections::HashSet::new();
+                    let mut count = 0;
+                    for key in clips.iter().flat_map(|c| c.property_tracks()) {
+                        let AnimatedProperty::Material(material, property) = key.target else {
+                            continue;
+                        };
+                        let (map, components) = match property {
+                            P::MapTextureOffset(map) | P::MapTextureScale(map) => (map, 2),
+                            P::MapTextureRotation(map) => (map, 1),
+                            _ => continue,
+                        };
+                        let desc = &ctx.gfx.assets3d.material_descs[&material.id];
+                        let transform = desc.texture_transform_for(map);
+                        let actual = match property {
+                            P::MapTextureOffset(_) => transform.offset,
+                            P::MapTextureScale(_) => transform.scale,
+                            _ => vec2(transform.rotation, 0.0),
+                        };
+                        let values = key.track.values();
+                        let expected = values[0].lerp(values[values.len() - 1], k).truncate().truncate();
+                        check(
+                            key.track.times() == [0.0, 6.0]
+                                && actual.abs_diff_eq(expected, 1e-4)
+                                && (components == 2 || actual.y == 0.0),
+                            format!(
+                                "{}: {property:?} on {material:?} has {actual}, expected {expected}",
+                                times[i]
+                            ),
+                        );
+                        count += 1;
+                        maps.insert(map);
+                    }
+                    // 103 source channels, 99 distinct property paths
+                    // (four exact duplicates). The sample has no scatter maps.
+                    check(count == 99, format!("expected 99 distinct texture tracks, got {count}"));
+                    for map in TextureMap::ALL
+                        .into_iter()
+                        .filter(|m| !matches!(m, TextureMap::ScatterColor | TextureMap::Scatter))
+                    {
+                        check(maps.contains(&map), format!("no track for {map:?}"));
+                    }
                     // The textures move from time to time; without the
                     // tracks, nothing does (the control).
                     let (moved, still) = (
@@ -968,7 +996,11 @@ fn known_pointer_animations_play() {
                 // picture doesn't change, and the material's value is what
                 // plays.
                 for (i, turned) in [(0, 0.0), (1, std::f32::consts::FRAC_PI_2), (2, std::f32::consts::PI)] {
-                    let rotation = animated_material(file, "HeatDome", times[i]).texture_transform.rotation;
+                    let (ctx, _) = animated_materials(file, times[i]);
+                    let (material, _) = ctx.gfx.loaded_materials("HeatDome")[0];
+                    let rotation = ctx.gfx.assets3d.material_descs[&material.id]
+                        .texture_transform_for(crate::render::TextureMap::Normal)
+                        .rotation;
                     check(
                         (rotation - turned).abs() < 1e-3,
                         format!("{}: the dome's normal map turned {rotation}, not {turned}", times[i]),

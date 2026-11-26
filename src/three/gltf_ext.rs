@@ -13,6 +13,7 @@
 //! (`KHR_mesh_quantization`), texture transforms, emissive strength,
 //! transmission, lights and cameras.
 
+use super::OrmMaps;
 use glam::{Mat4, Vec2, Vec3};
 use serde_json::Value;
 
@@ -571,15 +572,14 @@ impl PointerTarget {
             Self::Node(_, NodeValue::Visible) => 1,
             Self::Material(_, P::Color) => 4,
             Self::Material(_, P::Emissive | P::SheenColor | P::SpecularColor) => 3,
-            Self::Material(_, P::TextureOffset | P::TextureScale) => 2,
+            Self::Material(_, P::TextureOffset | P::TextureScale | P::MapTextureOffset(_) | P::MapTextureScale(_)) => 2,
             Self::Material(..) => 1,
         }
     }
 }
 
-/// The JSON paths of a material's textures whose transform its maps can
-/// follow, in the order the first present one is picked
-/// ([`material_extensions`]).
+/// The material texture paths in [`super::TextureMap`] order, with
+/// both draft names for the scatter color map adjacent.
 const MAPPED_TEXTURES: [&str; 22] = [
     "pbrMetallicRoughness/baseColorTexture",
     "emissiveTexture",
@@ -605,13 +605,13 @@ const MAPPED_TEXTURES: [&str; 22] = [
     "extensions/KHR_materials_scatter/scatterStrengthTexture",
 ];
 
-/// The texture (its path in [`MAPPED_TEXTURES`]) whose mapping material
-/// `material` (its JSON) follows: its first present one.
-fn mapped_texture(material: &Value) -> Option<&'static str> {
-    MAPPED_TEXTURES
-        .iter()
+/// Both scatter extensions name the same engine map.
+fn texture_map(path: &str) -> Option<super::TextureMap> {
+    let i = MAPPED_TEXTURES.iter().position(|p| *p == path)?;
+    let volume_scatter = super::TextureMap::ScatterColor as usize + 1;
+    super::TextureMap::ALL
+        .get(i - usize::from(i >= volume_scatter))
         .copied()
-        .find(|path| path.split('/').fold(material, |v, key| &v[key]).is_object())
 }
 
 /// What `pointer` (a JSON pointer into the file) animates, or why the
@@ -668,17 +668,18 @@ pub(super) fn pointer_target(json: &Value, pointer: &str) -> Result<PointerTarge
                 ["extensions", "KHR_materials_iridescence", "iridescenceThicknessMinimum"] => P::IridescenceThinnest,
                 ["extensions", "KHR_materials_iridescence", "iridescenceThicknessMaximum"] => P::IridescenceThickest,
                 [texture @ .., "extensions", "KHR_texture_transform", field] => {
-                    let path = texture.join("/");
-                    if !MAPPED_TEXTURES.contains(&path.as_str()) {
-                        return Err("that texture isn't read");
-                    }
-                    if mapped_texture(&json["materials"][m]) != Some(path.as_str()) {
-                        return Err("the material's maps follow its first texture's transform, not this texture's");
+                    let map = texture_map(&texture.join("/")).ok_or("that texture isn't read")?;
+                    if !texture
+                        .iter()
+                        .fold(&json["materials"][m], |v, key| &v[*key])
+                        .is_object()
+                    {
+                        return Err("that texture is absent");
                     }
                     match *field {
-                        "offset" => P::TextureOffset,
-                        "rotation" => P::TextureRotation,
-                        "scale" => P::TextureScale,
+                        "offset" => P::MapTextureOffset(map),
+                        "rotation" => P::MapTextureRotation(map),
+                        "scale" => P::MapTextureScale(map),
                         _ => return Err("that value of a texture transform isn't animated"),
                     }
                 }
@@ -1196,11 +1197,7 @@ fn view_bytes<'b>(view: &gltf::buffer::View, buffers: &'b [Vec<u8>]) -> Option<&
 }
 
 /// How a material's textures are laid on its meshes: which texture
-/// coordinate set, and how `KHR_texture_transform` moves it. The renderer
-/// reads every map of a material with one set of coordinates: the set is
-/// picked when the file loads, the transform is the material's
-/// [`TextureTransform`](super::TextureTransform), applied as it draws (so
-/// it can be animated).
+/// coordinate set, and how `KHR_texture_transform` moves it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct UvMapping {
     pub set: u32,
@@ -1236,7 +1233,14 @@ fn vec2_of(v: &Value) -> Option<Vec2> {
 
 /// Extension data of material `material` (its JSON).
 pub(super) struct MaterialExtensions {
+    /// The first map's transform and coordinate set.
     pub mapping: UvMapping,
+    /// The set imported into the primary mesh coordinates. If sets are
+    /// mixed, TEXCOORD_1 is available as the secondary coordinates.
+    pub primary_set: u32,
+    pub overrides: super::TextureTransformOverrides,
+    /// Metallic-roughness and occlusion presence in the packed ORM map.
+    pub orm_maps: OrmMaps,
     /// `KHR_materials_emissive_strength`: multiplies the emissive color.
     pub emissive_strength: f32,
     /// `KHR_materials_unlit`: drawn without lighting.
@@ -1375,9 +1379,8 @@ fn transmission_of(material: &Value) -> super::Transmission {
     }
 }
 
-/// Reads material `index`'s extensions; warns (into `warnings`) when its
-/// textures ask for different mappings, which one set of coordinates
-/// can't give.
+/// Reads material `index`'s extensions and reports maps that must use
+/// the first map's transform or coordinates.
 pub(super) fn material_extensions(
     json: &Value,
     index: usize,
@@ -1386,7 +1389,6 @@ pub(super) fn material_extensions(
 ) -> MaterialExtensions {
     let material = &json["materials"][index];
     let pbr = &material["pbrMetallicRoughness"];
-    // The base color's mapping wins: it's what shows most.
     let core = [
         &pbr["baseColorTexture"],
         &material["emissiveTexture"],
@@ -1395,24 +1397,63 @@ pub(super) fn material_extensions(
         &material["occlusionTexture"],
     ];
     let layer_infos = layer_texture_infos(material);
-    let mappings: Vec<UvMapping> = core
-        .iter()
-        .chain(&layer_infos)
-        .filter(|i| i.is_object())
-        .map(|i| mapping_of(i))
-        .collect();
-    let mapping = mappings.first().copied().unwrap_or(UvMapping::PLAIN);
-    if mappings.iter().any(|m| *m != mapping) {
-        let label = material["name"]
+    let mut infos = core.iter().chain(&layer_infos).copied();
+    let mappings: [Option<UvMapping>; super::TextureMap::ALL.len()] =
+        std::array::from_fn(|_| infos.next().filter(|info| info.is_object()).map(mapping_of));
+    let mapping = mappings.iter().flatten().next().copied().unwrap_or(UvMapping::PLAIN);
+    let primary_set = if mapping.set == 1 {
+        mappings.iter().flatten().find(|m| m.set != 1).map_or(1, |m| m.set)
+    } else {
+        mapping.set
+    };
+    let mut overrides = super::TextureTransformOverrides::default();
+    let mut table = super::texture_transforms::TransformTable::default();
+    let mut too_many = Vec::new();
+    let mut unsupported_sets = Vec::new();
+    for (map, value) in super::TextureMap::ALL.into_iter().zip(mappings) {
+        let Some(value) = value else { continue };
+        if table.insert(value.transform).is_none() {
+            too_many.push(format!("{map:?}"));
+        }
+        if value.transform != mapping.transform {
+            overrides.set(map, Some(value.transform));
+        }
+        let set = if value.set == primary_set || value.set == 1 {
+            value.set
+        } else {
+            unsupported_sets.push(format!("{map:?} (TEXCOORD_{})", value.set));
+            mapping.set
+        };
+        overrides.set_uv1(map, set == 1 && primary_set != 1);
+    }
+    let label = || {
+        material["name"]
             .as_str()
-            .map_or_else(|| format!("material {index}"), |n| format!("material {n:?}"));
+            .map_or_else(|| format!("material {index}"), |n| format!("material {n:?}"))
+    };
+    if !too_many.is_empty() {
         warnings.push(format!(
-            "{file}: {label}'s textures use different texture coordinates or transforms; \
-             all of them follow its first texture's"
+            "{file}: {} uses more than four texture transforms; {} follow the first transform",
+            label(),
+            too_many.join(", ")
+        ));
+    }
+    if !unsupported_sets.is_empty() {
+        warnings.push(format!(
+            "{file}: {} uses texture coordinate sets beyond the two available to this material; {} follow the first set",
+            label(),
+            unsupported_sets.join(", ")
         ));
     }
     MaterialExtensions {
         mapping,
+        primary_set,
+        overrides,
+        orm_maps: match (core[3].is_object(), core[4].is_object()) {
+            (true, false) => OrmMaps::MetallicRoughness,
+            (false, true) => OrmMaps::Occlusion,
+            _ => OrmMaps::Both,
+        },
         emissive_strength: extension(material, "KHR_materials_emissive_strength")
             .and_then(|e| e["emissiveStrength"].as_f64())
             .map_or(1.0, |s| s as f32),
@@ -2172,7 +2213,7 @@ mod tests {
     }
 
     #[test]
-    fn textures_asking_for_different_transforms_follow_the_base_color_and_warn() {
+    fn textures_keep_different_transforms_and_coordinate_sets() {
         let mut file = File::default();
         let uvs = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0];
         let text = triangle(
@@ -2182,7 +2223,7 @@ mod tests {
                 "materials": [{ "name": "brick",
                     "pbrMetallicRoughness": { "baseColorTexture": { "index": 0,
                         "extensions": { "KHR_texture_transform": { "scale": [4.0, 4.0] } } } },
-                    "normalTexture": { "index": 0 } }],
+                    "normalTexture": { "index": 0, "texCoord": 1 } }],
                 "textures": [{ "source": 0 }],
                 "images": [{ "uri": png([255, 255, 255, 255]) }],
             }),
@@ -2190,14 +2231,26 @@ mod tests {
         let loaded = load_str("mixed.gltf", &text).unwrap();
         let transform = loaded.materials[0].texture_transform;
         assert!(close(transform.apply(loaded.data.uvs[1]), Vec2::new(4.0, 0.0)));
-        assert!(
-            loaded
-                .warnings
-                .iter()
-                .any(|w| w.contains("\"brick\"") && w.contains("transforms")),
-            "{:?}",
-            loaded.warnings
+        let overrides = &loaded.materials[0].texture_transform_overrides;
+        assert_eq!(
+            overrides.get(super::super::TextureMap::Normal),
+            Some(super::super::TextureTransform::IDENTITY)
         );
+        assert!(overrides.uses_uv1(super::super::TextureMap::Normal));
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+    }
+
+    #[test]
+    fn exceeding_the_transform_limit_names_the_overflowing_maps() {
+        let info = |u| json!({ "index": 0, "extensions": { "KHR_texture_transform": { "offset": [u, 0] } } });
+        let json = json!({ "materials": [{ "name": "five",
+            "pbrMetallicRoughness": { "baseColorTexture": info(1), "metallicRoughnessTexture": info(2) },
+            "normalTexture": info(3), "occlusionTexture": info(4), "emissiveTexture": info(5)
+        }] });
+        let mut warnings = Vec::new();
+        material_extensions(&json, 0, "test.gltf", &mut warnings);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("five") && warnings[0].contains("Occlusion follow the first transform"));
     }
 
     #[test]
@@ -2540,7 +2593,11 @@ mod tests {
             let mut warnings = Vec::new();
             let mapped = material_extensions(&json, 0, "test.gltf", &mut warnings).mapping;
             assert_eq!(mapped.set, i as u32, "{first}");
-            assert_eq!(mapped_texture(&json["materials"][0]), Some(*first));
+            let map = texture_map(first).unwrap();
+            assert_eq!(
+                map as usize,
+                i - usize::from(i > super::super::TextureMap::ScatterColor as usize)
+            );
         }
     }
 
@@ -2608,15 +2665,15 @@ mod tests {
             ),
             (
                 "pbrMetallicRoughness/baseColorTexture/extensions/KHR_texture_transform/offset",
-                P::TextureOffset,
+                P::MapTextureOffset(super::super::TextureMap::BaseColor),
             ),
             (
                 "pbrMetallicRoughness/baseColorTexture/extensions/KHR_texture_transform/rotation",
-                P::TextureRotation,
+                P::MapTextureRotation(super::super::TextureMap::BaseColor),
             ),
             (
                 "pbrMetallicRoughness/baseColorTexture/extensions/KHR_texture_transform/scale",
-                P::TextureScale,
+                P::MapTextureScale(super::super::TextureMap::BaseColor),
             ),
         ] {
             assert_eq!(
@@ -2628,20 +2685,24 @@ mod tests {
         // A material whose only texture is its occlusion follows that one.
         assert_eq!(
             ok("/materials/1/occlusionTexture/extensions/KHR_texture_transform/scale"),
-            PointerTarget::Material(1, P::TextureScale)
+            PointerTarget::Material(1, P::MapTextureScale(super::super::TextureMap::Occlusion))
         );
         // ...and one whose only texture is a layer's follows that one.
         assert_eq!(
             ok(
                 "/materials/3/extensions/KHR_materials_volume/thicknessTexture/extensions/KHR_texture_transform/rotation"
             ),
-            PointerTarget::Material(3, P::TextureRotation)
+            PointerTarget::Material(3, P::MapTextureRotation(super::super::TextureMap::Thickness))
         );
         assert_eq!(ok("/materials/0/emissiveFactor").components(), 3);
         assert_eq!(ok("/materials/0/pbrMetallicRoughness/baseColorFactor").components(), 4);
         // What isn't played, and why.
         let why = |pointer: &str| pointer_target(&json, pointer).unwrap_err();
-        assert!(why("/materials/0/normalTexture/extensions/KHR_texture_transform/offset").contains("first texture"));
+        assert_eq!(
+            ok("/materials/0/normalTexture/extensions/KHR_texture_transform/offset"),
+            PointerTarget::Material(0, P::MapTextureOffset(super::super::TextureMap::Normal))
+        );
+        assert!(why("/materials/0/emissiveTexture/extensions/KHR_texture_transform/offset").contains("absent"));
         assert!(
             why("/materials/2/extensions/EXT_unknown/unknownTexture/extensions/KHR_texture_transform/offset")
                 .contains("isn't read")
@@ -2727,7 +2788,13 @@ mod tests {
         // The material values wait for the materials to be made.
         use crate::three::MaterialProperty as P;
         let animated: Vec<_> = loaded.clip_materials[0].iter().map(|(m, p, _)| (*m, *p)).collect();
-        assert_eq!(animated, vec![(0, P::TextureOffset), (0, P::EmissiveStrength)]);
+        assert_eq!(
+            animated,
+            vec![
+                (0, P::MapTextureOffset(super::super::TextureMap::BaseColor)),
+                (0, P::EmissiveStrength)
+            ]
+        );
         assert_eq!(
             loaded.clip_materials[0][0].2.values()[1],
             glam::Vec4::new(0.5, 0.25, 0.0, 0.0)

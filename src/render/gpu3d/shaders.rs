@@ -860,12 +860,24 @@ pub(super) fn compose_material(user: &str, decals: bool, gi: bool) -> String {
     let mut source = String::with_capacity(
         MESH_PRELUDE.len() + decal_code.len() + gi_code.len() + baked_code.len() + user.len() + MESH_MAIN.len() + 200,
     );
-    // The layered build of the built-in shader (`MaterialLayers`): the
-    // same, with the layers' code on.
-    if user == crate::three::LAYERED_SHADER {
-        source.push_str(&MESH_PRELUDE.replacen(LAYERS_OFF, LAYERS_ON, 1));
+    let layered = user == crate::three::LAYERED_SHADER || user == crate::three::api::LAYERED_MULTI_UV_SHADER;
+    let multi_uv = user == crate::three::api::MULTI_UV_SHADER || user == crate::three::api::LAYERED_MULTI_UV_SHADER;
+    let prelude = if layered {
+        std::borrow::Cow::Owned(MESH_PRELUDE.replacen(LAYERS_OFF, LAYERS_ON, 1))
     } else {
-        source.push_str(MESH_PRELUDE);
+        std::borrow::Cow::Borrowed(MESH_PRELUDE)
+    };
+    if multi_uv {
+        let (head, tail) = prelude.split_once("// MULTI_UV_IMPLEMENTATION").unwrap_or_default();
+        let (_, tail) = tail.split_once("// END_MULTI_UV_IMPLEMENTATION").unwrap_or_default();
+        source.push_str(&head.replace(
+            "// EXTRA_UV_UNIFORM",
+            "uv_additional: array<vec4<f32>, 6>, uv_indices: vec4<u32>,",
+        ));
+        source.push_str(include_str!("../material_uv.wgsl"));
+        source.push_str(tail);
+    } else {
+        source.push_str(&prelude);
     }
     source.push_str("@group(3) @binding(0) var<storage, read> items: array<vec4<f32>>;\n@group(3) @binding(1) var<storage, read> static_indices: array<u32>;\n");
     source.push_str(super::vertex_motion::ITEM_HELPER);

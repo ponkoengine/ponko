@@ -69,6 +69,7 @@ struct MaterialData {
     // The texture coordinates' transform (KHR_texture_transform): the
     // first two rows of its matrix, (a, b, offset) each.
     uv_transform: array<vec4<f32>, 2>,
+    // EXTRA_UV_UNIFORM
 };
 
 // Texture coordinates moved by the material's texture transform.
@@ -76,6 +77,24 @@ fn material_uv(uv: vec2<f32>) -> vec2<f32> {
     let t = material.uv_transform;
     return vec2<f32>(dot(t[0].xyz, vec3<f32>(uv, 1.0)), dot(t[1].xyz, vec3<f32>(uv, 1.0)));
 }
+
+// MULTI_UV_IMPLEMENTATION
+const MATERIAL_MULTI_UV: bool = false;
+fn map_uv(uv: vec2<f32>, uv1: vec2<f32>, kind: u32) -> vec2<f32> {
+    return uv;
+}
+fn same_map_uv(a: u32, b: u32) -> bool {
+    return true;
+}
+// END_MULTI_UV_IMPLEMENTATION
+
+// Map kinds (see TextureMap). Layer map kinds start at 5.
+const UV_BASE: u32 = 0u;
+const UV_EMISSIVE: u32 = 1u;
+const UV_NORMAL: u32 = 2u;
+const UV_METALLIC_ROUGHNESS: u32 = 3u;
+const UV_OCCLUSION: u32 = 4u;
+const UV_LAYER_START: u32 = 5u;
 
 // Where a cut-out material's alpha cuts (Blend::Cutout).
 fn alpha_cutoff() -> f32 {

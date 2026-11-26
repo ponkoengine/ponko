@@ -52,10 +52,22 @@ var<private> layers: Layers;
 // The two layer images at this pixel (white where not bound).
 var<private> layer_texel0: vec4<f32> = vec4<f32>(1.0);
 var<private> layer_texel1: vec4<f32> = vec4<f32>(1.0);
+var<private> layer_uv: vec2<f32>;
+var<private> layer_uv1: vec2<f32>;
 
 // Map `kind`'s texel, or `otherwise` without one.
 fn layer_map(kind: u32, otherwise: vec4<f32>) -> vec4<f32> {
     let slot = (material.layer_info.y >> (2u * kind)) & 3u;
+    if MATERIAL_MULTI_UV {
+        let uv = map_uv(layer_uv, layer_uv1, UV_LAYER_START + kind);
+        if slot == 1u {
+            return textureSampleBias(custom_texture0, material_sampler, uv, texture_mip_bias());
+        }
+        if slot == 2u {
+            return textureSampleBias(custom_texture1, material_sampler, uv, texture_mip_bias());
+        }
+        return otherwise;
+    }
     if slot == 1u {
         return layer_texel0;
     }
@@ -73,29 +85,41 @@ fn layer_max3(v: vec3<f32>) -> f32 {
     return max(v.x, max(v.y, v.z));
 }
 
-// Fills `layers` for a pixel of surface `s` at texture coordinates `uv`
-// (and `world`), whose mesh normal (facing the viewer) is `geometric`.
-// Called in uniform control flow (screen derivatives).
-fn fill_layers(s: Surface, uv: vec2<f32>, world: vec3<f32>, geometric: vec3<f32>, transformed_normal: vec3<f32>) {
-    let info = material.layer_info;
-    // The texture directions at this pixel (Schüler's cotangent frame, as
-    // the normal map's in `surface_at`): `t` along u, `b` along v.
+// The texture directions at this pixel (Schüler's cotangent frame).
+fn layer_frame(uv: vec2<f32>, world: vec3<f32>, geometric: vec3<f32>) -> mat2x3<f32> {
     let dp1 = dpdx(world);
     let dp2 = -dpdy(world);
     let duv1 = dpdx(uv);
     let duv2 = -dpdy(uv);
     let dp2perp = cross(dp2, geometric);
     let dp1perp = cross(geometric, dp1);
-    let inv = inverseSqrt(max(max(dot(dp2perp * duv1.x + dp1perp * duv2.x, dp2perp * duv1.x + dp1perp * duv2.x),
-        dot(dp2perp * duv1.y + dp1perp * duv2.y, dp2perp * duv1.y + dp1perp * duv2.y)), 1e-20));
-    let t = (dp2perp * duv1.x + dp1perp * duv2.x) * inv;
-    let b = (dp2perp * duv1.y + dp1perp * duv2.y) * inv;
-    if (info.z & 1u) != 0u {
-        layer_texel0 = textureSampleBias(custom_texture0, material_sampler, uv, texture_mip_bias());
+    let t = dp2perp * duv1.x + dp1perp * duv2.x;
+    let b = dp2perp * duv1.y + dp1perp * duv2.y;
+    let inv = inverseSqrt(max(max(dot(t, t), dot(b, b)), 1e-20));
+    return mat2x3<f32>(t * inv, b * inv);
+}
+
+// Fills `layers` in uniform control flow (screen derivatives).
+fn fill_layers(s: Surface, uv: vec2<f32>, uv1: vec2<f32>, world: vec3<f32>, geometric: vec3<f32>, transformed_normal: vec3<f32>) {
+    let info = material.layer_info;
+    if MATERIAL_MULTI_UV {
+        layer_uv = uv;
+        layer_uv1 = uv1;
+    } else {
+        if (info.z & 1u) != 0u {
+            layer_texel0 = textureSampleBias(custom_texture0, material_sampler, uv, texture_mip_bias());
+        }
+        if (info.z & 2u) != 0u {
+            layer_texel1 = textureSampleBias(custom_texture1, material_sampler, uv, texture_mip_bias());
+        }
     }
-    if (info.z & 2u) != 0u {
-        layer_texel1 = textureSampleBias(custom_texture1, material_sampler, uv, texture_mip_bias());
+    var anisotropy_uv = uv;
+    if MATERIAL_MULTI_UV {
+        anisotropy_uv = select(s.uv, map_uv(uv, uv1, UV_LAYER_START + MAP_ANISOTROPY), has_layer_map(MAP_ANISOTROPY));
     }
+    let basis = layer_frame(anisotropy_uv, world, geometric);
+    let t = basis[0];
+    let b = basis[1];
     var l: Layers;
     l.on = info.x;
     let values = material.layers;
@@ -109,7 +133,12 @@ fn fill_layers(s: Surface, uv: vec2<f32>, world: vec3<f32>, geometric: vec3<f32>
         var m = layer_map(MAP_CLEARCOAT_NORMAL, vec4<f32>(0.5, 0.5, 1.0, 1.0)).xyz * 2.0 - 1.0;
         m = vec3<f32>(m.xy * values[0].z, m.z);
         // glTF: +Y up the image, along -v (see `surface_at`).
-        l.clearcoat_normal = normalize(t * m.x - b * m.y + geometric * m.z);
+        var coat_basis = basis;
+        if MATERIAL_MULTI_UV {
+            let coat_uv = map_uv(uv, uv1, UV_LAYER_START + MAP_CLEARCOAT_NORMAL);
+            coat_basis = layer_frame(coat_uv, world, geometric);
+        }
+        l.clearcoat_normal = normalize(coat_basis[0] * m.x - coat_basis[1] * m.y + geometric * m.z);
     }
 
     // Sheen: color in red, green and blue (read as sRGB), roughness in alpha.

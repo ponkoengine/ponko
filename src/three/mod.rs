@@ -140,6 +140,9 @@ mod terrain;
 pub(crate) mod terrain_file;
 pub use far_terrain::FarTerrain;
 mod texture_array;
+mod texture_transforms;
+use texture_transforms::OrmMaps;
+pub use texture_transforms::{TextureMap, TextureTransformOverrides};
 pub(crate) mod view_model;
 pub use view_model::{HeldItem, VIEW_MODEL_LAYER, ViewModel};
 
@@ -556,10 +559,16 @@ pub struct MaterialDesc {
     /// see [`MaterialLayers`] for what they cost.
     pub layers: MaterialLayers,
     /// Moves, turns and scales the texture coordinates every map of the
-    /// material is read with, as glTF's `KHR_texture_transform` does.
+    /// material is read with unless the map has an override. The order is
+    /// scale, rotation, then offset, as in glTF's `KHR_texture_transform`.
     /// Default [`TextureTransform::IDENTITY`] (the mesh's coordinates as
-    /// they are). One more multiply per corner; it costs nothing per pixel.
+    /// they are). The shared mapping is applied in the vertex shader.
     pub texture_transform: TextureTransform,
+    /// Independent transforms and coordinate sets for the built-in shader's maps.
+    /// Up to four distinct transforms are drawn. Further maps fall back to the first.
+    pub texture_transform_overrides: TextureTransformOverrides,
+    /// Which packed ORM channels came from glTF texture references.
+    pub(crate) orm_maps: OrmMaps,
     /// The alpha below which a [`Blend::Cutout`] material's pixels are cut
     /// out (glTF's `alphaCutoff`). Default 0.5. Other blend modes ignore it.
     pub alpha_cutoff: f32,
@@ -669,6 +678,8 @@ impl Default for MaterialDesc {
             unlit: false,
             layers: MaterialLayers::NONE,
             texture_transform: TextureTransform::IDENTITY,
+            texture_transform_overrides: TextureTransformOverrides::default(),
+            orm_maps: OrmMaps::Both,
             alpha_cutoff: 0.5,
         }
     }
@@ -688,6 +699,20 @@ impl MaterialDesc {
             color,
             ..Self::default()
         }
+    }
+
+    /// The transform a map requests, before the renderer's four-transform limit.
+    pub fn texture_transform_for(&self, map: TextureMap) -> TextureTransform {
+        self.texture_transform_overrides
+            .get(map)
+            .unwrap_or(self.texture_transform)
+    }
+
+    /// Sets an independent transform for one map on a built-in material.
+    #[must_use]
+    pub fn with_map_texture_transform(mut self, map: TextureMap, transform: TextureTransform) -> Self {
+        self.texture_transform_overrides.set(map, Some(transform));
+        self
     }
 
     with_fields! {
@@ -1540,6 +1565,7 @@ pub(crate) struct Assets3D {
     /// The renderer's slot of the layered build of the built-in shader
     /// (`MaterialLayers`), once a material had layers.
     pub layered_shader: Option<u32>,
+    pub multi_uv_shaders: [Option<u32>; 2],
     pub material_ids: crate::handle::SlotCounter,
     /// What each material was last made or updated with: what clips that
     /// animate a material start from, and the editor's material windows.
@@ -1994,10 +2020,11 @@ mod c_api_mirror {
             // (`PonkoMaterialLayers`, field for field).
             unlit: _,
             layers: _,
-            // Not in C yet: `texture_transform` and `alpha_cutoff` (glTF
-            // files set them as they load; see the 3D chapter's coverage note).
+            // C: version 5 of `PonkoMaterialDescEx`.
             texture_transform: _,
-            alpha_cutoff: _,
+            texture_transform_overrides: _,
+            orm_maps: _,     // glTF import bookkeeping, not an authored setting.
+            alpha_cutoff: _, // glTF only in C.
         } = MaterialDesc::default();
         // C: `PonkoMaterialLayers`, with a `has_*` before each map.
         let MaterialLayers {

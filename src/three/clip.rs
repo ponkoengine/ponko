@@ -302,6 +302,12 @@ pub enum MaterialProperty {
     TextureRotation,
     /// The texture transform's `scale` (xy).
     TextureScale,
+    /// One map's texture offset (xy).
+    MapTextureOffset(super::TextureMap),
+    /// One map's texture rotation (x), radians.
+    MapTextureRotation(super::TextureMap),
+    /// One map's texture scale (xy).
+    MapTextureScale(super::TextureMap),
     /// The clear coat's amount (x), 0 to 1.
     Clearcoat,
     /// The clear coat's roughness (x), 0 to 1.
