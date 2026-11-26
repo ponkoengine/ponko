@@ -110,6 +110,7 @@ fn declared(resource: Resource, output: wgpu::TextureFormat, samples: u32) -> (O
         Format::Spread => Some(crate::render::ssr::SPREAD_FORMAT),
         Format::Hits => Some(crate::render::ssr::HITS_FORMAT),
         Format::DepthCopy => Some(crate::render::ssr::DEPTH_COPY_FORMAT),
+        Format::Normals => Some(crate::render::ssr::NORMALS_FORMAT),
         Format::CoarseDepth => Some(crate::render::ssr::COARSE_FORMAT),
         Format::Output => Some(output),
         Format::Buffer | Format::Any => None,
@@ -331,6 +332,15 @@ impl Renderer3D {
                 .ssr
                 .as_ref()
                 .map(|s| view(Resource::ReflectionDepth, s.depth_copy())),
+            targets
+                .ssr
+                .as_ref()
+                .map(|s| view(Resource::ReflectionNormals, s.normals().1.unwrap_or(s.normals().0))),
+            targets
+                .ssr
+                .as_ref()
+                .and_then(|s| s.normals().1.map(|_| s.normals().0))
+                .map(|samples| view(Resource::ReflectionNormalSamples, samples)),
             targets
                 .ssr
                 .as_ref()

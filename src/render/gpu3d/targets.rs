@@ -408,6 +408,7 @@ impl Renderer3D {
                 self.screen.ao_enabled,
                 self.no_spread.is_some(),
                 self.screen.ssr_thin,
+                self.samples,
             )
         });
         // With reflections, GTAO writes the first level of their image.

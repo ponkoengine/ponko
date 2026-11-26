@@ -392,7 +392,7 @@ to it. The full rule is in
 | `PonkoLightingEx` | `ponko_ctx_lighting_ex`, `ponko_ctx_set_lighting_ex` | `shadow_sun_size` (the sun's size for contact-hardening shadows) and `shadow_sun_step` |
 | `PonkoColliderEx` | `ponko_set_collider_ex`, `ponko_get_collider_ex` | a 2D collider's collision groups and polygon corners, in one call |
 | `PonkoQueryFilterEx` | the `ponko_ctx_*_ex` 2D and 3D queries | one filter for both, collision groups included |
-| `PonkoPostEx` | `ponko_ctx_post_ex`, `ponko_ctx_set_post_ex`, `ponko_post_ex_lerp`, `ponko_post_blend_volumes` | split toning, depth of field and the sample count (`msaa`); version 2: `ssr_thin_objects` (thin things whole in reflections); version 3: `upscaler` (a `PonkoUpscaler`: the stretch or temporal upscaling); blending two looks, and post volumes (`PonkoPostVolume` boxes) |
+| `PonkoPostEx` | `ponko_ctx_post_ex`, `ponko_ctx_set_post_ex`, `ponko_post_ex_lerp`, `ponko_post_blend_volumes` | split toning, depth of field and the sample count (`msaa`); version 2: `ssr_thin_objects` (thin things whole in reflections); version 3: `upscaler` (a `PonkoUpscaler`: the stretch or temporal upscaling); version 4: `auto_exposure` and its `auto_exposure_*` settings; version 5: `ssr_transparent` (reflections on transparent surfaces); blending two looks, and post volumes (`PonkoPostVolume` boxes) |
 | `PonkoParticleSettings3DEx` | `ponko_particle_settings3d_ex_defaults`, `ponko_ctx_set_particle_emitter3d_ex` | `softness`: soft particles |
 | `PonkoCamera3DEx` | `ponko_ctx_camera3d_ex`, `ponko_ctx_set_camera3d_ex`, `ponko_camera3d_ex_from` | `occlusion_culling` and `particles` (whether it draws particles, trails and lines) |
 | `PonkoTargetCameraEx` | `ponko_ctx_set_target_cameras_ex`, `ponko_ctx_target_camera_ex`, `ponko_target_camera_ex_from` | `particles`, `debug_draw`, culling box and background (version 3), per target camera |
@@ -532,6 +532,7 @@ binding arrives:
 
 | Rust feature | Where | From C and C++ |
 |---|---|---|
+| `Console::run` | [Developer console](control.md#c-and-c) | The retained console and the control endpoint run registered native commands outside a borrowed native context |
 | `Assets::scene_asset_field` | [Asset sources](asset-sources.md) | C components have no text fields to name an asset in; load what a scene needs before `load_scene` |
 | `Assets::image_limit_sources` | [Image size limits](security.md#tighter-limits-for-a-source-you-dont-trust) | C and C++ read the limits of a source whose id they know (`ponko_ctx_source_image_limits`); the control endpoint's `assets.image_limits` lists every source that has limits |
 | `PackSource` | [Asset sources](asset-sources.md#packs) | C and C++ games read the default `assets.pack` like Rust games; a pack of their own can be read through `ponko_ctx_add_asset_source` |

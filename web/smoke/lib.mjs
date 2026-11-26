@@ -33,7 +33,7 @@ export const USAGE =
   "usage: smoke.mjs (--dir <built site> | --fixture <name> [--build]) [--browser chromium|firefox|webkit]\n" +
   "                 [--backend auto|webgpu|webgl2] [--case ok|missing-asset|no-graphics|context-lost|panic|stall]\n" +
   "                 [--out <artifacts dir>] [--timeout <startup seconds>] [--run-timeout <seconds>]\n" +
-  "                 [--allow-unsupported]\n" +
+  "                 [--allow-unsupported | --require-gpu]\n" +
   "                 [--asset <file under assets/>] [--asset-size <W>x<H>|none]\n" +
   "                 [--press <Key>=<field>:<value>]... [--min <field>=<number>]...\n" +
   "                 [--click <x>,<y>=<field>:<value> | @retry=<field>:<value>]... [--query <?a=b>] [--persist granted|refused]\n" +
@@ -179,6 +179,7 @@ export function parseArgs(argv, fixtures = {}) {
     timeout: 90,
     runTimeout: 300,
     allowUnsupported: false,
+    requireGpu: false,
     browserArgs: [],
     chromiumMode: "shell",
     trace: true,
@@ -207,6 +208,7 @@ export function parseArgs(argv, fixtures = {}) {
       case "--timeout": args.timeout = Number(value()); break;
       case "--run-timeout": args.runTimeout = Number(value()); break;
       case "--allow-unsupported": args.allowUnsupported = true; break;
+      case "--require-gpu": args.requireGpu = true; break;
       case "--browser-arg": args.browserArgs.push(value()); break;
       case "--chromium-mode": args.chromiumMode = value(); break;
       case "--no-trace": args.trace = false; break;
@@ -269,6 +271,8 @@ export function parseArgs(argv, fixtures = {}) {
   if (!BROWSERS.includes(args.browser)) fail(`--browser must be one of ${BROWSERS.join(", ")}`);
   if (!["shell", "new"].includes(args.chromiumMode)) fail("--chromium-mode must be shell or new");
   if (!(args.case in CASES)) fail(`--case must be one of ${Object.keys(CASES).join(", ")}`);
+  if (args.requireGpu && args.allowUnsupported) fail("--require-gpu and --allow-unsupported can't go together: a real GPU is required");
+  if (args.requireGpu && (args.browser !== "chromium" || args.case !== "ok")) fail("--require-gpu is for a Chromium run of --case ok");
   if (!(args.timeout > 0)) fail("--timeout must be a positive number of seconds");
   if (!(args.runTimeout > 0)) fail("--run-timeout must be a positive number of seconds");
   if (args.assetSize !== "none" && !/^\d+x\d+$/.test(args.assetSize)) fail("--asset-size must look like 32x32, or none");
@@ -300,9 +304,9 @@ function fail(message) {
 export function launchConfig(browser, platform, args = {}) {
   const extra = args.browserArgs ?? [];
   if (browser === "chromium") {
-    // Software fallbacks so a GPU-less CI runner can still draw; Linux
-    // needs Vulkan turned on for WebGPU.
-    const flags = ["--enable-unsafe-swiftshader", "--enable-unsafe-webgpu"];
+    // Software fallbacks so a GPU-less CI runner can still draw (not when a
+    // real GPU is required); Linux needs Vulkan turned on for WebGPU.
+    const flags = args.requireGpu ? ["--enable-unsafe-webgpu"] : ["--enable-unsafe-swiftshader", "--enable-unsafe-webgpu"];
     if (platform === "linux") flags.push("--enable-features=Vulkan");
     // The full browser in its new headless mode, not the headless shell:
     // it has the compositor a WebGPU canvas is presented through.
@@ -418,6 +422,43 @@ export function unsupportedReason(caps, backend, browser = "chromium") {
   }
   if (backend === "webgl2" && !caps.webgl2) return `${name} has no WebGL2 here`;
   if (backend === "auto" && !caps.webgl2 && !caps.webgpu) return `${name} has neither WebGPU nor WebGL2 here`;
+  return null;
+}
+
+/**
+ * Software renderers: a run that must be on a real GPU (`--require-gpu`)
+ * fails when the browser's adapter or the engine's names one of these.
+ */
+export const SOFTWARE_RENDERER = /swiftshader|llvmpipe|lavapipe|softpipe|microsoft basic render/i;
+
+/**
+ * Why a run that must use a real GPU didn't, or null when it did. `caps` is
+ * the browser probe's (the WebGPU adapter's info and the WebGL2 renderer),
+ * `backend` the one the canvas got ("webgpu" or "webgl2") and `engineGpu`
+ * what the engine published (`data-smoke-gpu`). A fallback WebGPU adapter,
+ * a software renderer named by the browser or the engine, or an engine
+ * adapter of the CPU type each count as software.
+ */
+export function softwareGpuReason(caps, backend, engineGpu) {
+  if (backend === "webgpu") {
+    const gpu = caps?.webgpu;
+    if (!gpu) return "the browser has no WebGPU adapter";
+    if (gpu.fallback) return "the browser's WebGPU adapter is a fallback (software) adapter";
+    const named = [gpu.vendor, gpu.architecture, gpu.description].join(" ");
+    if (SOFTWARE_RENDERER.test(named)) return `the browser's WebGPU adapter is a software renderer (${named.trim()})`;
+  } else if (backend === "webgl2") {
+    const gl = caps?.webgl2;
+    if (!gl) return "the browser has no WebGL2";
+    const named = `${gl.vendor} ${gl.renderer}`;
+    if (SOFTWARE_RENDERER.test(named)) return `the browser's WebGL2 renderer is a software renderer (${named})`;
+  } else {
+    return `the canvas has no GPU backend (${backend})`;
+  }
+  const adapter = engineGpu?.adapter;
+  if (!adapter) return "the engine published no GPU report (data-smoke-gpu) to check its adapter";
+  if (String(adapter.device_type).toLowerCase() === "cpu") return `the engine's adapter is a CPU one ("${adapter.name}")`;
+  const named = [adapter.name, adapter.driver, adapter.driver_info].filter(Boolean).join(" ");
+  if (SOFTWARE_RENDERER.test(named)) return `the engine's adapter is a software renderer (${named})`;
   return null;
 }
 

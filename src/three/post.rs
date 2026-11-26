@@ -511,8 +511,11 @@ pub struct Post {
     /// behind something, or runs past
     /// [`ssr_max_distance`](Self::ssr_max_distance)), the environment's
     /// reflection stays. Wet streets, polished floors, still water. Things
-    /// off screen or hidden aren't reflected, and normal maps don't bend the
-    /// reflection. The colors come from the last frame's image, so the
+    /// off screen or hidden aren't reflected. Rays leave by the normal the
+    /// surface is lit with, normal maps and decals included (a thin pass
+    /// writes it; see the guide for its cost). Transparent surfaces get
+    /// them only with [`ssr_transparent`](Self::ssr_transparent). The
+    /// colors come from the last frame's image, so the
     /// first frame after a camera cut reflects only the environment. A
     /// half-resolution pass after the depth prepass; [`AntiAliasing::Taa`]
     /// smooths its grain. The blur follows the cone a rough surface
@@ -553,6 +556,27 @@ pub struct Post {
     /// (post.ssr, post.ssr_thin_objects) = (1.0, true); // a railing over a polished floor
     /// ```
     pub ssr_thin_objects: bool,
+    /// Screen-space reflections on transparent surfaces too: glossy water
+    /// and glass (roughness below about 0.7) reflect the opaque scene on
+    /// screen, as opaque surfaces do with [`ssr`](Self::ssr), instead of only
+    /// the sky and reflection probes. Each such pixel marches its reflected
+    /// ray across the depth behind it in its own fragment shader (24 steps,
+    /// then 4 to find the surface), up to
+    /// [`ssr_max_distance`](Self::ssr_max_distance), and shows this frame's
+    /// opaque scene, sharp: other transparent surfaces aren't in it. Any
+    /// transparent surface then draws after a copy of the scene's color and
+    /// depth, as one reading `scene_color` does. Its cost grows with the
+    /// transparent pixels on screen (the guide's reflections section has
+    /// the numbers). Off by default and in every
+    /// [`GraphicsQuality`](crate::render::GraphicsQuality) preset; only
+    /// matters where [`ssr`](Self::ssr) is on, and only in the main view
+    /// (not in held items or target cameras).
+    /// ```
+    /// let mut post = ponko::render::Post::default();
+    /// assert!(!post.ssr_transparent);
+    /// (post.ssr, post.ssr_transparent) = (1.0, true); // a pond reflecting the shore
+    /// ```
+    pub ssr_transparent: bool,
     /// Post antialiasing. Default off to preserve existing scenes.
     pub anti_aliasing: AntiAliasing,
     /// Samples per pixel of the 3D frame (multisampling), smoothing the
@@ -656,6 +680,7 @@ impl Default for Post {
             ssr: 0.0,
             ssr_max_distance: 30.0,
             ssr_thin_objects: false,
+            ssr_transparent: false,
             anti_aliasing: AntiAliasing::None,
             msaa: 4,
             taa_sharpness: 0.25,
@@ -861,6 +886,7 @@ impl Post {
             ssr: f(a.ssr, b.ssr),
             ssr_max_distance: f(a.ssr_max_distance, b.ssr_max_distance),
             ssr_thin_objects: pick(t, a.ssr_thin_objects, b.ssr_thin_objects),
+            ssr_transparent: pick(t, a.ssr_transparent, b.ssr_transparent),
             anti_aliasing: pick(t, a.anti_aliasing, b.anti_aliasing),
             msaa: pick(t, a.msaa, b.msaa),
             taa_sharpness: f(a.taa_sharpness, b.taa_sharpness),

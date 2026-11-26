@@ -134,6 +134,7 @@ pub mod collision;
 pub mod color;
 #[cfg(feature = "compressed-textures")]
 pub(crate) mod compressed;
+pub mod console;
 mod control;
 pub mod crash;
 mod ctx;
