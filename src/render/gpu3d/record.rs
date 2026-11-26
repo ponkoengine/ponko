@@ -1619,17 +1619,20 @@ impl Renderer3D {
             let Some((rest, indices)) = mesh.buffers(&self.resources.mesh_arena) else {
                 continue;
             };
-            let vertices = match posed {
-                None => rest,
+            // A posed model's corners start at `base` in a buffer shared
+            // with other models of its mesh (see `skinning.rs`).
+            let (vertices, base) = match posed {
+                None => (rest, 0),
                 Some(k) => match self.skinning.vertices(k) {
                     Some(v) => v,
                     None => continue,
                 },
             };
             // The motion pass also reads where each corner was: a posed
-            // model whose pose changed has its last pose posed apart.
+            // model whose pose changed has its last pose posed apart (laid
+            // out as this frame's, from the same `base`).
             let previous = match (kind, posed) {
-                (Kind::Velocity, Some(k)) => self.skinning.previous_vertices(k).unwrap_or(vertices),
+                (Kind::Velocity, Some(k)) => self.skinning.previous_vertices(k).map_or(vertices, |(b, _)| b),
                 _ => vertices,
             };
             let mut buffers_set = false;
@@ -1704,7 +1707,7 @@ impl Renderer3D {
                                 1,
                                 instances.slice(model as u64 * record..(model as u64 + 1) * record),
                             );
-                            pass.draw_indexed(range.clone(), 0, 0..count);
+                            pass.draw_indexed(range.clone(), base, 0..count);
                             n.vertex_buffers += 1;
                             n.draws += 1;
                         }
@@ -1720,7 +1723,7 @@ impl Renderer3D {
                         n.vertex_buffers += 1;
                         *instances_bound = true;
                     }
-                    pass.draw_indexed(range.clone(), 0, start..start + models);
+                    pass.draw_indexed(range.clone(), base, start..start + models);
                     n.draws += 1;
                 }
             }

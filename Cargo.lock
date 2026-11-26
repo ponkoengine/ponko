@@ -3839,6 +3839,7 @@ dependencies = [
  "half",
  "harfrust",
  "image",
+ "jni",
  "js-sys",
  "kira",
  "ktx2",

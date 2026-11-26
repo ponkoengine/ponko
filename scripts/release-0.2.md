@@ -73,6 +73,12 @@ cargo run -p ponko_mcp --example agent_suite -- replay
 python3 scripts/run-checks.py                   # the whole list on this machine
 ```
 
+For `rc.1` (once per minor) also try a real agent on the agent acceptance
+suite, one fresh session per task, and put
+`target/debug/examples/agent_suite scores /tmp/suite/*.result.json` in the
+pull request: "At a release" in `book/src/agents.md` has the steps, and
+`book/src/check-results/macos.md` the 2026-11-26 rehearsal to compare with.
+
 The checks that need other operating systems: run `run-checks.py` on the
 Linux and Windows machines, or, once per minor, on hosted runners with the
 release-time matrix (`scripts/release-matrix.yml`, not enabled; see

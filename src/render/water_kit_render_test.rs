@@ -420,6 +420,55 @@ fn a_sea_from_a_spectrum_has_waves() {
     reference_rejects("water_spectrum_sea", &calm, REFERENCE, "the waves off");
 }
 
+#[test]
+fn far_wave_crests_stay_lit_from_above() {
+    let Some(mut ctx) = offscreen((640, 360), None, false) else {
+        return;
+    };
+    let sea = WaterDesc {
+        ripples: false,
+        underwater: false,
+        ..WaterDesc::sea(0.0, vec2(-0.8, 0.5), 1.2)
+    };
+    Water::spawn(&mut ctx, sea);
+
+    let camera = &mut ctx.scene3d.camera;
+    camera.position = vec3(-8.0, 9.0, 22.0);
+    camera.rotation = Quat::from_rotation_y(-1.2) * Quat::from_rotation_x(-0.25);
+    for _ in 0..2 {
+        frame(&mut ctx);
+    }
+    let above = image(&mut ctx, "crests from above");
+    // The far strip just below the skyline reflects the bright sky at
+    // grazing angles. The dark underside has almost no red light.
+    let dark_crest = |[red, _, _, _]: [u8; 4]| red < 32;
+    let dark_above = above.fraction(32..608, 103..146, dark_crest);
+    let visible_sea = above.fraction(32..608, 140..146, |[red, _, _, _]| red < 125);
+
+    // Negative control: look at the corresponding strip from below,
+    // outside Snell's window, where the dark underside belongs.
+    let camera = &mut ctx.scene3d.camera;
+    camera.position.y = -9.0;
+    camera.rotation = Quat::from_rotation_y(-1.2) * Quat::from_rotation_x(0.25);
+    let below = image(&mut ctx, "crests from below");
+    let dark_below = below.fraction(32..608, 214..257, dark_crest);
+
+    eprintln!(
+        "far sea dark pixels: {:.2}% above, {:.2}% below",
+        dark_above * 100.0,
+        dark_below * 100.0
+    );
+    assert!(
+        visible_sea > 0.5,
+        "water covers the lower part of the strip: {visible_sea}"
+    );
+    assert!(
+        dark_below > 0.7,
+        "the underside at grazing angles is dark: {dark_below}"
+    );
+    assert!(dark_above < 0.002, "dark patches on the far sea: {dark_above}");
+}
+
 /// A lake with ripples, on a device with `tier`'s limits; touched in the
 /// middle on the second frame, then drawn for `frames` more. Its ripple
 /// field and whether a compute pass ran it.

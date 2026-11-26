@@ -6,6 +6,7 @@
 //! archives and icons are [`archive`]; the notices are [`notices`]; the
 //! smoke run is [`smoke`]. This module runs Cargo and ties them together.
 
+mod android;
 mod archive;
 mod layout;
 mod notices;
@@ -47,6 +48,8 @@ What it makes, by platform (the host's unless --target or --web):
            ipa, signed by your --sign program              --format ipa)
            for the simulator, zipped                       (--target ios-sim;
                                                             --format zip)
+  Android  an apk, signed with the debug key for testing, (--target android;
+           or by your --sign program                       --format apk)
 
 Options:
   --bin <name>, --example <name>  The program (default: the package's binary)
@@ -55,7 +58,9 @@ Options:
   --target <triple>               Build for another platform (cross-compiling);
                                   `ios` is aarch64-apple-ios (devices),
                                   `ios-sim` aarch64-apple-ios-sim (the
-                                  simulator on an Apple silicon Mac)
+                                  simulator on an Apple silicon Mac),
+                                  `android` aarch64-linux-android (needs
+                                  the Android SDK and NDK, see the guide)
   --web                           Build for browsers (wasm32-unknown-unknown;
                                   needs wasm-bindgen, see the guide)
   --threads                       With --web: build with worker threads
@@ -83,7 +88,7 @@ Options:
                                   A pack the engine's defaults would refuse to
                                   read is refused unless you raise them, and
                                   then the game must too (`Game::pack_limits`)
-  --format <list>                 folder, zip, tar.gz, dmg, ipa (comma-separated);
+  --format <list>                 folder, zip, tar.gz, dmg, ipa, apk (comma-separated);
                                   `folder` alone: the plain folder, no archive
                                   and no app bundle
   --out <dir>                     Where to put the package (default: target/package)
@@ -94,7 +99,9 @@ Options:
                                   before archiving (the .app, or the program),
                                   `<program> archive <path>` for each archive
                                   (see the guide; without it a macOS app is
-                                  sealed ad hoc, which is not a trusted signature)";
+                                  sealed ad hoc, which is not a trusted signature,
+                                  and an apk is signed with the debug key; with
+                                  it an apk comes unsigned to `archive`)";
 
 pub const NOTICES_USAGE: &str = "\
 ponko notices: write THIRD-PARTY-NOTICES.txt for a crate
@@ -674,6 +681,7 @@ fn build(
     example: bool,
     triple: &str,
     explicit: bool,
+    android: Option<&android::Tools>,
 ) -> Result<BuildOutput, String> {
     let profile = options.profile.as_deref().unwrap_or("release");
     let package = project.package["name"].as_str().unwrap_or_default();
@@ -718,17 +726,14 @@ fn build(
     } else {
         Command::new(cargo())
     };
-    cmd.args([
-        "build",
-        "--message-format",
-        "json-render-diagnostics",
-        "--profile",
-        profile,
-    ])
-    .arg("--manifest-path")
-    .arg(&project.manifest)
-    .args(["-p", package, &format!("--{kind}"), target])
-    .args(feature_args(options));
+    // Android loads the game as a library: `cargo rustc` links the
+    // program as one, with the NDK's compilers.
+    cmd.arg(if android.is_some() { "rustc" } else { "build" });
+    cmd.args(["--message-format", "json-render-diagnostics", "--profile", profile])
+        .arg("--manifest-path")
+        .arg(&project.manifest)
+        .args(["-p", package, &format!("--{kind}"), target])
+        .args(feature_args(options));
     if options.locked {
         cmd.arg("--locked");
     }
@@ -738,6 +743,18 @@ fn build(
     // Built for the oldest iOS the Info.plist names, unless the game says.
     if Platform::from_triple(triple)?.os.is_ios() && std::env::var_os("IPHONEOS_DEPLOYMENT_TARGET").is_none() {
         cmd.env("IPHONEOS_DEPLOYMENT_TARGET", layout::IOS_MINIMUM);
+    }
+    if let Some(tools) = android {
+        for (key, value) in android::build_env(tools, triple)? {
+            if std::env::var_os(&key).is_none() {
+                cmd.env(key, value);
+            }
+        }
+        let exports = project.target_dir.join("ponko-package").join("android-exports.map");
+        std::fs::create_dir_all(exports.parent().unwrap_or(Path::new(".")))
+            .and_then(|()| std::fs::write(&exports, android::EXPORTS))
+            .map_err(|e| format!("{}: {e}", exports.display()))?;
+        cmd.arg("--").args(android::link_args(&exports));
     }
     let mut child = cmd
         .stdout(Stdio::piped())
@@ -841,7 +858,7 @@ fn cook_settings(platform: &Platform, engine: Option<&[String]>, target_dir: &Pa
     crate::cook::Settings {
         platform: match platform.os {
             Os::Web => crate::cook::Platform::Web,
-            Os::Ios | Os::IosSimulator => crate::cook::Platform::Mobile,
+            Os::Ios | Os::IosSimulator | Os::Android => crate::cook::Platform::Mobile,
             Os::Windows | Os::Mac | Os::Linux => crate::cook::Platform::Desktop,
         },
         reads: crate::cook::Reads::from_features(engine.unwrap_or_default()),
@@ -1133,6 +1150,17 @@ pub fn package_command(options: &Options, cwd: &Path) -> Result<String, String> 
     }
     let mut notes = Vec::new();
     let (mut game, icon, pack_meta) = game(&project, &target, example, &mut notes)?;
+    // Found before the build, so a missing SDK is said at once.
+    let android_tools = match platform.os {
+        Os::Android => Some(android::find(&|k| std::env::var(k).ok())?),
+        _ => None,
+    };
+    if platform.os == Os::Android && (options.no_pack || !pack_meta.enabled) && !game.assets.is_empty() {
+        return Err(
+            "an Android game reads its assets from assets.pack inside the apk: leave out --no-pack and `pack = false`"
+                .into(),
+        );
+    }
     let out = cwd.join(
         options
             .out
@@ -1144,7 +1172,15 @@ pub fn package_command(options: &Options, cwd: &Path) -> Result<String, String> 
         program: built,
         engine,
         libraries,
-    } = build(options, &project, &target, example, &triple, explicit)?;
+    } = build(
+        options,
+        &project,
+        &target,
+        example,
+        &triple,
+        explicit,
+        android_tools.as_ref(),
+    )?;
     // Packed or cooked after the build: the cook asks what the engine was
     // built to read.
     let cook =
@@ -1194,11 +1230,18 @@ pub fn package_command(options: &Options, cwd: &Path) -> Result<String, String> 
             pack.as_ref().map(|p| p.0.as_slice()),
         )
     } else {
+        let built = match platform.os {
+            Os::Android => Built::Android {
+                library: &built,
+                debuggable: options.sign.is_none(),
+            },
+            _ => Built::Program(&built),
+        };
         layout::plan(
             &game,
             &platform,
             app,
-            Built::Program(&built),
+            built,
             &notices,
             icon.as_deref(),
             pack.as_ref().map(|p| p.0.as_slice()),
@@ -1208,6 +1251,11 @@ pub fn package_command(options: &Options, cwd: &Path) -> Result<String, String> 
     let plan = plan.and_then(|plan| write_plan(&out, &plan).map(|()| plan));
     let _ = std::fs::remove_dir_all(&web_dir);
     let plan = plan?;
+    if let Some(tools) = &android_tools
+        && !android::strip(tools, &out.join(&plan.program))?
+    {
+        notes.push("the library is not stripped: no Android NDK for llvm-strip".into());
+    }
     let dir = out.join(&plan.folder);
     let mut report = vec![format!(
         "packaged {} for {} ({count} libraries in the notices)",
@@ -1236,9 +1284,15 @@ pub fn package_command(options: &Options, cwd: &Path) -> Result<String, String> 
     // Signing: the hook, else an ad-hoc seal for a macOS app made on a Mac.
     let signed_path = out.join(plan.app.as_ref().unwrap_or(&plan.program));
     match (&options.sign, &plan.app) {
-        (Some(program), _) if platform.os != Os::Web => {
+        // An apk is signed whole, at `archive`.
+        (Some(program), _) if platform.os != Os::Web && platform.os != Os::Android => {
             sign_hook(program, "sign", &signed_path, &game, &platform, &dir)?;
         }
+        (None, _) if platform.os == Os::Android && archives.contains(&Format::Apk) => notes.push(
+            "the apk is signed with the debug key and debuggable, for testing: app stores take one signed with your \
+             release key (pass --sign; see the guide's Android chapter)"
+                .into(),
+        ),
         // A device installs only an app signed with the developer's
         // certificate and provisioning profile: that is the hook's job.
         (None, Some(_)) if platform.os == Os::Ios => notes.push(
@@ -1275,6 +1329,13 @@ pub fn package_command(options: &Options, cwd: &Path) -> Result<String, String> 
                  `SIMCTL_CHILD_PONKO_SMOKE=120 xcrun simctl launch --console booted <id>`"
             }
         ));
+    } else if platform.os == Os::Android {
+        report.push(format!(
+            "smoke run: skipped, an Android app runs on a phone or the emulator: `adb install -r <apk>`, then \
+             `adb shell am start -n {}/android.app.NativeActivity -e PONKO_SMOKE 120` (a debug-signed apk) \
+             and `adb logcat -s ponko`; see the guide's Android chapter",
+            layout::android_package(&game.id)?
+        ));
     } else if !runs_here {
         report.push(format!(
             "smoke run: skipped, a {} package does not run on {}",
@@ -1302,6 +1363,11 @@ pub fn package_command(options: &Options, cwd: &Path) -> Result<String, String> 
             Format::TarGz => archive::tar_gz(&out, &plan.folder, &executables, &file)?,
             Format::Dmg => dmg(&out, &plan, &game, &file)?,
             Format::Ipa => ipa(&out, &plan, &file)?,
+            Format::Apk => {
+                let tools = android_tools.as_ref().ok_or("an apk is for Android")?;
+                let app = plan.app.as_ref().ok_or("an apk is made of the package's apk folder")?;
+                android::apk(tools, &out.join(app), &file, options.sign.is_none())?;
+            }
             Format::Folder => continue,
         }
         if let Some(program) = &options.sign {

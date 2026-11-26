@@ -301,6 +301,14 @@ inline reflection_probe3d reflection_probe3d_default() { return ponko_reflection
 /// The built-in `SpotLight3D` component (Rust `SpotLight3D`): a cone of light along the entity's local -Z;
 /// angles are half angles in radians, range in meters (transform scale ignored).
 using spot_light3d = PonkoSpotLight3D;
+/// A light as a glTF file places it (Rust `ModelLight`), for ctx::place_light_exposed: set `kind` and fill the
+/// matching field (`point`, `spot`, or `sun_color` and `sun_intensity`). Intensities are the file's: candela
+/// for point and spot lights, lux for the sun. Start from model_light_default().
+using model_light = PonkoModelLight;
+/// Which kind of light a model_light is (Rust `ModelLightKind`).
+using model_light_kind = PonkoModelLightKind;
+/// A white point light of intensity 1 at the model's origin (Rust `ModelLight` with `PointLight3D::default()`).
+inline model_light model_light_default() { return ponko_model_light_default(); }
 /// A box that paints an image onto the opaque surfaces inside it (Rust
 /// `Decal3D`); start from decal3d_default(). Projected along its -Z.
 using decal3d = PonkoDecal3D;
@@ -1296,8 +1304,13 @@ inline bool report_crash(const char* message) {
 // defaults; change the fields you need and pass the struct by reference.
 
 /// A material description that can grow (PonkoMaterialDescEx): `desc` is material_desc, plus a stencil and,
-/// from version 2, masked_tint (the model's colour tints only where the vertex colour's alpha is 1).
+/// from version 2, masked_tint (the model's colour tints only where the vertex colour's alpha is 1); from
+/// version 3, `unlit` and `layers` (a material_layers, all off by default).
 using material_desc_ex = PonkoMaterialDescEx;
+/// Layers over a material's surface (PonkoMaterialLayers, Rust `MaterialLayers`): clear coat, sheen,
+/// specular strength and color, index of refraction, anisotropy and iridescence, each map with its
+/// `has_*` flag. At most two distinct layer images per material, and only with the built-in shader.
+using material_layers = PonkoMaterialLayers;
 /// Navmesh bake settings that can grow (PonkoNavBakeSettingsEx): `settings` is nav_bake_settings.
 using nav_bake_settings_ex = PonkoNavBakeSettingsEx;
 /// Lighting that can grow (PonkoLightingEx): `lighting` is ponko::lighting, plus shadow_sun_size and
@@ -6960,6 +6973,7 @@ enum class window_event_kind : std::uint32_t {
     suspended = PONKO_WINDOW_EVENT_SUSPENDED,                        ///< The app lost the screen (a phone's background): save now.
     resumed = PONKO_WINDOW_EVENT_RESUMED,                            ///< The app is in front again after a suspend.
     low_memory = PONKO_WINDOW_EVENT_LOW_MEMORY,                      ///< The system is short of memory: free what can be reloaded.
+    back_requested = PONKO_WINDOW_EVENT_BACK_REQUESTED,              ///< Back was pressed (Android): the app leaves unless canceled.
 };
 /// How the game's sound shares the device with other apps and a phone's silent switch (Rust
 /// `AudioSessionCategory`): iOS's audio session categories; kept and without effect elsewhere.
@@ -7347,6 +7361,14 @@ public:
     }
     /// Cancels the OS close request (an "unsaved changes?" prompt); quit() still quits.
     void window_cancel_close() { detail::check(ponko_ctx_window_cancel_close(raw_)); }
+    /// Whether Back was pressed (Android) and no system canceled it yet: the app leaves after this frame.
+    bool window_back_requested() const {
+        bool value = false;
+        detail::check(ponko_ctx_window_back_requested(raw_, &value));
+        return value;
+    }
+    /// Keeps the app in front after Back: the game handles it (closes a menu), in the frame that sees it.
+    void window_cancel_back() { detail::check(ponko_ctx_window_cancel_back(raw_)); }
     /// Saves the requested window settings to player storage (`window.json`).
     void window_save_settings() { detail::check(ponko_ctx_window_save_settings(raw_)); }
     /// Restores saved window settings; a monitor or mode that is gone falls back to windowed.
@@ -7364,7 +7386,7 @@ public:
     /// Whether the app is suspended (Rust `window.suspended()`): between window_event_kind::suspended and
     /// resumed; always false on desktops and the web.
     bool window_suspended() const { bool v = false; detail::check(ponko_ctx_window_suspended(raw_, &v)); return v; }
-    /// Feeds a phone's lifecycle event (suspended, resumed or low_memory) as the platform reports it, as a
+    /// Feeds a phone's lifecycle event (suspended, resumed, low_memory or back_requested) as the platform reports it, as a
     /// test does; a repeated suspend or resume changes nothing and sends nothing.
     void window_feed_lifecycle(window_event_kind kind) {
         detail::check(ponko_ctx_window_feed_lifecycle(raw_, static_cast<std::uint32_t>(kind)));
@@ -10035,6 +10057,52 @@ public:
     /// sun_size and fog_falloff must be above 0; fog_sun_focus is 0 to under 1;
     /// light_shafts is 0 to 1.
     void set_sky(const ponko::sky& s) { detail::check(ponko_ctx_set_sky(raw_, &s)); }
+    /// Sets up the lighting of a glTF preview from the file at `path` (Rust `SceneSettings::light_gltf`): its
+    /// point, spot and directional lights placed at `at` with exposure `ev100` (lux and candela are multiplied by
+    /// `1 / (1.2 * 2^ev100)`; a non-finite `ev100` is 0, the rest is limited to +-32), the hue-preserving tone
+    /// curve (post.tonemap 4), and the neutral studio environment if the scene has none. The file's directional
+    /// light replaces the scene's sun. Call once per loaded scene. Returns the spawned point and spot lights, so a
+    /// viewer can despawn them when changing models. Throws (not found, or what's wrong with the file).
+    std::vector<entity> light_gltf(const char* path, transform3d at, float ev100) {
+        std::size_t count = 0;
+        detail::check(ponko_ctx_gltf_local_light_count(raw_, path, &count));
+        std::vector<entity> spawned(count);
+        std::size_t written = 0;
+        detail::check(ponko_ctx_light_gltf(raw_, path, at, ev100, spawned.data(), spawned.size(), &written));
+        spawned.resize(written);
+        return spawned;
+    }
+    /// Places one light as a glTF file places it, with exposure `ev100` (Rust `ModelLight::place_exposed`):
+    /// lux and candela are multiplied by `1 / (1.2 * 2^ev100)`. A point or spot light spawns an entity, which
+    /// this returns; the sun sets the scene's sun direction, color and intensity and returns an empty optional.
+    /// Use one `ev100` for all the lights of a scene.
+    std::optional<entity> place_light_exposed(const model_light& light, transform3d at, float ev100) {
+        entity e = 0;
+        bool spawned = false;
+        detail::check(ponko_ctx_place_light_exposed(raw_, &light, at, ev100, &e, &spawned));
+        if (!spawned) return std::nullopt;
+        return e;
+    }
+    /// Lights the scene with a linear HDR or EXR panorama (Rust `Graphics::try_load_environment`): a 2:1
+    /// latitude-longitude image with +Y at the top and +X at the center. The renderer filters it into the lighting
+    /// atlas the first frame it is drawn; the visible sky and fog stay the sky's. Throws (and keeps the old
+    /// environment) if it can't be read, isn't 2:1 or has non-finite radiance.
+    void load_environment(const char* path) { detail::check(ponko_ctx_load_environment(raw_, path)); }
+    /// Lights the scene with six equal-size square HDR or EXR images, in the order +X, -X, +Y, -Y, +Z, -Z (Rust
+    /// `Graphics::try_load_environment_cube`). Throws (and keeps the old environment) like load_environment.
+    void load_environment_cube(const std::array<const char*, 6>& faces) {
+        detail::check(ponko_ctx_load_environment_cube(raw_, faces.data()));
+    }
+    /// Lights the scene with the neutral procedural studio (Rust `EnvironmentMap::studio`).
+    void set_studio_environment() { detail::check(ponko_ctx_set_studio_environment(raw_)); }
+    /// Goes back to lighting the scene from the sky.
+    void clear_environment() { detail::check(ponko_ctx_clear_environment(raw_)); }
+    /// Whether the scene has an environment map set.
+    bool has_environment() const {
+        bool has = false;
+        detail::check(ponko_ctx_has_environment(raw_, &has));
+        return has;
+    }
     /// Exposure, bloom, color grading and tone mapping of the 3D frame.
     ponko::post post() const { ponko::post p{}; detail::check(ponko_ctx_post(raw_, &p)); return p; }
     /// GTAO ao_half_resolution uses bilateral upsampling; ao_temporal accumulates

@@ -1,7 +1,8 @@
 //! A phone's app lifecycle from C: suspend, resume and low-memory events
 //! (`ponko_ctx_window_feed_lifecycle`, read with `ponko_ctx_window_event_ex`),
-//! `ponko_ctx_window_suspended`, the on-screen keyboard's inset and the audio
-//! session category, all as Rust's.
+//! `ponko_ctx_window_suspended`, Back (`ponko_ctx_window_back_requested`,
+//! `ponko_ctx_window_cancel_back`), the on-screen keyboard's inset and the
+//! audio session category, all as Rust's.
 mod common;
 use common::*;
 use ponko_ffi::*;
@@ -57,10 +58,36 @@ fn suspend_and_resume_are_events_and_a_state_that_changes_once_each() {
 }
 
 #[test]
+fn a_back_press_is_an_event_the_game_can_cancel() {
+    unsafe {
+        run_ctx(|ctx| {
+            let mut back = true;
+            assert_eq!(ponko_ctx_window_back_requested(ctx, &mut back), PONKO_OK);
+            assert!(!back);
+            let kind = PonkoWindowEventKind::PONKO_WINDOW_EVENT_BACK_REQUESTED as u32;
+            assert_eq!(ponko_ctx_window_feed_lifecycle(ctx, kind), PONKO_OK);
+            assert_eq!(kinds(ctx), [8]);
+            assert_eq!(ponko_ctx_window_back_requested(ctx, &mut back), PONKO_OK);
+            assert!(back, "the app would leave after this frame");
+            assert_eq!(ponko_ctx_window_cancel_back(ctx), PONKO_OK);
+            assert_eq!(ponko_ctx_window_back_requested(ctx, &mut back), PONKO_OK);
+            assert!(!back, "canceled: the game handles Back");
+            assert_eq!(ponko_ctx_window_back_requested(ctx, null_mut()), PONKO_INVALID_ARGUMENT);
+        });
+        let mut back = false;
+        assert_eq!(
+            ponko_ctx_window_back_requested(null_mut(), &mut back),
+            PONKO_INVALID_ARGUMENT
+        );
+        assert_eq!(ponko_ctx_window_cancel_back(null_mut()), PONKO_INVALID_ARGUMENT);
+    }
+}
+
+#[test]
 fn lifecycle_calls_refuse_other_kinds_null_outputs_and_null_contexts() {
     unsafe {
         run_ctx(|ctx| {
-            for kind in [0, 4, 8, u32::MAX] {
+            for kind in [0, 4, 9, u32::MAX] {
                 assert_eq!(ponko_ctx_window_feed_lifecycle(ctx, kind), PONKO_INVALID_ARGUMENT);
             }
             assert!(kinds(ctx).is_empty());

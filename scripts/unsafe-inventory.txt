@@ -9,6 +9,7 @@
 # Format: <path> | <item> | <test file>::<test fn> | <miri>
 # <miri>: miri (the test runs under Miri), miri(<features>), or why it can't:
 # c-library, gpu, os, windows, macos, wasm, ios (on the iOS simulator),
+# android (in an app on the Android emulator),
 # window (a check a person runs, in a real window), sanitizers. A check of a test program without the harness
 # (`harness = false`) is named like a test; a browser or device runner by its
 # path (`web/smoke/*.mjs`, `scripts/*.sh`). The Miri commands come from this
@@ -321,6 +322,8 @@ crates/ponko_ffi/src/rollback.rs | session | crates/ponko_ffi/tests/rollback.rs:
 src/mods/code.rs | Host::with_ctx | src/mods/code.rs::host_functions_reach_the_game_only_during_with_code | miri(mods-wasm)
 src/mods/code.rs | impl Send for CtxPtr | src/mods/code.rs::host_functions_reach_the_game_only_during_with_code | miri(mods-wasm)
 src/mods/code.rs | impl Sync for CtxPtr | src/mods/code.rs::host_functions_reach_the_game_only_during_with_code | miri(mods-wasm)
+src/mods/code.rs | impl Send for GamePtr | src/mods/code.rs::code_swapped_into_with_code_cannot_reach_the_game | miri(mods-wasm)
+src/mods/code.rs | impl Sync for GamePtr | src/mods/code.rs::code_swapped_into_with_code_cannot_reach_the_game | miri(mods-wasm)
 
 # iOS: Rust tests of this module run on the simulator, and the simulator
 # check runs the phone check, which needs an app (its scene and pasteboard).
@@ -330,3 +333,8 @@ src/platform/ios.rs | set_pasteboard_text | scripts/ios-simulator.sh | ios
 src/platform/ios.rs | watch_keyboard | src/platform/ios.rs::the_keyboard_frame_follows_its_notifications_and_hiding_keeps_only_its_top | ios
 src/platform/ios.rs | keyboard_end_frame | src/platform/ios.rs::the_keyboard_frame_follows_its_notifications_and_hiding_keeps_only_its_top | ios
 src/platform/ios.rs | set_audio_category | src/platform/ios.rs::every_audio_session_category_is_accepted_by_the_system | ios
+src/platform/android.rs | run_main | scripts/android-emulator.sh | android
+src/platform/android.rs | with_activity_of | scripts/android-emulator.sh | android
+src/platform/android.rs | send_output_to_logcat | scripts/android-emulator.sh | android
+src/platform/android.rs | use_app_folders | scripts/android-emulator.sh | android
+src/platform/android.rs | environment_from_intent | scripts/android-emulator.sh | android

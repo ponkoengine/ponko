@@ -175,6 +175,7 @@ mod lightmap_bake;
 mod nav_view;
 mod replication_raw;
 mod scenario_touch;
+mod scene_lighting;
 mod sky_kit;
 mod video;
 // Native API parity, round 5 (gl#157): crash reports and sliced loaders.
@@ -201,6 +202,7 @@ pub use nav_view::*;
 pub use replication_raw::*;
 pub use rollback::*;
 pub use scenario_touch::*;
+pub use scene_lighting::*;
 pub use skeleton2d::*;
 pub use sky_kit::*;
 pub use slice_loaders::*;

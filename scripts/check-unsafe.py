@@ -30,7 +30,8 @@ test runs under Miri: no GPU, window, audio device or C library),
 `miri(<features>)` (the same, with those engine features on), or the reason
 it can't: `c-library` (it calls a C library), `gpu`, `os` (signals, sockets,
 processes), `windows`, `macos`, `wasm`, `ios` (it runs on the iOS
-simulator), `window` (a real window) or
+simulator), `android` (it runs in an app on the Android emulator),
+`window` (a real window) or
 `sanitizers` (C API code, run under AddressSanitizer with the C and C++ test
 programs instead). `window` is a check a person runs, in a real window
 (the guide's "Unsafe code" lists them).
@@ -49,7 +50,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parent.parent
 INVENTORY = ROOT / 'scripts' / 'unsafe-inventory.txt'
-NO_MIRI = {'c-library', 'gpu', 'os', 'windows', 'macos', 'wasm', 'ios', 'window', 'sanitizers'}
+NO_MIRI = {'c-library', 'gpu', 'os', 'windows', 'macos', 'wasm', 'ios', 'android', 'window', 'sanitizers'}
 TEST_DIRS = {'tests', 'examples', 'benches'}
 # The ECS has its own Miri jobs.
 SKIPPED_CRATES = {'ponko_ecs'}

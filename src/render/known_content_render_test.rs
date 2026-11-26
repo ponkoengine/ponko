@@ -369,6 +369,7 @@ fn sample_lighting(name: &str) -> Option<(f32, f32)> {
         "LightsPunctualLamp" => (5.0, 0.20),
         "PointLightIntensityTest" => (0.0, 0.04),
         "DirectionalLight" => (0.0, 0.10),
+        "LightVisibility" => (0.0, 0.60),
         "CarConcept"
         | "CompareEmissiveStrength"
         | "EmissiveStrengthTest"
