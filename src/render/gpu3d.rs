@@ -115,6 +115,7 @@ pub(in crate::render) mod sky_render_test;
 mod stencil;
 #[cfg(test)]
 mod stencil_render_test;
+mod target_mips;
 mod targets;
 mod variants;
 mod vertex_motion;
@@ -149,6 +150,7 @@ use shadow_cache::ShadowCache;
 use shadows::ShadowMaps;
 use std::ops::Range;
 use std::sync::atomic::Ordering;
+pub(super) use target_mips::first_level;
 pub(in crate::render) use targets::*;
 pub(crate) use variants::{Instancing, Pass, PipelineRole, ShaderVariant, Sides};
 
@@ -1172,6 +1174,13 @@ impl Renderer3D {
     /// cameras and compute passes.
     pub fn add_render_target(&mut self, id: u32, texture: &wgpu::Texture) {
         self.render_targets.add(id, texture);
+    }
+
+    /// Render target `id` was written outside the 3D frame (a UI panel, the
+    /// CPU): if it is mipmapped, its levels are made again in the next
+    /// target camera stage.
+    pub fn wrote_render_target(&mut self, id: u32) {
+        self.render_targets.wrote(id, true);
     }
 
     /// Render target `id` was freed: target cameras and compute passes let

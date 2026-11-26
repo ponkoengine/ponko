@@ -744,7 +744,7 @@ pub unsafe extern "C" fn ponko_ctx_set_camera3d_ex(ctx: *mut PonkoCtx, camera: *
 }
 
 /// The version of `PonkoTargetCameraEx` this header describes.
-pub const PONKO_TARGET_CAMERA_EX_VERSION: u32 = 2;
+pub const PONKO_TARGET_CAMERA_EX_VERSION: u32 = 3;
 
 /// A camera drawing the 3D world into a render target each frame, in a
 /// layout that can grow (Rust `TargetCamera`): `PonkoTargetCamera` plus the
@@ -756,6 +756,9 @@ pub const PONKO_TARGET_CAMERA_EX_VERSION: u32 = 2;
 /// `ponko_ctx_set_target_cameras_ex`.
 ///
 /// Version 1: `target_camera`, `particles`. Version 2: `debug_draw`.
+/// Version 3: `has_cull_box`, `cull_box_min`, `cull_box_max`, `has_clear`,
+/// `clear`. Its screen effects are set apart, with
+/// `ponko_ctx_set_target_camera_effects`.
 /// ```
 /// use ponko_ffi::*;
 /// let t = PonkoTargetCamera {
@@ -786,6 +789,16 @@ pub struct PonkoTargetCameraEx {
     /// `PonkoDebugDraw`. Default `PONKO_DEBUG_DRAW_DEFAULT`: while it draws
     /// particles (a version 1 caller gets that too).
     pub debug_draw: u32,
+    /// Only models reaching into the world box from `cull_box_min` to
+    /// `cull_box_max` are drawn (Rust `TargetCamera::cull_box`). Default
+    /// false: everything in view.
+    pub has_cull_box: bool,
+    pub cull_box_min: PonkoVec3,
+    pub cull_box_max: PonkoVec3,
+    /// Clear to `clear` (alpha too) instead of the main view's clear colour
+    /// and sky (Rust `TargetCamera::clear`). Default false.
+    pub has_clear: bool,
+    pub clear: PonkoColor,
 }
 assert_header!(PonkoTargetCameraEx);
 
@@ -796,8 +809,27 @@ impl Versioned for PonkoTargetCameraEx {
         match version {
             1 => Some(end_of!(Self, particles: bool)),
             2 => Some(end_of!(Self, debug_draw: u32)),
+            3 => Some(end_of!(Self, clear: PonkoColor)),
             _ => None,
         }
+    }
+}
+
+/// The fields version 3 added, at their defaults: no culling box, the main
+/// view's background.
+fn defaults_v3() -> PonkoTargetCameraEx {
+    PonkoTargetCameraEx {
+        struct_size: size_of::<PonkoTargetCameraEx>() as u32,
+        version: PONKO_TARGET_CAMERA_EX_VERSION,
+        // SAFETY: plain data, all-zero valid.
+        target_camera: unsafe { std::mem::zeroed() },
+        particles: true,
+        debug_draw: debug_draw_to_c(None),
+        has_cull_box: false,
+        cull_box_min: PonkoVec3::default(),
+        cull_box_max: PonkoVec3::default(),
+        has_clear: false,
+        clear: to_c(Color::TRANSPARENT),
     }
 }
 
@@ -808,6 +840,11 @@ fn target_ex_of(t: &ponko::render::TargetCamera) -> PonkoTargetCameraEx {
         target_camera: target_camera_to_c(t),
         particles: t.camera.particles,
         debug_draw: debug_draw_to_c(t.camera.debug_draw),
+        has_cull_box: t.cull_box.is_some(),
+        cull_box_min: t.cull_box.map(|(min, _)| to_c(min)).unwrap_or_default(),
+        cull_box_max: t.cull_box.map(|(_, max)| to_c(max)).unwrap_or_default(),
+        has_clear: t.clear.is_some(),
+        clear: to_c(t.clear.unwrap_or(Color::TRANSPARENT)),
     }
 }
 
@@ -831,6 +868,7 @@ pub unsafe extern "C" fn ponko_target_camera_ex_from(
             target_camera: *camera,
             particles: true,
             debug_draw: debug_draw_to_c(None),
+            ..defaults_v3()
         };
         write_desc(out_camera, &value)
     })
@@ -873,11 +911,18 @@ pub unsafe extern "C" fn ponko_ctx_set_target_cameras_ex(
             target_camera: std::mem::zeroed(),
             particles: true,
             debug_draw: debug_draw_to_c(None),
+            ..defaults_v3()
         };
         for &camera in given {
             let d = read_desc(camera, defaults)?;
             list.push(d.target_camera);
-            particles.push((d.particles, debug_draw_from_c(d.debug_draw)?));
+            let (min, max): (Vec3, Vec3) = (to_c(d.cull_box_min), to_c(d.cull_box_max));
+            if d.has_cull_box && !(min.is_finite() && max.is_finite()) {
+                return Err(invalid("the culling box needs finite corners"));
+            }
+            let cull_box = d.has_cull_box.then(|| (min.min(max), min.max(max)));
+            let clear: Option<Color> = d.has_clear.then(|| to_c(d.clear));
+            particles.push((d.particles, debug_draw_from_c(d.debug_draw)?, cull_box, clear));
         }
         Ok(())
     });
@@ -892,9 +937,11 @@ pub unsafe extern "C" fn ponko_ctx_set_target_cameras_ex(
     // SAFETY: forwarded caller contract.
     boundary(|| unsafe {
         ctx_access(ctx, |c| {
-            for (t, &(on, debug_draw)) in c.scene3d.passes.target_cameras.iter_mut().zip(&particles) {
+            for (t, &(on, debug_draw, cull_box, clear)) in c.scene3d.passes.target_cameras.iter_mut().zip(&particles) {
                 t.camera.particles = on;
                 t.camera.debug_draw = debug_draw;
+                t.cull_box = cull_box;
+                t.clear = clear;
             }
             Ok(())
         })

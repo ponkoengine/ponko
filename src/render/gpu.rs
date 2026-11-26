@@ -543,6 +543,16 @@ impl Renderer {
         ))
     }
 
+    /// Tests: mip level `level` of texture `id` (a render target's: linear
+    /// RGBA16F), read back, with its width and height; `None` past its
+    /// last level.
+    #[cfg(all(test, feature = "3d"))]
+    pub(super) fn read_texture_level(&self, id: u32, level: u32) -> Option<(Vec<u8>, u32, u32)> {
+        let texture = &self.textures.get(id)?.texture;
+        (level < texture.mip_level_count())
+            .then(|| super::render_test_support::read_texture_level(&self.device, &self.queue, texture, level))
+    }
+
     /// Opens the GPU and sets up drawing to `window`, waiting for the GPU
     /// (desktop; the web build calls [`Self::new_async`]).
     #[cfg(not(target_arch = "wasm32"))]
@@ -1743,7 +1753,9 @@ impl Renderer {
 
     /// A texture target cameras draw into (linear HDR); returns its id.
     #[cfg(feature = "3d")]
-    pub fn create_render_target(&mut self, width: u32, height: u32) -> u32 {
+    /// `mips`: with a full mip chain (made again after each write, see
+    /// `gpu3d/target_mips.rs`).
+    pub fn create_render_target(&mut self, width: u32, height: u32, mips: bool) -> u32 {
         // Made first: making the 3D renderer adds textures of its own, and
         // the id below must be this one's.
         self.three();
@@ -1754,7 +1766,7 @@ impl Renderer {
                 height,
                 depth_or_array_layers: 1,
             },
-            mip_level_count: 1,
+            mip_level_count: if mips { super::mips::levels(width, height) } else { 1 },
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: super::gpu3d::HDR_FORMAT,
@@ -1770,7 +1782,8 @@ impl Renderer {
             bind_group,
             texture: texture.clone(),
             nearest: false,
-            // Drawn fresh each frame: no mipmaps to make.
+            // Drawn fresh each frame: the renderer makes its levels (if
+            // it has any), not the texture uploader.
             mips: Some(false),
         });
         self.three().add_render_target(id, &texture);
@@ -1837,6 +1850,10 @@ impl Renderer {
     /// `id`, `width` x `height`: a field the CPU worked out.
     #[cfg(feature = "3d")]
     pub fn write_render_target(&mut self, id: u32, width: u32, height: u32, texels: &[u8]) {
+        if self.textures.live(id).is_none() {
+            return;
+        }
+        self.three().wrote_render_target(id);
         let Some(tex) = self.textures.live(id) else {
             return;
         };
@@ -2591,6 +2608,10 @@ impl Renderer {
         // Panels draw into render targets, which only 3D makes.
         #[cfg(feature = "3d")]
         let panel_format = super::gpu3d::HDR_FORMAT;
+        #[cfg(feature = "3d")]
+        for &(texture, _, _) in &panels {
+            self.three().wrote_render_target(texture);
+        }
         #[cfg(not(feature = "3d"))]
         let panel_format = self.view_format;
         // Fading UI groups' layers: the screen's, then each panel's.
@@ -2864,12 +2885,10 @@ impl Renderer {
                         layers: &[],
                     };
                     self.draw_ui_layers(&mut encoder, jobs, &layer_pass, panel_format);
-                    let view = self
-                        .textures
-                        .live(*texture)
-                        .expect("a live panel target")
-                        .texture
-                        .create_view(&wgpu::TextureViewDescriptor::default());
+                    // Its first level (a mipmapped target's levels are made
+                    // again in the next target camera stage).
+                    let view =
+                        super::gpu3d::first_level(&self.textures.live(*texture).expect("a live panel target").texture);
                     let layers = [(&self.panel_cameras[i].1, *batches, panel_starts[i])];
                     let pass = SpritePass {
                         viewport: *size,

@@ -113,6 +113,18 @@ macro_rules! gpu {
 pub(super) struct SlotView {
     pub(super) planes: [glam::Vec4; 6],
     pub(super) eye: Vec3,
+    /// A target camera's culling box `(min, max)`: batches, cells and
+    /// crowds that don't touch it aren't drawn in this view.
+    pub(super) cull_box: Option<(Vec3, Vec3)>,
+}
+
+impl SlotView {
+    /// Whether the box from `min` to `max` touches the view's culling box
+    /// (true without one).
+    pub(super) fn in_cull_box(&self, min: Vec3, max: Vec3) -> bool {
+        self.cull_box
+            .is_none_or(|(lo, hi)| min.cmple(hi).all() && max.cmpge(lo).all())
+    }
 }
 
 /// The renderer's batch settings and per-frame scratch (kept between
@@ -1502,7 +1514,8 @@ fn cull_cells(
             view.eye,
             0.0,
             if legacy { far } else { f32::INFINITY },
-        ) || hides(cell.min, cell.max)
+        ) || !view.in_cull_box(cell.min, cell.max)
+            || hides(cell.min, cell.max)
         {
             continue;
         }
@@ -1937,6 +1950,10 @@ impl Renderer3D {
         let batching = &mut self.batching;
         batching.slots.clear();
         for slot in 0..slots {
+            let cull_box = (targets..gi_slot)
+                .contains(&slot)
+                .then(|| frame.views[slot - targets].cull_box)
+                .flatten();
             let (matrix, eye) = if slot == 0 {
                 (frame.view_proj, camera)
             } else if slot <= MAX_CASCADES {
@@ -1954,6 +1971,7 @@ impl Renderer3D {
             batching.slots.push(SlotView {
                 planes: planes(matrix),
                 eye,
+                cull_box,
             });
         }
         let grid = frame
@@ -2092,6 +2110,7 @@ impl Renderer3D {
                 };
                 if !batch.levels.iter().any(enabled)
                     || !intersects(batch.min, batch.max, &view.planes, view.eye, 0.0, far)
+                    || !view.in_cull_box(batch.min, batch.max)
                 {
                     continue;
                 }

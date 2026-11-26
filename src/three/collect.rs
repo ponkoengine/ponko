@@ -95,6 +95,10 @@ pub(crate) struct Frame3D {
     /// without shadows.
     pub shadow_runs: [Vec<(u32, u32, u32)>; MAX_SHADOW_VIEWS],
     pub view_proj: Mat4,
+    /// A target camera's culling box `(min, max)`: only what reaches into
+    /// it is drawn for the camera (`TargetCamera::cull_box`). Set before
+    /// [`collect`](Self::collect); `None` for the main view.
+    pub cull_box: Option<(Vec3, Vec3)>,
     /// The camera's near and far planes, for turning depth into distance
     /// (depth of field). Zero until a camera sets them: the renderer then
     /// uses a default camera's.
@@ -402,6 +406,14 @@ pub(crate) struct ViewFrame {
     pub eye: Option<Camera3D>,
     /// What it draws with: the camera's, tilted onto the clip plane.
     pub view_proj: Mat4,
+    /// Only what reaches into this world box `(min, max)` is drawn
+    /// (`TargetCamera::cull_box`).
+    pub cull_box: Option<(Vec3, Vec3)>,
+    /// Its background colour instead of the main view's clear colour and
+    /// sky (`TargetCamera::clear`).
+    pub clear: Option<crate::color::Color>,
+    /// Its screen effects, in order: (effect, material).
+    pub effects: Vec<(u32, u32)>,
     /// Its models, without shadow casters (it uses the main view's).
     pub frame: Frame3D,
 }
@@ -585,6 +597,7 @@ impl Frame3D {
             occlusion: self.occlusion.as_ref().filter(|_| camera.occlusion_culling),
             occluded: std::sync::atomic::AtomicUsize::new(0),
             layers: camera.layers.0,
+            cull_box: self.cull_box,
         };
         // `bounds`: the camera mesh's, and the shadow mesh's (`None`: no
         // shadow), as (center, radius) in model space.
@@ -1108,6 +1121,9 @@ pub(super) struct Culler<'a> {
     /// The camera's [`RenderLayers`](crate::camera::RenderLayers) bits:
     /// a model on none of them is drawn only into the shadow maps.
     layers: u32,
+    /// Only spheres touching this box `(min, max)` are seen by the camera
+    /// (a target camera's `cull_box`).
+    cull_box: Option<(Vec3, Vec3)>,
 }
 
 /// Set by [`Culler::classify_uncounted`] when the occlusion grid hid the
@@ -1131,7 +1147,10 @@ impl Culler<'_> {
     /// it from the camera. For things classified more than once a frame, or
     /// whose camera bit is dropped, which count themselves once.
     pub fn classify_uncounted(&self, center: Vec3, radius: f32, caster: Option<(Vec3, f32)>) -> u32 {
-        let mut seen = sphere_visible(&self.planes, center, radius);
+        let mut seen = sphere_visible(&self.planes, center, radius)
+            && self
+                .cull_box
+                .is_none_or(|(min, max)| sphere_touches_box(center, radius, min, max));
         let mut flags = 0;
         if seen
             && let Some(grid) = self.occlusion
@@ -1227,6 +1246,8 @@ impl Culler<'_> {
         };
         put(f32::from(u8::from(self.occlusion.is_some())));
         put(f32::from_bits(self.layers));
+        let (min, max) = self.cull_box.unwrap_or((Vec3::NAN, Vec3::NAN));
+        min.to_array().into_iter().chain(max.to_array()).for_each(&mut put);
         put(self.cascades as f32);
         put(self.light_views as f32);
         put(self.sweep);
@@ -1426,6 +1447,12 @@ fn frustum_planes(m: Mat4) -> [Vec4; 6] {
 
 fn sphere_visible(planes: &[Vec4], center: Vec3, radius: f32) -> bool {
     planes.iter().all(|p| p.truncate().dot(center) + p.w >= -radius)
+}
+
+/// Whether a sphere touches the box from `min` to `max` (its nearest point
+/// in the box is within `radius`).
+pub(crate) fn sphere_touches_box(center: Vec3, radius: f32, min: Vec3, max: Vec3) -> bool {
+    center.clamp(min, max).distance_squared(center) <= radius * radius
 }
 
 /// Whether a capsule (a sphere of `radius` swept from `a` to `b`) can be
