@@ -2,7 +2,7 @@
   "schema_version": 1,
   "env": {
     "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
-    "git_rev": "e60e15a8e5bd9465d1f1bba66d63a184875cb109",
+    "git_rev": "431fae00d189084a74d7df0c84f5014b56aabd93",
     "git_dirty": false,
     "os": "macos",
     "arch": "aarch64",
@@ -11,33 +11,40 @@
     "rayon_threads": 14,
     "debug_assertions": false,
     "ponko_features": ["physics", "physics3d", "navmesh", "window"],
-    "bevy_ecs": "0.20.1",
-    "bevy_ecs_features": ["default", "multi_threaded"],
+    "bevy_ecs": null,
+    "bevy_ecs_features": [],
     "hecs": "0.11.2",
-    "filter": "render/scene static-world|render/scene dynamic-world|render/scene multi-material",
-    "load_average": "1.56 4.99 4.82",
+    "filter": "render/scene static-world|render/scene dynamic-world|render/scene multi-material|render/scene animated",
+    "load_average": "2.49 6.14 8.53",
     "machine": null,
-    "unix_time": 1795204896
+    "code_align": null,
+    "unix_time": 1795713364
   },
   "results": [
-    {"name": "render/scene static-world collect", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 0.006292, "p50_ms": 0.008417, "p95_ms": 0.012000, "p99_ms": 0.016292, "max_ms": 0.023084, "mean_ms": 0.008584, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
-    {"name": "render/scene static-world prepare", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 0.065125, "p50_ms": 0.072917, "p95_ms": 0.080625, "p99_ms": 0.087500, "max_ms": 0.100125, "mean_ms": 0.073118, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
-    {"name": "render/scene static-world encode", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 0.093208, "p50_ms": 0.117250, "p95_ms": 0.138000, "p99_ms": 0.150500, "max_ms": 0.178042, "mean_ms": 0.113640, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
-    {"name": "render/scene static-world submit", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 0.015916, "p50_ms": 0.024167, "p95_ms": 0.027750, "p99_ms": 0.031875, "max_ms": 0.039125, "mean_ms": 0.023892, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
-    {"name": "render/scene static-world cpu", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 0.185458, "p50_ms": 0.219917, "p95_ms": 0.253709, "p99_ms": 0.284667, "max_ms": 0.321791, "mean_ms": 0.219236, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
-    {"name": "render/scene static-world frame", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 2.450834, "p50_ms": 3.041542, "p95_ms": 3.246666, "p99_ms": 3.324083, "max_ms": 3.759083, "mean_ms": 2.883695, "world_bytes": null, "allocs_per_run": 231.168, "alloc_bytes_per_run": 85272.733},
-    {"name": "render/scene dynamic-world collect", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 0.201542, "p50_ms": 0.262958, "p95_ms": 0.319333, "p99_ms": 0.366708, "max_ms": 0.479041, "mean_ms": 0.267021, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
-    {"name": "render/scene dynamic-world prepare", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 0.295000, "p50_ms": 0.466250, "p95_ms": 0.620084, "p99_ms": 0.666584, "max_ms": 0.745917, "mean_ms": 0.450286, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
-    {"name": "render/scene dynamic-world encode", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 0.105458, "p50_ms": 0.112833, "p95_ms": 0.131416, "p99_ms": 0.164750, "max_ms": 0.243666, "mean_ms": 0.115721, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
-    {"name": "render/scene dynamic-world submit", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 0.019083, "p50_ms": 0.024042, "p95_ms": 0.031916, "p99_ms": 0.040959, "max_ms": 0.057542, "mean_ms": 0.024827, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
-    {"name": "render/scene dynamic-world cpu", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 0.688083, "p50_ms": 0.858000, "p95_ms": 1.064667, "p99_ms": 1.149500, "max_ms": 1.328375, "mean_ms": 0.857857, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
-    {"name": "render/scene dynamic-world frame", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 1.928708, "p50_ms": 2.163459, "p95_ms": 2.396792, "p99_ms": 2.479208, "max_ms": 2.975250, "mean_ms": 2.170307, "world_bytes": null, "allocs_per_run": 271.642, "alloc_bytes_per_run": 77870.380},
-    {"name": "render/scene multi-material collect", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 0.101542, "p50_ms": 0.156833, "p95_ms": 0.224042, "p99_ms": 0.266959, "max_ms": 0.663375, "mean_ms": 0.164250, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
-    {"name": "render/scene multi-material prepare", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 0.177000, "p50_ms": 0.237875, "p95_ms": 0.314541, "p99_ms": 0.382042, "max_ms": 0.472542, "mean_ms": 0.245350, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
-    {"name": "render/scene multi-material encode", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 0.649834, "p50_ms": 1.124750, "p95_ms": 1.316125, "p99_ms": 1.373875, "max_ms": 1.478875, "mean_ms": 1.097949, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
-    {"name": "render/scene multi-material submit", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 0.066791, "p50_ms": 0.102125, "p95_ms": 0.151667, "p99_ms": 0.175541, "max_ms": 0.247583, "mean_ms": 0.106208, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
-    {"name": "render/scene multi-material cpu", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 1.104375, "p50_ms": 1.634208, "p95_ms": 1.889625, "p99_ms": 1.961167, "max_ms": 2.217791, "mean_ms": 1.613759, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
-    {"name": "render/scene multi-material frame", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 2.615375, "p50_ms": 3.393958, "p95_ms": 3.781458, "p99_ms": 3.975792, "max_ms": 4.485875, "mean_ms": 3.358739, "world_bytes": null, "allocs_per_run": 534.368, "alloc_bytes_per_run": 815032.553}
+    {"name": "render/scene static-world collect", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 0.006291, "p50_ms": 0.008291, "p95_ms": 0.009792, "p99_ms": 0.015000, "max_ms": 0.023500, "mean_ms": 0.008217, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
+    {"name": "render/scene static-world prepare", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 0.067208, "p50_ms": 0.074375, "p95_ms": 0.083250, "p99_ms": 0.091958, "max_ms": 0.102250, "mean_ms": 0.074691, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
+    {"name": "render/scene static-world encode", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 0.094209, "p50_ms": 0.116625, "p95_ms": 0.132333, "p99_ms": 0.153166, "max_ms": 0.176834, "mean_ms": 0.112859, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
+    {"name": "render/scene static-world submit", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 0.015250, "p50_ms": 0.024750, "p95_ms": 0.027875, "p99_ms": 0.032875, "max_ms": 0.035208, "mean_ms": 0.024281, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
+    {"name": "render/scene static-world cpu", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 0.188625, "p50_ms": 0.221459, "p95_ms": 0.246708, "p99_ms": 0.279958, "max_ms": 0.317458, "mean_ms": 0.220049, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
+    {"name": "render/scene static-world frame", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 2.470458, "p50_ms": 3.064958, "p95_ms": 3.288917, "p99_ms": 3.352708, "max_ms": 28.632292, "mean_ms": 2.953037, "world_bytes": null, "allocs_per_run": 230.163, "alloc_bytes_per_run": 87456.147},
+    {"name": "render/scene dynamic-world collect", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 0.199708, "p50_ms": 0.261625, "p95_ms": 0.327166, "p99_ms": 0.348750, "max_ms": 0.495375, "mean_ms": 0.265849, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
+    {"name": "render/scene dynamic-world prepare", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 0.308500, "p50_ms": 0.477083, "p95_ms": 0.630333, "p99_ms": 0.660083, "max_ms": 0.733209, "mean_ms": 0.457044, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
+    {"name": "render/scene dynamic-world encode", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 0.113625, "p50_ms": 0.129875, "p95_ms": 0.145542, "p99_ms": 0.241709, "max_ms": 0.275167, "mean_ms": 0.132479, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
+    {"name": "render/scene dynamic-world submit", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 0.020708, "p50_ms": 0.026083, "p95_ms": 0.033208, "p99_ms": 0.055792, "max_ms": 0.076042, "mean_ms": 0.027190, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
+    {"name": "render/scene dynamic-world cpu", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 0.700916, "p50_ms": 0.885750, "p95_ms": 1.099042, "p99_ms": 1.161083, "max_ms": 1.276208, "mean_ms": 0.882563, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
+    {"name": "render/scene dynamic-world frame", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 1.966583, "p50_ms": 2.203667, "p95_ms": 2.429167, "p99_ms": 2.515625, "max_ms": 2.659916, "mean_ms": 2.199454, "world_bytes": null, "allocs_per_run": 270.642, "alloc_bytes_per_run": 80338.380},
+    {"name": "render/scene multi-material collect", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 0.095750, "p50_ms": 0.137250, "p95_ms": 0.182792, "p99_ms": 0.205375, "max_ms": 0.240500, "mean_ms": 0.142114, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
+    {"name": "render/scene multi-material prepare", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 0.177958, "p50_ms": 0.212459, "p95_ms": 0.258166, "p99_ms": 0.313292, "max_ms": 0.386708, "mean_ms": 0.217543, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
+    {"name": "render/scene multi-material encode", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 0.690208, "p50_ms": 1.080083, "p95_ms": 1.241583, "p99_ms": 1.290416, "max_ms": 1.368959, "mean_ms": 1.058522, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
+    {"name": "render/scene multi-material submit", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 0.052333, "p50_ms": 0.084000, "p95_ms": 0.137125, "p99_ms": 0.170000, "max_ms": 0.179208, "mean_ms": 0.092690, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
+    {"name": "render/scene multi-material cpu", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 1.087916, "p50_ms": 1.528500, "p95_ms": 1.720292, "p99_ms": 1.826292, "max_ms": 2.022041, "mean_ms": 1.510871, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
+    {"name": "render/scene multi-material frame", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 2.611084, "p50_ms": 3.259667, "p95_ms": 3.553334, "p99_ms": 3.725500, "max_ms": 3.892917, "mean_ms": 3.233786, "world_bytes": null, "allocs_per_run": 536.907, "alloc_bytes_per_run": 819761.047},
+    {"name": "render/scene animated collect", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 0.086250, "p50_ms": 0.095166, "p95_ms": 0.102125, "p99_ms": 0.108292, "max_ms": 0.114417, "mean_ms": 0.095818, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
+    {"name": "render/scene animated prepare", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 0.133417, "p50_ms": 0.154833, "p95_ms": 0.169709, "p99_ms": 0.180834, "max_ms": 0.221208, "mean_ms": 0.154751, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
+    {"name": "render/scene animated encode", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 0.142250, "p50_ms": 0.203292, "p95_ms": 0.277333, "p99_ms": 0.300084, "max_ms": 0.351083, "mean_ms": 0.210936, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
+    {"name": "render/scene animated submit", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 0.035208, "p50_ms": 0.049459, "p95_ms": 0.087209, "p99_ms": 0.104459, "max_ms": 0.157917, "mean_ms": 0.052334, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
+    {"name": "render/scene animated cpu", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 0.413208, "p50_ms": 0.508125, "p95_ms": 0.579708, "p99_ms": 0.624750, "max_ms": 0.710000, "mean_ms": 0.513840, "world_bytes": null, "allocs_per_run": null, "alloc_bytes_per_run": null},
+    {"name": "render/scene animated frame", "kind": "steady", "warmup": 120, "runs": 600, "min_ms": 1.433667, "p50_ms": 1.667583, "p95_ms": 1.823791, "p99_ms": 2.241666, "max_ms": 4.275709, "mean_ms": 1.689691, "world_bytes": null, "allocs_per_run": 500.845, "alloc_bytes_per_run": 346977.147}
   ],
   "render": {
     "gpu": {
@@ -166,13 +173,13 @@
       "wgpu_features": "Features { features_wgpu: FeaturesWGPU(TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES), features_webgpu: FeaturesWebGPU(TIMESTAMP_QUERY) }"
     },
     "process": {
-      "peak_rss_bytes": 209371136,
+      "peak_rss_bytes": 362414080,
       "peak_rss_unavailable": null
     },
     "scenes": [
       {
-        "allocation_bytes_per_frame": 85272.733333,
-        "allocations_per_frame": 231.168333,
+        "allocation_bytes_per_frame": 87456.146667,
+        "allocations_per_frame": 230.163333,
         "command_buffers": 2,
         "counts": {
           "buffers_created": {
@@ -230,113 +237,103 @@
             "p50": 2.0
           },
           "upload_bytes": {
-            "max": 15200.0,
-            "mean": 15199.6,
-            "min": 15120.0,
-            "p50": 15200.0
+            "max": 15520.0,
+            "mean": 15519.6,
+            "min": 15440.0,
+            "p50": 15520.0
           }
         },
         "frames": 600,
         "gpu_ms": {
           "passes": [
             {
-              "max": 0.046584,
-              "mean": 0.037545,
-              "min": 0.031041,
+              "max": 0.046625,
+              "mean": 0.037509,
+              "min": 0.030917,
               "name": "shadows 0",
-              "p50": 0.03825,
-              "p95": 0.04225,
-              "p99": 0.04525,
+              "p50": 0.038209,
+              "p95": 0.042375,
+              "p99": 0.045333,
               "samples": 600
             },
             {
-              "max": 0.07325,
-              "mean": 0.052515,
-              "min": 0.044625,
+              "max": 0.070458,
+              "mean": 0.052153,
+              "min": 0.041334,
               "name": "shadows 1",
-              "p50": 0.051333,
-              "p95": 0.063209,
-              "p99": 0.067916,
+              "p50": 0.051125,
+              "p95": 0.0635,
+              "p99": 0.067375,
               "samples": 600
             },
             {
-              "max": 0.321125,
-              "mean": 0.151958,
-              "min": 0.135792,
-              "name": "shadows 2",
-              "p50": 0.1515,
-              "p95": 0.162709,
-              "p99": 0.167875,
-              "samples": 600
-            },
-            {
-              "max": 0.006125,
-              "mean": 0.000066,
-              "min": 0.0,
+              "max": 0.0905,
+              "mean": 0.003296,
+              "min": 0.002771,
               "name": "depth prepass",
-              "p50": 0.0,
-              "p95": 0.0,
-              "p99": 0.005333,
+              "p50": 0.003083,
+              "p95": 0.0035,
+              "p99": 0.005542,
               "samples": 600
             },
             {
-              "max": 1.067209,
-              "mean": 0.977164,
-              "min": 0.935875,
-              "name": "shadows 3",
-              "p50": 0.977125,
-              "p95": 1.000042,
-              "p99": 1.036,
-              "samples": 306
+              "max": 0.169208,
+              "mean": 0.148873,
+              "min": 0.134896,
+              "name": "shadows 2",
+              "p50": 0.148375,
+              "p95": 0.160021,
+              "p99": 0.164334,
+              "samples": 600
             },
             {
-              "max": 2.04475,
-              "mean": 1.648795,
-              "min": 1.328667,
+              "max": 16.464792,
+              "mean": 1.676042,
+              "min": 1.345625,
               "name": "opaque",
-              "p50": 1.562916,
-              "p95": 1.94825,
-              "p99": 1.979834,
-              "samples": 588
+              "p50": 1.561333,
+              "p95": 1.951208,
+              "p99": 1.97525,
+              "samples": 600
             },
             {
-              "max": 0.03025,
-              "mean": 0.027414,
-              "min": 0.024042,
+              "max": 0.037334,
+              "mean": 0.033381,
+              "min": 0.029125,
               "name": "post",
-              "p50": 0.027584,
-              "p95": 0.028792,
-              "p99": 0.029083,
-              "samples": 391
+              "p50": 0.033542,
+              "p95": 0.035125,
+              "p99": 0.0355,
+              "samples": 600
             },
             {
-              "max": 1.091666,
-              "mean": 1.07775,
-              "min": 1.063833,
-              "name": "occlusion depth",
-              "p50": 1.07775,
-              "p95": 1.091666,
-              "p99": 1.091666,
-              "samples": 3
+              "max": 1.008459,
+              "mean": 0.979826,
+              "min": 0.81775,
+              "name": "shadows 3",
+              "p50": 0.9825,
+              "p95": 1.00125,
+              "p99": 1.0045,
+              "samples": 306
             }
           ],
           "span": {
-            "max": 4.273166,
-            "mean": 2.382327,
-            "min": 0.233792,
-            "p50": 2.281375,
-            "p95": 2.756958,
-            "p99": 2.798208,
+            "max": 28.117834,
+            "mean": 2.483374,
+            "min": 2.028208,
+            "p50": 2.60675,
+            "p95": 2.794333,
+            "p99": 2.820459,
             "samples": 600
           },
           "timed_frames": 600,
           "total": {
-            "max": 3.724291,
-            "mean": 2.379509,
-            "min": 0.233792,
-            "p50": 2.281375,
-            "p95": 2.756625,
-            "p99": 2.798166,
+            "max": 16.740167,
+            "mean": 2.450966,
+            "min": 2.028208,
+            "p50": 2.60675,
+            "p95": 2.794041,
+            "p99": 2.820459,
             "samples": 600
           },
           "unavailable": null
@@ -357,7 +354,7 @@
         "memory": {
           "computed": "render_target_bytes, shadow_map_bytes and light_shadow_atlas_bytes are computed from the sizes, formats and sample counts of the textures as last drawn with (0 before the first frame), not read from the device: the scene's color, depth, HDR and scene-copy targets and the output; the sun's cascades; the lights' atlas",
           "computed_bytes": 129777664,
-          "counted_bytes": 24580,
+          "counted_bytes": 40964,
           "device_allocated_bytes": null,
           "device_reserved_bytes": null,
           "device_unavailable": "wgpu reports no allocator totals on the metal backend",
@@ -365,7 +362,7 @@
           "gpu_buffers": 0,
           "instance_batch_pool_bytes": 0,
           "light_shadow_atlas_bytes": 0,
-          "mesh_bytes": 24576,
+          "mesh_bytes": 40960,
           "mesh_cpu_bytes": 0,
           "meshes": 9,
           "render_target_bytes": 62668800,
@@ -415,6 +412,7 @@
             "shadow_cascades": 4,
             "shadow_distance": 80.0,
             "shadow_filter": 4,
+            "shadow_lag": false,
             "shadow_refresh": 1,
             "shadow_resolution": 2048,
             "shadow_sun_size": 0.5299999713897705,
@@ -422,79 +420,88 @@
             "sharpen": 0.0,
             "ssr": 0.0,
             "ssr_thin_objects": false,
+            "ssr_transparent": false,
             "tonemap": "aces"
           },
           "scale": 1.0,
           "shadow_workload": null
         },
+        "see_through_changes": {
+          "bind_groups": 0,
+          "draws": 0,
+          "index_buffers": 0,
+          "pipelines": 0,
+          "vertex_buffers": 0
+        },
         "state_changes": {
-          "bind_groups": 49,
+          "bind_groups": 48,
           "index_buffers": 8,
           "pipelines": 8,
-          "vertex_buffers": 49
+          "vertex_buffers": 48
         },
+        "submits": 1,
         "timings_ms": {
           "collect": {
-            "max": 0.023084,
-            "mean": 0.008585,
-            "min": 0.006292,
-            "p50": 0.008417,
-            "p95": 0.012,
-            "p99": 0.016292,
+            "max": 0.0235,
+            "mean": 0.008217,
+            "min": 0.006291,
+            "p50": 0.008291,
+            "p95": 0.009792,
+            "p99": 0.015,
             "samples": 600
           },
           "cpu": {
-            "max": 0.321791,
-            "mean": 0.219237,
-            "min": 0.185458,
-            "p50": 0.219917,
-            "p95": 0.253709,
-            "p99": 0.284667,
+            "max": 0.317458,
+            "mean": 0.220049,
+            "min": 0.188625,
+            "p50": 0.221459,
+            "p95": 0.246708,
+            "p99": 0.279958,
             "samples": 600
           },
           "encode": {
-            "max": 0.178042,
-            "mean": 0.113641,
-            "min": 0.093208,
-            "p50": 0.11725,
-            "p95": 0.138,
-            "p99": 0.1505,
+            "max": 0.176834,
+            "mean": 0.112859,
+            "min": 0.094209,
+            "p50": 0.116625,
+            "p95": 0.132333,
+            "p99": 0.153166,
             "samples": 600
           },
           "frame": {
-            "max": 3.759083,
-            "mean": 2.883695,
-            "min": 2.450834,
-            "p50": 3.041542,
-            "p95": 3.246666,
-            "p99": 3.324083,
+            "max": 28.632292,
+            "mean": 2.953038,
+            "min": 2.470458,
+            "p50": 3.064958,
+            "p95": 3.288917,
+            "p99": 3.352708,
             "samples": 600
           },
           "prepare": {
-            "max": 0.100125,
-            "mean": 0.073118,
-            "min": 0.065125,
-            "p50": 0.072917,
-            "p95": 0.080625,
-            "p99": 0.0875,
+            "max": 0.10225,
+            "mean": 0.074692,
+            "min": 0.067208,
+            "p50": 0.074375,
+            "p95": 0.08325,
+            "p99": 0.091958,
             "samples": 600
           },
           "submit": {
-            "max": 0.039125,
-            "mean": 0.023893,
-            "min": 0.015916,
-            "p50": 0.024167,
-            "p95": 0.02775,
-            "p99": 0.031875,
+            "max": 0.035208,
+            "mean": 0.024281,
+            "min": 0.01525,
+            "p50": 0.02475,
+            "p95": 0.027875,
+            "p99": 0.032875,
             "samples": 600
           },
           "update": {
-            "max": 0.001833,
-            "mean": 0.000221,
+            "max": 0.001875,
+            "mean": 0.000213,
             "min": 0.000083,
-            "p50": 0.000167,
-            "p95": 0.0005,
-            "p99": 0.000792,
+            "p50": 0.000208,
+            "p95": 0.000333,
+            "p99": 0.000667,
             "samples": 600
           }
         },
@@ -508,13 +515,13 @@
           "sprites": 0.0,
           "static_batches": 0.0,
           "textures": 0.0,
-          "uniforms": 15199.6
+          "uniforms": 15519.6
         },
         "warmup_frames": 120
       },
       {
-        "allocation_bytes_per_frame": 77870.38,
-        "allocations_per_frame": 271.641667,
+        "allocation_bytes_per_frame": 80338.38,
+        "allocations_per_frame": 270.641667,
         "command_buffers": 2,
         "counts": {
           "buffers_created": {
@@ -572,103 +579,103 @@
             "p50": 721530.0
           },
           "upload_bytes": {
-            "max": 2335920.0,
-            "mean": 1992464.4,
-            "min": 1855360.0,
-            "p50": 1885200.0
+            "max": 2336240.0,
+            "mean": 1992784.4,
+            "min": 1855680.0,
+            "p50": 1885520.0
           }
         },
         "frames": 600,
         "gpu_ms": {
           "passes": [
             {
-              "max": 0.0225,
-              "mean": 0.019069,
-              "min": 0.017167,
+              "max": 0.021958,
+              "mean": 0.018948,
+              "min": 0.016479,
               "name": "shadows 0",
-              "p50": 0.0185,
-              "p95": 0.021,
-              "p99": 0.021708,
+              "p50": 0.018334,
+              "p95": 0.021083,
+              "p99": 0.021625,
               "samples": 600
             },
             {
-              "max": 0.019125,
-              "mean": 0.014022,
-              "min": 0.013666,
+              "max": 0.016875,
+              "mean": 0.013953,
+              "min": 0.011001,
               "name": "shadows 1",
               "p50": 0.013875,
-              "p95": 0.014459,
-              "p99": 0.01725,
+              "p95": 0.01425,
+              "p99": 0.016208,
               "samples": 600
             },
             {
-              "max": 0.025667,
-              "mean": 0.016535,
-              "min": 0.014583,
+              "max": 0.024959,
+              "mean": 0.01641,
+              "min": 0.014667,
               "name": "shadows 2",
               "p50": 0.016208,
-              "p95": 0.019416,
-              "p99": 0.024167,
+              "p95": 0.016958,
+              "p99": 0.024,
               "samples": 600
             },
             {
-              "max": 0.081792,
-              "mean": 0.045162,
-              "min": 0.030291,
+              "max": 0.065291,
+              "mean": 0.043487,
+              "min": 0.029251,
               "name": "shadows 3",
-              "p50": 0.043292,
-              "p95": 0.062334,
-              "p99": 0.066042,
+              "p50": 0.0425,
+              "p95": 0.059563,
+              "p99": 0.062854,
               "samples": 600
             },
             {
-              "max": 0.007125,
-              "mean": 0.002656,
-              "min": 0.0,
+              "max": 0.006542,
+              "mean": 0.004076,
+              "min": 0.000041,
               "name": "depth prepass",
-              "p50": 0.001458,
-              "p95": 0.00575,
-              "p99": 0.005875,
+              "p50": 0.003625,
+              "p95": 0.005833,
+              "p99": 0.006042,
               "samples": 600
             },
             {
-              "max": 1.204584,
-              "mean": 0.894165,
-              "min": 0.834333,
+              "max": 0.962417,
+              "mean": 0.888116,
+              "min": 0.838083,
               "name": "opaque",
-              "p50": 0.891542,
-              "p95": 0.936083,
-              "p99": 0.963834,
-              "samples": 585
+              "p50": 0.88675,
+              "p95": 0.932,
+              "p99": 0.948917,
+              "samples": 600
             },
             {
-              "max": 0.183416,
-              "mean": 0.105312,
-              "min": 0.027209,
+              "max": 0.118375,
+              "mean": 0.033349,
+              "min": 0.028792,
               "name": "post",
-              "p50": 0.027209,
-              "p95": 0.183416,
-              "p99": 0.183416,
-              "samples": 2
+              "p50": 0.033458,
+              "p95": 0.034584,
+              "p99": 0.035042,
+              "samples": 600
             }
           ],
           "span": {
-            "max": 1.375542,
-            "mean": 0.988601,
-            "min": 0.087667,
-            "p50": 1.00675,
-            "p95": 1.071459,
-            "p99": 1.111542,
+            "max": 1.179542,
+            "mean": 1.036383,
+            "min": 0.95875,
+            "p50": 1.031292,
+            "p95": 1.092459,
+            "p99": 1.13425,
             "samples": 600
           },
           "timed_frames": 600,
           "total": {
-            "max": 1.317334,
-            "mean": 0.969606,
-            "min": 0.087667,
-            "p50": 0.99025,
-            "p95": 1.035374,
-            "p99": 1.062875,
+            "max": 1.114001,
+            "mean": 1.018339,
+            "min": 0.95875,
+            "p50": 1.016418,
+            "p95": 1.064751,
+            "p99": 1.088625,
             "samples": 600
           },
           "unavailable": null
@@ -689,7 +696,7 @@
         "memory": {
           "computed": "render_target_bytes, shadow_map_bytes and light_shadow_atlas_bytes are computed from the sizes, formats and sample counts of the textures as last drawn with (0 before the first frame), not read from the device: the scene's color, depth, HDR and scene-copy targets and the output; the sun's cascades; the lights' atlas",
           "computed_bytes": 129777664,
-          "counted_bytes": 49156,
+          "counted_bytes": 81924,
           "device_allocated_bytes": null,
           "device_reserved_bytes": null,
           "device_unavailable": "wgpu reports no allocator totals on the metal backend",
@@ -697,7 +704,7 @@
           "gpu_buffers": 0,
           "instance_batch_pool_bytes": 0,
           "light_shadow_atlas_bytes": 0,
-          "mesh_bytes": 49152,
+          "mesh_bytes": 81920,
           "mesh_cpu_bytes": 0,
           "meshes": 17,
           "render_target_bytes": 62668800,
@@ -747,6 +754,7 @@
             "shadow_cascades": 4,
             "shadow_distance": 80.0,
             "shadow_filter": 4,
+            "shadow_lag": false,
             "shadow_refresh": 1,
             "shadow_resolution": 2048,
             "shadow_sun_size": 0.5299999713897705,
@@ -754,79 +762,88 @@
             "sharpen": 0.0,
             "ssr": 0.0,
             "ssr_thin_objects": false,
+            "ssr_transparent": false,
             "tonemap": "aces"
           },
           "scale": 1.0,
           "shadow_workload": null
         },
+        "see_through_changes": {
+          "bind_groups": 0,
+          "draws": 0,
+          "index_buffers": 0,
+          "pipelines": 0,
+          "vertex_buffers": 0
+        },
         "state_changes": {
-          "bind_groups": 64,
+          "bind_groups": 63,
           "index_buffers": 5,
           "pipelines": 5,
-          "vertex_buffers": 16
+          "vertex_buffers": 15
         },
+        "submits": 1,
         "timings_ms": {
           "collect": {
-            "max": 0.479041,
-            "mean": 0.267021,
-            "min": 0.201542,
-            "p50": 0.262958,
-            "p95": 0.319333,
-            "p99": 0.366708,
+            "max": 0.495375,
+            "mean": 0.26585,
+            "min": 0.199708,
+            "p50": 0.261625,
+            "p95": 0.327166,
+            "p99": 0.34875,
             "samples": 600
           },
           "cpu": {
-            "max": 1.328375,
-            "mean": 0.857857,
-            "min": 0.688083,
-            "p50": 0.858,
-            "p95": 1.064667,
-            "p99": 1.1495,
+            "max": 1.276208,
+            "mean": 0.882564,
+            "min": 0.700916,
+            "p50": 0.88575,
+            "p95": 1.099042,
+            "p99": 1.161083,
             "samples": 600
           },
           "encode": {
-            "max": 0.243666,
-            "mean": 0.115722,
-            "min": 0.105458,
-            "p50": 0.112833,
-            "p95": 0.131416,
-            "p99": 0.16475,
+            "max": 0.275167,
+            "mean": 0.13248,
+            "min": 0.113625,
+            "p50": 0.129875,
+            "p95": 0.145542,
+            "p99": 0.241709,
             "samples": 600
           },
           "frame": {
-            "max": 2.97525,
-            "mean": 2.170308,
-            "min": 1.928708,
-            "p50": 2.163459,
-            "p95": 2.396792,
-            "p99": 2.479208,
+            "max": 2.659916,
+            "mean": 2.199454,
+            "min": 1.966583,
+            "p50": 2.203667,
+            "p95": 2.429167,
+            "p99": 2.515625,
             "samples": 600
           },
           "prepare": {
-            "max": 0.745917,
-            "mean": 0.450287,
-            "min": 0.295,
-            "p50": 0.46625,
-            "p95": 0.620084,
-            "p99": 0.666584,
+            "max": 0.733209,
+            "mean": 0.457044,
+            "min": 0.3085,
+            "p50": 0.477083,
+            "p95": 0.630333,
+            "p99": 0.660083,
             "samples": 600
           },
           "submit": {
-            "max": 0.057542,
-            "mean": 0.024827,
-            "min": 0.019083,
-            "p50": 0.024042,
-            "p95": 0.031916,
-            "p99": 0.040959,
+            "max": 0.076042,
+            "mean": 0.02719,
+            "min": 0.020708,
+            "p50": 0.026083,
+            "p95": 0.033208,
+            "p99": 0.055792,
             "samples": 600
           },
           "update": {
-            "max": 0.305042,
-            "mean": 0.238037,
-            "min": 0.190542,
-            "p50": 0.238667,
-            "p95": 0.266417,
-            "p99": 0.275166,
+            "max": 0.308958,
+            "mean": 0.257416,
+            "min": 0.197667,
+            "p50": 0.25925,
+            "p95": 0.287166,
+            "p99": 0.294042,
             "samples": 600
           }
         },
@@ -840,13 +857,13 @@
           "sprites": 0.0,
           "static_batches": 0.0,
           "textures": 0.0,
-          "uniforms": 15200.0
+          "uniforms": 15520.0
         },
         "warmup_frames": 120
       },
       {
-        "allocation_bytes_per_frame": 815032.553333,
-        "allocations_per_frame": 534.368333,
+        "allocation_bytes_per_frame": 819761.046667,
+        "allocations_per_frame": 536.906667,
         "command_buffers": 8,
         "counts": {
           "buffers_created": {
@@ -904,103 +921,103 @@
             "p50": 219480.0
           },
           "upload_bytes": {
-            "max": 640480.0,
-            "mean": 115712.133333,
-            "min": 15600.0,
-            "p50": 75440.0
+            "max": 640800.0,
+            "mean": 116032.133333,
+            "min": 15920.0,
+            "p50": 75760.0
           }
         },
         "frames": 600,
         "gpu_ms": {
           "passes": [
             {
-              "max": 0.152292,
-              "mean": 0.005264,
-              "min": 0.0,
-              "name": "depth prepass",
-              "p50": 0.006208,
-              "p95": 0.009542,
-              "p99": 0.020833,
-              "samples": 600
-            },
-            {
-              "max": 0.044375,
-              "mean": 0.019365,
-              "min": 0.017417,
+              "max": 0.026667,
+              "mean": 0.018944,
+              "min": 0.015853,
               "name": "shadows 0",
-              "p50": 0.018542,
-              "p95": 0.024292,
-              "p99": 0.03775,
+              "p50": 0.018625,
+              "p95": 0.02175,
+              "p99": 0.024042,
               "samples": 600
             },
             {
-              "max": 0.08725,
-              "mean": 0.035197,
-              "min": 0.014083,
+              "max": 0.070291,
+              "mean": 0.02991,
+              "min": 0.014041,
               "name": "shadows 1",
-              "p50": 0.047333,
-              "p95": 0.057041,
-              "p99": 0.066709,
+              "p50": 0.015375,
+              "p95": 0.050375,
+              "p99": 0.056458,
               "samples": 600
             },
             {
-              "max": 0.250209,
-              "mean": 0.08097,
-              "min": 0.053792,
+              "max": 0.113125,
+              "mean": 0.076585,
+              "min": 0.049542,
               "name": "shadows 2",
-              "p50": 0.080625,
-              "p95": 0.107126,
-              "p99": 0.116375,
+              "p50": 0.077416,
+              "p95": 0.099375,
+              "p99": 0.104375,
               "samples": 600
             },
             {
-              "max": 0.109792,
-              "mean": 0.069045,
-              "min": 0.049125,
+              "max": 0.094042,
+              "mean": 0.071656,
+              "min": 0.057625,
               "name": "shadows 3",
-              "p50": 0.068125,
-              "p95": 0.08325,
-              "p99": 0.092709,
+              "p50": 0.070792,
+              "p95": 0.087,
+              "p99": 0.091104,
               "samples": 596
             },
             {
-              "max": 1.676709,
-              "mean": 0.95704,
-              "min": 0.59775,
-              "name": "opaque",
-              "p50": 0.936125,
-              "p95": 1.168167,
-              "p99": 1.280792,
-              "samples": 591
+              "max": 0.009208,
+              "mean": 0.005118,
+              "min": 0.000041,
+              "name": "depth prepass",
+              "p50": 0.005791,
+              "p95": 0.006709,
+              "p99": 0.008209,
+              "samples": 600
             },
             {
-              "max": 0.053417,
-              "mean": 0.032246,
-              "min": 0.024375,
+              "max": 1.238375,
+              "mean": 0.943342,
+              "min": 0.853459,
+              "name": "opaque",
+              "p50": 0.943041,
+              "p95": 1.00975,
+              "p99": 1.145875,
+              "samples": 600
+            },
+            {
+              "max": 0.047334,
+              "mean": 0.033962,
+              "min": 0.029042,
               "name": "post",
-              "p50": 0.028666,
-              "p95": 0.053417,
-              "p99": 0.053417,
-              "samples": 19
+              "p50": 0.033791,
+              "p95": 0.037917,
+              "p99": 0.042833,
+              "samples": 600
             }
           ],
           "span": {
-            "max": 1.999042,
-            "mean": 1.247798,
-            "min": 0.186833,
-            "p50": 1.254375,
-            "p95": 1.469125,
-            "p99": 1.636625,
+            "max": 1.717209,
+            "mean": 1.316988,
+            "min": 1.093542,
+            "p50": 1.340167,
+            "p95": 1.517084,
+            "p99": 1.558375,
             "samples": 600
           },
           "timed_frames": 600,
           "total": {
-            "max": 1.976375,
-            "mean": 1.153085,
-            "min": 0.186833,
-            "p50": 1.142667,
-            "p95": 1.380875,
-            "p99": 1.511833,
+            "max": 1.536375,
+            "mean": 1.17904,
+            "min": 1.051083,
+            "p50": 1.181416,
+            "p95": 1.251166,
+            "p99": 1.414793,
             "samples": 600
           },
           "unavailable": null
@@ -1079,6 +1096,7 @@
             "shadow_cascades": 4,
             "shadow_distance": 80.0,
             "shadow_filter": 4,
+            "shadow_lag": false,
             "shadow_refresh": 1,
             "shadow_resolution": 2048,
             "shadow_sun_size": 0.5299999713897705,
@@ -1086,79 +1104,88 @@
             "sharpen": 0.0,
             "ssr": 0.0,
             "ssr_thin_objects": false,
+            "ssr_transparent": false,
             "tonemap": "aces"
           },
           "scale": 1.0,
           "shadow_workload": null
         },
+        "see_through_changes": {
+          "bind_groups": 0,
+          "draws": 0,
+          "index_buffers": 0,
+          "pipelines": 0,
+          "vertex_buffers": 0
+        },
         "state_changes": {
-          "bind_groups": 1665,
+          "bind_groups": 1664,
           "index_buffers": 8,
           "pipelines": 17,
-          "vertex_buffers": 22
+          "vertex_buffers": 21
         },
+        "submits": 1,
         "timings_ms": {
           "collect": {
-            "max": 0.663375,
-            "mean": 0.164251,
-            "min": 0.101542,
-            "p50": 0.156833,
-            "p95": 0.224042,
-            "p99": 0.266959,
+            "max": 0.2405,
+            "mean": 0.142115,
+            "min": 0.09575,
+            "p50": 0.13725,
+            "p95": 0.182792,
+            "p99": 0.205375,
             "samples": 600
           },
           "cpu": {
-            "max": 2.217791,
-            "mean": 1.613759,
-            "min": 1.104375,
-            "p50": 1.634208,
-            "p95": 1.889625,
-            "p99": 1.961167,
+            "max": 2.022041,
+            "mean": 1.510871,
+            "min": 1.087916,
+            "p50": 1.5285,
+            "p95": 1.720292,
+            "p99": 1.826292,
             "samples": 600
           },
           "encode": {
-            "max": 1.478875,
-            "mean": 1.09795,
-            "min": 0.649834,
-            "p50": 1.12475,
-            "p95": 1.316125,
-            "p99": 1.373875,
+            "max": 1.368959,
+            "mean": 1.058522,
+            "min": 0.690208,
+            "p50": 1.080083,
+            "p95": 1.241583,
+            "p99": 1.290416,
             "samples": 600
           },
           "frame": {
-            "max": 4.485875,
-            "mean": 3.35874,
-            "min": 2.615375,
-            "p50": 3.393958,
-            "p95": 3.781458,
-            "p99": 3.975792,
+            "max": 3.892917,
+            "mean": 3.233786,
+            "min": 2.611084,
+            "p50": 3.259667,
+            "p95": 3.553334,
+            "p99": 3.7255,
             "samples": 600
           },
           "prepare": {
-            "max": 0.472542,
-            "mean": 0.24535,
-            "min": 0.177,
-            "p50": 0.237875,
-            "p95": 0.314541,
-            "p99": 0.382042,
+            "max": 0.386708,
+            "mean": 0.217544,
+            "min": 0.177958,
+            "p50": 0.212459,
+            "p95": 0.258166,
+            "p99": 0.313292,
             "samples": 600
           },
           "submit": {
-            "max": 0.247583,
-            "mean": 0.106209,
-            "min": 0.066791,
-            "p50": 0.102125,
-            "p95": 0.151667,
-            "p99": 0.175541,
+            "max": 0.179208,
+            "mean": 0.09269,
+            "min": 0.052333,
+            "p50": 0.084,
+            "p95": 0.137125,
+            "p99": 0.17,
             "samples": 600
           },
           "update": {
-            "max": 0.010084,
-            "mean": 0.001117,
-            "min": 0.000125,
-            "p50": 0.000959,
-            "p95": 0.002333,
-            "p99": 0.003542,
+            "max": 0.002875,
+            "mean": 0.00043,
+            "min": 0.000084,
+            "p50": 0.000375,
+            "p95": 0.000833,
+            "p99": 0.001417,
             "samples": 600
           }
         },
@@ -1172,7 +1199,359 @@
           "sprites": 0.0,
           "static_batches": 0.0,
           "textures": 0.0,
-          "uniforms": 15199.733333
+          "uniforms": 15519.733333
+        },
+        "warmup_frames": 120
+      },
+      {
+        "allocation_bytes_per_frame": 346977.146667,
+        "allocations_per_frame": 500.845,
+        "command_buffers": 9,
+        "counts": {
+          "buffers_created": {
+            "max": 0.0,
+            "mean": 0.0,
+            "min": 0.0,
+            "p50": 0.0
+          },
+          "draw_calls": {
+            "max": 1841.0,
+            "mean": 1754.775,
+            "min": 1685.0,
+            "p50": 1740.0
+          },
+          "instances": {
+            "max": 392.0,
+            "mean": 381.205,
+            "min": 370.0,
+            "p50": 381.0
+          },
+          "occluded": {
+            "max": 0.0,
+            "mean": 0.0,
+            "min": 0.0,
+            "p50": 0.0
+          },
+          "pipelines_built": {
+            "max": 0.0,
+            "mean": 0.0,
+            "min": 0.0,
+            "p50": 0.0
+          },
+          "recorded_draws": {
+            "max": 1447.0,
+            "mean": 1371.57,
+            "min": 1311.0,
+            "p50": 1357.0
+          },
+          "shadow_instances": {
+            "max": 1055.0,
+            "mean": 990.365,
+            "min": 939.0,
+            "p50": 976.0
+          },
+          "shadow_triangles": {
+            "max": 403592.0,
+            "mean": 378772.16,
+            "min": 359048.0,
+            "p50": 373256.0
+          },
+          "triangles": {
+            "max": 150146.0,
+            "mean": 146000.72,
+            "min": 141698.0,
+            "p50": 145922.0
+          },
+          "upload_bytes": {
+            "max": 437152.0,
+            "mean": 425819.893333,
+            "min": 425056.0,
+            "p50": 425056.0
+          }
+        },
+        "frames": 600,
+        "gpu_ms": {
+          "passes": [
+            {
+              "max": 0.073584,
+              "mean": 0.018418,
+              "min": 0.016959,
+              "name": "skinning",
+              "p50": 0.018,
+              "p95": 0.018708,
+              "p99": 0.028625,
+              "samples": 600
+            },
+            {
+              "max": 0.163459,
+              "mean": 0.022228,
+              "min": 0.018042,
+              "name": "shadows 0",
+              "p50": 0.020542,
+              "p95": 0.025166,
+              "p99": 0.041458,
+              "samples": 600
+            },
+            {
+              "max": 0.084749,
+              "mean": 0.038456,
+              "min": 0.018188,
+              "name": "shadows 1",
+              "p50": 0.037917,
+              "p95": 0.045083,
+              "p99": 0.048375,
+              "samples": 600
+            },
+            {
+              "max": 0.149125,
+              "mean": 0.046095,
+              "min": 0.032708,
+              "name": "shadows 2",
+              "p50": 0.044875,
+              "p95": 0.051,
+              "p99": 0.059958,
+              "samples": 600
+            },
+            {
+              "max": 0.090042,
+              "mean": 0.040294,
+              "min": 0.023417,
+              "name": "shadows 3",
+              "p50": 0.039042,
+              "p95": 0.04675,
+              "p99": 0.049208,
+              "samples": 600
+            },
+            {
+              "max": 0.018833,
+              "mean": 0.005312,
+              "min": 0.000208,
+              "name": "depth prepass",
+              "p50": 0.005458,
+              "p95": 0.005917,
+              "p99": 0.008084,
+              "samples": 600
+            },
+            {
+              "max": 2.805375,
+              "mean": 0.643951,
+              "min": 0.544041,
+              "name": "opaque",
+              "p50": 0.635583,
+              "p95": 0.695,
+              "p99": 1.115084,
+              "samples": 600
+            },
+            {
+              "max": 0.139292,
+              "mean": 0.034328,
+              "min": 0.028958,
+              "name": "post",
+              "p50": 0.033417,
+              "p95": 0.036792,
+              "p99": 0.051375,
+              "samples": 600
+            }
+          ],
+          "span": {
+            "max": 3.435208,
+            "mean": 0.956134,
+            "min": 0.765166,
+            "p50": 0.93575,
+            "p95": 1.042417,
+            "p99": 1.447292,
+            "samples": 600
+          },
+          "timed_frames": 600,
+          "total": {
+            "max": 3.431708,
+            "mean": 0.849083,
+            "min": 0.740958,
+            "p50": 0.837292,
+            "p95": 0.899666,
+            "p99": 1.399625,
+            "samples": 600
+          },
+          "unavailable": null
+        },
+        "instance_batches": {
+          "batches": 0,
+          "cpu_no_compute": 0,
+          "cpu_over_limit": 0,
+          "cpu_small": 0,
+          "cull_dispatches": 0,
+          "cull_jobs": 0,
+          "dropped": 0,
+          "gpu_driven": 0,
+          "gpu_instances": 0,
+          "instances": 0,
+          "views_skipped": 0
+        },
+        "memory": {
+          "computed": "render_target_bytes, shadow_map_bytes and light_shadow_atlas_bytes are computed from the sizes, formats and sample counts of the textures as last drawn with (0 before the first frame), not read from the device: the scene's color, depth, HDR and scene-copy targets and the output; the sun's cascades; the lights' atlas",
+          "computed_bytes": 129777664,
+          "counted_bytes": 43492,
+          "device_allocated_bytes": null,
+          "device_reserved_bytes": null,
+          "device_unavailable": "wgpu reports no allocator totals on the metal backend",
+          "gpu_buffer_bytes": 0,
+          "gpu_buffers": 0,
+          "instance_batch_pool_bytes": 0,
+          "light_shadow_atlas_bytes": 0,
+          "mesh_bytes": 43488,
+          "mesh_cpu_bytes": 0,
+          "meshes": 4,
+          "render_target_bytes": 62668800,
+          "shadow_map_bytes": 67108864,
+          "texture_bytes": 4,
+          "textures": 1,
+          "uncounted": "the effects' own targets (ambient occlusion, reflections, antialiasing, motion vectors, bloom and the post chain), history textures, the instance buffers of static batches culled on the CPU and the per-frame instance, uniform and light buffers are neither in the renderer's tables nor computed here"
+        },
+        "name": "animated",
+        "reallocations": 0,
+        "scene": {
+          "content": {
+            "joints_per_skeleton": 16,
+            "materials": 4,
+            "meshes": 4,
+            "models": 401,
+            "moving_models": 0,
+            "point_lights": 0,
+            "shadowed_lights": 0,
+            "skinned_models": 400,
+            "spot_lights": 0,
+            "static_batches": 0,
+            "static_instances": 0,
+            "textures": 0,
+            "transparent_models": 0
+          },
+          "description": "skinned figures of 16 joints, every skeleton posed every frame",
+          "name": "animated",
+          "quality": {
+            "ambient_occlusion": false,
+            "anti_aliasing": "fxaa",
+            "ao_half_resolution": true,
+            "ao_slices": 2,
+            "ao_steps": 4,
+            "ao_temporal": true,
+            "atmosphere": false,
+            "bloom": 0.0,
+            "gi": false,
+            "level": "custom",
+            "light_shadow_atlas": 4096,
+            "light_shadow_resolution": 1024,
+            "light_shadow_views": 8,
+            "matched": true,
+            "occlusion_culling": false,
+            "preset": "high",
+            "render_scale": 1.0,
+            "shadow_cascades": 4,
+            "shadow_distance": 80.0,
+            "shadow_filter": 4,
+            "shadow_lag": false,
+            "shadow_refresh": 1,
+            "shadow_resolution": 2048,
+            "shadow_sun_size": 0.5299999713897705,
+            "shadows": true,
+            "sharpen": 0.0,
+            "ssr": 0.0,
+            "ssr_thin_objects": false,
+            "ssr_transparent": false,
+            "tonemap": "aces"
+          },
+          "scale": 1.0,
+          "shadow_workload": null
+        },
+        "see_through_changes": {
+          "bind_groups": 0,
+          "draws": 0,
+          "index_buffers": 0,
+          "pipelines": 0,
+          "vertex_buffers": 0
+        },
+        "state_changes": {
+          "bind_groups": 34,
+          "index_buffers": 22,
+          "pipelines": 7,
+          "vertex_buffers": 34
+        },
+        "submits": 1,
+        "timings_ms": {
+          "collect": {
+            "max": 0.114417,
+            "mean": 0.095818,
+            "min": 0.08625,
+            "p50": 0.095166,
+            "p95": 0.102125,
+            "p99": 0.108292,
+            "samples": 600
+          },
+          "cpu": {
+            "max": 0.71,
+            "mean": 0.513841,
+            "min": 0.413208,
+            "p50": 0.508125,
+            "p95": 0.579708,
+            "p99": 0.62475,
+            "samples": 600
+          },
+          "encode": {
+            "max": 0.351083,
+            "mean": 0.210936,
+            "min": 0.14225,
+            "p50": 0.203292,
+            "p95": 0.277333,
+            "p99": 0.300084,
+            "samples": 600
+          },
+          "frame": {
+            "max": 4.275709,
+            "mean": 1.689692,
+            "min": 1.433667,
+            "p50": 1.667583,
+            "p95": 1.823791,
+            "p99": 2.241666,
+            "samples": 600
+          },
+          "prepare": {
+            "max": 0.221208,
+            "mean": 0.154751,
+            "min": 0.133417,
+            "p50": 0.154833,
+            "p95": 0.169709,
+            "p99": 0.180834,
+            "samples": 600
+          },
+          "submit": {
+            "max": 0.157917,
+            "mean": 0.052335,
+            "min": 0.035208,
+            "p50": 0.049459,
+            "p95": 0.087209,
+            "p99": 0.104459,
+            "samples": 600
+          },
+          "update": {
+            "max": 0.047375,
+            "mean": 0.029426,
+            "min": 0.024792,
+            "p50": 0.029709,
+            "p95": 0.033208,
+            "p99": 0.037875,
+            "samples": 600
+          }
+        },
+        "upload_bytes_per_frame": {
+          "instances": 57.066667,
+          "lights": 0.0,
+          "materials": 0.0,
+          "meshes": 0.0,
+          "other": 0.0,
+          "skins": 410242.826667,
+          "sprites": 0.0,
+          "static_batches": 0.0,
+          "textures": 0.0,
+          "uniforms": 15520.0
         },
         "warmup_frames": 120
       }
