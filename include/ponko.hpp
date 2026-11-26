@@ -6968,6 +6968,7 @@ enum class window_event_kind : std::uint32_t {
     suspended = PONKO_WINDOW_EVENT_SUSPENDED,                        ///< The app lost the screen (a phone's background): save now.
     resumed = PONKO_WINDOW_EVENT_RESUMED,                            ///< The app is in front again after a suspend.
     low_memory = PONKO_WINDOW_EVENT_LOW_MEMORY,                      ///< The system is short of memory: free what can be reloaded.
+    back_requested = PONKO_WINDOW_EVENT_BACK_REQUESTED,              ///< Back was pressed (Android): the app leaves unless canceled.
 };
 /// How the game's sound shares the device with other apps and a phone's silent switch (Rust
 /// `AudioSessionCategory`): iOS's audio session categories; kept and without effect elsewhere.
@@ -7355,6 +7356,14 @@ public:
     }
     /// Cancels the OS close request (an "unsaved changes?" prompt); quit() still quits.
     void window_cancel_close() { detail::check(ponko_ctx_window_cancel_close(raw_)); }
+    /// Whether Back was pressed (Android) and no system canceled it yet: the app leaves after this frame.
+    bool window_back_requested() const {
+        bool value = false;
+        detail::check(ponko_ctx_window_back_requested(raw_, &value));
+        return value;
+    }
+    /// Keeps the app in front after Back: the game handles it (closes a menu), in the frame that sees it.
+    void window_cancel_back() { detail::check(ponko_ctx_window_cancel_back(raw_)); }
     /// Saves the requested window settings to player storage (`window.json`).
     void window_save_settings() { detail::check(ponko_ctx_window_save_settings(raw_)); }
     /// Restores saved window settings; a monitor or mode that is gone falls back to windowed.
@@ -7372,7 +7381,7 @@ public:
     /// Whether the app is suspended (Rust `window.suspended()`): between window_event_kind::suspended and
     /// resumed; always false on desktops and the web.
     bool window_suspended() const { bool v = false; detail::check(ponko_ctx_window_suspended(raw_, &v)); return v; }
-    /// Feeds a phone's lifecycle event (suspended, resumed or low_memory) as the platform reports it, as a
+    /// Feeds a phone's lifecycle event (suspended, resumed, low_memory or back_requested) as the platform reports it, as a
     /// test does; a repeated suspend or resume changes nothing and sends nothing.
     void window_feed_lifecycle(window_event_kind kind) {
         detail::check(ponko_ctx_window_feed_lifecycle(raw_, static_cast<std::uint32_t>(kind)));

@@ -18,7 +18,7 @@ unsafe fn save(map: *mut PonkoActionMap) -> String {
     unsafe {
         let mut len = 0;
         assert_eq!(ponko_action_map_save(map, null_mut(), 0, &mut len), PONKO_OK);
-        let mut buffer = vec![0i8; len + 1];
+        let mut buffer = vec![0 as std::ffi::c_char; len + 1];
         assert_eq!(
             ponko_action_map_save(map, buffer.as_mut_ptr(), buffer.len(), &mut len),
             PONKO_OK
@@ -95,7 +95,7 @@ fn all_sources_round_trip_and_invalid_updates_are_atomic() {
         assert_eq!(ponko_action_map_load(restored, json.as_ptr()), PONKO_OK);
         assert_eq!(save(restored), before);
         let mut len = 0;
-        let mut small = [42i8; 1];
+        let mut small = [42 as std::ffi::c_char; 1];
         assert_eq!(ponko_action_map_save(map, small.as_mut_ptr(), 1, &mut len), PONKO_OK);
         assert_eq!(small, [0]);
         assert_eq!(len, before.len());

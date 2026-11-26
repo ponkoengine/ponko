@@ -215,6 +215,9 @@ pub(in crate::audio) struct OutputState {
     pub events: Vec<AudioDeviceEvent>,
     /// The offline output's side to render from.
     pub offline: Option<Output>,
+    /// Closed by [`Audio::hold_output`]: the app is away or a call has the
+    /// audio. With whether it was open then, and the music's place.
+    held: Option<(bool, Option<f64>)>,
 }
 impl Default for OutputState {
     fn default() -> Self {
@@ -232,6 +235,7 @@ impl OutputState {
             since: 0.0,
             events: Vec::new(),
             offline: None,
+            held: None,
         }
     }
     /// Opens the chosen device, or the default if it isn't there.
@@ -260,6 +264,13 @@ impl Audio {
     /// voice goes virtual first, so it carries on from where it was.
     /// Whether a device opened.
     pub(super) fn reopen(&mut self) -> bool {
+        let music_at = self.close_output();
+        self.open_output(music_at)
+    }
+
+    /// Closes the output (every voice goes virtual first, so it carries on
+    /// from where it was) and returns where the music was.
+    fn close_output(&mut self) -> Option<f64> {
         let music_at = self.music_position();
         let ids: Vec<u64> = self.playing.keys().copied().collect();
         for id in ids {
@@ -275,6 +286,12 @@ impl Audio {
         self.reverb = None;
         self.drop_music_clock();
         self.manager = None;
+        music_at
+    }
+
+    /// Opens the output on the chosen device or the default, the music
+    /// going on from `music_at`. Whether a device opened.
+    fn open_output(&mut self, music_at: Option<f64>) -> bool {
         let opened = self.output.open_chosen();
         let ok = opened.is_some();
         self.manager = Some(opened);
@@ -289,11 +306,42 @@ impl Audio {
         ok
     }
 
+    /// Closes the output (`true`) while the app is in the background or a
+    /// phone call has the audio, so no stream runs and nothing is heard;
+    /// sounds played meanwhile wait, virtual. `false` opens it again (if it
+    /// was open), every voice and the music going on from where they were.
+    pub fn hold_output(&mut self, held: bool) {
+        if held == self.output.held.is_some() {
+            return;
+        }
+        if held {
+            let open = matches!(self.manager, Some(Some(_)));
+            let music_at = if open { self.close_output() } else { None };
+            // Nothing opens it while held.
+            self.manager = Some(None);
+            self.output.held = Some((open, music_at));
+        } else if let Some((open, music_at)) = self.output.held.take() {
+            self.manager = None;
+            if open {
+                self.open_output(music_at);
+            }
+        }
+    }
+
+    /// Whether [`hold_output`](Self::hold_output) closed the output.
+    #[cfg(test)]
+    pub fn output_held(&self) -> bool {
+        self.output.held.is_some()
+    }
+
     /// The frame's look at the output: what happened to the stream, and
     /// whether a lost device came back.
     pub(super) fn poll_output(&mut self, dt: f32) {
         // Last frame's news is old now.
         self.output.events.clear();
+        if self.output.held.is_some() {
+            return;
+        }
         self.output.since += dt.max(0.0);
         let mut lost = false;
         let mut rerouted = false;

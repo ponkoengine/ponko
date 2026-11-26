@@ -15,6 +15,7 @@
 //! | Windows | `%APPDATA%\<app id>` |
 //! | macOS | `~/Library/Application Support/<app id>` |
 //! | iOS | `Library/Application Support/<app id>` in the app's own container (backed up with the device) |
+//! | Android | `files/<app id>` in the app's own data folder (private to it, backed up with the device) |
 //! | Linux and other Unix | `$XDG_DATA_HOME/<app id>`, else `~/.local/share/<app id>` |
 //! | Web | The page's IndexedDB database `ponko:<app id>` (see below) |
 //!
@@ -991,6 +992,9 @@ fn base_dir(var: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> Option<PathBuf>
     } else if cfg!(any(target_os = "macos", target_os = "ios")) {
         // On iOS, HOME is the app's own container.
         var("HOME").map(|h| h.join("Library").join("Application Support"))
+    } else if cfg!(target_os = "android") {
+        // The engine points HOME at the app's own files folder.
+        var("HOME")
     } else {
         // XDG says a relative value is invalid and must be ignored.
         var("XDG_DATA_HOME")
@@ -1045,7 +1049,9 @@ fn keep_backup(path: &Path) -> std::io::Result<()> {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
         _ => {}
     }
-    if std::fs::hard_link(path, &backup).is_ok() {
+    // Android refuses apps hard links in their own folders (and logs each
+    // refusal): a copy there.
+    if !cfg!(target_os = "android") && std::fs::hard_link(path, &backup).is_ok() {
         return Ok(());
     }
     let temp = with_suffix(&backup, TEMP);
@@ -1283,6 +1289,8 @@ mod tests {
             PathBuf::from("C:\\Users\\p\\AppData\\Roaming")
         } else if cfg!(any(target_os = "macos", target_os = "ios")) {
             PathBuf::from("/home/p/Library/Application Support")
+        } else if cfg!(target_os = "android") {
+            PathBuf::from("/home/p")
         } else {
             PathBuf::from("/home/p/.local/share")
         };
@@ -1290,7 +1298,7 @@ mod tests {
         let over = env(&[(ENV_DATA_DIR, "/elsewhere"), ("HOME", "/home/p")]);
         assert_eq!(base_dir(&over), Some(PathBuf::from("/elsewhere")));
         assert_eq!(base_dir(&env(&[])), None, "no home: no folder");
-        if !cfg!(windows) && !cfg!(any(target_os = "macos", target_os = "ios")) {
+        if !cfg!(windows) && !cfg!(any(target_os = "macos", target_os = "ios", target_os = "android")) {
             let xdg = env(&[("XDG_DATA_HOME", "/xdg"), ("HOME", "/home/p")]);
             assert_eq!(base_dir(&xdg), Some(PathBuf::from("/xdg")));
             let relative = env(&[("XDG_DATA_HOME", "rel"), ("HOME", "/home/p")]);
