@@ -259,7 +259,8 @@ unsafe impl Sync for CtxPtr {}
 // the `with_code` call, and host functions follow it only inside that same
 // `ModCode::call` on that thread (wasmi runs a host function on the thread that
 // called into the module). The next call sets it again before any module code
-// runs, so a pointer left by a call that unwound is never followed.
+// runs, so a pointer left by an earlier call (one that ended, or unwound) is
+// never followed; `with_code` clears it as it ends.
 unsafe impl Send for GamePtr {}
 // SAFETY: as for `Send`.
 unsafe impl Sync for GamePtr {}
@@ -680,9 +681,9 @@ impl ModCode {
         host.ctx = GamePtr(self.ctx.live());
         let fueled = self.store.set_fuel(self.fuel_per_call);
         debug_assert!(fueled.is_ok(), "fuel is on in `engine()`");
-        let called = f.func.call(&mut self.store, &self.args, &mut self.results);
-        self.store.data_mut().ctx = GamePtr(None);
-        if let Err(e) = called {
+        // The pointer stays in the host after the call: the next call sets
+        // it again, from the live check, before any module code runs.
+        if let Err(e) = f.func.call(&mut self.store, &self.args, &mut self.results) {
             return Err(trap(self, e.to_string()));
         }
         Ok(self.results.first().and_then(ModValue::from_val))
@@ -773,6 +774,7 @@ pub fn with_code<R>(ctx: &mut Ctx, f: impl FnOnce(&mut ModCode) -> R) -> Option<
     let out = f(&mut code);
     drop(running);
     code.ctx = CtxPtr(None);
+    code.store.data_mut().ctx = GamePtr(None);
     ctx.world.insert_resource(code);
     Some(out)
 }
@@ -855,8 +857,8 @@ mod tests {
     /// The game is checked once per `ModCode::call`, not per host function:
     /// code swapped into a `with_code` call (it was never handed the game)
     /// is refused for every host call it makes, before and after the code
-    /// that was handed the game makes its own; and no call leaves the
-    /// pointer behind for the host functions.
+    /// that was handed the game makes its own (whose pointer, left in its
+    /// host, the next call sets again before any module code runs).
     #[test]
     fn code_swapped_into_with_code_cannot_reach_the_game() {
         let wasm = wat::parse_str(
@@ -890,10 +892,9 @@ mod tests {
             std::mem::swap(code, &mut outside);
             // `code` is now the one the call never handed the game.
             let refused = code.call(turn_outside, &[bits, ModValue::F64(0.25)]);
-            assert!(code.store.data().ctx.0.is_none(), "nothing kept after a call");
+            assert!(code.store.data().ctx.0.is_none(), "never handed the game");
             std::mem::swap(code, &mut outside);
             let written = code.call(turn, &[bits, ModValue::F64(0.5)]);
-            assert!(code.store.data().ctx.0.is_none(), "nothing kept after a call");
             std::mem::swap(code, &mut outside);
             let refused_again = code.call(turn_outside, &[bits, ModValue::F64(0.75)]);
             std::mem::swap(code, &mut outside);
