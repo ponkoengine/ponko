@@ -627,6 +627,75 @@ pub unsafe extern "C" fn ponko_ctx_audio_output_devices(
     })
 }
 
+/// How the game's sound shares the device with other apps and a phone's
+/// ring/silent switch (Rust `AudioSessionCategory`): iOS's audio session
+/// categories; kept and without effect elsewhere.
+#[repr(C)]
+#[allow(non_camel_case_types)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PonkoAudioSessionCategory {
+    /// The default: stops other apps' audio; the silent switch mutes the game.
+    PONKO_AUDIO_SESSION_SOLO_AMBIENT = 0,
+    /// Mixes with other apps' audio (the player's music plays on); the silent switch mutes the game.
+    PONKO_AUDIO_SESSION_AMBIENT = 1,
+    /// Heard with the silent switch on; stops other apps' audio.
+    PONKO_AUDIO_SESSION_PLAYBACK = 2,
+}
+
+/// Sets the audio session's category from now on (Rust
+/// `Audio::set_session_category`): a `PonkoAudioSessionCategory`. An
+/// unknown value is `PONKO_INVALID_ARGUMENT`; a category the system refuses
+/// is `PONKO_UNSUPPORTED`, and the old one stays.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_audio_set_session_category(std::ptr::null_mut(), 1) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_audio_set_session_category(ctx: *mut PonkoCtx, category: u32) -> PonkoStatus {
+    use ponko::audio::AudioSessionCategory as C;
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        let category = match category {
+            0 => C::SoloAmbient,
+            1 => C::Ambient,
+            2 => C::Playback,
+            _ => {
+                return Err(invalid(
+                    "unknown audio session category: use a PonkoAudioSessionCategory",
+                ));
+            }
+        };
+        ctx_access(ctx, |c| c.audio.set_session_category(category).map_err(engine_error))
+    })
+}
+
+/// Writes the audio session's category, a `PonkoAudioSessionCategory`
+/// (Rust `Audio::session_category`).
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_audio_session_category(std::ptr::null_mut(), std::ptr::null_mut()) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `category` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_audio_session_category(ctx: *mut PonkoCtx, category: *mut u32) -> PonkoStatus {
+    use ponko::audio::AudioSessionCategory as C;
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        if category.is_null() {
+            return Err(invalid("audio session category output is null"));
+        }
+        ctx_access(ctx, |c| {
+            let value = match c.audio.session_category() {
+                C::Ambient => PonkoAudioSessionCategory::PONKO_AUDIO_SESSION_AMBIENT,
+                C::Playback => PonkoAudioSessionCategory::PONKO_AUDIO_SESSION_PLAYBACK,
+                _ => PonkoAudioSessionCategory::PONKO_AUDIO_SESSION_SOLO_AMBIENT,
+            };
+            out(category, value as u32)
+        })
+    })
+}
+
 /// Plays on the device with this id or name from now on; null follows the
 /// system's default (Rust `Audio::set_output_device`). An unknown device is
 /// `PONKO_NOT_FOUND`.

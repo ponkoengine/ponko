@@ -608,7 +608,10 @@ impl Renderer {
                     adapter.limits()
                 } else {
                     // One more sampled texture than the default 16, where
-                    // the adapter has it: projected decals' images.
+                    // the adapter has it: projected decals' images. No
+                    // limit better than the adapter's: the iOS simulator's
+                    // Metal device has 15 inter-stage variables, not 16
+                    // (the tier then follows the device's real limits).
                     wgpu::Limits {
                         max_sampled_textures_per_shader_stage: adapter
                             .limits()
@@ -616,6 +619,7 @@ impl Renderer {
                             .clamp(16, 24),
                         ..wgpu::Limits::default()
                     }
+                    .or_worse_values_from(&adapter.limits())
                 },
                 ..Default::default()
             }
@@ -632,6 +636,9 @@ impl Renderer {
         } = browser_gpu::open(window.clone(), display, &device_descriptor).await?;
         #[cfg(not(target_arch = "wasm32"))]
         let (instance, surface, adapter, device, queue) = {
+            // A test takes one of the places GPU tests share (render_test_support).
+            #[cfg(all(test, feature = "window", feature = "3d"))]
+            crate::render::render_test_support::take_gpu_place();
             let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(
                 display,
             )));
@@ -708,7 +715,7 @@ impl Renderer {
         #[cfg(feature = "3d")]
         let tiled = adapter.get_info().backend == wgpu::Backend::Metal;
 
-        let size = window.inner_size();
+        let size = crate::window::surface_size(&window);
         let mut config = startup::config(surface.get_default_config(&adapter, size.width.max(1), size.height.max(1)))?;
         // Prefer an sRGB target so blending happens in linear light.
         let caps = surface.get_capabilities(&adapter);
@@ -836,6 +843,9 @@ impl Renderer {
     /// draws with. `Err` says why there is no GPU. Unstable (`bench-internals`).
     #[cfg(all(feature = "3d", feature = "bench-internals", not(target_arch = "wasm32")))]
     pub(crate) fn offscreen_bench(size: (u32, u32)) -> Result<Self, String> {
+        // A test takes one of the places GPU tests share (render_test_support).
+        #[cfg(all(test, feature = "window", feature = "3d"))]
+        crate::render::render_test_support::take_gpu_place();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,

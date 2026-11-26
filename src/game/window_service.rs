@@ -15,7 +15,7 @@ pub(super) type CursorQueue = Rc<RefCell<Option<winit::window::CustomCursorSourc
 pub(super) struct Backend {
     pub(super) window: Arc<Window>,
     pub(super) cursor: CursorQueue,
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
     clipboard: Option<arboard::Clipboard>,
     #[cfg(target_arch = "wasm32")]
     clipboard: Rc<RefCell<Option<Result<String, Error>>>>,
@@ -27,7 +27,7 @@ impl Backend {
         Self {
             window,
             cursor,
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
             clipboard: None,
             #[cfg(target_arch = "wasm32")]
             clipboard: Rc::default(),
@@ -216,7 +216,10 @@ impl WindowBackend for Backend {
             ),
         };
         WindowState {
-            physical_size: UVec2::new(self.window.inner_size().width, self.window.inner_size().height),
+            physical_size: {
+                let size = crate::window::surface_size(&self.window);
+                UVec2::new(size.width, size.height)
+            },
             scale_factor: self.window.scale_factor() as f32,
             focused: self.window.has_focus(),
             minimized: self.window.is_minimized().unwrap_or(false),
@@ -231,7 +234,7 @@ impl WindowBackend for Backend {
         self.window.available_monitors().map(|m| monitor_info(&m)).collect()
     }
     fn clipboard_read(&mut self) -> Result<Option<String>, Error> {
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
         {
             if self.clipboard.is_none() {
                 self.clipboard = Some(arboard::Clipboard::new().map_err(clipboard_error)?);
@@ -242,6 +245,16 @@ impl WindowBackend for Backend {
                 .get_text()
                 .map(Some)
                 .map_err(clipboard_error)
+        }
+        #[cfg(target_os = "ios")]
+        {
+            Ok(crate::platform::ios::pasteboard_text())
+        }
+        #[cfg(target_os = "android")]
+        {
+            Err(unsupported(
+                "cannot read the clipboard on Android yet; keep the text in the game",
+            ))
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -265,12 +278,24 @@ impl WindowBackend for Backend {
         }
     }
     fn clipboard_write(&mut self, text: &str) -> Result<(), Error> {
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
         {
             if self.clipboard.is_none() {
                 self.clipboard = Some(arboard::Clipboard::new().map_err(clipboard_error)?);
             }
             self.clipboard.as_mut().unwrap().set_text(text).map_err(clipboard_error)
+        }
+        #[cfg(target_os = "ios")]
+        {
+            crate::platform::ios::set_pasteboard_text(text);
+            Ok(())
+        }
+        #[cfg(target_os = "android")]
+        {
+            let _ = text;
+            Err(unsupported(
+                "cannot write the clipboard on Android yet; keep the text in the game",
+            ))
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -308,7 +333,7 @@ fn browser_clipboard() -> Result<web_sys::Clipboard, Error> {
     Ok(value.unchecked_into())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
 fn clipboard_error(e: arboard::Error) -> Error {
     unsupported(format!(
         "cannot access clipboard: {e}; ensure a desktop clipboard is available, allow access and retry"

@@ -1662,6 +1662,8 @@ fn probe_light_in_a_bright_closed_room_settles_within_400_frames() {
     };
     let unsettled = closed_lamp_room(&checkpoints, true).unwrap();
     let last = *unsettled.last().unwrap();
+    eprintln!("roof, raw (linear sum of three points): {settled:?}");
+    eprintln!("roof without the settled estimate, raw: {unsettled:?}");
     let print = |b: &[f32]| {
         b.iter()
             .map(|v| format!("{:.3}", v / last))

@@ -136,6 +136,9 @@ impl RecordBench {
     /// `None` without a GPU.
     #[must_use]
     pub fn new(scene: RecordScene) -> Option<Self> {
+        // A test takes one of the places GPU tests share (render_test_support).
+        #[cfg(all(test, feature = "window", feature = "3d"))]
+        crate::render::render_test_support::take_gpu_place();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
         let info = adapter.get_info();
