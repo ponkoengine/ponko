@@ -140,29 +140,29 @@ Chains can be as deep as you like; there is no depth limit.
 ## Cost
 
 `cargo run --release -p ponko_bench -- hierarchy`, Apple M4 Max (14
-cores), on an idle machine (2026-11-22, revision `9235ea05`, Rust 1.100.0,
-load average under 2.7), one update of 100,000 2D transforms; the fastest
+cores), on an idle machine (2026-11-26, revision `431fae00`, Rust 1.100.0,
+1-minute load 2.6 to 2.8), one update of 100,000 2D transforms; the fastest
 of twenty updates after five warm-up ones, the range over three runs (the
-medians are 2–20% above these):
+medians are 1–50% above these, the most in the moving wide and 3D trees):
 
 | Tree | Root moves | Nothing moves |
 |---|---|---|
-| deep (one chain 100,000 long) | 2.27–2.29 ms | 0.0017 ms |
-| wide (100,000 children of one root) | 0.096–0.104 ms | 0.0018 ms |
-| wide, 3D | 0.13–0.14 ms | |
-| 100,000 roots with one child each, all moving | 0.43–0.48 ms | |
+| deep (one chain 100,000 long) | 2.19–2.25 ms | 0.0018 ms |
+| wide (100,000 children of one root) | 0.096–0.131 ms | 0.0019 ms |
+| wide, 3D | 0.14–0.17 ms | |
+| 100,000 roots with one child each, all moving | 0.35–0.41 ms | |
 
 A subtree that didn't move gets no traversal and no transform writes, and
 a still tree costs per chunk of 64 entities, not per entity: the scan for
 changed attachments skips chunks nobody wrote to (see [change
 detection](ecs.md#change-detection)). Removing a child and attaching a
-new one under a still 100,000-wide root costs 0.035–0.037 ms: the update
+new one under a still 100,000-wide root costs 0.038–0.041 ms: the update
 takes removed links out of their old parent's list directly, without
 walking the tree. A despawned parent costs the links of its own children:
 the hierarchy notes its children list as it goes, with an `on_remove`
 hook on `Children` (see [component hooks](ecs.md#component-hooks)), and
 the update looks at those links only. With 100,000 root and child pairs
-and one root despawned per update, an update takes 0.34 ms at best (0.41 ms
+and one root despawned per update, an update takes 0.34–0.35 ms at best (0.41 ms
 on a busy machine when this was built, where scanning every link took
 0.51 ms).
 
@@ -189,7 +189,12 @@ machine busy with other builds (2026-11-26, load average 18–20, four runs
 each interleaved with the revision before), an update took 0.39–0.41 ms
 at best against 0.42–0.47 ms (medians 0.45–0.62 against 0.47–0.53 ms), and
 a tick of `attach/100k-spawn+10-ticks` (the move system and the update)
-1.00–1.02 ms against 1.02–1.08 ms.
+1.00–1.02 ms against 1.02–1.08 ms. On the idle machine of the table above,
+the same update took 0.35–0.41 ms at best (it was 0.43–0.48 ms on
+2026-11-22, before the flat update), and a steady tick of
+[attachments](attachments.md#cost) 0.48 ms against 0.63–0.64 ms for the
+flat pass attachments had before the hierarchy (that row's first ten ticks
+average 0.93–0.96 ms because the first one links the 100,000 new children).
 
 Linking 100,000 new children to 100,000 parents costs 4.5–4.6 ms in the
 first update and about 116 allocations in all: a children list keeps its first

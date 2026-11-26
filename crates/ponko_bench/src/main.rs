@@ -1351,8 +1351,10 @@ fn flow_benches(b: &mut Bench) {
     );
 
     // ---- attachments: 100k entities following 100k others ----------------------
-    // Spawning is the same in both; the difference is 10 ticks of following.
-    for ticks in [0u64, 10] {
+    // Spawning is the same in all three. The first tick also links the 100k
+    // new attachments to their parents (each parent gets its `Children`), a
+    // one-time cost: (+100 − +10) / 90 is the steady tick, the move included.
+    for ticks in [0u64, 10, 100] {
         b.steady(
             &format!("attach/100k-spawn+{ticks}-ticks"),
             20,

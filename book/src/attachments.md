@@ -62,10 +62,16 @@ a whole subtree.
 
 Placing runs on all cores when there is enough of it (a small update
 stays on the calling thread) and allocates nothing in steady state: about
-**1.0 ms per tick for 100,000 attachments** following 100,000 moving
-entities, the move included (release, Apple M4 Max, idle machine,
-2026-11-22, `cargo run --release -p ponko_bench -- attach`). Entities without
-`Attached` cost nothing.
+**0.48 ms per tick for 100,000 attachments** following 100,000 moving
+entities, the move included (0.06 ms of it). The first update after they
+are spawned also links each one into its parent's list of children, once:
+about 4.4 ms for the 100,000. Release, Apple M4 Max, idle machine,
+2026-11-26, revision `431fae00`, three runs of `cargo run --release -p
+ponko_bench -- attach/`: the steady tick is `(spawn+100 − spawn+10) / 90`,
+0.476 to 0.481 ms. The flat pass attachments had before the
+[hierarchy](hierarchy.md) took 0.633 to 0.639 ms a tick on the same
+machine, run in turns with it (it had no linking to do, so its first tick
+cost no more). Entities without `Attached` cost nothing.
 
 Attachments are a sim system, so they're deterministic, saved with the world
 (`Attached` is reflected) and visible to tools and agents like any other

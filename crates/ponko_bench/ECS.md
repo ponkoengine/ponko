@@ -206,7 +206,19 @@ and `query-build+count-cold` from 2.6 to 2.3 µs. bevy_ecs and hecs moved
 too, by 5–13% in some rows (for example bevy's `iter` at 1M, 407 to
 372 µs), on code that didn't change: that is the size of the difference
 between two idle runs two days apart, and smaller changes in ponko's rows
-are within it. One row is slower: `par-1k/ponko-t4`, 10.1 to 12.6 µs.
+are within it. One row looked slower: `par-1k/ponko-t4`, 10.1 to 12.6 µs.
+It is not a regression. The 10.1 µs came from the 2026-11-20 run, which
+started at a 1-minute load of 15.2 (`env.load_average` in its file): in
+that run the `t<k>` rows at 1k were out of order (t4 10.1, t1 10.9, t2
+11.1, t8 20.0, t14 28.0 µs) and `ponko-par` took 25.5 µs. Measured again
+on 2026-11-26 (revision `431fae00`, five runs of `ecs/par-`, 1-minute load
+2.5), `t4` is 12.4 µs (12.4 to 12.6), with the rows in order of pool size:
+t1 10.4, t2 11.9, t4 12.4, t8 15.1, t14 16.2 µs, the same as each of the
+three runs of 2026-11-22 (t4 12.5, 12.5, 12.6 µs). At 1k each `t<k>` row is
+the 5.7 µs loop plus handing it to a sleeping thread of an `install`ed pool
+and waiting for it, which costs more the more threads the pool has. The
+way a game runs a parallel loop, `ponko-par`, stays on the calling thread
+at this size: 5.8 µs (5.7 to 5.9), the serial loop's 5.7 µs.
 
 Parallel scaling, the `par` steering workload, p50 / p95. `ponko par` is
 ponko on the global pool without `install`, the setup that matches bevy's:

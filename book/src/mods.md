@@ -341,8 +341,18 @@ busy with other builds (2026-11-26, load average 61–65, three runs each,
 interleaved with the revision before), it cost nothing measurable and
 didn't bring the 46 ns back either: the call alone 0.056–0.058 ms against
 0.057 ms, `random` 0.069 ms against 0.068–0.070 ms and `get_field`
-0.379–0.386 ms against 0.379–0.387 ms. A run on an idle machine is still
-to place the 12 ns.
+0.379–0.386 ms against 0.379–0.387 ms. On an idle machine (2026-11-26,
+revision `431fae00`, 1-minute load 2.5–2.7, three runs each, in turns
+with the same revision built with `src/mods/code.rs` as it was before
+the call number), the call alone is 0.048–0.049 ms against 0.044–0.045
+ms, `random` 0.061–0.062 ms against 0.056–0.057 ms, and the frost
+drip's crawl on wasmi 0.182–0.183 ms against 0.179–0.182 ms (the same
+within the runs' spread). So of the 12 ns, about 4.5 ns a call are left;
+the only thing the call itself does more than before is read and compare
+the call number once. The tables above are
+from 2026-11-22; measured on 2026-11-26 the rows are 0.094 ms (Rust),
+0.183 ms (wasmi), 0.048, 0.061, 0.371 and 0.697 ms (none, `random`,
+`get_field`, `set_field`).
 
 `get_field` and `set_field` go through reflection's JSON (the component is
 read whole, and written back for a set), so they cost what `get_json` and
