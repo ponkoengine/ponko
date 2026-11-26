@@ -97,18 +97,24 @@ choose in the game or the page. On startup the engine:
 1. looks for `navigator.gpu`;
 2. asks it for an adapter (`requestAdapter()`), then the adapter for a
    device;
-3. waits for the device's first round trip to the GPU, to see that the
-   browser didn't lose it at once (its GPU process gone, the driver
-   refusing);
-4. only then gives the canvas its WebGPU context.
+3. clears and presents one test frame on a small canvas of its own (an
+   `OffscreenCanvas`, never the game's), inside error scopes: some
+   browsers offer an adapter that opens devices but can't show a frame,
+   such as the software fallback adapter of Chromium's headless shell on
+   macOS;
+4. waits for that frame's round trip to the GPU, to see that the browser
+   didn't lose the device at once (its GPU process gone, the driver
+   refusing) and that the frame drew without an error;
+5. only then gives the game's canvas its WebGPU context.
 
 If any step fails, the canvas is still untouched, so the engine starts over
 on WebGL2 and logs one line in the browser's console saying why, such as
 `ponko: falling back to WebGL2: navigator.gpu.requestAdapter() found no
 adapter` (or `... this browser has no WebGPU`, `... the WebGPU adapter could
 not open a device: <the browser's words>`, `... the WebGPU device was lost
-as it opened: <the browser's words>`). A WebGPU start logs `ponko: drawing
-with WebGPU`. Only when WebGL2 fails too does the page show a startup error
+as it opened: <the browser's words>`, `... a canvas can't show WebGPU
+frames: a test frame failed: <the browser's words>`). A WebGPU start logs
+`ponko: drawing with WebGPU`. Only when WebGL2 fails too does the page show a startup error
 (next sections). A WebGPU device lost later, while the game runs, is a
 [failure while playing](#failures-while-playing): a game can't switch
 backends mid-game.
@@ -180,6 +186,16 @@ a refused device, a device lost as it opens) took 228 to 234 ms, one load
 each: the WebGPU attempt adds nothing measurable to the WebGL2 start.
 On a busy machine (load average about 100) the same runs gave 200 and
 298 ms, and 248 and 370 ms.
+
+The test frame (step 3) costs little: from the device opening to the
+game's canvas getting its context, the 3D fixture took a median of 11 ms
+before it and 11 to 12 ms with it on the Metal adapter, and 10 to 11 ms
+before and 16 ms with it on SwiftShader, Chromium's software adapter
+(Chromium 156 new headless mode, Apple M4 Max, 2026-11-26, two runs of
+seven fresh loads each, on a busy machine at load average 55 to 65). A
+fresh browser's first page load took 2 to 17 ms more than before. Times to the first
+frame on that busy machine moved by more between loads of the same build
+than the test frame costs.
 
 `web/smoke/webgpu-fallback.mjs` checks each way into WebGL2 in a headless
 browser, faking the failure in the page before the game starts (see the

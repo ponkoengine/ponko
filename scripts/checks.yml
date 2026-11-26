@@ -1595,14 +1595,26 @@ jobs:
         timeout-minutes: 5
         if: ${{ !cancelled() }}
         run: node web/smoke/smoke.mjs --fixture web_smoke --browser chromium --backend webgpu --allow-unsupported
+      # Expected to fail on macOS, and only this way: the 3D fixture stalls
+      # (`stall`). SwiftShader's first 3D frames there block the page for
+      # 5 to 20 s on a busy machine (a page without the engine does the same
+      # with slow frames), then it runs on at about 3 frames a second;
+      # book/src/check-results/macos.md, 2026-11-26. Any other failure fails.
       - name: Chromium, WebGPU, new headless mode (2D and 3D fixtures)
         timeout-minutes: 8
         if: ${{ !cancelled() }}
         run: |
           status=0
           for fixture in web_smoke web_smoke_3d; do
+            out="target/web-smoke/webgpu-new-$fixture"
             node web/smoke/smoke.mjs --fixture "$fixture" --browser chromium --chromium-mode new --backend webgpu \
-              --browser-arg --use-webgpu-adapter=swiftshader --allow-unsupported || status=1
+              --browser-arg --use-webgpu-adapter=swiftshader --allow-unsupported --out "$out" && continue
+            if [ "$fixture" = web_smoke_3d ] && [ "$(uname)" = Darwin ] \
+              && node -e 'process.exit(require(process.argv[1]).outcome.kind === "stall" ? 0 : 1)' "$PWD/$out/report.json"; then
+              echo "expected on macOS: SwiftShader's first 3D frames block the page (book/src/check-results/macos.md)"
+              continue
+            fi
+            status=1
           done
           exit $status
       - name: Chromium, whatever the engine picks
