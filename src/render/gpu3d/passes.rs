@@ -150,8 +150,8 @@ pub(crate) enum Resource {
     /// The scene depth copied to one 32-bit float per pixel, which the
     /// reflections' trace and filtered levels read.
     ReflectionDepth,
-    /// The reflections' normals pass's multisampled target (kept on chip
-    /// where the GPU can).
+    /// The reflections' normals' multisampled target, written by the depth
+    /// prepass (kept on chip where the GPU can).
     ReflectionNormalSamples,
     /// Each pixel's normal and roughness, which the reflections' trace
     /// reads.
@@ -1165,24 +1165,31 @@ pub(crate) const FRAME_PASSES: [Pass; 8] = [
         after: &["3d prelude"],
         when: When::ALWAYS,
         steps: &[
-            step("depth", When::ALWAYS, models![u(SceneDepth, A::Depth)]),
-            // The cut-out prepass attaches the scene color (cleared, not kept).
+            // With reflections, it also writes each pixel's normal and
+            // roughness as the opaque pass will light it, which the trace's
+            // rays leave by; with multisampling the cut-outs are drawn in
+            // the same pass, through the scene color (cleared, not kept),
+            // which alpha to coverage needs.
+            step(
+                "depth",
+                When::ALWAYS,
+                models![
+                    u(SceneDepth, A::Depth),
+                    u(SceneColor, A::Color).on(F::SSR.with(F::MSAA)),
+                    u(ReflectionNormalSamples, A::Color).on(F::SSR.with(F::MSAA)),
+                    u(ReflectionNormals, A::Resolve).on(F::SSR.with(F::MSAA)),
+                    u(ReflectionNormals, A::Color).on(F::SSR).off(F::MSAA),
+                ],
+            ),
+            // Without reflections, the cut-out prepass is a pass of its own
+            // and attaches the scene color (cleared, not kept).
             step(
                 "cut-outs",
-                on(F::CUTOUTS),
+                When {
+                    all: F::CUTOUTS,
+                    none: F::SSR,
+                },
                 models![u(SceneColor, A::Color), u(SceneDepth, A::DepthLoad)],
-            ),
-            // What the opaque pass draws, over the finished depth: each
-            // pixel's normal and roughness, which the trace's rays leave by.
-            step(
-                "reflection normals",
-                on(F::SSR),
-                models![
-                    u(ReflectionNormalSamples, A::Color).on(F::MSAA),
-                    u(ReflectionNormals, A::Resolve).on(F::MSAA),
-                    u(ReflectionNormals, A::Color).off(F::MSAA),
-                    u(SceneDepth, A::DepthRead),
-                ],
             ),
             step(
                 "occlusion depth",
@@ -1953,11 +1960,14 @@ fn check_step(pass: &Pass, step: &'static Step) -> Result<(), PassError> {
         // frame satisfies along with its own.
         let together = |b: &&Use| !when.and(b.when).impossible();
         if a.access == A::Resolve {
-            let source =
-                step.uses.iter().filter(together).find(|b| {
+            // Its source: a multisampled color attachment, of its format
+            // where a pass has several.
+            let mut sources =
+                step.uses.iter().filter(together).filter(|b| {
                     matches!(b.access, A::Color | A::ColorLoad) && b.resource.desc().samples == Samples::Scene
                 });
-            match source {
+            let first = sources.clone().next();
+            match sources.find(|b| b.resource.desc().format == desc.format).or(first) {
                 None => return Err(invalid(a, "the step has no multisampled color attachment")),
                 Some(b) if b.resource.desc().format != desc.format => {
                     return Err(PassError::FormatMismatch {

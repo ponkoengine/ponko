@@ -29,13 +29,14 @@
 //! without them.
 //!
 //! Rays leave by the normal the opaque pass lights a pixel with, normal
-//! maps and decals included: a thin pass after the depth prepass draws the
-//! solid surfaces again, with depth testing for equal, into a normals image
-//! (`NORMALS_FORMAT`, resolved from the multisampled frame; the multisampled
-//! image is transient where the GPU keeps it in tile memory). Where the
-//! material didn't tilt the normal the trace keeps the depth's, which agrees
-//! with the depth it marches. Crowds and solid stencil materials aren't in
-//! it: they keep the depth's normal.
+//! maps and decals included: the depth prepass writes it as it draws each
+//! surface, into a normals image beside the depth (`NORMALS_FORMAT`,
+//! resolved from the multisampled frame; the multisampled image is
+//! transient where the GPU keeps it in tile memory), so no surface is drawn
+//! again for it. (The opaque pass can't write it: it reads the trace's
+//! result.) Where the material didn't tilt the normal the trace keeps the
+//! depth's, which agrees with the depth it marches. GPU-path crowds and
+//! solid stencil materials write none: they keep the depth's normal.
 //!
 //! Transparent surfaces aren't in any of this: with `Post::ssr_transparent`
 //! each glossy transparent pixel marches its own ray in its fragment shader
@@ -70,7 +71,7 @@ pub(super) const DEPTH_COPY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R
 /// and whether its normal is tilted from the mesh's. Four bytes a pixel; renderable,
 /// multisampled and resolved everywhere WebGPU runs.
 pub(super) const NORMALS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgb10a2Unorm;
-/// What the normals pass clears to: a zero normal (512 of 1023 on each
+/// What the prepass clears the normals to: a zero normal (512 of 1023 on each
 /// axis), where nothing is drawn.
 pub(super) const NO_NORMAL: wgpu::Color = wgpu::Color {
     r: 512.0 / 1023.0,
@@ -185,11 +186,11 @@ pub(super) struct SsrTargets {
     depth_group: wgpu::BindGroup,
     /// The depth copy (see `ssr.wgsl`), written before the trace each frame.
     depth_copy: wgpu::TextureView,
-    /// The normals the trace reads (see `NORMALS_FORMAT`), drawn after the
-    /// prepass each frame: into `normals_samples` with multisampling,
-    /// resolved here.
+    /// The normals the trace reads (see `NORMALS_FORMAT`), drawn by the
+    /// depth prepass each frame: into `normals_samples` with
+    /// multisampling, resolved here.
     normals: wgpu::TextureView,
-    /// With multisampling, the normals pass's own target, one value a
+    /// With multisampling, the prepass's normals target, one value a
     /// sample. Never stored: on GPUs that can keep it on chip
     /// (`transient`), it takes no memory.
     normals_samples: Option<wgpu::TextureView>,
@@ -242,7 +243,7 @@ impl SsrTargets {
         (&self.hits, &self.spread)
     }
 
-    /// The normals pass's target and what it resolves into (`None`
+    /// The prepass's normals target and what it resolves into (`None`
     /// without multisampling: the target is the image the trace reads).
     pub fn normals(&self) -> (&wgpu::TextureView, Option<&wgpu::TextureView>) {
         match &self.normals_samples {

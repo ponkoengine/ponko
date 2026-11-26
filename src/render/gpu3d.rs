@@ -2111,8 +2111,9 @@ impl Renderer3D {
 
     /// Draw calls the frame's models take: two per mesh part (depth
     /// prepass and lit), one per mesh part in each shadow cascade, one per
-    /// screen effect, one more per mesh part with screen-space reflections
-    /// (their normals), and the post chain's own (see `PostChain::draw_calls`).
+    /// screen effect, and the post chain's own (see `PostChain::draw_calls`).
+    /// (With screen-space reflections the prepass writes their normals in
+    /// the same draws.)
     /// HDR output's headroom over SDR white for the tone mapping of the
     /// frames prepared from now on; `None` tone maps for SDR.
     pub(crate) fn set_hdr_headroom(&mut self, headroom: Option<f32>) {
@@ -2153,9 +2154,7 @@ impl Renderer3D {
             + self.effects.frame.len()
             + self.effects.target_frame.len()
             + usize::from(self.screen.ao_enabled) * 2
-            // Reflections: their own passes, and the normals pass's
-            // draw of each part.
-            + usize::from(self.screen.ssr_on) * (2 + parts)
+            + usize::from(self.screen.ssr_on) * 2
             + usize::from(self.screen.taa_on)
             + if self.screen.velocity_on {
                 // The motion pass (one draw per moved part).

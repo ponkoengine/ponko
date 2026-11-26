@@ -2446,7 +2446,16 @@ enum Tilt {
 /// reflections on: the red of the reflection (on minus off, linear) over
 /// the floor below the box, its total and its center of mass on screen.
 fn reflection_on_a_tilted_floor(tilt: Tilt) -> Option<(f32, Vec2, Image, Stage)> {
-    let mut stage = Stage::new()?;
+    reflection_on_a_floor_drawn(tilt, 4, false)
+}
+
+/// [`reflection_on_a_tilted_floor`] drawn with `samples` a pixel, the
+/// floor a cut-out material where `cutout` (it cuts nothing away).
+fn reflection_on_a_floor_drawn(tilt: Tilt, samples: u32, cutout: bool) -> Option<(f32, Vec2, Image, Stage)> {
+    let mut stage = Stage::with(super::regression_stage::Setup {
+        samples,
+        ..Default::default()
+    })?;
     if !crate::render::render_test_support::needs(&stage.device, GpuFeature::ScreenSpaceReflections) {
         return None;
     }
@@ -2471,6 +2480,11 @@ fn reflection_on_a_tilted_floor(tilt: Tilt) -> Option<(f32, Vec2, Image, Stage)>
             metallic: 1.0,
             normal_map,
             shader,
+            blend: if cutout {
+                crate::render::Blend::Cutout
+            } else {
+                crate::render::Blend::Opaque
+            },
             ..Default::default()
         },
     );
@@ -2606,6 +2620,35 @@ fn a_normal_map_bends_the_reflection_as_a_turned_floor_does() {
         "the floor without its normal map",
     );
     stage.finish();
+}
+
+/// The depth prepass writes cut-out surfaces' normals too: with
+/// multisampling they are drawn through alpha to coverage, in the same
+/// pass as the solid surfaces, with a target of their own before the
+/// normals. A normal-mapped cut-out mirror floor reflects the box where the
+/// floor turned the map's way does, and not where the flat one does (the
+/// negative control: its normals were lost). (One sample a pixel is only
+/// WebGL2's, which has no reflections.)
+#[test]
+fn the_prepass_writes_cut_out_surfaces_normals() {
+    let Some((_, flat_at, _, stage)) = reflection_on_a_floor_drawn(Tilt::Flat, 4, true) else {
+        return;
+    };
+    stage.finish();
+    let (mapped, mapped_at, _, stage) = reflection_on_a_floor_drawn(Tilt::Map(15.0), 4, true).unwrap();
+    stage.finish();
+    let (_, toward, _, stage) = reflection_on_a_floor_drawn(Tilt::Turned(15.0), 4, true).unwrap();
+    stage.finish();
+    eprintln!("cut-out floor: flat at {flat_at}, normal map {mapped:.1} at {mapped_at}, turned floor at {toward}");
+    assert!(mapped > 5.0, "the box is reflected");
+    assert!(
+        (mapped_at.x - flat_at.x).abs() > 4.0,
+        "the normal map moves the reflection: {flat_at} -> {mapped_at}"
+    );
+    assert!(
+        (mapped_at.x - toward.x).abs() < 1.5,
+        "to where the turned floor puts it: {mapped_at} against {toward}"
+    );
 }
 
 /// A mirror pane over a dark floor, under a glowing red bar.
