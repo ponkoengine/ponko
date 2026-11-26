@@ -169,6 +169,11 @@ src/web_threads.rs | worker_start | web/smoke/threads.mjs | wasm
 src/web_threads.rs | start_workers | web/smoke/threads.mjs | wasm
 src/web_threads.rs | spawn_worker | web/smoke/threads.mjs | wasm
 
+# A Steam SDK call the `steamworks` crate has no safe wrapper for (feature
+# `steam`). The test runs it without a Steam client: the interface accessor
+# returns null and the invite is refused; sending one needs a signed-in Steam.
+src/net/steam_messages.rs | invite_user_to_lobby | src/net/steam_messages.rs::the_real_invite_is_refused_without_a_running_steam | c-library
+
 # ---- The command-line tool ---------------------------------------------------
 
 crates/ponko_cli/src/textures.rs | uastc_on | crates/ponko_cli/src/textures.rs::a_reused_encoder_gives_the_same_blocks_as_a_fresh_one | c-library

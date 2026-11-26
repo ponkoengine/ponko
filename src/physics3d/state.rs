@@ -164,7 +164,7 @@ mod tests {
     use crate::collision::{CollisionStarted, CollisionStopped};
     use crate::d3::Transform as Transform3D;
     use crate::events::Events;
-    use crate::physics3d::Joint3D;
+    use crate::physics3d_impl::Joint3D;
     use glam::vec3;
     use ponko_ecs::{World, WorldSnapshot};
 

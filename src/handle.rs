@@ -1017,7 +1017,7 @@ mod three {
 #[cfg(feature = "physics3d")]
 mod collision {
     use super::*;
-    use crate::physics3d::CollisionMesh;
+    use crate::physics3d_impl::CollisionMesh;
 
     impl sealed::Sealed for CollisionMesh {}
     impl raw::RawHandle for CollisionMesh {

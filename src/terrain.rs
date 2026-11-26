@@ -12,3 +12,18 @@
 pub use crate::three::{
     FarTerrain, Heightfield, TerrainFile, TerrainMaterialDesc, TerrainTile, TerrainTileData, TextureArray, TextureKind,
 };
+
+/// Moved: `ponko::streaming::CellStreamer`, next to the asset streaming it
+/// works with.
+///
+/// ```compile_fail
+/// #![deny(deprecated)]
+/// fn streamer(_: &ponko::terrain::CellStreamer) {}
+/// ```
+///
+/// ```
+/// #![allow(deprecated)]
+/// fn streamer(_: &ponko::terrain::CellStreamer) {}
+/// ```
+#[deprecated(since = "0.2.0", note = "use `ponko::streaming::CellStreamer`")]
+pub type CellStreamer = crate::streaming::CellStreamer;

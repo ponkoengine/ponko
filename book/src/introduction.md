@@ -77,8 +77,9 @@ improvements to existing systems, not replacements already delivered.
 exact ticks, read logs and measure performance. For visual checks, launch a
 windowed instance and request a screenshot. A useful loop is: edit, launch,
 run a fixed scenario, inspect state and timings, correct, and repeat with
-evidence. Broader automated acceptance workflows and reliable autonomous
-creation of complete games remain goals.
+evidence. The [agent acceptance suite](agents.md#the-agent-acceptance-suite)
+replays six tasks through these tools and scores them; reliable autonomous
+creation of complete games remains a goal.
 
 ## How this book is laid out
 

@@ -748,7 +748,7 @@ fn find_holders(physics: &mut Physics3D, holders: &mut Vec<Rect>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::physics3d::from_rp;
+    use crate::physics3d_impl::from_rp;
 
     /// Every triangle of `field`, its corners rounded to a millimeter and
     /// sorted, so two fields can be compared as sets of triangles.
