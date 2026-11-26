@@ -27,6 +27,19 @@
 //! another pipeline that walks its blocks (a Hi-Z march). Its pipelines are
 //! made when first used, and without it the trace is exactly the one
 //! without them.
+//!
+//! Rays leave by the normal the opaque pass lights a pixel with, normal
+//! maps and decals included: a thin pass after the depth prepass draws the
+//! solid surfaces again, with depth testing for equal, into a normals image
+//! (`NORMALS_FORMAT`, resolved from the multisampled frame; the multisampled
+//! image is transient where the GPU keeps it in tile memory). Where the
+//! material didn't tilt the normal the trace keeps the depth's, which agrees
+//! with the depth it marches. Crowds and solid stencil materials aren't in
+//! it: they keep the depth's normal.
+//!
+//! Transparent surfaces aren't in any of this: with `Post::ssr_transparent`
+//! each glossy transparent pixel marches its own ray in its fragment shader
+//! (`transparent_reflection` in `mesh_main.wgsl`).
 use crate::render::traffic::{Counted, Upload};
 use std::sync::atomic::{AtomicBool, Ordering};
 
