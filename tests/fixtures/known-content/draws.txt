@@ -77,13 +77,13 @@ IORTestGrid: differs
 InterpolationTest: matches
 IridescenceAbalone: matches
 IridescenceDielectricSpheres: differs
-IridescenceLamp: differs
+IridescenceLamp: matches
 IridescenceMetallicSpheres: differs
 IridescenceSuzanne: differs
 IridescentDishWithOlives: differs
 Lantern: differs
 LightVisibility: differs
-LightsPunctualLamp: differs
+LightsPunctualLamp: matches
 MandarinOrange: matches
 MaterialsVariantsShoe: differs
 MeshPrimitiveModes: differs
@@ -129,7 +129,7 @@ SpecGlossVsMetalRough: matches
 SpecularSilkPouf: differs
 SpecularTest: matches
 Sponza: differs
-StainedGlassLamp: differs
+StainedGlassLamp: matches
 SunglassesKhronos: differs
 Suzanne: differs
 TextureCoordinateTest: matches

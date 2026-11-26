@@ -245,6 +245,7 @@ impl Renderer3D {
                 .only_if(self.screen.ssr.is_some() && targets.ssr.is_some() && self.no_spread.is_some()),
             Features::SSR_THIN
                 .only_if(self.screen.ssr.is_some() && targets.ssr.as_ref().is_some_and(|s| s.coarse_depth().is_some())),
+            Features::REFRACTION_MIPS.only_if(targets.refraction().is_some()),
             Features::SPLIT.only_if(has(|p| matches!(p, Part::Transparent))),
             Features::VIEW_MODEL_SEE_THROUGH.only_if(self.view_model_see_through_pass()),
             Features::DEPTH_COPY.only_if(targets.depth_copy.is_some()),
@@ -285,7 +286,11 @@ impl Renderer3D {
             Some(view(Resource::SceneColor, &targets.color)),
             Some((Resource::Hdr, &targets.hdr_texture)),
             // One texture, in two roles (see `Resource::EffectScratch`).
-            Some((Resource::SceneCopy, &targets.scene_texture)),
+            Some((
+                Resource::SceneCopy,
+                targets.refraction().map_or(&targets.scene_texture, |r| &r.texture),
+            )),
+            targets.refraction().map(|r| (Resource::RefractionMips, &r.texture)),
             Some(view(Resource::EffectScratch, &targets.scene_view)),
             Some(view(Resource::BloomMips, targets.post.bloom_image())),
             self.post

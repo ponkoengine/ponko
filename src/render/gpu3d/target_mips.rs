@@ -129,6 +129,16 @@ impl MipMaker {
     /// Records the passes that make every level of `chain` from the one
     /// above, top down.
     pub(super) fn record(&self, encoder: &mut wgpu::CommandEncoder, chain: &MipChain, time: &super::PassTimer<'_, '_>) {
+        self.record_named(encoder, chain, time, "target mipmaps");
+    }
+
+    pub(super) fn record_named(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        chain: &MipChain,
+        time: &super::PassTimer<'_, '_>,
+        name: &'static str,
+    ) {
         for (group, view) in &chain.levels {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("render target mipmaps"),
@@ -143,7 +153,7 @@ impl MipMaker {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: time("target mipmaps"),
+                timestamp_writes: time(name),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
