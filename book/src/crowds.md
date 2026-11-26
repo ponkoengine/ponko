@@ -290,36 +290,55 @@ cargo test --release --lib --features 3d crowd_benchmark -- --ignored --nocaptur
 ```
 
 Measured on an Apple M4 Max (Metal), 1280x720 with 4x MSAA and a depth
-prepass, three runs each, the median of the runs' medians (and their
-range), on 2026-11-20 on an idle machine (nothing else was running). "Prepare
-+ record, 1 thread" is the CPU work of the frame measured on one thread.
+prepass, on 2026-11-26 on an idle machine (revision `431fae00` plus the
+CPU path's grouping below, 1-minute load 2.5 to 3.0, nothing else
+running): three runs of the command, each building and measuring every
+scene three times; the median of the runs' medians and, in brackets, the
+lowest and highest of them. "Prepare + record, 1 thread" is the CPU work
+of the frame measured on one thread.
 
 | Scene | GPU ms | Prepare + record ms, 1 thread | Draws | Posing ms (CPU) |
 |---|---|---|---|---|
-| Ground only | 0.24 (0.23–0.25) | 0.13 (0.13–0.13) | 2 | – |
-| Crowd | 7.01 (6.91–7.02) | 0.17 (0.17–0.17) | 4 | – |
-| Crowd, sun shadows | 8.42 (8.34–8.43) | 0.25 (0.25–0.25) | 12 | – |
-| Crowd, two levels (36 triangles past 40 m), sun shadows | 1.06 (1.06–1.06) | 0.25 (0.24–0.25) | 18 | – |
-| Crowd, CPU path (WebGL2's limits) | 3.51 (3.51–3.51) | 0.44 (0.44–0.44); 0.55 (0.54–0.56) on 2026-11-22 | 126 | – |
-| Skinned models | 27.89 (27.84–27.92) | 9.39 (9.39–9.42) | 19,246 | 0.33 |
-| Skinned models, sun shadows | 28.89 (28.88–28.97) | 9.96 (9.94–10.02) | 20,310 | 0.34 |
+| Ground only | 0.26 (0.23–0.32) | 0.13 (0.13–0.13) | 2 | – |
+| Crowd | 3.89 (3.88–3.89) | 0.16 (0.16–0.16) | 4 | – |
+| Crowd, sun shadows | 4.90 (4.89–4.90) | 0.23 (0.23–0.24) | 12 | – |
+| Crowd, two levels (36 triangles past 40 m), sun shadows | 0.89 (0.89–0.89) | 0.24 (0.24–0.26) | 18 | – |
+| Crowd, two levels crossfading over 5 m, sun shadows | 0.90 (0.89–0.90) | 0.25 (0.25–0.27) | 30 | – |
+| Crowd, CPU path (WebGL2's limits) | 3.60 (3.60–3.60) | 0.47 (0.45–0.48) | 126 | – |
+| Skinned models | 6.76 (6.76–6.77) | 3.50 (3.44–3.51) | 19,246 | 0.35 |
+| Skinned models, sun shadows | 7.17 (7.16–7.18) | 3.69 (3.63–3.71) | 20,310 | 0.36 |
 
 So on this machine 10,000 animated characters as a crowd **meet 60 fps by
-their measured cost**: 1.1 to 8.4 ms of GPU time and 0.17 to 0.44 ms of CPU
-work, together under 9 ms of the 16.7 ms a frame has. As skinned models the
-same characters don't (28 to 29 ms of GPU time and about 9.4 to 10 ms of CPU
-work a frame, with 0.3 ms more to pose them). The frame times this benchmark
-also prints (1.7 to 9.1 ms for the crowds, 37 ms for the skinned models)
-wait for the GPU after the CPU work, so they are not the frame rate a game
-would reach.
+their measured cost**: 0.9 to 4.9 ms of GPU time and 0.16 to 0.47 ms of CPU
+work. As skinned models the same characters take 6.8 to 7.2 ms of GPU time
+and about 3.5 to 3.7 ms of CPU work a frame, with 0.35 ms more to pose
+them: about 10.5 ms together, inside 16.7 ms too, but two to ten times the
+crowd's. The frame times this benchmark also prints (1.5 to 5.6 ms for the
+crowds, 10.0 to 10.5 ms for the skinned models) wait for the GPU after the
+CPU work, so they are not the frame rate a game would reach.
 
-Measured again on 2026-11-22 (idle, revision `9235ea05`, three runs),
-every row came out within 0.03 ms of the table except the CPU path's
-prepare + record, 0.55 ms (0.54–0.56) against 0.44, almost all of it in
-the prepare step (0.40 ms), where the CPU path culls the characters.
-That is slower by a quarter; culling by each clip's box and then by frame
-ranges' boxes (2026-11-21) is the change to that step since, but this
-was not confirmed.
+The table of 2026-11-20 (revision `e60e15a8`, also idle) had the crowd at
+7.01 ms of GPU time (8.42 with sun shadows, 1.06 with two levels) and the
+skinned models at 27.89 ms of GPU time and 9.39 ms of CPU work (28.89 and
+9.96 ms with shadows). The skinned models got faster when skinning was
+batched, one dispatch per mesh instead of one per model (#637). The crowd's
+GPU time was measured again on 2026-11-22 within 0.03 ms of 7.01 ms; what
+brought it to 3.89 ms since was not traced to one change.
+
+**The CPU path's cull.** On 2026-11-22 the CPU path's prepare + record had
+gone from 0.44 ms to 0.55 ms (0.54–0.56), and measured again before the
+change below it was 0.55 ms (0.53–0.57), almost all of it in the prepare
+step (0.38–0.41 ms), where the CPU path culls the characters. A profile
+(`sample`) of that step split it about 60/40 between culling and sorting
+the 10,000 draw keys. Since 2026-11-21 each character is culled by the box
+of the frame range it shows, under its own transform (a box against each
+view's planes), instead of by a sphere worked out when the crowd was set:
+that is where the 0.1 ms came from, the price of culling each character by
+what it shows. The sort is now a count of how many characters each key
+(view, level, crossfade, posed frame) has, linear in the characters and
+giving the same order (`grouped_keys_come_out_as_sorting_them_orders_them`):
+prepare + record 0.47 ms (0.45–0.48), the prepare step 0.32 to 0.34 ms.
+The rest above 0.44 ms, about 0.03 ms, is the box test.
 
 The CPU path's GPU time is lower than the GPU path's here because its
 corners are posed in advance: it trades blending between frames and clips
