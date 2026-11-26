@@ -69,5 +69,29 @@
     "assetSize": "32x32",
     "min": { "lights": 7 },
     "engineGpu": true
+  },
+  "shard_grove": {
+    "example": "shard_grove",
+    "features": ["navmesh", "physics3d"],
+    "asset": "shard_grove/grove.glb",
+    "presses": [
+      "Tab=focus:title.new",
+      "Enter=screen:Playing",
+      "Escape=screen:Paused",
+      "Enter=screen:Playing",
+      "Escape=screen:Paused"
+    ],
+    "min": { "joints": 1 },
+    "engineGpu": true
+  },
+  "shard_grove_walkthrough": {
+    "example": "shard_grove",
+    "features": ["navmesh", "physics3d"],
+    "query": "?smoke=walkthrough",
+    "asset": "shard_grove/grove.glb",
+    "min": { "joints": 1 },
+    "until": ["walkthrough_over:true", "finished:true", "screen:Title"],
+    "untilSeconds": 200,
+    "engineGpu": true
   }
 }

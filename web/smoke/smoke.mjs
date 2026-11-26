@@ -42,6 +42,7 @@ import {
   UsageError,
   backendAvailable,
   checkExpects,
+  checkUntil,
   checkEngineGpu,
   checkMinimums,
   checkMusicBeforeClick,
@@ -818,6 +819,33 @@ async function main() {
     snapshot = await call(smokeState(page));
     const tooLow = checkMinimums(snapshot.state, args.mins);
     if (tooLow) throw new Failure("state", tooLow);
+
+    // 4c'. A play-through (--until): a game that plays itself (Shard
+    //      Grove's walk-through) must reach these fields within
+    //      --until-timeout, still drawing and with no failure on the way.
+    if (args.until.length) {
+      step = `waiting up to ${args.untilSeconds}s for ${args.until.map(({ field, value }) => `${field}:${value}`).join(", ")}`;
+      const started = Date.now();
+      const untilDeadline = started + args.untilSeconds * 1000;
+      let lastLog = started;
+      for (;;) {
+        snapshot = await call(smokeState(page));
+        failure = appFailure(snapshot.status);
+        if (failure) throw await settled(failure);
+        const missing = checkUntil(snapshot.state, args.until);
+        if (!missing) break;
+        if (Date.now() > untilDeadline) {
+          throw new Failure("state", `after ${args.untilSeconds}s, ${missing} (state: ${JSON.stringify(snapshot.state)})`);
+        }
+        if (Date.now() - lastLog >= 10_000) {
+          log(`waiting: ${missing} (${JSON.stringify(snapshot.state)})`);
+          lastLog = Date.now();
+        }
+        await sleep(500);
+      }
+      report.until = { seconds: (Date.now() - started) / 1000, state: snapshot.state };
+      log(`reached in ${report.until.seconds.toFixed(1)}s: ${JSON.stringify(snapshot.state)}`);
+    }
 
     // 4d. Fields of the first page load (--persist): what the browser
     //     answered when the page asked to keep its storage.

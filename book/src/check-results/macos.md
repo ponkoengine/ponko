@@ -77,6 +77,64 @@ read the suite's chapter before it started, so this run shows the tasks can
 be finished with the tools as documented; it is weak evidence of how hard
 they are. Harder tasks are #630.
 
+## 2026-11-26: every web example and Shard Grove in the browser (#528, sections 1, 5 and 6a)
+
+`main` at `b7ca3382` plus the branch that adds the `web-examples` job, the
+same Mac (Apple M4 Max, macOS 27.2.1, Node 26.13.1, wasm-bindgen 0.2.130,
+playwright-core 1.65.1: Chromium 159.0.8154.6, WebKit 27.2). The machine was
+busy throughout (load average 30 to 86 on 14 cores: other agents were
+compiling). "On the GPU" is Chromium's new headless mode: WebGPU on the
+Metal adapter (`apple`, `metal-3`, not a fallback), WebGL2 on ANGLE's Metal
+renderer for the Apple M4 Max. "Software" is the headless shell: WebGL2 on
+ANGLE over SwiftShader. Every run was headless; no window opened.
+
+**What claims the web.** The gallery's list (`web/gallery/examples.json`,
+49 examples after this branch adds 12) and the `web/smoke` fixtures and
+examples (`web_smoke`, `web_smoke_3d`, `coin_dash`, `lights2d`, the editor
+fixtures, `lockstep`, `net_arena`, `web_threads`, `web_spectrum`,
+`web_video`), which the `web-smoke` job runs; its runs of 2026-11-26 are
+recorded below. The
+gallery's README names every other example and why it isn't on the web, and
+`node --test web/gallery` now fails for one that is neither.
+
+| Step (`web-examples` job) | Result | Time |
+|---|---|---|
+| Build: `node web/gallery/build.mjs` (49 examples) and `web/build.sh --features navmesh,physics3d shard_grove` | pass (release wasm: 1.1 GB of sites in `target/web/gallery`, 4.5 GB of build output in `target/wasm32-unknown-unknown`, deleted afterwards) | |
+| Every gallery page, Chromium, WebGL2 on the GPU | **pass**, 49 of 49 (47 run on WebGL2, the 2 compute demos show their WebGPU message) | 85 s |
+| Every gallery page, Chromium, WebGPU on the GPU | **pass**, 49 of 49, all on WebGPU | 90 s |
+| Every gallery page, WebKit (its own choice: WebGPU) | **pass**, 49 of 49 | 97 s |
+| Every gallery page, Chromium, WebGL2 (software) | 48 of 49 in the job's run: `shaders` timed out reading the canvas box (30 s) while its software-GL frames held the page, with a native test build running beside it; it passed alone twice (23 s, 35 s), and the check now allows 60 s, as for its screenshot | 543 s |
+| Shard Grove, keys (`--fixture shard_grove`, `--require-gpu`): Tab, Enter, Escape, Enter, Escape | **pass** on WebGPU and on WebGL2 | 5 s, 6 s |
+| Shard Grove, the whole walk-through (`--fixture shard_grove_walkthrough`, `--require-gpu`) | **pass** on WebGPU (36.7 s, 1,999 ticks, 2,394 frames) and on WebGL2 (36.7 s, 1,999 ticks, 2,393 frames): 6 shards, 1 save, 1 load, 2 pulses, 2 stuns, 1 win, no hit or loss | 46 s, 52 s |
+| Also run: the walk-through in the headless shell (software WebGL2) and in WebKit | **pass**: 36.1 s, 787 frames (about 22 a second on SwiftShader); WebKit 36.4 s on WebGPU | 53 s, 49 s |
+| Regression: the 3D fixture (`web_smoke_3d`, sun shadows) on the GPU | pass on WebGPU and WebGL2 | 12 s, 4 s |
+
+**Found and fixed on the branch:**
+
+- `lights` drew nothing on WebGL2 (a blank canvas on the GPU, and the
+  console full of `GL_INVALID_OPERATION: glDrawElementsInstanced: Mismatch
+  between texture format and sampler type`). With shadows off, the sun's
+  shadow map is a 1x1 texture of one layer; wgpu's GL backend makes a
+  one-layer texture a `TEXTURE_2D`, and the shaders read it through an array
+  sampler, so the browser refused every draw. With shadows on (two or more
+  cascades) the same build drew. Fixed: on GL the map and the 1x1 array
+  stand-ins get a second layer (as texture arrays already did). After the
+  fix `lights` on WebGL2 draws the same picture as on WebGPU, with no GL
+  error. The Metal render tests of shadows and memory (16) pass unchanged.
+- The software-GL gallery run had passed `lights` all the same: its
+  screenshot was 0.12% off the background, just above the blank threshold.
+  The gallery check now fails a page whose browser logged a WebGL error;
+  the unfixed build fails with it, the fixed one passes.
+- Shard Grove's web build only published its state. It now plays its
+  walk-through in the page with `?smoke=walkthrough`, and the runner's
+  `--until` waits for it.
+- 12 examples with a picture weren't in the gallery although its README said
+  every one was: `skeleton2d`, `ai_guards`, `prefabs`, `move_sprite`,
+  `ui_widgets`, `sky_kit`, `stylized_sky`, `reflection_refresh`,
+  `post_volumes`, `split_screen`, `crowd`, `water`. Each built and passed on
+  WebGPU and WebGL2 on the GPU before it was added, and in all four runs
+  above after.
+
 ## 2026-11-26: the ten-minute reference-game soaks (#509)
 
 The `soak` job's command, run once per workload, sequentially, from the
