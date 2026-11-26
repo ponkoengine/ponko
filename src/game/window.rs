@@ -16,19 +16,37 @@ use crate::error::{Error, ErrorKind};
 use crate::input::{Key, MouseButton};
 use crate::render::{FrameStatus, Renderer};
 
+/// The game's setup closure, behind a pointer.
+///
+/// Everything else in the windowed loop is then one non-generic type,
+/// compiled with the engine (at its opt-level) rather than in the game's
+/// crate, and the stack the loop takes doesn't depend on the game's
+/// build settings. Windows gives a program's main thread 1 MB of stack.
+type Setup<'s> = Box<dyn FnOnce(&mut Ctx) -> Option<SystemFn> + 's>;
+
 /// `Game::run`: opens the window and runs until it closes.
-pub(super) fn run<S, U>(mut game: Game, setup: S) -> Result<(), Error>
+pub(super) fn run<S, U>(game: Game, setup: S) -> Result<(), Error>
 where
     S: FnOnce(&mut Ctx) -> U,
     U: SetupResult,
 {
+    run_window(game, Box::new(move |ctx: &mut Ctx| setup(ctx).into_frame_fn()))
+}
+
+#[inline(never)]
+fn run_window(mut game: Game, setup: Setup<'_>) -> Result<(), Error> {
     #[cfg(feature = "profiling")]
     let _puffin_server = start_profiler();
 
     #[cfg(target_arch = "wasm32")]
     crate::web::show_panics_in_console();
     connect_hotpatch();
-    let event_loop = EventLoop::<Ready>::with_user_event().build().map_err(|e| {
+    #[cfg_attr(not(all(test, windows)), allow(unused_mut))]
+    let mut builder = EventLoop::<Ready>::with_user_event();
+    // Tests run startup on a thread with a small stack (`startup_stack_tests`).
+    #[cfg(all(test, windows))]
+    winit::platform::windows::EventLoopBuilderExtWindows::with_any_thread(&mut builder, true);
+    let event_loop = builder.build().map_err(|e| {
         let error = Error::new(ErrorKind::Unsupported, format!("could not start the event loop: {e}"));
         #[cfg(target_arch = "wasm32")]
         crate::web::finish_startup(Err(error.clone()));
@@ -147,7 +165,7 @@ fn print_mesh_costs(ctx: &Ctx) {
 /// The GPU is ready (with the assets, on the web): setup can run.
 struct Ready(Result<Renderer, Error>);
 
-struct App<S> {
+struct App<'s> {
     /// Delivers [`Ready`] from the task that opens the GPU (web builds).
     #[cfg(target_arch = "wasm32")]
     proxy: Option<winit::event_loop::EventLoopProxy<Ready>>,
@@ -156,7 +174,7 @@ struct App<S> {
     #[cfg(target_arch = "wasm32")]
     startup_context: Option<crate::web::ContextLostListener>,
     config: Game,
-    setup: Option<S>,
+    setup: Option<Setup<'s>>,
     /// Setup has run; frames may run.
     started: bool,
     error: Option<Error>,
@@ -164,7 +182,8 @@ struct App<S> {
     cursor_sources: super::window_service::CursorQueue,
     /// Follows the player's keyboard layout, for key labels.
     layout: Option<crate::input::key_labels::watch::LayoutWatch>,
-    ctx: Ctx,
+    /// Boxed: tens of kilobytes, kept off the stack.
+    ctx: Box<Ctx>,
     clock: Clock,
     last_frame: Instant,
     #[cfg(all(feature = "bench-internals", not(target_arch = "wasm32")))]
@@ -191,11 +210,7 @@ struct App<S> {
     browser_control: Option<crate::control::web::BrowserControl>,
 }
 
-impl<S, U> App<S>
-where
-    S: FnOnce(&mut Ctx) -> U,
-    U: SetupResult,
-{
+impl App<'_> {
     fn logical_window_size(window: &Window) -> Vec2 {
         let size: LogicalSize<f32> = crate::window::surface_size(window).to_logical(window.scale_factor());
         Vec2::new(size.width, size.height)
@@ -437,11 +452,7 @@ mod access_gap_tests {
     }
 }
 
-impl<S, U> App<S>
-where
-    S: FnOnce(&mut Ctx) -> U,
-    U: SetupResult,
-{
+impl App<'_> {
     /// The GPU is open: run setup and start the frames.
     fn start(&mut self, renderer: Renderer) {
         let Some(window) = self.window.clone() else {
@@ -542,7 +553,7 @@ where
                 self.error = Some(error);
                 return;
             }
-            let frame_fn = setup(&mut self.ctx).into_frame_fn();
+            let frame_fn = setup(&mut self.ctx);
             self.ctx.set_in_setup(false);
             self.ctx.apply_commands();
             // A sample count set in setup, before the first frame is drawn.
@@ -563,11 +574,7 @@ where
     }
 }
 
-impl<S, U> ApplicationHandler<Ready> for App<S>
-where
-    S: FnOnce(&mut Ctx) -> U,
-    U: SetupResult,
-{
+impl ApplicationHandler<Ready> for App<'_> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.error.is_some() {
             event_loop.exit();

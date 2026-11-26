@@ -121,11 +121,14 @@ mod far_terrain;
 mod shader_status;
 pub(crate) use crate::render::{ShaderDiagnostic, ShaderKind};
 pub(crate) use shader_status::{COMPUTE_STAND_IN, EFFECT_STAND_IN};
+mod icon;
 mod settings;
 mod sky;
 mod sky_kit;
 mod sky_shader;
 mod target;
+pub use icon::Icon;
+pub(crate) use icon::{ICON_FRAMES, PendingIcon};
 mod terrain;
 pub(crate) mod terrain_file;
 pub use far_terrain::FarTerrain;
@@ -1469,6 +1472,9 @@ pub(crate) struct Assets3D {
     pub loaded_shaders: std::collections::HashMap<crate::assets::Origin, Shader>,
     /// The material handed out for meshes without one.
     pub default_material: Option<Material>,
+    /// The tone mapping effect of item icons (`Graphics::render_icon`), once
+    /// one is drawn.
+    pub icon_effect: Option<Effect>,
     /// Meshes loaded from files, by where they were found (file or asset source).
     pub loaded: std::collections::HashMap<crate::assets::Origin, Mesh>,
     /// Material handles survive geometry eviction; reloading must preserve

@@ -3173,6 +3173,24 @@
     "reason": "A prefab node without a fresh instance was kept from the previous spawn; the reload decides both lists together.",
     "site": "src/three/gltf_scene.rs:688"
   },
+  "src/three/icon.rs:83ef55e3fed6603e": {
+    "classification": "invariant",
+    "construction": ".expect(\"post.wgsl has its ACES curve\")",
+    "reason": "Slices the engine's own post.wgsl, built into the binary: only an engine edit of that file can break it, and every icon test runs it.",
+    "site": "src/three/icon.rs:171"
+  },
+  "src/three/icon.rs:a301500f1f444ee1": {
+    "classification": "invariant",
+    "construction": ".expect(\"post.wgsl has its tonemap function\")",
+    "reason": "Slices the engine's own post.wgsl, built into the binary: only an engine edit of that file can break it, and every icon test runs it.",
+    "site": "src/three/icon.rs:172"
+  },
+  "src/three/icon.rs:ac1a17a0f081d297": {
+    "classification": "forwarded-error",
+    "construction": "panic!(\"{e}\")",
+    "reason": "render_icon re-raises try_render_icon's Error message; documented under Panics.",
+    "site": "src/three/icon.rs:244"
+  },
   "src/three/ik.rs:3fdfa2a3ea9f69a9": {
     "classification": "invariant",
     "construction": ".unwrap()",

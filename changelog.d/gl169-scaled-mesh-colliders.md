@@ -1,3 +1,4 @@
+<!-- area: Physics, navigation and AI -->
 ### Added
 - C and C++: `ponko_collider3d_scaled_mesh(mesh, scale)` and
   `ponko::scaled_mesh_collider(mesh, scale)` make a scaled mesh collider

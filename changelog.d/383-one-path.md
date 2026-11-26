@@ -107,6 +107,7 @@
   ```
   After:
   ```rust
+  # let (parent, tiles) = todo!();
   use ponko::d2::*;
   use ponko::{attach::Attached, tilemap::TileMap};
   let child = (Transform::default(), Attached::to(parent));
@@ -178,5 +179,6 @@
   ```
   After:
   ```rust
+  # let game = Game::new("g", 1, 1);
   game.add(Phase::SimLast, ponko::systems::follow_attachments)
   ```

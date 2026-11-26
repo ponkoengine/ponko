@@ -1323,7 +1323,12 @@ impl Renderer3D {
         };
         let mut in_image = true;
         for &(effect, material) in &target.effects {
-            let Some(pipeline) = self.effects.pipelines.get(effect as usize).and_then(Option::as_ref) else {
+            let Some(pipeline) = self
+                .effects
+                .view_pipelines
+                .get(effect as usize)
+                .and_then(Option::as_ref)
+            else {
                 continue;
             };
             let (source, into) = if in_image {

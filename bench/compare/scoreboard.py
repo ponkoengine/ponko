@@ -548,7 +548,8 @@ def make_base_project(name, work, folder):
         shutil.copytree(template, dest, ignore=shutil.ignore_patterns("tests", "*.md", ".mcp.json", "cargo-generate.toml"))
         liquid = os.path.join(dest, "Cargo.toml.liquid")
         text = read(liquid).replace("{{project-name}}", folder)
-        text = text.replace('ponko = { version = "0.1" }', f'ponko = {{ path = "{ROOT_TOML}" }}')
+        # Whatever minor the template names (the release bump changes it).
+        text = re.sub(r'ponko = \{ version = "[^"]+" \}', lambda _: f'ponko = {{ path = "{ROOT_TOML}" }}', text)
         write(os.path.join(dest, "Cargo.toml"), text + "\n[workspace]\n")
         os.unlink(liquid)
         for f in ("src/lib.rs", "src/main.rs"):

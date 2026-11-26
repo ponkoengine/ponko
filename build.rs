@@ -8,16 +8,6 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     // `cargo fuzz` builds with `--cfg fuzzing` (the `fuzz/` targets).
     println!("cargo::rustc-check-cfg=cfg(fuzzing)");
-    // Windows gives a program's main thread 1 MB of stack, Linux and macOS
-    // 8 MB. A windowed example in a debug build needs more than 1 MB while
-    // it starts (the game, its `Ctx` and the renderer are built in large
-    // stack frames at the dev profile's opt-level), so link the examples with
-    // the 8 MB the other systems give.
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
-        && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc")
-    {
-        println!("cargo::rustc-link-arg-examples=/STACK:8388608");
-    }
     if std::env::var_os("CARGO_FEATURE_STEAM").is_none() {
         return;
     }

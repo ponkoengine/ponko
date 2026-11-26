@@ -1,3 +1,4 @@
+<!-- area: Guide and examples -->
 ### Added
 - A cookbook in the guide: fifty small recipes (moving, fighting and collecting,
   timers, menus, cameras, 2D and 3D physics, levels, sound and saves), each in

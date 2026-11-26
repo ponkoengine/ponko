@@ -404,11 +404,18 @@ pub struct Ctx {
 }
 
 impl Ctx {
-    /// `fixed_dt` in seconds, as f64 so `sim_time()` stays exact over long runs.
-    pub(crate) fn new(fixed_dt: f64, window_size: Vec2) -> Self {
-        // Every service that loads files shares these two.
-        let asset_sources = assets::SharedSources::default();
-        let watcher = crate::hot_reload::SharedWatcher::default();
+    /// [`Ctx::new`] on the heap, for the game loops: a `Ctx` is tens of
+    /// kilobytes, and a debug build copies it from frame to frame while it
+    /// is moved. Out of line, so its frame isn't added to the caller's.
+    #[inline(never)]
+    pub(crate) fn boxed(fixed_dt: f64, window_size: Vec2) -> Box<Self> {
+        Box::new(Self::new(fixed_dt, window_size))
+    }
+
+    /// A world with the engine's components reflected. Out of line: the
+    /// registrations' temporaries stay out of [`Ctx::new`]'s frame.
+    #[inline(never)]
+    fn engine_world() -> World {
         let mut world = World::new();
         crate::reflect::WorldReflect::reflect::<crate::d2::Transform>(&mut world);
         crate::reflect::describe_transform2d(&mut world);
@@ -458,6 +465,15 @@ impl Ctx {
         crate::reflect::reflect_particle_emitter3d(&mut world);
         crate::reflect::reflect_animation(&mut world);
         crate::reflect::reflect_skeleton2d(&mut world);
+        world
+    }
+
+    /// `fixed_dt` in seconds, as f64 so `sim_time()` stays exact over long runs.
+    pub(crate) fn new(fixed_dt: f64, window_size: Vec2) -> Self {
+        // Every service that loads files shares these two.
+        let asset_sources = assets::SharedSources::default();
+        let watcher = crate::hot_reload::SharedWatcher::default();
+        let world = Self::engine_world();
         // The file names behind sprites and models: the world saves by them,
         // the graphics service fills them in as files load.
         let gfx = crate::gfx::Graphics::new(
@@ -592,6 +608,9 @@ impl Ctx {
             .assets3d
             .probes
             .settle(!matches!(status, FrameStatus::Occluded | FrameStatus::Skipped));
+        #[cfg(feature = "3d")]
+        self.gfx
+            .settle_icons(!matches!(status, FrameStatus::Occluded | FrameStatus::Skipped));
         self.perf.last_render_stats = self.gfx.renderer.as_ref().map(Renderer::stats).unwrap_or_default();
         self.perf.last_render_detail = self.gfx.renderer.as_ref().map(Renderer::detail);
         if self.gfx.renderer.is_some() && status.drew() {
