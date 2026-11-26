@@ -24,8 +24,15 @@
 
 use super::ShaderKind;
 
+/// The engine's wording of validation errors, by the names in the source
+/// (a copy of `src/render/shader_diagnostics/names.rs`).
+#[path = "shaders/names.rs"]
+#[allow(dead_code, reason = "the cook prints one line per error: no caret labels")]
+mod names;
 #[path = "shaders/rules.rs"]
 mod rules;
+// `names` reaches naga through its parent, as in the engine.
+use ::naga;
 
 /// Where the engine's mesh prelude goes in a part file.
 const PRELUDE: &str = "//@@ponko-mesh-prelude@@\n";
@@ -193,13 +200,9 @@ pub fn validate(name: &str, source: &str, kind: Option<ShaderKind>) -> Result<Sh
         naga::valid::Capabilities::all()
     };
     if let Err(e) = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), capabilities).validate(&module) {
-        let mut message = e.as_inner().to_string();
-        let mut cause = std::error::Error::source(e.as_inner());
-        while let Some(c) = cause {
-            message.push_str(": ");
-            message.push_str(&c.to_string());
-            cause = c.source();
-        }
+        // Types, functions and expressions by their names in the source,
+        // not naga's IR handles.
+        let message = names::Names::new(&module, &composed, e.as_inner()).message(e.as_inner());
         let at = e
             .spans()
             .filter_map(|(span, _)| span.to_range())
@@ -260,6 +263,16 @@ mod tests {
         assert!(err.starts_with("bad.wgsl:3:"), "{err}");
         let err = validate("typo.wgsl", "fn surface(s: Surface) -> Surface { return s }", None).unwrap_err();
         assert!(err.starts_with("typo.wgsl:1:"), "{err}");
+    }
+
+    #[test]
+    fn a_type_error_names_the_types_as_the_engine_does() {
+        let source = "fn fragment(p: SpritePixel) -> vec4<f32> {\n    let glow = material.params[0].x;\n    return mix(p.color.rgb, vec3<f32>(1.0), glow);\n}\n";
+        let err = validate("glow.wgsl", source, None).unwrap_err();
+        assert_eq!(
+            err,
+            "glow.wgsl:3:12: `fragment` returns `vec3<f32>` but is declared to return `vec4<f32>`"
+        );
     }
 
     #[test]

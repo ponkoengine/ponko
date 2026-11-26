@@ -25,6 +25,9 @@ pub(crate) struct Studio {
     ctx: Ctx,
     /// The files of the model being drawn, by asset name.
     files: Rc<RefCell<HashMap<String, Vec<u8>>>>,
+    /// Frames drawn so far, for the test that a thumbnail takes one.
+    #[cfg(test)]
+    frames: u32,
 }
 
 /// The studio's only asset source: the files of the model being drawn.
@@ -53,7 +56,18 @@ impl Studio {
         ctx.scene3d.sky.atmosphere = false;
         let files = Rc::default();
         ctx.assets.add_source(Files(Rc::clone(&files)));
-        Self { ctx, files }
+        Self {
+            ctx,
+            files,
+            #[cfg(test)]
+            frames: 0,
+        }
+    }
+
+    /// The frames drawn since the studio was made.
+    #[cfg(test)]
+    pub(crate) fn frames_drawn(&self) -> u32 {
+        self.frames
     }
 
     /// Draws model `rel` (in assets folder `root`) and saves its thumbnail
@@ -105,11 +119,15 @@ impl Studio {
         let e = ctx
             .world
             .spawn((crate::d3::Transform::default(), crate::render::Model::new(mesh)));
-        // The first frame settles what the renderer builds once per view.
-        ctx.render_frame();
+        // One frame is enough: the first frame of a view draws its 3D
+        // picture (#632), and the model's mesh and materials are made in it.
         let (reply, answer) = std::sync::mpsc::channel();
         ctx.gfx.queue_screenshot(out.to_path_buf(), SIZE as u32, Some(reply));
         ctx.render_frame();
+        #[cfg(test)]
+        {
+            self.frames += 1;
+        }
         ctx.world.despawn(e);
         ctx.gfx.free(mesh);
         ctx.gfx.release_file_materials(rel);

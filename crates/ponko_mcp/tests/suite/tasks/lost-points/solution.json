@@ -1,0 +1,25 @@
+{
+  "steps": [
+    { "call": "world_summary" },
+    { "call": "get_resource", "args": { "resource": "DashSettings" } },
+    { "call": "subscribe_events", "args": { "types": ["Collected", "Hurt"] } },
+    { "call": "run_input_scenario", "args": { "scenario": { "version": 1, "duration": 150, "steps": [{ "tick": 0, "type": "key", "key": "Right", "down": true }] } } },
+    { "call": "take_events" },
+    { "call": "list_entities", "args": { "with": ["Coin"] } },
+    { "write": "assets/dash.json", "text": "{\n  \"speed\": 300,\n  \"pickup_radius\": 24\n}\n" },
+    { "until": { "call": "get_resource", "args": { "resource": "DashSettings" }, "pointer": "/pickup_radius", "equals": 24.0 },
+      "each": { "call": "run_ticks", "args": { "ticks": 1 } } },
+    { "call": "load_scene", "args": { "path": "levels/run.json" } },
+    { "call": "subscribe_events", "args": { "types": ["Collected", "Hurt"] } },
+    { "call": "run_input_scenario", "args": { "scenario": { "version": 1, "duration": 150, "steps": [{ "tick": 0, "type": "key", "key": "Right", "down": true }] } } },
+    { "call": "take_events" },
+    { "call": "load_scene", "args": { "path": "levels/run.json" } },
+    { "call": "list_entities", "args": { "with": ["Spikes"] }, "save": { "spikes": "/entities/0/entity" } },
+    { "call": "despawn_entity", "args": { "entity": "$spikes" } },
+    { "call": "save_scene", "args": { "path": "levels/run.json" } },
+    { "call": "set_resource", "args": { "resource": "Score", "value": { "points": 0 } } },
+    { "call": "run_input_scenario", "args": { "scenario": { "version": 1, "duration": 150, "steps": [
+      { "tick": 0, "type": "key", "key": "Right", "down": true },
+      { "tick": 149, "type": "expect_resource", "resource": "Score", "pointer": "/points", "equals": 5 } ] } } }
+  ]
+}

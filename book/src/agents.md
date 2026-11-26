@@ -408,12 +408,12 @@ made from C and from C++ shows up there.
 
 The tools are tested call by call; the acceptance suite tests whether a
 task can be *finished* with them. It lives in `crates/ponko_mcp/tests/suite/`:
-six small game-development tasks, each with a starting project (files under
-`assets/`), a goal written for an agent, a checker that scores the result
-from the running game and its files, a scripted solution, and negative
-controls: plausible wrong fixes that the checker must reject. The games
-follow the 2D project template: rules in sim systems, numbers in JSON files
-that hot reload, gameplay types reflected.
+eleven small game-development tasks, each with a starting project (files
+under `assets/`, or a Rust crate), a goal written for an agent, a checker
+that scores the result from the running game and its files, a scripted
+solution, and negative controls: plausible wrong fixes that the checker
+must reject. The games follow the 2D project template: rules in sim
+systems, numbers in JSON files that hot reload, gameplay types reflected.
 
 | Task | Kind | The agent must | Checked by |
 |---|---|---|---|
@@ -423,6 +423,46 @@ that hot reload, gameplay types reflected.
 | `slow-crowd` | performance | find the system that got slow and cut its work tenfold | work counted per tick, and the same result as an all-pairs count |
 | `broken-shader` | shader | fix a WGSL file while the game runs | `shader_status` and the file |
 | `hidden-score` | ui | make the HUD show the score | what the UI shows, through `expect_ui` |
+| `lost-points` | bug | fix a bug with two causes in two files; the visible one fixed, the symptom stays | the data file, the level file, a fresh load of the level, a scenario's score |
+| `cannon-range` | measure | tune a value the file can't tell: the air's drag isn't given, and the vacuum formula falls short | the file, the live value, a shot's `Landed` event |
+| `tough-bats` | content | make one change across a scene, a prefab and a data file (whose difficulty scale halves new bats' health) | the files, and the bats the spawner adds after a fresh load |
+| `hold-the-gate` | experiment | pick two of six tower pads that hold a wave that comes once; only one pair does | the file, and the wave replayed from its start with `load_world` |
+| `stuck-guard` | code | fix a Rust game's code and restart it, once per attempt | a fresh build of the crate, the route file, positions read every tick |
+
+The first six check that each kind of work can be finished. The other five
+are harder on purpose, so that a poorer tool surface shows in the scores:
+fixing the first cause of `lost-points` leaves the symptom exactly as it
+was, so an agent that can't watch the score change during a run (it goes
+up, then drops to zero at the spikes) thinks its fix failed; the shot of
+`cannon-range` can only be measured, not computed; the right pair of
+`hold-the-gate` isn't the pair that covers the most road, and the wave
+comes once, so trying pairs needs `save_world` and `load_world`. Each task
+names the tools it leans on (`agent_suite list` prints them):
+
+| Task | Leans on |
+|---|---|
+| `tune-speed` | `get_resource`, `run_input_scenario` |
+| `coin-level` | `spawn_entity`, `save_scene`, `run_input_scenario` |
+| `immortal-enemy` | `list_entities`, `subscribe_events`, `run_ticks` |
+| `slow-crowd` | `system_timings`, `get_resource` |
+| `broken-shader` | `shader_status` |
+| `hidden-score` | `run_input_scenario` |
+| `lost-points` | `watch`, `subscribe_events`, `run_input_scenario`, `list_entities`, `save_scene` |
+| `cannon-range` | `subscribe_events`, `take_events`, `set_resource`, `run_ticks` |
+| `tough-bats` | `entity_stats`, `watch`, `load_scene`, `save_scene`, `spawn_prefab`, `save_prefab` |
+| `hold-the-gate` | `save_world`, `load_world`, `watch`, `list_entities` |
+| `stuck-guard` | `launch`, `quit_instance`, `get_entity`, `run_ticks`, `subscribe_events` |
+
+**Code tasks.** `stuck-guard`'s starting project is a crate (`Cargo.toml`,
+`src/main.rs`, `assets/`) that depends on this repository's engine by
+path. Every build of it, the checker's and the agent's, goes to one folder,
+`target/agent-suite` (about 1.5 GB): the first build compiles the engine
+without default features (about a minute), and a rebuild after an edit
+takes a second or two. In a code task the agent has `launch` and
+`quit_instance`: after an edit it quits the game and launches the new build
+(`release: false`). `submit_task` builds the crate from the folder's files
+itself and starts it fresh, so the score never depends on which build the
+agent left running.
 
 The performance task scores the work a tick does (distance checks), not
 wall-clock time, so its score is the same on every machine; `system_timings`
@@ -443,7 +483,9 @@ every negative control must fail exactly the checks it names (an empty
 "do nothing" control is required, so the starting state always fails). The
 scores must equal `tests/suite/baseline.json`; after a deliberate change to
 a task or a tool, rewrite it with `PONKO_UPDATE_BASELINE=1` and say why in
-the pull request. Nothing leaves the machine; it takes about half a minute.
+the pull request. Nothing leaves the machine (the code task builds offline,
+from the workspace's `Cargo.lock`); it takes about two minutes, half of it
+the code task, plus a minute the first time for its engine build.
 
 ### The 0.2.0 baseline
 
@@ -457,13 +499,19 @@ The scripted solutions, with the 0.2.0 tools:
 | `slow-crowd` | 4/4 | 8 | 4/4 |
 | `broken-shader` | 2/2 | 5 | 3/3 |
 | `hidden-score` | 2/2 | 6 | 3/3 |
-| **total** | **18/18, 6/6 tasks** | 51 | 22/22 |
+| `lost-points` | 4/4 | 18 | 7/7 |
+| `cannon-range` | 3/3 | 15 | 5/5 |
+| `tough-bats` | 3/3 | 21 | 5/5 |
+| `hold-the-gate` | 3/3 | 11 | 6/6 |
+| `stuck-guard` | 5/5 | 14 | 5/5 |
+| **total** | **36/36, 11/11 tasks** | 130 | 50/50 |
 
 A step is one tool call, one file edit, or one wait for a hot reload. The
 steps are a known path, not a bound: a real agent also explores. Runs of
 real agents are recorded with the checks on each machine; the first, on
 2026-11-26, is in [Check results: macOS](check-results/macos.md) (an AI
-coding agent solved all six tasks on its first submission).
+coding agent solved the first six tasks on its first submission, and the
+author of the other five solved those the same day).
 
 ### Trying a real agent
 
@@ -502,6 +550,12 @@ shows:
 ```sh
 target/debug/examples/agent_suite scores /tmp/suite/*.result.json
 ```
+
+To see what a tool is worth on a task, take it away:
+`agent_suite mcp TASK --hide watch,subscribe_events` serves the task
+without those tools, says so in the instructions, refuses calls to them,
+and records them in the result (`hidden_tools`). Compare the scores of runs
+with and without (one run of a model says little, so several of each).
 
 An agent with a shell but no MCP client (or one that can't add a server
 mid-session) drives the same server with `scripts/mcp-session.py`, which
@@ -571,12 +625,24 @@ guide:
   step.
 - **Counting is a question about many entities:** `entity_stats` with only
   `with` (no `fields`) answers how many match.
+- **A scene keeps the game's reflected resources.** `save_scene` writes
+  every reflected resource with the entities, settings loaded from data
+  files included, and `load_scene` writes them back. Save a level after
+  fixing its settings file, or loading the level brings the old values
+  back (`lost-points` has this as a negative control).
+- **A prefab's copies don't follow it.** Entities a level got from a
+  prefab are saved as copies in the scene: changing the prefab changes
+  only what is spawned from it later (`tough-bats`).
+- **A misspelled event type collected nothing.** `subscribe_events` now
+  replies with the types it collects and names unknown ones with a hint.
 
 ### Limits
 
-- The tasks change data files, scenes and shaders. None asks for Rust code
-  changes: rebuilding a game per attempt takes minutes, too slow for the test suite;
-  code tasks for real agents are future work.
+- One task asks for a Rust code change. Its crate builds against the
+  engine in `target/agent-suite`, so a rebuild per attempt takes seconds,
+  but the first build takes a minute and the folder 1.5 GB. Code tasks
+  with more than one file, or that need the 3D renderer's features, would
+  cost more of both.
 - Screenshots need a window and a GPU; the suite checks what is shown
   through the UI tree instead, so it runs headless with the tests.
 - A checker is only as strict as its checks: the negative controls are

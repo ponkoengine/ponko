@@ -414,7 +414,19 @@ fn subscribers_get_reflected_events_with_their_ticks() {
     let list = c.call("events.list", json!({})).unwrap();
     assert_eq!(list, json!([{ "name": "Ping", "kept": 0 }]));
 
-    c.call("events.subscribe", json!({ "types": ["Ping"] })).unwrap();
+    // A misspelled type is named in the reply, with the game's types.
+    let typo = c.call("events.subscribe", json!({ "types": ["Pong"] })).unwrap();
+    assert_eq!(typo["unknown"], json!(["Pong"]), "{typo}");
+    assert!(typo["hint"].as_str().unwrap().contains("Ping"), "{typo}");
+    let all = c.call("events.subscribe", json!({})).unwrap();
+    assert_eq!((&all["types"], &all["all"]), (&json!(["Ping"]), &json!(true)), "{all}");
+    let some = c.call("events.subscribe", json!({ "types": ["Ping"] })).unwrap();
+    assert_eq!(
+        (&some["types"], &some["all"]),
+        (&json!(["Ping"]), &json!(false)),
+        "{some}"
+    );
+    assert!(some.get("unknown").is_none(), "{some}");
     c.call("sim.step", json!({ "ticks": 5 })).unwrap();
     wait_for_tick(&mut c, 5);
     let got = c.call("events.take", json!({})).unwrap();

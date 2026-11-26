@@ -1,0 +1,94 @@
+{
+ "steps": [
+  {
+   "call": "get_resource",
+   "args": {
+    "resource": "Route"
+   }
+  },
+  {
+   "call": "list_entities",
+   "args": {
+    "with": [
+     "Guard"
+    ]
+   },
+   "save": {
+    "guard": "/entities/0/entity"
+   }
+  },
+  {
+   "call": "run_ticks",
+   "args": {
+    "ticks": 120
+   }
+  },
+  {
+   "call": "get_entity",
+   "args": {
+    "entity": "$guard"
+   }
+  },
+  {
+   "call": "run_ticks",
+   "args": {
+    "ticks": 1
+   }
+  },
+  {
+   "call": "get_entity",
+   "args": {
+    "entity": "$guard"
+   }
+  },
+  {
+   "edit": "src/main.rs",
+   "old": "            if to.length() == 0.0 {\n",
+   "new": "            if to.length() <= step {\n                // Close enough to get there this tick: stand on it.\n                t.position = target;\n"
+  },
+  {
+   "call": "quit_instance"
+  },
+  {
+   "call": "launch",
+   "args": {
+    "cwd": "$dir",
+    "release": false
+   }
+  },
+  {
+   "call": "list_entities",
+   "args": {
+    "with": [
+     "Guard"
+    ]
+   },
+   "save": {
+    "guard": "/entities/0/entity"
+   }
+  },
+  {
+   "call": "subscribe_events",
+   "args": {
+    "types": [
+     "Reached"
+    ]
+   }
+  },
+  {
+   "call": "run_ticks",
+   "args": {
+    "ticks": 800
+   }
+  },
+  {
+   "call": "take_events"
+  },
+  {
+   "call": "get_entity",
+   "args": {
+    "entity": "$guard"
+   }
+  }
+ ]
+}

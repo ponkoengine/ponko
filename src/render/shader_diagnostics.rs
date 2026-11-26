@@ -5,6 +5,8 @@
 use crate::render::{ShaderDiagnostic, ShaderKind};
 use wgpu::naga;
 
+mod names;
+
 /// The line before the game's code in every composed shader.
 const GAME_MARKER: &str = "\n// ---- the game's ";
 /// The line after it.
@@ -91,17 +93,16 @@ pub(crate) fn diagnose(
     };
     let result = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), capabilities).validate(&module);
     if let Err(e) = result {
-        // The error, then what caused it, from the outside in.
-        let mut message = e.as_inner().to_string();
-        let mut source = std::error::Error::source(e.as_inner());
-        while let Some(cause) = source {
-            message.push_str(": ");
-            message.push_str(&cause.to_string());
-            source = cause.source();
-        }
+        // What is wrong, by the names in the source: naga's own text names
+        // IR handles (`Function [4]`, `Some([10])`) instead.
+        let names = names::Names::new(&module, composed, e.as_inner());
+        let message = names.message(e.as_inner());
         let spans: Vec<(std::ops::Range<usize>, String)> = e
             .spans()
-            .filter_map(|(span, label)| Some((span.to_range()?, label.clone())))
+            .filter_map(|(span, label)| {
+                let label = names.label(label).unwrap_or_else(|| label.clone());
+                Some((span.to_range()?, label))
+            })
             .collect();
         // Validation adds the narrowest span first and wraps it in wider
         // ones (the function, ...): point at the narrowest.
@@ -208,6 +209,269 @@ mod cook_rules {
              PONKO_UPDATE_COOK_SHADERS=1 cargo test --lib the_cooks_shader_rules_are_the_engines"
         );
     }
+
+    /// `ponko cook` words validation errors as the engine does: its copy
+    /// (`crates/ponko_cli/src/cook/shaders/names.rs`) is `shader_diagnostics/names.rs`.
+    #[test]
+    fn the_cooks_error_names_are_the_engines() {
+        let engine = include_str!("shader_diagnostics/names.rs");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/ponko_cli/src/cook/shaders/names.rs");
+        if std::env::var_os("PONKO_UPDATE_COOK_SHADERS").is_some() {
+            std::fs::write(&path, engine).unwrap();
+        }
+        assert!(
+            std::fs::read_to_string(&path).ok().as_deref() == Some(engine),
+            "ponko cook's copy of the shader error names is out of date: run \
+             PONKO_UPDATE_COOK_SHADERS=1 cargo test --lib the_cooks_error_names_are_the_engines"
+        );
+    }
+}
+
+/// Validation errors name types, functions and expressions as the source
+/// does, not by naga's IR handles (`Function [4]`, `Some([10])`).
+#[cfg(test)]
+mod names_in_messages {
+    use super::*;
+
+    /// The diagnostic of sprite shader `user` (the game's code).
+    fn sprite(user: &str) -> Box<ShaderDiagnostic> {
+        let composed = crate::sprite_material::compose_sprite_shader(user);
+        diagnose("glow.wgsl", ShaderKind::Sprite, "sprite", &composed).unwrap_err()
+    }
+
+    /// The diagnostic of a whole WGSL module (no engine code around it).
+    fn module(wgsl: &str) -> Box<ShaderDiagnostic> {
+        diagnose("m.wgsl", ShaderKind::Compute, "compute", wgsl).unwrap_err()
+    }
+
+    /// No IR handle is left anywhere in the diagnostic.
+    #[track_caller]
+    fn no_handles(d: &ShaderDiagnostic) {
+        let text = d.to_string();
+        assert!(!text.contains("naga::ir"), "{text}");
+        assert!(!text.contains("Some(["), "{text}");
+        // naga writes a handle as ` [4]`; code like `a[0]` has no space.
+        assert!(
+            !text.split(" [").skip(1).any(|s| s
+                .split(']')
+                .next()
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))),
+            "a handle like `[4]` is left: {text}"
+        );
+    }
+
+    #[test]
+    fn a_return_type_mismatch_names_both_types() {
+        let d = sprite(
+            "fn fragment(p: SpritePixel) -> vec4<f32> {\n    let glow = material.params[0].x;\n    return mix(p.color.rgb, vec3<f32>(1.0), glow);\n}",
+        );
+        assert_eq!(
+            d.message, "`fragment` returns `vec3<f32>` but is declared to return `vec4<f32>`",
+            "{d}"
+        );
+        assert_eq!((d.line, d.column, d.in_engine_code), (Some(3), Some(12), false), "{d}");
+        assert_eq!(
+            d.label, "`mix(p.color.rgb, vec3<f32>(1.0), glow)` is `vec3<f32>`",
+            "{d}"
+        );
+        assert_eq!(d.notes, ["in `fn fragment`"], "{d}");
+        assert!(
+            d.to_string().starts_with(
+                "glow.wgsl:3:12: error: `fragment` returns `vec3<f32>` but is declared to return `vec4<f32>`\n        return mix("
+            ),
+            "{d}"
+        );
+        no_handles(&d);
+    }
+
+    #[test]
+    fn a_struct_returned_for_a_vector_is_named() {
+        let d = sprite(
+            "struct Glow { amount: f32 }\nfn fragment(p: SpritePixel) -> vec4<f32> {\n    let g = Glow(1.0);\n    return g;\n}",
+        );
+        assert_eq!(
+            d.message, "`fragment` returns `Glow` but is declared to return `vec4<f32>`",
+            "{d}"
+        );
+        no_handles(&d);
+    }
+
+    #[test]
+    fn a_missing_return_value_says_so() {
+        let d = sprite(
+            "fn amount() -> f32 {\n}\nfn fragment(p: SpritePixel) -> vec4<f32> {\n    return p.color * amount();\n}",
+        );
+        assert_eq!(
+            d.message, "`amount` is declared to return `f32` but returns without a value",
+            "{d}"
+        );
+        assert_eq!(d.line, Some(1), "{d}");
+        assert_eq!(d.label, "in `fn amount`", "{d}");
+        no_handles(&d);
+    }
+
+    #[test]
+    fn an_argument_type_mismatch_names_the_parameter_and_both_types() {
+        let d = sprite(
+            "fn brighten(c: vec4<f32>, by: f32) -> vec4<f32> { return c * by; }\nfn fragment(p: SpritePixel) -> vec4<f32> {\n    return brighten(p.color.rgb, 2.0);\n}",
+        );
+        assert_eq!(
+            d.message, "argument 1 of `brighten` (`p.color.rgb`) is `vec3<f32>`, but its parameter `c` is `vec4<f32>`",
+            "{d}"
+        );
+        assert_eq!((d.line, d.column), (Some(3), Some(21)), "{d}");
+        no_handles(&d);
+    }
+
+    #[test]
+    fn a_wrong_argument_count_names_the_function() {
+        let d = sprite(
+            "fn brighten(c: vec4<f32>) -> vec4<f32> { return c * 2.0; }\nfn fragment(p: SpritePixel) -> vec4<f32> {\n    return brighten(p.color, 2.0);\n}",
+        );
+        assert_eq!(d.message, "`brighten` takes 1 argument, but the call gives 2", "{d}");
+        assert_eq!(d.line, Some(3), "{d}");
+        no_handles(&d);
+    }
+
+    #[test]
+    fn a_binary_operation_on_mismatched_vectors_names_both_sides() {
+        let d = sprite(
+            "fn fragment(p: SpritePixel) -> vec4<f32> {\n    let tinted = p.color.rgb * p.uv;\n    return p.color;\n}",
+        );
+        assert!(
+            d.message.starts_with(
+                "`*` can't combine `vec3<f32>` (`p.color.rgb`) and `vec2<f32>` (`p.uv`); the vectors' sizes differ"
+            ),
+            "{d}"
+        );
+        assert_eq!((d.line, d.column), (Some(2), Some(18)), "{d}");
+        // The operation has no type to show: the message says what is wrong.
+        assert_eq!(d.label, "", "{d}");
+        no_handles(&d);
+    }
+
+    #[test]
+    fn a_binary_operation_on_two_number_types_says_to_convert() {
+        let d = sprite(
+            "fn fragment(p: SpritePixel) -> vec4<f32> {\n    let steps: i32 = 4;\n    return p.color * steps;\n}",
+        );
+        assert!(
+            d.message
+                .starts_with("`*` can't combine `vec4<f32>` (`p.color`) and `i32` (`steps`); WGSL doesn't convert"),
+            "{d}"
+        );
+        assert!(d.message.contains("`f32(x)`"), "{d}");
+        no_handles(&d);
+    }
+
+    #[test]
+    fn an_assignment_of_the_wrong_type_names_the_variable() {
+        let d =
+            sprite("fn fragment(p: SpritePixel) -> vec4<f32> {\n    var c = p.color;\n    c = p.uv;\n    return c;\n}");
+        assert_eq!(
+            d.message, "can't assign `vec2<f32>` to `c`, which is `vec4<f32>`",
+            "{d}"
+        );
+        assert_eq!(d.line, Some(3), "{d}");
+        no_handles(&d);
+    }
+
+    #[test]
+    fn a_non_bool_condition_names_its_type() {
+        let d = sprite(
+            "fn fragment(p: SpritePixel) -> vec4<f32> {\n    if (p.uv.x) { return p.color; }\n    return p.color;\n}",
+        );
+        assert_eq!(
+            d.message, "an `if` condition must be `bool`, but `p.uv.x` is `f32`",
+            "{d}"
+        );
+        no_handles(&d);
+    }
+
+    #[test]
+    fn select_with_two_types_names_both() {
+        let d = sprite("fn fragment(p: SpritePixel) -> vec4<f32> {\n    return select(p.color, p.uv, true);\n}");
+        assert_eq!(
+            d.message,
+            "`select(f, t, condition)` needs `f` and `t` of one type, but `f` is `vec4<f32>` and `t` is `vec2<f32>`",
+            "{d}"
+        );
+        no_handles(&d);
+    }
+
+    #[test]
+    fn a_float_index_names_its_type() {
+        let d = sprite(
+            "fn fragment(p: SpritePixel) -> vec4<f32> {\n    let a = array<f32, 2>(1.0, 2.0);\n    return vec4<f32>(a[p.uv.x]);\n}",
+        );
+        assert_eq!(
+            d.message, "an index must be `i32` or `u32`, but `p.uv.x` is `f32`",
+            "{d}"
+        );
+        no_handles(&d);
+    }
+
+    #[test]
+    fn a_write_to_a_read_only_buffer_names_it() {
+        let d = module(
+            "@group(0) @binding(0) var<storage, read> cells: array<f32>;\n@compute @workgroup_size(1) fn main() {\n    cells[0] = 1.0;\n}",
+        );
+        assert_eq!(d.message, "`cells[0]` can't be written to: it is read-only", "{d}");
+        no_handles(&d);
+    }
+
+    #[test]
+    fn a_uniform_layout_error_names_the_variable_and_its_type() {
+        let d = module(
+            "struct Params { weights: array<f32, 4> }\n@group(0) @binding(0) var<uniform> params: Params;\n@compute @workgroup_size(1) fn main() { let w = params.weights[0]; }",
+        );
+        assert!(
+            d.message.starts_with("`params`: `array<f32, 4>` in its type `Params` breaks the uniform address space's layout rules: the array stride 4 is not a multiple of the required alignment 16"),
+            "{d}"
+        );
+        assert!(d.message.contains("array<vec4<f32>, N>"), "{d}");
+        assert_eq!(d.label, "`params`", "{d}");
+        no_handles(&d);
+    }
+
+    #[test]
+    fn a_binding_used_twice_names_the_variable() {
+        let d = module(
+            "@group(0) @binding(0) var<storage> a: array<f32>;\n@group(0) @binding(0) var<storage> b: array<f32>;\n@compute @workgroup_size(1) fn main() { let x = a[0] + b[0]; }",
+        );
+        assert_eq!(
+            d.message, "`b` uses the same @group/@binding as another resource of the @compute entry point `main`",
+            "{d}"
+        );
+        no_handles(&d);
+    }
+
+    #[test]
+    fn errors_without_a_message_of_their_own_keep_nagas_text_without_handles() {
+        // A float literal returned from a function with no return type: naga
+        // reports the abstract float, which has no message here.
+        let d = module("fn f() {\n    return 1.0;\n}\n@compute @workgroup_size(1) fn main() { f(); }");
+        assert_eq!(
+            d.message, "in `fn f`: Abstract types may only appear in constant expressions",
+            "{d}"
+        );
+        assert_eq!(d.label, "", "{d}");
+        assert_eq!(d.line, Some(2), "{d}");
+        no_handles(&d);
+    }
+
+    #[test]
+    fn handles_come_out_of_any_text() {
+        assert_eq!(
+            names::stripped("Call to [4] is invalid: Argument 0 value [2] doesn't match the type [0]"),
+            "Call to is invalid: Argument 0 value doesn't match the type"
+        );
+        assert_eq!(
+            names::stripped("The `return` expression Some([10]) does not match Some([5])"),
+            "The `return` expression does not match"
+        );
+        assert_eq!(names::stripped("member[2] offset [x] stays"), "member offset [x] stays");
+    }
 }
 
 #[cfg(all(test, feature = "3d"))]
@@ -247,13 +511,42 @@ mod tests {
     }
 
     #[test]
+    fn validation_errors_name_the_types_in_the_games_words() {
+        let user = "fn surface(s: Surface) -> Surface {\n    var out = s;\n    out.albedo = s.albedo * s.uv;\n    return out;\n}";
+        let d = diagnose("water.wgsl", ShaderKind::Material, "material", &compose_shader(user)).unwrap_err();
+        assert!(!d.in_engine_code, "{d}");
+        assert_eq!((d.line, d.column), (Some(3), Some(18)), "{d}");
+        assert!(
+            d.message
+                .starts_with("`*` can't combine `vec3<f32>` (`s.albedo`) and `vec2<f32>` (`s.uv`)"),
+            "{d}"
+        );
+        assert_eq!(d.notes, ["in `fn surface`"], "{d}");
+        let effect = "fn effect(p: Pixel) -> vec4<f32> {\n    return p.color.rgb;\n}";
+        let d = diagnose("fx.wgsl", ShaderKind::Effect, "effect", &compose_effect(effect)).unwrap_err();
+        assert_eq!(d.line, Some(2), "{d}");
+        assert_eq!(
+            d.message, "`effect` returns `vec3<f32>` but is declared to return `vec4<f32>`",
+            "{d}"
+        );
+    }
+
+    #[test]
     fn validator_errors_have_their_causes() {
         // Parses, but the validator rejects it: a function that never returns.
         let user = "fn helper() -> f32 {\n}\nfn surface(s: Surface) -> Surface { return s; }";
         let d = diagnose("v.wgsl", ShaderKind::Material, "material", &compose_shader(user)).unwrap_err();
-        assert!(!d.message.is_empty(), "{d}");
-        assert!(d.message.contains(": "), "the cause follows: {d}");
-        assert!(d.line.is_some(), "{d}");
+        assert_eq!(
+            d.message, "`helper` is declared to return `f32` but returns without a value",
+            "{d}"
+        );
+        assert_eq!(d.line, Some(1), "{d}");
+        // An error with no message of its own keeps the compiler's causes,
+        // from the outside in.
+        let user = "fn helper() {\n    return 1.0;\n}\nfn surface(s: Surface) -> Surface { helper(); return s; }";
+        let d = diagnose("v.wgsl", ShaderKind::Material, "material", &compose_shader(user)).unwrap_err();
+        assert!(d.message.starts_with("in `fn helper`: "), "the cause follows: {d}");
+        assert_eq!(d.line, Some(2), "{d}");
     }
 
     #[test]

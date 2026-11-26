@@ -127,7 +127,7 @@ Nothing is left out silently, and nothing unavailable is written as 0:
 | `PONKO_RENDER_MATCHED` | 0 | 1: draw only what the Bevy copies draw too (see below) |
 | `PONKO_RENDER_TAA` | 0 | 1: temporal antialiasing instead of the preset's, so motion vectors are drawn (no preset turns TAA on) |
 | `PONKO_RENDER_SHADOW_FILTER` | the preset's | The sun shadow filter instead of the preset's (and the scene's): 1 `Sharp`, 2 `Soft`, 3 `Softest`, 4 `ContactHardening` |
-| `PONKO_RENDER_SSR_THIN` | the preset's | 0 or 1: screen reflections' thin objects (`ssr_thin_objects`) off or on, whatever the preset says |
+| `PONKO_RENDER_SSR_THIN` | the preset's | 0 or 1: screen reflections' thin objects (`ssr_thin_objects`) off or on, whatever the preset says (only `ultra` turns it on) |
 | `PONKO_RENDER_WIND` | 0 | 1: `game-like`'s tree crowns sway in a material `vertex` function, and 4,096 cubes are placed from a GPU buffer of 262,144 elements that keeps its last frame (what motion vectors of `vertex` functions and buffers cost) |
 | `PONKO_RENDER_VERTEX_MOTION` | 1 | 0: the motion pass ignores what `vertex` functions do (the control for `PONKO_RENDER_WIND` with TAA) |
 | `PONKO_RENDER_VIEWS` | 1 | 2 or 4: split screen, the main camera and one or three views (`ctx.scene3d.views`), each circling the scene from its own side, drawn into their parts of the target as a game's window draws them. `minimap`: the main camera on the whole target and a quarter-sized view in its top right corner with bloom, ambient occlusion, contact shadows and screen-space reflections off and FXAA (`View3D::with_post`), as a game's minimap. Preparing and encoding interleave there, so `prepare` is 0 and `encode` holds both; `submit` is the copy into the target |
@@ -261,8 +261,10 @@ to 23 fewer a frame in every scene (`single-material` 565 → 545,
 recording the thin-object trace's two passes (barriers, the trackers its
 `finish` builds, one more compute pass); the engine's own code allocates
 one a timed frame (the `GpuTimer` callback, a boxed closure wgpu asks for)
-and nothing per model or pass. They go if `high` stops turning thin
-objects on. `a_steady_frame_stays_within_its_allocation_budget` (a GPU
+and nothing per model or pass. They went when `high` stopped turning thin
+objects on (2026-11-26: `single-material` 552 → 524, `game-like` 984 → 956;
+the baseline files below were recorded with it on and need recording again
+on a quiet machine). `a_steady_frame_stays_within_its_allocation_budget` (a GPU
 test, enforced on Metal) holds a steady frame's count to its budget, with
 the setting off as control, and `a_frame_allocates_no_more_for_more_models`
 holds a scene drawn with ten times the models to the same count.

@@ -147,6 +147,40 @@ fn the_mcp_proxy_serves_a_task_and_scores_submissions(root: &Path, instances: &P
     let second = submit(s, r);
     assert_eq!(second["solved"], true, "{second}");
 
+    // Every tool a task leans on is one of the server's.
+    for t in suite::TASKS {
+        for tool in t.leans_on {
+            assert!(
+                names.contains(tool) || suite::proxy::HIDDEN.contains(tool),
+                "{}: leans on `{tool}`, which isn't a tool",
+                t.id
+            );
+        }
+    }
+
+    // `--hide`: a poorer tool surface, for comparing runs.
+    let mut poorer = suite::proxy::Record::new(task, None, &dir);
+    poorer.hide(&["watch".to_string()]);
+    let p = &mut poorer;
+    let init = rpc(s, p, "initialize", json!({ "protocolVersion": "2025-06-18" }));
+    assert!(init["instructions"].as_str().unwrap().contains("`watch`"), "{init}");
+    let tools = rpc(s, p, "tools/list", json!({}));
+    assert!(
+        !tools["tools"].as_array().unwrap().iter().any(|t| t["name"] == "watch"),
+        "{tools}"
+    );
+    let refused = rpc(
+        s,
+        p,
+        "tools/call",
+        json!({ "name": "watch", "arguments": { "ticks": 1 } }),
+    );
+    assert_eq!(refused["isError"], true, "{refused}");
+    assert_eq!(
+        poorer.json()["hidden_tools"],
+        json!(["launch", "quit_instance", "watch"])
+    );
+
     let result = record.json();
     assert_eq!(
         (
@@ -177,6 +211,7 @@ fn tasks_are_well_formed() {
             task.id
         );
         assert!(!task.files.is_empty(), "{}: starts from no files", task.id);
+        assert!(!task.leans_on.is_empty(), "{}: says which tools it leans on", task.id);
         let names: std::collections::HashSet<_> = task.checks.iter().collect();
         assert_eq!(names.len(), task.checks.len(), "{}: two checks share a name", task.id);
         for control in task.controls() {

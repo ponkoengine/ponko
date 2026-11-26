@@ -41,6 +41,30 @@ fn a_broken_sprite_shader_says_where_and_why_in_its_own_lines() {
     });
 }
 
+#[test]
+fn a_type_error_names_the_types_not_compiler_handles() {
+    // Returns a `vec3<f32>` (what `mix` of two colors' rgb gives) from a
+    // hook declared to return `vec4<f32>`.
+    let glow = "fn fragment(p: SpritePixel) -> vec4<f32> {\n    let glow = material.params[0].x;\n    return mix(p.color.rgb, vec3<f32>(1.0), glow);\n}\n";
+    Game::new("t", 1, 1).run_headless(0, |ctx| {
+        let err = ctx.gfx.try_create_sprite_shader("glow.wgsl", glow).unwrap_err();
+        let d = &ctx.gfx.shader_status()[0].diagnostics[0];
+        assert_eq!(
+            d.message, "`fragment` returns `vec3<f32>` but is declared to return `vec4<f32>`",
+            "{d}"
+        );
+        assert_eq!((d.line, d.column), (Some(3), Some(12)), "{d}");
+        assert_eq!(
+            d.label, "`mix(p.color.rgb, vec3<f32>(1.0), glow)` is `vec3<f32>`",
+            "{d}"
+        );
+        assert_eq!(err.message(), d.to_string());
+        for handle in ["naga::ir", "Some([", "Function [", "Expression ["] {
+            assert!(!err.message().contains(handle), "{err}");
+        }
+    });
+}
+
 fn error_for(source: &str) -> String {
     let mut message = None;
     Game::new("t", 1, 1).run_headless(0, |ctx| {
