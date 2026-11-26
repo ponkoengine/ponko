@@ -290,9 +290,12 @@ mod at_once {
         }
     }
 
-    /// One at a time. Two at once already lost the device on a Radeon RX
-    /// Vega under Vulkan (`crowd_render_test`), and the suites spend most of
-    /// their time waiting for the GPU, so more buy little.
+    /// One at a time. On a Radeon RX Vega two at once already lost the
+    /// device under Vulkan (`crowd_render_test`), and four under Direct3D 12
+    /// (the whole render suite); one at a time lost it on neither. It costs
+    /// time where opening a device compiles shaders on the CPU: Direct3D 12
+    /// took twice as long on `regression_sequence_render_test` (356 s
+    /// against 184 s with four).
     pub(super) const DEFAULT_AT_ONCE: usize = 1;
 
     pub(super) fn limit() -> usize {

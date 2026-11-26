@@ -71,9 +71,11 @@ Tests that need no GPU run beside them on the runner's other threads. One
 device per test thread was too many for some drivers: on a Radeon RX Vega
 two at once already lost the device under Vulkan, and every test on it
 then failed with errors that looked like unrelated bugs (`BufferAsyncError`
-on readback, a buffer "is invalid", `DXGI_ERROR_DEVICE_REMOVED`). The
-default is one at a time; `PONKO_GPU_TESTS_AT_ONCE=<n>` allows more on a
-GPU that copes:
+on readback, a buffer "is invalid", `DXGI_ERROR_DEVICE_REMOVED`). Four at once
+lost it under Direct3D 12 on the same card. The default is one at a time;
+it is slower where each device compiles its shaders on the CPU (Direct3D 12
+took about twice as long), so `PONKO_GPU_TESTS_AT_ONCE=<n>` allows more on
+a GPU that copes:
 
 ```sh
 PONKO_GPU_TESTS_AT_ONCE=4 cargo test -p ponko --lib --features 3d render_test
