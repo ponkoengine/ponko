@@ -28,7 +28,7 @@ branch, on the same Mac (Apple M4 Max, macOS 27.2.1), debug builds, busy
 
 **Replay.** `cargo test -p ponko_mcp --test agent_suite`: passed, 11/11
 tasks solved, 36/36 checks, 50/50 negative controls caught, equal to the new
-baseline (108 s; the code task about 55 s of it, its engine build in
+baseline (108 s, and 125 s after merging `main`; the code task about 55 s of it, its engine build in
 `target/agent-suite` done before). Each new task's checker was also given
 a second, different correct fix, which it passed: a guard that carries the
 rest of its step round a corner, a prefab of 60 health with the spawner's
@@ -84,9 +84,9 @@ What each run used, and what it ran into:
   unknown ones with a hint.
 - Not changed: every tool call opens a new connection to the game, which
   accepts them every 20 ms, so a call takes about 45 ms here (840 calls in
-39 s). That doesn't slow
-  an agent, but a checker that reads a position every tick has to keep to
-  a few windows (`stuck-guard` reads 60 positions, not 400).
+  39 s). That doesn't slow an agent, but a checker that reads a position
+  every tick has to keep to a few windows (`stuck-guard` reads 60
+  positions, not 400).
 
 ## 2026-11-26: the agent acceptance suite, replayed and tried by a real agent (#528, section 7)
 
