@@ -7,6 +7,7 @@
 //! that record what they saw; the tests check afterwards.
 use ponko_ffi::*;
 use std::ffi::{CStr, c_void};
+use std::mem::offset_of;
 use std::ptr::{null, null_mut};
 
 use PonkoStatus::*;
@@ -108,21 +109,22 @@ fn defaults_match_the_abi_2_defaults() {
         };
         assert_eq!(m.desc, ponko_material_desc(white));
         assert!(!m.has_stencil);
-        // Version 2: lit, and every layer off.
+        // Version 3: lit, and every layer off.
         assert!(!m.unlit);
         let l = m.layers;
         assert_eq!((l.clearcoat, l.iridescence, l.anisotropy), (0.0, 0.0, 0.0));
         assert_eq!((l.specular, l.ior, l.iridescence_ior), (1.0, 1.5, 1.3));
         assert_eq!(l.iridescence_thickness, [100.0, 400.0]);
         assert!(!l.has_clearcoat_map && !l.has_anisotropy_map);
-        // A version 1 caller's smaller struct: its fields only.
-        let mut v1: PonkoMaterialDescEx = header(1);
-        v1.struct_size = std::mem::offset_of!(PonkoMaterialDescEx, unlit) as u32;
-        v1.unlit = true;
-        assert_eq!(ponko_material_desc_ex_defaults(&mut v1), PONKO_OK);
-        assert_eq!(v1.desc.roughness, 0.6);
-        assert!(v1.unlit, "fields past version 1 are not written");
+        // A version 2 caller's smaller struct: its fields only.
+        let mut v2: PonkoMaterialDescEx = header(2);
+        v2.struct_size = std::mem::offset_of!(PonkoMaterialDescEx, unlit) as u32;
+        v2.unlit = true;
+        assert_eq!(ponko_material_desc_ex_defaults(&mut v2), PONKO_OK);
+        assert_eq!(v2.desc.roughness, 0.6);
+        assert!(v2.unlit, "fields past version 2 are not written");
         assert_eq!(m.stencil, ponko_stencil_default());
+        assert!(!m.masked_tint);
 
         let mut s: PonkoNavBakeSettingsEx = header(PONKO_NAV_BAKE_SETTINGS_EX_VERSION);
         assert_eq!(ponko_nav_bake_settings_ex_defaults(&mut s), PONKO_OK);
@@ -234,7 +236,18 @@ unsafe extern "C" fn three_d(ctx: *mut PonkoCtx, user: *mut c_void) {
             ponko_ctx_create_material_ex(ctx, &d, null_mut()),
             PONKO_INVALID_ARGUMENT
         );
-        // Version 2: unlit, and layers (refused out of range).
+        // Version 2: the model's colour masked by the vertex colour's alpha.
+        // A version 1 descriptor (shorter) still makes a material.
+        d.has_stencil = false;
+        d.masked_tint = true;
+        let mut masked = PonkoMaterial::default();
+        expect!(seen, ponko_ctx_create_material_ex(ctx, &d, &mut masked), PONKO_OK);
+        expect!(seen, ponko_ctx_update_material_ex(ctx, masked, &d), PONKO_OK);
+        let mut v1 = d;
+        (v1.version, v1.struct_size) = (1, offset_of!(PonkoMaterialDescEx, masked_tint) as u32);
+        expect!(seen, ponko_ctx_create_material_ex(ctx, &v1, &mut masked), PONKO_OK);
+        d.masked_tint = false;
+        // Version 3: unlit, and layers (refused out of range).
         d.has_stencil = false;
         d.unlit = true;
         d.layers.clearcoat = 1.0;

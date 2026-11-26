@@ -1054,7 +1054,7 @@ pub unsafe extern "C" fn ponko_icon_defaults(size: u32, out_icon: *mut PonkoIcon
 /// framed to fill it, seen from `icon->from`, lit by the scene's sun and
 /// sky light only and tone mapped as the main view is, on
 /// `icon->background`; nothing of the game's world is in it and nothing is
-/// added to the world. It is drawn in the next two frames, then keeps the
+/// added to the world. It is drawn with the next frame, then keeps the
 /// picture. `parts` and `materials` (`count`
 /// pairs, as `ponko_ctx_set_model_part_materials` takes) draw chosen parts
 /// with other materials; `count` 0 draws the mesh's own. Fields newer than

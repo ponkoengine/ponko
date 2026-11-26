@@ -51,6 +51,12 @@ struct Render3DSettings {
 pub(crate) struct Renderer {
     window_surface: Option<WindowSurface>,
     lifecycle: super::surface_lifecycle::SurfaceLifecycle,
+    /// The surface changed (see [`surface_event`](Self::surface_event)):
+    /// the next 3D frame prepared makes its scene targets and history anew.
+    /// Not the frame being drawn, which was prepared before `render` heard
+    /// of the change.
+    #[cfg(feature = "3d")]
+    targets_stale: bool,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
@@ -407,6 +413,11 @@ impl Renderer {
     pub fn set_draw_hidden(&mut self, on: bool, always: bool) {
         self.draw_hidden = on || always;
         self.only_hidden = always;
+        // Never presenting from now on: hidden from the start, so the first
+        // frame drawn offscreen isn't a change of the surface's state.
+        if always {
+            self.surface_event(super::surface_lifecycle::SurfaceEvent::Occluded(true));
+        }
     }
 
     /// A view of the offscreen stand-in for the window, made at its size.
@@ -1096,6 +1107,8 @@ impl Renderer {
         Self {
             window_surface,
             lifecycle: Default::default(),
+            #[cfg(feature = "3d")]
+            targets_stale: false,
             device,
             queue,
             config,
@@ -1573,6 +1586,7 @@ impl Renderer {
     #[cfg(feature = "3d")]
     pub fn prepare_3d(&mut self, scene: &crate::three::Scene3D<'_>, collect_ms: f32) {
         let start = web_time::Instant::now();
+        self.drop_stale_targets();
         let size = (self.config.width, self.config.height);
         // A lookup table must be a strip of n squares of n x n.
         let lut = scene.post.lut.filter(|t| {
@@ -1606,6 +1620,7 @@ impl Renderer {
         collect_ms: f32,
     ) {
         let start = web_time::Instant::now();
+        self.drop_stale_targets();
         if !main.0.frame.debug_lines.is_empty() || main.0.frame.window_views.iter().any(|f| !f.debug_lines.is_empty()) {
             self.three(); // debug lines draw in the 3D frame, even without models
         }
@@ -2363,10 +2378,23 @@ impl Renderer {
 
     pub(crate) fn surface_event(&mut self, event: super::surface_lifecycle::SurfaceEvent) {
         if self.lifecycle.update(event) {
+            // `render` hears of it after the frame was prepared: dropping
+            // the targets now would leave that frame without a 3D picture.
             #[cfg(feature = "3d")]
-            if let Some(three) = &mut self.three {
-                three.invalidate_targets();
+            {
+                self.targets_stale = true;
             }
+        }
+    }
+
+    /// Before a 3D frame is prepared: the targets made before a change of
+    /// the surface are dropped (see `targets_stale`).
+    #[cfg(feature = "3d")]
+    fn drop_stale_targets(&mut self) {
+        if std::mem::take(&mut self.targets_stale)
+            && let Some(three) = &mut self.three
+        {
+            three.invalidate_targets();
         }
     }
 

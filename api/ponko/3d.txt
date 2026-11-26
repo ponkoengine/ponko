@@ -2121,6 +2121,8 @@ pub const ponko::color::Color::TRANSPARENT: ponko::color::Color
 pub const ponko::color::Color::WHITE: ponko::color::Color
 pub const ponko::color::Color::YELLOW: ponko::color::Color
 pub const fn ponko::color::Color::hex(u32) -> ponko::color::Color
+pub const fn ponko::color::Color::hex_rgba(u32) -> ponko::color::Color
+pub fn ponko::color::Color::lerp(self, ponko::color::Color, f32) -> ponko::color::Color
 pub const fn ponko::color::Color::rgb(f32, f32, f32) -> ponko::color::Color
 pub const fn ponko::color::Color::rgba(f32, f32, f32, f32) -> ponko::color::Color
 pub const fn ponko::color::Color::with_alpha(self, f32) -> ponko::color::Color
@@ -2136,6 +2138,9 @@ impl core::fmt::Debug for ponko::color::Color
 pub fn ponko::color::Color::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::color::Color
 impl core::marker::StructuralPartialEq for ponko::color::Color
+impl core::str::traits::FromStr for ponko::color::Color
+pub type ponko::color::Color::Err = ponko::error::Error
+pub fn ponko::color::Color::from_str(&str) -> core::result::Result<ponko::color::Color, ponko::error::Error>
 impl serde_core::ser::Serialize for ponko::color::Color
 pub fn ponko::color::Color::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for ponko::color::Color
@@ -4266,6 +4271,9 @@ impl ponko::gfx::Graphics
 pub fn ponko::gfx::Graphics::shader_status(&self) -> &[ponko::render::ShaderStatus]
 impl ponko::gfx::Graphics
 pub fn ponko::gfx::Graphics::stream_mesh(&mut self, &str) -> core::option::Option<ponko::render::Mesh>
+impl ponko::gfx::Graphics
+pub fn ponko::gfx::Graphics::try_load_environment(&self, &str) -> core::result::Result<ponko::render::EnvironmentMap, ponko::error::Error>
+pub fn ponko::gfx::Graphics::try_load_environment_cube(&self, [&str; 6]) -> core::result::Result<ponko::render::EnvironmentMap, ponko::error::Error>
 pub mod ponko::handle
 #[non_exhaustive] pub struct ponko::handle::LiveCounts
 pub ponko::handle::LiveCounts::collision_meshes: usize
@@ -9502,6 +9510,8 @@ pub const ponko::color::Color::TRANSPARENT: ponko::color::Color
 pub const ponko::color::Color::WHITE: ponko::color::Color
 pub const ponko::color::Color::YELLOW: ponko::color::Color
 pub const fn ponko::color::Color::hex(u32) -> ponko::color::Color
+pub const fn ponko::color::Color::hex_rgba(u32) -> ponko::color::Color
+pub fn ponko::color::Color::lerp(self, ponko::color::Color, f32) -> ponko::color::Color
 pub const fn ponko::color::Color::rgb(f32, f32, f32) -> ponko::color::Color
 pub const fn ponko::color::Color::rgba(f32, f32, f32, f32) -> ponko::color::Color
 pub const fn ponko::color::Color::with_alpha(self, f32) -> ponko::color::Color
@@ -9517,6 +9527,9 @@ impl core::fmt::Debug for ponko::color::Color
 pub fn ponko::color::Color::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::color::Color
 impl core::marker::StructuralPartialEq for ponko::color::Color
+impl core::str::traits::FromStr for ponko::color::Color
+pub type ponko::color::Color::Err = ponko::error::Error
+pub fn ponko::color::Color::from_str(&str) -> core::result::Result<ponko::color::Color, ponko::error::Error>
 impl serde_core::ser::Serialize for ponko::color::Color
 pub fn ponko::color::Color::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for ponko::color::Color
@@ -11119,6 +11132,7 @@ impl core::marker::StructuralPartialEq for ponko::render::StencilOp
 #[non_exhaustive] #[repr(u32)] pub enum ponko::render::Tonemap
 pub ponko::render::Tonemap::Aces = 0
 pub ponko::render::Tonemap::AgX = 1
+pub ponko::render::Tonemap::HuePreserving = 4
 pub ponko::render::Tonemap::Neutral = 2
 pub ponko::render::Tonemap::None = 3
 impl core::clone::Clone for ponko::render::Tonemap
@@ -11457,6 +11471,13 @@ impl core::marker::StructuralPartialEq for ponko::render::Effect
 impl ponko::handle::GfxHandle for ponko::render::Effect
 impl ponko::handle::Handle for ponko::render::Effect
 pub const ponko::render::Effect::NONE: Self
+pub struct ponko::render::EnvironmentMap(_)
+impl ponko::render::EnvironmentMap
+pub fn ponko::render::EnvironmentMap::studio() -> Self
+impl core::clone::Clone for ponko::render::EnvironmentMap
+pub fn ponko::render::EnvironmentMap::clone(&self) -> Self
+impl core::fmt::Debug for ponko::render::EnvironmentMap
+pub fn ponko::render::EnvironmentMap::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct ponko::render::GlobalIllumination
 pub ponko::render::GlobalIllumination::enabled: bool
 pub ponko::render::GlobalIllumination::extent: glam::f32::vec3::Vec3
@@ -11981,6 +12002,7 @@ pub ponko::render::MaterialDesc::double_sided: bool
 pub ponko::render::MaterialDesc::emissive: ponko::color::Color
 pub ponko::render::MaterialDesc::emissive_map: core::option::Option<ponko::texture::Texture>
 pub ponko::render::MaterialDesc::layers: ponko::render::MaterialLayers
+pub ponko::render::MaterialDesc::masked_tint: bool
 pub ponko::render::MaterialDesc::metallic: f32
 pub ponko::render::MaterialDesc::normal_map: core::option::Option<ponko::texture::Texture>
 pub ponko::render::MaterialDesc::normal_strength: f32
@@ -12001,6 +12023,7 @@ pub fn ponko::render::MaterialDesc::with_double_sided(self, bool) -> Self
 pub fn ponko::render::MaterialDesc::with_emissive(self, ponko::color::Color) -> Self
 pub fn ponko::render::MaterialDesc::with_emissive_map(self, impl core::convert::Into<core::option::Option<ponko::texture::Texture>>) -> Self
 pub fn ponko::render::MaterialDesc::with_layers(self, ponko::render::MaterialLayers) -> Self
+pub fn ponko::render::MaterialDesc::with_masked_tint(self, bool) -> Self
 pub fn ponko::render::MaterialDesc::with_metallic(self, f32) -> Self
 pub fn ponko::render::MaterialDesc::with_normal_map(self, impl core::convert::Into<core::option::Option<ponko::texture::Texture>>) -> Self
 pub fn ponko::render::MaterialDesc::with_normal_strength(self, f32) -> Self
@@ -12170,6 +12193,7 @@ pub ponko::render::ModelLight::name: alloc::string::String
 pub ponko::render::ModelLight::transform: ponko::d3::Transform
 impl ponko::render::ModelLight
 pub const ponko::render::ModelLight::CANDELA_PER_UNIT: f32
+pub fn ponko::render::ModelLight::place_exposed(&self, &mut ponko_ecs::world::World, &mut ponko::render::Lighting, &ponko::d3::Transform, f32) -> core::option::Option<ponko_ecs::entity::Entity>
 pub fn ponko::render::ModelLight::placed(&self, &ponko::d3::Transform) -> ponko::d3::Transform
 pub fn ponko::render::ModelLight::spawn(&self, &mut ponko_ecs::world::World, &ponko::d3::Transform) -> core::option::Option<ponko_ecs::entity::Entity>
 impl core::clone::Clone for ponko::render::ModelLight
@@ -12446,6 +12470,7 @@ impl ponko::handle::Handle for ponko::render::RenderTarget
 pub const ponko::render::RenderTarget::NONE: Self
 pub struct ponko::render::SceneSettings
 pub ponko::render::SceneSettings::camera: ponko::d3::Camera
+pub ponko::render::SceneSettings::environment: core::option::Option<ponko::render::EnvironmentMap>
 pub ponko::render::SceneSettings::lighting: ponko::render::Lighting
 pub ponko::render::SceneSettings::lod: ponko::render::LodSettings
 pub ponko::render::SceneSettings::passes: ponko::render::RenderPasses
@@ -12455,6 +12480,7 @@ pub ponko::render::SceneSettings::view_model: core::option::Option<ponko::d3::Vi
 pub ponko::render::SceneSettings::views: alloc::vec::Vec<ponko::d3::View>
 impl ponko::render::SceneSettings
 pub fn ponko::render::SceneSettings::camera_at(&self, glam::f32::vec2::Vec2) -> &ponko::d3::Camera
+pub fn ponko::render::SceneSettings::light_gltf(&mut self, &mut ponko_ecs::world::World, &[ponko::render::ModelLight], &ponko::d3::Transform, f32) -> alloc::vec::Vec<ponko_ecs::entity::Entity>
 impl ponko::render::SceneSettings
 pub fn ponko::render::SceneSettings::clamp_quality(&mut self)
 pub fn ponko::render::SceneSettings::fit_quality_to(&mut self, &ponko::render::GpuCapabilities)

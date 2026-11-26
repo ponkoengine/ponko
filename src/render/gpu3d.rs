@@ -103,6 +103,9 @@ pub use scene_bench::{SceneBench, SceneFrame, SceneKind, SceneSetup};
 #[cfg(test)]
 mod cook_shader_parts_test;
 mod resources;
+/// The bytes of one mesh corner on the GPU, for cost reports.
+#[cfg(test)]
+pub(crate) const VERTEX_SIZE: usize = size_of::<resources::Vertex>();
 mod screen_space;
 mod shader_checks;
 mod shaders;
@@ -209,6 +212,40 @@ pub(crate) fn multisamples(adapter: &wgpu::Adapter, samples: u32) -> bool {
 /// glow's browser binding panics on it). The 3D frame then uses one sample.
 pub(crate) fn browser_gl_has_no_multisampled_textures(backend: wgpu::Backend) -> bool {
     cfg!(target_arch = "wasm32") && backend == wgpu::Backend::Gl
+}
+
+/// The layers to make a texture with that is read through a `D2Array` view
+/// (the sun's shadow cascades, the 1x1 stand-ins of arrays). wgpu's GL
+/// backend (WebGL2, `gl`) makes a one-layer 2D texture an ordinary
+/// `TEXTURE_2D`, which a shader's array sampler can't read: WebGL2 refuses
+/// every draw that binds it ("Mismatch between texture format and sampler
+/// type"), so a scene without shadows drew nothing. There such an array gets
+/// a second layer that nothing reads, as `stored_layers` in `gpu.rs` does
+/// for texture arrays made from data. (A sun with one shadow cascade so
+/// costs a second, unused map on GL; every preset has two or more.)
+pub(super) fn array_layers(backend: wgpu::Backend, layers: u32) -> u32 {
+    if backend == wgpu::Backend::Gl {
+        layers.max(2)
+    } else {
+        layers
+    }
+}
+
+#[cfg(test)]
+mod array_layer_tests {
+    use super::array_layers;
+
+    #[test]
+    fn one_layer_arrays_get_a_second_layer_on_gl_only() {
+        assert_eq!(array_layers(wgpu::Backend::Gl, 1), 2);
+        assert_eq!(
+            array_layers(wgpu::Backend::Gl, 4),
+            4,
+            "more than one layer is an array already"
+        );
+        assert_eq!(array_layers(wgpu::Backend::Metal, 1), 1);
+        assert_eq!(array_layers(wgpu::Backend::Vulkan, 1), 1);
+    }
 }
 
 #[path = "skinning.rs"]
@@ -749,7 +786,7 @@ impl Renderer3D {
             size: wgpu::Extent3d {
                 width: 1,
                 height: 1,
-                depth_or_array_layers: 1,
+                depth_or_array_layers: array_layers(device.adapter_info().backend, 1),
             },
             mip_level_count: 1,
             sample_count: 1,
@@ -882,7 +919,11 @@ impl Renderer3D {
                     size: wgpu::Extent3d {
                         width: 1,
                         height: 1,
-                        depth_or_array_layers: 1,
+                        depth_or_array_layers: if layers == wgpu::TextureViewDimension::D2Array {
+                            array_layers(device.adapter_info().backend, 1)
+                        } else {
+                            1
+                        },
                     },
                     mip_level_count: 1,
                     sample_count: 1,

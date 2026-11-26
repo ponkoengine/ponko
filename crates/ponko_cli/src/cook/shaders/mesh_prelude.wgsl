@@ -75,9 +75,9 @@ struct Frame {
 
 struct MaterialData {
     color: vec4<f32>,      // linear RGBA
-    emissive: vec4<f32>,   // linear RGB
+    emissive: vec4<f32>,   // linear RGB; w: unlit (1)
     params: vec4<f32>,     // roughness, metallic, normal map strength
-    maps: vec4<u32>,       // has: normal map, ORM map, emissive map; w: unlit
+    maps: vec4<u32>,       // has: normal map, ORM map, emissive map; w: masked tint
     custom: array<vec4<f32>, 4>,
     // Layers over the surface (see material_layers.wgsl): which are on,
     // where their maps are, and their values. Read only where they're on.
@@ -451,16 +451,19 @@ fn punctual_light(s: Surface) -> vec3<f32> {
         if d2 >= pr.w * pr.w { continue; }
         let l = delta / max(sqrt(d2), 1e-6);
         let cone = textureLoad(punctual_records, vec2<i32>(2, id), 0);
+        let shadow_info = textureLoad(punctual_records, vec2<i32>(3, id), 0);
+        let physical = shadow_info.w != 0.0;
         var attenuation = 1.0;
         if cone.w > -1.0 {
-            let inner = textureLoad(punctual_records, vec2<i32>(3, id), 0).x;
+            let inner = shadow_info.x;
             let angle = dot(-l, cone.xyz);
             // A zero-width transition is an explicit hard cone.
-            attenuation = select(smoothstep(cone.w, max(inner, cone.w + 1e-6), angle), select(0.0, 1.0, angle >= cone.w), inner == cone.w);
+            let ramp = clamp((angle - cone.w) / max(inner - cone.w, 1e-6), 0.0, 1.0);
+            let falloff = select(smoothstep(cone.w, max(inner, cone.w + 1e-6), angle), ramp * ramp, physical);
+            attenuation = select(falloff, select(0.0, 1.0, angle >= cone.w), inner == cone.w);
         }
         let window = max(1.0 - (d2 / (pr.w * pr.w)) * (d2 / (pr.w * pr.w)), 0.0);
-        attenuation *= window * window / max(d2, 1.0);
-        let shadow_info = textureLoad(punctual_records, vec2<i32>(3, id), 0);
+        attenuation *= select(window * window / max(d2, 1.0), window / max(d2, 1e-4), physical);
         if shadow_info.y >= 0.0 && attenuation > 0.0 {
             attenuation *= punctual_shadow(i32(shadow_info.y), shadow_info.z, pr.xyz, s.world, s.normal, cone.w <= -1.0);
         }

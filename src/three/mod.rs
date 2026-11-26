@@ -50,6 +50,7 @@ mod clip;
 mod collect;
 mod compute;
 mod effect;
+mod environment_map;
 #[cfg(any(test, feature = "bench-internals"))]
 mod extraction_bench;
 #[cfg(any(test, feature = "bench-internals"))]
@@ -131,7 +132,7 @@ mod sky_kit;
 mod sky_shader;
 mod target;
 pub use icon::Icon;
-pub(crate) use icon::{ICON_FRAMES, PendingIcon};
+pub(crate) use icon::PendingIcon;
 mod terrain;
 pub(crate) mod terrain_file;
 pub use far_terrain::FarTerrain;
@@ -156,6 +157,7 @@ pub(crate) use collect::{
 pub(crate) use collect::{Frame3D, MAX_SHADOW_RESOLUTION, MIN_SHADOW_RESOLUTION, SHADOW_MAP_SIZE};
 pub use compute::{Compute, ComputePass, GpuBuffer};
 pub use effect::{Effect, ScreenEffect, TargetEffect};
+pub use environment_map::EnvironmentMap;
 pub use gltf_ext::{ModelCamera, ModelLight, ModelLightKind, ModelProjection};
 pub use gltf_props::{NodeBody, NodeCollider, NodeProperties, gltf_properties_schema};
 #[cfg(all(test, feature = "editor"))]
@@ -530,6 +532,14 @@ pub struct MaterialDesc {
     /// Stencil test and writes; `None` (the default) is none. See
     /// [`Stencil`] for when they happen and the drawing order they keep.
     pub stencil: Option<Stencil>,
+    /// The model's colour ([`Model::color`]) tints only part of the mesh:
+    /// as far as each corner's vertex colour alpha says, 1 tinted, 0 not
+    /// (the shirt of a character, the paint of a car), so one material
+    /// and one mesh take a colour per model. The vertex colour's alpha is
+    /// then that mask, not opacity; the model colour's alpha still fades
+    /// the whole model, and the vertex colour's red, green and blue still
+    /// multiply everywhere. Default false: the model's colour tints it all.
+    pub masked_tint: bool,
     /// Drawn without lighting: its color (times the texture and the vertex
     /// colors) plus `emissive`, as glTF's `KHR_materials_unlit` has it.
     /// Default false. Costs less than a lit material.
@@ -559,6 +569,7 @@ impl Default for MaterialDesc {
             custom_textures: [None; 2],
             custom_arrays: [None; 3],
             stencil: None,
+            masked_tint: false,
             unlit: false,
             layers: MaterialLayers::NONE,
         }
@@ -614,6 +625,9 @@ impl MaterialDesc {
         custom_arrays: [Option<TextureArray>; 3] => with_custom_arrays;
         /// Sets [`stencil`](Self::stencil), the stencil test and writes.
         stencil: Option<Stencil> => with_stencil;
+        /// Sets [`masked_tint`](Self::masked_tint): the model's colour
+        /// tints only where the vertex colour's alpha is 1.
+        masked_tint: bool => with_masked_tint;
         /// Sets [`unlit`](Self::unlit): drawn without lighting.
         unlit: bool => with_unlit;
         /// Sets [`layers`](Self::layers): clear coat, sheen, specular, anisotropy, iridescence.
@@ -1864,7 +1878,9 @@ mod c_api_mirror {
             custom_arrays: _,
             // C: `ponko_ctx_create_material_with_stencil` and `ponko_ctx_update_material_with_stencil`.
             stencil: _,
-            // C: `PonkoMaterialDescEx` version 2, `unlit` and `layers`
+            // C: `PonkoMaterialDescEx.masked_tint` (version 2).
+            masked_tint: _,
+            // C: `PonkoMaterialDescEx` version 3, `unlit` and `layers`
             // (`PonkoMaterialLayers`, field for field).
             unlit: _,
             layers: _,

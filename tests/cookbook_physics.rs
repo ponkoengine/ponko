@@ -333,3 +333,158 @@ fn the_platformer_player_runs_jumps_from_the_ground_only_and_lands() {
     );
     assert!((heights[149] - resting_y).abs() < 1.0, "and it landed again");
 }
+
+// ANCHOR: forgiving_jump
+const COYOTE_SECS: f32 = 0.1; // a jump still works this long after running off a ledge
+const JUMP_BUFFER_SECS: f32 = 0.12; // a press this long before landing is remembered
+const JUMP_SPEED: f32 = 450.0;
+
+/// The seconds left in each window, on the player.
+#[derive(Component, Default)]
+struct JumpWindows {
+    coyote: f32, // full while standing on something, then runs down
+    buffer: f32, // full when jump is pressed, then runs down
+}
+
+/// Replaces `platformer_controls`: the same walk, and a jump with a grace window on each side.
+fn forgiving_controls(ctx: &mut Ctx) {
+    let dt = ctx.time.dt();
+    let Move(movement) = *ctx.world.resource::<Move>();
+    let run = ctx.input.action_axis2(movement).x;
+    let pressed = ctx.input.key_pressed(Key::Space);
+    ctx.world
+        .query::<(Entity, &Player, &Transform, &mut Velocity, &mut JumpWindows)>()
+        .for_each(|(me, _, t, v, w)| {
+            v.linear.x = run * 200.0;
+            let feet = t.position + vec2(0.0, 10.0);
+            let grounded = ctx
+                .physics
+                .cast_ray(feet, Vec2::Y, 4.0, QueryFilter::default().exclude(me))
+                .is_some();
+            // Standing refills the coyote window (not while rising from a jump);
+            // a press refills the buffer. Both run down with time.
+            let rising = v.linear.y < -1.0;
+            w.coyote = if grounded && !rising {
+                COYOTE_SECS
+            } else {
+                (w.coyote - dt).max(0.0)
+            };
+            w.buffer = if pressed {
+                JUMP_BUFFER_SECS
+            } else {
+                (w.buffer - dt).max(0.0)
+            };
+            // Jump when both are open, and use them up so one press is one jump.
+            if w.coyote > 0.0 && w.buffer > 0.0 {
+                v.linear.y = -JUMP_SPEED;
+                w.coyote = 0.0;
+                w.buffer = 0.0;
+            }
+        });
+}
+// ANCHOR_END: forgiving_jump
+
+/// What a run of the forgiving player did, tick by tick.
+#[derive(Default)]
+struct Frames {
+    standing: Vec<bool>, // the coyote window was refilled this tick
+    jumped_at: Vec<u64>, // ticks on which the jump fired
+}
+
+/// Runs the forgiving player (a ledge it can walk off, or a drop onto a wide floor) with `keys`.
+fn run_forgiving(ledge: bool, keys: InputScenario, ticks: u64) -> Frames {
+    let mut world = Game::new("forgiving", 640, 480)
+        .physics(vec2(0.0, 900.0))
+        .setup(move |ctx| {
+            bind_move(ctx);
+            ctx.world.insert_resource(Frames::default());
+            // Top at y = 290. The ledge ends at x = 300; the floor does not.
+            let (center, width) = if ledge { (0.0, 600.0) } else { (300.0, 2000.0) };
+            ctx.world.spawn((
+                Transform::at(vec2(center, 300.0)),
+                RigidBody::fixed(),
+                Collider::rect(vec2(width, 20.0)),
+            ));
+            let start = if ledge { vec2(100.0, 270.0) } else { vec2(100.0, 100.0) };
+            ctx.world.spawn((
+                Player,
+                Transform::at(start),
+                RigidBody {
+                    lock_rotation: true,
+                    ..RigidBody::dynamic()
+                },
+                Collider::rect(vec2(16.0, 20.0)),
+                Velocity::default(),
+                JumpWindows::default(),
+            ));
+        })
+        .add(Phase::BeforePhysics, forgiving_controls)
+        .add(Phase::BeforePhysics, |ctx: &mut Ctx| {
+            let tick = ctx.time.sim_tick();
+            let mut now = (false, false);
+            ctx.world.query::<(&JumpWindows, &Velocity)>().for_each(|(w, v)| {
+                now = (w.coyote == COYOTE_SECS, v.linear.y == -JUMP_SPEED);
+            });
+            let frames = ctx.world.resource_mut::<Frames>();
+            frames.standing.push(now.0);
+            if now.1 {
+                frames.jumped_at.push(tick);
+            }
+        })
+        .input_scenario(keys)
+        .run_headless(ticks);
+    std::mem::take(world.resource_mut::<Frames>())
+}
+
+fn press(keys: InputScenario, tick: u64) -> InputScenario {
+    keys.at(tick, InputEvent::Key(Key::Space, true))
+        .at(tick + 1, InputEvent::Key(Key::Space, false))
+}
+
+#[test]
+fn a_jump_pressed_shortly_after_leaving_a_ledge_works_and_a_late_one_does_not() {
+    let walk = || hold(InputScenario::new(), Key::D, 10, 200); // off the ledge's end
+    let base = run_forgiving(true, walk(), 120);
+    assert!(base.jumped_at.is_empty(), "no press, no jump");
+    // The first tick the player is no longer standing, after having stood.
+    let left = base.standing.iter().rposition(|&s| s).expect("it stood on the ledge") as u64 + 1;
+    assert!(left > 60, "it walked to the end of the ledge first: tick {left}");
+    let step = 1.0 / 60.0;
+    let early = left + (0.05 / step) as u64; // 0.05 s after leaving
+    let late = left + (0.3 / step) as u64; // 0.3 s after leaving
+    assert_eq!(
+        run_forgiving(true, press(walk(), early), 120).jumped_at,
+        [early],
+        "0.05 s after the ledge it still jumps, on the press"
+    );
+    assert!(
+        run_forgiving(true, press(walk(), late), 120).jumped_at.is_empty(),
+        "0.3 s after the ledge it is too late"
+    );
+}
+
+#[test]
+fn a_jump_pressed_shortly_before_landing_fires_on_landing_and_an_early_one_is_forgotten() {
+    let base = run_forgiving(false, InputScenario::new(), 80);
+    assert!(base.jumped_at.is_empty(), "no press, no jump");
+    let landed = base.standing.iter().position(|&s| s).expect("it landed") as u64;
+    assert!(landed > 20, "it fell for a while first: tick {landed}");
+    assert_eq!(
+        run_forgiving(false, press(InputScenario::new(), landed - 3), 80).jumped_at,
+        [landed],
+        "pressed 0.05 s before landing: the jump fires on the landing tick"
+    );
+    assert!(
+        run_forgiving(false, press(InputScenario::new(), landed - 12), 80)
+            .jumped_at
+            .is_empty(),
+        "pressed 0.2 s before landing: the buffer ran out"
+    );
+}
+
+#[test]
+fn one_press_is_one_jump_even_inside_both_windows() {
+    // Standing on the floor, one press: the jump fires once, not again in the air.
+    let frames = run_forgiving(false, press(InputScenario::new(), 50), 90);
+    assert_eq!(frames.jumped_at.len(), 1, "{:?}", frames.jumped_at);
+}

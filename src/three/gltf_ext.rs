@@ -1144,6 +1144,23 @@ pub(super) fn visible(json: &Value, node: usize) -> bool {
 /// intensity over distance squared falls to this.
 const UNLIMITED_RANGE_CUTOFF: f32 = 0.01;
 
+/// Where a local light of `intensity` with no range in its file stops.
+fn unlimited_range(intensity: f32) -> f32 {
+    (intensity / UNLIMITED_RANGE_CUTOFF).sqrt()
+}
+
+/// The range of a local light of `intensity` (engine units) placed with
+/// [`ModelLight::place_exposed`]'s `scale`. A range the file gave stays.
+/// One the loader derived (the file gave none) grows to where the exposed
+/// light falls to the same cutoff, never below the loaded one.
+fn exposed_range(range: f32, intensity: f32, scale: f32) -> f32 {
+    if range.to_bits() == unlimited_range(intensity).to_bits() {
+        range.max(unlimited_range(intensity * scale))
+    } else {
+        range
+    }
+}
+
 /// What a glTF file's light is.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ModelLightKind {
@@ -1156,7 +1173,7 @@ pub enum ModelLightKind {
     Sun {
         /// sRGB color.
         color: Color,
-        /// Intensity in lux, which is what [`Lighting::sun_intensity`](crate::render::Lighting::sun_intensity) means.
+        /// Illuminance in lux, before exposure.
         intensity: f32,
     },
 }
@@ -1196,8 +1213,62 @@ pub struct ModelLight {
 impl ModelLight {
     /// The luminous efficacy Blender's glTF exporter uses (683 lm/W): a
     /// point or spot light of `I` candela in a file is `I / 683` in ponko's
-    /// units, in which the sun's intensity is the file's lux as it is.
+    /// units on the legacy [`spawn`](Self::spawn) path. The directional
+    /// light's intensity is stored in lux.
     pub const CANDELA_PER_UNIT: f32 = 683.0;
+
+    /// Places this light at `model` with a camera exposure (EV100).
+    ///
+    /// Multiplies lux and candela by `1 / (1.2 * 2^ev100)` before shading.
+    /// One stop higher halves the light. The model uses metres, so one
+    /// candela at one metre gives the same incident light as one lux.
+    /// Local lights use inverse-square falloff (softened inside 1 cm)
+    /// and fade toward their loaded range. A light the file gives no
+    /// range reaches at least until its exposed light has faded to the
+    /// same small cutoff [`load_lights`](crate::gfx::Graphics::load_lights)
+    /// uses, so a low EV100 doesn't cut it short. The directional light
+    /// replaces the scene sun and returns `None`. Point and spot lights
+    /// spawn entities and return their handles.
+    ///
+    /// Exposure is baked into the light's intensity when placed. Use the
+    /// same EV100 for all imported lights in a scene. For a camera-wide
+    /// brightness adjustment after placement, use [`Post::exposure`](crate::render::Post::exposure).
+    /// A non-finite EV100 uses 0, and finite values are limited to ±32.
+    pub fn place_exposed(
+        &self,
+        world: &mut ponko_ecs::World,
+        lighting: &mut super::Lighting,
+        model: &Transform3D,
+        ev100: f32,
+    ) -> Option<ponko_ecs::Entity> {
+        let ev100 = if ev100.is_finite() {
+            ev100.clamp(-32.0, 32.0)
+        } else {
+            0.0
+        };
+        let exposure = (-ev100).exp2() / 1.2;
+        let at = self.placed(model);
+        let local_scale = Self::CANDELA_PER_UNIT * exposure;
+        use super::lights::PhotometricLight;
+        match self.kind {
+            ModelLightKind::Sun { color, intensity } => {
+                lighting.sun_direction = at.forward();
+                lighting.sun_color = color;
+                lighting.sun_intensity = intensity * exposure;
+                None
+            }
+            ModelLightKind::Point(mut light) => {
+                light.range = exposed_range(light.range, light.intensity, local_scale);
+                light.intensity *= local_scale;
+                Some(world.spawn((at, light, PhotometricLight)))
+            }
+            ModelLightKind::Spot(mut light) => {
+                light.range = exposed_range(light.range, light.intensity, local_scale);
+                light.intensity *= local_scale;
+                Some(world.spawn((at, light, PhotometricLight)))
+            }
+        }
+    }
 
     /// Where it is in the world, for a model at `model`.
     #[must_use]
@@ -1334,7 +1405,7 @@ pub(super) fn light_of(json: &Value, node: usize, world: Mat4, node_name: Option
         .as_f64()
         .map(|r| r as f32)
         .filter(|r| *r > 0.0)
-        .unwrap_or_else(|| (units / UNLIMITED_RANGE_CUTOFF).sqrt());
+        .unwrap_or_else(|| unlimited_range(units));
     let kind = match light["type"].as_str()? {
         "directional" => ModelLightKind::Sun { color, intensity },
         "point" => ModelLightKind::Point(PointLight3D {
@@ -2261,6 +2332,38 @@ mod tests {
                 intensity: 3.0
             }
         );
+    }
+
+    #[test]
+    fn exposed_lights_without_a_range_reach_until_their_exposed_light_fades() {
+        let mut file = File::default();
+        let loaded = load_str("lit.gltf", &lit(&mut file)).unwrap();
+        let mut world = ponko_ecs::World::new();
+        let mut lighting = super::super::Lighting::default();
+        let at = Transform3D::default();
+        let placed_range = |world: &mut ponko_ecs::World, lighting: &mut super::super::Lighting, name: &str, ev100| {
+            let light = loaded.lights.iter().find(|l| l.name == name).unwrap();
+            let entity = light.place_exposed(world, lighting, &at, ev100).unwrap();
+            world
+                .get::<PointLight3D>(entity)
+                .map(|p| (p.intensity, p.range))
+                .or_else(|| world.get::<SpotLight3D>(entity).map(|s| (s.intensity, s.range)))
+                .unwrap()
+        };
+        // 6830 cd with no range, at EV100 0: 6830 / 1.2 in engine units,
+        // reaching until that falls to the loader's cutoff.
+        let (intensity, range) = placed_range(&mut world, &mut lighting, "bulb", 0.0);
+        assert!((intensity - 6830.0 / 1.2).abs() < 0.05, "{intensity}");
+        assert!(
+            (range - (intensity / UNLIMITED_RANGE_CUTOFF).sqrt()).abs() < 1e-2,
+            "{range}"
+        );
+        // A dim exposure keeps the loaded reach.
+        let (_, range) = placed_range(&mut world, &mut lighting, "bulb", 20.0);
+        assert_eq!(range, (10.0f32 / UNLIMITED_RANGE_CUTOFF).sqrt());
+        // The file's own range stays as it is.
+        let (_, range) = placed_range(&mut world, &mut lighting, "beam", 0.0);
+        assert_eq!(range, 7.0);
     }
 
     #[test]

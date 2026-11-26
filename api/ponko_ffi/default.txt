@@ -3709,6 +3709,7 @@ impl core::marker::StructuralPartialEq for ponko_ffi::PonkoMaterialDesc
 pub ponko_ffi::PonkoMaterialDescEx::desc: ponko_ffi::PonkoMaterialDesc
 pub ponko_ffi::PonkoMaterialDescEx::has_stencil: bool
 pub ponko_ffi::PonkoMaterialDescEx::layers: ponko_ffi::PonkoMaterialLayers
+pub ponko_ffi::PonkoMaterialDescEx::masked_tint: bool
 pub ponko_ffi::PonkoMaterialDescEx::stencil: ponko_ffi::PonkoStencil
 pub ponko_ffi::PonkoMaterialDescEx::struct_size: u32
 pub ponko_ffi::PonkoMaterialDescEx::unlit: bool

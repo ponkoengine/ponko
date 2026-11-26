@@ -101,7 +101,7 @@ NodeVisibilityTest: matches
 NormalTangentMirrorTest: matches
 NormalTangentTest: matches
 OrientationTest: differs
-PlaysetLightTest: differs
+PlaysetLightTest: matches
 PointLightIntensityTest: differs
 PotOfCoals: differs
 PotOfCoalsAnimationPointer: differs

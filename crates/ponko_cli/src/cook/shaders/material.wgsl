@@ -391,6 +391,17 @@ struct VertexOut {
     @location(8) @interpolate(flat) lightmap: f32,
 };
 
+// The model's tint (`Model::color`) on a corner's vertex colour: all over,
+// or, for a material with a masked tint (`maps.w`), only as far as the
+// vertex colour's alpha says (1 tinted, 0 not); that alpha is then a mask,
+// not opacity, and the tint's alpha still fades the whole model.
+fn tinted(tint: vec4<f32>, vertex_color: vec4<f32>) -> vec4<f32> {
+    if material.maps.w == 1u {
+        return vec4<f32>(vertex_color.rgb * mix(vec3<f32>(1.0), tint.rgb, vertex_color.a), tint.a);
+    }
+    return tint * vertex_color;
+}
+
 // The vertex in world space, after the shader's `vertex` function.
 fn world_vertex(input: VertexIn) -> Vertex {
     let in = static_instance(input);
@@ -405,7 +416,7 @@ fn world_vertex(input: VertexIn) -> Vertex {
     v.position = (model * vec4<f32>(in.position, 1.0)).xyz;
     v.normal = normal;
     v.uv = in.uv;
-    v.color = in.color * in.vertex_color;
+    v.color = tinted(in.color, in.vertex_color);
     v.uv1 = in.uv1;
     v.origin = in.m3.xyz;
     var out = vertex(v);
@@ -555,7 +566,7 @@ fn surface_at(in: VertexOut, front: bool) -> Surface {
     if material.maps.z != 0u {
         s.emissive *= textureSampleBias(emissive_texture, material_sampler, in.uv, texture_mip_bias()).rgb;
     }
-    s.unlit = material.maps.w != 0u;
+    s.unlit = material.emissive.w != 0.0;
     if MATERIAL_LAYERS {
         fill_layers(s, in.uv, in.world, geometric);
     }

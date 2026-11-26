@@ -768,3 +768,46 @@ fn offscreen_mesh_keeps_its_fallbacks_when_resource_slots_are_reused() {
         "old mesh still draws with the plain material"
     );
 }
+
+#[cfg(all(feature = "bench-internals", not(target_arch = "wasm32")))]
+#[test]
+fn offscreen_soak_draws_a_mesh_before_and_after_surface_changes() {
+    let mut frames = 0;
+    let game = Game::new("offscreen soak", 64, 64)
+        .bench_offscreen()
+        .bench_after_frame(move |ctx, _| {
+            let stats = ctx.perf.render_stats();
+            assert!(stats.triangles > 0, "the offscreen frame drew the setup mesh");
+            assert!(ctx.bench_gpu_memory().is_some_and(|m| m.meshes > 0));
+            frames += 1;
+            match frames {
+                1 => ctx.bench_surface(None),
+                2 => {
+                    assert!(ctx.window.suspended());
+                    assert_eq!(ctx.window_size(), vec2(64.0, 64.0));
+                    ctx.bench_surface(Some((96, 64)));
+                }
+                3 => {
+                    assert!(!ctx.window.suspended());
+                    assert_eq!(ctx.window_size(), vec2(96.0, 64.0));
+                    ctx.world.insert_resource(frames);
+                    ctx.quit();
+                }
+                _ => unreachable!("the third observation ended the run"),
+            }
+        });
+    let world = match game.try_run_headless(10, |ctx| {
+        let mesh = ctx.gfx.create_plain_mesh(&MeshData::cube(1.0));
+        ctx.world.spawn((Transform3D::default(), Model::new(mesh)));
+        ctx.scene3d.camera.position = vec3(0.0, 1.0, 3.0);
+        ctx.scene3d.camera.look_at(Vec3::ZERO);
+    }) {
+        Ok(world) => world,
+        Err(error) if error.kind() == crate::error::ErrorKind::Unsupported => {
+            support::skip(error);
+            return;
+        }
+        Err(error) => panic!("offscreen setup failed: {error}"),
+    };
+    assert_eq!(*world.resource::<i32>(), 3);
+}

@@ -19,13 +19,14 @@ use ponko_ecs::World;
 pub(crate) struct MaterialUniform {
     /// Linear RGBA.
     pub color: [f32; 4],
-    /// Linear RGB, then unused.
+    /// Linear RGB, then whether it is unlit (1/0).
     pub emissive: [f32; 4],
     /// roughness, metallic, normal map strength, unused.
     pub params: [f32; 4],
-    /// Which maps it has (1/0): normal, ORM, emissive, then whether it is
-    /// unlit (1/0). A two-channel normal map is 2 (X and Y in red and
-    /// green) or 3 (in red and alpha): the shader rebuilds Z.
+    /// Which maps it has (1/0): normal, ORM, emissive; then whether the
+    /// model's tint is masked by the vertex colour's alpha (1/0). A
+    /// two-channel normal map is 2 (X and Y in red and green) or 3 (in red
+    /// and alpha): the shader rebuilds Z.
     pub maps: [u32; 4],
     /// For custom shaders.
     pub custom: [[f32; 4]; 4],
@@ -77,7 +78,7 @@ impl GpuMaterialDesc {
     /// [`new`](Self::new), with the layer maps `live` says are freed left out.
     pub(crate) fn of(desc: &MaterialDesc, live: &dyn Fn(crate::texture::Texture) -> bool) -> Self {
         let mut gpu = Self::base(desc);
-        gpu.uniform.maps[3] = u32::from(desc.unlit);
+        gpu.uniform.emissive[3] = if desc.unlit { 1.0 } else { 0.0 };
         let bits = desc.layers.bits();
         // Layers are the built-in shader's (`check_material` turns down a
         // custom shader with them).
@@ -123,7 +124,7 @@ impl GpuMaterialDesc {
                     u32::from(desc.normal_map.is_some()),
                     u32::from(desc.orm_map.is_some()),
                     u32::from(desc.emissive_map.is_some()),
-                    0,
+                    u32::from(desc.masked_tint),
                 ],
                 custom: desc.custom.map(|v| v.to_array()),
                 ..MaterialUniform::default()
@@ -2159,8 +2160,8 @@ impl Ctx {
                 };
             }
         }
-        // Icons drawn in all their frames are done: their materials go.
-        let done = |i: &mut super::PendingIcon| i.frames >= super::ICON_FRAMES;
+        // Icons drawn are done: their materials go.
+        let done = |i: &mut super::PendingIcon| i.drawn;
         for icon in self.gfx.icons.extract_if(.., done).collect::<Vec<_>>() {
             self.gfx.free(icon.material);
         }
@@ -2427,6 +2428,7 @@ impl Ctx {
             return;
         };
         self.gfx.frame3d.size_limit = renderer.max_texture_size();
+        self.gfx.frame3d.environment.clone_from(&self.scene3d.environment);
         self.gfx.frame3d.lod = self.scene3d.lod;
         self.gfx.frame3d.lod_dt = Some(self.time.frame_dt());
         self.gfx.frame3d.motion.enabled = motion;
@@ -2572,6 +2574,7 @@ pub(crate) fn collect_window_views(
         frame.cascade_texel = main.cascade_texel;
         frame.shadow_size = main.shadow_size;
         frame.probes = main.probes;
+        frame.environment.clone_from(&main.environment);
         frame.effects.clone_from(&main.effects);
         let lines = &mut frame.debug_lines;
         lines.clear();

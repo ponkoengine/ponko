@@ -1295,8 +1295,9 @@ inline bool report_crash(const char* message) {
 // add fields at the end. The helpers below fill both header fields for this header's version and the
 // defaults; change the fields you need and pass the struct by reference.
 
-/// A material description that can grow (PonkoMaterialDescEx): `desc` is material_desc, plus a stencil
-/// and, from version 2, `unlit` and `layers` (a material_layers, all off by default).
+/// A material description that can grow (PonkoMaterialDescEx): `desc` is material_desc, plus a stencil and,
+/// from version 2, masked_tint (the model's colour tints only where the vertex colour's alpha is 1); from
+/// version 3, `unlit` and `layers` (a material_layers, all off by default).
 using material_desc_ex = PonkoMaterialDescEx;
 /// Layers over a material's surface (PonkoMaterialLayers, Rust `MaterialLayers`): clear coat, sheen,
 /// specular strength and color, index of refraction, anisotropy and iridescence, each map with its
@@ -3264,8 +3265,9 @@ public:
     mesh_data(const mesh_data&) = delete;
     mesh_data& operator=(const mesh_data&) = delete;
     ///@}
-    /// One color per corner, multiplying the material's color; empty
-    /// removes them. Throws unless there's one per corner.
+    /// One color per corner, multiplying the material's color (red, green
+    /// and blue may go above 1); empty removes them. Throws unless there's
+    /// one per corner.
     void set_colors(const std::vector<color>& colors) {
         detail::check(ponko_mesh_data_set_colors(raw_, colors.empty() ? nullptr : colors.data(), colors.size()));
     }
@@ -8830,7 +8832,7 @@ public:
     /// Draws `m` into a new square render target that keeps the picture, for a UI image: an item icon
     /// (Rust `Graphics::render_icon`). Framed to fill it, seen from `settings.from`, lit by the scene's sun
     /// and sky light only, tone mapped, on `settings.background`; nothing of the world is in it and
-    /// nothing is added to it. Drawn in the next two frames. `parts` are `{part, material}` pairs as
+    /// nothing is added to it. Drawn with the next frame. `parts` are `{part, material}` pairs as
     /// set_model_part_materials takes. Throws for a mesh that isn't live or a bad size, direction or
     /// field of view.
     ponko::render_target render_icon(mesh m, const icon& settings,

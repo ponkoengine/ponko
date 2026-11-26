@@ -588,7 +588,7 @@ pub extern "C" fn ponko_sun_direction_at(hour: f32) -> PonkoVec3 {
 
 /// What happens to the lit 3D frame on its way to the screen (Rust
 /// `ctx.scene3d.post`). `tonemap`: 0 ACES (default), 1 AgX, 2 Khronos PBR Neutral,
-/// 3 none. `lut` is used when `has_lut`.
+/// 3 none, 4 hue-preserving. `lut` is used when `has_lut`.
 /// ```
 /// let mut p = std::mem::MaybeUninit::<ponko_ffi::PonkoPost>::uninit();
 /// assert_eq!(unsafe { ponko_ffi::ponko_ctx_post(std::ptr::null_mut(), p.as_mut_ptr()) } as u32, 1);
@@ -1311,7 +1311,8 @@ pub unsafe extern "C" fn ponko_mesh_data_heightfield(
 }
 
 /// Gives mesh data one color per corner (Rust `MeshData::colors`),
-/// multiplying its material's color; `count` must be its number of corners,
+/// multiplying its material's color (red, green and blue may go above 1,
+/// for corners brighter than white); `count` must be its number of corners,
 /// or 0 to remove them.
 /// # Safety
 /// `data` null or live; `colors` holds `count` colors (may be null when 0).
@@ -2800,7 +2801,8 @@ pub(crate) fn post_from_c(post: &mut ponko::render::Post, p: &PonkoPost) -> Resu
         1 => Tonemap::AgX,
         2 => Tonemap::Neutral,
         3 => Tonemap::None,
-        _ => return Err(invalid("tonemap must be 0 to 3")),
+        4 => Tonemap::HuePreserving,
+        _ => return Err(invalid("tonemap must be 0 to 4")),
     };
     let finite = [
         p.exposure,
@@ -2850,7 +2852,7 @@ pub(crate) fn post_from_c(post: &mut ponko::render::Post, p: &PonkoPost) -> Resu
     Ok(())
 }
 
-/// Changes the 3D post-processing settings. `tonemap` must be 0 to 3;
+/// Changes the 3D post-processing settings. `tonemap` must be 0 to 4;
 /// bloom, its threshold, contrast and saturation can't be negative;
 /// `render_scale` is 0.25 to 2 and `sharpen` 0 to 1; `contact_shadows`
 /// can't be negative; `ssr` is 0 to 1 and `ssr_max_distance` above zero;

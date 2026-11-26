@@ -1,6 +1,6 @@
 // Skinning: poses one skinned model's corners into its own vertex buffer,
-// which every pass then draws like any mesh. A vertex is 11 words: position
-// (3), normal (3), uv (2), color (1, RGBA8), uv1 (2). Morph targets are
+// which every pass then draws like any mesh. A vertex is 12 words: position
+// (3), normal (3), uv (2), color (2, RGBA as half floats), uv1 (2). Morph targets are
 // added first, then the corner is skinned.
 
 struct Params {
@@ -42,7 +42,7 @@ fn skin(@builtin(global_invocation_id) id: vec3<u32>) {
     if i >= params.count {
         return;
     }
-    let v = i * 11u;
+    let v = i * 12u;
     let m = skin_matrix(i);
     var rp = vec3<f32>(rest[v], rest[v + 1u], rest[v + 2u]);
     var rn = vec3<f32>(rest[v + 3u], rest[v + 4u], rest[v + 5u]);
@@ -63,7 +63,7 @@ fn skin(@builtin(global_invocation_id) id: vec3<u32>) {
     posed[v + 3u] = n.x;
     posed[v + 4u] = n.y;
     posed[v + 5u] = n.z;
-    for (var k = 6u; k < 11u; k++) {
+    for (var k = 6u; k < 12u; k++) {
         posed[v + k] = rest[v + k];
     }
 }
@@ -76,7 +76,7 @@ fn skin_positions(@builtin(global_invocation_id) id: vec3<u32>) {
     if i >= params.count {
         return;
     }
-    let v = i * 11u;
+    let v = i * 12u;
     var rp = vec3<f32>(rest[v], rest[v + 1u], rest[v + 2u]);
     for (var t = 0u; t < params.morph_count; t++) {
         let mw = morph_weights[params.morph_first + t];

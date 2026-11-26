@@ -19,6 +19,118 @@ jobs written for macOS; the platform-neutral jobs written for `ubuntu-latest`
 (clippy, docs, Miri, the web build and the browser runs, templates and more)
 ran on this Mac by hand, as recorded below.
 
+## 2026-11-26: every web example and Shard Grove in the browser (#528, sections 1, 5 and 6a)
+
+`main` at `b7ca3382` plus the branch that adds the `web-examples` job, the
+same Mac (Apple M4 Max, macOS 27.2.1, Node 26.13.1, wasm-bindgen 0.2.130,
+playwright-core 1.65.1: Chromium 159.0.8154.6, WebKit 27.2). The machine was
+busy throughout (load average 30 to 86 on 14 cores: other agents were
+compiling). "On the GPU" is Chromium's new headless mode: WebGPU on the
+Metal adapter (`apple`, `metal-3`, not a fallback), WebGL2 on ANGLE's Metal
+renderer for the Apple M4 Max. "Software" is the headless shell: WebGL2 on
+ANGLE over SwiftShader. Every run was headless; no window opened.
+
+**What claims the web.** The gallery's list (`web/gallery/examples.json`,
+49 examples after this branch adds 12) and the `web/smoke` fixtures and
+examples (`web_smoke`, `web_smoke_3d`, `coin_dash`, `lights2d`, the editor
+fixtures, `lockstep`, `net_arena`, `web_threads`, `web_spectrum`,
+`web_video`), which the `web-smoke` job runs; its runs of 2026-11-26 are
+recorded below. The
+gallery's README names every other example and why it isn't on the web, and
+`node --test web/gallery` now fails for one that is neither.
+
+| Step (`web-examples` job) | Result | Time |
+|---|---|---|
+| Build: `node web/gallery/build.mjs` (49 examples) and `web/build.sh --features navmesh,physics3d shard_grove` | pass (release wasm: 1.1 GB of sites in `target/web/gallery`, 4.5 GB of build output in `target/wasm32-unknown-unknown`, deleted afterwards) | |
+| Every gallery page, Chromium, WebGL2 on the GPU | **pass**, 49 of 49 (47 run on WebGL2, the 2 compute demos show their WebGPU message) | 85 s |
+| Every gallery page, Chromium, WebGPU on the GPU | **pass**, 49 of 49, all on WebGPU | 90 s |
+| Every gallery page, WebKit (its own choice: WebGPU) | **pass**, 49 of 49 | 97 s |
+| Every gallery page, Chromium, WebGL2 (software) | 48 of 49 in the job's run: `shaders` timed out reading the canvas box (30 s) while its software-GL frames held the page, with a native test build running beside it; it passed alone twice (23 s, 35 s), and the check now allows 60 s, as for its screenshot | 543 s |
+| Shard Grove, keys (`--fixture shard_grove`, `--require-gpu`): Tab, Enter, Escape, Enter, Escape | **pass** on WebGPU and on WebGL2 | 5 s, 6 s |
+| Shard Grove, the whole walk-through (`--fixture shard_grove_walkthrough`, `--require-gpu`) | **pass** on WebGPU (36.7 s, 1,999 ticks, 2,394 frames) and on WebGL2 (36.7 s, 1,999 ticks, 2,393 frames): 6 shards, 1 save, 1 load, 2 pulses, 2 stuns, 1 win, no hit or loss | 46 s, 52 s |
+| Also run: the walk-through in the headless shell (software WebGL2) and in WebKit | **pass**: 36.1 s, 787 frames (about 22 a second on SwiftShader); WebKit 36.4 s on WebGPU | 53 s, 49 s |
+| Regression: the 3D fixture (`web_smoke_3d`, sun shadows) on the GPU | pass on WebGPU and WebGL2 | 12 s, 4 s |
+
+**Found and fixed on the branch:**
+
+- `lights` drew nothing on WebGL2 (a blank canvas on the GPU, and the
+  console full of `GL_INVALID_OPERATION: glDrawElementsInstanced: Mismatch
+  between texture format and sampler type`). With shadows off, the sun's
+  shadow map is a 1x1 texture of one layer; wgpu's GL backend makes a
+  one-layer texture a `TEXTURE_2D`, and the shaders read it through an array
+  sampler, so the browser refused every draw. With shadows on (two or more
+  cascades) the same build drew. Fixed: on GL the map and the 1x1 array
+  stand-ins get a second layer (as texture arrays already did). After the
+  fix `lights` on WebGL2 draws the same picture as on WebGPU, with no GL
+  error. The Metal render tests of shadows and memory (16) pass unchanged.
+- The software-GL gallery run had passed `lights` all the same: its
+  screenshot was 0.12% off the background, just above the blank threshold.
+  The gallery check now fails a page whose browser logged a WebGL error;
+  the unfixed build fails with it, the fixed one passes.
+- Shard Grove's web build only published its state. It now plays its
+  walk-through in the page with `?smoke=walkthrough`, and the runner's
+  `--until` waits for it.
+- 12 examples with a picture weren't in the gallery although its README said
+  every one was: `skeleton2d`, `ai_guards`, `prefabs`, `move_sprite`,
+  `ui_widgets`, `sky_kit`, `stylized_sky`, `reflection_refresh`,
+  `post_volumes`, `split_screen`, `crowd`, `water`. Each built and passed on
+  WebGPU and WebGL2 on the GPU before it was added, and in all four runs
+  above after.
+
+## 2026-11-26: the ten-minute reference-game soaks (#509)
+
+The `soak` job's command, run once per workload, sequentially, from the
+`tooling/509-soak` branch at `1be6de65` (`main` at `719e6ec4` merged), on an
+Apple M4 Max (14 cores, macOS 27.2.1, Metal, adapter "Apple M4 Max (Metal)"),
+offscreen GPU drawing with the offline 48 kHz mixer:
+
+```sh
+python3 scripts/soak.py --seconds 600 --sample 10 --warmup 120 --out target/soak-10m
+```
+
+The machine was busy all the time: load average 28 to 50 for the first three
+runs and rising to 111 (one minute) during the last one (other agents were
+compiling). Each game ran 600 s in one process; figures below are after the
+120-second warm-up.
+
+| Game | Cycles | Saves, loads, deaths | Resizes, restores | RSS | GPU (renderer, adapter) | Live handles | Allocations per frame | Frame p50, p99 (median) | Verdict |
+|---|---:|---|---|---|---|---|---|---|---|
+| Coin Dash | 32 | 32, 32, 16 | 60, 30 | 31 to 54 MiB | 6.4, 8.4 MiB, constant | 3 textures, 5 sounds, 1 font, constant | 91 to 100 | 1.2 ms, 9.7 ms | pass |
+| Ember Hop | 16 | 66, 33, 17 | 60, 30 | 35 to 38 MiB | 6.1, 8.0 MiB, constant | 9 textures, 9 sounds, constant | 110 to 150 | 1.5 ms, 10.0 ms | pass |
+| Shard Grove | 12 | 13, 26, 13 | 60, 30 | 76 to 129 MiB | 306.0, 316.6 MiB, constant | 13 textures, 8 meshes, 21 materials, 9 sounds, constant | 813 to 1,949 | 10.8 ms, 32.3 ms | **fail** (allocations slope), see below |
+| Streaming | 440 | none (no such mechanics) | 60, 30 | 76 to 139 MiB | 523.5, 528.7 MiB, constant | 524 to 548 tile meshes | 554 to 589 | 15.4 ms, 32.8 ms | **fail** (frame p50 and p99 slopes), see below |
+
+Audio voices stayed at 1 to 4 real and 0 to 4 virtual. RSS only fell after
+warm-up (macOS compresses idle pages of a busy machine); its fitted slopes
+were -181, 2, -177 and 20 MiB/h against a bound of 196 MiB/h for this length.
+
+Nothing grew. The two failures came from the bounds and the sampling, not
+from the games:
+
+- **Shard Grove, allocations per frame** (slope 45.6/h, bound 32.0/h): the
+  readings alternated on every sample, 807 to 850 and 1,838 to 1,966, each
+  flat over the run. The runner shrinks, minimizes and restores every 20 s,
+  so every other 10-second sample held one such cycle, which costs this
+  3D game about 450,000 allocations each time. Averaged over 20-second windows the series
+  is 1,332 to 1,392 with a slope of -3.3/h. Ember Hop showed the same
+  alternation, smaller (110 to 150). Change: `--sample` must now be a
+  multiple of 20 s, and the job samples every 20 s.
+- **Streaming, frame p50 and p99** (35/h against 15.5/h, 80/h against
+  77/h): p50 jumped between 5 and 19 ms from one sample to the next while
+  meshes, GPU bytes, allocations and frames per interval (about 490 per 10 s)
+  stayed flat, and the machine's load doubled during the run. A fixed 2 ms
+  noise allowance cannot hold on a shared machine. Change: a frame-time
+  percentile may also change once by half its post-warm-up median, and every
+  sample now records the one-minute load average.
+
+Judged again with these rules (`--evaluate`, consecutive 10-second samples
+merged into 20-second ones, frame percentiles averaged by frames, which is an
+approximation), all four pass: allocation slopes -2.1, 4.2, -3.3 and -47.4/h
+against 32/h. With the 10-second samples as recorded and only the new frame
+allowance, streaming's p50 and p99 pass (35 against 58/h, 80 against 125/h).
+No issue was filed: no quantity grew. The four-hour windowed runs on macOS,
+Windows and Linux need a person (`scripts/checklists/soak.md`).
+
 ## 2026-11-26: Playwright 1.65.1 (#601) and the fuzz targets (#528, section 3)
 
 `main` at `f308b7f6` plus the branch that moves `web/smoke` to

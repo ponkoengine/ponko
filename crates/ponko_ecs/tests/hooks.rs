@@ -509,3 +509,146 @@ fn hp_removed_if_any(w: &mut HookWorld, e: Entity) {
         log(w, "remove hp", e, hp.0);
     }
 }
+
+// ---- the hook world's conveniences: get_mut, insert_resource, get_resource_mut -
+
+/// The entity a hook writes to.
+struct Victim(Entity);
+
+/// On a new `Hp`: the victim's armor goes up by the hp, through `HookWorld::get_mut`.
+fn hp_hardens_the_victim(w: &mut HookWorld, e: Entity) {
+    let hp = w.get::<Hp>(e).unwrap().0;
+    let victim = w.resource::<Victim>().0;
+    w.get_mut::<Armor>(victim).expect("the victim has armor").0 += hp;
+}
+
+/// What a hook found out, as plain text.
+#[derive(Default)]
+struct Notes(Vec<String>);
+
+#[test]
+fn a_hook_changes_another_entitys_component_through_get_mut_and_change_detection_sees_it() {
+    use ponko_ecs::{Changed, Tick};
+    let changed = |w: &mut World, since: Tick| -> Vec<Entity> {
+        let mut out: Vec<Entity> = w
+            .query::<Entity>()
+            .filter::<Changed<Armor>>()
+            .since(since)
+            .iter()
+            .collect();
+        out.sort_by_key(|e| e.to_bits());
+        out
+    };
+    let mut world = World::new();
+    world.track_changes::<Armor>();
+    let victim = world.spawn((Armor(1),));
+    let bystander = world.spawn((Armor(100),));
+    world.insert_resource(Victim(victim));
+    world.on_add::<Hp>(hp_hardens_the_victim);
+    let before = world.advance_change_tick();
+    assert_eq!(changed(&mut world, before), [], "nothing changed yet");
+
+    let attacker = world.spawn((Hp(5),));
+
+    assert_eq!(
+        world.get::<Armor>(victim),
+        Some(&Armor(6)),
+        "the hook changed the victim"
+    );
+    assert_eq!(world.get::<Armor>(bystander), Some(&Armor(100)), "and only the victim");
+    assert!(world.get::<Armor>(attacker).is_none());
+    assert_eq!(
+        changed(&mut world, before),
+        [victim],
+        "a change made in a hook counts for change detection, as World::get_mut does"
+    );
+    // The next run sees nothing new until the hook writes again.
+    let after = world.advance_change_tick();
+    assert_eq!(changed(&mut world, after), []);
+    world.spawn((Hp(2),));
+    assert_eq!(world.get::<Armor>(victim), Some(&Armor(8)));
+    assert_eq!(changed(&mut world, after), [victim]);
+}
+
+#[test]
+fn get_mut_in_a_hook_is_none_for_a_missing_component_or_a_dead_entity() {
+    fn probe(w: &mut HookWorld, e: Entity) {
+        let victim = w.resource::<Victim>().0;
+        let hp = w.get::<Hp>(e).unwrap().0;
+        let note = format!("{hp}: armor {}", w.get_mut::<Armor>(victim).is_some());
+        w.resource_mut::<Notes>().0.push(note);
+    }
+    let mut world = World::new();
+    world.insert_resource(Notes::default());
+    let victim = world.spawn((Pos(0.0, 0.0),));
+    world.insert_resource(Victim(victim));
+    world.on_add::<Hp>(probe);
+    world.spawn((Hp(1),));
+    world.insert(victim, Armor(1));
+    world.spawn((Hp(2),));
+    world.despawn(victim);
+    world.spawn((Hp(3),));
+    assert_eq!(
+        world.resource::<Notes>().0,
+        ["1: armor false", "2: armor true", "3: armor false"]
+    );
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+struct Latest(i32);
+
+fn hp_becomes_the_latest(w: &mut HookWorld, e: Entity) {
+    let hp = w.get::<Hp>(e).unwrap().0;
+    w.insert_resource(Latest(hp));
+}
+
+#[test]
+fn a_hook_inserts_a_missing_resource_and_inserting_again_replaces_it() {
+    let mut world = World::new();
+    world.on_add::<Hp>(hp_becomes_the_latest);
+    assert!(world.get_resource::<Latest>().is_none(), "no resource yet");
+    world.spawn((Hp(3),));
+    assert_eq!(world.get_resource::<Latest>(), Some(&Latest(3)), "the hook made it");
+    world.spawn((Hp(8),));
+    assert_eq!(
+        world.get_resource::<Latest>(),
+        Some(&Latest(8)),
+        "the second insert replaced it"
+    );
+}
+
+#[derive(Debug, PartialEq)]
+struct Counter(i32);
+
+/// Adds one to the `Counter` if there is one, and notes whether there was.
+fn count_if_there_is_a_counter(w: &mut HookWorld, _e: Entity) {
+    let note = match w.get_resource_mut::<Counter>() {
+        Some(counter) => {
+            counter.0 += 1;
+            format!("some {}", counter.0)
+        }
+        None => "none".to_string(),
+    };
+    w.resource_mut::<Notes>().0.push(note);
+}
+
+#[test]
+fn a_hook_gets_none_for_a_missing_resource_and_a_mutable_one_when_there_is_one() {
+    let mut world = World::new();
+    world.insert_resource(Notes::default());
+    world.on_add::<Hp>(count_if_there_is_a_counter);
+    world.spawn((Hp(1),));
+    assert!(
+        world.get_resource::<Counter>().is_none(),
+        "a missing resource stays missing"
+    );
+    world.insert_resource(Counter(10));
+    world.spawn((Hp(2),));
+    world.spawn((Hp(3),));
+    assert_eq!(world.resource::<Notes>().0, ["none", "some 11", "some 12"]);
+    assert_eq!(
+        world.resource::<Counter>(),
+        &Counter(12),
+        "the hook's changes are in the world"
+    );
+}

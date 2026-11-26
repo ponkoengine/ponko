@@ -84,6 +84,31 @@ PONKO_GPU_TESTS_AT_ONCE=4 cargo test -p ponko --lib --features 3d render_test
 The places are counted in one test process. A runner that starts a process
 per test (`cargo nextest`) limits GPU tests with its own `--test-threads`.
 
+### A card with little memory
+
+By default `cargo test` runs as many tests at once as the machine has
+threads, and every renderer test that is running holds some of the GPU's
+memory. On a Windows machine with a 4 GB card and 12 test threads, about 600
+tests were on the GPU at the same moment. Many failed with
+`no GPU device ... (Not enough memory left.)`, and once the whole test
+process exited with no message at all. The cause is too many tests holding
+the GPU at once, not a bug in the tests. Run fewer at a time:
+
+```sh
+cargo test -p ponko --lib render:: -- --test-threads=4
+```
+
+Lower the number on a smaller card (`--test-threads=2`, then `1`). It
+limits every test of the run, not only the GPU ones, so the run takes
+longer; it is the number to turn down first, before `PONKO_GPU_TESTS_AT_ONCE`
+above, which only limits the tests that open a device through
+`render_test_support`. A failure that goes away with fewer threads is this,
+not a regression in your change. The Windows lanes in `scripts/checks.yml`
+(`windows-unit`, `windows-gpu-tiers`) pass `--test-threads 2` to `cargo
+nextest` for the same reason; the other jobs of `scripts/run-checks.py` use
+cargo's own default, so on a small card pass the limit yourself (`cargo test
+... -- --test-threads=4`).
+
 ### GPU tiers
 
 The engine has three capability tiers (`desktop`, `baseline`, `webgl2`).
@@ -342,6 +367,7 @@ and why"). Read a failure by its kind:
 | `the GPU reported errors` from `stage.finish()` | A validation error: a binding, format or limit the device rejects | A regression, usually on a lower tier. The message is wgpu's |
 | `no GPU adapter ..., and PONKO_REQUIRE_GPU is set` | The machine was expected to have a GPU and doesn't | Fix the runner or driver, not the test |
 | `no GPU adapter ...` or `no GPU device ...`, `and an earlier test of this run opened one` | The device was lost during the run | Look at the first test that failed with `BufferAsyncError`, an invalid resource or a removed device; run with fewer `PONKO_GPU_TESTS_AT_ONCE` |
+| `no GPU device ... (Not enough memory left.)` on many tests at once, or a test process that exits with no message | Too many tests holding the GPU's memory at the same time (a small card), not a bug in the tests | Run with fewer test threads: `-- --test-threads=4`, see "A card with little memory" |
 | Only under `PONKO_GPU_TIER=webgl2` or `baseline` | The lower tier's path is broken or the test assumes a feature | Guard the test with `needs`, or fix the fallback |
 
 When you report a failure from hardware the maintainers don't have, include

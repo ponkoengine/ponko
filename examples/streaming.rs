@@ -9,7 +9,22 @@
 //! `BENCH=1` flies at top speed for 3000 frames, prints what the streaming cost on the
 //! game's thread, and quits.
 
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::rc::Rc;
+
+#[cfg(all(
+    feature = "bench-internals",
+    feature = "window",
+    feature = "3d",
+    feature = "audio",
+    not(target_arch = "wasm32")
+))]
+#[path = "support/soak.rs"]
+mod soak;
+
+type TileCounts = Rc<Cell<(usize, usize)>>;
+const WINDOW: (u32, u32) = (1280, 720);
 
 #[allow(unused_imports)]
 #[cfg(feature = "3d")]
@@ -85,21 +100,71 @@ fn tile_data(corner: Vec3) -> TerrainTileData {
 }
 
 fn main() {
+    #[cfg(all(
+        feature = "bench-internals",
+        feature = "window",
+        feature = "3d",
+        feature = "audio",
+        not(target_arch = "wasm32")
+    ))]
+    {
+        let args: Vec<_> = std::env::args().skip(1).collect();
+        if args.first().is_some_and(|arg| arg == "--soak") {
+            let counts = TileCounts::default();
+            let read = counts.clone();
+            soak::run(
+                &args[1..],
+                move |game| streaming(game, false, None, Some(counts)),
+                |_| {},
+                move |_| {
+                    let (uploaded, freed) = read.get();
+                    // A cycle crosses tile boundaries and replaces 32 tiles.
+                    // No save/death mechanics in this example.
+                    soak::Work {
+                        cycles: (uploaded.min(freed) / 32) as u64,
+                        ..Default::default()
+                    }
+                },
+                "Streaming soak",
+                WINDOW,
+            );
+            return;
+        }
+    }
     let bench = std::env::var("BENCH").is_ok();
     let shot = std::env::var("SHOT").ok();
+    streaming(Game::new("Ponko: streaming", WINDOW.0, WINDOW.1), bench, shot, None).run();
+}
+
+fn streaming(game: Game, bench: bool, shot: Option<String>, soak: Option<TileCounts>) -> ConfiguredGame {
     let mut cells = ponko::streaming::CellStreamer::new(TILE, LOAD, KEEP);
     let mut tiles: HashMap<(i32, i32), Tile> = HashMap::new();
     let mut ground: Option<Material> = None;
     let (mut yaw, mut speed, mut altitude) = (0.4f32, if bench { 600.0f32 } else { 120.0 }, 90.0f32);
     // The streaming's cost on the game's thread, for BENCH.
     let (mut uploaded, mut freed, mut upload_time, mut worst_upload) = (0usize, 0usize, 0.0f64, 0.0f64);
-    Game::new("Ponko: streaming", 1280, 720)
+    game
         .vsync(!bench)
         .system(move |ctx: &mut Ctx| {
             if ctx.input.key_pressed(Key::Escape) {
                 ctx.quit();
             }
             let dt = ctx.time.dt();
+            if soak.is_some() {
+                use ponko::actions::InputEvent;
+                // Keep flying through new cells, with brief steering and
+                // altitude changes on every 24-second leg.
+                let leg = ctx.time.elapsed().rem_euclid(24.0);
+                for (key, down) in [
+                    (Key::W, true),
+                    (Key::Left, (6.0..6.5).contains(&leg)),
+                    (Key::Right, (16.0..16.5).contains(&leg)),
+                    (Key::E, (8.0..9.0).contains(&leg)),
+                    (Key::Q, (18.0..19.0).contains(&leg)),
+                ] {
+                    ctx.input.feed(InputEvent::Key(key, down));
+                }
+            }
             if ctx.input.key_down(Key::Left) {
                 yaw += dt * 0.8;
             }
@@ -166,6 +231,9 @@ fn main() {
                 }
             }
 
+            if let Some(counts) = &soak {
+                counts.set((uploaded, freed));
+            }
             if ctx.time.frame() == 400
                 && let Some(path) = &shot
             {
@@ -194,5 +262,5 @@ fn main() {
             ctx.scene3d.sky.fog_height = 40.0;
             ctx.scene3d.sky.fog_falloff = 90.0;
             ctx.scene3d.camera.position = vec3(0.0, height(0.0, 0.0) + 60.0, 0.0);
-        }).run();
+        })
 }

@@ -11,5 +11,5 @@
   `KHR_node_visibility` (a hidden node is left out with everything under
   it). A file that requires `KHR_materials_volume` loads with a warning
   (transmission without refraction or absorption).
-- C API: `PonkoMaterialDescEx` version 2 adds `unlit` and `layers`
+- C API: `PonkoMaterialDescEx` version 3 adds `unlit` and `layers`
   (`PonkoMaterialLayers`).
