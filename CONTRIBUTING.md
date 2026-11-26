@@ -917,9 +917,11 @@ only builds them, and says so. Each `--target` is a whole extra release
 build: delete `target/<triple>` once its archive is uploaded.
 
 **macOS (Apple silicon): `macos-arm64` and `macos-x86_64`.** The two are
-separate archives: the arm64 one keeps its 0.1.0 name and contents, and
-each download is half the size of a universal one (users who want one join
-them with `lipo -create`).
+separate archives: the arm64 one keeps its 0.1.0 name and contents, each
+download is half the size of a universal one (about 58 MB each against
+117 MB), and each has its own third-party notices (the two targets link
+slightly different crates). Users who want a universal library join them
+with `lipo -create`.
 
 ```sh
 rustup target add x86_64-apple-darwin
