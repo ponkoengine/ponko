@@ -1597,7 +1597,17 @@ pub fn hud_text(ctx: &mut Ctx) -> Vec<fit2d::Placed> {
         })
         .collect();
     let height: f32 = lines.iter().map(|l| l.1 * 1.4).sum();
-    let top = room.min.y + (room.size().y - height) / 2.0 - 40.0 + MENU_RISE * (1.0 - shown);
+    let mut top = room.min.y + (room.size().y - height) / 2.0 - 40.0;
+    // A tall window (a phone held upright) has room above the title scene:
+    // the text goes there, not over the scene.
+    let window = Rect::new(0.0, 0.0, ctx.window_size().x, ctx.window_size().y);
+    if title_shown(ctx)
+        && let Some(scene) = fit2d::fitted(TITLE_VIEW, window)
+        && scene.min.y - room.min.y >= height + 28.0
+    {
+        top = room.min.y + (scene.min.y - room.min.y - height) / 2.0;
+    }
+    let top = top + MENU_RISE * (1.0 - shown);
     placed.extend(fit2d::stack_lines(lines, 1.4, room, 14.0, Some(top)));
     placed
 }

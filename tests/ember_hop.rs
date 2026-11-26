@@ -1122,6 +1122,16 @@ fn check_phone(name: &str, seen: &[Seen]) {
             let spans = (s.title.size() - s.window).abs().min_element();
             assert!(spans < 0.5, "{what}: {:?} fills the window one way", s.title);
             assert!((s.title.center() - s.window / 2.0).length() < 0.5, "{what}");
+            // Upright there is room above the scene: the text is there, not on it.
+            if s.window.y > s.window.x {
+                for line in &s.text {
+                    assert!(
+                        line.rect().max.y <= s.title.min.y,
+                        "{what}: {:?} over the scene",
+                        line.text
+                    );
+                }
+            }
         } else {
             let hero = s.hero.expect("a hero in a run");
             assert!(s.safe.contains(hero), "{what}: the hero at {hero}");

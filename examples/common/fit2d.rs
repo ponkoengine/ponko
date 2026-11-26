@@ -19,18 +19,28 @@
 use ponko::d2::Camera;
 use ponko::prelude::*;
 
-/// Points the camera so `area` (world units) is whole, as large as fits
-/// and centred in `room` (window pixels, such as `ctx.window.safe_area()`).
-/// Returns the zoom; nothing changes for an empty `room` or `area`.
-pub fn fit_camera(camera: &mut Camera, area: Rect, room: Rect) -> f32 {
+/// Where `area` shows in `room` when it is whole, as large as fits and
+/// centred: what [`fit_camera`] makes of it. `None` for an empty `room` or
+/// `area`.
+pub fn fitted(area: Rect, room: Rect) -> Option<Rect> {
     let zoom = (room.size() / area.size()).min_element();
     if !(zoom.is_finite() && zoom > 0.0) {
-        return camera.zoom;
+        return None;
     }
-    camera.zoom = zoom;
-    let origin = camera.screen_rect().min;
-    camera.position = area.center() - (room.center() - origin) / zoom;
-    zoom
+    let size = area.size() * zoom;
+    let min = room.center() - size / 2.0;
+    Some(Rect { min, max: min + size })
+}
+
+/// Points the camera so `area` (world units) is whole, as large as fits
+/// and centred in `room` (window pixels, such as `ctx.window.safe_area()`).
+/// Nothing changes for an empty `room` or `area`.
+pub fn fit_camera(camera: &mut Camera, area: Rect, room: Rect) {
+    let Some(shown) = fitted(area, room) else {
+        return;
+    };
+    camera.zoom = shown.size().x / area.size().x;
+    camera.position = area.min - (shown.min - camera.screen_rect().min) / camera.zoom;
 }
 
 /// One line of text where it is drawn: its top left corner (window
