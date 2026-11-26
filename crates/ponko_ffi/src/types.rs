@@ -118,7 +118,10 @@ pub struct PonkoRect {
 
 /// The built-in `Sprite` component as a C value. Get and set it with the
 /// sprite component id like any component; it can't be a query column,
-/// because the engine stores it in a Rust layout.
+/// because the engine stores it in a Rust layout. The layout is fixed and has
+/// no flips: read and set `Sprite::flip_x` and `Sprite::flip_y` with
+/// `ponko_sprite_flip` and `ponko_sprite_set_flip`. Setting a `PonkoSprite`
+/// keeps the flips of the sprite the entity already has.
 /// ```
 /// let s = ponko_ffi::PonkoSprite::default();
 /// assert_eq!(s.pivot.x, 0.5);

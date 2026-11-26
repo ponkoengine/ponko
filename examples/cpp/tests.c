@@ -4132,7 +4132,40 @@ static void brain_values_ripples_and_ui_area(void) {
     CHECK(ponko_world_free(w) == PONKO_OK);
 }
 
+/* A sprite's flips: PonkoSprite has no fields for them, so they have calls of their own. */
+static void sprite_flips(void) {
+    PonkoWorld* w = ponko_world_new(); CHECK(w);
+    uint32_t sprite_id; CHECK(ponko_sprite_component(w, &sprite_id) == PONKO_OK);
+    PonkoSprite sprite = {0};
+    sprite.pivot.x = 0.5f; sprite.pivot.y = 0.5f;
+    PonkoValue value = {sprite_id, &sprite, sizeof(sprite)};
+    uint64_t e, bare;
+    CHECK(ponko_spawn(w, &value, 1, &e) == PONKO_OK);
+    CHECK(ponko_spawn(w, NULL, 0, &bare) == PONKO_OK);
+    bool fx = true, fy = true;
+    CHECK(ponko_sprite_flip(w, e, &fx, &fy) == PONKO_OK && !fx && !fy);   /* new sprites are unflipped */
+    CHECK(ponko_sprite_set_flip(w, e, true, false) == PONKO_OK);
+    CHECK(ponko_sprite_flip(w, e, &fx, &fy) == PONKO_OK && fx && !fy);
+    CHECK(ponko_sprite_flip(w, e, NULL, &fy) == PONKO_OK && !fy);          /* an output you don't need can be NULL */
+    /* Writing a PonkoSprite back keeps the flips. */
+    sprite.z = 3;
+    CHECK(ponko_set(w, e, sprite_id, &sprite, sizeof(sprite)) == PONKO_OK);
+    CHECK(ponko_sprite_flip(w, e, &fx, &fy) == PONKO_OK && fx && !fy);
+    CHECK(ponko_sprite_set_flip(w, e, false, true) == PONKO_OK);
+    CHECK(ponko_sprite_flip(w, e, &fx, &fy) == PONKO_OK && !fx && fy);
+    /* No sprite, no such entity, no world. */
+    fx = true;
+    CHECK(ponko_sprite_set_flip(w, bare, true, true) == PONKO_NOT_FOUND);
+    CHECK(ponko_sprite_flip(w, bare, &fx, &fy) == PONKO_NOT_FOUND && fx);
+    CHECK(ponko_despawn(w, e) == PONKO_OK);
+    CHECK(ponko_sprite_flip(w, e, &fx, &fy) == PONKO_NOT_FOUND);
+    CHECK(ponko_sprite_set_flip(NULL, 0, true, true) == PONKO_INVALID_ARGUMENT);
+    CHECK(ponko_sprite_flip(NULL, 0, &fx, &fy) == PONKO_INVALID_ARGUMENT);
+    CHECK(ponko_world_free(w) == PONKO_OK);
+}
+
 int main(void) {
+    sprite_flips();
     states();
     change_detection();
     declared_access();
