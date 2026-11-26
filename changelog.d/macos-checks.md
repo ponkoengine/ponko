@@ -1,10 +1,4 @@
 ### Fixed
-- The `ponko_aseprite` and `ponko_lobby` crates ship the license files and
-  the notice (`LICENSE-MIT`, `LICENSE-APACHE`, `NOTICE`) like the other
-  published crates; `scripts/release-check.py selftest` failed without them.
-- The API listing in `api/` names `World::insert_many` and
-  `World::remove_many`, and lists the joystick and force feedback items in
-  the order `scripts/api-snapshots.py` writes them, so its check passes.
 - The asset group test `without_workers_other_assets_load_as_before` passes
   with the `image-gif` feature (and `image-formats`): it expected a GIF to be
   unsupported, which it is only without the decoder.
