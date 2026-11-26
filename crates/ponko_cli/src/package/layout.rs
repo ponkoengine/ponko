@@ -271,7 +271,8 @@ pub struct Game {
     pub name: String,
     /// The name in file names: `coin-dash` for "Coin Dash".
     pub slug: String,
-    /// The reverse-DNS app id: the macOS bundle identifier.
+    /// The reverse-DNS app id: the macOS and iOS bundle identifier, the
+    /// Android package name (with `-` as `_`).
     pub id: String,
     pub version: String,
     /// The Cargo target (binary or example) that is the program.

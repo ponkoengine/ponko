@@ -4207,6 +4207,28 @@ static void phone_lifecycle_runs() {
     });
 }
 
+// ANCHOR: phone_back
+// Back (Android) closes the pause menu when it is open; otherwise the app
+// leaves to the background, as the player expects.
+static void handle_back(ponko::ctx& ctx, bool& menu_open) {
+    for (const auto& event : ctx.window_events()) {
+        if (event.kind == ponko::window_event_kind::back_requested && menu_open) {
+            menu_open = false;
+            ctx.window_cancel_back();
+        }
+    }
+}
+// ANCHOR_END: phone_back
+
+static void phone_back_runs() {
+    ponko::game("guide", 390, 844).run_headless(0, [](ponko::ctx& ctx) {
+        bool menu_open = true;
+        ctx.window_feed_lifecycle(ponko::window_event_kind::back_requested);
+        handle_back(ctx, menu_open);
+        if (menu_open || ctx.window_back_requested()) std::abort();
+    });
+}
+
 static void touch_scenario_runs() {
     ponko::game game("Fingers", 640, 800);
     auto run = game.run_headless_scenario(touch_test());
@@ -5191,6 +5213,7 @@ int main() {
     touch_scenario_runs();
     safe_area_runs();
     phone_lifecycle_runs();
+    phone_back_runs();
     states_guide();
     state_screen_guide();
     native_prediction_runs();

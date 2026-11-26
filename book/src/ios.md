@@ -65,7 +65,7 @@ the Mac); the simulator check below is how a package is run.
 
 A phone takes the screen from a game whenever the player goes home, opens
 the app switcher, takes a call or locks it. The engine sends a
-`WindowEvent`, the same on iOS and later on Android:
+`WindowEvent`, the same on iOS and [Android](android.md):
 
 | Event | When | What a game does |
 |---|---|---|
@@ -290,5 +290,6 @@ Cargo targets only.
 
 The lifecycle events, `suspended()`, the keyboard inset, the platform's
 safe insets and the audio session category are platform-neutral: Android
-reports the same events and insets through the same calls, and the
+reports the same events and insets through the same calls
+([Android](android.md)), and the
 category is kept, without effect, where a system has no such session.

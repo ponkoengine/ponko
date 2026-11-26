@@ -378,7 +378,8 @@ ctx.ui.show_hud(hud);
   notch, and the safe area is the whole canvas. On iOS the system reports
   them, at start and on each resize ([iOS](ios.md#the-safe-area)). Desktop
   windows have no insets (a full-screen window on a Mac with a notch is
-  placed below it). Ponko has no Android builds yet.
+  placed below it). On Android the system reports them too, from its
+  window insets ([Android](android.md#the-keyboard-the-safe-area-and-turning-the-phone)).
 - **Testing.** `ctx.window.feed_safe_insets(SafeInsets::new(top, right, bottom, left))`
   feeds the insets a phone would report, as a test does, and so can a
   platform layer of the game's own. The UI lays out with them from the

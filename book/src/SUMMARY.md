@@ -86,6 +86,7 @@
 - [Legions: 100,000 units that replay bit for bit](legions.md)
 - [Web builds: games in the browser](web.md)
 - [iOS: games on iPhone and iPad](ios.md)
+- [Android: games on phones and tablets](android.md)
   - [Threads on the web](web-threads.md)
 - [C and C++](c-cpp.md)
 - [Naming and compatibility](naming.md)
