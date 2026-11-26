@@ -265,7 +265,9 @@ spread:
   (`animated` +381, the others +1 to +17).
 - **Peak resident memory 225 → 380 MB** (three runs: 379 to 386 MB) for the
   whole run, not explained here. The render targets and shadow maps
-  computed from their sizes are unchanged (130 MB).
+  computed from their sizes are unchanged (130 MB). One scene alone peaks
+  at 276 MB (`single-material`; 266 MB with the build of `24b58431`, before
+  skinning was batched), so most of the rise came before that revision.
 - Allocations a frame are within 10 of the old ones in every scene but
   `multi-material` (+16) and `animated` (−32).
 
