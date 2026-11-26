@@ -616,7 +616,7 @@ Not covered yet: Firefox on a Mac with the Playwright build the lockfile
 pins (playwright-core 1.64.1, Firefox 157 Nightly, `firefox-1555`: on macOS
 27.2 it exits at once with "Could not find profile folder." for any profile;
 the Firefox 159 of playwright-core 1.65.1, `firefox-1572`, starts and passes
-the WebGL2 steps there), Firefox on a GPU-less Linux machine (no WebGL2),
+the WebGL2 steps there; #601), Firefox on a GPU-less Linux machine (no WebGL2),
 WebGPU on a GPU-less Linux machine (the `web-smoke` job tries it and
 reports), and mobile browsers.
 

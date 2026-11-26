@@ -63,7 +63,7 @@ starts too: run through `smoke.mjs` with it installed, the 2D and 3D
 fixtures pass on WebGL2, `--backend auto` passes on WebGL2 and WebGPU is
 reported unsupported (no adapter in headless Firefox). The runner is fine;
 moving the lockfile to 1.65.1 also moves Chromium and WebKit, so it needs
-the whole `web-smoke` job run again and is left to its own issue.
+the whole `web-smoke` job run again and is left to its own issue (#601).
 
 **Start-up cost of the test frame.** From the device opening to the game's
 canvas getting its context (3D fixture, new headless mode, two runs of seven
