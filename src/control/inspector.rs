@@ -398,6 +398,7 @@ pub(super) fn quality_json(s: &crate::render::SceneSettings) -> Value {
         "ao_steps": p.ambient_occlusion.steps,
         "ssr": p.ssr,
         "ssr_thin_objects": p.ssr_thin_objects,
+        "ssr_transparent": p.ssr_transparent,
         "gi": l.gi.enabled,
         "anti_aliasing": format!("{:?}", p.anti_aliasing).to_lowercase(),
     })

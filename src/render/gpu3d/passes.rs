@@ -144,6 +144,12 @@ pub(crate) enum Resource {
     /// The scene depth copied to one 32-bit float per pixel, which the
     /// reflections' trace and filtered levels read.
     ReflectionDepth,
+    /// The reflections' normals pass's multisampled target (kept on chip
+    /// where the GPU can).
+    ReflectionNormalSamples,
+    /// Each pixel's normal and roughness, which the reflections' trace
+    /// reads.
+    ReflectionNormals,
     /// The nearest depth of each 8x8 block of the reflections' depth copy
     /// (and of 16, 32 and 64 pixels), with the plane of flat ones, which
     /// their trace reads along the stretches its long steps jump over
@@ -219,6 +225,9 @@ pub(crate) enum Format {
     Hits,
     /// A copy of the depth as a color image: one 32-bit float channel.
     DepthCopy,
+    /// The reflections' normals: octahedral normal, roughness and coverage
+    /// in 10, 10, 10 and 2 bits.
+    Normals,
     /// The reflections' coarse depth: nearest depth and plane, four 32-bit
     /// float channels.
     CoarseDepth,
@@ -250,7 +259,7 @@ pub(crate) struct Desc {
 
 impl Resource {
     /// Every resource, in declaration order.
-    pub(crate) const ALL: [Resource; 54] = {
+    pub(crate) const ALL: [Resource; 56] = {
         use Resource::*;
         [
             VisibleDraws,
@@ -291,6 +300,8 @@ impl Resource {
             ReflectionLevels,
             ReflectionHits,
             ReflectionDepth,
+            ReflectionNormalSamples,
+            ReflectionNormals,
             ReflectionCoarseDepth,
             ReflectionSpread,
             ReflectionHistory,
@@ -366,6 +377,8 @@ impl Resource {
             Resource::ReflectionLevels => desc("reflection levels", Frame, F::Screen, One),
             Resource::ReflectionHits => desc("reflection hits", Frame, F::Hits, One),
             Resource::ReflectionDepth => desc("reflection depth", Frame, F::DepthCopy, One),
+            Resource::ReflectionNormalSamples => desc("reflection normal samples", Frame, F::Normals, Scene),
+            Resource::ReflectionNormals => desc("reflection normals", Frame, F::Normals, One),
             Resource::ReflectionCoarseDepth => desc("reflection coarse depth", Frame, F::CoarseDepth, One),
             Resource::ReflectionSpread => desc("reflection spread", Frame, F::Spread, One),
             Resource::ReflectionHistory => desc("reflection history", Persistent, F::Hdr, One),
@@ -1091,6 +1104,18 @@ pub(crate) const FRAME_PASSES: [Pass; 8] = [
                 on(F::CUTOUTS),
                 models![u(SceneColor, A::Color), u(SceneDepth, A::DepthLoad)],
             ),
+            // What the opaque pass draws, over the finished depth: each
+            // pixel's normal and roughness, which the trace's rays leave by.
+            step(
+                "reflection normals",
+                on(F::SSR),
+                models![
+                    u(ReflectionNormalSamples, A::Color).on(F::MSAA),
+                    u(ReflectionNormals, A::Resolve).on(F::MSAA),
+                    u(ReflectionNormals, A::Color).off(F::MSAA),
+                    u(SceneDepth, A::DepthRead),
+                ],
+            ),
             step(
                 "occlusion depth",
                 on(F::OCCLUSION.with(F::SOLID_PREPASS)),
@@ -1134,6 +1159,7 @@ pub(crate) const FRAME_PASSES: [Pass; 8] = [
                 on(F::SSR),
                 &[
                     u(ReflectionDepth, A::Sample),
+                    u(ReflectionNormals, A::Sample),
                     u(ReflectionCoarseDepth, A::Sample).on(F::SSR_THIN),
                     u(ReflectionHistory, A::SamplePrevious),
                     u(ScreenImage, A::Color),

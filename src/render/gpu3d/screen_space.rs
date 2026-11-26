@@ -51,6 +51,10 @@ pub(super) struct ScreenSpace {
     /// Whether this frame's reflections trace thin objects
     /// (`Post::ssr_thin_objects`, see `ssr_thin.wgsl`).
     pub(super) ssr_thin: bool,
+    /// Screen-space reflections on transparent surfaces this frame
+    /// (`Post::ssr_transparent`, with `ssr_on`): any transparent surface
+    /// then draws in the split transparent pass, which reads the scene.
+    pub(super) ssr_transparent: bool,
     /// Tests: no mip bias while upscaling (the negative control).
     #[cfg(test)]
     pub(super) mip_bias_off: bool,
@@ -97,6 +101,7 @@ impl ScreenSpace {
             ssr: None,
             ssr_on: false,
             ssr_thin: false,
+            ssr_transparent: false,
         }
     }
 }

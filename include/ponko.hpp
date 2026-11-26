@@ -1306,7 +1306,8 @@ using query_filter_ex = PonkoQueryFilterEx;
 /// 2560x1440; the high and ultra presets turn it on), from version 3, the upscaler (a ponko::upscaler;
 /// set it with `static_cast<std::uint32_t>(...)`) and, from version 4, auto exposure (auto_exposure,
 /// auto_exposure_min and _max in stops, _compensation, _brighten_speed and _darken_speed in stops a
-/// second, _center_weight, and a metering mask in _has_mask and _mask).
+/// second, _center_weight, and a metering mask in _has_mask and _mask) and, from version 5,
+/// screen-space reflections on transparent surfaces (ssr_transparent: off by default and in every preset).
 using post_ex = PonkoPostEx;
 /// HDR display output settings that can grow (PonkoHdrOutput): enabled, paper_white_nits, peak_nits
 /// (0: the display's) and, from version 2, the HDR10 metadata max_content_light_nits and
