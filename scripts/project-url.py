@@ -60,7 +60,7 @@ DOC_SUFFIXES = (".md", ".txt", ".toml", ".liquid", ".rs")
 
 
 def project_url():
-    url = URL_FILE.read_text().strip()
+    url = URL_FILE.read_text(encoding='utf-8').strip()
     if not re.fullmatch(r"https://[^\s/]+(/[^\s/]+)+", url):
         sys.exit(f"PROJECT_URL must be one https URL without a trailing slash, got {url!r}")
     return url
@@ -68,7 +68,7 @@ def project_url():
 
 def doc_files():
     """Tracked files the URL rules apply to, as repository-relative paths."""
-    out = subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True).stdout
+    out = subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, encoding='utf-8', check=True).stdout
     for name in out.splitlines():
         if name in EXCLUDED_FILES or name.startswith(EXCLUDED_PREFIXES):
             continue
@@ -231,9 +231,9 @@ def set_url(new):
             moved = replace_url(moved, companion_url(old, companion), companion_url(new, companion))
         moved = replace_url(moved, old, new)
         if moved != text:
-            path.write_text(moved, encoding="utf-8")
+            path.write_text(moved, encoding="utf-8", newline='\n')
             changed += 1
-    URL_FILE.write_text(new + "\n")
+    URL_FILE.write_text(new + "\n", encoding='utf-8', newline='\n')
     print(f"PROJECT_URL is {new} now; {changed} files rewritten (review `git diff`)")
     return 0
 

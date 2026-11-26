@@ -142,6 +142,22 @@ The callback is subscribed late, after the failure, so the run also checks
 that a late subscriber gets it at once. `runtime-failures.test.mjs` checks
 the template's handling and the runner's checks without a browser.
 
+## WebKit audio
+
+With the 2D fixture built, run these checks in headless WebKit:
+
+```sh
+env -u WEBKIT_GST_MAX_NUMBER_OF_AUDIO_OUTPUT_CHANNELS node web/smoke/smoke.mjs --fixture web_smoke --browser webkit --backend webgl2
+env -u WEBKIT_GST_MAX_NUMBER_OF_AUDIO_OUTPUT_CHANNELS node web/smoke/smoke.mjs --fixture web_smoke --browser webkit --backend webgl2 --audio-output zero-channels
+env -u WEBKIT_GST_MAX_NUMBER_OF_AUDIO_OUTPUT_CHANNELS node web/smoke/smoke.mjs --fixture web_smoke --browser webkit --backend webgl2 --audio-output resume-rejected
+```
+
+The first run uses the browser's actual channel report. The second forces a
+zero report on the real destination and verifies that the engine schedules
+stereo music after the click and logs the fallback once. The third makes
+`AudioContext.resume()` reject and checks that the game reports audio as
+unavailable, schedules no buffers, and logs the reason once.
+
 ## WebGPU first
 
 `webgpu-fallback.mjs` checks that a web build draws with WebGPU where the

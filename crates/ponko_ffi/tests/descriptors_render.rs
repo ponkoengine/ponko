@@ -229,11 +229,87 @@ fn the_upscaler_reaches_the_engine_in_version_3_and_older_callers_keep_it() {
     });
 }
 
-/// Version 4 adds reflections on transparent surfaces
+/// Version 4 adds auto exposure (`Post::auto_exposure`): it reaches the
+/// engine and comes back with its mask, settings out of range are refused,
+/// and an older caller neither reads nor changes it.
+#[test]
+fn auto_exposure_reaches_the_engine_in_version_4_and_older_callers_keep_it() {
+    run_ctx(|ctx| unsafe {
+        let mut p: PonkoPostEx = header(PONKO_POST_EX_VERSION);
+        assert_eq!(ponko_ctx_post_ex(ctx, &mut p), PONKO_OK);
+        assert!(!p.auto_exposure, "off by default");
+        assert_eq!(
+            (p.auto_exposure_brighten_speed, p.auto_exposure_darken_speed),
+            (1.0, 3.0)
+        );
+        assert!(!p.auto_exposure_has_mask);
+        p.auto_exposure = true;
+        p.auto_exposure_min = -2.0;
+        p.auto_exposure_max = 6.0;
+        p.auto_exposure_compensation = 0.5;
+        p.auto_exposure_brighten_speed = f32::INFINITY;
+        p.auto_exposure_darken_speed = 0.0;
+        p.auto_exposure_center_weight = 1.0;
+        p.auto_exposure_has_mask = true;
+        p.auto_exposure_mask = PonkoTexture {
+            id: 3,
+            width: 4,
+            height: 2,
+        };
+        assert_eq!(ponko_ctx_set_post_ex(ctx, &p), PONKO_OK, "{}", last_error());
+        let mut back: PonkoPostEx = header(PONKO_POST_EX_VERSION);
+        assert_eq!(ponko_ctx_post_ex(ctx, &mut back), PONKO_OK);
+        assert!(back.auto_exposure);
+        assert_eq!(
+            (
+                back.auto_exposure_min,
+                back.auto_exposure_max,
+                back.auto_exposure_compensation,
+                back.auto_exposure_brighten_speed,
+                back.auto_exposure_darken_speed,
+                back.auto_exposure_center_weight,
+            ),
+            (-2.0, 6.0, 0.5, f32::INFINITY, 0.0, 1.0)
+        );
+        assert!(back.auto_exposure_has_mask);
+        assert_eq!((back.auto_exposure_mask.id, back.auto_exposure_mask.width), (3, 4));
+
+        let refused: [fn(&mut PonkoPostEx); 6] = [
+            |w| w.auto_exposure_min = 7.0,
+            |w| w.auto_exposure_max = f32::NAN,
+            |w| w.auto_exposure_compensation = f32::INFINITY,
+            |w| w.auto_exposure_brighten_speed = -1.0,
+            |w| w.auto_exposure_darken_speed = f32::NAN,
+            |w| w.auto_exposure_center_weight = 1.5,
+        ];
+        for change in refused {
+            let mut wrong = back;
+            change(&mut wrong);
+            wrong.post.exposure = 1.5;
+            assert_eq!(ponko_ctx_set_post_ex(ctx, &wrong), PONKO_INVALID_ARGUMENT);
+            assert!(last_error().contains("auto_exposure"), "{}", last_error());
+        }
+        assert_eq!(ponko_ctx_post_ex(ctx, &mut back), PONKO_OK);
+        assert_eq!(back.post.exposure, p.post.exposure, "nothing changes when it fails");
+
+        let mut v3: PonkoPostEx = header(3);
+        assert_eq!(ponko_ctx_post_ex(ctx, &mut v3), PONKO_OK);
+        assert!(!v3.auto_exposure, "a field past version 3 isn't written");
+        v3.auto_exposure = false; // past its version: not read
+        v3.auto_exposure_min = f32::NAN;
+        assert_eq!(ponko_ctx_set_post_ex(ctx, &v3), PONKO_OK, "{}", last_error());
+        assert_eq!(ponko_ctx_post_ex(ctx, &mut back), PONKO_OK);
+        assert!(back.auto_exposure, "nor read: it stays on");
+        assert_eq!(back.auto_exposure_min, -2.0);
+        assert!(back.auto_exposure_has_mask);
+    });
+}
+
+/// Version 5 adds reflections on transparent surfaces
 /// (`Post::ssr_transparent`): they reach the engine and come back, and an
 /// older caller neither reads nor changes them.
 #[test]
-fn transparent_reflections_reach_the_engine_in_version_4_and_older_callers_keep_them() {
+fn transparent_reflections_reach_the_engine_in_version_5_and_older_callers_keep_them() {
     run_ctx(|ctx| unsafe {
         let mut p: PonkoPostEx = header(PONKO_POST_EX_VERSION);
         assert_eq!(ponko_ctx_post_ex(ctx, &mut p), PONKO_OK);
@@ -244,10 +320,10 @@ fn transparent_reflections_reach_the_engine_in_version_4_and_older_callers_keep_
         assert_eq!(ponko_ctx_post_ex(ctx, &mut back), PONKO_OK);
         assert!(back.ssr_transparent);
 
-        let mut v3: PonkoPostEx = header(3);
-        assert_eq!(ponko_ctx_post_ex(ctx, &mut v3), PONKO_OK);
-        assert!(!v3.ssr_transparent, "a field past version 3 isn't written");
-        assert_eq!(ponko_ctx_set_post_ex(ctx, &v3), PONKO_OK, "{}", last_error());
+        let mut v4: PonkoPostEx = header(4);
+        assert_eq!(ponko_ctx_post_ex(ctx, &mut v4), PONKO_OK);
+        assert!(!v4.ssr_transparent, "a field past version 4 isn't written");
+        assert_eq!(ponko_ctx_set_post_ex(ctx, &v4), PONKO_OK, "{}", last_error());
         assert_eq!(ponko_ctx_post_ex(ctx, &mut back), PONKO_OK);
         assert!(back.ssr_transparent, "nor read: it keeps its value");
     });

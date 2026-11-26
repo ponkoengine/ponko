@@ -43,7 +43,7 @@ STRING = re.compile(r'"(?:\\.|[^"\\\n])*"')
 
 
 def c_functions():
-    return set(re.findall(r'\b(ponko_[a-z0-9_]+)\s*\(', COMMENT.sub(' ', HEADER.read_text())))
+    return set(re.findall(r'\b(ponko_[a-z0-9_]+)\s*\(', COMMENT.sub(' ', HEADER.read_text(encoding='utf-8'))))
 
 
 def wrapped(text):
@@ -53,7 +53,7 @@ def wrapped(text):
 
 def c_only_list():
     entries, problems = {}, []
-    for number, line in enumerate(C_ONLY.read_text().splitlines(), 1):
+    for number, line in enumerate(C_ONLY.read_text(encoding='utf-8').splitlines(), 1):
         if not line.strip() or line.lstrip().startswith('#'):
             continue
         name, _, reason = line.partition('#')
@@ -70,7 +70,7 @@ def coverage_problems(text):
     functions = c_functions()
     missing = functions - wrapped(text)
     listed, problems = c_only_list()
-    guide = GUIDE.read_text()
+    guide = GUIDE.read_text(encoding='utf-8')
     for name in sorted(missing - listed.keys()):
         problems.append(f'{name}: ponko.hpp does not wrap it and it is not on the C-only list. Wrap it in '
                         f'include/ponko.hpp (with a doc comment and a test in examples/cpp/tests.cpp), or, if '
@@ -164,7 +164,7 @@ def book_problems():
     for chapter in [*sorted(BOOK.glob('*.md')), *sorted(BOOK.glob('*/*.md'))]:
         if chapter.name.startswith('migrating-to-'):
             continue  # shows code from before a change, which is not compiled
-        text = chapter.read_text()
+        text = chapter.read_text(encoding='utf-8')
         for match in block.finditer(text):
             line = text.count('\n', 0, match.start()) + 1
             where = f'{chapter.relative_to(ROOT).as_posix()}:{line}'
@@ -181,14 +181,14 @@ def book_problems():
                     problems.append(f'{where}: includes {found.group(1)}, which is not a file in examples/cpp.')
                     continue
                 anchor = found.group(2)
-                if anchor and not re.search(rf'ANCHOR:\s*{re.escape(anchor)}\s*$', source.read_text(),
+                if anchor and not re.search(rf'ANCHOR:\s*{re.escape(anchor)}\s*$', source.read_text(encoding='utf-8'),
                                             re.MULTILINE):
                     problems.append(f'{where}: anchor `{anchor}` is not in {source.relative_to(ROOT)}.')
     return problems
 
 
 def main():
-    text = WRAPPER.read_text()
+    text = WRAPPER.read_text(encoding='utf-8')
     if '--list' in sys.argv:
         missing = sorted(c_functions() - wrapped(text))
         print('\n'.join(missing))

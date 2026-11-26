@@ -92,7 +92,8 @@ the library yourself, make the same check at startup:
 ```
 
 Within a version, existing functions and struct layouts never change and new
-releases only add functions and enum values. The version stays 2 for 0.1.0: the
+releases only add functions and enum values, except for the
+[unstable functions](#unstable-functions). The version stays 2 for 0.1.0: the
 old C spellings were removed before any native artifact was released,
 and every `ponko_*` function, layout and numeric value is unchanged.
 
@@ -391,7 +392,7 @@ to it. The full rule is in
 | `PonkoLightingEx` | `ponko_ctx_lighting_ex`, `ponko_ctx_set_lighting_ex` | `shadow_sun_size` (the sun's size for contact-hardening shadows) and `shadow_sun_step` |
 | `PonkoColliderEx` | `ponko_set_collider_ex`, `ponko_get_collider_ex` | a 2D collider's collision groups and polygon corners, in one call |
 | `PonkoQueryFilterEx` | the `ponko_ctx_*_ex` 2D and 3D queries | one filter for both, collision groups included |
-| `PonkoPostEx` | `ponko_ctx_post_ex`, `ponko_ctx_set_post_ex`, `ponko_post_ex_lerp`, `ponko_post_blend_volumes` | split toning, depth of field and the sample count (`msaa`); version 2: `ssr_thin_objects` (thin things whole in reflections); version 3: `upscaler` (a `PonkoUpscaler`: the stretch or temporal upscaling); version 4: `ssr_transparent` (reflections on transparent surfaces); blending two looks, and post volumes (`PonkoPostVolume` boxes) |
+| `PonkoPostEx` | `ponko_ctx_post_ex`, `ponko_ctx_set_post_ex`, `ponko_post_ex_lerp`, `ponko_post_blend_volumes` | split toning, depth of field and the sample count (`msaa`); version 2: `ssr_thin_objects` (thin things whole in reflections); version 3: `upscaler` (a `PonkoUpscaler`: the stretch or temporal upscaling); version 4: `auto_exposure` and its `auto_exposure_*` settings; version 5: `ssr_transparent` (reflections on transparent surfaces); blending two looks, and post volumes (`PonkoPostVolume` boxes) |
 | `PonkoParticleSettings3DEx` | `ponko_particle_settings3d_ex_defaults`, `ponko_ctx_set_particle_emitter3d_ex` | `softness`: soft particles |
 | `PonkoCamera3DEx` | `ponko_ctx_camera3d_ex`, `ponko_ctx_set_camera3d_ex`, `ponko_camera3d_ex_from` | `occlusion_culling` and `particles` (whether it draws particles, trails and lines) |
 | `PonkoTargetCameraEx` | `ponko_ctx_set_target_cameras_ex`, `ponko_ctx_target_camera_ex`, `ponko_target_camera_ex_from` | `particles`, per target camera |
@@ -437,6 +438,28 @@ this complete: every public field of a Rust settings struct (`Post`,
 the same name in its C struct or descriptor, or a line in
 `scripts/settings-fields.txt` that names where C sets it, or a Rust-only entry
 with its reason.
+
+## Unstable functions
+
+A few C functions belong to experimental features (the guide's
+[maturity levels](maturity.md)): HDR output and WebRTC today. They are outside
+the ABI's promise and may change or go in any release, even within an ABI
+version. The header says so on the line above each one, and the C++ wrapper's
+doc comment repeats it:
+
+```text
+/* Unstable: experimental (book/src/hdr.md) */
+enum PonkoStatus ponko_ctx_hdr_status(struct PonkoCtx *ctx,
+                                      struct PonkoHdrStatus *out_status);
+```
+
+The types only they use (`PonkoHdrOutput`, `PonkoHdrStatus`, ...) are unstable
+with them. The names keep the `ponko_` prefix: when a feature becomes tested or
+proven, its functions lose the note and are covered from then on, without a
+rename. `grep -n "Unstable:" ponko.h` lists them;
+`scripts/experimental-api.txt` in the repository has each one with its reason.
+In Rust the same items keep their names too; STABILITY.md, "Unstable", lists
+them.
 
 ## C functions without a C++ wrapper
 
@@ -525,6 +548,7 @@ binding arrives:
 | `Graphics::stream_instance_cell` | [Streaming instance cells](3d.md#streaming-instance-cells) | Build a cell's matrices on your own threads, then `ponko_ctx_add_instance_cell` (`ctx::add_instance_cell`) on the game's |
 | `InstanceCellData` | [Streaming instance cells](3d.md#streaming-instance-cells) | The same: matrices and colours go straight to `ponko_ctx_add_instance_cell` |
 | `GamepadBackend` | [Backends and tests](controllers.md#backends-and-tests) | Native games use the built-in gamepad backend |
+| `FakeSteam` | [Shipping on Steam](steam.md#testing-a-games-steam-logic) | C and C++ tests run against an absent Steam (every `ponko_steam_*` call does nothing); the fake is for Rust tests |
 | `FakeGamepads` | [Backends and tests](controllers.md#backends-and-tests) | Native tests feed `ponko_ctx_feed_input` (kind 8 connects a pad) and `ponko_ctx_feed_gamepad_motion` |
 | `KeyLabels::text` | [Key labels follow the keyboard layout](controllers.md#key-labels-follow-the-keyboard-layout) | Join the labels of `ponko_ctx_glyph_label` (`ctx::layout_glyph_label`) with `/`; the player's labels themselves are `ponko_ctx_key_label` |
 | `InputScenario::connect_gamepad` | [Backends and tests](controllers.md#backends-and-tests) | Scenarios are JSON in C and C++: a `gamepad_connected` step takes the same `info` object |
@@ -542,7 +566,9 @@ binding arrives:
 | `Net::accept_web`, `Net::join_web`, `Net::web_addr`, `NetMessages::accept_web`, `NetMessages::join_web`, `NetMessages::web_addr` | [Multiplayer in the browser](networking.md#in-the-browser) | Not bound yet: C and C++ hosts take UDP players only, and C and C++ web games can't join over WebSocket |
 | `LobbyClient::join_web` | [Lobbies, matchmaking and relays](lobby.md#the-client) | C and C++ lobby clients join over UDP, so a C or C++ web game has none |
 | `Signaling` | [Peer to peer over WebRTC](webrtc.md#with-any-signaling-channel) | C and C++ WebRTC endpoints are signaled through a lobby client (`ponko_net_messages_rtc_host`, `_rtc_join`) |
-| `RtcConfig::turn` | [Peer to peer over WebRTC](webrtc.md#stun-turn-and-nats) | TURN works in browsers only, and C and C++ web games have no WebRTC endpoint |
+| `RtcConfig::turn`, `RtcConfig::relay_only`, `RtcConfig::turn_servers` | [Peer to peer over WebRTC](webrtc.md#stun-turn-and-nats) | Not bound yet: C and C++ WebRTC endpoints take STUN servers only (`stun_urls`) |
+| `Net::host_relay`, `Net::join_relay`, `Net::relay_lobby`, `NetMessages::host_relay`, `NetMessages::join_relay`, `NetMessages::relay_lobby` | [Lobbies, matchmaking and relays](lobby.md#game-sessions-through-the-relay) | Not bound yet; C and C++ games relay their own packets with `ponko_lobby_relay` |
+| `NetMessages::web_peer`, `WebPeer` | [Lobbies, matchmaking and relays](lobby.md#behind-a-proxy) | For game servers behind a TLS proxy, which are Rust; C and C++ hosts take UDP players only |
 | `Assets::browser_saves`, `Assets::revert_browser_save` | [Saving in a browser](editor.md#saving-in-a-browser) | A C or C++ web game keeps no files in a browser yet |
 | `Assets::browser_saves`, `Assets::revert_browser_save`, `Assets::browser_saves_persistent` | [Saving in a browser](editor.md#saving-in-a-browser) | A C or C++ web game keeps no files in a browser yet |
 | `SkeletonData::add_bone`, `SpineAtlas` | [2D skeletons](skeleton2d.md#from-c-and-c) | Skeletons come from files (Ponko's format or a Spine export and its atlas) through the assets; a memory source holds files kept in memory |

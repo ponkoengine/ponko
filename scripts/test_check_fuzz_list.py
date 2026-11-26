@@ -19,14 +19,14 @@ def fuzz_folder(root, files, bins, readme_rows, listed):
     fuzz = Path(root)
     (fuzz / 'fuzz_targets').mkdir()
     for name in files:
-        (fuzz / 'fuzz_targets' / f'{name}.rs').write_text('')
+        (fuzz / 'fuzz_targets' / f'{name}.rs').write_text('', encoding='utf-8', newline='\n')
     (fuzz / 'Cargo.toml').write_text(
-        ''.join(f'[[bin]]\nname = "{name}"\npath = "fuzz_targets/{name}.rs"\n' for name in bins)
+        ''.join(f'[[bin]]\nname = "{name}"\npath = "fuzz_targets/{name}.rs"\n' for name in bins), encoding='utf-8', newline='\n'
     )
     (fuzz / 'README.md').write_text(
-        '| Target | What it reads |\n|---|---|\n' + ''.join(f'| `{name}` | something |\n' for name in readme_rows)
+        '| Target | What it reads |\n|---|---|\n' + ''.join(f'| `{name}` | something |\n' for name in readme_rows), encoding='utf-8', newline='\n'
     )
-    (fuzz / 'targets.txt').write_text('# the list\n' + ''.join(f'{line}\n' for line in listed))
+    (fuzz / 'targets.txt').write_text('# the list\n' + ''.join(f'{line}\n' for line in listed), encoding='utf-8', newline='\n')
     return fuzz
 
 

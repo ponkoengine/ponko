@@ -90,6 +90,14 @@ pub struct Sprite {
     /// The part of the texture to show, in texture pixels (a frame of a
     /// [`SpriteSheet`](crate::sheet::SpriteSheet)). `None` (default) shows all of it.
     pub region: Option<Rect>,
+    /// Mirror the image left to right, in place: the sprite covers the same
+    /// rectangle (same pivot, same bounds) and shows its region flipped.
+    /// Unlike a negative [`Transform`](crate::d2::Transform) scale it leaves
+    /// attached children and their offsets alone. Default `false`.
+    pub flip_x: bool,
+    /// Mirror the image top to bottom, in place, like [`flip_x`](Self::flip_x).
+    /// Default `false`.
+    pub flip_y: bool,
 }
 
 impl Sprite {
@@ -102,6 +110,8 @@ impl Sprite {
             z: 0.0,
             pivot: Vec2::splat(0.5),
             region: None,
+            flip_x: false,
+            flip_y: false,
         }
     }
 
@@ -137,6 +147,28 @@ impl Sprite {
     #[must_use]
     pub fn with_pivot(self, pivot: Vec2) -> Self {
         Self { pivot, ..self }
+    }
+
+    /// Same sprite, mirrored left to right (`true`) or not, in place: see
+    /// [`flip_x`](Self::flip_x). A character turns around by setting the field:
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # fn f(hero: Texture, velocity: Vec2) {
+    /// let mut sprite = ponko::d2::Sprite::new(hero).with_flip_x(true);
+    /// sprite.flip_x = velocity.x < 0.0; // face the way it walks
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn with_flip_x(self, flip_x: bool) -> Self {
+        Self { flip_x, ..self }
+    }
+
+    /// Same sprite, mirrored top to bottom (`true`) or not, in place: see
+    /// [`flip_y`](Self::flip_y).
+    #[must_use]
+    pub fn with_flip_y(self, flip_y: bool) -> Self {
+        Self { flip_y, ..self }
     }
 }
 

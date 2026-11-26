@@ -38,6 +38,8 @@ mod editor;
 mod game_methods;
 mod inspector;
 mod query;
+#[cfg(all(target_arch = "wasm32", feature = "web-control"))]
+pub(crate) mod web;
 pub(crate) use game_methods::GameExtensions;
 use query::{Condition, FieldPath, FieldStats};
 
@@ -1769,7 +1771,7 @@ pub(crate) fn handle(ctx: &mut Ctx, method: &str, params: &Value) -> Result<Valu
                 .collect(),
         ),
         "info" => json!({
-            "pid": std::process::id(),
+            "pid": if cfg!(target_arch = "wasm32") { None } else { Some(std::process::id()) },
             "headless": ctx.headless,
             "tick": ctx.time.sim_tick(),
             "sim_time": ctx.time.sim_time(),

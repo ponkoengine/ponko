@@ -212,6 +212,7 @@ fn games_reflect_the_builtin_components_by_default() {
             "Attached3D",
             "SkinOf",
             "Decal3D",
+            "LodFadeTime",
             "LodGroup",
             "LodHysteresis",
             "Model",

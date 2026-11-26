@@ -170,17 +170,21 @@ does that on the I key). The Steam calls take and return Ponko's own types:
 `SteamClient` (started once with `SteamClient::init_app`), `SteamLobbyId` and
 `SteamUserId` (64-bit numbers: `from_raw`, `raw`, and they print and parse as
 that number), so a new version of the `steamworks` crate doesn't change your
-code. For the parts of Steam Ponko doesn't wrap (achievements, stats, rich
-presence), `client.unstable_steamworks()` is the `steamworks` client
-underneath and `ponko::net::unstable_steamworks` the crate; those are
+code. Achievements, stats, cloud saves, rich presence, the overlay and the
+Deck's text input are `ponko::steam::Steam` ([Shipping on Steam](steam.md);
+`Steam::with_client` shares this client). For the parts of Steam Ponko
+doesn't wrap (Workshop, inventory, leaderboards), `client.unstable_steamworks()`
+is the `steamworks` client underneath and `ponko::net::unstable_steamworks`
+the crate; those are
 [unstable](https://github.com/ponkoengine/ponko/blob/main/STABILITY.md#unstable),
 so their `steamworks` version may change in any Ponko release.
 
 Shipping: the game needs Steam running, its Steam app id (480, Valve's
 test app "Spacewar", works for development) and Valve's `libsteam_api`
 library next to the executable (`libsteam_api.dylib`, `libsteam_api.so`
-or `steam_api64.dll`). Cargo puts it there for `cargo run`, examples and
-tests; when you package the game, copy it from `target/<profile>/`. For C
+or `steam_api64.dll`). Cargo finds it for `cargo run`, examples and
+tests, and `ponko package` puts it beside the program
+([Shipping on Steam](steam.md#depots-from-ponko-package)). For C
 and C++, build ponko_ffi with `--features steam`.
 
 Try it with two Steam accounts on two machines:
@@ -633,6 +637,13 @@ Everything networking is behind `ctx.net` (and in the `ponko::net` module):
 
 Lockstep and messages are independent and can run side by side. A
 single-player game has an offline lockstep session and nothing else.
+
+Both run over UDP (`Net::host`, `NetMessages::host`), WebSocket for
+browsers (`accept_web`, `join_web`), Steam, or the lobby server's relay
+for players who can't reach each other (`Net::host_relay`,
+`NetMessages::host_relay`, see [Game sessions through the
+relay](lobby.md#game-sessions-through-the-relay)); messages also over
+[WebRTC](webrtc.md). The session works the same on each.
 
 ## Application messages (Rust)
 

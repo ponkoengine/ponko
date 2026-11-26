@@ -66,8 +66,22 @@ fn instance_lightmap(in: VertexIn) -> f32 {
     return static_instance(in).m2.w;
 }
 
+// `input` with `instance_index` read in the entry point itself. Direct3D
+// 12's instance ID starts at 0 whatever the draw's first instance; naga adds
+// the first instance to `instance_index` only where an entry point reads the
+// builtin, not in a function the whole input struct is passed to. Every
+// entry point taking a `VertexIn` passes it through this first, so the
+// functions below see the same index as on Vulkan and Metal (instance cells
+// drawn together start each cell's list at its first instance).
+fn entry_input(input: VertexIn, instance_index: u32) -> VertexIn {
+    var v = input;
+    v.instance_index = instance_index;
+    return v;
+}
+
 @vertex
-fn vs_main(in: VertexIn) -> VertexOut {
+fn vs_main(input: VertexIn) -> VertexOut {
+    let in = entry_input(input, input.instance_index);
     let v = world_vertex(in);
     var out: VertexOut;
     out.decal_layers = instance_decal_layers(in);
@@ -85,7 +99,8 @@ fn vs_main(in: VertexIn) -> VertexOut {
 
 // The shadow map: depth seen from the sun.
 @vertex
-fn vs_shadow(in: VertexIn) -> VertexOut {
+fn vs_shadow(input: VertexIn) -> VertexOut {
+    let in = entry_input(input, input.instance_index);
     let v = world_vertex(in);
     var out: VertexOut;
     out.decal_layers = 0u;
@@ -586,7 +601,8 @@ fn world_vertex_before(in: VertexIn) -> Vertex {
 // and the last. Models that also moved are drawn by `vs_velocity` after,
 // over these.
 @vertex
-fn vs_velocity_still(in: VertexIn) -> VelocityOut {
+fn vs_velocity_still(input: VertexIn) -> VelocityOut {
+    let in = entry_input(input, input.instance_index);
     let now = world_vertex(in);
     let before = world_vertex_before(in);
     var out: VelocityOut;

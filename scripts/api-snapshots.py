@@ -21,6 +21,12 @@ a proc-macro crate, not a binary-only crate), in these feature sets:
                         everything public, not `hotpatch` or `bench-internals`
   <extra>               EXTRA_SETS below: `ponko` with `3d` on top of the defaults
 
+Experimental items (scripts/experimental-api.txt: the public items of a
+feature whose guide chapter is experimental) are outside the versions'
+promise, so they are not in these files: every listed item's lines, from all
+sets, go to `api/<crate>/experimental.txt`. The other files are exactly the
+covered API, and a change to an experimental item still shows up in review.
+
 A set that lists exactly what `default` lists is not written (a missing file
 means "same as default": `ponko` without its window has the same API, which is
 the promise of the feature docs). If it starts to differ, its file appears in
@@ -50,6 +56,7 @@ The semver job shows only what breaks code that compiled against the last
 release. CONTRIBUTING.md has a section on both.
 """
 import difflib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -89,6 +96,7 @@ SUMMARY_DIFF_LINES = 300
 MACOS_TARGET = 'x86_64-apple-darwin'
 
 UPDATE_COMMAND = 'python3 scripts/api-snapshots.py update'
+EXPERIMENTAL_SET = 'experimental'
 
 
 # Planning and comparing: plain functions of their input, checked by `selftest`.
@@ -145,6 +153,19 @@ def drop_lines(text, prefixes, replacements=None):
         else:
             keep.extend(f'{l}\n' for l in (replacements or {}).get(prefix, []))
     return ''.join(keep)
+
+
+def split_experimental(listings, split):
+    """(covered listings, experimental text or None) of one crate.
+
+    `split(text)` returns (covered text, experimental lines); the experimental
+    lines of every set are merged, sorted, into one listing.
+    """
+    covered, experimental = {}, set()
+    for name, text in listings.items():
+        covered[name], lines = split(text)
+        experimental.update(lines)
+    return covered, ''.join(f'{l}\n' for l in sorted(experimental)) or None
 
 
 def drop_same_as_default(listings):
@@ -211,7 +232,7 @@ def summary_text(changes):
 # Side effects: cargo and the file system.
 
 def run(cmd, **kw):
-    return subprocess.run(cmd, cwd=ROOT, text=True, **kw)
+    return subprocess.run(cmd, cwd=ROOT, text=True, encoding='utf-8', **kw)
 
 
 def packages():
@@ -275,9 +296,18 @@ def generate(package, set_name, flags):
     return text if text.endswith('\n') else text + '\n'
 
 
+def experimental_api():
+    spec = importlib.util.spec_from_file_location('experimental_api', ROOT / 'scripts' / 'experimental-api.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def generate_all():
     """{relative path: text} for every crate and feature set."""
     require_tools()
+    experimental = experimental_api()
+    sections = experimental.load_list()
     files = {}
     for package in packages():
         reason = skip_reason(package)
@@ -286,8 +316,13 @@ def generate_all():
             continue
         listings = {name: generate(package, name, flags)
                     for name, flags in feature_sets(package).items()}
+        entries = experimental.item_paths(sections, package['name'])
+        listings, unstable = split_experimental(
+            listings, lambda text: experimental.split_listing(text, entries))
         for name, text in drop_same_as_default(listings).items():
             files[relative(package['name'], name)] = text
+        if unstable:
+            files[relative(package['name'], EXPERIMENTAL_SET)] = unstable
     return files
 
 
@@ -295,7 +330,7 @@ def committed():
     """{relative path: text} of the files in api/ now."""
     if not API.is_dir():
         return {}
-    return {str(p.relative_to(API)): p.read_text() for p in sorted(API.glob('*/*.txt'))}
+    return {p.relative_to(API).as_posix(): p.read_text(encoding='utf-8') for p in sorted(API.glob('*/*.txt'))}
 
 
 def main_update():
@@ -306,7 +341,7 @@ def main_update():
     for path, text in files.items():
         target = API / path
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(text)
+        target.write_text(text, encoding='utf-8', newline='\n')
     for crate_dir in API.glob('*'):
         if crate_dir.is_dir() and not any(crate_dir.iterdir()):
             crate_dir.rmdir()
@@ -339,7 +374,7 @@ def main_check():
         for rel, text in files.items():
             target = Path(out) / rel
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(text)
+            target.write_text(text, encoding='utf-8', newline='\n')
     return 1
 
 
@@ -367,6 +402,14 @@ def selftest():
     assert '+pub fn b' in changes[0][2]
     assert diff_files(same, {})[0][1] == 'stale'
     assert drop_same_as_default({'default': 'a', 'x': 'a', 'y': 'b'}) == {'default': 'a', 'y': 'b'}
+    def split(text):
+        lines = text.splitlines()
+        return (''.join(f'{l}\n' for l in lines if 'Exp' not in l), [l for l in lines if 'Exp' in l])
+    covered, unstable = split_experimental({'default': 'pub fn a\npub fn Exp::b\n',
+                                            'docs-rs': 'pub fn a\npub fn Exp::c\npub fn Exp::b\n'}, split)
+    assert covered == {'default': 'pub fn a\n', 'docs-rs': 'pub fn a\n'}, covered
+    assert unstable == 'pub fn Exp::b\npub fn Exp::c\n', unstable
+    assert split_experimental({'default': 'pub fn a\n'}, split)[1] is None
     message = '\n'.join(failure_message(changes))
     assert UPDATE_COMMAND in message and 'api/a/new.txt' in message
     assert '```diff' in summary_text(changes)

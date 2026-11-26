@@ -20,6 +20,7 @@ CI job does, how this relates to the Semver checks job).
 | `<crate>/no-default-features.txt` | `--no-default-features` (for `ponko`: headless, no window) |
 | `<crate>/docs-rs.txt` | the features docs.rs builds: everything public |
 | `ponko/3d.txt` | the defaults plus `3d` |
+| `<crate>/experimental.txt` | the experimental items (`scripts/experimental-api.txt`), from every set: outside the versions' promise, so the other files list exactly the covered API |
 
 A set that lists the same API as `default` has no file (a missing
 `no-default-features.txt` means the crate has the same API without its default

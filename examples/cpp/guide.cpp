@@ -2201,7 +2201,7 @@ static void thin_reflections(ponko::ctx& ctx) {
 // ANCHOR: ssr_transparent
 /// Water and glass reflect the scene too (each such pixel marches its own ray).
 static void transparent_reflections(ponko::ctx& ctx) {
-    auto post = ctx.post_ex(); // version 4 has ssr_transparent
+    auto post = ctx.post_ex(); // version 5 has ssr_transparent
     post.ssr_transparent = true;
     ctx.set_post(post);
     auto pond = ponko::material_of(ponko::rgba(.2f, .35f, .4f, .6f));
@@ -2221,6 +2221,21 @@ static void temporal_upscaling(ponko::ctx& ctx) {
     ctx.set_post(post);
 }
 // ANCHOR_END: upscaler
+
+// ANCHOR: auto_exposure
+/// The exposure follows the scene: a dark cave brightens over a few seconds, the sun outside darkens it
+/// faster.
+static void eye_adaptation(ponko::ctx& ctx) {
+    auto post = ctx.post_ex(); // version 4 has auto exposure
+    post.auto_exposure = true;
+    post.auto_exposure_min = -2;           // stops: at most 4x darker than without it...
+    post.auto_exposure_max = 3;            // ...and 8x brighter
+    post.auto_exposure_compensation = .5f; // a little brighter than middle grey
+    post.auto_exposure_brighten_speed = 1; // stops a second
+    post.auto_exposure_darken_speed = 3;
+    ctx.set_post(post);
+}
+// ANCHOR_END: auto_exposure
 
 // ANCHOR: gi
 /// Sunlight bounces off walls and floors onto other surfaces.
@@ -2594,6 +2609,8 @@ static void the_village_has_five_spinning_houses() {
         if (!ctx.post_ex().ssr_transparent) { std::fprintf(stderr, "ssr transparent\n"); std::abort(); }
         temporal_upscaling(ctx);
         if (ctx.post_ex().upscaler != uint32_t(ponko::upscaler::temporal) || ctx.post().render_scale != 0.67f) { std::fprintf(stderr, "upscaler\n"); std::abort(); }
+        eye_adaptation(ctx);
+        if (!ctx.post_ex().auto_exposure || ctx.post_ex().auto_exposure_max != 3) { std::fprintf(stderr, "auto exposure\n"); std::abort(); }
         bounced_light(ctx);
         if (!ctx.lighting().gi_enabled) { std::fprintf(stderr, "gi\n"); std::abort(); }
         trilight(ctx);
@@ -5432,6 +5449,22 @@ int main() {
         lobby.leave();
     }
     // ANCHOR_END: general_steam_lobby
+}
+
+// Compiled for the guide's "Shipping on Steam" chapter.
+[[maybe_unused]] static void steam_services(ponko::ctx& ctx) {
+    // ANCHOR: steam_services
+    ponko::steam::start(480);                   // at launch; false without Steam
+    ctx.steam_sync_cloud({"saves/"});           // at launch and after saving
+    // Each frame:
+    ponko::steam::update();
+    if (ponko::steam::overlay_open()) ctx.pause();
+    ponko::steam::set_rich_presence("status", "Level 3");
+    // When the player wins:
+    ponko::steam::unlock_achievement("FIRST_WIN");
+    ponko::steam::set_stat("wins", std::int32_t{1});
+    ponko::steam::store_stats();
+    // ANCHOR_END: steam_services
 }
 
 // Compiled for the guide's 2D skeleton chapter; a game calls these from its

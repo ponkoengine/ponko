@@ -2868,7 +2868,7 @@ impl Game {
         self
     }
 
-    /// Opens the control endpoint, so tools such as the `ponko-mcp` agent
+    /// Opens the native control endpoint, so tools such as the `ponko-mcp` agent
     /// bridge can inspect and drive this game while it runs: list and edit
     /// entities (through [reflection](crate::reflect::WorldReflect)), pause, step,
     /// change speed, read system timings.
@@ -2880,6 +2880,8 @@ impl Game {
     /// changes in a debug build, or in a release build with the
     /// `control-env` feature (a shipped release build without it ignores
     /// the variable). `PONKO_START_PAUSED=1` starts the simulation paused.
+    /// A browser build can instead opt in with the `web-control` feature and
+    /// the URL fragment printed by `ponko-mcp --web-bridge`.
     ///
     /// ```no_run
     /// # use ponko::prelude::*;
@@ -3064,7 +3066,9 @@ impl Game {
             return None;
         }
         if cfg!(target_arch = "wasm32") {
-            eprintln!("ponko: the control endpoint isn't available in web builds");
+            eprintln!(
+                "ponko: the native control endpoint is unavailable in web builds; use the web-control feature with ponko-mcp --web-bridge"
+            );
             return None;
         }
         match Control::start(&self.title, headless) {

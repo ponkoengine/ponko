@@ -126,6 +126,11 @@ pub struct Importer<'p> {
     colliders: bool,
     /// Whether LOD groups come over (`lod_groups`).
     lod_groups: bool,
+    /// How long animated LOD cross-fades take, in seconds (`lod_fade_time`).
+    lod_fade_time: f32,
+    /// The avatar for humanoid clips on skins without one of their own
+    /// (`humanoid_avatar`).
+    avatar: Option<crate::HumanoidAvatar>,
     report: Report,
 }
 
@@ -155,6 +160,26 @@ impl<'p> Importer<'p> {
         self.animation_clips.extend(clips);
     }
 
+    /// The avatar humanoid clips ([`animation_clips`](Self::animation_clips))
+    /// use on skins that have none of their own. A skin's own is the
+    /// avatar of the model its Animator names (`m_Avatar`), else of its
+    /// mesh's model file, when that model's Rig is Humanoid; without one or
+    /// this, the importer looks for the bones by name
+    /// ([`HumanoidAvatar::detect`](crate::HumanoidAvatar::detect)).
+    ///
+    /// ```no_run
+    /// # let project = ponko_unity::Project::open("Project")?;
+    /// let mut importer = ponko_unity::Importer::new(&project, "out", "");
+    /// let meta = std::fs::read_to_string("Project/Assets/Hero.fbx.meta").unwrap();
+    /// if let Some(avatar) = ponko_unity::HumanoidAvatar::from_meta(&meta)? {
+    ///     importer.humanoid_avatar(avatar);
+    /// }
+    /// # Ok::<(), ponko_unity::Error>(())
+    /// ```
+    pub fn humanoid_avatar(&mut self, avatar: crate::HumanoidAvatar) {
+        self.avatar = Some(avatar);
+    }
+
     /// Writes into `out` (a folder under the game's `assets/`), whose asset
     /// name is `prefix` (`"town/"` for `assets/town`).
     pub fn new(project: &'p Project, out: impl Into<PathBuf>, prefix: &str) -> Self {
@@ -177,6 +202,8 @@ impl<'p> Importer<'p> {
             vertex_colors: HashMap::new(),
             colliders: false,
             lod_groups: true,
+            lod_fade_time: 0.5,
+            avatar: None,
             report: Report::default(),
         }
     }
@@ -207,9 +234,11 @@ impl<'p> Importer<'p> {
     /// and crossfade width. Each renderer is placed relative to the group,
     /// and its Cast Shadows setting becomes the level's shadow casters
     /// (Off and Shadows Only renderers make the level cast different
-    /// meshes than it shows). Cross-fading (`m_FadeMode`) needs the group
-    /// not to animate it; animated fades (`m_AnimateCrossFading`) become
-    /// a fade over a band of screen heights, and are counted in the report.
+    /// meshes than it shows). With Fade Mode Cross Fade or SpeedTree
+    /// (`m_FadeMode`), levels crossfade over their transition width; with
+    /// Animate Cross-fading (`m_AnimateCrossFading`) on, each change of
+    /// level fades over time instead: the group gets a `LodFadeTime` of
+    /// [`lod_fade_time`](Self::lod_fade_time) seconds.
     /// Off, only LOD 0 is kept and the far levels are left out.
     ///
     /// Skinned renderers are never part of a group: one in LOD 0 stays an
@@ -222,6 +251,21 @@ impl<'p> Importer<'p> {
     /// ```
     pub fn lod_groups(&mut self, on: bool) {
         self.lod_groups = on;
+    }
+
+    /// How long a LOD group with Animate Cross-fading takes to fade from
+    /// one level to the next, in seconds: Unity's
+    /// `LODGroup.crossFadeAnimationDuration`, which a game sets from a
+    /// script for the whole project, so no file has it. 0.5 at first,
+    /// Unity's default.
+    ///
+    /// ```no_run
+    /// # let project = ponko_unity::Project::open("MyUnityGame").unwrap();
+    /// let mut import = ponko_unity::Importer::new(&project, "my_game/assets/town", "town/");
+    /// import.lod_fade_time(0.3); // what the game's startup script set
+    /// ```
+    pub fn lod_fade_time(&mut self, seconds: f32) {
+        self.lod_fade_time = seconds.max(0.0);
     }
 
     /// Says the game draws materials of `shader` (its asset path, as
@@ -446,11 +490,8 @@ impl<'p> Importer<'p> {
         }
         // Cross-fade (1) and SpeedTree (2) fade; None (0) switches at once.
         let fades = b["m_FadeMode"].as_i64().unwrap_or(0) != 0;
-        let animated = b["m_AnimateCrossFading"].as_i64() == Some(1);
-        if fades && animated {
-            self.report
-                .skip("an animated cross-fade (fades over a band of screen heights instead)");
-        }
+        // Animated: each change of level fades over time (`LodFadeTime`).
+        let animated = fades && b["m_AnimateCrossFading"].as_i64() == Some(1);
         let inverse = world.inverse();
         let renderer = |r: &GroupRenderer| {
             let (scale, rotation, position) = (inverse * r.world).to_scale_rotation_translation();
@@ -476,10 +517,8 @@ impl<'p> Importer<'p> {
                         // Unity's own defaults when a file has none.
                         .unwrap_or(0.5 / (1 << k.min(10)) as f32)
                 };
-                let width = if !fades {
+                let width = if !fades || animated {
                     0.0
-                } else if animated {
-                    0.2
                 } else {
                     l["fadeTransitionWidth"].as_f32().unwrap_or(0.0).clamp(0.0, 1.0)
                 };
@@ -519,7 +558,7 @@ impl<'p> Importer<'p> {
         };
         let (scale, rotation, position) = world.to_scale_rotation_translation();
         self.report.lod_groups += 1;
-        Some(json!({
+        let mut components = json!({
             "Transform3D": {
                 "position": position.to_array(),
                 "rotation": rotation.to_array(),
@@ -530,7 +569,11 @@ impl<'p> Importer<'p> {
                 "center": at(&b["m_LocalReferencePoint"]).to_array(),
                 "levels": levels,
             },
-        }))
+        });
+        if animated {
+            components["LodFadeTime"] = json!(self.lod_fade_time);
+        }
+        Some(components)
     }
 
     /// A collider component's entity (Unity's `world` matrix): its
@@ -647,15 +690,28 @@ impl<'p> Importer<'p> {
             }
         };
         let mut clip_root = None;
+        // The avatar for humanoid clips: the Animator's, else the model's.
+        let mut avatar = None;
         if let Some((scene, world, renderer, bones, root)) = skeleton
             && let Some(skin) = &mut unity.skin
         {
             apply_scene_bones(skin, scene, world, renderer, bones, root);
             clip_root = animator_node(skin, scene, renderer, bones);
             unity.name = format!("{}_renderer_{renderer}", unity.name);
+            if self.animation_clips.iter().any(crate::AnimationClip::is_humanoid)
+                && let Some(guid) = animator_avatar(scene, renderer)
+            {
+                avatar = self.model_avatar(&guid);
+            }
+        }
+        if avatar.is_none()
+            && unity.skin.is_some()
+            && self.animation_clips.iter().any(crate::AnimationClip::is_humanoid)
+        {
+            avatar = self.model_avatar(guid).or_else(|| self.avatar.clone());
         }
         let mats: Vec<Option<UnityMaterial>> = materials.iter().map(|m| self.material(m)).collect();
-        let glb = self.build_glb(&unity, &mats, clip_root);
+        let glb = self.build_glb(&unity, &mats, clip_root, avatar);
         let file_name = self.unique_name(&unity.name, mesh, materials);
         let dir = self.out.join("meshes");
         std::fs::create_dir_all(&dir).map_err(|e| Error::io(&dir, e))?;
@@ -718,6 +774,16 @@ impl<'p> Importer<'p> {
         };
         Ok(Some(unity))
     }
+    /// The humanoid avatar of the model file with this GUID, if it is one
+    /// whose Rig is Humanoid.
+    fn model_avatar(&mut self, guid: &str) -> Option<crate::HumanoidAvatar> {
+        let ext = self.project.path_of(guid)?.extension()?.to_str()?.to_ascii_lowercase();
+        if !MODEL_FILES.contains(&ext.as_str()) {
+            return None;
+        }
+        self.model_file(guid).as_ref().ok()?.avatar.clone()
+    }
+
     /// The model file (FBX, OBJ) with this GUID, read once.
     fn model_file(&mut self, guid: &str) -> &Result<ModelFile, Error> {
         let project = self.project;
@@ -824,7 +890,13 @@ impl<'p> Importer<'p> {
     /// its material. Standalone clips (`animation_clips`) resolve their
     /// paths from skin node `clip_root` (the Animator's object), else from
     /// the skin's root bone.
-    fn build_glb(&mut self, mesh: &UnityMesh, mats: &[Option<UnityMaterial>], clip_root: Option<usize>) -> Vec<u8> {
+    fn build_glb(
+        &mut self,
+        mesh: &UnityMesh,
+        mats: &[Option<UnityMaterial>],
+        clip_root: Option<usize>,
+        avatar: Option<crate::HumanoidAvatar>,
+    ) -> Vec<u8> {
         let mut textures: Vec<String> = Vec::new();
         let mut materials: Vec<Json> = Vec::new();
         let mut vertices = Vertices {
@@ -855,10 +927,21 @@ impl<'p> Importer<'p> {
                         .or(skin.root)
                         .or_else(|| skin.nodes.iter().position(|n| n.parent.is_none()))
                         .unwrap_or(0);
+                    // Humanoid clips: the skin's avatar, else one found by name.
+                    let avatar = avatar.clone().or_else(|| {
+                        let found = crate::HumanoidAvatar::detect(&skin);
+                        (self.animation_clips.iter().any(crate::AnimationClip::is_humanoid)
+                            && found.missing().is_empty())
+                        .then_some(found)
+                    });
                     for clip in &self.animation_clips {
                         // Baked runtime curves name blend shapes by hash only.
                         let clip = clip.with_blend_shape_names(mesh.blend_shapes.iter().map(|b| b.name.as_str()));
-                        for diagnostic in clip.append_to_skin(&mut skin, root) {
+                        let diagnostics = match (&avatar, clip.is_humanoid()) {
+                            (Some(avatar), true) => clip.append_to_skin_with_avatar(&mut skin, root, avatar),
+                            _ => clip.append_to_skin(&mut skin, root),
+                        };
+                        for diagnostic in diagnostics {
                             self.report.skip(diagnostic);
                         }
                     }
@@ -1355,6 +1438,20 @@ fn animator_node(skin: &crate::mesh::MeshSkin, scene: &Hierarchy, renderer: usiz
     None
 }
 
+/// The GUID of the model whose avatar the Animator above `renderer` uses
+/// (`m_Avatar`), if it has one.
+fn animator_avatar(scene: &Hierarchy, renderer: usize) -> Option<String> {
+    let objects = &scene.objects;
+    let mut at = Some(renderer);
+    while let Some(i) = at {
+        if let Some(animator) = objects[i].component(ANIMATOR) {
+            return animator.body["m_Avatar"].obj_ref()?.guid;
+        }
+        at = objects[i].parent;
+    }
+    None
+}
+
 // Preserve joint order (the vertex indices and bind poses use it), while
 // taking the rest pose and names from the flattened, overridden scene.
 type SceneSkeleton<'a> = (&'a Hierarchy, &'a [Mat4], usize, &'a [Value], &'a Value);
@@ -1629,7 +1726,7 @@ mod tests {
             let [speed, foam] = mesh.uvs[1][v];
             [speed / 2.0, foam, 0.0, 9.0]
         });
-        let colors = colors_of(&import.build_glb(&quad, &river, None));
+        let colors = colors_of(&import.build_glb(&quad, &river, None, None));
         assert_eq!(colors.len(), 4);
         let mut speeds: Vec<f32> = colors.iter().map(|c| c[0]).collect();
         speeds.sort_by(f32::total_cmp);
@@ -1658,12 +1755,12 @@ mod tests {
         quad.uvs[1] = vec![[3.0, 1.0]; quad.positions.len()];
         let leaf = [Some(material_of("leaf0000"))];
         let mut plain = Importer::new(&project, dir.join("out"), "");
-        assert!(!has_uv1(&plain.build_glb(&quad, &leaf, None)));
+        assert!(!has_uv1(&plain.build_glb(&quad, &leaf, None, None)));
         let mut custom = Importer::new(&project, dir.join("out"), "");
         custom.custom_shader("Assets/Leaf.shader");
-        assert!(has_uv1(&custom.build_glb(&quad, &leaf, None)));
+        assert!(has_uv1(&custom.build_glb(&quad, &leaf, None, None)));
         quad.uvs[1].clear();
-        assert!(!has_uv1(&custom.build_glb(&quad, &leaf, None)), "none to keep");
+        assert!(!has_uv1(&custom.build_glb(&quad, &leaf, None, None)), "none to keep");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1679,14 +1776,14 @@ mod tests {
         let wall = [Some(material_of("wall0000"))];
         let mut plain = Importer::new(&project, dir.join("out"), "");
         assert!(
-            !has_colors(&plain.build_glb(&cube, &wall, None)),
+            !has_colors(&plain.build_glb(&cube, &wall, None, None)),
             "Lit-style shaders ignore them"
         );
         let mut custom = Importer::new(&project, dir.join("out"), "");
         custom.custom_shader("Assets/Wall.shader");
-        assert!(has_colors(&custom.build_glb(&cube, &wall, None)));
+        assert!(has_colors(&custom.build_glb(&cube, &wall, None, None)));
         cube.colors.clear();
-        assert!(!has_colors(&custom.build_glb(&cube, &wall, None)), "none to keep");
+        assert!(!has_colors(&custom.build_glb(&cube, &wall, None, None)), "none to keep");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

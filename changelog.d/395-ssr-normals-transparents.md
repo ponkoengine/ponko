@@ -1,5 +1,5 @@
 ### Added
-- `Post::ssr_transparent` (C: `PonkoPostEx` version 4, `ssr_transparent`):
+- `Post::ssr_transparent` (C: `PonkoPostEx` version 5, `ssr_transparent`):
   screen-space reflections on glossy transparent surfaces such as water and
   glass. Each such pixel marches its reflected ray across the opaque scene
   behind it. Off by default and in every quality preset.

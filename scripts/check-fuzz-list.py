@@ -43,14 +43,14 @@ def check(fuzz):
     list_file = fuzz / 'targets.txt'
     if not list_file.is_file():
         return ['fuzz/targets.txt is missing']
-    in_list, problems = listed(list_file.read_text())
+    in_list, problems = listed(list_file.read_text(encoding='utf-8'))
     places = {
         'file in fuzz/fuzz_targets/': {p.stem for p in (fuzz / 'fuzz_targets').glob('*.rs')},
         '[[bin]] in fuzz/Cargo.toml': set(
-            re.findall(r'\[\[bin\]\]\s*name\s*=\s*"([^"]+)"', (fuzz / 'Cargo.toml').read_text())
+            re.findall(r'\[\[bin\]\]\s*name\s*=\s*"([^"]+)"', (fuzz / 'Cargo.toml').read_text(encoding='utf-8'))
         ),
         'row in the table of fuzz/README.md': set(
-            re.findall(r'^\|\s*`([a-z0-9_]+)`\s*\|', (fuzz / 'README.md').read_text(), re.M)
+            re.findall(r'^\|\s*`([a-z0-9_]+)`\s*\|', (fuzz / 'README.md').read_text(encoding='utf-8'), re.M)
         ),
     }
     for place, names in places.items():

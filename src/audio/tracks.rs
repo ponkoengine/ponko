@@ -12,16 +12,30 @@ use kira::effect::{
     reverb::{ReverbBuilder, ReverbHandle},
 };
 use kira::track::{SendTrackBuilder, SendTrackHandle, TrackBuilder, TrackHandle};
-use kira::{AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Mix, ResourceLimitReached, Tween};
+use kira::{AudioManager, AudioManagerSettings, Decibels, Mix, ResourceLimitReached, Tween};
 use std::sync::Arc;
 use std::time::Duration;
 
 /// The output: a device, or a buffer that offline mixing and tests read.
 pub(super) enum Manager {
-    Device(AudioManager<DefaultBackend>),
+    #[cfg(not(target_arch = "wasm32"))]
+    Device(AudioManager<kira::DefaultBackend>),
+    #[cfg(target_arch = "wasm32")]
+    Browser(
+        AudioManager<super::web_output::BrowserOutput>,
+        super::web_output::BrowserStatus,
+    ),
     Buffer(AudioManager<super::dsp::buffer::BufferBackend>),
 }
 impl Manager {
+    #[cfg(target_arch = "wasm32")]
+    pub(super) fn ready(&self) -> bool {
+        match self {
+            Self::Browser(_, status) => status.ready(),
+            Self::Buffer(_) => true,
+        }
+    }
+
     /// A manager mixing into memory; `None` if Kira can't make one.
     pub(super) fn buffer(sample_rate: u32) -> Option<(Self, super::dsp::buffer::Output)> {
         use super::dsp::buffer::{BufferSettings, Output};
@@ -40,13 +54,19 @@ impl Manager {
     }
     pub(super) fn add_sub_track(&mut self, builder: TrackBuilder) -> Result<TrackHandle, ResourceLimitReached> {
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Self::Device(m) => m.add_sub_track(builder),
+            #[cfg(target_arch = "wasm32")]
+            Self::Browser(m, _) => m.add_sub_track(builder),
             Self::Buffer(m) => m.add_sub_track(builder),
         }
     }
     pub(super) fn add_clock(&mut self, speed: ClockSpeed) -> Result<ClockHandle, ResourceLimitReached> {
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Self::Device(m) => m.add_clock(speed),
+            #[cfg(target_arch = "wasm32")]
+            Self::Browser(m, _) => m.add_clock(speed),
             Self::Buffer(m) => m.add_clock(speed),
         }
     }
@@ -55,7 +75,10 @@ impl Manager {
         builder: SendTrackBuilder,
     ) -> Result<SendTrackHandle, ResourceLimitReached> {
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Self::Device(m) => m.add_send_track(builder),
+            #[cfg(target_arch = "wasm32")]
+            Self::Browser(m, _) => m.add_send_track(builder),
             Self::Buffer(m) => m.add_send_track(builder),
         }
     }

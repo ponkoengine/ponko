@@ -92,6 +92,17 @@ test("artifacts go to a folder named by fixture, browser, backend and case", () 
   assert.match(full.out, /web_smoke-chromium-new-webgpu-ok$/, "the two Chromium modes don't overwrite each other");
 });
 
+test("audio regressions require a fixture with music and get distinct output folders", () => {
+  assert.equal(parse("--fixture", "web_smoke").audioOutput, "normal");
+  const zero = parse("--fixture", "web_smoke", "--audio-output", "zero-channels");
+  assert.match(zero.out, /ok-zero-channels$/);
+  assert.equal(zero.audioOutput, "zero-channels");
+  const rejected = parse("--fixture", "web_smoke", "--audio-output", "resume-rejected");
+  assert.match(rejected.out, /ok-resume-rejected$/);
+  assert.throws(() => parse("--fixture", "web_smoke", "--music", "none", "--audio-output", "zero-channels"), /needs .*--music required/);
+  assert.throws(() => parse("--fixture", "web_smoke", "--audio-output", "other"), /--audio-output must be/);
+});
+
 test("bad arguments are usage errors that name the problem", () => {
   const bad = (message, ...argv) => assert.throws(() => parse(...argv), (e) => e instanceof UsageError && message.test(e.message));
   bad(/--dir or --fixture/);

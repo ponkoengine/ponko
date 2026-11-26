@@ -282,6 +282,156 @@ impl DepthOfField {
     }
 }
 
+/// Auto exposure ([`Post::auto_exposure`]): the picture's exposure follows
+/// its brightness, as an eye or a camera adapts. Walk from daylight into a
+/// dark interior and the picture brightens over a few seconds; walk back out
+/// and it darkens again. Off by default.
+///
+/// Each frame the lit HDR frame is metered: the average of its brightness
+/// (the mean of the log luminance, so one bright lamp doesn't decide it)
+/// over what the 3D frame drew (the background color the game clears to
+/// doesn't count), weighted toward the middle by
+/// [`center_weight`](Self::center_weight) and by the [`mask`](Self::mask).
+/// The exposure that brings that average to middle grey (0.18), moved by
+/// [`compensation`](Self::compensation) and held between [`min`](Self::min)
+/// and [`max`](Self::max), is the target, and the exposure moves toward it
+/// at most [`brighten_speed`](Self::brighten_speed) or
+/// [`darken_speed`](Self::darken_speed) stops a second. The result adds to
+/// [`Post::exposure`], which still applies on top (so fades and
+/// [`PostVolume`]s that set it keep working), before bloom and tone mapping.
+///
+/// The first frame drawn with it on starts at the target, as does the
+/// first after `Graphics::reset_temporal_history` (a teleport or a new
+/// scene). Each camera of a split screen ([`d3::View`](crate::d3::View))
+/// adapts on its own. The adapted exposure stays on the GPU: nothing is read
+/// back, so the game can't read it.
+///
+/// **Cost:** off, nothing: no pass, no image, and one skipped branch in the
+/// tone mapping pass. On, a metering pass over an eighth of the frame's
+/// width and height, a few tiny passes that reduce it to one value and one
+/// that adapts it: about 0.2 to 0.4 ms of GPU time at 1920x1080 and
+/// 2560x1440 on an Apple M4 Max, mostly the metering pass and the fixed cost
+/// of each small pass (the guide has the numbers). It works on every GPU
+/// tier, WebGL2 included: it uses render passes only.
+/// ```
+/// use ponko::render::{AutoExposure, Post};
+/// let mut post = Post::default();
+/// assert!(!post.auto_exposure.enabled);
+/// post.auto_exposure = AutoExposure { enabled: true, max: 6.0, ..Default::default() };
+/// assert_eq!((post.auto_exposure.min, post.auto_exposure.brighten_speed), (-4.0, 1.0));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AutoExposure {
+    /// Follow the picture's brightness. Default false.
+    pub enabled: bool,
+    /// The most it darkens the picture, in stops (0 or below; -4 is a
+    /// sixteenth of the light). Default -4.
+    pub min: f32,
+    /// The most it brightens the picture, in stops (0 or above). Default 4.
+    /// A max below `min` counts as `min`.
+    pub max: f32,
+    /// Where it settles, in stops from middle grey: +1 keeps the picture a
+    /// stop brighter than the meter says, -1 a stop darker. It is part of
+    /// the target, so `min` and `max` hold it too. Default 0.
+    pub compensation: f32,
+    /// How fast the picture brightens (after the camera walks into the
+    /// dark), in stops a second. Default 1. 0 holds the exposure where it
+    /// is; `f32::INFINITY` jumps to the target at once.
+    pub brighten_speed: f32,
+    /// How fast the picture darkens (after the camera walks into bright
+    /// light), in stops a second. Default 3, as eyes adapt to light faster
+    /// than to the dark. 0 holds; `f32::INFINITY` jumps.
+    pub darken_speed: f32,
+    /// How much more the middle of the picture counts than its edges, 0 to
+    /// 1: 0 meters the whole picture evenly, 1 leaves the corners out.
+    /// Default 0.5.
+    pub center_weight: f32,
+    /// A metering mask: a texture stretched over the picture whose red
+    /// channel says how much each part counts (white fully, black not at
+    /// all), on top of `center_weight`. For example a white disc in the
+    /// middle for spot metering, or black under the HUD's panel. Default
+    /// none.
+    pub mask: Option<Texture>,
+}
+
+impl Default for AutoExposure {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            min: -4.0,
+            max: 4.0,
+            compensation: 0.0,
+            brighten_speed: 1.0,
+            darken_speed: 3.0,
+            center_weight: 0.5,
+            mask: None,
+        }
+    }
+}
+
+impl AutoExposure {
+    /// The exposure, in stops added to [`Post::exposure`], that auto
+    /// exposure settles at for a picture whose metered average luminance
+    /// (the weighted mean of its log luminance, as a luminance) is
+    /// `average`: what brings it to middle grey, moved by the compensation
+    /// and held between `min` and `max`. What the GPU computes, for
+    /// working out settings.
+    /// ```
+    /// use ponko::render::AutoExposure;
+    /// let auto = AutoExposure { enabled: true, ..Default::default() };
+    /// assert_eq!(auto.target(0.18), 0.0, "middle grey already");
+    /// assert!((auto.target(0.045) - 2.0).abs() < 1e-5, "two stops too dark: brightened by two");
+    /// assert_eq!(auto.target(0.001), 4.0, "held at max");
+    /// let brighter = AutoExposure { compensation: 1.0, ..auto };
+    /// assert_eq!(brighter.target(0.18), 1.0);
+    /// ```
+    #[must_use]
+    pub fn target(&self, average: f32) -> f32 {
+        let [min, max, compensation, _] = self.meter();
+        let metered = average.max(f32::MIN_POSITIVE).log2().clamp(-METER_STOPS, METER_STOPS);
+        (MIDDLE_GREY.log2() - metered + compensation).clamp(min, max)
+    }
+
+    /// `min`, `max`, `compensation` and `center_weight` as the GPU reads
+    /// them: a non-finite value is the default, the weight clamped to 0..1
+    /// and `max` at least `min`.
+    fn meter(&self) -> [f32; 4] {
+        let or = |v: f32, d: f32| if v.is_finite() { v } else { d };
+        let d = AutoExposure::default();
+        let min = or(self.min, d.min);
+        let max = or(self.max, d.max).max(min);
+        [
+            min,
+            max,
+            or(self.compensation, 0.0),
+            or(self.center_weight, d.center_weight).clamp(0.0, 1.0),
+        ]
+    }
+
+    /// How far the exposure may move in a frame `dt` seconds long, in
+    /// stops: brightening and darkening (a negative or NaN speed holds,
+    /// an infinite one jumps).
+    fn steps(&self, dt: f32) -> [f32; 2] {
+        let dt = if dt.is_finite() { dt.max(0.0) } else { 0.0 };
+        let step = |speed: f32| {
+            if speed == f32::INFINITY {
+                f32::MAX
+            } else if speed.is_nan() || speed <= 0.0 {
+                0.0
+            } else {
+                (speed * dt).min(f32::MAX)
+            }
+        };
+        [step(self.brighten_speed), step(self.darken_speed)]
+    }
+}
+
+/// Middle grey: what auto exposure brings the metered average to.
+pub(crate) const MIDDLE_GREY: f32 = 0.18;
+/// The metered log luminance is held within this many stops of 1 (in the
+/// shader too), so a black or blinding frame still meters finitely.
+pub(crate) const METER_STOPS: f32 = 16.0;
+
 /// What happens to the lit 3D frame before it reaches the screen: the
 /// resolution it is drawn at, antialiasing, ambient occlusion, reflections,
 /// depth of field, exposure, bloom, color grading and tone mapping. At
@@ -305,8 +455,8 @@ impl DepthOfField {
 ///
 /// [`Default`] draws at the window's resolution with 4x multisampling and
 /// no post antialiasing, ACES tone mapping, a bloom of 0.05, and ambient
-/// occlusion, contact shadows, reflections, depth of field, vignette and the
-/// lens effects off; exposure, contrast, saturation, temperature and tint are
+/// occlusion, contact shadows, reflections, depth of field, auto exposure,
+/// vignette and the lens effects off; exposure, contrast, saturation, temperature and tint are
 /// neutral. What is off costs nothing. What is on adds work, as each field
 /// says: a pass for a `render_scale` other than 1, one full-screen pass for
 /// FXAA and three for SMAA, a motion pass, a resolve pass and three
@@ -465,7 +615,12 @@ pub struct Post {
     /// image a little), 0 to 1. Default 0.25.
     pub taa_sharpness: f32,
     /// Brightness in stops: +1 doubles the light, -1 halves it. Default 0.
+    /// With [`auto_exposure`](Self::auto_exposure) on, it still applies, on
+    /// top of the adapted exposure.
     pub exposure: f32,
+    /// Exposure that follows the picture's brightness, as eyes adapt.
+    /// Default off.
+    pub auto_exposure: AutoExposure,
     /// How light maps to the screen. Default [`Tonemap::Aces`].
     pub tonemap: Tonemap,
     /// How strongly bright light glows into its surroundings; 0 turns bloom
@@ -530,6 +685,7 @@ impl Default for Post {
             msaa: 4,
             taa_sharpness: 0.25,
             exposure: 0.0,
+            auto_exposure: AutoExposure::default(),
             tonemap: Tonemap::Aces,
             bloom: 0.05,
             bloom_threshold: 1.0,
@@ -614,9 +770,10 @@ impl Post {
     /// Amounts and colors blend: exposure, bloom, grading, white balance,
     /// split toning, vignette, lens effects, sharpening, contact shadows
     /// and reflections. An effect on at one end and off at the other
-    /// (ambient occlusion, depth of field) runs through the blend with its
-    /// strength fading to nothing at the end where it is off, and its other
-    /// settings from the end where it is on. Choices that can't be mixed
+    /// (ambient occlusion, depth of field, auto exposure) runs through the
+    /// blend with its strength fading to nothing at the end where it is off
+    /// (for auto exposure: its `min` and `max` closing in on 0 stops), and
+    /// its other settings from the end where it is on. Choices that can't be mixed
     /// switch halfway: the tone map, the lookup table, antialiasing,
     /// multisampling, the render scale (blending it would make the scene's
     /// images again every frame), the ambient occlusion's quality and
@@ -686,6 +843,38 @@ impl Post {
                 blur: f(blur(x), blur(y)),
             }
         };
+        let auto_exposure = {
+            let (x, y) = (&a.auto_exposure, &b.auto_exposure);
+            // An end that is off adds no exposure: its range is 0 stops.
+            let off = |o: &AutoExposure| AutoExposure {
+                min: 0.0,
+                max: 0.0,
+                ..*o
+            };
+            // An infinite speed (a jump) doesn't blend: it switches halfway.
+            let speed = |a: f32, b: f32| {
+                if a.is_finite() && b.is_finite() {
+                    f(a, b)
+                } else {
+                    pick(t, a, b)
+                }
+            };
+            let (from, to) = match (x.enabled, y.enabled) {
+                (true, false) => (*x, off(x)),
+                (false, true) => (off(y), *y),
+                _ => (*x, *y),
+            };
+            AutoExposure {
+                enabled: x.enabled || y.enabled,
+                min: f(from.min, to.min),
+                max: f(from.max, to.max),
+                compensation: f(from.compensation, to.compensation),
+                brighten_speed: speed(from.brighten_speed, to.brighten_speed),
+                darken_speed: speed(from.darken_speed, to.darken_speed),
+                center_weight: f(from.center_weight, to.center_weight),
+                mask: pick(t, from.mask, to.mask),
+            }
+        };
         Post {
             render_scale: pick(t, a.render_scale, b.render_scale),
             sharpen: f(a.sharpen, b.sharpen),
@@ -702,6 +891,7 @@ impl Post {
             msaa: pick(t, a.msaa, b.msaa),
             taa_sharpness: f(a.taa_sharpness, b.taa_sharpness),
             exposure: f(a.exposure, b.exposure),
+            auto_exposure,
             tonemap: pick(t, a.tonemap, b.tonemap),
             bloom: f(a.bloom, b.bloom),
             bloom_threshold: f(a.bloom_threshold, b.bloom_threshold),
@@ -878,6 +1068,14 @@ pub(crate) struct PostUniform {
     /// distance; z: with HDR output (`mode.w` 1), the brightest the frame
     /// may be over SDR white.
     pub camera: [f32; 4],
+    /// Auto exposure's meter: x min, y max (stops), z compensation, w
+    /// center weight.
+    pub meter: [f32; 4],
+    /// Auto exposure's adaptation this frame: the most it may brighten (x)
+    /// and darken (y), in stops.
+    pub adapt: [f32; 4],
+    /// Auto exposure: x on (1/0), y jump to the target this frame (1/0).
+    pub auto: [u32; 4],
 }
 
 /// The lens distortion terms, as Unity's and other engines' "lens
@@ -957,7 +1155,26 @@ impl PostUniform {
                 [0.0; 4]
             },
             camera: [0.1, 1000.0, 0.0, 0.0],
+            meter: if post.auto_exposure.enabled {
+                post.auto_exposure.meter()
+            } else {
+                [0.0; 4]
+            },
+            adapt: [0.0; 4],
+            auto: [u32::from(post.auto_exposure.enabled), 0, 0, 0],
         }
+    }
+
+    /// The same, for a frame `dt` seconds after the last one this camera
+    /// drew: how far auto exposure may move, or with `jump` (its first
+    /// frame, or after a reset) that it starts at the target.
+    pub fn adapt(mut self, post: &Post, dt: f32, jump: bool) -> Self {
+        if self.auto[0] != 0 {
+            let [brighten, darken] = post.auto_exposure.steps(dt);
+            self.adapt = [brighten, darken, 0.0, 0.0];
+            self.auto[1] = u32::from(jump);
+        }
+        self
     }
 
     /// The same, for a camera with these near and far planes (depth of
@@ -1261,6 +1478,123 @@ mod tests {
             diagonal < corner.weight(Vec3::new(2.0, 1.0, 1.0)),
             "distance to the box, not per axis"
         );
+    }
+
+    #[test]
+    fn auto_exposure_is_off_in_the_uniform_until_enabled() {
+        let off = PostUniform::new(&Post::default(), None).adapt(&Post::default(), 0.5, true);
+        assert_eq!((off.meter, off.adapt, off.auto), ([0.0; 4], [0.0; 4], [0; 4]));
+        let mut post = Post {
+            auto_exposure: AutoExposure {
+                enabled: true,
+                min: -2.0,
+                max: f32::NAN,
+                compensation: 0.5,
+                center_weight: 3.0,
+                ..Default::default()
+            },
+            ..Post::default()
+        };
+        let u = PostUniform::new(&post, None).adapt(&post, 0.5, false);
+        assert_eq!(
+            u.meter,
+            [-2.0, 4.0, 0.5, 1.0],
+            "a NaN max is the default, the weight clamped"
+        );
+        assert_eq!(u.adapt, [0.5, 1.5, 0.0, 0.0], "half a second at 1 and 3 stops a second");
+        assert_eq!(u.auto, [1, 0, 0, 0]);
+        assert_eq!(
+            PostUniform::new(&post, None).adapt(&post, 0.5, true).auto[1],
+            1,
+            "a jump"
+        );
+        post.auto_exposure.max = -5.0;
+        assert_eq!(PostUniform::new(&post, None).meter[1], -2.0, "a max below min is min");
+    }
+
+    #[test]
+    fn auto_exposure_steps_hold_at_zero_and_jump_at_infinity() {
+        let steps = |brighten, darken, dt| {
+            AutoExposure {
+                brighten_speed: brighten,
+                darken_speed: darken,
+                ..Default::default()
+            }
+            .steps(dt)
+        };
+        assert_eq!(steps(2.0, 4.0, 0.25), [0.5, 1.0]);
+        assert_eq!(steps(0.0, -1.0, 0.25), [0.0, 0.0], "0 or below holds");
+        assert_eq!(
+            steps(f32::NAN, 1.0, f32::NAN),
+            [0.0, 0.0],
+            "NaN holds; a NaN frame moves nothing"
+        );
+        assert_eq!(
+            steps(f32::INFINITY, 1.0, 0.0),
+            [f32::MAX, 0.0],
+            "infinite jumps, even at dt 0"
+        );
+        assert_eq!(steps(1.0, 1.0, -1.0), [0.0, 0.0], "time doesn't run backwards");
+    }
+
+    #[test]
+    fn auto_exposure_targets_middle_grey_within_its_range() {
+        let auto = AutoExposure {
+            enabled: true,
+            ..Default::default()
+        };
+        assert!((auto.target(0.09) - 1.0).abs() < 1e-5);
+        assert!((auto.target(0.36) + 1.0).abs() < 1e-5);
+        assert_eq!(auto.target(0.0), 4.0, "black: held at max");
+        assert_eq!(auto.target(1e9), -4.0, "blinding: held at min");
+        let wide = AutoExposure {
+            min: -40.0,
+            max: 40.0,
+            ..auto
+        };
+        assert!(wide.target(0.0).is_finite(), "the meter is held within its stops");
+    }
+
+    #[test]
+    fn lerp_fades_auto_exposure_in_by_its_range() {
+        let off = Post::default();
+        let on = Post {
+            auto_exposure: AutoExposure {
+                enabled: true,
+                min: -2.0,
+                max: 6.0,
+                brighten_speed: f32::INFINITY,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let q = off.lerp(&on, 0.25);
+        assert!(q.auto_exposure.enabled, "on through the blend");
+        assert_eq!(
+            (q.auto_exposure.min, q.auto_exposure.max),
+            (-0.5, 1.5),
+            "a quarter of the range"
+        );
+        assert_eq!(q.auto_exposure.darken_speed, 3.0, "the settings of the end that has it");
+        assert_eq!(
+            q.auto_exposure.brighten_speed,
+            f32::INFINITY,
+            "an infinite speed isn't blended"
+        );
+        let back = on.lerp(&off, 0.75);
+        assert_eq!(back.auto_exposure, q.auto_exposure, "the same either way");
+        assert_eq!(off.lerp(&on, 0.0), off, "fully off at its own end");
+        let half = on.lerp(
+            &Post {
+                auto_exposure: AutoExposure {
+                    brighten_speed: 1.0,
+                    ..on.auto_exposure
+                },
+                ..on
+            },
+            0.5,
+        );
+        assert_eq!(half.auto_exposure.brighten_speed, 1.0, "switched halfway");
     }
 
     #[test]

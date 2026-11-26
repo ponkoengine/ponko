@@ -9,7 +9,8 @@
 //! the socket sent to may answer: most home routers) or a symmetric one (a
 //! new public port per destination: some mobile and corporate networks). A
 //! STUN server on the network answers binding requests with the address it
-//! sees, as a public one does.
+//! sees, as a public one does, and a TURN server (`turn.rs`'s test server)
+//! relays for peers that allocated an address on it.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io;
@@ -20,11 +21,13 @@ use std::time::Duration;
 use super::rtc::{Agent, Signaling};
 use super::rtc_native::Socket;
 use super::stun;
+use super::turn::test_server::{Out, TestTurnServer};
 use crate::net::{Lane, MessageEvent, NetMessages, PeerId};
 
 /// One scripted step: every endpoint polls with this much protocol time.
 const STEP: Duration = Duration::from_millis(10);
 const STUN_SERVER: &str = "198.51.100.1:3478";
+const TURN_SERVER: &str = "198.51.100.2:3478";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum NatKind {
@@ -57,6 +60,10 @@ struct Network {
     /// Every destination peers sent to, delivered or not.
     tried: Vec<SocketAddr>,
     stun_requests: u64,
+    /// The TURN server at `TURN_SERVER`, if the test runs one.
+    turn: Option<TestTurnServer>,
+    /// The password agents give the TURN server (`secret` is right).
+    turn_password: String,
 }
 
 impl Network {
@@ -108,8 +115,52 @@ impl Network {
         self.inboxes.contains_key(&to).then_some(to)
     }
 
+    fn run_turn(&mut self) {
+        let mut next = 50_000;
+        self.turn = Some(TestTurnServer::new("alice", "secret", move || {
+            next += 1;
+            SocketAddr::new("198.51.100.2".parse().unwrap(), next)
+        }));
+    }
+
+    /// A datagram for the TURN server, at its listening address or at one
+    /// of its relayed ones; false if `to` is neither.
+    fn through_turn(&mut self, seen: SocketAddr, to: SocketAddr, bytes: &[u8]) -> bool {
+        let Some(mut turn) = self.turn.take() else {
+            return false;
+        };
+        let server: SocketAddr = TURN_SERVER.parse().unwrap();
+        let mut out = Vec::new();
+        let handled = if to == server {
+            turn.on_client_packet(seen, bytes, &mut out);
+            true
+        } else if turn.relays().any(|r| r == to) {
+            if let Some((client, data)) = turn.on_peer_packet(to, seen, bytes) {
+                out.push(Out::ToClient(client, data));
+            }
+            true
+        } else {
+            false
+        };
+        self.turn = Some(turn);
+        for o in out {
+            match o {
+                Out::ToClient(client, data) => {
+                    if let Some(at) = self.inward(server, client) {
+                        self.inboxes.get_mut(&at).unwrap().push_back((server, data));
+                    }
+                }
+                Out::FromRelay { relay, to, bytes } => self.send(relay, to, &bytes),
+            }
+        }
+        handled
+    }
+
     fn send(&mut self, from: SocketAddr, to: SocketAddr, bytes: &[u8]) {
         let seen = self.outward(from, to);
+        if self.through_turn(seen, to, bytes) {
+            return;
+        }
         if to == STUN_SERVER.parse().unwrap() {
             self.stun_requests += 1;
             let mut reply = Vec::new();
@@ -164,7 +215,15 @@ fn agent(net: &Shared, addr: &str, stun: bool) -> Agent {
     } else {
         Vec::new()
     };
-    Agent::with_socket(Box::new(MemSocket { net: net.clone(), me }), me, &servers).unwrap()
+    let agent = Agent::with_socket(Box::new(MemSocket { net: net.clone(), me }), me, &servers).unwrap();
+    // Agents on a network with a TURN server use it, with the password `password`.
+    let turn = net.lock().unwrap().turn.is_some();
+    let password = net.lock().unwrap().turn_password.clone();
+    if turn {
+        agent.with_turn(&[(TURN_SERVER.parse().unwrap(), "alice".into(), password)], false)
+    } else {
+        agent
+    }
 }
 
 /// Endpoints with their signaling handles (endpoint `i` is signaling peer
@@ -174,6 +233,8 @@ struct Session {
     nets: Vec<Option<NetMessages>>,
     signaling: Vec<Signaling>,
     logs: Vec<Vec<MessageEvent>>,
+    /// Per endpoint: the TURN failures `poll` reported.
+    turn_errors: Vec<Vec<String>>,
     /// Signaling messages carried, for assertions.
     signals: usize,
 }
@@ -200,6 +261,7 @@ impl Session {
             nets,
             signaling,
             logs,
+            turn_errors: addrs.iter().map(|_| Vec::new()).collect(),
             signals: 0,
         }
     }
@@ -218,7 +280,11 @@ impl Session {
         for _ in 0..steps {
             for i in 0..self.nets.len() {
                 if let Some(net) = &mut self.nets[i] {
-                    net.poll_elapsed(STEP).unwrap();
+                    if let Err(e) = net.poll_elapsed(STEP) {
+                        let why = e.to_string();
+                        assert!(why.starts_with("TURN server"), "endpoint {i}: {why}");
+                        self.turn_errors[i].push(why);
+                    }
                     self.logs[i].extend(net.events());
                 }
             }
@@ -356,7 +422,7 @@ fn a_peer_behind_a_symmetric_nat_reaches_a_public_host_but_two_symmetric_nats_ne
     s.connect(1500).expect("a symmetric NAT reaches a public host");
 
     // Both behind symmetric NATs: no address either learns works for the
-    // other. Browsers would need a TURN server; the desktop has none.
+    // other. Without a TURN server they can't connect (the next test has one).
     let net = open_network();
     {
         let mut n = net.lock().unwrap();
@@ -372,6 +438,164 @@ fn a_peer_behind_a_symmetric_nat_reaches_a_public_host_but_two_symmetric_nats_ne
             .iter()
             .any(|e| matches!(e, MessageEvent::Disconnected(PeerId::HOST, _)))
     );
+}
+
+/// Two peers behind symmetric NATs, with STUN and a TURN server on the
+/// network that agents reach with `password`.
+fn behind_symmetric_nats_with_turn(password: &str) -> (Shared, Session) {
+    let net = open_network();
+    {
+        let mut n = net.lock().unwrap();
+        n.nat("10.0.0.2", "198.51.100.20", NatKind::Symmetric);
+        n.nat("10.1.0.2", "198.51.100.30", NatKind::Symmetric);
+        n.run_turn();
+        n.turn_password = password.into();
+    }
+    let s = Session::new(net.clone(), &["10.0.0.2:5000", "10.1.0.2:5000"], true, 4);
+    (net, s)
+}
+
+#[test]
+fn peers_behind_two_symmetric_nats_connect_through_a_turn_server() {
+    let (net, mut s) = behind_symmetric_nats_with_turn("secret");
+    s.connect(3000).expect("connects through the TURN server");
+    let peer = s.host_peer_of(1);
+    s.net(1).send(PeerId::HOST, Lane::Reliable, b"up").unwrap();
+    s.net(0).send(peer, Lane::Reliable, b"down").unwrap();
+    s.step(50);
+    assert_eq!(s.messages(0, Lane::Reliable), [b"up".to_vec()]);
+    assert_eq!(s.messages(1, Lane::Reliable), [b"down".to_vec()]);
+    let n = net.lock().unwrap();
+    let turn = n.turn.as_ref().unwrap();
+    assert!(
+        turn.relayed_to_peers > 0 && turn.relayed_to_clients > 0,
+        "the packets went through the relay: {} out, {} in",
+        turn.relayed_to_peers,
+        turn.relayed_to_clients
+    );
+    assert_eq!(turn.relays().count(), 2, "each peer allocated a relayed address");
+    assert!(s.turn_errors.iter().all(Vec::is_empty), "{:?}", s.turn_errors);
+}
+
+#[test]
+fn wrong_turn_credentials_leave_two_symmetric_nats_unconnected() {
+    let (net, mut s) = behind_symmetric_nats_with_turn("wrong");
+    assert_eq!(s.connect(1500), None);
+    let n = net.lock().unwrap();
+    let turn = n.turn.as_ref().unwrap();
+    assert_eq!(turn.relays().count(), 0, "no allocation without the right password");
+    assert!(turn.refused >= 2, "both were refused");
+    // Each endpoint's poll said why, once.
+    for errors in &s.turn_errors {
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("refused the credentials"), "{errors:?}");
+    }
+}
+
+#[test]
+fn a_direct_path_is_preferred_over_the_turn_relay() {
+    let net = open_network();
+    net.lock().unwrap().run_turn();
+    net.lock().unwrap().turn_password = "secret".into();
+    let mut s = Session::new(net.clone(), &["203.0.113.1:5000", "203.0.113.2:5000"], false, 4);
+    s.connect(1500).expect("connects");
+    s.step(200);
+    let before = net.lock().unwrap().turn.as_ref().unwrap().relayed_to_peers;
+    for i in 0..100u32 {
+        s.net(1).send(PeerId::HOST, Lane::Reliable, &i.to_le_bytes()).unwrap();
+        s.step(1);
+    }
+    s.step(50);
+    assert_eq!(s.messages(0, Lane::Reliable).len(), 100);
+    let after = net.lock().unwrap().turn.as_ref().unwrap().relayed_to_peers;
+    assert!(
+        after - before < 20,
+        "the messages went directly, not through the relay ({} relayed)",
+        after - before
+    );
+}
+
+#[test]
+fn a_relay_only_client_joins_through_a_turn_server_on_real_udp_sockets() {
+    use super::rtc::RtcConfig;
+    use std::net::UdpSocket;
+
+    // The TURN server on loopback: its listening socket and one socket per
+    // relayed address, polled with the endpoints.
+    let listen = UdpSocket::bind("127.0.0.1:0").unwrap();
+    listen.set_nonblocking(true).unwrap();
+    let new_relays: Arc<Mutex<Vec<UdpSocket>>> = Arc::default();
+    let made = new_relays.clone();
+    let mut turn = TestTurnServer::new("alice", "secret", move || {
+        let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+        socket.set_nonblocking(true).unwrap();
+        let addr = socket.local_addr().unwrap();
+        made.lock().unwrap().push(socket);
+        addr
+    });
+    let mut relays: BTreeMap<SocketAddr, UdpSocket> = BTreeMap::new();
+    let mut poll_turn = |turn: &mut TestTurnServer| {
+        let mut buf = [0u8; 4096];
+        let mut out = Vec::new();
+        while let Ok((n, from)) = listen.recv_from(&mut buf) {
+            turn.on_client_packet(from, &buf[..n], &mut out);
+        }
+        for socket in new_relays.lock().unwrap().drain(..) {
+            relays.insert(socket.local_addr().unwrap(), socket);
+        }
+        for (&relay, socket) in &relays {
+            while let Ok((n, from)) = socket.recv_from(&mut buf) {
+                if let Some((client, data)) = turn.on_peer_packet(relay, from, &buf[..n]) {
+                    out.push(Out::ToClient(client, data));
+                }
+            }
+        }
+        for o in out {
+            match o {
+                Out::ToClient(client, data) => {
+                    let _ = listen.send_to(&data, client);
+                }
+                Out::FromRelay { relay, to, bytes } => {
+                    let _ = relays[&relay].send_to(&bytes, to);
+                }
+            }
+        }
+    };
+    let url = format!("turn:{}", listen.local_addr().unwrap());
+
+    let config = RtcConfig::new()
+        .bind("127.0.0.1:0".parse().unwrap())
+        .turn(&url, "alice", "secret")
+        .relay_only();
+    let (host_side, client_side) = (Signaling::new(), Signaling::new());
+    let mut host = NetMessages::host_rtc(host_side.clone(), config.clone(), 2).unwrap();
+    let mut client = NetMessages::join_rtc(client_side.clone(), 1, config).unwrap();
+    let mut message = None;
+    // Simulated time; the kernel delivers loopback packets at once.
+    for _ in 0..5000 {
+        poll_turn(&mut turn);
+        host.poll_elapsed(STEP).unwrap();
+        poll_turn(&mut turn);
+        client.poll_elapsed(STEP).unwrap();
+        while let Some((_, bytes)) = client_side.next_outgoing() {
+            host_side.deliver(2, &bytes);
+        }
+        while let Some((_, bytes)) = host_side.next_outgoing() {
+            client_side.deliver(1, &bytes);
+        }
+        if client.events().any(|e| e == MessageEvent::Connected(PeerId::HOST)) {
+            client.send(PeerId::HOST, Lane::Reliable, b"through the relay").unwrap();
+        }
+        if let Some(MessageEvent::Message { bytes, .. }) =
+            host.events().find(|e| matches!(e, MessageEvent::Message { .. }))
+        {
+            message = Some(bytes);
+            break;
+        }
+    }
+    assert_eq!(message.as_deref(), Some(b"through the relay".as_slice()));
+    assert!(turn.relayed_to_peers > 0 && turn.relayed_to_clients > 0);
+    assert_eq!(turn.relays().count(), 2, "both ends relayed, as relay_only asks");
 }
 
 #[test]
