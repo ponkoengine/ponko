@@ -2167,6 +2167,8 @@ pub const ponko::color::Color::TRANSPARENT: ponko::color::Color
 pub const ponko::color::Color::WHITE: ponko::color::Color
 pub const ponko::color::Color::YELLOW: ponko::color::Color
 pub const fn ponko::color::Color::hex(u32) -> ponko::color::Color
+pub const fn ponko::color::Color::hex_rgba(u32) -> ponko::color::Color
+pub fn ponko::color::Color::lerp(self, ponko::color::Color, f32) -> ponko::color::Color
 pub const fn ponko::color::Color::rgb(f32, f32, f32) -> ponko::color::Color
 pub const fn ponko::color::Color::rgba(f32, f32, f32, f32) -> ponko::color::Color
 pub const fn ponko::color::Color::with_alpha(self, f32) -> ponko::color::Color
@@ -2182,6 +2184,9 @@ impl core::fmt::Debug for ponko::color::Color
 pub fn ponko::color::Color::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::color::Color
 impl core::marker::StructuralPartialEq for ponko::color::Color
+impl core::str::traits::FromStr for ponko::color::Color
+pub type ponko::color::Color::Err = ponko::error::Error
+pub fn ponko::color::Color::from_str(&str) -> core::result::Result<ponko::color::Color, ponko::error::Error>
 impl serde_core::ser::Serialize for ponko::color::Color
 pub fn ponko::color::Color::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for ponko::color::Color
@@ -11972,6 +11977,8 @@ pub const ponko::color::Color::TRANSPARENT: ponko::color::Color
 pub const ponko::color::Color::WHITE: ponko::color::Color
 pub const ponko::color::Color::YELLOW: ponko::color::Color
 pub const fn ponko::color::Color::hex(u32) -> ponko::color::Color
+pub const fn ponko::color::Color::hex_rgba(u32) -> ponko::color::Color
+pub fn ponko::color::Color::lerp(self, ponko::color::Color, f32) -> ponko::color::Color
 pub const fn ponko::color::Color::rgb(f32, f32, f32) -> ponko::color::Color
 pub const fn ponko::color::Color::rgba(f32, f32, f32, f32) -> ponko::color::Color
 pub const fn ponko::color::Color::with_alpha(self, f32) -> ponko::color::Color
@@ -11987,6 +11994,9 @@ impl core::fmt::Debug for ponko::color::Color
 pub fn ponko::color::Color::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::color::Color
 impl core::marker::StructuralPartialEq for ponko::color::Color
+impl core::str::traits::FromStr for ponko::color::Color
+pub type ponko::color::Color::Err = ponko::error::Error
+pub fn ponko::color::Color::from_str(&str) -> core::result::Result<ponko::color::Color, ponko::error::Error>
 impl serde_core::ser::Serialize for ponko::color::Color
 pub fn ponko::color::Color::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for ponko::color::Color

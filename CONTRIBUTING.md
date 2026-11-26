@@ -155,6 +155,8 @@ command-line limit ("The filename or extension is too long (os error 206)").
 `python3 scripts/fmt-workspace.py --check` checks the same files in batches
 and works everywhere; the format check in `scripts/checks.yml` uses it.
 
+On a card with little memory the renderer's GPU tests can fail with `Not enough memory left`: add `-- --test-threads=4` (see [A card with little memory](book/src/render-tests.md#a-card-with-little-memory)).
+
 For guide changes, run `mdbook build book` if mdBook is available. You do not
 need a C++ toolchain for an unrelated Rust change. Report checks you could not
 run; maintainers cover the broader matrix before merging.
