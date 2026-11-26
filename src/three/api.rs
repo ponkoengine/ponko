@@ -2007,8 +2007,8 @@ impl Ctx {
                 };
             }
         }
-        // Icons drawn in all their frames are done: their materials go.
-        let done = |i: &mut super::PendingIcon| i.frames >= super::ICON_FRAMES;
+        // Icons drawn are done: their materials go.
+        let done = |i: &mut super::PendingIcon| i.drawn;
         for icon in self.gfx.icons.extract_if(.., done).collect::<Vec<_>>() {
             self.gfx.free(icon.material);
         }
