@@ -66,7 +66,7 @@ Where it got stuck, and what changed for it in the same pull request:
 - `broken-shader`: `shader_status` gave the right line, column and source
   line, but naga's message names IR handles, not types ("the `return`
   expression Some([10]) does not match the declared return type
-  Some([5])"); the agent fixed it from the source line. Filed as an issue.
+  Some([5])"); the agent fixed it from the source line. Filed as #629.
 - `immortal-enemy`, `slow-crowd`: no friction.
 
 Compared with the scripted solutions, the agent made the same fix in every
@@ -75,7 +75,7 @@ the same five coin positions, armor 0.25, cell size 24, shader and HUD
 fixes). The agent is the same kind of model that wrote the tasks and had
 read the suite's chapter before it started, so this run shows the tasks can
 be finished with the tools as documented; it is weak evidence of how hard
-they are. Harder tasks are filed as an issue.
+they are. Harder tasks are #630.
 
 ## 2026-11-26: Playwright 1.65.1 (#601) and the fuzz targets (#528, section 3)
 
