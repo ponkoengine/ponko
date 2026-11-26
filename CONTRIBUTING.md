@@ -202,6 +202,14 @@ means a check failed, and exit code 2 means a usage error or zero checks ran.
 The [integration instructions](AGENTS.md#integration-checks) describe when
 maintainers need additional checks.
 
+#### Checks that need a person
+
+Some checks need a real machine, display or device. [scripts/checklists/](scripts/checklists/README.md)
+has a checklist and record sheet for each (hardware checks per OS, a
+newcomer test, input methods and screen readers, low-end hardware and the
+Steam Deck, the whole list on Linux), with scripts that make the runs quick.
+If you have the hardware, pick one and report on its issue.
+
 #### Nightly runs on maintainer machines
 
 Use a dedicated `main` checkout on each macOS, Windows, and Linux test
