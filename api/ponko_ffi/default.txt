@@ -3726,6 +3726,7 @@ pub ponko_ffi::PonkoMaterialDescEx::layers: ponko_ffi::PonkoMaterialLayers
 pub ponko_ffi::PonkoMaterialDescEx::masked_tint: bool
 pub ponko_ffi::PonkoMaterialDescEx::stencil: ponko_ffi::PonkoStencil
 pub ponko_ffi::PonkoMaterialDescEx::struct_size: u32
+pub ponko_ffi::PonkoMaterialDescEx::transmission: ponko_ffi::PonkoMaterialTransmission
 pub ponko_ffi::PonkoMaterialDescEx::unlit: bool
 pub ponko_ffi::PonkoMaterialDescEx::version: u32
 impl core::clone::Clone for ponko_ffi::PonkoMaterialDescEx
@@ -3778,6 +3779,37 @@ impl core::fmt::Debug for ponko_ffi::PonkoMaterialLayers
 pub fn ponko_ffi::PonkoMaterialLayers::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_ffi::PonkoMaterialLayers
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoMaterialLayers
+#[repr(C)] pub struct ponko_ffi::PonkoMaterialTransmission
+pub ponko_ffi::PonkoMaterialTransmission::attenuation_color: ponko_ffi::PonkoColor
+pub ponko_ffi::PonkoMaterialTransmission::attenuation_distance: f32
+pub ponko_ffi::PonkoMaterialTransmission::diffuse: f32
+pub ponko_ffi::PonkoMaterialTransmission::diffuse_color: ponko_ffi::PonkoColor
+pub ponko_ffi::PonkoMaterialTransmission::diffuse_color_map: ponko_ffi::PonkoTexture
+pub ponko_ffi::PonkoMaterialTransmission::diffuse_map: ponko_ffi::PonkoTexture
+pub ponko_ffi::PonkoMaterialTransmission::dispersion: f32
+pub ponko_ffi::PonkoMaterialTransmission::factor: f32
+pub ponko_ffi::PonkoMaterialTransmission::has_diffuse_color_map: bool
+pub ponko_ffi::PonkoMaterialTransmission::has_diffuse_map: bool
+pub ponko_ffi::PonkoMaterialTransmission::has_map: bool
+pub ponko_ffi::PonkoMaterialTransmission::has_scatter_color_map: bool
+pub ponko_ffi::PonkoMaterialTransmission::has_scatter_map: bool
+pub ponko_ffi::PonkoMaterialTransmission::has_thickness_map: bool
+pub ponko_ffi::PonkoMaterialTransmission::map: ponko_ffi::PonkoTexture
+pub ponko_ffi::PonkoMaterialTransmission::scatter: f32
+pub ponko_ffi::PonkoMaterialTransmission::scatter_anisotropy: f32
+pub ponko_ffi::PonkoMaterialTransmission::scatter_color: ponko_ffi::PonkoColor
+pub ponko_ffi::PonkoMaterialTransmission::scatter_color_map: ponko_ffi::PonkoTexture
+pub ponko_ffi::PonkoMaterialTransmission::scatter_map: ponko_ffi::PonkoTexture
+pub ponko_ffi::PonkoMaterialTransmission::thickness: f32
+pub ponko_ffi::PonkoMaterialTransmission::thickness_map: ponko_ffi::PonkoTexture
+impl core::clone::Clone for ponko_ffi::PonkoMaterialTransmission
+pub fn ponko_ffi::PonkoMaterialTransmission::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko_ffi::PonkoMaterialTransmission
+pub fn ponko_ffi::PonkoMaterialTransmission::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko_ffi::PonkoMaterialTransmission
+pub fn ponko_ffi::PonkoMaterialTransmission::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoMaterialTransmission
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoMaterialTransmission
 pub struct ponko_ffi::PonkoMemorySource(_)
 #[repr(C)] pub struct ponko_ffi::PonkoMesh
 pub ponko_ffi::PonkoMesh::id: u32

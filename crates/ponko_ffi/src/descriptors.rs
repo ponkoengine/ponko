@@ -140,7 +140,7 @@ macro_rules! assert_header {
 // ---- material ---------------------------------------------------------------
 
 /// The version of `PonkoMaterialDescEx` this header describes.
-pub const PONKO_MATERIAL_DESC_EX_VERSION: u32 = 3;
+pub const PONKO_MATERIAL_DESC_EX_VERSION: u32 = 4;
 
 /// Layers over a material's surface (Rust `MaterialLayers`): clear coat,
 /// sheen, specular strength and color, index of refraction, anisotropy and
@@ -295,6 +295,123 @@ fn layers_from_c(l: &PonkoMaterialLayers) -> MaterialLayers {
     out
 }
 
+/// Light through a material's surface and the medium behind it (Rust
+/// `Transmission`, glTF's transmission, volume, dispersion and diffuse
+/// transmission extensions). `ponko_material_desc_ex_defaults` sets it off:
+/// no transmission, an infinite (clear) attenuation distance and white tints.
+/// Each `has_*` says whether the map after it is used. The maps count
+/// towards the material's two distinct layer images, and transmission needs
+/// the built-in shader (`has_shader` false).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PonkoMaterialTransmission {
+    /// Share of dielectric light transmitted through the surface, 0 (none) to 1.
+    pub factor: f32,
+    /// Whether `map` is used.
+    pub has_map: bool,
+    /// Multiplies `factor` by its red channel.
+    pub map: PonkoTexture,
+    /// Volume thickness in mesh units; 0 is a thin wall.
+    pub thickness: f32,
+    /// Whether `thickness_map` is used.
+    pub has_thickness_map: bool,
+    /// Multiplies `thickness` by its green channel.
+    pub thickness_map: PonkoTexture,
+    /// World-space distance at which white light takes on `attenuation_color`
+    /// (infinity: clear).
+    pub attenuation_distance: f32,
+    /// The volume's tint (sRGB, alpha unused; white).
+    pub attenuation_color: PonkoColor,
+    /// Color separation in a volume, glTF's 20 / Abbe number (0: none).
+    pub dispersion: f32,
+    /// Share of the remaining diffuse light scattered through the surface from
+    /// the other side, 0 (none) to 1.
+    pub diffuse: f32,
+    /// Whether `diffuse_map` is used.
+    pub has_diffuse_map: bool,
+    /// Multiplies `diffuse` by its alpha.
+    pub diffuse_map: PonkoTexture,
+    /// Diffuse transmitted tint (sRGB, alpha unused; white).
+    pub diffuse_color: PonkoColor,
+    /// Whether `diffuse_color_map` is used.
+    pub has_diffuse_color_map: bool,
+    /// Multiplies `diffuse_color` by its red, green and blue.
+    pub diffuse_color_map: PonkoTexture,
+    /// Share of clear transmission redirected into an approximate scattering
+    /// lobe, 0 (none) to 1.
+    pub scatter: f32,
+    /// Whether `scatter_map` is used.
+    pub has_scatter_map: bool,
+    /// Multiplies `scatter` by its alpha.
+    pub scatter_map: PonkoTexture,
+    /// Scattered light's tint (sRGB, alpha unused; white).
+    pub scatter_color: PonkoColor,
+    /// Whether `scatter_color_map` is used.
+    pub has_scatter_color_map: bool,
+    /// Multiplies `scatter_color` by its red, green and blue.
+    pub scatter_color_map: PonkoTexture,
+    /// Bias of the scattering toward forward (positive) or backward
+    /// (negative) light, -1 to 1 (0).
+    pub scatter_anisotropy: f32,
+}
+
+fn transmission_to_c(t: &ponko::render::Transmission) -> PonkoMaterialTransmission {
+    let map = |t: Option<ponko::prelude::Texture>| (t.is_some(), t.map_or(NO_TEXTURE, texture_to_c));
+    let (has_map, map_) = map(t.map);
+    let (has_thickness_map, thickness_map) = map(t.thickness_map);
+    let (has_diffuse_map, diffuse_map) = map(t.diffuse_map);
+    let (has_diffuse_color_map, diffuse_color_map) = map(t.diffuse_color_map);
+    let (has_scatter_map, scatter_map) = map(t.scatter_map);
+    let (has_scatter_color_map, scatter_color_map) = map(t.scatter_color_map);
+    PonkoMaterialTransmission {
+        factor: t.factor,
+        has_map,
+        map: map_,
+        thickness: t.thickness,
+        has_thickness_map,
+        thickness_map,
+        attenuation_distance: t.attenuation_distance,
+        attenuation_color: to_c(t.attenuation_color),
+        dispersion: t.dispersion,
+        diffuse: t.diffuse,
+        has_diffuse_map,
+        diffuse_map,
+        diffuse_color: to_c(t.diffuse_color),
+        has_diffuse_color_map,
+        diffuse_color_map,
+        scatter: t.scatter,
+        has_scatter_map,
+        scatter_map,
+        scatter_color: to_c(t.scatter_color),
+        has_scatter_color_map,
+        scatter_color_map,
+        scatter_anisotropy: t.scatter_anisotropy,
+    }
+}
+
+fn transmission_from_c(t: &PonkoMaterialTransmission) -> ponko::render::Transmission {
+    let map = |has: bool, t: PonkoTexture| has.then(|| texture_from_c(t));
+    // `Transmission` is `#[non_exhaustive]`: start from its defaults.
+    let mut out = ponko::render::Transmission::NONE;
+    out.factor = t.factor;
+    out.map = map(t.has_map, t.map);
+    out.thickness = t.thickness;
+    out.thickness_map = map(t.has_thickness_map, t.thickness_map);
+    out.attenuation_distance = t.attenuation_distance;
+    out.attenuation_color = to_c(t.attenuation_color);
+    out.dispersion = t.dispersion;
+    out.diffuse = t.diffuse;
+    out.diffuse_map = map(t.has_diffuse_map, t.diffuse_map);
+    out.diffuse_color = to_c(t.diffuse_color);
+    out.diffuse_color_map = map(t.has_diffuse_color_map, t.diffuse_color_map);
+    out.scatter = t.scatter;
+    out.scatter_map = map(t.has_scatter_map, t.scatter_map);
+    out.scatter_color = to_c(t.scatter_color);
+    out.scatter_color_map = map(t.has_scatter_color_map, t.scatter_color_map);
+    out.scatter_anisotropy = t.scatter_anisotropy;
+    out
+}
+
 const NO_TEXTURE: PonkoTexture = PonkoTexture {
     id: 0,
     width: 0,
@@ -314,13 +431,14 @@ const NO_TEXTURE: PonkoTexture = PonkoTexture {
 /// ```
 ///
 /// Version 1: `desc`, `has_stencil`, `stencil`. Version 2 adds
-/// `masked_tint`, version 3 `unlit` and `layers`.
+/// `masked_tint`, version 3 `unlit` and `layers`, version 4 `transmission`.
 /// ```
 /// use ponko_ffi::*;
 /// let mut d = PonkoMaterialDescEx { struct_size: size_of::<PonkoMaterialDescEx>() as u32, version: PONKO_MATERIAL_DESC_EX_VERSION, ..unsafe { std::mem::zeroed() } };
 /// assert_eq!(unsafe { ponko_material_desc_ex_defaults(&mut d) }, PonkoStatus::PONKO_OK);
 /// assert_eq!((d.desc.roughness, d.has_stencil, d.masked_tint, d.unlit), (0.6, false, false, false));
 /// assert_eq!((d.layers.clearcoat, d.layers.ior, d.layers.specular), (0.0, 1.5, 1.0));
+/// assert_eq!((d.transmission.factor, d.transmission.attenuation_distance), (0.0, f32::INFINITY));
 /// ```
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -343,6 +461,9 @@ pub struct PonkoMaterialDescEx {
     pub unlit: bool,
     /// Version 3: layers over the surface (all off by default).
     pub layers: PonkoMaterialLayers,
+    /// Version 4: light through the surface and the medium behind it (off by
+    /// default).
+    pub transmission: PonkoMaterialTransmission,
 }
 assert_header!(PonkoMaterialDescEx);
 
@@ -354,6 +475,7 @@ impl Versioned for PonkoMaterialDescEx {
             1 => Some(end_of!(Self, stencil: PonkoStencil)),
             2 => Some(end_of!(Self, masked_tint: bool)),
             3 => Some(end_of!(Self, layers: PonkoMaterialLayers)),
+            4 => Some(end_of!(Self, transmission: PonkoMaterialTransmission)),
             _ => None,
         }
     }
@@ -374,6 +496,7 @@ fn material_defaults() -> PonkoMaterialDescEx {
         masked_tint: false,
         unlit: false,
         layers: layers_to_c(&MaterialLayers::NONE),
+        transmission: transmission_to_c(&ponko::render::Transmission::NONE),
     }
 }
 
@@ -400,12 +523,12 @@ fn material_ex(c: &ponko::prelude::Ctx, d: &PonkoMaterialDescEx) -> Result<ponko
         .with_stencil(stencil)
         .with_masked_tint(d.masked_tint)
         .with_unlit(d.unlit)
-        .with_layers(layers_from_c(&d.layers)))
+        .with_layers(layers_from_c(&d.layers).with_transmission(transmission_from_c(&d.transmission))))
 }
 
 /// Puts a material on the GPU, from a versioned description (as
 /// `ponko_ctx_create_material`, plus a stencil state with `has_stencil`,
-/// from version 2 `masked_tint`, and from version 3 `unlit` and `layers`). Layers out of range, with a
+/// from version 2 `masked_tint`, and from version 3 `unlit` and `layers`, from version 4 `transmission`). Layers out of range, with a
 /// custom shader or reading more than two images are refused with
 /// `PONKO_INVALID_ARGUMENT`.
 /// # Safety

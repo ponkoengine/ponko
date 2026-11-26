@@ -2890,6 +2890,34 @@ static void descriptors_setup(PonkoCtx* ctx, void* user) {
     CHECK(ponko_ctx_update_material_ex(ctx, m, &d) == PONKO_OK);
     d.layers.clearcoat = 2.0f;
     CHECK(ponko_ctx_update_material_ex(ctx, m, &d) == PONKO_INVALID_ARGUMENT);
+    /* Version 4: glass with a volume, dispersion, diffuse transmission and scatter, and its maps. */
+    CHECK(ponko_material_desc_ex_defaults(&d) == PONKO_OK);
+    CHECK(d.transmission.factor == 0 && isinf(d.transmission.attenuation_distance) && !d.transmission.has_map);
+    d.transmission.factor = 1.0f;
+    d.transmission.thickness = .15f;
+    d.transmission.attenuation_distance = 3.0f;
+    d.transmission.attenuation_color = (PonkoColor){.7f, .9f, .8f, 1};
+    d.transmission.dispersion = .5f;
+    d.transmission.diffuse = .25f;
+    d.transmission.scatter = .5f;
+    d.transmission.scatter_anisotropy = -.5f;
+    CHECK(ponko_ctx_update_material_ex(ctx, m, &d) == PONKO_OK);
+    PonkoTexture glass_maps[3];
+    for (int i = 0; i < 3; ++i) {
+        const uint8_t white[4] = {255, 255, 255, 255};
+        CHECK(ponko_ctx_create_texture(ctx, 1, 1, white, sizeof white, &glass_maps[i]) == PONKO_OK);
+    }
+    d.transmission.has_map = true;
+    d.transmission.map = glass_maps[0];
+    d.transmission.has_thickness_map = true;
+    d.transmission.thickness_map = glass_maps[1];
+    CHECK(ponko_ctx_update_material_ex(ctx, m, &d) == PONKO_OK);
+    d.transmission.has_scatter_map = true; /* a third distinct image: too many */
+    d.transmission.scatter_map = glass_maps[2];
+    CHECK(ponko_ctx_update_material_ex(ctx, m, &d) == PONKO_INVALID_ARGUMENT);
+    d.transmission.has_scatter_map = false;
+    d.transmission.factor = 2.0f;
+    CHECK(ponko_ctx_update_material_ex(ctx, m, &d) == PONKO_INVALID_ARGUMENT);
     /* Retargeting between two humanoids, the second half the size. */
     static const char* const a[15] = {"Hips", "Spine", "Head", "LeftArm", "LeftForeArm", "LeftHand", "RightArm",
         "RightForeArm", "RightHand", "LeftUpLeg", "LeftLeg", "LeftFoot", "RightUpLeg", "RightLeg", "RightFoot"};
