@@ -99,6 +99,8 @@ jobs:
         run: python3 scripts/check-cpp-api.py
       - name: Check runner self-tests
         run: python3 scripts/run-checks.py --selftest
+      - name: Public API by use
+        run: python3 scripts/api-usage.py selftest && python3 scripts/api-usage.py check
       # The experimental items outside the versions' promise
       # (scripts/experimental-api.txt) match the guide's levels, api/ and the
       # Unstable notes of the C header and the C++ wrapper.
