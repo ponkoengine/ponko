@@ -27,7 +27,7 @@ use super::render_test_support::{TestGpu, describe_adapter, gpu_with};
 use crate::ctx::Ctx;
 use crate::d3::Transform as Transform3D;
 use crate::prelude::*;
-use crate::render::{GraphicsQuality, Model, ModelLightKind};
+use crate::render::{EnvironmentMap, GraphicsQuality, Model, ModelLightKind};
 
 /// Reads asset names as files under a folder (the cache).
 struct Folder(PathBuf);
@@ -357,18 +357,38 @@ fn drawn_size(reference: (u32, u32)) -> (u32, u32) {
     )
 }
 
-/// The rig's sun. With the grey studio sky below, it was set once so that
-/// over the samples whose silhouettes match their screenshots, the
-/// drawings are as light as the screenshots in the median (the engine's
-/// default sun, 3, was 11 L* lighter).
+// Keep the comparison rig for samples outside the lighting group so the
+// existing material, geometry and texture comparisons stay comparable.
 const RIG_SUN: f32 = 2.0;
 
-/// Draws sample `file` at `size` on `background`: through its first
-/// camera, or framed by [`frame`]. Lit by the file's lights where it has
-/// some, else by a sun from over the camera's left shoulder ([`RIG_SUN`])
-/// and a grey studio sky. Returns the picture and whether the file's camera was
-/// used.
-fn draw_sample(file: &str, size: (u32, u32), background: [u8; 3]) -> Result<Option<(image::RgbaImage, bool)>, String> {
+fn sample_lighting(name: &str) -> Option<(f32, f32)> {
+    // Fixed EV100 and environment intensity for the reference shots.
+    // glTF files carry no camera exposure.
+    let lighting = match name {
+        "PlaysetLightTest" => (11.0, 0.35),
+        "LightsPunctualLamp" => (5.0, 0.20),
+        "PointLightIntensityTest" => (0.0, 0.04),
+        "DirectionalLight" => (0.0, 0.10),
+        "CarConcept"
+        | "CompareEmissiveStrength"
+        | "EmissiveStrengthTest"
+        | "EnvironmentTest"
+        | "PotOfCoals"
+        | "USDShaderBallForGltf"
+        | "VirtualCity" => (0.0, 1.0),
+        _ => return None,
+    };
+    Some(lighting)
+}
+
+/// Draws the sample through its first camera or frames its bounds, with
+/// the screenshot's background and the test's lighting for that sample.
+fn draw_sample(
+    name: &str,
+    file: &str,
+    size: (u32, u32),
+    background: [u8; 3],
+) -> Result<Option<(image::RgbaImage, bool)>, String> {
     let Some((mut ctx, _)) = game_ctx(size) else {
         return Ok(None);
     };
@@ -385,8 +405,6 @@ fn draw_sample(file: &str, size: (u32, u32), background: [u8; 3]) -> Result<Opti
     ctx.gfx.clear_color = Color::rgb(bg(background[0]), bg(background[1]), bg(background[2]));
     let sky = &mut ctx.scene3d.sky;
     sky.atmosphere = false;
-    sky.sky_color = Color::rgb(0.6, 0.6, 0.6);
-    sky.ground_color = Color::rgb(0.3, 0.3, 0.3);
     let camera = &mut ctx.scene3d.camera;
     let aspect = size.0 as f32 / size.1 as f32;
     let cameras = ctx.gfx.try_load_cameras(file).map_err(|e| e.to_string())?;
@@ -398,20 +416,36 @@ fn draw_sample(file: &str, size: (u32, u32), background: [u8; 3]) -> Result<Opti
         frame(camera, center, radius, aspect);
         false
     };
-    let (forward, up, right) = (
-        camera.rotation * Vec3::NEG_Z,
-        camera.rotation * Vec3::Y,
-        camera.rotation * Vec3::X,
-    );
-    ctx.scene3d.lighting.sun_direction = (forward * 0.7 - up * 0.8 + right * 0.5).normalize();
-    ctx.scene3d.lighting.sun_intensity = RIG_SUN;
-    for light in ctx.gfx.try_load_lights(file).map_err(|e| e.to_string())? {
-        if let ModelLightKind::Sun { color, intensity } = light.kind {
-            let lighting = &mut ctx.scene3d.lighting;
-            lighting.sun_direction = light.placed(&at).forward();
-            (lighting.sun_color, lighting.sun_intensity) = (color, intensity);
-        } else {
-            light.spawn(&mut ctx.world, &at);
+    if let Some((ev100, ambient)) = sample_lighting(name) {
+        ctx.scene3d.lighting.ambient_intensity = ambient;
+        let lights = ctx.gfx.try_load_lights(file).map_err(|e| e.to_string())?;
+        ctx.scene3d.light_gltf(&mut ctx.world, &lights, &at, ev100);
+        if name == "DirectionalLight" {
+            // The reference shows the direct BRDF of three spheres in isolation.
+            ctx.scene3d.lighting.shadows = false;
+        }
+        if name == "EmissiveStrengthTest" {
+            ctx.scene3d.post.exposure = -1.25;
+            ctx.scene3d.post.bloom = 0.15;
+        }
+    } else {
+        ctx.scene3d.sky.sky_color = Color::rgb(0.6, 0.6, 0.6);
+        ctx.scene3d.sky.ground_color = Color::rgb(0.3, 0.3, 0.3);
+        let (forward, up, right) = (
+            camera.rotation * Vec3::NEG_Z,
+            camera.rotation * Vec3::Y,
+            camera.rotation * Vec3::X,
+        );
+        let lighting = &mut ctx.scene3d.lighting;
+        lighting.sun_direction = (forward * 0.7 - up * 0.8 + right * 0.5).normalize();
+        lighting.sun_intensity = RIG_SUN;
+        for light in ctx.gfx.try_load_lights(file).map_err(|e| e.to_string())? {
+            if let ModelLightKind::Sun { color, intensity } = light.kind {
+                lighting.sun_direction = light.placed(&at).forward();
+                (lighting.sun_color, lighting.sun_intensity) = (color, intensity);
+            } else {
+                light.spawn(&mut ctx.world, &at);
+            }
         }
     }
     // Uploads, shadows and the temporal effects settle over a few frames.
@@ -536,9 +570,9 @@ fn the_framing_rule_fits_the_bounds_in_view() {
 fn known_samples_are_drawn_like_their_screenshots() {
     let root = cache();
     let Some(manifest) = manifest(&root) else { return };
-    if game_ctx((16, 16)).is_none() {
+    let Some((_, adapter)) = game_ctx((16, 16)) else {
         return;
-    }
+    };
     let revision = manifest["samples"]["revision"].as_str().unwrap_or_default().to_string();
     let only = std::env::var("PONKO_KNOWN_ONLY").ok();
     let out = root.join("results");
@@ -572,7 +606,7 @@ fn known_samples_are_drawn_like_their_screenshots() {
         let size = drawn_size(reference.dimensions());
         let reference = image::imageops::resize(&reference, size.0, size.1, image::imageops::FilterType::Triangle);
         let background = border_color(&reference);
-        let drawn = std::panic::catch_unwind(|| draw_sample(file, size, background));
+        let drawn = std::panic::catch_unwind(|| draw_sample(&name, file, size, background));
         let (drawn, own_camera) = match drawn {
             Ok(Ok(Some(drawn))) => drawn,
             Ok(Ok(None)) => return,
@@ -628,6 +662,7 @@ fn known_samples_are_drawn_like_their_screenshots() {
         out.join("draw.json"),
         serde_json::to_string_pretty(&json!({
             "revision": revision,
+            "adapter": describe_adapter(&adapter),
             "tolerance": { "overlap": Similarity::OVERLAP, "color": Similarity::COLOR },
             "assets": rows,
         }))
@@ -715,7 +750,12 @@ fn known_scenes_benchmark() {
             .is_some_and(|a| a.iter().any(|x| x["file"] == file))
     };
     let mut report = Vec::new();
+    let only = std::env::var("PONKO_KNOWN_SCENE").ok();
+    let studio = std::env::var_os("PONKO_KNOWN_STUDIO").is_some();
     for (name, file, place) in SCENES {
+        if only.as_deref().is_some_and(|only| only != name) {
+            continue;
+        }
         if !have(file) {
             eprintln!("{name}: not in the cache (fetch it with --set all)");
             continue;
@@ -730,16 +770,16 @@ fn known_scenes_benchmark() {
         ctx.world.spawn((at, Model::new(mesh)));
         let mut lights = 0;
         for light in ctx.gfx.load_lights(file) {
-            if let ModelLightKind::Sun { color, .. } = light.kind {
-                // The file's sun is in lux (6830); the engine's sun is in
-                // its own units: the direction and color, at the default
-                // brightness.
-                ctx.scene3d.lighting.sun_direction = light.placed(&at).forward();
-                ctx.scene3d.lighting.sun_color = color;
-            } else {
-                light.spawn(&mut ctx.world, &at);
+            // The Bistro sun is 6830 lux, exposed at EV100 11.
+            if light
+                .place_exposed(&mut ctx.world, &mut ctx.scene3d.lighting, &at, 11.0)
+                .is_some()
+            {
                 lights += 1;
             }
+        }
+        if studio {
+            ctx.scene3d.environment = Some(EnvironmentMap::studio());
         }
         match (ctx.gfx.load_cameras(file).first(), place) {
             (Some(shot), _) => shot.apply(&mut ctx.scene3d.camera, &at),
@@ -825,7 +865,7 @@ fn known_scenes_benchmark() {
                     gpu.shadows as f64 / 1e6,
                 );
                 report.push(json!({
-                    "scene": name, "width": size.0, "height": size.1, "quality": format!("{quality:?}"),
+                    "scene": name, "studio_environment": studio, "width": size.0, "height": size.1, "quality": format!("{quality:?}"),
                     "parse_s": parsed, "first_frame_s": loaded, "resident_mb": rss as f64 / 1e6, "resident_added_mb": rss.saturating_sub(rss_before) as f64 / 1e6,
                     "frame_ms_median": frame_ms[FRAMES / 2], "frame_ms_p95": frame_ms[FRAMES * 95 / 100],
                     "gpu_ms": gpu_total, "gpu_frames_timed": timed,

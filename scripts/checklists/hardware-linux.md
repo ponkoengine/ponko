@@ -12,6 +12,9 @@ GPU and driver: ______
 displays (size, scale): ______
 ```
 
+For minor releases, also run the [four-hour reference-game soaks](soak.md).
+Record their results on that sheet.
+
 ## W1. Window modes
 
 - **Run:** Copy `scripts/checklists/window_driver.rs` to `examples/window_driver.rs` (do not commit it) and run `cargo run --example window_driver`; its header lists the keys (F1 mode, F2 title bar, F3 always on top, F4 cursor grab, F5 cursor shown, F6 system cursors, F7 save settings, F8 print the state). Press F1 repeatedly: windowed → borderless → exclusive (an advertised mode) → windowed.

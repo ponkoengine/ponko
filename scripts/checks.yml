@@ -2009,6 +2009,19 @@ jobs:
           python -c "import json, sys; r = json.load(open(sys.argv[1])); print(json.dumps(r)); t = r['tally']; ok = r['finished'] and r['mode'] == 'headless' and t['saves'] >= 1 and t['loads'] >= 1 and t['wins'] == 1 and r['warden_joints'] > 0 and r['path_corners'] > 0; sys.exit(0 if ok else 1)" report.json
           cd "$GITHUB_WORKSPACE"
 
+  # Four sequential ten-minute runs. Offscreen GPU and offline audio;
+  # skipped by the normal list unless explicitly enabled on this machine.
+  soak:
+    name: Reference games (ten-minute offscreen soaks)
+    local-os: [Linux, macOS, Windows]
+    local-tags: [slow, gpu]
+    local-requires: [env:PONKO_SOAK]
+    steps:
+      - name: Pass/fail calculation
+        run: python3 scripts/test_soak.py
+      - name: Play each workload for ten minutes, sampling every twenty seconds
+        run: python3 scripts/soak.py --seconds 600 --sample 20 --warmup 120
+
   # iOS (book/src/ios.md): the engine and the C library linted for devices
   # and the simulator, then the phone check packaged with `ponko package
   # --target ios-sim` and run on a fresh simulated iPhone: headless, with

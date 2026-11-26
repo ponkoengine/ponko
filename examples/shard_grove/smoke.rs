@@ -40,6 +40,13 @@ pub struct Smoke {
     report_path: Option<PathBuf>,
     report: Report,
     step: Step,
+    looping: bool,
+    cycle_start: u64,
+    /// Completed walk-throughs, with a fresh per-cycle timeout.
+    pub cycles: u64,
+    pub deaths: u64,
+    death_attempted: bool,
+    saves_at_start: u32,
     since: u64,
     /// The walk-through has ended, finished or not (the web build keeps
     /// running after it, showing the title).
@@ -108,6 +115,12 @@ pub fn setup_smoke(ctx: &mut Ctx, report_path: Option<PathBuf>, mode: &str) {
         report_path,
         report,
         step: Step::Start,
+        looping: mode == "soak",
+        cycle_start: 0,
+        cycles: 0,
+        deaths: 0,
+        death_attempted: false,
+        saves_at_start: 0,
         since: 0,
         over: false,
     });
@@ -143,21 +156,36 @@ pub fn walkthrough(ctx: &mut Ctx) {
     let screen = *ctx.world.resource::<Screen>();
     let (step, since) = {
         let smoke = ctx.world.resource_mut::<Smoke>();
-        let name = screen_name(screen).to_string();
-        if smoke.report.screens.last() != Some(&name) {
-            smoke.report.screens.push(name);
+        if !smoke.looping {
+            let name = screen_name(screen).to_string();
+            if smoke.report.screens.last() != Some(&name) {
+                smoke.report.screens.push(name);
+            }
         }
         (smoke.step, smoke.since)
     };
+    let (looping, cycle_start) = {
+        let smoke = ctx.world.resource::<Smoke>();
+        (smoke.looping, smoke.cycle_start)
+    };
+    if tick - cycle_start >= MAX_TICKS {
+        finish(ctx, tick, false);
+        return;
+    }
     let waited = tick - since >= DWELL;
     let found = ctx.world.resource::<Run>().shards.len();
     let saves = ctx.world.resource::<Tally>().saves;
+    let saves_at_start = ctx.world.resource::<Smoke>().saves_at_start;
     let mut next = step;
     // Lost: try again from the last save, wherever the walk-through was.
     if screen == Screen::Lost {
         if waited {
             menu(ctx, Menu::TryAgain);
-            ctx.world.resource_mut::<Smoke>().since = tick;
+            let smoke = ctx.world.resource_mut::<Smoke>();
+            smoke.since = tick;
+            if looping {
+                smoke.deaths += 1;
+            }
         }
         return;
     }
@@ -168,7 +196,7 @@ pub fn walkthrough(ctx: &mut Ctx) {
         }
         Step::CollectFirst if found >= FIRST_SHARDS => next = Step::Save,
         Step::CollectFirst => autopilot(ctx, Goal::Shard),
-        Step::Save if saves > 0 => next = Step::Pause,
+        Step::Save if saves > saves_at_start => next = Step::Pause,
         Step::Save => autopilot(ctx, Goal::Shrine),
         Step::Pause if waited => {
             ctx.world.resource_mut::<Intent>().pause = true;
@@ -183,17 +211,22 @@ pub fn walkthrough(ctx: &mut Ctx) {
             next = Step::Finish;
         }
         Step::Finish if screen == Screen::Won => next = Step::Done,
+        Step::Finish if looping && screen == Screen::Playing && !ctx.world.resource::<Smoke>().death_attempted => {
+            // Let the normal rules enter Lost and the existing driver reload.
+            ctx.world.resource_mut::<Smoke>().death_attempted = true;
+            ctx.world.resource_mut::<Run>().health = 0;
+        }
         Step::Finish if found < SHARD_SPOTS.len() => autopilot(ctx, Goal::Shard),
         Step::Finish => autopilot(ctx, Goal::Gate),
         Step::Done if waited => {
             menu(ctx, Menu::Back);
             next = Step::Report;
         }
-        Step::Report if screen == Screen::Title => finish(ctx, tick, true),
+        Step::Report if screen == Screen::Title => {
+            finish(ctx, tick, true);
+            return;
+        }
         _ => {}
-    }
-    if tick >= MAX_TICKS {
-        finish(ctx, tick, false);
     }
     if next != step {
         let smoke = ctx.world.resource_mut::<Smoke>();
@@ -270,6 +303,16 @@ pub fn count_frames(ctx: &mut Ctx) {
 fn finish(ctx: &mut Ctx, tick: u64, completed: bool) {
     let tally = ctx.world.resource::<Tally>().clone();
     let time = ctx.world.resource::<Records>().best_time.unwrap_or(0.0);
+    if completed && ctx.world.resource::<Smoke>().looping {
+        let smoke = ctx.world.resource_mut::<Smoke>();
+        smoke.cycles += 1;
+        smoke.cycle_start = tick;
+        smoke.since = tick;
+        smoke.step = Step::Start;
+        smoke.death_attempted = false;
+        smoke.saves_at_start = tally.saves;
+        return;
+    }
     let smoke = ctx.world.resource_mut::<Smoke>();
     let report = &mut smoke.report;
     report.tally = tally;

@@ -168,10 +168,12 @@ static void setup(PonkoCtx* ctx, void* user) {
     CHECK(!post.ao_enabled && post.anti_aliasing == 0 && post.ao_radius == 1);
     post.ao_enabled = true; post.ao_half_resolution = true; post.ao_temporal = true; post.ao_radius = 2; post.ao_intensity = 1.5f;
     post.ao_slices = 4; post.ao_steps = 8; post.anti_aliasing = 1;
+    post.tonemap = 4; /* hue-preserving */
     CHECK(ponko_ctx_set_post(ctx, &post) == PONKO_OK);
     PonkoPost back;
     CHECK(ponko_ctx_post(ctx, &back) == PONKO_OK);
     CHECK(back.ao_half_resolution && back.ao_temporal && back.ao_enabled && back.ao_radius == 2 && back.anti_aliasing == 1);
+    CHECK(back.tonemap == 4);
     post.anti_aliasing = 4;
     CHECK(ponko_ctx_set_post(ctx, &post) == PONKO_INVALID_ARGUMENT);
     CHECK(back.render_scale == 1 && back.sharpen == 0);

@@ -91,6 +91,16 @@ Anything that hurts sends a `Damage` event; one system keeps the books. A second
 </div>
 </div>
 
+## Invincibility frames after a hit
+
+After a hit the player cannot be hurt for a moment, and blinks so that you can see it. A hit that lands adds an `Invincible` component with the seconds left; the damage system ignores a target that has one. A second system counts it down, makes the sprite faint in every other phase of a tenth of a second, and takes the component off when time is up. The lengths are named constants, so you can tune them. The recipe reuses `Health` and `Damage` from the recipe above.
+
+Rust only for now: the C++ half has not been written.
+
+```rust
+{{#include ../../../tests/cookbook_gameplay.rs:invincibility}}
+```
+
 ## Draw a health bar
 
 A bar is two rectangles: the empty bar and a part of it in proportion to the health. It is drawn in world units, so it follows the unit and the camera.

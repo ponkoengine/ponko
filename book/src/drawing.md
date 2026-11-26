@@ -102,6 +102,29 @@ ctx.gfx.draw_ex(crab, vec2(200.0, 100.0), params);
 </div>
 </div>
 
+## Colors
+
+A `Color` holds red, green, blue and alpha from 0 to 1, in sRGB: the values a
+paint program shows. `Color::hex(0xFF8800)` takes `0xRRGGBB` and
+`Color::hex_rgba(0xFF880080)` takes `0xRRGGBBAA`. Text parses too, as in a data
+file or a pasted CSS value: `#rgb`, `#rrggbb` or `#rrggbbaa`, the `#` optional,
+and a bad string is an error that says what is wrong. `lerp` mixes two colors
+(`t` from 0 to 1, clamped, alpha included), on the sRGB values, not in linear
+light.
+
+```rust
+let orange: Color = "#ff8800".parse()?;
+assert_eq!(orange, Color::hex(0xFF8800));
+assert_eq!("#f80".parse::<Color>()?, orange); // each digit doubled
+let half = Color::hex_rgba(0xFF880080); // alpha 128 of 255
+// A health bar that goes from green to red as the health falls.
+let bar = Color::RED.lerp(Color::GREEN, 0.25);
+# Ok::<(), ponko::error::Error>(())
+```
+
+`hex_rgba`, `lerp` and parsing are Rust only: a `PonkoColor` in C and C++ is
+four floats, and the games that use it mix and parse colors themselves.
+
 ## Coordinate spaces
 
 Sprite positions use world units through the 2D camera by default. Before
