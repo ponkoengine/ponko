@@ -78,6 +78,26 @@ fn malformed_or_duplicate_registrations_fail_before_setup() {
 }
 
 #[test]
+fn a_command_can_run_other_entries_but_not_itself_while_running() {
+    Game::new("Console", 1, 1)
+        .developer_console(true)
+        .console_variable("speed", "Speed", ConsoleValue::Integer(1))
+        .console_command("fast", "Set speed through the console", &[], |ctx, _| {
+            Console::run(ctx, "speed 5")
+        })
+        .console_command("again", "Run itself", &[], |ctx, _| {
+            Ok(Console::run(ctx, "again").unwrap_err().message().to_string())
+        })
+        .run_headless(0, |ctx| {
+            assert_eq!(Console::run(ctx, "fast").unwrap(), "5");
+            assert_eq!(ctx.console.value("speed"), Some(&ConsoleValue::Integer(5)));
+            assert!(Console::run(ctx, "again").unwrap().contains("already running"));
+            // The refused inner call leaves the command usable afterwards.
+            assert!(Console::run(ctx, "again").unwrap().contains("already running"));
+        });
+}
+
+#[test]
 fn disabling_the_console_blocks_execution_and_preserves_variable_defaults() {
     Game::new("Console", 1, 1)
         .developer_console(false)
