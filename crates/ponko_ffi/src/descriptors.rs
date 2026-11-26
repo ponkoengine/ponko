@@ -420,7 +420,8 @@ pub unsafe extern "C" fn ponko_ctx_create_material_ex(
                 return Err(invalid("output is null"));
             }
             let desc = material_ex(c, &d)?;
-            out(out_material, to_c(c.gfx.create_material(desc)))
+            let material = c.gfx.try_create_material(desc).map_err(crate::engine_error)?;
+            out(out_material, to_c(material))
         })
     })
 }
@@ -449,8 +450,7 @@ pub unsafe extern "C" fn ponko_ctx_update_material_ex(
                 return Err(invalid("that material wasn't made by this game"));
             }
             let desc = material_ex(c, &d)?;
-            c.gfx.update_material(material, desc);
-            Ok(())
+            c.gfx.try_update_material(material, desc).map_err(crate::engine_error)
         })
     })
 }

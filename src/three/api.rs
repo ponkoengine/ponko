@@ -83,7 +83,7 @@ impl GpuMaterialDesc {
         // custom shader with them).
         if bits != 0 && desc.shader.is_none() {
             let layers = &desc.layers;
-            let (slots, _) = super::LayerSlots::of(layers, |t| live(t));
+            let (slots, _) = super::LayerSlots::of(layers, live);
             for (i, image) in slots.images.iter().enumerate() {
                 gpu.textures[4 + i] = image.map(|(id, _)| id);
                 gpu.linear_custom[i] = image.is_some_and(|(_, srgb)| !srgb);
@@ -249,9 +249,38 @@ impl Graphics {
             self.assets3d.materials_live.was_made(material.id),
             "ponko: update_material: that material wasn't made by this game; update a material this game created"
         );
-        self.check_material(&desc).unwrap_or_else(|e| panic!("{e}"));
+        self.try_update_material(material, desc)
+            .unwrap_or_else(|e| panic!("{e}"));
+    }
+
+    /// [`update_material`](Self::update_material) with errors as values:
+    /// the material keeps what it had when `desc` is refused.
+    ///
+    /// # Errors
+    ///
+    /// As [`try_create_material`](Self::try_create_material), and
+    /// [`BadHandle`](crate::error::ErrorKind::BadHandle) if the material
+    /// wasn't made by this game.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// use ponko::render::{MaterialDesc, MaterialLayers};
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     let m = ctx.gfx.create_material(MaterialDesc::default());
+    ///     let coat = MaterialDesc::default().with_layers(MaterialLayers::NONE.with_clearcoat(2.0, 0.1));
+    ///     assert_eq!(ctx.gfx.try_update_material(m, coat).unwrap_err().kind(), ErrorKind::Invalid);
+    /// });
+    /// ```
+    pub fn try_update_material(&mut self, material: Material, desc: MaterialDesc) -> Result<(), crate::error::Error> {
+        if !self.assets3d.materials_live.was_made(material.id) {
+            return Err(crate::error::Error::new(
+                crate::error::ErrorKind::BadHandle,
+                "update_material: that material wasn't made by this game; update a material this game created",
+            ));
+        }
+        self.check_material(&desc)?;
         if !self.assets3d.materials_live.contains(material.id) {
-            return;
+            return Ok(());
         }
         if let Some(sources) = self.assets3d.bake_sources.as_mut() {
             sources.material_set(material.id, &desc);
@@ -265,6 +294,7 @@ impl Graphics {
         {
             renderer.update_material(material.id, &gpu, &self.assets3d.instance_batches);
         }
+        Ok(())
     }
 
     /// What the GPU makes of `desc`: freed shaders, textures and arrays
