@@ -116,6 +116,12 @@ cargo test -p ponko_ecs --test queries  # an ECS query change
 cargo test -p ponko --test headless    # a headless simulation change
 ```
 
+`cargo fmt --all` hands every target's file of the workspace to one `rustfmt`
+command; on Windows, in a checkout with a long path, that passes the
+command-line limit ("The filename or extension is too long (os error 206)").
+`python3 scripts/fmt-workspace.py --check` checks the same files in batches
+and works everywhere; the format check in `scripts/checks.yml` uses it.
+
 For guide changes, run `mdbook build book` if mdBook is available. You do not
 need a C++ toolchain for an unrelated Rust change. Report checks you could not
 run; maintainers cover the broader matrix before merging.

@@ -565,7 +565,9 @@ binding arrives:
 | `Net::accept_web`, `Net::join_web`, `Net::web_addr`, `NetMessages::accept_web`, `NetMessages::join_web`, `NetMessages::web_addr` | [Multiplayer in the browser](networking.md#in-the-browser) | Not bound yet: C and C++ hosts take UDP players only, and C and C++ web games can't join over WebSocket |
 | `LobbyClient::join_web` | [Lobbies, matchmaking and relays](lobby.md#the-client) | C and C++ lobby clients join over UDP, so a C or C++ web game has none |
 | `Signaling` | [Peer to peer over WebRTC](webrtc.md#with-any-signaling-channel) | C and C++ WebRTC endpoints are signaled through a lobby client (`ponko_net_messages_rtc_host`, `_rtc_join`) |
-| `RtcConfig::turn` | [Peer to peer over WebRTC](webrtc.md#stun-turn-and-nats) | TURN works in browsers only, and C and C++ web games have no WebRTC endpoint |
+| `RtcConfig::turn`, `RtcConfig::relay_only`, `RtcConfig::turn_servers` | [Peer to peer over WebRTC](webrtc.md#stun-turn-and-nats) | Not bound yet: C and C++ WebRTC endpoints take STUN servers only (`stun_urls`) |
+| `Net::host_relay`, `Net::join_relay`, `Net::relay_lobby`, `NetMessages::host_relay`, `NetMessages::join_relay`, `NetMessages::relay_lobby` | [Lobbies, matchmaking and relays](lobby.md#game-sessions-through-the-relay) | Not bound yet; C and C++ games relay their own packets with `ponko_lobby_relay` |
+| `NetMessages::web_peer`, `WebPeer` | [Lobbies, matchmaking and relays](lobby.md#behind-a-proxy) | For game servers behind a TLS proxy, which are Rust; C and C++ hosts take UDP players only |
 | `Assets::browser_saves`, `Assets::revert_browser_save` | [Saving in a browser](editor.md#saving-in-a-browser) | A C or C++ web game keeps no files in a browser yet |
 | `Assets::browser_saves`, `Assets::revert_browser_save`, `Assets::browser_saves_persistent` | [Saving in a browser](editor.md#saving-in-a-browser) | A C or C++ web game keeps no files in a browser yet |
 | `SkeletonData::add_bone`, `SpineAtlas` | [2D skeletons](skeleton2d.md#from-c-and-c) | Skeletons come from files (Ponko's format or a Spine export and its atlas) through the assets; a memory source holds files kept in memory |

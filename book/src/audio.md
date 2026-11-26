@@ -692,8 +692,8 @@ and `ponko_ctx_audio_device_events` (JSON, two-call buffer convention),
 
 Browsers let a page make sound only after the player has clicked, tapped or
 pressed a key. The engine opens its audio output at that first gesture, and
-until then `ctx.audio.unlocked()` is `false` (on the desktop it is always
-`true`). What the game plays before the gesture is not simply lost:
+`ctx.audio.unlocked()` becomes `true` when that output starts (on the desktop
+it is always `true`). Before the gesture:
 
 - Looping sounds (music, ambience) wait and start at the gesture, with the
   volume, bus and effects they were given. Their handles work meanwhile:
@@ -702,7 +702,7 @@ until then `ctx.audio.unlocked()` is `false` (on the desktop it is always
   out of place.
 
 So a game starts its music in setup as it does on the desktop. If the
-player should hear the opening, show a prompt until sound is allowed:
+player should hear the opening, show a prompt for the first gesture:
 
 ```rust
 # use ponko::prelude::*;
@@ -712,6 +712,12 @@ if !ctx.audio.unlocked() {
 }
 # }
 ```
+
+Some WebKit builds on Linux can report zero output channels while the
+sound device list is still being detected. The engine logs that once and
+tries stereo through the browser's default destination. If the browser
+cannot open or start the output, `ctx.audio.unlocked()` stays `false` and
+the engine logs one warning with the reason.
 
 Streamed sounds (`load_stream`) keep the fetched bytes encoded and decode a
 packet at a time as they play, on the page's thread. A three-minute stereo

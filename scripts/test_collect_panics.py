@@ -56,7 +56,7 @@ class CheckTests(unittest.TestCase):
             (root / "scripts").mkdir()
             (root / "crates/ponko_ecs/src").mkdir(parents=True)
             (root / "src").mkdir()
-            (root / "src/lib.rs").write_text('pub fn f(x: Option<u8>) -> u8 {\n    x.expect("set above")\n}\n')
+            (root / "src/lib.rs").write_text('pub fn f(x: Option<u8>) -> u8 {\n    x.expect("set above")\n}\n', encoding='utf-8', newline='\n')
             with self.assertRaises(SystemExit) as failed:
                 self.run_main(root, "--check")
             self.assertIn("1 panic sites need review", str(failed.exception))
@@ -69,7 +69,7 @@ class CheckTests(unittest.TestCase):
             (root / "src").mkdir()
             (root / "crates/ponko_ecs/src").mkdir(parents=True)
             (root / "scripts").mkdir()
-            (root / "src/lib.rs").write_text("fn f() { panic!(); }\n")
+            (root / "src/lib.rs").write_text("fn f() { panic!(); }\n", encoding='utf-8', newline='\n')
             with self.assertRaises(SystemExit):
                 self.run_main(root, "--record", "src/lib.rs:1", "fine", "looks fine")
 

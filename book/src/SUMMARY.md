@@ -46,6 +46,7 @@
   - [Dedicated servers](servers.md)
   - [Lobbies, matchmaking and relays](lobby.md)
   - [Peer to peer over WebRTC](webrtc.md)
+  - [Putting a game online](online.md)
 - [Drawing](drawing.md)
 - [Camera, text and UI](camera-ui.md)
 - [Several cameras: split screen and minimaps](viewports.md)

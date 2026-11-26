@@ -565,13 +565,16 @@ fn mix(n: u64) -> u64 {
 /// (feature `webrtc`) and the scripted transport used by the conformance
 /// tests in `net/message_conformance.rs`, which also lists the contract each
 /// transport has to keep.
-#[cfg(any(test, feature = "steam", feature = "webrtc"))]
+#[cfg(any(test, feature = "steam", feature = "webrtc", feature = "lobby"))]
 pub(super) trait PacketTransport: Send {
     fn send(&mut self, to: SocketAddr, bytes: &[u8]) -> io::Result<bool>;
     fn recv(&mut self, buf: &mut [u8]) -> io::Result<Option<(SocketAddr, usize)>>;
     /// Protocol time, before each poll's receives: for transports with
     /// timers of their own (WebRTC), so they follow `poll_elapsed`'s clock.
     fn advance(&mut self, _now: Duration) {}
+    /// After each poll's sends: for transports that queue packets for a
+    /// carrier of their own (the lobby relay), so they leave in this poll.
+    fn flush(&mut self) {}
     /// The signaling peer behind a session address (WebRTC).
     #[cfg(feature = "webrtc")]
     fn signal_peer(&self, _addr: SocketAddr) -> Option<u64> {
@@ -581,10 +584,15 @@ pub(super) trait PacketTransport: Send {
     fn lobby(&self) -> Option<&super::SteamLobby> {
         None
     }
+    /// The lobby connection under a relay endpoint.
+    #[cfg(feature = "lobby")]
+    fn relay_lobby(&mut self) -> Option<&mut super::lobby::LobbyClient> {
+        None
+    }
 }
 
 enum Wire {
-    #[cfg(any(test, feature = "steam", feature = "webrtc"))]
+    #[cfg(any(test, feature = "steam", feature = "webrtc", feature = "lobby"))]
     Custom(Box<dyn PacketTransport>),
     Udp(UdpSocket),
     /// A UDP host that also takes browser clients over WebSocket.
@@ -605,7 +613,7 @@ enum Wire {
 impl Wire {
     fn addr(&self) -> io::Result<SocketAddr> {
         match self {
-            #[cfg(any(test, feature = "steam", feature = "webrtc"))]
+            #[cfg(any(test, feature = "steam", feature = "webrtc", feature = "lobby"))]
             Self::Custom(_) => Err(io::Error::other("no UDP address")),
             Self::Udp(s) => s.local_addr(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -616,7 +624,7 @@ impl Wire {
     }
     fn send(&mut self, addr: SocketAddr, bytes: &[u8]) -> io::Result<bool> {
         match self {
-            #[cfg(any(test, feature = "steam", feature = "webrtc"))]
+            #[cfg(any(test, feature = "steam", feature = "webrtc", feature = "lobby"))]
             Self::Custom(t) => t.send(addr, bytes),
             Self::Udp(s) => udp_send(s, addr, bytes),
             #[cfg(not(target_arch = "wasm32"))]
@@ -655,7 +663,7 @@ impl Wire {
     }
     fn recv(&mut self, buf: &mut [u8]) -> io::Result<Option<(SocketAddr, usize)>> {
         match self {
-            #[cfg(any(test, feature = "steam", feature = "webrtc"))]
+            #[cfg(any(test, feature = "steam", feature = "webrtc", feature = "lobby"))]
             Self::Custom(t) => t.recv(buf),
             Self::Udp(s) => udp_recv(s, buf),
             #[cfg(not(target_arch = "wasm32"))]
@@ -766,7 +774,7 @@ pub struct NetMessages {
     stranger_budget: StrangerBudget,
 }
 impl NetMessages {
-    #[cfg(any(test, feature = "steam", feature = "webrtc"))]
+    #[cfg(any(test, feature = "steam", feature = "webrtc", feature = "lobby"))]
     pub(super) fn transported(
         transport: Box<dyn PacketTransport>,
         host: Option<SocketAddr>,
@@ -787,6 +795,13 @@ impl NetMessages {
         let link = self.links.get(&peer).filter(|l| l.connected)?;
         match &self.wire {
             Wire::Custom(t) => t.signal_peer(link.addr),
+            _ => None,
+        }
+    }
+    #[cfg(feature = "lobby")]
+    pub(super) fn transport_relay_lobby(&mut self) -> Option<&mut super::lobby::LobbyClient> {
+        match &mut self.wire {
+            Wire::Custom(t) => t.relay_lobby(),
             _ => None,
         }
     }
@@ -1208,7 +1223,7 @@ impl NetMessages {
         for link in self.links.values_mut() {
             link.renet.update(elapsed);
         }
-        #[cfg(any(test, feature = "steam", feature = "webrtc"))]
+        #[cfg(any(test, feature = "steam", feature = "webrtc", feature = "lobby"))]
         if let Wire::Custom(t) = &mut self.wire {
             t.advance(self.now);
         }
@@ -1299,6 +1314,10 @@ impl NetMessages {
         })();
         links.retain(|_, link| !link.renet.is_disconnected());
         self.links = links;
+        #[cfg(any(test, feature = "steam", feature = "webrtc", feature = "lobby"))]
+        if let Wire::Custom(t) = &mut self.wire {
+            t.flush();
+        }
         result
     }
     fn transmit(&mut self, link: &Link, kind: u8, data: &[u8]) -> io::Result<()> {
@@ -1553,6 +1572,25 @@ impl NetMessages {
     /// ```
     pub fn peer_addr(&self, peer: PeerId) -> Option<SocketAddr> {
         self.links.get(&peer).filter(|l| l.connected).map(|l| l.addr)
+    }
+
+    /// Where a connected browser peer of [`accept_web`](Self::accept_web)
+    /// comes from: its TCP address and the `X-Forwarded-For` header of its
+    /// upgrade request, for a server behind a reverse proxy that limits per
+    /// client ([`WebPeer::client_ip`](super::WebPeer::client_ip)). `None`
+    /// for any other peer (UDP, in memory, unknown) and in a browser.
+    /// ```
+    /// let nets = ponko::net::NetMessages::loopback(2);
+    /// assert!(nets[1].web_peer(ponko::net::PeerId::HOST).is_none());
+    /// ```
+    pub fn web_peer(&self, peer: PeerId) -> Option<super::WebPeer> {
+        let addr = self.links.get(&peer).filter(|l| l.connected)?.addr;
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Wire::UdpWeb(_, web, _) = &self.wire {
+            return web.peer(addr);
+        }
+        let _ = addr;
+        None
     }
 
     /// Whether this endpoint hosts (from [`host`](Self::host) or the first

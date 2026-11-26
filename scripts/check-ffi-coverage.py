@@ -73,14 +73,14 @@ def code_only(text):
 def exports():
     names = set()
     for source in sorted((ROOT / 'crates/ponko_ffi/src').rglob('*.rs')):
-        names.update(EXPORT.findall(source.read_text()))
+        names.update(EXPORT.findall(source.read_text(encoding='utf-8')))
     return names
 
 
 def test_text():
     files = sorted((ROOT / 'crates/ponko_ffi/tests').glob('*.rs'))
     files += sorted((ROOT / 'examples/cpp').glob('*.c')) + sorted((ROOT / 'examples/cpp').glob('*.cpp'))
-    return '\n'.join(code_only(f.read_text()) for f in files)
+    return '\n'.join(code_only(f.read_text(encoding='utf-8')) for f in files)
 
 
 def untested(names, text):
@@ -93,7 +93,7 @@ def untested(names, text):
 
 def allowlist():
     entries, problems = {}, []
-    for number, line in enumerate(ALLOWLIST.read_text().splitlines(), 1):
+    for number, line in enumerate(ALLOWLIST.read_text(encoding='utf-8').splitlines(), 1):
         if not line.strip() or line.lstrip().startswith('#'):
             continue
         name, _, reason = line.partition('#')
@@ -108,7 +108,7 @@ def allowlist():
 
 def rust_only_entries():
     entries, problems = {}, []
-    for number, line in enumerate(RUST_ONLY.read_text().splitlines(), 1):
+    for number, line in enumerate(RUST_ONLY.read_text(encoding='utf-8').splitlines(), 1):
         if not line.strip() or line.lstrip().startswith('#'):
             continue
         fields, _, reason = line.partition('#')
@@ -127,7 +127,7 @@ def rust_only_entries():
 
 def rust_only_table():
     """{name: chapter file} for the first table after "## Still Rust-only"."""
-    lines = GUIDE.read_text().split('## Still Rust-only', 1)[1].splitlines()
+    lines = GUIDE.read_text(encoding='utf-8').split('## Still Rust-only', 1)[1].splitlines()
     rows, started = {}, False
     for line in lines:
         if line.startswith('|'):
@@ -149,7 +149,7 @@ def snake(name):
 
 def rust_sources():
     files = list((ROOT / 'src').rglob('*.rs')) + list((ROOT / 'crates/ponko_ecs/src').rglob('*.rs'))
-    return '\n'.join(f.read_text() for f in files)
+    return '\n'.join(f.read_text(encoding='utf-8') for f in files)
 
 
 def c_function_for(name, header):
@@ -183,7 +183,7 @@ def rust_only_problems():
     for name in sorted(table.keys() - entries.keys()):
         problems.append(f'{name}: in the "Still Rust-only" table of book/src/c-cpp.md but not on scripts/{RUST_ONLY.name}.')
     source = rust_sources()
-    header = HEADER.read_text()
+    header = HEADER.read_text(encoding='utf-8')
     for name, chapter in sorted(entries.items()):
         last = name.split('::')[-1]
         if table.get(name) not in (None, chapter):
@@ -195,7 +195,7 @@ def rust_only_problems():
         chapter_path = BOOK / chapter
         if not chapter_path.exists():
             problems.append(f'{name}: {chapter} does not exist.')
-        elif not re.search(rf'\b{last}\b', chapter_path.read_text()):
+        elif not re.search(rf'\b{last}\b', chapter_path.read_text(encoding='utf-8')):
             problems.append(f'{name}: {chapter} never mentions {last}.')
         bound = c_function_for(name, header)
         if bound:
@@ -203,7 +203,7 @@ def rust_only_problems():
                             f'remove the entry and its table row.')
     covered = set(entries.values()) | set(NOT_FEATURES)
     for chapter in sorted(BOOK.glob('*.md')):
-        if chapter.name != GUIDE.name and chapter.name not in covered and re.search(r'rust[- ]only', chapter.read_text(), re.I):
+        if chapter.name != GUIDE.name and chapter.name not in covered and re.search(r'rust[- ]only', chapter.read_text(encoding='utf-8'), re.I):
             problems.append(f'{chapter.name}: says "Rust-only" but has no entry on scripts/{RUST_ONLY.name} '
                             f'(add one with its table row, or list the chapter in NOT_FEATURES if it is not about the API).')
     return problems

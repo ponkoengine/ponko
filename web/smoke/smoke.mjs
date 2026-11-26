@@ -312,8 +312,8 @@ async function startupResult(page) {
  * was heard, or else where the output stopped. Installed before the page's
  * own scripts run.
  */
-function watchAudio() {
-  const seen = { contexts: [], audible: 0, started: 0, ended: 0 };
+function watchAudio(mode) {
+  const seen = { contexts: [], audible: 0, stereo: 0, started: 0, ended: 0 };
   Object.defineProperty(window, "__smokeAudio", { value: seen });
   const Original = window.AudioContext;
   if (!Original) return;
@@ -321,6 +321,13 @@ function watchAudio() {
     constructor(...options) {
       super(...options);
       seen.contexts.push(this);
+      if (mode === "zero-channels") {
+        Object.defineProperty(this.destination, "maxChannelCount", { get: () => 0 });
+      }
+    }
+    resume() {
+      if (mode === "resume-rejected") return Promise.reject(new Error("smoke audio resume refused"));
+      return super.resume();
     }
   };
   const start = AudioBufferSourceNode.prototype.start;
@@ -328,7 +335,10 @@ function watchAudio() {
     seen.started++;
     this.addEventListener("ended", () => seen.ended++);
     const buffer = this.buffer;
-    if (buffer && buffer.getChannelData(0).some((sample) => Math.abs(sample) > 1e-4)) seen.audible++;
+    if (buffer && buffer.getChannelData(0).some((sample) => Math.abs(sample) > 1e-4)) {
+      seen.audible++;
+      if (buffer.numberOfChannels === 2) seen.stereo++;
+    }
     return start.apply(this, when);
   };
 }
@@ -340,13 +350,14 @@ function watchAudio() {
  */
 async function audioSeen(page) {
   return page.evaluate(() => {
-    const seen = window.__smokeAudio ?? { contexts: [], audible: 0, started: 0, ended: 0 };
+    const seen = window.__smokeAudio ?? { contexts: [], audible: 0, stereo: 0, started: 0, ended: 0 };
     return {
       contexts: seen.contexts.map((c) => c.state),
       clocks: seen.contexts.map((c) => Math.round(c.currentTime * 1000) / 1000),
       sampleRates: seen.contexts.map((c) => c.sampleRate),
       maxChannels: seen.contexts.map((c) => c.destination.maxChannelCount),
       audible: seen.audible,
+      stereo: seen.stereo,
       started: seen.started,
       ended: seen.ended,
     };
@@ -531,7 +542,7 @@ async function main() {
         };
       });
     }
-    if (args.music === "required") await context.addInitScript(watchAudio);
+    if (args.music === "required") await context.addInitScript(watchAudio, args.audioOutput);
     if (args.persist) await context.addInitScript(fakePersistence, args.persist);
     if (args.case === "missing-asset") {
       await context.route(`**/assets/${args.asset}`, (route) => route.fulfill({ status: 404, body: "gone" }));
@@ -734,17 +745,40 @@ async function main() {
     // 4a. The click lets the page make sound, and the music that waited
     //     for it plays.
     if (args.music === "required") {
-      step = "waiting for the music after the click";
+      const rejected = args.audioOutput === "resume-rejected";
+      const zero = args.audioOutput === "zero-channels";
+      step = "checking audio output after the click";
       const musicDeadline = Date.now() + 10_000;
       for (;;) {
         snapshot = await call(smokeState(page));
         report.audio.afterClick = await call(audioSeen(page));
-        const waiting = musicAfterClick(snapshot.state, report.audio.afterClick);
+        const output = report.audio.afterClick;
+        let waiting;
+        if (rejected) {
+          const warnings = report.console.filter(({ type, text }) =>
+            type === "warning" && text.includes("Browser audio is unavailable"));
+          if (snapshot.state.audio_unlocked !== false || output.started !== 0 || warnings.length > 1) {
+            throw new Failure("audio", "a rejected resume must stay locked and silent and warn once");
+          }
+          waiting = warnings.length === 1 && warnings[0].text.includes("smoke audio resume refused")
+            ? null : "the resume rejection was not logged with its reason";
+        } else {
+          waiting = musicAfterClick(snapshot.state, output);
+          if (!waiting && zero) {
+            const warnings = report.console.filter(({ type, text }) =>
+              type === "warning" && text.includes("reported zero output channels. Trying stereo."));
+            if (warnings.length !== 1 || output.maxChannels.length !== 1 || output.maxChannels[0] !== 0) {
+              waiting = "the zero-channel destination did not trigger exactly one stereo fallback warning";
+            } else if (output.stereo < 3 || output.ended < 1) {
+              waiting = "the fallback did not keep playing stereo buffers after the initial pair";
+            }
+          }
+        }
         if (!waiting) break;
-        if (Date.now() > musicDeadline) throw new Failure("audio", `the music never played after the click: ${waiting}`);
+        if (Date.now() > musicDeadline) throw new Failure("audio", waiting);
         await sleep(100);
       }
-      log(`music heard after the click: ${JSON.stringify(report.audio.afterClick)}`);
+      log(`audio checked after the click: ${JSON.stringify(report.audio.afterClick)}`);
     }
 
     // 4b. Keys: each --press key reaches the game and changes the state it

@@ -162,7 +162,7 @@ def outcome(returncode, output, classify):
 # Side effects: cargo, git and gh.
 
 def run(cmd, **kw):
-    return subprocess.run(cmd, cwd=ROOT, text=True, **kw)
+    return subprocess.run(cmd, cwd=ROOT, text=True, encoding='utf-8', **kw)
 
 
 def packages():

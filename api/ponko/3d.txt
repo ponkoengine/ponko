@@ -6217,6 +6217,7 @@ pub fn ponko::net::NetMessages::send_to_all(&mut self, ponko::net::Lane, &[u8]) 
 pub fn ponko::net::NetMessages::stats(&self) -> ponko::net::MessageStats
 pub fn ponko::net::NetMessages::timeout(self, core::time::Duration) -> Self
 pub fn ponko::net::NetMessages::web_addr(&self) -> core::option::Option<core::net::socket_addr::SocketAddr>
+pub fn ponko::net::NetMessages::web_peer(&self, ponko::net::PeerId) -> core::option::Option<ponko::net::WebPeer>
 pub struct ponko::net::NetPose
 pub ponko::net::NetPose::stream: ponko::net::SnapshotStream<ponko::net::Pose>
 impl core::clone::Clone for ponko::net::NetPose
@@ -6679,6 +6680,20 @@ impl core::hash::Hash for ponko::net::UpdateStamp
 pub fn ponko::net::UpdateStamp::hash<__H: core::hash::Hasher>(&self, &mut __H)
 impl core::marker::Copy for ponko::net::UpdateStamp
 impl core::marker::StructuralPartialEq for ponko::net::UpdateStamp
+pub struct ponko::net::WebPeer
+impl ponko::net::WebPeer
+pub fn ponko::net::WebPeer::client_ip(&self, impl core::ops::function::Fn(core::net::ip_addr::IpAddr) -> bool) -> core::option::Option<core::net::ip_addr::IpAddr>
+pub fn ponko::net::WebPeer::forwarded_for(&self) -> core::option::Option<&str>
+pub fn ponko::net::WebPeer::new(core::net::socket_addr::SocketAddr, core::option::Option<&str>) -> Self
+pub fn ponko::net::WebPeer::remote(&self) -> core::net::socket_addr::SocketAddr
+impl core::clone::Clone for ponko::net::WebPeer
+pub fn ponko::net::WebPeer::clone(&self) -> Self
+impl core::cmp::Eq for ponko::net::WebPeer
+impl core::cmp::PartialEq for ponko::net::WebPeer
+pub fn ponko::net::WebPeer::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::net::WebPeer
+pub fn ponko::net::WebPeer::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::net::WebPeer
 pub const ponko::net::DEFAULT_BUDGET: u32
 pub const ponko::net::MAX_INPUT_BYTES: usize
 pub const ponko::net::MAX_INTEREST_TIERS: usize
