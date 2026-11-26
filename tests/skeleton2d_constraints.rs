@@ -97,7 +97,7 @@ fn transform_mix_keys_move_the_follower_part_way() {
     let leader = data.add_bone("leader", Some(root), BonePose::at(vec2(10.0, 4.0)), 0.0);
     let follower = data.add_bone("follower", Some(root), BonePose::IDENTITY, 0.0);
     data.add_transform_constraint(TransformConstraint::new("follow", &[follower], leader));
-    let mut slide = TransformTrack::new(0);
+    let mut slide = TransformTrack::new(data.transform_constraint("follow").unwrap());
     slide.mix_translate = vec![Key::new(0.0, vec2(0.0, 0.0)), Key::new(1.0, vec2(1.0, 0.5))];
     data.add_clip(Clip::new("slide", 1.0).with_transform_track(slide));
     let mut s = Skeleton::new(Arc::new(data));
@@ -203,7 +203,7 @@ fn path_spacing_and_mixes_follow_their_modes_and_keys() {
     // A clip keys the position: 0 to 20 over a second, so 10 half way.
     let (s, [a, ..]) = snake(|_| {});
     let mut data = (**s.data()).clone();
-    let mut track = PathTrack::new(0);
+    let mut track = PathTrack::new(data.path_constraint("follow").unwrap());
     track.position = vec![Key::new(0.0, 0.0), Key::new(1.0, 20.0)];
     data.add_clip(Clip::new("slide", 1.0).with_path_track(track));
     let mut s = Skeleton::new(Arc::new(data));
@@ -271,6 +271,20 @@ fn a_bone_with_physics_lags_behind_a_jump_by_one_spring_step() {
     near(s.bone_position(tip).x, 10.0 - 10.0 + velocity / 60.0);
     // A reset key starts the springs over: the bone is where the pose is.
     s.update(0.5);
+    near2(s.bone_position(tip), vec2(10.0, 0.0));
+}
+
+#[test]
+fn a_teleported_skeleton_restarts_its_springs_where_it_lands() {
+    let (mut s, tip) = jumper(|p| p.x = 1.0);
+    assert_eq!(s.data().physics_constraint("lag"), Some(0));
+    assert_eq!(s.data().physics_constraint("hair"), None);
+    // Jumped 10 right: the bone lags behind until the game says the jump
+    // was a teleport, not a move.
+    s.update(1.0 / 60.0);
+    assert!(s.bone_position(tip).x < 1.0);
+    s.reset_physics();
+    s.update(1.0 / 60.0);
     near2(s.bone_position(tip), vec2(10.0, 0.0));
 }
 

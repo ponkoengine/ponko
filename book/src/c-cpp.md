@@ -549,6 +549,7 @@ binding arrives:
 | `Graphics::stream_instance_cell` | [Streaming instance cells](3d.md#streaming-instance-cells) | Build a cell's matrices on your own threads, then `ponko_ctx_add_instance_cell` (`ctx::add_instance_cell`) on the game's |
 | `InstanceCellData` | [Streaming instance cells](3d.md#streaming-instance-cells) | The same: matrices and colours go straight to `ponko_ctx_add_instance_cell` |
 | `GamepadBackend` | [Backends and tests](controllers.md#backends-and-tests) | Native games use the built-in gamepad backend |
+| `FakeSteam` | [Shipping on Steam](steam.md#testing-a-games-steam-logic) | C and C++ tests run against an absent Steam (every `ponko_steam_*` call does nothing); the fake is for Rust tests |
 | `FakeGamepads` | [Backends and tests](controllers.md#backends-and-tests) | Native tests feed `ponko_ctx_feed_input` (kind 8 connects a pad) and `ponko_ctx_feed_gamepad_motion` |
 | `KeyLabels::text` | [Key labels follow the keyboard layout](controllers.md#key-labels-follow-the-keyboard-layout) | Join the labels of `ponko_ctx_glyph_label` (`ctx::layout_glyph_label`) with `/`; the player's labels themselves are `ponko_ctx_key_label` |
 | `InputScenario::connect_gamepad` | [Backends and tests](controllers.md#backends-and-tests) | Scenarios are JSON in C and C++: a `gamepad_connected` step takes the same `info` object |

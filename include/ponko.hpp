@@ -7553,6 +7553,16 @@ public:
     std::uint64_t steam_lobby() const { std::uint64_t l = 0; detail::check(ponko_ctx_steam_lobby(raw_, &l)); return l; }
     /// Opens the Steam overlay to invite friends to this session's lobby.
     void steam_invite() { detail::check(ponko_ctx_steam_invite(raw_)); }
+    /// Brings Steam Cloud and the stored files in step for `files` (names, or
+    /// folders ending in '/'): the newest copy of each wins. Returns {downloaded,
+    /// uploaded}; {0, 0} without Steam or with its cloud off (see steam::start).
+    std::pair<std::uint32_t, std::uint32_t> steam_sync_cloud(std::initializer_list<const char*> files) {
+        std::uint32_t down = 0, up = 0;
+        detail::check(ponko_ctx_steam_sync_cloud(raw_, files.begin(), files.size(), &down, &up));
+        return {down, up};
+    }
+    /// Deletes the stored file `name` and its Steam Cloud copy.
+    void steam_delete_cloud_file(const char* name) { detail::check(ponko_ctx_steam_delete_cloud_file(raw_, name)); }
     /// Pauses the simulation; frame systems keep running.
     void pause() { detail::check(ponko_ctx_pause(raw_)); }
     /// Resumes a paused simulation.
@@ -12016,6 +12026,79 @@ inline std::uint64_t steam_wait_for_invite(std::uint32_t app_id, std::uint32_t t
     detail::check(ponko_steam_wait_for_invite(app_id, timeout_ms, &l));
     return l;
 }
+
+/// Steam's store-side services (the library built with `steam`): achievements,
+/// stats, rich presence, the overlay's state and the Deck's text input; cloud
+/// saves are ctx::steam_sync_cloud. One Steam per process. Before start(), when
+/// Steam isn't running, and without the feature, every call does nothing and
+/// returns false, so one build runs from any store.
+namespace steam {
+/// What the text input accepts (Rust's SteamTextMode).
+enum class text_mode : std::uint32_t { single_line = 0, multi_line = 1, password = 2, email = 3, numeric = 4 };
+/// Starts the services for `app_id` (480: Valve's test app); true when Steam runs.
+inline bool start(std::uint32_t app_id) { return ponko_steam_start(app_id); }
+/// Whether the services reach a running Steam.
+inline bool running() { return ponko_steam_running(); }
+/// Runs Steam's callbacks: the overlay's state and the text input. Once a frame.
+inline void update() { ponko_steam_update(); }
+/// Unlocks the achievement `name`; false when Steam is absent or refuses the name.
+inline bool unlock_achievement(const char* name) { return ponko_steam_unlock_achievement(name); }
+/// Locks the achievement `name` again.
+inline bool clear_achievement(const char* name) { return ponko_steam_clear_achievement(name); }
+/// Whether the player has the achievement; nothing when Steam is absent or doesn't know it.
+inline std::optional<bool> achievement(const char* name) {
+    const std::int32_t a = ponko_steam_achievement(name);
+    if (a < 0) return std::nullopt;
+    return a == 1;
+}
+/// Sets an integer stat; kept after store_stats().
+inline bool set_stat(const char* name, std::int32_t value) { return ponko_steam_set_stat_i32(name, value); }
+/// Sets a float stat; kept after store_stats().
+inline bool set_stat(const char* name, float value) { return ponko_steam_set_stat_f32(name, value); }
+/// An integer stat; nothing when Steam is absent or doesn't know it.
+inline std::optional<std::int32_t> stat_i32(const char* name) {
+    std::int32_t v = 0;
+    if (!ponko_steam_stat_i32(name, &v)) return std::nullopt;
+    return v;
+}
+/// A float stat; nothing when Steam is absent or doesn't know it.
+inline std::optional<float> stat_f32(const char* name) {
+    float v = 0;
+    if (!ponko_steam_stat_f32(name, &v)) return std::nullopt;
+    return v;
+}
+/// Sends the changed achievements and stats to Steam's servers.
+inline bool store_stats() { return ponko_steam_store_stats(); }
+/// Sets the rich presence `key` (an empty value removes it).
+inline bool set_rich_presence(const char* key, const char* value) { return ponko_steam_set_rich_presence(key, value); }
+/// Removes every rich presence key.
+inline void clear_rich_presence() { ponko_steam_clear_rich_presence(); }
+/// Whether the overlay is open, as of the last update(): pause while it is.
+inline bool overlay_open() { return ponko_steam_overlay_open(); }
+/// Whether the game runs on a Steam Deck.
+inline bool is_steam_deck() { return ponko_steam_is_steam_deck(); }
+/// Whether Steam runs in Big Picture mode.
+inline bool is_big_picture() { return ponko_steam_is_big_picture(); }
+/// Opens the full-screen gamepad text input (Big Picture, Deck); false when it didn't open.
+inline bool show_text_input(text_mode mode, const char* description, const char* existing, std::uint32_t max_chars) {
+    return ponko_steam_show_text_input(static_cast<std::uint32_t>(mode), description, existing, max_chars);
+}
+/// How the text input closed, once: {PONKO_STEAM_TEXT_*, the submitted text}.
+inline std::pair<std::uint32_t, std::string> take_text_input() {
+    std::uint32_t state = PONKO_STEAM_TEXT_NONE;
+    std::size_t n = 0;
+    if (ponko_steam_take_text_input(&state, nullptr, 0, &n) == PONKO_OK) return {state, std::string()};
+    std::vector<char> b(n + 1);
+    detail::check(ponko_steam_take_text_input(&state, b.data(), b.size(), &n));
+    return {state, std::string(b.data(), n)};
+}
+/// Opens the Deck's floating keyboard beside the text field at x, y (pixels) of width by height.
+inline bool show_floating_keyboard(text_mode mode, std::int32_t x, std::int32_t y, std::int32_t width, std::int32_t height) {
+    return ponko_steam_show_floating_keyboard(static_cast<std::uint32_t>(mode), x, y, width, height);
+}
+/// Whether Steam Cloud keeps this player's files.
+inline bool cloud_enabled() { return ponko_steam_cloud_enabled(); }
+} // namespace steam
 
 // ---- glTF files as scenes (from Blender and other editors) ----------------------
 /// Spawns the glTF file at `path` as a scene placed at `at`: a root entity

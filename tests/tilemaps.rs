@@ -337,6 +337,9 @@ fn spawned_tmx_layers_become_tile_maps_stacked_by_z() {
         .unwrap();
     assert_eq!(animated[0].tile, 1);
     assert_eq!(animated[0].frames, [(1, 0.2), (2, 0.3)]);
+    // Each frame for its time, looping after half a second.
+    let shown: Vec<u16> = [0.0, 0.1, 0.25, 0.45, 0.55].map(|t| animated[0].frame_at(t)).to_vec();
+    assert_eq!(shown, [1, 1, 2, 2, 1]);
 
     // Margin and spacing: the tiles are packed into a texture of their own.
     let spaced = world

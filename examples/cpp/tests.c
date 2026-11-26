@@ -1076,6 +1076,24 @@ static void steam_messages_validation(void) {
     ponko_steam_lobby_free(NULL);
 }
 
+/* Steam's store-side services before ponko_steam_start (and in a library
+   built without `steam`): every call does nothing and says false. */
+static void steam_services_without_steam(void) {
+    CHECK(!ponko_steam_running());
+    ponko_steam_update();
+    CHECK(!ponko_steam_unlock_achievement("FIRST_WIN"));
+    CHECK(ponko_steam_achievement("FIRST_WIN") == -1);
+    int32_t wins = 5;
+    CHECK(!ponko_steam_set_stat_i32("wins", 1) && !ponko_steam_stat_i32("wins", &wins) && wins == 5);
+    CHECK(!ponko_steam_store_stats());
+    CHECK(!ponko_steam_set_rich_presence("status", "Menu"));
+    CHECK(!ponko_steam_overlay_open());
+    CHECK(!ponko_steam_show_text_input(0, "Name", "", 16));
+    uint32_t state = 9; size_t len = 9;
+    CHECK(ponko_steam_take_text_input(&state, NULL, 0, &len) == PONKO_OK && state == PONKO_STEAM_TEXT_NONE);
+    CHECK(!ponko_steam_cloud_enabled());
+}
+
 /* A lobby client with no server behind it: requests wait for the server's
    answer, relaying needs a room, bad arguments are errors. The full flow
    runs against a real server in crates/ponko_ffi/tests/lobby.rs. */
@@ -4106,6 +4124,7 @@ int main(void) {
     command_barriers();
     command_spawn_ids();
     steam_messages_validation();
+    steam_services_without_steam();
     lobby_client();
     rtc_endpoints();
     morph_clip_api();
