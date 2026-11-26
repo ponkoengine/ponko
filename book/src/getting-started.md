@@ -27,6 +27,7 @@ cargo run --release --example boids
 | `ants` | Ant colonies: pheromone trails, foraging, growth; up to millions of ants |
 | `headless` | A million agents with no window or GPU |
 | `coin_dash` | A small complete game (title, settings with UI scale and rebinding, rounds, pause, saved progress, sound), tested headlessly, packaged for the desktop and built for the web; see [A complete game, packaged](packaging.md) and [Headless runs and testing](headless.md#a-complete-game-tested-headlessly) |
+| `examples/cpp/coin_dash/` | Coin Dash in C++, with the Rust game's scenario tests (see [C and C++](c-cpp.md#a-complete-game-coin-dash-in-c)) |
 | `examples/cpp/boids.cpp` | The boids example in C++ (build with CMake, see [C and C++](c-cpp.md)) |
 
 Always use `--release` for anything with many entities; debug builds are

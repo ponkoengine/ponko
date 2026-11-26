@@ -46,6 +46,7 @@ struct Shown {
 // checked at each step by the scenario itself (ui checks), and the screens
 // logged by a frame system for the steps a scenario can't name.
 void menus(const std::filesystem::path& scenarios) {
+    // ANCHOR: scenario_file
     const auto scenario = ponko::input_scenario::from_json(read_file(scenarios / "menus.json"));
     std::vector<Shown> seen;
     ponko::game g("coin dash menus", std::uint32_t(ARENA.x), std::uint32_t(ARENA.y));
@@ -60,6 +61,7 @@ void menus(const std::filesystem::path& scenarios) {
     auto [world, report] = g.run_headless_scenario(scenario);
     if (!report.passed()) std::cerr << "menus: " << world.scenario_report_json() << "\n";
     CHECK(report.passed());
+    // ANCHOR_END: scenario_file
 
     auto at = [&](std::size_t tick) { return tick < seen.size() ? seen[tick] : Shown{Screen::title, false}; };
     CHECK((at(5) == Shown{Screen::title, false}));
@@ -139,6 +141,7 @@ void session(const std::filesystem::path& scenarios, const std::filesystem::path
 void win(const std::filesystem::path& data) {
     std::filesystem::remove_all(data);
     const std::uint64_t ticks = std::uint64_t(ROUND_SECONDS) * 60;
+    // ANCHOR: resource_checks
     ponko::input_scenario scenario;
     scenario.duration(ticks)
         .expect(ticks - 1, ponko::scenario_check::resource("coin_dash::Round", "/collected", std::to_string(COINS)))
@@ -152,6 +155,7 @@ void win(const std::filesystem::path& data) {
     if (!report.passed()) std::cerr << "win: " << world.scenario_report_json() << "\n";
     CHECK(report.passed());
     CHECK(world.state<Screen>() == Screen::result_won);
+    // ANCHOR_END: resource_checks
     const Round round = world.resource<Round>();
     CHECK(round.collected == COINS && round.number == 1 && round.time_left > 0);
     std::size_t coins = 0;

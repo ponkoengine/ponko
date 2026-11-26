@@ -1452,6 +1452,7 @@ struct SettingsScreen {
     }
 };
 
+// ANCHOR: rules_plugin
 /// Layer 2: the rules, on the fixed tick, the screens and the resources they
 /// own. The game starts on the title screen with the progress loaded.
 struct Rules {
@@ -1476,6 +1477,7 @@ struct Rules {
         put(c, SaveFile{load, false});
     }
 };
+// ANCHOR_END: rules_plugin
 
 /// Layer 3: the pictures, the text and the sound effects. The sprites
 /// themselves are drawn by the engine's built-in sprite system.
@@ -1490,6 +1492,7 @@ struct Drawing {
     }
 };
 
+// ANCHOR: whole_game
 /// The whole game: its layers, each a plugin of its own. Startup is the
 /// plugins' setup, in this order.
 struct CoinDash {
@@ -1503,5 +1506,6 @@ constexpr const char* TITLE = "Coin Dash";
 /// run_headless: CoinDash with progress and settings in the player's data
 /// folder (PONKO_DATA_DIR moves it).
 inline ponko::game& build(ponko::game& g) { return g.seed(SEED).app_id(APP_ID).plugin(CoinDash{}); }
+// ANCHOR_END: whole_game
 
 }  // namespace coin_dash
