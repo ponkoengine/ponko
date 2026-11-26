@@ -32,7 +32,10 @@ pub struct MeshData {
     pub indices: Vec<u32>,
     /// One color per corner, multiplying the material's color (and
     /// readable in shaders, for wind weights and other masks: `v.color`
-    /// and `s.color`). Empty: all white. Kept to 8 bits per channel.
+    /// and `s.color`). Empty: all white. Kept as half floats: red, green
+    /// and blue may go above 1 (up to 65504) for corners brighter than
+    /// white, as imported meshes use for light strips and baked glow;
+    /// alpha is kept from 0 to 1.
     pub colors: Vec<Color>,
     /// A second texture coordinate per corner (glTF's `TEXCOORD_1`), for
     /// the game's own shaders: `v.uv1` and `s.uv1` (lightmaps, texture

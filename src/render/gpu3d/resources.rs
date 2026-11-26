@@ -600,9 +600,7 @@ impl Resources {
                 position: data.positions[i].to_array(),
                 normal: normals[i].to_array(),
                 uv: data.uvs.get(i).map_or([0.0; 2], |uv| uv.to_array()),
-                color: data.colors.get(i).map_or([255; 4], |&c| {
-                    linear(c).map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
-                }),
+                color: data.colors.get(i).map_or(HALF_WHITE, |&c| half_color(linear(c))),
                 uv1: data.uvs1.get(i).map_or([0.0; 2], |uv| uv.to_array()),
             })
             .collect();
@@ -753,14 +751,25 @@ pub(super) struct Vertex {
     pub(super) position: [f32; 3],
     pub(super) normal: [f32; 3],
     pub(super) uv: [f32; 2],
-    /// Linear RGBA, 0..255.
-    pub(super) color: [u8; 4],
+    /// Linear RGBA as half floats (`half::f16` bits): red, green and blue
+    /// above 1 for brighter than white.
+    pub(super) color: [u16; 4],
     /// The second texture coordinate set.
     pub(super) uv1: [f32; 2],
 }
 
+/// White, opaque: a corner of a mesh without colours.
+const HALF_WHITE: [u16; 4] = [0x3C00; 4];
+
+/// A linear colour as a vertex holds it: red, green and blue from 0 to the
+/// largest half float (65504), alpha from 0 to 1; not a number is 0.
+fn half_color([r, g, b, a]: [f32; 4]) -> [u16; 4] {
+    let half = |v: f32, top: f32| half::f16::from_f32(if v.is_nan() { 0.0 } else { v.clamp(0.0, top) }).to_bits();
+    [half(r, 65504.0), half(g, 65504.0), half(b, 65504.0), half(a, 1.0)]
+}
+
 pub(super) const VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 5] =
-    wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 8 => Unorm8x4, 9 => Float32x2];
+    wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 8 => Float16x4, 9 => Float32x2];
 
 pub(super) const INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
     3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4, // model matrix
