@@ -962,10 +962,11 @@ fn known_pointer_animations_play() {
                 }
             }
             _ => {
-                // The turning normal map is the heat dome's, which is fully
-                // transmissive: drawn as see-through blending it shows
-                // nothing until refraction is drawn (#595). So the picture
-                // doesn't change, and the material's value is what plays.
+                // The turning normal map is the heat dome's: clear glass
+                // with no specular reflection and a 2 cm volume, so a
+                // turned normal barely bends what is seen through it. The
+                // picture doesn't change, and the material's value is what
+                // plays.
                 for (i, turned) in [(0, 0.0), (1, std::f32::consts::FRAC_PI_2), (2, std::f32::consts::PI)] {
                     let rotation = animated_material(file, "HeatDome", times[i]).texture_transform.rotation;
                     check(
@@ -974,7 +975,7 @@ fn known_pointer_animations_play() {
                     );
                     check(
                         difference(i) < 0.05,
-                        format!("{}: the invisible dome changed the picture", times[i]),
+                        format!("{}: the turned dome changed the picture", times[i]),
                     );
                 }
             }

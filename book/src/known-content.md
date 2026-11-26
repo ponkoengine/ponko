@@ -332,11 +332,11 @@ adapter to `results/pointer/pointer.json`. On an Apple M4 Max (Metal):
 
 | Sample | Times (s) | What the test checks | Measured |
 |---|---|---|---|
-| CubeVisibility | 0.25, 0.75, 1.25 | the blue cube shows, hides, shows | hidden at 0.75: half the model's pixels go (19264 to 9630), mean difference from the control 8.0; shown: identical to it |
+| CubeVisibility | 0.25, 0.75, 1.25 | the blue cube shows, hides, shows | hidden at 0.75: half the model's pixels go (8395 to 4196), mean difference from the control 8.0; shown: identical to it |
 | LightVisibility | 0.25, 0.75, 1.25 | the blue spot light shines, goes out, shines | out at 0.75: less blue, mean difference 1.7; on: identical |
 | AnimatedColorsCube | 0.75, 1.75, 2.75 | the moving cube is green over the green cube, blue over the blue one, red back over the red one | the changed pixels are green, then blue, where the control's are red; red again: identical |
 | AnimationPointerUVs | 0, 3, 6 | the keyed base color transforms (offset, scale, rotation) take their keyed values, and the textures move from time to time where the control's don't | every value exact; the other maps' channels warn ([#666](https://github.com/ponkoengine/ponko/issues/666)) |
-| PotOfCoalsAnimationPointer | 0, 1, 2 | the heat dome's normal map turns 0, a quarter and half a turn | exact; the dome is fully transmissive, drawn invisible until [#595](https://github.com/ponkoengine/ponko/issues/595), so the picture doesn't change |
+| PotOfCoalsAnimationPointer | 0, 1, 2 | the heat dome's normal map turns 0, a quarter and half a turn | exact; the dome is clear glass with no specular reflection and a 2 cm volume, so the turn doesn't change the picture |
 
 None of their screenshots matches at any of the times: the screenshots are
 taken from other views, and the GIF and WebP ones are animated (the first

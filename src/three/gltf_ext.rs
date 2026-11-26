@@ -580,7 +580,7 @@ impl PointerTarget {
 /// The JSON paths of a material's textures whose transform its maps can
 /// follow, in the order the first present one is picked
 /// ([`material_extensions`]).
-const MAPPED_TEXTURES: [&str; 15] = [
+const MAPPED_TEXTURES: [&str; 22] = [
     "pbrMetallicRoughness/baseColorTexture",
     "emissiveTexture",
     "normalTexture",
@@ -596,6 +596,13 @@ const MAPPED_TEXTURES: [&str; 15] = [
     "extensions/KHR_materials_anisotropy/anisotropyTexture",
     "extensions/KHR_materials_iridescence/iridescenceTexture",
     "extensions/KHR_materials_iridescence/iridescenceThicknessTexture",
+    "extensions/KHR_materials_transmission/transmissionTexture",
+    "extensions/KHR_materials_volume/thicknessTexture",
+    "extensions/KHR_materials_diffuse_transmission/diffuseTransmissionColorTexture",
+    "extensions/KHR_materials_diffuse_transmission/diffuseTransmissionTexture",
+    "extensions/KHR_materials_scatter/multiscatterColorTexture",
+    "extensions/KHR_materials_volume_scatter/multiscatterColorTexture",
+    "extensions/KHR_materials_scatter/scatterStrengthTexture",
 ];
 
 /// The texture (its path in [`MAPPED_TEXTURES`]) whose mapping material
@@ -2513,6 +2520,31 @@ mod tests {
     }
 
     #[test]
+    fn the_mapped_textures_are_in_the_order_the_loader_picks_from() {
+        // For each texture, a material with it and every texture after it
+        // (each on its own set) maps as that texture does: the list names
+        // every texture the loader takes a mapping from, in its order.
+        // The two scatter drafts are alternatives, never mixed.
+        for (i, first) in MAPPED_TEXTURES.iter().enumerate() {
+            let mut material = json!({});
+            for (j, path) in MAPPED_TEXTURES.iter().enumerate().skip(i) {
+                let scatter = |p: &str| p.contains("KHR_materials_scatter");
+                let volume_scatter = |p: &str| p.contains("KHR_materials_volume_scatter");
+                if j > i && (volume_scatter(path) || (volume_scatter(first) && scatter(path))) {
+                    continue;
+                }
+                let at = path.split('/').fold(&mut material, |v, key| &mut v[key]);
+                *at = json!({ "index": 0, "texCoord": j });
+            }
+            let json = json!({ "materials": [material] });
+            let mut warnings = Vec::new();
+            let mapped = material_extensions(&json, 0, "test.gltf", &mut warnings).mapping;
+            assert_eq!(mapped.set, i as u32, "{first}");
+            assert_eq!(mapped_texture(&json["materials"][0]), Some(*first));
+        }
+    }
+
+    #[test]
     fn pointers_resolve_to_what_the_engine_plays_or_say_why_not() {
         use crate::three::MaterialProperty as P;
         let json = json!({
@@ -2521,6 +2553,7 @@ mod tests {
                 { "pbrMetallicRoughness": { "baseColorTexture": { "index": 0 } }, "normalTexture": { "index": 0 } },
                 { "occlusionTexture": { "index": 0 } },
                 {},
+                { "extensions": { "KHR_materials_volume": { "thicknessTexture": { "index": 0 } } } },
             ],
         });
         let ok = |pointer: &str| pointer_target(&json, pointer).unwrap();
@@ -2597,13 +2630,20 @@ mod tests {
             ok("/materials/1/occlusionTexture/extensions/KHR_texture_transform/scale"),
             PointerTarget::Material(1, P::TextureScale)
         );
+        // ...and one whose only texture is a layer's follows that one.
+        assert_eq!(
+            ok(
+                "/materials/3/extensions/KHR_materials_volume/thicknessTexture/extensions/KHR_texture_transform/rotation"
+            ),
+            PointerTarget::Material(3, P::TextureRotation)
+        );
         assert_eq!(ok("/materials/0/emissiveFactor").components(), 3);
         assert_eq!(ok("/materials/0/pbrMetallicRoughness/baseColorFactor").components(), 4);
         // What isn't played, and why.
         let why = |pointer: &str| pointer_target(&json, pointer).unwrap_err();
         assert!(why("/materials/0/normalTexture/extensions/KHR_texture_transform/offset").contains("first texture"));
         assert!(
-            why("/materials/2/extensions/KHR_materials_transmission/transmissionTexture/extensions/KHR_texture_transform/offset")
+            why("/materials/2/extensions/EXT_unknown/unknownTexture/extensions/KHR_texture_transform/offset")
                 .contains("isn't read")
         );
         assert!(why("/materials/0/extensions/KHR_materials_transmission/transmissionFactor").contains("material"));
