@@ -12,6 +12,7 @@
 #[path = "../examples/ember_hop/game.rs"]
 mod game;
 
+use game::fit2d;
 use game::*;
 use ponko::actions::InputEvent;
 use ponko::d2::{Transform, Velocity};
@@ -985,5 +986,245 @@ fn every_file_the_game_ships_is_in_the_content_notices() {
             notices.contains(&format!("assets/{file}")),
             "{file} isn't in CONTENT-NOTICES.txt"
         );
+    }
+}
+
+// ---- laid out for phones ---------------------------------------------------------
+
+/// A phone's window and the insets its system reports: iPhone (the Dynamic
+/// Island, the home bar) and Android (the camera cutout, the navigation
+/// bar), upright and turned, as the mobile checks measured them.
+const PHONES: [(&str, Vec2, ponko::window::SafeInsets); 4] = [
+    ("iPhone upright", vec2(402.0, 874.0), insets(62.0, 0.0, 34.0, 0.0)),
+    ("iPhone turned", vec2(874.0, 402.0), insets(0.0, 62.0, 21.0, 62.0)),
+    ("Android upright", vec2(411.0, 914.0), insets(52.0, 0.0, 24.0, 0.0)),
+    ("Android turned", vec2(914.0, 411.0), insets(0.0, 0.0, 24.0, 52.0)),
+];
+
+const fn insets(top: f32, right: f32, bottom: f32, left: f32) -> ponko::window::SafeInsets {
+    ponko::window::SafeInsets {
+        top,
+        right,
+        bottom,
+        left,
+    }
+}
+
+/// What the player sees in one frame.
+#[derive(Debug, Clone)]
+struct Seen {
+    screen: Screen,
+    window: Vec2,
+    safe: Rect,
+    /// The title scene's corners, in window pixels.
+    title: Rect,
+    /// The hero, in window pixels.
+    hero: Option<Vec2>,
+    text: Vec<fit2d::Placed>,
+    /// The on-screen pause button, in window pixels, while it is up.
+    pause: Option<Rect>,
+    zoom: f32,
+    position: Vec2,
+}
+
+/// The ticks the script below shows each screen on: the title, a run, the
+/// pause, and the title again with the run saved.
+const LAYOUT_TICKS: [u64; 4] = [40, 150, 190, 240];
+
+/// Plays title → run → pause → title in a window `size` large with
+/// `insets`, on a touch screen if `touch`, and looks at each screen.
+fn play_laid_out(size: Vec2, insets: ponko::window::SafeInsets, touch: bool, scenario: InputScenario) -> Vec<Seen> {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    static RUNS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let run = RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = data_dir(&format!("layout-{run}"));
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let log = seen.clone();
+    let (_, report) = Game::new("ember hop layout", size.x as u32, size.y as u32)
+        .data_dir(&dir)
+        .seed(SEED)
+        .headless_frames(true)
+        .sim_system(|ctx: &mut Ctx| {
+            let tick = ctx.time.sim_tick();
+            let intent = ctx.world.resource_mut::<Intent>();
+            match tick {
+                60 => intent.confirm = true,
+                151 => intent.pause = true,
+                191 => intent.back = true,
+                _ => {}
+            }
+        })
+        .plugin(EmberHop)
+        .add(Phase::Late, move |ctx: &mut Ctx| {
+            if !LAYOUT_TICKS.contains(&ctx.time.sim_tick()) {
+                return;
+            }
+            let text = hud_text(ctx);
+            let camera = ctx.camera;
+            let hero = hero(ctx).map(|(_, at)| camera.world_to_screen(at));
+            let pause = ctx
+                .input
+                .touch_controls_shown()
+                .then(|| ctx.ui.find("touch.pause").and_then(|id| ctx.ui.rect(id)))
+                .flatten()
+                .filter(|r| r.size().x > 0.0);
+            let seen = Seen {
+                screen: screen(&ctx.world),
+                window: ctx.window_size(),
+                safe: ctx.window.safe_area(),
+                title: Rect {
+                    min: camera.world_to_screen(TITLE_VIEW.min),
+                    max: camera.world_to_screen(TITLE_VIEW.max),
+                },
+                hero,
+                text,
+                pause,
+                zoom: camera.zoom,
+                position: camera.position,
+            };
+            log.borrow_mut().push(seen);
+        })
+        .setup(move |ctx: &mut Ctx| {
+            ctx.window.feed_safe_insets(insets);
+            ctx.input.set_touch_device(touch);
+        })
+        .run_headless_scenario(scenario.duration(LAYOUT_TICKS[3] + 1));
+    report.assert_passed();
+    let _ = std::fs::remove_dir_all(dir);
+    seen.take()
+}
+
+fn within(outer: Rect, inner: Rect) -> bool {
+    let slack = 0.5;
+    inner.min.x >= outer.min.x - slack
+        && inner.min.y >= outer.min.y - slack
+        && inner.max.x <= outer.max.x + slack
+        && inner.max.y <= outer.max.y + slack
+}
+
+/// Everything a phone shows is where it must be: on the title the whole
+/// scene, in a run the hero; every line inside the safe area, readable, the
+/// menus centred, the status line clear of the pause button, touch hints.
+fn check_phone(name: &str, seen: &[Seen]) {
+    let screens: Vec<Screen> = seen.iter().map(|s| s.screen).collect();
+    assert_eq!(
+        screens,
+        [Screen::Title, Screen::Playing, Screen::Paused, Screen::Title],
+        "{name}"
+    );
+    for s in seen {
+        let what = format!("{name} {:?}", s.screen);
+        let window = Rect::new(0.0, 0.0, s.window.x, s.window.y);
+        if s.screen == Screen::Title {
+            // The whole title scene, as large as fits, centred.
+            assert!(within(window, s.title), "{what}: {:?}", s.title);
+            let spans = (s.title.size() - s.window).abs().min_element();
+            assert!(spans < 0.5, "{what}: {:?} fills the window one way", s.title);
+            assert!((s.title.center() - s.window / 2.0).length() < 0.5, "{what}");
+        } else {
+            let hero = s.hero.expect("a hero in a run");
+            assert!(s.safe.contains(hero), "{what}: the hero at {hero}");
+            assert!(s.pause.is_some(), "{what}: the pause button is up");
+            assert!(
+                s.text[0].text.starts_with("The Mossy Hollow"),
+                "{what}: {:?}",
+                s.text[0]
+            );
+        }
+        assert!(!s.text.is_empty(), "{what}");
+        for line in &s.text {
+            assert!(line.text.is_empty() || line.size >= 8.0, "{what}: {:?}", line.text);
+            assert!(
+                within(s.safe, line.rect()),
+                "{what}: {:?} at {:?}",
+                line.text,
+                line.rect()
+            );
+            if let Some(pause) = s.pause {
+                assert!(
+                    line.rect().max.x <= pause.min.x || line.rect().min.y >= pause.max.y,
+                    "{what}: {:?} under the pause button {pause:?}",
+                    line.text
+                );
+            }
+            for key in ["Enter", "Esc", "Space", "arrows"] {
+                assert!(!line.text.contains(key), "{what}: {:?}", line.text);
+            }
+        }
+        let menu = if s.screen == Screen::Title {
+            &s.text[..]
+        } else {
+            &s.text[1..]
+        };
+        for line in menu.iter().filter(|l| !l.text.is_empty()) {
+            let middle = line.rect().center().x;
+            assert!(
+                (middle - s.safe.center().x).abs() < 0.5,
+                "{what}: {:?} centred",
+                line.text
+            );
+        }
+    }
+    let texts = |i: usize| seen[i].text.iter().map(|l| l.text.clone()).collect::<Vec<_>>();
+    assert!(texts(0).contains(&"Tap: new run".to_string()), "{name}: {:?}", texts(0));
+    assert!(
+        texts(2).contains(&"Tap or II: resume".to_string()),
+        "{name}: {:?}",
+        texts(2)
+    );
+    assert!(
+        texts(3).contains(&"Hold: continue the saved run".to_string()),
+        "{name}: {:?}",
+        texts(3)
+    );
+}
+
+#[test]
+fn on_a_phone_upright_and_turned_the_title_the_run_and_the_text_fit() {
+    for (name, size, insets) in PHONES {
+        let seen = play_laid_out(size, insets, true, InputScenario::new());
+        check_phone(name, &seen);
+    }
+}
+
+#[test]
+fn the_layout_follows_the_safe_area_when_it_changes_without_a_restart() {
+    // Upright, then the notch is on the left from the run on, as when the
+    // phone turns: the layout is worked out every frame.
+    let (_, size, upright) = PHONES[0];
+    let left = insets(0.0, 0.0, 34.0, 62.0);
+    let seen = play_laid_out(size, upright, true, InputScenario::new().safe_insets(80, left));
+    let turned = Rect::new(62.0, 0.0, size.x - 62.0, size.y - 34.0);
+    assert!(seen[0].text.iter().all(|l| l.at.y >= 62.0), "below the island first");
+    for s in &seen[1..] {
+        assert_eq!(s.safe, turned);
+        for line in &s.text {
+            assert!(within(turned, line.rect()), "{:?} at {:?}", line.text, line.rect());
+        }
+    }
+    assert!(seen[1].text[0].at.x >= 62.0 + 14.0 - 0.5, "{:?}", seen[1].text[0]);
+}
+
+#[test]
+fn the_desktop_window_is_laid_out_as_it_always_was() {
+    let seen = play_laid_out(WINDOW, ponko::window::SafeInsets::NONE, false, InputScenario::new());
+    // The title scene three times as large, its corner at the window's.
+    assert_eq!((seen[0].zoom, seen[0].position), (ZOOM, Vec2::ZERO));
+    assert_eq!(seen[0].title, Rect::new(0.0, 0.0, WINDOW.x, WINDOW.y));
+    // The status line and the keys along the bottom, where and as large as
+    // they were.
+    let run = &seen[1].text;
+    assert_eq!((run[0].at, run[0].size), (vec2(14.0, 10.0), 22.0));
+    assert_eq!((run[1].at, run[1].size), (vec2(14.0, WINDOW.y - 26.0), 14.0));
+    assert!(run[1].text.starts_with("Move: arrows"), "{:?}", run[1].text);
+    // The title's lines at their sizes, centred, the block above the middle.
+    let title = &seen[0].text;
+    let sizes: Vec<f32> = title.iter().map(|l| l.size).collect();
+    assert_eq!(sizes, [64.0, 24.0, 16.0, 22.0, 18.0]);
+    let height: f32 = sizes.iter().map(|s| s * 1.4).sum();
+    assert_eq!(title[0].at.y, (WINDOW.y - height) / 2.0 - 40.0);
+    for line in title {
+        assert!((line.at.x - (WINDOW.x - line.width) / 2.0).abs() < 1e-3, "{line:?}");
     }
 }

@@ -22,6 +22,11 @@
 //! (UI scale, volume, rebound controls, language) in a [`settings::Settings`]
 //! file; both survive a missing or damaged file.
 //!
+//! The arena is fitted into the window's safe area (letterboxed), and the
+//! text is placed in it, every frame: a phone upright or turned, with a
+//! notch or a home bar, shows the whole arena and every line (see `fit2d`).
+//! On a touch screen the hints name taps and the on-screen buttons.
+//!
 //! Every text the player reads comes from the string tables in
 //! `assets/coin_dash/lang` (English and Arabic, see [`LANGUAGES`]), through
 //! the engine's `ponko::locale`: the settings screen's labels hold keys and
@@ -35,6 +40,9 @@
 pub mod settings;
 #[path = "smoke.rs"]
 pub mod smoke;
+// Shared with Ember Hop: the play area and the text for any window.
+#[path = "../common/fit2d.rs"]
+pub mod fit2d;
 
 #[allow(unused_imports)]
 use ponko::d2::{Sprite, Transform};
@@ -46,7 +54,8 @@ use ponko::ui::{UiTheme, UiTransition};
 use serde::{Deserialize, Serialize};
 use settings::Settings;
 
-/// Size of the playfield, in world units (the window starts the same size).
+/// Size of the playfield, in world units (the window starts the same size;
+/// another window shows it whole, as large as fits).
 pub const ARENA: Vec2 = vec2(800.0, 600.0);
 /// Coins on the field at the start of a round.
 pub const COINS: usize = 8;
@@ -221,8 +230,16 @@ impl Plugin for PlayerInput {
         ctx.input.set_actions(bindings());
         ctx.world.insert_resource(Act::resolve(ctx));
         ctx.world.insert_resource(Intent::default());
+        ctx.world.insert_resource(Hints::default());
         ctx.input.set_touch_controls(touch_controls());
     }
+}
+
+/// Which hints the screens show: taps and the on-screen buttons while the
+/// on-screen controls are up, else keys. Kept by `read_input`.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Hints {
+    pub touch: bool,
 }
 
 // ANCHOR: touch
@@ -373,6 +390,7 @@ pub fn read_input(ctx: &mut Ctx) {
     let pause = ctx.input.action_pressed(act.pause);
     let back = ctx.input.action_pressed(act.back);
     let open_settings = ctx.input.action_pressed(act.settings);
+    ctx.world.resource_mut::<Hints>().touch = ctx.input.touch_controls_shown();
     let intent = ctx.world.resource_mut::<Intent>();
     intent.direction = direction;
     intent.confirm |= confirm;
@@ -673,6 +691,7 @@ pub fn screen_lines(world: &World) -> Vec<Line> {
     let settings = world.resource::<Settings>();
     let tr = strings(world);
     let key = |control| Arg::from(settings.controls.key_name(control));
+    let touch = world.get_resource::<Hints>().is_some_and(|h| h.touch);
     use settings::Control as C;
     let best = if progress.rounds_played == 0 {
         tr.get("title.no_rounds").into_owned()
@@ -710,8 +729,11 @@ pub fn screen_lines(world: &World) -> Vec<Line> {
             if world.resource::<settings::SettingsFile>().load == LoadStatus::Recovered {
                 lines.push(line(tr.get("title.settings_reset"), 20.0, red));
             }
-            // A browser tab can't be closed by the game, so the web build has no quit.
-            let keys = if cfg!(target_arch = "wasm32") {
+            // A browser tab can't be closed by the game, so the web build has
+            // no quit; nor has a phone, whose system closes apps.
+            let keys = if touch {
+                "title.touch"
+            } else if cfg!(target_arch = "wasm32") {
                 "title.keys"
             } else {
                 "title.keys_quit"
@@ -727,14 +749,18 @@ pub fn screen_lines(world: &World) -> Vec<Line> {
         Screen::Paused => vec![
             line(tr.get("paused.title"), 48.0, Color::WHITE),
             line(
-                tr.format(
-                    "paused.keys",
-                    &[
-                        ("pause", key(C::Pause)),
-                        ("restart", key(C::Restart)),
-                        ("back", key(C::Back)),
-                    ],
-                ),
+                if touch {
+                    tr.get("paused.touch").into_owned()
+                } else {
+                    tr.format(
+                        "paused.keys",
+                        &[
+                            ("pause", key(C::Pause)),
+                            ("restart", key(C::Restart)),
+                            ("back", key(C::Back)),
+                        ],
+                    )
+                },
                 20.0,
                 Color::WHITE,
             ),
@@ -769,11 +795,12 @@ pub fn screen_lines(world: &World) -> Vec<Line> {
                 lines.push(line(tr.get("result.new_best"), 24.0, gold));
             }
             lines.push(line(best, 20.0, Color::WHITE));
-            lines.push(line(
-                tr.format("result.keys", &[("confirm", key(C::Confirm)), ("back", key(C::Back))]),
-                20.0,
-                Color::WHITE,
-            ));
+            let keys = if touch {
+                tr.get("result.touch").into_owned()
+            } else {
+                tr.format("result.keys", &[("confirm", key(C::Confirm)), ("back", key(C::Back))])
+            };
+            lines.push(line(keys, 20.0, Color::WHITE));
             lines
         }
     };
@@ -817,13 +844,37 @@ fn menu_fade(ctx: &mut Ctx) -> f32 {
     fade.shown
 }
 
-/// Frame system: the text on top of the sprites, at the player's UI scale,
-/// with the current language's font (the built-in one for English).
+/// The arena, in world units.
+pub fn arena() -> Rect {
+    Rect::new(0.0, 0.0, ARENA.x, ARENA.y)
+}
+
+/// Frame system: the camera shows the whole arena in the window's safe
+/// area, then the text goes on top of the sprites.
 pub fn hud(ctx: &mut Ctx) {
+    let room = ctx.window.safe_area();
+    fit2d::fit_camera(&mut ctx.camera, arena(), room);
+    let font = strings(&ctx.world).font().unwrap_or(Font::DEFAULT);
+    for p in hud_text(ctx) {
+        let params = TextParams::default()
+            .with_font(font)
+            .with_size(p.size)
+            .with_color(p.color);
+        ctx.gfx.draw_text_ex(&p.text, p.at, params);
+    }
+}
+
+/// The text `hud` draws this frame, where it draws it, at the player's UI
+/// scale, with the current language's font (the built-in one for
+/// English): the status line in the top corner of the safe area (clear of
+/// the on-screen pause button), the screen's lines centred in it, each
+/// made smaller only where it wouldn't fit.
+pub fn hud_text(ctx: &mut Ctx) -> Vec<fit2d::Placed> {
     let shown = menu_fade(ctx);
     let scale = ctx.world.resource::<Settings>().ui_scale;
     let font = strings(&ctx.world).font().unwrap_or(Font::DEFAULT);
-    let text = |size: f32, color| TextParams::default().with_font(font).with_size(size).with_color(color);
+    let room = ctx.window.safe_area();
+    let mut placed = Vec::new();
     if ctx.world.resource::<State<Screen>>().in_stack(&Screen::Playing) {
         let round = ctx.world.resource::<Round>().clone();
         let status = strings(&ctx.world).format(
@@ -835,26 +886,44 @@ pub fn hud(ctx: &mut Ctx) {
                 ("seconds", Arg::from(round.time_left)),
             ],
         );
+        // The on-screen pause button sits in the top right corner (its rect
+        // is in window pixels).
+        let mut right = room.max.x;
+        if ctx.world.resource::<Hints>().touch
+            && let Some(button) = ctx.ui.find("touch.pause").and_then(|id| ctx.ui.rect(id))
+        {
+            right = right.min(button.min.x - 8.0 * scale);
+        }
+        let margin = 12.0 * scale;
+        let size = 20.0 * scale;
+        let width = ctx.gfx.measure_text_ex(&status, font, size).x;
+        let fitted = fit2d::fit_size(size, width, right - room.min.x - 2.0 * margin);
+        let width = width * fitted / size;
         // Right to left, the status line starts at the right edge.
-        let width = ctx.gfx.measure_text_ex(&status, font, 20.0 * scale).x;
         let x = if strings(&ctx.world).is_rtl() {
-            ARENA.x - 12.0 * scale - width
+            right - margin - width
         } else {
-            12.0 * scale
+            room.min.x + margin
         };
-        ctx.gfx
-            .draw_text_ex(&status, vec2(x, 8.0 * scale), text(20.0 * scale, Color::WHITE));
+        placed.push(fit2d::Placed {
+            text: status,
+            at: vec2(x, room.min.y + 8.0 * scale),
+            size: fitted,
+            width,
+            color: Color::WHITE,
+        });
     }
-    // The block of lines, centred on the arena.
-    let lines = screen_lines(&ctx.world);
-    let height: f32 = lines.iter().map(|l| l.size * scale * 1.5).sum();
-    let mut y = (ARENA.y - height) / 2.0 + MENU_RISE * scale * (1.0 - shown);
-    for l in lines {
-        let size = l.size * scale;
-        let width = ctx.gfx.measure_text_ex(&l.text, font, size).x;
-        let color = l.color.with_alpha(l.color.a * shown);
-        ctx.gfx
-            .draw_text_ex(&l.text, vec2((ARENA.x - width) / 2.0, y), text(size, color));
-        y += size * 1.5;
-    }
+    // The block of lines, centred in the safe area.
+    let lines: Vec<_> = screen_lines(&ctx.world)
+        .into_iter()
+        .map(|l| {
+            let size = l.size * scale;
+            let width = ctx.gfx.measure_text_ex(&l.text, font, size).x;
+            (l.text, size, width, l.color.with_alpha(l.color.a * shown))
+        })
+        .collect();
+    let height: f32 = lines.iter().map(|l| l.1 * 1.5).sum();
+    let top = room.min.y + (room.size().y - height) / 2.0 + MENU_RISE * scale * (1.0 - shown);
+    placed.extend(fit2d::stack_lines(lines, 1.5, room, 16.0 * scale, Some(top)));
+    placed
 }

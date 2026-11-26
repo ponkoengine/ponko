@@ -228,6 +228,11 @@ impl TouchControls {
     }
 }
 
+/// The share of a button's width its label may take, across its middle.
+const LABEL_WIDTH: f32 = 0.85;
+/// The smallest a button's label shrinks to, in UI units.
+const LABEL_MIN_SIZE: f32 = 6.0;
+
 /// One placed control: its nodes.
 #[derive(Debug, Clone)]
 struct Placed {
@@ -581,6 +586,8 @@ impl Ctx {
                         .background(Color::TRANSPARENT)
                         .color(style.label)
                         .align(UiTextAlign::Center)
+                        // A long label ("Jump", "Flare") shrinks to stay on its disc.
+                        .label_fit(LABEL_MIN_SIZE)
                         .id();
                     (button, text)
                 }
@@ -623,9 +630,13 @@ impl Ctx {
                     let mut paint = self.ui.paint(p.inner).unwrap_or_default();
                     paint.font_size = size;
                     self.ui.set_paint(p.inner, paint);
+                    // As wide as the disc is, less a rim, across its middle.
+                    let inset = radius * (1.0 - LABEL_WIDTH);
                     self.ui.set_layout(
                         p.inner,
-                        UiLayout::anchored(0.0, 0.0, 1.0, 0.0)
+                        UiLayout::anchored(0.0, 0.0, 0.0, 0.0)
+                            .left(inset)
+                            .width(2.0 * radius - 2.0 * inset)
                             .top(radius - size * 0.62)
                             .height(size * 1.3),
                     );
@@ -790,6 +801,57 @@ mod tests {
         assert_eq!((layout.size, layout.opacity), (1.0, 1.0));
         assert_eq!(layout.adjusted("jump").size, 0.1);
         assert_eq!(layout.adjusted("fire").place, None);
+    }
+
+    /// The glyphs of a lone button labelled `label`, drawn on a phone-sized
+    /// window, as `(left, right)` in window pixels, the button's rect and
+    /// how wide the label would be at its full size.
+    fn button_label(label: &str) -> ((f32, f32), crate::camera::Rect, f32) {
+        let mut ctx = Ctx::new(1.0 / 60.0, vec2(402.0, 874.0));
+        ctx.gfx.stand_in_textures();
+        // The disc, made already (a test has no GPU to make it on).
+        ctx.ui_state.touch.texture = Some(Texture::new(9, DISC, DISC));
+        ctx.input.set_touch_controls(
+            TouchControls::new()
+                .button("jump", label)
+                .show(crate::ui::touch::TouchShow::Always),
+        );
+        ctx.update_touch_controls();
+        ctx.ui.layout(vec2(402.0, 874.0));
+        ctx.draw_retained_ui();
+        let (sprites, batches) = ctx.gfx.ui_list.finish();
+        // The glyph atlas of `stand_in_textures`.
+        let glyphs: Vec<_> = batches
+            .iter()
+            .filter(|b| b.texture == 1)
+            .flat_map(|b| &sprites[b.start as usize..b.end as usize])
+            .map(|s| (s.pos[0], s.pos[0] + s.size[0]))
+            .collect();
+        assert!(!glyphs.is_empty(), "the label is drawn");
+        let left = glyphs.iter().map(|g| g.0).fold(f32::INFINITY, f32::min);
+        let right = glyphs.iter().map(|g| g.1).fold(f32::NEG_INFINITY, f32::max);
+        let button = ctx.ui.rect(ctx.ui.find("touch.jump").unwrap()).unwrap();
+        let full = button.size().x / 2.0 * TouchStyle::default().label_size;
+        let natural = ctx.gfx.measure_text_ex(label, crate::text::Font::DEFAULT, full).x;
+        ((left, right), button, natural)
+    }
+
+    #[test]
+    fn a_long_button_label_shrinks_to_stay_on_its_disc() {
+        for label in ["Jump", "Flare", "Interact"] {
+            let ((left, right), disc, natural) = button_label(label);
+            // At its full size it would run over the disc's rim.
+            assert!(natural > disc.size().x * LABEL_WIDTH, "{label:?}: {natural}");
+            assert!(
+                left >= disc.min.x && right <= disc.max.x,
+                "{label:?}: glyphs {left}..{right}, disc {}..{}",
+                disc.min.x,
+                disc.max.x
+            );
+        }
+        // A short one keeps its full size.
+        let ((left, right), _, natural) = button_label("A");
+        assert!((right - left - natural).abs() < 2.0, "{} of {natural}", right - left);
     }
 
     #[test]
