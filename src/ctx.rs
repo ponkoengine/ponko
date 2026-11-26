@@ -114,6 +114,8 @@ pub(crate) fn screen_projection(size: Vec2) -> Mat4 {
 /// Game::new("Spin", 800, 600).sim_system(spin).run_headless(10, |_| {});
 /// ```
 pub struct Ctx {
+    #[cfg(all(feature = "bench-internals", feature = "window", not(target_arch = "wasm32")))]
+    pub(crate) bench_minimize: Option<std::time::Duration>,
     /// All entities, components and resources.
     ///
     /// ```
@@ -469,6 +471,8 @@ impl Ctx {
         );
         #[allow(unused_mut, clippy::let_and_return)]
         let mut ctx = Self {
+            #[cfg(all(feature = "bench-internals", feature = "window", not(target_arch = "wasm32")))]
+            bench_minimize: None,
             audio: Audio {
                 asset_sources: asset_sources.clone(),
                 watcher: watcher.clone(),
@@ -1030,6 +1034,54 @@ impl Ctx {
     ))]
     pub fn bench_adapter(&self) -> Option<String> {
         self.gfx.renderer.as_ref().map(crate::render::Renderer::bench_adapter)
+    }
+
+    /// Read the renderer's memory inventory on demand. Unstable
+    /// (`bench-internals`).
+    #[doc(hidden)]
+    #[cfg(all(feature = "bench-internals", not(target_arch = "wasm32")))]
+    pub fn bench_gpu_memory(&self) -> Option<crate::perf::GpuMemory> {
+        self.gfx.renderer.as_ref().and_then(Renderer::gpu_memory)
+    }
+
+    /// Ask the desktop event loop to minimize, then restore after a delay.
+    /// The window manager must support both requests. Unstable tooling hook.
+    #[doc(hidden)]
+    #[cfg(all(feature = "bench-internals", feature = "window", not(target_arch = "wasm32")))]
+    pub fn bench_minimize_for(&mut self, duration: std::time::Duration) {
+        self.bench_minimize = Some(duration);
+    }
+
+    /// Exercise the offscreen renderer's resize and surface lifecycle paths;
+    /// `None` simulates zero drawable size and suspension. Unstable
+    /// (`bench-internals`).
+    #[doc(hidden)]
+    #[cfg(all(feature = "bench-internals", feature = "window", not(target_arch = "wasm32")))]
+    pub fn bench_surface(&mut self, size: Option<(u32, u32)>) {
+        use crate::render::surface_lifecycle::SurfaceEvent;
+        use crate::window::WindowEvent;
+
+        if let Some(renderer) = &mut self.gfx.renderer {
+            let (w, h) = size.unwrap_or((0, 0));
+            renderer.surface_event(SurfaceEvent::Suspended(size.is_none()));
+            renderer.resize(w, h);
+        }
+        if let Some((w, h)) = size {
+            self.set_window_size(Vec2::new(w as f32, h as f32));
+        }
+        let suspended = size.is_none();
+        for event in [
+            WindowEvent::Minimized(suspended),
+            if suspended {
+                WindowEvent::Suspended
+            } else {
+                WindowEvent::Resumed
+            },
+        ] {
+            if self.window.feed_event(&event) {
+                self.events.send(event);
+            }
+        }
     }
 
     /// One frame of the built-in sprite drawing without a GPU, for

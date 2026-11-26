@@ -431,6 +431,8 @@ pub struct Game {
         not(target_arch = "wasm32")
     ))]
     bench_offscreen: bool,
+    #[cfg(all(feature = "bench-internals", not(target_arch = "wasm32")))]
+    bench_after_frame: Option<BenchAfterFrame>,
     /// From `parallel_systems`: batches of view systems may use other threads.
     parallel: bool,
     /// From `parallel_threshold`.
@@ -462,6 +464,9 @@ pub struct Game {
     /// From `crash_reports`.
     crash: crate::crash::CrashReports,
 }
+
+#[cfg(all(feature = "bench-internals", not(target_arch = "wasm32")))]
+type BenchAfterFrame = Box<dyn FnMut(&mut Ctx, Duration)>;
 
 type SetupFn = Box<dyn FnOnce(&mut Ctx) -> Result<(), crate::error::Error>>;
 
@@ -1515,6 +1520,8 @@ impl Game {
                 not(target_arch = "wasm32")
             ))]
             bench_offscreen: false,
+            #[cfg(all(feature = "bench-internals", not(target_arch = "wasm32")))]
+            bench_after_frame: None,
             parallel: false,
             parallel_threshold: None,
             parallel_env: true,
@@ -2900,6 +2907,16 @@ impl Game {
         self
     }
 
+    /// Observe a completed frame, including drawing, before starting the next
+    /// one. The elapsed work includes any blocking GPU wait or presentation.
+    /// Unstable tooling hook (`bench-internals`).
+    #[doc(hidden)]
+    #[cfg(all(feature = "bench-internals", not(target_arch = "wasm32")))]
+    pub fn bench_after_frame(mut self, observer: impl FnMut(&mut Ctx, Duration) + 'static) -> Self {
+        self.bench_after_frame = Some(Box::new(observer));
+        self
+    }
+
     /// Runs `scenario` headlessly for its [`ticks`](crate::scenario::InputScenario::ticks)
     /// and returns the world with the scenario's report: the bounded runner
     /// for tests and CI. A failed check ends the run at that tick and the
@@ -3836,7 +3853,12 @@ impl Game {
         if self.bench_offscreen {
             let size = (self.width.max(1), self.height.max(1));
             match crate::render::Renderer::offscreen_bench(size) {
-                Ok(renderer) => ctx.gfx.renderer = Some(renderer),
+                Ok(renderer) => {
+                    ctx.gfx.renderer = Some(renderer);
+                    // Only the window and audio device are absent. Setup
+                    // must create real GPU assets for offscreen drawing.
+                    ctx.gfx.headless = false;
+                }
                 Err(why) => {
                     return Err(crate::error::Error::new(
                         crate::error::ErrorKind::Unsupported,
@@ -3938,6 +3960,10 @@ impl Game {
                 if warmup == Some(ran) {
                     ctx.perf.state.collector.clear();
                 }
+            }
+            #[cfg(all(feature = "bench-internals", not(target_arch = "wasm32")))]
+            if let Some(observe) = &mut self.bench_after_frame {
+                observe(&mut ctx, tick_start.elapsed());
             }
         }
         let report = warmup.map(|_| ctx.perf.report());

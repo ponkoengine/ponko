@@ -284,3 +284,67 @@ Popped UI screens keep their nodes until the game removes them (see
 [the screen stack](ui.md#screen-stack-and-modal-dialogs)). To check your own game, count with
 [`perf::net_alloc_bytes`](profiling.md#count-allocations) across a stretch
 of play and compare `ctx.live_counts()` before and after.
+
+### Reference-game soaks
+
+From the checkout, run the four reference workloads sequentially in release
+builds. The default is offscreen with GPU drawing and a 48 kHz memory-backed
+audio mixer. It uses the same game processes from start to finish and keeps
+their saves in temporary folders.
+
+```sh
+python3 scripts/soak.py --seconds 600 --sample 10 --warmup 120 --out target/soak-short
+```
+
+Set `PONKO_SOAK=1` to enable the slow `soak` job in
+`scripts/run-checks.py --job soak`. The sampler defaults to 60 seconds.
+Use `--game` to select examples for a shorter diagnostic sweep and
+`--headless` to diagnose without drawing. The release checklist uses
+`--windowed` on macOS, Windows and Linux for four hours per game. In that
+mode the runner requests actual window resizes and timed minimize and
+restore. In offscreen mode it drives resize, zero drawable size, suspend
+and resume through the renderer and sends the matching window events.
+The renderer can still draw offscreen with presentation suspended.
+
+Coin Dash loops through settings and rounds, alternating a timed-out round
+with the coin-chasing route, and reads the saved progress back at the title.
+Ember Hop plays both caves, invokes the game's death path once per run and
+takes the pause, quit and continue route. Shard Grove collects shards, saves
+at a shrine, leaves for the title, continues, exhausts the warden's health,
+retries and finishes at the gate. Streaming steers and changes altitude
+while crossing cells, uploading terrain tiles and evicting old ones. It has
+no save or death mechanics. A passing run reaches its requested wall time
+and completes at least two workload cycles.
+
+Each game's folder holds `samples.csv`, `report.json` and `game.log`. Frame
+percentiles use the completed frames in each interval, including blocking GPU
+wait or presentation and, offscreen, the offline audio mix. Timing excludes
+the sampler and its pacing sleep. Allocations per frame come from Rust's
+counting allocator across all threads. RSS is the resident set on macOS and
+Linux and the working set on Windows. The renderer reports its own live GPU
+bytes plus the adapter figure when available. A backend that reports no
+adapter figure gets a null reading and an explicit unavailable status.
+Headless diagnostics also omit the GPU inventory. Handles are grouped by
+kind, and real and virtual voices are measured separately.
+
+For each quantity, the report fits a least-squares line through the samples
+at or after warm-up. The upper bound for its slope is the hourly allowance
+plus the noise allowance divided by the observed post-warm-up hours. This
+gives short checks room for the same one-time fluctuations as a long run.
+At least three post-warm-up readings are needed for each available metric.
+
+| Quantity | Hourly growth allowance | Noise allowance |
+|---|---:|---:|
+| RSS | 16 MiB/h | 24 MiB |
+| Renderer GPU bytes | 8 MiB/h | 16 MiB |
+| Adapter GPU bytes | 8 MiB/h | 32 MiB |
+| Live handles, each kind | 1/h | 2 (80 for the streaming example's tile meshes) |
+| Allocations per frame | 2/h | 4 |
+| Real and virtual voices, each | 1/h | 4 |
+| Frame p50 | 0.5 ms/h | 2 ms |
+| Frame p95 | 1 ms/h | 5 ms |
+| Frame p99 | 2 ms/h | 10 ms |
+
+A slope above its bound fails the command and writes a graph of that metric
+beside the report. Include the graph, measured slope and bound, game,
+revision, adapter, operating system and command when filing the growth.

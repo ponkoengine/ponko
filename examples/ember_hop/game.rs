@@ -803,7 +803,7 @@ pub fn save_run(ctx: &mut Ctx) {
 }
 
 /// The hero is lost: a puff of embers, then the last save.
-fn lose_hero(ctx: &mut Ctx, hero: Entity) {
+pub(crate) fn lose_hero(ctx: &mut Ctx, hero: Entity) {
     let at = ctx.world.get::<Transform>(hero).map_or(Vec2::ZERO, |t| t.position);
     ctx.world.despawn(hero);
     let art = *ctx.world.resource::<Art>();
