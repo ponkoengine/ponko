@@ -471,6 +471,10 @@ pub(crate) struct Renderer3D {
     writes: std::sync::Mutex<traffic::WriteBatch>,
     /// `draw`'s list of the frame's parts, kept between frames.
     parts: std::sync::Mutex<Vec<record::Part>>,
+    /// Images made since the last `draw` that a pass first writes by
+    /// resolving into them: `draw` clears each once before anything else
+    /// (see `clear_before_resolving`).
+    unresolved: std::sync::Mutex<Vec<wgpu::TextureView>>,
     frame_buffer: wgpu::Buffer,
     /// What `frame_buffer` holds (see `sync_frame`).
     frame_mirror: Mirror,
@@ -1123,6 +1127,7 @@ impl Renderer3D {
             extra: false,
             writes: Default::default(),
             parts: Default::default(),
+            unresolved: Default::default(),
             post,
             effects: Effects::default(),
             custom_passes: Default::default(),
