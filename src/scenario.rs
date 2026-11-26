@@ -624,9 +624,12 @@ impl InputScenario {
     /// `gamepad_connected` (`pad`, and an optional `info` object: `name`,
     /// `family` one of `Generic`, `Xbox`, `PlayStation`, `Nintendo`,
     /// `vendor_id`, `product_id`, and the capabilities `rumble`,
-    /// `trigger_rumble`, `motion`; see [`connect_gamepad`](Self::connect_gamepad)),
-    /// `gamepad_motion` (`pad`, `gyro` and
-    /// `accel` as `[x, y, z]`), `mouse_move` (`position`, window pixels as `[x, y]`), `mouse_wheel`
+    /// `trigger_rumble`, `motion`, `light`, `player_leds`, `touchpad`, and
+    /// `adaptive_triggers`. See [`connect_gamepad`](Self::connect_gamepad).
+    /// `gamepad_motion` takes `pad`, `gyro` and `accel` as `[x, y, z]`.
+    /// `gamepad_touchpad` takes `pad`, `finger` (0 or 1) and `contact`
+    /// (`x`, `y`, `pressure`, `down`). Other steps include
+    /// `mouse_move` (`position`, window pixels as `[x, y]`), `mouse_wheel`
     /// (`delta`, lines as `[x, y]`) and `touch` (`id`, `phase` one of
     /// `started`, `moved`, `ended`, `cancelled`, and `position`).
     /// UI steps are `ui_click` (`node`) and `ui_type` (`node`, `text`), see

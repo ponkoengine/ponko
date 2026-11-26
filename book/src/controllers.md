@@ -448,7 +448,8 @@ Outputs apply on the next backend update. Pass black to turn off the light
 bar, `None` to turn off the player indicator, and `TriggerEffect::Off` for
 free trigger travel. SDL maps player indicators using its own zero-based
 player indices. Those indices are separate from Ponko's local player
-assignments. SDL sends a reset for changed outputs before closing the
+assignments. If an SDL index is already in use, SDL moves that controller
+to a free index. SDL sends a reset for changed outputs before closing the
 controller. A link that has already vanished cannot receive that reset, so
 a new DualSense connection starts with both adaptive triggers cleared.
 
