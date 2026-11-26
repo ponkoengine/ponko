@@ -50,10 +50,10 @@ packaged copy once to check it runs (the [smoke run](#the-smoke-run-of-any-packa
 | Linux | a folder, like Windows' | `.tar.gz` |
 | Web (`--web`) | a folder: `index.html`, `game.js`, `game_bg.wasm`, `assets.pack`, the licenses and notices | none: upload the folder |
 | iOS (`--target ios`, `--target ios-sim`) | `My Game.app`, a flat iOS bundle: the program, `assets.pack`, the icons, an `Info.plist`, the licenses and notices (see [iOS](ios.md)) | `.ipa` for a device, `.zip` for the simulator |
-| Android (`--target android`) | the files of the apk in `apk/`: `AndroidManifest.xml`, the program as `lib/arm64-v8a/libmain.so`, `assets/assets.pack`, the icons, the licenses and notices; the licenses and notices also beside it (see [Android](android.md)) | `.apk`, signed with the debug key (or by the signing hook) |
+| Android (`--target android`) | the files of the apk in `apk/`: `AndroidManifest.xml`, the program as `lib/arm64-v8a/libmain.so`, `assets/assets.pack`, the icons, the licenses and notices; the licenses and notices also beside it (see [Android](android.md)) | `.apk`, signed with the debug key (or by the signing hook); `.aab`, the app bundle Google Play takes, with `--format aab` |
 
 `--format` picks others (comma-separated `zip`, `tar.gz`, `dmg`, `ipa` (iOS
-devices), `apk` (Android), or `folder`: the plain folder without archive, and on macOS without
+devices), `apk` and `aab` (Android), or `folder`: the plain folder without archive, and on macOS without
 app bundle). The zip and
 tar.gz files are written by the command itself, so no `zip` or `tar` program is
 needed on any OS, and they are reproducible: entries sorted, owned by root,
@@ -559,7 +559,7 @@ for it (`rustup target add <triple>` and a linker for it, such as MinGW for
 run is skipped, a macOS app made elsewhere is not sealed, and a dmg needs a
 Mac. `--target ios` and `--target ios-sim` make an iOS app; [iOS](ios.md)
 has its signing steps and the simulator check. `--target android` makes an
-Android apk with the Android SDK and NDK; [Android](android.md) has their
+Android apk (or app bundle) with the Android SDK and NDK; [Android](android.md) has their
 setup, the signing steps and the emulator check. What the command doesn't do yet:
 
 - **Verified on macOS (Apple silicon) only.** There `ponko package` was run on

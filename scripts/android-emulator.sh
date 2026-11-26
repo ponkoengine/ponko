@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # The Android emulator check (book/src/android.md, "Checking on the
 # emulator"): packages the phone check (`examples/phone.rs`) with `ponko
-# package --target android`, boots an emulated phone without a window, and
-# on it
+# package --target android` as an apk and an app bundle (aab), boots an
+# emulated phone without a window, installs the phone check from the
+# bundle (`bundletool build-apks` and `install-apks`, as Google Play
+# would), and on it
 #   0. runs the engine's unit tests,
 #   1. runs the app headless for 120 ticks (`PONKO_SMOKE`), once: the
 #      process must end without Android starting it again,
@@ -16,12 +18,15 @@
 #      cancels must keep it in front,
 #   4. packages Coin Dash, a reference game with assets, and runs it
 #      headless from its apk (its asset pack read from inside the apk),
-# saving screenshots of 2 and 3. The emulator is stopped at the end, also
+#   5. draws the phone check with OpenGL ES (`WGPU_BACKEND=gl`) and with
+#      Vulkan: the two screenshots must show the same colours,
+# saving screenshots of 2, 3 and 5. The emulator is stopped at the end, also
 # when a step fails, with the adb server if this script started it.
 #
 # Needs the Android SDK (ANDROID_HOME, else Android Studio's folder) with
 # platform-tools, build-tools, a platform, the NDK, the emulator and an
-# arm64 (or, on an Intel machine, x86_64) system image; a JDK; and
+# arm64 (or, on an Intel machine, x86_64) system image; a JDK; Google's
+# bundletool (BUNDLETOOL names its jar, else `bundletool` on the PATH); and
 # `rustup target add aarch64-linux-android`. The guide lists the
 # `sdkmanager` packages.
 #
@@ -85,13 +90,28 @@ if [ "$clippy" = yes ]; then
 fi
 [ -x "$adb" ] || fail "no adb: \`sdkmanager platform-tools\`"
 [ -x "$emulator" ] || fail "no emulator: \`sdkmanager emulator\`"
+if [ -n "${BUNDLETOOL:-}" ]; then
+    [ -f "$BUNDLETOOL" ] || fail "BUNDLETOOL is $BUNDLETOOL, which is not a file"
+    case $BUNDLETOOL in
+    *.jar) bundletool() { java -jar "$BUNDLETOOL" "$@"; } ;;
+    *) bundletool() { "$BUNDLETOOL" "$@"; } ;;
+    esac
+elif ! command -v bundletool >/dev/null; then
+    fail "no bundletool: download bundletool-all-<version>.jar from github.com/google/bundletool/releases and set BUNDLETOOL to it"
+fi
 
 echo "android-emulator: packaging the phone check"
 rm -rf "$out"
 mkdir -p "$out"
-cargo run -q -p ponko_cli -- package --example phone --target android --out "$out/package" >"$out/package.log" ||
-    fail "packaging: $(cat "$out/package.log")"
-apk=$(ls "$out"/package/phone-check-*-android-aarch64.apk)
+cargo run -q -p ponko_cli -- package --example phone --target android --format apk,aab --out "$out/package" \
+    >"$out/package.log" || fail "packaging: $(cat "$out/package.log")"
+aab=$(ls "$out"/package/phone-check-*-android-aarch64.aab)
+# The apks a phone gets from the bundle, signed with the debug key the
+# package was signed with.
+keystore=${ANDROID_USER_HOME:-$HOME/.android}/debug.keystore
+bundletool build-apks --bundle "$aab" --output "$out/package/phone-check.apks" --ks "$keystore" \
+    --ks-pass pass:android --ks-key-alias androiddebugkey --key-pass pass:android >"$out/bundle.log" 2>&1 ||
+    fail "bundletool build-apks: $(cat "$out/bundle.log")"
 
 echo "android-emulator: building the engine's unit tests for Android"
 tests=$(cargo test -q -p ponko --lib --target aarch64-linux-android --no-run --message-format=json 2>/dev/null |
@@ -137,7 +157,10 @@ sh() { "$adb" -s "$serial" shell "$@"; }
 sh settings put global window_animation_scale 0
 sh settings put global transition_animation_scale 0
 sh wm user-rotation lock 0
-"$adb" -s "$serial" install -r "$apk" >/dev/null
+sh pm uninstall "$id" >/dev/null 2>&1 || true
+ANDROID_HOME=$sdk PATH=$sdk/platform-tools:$PATH bundletool install-apks --apks "$out/package/phone-check.apks" \
+    --device-id "$serial" >>"$out/bundle.log" 2>&1 || fail "bundletool install-apks: $(cat "$out/bundle.log")"
+sh pm path "$id" | grep -q split_config || fail "the phone check was not installed from its bundle (no split apks)"
 
 echo "android-emulator: 0. the engine's unit tests"
 "$adb" -s "$serial" push "$tests" /data/local/tmp/ponko-tests >/dev/null 2>&1
@@ -149,6 +172,7 @@ sh "mkdir -p /data/local/tmp/t && cd /data/local/tmp && HOME=/data/local/tmp/t T
     --skip assets::tests::loose_files_win_over_default_packs_which_fill_in_the_rest \
     --skip control::tests::overwrite_refuses_pipes_and_hard_links \
     --skip editor::document::tests --skip render::gpu::browser_gpu::tests \
+    --skip inspector::tests::every_button_of_the_overlay_does_what_it_says \
     --skip render::shader_diagnostics::cook_rules --skip scene::lockstep_tests \
     --skip ui::pixel_snap_tests::a_retained_label_draws_missing_glyphs_with_its_fallback_font \
     --skip ui::pixel_snap_tests::named_rich_faces_and_synthetic_bold_reach_the_draw_list" \
@@ -247,4 +271,21 @@ log >"$out/coin.log"
 grep -q "ponko: smoke run passed" "$out/coin.log" || fail "Coin Dash smoke run: $(cat "$out/coin.log")"
 grep -qi "not found\|can't read\|panicked" "$out/coin.log" && fail "Coin Dash's assets: $(cat "$out/coin.log")"
 
-echo "android-emulator: passed; screenshots in $out (phone.png, landscape.png, keyboard.png)"
+echo "android-emulator: 5. the same colours with OpenGL ES as with Vulkan"
+for backend in vulkan gl; do
+    sh am force-stop "$id"
+    mark
+    # Without the clipboard, whose system panel would cover part of a shot.
+    start -e WGPU_BACKEND "$backend" -e PONKO_PHONE_CLIPBOARD 0
+    await "frames in 5" || fail "no frames with $backend: $(log)"
+    shot "$out/colours-$backend.png"
+    log >"$out/colours-$backend.log"
+done
+sh am force-stop "$id"
+grep -Eq "phone: gpu .* on gl" "$out/colours-gl.log" || fail "WGPU_BACKEND=gl did not draw with OpenGL ES"
+# Text edges may differ by a few steps; a frame written without sRGB
+# encoding differs on nearly every pixel, by up to 76.
+cargo run -q -p ponko_cli -- image-diff "$out/colours-vulkan.png" "$out/colours-gl.png" --tolerance 12 --threshold 0.5 \
+    >"$out/colours.json" || fail "OpenGL ES draws other colours than Vulkan: $(cat "$out/colours.json")"
+
+echo "android-emulator: passed; screenshots in $out (phone.png, landscape.png, keyboard.png, colours-*.png)"
