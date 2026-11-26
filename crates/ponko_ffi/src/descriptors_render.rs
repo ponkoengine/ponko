@@ -1050,7 +1050,7 @@ pub unsafe extern "C" fn ponko_icon_defaults(size: u32, out_icon: *mut PonkoIcon
 }
 
 /// Draws `mesh` into a new square render target that keeps the picture,
-/// for a UI image: an item icon (Rust `Ctx::render_icon`). The mesh is
+/// for a UI image: an item icon (Rust `Graphics::render_icon`). The mesh is
 /// framed to fill it, seen from `icon->from`, lit by the scene's sun and
 /// sky light only and tone mapped as the main view is, on
 /// `icon->background`; nothing of the game's world is in it and nothing is
@@ -1106,7 +1106,10 @@ pub unsafe extern "C" fn ponko_ctx_render_icon(
                     .collect();
                 settings = settings.with_materials(ponko::render::ModelMaterials::new(&list));
             }
-            let target = c.try_render_icon(to_c(mesh), &settings).map_err(crate::invalid_owned)?;
+            let target = c
+                .gfx
+                .try_render_icon(to_c(mesh), &settings)
+                .map_err(crate::invalid_owned)?;
             crate::ctx::out(out_texture, texture_to_c(target.texture()))
         })
     })

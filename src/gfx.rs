@@ -200,7 +200,7 @@ pub struct Graphics {
     pub(crate) assets3d: crate::three::Assets3D,
     #[cfg(feature = "3d")]
     pub(crate) frame3d: crate::three::Frame3D,
-    /// Item icons waiting for their frame (`Ctx::render_icon`).
+    /// Item icons waiting for their frame (`Graphics::render_icon`).
     #[cfg(feature = "3d")]
     pub(crate) icons: Vec<crate::three::PendingIcon>,
     /// Automatic quality's running controller, following the policy in

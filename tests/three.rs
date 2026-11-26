@@ -967,7 +967,7 @@ fn inventory_slots(ctx: &mut Ctx, items: &[Mesh]) -> Vec<RenderTarget> {
     let bag = ctx.ui.root().id();
     let mut icons = Vec::new();
     for &item in items {
-        let icon = ctx.render_icon(item, &look);
+        let icon = ctx.gfx.render_icon(item, &look);
         ctx.ui
             .image(bag, icon.texture())
             .layout(ponko::ui::UiLayout::fixed(64.0, 64.0));

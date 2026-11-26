@@ -4174,6 +4174,9 @@ pub fn ponko::gfx::Graphics::unpin_resident_texture(&mut self, &str)
 impl ponko::gfx::Graphics
 pub fn ponko::gfx::Graphics::pipeline_stats(&self) -> ponko::render::PipelineStats
 impl ponko::gfx::Graphics
+pub fn ponko::gfx::Graphics::render_icon(&mut self, ponko::render::Mesh, &ponko::render::Icon) -> ponko::render::RenderTarget
+pub fn ponko::gfx::Graphics::try_render_icon(&mut self, ponko::render::Mesh, &ponko::render::Icon) -> core::result::Result<ponko::render::RenderTarget, ponko::error::Error>
+impl ponko::gfx::Graphics
 pub fn ponko::gfx::Graphics::set_residency_budget(&mut self, ponko::streaming::ResidencyKind, core::option::Option<u64>)
 impl ponko::gfx::Graphics
 pub fn ponko::gfx::Graphics::shader_status(&self) -> &[ponko::render::ShaderStatus]
@@ -9485,9 +9488,6 @@ pub fn ponko::prelude::Ctx::set_state<S: ponko::state::States>(&mut self, S)
 pub fn ponko::prelude::Ctx::state<S: ponko::state::States>(&self) -> &S
 impl ponko::prelude::Ctx
 pub fn ponko::prelude::Ctx::quality_autotune_status(&self) -> core::option::Option<ponko::render::QualityAutotuneStatus>
-impl ponko::prelude::Ctx
-pub fn ponko::prelude::Ctx::render_icon(&mut self, ponko::render::Mesh, &ponko::render::Icon) -> ponko::render::RenderTarget
-pub fn ponko::prelude::Ctx::try_render_icon(&mut self, ponko::render::Mesh, &ponko::render::Icon) -> core::result::Result<ponko::render::RenderTarget, ponko::error::Error>
 impl<F: core::ops::function::FnMut(&mut ponko::prelude::Ctx) + 'static> ponko::prelude::IntoSystem<ponko::prelude::Ctx> for F
 pub fn F::access(self, ponko::access::SystemAccess) -> ponko::game::SystemConfig
 pub fn F::every(self, u32) -> ponko::game::SystemConfig

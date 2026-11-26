@@ -2011,6 +2011,12 @@ impl Ctx {
         for icon in self.gfx.icons.extract_if(.., done).collect::<Vec<_>>() {
             self.gfx.free(icon.material);
         }
+        // Tone mapped as the main view is now.
+        for i in 0..self.gfx.icons.len() {
+            let (material, exposure) = (self.gfx.icons[i].material, self.gfx.icons[i].exposure);
+            let desc = super::icon::icon_material(exposure, self.scene3d.post.tonemap);
+            self.gfx.update_material(material, desc);
+        }
         let targets = &self.gfx.assets3d.render_targets;
         let live = |c: &super::TargetCamera| targets.iter().any(|t| t.id == c.target.texture.id);
         // An icon whose target was freed before its frame is dropped.

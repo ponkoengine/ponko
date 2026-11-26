@@ -1,4 +1,4 @@
-//! Item icons (`Ctx::render_icon`) through a game's own frame
+//! Item icons (`Graphics::render_icon`) through a game's own frame
 //! (`Ctx::render_frame` with the offscreen renderer): the model alone,
 //! framed, tone mapped, on its background, drawn once, and untouched by
 //! the game's world (its models and its shadows). Each test has its
@@ -110,7 +110,7 @@ fn count8(image: &Image, channel: usize) -> usize {
 fn an_icon_shows_the_model_alone_on_a_see_through_background() {
     let Some(mut scene) = Scene::new() else { return };
     let entities = scene.ctx.world.len();
-    let icon = scene.ctx.render_icon(scene.red, &Icon::new(ICON));
+    let icon = scene.ctx.gfx.render_icon(scene.red, &Icon::new(ICON));
     assert_eq!(scene.ctx.world.len(), entities, "nothing spawned in the game's world");
     // The game's first frame draws no 3D picture: an icon asked for in
     // setup is drawn again in the second.
@@ -140,6 +140,7 @@ fn an_icon_shows_the_model_alone_on_a_see_through_background() {
     // With a background of its own: opaque blue around the box.
     let blue = scene
         .ctx
+        .gfx
         .render_icon(scene.red, &Icon::new(ICON).with_background(Color::rgb(0.0, 0.0, 1.0)));
     scene.frame();
     let texels = scene.read(blue);
@@ -154,7 +155,7 @@ fn an_icon_is_drawn_in_two_frames_and_kept() {
     let materials = scene.ctx.gfx.assets3d.materials_live.ids().count();
     // The game's first frame, which draws no 3D picture, behind it.
     scene.frame();
-    let icon = scene.ctx.render_icon(scene.red, &Icon::new(ICON));
+    let icon = scene.ctx.gfx.render_icon(scene.red, &Icon::new(ICON));
     scene.frame();
     let first = scene.read(icon);
     assert!(count(&first, 0) > first.len() / 4, "drawn with the next frame");
@@ -183,7 +184,7 @@ fn an_icon_is_drawn_in_two_frames_and_kept() {
     assert!(count(&scene.read(icon), 1) > 10, "a target camera draws over it");
     // A target freed before its frame: the icon is dropped, nothing drawn.
     scene.ctx.scene3d.passes.target_cameras.clear();
-    let gone = scene.ctx.render_icon(scene.red, &Icon::new(ICON));
+    let gone = scene.ctx.gfx.render_icon(scene.red, &Icon::new(ICON));
     scene.ctx.free(gone);
     scene.frame();
     assert!(scene.ctx.gfx.icons.is_empty() && scene.ctx.gfx.frame3d.views.is_empty());
@@ -194,8 +195,8 @@ fn an_icon_is_drawn_in_two_frames_and_kept() {
 fn an_icons_light_is_tone_mapped() {
     let Some(mut scene) = Scene::new() else { return };
     let bright = glowing(&mut scene.ctx, Color::rgb(20.0, 2.0, 0.0));
-    let icon = scene.ctx.render_icon(bright, &Icon::new(ICON));
-    let dim = scene.ctx.render_icon(bright, &Icon::new(ICON).with_exposure(0.02));
+    let icon = scene.ctx.gfx.render_icon(bright, &Icon::new(ICON));
+    let dim = scene.ctx.gfx.render_icon(bright, &Icon::new(ICON).with_exposure(0.02));
     scene.frame();
     scene.frame();
     let texels = scene.read(icon);
@@ -214,6 +215,24 @@ fn an_icons_light_is_tone_mapped() {
     assert!(
         low[1] > 0.01 && low[1] < center[1] * 0.5,
         "darker: {low:?} vs {center:?}"
+    );
+}
+
+#[test]
+fn an_icon_follows_the_main_views_tone_mapping_curve() {
+    let Some(mut scene) = Scene::new() else { return };
+    let bright = glowing(&mut scene.ctx, Color::rgb(20.0, 2.0, 0.0));
+    let icon = scene.ctx.gfx.render_icon(bright, &Icon::new(ICON));
+    // Changed after the icon was asked for: the icon draws with the new
+    // curve. No curve clips both red and green to white; the film curve
+    // (the other test, the control) keeps green below red.
+    scene.ctx.scene3d.post.tonemap = crate::render::Tonemap::None;
+    scene.frame();
+    scene.frame();
+    let center = scene.read(icon)[(ICON / 2 * ICON + ICON / 2) as usize];
+    assert!(
+        center[0] > 0.998 && center[1] > 0.998,
+        "clipped, not curved: {center:?}"
     );
 }
 
@@ -243,7 +262,7 @@ fn an_icon_takes_no_shadow_from_the_games_world() {
         .push(crate::render::TargetCamera::new(eye, seen));
     let from_above = Icon::new(ICON).with_from(vec3(0.0, 1.0, 0.2));
     let top = |t: &[[f32; 4]]| t[(ICON / 2 * ICON + ICON / 2) as usize][0];
-    let open = scene.ctx.render_icon(cube, &from_above);
+    let open = scene.ctx.gfx.render_icon(cube, &from_above);
     scene.frame();
     scene.frame();
     let (icon_open, world_open) = (top(&scene.read(open)), top(&scene.read(seen)));
@@ -260,7 +279,7 @@ fn an_icon_takes_no_shadow_from_the_games_world() {
         },
         Model::new(roof),
     ));
-    let roofed = scene.ctx.render_icon(cube, &from_above);
+    let roofed = scene.ctx.gfx.render_icon(cube, &from_above);
     scene.frame();
     scene.frame();
     // Negative control: the world's cube is in the roof's shadow.

@@ -1472,7 +1472,7 @@ pub(crate) struct Assets3D {
     pub loaded_shaders: std::collections::HashMap<crate::assets::Origin, Shader>,
     /// The material handed out for meshes without one.
     pub default_material: Option<Material>,
-    /// The tone mapping effect of item icons (`Ctx::render_icon`), once
+    /// The tone mapping effect of item icons (`Graphics::render_icon`), once
     /// one is drawn.
     pub icon_effect: Option<Effect>,
     /// Meshes loaded from files, by where they were found (file or asset source).

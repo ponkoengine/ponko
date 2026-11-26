@@ -1,5 +1,5 @@
 //! Item icons: a model drawn once into a render target, for a UI image
-//! (`Ctx::render_icon`).
+//! (`Graphics::render_icon`).
 //!
 //! The model is drawn by the renderer the game draws with, as a target
 //! camera of one frame, but from a world of its own holding only it: the
@@ -13,10 +13,10 @@ use glam::{Vec3, Vec4};
 
 use super::{MaterialDesc, Mesh, Model, ModelMaterials, RenderTarget, ScreenEffect, TargetCamera, Transform3D};
 use crate::color::Color;
-use crate::ctx::Ctx;
 use crate::error::{Error, ErrorKind};
+use crate::gfx::Graphics;
 
-/// How [`Ctx::render_icon`] draws a model: the icon's size, where it is
+/// How [`Graphics::render_icon`] draws a model: the icon's size, where it is
 /// seen from, how bright, on what background.
 ///
 /// ```
@@ -137,7 +137,7 @@ impl Icon {
     /// let gold = ctx.gfx.create_material(ponko::render::MaterialDesc::color(Color::rgb(1.0, 0.8, 0.3)));
     /// // The blade (part 1) in gold.
     /// let icon = ponko::render::Icon::new(64).with_materials(ponko::render::ModelMaterials::new(&[(1, gold)]));
-    /// let image = ctx.render_icon(sword, &icon);
+    /// let image = ctx.gfx.render_icon(sword, &icon);
     /// # }
     /// ```
     #[must_use]
@@ -153,6 +153,9 @@ pub(crate) struct PendingIcon {
     pub(crate) world: ponko_ecs::World,
     pub(crate) camera: TargetCamera,
     pub(crate) material: super::Material,
+    /// [`Icon::exposure`]: the material gets it with the main view's tone
+    /// mapping curve each frame the icon is drawn.
+    pub(crate) exposure: f32,
     /// Handed to the renderer this frame.
     pub(crate) sent: bool,
     /// Frames that drew it.
@@ -194,7 +197,18 @@ fn effect(p: Pixel) -> vec3<f32> {{
     )
 }
 
-impl crate::gfx::Graphics {
+/// The material of an icon's tone mapping: `custom[0]` is the exposure and
+/// the curve.
+pub(crate) fn icon_material(exposure: f32, tonemap: super::Tonemap) -> MaterialDesc {
+    MaterialDesc::default().with_custom([
+        Vec4::new(exposure, tonemap as u32 as f32, 0.0, 0.0),
+        Vec4::ZERO,
+        Vec4::ZERO,
+        Vec4::ZERO,
+    ])
+}
+
+impl Graphics {
     /// After a frame: icons handed to the renderer count it if it was drawn
     /// (one that wasn't hands them to the next frame).
     pub(crate) fn settle_icons(&mut self, drawn: bool) {
@@ -206,7 +220,7 @@ impl crate::gfx::Graphics {
     }
 }
 
-impl Ctx {
+impl Graphics {
     /// Draws `mesh` into a new square render target that keeps the picture,
     /// for a UI image: an item icon (feature `3d`). Show it with `target.texture()`, as
     /// [`UiBuilder::image`](crate::ui::UiBuilder::image) or any texture.
@@ -222,7 +236,7 @@ impl Ctx {
     /// It is drawn with the next frame, before the UI, so the UI can show
     /// it that frame, and once more in the frame after (the renderer's very
     /// first frame draws no target's picture); then the target keeps the
-    /// picture until it is freed ([`Ctx::free`](crate::ctx::Ctx::free)).
+    /// picture until it is freed ([`Graphics::free`]).
     /// It costs one small target camera's view in those two frames and
     /// nothing after. Without a GPU
     /// (headless) the target is made and stays empty.
@@ -230,7 +244,7 @@ impl Ctx {
     /// ```no_run
     /// # use ponko::prelude::*;
     /// # fn f(ctx: &mut Ctx, sword: ponko::render::Mesh) {
-    /// let icon = ctx.render_icon(sword, &ponko::render::Icon::new(64));
+    /// let icon = ctx.gfx.render_icon(sword, &ponko::render::Icon::new(64));
     /// let root = ctx.ui.root().id();
     /// ctx.ui.image(root, icon.texture());
     /// # }
@@ -255,16 +269,17 @@ impl Ctx {
     /// ```
     /// # use ponko::prelude::*;
     /// Game::new("t", 1, 1).run_headless(0, |ctx| {
-    ///     let cube = ctx.gfx.create_mesh(&ponko::render::MeshData::cube(1.0), ctx.gfx.default_material());
-    ///     let icon = ctx.try_render_icon(cube, &ponko::render::Icon::new(32)).unwrap();
-    ///     assert_eq!(icon.size(), vec2(32.0, 32.0));
-    ///     let err = ctx.try_render_icon(cube, &ponko::render::Icon::new(0)).unwrap_err();
+    ///     let white = ctx.gfx.default_material();
+    ///     let cube = ctx.gfx.create_mesh(&ponko::render::MeshData::cube(1.0), white);
+    ///     let icon = ctx.gfx.try_render_icon(cube, &ponko::render::Icon::new(32)).unwrap();
+    ///     assert_eq!((icon.width(), icon.height()), (32, 32));
+    ///     let err = ctx.gfx.try_render_icon(cube, &ponko::render::Icon::new(0)).unwrap_err();
     ///     assert_eq!(err.kind(), ErrorKind::Invalid);
     /// });
     /// ```
     pub fn try_render_icon(&mut self, mesh: Mesh, icon: &Icon) -> Result<RenderTarget, Error> {
         let invalid = |what: String| Error::new(ErrorKind::Invalid, what);
-        let Some((center, radius)) = self.gfx.assets3d.live_bounds(mesh.id) else {
+        let Some((center, radius)) = self.assets3d.live_bounds(mesh.id) else {
             return Err(invalid("render_icon: the mesh isn't live".to_owned()));
         };
         if icon.size == 0 {
@@ -283,34 +298,27 @@ impl Ctx {
                 icon.fov_y
             )));
         }
-        let target = self.gfx.try_create_render_target(icon.size, icon.size)?;
-        if self.gfx.renderer.is_none() || self.headless {
+        let target = self.try_create_render_target(icon.size, icon.size)?;
+        if self.renderer.is_none() || self.headless {
             return Ok(target);
         }
         let radius = radius.max(1e-3);
-        let mut camera = self.scene3d.camera;
+        let mut camera = super::Camera3D::new(glam::Vec2::splat(icon.size as f32));
         camera.fov_y = icon.fov_y;
         let distance = radius / (icon.fov_y * 0.5).sin() * 1.05;
         camera.position = center + from * distance;
         camera.look_at(center);
         camera.near = (distance - radius * 1.1).max(distance * 1e-3);
         camera.far = distance + radius * 1.1;
-        let effect = match self.gfx.assets3d.icon_effect {
+        let effect = match self.assets3d.icon_effect {
             Some(e) => e,
             None => {
-                let e = self
-                    .gfx
-                    .try_create_effect("icon tone mapping", &tone_mapping_source())?;
-                self.gfx.assets3d.icon_effect = Some(e);
+                let e = self.try_create_effect("icon tone mapping", &tone_mapping_source())?;
+                self.assets3d.icon_effect = Some(e);
                 e
             }
         };
-        let material = self.gfx.create_material(MaterialDesc::default().with_custom([
-            Vec4::new(icon.exposure, self.scene3d.post.tonemap as u32 as f32, 0.0, 0.0),
-            Vec4::ZERO,
-            Vec4::ZERO,
-            Vec4::ZERO,
-        ]));
+        let material = self.create_material(icon_material(icon.exposure, super::Tonemap::default()));
         let mut world = ponko_ecs::World::new();
         let model = world.spawn((
             Transform3D::default(),
@@ -322,7 +330,7 @@ impl Ctx {
         if let Some(materials) = &icon.materials {
             world.insert(model, materials.clone());
         }
-        self.gfx.icons.push(PendingIcon {
+        self.icons.push(PendingIcon {
             world,
             camera: TargetCamera::new(camera, target)
                 .with_particles(false)
@@ -330,6 +338,7 @@ impl Ctx {
                 .with_clear(icon.background)
                 .with_effect(ScreenEffect::new(effect).with_material(material)),
             material,
+            exposure: icon.exposure,
             sent: false,
             frames: 0,
         });
