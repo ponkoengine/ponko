@@ -1812,6 +1812,7 @@ pub fn ponko_ffi::PonkoWaterReflection::fmt(&self, &mut core::fmt::Formatter<'_>
 impl core::marker::Copy for ponko_ffi::PonkoWaterReflection
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoWaterReflection
 #[repr(C)] pub enum ponko_ffi::PonkoWindowEventKind
+pub ponko_ffi::PonkoWindowEventKind::PONKO_WINDOW_EVENT_BACK_REQUESTED = 8
 pub ponko_ffi::PonkoWindowEventKind::PONKO_WINDOW_EVENT_CLOSE_REQUESTED = 2
 pub ponko_ffi::PonkoWindowEventKind::PONKO_WINDOW_EVENT_FILE_DROPPED = 3
 pub ponko_ffi::PonkoWindowEventKind::PONKO_WINDOW_EVENT_FOCUSED = 0
@@ -7697,6 +7698,8 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_water_started_contacts(*mut ponko_ffi::PonkoCtx, u64, *mut u64) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_water_touch(*mut ponko_ffi::PonkoCtx, u64, ponko_ffi::PonkoVec2, f32, f32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_water_waiting_contacts(*mut ponko_ffi::PonkoCtx, u64, *mut u32) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_window_back_requested(*mut ponko_ffi::PonkoCtx, *mut bool) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_window_cancel_back(*mut ponko_ffi::PonkoCtx) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_window_cancel_close(*mut ponko_ffi::PonkoCtx) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_window_close_requested(*mut ponko_ffi::PonkoCtx, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_window_event_count(*mut ponko_ffi::PonkoCtx, *mut usize) -> ponko_ffi::PonkoStatus

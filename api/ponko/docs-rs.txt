@@ -18732,6 +18732,7 @@ pub fn ponko::window::CursorIcon::serialize<__S>(&self, __S) -> core::result::Re
 impl<'de> serde_core::de::Deserialize<'de> for ponko::window::CursorIcon
 pub fn ponko::window::CursorIcon::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 #[non_exhaustive] pub enum ponko::window::WindowEvent
+pub ponko::window::WindowEvent::BackRequested
 pub ponko::window::WindowEvent::CloseRequested
 pub ponko::window::WindowEvent::FileDropped(std::path::PathBuf)
 pub ponko::window::WindowEvent::Focused(bool)
@@ -18884,6 +18885,8 @@ impl<'de> serde_core::de::Deserialize<'de> for ponko::window::WindowImage
 pub fn ponko::window::WindowImage::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 #[non_exhaustive] pub struct ponko::window::WindowService
 impl ponko::window::WindowService
+pub fn ponko::window::WindowService::back_requested(&self) -> bool
+pub fn ponko::window::WindowService::cancel_back(&mut self)
 pub fn ponko::window::WindowService::cancel_close(&mut self)
 pub fn ponko::window::WindowService::clipboard_read(&mut self) -> core::result::Result<core::option::Option<alloc::string::String>, ponko::error::Error>
 pub fn ponko::window::WindowService::clipboard_write(&mut self, &str) -> core::result::Result<(), ponko::error::Error>
