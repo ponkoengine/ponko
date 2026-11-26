@@ -87,11 +87,6 @@ video = ["ponko/video"]
 # calls report PONKO_UNSUPPORTED and a mod with code is refused at mount.
 mods-wasm = ["ponko/mods-wasm"]
 
-# The WebRTC test needs the feature (C calls against a lobby server).
-[[test]]
-name = "rtc"
-required-features = ["webrtc"]
-
 [dependencies]
 # The C API exports its 3D and navigation functions unconditionally, so the
 # engine's `3d` and `navmesh` features are always on here, even with
