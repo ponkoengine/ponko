@@ -1303,6 +1303,27 @@ mod safe_area_tests {
 }
 
 #[cfg(test)]
+mod back_tests {
+    use super::*;
+
+    #[test]
+    fn a_back_press_leaves_after_the_frame_unless_a_system_cancels_it() {
+        let mut window = WindowService::default();
+        assert!(!window.take_back(), "no press, no leaving");
+        window.feed_event(&WindowEvent::BackRequested);
+        assert!(window.back_requested());
+        assert!(window.take_back(), "uncanceled: the app leaves");
+        assert!(!window.back_requested() && !window.take_back(), "once per press");
+        window.feed_event(&WindowEvent::BackRequested);
+        window.cancel_back();
+        assert!(!window.take_back(), "canceled: the game handled Back");
+        // Back is not a close request.
+        window.feed_event(&WindowEvent::BackRequested);
+        assert!(!window.close_requested());
+    }
+}
+
+#[cfg(test)]
 mod web_tests {
     use super::*;
     #[test]

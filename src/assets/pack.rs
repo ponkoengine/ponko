@@ -639,7 +639,7 @@ static DEFAULT_PACKS: OnceLock<Vec<PackSource>> = OnceLock::new();
 pub(crate) fn default_packs() -> &'static [PackSource] {
     DEFAULT_PACKS.get_or_init(|| {
         #[cfg(not(target_arch = "wasm32"))]
-        #[cfg_attr(all(target_os = "android", feature = "window"), allow(unused_mut))]
+        #[cfg_attr(not(all(target_os = "android", feature = "window")), allow(unused_mut))]
         let mut packs = discover(&crate::assets::asset_roots());
         #[cfg(target_arch = "wasm32")]
         let packs = Vec::new();

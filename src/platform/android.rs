@@ -31,19 +31,38 @@ pub(crate) fn app() -> Option<&'static AndroidApp> {
 /// Called by android-activity on its own thread once the activity exists:
 /// sets up the process and runs the game's `main`. The process ends with
 /// it, so a later start of the app is a fresh process (winit's event loop
-/// can be made once per process).
+/// can be made once per process): the activity is finished first, or
+/// Android would take the ended process for a crash and start it again.
 #[unsafe(no_mangle)]
 pub fn android_main(app: AndroidApp) {
     send_output_to_logcat();
     if APP.set(app.clone()).is_err() {
         eprintln!("ponko: the activity started a second time in one process; ending it");
-        std::process::exit(0);
+        finish_and_exit(&app, 0);
     }
     use_app_folders(&app);
     if debuggable() {
         environment_from_intent();
     }
     let code = run_main();
+    finish_and_exit(&app, code);
+}
+
+/// Finishes the activity, waits (up to two seconds) until Android has
+/// destroyed it, and ends the process with `code`.
+fn finish_and_exit(app: &AndroidApp, code: c_int) -> ! {
+    use winit::platform::android::activity::{MainEvent, PollEvent};
+    // SAFETY: the activity pointer is android-activity's, valid until its
+    // destruction, which this waits for; `ANativeActivity_finish` may be
+    // called from any thread (it posts to the main thread).
+    unsafe { ndk_sys::ANativeActivity_finish(app.activity_as_ptr().cast()) };
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let mut destroyed = false;
+    while !destroyed && std::time::Instant::now() < until {
+        app.poll_events(Some(std::time::Duration::from_millis(50)), |event| {
+            destroyed |= matches!(event, PollEvent::Main(MainEvent::Destroy));
+        });
+    }
     std::process::exit(code);
 }
 

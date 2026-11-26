@@ -19,6 +19,9 @@ pub enum Os {
     /// The iOS simulator on a Mac: `aarch64-apple-ios-sim` (or
     /// `x86_64-apple-ios` on an Intel Mac).
     IosSimulator,
+    /// Android phones and tablets: `aarch64-linux-android` (and the other
+    /// Android triples, which are built but untested).
+    Android,
 }
 
 impl Os {
@@ -28,11 +31,13 @@ impl Os {
     }
 }
 
-/// `--target ios` and `--target ios-sim`: the triples they stand for.
+/// `--target ios`, `--target ios-sim` and `--target android`: the triples
+/// they stand for.
 pub fn target_alias(target: &str) -> &str {
     match target {
         "ios" => "aarch64-apple-ios",
         "ios-sim" | "ios-simulator" => "aarch64-apple-ios-sim",
+        "android" => "aarch64-linux-android",
         other => other,
     }
 }
@@ -42,6 +47,28 @@ pub fn target_alias(target: &str) -> &str {
 /// iPhone from the iPhone 8 and every iPad with an A9X or later, all with
 /// Metal.
 pub const IOS_MINIMUM: &str = "16.0";
+
+/// The oldest Android a package runs on (`minSdkVersion`, and the API level
+/// the NDK links it for): Android 11. It is the first with the
+/// `WindowInsets.Type` calls the safe area and the keyboard inset come
+/// from, and every phone it runs on has Vulkan 1.1 or OpenGL ES 3.2.
+pub const ANDROID_MIN_SDK: u32 = 30;
+
+/// The Android the package is made for (`targetSdkVersion`): Android 16,
+/// what it was checked on. App stores ask for a recent one.
+pub const ANDROID_TARGET_SDK: u32 = 36;
+
+/// The folder of an Android CPU's libraries in an apk (its ABI), from the
+/// triple's first part.
+pub fn android_abi(arch: &str) -> Option<&'static str> {
+    match arch {
+        "aarch64" => Some("arm64-v8a"),
+        "x86_64" => Some("x86_64"),
+        "armv7" | "thumbv7neon" => Some("armeabi-v7a"),
+        "i686" => Some("x86"),
+        _ => None,
+    }
+}
 
 /// The platform a package is for, from a Rust target triple.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -67,11 +94,16 @@ impl Platform {
             } else {
                 Os::Ios
             }
-        } else if triple.contains("-linux") && !triple.contains("android") {
+        } else if triple.contains("-linux-android") {
+            if android_abi(&arch).is_none() {
+                return Err(format!("can't package for `{triple}`: Android has no ABI for `{arch}`"));
+            }
+            Os::Android
+        } else if triple.contains("-linux") {
             Os::Linux
         } else {
             return Err(format!(
-                "can't package for `{triple}`: packages are made for Windows, macOS, Linux, iOS (`--target ios`, `--target ios-sim`) and the web (wasm32-unknown-unknown)"
+                "can't package for `{triple}`: packages are made for Windows, macOS, Linux, iOS (`--target ios`, `--target ios-sim`), Android (`--target android`) and the web (wasm32-unknown-unknown)"
             ));
         };
         Ok(Platform {
@@ -90,6 +122,7 @@ impl Platform {
             Os::Linux => format!("linux-{}", self.arch),
             Os::Ios => format!("ios-{}", self.arch),
             Os::IosSimulator => format!("ios-simulator-{}", self.arch),
+            Os::Android => format!("android-{}", self.arch),
         }
     }
 
@@ -100,7 +133,7 @@ impl Platform {
         match self.os {
             Os::Windows => Some(format!("{name}.dll")),
             Os::Mac | Os::Ios | Os::IosSimulator => Some(format!("lib{name}.dylib")),
-            Os::Linux => Some(format!("lib{name}.so")),
+            Os::Linux | Os::Android => Some(format!("lib{name}.so")),
             Os::Web => None,
         }
     }
@@ -127,6 +160,9 @@ pub enum Format {
     /// An iOS app archive: a zip of `Payload/Name.app`, what a device
     /// installs (once signed).
     Ipa,
+    /// An Android package: what a phone installs, signed with the debug
+    /// key or by the `--sign` program.
+    Apk,
 }
 
 impl Format {
@@ -139,15 +175,16 @@ impl Format {
                 "tar.gz" | "tgz" => Format::TarGz,
                 "dmg" => Format::Dmg,
                 "ipa" => Format::Ipa,
+                "apk" => Format::Apk,
                 other => {
                     return Err(format!(
-                        "unknown format `{other}`: use folder, zip, tar.gz, dmg or ipa (comma-separated)"
+                        "unknown format `{other}`: use folder, zip, tar.gz, dmg, ipa or apk (comma-separated)"
                     ));
                 }
             });
         }
         if out.is_empty() {
-            return Err("--format needs at least one of folder, zip, tar.gz, dmg, ipa".into());
+            return Err("--format needs at least one of folder, zip, tar.gz, dmg, ipa, apk".into());
         }
         Ok(out.into_iter().collect())
     }
@@ -164,6 +201,7 @@ impl Format {
             Os::Ios => vec![Format::Ipa],
             // `xcrun simctl install` takes the app folder; the zip carries it.
             Os::IosSimulator => vec![Format::Zip],
+            Os::Android => vec![Format::Apk],
         }
     }
 
@@ -174,6 +212,7 @@ impl Format {
             Format::TarGz => "tar.gz",
             Format::Dmg => "dmg",
             Format::Ipa => "ipa",
+            Format::Apk => "apk",
         }
     }
 }
@@ -197,12 +236,23 @@ pub fn check_formats(platform: &Platform, formats: &[Format]) -> Result<(bool, V
     if platform.os.is_ios() && formats.contains(&Format::TarGz) {
         return Err("iOS packages are zips (an ipa, or the app zipped for the simulator), not tar.gz".into());
     }
+    if platform.os == Os::Android {
+        if let Some(other) = formats.iter().find(|f| !matches!(f, Format::Apk | Format::Folder)) {
+            return Err(format!(
+                "an Android package is an apk (or `folder`, the files it is made of), not {}",
+                other.extension()
+            ));
+        }
+    } else if formats.contains(&Format::Apk) {
+        return Err(format!("an apk is for Android, not {}", platform.triple));
+    }
     let flat = formats.contains(&Format::Folder);
     if flat && formats.contains(&Format::Dmg) {
         return Err("a dmg holds the app bundle: don't combine it with `folder`".into());
     }
-    // An iOS app is always a bundle: `folder` keeps the folder holding it.
-    let app = (platform.os == Os::Mac && !flat) || platform.os.is_ios();
+    // An iOS app is always a bundle, and an Android package's files are
+    // always laid out for the apk: `folder` keeps the folder holding them.
+    let app = (platform.os == Os::Mac && !flat) || platform.os.is_ios() || platform.os == Os::Android;
     let archives = formats.iter().copied().filter(|f| *f != Format::Folder).collect();
     Ok((app, archives))
 }
@@ -233,12 +283,12 @@ pub struct Game {
     pub assets: Vec<FileCopy>,
     /// Licenses, readmes and notices, at the package's top level.
     pub files: Vec<FileCopy>,
-    /// Which ways a phone or tablet may be held (iOS).
+    /// Which ways a phone or tablet may be held (iOS and Android).
     pub orientation: Orientation,
 }
 
-/// The `orientation` key: which ways an iOS device may be held while the
-/// game runs. Desktops and the web ignore it.
+/// The `orientation` key: which ways a phone or tablet (iOS, Android) may
+/// be held while the game runs. Desktops and the web ignore it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Orientation {
     /// Every way (upright, and sideways either way; iPads upside down too).
@@ -259,6 +309,16 @@ impl Orientation {
             other => Err(format!(
                 "unknown orientation `{other}` (use any, landscape or portrait)"
             )),
+        }
+    }
+
+    /// The activity's `android:screenOrientation`: the `user` values follow
+    /// the player's rotation lock, as other apps do.
+    fn android_value(self) -> &'static str {
+        match self {
+            Orientation::Any => "fullUser",
+            Orientation::Landscape => "userLandscape",
+            Orientation::Portrait => "userPortrait",
         }
     }
 
@@ -568,6 +628,10 @@ pub enum Built<'a> {
         threads: bool,
         isolation_worker: bool,
     },
+    /// An Android build: the program linked as a shared library, which
+    /// Android's NativeActivity loads. `debuggable` when the package is
+    /// signed with the debug key (for testing, not for players).
+    Android { library: &'a Path, debuggable: bool },
 }
 
 /// The name of a package's folder (and archives): `coin-dash-0.1.0-macos-aarch64`.
@@ -696,6 +760,49 @@ pub fn plan(
                 }
             }
             (top("index.html"), None)
+        }
+        (Built::Android { library, debuggable }, _) => {
+            // The files the apk is made of: the manifest, the library, the
+            // pack and the notices under assets/, the icons under res/.
+            let app = folder.join("apk");
+            if let Some(a) = loose.first() {
+                return Err(format!(
+                    "{} would be a loose file in an Android package, where the game can't read it: \
+                     an Android game reads its assets from assets.pack (so no --no-pack or `pack = false`, \
+                     and `assets` only below assets/)",
+                    a.to.display()
+                ));
+            }
+            let abi =
+                android_abi(&platform.arch).ok_or_else(|| format!("Android has no ABI for `{}`", platform.arch))?;
+            let program = app.join("lib").join(abi).join(ANDROID_LIBRARY);
+            entries.push(Entry {
+                path: program.clone(),
+                source: Source::Copy(library.to_path_buf()),
+                executable: false,
+            });
+            assets(&mut entries, &app.join("assets"));
+            let icon = match icon_png {
+                Some(png) => {
+                    for (dir, bytes) in super::archive::android_icons(png)? {
+                        entries.push(Entry {
+                            path: app.join("res").join(dir).join("ic_launcher.png"),
+                            source: Source::Bytes(bytes),
+                            executable: false,
+                        });
+                    }
+                    true
+                }
+                None => false,
+            };
+            entries.push(Entry {
+                path: app.join("AndroidManifest.xml"),
+                source: Source::Text(android_manifest(game, debuggable, icon)?),
+                executable: false,
+            });
+            docs(&mut entries, &app.join("assets"));
+            docs(&mut entries, &folder);
+            (program, Some(app))
         }
         (Built::Program(exe), false) => {
             let program = top(&platform.exe_name(&game.target));
@@ -830,6 +937,115 @@ pub fn with_libraries(mut plan: Plan, libraries: &[PathBuf]) -> Result<Plan, Str
         });
     }
     Ok(plan)
+}
+
+/// The program's file in an apk (`lib/<abi>/libmain.so`): the name
+/// NativeActivity loads by default.
+pub const ANDROID_LIBRARY: &str = "libmain.so";
+
+/// The launcher icon's sizes: (folder under `res/`, pixels).
+pub const ANDROID_ICONS: &[(&str, u32)] = &[
+    ("mipmap-mdpi", 48),
+    ("mipmap-hdpi", 72),
+    ("mipmap-xhdpi", 96),
+    ("mipmap-xxhdpi", 144),
+    ("mipmap-xxxhdpi", 192),
+];
+
+/// The Android package name for an app id: Java's rules, so each part
+/// starts with a letter and `-` becomes `_` (`dev.example.coin-dash` ->
+/// `dev.example.coin_dash`).
+pub fn android_package(id: &str) -> Result<String, String> {
+    let name = id.replace('-', "_");
+    let good = name.split('.').count() >= 2
+        && name.split('.').all(|part| {
+            part.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+                && part.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        });
+    if good {
+        Ok(name)
+    } else {
+        Err(format!(
+            "the id `{id}` can't be an Android package name: every dot-separated part must start with a letter \
+             (set `id` in [package.metadata.ponko], such as `com.example.my-game`)"
+        ))
+    }
+}
+
+/// The `versionCode` of a Cargo version: `major * 1000000 + minor * 1000
+/// + patch` (`1.2.3` -> `1002003`), so a later version always has a
+/// larger code, as app stores require. A pre-release has its release's code.
+pub fn android_version_code(version: &str) -> Result<u32, String> {
+    let numbers: Vec<u64> = bundle_version(version)
+        .split('.')
+        .map(|n| n.parse::<u64>())
+        .collect::<Result<_, _>>()
+        .map_err(|_| format!("version `{version}` is not major.minor.patch"))?;
+    let [major, minor, patch] = numbers[..] else {
+        return Err(format!("version `{version}` is not major.minor.patch"));
+    };
+    let code = major * 1_000_000 + minor * 1_000 + patch;
+    if minor >= 1000 || patch >= 1000 || code == 0 || code > 2_100_000_000 {
+        return Err(format!(
+            "version `{version}` has no Android versionCode: it is major * 1000000 + minor * 1000 + patch, \
+             which must be between 1 and 2100000000 with minor and patch below 1000"
+        ));
+    }
+    Ok(code as u32)
+}
+
+/// The apk's `AndroidManifest.xml`: a NativeActivity app (no Java code)
+/// that runs `lib/<abi>/libmain.so`, full screen, that handles rotation,
+/// resizing and the keyboard itself instead of being restarted.
+pub fn android_manifest(game: &Game, debuggable: bool, icon: bool) -> Result<String, String> {
+    let package = android_package(&game.id)?;
+    let code = android_version_code(&game.version)?;
+    let label = xml(&game.name);
+    let icon = if icon {
+        "\n        android:icon=\"@mipmap/ic_launcher\""
+    } else {
+        ""
+    };
+    let library = ANDROID_LIBRARY.trim_start_matches("lib").trim_end_matches(".so");
+    Ok(format!(
+        r#"<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="{package}"
+    android:versionCode="{code}"
+    android:versionName="{version}">
+    <uses-sdk android:minSdkVersion="{ANDROID_MIN_SDK}" android:targetSdkVersion="{ANDROID_TARGET_SDK}" />
+    <!-- wgpu draws with Vulkan, or OpenGL ES 3 where Vulkan is missing. -->
+    <uses-feature android:glEsVersion="0x00030000" android:required="true" />
+    <application
+        android:label="{label}"{icon}
+        android:hasCode="false"
+        android:extractNativeLibs="false"
+        android:debuggable="{debuggable}"
+        android:appCategory="game"
+        android:isGame="true"
+        android:enableOnBackInvokedCallback="false">
+        <activity
+            android:name="android.app.NativeActivity"
+            android:label="{label}"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="{orientation}"
+            android:resizeableActivity="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|keyboard|keyboardHidden|navigation|uiMode"
+            android:windowSoftInputMode="adjustNothing"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
+            <meta-data android:name="android.app.lib_name" android:value="{library}" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
+"#,
+        version = xml(&game.version),
+        orientation = game.orientation.android_value(),
+    ))
 }
 
 /// The third-party notices' file name.
@@ -1215,13 +1431,15 @@ mod tests {
             ("aarch64-apple-ios", Os::Ios, "ios-aarch64"),
             ("aarch64-apple-ios-sim", Os::IosSimulator, "ios-simulator-aarch64"),
             ("x86_64-apple-ios", Os::IosSimulator, "ios-simulator-x86_64"),
+            ("aarch64-linux-android", Os::Android, "android-aarch64"),
+            ("x86_64-linux-android", Os::Android, "android-x86_64"),
         ];
         for (triple, os, label) in cases {
             let p = platform(triple);
             assert_eq!((p.os, p.label().as_str()), (os, label), "{triple}");
         }
         for unsupported in [
-            "aarch64-linux-android",
+            "riscv64-linux-android",
             "thumbv7em-none-eabihf",
             "aarch64-apple-ios-macabi",
         ] {
@@ -1900,6 +2118,148 @@ mod tests {
         );
         assert!(device.contains("<key>CFBundleIcons~ipad</key>"));
         assert!(device.contains("<string>AppIcon83.5x83.5</string>"));
+    }
+
+    #[test]
+    fn android_packages_are_apks_or_the_folder_they_are_made_of() {
+        assert_eq!(target_alias("android"), "aarch64-linux-android");
+        assert_eq!(Format::defaults(Os::Android, true), [Format::Apk]);
+        assert_eq!(Format::parse_list("apk").unwrap(), [Format::Apk]);
+        let android = platform("aarch64-linux-android");
+        assert_eq!(
+            check_formats(&android, &[Format::Apk]).unwrap(),
+            (true, vec![Format::Apk])
+        );
+        assert_eq!(check_formats(&android, &[Format::Folder]).unwrap(), (true, vec![]));
+        for other in [Format::Zip, Format::TarGz, Format::Dmg, Format::Ipa] {
+            assert!(check_formats(&android, &[other]).is_err(), "{other:?}");
+        }
+        assert!(check_formats(&platform("x86_64-unknown-linux-gnu"), &[Format::Apk]).is_err());
+        assert_eq!(android.library_name("steam_api"), Some("libsteam_api.so".into()));
+    }
+
+    #[test]
+    fn the_android_package_holds_the_library_pack_notices_and_icons_for_the_apk() {
+        let mut icon = Vec::new();
+        image::RgbaImage::from_pixel(512, 512, image::Rgba([0, 0, 255, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut icon), image::ImageFormat::Png)
+            .unwrap();
+        let built = Built::Android {
+            library: Path::new("/t/coin_dash"),
+            debuggable: false,
+        };
+        let plan = plan(
+            &game(),
+            &platform("aarch64-linux-android"),
+            true,
+            built,
+            "N",
+            Some(&icon),
+            Some(b"PACK"),
+        )
+        .unwrap();
+        let folder = "coin-dash-1.2.3-android-aarch64";
+        let apk = format!("{folder}/apk");
+        let p = paths(&plan);
+        for want in [
+            format!("{apk}/AndroidManifest.xml"),
+            format!("{apk}/lib/arm64-v8a/libmain.so"),
+            format!("{apk}/assets/assets.pack"),
+            format!("{apk}/assets/THIRD-PARTY-NOTICES.txt"),
+            format!("{apk}/assets/LICENSE-MIT"),
+            format!("{apk}/res/mipmap-mdpi/ic_launcher.png"),
+            format!("{apk}/res/mipmap-xxxhdpi/ic_launcher.png"),
+            format!("{folder}/THIRD-PARTY-NOTICES.txt"),
+        ] {
+            assert!(p.contains(&want), "{want} missing from {p:#?}");
+        }
+        assert_eq!(plan.app.as_deref(), Some(Path::new(&apk)));
+        assert_eq!(plan.program, Path::new(&format!("{apk}/lib/arm64-v8a/libmain.so")));
+        let manifest = plan
+            .entries
+            .iter()
+            .find(|e| e.path.ends_with("AndroidManifest.xml"))
+            .unwrap();
+        let Source::Text(manifest) = &manifest.source else {
+            panic!("the manifest is text");
+        };
+        assert!(manifest.contains(r#"android:icon="@mipmap/ic_launcher""#));
+        assert!(manifest.contains(r#"android:debuggable="false""#));
+        // Libraries a build script linked load from beside the program.
+        let plan = with_libraries(plan, &[PathBuf::from("/o/libsteam_api.so")]).unwrap();
+        assert!(paths(&plan).contains(&format!("{apk}/lib/arm64-v8a/libsteam_api.so")));
+
+        // A game reads only the pack inside an apk: loose files are refused.
+        let built = Built::Android {
+            library: Path::new("/t/coin_dash"),
+            debuggable: true,
+        };
+        let loose = plan_err(built);
+        assert!(loose.contains("assets.pack"), "{loose}");
+    }
+
+    fn plan_err(built: Built) -> String {
+        plan(
+            &game(),
+            &platform("aarch64-linux-android"),
+            true,
+            built,
+            "N",
+            None,
+            None,
+        )
+        .unwrap_err()
+    }
+
+    #[test]
+    fn the_android_manifest_runs_the_library_full_screen_and_handles_rotation_itself() {
+        let mut g = game();
+        g.name = "Coin & Dash".into();
+        g.orientation = Orientation::Landscape;
+        let m = android_manifest(&g, true, false).unwrap();
+        for want in [
+            r#"package="dev.example.coin_dash""#,
+            r#"android:versionCode="1002003""#,
+            r#"android:versionName="1.2.3""#,
+            &format!(r#"android:minSdkVersion="{ANDROID_MIN_SDK}" android:targetSdkVersion="{ANDROID_TARGET_SDK}""#),
+            r#"android:label="Coin &amp; Dash""#,
+            r#"android:hasCode="false""#,
+            r#"android:extractNativeLibs="false""#,
+            r#"android:debuggable="true""#,
+            r#"android:appCategory="game""#,
+            r#"android:name="android.app.NativeActivity""#,
+            r#"android:screenOrientation="userLandscape""#,
+            "orientation|screenSize|smallestScreenSize|screenLayout|density|keyboard|keyboardHidden",
+            r#"android:windowSoftInputMode="adjustNothing""#,
+            r#"<meta-data android:name="android.app.lib_name" android:value="main" />"#,
+            "android.intent.category.LAUNCHER",
+        ] {
+            assert!(m.contains(want), "{want} missing from\n{m}");
+        }
+        assert!(!m.contains("android:icon"));
+        g.orientation = Orientation::Any;
+        assert!(android_manifest(&g, false, true).unwrap().contains(r#""fullUser""#));
+        g.orientation = Orientation::Portrait;
+        assert!(android_manifest(&g, false, true).unwrap().contains(r#""userPortrait""#));
+    }
+
+    #[test]
+    fn android_version_codes_grow_with_the_version_and_ids_become_package_names() {
+        assert_eq!(android_version_code("1.2.3").unwrap(), 1_002_003);
+        assert_eq!(android_version_code("0.1.0").unwrap(), 1_000);
+        assert_eq!(android_version_code("0.2.0-rc.1").unwrap(), 2_000);
+        assert!(android_version_code("1.2.3").unwrap() < android_version_code("1.10.0").unwrap());
+        for bad in ["0.0.0", "1.2", "1.1000.0", "2101.0.0", "x.y.z"] {
+            assert!(android_version_code(bad).is_err(), "{bad}");
+        }
+        assert_eq!(
+            android_package("dev.example.coin-dash").unwrap(),
+            "dev.example.coin_dash"
+        );
+        assert_eq!(android_package("com.example.game2").unwrap(), "com.example.game2");
+        for bad in ["com.2fast.game", "com.example.-game"] {
+            assert!(android_package(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

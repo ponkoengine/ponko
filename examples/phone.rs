@@ -13,7 +13,9 @@
 //! - Suspend, resume and memory warnings are listed and printed.
 //! - `PONKO_PHONE_KEYBOARD=1` opens the keyboard at the start.
 //! - A file is written to the game's storage and read back.
-//! - A quiet tone plays (the audio session; on Android, audio focus).
+//! - A quiet tone plays, mixed with other apps' audio (the Ambient
+//!   session); `PONKO_PHONE_AUDIO=solo` or `playback` stops theirs (on
+//!   Android, it takes the audio focus).
 //! - Back (Android) is listed; the app leaves on it, unless
 //!   `PONKO_PHONE_KEEP_BACK=1`, which keeps it in front.
 
@@ -24,7 +26,12 @@ use ponko::window::{SafeInsets, WindowEvent};
 fn main() {
     Game::new("Phone check", 390, 844).app_id("dev.ponko.phone-check").run(|ctx| {
         // The player's own music may play on under the game's sounds.
-        match ctx.audio.set_session_category(AudioSessionCategory::Ambient) {
+        let category = match std::env::var("PONKO_PHONE_AUDIO").as_deref() {
+            Ok("solo") => AudioSessionCategory::SoloAmbient,
+            Ok("playback") => AudioSessionCategory::Playback,
+            _ => AudioSessionCategory::Ambient,
+        };
+        match ctx.audio.set_session_category(category) {
             Ok(()) => println!("phone: audio session {:?}", ctx.audio.session_category()),
             Err(e) => println!("phone: audio session not set: {e}"),
         }
