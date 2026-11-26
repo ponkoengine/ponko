@@ -970,8 +970,8 @@ mod tests {
         );
         assert_eq!(
             size_of::<super::super::Vertex>(),
-            44,
-            "skin.wgsl reads 11 words per vertex"
+            48,
+            "skin.wgsl reads 12 words per vertex"
         );
     }
 }

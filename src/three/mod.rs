@@ -524,6 +524,14 @@ pub struct MaterialDesc {
     /// Stencil test and writes; `None` (the default) is none. See
     /// [`Stencil`] for when they happen and the drawing order they keep.
     pub stencil: Option<Stencil>,
+    /// The model's colour ([`Model::color`]) tints only part of the mesh:
+    /// as far as each corner's vertex colour alpha says, 1 tinted, 0 not
+    /// (the shirt of a character, the paint of a car), so one material
+    /// and one mesh take a colour per model. The vertex colour's alpha is
+    /// then that mask, not opacity; the model colour's alpha still fades
+    /// the whole model, and the vertex colour's red, green and blue still
+    /// multiply everywhere. Default false: the model's colour tints it all.
+    pub masked_tint: bool,
 }
 
 impl Default for MaterialDesc {
@@ -545,6 +553,7 @@ impl Default for MaterialDesc {
             custom_textures: [None; 2],
             custom_arrays: [None; 3],
             stencil: None,
+            masked_tint: false,
         }
     }
 }
@@ -598,6 +607,9 @@ impl MaterialDesc {
         custom_arrays: [Option<TextureArray>; 3] => with_custom_arrays;
         /// Sets [`stencil`](Self::stencil), the stencil test and writes.
         stencil: Option<Stencil> => with_stencil;
+        /// Sets [`masked_tint`](Self::masked_tint): the model's colour
+        /// tints only where the vertex colour's alpha is 1.
+        masked_tint: bool => with_masked_tint;
     }
 }
 
@@ -1841,6 +1853,8 @@ mod c_api_mirror {
             custom_arrays: _,
             // C: `ponko_ctx_create_material_with_stencil` and `ponko_ctx_update_material_with_stencil`.
             stencil: _,
+            // C: `PonkoMaterialDescEx.masked_tint` (version 2).
+            masked_tint: _,
         } = MaterialDesc::default();
         let ParticleSettings3D {
             rate: _,

@@ -251,7 +251,7 @@
 
 #define PONKO_QUERY_FILTER_EX_VERSION 1
 
-#define PONKO_MATERIAL_DESC_EX_VERSION 1
+#define PONKO_MATERIAL_DESC_EX_VERSION 2
 
 #define PONKO_NAV_BAKE_SETTINGS_EX_VERSION 1
 
@@ -3637,6 +3637,7 @@ typedef struct PonkoMaterialDescEx {
   struct PonkoMaterialDesc desc;
   bool has_stencil;
   struct PonkoStencil stencil;
+  bool masked_tint;
 } PonkoMaterialDescEx;
 
 typedef struct PonkoNavBakeSettingsEx {
