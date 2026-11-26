@@ -7,30 +7,30 @@ test, binding or other crate. The freeze review (#478) reads it next to the name
 shapes. `scripts/api-usage.py`'s docstring says what counts as a call; matching is by
 name, so the list errs on the side of "called".
 
-6785 covered items (types, traits, functions, methods, constants, statics, macros;
+6757 covered items (types, traits, functions, methods, constants, statics, macros;
 not fields, variants or trait impls' methods):
 
 | Status | Items |
 |---|---|
-| called | 6385 |
-| reached: a type or trait no one names, but a called item takes or returns it | 125 |
+| called | 6364 |
+| reached: a type or trait no one names, but a called item takes or returns it | 124 |
 | a trait's method: part of its trait, which is called or reached | 11 |
-| ambiguous: only a name other types share is called | 179 |
-| not called | 85 |
+| ambiguous: only a name other types share is called | 177 |
+| not called | 81 |
 
 Items called from each kind of place (an item can count in several):
 
 | Place | Items |
 |---|---|
 | game | 460 |
-| example | 1568 |
-| cookbook | 383 |
-| guide | 3519 |
-| test | 5900 |
-| binding | 4973 |
-| tool | 1234 |
+| example | 1552 |
+| cookbook | 382 |
+| guide | 3499 |
+| test | 5889 |
+| binding | 4947 |
+| tool | 1242 |
 
-6 more items are outside the promise already (experimental, or named `unstable_`) and are not listed.
+54 more items are outside the promise already (experimental, or named `unstable_`) and are not listed.
 
 ## Not called, by module
 
@@ -143,13 +143,6 @@ one needs a decision before the freeze.
 | `ponko::net::lobby::protocol::CONTROL` | const | **keep**: the relay's wire format, for a relay of the game's own (#486 area) |
 | `ponko::net::lobby::protocol::RELAY_HEADER` | const | **keep**: the relay's wire format, for a relay of the game's own (#486 area) |
 
-### `ponko::net::rtc`
-
-| Item | Kind | Decision |
-|---|---|---|
-| `ponko::net::rtc::RtcConfig::host_address` | fn | **undecided** |
-| `ponko::net::rtc::RtcConfig::stun_urls` | fn | **undecided** |
-
 ### `ponko::net::stun`
 
 | Item | Kind | Decision |
@@ -183,8 +176,6 @@ one needs a decision before the freeze.
 | `ponko::render::CrowdAnimation::try_clip` | fn | **keep**: the error-returning form of the called `clip`, like every `try_*` |
 | `ponko::render::GpuFeature::is_3d` | fn | **keep**: groups the tier report's features, for a game's own GPU screen |
 | `ponko::render::GpuTier::forced` | fn | **keep**: reads the `PONKO_GPU_TIER` override, for a game that shows it |
-| `ponko::render::HdrMetadata::for_output` | fn | **undecided** |
-| `ponko::render::HdrOutput::paper_white` | fn | **undecided** |
 | `ponko::render::InstanceCellData::with_colors` | fn | **keep**: per-instance colours of an instance cell, the builder the called ones complete |
 | `ponko::render::PipelineStats::hit_rate` | fn | **keep**: the summary of the called pipeline stats, for overlays |
 | `ponko::render::ReceivesDecals::ALL` | const | **keep**: the default (every decal), named for a game that sets it back |
@@ -292,7 +283,7 @@ review can look at any it doubts with `api-usage.py item <path>`.
 - `ponko::d2`: `Collider::requires`, `Physics::restore_state`, `Physics::save_state`, `RigidBody::requires`
 - `ponko::d3`: `Collider::requires`, `GltfRoot::entities`, `NavConvexPolygon::new`, `NavConvexPolygon::points`, `NodeBody::name`, `NodeBody::parse`, `NodeCollider::name`, `NodeCollider::parse`, `NodeProperties::read`, `Physics::restore_state`, `Physics::save_state`, `PhysicsState`, `RigidBody::requires`
 - `ponko::debug`: `DebugDraw::new`, `DebugView::name`
-- `ponko::game`: `ConfiguredGame::barrier`, `ConfiguredGame::control_method`, `ConfiguredGame::crash_reports`, `ConfiguredGame::debug_toggle`, `ConfiguredGame::gamepad_backend`, `ConfiguredGame::hdr_output`, `ConfiguredGame::headless_frame_duration`, `ConfiguredGame::image_limits`, `ConfiguredGame::lockstep`, `ConfiguredGame::messages`, `ConfiguredGame::on_exit`, `ConfiguredGame::order`, `ConfiguredGame::pack_limits`, `ConfiguredGame::replication`, `ConfiguredGame::restore_window_settings`, `ConfiguredGame::run_server`, `ConfiguredGame::web_threads`
+- `ponko::game`: `ConfiguredGame::barrier`, `ConfiguredGame::control_method`, `ConfiguredGame::crash_reports`, `ConfiguredGame::debug_toggle`, `ConfiguredGame::gamepad_backend`, `ConfiguredGame::headless_frame_duration`, `ConfiguredGame::image_limits`, `ConfiguredGame::lockstep`, `ConfiguredGame::messages`, `ConfiguredGame::on_exit`, `ConfiguredGame::order`, `ConfiguredGame::pack_limits`, `ConfiguredGame::replication`, `ConfiguredGame::restore_window_settings`, `ConfiguredGame::run_server`
 - `ponko::hierarchy`: `EntityName::new`, `PrefabInstance::new`
 - `ponko::input`: `GamepadEvents::axis`, `GamepadEvents::button`, `Input::force_feedback`, `Input::joystick_axis`, `Input::joystick_hat`, `Input::set_force_feedback`, `Joystick::slot`, `Vibration::is_off`
 - `ponko::inventory`: `AssetInventory::get`
