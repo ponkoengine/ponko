@@ -1,22 +1,5 @@
-### Breaking changes
-- `ponko notices` refuses the options only `ponko package` uses, and `ponko package` refuses `--title`.
-  Both commands share one parser, so `ponko notices --web` or `ponko package --title Game` were
-  accepted and did nothing; now they stop with an error naming the option.
-  Instead: drop the option; `ponko notices` takes `--out`, `-p`, `--title`, `--manifest-path`,
-  `--target`, `--features`, `--no-default-features` and `--locked`.
-  Before:
-  ```sh
-  ponko notices --out NOTICES.txt --release --no-smoke
-  ponko package --title "My Game"
-  ```
-  After:
-  ```sh
-  ponko notices --out NOTICES.txt
-  ponko package
-  ```
-
 ### Added
-- The guide's [The `ponko` command](book/src/cli.md) lists every command and option `--help` shows;
+- The guide's chapter "The `ponko` command" (`book/src/cli.md`) lists every command and option `--help` shows;
   a test of `ponko_cli` fails when one is missing there or isn't accepted, and runs `pack`, `cook`,
   `textures`, `new`, `editor --print` and `notices` for real in a temporary folder.
 - Headless tests open every menu of the editor, list its entries and use each one, and use every
@@ -40,3 +23,9 @@
 - `ponko --help` lists `ponko new --plugin`, `ponko editor --last` and `--recent`, and
   `ponko pack --list`; `ponko notices --help` describes each of its options.
 - The editor's **3D** view button says why it is greyed out in a game without the `3d` feature.
+
+### Changed
+- `ponko notices` refuses the options only `ponko package` uses, and `ponko package` refuses
+  `--title`: both share one parser, so `ponko notices --web` or `ponko package --title Game` were
+  accepted and did nothing. Drop such an option from a script; `ponko notices` takes `--out`, `-p`,
+  `--title`, `--manifest-path`, `--target`, `--features`, `--no-default-features` and `--locked`.

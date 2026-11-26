@@ -1,5 +1,10 @@
 # The `ponko` command
 
+> **Maturity: [tested](maturity.md).** Game: Coin Dash and Ember Hop are
+> packaged with it. Tests: `crates/ponko_cli/tests/commands.rs` runs every
+> command and option `--help` lists, and each command's own tests. Platforms:
+> Linux, macOS, Windows. Graphics: none (the command opens no window).
+
 `ponko` is the engine's command-line tool: it makes projects, opens them in
 the editor, and turns a game into what players download. Install it once:
 
