@@ -8,12 +8,18 @@ command, results as JSON and as a Markdown table.
     python3 bench/compare/scoreboard.py --only sprites,ui
     python3 bench/compare/scoreboard.py --tuned      # the second table: both engines tuned
     python3 bench/compare/scoreboard.py --tuned --runtime
+    python3 bench/compare/scoreboard.py --machine NAME --backend vulkan   # results/NAME/, both engines on Vulkan
+
+On Windows, run it with `py` or `python` if `python3` is the Microsoft Store
+stub; the scripts it calls need Git for Windows' `bash` and `perl`.
 
 It builds `ponko_bench` (feature `render`) in the engine's workspace and
 `bench/compare` in its own, once each, in release; then runs each workload
 three times per engine, one process at a time, alternating the engines, with
 the 1-minute load average written next to every run (it waits up to ten
-minutes for a load under 3 first, and marks a run taken above it). Build
+minutes for a load under 3 first, and marks a run taken above it; on
+Windows the load is the number of busy logical processors averaged over 5
+seconds, see `scripts/cpu_load.py`). Build
 times and sizes come from `scripts/build-times.sh` (debug: three clean
 builds, then rebuilds after one-line edits) and one clean release build and
 one wasm build per project, each project made fresh in a folder outside
@@ -31,7 +37,10 @@ advice and the shipping profile. Without `--runtime`, `--builds` or
 
 Writes `bench/compare/results/scoreboard.json` and `scoreboard.md` (the
 first table), `scoreboard-tuned.json` and `scoreboard-tuned.md` (the
-second), and prints the tables. `bench/compare/README.md` describes every workload and
+second), and prints the tables. `--machine NAME` writes them to
+`results/NAME/` instead, one folder per machine (and backend).
+`--backend` sets `WGPU_BACKEND` for every run of both engines and records
+it; the GPU adapters the programs report are recorded with the results. `bench/compare/README.md` describes every workload and
 what is and isn't the same on both sides.
 """
 
@@ -39,6 +48,7 @@ import argparse
 import gzip
 import json
 import os
+import platform
 import re
 import shutil
 import statistics
@@ -49,10 +59,16 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
+# The checkout as a path inside Cargo.toml: TOML strings treat `\` as an
+# escape, and Cargo takes forward slashes on Windows too.
+ROOT_TOML = ROOT.replace("\\", "/")
 RESULTS = os.path.join(HERE, "results")
-PONKO_BENCH = os.path.join(ROOT, "target", "release", "ponko_bench")
-FIRST_FRAME = os.path.join(ROOT, "target", "release", "first_frame")
-COMPARE = os.path.join(HERE, "target", "release", "ponko_compare")
+WINDOWS = sys.platform == "win32"
+EXE = ".exe" if WINDOWS else ""
+COMPARE = os.path.join(HERE, "target", "release", "ponko_compare" + EXE)
+
+sys.path.insert(0, os.path.join(ROOT, "scripts"))
+import cpu_load  # noqa: E402  (scripts/cpu_load.py: the load figure on every OS)
 
 # The ECS rows: one process runs all three libraries (see src/ecs.rs).
 ECS_ROWS = [
@@ -99,13 +115,13 @@ class Binaries:
     def __init__(self, tuned):
         self.tuned = tuned
         out = "ship" if tuned else "release"
-        self.ponko_bench = os.path.join(ROOT, "target", out, "ponko_bench")
-        self.first_frame = os.path.join(ROOT, "target", out, "first_frame")
+        self.ponko_bench = os.path.join(ROOT, "target", out, "ponko_bench" + EXE)
+        self.first_frame = os.path.join(ROOT, "target", out, "first_frame" + EXE)
 
     def compare(self, key):
         if not self.tuned:
             return COMPARE
-        return os.path.join(HERE, "target", "ship", f"tuned-{BEVY_GROUPS[key]}")
+        return os.path.join(HERE, "target", "ship", f"tuned-{BEVY_GROUPS[key]}{EXE}")
 
     def env(self, side, key):
         if not self.tuned:
@@ -120,13 +136,35 @@ def log(msg):
     print(msg, flush=True)
 
 
+class Failed(SystemExit):
+    """A command that exited with an error; `reason` is its telling line."""
+
+    def __init__(self, message, reason):
+        super().__init__(message)
+        self.reason = reason
+
+
+def failure_reason(output):
+    """The most telling line of a failed program's output: its first error
+    or panic message, without terminal colors."""
+    lines = [re.sub(r"\x1b\[[0-9;]*m", "", line).strip() for line in output.splitlines()]
+    for marker in ("ERROR", "panicked at", "error:"):
+        for i, line in enumerate(lines):
+            if marker in line:
+                # A panic's message is on the line after "panicked at".
+                text = lines[i + 1] if marker == "panicked at" and i + 1 < len(lines) else line
+                return text[-200:]
+    return (lines[-1] if lines else "")[-200:]
+
+
 def sh(cmd, cwd=ROOT, env=None, check=True, capture=True):
     full_env = dict(os.environ)
     full_env.update(env or {})
     r = subprocess.run(cmd, cwd=cwd, env=full_env, text=True, capture_output=capture)
     if check and r.returncode != 0:
-        sys.stderr.write((r.stdout or "") + (r.stderr or ""))
-        raise SystemExit(f"failed ({r.returncode}): {' '.join(cmd)}")
+        output = (r.stdout or "") + (r.stderr or "")
+        sys.stderr.write(output)
+        raise Failed(f"failed ({r.returncode}): {' '.join(cmd)}", failure_reason(output))
     return r
 
 
@@ -138,8 +176,114 @@ def out(cmd):
 
 
 def load():
-    m = re.search(r"averages?:\s*([\d.]+)", out(["uptime"]))
-    return float(m.group(1)) if m else -1.0
+    """The 1-minute load average; on Windows the busy logical processors
+    (scripts/cpu_load.py). -1 if it can't be read."""
+    return cpu_load.load()
+
+
+def text(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def powershell(command):
+    """A PowerShell one-liner's output (Windows), or ""."""
+    return out(["powershell", "-NoProfile", "-NonInteractive", "-Command", command])
+
+
+def windows_machine():
+    import ctypes
+    import winreg
+
+    def reg(path, name):
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, path) as key:
+                return str(winreg.QueryValueEx(key, name)[0]).strip()
+        except OSError:
+            return ""
+
+    class Memory(ctypes.Structure):
+        _fields_ = [("length", ctypes.c_ulong), ("load", ctypes.c_ulong), ("total", ctypes.c_ulonglong),
+                    ("avail", ctypes.c_ulonglong), ("page_total", ctypes.c_ulonglong),
+                    ("page_avail", ctypes.c_ulonglong), ("virtual_total", ctypes.c_ulonglong),
+                    ("virtual_avail", ctypes.c_ulonglong), ("extended", ctypes.c_ulonglong)]
+
+    class Power(ctypes.Structure):
+        _fields_ = [("ac", ctypes.c_ubyte), ("battery_flag", ctypes.c_ubyte), ("percent", ctypes.c_ubyte),
+                    ("saver", ctypes.c_ubyte), ("life", ctypes.c_ulong), ("full_life", ctypes.c_ulong)]
+
+    mem = Memory()
+    mem.length = ctypes.sizeof(Memory)
+    ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(mem))
+    power = Power()
+    if ctypes.windll.kernel32.GetSystemPowerStatus(ctypes.byref(power)):
+        source = {0: "Battery Power", 1: "AC Power"}.get(power.ac, "unknown")
+        if power.battery_flag == 128:
+            source += " (no battery)"
+    else:
+        source = "unknown"
+    cpu_key = r"HARDWARE\DESCRIPTION\System\CentralProcessor\0"
+    version = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion"
+    product = reg(version, "ProductName")
+    build = reg(version, "CurrentBuildNumber")
+    # ProductName still says "Windows 10" on Windows 11 (build 22000 and up).
+    if build.isdigit() and int(build) >= 22000:
+        product = product.replace("Windows 10", "Windows 11")
+    cores = powershell("(Get-CimInstance Win32_Processor | Measure-Object -Sum NumberOfCores).Sum")
+    gpus = powershell("Get-CimInstance Win32_VideoController | ForEach-Object { $_.Name + ' | ' + $_.DriverVersion }")
+    return {
+        "cpu": reg(cpu_key, "ProcessorNameString") or platform.processor(),
+        "cores": f"{cores} cores, {os.cpu_count()} threads" if cores else f"{os.cpu_count()} threads",
+        "memory_gb": round(mem.total / 2**30),
+        "os": f"{product} {reg(version, 'DisplayVersion')} (build {build}.{reg(version, 'UBR')})".replace("  ", " "),
+        "power": source,
+        "gpus": [dict(zip(("name", "driver"), (x.strip() for x in line.split("|")))) for line in gpus.splitlines()
+                 if line.strip()],
+    }
+
+
+def linux_machine():
+    cpuinfo = text("/proc/cpuinfo")
+    model = re.search(r"^model name\s*:\s*(.+)$", cpuinfo, re.M)
+    cores = {(m.group(1), m.group(2)) for m in re.finditer(
+        r"physical id\s*:\s*(\d+).*?core id\s*:\s*(\d+)", cpuinfo, re.S)}
+    mem = re.search(r"^MemTotal:\s*(\d+) kB", text("/proc/meminfo"), re.M)
+    os_name = re.search(r'^PRETTY_NAME="?([^"\n]+)', text("/etc/os-release"), re.M)
+    power = "unknown"
+    base = "/sys/class/power_supply"
+    supplies = sorted(os.listdir(base)) if os.path.isdir(base) else []
+    for supply in supplies:
+        kind = text(os.path.join(base, supply, "type")).strip()
+        if kind == "Mains":
+            power = "AC Power" if text(os.path.join(base, supply, "online")).strip() == "1" else "Battery Power"
+    if power == "unknown" and not any(text(os.path.join(base, s, "type")).strip() == "Battery" for s in supplies):
+        power = "AC Power (no battery)"
+    gpus = [line.split(": ", 1)[-1] for line in out(["lspci"]).splitlines()
+            if re.search(r"VGA|3D controller|Display controller", line)]
+    return {
+        "cpu": model.group(1).strip() if model else platform.processor(),
+        "cores": f"{len(cores)} cores, {os.cpu_count()} threads" if cores else f"{os.cpu_count()} threads",
+        "memory_gb": round(int(mem.group(1)) / 2**20) if mem else 0,
+        "os": f"{os_name.group(1) if os_name else 'Linux'}, kernel {platform.release()}",
+        "power": power,
+        "gpus": [{"name": g, "driver": ""} for g in gpus],
+    }
+
+
+def mac_machine():
+    gb = int(out(["sysctl", "-n", "hw.memsize"]) or 0) // 2**30
+    perf, eff = out(["sysctl", "-n", "hw.perflevel0.physicalcpu"]), out(["sysctl", "-n", "hw.perflevel1.physicalcpu"])
+    batt = out(["pmset", "-g", "batt"]).splitlines()
+    return {
+        "cpu": out(["sysctl", "-n", "machdep.cpu.brand_string"]),
+        "cores": f"{perf} performance + {eff} efficiency" if perf else out(["sysctl", "-n", "hw.ncpu"]),
+        "memory_gb": gb,
+        "os": f"{out(['sw_vers', '-productName'])} {out(['sw_vers', '-productVersion'])}",
+        "power": batt[0].split("'")[1] if batt and "'" in batt[0] else "unknown",
+    }
 
 
 def quiet():
@@ -153,15 +297,17 @@ def quiet():
 
 
 def machine():
-    gb = int(out(["sysctl", "-n", "hw.memsize"]) or 0) // 2**30
-    perf, eff = out(["sysctl", "-n", "hw.perflevel0.physicalcpu"]), out(["sysctl", "-n", "hw.perflevel1.physicalcpu"])
-    batt = out(["pmset", "-g", "batt"]).splitlines()
+    """CPU, cores, memory, OS, power source (and GPUs where the OS lists
+    them), the toolchain and the revision."""
+    if WINDOWS:
+        about = windows_machine()
+    elif sys.platform == "darwin":
+        about = mac_machine()
+    else:
+        about = linux_machine()
     return {
-        "cpu": out(["sysctl", "-n", "machdep.cpu.brand_string"]),
-        "cores": f"{perf} performance + {eff} efficiency" if perf else out(["sysctl", "-n", "hw.ncpu"]),
-        "memory_gb": gb,
-        "os": f"{out(['sw_vers', '-productName'])} {out(['sw_vers', '-productVersion'])}",
-        "power": batt[0].split("'")[1] if batt and "'" in batt[0] else "unknown",
+        **about,
+        "backend": os.environ.get("WGPU_BACKEND", "default"),
         "rustc": out(["rustc", "--version"]),
         "ponko_rev": out(["git", "-C", ROOT, "rev-parse", "--short=8", "HEAD"]),
         "ponko_dirty": bool(out(["git", "-C", ROOT, "status", "--porcelain", "--untracked-files=no"])),
@@ -171,7 +317,7 @@ def machine():
 
 
 def bevy_version():
-    m = re.search(r'^bevy = \{ version = "=([^"]+)"', open(os.path.join(HERE, "Cargo.toml")).read(), re.M)
+    m = re.search(r'^bevy = \{ version = "=([^"]+)"', text(os.path.join(HERE, "Cargo.toml")), re.M)
     return m.group(1)
 
 
@@ -192,9 +338,25 @@ def build_tuned(only):
         features = [group] + (RAPIER_FEATURES if group == "headless" else [])
         sh(["cargo", "build", "--profile", "ship", "--no-default-features", "--features", ",".join(features)],
            cwd=HERE, capture=False)
-        shutil.copy(os.path.join(HERE, "target", "ship", "ponko_compare"),
-                    os.path.join(HERE, "target", "ship", f"tuned-{group}"))
+        shutil.copy(os.path.join(HERE, "target", "ship", "ponko_compare" + EXE),
+                    os.path.join(HERE, "target", "ship", f"tuned-{group}{EXE}"))
     time.sleep(20)
+
+
+# Every GPU adapter a program reported, as written in its document.
+ADAPTERS = set()
+
+
+def collect_adapters(value):
+    if isinstance(value, dict):
+        for key, inner in value.items():
+            if key == "adapter" and inner:
+                ADAPTERS.add(json.dumps(inner, sort_keys=True) if isinstance(inner, dict) else str(inner))
+            else:
+                collect_adapters(inner)
+    elif isinstance(value, list):
+        for inner in value:
+            collect_adapters(inner)
 
 
 def run_json(cmd, env=None, cwd=ROOT):
@@ -204,8 +366,10 @@ def run_json(cmd, env=None, cwd=ROOT):
     os.close(fd)
     try:
         sh(cmd, cwd=cwd, env={**(env or {}), "PONKO_BENCH_JSON": path})
-        with open(path) as f:
-            return json.load(f), state
+        with open(path, encoding="utf-8") as f:
+            doc = json.load(f)
+        collect_adapters(doc)
+        return doc, state
     finally:
         os.unlink(path)
 
@@ -273,6 +437,8 @@ def first_frame(cmd, cwd, env=None):
 
 
 def summary(values):
+    if not values:  # every run failed
+        return {"median": None, "min": None, "max": None, "runs": []}
     return {"median": statistics.median(values), "min": min(values), "max": max(values), "runs": values}
 
 
@@ -299,7 +465,15 @@ def runtime(runs, only, bins):
             # Alternate which engine goes first, so a slow minute hits both.
             order = [("ponko", ponko), ("bevy", bevy)] if i % 2 == 0 else [("bevy", bevy), ("ponko", ponko)]
             for side, f in order:
-                value, state = f()
+                try:
+                    value, state = f()
+                except Failed as e:
+                    # One engine failing a workload (a crash, the GPU out of
+                    # memory) is a result too: record it and go on.
+                    row = results.setdefault(title, {"unit": "ms", "ponko": [], "bevy": [], "loads": []})
+                    row.setdefault("failures", {}).setdefault(side, []).append(e.reason)
+                    log(f"  {side}: FAILED: {e.reason}")
+                    continue
                 add(title, side, value, state)
                 log(f"  {side}: {value:.3f} ms (load {state['load']})")
         if not only or "first-frame" in only:
@@ -338,12 +512,12 @@ def make_project(name, work):
     dest = make_base_project(base, work, name)
     if tuned:
         toml = os.path.join(dest, "Cargo.toml")
-        text = open(toml).read()
+        text = read(toml)
         if base.startswith("ponko"):
             features = ", ".join(f'"{f}"' for f in PONKO_TUNED_FEATURES)
-            old = f'ponko = {{ path = "{ROOT}" }}'
+            old = f'ponko = {{ path = "{ROOT_TOML}" }}'
             assert old in text, text
-            text = text.replace(old, f'ponko = {{ path = "{ROOT}", default-features = false, features = [{features}] }}')
+            text = text.replace(old, f'ponko = {{ path = "{ROOT_TOML}", default-features = false, features = [{features}] }}')
         else:
             features = ", ".join(f'"{f}"' for f in BEVY_TUNED_FEATURES)
             old = 'bevy = { version = "=0.20.1" }'
@@ -351,8 +525,19 @@ def make_project(name, work):
             text = text.replace(old, f'bevy = {{ version = "=0.20.1", default-features = false, features = [{features}] }}')
         text = text.replace("\n[workspace]\n", SHIP_PROFILE + "\n[workspace]\n")
         assert "[profile.ship]" in text, text
-        open(toml, "w").write(text)
+        write(toml, text)
     return dest
+
+
+def read(path):
+    with open(path, encoding="utf-8") as f:
+        return f.read()
+
+
+def write(path, content):
+    # newline="": keep \n line endings on Windows too.
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(content)
 
 
 def make_base_project(name, work, folder):
@@ -362,20 +547,30 @@ def make_base_project(name, work, folder):
         template = os.path.join(ROOT, "crates", "ponko_cli", "templates", "2d")
         shutil.copytree(template, dest, ignore=shutil.ignore_patterns("tests", "*.md", ".mcp.json", "cargo-generate.toml"))
         liquid = os.path.join(dest, "Cargo.toml.liquid")
-        text = open(liquid).read().replace("{{project-name}}", folder)
-        text = text.replace('ponko = { version = "0.1" }', f'ponko = {{ path = "{ROOT}" }}')
-        open(os.path.join(dest, "Cargo.toml"), "w").write(text + "\n[workspace]\n")
+        text = read(liquid).replace("{{project-name}}", folder)
+        text = text.replace('ponko = { version = "0.1" }', f'ponko = {{ path = "{ROOT_TOML}" }}')
+        write(os.path.join(dest, "Cargo.toml"), text + "\n[workspace]\n")
         os.unlink(liquid)
         for f in ("src/lib.rs", "src/main.rs"):
             p = os.path.join(dest, f)
-            text = open(p).read().replace("{{project-name}}", folder).replace("{{crate_name}}", folder.replace("-", "_"))
-            open(p, "w").write(text)
+            text = read(p).replace("{{project-name}}", folder).replace("{{crate_name}}", folder.replace("-", "_"))
+            write(p, text)
     else:
         shutil.copytree(os.path.join(HERE, "projects", name), dest)
         toml = os.path.join(dest, "Cargo.toml")
-        text = open(toml).read().replace("PONKO_PATH", ROOT)
-        open(toml, "w").write(text)
+        write(toml, read(toml).replace("PONKO_PATH", ROOT_TOML))
     return dest
+
+
+def bash():
+    """Git for Windows' bash on Windows (`bash` on the PATH may be WSL's,
+    which can't run Windows' cargo); `bash` elsewhere."""
+    if WINDOWS:
+        for base in (os.environ.get("ProgramFiles", r"C:\Program Files"), os.environ.get("ProgramW6432", "")):
+            candidate = os.path.join(base, "Git", "bin", "bash.exe")
+            if base and os.path.exists(candidate):
+                return candidate
+    return "bash"
 
 
 def build_project(name, work):
@@ -385,7 +580,9 @@ def build_project(name, work):
     # setup guide advises while developing (`bevy/dynamic_linking`).
     env = {"BUILD_TIMES_CARGO_ARGS": "--features bevy/dynamic_linking"} if tuned and name.startswith("bevy") else {}
     log(f"{name}: build-times.sh (debug, 3 clean builds) in {dest} {env}")
-    text = sh(["bash", os.path.join(ROOT, "scripts", "build-times.sh"), dest, "dev", "3"], env=env).stdout
+    script = os.path.join(ROOT, "scripts", "build-times.sh").replace("\\", "/")
+    env = {**env, "PYTHON": sys.executable}
+    text = sh([bash(), script, dest.replace("\\", "/"), "dev", "3"], env=env).stdout
     log(text)
     row = {"clean_debug": [], "edit_lib_debug": [], "edit_main_debug": [], "link_debug": [], "loads": []}
     for line in text.splitlines():
@@ -399,7 +596,7 @@ def build_project(name, work):
         m = re.match(r"binary-debug (\d+) bytes", line)
         if m:
             row["debug_binary_bytes"] = int(m.group(1))
-    package = re.search(r'^name = "([^"]+)"', open(os.path.join(dest, "Cargo.toml")).read(), re.M).group(1)
+    package = re.search(r'^name = "([^"]+)"', read(os.path.join(dest, "Cargo.toml")), re.M).group(1)
     crate = package.replace("-", "_")
     # One clean release build (tuned: the shipping profile): its time and
     # the binary's size.
@@ -410,11 +607,15 @@ def build_project(name, work):
     row["release_load"] = load()
     r = sh(["cargo", "build", *profile], cwd=dest)
     row["clean_release"] = seconds(re.search(r"Finished .* in (.+)", r.stderr).group(1))
-    binary = os.path.join(dest, "target", out, package)
+    binary = os.path.join(dest, "target", out, package + EXE)
     row["release_binary_bytes"] = os.path.getsize(binary)
-    shutil.copy(binary, binary + ".stripped")
-    sh(["strip", binary + ".stripped"])
-    row["release_stripped_bytes"] = os.path.getsize(binary + ".stripped")
+    if shutil.which("strip") and not WINDOWS:
+        shutil.copy(binary, binary + ".stripped")
+        sh(["strip", binary + ".stripped"])
+        row["release_stripped_bytes"] = os.path.getsize(binary + ".stripped")
+    else:
+        # MSVC keeps debug info in a separate .pdb: the .exe is what ships.
+        row["release_stripped_bytes"] = None
     # The wasm of the release build, as cargo writes it (before wasm-bindgen
     # and wasm-opt), and gzipped.
     r = sh(["cargo", "build", *profile, "--target", "wasm32-unknown-unknown"], cwd=dest, check=False)
@@ -423,7 +624,8 @@ def build_project(name, work):
         wasm = os.path.join(dest, "target", "wasm32-unknown-unknown", out, f"{package}.wasm")
     if r.returncode == 0 and os.path.exists(wasm):
         row["wasm_bytes"] = os.path.getsize(wasm)
-        row["wasm_gzip_bytes"] = len(gzip.compress(open(wasm, "rb").read(), 9))
+        with open(wasm, "rb") as f:
+            row["wasm_gzip_bytes"] = len(gzip.compress(f.read(), 9))
     else:
         row["wasm_error"] = (r.stderr or "").strip().splitlines()[-12:]
         log(f"{name}: wasm build failed:\n" + "\n".join(row["wasm_error"]))
@@ -463,11 +665,18 @@ def table(doc, first=None):
     m = doc["machine"]
     build = ("the shipping profile (fat LTO, one codegen unit, panic = abort) on both sides" if tuned
              else "release builds")
+    cores = m["cores"] if "cores" in str(m["cores"]) else f"{m['cores']} cores"
     lines.append(
         f"Measured {m['date']} at `{m['ponko_rev']}`{' (with uncommitted changes)' if m['ponko_dirty'] else ''} "
-        f"on {m['cpu']} ({m['cores']} cores, {m['memory_gb']} GB), {m['os']}, {m['rustc']}, "
+        f"on {m['cpu']} ({cores}, {m['memory_gb']} GB), {m['os']}, {m['rustc']}, "
         f"Bevy {m['bevy']}; {build}, {doc['runs']} runs per engine, one process at a time.\n"
     )
+    if m.get("gpus") or m.get("backend", "default") != "default":
+        gpus = "; ".join(f"{g['name']} (driver {g['driver']})" if g.get("driver") else g["name"]
+                         for g in m.get("gpus", []))
+        lines.append(f"GPU: {gpus or 'not listed'}; backend: {m.get('backend', 'default')}.\n")
+    if doc.get("adapters"):
+        lines.append("Adapters the programs reported: " + "; ".join(f"`{a}`" for a in doc["adapters"]) + ".\n")
     by_source = {}
     for part, source in doc.get("power", {}).items():
         by_source.setdefault(source, []).append(part)
@@ -485,22 +694,42 @@ def table(doc, first=None):
         else:
             lines.append("| Workload | Ponko (ms) | Bevy (ms) | Bevy / Ponko | |")
             lines.append("|---|---:|---:|---:|---|")
+        notes = []
         for title, row in doc["runtime"].items():
             p, b = row["ponko"], row["bevy"]
-            line = (
-                f"| {title} | {fmt(p['median'])} ({fmt(p['min'])}–{fmt(p['max'])}) | "
-                f"{fmt(b['median'])} ({fmt(b['min'])}–{fmt(b['max'])}) | {b['median'] / p['median']:.2f}× | {verdict(p, b)} |"
-            )
+            failures = row.get("failures", {})
+
+            def cell(side, v):
+                failed = len(failures.get(side, []))
+                if v["median"] is None:
+                    return f"failed ({failed} of {failed} runs)"
+                text = f"{fmt(v['median'])} ({fmt(v['min'])}–{fmt(v['max'])})"
+                return text + (f", {failed} run{'s' if failed > 1 else ''} failed" if failed else "")
+
+            if p["median"] is None or b["median"] is None:
+                who = " and ".join(n for n, v in (("Ponko", p), ("Bevy", b)) if v["median"] is None)
+                ratio, said = "–", f"**{who} failed**"
+            else:
+                ratio, said = f"{b['median'] / p['median']:.2f}×", verdict(p, b)
+            line = f"| {title} | {cell('ponko', p)} | {cell('bevy', b)} | {ratio} | {said} |"
             if tuned:
                 old = first.get("runtime", {}).get(title)
-                line += f" {old['bevy']['median'] / old['ponko']['median']:.2f}×, {verdict(old['ponko'], old['bevy'])} |" if old else " – |"
+                ok = old and old["ponko"]["median"] is not None and old["bevy"]["median"] is not None
+                line += f" {old['bevy']['median'] / old['ponko']['median']:.2f}×, {verdict(old['ponko'], old['bevy'])} |" if ok else " – |"
             lines.append(line)
+            for side, reasons in failures.items():
+                for reason in sorted(set(reasons)):
+                    notes.append(f"- {title}, {side.capitalize()}: `{reason}`")
         loads = [l["load"] for row in doc["runtime"].values() for l in row["loads"]]
         lines.append(f"\nMedians of {doc['runs']} runs, the range in brackets; 1-minute load {min(loads):.2f} to {max(loads):.2f}.")
+        if notes:
+            lines.append("\nFailed runs:\n\n" + "\n".join(notes))
     if doc.get("builds"):
         b = doc["builds"]
         med = lambda v: statistics.median(v) if v else float("nan")
         mb = lambda v: f"{v / 1e6:.1f} MB" if v else "–"
+        stripped = lambda r: (f"{mb(r['release_binary_bytes'])} / {mb(r['release_stripped_bytes'])}"
+                              if r.get("release_stripped_bytes") else f"{mb(r['release_binary_bytes'])} / –")
         if tuned:
             names = list(TUNED_BUILDS)
             lines.append("\n| | Ponko small game, tuned | Bevy small game, tuned |")
@@ -519,7 +748,7 @@ def table(doc, first=None):
             ("Debug rebuild after a one-line change in src/lib.rs (s)", lambda r: f"{med(r['edit_lib_debug']):.2f}"),
             ("... in src/main.rs (s)", lambda r: f"{med(r['edit_main_debug']):.2f}"),
             (release, lambda r: f"{r['clean_release']:.1f}"),
-            ("Binary / stripped", lambda r: f"{mb(r['release_binary_bytes'])} / {mb(r['release_stripped_bytes'])}"),
+            ("Binary / stripped", stripped),
             (wasm, lambda r: f"{mb(r.get('wasm_bytes'))} / {mb(r.get('wasm_gzip_bytes'))}" if r.get("wasm_bytes") else "build failed"),
         ]
         if not tuned:
@@ -529,10 +758,17 @@ def table(doc, first=None):
     return "\n".join(lines) + "\n"
 
 
+def load_json(path):
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
 def make_table(args, only, tuned):
     name = "scoreboard-tuned" if tuned else "scoreboard"
-    path = os.path.join(RESULTS, f"{name}.json")
-    doc = json.load(open(path)) if os.path.exists(path) else {}
+    results = args.results
+    path = os.path.join(results, f"{name}.json")
+    doc = load_json(path) if os.path.exists(path) else {}
+    ADAPTERS.clear()
     doc["machine"] = machine()
     doc["runs"] = args.runs
     if tuned:
@@ -549,19 +785,18 @@ def make_table(args, only, tuned):
         doc["runtime"] = {**doc.get("runtime", {}), **fresh} if only else fresh
         for title in fresh:
             power[title] = doc["machine"]["power"]
+        doc["adapters"] = sorted(ADAPTERS | (set(doc.get("adapters", [])) if only else set()))
     if not args.runtime and not only:
         os.makedirs(args.work, exist_ok=True)
         doc["builds"] = builds(args.work, TUNED_BUILDS) if tuned else builds(args.work)
         power["builds"] = doc["machine"]["power"]
-    with open(path, "w") as f:
-        json.dump(doc, f, indent=2)
-        f.write("\n")
+    write(path, json.dumps(doc, indent=2, ensure_ascii=False) + "\n")
     first = None
     if tuned:
-        first_path = os.path.join(RESULTS, "scoreboard.json")
-        first = json.load(open(first_path)) if os.path.exists(first_path) else {}
+        first_path = os.path.join(results, "scoreboard.json")
+        first = load_json(first_path) if os.path.exists(first_path) else {}
     md = table(doc, first)
-    open(os.path.join(RESULTS, f"{name}.md"), "w").write(md)
+    write(os.path.join(results, f"{name}.md"), md)
     print("\n" + md)
     log(f"written: {path} and {name}.md")
 
@@ -573,11 +808,18 @@ def main():
     ap.add_argument("--tuned", action="store_true", help="only the second table: both engines tuned")
     ap.add_argument("--only", default="", help="comma list: ecs,sprites,scenes,physics,ui,sim,first-frame")
     ap.add_argument("--runs", type=int, default=3)
+    ap.add_argument("--machine", default="",
+                    help="write to results/MACHINE/ (one folder per machine and backend) instead of results/")
+    ap.add_argument("--backend", default="", choices=["", "dx12", "vulkan", "metal", "gl"],
+                    help="the GPU backend for both engines (sets WGPU_BACKEND); default: each engine's own choice")
     ap.add_argument("--work", default=os.path.join(tempfile.gettempdir(), "ponko-scoreboard"),
                     help="where the build-time projects are made (outside the checkout)")
     args = ap.parse_args()
     only = {k for k in args.only.split(",") if k}
-    os.makedirs(RESULTS, exist_ok=True)
+    if args.backend:
+        os.environ["WGPU_BACKEND"] = args.backend
+    args.results = os.path.join(RESULTS, args.machine) if args.machine else RESULTS
+    os.makedirs(args.results, exist_ok=True)
     everything = not (args.runtime or args.builds or args.tuned or only)
     if not args.tuned:
         make_table(args, only, tuned=False)

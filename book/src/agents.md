@@ -12,6 +12,8 @@ your game, look inside it while it runs, change it, and step the simulation,
 instead of guessing from source code and print statements.
 
 It builds on the [control endpoint](control.md) and [reflection](reflection.md).
+For a development web build, [connect the browser tab to a local bridge](control.md#controlling-a-browser-tab)
+and use the same MCP tools to inspect it, step the simulation and capture the canvas.
 
 ## Setup
 

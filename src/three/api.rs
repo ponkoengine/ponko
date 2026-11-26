@@ -2030,6 +2030,7 @@ impl Ctx {
             let mut eye = camera.camera;
             eye.set_viewport(glam::Vec2::new(size.0 as f32, size.1 as f32));
             view.frame.lod = self.scene3d.lod;
+            view.frame.lod_dt = Some(self.time.frame_dt());
             view.frame
                 .collect(&mut self.world, &self.gfx.assets3d, skins, &eye, &lighting);
             view.target = camera.target.texture.id;
@@ -2251,6 +2252,7 @@ impl Ctx {
         };
         self.gfx.frame3d.size_limit = renderer.max_texture_size();
         self.gfx.frame3d.lod = self.scene3d.lod;
+        self.gfx.frame3d.lod_dt = Some(self.time.frame_dt());
         self.gfx.frame3d.motion.enabled = motion;
         if !self.scene3d.camera.occlusion_culling {
             self.gfx.frame3d.occlusion = None;
@@ -2378,6 +2380,7 @@ pub(crate) fn collect_window_views(
         let post = view.post.as_ref().unwrap_or(&settings.post);
         frame.size_limit = main.size_limit;
         frame.lod = settings.lod;
+        frame.lod_dt = main.lod_dt;
         frame.motion.enabled =
             post.anti_aliasing == super::AntiAliasing::Taa || (post.ao_temporal && post.ambient_occlusion.enabled);
         frame.occlusion = None;

@@ -75,7 +75,7 @@ pub use gi::GlobalIllumination;
 #[cfg(feature = "window")]
 pub(crate) use gi::MAX_GI_PROBES_PER_FRAME;
 pub use ik::{look_at_joint, two_bone_ik};
-pub use lod::{LodGroup, LodHysteresis, LodLevel, LodPick, LodRenderer, LodSettings, LodShadow};
+pub use lod::{LodFadeTime, LodGroup, LodHysteresis, LodLevel, LodPick, LodRenderer, LodSettings, LodShadow};
 pub use retarget::{HumanBone, HumanoidMap, RetargetError, Retargeter};
 pub(crate) mod lights;
 #[cfg(feature = "editor")]

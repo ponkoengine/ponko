@@ -6,7 +6,7 @@
 
 <!-- There is no CI: nothing runs on this pull request by itself. List the commands you ran (and on which OS), tests added, and for performance changes release-build numbers before and after. The full list of checks is scripts/checks.yml. -->
 
-- [ ] `cargo fmt --all --check`, `cargo clippy --workspace --all-targets` and `cargo test --workspace` pass
+- [ ] `cargo fmt --all --check` (on Windows `python3 scripts/fmt-workspace.py --check`), `cargo clippy --workspace --all-targets` and `cargo test --workspace` pass
 - [ ] New public behavior has tests and doctests
 - [ ] The guide (`book/src/`) is updated, if this changes how games are written
 - [ ] The C API and C++ wrapper are updated, or not needed (say why)

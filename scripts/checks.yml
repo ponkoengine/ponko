@@ -99,8 +99,10 @@ jobs:
         run: python3 scripts/check-cpp-api.py
       - name: Check runner self-tests
         run: python3 scripts/run-checks.py --selftest
+      # `cargo fmt --all --check` checks the same files, but in one rustfmt
+      # command that passes Windows' command-line limit in a long checkout path.
       - name: Workspace Rust formatting
-        run: cargo fmt --all --check
+        run: python3 scripts/fmt-workspace.py --check
       # The Bevy comparison scenes are a crate of their own, outside the
       # workspace. Only their formatting is checked: building them pulls in
       # all of Bevy.
@@ -641,6 +643,10 @@ jobs:
           # Windows needs its complete feature graph cached separately:
           # the faster default job otherwise wins the immutable cache key.
           shared-key: ${{ runner.os == 'Windows' && 'test-features' || 'test' }}
+      - name: Tests, WebSocket control bridge with a fake browser
+        run: cargo test -p ponko_mcp --test web_bridge
+      - name: Tests, browser control feature in the native capabilities inventory
+        run: cargo test -p ponko --features web-control --lib control::capabilities
       - name: Tests, ECS without rayon
         if: ${{ !cancelled() }}
         run: cargo test -p ponko_ecs --tests --no-fail-fast --no-default-features --features derive
@@ -1222,6 +1228,8 @@ jobs:
           key: web
       - run: cargo clippy -p ponko --target wasm32-unknown-unknown --examples
       - run: cargo clippy -p ponko --target wasm32-unknown-unknown --lib --example web_smoke -- -D warnings
+      - name: Clippy, browser control endpoint
+        run: cargo clippy -p ponko --target wasm32-unknown-unknown --features web-control --lib --example web_smoke -- -D warnings
       # Image decoders work in the browser build too, with every format on.
       - run: cargo check -p ponko --target wasm32-unknown-unknown --features image-formats
       # The 3D examples (the 3D browser smoke fixture among them) need the feature.
@@ -1370,6 +1378,12 @@ jobs:
       - name: Chromium, WebGL2, 2D fixture
         timeout-minutes: 5
         run: node web/smoke/smoke.mjs --fixture web_smoke --browser chromium --backend webgl2 --chrome-trace
+      - name: Chromium, WebGL2, browser control endpoint
+        timeout-minutes: 5
+        run: |
+          cargo build -p ponko_mcp --bin ponko-mcp
+          web/build.sh --features web-control web_smoke target/web/web-control
+          node web/smoke/control.mjs target/web/web-control target/debug/ponko-mcp
       - name: Chromium, WebGL2, 3D fixture
         timeout-minutes: 5
         if: ${{ !cancelled() }}

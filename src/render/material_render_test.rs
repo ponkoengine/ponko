@@ -229,7 +229,9 @@ fn uniform_updates_reuse_bindings_and_resource_changes_sample_new_textures() {
     let Some(mut rig) = Rig::new() else { return };
     let mut desc = GpuMaterialDesc::new(&MaterialDesc::default());
     let id = rig.renderer.create_material(&rig.device, &desc, &rig.textures);
-    desc.uniform.color = [0.5, 1.0, 1.0, 1.0];
+    // 0.4 of 255 is 102 exactly. A half (127.5) lands between two levels,
+    // and adapters differ on which way they round it (127 or 128).
+    desc.uniform.color = [0.4, 1.0, 1.0, 1.0];
     desc.transparent = true;
     desc.cutout = true;
     desc.double_sided = true;
@@ -237,7 +239,7 @@ fn uniform_updates_reuse_bindings_and_resource_changes_sample_new_textures() {
     assert!(rig.renderer.resources.materials[id as usize].transparent);
     assert!(rig.renderer.resources.materials[id as usize].cutout);
     assert!(rig.renderer.resources.materials[id as usize].double_sided);
-    assert_eq!(rig.pixel(id, false), [128, 255, 255, 255]);
+    assert_eq!(rig.pixel(id, false), [102, 255, 255, 255]);
 
     let red = Rig::texture(&rig.device, &rig.queue, [255, 0, 0, 255], 1);
     rig.textures.push(GpuTexture {
@@ -248,7 +250,7 @@ fn uniform_updates_reuse_bindings_and_resource_changes_sample_new_textures() {
     });
     desc.textures[0] = Some(1);
     rig.update(id, &desc, true);
-    assert_eq!(rig.pixel(id, false), [128, 0, 0, 255]);
+    assert_eq!(rig.pixel(id, false), [102, 0, 0, 255]);
     rig.update(id, &desc, false);
 
     // Same ID, new resource (as with reload, free/reuse, or mip promotion).
@@ -260,7 +262,7 @@ fn uniform_updates_reuse_bindings_and_resource_changes_sample_new_textures() {
     // An unresolved ID initially uses white, then resolves after an upload.
     desc.textures[0] = Some(2);
     rig.update(id, &desc, true);
-    assert_eq!(rig.pixel(id, false), [128, 255, 255, 255]);
+    assert_eq!(rig.pixel(id, false), [102, 255, 255, 255]);
     rig.textures.push(GpuTexture {
         texture: red.clone(),
         bind_group: rig.textures[0].bind_group.clone(),
@@ -268,14 +270,14 @@ fn uniform_updates_reuse_bindings_and_resource_changes_sample_new_textures() {
         mips: None,
     });
     rig.update(id, &desc, true);
-    assert_eq!(rig.pixel(id, false), [128, 0, 0, 255]);
+    assert_eq!(rig.pixel(id, false), [102, 0, 0, 255]);
 
     desc.arrays[0] = Some(0);
     rig.update(id, &desc, true);
-    assert_eq!(rig.pixel(id, true), [128, 255, 255, 255]);
+    assert_eq!(rig.pixel(id, true), [102, 255, 255, 255]);
     rig.renderer.add_texture_array(&red);
     rig.update(id, &desc, true);
-    assert_eq!(rig.pixel(id, true), [128, 0, 0, 255]);
+    assert_eq!(rig.pixel(id, true), [102, 0, 0, 255]);
     rig.update(id, &desc, false);
     let blue = Rig::texture(&rig.device, &rig.queue, [0, 0, 255, 255], 1);
     desc.arrays[0] = Some(rig.renderer.add_texture_array(&blue));
