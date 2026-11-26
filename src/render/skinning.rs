@@ -1141,7 +1141,10 @@ mod tests {
                 vertex([0.5, 0.5, 0.5]),
             ],
         ];
-        let joints = [vec![[0u16, 0, 0, 0], [0, 1, 0, 0], [1, 0, 0, 0]], vec![[0u16, 0, 0, 0]; 4]];
+        let joints = [
+            vec![[0u16, 0, 0, 0], [0, 1, 0, 0], [1, 0, 0, 0]],
+            vec![[0u16, 0, 0, 0]; 4],
+        ];
         let weights = [
             vec![[1.0f32, 0.0, 0.0, 0.0], [0.5, 0.5, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]],
             vec![[1.0f32, 0.0, 0.0, 0.0]; 4],
@@ -1149,7 +1152,12 @@ mod tests {
         // More models of each mesh than one dispatch takes.
         let models = 2 * super::CHUNK as usize + 300;
         let dispatches: usize = (0..2)
-            .map(|m| (0..models).filter(|k| k % 2 == m && k % 5 != 4).count().div_ceil(super::CHUNK as usize))
+            .map(|m| {
+                (0..models)
+                    .filter(|k| k % 2 == m && k % 5 != 4)
+                    .count()
+                    .div_ceil(super::CHUNK as usize)
+            })
             .sum();
         assert_eq!(dispatches, 4);
         for (page_limit, moving) in [(None, false), (Some(10), true)] {
@@ -1216,7 +1224,14 @@ mod tests {
             skinning.record(&mut encoder, None);
             queue.submit([encoder.finish()]);
             let read = |buffer: &wgpu::Buffer| -> Vec<super::Vertex> {
-                bytemuck::cast_slice(&crate::render::traffic::read_back(&device, &queue, buffer, 0, buffer.size())).to_vec()
+                bytemuck::cast_slice(&crate::render::traffic::read_back(
+                    &device,
+                    &queue,
+                    buffer,
+                    0,
+                    buffer.size(),
+                ))
+                .to_vec()
             };
             let pages: Vec<_> = skinning
                 .pages
