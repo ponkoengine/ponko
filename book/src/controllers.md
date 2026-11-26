@@ -327,8 +327,11 @@ documentation (November 2026):
 SDL is the only one that covers all three features on all three desktop
 systems, and the pads it supports are kept up by the project most PC games
 already rely on. The cost is a native library to install and ship, which is
-why it is an optional feature and gilrs stays the default. `sdl3-sys`
-provides the low-level binding for the SDL calls. SDL's own handlers for Ctrl-C are left off, so the game's
+why it is an optional feature and gilrs stays the default (a game that
+needs neither gyro nor trigger rumble gains nothing from it). `sdl3-sys` is
+the low-level binding with no other dependencies; the engine uses a few
+dozen of its functions and the `sdl3` crate's safe wrapper would only add
+another layer. SDL's own handlers for Ctrl-C are left off, so the game's
 stay in charge.
 
 Its tests run without a pad: the backend's logic is tested through

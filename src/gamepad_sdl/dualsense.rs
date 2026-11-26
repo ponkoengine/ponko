@@ -1,6 +1,12 @@
-//! The DualSense effect payload (DS5EffectsState_t in SDL's PS5 HID driver).
-//! SDL_SendGamepadEffect takes the common payload and supplies the report ID,
-//! transport padding and, over Bluetooth, the 0xA2-seeded CRC32.
+//! The DualSense effect payload (`DS5EffectsState_t` in SDL's PS5 HID driver,
+//! `src/joystick/hidapi/SDL_hidapi_ps5.c`). `SDL_SendGamepadEffect` takes the
+//! common payload and supplies the report ID, transport padding and, over
+//! Bluetooth, the CRC-32 seeded with the 0xA2 HID header byte.
+//!
+//! The 11-byte trigger blocks follow Nielk1's MIT-licensed
+//! `TriggerEffectGenerator` (gist 6d54cc2c00d2201ccb8c2720ad7538db): Off
+//! 0x05, Feedback 0x21, Weapon 0x25, Vibration 0x26, with three bits of
+//! strength per zone in bytes 3–6 and the vibration frequency in byte 9.
 use crate::input::TriggerEffect;
 
 pub(crate) const PAYLOAD_SIZE: usize = 47;
@@ -19,12 +25,11 @@ pub(crate) fn trigger_report([left, right]: [TriggerEffect; 2]) -> Payload {
 }
 
 fn encode(effect: TriggerEffect) -> [u8; 11] {
-    // These modes are documented with examples in nondebug/dualsense.
     const OFF: [u8; 11] = [0x05, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     match effect {
         TriggerEffect::Off => OFF,
-        TriggerEffect::Resistance { start, strength } => zones(0x21, from_start(start, strength), 0),
-        TriggerEffect::ResistanceProfile(strengths) => zones(0x21, strengths, 0),
+        TriggerEffect::Resistance { start, strength } => zones(0x21, from_start(start, strength)),
+        TriggerEffect::ResistanceProfile(strengths) => zones(0x21, strengths),
         TriggerEffect::Weapon { start, end, strength } => {
             if strength == 0 {
                 return OFF;
@@ -42,7 +47,11 @@ fn encode(effect: TriggerEffect) -> [u8; 11] {
             if frequency == 0 {
                 return OFF;
             }
-            zones(0x26, from_start(start, amplitude), frequency)
+            let mut block = zones(0x26, from_start(start, amplitude));
+            if block[0] == 0x26 {
+                block[FREQUENCY] = frequency;
+            }
+            block
         }
     }
 }
@@ -53,7 +62,10 @@ fn from_start(start: u8, strength: u8) -> [u8; 10] {
     strengths
 }
 
-fn zones(mode: u8, strengths: [u8; 10], frequency: u8) -> [u8; 11] {
+/// Byte 9 of a vibration block holds its frequency in hertz.
+const FREQUENCY: usize = 9;
+
+fn zones(mode: u8, strengths: [u8; 10]) -> [u8; 11] {
     let mut mask = 0u16;
     let mut packed = 0u32;
     for (zone, strength) in strengths.into_iter().enumerate() {
@@ -67,7 +79,7 @@ fn zones(mode: u8, strengths: [u8; 10], frequency: u8) -> [u8; 11] {
     }
     let [m0, m1] = mask.to_le_bytes();
     let [s0, s1, s2, s3] = packed.to_le_bytes();
-    [mode, m0, m1, s0, s1, s2, s3, frequency, 0, 0, 0]
+    [mode, m0, m1, s0, s1, s2, s3, 0, 0, 0, 0]
 }
 
 #[cfg(test)]
@@ -144,15 +156,15 @@ mod tests {
             ]),
             &[
                 0x02, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x21, 0x05, 0x02, 0x81, 0x00, 0x00,
-                0x38, 0x00, 0x00, 0x00, 0x00, 0x26, 0x00, 0x02, 0x00, 0x00, 0x00, 0x18, 0x3c, 0x00, 0x00, 0x00, 0x00,
+                0x38, 0x00, 0x00, 0x00, 0x00, 0x26, 0x00, 0x02, 0x00, 0x00, 0x00, 0x18, 0x00, 0x00, 0x3c, 0x00, 0x00,
                 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             ],
             &[
                 0x31, 0x00, 0x10, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x21, 0x05, 0x02, 0x81,
-                0x00, 0x00, 0x38, 0x00, 0x00, 0x00, 0x00, 0x26, 0x00, 0x02, 0x00, 0x00, 0x00, 0x18, 0x3c, 0x00, 0x00,
+                0x00, 0x00, 0x38, 0x00, 0x00, 0x00, 0x00, 0x26, 0x00, 0x02, 0x00, 0x00, 0x00, 0x18, 0x00, 0x00, 0x3c,
                 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x4b, 0x03, 0x21, 0xfb,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc4, 0x71, 0x9e, 0x98,
             ],
         );
     }
