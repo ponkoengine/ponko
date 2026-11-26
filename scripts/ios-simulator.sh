@@ -5,7 +5,8 @@
 #   0. runs the engine's iOS unit tests (`src/platform/ios.rs`),
 #   1. runs the app headless for 120 ticks (`PONKO_SMOKE`),
 #   2. starts it with its window: it must draw frames, read the safe area,
-#      be suspended when another app comes to the front and resumed after,
+#      use the clipboard, keep a file in its storage folder, be suspended
+#      when another app comes to the front and resumed after,
 #   3. starts it with the keyboard open: the keyboard's inset must show,
 # saving a screenshot of 2 and 3. The simulated iPhone is shut down and
 # deleted at the end, also when a step fails. No window opens on the Mac:
@@ -102,6 +103,8 @@ grep -Eq "safe insets top [1-9]" "$out/window.log" || fail "no safe area inset r
 grep -q "phone: suspended" "$out/window.log" || fail "no Suspended event"
 grep -q "phone: resumed" "$out/window.log" || fail "no Resumed event"
 grep -q 'clipboard holds Some("ponko phone check")' "$out/window.log" || fail "the clipboard"
+grep -q "storage kept a file in .*Library/Application Support/dev.ponko.phone-check" "$out/window.log" ||
+    fail "storage in the app's Application Support folder"
 
 echo "ios-simulator: 3. the on-screen keyboard"
 start "$out/keyboard.log" SIMCTL_CHILD_PONKO_PHONE_KEYBOARD=1

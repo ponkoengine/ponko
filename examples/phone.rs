@@ -11,13 +11,14 @@
 //!   is typed shows at the top of the safe area.
 //! - Suspend, resume and memory warnings are listed and printed.
 //! - `PONKO_PHONE_KEYBOARD=1` opens the keyboard at the start.
+//! - A file is written to the game's storage and read back.
 
 use ponko::audio::AudioSessionCategory;
 use ponko::prelude::*;
 use ponko::window::{SafeInsets, WindowEvent};
 
 fn main() {
-    Game::new("Phone check", 390, 844).run(|ctx| {
+    Game::new("Phone check", 390, 844).app_id("dev.ponko.phone-check").run(|ctx| {
         // The player's own music may play on under the game's sounds.
         match ctx.audio.set_session_category(AudioSessionCategory::Ambient) {
             Ok(()) => println!("phone: audio session {:?}", ctx.audio.session_category()),
@@ -26,6 +27,14 @@ fn main() {
         match ctx.window.clipboard_write("ponko phone check") {
             Ok(()) => println!("phone: clipboard written"),
             Err(e) => println!("phone: clipboard not written: {e}"),
+        }
+        let stored = ctx.storage.write("check.txt", b"kept").and_then(|()| ctx.storage.read("check.txt"));
+        match stored {
+            Ok(bytes) if bytes == b"kept" => {
+                println!("phone: storage kept a file in {:?}", ctx.storage.dir().unwrap_or(std::path::Path::new("?")))
+            }
+            Ok(_) => println!("phone: storage gave back other bytes"),
+            Err(e) => println!("phone: storage failed: {e}"),
         }
         ctx.input
             .set_action("keyboard", Action::Button(vec![ButtonBinding::Gesture(Gesture::Tap)]));
