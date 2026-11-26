@@ -1,3 +1,4 @@
+<!-- area: Tools: editor, inspector and agents -->
 ### Changed
 - In a web build with threads, a hierarchy update (attachments) pass worth
   sharing out runs on the worker threads, through the same runner as

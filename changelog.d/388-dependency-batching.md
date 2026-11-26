@@ -1,3 +1,4 @@
+<!-- area: ECS and systems -->
 ### Breaking changes
 - `schedule::Stage::systems` returns `&[usize]` instead of a `Range<usize>`.
   A batch's systems need not be neighbours any more (see Changed), so a

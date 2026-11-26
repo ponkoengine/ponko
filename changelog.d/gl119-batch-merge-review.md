@@ -1,3 +1,4 @@
+<!-- area: API and crate layout -->
 ### Changed
 - Three types keep one public path each. None of the removed paths was in
   a release (they were added and dropped on the development branch before

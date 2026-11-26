@@ -185,9 +185,32 @@ def gallery_line(version):
             f"release; each page links the example's source).\n")
 
 
-def release_notes(section):
-    """A changelog section's lines as the text of a GitHub release body."""
-    return "\n".join(section).strip() + "\n"
+def section_link(changelog_text, heading, version):
+    """Where a changelog section is read in full: CHANGELOG.md at the tag, at the section's anchor."""
+    line = next((l for l in changelog_text.splitlines() if l.startswith(f"## [{heading}]")), f"## [{heading}]")
+    slug = re.sub(r"[^\w\- ]", "", line[3:].strip().lower()).replace(" ", "-")
+    return f"{project_url()}/blob/v{version}/CHANGELOG.md#{slug}"
+
+
+def release_notes(section, link=None):
+    """A changelog section's lines as the text of a GitHub release body.
+
+    A section longer than a release body holds (MAX_NOTES) keeps what comes
+    before its first subsection (the release's story and highlights) and its
+    Breaking changes, and links the rest, which is read in CHANGELOG.md at
+    `link` and on the guide's release page. Without a link it is kept whole."""
+    full = "\n".join(section).strip() + "\n"
+    if len(full) <= MAX_NOTES or link is None:
+        return full
+    heads = [i for i, l in enumerate(section) if l.startswith("### ")]
+    breaking = [i for i in heads if section[i][4:].strip() == changelog.BREAKING]
+    cut = next((i for i in heads if i > breaking[0]), len(section)) if breaking else \
+        (heads[0] if heads else len(section))
+    left = sum(1 for l in section[cut:] if l.startswith("- "))
+    kept = "\n".join(section[:cut]).strip()
+    return (kept + f"\n\n### Everything else\n\nThe other {left:,} changes, grouped by area under "
+            f"Added, Changed, Deprecated, Removed, Fixed and Security, are in [CHANGELOG.md]({link}): "
+            "the whole list is longer than a GitHub release holds.\n")
 
 
 def breaking_headlines(section):
@@ -199,6 +222,22 @@ def breaking_headlines(section):
         elif inside and line.startswith("- "):
             found.append(line[2:].strip())
     return found
+
+
+def breaking_texts(section):
+    """What each bullet of `### Breaking changes` says changed: its lines up to `Instead:`, joined."""
+    found, inside = [], False
+    for line in section:
+        if line.startswith("### "):
+            inside = line[4:].strip() == changelog.BREAKING
+        elif inside and line.startswith("- "):
+            found.append([line[2:].strip()])
+        elif inside and found and line.startswith("  ") and len(found[-1]) and found[-1][-1] is not None:
+            if line.strip().startswith("Instead:"):
+                found[-1].append(None)
+            else:
+                found[-1].append(line.strip())
+    return [" ".join(l for l in parts if l is not None) for parts in found]
 
 
 def migration_problems(version, section, chapter, summary):
@@ -223,7 +262,10 @@ def migration_problems(version, section, chapter, summary):
     out = []
     if f"({name})" not in summary:
         out.append(f"book/src/SUMMARY.md has no line for {name}")
-    missing = [h for h in headlines if h.rstrip(".") not in chapter]
+    # An entry's heading in the chapter is its first sentence (cut short when
+    # long, changelog.split_title), so either that or its first line is there.
+    missing = [h for h, text in zip(headlines, breaking_texts(section))
+               if h.rstrip(".") not in chapter and changelog.title_of(text) not in chapter]
     if missing:
         shown = "; ".join(f"`{h[:50]}`" for h in missing[:3]) + (" ..." if len(missing) > 3 else "")
         out.append(f"book/src/{name} lacks {len(missing)} breaking change(s) of the CHANGELOG: {shown}")
@@ -287,11 +329,12 @@ def problems(tag, crate_list, changelog_text, fragments, book=None, pins=None):
         heading, section = chosen
         if not any(l.strip() for l in section):
             out.append(f"CHANGELOG.md's `## [{heading}]` section is empty")
-        elif len(release_notes(section)) > MAX_NOTES:
+        elif len(release_notes(section, section_link(changelog_text, heading, version))) > MAX_NOTES:
             out.append(
-                f"CHANGELOG.md's `## [{heading}]` section has {len(release_notes(section)):,} characters; "
-                f"a GitHub release body holds at most {MAX_NOTES:,}. Shorten it (summarize, and link the "
-                "full lists in the guide)"
+                f"the release notes from CHANGELOG.md's `## [{heading}]` section have "
+                f"{len(release_notes(section, section_link(changelog_text, heading, version))):,} characters "
+                f"(its story and Breaking changes; the rest is linked); a GitHub release body holds at "
+                f"most {MAX_NOTES:,}. Shorten them (summarize, and keep long lists in the guide)"
             )
     if section and book is not None:
         out += migration_problems(version, section, *book)
@@ -379,7 +422,9 @@ def notes(tag, out):
     chosen = notes_section((ROOT / "CHANGELOG.md").read_text(encoding='utf-8'), version)
     if chosen is None or not any(l.strip() for l in chosen[1]):
         sys.exit(f"CHANGELOG.md has no notes for {version}")
-    text = (candidate_preamble(version) if is_candidate(version) else "") + release_notes(chosen[1])
+    changelog_text = (ROOT / "CHANGELOG.md").read_text(encoding='utf-8')
+    text = (candidate_preamble(version) if is_candidate(version) else "") + \
+        release_notes(chosen[1], section_link(changelog_text, chosen[0], version))
     text += gallery_line(version) or ""
     if len(text) > MAX_NOTES:
         sys.exit(f"the notes for {version} have {len(text):,} characters; GitHub allows {MAX_NOTES:,}")
@@ -510,7 +555,14 @@ def selftest():
     assert any("1 fragment(s)" in p for p in problems("v0.0.2", ok, log, ["12-x.md"]))
     assert changelog_section(log, "0.0.1") == ["- old"] or changelog_section(log, "0.0.1")[-1] == "- old"
     huge = log.replace("- thing\n", "- thing\n" + "- x\n" * (MAX_NOTES // 4 + 1))
-    assert any("a GitHub release body holds at most" in p for p in problems("v0.0.2", ok, huge, [])), (
+    assert not any("release body" in p for p in problems("v0.0.2", ok, huge, [])), (
+        "a long list of changes is linked, not put in the release body"
+    )
+    short = release_notes(changelog_section(huge, "0.0.2"), "https://example.com/CHANGELOG.md#002---x")
+    assert "- x" not in short and "The other 31,252 changes" in short and "#002---x)" in short, short[:300]
+    assert section_link("## [0.2.0] - 2026-12-03\n", "0.2.0", "0.2.0").endswith("/blob/v0.2.0/CHANGELOG.md#020---2026-12-03")
+    huge_breaks = log.replace("### Added\n- thing\n", "### Breaking changes\n" + "- `x` is gone.\n  Instead: y.\n" * (MAX_NOTES // 20) + "\n### Added\n- thing\n")
+    assert any("a GitHub release body holds at most" in p for p in problems("v0.0.2", ok, huge_breaks, [])), (
         "notes longer than a GitHub release body are refused before anything is built"
     )
     assert release_notes(changelog_section(log, "0.0.2")) == "### Added\n- thing\n"
