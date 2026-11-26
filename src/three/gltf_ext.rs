@@ -41,6 +41,7 @@ fn support(extension: &str) -> Option<Support> {
         | "KHR_materials_emissive_strength"
         | "KHR_mesh_quantization"
         | "KHR_materials_transmission"
+        | SPECULAR_GLOSSINESS
         | QUANTIZED_POSITIONS => Support::Always,
         "EXT_meshopt_compression" | "KHR_meshopt_compression" => Support::Feature("gltf-meshopt", MESHOPT),
         // KTX2 images: block formats upload as they are; Basis Universal
@@ -48,6 +49,8 @@ fn support(extension: &str) -> Option<Support> {
         // it, and the texture's core image loads instead if it has one).
         "KHR_texture_basisu" => Support::Feature("compressed-textures", cfg!(feature = "compressed-textures")),
         "EXT_texture_webp" => Support::Feature("image-webp", cfg!(feature = "image-webp")),
+        // DDS images of BCn blocks, as the KTX2 ones upload.
+        "MSFT_texture_dds" => Support::Feature("compressed-textures", cfg!(feature = "compressed-textures")),
         _ => return None,
     })
 }
@@ -245,12 +248,20 @@ impl Start {
         let Self {
             mut json,
             mut buffers,
-            warnings,
+            mut warnings,
             ..
         } = self;
         decompress_views(name, &mut json, &mut buffers)?;
+        if specular_glossiness_as_metal_rough(&mut json) {
+            warnings.push(format!(
+                "{name}: approximates its {SPECULAR_GLOSSINESS} materials: the diffuse color and texture \
+                 show as the base color and the glossiness as roughness; the specular color and the \
+                 specular-glossiness texture are left out"
+            ));
+        }
         let preferred_image = texture_sources(name, &mut json)?;
         let dequantize = fold_quantized_positions(&mut json);
+        drop_channels_without_nodes(&mut json);
 
         // The `gltf` crate checks required extensions against its own list,
         // which doesn't know these; they were checked above.
@@ -267,6 +278,68 @@ impl Start {
             dequantize,
             warnings,
         })
+    }
+}
+
+/// The retired specular-glossiness workflow of glTF materials, which
+/// older exporters still write (often with no metallic-roughness block).
+const SPECULAR_GLOSSINESS: &str = "KHR_materials_pbrSpecularGlossiness";
+
+/// Gives every material of the retired specular-glossiness workflow
+/// ([`SPECULAR_GLOSSINESS`]) without a metallic-roughness block of its own
+/// one made from it, which the rest of the loader reads: the diffuse color
+/// and texture as the base color, no metalness, and one minus the
+/// glossiness as the roughness. The specular color and the
+/// specular-glossiness texture have no counterpart there (`true`: some
+/// material was converted, so the caller warns that it is approximated).
+pub(super) fn specular_glossiness_as_metal_rough(json: &mut Value) -> bool {
+    let Some(materials) = json.get_mut("materials").and_then(Value::as_array_mut) else {
+        return false;
+    };
+    let mut converted = false;
+    for material in materials {
+        if material.get("pbrMetallicRoughness").is_some() {
+            continue;
+        }
+        let Some(sg) = extension(material, SPECULAR_GLOSSINESS).cloned() else {
+            continue;
+        };
+        let mut pbr = serde_json::Map::new();
+        if let Some(factor) = sg.get("diffuseFactor") {
+            pbr.insert("baseColorFactor".into(), factor.clone());
+        }
+        if let Some(texture) = sg.get("diffuseTexture") {
+            pbr.insert("baseColorTexture".into(), texture.clone());
+        }
+        pbr.insert("metallicFactor".into(), Value::from(0.0));
+        let glossiness = sg["glossinessFactor"].as_f64().unwrap_or(1.0).clamp(0.0, 1.0);
+        pbr.insert("roughnessFactor".into(), Value::from(1.0 - glossiness));
+        material["pbrMetallicRoughness"] = Value::Object(pbr);
+        converted = true;
+    }
+    converted
+}
+
+/// Takes out the animation channels that animate no node: those of
+/// `KHR_animation_pointer` (a material's color, a texture's offset), whose
+/// target has a pointer instead of a node. The engine doesn't play them
+/// (the extension is optional, so loading it warned already), and the
+/// `gltf` crate refuses a target without a node, which would fail the
+/// whole file. The node channels play as they would without the others.
+pub(super) fn drop_channels_without_nodes(json: &mut Value) {
+    let Some(animations) = json.get_mut("animations").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for animation in animations {
+        if let Some(channels) = animation.get_mut("channels").and_then(Value::as_array_mut) {
+            channels.retain(|c| {
+                c["target"]["node"].is_u64()
+                    && matches!(
+                        c["target"]["path"].as_str(),
+                        Some("translation" | "rotation" | "scale" | "weights")
+                    )
+            });
+        }
     }
 }
 
@@ -601,18 +674,22 @@ fn decode_meshopt(_: &[u8], _: usize, _: usize, _: &str, _: &str) -> Result<Vec<
     unreachable!("meshopt views are only decompressed with the `gltf-meshopt` feature")
 }
 
+/// The extensions that give a texture an image in another format than
+/// its core PNG or JPEG one.
+const IMAGE_EXTENSIONS: [&str; 3] = ["KHR_texture_basisu", "EXT_texture_webp", "MSFT_texture_dds"];
+
 /// Texture images given by extensions (`KHR_texture_basisu`'s KTX2,
-/// `EXT_texture_webp`'s WebP) the build reads. A texture with only such an
-/// image gets it as its source (the core image is required by the `gltf`
-/// crate); one with both gets it as its preferred image, its core image
-/// staying the fallback.
+/// `EXT_texture_webp`'s WebP, `MSFT_texture_dds`'s DDS) the build reads. A
+/// texture with only such an image gets it as its source (the core image is
+/// required by the `gltf` crate); one with both gets it as its preferred
+/// image, its core image staying the fallback.
 fn texture_sources(name: &str, json: &mut Value) -> Result<Vec<Option<usize>>, String> {
     let Some(textures) = json.get_mut("textures").and_then(Value::as_array_mut) else {
         return Ok(Vec::new());
     };
     let mut preferred = Vec::with_capacity(textures.len());
     for (i, texture) in textures.iter_mut().enumerate() {
-        let readable = ["KHR_texture_basisu", "EXT_texture_webp"].into_iter().find_map(|ext| {
+        let readable = IMAGE_EXTENSIONS.into_iter().find_map(|ext| {
             let source = extension(texture, ext)?["source"].as_u64()? as usize;
             matches!(support(ext), Some(Support::Feature(_, true))).then_some(source)
         });
@@ -625,7 +702,7 @@ fn texture_sources(name: &str, json: &mut Value) -> Result<Vec<Option<usize>>, S
             (Some(source), true) => preferred.push(Some(source)),
             (None, true) => preferred.push(None),
             (None, false) => {
-                let wanted = ["KHR_texture_basisu", "EXT_texture_webp"]
+                let wanted = IMAGE_EXTENSIONS
                     .into_iter()
                     .find(|ext| extension(texture, ext).is_some());
                 return Err(match wanted.and_then(|ext| Some((ext, support(ext)?))) {
@@ -1524,6 +1601,104 @@ mod tests {
                 .warnings
                 .iter()
                 .any(|w| w.contains("KHR_materials_ior") && w.contains("refraction"))
+        );
+    }
+
+    #[test]
+    fn specular_glossiness_materials_show_their_diffuse_as_base_color() {
+        let mut file = File::default();
+        let text = triangle(
+            &mut file,
+            None,
+            json!({
+                "extensionsUsed": ["KHR_materials_pbrSpecularGlossiness"],
+                "extensionsRequired": ["KHR_materials_pbrSpecularGlossiness"],
+                "materials": [{ "extensions": { "KHR_materials_pbrSpecularGlossiness": {
+                    "diffuseFactor": [0.5, 0.25, 1.0, 1.0], "glossinessFactor": 0.8,
+                    "specularFactor": [0.1, 0.1, 0.1] } } }],
+            }),
+        );
+        let loaded = load_str("old.gltf", &text).unwrap();
+        let m = &loaded.materials[0];
+        let [r, g, b, a] = super::super::linear(m.color);
+        assert!(
+            (r - 0.5).abs() < 1e-3 && (g - 0.25).abs() < 1e-3 && (b - 1.0).abs() < 1e-3 && a == 1.0,
+            "{r} {g} {b} {a}"
+        );
+        assert!((m.roughness - 0.2).abs() < 1e-5, "{}", m.roughness);
+        assert_eq!(m.metallic, 0.0);
+        assert!(
+            loaded
+                .warnings
+                .iter()
+                .any(|w| w.contains("old.gltf") && w.contains("approximates")),
+            "{:?}",
+            loaded.warnings
+        );
+        // A material with a metallic-roughness block of its own keeps it.
+        let mut both = serde_json::from_str::<Value>(&text).unwrap();
+        both["materials"][0]["pbrMetallicRoughness"] =
+            json!({ "baseColorFactor": [0, 1, 0, 1], "roughnessFactor": 0.5 });
+        let loaded = load_str("both.gltf", &both.to_string()).unwrap();
+        assert_eq!(loaded.materials[0].roughness, 0.5);
+        let [r, g, _, _] = super::super::linear(loaded.materials[0].color);
+        assert!(r.abs() < 1e-3 && (g - 1.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_dds_image_is_the_preferred_image_of_its_texture() {
+        let mut json = json!({
+            "textures": [
+                { "source": 0, "extensions": { "MSFT_texture_dds": { "source": 1 } } },
+                { "source": 2 }
+            ]
+        });
+        let preferred = texture_sources("dds.gltf", &mut json).unwrap();
+        if cfg!(feature = "compressed-textures") {
+            assert_eq!(preferred, [Some(1), None]);
+        } else {
+            assert_eq!(preferred, [None, None], "without the feature the core image loads");
+        }
+    }
+
+    #[test]
+    fn animation_pointer_channels_are_left_out_and_node_channels_still_load() {
+        let mut file = File::default();
+        // One key: at time 0, the node at the origin.
+        let times = file.floats(&[0.0], 1);
+        let places = file.floats(&[0.0, 0.0, 0.0], 3);
+        let text = triangle(
+            &mut file,
+            None,
+            json!({
+                "extensionsUsed": ["KHR_animation_pointer"],
+                "animations": [{
+                    "name": "pulse",
+                    "samplers": [{ "input": times, "output": places }],
+                    "channels": [
+                        { "sampler": 0, "target": { "node": 0, "path": "translation" } },
+                        { "sampler": 0, "target": { "path": "pointer", "extensions": { "KHR_animation_pointer":
+                            { "pointer": "/materials/0/pbrMetallicRoughness/baseColorFactor" } } } }
+                    ]
+                }],
+            }),
+        );
+        let value: Value = serde_json::from_str(&text).unwrap();
+        let mut channels = value.clone();
+        drop_channels_without_nodes(&mut channels);
+        assert_eq!(
+            channels["animations"][0]["channels"].as_array().map(Vec::len),
+            Some(1),
+            "only the node's channel is kept"
+        );
+        assert_eq!(channels["animations"][0]["channels"][0]["target"]["node"], 0);
+        // The whole file loads (the gltf crate refuses a target without a
+        // node), and says it ignores the extension.
+        let loaded = load_str("pointer.gltf", &value.to_string()).unwrap();
+        assert!(
+            loaded.warnings.iter().any(|w| w.contains("KHR_animation_pointer")),
+            "{:?}",
+            loaded.warnings
         );
     }
 
