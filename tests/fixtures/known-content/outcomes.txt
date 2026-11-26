@@ -7,7 +7,7 @@ AnimatedColorsCube: loaded
 AnimatedCube: loaded
 AnimatedMorphCube: loaded
 AnimatedTriangle: loaded
-AnimationPointerUVs: skipped KHR_materials_unlit
+AnimationPointerUVs: loaded
 AnisotropyBarnLamp: loaded
 AnisotropyDiscTest: loaded
 AnisotropyRotationTest: loaded
@@ -33,7 +33,7 @@ CesiumMan: loaded
 CesiumMilkTruck: loaded
 ChairDamaskPurplegold: loaded
 ChronographWatch: loaded
-ClearCoatCarPaint: skipped KHR_materials_clearcoat
+ClearCoatCarPaint: loaded
 ClearCoatTest: loaded
 ClearcoatWicker: loaded
 CommercialRefrigerator: loaded
@@ -55,11 +55,11 @@ CompareTransmission: loaded
 CompareVolume: loaded
 Corset: loaded
 Cube: loaded
-CubeVisibility: skipped KHR_node_visibility
+CubeVisibility: loaded
 DamagedHelmet: loaded
 DiffuseTransmissionPlant: loaded
 DiffuseTransmissionTeacup: loaded
-DiffuseTransmissionTest: skipped KHR_materials_unlit
+DiffuseTransmissionTest: loaded
 DirectionalLight: loaded
 DispersionTest: loaded
 DragonAttenuation: loaded
@@ -79,10 +79,10 @@ IridescenceAbalone: loaded
 IridescenceDielectricSpheres: loaded
 IridescenceLamp: loaded
 IridescenceMetallicSpheres: loaded
-IridescenceSuzanne: skipped KHR_materials_iridescence
+IridescenceSuzanne: loaded
 IridescentDishWithOlives: loaded
 Lantern: loaded
-LightVisibility: skipped KHR_node_visibility
+LightVisibility: loaded
 LightsPunctualLamp: loaded
 MandarinOrange: loaded
 MaterialsVariantsShoe: loaded
@@ -104,19 +104,19 @@ OrientationTest: loaded
 PlaysetLightTest: loaded
 PointLightIntensityTest: loaded
 PotOfCoals: loaded
-PotOfCoalsAnimationPointer: skipped KHR_materials_specular
+PotOfCoalsAnimationPointer: loaded
 PrimitiveModeNormalsTest: loaded
 RecursiveSkeletons: loaded
 RiggedFigure: loaded
 RiggedSimple: loaded
-ScatterAnemone: skipped KHR_materials_volume
+ScatterAnemone: loaded
 ScatterPlant: loaded
 ScatterTest: loaded
 ScatteringSkull: loaded
 SciFiHelmet: loaded
 SheenChair: loaded
 SheenCloth: loaded
-SheenTestGrid: skipped KHR_materials_sheen
+SheenTestGrid: loaded
 SheenWoodLeatherSofa: loaded
 SimpleInstancing: loaded
 SimpleMaterial: loaded
@@ -126,7 +126,7 @@ SimpleSkin: loaded
 SimpleSparseAccessor: loaded
 SimpleTexture: loaded
 SpecGlossVsMetalRough: loaded
-SpecularSilkPouf: skipped KHR_materials_specular
+SpecularSilkPouf: loaded
 SpecularTest: loaded
 Sponza: loaded
 StainedGlassLamp: loaded
@@ -149,7 +149,7 @@ TriangleWithoutIndices: loaded
 TwoSidedPlane: loaded
 USDShaderBallForGltf: loaded
 Unicode❤♻Test: loaded
-UnlitTest: skipped KHR_materials_unlit
+UnlitTest: loaded
 VertexColorTest: loaded
 VirtualCity: loaded
 WaterBottle: loaded

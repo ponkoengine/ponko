@@ -1133,7 +1133,7 @@ pub(super) fn material_extensions(
 
 /// Whether node `node` is visible (`KHR_node_visibility`): a node marked
 /// invisible hides itself and everything under it, meshes and lights.
-/// Visibility animated through `KHR_animation_pointer` isn't read; the
+/// Visibility animated through `KHR_animation_pointer` isn't read (#620); the
 /// file's initial visibility stays.
 pub(super) fn visible(json: &Value, node: usize) -> bool {
     extension(&json["nodes"][node], "KHR_node_visibility").and_then(|v| v["visible"].as_bool()) != Some(false)
