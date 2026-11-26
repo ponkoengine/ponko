@@ -281,7 +281,7 @@ fn the_sea_mesh_follows_the_camera_and_the_mirror_with_it() {
             (at - vec3(120.0, 0.0, -40.0)).length() < 5.0,
             "the mesh is under the camera: {at}"
         );
-        let mirror = ctx.scene3d.passes.target_cameras[0];
+        let mirror = &ctx.scene3d.passes.target_cameras[0];
         assert_eq!(mirror.camera.position, vec3(120.0, -10.0, -40.0));
         assert!(ctx.world.get::<Model>(e).is_some());
     });

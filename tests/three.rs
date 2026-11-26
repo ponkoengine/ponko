@@ -931,6 +931,31 @@ fn follow_reflections(ctx: &mut Ctx) {
 }
 // ANCHOR_END: mirror
 
+// ANCHOR: security_screen
+/// Night vision: everything green, brighter in the dark.
+const NIGHT_VISION: &str = "
+fn effect(p: Pixel) -> vec3<f32> {
+    return vec3<f32>(0.0, dot(p.color, vec3<f32>(0.3, 0.6, 0.1)) * 4.0, 0.0);
+}";
+
+/// A screen in the guard's office: a camera in the vault shows the vault
+/// and nothing of the rooms around it, in night vision, on black.
+/// Mipmapped, so it doesn't shimmer seen from across the office.
+fn security_screen(ctx: &mut Ctx) -> RenderTarget {
+    let screen = ctx.gfx.create_mipmapped_render_target(256, 192);
+    let mut eye = ctx.scene3d.camera;
+    eye.position = vec3(3.5, 2.8, -6.5);
+    let green = ctx.gfx.create_effect("night vision", NIGHT_VISION);
+    ctx.scene3d.passes.target_cameras.push(
+        TargetCamera::new(eye, screen)
+            .with_cull_box(vec3(-4.0, 0.0, -12.0), vec3(4.0, 3.0, -6.0))
+            .with_clear(Color::BLACK)
+            .with_effect(ScreenEffect::new(green)),
+    );
+    screen
+}
+// ANCHOR_END: security_screen
+
 // ANCHOR: compute
 /// Ripples: each texel moves toward the average of its neighbours,
 /// overshooting like water. Red is the height now, green the height a
@@ -997,11 +1022,25 @@ fn the_guide_pond_mirrors_the_camera() {
         pond(ctx);
         ctx.scene3d.camera.position = vec3(3.0, 5.0, 1.0);
         follow_reflections(ctx);
-        let below = ctx.scene3d.passes.target_cameras[0];
+        let below = &ctx.scene3d.passes.target_cameras[0];
         assert!(ctx.is_live(below.target));
         assert_eq!(below.target.width(), 32);
         assert_eq!(below.camera.position, vec3(3.0, -5.0, 1.0));
         assert_eq!(below.clip_plane, Some(vec4(0.0, 1.0, 0.0, 0.0)));
+    });
+}
+
+#[test]
+fn the_guide_security_screen_sees_only_the_vault_in_green() {
+    Game::new("vault", 64, 64).run_headless(0, |ctx| {
+        let screen = security_screen(ctx);
+        assert!(ctx.is_live(screen));
+        assert_eq!(screen.width(), 256);
+        let camera = &ctx.scene3d.passes.target_cameras[0];
+        assert_eq!(camera.cull_box, Some((vec3(-4.0, 0.0, -12.0), vec3(4.0, 3.0, -6.0))));
+        assert_eq!(camera.clear, Some(Color::BLACK));
+        assert_eq!(camera.effects.len(), 1);
+        assert!(ctx.scene3d.passes.effects.is_empty(), "the main view keeps its own");
     });
 }
 
