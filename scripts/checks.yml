@@ -550,6 +550,33 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  windows-startup-stack:
+    local-requires: [cargo-nextest]
+    local-tags: [test, gpu]
+    name: Windowed startup on half of a main thread's stack (windows-latest)
+    needs: windows-unit-build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/nextest
+      - uses: actions/download-artifact@v8
+        with:
+          name: windows-unit-tests
+          path: target/ci-unit
+      # Windows gives a program's main thread 1 MB of stack. The whole
+      # windowed startup (event loop, window, GPU device, setup with a 3D
+      # mesh, three frames) runs on a thread with 512 KB
+      # (`src/game/startup_stack_tests.rs`). It opens a window, and a
+      # process makes one event loop: nextest runs it in its own process.
+      - name: Windowed startup in 512 KB of stack
+        local-tags: [windowed]
+        env:
+          PONKO_REQUIRE_GPU: 1
+        run: >-
+          cargo nextest run --archive-file target/windows-unit.tar.zst
+          --workspace-remap . --run-ignored only
+          -E 'test(windowed_startup_fits_in_half_of_a_windows_main_thread_stack)'
+
   windows-gpu-tiers:
     local-requires: [cargo-nextest]
     local-tags: [test, gpu]
