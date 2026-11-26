@@ -151,6 +151,19 @@ impl core::fmt::Debug for ponko_ffi::PonkoAudioRolloff
 pub fn ponko_ffi::PonkoAudioRolloff::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_ffi::PonkoAudioRolloff
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoAudioRolloff
+#[repr(C)] pub enum ponko_ffi::PonkoAudioSessionCategory
+pub ponko_ffi::PonkoAudioSessionCategory::PONKO_AUDIO_SESSION_AMBIENT = 1
+pub ponko_ffi::PonkoAudioSessionCategory::PONKO_AUDIO_SESSION_PLAYBACK = 2
+pub ponko_ffi::PonkoAudioSessionCategory::PONKO_AUDIO_SESSION_SOLO_AMBIENT = 0
+impl core::clone::Clone for ponko_ffi::PonkoAudioSessionCategory
+pub fn ponko_ffi::PonkoAudioSessionCategory::clone(&self) -> Self
+impl core::cmp::Eq for ponko_ffi::PonkoAudioSessionCategory
+impl core::cmp::PartialEq for ponko_ffi::PonkoAudioSessionCategory
+pub fn ponko_ffi::PonkoAudioSessionCategory::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko_ffi::PonkoAudioSessionCategory
+pub fn ponko_ffi::PonkoAudioSessionCategory::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoAudioSessionCategory
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoAudioSessionCategory
 #[repr(C)] pub enum ponko_ffi::PonkoAuthorityCheck
 pub ponko_ffi::PonkoAuthorityCheck::PONKO_AUTHORITY_ACCEPT = 0
 pub ponko_ffi::PonkoAuthorityCheck::PONKO_AUTHORITY_AHEAD = 3
@@ -1768,8 +1781,11 @@ impl core::marker::StructuralPartialEq for ponko_ffi::PonkoWaterReflection
 pub ponko_ffi::PonkoWindowEventKind::PONKO_WINDOW_EVENT_CLOSE_REQUESTED = 2
 pub ponko_ffi::PonkoWindowEventKind::PONKO_WINDOW_EVENT_FILE_DROPPED = 3
 pub ponko_ffi::PonkoWindowEventKind::PONKO_WINDOW_EVENT_FOCUSED = 0
+pub ponko_ffi::PonkoWindowEventKind::PONKO_WINDOW_EVENT_LOW_MEMORY = 7
 pub ponko_ffi::PonkoWindowEventKind::PONKO_WINDOW_EVENT_MINIMIZED = 1
+pub ponko_ffi::PonkoWindowEventKind::PONKO_WINDOW_EVENT_RESUMED = 6
 pub ponko_ffi::PonkoWindowEventKind::PONKO_WINDOW_EVENT_SCALE_FACTOR_CHANGED = 4
+pub ponko_ffi::PonkoWindowEventKind::PONKO_WINDOW_EVENT_SUSPENDED = 5
 impl core::clone::Clone for ponko_ffi::PonkoWindowEventKind
 pub fn ponko_ffi::PonkoWindowEventKind::clone(&self) -> Self
 impl core::cmp::Eq for ponko_ffi::PonkoWindowEventKind
@@ -6587,6 +6603,8 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_audio_mixer_state(*mut ponko_ffi::PonkoCtx, *mut core::ffi::primitives::c_char, usize, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_audio_output_device(*mut ponko_ffi::PonkoCtx, *mut core::ffi::primitives::c_char, usize, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_audio_output_devices(*mut ponko_ffi::PonkoCtx, *mut core::ffi::primitives::c_char, usize, *mut usize) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_audio_session_category(*mut ponko_ffi::PonkoCtx, *mut u32) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_audio_set_session_category(*mut ponko_ffi::PonkoCtx, u32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_audio_snapshot_id(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, *mut u32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_audio_snapshot_weight(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, *mut f32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_audio_snapshot_weight_id(*mut ponko_ffi::PonkoCtx, u32, *mut f32) -> ponko_ffi::PonkoStatus
@@ -7498,7 +7516,10 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_window_close_requested(*mut ponko_ffi::PonkoCtx, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_window_event_count(*mut ponko_ffi::PonkoCtx, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_window_event_ex(*mut ponko_ffi::PonkoCtx, usize, *mut ponko_ffi::PonkoWindowEventEx, *mut core::ffi::primitives::c_char, usize, *mut usize) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_window_feed_keyboard_inset(*mut ponko_ffi::PonkoCtx, f32) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_window_feed_lifecycle(*mut ponko_ffi::PonkoCtx, u32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_window_feed_safe_insets(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoSafeInsets) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_window_keyboard_inset(*mut ponko_ffi::PonkoCtx, *mut f32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_window_mode_ex(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoWindowModeEx) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_window_monitor_count(*mut ponko_ffi::PonkoCtx, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_window_monitor_ex(*mut ponko_ffi::PonkoCtx, u32, *mut ponko_ffi::PonkoWindowMonitorEx) -> ponko_ffi::PonkoStatus
@@ -7522,6 +7543,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_window_set_title(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_window_size(*const ponko_ffi::PonkoCtx) -> ponko_ffi::PonkoVec2
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_window_state_ex(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoWindowStateEx) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_window_suspended(*mut ponko_ffi::PonkoCtx, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_window_title(*mut ponko_ffi::PonkoCtx, *mut core::ffi::primitives::c_char, usize, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_window_video_mode_count(*mut ponko_ffi::PonkoCtx, u32, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_window_video_mode_ex(*mut ponko_ffi::PonkoCtx, u32, u32, *mut ponko_ffi::PonkoWindowVideoModeEx) -> ponko_ffi::PonkoStatus
