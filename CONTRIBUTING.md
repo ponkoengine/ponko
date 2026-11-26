@@ -884,7 +884,10 @@ release branch (`v0.1.1` on `release-0.1`, see
       `web/gallery/README.md`), for a release that is the newest version
       (not for a candidate, nor for a patch of an older minor): build it for
       the tag and check every page in headless Chromium, then put the folder
-      on the `gh-pages` branch, which GitHub Pages serves:
+      on the `gh-pages` branch, which GitHub Pages serves
+      (its address is derived from `PROJECT_URL`; there is no CI, so the
+      maintainer pushes the branch by hand, and the gallery has no domain of
+      its own):
 
       ```sh
       node --test web/gallery/*.test.mjs web/smoke/gallery-lib.test.mjs
@@ -892,7 +895,10 @@ release branch (`v0.1.1` on `release-0.1`, see
       node web/smoke/gallery.mjs --dir target/web/gallery --browser chromium --backend webgl2
       ```
 
-      A failed page stops only the gallery, not the release.
+      Then push the branch with the commands in
+      [web/gallery/README.md](web/gallery/README.md#publishing) (one commit,
+      force-pushed), and open the address. A failed page stops only the
+      gallery, not the release.
 
 ### The C library archives
 

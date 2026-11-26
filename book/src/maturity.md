@@ -203,3 +203,4 @@ The level each top-level module of `ponko` gives in its rustdoc.
 - [API reference](api.md): Where the API reference is.
 - [Contributing](contributing.md): How to contribute.
 - [Workspace test coverage](test-coverage.md): How test coverage is measured.
+- [Check results: macOS](check-results/macos.md): A record of runs of the list of checks on a Mac.

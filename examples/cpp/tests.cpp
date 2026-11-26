@@ -2546,6 +2546,8 @@ static void messages() {
     throws([] { ponko::net_messages::steam_host(480, 0); });
     throws([] { ponko::net_messages::steam_join(480, 0); });
     throws([] { ponko::net_messages::steam_host(480, 2); }); // no Steam support/client in native test
+    throws([] { ponko::net_messages::steam_sockets_host(480, ponko::steam_lobby_visibility::public_lobby, 0); });
+    throws([] { ponko::net_messages::steam_sockets_host(480, ponko::steam_lobby_visibility::public_lobby, 2); });
     throws([] { ponko::steam_lobby::create(480, ponko::steam_lobby_visibility::private_lobby, 0); });
     throws([] { ponko::steam_lobby::create(480, ponko::steam_lobby_visibility::friends_only, 2); });
     throws([] { ponko::steam_lobby::join(480, 0); });
@@ -5675,13 +5677,18 @@ static void native_parity_round5() {
     CHECK(crowd_stats.steps == 10 && crowd_stats.agent_steps == 30 && crowd_stats.work > 0);
 
     // This thread's allocations, and a PONKO_PROFILE_SCOPE counting the ones made inside it.
+    // Each block is stored through `alloc_sink`, a volatile pointer: an optimizing build may
+    // otherwise remove a new/delete pair nothing else reads, and count nothing (C++14 lets
+    // the compiler elide such an allocation; clang does in a Release build).
+    static void* volatile alloc_sink = nullptr;
     ponko::game("c++ allocs", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
         ctx.set_profiling(true);
         ponko::alloc_counts before{}, after{};
         {
             PONKO_PROFILE_SCOPE("c++/alloc");
             before = ponko::thread_alloc_counts();
-            int* volatile boxed = new int(7); // counted (PONKO_COUNT_CPP_ALLOCATIONS); volatile: clang may drop a new/delete pair
+            auto* boxed = new int(7); // counted: PONKO_COUNT_CPP_ALLOCATIONS is on in this program
+            alloc_sink = boxed;
             after = ponko::thread_alloc_counts();
             delete boxed;
         }
@@ -5691,7 +5698,8 @@ static void native_parity_round5() {
         // earlier game left) give back meanwhile isn't in it, so the counts are exact.
         {
             const std::int64_t held = ponko::thread_net_alloc_bytes();
-            char* volatile block = new char[4096];
+            auto* block = new char[4096];
+            alloc_sink = block;
             const std::int64_t holding = ponko::thread_net_alloc_bytes();
             delete[] block;
             const std::int64_t released = ponko::thread_net_alloc_bytes();

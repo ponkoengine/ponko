@@ -867,7 +867,7 @@ jobs:
       # (RUSTDOCFLAGS denies them).
       - name: Docs with every public feature
         run: |
-          cargo doc -p ponko --no-deps --features physics,physics3d,physics-determinism,steam,3d,navmesh,accessibility,control-env,profiling,video,lobby,webrtc,editor
+          cargo doc -p ponko --no-deps --features physics,physics3d,physics-determinism,steam,3d,navmesh,accessibility,control-env,profiling,video,lobby,webrtc,mods-wasm,editor
           cargo doc -p ponko_ecs -p ponko_ffi --no-deps --all-features
 
   # The API of the published crates against the last crates.io release, with
@@ -1268,9 +1268,12 @@ jobs:
             echo "wasm-simd built without simd128" >&2; exit 1
           fi
           grep "needs the whole build compiled with SIMD" target/wasm-simd-refused.txt
+      # In RUSTFLAGS, not CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS: Cargo
+      # reads only the first of the two that is set, and the environment at
+      # the top sets RUSTFLAGS (web/build.sh --simd does the same).
       - name: Clippy, wasm-simd with simd128
         env:
-          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS: -C target-feature=+simd128
+          RUSTFLAGS: -D warnings -C target-feature=+simd128
         run: cargo clippy -p ponko --target wasm32-unknown-unknown --features 3d,wasm-simd --example web_spectrum -- -D warnings
       # The accessibility feature has no web adapter (AccessKit has none for
       # a canvas): it must build and do nothing.

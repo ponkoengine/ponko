@@ -11,6 +11,18 @@ fn steam_message_and_lobby_arguments_fail_before_initialization() {
             PonkoStatus::PONKO_INVALID_ARGUMENT
         );
         assert!(endpoint.is_null());
+        for (visibility, max_clients) in [(1, 0), (1, 250), (3, 4)] {
+            endpoint = std::ptr::dangling_mut();
+            assert_eq!(
+                ponko_net_messages_steam_sockets_host(480, visibility, max_clients, &mut endpoint),
+                PonkoStatus::PONKO_INVALID_ARGUMENT
+            );
+            assert!(endpoint.is_null());
+        }
+        assert_eq!(
+            ponko_net_messages_steam_sockets_host(480, 1, 1, std::ptr::null_mut()),
+            PonkoStatus::PONKO_INVALID_ARGUMENT
+        );
         assert_eq!(
             ponko_net_messages_steam_join(480, 0, &mut endpoint),
             PonkoStatus::PONKO_INVALID_ARGUMENT

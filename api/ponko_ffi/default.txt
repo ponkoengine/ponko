@@ -7956,6 +7956,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_net_messages_steam_lobby_metadata(*mut ponko_ffi::PonkoNetMessages, *const core::ffi::primitives::c_char, *mut core::ffi::primitives::c_char, usize, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_net_messages_steam_lobby_set_metadata(*mut ponko_ffi::PonkoNetMessages, *const core::ffi::primitives::c_char, *const core::ffi::primitives::c_char) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_net_messages_steam_peer(*mut ponko_ffi::PonkoNetMessages, u64, *mut u64) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_net_messages_steam_sockets_host(u32, u32, usize, *mut *mut ponko_ffi::PonkoNetMessages) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub c fn ponko_ffi::ponko_note_allocation(usize)
 #[no_mangle] pub c fn ponko_ffi::ponko_note_deallocation(usize)
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_orbit_camera_defaults(*mut ponko_ffi::PonkoOrbitCamera) -> ponko_ffi::PonkoStatus

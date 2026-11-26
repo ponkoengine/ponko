@@ -155,9 +155,26 @@ def candidate_preamble(version):
             "unchanged if no regression turns up.\n\n")
 
 
+def project_url(root=ROOT):
+    """The project's URL from PROJECT_URL (https, host, owner, repository)."""
+    url = (root / "PROJECT_URL").read_text(encoding="utf-8").strip()
+    if not re.fullmatch(r"https://[^\s/]+(/[^\s/]+)+", url):
+        sys.exit(f"PROJECT_URL must be one https URL without a trailing slash, got {url!r}")
+    return url
+
+
+def pages_url(url):
+    """Where GitHub Pages serves a repository's gh-pages branch: https://<owner>.github.io/<repository>/."""
+    m = re.fullmatch(r"https://github\.com/([^/]+)/([^/]+)", url)
+    if not m:
+        sys.exit(f"no GitHub Pages address for {url}: PROJECT_URL is not https://github.com/<owner>/<repository>")
+    return f"https://{m.group(1).lower()}.github.io/{m.group(2)}/"
+
+
 # The web gallery of the examples (web/gallery/README.md), which the
-# maintainer publishes for a release that is the newest version.
-GALLERY_URL = "https://ponkoengine.github.io/ponko/"
+# maintainer publishes for a release that is the newest version. Its address
+# follows PROJECT_URL (the same rule as web/gallery/lib.mjs).
+GALLERY_URL = pages_url(project_url())
 
 
 def gallery_line(version):
@@ -577,6 +594,15 @@ def selftest():
     assert release_branch("1.4.2") == "release-1.4"
     assert candidate_preamble("0.3.0-rc.1").startswith("Release candidate of 0.3.0, for testing.")
     assert GALLERY_URL in gallery_line("0.3.0"), "a release's notes link the web gallery"
+    assert pages_url("https://github.com/Some-Org/proj") == "https://some-org.github.io/proj/"
+    assert GALLERY_URL == pages_url((ROOT / "PROJECT_URL").read_text(encoding="utf-8").strip()), "the gallery follows PROJECT_URL"
+    for bad in ("https://git.example.test/o/r", "https://github.com/o/r/extra"):
+        try:
+            pages_url(bad)
+        except SystemExit as e:
+            assert "no GitHub Pages address" in str(e), e
+        else:
+            raise AssertionError(f"{bad} has no Pages address")
     assert gallery_line("0.3.0-rc.1") is None, "a candidate publishes no gallery, so its notes don't link one"
     assert "ponko = \"0.3.0-rc.1\"" in candidate_preamble("0.3.0-rc.1")
     assert untagged({"ponko": ["0.0.1", "0.0.2"], "ponko_ecs": ["0.0.1"]}, {"v0.0.1"}) == [
