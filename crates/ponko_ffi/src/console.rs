@@ -107,22 +107,32 @@ unsafe fn view<'a, T>(data: *const T, len: usize) -> Result<&'a [T], Failure> {
     Ok(unsafe { slice::from_raw_parts(data, len) })
 }
 
-unsafe fn value_of(value: &PonkoConsoleValue) -> Result<ConsoleValue, Failure> {
-    Ok(match kind(value.kind)? {
-        ConsoleType::Text => {
-            // SAFETY: the caller provides readable UTF-8 bytes for text.
-            let bytes = unsafe { view(value.text.cast(), value.text_len) }?;
-            ConsoleValue::Text(
-                str::from_utf8(bytes)
-                    .map_err(|_| invalid("console text is not UTF-8"))?
-                    .to_owned(),
-            )
-        }
-        ConsoleType::Integer => ConsoleValue::Integer(value.integer),
-        ConsoleType::Float => ConsoleValue::Float(value.number),
-        ConsoleType::Bool => ConsoleValue::Bool(value.flag),
-        _ => return Err(invalid("unknown console value type")),
-    })
+unsafe fn value_of(value: *const PonkoConsoleValue) -> Result<ConsoleValue, Failure> {
+    if value.is_null() {
+        return Err(invalid("console variable value is null"));
+    }
+    // SAFETY: the caller supplies an initialized kind and the fields for
+    // that kind. Read those fields by pointer so unused fields may be
+    // uninitialized in a C descriptor.
+    unsafe {
+        Ok(match kind((&raw const (*value).kind).read())? {
+            ConsoleType::Text => {
+                let bytes = view(
+                    (&raw const (*value).text).read().cast(),
+                    (&raw const (*value).text_len).read(),
+                )?;
+                ConsoleValue::Text(
+                    str::from_utf8(bytes)
+                        .map_err(|_| invalid("console text is not UTF-8"))?
+                        .to_owned(),
+                )
+            }
+            ConsoleType::Integer => ConsoleValue::Integer((&raw const (*value).integer).read()),
+            ConsoleType::Float => ConsoleValue::Float((&raw const (*value).number).read()),
+            ConsoleType::Bool => ConsoleValue::Bool((&raw const (*value).flag).read()),
+            _ => return Err(invalid("unknown console value type")),
+        })
+    }
 }
 
 /// A reply slot borrowed for one command callback.
@@ -249,7 +259,8 @@ pub unsafe extern "C" fn ponko_console_reply_text(
 ///
 /// # Safety
 /// `game` is null or live; variable and help are NUL-terminated UTF-8.
-/// `initial` is null or a readable value, including its text buffer.
+/// `initial` is null or points to a value with its kind and matching fields
+/// initialized, including a readable buffer for text.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ponko_game_console_variable(
     game: *mut PonkoGame,
@@ -260,12 +271,7 @@ pub unsafe extern "C" fn ponko_game_console_variable(
     // SAFETY: forwarded builder and value contracts.
     unsafe {
         build(game, |game| {
-            let registration = || {
-                let initial = initial
-                    .as_ref()
-                    .ok_or_else(|| invalid("console variable value is null"))?;
-                Ok((name(variable)?, name(help)?, value_of(initial)?))
-            };
+            let registration = || Ok((name(variable)?, name(help)?, value_of(initial)?));
             match registration() {
                 Ok((variable, help, initial)) => ok(game.console_variable(variable, help, initial)),
                 Err(e) => (game, Err(e)),

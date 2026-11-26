@@ -97,14 +97,13 @@ fn native_console_copies_registration_and_dispatches_typed_values_on_headless_fr
                 .contains("console input")
         );
         let mut text = *b"Ready";
-        let initial = PonkoConsoleValue {
-            kind: PONKO_CONSOLE_TEXT as u32,
-            text: text.as_ptr().cast(),
-            text_len: text.len(),
-            ..Default::default()
-        };
+        let mut initial = std::mem::MaybeUninit::<PonkoConsoleValue>::uninit();
+        let initial = initial.as_mut_ptr();
+        (&raw mut (*initial).kind).write(PONKO_CONSOLE_TEXT as u32);
+        (&raw mut (*initial).text).write(text.as_ptr().cast());
+        (&raw mut (*initial).text_len).write(text.len());
         assert_eq!(
-            ponko_game_console_variable(game, c"label".as_ptr(), c"Label".as_ptr(), &initial),
+            ponko_game_console_variable(game, c"label".as_ptr(), c"Label".as_ptr(), initial),
             PONKO_OK
         );
         text[0] = b'X';
