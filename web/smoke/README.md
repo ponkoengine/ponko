@@ -125,8 +125,9 @@ node web/smoke/runtime-failures.mjs --case device-lost --chromium-mode new \
   `reason` `Destroyed` (`Unknown` when the browser lost it first, as the
   page's own `device.lost` says), and the engine's message for that reason
   with the browser's words in it (“The WebGPU device was destroyed while
-  the game was running: Device was destroyed.”). Where the game opened no WebGPU device (the
-  browser has none, so it runs on WebGL2) the case is unsupported, not
+  the game was running: Device was destroyed.”). Where the game draws no WebGPU canvas (the
+  browser has no WebGPU, or can't present one, as Chromium's headless shell
+  on a Mac can't, so the game runs on WebGL2) the case is unsupported, not
   failed; a run where every case was unsupported exits 2, or 0 with
   `--allow-unsupported`. Chromium's headless shell can't present a WebGPU
   canvas and loses the device by itself before the runner does; the run
@@ -296,7 +297,7 @@ its `report.json` has the tab's last state, its console and the server's
 output) and `--run-timeout <s>` (default 120; a run takes a few seconds once
 built). The page runs on WebGL2 (WebGPU hidden): the test is about the
 network. `replication.test.mjs` tests its checks without a browser. Checked
-so far in Chromium 156 (headless shell) on an Apple Silicon Mac.
+so far in Chromium 159 (headless shell) on an Apple Silicon Mac.
 
 ## The web gallery
 
@@ -411,7 +412,7 @@ node web/smoke/threads.mjs --bench --workloads par,sweep --repeat 3
 Exit codes and `report.json` (in `--out`, default
 `target/web-smoke/threads`) are as for `smoke.mjs`. `threads.test.mjs`
 tests its checks and its summary without a browser. Checked so far in
-Chromium 156 (headless shell) on an Apple Silicon Mac; Firefox and WebKit
+Chromium 159 (headless shell) on an Apple Silicon Mac; Firefox and WebKit
 are not tried yet.
 
 ## Spectrum
@@ -602,23 +603,20 @@ table.
 | The list of checks (`web-smoke-runner`) | none | the runner's own tests only (and the gallery's) | |
 | The list of checks (`web-gpu` job, a Mac with its GPU) | Chromium new headless mode | Must pass on the GPU for the 3D fixture (`--require-gpu`: ANGLE on Metal, no software renderer) | **Must pass** on the GPU for the 2D and 3D fixtures (`--require-gpu`); unsupported, a fallback to WebGL2 or a software adapter fails; then `frame-times.mjs` once per backend |
 | A release (the gallery check, Ubuntu, no GPU) | Chromium headless shell | Every gallery page must pass (software GL) | Not tried; the demos that need WebGPU must show their message |
-| Apple Silicon Mac, the gallery (`gallery.mjs`) | Chromium 156 | Every page passes in the headless shell; the 2 demos that need WebGPU (compute passes) show their message | Every page passes in new headless mode on the Metal adapter |
-| Apple Silicon Mac, Chromium new headless mode | Chromium 156 | Passes (ANGLE on Metal) | **Passes** on the Metal adapter: the engine reports `webgpu`, the canvas draws |
-| Apple Silicon Mac, `webgpu-fallback.mjs` (3D fixture) | Chromium 156 new headless mode | Each of the five faked failures ends on WebGL2 and draws the scene, with its one console line | Passes on the Metal adapter and on SwiftShader (`--use-webgpu-adapter=swiftshader`): the same scene, `ponko: drawing with WebGPU` |
+| Apple Silicon Mac, the gallery (`gallery.mjs`) | Chromium 159 | Every page passes in the headless shell; the 2 demos that need WebGPU (compute passes) show their message | Every page passes in new headless mode on the Metal adapter |
+| Apple Silicon Mac, Chromium new headless mode | Chromium 159 | Passes (ANGLE on Metal) | **Passes** on the Metal adapter: the engine reports `webgpu`, the canvas draws |
+| Apple Silicon Mac, `webgpu-fallback.mjs` (3D fixture) | Chromium 159 new headless mode | Each of the five faked failures ends on WebGL2 and draws the scene, with its one console line | Passes on the Metal adapter and on SwiftShader (`--use-webgpu-adapter=swiftshader`): the same scene, `ponko: drawing with WebGPU` |
 | Apple Silicon Mac, Chromium headless shell | same | Passes (ANGLE on SwiftShader) | Unsupported: a SwiftShader fallback adapter exists, but a WebGPU canvas can't be shown. With `--backend auto` the engine's test frame fails and the game draws with WebGL2 |
 | Apple Silicon Mac, Chromium new headless mode, SwiftShader (`--use-webgpu-adapter=swiftshader`) | same | | The 2D fixture passes. The 3D fixture fails as a `stall`: on a busy machine the software adapter's first 3D frames block the page for 5 to 20 s, then it runs at about 3 frames a second (`book/src/check-results/macos.md`, 2026-11-26) |
-| Apple Silicon Mac, `multiplayer.mjs` | Chromium 156 headless shell | Passes: two tabs, a native host and a native UDP client agree on the world at tick 300 | Not tried (WebGPU is hidden) |
-| Apple Silicon Mac, WebKit (Playwright build) | WebKit 27 | Passes | Passes on its own adapter |
-| Apple Silicon Mac, `cpp.mjs` | Chromium 156 headless shell | Passes: the guide's C++ game starts in 0.5 s (a busy machine), draws its crab and moves it 200 px in the second ArrowRight is held | Not tried (WebGPU is hidden: the headless shell can't present it) |
-| Apple Silicon Mac, `threads.mjs` | Chromium 156 headless shell | Passes on whichever backend the page picks (the check is about threads, not drawing): workers on the isolated page, one thread without the headers, the same world; a worker's panic stops the game | Not tried on its own |
+| Apple Silicon Mac, `multiplayer.mjs` | Chromium 159 headless shell | Passes: two tabs, a native host and a native UDP client agree on the world at tick 300 | Not tried (WebGPU is hidden) |
+| Apple Silicon Mac, WebKit (Playwright build) | WebKit 27.2 | Passes | Passes on its own adapter |
+| Apple Silicon Mac, Firefox (Playwright build) | Firefox 159.0 (`firefox-1572`, playwright-core 1.65.1) | Passes for the 2D and 3D fixtures (Apple GPU through WebGL2); `--backend auto` passes on WebGL2 | Unsupported: headless Firefox has no WebGPU adapter there |
+| Apple Silicon Mac, `cpp.mjs` | Chromium 159 headless shell | Passes: the guide's C++ game starts in 0.5 s (a busy machine), draws its crab and moves it 200 px in the second ArrowRight is held | Not tried (WebGPU is hidden: the headless shell can't present it) |
+| Apple Silicon Mac, `threads.mjs` | Chromium 159 headless shell | Passes on whichever backend the page picks (the check is about threads, not drawing): workers on the isolated page, one thread without the headers, the same world; a worker's panic stops the game | Not tried on its own |
 
-Not covered yet: Firefox on a Mac with the Playwright build the lockfile
-pins (playwright-core 1.64.1, Firefox 157 Nightly, `firefox-1555`: on macOS
-27.2 it exits at once with "Could not find profile folder." for any profile;
-the Firefox 159 of playwright-core 1.65.1, `firefox-1572`, starts and passes
-the WebGL2 steps there; #601), Firefox on a GPU-less Linux machine (no WebGL2),
-WebGPU on a GPU-less Linux machine (the `web-smoke` job tries it and
-reports), and mobile browsers.
+Not covered yet: Firefox on a GPU-less Linux machine (no WebGL2), WebGPU on
+a GPU-less Linux machine (the `web-smoke` job tries it and reports), and
+mobile browsers.
 
 ## First-load cost
 

@@ -319,13 +319,16 @@ function watchAudio(mode) {
   Object.defineProperty(window, "__smokeAudio", { value: seen });
   const Original = window.AudioContext;
   if (!Original) return;
+  if (mode === "zero-channels") {
+    // On the prototype, not on one context's destination: WebKit may hand
+    // out a new wrapper object for `destination` once the first was
+    // collected, which would show the real channel count again.
+    Object.defineProperty(AudioDestinationNode.prototype, "maxChannelCount", { get: () => 0, configurable: true });
+  }
   window.AudioContext = class extends Original {
     constructor(...options) {
       super(...options);
       seen.contexts.push(this);
-      if (mode === "zero-channels") {
-        Object.defineProperty(this.destination, "maxChannelCount", { get: () => 0 });
-      }
     }
     resume() {
       if (mode === "resume-rejected") return Promise.reject(new Error("smoke audio resume refused"));
