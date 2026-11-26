@@ -3925,6 +3925,11 @@ mod tests {
             assert_ne!(before, observable(&p, &ctx), "{button} did nothing");
             assert!(check(&p, &ctx), "{button}: {}", observable(&p, &ctx));
         }
+        // The hierarchy's own button.
+        let (egui, mut p, mut ctx, _) = busy_editor(&file);
+        let count = ctx.world.len();
+        click_text(&egui, &mut p, &mut ctx, |t| t == "+ entity");
+        assert_eq!(ctx.world.len(), count + 1, "+ entity");
         // The view switch: 3D is there only in games built with `3d`.
         let (egui, mut p, mut ctx, _) = busy_editor(&file);
         click_text(&egui, &mut p, &mut ctx, |t| t == "3D");
