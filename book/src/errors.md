@@ -253,6 +253,26 @@ ponko: red.wgsl:3:12: error: automatic conversions cannot convert `{AbstractFloa
   = variant: material shader with decals, global illumination and instance storage
 ```
 
+The message names the types, functions and variables as your WGSL writes
+them. A sprite shader whose `fragment` hook returns three components
+instead of four:
+
+```text
+glow.wgsl:3:12: error: `fragment` returns `vec3<f32>` but is declared to return `vec4<f32>`
+        return mix(p.color.rgb, vec3<f32>(1.0), glow);
+               ^ `mix(p.color.rgb, vec3<f32>(1.0), glow)` is `vec3<f32>`
+  = note: in `fn fragment`
+  = variant: sprite
+```
+
+The usual type mistakes read the same way: a call's argument against the
+parameter it is passed to (``argument 1 of `brighten` (`p.color.rgb`) is
+`vec3<f32>`, but its parameter `c` is `vec4<f32>` ``), an operation on two
+types that don't go together (`` `*` can't combine `vec4<f32>` (`p.color`)
+and `i32` (`steps`) ``, with the conversion to write), an assignment, an
+`if` condition, an index, a uniform buffer's layout. A rarer error keeps the
+compiler's own words, without its internal numbering.
+
 It reaches the terminal as the panic of `create_shader` or `load_shader`, as
 the notice of a watched file that draws with a stand-in until it compiles,
 and as the notice of a hot reload that kept the previous version. A `try_`

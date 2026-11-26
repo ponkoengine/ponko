@@ -66,7 +66,9 @@ Where it got stuck, and what changed for it in the same pull request:
 - `broken-shader`: `shader_status` gave the right line, column and source
   line, but naga's message names IR handles, not types ("the `return`
   expression Some([10]) does not match the declared return type
-  Some([5])"); the agent fixed it from the source line. Filed as #629.
+  Some([5])"); the agent fixed it from the source line. Filed as #629;
+  the message now names the types ("`fragment` returns `vec3<f32>` but is
+  declared to return `vec4<f32>`").
 - `immortal-enemy`, `slow-crowd`: no friction.
 
 Compared with the scripted solutions, the agent made the same fix in every

@@ -8,7 +8,9 @@
 //! source text (`p.color.rgb`). The errors people meet most get a message of
 //! their own; any other keeps naga's text, with the handles taken out.
 
-use wgpu::naga;
+// The parent module's `naga`: the engine's (wgpu's) or `ponko cook`'s, which
+// keeps a copy of this file (`crates/ponko_cli/src/cook/shaders/names.rs`).
+use super::naga;
 
 use naga::common::wgsl::TypeContext;
 use naga::proc::TypeResolution;

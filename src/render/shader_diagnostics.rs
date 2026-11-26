@@ -209,6 +209,22 @@ mod cook_rules {
              PONKO_UPDATE_COOK_SHADERS=1 cargo test --lib the_cooks_shader_rules_are_the_engines"
         );
     }
+
+    /// `ponko cook` words validation errors as the engine does: its copy
+    /// (`crates/ponko_cli/src/cook/shaders/names.rs`) is `shader_diagnostics/names.rs`.
+    #[test]
+    fn the_cooks_error_names_are_the_engines() {
+        let engine = include_str!("shader_diagnostics/names.rs");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/ponko_cli/src/cook/shaders/names.rs");
+        if std::env::var_os("PONKO_UPDATE_COOK_SHADERS").is_some() {
+            std::fs::write(&path, engine).unwrap();
+        }
+        assert!(
+            std::fs::read_to_string(&path).ok().as_deref() == Some(engine),
+            "ponko cook's copy of the shader error names is out of date: run \
+             PONKO_UPDATE_COOK_SHADERS=1 cargo test --lib the_cooks_error_names_are_the_engines"
+        );
+    }
 }
 
 /// Validation errors name types, functions and expressions as the source
@@ -495,13 +511,42 @@ mod tests {
     }
 
     #[test]
+    fn validation_errors_name_the_types_in_the_games_words() {
+        let user = "fn surface(s: Surface) -> Surface {\n    var out = s;\n    out.albedo = s.albedo * s.uv;\n    return out;\n}";
+        let d = diagnose("water.wgsl", ShaderKind::Material, "material", &compose_shader(user)).unwrap_err();
+        assert!(!d.in_engine_code, "{d}");
+        assert_eq!((d.line, d.column), (Some(3), Some(18)), "{d}");
+        assert!(
+            d.message
+                .starts_with("`*` can't combine `vec3<f32>` (`s.albedo`) and `vec2<f32>` (`s.uv`)"),
+            "{d}"
+        );
+        assert_eq!(d.notes, ["in `fn surface`"], "{d}");
+        let effect = "fn effect(p: Pixel) -> vec4<f32> {\n    return p.color.rgb;\n}";
+        let d = diagnose("fx.wgsl", ShaderKind::Effect, "effect", &compose_effect(effect)).unwrap_err();
+        assert_eq!(d.line, Some(2), "{d}");
+        assert_eq!(
+            d.message, "`effect` returns `vec3<f32>` but is declared to return `vec4<f32>`",
+            "{d}"
+        );
+    }
+
+    #[test]
     fn validator_errors_have_their_causes() {
         // Parses, but the validator rejects it: a function that never returns.
         let user = "fn helper() -> f32 {\n}\nfn surface(s: Surface) -> Surface { return s; }";
         let d = diagnose("v.wgsl", ShaderKind::Material, "material", &compose_shader(user)).unwrap_err();
-        assert!(!d.message.is_empty(), "{d}");
-        assert!(d.message.contains(": "), "the cause follows: {d}");
-        assert!(d.line.is_some(), "{d}");
+        assert_eq!(
+            d.message, "`helper` is declared to return `f32` but returns without a value",
+            "{d}"
+        );
+        assert_eq!(d.line, Some(1), "{d}");
+        // An error with no message of its own keeps the compiler's causes,
+        // from the outside in.
+        let user = "fn helper() {\n    return 1.0;\n}\nfn surface(s: Surface) -> Surface { helper(); return s; }";
+        let d = diagnose("v.wgsl", ShaderKind::Material, "material", &compose_shader(user)).unwrap_err();
+        assert!(d.message.starts_with("in `fn helper`: "), "the cause follows: {d}");
+        assert_eq!(d.line, Some(2), "{d}");
     }
 
     #[test]
