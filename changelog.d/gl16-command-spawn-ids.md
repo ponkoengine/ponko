@@ -10,6 +10,8 @@
   ```
   After:
   ```rust
+  # #[derive(Component)] struct Marker;
+  # let game = Game::new("g", 1, 1);
   game.sim_system(|ctx: &mut Ctx| {
       ctx.commands.spawn((Marker,));
   });
@@ -29,6 +31,7 @@
   ```
   After:
   ```rust
+  # #[derive(Component)] struct Marker;
   let mut commands = world.commands();
   commands.spawn((Marker,));
   world.apply(&mut commands);

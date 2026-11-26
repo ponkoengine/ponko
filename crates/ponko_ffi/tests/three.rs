@@ -1607,3 +1607,106 @@ fn model_material_overrides_are_set_read_and_cleared_from_c() {
     }
     assert_eq!(errors, vec![PONKO_INVALID_ARGUMENT; 12]);
 }
+
+unsafe extern "C" fn icons(ctx: *mut PonkoCtx, user: *mut c_void) {
+    unsafe {
+        let errors = &mut *user.cast::<Vec<PonkoStatus>>();
+        let mut white = PonkoMaterial::default();
+        assert_eq!(ponko_ctx_default_material(ctx, &mut white), PONKO_OK);
+        let cube = ponko_mesh_data_cube(1.0);
+        let mut mesh = PonkoMesh::default();
+        assert_eq!(ponko_ctx_create_mesh(ctx, cube, white, &mut mesh), PONKO_OK);
+        ponko_mesh_data_free(cube);
+        let mut icon: PonkoIcon = std::mem::zeroed();
+        (icon.struct_size, icon.version) = (size_of::<PonkoIcon>() as u32, PONKO_ICON_VERSION);
+        assert_eq!(ponko_icon_defaults(48, &mut icon), PONKO_OK);
+        assert_eq!((icon.size, icon.exposure, icon.fov_y), (48, 1.0, 0.5));
+        assert_eq!((icon.background.a, icon.color.r), (0.0, 1.0));
+        icon.background = PonkoColor {
+            r: 0.1,
+            g: 0.1,
+            b: 0.2,
+            a: 1.0,
+        };
+        let mut image = PonkoTexture {
+            id: 0,
+            width: 0,
+            height: 0,
+        };
+        let parts = [0u32];
+        let materials = [white];
+        assert_eq!(
+            ponko_ctx_render_icon(ctx, mesh, &icon, parts.as_ptr(), materials.as_ptr(), 1, &mut image),
+            PONKO_OK
+        );
+        assert_eq!((image.width, image.height), (48, 48));
+        let mut plain = PonkoTexture {
+            id: 0,
+            width: 0,
+            height: 0,
+        };
+        assert_eq!(
+            ponko_ctx_render_icon(ctx, mesh, &icon, null(), null(), 0, &mut plain),
+            PONKO_OK
+        );
+        assert_ne!(plain.id, image.id, "each icon is a target of its own");
+        // Errors: a size of 0, no direction, a field of view of 0, a mesh
+        // that isn't live, parts without materials, a stranger material.
+        let bad = |change: &dyn Fn(&mut PonkoIcon)| {
+            let mut i = icon;
+            change(&mut i);
+            i
+        };
+        let mut out = image;
+        for wrong in [
+            bad(&|i| i.size = 0),
+            bad(&|i| i.from = v3(0.0, 0.0, 0.0)),
+            bad(&|i| i.fov_y = 0.0),
+        ] {
+            errors.push(ponko_ctx_render_icon(ctx, mesh, &wrong, null(), null(), 0, &mut out));
+        }
+        errors.push(ponko_ctx_render_icon(
+            ctx,
+            PonkoMesh { id: 999 },
+            &icon,
+            null(),
+            null(),
+            0,
+            &mut out,
+        ));
+        errors.push(ponko_ctx_render_icon(
+            ctx,
+            mesh,
+            &icon,
+            parts.as_ptr(),
+            null(),
+            1,
+            &mut out,
+        ));
+        let stranger = [PonkoMaterial { id: 777 }];
+        errors.push(ponko_ctx_render_icon(
+            ctx,
+            mesh,
+            &icon,
+            parts.as_ptr(),
+            stranger.as_ptr(),
+            1,
+            &mut out,
+        ));
+        errors.push(ponko_ctx_render_icon(ctx, mesh, null(), null(), null(), 0, &mut out));
+        assert_eq!(out, image, "nothing written on an error");
+    }
+}
+
+#[test]
+fn icons_are_made_from_c_and_bad_settings_are_errors() {
+    let mut errors: Vec<PonkoStatus> = Vec::new();
+    unsafe {
+        let g = ponko_game_new(c"icons".as_ptr(), 64, 64);
+        let mut world = null_mut();
+        let user = (&raw mut errors).cast();
+        assert_eq!(ponko_game_run_headless(g, 1, Some(icons), user, &mut world), PONKO_OK);
+        ponko_world_free(world);
+    }
+    assert_eq!(errors, vec![PONKO_INVALID_ARGUMENT; 7]);
+}

@@ -1508,6 +1508,18 @@ inline target_camera_ex target_camera_ex_of(const target_camera& t) {
     return x;
 }
 
+/// How ctx::render_icon draws a model (Rust `Icon`): `size`, `from` (where the camera is, seen from the
+/// model's center), `fov_y`, `exposure`, `background` (default transparent) and `color` (a tint).
+using icon = PonkoIcon;
+/// An icon `size` pixels wide and high, with the defaults for the rest (Rust `Icon::new`).
+inline icon icon_of(std::uint32_t size) {
+    icon x{};
+    x.struct_size = sizeof(icon);
+    x.version = PONKO_ICON_VERSION;
+    detail::check(ponko_icon_defaults(size, &x));
+    return x;
+}
+
 /// The levels of an instance batch drawing copies of a LOD group the way the group would (Rust
 /// `LodGroup::instance_levels`): `levels` as for ctx::set_lod_group, each copy scaled by `scale`, for a
 /// camera of vertical field of view `fov_y`, under `settings`. std::nullopt when the group can't be a
@@ -8814,6 +8826,21 @@ public:
     /// `Graphics::create_mipmapped_render_target`). A third more memory.
     ponko::render_target create_mipmapped_render_target(std::uint32_t w, std::uint32_t h) {
         ponko::render_target t{}; detail::check(ponko_ctx_create_mipmapped_render_target(raw_, w, h, &t)); return t;
+    }
+    /// Draws `m` into a new square render target that keeps the picture, for a UI image: an item icon
+    /// (Rust `Graphics::render_icon`). Framed to fill it, seen from `settings.from`, lit by the scene's sun
+    /// and sky light only, tone mapped, on `settings.background`; nothing of the world is in it and
+    /// nothing is added to it. Drawn in the next two frames. `parts` are `{part, material}` pairs as
+    /// set_model_part_materials takes. Throws for a mesh that isn't live or a bad size, direction or
+    /// field of view.
+    ponko::render_target render_icon(mesh m, const icon& settings,
+                                     const std::vector<std::pair<std::uint32_t, material>>& parts = {}) {
+        std::vector<std::uint32_t> numbers;
+        std::vector<material> materials;
+        for (const auto& [part, mat] : parts) { numbers.push_back(part); materials.push_back(mat); }
+        ponko::render_target t{};
+        detail::check(ponko_ctx_render_icon(raw_, m, &settings, numbers.data(), materials.data(), parts.size(), &t));
+        return t;
     }
     /// `t` as the render target it is: the `target` of a target_camera,
     /// compute_pass or target_effect read back from the engine is a plain

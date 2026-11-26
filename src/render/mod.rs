@@ -466,6 +466,8 @@ mod gpu_memory_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod handle_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
+mod icon_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
 mod legions_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod light_shadow_render_test;
@@ -653,7 +655,7 @@ pub use crate::three::MaterialLayers;
 pub use crate::three::{
     AmbientOcclusion, AntiAliasing, AutoExposure, BatchCulling, Blend, Compute, ComputePass, Crowd, CrowdAnimation,
     CrowdClip, CrowdInstance, CrowdLevel, CrowdOptions, DepthOfField, Effect, GlobalIllumination, GpuBuffer,
-    GraphicsQuality, InstanceBatch, InstanceBatchOptions, InstanceLevel, Lighting, LodFadeTime, LodGroup,
+    GraphicsQuality, Icon, InstanceBatch, InstanceBatchOptions, InstanceLevel, Lighting, LodFadeTime, LodGroup,
     LodHysteresis, LodLevel, LodPick, LodRenderer, LodSettings, LodShadow, MAX_CROWD_INSTANCES, MAX_CROWD_LEVELS,
     Material, MaterialDesc, Mesh, MeshCost, MeshData, Model, ModelCamera, ModelLight, ModelLightKind, ModelMaterial,
     ModelMaterials, ModelProjection, Post, PostVolume, ReceivesDecals, RenderPasses, RenderTarget, SceneSettings,

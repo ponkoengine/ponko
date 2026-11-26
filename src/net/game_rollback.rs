@@ -78,7 +78,7 @@ pub(crate) struct GameState {
     #[cfg(feature = "physics")]
     pub(crate) physics: crate::physics::PhysicsState,
     #[cfg(feature = "physics3d")]
-    pub(crate) physics3d: crate::physics3d::Physics3DState,
+    pub(crate) physics3d: crate::physics3d_impl::Physics3DState,
     /// The world's hash, on the ticks checksums compare.
     pub(crate) hash: Option<u64>,
     /// How many change ticks before the save each simulation system last

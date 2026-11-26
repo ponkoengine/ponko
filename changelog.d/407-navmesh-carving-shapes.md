@@ -10,6 +10,8 @@
   ```
   After:
   ```rust
+  use ponko::d3::NavObstacle;
+  # let (center, half_extents) = (Vec3::ZERO, Vec3::ONE);
   let mut obstacle = NavObstacle::new(center, half_extents);
   obstacle.carve = true;
   ```
