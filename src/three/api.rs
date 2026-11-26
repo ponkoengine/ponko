@@ -1721,6 +1721,9 @@ impl Graphics {
     /// somewhere else (a teleport, a new scene), so the old view does not
     /// blend into the new one. Call this after teleporting objects too:
     /// on this frame no model has motion (the old position is not its past).
+    /// Auto exposure ([`Post::auto_exposure`](crate::render::Post::auto_exposure))
+    /// starts over at the exposure the new view needs, instead of adapting
+    /// to it.
     ///
     /// The engine resets by itself on a window resize or render scale
     /// change, when temporal antialiasing or another screen effect is

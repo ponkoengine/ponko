@@ -4169,6 +4169,15 @@ pub fn ponko_ffi::PonkoPost::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::
 impl core::marker::Copy for ponko_ffi::PonkoPost
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoPost
 #[repr(C)] pub struct ponko_ffi::PonkoPostEx
+pub ponko_ffi::PonkoPostEx::auto_exposure: bool
+pub ponko_ffi::PonkoPostEx::auto_exposure_brighten_speed: f32
+pub ponko_ffi::PonkoPostEx::auto_exposure_center_weight: f32
+pub ponko_ffi::PonkoPostEx::auto_exposure_compensation: f32
+pub ponko_ffi::PonkoPostEx::auto_exposure_darken_speed: f32
+pub ponko_ffi::PonkoPostEx::auto_exposure_has_mask: bool
+pub ponko_ffi::PonkoPostEx::auto_exposure_mask: ponko_ffi::PonkoTexture
+pub ponko_ffi::PonkoPostEx::auto_exposure_max: f32
+pub ponko_ffi::PonkoPostEx::auto_exposure_min: f32
 pub ponko_ffi::PonkoPostEx::dof_blur: f32
 pub ponko_ffi::PonkoPostEx::dof_enabled: bool
 pub ponko_ffi::PonkoPostEx::dof_focus_distance: f32
