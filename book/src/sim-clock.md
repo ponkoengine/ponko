@@ -346,5 +346,6 @@ At least three post-warm-up readings are needed for each available metric.
 | Frame p99 | 2 ms/h | 10 ms |
 
 A slope above its bound fails the command and writes a graph of that metric
-beside the report. Include the graph, measured slope and bound, game,
+beside the report. To judge saved samples again (after a change to the
+bounds, say), pass the same options plus `--evaluate`; nothing runs. Include the graph, measured slope and bound, game,
 revision, adapter, operating system and command when filing the growth.

@@ -149,6 +149,18 @@ def build(games, cargo):
             raise subprocess.CalledProcessError(code, command)
 
 
+def read_samples(raw):
+    if not raw.exists():
+        return []
+    return [json.loads(line) for line in raw.read_text(encoding="utf-8").splitlines()]
+
+
+def reevaluate(game, args):
+    """The exit code is not saved, so only the samples are judged again."""
+    out = args.out.resolve() / game
+    return evaluate(out, game, read_samples(out / "samples.jsonl"), args, 0)
+
+
 def run_game(game, binary, args):
     out = args.out.resolve() / game
     out.mkdir(parents=True, exist_ok=False)
@@ -164,11 +176,7 @@ def run_game(game, binary, args):
                                       timeout=args.seconds + 60, check=False).returncode
             except subprocess.TimeoutExpired:
                 code = "timeout"
-    rows = []
-    if raw.exists():
-        for line in raw.read_text(encoding="utf-8").splitlines():
-            rows.append(json.loads(line))
-    return evaluate(out, game, rows, args, code)
+    return evaluate(out, game, read_samples(raw), args, code)
 
 
 def main():
@@ -179,6 +187,8 @@ def main():
     parser.add_argument("--warmup", type=int, default=120)
     parser.add_argument("--out", type=Path, help="new report directory (default: a fresh folder under target/soak)")
     parser.add_argument("--binaries", type=Path, help="use examples built with the documented feature set")
+    parser.add_argument("--evaluate", action="store_true",
+                        help="re-evaluate the samples already in --out with the current bounds; runs nothing")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--windowed", action="store_true", help="open a real window (attended run)")
     mode.add_argument("--headless", action="store_true", help="omit GPU drawing for diagnostics")
@@ -187,6 +197,13 @@ def main():
             and args.seconds - args.warmup >= 2 * args.sample):
         parser.error("need at least three post-warm-up samples (decrease --sample or --warmup)")
     games = tuple(dict.fromkeys(args.game or GAMES))
+    if args.evaluate:
+        if args.out is None:
+            parser.error("--evaluate needs --out")
+        statuses = [reevaluate(game, args) for game in games if (args.out / game / "samples.jsonl").exists()]
+        if not statuses:
+            parser.error(f"no samples under {args.out}")
+        return 0 if all(statuses) else 1
     if args.out is None:
         parent = ROOT / "target/soak"
         parent.mkdir(parents=True, exist_ok=True)

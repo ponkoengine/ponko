@@ -31,7 +31,8 @@ minimize/restore, verdict and any unavailable readings. Attach each game's
 game, revision, hardware, exact command, measured slope, bound and the
 metric's SVG. Attach the graph as a PNG if the tracker cannot display SVG
 attachments. Include `game.log` for a crash or an incomplete run. Post the
-filled lines and links in one comment on [#509](https://github.com/ponkoengine/ponko/issues/509)
+filled lines and links in one comment on [#484](https://github.com/ponkoengine/ponko/issues/484)
+(the checks that need a person)
 and link the comment in the release pull request. See
 [Reference-game soaks](../../book/src/sim-clock.md#reference-game-soaks) for
 how to read the reports.
