@@ -13,10 +13,13 @@ repository.workspace = true
 homepage.workspace = true
 documentation = "https://docs.rs/ponko/"
 # What the published crate holds: the engine's sources and build script, the
-# Rust examples with the assets they load, and the license and policy files.
-# Not the guide, CI, scripts, tests (they need the workspace), the web shell,
-# the C/C++ side (the headers ship with the release archives), the benchmark
-# scenes or the logo.
+# Rust examples with the small assets they load, and the license and policy
+# files. Not the guide, CI, scripts, tests (they need the workspace), the web
+# shell, the C/C++ side (the headers ship with the release archives), the
+# benchmark scenes, the logo or the three reference games' art, sound and
+# music: nothing builds from them (the examples load them when they run, and
+# their sources stay, so the crate compiles), and Shard Grove's alone was
+# 2.7 MiB of a 10 MB upload limit. Get the games from the repository.
 include = [
     "/src/**",
     "/build.rs",
@@ -24,6 +27,9 @@ include = [
     "!/examples/cpp/**",
     "/assets/**",
     "!/assets/branding/**",
+    "!/assets/coin_dash/**",
+    "!/assets/ember_hop/**",
+    "!/assets/shard_grove/**",
     "/README.md",
     "/CHANGELOG.md",
     "/STABILITY.md",
