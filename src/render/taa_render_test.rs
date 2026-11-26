@@ -126,7 +126,7 @@ impl Rig {
             &ctx.scene3d.lighting,
         );
         ctx.gfx.frame3d.views = std::mem::take(&mut self.frame.views);
-        ctx.collect_views(&SkinFrame::default());
+        ctx.collect_views(&SkinFrame::default(), None);
         self.frame.views = std::mem::take(&mut ctx.gfx.frame3d.views);
         if self.disable_motion {
             self.frame.motion.runs.clear();

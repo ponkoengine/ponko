@@ -60,6 +60,9 @@ Camera.rect                ponko_ctx_set_camera3d_view  # PonkoView3D.rect, with
 Camera.layers              ponko_ctx_set_camera3d_view  # PonkoView3D.layers
 struct TargetCamera TargetCamera src/three/target.rs PonkoTargetCamera,PonkoTargetCameraEx
 TargetCamera.clip_plane           has_clip_plane         # has_clip_plane and the four numbers of clip_plane
+TargetCamera.cull_box             has_cull_box           # has_cull_box, cull_box_min and cull_box_max (version 3)
+TargetCamera.clear                has_clear              # has_clear and clear (version 3)
+TargetCamera.effects              ponko_ctx_set_target_camera_effects # a list: set and read apart, by camera index
 
 struct Lighting Lighting src/three/mod.rs PonkoLighting,PonkoLightingEx
 Lighting.gi                       gi_enabled             # GlobalIllumination's fields are the gi_* fields

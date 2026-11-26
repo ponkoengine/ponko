@@ -137,3 +137,14 @@ impl<T: Sync + ?Sized> Shared for T {}
 pub(super) trait Shared {}
 #[cfg(target_arch = "wasm32")]
 impl<T: ?Sized> Shared for T {}
+
+/// The view of a render target's first level: what passes render into
+/// (a view of every level can't be an attachment).
+pub(crate) fn first_level(texture: &wgpu::Texture) -> wgpu::TextureView {
+    texture.create_view(&wgpu::TextureViewDescriptor {
+        label: Some("render target"),
+        base_mip_level: 0,
+        mip_level_count: Some(1),
+        ..Default::default()
+    })
+}

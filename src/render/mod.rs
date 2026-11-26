@@ -505,6 +505,8 @@ mod render_target_frame_render_test;
 mod reverse_z_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod stereo_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod target_camera_render_test;
 #[cfg(all(test, feature = "window", feature = "3d", feature = "video"))]
 mod video_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]

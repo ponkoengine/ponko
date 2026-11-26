@@ -213,7 +213,7 @@ impl Rig {
             &ctx.scene3d.lighting,
         );
         ctx.gfx.frame3d.views = std::mem::take(&mut frame.views);
-        ctx.collect_views(&SkinFrame::default());
+        ctx.collect_views(&SkinFrame::default(), None);
         frame.views = std::mem::take(&mut ctx.gfx.frame3d.views);
         frame.probe_bakes.clone_from(&self.probe_bakes);
         // Like the frame does: a freed buffer's passes are left out.
