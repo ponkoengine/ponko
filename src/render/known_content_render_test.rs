@@ -752,6 +752,11 @@ fn known_scenes_benchmark() {
         wait(&ctx);
         let loaded = started.elapsed().as_secs_f64();
         let rss = resident_memory().unwrap_or(0);
+        // What was measured, to look at.
+        std::fs::create_dir_all(root.join("results")).unwrap();
+        capture(&mut ctx)
+            .save(root.join(format!("results/{name}.png")))
+            .unwrap();
         eprintln!(
             "{name}: parsed in {parsed:.2} s, first frame drawn {loaded:.2} s after the load began; \
              resident memory {:.0} MB (+{:.0} MB); {lights} lights; on {}",
