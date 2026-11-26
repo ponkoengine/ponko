@@ -664,7 +664,7 @@ pub use crate::three::{
     MAX_CROWD_LEVELS, Material, MaterialDesc, Mesh, MeshCost, MeshData, Model, ModelCamera, ModelLight, ModelLightKind,
     ModelMaterial, ModelMaterials, ModelProjection, Post, PostVolume, ReceivesDecals, RenderPasses, RenderTarget,
     SceneSettings, ScreenEffect, Shader, ShadowFilter, ShadowMesh, ShadowOnly, Sky, SkyShader, SplitToning, Stencil,
-    StencilCompare, StencilFace, StencilOp, StreamedLod, TargetCamera, TargetEffect, Tonemap,
+    StencilCompare, StencilFace, StencilOp, StreamedLod, TargetCamera, TargetEffect, TextureTransform, Tonemap,
 };
 #[cfg(feature = "3d")]
 pub use crate::three::{

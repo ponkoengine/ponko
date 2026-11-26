@@ -1,7 +1,8 @@
 //! Animation tracks and allocation-free steady-state pose sampling.
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use super::{Joint, Skeleton};
+use super::{Joint, Material, Skeleton};
 use crate::error::{Error, ErrorKind};
 use glam::{Quat, Vec4};
 
@@ -264,14 +265,203 @@ impl MorphAnimation {
         }
     }
 }
+/// A value of a material a clip can animate ([`AnimatedProperty::Material`]).
+/// Each is read from the track's x, or xy, xyz, xyzw as noted. Colors are
+/// linear RGB(A), as glTF's factors are (so they blend in linear light),
+/// not the sRGB [`Color`](crate::color::Color) of a
+/// [`MaterialDesc`](crate::render::MaterialDesc).
+///
+/// ```
+/// use ponko::anim::MaterialProperty;
+/// assert_ne!(MaterialProperty::Color, MaterialProperty::Emissive);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum MaterialProperty {
+    /// The base color, linear RGBA (xyzw): `color` (glTF's
+    /// `baseColorFactor`).
+    Color,
+    /// The light it gives off, linear RGB (xyz), before
+    /// [`EmissiveStrength`](Self::EmissiveStrength): `emissive` (glTF's
+    /// `emissiveFactor`).
+    Emissive,
+    /// Multiplies [`Emissive`](Self::Emissive) (x), glTF's
+    /// `KHR_materials_emissive_strength`.
+    EmissiveStrength,
+    /// `roughness` (x), 0 to 1.
+    Roughness,
+    /// `metallic` (x), 0 to 1.
+    Metallic,
+    /// `normal_strength` (x).
+    NormalStrength,
+    /// `alpha_cutoff` (x).
+    AlphaCutoff,
+    /// The texture transform's `offset` (xy).
+    TextureOffset,
+    /// The texture transform's `rotation` (x), radians.
+    TextureRotation,
+    /// The texture transform's `scale` (xy).
+    TextureScale,
+    /// The clear coat's amount (x), 0 to 1.
+    Clearcoat,
+    /// The clear coat's roughness (x), 0 to 1.
+    ClearcoatRoughness,
+    /// The sheen's color, linear RGB (xyz).
+    SheenColor,
+    /// The sheen's roughness (x), 0 to 1.
+    SheenRoughness,
+    /// The specular strength (x), 0 to 1.
+    Specular,
+    /// The specular color, linear RGB (xyz).
+    SpecularColor,
+    /// The index of refraction (x), at least 1.
+    Ior,
+    /// The anisotropy's strength (x), -1 to 1.
+    Anisotropy,
+    /// The anisotropy's rotation (x), radians.
+    AnisotropyRotation,
+    /// The iridescence's amount (x), 0 to 1.
+    Iridescence,
+    /// The iridescent film's index of refraction (x), at least 1.
+    IridescenceIor,
+    /// The iridescent film's thinnest thickness (x), in nanometers.
+    IridescenceThinnest,
+    /// The iridescent film's thickest thickness (x), in nanometers.
+    IridescenceThickest,
+}
+
+/// What a [`PropertyAnimation`] changes: something other than a joint's
+/// place, which [`JointAnimation`] keys.
+///
+/// ```
+/// use ponko::anim::AnimatedProperty;
+/// let blink = AnimatedProperty::JointVisible(3);
+/// assert_eq!(blink, AnimatedProperty::JointVisible(3));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum AnimatedProperty {
+    /// Whether joint `.0` of the skeleton shows (x at least 0.5) or is
+    /// hidden with everything under it, as glTF's `KHR_node_visibility`
+    /// has it: what hangs from it isn't drawn, and lights and models
+    /// attached to it with [`AttachToJoint`](crate::anim::AttachToJoint)
+    /// go out. See [`Skeleton::joint_visible`].
+    JointVisible(usize),
+    /// A value of a material. Materials are shared: every model drawn with
+    /// the material shows the change, whichever skeleton the clip plays on.
+    Material(Material, MaterialProperty),
+}
+
+/// Keys for one [`AnimatedProperty`], the value in the track's components
+/// that property names. glTF's `KHR_animation_pointer` channels load as
+/// these.
+///
+/// New fields may be added in any release: build one with
+/// [`new`](Self::new).
+/// ```
+/// use ponko::prelude::*;
+/// use ponko::anim::{AnimatedProperty, AnimationTrack, Interpolation, PropertyAnimation};
+/// let off = AnimationTrack::new(vec![0.0, 1.0], vec![Vec4::X, Vec4::ZERO], Interpolation::Step);
+/// let blink = PropertyAnimation::new(AnimatedProperty::JointVisible(2), off);
+/// assert_eq!(blink.target, AnimatedProperty::JointVisible(2));
+/// ```
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct PropertyAnimation {
+    /// What it changes.
+    pub target: AnimatedProperty,
+    /// The values, in the components `target` reads.
+    pub track: AnimationTrack,
+}
+
+impl PropertyAnimation {
+    /// Keys `track` for `target`.
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::anim::{AnimatedProperty, AnimationTrack, Interpolation, PropertyAnimation};
+    /// let p = PropertyAnimation::new(AnimatedProperty::JointVisible(0), AnimationTrack::new(vec![0.0], vec![Vec4::X], Interpolation::Step));
+    /// assert_eq!(p.track.times(), &[0.0]);
+    /// ```
+    #[must_use]
+    pub fn new(target: AnimatedProperty, track: AnimationTrack) -> Self {
+        Self { target, track }
+    }
+}
+
+/// How many live clips animate a material: while none does, drawing a
+/// frame doesn't look for animated materials at all.
+static MATERIAL_CLIPS: AtomicUsize = AtomicUsize::new(0);
+
+/// Whether a live clip animates a material.
+pub(crate) fn any_material_clips() -> bool {
+    MATERIAL_CLIPS.load(Ordering::Relaxed) > 0
+}
+
 #[derive(Debug)]
 struct ClipData {
     name: String,
     duration: f32,
     tracks: Vec<JointAnimation>,
     morphs: Vec<MorphAnimation>,
+    properties: Vec<PropertyAnimation>,
+    /// Whether `properties` has a material's (counted in `MATERIAL_CLIPS`).
+    materials: bool,
     joints: Arc<[Joint]>,
     bindings: Mutex<Vec<Binding>>,
+}
+
+impl ClipData {
+    /// The last key time of every track.
+    fn last_key(&self) -> f32 {
+        self.tracks
+            .iter()
+            .flat_map(|t| [&t.translation, &t.rotation, &t.scale])
+            .flatten()
+            .chain(self.morphs.iter().map(|m| &m.track))
+            .chain(self.properties.iter().map(|p| &p.track))
+            .filter_map(|t| t.times.last().copied())
+            .fold(0.0, f32::max)
+    }
+
+    /// Replaces the property tracks, keeping `MATERIAL_CLIPS` up to date.
+    fn set_properties(&mut self, properties: Vec<PropertyAnimation>) {
+        let materials = properties
+            .iter()
+            .any(|p| matches!(p.target, AnimatedProperty::Material(..)));
+        match (self.materials, materials) {
+            (false, true) => {
+                MATERIAL_CLIPS.fetch_add(1, Ordering::Relaxed);
+            }
+            (true, false) => {
+                MATERIAL_CLIPS.fetch_sub(1, Ordering::Relaxed);
+            }
+            _ => {}
+        }
+        self.materials = materials;
+        self.properties = properties;
+    }
+
+    /// A copy with no cached bindings.
+    fn copy(&self) -> Self {
+        let mut copy = Self {
+            name: self.name.clone(),
+            duration: self.duration,
+            tracks: self.tracks.clone(),
+            morphs: self.morphs.clone(),
+            properties: Vec::new(),
+            materials: false,
+            joints: self.joints.clone(),
+            bindings: Mutex::new(Vec::new()),
+        };
+        copy.set_properties(self.properties.clone());
+        copy
+    }
+}
+
+impl Drop for ClipData {
+    fn drop(&mut self) {
+        self.set_properties(Vec::new());
+    }
 }
 #[derive(Debug, Clone)]
 struct Binding {
@@ -353,6 +543,8 @@ impl AnimationClip {
             duration,
             tracks,
             morphs: Vec::new(),
+            properties: Vec::new(),
+            materials: false,
             joints: source.shared_joints().clone(),
             bindings: Mutex::new(Vec::new()),
         })))
@@ -402,30 +594,93 @@ impl AnimationClip {
                 format!("duplicate morph track name \"{}\"", t.name),
             ));
         }
-        if Arc::get_mut(&mut self.0).is_none() {
-            self.0 = Arc::new(ClipData {
-                name: self.0.name.clone(),
-                duration: self.0.duration,
-                tracks: self.0.tracks.clone(),
-                morphs: self.0.morphs.clone(),
-                joints: self.0.joints.clone(),
-                bindings: Mutex::new(Vec::new()),
-            });
-        }
-        let data = Arc::get_mut(&mut self.0).unwrap();
-        data.duration = tracks
-            .iter()
-            .map(|t| *t.track.times.last().unwrap())
-            .chain(
-                data.tracks
-                    .iter()
-                    .flat_map(|t| [&t.translation, &t.rotation, &t.scale])
-                    .flatten()
-                    .map(|t| *t.times.last().unwrap()),
-            )
-            .fold(0., f32::max);
+        let data = self.data_mut();
         data.morphs = tracks;
+        data.duration = data.last_key();
         Ok(self)
+    }
+
+    /// The clip's data, copied first when another clone shares it.
+    fn data_mut(&mut self) -> &mut ClipData {
+        if Arc::get_mut(&mut self.0).is_none() {
+            self.0 = Arc::new(self.0.copy());
+        }
+        Arc::get_mut(&mut self.0).expect("invariant: the clip's data was just copied, so no other clone shares it")
+    }
+
+    /// Replaces the clip's property tracks: values other than joints'
+    /// places, such as a joint's visibility or a material's color (glTF's
+    /// `KHR_animation_pointer` channels load as these). They are sampled
+    /// with the rest of the clip into the [`Skeleton`] it plays on (see
+    /// [`Skeleton::property`]); the engine applies them as it draws.
+    /// [`try_with_property_tracks`](Self::try_with_property_tracks) returns
+    /// the failure as an error instead.
+    ///
+    /// # Panics
+    ///
+    /// When two tracks have the same target.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::anim::{AnimatedProperty, AnimationClip, AnimationTrack, Interpolation, PropertyAnimation, Skeleton};
+    /// let s = Skeleton::new(vec![ponko::anim::Joint::new("lamp", None)]);
+    /// let off = AnimationTrack::new(vec![0.0, 1.0], vec![Vec4::X, Vec4::ZERO], Interpolation::Step);
+    /// let blink = AnimationClip::new("blink", &s, vec![])
+    ///     .with_property_tracks(vec![PropertyAnimation::new(AnimatedProperty::JointVisible(0), off)]);
+    /// assert_eq!(blink.duration(), 1.0);
+    /// ```
+    pub fn with_property_tracks(self, tracks: Vec<PropertyAnimation>) -> Self {
+        self.try_with_property_tracks(tracks)
+            .unwrap_or_else(|e| panic!("AnimationClip::with_property_tracks: {}", e.message()))
+    }
+
+    /// Replaces the property tracks like
+    /// [`with_property_tracks`](Self::with_property_tracks).
+    ///
+    /// # Errors
+    ///
+    /// An [`ErrorKind::Invalid`](crate::error::ErrorKind::Invalid) error naming the
+    /// first target with two tracks (the clip is dropped).
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::anim::{AnimatedProperty, AnimationClip, AnimationTrack, Interpolation, PropertyAnimation, Skeleton};
+    /// let on = PropertyAnimation::new(AnimatedProperty::JointVisible(0), AnimationTrack::new(vec![0.0], vec![Vec4::X], Interpolation::Step));
+    /// let clip = AnimationClip::new("blink", &Skeleton::new(vec![]), vec![]);
+    /// let err = clip.try_with_property_tracks(vec![on.clone(), on]).unwrap_err();
+    /// assert_eq!(err.kind(), ErrorKind::Invalid);
+    /// ```
+    pub fn try_with_property_tracks(mut self, tracks: Vec<PropertyAnimation>) -> Result<Self, Error> {
+        if let Some(t) = tracks
+            .iter()
+            .enumerate()
+            .find_map(|(i, t)| tracks[..i].iter().any(|p| p.target == t.target).then_some(t))
+        {
+            return Err(Error::new(
+                ErrorKind::Invalid,
+                format!("two property tracks for {:?}", t.target),
+            ));
+        }
+        let data = self.data_mut();
+        data.set_properties(tracks);
+        data.duration = data.last_key();
+        Ok(self)
+    }
+
+    /// The property tracks: a joint's visibility, a material's values.
+    /// ```
+    /// # use ponko::prelude::*;
+    /// assert!(ponko::anim::AnimationClip::new("idle", &ponko::anim::Skeleton::new(vec![]), vec![]).property_tracks().is_empty());
+    /// ```
+    pub fn property_tracks(&self) -> &[PropertyAnimation] {
+        &self.0.properties
+    }
+
+    /// Samples the property tracks into `skeleton` at `time`, by `weight`.
+    fn sample_properties(&self, time: f32, weight: f32, skeleton: &mut Skeleton) {
+        for p in &self.0.properties {
+            skeleton.morphs.set_property(p.target, p.track.sample(time, false), weight);
+        }
     }
     /// Named morph tracks, in weight units (1 is full weight).
     /// ```
@@ -492,6 +747,7 @@ impl AnimationClip {
             time.clamp(0.0, self.duration())
         };
         self.sample_morphs(time, weight, skeleton);
+        self.sample_properties(time, weight, skeleton);
         if skeleton.shares_joints(&self.0.joints) {
             self.apply(time, weight, skeleton, None);
         } else {

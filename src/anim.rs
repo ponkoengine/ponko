@@ -18,10 +18,10 @@
 pub(crate) mod graph;
 #[cfg(feature = "3d")]
 pub use crate::three::{
-    AnimationClip, AnimationGraph, AnimationLayer, AnimationState, AnimationTrack, Animator, AttachToJoint, HumanBone,
-    HumanoidMap, Interpolation, Joint, JointAnimation, JointMask, LayerBlend, LayerId, MorphAnimation, MorphFrame,
-    MorphTarget, MorphWeights, Motion, MotionChild, RetargetError, Retargeter, RootMotion, Skeleton, SkinOf,
-    look_at_joint, two_bone_ik,
+    AnimatedProperty, AnimationClip, AnimationGraph, AnimationLayer, AnimationState, AnimationTrack, Animator,
+    AttachToJoint, HumanBone, HumanoidMap, Interpolation, Joint, JointAnimation, JointMask, LayerBlend, LayerId,
+    MaterialProperty, MorphAnimation, MorphFrame, MorphTarget, MorphWeights, Motion, MotionChild, PropertyAnimation,
+    RetargetError, Retargeter, RootMotion, Skeleton, SkinOf, look_at_joint, two_bone_ik,
 };
 pub use graph::{
     AnimationCondition, AnimationEvent, AnimationGraphError, AnimationParameter, AnimationTransition, ParamId, StateId,

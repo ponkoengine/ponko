@@ -423,7 +423,9 @@ impl LightGrid {
         proj: Mat4,
         far: f32,
     ) {
+        // A light attached to a hidden joint has no size (`AttachToJoint`).
         if !t.position.is_finite()
+            || t.scale == Vec3::ZERO
             || !p.range.is_finite()
             || p.range <= 0.0
             || !p.intensity.is_finite()

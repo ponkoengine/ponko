@@ -153,6 +153,7 @@ fn exposed_lux_and_candela_agree_at_half_a_metre() {
             color: Color::WHITE,
             intensity: 4.0,
         },
+        joint: None,
     };
     light.transform.rotation = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
     let pixel = |stage: &mut Stage| {
