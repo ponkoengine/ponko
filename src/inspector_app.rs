@@ -173,6 +173,9 @@ impl Panels {
         let mut layout = self.layout();
 
         egui::Panel::top("ponko-editor-bar").show(ui, |ui| self.menu_bar(ui, ctx));
+        // Window > Assets panel turns it on or off; the layout saved at the
+        // end of the frame must keep that.
+        layout.assets = self.layout().assets;
         egui::Panel::bottom("ponko-editor-status").show(ui, |ui| self.status_bar(ui, ctx));
         if layout.assets {
             layout.bottom = egui::Panel::bottom("ponko-editor-assets")
@@ -617,14 +620,6 @@ impl Panels {
             self.view_toggle(ui);
         });
         self.gizmo_tools(ui);
-    }
-
-    /// A menu entry with its shortcut, as bound now: "Save  (Ctrl+S)".
-    pub(super) fn labelled(&self, text: &str, action: Action) -> String {
-        match self.keys.keys(action).first() {
-            Some(key) => format!("{text}  ({})", super::keys::text(key)),
-            None => text.to_string(),
-        }
     }
 
     fn reload(&mut self, ctx: &mut Ctx) {
@@ -3708,5 +3703,370 @@ mod tests {
         click_text(&egui, &mut p, &mut ctx, |t| t == "Use the pattern / defaults");
         let cook = CookSettings::load(&root).unwrap();
         assert_eq!(cook.rule_for(&tile.name).1, Source::Pattern(pattern));
+    }
+
+    // Every entry, button and shortcut of the editor does something: the
+    // tests below open each menu, list what it shows (a new entry must be
+    // added here, or they fail) and use each entry on an editor where it
+    // has something to act on, then check that what a person sees changed,
+    // and that it changed the way the label says.
+
+    /// What a person can see change after using a menu entry, a button or
+    /// a key: the dialog, the picker, the status and error lines, the
+    /// layout and windows, the selection, renaming, the gizmo, the view,
+    /// the document and its history, the clock and the world. A dead entry
+    /// leaves all of it as it was.
+    fn observable(p: &Panels, ctx: &Ctx) -> String {
+        let app = p.app.as_ref().unwrap();
+        let g = &p.scene.gizmo2;
+        format!(
+            "dialog {:?}\npicker {:?}\nstatus {:?}\nerror {:?}\nlayout {:?}\nshortcuts {}\nauthor {:?}\n\
+             selection {:?}\nrenaming {:?}\ngizmo {:?} {:?} {}\n3d {}\ndoc {:?} dirty {} undo {} redo {} \
+             playing {}\npaused {} tick {}\nworld {:?}",
+            app.dialog,
+            app.file_picker,
+            p.status,
+            p.error,
+            p.layout(),
+            app.prefs.shortcuts.is_some(),
+            app.author.picking,
+            p.selection(),
+            p.scene.renaming,
+            g.mode,
+            g.space,
+            g.snap.on,
+            p.scene.active3d,
+            ctx.editor.doc.path,
+            ctx.editor.dirty(),
+            ctx.editor.can_undo(),
+            ctx.editor.can_redo(),
+            ctx.editor.playing(),
+            ctx.time.is_paused(),
+            ctx.time.sim_tick(),
+            ctx.world.save(),
+        )
+    }
+
+    /// An editor where every entry has something to act on: a scene saved
+    /// as `file` (so it is a recent file and can be reloaded), then changed
+    /// once (unsaved, with an undo step), its entity selected, and Open and
+    /// Save as asking for the path in the editor rather than the system's
+    /// dialog.
+    fn busy_editor(file: &TempAsset) -> (egui::Context, Panels, Ctx, Entity) {
+        let (egui, mut p, mut ctx) = editor(None);
+        p.app.as_mut().unwrap().system_picker = false;
+        p.set_dialog(Some(Dialog::SaveAs {
+            path: file.name.clone(),
+            kind: DocKind::Scene,
+            then_quit: false,
+        }));
+        frame(&egui, &mut p, &mut ctx, vec![]);
+        frame(&egui, &mut p, &mut ctx, vec![plain(Key::Enter)]);
+        assert!(
+            file.file.exists() && p.dialog().is_none(),
+            "{:?} {:?}",
+            p.dialog(),
+            p.error
+        );
+        let e = the_entity(&mut ctx);
+        ctx.edit(|ed, ctx| ed.set(ctx, e, "Hp", serde_json::json!(5.0)))
+            .unwrap();
+        p.select(Some(e), false);
+        frame(&egui, &mut p, &mut ctx, vec![]);
+        assert!(ctx.editor.dirty() && ctx.editor.can_undo());
+        (egui, p, ctx, e)
+    }
+
+    /// Opens menu `menu` of the menu bar; returns the texts that appeared:
+    /// its entries, as labelled ("Save  (Ctrl+S)"). The menu stays open.
+    fn open_menu(egui: &egui::Context, p: &mut Panels, ctx: &mut Ctx, menu: &str) -> Vec<String> {
+        let before = texts(&drawn(egui, p, ctx, vec![]));
+        click_text(egui, p, ctx, |t| t == menu);
+        let after = texts(&drawn(egui, p, ctx, vec![]));
+        after.into_iter().filter(|t| !before.contains(t)).collect()
+    }
+
+    /// A label without its shortcut: "Save  (Ctrl+S)" is "Save".
+    fn entry_name(label: &str) -> &str {
+        label.split("  (").next().unwrap()
+    }
+
+    #[test]
+    fn every_menu_entry_is_listed_here_and_does_what_it_says() {
+        let file = TempAsset::new("menus");
+        let author: Vec<&str> = super::super::author::Tool::all().iter().map(|t| t.label()).collect();
+        let menus: [(&str, Vec<&str>); 5] = [
+            (
+                "File",
+                vec![
+                    "New scene",
+                    "Open…",
+                    "Open recent",
+                    "Save",
+                    "Save as…",
+                    "Save selection as prefab…",
+                    "Reload from disk",
+                ],
+            ),
+            (
+                "Edit",
+                vec!["Undo", "Redo", "Duplicate", "Rename", "Delete", "New entity"],
+            ),
+            ("Author", author),
+            ("Window", vec!["Assets panel"]),
+            ("Help", vec!["Shortcuts…"]),
+        ];
+        for (menu, expected) in menus {
+            let (egui, mut p, mut ctx, _) = busy_editor(&file);
+            let shown = open_menu(&egui, &mut p, &mut ctx, menu);
+            let names: Vec<&str> = shown.iter().map(|l| entry_name(l)).collect();
+            assert_eq!(names, expected, "the entries of {menu}: {shown:?}");
+            for label in &shown {
+                let name = entry_name(label);
+                let (egui, mut p, mut ctx, e) = busy_editor(&file);
+                if name == "Redo" {
+                    frame(&egui, &mut p, &mut ctx, vec![command(Key::Z)]);
+                    assert!(ctx.editor.can_redo());
+                }
+                let count = ctx.world.len();
+                open_menu(&egui, &mut p, &mut ctx, menu);
+                let before = observable(&p, &ctx);
+                click_text(&egui, &mut p, &mut ctx, |t| t == label);
+                if name == "Open recent" {
+                    // A submenu: its entries are the recent files.
+                    click_text(&egui, &mut p, &mut ctx, |t| t == file.name);
+                }
+                frame(&egui, &mut p, &mut ctx, vec![]);
+                let after = observable(&p, &ctx);
+                assert_ne!(before, after, "{menu} > {label} did nothing");
+                let app = p.app.as_ref().unwrap();
+                let what = format!("{menu} > {label}: {after}");
+                match name {
+                    "New scene" => assert!(matches!(app.dialog, Some(Dialog::New)), "{what}"),
+                    "Open…" => assert!(matches!(app.dialog, Some(Dialog::Open { .. })), "{what}"),
+                    "Open recent" => {
+                        assert!(
+                            matches!(&app.dialog, Some(Dialog::Open { path }) if *path == file.name),
+                            "{what}"
+                        )
+                    }
+                    "Save" => assert!(!ctx.editor.dirty(), "{what}"),
+                    "Save as…" => assert!(matches!(app.dialog, Some(Dialog::SaveAs { .. })), "{what}"),
+                    "Save selection as prefab…" => {
+                        assert!(matches!(app.dialog, Some(Dialog::SavePrefab { .. })), "{what}")
+                    }
+                    "Reload from disk" => assert!(!ctx.editor.dirty() && !ctx.editor.can_undo(), "{what}"),
+                    "Undo" => assert!(ctx.editor.can_redo(), "{what}"),
+                    "Redo" => assert!(!ctx.editor.can_redo(), "{what}"),
+                    "Duplicate" => assert_eq!(ctx.world.len(), count + 1, "{what}"),
+                    "Rename" => assert_eq!(p.scene.renaming.as_ref().map(|r| r.0), Some(e), "{what}"),
+                    "Delete" => assert_eq!(ctx.world.len(), count - 1, "{what}"),
+                    "New entity" => assert_eq!(ctx.world.len(), count + 1, "{what}"),
+                    "Assets panel" => assert!(!p.layout().assets, "{what}"),
+                    "Shortcuts…" => assert!(app.prefs.shortcuts.is_some(), "{what}"),
+                    tool => {
+                        let picked = app.author.picking.as_ref().map(|(t, _)| t.label());
+                        assert_eq!(picked, Some(tool), "{what}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_button_of_the_bar_and_the_gizmo_row_does_something() {
+        let file = TempAsset::new("bar");
+        // (the button, what to press first, how to check it)
+        type Check = fn(&Panels, &Ctx) -> bool;
+        let cases: [(&str, Option<&str>, Check); 11] = [
+            ("Play", None, |_, ctx| ctx.editor.playing() && !ctx.time.is_paused()),
+            ("Pause", Some("Play"), |_, ctx| {
+                ctx.editor.playing() && ctx.time.is_paused()
+            }),
+            ("Resume", Some("Step"), |_, ctx| !ctx.time.is_paused()),
+            // A step is taken by the game's next tick (no loop runs here).
+            ("Step", None, |_, ctx| ctx.editor.playing() && ctx.time.is_paused()),
+            ("Stop", Some("Play"), |_, ctx| !ctx.editor.playing()),
+            ("Rotate", None, |p, _| {
+                p.scene.gizmo2.mode == crate::edit2d::Mode::Rotate
+            }),
+            ("Scale", None, |p, _| p.scene.gizmo2.mode == crate::edit2d::Mode::Scale),
+            ("Move", Some("Scale"), |p, _| {
+                p.scene.gizmo2.mode == crate::edit2d::Mode::Translate
+            }),
+            ("Local", None, |p, _| {
+                p.scene.gizmo2.space == crate::edit2d::Space::Local
+            }),
+            ("World", Some("Local"), |p, _| {
+                p.scene.gizmo2.space == crate::edit2d::Space::World
+            }),
+            ("Snap", None, |p, _| p.scene.gizmo2.snap.on),
+        ];
+        for (button, first, check) in cases {
+            let (egui, mut p, mut ctx, _) = busy_editor(&file);
+            let click = |egui: &egui::Context, p: &mut Panels, ctx: &mut Ctx, name: &str| {
+                let shown = texts(&drawn(egui, p, ctx, vec![]));
+                assert!(shown.iter().any(|t| entry_name(t) == name), "{name} in {shown:?}");
+                click_text(egui, p, ctx, |t| entry_name(t) == name);
+                frame(egui, p, ctx, vec![]);
+            };
+            if let Some(first) = first {
+                // Step plays and pauses: Play becomes Resume.
+                click(&egui, &mut p, &mut ctx, first);
+            }
+            let before = observable(&p, &ctx);
+            click(&egui, &mut p, &mut ctx, button);
+            if button == "Stop" {
+                // Edits made while playing: Stop asks which to keep.
+                if p.dialog().is_some() {
+                    frame(&egui, &mut p, &mut ctx, vec![plain(Key::Enter)]);
+                }
+            }
+            assert_ne!(before, observable(&p, &ctx), "{button} did nothing");
+            assert!(check(&p, &ctx), "{button}: {}", observable(&p, &ctx));
+        }
+        // The hierarchy's own button.
+        let (egui, mut p, mut ctx, _) = busy_editor(&file);
+        let count = ctx.world.len();
+        click_text(&egui, &mut p, &mut ctx, |t| t == "+ entity");
+        assert_eq!(ctx.world.len(), count + 1, "+ entity");
+        // The view switch: 3D is there only in games built with `3d`.
+        let (egui, mut p, mut ctx, _) = busy_editor(&file);
+        click_text(&egui, &mut p, &mut ctx, |t| t == "3D");
+        frame(&egui, &mut p, &mut ctx, vec![]);
+        assert_eq!(p.scene.active3d, cfg!(feature = "3d"));
+    }
+
+    #[test]
+    fn every_entry_of_a_hierarchy_rows_menu_does_what_it_says() {
+        let file = TempAsset::new("row-menu");
+        let entries = ["Rename", "Duplicate", "Delete", "New child", "Detach"];
+        for entry in entries {
+            let (egui, mut p, mut ctx, e) = busy_editor(&file);
+            // A child, so the row has Detach.
+            let child = ctx.edit(|ed, ctx| ed.spawn_child(ctx, e)).unwrap();
+            let row_of = if entry == "Detach" { child } else { e };
+            let count = ctx.world.len();
+            let shapes = drawn(&egui, &mut p, &mut ctx, vec![]);
+            let before_menu = texts(&shapes);
+            let rows: Vec<String> = before_menu.iter().filter(|t| t.contains('#')).cloned().collect();
+            let wanted = format!("#{}", row_of.index());
+            let row = rows
+                .iter()
+                .find(|t| t.split_whitespace().any(|w| w == wanted))
+                .unwrap_or_else(|| panic!("a row for {row_of:?} in {rows:?}"))
+                .clone();
+            let at = text_at(&shapes, |t| t == row).unwrap();
+            let right = |pressed| egui::Event::PointerButton {
+                pos: egui::pos2(at.x, at.y),
+                button: egui::PointerButton::Secondary,
+                pressed,
+                modifiers: Default::default(),
+            };
+            frame(&egui, &mut p, &mut ctx, vec![moved(at)]);
+            frame(&egui, &mut p, &mut ctx, vec![right(true)]);
+            frame(&egui, &mut p, &mut ctx, vec![right(false)]);
+            let shown: Vec<String> = texts(&drawn(&egui, &mut p, &mut ctx, vec![]))
+                .into_iter()
+                .filter(|t| !before_menu.contains(t))
+                .collect();
+            let names: Vec<&str> = shown.iter().map(|t| entry_name(t)).collect();
+            let expected: &[&str] = if row_of == child { &entries } else { &entries[..4] };
+            assert_eq!(names, expected, "the row's menu");
+            let label = shown.iter().find(|t| entry_name(t) == entry).unwrap().clone();
+            let before = observable(&p, &ctx);
+            click_text(&egui, &mut p, &mut ctx, |t| t == label);
+            frame(&egui, &mut p, &mut ctx, vec![]);
+            assert_ne!(before, observable(&p, &ctx), "{entry} did nothing");
+            match entry {
+                "Rename" => assert_eq!(p.scene.renaming.as_ref().map(|r| r.0), Some(e)),
+                // The row's entity with its child.
+                "Duplicate" => assert_eq!(ctx.world.len(), count + 2, "{entry}"),
+                "New child" => assert_eq!(ctx.world.len(), count + 1, "{entry}"),
+                "Delete" => assert!(!ctx.world.is_alive(e) && !ctx.world.is_alive(child), "with its child"),
+                _ => assert!(ctx.world.get::<crate::attach::Attached>(child).is_none(), "detached"),
+            }
+        }
+    }
+
+    #[test]
+    fn every_shortcut_does_what_the_shortcuts_list_says() {
+        use super::super::keys::Action;
+        let file = TempAsset::new("keys");
+        for action in Action::ALL {
+            if action == Action::Frame {
+                // Frames the selection in the 3D view: the 3D tests in
+                // `inspector_scene.rs` press it.
+                continue;
+            }
+            let (egui, mut p, mut ctx, e) = busy_editor(&file);
+            let press = |egui: &egui::Context, p: &mut Panels, ctx: &mut Ctx, action: Action| {
+                let s = action.defaults()[0];
+                frame(egui, p, ctx, vec![key(s.logical_key, s.modifiers)]);
+                frame(egui, p, ctx, vec![]);
+            };
+            match action {
+                Action::Redo => press(&egui, &mut p, &mut ctx, Action::Undo),
+                Action::Pause | Action::Stop => press(&egui, &mut p, &mut ctx, Action::Play),
+                Action::Cancel => p.set_dialog(Some(Dialog::New)),
+                Action::Move => p.scene.gizmo2.mode = crate::edit2d::Mode::Scale,
+                _ => {}
+            }
+            let count = ctx.world.len();
+            let focused = egui.memory(|m| m.focused());
+            let before = observable(&p, &ctx);
+            press(&egui, &mut p, &mut ctx, action);
+            if action == Action::Stop && p.dialog().is_some() {
+                frame(&egui, &mut p, &mut ctx, vec![plain(Key::Enter)]);
+            }
+            let after = observable(&p, &ctx);
+            let what = format!("{action:?} ({}): {after}", action.describe());
+            if action == Action::Search {
+                // The asset panel's search field takes the keyboard.
+                assert!(focused.is_none() && egui.memory(|m| m.focused()).is_some(), "{what}");
+                continue;
+            }
+            assert_ne!(before, after, "{what}: did nothing");
+            let app = p.app.as_ref().unwrap();
+            use crate::edit2d::Mode;
+            let ok = match action {
+                Action::New => matches!(app.dialog, Some(Dialog::New)),
+                Action::Open => matches!(app.dialog, Some(Dialog::Open { .. })),
+                Action::Save => !ctx.editor.dirty(),
+                Action::SaveAs => matches!(app.dialog, Some(Dialog::SaveAs { .. })),
+                Action::Undo => ctx.editor.can_redo(),
+                Action::Redo => !ctx.editor.can_redo(),
+                Action::Duplicate => ctx.world.len() == count + 1,
+                Action::Delete => !ctx.world.is_alive(e),
+                Action::Rename => p.scene.renaming.is_some(),
+                Action::Cancel => app.dialog.is_none(),
+                Action::Move => p.scene.gizmo2.mode == Mode::Translate,
+                Action::Rotate => p.scene.gizmo2.mode == Mode::Rotate,
+                Action::Scale => p.scene.gizmo2.mode == Mode::Scale,
+                Action::Play => ctx.editor.playing() && !ctx.time.is_paused(),
+                Action::Pause => ctx.time.is_paused(),
+                Action::Step => ctx.editor.playing() && ctx.time.is_paused(),
+                Action::Stop => !ctx.editor.playing(),
+                Action::Shortcuts => app.prefs.shortcuts.is_some(),
+                Action::Frame | Action::Search => unreachable!(),
+            };
+            assert!(ok, "{what}");
+        }
+    }
+
+    #[test]
+    fn menu_entries_and_tooltips_show_the_keys_as_rebound() {
+        use super::super::keys::{Action, parse};
+        let file = TempAsset::new("rebound");
+        let (egui, mut p, mut ctx, _) = busy_editor(&file);
+        p.keys.set(Action::Duplicate, vec![parse("Ctrl+J").unwrap()]);
+        p.keys.set(Action::Move, vec![parse("M").unwrap()]);
+        let shown = open_menu(&egui, &mut p, &mut ctx, "Edit");
+        assert!(shown.iter().any(|t| t == "Duplicate  (Ctrl+J)"), "{shown:?}");
+        assert_eq!(p.key_hint(Action::Move), "M");
+        assert_eq!(p.key_hint(Action::Delete), "Delete or Backspace");
+        p.keys.set(Action::Rename, vec![]);
+        assert_eq!(p.key_hint(Action::Rename), "no shortcut");
+        assert_eq!(p.labelled("Rename", Action::Rename), "Rename");
     }
 }

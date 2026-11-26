@@ -702,7 +702,8 @@ can miss waking a worker); the memory they keep is what encoding the images
 took at the peak anyway.
 
 A `textures.json` in that folder says what each image is, by path or
-pattern (`*` within a folder name, `**` across folders; an exact path wins
+pattern (`*` within a folder name, `**` across folders, so `**/*.png` is
+every PNG, at the top too; an exact path wins
 over patterns, and a longer pattern over a shorter one):
 
 ```json

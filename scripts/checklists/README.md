@@ -10,6 +10,7 @@ Some checks need a real machine, a real display or a person: no headless test ca
 | [input-and-readers.md](input-and-readers.md) | [#460](https://github.com/ponkoengine/ponko/issues/460) | IME typing and screen reader checks for macOS, Windows and Linux |
 | [lowend.md](lowend.md), [lowend_bench.py](lowend_bench.py), [perf_get.py](perf_get.py) | [#510](https://github.com/ponkoengine/ponko/issues/510) | The low-end and Steam Deck run: a benchmark script, an adapter query and a sheet |
 | [linux-full-run.md](linux-full-run.md), [record_run.py](record_run.py) | [#500](https://github.com/ponkoengine/ponko/issues/500) | The whole list of checks on Linux, with a helper that turns the result into a record |
+| [editor-and-inspector.md](editor-and-inspector.md) | #484 ([#613](https://github.com/ponkoengine/ponko/issues/613)) | The look of the editor's menus, bar, dialogs and the overlay inspector, and `ponko --help` in a terminal |
 | [shard-grove.md](shard-grove.md) | [#454](https://github.com/ponkoengine/ponko/issues/454) | The 3D reference game: a frame-time baseline per GPU tier, opened in a WebGPU browser and in a window on each OS |
 
 The scripts only run things on the machine they are on and print or write files there; nothing is sent anywhere. `python3 scripts/checklists/test_checklists.py` tests their parsing and formatting without any hardware.
