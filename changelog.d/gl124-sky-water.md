@@ -1,3 +1,4 @@
+<!-- area: Rendering -->
 ### Added
 - Waves from a spectrum for the water kit (issue #124): `Waves::spectrum`
   with `WaveSpectrum` (wind, significant height, a repeating square of 64,

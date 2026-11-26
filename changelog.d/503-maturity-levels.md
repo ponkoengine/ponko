@@ -1,3 +1,4 @@
+<!-- area: Guide and examples -->
 ### Added
 - Maturity levels: every guide chapter opens with its level (proven, tested
   or experimental) and what it rests on (the reference game, the platforms

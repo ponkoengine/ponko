@@ -1,3 +1,25 @@
+### Breaking changes
+- The message protocol is version 2: hosts and clients of 0.1 and 0.2 can't play together.
+  Packets start with `CRM2`, the Steam lobby's `ponko_protocol` is
+  `ponko-messages-2`, and connecting takes one extra round trip on UDP. A
+  version-1 client joining a new host, or a new client joining a version-1
+  host, times out ("peer timed out"); Steam joins fail with "incompatible
+  message protocol". From version 2 on, a host answers a hello of another
+  version with a refusal the client reports as `Disconnected` with a reason
+  starting "version mismatch".
+  Instead: ship the host (a dedicated server too) and every client built
+  with the same engine version.
+  Before:
+  ```toml
+  [dependencies]
+  ponko = "0.1"
+  ```
+  After:
+  ```toml
+  [dependencies]
+  ponko = "0.2"
+  ```
+
 ### Security
 - A UDP message host (`NetMessages::host`) checks that a joining client
   can receive at its address before it gives the client anything: a hello
@@ -10,15 +32,3 @@
   host as a reflector. Always on; C and C++ need no new call. WebSocket,
   WebRTC and Steam relay clients are unchanged (book/src/security.md,
   "Forged hellos").
-
-### Changed
-- **Breaking:** the message protocol is version 2 (packets start with
-  `CRM2`; the Steam lobby's `ponko_protocol` is `ponko-messages-2`).
-  Connecting takes one extra round trip on UDP. Clients and hosts from
-  before this version can't talk to new ones: a version-1 client joining a
-  new host, or a new client joining a version-1 host, times out ("peer
-  timed out"), and Steam joins fail with "incompatible message protocol".
-  Migration: ship the host and every client with the same engine version.
-  From version 2 on, a host answers a hello of another version with a
-  refusal the client reports as `Disconnected` with a reason starting
-  "version mismatch".

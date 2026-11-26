@@ -11,6 +11,7 @@
   ```
   After:
   ```rust
+  # let shape = todo!();
   let c = ponko::d2::Collider { shape, density: 1.0, friction: 0.5, restitution: 0.0, sensor: false, offset: Vec2::ZERO, groups: ponko::d2::CollisionGroups::ALL };
   ```
 - `d2::QueryFilter` has a `groups` field, as `d3::QueryFilter` does.
@@ -23,6 +24,7 @@
   ```
   After:
   ```rust
+  # let player: Entity = todo!();
   let filter = ponko::d2::QueryFilter::default().exclude(player).with_sensors();
   ```
 

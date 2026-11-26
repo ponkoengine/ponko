@@ -45,9 +45,5 @@
   `ui::named_ease`.
 
 ### Changed
-- **Breaking:** `UiTheme` has the new fields `transition` and `press_scale`.
-  Build themes with `..UiTheme::default()`, `dark()` or `light()`. Every
-  built-in theme has no transition and a press scale of 1, so it draws
-  exactly as before.
 - C: `PonkoUiThemeEx` is version 2, with `transition` and `press_scale` at
   its end. Callers that pass version 1 keep working and get no transition.

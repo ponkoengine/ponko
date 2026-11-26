@@ -1,8 +1,5 @@
 ### Changed
-- **Breaking:** `ui::UiRole`, `ui::UiAccessValue` and `ui::UiAccessAction` are
-  `#[non_exhaustive]`, so new roles, values and assistive-technology requests
-  can come in minor releases; add `_` arms to external matches
-  (`UiRole::as_str` names any role). From C, a role or value without an ABI-2
+- `UiRole::as_str` names any role, including ones added later. From C, a role or value without an ABI-2
   constant reads as `PONKO_UI_ROLE_GROUP` or `PONKO_UI_ACCESS_VALUE_NONE`.
 
 ### Added
@@ -30,7 +27,9 @@
   `into_unstable_style`. Same behaviour.
 
 ### Breaking changes
-- `UiRole`, `UiAccessValue` and `UiAccessAction` require wildcard match arms.
+- `UiRole`, `UiAccessValue` and `UiAccessAction` are `#[non_exhaustive]`: a `match` on one needs a `_` arm.
+  New roles, values and assistive-technology requests can then come in minor
+  releases.
   Instead: handle roles, values and requests added later with a `_` arm.
   Before:
   ```rust
@@ -38,5 +37,7 @@
   ```
   After:
   ```rust
+  use ponko::ui::UiRole;
+  # let role = UiRole::Button;
   let polite = matches!(role, UiRole::Button | UiRole::CheckBox | UiRole::Slider | UiRole::TextInput);
   ```

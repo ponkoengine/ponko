@@ -20,6 +20,8 @@
   ```
   After:
   ```rust
+  use ponko::net::Net;
+  # let id: u64 = todo!();
   let client = ponko::net::SteamClient::init_app(480)?;
   let net = match ponko::net::steam_lobby_from_args() {
       Some(lobby) => Net::steam_join(&client, lobby),
@@ -27,9 +29,9 @@
   };
   let lobby = ponko::net::SteamLobbyId::from_raw(id);
   ```
-- `ponko::net::steam`, the re-exported `steamworks` crate, is
-  `ponko::net::unstable_steamworks` now, outside the versions like
-  `ui::unstable_taffy`: its `steamworks` version may change in any release.
+- `ponko::net::steam`, the re-exported `steamworks` crate, is `ponko::net::unstable_steamworks` now.
+  Like `ui::unstable_taffy`, it is outside the versions: its `steamworks`
+  version may change in any release.
   Instead: use Ponko's Steam types; for the parts of Steam Ponko doesn't wrap
   (achievements, stats, rich presence), take the client underneath with
   `SteamClient::unstable_steamworks`, and pass ids across as `u64`.

@@ -1,3 +1,4 @@
+<!-- area: Rendering -->
 ### Fixed
 - Realtime global illumination leaks less light through thin walls near
   their top. Probes inside a wall just below its top weren't found to be in
