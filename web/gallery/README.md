@@ -23,8 +23,8 @@ target and `wasm-bindgen-cli` at the version in `Cargo.lock`, see the guide's
 | `--only <a,b>` | Build only these examples. |
 | `--pages-only` | Rewrite the pages without building (after editing `examples.json` or the page code). |
 
-The site is about 15 MB per example uncompressed (the game's `.wasm` and a
-copy of `assets/`); 30 examples come to about 400 MB.
+The site is about 20 MB per example uncompressed (the game's `.wasm` and a
+copy of `assets/`); the 49 examples come to about 1.1 GB.
 
 ## Adding an example: one line
 
@@ -52,14 +52,20 @@ its required features, and sits on one line.
 
 Every example with a window that shows something on its own or with a
 mouse and keyboard is listed. Left out: those without a picture (`headless`,
-`ecs`, `action_map`, `net_messages`, `net_replication`, `navmesh3d`,
-`ffi_bench`; `audio3d` is a sound with an empty scene; `window` draws
-nothing), those that need something a gallery page doesn't give them
-(`lockstep`: a second player over the network; `hotpatch`: a running `dx`;
-`scene_viewer`: a scene file named in the environment; `gamepad`: a
-controller, which the headless check can't plug in), the smoke-test fixtures
-(`web_smoke`, `web_smoke_3d`) and `bunnymark` (the same picture as
-`bunnymark_ecs`, which is listed).
+`ecs`, `action_map`, `net_messages`, `net_replication`, `net_prediction`,
+`navmesh3d`, `ffi_bench`, `validation_bundle`; `audio3d` and `audio_mixer`
+are sounds with an empty scene; `window` draws nothing), those that need
+something a gallery page doesn't give them (`lockstep`: a second player over
+the network; `net_arena`: a server; `net_webrtc`: a peer; `hotpatch`: a
+running `dx`; `scene_viewer`: a scene file named in the environment;
+`video_player`: a video file named on the command line; `bake_lighting`: a
+file of baked light it writes first; `gamepad`: a controller, which the
+headless check can't plug in; `phone`: a phone's insets and keyboard), the
+smoke-test fixtures (`web_smoke`, `web_smoke_3d`, `web_editor_save`,
+`web_editor_unloaded`, `web_threads`, `web_threads_warning`, `web_spectrum`,
+`web_video`) and `bunnymark` (the same picture as `bunnymark_ecs`, which is
+listed). `lockstep`, `net_arena` and the fixtures still run in a browser:
+`web/smoke` checks each (its [README](../smoke/README.md)).
 
 `webgpu: required` is set where WebGL2 can't show the demo:
 `compute` and `scene_compute` are about compute passes, which WebGL2 lacks.
@@ -85,8 +91,9 @@ check below.
 headless browser (no window): the index must link every example, and each
 page must start its game, keep drawing (draw calls or WebGPU submissions go
 on), survive a click and show a canvas that isn't blank, with no panic, page
-error or failed request; a `required` demo without WebGPU must show its
-message instead. With the runner set up as in
+error, WebGL error the browser logged (a refused call: the draw drew nothing,
+even where the canvas isn't quite blank) or failed request; a `required` demo
+without WebGPU must show its message instead. With the runner set up as in
 [`web/smoke/README.md`](../smoke/README.md):
 
 ```sh

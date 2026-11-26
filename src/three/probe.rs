@@ -734,64 +734,12 @@ impl Graphics {
         entity: Entity,
         name: &str,
     ) -> Result<(), crate::error::Error> {
-        let found = self.asset_sources.find(name)?;
-        let origin = found.origin.clone();
-        let bytes = found.into_bytes().map_err(|e| e.with_path(name))?;
-        let image = image::load_from_memory(&bytes)
-            .map_err(|e| {
-                crate::error::Error::decode(name, format!("{} is not a valid image: {e}", origin.describe(name)))
-            })?
-            .into_rgb32f();
-        let (width, height) = image.dimensions();
-        if width != height.saturating_mul(2) || height == 0 {
-            return Err(crate::error::Error::new(
-                crate::error::ErrorKind::Invalid,
-                "reflection image must have 2:1 aspect ratio",
-            )
-            .with_path(name));
-        }
-        let mut pixels = Vec::with_capacity(768 * 128 * 4);
-        for y in 0..128 {
-            for x in 0..768 {
-                let d = cube_direction(
-                    x / 128,
-                    (x % 128) as f32 / 128.0 + 0.5 / 128.0,
-                    y as f32 / 128.0 + 0.5 / 128.0,
-                );
-                let u = (d.z.atan2(d.x) / std::f32::consts::TAU + 0.5) * width as f32 - 0.5;
-                let v = (0.5 - d.y.asin() / std::f32::consts::PI) * height as f32 - 0.5;
-                let ix = u.floor() as i32;
-                let iy = v.floor() as i32;
-                let sample = |x: i32, y: i32| {
-                    Vec3::from_array(
-                        image
-                            .get_pixel(x.rem_euclid(width as i32) as u32, y.clamp(0, height as i32 - 1) as u32)
-                            .0,
-                    )
-                };
-                let c = sample(ix, iy).lerp(sample(ix + 1, iy), u.fract().rem_euclid(1.0)).lerp(
-                    sample(ix, iy + 1).lerp(sample(ix + 1, iy + 1), u.fract().rem_euclid(1.0)),
-                    v.fract().rem_euclid(1.0),
-                );
-                if !c.is_finite() {
-                    return Err(crate::error::Error::decode(
-                        name,
-                        "reflection image contains non-finite radiance",
-                    ));
-                }
-                pixels.extend(
-                    c.clamp(Vec3::ZERO, Vec3::splat(65504.0))
-                        .to_array()
-                        .map(|v| half::f16::from_f32(v).to_bits()),
-                );
-                pixels.push(half::f16::ONE.to_bits());
-            }
-        }
+        let pixels = self.try_load_environment(name)?.0;
         self.bake_reflection_probe(world, entity)?;
         let slot = world.get::<ReflectionProbe3D>(entity).unwrap().content;
         self.assets3d.probes.pending.retain(|&(s, _)| s != slot);
         self.assets3d.probes.uploads.retain(|(s, _)| *s != slot);
-        self.assets3d.probes.uploads.push((slot, std::sync::Arc::new(pixels)));
+        self.assets3d.probes.uploads.push((slot, pixels));
         self.assets3d.probes.refresh.replaced(slot);
         Ok(())
     }

@@ -1,7 +1,7 @@
 //! Render-pass IBL baking using the existing sky texture binding.
 use super::gpu3d::HDR_FORMAT;
 use crate::render::traffic::{Counted, Upload};
-use crate::three::probe::RefreshStep;
+use crate::three::{EnvironmentMap, probe::RefreshStep};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The GPU timer's name for a probe refresh's passes.
@@ -52,6 +52,9 @@ pub(super) struct Environment {
     /// is prepared but then skipped (hidden window) must not lose the bake.
     brdf_pending: AtomicBool,
     dirty: AtomicBool,
+    map: Option<EnvironmentMap>,
+    map_intensity: f32,
+    map_dirty: AtomicBool,
     pub bakes: Vec<(u32, [u32; 6])>,
     uploads: Vec<(u32, wgpu::Texture)>,
     /// The sky lighting the image-based light was last baked from.
@@ -332,9 +335,49 @@ impl Environment {
             key: None,
             stale: 0,
             since_bake: 0,
+            map: None,
+            map_intensity: 0.0,
+            map_dirty: AtomicBool::new(false),
             uploads: Vec::new(),
         }
     }
+    /// Stage an authored map in the source strip for the next recorded bake.
+    /// The first pass of that frame consumes it before local probe captures
+    /// reuse the strip. Until that frame the dirty bit stays set.
+    pub fn prepare_map(&mut self, queue: &wgpu::Queue, map: Option<&EnvironmentMap>, intensity: f32) {
+        let intensity = if intensity.is_finite() { intensity.max(0.0) } else { 0.0 };
+        let Some(map) = map else {
+            if self.map.take().is_some() {
+                self.dirty.store(true, Ordering::Relaxed);
+                self.map_dirty.store(false, Ordering::Relaxed);
+                // The sky's settings may have changed while the map was in use.
+                self.key = None;
+            }
+            return;
+        };
+        if self
+            .map
+            .as_ref()
+            .is_some_and(|old| std::sync::Arc::ptr_eq(&old.0, &map.0))
+            && self.map_intensity == intensity
+        {
+            return;
+        }
+        self.map = Some(map.clone());
+        self.map_intensity = intensity;
+        self.map_dirty.store(true, Ordering::Relaxed);
+        queue.uploading(Upload::Textures).write_texture(
+            self.source.as_image_copy(),
+            bytemuck::cast_slice(&map.0),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(768 * 8),
+                rows_per_image: Some(128),
+            },
+            self.source.size(),
+        );
+    }
+
     /// Decides whether this frame bakes the sky's maps again, and uploads
     /// the sky's settings. `lighting` is the sun and sky light the maps
     /// depend on; `shader`, a sky shader's id, authored-ambient flag and
@@ -351,7 +394,7 @@ impl Environment {
         intensity: f32,
         authored_ambient: bool,
         // Sky, ground and equator light (w 1 to use the equator).
-        [mut sky, ground, equator]: [[f32; 4]; 3],
+        [mut sky, mut ground, equator]: [[f32; 4]; 3],
     ) {
         let mut key = [0.0; 41];
         key[..22].copy_from_slice(&lighting);
@@ -368,7 +411,10 @@ impl Environment {
             self.since_bake = 0;
         }
         // sky.w: the diffuse light from the authored colors (see `sh`).
-        sky[3] = f32::from(authored_ambient);
+        let authored_map = self.map.is_some();
+        sky[3] = f32::from(authored_ambient && !authored_map);
+        ground[3] = f32::from(authored_map);
+        let intensity = if authored_map { self.map_intensity } else { intensity };
         let settings = [[0.0, f32::from(atmosphere), intensity, 0.0], sky, ground, equator];
         let settings = bytemuck::cast_slice(&settings);
         self.settings_mirror
@@ -459,7 +505,13 @@ impl Environment {
         if self.dirty.swap(false, Ordering::Relaxed) {
             super::gpu3d::mark_step("sky maps");
             encoder.copy_texture_to_texture(sky.as_image_copy(), self.atlas.as_image_copy(), sky.size());
-            Self::draw(encoder, &self.source, &self.cube, &self.sky_group, [0, 0, 768, 128]);
+            if self.map.is_none() {
+                Self::draw(encoder, &self.source, &self.cube, &self.sky_group, [0, 0, 768, 128]);
+                self.filter(encoder, 0);
+            }
+        }
+        if self.map_dirty.swap(false, Ordering::Relaxed) {
+            super::gpu3d::mark_step("sky maps");
             self.filter(encoder, 0);
         }
     }
@@ -500,7 +552,7 @@ impl Environment {
     }
     /// Whether this frame re-renders the sky environment.
     pub fn needs_sky(&self) -> bool {
-        self.dirty.load(Ordering::Relaxed)
+        self.dirty.load(Ordering::Relaxed) || self.map_dirty.load(Ordering::Relaxed)
     }
     /// Whether render target `target` is a probe's face drawn this frame
     /// (lit by the sky alone, and cleared to nothing).

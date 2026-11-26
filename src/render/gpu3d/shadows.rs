@@ -8,7 +8,7 @@
 //! (`shadow_cache.rs`), not made here. A remade map is handed to the frame
 //! sources, and the caller makes the frame bind groups again.
 
-use super::{DEPTH_FORMAT, FrameSources, SHADOW_READBACK, shadow_cache};
+use super::{DEPTH_FORMAT, FrameSources, SHADOW_READBACK, array_layers, shadow_cache};
 use crate::render::traffic::Mirror;
 use crate::three::Frame3D;
 
@@ -63,7 +63,8 @@ impl ShadowMaps {
             size: wgpu::Extent3d {
                 width: wanted.0,
                 height: wanted.0,
-                depth_or_array_layers: wanted.1,
+                // One cascade (or none) is still an array to the shaders.
+                depth_or_array_layers: array_layers(device.adapter_info().backend, wanted.1),
             },
             mip_level_count: 1,
             sample_count: 1,

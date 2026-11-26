@@ -8836,7 +8836,7 @@ public:
     /// Draws `m` into a new square render target that keeps the picture, for a UI image: an item icon
     /// (Rust `Graphics::render_icon`). Framed to fill it, seen from `settings.from`, lit by the scene's sun
     /// and sky light only, tone mapped, on `settings.background`; nothing of the world is in it and
-    /// nothing is added to it. Drawn in the next two frames. `parts` are `{part, material}` pairs as
+    /// nothing is added to it. Drawn with the next frame. `parts` are `{part, material}` pairs as
     /// set_model_part_materials takes. Throws for a mesh that isn't live or a bad size, direction or
     /// field of view.
     ponko::render_target render_icon(mesh m, const icon& settings,

@@ -7,7 +7,7 @@
 //
 // The index must link every example. Each example's page must then start its
 // game and keep drawing (draw calls or WebGPU submissions go on), with no
-// panic, page error or failed asset request; survive a click; and show a
+// panic, page error, WebGL error or failed asset request; survive a click; and show a
 // canvas that isn't blank. A demo that needs WebGPU, on a page without it
 // (`--backend webgl2` hides it), must instead say it needs WebGPU and not
 // start. Unlike smoke.mjs's fixtures, examples publish no state, so these
@@ -30,6 +30,7 @@ import {
   expectedPage,
   parseGalleryArgs,
   selectExamples,
+  webglErrorOf,
 } from "./gallery-lib.mjs";
 import { GAME_CANVAS, LAUNCHERS, canvasBackend, canvasStats, probe, serve } from "./smoke.mjs";
 
@@ -124,6 +125,8 @@ async function checkExample(browser, url, entry, args, caps, report) {
       const panic = report.console.find((m) => m.text.includes("panicked at"));
       if (panic) return new Failure("panic", panic.text.split("\n").slice(0, 3).join(" | "));
       if (report.pageErrors.length) return new Failure("page-error", report.pageErrors[0].message.split("\n")[0]);
+      const glError = report.console.map((m) => webglErrorOf(m.text)).find(Boolean);
+      if (glError) return new Failure("webgl-error", `the browser refused a WebGL call: ${glError}`);
       if (state?.gallery === "error") return new Failure("page-error", state.status);
       return null;
     };
@@ -179,8 +182,10 @@ async function checkExample(browser, url, entry, args, caps, report) {
     }
     report.progress = { before, after: state.draws };
 
-    // A click on the game doesn't break it.
-    const box = await page.locator(GAME_CANVAS).boundingBox();
+    // A click on the game doesn't break it. A heavy demo on software GL
+    // (the headless shell) on a busy machine can hold the page's thread for
+    // longer than the 30 s default, as for the screenshot below.
+    const box = await page.locator(GAME_CANVAS).boundingBox({ timeout: 60_000 });
     await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
     await sleep(1000);
     state = await pageState(page);

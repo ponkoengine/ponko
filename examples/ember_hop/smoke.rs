@@ -44,6 +44,12 @@ pub struct Smoke {
     report_path: Option<PathBuf>,
     report: Report,
     step: Step,
+    looping: bool,
+    cycle_start: u64,
+    /// Completed walk-throughs, with a fresh per-cycle timeout.
+    pub cycles: u64,
+    pub deaths: u64,
+    death_attempted: bool,
     since: u64,
 }
 
@@ -100,6 +106,11 @@ pub fn setup_smoke(ctx: &mut Ctx, report_path: Option<PathBuf>, mode: &str) {
         report_path,
         report,
         step: Step::Start,
+        looping: mode == "soak",
+        cycle_start: 0,
+        cycles: 0,
+        deaths: 0,
+        death_attempted: false,
         since: 0,
     });
 }
@@ -119,14 +130,29 @@ pub fn walkthrough(ctx: &mut Ctx) {
     let screen = screen(&ctx.world);
     let (step, since) = {
         let smoke = ctx.world.resource_mut::<Smoke>();
-        let name = screen_name(screen).to_string();
-        if smoke.report.screens.last() != Some(&name) {
-            smoke.report.screens.push(name);
+        if !smoke.looping {
+            let name = screen_name(screen).to_string();
+            if smoke.report.screens.last() != Some(&name) {
+                smoke.report.screens.push(name);
+            }
         }
         (smoke.step, smoke.since)
     };
+    let (looping, cycle_start) = {
+        let smoke = ctx.world.resource::<Smoke>();
+        (smoke.looping, smoke.cycle_start)
+    };
+    if tick - cycle_start >= MAX_TICKS {
+        finish(ctx, tick, false);
+        return;
+    }
     let waited = tick - since >= DWELL;
     let level = ctx.world.resource::<Run>().level;
+    if looping && screen == Screen::Dying && !ctx.world.resource::<Smoke>().death_attempted {
+        let smoke = ctx.world.resource_mut::<Smoke>();
+        smoke.death_attempted = true;
+        smoke.deaths += 1;
+    }
     let mut next = step;
     match step {
         Step::Start if screen == Screen::Title && waited => {
@@ -134,7 +160,21 @@ pub fn walkthrough(ctx: &mut Ctx) {
             next = Step::PlayFirst;
         }
         Step::PlayFirst if screen == Screen::Playing && level == 1 => next = Step::Pause,
-        Step::PlayFirst => autopilot(ctx),
+        Step::PlayFirst => {
+            if looping && waited && screen == Screen::Playing && !ctx.world.resource::<Smoke>().death_attempted {
+                let hero = ctx
+                    .world
+                    .query::<(Entity, &Player)>()
+                    .iter()
+                    .next()
+                    .map(|(entity, _)| entity);
+                if let Some(hero) = hero {
+                    lose_hero(ctx, hero);
+                }
+            } else {
+                autopilot(ctx);
+            }
+        }
         Step::Pause if waited => {
             ctx.world.resource_mut::<Intent>().pause = true;
             next = Step::Leave;
@@ -153,11 +193,11 @@ pub fn walkthrough(ctx: &mut Ctx) {
             ctx.world.resource_mut::<Intent>().any = true;
             next = Step::Report;
         }
-        Step::Report if screen == Screen::Title => finish(ctx, tick, true),
+        Step::Report if screen == Screen::Title => {
+            finish(ctx, tick, true);
+            return;
+        }
         _ => {}
-    }
-    if tick >= MAX_TICKS {
-        finish(ctx, tick, false);
     }
     if next != step {
         let smoke = ctx.world.resource_mut::<Smoke>();
@@ -232,6 +272,15 @@ fn finish(ctx: &mut Ctx, tick: u64, completed: bool) {
     let tally = ctx.world.resource::<Tally>().clone();
     let progress = ctx.world.resource::<Progress>().clone();
     let run = ctx.world.resource::<Run>().clone();
+    if completed && ctx.world.resource::<Smoke>().looping {
+        let smoke = ctx.world.resource_mut::<Smoke>();
+        smoke.cycles += 1;
+        smoke.cycle_start = tick;
+        smoke.since = tick;
+        smoke.step = Step::Start;
+        smoke.death_attempted = false;
+        return;
+    }
     let smoke = ctx.world.resource_mut::<Smoke>();
     let report = &mut smoke.report;
     report.levels_cleared = tally.levels_cleared;
