@@ -530,6 +530,8 @@ mod instance_cells_bench;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod instance_cells_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
+mod known_content_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
 mod prompt_row_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 pub(crate) mod render_test_support;

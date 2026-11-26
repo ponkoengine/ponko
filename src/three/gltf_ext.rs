@@ -42,6 +42,7 @@ fn support(extension: &str) -> Option<Support> {
         | "KHR_mesh_quantization"
         | "KHR_materials_transmission"
         | SPECULAR_GLOSSINESS
+        | INSTANCING
         | QUANTIZED_POSITIONS => Support::Always,
         "EXT_meshopt_compression" | "KHR_meshopt_compression" => Support::Feature("gltf-meshopt", MESHOPT),
         // KTX2 images: block formats upload as they are; Basis Universal
@@ -261,6 +262,13 @@ impl Start {
         }
         let preferred_image = texture_sources(name, &mut json)?;
         let dequantize = fold_quantized_positions(&mut json);
+        let unread = instances_as_nodes(&mut json, &buffers);
+        if unread > 0 {
+            warnings.push(format!(
+                "{name}: draws the mesh of {unread} {INSTANCING} node(s) once, at the node: their instance \
+                 transforms aren't readable (a sparse accessor, or a type the extension doesn't allow)"
+            ));
+        }
         drop_channels_without_nodes(&mut json);
 
         // The `gltf` crate checks required extensions against its own list,
@@ -318,6 +326,122 @@ pub(super) fn specular_glossiness_as_metal_rough(json: &mut Value) -> bool {
         converted = true;
     }
     converted
+}
+
+/// glTF's GPU instancing extension: a node that draws its mesh once per
+/// instance, each instance with the translation, rotation and scale its
+/// accessors give (in the node's space).
+const INSTANCING: &str = "EXT_mesh_gpu_instancing";
+
+/// Gives every instance of each [`INSTANCING`] node a child node of its
+/// own that shows the node's mesh with the instance's transform, and the
+/// node itself shows nothing: the loader draws nodes, so each instance
+/// draws (as a copy of the mesh in the loaded model). A node with a skin
+/// is left as it is. Returns how many nodes' instances couldn't be read
+/// (their mesh draws once, at the node, as without the extension).
+pub(super) fn instances_as_nodes(json: &mut Value, buffers: &[Vec<u8>]) -> usize {
+    let mut unread = 0;
+    let mut added = Vec::new();
+    for (n, node) in json["nodes"].as_array().into_iter().flatten().enumerate() {
+        let Some(attributes) = node["extensions"][INSTANCING]["attributes"].as_object() else {
+            continue;
+        };
+        if node.get("mesh").is_none() || node.get("skin").is_some() {
+            continue;
+        }
+        let read = |name: &str, components: usize| {
+            attributes
+                .get(name)
+                .map(|accessor| accessor_floats(json, buffers, accessor, components))
+        };
+        let parts = [read("TRANSLATION", 3), read("ROTATION", 4), read("SCALE", 3)];
+        if parts.iter().any(|p| matches!(p, Some(None))) {
+            unread += 1;
+            continue;
+        }
+        let parts: Vec<(usize, Vec<f32>)> = [("translation", 3), ("rotation", 4), ("scale", 3)]
+            .iter()
+            .zip(parts)
+            .filter_map(|(&(_, n), p)| Some((n, p.flatten()?)))
+            .collect();
+        let Some(count) = parts.first().map(|(n, values)| values.len() / n) else {
+            continue;
+        };
+        if parts.iter().any(|(n, values)| values.len() != count * n) {
+            unread += 1;
+            continue;
+        }
+        let names: Vec<&str> = ["TRANSLATION", "ROTATION", "SCALE"]
+            .iter()
+            .zip(["translation", "rotation", "scale"])
+            .filter(|(attribute, _)| attributes.contains_key(**attribute))
+            .map(|(_, path)| path)
+            .collect();
+        let children: Vec<Value> = (0..count)
+            .map(|i| {
+                let mut child = serde_json::json!({ "mesh": node["mesh"] });
+                if let Some(weights) = node.get("weights") {
+                    child["weights"] = weights.clone();
+                }
+                for (path, (components, values)) in names.iter().zip(&parts) {
+                    child[*path] = values[i * components..(i + 1) * components].into();
+                }
+                child
+            })
+            .collect();
+        added.push((n, children));
+    }
+    for (n, children) in added {
+        let Some(nodes) = json["nodes"].as_array_mut() else {
+            break;
+        };
+        let first = nodes.len();
+        nodes.extend(children);
+        let last = nodes.len();
+        let node = &mut nodes[n];
+        let mut list = node["children"].as_array().cloned().unwrap_or_default();
+        list.extend((first..last).map(Value::from));
+        node["children"] = Value::Array(list);
+        if let Some(node) = node.as_object_mut() {
+            node.remove("mesh");
+            node.remove("weights");
+        }
+    }
+    unread
+}
+
+/// The values of a `components`-wide accessor (VEC3 or VEC4) as floats:
+/// float components as they are, normalized integer ones scaled to 0..1 or
+/// -1..1. `None` when it can't be read here: sparse, another type, or
+/// pointing past its buffer.
+fn accessor_floats(json: &Value, buffers: &[Vec<u8>], index: &Value, components: usize) -> Option<Vec<f32>> {
+    let accessor = &json["accessors"][usize::try_from(index.as_u64()?).ok()?];
+    let ty = ["", "SCALAR", "VEC2", "VEC3", "VEC4"].get(components)?;
+    if accessor["type"] != *ty || accessor.get("sparse").is_some() {
+        return None;
+    }
+    let field = |value: &Value, key: &str| value[key].as_u64().and_then(|v| usize::try_from(v).ok());
+    let count = field(accessor, "count")?;
+    let view = &json["bufferViews"][field(accessor, "bufferView")?];
+    let data = buffers.get(field(view, "buffer")?)?;
+    let (size, read): (usize, fn(&[u8]) -> f32) = match accessor["componentType"].as_u64()? {
+        5126 => (4, |b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])),
+        5120 => (1, |b| (f32::from(b[0] as i8) / 127.0).max(-1.0)),
+        5121 => (1, |b| f32::from(b[0]) / 255.0),
+        5122 => (2, |b| (f32::from(i16::from_le_bytes([b[0], b[1]])) / 32767.0).max(-1.0)),
+        5123 => (2, |b| f32::from(u16::from_le_bytes([b[0], b[1]])) / 65535.0),
+        _ => return None,
+    };
+    let start = field(view, "byteOffset").unwrap_or(0) + field(accessor, "byteOffset").unwrap_or(0);
+    let stride = field(view, "byteStride").unwrap_or(size * components);
+    let mut out = Vec::with_capacity(count * components);
+    for i in 0..count {
+        for c in 0..components {
+            let at = start + i * stride + c * size;
+            out.push(read(data.get(at..at + size)?));
+        }
+    }
+    Some(out)
 }
 
 /// Takes out the animation channels that animate no node: those of
@@ -1697,6 +1821,60 @@ mod tests {
         let loaded = load_str("pointer.gltf", &value.to_string()).unwrap();
         assert!(
             loaded.warnings.iter().any(|w| w.contains("KHR_animation_pointer")),
+            "{:?}",
+            loaded.warnings
+        );
+    }
+
+    #[test]
+    fn each_gpu_instance_draws_the_mesh_with_its_own_transform() {
+        let mut file = File::default();
+        let places = file.floats(&[0.0, 0.0, 0.0, 5.0, 0.0, 0.0, 0.0, 5.0, 0.0], 3);
+        let sizes = file.floats(&[1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 1.0, 1.0, 1.0], 3);
+        let text = triangle(
+            &mut file,
+            None,
+            json!({
+                "extensionsUsed": [INSTANCING],
+                "extensionsRequired": [INSTANCING],
+                "nodes": [{ "mesh": 0, "translation": [0.0, 0.0, 10.0],
+                    "extensions": { INSTANCING: { "attributes": { "TRANSLATION": places, "SCALE": sizes } } } }],
+            }),
+        );
+        let loaded = load_str("instances.gltf", &text).unwrap();
+        let p = &loaded.data.positions;
+        assert_eq!(p.len(), 9, "three instances of a triangle: {p:?}");
+        for corner in [
+            Vec3::new(1.0, 0.0, 10.0),
+            Vec3::new(7.0, 0.0, 10.0),
+            Vec3::new(5.0, 2.0, 10.0),
+            Vec3::new(0.0, 6.0, 10.0),
+        ] {
+            assert!(
+                p.iter().any(|q| (*q - corner).length() < 1e-5),
+                "no corner at {corner}: {p:?}"
+            );
+        }
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+    }
+
+    #[test]
+    fn unreadable_instances_draw_the_mesh_once_and_warn() {
+        let mut file = File::default();
+        // A scale that isn't a VEC3: the extension doesn't allow it.
+        let sizes = file.floats(&[1.0, 2.0], 1);
+        let text = triangle(
+            &mut file,
+            None,
+            json!({
+                "extensionsUsed": [INSTANCING],
+                "nodes": [{ "mesh": 0, "extensions": { INSTANCING: { "attributes": { "SCALE": sizes } } } }],
+            }),
+        );
+        let loaded = load_str("instances.gltf", &text).unwrap();
+        assert_eq!(loaded.data.positions.len(), 3);
+        assert!(
+            loaded.warnings.iter().any(|w| w.contains(INSTANCING)),
             "{:?}",
             loaded.warnings
         );
