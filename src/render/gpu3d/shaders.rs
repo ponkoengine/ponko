@@ -1428,42 +1428,44 @@ impl SideBuilder {
             blend: None,
             write_mask: wgpu::ColorWrites::ALL,
         })];
-        let velocity = if self.crowd {
-            pipeline(
-                "3d crowd motion vectors",
-                layout,
-                "vs_velocity_still",
-                fs(PipelineRole::Velocity),
-                cull,
-                depth(false, wgpu::CompareFunction::Equal, Default::default()),
-                msaa,
-                &velocity_target,
-            )
-        } else {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("3d motion vectors"),
-                layout: Some(layout),
-                vertex: wgpu::VertexState {
-                    module,
-                    entry_point: Some(vs(PipelineRole::Velocity)),
-                    compilation_options: Default::default(),
-                    buffers: &moved_buffers,
-                },
-                primitive: wgpu::PrimitiveState {
-                    cull_mode: cull,
-                    ..Default::default()
-                },
-                depth_stencil: depth(false, wgpu::CompareFunction::Equal, Default::default()),
-                multisample: msaa,
-                fragment: Some(wgpu::FragmentState {
-                    module,
-                    entry_point: fs(PipelineRole::Velocity),
-                    compilation_options: Default::default(),
-                    targets: &velocity_target,
-                }),
-                multiview_mask: None,
-                cache: None,
-            })
+        let velocity = || {
+            if self.crowd {
+                pipeline(
+                    "3d crowd motion vectors",
+                    layout,
+                    "vs_velocity_still",
+                    fs(PipelineRole::Velocity),
+                    cull,
+                    depth(false, wgpu::CompareFunction::Equal, Default::default()),
+                    msaa,
+                    &velocity_target,
+                )
+            } else {
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some("3d motion vectors"),
+                    layout: Some(layout),
+                    vertex: wgpu::VertexState {
+                        module,
+                        entry_point: Some(vs(PipelineRole::Velocity)),
+                        compilation_options: Default::default(),
+                        buffers: &moved_buffers,
+                    },
+                    primitive: wgpu::PrimitiveState {
+                        cull_mode: cull,
+                        ..Default::default()
+                    },
+                    depth_stencil: depth(false, wgpu::CompareFunction::Equal, Default::default()),
+                    multisample: msaa,
+                    fragment: Some(wgpu::FragmentState {
+                        module,
+                        entry_point: fs(PipelineRole::Velocity),
+                        compilation_options: Default::default(),
+                        targets: &velocity_target,
+                    }),
+                    multiview_mask: None,
+                    cache: None,
+                })
+            }
         };
         let shadow_bias = wgpu::DepthBiasState {
             constant: 2,
@@ -1513,36 +1515,33 @@ impl SideBuilder {
             blend: None,
             write_mask: wgpu::ColorWrites::empty(),
         })];
-        let coverage = (samples > 1).then(|| {
-            [
-                pipeline(
-                    "3d depth prepass coverage",
-                    layout,
-                    vs(PipelineRole::PrepassCoverage),
-                    fs(PipelineRole::PrepassCoverage),
-                    cull,
-                    depth(true, super::SCENE_DEPTH_NEARER, Default::default()),
-                    coverage_msaa,
-                    &unwritten,
-                ),
-                pipeline(
-                    "3d opaque coverage",
-                    layout,
-                    vs(PipelineRole::OpaqueCoverage),
-                    fs(PipelineRole::OpaqueCoverage),
-                    cull,
-                    depth(false, wgpu::CompareFunction::Equal, Default::default()),
-                    coverage_msaa,
-                    &opaque_target,
-                ),
-            ]
-        });
-        Pipelines {
-            coverage,
-            prepass: prepass(PipelineRole::Prepass),
-            prepass_cutout: prepass(PipelineRole::PrepassCutout),
-            // Only the fragments the prepass found nearest: each pixel is lit once.
-            opaque: pipeline(
+        let prepass_coverage = || {
+            pipeline(
+                "3d depth prepass coverage",
+                layout,
+                vs(PipelineRole::PrepassCoverage),
+                fs(PipelineRole::PrepassCoverage),
+                cull,
+                depth(true, super::SCENE_DEPTH_NEARER, Default::default()),
+                coverage_msaa,
+                &unwritten,
+            )
+        };
+        let opaque_coverage = || {
+            pipeline(
+                "3d opaque coverage",
+                layout,
+                vs(PipelineRole::OpaqueCoverage),
+                fs(PipelineRole::OpaqueCoverage),
+                cull,
+                depth(false, wgpu::CompareFunction::Equal, Default::default()),
+                coverage_msaa,
+                &opaque_target,
+            )
+        };
+        // Only the fragments the prepass found nearest: each pixel is lit once.
+        let opaque = || {
+            pipeline(
                 "3d opaque",
                 layout,
                 vs(PipelineRole::Opaque),
@@ -1551,8 +1550,10 @@ impl SideBuilder {
                 depth(false, wgpu::CompareFunction::Equal, Default::default()),
                 msaa,
                 &opaque_target,
-            ),
-            opaque_solid: pipeline(
+            )
+        };
+        let opaque_solid = || {
+            pipeline(
                 "3d opaque solid",
                 layout,
                 vs(PipelineRole::OpaqueSolid),
@@ -1561,9 +1562,11 @@ impl SideBuilder {
                 depth(true, super::SCENE_DEPTH_NEARER, Default::default()),
                 msaa,
                 &opaque_target,
-            ),
-            // Over the opaque frame, without hiding what's behind it.
-            transparent: pipeline(
+            )
+        };
+        // Over the opaque frame, without hiding what's behind it.
+        let transparent = || {
+            pipeline(
                 "3d transparent",
                 layout,
                 vs(PipelineRole::Transparent),
@@ -1572,25 +1575,127 @@ impl SideBuilder {
                 depth(false, super::SCENE_DEPTH_NEARER, Default::default()),
                 msaa,
                 &transparent_target,
-            ),
-            shadow: shadow(PipelineRole::Shadow),
-            shadow_cutout: shadow(PipelineRole::ShadowCutout),
+            )
+        };
+        // Models that hold still but whose `vertex` moves them: drawn
+        // from the frame's own instances, `vertex` run as of this frame
+        // and the last (see `vertex_motion.rs`).
+        let velocity_still = || {
+            pipeline(
+                "3d still motion vectors",
+                layout,
+                "vs_velocity_still",
+                fs(PipelineRole::Velocity),
+                cull,
+                depth(false, wgpu::CompareFunction::Equal, Default::default()),
+                msaa,
+                &velocity_target,
+            )
+        };
+        let (prepass_plain, prepass_cutout) = (
+            || prepass(PipelineRole::Prepass),
+            || prepass(PipelineRole::PrepassCutout),
+        );
+        let (shadow_plain, shadow_cutout) = (|| shadow(PipelineRole::Shadow), || shadow(PipelineRole::ShadowCutout));
+        let mut fixed = [
+            &prepass_plain as Job,
+            &prepass_cutout,
+            &opaque,
+            &opaque_solid,
+            &transparent,
+            &shadow_plain,
+            &shadow_cutout,
+            &velocity,
+        ]
+        .map(AtOnce::new);
+        let mut coverage = (samples > 1).then(|| [&prepass_coverage as Job, &opaque_coverage].map(AtOnce::new));
+        let mut still = (self.past.any() && !self.crowd).then(|| AtOnce::new(&velocity_still));
+        build_at_once(
+            device,
+            fixed
+                .iter_mut()
+                .chain(coverage.iter_mut().flatten())
+                .chain(still.as_mut())
+                .collect(),
+        );
+        let [
+            prepass,
+            prepass_cutout,
+            opaque,
+            opaque_solid,
+            transparent,
+            shadow,
+            shadow_cutout,
             velocity,
-            // Models that hold still but whose `vertex` moves them: drawn
-            // from the frame's own instances, `vertex` run as of this frame
-            // and the last (see `vertex_motion.rs`).
-            velocity_still: (self.past.any() && !self.crowd).then(|| {
-                pipeline(
-                    "3d still motion vectors",
-                    layout,
-                    "vs_velocity_still",
-                    fs(PipelineRole::Velocity),
-                    cull,
-                    depth(false, wgpu::CompareFunction::Equal, Default::default()),
-                    msaa,
-                    &velocity_target,
-                )
-            }),
+        ] = fixed.map(AtOnce::take);
+        Pipelines {
+            coverage: coverage.map(|pair| pair.map(AtOnce::take)),
+            prepass,
+            prepass_cutout,
+            opaque,
+            opaque_solid,
+            transparent,
+            shadow,
+            shadow_cutout,
+            velocity,
+            velocity_still: still.map(AtOnce::take),
         }
     }
 }
+
+/// One pipeline to build together with others ([`build_at_once`]).
+#[cfg(not(target_arch = "wasm32"))]
+type Job<'a> = &'a (dyn Fn() -> wgpu::RenderPipeline + Sync + 'a);
+#[cfg(target_arch = "wasm32")]
+type Job<'a> = &'a (dyn Fn() -> wgpu::RenderPipeline + 'a);
+
+/// A pipeline's job, and the pipeline once [`build_at_once`] built it.
+struct AtOnce<'a> {
+    job: Job<'a>,
+    built: Option<wgpu::RenderPipeline>,
+}
+
+impl<'a> AtOnce<'a> {
+    fn new(job: Job<'a>) -> Self {
+        Self { job, built: None }
+    }
+
+    /// The pipeline: as built at once, or else built now on this thread,
+    /// where the caller's error scope sees what the GPU says about it.
+    fn take(self) -> wgpu::RenderPipeline {
+        self.built.unwrap_or_else(|| (self.job)())
+    }
+}
+
+/// Builds a set's pipelines at once on the frame pool. Each pipeline's
+/// shaders are compiled on the CPU when it is created, and a set has about
+/// ten: on Direct3D 12 the built-in shader's three plain sets took 4 s one
+/// after the other with FXC (9 s with a release build's optimizing flags)
+/// on a 6-core desktop. Built at once they take about half as long with
+/// DXC or on Vulkan; FXC gains less, as it mostly compiles one shader at a
+/// time. GL and the browser build them on this thread (`AtOnce::take`
+/// builds whatever wasn't built here).
+///
+/// wgpu's error scopes are per thread, so each pipeline is built in its
+/// own: one the GPU rejects is dropped and built again by `take` on the
+/// calling thread, where the caller's scope (a game shader's check) or the
+/// device's handler sees the error as before.
+#[cfg(not(target_arch = "wasm32"))]
+fn build_at_once(device: &wgpu::Device, mut builds: Vec<&mut AtOnce<'_>>) {
+    use rayon::prelude::*;
+    if builds.len() < 2 || matches!(device.adapter_info().backend, wgpu::Backend::Gl) {
+        return;
+    }
+    crate::frame_pool::run(|| {
+        builds.par_iter_mut().for_each(|build| {
+            let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+            let pipeline = (build.job)();
+            if matches!(end_scope(scope, false), Ok(None)) {
+                build.built = Some(pipeline);
+            }
+        });
+    });
+}
+
+#[cfg(target_arch = "wasm32")]
+fn build_at_once(_device: &wgpu::Device, _builds: Vec<&mut AtOnce<'_>>) {}
