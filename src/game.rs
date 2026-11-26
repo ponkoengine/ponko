@@ -932,6 +932,14 @@ impl ConfiguredGame {
         self
     }
 
+    /// Soak runs: [`Game::bench_after_frame`]. Unstable (`bench-internals`).
+    #[doc(hidden)]
+    #[cfg(all(feature = "bench-internals", not(target_arch = "wasm32")))]
+    pub fn bench_after_frame(mut self, observer: impl FnMut(&mut Ctx, Duration) + 'static) -> Self {
+        self.game = self.game.bench_after_frame(observer);
+        self
+    }
+
     /// Feeds scheduled input into the game by tick: [`Game::input_scenario`].
     pub fn input_scenario(mut self, scenario: crate::scenario::InputScenario) -> Self {
         self.game = self.game.input_scenario(scenario);
