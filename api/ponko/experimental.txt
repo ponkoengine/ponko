@@ -65,9 +65,11 @@ pub fn ponko::net::rtc::RtcConfig::eq(&self, &Self) -> bool
 pub fn ponko::net::rtc::RtcConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub fn ponko::net::rtc::RtcConfig::host_address(self, core::net::ip_addr::IpAddr) -> Self
 pub fn ponko::net::rtc::RtcConfig::new() -> Self
+pub fn ponko::net::rtc::RtcConfig::relay_only(self) -> Self
 pub fn ponko::net::rtc::RtcConfig::stun(self, &str) -> Self
 pub fn ponko::net::rtc::RtcConfig::stun_urls(&self) -> impl core::iter::traits::iterator::Iterator<Item = &str>
 pub fn ponko::net::rtc::RtcConfig::turn(self, &str, &str, &str) -> Self
+pub fn ponko::net::rtc::RtcConfig::turn_servers(&self) -> impl core::iter::traits::iterator::Iterator<Item = (&str, &str, &str)>
 pub fn ponko::net::rtc::Signaling::clone(&self) -> Self
 pub fn ponko::net::rtc::Signaling::default() -> Self
 pub fn ponko::net::rtc::Signaling::deliver(&self, u64, &[u8]) -> bool

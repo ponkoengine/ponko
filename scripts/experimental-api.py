@@ -324,8 +324,9 @@ def run_check():
 
     # The list and the maturity levels.
     maturity = load_maturity()
-    level_problems, levels = maturity.collect()
-    problems += level_problems
+    # A chapter without a level is maturity.py's to report (its own check);
+    # this one only compares the levels it can read with the list.
+    _, levels = maturity.collect()
     experimental_chapters = {p for p, (level, _) in levels.items() if level == 'experimental'}
     listed_chapters = [s['chapter'] for s in sections]
     for chapter in sorted(experimental_chapters - set(listed_chapters)):
