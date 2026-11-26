@@ -2546,6 +2546,8 @@ static void messages() {
     throws([] { ponko::net_messages::steam_host(480, 0); });
     throws([] { ponko::net_messages::steam_join(480, 0); });
     throws([] { ponko::net_messages::steam_host(480, 2); }); // no Steam support/client in native test
+    throws([] { ponko::net_messages::steam_sockets_host(480, ponko::steam_lobby_visibility::public_lobby, 0); });
+    throws([] { ponko::net_messages::steam_sockets_host(480, ponko::steam_lobby_visibility::public_lobby, 2); });
     throws([] { ponko::steam_lobby::create(480, ponko::steam_lobby_visibility::private_lobby, 0); });
     throws([] { ponko::steam_lobby::create(480, ponko::steam_lobby_visibility::friends_only, 2); });
     throws([] { ponko::steam_lobby::join(480, 0); });

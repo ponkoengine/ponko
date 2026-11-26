@@ -337,7 +337,7 @@ impl Rig {
         let ctx = &mut self.ctx;
         ctx.collect_passes(None);
         let skins = SkinFrame::default();
-        ctx.collect_views(&skins);
+        ctx.collect_views(&skins, None);
         ctx.gfx.frame3d.lod = ctx.scene3d.lod;
         ctx.gfx.frame3d.collect(
             &mut ctx.world,

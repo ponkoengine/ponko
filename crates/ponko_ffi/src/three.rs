@@ -1840,22 +1840,52 @@ pub unsafe extern "C" fn ponko_ctx_set_effects(
             } else {
                 std::slice::from_raw_parts(effects, count)
             };
-            let mut list = Vec::with_capacity(count);
-            for e in given {
-                let effect = __ffi::from_id::<Effect>(e.effect.id);
-                if !c.gfx.is_live(effect) {
-                    return Err(invalid("that effect wasn't made by this game"));
-                }
-                let material = e.has_material.then(|| to_c(e.material));
-                if material.is_some_and(|m| !c.gfx.is_live(m)) {
-                    return Err(invalid("that material wasn't made by this game"));
-                }
-                list.push(ScreenEffect { effect, material });
-            }
-            c.scene3d.passes.effects = list;
+            c.scene3d.passes.effects = screen_effects_from_c(c, given)?;
             Ok(())
         })
     })
+}
+
+/// `given` as Rust screen effects, each checked: its effect and material
+/// made by this game.
+fn screen_effects_from_c(
+    c: &ponko::prelude::Ctx,
+    given: &[PonkoScreenEffect],
+) -> Result<Vec<ScreenEffect>, crate::Failure> {
+    let mut list = Vec::with_capacity(given.len());
+    for e in given {
+        let effect = __ffi::from_id::<Effect>(e.effect.id);
+        if !c.gfx.is_live(effect) {
+            return Err(invalid("that effect wasn't made by this game"));
+        }
+        let material = e.has_material.then(|| to_c(e.material));
+        if material.is_some_and(|m| !c.gfx.is_live(m)) {
+            return Err(invalid("that material wasn't made by this game"));
+        }
+        let mut entry = ScreenEffect::new(effect);
+        entry.material = material;
+        list.push(entry);
+    }
+    Ok(list)
+}
+
+/// `effects` in C form, up to `capacity` of them into `out`.
+///
+/// # Safety
+/// `out` holds `capacity` values (or `capacity` is 0).
+unsafe fn screen_effects_to_c(effects: &[ScreenEffect], out: *mut PonkoScreenEffect, capacity: usize) {
+    for (i, e) in effects.iter().take(capacity).enumerate() {
+        // SAFETY: `i < capacity`, which the caller says `out` holds.
+        unsafe {
+            out.add(i).write(PonkoScreenEffect {
+                effect: PonkoEffect {
+                    id: __ffi::id(e.effect),
+                },
+                has_material: e.material.is_some(),
+                material: e.material.map(to_c).unwrap_or_default(),
+            });
+        }
+    }
 }
 
 /// The screen effects run each frame: writes up to `capacity` of them to
@@ -1879,15 +1909,7 @@ pub unsafe extern "C" fn ponko_ctx_effects(
             if out_count.is_null() || (out_effects.is_null() && capacity > 0) {
                 return Err(invalid("output is null"));
             }
-            for (i, e) in c.scene3d.passes.effects.iter().take(capacity).enumerate() {
-                out_effects.add(i).write(PonkoScreenEffect {
-                    effect: PonkoEffect {
-                        id: __ffi::id(e.effect),
-                    },
-                    has_material: e.material.is_some(),
-                    material: e.material.map(to_c).unwrap_or_default(),
-                });
-            }
+            screen_effects_to_c(&c.scene3d.passes.effects, out_effects, capacity);
             out(out_count, c.scene3d.passes.effects.len())
         })
     })
@@ -2119,6 +2141,111 @@ pub unsafe extern "C" fn ponko_ctx_create_render_target(
     })
 }
 
+/// A render target like `ponko_ctx_create_render_target`'s with a full
+/// chain of mip levels, made again from the first level each frame
+/// something wrote it, so materials sampling it from afar don't alias
+/// (Rust `Graphics::create_mipmapped_render_target`). A third more memory.
+/// # Safety
+/// `ctx` null or live; output writable.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_create_mipmapped_render_target(std::ptr::null_mut(), 64, 64, std::ptr::null_mut()) } as u32, 1);
+/// ```
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_create_mipmapped_render_target(
+    ctx: *mut PonkoCtx,
+    width: u32,
+    height: u32,
+    out_texture: *mut PonkoTexture,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            if out_texture.is_null() {
+                return Err(invalid("output is null"));
+            }
+            let target = c
+                .gfx
+                .try_create_mipmapped_render_target(width, height)
+                .map_err(invalid_owned)?;
+            out(out_texture, texture_to_c(target.texture()))
+        })
+    })
+}
+
+/// Replaces the screen effects of target camera `index` (counting from 0)
+/// with `count` of them, run in order over its picture after it is drawn
+/// (Rust `TargetCamera::effects`); 0 runs none. The main view's effects
+/// (`ponko_ctx_set_effects`) never apply to a target camera. Setting the
+/// target cameras again keeps the effects of a camera that draws into the
+/// same render target at the same index.
+/// # Safety
+/// `ctx` null or live; `effects` holds `count` values (may be null when 0).
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_set_target_camera_effects(std::ptr::null_mut(), 0, std::ptr::null(), 0) } as u32, 1);
+/// ```
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_set_target_camera_effects(
+    ctx: *mut PonkoCtx,
+    index: usize,
+    effects: *const PonkoScreenEffect,
+    count: usize,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            if effects.is_null() && count > 0 {
+                return Err(invalid("effects is null"));
+            }
+            if index >= c.scene3d.passes.target_cameras.len() {
+                return Err(invalid("no target camera with that index"));
+            }
+            let given = if count == 0 {
+                &[][..]
+            } else {
+                std::slice::from_raw_parts(effects, count)
+            };
+            let list = screen_effects_from_c(c, given)?;
+            c.scene3d.passes.target_cameras[index].effects = list;
+            Ok(())
+        })
+    })
+}
+
+/// The screen effects of target camera `index`: writes up to `capacity` of
+/// them to `out_effects` and how many there are to `out_count` (Rust
+/// `TargetCamera::effects`).
+/// # Safety
+/// `ctx` null or live; `out_effects` holds `capacity` values (may be null
+/// when 0); `out_count` writable.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_target_camera_effects(std::ptr::null_mut(), 0, std::ptr::null_mut(), 0, std::ptr::null_mut()) } as u32, 1);
+/// ```
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_target_camera_effects(
+    ctx: *mut PonkoCtx,
+    index: usize,
+    out_effects: *mut PonkoScreenEffect,
+    capacity: usize,
+    out_count: *mut usize,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            if out_count.is_null() || (out_effects.is_null() && capacity > 0) {
+                return Err(invalid("output is null"));
+            }
+            let camera = c
+                .scene3d
+                .passes
+                .target_cameras
+                .get(index)
+                .ok_or_else(|| invalid("no target camera with that index"))?;
+            screen_effects_to_c(&camera.effects, out_effects, capacity);
+            out(out_count, camera.effects.len())
+        })
+    })
+}
+
 /// The target camera seeing `camera`'s view mirrored in the level plane at
 /// height `level`, clipped to what's above it (Rust
 /// `TargetCamera::reflection`). Read its target at the screen position
@@ -2157,7 +2284,10 @@ pub unsafe extern "C" fn ponko_ctx_reflection_camera(
 
 /// Replaces the target cameras drawn each frame with `count` of them
 /// (Rust `ctx.scene3d.passes.target_cameras`); 0 draws none. Each target must come from
-/// `ponko_ctx_create_render_target`.
+/// `ponko_ctx_create_render_target`. A camera drawing into the same target
+/// as the one it replaces (at the same index) keeps that one's screen
+/// effects (`ponko_ctx_set_target_camera_effects`); its culling box and
+/// background are reset (`ponko_ctx_set_target_cameras_ex` sets them).
 /// # Safety
 /// `ctx` null or live; `cameras` holds `count` values (may be null when 0).
 /// ```
@@ -2187,11 +2317,17 @@ pub unsafe extern "C" fn ponko_ctx_set_target_cameras(
                 if t.has_clip_plane && !(plane.is_finite() && plane.truncate().length_squared() > 0.0) {
                     return Err(invalid("the clip plane needs a finite, nonzero normal"));
                 }
-                list.push(TargetCamera {
-                    camera: camera_from_c(c.scene3d.camera, &t.camera)?,
-                    target,
-                    clip_plane: t.has_clip_plane.then_some(plane),
-                });
+                let mut camera = TargetCamera::new(camera_from_c(c.scene3d.camera, &t.camera)?, target);
+                camera.clip_plane = t.has_clip_plane.then_some(plane);
+                list.push(camera);
+            }
+            // A camera into the same target at the same index keeps its
+            // screen effects, which this struct doesn't carry.
+            let old = std::mem::take(&mut c.scene3d.passes.target_cameras);
+            for (new, old) in list.iter_mut().zip(old) {
+                if new.target == old.target {
+                    new.effects = old.effects;
+                }
             }
             c.scene3d.passes.target_cameras = list;
             Ok(())

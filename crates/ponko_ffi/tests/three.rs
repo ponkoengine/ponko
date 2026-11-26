@@ -1090,6 +1090,134 @@ fn screen_effects_are_made_and_listed_from_c() {
     assert_eq!(errors, vec![PONKO_INVALID_ARGUMENT; 3]);
 }
 
+unsafe extern "C" fn target_camera_extras(ctx: *mut PonkoCtx, user: *mut c_void) {
+    unsafe {
+        let errors = &mut *user.cast::<Vec<PonkoStatus>>();
+        let mut mirror = PonkoTexture {
+            id: 0,
+            width: 0,
+            height: 0,
+        };
+        assert_eq!(
+            ponko_ctx_create_mipmapped_render_target(ctx, 64, 32, &mut mirror),
+            PONKO_OK
+        );
+        assert_eq!((mirror.width, mirror.height), (64, 32));
+        errors.push(ponko_ctx_create_mipmapped_render_target(ctx, 0, 32, &mut mirror));
+        let mut eye = std::mem::zeroed::<PonkoCamera3D>();
+        assert_eq!(ponko_ctx_camera3d(ctx, &mut eye), PONKO_OK);
+        let flat = PonkoTargetCamera {
+            camera: eye,
+            target: mirror,
+            has_clip_plane: false,
+            clip_plane: [0.0; 4],
+        };
+        assert_eq!(ponko_ctx_set_target_cameras(ctx, &flat, 1), PONKO_OK);
+        // Its own screen effects, set and read by index.
+        let mut grey = PonkoEffect::default();
+        let source = c"fn effect(p: Pixel) -> vec3<f32> { return vec3<f32>(p.color.g); }";
+        assert_eq!(
+            ponko_ctx_create_effect(ctx, c"grey".as_ptr(), source.as_ptr(), &mut grey),
+            PONKO_OK
+        );
+        let list = [PonkoScreenEffect {
+            effect: grey,
+            has_material: false,
+            material: PonkoMaterial::default(),
+        }; 2];
+        assert_eq!(ponko_ctx_set_target_camera_effects(ctx, 0, list.as_ptr(), 2), PONKO_OK);
+        let mut back = [PonkoScreenEffect::default(); 4];
+        let mut n = 0;
+        assert_eq!(
+            ponko_ctx_target_camera_effects(ctx, 0, back.as_mut_ptr(), 4, &mut n),
+            PONKO_OK
+        );
+        assert_eq!((n, back[1]), (2, list[1]));
+        // The main view's list is its own.
+        assert_eq!(ponko_ctx_effects(ctx, back.as_mut_ptr(), 4, &mut n), PONKO_OK);
+        assert_eq!(n, 0);
+        // Setting the cameras again keeps them for the same target.
+        assert_eq!(ponko_ctx_set_target_cameras(ctx, &flat, 1), PONKO_OK);
+        assert_eq!(
+            ponko_ctx_target_camera_effects(ctx, 0, back.as_mut_ptr(), 4, &mut n),
+            PONKO_OK
+        );
+        assert_eq!(n, 2, "kept");
+        // Version 3: the culling box and background, and back.
+        let mut ex: PonkoTargetCameraEx = std::mem::zeroed();
+        ex.struct_size = size_of::<PonkoTargetCameraEx>() as u32;
+        ex.version = PONKO_TARGET_CAMERA_EX_VERSION;
+        assert_eq!(ponko_target_camera_ex_from(&flat, &mut ex), PONKO_OK);
+        assert!(!ex.has_cull_box && !ex.has_clear, "the defaults");
+        ex.has_cull_box = true;
+        ex.cull_box_min = PonkoVec3 { x: 1.0, y: 2.0, z: 3.0 };
+        ex.cull_box_max = PonkoVec3 {
+            x: -1.0,
+            y: 0.0,
+            z: 5.0,
+        };
+        ex.has_clear = true;
+        ex.clear = PonkoColor {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 0.0,
+        };
+        let pointer: *const PonkoTargetCameraEx = &ex;
+        assert_eq!(ponko_ctx_set_target_cameras_ex(ctx, &pointer, 1), PONKO_OK);
+        let mut read: PonkoTargetCameraEx = std::mem::zeroed();
+        read.struct_size = size_of::<PonkoTargetCameraEx>() as u32;
+        read.version = PONKO_TARGET_CAMERA_EX_VERSION;
+        assert_eq!(ponko_ctx_target_camera_ex(ctx, 0, &mut read), PONKO_OK);
+        assert!(read.has_cull_box && read.has_clear);
+        assert_eq!(
+            read.cull_box_min,
+            PonkoVec3 {
+                x: -1.0,
+                y: 0.0,
+                z: 3.0
+            },
+            "corners sorted"
+        );
+        assert_eq!(read.cull_box_max, PonkoVec3 { x: 1.0, y: 2.0, z: 5.0 });
+        assert_eq!(read.clear.a, 0.0);
+        let mut bad = ex;
+        bad.cull_box_min.x = f32::NAN;
+        let pointer: *const PonkoTargetCameraEx = &bad;
+        errors.push(ponko_ctx_set_target_cameras_ex(ctx, &pointer, 1));
+        // A version 2 caller gets neither.
+        let mut v2 = ex;
+        v2.version = 2;
+        let pointer: *const PonkoTargetCameraEx = &v2;
+        assert_eq!(ponko_ctx_set_target_cameras_ex(ctx, &pointer, 1), PONKO_OK);
+        assert_eq!(ponko_ctx_target_camera_ex(ctx, 0, &mut read), PONKO_OK);
+        assert!(
+            !read.has_cull_box && !read.has_clear,
+            "a version 2 caller leaves them off"
+        );
+        // No such camera; a null list.
+        errors.push(ponko_ctx_set_target_camera_effects(ctx, 1, list.as_ptr(), 1));
+        errors.push(ponko_ctx_target_camera_effects(ctx, 1, back.as_mut_ptr(), 4, &mut n));
+        errors.push(ponko_ctx_set_target_camera_effects(ctx, 0, std::ptr::null(), 1));
+    }
+}
+
+#[test]
+fn target_cameras_get_effects_a_culling_box_and_a_background_from_c() {
+    let mut errors: Vec<PonkoStatus> = Vec::new();
+    unsafe {
+        let g = ponko_game_new(c"target extras".as_ptr(), 64, 64);
+        let mut world = null_mut();
+        let user = (&raw mut errors).cast();
+        assert_eq!(
+            ponko_game_run_headless(g, 1, Some(target_camera_extras), user, &mut world),
+            PONKO_OK
+        );
+        ponko_world_free(world);
+    }
+    assert_eq!(errors, vec![PONKO_INVALID_ARGUMENT; 5]);
+}
+
 unsafe extern "C" fn materials(ctx: *mut PonkoCtx, user: *mut c_void) {
     unsafe {
         let found = &mut *user.cast::<Vec<(usize, bool)>>();

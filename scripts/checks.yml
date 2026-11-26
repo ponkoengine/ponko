@@ -77,6 +77,7 @@ jobs:
       - name: Release scripts
         run: |
           python3 scripts/release-check.py selftest
+          python3 scripts/c-library.py selftest
           python3 scripts/guide-note.py selftest
       # Every C export needs a test, or a reasoned entry in the allowlist.
       - name: C ABI test coverage
@@ -1880,6 +1881,31 @@ jobs:
             test -f "$work/data/ember-hop/progress.json"
             cd "$GITHUB_WORKSPACE"
           done
+      # The 3D reference game (examples/shard_grove, features navmesh and
+      # physics3d): its download with the command's own smoke run, then its
+      # walk-through from the package, started from an unrelated folder with
+      # a data folder of its own: three shards, a save at a shrine, quitting
+      # to the title, continuing the saved run, the gate and the title again;
+      # headless (no window, no GPU). Opening it in a window on each OS is a
+      # person's job (scripts/checklists/).
+      - name: The 3D game's download, with ponko package's own smoke run
+        if: ${{ !cancelled() }}
+        run: cargo run -p ponko_cli -- package --example shard_grove --features navmesh,physics3d --profile dev --out target/package-grove
+      - name: The 3D game's walk-through from its package (headless, from an unrelated folder)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir=$(find target/package-grove -maxdepth 1 -type d -name 'shard-grove-*' | head -n 1)
+          exe=$(find "$dir" -type f \( -name shard_grove -o -name shard_grove.exe \) | head -n 1)
+          test -n "$exe" || { echo "no shard_grove program in $dir"; exit 1; }
+          exe="$GITHUB_WORKSPACE/$exe"
+          work="$RUNNER_TEMP/grove headless"
+          mkdir -p "$work/elsewhere" "$work/data"
+          cd "$work/elsewhere"
+          PONKO_DATA_DIR="$work/data" "$exe" --smoke headless --report report.json
+          python -c "import json, sys; r = json.load(open(sys.argv[1])); print(json.dumps(r)); t = r['tally']; ok = r['finished'] and r['mode'] == 'headless' and t['saves'] >= 1 and t['loads'] >= 1 and t['wins'] == 1 and r['warden_joints'] > 0 and r['path_corners'] > 0; sys.exit(0 if ok else 1)" report.json
+          cd "$GITHUB_WORKSPACE"
 
   # The reference validation bundles (book/src/validation-bundles.md): the
   # deliberately broken game and the corrected one, run in-process and as a

@@ -263,7 +263,7 @@
 
 #define PONKO_CAMERA3D_EX_VERSION 2
 
-#define PONKO_TARGET_CAMERA_EX_VERSION 2
+#define PONKO_TARGET_CAMERA_EX_VERSION 3
 
 #define PONKO_PREDICTION_DEFAULT_CAPACITY 256
 
@@ -3697,6 +3697,11 @@ typedef struct PonkoTargetCameraEx {
   struct PonkoTargetCamera target_camera;
   bool particles;
   uint32_t debug_draw;
+  bool has_cull_box;
+  struct PonkoVec3 cull_box_min;
+  struct PonkoVec3 cull_box_max;
+  bool has_clear;
+  struct PonkoColor clear;
 } PonkoTargetCameraEx;
 
 typedef bool (*PonkoPredictStepFn)(void *user,
@@ -6491,6 +6496,11 @@ enum PonkoStatus ponko_net_messages_steam_host(uint32_t app_id,
                                                size_t max_clients,
                                                struct PonkoNetMessages **out_endpoint);
 
+enum PonkoStatus ponko_net_messages_steam_sockets_host(uint32_t app_id,
+                                                       uint32_t visibility,
+                                                       size_t max_clients,
+                                                       struct PonkoNetMessages **out_endpoint);
+
 enum PonkoStatus ponko_net_messages_steam_join(uint32_t app_id,
                                                uint64_t lobby,
                                                struct PonkoNetMessages **out_endpoint);
@@ -8582,6 +8592,22 @@ enum PonkoStatus ponko_ctx_create_render_target(struct PonkoCtx *ctx,
                                                 uint32_t width,
                                                 uint32_t height,
                                                 struct PonkoTexture *out_texture);
+
+enum PonkoStatus ponko_ctx_create_mipmapped_render_target(struct PonkoCtx *ctx,
+                                                          uint32_t width,
+                                                          uint32_t height,
+                                                          struct PonkoTexture *out_texture);
+
+enum PonkoStatus ponko_ctx_set_target_camera_effects(struct PonkoCtx *ctx,
+                                                     size_t index,
+                                                     const struct PonkoScreenEffect *effects,
+                                                     size_t count);
+
+enum PonkoStatus ponko_ctx_target_camera_effects(struct PonkoCtx *ctx,
+                                                 size_t index,
+                                                 struct PonkoScreenEffect *out_effects,
+                                                 size_t capacity,
+                                                 size_t *out_count);
 
 enum PonkoStatus ponko_ctx_reflection_camera(struct PonkoCtx *ctx,
                                              const struct PonkoCamera3D *camera,

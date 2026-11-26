@@ -3597,6 +3597,14 @@ public:
     static net_messages steam_host(std::uint32_t app_id, std::size_t max_clients) {
         PonkoNetMessages* p = nullptr; detail::check(ponko_net_messages_steam_host(app_id, max_clients, &p)); return net_messages(p);
     }
+    /// Like steam_host, over Steam Networking Sockets, in a lobby of that visibility: lobby members
+    /// connect to this host through Valve's relays. For dedicated hosts and games that want
+    /// connections; joiners use steam_join.
+    static net_messages steam_sockets_host(std::uint32_t app_id, steam_lobby_visibility visibility, std::size_t max_clients) {
+        PonkoNetMessages* p = nullptr;
+        detail::check(ponko_net_messages_steam_sockets_host(app_id, static_cast<std::uint32_t>(visibility), max_clients, &p));
+        return net_messages(p);
+    }
     /// Joins Steam lobby `lobby` of app `app_id` through Steam relays. Throws ponko::error without the
     /// `steam` feature or a running Steam.
     static net_messages steam_join(std::uint32_t app_id, std::uint64_t lobby) {
@@ -8747,6 +8755,12 @@ public:
     ponko::render_target create_render_target(std::uint32_t w, std::uint32_t h) {
         ponko::render_target t{}; detail::check(ponko_ctx_create_render_target(raw_, w, h, &t)); return t;
     }
+    /// A render target with a full chain of mip levels, made again from the first each frame something
+    /// wrote it, so materials sampling it from afar don't alias (Rust
+    /// `Graphics::create_mipmapped_render_target`). A third more memory.
+    ponko::render_target create_mipmapped_render_target(std::uint32_t w, std::uint32_t h) {
+        ponko::render_target t{}; detail::check(ponko_ctx_create_mipmapped_render_target(raw_, w, h, &t)); return t;
+    }
     /// `t` as the render target it is: the `target` of a target_camera,
     /// compute_pass or target_effect read back from the engine is a plain
     /// texture. Throws ponko::error (PONKO_ERROR_INVALID) if `t` isn't a live
@@ -8787,12 +8801,28 @@ public:
         return t;
     }
     /// Replaces the target cameras drawn each frame from their versioned forms (empty: none): as
-    /// set_target_cameras, each with its `particles` and `debug_draw`.
+    /// set_target_cameras, each with its `particles`, `debug_draw`, culling box (`has_cull_box`,
+    /// `cull_box_min`, `cull_box_max`) and background (`has_clear`, `clear`).
     void set_target_cameras_ex(const std::vector<ponko::target_camera_ex>& list) {
         std::vector<const PonkoTargetCameraEx*> pointers;
         pointers.reserve(list.size());
         for (const ponko::target_camera_ex& t : list) pointers.push_back(&t);
         detail::check(ponko_ctx_set_target_cameras_ex(raw_, pointers.data(), pointers.size()));
+    }
+    /// The screen effects of target camera `index`, run over its picture after it is drawn (Rust
+    /// `TargetCamera::effects`). Throws for an index past the end.
+    std::vector<screen_effect> target_camera_effects(std::size_t index) const {
+        std::size_t n = 0;
+        detail::check(ponko_ctx_target_camera_effects(raw_, index, nullptr, 0, &n));
+        std::vector<screen_effect> list(n);
+        detail::check(ponko_ctx_target_camera_effects(raw_, index, list.data(), list.size(), &n));
+        return list;
+    }
+    /// Replaces the screen effects of target camera `index` (empty: none); the main view's
+    /// (set_effects) never apply to it. Setting the target cameras again keeps them for a camera
+    /// drawing into the same render target at the same index. Throws for an index past the end.
+    void set_target_camera_effects(std::size_t index, const std::vector<screen_effect>& list) {
+        detail::check(ponko_ctx_set_target_camera_effects(raw_, index, list.data(), list.size()));
     }
     /// A plain white material, made once and shared.
     material default_material() { material m{}; detail::check(ponko_ctx_default_material(raw_, &m)); return m; }

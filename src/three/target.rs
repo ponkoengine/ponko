@@ -5,7 +5,8 @@
 
 use glam::{Mat4, Vec3, Vec4};
 
-use super::Camera3D;
+use super::{Camera3D, ScreenEffect};
+use crate::color::Color;
 use crate::gfx::Graphics;
 use crate::texture::Texture;
 
@@ -119,8 +120,23 @@ impl RenderTarget {
 /// [`debug_draw`](crate::d3::Camera::debug_draw) says so
 /// ([`with_debug_draw`](Self::with_debug_draw)).
 ///
-/// Target cameras have no temporal history: no jitter, TAA, temporal AO or
-/// SSR is applied. Each draw clears and replaces the target's color/depth.
+/// What else is its own:
+/// - [`cull_box`](Self::cull_box): only what reaches into a box in the
+///   world is drawn (a room seen in a mirror, a reflection of one shore);
+/// - [`clear`](Self::clear): a background colour instead of the main view's
+///   clear colour and sky (transparent for an item icon);
+/// - [`effects`](Self::effects): [`ScreenEffect`]s run over its picture
+///   after it is drawn, in order, each reading what the one before left
+///   (night vision on a security camera). The main view's
+///   [`RenderPasses::effects`](crate::render::RenderPasses::effects) are
+///   never applied to it.
+///
+/// The engine's own screen-space and display effects are the main view's:
+/// target cameras have no jitter, TAA, ambient occlusion or screen-space
+/// reflections, and their pictures get bloom, exposure and tone mapping
+/// when the main view shows them, not before. Game screen effects keep no
+/// history from one frame to the next, so a target camera needs none for
+/// them. Each draw clears and replaces the target's color and depth.
 /// Changing MSAA recreates their attachments before the next draw.
 ///
 /// ```no_run
@@ -137,7 +153,8 @@ impl RenderTarget {
 /// );
 /// # }
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct TargetCamera {
     /// Where it looks from. Its aspect ratio follows the target's size.
     pub camera: Camera3D,
@@ -148,6 +165,22 @@ pub struct TargetCamera {
     /// which mustn't show what's below the mirror. It costs nothing: the
     /// camera's near plane is tilted onto it.
     pub clip_plane: Option<Vec4>,
+    /// Only models whose bounds reach into this box in the world, `(min,
+    /// max)`, are drawn: a model is kept when its bounding sphere touches
+    /// the box. Models, LOD groups and terrain tiles are tested one by one;
+    /// instance batches by their box (and their cells on the CPU path);
+    /// crowds whole. Particles, trails, lines and the sky aren't culled by
+    /// it. `None`: everything in view.
+    pub cull_box: Option<(Vec3, Vec3)>,
+    /// The background where nothing is drawn: this colour (its alpha too)
+    /// instead of the main view's clear colour and sky. `None`: the main
+    /// view's.
+    pub clear: Option<Color>,
+    /// Screen effects over its picture, after it is drawn and before
+    /// anything reads it, in order. Each reads the target camera's picture
+    /// and depth (`p.color`, `p.world`, `p.distance`, `scene_color`, ...)
+    /// as a main-view effect reads the frame. Empty: none, at no cost.
+    pub effects: Vec<ScreenEffect>,
 }
 
 impl TargetCamera {
@@ -166,7 +199,70 @@ impl TargetCamera {
             camera,
             target,
             clip_plane: None,
+            cull_box: None,
+            clear: None,
+            effects: Vec::new(),
         }
+    }
+
+    /// The same camera, drawing only models that reach into the world box
+    /// from `min` to `max` (see [`cull_box`](Self::cull_box)).
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("Mirror", 640, 360).run_headless(0, |ctx| {
+    ///     let mirror = ctx.gfx.create_render_target(256, 256);
+    ///     // Only the bathroom shows in its mirror, not the rooms behind the wall.
+    ///     let camera = ponko::render::TargetCamera::new(ctx.scene3d.camera, mirror)
+    ///         .with_cull_box(vec3(-2.0, 0.0, -3.0), vec3(2.0, 3.0, 0.0));
+    ///     assert_eq!(camera.cull_box, Some((vec3(-2.0, 0.0, -3.0), vec3(2.0, 3.0, 0.0))));
+    ///     ctx.scene3d.passes.target_cameras.push(camera);
+    /// });
+    /// ```
+    #[must_use]
+    pub fn with_cull_box(mut self, min: Vec3, max: Vec3) -> Self {
+        self.cull_box = Some((min.min(max), min.max(max)));
+        self
+    }
+
+    /// The same camera, clearing its target to `color` instead of the main
+    /// view's background (see [`clear`](Self::clear)).
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("Icons", 640, 360).run_headless(0, |ctx| {
+    ///     let icon = ctx.gfx.create_render_target(64, 64);
+    ///     // An item icon: the model on a see-through background.
+    ///     let camera = ponko::render::TargetCamera::new(ctx.scene3d.camera, icon).with_clear(Color::TRANSPARENT);
+    ///     assert_eq!(camera.clear, Some(Color::TRANSPARENT));
+    /// });
+    /// ```
+    #[must_use]
+    pub fn with_clear(mut self, color: Color) -> Self {
+        self.clear = Some(color);
+        self
+    }
+
+    /// The same camera, running `effect` over its picture after the
+    /// effects it already has (see [`effects`](Self::effects)).
+    ///
+    /// ```no_run
+    /// # use ponko::prelude::*;
+    /// # fn f(ctx: &mut Ctx) {
+    /// let screen = ctx.gfx.create_render_target(320, 240);
+    /// let green = ctx.gfx.create_effect("night vision", "
+    ///     fn effect(p: Pixel) -> vec3<f32> {
+    ///         return vec3<f32>(0.0, dot(p.color, vec3<f32>(0.3, 0.6, 0.1)) * 4.0, 0.0);
+    ///     }");
+    /// let camera = ponko::render::TargetCamera::new(ctx.scene3d.camera, screen)
+    ///     .with_effect(ponko::render::ScreenEffect::new(green));
+    /// ctx.scene3d.passes.target_cameras.push(camera);
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn with_effect(mut self, effect: ScreenEffect) -> Self {
+        self.effects.push(effect);
+        self
     }
 
     /// The same camera, drawing particles, trails and lines or not (its
@@ -235,9 +331,8 @@ impl TargetCamera {
         let forward = camera.forward() * Vec3::new(1.0, -1.0, 1.0);
         mirrored.rotation = super::look_rotation(forward);
         Self {
-            camera: mirrored,
-            target,
             clip_plane: Some(Vec4::new(0.0, 1.0, 0.0, -level)),
+            ..Self::new(mirrored, target)
         }
     }
 }
@@ -313,7 +408,67 @@ impl Graphics {
     /// });
     /// ```
     pub fn try_create_render_target(&mut self, width: u32, height: u32) -> Result<RenderTarget, crate::error::Error> {
-        let target = self.make_render_target(width, height)?;
+        self.new_render_target(width, height, false)
+    }
+
+    /// A [`RenderTarget`] like [`create_render_target`](Self::create_render_target)'s, with a full
+    /// chain of mip levels (down to 1 x 1) that the engine makes again from
+    /// the first level each frame something wrote it: a target camera (after
+    /// its screen effects), a compute pass, a target effect or a UI panel.
+    /// A material sampling it from afar, or at a slant, reads the smaller
+    /// levels instead of aliasing: a mirror down a corridor, a monitor across
+    /// a room, a reflection on rippled water.
+    ///
+    /// It costs a third more memory than one without levels, and each frame
+    /// it is written, one small pass per level (each a quarter of the one
+    /// above). Levels written by a target camera, a compute pass or a
+    /// texture the CPU wrote are ready for the main view of the same frame;
+    /// after a target effect or a UI panel, for the next frame's.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("Mirror", 640, 360).run_headless(0, |ctx| {
+    ///     let mirror = ctx.gfx.create_mipmapped_render_target(512, 512);
+    ///     ctx.scene3d.passes.target_cameras.push(ponko::render::TargetCamera::new(ctx.scene3d.camera, mirror));
+    ///     let glass = ctx.gfx.create_material(ponko::render::MaterialDesc::default().with_texture(mirror.texture()));
+    ///     assert_eq!(mirror.size(), vec2(512.0, 512.0));
+    ///     assert!(ctx.is_live(glass));
+    /// });
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// If the size is zero or larger than the GPU takes.
+    pub fn create_mipmapped_render_target(&mut self, width: u32, height: u32) -> RenderTarget {
+        self.try_create_mipmapped_render_target(width, height)
+            .unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// [`create_mipmapped_render_target`](Self::create_mipmapped_render_target)
+    /// with errors as values.
+    ///
+    /// # Errors
+    ///
+    /// As [`try_create_render_target`](Self::try_create_render_target)'s.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     let err = ctx.gfx.try_create_mipmapped_render_target(64, 0).unwrap_err();
+    ///     assert_eq!(err.kind(), ErrorKind::Invalid);
+    /// });
+    /// ```
+    pub fn try_create_mipmapped_render_target(
+        &mut self,
+        width: u32,
+        height: u32,
+    ) -> Result<RenderTarget, crate::error::Error> {
+        self.new_render_target(width, height, true)
+    }
+
+    /// A render target the game owns, with mip levels or not.
+    fn new_render_target(&mut self, width: u32, height: u32, mips: bool) -> Result<RenderTarget, crate::error::Error> {
+        let target = self.make_render_target_with(width, height, mips)?;
         self.textures_live.insert(target.texture.id);
         self.asset_ledger
             .made(crate::inventory::AssetClass::RenderTarget, target.texture.id);
@@ -323,6 +478,16 @@ impl Graphics {
     /// [`Graphics::try_create_render_target`](crate::gfx::Graphics::try_create_render_target) for the engine's own targets
     /// (reflection probe faces): not the game's to free or count.
     pub(crate) fn make_render_target(&mut self, width: u32, height: u32) -> Result<RenderTarget, crate::error::Error> {
+        self.make_render_target_with(width, height, false)
+    }
+
+    /// [`make_render_target`](Self::make_render_target), with mip levels or not.
+    fn make_render_target_with(
+        &mut self,
+        width: u32,
+        height: u32,
+        mips: bool,
+    ) -> Result<RenderTarget, crate::error::Error> {
         if width == 0 || height == 0 {
             return Err(crate::error::Error::new(
                 crate::error::ErrorKind::Invalid,
@@ -340,7 +505,7 @@ impl Graphics {
                     format!("{width} x {height} is larger than this GPU's maximum texture size ({max})"),
                 ));
             }
-            Texture::new(renderer.create_render_target(width, height), width, height)
+            Texture::new(renderer.create_render_target(width, height, mips), width, height)
         };
         self.assets3d.render_targets.push(texture);
         Ok(RenderTarget::from_texture(texture))

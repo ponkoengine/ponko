@@ -408,7 +408,17 @@ pub(super) fn target(device: &wgpu::Device, size: (u32, u32), format: wgpu::Text
 /// The first mip and layer of `texture` (made with `COPY_SRC`), row by row
 /// from the top with no padding. Waits for the GPU.
 pub(crate) fn read_texture(device: &wgpu::Device, queue: &wgpu::Queue, texture: &wgpu::Texture) -> Vec<u8> {
-    let (width, height) = (texture.width(), texture.height());
+    read_texture_level(device, queue, texture, 0).0
+}
+
+/// [`read_texture`] of mip level `level`, with the level's width and height.
+pub(crate) fn read_texture_level(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    level: u32,
+) -> (Vec<u8>, u32, u32) {
+    let (width, height) = ((texture.width() >> level).max(1), (texture.height() >> level).max(1));
     let texel = texture
         .format()
         .block_copy_size(None)
@@ -423,7 +433,10 @@ pub(crate) fn read_texture(device: &wgpu::Device, queue: &wgpu::Queue, texture: 
     });
     let mut encoder = device.create_command_encoder(&Default::default());
     encoder.copy_texture_to_buffer(
-        texture.as_image_copy(),
+        wgpu::TexelCopyTextureInfo {
+            mip_level: level,
+            ..texture.as_image_copy()
+        },
         wgpu::TexelCopyBufferInfo {
             buffer: &readback,
             layout: wgpu::TexelCopyBufferLayout {
@@ -443,13 +456,14 @@ pub(crate) fn read_texture(device: &wgpu::Device, queue: &wgpu::Queue, texture: 
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     let mapped = readback.get_mapped_range(..).unwrap();
     if padded == row {
-        return mapped.to_vec();
+        return (mapped.to_vec(), width, height);
     }
-    mapped
+    let texels = mapped
         .chunks_exact(padded as usize)
         .flat_map(|r| &r[..row as usize])
         .copied()
-        .collect()
+        .collect();
+    (texels, width, height)
 }
 
 /// An RGBA8 image read back from the GPU, row by row from the top.
