@@ -1425,3 +1425,104 @@ fn considerations_and_checks_read_raw_values() {
     assert!(!Value::Num(0.0).truthy());
     assert!(Value::Vec2(Vec2::ZERO).truthy(), "any point counts as set");
 }
+
+// ---- counting and listing ---------------------------------------------------
+
+#[test]
+fn a_new_blackboard_is_empty() {
+    let bb = Blackboard::new();
+    assert!(bb.is_empty());
+    assert_eq!(bb.len(), 0);
+    assert_eq!(bb.iter().count(), 0);
+}
+
+#[test]
+fn a_blackboard_counts_its_entries() {
+    let mut bb = Blackboard::new().with(ALERT, true);
+    assert!(!bb.is_empty());
+    assert_eq!(bb.len(), 1);
+    bb.set(HEALTH, 0.5);
+    assert_eq!(bb.len(), 2);
+    assert_eq!(bb.remove(ALERT), Some(Value::Bool(true)));
+    assert_eq!(bb.len(), 1);
+    bb.remove(HEALTH);
+    assert!(bb.is_empty(), "removing the last entry empties it");
+}
+
+#[test]
+fn setting_a_key_again_replaces_it_and_keeps_its_place() {
+    let mut bb = Blackboard::new().with(ALERT, true).with(HEALTH, 1.0).with(HUNGER, 10.0);
+    bb.set(ALERT, false);
+    bb.set(HEALTH, 0.25);
+    assert_eq!(bb.len(), 3, "setting an existing key adds no entry");
+    let listed: Vec<_> = bb.iter().collect();
+    assert_eq!(
+        listed,
+        [
+            (ALERT, Value::Bool(false)),
+            (HEALTH, Value::Num(0.25)),
+            (HUNGER, Value::Num(10.0)),
+        ],
+        "the new values, in the old places"
+    );
+}
+
+#[test]
+fn iter_lists_entries_in_the_order_they_were_first_set() {
+    let mut bb = Blackboard::new();
+    bb.set(HUNGER, 1.0);
+    bb.set(ALERT, true);
+    bb.set(HEALTH, 2.0);
+    bb.set(HUNGER, 3.0); // set again: still first
+    let keys: Vec<_> = bb.iter().map(|(k, _)| k.name()).collect();
+    assert_eq!(keys, ["hunger", "alert", "health"]);
+    // A removed key that comes back is a new entry, at the end.
+    bb.remove(HUNGER);
+    bb.set(HUNGER, 4.0);
+    let keys: Vec<_> = bb.iter().map(|(k, _)| k.name()).collect();
+    assert_eq!(keys, ["alert", "health", "hunger"]);
+    assert_eq!(bb.iter().last(), Some((HUNGER, Value::Num(4.0))));
+}
+
+#[test]
+fn the_tree_registry_counts_its_trees() {
+    let mut trees = BehaviorTrees::default();
+    assert!(trees.is_empty());
+    assert_eq!(trees.len(), 0);
+    trees.insert(
+        "patrol",
+        BehaviorTree::from_json(r#"{"root": {"do": "walk"}}"#).unwrap(),
+    );
+    assert!(!trees.is_empty());
+    assert_eq!(trees.len(), 1);
+    trees.insert(
+        "guard",
+        BehaviorTree::from_json(r#"{"root": {"do": "chase"}}"#).unwrap(),
+    );
+    assert_eq!(trees.len(), 2);
+    // Inserting under a name that is taken replaces the tree.
+    trees.insert("guard", BehaviorTree::from_json(r#"{"root": {"do": "flee"}}"#).unwrap());
+    assert_eq!(trees.len(), 2, "a replaced tree is not counted twice");
+    assert_eq!(trees.names(), ["guard", "patrol"]);
+}
+
+#[test]
+fn a_tree_the_registry_refuses_is_not_counted() {
+    let mut trees = BehaviorTrees::default();
+    trees.insert("ok", BehaviorTree::from_json(r#"{"root": {"do": "walk"}}"#).unwrap());
+    // A tree that runs itself is refused, and nothing changes.
+    let looped = BehaviorTree::from_json(r#"{"root": {"subtree": "loop"}}"#).unwrap();
+    assert!(trees.try_insert("loop", looped).is_err());
+    assert_eq!(trees.len(), 1);
+    assert_eq!(trees.names(), ["ok"]);
+}
+
+#[test]
+fn a_compiled_tree_is_not_empty_and_counts_its_nodes() {
+    let one = BehaviorTree::from_json(r#"{"root": {"do": "walk"}}"#).unwrap();
+    assert!(!one.is_empty(), "a compiled tree always has a root");
+    assert_eq!(one.len(), 1);
+    let three = BehaviorTree::from_json(r#"{"root": {"sequence": [{"check": "alert"}, {"do": "chase"}]}}"#).unwrap();
+    assert!(!three.is_empty());
+    assert_eq!(three.len(), 3, "the sequence and its two children");
+}
