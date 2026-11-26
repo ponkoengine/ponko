@@ -54,8 +54,10 @@
 #![deny(missing_docs)]
 
 pub mod load;
+mod proxy;
 mod stun;
 
+pub use proxy::TrustedProxy;
 pub use stun::{StunResponder, StunStats};
 
 use std::collections::{BTreeMap, HashMap};
@@ -75,7 +77,9 @@ use ponko::net::{Lane, MessageEvent, NetMessages, PeerId};
 pub enum AddressKey {
     /// The IP address, whatever the port: every client behind one IP
     /// shares the budgets. A browser (WebSocket) connection is its own
-    /// address, since the server doesn't see the browser's IP.
+    /// address, unless [`LobbyLimits::trusted_proxies`] names the reverse
+    /// proxies in front of the server: then it is the client's IP address,
+    /// from the proxy's `X-Forwarded-For` header.
     #[default]
     Ip,
     /// Every connection on its own (behind a proxy that hides the clients'
@@ -97,6 +101,16 @@ pub enum AddressKey {
 pub struct LobbyLimits {
     /// What counts as one address (default [`AddressKey::Ip`]).
     pub address_key: AddressKey,
+    /// Reverse proxies in front of the WebSocket port whose
+    /// `X-Forwarded-For` header the server believes (default none). A
+    /// browser connection from one of them counts as the client address
+    /// the proxies wrote ([`WebPeer::client_ip`](ponko::net::WebPeer::client_ip)),
+    /// and the limits per address use that. With any proxy named, a
+    /// browser connection from anywhere else counts as its own IP address
+    /// (its header ignored); a trusted proxy's connection without a
+    /// readable header counts on its own. Empty: every browser connection
+    /// is an address of its own, and the header is never read.
+    pub trusted_proxies: Vec<TrustedProxy>,
     /// Connections one address may hold (default 16); more are refused
     /// with [`LobbyError::TooManyConnections`] and closed.
     pub connections_per_address: u32,
@@ -141,6 +155,7 @@ impl Default for LobbyLimits {
     fn default() -> Self {
         Self {
             address_key: AddressKey::Ip,
+            trusted_proxies: Vec::new(),
             connections_per_address: 16,
             requests_per_second: 10.0,
             request_burst: 20.0,
@@ -671,10 +686,9 @@ impl LobbyServer {
     fn connected(&mut self, endpoint: usize, peer: PeerId) {
         let member = MemberId::from_bits(self.next_member);
         self.next_member = self.next_member.wrapping_add(1).max(1);
-        let addr = match (self.limits.address_key, self.endpoints[endpoint].peer_addr(peer)) {
-            (AddressKey::Ip, Some(addr)) => AddrKey::Ip(addr.ip()),
-            _ => AddrKey::Member(member),
-        };
+        let addr = self
+            .address_of(endpoint, peer)
+            .map_or(AddrKey::Member(member), AddrKey::Ip);
         let (requests, relay) = (self.limits.request_burst, self.limits.relay_burst_bytes);
         let now = self.now;
         let address = self.addresses.entry(addr).or_insert_with(|| Address {
@@ -717,6 +731,22 @@ impl LobbyServer {
                 limits,
             },
         );
+    }
+
+    /// The IP address a connection's limits count against, if it has one:
+    /// a browser behind a trusted proxy is the client the proxy names.
+    fn address_of(&self, endpoint: usize, peer: PeerId) -> Option<IpAddr> {
+        if self.limits.address_key != AddressKey::Ip {
+            return None;
+        }
+        let net = &self.endpoints[endpoint];
+        match net.web_peer(peer) {
+            Some(web) if !self.limits.trusted_proxies.is_empty() => {
+                let proxies = &self.limits.trusted_proxies;
+                web.client_ip(|ip| proxies.iter().any(|p| p.contains(ip)))
+            }
+            _ => net.peer_addr(peer).map(|a| a.ip()),
+        }
     }
 
     /// Closes `member` after its last messages went out.

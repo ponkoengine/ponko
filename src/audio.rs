@@ -183,6 +183,8 @@ pub(crate) mod sound_file;
 mod stream_decoder;
 #[cfg(feature = "audio")]
 mod unlock;
+#[cfg(all(feature = "audio", any(target_arch = "wasm32", test)))]
+mod web_output;
 
 #[cfg(feature = "audio")]
 mod backend {
@@ -447,10 +449,16 @@ mod backend {
         pub(crate) spatial: super::spatial::SpatialState,
     }
     impl Audio {
-        /// Whether sound is allowed: always on the desktop, after the
-        /// first click, tap or key press on the web.
         pub fn unlocked(&self) -> bool {
-            !self.gate.is_locked()
+            let unlocked = !self.gate.is_locked();
+            #[cfg(target_arch = "wasm32")]
+            let unlocked = unlocked
+                && self
+                    .manager
+                    .as_ref()
+                    .and_then(Option::as_ref)
+                    .is_some_and(Manager::ready);
+            unlocked
         }
         /// A click, tap or key press: on the web the first one opens the
         /// output (browsers allow it now) and starts the voices that waited.
@@ -1542,13 +1550,11 @@ impl Audio {
         self.started.clear();
     }
 
-    /// Whether the game can be heard yet: always on the desktop (and
-    /// without the `audio` feature or a window). In a browser, `false` until
-    /// the player first clicks, taps or presses a key, as browsers allow
-    /// sound only after that. Until then looping sounds you play (music,
-    /// ambience) wait and start at that gesture, while one-shots are
-    /// dropped: a click heard seconds late would be out of place. Show a
-    /// "click to start" screen while it is `false` if the first sounds matter.
+    /// Whether browser audio is ready. Browser output opens after the player
+    /// first clicks, taps or presses a key. This stays `false` if the output
+    /// fails to open. Before the gesture, looping sounds (music, ambience)
+    /// wait and one-shots are dropped. Returns `true` on the desktop, in
+    /// headless runs and when the `audio` feature is disabled.
     ///
     /// ```
     /// # use ponko::prelude::*;
@@ -1560,7 +1566,7 @@ impl Audio {
     /// Game::new("t", 1, 1).run_headless(0, |ctx| assert!(ctx.audio.unlocked()));
     /// ```
     pub fn unlocked(&self) -> bool {
-        self.backend.unlocked()
+        self.headless || self.backend.unlocked()
     }
 
     /// Whether nothing is mixed: a headless run without an offline output,

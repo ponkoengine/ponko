@@ -142,8 +142,6 @@ impl LodBench {
     /// limits, timestamp queries where there are any, `PONKO_GPU_TIER`
     /// honored) and builds the field. `Err` says why there is no GPU.
     pub fn new(scene: LodScene) -> Result<Self, String> {
-        // Backends and flags from wgpu's environment variables, as the window's
-        // instance takes them: `WGPU_BACKEND=dx12` benchmarks DirectX 12.
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,

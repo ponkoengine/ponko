@@ -99,8 +99,10 @@ jobs:
         run: python3 scripts/check-cpp-api.py
       - name: Check runner self-tests
         run: python3 scripts/run-checks.py --selftest
+      # `cargo fmt --all --check` checks the same files, but in one rustfmt
+      # command that passes Windows' command-line limit in a long checkout path.
       - name: Workspace Rust formatting
-        run: cargo fmt --all --check
+        run: python3 scripts/fmt-workspace.py --check
       # The Bevy comparison scenes are a crate of their own, outside the
       # workspace. Only their formatting is checked: building them pulls in
       # all of Bevy.
@@ -1221,6 +1223,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           key: web
       - run: cargo clippy -p ponko --target wasm32-unknown-unknown --examples
+      - run: cargo clippy -p ponko --target wasm32-unknown-unknown --lib --example web_smoke -- -D warnings
       # Image decoders work in the browser build too, with every format on.
       - run: cargo check -p ponko --target wasm32-unknown-unknown --features image-formats
       # The 3D examples (the 3D browser smoke fixture among them) need the feature.
@@ -1598,7 +1601,7 @@ jobs:
       # GStreamer's PulseAudio device provider fails to connect) as soon as
       # a page asks an AudioContext for its output channels, which the
       # engine does when it opens its audio at a game's first click
-      # (src/audio/unlock.rs). A PulseAudio server with a null sink is the
+      # (src/audio/web_output/browser.rs). A PulseAudio server with a null sink is the
       # runner's sound card, so the fixtures' music plays in WebKit too.
       - name: A sound server for WebKit (PulseAudio with a null sink)
         local-skip: Configure a PulseAudio null sink on the dedicated test host.
@@ -1611,16 +1614,9 @@ jobs:
           pactl set-default-sink ci_null
           pactl info
       - name: WebKit, WebGL2 (2D and 3D fixtures)
-        # WebKit on Linux plays Web Audio and media through GStreamer: its
-        # warnings land in the browser's output (browser.log in the report).
-        # WebKit reads an AudioContext's output channels from GStreamer's
-        # list of audio devices, and on the runner that list comes back
-        # empty (it is read before the device providers have started), so
-        # maxChannelCount is 0 and the engine's audio output refuses to open
-        # (0 buffers played). The null sink is stereo: say so.
+        # Keep GStreamer diagnostics in browser.log.
         env:
           GST_DEBUG: "2"
-          WEBKIT_GST_MAX_NUMBER_OF_AUDIO_OUTPUT_CHANNELS: "2"
         timeout-minutes: 8
         if: ${{ !cancelled() }}
         run: |
@@ -1629,17 +1625,19 @@ jobs:
             node web/smoke/smoke.mjs --fixture "$fixture" --browser webkit --backend webgl2 || status=1
           done
           exit $status
+      - name: WebKit audio with zero reported channels and a rejected resume
+        timeout-minutes: 5
+        if: ${{ !cancelled() }}
+        run: |
+          status=0
+          for mode in zero-channels resume-rejected; do
+            env -u WEBKIT_GST_MAX_NUMBER_OF_AUDIO_OUTPUT_CHANNELS node web/smoke/smoke.mjs --fixture web_smoke --browser webkit --backend webgl2 --audio-output "$mode" || status=1
+          done
+          exit $status
       - name: WebKit, WebGPU
-        # WebKit on Linux plays Web Audio and media through GStreamer: its
-        # warnings land in the browser's output (browser.log in the report).
-        # WebKit reads an AudioContext's output channels from GStreamer's
-        # list of audio devices, and on the runner that list comes back
-        # empty (it is read before the device providers have started), so
-        # maxChannelCount is 0 and the engine's audio output refuses to open
-        # (0 buffers played). The null sink is stereo: say so.
+        # Keep GStreamer diagnostics in browser.log.
         env:
           GST_DEBUG: "2"
-          WEBKIT_GST_MAX_NUMBER_OF_AUDIO_OUTPUT_CHANNELS: "2"
         timeout-minutes: 5
         if: ${{ !cancelled() }}
         run: node web/smoke/smoke.mjs --fixture web_smoke --browser webkit --backend webgpu --allow-unsupported

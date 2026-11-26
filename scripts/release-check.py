@@ -79,7 +79,7 @@ def crates(root=ROOT):
     """(name, version, manifest dict) of every publishable crate of the workspace."""
     found = []
     for manifest in [root / "Cargo.toml", *sorted(root.glob("crates/*/Cargo.toml"))]:
-        data = tomllib.loads(manifest.read_text())
+        data = tomllib.loads(manifest.read_text(encoding='utf-8'))
         package = data.get("package")
         if package is None or package.get("publish") is False:
             continue
@@ -94,7 +94,7 @@ def license_problems(root=ROOT):
     """Publishable sub-crates whose license files are missing or differ from the root's."""
     out = []
     for manifest in sorted(root.glob("crates/*/Cargo.toml")):
-        package = tomllib.loads(manifest.read_text()).get("package")
+        package = tomllib.loads(manifest.read_text(encoding='utf-8')).get("package")
         if package is None or package.get("publish") is False:
             continue
         for name in LICENSE_FILES:
@@ -235,7 +235,7 @@ def pin_texts(root=ROOT):
     texts = {}
     for pattern in PIN_FILES:
         for path in sorted(root.glob(pattern)):
-            texts[str(path.relative_to(root))] = path.read_text()
+            texts[str(path.relative_to(root))] = path.read_text(encoding='utf-8')
     return texts
 
 
@@ -297,7 +297,7 @@ def untagged(published, tags):
 
 
 def git(*args, repo=ROOT):
-    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
+    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, encoding='utf-8')
 
 
 def release_branch(version):
@@ -339,9 +339,9 @@ def check(tag, on_branch):
     book = None
     if found:
         chapter = ROOT / "book" / "src" / changelog.chapter_name(found.group(1))
-        book = (chapter.read_text() if chapter.is_file() else None,
-                (ROOT / "book" / "src" / "SUMMARY.md").read_text())
-    found = problems(tag, crates(), (ROOT / "CHANGELOG.md").read_text(), fragments, book, pin_texts()) + license_problems()
+        book = (chapter.read_text(encoding='utf-8') if chapter.is_file() else None,
+                (ROOT / "book" / "src" / "SUMMARY.md").read_text(encoding='utf-8'))
+    found = problems(tag, crates(), (ROOT / "CHANGELOG.md").read_text(encoding='utf-8'), fragments, book, pin_texts()) + license_problems()
     if on_branch:
         found += branch_problems(tag)
     if found:
@@ -359,14 +359,14 @@ def notes(tag, out):
     if not found:
         sys.exit(f"`{tag}` is not {TAG_HELP}")
     version = found.group(1)
-    chosen = notes_section((ROOT / "CHANGELOG.md").read_text(), version)
+    chosen = notes_section((ROOT / "CHANGELOG.md").read_text(encoding='utf-8'), version)
     if chosen is None or not any(l.strip() for l in chosen[1]):
         sys.exit(f"CHANGELOG.md has no notes for {version}")
     text = (candidate_preamble(version) if is_candidate(version) else "") + release_notes(chosen[1])
     text += gallery_line(version) or ""
     if len(text) > MAX_NOTES:
         sys.exit(f"the notes for {version} have {len(text):,} characters; GitHub allows {MAX_NOTES:,}")
-    Path(out).write_text(text, encoding="utf-8")
+    Path(out).write_text(text, encoding="utf-8", newline='\n')
     print(f"wrote {out} ({len(text):,} characters)")
     return 0
 
@@ -587,12 +587,12 @@ def selftest():
     with tempfile.TemporaryDirectory(prefix="release-check-") as tmp:
         tmp = Path(tmp)
         (tmp / "crates" / "a").mkdir(parents=True)
-        (tmp / "crates" / "a" / "Cargo.toml").write_text('[package]\nname = "a"\nversion = "0.0.2"\n')
+        (tmp / "crates" / "a" / "Cargo.toml").write_text('[package]\nname = "a"\nversion = "0.0.2"\n', encoding='utf-8', newline='\n')
         for name in LICENSE_FILES:
-            (tmp / name).write_text(name)
-            (tmp / "crates" / "a" / name).write_text(name)
+            (tmp / name).write_text(name, encoding='utf-8', newline='\n')
+            (tmp / "crates" / "a" / name).write_text(name, encoding='utf-8', newline='\n')
         assert license_problems(tmp) == [], "identical copies pass"
-        (tmp / "crates" / "a" / "NOTICE").write_text("old")
+        (tmp / "crates" / "a" / "NOTICE").write_text("old", encoding='utf-8', newline='\n')
         assert "a/NOTICE differs" in license_problems(tmp)[0], "a stale copy is refused"
         (tmp / "crates" / "a" / "NOTICE").unlink()
         assert "a has no NOTICE" in license_problems(tmp)[0], "a missing copy is refused"

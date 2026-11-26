@@ -296,6 +296,15 @@ fn strips_in(rig: &mut Rig, stencil: Option<Stencil>) -> Option<([u8; 3], [u8; 3
     Some((rig.at(&pixels, vec3(1.8, 0.0, 0.0)), rig.at(&pixels, Vec3::ZERO)))
 }
 
+/// Whether the crossing looks like one strip: every channel within 3 levels.
+/// The two pixels are at different places on screen, and some adapters
+/// shade them a level apart in green and blue (11 against 10, measured on
+/// a non-Apple GPU); a second blend adds more than 20 to red (the negative
+/// controls check that).
+fn blend_once(single: [u8; 3], crossed: [u8; 3]) -> bool {
+    single.iter().zip(crossed).all(|(&a, b)| a.abs_diff(b) <= 3)
+}
+
 #[test]
 fn overlapping_transparent_strips_with_a_stencil_blend_once() {
     for samples in [1, 4] {
@@ -312,7 +321,7 @@ fn overlapping_transparent_strips_with_a_stencil_blend_once() {
         eprintln!("{samples} samples, Stencil::once: one strip {single:?}, both {crossed:?}");
         assert!(single[0] > 40, "the strip shows: {single:?}");
         assert!(
-            crossed[0].abs_diff(single[0]) <= 3 && crossed[1..] == single[1..],
+            blend_once(single, crossed),
             "with Stencil::once, the crossing blends once: {single:?} vs {crossed:?}"
         );
     }
@@ -465,7 +474,7 @@ fn stencil_materials_draw_on_the_webgl2_path() {
     let (single, crossed) = strips_in(&mut Rig::webgl2().unwrap(), Some(Stencil::once(1))).unwrap();
     assert!(single[0] > 40, "the strip shows: {single:?}");
     assert!(
-        crossed[0].abs_diff(single[0]) <= 3 && crossed[1..] == single[1..],
+        blend_once(single, crossed),
         "with Stencil::once, the crossing blends once: {single:?} vs {crossed:?}"
     );
 

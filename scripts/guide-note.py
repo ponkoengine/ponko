@@ -21,13 +21,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 # The project's home is the one line in PROJECT_URL (see scripts/project-url.py).
-REPO_URL = (ROOT / "PROJECT_URL").read_text().strip()
+REPO_URL = (ROOT / "PROJECT_URL").read_text(encoding="utf-8").strip()
 CHANGELOG_URL = f"{REPO_URL}/blob/main/CHANGELOG.md"  # BLOB of project-url.py
 
 
 def engine_version(root=ROOT):
     """The version the root `Cargo.toml` says (`0.2.0`, `0.3.0-rc.1`)."""
-    return tomllib.loads((root / "Cargo.toml").read_text())["package"]["version"]
+    return tomllib.loads((root / "Cargo.toml").read_text(encoding="utf-8"))["package"]["version"]
 
 
 def unreleased_changes(root=ROOT):

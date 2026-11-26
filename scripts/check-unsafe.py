@@ -290,7 +290,7 @@ def test_modules(files):
     with their submodules: test code."""
     found = set()
     for f in files:
-        code = code_only(f.read_text(encoding="utf-8"))
+        code = code_only(f.read_text(encoding='utf-8'))
         here = f.parent if f.name in ('mod.rs', 'lib.rs', 'main.rs') else f.parent / f.stem
         for m in re.finditer(r'\bmod\s+(\w+)\s*;', code):
             if is_test_attr(attributes_before(code, m.start())):
@@ -310,7 +310,7 @@ def ffi_functions():
     found = []
     for f in sorted(FFI_SRC.rglob('*.rs')):
         rel = f.relative_to(ROOT).as_posix()
-        text = f.read_text(encoding="utf-8")
+        text = f.read_text(encoding='utf-8')
         code = code_only(text)
         spans = scopes(code)
         for start, end, kind, name, test in spans:
@@ -347,7 +347,7 @@ def ffi_tests():
     tests = {}
     for f in sorted(FFI_TESTS.glob('*.rs')):
         rel = f.relative_to(ROOT).as_posix()
-        code = code_only(f.read_text(encoding="utf-8"))
+        code = code_only(f.read_text(encoding='utf-8'))
         fns = {}
         roots = []
         for start, end, kind, name, test in scopes(code):
@@ -369,7 +369,7 @@ def ffi_tests():
     native = ROOT / 'examples' / 'cpp'
     for f in sorted(native.glob('*.c')) + sorted(native.glob('*.cpp')):
         rel = f.relative_to(ROOT).as_posix()
-        code = code_only(f.read_text(encoding="utf-8"))
+        code = code_only(f.read_text(encoding='utf-8'))
         for name, start, end in c_functions(code):
             for called in re.findall(r'\b(ponko_\w+)', code[start:end]):
                 tests.setdefault(called, f'{rel}::{name}')
@@ -426,7 +426,7 @@ def all_sites():
     items = {}
     for f in source_files():
         rel = f.relative_to(ROOT).as_posix()
-        for line, item, _form, export in unsafe_sites(rel, f.read_text(encoding="utf-8")):
+        for line, item, _form, export in unsafe_sites(rel, f.read_text(encoding='utf-8')):
             if export and rel.startswith('crates/ponko_ffi/'):
                 continue
             items.setdefault((rel, item), []).append(line)
@@ -435,7 +435,7 @@ def all_sites():
 
 def inventory():
     entries, problems = {}, []
-    for number, raw in enumerate(INVENTORY.read_text(encoding="utf-8").splitlines(), 1):
+    for number, raw in enumerate(INVENTORY.read_text(encoding='utf-8').splitlines(), 1):
         line = raw.split('#', 1)[0].strip() if raw.lstrip().startswith('#') else raw.strip()
         if not line:
             continue
@@ -466,7 +466,7 @@ def harnessless_tests():
     `harness = false` in a Cargo.toml): their checks are plain functions."""
     found = set()
     for manifest in [ROOT / 'Cargo.toml'] + sorted((ROOT / 'crates').glob('*/Cargo.toml')):
-        text = manifest.read_text(encoding="utf-8")
+        text = manifest.read_text(encoding='utf-8')
         for block in re.split(r'^\[', text, flags=re.MULTILINE):
             if not block.startswith('[test]]') or not re.search(r'^harness\s*=\s*false', block, re.MULTILINE):
                 continue
@@ -496,7 +496,7 @@ def test_exists(test):
     path = ROOT / file
     if not path.is_file():
         return f'{file} does not exist'
-    code = code_only(path.read_text(encoding="utf-8"))
+    code = code_only(path.read_text(encoding='utf-8'))
     if file in harnessless_tests():
         if re.search(rf'\bfn\s+{re.escape(name)}\s*[(<]', code):
             return None
@@ -578,7 +578,7 @@ def unit_test_path(test):
     if mods:
         modules += mods  # a test a macro makes in a module of its own
     else:
-        code = code_only((ROOT / file).read_text(encoding="utf-8"))
+        code = code_only((ROOT / file).read_text(encoding='utf-8'))
         at = re.search(rf'\bfn\s+{re.escape(name)}\s*[(<]', code).start()
         modules += [mod for start, end, kind, mod, _t in scopes(code) if kind == 'mod' and start < at < end]
     return package, target, '::'.join(modules + [name])

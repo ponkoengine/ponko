@@ -66,14 +66,14 @@ def fields(body):
 
 
 def ffi_text():
-    return '\n'.join(f.read_text() for f in sorted(FFI_SRC.glob('*.rs')))
+    return '\n'.join(f.read_text(encoding='utf-8') for f in sorted(FFI_SRC.glob('*.rs')))
 
 
 def read_config():
     """(structs, mappings, problems): structs are (public, rust, file, [c structs]) and
     mappings {(public, field): (target, line number)}."""
     structs, mappings, problems = [], {}, []
-    for number, line in enumerate(CONFIG.read_text().splitlines(), 1):
+    for number, line in enumerate(CONFIG.read_text(encoding='utf-8').splitlines(), 1):
         if not line.strip() or line.lstrip().startswith('#'):
             continue
         fields_part, _, reason = line.partition('#')
@@ -98,7 +98,7 @@ def read_config():
 
 def rust_only_names():
     names = set()
-    for line in RUST_ONLY.read_text().splitlines():
+    for line in RUST_ONLY.read_text(encoding='utf-8').splitlines():
         if line.strip() and not line.lstrip().startswith('#'):
             names.add(line.partition('#')[0].split()[0])
     return names
@@ -107,7 +107,7 @@ def rust_only_names():
 def problems_found():
     structs, mappings, problems = read_config()
     ffi = ffi_text()
-    header = HEADER.read_text()
+    header = HEADER.read_text(encoding='utf-8')
     rust_only = rust_only_names()
     listed = {name for name, *_ in structs}
     for public, rust, path, c_names in structs:
@@ -115,7 +115,7 @@ def problems_found():
         if not file.exists():
             problems.append(f'{public}: {path} does not exist.')
             continue
-        body = struct_body(file.read_text(), rust)
+        body = struct_body(file.read_text(encoding='utf-8'), rust)
         if body is None:
             problems.append(f'{public}: no `pub struct {rust}` in {path}.')
             continue

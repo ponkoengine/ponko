@@ -2,7 +2,8 @@
 //! window's sprite pass: each blend mode combines with the background as
 //! documented (the plain alpha draw is the control), a material's shader
 //! reads its parameters and extra textures, hot reloads replace the
-//! shader and a GPU rejection keeps the old one. Skips without a GPU.
+//! shader and a GPU rejection keeps the old one. A flipped `Sprite` shows
+//! its image mirrored in the same place. Skips without a GPU.
 
 use glam::{Vec2, Vec4};
 
@@ -68,11 +69,17 @@ impl Rig {
 
     /// Adds a 1x1 texture of sRGB `rgba`; returns its id.
     fn texture(&mut self, rgba: [u8; 4]) -> u32 {
+        self.texture_sized(1, 1, &rgba)
+    }
+
+    /// Adds a `width` x `height` texture of sRGB `rgba` texels (rows top
+    /// to bottom), sampled nearest; returns its id.
+    fn texture_sized(&mut self, width: u32, height: u32, rgba: &[u8]) -> u32 {
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: None,
             size: wgpu::Extent3d {
-                width: 1,
-                height: 1,
+                width,
+                height,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -84,10 +91,10 @@ impl Rig {
         });
         self.queue.write_texture(
             texture.as_image_copy(),
-            &rgba,
+            rgba,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(4),
+                bytes_per_row: Some(4 * width),
                 rows_per_image: None,
             },
             texture.size(),
@@ -130,12 +137,34 @@ impl Rig {
 
     /// [`draw`](Self::draw) with a texture per sprite.
     fn draw_textured(&mut self, draws: &[(u32, u32, Color)]) -> Vec<[f32; 3]> {
-        use wgpu::util::DeviceExt;
         let size = (CELL * draws.len() as u32, CELL);
+        let sprites: Vec<_> = draws
+            .iter()
+            .enumerate()
+            .map(|(i, &(texture, style, tint))| {
+                let center = [(i as u32 * CELL + CELL / 2) as f32, (CELL / 2) as f32];
+                (
+                    texture,
+                    style,
+                    SpriteInstance::new(center, [CELL as f32; 2], [0.5, 0.5], 0.0, tint.to_rgba8()),
+                )
+            })
+            .collect();
+        let rgba = self.render(size, &sprites);
+        (0..draws.len())
+            .map(|i| {
+                let at = ((CELL / 2 * size.0 + i as u32 * CELL + CELL / 2) * 4) as usize;
+                [0, 1, 2].map(|k| to_linear(f32::from(rgba[at + k]) / 255.0))
+            })
+            .collect()
+    }
+
+    /// Draws `(texture, style, instance)`s over the grey background on a
+    /// `size` target; returns its RGBA pixels.
+    fn render(&mut self, size: (u32, u32), sprites: &[(u32, u32, SpriteInstance)]) -> Vec<u8> {
+        use wgpu::util::DeviceExt;
         let mut list = DrawList::default();
-        for (i, &(texture, style, tint)) in draws.iter().enumerate() {
-            let center = [(i as u32 * CELL + CELL / 2) as f32, (CELL / 2) as f32];
-            let sprite = SpriteInstance::new(center, [CELL as f32; 2], [0.5, 0.5], 0.0, tint.to_rgba8());
+        for &(texture, style, sprite) in sprites {
             list.push_styled(texture, style, 0.0, sprite);
         }
         let (instances, batches) = list.finish();
@@ -179,13 +208,7 @@ impl Rig {
             Some((&self.looks, FORMAT)),
         );
         self.queue.submit([encoder.finish()]);
-        let rgba = read_texture(device, &self.queue, &output);
-        (0..draws.len())
-            .map(|i| {
-                let at = ((CELL / 2 * size.0 + i as u32 * CELL + CELL / 2) * 4) as usize;
-                [0, 1, 2].map(|k| to_linear(f32::from(rgba[at + k]) / 255.0))
-            })
-            .collect()
+        read_texture(device, &self.queue, &output)
     }
 }
 
@@ -358,4 +381,78 @@ fn the_examples_dissolve_burns_away_where_its_noise_is_below_the_progress() {
     assert_near("burned away", burned(&mut rig, 0.5), linear(BACKGROUND));
     let glowing = burned(&mut rig, 0.18);
     assert!(glowing[0] > 0.9 && glowing[1] < 0.9, "the edge glows red: {glowing:?}");
+}
+
+/// A 2x2 image (red, blue / green, yellow) drawn through `Sprite` at 4x
+/// scale: unflipped (the control), flipped along x, along y and both, and
+/// flipped along x with a corner pivot. Each must cover its own 8x8 cell
+/// and show the quadrants mirrored accordingly.
+#[test]
+fn flipped_sprites_show_their_image_mirrored_in_place() {
+    use crate::d2::{Sprite, Transform as Transform2D};
+    let Some(mut rig) = Rig::new(gpu()) else { return };
+    const RED: [u8; 4] = [255, 0, 0, 255];
+    const BLUE: [u8; 4] = [0, 0, 255, 255];
+    const GREEN: [u8; 4] = [0, 255, 0, 255];
+    const YELLOW: [u8; 4] = [255, 255, 0, 255];
+    let id = rig.texture_sized(2, 2, &[RED, BLUE, GREEN, YELLOW].concat());
+    let texture = crate::texture::Texture::new(id, 2, 2);
+    let cell = CELL as f32;
+    // (flip_x, flip_y, pivot): the last one is placed by its top-left corner.
+    let cases = [
+        (false, false, Vec2::splat(0.5)),
+        (true, false, Vec2::splat(0.5)),
+        (false, true, Vec2::splat(0.5)),
+        (true, true, Vec2::splat(0.5)),
+        (true, false, Vec2::ZERO),
+    ];
+    let sprites: Vec<_> = cases
+        .iter()
+        .enumerate()
+        .map(|(i, &(flip_x, flip_y, pivot))| {
+            let at = Vec2::new(i as f32 * cell, 0.0) + pivot * cell;
+            let transform = Transform2D::at(at).scaled(Vec2::splat(4.0));
+            let sprite = Sprite::new(texture)
+                .with_pivot(pivot)
+                .with_flip_x(flip_x)
+                .with_flip_y(flip_y);
+            (id, 0, crate::ctx::sprite_instance(&transform, &sprite))
+        })
+        .collect();
+    let size = (CELL * cases.len() as u32, CELL);
+    let rgba = rig.render(size, &sprites);
+    let pixel = |x: u32, y: u32| {
+        let at = ((y * size.0 + x) * 4) as usize;
+        [rgba[at], rgba[at + 1], rgba[at + 2], rgba[at + 3]]
+    };
+    // Each cell's quadrants, read at their centers: top-left, top-right,
+    // bottom-left, bottom-right.
+    let quadrants = |i: u32| {
+        let x0 = i * CELL;
+        [(2, 2), (6, 2), (2, 6), (6, 6)].map(|(x, y)| pixel(x0 + x, y))
+    };
+    let expected = [
+        [RED, BLUE, GREEN, YELLOW],
+        [BLUE, RED, YELLOW, GREEN],
+        [GREEN, YELLOW, RED, BLUE],
+        [YELLOW, GREEN, BLUE, RED],
+        [BLUE, RED, YELLOW, GREEN],
+    ];
+    for (i, want) in expected.iter().enumerate() {
+        assert_eq!(&quadrants(i as u32), want, "case {i} {:?}", cases[i]);
+    }
+    // Negative control: the flips really change the picture.
+    assert_ne!(quadrants(0), quadrants(1), "flip_x drew the same as unflipped");
+    assert_ne!(quadrants(0), quadrants(2), "flip_y drew the same as unflipped");
+    // In place: no flipped sprite leaks into the background or a neighbour,
+    // so every pixel is one of the image's four colors.
+    for y in 0..size.1 {
+        for x in 0..size.0 {
+            let p = pixel(x, y);
+            assert!(
+                [RED, BLUE, GREEN, YELLOW].contains(&p),
+                "background at ({x}, {y}): {p:?}"
+            );
+        }
+    }
 }

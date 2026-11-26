@@ -826,8 +826,6 @@ impl Renderer {
     /// draws with. `Err` says why there is no GPU. Unstable (`bench-internals`).
     #[cfg(all(feature = "3d", feature = "bench-internals", not(target_arch = "wasm32")))]
     pub(crate) fn offscreen_bench(size: (u32, u32)) -> Result<Self, String> {
-        // Backends and flags from wgpu's environment variables, as the window's
-        // instance takes them: `WGPU_BACKEND=dx12` benchmarks DirectX 12.
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
