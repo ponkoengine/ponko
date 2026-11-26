@@ -26,6 +26,8 @@
 # `sdkmanager` packages.
 #
 #   scripts/android-emulator.sh [out-dir]   (default target/android-emulator)
+#   scripts/android-emulator.sh --clippy    (only clippy for Android, with
+#                                            the NDK's compilers; no emulator)
 #
 # PONKO_ANDROID_AVD names an existing virtual device to boot instead of a
 # fresh one; PONKO_ANDROID_IMAGE the system image of a fresh one (default:
@@ -35,6 +37,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+clippy=no
+if [ "${1:-}" = --clippy ]; then
+    clippy=yes
+    shift
+fi
 out=${1:-target/android-emulator}
 id=dev.ponko.phone_check
 activity=android.app.NativeActivity
@@ -58,10 +65,26 @@ export ANDROID_HOME=$sdk
 adb=$sdk/platform-tools/adb
 emulator=$sdk/emulator/emulator
 avdmanager=$(ls "$sdk"/cmdline-tools/*/bin/avdmanager 2>/dev/null | head -1)
-[ -x "$adb" ] || fail "no adb: \`sdkmanager platform-tools\`"
-[ -x "$emulator" ] || fail "no emulator: \`sdkmanager emulator\`"
 rustup target list --installed 2>/dev/null | grep -q aarch64-linux-android ||
     fail "no Rust target: \`rustup target add aarch64-linux-android\`"
+
+# The NDK's compilers, for the unit tests and clippy (`ponko package` sets
+# the same for the package).
+ndk=${ANDROID_NDK_HOME:-$(ls -d "$sdk"/ndk/* 2>/dev/null | sort -V | tail -1)}
+[ -d "$ndk" ] || fail "no NDK: \`sdkmanager \"ndk;29.0.14206865\"\`, or set ANDROID_NDK_HOME"
+bin=$(ls -d "$ndk"/toolchains/llvm/prebuilt/*/bin | head -1)
+export CC_aarch64_linux_android=${CC_aarch64_linux_android:-$bin/aarch64-linux-android30-clang}
+export CXX_aarch64_linux_android=${CXX_aarch64_linux_android:-$bin/aarch64-linux-android30-clang++}
+export AR_aarch64_linux_android=${AR_aarch64_linux_android:-$bin/llvm-ar}
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER:-$bin/aarch64-linux-android30-clang}
+if [ "$clippy" = yes ]; then
+    # Android's thread locals are emulated, so clippy asks for `const`
+    # initializers that are already there: that lint is off here.
+    exec cargo clippy -p ponko -p ponko_ffi --target aarch64-linux-android --all-targets "$@" -- \
+        -A clippy::missing_const_for_thread_local
+fi
+[ -x "$adb" ] || fail "no adb: \`sdkmanager platform-tools\`"
+[ -x "$emulator" ] || fail "no emulator: \`sdkmanager emulator\`"
 
 echo "android-emulator: packaging the phone check"
 rm -rf "$out"
@@ -70,14 +93,6 @@ cargo run -q -p ponko_cli -- package --example phone --target android --out "$ou
     fail "packaging: $(cat "$out/package.log")"
 apk=$(ls "$out"/package/phone-check-*-android-aarch64.apk)
 
-# The engine's unit tests, built with the NDK's compilers (as the package
-# was: ponko package sets them; here they come from its build variables).
-ndk=${ANDROID_NDK_HOME:-$(ls -d "$sdk"/ndk/* 2>/dev/null | sort -V | tail -1)}
-bin=$(ls -d "$ndk"/toolchains/llvm/prebuilt/*/bin | head -1)
-export CC_aarch64_linux_android=${CC_aarch64_linux_android:-$bin/aarch64-linux-android30-clang}
-export CXX_aarch64_linux_android=${CXX_aarch64_linux_android:-$bin/aarch64-linux-android30-clang++}
-export AR_aarch64_linux_android=${AR_aarch64_linux_android:-$bin/llvm-ar}
-export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER:-$bin/aarch64-linux-android30-clang}
 echo "android-emulator: building the engine's unit tests for Android"
 tests=$(cargo test -q -p ponko --lib --target aarch64-linux-android --no-run --message-format=json 2>/dev/null |
     python3 -c 'import json,sys

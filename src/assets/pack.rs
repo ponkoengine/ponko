@@ -477,7 +477,7 @@ impl PackSource {
         };
         if len < header.total_len() {
             return Err(Error::decode(
-                &shown,
+                shown,
                 format!(
                     "{shown} is cut short: {len} bytes, its header says {}",
                     header.total_len()

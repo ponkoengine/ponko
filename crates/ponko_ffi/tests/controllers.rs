@@ -46,7 +46,10 @@ fn label(g: PonkoGlyph) -> String {
     let mut len = 0;
     // SAFETY: a buffer of the stated length.
     unsafe { ok(ponko_glyph_label(g, buf.as_mut_ptr(), buf.len(), &mut len)) };
-    String::from_utf8(buf[..len].iter().map(|&c| c as u8).collect()).unwrap()
+    // `c_char` is i8 or u8, by platform.
+    #[allow(clippy::unnecessary_cast)]
+    let bytes = buf[..len].iter().map(|&c| c as u8).collect();
+    String::from_utf8(bytes).unwrap()
 }
 
 #[test]

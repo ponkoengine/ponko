@@ -289,10 +289,13 @@ where
     #[cfg(target_os = "android")]
     fn follow_android(&mut self) {
         self.android.frames = self.android.frames.wrapping_add(1);
-        if self.ctx.input.ime_allowed() || self.ctx.window.keyboard_inset() > 0.0 || self.android.frames % 30 == 0 {
+        if self.ctx.input.ime_allowed()
+            || self.ctx.window.keyboard_inset() > 0.0
+            || self.android.frames.is_multiple_of(30)
+        {
             self.follow_android_insets();
         }
-        if self.android.frames % 60 == 0 {
+        if self.android.frames.is_multiple_of(60) {
             let in_call = crate::platform::android::in_call();
             if in_call != self.android.in_call {
                 self.android.in_call = in_call;

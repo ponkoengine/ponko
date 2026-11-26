@@ -197,7 +197,7 @@ fn steam_lobby_calls_on_a_plain_message_endpoint_are_refused() {
         let mut endpoints = [null_mut(); 2];
         assert_eq!(ponko_net_messages_loopback(2, endpoints.as_mut_ptr()), PONKO_OK);
         let endpoint = endpoints[0];
-        let (mut id, mut needed, mut members, mut text) = (7u64, 7usize, [0u64; 4], [0i8; 16]);
+        let (mut id, mut needed, mut members, mut text) = (7u64, 7usize, [0u64; 4], [0 as std::ffi::c_char; 16]);
         assert_eq!(ponko_net_messages_steam_lobby_id(endpoint, &mut id), BAD);
         assert_eq!(id, 7);
         assert_eq!(ponko_net_messages_steam_lobby_invite(endpoint), BAD);
