@@ -434,7 +434,7 @@ impl Panels {
         ui.horizontal(|ui| {
             if ui
                 .add_enabled(ctx.editor.can_redo(), egui::Button::new("Redo"))
-                .on_hover_text("Ctrl+Shift+Z or Ctrl+Y")
+                .on_hover_text(self.key_hint(super::keys::Action::Redo))
                 .clicked()
             {
                 let redone = ctx.edit(|ed, ctx| ed.redo(ctx));
@@ -443,10 +443,19 @@ impl Panels {
             self.view_toggle(ui);
         });
         self.gizmo_tools(ui);
+        use super::keys::Action;
         let help = if self.scene.active3d {
-            "Click picks (Shift adds), drag a handle, right-drag looks, WASD/QE fly, wheel moves, F frames."
+            format!(
+                "Click picks (Shift adds), drag a handle, right-drag looks, WASD/QE fly, wheel moves, {} frames.",
+                self.key_hint(Action::Frame)
+            )
         } else {
-            "W, E, R: move, rotate, scale gizmo. Drag a handle, or what you clicked."
+            format!(
+                "{}, {}, {}: move, rotate, scale gizmo. Drag a handle, or what you clicked.",
+                self.key_hint(Action::Move),
+                self.key_hint(Action::Rotate),
+                self.key_hint(Action::Scale)
+            )
         };
         ui.label(RichText::new(help).weak());
     }
@@ -456,7 +465,10 @@ impl Panels {
         ui.label("View");
         let mut three = self.scene.active3d;
         ui.selectable_value(&mut three, false, "2D");
-        ui.add_enabled_ui(cfg!(feature = "3d"), |ui| ui.selectable_value(&mut three, true, "3D"));
+        ui.add_enabled_ui(cfg!(feature = "3d"), |ui| {
+            ui.selectable_value(&mut three, true, "3D")
+                .on_disabled_hover_text("This game is built without the engine's `3d` feature")
+        });
         if three != self.scene.active3d {
             self.scene.view3d = Some(three);
             self.scene.active3d = three;
@@ -467,11 +479,20 @@ impl Panels {
     pub(crate) fn gizmo_tools(&mut self, ui: &mut Ui) {
         use crate::edit2d::{Mode, Snap, Space};
         /// The mode, space and snap rows, with the move step's unit.
-        fn rows(ui: &mut Ui, mode: &mut Mode, space: &mut Space, snap: &mut Snap, step_max: f32, unit: &str) {
+        /// `hints`: the move, rotate and scale keys, as bound now.
+        fn rows(
+            ui: &mut Ui,
+            (mode, space, snap): (&mut Mode, &mut Space, &mut Snap),
+            hints: &[String; 3],
+            step_max: f32,
+            unit: &str,
+        ) {
             ui.horizontal(|ui| {
-                ui.selectable_value(mode, Mode::Translate, "Move").on_hover_text("W");
-                ui.selectable_value(mode, Mode::Rotate, "Rotate").on_hover_text("E");
-                ui.selectable_value(mode, Mode::Scale, "Scale").on_hover_text("R");
+                ui.selectable_value(mode, Mode::Translate, "Move")
+                    .on_hover_text(&hints[0]);
+                ui.selectable_value(mode, Mode::Rotate, "Rotate")
+                    .on_hover_text(&hints[1]);
+                ui.selectable_value(mode, Mode::Scale, "Scale").on_hover_text(&hints[2]);
                 ui.separator();
                 ui.selectable_value(space, Space::World, "World");
                 ui.selectable_value(space, Space::Local, "Local")
@@ -506,14 +527,16 @@ impl Panels {
                 );
             });
         }
+        use super::keys::Action;
+        let hints = [Action::Move, Action::Rotate, Action::Scale].map(|a| self.key_hint(a));
         #[cfg(feature = "3d")]
         if self.scene.active3d {
             let g = &mut self.scene.gizmo;
-            rows(ui, &mut g.mode, &mut g.space, &mut g.snap, 100.0, "");
+            rows(ui, (&mut g.mode, &mut g.space, &mut g.snap), &hints, 100.0, "");
             return;
         }
         let g = &mut self.scene.gizmo2;
-        rows(ui, &mut g.mode, &mut g.space, &mut g.snap, 1000.0, " px");
+        rows(ui, (&mut g.mode, &mut g.space, &mut g.snap), &hints, 1000.0, " px");
     }
 
     /// The hierarchy: every entity under what it hangs off. Drag a row onto
@@ -528,6 +551,14 @@ impl Panels {
     /// is in it), and the right button opens a menu.
     pub(crate) fn hierarchy_rows(&mut self, ui: &mut Ui, ctx: &mut Ctx, max_height: f32) {
         let nodes = editor::hierarchy(&ctx.world);
+        let labels = {
+            use super::keys::Action;
+            [
+                self.labelled("Rename", Action::Rename),
+                self.labelled("Duplicate", Action::Duplicate),
+                self.labelled("Delete", Action::Delete),
+            ]
+        };
         let detach = ui
             .add(egui::Label::new(RichText::new("drop here to detach").weak()).sense(Sense::hover()))
             .on_hover_text("Drag an entity from the list here to make it follow nothing");
@@ -614,9 +645,9 @@ impl Panels {
                                     ui.close();
                                 }
                             };
-                            pick(ui, "Rename (F2)", RowAction::StartRename(e));
-                            pick(ui, "Duplicate (Ctrl+D)", RowAction::Duplicate(e));
-                            pick(ui, "Delete (Del)", RowAction::Delete(e));
+                            pick(ui, &labels[0], RowAction::StartRename(e));
+                            pick(ui, &labels[1], RowAction::Duplicate(e));
+                            pick(ui, &labels[2], RowAction::Delete(e));
                             pick(ui, "New child", RowAction::NewChild(e));
                             if n.parent.is_some() {
                                 pick(ui, "Detach", RowAction::Detach(e));
