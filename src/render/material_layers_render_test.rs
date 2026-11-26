@@ -236,10 +236,11 @@ fn specular_strength_color_and_index_of_refraction_change_the_highlight() {
     let tint = pixels(&red).map(|(_, _, [r, g, _])| r - g).fold(0.0, f32::max);
     assert!(tint > 40.0, "a red specular color: red over green by at most {tint}");
     let dense = ball(&mut stage, glossy.with_layers(MaterialLayers::NONE.with_ior(2.5)));
-    let dense_peak = peak(&dense);
+    let total = |image: &Image| pixels(image).map(|(_, _, c)| luma(c)).sum::<f32>();
+    let (dense, plain) = (total(&dense), total(&plain));
     assert!(
-        dense_peak > plain_peak + 10.0,
-        "index of refraction 2.5 peaks at {dense_peak}, 1.5 at {plain_peak}"
+        dense > plain * 1.2,
+        "index of refraction 2.5 gives {dense} in all, 1.5 {plain}"
     );
     stage.finish();
 }

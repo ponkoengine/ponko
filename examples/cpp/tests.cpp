@@ -4687,6 +4687,14 @@ static void versioned_descriptors_retargeting_and_prediction() {
         d.stencil = ponko::stencil_mark(2);
         auto m = ctx.create_material(d);
         ctx.update_material(m, d);
+        // Version 2: a clear coat and a sheen, unlit refused out of range.
+        CHECK(!d.unlit && d.layers.ior == 1.5f && d.layers.clearcoat == 0.0f);
+        d.has_stencil = false;
+        d.layers.clearcoat = 1.0f;
+        d.layers.sheen_color = ponko::colors::white;
+        ctx.update_material(m, d);
+        d.layers.anisotropy = 2.0f;
+        throws_kind([&] { ctx.update_material(m, d); }, PONKO_ERROR_INVALID);
         // A collider and its groups in one call.
         auto world = ctx.world();
         auto e = world.spawn(ponko::transform_at({0, 0}), ponko::fixed_body());
