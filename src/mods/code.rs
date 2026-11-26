@@ -189,9 +189,10 @@ struct Host {
     current: usize,
     dt: f32,
     log: Vec<(usize, String)>,
-    /// The game during [`with_code`], for the host functions that read and
+    /// The game during a [`ModCode::call`] made inside the [`with_code`]
+    /// call that handed the code out, for the host functions that read and
     /// change it; `None` otherwise.
-    ctx: CtxPtr,
+    ctx: GamePtr,
     /// The entities mods may read and change.
     exposed: HashSet<Entity>,
     /// The prefabs mods may spawn.
@@ -200,15 +201,31 @@ struct Host {
     rngs: Vec<(String, Rng)>,
 }
 
-/// The game, reachable from the host functions while [`with_code`] runs:
-/// the pointer and the number of the `with_code` call that set it.
+/// The game, as [`with_code`] handed it to its `ModCode`: the pointer and
+/// the number of the `with_code` call that set it. Nothing follows it
+/// directly: [`ModCode::call`] checks once that this call is still running
+/// on this thread and only then hands the pointer to the host functions
+/// ([`GamePtr`]) for the length of that one call.
 struct CtxPtr(Option<(NonNull<Ctx>, u64)>);
+
+impl CtxPtr {
+    /// The pointer, if the `with_code` call that set it is the one running
+    /// on this thread now.
+    fn live(&self) -> Option<NonNull<Ctx>> {
+        let (ptr, call) = self.0?;
+        (RUNNING.get() == call).then_some(ptr)
+    }
+}
+
+/// The game for the length of one [`ModCode::call`], checked live
+/// ([`CtxPtr::live`]) when that call began: what the host functions follow.
+struct GamePtr(Option<NonNull<Ctx>>);
 
 thread_local! {
     /// The number of the `with_code` call running on this thread, 0 for none.
-    /// A pointer is followed only while the call that set it runs, so a
-    /// `ModCode` swapped out of its call (it is handed out as `&mut`) or left
-    /// behind by a panic holds a pointer nothing follows.
+    /// A pointer is handed to the host functions only while the call that
+    /// set it runs, so a `ModCode` swapped out of its call (it is handed out
+    /// as `&mut`) or left behind by a panic holds a pointer nothing follows.
     static RUNNING: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
@@ -231,27 +248,33 @@ impl Drop for Running {
 }
 
 // SAFETY: the pointer is set only for the length of a `with_code` call, on the
-// thread that holds the `&mut Ctx` it came from, and dereferenced only on that
-// thread inside that call (`RUNNING` is per thread and names that call; a host
-// function runs inside `ModCode::call`). Sending or sharing `ModCode` outside
-// that call shares a pointer nothing follows.
+// thread that holds the `&mut Ctx` it came from, and followed only through
+// `CtxPtr::live`, which checks on the calling thread that this call is the one
+// running (`RUNNING` is per thread and names that call). Sending or sharing
+// `ModCode` outside that call shares a pointer nothing follows.
 unsafe impl Send for CtxPtr {}
 // SAFETY: as for `Send`.
 unsafe impl Sync for CtxPtr {}
+// SAFETY: `ModCode::call` sets it from `CtxPtr::live` on the thread that runs
+// the `with_code` call, and host functions follow it only inside that same
+// `ModCode::call` on that thread (wasmi runs a host function on the thread that
+// called into the module). The next call sets it again before any module code
+// runs, so a pointer left by a call that unwound is never followed.
+unsafe impl Send for GamePtr {}
+// SAFETY: as for `Send`.
+unsafe impl Sync for GamePtr {}
 
 impl Host {
-    /// Runs `f` with the game, or returns `None` outside [`with_code`].
+    /// Runs `f` with the game, or returns `None` outside a [`ModCode::call`]
+    /// made inside the [`with_code`] call that handed the code out.
     fn with_ctx<R>(&mut self, f: impl FnOnce(&mut Ctx, &mut HashSet<Entity>, &HashSet<String>) -> R) -> Option<R> {
-        let (mut ptr, call) = self.ctx.0?;
-        if RUNNING.get() != call {
-            return None;
-        }
-        // SAFETY: the `with_code` call that set the pointer from its `&mut Ctx`
-        // is still running on this thread (checked above), and it doesn't use
-        // `ctx` again before it has stopped being the running call; the
-        // `ModCode` this `Host` lives in was taken out of `ctx.world`, so the
-        // game and the host don't overlap, and nothing else touches `ctx`
-        // while the mod's call runs.
+        let mut ptr = self.ctx.0?;
+        // SAFETY: `ModCode::call` set the pointer for this call only, after
+        // `CtxPtr::live` found the `with_code` call that set it from its
+        // `&mut Ctx` running on this thread; that call doesn't use `ctx`
+        // while `f` (inside it) runs. The `ModCode` this `Host` lives in was
+        // taken out of `ctx.world`, so the game and the host don't overlap,
+        // and nothing else touches `ctx` while the mod's call runs.
         let ctx = unsafe { ptr.as_mut() };
         Some(f(ctx, &mut self.exposed, &self.prefabs))
     }
@@ -545,6 +568,9 @@ pub struct ModCode {
     fuel_per_call: u64,
     args: Vec<Val>,
     results: Vec<Val>,
+    /// The game as [`with_code`] handed it over; checked once per
+    /// [`call`](Self::call), not once per host function.
+    ctx: CtxPtr,
 }
 
 impl fmt::Debug for ModCode {
@@ -571,7 +597,7 @@ impl ModCode {
             current: 0,
             dt: 0.0,
             log: Vec::new(),
-            ctx: CtxPtr(None),
+            ctx: GamePtr(None),
             exposed: HashSet::new(),
             prefabs: HashSet::new(),
             rngs: modules.iter().map(|(id, _)| (id.clone(), rng_for(0, id))).collect(),
@@ -595,6 +621,7 @@ impl ModCode {
             fuel_per_call: limits.fuel_per_call,
             args: Vec::with_capacity(MAX_PARAMS),
             results: Vec::with_capacity(4),
+            ctx: CtxPtr(None),
         })
     }
 
@@ -646,10 +673,16 @@ impl ModCode {
         self.results.clear();
         self.results
             .extend(ty.results().iter().map(|t| Val::default_for_ty(*t)));
-        self.store.data_mut().current = f.slot;
+        let host = self.store.data_mut();
+        host.current = f.slot;
+        // Once per call: the game, if the `with_code` call that handed this
+        // code out is still the one running here.
+        host.ctx = GamePtr(self.ctx.live());
         let fueled = self.store.set_fuel(self.fuel_per_call);
         debug_assert!(fueled.is_ok(), "fuel is on in `engine()`");
-        if let Err(e) = f.func.call(&mut self.store, &self.args, &mut self.results) {
+        let called = f.func.call(&mut self.store, &self.args, &mut self.results);
+        self.store.data_mut().ctx = GamePtr(None);
+        if let Err(e) = called {
             return Err(trap(self, e.to_string()));
         }
         Ok(self.results.first().and_then(ModValue::from_val))
@@ -736,10 +769,10 @@ pub fn with_code<R>(ctx: &mut Ctx, f: impl FnOnce(&mut ModCode) -> R) -> Option<
     let mut code = ctx.world.remove_resource::<ModCode>()?;
     code.store.data_mut().dt = ctx.time.dt();
     let (running, call) = Running::start();
-    code.store.data_mut().ctx = CtxPtr(Some((NonNull::from(&mut *ctx), call)));
+    code.ctx = CtxPtr(Some((NonNull::from(&mut *ctx), call)));
     let out = f(&mut code);
     drop(running);
-    code.store.data_mut().ctx = CtxPtr(None);
+    code.ctx = CtxPtr(None);
     ctx.world.insert_resource(code);
     Some(out)
 }
@@ -777,6 +810,7 @@ mod tests {
         assert_eq!(answer, Some(Ok(Some(ModValue::I32(0)))));
         assert_eq!(ctx.world.get::<crate::d2::Transform>(e).map(|t| t.rotation), Some(0.5));
         let code = ctx.world.get_resource::<ModCode>().expect("back in the world");
+        assert!(code.ctx.0.is_none(), "no pointer kept after with_code");
         assert!(code.store.data().ctx.0.is_none(), "no pointer kept after the call");
         // ModCode is a resource: Send and Sync.
         fn shared<T: Send + Sync>(_: &T) {}
@@ -816,5 +850,60 @@ mod tests {
         let answer = kept.call(turn, &[ModValue::I64(e.to_bits() as i64)]);
         assert_ne!(answer, Ok(Some(ModValue::I32(0))), "the write was refused");
         assert_eq!(ctx.world.get::<crate::d2::Transform>(e).map(|t| t.rotation), Some(0.0));
+    }
+
+    /// The game is checked once per `ModCode::call`, not per host function:
+    /// code swapped into a `with_code` call (it was never handed the game)
+    /// is refused for every host call it makes, before and after the code
+    /// that was handed the game makes its own; and no call leaves the
+    /// pointer behind for the host functions.
+    #[test]
+    fn code_swapped_into_with_code_cannot_reach_the_game() {
+        let wasm = wat::parse_str(
+            r#"(module
+                (import "ponko" "set_field" (func $set (param i64 i32 i32 f64) (result i32)))
+                (memory (export "memory") 1)
+                (data (i32.const 0) "Transform2D.rotation")
+                (func (export "turn") (param i64 f64) (result i32)
+                    local.get 0 i32.const 0 i32.const 20 local.get 1 call $set
+                    local.get 0 i32.const 0 i32.const 20 local.get 1 call $set
+                    i32.add))"#,
+        )
+        .expect("valid WebAssembly text");
+        let engine = engine();
+        let start = || {
+            let module = compile(&engine, &wasm).expect("compiles");
+            ModCode::start(&engine, vec![("turner".into(), module)], CodeLimits::default()).expect("starts")
+        };
+        let mut ctx = Ctx::new(1.0 / 60.0, glam::Vec2::new(8.0, 8.0));
+        ctx.world.reflect::<crate::d2::Transform>();
+        ctx.world.insert_resource(start());
+        let e = ctx.world.spawn((crate::d2::Transform::default(),));
+        let bits = ModValue::I64(e.to_bits() as i64);
+        let mut outside = start();
+        outside.expose(e);
+        // A function belongs to its code's store: one for each.
+        let turn_outside = outside.function("turner", "turn").expect("exported");
+        let answers = with_code(&mut ctx, |code| {
+            code.expose(e);
+            let turn = code.function("turner", "turn").expect("exported");
+            std::mem::swap(code, &mut outside);
+            // `code` is now the one the call never handed the game.
+            let refused = code.call(turn_outside, &[bits, ModValue::F64(0.25)]);
+            assert!(code.store.data().ctx.0.is_none(), "nothing kept after a call");
+            std::mem::swap(code, &mut outside);
+            let written = code.call(turn, &[bits, ModValue::F64(0.5)]);
+            assert!(code.store.data().ctx.0.is_none(), "nothing kept after a call");
+            std::mem::swap(code, &mut outside);
+            let refused_again = code.call(turn_outside, &[bits, ModValue::F64(0.75)]);
+            std::mem::swap(code, &mut outside);
+            (refused, written, refused_again)
+        })
+        .expect("the mod has code");
+        // Both host calls of each refused call were refused; both written.
+        assert_eq!(answers.0, Ok(Some(ModValue::I32(2 * REFUSED_ENTITY))));
+        assert_eq!(answers.1, Ok(Some(ModValue::I32(0))));
+        assert_eq!(answers.2, Ok(Some(ModValue::I32(2 * REFUSED_ENTITY))));
+        assert_eq!(ctx.world.get::<crate::d2::Transform>(e).map(|t| t.rotation), Some(0.5));
     }
 }

@@ -69,7 +69,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
 
 use glam::Vec2;
-use ponko_ecs::{Changed, Commands, Component, ComponentId, Entity, HookWorld, Tick, Without, World};
+use ponko_ecs::{Changed, Commands, Component, ComponentId, Entity, HookWorld, Tick, With, Without, World};
 use smallvec::SmallVec;
 
 use crate::attach::Attached;
@@ -164,6 +164,9 @@ pub struct Children {
     list: List,
     /// The root's transforms when its subtree was last placed (roots only).
     seen: Seen,
+    /// The number of the update that last found this root moved, for
+    /// [`place_flat`] (roots only, 0 for none).
+    moved: u64,
 }
 
 impl Children {
@@ -196,7 +199,7 @@ impl<'de> serde::Deserialize<'de> for Children {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         Ok(Self {
             list: List::from_vec(Vec::deserialize(d)?),
-            seen: Seen::default(),
+            ..Self::default()
         })
     }
 }
@@ -565,7 +568,7 @@ fn list(world: &mut World, parent: Entity, child: Entity) {
                 parent,
                 Children {
                     list: smallvec::smallvec![child],
-                    seen: Seen::default(),
+                    ..Children::default()
                 },
             );
         }
@@ -651,6 +654,17 @@ struct State {
     table: Vec<AtomicU32>,
     broken: Vec<Entity>,
     stale: Vec<Entity>,
+    /// The number of this update, for [`Children::moved`].
+    update: u64,
+    /// [`place_flat`]'s scratch: each root's children if it moved, else 0;
+    /// the attached entities in query order and where they go.
+    moved_kids: Vec<u32>,
+    flat2: Vec<(Entity, Attached)>,
+    placed2: Vec<Option<(Vec2, f32)>>,
+    #[cfg(feature = "3d")]
+    flat3: Vec<(Entity, Attached3D)>,
+    #[cfg(feature = "3d")]
+    placed3: Vec<Option<T3>>,
 }
 
 /// The update behind [`WorldHierarchy::update_hierarchy`].
@@ -701,62 +715,40 @@ fn update_with(world: &mut World, s: &mut State, mode: Mode) {
     apply_unlinks(world, s);
     join_parents(world, s);
 
-    // Roots that moved since they were last placed, compared on all cores
-    // when there are enough of them to be worth it (`par_collect_into`
-    // times its first rows and stays on this thread under about 50 µs):
-    // each root with children is a node of the first level, empty if it
-    // stayed put.
+    // Roots that moved since they were last placed, and what hangs off them.
     s.starts.clear();
     s.marks.clear();
     s.pairs.clear();
-    {
-        #[cfg(feature = "3d")]
-        let mut q = world
-            .query::<(Entity, &mut Children, Option<&T2>, Option<&T3>)>()
-            .filter::<(Without<Attached>, Without<Attached3D>)>();
-        #[cfg(not(feature = "3d"))]
-        let mut q = world
-            .query::<(Entity, &mut Children, Option<&T2>)>()
-            .filter::<Without<Attached>>();
-        q.par_collect_into(&mut s.frontier, |item| {
-            #[cfg(feature = "3d")]
-            let (e, c, t2, t3) = item;
-            #[cfg(not(feature = "3d"))]
-            let (e, c, t2) = item;
-            let now = Seen {
-                d2: t2.copied(),
-                #[cfg(feature = "3d")]
-                d3: t3.copied(),
-            };
-            if now == c.seen {
-                return Node::EMPTY;
-            }
-            c.seen = now;
-            Node {
-                e: Some(e),
-                kids: c.list.len() as u32,
-                at: At {
-                    d2: now.d2,
-                    #[cfg(feature = "3d")]
-                    d3: now.d3,
-                },
-            }
-        });
-    }
-    s.indexed = 0;
-    let slots = world.entity_slots();
-    s.kids = index_frontier(s, slots);
+    s.update += 1;
+    // A flat update places every child straight from its parent
+    // (`place_flat`); otherwise, or when few roots moved, the levels below.
+    let placed = match place_flat(world, s) {
+        Flat::Placed => true,
+        Flat::Few => {
+            frontier_of_moved(world, s);
+            false
+        }
+        Flat::No => {
+            roots_that_moved(world, s);
+            false
+        }
+    };
+    if !placed {
+        s.indexed = 0;
+        let slots = world.entity_slots();
+        s.kids = index_frontier(s, slots);
 
-    // Edited links start a placement too, unless something above them is placed anyway.
-    find_starts(world, s);
+        // Edited links start a placement too, unless something above them is placed anyway.
+        find_starts(world, s);
 
-    // Place the subtrees, from each start down, a level at a time.
-    place_all(world, s);
-    s.stale.sort_unstable();
-    s.stale.dedup();
+        // Place the subtrees, from each start down, a level at a time.
+        place_all(world, s);
+        s.stale.sort_unstable();
+        s.stale.dedup();
 
-    for &parent in &s.stale {
-        prune(world, parent);
+        for &parent in &s.stale {
+            prune(world, parent);
+        }
     }
     if mode == Mode::Tick {
         s.broken.sort_unstable();
@@ -766,6 +758,45 @@ fn update_with(world: &mut World, s: &mut State, mode: Mode) {
         }
         s.seen = world.advance_change_tick();
     }
+}
+
+/// The general first level: each root with children becomes a node of
+/// `s.frontier`, empty if it stayed put. Compared on all cores when there
+/// are enough roots to be worth it (`par_collect_into` times its first rows
+/// and stays on this thread under about 50 µs).
+fn roots_that_moved(world: &mut World, s: &mut State) {
+    #[cfg(feature = "3d")]
+    let mut q = world
+        .query::<(Entity, &mut Children, Option<&T2>, Option<&T3>)>()
+        .filter::<(Without<Attached>, Without<Attached3D>)>();
+    #[cfg(not(feature = "3d"))]
+    let mut q = world
+        .query::<(Entity, &mut Children, Option<&T2>)>()
+        .filter::<Without<Attached>>();
+    q.par_collect_into(&mut s.frontier, |item| {
+        #[cfg(feature = "3d")]
+        let (e, c, t2, t3) = item;
+        #[cfg(not(feature = "3d"))]
+        let (e, c, t2) = item;
+        let now = Seen {
+            d2: t2.copied(),
+            #[cfg(feature = "3d")]
+            d3: t3.copied(),
+        };
+        if now == c.seen {
+            return Node::EMPTY;
+        }
+        c.seen = now;
+        Node {
+            e: Some(e),
+            kids: c.list.len() as u32,
+            at: At {
+                d2: now.d2,
+                #[cfg(feature = "3d")]
+                d3: now.d3,
+            },
+        }
+    });
 }
 
 /// The slot of `child` in `s.up`, grown to fit.
@@ -1322,6 +1353,207 @@ fn count_attached(world: &mut World) -> usize {
     n
 }
 
+/// What [`place_flat`] did.
+enum Flat {
+    /// Not a flat update: the general first level is needed.
+    No,
+    /// A flat update, every child of a moved root placed.
+    Placed,
+    /// A flat update with too few moved roots for a pass over every
+    /// attached entity: the moved roots (their [`Children::moved`]) go on
+    /// as the first level.
+    Few,
+}
+
+/// Places a flat update, where every parent is a root: no link was added,
+/// edited, removed or lost since the last update, nothing tracks transform
+/// changes, and no attached entity has children of its own. The subtree of
+/// a moved root is then its children, so a pass over the roots marks those
+/// that moved ([`Children::moved`]) and passes over the attached entities
+/// place each child from its parent's transforms, all on all cores. The
+/// general path builds a level of nodes for the roots, indexes it and
+/// gathers what it placed on the calling thread (two passes over every
+/// root and every child), which a flat update doesn't need.
+///
+/// Places exactly what the general path would: the children of the roots
+/// whose transforms changed, from those transforms
+/// (`a_flat_update_places_what_the_levels_place`).
+fn place_flat(world: &mut World, s: &mut State) -> Flat {
+    if !s.changed.is_empty() || !s.unlink.is_empty() || !s.broken.is_empty() {
+        return Flat::No;
+    }
+    #[cfg(test)]
+    if tests::FLAT.with(|f| f.get().0) {
+        return Flat::No;
+    }
+    let ids = Ids::of(world);
+    #[cfg(feature = "3d")]
+    let tracked = ids.t2_tracked || ids.t3_tracked;
+    #[cfg(not(feature = "3d"))]
+    let tracked = ids.t2_tracked;
+    if tracked {
+        return Flat::No;
+    }
+    let attached = count_attached(world);
+    if attached < LINEAR {
+        return Flat::No;
+    }
+    let nested = world
+        .query::<Entity>()
+        .filter::<(With<Attached>, With<Children>)>()
+        .count();
+    #[cfg(feature = "3d")]
+    let nested = nested
+        + world
+            .query::<Entity>()
+            .filter::<(With<Attached3D>, With<Children>)>()
+            .count();
+    if nested > 0 {
+        return Flat::No;
+    }
+    let update = s.update;
+    {
+        #[cfg(feature = "3d")]
+        let mut q = world
+            .query::<(&mut Children, Option<&T2>, Option<&T3>)>()
+            .filter::<(Without<Attached>, Without<Attached3D>)>();
+        #[cfg(not(feature = "3d"))]
+        let mut q = world
+            .query::<(&mut Children, Option<&T2>)>()
+            .filter::<Without<Attached>>();
+        q.par_collect_into(&mut s.moved_kids, |item| {
+            #[cfg(feature = "3d")]
+            let (c, t2, t3) = item;
+            #[cfg(not(feature = "3d"))]
+            let (c, t2) = item;
+            let now = Seen {
+                d2: t2.copied(),
+                #[cfg(feature = "3d")]
+                d3: t3.copied(),
+            };
+            if now == c.seen {
+                return 0;
+            }
+            c.seen = now;
+            c.moved = update;
+            c.list.len() as u32
+        });
+    }
+    let kids: usize = s.moved_kids.iter().map(|&k| k as usize).sum();
+    if kids == 0 {
+        return Flat::Placed;
+    }
+    if kids * 4 < attached {
+        return Flat::Few;
+    }
+    // 2D: where each child goes, then written in the same query order.
+    world
+        .query::<(Entity, &Attached, &T2)>()
+        .par_collect_into(&mut s.flat2, |(e, a, _)| (e, *a));
+    {
+        let w = &*world;
+        par_map(&s.flat2, &mut s.placed2, |&(e, a)| {
+            if a.to == e {
+                return None;
+            }
+            let c = read::<Children>(w, ids.children, a.to)?;
+            let p = c.seen.d2.filter(|_| c.moved == update)?;
+            Some((
+                p.position + Vec2::from_angle(p.rotation).rotate(a.offset * p.scale),
+                p.rotation + a.rotation,
+            ))
+        });
+    }
+    let (flat2, placed2) = (&s.flat2, &s.placed2);
+    world
+        .query::<(Entity, &Attached, &mut T2)>()
+        .par_for_each_indexed(|i, (e, _, t)| {
+            if let (Some(&(was, _)), Some(&Some((position, rotation)))) = (flat2.get(i), placed2.get(i))
+                && was == e
+            {
+                t.position = position;
+                t.rotation = rotation;
+            }
+        });
+    #[cfg(feature = "3d")]
+    {
+        world
+            .query::<(Entity, &Attached3D, &T3)>()
+            .filter::<Without<Attached>>()
+            .par_collect_into(&mut s.flat3, |(e, a, _)| (e, *a));
+        {
+            let w = &*world;
+            par_map(&s.flat3, &mut s.placed3, |&(e, a)| {
+                if a.to == e {
+                    return None;
+                }
+                let c = read::<Children>(w, ids.children, a.to)?;
+                let p = c.seen.d3.filter(|_| c.moved == update)?;
+                Some(crate::attach::compose3d(&p, &a.offset))
+            });
+        }
+        let (flat3, placed3) = (&s.flat3, &s.placed3);
+        world
+            .query::<(Entity, &Attached3D, &mut T3)>()
+            .filter::<Without<Attached>>()
+            .par_for_each_indexed(|i, (e, _, t)| {
+                if let (Some(&(was, _)), Some(&Some(placed))) = (flat3.get(i), placed3.get(i))
+                    && was == e
+                {
+                    *t = placed;
+                }
+            });
+    }
+    #[cfg(test)]
+    tests::FLAT.with(|f| f.set((false, f.get().1 + 1)));
+    Flat::Placed
+}
+
+/// After [`place_flat`] found few roots moved: those roots as the first
+/// level, as [`roots_that_moved`] makes it.
+fn frontier_of_moved(world: &mut World, s: &mut State) {
+    let update = s.update;
+    #[cfg(feature = "3d")]
+    let mut q = world
+        .query::<(Entity, &Children)>()
+        .filter::<(Without<Attached>, Without<Attached3D>)>();
+    #[cfg(not(feature = "3d"))]
+    let mut q = world.query::<(Entity, &Children)>().filter::<Without<Attached>>();
+    q.par_collect_into(&mut s.frontier, |(e, c)| {
+        if c.moved != update {
+            return Node::EMPTY;
+        }
+        Node {
+            e: Some(e),
+            kids: c.list.len() as u32,
+            at: At {
+                d2: c.seen.d2,
+                #[cfg(feature = "3d")]
+                d3: c.seen.d3,
+            },
+        }
+    });
+}
+
+/// `out` = `one` of each of `items`, in order: on all cores when its first
+/// [`PROBE`] items, timed, project the whole over [`SERIAL_BUDGET_NS`] (as
+/// [`place_level`] decides).
+fn par_map<T: Sync, R: Send>(items: &[T], out: &mut Vec<R>, one: impl Fn(&T) -> R + Sync + Send) {
+    out.clear();
+    let (first, rest) = items.split_at(PROBE.min(items.len()));
+    let start = web_time::Instant::now();
+    out.extend(first.iter().map(&one));
+    if rest.is_empty() {
+        return;
+    }
+    if crate::frame_pool::share(|| worth_sharing(start.elapsed().as_nanos(), first.len(), items.len())) {
+        use rayon::prelude::*;
+        crate::frame_pool::run(|| out.par_extend(rest.par_iter().map(&one)));
+    } else {
+        out.extend(rest.iter().map(&one));
+    }
+}
+
 /// What [`place_linear`] did with one attached entity.
 #[derive(Clone, Copy)]
 enum Found<T> {
@@ -1580,6 +1812,162 @@ pub(crate) fn settle(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::random::Rng;
+    use glam::vec2;
+
+    thread_local! {
+        /// On this thread: whether [`place_flat`] is off (the general path
+        /// places everything), and how many updates it placed in passes.
+        pub(super) static FLAT: std::cell::Cell<(bool, u32)> = const { std::cell::Cell::new((false, 0)) };
+    }
+
+    /// A world of roots with one to three children each, in 2D and 3D
+    /// (some roots have only one of the transforms, some children hang off
+    /// a root without the transform their link needs), and the roots.
+    fn flat_world() -> (World, Vec<Entity>) {
+        let mut rng = Rng::new(7);
+        let mut world = World::new();
+        let mut roots = Vec::new();
+        for i in 0..1500 {
+            let at = vec2(rng.range(-50.0, 50.0), rng.range(-50.0, 50.0));
+            let t2 = T2::at(at).rotated(rng.range(-3.0, 3.0));
+            #[cfg(feature = "3d")]
+            let t3 = T3::at(glam::vec3(at.x, rng.range(0.0, 9.0), at.y))
+                .rotated(glam::Quat::from_rotation_y(rng.range(-3.0, 3.0)));
+            let root = match i % 4 {
+                #[cfg(feature = "3d")]
+                1 => world.spawn((t3,)),
+                #[cfg(feature = "3d")]
+                2 => world.spawn((t2, t3)),
+                _ => world.spawn((t2,)),
+            };
+            roots.push(root);
+            for k in 0..1 + rng.below(3) {
+                let offset = vec2(rng.range(-2.0, 2.0), rng.range(-2.0, 2.0));
+                let three = cfg!(feature = "3d") && (k + i) % 3 == 1;
+                if three {
+                    #[cfg(feature = "3d")]
+                    world.spawn((
+                        T3::default(),
+                        Attached3D::to(root).offset(T3::at(glam::vec3(offset.x, 1.0, offset.y))),
+                    ));
+                } else {
+                    world.spawn((T2::default(), Attached::to(root).offset(offset).rotated(0.5)));
+                }
+            }
+        }
+        (world, roots)
+    }
+
+    /// Every transform in `world`, in entity order.
+    fn transforms(world: &mut World) -> Vec<(Entity, Option<T2>, Option<[f32; 10]>)> {
+        let mut out: Vec<_> = world
+            .query::<(Entity, Option<&T2>)>()
+            .iter()
+            .map(|(e, t)| (e, t.copied(), None))
+            .collect();
+        #[cfg(feature = "3d")]
+        for (e, _, d3) in &mut out {
+            *d3 = world.get::<T3>(*e).map(|t| {
+                let (p, r, s) = (t.position, t.rotation, t.scale);
+                [p.x, p.y, p.z, r.x, r.y, r.z, r.w, s.x, s.y, s.z]
+            });
+        }
+        out.sort_by_key(|(e, _, _)| *e);
+        out
+    }
+
+    /// One step of the comparison: the roots in `moving` move, some
+    /// children are moved by hand (a still root's children keep that, a
+    /// moving root's are placed again), and on `relink` ticks a child is
+    /// added and one despawned (a tick that isn't flat).
+    fn step(world: &mut World, roots: &[Entity], rng: &mut Rng, every: u32, relink: bool) {
+        for &root in roots {
+            if rng.below(every) != 0 {
+                continue;
+            }
+            let d = vec2(rng.range(-1.0, 1.0), rng.range(-1.0, 1.0));
+            if let Some(t) = world.get_mut::<T2>(root) {
+                t.position += d;
+                t.rotation += 0.1;
+            }
+            #[cfg(feature = "3d")]
+            if rng.below(2) == 0
+                && let Some(t) = world.get_mut::<T3>(root)
+            {
+                t.position.x += d.x;
+                t.scale = glam::Vec3::splat(1.0 + d.y.abs());
+            }
+        }
+        world
+            .query::<(&mut T2, &Attached)>()
+            .for_each(|(t, _)| t.position.x += 0.25);
+        if relink {
+            let root = roots[rng.below(roots.len() as u32) as usize];
+            world.spawn((T2::default(), Attached::to(root).offset(vec2(1.0, 0.0))));
+            let child = world
+                .query::<(Entity, &Attached)>()
+                .iter()
+                .nth(rng.below(100) as usize)
+                .map(|(e, _)| e);
+            if let Some(child) = child {
+                world.despawn(child);
+            }
+        }
+    }
+
+    /// The flat path places exactly what the levels place: the same
+    /// transforms on every entity after every update, whether all roots
+    /// move, a few, or none, and across ticks that relink (not flat).
+    #[test]
+    fn a_flat_update_places_what_the_levels_place() {
+        let (mut flat, roots) = flat_world();
+        let (mut levels, same) = flat_world();
+        assert_eq!(roots, same);
+        let (mut a, mut b) = (Rng::new(11), Rng::new(11));
+        let ticks: [(u32, bool); 9] = [
+            (1, false),
+            (1, false),
+            (2, false),
+            (40, false),
+            (1, true),
+            (1, false),
+            (1_000_000, false),
+            (3, false),
+            (1, false),
+        ];
+        FLAT.with(|f| f.set((false, 0)));
+        for (tick, &(every, relink)) in ticks.iter().enumerate() {
+            step(&mut flat, &roots, &mut a, every, relink);
+            step(&mut levels, &roots, &mut b, every, relink);
+            FLAT.with(|f| f.set((false, f.get().1)));
+            flat.update_hierarchy();
+            let placed = FLAT.with(|f| f.get().1);
+            FLAT.with(|f| f.set((true, placed)));
+            levels.update_hierarchy();
+            FLAT.with(|f| f.set((false, placed)));
+            assert!(
+                transforms(&mut flat) == transforms(&mut levels),
+                "tick {tick}: the flat path placed something differently"
+            );
+        }
+        // Positive control: the passes did run. The first update (every
+        // link new), the relinking one and those with few roots moving
+        // (every 40th, none) go through the levels.
+        let placed = FLAT.with(|f| f.get().1);
+        assert_eq!(placed, 5, "flat updates taken");
+        // Negative control: the comparison sees a difference. A child moved
+        // by hand under a still root is kept on both sides; changed on one
+        // side only, it is told.
+        let child = flat
+            .query::<(Entity, &Attached)>()
+            .iter()
+            .next()
+            .map(|(e, _)| e)
+            .unwrap();
+        flat.get_mut::<T2>(child).unwrap().position.y += 1.0;
+        assert!(transforms(&mut flat) != transforms(&mut levels));
+    }
 
     #[test]
     fn a_level_is_shared_out_only_when_its_timed_children_project_over_the_budget() {
