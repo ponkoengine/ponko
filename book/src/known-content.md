@@ -99,12 +99,15 @@ curve and often its own camera. So:
   field of view, the camera on the +Z side of the center of the model's
   bounds, looking down -Z, as far away as the bounding sphere needs to fit
   the narrower field of view.
-- **Lights.** The file's own lights where it has some (its sun replaces the
-  rig's). Otherwise a sun from over the camera's left shoulder at intensity
-  2, and a flat grey studio sky (0.6 above, 0.3 below) instead of the
-  atmosphere. The sun's intensity was set once so that, over the samples
-  whose outlines match, the drawings are as light as the screenshots in the
-  median (the default 3 was 11 L* lighter).
+- **Lights.** The eleven light, emission and environment samples in
+  [#597](https://github.com/ponkoengine/ponko/issues/597) use
+  `Ctx::try_light_gltf`: the file's lights with EV100 exposure, a neutral
+  studio environment and a hue-preserving highlight curve. The harness
+  pins EV100 and ambient strength for the four punctual-light shots, and
+  lowers picture exposure for EmissiveStrengthTest so its five strengths
+  are distinguishable. Other samples retain the comparison rig of a sun
+  from over the camera's left shoulder at intensity 2 and a flat grey sky
+  (0.6 above, 0.3 below), with file lights where available.
 - **Background.** The screenshot's border color, so the outlines compare.
 - **Skins** stand in their rest pose with their skeleton, as a game spawns
   them; nothing is animated.
@@ -130,7 +133,7 @@ Each run writes the drawing next to its screenshot in
 that matched and stops matching fails the test; a sample that starts
 matching is recorded with `PONKO_UPDATE_KNOWN_CONTENT=1`.
 
-At this revision **38 of the 142 drawings match** their screenshots. Most
+At this revision **39 of the 142 drawings match** their screenshots. Most
 of the others differ for reasons outside the renderer's correctness, which
 the table says in a word:
 
@@ -145,10 +148,8 @@ the table says in a word:
 
 The rest are missing features, each with its issue:
 [#595](https://github.com/ponkoengine/ponko/issues/595) transmissive
-materials vanish, [#596](https://github.com/ponkoengine/ponko/issues/596)
-material and node extensions that aren't drawn, and
-[#597](https://github.com/ponkoengine/ponko/issues/597) light units, bright
-emission and environment lighting. Points and lines aren't drawn either
+materials vanish, and [#596](https://github.com/ponkoengine/ponko/issues/596)
+material and node extensions that aren't drawn. Points and lines aren't drawn either
 (MeshPrimitiveModes, PrimitiveModeNormalsTest).
 
 Fixed while making this list: triangle strips and fans are drawn (they were
@@ -190,7 +191,7 @@ Overlap and ΔE are after registration; a dash: not drawn.
 | BrainStem | yes | differs | 0.30 | 12.4 | anim: drawn in its rest pose, the screenshot shows a pose of its animation |
 | Cameras | yes | differs | 0.97 | 34.1 | light: the file's camera frames it as the screenshot, but it is lit fully where the screenshot shades it |
 | CarbonFibre | yes | matches | 0.78 | 17.9 |  |
-| CarConcept | yes | differs | 0.54 | 25.5 | environment: the paint and chrome reflect a flat studio sky ([#597](https://github.com/ponkoengine/ponko/issues/597)); clear coat isn't drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)) |
+| CarConcept | yes | differs | 0.54 | 24.8 | view: the screenshot shows a three-quarter angle, with other reflections and clear coat ([#596](https://github.com/ponkoengine/ponko/issues/596)) |
 | CesiumMan | yes | differs | 0.42 | 15.2 | anim: rest pose against a walking pose |
 | CesiumMilkTruck | yes | differs | 0.71 | 26.6 | view: the screenshot is from three quarters |
 | ChairDamaskPurplegold | yes | differs | 0.74 | 30.2 | sheen isn't drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)): the fabric's colors are off |
@@ -205,7 +206,7 @@ Overlap and ΔE are after registration; a dash: not drawn.
 | CompareBaseColor | yes | matches | 0.96 | 13.5 |  |
 | CompareClearcoat | yes | matches | 0.94 | 14.6 |  |
 | CompareDispersion | yes | differs | 0.51 | 18.9 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
-| CompareEmissiveStrength | yes | differs | 0.43 | 15.9 | emission above 1 clips to white ([#597](https://github.com/ponkoengine/ponko/issues/597)); view |
+| CompareEmissiveStrength | yes | differs | 0.60 | 14.7 | both logos keep their color and the stronger one glows more; crop and reflected surroundings differ |
 | CompareIor | yes | differs | 0.31 | 12.6 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
 | CompareIridescence | yes | matches | 0.92 | 17.9 |  |
 | CompareMetallic | yes | matches | 0.95 | 16.2 |  |
@@ -222,13 +223,13 @@ Overlap and ΔE are after registration; a dash: not drawn.
 | DiffuseTransmissionPlant | yes | differs | 0.41 | 27.4 | the file's camera isn't the screenshot's; diffuse transmission isn't drawn ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
 | DiffuseTransmissionTeacup | yes | differs | 0.33 | 14.1 | view; diffuse transmission isn't drawn ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
 | DiffuseTransmissionTest | skipped: needs `KHR_materials_unlit` | — | | | not drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)) |
-| DirectionalLight | yes | differs | 0.15 | 31.3 | light units: the file's sun (in lux) is drawn as engine intensity ([#597](https://github.com/ponkoengine/ponko/issues/597)) |
+| DirectionalLight | yes | differs | 0.15 | 35.1 | the spheres pick up the yellow sun; the screenshot’s toolbar enters the silhouette comparison and its specular highlights are broader |
 | DispersionTest | yes | differs | 0.23 | 14.8 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
 | DragonAttenuation | yes | differs | 0.30 | 26.0 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
 | DragonDispersion | yes | differs | 0.30 | 11.6 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
 | Duck | yes | differs | 0.75 | 33.6 | light: more saturated and brighter (file camera) |
-| EmissiveStrengthTest | yes | differs | 0.44 | 29.0 | emission above 1 clips to white ([#597](https://github.com/ponkoengine/ponko/issues/597)) |
-| EnvironmentTest | yes | differs | 0.13 | 13.4 | environment: the spheres reflect a flat sky, no environment map ([#597](https://github.com/ponkoengine/ponko/issues/597)) |
+| EmissiveStrengthTest | yes | differs | 0.12 | 17.6 | the panels stay blue as strength rises; the screenshot is angled down and has brighter bloom and a brighter backdrop |
+| EnvironmentTest | yes | differs | 0.13 | 13.3 | the first row reflects the studio panels across roughnesses; the reference has a different environment and a gradient background |
 | FlightHelmet | yes | differs | 0.36 | 19.6 | crop: the screenshot is a close-up |
 | Fox | yes | differs | 0.21 | 36.7 | view: drawn from the front, the screenshot is from the side |
 | GlamVelvetSofa | yes | matches | 0.94 | 15.2 |  |
@@ -244,7 +245,7 @@ Overlap and ΔE are after registration; a dash: not drawn.
 | IridescenceSuzanne | skipped: needs `KHR_materials_iridescence` | — | | | not drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)) |
 | IridescentDishWithOlives | yes | differs | 0.51 | 37.1 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)): the jug is missing (file camera) |
 | Lantern | yes | differs | 0.55 | 11.2 | view: the screenshot is from three quarters |
-| LightsPunctualLamp | yes | differs | 0.35 | 28.5 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)): the shade is missing; light units ([#597](https://github.com/ponkoengine/ponko/issues/597)) |
+| LightsPunctualLamp | yes | differs | 0.35 | 28.7 | the bulb lights up; the transmitted shade is missing ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
 | LightVisibility | skipped: needs `KHR_node_visibility` | — | | | not drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)) |
 | MandarinOrange | yes | matches | 0.91 | 15.6 |  |
 | MaterialsVariantsShoe | yes | differs | 0.56 | 26.0 | view: the screenshot is from the side, above |
@@ -263,9 +264,9 @@ Overlap and ΔE are after registration; a dash: not drawn.
 | NormalTangentMirrorTest | yes | matches | 0.77 | 11.6 |  |
 | NormalTangentTest | yes | matches | 0.91 | 8.6 |  |
 | OrientationTest | yes | differs | 0.72 | 31.4 | view: the screenshot is from an angle |
-| PlaysetLightTest | yes | differs | 0.78 | 55.9 | light units: the file's 512 lux sun blows the picture out ([#597](https://github.com/ponkoengine/ponko/issues/597)) |
-| PointLightIntensityTest | yes | differs | 0.60 | 35.0 | light units: the file's candela lights are near black next to the rig's sun ([#597](https://github.com/ponkoengine/ponko/issues/597)) |
-| PotOfCoals | yes | differs | 0.79 | 36.5 | environment: the copper reflects a flat sky, darker ([#597](https://github.com/ponkoengine/ponko/issues/597)); view from higher |
+| PlaysetLightTest | yes | matches | 0.80 | 18.6 | the 512 lux sun and 1500 candela point light use EV100 11 (file camera) |
+| PointLightIntensityTest | yes | differs | 0.55 | 17.1 | the red, green, blue and neutral pools of light are visible; the reference is a closer crop with unlit labels ([#596](https://github.com/ponkoengine/ponko/issues/596)) |
+| PotOfCoals | yes | differs | 0.79 | 36.0 | view: the screenshot looks down into the pot and shows hotter coals and different studio reflections |
 | PotOfCoalsAnimationPointer | skipped: needs `KHR_materials_specular` | — | | | not drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)) |
 | PrimitiveModeNormalsTest | yes | differs | 0.38 | 14.8 | points and lines aren't drawn; view |
 | RecursiveSkeletons | yes | differs | 0.13 | 22.0 | anim: rest pose against a pose of its animation; framed differently |
@@ -311,9 +312,9 @@ Overlap and ΔE are after registration; a dash: not drawn.
 | TwoSidedPlane | yes | differs | 0.00 | 15.0 | view: the plane lies flat and the rule sees it edge-on |
 | Unicode❤♻Test | yes | matches | 0.85 | 19.5 |  |
 | UnlitTest | skipped: needs `KHR_materials_unlit` | — | | | not drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)) |
-| USDShaderBallForGltf | yes | differs | 0.35 | 35.6 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)): the glass ball is missing; environment ([#597](https://github.com/ponkoengine/ponko/issues/597)) |
+| USDShaderBallForGltf | yes | differs | 0.34 | 43.6 | the screenshot combines two views and shows transmission ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
 | VertexColorTest | yes | matches | 0.82 | 14.9 |  |
-| VirtualCity | yes | differs | 0.26 | 46.4 | light: the screenshot's sunset light and sky ([#597](https://github.com/ponkoengine/ponko/issues/597)) (file camera) |
+| VirtualCity | yes | differs | 0.17 | 54.6 | the file’s camera looks down onto the city; the reference shows a different view and orange sunset surroundings |
 | WaterBottle | yes | differs | 0.35 | 25.3 | background: the screenshot has a backdrop behind it; view |
 | XmpMetadataRoundedCube | yes | differs | 0.27 | 27.4 | view; light |
 
@@ -338,11 +339,21 @@ scene.
   one end of the atrium at head height, looking down its length. The
   file has no lights; the engine's default sun lights it.
 - **Bistro** (about 2 GB, BC7 textures): the file's own camera down the
-  street, its sun's direction and color at the engine's default intensity
-  (its 6830 lux would blow out, see #597), and its 96 point lights.
+  street, its 6830 lux sun and 96 point lights placed at EV100 11.
+  Set `PONKO_KNOWN_SCENE=Bistro` to measure just this scene, and
+  `PONKO_KNOWN_STUDIO=1` to replace the sky IBL with the procedural studio.
+  Both settings use the same lighting atlas, sampling and BRDF.
 
-Measured on an Apple M4 Max (Metal), release build, the median of three
-runs. **The machine was busy** (load average 34–62 from other builds), so
+For #597, the Bistro at 1920×1080 Medium had median GPU frame times of
+5.45 ms with sky IBL and 5.44 ms with the studio map. Median wall-clock
+frame times were 9.43 ms and 8.77 ms, respectively. These are medians of
+three offscreen release runs per setting on Apple M4 Max (Metal), with
+20 warm-up and 60 timed frames per run. The machine was busy compiling
+other work, and GPU times varied more between runs than between sources.
+Both settings used 2128 MB of GPU memory.
+
+The original scene measurements from #603 used an Apple M4 Max (Metal),
+a release build and the median of three runs. **The machine was busy** (load average 34–62 from other builds), so
 these are an upper bound; frame time is CPU and GPU together.
 
 | | Sponza | Bistro |
