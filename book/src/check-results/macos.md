@@ -13,6 +13,12 @@ examples, `cargo test --workspace`, the C header, the debug C and C++ tests,
 the guide's snippets and `mdbook build`) ran as one script with the default
 environment.
 
+Later runs can use `python3 scripts/run-checks.py`, which reads the same
+list and writes a report (`target/check-results/`). It runs on a Mac only the
+jobs written for macOS; the platform-neutral jobs written for `ubuntu-latest`
+(clippy, docs, Miri, the web build and the browser runs, templates and more)
+ran on this Mac by hand, as recorded below.
+
 ## 2026-11-25: `main` at `de9557f5`
 
 **Machine.** Apple M4 Max (14 CPU cores, 32 GPU cores, 36 GB), macOS 27.2.1
@@ -31,8 +37,13 @@ WebKit 27 (webkit-2370); WASI SDK 34 (arm64-macos); SDL 3.4.20 from Homebrew.
 
 **Result.** Everything that applies to macOS and runs without a person passes
 on the branch that fixes what failed (pull request "macOS: run the list of
-checks", nine fixes listed below), except three web steps, listed under
-"Failing". Times are wall-clock on the busy machine.
+checks", the fixes listed below), except three web steps, listed under
+"Failing". Times are wall-clock on the busy machine. The core part ran again
+on the final head of the pull request, `main` at `203151c4` merged with the
+fixes: every step
+passed, with 11 307 tests passed, 0 failed and 69 ignored (the 68 below and
+one new benchmark, `render::auto_exposure_render_test::auto_exposure_cost`),
+and the C and C++ tests 15 of 15.
 
 ### Fixed in the same pull request
 
@@ -40,9 +51,9 @@ These failed on `de9557f5` and pass with the fix.
 
 | Check | What failed | Fix |
 |---|---|---|
-| `fmt`: Release scripts (`release-check.py selftest`) | `ponko_aseprite` and `ponko_lobby` had no `LICENSE-MIT`, `LICENSE-APACHE`, `NOTICE` | copies of the root files |
+| `fmt`: Release scripts (`release-check.py selftest`) | `ponko_aseprite` and `ponko_lobby` had no `LICENSE-MIT`, `LICENSE-APACHE`, `NOTICE` | copies of the root files; fixed on `main` meanwhile (#533) |
 | `fmt`: C ABI test coverage (`check-ffi-coverage.py`) | the maturity line of `web-threads.md` ("nightly Rust only") matched the Rust-only pattern | reworded; fixed on `main` the same way meanwhile (#541) |
-| `api-snapshots` (`api-snapshots.py check`) | `World::insert_many`, `World::remove_many` missing; joystick items out of order | regenerated `api/` |
+| `api-snapshots` (`api-snapshots.py check`) | `World::insert_many`, `World::remove_many` missing; joystick items out of order | regenerated `api/`; fixed on `main` meanwhile (#538), and again after #548 (#560) |
 | `test-features`: engine with every image format | `assets::group::tests::without_workers_other_assets_load_as_before` expected a GIF to be unsupported, which it is only without `image-gif` | the test expects `Decode` with the decoder, `Unsupported` without |
 | `docs`: every public feature | the step lacked `mods-wasm`, which docs.rs builds; the code-mod links in `ponko::mods` broke | `mods-wasm` added to the step |
 | `native`: `ctest` (Release) | `cpp_wrapper` aborted: clang removed the `new`/`delete` pair the allocation count measures | the pointers go through a volatile sink |
@@ -199,7 +210,7 @@ No test skipped for lack of a GPU or a GPU feature (above). The 68 ignored
 tests of `cargo test --workspace` are ignored on purpose, each with its reason
 in the code:
 
-- 54 benchmarks and measurements (`render::*_cost`, `*_benchmark`,
+- 54 benchmarks and measurements (55 on the final head; `render::*_cost`, `*_benchmark`,
   `*_gpu_time`, `water::spectrum` timings and the like; "run in release" or
   "run by hand"), which assert nothing about time;
 - 10 that write fixture files (`write_*_fixture`, `write_the_committed_replay`);
