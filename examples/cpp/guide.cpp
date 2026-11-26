@@ -4133,17 +4133,22 @@ static float chat_line_bottom(ponko::ctx& ctx, const std::string& progress) {
 // ANCHOR_END: phone_lifecycle
 
 static void phone_lifecycle_runs() {
-    ponko::game("guide", 390, 844).data_dir("guide-storage").run_headless(0, [](ponko::ctx& ctx) {
+    auto expect = [](bool ok, const char* what) {
+        if (!ok) { std::fprintf(stderr, "phone lifecycle: %s\n", what); std::abort(); }
+    };
+    // A folder of its own: the storage example checks every file of guide-storage.
+    ponko::game("guide", 390, 844).data_dir("guide-phone-storage").run_headless(0, [&](ponko::ctx& ctx) {
         phone_setup(ctx);
-        if (ctx.audio_session_category() != ponko::audio_session_category::ambient) std::abort();
+        expect(ctx.audio_session_category() == ponko::audio_session_category::ambient, "the session category");
         ctx.storage_delete("progress.txt");
         ctx.window_feed_safe_insets({62, 0, 34, 0});
-        if (chat_line_bottom(ctx, "level 3") != 810) std::abort();   // above the home bar
-        if (ctx.storage_read_text("progress.txt")) std::abort();     // not sent away yet
+        expect(chat_line_bottom(ctx, "level 3") == 810, "above the home bar");
+        expect(!ctx.storage_read_text("progress.txt"), "not sent away yet");
         ctx.window_feed_lifecycle(ponko::window_event_kind::suspended);
         ctx.window_feed_keyboard_inset(336);
-        if (chat_line_bottom(ctx, "level 3") != 508) std::abort();   // above the keyboard
-        if (ctx.storage_read_text("progress.txt") != std::optional<std::string>("level 3")) std::abort();
+        expect(chat_line_bottom(ctx, "level 3") == 508, "above the keyboard");
+        expect(ctx.storage_read_text("progress.txt") == std::optional<std::string>("level 3"), "saved when sent away");
+        ctx.storage_delete("progress.txt");
     });
 }
 
