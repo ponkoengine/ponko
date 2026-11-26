@@ -3273,15 +3273,27 @@ mod tests {
             eye: Vec3::ZERO,
             cull_box: None,
         };
-        assert!(open.in_cull_box(Vec3::splat(100.0), Vec3::splat(101.0)), "no box: everything");
+        assert!(
+            open.in_cull_box(Vec3::splat(100.0), Vec3::splat(101.0)),
+            "no box: everything"
+        );
         let boxed = SlotView {
             cull_box: Some((Vec3::ZERO, Vec3::ONE)),
             ..open
         };
         assert!(boxed.in_cull_box(Vec3::splat(0.5), Vec3::splat(2.0)), "overlapping");
-        assert!(boxed.in_cull_box(Vec3::new(1.0, 0.0, 0.0), Vec3::new(2.0, 1.0, 1.0)), "sharing a face");
-        assert!(!boxed.in_cull_box(Vec3::new(1.1, 0.0, 0.0), Vec3::new(2.0, 1.0, 1.0)), "beside it");
-        assert!(!boxed.in_cull_box(Vec3::new(0.0, -3.0, 0.0), Vec3::new(1.0, -2.0, 1.0)), "below it");
+        assert!(
+            boxed.in_cull_box(Vec3::new(1.0, 0.0, 0.0), Vec3::new(2.0, 1.0, 1.0)),
+            "sharing a face"
+        );
+        assert!(
+            !boxed.in_cull_box(Vec3::new(1.1, 0.0, 0.0), Vec3::new(2.0, 1.0, 1.0)),
+            "beside it"
+        );
+        assert!(
+            !boxed.in_cull_box(Vec3::new(0.0, -3.0, 0.0), Vec3::new(1.0, -2.0, 1.0)),
+            "below it"
+        );
     }
 
     #[test]

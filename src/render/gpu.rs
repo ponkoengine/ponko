@@ -2887,8 +2887,9 @@ impl Renderer {
                     self.draw_ui_layers(&mut encoder, jobs, &layer_pass, panel_format);
                     // Its first level (a mipmapped target's levels are made
                     // again in the next target camera stage).
-                    let view =
-                        super::gpu_textures::first_level(&self.textures.live(*texture).expect("a live panel target").texture);
+                    let view = super::gpu_textures::first_level(
+                        &self.textures.live(*texture).expect("a live panel target").texture,
+                    );
                     let layers = [(&self.panel_cameras[i].1, *batches, panel_starts[i])];
                     let pass = SpritePass {
                         viewport: *size,

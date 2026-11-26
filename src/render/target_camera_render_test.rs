@@ -328,10 +328,16 @@ fn compute_passes_and_target_effects_get_a_mipmapped_targets_levels_made_too() {
         .push(crate::render::ComputePass::new(fill, field));
     scene.frame();
     let average = last(&scene);
-    assert!((average[0] - 0.5).abs() < 0.02 && (average[1] - 0.25).abs() < 0.01, "{average:?}");
+    assert!(
+        (average[0] - 0.5).abs() < 0.02 && (average[1] - 0.25).abs() < 0.01,
+        "{average:?}"
+    );
     // A target effect writes it instead: the levels follow by the next frame.
     scene.ctx.scene3d.passes.compute.clear();
-    let blue = scene.ctx.gfx.create_effect("blue", "fn effect(p: Pixel) -> vec3<f32> { return vec3<f32>(0.0, 0.0, 0.75); }");
+    let blue = scene.ctx.gfx.create_effect(
+        "blue",
+        "fn effect(p: Pixel) -> vec3<f32> { return vec3<f32>(0.0, 0.0, 0.75); }",
+    );
     scene
         .ctx
         .scene3d
@@ -341,5 +347,8 @@ fn compute_passes_and_target_effects_get_a_mipmapped_targets_levels_made_too() {
     scene.frame();
     scene.frame();
     let average = last(&scene);
-    assert!(average[0] < 0.01 && (average[2] - 0.75).abs() < 0.02, "the effect's blue: {average:?}");
+    assert!(
+        average[0] < 0.01 && (average[2] - 0.75).abs() < 0.02,
+        "the effect's blue: {average:?}"
+    );
 }

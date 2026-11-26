@@ -1471,10 +1471,19 @@ mod tests {
         use super::{Vec3, sphere_touches_box};
         let (min, max) = (Vec3::ZERO, Vec3::ONE);
         assert!(sphere_touches_box(Vec3::splat(0.5), 0.1, min, max), "inside");
-        assert!(sphere_touches_box(Vec3::new(1.5, 0.5, 0.5), 0.6, min, max), "overlapping a face");
-        assert!(!sphere_touches_box(Vec3::new(1.5, 0.5, 0.5), 0.4, min, max), "short of a face");
+        assert!(
+            sphere_touches_box(Vec3::new(1.5, 0.5, 0.5), 0.6, min, max),
+            "overlapping a face"
+        );
+        assert!(
+            !sphere_touches_box(Vec3::new(1.5, 0.5, 0.5), 0.4, min, max),
+            "short of a face"
+        );
         // Near a corner the box is round-cornered for the test, not square.
-        assert!(!sphere_touches_box(Vec3::splat(1.5), 0.8, min, max), "0.87 from the corner");
+        assert!(
+            !sphere_touches_box(Vec3::splat(1.5), 0.8, min, max),
+            "0.87 from the corner"
+        );
         assert!(sphere_touches_box(Vec3::splat(1.5), 0.9, min, max));
     }
 
