@@ -2850,6 +2850,11 @@ static void retained_ui_presets() {
         ui.set_theme(theme);
         CHECK(ui.theme().title_size == 30 && ui.resolved_paint(title).font_size == 30);
         CHECK(ui.resolved_paint(buy).border.g == 1 && ctx.ui_style().accent.g == 1);
+        // A paint started from the node's own, one field changed.
+        PonkoUiPaint bigger = ui.resolved_paint(buy);
+        bigger.font_size = 40;
+        ui.set_paint(buy, ponko::ui::paint(bigger));
+        CHECK(ui.resolved_paint(buy).font_size == 40 && ui.resolved_paint(buy).border.g == 1);
         theme.border_width = -1;
         throws([&] { ui.set_theme(theme); });
 
@@ -4757,7 +4762,8 @@ static void game_states() {
              [&checked](ponko::ctx& ctx) { checked++; return ctx.sim_tick() % 2 == 0; },
              [&even](ponko::ctx&) { even++; }, "even");
     CHECK(g.schedule_plan().find("even") != std::string::npos);
-    g.run_headless(20);
+    auto ended = g.run_headless(20);
+    CHECK(ended.state<screen>() == screen::title);   // where the run ended
 
     const std::vector<entry> want{
         {'e', screen::title, 0},

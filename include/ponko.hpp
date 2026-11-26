@@ -2497,6 +2497,9 @@ public:
     std::uint32_t render_layers(entity e) const { valid(); std::uint32_t result = 0; detail::check(ponko_world_render_layers(raw_, e, &result)); return result; }
     /// How many entities are alive.
     std::size_t size() const { valid(); std::size_t result = 0; detail::check(ponko_world_len(raw_, &result)); return result; }
+    /// The state the world's game is in, as the game's enum `S` (Rust `world.resource::<State<S>>()`): where a
+    /// headless run ended. Throws ponko::error if the game has no state machine.
+    template<class S> S state() const { valid(); std::uint32_t s = 0; detail::check(ponko_world_state(raw_, &s)); return static_cast<S>(s); }
     /// Despawns every entity (Rust `World::clear`); resources stay. Not inside a query.
     void clear() { valid(); detail::check(ponko_world_clear(raw_)); }
     /// A copy of `e`'s `T`; throws if `e` is dead or has no `T` (see try_get).
@@ -4520,6 +4523,10 @@ public:
 class paint {
     PonkoUiPaint c_ = ponko_ui_paint_default();
 public:
+    /// The default paint.
+    paint() = default;
+    /// Starts from a C paint, such as `tree::resolved_paint(node)`, to change a few of its fields.
+    explicit paint(const PonkoUiPaint& c) : c_(c) {}
     /// Background color.
     paint& background(ponko::color c) { c_.background = c; return *this; }
     /// Background while hovered or focused.

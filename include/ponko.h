@@ -7172,6 +7172,8 @@ enum PonkoStatus ponko_game_add_system_if(struct PonkoGame *game,
 
 enum PonkoStatus ponko_ctx_state(struct PonkoCtx *ctx, uint32_t *out_state);
 
+enum PonkoStatus ponko_world_state(struct PonkoWorld *world, uint32_t *out_state);
+
 enum PonkoStatus ponko_ctx_state_ticks(struct PonkoCtx *ctx, uint64_t *out_ticks);
 
 enum PonkoStatus ponko_ctx_state_in_stack(struct PonkoCtx *ctx, uint32_t state, bool *out_in_stack);
