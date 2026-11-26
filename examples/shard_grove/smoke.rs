@@ -359,6 +359,8 @@ pub fn publish_web_state(ctx: &mut Ctx) {
         "joints": joints,
         "size": [size.x, size.y],
         "screen": screen_name(*ctx.world.resource::<Screen>()),
+        // The menu button the keyboard is on (Enter presses it).
+        "focus": ctx.ui.focus().and_then(|id| ctx.ui.name(id)),
         "shards": run.shards.len(),
         "tally": tally,
         "quality": quality_name(ctx),

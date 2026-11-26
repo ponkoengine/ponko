@@ -75,6 +75,7 @@
     "features": ["navmesh", "physics3d"],
     "asset": "shard_grove/grove.glb",
     "presses": [
+      "Tab=focus:title.new",
       "Enter=screen:Playing",
       "Escape=screen:Paused",
       "Enter=screen:Playing",

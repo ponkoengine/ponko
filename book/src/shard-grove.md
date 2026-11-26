@@ -211,10 +211,27 @@ web/build.sh --features navmesh,physics3d shard_grove && python3 -m http.server 
 ```
 
 builds it for the browser at the `Low` preset. The game publishes its state
-on `<html data-smoke>` (ticks, frames, the warden's joints, the screen, the
-shards, the quality, the storage), in the format of the
-`web/smoke` fixtures, and the [web gallery](web.md#the-gallery-of-examples)
-lists it.
+on `<html data-smoke>` (ticks, frames, clicks, the warden's joints, the
+screen, the focused menu button, the shards, the tally, the quality, the
+storage), in the format of the `web/smoke` fixtures, and the
+[web gallery](web.md#the-gallery-of-examples) lists it.
+
+`?smoke=walkthrough` in the page's address makes the game play the
+walk-through of `--smoke` by itself in the browser (a page can't quit, so it
+stays on the title at the end and reports `finished`). The list of checks
+plays the web build in headless Chromium on WebGPU and on WebGL2 (the
+`web-examples` job, with the fixtures `shard_grove` and
+`shard_grove_walkthrough` of `web/smoke/fixtures.json`):
+
+```sh
+node web/smoke/smoke.mjs --fixture shard_grove --chromium-mode new --backend webgl2 --require-gpu
+node web/smoke/smoke.mjs --fixture shard_grove_walkthrough --chromium-mode new --backend webgpu --require-gpu
+```
+
+The first presses the menus' keys (title to a game, pause, resume, pause);
+the second waits for the whole walk-through: three shards, a save at a
+shrine, back to the title, "continue", the other shards, the gate, the end
+screen and the title again.
 
 ## Performance baseline
 
