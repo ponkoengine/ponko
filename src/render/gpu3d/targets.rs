@@ -310,10 +310,10 @@ impl Renderer3D {
     pub(super) fn prepare_refraction_copy(&mut self, device: &wgpu::Device) {
         // GL keeps the original one-level copy. Its texture views can't
         // sample one mip while rendering to another on the same image.
-        let active = !self.float_depth && self.needs_refraction();
+        let active = self.needs_refraction();
         let Some(targets) = &mut self.targets else { return };
         targets.refraction_active = active;
-        if !active || targets.refraction.is_some() {
+        if !active || self.float_depth || targets.refraction.is_some() {
             return;
         }
         let size = targets.scene_texture.size();
@@ -545,7 +545,7 @@ pub(super) struct Targets {
     /// Lazily allocated per view, retained so a moving camera does not
     /// allocate images each time a refractive model comes into view.
     refraction: Option<RefractionCopy>,
-    refraction_active: bool,
+    pub(super) refraction_active: bool,
     /// The scene bind group of the transparent pass: `scene_texture` and
     /// `depth` (or its copy, `depth_copy`).
     pub(super) scene: wgpu::BindGroup,
@@ -984,6 +984,9 @@ impl Targets {
             ("3d depth", &self.depth),
         ] {
             t.view(C::FrameTargets, label, view);
+        }
+        if let Some(refraction) = &self.refraction {
+            t.texture(C::FrameTargets, "opaque refraction image", &refraction.texture);
         }
         if let Some(copy) = &self.depth_copy {
             t.view(C::FrameTargets, "depth copy", &copy.view);

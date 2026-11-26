@@ -1380,7 +1380,7 @@ impl Renderer3D {
     /// a transparent surface reads the scene behind it, or a soft particle
     /// its depth.
     pub(super) fn splits_transparent(&self) -> bool {
-        self.needs_refraction() || self.needs_scene() || self.particles.soft()
+        self.targets.as_ref().is_some_and(|t| t.refraction_active) || self.needs_scene() || self.particles.soft()
     }
 
     /// Whether any camera-visible run or batch level needs the opaque image.
