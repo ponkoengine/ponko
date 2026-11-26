@@ -251,7 +251,9 @@
 
 #define PONKO_QUERY_FILTER_EX_VERSION 1
 
-#define PONKO_MATERIAL_DESC_EX_VERSION 4
+#define PONKO_MATERIAL_DESC_EX_VERSION 5
+
+#define PONKO_TEXTURE_MAP_COUNT 21
 
 #define PONKO_NAV_BAKE_SETTINGS_EX_VERSION 1
 
@@ -1559,6 +1561,37 @@ typedef enum PonkoConsoleType {
   PONKO_CONSOLE_FLOAT,
   PONKO_CONSOLE_BOOL,
 } PonkoConsoleType;
+
+enum PonkoTextureMap
+#ifdef __cplusplus
+  : uint32_t
+#endif // __cplusplus
+ {
+  PONKO_TEXTURE_MAP_BASE_COLOR = 0,
+  PONKO_TEXTURE_MAP_EMISSIVE = 1,
+  PONKO_TEXTURE_MAP_NORMAL = 2,
+  PONKO_TEXTURE_MAP_METALLIC_ROUGHNESS = 3,
+  PONKO_TEXTURE_MAP_OCCLUSION = 4,
+  PONKO_TEXTURE_MAP_CLEARCOAT = 5,
+  PONKO_TEXTURE_MAP_CLEARCOAT_ROUGHNESS = 6,
+  PONKO_TEXTURE_MAP_CLEARCOAT_NORMAL = 7,
+  PONKO_TEXTURE_MAP_SHEEN_COLOR = 8,
+  PONKO_TEXTURE_MAP_SHEEN_ROUGHNESS = 9,
+  PONKO_TEXTURE_MAP_SPECULAR = 10,
+  PONKO_TEXTURE_MAP_SPECULAR_COLOR = 11,
+  PONKO_TEXTURE_MAP_ANISOTROPY = 12,
+  PONKO_TEXTURE_MAP_IRIDESCENCE = 13,
+  PONKO_TEXTURE_MAP_IRIDESCENCE_THICKNESS = 14,
+  PONKO_TEXTURE_MAP_TRANSMISSION = 15,
+  PONKO_TEXTURE_MAP_THICKNESS = 16,
+  PONKO_TEXTURE_MAP_DIFFUSE_TRANSMISSION_COLOR = 17,
+  PONKO_TEXTURE_MAP_DIFFUSE_TRANSMISSION = 18,
+  PONKO_TEXTURE_MAP_SCATTER_COLOR = 19,
+  PONKO_TEXTURE_MAP_SCATTER = 20,
+};
+#ifndef __cplusplus
+typedef uint32_t PonkoTextureMap;
+#endif // __cplusplus
 
 typedef struct PonkoAccess PonkoAccess;
 
@@ -3699,6 +3732,18 @@ typedef struct PonkoMaterialTransmission {
   float scatter_anisotropy;
 } PonkoMaterialTransmission;
 
+typedef struct PonkoTextureTransform {
+  float offset[2];
+  float rotation;
+  float scale[2];
+} PonkoTextureTransform;
+
+typedef struct PonkoTextureTransformOverrides {
+  uint32_t transform_mask;
+  uint32_t uv1_mask;
+  struct PonkoTextureTransform transforms[PONKO_TEXTURE_MAP_COUNT];
+} PonkoTextureTransformOverrides;
+
 typedef struct PonkoMaterialDescEx {
   uint32_t struct_size;
   uint32_t version;
@@ -3709,6 +3754,8 @@ typedef struct PonkoMaterialDescEx {
   bool unlit;
   struct PonkoMaterialLayers layers;
   struct PonkoMaterialTransmission transmission;
+  struct PonkoTextureTransform texture_transform;
+  struct PonkoTextureTransformOverrides texture_transform_overrides;
 } PonkoMaterialDescEx;
 
 typedef struct PonkoNavBakeSettingsEx {

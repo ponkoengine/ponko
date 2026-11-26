@@ -2918,6 +2918,23 @@ static void descriptors_setup(PonkoCtx* ctx, void* user) {
     d.transmission.has_scatter_map = false;
     d.transmission.factor = 2.0f;
     CHECK(ponko_ctx_update_material_ex(ctx, m, &d) == PONKO_INVALID_ARGUMENT);
+    /* Version 5: an emissive map can use its own scale and coordinates. */
+    CHECK(ponko_material_desc_ex_defaults(&d) == PONKO_OK);
+    CHECK(d.texture_transform.scale[0] == 1 && d.texture_transform_overrides.transform_mask == 0);
+    d.desc.has_texture = true;
+    d.desc.texture = glass_maps[0];
+    d.desc.has_emissive_map = true;
+    d.desc.emissive_map = glass_maps[1];
+    const unsigned emissive = PONKO_TEXTURE_MAP_EMISSIVE;
+    d.texture_transform_overrides.transform_mask = 1u << emissive;
+    d.texture_transform_overrides.uv1_mask = 1u << emissive;
+    d.texture_transform_overrides.transforms[emissive].scale[0] = 2.0f;
+    CHECK(ponko_ctx_update_material_ex(ctx, m, &d) == PONKO_OK);
+    d.texture_transform_overrides.transforms[emissive].rotation = NAN;
+    CHECK(ponko_ctx_update_material_ex(ctx, m, &d) == PONKO_INVALID_ARGUMENT);
+    d.version = 4;
+    d.struct_size = offsetof(PonkoMaterialDescEx, texture_transform);
+    CHECK(ponko_ctx_update_material_ex(ctx, m, &d) == PONKO_OK);
     /* Retargeting between two humanoids, the second half the size. */
     static const char* const a[15] = {"Hips", "Spine", "Head", "LeftArm", "LeftForeArm", "LeftHand", "RightArm",
         "RightForeArm", "RightHand", "LeftUpLeg", "LeftLeg", "LeftFoot", "RightUpLeg", "RightLeg", "RightFoot"};

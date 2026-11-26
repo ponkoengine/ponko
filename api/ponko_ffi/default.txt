@@ -1378,6 +1378,37 @@ impl core::fmt::Debug for ponko_ffi::PonkoTextShaping
 pub fn ponko_ffi::PonkoTextShaping::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_ffi::PonkoTextShaping
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoTextShaping
+#[repr(u32)] pub enum ponko_ffi::PonkoTextureMap
+pub ponko_ffi::PonkoTextureMap::PONKO_TEXTURE_MAP_ANISOTROPY = 12
+pub ponko_ffi::PonkoTextureMap::PONKO_TEXTURE_MAP_BASE_COLOR = 0
+pub ponko_ffi::PonkoTextureMap::PONKO_TEXTURE_MAP_CLEARCOAT = 5
+pub ponko_ffi::PonkoTextureMap::PONKO_TEXTURE_MAP_CLEARCOAT_NORMAL = 7
+pub ponko_ffi::PonkoTextureMap::PONKO_TEXTURE_MAP_CLEARCOAT_ROUGHNESS = 6
+pub ponko_ffi::PonkoTextureMap::PONKO_TEXTURE_MAP_DIFFUSE_TRANSMISSION = 18
+pub ponko_ffi::PonkoTextureMap::PONKO_TEXTURE_MAP_DIFFUSE_TRANSMISSION_COLOR = 17
+pub ponko_ffi::PonkoTextureMap::PONKO_TEXTURE_MAP_EMISSIVE = 1
+pub ponko_ffi::PonkoTextureMap::PONKO_TEXTURE_MAP_IRIDESCENCE = 13
+pub ponko_ffi::PonkoTextureMap::PONKO_TEXTURE_MAP_IRIDESCENCE_THICKNESS = 14
+pub ponko_ffi::PonkoTextureMap::PONKO_TEXTURE_MAP_METALLIC_ROUGHNESS = 3
+pub ponko_ffi::PonkoTextureMap::PONKO_TEXTURE_MAP_NORMAL = 2
+pub ponko_ffi::PonkoTextureMap::PONKO_TEXTURE_MAP_OCCLUSION = 4
+pub ponko_ffi::PonkoTextureMap::PONKO_TEXTURE_MAP_SCATTER = 20
+pub ponko_ffi::PonkoTextureMap::PONKO_TEXTURE_MAP_SCATTER_COLOR = 19
+pub ponko_ffi::PonkoTextureMap::PONKO_TEXTURE_MAP_SHEEN_COLOR = 8
+pub ponko_ffi::PonkoTextureMap::PONKO_TEXTURE_MAP_SHEEN_ROUGHNESS = 9
+pub ponko_ffi::PonkoTextureMap::PONKO_TEXTURE_MAP_SPECULAR = 10
+pub ponko_ffi::PonkoTextureMap::PONKO_TEXTURE_MAP_SPECULAR_COLOR = 11
+pub ponko_ffi::PonkoTextureMap::PONKO_TEXTURE_MAP_THICKNESS = 16
+pub ponko_ffi::PonkoTextureMap::PONKO_TEXTURE_MAP_TRANSMISSION = 15
+impl core::clone::Clone for ponko_ffi::PonkoTextureMap
+pub fn ponko_ffi::PonkoTextureMap::clone(&self) -> Self
+impl core::cmp::Eq for ponko_ffi::PonkoTextureMap
+impl core::cmp::PartialEq for ponko_ffi::PonkoTextureMap
+pub fn ponko_ffi::PonkoTextureMap::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko_ffi::PonkoTextureMap
+pub fn ponko_ffi::PonkoTextureMap::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoTextureMap
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoTextureMap
 #[repr(u32)] pub enum ponko_ffi::PonkoTouchControlKind
 pub ponko_ffi::PonkoTouchControlKind::PONKO_TOUCH_BUTTON = 2
 pub ponko_ffi::PonkoTouchControlKind::PONKO_TOUCH_CORNER_BUTTON = 3
@@ -3726,6 +3757,8 @@ pub ponko_ffi::PonkoMaterialDescEx::layers: ponko_ffi::PonkoMaterialLayers
 pub ponko_ffi::PonkoMaterialDescEx::masked_tint: bool
 pub ponko_ffi::PonkoMaterialDescEx::stencil: ponko_ffi::PonkoStencil
 pub ponko_ffi::PonkoMaterialDescEx::struct_size: u32
+pub ponko_ffi::PonkoMaterialDescEx::texture_transform: ponko_ffi::PonkoTextureTransform
+pub ponko_ffi::PonkoMaterialDescEx::texture_transform_overrides: ponko_ffi::PonkoTextureTransformOverrides
 pub ponko_ffi::PonkoMaterialDescEx::transmission: ponko_ffi::PonkoMaterialTransmission
 pub ponko_ffi::PonkoMaterialDescEx::unlit: bool
 pub ponko_ffi::PonkoMaterialDescEx::version: u32
@@ -5324,6 +5357,30 @@ impl core::fmt::Debug for ponko_ffi::PonkoTextureArray
 pub fn ponko_ffi::PonkoTextureArray::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_ffi::PonkoTextureArray
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoTextureArray
+#[repr(C)] pub struct ponko_ffi::PonkoTextureTransform
+pub ponko_ffi::PonkoTextureTransform::offset: [f32; 2]
+pub ponko_ffi::PonkoTextureTransform::rotation: f32
+pub ponko_ffi::PonkoTextureTransform::scale: [f32; 2]
+impl core::clone::Clone for ponko_ffi::PonkoTextureTransform
+pub fn ponko_ffi::PonkoTextureTransform::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko_ffi::PonkoTextureTransform
+pub fn ponko_ffi::PonkoTextureTransform::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko_ffi::PonkoTextureTransform
+pub fn ponko_ffi::PonkoTextureTransform::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoTextureTransform
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoTextureTransform
+#[repr(C)] pub struct ponko_ffi::PonkoTextureTransformOverrides
+pub ponko_ffi::PonkoTextureTransformOverrides::transform_mask: u32
+pub ponko_ffi::PonkoTextureTransformOverrides::transforms: [ponko_ffi::PonkoTextureTransform; 21]
+pub ponko_ffi::PonkoTextureTransformOverrides::uv1_mask: u32
+impl core::clone::Clone for ponko_ffi::PonkoTextureTransformOverrides
+pub fn ponko_ffi::PonkoTextureTransformOverrides::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko_ffi::PonkoTextureTransformOverrides
+pub fn ponko_ffi::PonkoTextureTransformOverrides::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko_ffi::PonkoTextureTransformOverrides
+pub fn ponko_ffi::PonkoTextureTransformOverrides::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoTextureTransformOverrides
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoTextureTransformOverrides
 #[repr(C)] pub struct ponko_ffi::PonkoThirdPersonCamera
 pub ponko_ffi::PonkoThirdPersonCamera::collision_radius: f32
 pub ponko_ffi::PonkoThirdPersonCamera::current_distance: f32
@@ -6526,6 +6583,7 @@ pub const ponko_ffi::PONKO_TERRAIN_LAYERS: usize
 pub const ponko_ffi::PONKO_TERRAIN_LODS: usize
 pub const ponko_ffi::PONKO_TEXTURE_COLOR: u32
 pub const ponko_ffi::PONKO_TEXTURE_DATA: u32
+pub const ponko_ffi::PONKO_TEXTURE_MAP_COUNT: usize
 pub const ponko_ffi::PONKO_THIRD_PERSON_CAMERA_VERSION: u32
 pub const ponko_ffi::PONKO_TILE_EMPTY: u16
 pub const ponko_ffi::PONKO_TILE_FLIP_DIAGONAL: u8

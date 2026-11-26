@@ -24,7 +24,7 @@
 
 use std::mem::{offset_of, size_of};
 
-use ponko::render::{Lighting, MaterialLayers, Sky};
+use ponko::render::{Lighting, MaterialLayers, Sky, TextureMap, TextureTransform};
 
 use crate::ctx::{ctx_access, out};
 use crate::nav3d::{PonkoNavBakeSettings, PonkoNavSources, ponko_ctx_bake_navmesh, ponko_nav_bake_settings_default};
@@ -140,7 +140,7 @@ macro_rules! assert_header {
 // ---- material ---------------------------------------------------------------
 
 /// The version of `PonkoMaterialDescEx` this header describes.
-pub const PONKO_MATERIAL_DESC_EX_VERSION: u32 = 4;
+pub const PONKO_MATERIAL_DESC_EX_VERSION: u32 = 5;
 
 /// Layers over a material's surface (Rust `MaterialLayers`): clear coat,
 /// sheen, specular strength and color, index of refraction, anisotropy and
@@ -418,6 +418,106 @@ const NO_TEXTURE: PonkoTexture = PonkoTexture {
     height: 0,
 };
 
+/// Map indices and mask positions for `PonkoTextureTransformOverrides`.
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
+pub enum PonkoTextureMap {
+    /// Base color and alpha coverage.
+    PONKO_TEXTURE_MAP_BASE_COLOR = 0,
+    /// Emissive color.
+    PONKO_TEXTURE_MAP_EMISSIVE = 1,
+    /// Tangent-space normal.
+    PONKO_TEXTURE_MAP_NORMAL = 2,
+    /// Metallic and roughness in the packed ORM map.
+    PONKO_TEXTURE_MAP_METALLIC_ROUGHNESS = 3,
+    /// Occlusion in the packed ORM map.
+    PONKO_TEXTURE_MAP_OCCLUSION = 4,
+    /// Clear coat amount.
+    PONKO_TEXTURE_MAP_CLEARCOAT = 5,
+    /// Clear coat roughness.
+    PONKO_TEXTURE_MAP_CLEARCOAT_ROUGHNESS = 6,
+    /// Clear coat normal.
+    PONKO_TEXTURE_MAP_CLEARCOAT_NORMAL = 7,
+    /// Sheen color.
+    PONKO_TEXTURE_MAP_SHEEN_COLOR = 8,
+    /// Sheen roughness.
+    PONKO_TEXTURE_MAP_SHEEN_ROUGHNESS = 9,
+    /// Specular strength.
+    PONKO_TEXTURE_MAP_SPECULAR = 10,
+    /// Specular color.
+    PONKO_TEXTURE_MAP_SPECULAR_COLOR = 11,
+    /// Anisotropy.
+    PONKO_TEXTURE_MAP_ANISOTROPY = 12,
+    /// Iridescence amount.
+    PONKO_TEXTURE_MAP_IRIDESCENCE = 13,
+    /// Iridescence thickness.
+    PONKO_TEXTURE_MAP_IRIDESCENCE_THICKNESS = 14,
+    /// Transmission amount.
+    PONKO_TEXTURE_MAP_TRANSMISSION = 15,
+    /// Volume thickness.
+    PONKO_TEXTURE_MAP_THICKNESS = 16,
+    /// Diffuse transmission color.
+    PONKO_TEXTURE_MAP_DIFFUSE_TRANSMISSION_COLOR = 17,
+    /// Diffuse transmission amount.
+    PONKO_TEXTURE_MAP_DIFFUSE_TRANSMISSION = 18,
+    /// Volume scatter color.
+    PONKO_TEXTURE_MAP_SCATTER_COLOR = 19,
+    /// Volume scatter strength.
+    PONKO_TEXTURE_MAP_SCATTER = 20,
+}
+
+/// Number of entries in version 5's per-map overrides.
+pub const PONKO_TEXTURE_MAP_COUNT: usize = 21;
+
+/// Affine texture coordinates, applied in glTF order (scale, turn, offset).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PonkoTextureTransform {
+    /// Final offset in UV units.
+    pub offset: [f32; 2],
+    /// Rotation in radians, in glTF's convention.
+    pub rotation: f32,
+    /// Scale along U and V.
+    pub scale: [f32; 2],
+}
+
+impl PonkoTextureTransform {
+    const IDENTITY: Self = Self {
+        offset: [0.0; 2],
+        rotation: 0.0,
+        scale: [1.0; 2],
+    };
+
+    fn to_rust(self) -> TextureTransform {
+        TextureTransform::IDENTITY
+            .with_offset(self.offset.into())
+            .with_rotation(self.rotation)
+            .with_scale(self.scale.into())
+    }
+}
+
+/// Per-map overrides for a built-in material shader. Indices are
+/// `PonkoTextureMap` values. Up to four distinct transforms are drawn.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PonkoTextureTransformOverrides {
+    /// Bit per map that uses its entry in `transforms`, else the shared transform.
+    pub transform_mask: u32,
+    /// Bit per map that uses the mesh's second texture coordinates.
+    pub uv1_mask: u32,
+    /// Overrides for the maps selected by `transform_mask`.
+    pub transforms: [PonkoTextureTransform; PONKO_TEXTURE_MAP_COUNT],
+}
+
+impl PonkoTextureTransformOverrides {
+    const NONE: Self = Self {
+        transform_mask: 0,
+        uv1_mask: 0,
+        transforms: [PonkoTextureTransform::IDENTITY; PONKO_TEXTURE_MAP_COUNT],
+    };
+}
+
 /// What a material is made from, in a layout that can grow (Rust
 /// `MaterialDesc`): `PonkoMaterialDesc` plus the fields added since ABI 2.
 /// Set `struct_size` and `version`, then fill it with
@@ -432,6 +532,7 @@ const NO_TEXTURE: PonkoTexture = PonkoTexture {
 ///
 /// Version 1: `desc`, `has_stencil`, `stencil`. Version 2 adds
 /// `masked_tint`, version 3 `unlit` and `layers`, version 4 `transmission`.
+/// Version 5 adds the shared texture transform and per-map overrides.
 /// ```
 /// use ponko_ffi::*;
 /// let mut d = PonkoMaterialDescEx { struct_size: size_of::<PonkoMaterialDescEx>() as u32, version: PONKO_MATERIAL_DESC_EX_VERSION, ..unsafe { std::mem::zeroed() } };
@@ -464,6 +565,10 @@ pub struct PonkoMaterialDescEx {
     /// Version 4: light through the surface and the medium behind it (off by
     /// default).
     pub transmission: PonkoMaterialTransmission,
+    /// Version 5: the transform all maps inherit by default (identity).
+    pub texture_transform: PonkoTextureTransform,
+    /// Version 5: independent transforms and coordinate sets.
+    pub texture_transform_overrides: PonkoTextureTransformOverrides,
 }
 assert_header!(PonkoMaterialDescEx);
 
@@ -476,6 +581,7 @@ impl Versioned for PonkoMaterialDescEx {
             2 => Some(end_of!(Self, masked_tint: bool)),
             3 => Some(end_of!(Self, layers: PonkoMaterialLayers)),
             4 => Some(end_of!(Self, transmission: PonkoMaterialTransmission)),
+            5 => Some(end_of!(Self, texture_transform_overrides: PonkoTextureTransformOverrides)),
             _ => None,
         }
     }
@@ -497,6 +603,8 @@ fn material_defaults() -> PonkoMaterialDescEx {
         unlit: false,
         layers: layers_to_c(&MaterialLayers::NONE),
         transmission: transmission_to_c(&ponko::render::Transmission::NONE),
+        texture_transform: PonkoTextureTransform::IDENTITY,
+        texture_transform_overrides: PonkoTextureTransformOverrides::NONE,
     }
 }
 
@@ -519,16 +627,33 @@ fn material_ex(c: &ponko::prelude::Ctx, d: &PonkoMaterialDescEx) -> Result<ponko
     } else {
         None
     };
-    Ok(material_from_c(c, &d.desc)?
+    let mut desc = material_from_c(c, &d.desc)?
         .with_stencil(stencil)
         .with_masked_tint(d.masked_tint)
         .with_unlit(d.unlit)
-        .with_layers(layers_from_c(&d.layers).with_transmission(transmission_from_c(&d.transmission))))
+        .with_layers(layers_from_c(&d.layers).with_transmission(transmission_from_c(&d.transmission)))
+        .with_texture_transform(d.texture_transform.to_rust());
+    let overrides = &d.texture_transform_overrides;
+    if (overrides.transform_mask | overrides.uv1_mask) >> PONKO_TEXTURE_MAP_COUNT != 0 {
+        return Err(invalid("texture transform overrides contain an unknown map bit"));
+    }
+    for map in TextureMap::ALL {
+        let i = map as usize;
+        let mask = 1 << i;
+        if overrides.transform_mask & mask != 0 {
+            desc.texture_transform_overrides
+                .set(map, Some(overrides.transforms[i].to_rust()));
+        }
+        desc.texture_transform_overrides
+            .set_uv1(map, overrides.uv1_mask & mask != 0);
+    }
+    Ok(desc)
 }
 
 /// Puts a material on the GPU, from a versioned description (as
 /// `ponko_ctx_create_material`, plus a stencil state with `has_stencil`,
-/// from version 2 `masked_tint`, and from version 3 `unlit` and `layers`, from version 4 `transmission`). Layers out of range, with a
+/// from version 2 `masked_tint`, from version 3 `unlit` and `layers`, from
+/// version 4 `transmission`, and from version 5 texture transforms). Layers out of range, with a
 /// custom shader or reading more than two images are refused with
 /// `PONKO_INVALID_ARGUMENT`.
 /// # Safety
@@ -825,6 +950,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn texture_map_indices_agree_with_the_rust_descriptor() {
+        assert_eq!(PONKO_TEXTURE_MAP_COUNT, TextureMap::ALL.len());
+        for (native, rust) in [
+            PonkoTextureMap::PONKO_TEXTURE_MAP_BASE_COLOR,
+            PonkoTextureMap::PONKO_TEXTURE_MAP_EMISSIVE,
+            PonkoTextureMap::PONKO_TEXTURE_MAP_NORMAL,
+            PonkoTextureMap::PONKO_TEXTURE_MAP_METALLIC_ROUGHNESS,
+            PonkoTextureMap::PONKO_TEXTURE_MAP_OCCLUSION,
+            PonkoTextureMap::PONKO_TEXTURE_MAP_CLEARCOAT,
+            PonkoTextureMap::PONKO_TEXTURE_MAP_CLEARCOAT_ROUGHNESS,
+            PonkoTextureMap::PONKO_TEXTURE_MAP_CLEARCOAT_NORMAL,
+            PonkoTextureMap::PONKO_TEXTURE_MAP_SHEEN_COLOR,
+            PonkoTextureMap::PONKO_TEXTURE_MAP_SHEEN_ROUGHNESS,
+            PonkoTextureMap::PONKO_TEXTURE_MAP_SPECULAR,
+            PonkoTextureMap::PONKO_TEXTURE_MAP_SPECULAR_COLOR,
+            PonkoTextureMap::PONKO_TEXTURE_MAP_ANISOTROPY,
+            PonkoTextureMap::PONKO_TEXTURE_MAP_IRIDESCENCE,
+            PonkoTextureMap::PONKO_TEXTURE_MAP_IRIDESCENCE_THICKNESS,
+            PonkoTextureMap::PONKO_TEXTURE_MAP_TRANSMISSION,
+            PonkoTextureMap::PONKO_TEXTURE_MAP_THICKNESS,
+            PonkoTextureMap::PONKO_TEXTURE_MAP_DIFFUSE_TRANSMISSION_COLOR,
+            PonkoTextureMap::PONKO_TEXTURE_MAP_DIFFUSE_TRANSMISSION,
+            PonkoTextureMap::PONKO_TEXTURE_MAP_SCATTER_COLOR,
+            PonkoTextureMap::PONKO_TEXTURE_MAP_SCATTER,
+        ]
+        .into_iter()
+        .zip(TextureMap::ALL)
+        {
+            assert_eq!(native as usize, rust as usize);
+        }
+    }
+
+    #[test]
     fn version_one_covers_every_field_and_no_tail_padding() {
         // A version's length ends at its last field: the header plus fields.
         assert_eq!(
@@ -844,7 +1002,14 @@ mod tests {
             PonkoMaterialDescEx::len_of(4),
             Some(offset_of!(PonkoMaterialDescEx, transmission) + size_of::<PonkoMaterialTransmission>())
         );
-        assert_eq!(PonkoMaterialDescEx::len_of(5), None);
+        assert_eq!(
+            PonkoMaterialDescEx::len_of(5),
+            Some(
+                offset_of!(PonkoMaterialDescEx, texture_transform_overrides)
+                    + size_of::<PonkoTextureTransformOverrides>()
+            )
+        );
+        assert_eq!(PonkoMaterialDescEx::len_of(6), None);
         assert!(PonkoNavBakeSettingsEx::len_of(1).unwrap() <= size_of::<PonkoNavBakeSettingsEx>());
         assert_eq!(PonkoLightingEx::len_of(2), None);
     }

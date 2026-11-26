@@ -747,6 +747,9 @@ pub ponko::anim::MaterialProperty::Iridescence
 pub ponko::anim::MaterialProperty::IridescenceIor
 pub ponko::anim::MaterialProperty::IridescenceThickest
 pub ponko::anim::MaterialProperty::IridescenceThinnest
+pub ponko::anim::MaterialProperty::MapTextureOffset(ponko::render::TextureMap)
+pub ponko::anim::MaterialProperty::MapTextureRotation(ponko::render::TextureMap)
+pub ponko::anim::MaterialProperty::MapTextureScale(ponko::render::TextureMap)
 pub ponko::anim::MaterialProperty::Metallic
 pub ponko::anim::MaterialProperty::NormalStrength
 pub ponko::anim::MaterialProperty::Roughness
@@ -13684,6 +13687,41 @@ impl core::hash::Hash for ponko::render::StencilOp
 pub fn ponko::render::StencilOp::hash<__H: core::hash::Hasher>(&self, &mut __H)
 impl core::marker::Copy for ponko::render::StencilOp
 impl core::marker::StructuralPartialEq for ponko::render::StencilOp
+#[non_exhaustive] #[repr(u8)] pub enum ponko::render::TextureMap
+pub ponko::render::TextureMap::Anisotropy
+pub ponko::render::TextureMap::BaseColor
+pub ponko::render::TextureMap::Clearcoat
+pub ponko::render::TextureMap::ClearcoatNormal
+pub ponko::render::TextureMap::ClearcoatRoughness
+pub ponko::render::TextureMap::DiffuseTransmission
+pub ponko::render::TextureMap::DiffuseTransmissionColor
+pub ponko::render::TextureMap::Emissive
+pub ponko::render::TextureMap::Iridescence
+pub ponko::render::TextureMap::IridescenceThickness
+pub ponko::render::TextureMap::MetallicRoughness
+pub ponko::render::TextureMap::Normal
+pub ponko::render::TextureMap::Occlusion
+pub ponko::render::TextureMap::Scatter
+pub ponko::render::TextureMap::ScatterColor
+pub ponko::render::TextureMap::SheenColor
+pub ponko::render::TextureMap::SheenRoughness
+pub ponko::render::TextureMap::Specular
+pub ponko::render::TextureMap::SpecularColor
+pub ponko::render::TextureMap::Thickness
+pub ponko::render::TextureMap::Transmission
+impl ponko::render::TextureMap
+pub const ponko::render::TextureMap::ALL: [Self; 21]
+impl core::clone::Clone for ponko::render::TextureMap
+pub fn ponko::render::TextureMap::clone(&self) -> Self
+impl core::cmp::Eq for ponko::render::TextureMap
+impl core::cmp::PartialEq for ponko::render::TextureMap
+pub fn ponko::render::TextureMap::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::render::TextureMap
+pub fn ponko::render::TextureMap::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for ponko::render::TextureMap
+pub fn ponko::render::TextureMap::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for ponko::render::TextureMap
+impl core::marker::StructuralPartialEq for ponko::render::TextureMap
 #[non_exhaustive] #[repr(u32)] pub enum ponko::render::Tonemap
 pub ponko::render::Tonemap::Aces = 0
 pub ponko::render::Tonemap::AgX = 1
@@ -14568,9 +14606,11 @@ pub ponko::render::MaterialDesc::shader: core::option::Option<ponko::render::Sha
 pub ponko::render::MaterialDesc::stencil: core::option::Option<ponko::render::Stencil>
 pub ponko::render::MaterialDesc::texture: core::option::Option<ponko::texture::Texture>
 pub ponko::render::MaterialDesc::texture_transform: ponko::render::TextureTransform
+pub ponko::render::MaterialDesc::texture_transform_overrides: ponko::render::TextureTransformOverrides
 pub ponko::render::MaterialDesc::unlit: bool
 impl ponko::render::MaterialDesc
 pub fn ponko::render::MaterialDesc::color(ponko::color::Color) -> Self
+pub fn ponko::render::MaterialDesc::texture_transform_for(&self, ponko::render::TextureMap) -> ponko::render::TextureTransform
 pub fn ponko::render::MaterialDesc::with_alpha_cutoff(self, f32) -> Self
 pub fn ponko::render::MaterialDesc::with_blend(self, ponko::render::Blend) -> Self
 pub fn ponko::render::MaterialDesc::with_color(self, ponko::color::Color) -> Self
@@ -14581,6 +14621,7 @@ pub fn ponko::render::MaterialDesc::with_double_sided(self, bool) -> Self
 pub fn ponko::render::MaterialDesc::with_emissive(self, ponko::color::Color) -> Self
 pub fn ponko::render::MaterialDesc::with_emissive_map(self, impl core::convert::Into<core::option::Option<ponko::texture::Texture>>) -> Self
 pub fn ponko::render::MaterialDesc::with_layers(self, ponko::render::MaterialLayers) -> Self
+pub fn ponko::render::MaterialDesc::with_map_texture_transform(self, ponko::render::TextureMap, ponko::render::TextureTransform) -> Self
 pub fn ponko::render::MaterialDesc::with_masked_tint(self, bool) -> Self
 pub fn ponko::render::MaterialDesc::with_metallic(self, f32) -> Self
 pub fn ponko::render::MaterialDesc::with_normal_map(self, impl core::convert::Into<core::option::Option<ponko::texture::Texture>>) -> Self
@@ -15416,6 +15457,22 @@ impl core::fmt::Debug for ponko::render::TextureTransform
 pub fn ponko::render::TextureTransform::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::render::TextureTransform
 impl core::marker::StructuralPartialEq for ponko::render::TextureTransform
+pub struct ponko::render::TextureTransformOverrides
+impl ponko::render::TextureTransformOverrides
+pub fn ponko::render::TextureTransformOverrides::get(&self, ponko::render::TextureMap) -> core::option::Option<ponko::render::TextureTransform>
+pub fn ponko::render::TextureTransformOverrides::set(&mut self, ponko::render::TextureMap, core::option::Option<ponko::render::TextureTransform>)
+pub fn ponko::render::TextureTransformOverrides::set_uv1(&mut self, ponko::render::TextureMap, bool)
+pub fn ponko::render::TextureTransformOverrides::uses_uv1(&self, ponko::render::TextureMap) -> bool
+impl core::clone::Clone for ponko::render::TextureTransformOverrides
+pub fn ponko::render::TextureTransformOverrides::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::render::TextureTransformOverrides
+pub fn ponko::render::TextureTransformOverrides::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::render::TextureTransformOverrides
+pub fn ponko::render::TextureTransformOverrides::default() -> Self
+impl core::fmt::Debug for ponko::render::TextureTransformOverrides
+pub fn ponko::render::TextureTransformOverrides::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::render::TextureTransformOverrides
+impl core::marker::StructuralPartialEq for ponko::render::TextureTransformOverrides
 #[non_exhaustive] pub struct ponko::render::Transmission
 pub ponko::render::Transmission::attenuation_color: ponko::color::Color
 pub ponko::render::Transmission::attenuation_distance: f32

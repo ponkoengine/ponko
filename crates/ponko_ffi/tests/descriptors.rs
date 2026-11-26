@@ -128,6 +128,15 @@ fn defaults_match_the_abi_2_defaults() {
             (white, white, white)
         );
         assert!(!t.has_map && !t.has_thickness_map && !t.has_diffuse_map && !t.has_scatter_color_map);
+        assert_eq!(m.texture_transform.scale, [1.0; 2]);
+        assert_eq!(m.texture_transform_overrides.transform_mask, 0);
+        assert_eq!(m.texture_transform_overrides.uv1_mask, 0);
+        // Version 4's prefix ends before the shared transform.
+        let mut v4: PonkoMaterialDescEx = header(4);
+        v4.struct_size = std::mem::offset_of!(PonkoMaterialDescEx, texture_transform) as u32;
+        v4.texture_transform.rotation = 2.0;
+        assert_eq!(ponko_material_desc_ex_defaults(&mut v4), PONKO_OK);
+        assert_eq!(v4.texture_transform.rotation, 2.0);
         // A version 3 caller's smaller struct: no transmission written.
         let mut v3: PonkoMaterialDescEx = header(3);
         v3.struct_size = std::mem::offset_of!(PonkoMaterialDescEx, transmission) as u32;
@@ -337,6 +346,29 @@ unsafe extern "C" fn three_d(ctx: *mut PonkoCtx, user: *mut c_void) {
             ponko_ctx_update_material_ex(ctx, glass, &d),
             PONKO_INVALID_ARGUMENT
         );
+        // Version 5: author a second transform, reject invalid values and
+        // unknown map bits, and keep accepting a version 4 descriptor.
+        expect!(seen, ponko_material_desc_ex_defaults(&mut d), PONKO_OK);
+        let map = PonkoTextureMap::PONKO_TEXTURE_MAP_EMISSIVE as usize;
+        d.texture_transform.offset = [0.5, 0.0];
+        d.texture_transform_overrides.transform_mask = 1 << map;
+        d.texture_transform_overrides.transforms[map].scale = [2.0; 2];
+        expect!(seen, ponko_ctx_update_material_ex(ctx, glass, &d), PONKO_OK);
+        d.texture_transform_overrides.transforms[map].scale[0] = f32::NAN;
+        expect!(
+            seen,
+            ponko_ctx_update_material_ex(ctx, glass, &d),
+            PONKO_INVALID_ARGUMENT
+        );
+        d.texture_transform_overrides.uv1_mask = 1 << PONKO_TEXTURE_MAP_COUNT;
+        expect!(
+            seen,
+            ponko_ctx_update_material_ex(ctx, glass, &d),
+            PONKO_INVALID_ARGUMENT
+        );
+        d.version = 4;
+        d.struct_size = std::mem::offset_of!(PonkoMaterialDescEx, texture_transform) as u32;
+        expect!(seen, ponko_ctx_update_material_ex(ctx, glass, &d), PONKO_OK);
         let foreign = PonkoMaterial { id: 9999 };
         expect!(
             seen,
