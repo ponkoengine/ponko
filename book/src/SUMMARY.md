@@ -108,6 +108,7 @@
   - [Well-known content](known-content.md)
 - [Security: what reads untrusted bytes](security.md)
 - [API reference](api.md)
+- [The `ponko` command](cli.md)
 - [Contributing](contributing.md)
   - [Workspace test coverage](test-coverage.md)
   - [Check results: macOS](check-results/macos.md)
