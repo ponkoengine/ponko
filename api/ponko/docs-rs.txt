@@ -5153,6 +5153,7 @@ pub fn ponko::gfx::Graphics::try_load_mesh(&mut self, &str) -> core::result::Res
 pub fn ponko::gfx::Graphics::try_load_mesh_data(&self, &str) -> core::result::Result<ponko::render::MeshData, ponko::error::Error>
 pub fn ponko::gfx::Graphics::try_load_shader(&mut self, &str) -> core::result::Result<ponko::render::Shader, ponko::error::Error>
 pub fn ponko::gfx::Graphics::try_load_skeleton(&mut self, &str) -> core::result::Result<ponko::anim::Skeleton, ponko::error::Error>
+pub fn ponko::gfx::Graphics::try_update_material(&mut self, ponko::render::Material, ponko::render::MaterialDesc) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::gfx::Graphics::unload_mesh(&mut self, &str) -> bool
 pub fn ponko::gfx::Graphics::update_material(&mut self, ponko::render::Material, ponko::render::MaterialDesc)
 pub fn ponko::gfx::Graphics::warm_render_pipelines(&mut self)
@@ -14468,6 +14469,7 @@ pub ponko::render::MaterialDesc::custom_textures: [core::option::Option<ponko::t
 pub ponko::render::MaterialDesc::double_sided: bool
 pub ponko::render::MaterialDesc::emissive: ponko::color::Color
 pub ponko::render::MaterialDesc::emissive_map: core::option::Option<ponko::texture::Texture>
+pub ponko::render::MaterialDesc::layers: ponko::render::MaterialLayers
 pub ponko::render::MaterialDesc::metallic: f32
 pub ponko::render::MaterialDesc::normal_map: core::option::Option<ponko::texture::Texture>
 pub ponko::render::MaterialDesc::normal_strength: f32
@@ -14476,6 +14478,7 @@ pub ponko::render::MaterialDesc::roughness: f32
 pub ponko::render::MaterialDesc::shader: core::option::Option<ponko::render::Shader>
 pub ponko::render::MaterialDesc::stencil: core::option::Option<ponko::render::Stencil>
 pub ponko::render::MaterialDesc::texture: core::option::Option<ponko::texture::Texture>
+pub ponko::render::MaterialDesc::unlit: bool
 impl ponko::render::MaterialDesc
 pub fn ponko::render::MaterialDesc::color(ponko::color::Color) -> Self
 pub fn ponko::render::MaterialDesc::with_blend(self, ponko::render::Blend) -> Self
@@ -14486,6 +14489,7 @@ pub fn ponko::render::MaterialDesc::with_custom_textures(self, [core::option::Op
 pub fn ponko::render::MaterialDesc::with_double_sided(self, bool) -> Self
 pub fn ponko::render::MaterialDesc::with_emissive(self, ponko::color::Color) -> Self
 pub fn ponko::render::MaterialDesc::with_emissive_map(self, impl core::convert::Into<core::option::Option<ponko::texture::Texture>>) -> Self
+pub fn ponko::render::MaterialDesc::with_layers(self, ponko::render::MaterialLayers) -> Self
 pub fn ponko::render::MaterialDesc::with_metallic(self, f32) -> Self
 pub fn ponko::render::MaterialDesc::with_normal_map(self, impl core::convert::Into<core::option::Option<ponko::texture::Texture>>) -> Self
 pub fn ponko::render::MaterialDesc::with_normal_strength(self, f32) -> Self
@@ -14494,6 +14498,7 @@ pub fn ponko::render::MaterialDesc::with_roughness(self, f32) -> Self
 pub fn ponko::render::MaterialDesc::with_shader(self, impl core::convert::Into<core::option::Option<ponko::render::Shader>>) -> Self
 pub fn ponko::render::MaterialDesc::with_stencil(self, impl core::convert::Into<core::option::Option<ponko::render::Stencil>>) -> Self
 pub fn ponko::render::MaterialDesc::with_texture(self, impl core::convert::Into<core::option::Option<ponko::texture::Texture>>) -> Self
+pub fn ponko::render::MaterialDesc::with_unlit(self, bool) -> Self
 impl core::clone::Clone for ponko::render::MaterialDesc
 pub fn ponko::render::MaterialDesc::clone(&self) -> Self
 impl core::cmp::PartialEq for ponko::render::MaterialDesc
@@ -14504,6 +14509,59 @@ impl core::fmt::Debug for ponko::render::MaterialDesc
 pub fn ponko::render::MaterialDesc::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::render::MaterialDesc
 impl core::marker::StructuralPartialEq for ponko::render::MaterialDesc
+#[non_exhaustive] pub struct ponko::render::MaterialLayers
+pub ponko::render::MaterialLayers::anisotropy: f32
+pub ponko::render::MaterialLayers::anisotropy_map: core::option::Option<ponko::texture::Texture>
+pub ponko::render::MaterialLayers::anisotropy_rotation: f32
+pub ponko::render::MaterialLayers::clearcoat: f32
+pub ponko::render::MaterialLayers::clearcoat_map: core::option::Option<ponko::texture::Texture>
+pub ponko::render::MaterialLayers::clearcoat_normal_map: core::option::Option<ponko::texture::Texture>
+pub ponko::render::MaterialLayers::clearcoat_normal_strength: f32
+pub ponko::render::MaterialLayers::clearcoat_roughness: f32
+pub ponko::render::MaterialLayers::clearcoat_roughness_map: core::option::Option<ponko::texture::Texture>
+pub ponko::render::MaterialLayers::ior: f32
+pub ponko::render::MaterialLayers::iridescence: f32
+pub ponko::render::MaterialLayers::iridescence_ior: f32
+pub ponko::render::MaterialLayers::iridescence_map: core::option::Option<ponko::texture::Texture>
+pub ponko::render::MaterialLayers::iridescence_thickness: [f32; 2]
+pub ponko::render::MaterialLayers::iridescence_thickness_map: core::option::Option<ponko::texture::Texture>
+pub ponko::render::MaterialLayers::sheen_color: ponko::color::Color
+pub ponko::render::MaterialLayers::sheen_color_map: core::option::Option<ponko::texture::Texture>
+pub ponko::render::MaterialLayers::sheen_roughness: f32
+pub ponko::render::MaterialLayers::sheen_roughness_map: core::option::Option<ponko::texture::Texture>
+pub ponko::render::MaterialLayers::specular: f32
+pub ponko::render::MaterialLayers::specular_color: ponko::color::Color
+pub ponko::render::MaterialLayers::specular_color_map: core::option::Option<ponko::texture::Texture>
+pub ponko::render::MaterialLayers::specular_map: core::option::Option<ponko::texture::Texture>
+impl ponko::render::MaterialLayers
+pub const ponko::render::MaterialLayers::NONE: Self
+pub fn ponko::render::MaterialLayers::is_on(&self) -> bool
+pub fn ponko::render::MaterialLayers::with_anisotropy(self, f32, f32) -> Self
+pub fn ponko::render::MaterialLayers::with_anisotropy_map(self, impl core::convert::Into<core::option::Option<ponko::texture::Texture>>) -> Self
+pub fn ponko::render::MaterialLayers::with_clearcoat(self, f32, f32) -> Self
+pub fn ponko::render::MaterialLayers::with_clearcoat_map(self, impl core::convert::Into<core::option::Option<ponko::texture::Texture>>) -> Self
+pub fn ponko::render::MaterialLayers::with_clearcoat_normal_map(self, impl core::convert::Into<core::option::Option<ponko::texture::Texture>>) -> Self
+pub fn ponko::render::MaterialLayers::with_clearcoat_roughness_map(self, impl core::convert::Into<core::option::Option<ponko::texture::Texture>>) -> Self
+pub fn ponko::render::MaterialLayers::with_ior(self, f32) -> Self
+pub fn ponko::render::MaterialLayers::with_iridescence(self, f32, f32, f32) -> Self
+pub fn ponko::render::MaterialLayers::with_iridescence_map(self, impl core::convert::Into<core::option::Option<ponko::texture::Texture>>) -> Self
+pub fn ponko::render::MaterialLayers::with_iridescence_thickness_map(self, impl core::convert::Into<core::option::Option<ponko::texture::Texture>>) -> Self
+pub fn ponko::render::MaterialLayers::with_sheen(self, ponko::color::Color, f32) -> Self
+pub fn ponko::render::MaterialLayers::with_sheen_color_map(self, impl core::convert::Into<core::option::Option<ponko::texture::Texture>>) -> Self
+pub fn ponko::render::MaterialLayers::with_sheen_roughness_map(self, impl core::convert::Into<core::option::Option<ponko::texture::Texture>>) -> Self
+pub fn ponko::render::MaterialLayers::with_specular(self, f32, ponko::color::Color) -> Self
+pub fn ponko::render::MaterialLayers::with_specular_color_map(self, impl core::convert::Into<core::option::Option<ponko::texture::Texture>>) -> Self
+pub fn ponko::render::MaterialLayers::with_specular_map(self, impl core::convert::Into<core::option::Option<ponko::texture::Texture>>) -> Self
+impl core::clone::Clone for ponko::render::MaterialLayers
+pub fn ponko::render::MaterialLayers::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::render::MaterialLayers
+pub fn ponko::render::MaterialLayers::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::render::MaterialLayers
+pub fn ponko::render::MaterialLayers::default() -> Self
+impl core::fmt::Debug for ponko::render::MaterialLayers
+pub fn ponko::render::MaterialLayers::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::render::MaterialLayers
+impl core::marker::StructuralPartialEq for ponko::render::MaterialLayers
 #[repr(C)] pub struct ponko::render::Mesh
 impl ponko::render::Mesh
 pub const ponko::render::Mesh::NONE: ponko::render::Mesh
