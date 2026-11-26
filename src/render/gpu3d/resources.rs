@@ -27,6 +27,8 @@ pub(super) struct Resources {
     pub(super) meshes: Vec<GpuMesh>,
     pub(super) mesh_arena: super::mesh_arena::MeshArena,
     pub(super) materials: Vec<GpuMaterial>,
+    /// Live materials which need opaque HDR color.
+    pub(super) refractors: usize,
     pub(super) material_ids: crate::handle::SlotLiveSet,
     pub(super) material_layout: wgpu::BindGroupLayout,
     pub(super) material_sampler: wgpu::Sampler,
@@ -481,6 +483,7 @@ impl Resources {
         textures: &dyn TextureTable,
         shaders: u32,
     ) {
+        self.refractors += usize::from(desc.refracts);
         let material = self.build_material(device, desc, textures, shaders);
         write_slot(&mut self.materials, id & INDEX_MASK, material);
         self.material_ids.insert(id);
@@ -508,6 +511,7 @@ impl Resources {
             bindings,
             shader: desc.shader.min(shaders - 1),
             transparent: desc.transparent,
+            refracts: desc.refracts,
             cutout: desc.cutout,
             double_sided: desc.double_sided,
         }
@@ -548,6 +552,7 @@ impl Resources {
         }
         let slot = (id & INDEX_MASK) as usize;
         let material = &self.materials[slot];
+        self.refractors = self.refractors + usize::from(desc.refracts) - usize::from(material.refracts);
         let changed_blend = material.transparent != desc.transparent;
         queue
             .uploading(Upload::Materials)
@@ -563,6 +568,7 @@ impl Resources {
         let material = &mut self.materials[slot];
         material.shader = shader;
         material.transparent = desc.transparent;
+        material.refracts = desc.refracts;
         material.cutout = desc.cutout;
         material.double_sided = desc.double_sided;
         changed_blend
@@ -574,6 +580,7 @@ impl Resources {
         if !self.material_ids.remove(id) {
             return;
         }
+        self.refractors -= usize::from(self.materials[(id & INDEX_MASK) as usize].refracts);
         if self.freed_material.is_none() {
             let default = GpuMaterialDesc::new(&crate::three::MaterialDesc::default());
             self.freed_material = Some(self.build_material(device, &default, textures, 1));
@@ -863,6 +870,7 @@ pub(super) struct GpuMaterial {
     pub(super) bindings: MaterialBindings,
     pub(super) shader: u32,
     pub(super) transparent: bool,
+    pub(super) refracts: bool,
     /// Whether its depth passes cut out pixels by alpha ([`Blend::Cutout`]).
     pub(super) cutout: bool,
     pub(super) double_sided: bool,

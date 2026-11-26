@@ -45,6 +45,7 @@ pub(crate) struct GpuMaterialDesc {
     /// Index into the renderer's shaders (0: the built-in one).
     pub shader: u32,
     pub transparent: bool,
+    pub refracts: bool,
     pub cutout: bool,
     pub double_sided: bool,
     pub stencil: Option<super::Stencil>,
@@ -77,6 +78,7 @@ impl GpuMaterialDesc {
             ],
             arrays: desc.custom_arrays.map(|a| a.map(|a| a.id)),
             shader: desc.shader.map_or(0, |s| (s.id & INDEX_MASK) + 1),
+            refracts: false,
             transparent: desc.blend == Blend::Transparent,
             cutout: desc.blend == Blend::Cutout,
             double_sided: desc.double_sided,

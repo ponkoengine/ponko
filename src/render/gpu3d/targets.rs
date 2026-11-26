@@ -306,6 +306,45 @@ impl Renderer3D {
         })
     }
 
+    /// Prepare the refraction image only for a view with a refractive draw.
+    pub(super) fn prepare_refraction_copy(&mut self, device: &wgpu::Device) {
+        // GL keeps the original one-level copy. Its texture views can't
+        // sample one mip while rendering to another on the same image.
+        let active = !self.float_depth && self.needs_refraction();
+        let Some(targets) = &mut self.targets else { return };
+        targets.refraction_active = active;
+        if !active || targets.refraction.is_some() {
+            return;
+        }
+        let size = targets.scene_texture.size();
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("opaque refraction image"),
+            size,
+            mip_level_count: crate::render::mips::levels(size.width, size.height).min(7),
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: HDR_FORMAT,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let scene = scene_bind_group(
+            device,
+            &self.scene_layout,
+            &texture.create_view(&Default::default()),
+            &targets.depth_read,
+            self.scene_depth_sampler.as_ref(),
+            self.no_spread.as_ref(),
+        );
+        let maker = self
+            .render_targets
+            .mip_maker
+            .get_or_insert_with(|| super::target_mips::MipMaker::new(device));
+        let mips = maker.chain(device, &texture);
+        targets.refraction = Some(RefractionCopy { texture, scene, mips });
+    }
+
     /// Makes the scene-sized targets for `size` and the effects that are on
     /// this frame (decided earlier in `prepare`).
     pub(super) fn make_targets(
@@ -469,6 +508,8 @@ impl Renderer3D {
             depth_read,
             hdr_texture,
             scene_texture,
+            refraction: None,
+            refraction_active: false,
             scene,
             depth_copy,
             scene_of_hdr,
@@ -501,6 +542,10 @@ pub(super) struct Targets {
     pub(super) hdr_texture: wgpu::Texture,
     /// A copy of the opaque scene, for transparent shaders that read it.
     pub(super) scene_texture: wgpu::Texture,
+    /// Lazily allocated per view, retained so a moving camera does not
+    /// allocate images each time a refractive model comes into view.
+    refraction: Option<RefractionCopy>,
+    refraction_active: bool,
     /// The scene bind group of the transparent pass: `scene_texture` and
     /// `depth` (or its copy, `depth_copy`).
     pub(super) scene: wgpu::BindGroup,
@@ -519,7 +564,17 @@ pub(super) struct Targets {
     pub(super) size: (u32, u32),
 }
 
+pub(super) struct RefractionCopy {
+    pub(super) texture: wgpu::Texture,
+    pub(super) scene: wgpu::BindGroup,
+    pub(super) mips: super::target_mips::MipChain,
+}
+
 impl Targets {
+    /// The HDR copy with roughness levels for this frame, if needed.
+    pub(super) fn refraction(&self) -> Option<&RefractionCopy> {
+        self.refraction.as_ref().filter(|_| self.refraction_active)
+    }
     /// What the 3D passes resolve the lit frame into: `hdr`, or with
     /// temporal antialiasing its input image (the resolve then writes `hdr`).
     pub(super) fn lit_view(&self, taa: bool) -> &wgpu::TextureView {

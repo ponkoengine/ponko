@@ -1097,6 +1097,7 @@ impl Renderer3D {
                 meshes: Vec::new(),
                 mesh_arena: Default::default(),
                 materials: Vec::new(),
+                refractors: 0,
                 material_ids: Default::default(),
                 material_layout,
                 material_sampler,
