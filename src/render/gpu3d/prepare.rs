@@ -644,11 +644,25 @@ impl Renderer3D {
         let (id, target) = &mut self.render_targets.views[index];
         target.clear = clear.map(crate::color::Color::to_linear_wgpu);
         target.effects.clear();
-        let pipelines = &self.effects.pipelines;
         for &(effect, material) in effects {
             let effect = effect & crate::handle::INDEX_MASK;
-            if pipelines.get(effect as usize).and_then(Option::as_ref).is_none() {
+            // Only an effect whose screen pipeline stands (not one the GPU
+            // turned down).
+            let (Some(Some(_)), Some(Some(module))) = (
+                self.effects.pipelines.get(effect as usize),
+                self.effects.modules.get(effect as usize),
+            ) else {
                 continue;
+            };
+            if self.effects.view_pipelines[effect as usize].is_none() {
+                self.effects.view_pipelines[effect as usize] = Some(super::shaders::effect_pipeline(
+                    device,
+                    &self.shaders.layout,
+                    "3d target camera effect",
+                    module,
+                    "vs_effect",
+                    "fs_effect_view",
+                ));
             }
             let Some(slot) = self.resources.material_slot(material) else {
                 continue;
