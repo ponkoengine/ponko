@@ -423,7 +423,7 @@ impl Rig {
             &ctx.scene3d.lighting,
         );
         ctx.gfx.frame3d.views = std::mem::take(&mut frame.views);
-        ctx.collect_views(&SkinFrame::default());
+        ctx.collect_views(&SkinFrame::default(), None);
         frame.views = std::mem::take(&mut ctx.gfx.frame3d.views);
         ctx.collect_passes(None);
         std::mem::swap(&mut frame.effects, &mut ctx.gfx.frame3d.effects);

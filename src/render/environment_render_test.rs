@@ -180,7 +180,7 @@ impl Rig {
     fn draw(&mut self) -> Vec<u8> {
         self.register_captures();
         let skins = SkinFrame::default();
-        self.ctx.collect_views(&skins);
+        self.ctx.collect_views(&skins, None);
         // A refreshing probe gets its slot while the views are collected.
         self.register_captures();
         let ctx = &mut self.ctx;

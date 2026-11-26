@@ -409,6 +409,7 @@ impl Renderer3D {
             self.screen.ssr = Some(crate::render::ssr::Ssr::new(device));
         }
         self.screen.ssr_thin = self.screen.ssr_on && post.ssr_thin_objects;
+        self.screen.ssr_transparent = self.screen.ssr_on && post.ssr_transparent;
         if self.screen.ssr_thin
             && let Some(ssr) = &mut self.screen.ssr
         {
@@ -629,6 +630,51 @@ impl Renderer3D {
         });
     }
 
+    /// A target camera's background and screen effects this frame (`view`,
+    /// drawing into `self.render_targets.views[index]`), and what its
+    /// effects read and write, made the first time it has some. An effect
+    /// whose material samples the camera's own render target is left out
+    /// (one pass can't read and write a texture), with a warning.
+    fn prepare_view_effects(
+        &mut self,
+        device: &wgpu::Device,
+        index: usize,
+        (clear, effects): (Option<crate::color::Color>, &[(u32, u32)]),
+    ) {
+        let (id, target) = &mut self.render_targets.views[index];
+        target.clear = clear.map(crate::color::Color::to_linear_wgpu);
+        target.effects.clear();
+        let pipelines = &self.effects.pipelines;
+        for &(effect, material) in effects {
+            let effect = effect & crate::handle::INDEX_MASK;
+            if pipelines.get(effect as usize).and_then(Option::as_ref).is_none() {
+                continue;
+            }
+            let Some(slot) = self.resources.material_slot(material) else {
+                continue;
+            };
+            if self.resources.material(slot).bindings.textures.contains(&target.image) {
+                crate::render::traffic::warn(&format!(
+                    "ponko: a screen effect of the target camera drawing render target {id} skipped: its \
+                     material samples that render target (one pass can't read and write a texture); give \
+                     it a material without that texture"
+                ));
+                continue;
+            }
+            target.effects.push((effect, slot));
+        }
+        if target.effects.is_empty() || target.effect_targets.is_some() {
+            return;
+        }
+        target.effect_targets = Some(super::targets::ViewEffects::new(
+            device,
+            &self.scene_layout,
+            target,
+            self.scene_depth_sampler.as_ref(),
+            self.no_spread.as_ref(),
+        ));
+    }
+
     /// Step 5: this frame's draw lists (runs of every view, effects, compute
     /// passes, material overrides, posed skins), sorted for the passes.
     /// Returns how many instances the frame uploads.
@@ -723,6 +769,19 @@ impl Renderer3D {
         let mut computes = std::mem::take(&mut self.lists.computes);
         self.list_computes(device, &frame.computes, Stage::Compute, &mut computes);
         self.lists.computes = computes;
+        if !extra {
+            // Mipmapped targets written this frame before the target camera
+            // stage get their levels made in it (see `target_mips.rs`).
+            self.render_targets.begin_mips();
+            for &(_, target, _) in &frame.computes {
+                if target & (1 << 31) == 0 {
+                    self.render_targets.wrote(target, false);
+                }
+            }
+            for &(_, target, _) in &frame.target_effects {
+                self.render_targets.wrote(target, true);
+            }
+        }
         let mut computes = std::mem::take(&mut self.lists.scene_computes);
         self.list_computes(device, &frame.scene_computes, Stage::SceneCompute, &mut computes);
         self.lists.scene_computes = computes;
@@ -755,6 +814,8 @@ impl Renderer3D {
             ) else {
                 continue;
             };
+            self.prepare_view_effects(device, target, (view.clear, &view.effects));
+            self.render_targets.wrote(view.target, false);
             // Debug labels are drawn with the particles' text.
             if view.particles || view.debug {
                 let particles = &view.frame.particles;
@@ -784,6 +845,9 @@ impl Renderer3D {
         }
         views.truncate(used);
         self.lists.views = views;
+        if !extra {
+            self.render_targets.prepare_mips(device);
+        }
         if !extra {
             self.particles.end_targets();
             if let Some(lines) = &mut self.debug_lines {
@@ -1042,6 +1106,7 @@ impl Renderer3D {
             light,
             camera,
             time,
+            post,
             ..
         } = scene;
         let FrameView {
@@ -1153,6 +1218,11 @@ impl Renderer3D {
             },
             sky_kit: self.kit_uniform(device, queue, (sun, camera, sky.stars), size, unjittered),
         };
+        if self.screen.ssr_transparent {
+            // Reflections on transparent surfaces: their strength and reach.
+            uniform.fog_color[3] = post.ssr.min(1.0);
+            uniform.night[3] = post.ssr_max_distance;
+        }
         if let (Some(g), Some(gi)) = (gi_frame, &self.gi) {
             let (n, origin) = (g.grid.counts.as_vec3(), g.grid.origin.as_vec3());
             uniform.gi = [
@@ -1236,6 +1306,11 @@ impl Renderer3D {
             [uniform.sky, uniform.ground, equator],
         );
         sync_frame(queue, &self.frame_buffer, 0, &mut self.frame_mirror, &uniform);
+        // Reflections on transparent surfaces march the main view's scene
+        // depth: the other views (held items, target cameras, probe views)
+        // draw without them.
+        uniform.fog_color[3] = 0.0;
+        uniform.night[3] = 0.0;
         self.upload_view_model(queue, frame, &uniform, view_proj * unjittered.inverse());
         if self.extra {
             // A window view: its frame alone; the probes, target cameras

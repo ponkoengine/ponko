@@ -2198,6 +2198,19 @@ static void thin_reflections(ponko::ctx& ctx) {
 }
 // ANCHOR_END: ssr_thin
 
+// ANCHOR: ssr_transparent
+/// Water and glass reflect the scene too (each such pixel marches its own ray).
+static void transparent_reflections(ponko::ctx& ctx) {
+    auto post = ctx.post_ex(); // version 5 has ssr_transparent
+    post.ssr_transparent = true;
+    ctx.set_post(post);
+    auto pond = ponko::material_of(ponko::rgba(.2f, .35f, .4f, .6f));
+    pond.roughness = 0.05f;
+    pond.blend = 1; // transparent
+    (void)pond;
+}
+// ANCHOR_END: ssr_transparent
+
 // ANCHOR: upscaler
 /// Two thirds of the pixels across, rebuilt to the window's resolution over frames.
 static void temporal_upscaling(ponko::ctx& ctx) {
@@ -2411,6 +2424,34 @@ static void follow_reflections(ponko::ctx& ctx) {
 }
 // ANCHOR_END: mirror
 
+// ANCHOR: security_screen
+/// Night vision: everything green, brighter in the dark.
+static const char* night_vision_shader = R"(
+fn effect(p: Pixel) -> vec3<f32> {
+    return vec3<f32>(0.0, dot(p.color, vec3<f32>(0.3, 0.6, 0.1)) * 4.0, 0.0);
+})";
+
+/// A screen in the guard's office: a camera in the vault shows the vault
+/// and nothing of the rooms around it, in night vision, on black.
+/// Mipmapped, so it doesn't shimmer seen from across the office.
+static ponko::render_target security_screen(ponko::ctx& ctx) {
+    auto screen = ctx.create_mipmapped_render_target(256, 192);
+    ponko::camera3d eye = ctx.camera3d();
+    eye.position = {3.5f, 2.8f, -6.5f};
+    auto camera = ponko::target_camera_ex_of(ponko::target_camera_of(eye, screen));
+    camera.has_cull_box = true;
+    camera.cull_box_min = {-4, 0, -12};
+    camera.cull_box_max = {4, 3, -6};
+    camera.has_clear = true;
+    camera.clear = ponko::colors::black;
+    ctx.set_target_cameras_ex({camera});
+    ponko::screen_effect green{};
+    green.effect = ctx.create_effect("night vision", night_vision_shader);
+    ctx.set_target_camera_effects(0, {green});
+    return screen;
+}
+// ANCHOR_END: security_screen
+
 // ANCHOR: monitor
 /// A security monitor shows the room, but not the smoke.
 static void monitor(ponko::ctx& ctx, ponko::render_target screen) {
@@ -2592,6 +2633,8 @@ static void the_village_has_five_spinning_houses() {
         if (ctx.post().ssr != 1.0f) { std::fprintf(stderr, "ssr\n"); std::abort(); }
         thin_reflections(ctx);
         if (!ctx.post_ex().ssr_thin_objects || ctx.post().ssr != 1.0f) { std::fprintf(stderr, "ssr thin\n"); std::abort(); }
+        transparent_reflections(ctx);
+        if (!ctx.post_ex().ssr_transparent) { std::fprintf(stderr, "ssr transparent\n"); std::abort(); }
         temporal_upscaling(ctx);
         if (ctx.post_ex().upscaler != uint32_t(ponko::upscaler::temporal) || ctx.post().render_scale != 0.67f) { std::fprintf(stderr, "upscaler\n"); std::abort(); }
         eye_adaptation(ctx);
@@ -2687,6 +2730,18 @@ static void the_pond_mirrors_the_camera() {
         auto list = ctx.target_cameras();
         if (list.size() != 1 || list[0].camera.position.y != -5 || list[0].target.width != 32) {
             std::fprintf(stderr, "pond\n");
+            std::abort();
+        }
+    });
+}
+
+static void the_security_screen_sees_only_the_vault_in_green() {
+    ponko::game("vault", 64, 64).run_headless(1, [](ponko::ctx& ctx) {
+        auto screen = security_screen(ctx);
+        const auto camera = ctx.target_camera_ex(0);
+        if (screen.width != 256 || !camera.has_cull_box || camera.cull_box_min.z != -12 || !camera.has_clear ||
+            camera.clear.r != 0 || ctx.target_camera_effects(0).size() != 1 || !ctx.effects().empty()) {
+            std::fprintf(stderr, "security screen\n");
             std::abort();
         }
     });
@@ -5265,6 +5320,7 @@ int main() {
     ponko::game("decal guide", 64, 64).run_headless(0, projected_decals);
     the_ripples_run_on_a_render_target();
     the_pond_mirrors_the_camera();
+    the_security_screen_sees_only_the_vault_in_green();
     the_debug_map_shows_what_the_window_leaves_out();
     the_hills_are_nine_tiles();
     tiles_are_solid_only_near_the_player_and_the_car();
@@ -5457,6 +5513,17 @@ int main() {
         net.steam_invite(); // normally in response to the player's invite button
     }
     // ANCHOR_END: steam_messages
+}
+[[maybe_unused]] static void steam_sockets_server() {
+    // ANCHOR: steam_sockets
+    // A host process nobody plays on, signed in to its own Steam account.
+    auto net = ponko::net_messages::steam_sockets_host(480, ponko::steam_lobby_visibility::public_lobby, 16);
+    for (;;) {
+        net.poll(); // players join with net_messages::steam_join(app_id, lobby id)
+        while (auto event = net.next_event()) { (void)event; /* run the game */ }
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    }
+    // ANCHOR_END: steam_sockets
 }
 [[maybe_unused]] static void general_steam_lobby() {
     // ANCHOR: general_steam_lobby

@@ -148,6 +148,7 @@ impl Shaders {
                 fade: Default::default(),
                 shared: Default::default(),
                 view_model_cutout: Default::default(),
+                normals: Default::default(),
                 builder,
                 counters: cache.counters.clone(),
                 in_use: true,
@@ -536,6 +537,10 @@ pub(super) struct ShaderPipelines {
     /// their own depth. Built the first time one is drawn; never without
     /// a view model.
     pub(super) view_model_cutout: [std::sync::OnceLock<wgpu::RenderPipeline>; ShaderVariant::ALL.len()],
+    /// The reflections' normals pass (see [`SideBuilder::build_normals`]),
+    /// one per [`ShaderVariant::ALL`]. Built the first time one is drawn;
+    /// never without screen-space reflections.
+    pub(super) normals: [std::sync::OnceLock<wgpu::RenderPipeline>; ShaderVariant::ALL.len()],
     pub(super) builder: SideBuilder,
     /// The cache's counters: builds, misses, and the sets this one drops.
     pub(super) counters: Arc<pipeline_cache::Counters>,
@@ -583,6 +588,19 @@ impl ShaderPipelines {
             self.counters.missed();
             let start = crate::perf::Instant::now();
             let pipeline = self.builder.build_view_model_cutout(variant, Default::default());
+            self.counters.built(start.elapsed());
+            pipeline
+        })
+    }
+
+    /// The reflections' normals pipeline of `variant`, built now the
+    /// first time (counted as a build).
+    pub(super) fn normals(&self, variant: ShaderVariant) -> &wgpu::RenderPipeline {
+        let at = ShaderVariant::ALL.iter().position(|&v| v == variant).unwrap_or(0);
+        self.normals[at].get_or_init(|| {
+            self.counters.missed();
+            let start = crate::perf::Instant::now();
+            let pipeline = self.builder.build_normals(variant);
             self.counters.built(start.elapsed());
             pipeline
         })
@@ -662,6 +680,10 @@ impl Pipelines {
     pub(super) fn for_kind(&self, kind: super::record::Kind, role: PipelineRole) -> Option<&wgpu::RenderPipeline> {
         if kind == super::record::Kind::VelocityStill {
             self.velocity_still.as_ref()
+        } else if kind == super::record::Kind::Normals {
+            // Only a shader's own lazily built set has them (see
+            // `ShaderPipelines::normals`); crowds draw none.
+            None
         } else {
             self.role(role)
         }
@@ -1031,6 +1053,7 @@ pub(super) fn build_pipelines(
         fade: Default::default(),
         shared: Default::default(),
         view_model_cutout: Default::default(),
+        normals: Default::default(),
         builder,
         counters: counters.clone(),
         in_use: false,
@@ -1199,6 +1222,69 @@ impl SideBuilder {
             fragment: Some(wgpu::FragmentState {
                 module: &self.module,
                 entry_point: fragment,
+                compilation_options: Default::default(),
+                targets: &targets,
+            }),
+            multiview_mask: None,
+            cache: None,
+        })
+    }
+
+    /// The reflections' normals pass of `variant` (see `fs_normals` in
+    /// `mesh_main.wgsl`): solid and cut-out surfaces drawn again over the
+    /// finished prepass depth, where it is equal (so each pixel once, and
+    /// cut-outs only where they kept it), writing the normal and roughness
+    /// the opaque pass will light them with.
+    pub(super) fn build_normals(&self, variant: ShaderVariant) -> wgpu::RenderPipeline {
+        let shared = variant.instancing.shared();
+        let buffers = [
+            Some(wgpu::VertexBufferLayout {
+                array_stride: size_of::<Vertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &VERTEX_ATTRIBUTES,
+            }),
+            Some(wgpu::VertexBufferLayout {
+                array_stride: if shared { 0 } else { size_of::<Instance3D>() as u64 },
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &INSTANCE_ATTRIBUTES,
+            }),
+        ];
+        let targets = [Some(wgpu::ColorTargetState {
+            format: crate::render::ssr::NORMALS_FORMAT,
+            blend: None,
+            write_mask: wgpu::ColorWrites::ALL,
+        })];
+        self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("3d reflection normals"),
+            layout: Some(&self.layout),
+            vertex: wgpu::VertexState {
+                module: &self.module,
+                entry_point: Some(PipelineRole::Opaque.vertex_entry()),
+                compilation_options: Default::default(),
+                buffers: &buffers,
+            },
+            primitive: wgpu::PrimitiveState {
+                cull_mode: variant.sides.cull(),
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: self.depth,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Equal),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: self.samples,
+                ..Default::default()
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &self.module,
+                entry_point: Some(if variant.instancing.fades() {
+                    "fs_normals_fade"
+                } else {
+                    "fs_normals"
+                }),
                 compilation_options: Default::default(),
                 targets: &targets,
             }),

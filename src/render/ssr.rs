@@ -27,6 +27,19 @@
 //! another pipeline that walks its blocks (a Hi-Z march). Its pipelines are
 //! made when first used, and without it the trace is exactly the one
 //! without them.
+//!
+//! Rays leave by the normal the opaque pass lights a pixel with, normal
+//! maps and decals included: a thin pass after the depth prepass draws the
+//! solid surfaces again, with depth testing for equal, into a normals image
+//! (`NORMALS_FORMAT`, resolved from the multisampled frame; the multisampled
+//! image is transient where the GPU keeps it in tile memory). Where the
+//! material didn't tilt the normal the trace keeps the depth's, which agrees
+//! with the depth it marches. Crowds and solid stencil materials aren't in
+//! it: they keep the depth's normal.
+//!
+//! Transparent surfaces aren't in any of this: with `Post::ssr_transparent`
+//! each glossy transparent pixel marches its own ray in its fragment shader
+//! (`transparent_reflection` in `mesh_main.wgsl`).
 use crate::render::traffic::{Counted, Upload};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -51,6 +64,20 @@ pub(super) const SPREAD_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Fl
 pub(super) const HITS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg16Float;
 /// The copy of the scene depth the trace reads (see `ssr.wgsl`).
 pub(super) const DEPTH_COPY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
+/// The reflections' normals (`reflection_normal` in `mesh_main.wgsl`):
+/// the normal in red, green and blue, and in alpha whether anything was
+/// drawn there, whether the surface is glossy enough to show reflections
+/// and whether its normal is tilted from the mesh's. Four bytes a pixel; renderable,
+/// multisampled and resolved everywhere WebGPU runs.
+pub(super) const NORMALS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgb10a2Unorm;
+/// What the normals pass clears to: a zero normal (512 of 1023 on each
+/// axis), where nothing is drawn.
+pub(super) const NO_NORMAL: wgpu::Color = wgpu::Color {
+    r: 512.0 / 1023.0,
+    g: 512.0 / 1023.0,
+    b: 512.0 / 1023.0,
+    a: 0.0,
+};
 /// The coarse depth's blocks: each of its pixels holds the nearest depth of
 /// this many pixels squared of the copy, and their plane where they are flat
 /// (`CELL` in `ssr_thin.wgsl`).
@@ -155,6 +182,15 @@ pub(super) struct SsrTargets {
     depth_group: wgpu::BindGroup,
     /// The depth copy (see `ssr.wgsl`), written before the trace each frame.
     depth_copy: wgpu::TextureView,
+    /// The normals the trace reads (see `NORMALS_FORMAT`), drawn after the
+    /// prepass each frame: into `normals_samples` with multisampling,
+    /// resolved here.
+    normals: wgpu::TextureView,
+    /// With multisampling, the normals pass's own target, one value a
+    /// sample. Never stored: on GPUs that can keep it on chip
+    /// (`transient`), it takes no memory.
+    normals_samples: Option<wgpu::TextureView>,
+    transient: bool,
     /// With `Post::ssr_thin_objects`: the coarse depth, made from the copy
     /// before the trace each frame, and the trace's bindings with it.
     thin: Option<ThinTargets>,
@@ -202,6 +238,15 @@ impl SsrTargets {
     pub fn spread(&self) -> (&wgpu::TextureView, &wgpu::TextureView) {
         (&self.hits, &self.spread)
     }
+
+    /// The normals pass's target and what it resolves into (`None`
+    /// without multisampling: the target is the image the trace reads).
+    pub fn normals(&self) -> (&wgpu::TextureView, Option<&wgpu::TextureView>) {
+        match &self.normals_samples {
+            Some(samples) => (samples, Some(&self.normals)),
+            None => (&self.normals, None),
+        }
+    }
 }
 
 impl Ssr {
@@ -237,6 +282,7 @@ impl Ssr {
                     },
                     count: None,
                 },
+                texture(18, wgpu::TextureSampleType::Float { filterable: false }, false),
             ],
         });
         let shader = device.create_shader_module(wgpu::include_wgsl!("ssr.wgsl"));
@@ -473,6 +519,7 @@ impl Ssr {
                 },
                 // The coarse depth.
                 texture(11, fragment, false),
+                texture(18, fragment, false),
             ],
         });
         let target = |format| {
@@ -597,7 +644,8 @@ impl Ssr {
     /// the opaque pass resolves into; `ao` whether GTAO writes `ao` (and
     /// copies the cone's spread into it), `spread_slot` whether the opaque
     /// pass reads the spread image directly, `thin` whether the trace reads
-    /// the coarse depth (after [`Ssr::use_thin`]).
+    /// the coarse depth (after [`Ssr::use_thin`]); `samples` the scene's
+    /// samples per pixel.
     #[allow(clippy::too_many_arguments)]
     pub fn targets(
         &self,
@@ -608,6 +656,7 @@ impl Ssr {
         ao: bool,
         spread_slot: bool,
         thin: bool,
+        samples: u32,
     ) -> SsrTargets {
         let texture = |label, size: (u32, u32), levels, format, usage| {
             device.create_texture(&wgpu::TextureDescriptor {
@@ -656,6 +705,33 @@ impl Ssr {
         };
         let hits = sized("screen reflection hits", half_size, HITS_FORMAT);
         let depth_copy = sized("screen reflection depth", size, DEPTH_COPY_FORMAT);
+        let normals = sized("screen reflection normals", size, NORMALS_FORMAT);
+        // Kept on chip where the GPU can (Apple's, tile-based mobile ones):
+        // only the resolved image is ever read. Elsewhere (and in browsers,
+        // which may not know the usage) an ordinary target.
+        let transient = device.adapter_info().transient_saves_memory == Some(true);
+        let normals_samples = (samples > 1).then(|| {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("screen reflection normal samples"),
+                    size: wgpu::Extent3d {
+                        width: size.0,
+                        height: size.1,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: samples,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: NORMALS_FORMAT,
+                    usage: if transient {
+                        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TRANSIENT_ATTACHMENT
+                    } else {
+                        wgpu::TextureUsages::RENDER_ATTACHMENT
+                    },
+                    view_formats: &[],
+                })
+                .create_view(&Default::default())
+        });
         let depth_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("screen reflection depth"),
             layout: &self.depth_layout,
@@ -685,6 +761,10 @@ impl Ssr {
                     wgpu::BindGroupEntry {
                         binding: 3,
                         resource: self.uniform.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 18,
+                        resource: wgpu::BindingResource::TextureView(&normals),
                     },
                 ],
             })
@@ -852,6 +932,10 @@ impl Ssr {
                         binding: 11,
                         resource: wgpu::BindingResource::TextureView(&coarse),
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 18,
+                        resource: wgpu::BindingResource::TextureView(&normals),
+                    },
                 ],
             });
             ThinTargets {
@@ -887,6 +971,9 @@ impl Ssr {
             mark_group: group(&spread),
             depth_group,
             depth_copy,
+            normals,
+            normals_samples,
+            transient,
             history,
             ao: level(0),
             output: level(1),
@@ -1113,8 +1200,12 @@ impl SsrTargets {
             ("reflection hits", &self.hits),
             ("reflection spread", &self.spread),
             ("reflection depth", &self.depth_copy),
+            ("reflection normals", &self.normals),
         ] {
             t.view(C::FrameTargets, label, view);
+        }
+        if let Some(samples) = self.normals_samples.as_ref().filter(|_| !self.transient) {
+            t.view(C::FrameTargets, "reflection normal samples", samples);
         }
         if let Some(thin) = &self.thin {
             t.view(C::FrameTargets, "reflection coarse depth", &thin.coarse);

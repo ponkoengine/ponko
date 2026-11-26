@@ -822,9 +822,9 @@ unsafe extern "C" fn check_gamepads(ctx: *mut PonkoCtx, user: *mut c_void) {
         let mut value = 5.0;
         let stick_y = PonkoGamepadAxis::PONKO_GAMEPAD_LEFT_STICK_Y as u32;
         seen.push((ponko_ctx_gamepad_axis(ctx, 0, stick_y, &mut value), value));
-        // Out of range: slot 8, button 16, axis 6.
+        // Out of range slot, button and axis.
         seen.push((ponko_ctx_gamepad_down(ctx, 8, south, &mut down), 0.0));
-        seen.push((ponko_ctx_gamepad_down(ctx, 0, 16, &mut down), 0.0));
+        seen.push((ponko_ctx_gamepad_down(ctx, 0, u32::MAX, &mut down), 0.0));
         seen.push((ponko_ctx_gamepad_axis(ctx, 0, 6, &mut value), 0.0));
     }
 }

@@ -110,6 +110,7 @@ fn declared(resource: Resource, output: wgpu::TextureFormat, samples: u32) -> (O
         Format::Spread => Some(crate::render::ssr::SPREAD_FORMAT),
         Format::Hits => Some(crate::render::ssr::HITS_FORMAT),
         Format::DepthCopy => Some(crate::render::ssr::DEPTH_COPY_FORMAT),
+        Format::Normals => Some(crate::render::ssr::NORMALS_FORMAT),
         Format::CoarseDepth => Some(crate::render::ssr::COARSE_FORMAT),
         Format::Output => Some(output),
         Format::Buffer | Format::Any => None,
@@ -186,6 +187,14 @@ impl Renderer3D {
         let buffer = |&(_, state, _): &(u32, usize, u32)| state & (1 << 31) != 0;
         let effects = self.effects.frame.len();
         let cameras = !self.lists.views.is_empty();
+        // Whether a target camera drawn this frame runs a number of screen
+        // effects that `n` accepts.
+        let camera_effects = |n: fn(usize) -> bool| {
+            self.lists.views.iter().any(|&(i, _, _)| {
+                let target = &self.render_targets.views[i].1;
+                target.effect_targets.is_some() && n(target.effects.len())
+            })
+        };
         // What `Environment::probes` records: a bake with a face that
         // isn't a render target is left out, though its part is in the frame.
         let probes = self.environment.records_probes();
@@ -213,6 +222,11 @@ impl Renderer3D {
             Features::VIEWS.only_if(has(|p| matches!(p, Part::Views))),
             Features::TARGET_CAMERAS.only_if(cameras),
             Features::TARGET_CUTOUTS.only_if(self.lists.views.iter().any(|(_, runs, _)| self.has_cutouts(runs, true))),
+            Features::TARGET_CAMERA_EFFECTS.only_if(camera_effects(|n| n > 0)),
+            Features::TARGET_CAMERA_EFFECTS_BACK.only_if(camera_effects(|n| n > 1)),
+            Features::TARGET_CAMERA_EFFECTS_ODD.only_if(camera_effects(|n| n % 2 == 1)),
+            Features::TARGET_MIPS
+                .only_if(has(|p| matches!(p, Part::Views)) && !self.render_targets.mips_due.is_empty()),
             Features::PROBES.only_if(probes),
             Features::GI.only_if(gi),
             Features::GI_UPDATE.only_if(gi && self.gi.as_ref().is_some_and(|g| g.updates_probes())),
@@ -318,6 +332,15 @@ impl Renderer3D {
                 .ssr
                 .as_ref()
                 .map(|s| view(Resource::ReflectionDepth, s.depth_copy())),
+            targets
+                .ssr
+                .as_ref()
+                .map(|s| view(Resource::ReflectionNormals, s.normals().1.unwrap_or(s.normals().0))),
+            targets
+                .ssr
+                .as_ref()
+                .and_then(|s| s.normals().1.map(|_| s.normals().0))
+                .map(|samples| view(Resource::ReflectionNormalSamples, samples)),
             targets
                 .ssr
                 .as_ref()

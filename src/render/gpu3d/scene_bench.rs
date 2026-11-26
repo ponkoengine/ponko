@@ -1447,7 +1447,7 @@ impl SceneBench {
         let mut skins = std::mem::take(&mut ctx.gfx.frame3d.skins);
         skins.motion = motion;
         skins.collect(&mut ctx.world, &ctx.gfx.assets3d);
-        ctx.collect_views(&skins);
+        ctx.collect_views(&skins, None);
         let frame = &mut ctx.gfx.frame3d;
         frame.size_limit = self.device.limits().max_texture_dimension_2d;
         frame.lod = ctx.scene3d.lod;
@@ -1812,6 +1812,7 @@ impl SceneBench {
                 "ao_steps": p.ambient_occlusion.steps,
                 "ssr": p.ssr,
                 "ssr_thin_objects": p.ssr_thin_objects,
+                "ssr_transparent": p.ssr_transparent,
                 "gi": l.gi.enabled,
                 "anti_aliasing": format!("{:?}", p.anti_aliasing).to_lowercase(),
                 "bloom": ctx.scene3d.post.bloom,

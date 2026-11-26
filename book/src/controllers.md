@@ -329,8 +329,8 @@ systems, and the pads it supports are kept up by the project most PC games
 already rely on. The cost is a native library to install and ship, which is
 why it is an optional feature and gilrs stays the default (a game that
 needs neither gyro nor trigger rumble gains nothing from it). `sdl3-sys` is
-the low-level binding with no other dependencies; the engine uses about
-twenty of its functions and the `sdl3` crate's safe wrapper would only add
+the low-level binding with no other dependencies; the engine uses a few
+dozen of its functions and the `sdl3` crate's safe wrapper would only add
 another layer. SDL's own handlers for Ctrl-C are left off, so the game's
 stay in charge.
 
@@ -393,6 +393,99 @@ actuators record what they are asked.
 
 For trigger rumble or motion on the desktop, turn on `gamepad-sdl`; for a
 platform SDK of your own, install a `GamepadBackend` that reads it.
+
+## DualSense and DualShock 4
+
+With the SDL backend, check the capabilities of each connected pad before
+offering extras. The flags reflect what its driver can do over the current
+connection. On Linux, the HID driver may need access to the device's
+`/dev/hidraw*` node. On Bluetooth, let SDL use enhanced reports for Sony
+controllers. These reports enable sensor and output features and can affect
+how other software on the system sees the controller.
+[SDL enhanced reports hint](https://wiki.libsdl.org/SDL3/SDL_HINT_JOYSTICK_ENHANCED_REPORTS).
+
+| Feature | Desktop with `gamepad-sdl` | Default desktop backend | Web |
+|---|---|---|---|
+| RGB light bar | DualSense and DualShock 4 with SDL HID support | — | — |
+| Player LEDs | Where SDL reports player LEDs, including DualSense and supported Nintendo pads | — | — |
+| Touchpad click and up to two contacts | DualSense and DualShock 4 with SDL HID support | — | — |
+| Adaptive resistance and vibration | DualSense and DualSense Edge through SDL HID over USB and Bluetooth | — | — |
+| Compatible rumble | Where SDL reports rumble | Where gilrs reports rumble | `vibrationActuator` where the browser supports it |
+| Voice-coil waveforms, controller audio and mic | — | — | — |
+
+`GamepadButton::Touchpad` is the physical click. `gamepad_touchpad`
+returns two finger slots. Each has normalized `x`, `y`, `pressure`, and a
+`down` flag. `gamepad_touchpad_events` preserves changes in order within the
+frame, including lifts. Scenario recordings capture contacts and clicks.
+
+```rust
+# use ponko::prelude::*;
+use ponko::input::TriggerEffect;
+
+# fn update(ctx: &mut Ctx, pad: Gamepad) {
+let Some(caps) = ctx.input.gamepad_info(pad).map(|info| info.capabilities) else {
+    return;
+};
+if caps.light {
+    ctx.input.set_gamepad_light(pad, Color::hex(0x0080ff));
+}
+if caps.player_leds {
+    ctx.input.set_gamepad_player_leds(pad, Some(0));
+}
+if caps.adaptive_triggers {
+    ctx.input.set_gamepad_trigger_effects(
+        pad,
+        TriggerEffect::Off,
+        TriggerEffect::Resistance { start: 4, strength: 3 },
+    );
+}
+if let Some([first, _]) = ctx.input.gamepad_touchpad(pad)
+    && first.down
+{
+    println!("Touch at {}, {}", first.x, first.y);
+}
+# }
+```
+
+Outputs apply on the next backend update. Pass black to turn off the light
+bar, `None` to turn off the player indicator, and `TriggerEffect::Off` for
+free trigger travel. SDL maps player indicators using its own zero-based
+player indices. Those indices are separate from Ponko's local player
+assignments. If an SDL index is already in use, SDL moves that controller
+to a free index. SDL sends a reset for changed outputs before closing the
+controller. A link that has already vanished cannot receive that reset, so
+a new DualSense connection starts with both adaptive triggers cleared.
+
+The C and C++ bindings expose the extra flags via `ponko_ctx_gamepad_extras`
+and `ctx.gamepad_extras`. Build the native library with
+`cargo build -p ponko_ffi --features ponko/gamepad-sdl` to use SDL.
+`PONKO_GAMEPAD_TOUCHPAD` works with the existing button APIs.
+
+The browser Gamepad API exposes `dual-rumble` and sometimes
+`trigger-rumble` through `vibrationActuator`. Those effects vibrate motors.
+The browser backend has no adaptive trigger resistance, light or player
+LED control, or touchpad contacts and click.
+[W3C Gamepad specification](https://www.w3.org/TR/gamepad/).
+
+### Controller haptics
+
+SDL's gamepad rumble API takes low- and high-frequency motor levels. Its
+DualSense HID driver sends compatible vibration commands, and its Switch
+driver translates two levels to the controller's HD Rumble packets. SDL
+exposes no gamepad API for choosing individual Switch frequencies or
+streaming samples to DualSense voice coils.
+[SDL DualSense driver](https://github.com/libsdl-org/SDL/blob/release-3.4.20/src/joystick/hidapi/SDL_hidapi_ps5.c)
+and [SDL Switch driver](https://github.com/libsdl-org/SDL/blob/release-3.4.20/src/joystick/hidapi/SDL_hidapi_switch.c).
+
+A wired DualSense also exposes USB audio. A dedicated multichannel audio
+stream can carry waveforms to its voice coils. A product implementation
+would need to match the audio endpoint to the gamepad, handle reconnects and
+channel routing, and measure latency and actuator output on each supported
+OS. The HID control report handles triggers, LEDs and compatible rumble,
+with separate flags for routing and volume. Ponko ships compatible rumble
+and adaptive triggers. It does not route audio to the controller speaker,
+capture its microphone or send voice-coil waveforms.
+[DualSense USB descriptors and HID reports](https://github.com/nondebug/dualsense).
 
 ## Wheels, pedals and joysticks
 

@@ -86,7 +86,7 @@ impl Renderer {
         match *self {}
     }
     #[cfg(feature = "3d")]
-    pub fn create_render_target(&mut self, _width: u32, _height: u32) -> u32 {
+    pub fn create_render_target(&mut self, _width: u32, _height: u32, _mips: bool) -> u32 {
         match *self {}
     }
     #[cfg(feature = "3d")]

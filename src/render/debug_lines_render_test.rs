@@ -610,7 +610,7 @@ fn debug_drawing_in_a_target_camera_follows_its_own_flag_whatever_its_particles(
     // Its own flag on: the depth-tested label and line show, without
     // particles.
     let camera = &mut views.ctx.scene3d.passes.target_cameras[0];
-    *camera = camera.with_debug_draw(true);
+    *camera = camera.clone().with_debug_draw(true);
     let label = target(&mut views, magenta8);
     let line = target(&mut views, green8);
     assert!(
@@ -633,7 +633,7 @@ fn debug_drawing_in_a_target_camera_follows_its_own_flag_whatever_its_particles(
     // Its own flag off: nothing, though it draws particles.
     let camera = &mut views.ctx.scene3d.passes.target_cameras[0];
     camera.camera.particles = true;
-    *camera = camera.with_debug_draw(false);
+    *camera = camera.clone().with_debug_draw(false);
     assert_eq!(
         target(&mut views, magenta8),
         0,

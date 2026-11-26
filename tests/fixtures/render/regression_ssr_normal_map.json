@@ -1,0 +1,17 @@
+{
+  "name": "regression_ssr_normal_map",
+  "scene": "A glowing red unit box (emissive 4, 0, 0) standing on a white metal mirror floor (roughness 0) whose 1x1 normal map (rgb 160, 128, 251) tilts every normal 15 degrees; nothing lit, exposure -5, screen-space reflections at 1.0, fourth frame; camera at (0, 2, 6) looking at (0, 0.5, 0); 128x128, 4x multisampling, no tonemapping.",
+  "width": 128,
+  "height": 128,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 16,
+    "outliers": 0.015,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "5e1085cca057393f",
+  "reason": "New reference: a normal-mapped mirror floor reflecting a red box (screen-space reflections follow normal maps, #395)"
+}

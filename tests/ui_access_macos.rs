@@ -42,6 +42,7 @@ mod mac {
     use objc2_foundation::{NSArray, NSNumber, NSString};
     use ponko::prelude::*;
     use ponko::ui::{Ui, UiAccessAdapter, UiEvent, UiId, UiInput, UiLayout};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     const VIEW: Vec2 = Vec2::new(800.0, 600.0);
 
@@ -650,7 +651,8 @@ AXGroup
         use std::cell::RefCell;
         use std::fmt::Write;
         if std::env::var(WINDOW_ENV).as_deref() != Ok("1") {
-            print!("(skipped: opens a window; run with {WINDOW_ENV}=1) ");
+            print!("(opens a window; run with {WINDOW_ENV}=1) ");
+            skipped();
             return;
         }
         thread_local! {
@@ -795,7 +797,7 @@ AXGroup
         // `cargo test <filter>` passes a filter; run the checks it matches.
         let filter = std::env::args().skip(1).find(|a| !a.starts_with('-'));
         println!("\nrunning {} checks on the main thread", checks.len());
-        let mut ran = 0;
+        let (mut passed, mut skips) = (0, 0);
         for (name, check) in checks {
             if filter.as_ref().is_some_and(|f| !name.contains(f.as_str())) {
                 continue;
@@ -803,10 +805,25 @@ AXGroup
             // A failed check panics: the program exits non-zero and cargo
             // reports the test as failed, with the name printed last.
             print!("check {name} ... ");
+            let before = SKIPPED.load(Ordering::Relaxed);
             check();
-            println!("ok");
-            ran += 1;
+            if SKIPPED.load(Ordering::Relaxed) == before {
+                println!("ok");
+                passed += 1;
+            } else {
+                println!("skipped");
+                skips += 1;
+            }
         }
-        println!("\ncheck result: ok. {ran} passed\n");
+        println!("\ncheck result: ok. {passed} passed; {skips} skipped\n");
+    }
+
+    /// Checks that return without checking anything (they need something
+    /// this run doesn't have) call [`skipped`], so the summary never counts
+    /// them as passed.
+    static SKIPPED: AtomicUsize = AtomicUsize::new(0);
+
+    fn skipped() {
+        SKIPPED.fetch_add(1, Ordering::Relaxed);
     }
 }

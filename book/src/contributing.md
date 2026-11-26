@@ -206,6 +206,14 @@ ctx.world.despawn(enemy);
 - The check enables the `3d`, `physics`, `physics3d`, `navmesh` and `steam`
   features, so snippets for those compile without extra setup.
 
+## Runs of the list of checks
+
+Nothing runs `scripts/checks.yml` by itself: a maintainer runs it on their own
+machine, and records what ran there, on what hardware and toolchain, and what
+passed, failed, was skipped or needs a person. The records:
+
+- [macOS](check-results/macos.md)
+
 ## Tests on a busy machine
 
 `cargo test --workspace` runs many test binaries at once, often next to other

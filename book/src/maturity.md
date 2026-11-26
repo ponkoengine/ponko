@@ -85,7 +85,7 @@ Chapters: 21 proven, 62 tested, 6 experimental.
 | [Localization](localization.md) | **proven** | Coin Dash, packaged and played on Linux, macOS and Windows | — |
 | [Sprite sheets, animation, tilemaps](tiles.md) | **proven** | Ember Hop's Tiled levels, autotiled ground and tile colliders, packaged and played on Linux, macOS and Windows | — |
 | [2D skeletons: bones, skinned sprites and blending](skeleton2d.md) | **tested** | none | a reference game that uses it |
-| [3D: meshes, materials and the sun](3d.md) | **tested** | Shard Grove, played headless by `tests/shard_grove.rs`; its package is not played in the list of checks | Shard Grove's package played on each OS |
+| [3D: meshes, materials and the sun](3d.md) | **tested** | Shard Grove, played headless by `tests/shard_grove.rs`; its package is played headless in the list of checks | Shard Grove's frame-time baseline per GPU tier, and its web build and window played on a real GPU of each OS (#454) |
 | [Crowds: thousands of animated characters](crowds.md) | **tested** | none | a reference game that uses it |
 | [3D physics: bodies, terrain, characters and vehicles](physics3d.md) | **tested** | Shard Grove (character controller), headless only | Shard Grove's package played on each OS |
 | [3D navigation meshes](navigation3d.md) | **tested** | Shard Grove (crawlers on the navmesh), headless only | Shard Grove's package played on each OS |
@@ -109,7 +109,7 @@ Chapters: 21 proven, 62 tested, 6 experimental.
 | [Shipping on Steam](steam.md) | **tested** | none | a recorded run against a real Steam client, and a released game that uses it |
 | [Crash reports](crash-reports.md) | **tested** | none | a reference game that uses it |
 | [Ember Hop: a platformer, start to finish](ember-hop.md) | **proven** | Ember Hop itself, packaged and played on Linux, macOS and Windows | — |
-| [Shard Grove: a 3D game, start to finish](shard-grove.md) | **tested** | Shard Grove itself, played headless | its package played on each OS |
+| [Shard Grove: a 3D game, start to finish](shard-grove.md) | **tested** | Shard Grove itself, played headless | a frame-time baseline per GPU tier, and the game opened in a WebGPU browser and in a window on each OS (#454) |
 | [Legions: 100,000 units that replay bit for bit](legions.md) | **tested** | Legions, a showcase rather than a reference game | a reference game that uses it |
 | [Web builds: games in the browser](web.md) | **tested** | Coin Dash in headless Chromium and WebKit; Ember Hop builds for the web | WebGPU on Windows and Linux GPUs in a recorded run, and Firefox (its headless build has no WebGL2) |
 | [iOS: games on iPhone and iPad](ios.md) | **experimental** | none (the phone check, `examples/phone.rs`, is a test app) | a run on a device (touch, typing, interruptions, the silent switch, memory warnings, performance and power), signing, and the App Store |
@@ -142,6 +142,7 @@ The level each top-level module of `ponko` gives in its rustdoc.
 | `ponko::camera` | **tested** | [Several cameras: split screen and minimaps](viewports.md) |
 | `ponko::collision` | **tested** | [3D physics: bodies, terrain, characters and vehicles](physics3d.md) |
 | `ponko::color` | **proven** | [Drawing](drawing.md) |
+| `ponko::console` | **tested** | [Tools and agents: the control endpoint](control.md) |
 | `ponko::crash` | **tested** | [Crash reports](crash-reports.md) |
 | `ponko::d2` | **proven** | [Drawing](drawing.md) |
 | `ponko::d3` | **tested** | [3D: meshes, materials and the sun](3d.md) |
@@ -204,3 +205,4 @@ The level each top-level module of `ponko` gives in its rustdoc.
 - [API reference](api.md): Where the API reference is.
 - [Contributing](contributing.md): How to contribute.
 - [Workspace test coverage](test-coverage.md): How test coverage is measured.
+- [Check results: macOS](check-results/macos.md): A record of runs of the list of checks on a Mac.
