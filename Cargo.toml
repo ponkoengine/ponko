@@ -332,6 +332,14 @@ objc2-foundation = { version = "0.3.2", optional = true, default-features = fals
 objc2-ui-kit = { version = "0.3.2", optional = true, default-features = false, features = ["std", "objc2-core-foundation", "UIApplication", "UIGeometry", "UIPasteboard", "UIResponder", "UIScene", "UIScreen", "UIView", "UIWindow", "UIWindowScene"] }
 objc2-avf-audio = { version = "0.3.2", optional = true, default-features = false, features = ["std", "AVAudioSession", "AVAudioSessionTypes"] }
 
+# Android: winit's NativeActivity backend (android-activity; no Java code,
+# so a package needs no Gradle), and JNI for what the NDK has no C API for
+# (window insets, the clipboard, audio focus, leaving on Back). The jni
+# release android-activity already builds: nothing new is built.
+[target.'cfg(target_os = "android")'.dependencies]
+winit = { version = "0.30.13", optional = true, features = ["android-native-activity"] }
+jni = { version = "0.22.4", optional = true }
+
 # Windows: UI Automation (Narrator, NVDA, JAWS) on the window's HWND. Its
 # `windows` crate is the release wgpu already brings in.
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -438,7 +446,7 @@ navmesh = ["3d", "dep:navmesh-rs", "dep:libm"]
 default = ["audio", "window", "inspector", "gamepad", "image-jpeg"]
 # A window and GPU rendering (winit + wgpu). Off: `Game::run_headless` only,
 # for simulation servers and CI; drawing calls do nothing, `Game::run` panics.
-window = ["dep:arboard", "dep:wgpu", "dep:winit", "dep:pollster", "dep:objc2-metal", "dep:objc2-quartz-core", "dep:windows", "dep:xkeysym", "dep:x11rb", "dep:wayland-client", "dep:wayland-backend", "dep:objc2_06", "dep:block2", "dep:objc2-core-foundation", "dep:objc2-foundation", "dep:objc2-ui-kit"]
+window = ["dep:arboard", "dep:wgpu", "dep:winit", "dep:pollster", "dep:objc2-metal", "dep:objc2-quartz-core", "dep:windows", "dep:xkeysym", "dep:x11rb", "dep:wayland-client", "dep:wayland-backend", "dep:objc2_06", "dep:block2", "dep:objc2-core-foundation", "dep:objc2-foundation", "dep:objc2-ui-kit", "dep:jni"]
 # Sound with kira. Off: the sound API stays and is silent (for servers).
 audio = [
     "dep:kira",

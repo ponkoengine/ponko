@@ -1254,6 +1254,7 @@ mod backend {
             &[]
         }
         pub fn open_offline(&mut self, _sample_rate: u32) {}
+        pub fn hold_output(&mut self, _held: bool) {}
         /// Silence: nothing is mixed without the `audio` feature.
         pub fn render_offline(&mut self, seconds: f32, sample_rate: u32) -> Vec<[f32; 2]> {
             vec![[0.0; 2]; (seconds.max(0.0) * sample_rate as f32).round() as usize]

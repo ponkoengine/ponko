@@ -353,6 +353,12 @@ pub enum WindowEvent {
     /// `onTrimMemory`): free what can be loaded again, such as cached
     /// sounds and textures not on screen, or the system may end the app.
     LowMemory,
+    /// The player pressed Back (Android's back button or gesture). Unless a
+    /// system calls [`WindowService::cancel_back`] in the frame that sees
+    /// it, the app then leaves, as Android apps do: it goes to the
+    /// background, and comes back where it was. Cancel it to close a menu
+    /// or ask "quit?" first. Sent on Android only.
+    BackRequested,
 }
 /// Last observed display state (requests are not proof the OS accepted them).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -441,6 +447,8 @@ pub struct WindowService {
     suspended: bool,
     /// How far up from the bottom the on-screen keyboard covers the window.
     keyboard_inset: f32,
+    /// A Back press no system canceled yet ([`WindowEvent::BackRequested`]).
+    back: bool,
 }
 impl Default for WindowService {
     fn default() -> Self {
@@ -464,6 +472,7 @@ impl WindowService {
             platform_insets: None,
             suspended: false,
             keyboard_inset: 0.0,
+            back: false,
         }
     }
     /// Replace the inert backend with an already-created window adapter.
@@ -558,8 +567,10 @@ impl WindowService {
             }
             *last = Some(value);
         }
-        if matches!(event, WindowEvent::CloseRequested) {
-            self.close = true;
+        match event {
+            WindowEvent::CloseRequested => self.close = true,
+            WindowEvent::BackRequested => self.back = true,
+            _ => {}
         }
         true
     }
@@ -659,6 +670,38 @@ impl WindowService {
     /// Veto the current close request. Explicit `ctx.quit()` remains unconditional.
     pub fn cancel_close(&mut self) {
         self.close = false;
+    }
+    /// Keeps the app in front after a Back press
+    /// ([`WindowEvent::BackRequested`]): the game handles Back itself, in
+    /// the frame that sees the event. Without this the app leaves.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::window::WindowEvent;
+    /// Game::new("phone", 390, 844).run_headless(0, |ctx| {
+    ///     let mut menu_open = true;
+    ///     // As Android reports the back gesture.
+    ///     ctx.window.feed_event(&WindowEvent::BackRequested);
+    ///     assert!(ctx.window.back_requested(), "the app would leave");
+    ///     if menu_open {
+    ///         menu_open = false; // Back closes the menu instead
+    ///         ctx.window.cancel_back();
+    ///     }
+    ///     assert!(!ctx.window.back_requested() && !menu_open);
+    /// });
+    /// ```
+    pub fn cancel_back(&mut self) {
+        self.back = false;
+    }
+    /// Whether a Back press is pending that no system canceled: the app
+    /// leaves after this frame.
+    pub fn back_requested(&self) -> bool {
+        self.back
+    }
+    /// The frame is over: whether the app should leave for a Back press.
+    #[cfg_attr(not(any(test, target_os = "android")), allow(dead_code))]
+    pub(crate) fn take_back(&mut self) -> bool {
+        std::mem::take(&mut self.back)
     }
     /// Whether an uncanceled OS close request is pending.
     pub fn close_requested(&self) -> bool {
@@ -1015,7 +1058,7 @@ pub(crate) fn surface_size(window: &winit::window::Window) -> winit::dpi::Physic
 /// in logical pixels: how iOS reports its safe area through winit (the
 /// window's inner position and size are the safe area's, the outer ones
 /// the screen's). `scale` is the window's scale factor.
-#[cfg_attr(not(any(test, target_os = "ios", target_os = "android")), allow(dead_code))]
+#[cfg_attr(not(any(test, target_os = "ios")), allow(dead_code))]
 pub(crate) fn insets_of_frame(outer: (Vec2, Vec2), inner: (Vec2, Vec2), scale: f32) -> SafeInsets {
     let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
     let (outer_min, outer_max) = (outer.0, outer.0 + outer.1);
@@ -1034,7 +1077,7 @@ pub(crate) fn insets_of_frame(outer: (Vec2, Vec2), inner: (Vec2, Vec2), scale: f
 /// units: 0 when the keyboard is hidden, off the window, or floating (it
 /// doesn't reach the window's bottom edge, as an undocked or split iPad
 /// keyboard).
-#[cfg_attr(not(any(test, target_os = "ios", target_os = "android")), allow(dead_code))]
+#[cfg_attr(not(any(test, target_os = "ios")), allow(dead_code))]
 pub(crate) fn keyboard_cover(window_top: f32, window_height: f32, keyboard_top: f32, keyboard_height: f32) -> f32 {
     let values = [window_top, window_height, keyboard_top, keyboard_height];
     if values.iter().any(|v| !v.is_finite()) || keyboard_height <= 0.0 || window_height <= 0.0 {

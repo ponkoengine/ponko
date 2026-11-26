@@ -1,9 +1,10 @@
 //! A phone check: what the engine reads from a phone or tablet, on screen
-//! and printed. The guide's iOS chapter runs it on the simulator.
+//! and printed. The guide's iOS and Android chapters run it on the iOS
+//! simulator and the Android emulator.
 //!
 //! Run with: `cargo run --example phone` (a desktop shows no insets and no
-//! keyboard), or package it for iOS:
-//! `ponko package --example phone --target ios-sim`.
+//! keyboard), or package it for a phone:
+//! `ponko package --example phone --target ios-sim` or `--target android`.
 //!
 //! - The safe area is outlined in green; what the on-screen keyboard
 //!   covers is red.
@@ -12,6 +13,9 @@
 //! - Suspend, resume and memory warnings are listed and printed.
 //! - `PONKO_PHONE_KEYBOARD=1` opens the keyboard at the start.
 //! - A file is written to the game's storage and read back.
+//! - A quiet tone plays (the audio session; on Android, audio focus).
+//! - Back (Android) is listed; the app leaves on it, unless
+//!   `PONKO_PHONE_KEEP_BACK=1`, which keeps it in front.
 
 use ponko::audio::AudioSessionCategory;
 use ponko::prelude::*;
@@ -41,11 +45,25 @@ fn main() {
         if std::env::var("PONKO_PHONE_KEYBOARD").is_ok_and(|v| v == "1") {
             ctx.input.set_ime_allowed(true);
         }
+        let keep_back = std::env::var("PONKO_PHONE_KEEP_BACK").is_ok_and(|v| v == "1");
+        // A quiet 440 Hz tone, looping: something to hear and to hold the
+        // audio focus with.
+        let rate = 44_100;
+        let samples: Vec<f32> = (0..rate)
+            .map(|i| (i as f32 * 440.0 * std::f32::consts::TAU / rate as f32).sin() * 0.2)
+            .collect();
+        let tone = ctx.audio.create(rate, &samples);
+        ctx.audio.play_ex(tone, SoundParams { volume: 0.1, looping: true, ..Default::default() });
 
         let mut log: Vec<String> = Vec::new();
         let mut typed = String::new();
         let mut shown = (SafeInsets::NONE, -1.0_f32, Vec2::ZERO);
         let mut clipboard_read = false;
+
+        if let Some(gpu) = ctx.gfx.gpu_capabilities() {
+            let a = &gpu.adapter;
+            println!("phone: gpu {} on {} ({}), tier {}", a.name, a.backend, a.driver, gpu.tier);
+        }
 
         let mut frames = 0_u64;
         let mut next_report = 5.0_f64;
@@ -68,6 +86,11 @@ fn main() {
                     WindowEvent::Suspended => "suspended",
                     WindowEvent::Resumed => "resumed",
                     WindowEvent::LowMemory => "low memory",
+                    WindowEvent::BackRequested if keep_back => {
+                        ctx.window.cancel_back();
+                        "back, kept"
+                    }
+                    WindowEvent::BackRequested => "back, leaving",
                     _ => continue,
                 };
                 println!("phone: {line} at {:.1} s", ctx.time.elapsed());

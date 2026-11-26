@@ -50,6 +50,10 @@ struct Render3DSettings {
 
 pub(crate) struct Renderer {
     window_surface: Option<WindowSurface>,
+    /// Android: the window's surface was destroyed with its native window
+    /// while the app is in the background; what makes it again.
+    #[cfg(target_os = "android")]
+    released_surface: Option<(Arc<Window>, wgpu::Instance, wgpu::Adapter)>,
     lifecycle: super::surface_lifecycle::SurfaceLifecycle,
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -1096,6 +1100,8 @@ impl Renderer {
 
         Self {
             window_surface,
+            #[cfg(target_os = "android")]
+            released_surface: None,
             lifecycle: Default::default(),
             device,
             queue,
@@ -2358,6 +2364,49 @@ impl Renderer {
             #[cfg(feature = "3d")]
             if let Some(three) = &mut self.three {
                 three.invalidate_targets();
+            }
+        }
+    }
+
+    /// Android destroys the window's native surface when the app goes to
+    /// the background: the GPU surface made on it goes first (the device,
+    /// textures and pipelines stay).
+    #[cfg(target_os = "android")]
+    pub(crate) fn release_window_surface(&mut self) {
+        if let Some(WindowSurface {
+            window,
+            instance,
+            surface,
+            adapter,
+        }) = self.window_surface.take()
+        {
+            drop(surface);
+            self.released_surface = Some((window, instance, adapter));
+        }
+    }
+
+    /// Back in front with a new native surface: a GPU surface on it,
+    /// configured as the last one was. A surface that can't be made is
+    /// reported, and frames are drawn to nothing until the next resume.
+    #[cfg(target_os = "android")]
+    pub(crate) fn restore_window_surface(&mut self) {
+        let Some((window, instance, adapter)) = self.released_surface.take() else {
+            return;
+        };
+        match instance.create_surface(window.clone()) {
+            Ok(surface) => {
+                self.window_surface = Some(WindowSurface {
+                    window,
+                    instance,
+                    surface,
+                    adapter,
+                });
+                self.surface_event(super::surface_lifecycle::SurfaceEvent::Recreated);
+                self.configure_surface();
+            }
+            Err(e) => {
+                eprintln!("ponko: could not make the GPU surface again: {e}");
+                self.released_surface = Some((window, instance, adapter));
             }
         }
     }

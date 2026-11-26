@@ -8,3 +8,6 @@
 
 #[cfg(target_os = "ios")]
 pub(crate) mod ios;
+
+#[cfg(all(target_os = "android", feature = "window"))]
+pub(crate) mod android;

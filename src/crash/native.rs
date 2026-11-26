@@ -730,7 +730,7 @@ fn hex_id(bytes: &[u8]) -> String {
 
 /// For a module without a build id: its file's size and modification time,
 /// or `-` (never the same) when the file can't be read.
-#[cfg_attr(not(any(unix, windows)), allow(dead_code))]
+#[cfg_attr(not(any(target_vendor = "apple", target_os = "linux", windows)), allow(dead_code))]
 fn file_id(path: &str) -> String {
     let Ok(meta) = std::fs::metadata(path) else {
         return "-".to_string();

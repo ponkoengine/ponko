@@ -103,6 +103,15 @@ impl Audio {
         Ok(())
     }
 
+    /// Closes the output while the app is in the background or a phone
+    /// call has the audio (`true`), and opens it again after (Android):
+    /// nothing plays and no stream runs meanwhile; every sound and the
+    /// music go on from where they were.
+    #[cfg_attr(not(any(test, target_os = "android")), allow(dead_code))]
+    pub(crate) fn hold_output(&mut self, held: bool) {
+        self.backend.hold_output(held);
+    }
+
     /// The device asked for with [`set_output_device`](Self::set_output_device);
     /// `None` follows the system's default.
     #[must_use]
