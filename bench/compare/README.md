@@ -30,6 +30,24 @@ waits up to ten minutes for a 1-minute load average under 3. It records the
 load next to the run and marks a run taken above it. It writes
 `results/scoreboard.json` and `results/scoreboard.md` and prints the table.
 A row is "within noise" when the two engines' ranges over the runs overlap.
+
+Every machine gets its own folder: `--machine NAME` writes to
+`results/NAME/` instead of `results/` (the Apple M4 Max results are the
+ones directly in `results/`). `--backend dx12|vulkan|metal|gl` runs both
+engines on that GPU backend (it sets `WGPU_BACKEND`, which both read); use
+one folder per backend, for example `--machine windows-ryzen5-3600-vega-dx12`.
+The results record the CPU, cores, memory, OS, power source, the GPUs and
+drivers the OS lists, the backend, and every GPU adapter the programs
+reported.
+
+On Windows: run the script with `py` or `python` when `python3` is the
+Microsoft Store stub, and install Git for Windows (the build rows run
+`scripts/build-times.sh` with its `bash` and `perl`). Windows has no load
+average, so the load figure there is the number of busy logical processors
+averaged over five seconds (`scripts/cpu_load.py`), read against the same
+threshold of 3. MSVC keeps debug info in a separate `.pdb`, so there is no
+"stripped" size: the `.exe` is what ships. The wasm rows need
+`rustup target add wasm32-unknown-unknown`.
 With no option it makes both tables: the first ("as a new project
 starts") and the tuned one (`results/scoreboard-tuned.json` and `.md`,
 [below](#the-tuned-table)), whose last column repeats the first table's
@@ -286,7 +304,8 @@ none at the moment.
 - `projects/`: the build-time projects. `PONKO_PATH` is replaced with the
   checkout's path when they are copied.
 - `scoreboard.py`: the one command. `results/`: its last output
-  (`scoreboard.*` the first table, `scoreboard-tuned.*` the second).
+  (`scoreboard.*` the first table, `scoreboard-tuned.*` the second), and
+  one folder per other machine and backend.
 - The features in `Cargo.toml`: `stock` (the default, the first table)
   and the tuned groups `headless`, `sprites`, `ui` and `scenes`. A tuned
   program by hand: `cargo run --profile ship --no-default-features

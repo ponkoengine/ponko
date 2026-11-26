@@ -55,6 +55,38 @@ fn hysteresis_is_set_read_back_and_checked() {
 }
 
 #[test]
+fn fade_time_is_set_read_back_removed_and_checked() {
+    run_ctx(|ctx| unsafe {
+        let w = ponko_ctx_world(ctx);
+        let mut e = 0;
+        assert_eq!(ponko_spawn(w, null(), 0, &mut e), PONKO_OK);
+        let mut s = 9.0;
+        assert_eq!(ponko_ctx_lod_fade_time(ctx, e, &mut s), PONKO_OK);
+        assert_eq!(s, 0.0, "none: fades over screen heights");
+        assert_eq!(ponko_ctx_set_lod_fade_time(ctx, e, 0.5), PONKO_OK, "{}", last_error());
+        assert_eq!(ponko_ctx_lod_fade_time(ctx, e, &mut s), PONKO_OK);
+        assert_eq!(s, 0.5);
+        for bad in [-0.1, f32::INFINITY, f32::NAN] {
+            assert_eq!(
+                ponko_ctx_set_lod_fade_time(ctx, e, bad),
+                PONKO_INVALID_ARGUMENT,
+                "{bad}"
+            );
+        }
+        assert_eq!(ponko_ctx_lod_fade_time(ctx, e, &mut s), PONKO_OK);
+        assert_eq!(s, 0.5, "a refused value changes nothing");
+        assert_eq!(ponko_ctx_set_lod_fade_time(ctx, e, 0.0), PONKO_OK);
+        assert_eq!(ponko_ctx_lod_fade_time(ctx, e, &mut s), PONKO_OK);
+        assert_eq!(s, 0.0, "0 removes it");
+        assert_eq!(ponko_ctx_lod_fade_time(ctx, e, null_mut()), PONKO_INVALID_ARGUMENT);
+
+        assert_eq!(ponko_despawn(w, e), PONKO_OK);
+        assert_eq!(ponko_ctx_set_lod_fade_time(ctx, e, 0.5), PONKO_INVALID_ARGUMENT);
+        assert_eq!(ponko_ctx_lod_fade_time(ctx, e, &mut s), PONKO_INVALID_ARGUMENT);
+    });
+}
+
+#[test]
 fn instance_levels_switch_where_the_group_would() {
     unsafe {
         let near = [ponko_lod_renderer(PonkoMesh { id: 4 })];

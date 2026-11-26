@@ -1,5 +1,6 @@
 //! Levels of detail beyond `ponko_ctx_set_lod_group`: hysteresis (Rust
-//! `LodHysteresis`) and a group's levels as instance batch levels (Rust
+//! `LodHysteresis`), crossfades over time (Rust `LodFadeTime`) and a
+//! group's levels as instance batch levels (Rust
 //! `LodGroup::instance_levels`).
 use crate::PonkoVec3;
 use crate::ctx::{ctx_access, out};
@@ -7,7 +8,7 @@ use crate::three::{PonkoInstanceLevel, PonkoLodLevel, PonkoLodSettings, lod_leve
 use crate::types::to_c;
 use crate::{PonkoCtx, PonkoStatus, boundary, error, invalid};
 use ponko::prelude::Entity;
-use ponko::render::{LodGroup, LodHysteresis, LodSettings};
+use ponko::render::{LodFadeTime, LodGroup, LodHysteresis, LodSettings};
 
 /// Holds each level of `entity`'s LOD group until the group's screen height
 /// moves `fraction` (0 to 1) past the level's own range (Rust
@@ -60,6 +61,64 @@ pub unsafe extern "C" fn ponko_ctx_lod_hysteresis(
                 return Err(invalid("no such entity"));
             }
             out(out_fraction, c.world.get::<LodHysteresis>(entity).map_or(0.0, |h| h.0))
+        })
+    })
+}
+
+/// Makes each change of level of `entity`'s LOD group crossfade over
+/// `seconds` (Rust `LodFadeTime`), on each camera's frame clock, instead of
+/// over a band of screen heights: the levels' fade widths are then not
+/// used. 0 removes it. A negative, infinite or NaN time, or a stale entity,
+/// is an error.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_set_lod_fade_time(std::ptr::null_mut(), 0, 0.5) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_set_lod_fade_time(ctx: *mut PonkoCtx, entity: u64, seconds: f32) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            let entity = Entity::from_bits(entity);
+            if !c.world.is_alive(entity) {
+                return Err(invalid("no such entity"));
+            }
+            if !(seconds.is_finite() && seconds >= 0.0) {
+                return Err(invalid("fade time must be 0 or more seconds"));
+            }
+            if seconds == 0.0 {
+                c.world.remove::<LodFadeTime>(entity);
+            } else {
+                c.world.insert(entity, LodFadeTime(seconds));
+            }
+            Ok(())
+        })
+    })
+}
+
+/// `entity`'s LOD fade time in seconds (`ponko_ctx_set_lod_fade_time`); 0
+/// when it has none. A stale entity is an error.
+/// ```
+/// let mut s = 1.0;
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_lod_fade_time(std::ptr::null_mut(), 0, &mut s) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `out_seconds` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_lod_fade_time(
+    ctx: *mut PonkoCtx,
+    entity: u64,
+    out_seconds: *mut f32,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            let entity = Entity::from_bits(entity);
+            if !c.world.is_alive(entity) {
+                return Err(invalid("no such entity"));
+            }
+            out(out_seconds, c.world.get::<LodFadeTime>(entity).map_or(0.0, |f| f.0))
         })
     })
 }

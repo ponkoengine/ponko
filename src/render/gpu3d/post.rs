@@ -68,20 +68,21 @@ use crate::three::PostUniform;
 /// one before it left.
 /// Documentation that a test holds the recording to.
 #[cfg_attr(not(test), allow(dead_code))]
-pub(super) const POST_CHAIN: [&str; 9] = [
+pub(super) const POST_CHAIN: [&str; 10] = [
     "temporal antialiasing",
     "scene compute passes",
     "target effects",
     "screen effects",
     "depth of field",
+    "auto exposure",
     "bloom",
     "tone mapping",
     "antialiasing",
     "upscale",
 ];
 
-/// The post chain's own passes: depth of field, bloom, tone mapping,
-/// antialiasing and scaling.
+/// The post chain's own passes: depth of field, auto exposure, bloom, tone
+/// mapping, antialiasing and scaling.
 pub(super) struct PostChain {
     /// The format of the image the chain ends in (the window's).
     output_format: wgpu::TextureFormat,
@@ -118,6 +119,96 @@ pub(super) struct PostChain {
     /// HDR output's headroom over SDR white (`hdr_output.rs`), or `None`
     /// to tone map for SDR.
     pub(super) hdr_headroom: Option<f32>,
+    /// Auto exposure: the layout of the adapted exposure's group (group 3
+    /// of the tone mapping, bloom prefilter and adaptation passes), the
+    /// group read while it is off (0 stops, never read: the shader skips
+    /// it), and the pipeline layouts of the meter (the frame and the mask)
+    /// and of the passes that read the exposure without a lookup table.
+    exposure_layout: wgpu::BindGroupLayout,
+    exposure_off: wgpu::BindGroup,
+    meter_layout: wgpu::PipelineLayout,
+    exposed_layout: wgpu::PipelineLayout,
+    /// Auto exposure's passes, built the first time it is on.
+    meter_pipelines: Option<MeterPipelines>,
+    /// This camera's auto exposure while it is on (each window view has its
+    /// own, swapped in: see `views.rs`), and the mask texture it meters
+    /// with (the white texture without one).
+    metering: Option<Metering>,
+    mask: u32,
+    white: u32,
+}
+
+/// Auto exposure's passes (`post.wgsl`): the meter, its reduction and the
+/// adaptation.
+struct MeterPipelines {
+    meter: wgpu::RenderPipeline,
+    reduce: wgpu::RenderPipeline,
+    adapt: wgpu::RenderPipeline,
+}
+
+/// The format of the adapted exposure: the lit frame's, which every device
+/// that draws the 3D frame renders to (a 32-bit float target needs another
+/// extension on WebGL2). The shader keeps it in two channels, the value
+/// rounded to 1/64 of a stop and what that left over (`post.wgsl`'s
+/// `exposure_texel`), so a slow adaptation's small steps aren't lost.
+pub(super) const EXPOSURE_FORMAT: wgpu::TextureFormat = HDR_FORMAT;
+
+/// One camera's auto exposure: the adapted exposure of the last frame and
+/// this one (kept from frame to frame), and the meter's images for its
+/// scene's size (made again when it changes).
+pub(super) struct Metering {
+    /// The two exposures, as targets and as group 3, and which one the
+    /// next frame writes (it reads the other).
+    states: [wgpu::TextureView; 2],
+    state_groups: [wgpu::BindGroup; 2],
+    write: usize,
+    /// The next frame starts at the target: the first frame, or a reset.
+    jump: bool,
+    /// The scene size the levels were made for, the levels (an eighth of
+    /// the scene, then a quarter of the one before, down to one texel),
+    /// and the groups reading each level (for the next, the last for the
+    /// adaptation).
+    size: (u32, u32),
+    levels: Vec<wgpu::TextureView>,
+    reads: Vec<wgpu::BindGroup>,
+}
+
+impl Metering {
+    /// The sizes of the meter's levels for a scene of `size`.
+    fn level_sizes(size: (u32, u32)) -> Vec<(u32, u32)> {
+        let mut level = (size.0.div_ceil(8).max(1), size.1.div_ceil(8).max(1));
+        let mut sizes = vec![level];
+        while level != (1, 1) {
+            level = (level.0.div_ceil(4), level.1.div_ceil(4));
+            sizes.push(level);
+        }
+        sizes
+    }
+
+    /// The first image of the meter and the adapted exposure this frame
+    /// writes, for the frame checks.
+    pub(super) fn images(&self) -> (&wgpu::TextureView, &wgpu::TextureView) {
+        (&self.levels[0], &self.states[self.write])
+    }
+
+    /// Counts the meter's levels as frame targets and the two exposures as
+    /// other memory (see `memory.rs`).
+    pub(super) fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
+        use crate::render::memory::MemoryClass as C;
+        for view in &self.levels {
+            t.view(C::FrameTargets, "auto exposure meter", view);
+        }
+        for view in &self.states {
+            t.view(C::Other, "auto exposure", view);
+        }
+    }
+
+    /// The adapted exposure written this frame: what bloom and tone
+    /// mapping read (test hook).
+    #[cfg(test)]
+    pub(super) fn state(&self) -> &wgpu::TextureView {
+        &self.states[self.write]
+    }
 }
 
 /// The post chain's images, of the scene's size.
@@ -231,11 +322,23 @@ impl PostChain {
             .with(Features::FXAA.only_if(self.aa == AntiAliasing::Fxaa))
             .with(Features::SMAA.only_if(self.aa == AntiAliasing::Smaa))
             .with(Features::UPSCALE.only_if(images.upscale_group.is_some()))
+            .with(Features::AUTO_EXPOSURE.only_if(self.metering.is_some()))
+    }
+
+    /// This camera's auto exposure, while it is on.
+    pub(super) fn metering(&self) -> Option<&Metering> {
+        self.metering.as_ref()
+    }
+
+    /// Trades this camera's auto exposure with `other`'s, for a window view
+    /// (see `views.rs`).
+    pub(super) fn swap_metering(&mut self, other: &mut Option<Metering>) {
+        std::mem::swap(&mut self.metering, other);
     }
 
     /// Draw calls the chain's own links take this frame, for the frame's
-    /// statistics: depth of field, the post pass, the bloom steps and the
-    /// antialiasing passes (the scaling pass isn't counted). `images`: the chain's, once
+    /// statistics: depth of field, auto exposure, the post pass, the bloom
+    /// steps and the antialiasing passes (the scaling pass isn't counted). `images`: the chain's, once
     /// made.
     pub(super) fn draw_calls(&self, images: Option<&PostTargets>) -> usize {
         let antialiasing = match self.aa {
@@ -248,7 +351,8 @@ impl PostChain {
         } else {
             0
         };
-        1 + antialiasing + bloom + usize::from(self.depth_of_field_on())
+        let metering = self.metering.as_ref().map_or(0, |m| m.levels.len() + 1);
+        1 + antialiasing + bloom + metering + usize::from(self.depth_of_field_on())
     }
 
     pub(super) fn new(
@@ -295,8 +399,34 @@ impl PostChain {
                 texture_entry(3),
             ],
         });
+        // Auto exposure's adapted exposure: one texel, read with
+        // `textureLoad`.
+        let exposure_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("3d exposure layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }],
+        });
+        let exposure_off = exposure_group(device, &exposure_layout, &exposure_target(device));
         let post_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("3d post pipeline layout"),
+            bind_group_layouts: &[Some(&post_layout), Some(texture_layout), None, Some(&exposure_layout)],
+            immediate_size: 0,
+        });
+        let exposed_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("3d exposed pipeline layout"),
+            bind_group_layouts: &[Some(&post_layout), None, None, Some(&exposure_layout)],
+            immediate_size: 0,
+        });
+        let meter_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("3d auto exposure meter layout"),
             bind_group_layouts: &[Some(&post_layout), Some(texture_layout)],
             immediate_size: 0,
         });
@@ -340,7 +470,7 @@ impl PostChain {
         );
         let bloom_prefilter = full_screen(
             "3d bloom prefilter",
-            &bloom_pipeline_layout,
+            &exposed_layout,
             "fs_bloom_prefilter",
             HDR_FORMAT,
             None,
@@ -420,28 +550,41 @@ impl PostChain {
             aa: AntiAliasing::None,
             smaa: None,
             hdr_headroom: None,
+            exposure_layout,
+            exposure_off,
+            meter_layout,
+            exposed_layout,
+            meter_pipelines: None,
+            metering: None,
+            mask: white,
+            white,
         }
     }
 
     /// This frame's post settings: the uniform, the lookup table, whether
-    /// bloom and depth of field run, and the antialiasing (temporal
-    /// antialiasing needs compute-class devices; the others get FXAA).
-    /// `camera`: its near and far planes.
+    /// bloom and depth of field run, auto exposure, and the antialiasing
+    /// (temporal antialiasing needs compute-class devices; the others get
+    /// FXAA). `camera`: its near and far planes. `clock`: the seconds since
+    /// this camera's last frame, and whether the game asked to forget the
+    /// past frames (auto exposure then starts at its target).
     #[allow(clippy::too_many_arguments)]
     pub(super) fn prepare(
         &mut self,
-        queue: &wgpu::Queue,
+        (device, queue): (&wgpu::Device, &wgpu::Queue),
         post: &crate::render::Post,
         lut: Option<(u32, u32)>,
         (size, window): ((u32, u32), (u32, u32)),
         camera: (f32, f32),
         white: u32,
         taa_supported: bool,
+        (dt, reset): (f32, bool),
     ) {
+        let jump = self.prepare_auto_exposure(device, post, size, reset);
         let post_uniform = PostUniform::new(post, lut.map(|(_, n)| n))
             .scaled(post, size, window)
             .camera(camera.0, camera.1)
-            .hdr(self.hdr_headroom);
+            .hdr(self.hdr_headroom)
+            .adapt(post, dt, jump);
         let post_uniform = bytemuck::bytes_of(&post_uniform);
         self.mirror
             .upload(queue, Upload::Uniforms, &self.buffer, 0, post_uniform);
@@ -452,6 +595,123 @@ impl PostChain {
             AntiAliasing::Taa if !taa_supported => AntiAliasing::Fxaa,
             aa => aa,
         };
+    }
+
+    /// Auto exposure for this frame: its passes, made the first time it is
+    /// on, and this camera's exposures and meter (the meter made again for
+    /// a new scene `size`), or nothing while it is off (its images are
+    /// freed). Returns whether the frame jumps to the target: the first
+    /// with it on, or after a `reset`.
+    fn prepare_auto_exposure(
+        &mut self,
+        device: &wgpu::Device,
+        post: &crate::render::Post,
+        size: (u32, u32),
+        reset: bool,
+    ) -> bool {
+        let auto = &post.auto_exposure;
+        if !auto.enabled {
+            self.metering = None;
+            return false;
+        }
+        self.mask = auto.mask.map_or(self.white, |t| t.id);
+        if self.meter_pipelines.is_none() {
+            self.meter_pipelines = Some(self.meter_pipelines(device));
+        }
+        let metering = self.metering.get_or_insert_with(|| {
+            let states = [exposure_target(device), exposure_target(device)];
+            let state_groups = [
+                exposure_group(device, &self.exposure_layout, &states[0]),
+                exposure_group(device, &self.exposure_layout, &states[1]),
+            ];
+            Metering {
+                states,
+                state_groups,
+                write: 1,
+                jump: true,
+                size: (0, 0),
+                levels: Vec::new(),
+                reads: Vec::new(),
+            }
+        });
+        metering.write ^= 1;
+        if metering.size != size {
+            let sizes = Metering::level_sizes(size);
+            let levels: Vec<wgpu::TextureView> = sizes
+                .iter()
+                .map(|&(width, height)| {
+                    device
+                        .create_texture(&wgpu::TextureDescriptor {
+                            label: Some("3d auto exposure meter"),
+                            size: wgpu::Extent3d {
+                                width,
+                                height,
+                                depth_or_array_layers: 1,
+                            },
+                            mip_level_count: 1,
+                            sample_count: 1,
+                            dimension: wgpu::TextureDimension::D2,
+                            format: HDR_FORMAT,
+                            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                            view_formats: &[],
+                        })
+                        .create_view(&Default::default())
+                })
+                .collect();
+            metering.reads = levels
+                .iter()
+                .map(|level| {
+                    post_group(
+                        device,
+                        &self.layout,
+                        level,
+                        &self.linear_clamp,
+                        &self.buffer,
+                        &self.black,
+                    )
+                })
+                .collect();
+            metering.levels = levels;
+            metering.size = size;
+        }
+        std::mem::replace(&mut metering.jump, false) || reset
+    }
+
+    /// Auto exposure's passes (`post.wgsl`).
+    fn meter_pipelines(&self, device: &wgpu::Device) -> MeterPipelines {
+        let make = |label, layout, entry_point, format: wgpu::TextureFormat| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(layout),
+                vertex: wgpu::VertexState {
+                    module: &self.shader,
+                    entry_point: Some("vs_full"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &self.shader,
+                    entry_point: Some(entry_point),
+                    compilation_options: Default::default(),
+                    targets: &[Some(format.into())],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        MeterPipelines {
+            meter: make("3d auto exposure meter", &self.meter_layout, "fs_meter", HDR_FORMAT),
+            reduce: make(
+                "3d auto exposure reduce",
+                &self.bloom_pipeline_layout,
+                "fs_meter_reduce",
+                HDR_FORMAT,
+            ),
+            adapt: make("3d auto exposure", &self.exposed_layout, "fs_adapt", EXPOSURE_FORMAT),
+        }
     }
 
     /// Depth of field's pipeline, built the first time it is on. It reads
@@ -693,6 +953,9 @@ impl PostChain {
         } else {
             (&images.post_of_scene, &images.bloom_prefilter_of_scene)
         };
+        // Auto exposure meters the frame before bloom: bloom's threshold and
+        // the tone mapping see the exposed light.
+        let exposure = self.record_auto_exposure(encoder, post, textures, time);
         if self.bloom_on {
             passes::mark("bloom");
             let step = |encoder: &mut wgpu::CommandEncoder,
@@ -719,6 +982,9 @@ impl PostChain {
                 });
                 pass.set_pipeline(pipeline);
                 pass.set_bind_group(0, group, &[]);
+                if std::ptr::eq(pipeline, &self.bloom_prefilter) {
+                    pass.set_bind_group(3, exposure, &[]);
+                }
                 pass.set_blend_constant(wgpu::Color {
                     r: BLOOM_SCATTER,
                     g: BLOOM_SCATTER,
@@ -774,6 +1040,7 @@ impl PostChain {
             .texture(self.lut)
             .expect("a live lookup table (checked in prepare)");
         pass.set_bind_group(1, &lut.bind_group, &[]);
+        pass.set_bind_group(3, exposure, &[]);
         pass.draw(0..3, 0..1);
         drop(pass);
         match self.aa {
@@ -828,6 +1095,140 @@ impl PostChain {
             pass.draw(0..3, 0..1);
         }
     }
+}
+
+impl PostChain {
+    /// Records auto exposure while it is on: the meter of the frame (read
+    /// through `post`, the tone mapping's group), its reduction to one
+    /// texel and the adaptation. Returns the group bloom and tone mapping
+    /// read the exposure from (a stand-in they skip while it is off).
+    fn record_auto_exposure<'t>(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        post: &wgpu::BindGroup,
+        textures: &dyn TextureTable,
+        time: &PassTimer<'_, 't>,
+    ) -> &wgpu::BindGroup {
+        let (Some(metering), Some(pipelines)) = (&self.metering, &self.meter_pipelines) else {
+            return &self.exposure_off;
+        };
+        let Some(mask) = textures.texture(self.mask).or_else(|| textures.texture(self.white)) else {
+            return &self.exposure_off;
+        };
+        passes::mark("auto exposure");
+        let pass = |encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView| {
+            encoder
+                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("3d auto exposure"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: target,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: time("auto exposure"),
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                })
+                .forget_lifetime()
+        };
+        {
+            let mut meter = pass(encoder, &metering.levels[0]);
+            meter.set_pipeline(&pipelines.meter);
+            meter.set_bind_group(0, post, &[]);
+            meter.set_bind_group(1, &mask.bind_group, &[]);
+            meter.draw(0..3, 0..1);
+        }
+        for (level, read) in metering.levels[1..].iter().zip(&metering.reads) {
+            let mut reduce = pass(encoder, level);
+            reduce.set_pipeline(&pipelines.reduce);
+            reduce.set_bind_group(0, read, &[]);
+            reduce.draw(0..3, 0..1);
+        }
+        let write = metering.write;
+        let mut adapt = pass(encoder, &metering.states[write]);
+        adapt.set_pipeline(&pipelines.adapt);
+        adapt.set_bind_group(0, &metering.reads[metering.levels.len() - 1], &[]);
+        adapt.set_bind_group(3, &metering.state_groups[write ^ 1], &[]);
+        adapt.draw(0..3, 0..1);
+        &metering.state_groups[write]
+    }
+}
+
+/// A one-texel image for an adapted exposure, cleared to 0 stops.
+fn exposure_target(device: &wgpu::Device) -> wgpu::TextureView {
+    device
+        .create_texture(&wgpu::TextureDescriptor {
+            label: Some("3d auto exposure"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: EXPOSURE_FORMAT,
+            // Tests read it back.
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | if cfg!(test) {
+                    wgpu::TextureUsages::COPY_SRC
+                } else {
+                    wgpu::TextureUsages::empty()
+                },
+            view_formats: &[],
+        })
+        .create_view(&Default::default())
+}
+
+/// Group 3 of the passes that read an adapted exposure.
+fn exposure_group(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, state: &wgpu::TextureView) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("3d auto exposure"),
+        layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: wgpu::BindingResource::TextureView(state),
+        }],
+    })
+}
+
+/// A post group (`post.wgsl`'s group 0) reading `source`.
+fn post_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    source: &wgpu::TextureView,
+    sampler: &wgpu::Sampler,
+    uniform: &wgpu::Buffer,
+    bloom: &wgpu::TextureView,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("3d post"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(source),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: uniform.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(bloom),
+            },
+        ],
+    })
 }
 
 impl Renderer3D {
@@ -899,8 +1300,53 @@ impl PostChain {
         if let Some(smaa) = &self.smaa {
             smaa.tally_memory(t);
         }
+        if let Some(metering) = &self.metering {
+            metering.tally_memory(t);
+        }
         t.buffer(C::Other, "post uniforms", &self.buffer);
         t.view(C::Other, "post black stand-in", &self.black);
+    }
+}
+
+#[cfg(test)]
+impl Renderer3D {
+    /// The exposure auto exposure adapted to in the last frame drawn, in
+    /// stops added to `Post::exposure`: the main camera's (`view` `None`)
+    /// or window view `view`'s. `None` while it is off (test hook).
+    pub(crate) fn auto_exposure_stops(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        view: Option<usize>,
+    ) -> Option<f32> {
+        let metering = match view {
+            None => self.post.metering(),
+            Some(index) => self.view_metering(index),
+        }?;
+        let bytes = crate::render::render_test_support::read_texture(device, queue, metering.state().texture());
+        // The rounded value and what it left over (`exposure_texel`).
+        let half = |at: usize| {
+            let bits = u16::from_le_bytes([bytes[at], bytes[at + 1]]);
+            let (exp, frac) = (i32::from((bits >> 10) & 31), f32::from(bits & 1023));
+            let v = if exp == 0 {
+                frac * 2f32.powi(-24)
+            } else {
+                (1.0 + frac / 1024.0) * 2f32.powi(exp - 15)
+            };
+            if bits >> 15 == 1 { -v } else { v }
+        };
+        Some(half(0) + half(2))
+    }
+
+    /// The sizes of the auto exposure meter's images, while it is on (test
+    /// hook).
+    pub(crate) fn auto_exposure_meter_sizes(&self) -> Option<Vec<(u32, u32)>> {
+        self.post.metering().map(|m| {
+            m.levels
+                .iter()
+                .map(|l| (l.texture().width(), l.texture().height()))
+                .collect()
+        })
     }
 }
 
@@ -969,12 +1415,13 @@ mod tests {
 
     /// What records each link of [`POST_CHAIN`]: `(link, the function it is
     /// recorded from, the text that records it)`.
-    const RECORDED: [(&str, &str, &str); 9] = [
+    const RECORDED: [(&str, &str, &str); 10] = [
         ("temporal antialiasing", "fn record_post(", "time(\"taa\")"),
         ("scene compute passes", "fn record_post(", "SCENE_COMPUTE_STEPS"),
         ("target effects", "fn record_post(", ".record_targets("),
         ("screen effects", "fn record_post(", ".record_screen("),
         ("depth of field", "fn record_post(", ".record_depth_of_field("),
+        ("auto exposure", "fn record<'t>(", ".record_auto_exposure("),
         ("bloom", "fn record<'t>(", "\"bloom\","),
         ("tone mapping", "fn record<'t>(", "time(\"post\")"),
         ("antialiasing", "fn record<'t>(", "Some(\"FXAA\")"),

@@ -163,6 +163,12 @@ pub(crate) enum Resource {
     OcclusionReadback,
     /// The render targets target effects write.
     EffectTargets,
+    /// Auto exposure's meter: ever smaller images of the frame's log
+    /// luminance, down to one texel.
+    ExposureMeter,
+    /// Auto exposure's adapted exposure: last frame's, read and moved on
+    /// into this frame's.
+    ExposureState,
     /// Bloom's chain of ever smaller images.
     BloomMips,
     /// The tone mapped frame before FXAA.
@@ -244,7 +250,7 @@ pub(crate) struct Desc {
 
 impl Resource {
     /// Every resource, in declaration order.
-    pub(crate) const ALL: [Resource; 52] = {
+    pub(crate) const ALL: [Resource; 54] = {
         use Resource::*;
         [
             VisibleDraws,
@@ -292,6 +298,8 @@ impl Resource {
             OcclusionGrid,
             OcclusionReadback,
             EffectTargets,
+            ExposureMeter,
+            ExposureState,
             BloomMips,
             Ldr,
             SmaaInput,
@@ -366,6 +374,8 @@ impl Resource {
             Resource::OcclusionGrid => desc("occlusion grid", Frame, F::Buffer, One),
             Resource::OcclusionReadback => desc("occlusion readback", Persistent, F::Buffer, One),
             Resource::EffectTargets => desc("effect targets", Persistent, F::Any, One),
+            Resource::ExposureMeter => desc("auto exposure meter", Frame, F::Hdr, One),
+            Resource::ExposureState => desc("auto exposure", Persistent, F::Hdr, One),
             Resource::BloomMips => desc("bloom", Frame, F::Hdr, One),
             Resource::Ldr => desc("frame before fxaa", Frame, F::Output, One),
             Resource::SmaaInput => desc("frame before smaa", Frame, F::Any, One),
@@ -510,6 +520,8 @@ features! {
     /// Nothing moved, and the motion vectors (kept from frame to frame)
     /// hold none since the last motion pass cleared them: it is skipped.
     MOTION_KEPT = 48, "motion vectors kept";
+    /// Auto exposure meters the frame and adapts the exposure.
+    AUTO_EXPOSURE = 49, "auto exposure";
 }
 
 impl Features {
@@ -1416,6 +1428,19 @@ pub(crate) const FRAME_PASSES: [Pass; 8] = [
             // The frame is in the scratch after an odd number of swaps:
             // screen effects and depth of field.
             step(
+                "auto exposure",
+                on(F::AUTO_EXPOSURE),
+                &[
+                    u(Hdr, A::Sample).off(F::EFFECTS_ODD.with(F::DOF)),
+                    u(Hdr, A::Sample).on(F::EFFECTS_ODD.with(F::DOF)),
+                    u(EffectScratch, A::Sample).on(F::EFFECTS_ODD).off(F::DOF),
+                    u(EffectScratch, A::Sample).on(F::DOF).off(F::EFFECTS_ODD),
+                    u(ExposureMeter, A::Color),
+                    u(ExposureState, A::SamplePrevious),
+                    u(ExposureState, A::Color),
+                ],
+            ),
+            step(
                 "bloom",
                 on(F::BLOOM),
                 &[
@@ -1423,6 +1448,7 @@ pub(crate) const FRAME_PASSES: [Pass; 8] = [
                     u(Hdr, A::Sample).on(F::EFFECTS_ODD.with(F::DOF)),
                     u(EffectScratch, A::Sample).on(F::EFFECTS_ODD).off(F::DOF),
                     u(EffectScratch, A::Sample).on(F::DOF).off(F::EFFECTS_ODD),
+                    u(ExposureState, A::Sample).on(F::AUTO_EXPOSURE),
                     u(BloomMips, A::Color),
                 ],
             ),
@@ -1435,6 +1461,7 @@ pub(crate) const FRAME_PASSES: [Pass; 8] = [
                     u(EffectScratch, A::Sample).on(F::EFFECTS_ODD).off(F::DOF),
                     u(EffectScratch, A::Sample).on(F::DOF).off(F::EFFECTS_ODD),
                     u(BloomMips, A::Sample).on(F::BLOOM),
+                    u(ExposureState, A::Sample).on(F::AUTO_EXPOSURE),
                     u(Ldr, A::Color).on(F::FXAA),
                     u(SmaaInput, A::Color).on(F::SMAA),
                     u(Upscaled, A::Color).on(F::UPSCALE).off(F::FXAA.with(F::SMAA)),
