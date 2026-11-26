@@ -381,12 +381,14 @@ types. For Steam those are `SteamClient` (started with
 `SteamClient::init_app`), `SteamLobbyId`, `SteamUserId`, `SteamLobby` and
 `SteamLobbyVisibility`, taken and returned by `Net::steam_*`,
 `NetMessages::steam_*` and the invite helpers; ids pass to and from the raw
-crate as `u64` (`from_raw`, `raw`). The raw crate stays reachable at an
+crate as `u64` (`from_raw`, `raw`), or with the unstable `From` conversions
+(see [Unstable](#unstable)). The raw crate stays reachable at an
 `unstable_` path for what Ponko doesn't wrap (achievements, stats), so a new
 `steamworks` or `taffy` release, compatible or not, can come with any Ponko
 release without breaking the stable API. `tests/third_party_api.rs` checks
 the API listing (`api/ponko/docs-rs.txt`) for `steamworks` and `taffy` types
-on items without an `unstable_` name.
+on items without an `unstable_` name, apart from the unstable items it lists
+with their reason.
 
 ## Minimum Rust version (MSRV)
 
