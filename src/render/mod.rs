@@ -71,6 +71,8 @@ mod shader_status;
 mod smaa;
 #[cfg(feature = "window")]
 mod sprite_pipelines;
+#[cfg(feature = "window")]
+mod srgb_output;
 #[cfg(all(feature = "window", feature = "3d"))]
 mod ssr;
 #[cfg(feature = "window")]
@@ -562,6 +564,8 @@ mod skeleton2d_render_test;
 mod skin_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod sprite_material_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod srgb_output_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod ssr_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
