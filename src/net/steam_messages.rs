@@ -22,8 +22,8 @@ const PROTOCOL: &str = "ponko-messages-2";
 /// The lobby metadata key naming the host's carrier: [`MESSAGES`] or
 /// [`SOCKETS`]. A host from before the key existed uses Messages.
 const CARRIER_KEY: &str = "ponko_carrier";
-const MESSAGES: &str = "messages";
-const SOCKETS: &str = "sockets";
+pub(super) const MESSAGES: &str = "messages";
+pub(super) const SOCKETS: &str = "sockets";
 /// The Sockets carrier's virtual port, beside lockstep's channel zero and
 /// the Messages carrier's channel.
 const SOCKETS_PORT: i32 = 12702;
@@ -869,8 +869,9 @@ impl NetMessages {
 /// In-memory Steam for tests: lobbies, Messages and Sockets, with packets
 /// in memory or over the scripted network of the conformance tests.
 #[cfg(test)]
-pub(super) mod testing {
+pub(in crate::net) mod testing {
     use super::*;
+    pub(in crate::net) use super::{MESSAGES, SOCKETS};
     use crate::net::scripted::{Port, Shared};
     use std::collections::BTreeMap;
 
@@ -883,7 +884,7 @@ pub(super) mod testing {
         pub(super) metadata: BTreeMap<String, String>,
     }
     #[derive(Default)]
-    pub(super) struct State {
+    pub(in crate::net) struct State {
         pub(super) rooms: BTreeMap<u64, Room>,
         /// In-memory packets per receiver, Messages and Sockets alike.
         pub(super) packets: BTreeMap<u64, VecDeque<(SteamUserId, Vec<u8>)>>,
@@ -897,7 +898,7 @@ pub(super) mod testing {
         pub(super) events: BTreeMap<u64, VecDeque<SocketEvent>>,
         pub(super) dials: usize,
     }
-    pub(super) type Steam = Arc<Mutex<State>>;
+    pub(in crate::net) type Steam = Arc<Mutex<State>>;
 
     fn link(a: u64, b: u64) -> (u64, u64) {
         (a.min(b), a.max(b))
@@ -1114,7 +1115,7 @@ pub(super) mod testing {
     /// `1 + clients` endpoints on one fake Steam: Steam user 1 hosts
     /// with `carrier` ([`MESSAGES`] or [`SOCKETS`]) for up to `max_clients`;
     /// users 2, 3, ... join its lobby. Packets cross `net` when given.
-    pub(super) fn endpoints_on(
+    pub(in crate::net) fn endpoints_on(
         carrier: &'static str,
         clients: usize,
         max_clients: usize,
