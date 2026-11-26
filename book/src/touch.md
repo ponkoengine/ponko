@@ -168,7 +168,9 @@ for every control, `control_style` for one, and `place` puts a control
 where the game wants it instead of where the engine lays it out: a
 `TouchPlace` is a point of the view (`(0, 0)` top left to `(1, 1)` bottom
 right) and an offset from it in UI units, so a control anchored to a
-corner keeps its distance from it when the phone turns.
+corner keeps its distance from it when the phone turns. A button's label is
+`label_size` times its radius high (0.8 by default); a label too wide for
+the disc ("Jump", "Flare") is drawn smaller, so it stays inside the rim.
 
 <div class="lang-pair">
 <div>
@@ -398,6 +400,40 @@ Game::new("notch", 844, 390).run_headless(1, |ctx| {
     assert_eq!(ctx.window.safe_area(), Rect::new(47.0, 0.0, 797.0, 369.0));
 });
 ```
+
+### A fixed play area on any screen
+
+A 2D game drawn for one window size (an 800 x 600 arena, a 320 x 180 pixel
+scene) shows only part of it on a phone, and text placed at fixed pixels runs
+under the notch or off the edge. The two 2D reference games, Coin Dash and
+Ember Hop, lay out for the window they get instead, every frame, so turning
+the phone needs no restart:
+
+- **The play area is fitted.** The camera shows the whole area, as large
+  as fits and centred in the safe area; the rest of the window is the clear
+  color (letterboxed). In a window the area's own size it is the camera the
+  game always had (zoom 1, the area's corner at the window's), so the
+  desktop look doesn't change. Neither game's rules or levels change.
+- **Text is placed in the safe area.** The status line sits in its top
+  corner, clear of the on-screen pause button (`ctx.ui.find("touch.pause")`
+  and `ctx.ui.rect`, in window pixels); menus are centred in it, and a line
+  too wide for it is drawn smaller rather than cut off.
+- **Hints follow the controls.** While `ctx.input.touch_controls_shown()`,
+  the screens say "Tap: play" instead of naming keys.
+
+The camera part, from `examples/common/fit2d.rs`, which both games share:
+
+```rust
+{{#include ../../examples/common/fit2d.rs:fit_camera}}
+```
+
+Called with the arena and `ctx.window.safe_area()` in a frame system, it
+keeps the arena whole as the window turns. Their tests
+(`tests/coin_dash_layout.rs`, and the phone tests in `tests/ember_hop.rs`)
+play the games headlessly in a phone's window, upright and turned, with
+the insets iOS and Android report, and check that the play area and every
+line of text are inside the safe area, that they follow insets changed
+mid-game, and that a desktop window is laid out as before.
 
 What needs a person: the tests feed the insets a phone reports and check
 that the controls, the panel and the game's UI keep out of them; that a

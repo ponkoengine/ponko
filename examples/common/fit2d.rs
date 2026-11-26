@@ -19,6 +19,7 @@
 use ponko::d2::Camera;
 use ponko::prelude::*;
 
+// ANCHOR: fit_camera
 /// Where `area` shows in `room` when it is whole, as large as fits and
 /// centred: what [`fit_camera`] makes of it. `None` for an empty `room` or
 /// `area`.
@@ -42,6 +43,8 @@ pub fn fit_camera(camera: &mut Camera, area: Rect, room: Rect) {
     camera.zoom = shown.size().x / area.size().x;
     camera.position = area.min - (shown.min - camera.screen_rect().min) / camera.zoom;
 }
+
+// ANCHOR_END: fit_camera
 
 /// One line of text where it is drawn: its top left corner (window
 /// pixels), its size and its width at that size.
