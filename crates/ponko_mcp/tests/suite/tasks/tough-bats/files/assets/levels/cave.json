@@ -1,0 +1,11 @@
+{
+  "format": "ponko-world",
+  "version": 1,
+  "entities": [
+    { "entity": 0, "components": { "Player": null, "Transform2D": { "position": [100.0, 300.0] } } },
+    { "entity": 1, "components": { "Bat": null, "Health": { "current": 10.0 }, "Transform2D": { "position": [300.0, 200.0] } } },
+    { "entity": 2, "components": { "Bat": null, "Health": { "current": 10.0 }, "Transform2D": { "position": [380.0, 420.0] } } },
+    { "entity": 3, "components": { "Bat": null, "Health": { "current": 10.0 }, "Transform2D": { "position": [500.0, 160.0] } } },
+    { "entity": 4, "components": { "Bat": null, "Health": { "current": 10.0 }, "Transform2D": { "position": [560.0, 380.0] } } }
+  ]
+}

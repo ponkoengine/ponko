@@ -5,10 +5,12 @@
 //!   agent_suite goal TASK               what an agent is told
 //!   agent_suite replay [TASK...]        the scripted solutions and negative
 //!                                       controls, scored; no model involved
-//!   agent_suite mcp TASK [--dir DIR] [--out FILE] [--agent NAME]
+//!   agent_suite mcp TASK [--dir DIR] [--out FILE] [--agent NAME] [--hide TOOL,...]
 //!                                       one task for a real agent: an MCP
 //!                                       server over stdio, with every
-//!                                       ponko-mcp tool and `submit_task`
+//!                                       ponko-mcp tool and `submit_task`;
+//!                                       `--hide` takes tools away, to see
+//!                                       what they are worth on the task
 //!   agent_suite scores FILE...          a Markdown table of `mcp` result
 //!                                       files, for a pull request
 //!
@@ -33,7 +35,7 @@ use std::process::ExitCode;
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage: agent_suite list | goal TASK | replay [TASK...] | mcp TASK [--dir DIR] [--out FILE] [--agent NAME] | scores FILE..."
+        "usage: agent_suite list | goal TASK | replay [TASK...] | mcp TASK [--dir DIR] [--out FILE] [--agent NAME] [--hide TOOL,...] | scores FILE..."
     );
     ExitCode::from(2)
 }
@@ -45,6 +47,7 @@ fn main() -> ExitCode {
         ["list"] => {
             for t in suite::TASKS {
                 println!("{:<16} {:<12} {}", t.id, t.kind, t.title);
+                println!("{:<16} {:<12} leans on: {}", "", "", t.leans_on.join(", "));
             }
             ExitCode::SUCCESS
         }
@@ -76,6 +79,7 @@ fn main() -> ExitCode {
                     "--dir" => options.dir = Some(PathBuf::from(value)),
                     "--out" => options.out = Some(PathBuf::from(value)),
                     "--agent" => options.agent = Some((*value).to_string()),
+                    "--hide" => options.hide.extend(value.split(',').map(|t| t.trim().to_string())),
                     _ => return usage(),
                 }
             }
@@ -174,9 +178,12 @@ struct McpOptions {
     dir: Option<PathBuf>,
     out: Option<PathBuf>,
     agent: Option<String>,
+    hide: Vec<String>,
 }
 
 fn mcp(task: &'static suite::Task, options: McpOptions) -> Result<(), String> {
+    // SAFETY: before any thread starts.
+    unsafe { suite::prepare_cargo_env() };
     let dir = options.dir.unwrap_or_else(|| scratch(task.id));
     let dir = std::path::absolute(&dir).map_err(|e| e.to_string())?;
     let out = options.out.unwrap_or_else(|| dir.with_extension("result.json"));
@@ -191,6 +198,7 @@ fn mcp(task: &'static suite::Task, options: McpOptions) -> Result<(), String> {
     );
 
     let mut record = suite::proxy::Record::new(task, options.agent, &dir);
+    record.hide(&options.hide);
     let write = |record: &suite::proxy::Record| {
         let text = serde_json::to_string_pretty(&record.json()).unwrap_or_default();
         if let Err(e) = std::fs::write(&out, text + "\n") {

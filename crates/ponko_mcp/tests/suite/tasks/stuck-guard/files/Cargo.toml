@@ -1,0 +1,12 @@
+[package]
+name = "patrol"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+ponko = { path = '{{PONKO}}', default-features = false }
+serde = { version = "1", features = ["derive"] }
+
+# A project of its own, not part of a workspace above it.
+[workspace]

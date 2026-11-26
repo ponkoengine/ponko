@@ -1,0 +1,197 @@
+{
+ "steps": [
+  {
+   "call": "world_summary"
+  },
+  {
+   "call": "entity_stats",
+   "args": {
+    "fields": [
+     "Health.current"
+    ],
+    "with": [
+     "Bat"
+    ]
+   }
+  },
+  {
+   "call": "get_resource",
+   "args": {
+    "resource": "Spawning"
+   }
+  },
+  {
+   "call": "watch",
+   "args": {
+    "ticks": 200,
+    "every": 50,
+    "count": [
+     "Bat"
+    ]
+   }
+  },
+  {
+   "call": "entity_stats",
+   "args": {
+    "fields": [
+     "Health.current"
+    ],
+    "with": [
+     "Bat"
+    ]
+   }
+  },
+  {
+   "write": "assets/spawner.json",
+   "text": "{\n  \"prefab\": \"prefabs/bat.json\",\n  \"every_secs\": 6.0,\n  \"max_bats\": 8,\n  \"health_scale\": 1.0\n}\n"
+  },
+  {
+   "until": {
+    "call": "get_resource",
+    "args": {
+     "resource": "Spawning"
+    },
+    "pointer": "/every_secs",
+    "equals": 6.0
+   },
+   "each": {
+    "call": "run_ticks",
+    "args": {
+     "ticks": 1
+    }
+   }
+  },
+  {
+   "call": "spawn_prefab",
+   "args": {
+    "path": "prefabs/bat.json",
+    "at": [
+     0,
+     0
+    ]
+   },
+   "save": {
+    "bat": "/entity"
+   }
+  },
+  {
+   "call": "set_component",
+   "args": {
+    "entity": "$bat",
+    "component": "Health",
+    "value": {
+     "current": 30
+    }
+   }
+  },
+  {
+   "call": "save_prefab",
+   "args": {
+    "entity": "$bat",
+    "path": "prefabs/bat.json"
+   }
+  },
+  {
+   "call": "despawn_prefab",
+   "args": {
+    "entity": "$bat"
+   }
+  },
+  {
+   "call": "load_scene",
+   "args": {
+    "path": "levels/cave.json"
+   }
+  },
+  {
+   "call": "list_entities",
+   "args": {
+    "with": [
+     "Bat"
+    ]
+   },
+   "save": {
+    "b1": "/entities/0/entity",
+    "b2": "/entities/1/entity",
+    "b3": "/entities/2/entity",
+    "b4": "/entities/3/entity"
+   }
+  },
+  {
+   "call": "set_component",
+   "args": {
+    "entity": "$b1",
+    "component": "Health",
+    "value": {
+     "current": 30
+    }
+   }
+  },
+  {
+   "call": "set_component",
+   "args": {
+    "entity": "$b2",
+    "component": "Health",
+    "value": {
+     "current": 30
+    }
+   }
+  },
+  {
+   "call": "set_component",
+   "args": {
+    "entity": "$b3",
+    "component": "Health",
+    "value": {
+     "current": 30
+    }
+   }
+  },
+  {
+   "call": "set_component",
+   "args": {
+    "entity": "$b4",
+    "component": "Health",
+    "value": {
+     "current": 30
+    }
+   }
+  },
+  {
+   "call": "save_scene",
+   "args": {
+    "path": "levels/cave.json"
+   }
+  },
+  {
+   "call": "set_resource",
+   "args": {
+    "resource": "Spawning",
+    "value": {
+     "secs": 0
+    }
+   }
+  },
+  {
+   "call": "watch",
+   "args": {
+    "ticks": 372,
+    "every": 62,
+    "count": [
+     "Bat"
+    ]
+   }
+  },
+  {
+   "call": "entity_stats",
+   "args": {
+    "fields": [
+     "Health.current"
+    ],
+    "with": [
+     "Bat"
+    ]
+   }
+  }
+ ]
+}

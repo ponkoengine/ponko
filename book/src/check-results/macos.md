@@ -19,6 +19,75 @@ jobs written for macOS; the platform-neutral jobs written for `ubuntu-latest`
 (clippy, docs, Miri, the web build and the browser runs, templates and more)
 ran on this Mac by hand, as recorded below.
 
+## 2026-11-26: five harder agent tasks, replayed and tried by an AI coding agent (#630)
+
+The suite's five new tasks ("The agent acceptance suite" in
+[Working with AI agents](../agents.md)), on the `tooling/630-harder-suite`
+branch, on the same Mac (Apple M4 Max, macOS 27.2.1), debug builds, busy
+(load average 30 to 800 on 14 cores: other agents were compiling).
+
+**Replay.** `cargo test -p ponko_mcp --test agent_suite`: passed, 11/11
+tasks solved, 36/36 checks, 50/50 negative controls caught, equal to the new
+baseline (108 s, and 125 s after merging `main`; the code task about 55 s of it, its engine build in
+`target/agent-suite` done before). Each new task's checker was also given
+a second, different correct fix, which it passed: a guard that carries the
+rest of its step round a corner, a prefab of 60 health with the spawner's
+scale of 0.5 kept, spikes moved off the path instead of removed.
+
+**An AI coding agent.** The same kind of agent as the run below (a CLI
+coding agent with a shell, driving `agent_suite mcp TASK` with
+`scripts/mcp-session.py`, headless), but this time it had written the five
+tasks earlier the same day: it knew each answer before it started, and the
+cannon's landing points from tuning the task. So this run shows the tasks
+can be finished with the tools as documented and that the checkers accept
+a real session's work; it says nothing about how hard they are. That needs
+a fresh session of another agent, at the release cut. Seconds are
+wall-clock from starting the server to the submission.
+
+| Task | Solved | Checks | Tool calls | Tool errors | Submissions | Seconds | Scripted steps |
+|---|---|---|---|---|---|---|---|
+| `lost-points` | yes | 4/4 | 23 | 0 | 1 | 30 | 18 |
+| `cannon-range` | yes | 3/3 | 15 | 0 | 1 | 17 | 15 |
+| `tough-bats` | yes | 3/3 | 22 | 0 | 1 | 27 | 21 |
+| `hold-the-gate` | yes | 3/3 | 95 | 0 | 1 | 33 | 11 |
+| `stuck-guard` | yes | 5/5 | 23 | 0 | 1 | 31 | 14 |
+| **total** | **5/5** | **18/18** | 178 | 0 | 5 | 138 | 79 |
+
+What each run used, and what it ran into:
+
+- `lost-points`: a scenario holding Right, then `take_events` showed no
+  `Collected` event; after the radius fix the events showed five coins
+  collected and a `Hurt` that took all five points at the spikes. The
+  spikes were removed from the level with `load_scene`, `despawn_entity`
+  and `save_scene`.
+- `cannon-range`: three shots (400, 620, 648), each a file edit, one tick
+  for the reload, `set_resource` on the trigger, `run_ticks` and
+  `take_events` for the landing point.
+- `tough-bats`: `watch` with the bat count and the `Spawning` resource
+  showed a new bat every 3 s; the prefab was changed with `spawn_prefab`,
+  `set_component` and `save_prefab`, the level's bats with `load_scene`,
+  `set_component` and `save_scene`; a second `watch` after a fresh load
+  showed the new timing. `Spawning` read 0 before the first tick; it now
+  starts with the file's numbers.
+- `hold-the-gate`: `save_world` at the start, then all 15 pairs, each a
+  file edit, `load_world` and a 3,600-tick `run_ticks`: one pair holds
+  (`bend` and `corner`); the two that cover the most road let two and three
+  walkers through. 95 calls, all of the sweep.
+- `stuck-guard`: two `get_entity` reads a tick apart showed the guard
+  stepping back and forth across the first corner; one edit, then
+  `quit_instance` and `launch` (`release: false`: 1.5 s to rebuild and
+  start); `Reached` events showed two laps. `submit_task` took 8 s (a
+  build and a fresh start, then 60 position reads).
+- Friction fixed on the branch: `subscribe_events` replied `"types": []`
+  when it collects everything, and accepted a misspelled type that would
+  never collect anything. It now lists the types it collects and names
+  unknown ones with a hint.
+- Not changed: every tool call opens a new connection to the game, which
+  accepts them every 20 ms, so a call takes about 45 ms here (840 calls in
+  39 s). That doesn't slow an agent, but a checker that reads a position
+  every tick has to keep to a few windows (`stuck-guard` reads 60
+  positions, not 400).
+
 ## 2026-11-26: the agent acceptance suite, replayed and tried by a real agent (#528, section 7)
 
 A rehearsal of the cut's step ("The agent acceptance suite", "At a

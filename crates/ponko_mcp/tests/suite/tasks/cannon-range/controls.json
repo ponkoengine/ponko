@@ -1,0 +1,25 @@
+[
+  { "name": "nothing", "why": "the shot falls far short", "steps": [],
+    "fails": ["a shot lands on the target"] },
+  { "name": "vacuum formula", "why": "range = v² / g without the air: the speed for 580 pixels in a vacuum, which falls short with drag",
+    "steps": [
+      { "write": "assets/cannon.json", "text": "{\n  \"muzzle_speed\": 482,\n  \"angle_degrees\": 45\n}\n" },
+      { "until": { "call": "get_resource", "args": { "resource": "CannonSettings" }, "pointer": "/muzzle_speed", "equals": 482.0 }, "each": { "call": "run_ticks", "args": { "ticks": 1 } } }
+    ],
+    "fails": ["a shot lands on the target"] },
+  { "name": "overshoot", "why": "a guess too far",
+    "steps": [
+      { "write": "assets/cannon.json", "text": "{\n  \"muzzle_speed\": 700,\n  \"angle_degrees\": 45\n}\n" },
+      { "until": { "call": "get_resource", "args": { "resource": "CannonSettings" }, "pointer": "/muzzle_speed", "equals": 700.0 }, "each": { "call": "run_ticks", "args": { "ticks": 1 } } }
+    ],
+    "fails": ["a shot lands on the target"] },
+  { "name": "angle changed", "why": "aims lower instead of tuning the speed",
+    "steps": [
+      { "write": "assets/cannon.json", "text": "{\n  \"muzzle_speed\": 400,\n  \"angle_degrees\": 30\n}\n" },
+      { "until": { "call": "get_resource", "args": { "resource": "CannonSettings" }, "pointer": "/angle_degrees", "equals": 30.0 }, "each": { "call": "run_ticks", "args": { "ticks": 1 } } }
+    ],
+    "fails": ["cannon file is valid", "a shot lands on the target"] },
+  { "name": "live only", "why": "the right speed in the running game, not in the file",
+    "steps": [ { "call": "set_resource", "args": { "resource": "CannonSettings", "value": { "muzzle_speed": 650 } } } ],
+    "fails": ["game uses the file"] }
+]

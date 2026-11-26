@@ -1294,7 +1294,7 @@ pub(crate) const METHODS: &[(&str, &str)] = &[
     ),
     (
         "events.subscribe",
-        "start collecting new events, between frames, newest kept; params: types? (names, default all), capacity? (1000)",
+        "start collecting new events, between frames, newest kept; params: types? (names, default all), capacity? (1000). Returns the types collected, all (true when none were named), capacity, and `unknown` with a `hint` for names the game has no event type of",
     ),
     (
         "events.take",
@@ -2125,8 +2125,36 @@ pub(crate) fn handle(ctx: &mut Ctx, method: &str, params: &Value) -> Result<Valu
                 None | Some(Value::Null) => 1000,
                 Some(v) => v.as_u64().ok_or("`capacity` must be a whole number")?.min(100_000) as usize,
             };
-            ctx.events.subscribe(&ctx.world, types.clone(), capacity);
-            json!({ "types": types, "capacity": capacity })
+            // A misspelled name collects nothing: say so (still accepted, as
+            // before). C events are named by their component, and listed
+            // once one is sent.
+            let listed: Vec<String> = (ctx.events.reflected_json(&ctx.world).iter())
+                .filter_map(|e| e["name"].as_str().map(str::to_string))
+                .collect();
+            let components = ctx.world.reflected_components();
+            let unknown: Vec<&String> = (types.iter())
+                .filter(|t| !listed.contains(t) && !components.contains(&t.as_str()))
+                .collect();
+            let all = types.is_empty();
+            let mut reply = json!({
+                // What is collected: every type, when none were named.
+                "types": if all { &listed } else { &types },
+                "all": all,
+                "capacity": capacity,
+            });
+            if !unknown.is_empty() {
+                reply["unknown"] = json!(unknown);
+                reply["hint"] = json!(format!(
+                    "no event type of these names in this game, so none will be collected; events.list has: {}",
+                    if listed.is_empty() {
+                        "none".to_string()
+                    } else {
+                        listed.join(", ")
+                    }
+                ));
+            }
+            ctx.events.subscribe(&ctx.world, types, capacity);
+            reply
         }
         "events.take" => {
             let feed = ctx

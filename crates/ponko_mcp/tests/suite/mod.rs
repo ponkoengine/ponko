@@ -25,7 +25,7 @@ use std::sync::mpsc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-pub use tasks::{TASKS, Task};
+pub use tasks::{Run, TASKS, Task};
 
 /// Bumped when tasks or scoring change in a way that makes older results
 /// incomparable.
@@ -124,6 +124,9 @@ pub struct Probe<'a> {
     pub tools: &'a mut Tools,
     /// The task's folder (the game's working folder).
     pub dir: &'a Path,
+    /// For a code task, whether the checker's build of the game worked
+    /// (`Ok` with what it built, `Err` with the compiler's last lines).
+    pub build: Option<Result<String, String>>,
 }
 
 impl Probe<'_> {
@@ -189,6 +192,8 @@ pub struct Session {
     pub agent: Tools,
     /// The checker's client.
     checker: Tools,
+    /// Where the games register.
+    instances: PathBuf,
 }
 
 /// The file that marks a folder as the suite's own, so a later run may
@@ -215,15 +220,78 @@ pub fn prepare(task: &Task, dir: &Path) -> Result<(), String> {
     for (path, text) in task.files {
         let file = dir.join(path);
         std::fs::create_dir_all(file.parent().unwrap()).map_err(|e| e.to_string())?;
+        let text = text
+            .replace("{{PONKO}}", &forward(&ponko_root()))
+            .replace("{{TARGET}}", &forward(&crate_target_dir()));
         std::fs::write(&file, text).map_err(|e| format!("can't write {}: {e}", file.display()))?;
     }
+    if let Run::Crate { .. } = task.game {
+        // The workspace's lock file: the same dependency versions, and
+        // builds that need no network.
+        let lock = ponko_root().join("Cargo.lock");
+        std::fs::copy(&lock, dir.join("Cargo.lock")).map_err(|e| format!("can't copy {}: {e}", lock.display()))?;
+    }
     Ok(())
+}
+
+/// The engine's repository, which a code task's crate depends on by path.
+pub fn ponko_root() -> PathBuf {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    root.canonicalize().unwrap_or(root)
+}
+
+/// Where code tasks are built: one folder for every task and attempt, so
+/// the engine is compiled once and a rebuild after an edit takes seconds.
+pub fn crate_target_dir() -> PathBuf {
+    ponko_root().join("target").join("agent-suite")
+}
+
+/// A path with `/` between its folders, for TOML and for cargo on every
+/// system.
+fn forward(path: &Path) -> String {
+    path.display().to_string().replace('\\', "/")
+}
+
+/// Builds the code task's crate in `dir` (a debug build, offline); its
+/// binary, or the compiler's last lines.
+pub fn build_crate(dir: &Path, bin: &str) -> Result<PathBuf, String> {
+    let target = crate_target_dir();
+    let out = std::process::Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
+        .args(["build", "--offline", "--bin", bin, "--target-dir"])
+        .arg(&target)
+        .current_dir(dir)
+        // The same flags for every build, whoever starts it (see
+        // `prepare_cargo_env`): a change would rebuild the engine.
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env_remove("CARGO_BUILD_TARGET_DIR")
+        .env_remove("CARGO_MANIFEST_DIR")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("can't run cargo: {e}"))?;
+    if !out.status.success() {
+        let text = String::from_utf8_lossy(&out.stderr);
+        let lines: Vec<&str> = text
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("Compiling"))
+            .collect();
+        return Err(format!(
+            "cargo build failed:\n{}",
+            lines[lines.len().saturating_sub(30)..].join("\n")
+        ));
+    }
+    Ok(target
+        .join("debug")
+        .join(format!("{bin}{}", std::env::consts::EXE_SUFFIX)))
 }
 
 /// Runs `task`'s game on this thread until a tool asks it to quit. The
 /// working folder must be the task's folder; `ready` gets its port.
 pub fn run_game(task: &Task, ready: Option<mpsc::Sender<u16>>) {
-    let (game, setup) = (task.game)();
+    let Run::Game(make) = task.game else {
+        panic!("{} is a code task: its game is the crate in its folder", task.id);
+    };
+    let (game, setup) = make();
     game.control_endpoint(true)
         .hot_reload(true)
         .input_injection(true)
@@ -245,17 +313,128 @@ impl Session {
         std::env::set_current_dir(std::env::temp_dir()).map_err(|e| e.to_string())?;
         prepare(task, dir)?;
         std::env::set_current_dir(dir).map_err(|e| e.to_string())?;
+        let Run::Game(_) = task.game else {
+            return Self::in_crate(task, dir, instances);
+        };
         let (tx, rx) = mpsc::channel();
         let thread = std::thread::spawn(move || run_game(task, Some(tx)));
         rx.recv_timeout(Duration::from_secs(60))
             .map_err(|_| format!("{}: the game didn't start", task.id))?;
-        Ok(Self::with_host(task, dir, instances, Host::Thread(thread)))
+        Self::with_host(task, dir, instances, Host::Thread(thread)).started()
+    }
+
+    /// A code task: its folder prepared, its crate built and started.
+    fn in_crate(task: &'static Task, dir: &Path, instances: &Path) -> Result<Self, String> {
+        let mut session = Session {
+            task,
+            dir: dir.to_path_buf(),
+            host: None,
+            agent: Tools::new(instances),
+            checker: Tools::new(instances),
+            instances: instances.to_path_buf(),
+        };
+        session.restart_crate()?;
+        session.started()
+    }
+
+    /// Builds the code task's crate from the folder's files and starts it,
+    /// after stopping every game the agent started. `Ok` names the binary.
+    fn restart_crate(&mut self) -> Result<String, String> {
+        let Run::Crate { bin } = self.task.game else {
+            return Err(format!("{} is not a code task", self.task.id));
+        };
+        self.stop_games();
+        let program = build_crate(&self.dir, bin)?;
+        std::fs::create_dir_all(&self.instances).map_err(|e| e.to_string())?;
+        let log = std::fs::File::create(self.dir.join("game.log")).map_err(|e| e.to_string())?;
+        let child = std::process::Command::new(&program)
+            .current_dir(&self.dir)
+            .env("PONKO_INSTANCES_DIR", &self.instances)
+            .env("PONKO_START_PAUSED", "1")
+            .env_remove("CARGO_MANIFEST_DIR")
+            .stdin(std::process::Stdio::null())
+            .stdout(log.try_clone().map_err(|e| e.to_string())?)
+            .stderr(log)
+            .spawn()
+            .map_err(|e| format!("can't start {}: {e}", program.display()))?;
+        self.host = Some(Host::Process(child));
+        self.wait_for_game()?;
+        Ok(format!("built and started {bin}"))
+    }
+
+    /// Waits until the game answers.
+    fn wait_for_game(&mut self) -> Result<(), String> {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while self.checker.call("instance_info", json!({})).is_err() {
+            if let Some(Host::Process(child)) = &mut self.host
+                && let Ok(Some(status)) = child.try_wait()
+            {
+                return Err(format!(
+                    "{}: the game exited ({status}); see {}",
+                    self.task.id,
+                    self.dir.join("game.log").display()
+                ));
+            }
+            if Instant::now() > deadline {
+                return Err(format!(
+                    "{}: the game didn't start; see {}",
+                    self.task.id,
+                    self.dir.join("game.log").display()
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        Ok(())
+    }
+
+    /// Asks every game in the instances folder to quit (a code task's
+    /// agent may have started its own), and ends this session's host.
+    fn stop_games(&mut self) {
+        if let Ok(all) = self.checker.call("list_instances", json!({})) {
+            for i in all.as_array().into_iter().flatten() {
+                let _ = self.checker.call("quit_instance", json!({ "instance": i["id"] }));
+            }
+        }
+        if let Some(Host::Process(mut child)) = self.host.take() {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while matches!(child.try_wait(), Ok(None)) && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        // Until the quitting games have taken their registrations away.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while self
+            .checker
+            .call("list_instances", json!({}))
+            .is_ok_and(|all| all.as_array().is_some_and(|a| !a.is_empty()))
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// Runs the task's start hook, if it has one.
+    fn started(mut self) -> Result<Self, String> {
+        if let Some(start) = self.task.start {
+            let mut probe = Probe {
+                tools: &mut self.checker,
+                dir: &self.dir,
+                build: None,
+            };
+            start(&mut probe).map_err(|e| format!("{}: the start hook failed: {e}", self.task.id))?;
+        }
+        Ok(self)
     }
 
     /// Prepares `dir` and starts the game as `program host <task>` in it,
     /// registering in `instances`; its output goes to `dir/game.log`.
     pub fn in_child(task: &'static Task, dir: &Path, instances: &Path, program: &Path) -> Result<Self, String> {
         prepare(task, dir)?;
+        if let Run::Crate { .. } = task.game {
+            return Self::in_crate(task, dir, instances);
+        }
         std::fs::create_dir_all(instances).map_err(|e| e.to_string())?;
         let log = std::fs::File::create(dir.join("game.log")).map_err(|e| e.to_string())?;
         let child = std::process::Command::new(program)
@@ -280,7 +459,7 @@ impl Session {
             }
             std::thread::sleep(Duration::from_millis(100));
         }
-        Ok(session)
+        session.started()
     }
 
     fn with_host(task: &'static Task, dir: &Path, instances: &Path, host: Host) -> Self {
@@ -290,6 +469,7 @@ impl Session {
             host: Some(host),
             agent: Tools::new(instances),
             checker: Tools::new(instances),
+            instances: instances.to_path_buf(),
         }
     }
 
@@ -297,8 +477,16 @@ impl Session {
     /// reach the game (hot reload checks files a few times a second) with
     /// one tick, then runs the task's checker.
     pub fn check(&mut self) -> Vec<Check> {
+        // A code task is scored from its files: the checker builds the
+        // game and starts it fresh.
+        let build = match self.task.game {
+            Run::Crate { .. } => Some(self.restart_crate()),
+            Run::Game(_) => None,
+        };
         std::thread::sleep(Duration::from_millis(350));
-        if let Err(e) = self.checker.call("run_ticks", json!({ "ticks": 1 })) {
+        if let Err(e) = self.checker.call("run_ticks", json!({ "ticks": 1 }))
+            && build.as_ref().is_none_or(Result::is_ok)
+        {
             return self
                 .task
                 .checks
@@ -313,6 +501,7 @@ impl Session {
         let mut probe = Probe {
             tools: &mut self.checker,
             dir: &self.dir,
+            build,
         };
         let checks = (self.task.check)(&mut probe);
         debug_assert_eq!(
@@ -326,6 +515,10 @@ impl Session {
 
     /// Asks the game to quit and waits for it.
     pub fn finish(mut self) {
+        if let Run::Crate { .. } = self.task.game {
+            self.stop_games();
+            return;
+        }
         let _ = self.checker.call("quit_instance", json!({}));
         match self.host.take() {
             Some(Host::Thread(thread)) => {
@@ -434,8 +627,10 @@ struct Ran {
 /// - `{"call": tool, "args": {...}, "save": {"var": "/json/pointer"}}`: a
 ///   tool call; `"$var"` in later arguments is the saved value. A tool
 ///   error stops the script, unless the step says `"error": true`.
-/// - `{"write": "assets/file", "text": "..."}`: the agent edits a file in
+/// - `{"write": "assets/file", "text": "..."}`: the agent writes a file in
 ///   the task's folder (an agent's own file tools, not MCP).
+/// - `{"edit": "src/main.rs", "old": "...", "new": "..."}`: the agent
+///   replaces text that occurs once in a file.
 /// - `{"until": {"call", "args", "pointer", "equals"}, "each": {"call",
 ///   "args"}, "timeout_secs": 10}`: repeats `each` then `until`'s call
 ///   until the value at `pointer` equals `equals` (waiting for a hot reload).
@@ -479,6 +674,17 @@ fn run_step(
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         std::fs::write(&file, text).map_err(|e| format!("can't write {path}: {e}"))
+    } else if let Some(path) = step["edit"].as_str() {
+        let (old, new) = (
+            step["old"].as_str().ok_or("`edit` needs `old`")?,
+            step["new"].as_str().ok_or("`edit` needs `new`")?,
+        );
+        let file = dir.join(path);
+        let text = std::fs::read_to_string(&file).map_err(|e| format!("can't read {path}: {e}"))?;
+        if text.matches(old).count() != 1 {
+            return Err(format!("`old` must occur once in {path}"));
+        }
+        std::fs::write(&file, text.replacen(old, new, 1)).map_err(|e| format!("can't write {path}: {e}"))
     } else if let Some(until) = step.get("until") {
         // A hang detector: the step ends as soon as its condition holds.
         let deadline = Instant::now() + Duration::from_secs(step["timeout_secs"].as_u64().unwrap_or(10));
@@ -547,7 +753,9 @@ pub fn replay(task: &'static Task, script: &Script, dir: &Path, instances: &Path
         Err(e) => panic!("{e}"),
     };
     let mut ran = Ran::default();
+    // `"$dir"` is the task's folder (for `launch`'s `cwd`).
     let mut vars = serde_json::Map::new();
+    vars.insert("dir".into(), json!(dir.display().to_string()));
     for (i, step) in script.steps.iter().enumerate() {
         if let Err(e) = run_step(step, dir, &mut session.agent, &mut vars, &mut ran) {
             ran.stuck = Some(format!("step {}: {e}", i + 1));
@@ -697,5 +905,23 @@ pub unsafe fn prepare_process(instances: &Path) {
         std::env::set_var("PONKO_INSTANCES_DIR", instances);
         // Hot reload is on in every task; an outside setting must not turn it off.
         std::env::remove_var("PONKO_HOT_RELOAD");
+        prepare_cargo_env();
+    }
+}
+
+/// Makes every cargo this process starts (the checker's builds of a code
+/// task, and the agent's `launch`) build the same way, into
+/// [`crate_target_dir`], so the engine is compiled once.
+///
+/// # Safety
+///
+/// Changes the environment: call it before this process starts threads.
+pub unsafe fn prepare_cargo_env() {
+    // SAFETY: the caller promises no other thread runs yet.
+    unsafe {
+        std::env::set_var("CARGO_TARGET_DIR", crate_target_dir());
+        for flags in ["RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_TARGET_DIR"] {
+            std::env::remove_var(flags);
+        }
     }
 }

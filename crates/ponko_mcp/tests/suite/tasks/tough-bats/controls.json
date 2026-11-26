@@ -1,0 +1,170 @@
+[
+ {
+  "name": "nothing",
+  "why": "bats as weak and as frequent as before",
+  "steps": [],
+  "fails": [
+   "spawner file is right",
+   "level bats have 30 health",
+   "spawned bats have 30 health"
+  ]
+ },
+ {
+  "name": "difficulty scale missed",
+  "why": "the prefab and the level say 30, but the spawner halves a new bat's health",
+  "steps": [
+   {
+    "write": "assets/spawner.json",
+    "text": "{\n  \"prefab\": \"prefabs/bat.json\",\n  \"every_secs\": 6.0,\n  \"max_bats\": 8,\n  \"health_scale\": 0.5\n}\n"
+   },
+   {
+    "until": {
+     "call": "get_resource",
+     "args": {
+      "resource": "Spawning"
+     },
+     "pointer": "/every_secs",
+     "equals": 6.0
+    },
+    "each": {
+     "call": "run_ticks",
+     "args": {
+      "ticks": 1
+     }
+    }
+   },
+   {
+    "write": "assets/prefabs/bat.json",
+    "text": "{\n  \"format\": \"ponko-prefab\",\n  \"version\": 1,\n  \"components\": {\n    \"Transform2D\": {},\n    \"Bat\": null,\n    \"Health\": { \"current\": 30.0 }\n  }\n}\n"
+   },
+   {
+    "write": "assets/levels/cave.json",
+    "text": "{\n  \"format\": \"ponko-world\",\n  \"version\": 1,\n  \"entities\": [\n    { \"entity\": 0, \"components\": { \"Player\": null, \"Transform2D\": { \"position\": [100.0, 300.0] } } },\n    { \"entity\": 1, \"components\": { \"Bat\": null, \"Health\": { \"current\": 30.0 }, \"Transform2D\": { \"position\": [300.0, 200.0] } } },\n    { \"entity\": 2, \"components\": { \"Bat\": null, \"Health\": { \"current\": 30.0 }, \"Transform2D\": { \"position\": [380.0, 420.0] } } },\n    { \"entity\": 3, \"components\": { \"Bat\": null, \"Health\": { \"current\": 30.0 }, \"Transform2D\": { \"position\": [500.0, 160.0] } } },\n    { \"entity\": 4, \"components\": { \"Bat\": null, \"Health\": { \"current\": 30.0 }, \"Transform2D\": { \"position\": [560.0, 380.0] } } }\n  ]\n}\n"
+   }
+  ],
+  "fails": [
+   "spawned bats have 30 health"
+  ]
+ },
+ {
+  "name": "level copies missed",
+  "why": "the prefab changed, but the level's bats are copies, not links to it",
+  "steps": [
+   {
+    "write": "assets/spawner.json",
+    "text": "{\n  \"prefab\": \"prefabs/bat.json\",\n  \"every_secs\": 6.0,\n  \"max_bats\": 8,\n  \"health_scale\": 1.0\n}\n"
+   },
+   {
+    "until": {
+     "call": "get_resource",
+     "args": {
+      "resource": "Spawning"
+     },
+     "pointer": "/every_secs",
+     "equals": 6.0
+    },
+    "each": {
+     "call": "run_ticks",
+     "args": {
+      "ticks": 1
+     }
+    }
+   },
+   {
+    "write": "assets/prefabs/bat.json",
+    "text": "{\n  \"format\": \"ponko-prefab\",\n  \"version\": 1,\n  \"components\": {\n    \"Transform2D\": {},\n    \"Bat\": null,\n    \"Health\": { \"current\": 30.0 }\n  }\n}\n"
+   }
+  ],
+  "fails": [
+   "level bats have 30 health",
+   "spawned bats have 30 health"
+  ]
+ },
+ {
+  "name": "twice as often",
+  "why": "halves the interval instead of doubling it",
+  "steps": [
+   {
+    "write": "assets/spawner.json",
+    "text": "{\n  \"prefab\": \"prefabs/bat.json\",\n  \"every_secs\": 1.5,\n  \"max_bats\": 8,\n  \"health_scale\": 1.0\n}\n"
+   },
+   {
+    "write": "assets/prefabs/bat.json",
+    "text": "{\n  \"format\": \"ponko-prefab\",\n  \"version\": 1,\n  \"components\": {\n    \"Transform2D\": {},\n    \"Bat\": null,\n    \"Health\": { \"current\": 30.0 }\n  }\n}\n"
+   },
+   {
+    "write": "assets/levels/cave.json",
+    "text": "{\n  \"format\": \"ponko-world\",\n  \"version\": 1,\n  \"entities\": [\n    { \"entity\": 0, \"components\": { \"Player\": null, \"Transform2D\": { \"position\": [100.0, 300.0] } } },\n    { \"entity\": 1, \"components\": { \"Bat\": null, \"Health\": { \"current\": 30.0 }, \"Transform2D\": { \"position\": [300.0, 200.0] } } },\n    { \"entity\": 2, \"components\": { \"Bat\": null, \"Health\": { \"current\": 30.0 }, \"Transform2D\": { \"position\": [380.0, 420.0] } } },\n    { \"entity\": 3, \"components\": { \"Bat\": null, \"Health\": { \"current\": 30.0 }, \"Transform2D\": { \"position\": [500.0, 160.0] } } },\n    { \"entity\": 4, \"components\": { \"Bat\": null, \"Health\": { \"current\": 30.0 }, \"Transform2D\": { \"position\": [560.0, 380.0] } } }\n  ]\n}\n"
+   }
+  ],
+  "fails": [
+   "spawner file is right",
+   "spawned bats have 30 health"
+  ]
+ },
+ {
+  "name": "live only",
+  "why": "the running bats get 30, no file changes",
+  "steps": [
+   {
+    "call": "list_entities",
+    "args": {
+     "with": [
+      "Bat"
+     ]
+    },
+    "save": {
+     "b1": "/entities/0/entity",
+     "b2": "/entities/1/entity",
+     "b3": "/entities/2/entity",
+     "b4": "/entities/3/entity"
+    }
+   },
+   {
+    "call": "set_component",
+    "args": {
+     "entity": "$b1",
+     "component": "Health",
+     "value": {
+      "current": 30
+     }
+    }
+   },
+   {
+    "call": "set_component",
+    "args": {
+     "entity": "$b2",
+     "component": "Health",
+     "value": {
+      "current": 30
+     }
+    }
+   },
+   {
+    "call": "set_component",
+    "args": {
+     "entity": "$b3",
+     "component": "Health",
+     "value": {
+      "current": 30
+     }
+    }
+   },
+   {
+    "call": "set_component",
+    "args": {
+     "entity": "$b4",
+     "component": "Health",
+     "value": {
+      "current": 30
+     }
+    }
+   }
+  ],
+  "fails": [
+   "spawner file is right",
+   "level bats have 30 health",
+   "spawned bats have 30 health"
+  ]
+ }
+]

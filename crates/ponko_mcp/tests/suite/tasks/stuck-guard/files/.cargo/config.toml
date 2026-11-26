@@ -1,0 +1,7 @@
+# Every build of this game shares one target folder, so the engine is
+# compiled once and a rebuild after an edit takes seconds.
+[build]
+target-dir = '{{TARGET}}'
+
+[net]
+offline = true
