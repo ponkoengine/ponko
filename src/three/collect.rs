@@ -176,6 +176,10 @@ pub(crate) struct Frame3D {
     /// What each target camera draws, in `RenderPasses::target_cameras` order (only
     /// the main frame has these).
     pub views: Vec<ViewFrame>,
+    /// Target cameras' frames not drawn this frame, kept with what they
+    /// collected so a camera that draws every few frames (a reflection on
+    /// a cadence) doesn't start from nothing each time.
+    pub spare_views: Vec<ViewFrame>,
     /// The other window views' cameras (`SceneSettings::views`): the sun's
     /// cascades are fitted around their views too, and shadow casters are
     /// kept for all of them, so every view reads this frame's shadow maps.
@@ -425,6 +429,25 @@ pub(crate) struct ViewFrame {
 }
 
 impl Frame3D {
+    /// Lines up one view frame per target camera drawing this frame, in
+    /// order of `targets` (their render targets' texture ids): each gets
+    /// the frame its target had when it last drew, so what that frame
+    /// collected and keeps between frames carries over. A camera that draws
+    /// every few frames (a reflection on a cadence) would otherwise collect
+    /// its whole view from nothing each time. Frames of cameras not drawing
+    /// now wait in `spare_views`, at most `live_targets` of them.
+    pub(crate) fn reuse_views(&mut self, targets: impl Iterator<Item = u32>, live_targets: usize) {
+        self.spare_views.append(&mut self.views);
+        for target in targets {
+            let view = match self.spare_views.iter().position(|v| v.target == target) {
+                Some(at) => self.spare_views.swap_remove(at),
+                None => self.spare_views.pop().unwrap_or_default(),
+            };
+            self.views.push(view);
+        }
+        self.spare_views.truncate(live_targets);
+    }
+
     /// Fills the frame with what the camera sees and, with shadows on,
     /// what's inside the sun's shadow box.
     pub fn collect(
@@ -2290,5 +2313,54 @@ mod stable_shadow_tests {
         );
         camera.position = Vec3::splat(100_000.0);
         assert_eq!(slice_sphere(&camera, 0.1, 50.0).1, radius);
+    }
+}
+
+#[cfg(test)]
+mod view_reuse_tests {
+    use super::Frame3D;
+
+    fn targets(frame: &Frame3D) -> Vec<u32> {
+        frame.views.iter().map(|v| v.target).collect()
+    }
+
+    /// A frame with views for `ids`, each marked with its own target.
+    fn drawing(frame: &mut Frame3D, ids: &[u32], live: usize) {
+        frame.reuse_views(ids.iter().copied(), live);
+        for (view, &id) in frame.views.iter_mut().zip(ids) {
+            view.target = id;
+        }
+    }
+
+    #[test]
+    fn a_camera_that_skips_frames_gets_its_frame_back() {
+        let mut frame = Frame3D::default();
+        drawing(&mut frame, &[7], 1);
+        frame.views[0].size = (64, 32); // stands for what it collected
+        drawing(&mut frame, &[], 1);
+        assert!(frame.views.is_empty(), "not drawn this frame");
+        assert_eq!(frame.spare_views.len(), 1, "kept for the next time");
+        drawing(&mut frame, &[7], 1);
+        assert_eq!(frame.views[0].size, (64, 32), "the same frame as before");
+    }
+
+    #[test]
+    fn frames_follow_their_targets_when_cameras_reorder() {
+        let mut frame = Frame3D::default();
+        drawing(&mut frame, &[1, 2], 2);
+        frame.views[0].size = (1, 1);
+        frame.views[1].size = (2, 2);
+        drawing(&mut frame, &[2, 1], 2);
+        assert_eq!(targets(&frame), vec![2, 1]);
+        assert_eq!(frame.views[0].size, (2, 2));
+        assert_eq!(frame.views[1].size, (1, 1));
+    }
+
+    #[test]
+    fn spares_of_freed_targets_are_dropped() {
+        let mut frame = Frame3D::default();
+        drawing(&mut frame, &[1, 2, 3], 3);
+        drawing(&mut frame, &[], 1);
+        assert_eq!(frame.spare_views.len(), 1);
     }
 }

@@ -216,6 +216,27 @@ pub struct GpuMemory {
     pub adapter_note: String,
 }
 
+/// What the operating system says about the GPU's own memory (VRAM), for
+/// this game: [`Graphics::video_memory`](crate::gfx::Graphics::video_memory).
+///
+/// Past [`budget`](Self::budget), the system moves some of the game's
+/// textures and buffers to system memory, and every frame that reads them
+/// waits on the bus: a game that ran at 60 fps can drop to a few frames a
+/// second. Settings screens can compare an estimate against it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct VideoMemory {
+    /// The GPU's own memory, in bytes (what the card is sold with).
+    pub total: u64,
+    /// How much of it the system lets this process use now, in bytes. It
+    /// is less than `total`: the desktop and other programs hold some, and
+    /// the system keeps a share back.
+    pub budget: u64,
+    /// How much of it this process uses now, in bytes, by the system's
+    /// count (all of the game's GPU memory, the driver's included).
+    pub used: u64,
+}
+
 impl GpuMemory {
     /// Each class with its name as reports print it (`"frame_targets"`),
     /// in a fixed order; `total` is not in it.

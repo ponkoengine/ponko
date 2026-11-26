@@ -211,6 +211,10 @@ pub struct Graphics {
     /// two-channel normal map keeps its X and Y (materials rebuild Z).
     #[cfg(feature = "compressed-textures")]
     pub(crate) compressed: std::collections::HashMap<u32, crate::compressed::NormalChannels>,
+    /// How many of their largest mip levels 3D textures loaded from now on
+    /// drop (`set_texture_mip_limit`).
+    #[cfg(feature = "3d")]
+    pub(crate) texture_mip_limit: u32,
 }
 
 impl Graphics {
@@ -267,7 +271,79 @@ impl Graphics {
             autotune: None,
             #[cfg(feature = "compressed-textures")]
             compressed: Default::default(),
+            #[cfg(feature = "3d")]
+            texture_mip_limit: 0,
         }
+    }
+
+    /// What the operating system says about the GPU's own memory (VRAM)
+    /// for this game: the card's size, how much the game may use before
+    /// the system moves some of it to system memory (every frame then
+    /// waits on it), and how much it uses now. For a settings screen that
+    /// warns when the chosen quality won't fit (compare an estimate built
+    /// from [`gpu_memory`](Self::gpu_memory) against `budget`).
+    ///
+    /// Windows only for now (DXGI, whichever backend draws); `None`
+    /// elsewhere, headless, and when the system doesn't say. It asks the
+    /// system each call: a few times a second at most, not every frame.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     assert!(ctx.gfx.video_memory().is_none(), "no GPU when headless");
+    /// });
+    /// ```
+    pub fn video_memory(&self) -> Option<crate::perf::VideoMemory> {
+        self.renderer.as_ref().filter(|_| !self.headless)?.video_memory()
+    }
+
+    /// The GPU memory the engine holds for this game, by class (textures,
+    /// meshes, shadows, frame targets, ...), as the performance report
+    /// counts it: [`GpuMemory`](crate::perf::GpuMemory). Built when asked
+    /// for, walking every texture and buffer: not every frame. `None`
+    /// headless.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     assert!(ctx.gfx.gpu_memory().is_none(), "no GPU when headless");
+    /// });
+    /// ```
+    pub fn gpu_memory(&self) -> Option<crate::perf::GpuMemory> {
+        self.renderer.as_ref().filter(|_| !self.headless)?.gpu_memory()
+    }
+
+    /// Makes 3D textures loaded from now on drop their `levels` largest mip
+    /// levels before they reach the GPU, as Unity's texture mipmap limit
+    /// does: each level halves their width and height and quarters their
+    /// video memory. Use it on GPUs with little video memory, where a world
+    /// that doesn't fit spills into system memory and every frame waits on
+    /// it. 0 (the default) keeps full resolution; at most 4.
+    ///
+    /// It applies to the images of model files (`load_mesh`, scenes and
+    /// their materials) and to texture arrays (`create_texture_array`,
+    /// `load_texture_array`), RGBA and block-compressed alike. Textures keep
+    /// at least 32 pixels on each side, so small masks and lookup strips
+    /// don't change. Textures loaded with `load_texture` (sprites, UI) and
+    /// render targets never do. Already loaded textures keep their size:
+    /// set it before loading the world, or reload what should change.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     ctx.gfx.set_texture_mip_limit(1); // half resolution, a quarter of the memory
+    ///     assert_eq!(ctx.gfx.texture_mip_limit(), 1);
+    /// });
+    /// ```
+    #[cfg(feature = "3d")]
+    pub fn set_texture_mip_limit(&mut self, levels: u32) {
+        self.texture_mip_limit = levels.min(crate::mip_limit::MAX_LIMIT);
+    }
+
+    /// The limit [`set_texture_mip_limit`](Self::set_texture_mip_limit) set.
+    #[cfg(feature = "3d")]
+    pub fn texture_mip_limit(&self) -> u32 {
+        self.texture_mip_limit
     }
 
     /// Sets the background color. It stays until you change it. In 3D it

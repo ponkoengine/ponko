@@ -1483,10 +1483,14 @@ impl Graphics {
 
     /// A texture of a model's image: its blocks uploaded as they are, else
     /// its RGBA8.
+    /// Both drop the largest mip levels the texture mip limit asks for.
     fn model_texture(&mut self, image: &gltf::Image, blocks: Option<&gltf::Blocks>) -> crate::texture::Texture {
         #[cfg(feature = "compressed-textures")]
         if let Some(blocks) = blocks {
-            let texture = self.make_compressed_texture(blocks);
+            let texture = match self.compressed_levels_to_drop(blocks) {
+                0 => self.make_compressed_texture(blocks),
+                drop => self.make_compressed_texture(&blocks.starting_at_level(drop)),
+            };
             self.textures_live.insert(texture.id);
             return texture;
         }
@@ -1494,7 +1498,28 @@ impl Graphics {
         if let Some(never) = blocks {
             match *never {}
         }
-        self.create_texture(image.0, image.1, &image.2)
+        match crate::mip_limit::levels_to_drop(image.0, image.1, self.texture_mip_limit) {
+            0 => self.create_texture(image.0, image.1, &image.2),
+            drop => {
+                let (w, h, rgba) = crate::mip_limit::reduce(image.0, image.1, &image.2, drop);
+                self.create_texture(w, h, &rgba)
+            }
+        }
+    }
+
+    /// How many of its largest stored levels a block-compressed texture
+    /// drops under the texture mip limit: no more than it has below them,
+    /// and only down to a level of whole blocks.
+    #[cfg(feature = "compressed-textures")]
+    pub(crate) fn compressed_levels_to_drop(&self, image: &crate::compressed::CompressedImage) -> usize {
+        let wanted = crate::mip_limit::levels_to_drop(image.width, image.height, self.texture_mip_limit) as usize;
+        (1..=wanted.min(image.levels.len().saturating_sub(1)))
+            .rev()
+            .find(|&level| {
+                let (w, h) = image.level_size(level);
+                crate::compressed::block_aligned(w, h)
+            })
+            .unwrap_or(0)
     }
 
     /// Frees the materials and textures glTF file `path` made, as
@@ -2387,8 +2412,17 @@ impl Ctx {
             .chain(capture_cameras.iter())
             .filter(|c| live(c));
         let count = cameras.clone().count();
-        let views = &mut self.gfx.frame3d.views;
-        views.resize_with(count + self.gfx.icons.len(), Default::default);
+        // Each target camera, then each icon, gets the frame its target had
+        // when it last drew (see `Frame3D::reuse_views`).
+        let frame3d = &mut self.gfx.frame3d;
+        frame3d.reuse_views(
+            cameras
+                .clone()
+                .map(|c| c.target.texture.id)
+                .chain(self.gfx.icons.iter().map(|i| i.camera.target.texture.id)),
+            targets.len(),
+        );
+        let views = &mut frame3d.views;
         let lighting = super::Lighting {
             shadows: false,
             gi: super::GlobalIllumination {

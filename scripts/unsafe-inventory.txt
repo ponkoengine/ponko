@@ -142,6 +142,7 @@ src/three/gltf_ext.rs | decode_meshopt | src/three/gltf_ext.rs::meshopt_compress
 src/render/hdr_metadata.rs | send | src/render/hdr_metadata.rs::a_metal_layer_configured_for_pq_takes_hdr10_metadata | gpu
 src/render/hdr_metadata.rs | set_hdr_metadata | src/render/hdr_metadata.rs::a_dxgi_swap_chain_takes_hdr10_metadata | windows
 src/render/memory.rs | metal_allocated_bytes | src/render/gpu_memory_render_test.rs::adapter_figure_child | gpu
+src/render/memory.rs | dxgi_video_memory | src/render/memory.rs::dxgi_reports_the_video_memory_of_a_real_adapter | windows
 
 # Screen readers: the platform adapters attach to a view (macOS) or a window
 # (Windows): one with no window, one never shown, and, for the engine's own

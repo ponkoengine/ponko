@@ -145,6 +145,22 @@ impl Graphics {
                 layer.len()
             )));
         }
+        // The texture mip limit: every layer without its largest levels.
+        let drop = crate::mip_limit::levels_to_drop(width, height, self.texture_mip_limit);
+        let reduced: Vec<Vec<u8>> = if drop > 0 {
+            layers
+                .iter()
+                .map(|layer| crate::mip_limit::reduce(width, height, layer, drop).2)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let reduced_layers: Vec<&[u8]> = reduced.iter().map(Vec::as_slice).collect();
+        let (layers, width, height) = if drop > 0 {
+            (&reduced_layers[..], (width >> drop).max(1), (height >> drop).max(1))
+        } else {
+            (layers, width, height)
+        };
         let id = self.assets3d.array_ids.next("texture array");
         let slot = id & INDEX_MASK;
         if let Some(renderer) = self.renderer.as_mut()
@@ -320,6 +336,14 @@ impl Graphics {
             layer.srgb = srgb;
             layer.levels.truncate(levels);
         }
+        // The texture mip limit: every layer from the same smaller level.
+        let drop = self.compressed_levels_to_drop(&layers[0].1);
+        if drop > 0 {
+            for (_, layer) in layers.iter_mut() {
+                *layer = layer.starting_at_level(drop);
+            }
+        }
+        let (width, height) = (layers[0].1.width, layers[0].1.height);
         let id = self.assets3d.array_ids.next("texture array");
         let slot = id & INDEX_MASK;
         if let Some(renderer) = self.renderer.as_mut()
