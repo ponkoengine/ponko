@@ -263,7 +263,7 @@ pub(crate) struct Desc {
 
 impl Resource {
     /// Every resource, in declaration order.
-    pub(crate) const ALL: [Resource; 56] = {
+    pub(crate) const ALL: [Resource; 58] = {
         use Resource::*;
         [
             VisibleDraws,
