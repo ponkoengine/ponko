@@ -470,6 +470,13 @@ git add api
   public ones, `3d` included) and, for `ponko`, `3d` (the defaults plus `3d`).
   A set that lists the same as `default` has no file. Blanket and auto-trait
   impls are left out as noise; derived impls (`Clone`, `Debug`) stay.
+- **Experimental items** (`scripts/experimental-api.txt`, STABILITY.md
+  "Maturity levels") are listed apart, in `api/<crate>/experimental.txt`,
+  from every set: the other files are exactly the API the versions cover. A
+  change to them still shows up in the diff. Adding an item to the list (or
+  taking one off) moves its lines on the next `update`;
+  `python3 scripts/experimental-api.py check` says when the list, the guide's
+  levels, `api/` and the C header disagree.
 - **Reading a failure.** The output shows the diff and the command above. If
   you cannot run the tool, say so in the pull request and a maintainer
   regenerates the folder. A diff you did
@@ -521,6 +528,11 @@ before merging a change to public API.
   `bench-internals`, which are not API). A new publishable crate is picked up
   by itself. `ponko_macros` is listed as not checked: the tool reads no API
   from a proc-macro crate.
+- **Experimental items** don't count. A crate whose every `Failed in:` line
+  names an item of `scripts/experimental-api.txt` (or one of its cargo
+  features) is reported as `experimental`, not as a break, on any branch: they
+  are outside the promise (STABILITY.md, "Unstable"). A name the tool prints
+  that a covered item shares (a short type name) never excuses a failure.
 - **What fails.** On a `release-*` branch (patch releases) and on a pull request
   into one, every break fails the check. On `main`, breaks pile up until the next
   minor release, so the comparison with crates.io only reports them. What
