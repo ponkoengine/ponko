@@ -25,10 +25,22 @@ boundary, and `each_par` runs them on all cores.
 
 ## Get the library
 
-**From a release.** Each release, starting with 0.1.0, has an archive
-per platform: `ponko-v0.1.0-linux-x86_64.tar.gz`,
-`ponko-v0.1.0-macos-arm64.tar.gz` and `ponko-v0.1.0-windows-x86_64.zip`.
-Each holds
+**From a release.** Each release has an archive per platform. 0.1.0 had
+the first three; from 0.2.0 on there are six, named like
+`ponko-v0.2.0-linux-x86_64.tar.gz`:
+
+| Archive | Rust target | Runs on |
+|---|---|---|
+| `linux-x86_64.tar.gz` | `x86_64-unknown-linux-gnu` | 64-bit Intel and AMD Linux |
+| `linux-arm64.tar.gz` | `aarch64-unknown-linux-gnu` | 64-bit Arm Linux, glibc 2.28 or newer |
+| `macos-arm64.tar.gz` | `aarch64-apple-darwin` | Apple silicon Macs |
+| `macos-x86_64.tar.gz` | `x86_64-apple-darwin` | Intel Macs |
+| `windows-x86_64.zip` | `x86_64-pc-windows-msvc` | 64-bit Intel and AMD Windows |
+| `windows-arm64.zip` | `aarch64-pc-windows-msvc` | Windows on Arm |
+
+The Linux libraries also need ALSA (`libasound2`) and udev (`libudev1`),
+which desktop distributions have. The two macOS archives are separate: for a
+universal library, join them with `lipo -create`. Each archive holds
 
 - `include/`: `ponko.h` and `ponko.hpp`, matching the library next to them;
 - `lib/`: `ponko_ffi` as a shared library (`libponko_ffi.so`,
@@ -75,7 +87,11 @@ For your own game, copy the recipe in `examples/cpp/CMakeLists.txt`: include
 the two headers, link `ponko_ffi`, ship its shared library next to your
 executable, and put your textures in an `assets/` folder next to it (the
 example copies the repository's `assets/`). Rebuild against the matching
-header when you update the engine.
+header when you update the engine. Windows finds the library next to the
+executable by itself. On macOS and Linux, give the program an rpath to it:
+`-Wl,-rpath,@executable_path` on macOS (the release libraries' install name
+is `@rpath/libponko_ffi.dylib`) and `-Wl,-rpath,'$ORIGIN'` on Linux, or
+CMake's `INSTALL_RPATH`.
 
 ### The ABI version
 
