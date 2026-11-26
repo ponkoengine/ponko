@@ -561,6 +561,9 @@ fn serve_lines(
     auth_timeout: Duration,
 ) {
     let _ = stream.set_nonblocking(false);
+    // Replies are whole lines in one write (see `write_line`): send each
+    // at once rather than wait for the client to acknowledge the last.
+    let _ = stream.set_nodelay(true);
     // A client that doesn't read its replies can't hold the connection
     // either: until it sends the token, a blocked write gives up too.
     let _ = stream.set_write_timeout(Some(auth_timeout));
@@ -602,19 +605,29 @@ fn serve_lines(
             // The first request must carry the token: say why, then hang
             // up, so strangers get one reply and no more.
             drop(owed_reply);
-            let _ = writeln!(writer, "{reply}").and_then(|()| writer.flush());
+            let _ = write_line(&mut writer, &reply);
             hang_up(&writer);
             return;
         }
         if reply["result"]["bound_to_connection"] == true {
             *bound_scenario = true;
         }
-        let written = writeln!(writer, "{reply}").and_then(|()| writer.flush());
+        let written = write_line(&mut writer, &reply);
         drop(owed_reply);
         if written.is_err() {
             return;
         }
     }
+}
+
+/// Writes `reply` and its newline in one write. Written piece by piece (as
+/// `writeln!` does), a connection kept open for many requests can hold the
+/// last piece back until the client acknowledges the first, which some
+/// systems delay by tens of milliseconds.
+fn write_line(writer: &mut TcpStream, reply: &Value) -> std::io::Result<()> {
+    let mut line = reply.to_string();
+    line.push('\n');
+    writer.write_all(line.as_bytes())
 }
 
 /// Whether `sent` is `token`, in time that doesn't depend on where they
