@@ -9,6 +9,10 @@
                                     the GitHub release's notes, to FILE (a
                                     release's notes end with a link to the
                                     web gallery of the examples)
+    release-check.py bump X.Y.Z [--dry-run]
+                                    set every publishable crate, the requirements
+                                    between them and the docs' and templates'
+                                    `ponko = "X.Y"` lines to that version
     release-check.py published      every version of our crates on crates.io
                                     has a git tag
     release-check.py selftest       check the decisions with made-up input
@@ -273,8 +277,10 @@ def migration_problems(version, section, chapter, summary):
 
 
 # Where the docs and templates write the engine's own version requirement.
-PIN_FILES = ("book/src/getting-started.md", "book/src/tutorial-2d.md", "book/src/tutorial-3d.md",
+PIN_FILES = ("README.md", "book/src/*.md", "book/src/*/*.md",
              "crates/ponko_cli/templates/*/Cargo.toml.liquid")
+# The migration chapters and release pages quote old versions on purpose.
+PIN_SKIP = re.compile(r"(?:^|/)(?:migrating-to-|release-)[\w.-]*\.md$")
 PIN = re.compile(r'^\s*ponko\s*=\s*(?:\{\s*version\s*=\s*)?"(\d+\.\d+)(?:\.\d+)?(?:-rc\.\d+)?"', re.M)
 
 
@@ -294,8 +300,57 @@ def pin_texts(root=ROOT):
     texts = {}
     for pattern in PIN_FILES:
         for path in sorted(root.glob(pattern)):
-            texts[str(path.relative_to(root))] = path.read_text(encoding='utf-8')
+            name = path.relative_to(root).as_posix()
+            if not PIN_SKIP.search(name):
+                texts[name] = path.read_text(encoding='utf-8')
     return texts
+
+
+MANIFESTS = ("Cargo.toml", "crates/*/Cargo.toml")
+SIBLING = r'(?m)^(\s*(?:{names})\s*=\s*\{{[^}}\n]*?\bversion\s*=\s*")[^"]+(")'
+
+
+def bumped(version, files, names):
+    """{name: new text} for the files that change when the release is `version`.
+
+    files: {name: text} of the workspace manifests (MANIFESTS) and of the
+    pins (pin_texts()); names: the publishable crates. A publishable crate's
+    `[package] version` becomes `version`, every one-line requirement on a
+    sibling (`ponko_ecs = { path = ..., version = "..." }`, in any manifest)
+    too, and each `ponko = "X.Y"` pin the version's minor."""
+    minor = ".".join(version.split("-")[0].split(".")[:2])
+    sibling = re.compile(SIBLING.format(names="|".join(sorted(names))))
+    out = {}
+    for name, text in files.items():
+        new = text
+        if name.endswith("Cargo.toml"):
+            package = tomllib.loads(text).get("package")
+            if package and package.get("publish") is not False and package.get("name") in names:
+                new = re.sub(r'(?ms)^(\[package\][^\[]*?^version\s*=\s*")[^"]+(")',
+                             lambda m: m.group(1) + version + m.group(2), new, count=1)
+            new = sibling.sub(lambda m: m.group(1) + version + m.group(2), new)
+        else:
+            new = PIN.sub(lambda m: re.sub(r'"[^"]+"$', f'"{minor}"', m.group(0)), new)
+        if new != text:
+            out[name] = new
+    return out
+
+
+def bump(version, dry_run, root=ROOT):
+    """Sets the crates, their sibling requirements and the docs' pins to `version` (bumped())."""
+    if not re.fullmatch(r"\d+\.\d+\.\d+(?:-rc\.[1-9]\d*)?", version):
+        sys.exit(f"`{version}` is not X.Y.Z or X.Y.Z-rc.N")
+    files = {p.relative_to(root).as_posix(): p.read_text(encoding="utf-8")
+             for pattern in MANIFESTS for p in sorted(root.glob(pattern))}
+    files.update(pin_texts(root))
+    changed = bumped(version, files, {name for name, _, _ in crates(root)})
+    for name, text in sorted(changed.items()):
+        print(("would change " if dry_run else "changed ") + name)
+        if not dry_run:
+            (root / name).write_text(text, encoding="utf-8", newline="\n")
+    if not dry_run:
+        print("Now refresh Cargo.lock: cargo update --workspace")
+    return 0
 
 
 def problems(tag, crate_list, changelog_text, fragments, book=None, pins=None):
@@ -683,6 +738,23 @@ def selftest():
     assert problems("v0.0.2", ok, log, [], None, {"a.md": 'ponko = "0.1"\n'}) == [
         'a.md tells people to depend on ponko "0.1", not "0.0"'], "problems() runs the pin check"
     assert len(pin_texts()) >= 5, "finds the real getting-started, tutorials and templates"
+    assert "book/src/3d.md" in pin_texts() and not any("migrating-to-" in n for n in pin_texts()), \
+        "every chapter's pins, but not the migration chapters' old code"
+    # The bump: package versions, sibling requirements anywhere, the docs' pins.
+    files = {
+        "Cargo.toml": '[package]\nname = "ponko"\nversion = "0.1.0"\n\n[dependencies]\n'
+                      'ponko_ecs = { path = "crates/ponko_ecs", version = "0.1.0", features = ["x"] }\n'
+                      'serde = { version = "1.0.1" }\n',
+        "crates/ponko_bench/Cargo.toml": '[package]\nname = "ponko_bench"\nversion = "0.1.0"\npublish = false\n'
+                                         '[dependencies]\nponko = { path = "../..", version = "0.1.0" }\n',
+        "book/src/3d.md": 'x\nponko = { version = "0.1", features = ["3d"] }\nponko = "0.1"\n',
+    }
+    out = bumped("0.2.0-rc.1", files, {"ponko", "ponko_ecs"})
+    assert 'version = "0.2.0-rc.1"\n' in out["Cargo.toml"] and 'version = "0.2.0-rc.1", features' in out["Cargo.toml"]
+    assert 'serde = { version = "1.0.1" }' in out["Cargo.toml"], "other crates keep their requirement"
+    assert out["crates/ponko_bench/Cargo.toml"].count('"0.1.0"') == 1, "an unpublished crate keeps its own version"
+    assert out["book/src/3d.md"] == 'x\nponko = { version = "0.2", features = ["3d"] }\nponko = "0.2"\n'
+    assert pin_problems("0.2.0", {k: v for k, v in out.items() if k.endswith(".md")}) == []
     real = license_problems()
     assert real == [], f"the sub-crates' license files: {real}"
     names = {n for n, _, _ in crates()}
@@ -696,6 +768,8 @@ def main():
         return check(sys.argv[2], "--on-branch" in sys.argv)
     if command == "notes" and len(sys.argv) > 3:
         return notes(sys.argv[2], sys.argv[3])
+    if command == "bump" and len(sys.argv) > 2:
+        return bump(sys.argv[2], "--dry-run" in sys.argv)
     if command == "published":
         return published()
     if command == "selftest":

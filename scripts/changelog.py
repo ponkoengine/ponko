@@ -463,6 +463,8 @@ def chapter_text(version, groups):
     return '\n'.join([
         f'# {chapter_title(version)}',
         '',
+        '> **Maturity: not a feature.** A migration guide for one release.',
+        '',
         f'Ponko {chapter_stem(version)} breaks the API in the ways listed here, grouped by area. Each '
         'entry says what changed, what to write instead, and shows the code before and after. The '
         'compiler names most of them; look the message up below. The code after each change is '
@@ -549,8 +551,13 @@ def story_of(page):
     return page.split(STORY_START, 1)[1].split(STORY_END, 1)[0].strip('\n')
 
 
-def guide_links(text):
-    """Relative chapter links (`(ecs.md#x)`) as links into the guide on the website, for CHANGELOG.md."""
+def guide_links(text, root=ROOT):
+    """A release page's relative links as absolute ones, for CHANGELOG.md and the GitHub release.
+
+    A chapter (`(ecs.md#x)`) goes to the guide on the website; a file of the
+    repository (`(../../STABILITY.md)`) to it on the project's host (PROJECT_URL)."""
+    host = (root / 'PROJECT_URL').read_text(encoding='utf-8').strip() if (root / 'PROJECT_URL').exists() else ''
+    text = re.sub(r'\]\(\.\./\.\./([^)\s]+)\)', lambda m: f']({host}/blob/main/{m.group(1)})', text)
     return re.sub(r'\]\((?!https?:|#)([\w./-]+?)\.md(#[\w-]+)?\)',
                   lambda m: f']({GUIDE}/{m.group(1)}.html{m.group(2) or ""})', text)
 
@@ -593,7 +600,8 @@ def release_page(version, existing, generated):
     """The release page with its generated part replaced (or a new page with an empty story)."""
     if existing is None:
         existing = '\n'.join([
-            f'# {release_page_title(version)}', '', STORY_START,
+            f'# {release_page_title(version)}', '',
+            '> **Maturity: not a feature.** The release notes of one release.', '', STORY_START,
             f'Ponko {chapter_stem(version)} is ... (one paragraph: what the release is about, for a '
             'game developer), then **Highlights**: one bullet per area that matters, each linking '
             'its guide chapter.', STORY_END, '', NOTES_START, NOTES_END, ''])
@@ -953,7 +961,8 @@ def selftest():
                      '  Instead: wrap the argument, `Baz::new(x)`.', '  It keeps the old meaning.']
     # The chapter form has everything, grouped by area.
     chapter = chapter_text('0.2.0', [('Rendering', found[1:]), ('ECS and systems', found[:1])])
-    assert chapter.startswith('# Migrating from 0.1 to 0.2\n')
+    assert chapter.startswith('# Migrating from 0.1 to 0.2\n\n> **Maturity: not a feature.**'), \
+        'every chapter in SUMMARY.md says its maturity (scripts/maturity.py)'
     assert '### `Foo::bar` takes a `Baz` now\n' in chapter and '### `Qux` is gone\n' in chapter
     assert chapter.index('## ECS and systems') < chapter.index('`Foo::bar` takes') \
         < chapter.index('## Rendering') < chapter.index('`Qux` is gone'), 'areas in AREAS order'
@@ -1024,6 +1033,8 @@ def selftest():
     assert 'foo.bar' not in text, 'the changelog has no snippets'
     # The story goes on top once, with chapter links into the guide.
     top = ['', '### Added', '- x']
+    assert guide_links('[s](../../STABILITY.md)').endswith('/blob/main/STABILITY.md)') and \
+        '..' not in guide_links('[s](../../STABILITY.md)')
     add_story(top, 'Ponko 0.2 is here.\n\n- [ECS](ecs.md#queries), [site](https://x.dev/a.md)')
     add_story(top, 'Ponko 0.2 is here.')
     assert top[:4] == ['', 'Ponko 0.2 is here.', '', f'- [ECS]({GUIDE}/ecs.html#queries), [site](https://x.dev/a.md)']
@@ -1052,7 +1063,7 @@ def selftest():
             assert 'patch release' in str(error)
         # The release page: a new one has an empty story; --notes fills its generated part.
         page = notes(tmp, '0.2.0', False)
-        assert page.startswith("# What's new in 0.2\n") and STORY_START in page
+        assert page.startswith("# What's new in 0.2\n\n> **Maturity: not a feature.**") and STORY_START in page
         assert '## Breaking changes at a glance' in page and '(migrating-to-0.2.md#qux-is-gone)' in page
         assert '| **All** |' in page
         story_page = tmp / 'book' / 'src' / 'release-0.2.md'

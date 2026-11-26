@@ -1,5 +1,7 @@
 # What's new in 0.2
 
+> **Maturity: not a feature.** The release notes of one release.
+
 <!-- release story: written by hand, copied to CHANGELOG.md by the fold -->
 Ponko 0.2 grows the engine from "a fast 2D and 3D core" into one you can
 ship a whole game with. It adds the tools around the code (an editor, an
@@ -9,7 +11,6 @@ and multiplayer from rollback to dedicated servers, while the simple path
 stays `Game::new()`, systems and `.run()`. Where it breaks the API, the
 [migration guide](migrating-to-0.2.md) lists each change with the code
 before and after.
-The [CHANGELOG](../../CHANGELOG.md) has every change, grouped by area.
 
 **Highlights**
 
