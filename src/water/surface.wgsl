@@ -203,7 +203,14 @@ fn surface(s: Surface) -> Surface {
     let scatter = material.custom[1].rgb * water_ambient();
     var color = vec3<f32>(0.0);
 
-    if dot(view, wave.normal) >= 0.0 {
+    // The engine flips the mesh's up normal on back faces. Use that side
+    // near the surface: the filtered wave normal can point away from the
+    // viewer even on a front face. Outside the waves' height range, use
+    // the camera's side so overlapping triangles cannot draw the underside
+    // over water seen from above (or vice versa).
+    let camera_height = frame.camera.y - s.origin.y;
+    let from_above = select(s.normal.y > 0.0, camera_height > 0.0, abs(camera_height) > WATER_WAVE_REACH);
+    if from_above {
         // Seen from above. What lies under the surface, bent by its normal.
         let behind = scene_position(s.screen);
         let solid = water_solid(behind);
