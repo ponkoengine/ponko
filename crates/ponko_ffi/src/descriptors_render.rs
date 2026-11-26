@@ -793,11 +793,14 @@ pub struct PonkoTargetCameraEx {
     /// `cull_box_max` are drawn (Rust `TargetCamera::cull_box`). Default
     /// false: everything in view.
     pub has_cull_box: bool,
+    /// One corner of the culling box (either order; version 3).
     pub cull_box_min: PonkoVec3,
+    /// The opposite corner (version 3).
     pub cull_box_max: PonkoVec3,
     /// Clear to `clear` (alpha too) instead of the main view's clear colour
     /// and sky (Rust `TargetCamera::clear`). Default false.
     pub has_clear: bool,
+    /// The background, as Rust `Color` (version 3).
     pub clear: PonkoColor,
 }
 assert_header!(PonkoTargetCameraEx);
@@ -815,14 +818,14 @@ impl Versioned for PonkoTargetCameraEx {
     }
 }
 
-/// The fields version 3 added, at their defaults: no culling box, the main
-/// view's background.
-fn defaults_v3() -> PonkoTargetCameraEx {
+/// A descriptor holding `target_camera`, with every later field at its
+/// default: particles drawn, debug drawing `PONKO_DEBUG_DRAW_DEFAULT`, no
+/// culling box, the main view's background.
+fn target_ex_defaults(target_camera: PonkoTargetCamera) -> PonkoTargetCameraEx {
     PonkoTargetCameraEx {
         struct_size: size_of::<PonkoTargetCameraEx>() as u32,
         version: PONKO_TARGET_CAMERA_EX_VERSION,
-        // SAFETY: plain data, all-zero valid.
-        target_camera: unsafe { std::mem::zeroed() },
+        target_camera,
         particles: true,
         debug_draw: debug_draw_to_c(None),
         has_cull_box: false,
@@ -862,15 +865,7 @@ pub unsafe extern "C" fn ponko_target_camera_ex_from(
     // SAFETY: forwarded caller contract.
     boundary(|| unsafe {
         let camera = camera.as_ref().ok_or_else(|| invalid("camera is null"))?;
-        let value = PonkoTargetCameraEx {
-            struct_size: size_of::<PonkoTargetCameraEx>() as u32,
-            version: PONKO_TARGET_CAMERA_EX_VERSION,
-            target_camera: *camera,
-            particles: true,
-            debug_draw: debug_draw_to_c(None),
-            ..defaults_v3()
-        };
-        write_desc(out_camera, &value)
+        write_desc(out_camera, &target_ex_defaults(*camera))
     })
 }
 
@@ -904,15 +899,8 @@ pub unsafe extern "C" fn ponko_ctx_set_target_cameras_ex(
             std::slice::from_raw_parts(cameras, count)
         };
         // Fields past a caller's version keep their defaults.
-        let defaults = PonkoTargetCameraEx {
-            struct_size: size_of::<PonkoTargetCameraEx>() as u32,
-            version: PONKO_TARGET_CAMERA_EX_VERSION,
-            // SAFETY: plain data, all-zero valid.
-            target_camera: std::mem::zeroed(),
-            particles: true,
-            debug_draw: debug_draw_to_c(None),
-            ..defaults_v3()
-        };
+        // SAFETY: plain data, all-zero valid.
+        let defaults = target_ex_defaults(std::mem::zeroed());
         for &camera in given {
             let d = read_desc(camera, defaults)?;
             list.push(d.target_camera);
@@ -1014,6 +1002,11 @@ mod tests {
             PonkoPostEx::len_of(4),
             Some(offset_of!(PonkoPostEx, auto_exposure_mask) + size_of::<PonkoTexture>())
         );
+        assert_eq!(
+            PonkoTargetCameraEx::len_of(3),
+            Some(offset_of!(PonkoTargetCameraEx, clear) + size_of::<PonkoColor>())
+        );
+        assert_eq!(PonkoTargetCameraEx::len_of(4), None);
         assert_eq!(PonkoPostEx::len_of(5), None);
     }
 

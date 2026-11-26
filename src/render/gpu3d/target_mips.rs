@@ -154,4 +154,4 @@ impl MipMaker {
     }
 }
 
-pub(crate) use crate::render::gpu_textures::first_level;
+pub(super) use crate::render::gpu_textures::first_level;

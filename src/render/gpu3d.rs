@@ -150,7 +150,6 @@ use shadow_cache::ShadowCache;
 use shadows::ShadowMaps;
 use std::ops::Range;
 use std::sync::atomic::Ordering;
-pub(super) use target_mips::first_level;
 pub(in crate::render) use targets::*;
 pub(crate) use variants::{Instancing, Pass, PipelineRole, ShaderVariant, Sides};
 
