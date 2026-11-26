@@ -2217,7 +2217,7 @@ static void screen_reflections(ponko::ctx& ctx) {
 static void thin_reflections(ponko::ctx& ctx) {
     auto post = ctx.post_ex(); // version 2 has ssr_thin_objects
     post.post.anti_aliasing = uint32_t(ponko::anti_aliasing::smaa);
-    post.ssr_thin_objects = true; // about 0.2 ms more at 1440p
+    post.ssr_thin_objects = true; // 0.2 ms and more at 1440p; only the ultra preset has it on
     ctx.set_post(post);
 }
 // ANCHOR_END: ssr_thin
