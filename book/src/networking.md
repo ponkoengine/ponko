@@ -170,17 +170,21 @@ does that on the I key). The Steam calls take and return Ponko's own types:
 `SteamClient` (started once with `SteamClient::init_app`), `SteamLobbyId` and
 `SteamUserId` (64-bit numbers: `from_raw`, `raw`, and they print and parse as
 that number), so a new version of the `steamworks` crate doesn't change your
-code. For the parts of Steam Ponko doesn't wrap (achievements, stats, rich
-presence), `client.unstable_steamworks()` is the `steamworks` client
-underneath and `ponko::net::unstable_steamworks` the crate; those are
+code. Achievements, stats, cloud saves, rich presence, the overlay and the
+Deck's text input are `ponko::steam::Steam` ([Shipping on Steam](steam.md);
+`Steam::with_client` shares this client). For the parts of Steam Ponko
+doesn't wrap (Workshop, inventory, leaderboards), `client.unstable_steamworks()`
+is the `steamworks` client underneath and `ponko::net::unstable_steamworks`
+the crate; those are
 [unstable](https://github.com/ponkoengine/ponko/blob/main/STABILITY.md#unstable),
 so their `steamworks` version may change in any Ponko release.
 
 Shipping: the game needs Steam running, its Steam app id (480, Valve's
 test app "Spacewar", works for development) and Valve's `libsteam_api`
 library next to the executable (`libsteam_api.dylib`, `libsteam_api.so`
-or `steam_api64.dll`). Cargo puts it there for `cargo run`, examples and
-tests; when you package the game, copy it from `target/<profile>/`. For C
+or `steam_api64.dll`). Cargo finds it for `cargo run`, examples and
+tests, and `ponko package` puts it beside the program
+([Shipping on Steam](steam.md#depots-from-ponko-package)). For C
 and C++, build ponko_ffi with `--features steam`.
 
 Try it with two Steam accounts on two machines:
@@ -767,9 +771,8 @@ unencrypted**. Session nonces reject delayed traffic from earlier connections,
 and the address cookie proves only that a client receives at its address;
 neither authenticates users. Use a trusted network or a secure tunnel;
 public Internet authentication, encryption and admission policy belong in a
-secure transport. This message API currently supports UDP and memory only.
-With feature `steam`, `NetMessages` uses Steam Networking Messages on a
-separate channel from lockstep. Steam sends unreliable packets without Nagle;
+secure transport. With feature `steam`, `NetMessages` uses Steam Networking
+Messages on a separate channel from lockstep (or Networking Sockets, below). Steam sends unreliable packets without Nagle;
 renet supplies delivery, ordering and fragmentation. Each transport packet is
 at most 1,500 bytes, below Steam's message limit. `Lane::ReliableUnordered`
 (`PONKO_LANE_RELIABLE_UNORDERED` in C++) retries without ordering messages.
@@ -808,6 +811,70 @@ if lobby_id.is_none() {
 
 ```cpp
 {{#include ../../examples/cpp/guide.cpp:steam_messages}}
+```
+
+</div>
+</div>
+
+#### Steam Networking Sockets: connections
+
+`steam_host` sends through Steam Networking Messages: no connections, each
+packet addressed to a Steam user. It stays the default for games among
+friends. `NetMessages::steam_sockets_host` sends the same message traffic
+through Steam Networking Sockets instead: every lobby member opens a
+connection to the host, relayed through Valve's network, and the host
+accepts or refuses each one. Use it for a host that runs on its own (a
+headless server process) and for games that want a connection per player.
+
+| | `steam_host` (Messages) | `steam_sockets_host` (Sockets) |
+|---|---|---|
+| Transport | connectionless messages to a Steam user | one connection per client, to the host |
+| Relayed by Valve | yes | yes |
+| Lobby | friends-only | the visibility you pass (`Public` for a host nobody plays on) |
+| Joining | `steam_join` | the same `steam_join`: it reads the host's choice from the lobby |
+| Who can send to the host | lobby members (others are filtered) | lobby members; the host refuses other connections |
+| Leaving the lobby | the host stops hearing that player | the host closes that player's connection at once |
+
+Everything else is the same: lanes, events, `steam_peer`, invites, lobby
+metadata and the protocol check. The host's protocol metadata names its
+carrier (`ponko-messages-2` for Messages, as before; `ponko-messages-2-sockets`
+for Sockets), so a joiner from an older version refuses a Sockets host with
+an error from `poll` instead of a silent timeout, and still joins a
+Messages host. A dropped connection is dialed again while the client is
+still in the lobby; renet's resends cover what was lost meanwhile, and the
+session only ends if the gap outlasts the timeout.
+
+A dedicated host is a game process run headless (`Game::run_headless` or
+no `Game` at all) that is signed in to a Steam account of its own: start it
+with `steam_sockets_host`, give players its lobby id (invites, rich presence
+or your own server list) and poll it every frame. Steam's anonymous game
+server login (`SteamGameServer`, no account) is not wrapped yet.
+
+<div class="lang-pair">
+<div class="lang-rust">
+
+```rust,no_run
+use ponko::prelude::*;
+// A host process nobody plays on, signed in to its own Steam account.
+let client = ponko::net::SteamClient::init_app(480)?;
+let public = ponko::net::SteamLobbyVisibility::Public;
+let mut net = ponko::net::NetMessages::steam_sockets_host(&client, public, 16)?;
+loop {
+    net.poll()?; // players join with NetMessages::steam_join(&client, lobby id)
+    for event in net.events() {
+        let _ = event; // run the game
+    }
+    std::thread::sleep(std::time::Duration::from_millis(16));
+}
+# #[allow(unreachable_code)]
+# Ok::<(), std::io::Error>(())
+```
+
+</div>
+<div class="lang-cpp">
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:steam_sockets}}
 ```
 
 </div>

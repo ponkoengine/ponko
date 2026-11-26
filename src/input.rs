@@ -34,6 +34,7 @@ use winit::keyboard::KeyCode;
 
 pub(crate) mod backend;
 pub(crate) mod controller;
+pub(crate) mod gamepad_extras;
 pub(crate) mod glyphs;
 pub(crate) mod ime;
 pub(crate) mod joystick;
@@ -42,6 +43,7 @@ pub use backend::{DeviceKey, FakeGamepads, GamepadBackend, GamepadEvents};
 pub use controller::{
     ControllerFamily, GamepadCapabilities, GamepadInfo, GamepadMotion, InputDevice, MAX_PLAYERS, MotorLevels, Rumble,
 };
+pub use gamepad_extras::{GamepadTouchpadFinger, TriggerEffect};
 pub use glyphs::{Glyph, GlyphAtlas, Glyphs};
 pub use ime::ImeEvent;
 pub use joystick::{
@@ -248,10 +250,12 @@ pub enum GamepadButton {
     DPadLeft,
     /// The d-pad, right.
     DPadRight,
+    /// Pressing the controller's touch surface in.
+    Touchpad,
 }
 
 impl GamepadButton {
-    pub(crate) const COUNT: usize = 16;
+    pub(crate) const COUNT: usize = 17;
     /// Every button, in discriminant order.
     pub(crate) const ALL: [GamepadButton; Self::COUNT] = [
         GamepadButton::South,
@@ -270,6 +274,7 @@ impl GamepadButton {
         GamepadButton::DPadDown,
         GamepadButton::DPadLeft,
         GamepadButton::DPadRight,
+        GamepadButton::Touchpad,
     ];
 }
 
@@ -1336,6 +1341,7 @@ impl Input {
             InputEvent::GamepadDisconnected(p) => self.disconnect_gamepad(p),
             InputEvent::GamepadConnected(p) => self.connect_gamepad_at(p, GamepadInfo::default()),
             InputEvent::GamepadMotion(p, motion) => self.set_gamepad_motion(p, motion),
+            InputEvent::GamepadTouchpad(p, finger, contact) => self.set_gamepad_touchpad_finger(p, finger, contact),
             InputEvent::MouseMove(at) => self.set_mouse_pos(at),
             InputEvent::MouseWheel(lines) => self.add_mouse_wheel(lines),
             InputEvent::Touch { id, phase, position } => self.feed_touch(id, phase, position),

@@ -115,6 +115,7 @@ pub(in crate::render) mod sky_render_test;
 mod stencil;
 #[cfg(test)]
 mod stencil_render_test;
+mod target_mips;
 mod targets;
 mod variants;
 mod vertex_motion;
@@ -1174,6 +1175,13 @@ impl Renderer3D {
         self.render_targets.add(id, texture);
     }
 
+    /// Render target `id` was written outside the 3D frame (a UI panel, the
+    /// CPU): if it is mipmapped, its levels are made again in the next
+    /// target camera stage.
+    pub fn wrote_render_target(&mut self, id: u32) {
+        self.render_targets.wrote(id, true);
+    }
+
     /// Render target `id` was freed: target cameras and compute passes let
     /// go of it and of what they made for it.
     pub fn free_render_target(&mut self, id: u32) {
@@ -2057,7 +2065,8 @@ impl Renderer3D {
 
     /// Draw calls the frame's models take: two per mesh part (depth
     /// prepass and lit), one per mesh part in each shadow cascade, one per
-    /// screen effect, and the post chain's own (see `PostChain::draw_calls`).
+    /// screen effect, one more per mesh part with screen-space reflections
+    /// (their normals), and the post chain's own (see `PostChain::draw_calls`).
     /// HDR output's headroom over SDR white for the tone mapping of the
     /// frames prepared from now on; `None` tone maps for SDR.
     pub(crate) fn set_hdr_headroom(&mut self, headroom: Option<f32>) {
@@ -2098,7 +2107,9 @@ impl Renderer3D {
             + self.effects.frame.len()
             + self.effects.target_frame.len()
             + usize::from(self.screen.ao_enabled) * 2
-            + usize::from(self.screen.ssr_on) * 2
+            // Reflections: their own passes, and the normals pass's
+            // draw of each part.
+            + usize::from(self.screen.ssr_on) * (2 + parts)
             + usize::from(self.screen.taa_on)
             + if self.screen.velocity_on {
                 // The motion pass (one draw per moved part).

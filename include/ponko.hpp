@@ -38,6 +38,7 @@
 #include <typeindex>
 #include <unordered_map>
 #include <utility>
+#include <variant>
 #include <vector>
 
 // ---- math on the C types (global, so it works without `using namespace`) ----
@@ -1302,8 +1303,11 @@ using query_filter_ex = PonkoQueryFilterEx;
 /// (split_toning_shadows, split_toning_highlights, split_toning_balance), depth of field (dof_enabled,
 /// dof_focus_distance, dof_focus_range, dof_blur), the sample count (msaa) and, from version 2, thin
 /// objects in screen-space reflections (ssr_thin_objects: whole without TAA, about 0.2 ms more at
-/// 2560x1440; the high and ultra presets turn it on) and, from version 3, the upscaler (a ponko::upscaler;
-/// set it with `static_cast<std::uint32_t>(...)`).
+/// 2560x1440; the high and ultra presets turn it on), from version 3, the upscaler (a ponko::upscaler;
+/// set it with `static_cast<std::uint32_t>(...)`) and, from version 4, auto exposure (auto_exposure,
+/// auto_exposure_min and _max in stops, _compensation, _brighten_speed and _darken_speed in stops a
+/// second, _center_weight, and a metering mask in _has_mask and _mask) and, from version 5,
+/// screen-space reflections on transparent surfaces (ssr_transparent: off by default and in every preset).
 using post_ex = PonkoPostEx;
 /// HDR display output settings that can grow (PonkoHdrOutput): enabled, paper_white_nits, peak_nits
 /// (0: the display's) and, from version 2, the HDR10 metadata max_content_light_nits and
@@ -1411,6 +1415,7 @@ inline query_filter_ex query_filter_ex_of(const filter3d& f) {
 }
 
 /// HDR output settings with their defaults (off, 200-nit paper white, the display's peak).
+/// Unstable: experimental (the guide's "HDR displays"); may change in any release.
 inline hdr_output hdr_output_defaults() {
     hdr_output h{};
     h.struct_size = sizeof(hdr_output);
@@ -3584,12 +3589,21 @@ public:
         return out;
     }
     /// The lobby member id behind connected `peer` of a WebRTC endpoint (lobby::rtc_host, lobby::rtc_join), or 0.
+    /// Unstable: experimental (the guide's "Peer to peer over WebRTC"); may change in any release.
     std::uint32_t rtc_peer(std::uint64_t peer) const { std::uint32_t m = 0; detail::check(ponko_net_messages_rtc_peer(raw_, peer, &m)); return m; }
     /// The Steam id of connected `peer`, or 0 for an unknown or non-Steam peer.
     std::uint64_t steam_peer(std::uint64_t peer) const { std::uint64_t id = 0; detail::check(ponko_net_messages_steam_peer(raw_, peer, &id)); return id; }
     /// Steam relays plus a friends-only lobby, for 1..=249 clients.
     static net_messages steam_host(std::uint32_t app_id, std::size_t max_clients) {
         PonkoNetMessages* p = nullptr; detail::check(ponko_net_messages_steam_host(app_id, max_clients, &p)); return net_messages(p);
+    }
+    /// Like steam_host, over Steam Networking Sockets, in a lobby of that visibility: lobby members
+    /// connect to this host through Valve's relays. For dedicated hosts and games that want
+    /// connections; joiners use steam_join.
+    static net_messages steam_sockets_host(std::uint32_t app_id, steam_lobby_visibility visibility, std::size_t max_clients) {
+        PonkoNetMessages* p = nullptr;
+        detail::check(ponko_net_messages_steam_sockets_host(app_id, static_cast<std::uint32_t>(visibility), max_clients, &p));
+        return net_messages(p);
     }
     /// Joins Steam lobby `lobby` of app `app_id` through Steam relays. Throws ponko::error without the
     /// `steam` feature or a running Steam.
@@ -3743,12 +3757,14 @@ public:
     /// through this client's room. `stun_urls`: space-separated "stun:host:port" URLs, or null; `bind`: the UDP
     /// socket's address, or null for any port. Keep polling this client. Throws ponko::error without the `webrtc`
     /// feature.
+    /// Unstable: experimental (the guide's "Peer to peer over WebRTC"); may change in any release.
     net_messages rtc_host(const char* stun_urls, std::size_t max_clients, const char* bind = nullptr) {
         PonkoNetMessages* m = nullptr; detail::check(ponko_net_messages_rtc_host(raw_, stun_urls, bind, max_clients, &m));
         return net_messages(m);
     }
     /// A message endpoint joining the host that member `host` (the room's host) runs, over WebRTC signaled
     /// through this client. Settings as rtc_host.
+    /// Unstable: experimental (the guide's "Peer to peer over WebRTC"); may change in any release.
     net_messages rtc_join(std::uint32_t host, const char* stun_urls, const char* bind = nullptr) {
         PonkoNetMessages* m = nullptr; detail::check(ponko_net_messages_rtc_join(raw_, host, stun_urls, bind, &m));
         return net_messages(m);
@@ -5979,6 +5995,37 @@ enum class controller_family : std::uint32_t { generic = 0, xbox = 1, playstatio
 /// What a connected controller is (Rust `GamepadInfo`, its name from ctx::gamepad_name): `family`,
 /// USB ids when `has_ids`, and what it can do (`rumble`, `trigger_rumble`, `motion`).
 using gamepad_info = PonkoGamepadInfo;
+/// Optional lights, touchpad and adaptive-trigger support for a controller.
+using gamepad_extras = PonkoGamepadExtras;
+/// The controller's first two finger slots.
+using gamepad_touchpad = PonkoGamepadTouchpad;
+/// One finger change in the current frame.
+using gamepad_touchpad_event = PonkoGamepadTouchpadEvent;
+/// Adaptive trigger requests. The positions are zones 0 through 9;
+/// strengths range from 0 (off) to 8.
+struct trigger_effect {
+    PonkoTriggerEffect raw{};
+    /// Clears any effect on this trigger.
+    static trigger_effect off() noexcept { return {}; }
+    /// Applies constant resistance from the start zone.
+    static trigger_effect resistance(std::uint8_t start, std::uint8_t strength) noexcept {
+        return {{PONKO_TRIGGER_EFFECT_RESISTANCE, start, 0, strength, 0, {}}};
+    }
+    /// Adds a break between start and end.
+    static trigger_effect weapon(std::uint8_t start, std::uint8_t end, std::uint8_t strength) noexcept {
+        return {{PONKO_TRIGGER_EFFECT_WEAPON, start, end, strength, 0, {}}};
+    }
+    /// Vibrates from the start zone at the given frequency in Hz.
+    static trigger_effect vibration(std::uint8_t start, std::uint8_t amplitude, std::uint8_t frequency) noexcept {
+        return {{PONKO_TRIGGER_EFFECT_VIBRATION, start, 0, amplitude, frequency, {}}};
+    }
+    /// Sets a separate resistance for each zone.
+    static trigger_effect resistance_profile(const std::array<std::uint8_t, 10>& profile) noexcept {
+        trigger_effect result{{PONKO_TRIGGER_EFFECT_RESISTANCE_PROFILE, 0, 0, 0, 0, {}}};
+        std::copy(profile.begin(), profile.end(), result.raw.profile);
+        return result;
+    }
+};
 /// How hard each motor runs, 0..1 (Rust `MotorLevels`).
 using motor_levels = PonkoMotorLevels;
 /// A rumble request for ctx::rumble (Rust `Rumble`): body motors `strong` (low frequency) and `weak`
@@ -6873,6 +6920,16 @@ enum class window_event_kind : std::uint32_t {
     close_requested = PONKO_WINDOW_EVENT_CLOSE_REQUESTED,            ///< The OS asked to close the window.
     file_dropped = PONKO_WINDOW_EVENT_FILE_DROPPED,                  ///< A file was dropped (`path`).
     scale_factor_changed = PONKO_WINDOW_EVENT_SCALE_FACTOR_CHANGED,  ///< The DPI scale changed (`scale_factor`).
+    suspended = PONKO_WINDOW_EVENT_SUSPENDED,                        ///< The app lost the screen (a phone's background): save now.
+    resumed = PONKO_WINDOW_EVENT_RESUMED,                            ///< The app is in front again after a suspend.
+    low_memory = PONKO_WINDOW_EVENT_LOW_MEMORY,                      ///< The system is short of memory: free what can be reloaded.
+};
+/// How the game's sound shares the device with other apps and a phone's silent switch (Rust
+/// `AudioSessionCategory`): iOS's audio session categories; kept and without effect elsewhere.
+enum class audio_session_category : std::uint32_t {
+    solo_ambient = PONKO_AUDIO_SESSION_SOLO_AMBIENT,  ///< The default: stops other apps' audio; the silent switch mutes the game.
+    ambient = PONKO_AUDIO_SESSION_AMBIENT,            ///< Mixes with other apps' audio; the silent switch mutes the game.
+    playback = PONKO_AUDIO_SESSION_PLAYBACK,          ///< Heard with the silent switch on; stops other apps' audio.
 };
 /// One window event of this frame (Rust `WindowEvent`).
 struct window_event {
@@ -6972,6 +7029,44 @@ struct day_night : PonkoDayNight {
     /// The moon's phase at the cycle's time: 0 new, 0.5 full.
     float moon_phase() const { float p = 0; detail::check(ponko_day_night_moon_phase(this, &p)); return p; }
 };
+
+/// A named, required developer console argument.
+using console_arg = PonkoConsoleArg;
+/// The typed value of a developer console argument or variable.
+using console_value = std::variant<std::string, std::int64_t, double, bool>;
+
+namespace detail {
+inline console_value console_from_c(const PonkoConsoleValue& value) {
+    switch (value.kind) {
+    case PONKO_CONSOLE_TEXT: return std::string(value.text, value.text_len);
+    case PONKO_CONSOLE_INTEGER: return value.integer;
+    case PONKO_CONSOLE_FLOAT: return value.number;
+    case PONKO_CONSOLE_BOOL: return value.flag;
+    default: throw std::invalid_argument("unknown console value type");
+    }
+}
+inline PonkoConsoleValue console_to_c(const console_value& value) {
+    PonkoConsoleValue raw{};
+    std::visit([&](const auto& v) {
+        using T = std::decay_t<decltype(v)>;
+        if constexpr (std::is_same_v<T, std::string>) {
+            raw.kind = PONKO_CONSOLE_TEXT;
+            raw.text = v.data();
+            raw.text_len = v.size();
+        } else if constexpr (std::is_same_v<T, std::int64_t>) {
+            raw.kind = PONKO_CONSOLE_INTEGER;
+            raw.integer = v;
+        } else if constexpr (std::is_same_v<T, double>) {
+            raw.kind = PONKO_CONSOLE_FLOAT;
+            raw.number = v;
+        } else {
+            raw.kind = PONKO_CONSOLE_BOOL;
+            raw.flag = v;
+        }
+    }, value);
+    return raw;
+}
+} // namespace detail
 
 /// What a system gets (Rust `Ctx`): the world, time, input, randomness, drawing, audio, physics and the other
 /// engine services. Valid only during the call; don't keep it. Calls throw ponko::error when the engine
@@ -7229,6 +7324,19 @@ public:
     /// Feeds the safe area insets a phone would report (Rust `window.feed_safe_insets()`), as a test does; a
     /// negative or not finite inset counts as 0. The UI lays out with them from the next frame.
     void window_feed_safe_insets(safe_insets insets) { detail::check(ponko_ctx_window_feed_safe_insets(raw_, insets)); }
+    /// Whether the app is suspended (Rust `window.suspended()`): between window_event_kind::suspended and
+    /// resumed; always false on desktops and the web.
+    bool window_suspended() const { bool v = false; detail::check(ponko_ctx_window_suspended(raw_, &v)); return v; }
+    /// Feeds a phone's lifecycle event (suspended, resumed or low_memory) as the platform reports it, as a
+    /// test does; a repeated suspend or resume changes nothing and sends nothing.
+    void window_feed_lifecycle(window_event_kind kind) {
+        detail::check(ponko_ctx_window_feed_lifecycle(raw_, static_cast<std::uint32_t>(kind)));
+    }
+    /// How far up from the window's bottom edge the on-screen keyboard covers it, in logical pixels (Rust
+    /// `window.keyboard_inset()`); 0 while it is hidden or floating, and on desktops.
+    float window_keyboard_inset() const { float v = 0; detail::check(ponko_ctx_window_keyboard_inset(raw_, &v)); return v; }
+    /// Feeds the keyboard's inset (Rust `window.feed_keyboard_inset()`), as a test does; negative or not finite is 0.
+    void window_feed_keyboard_inset(float inset) { detail::check(ponko_ctx_window_feed_keyboard_inset(raw_, inset)); }
     /// Copies UTF-8 text to the clipboard.
     void clipboard_write(const char* value) { detail::check(ponko_ctx_clipboard_write(raw_, value)); }
     /// The clipboard's text; unset headless, with no text, or while a browser read is pending.
@@ -7508,6 +7616,16 @@ public:
     std::uint64_t steam_lobby() const { std::uint64_t l = 0; detail::check(ponko_ctx_steam_lobby(raw_, &l)); return l; }
     /// Opens the Steam overlay to invite friends to this session's lobby.
     void steam_invite() { detail::check(ponko_ctx_steam_invite(raw_)); }
+    /// Brings Steam Cloud and the stored files in step for `files` (names, or
+    /// folders ending in '/'): the newest copy of each wins. Returns {downloaded,
+    /// uploaded}; {0, 0} without Steam or with its cloud off (see steam::start).
+    std::pair<std::uint32_t, std::uint32_t> steam_sync_cloud(std::initializer_list<const char*> files) {
+        std::uint32_t down = 0, up = 0;
+        detail::check(ponko_ctx_steam_sync_cloud(raw_, files.begin(), files.size(), &down, &up));
+        return {down, up};
+    }
+    /// Deletes the stored file `name` and its Steam Cloud copy.
+    void steam_delete_cloud_file(const char* name) { detail::check(ponko_ctx_steam_delete_cloud_file(raw_, name)); }
     /// Pauses the simulation; frame systems keep running.
     void pause() { detail::check(ponko_ctx_pause(raw_)); }
     /// Resumes a paused simulation.
@@ -7845,6 +7963,38 @@ public:
         ponko::gamepad_info i{}; bool connected = false;
         detail::check(ponko_ctx_gamepad_info(raw_, p.slot, &i, &connected));
         return connected ? std::optional<ponko::gamepad_info>(i) : std::nullopt;
+    }
+    /// Queries lights, touchpad and adaptive triggers. Empty slots return false capabilities.
+    ponko::gamepad_extras gamepad_extras(gamepad p) const {
+        ponko::gamepad_extras extras{};
+        detail::check(ponko_ctx_gamepad_extras(raw_, p.slot, &extras));
+        return extras;
+    }
+    /// Sets the RGB light bar when supported. Black turns it off.
+    void set_gamepad_light(gamepad p, color rgb) {
+        detail::check(ponko_ctx_set_gamepad_light(raw_, p.slot, rgb));
+    }
+    /// Sets the player indicator when supported. Zero is player one, nullopt switches it off.
+    void set_gamepad_player_leds(gamepad p, std::optional<std::uint8_t> player) {
+        detail::check(ponko_ctx_set_gamepad_player_leds(raw_, p.slot, player ? *player : -1));
+    }
+    /// Sets both adaptive triggers when supported.
+    void set_gamepad_trigger_effects(gamepad p, trigger_effect left, trigger_effect right) {
+        detail::check(ponko_ctx_set_gamepad_trigger_effects(raw_, p.slot, left.raw, right.raw));
+    }
+    /// The first touchpad's two finger slots, if supported.
+    std::optional<ponko::gamepad_touchpad> gamepad_touchpad(gamepad p) const {
+        ponko::gamepad_touchpad touchpad{};
+        bool has = false;
+        detail::check(ponko_ctx_gamepad_touchpad(raw_, p.slot, &touchpad, &has));
+        return has ? std::optional<ponko::gamepad_touchpad>(touchpad) : std::nullopt;
+    }
+    /// Reads the change at index in this frame's gamepad touchpad events.
+    std::optional<ponko::gamepad_touchpad_event> gamepad_touchpad_event(std::size_t index) const {
+        ponko::gamepad_touchpad_event event{};
+        bool has = false;
+        detail::check(ponko_ctx_gamepad_touchpad_event(raw_, index, &event, &has));
+        return has ? std::optional<ponko::gamepad_touchpad_event>(event) : std::nullopt;
     }
     /// The name the system gives gamepad `p` ("" for none).
     std::string gamepad_name(gamepad p) const {
@@ -8306,6 +8456,23 @@ public:
         if (!found) return std::nullopt;
         return e;
     }
+    /// A registered developer variable's current typed value.
+    std::optional<ponko::console_value> console_value(const char* name) const {
+        struct result {
+            std::optional<ponko::console_value> value;
+            std::exception_ptr error;
+        } out;
+        const auto status = ponko_ctx_console_value(raw_, name,
+            [](const PonkoConsoleValue* value, void* user) noexcept {
+                auto& out = *static_cast<result*>(user);
+                try { out.value = detail::console_from_c(*value); }
+                catch (...) { out.error = std::current_exception(); }
+            }, &out);
+        if (status == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(status);
+        if (out.error) std::rethrow_exception(out.error);
+        return std::move(out.value);
+    }
     /// The authenticated control endpoint's loopback port, when enabled.
     std::optional<std::uint16_t> control_port() const {
         std::uint16_t port = 0;
@@ -8611,6 +8778,12 @@ public:
     ponko::render_target create_render_target(std::uint32_t w, std::uint32_t h) {
         ponko::render_target t{}; detail::check(ponko_ctx_create_render_target(raw_, w, h, &t)); return t;
     }
+    /// A render target with a full chain of mip levels, made again from the first each frame something
+    /// wrote it, so materials sampling it from afar don't alias (Rust
+    /// `Graphics::create_mipmapped_render_target`). A third more memory.
+    ponko::render_target create_mipmapped_render_target(std::uint32_t w, std::uint32_t h) {
+        ponko::render_target t{}; detail::check(ponko_ctx_create_mipmapped_render_target(raw_, w, h, &t)); return t;
+    }
     /// `t` as the render target it is: the `target` of a target_camera,
     /// compute_pass or target_effect read back from the engine is a plain
     /// texture. Throws ponko::error (PONKO_ERROR_INVALID) if `t` isn't a live
@@ -8651,12 +8824,28 @@ public:
         return t;
     }
     /// Replaces the target cameras drawn each frame from their versioned forms (empty: none): as
-    /// set_target_cameras, each with its `particles` and `debug_draw`.
+    /// set_target_cameras, each with its `particles`, `debug_draw`, culling box (`has_cull_box`,
+    /// `cull_box_min`, `cull_box_max`) and background (`has_clear`, `clear`).
     void set_target_cameras_ex(const std::vector<ponko::target_camera_ex>& list) {
         std::vector<const PonkoTargetCameraEx*> pointers;
         pointers.reserve(list.size());
         for (const ponko::target_camera_ex& t : list) pointers.push_back(&t);
         detail::check(ponko_ctx_set_target_cameras_ex(raw_, pointers.data(), pointers.size()));
+    }
+    /// The screen effects of target camera `index`, run over its picture after it is drawn (Rust
+    /// `TargetCamera::effects`). Throws for an index past the end.
+    std::vector<screen_effect> target_camera_effects(std::size_t index) const {
+        std::size_t n = 0;
+        detail::check(ponko_ctx_target_camera_effects(raw_, index, nullptr, 0, &n));
+        std::vector<screen_effect> list(n);
+        detail::check(ponko_ctx_target_camera_effects(raw_, index, list.data(), list.size(), &n));
+        return list;
+    }
+    /// Replaces the screen effects of target camera `index` (empty: none); the main view's
+    /// (set_effects) never apply to it. Setting the target cameras again keeps them for a camera
+    /// drawing into the same render target at the same index. Throws for an index past the end.
+    void set_target_camera_effects(std::size_t index, const std::vector<screen_effect>& list) {
+        detail::check(ponko_ctx_set_target_camera_effects(raw_, index, list.data(), list.size()));
     }
     /// A plain white material, made once and shared.
     material default_material() { material m{}; detail::check(ponko_ctx_default_material(raw_, &m)); return m; }
@@ -9808,9 +9997,11 @@ public:
     }
     /// Changes the post-processing from its versioned form: the checks of set_post, plus split toning tints
     /// finite and its balance -1 to 1, dof_focus_distance and dof_focus_range not negative, dof_blur 0 to
-    /// 0.05 and msaa 2 or 4. Nothing changes when it throws.
+    /// 0.05, msaa 2 or 4, and auto exposure's min, max and compensation finite with min not above max, its
+    /// speeds not negative (infinity jumps) and its center weight 0 to 1. Nothing changes when it throws.
     void set_post(const ponko::post_ex& p) { detail::check(ponko_ctx_set_post_ex(raw_, &p)); }
     /// The HDR output settings (Rust `ctx.gfx.hdr_output()`).
+    /// Unstable: experimental (the guide's "HDR displays"); may change in any release.
     ponko::hdr_output hdr_output() const {
         ponko::hdr_output h{};
         h.struct_size = sizeof(h);
@@ -9821,9 +10012,11 @@ public:
     /// Changes the HDR output settings from the next frame: `enabled` switches the window between HDR
     /// and SDR while the game runs (no restart); paper white, peak and HDR10 metadata follow.
     /// Throws, changing nothing, for a NaN or negative peak_nits or metadata value.
+    /// Unstable: experimental (the guide's "HDR displays"); may change in any release.
     void set_hdr_output(const ponko::hdr_output& h) { detail::check(ponko_ctx_set_hdr_output(raw_, &h)); }
     /// What the window does with the HDR settings: active, encoding, reason, paper white and peak as used,
     /// and the HDR10 metadata sent.
+    /// Unstable: experimental (the guide's "HDR displays"); may change in any release.
     ponko::hdr_status hdr_status() const {
         ponko::hdr_status s{};
         s.struct_size = sizeof(s);
@@ -10323,6 +10516,18 @@ public:
     /// The volume layer `layer` of the playing song is set to.
     float music_layer_volume(std::size_t layer) {
         float v = 0; detail::check(ponko_ctx_music_layer_volume(raw_, layer, &v)); return v;
+    }
+
+    // The audio session (iOS).
+    /// Sets the audio session's category from now on (Rust `audio.set_session_category()`); throws if the
+    /// system refuses it, and the old one stays.
+    void set_audio_session_category(ponko::audio_session_category category) {
+        detail::check(ponko_ctx_audio_set_session_category(raw_, static_cast<std::uint32_t>(category)));
+    }
+    /// The audio session's category (Rust `audio.session_category()`).
+    ponko::audio_session_category audio_session_category() const {
+        std::uint32_t v = 0; detail::check(ponko_ctx_audio_session_category(raw_, &v));
+        return static_cast<ponko::audio_session_category>(v);
     }
 
     // Output devices and the offline mix.
@@ -11480,6 +11685,31 @@ class game {
     std::vector<std::unique_ptr<control_holder>> control_methods_;
     std::unique_ptr<std::function<void(const crash_report&)>> crash_hook_;
 
+    struct console_holder {
+        std::function<std::string(ctx&, const std::vector<console_value>&)> fn;
+        shared_state* st;
+    };
+    std::vector<std::unique_ptr<console_holder>> console_commands_;
+
+    static void console_trampoline(PonkoCtx* raw, const PonkoConsoleValue* args, std::size_t count,
+                                   PonkoConsoleReply* reply, void* user) noexcept {
+        auto& h = *static_cast<console_holder*>(user);
+        try {
+            std::vector<console_value> values;
+            values.reserve(count);
+            for (std::size_t i = 0; i < count; ++i) values.push_back(detail::console_from_c(args[i]));
+            ctx c(raw, h.st->owner);
+            const auto answer = h.fn(c, values);
+            c.run_after_system();
+            detail::check(ponko_console_reply_text(reply, answer.data(), answer.size(), false));
+        } catch (const std::exception& e) {
+            (void)ponko_console_reply_text(reply, e.what(), std::strlen(e.what()), true);
+        } catch (...) {
+            constexpr std::string_view error = "native console command threw an exception";
+            (void)ponko_console_reply_text(reply, error.data(), error.size(), true);
+        }
+    }
+
     static void control_trampoline(PonkoCtx* raw, const char* params, PonkoControlReply* reply, void* user) noexcept {
         auto& h = *static_cast<control_holder*>(user);
         try {
@@ -11601,6 +11831,7 @@ public:
     /// HDR display output (Rust `Game::hdr_output`): with `h.enabled` the window opens in an HDR format
     /// and color space where the display system offers one; ctx::set_hdr_output switches it later.
     /// Off by default, and then nothing changes.
+    /// Unstable: experimental (the guide's "HDR displays"); may change in any release.
     game& hdr_output(const ponko::hdr_output& h) { return check(ponko_game_hdr_output(raw_, &h)); }
     /// Samples per pixel of the 3D frame: 4 (default) or 2.
     game& msaa(std::uint32_t samples) { return check(ponko_game_msaa(raw_, samples)); }
@@ -11620,6 +11851,25 @@ public:
         const auto status = ponko_game_control_method(raw_, name, about, control_trampoline, control_methods_.back().get());
         if (status != PONKO_OK) control_methods_.pop_back();
         return check(status);
+    }
+    /// Enables the developer console in any build, or disables it.
+    game& developer_console(bool on) { return check(ponko_game_developer_console(raw_, on)); }
+    /// Chooses the physical key that opens and closes the console.
+    game& console_key(key k) { return check(ponko_game_console_key(raw_, k)); }
+    /// Registers a command with required typed arguments. Its return value or
+    /// exception message is shown in the console or sent to the control client.
+    game& console_command(const char* name, const char* help, std::initializer_list<console_arg> args,
+                          std::function<std::string(ctx&, const std::vector<console_value>&)> command) {
+        console_commands_.push_back(std::make_unique<console_holder>(console_holder{std::move(command), state_.get()}));
+        const auto status = ponko_game_console_command(raw_, name, help, args.begin(), args.size(),
+                                                       console_trampoline, console_commands_.back().get());
+        if (status != PONKO_OK) console_commands_.pop_back();
+        return check(status);
+    }
+    /// Registers a variable. Its initial value fixes its type.
+    game& console_variable(const char* name, const char* help, const console_value& initial) {
+        const auto raw = detail::console_to_c(initial);
+        return check(ponko_game_console_variable(raw_, name, help, &raw));
     }
     /// Registers a named debug toggle and its initial value.
     game& debug_toggle(const char* name, bool on) { return check(ponko_game_debug_toggle(raw_, name, on)); }
@@ -11905,6 +12155,79 @@ inline std::uint64_t steam_wait_for_invite(std::uint32_t app_id, std::uint32_t t
     detail::check(ponko_steam_wait_for_invite(app_id, timeout_ms, &l));
     return l;
 }
+
+/// Steam's store-side services (the library built with `steam`): achievements,
+/// stats, rich presence, the overlay's state and the Deck's text input; cloud
+/// saves are ctx::steam_sync_cloud. One Steam per process. Before start(), when
+/// Steam isn't running, and without the feature, every call does nothing and
+/// returns false, so one build runs from any store.
+namespace steam {
+/// What the text input accepts (Rust's SteamTextMode).
+enum class text_mode : std::uint32_t { single_line = 0, multi_line = 1, password = 2, email = 3, numeric = 4 };
+/// Starts the services for `app_id` (480: Valve's test app); true when Steam runs.
+inline bool start(std::uint32_t app_id) { return ponko_steam_start(app_id); }
+/// Whether the services reach a running Steam.
+inline bool running() { return ponko_steam_running(); }
+/// Runs Steam's callbacks: the overlay's state and the text input. Once a frame.
+inline void update() { ponko_steam_update(); }
+/// Unlocks the achievement `name`; false when Steam is absent or refuses the name.
+inline bool unlock_achievement(const char* name) { return ponko_steam_unlock_achievement(name); }
+/// Locks the achievement `name` again.
+inline bool clear_achievement(const char* name) { return ponko_steam_clear_achievement(name); }
+/// Whether the player has the achievement; nothing when Steam is absent or doesn't know it.
+inline std::optional<bool> achievement(const char* name) {
+    const std::int32_t a = ponko_steam_achievement(name);
+    if (a < 0) return std::nullopt;
+    return a == 1;
+}
+/// Sets an integer stat; kept after store_stats().
+inline bool set_stat(const char* name, std::int32_t value) { return ponko_steam_set_stat_i32(name, value); }
+/// Sets a float stat; kept after store_stats().
+inline bool set_stat(const char* name, float value) { return ponko_steam_set_stat_f32(name, value); }
+/// An integer stat; nothing when Steam is absent or doesn't know it.
+inline std::optional<std::int32_t> stat_i32(const char* name) {
+    std::int32_t v = 0;
+    if (!ponko_steam_stat_i32(name, &v)) return std::nullopt;
+    return v;
+}
+/// A float stat; nothing when Steam is absent or doesn't know it.
+inline std::optional<float> stat_f32(const char* name) {
+    float v = 0;
+    if (!ponko_steam_stat_f32(name, &v)) return std::nullopt;
+    return v;
+}
+/// Sends the changed achievements and stats to Steam's servers.
+inline bool store_stats() { return ponko_steam_store_stats(); }
+/// Sets the rich presence `key` (an empty value removes it).
+inline bool set_rich_presence(const char* key, const char* value) { return ponko_steam_set_rich_presence(key, value); }
+/// Removes every rich presence key.
+inline void clear_rich_presence() { ponko_steam_clear_rich_presence(); }
+/// Whether the overlay is open, as of the last update(): pause while it is.
+inline bool overlay_open() { return ponko_steam_overlay_open(); }
+/// Whether the game runs on a Steam Deck.
+inline bool is_steam_deck() { return ponko_steam_is_steam_deck(); }
+/// Whether Steam runs in Big Picture mode.
+inline bool is_big_picture() { return ponko_steam_is_big_picture(); }
+/// Opens the full-screen gamepad text input (Big Picture, Deck); false when it didn't open.
+inline bool show_text_input(text_mode mode, const char* description, const char* existing, std::uint32_t max_chars) {
+    return ponko_steam_show_text_input(static_cast<std::uint32_t>(mode), description, existing, max_chars);
+}
+/// How the text input closed, once: {PONKO_STEAM_TEXT_*, the submitted text}.
+inline std::pair<std::uint32_t, std::string> take_text_input() {
+    std::uint32_t state = PONKO_STEAM_TEXT_NONE;
+    std::size_t n = 0;
+    if (ponko_steam_take_text_input(&state, nullptr, 0, &n) == PONKO_OK) return {state, std::string()};
+    std::vector<char> b(n + 1);
+    detail::check(ponko_steam_take_text_input(&state, b.data(), b.size(), &n));
+    return {state, std::string(b.data(), n)};
+}
+/// Opens the Deck's floating keyboard beside the text field at x, y (pixels) of width by height.
+inline bool show_floating_keyboard(text_mode mode, std::int32_t x, std::int32_t y, std::int32_t width, std::int32_t height) {
+    return ponko_steam_show_floating_keyboard(static_cast<std::uint32_t>(mode), x, y, width, height);
+}
+/// Whether Steam Cloud keeps this player's files.
+inline bool cloud_enabled() { return ponko_steam_cloud_enabled(); }
+} // namespace steam
 
 // ---- glTF files as scenes (from Blender and other editors) ----------------------
 /// Spawns the glTF file at `path` as a scene placed at `at`: a root entity

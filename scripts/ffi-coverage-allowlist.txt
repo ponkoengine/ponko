@@ -24,3 +24,4 @@ ponko_ctx_clear_decal_textures    # clears the array the decal pass samples; the
 ponko_steam_lobby_id              # reads a lobby made by ponko_steam_lobby_create, which needs Steam
 ponko_steam_lobby_members         # same
 ponko_steam_lobby_metadata        # same
+ponko_steam_start                 # starts the real Steam client; the services before it are tested in tests/steam_services.rs

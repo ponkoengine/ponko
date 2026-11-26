@@ -115,6 +115,8 @@ test("arguments default to the check of the built fixture and refuse what they d
   assert.equal(args.dir, "target/web/web_threads");
   assert.deepEqual(parseArgs(["--bench", "--workloads", "par,jobs", "--threads", "1,4", "--repeat", "5"]).threads, [1, 4]);
   assert.throws(() => parseArgs(["--workloads", "nope"]), UsageError);
+  assert.deepEqual(parseArgs(["--bench", "--workloads", "boids"]).workloads, ["boids"], "the boids example's tick");
+  assert.ok(parseArgs(["--bench"]).workloads.includes("boids"));
   assert.throws(() => parseArgs(["--repeat", "0"]), UsageError);
   assert.throws(() => parseArgs(["--case", "stall"]), UsageError);
   assert.equal(parseArgs(["--case", "gamepads"]).case, "gamepads");

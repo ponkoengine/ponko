@@ -3,11 +3,12 @@
 //! shaders and effects, levels of detail, instancing and render settings.
 //!
 //! **Maturity: tested**, from the guide chapter `3d.md`. Game: Shard Grove, played headless by
-//! `tests/shard_grove.rs`; its package is not played in the list of checks. Tests:
+//! `tests/shard_grove.rs`; its package is played headless in the list of checks. Tests:
 //! `tests/three.rs`, `tests/lights.rs`, `tests/morph3d.rs` and the 3D render tests. Platforms:
 //! Linux, macOS and Windows, headless (the workspace tests in the list of checks). Graphics:
 //! offscreen render tests, required on Windows (DirectX 12 on the WARP software adapter) and run on
-//! Linux and macOS only where a GPU is found. Missing: Shard Grove's package played on each OS.
+//! Linux and macOS only where a GPU is found. Missing: Shard Grove's frame-time baseline per GPU
+//! tier, and its web build and window played on a real GPU of each OS (#454).
 #![cfg_attr(feature = "3d", doc = " [`d3`](crate::d3) re-exports them for `use ponko::d3::*;`.")]
 #![cfg_attr(not(feature = "3d"), doc = " `d3` re-exports them for `use ponko::d3::*;`.")]
 #![deny(missing_docs)]
@@ -429,6 +430,8 @@ mod area_lights_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod atlas_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
+mod auto_exposure_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
 mod baked_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod buffer_render_test;
@@ -502,6 +505,8 @@ mod render_target_frame_render_test;
 mod reverse_z_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod stereo_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod target_camera_render_test;
 #[cfg(all(test, feature = "window", feature = "3d", feature = "video"))]
 mod video_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
@@ -527,6 +532,8 @@ mod hdr_render_test;
 mod instance_cells_bench;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod instance_cells_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod normal_map_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod prompt_row_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
@@ -637,14 +644,14 @@ pub use crate::three::Upscaler;
 pub use crate::three::bake_lighting_gpu;
 #[cfg(feature = "3d")]
 pub use crate::three::{
-    AmbientOcclusion, AntiAliasing, BatchCulling, Blend, Compute, ComputePass, Crowd, CrowdAnimation, CrowdClip,
-    CrowdInstance, CrowdLevel, CrowdOptions, DepthOfField, Effect, GlobalIllumination, GpuBuffer, GraphicsQuality,
-    InstanceBatch, InstanceBatchOptions, InstanceLevel, Lighting, LodFadeTime, LodGroup, LodHysteresis, LodLevel,
-    LodPick, LodRenderer, LodSettings, LodShadow, MAX_CROWD_INSTANCES, MAX_CROWD_LEVELS, Material, MaterialDesc, Mesh,
-    MeshCost, MeshData, Model, ModelCamera, ModelLight, ModelLightKind, ModelMaterial, ModelMaterials, ModelProjection,
-    Post, PostVolume, ReceivesDecals, RenderPasses, RenderTarget, SceneSettings, ScreenEffect, Shader, ShadowFilter,
-    ShadowMesh, ShadowOnly, Sky, SkyShader, SplitToning, Stencil, StencilCompare, StencilFace, StencilOp, StreamedLod,
-    TargetCamera, TargetEffect, Tonemap,
+    AmbientOcclusion, AntiAliasing, AutoExposure, BatchCulling, Blend, Compute, ComputePass, Crowd, CrowdAnimation,
+    CrowdClip, CrowdInstance, CrowdLevel, CrowdOptions, DepthOfField, Effect, GlobalIllumination, GpuBuffer,
+    GraphicsQuality, InstanceBatch, InstanceBatchOptions, InstanceLevel, Lighting, LodFadeTime, LodGroup,
+    LodHysteresis, LodLevel, LodPick, LodRenderer, LodSettings, LodShadow, MAX_CROWD_INSTANCES, MAX_CROWD_LEVELS,
+    Material, MaterialDesc, Mesh, MeshCost, MeshData, Model, ModelCamera, ModelLight, ModelLightKind, ModelMaterial,
+    ModelMaterials, ModelProjection, Post, PostVolume, ReceivesDecals, RenderPasses, RenderTarget, SceneSettings,
+    ScreenEffect, Shader, ShadowFilter, ShadowMesh, ShadowOnly, Sky, SkyShader, SplitToning, Stencil, StencilCompare,
+    StencilFace, StencilOp, StreamedLod, TargetCamera, TargetEffect, Tonemap,
 };
 #[cfg(feature = "3d")]
 pub use crate::three::{

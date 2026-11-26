@@ -23,7 +23,7 @@ use ponko::render::{
 };
 #[allow(unused_imports)]
 #[cfg(feature = "3d")]
-use ponko::render::{DepthOfField, PostVolume};
+use ponko::render::{AutoExposure, DepthOfField, PostVolume};
 #[allow(unused_imports)]
 use ponko::render::{GpuFeature, GpuTier};
 #[allow(unused_imports)]
@@ -430,6 +430,22 @@ fn close_up(ctx: &mut Ctx, speaker: Vec3) {
 }
 // ANCHOR_END: depth_of_field
 
+// ANCHOR: auto_exposure
+/// The exposure follows the scene: a dark cave brightens over a few
+/// seconds, the sun outside darkens it faster.
+fn eye_adaptation(ctx: &mut Ctx) {
+    ctx.scene3d.post.auto_exposure = AutoExposure {
+        enabled: true,
+        min: -2.0,           // stops: at most 4x darker than without it...
+        max: 3.0,            // ...and 8x brighter
+        compensation: 0.5,   // a little brighter than middle grey
+        brighten_speed: 1.0, // stops a second
+        darken_speed: 3.0,
+        ..Default::default()
+    };
+}
+// ANCHOR_END: auto_exposure
+
 // ANCHOR: post_volumes
 /// The looks of a level: outdoors everywhere, a cave and a sunset garden.
 struct Looks {
@@ -478,6 +494,19 @@ fn split_toning_and_depth_of_field_stay_as_set() {
         assert_eq!(dof.focus_distance, 3.0);
         assert_eq!(dof.blur_at(3.4), 0.0, "the speaker is sharp");
         assert_eq!(dof.blur_at(30.0), 0.015, "the background is not");
+    });
+}
+
+#[test]
+fn auto_exposure_stays_as_set() {
+    Game::new("t", 1, 1).run_headless(1, |ctx| {
+        assert!(!ctx.scene3d.post.auto_exposure.enabled, "off by default");
+        eye_adaptation(ctx);
+        let auto = ctx.scene3d.post.auto_exposure;
+        assert!(auto.enabled);
+        assert_eq!((auto.min, auto.max, auto.center_weight), (-2.0, 3.0, 0.5));
+        assert_eq!(auto.target(0.18), 0.5, "middle grey, half a stop brighter");
+        assert_eq!(auto.target(100.0), -2.0, "held at min");
     });
 }
 
@@ -902,6 +931,31 @@ fn follow_reflections(ctx: &mut Ctx) {
 }
 // ANCHOR_END: mirror
 
+// ANCHOR: security_screen
+/// Night vision: everything green, brighter in the dark.
+const NIGHT_VISION: &str = "
+fn effect(p: Pixel) -> vec3<f32> {
+    return vec3<f32>(0.0, dot(p.color, vec3<f32>(0.3, 0.6, 0.1)) * 4.0, 0.0);
+}";
+
+/// A screen in the guard's office: a camera in the vault shows the vault
+/// and nothing of the rooms around it, in night vision, on black.
+/// Mipmapped, so it doesn't shimmer seen from across the office.
+fn security_screen(ctx: &mut Ctx) -> RenderTarget {
+    let screen = ctx.gfx.create_mipmapped_render_target(256, 192);
+    let mut eye = ctx.scene3d.camera;
+    eye.position = vec3(3.5, 2.8, -6.5);
+    let green = ctx.gfx.create_effect("night vision", NIGHT_VISION);
+    ctx.scene3d.passes.target_cameras.push(
+        TargetCamera::new(eye, screen)
+            .with_cull_box(vec3(-4.0, 0.0, -12.0), vec3(4.0, 3.0, -6.0))
+            .with_clear(Color::BLACK)
+            .with_effect(ScreenEffect::new(green)),
+    );
+    screen
+}
+// ANCHOR_END: security_screen
+
 // ANCHOR: compute
 /// Ripples: each texel moves toward the average of its neighbours,
 /// overshooting like water. Red is the height now, green the height a
@@ -968,11 +1022,25 @@ fn the_guide_pond_mirrors_the_camera() {
         pond(ctx);
         ctx.scene3d.camera.position = vec3(3.0, 5.0, 1.0);
         follow_reflections(ctx);
-        let below = ctx.scene3d.passes.target_cameras[0];
+        let below = &ctx.scene3d.passes.target_cameras[0];
         assert!(ctx.is_live(below.target));
         assert_eq!(below.target.width(), 32);
         assert_eq!(below.camera.position, vec3(3.0, -5.0, 1.0));
         assert_eq!(below.clip_plane, Some(vec4(0.0, 1.0, 0.0, 0.0)));
+    });
+}
+
+#[test]
+fn the_guide_security_screen_sees_only_the_vault_in_green() {
+    Game::new("vault", 64, 64).run_headless(0, |ctx| {
+        let screen = security_screen(ctx);
+        assert!(ctx.is_live(screen));
+        assert_eq!(screen.width(), 256);
+        let camera = &ctx.scene3d.passes.target_cameras[0];
+        assert_eq!(camera.cull_box, Some((vec3(-4.0, 0.0, -12.0), vec3(4.0, 3.0, -6.0))));
+        assert_eq!(camera.clear, Some(Color::BLACK));
+        assert_eq!(camera.effects.len(), 1);
+        assert!(ctx.scene3d.passes.effects.is_empty(), "the main view keeps its own");
     });
 }
 
@@ -1690,6 +1758,21 @@ fn screen_space_reflections_are_off_until_turned_on() {
         assert_eq!(ctx.scene3d.quality(), Some(GraphicsQuality::Ultra));
         ctx.scene3d.post.ssr_thin_objects = false;
         assert_eq!(ctx.scene3d.quality(), None, "custom without them");
+        ctx.scene3d.set_quality(GraphicsQuality::Ultra);
+        assert!(!ctx.scene3d.post.ssr_transparent, "no preset turns them on");
+        // ANCHOR: ssr_transparent
+        // Water and glass reflect the scene too (each such pixel marches its own ray).
+        ctx.scene3d.post.ssr_transparent = true;
+        let pond = MaterialDesc::color(Color::rgba(0.2, 0.35, 0.4, 0.6))
+            .with_roughness(0.05)
+            .with_blend(Blend::Transparent);
+        // ANCHOR_END: ssr_transparent
+        assert_eq!(pond.blend, Blend::Transparent);
+        assert_eq!(
+            ctx.scene3d.quality(),
+            Some(GraphicsQuality::Ultra),
+            "a preset leaves them as they are"
+        );
     });
 }
 

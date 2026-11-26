@@ -45,9 +45,11 @@ packaged copy once to check it runs (the [smoke run](#the-smoke-run-of-any-packa
 | macOS | `My Game.app` (the program in `Contents/MacOS`, `assets.pack`, licenses and notices in `Contents/Resources`, the icon as `icon.icns`, an `Info.plist`), with the licenses and notices also beside the app | `.dmg` with a link to Applications (made with `hdiutil`, so on a Mac; elsewhere a `.zip`) |
 | Linux | a folder, like Windows' | `.tar.gz` |
 | Web (`--web`) | a folder: `index.html`, `game.js`, `game_bg.wasm`, `assets.pack`, the licenses and notices | none: upload the folder |
+| iOS (`--target ios`, `--target ios-sim`) | `My Game.app`, a flat iOS bundle: the program, `assets.pack`, the icons, an `Info.plist`, the licenses and notices (see [iOS](ios.md)) | `.ipa` for a device, `.zip` for the simulator |
 
-`--format` picks others (comma-separated `zip`, `tar.gz`, `dmg`, or `folder`:
-the plain folder without archive, and on macOS without app bundle). The zip and
+`--format` picks others (comma-separated `zip`, `tar.gz`, `dmg`, `ipa` (iOS
+devices), or `folder`: the plain folder without archive, and on macOS without
+app bundle). The zip and
 tar.gz files are written by the command itself, so no `zip` or `tar` program is
 needed on any OS, and they are reproducible: entries sorted, owned by root,
 with fixed dates, so packing the same files twice gives the same bytes. The
@@ -67,6 +69,7 @@ table already; every key is optional:
 name = "My Game"              # the name players see: the app, the web page's title, the file names (my-game-...)
 id = "com.example.my-game"    # a reverse-DNS id you own: the macOS bundle identifier
 icon = "assets/icon.png"      # a square PNG of 16 to 1024 pixels (a power of two; 512 or 1024 looks best)
+orientation = "any"           # iOS: any, landscape or portrait
 assets = ["assets"]           # folders or files, shipped at the same path next to the program
 pack = { exclude = ["**/*.psd"] }  # how files under assets/ go into assets.pack (or pack = false: loose)
 files = [                     # put at the package's top: licenses, a readme for players, notices
@@ -81,6 +84,7 @@ files = [                     # put at the package's top: licenses, a readme for
 | `name` | the package's name (an example's name for `--example`) |
 | `id` | `local.<name>`, with a note to set one |
 | `icon` | none: macOS shows the generic app icon |
+| `orientation` | `any`: an iOS app turns every way the device does (iPhones not upside down) |
 | `assets` | `["assets"]` if that folder exists, else nothing; hidden files (`.DS_Store`) are left out |
 | `files` | the `LICENSE*`, `LICENCE*`, `COPYING*`, `NOTICE*` files beside `Cargo.toml`; a path is put at the package's top under its file name, `{ from, to }` at `to`: a file name or a path inside the package such as `docs/README.txt` (`/`-separated, no `..`), made in each place the package has its files (on macOS inside the app's `Resources` and beside the app) |
 | `pack` | `true`: the files under `assets/` in one `assets.pack`, [cooked](#cooking-assets-ponko-cook); `false` ships them loose; a table sets packing up: `exclude` (patterns of files left out), `textures = true` (images converted to KTX2 per `textures.json`, as `ponko pack --textures`) and `cook = false` (the source files as they are) |
@@ -546,7 +550,8 @@ headers](web-threads.md#hosts-that-cant-send-the-headers)).
 for it (`rustup target add <triple>` and a linker for it, such as MinGW for
 `x86_64-pc-windows-gnu`): the layout and archive are the target's, the smoke
 run is skipped, a macOS app made elsewhere is not sealed, and a dmg needs a
-Mac. What the command doesn't do yet:
+Mac. `--target ios` and `--target ios-sim` make an iOS app; [iOS](ios.md)
+has its signing steps and the simulator check. What the command doesn't do yet:
 
 - **Verified on macOS (Apple silicon) only.** There `ponko package` was run on
   a fresh `ponko new` project and on Coin Dash for every format, the archives

@@ -511,11 +511,15 @@ fn surface_at(in: VertexOut, front: bool) -> Surface {
     }
     if material.maps.x != 0u {
         // Tangent space from screen derivatives (Schüler's cotangent frame):
-        // no tangents needed in the mesh.
+        // no tangents needed in the mesh. `t` and `b` point where u and v
+        // grow. The frame takes screen y up, as OpenGL's derivatives have
+        // it: WGSL's `dpdy` runs down the screen, which taken as it is turns
+        // `t` and `b` around (a normal map would lean the surface the wrong
+        // way on both axes).
         let dp1 = dpdx(in.world);
-        let dp2 = dpdy(in.world);
+        let dp2 = -dpdy(in.world);
         let duv1 = dpdx(in.uv);
-        let duv2 = dpdy(in.uv);
+        let duv2 = -dpdy(in.uv);
         let dp2perp = cross(dp2, n);
         let dp1perp = cross(n, dp1);
         let t = dp2perp * duv1.x + dp1perp * duv2.x;
@@ -532,7 +536,8 @@ fn surface_at(in: VertexOut, front: bool) -> Surface {
             m.z = sqrt(max(1.0 - dot(m.xy, m.xy), 0.0));
         }
         m = vec3<f32>(m.xy * material.params.z, m.z);
-        // glTF's texture coordinates run down the image: flip the bitangent.
+        // glTF: the map's +X is along +u; its +Y is up the image, and glTF's
+        // v runs down the image, so +Y is along -v: minus the bitangent.
         n = normalize(t * inv * m.x - b * inv * m.y + n * m.z);
     }
     s.normal = n;
@@ -627,6 +632,53 @@ fn fs_fade(in: VertexOut) {
     if !fade_keeps(in.fade, in.clip.xy) {
         discard;
     }
+}
+
+// ---- Screen-space reflections' normals ----
+// With reflections on, solid surfaces are drawn once more over the
+// finished prepass depth (equal depths only, so each pixel once) to say
+// which way each faces: the normal the opaque pass lights it with, normal
+// maps, `surface` and decals included, so the trace's rays leave as the
+// opaque pass reflects (see ssr.wgsl). Red, green and blue: the normal,
+// each axis -1 to 1 in 10 bits with 0 exact. Multisampling averages a
+// pixel's samples: two surfaces' normals, or one and the clear value (all
+// 0), average to shorter than 1, which the trace can tell. Alpha, in two
+// bits: 0 where nothing was drawn (crowds and solid stencil materials
+// aren't: the trace keeps the depth's normal and traces), 1/3 where the
+// surface is too rough to show reflections (roughness 0.7 and up, where
+// `environment_light` has faded them out: no ray), 2/3 where it is glossy
+// and nothing tilted its normal from the mesh's (`geometric`: the trace
+// keeps the depth's normal, as without this pass), 1 where something did.
+fn reflection_normal(n: vec3<f32>, geometric: vec3<f32>, roughness: f32) -> vec4<f32> {
+    let tilted = dot(n, geometric) < 0.99996;
+    let alpha = select(select(2.0 / 3.0, 1.0, tilted), 1.0 / 3.0, roughness >= 0.7);
+    return vec4<f32>((n * 511.0 + 512.0) / 1023.0, alpha);
+}
+
+fn reflection_surface(in: VertexOut, front: bool, dp_x: vec3<f32>, dp_y: vec3<f32>) -> vec4<f32> {
+    var s = surface_at(in, front);
+    var geometric = normalize(in.normal);
+    if !front {
+        geometric = -geometric;
+    }
+    s = apply_decals(s, geometric, in.decal_layers, dp_x, dp_y);
+    return reflection_normal(s.normal, geometric, clamp(s.roughness, 0.03, 1.0));
+}
+
+@fragment
+fn fs_normals(in: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    return reflection_surface(in, front, dpdx(in.world), dpdy(in.world));
+}
+
+@fragment
+fn fs_normals_fade(in: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    let dp_x = dpdx(in.world);
+    let dp_y = dpdy(in.world);
+    let n = reflection_surface(in, front, dp_x, dp_y);
+    if !fade_keeps(in.fade, in.clip.xy) {
+        discard;
+    }
+    return n;
 }
 
 // The opaque pass's contact shadow at this pixel (see opaque_color).
@@ -743,7 +795,91 @@ fn transparent_color(in: VertexOut, front: bool) -> vec4<f32> {
     let s = surface_at(in, front);
     baked_entry = in.lightmap;
     baked_face = select(-1.0, 1.0, front) * normalize(in.normal);
+    if frame.fog_color.w > 0.0 && s.roughness < 0.7 {
+        screen_reflection = transparent_reflection(s);
+    }
     return vec4<f32>(fog(shade(s), s.world) * s.alpha, s.alpha);
+}
+
+// ---- Screen-space reflections on transparent surfaces ----
+// With `Post::ssr_transparent` (the strength in frame.fog_color.w, how far
+// a ray looks in frame.night.w), a glossy transparent surface such as water
+// or glass marches its reflected ray across the opaque scene behind it: the
+// depth and color the split transparent pass copies (see scene_color). 24
+// jittered steps in screen space (in the offscreen test, 32 drew slightly
+// smoother edges, 16 ragged ones); a step that went behind something closer than
+// twice its own length is a hit, then 4 halvings find the surface. It shows the opaque scene of this
+// frame, sharp (no cone blur: `environment_light` fades reflections out on
+// rough surfaces anyway), fading out toward the screen's edges and the end
+// of the ray. Other transparent surfaces are not in it.
+fn transparent_reflection(s: Surface) -> vec4<f32> {
+    let ray = reflect(-s.view, s.normal);
+    var reach = frame.night.w;
+    let start = frame.view_proj * vec4<f32>(s.world, 1.0);
+    var end = frame.view_proj * vec4<f32>(s.world + ray * reach, 1.0);
+    // A ray toward the camera stops before it passes the near plane.
+    let nearest = start.w * 0.1;
+    if end.w < nearest {
+        let t = (start.w - nearest) / (start.w - end.w);
+        reach *= t;
+        end = mix(start, end, t);
+    }
+    let size = frame.screen.xy;
+    let a = vec3<f32>(start.xy / start.w * vec2<f32>(0.5, -0.5) + 0.5, start.z / start.w);
+    let b = vec3<f32>(end.xy / end.w * vec2<f32>(0.5, -0.5) + 0.5, end.z / end.w);
+    let far = s.world + ray * reach;
+    // Positions over w and 1 / w change linearly across the screen.
+    let world_a = vec4<f32>(s.world, 1.0) / start.w;
+    let world_b = vec4<f32>(far, 1.0) / end.w;
+    let jitter = hash2(s.screen);
+    var before = 0.0;
+    var hit = -1.0;
+    var previous = s.world;
+    for (var i = 0u; i < 24u; i++) {
+        let k = (f32(i) + jitter) / 24.0;
+        let p = mix(a, b, k);
+        if any(p.xy < vec2<f32>(0.0)) || any(p.xy > vec2<f32>(1.0)) {
+            break;
+        }
+        let h = mix(world_a, world_b, k);
+        let point = h.xyz / h.w;
+        // Reversed depth: the opaque scene is nearer than the ray where its
+        // depth is greater.
+        if opaque_depth_at(p.xy * size) > p.z {
+            let gap = distance(point, scene_position(p.xy * size));
+            if gap < max(2.0 * distance(point, previous), 0.05) {
+                hit = k;
+                break;
+            }
+        }
+        before = k;
+        previous = point;
+    }
+    if hit < 0.0 {
+        return vec4<f32>(0.0);
+    }
+    var low = before;
+    for (var j = 0; j < 4; j++) {
+        let k = 0.5 * (low + hit);
+        let p = mix(a, b, k);
+        if opaque_depth_at(p.xy * size) > p.z {
+            hit = k;
+        } else {
+            low = k;
+        }
+    }
+    let p = mix(a, b, hit);
+    let h = mix(world_a, world_b, hit);
+    let travelled = distance(h.xyz / h.w, s.world) / max(reach, 0.0001);
+    let edge = max(abs(p.x - 0.5), abs(p.y - 0.5)) * 2.0;
+    let fade = (1.0 - smoothstep(0.9, 1.0, edge)) * (1.0 - smoothstep(0.8, 1.0, travelled));
+    return vec4<f32>(scene_color(p.xy * size), fade * min(frame.fog_color.w, 1.0));
+}
+
+// The opaque scene's depth at a pixel (reversed: 0 is the far plane).
+fn opaque_depth_at(screen: vec2<f32>) -> f32 {
+    let at = min(vec2<i32>(screen), vec2<i32>(textureDimensions(scene_depth_texture)) - 1);
+    return textureLoad(scene_depth_texture, at, 0);
 }
 
 // ---- Motion vectors (temporal antialiasing) ----

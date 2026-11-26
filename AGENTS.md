@@ -6,7 +6,7 @@ Rules for any coding agent (Claude Code, Codex, Cursor, ...) working in this rep
 
 1. **Never work directly on `main`.** Before changing anything, create a branch from an up-to-date `main`:
    - `git switch main && git pull && git switch -c <type>/<short-name>`
-   - There is also an integration branch, `dev`: agent work is based on `origin/dev`, and maintainers bring `dev` into `main` through a pull request.
+   - There is no integration branch: agent work is based on `origin/main`, and its pull requests go to `main`.
    - Branch names: `m<N>/<topic>` for roadmap milestone work (e.g. `m3/ecs-crate`), `fix/<topic>`, `chore/<topic>`, `docs/<topic>`.
    - One branch per task. Start unrelated work on its own branch (use `git worktree` if another branch is in progress).
 2. **Commit and push along the way**, not only at the end. Make a commit at every meaningful, working step (it builds, and tests pass) and push it right away (`git push -u origin <branch>` the first time).

@@ -93,6 +93,10 @@ pub(crate) enum Resource {
     TargetColor,
     /// Target cameras' textures, as materials and probe captures read them.
     TargetImage,
+    /// What a target camera's screen effects swap with its texture.
+    TargetEffectScratch,
+    /// The levels below the first of mipmapped render targets.
+    TargetMips,
     /// The sun shadow map of global illumination's probe views.
     GiShadowMap,
     /// The probe views' depth.
@@ -144,6 +148,12 @@ pub(crate) enum Resource {
     /// The scene depth copied to one 32-bit float per pixel, which the
     /// reflections' trace and filtered levels read.
     ReflectionDepth,
+    /// The reflections' normals pass's multisampled target (kept on chip
+    /// where the GPU can).
+    ReflectionNormalSamples,
+    /// Each pixel's normal and roughness, which the reflections' trace
+    /// reads.
+    ReflectionNormals,
     /// The nearest depth of each 8x8 block of the reflections' depth copy
     /// (and of 16, 32 and 64 pixels), with the plane of flat ones, which
     /// their trace reads along the stretches its long steps jump over
@@ -163,6 +173,12 @@ pub(crate) enum Resource {
     OcclusionReadback,
     /// The render targets target effects write.
     EffectTargets,
+    /// Auto exposure's meter: ever smaller images of the frame's log
+    /// luminance, down to one texel.
+    ExposureMeter,
+    /// Auto exposure's adapted exposure: last frame's, read and moved on
+    /// into this frame's.
+    ExposureState,
     /// Bloom's chain of ever smaller images.
     BloomMips,
     /// The tone mapped frame before FXAA.
@@ -213,6 +229,9 @@ pub(crate) enum Format {
     Hits,
     /// A copy of the depth as a color image: one 32-bit float channel.
     DepthCopy,
+    /// The reflections' normals: octahedral normal, roughness and coverage
+    /// in 10, 10, 10 and 2 bits.
+    Normals,
     /// The reflections' coarse depth: nearest depth and plane, four 32-bit
     /// float channels.
     CoarseDepth,
@@ -244,7 +263,7 @@ pub(crate) struct Desc {
 
 impl Resource {
     /// Every resource, in declaration order.
-    pub(crate) const ALL: [Resource; 52] = {
+    pub(crate) const ALL: [Resource; 58] = {
         use Resource::*;
         [
             VisibleDraws,
@@ -264,6 +283,8 @@ impl Resource {
             TargetDepth,
             TargetColor,
             TargetImage,
+            TargetEffectScratch,
+            TargetMips,
             GiShadowMap,
             GiViewDepth,
             GiViewColor,
@@ -285,6 +306,8 @@ impl Resource {
             ReflectionLevels,
             ReflectionHits,
             ReflectionDepth,
+            ReflectionNormalSamples,
+            ReflectionNormals,
             ReflectionCoarseDepth,
             ReflectionSpread,
             ReflectionHistory,
@@ -292,6 +315,8 @@ impl Resource {
             OcclusionGrid,
             OcclusionReadback,
             EffectTargets,
+            ExposureMeter,
+            ExposureState,
             BloomMips,
             Ldr,
             SmaaInput,
@@ -333,6 +358,8 @@ impl Resource {
             Resource::TargetDepth => desc("target camera depth", Frame, F::Depth, Scene),
             Resource::TargetColor => desc("target camera color", Frame, F::Hdr, Scene),
             Resource::TargetImage => desc("target camera image", Persistent, F::Hdr, One),
+            Resource::TargetEffectScratch => desc("target camera effect scratch", Frame, F::Hdr, One),
+            Resource::TargetMips => desc("render target mip levels", Persistent, F::Hdr, One),
             Resource::GiShadowMap => desc("gi shadow map", Frame, F::Depth, One),
             Resource::GiViewDepth => desc("gi view depth", Frame, F::Depth, Scene),
             Resource::GiViewColor => desc("gi view color", Frame, F::Hdr, Scene),
@@ -358,6 +385,8 @@ impl Resource {
             Resource::ReflectionLevels => desc("reflection levels", Frame, F::Screen, One),
             Resource::ReflectionHits => desc("reflection hits", Frame, F::Hits, One),
             Resource::ReflectionDepth => desc("reflection depth", Frame, F::DepthCopy, One),
+            Resource::ReflectionNormalSamples => desc("reflection normal samples", Frame, F::Normals, Scene),
+            Resource::ReflectionNormals => desc("reflection normals", Frame, F::Normals, One),
             Resource::ReflectionCoarseDepth => desc("reflection coarse depth", Frame, F::CoarseDepth, One),
             Resource::ReflectionSpread => desc("reflection spread", Frame, F::Spread, One),
             Resource::ReflectionHistory => desc("reflection history", Persistent, F::Hdr, One),
@@ -366,6 +395,8 @@ impl Resource {
             Resource::OcclusionGrid => desc("occlusion grid", Frame, F::Buffer, One),
             Resource::OcclusionReadback => desc("occlusion readback", Persistent, F::Buffer, One),
             Resource::EffectTargets => desc("effect targets", Persistent, F::Any, One),
+            Resource::ExposureMeter => desc("auto exposure meter", Frame, F::Hdr, One),
+            Resource::ExposureState => desc("auto exposure", Persistent, F::Hdr, One),
             Resource::BloomMips => desc("bloom", Frame, F::Hdr, One),
             Resource::Ldr => desc("frame before fxaa", Frame, F::Output, One),
             Resource::SmaaInput => desc("frame before smaa", Frame, F::Any, One),
@@ -510,6 +541,17 @@ features! {
     /// Nothing moved, and the motion vectors (kept from frame to frame)
     /// hold none since the last motion pass cleared them: it is skipped.
     MOTION_KEPT = 48, "motion vectors kept";
+    /// Auto exposure meters the frame and adapts the exposure.
+    AUTO_EXPOSURE = 49, "auto exposure";
+    /// A target camera runs screen effects over its picture.
+    TARGET_CAMERA_EFFECTS = 50, "target camera effects";
+    /// A target camera runs at least two: one writes back into its texture.
+    TARGET_CAMERA_EFFECTS_BACK = 51, "two target camera effects";
+    /// A target camera runs an odd number: its picture ends in the scratch
+    /// and is copied back.
+    TARGET_CAMERA_EFFECTS_ODD = 52, "odd target camera effects";
+    /// Mipmapped render targets get their levels made again.
+    TARGET_MIPS = 53, "render target mipmaps";
 }
 
 impl Features {
@@ -522,6 +564,10 @@ impl Features {
         (Features::TARGET_CAMERAS, Features::VIEWS),
         (Features::PROBES, Features::VIEWS),
         (Features::TARGET_CUTOUTS, Features::TARGET_CAMERAS),
+        (Features::TARGET_CAMERA_EFFECTS, Features::TARGET_CAMERAS),
+        (Features::TARGET_CAMERA_EFFECTS_BACK, Features::TARGET_CAMERA_EFFECTS),
+        (Features::TARGET_CAMERA_EFFECTS_ODD, Features::TARGET_CAMERA_EFFECTS),
+        (Features::TARGET_MIPS, Features::VIEWS),
         (Features::VIEW_MODEL_SEE_THROUGH, Features::SPLIT),
         (Features::TARGET_CUTOUTS, Features::MSAA),
         (Features::CUTOUTS, Features::MSAA),
@@ -1024,6 +1070,47 @@ pub(crate) const FRAME_PASSES: [Pass; 8] = [
                     u(TargetDepth, A::DepthLoad),
                 ],
             ),
+            // A camera's screen effects swap between its texture and the
+            // scratch, as the main view's do; an odd number ends in the
+            // scratch, which is copied back.
+            step(
+                "effect",
+                on(F::TARGET_CAMERA_EFFECTS),
+                &[
+                    u(TargetImage, A::Sample),
+                    u(TargetDepth, A::SampleMs),
+                    u(ComputeTargets, A::Sample).on(F::TEXTURE_COMPUTE),
+                    u(TargetEffectScratch, A::Color),
+                ],
+            ),
+            step(
+                "effect back",
+                on(F::TARGET_CAMERA_EFFECTS_BACK),
+                &[
+                    u(TargetEffectScratch, A::Sample),
+                    u(TargetDepth, A::SampleMs),
+                    u(ComputeTargets, A::Sample).on(F::TEXTURE_COMPUTE),
+                    u(TargetImage, A::Color),
+                ],
+            ),
+            step(
+                "effect copy",
+                on(F::TARGET_CAMERA_EFFECTS_ODD),
+                &[u(TargetEffectScratch, A::CopyFrom), u(TargetImage, A::CopyTo)],
+            ),
+            // Each mipmapped render target written since its levels were
+            // last made (by these cameras, compute passes, or the last
+            // frame's target effects): each level from the one above.
+            step(
+                "mipmaps",
+                on(F::TARGET_MIPS),
+                &[
+                    u(TargetImage, A::Sample).on(F::TARGET_CAMERAS),
+                    u(ComputeTargets, A::Sample).on(F::TEXTURE_COMPUTE),
+                    u(EffectTargets, A::SamplePrevious).on(F::TARGET_EFFECTS),
+                    u(TargetMips, A::Color),
+                ],
+            ),
             step(
                 "probes",
                 on(F::PROBES),
@@ -1079,6 +1166,18 @@ pub(crate) const FRAME_PASSES: [Pass; 8] = [
                 on(F::CUTOUTS),
                 models![u(SceneColor, A::Color), u(SceneDepth, A::DepthLoad)],
             ),
+            // What the opaque pass draws, over the finished depth: each
+            // pixel's normal and roughness, which the trace's rays leave by.
+            step(
+                "reflection normals",
+                on(F::SSR),
+                models![
+                    u(ReflectionNormalSamples, A::Color).on(F::MSAA),
+                    u(ReflectionNormals, A::Resolve).on(F::MSAA),
+                    u(ReflectionNormals, A::Color).off(F::MSAA),
+                    u(SceneDepth, A::DepthRead),
+                ],
+            ),
             step(
                 "occlusion depth",
                 on(F::OCCLUSION.with(F::SOLID_PREPASS)),
@@ -1122,6 +1221,7 @@ pub(crate) const FRAME_PASSES: [Pass; 8] = [
                 on(F::SSR),
                 &[
                     u(ReflectionDepth, A::Sample),
+                    u(ReflectionNormals, A::Sample),
                     u(ReflectionCoarseDepth, A::Sample).on(F::SSR_THIN),
                     u(ReflectionHistory, A::SamplePrevious),
                     u(ScreenImage, A::Color),
@@ -1416,6 +1516,19 @@ pub(crate) const FRAME_PASSES: [Pass; 8] = [
             // The frame is in the scratch after an odd number of swaps:
             // screen effects and depth of field.
             step(
+                "auto exposure",
+                on(F::AUTO_EXPOSURE),
+                &[
+                    u(Hdr, A::Sample).off(F::EFFECTS_ODD.with(F::DOF)),
+                    u(Hdr, A::Sample).on(F::EFFECTS_ODD.with(F::DOF)),
+                    u(EffectScratch, A::Sample).on(F::EFFECTS_ODD).off(F::DOF),
+                    u(EffectScratch, A::Sample).on(F::DOF).off(F::EFFECTS_ODD),
+                    u(ExposureMeter, A::Color),
+                    u(ExposureState, A::SamplePrevious),
+                    u(ExposureState, A::Color),
+                ],
+            ),
+            step(
                 "bloom",
                 on(F::BLOOM),
                 &[
@@ -1423,6 +1536,7 @@ pub(crate) const FRAME_PASSES: [Pass; 8] = [
                     u(Hdr, A::Sample).on(F::EFFECTS_ODD.with(F::DOF)),
                     u(EffectScratch, A::Sample).on(F::EFFECTS_ODD).off(F::DOF),
                     u(EffectScratch, A::Sample).on(F::DOF).off(F::EFFECTS_ODD),
+                    u(ExposureState, A::Sample).on(F::AUTO_EXPOSURE),
                     u(BloomMips, A::Color),
                 ],
             ),
@@ -1435,6 +1549,7 @@ pub(crate) const FRAME_PASSES: [Pass; 8] = [
                     u(EffectScratch, A::Sample).on(F::EFFECTS_ODD).off(F::DOF),
                     u(EffectScratch, A::Sample).on(F::DOF).off(F::EFFECTS_ODD),
                     u(BloomMips, A::Sample).on(F::BLOOM),
+                    u(ExposureState, A::Sample).on(F::AUTO_EXPOSURE),
                     u(Ldr, A::Color).on(F::FXAA),
                     u(SmaaInput, A::Color).on(F::SMAA),
                     u(Upscaled, A::Color).on(F::UPSCALE).off(F::FXAA.with(F::SMAA)),

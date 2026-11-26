@@ -37,6 +37,7 @@ Give the game an app id with `Game::app_id` (C++ `game::app_id`, C
 |---|---|
 | Windows | `%APPDATA%\<app id>\` |
 | macOS | `~/Library/Application Support/<app id>/` |
+| iOS | `Library/Application Support/<app id>/` in the app's own container, backed up with the device |
 | Linux and other Unix | `$XDG_DATA_HOME/<app id>/`, else `~/.local/share/<app id>/` |
 | Web | The page's IndexedDB database `ponko:<app id>` |
 

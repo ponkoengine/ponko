@@ -14,6 +14,7 @@
 //! |---|---|
 //! | Windows | `%APPDATA%\<app id>` |
 //! | macOS | `~/Library/Application Support/<app id>` |
+//! | iOS | `Library/Application Support/<app id>` in the app's own container (backed up with the device) |
 //! | Linux and other Unix | `$XDG_DATA_HOME/<app id>`, else `~/.local/share/<app id>` |
 //! | Web | The page's IndexedDB database `ponko:<app id>` (see below) |
 //!
@@ -372,6 +373,19 @@ impl Storage {
             Backend::Folder(dir) => dir.join(name).is_file(),
             #[cfg(target_arch = "wasm32")]
             Backend::Browser => web::read(name).is_some(),
+        }
+    }
+
+    /// When the file `name` was last written: `None` when it isn't there,
+    /// and on the web (the browser keeps no times). For syncing with a
+    /// cloud copy ([`Steam::sync_cloud`](crate::steam::Steam::sync_cloud)).
+    #[cfg_attr(not(feature = "steam"), allow(dead_code))]
+    pub(crate) fn modified(&self, name: &str) -> Option<std::time::SystemTime> {
+        check_name(name).ok()?;
+        self.queue.wait_for(|n| n == name);
+        match &self.backend {
+            Backend::Folder(dir) => std::fs::metadata(dir.join(name)).and_then(|m| m.modified()).ok(),
+            _ => None,
         }
     }
 
@@ -833,7 +847,7 @@ impl Drop for Ticket {
 
 /// Checks a file name: relative parts with safe characters, no reserved
 /// suffix.
-fn check_name(name: &str) -> Result<(), Error> {
+pub(crate) fn check_name(name: &str) -> Result<(), Error> {
     let bad = |why: &str| Err(Error::new(ErrorKind::Invalid, format!("file name {name:?} {why}")).with_path(name));
     if name.is_empty() {
         return bad("is empty");
@@ -917,7 +931,8 @@ fn base_dir(var: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> Option<PathBuf>
     }
     if cfg!(windows) {
         var("APPDATA").or_else(|| var("USERPROFILE").map(|h| h.join("AppData").join("Roaming")))
-    } else if cfg!(target_os = "macos") {
+    } else if cfg!(any(target_os = "macos", target_os = "ios")) {
+        // On iOS, HOME is the app's own container.
         var("HOME").map(|h| h.join("Library").join("Application Support"))
     } else {
         // XDG says a relative value is invalid and must be ignored.
@@ -1209,7 +1224,7 @@ mod tests {
         let home = env(&[("HOME", "/home/p"), ("APPDATA", "C:\\Users\\p\\AppData\\Roaming")]);
         let expected = if cfg!(windows) {
             PathBuf::from("C:\\Users\\p\\AppData\\Roaming")
-        } else if cfg!(target_os = "macos") {
+        } else if cfg!(any(target_os = "macos", target_os = "ios")) {
             PathBuf::from("/home/p/Library/Application Support")
         } else {
             PathBuf::from("/home/p/.local/share")
@@ -1218,7 +1233,7 @@ mod tests {
         let over = env(&[(ENV_DATA_DIR, "/elsewhere"), ("HOME", "/home/p")]);
         assert_eq!(base_dir(&over), Some(PathBuf::from("/elsewhere")));
         assert_eq!(base_dir(&env(&[])), None, "no home: no folder");
-        if !cfg!(windows) && !cfg!(target_os = "macos") {
+        if !cfg!(windows) && !cfg!(any(target_os = "macos", target_os = "ios")) {
             let xdg = env(&[("XDG_DATA_HOME", "/xdg"), ("HOME", "/home/p")]);
             assert_eq!(base_dir(&xdg), Some(PathBuf::from("/xdg")));
             let relative = env(&[("XDG_DATA_HOME", "rel"), ("HOME", "/home/p")]);

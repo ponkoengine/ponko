@@ -191,6 +191,55 @@ node web/smoke/webgpu-fallback.mjs --case device-lost --chromium-mode new   # on
 
 `webgpu-fallback.test.mjs` checks its decisions without a browser.
 
+## On a real GPU
+
+`--require-gpu` makes a Chromium run (`--case ok`) a gate for the
+machine's GPU instead of a report: the run fails (exit 1, kind `no-gpu`)
+when the browser lacks the backend asked for, when its WebGPU adapter is a
+fallback adapter or a software renderer (SwiftShader, llvmpipe, lavapipe,
+...), when its WebGL2 renderer is one, or when the engine's own adapter
+(`data-smoke-gpu`) is of the CPU type or names one. It also leaves out
+`--enable-unsafe-swiftshader`, so the browser can't quietly fall back. A
+WebGPU run that fell back to WebGL2 already fails as `backend`. It can't go
+with `--allow-unsupported`. Use the new headless mode: the headless shell
+has no GPU.
+
+```sh
+node web/smoke/smoke.mjs --fixture web_smoke_3d --chromium-mode new --backend webgpu --require-gpu
+```
+
+The check list's `web-gpu` job (macOS) runs it for the 2D and 3D fixtures
+on WebGPU and the 3D one on WebGL2, then `frame-times.mjs` once.
+
+## Frame times
+
+`frame-times.mjs` times the 3D fixture's frames (`web/build.sh --features
+3d web_smoke_3d` first, or `--build`) on WebGPU and WebGL2 in Chromium's
+new headless mode, on a real GPU (it fails otherwise, as `--require-gpu`
+does). A page script notes `performance.now()` each time the fixture
+publishes a new frame count (once per engine frame), on a cross-origin
+isolated page for a fine clock; each load skips `--warmup` frames (120)
+and times the next `--frames` (1,000). It prints each load's median, 95th
+and 99th percentile and slowest frame, the engine's own split from the
+fixture's `frame_stats` (CPU in systems and drawing, GPU where the browser
+times passes), the load average, and a summary over the `--repeat` loads
+(3) per backend.
+
+| Option | Default | |
+|---|---|---|
+| `--pacing uncapped\|display` | `uncapped` | `uncapped` turns off vsync and the frame-rate limit, so a frame time is the frame's cost; `display` keeps the browser's 60 Hz |
+| `--backends webgpu,webgl2` | both | |
+| `--frames <n>`, `--warmup <n>`, `--repeat <n>` | 1000, 120, 3 | |
+| `--dir`, `--out`, `--timeout <s>` | `target/web/web_smoke_3d`, `target/web-smoke/frame-times-<pacing>`, 60 per load | |
+
+```sh
+node web/smoke/frame-times.mjs
+node web/smoke/frame-times.mjs --pacing display --frames 600
+```
+
+The guide's [Frame times](../../book/src/web.md#frame-times) has the
+numbers and what they mean. `frame-times.test.mjs` checks the arithmetic.
+
 ## Multiplayer
 
 `multiplayer.mjs` checks [browser multiplayer](../../book/src/networking.md#in-the-browser):
@@ -297,7 +346,8 @@ More modes:
   console must say `the game stops`, the page must still answer, and the
   ticks must stop.
 - `--bench` times the fixture's workloads (`par`, `sweep`, `interleaved`,
-  `jobs`: those of `crates/ponko_bench`) with `?threads=1` and with the
+  `jobs`: those of `crates/ponko_bench`; `boids`: one tick of
+  `examples/boids.rs`, 20,000 boids) with `?threads=1` and with the
   default, three page loads each (`--repeat`). It prints the medians, their
   spread, and each speed-up, saying whether it is beyond the noise.
   `--dir <an ordinary build> --threads 1` times a build without threads.
@@ -549,6 +599,7 @@ table.
 |---|---|---|---|
 | The list of checks (`web-smoke` job, Ubuntu, no GPU) | Chromium (headless shell and full browser), Firefox, WebKit from Playwright | Must pass in Chromium and WebKit, for the 2D and 3D fixtures (software GL); `coin_dash` and the multiplayer check (`multiplayer.mjs`) in Chromium. Firefox is tried and reported: headless Firefox has no WebGL2 on that machine, so it reads "unsupported" | Tried; passes as "unsupported", with the reason, where the browser can't show a WebGPU canvas; where it can, the game must draw through it |
 | The list of checks (`web-smoke-runner`) | none | the runner's own tests only (and the gallery's) | |
+| The list of checks (`web-gpu` job, a Mac with its GPU) | Chromium new headless mode | Must pass on the GPU for the 3D fixture (`--require-gpu`: ANGLE on Metal, no software renderer) | **Must pass** on the GPU for the 2D and 3D fixtures (`--require-gpu`); unsupported, a fallback to WebGL2 or a software adapter fails; then `frame-times.mjs` once per backend |
 | A release (the gallery check, Ubuntu, no GPU) | Chromium headless shell | Every gallery page must pass (software GL) | Not tried; the demos that need WebGPU must show their message |
 | Apple Silicon Mac, the gallery (`gallery.mjs`) | Chromium 156 | Every page passes in the headless shell; the 2 demos that need WebGPU (compute passes) show their message | Every page passes in new headless mode on the Metal adapter |
 | Apple Silicon Mac, Chromium new headless mode | Chromium 156 | Passes (ANGLE on Metal) | **Passes** on the Metal adapter: the engine reports `webgpu`, the canvas draws |

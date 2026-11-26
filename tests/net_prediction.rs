@@ -309,6 +309,29 @@ fn predictions_survive_loss_and_reordering_without_corrections() {
 }
 
 #[test]
+fn a_late_joiner_numbers_its_inputs_like_the_running_stream() {
+    // The server's input stream for this seat is near the end of its
+    // numbers, so the new prediction picks up its numbering.
+    let mut p = Prediction::<Walker, Stick>::new(Walker {
+        pos: Vec2::ZERO,
+        vel: Vec2::ZERO,
+    })
+    .starting_at(65_534);
+    let right = Stick { x: 1, y: 0 };
+    let seqs: Vec<u16> = (0..3).map(|_| p.predict(right, walk)).collect();
+    assert_eq!(seqs, [65_534, 65_535, 0]);
+    // The server acknowledges by those numbers; the first two are dropped.
+    let mut server = Walker {
+        pos: Vec2::ZERO,
+        vel: Vec2::ZERO,
+    };
+    walk(&mut server, &right);
+    walk(&mut server, &right);
+    p.reconcile(65_535, server, walk);
+    assert_eq!(p.unacked().map(|(seq, _)| seq).collect::<Vec<_>>(), [0]);
+}
+
+#[test]
 fn server_side_pushes_are_corrected_and_smoothed() {
     let world = World {
         conveyor: 1.0,

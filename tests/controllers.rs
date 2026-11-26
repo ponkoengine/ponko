@@ -36,6 +36,7 @@ fn rumbling() -> GamepadInfo {
         rumble: true,
         trigger_rumble: true,
         motion: true,
+        ..Default::default()
     })
 }
 
@@ -573,4 +574,219 @@ fn polling_rumble_motion_and_prompts_allocate_nothing_per_frame() {
             assert_eq!(ALLOCS.get(), 0);
         }
     });
+}
+
+// Joysticks: wheels, pedals and flight sticks, read by number.
+
+fn wheel() -> ponko::input::JoystickInfo {
+    use ponko::input::{ForceFeedbackSupport, JoystickInfo, JoystickKind};
+    JoystickInfo::new("Wheel")
+        .kind(JoystickKind::Wheel)
+        .layout(3, 12, 1)
+        .force_feedback(ForceFeedbackSupport {
+            spring: true,
+            damper: true,
+            ..Default::default()
+        })
+}
+
+#[test]
+fn a_wheel_reads_its_buttons_and_hat_by_number_and_edges_last_one_frame() {
+    use ponko::input::{Joystick, MAX_JOYSTICK_BUTTONS, MAX_JOYSTICK_HATS, hat_from_bits};
+    let fake = FakeGamepads::new();
+    let device = fake.connect_joystick(wheel());
+    let script = fake.clone();
+    run(&fake, 5, move |ctx, frame| {
+        let wheel = Joystick::from_slot(0).unwrap();
+        match frame {
+            0 => {
+                assert_eq!(ctx.input.joysticks(), [wheel]);
+                script.set_joystick_button(device, 3, true);
+                script.set_joystick_hat(device, 0, hat_from_bits(0b0011));
+                script.set_joystick_axis(device, 0, 0.5);
+                // Past the limits: ignored, not a panic.
+                script.set_joystick_button(device, MAX_JOYSTICK_BUTTONS, true);
+                script.set_joystick_hat(device, MAX_JOYSTICK_HATS, glam::IVec2::ONE);
+            }
+            1 => {
+                assert!(ctx.input.joystick_pressed(wheel, 3) && ctx.input.joystick_down(wheel, 3));
+                assert_eq!(
+                    ctx.input.joystick_hat(wheel, 0),
+                    glam::IVec2::new(1, -1),
+                    "up and right"
+                );
+                assert_eq!(ctx.input.joystick_axis(wheel, 0), 0.5);
+                assert!(!ctx.input.joystick_down(wheel, MAX_JOYSTICK_BUTTONS));
+                assert_eq!(ctx.input.joystick_hat(wheel, MAX_JOYSTICK_HATS), glam::IVec2::ZERO);
+            }
+            2 => {
+                assert!(!ctx.input.joystick_pressed(wheel, 3), "a press is one frame");
+                assert!(ctx.input.joystick_down(wheel, 3));
+                script.set_joystick_button(device, 3, false);
+            }
+            3 => {
+                assert!(ctx.input.joystick_released(wheel, 3) && !ctx.input.joystick_down(wheel, 3));
+                script.disconnect(device);
+            }
+            _ => {
+                assert!(ctx.input.joysticks().is_empty());
+                assert_eq!(
+                    ctx.input.joystick_hat(wheel, 0),
+                    glam::IVec2::ZERO,
+                    "rests when unplugged"
+                );
+            }
+        }
+    });
+    assert!(Joystick::from_slot(ponko::input::MAX_JOYSTICKS).is_none());
+}
+
+#[test]
+fn force_feedback_reaches_the_wheel_once_per_change() {
+    use ponko::input::{ForceFeedback, Joystick};
+    let fake = FakeGamepads::new();
+    let device = fake.connect_joystick(wheel());
+    let script = fake.clone();
+    let effects = ForceFeedback {
+        spring: 0.5,
+        damper: 0.2,
+        ..ForceFeedback::OFF
+    };
+    run(&fake, 5, move |ctx, frame| {
+        let wheel = Joystick::from_slot(0).unwrap();
+        match frame {
+            0 => {
+                assert!(ctx.input.joystick_info(wheel).unwrap().force_feedback.spring);
+                ctx.input.set_force_feedback(wheel, effects);
+                assert_eq!(ctx.input.force_feedback(wheel), effects);
+            }
+            1 | 2 => ctx.input.set_force_feedback(wheel, effects),
+            3 => {
+                assert_eq!(script.force_feedback(device), effects);
+                assert_eq!(
+                    script.force_feedback_changes(device),
+                    1,
+                    "the same effects again aren't resent"
+                );
+                ctx.input.set_force_feedback(wheel, ForceFeedback::OFF);
+            }
+            _ => {
+                assert!(script.force_feedback(device).is_off());
+                assert_eq!(script.force_feedback_changes(device), 2);
+            }
+        }
+    });
+}
+
+#[test]
+fn a_pad_axis_from_the_backend_moves_the_stick() {
+    let fake = FakeGamepads::new();
+    let device = fake.connect(GamepadInfo::new("Pad"));
+    fake.set_axis(device, GamepadAxis::LeftStickX, -0.75);
+    run(&fake, 1, |ctx, _| {
+        assert_eq!(ctx.input.gamepad_axis(pad(0), GamepadAxis::LeftStickX), -0.75);
+        assert!(ctx.input.rumble_levels(pad(0)) == MotorLevels::OFF);
+    });
+}
+
+/// A backend of its own: one pad and one flight stick, told about through
+/// `GamepadEvents`, and the motor and force-feedback levels it was sent.
+struct Scripted {
+    frame: u32,
+    rumble: std::sync::Arc<std::sync::Mutex<Vec<MotorLevels>>>,
+}
+
+impl ponko::input::GamepadBackend for Scripted {
+    fn poll(&mut self, events: &mut ponko::input::GamepadEvents<'_>) {
+        use ponko::input::{JoystickInfo, JoystickKind};
+        match self.frame {
+            0 => {
+                events.connected(DeviceKey(1), rumbling());
+                let stick =
+                    events.joystick_connected(DeviceKey(2), JoystickInfo::new("Stick").kind(JoystickKind::FlightStick));
+                assert!(stick.is_some());
+            }
+            1 => {
+                events.joystick_button(DeviceKey(2), 0, true);
+                events.joystick_hat(DeviceKey(2), 0, glam::IVec2::new(-1, 0));
+                events.joystick_axis(DeviceKey(2), 1, -1.0);
+            }
+            2 => {
+                events.joystick_disconnected(DeviceKey(2));
+                events.disconnected(DeviceKey(1));
+            }
+            _ => {}
+        }
+        self.frame += 1;
+    }
+
+    fn set_rumble(&mut self, _device: DeviceKey, levels: MotorLevels) {
+        self.rumble.lock().unwrap().push(levels);
+    }
+}
+
+#[test]
+fn a_backend_of_its_own_reports_pads_and_joysticks_through_its_events() {
+    use ponko::input::Joystick;
+    let rumble = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let backend = Scripted {
+        frame: 0,
+        rumble: rumble.clone(),
+    };
+    // What each frame saw: pads, joysticks, button 0 pressed, hat 0, axis 1.
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = seen.clone();
+    Game::new("controllers", 1, 1)
+        .gamepad_backend(backend)
+        .sim_system(move |ctx: &mut Ctx| {
+            let stick = Joystick::from_slot(0).unwrap();
+            if ctx.input.gamepads().len() == 1 && ctx.input.rumble_levels(pad(0)).is_off() {
+                ctx.input.rumble(pad(0), Rumble::new(0.5, 0.5).seconds(10.0));
+            }
+            log.lock().unwrap().push((
+                ctx.input.gamepads().len(),
+                ctx.input.joysticks().len(),
+                ctx.input.joystick_pressed(stick, 0),
+                ctx.input.joystick_hat(stick, 0),
+                ctx.input.joystick_axis(stick, 1),
+            ));
+        })
+        .run_headless(4, |_| {});
+    let seen = seen.lock().unwrap();
+    assert_eq!((seen[0].0, seen[0].1), (1, 1), "connected: {seen:?}");
+    assert!(
+        seen.iter()
+            .any(|&(_, _, pressed, hat, axis)| pressed && hat == glam::IVec2::new(-1, 0) && axis == -1.0),
+        "{seen:?}"
+    );
+    assert_eq!(
+        (seen.last().unwrap().0, seen.last().unwrap().1),
+        (0, 0),
+        "both gone: {seen:?}"
+    );
+    let sent = rumble.lock().unwrap();
+    assert!(
+        sent.iter().any(|l| l.strong == 0.5),
+        "rumble went to the backend: {sent:?}"
+    );
+}
+
+#[test]
+fn every_controller_family_has_glyphs_in_the_atlas_grid() {
+    use ponko::input::GlyphAtlas;
+    let atlas = GlyphAtlas::new(16);
+    assert_eq!(atlas.size().0, GlyphAtlas::COLUMNS * 16, "a row is COLUMNS cells wide");
+    for family in ControllerFamily::ALL {
+        let south = atlas.region(Glyph::Button(family, GamepadButton::South));
+        assert_eq!(south.size(), glam::vec2(16.0, 16.0), "{family:?}");
+    }
+    assert_eq!(ControllerFamily::ALL.len(), 4);
+}
+
+#[test]
+fn input_injection_is_off_unless_the_game_allows_it() {
+    Game::new("t", 1, 1).run_headless(1, |ctx| assert!(!ctx.input.injection_allowed()));
+    Game::new("t", 1, 1)
+        .input_injection(true)
+        .run_headless(1, |ctx| assert!(ctx.input.injection_allowed()));
 }

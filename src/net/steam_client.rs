@@ -26,7 +26,7 @@ use std::str::FromStr;
 /// ```
 #[derive(Clone)]
 pub struct SteamClient {
-    pub(super) inner: steamworks::Client,
+    pub(crate) inner: steamworks::Client,
 }
 
 impl SteamClient {

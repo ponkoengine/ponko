@@ -36,6 +36,16 @@ DepthOfField.focus_distance dof_focus_distance      # same
 DepthOfField.focus_range    dof_focus_range         # same
 DepthOfField.blur           dof_blur                # same
 
+struct AutoExposure AutoExposure src/three/post.rs PonkoPostEx
+AutoExposure.enabled        auto_exposure           # prefixed in the flat C struct
+AutoExposure.min            auto_exposure_min       # same
+AutoExposure.max            auto_exposure_max       # same
+AutoExposure.compensation   auto_exposure_compensation # same
+AutoExposure.brighten_speed auto_exposure_brighten_speed # same
+AutoExposure.darken_speed   auto_exposure_darken_speed # same
+AutoExposure.center_weight  auto_exposure_center_weight # same
+AutoExposure.mask           auto_exposure_mask      # with auto_exposure_has_mask
+
 struct ParticleSettings ParticleSettings3D src/three/particles.rs PonkoParticleSettings3D,PonkoParticleSettings3DEx
 ParticleSettings.lifetime         lifetime_min           # a range is a _min and a _max field
 ParticleSettings.speed            speed_min              # same
@@ -50,6 +60,9 @@ Camera.rect                ponko_ctx_set_camera3d_view  # PonkoView3D.rect, with
 Camera.layers              ponko_ctx_set_camera3d_view  # PonkoView3D.layers
 struct TargetCamera TargetCamera src/three/target.rs PonkoTargetCamera,PonkoTargetCameraEx
 TargetCamera.clip_plane           has_clip_plane         # has_clip_plane and the four numbers of clip_plane
+TargetCamera.cull_box             has_cull_box           # has_cull_box, cull_box_min and cull_box_max (version 3)
+TargetCamera.clear                has_clear              # has_clear and clear (version 3)
+TargetCamera.effects              ponko_ctx_set_target_camera_effects # a list: set and read apart, by camera index
 
 struct Lighting Lighting src/three/mod.rs PonkoLighting,PonkoLightingEx
 Lighting.gi                       gi_enabled             # GlobalIllumination's fields are the gi_* fields

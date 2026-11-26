@@ -1721,6 +1721,9 @@ impl Graphics {
     /// somewhere else (a teleport, a new scene), so the old view does not
     /// blend into the new one. Call this after teleporting objects too:
     /// on this frame no model has motion (the old position is not its past).
+    /// Auto exposure ([`Post::auto_exposure`](crate::render::Post::auto_exposure))
+    /// starts over at the exposure the new view needs, instead of adapting
+    /// to it.
     ///
     /// The engine resets by itself on a window resize or render scale
     /// change, when temporal antialiasing or another screen effect is
@@ -1930,7 +1933,7 @@ impl Ctx {
     /// Engine side, before drawing: collect the visible models and hand
     /// them, the camera and the light to the renderer.
     /// What each target camera into a real render target sees.
-    pub(crate) fn collect_views(&mut self, skins: &super::SkinFrame) {
+    pub(crate) fn collect_views(&mut self, skins: &super::SkinFrame, fallback: Option<Material>) {
         let mut capture_cameras = Vec::new();
         self.gfx.frame3d.probe_bakes.clear();
         self.gfx.frame3d.probe_uploads.clear();
@@ -2028,6 +2031,7 @@ impl Ctx {
             eye.set_viewport(glam::Vec2::new(size.0 as f32, size.1 as f32));
             view.frame.lod = self.scene3d.lod;
             view.frame.lod_dt = Some(self.time.frame_dt());
+            view.frame.cull_box = camera.cull_box;
             view.frame
                 .collect(&mut self.world, &self.gfx.assets3d, skins, &eye, &lighting);
             view.target = camera.target.texture.id;
@@ -2036,6 +2040,18 @@ impl Ctx {
             view.particles = eye.particles;
             view.debug = eye.draws_debug(true);
             view.eye = Some(eye);
+            view.cull_box = camera.cull_box;
+            view.clear = camera.clear;
+            let effects_live = &self.gfx.assets3d.effects_live;
+            view.effects.clear();
+            view.effects.extend(camera.effects.iter().filter_map(|e| {
+                // A freed effect is skipped, as in the main view's list.
+                if !effects_live.contains(e.effect.id) {
+                    return None;
+                }
+                let material = e.material.or(fallback)?;
+                Some((e.effect.id, material.id))
+            }));
             view.view_proj = match camera.clip_plane {
                 Some(plane) => super::target::oblique(eye.view_proj(), eye.view(), plane),
                 None => eye.view_proj(),
@@ -2225,6 +2241,9 @@ impl Ctx {
             || self.scene3d.passes.target_effects.iter().any(|e| e.material.is_none())
             || self.scene3d.passes.compute.iter().any(|c| c.material.is_none())
             || self.scene3d.passes.scene_compute.iter().any(|c| c.material.is_none())
+            || (self.scene3d.passes.target_cameras.iter())
+                .flat_map(|c| &c.effects)
+                .any(|e| e.material.is_none())
         {
             Some(self.gfx.default_material())
         } else {
@@ -2243,7 +2262,7 @@ impl Ctx {
         // The last frame's poses are kept only while something reads motion.
         skins.motion = motion;
         skins.collect(&mut self.world, &self.gfx.assets3d);
-        self.collect_views(&skins);
+        self.collect_views(&skins, fallback);
         let Some(renderer) = self.gfx.renderer.as_mut() else {
             return;
         };

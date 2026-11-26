@@ -2546,6 +2546,8 @@ static void messages() {
     throws([] { ponko::net_messages::steam_host(480, 0); });
     throws([] { ponko::net_messages::steam_join(480, 0); });
     throws([] { ponko::net_messages::steam_host(480, 2); }); // no Steam support/client in native test
+    throws([] { ponko::net_messages::steam_sockets_host(480, ponko::steam_lobby_visibility::public_lobby, 0); });
+    throws([] { ponko::net_messages::steam_sockets_host(480, ponko::steam_lobby_visibility::public_lobby, 2); });
     throws([] { ponko::steam_lobby::create(480, ponko::steam_lobby_visibility::private_lobby, 0); });
     throws([] { ponko::steam_lobby::create(480, ponko::steam_lobby_visibility::friends_only, 2); });
     throws([] { ponko::steam_lobby::join(480, 0); });
@@ -4316,6 +4318,34 @@ static void safe_area() {
         const auto area = ctx.window_safe_area();
         CHECK(area.min.x == 47 && area.max.y == 369);
     });
+
+    // A phone's lifecycle, keyboard and audio session (#476).
+    ponko::game("c++ phone lifecycle", 844, 390).run_headless(0, [](ponko::ctx& ctx) {
+        using kind = ponko::window_event_kind;
+        CHECK(!ctx.window_suspended());
+        ctx.window_feed_lifecycle(kind::suspended);
+        ctx.window_feed_lifecycle(kind::suspended);
+        CHECK(ctx.window_suspended());
+        ctx.window_feed_lifecycle(kind::low_memory);
+        ctx.window_feed_lifecycle(kind::resumed);
+        CHECK(!ctx.window_suspended());
+        const auto events = ctx.window_events();
+        CHECK(events.size() == 3 && events[0].kind == kind::suspended && events[1].kind == kind::low_memory &&
+              events[2].kind == kind::resumed);
+        bool refused = false;
+        try {
+            ctx.window_feed_lifecycle(kind::focused);
+        } catch (const ponko::error&) {
+            refused = true;
+        }
+        CHECK(refused);
+        CHECK(ctx.window_keyboard_inset() == 0);
+        ctx.window_feed_keyboard_inset(301);
+        CHECK(ctx.window_keyboard_inset() == 301);
+        CHECK(ctx.audio_session_category() == ponko::audio_session_category::solo_ambient);
+        ctx.set_audio_session_category(ponko::audio_session_category::ambient);
+        CHECK(ctx.audio_session_category() == ponko::audio_session_category::ambient);
+    });
 }
 
 // IME composition (#410): a Japanese composition replayed into a text
@@ -4986,6 +5016,16 @@ static void versioned_render_descriptors() {
         CHECK(ctx.post_ex().ssr_thin_objects);
         ctx.set_graphics_quality(ponko::graphics_quality_preset(ponko::quality_level::medium));
         CHECK(!ctx.post_ex().ssr_thin_objects);
+        // Version 4: auto exposure, off by default; a min above its max is refused.
+        p = ctx.post_ex();
+        CHECK(!p.auto_exposure && p.auto_exposure_brighten_speed == 1 && p.auto_exposure_darken_speed == 3);
+        p.auto_exposure = true;
+        p.auto_exposure_center_weight = 1;
+        ctx.set_post(p);
+        CHECK(ctx.post_ex().auto_exposure && ctx.post_ex().auto_exposure_center_weight == 1);
+        p.auto_exposure_max = -5;
+        throws_kind([&] { ctx.set_post(p); }, PONKO_ERROR_INVALID);
+        CHECK(ctx.post_ex().auto_exposure_max == 4);
 
         auto e = ctx.world().spawn(ponko::transform3d_at({0, 1, 0}));
         ctx.set_particle_emitter3d(e, ponko::particle_settings().rate(40).softness(1.5f));
@@ -5394,6 +5434,17 @@ static void controllers() {
         ctx.stop_rumble(ponko::gamepad{0});
         CHECK(ctx.rumble_levels(ponko::gamepad{0}).strong == 0.0f);
 
+        auto controller = ponko::gamepad{0};
+        const auto extras = ctx.gamepad_extras(controller);
+        CHECK(!extras.light && !extras.player_leds && !extras.touchpad && !extras.adaptive_triggers);
+        CHECK(!ctx.gamepad_touchpad(controller) && !ctx.gamepad_touchpad_event(0));
+        ctx.set_gamepad_light(controller, {1.0f, 0.5f, 0.0f, 1.0f});
+        ctx.set_gamepad_player_leds(controller, std::nullopt);
+        ctx.set_gamepad_trigger_effects(controller, ponko::trigger_effect::resistance(3, 4),
+                                       ponko::trigger_effect::off());
+        ctx.feed_input(ponko::input_event::button(controller, PONKO_GAMEPAD_TOUCHPAD, true));
+        CHECK(ctx.gamepad_pressed(controller, PONKO_GAMEPAD_TOUCHPAD));
+
         CHECK(!ctx.gamepad_motion(ponko::gamepad{0}));
         ctx.feed_gamepad_motion(ponko::gamepad{0}, {{0, 1, 0}, {0, 9.81f, 0}});
         CHECK(ctx.gamepad_motion(ponko::gamepad{0})->gyro.y == 1.0f);
@@ -5654,6 +5705,10 @@ static void native_parity_round5() {
     CHECK(crowd_stats.steps == 10 && crowd_stats.agent_steps == 30 && crowd_stats.work > 0);
 
     // This thread's allocations, and a PONKO_PROFILE_SCOPE counting the ones made inside it.
+    // Each block is stored through `alloc_sink`, a volatile pointer: an optimizing build may
+    // otherwise remove a new/delete pair nothing else reads, and count nothing (C++14 lets
+    // the compiler elide such an allocation; clang does in a Release build).
+    static void* volatile alloc_sink = nullptr;
     ponko::game("c++ allocs", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
         ctx.set_profiling(true);
         ponko::alloc_counts before{}, after{};
@@ -5661,6 +5716,7 @@ static void native_parity_round5() {
             PONKO_PROFILE_SCOPE("c++/alloc");
             before = ponko::thread_alloc_counts();
             auto* boxed = new int(7); // counted: PONKO_COUNT_CPP_ALLOCATIONS is on in this program
+            alloc_sink = boxed;
             after = ponko::thread_alloc_counts();
             delete boxed;
         }
@@ -5671,6 +5727,7 @@ static void native_parity_round5() {
         {
             const std::int64_t held = ponko::thread_net_alloc_bytes();
             auto* block = new char[4096];
+            alloc_sink = block;
             const std::int64_t holding = ponko::thread_net_alloc_bytes();
             delete[] block;
             const std::int64_t released = ponko::thread_net_alloc_bytes();
@@ -5864,8 +5921,25 @@ static void rollback_two_peers() {
     throws([&] { other.restore_snapshot(snapshot); });
 }
 
+// Steam's store-side services before steam::start: every call does nothing.
+static void steam_services_without_steam() {
+    CHECK(!ponko::steam::running());
+    ponko::steam::update();
+    CHECK(!ponko::steam::unlock_achievement("FIRST_WIN") && !ponko::steam::achievement("FIRST_WIN"));
+    CHECK(!ponko::steam::set_stat("wins", std::int32_t{1}) && !ponko::steam::stat_i32("wins"));
+    CHECK(!ponko::steam::set_stat("distance", 1.5f) && !ponko::steam::stat_f32("distance"));
+    CHECK(!ponko::steam::store_stats() && !ponko::steam::set_rich_presence("status", "Menu"));
+    ponko::steam::clear_rich_presence();
+    CHECK(!ponko::steam::overlay_open() && !ponko::steam::is_steam_deck() && !ponko::steam::is_big_picture());
+    CHECK(!ponko::steam::show_text_input(ponko::steam::text_mode::single_line, "Name", "", 16));
+    CHECK(ponko::steam::take_text_input().first == PONKO_STEAM_TEXT_NONE);
+    CHECK(!ponko::steam::show_floating_keyboard(ponko::steam::text_mode::numeric, 0, 0, 200, 30));
+    CHECK(!ponko::steam::cloud_enabled());
+}
+
 int main() {
     rollback_two_peers();
+    steam_services_without_steam();
     hdr_output();
     controllers();
     key_labels();

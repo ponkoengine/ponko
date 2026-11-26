@@ -8,8 +8,11 @@ import { fileURLToPath } from "node:url";
 import {
   GALLERY_URL,
   ManifestError,
+  REPO,
   escapeHtml,
+  pagesUrl,
   parseManifest,
+  parseProjectUrl,
   renderIndex,
   renderPage,
   requiredFeatures,
@@ -133,5 +136,20 @@ test("the README and the guide point to the gallery's chapter and the release no
   // The docs link the guide's web chapter, not the gallery's host (scripts/project-url.py keeps old hosts out).
   assert.ok(readFileSync(join(ROOT, "README.md"), "utf8").includes("https://ponko.dev/guide/web.html"), "README.md");
   assert.ok(readFileSync(join(ROOT, "book", "src", "web.md"), "utf8").includes("web/gallery/"), "book/src/web.md");
-  assert.ok(readFileSync(join(ROOT, "scripts", "release-check.py"), "utf8").includes(GALLERY_URL), "scripts/release-check.py");
+  // release-check.py derives the same address from PROJECT_URL (its self-test checks the rule).
+  const releaseCheck = readFileSync(join(ROOT, "scripts", "release-check.py"), "utf8");
+  assert.ok(releaseCheck.includes("pages_url(project_url())"), "scripts/release-check.py reads PROJECT_URL");
+  assert.ok(!releaseCheck.includes(GALLERY_URL), "scripts/release-check.py holds no copy of the address");
+});
+
+test("the repository and the gallery's address come from PROJECT_URL", () => {
+  assert.equal(REPO, readFileSync(join(ROOT, "PROJECT_URL"), "utf8").trim());
+  assert.equal(GALLERY_URL, pagesUrl(REPO));
+  assert.equal(parseProjectUrl("https://github.com/Some-Org/proj\n"), "https://github.com/Some-Org/proj");
+  assert.equal(pagesUrl("https://github.com/Some-Org/proj"), "https://some-org.github.io/proj/", "the host is lower case, the repository is as written");
+  for (const bad of ["", "http://github.com/o/r", "https://github.com", "https://github.com/o/r/", "github.com/o/r", "https://github.com/o r"]) {
+    assert.throws(() => parseProjectUrl(bad), /PROJECT_URL must be one https URL/, JSON.stringify(bad));
+  }
+  assert.throws(() => pagesUrl("https://git.example.test/o/r"), /no GitHub Pages address/);
+  assert.throws(() => pagesUrl("https://github.com/o/r/extra"), /no GitHub Pages address/);
 });

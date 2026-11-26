@@ -198,6 +198,11 @@ pub(super) enum Kind {
     /// The view model's see-through held items: as `Transparent`, but
     /// always writing the stencil, for they draw where it can be written.
     ViewModelBlended,
+    /// Screen-space reflections' normals: what the opaque pass draws, over
+    /// the prepass depth, writing each pixel's normal and roughness (see
+    /// `fs_normals`). Crowds and solid stencil materials are left out:
+    /// their pixels keep the depth's normal.
+    Normals,
 }
 
 impl Kind {
@@ -212,6 +217,7 @@ impl Kind {
             Kind::Capture => Pass::Capture,
             Kind::ViewModel => Pass::Opaque,
             Kind::ViewModelBlended => Pass::Transparent,
+            Kind::Normals => Pass::Opaque,
         }
     }
 }
@@ -244,7 +250,7 @@ impl Renderer3D {
             // holes (see `draw_pipeline`).
             return (!m.transparent).then_some(PipelineRole::OpaqueSolid);
         }
-        if stencil_solid && matches!(kind, Kind::Velocity | Kind::VelocityStill) {
+        if stencil_solid && matches!(kind, Kind::Velocity | Kind::VelocityStill | Kind::Normals) {
             return None;
         }
         PipelineRole::for_pass(
@@ -267,6 +273,9 @@ impl Renderer3D {
         kind: Kind,
         role: PipelineRole,
     ) -> Option<&'a wgpu::RenderPipeline> {
+        if kind == Kind::Normals {
+            return Some(shader.normals(variant));
+        }
         if kind == Kind::ViewModel && self.resources.material(id).cutout {
             return Some(match self.stencil.view_model_cutout(id, variant.instancing) {
                 Some(pipeline) => pipeline,
@@ -541,7 +550,11 @@ impl Renderer3D {
             parts.push(Part::LightViews { first, last });
         }
         // A window view (see `views.rs`) draws only its own camera's passes.
-        if !self.extra && (!self.lists.views.is_empty() || self.environment.has_probes()) {
+        if !self.extra
+            && (!self.lists.views.is_empty()
+                || self.environment.has_probes()
+                || !self.render_targets.mips_due.is_empty())
+        {
             parts.push(Part::Views);
         }
         if !self.extra && self.gi.as_ref().is_some_and(|g| g.update_count() > 0) {
@@ -706,9 +719,19 @@ impl Renderer3D {
                     let (id, target) = &self.render_targets.views[*target];
                     // Probe captures start empty (alpha 0): the sky fills in behind them.
                     let capture = self.environment.is_capture(*id);
-                    let clear = if capture { wgpu::Color::TRANSPARENT } else { clear };
+                    // A camera's own background replaces the clear colour and the sky.
+                    let background = match target.clear {
+                        Some(own) => (own, false),
+                        None if capture => (wgpu::Color::TRANSPARENT, true),
+                        None => (clear, true),
+                    };
                     let particles = self.particles.target(*id).map(|p| (p, textures));
-                    self.draw_view(encoder, (*id, target), runs, *batch_view, clear, time, particles);
+                    self.draw_view(encoder, (*id, target), runs, *batch_view, background, time, particles);
+                    self.record_view_effects(encoder, target, time);
+                }
+                if !self.render_targets.mips_due.is_empty() {
+                    passes::mark("mipmaps");
+                    self.render_targets.record_mips(encoder, time);
                 }
                 self.environment.probes(encoder, time);
             }
@@ -742,6 +765,43 @@ impl Renderer3D {
                     &self.lists.solid_runs,
                     Some(0),
                 );
+                // The reflections' normals, over the finished depth (see
+                // `fs_normals`): the trace's rays leave by them.
+                if self.screen.ssr.is_some()
+                    && let Some(images) = &targets.ssr
+                {
+                    passes::mark("reflection normals");
+                    let (view, resolve) = images.normals();
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("3d reflection normals"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view,
+                            depth_slice: None,
+                            resolve_target: resolve,
+                            ops: wgpu::Operations {
+                                // A zero normal: no surface (the sky,
+                                // crowds, solid stencil materials).
+                                load: wgpu::LoadOp::Clear(crate::render::ssr::NO_NORMAL),
+                                store: if resolve.is_some() {
+                                    wgpu::StoreOp::Discard
+                                } else {
+                                    wgpu::StoreOp::Store
+                                },
+                            },
+                        })],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &targets.depth,
+                            depth_ops: None,
+                            stencil_ops: None,
+                        }),
+                        timestamp_writes: time("reflection normals"),
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    pass.set_bind_group(0, &self.frame_bind_group, &[]);
+                    pass.set_bind_group(2, &self.no_scene, &[]);
+                    self.draw_solid(&mut pass, Kind::Normals);
+                }
                 // With every solid surface in it, the depth is complete here.
                 if self.solid_prepass {
                     self.record_occlusion(encoder, frame);
@@ -1160,7 +1220,7 @@ impl Renderer3D {
         (id, target): (u32, &ViewTarget),
         runs: &[(u32, u32, u32)],
         batch_view: usize,
-        clear: wgpu::Color,
+        (clear, sky): (wgpu::Color, bool),
         time: &PassTimer<'_, 't>,
         particles: Option<(&super::super::particles::ParticleView, &dyn TextureTable)>,
     ) {
@@ -1217,7 +1277,12 @@ impl Renderer3D {
                 view: &target.depth,
                 depth_ops: Some(wgpu::Operations {
                     load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Discard,
+                    // Its screen effects read it.
+                    store: if target.effects.is_empty() {
+                        wgpu::StoreOp::Discard
+                    } else {
+                        wgpu::StoreOp::Store
+                    },
                 }),
                 stencil_ops: self.stencil_ops(Some(false)),
             }),
@@ -1228,7 +1293,7 @@ impl Renderer3D {
         pass.set_bind_group(0, &target.frame_bind_group, &[]);
         pass.set_bind_group(2, &self.no_scene, &[]);
         self.draw_models_view(&mut pass, runs, Kind::Opaque, &self.instances, batch_view);
-        if self.atmosphere {
+        if self.atmosphere && sky {
             pass.set_pipeline(self.sky_pipelines().1);
             pass.set_bind_group(0, &target.frame_bind_group, &[]);
             pass.draw(0..3, 0..1);
@@ -1245,6 +1310,61 @@ impl Renderer3D {
         // Debug labels on top last, over everything, as on screen.
         if let Some((view, textures)) = particles {
             self.particles.draw_on_top(view, &mut pass, textures);
+        }
+    }
+
+    /// A target camera's screen effects over its picture, in order, swapping
+    /// between its texture and the scratch as the main view's swap between
+    /// the lit frame and its scratch. An odd number ends in the scratch,
+    /// which is copied back.
+    fn record_view_effects(&self, encoder: &mut wgpu::CommandEncoder, target: &ViewTarget, time: &PassTimer<'_, '_>) {
+        let Some(images) = target.effect_targets.as_ref().filter(|_| !target.effects.is_empty()) else {
+            return;
+        };
+        let mut in_image = true;
+        for &(effect, material) in &target.effects {
+            let Some(pipeline) = self.effects.pipelines.get(effect as usize).and_then(Option::as_ref) else {
+                continue;
+            };
+            let (source, into) = if in_image {
+                (&images.of_image, &images.scratch_view)
+            } else {
+                (&images.of_scratch, &target.resolve)
+            };
+            passes::mark(if in_image { "effect" } else { "effect back" });
+            in_image = !in_image;
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("3d target camera effect"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: into,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: time("target camera effects"),
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &target.frame_bind_group, &[]);
+            pass.set_bind_group(1, &self.resources.material(material).bind_group, &[]);
+            pass.set_bind_group(2, source, &[]);
+            if let Some(dummy) = self.resources.storage_dummy.as_ref() {
+                pass.set_bind_group(3, dummy, &[]);
+            }
+            pass.draw(0..3, 0..1);
+        }
+        if !in_image {
+            passes::mark("effect copy");
+            encoder.copy_texture_to_texture(
+                images.scratch.as_image_copy(),
+                target.image.as_image_copy(),
+                images.scratch.size(),
+            );
         }
     }
 
@@ -1275,7 +1395,8 @@ impl Renderer3D {
                     .enumerate()
                     .any(|(part, &(_, m))| {
                         let m = self.resources.material(self.part_material(mesh, part, m));
-                        m.transparent && self.shaders.sets[m.shader as usize].reads_scene
+                        m.transparent
+                            && (self.screen.ssr_transparent || self.shaders.sets[m.shader as usize].reads_scene)
                     })
             })
     }

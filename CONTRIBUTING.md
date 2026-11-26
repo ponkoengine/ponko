@@ -3,6 +3,28 @@
 Thanks for your interest! Bug reports, benchmarks on your hardware, docs
 fixes, examples and code are all welcome.
 
+## Quick start
+
+1. **Clone** and check that your machine builds the engine (stable Rust; on
+   Linux also `sudo apt-get install libasound2-dev libudev-dev`):
+   ```sh
+   git clone https://github.com/ponkoengine/ponko && cd ponko
+   python3 scripts/run-checks.py --quick
+   ```
+2. **Pick** an issue labelled
+   [`good first issue`](https://github.com/ponkoengine/ponko/labels/good%20first%20issue)
+   (each names the files to read and how to test the change), and comment on it
+   so nobody else starts the same work. Not sure what to pick? Ask in
+   [Discussions](https://github.com/ponkoengine/ponko/discussions).
+3. **Branch** from `main` (`git switch -c fix/<topic>`), make one focused change
+   with a test, and run the checks it needs ([Checks: start with your
+   change](#checks-start-with-your-change)).
+4. **Open a pull request** to `main` (`gh pr create --base main`, or the
+   button on GitHub). Say what changed and which checks you ran; a draft is
+   fine. Maintainers answer within a week.
+
+The rest of this file is reference: read the part you need when you need it.
+
 ## Start with what you know
 
 **Rust-only pull requests are welcome.** You do not need to know C or C++,
@@ -25,16 +47,24 @@ integration checklist; you only need the parts relevant to your contribution.
 
 ## Questions, bugs and ideas
 
-- **Questions:** ask in the [issue tracker](https://github.com/ponkoengine/ponko/issues)
-  and say it is a question, so the answer stays findable for the next person.
+[GitHub Discussions](https://github.com/ponkoengine/ponko/discussions) is the
+place to talk: there is no separate chat room for now. Maintainers answer new
+issues and new discussions within a week; a pull request from outside gets a
+first answer in the same time.
+
+- **Questions:** ask in [Q&A](https://github.com/ponkoengine/ponko/discussions/categories/q-a),
+  so the answer stays findable for the next person.
 - **Bugs:** open an [issue](https://github.com/ponkoengine/ponko/issues/new)
   with the smallest code that shows the problem, your OS and GPU, and what
   you expected.
-- **Ideas and features:** open an issue describing the idea (or, if you already have a concrete design, the design), so we can agree on
+- **Ideas and features:** start in [Ideas](https://github.com/ponkoengine/ponko/discussions/categories/ideas)
+  (or open an issue if you already have a concrete design), so we can agree on
   the shape before you write the code. The engine aims for one obvious way to
   do each thing, so a new API gets discussed before it's built.
-- **Made something?** Tell us in an [issue](https://github.com/ponkoengine/ponko/issues).
+- **Made something?** Show it in [Show and tell](https://github.com/ponkoengine/ponko/discussions/categories/show-and-tell).
 - **Security issues:** don't open a public issue; see [SECURITY.md](SECURITY.md).
+
+How decisions are made, and who can merge, is in [GOVERNANCE.md](GOVERNANCE.md).
 
 ## Finding a manageable contribution
 
@@ -43,20 +73,23 @@ example or clarify a guide page. Start with one reproducible behavior and its te
 Browse the [open issues](https://github.com/ponkoengine/ponko/issues), check for an
 existing assignee or active PR, and comment with the slice you want to tackle.
 
-The ECS/rendering backlog (#132–#166) uses `help wanted`, `priority: P0` through
-`priority: P3`, subsystem labels such as `area: ecs`, `area: rendering`,
-`area: shaders`, `area: assets`, and `type:` labels. P0 establishes foundations;
-P1 addresses high-impact limitations, P2 is useful lower-urgency work, and P3 is research. Priority is not difficulty:
-this backlog has no difficulty labels. Read acceptance criteria and dependencies,
-and ask for a bounded first step if the scope is unclear.
+- [`good first issue`](https://github.com/ponkoengine/ponko/labels/good%20first%20issue)
+  marks work sized for a few evenings. Each names the files to read and how to
+  test the change, and is kept for outside contributors.
+- [`help wanted`](https://github.com/ponkoengine/ponko/labels/help%20wanted) marks
+  larger work where a maintainer would welcome help; ask for a bounded first
+  step if the scope is unclear.
 
-For example, #133 covers ECS
-correctness tests and #135
-covers visual regressions; a focused reproducer or test case can contribute toward
-either without claiming the entire issue. Performance work starts with the baselines
-in #132 and
-#134.
-[ROADMAP.md](ROADMAP.md) explains the sequence; verify live issue status before starting.
+The backlog also uses `priority: P0` through `priority: P3`, subsystem labels
+such as `area: ecs`, `area: rendering`, `area: shaders`, `area: assets` and
+`area: ui`, and `type:` labels. P0 establishes foundations; P1 addresses
+high-impact limitations, P2 is useful lower-urgency work, and P3 is research.
+Priority is not difficulty, and the backlog has no difficulty labels: read the
+acceptance criteria and dependencies. A focused reproducer or test case can
+contribute toward a large issue without claiming all of it.
+[ROADMAP.md](ROADMAP.md) explains the sequence; verify live issue status before
+starting. The 0.2.0 release is tracked in
+[#528](https://github.com/ponkoengine/ponko/issues/528).
 
 ## Setting up
 
@@ -168,6 +201,14 @@ tests report them. The JSON also includes failed step output. Exit code 1
 means a check failed, and exit code 2 means a usage error or zero checks ran.
 The [integration instructions](AGENTS.md#integration-checks) describe when
 maintainers need additional checks.
+
+#### Checks that need a person
+
+Some checks need a real machine, display or device. [scripts/checklists/](scripts/checklists/README.md)
+has a checklist and record sheet for each (hardware checks per OS, a
+newcomer test, input methods and screen readers, low-end hardware and the
+Steam Deck, the whole list on Linux), with scripts that make the runs quick.
+If you have the hardware, pick one and report on its issue.
 
 #### Nightly runs on maintainer machines
 
@@ -470,6 +511,13 @@ git add api
   public ones, `3d` included) and, for `ponko`, `3d` (the defaults plus `3d`).
   A set that lists the same as `default` has no file. Blanket and auto-trait
   impls are left out as noise; derived impls (`Clone`, `Debug`) stay.
+- **Experimental items** (`scripts/experimental-api.txt`, STABILITY.md
+  "Maturity levels") are listed apart, in `api/<crate>/experimental.txt`,
+  from every set: the other files are exactly the API the versions cover. A
+  change to them still shows up in the diff. Adding an item to the list (or
+  taking one off) moves its lines on the next `update`;
+  `python3 scripts/experimental-api.py check` says when the list, the guide's
+  levels, `api/` and the C header disagree.
 - **Reading a failure.** The output shows the diff and the command above. If
   you cannot run the tool, say so in the pull request and a maintainer
   regenerates the folder. A diff you did
@@ -521,6 +569,11 @@ before merging a change to public API.
   `bench-internals`, which are not API). A new publishable crate is picked up
   by itself. `ponko_macros` is listed as not checked: the tool reads no API
   from a proc-macro crate.
+- **Experimental items** don't count. A crate whose every `Failed in:` line
+  names an item of `scripts/experimental-api.txt` (or one of its cargo
+  features) is reported as `experimental`, not as a break, on any branch: they
+  are outside the promise (STABILITY.md, "Unstable"). A name the tool prints
+  that a covered item shares (a short type name) never excuses a failure.
 - **What fails.** On a `release-*` branch (patch releases) and on a pull request
   into one, every break fails the check. On `main`, breaks pile up until the next
   minor release, so the comparison with crates.io only reports them. What
@@ -713,7 +766,9 @@ out of public submissions and external services.
 For maintainers. A release is a version tag, and a maintainer builds and
 publishes it from that tag on their own machine, so the tag, the crates on
 crates.io and the CHANGELOG section always come from one commit. There is no
-release service: the steps below are the whole procedure. There are
+release service: the steps below are the whole procedure, written so a second
+maintainer can do a release from them alone ([GOVERNANCE.md](GOVERNANCE.md#continuity)
+says why that matters and what is still missing). There are
 three kinds of tag, all in the steps below: a release from `main`
 (`v0.2.0`), a release candidate before a minor (`v0.2.0-rc.1`, see
 [Release candidates](#release-candidates)), and a patch release from a
@@ -798,23 +853,21 @@ release branch (`v0.1.1` on `release-0.1`, see
       summary and holding every entry, the sub-crates carry the root license
       files and no fragment is left over). Make sure the checks passed on
       this exact commit.
-   2. **Build the C library** on each OS (Linux x86_64, macOS arm64, Windows
-      x86_64): `cargo build --release -p ponko_ffi`, then a folder
-      `ponko-vX.Y.Z-<os>-<arch>` with `include/ponko.h` and
-      `include/ponko.hpp` in `include/`, `LICENSE-MIT`, `LICENSE-APACHE` and
-      `NOTICE`, the libraries from `target/release` (`libponko_ffi.a`,
-      `.so`, `.dylib`, or `ponko_ffi.lib`, `.dll`, `.dll.lib`) in `lib/`, and
-      `THIRD-PARTY-NOTICES.txt` for every library linked into it
-      (`python3 scripts/package-coin-dash.py notices --crate ponko_ffi
-      --title "the Ponko C library" --out <folder>/THIRD-PARTY-NOTICES.txt`).
-      Pack it as `.tar.gz` (`.zip` on Windows).
+   2. **Build the six C library archives** (see
+      [The C library archives](#the-c-library-archives)):
+      `linux-x86_64`, `linux-arm64`, `macos-arm64`, `macos-x86_64`,
+      `windows-x86_64` and `windows-arm64`, with
+      `python3 scripts/c-library.py build --target <triple>`, and check
+      each with `python3 scripts/c-library.py smoke <archive>`.
    3. **Package the crates**: `cargo publish --workspace --dry-run`.
    4. **Create the GitHub release** from the CHANGELOG section, with the
-      archives:
+      six archives gathered in one folder (`dist/`, from each machine's
+      `target/c-library/`):
 
       ```sh
       python3 scripts/release-check.py notes vX.Y.Z notes.md
-      gh release create vX.Y.Z ponko-vX.Y.Z-* --title "Ponko X.Y.Z" --notes-file notes.md
+      ls dist   # ponko-vX.Y.Z-{linux,macos}-{x86_64,arm64}.tar.gz, ponko-vX.Y.Z-windows-{x86_64,arm64}.zip
+      gh release create vX.Y.Z dist/ponko-vX.Y.Z-* --title "Ponko X.Y.Z" --notes-file notes.md
       ```
 
       Add `--prerelease` for a candidate (`vX.Y.0-rc.N`).
@@ -831,7 +884,10 @@ release branch (`v0.1.1` on `release-0.1`, see
       `web/gallery/README.md`), for a release that is the newest version
       (not for a candidate, nor for a patch of an older minor): build it for
       the tag and check every page in headless Chromium, then put the folder
-      on the `gh-pages` branch, which GitHub Pages serves:
+      on the `gh-pages` branch, which GitHub Pages serves
+      (its address is derived from `PROJECT_URL`; there is no CI, so the
+      maintainer pushes the branch by hand, and the gallery has no domain of
+      its own):
 
       ```sh
       node --test web/gallery/*.test.mjs web/smoke/gallery-lib.test.mjs
@@ -839,7 +895,100 @@ release branch (`v0.1.1` on `release-0.1`, see
       node web/smoke/gallery.mjs --dir target/web/gallery --browser chromium --backend webgl2
       ```
 
-      A failed page stops only the gallery, not the release.
+      Then push the branch with the commands in
+      [web/gallery/README.md](web/gallery/README.md#publishing) (one commit,
+      force-pushed), and open the address. A failed page stops only the
+      gallery, not the release.
+
+### The C library archives
+
+`scripts/c-library.py` makes each archive from the tag's checkout. It builds
+`ponko_ffi` with its default features (`cargo build --release --locked
+--target <triple>`) and packs a folder `ponko-vX.Y.Z-<os>-<arch>` holding
+`include/ponko.h` and `include/ponko.hpp`, the shared and static libraries
+in `lib/` (`libponko_ffi.so` and `.a`, `libponko_ffi.dylib` and `.a`, or
+`ponko_ffi.dll`, its import library `ponko_ffi.dll.lib` and
+`ponko_ffi.lib`), `LICENSE-MIT`, `LICENSE-APACHE`, `NOTICE`, and
+`THIRD-PARTY-NOTICES.txt` for every library linked into it on that target.
+It refuses a library built for the wrong CPU and gives the macOS library the
+install name `@rpath/libponko_ffi.dylib` (the linker writes the path it was
+built at). The archive goes to `target/c-library/` as `.tar.gz` (`.zip` for
+Windows). `targets` lists the six, `--dry-run` shows the commands and the
+layout, and `--help` has the rest.
+
+`smoke <archive>` unpacks it elsewhere, builds `examples/cpp` against its
+`include/` and `lib/` the way the C/C++ chapter tells users to, and runs the
+C and C++ tests with ctest. Where the programs can't run on the machine it
+only builds them, and says so. Each `--target` is a whole extra release
+build: delete `target/<triple>` once its archive is uploaded.
+
+**macOS (Apple silicon): `macos-arm64` and `macos-x86_64`.** The two are
+separate archives: the arm64 one keeps its 0.1.0 name and contents, each
+download is half the size of a universal one (about 58 MB each against
+117 MB), and each has its own third-party notices (the two targets link
+slightly different crates). Users who want a universal library join them
+with `lipo -create`.
+
+```sh
+rustup target add x86_64-apple-darwin
+python3 scripts/c-library.py build --target aarch64-apple-darwin
+python3 scripts/c-library.py build --target x86_64-apple-darwin
+python3 scripts/c-library.py smoke target/c-library/ponko-vX.Y.Z-macos-arm64.tar.gz
+python3 scripts/c-library.py smoke target/c-library/ponko-vX.Y.Z-macos-x86_64.tar.gz
+```
+
+The Intel programs run under Rosetta (`softwareupdate --install-rosetta`);
+without it the smoke only builds them.
+
+**Linux x86_64: `linux-x86_64`**, on the Linux machine, with
+`sudo apt install libasound2-dev libudev-dev cmake g++`:
+`python3 scripts/c-library.py build`, then `smoke` it. The library needs the
+glibc of that machine or newer.
+
+**Linux arm64: `linux-arm64`**, cross-built from the Mac (or the Linux
+machine) with zig as the linker, for glibc 2.28:
+
+```sh
+brew install zig                 # or zig from ziglang.org on Linux
+cargo install cargo-zigbuild --locked
+rustup target add aarch64-unknown-linux-gnu
+```
+
+The linker needs the target's ALSA and udev libraries. Download the arm64
+packages `libasound2`, `libasound2-dev`, `libudev1` and `libudev-dev` of a
+Debian release (packages.debian.org, "arm64", or `apt-get download
+<package>:arm64` on Debian/Ubuntu with the arm64 architecture added), then:
+
+```sh
+python3 scripts/c-library.py sysroot --out target/sysroot-arm64 <the four .deb files>
+python3 scripts/c-library.py build --target aarch64-unknown-linux-gnu --zig --sysroot target/sysroot-arm64
+python3 scripts/c-library.py smoke target/c-library/ponko-vX.Y.Z-linux-arm64.tar.gz --zig
+```
+
+The smoke compiles and links the C and C++ programs for arm64 with zig; it
+runs them only on an arm64 Linux machine (copy the archive there, install
+`cmake g++ libasound2 libudev1` and run `smoke` without `--zig`).
+
+**Windows x64: `windows-x86_64` and `windows-arm64`**, in PowerShell, with
+Python, CMake and Visual Studio 2022 (or its Build Tools) with the "Desktop
+development with C++" workload. The arm64 archive also needs the component
+"MSVC v143 - VS 2022 C++ ARM64/ARM64EC build tools (Latest)" (Visual Studio
+Installer, Modify, Individual components; or `vs_installer.exe modify
+--installPath <the Visual Studio folder> --add
+Microsoft.VisualStudio.Component.VC.Tools.ARM64`). rustc finds the ARM64
+linker by itself; nothing in `ponko_ffi` compiles C for Windows.
+
+```powershell
+rustup target add aarch64-pc-windows-msvc
+python scripts/c-library.py build --target x86_64-pc-windows-msvc
+python scripts/c-library.py build --target aarch64-pc-windows-msvc
+python scripts/c-library.py smoke target/c-library/ponko-vX.Y.Z-windows-x86_64.zip
+python scripts/c-library.py smoke target/c-library/ponko-vX.Y.Z-windows-arm64.zip
+```
+
+On an x64 machine the arm64 smoke builds the programs (`cmake -A ARM64`,
+the Visual Studio generator) without running them; on a Windows on Arm
+machine the same command runs them.
 
 ### One-time setup (a maintainer, in settings)
 

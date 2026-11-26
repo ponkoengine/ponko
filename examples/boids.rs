@@ -27,7 +27,7 @@ fn env_number(name: &str, default: f64) -> f64 {
 // ANCHOR: flocking
 /// The flocking system. It owns a grid that stores each boid's velocity, so
 /// neighbors' velocities can be read while the world is busy with the query.
-fn flocking(bounds: Vec2) -> impl FnMut(&mut Ctx) {
+pub fn flocking(bounds: Vec2) -> impl FnMut(&mut Ctx) {
     let mut grid = SpatialGrid::with_data(RADIUS);
     move |ctx: &mut Ctx| {
         let dt = ctx.time.dt();
@@ -96,7 +96,7 @@ fn controls(ctx: &mut Ctx) {
     }
 }
 
-fn spawn_boids(ctx: &mut Ctx, n: usize, bounds: Vec2) {
+pub fn spawn_boids(ctx: &mut Ctx, n: usize, bounds: Vec2) {
     ctx.world.reflect::<Vel>();
     let tex = ctx.gfx.load_texture("crab.png");
     let mut s = 0x9E37_79B9_7F4A_7C15u64;

@@ -7,7 +7,7 @@
 //! must outlive a frame, lives in a [`ViewState`]: its scene-sized targets
 //! (with the temporal history images), its temporal history, its
 //! screen-space passes (temporal AO and SSR keep their last frame), SMAA's
-//! targets, its draw lists and its instance buffer (each view's own, so a
+//! targets, its auto exposure (the exposure it adapted to, and its meter), its draw lists and its instance buffer (each view's own, so a
 //! still view uploads nothing). Everything else (meshes, materials,
 //! pipelines, skinning, shadow maps, target cameras, global illumination)
 //! is shared, and the main frame alone updates it: views skip those steps
@@ -21,6 +21,7 @@ pub(super) struct ViewState {
     history: History,
     screen: ScreenSpace,
     smaa: Option<crate::render::smaa::Smaa>,
+    metering: Option<super::post::Metering>,
     lists: FrameLists,
     instances: wgpu::Buffer,
     instance_mirror: Mirror,
@@ -35,6 +36,7 @@ impl ViewState {
             history: History::default(),
             screen: ScreenSpace::new(taa_supported),
             smaa: None,
+            metering: None,
             lists: FrameLists::default(),
             instances: Renderer3D::instance_buffer(device, capacity),
             instance_mirror: Mirror::default(),
@@ -56,6 +58,9 @@ impl ViewState {
         }
         if let Some(smaa) = &self.smaa {
             smaa.tally_memory(t);
+        }
+        if let Some(metering) = &self.metering {
+            metering.tally_memory(t);
         }
         t.buffer(C::InstanceBatches, "view instances", &self.instances);
     }
@@ -92,6 +97,7 @@ impl Renderer3D {
         std::mem::swap(&mut self.history, &mut v.history);
         std::mem::swap(&mut self.screen, &mut v.screen);
         self.post.swap_smaa(&mut v.smaa);
+        self.post.swap_metering(&mut v.metering);
         std::mem::swap(&mut self.lists, &mut v.lists);
         std::mem::swap(&mut self.instances, &mut v.instances);
         std::mem::swap(&mut self.instance_mirror, &mut v.instance_mirror);
@@ -150,6 +156,12 @@ impl Renderer3D {
         self.extra = false;
         self.swap_view(index);
         buffers
+    }
+
+    /// Window view `index`'s auto exposure, while it is on (test hook).
+    #[cfg(test)]
+    pub(super) fn view_metering(&self, index: usize) -> Option<&super::post::Metering> {
+        self.extra_views.get(index).and_then(|v| v.metering.as_ref())
     }
 
     /// The size window view `index`'s scene is drawn at (test hook).

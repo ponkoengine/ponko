@@ -87,7 +87,9 @@
 //!   (VoiceOver), Windows (UI Automation: Narrator, NVDA) and Linux (AT-SPI:
 //!   Orca). On the web it builds and does nothing. Needs `window`.
 //! - `steam`: lockstep and byte messages over Steam's relays and lobbies
-//!   (`Net::steam_host`, `net::SteamClient`); the raw `steamworks` crate is
+//!   (`Net::steam_host`, `net::SteamClient`), and the store's services:
+//!   achievements, stats, cloud saves, rich presence, the overlay and the
+//!   Deck's text input (`steam::Steam`); the raw `steamworks` crate is
 //!   `ponko::net::unstable_steamworks`, outside the versions.
 //! - `bench-internals`: **unstable** benchmark drivers for the engine's own
 //!   benchmark crate. Not part of the API; they change in any release.
@@ -100,6 +102,10 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 // Without a window, the code that only the window loop calls is unused.
 #![cfg_attr(not(feature = "window"), allow(dead_code))]
+// Whether the renderer's texture tables are `Send + Sync` is proven through
+// wgpu's internals, deeper than the default limit of 128 (newer compilers
+// warn about it: `recursion_depth_exceeding_limit`).
+#![recursion_limit = "256"]
 
 // `#[derive(Component)]` names the trait `::ponko::prelude::Component`, in
 // this crate too; tests also include example files as they are.
@@ -132,6 +138,7 @@ pub mod collision;
 pub mod color;
 #[cfg(feature = "compressed-textures")]
 pub(crate) mod compressed;
+pub mod console;
 mod control;
 pub mod crash;
 mod ctx;
@@ -285,6 +292,7 @@ mod physics;
 mod physics3d;
 #[cfg(any(feature = "physics", feature = "physics3d"))]
 mod physics_links;
+mod platform;
 mod profiler;
 #[cfg(any(all(target_arch = "wasm32", feature = "window"), test))]
 mod query;
@@ -303,6 +311,8 @@ pub mod skeleton2d;
 pub mod spatial;
 mod sprite_material;
 pub mod state;
+#[cfg(feature = "steam")]
+pub mod steam;
 pub mod storage;
 /// Deprecated: [`Job`](crate::streaming::Job) and `CellStreamer` moved to
 /// [`streaming`], next to the asset streaming they work with.

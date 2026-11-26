@@ -113,6 +113,18 @@ macro_rules! gpu {
 pub(super) struct SlotView {
     pub(super) planes: [glam::Vec4; 6],
     pub(super) eye: Vec3,
+    /// A target camera's culling box `(min, max)`: batches, cells and
+    /// crowds that don't touch it aren't drawn in this view.
+    pub(super) cull_box: Option<(Vec3, Vec3)>,
+}
+
+impl SlotView {
+    /// Whether the box from `min` to `max` touches the view's culling box
+    /// (true without one).
+    pub(super) fn in_cull_box(&self, min: Vec3, max: Vec3) -> bool {
+        self.cull_box
+            .is_none_or(|(lo, hi)| min.cmple(hi).all() && max.cmpge(lo).all())
+    }
 }
 
 /// The renderer's batch settings and per-frame scratch (kept between
@@ -1502,7 +1514,8 @@ fn cull_cells(
             view.eye,
             0.0,
             if legacy { far } else { f32::INFINITY },
-        ) || hides(cell.min, cell.max)
+        ) || !view.in_cull_box(cell.min, cell.max)
+            || hides(cell.min, cell.max)
         {
             continue;
         }
@@ -1937,6 +1950,10 @@ impl Renderer3D {
         let batching = &mut self.batching;
         batching.slots.clear();
         for slot in 0..slots {
+            let cull_box = (targets..gi_slot)
+                .contains(&slot)
+                .then(|| frame.views[slot - targets].cull_box)
+                .flatten();
             let (matrix, eye) = if slot == 0 {
                 (frame.view_proj, camera)
             } else if slot <= MAX_CASCADES {
@@ -1954,6 +1971,7 @@ impl Renderer3D {
             batching.slots.push(SlotView {
                 planes: planes(matrix),
                 eye,
+                cull_box,
             });
         }
         let grid = frame
@@ -2092,6 +2110,7 @@ impl Renderer3D {
                 };
                 if !batch.levels.iter().any(enabled)
                     || !intersects(batch.min, batch.max, &view.planes, view.eye, 0.0, far)
+                    || !view.in_cull_box(batch.min, batch.max)
                 {
                     continue;
                 }
@@ -3246,6 +3265,36 @@ impl Renderer3D {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_views_culling_box_keeps_boxes_that_touch_it() {
+        let open = SlotView {
+            planes: [glam::Vec4::ZERO; 6],
+            eye: Vec3::ZERO,
+            cull_box: None,
+        };
+        assert!(
+            open.in_cull_box(Vec3::splat(100.0), Vec3::splat(101.0)),
+            "no box: everything"
+        );
+        let boxed = SlotView {
+            cull_box: Some((Vec3::ZERO, Vec3::ONE)),
+            ..open
+        };
+        assert!(boxed.in_cull_box(Vec3::splat(0.5), Vec3::splat(2.0)), "overlapping");
+        assert!(
+            boxed.in_cull_box(Vec3::new(1.0, 0.0, 0.0), Vec3::new(2.0, 1.0, 1.0)),
+            "sharing a face"
+        );
+        assert!(
+            !boxed.in_cull_box(Vec3::new(1.1, 0.0, 0.0), Vec3::new(2.0, 1.0, 1.0)),
+            "beside it"
+        );
+        assert!(
+            !boxed.in_cull_box(Vec3::new(0.0, -3.0, 0.0), Vec3::new(1.0, -2.0, 1.0)),
+            "below it"
+        );
+    }
 
     #[test]
     fn packed_distances_preserve_scalar_distance_and_boundary_selection() {

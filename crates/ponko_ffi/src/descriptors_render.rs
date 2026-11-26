@@ -12,7 +12,7 @@
 use std::mem::{offset_of, size_of};
 
 use ponko::prelude::{Color, Vec3};
-use ponko::render::{DepthOfField, Post, PostVolume, SplitToning, Upscaler};
+use ponko::render::{AutoExposure, DepthOfField, Post, PostVolume, SplitToning, Upscaler};
 
 use crate::ctx::ctx_access;
 use crate::descriptors::{Versioned, read_desc, write_desc};
@@ -21,7 +21,7 @@ use crate::three::{
     PonkoCamera3D, PonkoPost, PonkoTargetCamera, PonkoVec3, camera_from_c, camera_to_c, ponko_ctx_set_target_cameras,
     post_from_c, post_to_c, target_camera_to_c,
 };
-use crate::types::{PonkoColor, to_c};
+use crate::types::{PonkoColor, PonkoTexture, texture_from_c, texture_to_c, to_c};
 use crate::{Failure, PonkoCtx, PonkoParticleSettings3D, PonkoStatus, boundary, invalid};
 
 /// The end of field `$f` of `$t` (its offset plus its size).
@@ -41,19 +41,23 @@ macro_rules! assert_header {
 // ---- post-processing --------------------------------------------------------
 
 /// The version of `PonkoPostEx` this header describes.
-pub const PONKO_POST_EX_VERSION: u32 = 3;
+pub const PONKO_POST_EX_VERSION: u32 = 5;
 
 /// What happens to the lit 3D frame on its way to the screen, in a layout
 /// that can grow (Rust `ctx.scene3d.post`): `PonkoPost` plus the fields it
-/// couldn't hold, split toning, depth of field, the sample count and thin
-/// objects in reflections and the upscaler. Read it
+/// couldn't hold, split toning, depth of field, the sample count, thin
+/// objects in reflections, the upscaler, auto exposure and reflections on
+/// transparent surfaces. Read it
 /// with `ponko_ctx_post_ex` (set `struct_size` and `version` first), change
 /// it, and give it back with `ponko_ctx_set_post_ex`.
 ///
 /// Version 1: `post`, `split_toning_*`, `dof_*`, `msaa`. Version 2 adds
 /// `ssr_thin_objects`; a version 1 caller leaves it as it is (off, unless
 /// Rust or a newer caller turned it on). Version 3 adds `upscaler` (a
-/// `PonkoUpscaler`); an older caller leaves it as it is.
+/// `PonkoUpscaler`); an older caller leaves it as it is. Version 4 adds
+/// `auto_exposure` and its `auto_exposure_*` settings; an older caller
+/// leaves them as they are (off, unless Rust or a newer caller turned it
+/// on). Version 5 adds `ssr_transparent`; an older caller leaves it as it is.
 /// ```
 /// use ponko_ffi::*;
 /// let mut p: PonkoPostEx = unsafe { std::mem::zeroed() };
@@ -62,6 +66,9 @@ pub const PONKO_POST_EX_VERSION: u32 = 3;
 /// assert_eq!((p.dof_enabled, p.dof_focus_distance, p.msaa), (false, 10.0, 4));
 /// assert!(!p.ssr_thin_objects);
 /// assert_eq!(p.upscaler, PonkoUpscaler::PONKO_UPSCALER_BILINEAR as u32);
+/// assert!(!p.auto_exposure);
+/// assert_eq!((p.auto_exposure_min, p.auto_exposure_max), (-4.0, 4.0));
+/// assert!(!p.ssr_transparent);
 /// ```
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -110,6 +117,42 @@ pub struct PonkoPostEx {
     /// needs `post.anti_aliasing` 3, TAA; otherwise it stretches). Another
     /// value fails with `PONKO_INVALID_ARGUMENT`.
     pub upscaler: u32,
+    /// Version 4. Auto exposure (Rust `Post::auto_exposure`): the
+    /// picture's exposure follows its brightness, as eyes adapt, on top of
+    /// `post.exposure`. Each frame the lit frame's average brightness is
+    /// metered, and the exposure that brings it to middle grey (moved by
+    /// the compensation, held between min and max) is approached at the
+    /// speeds below. Default false. Off it costs nothing; on, a few small
+    /// passes, on every GPU tier.
+    pub auto_exposure: bool,
+    /// The most it darkens the picture, in stops (0 or below). Default -4.
+    pub auto_exposure_min: f32,
+    /// The most it brightens the picture, in stops (0 or above, not below
+    /// `auto_exposure_min`). Default 4.
+    pub auto_exposure_max: f32,
+    /// Where it settles, in stops from middle grey (+1: a stop brighter).
+    /// Default 0.
+    pub auto_exposure_compensation: f32,
+    /// How fast the picture brightens, in stops a second (0 or more; 0
+    /// holds, `INFINITY` jumps). Default 1.
+    pub auto_exposure_brighten_speed: f32,
+    /// How fast the picture darkens, in stops a second (0 or more; 0 holds,
+    /// `INFINITY` jumps). Default 3.
+    pub auto_exposure_darken_speed: f32,
+    /// How much more the middle of the picture counts than its edges, 0 to
+    /// 1 (1 leaves the corners out). Default 0.5.
+    pub auto_exposure_center_weight: f32,
+    /// Whether `auto_exposure_mask` is used.
+    pub auto_exposure_has_mask: bool,
+    /// A metering mask stretched over the picture: its red channel says how
+    /// much each part counts (white fully, black not at all).
+    pub auto_exposure_mask: PonkoTexture,
+    /// Version 5. Screen-space reflections on transparent surfaces too:
+    /// glossy water and glass reflect the opaque scene on screen, each pixel
+    /// marching its ray in its own shader (Rust `Post::ssr_transparent`).
+    /// Default false, in every preset too. Only matters where `post.ssr` is
+    /// above 0.
+    pub ssr_transparent: bool,
 }
 assert_header!(PonkoPostEx);
 
@@ -151,6 +194,8 @@ impl Versioned for PonkoPostEx {
             1 => Some(end_of!(Self, msaa: u32)),
             2 => Some(end_of!(Self, ssr_thin_objects: bool)),
             3 => Some(end_of!(Self, upscaler: u32)),
+            4 => Some(end_of!(Self, auto_exposure_mask: PonkoTexture)),
+            5 => Some(end_of!(Self, ssr_transparent: bool)),
             _ => None,
         }
     }
@@ -172,6 +217,20 @@ fn post_ex_of(p: &Post) -> PonkoPostEx {
         msaa: p.msaa,
         ssr_thin_objects: p.ssr_thin_objects,
         upscaler: upscaler_to_c(p.upscaler),
+        auto_exposure: p.auto_exposure.enabled,
+        auto_exposure_min: p.auto_exposure.min,
+        auto_exposure_max: p.auto_exposure.max,
+        auto_exposure_compensation: p.auto_exposure.compensation,
+        auto_exposure_brighten_speed: p.auto_exposure.brighten_speed,
+        auto_exposure_darken_speed: p.auto_exposure.darken_speed,
+        auto_exposure_center_weight: p.auto_exposure.center_weight,
+        auto_exposure_has_mask: p.auto_exposure.mask.is_some(),
+        auto_exposure_mask: p.auto_exposure.mask.map(texture_to_c).unwrap_or(PonkoTexture {
+            id: 0,
+            width: 0,
+            height: 0,
+        }),
+        ssr_transparent: p.ssr_transparent,
     }
 }
 
@@ -207,6 +266,33 @@ fn post_of_ex(base: Post, ex: &PonkoPostEx) -> Result<Post, Failure> {
         return Err(invalid("msaa takes 2 or 4 samples"));
     }
     let upscaler = upscaler_from_c(ex.upscaler)?;
+    let finite = [
+        ex.auto_exposure_min,
+        ex.auto_exposure_max,
+        ex.auto_exposure_compensation,
+    ];
+    let speed = |v: f32| v >= 0.0; // INFINITY jumps; a NaN fails
+    if !finite.iter().all(|v| v.is_finite())
+        || ex.auto_exposure_min > ex.auto_exposure_max
+        || !speed(ex.auto_exposure_brighten_speed)
+        || !speed(ex.auto_exposure_darken_speed)
+        || !(0.0..=1.0).contains(&ex.auto_exposure_center_weight)
+    {
+        return Err(invalid(
+            "auto_exposure_min and auto_exposure_max must be finite with min not above max, \
+             auto_exposure_compensation finite, the speeds 0 or more and auto_exposure_center_weight 0 to 1",
+        ));
+    }
+    post.auto_exposure = AutoExposure {
+        enabled: ex.auto_exposure,
+        min: ex.auto_exposure_min,
+        max: ex.auto_exposure_max,
+        compensation: ex.auto_exposure_compensation,
+        brighten_speed: ex.auto_exposure_brighten_speed,
+        darken_speed: ex.auto_exposure_darken_speed,
+        center_weight: ex.auto_exposure_center_weight,
+        mask: ex.auto_exposure_has_mask.then(|| texture_from_c(ex.auto_exposure_mask)),
+    };
     post.split_toning = SplitToning {
         shadows,
         highlights,
@@ -221,6 +307,7 @@ fn post_of_ex(base: Post, ex: &PonkoPostEx) -> Result<Post, Failure> {
     post.msaa = ex.msaa;
     post.ssr_thin_objects = ex.ssr_thin_objects;
     post.upscaler = upscaler;
+    post.ssr_transparent = ex.ssr_transparent;
     Ok(post)
 }
 
@@ -253,7 +340,9 @@ pub unsafe extern "C" fn ponko_ctx_post_ex(ctx: *mut PonkoCtx, out_post: *mut Po
 /// Changes the 3D post-processing settings from their versioned form (the
 /// checks of `ponko_ctx_set_post`, plus the split toning tints finite and its
 /// balance -1 to 1, `dof_focus_distance` and `dof_focus_range` not negative,
-/// `dof_blur` 0 to 0.05, `msaa` 2 or 4 and `upscaler` a `PonkoUpscaler`). Fields newer than the caller's
+/// `dof_blur` 0 to 0.05, `msaa` 2 or 4, `upscaler` a `PonkoUpscaler`, and
+/// auto exposure's min finite and not above its max, its compensation
+/// finite, its speeds 0 or more and its center weight 0 to 1). Fields newer than the caller's
 /// version keep their current values. Nothing changes when it fails.
 /// # Safety
 /// `ctx` null or live; `post` null or a readable descriptor.
@@ -666,7 +755,7 @@ pub unsafe extern "C" fn ponko_ctx_set_camera3d_ex(ctx: *mut PonkoCtx, camera: *
 }
 
 /// The version of `PonkoTargetCameraEx` this header describes.
-pub const PONKO_TARGET_CAMERA_EX_VERSION: u32 = 2;
+pub const PONKO_TARGET_CAMERA_EX_VERSION: u32 = 3;
 
 /// A camera drawing the 3D world into a render target each frame, in a
 /// layout that can grow (Rust `TargetCamera`): `PonkoTargetCamera` plus the
@@ -678,6 +767,9 @@ pub const PONKO_TARGET_CAMERA_EX_VERSION: u32 = 2;
 /// `ponko_ctx_set_target_cameras_ex`.
 ///
 /// Version 1: `target_camera`, `particles`. Version 2: `debug_draw`.
+/// Version 3: `has_cull_box`, `cull_box_min`, `cull_box_max`, `has_clear`,
+/// `clear`. Its screen effects are set apart, with
+/// `ponko_ctx_set_target_camera_effects`.
 /// ```
 /// use ponko_ffi::*;
 /// let t = PonkoTargetCamera {
@@ -708,6 +800,19 @@ pub struct PonkoTargetCameraEx {
     /// `PonkoDebugDraw`. Default `PONKO_DEBUG_DRAW_DEFAULT`: while it draws
     /// particles (a version 1 caller gets that too).
     pub debug_draw: u32,
+    /// Only models reaching into the world box from `cull_box_min` to
+    /// `cull_box_max` are drawn (Rust `TargetCamera::cull_box`). Default
+    /// false: everything in view.
+    pub has_cull_box: bool,
+    /// One corner of the culling box (either order; version 3).
+    pub cull_box_min: PonkoVec3,
+    /// The opposite corner (version 3).
+    pub cull_box_max: PonkoVec3,
+    /// Clear to `clear` (alpha too) instead of the main view's clear colour
+    /// and sky (Rust `TargetCamera::clear`). Default false.
+    pub has_clear: bool,
+    /// The background, as Rust `Color` (version 3).
+    pub clear: PonkoColor,
 }
 assert_header!(PonkoTargetCameraEx);
 
@@ -718,8 +823,27 @@ impl Versioned for PonkoTargetCameraEx {
         match version {
             1 => Some(end_of!(Self, particles: bool)),
             2 => Some(end_of!(Self, debug_draw: u32)),
+            3 => Some(end_of!(Self, clear: PonkoColor)),
             _ => None,
         }
+    }
+}
+
+/// A descriptor holding `target_camera`, with every later field at its
+/// default: particles drawn, debug drawing `PONKO_DEBUG_DRAW_DEFAULT`, no
+/// culling box, the main view's background.
+fn target_ex_defaults(target_camera: PonkoTargetCamera) -> PonkoTargetCameraEx {
+    PonkoTargetCameraEx {
+        struct_size: size_of::<PonkoTargetCameraEx>() as u32,
+        version: PONKO_TARGET_CAMERA_EX_VERSION,
+        target_camera,
+        particles: true,
+        debug_draw: debug_draw_to_c(None),
+        has_cull_box: false,
+        cull_box_min: PonkoVec3::default(),
+        cull_box_max: PonkoVec3::default(),
+        has_clear: false,
+        clear: to_c(Color::TRANSPARENT),
     }
 }
 
@@ -730,6 +854,11 @@ fn target_ex_of(t: &ponko::render::TargetCamera) -> PonkoTargetCameraEx {
         target_camera: target_camera_to_c(t),
         particles: t.camera.particles,
         debug_draw: debug_draw_to_c(t.camera.debug_draw),
+        has_cull_box: t.cull_box.is_some(),
+        cull_box_min: t.cull_box.map(|(min, _)| to_c(min)).unwrap_or_default(),
+        cull_box_max: t.cull_box.map(|(_, max)| to_c(max)).unwrap_or_default(),
+        has_clear: t.clear.is_some(),
+        clear: to_c(t.clear.unwrap_or(Color::TRANSPARENT)),
     }
 }
 
@@ -747,14 +876,7 @@ pub unsafe extern "C" fn ponko_target_camera_ex_from(
     // SAFETY: forwarded caller contract.
     boundary(|| unsafe {
         let camera = camera.as_ref().ok_or_else(|| invalid("camera is null"))?;
-        let value = PonkoTargetCameraEx {
-            struct_size: size_of::<PonkoTargetCameraEx>() as u32,
-            version: PONKO_TARGET_CAMERA_EX_VERSION,
-            target_camera: *camera,
-            particles: true,
-            debug_draw: debug_draw_to_c(None),
-        };
-        write_desc(out_camera, &value)
+        write_desc(out_camera, &target_ex_defaults(*camera))
     })
 }
 
@@ -788,18 +910,18 @@ pub unsafe extern "C" fn ponko_ctx_set_target_cameras_ex(
             std::slice::from_raw_parts(cameras, count)
         };
         // Fields past a caller's version keep their defaults.
-        let defaults = PonkoTargetCameraEx {
-            struct_size: size_of::<PonkoTargetCameraEx>() as u32,
-            version: PONKO_TARGET_CAMERA_EX_VERSION,
-            // SAFETY: plain data, all-zero valid.
-            target_camera: std::mem::zeroed(),
-            particles: true,
-            debug_draw: debug_draw_to_c(None),
-        };
+        // SAFETY: plain data, all-zero valid.
+        let defaults = target_ex_defaults(std::mem::zeroed());
         for &camera in given {
             let d = read_desc(camera, defaults)?;
             list.push(d.target_camera);
-            particles.push((d.particles, debug_draw_from_c(d.debug_draw)?));
+            let (min, max): (Vec3, Vec3) = (to_c(d.cull_box_min), to_c(d.cull_box_max));
+            if d.has_cull_box && !(min.is_finite() && max.is_finite()) {
+                return Err(invalid("the culling box needs finite corners"));
+            }
+            let cull_box = d.has_cull_box.then(|| (min.min(max), min.max(max)));
+            let clear: Option<Color> = d.has_clear.then(|| to_c(d.clear));
+            particles.push((d.particles, debug_draw_from_c(d.debug_draw)?, cull_box, clear));
         }
         Ok(())
     });
@@ -814,9 +936,11 @@ pub unsafe extern "C" fn ponko_ctx_set_target_cameras_ex(
     // SAFETY: forwarded caller contract.
     boundary(|| unsafe {
         ctx_access(ctx, |c| {
-            for (t, &(on, debug_draw)) in c.scene3d.passes.target_cameras.iter_mut().zip(&particles) {
+            for (t, &(on, debug_draw, cull_box, clear)) in c.scene3d.passes.target_cameras.iter_mut().zip(&particles) {
                 t.camera.particles = on;
                 t.camera.debug_draw = debug_draw;
+                t.cull_box = cull_box;
+                t.clear = clear;
             }
             Ok(())
         })
@@ -885,7 +1009,20 @@ mod tests {
             Some(offset_of!(PonkoPostEx, ssr_thin_objects) + 1)
         );
         assert_eq!(PonkoPostEx::len_of(3), Some(offset_of!(PonkoPostEx, upscaler) + 4));
-        assert_eq!(PonkoPostEx::len_of(4), None);
+        assert_eq!(
+            PonkoPostEx::len_of(4),
+            Some(offset_of!(PonkoPostEx, auto_exposure_mask) + size_of::<PonkoTexture>())
+        );
+        assert_eq!(
+            PonkoTargetCameraEx::len_of(3),
+            Some(offset_of!(PonkoTargetCameraEx, clear) + size_of::<PonkoColor>())
+        );
+        assert_eq!(PonkoTargetCameraEx::len_of(4), None);
+        assert_eq!(
+            PonkoPostEx::len_of(5),
+            Some(offset_of!(PonkoPostEx, ssr_transparent) + 1)
+        );
+        assert_eq!(PonkoPostEx::len_of(6), None);
     }
 
     /// A descriptor with its header set for version 1.

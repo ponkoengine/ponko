@@ -2,13 +2,20 @@
 
 > **Maturity: not a feature.** How to contribute.
 
-Start with [`CONTRIBUTING.md`](../../CONTRIBUTING.md).
-The detailed maintainer/agent integration checklist is in
-[`AGENTS.md`](../../AGENTS.md).
+Start with the quick start at the top of
+[`CONTRIBUTING.md`](../../CONTRIBUTING.md): clone, run
+`python3 scripts/run-checks.py --quick`, pick a `good first issue`, open a pull
+request. The detailed maintainer/agent integration checklist is in
+[`AGENTS.md`](../../AGENTS.md); how decisions are made and who can merge is in
+[`GOVERNANCE.md`](../../GOVERNANCE.md).
 In short:
 
-- Work on a branch, open a pull request to `main`, and run the checks your
-  change needs locally (there is no CI).
+- Talk in [GitHub Discussions](https://github.com/ponkoengine/ponko/discussions)
+  (there is no chat room for now); maintainers answer new issues and
+  discussions within a week.
+- Work on a branch from `main` (there is no other integration branch), open a
+  pull request to `main`, and run the checks your change needs locally (there
+  is no CI).
 - Add relevant tests for changed behavior and helpful nearby API comments.
   You do not need a doctest for every item or unrelated local toolchains.
 - Performance claims need release-build numbers in the PR.
@@ -82,6 +89,12 @@ In `scripts/unsafe-inventory.txt` such a check is named like any test, with
 `window` for why it can't run under Miri. A check of a test program without
 the harness (`harness = false`, for code that needs the main thread) is
 named by its function: `tests/ui_access_window.rs::the_engine_window_...`.
+
+Code that only runs on iOS is checked on the simulator, on a Mac with Xcode:
+`scripts/ios-simulator.sh` runs the engine's iOS unit tests in a simulated
+iPhone and then an app that needs a real scene (see [iOS](ios.md)). Its
+lines name such a test, or the script itself for what only an app reaches,
+with `ios` for why it can't run under Miri.
 
 The C API is one long unsafe boundary, so its tests also run under
 AddressSanitizer and UndefinedBehaviorSanitizer: the C and C++ test programs
@@ -192,6 +205,14 @@ ctx.world.despawn(enemy);
   `bench/compare`) instead of writing it inline, and keep `ignore` for Ponko code.
 - The check enables the `3d`, `physics`, `physics3d`, `navmesh` and `steam`
   features, so snippets for those compile without extra setup.
+
+## Runs of the list of checks
+
+Nothing runs `scripts/checks.yml` by itself: a maintainer runs it on their own
+machine, and records what ran there, on what hardware and toolchain, and what
+passed, failed, was skipped or needs a person. The records:
+
+- [macOS](check-results/macos.md)
 
 ## Tests on a busy machine
 

@@ -1069,11 +1069,32 @@ static void steam_messages_validation(void) {
     CHECK(ponko_steam_lobby_create(480, 3, 2, &lobby) == PONKO_INVALID_ARGUMENT && !lobby);
     CHECK(ponko_steam_lobby_join(480, 0, &lobby) == PONKO_INVALID_ARGUMENT && !lobby);
     CHECK(ponko_net_messages_steam_host(480, 2, &endpoint) != PONKO_OK && !endpoint);
+    CHECK(ponko_net_messages_steam_sockets_host(480, 1, 250, &endpoint) == PONKO_INVALID_ARGUMENT && !endpoint);
+    CHECK(ponko_net_messages_steam_sockets_host(480, 3, 2, &endpoint) == PONKO_INVALID_ARGUMENT && !endpoint);
+    CHECK(ponko_net_messages_steam_sockets_host(480, 1, 2, &endpoint) != PONKO_OK && !endpoint);
     CHECK(ponko_steam_lobby_create(480, 0, 2, &lobby) != PONKO_OK && !lobby);
     CHECK(ponko_steam_lobby_poll(NULL) != PONKO_OK);
     CHECK(ponko_steam_lobby_leave(NULL) != PONKO_OK);
     CHECK(ponko_steam_lobby_set_metadata(NULL, "version", "1") != PONKO_OK);
     ponko_steam_lobby_free(NULL);
+}
+
+/* Steam's store-side services before ponko_steam_start (and in a library
+   built without `steam`): every call does nothing and says false. */
+static void steam_services_without_steam(void) {
+    CHECK(!ponko_steam_running());
+    ponko_steam_update();
+    CHECK(!ponko_steam_unlock_achievement("FIRST_WIN"));
+    CHECK(ponko_steam_achievement("FIRST_WIN") == -1);
+    int32_t wins = 5;
+    CHECK(!ponko_steam_set_stat_i32("wins", 1) && !ponko_steam_stat_i32("wins", &wins) && wins == 5);
+    CHECK(!ponko_steam_store_stats());
+    CHECK(!ponko_steam_set_rich_presence("status", "Menu"));
+    CHECK(!ponko_steam_overlay_open());
+    CHECK(!ponko_steam_show_text_input(0, "Name", "", 16));
+    uint32_t state = 9; size_t len = 9;
+    CHECK(ponko_steam_take_text_input(&state, NULL, 0, &len) == PONKO_OK && state == PONKO_STEAM_TEXT_NONE);
+    CHECK(!ponko_steam_cloud_enabled());
 }
 
 /* A lobby client with no server behind it: requests wait for the server's
@@ -3098,6 +3119,32 @@ static void render_descriptors_setup(PonkoCtx* ctx, void* user) {
     CHECK(ponko_ctx_post_ex(ctx, &back) == PONKO_OK && back.upscaler == PONKO_UPSCALER_TEMPORAL);
     post.upscaler = PONKO_UPSCALER_BILINEAR;
     CHECK(ponko_ctx_set_post_ex(ctx, &post) == PONKO_OK);
+    /* Version 4: auto exposure, off by default. Out-of-range settings are refused; a version 3 caller
+       leaves it as it is. */
+    CHECK(!back.auto_exposure && back.auto_exposure_min == -4 && back.auto_exposure_max == 4);
+    post.auto_exposure = true;
+    post.auto_exposure_compensation = .5f;
+    post.auto_exposure_darken_speed = INFINITY; /* jumps down at once */
+    CHECK(ponko_ctx_set_post_ex(ctx, &post) == PONKO_OK);
+    post.auto_exposure_min = 5; /* above max */
+    CHECK(ponko_ctx_set_post_ex(ctx, &post) == PONKO_INVALID_ARGUMENT);
+    post.auto_exposure_min = -4;
+    PonkoPostEx v3 = {.struct_size = sizeof v3, .version = 3};
+    CHECK(ponko_ctx_post_ex(ctx, &v3) == PONKO_OK && !v3.auto_exposure); /* not written */
+    CHECK(ponko_ctx_set_post_ex(ctx, &v3) == PONKO_OK);
+    CHECK(ponko_ctx_post_ex(ctx, &back) == PONKO_OK && back.auto_exposure && back.auto_exposure_compensation == .5f);
+    post.auto_exposure = false;
+    CHECK(ponko_ctx_set_post_ex(ctx, &post) == PONKO_OK);
+    /* Version 5: reflections on transparent surfaces; a version 4 caller leaves them as they are. */
+    CHECK(!back.ssr_transparent);
+    post.ssr_transparent = true;
+    CHECK(ponko_ctx_set_post_ex(ctx, &post) == PONKO_OK);
+    PonkoPostEx v4 = {.struct_size = sizeof v4, .version = 4};
+    CHECK(ponko_ctx_post_ex(ctx, &v4) == PONKO_OK && !v4.ssr_transparent); /* not written */
+    CHECK(ponko_ctx_set_post_ex(ctx, &v4) == PONKO_OK);
+    CHECK(ponko_ctx_post_ex(ctx, &back) == PONKO_OK && back.ssr_transparent);
+    post.ssr_transparent = false;
+    CHECK(ponko_ctx_set_post_ex(ctx, &post) == PONKO_OK);
     /* Two looks blended, and volumes by where the camera is. */
     PonkoPostEx day = {.struct_size = sizeof day, .version = PONKO_POST_EX_VERSION};
     PonkoPostEx cave = day, blended = day;
@@ -4090,6 +4137,7 @@ int main(void) {
     command_barriers();
     command_spawn_ids();
     steam_messages_validation();
+    steam_services_without_steam();
     lobby_client();
     rtc_endpoints();
     morph_clip_api();

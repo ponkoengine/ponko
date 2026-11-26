@@ -159,7 +159,7 @@ pub(crate) use gltf_scene::{GltfEntities, GltfOverride, GltfOverrideKind, Waitin
 pub use gltf_scene::{GltfNode, GltfOptions, GltfRoot, GltfScene, GltfSceneNode, SpawnPoint};
 pub use mesh::{MeshData, MorphFrame, MorphTarget};
 pub use post::Upscaler;
-pub use post::{AmbientOcclusion, AntiAliasing, DepthOfField, Post, PostVolume, SplitToning, Tonemap};
+pub use post::{AmbientOcclusion, AntiAliasing, AutoExposure, DepthOfField, Post, PostVolume, SplitToning, Tonemap};
 pub(crate) use post::{MAX_RENDER_SCALE, MIN_RENDER_SCALE};
 #[cfg(feature = "window")]
 pub(crate) use post::{PostUniform, scaled_size};

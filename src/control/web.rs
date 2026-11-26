@@ -163,6 +163,8 @@ fn available(method: &str) -> bool {
             | "resource.get"
             | "systems.timings"
             | "ecs.diagnostics"
+            | "debug.console.help"
+            | "debug.console.run"
             | "perf.get"
             | "shaders.status"
             | "camera.get"

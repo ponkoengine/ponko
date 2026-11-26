@@ -1,5 +1,12 @@
 # Putting a game online
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests: the relay sessions
+> through the lobby server, the proxy-header tests and the TURN client against
+> an in-process TURN server; the one-machine walkthrough below was run as
+> written, against coturn 4.19.2 on macOS. Platforms: Linux, macOS and Windows,
+> headless. Graphics: not involved. Missing: a reference game and a public
+> deployment.
+
 This page is one complete setup, from an empty server to players in a
 match: the [lobby server](lobby.md) for rooms and its relay, a TLS proxy
 so browsers can reach it over `wss://`, and a TURN server so
@@ -54,8 +61,11 @@ docker run --rm --network host coturn/coturn -n \
   --listening-ip=127.0.0.1 --relay-ip=127.0.0.1 --listening-port=3478 \
   --min-port=49152 --max-port=49200 \
   --lt-cred-mech --user=game:secret --realm=localhost \
-  --allow-loopback-peers --no-cli
+  --allow-loopback-peers
 ```
+
+Coturn 4.10 and newer disable the admin CLI by default. With an older
+version, add `--no-cli`.
 
 On macOS and Windows, Docker runs containers in a virtual machine whose
 loopback interface isn't your computer's: install coturn there instead
@@ -70,9 +80,18 @@ cargo run -p ponko_lobby --features webrtc --example online_check -- join X2E9GV
 
 `turn` connects over WebRTC with `RtcConfig::relay_only`: neither player
 offers its own address, so the only way through is a relayed address on
-the TURN server, and `it works` means TURN works. The lobby only carries
-the WebRTC signaling here. Without a TURN server, or with the wrong
-password, both sides stop within ten seconds and say why:
+the TURN server. The lobby only carries the WebRTC signaling here. Both
+sides print `it works` after exchanging messages.
+
+To check credential rejection, prefix both commands with
+`TURN_PASSWORD=wrong` and join the new room code printed by the host.
+Both sides stop within ten seconds after joining the room:
+
+```text
+online_check: TURN server 127.0.0.1:3478: the TURN server refused the credentials (401)
+```
+
+When the TURN server is stopped, both sides report:
 
 ```text
 online_check: TURN server 127.0.0.1:3478: the TURN server didn't answer
@@ -80,7 +99,7 @@ online_check: TURN server 127.0.0.1:3478: the TURN server didn't answer
 
 The example reads `LOBBY` (default `127.0.0.1:7700`), `TURN`
 (`turn:127.0.0.1:3478`), `TURN_USER` and `TURN_PASSWORD` from the
-environment: the same two commands check the real server once it runs,
+environment. The same two commands check the real server once it runs,
 from two machines on different networks
 (`LOBBY=lobby.example.org:7700 TURN=turn:lobby.example.org:3478`).
 
@@ -292,8 +311,7 @@ the proxy header through a small reverse proxy in the test
 (`crates/ponko_lobby/tests/proxy.rs`), and two desktop peers behind
 simulated strict NATs connecting through a TURN server that runs inside
 the test, in memory and over UDP on loopback
-(`net::rtc_tests` and `net::turn`). The `relay` check above was run as
-written, on macOS. **Not tested**: the `turn` check against coturn (the
-tests' TURN server is a small one of the engine's own, speaking the same
-RFC 8656 messages), the server deployment, Caddy, and real NATs. Run the
-checks above before you rely on it.
+(`net::rtc_tests` and `net::turn`). The `relay` and `turn` checks above
+were run on macOS with coturn 4.19.2, including rejection of an incorrect
+TURN password. The server deployment, Caddy, and real NATs still need
+the end-to-end checks above.

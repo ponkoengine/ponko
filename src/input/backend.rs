@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use glam::IVec2;
 
 use super::controller::{GamepadInfo, GamepadMotion, MotorLevels};
+use super::gamepad_extras::{GamepadOutput, GamepadTouchpadFinger, TriggerEffect};
 use super::joystick::{ForceFeedback, Joystick, JoystickInfo, MAX_JOYSTICKS};
 use super::{Gamepad, GamepadAxis, GamepadButton, Input, MAX_GAMEPADS};
 use crate::ctx::Ctx;
@@ -98,6 +99,21 @@ pub trait GamepadBackend: Send + 'static {
     fn set_force_feedback(&mut self, device: DeviceKey, effects: ForceFeedback) {
         let _ = (device, effects);
     }
+
+    /// Sets the light bar's RGB channels. Black switches the light off.
+    fn set_light(&mut self, device: DeviceKey, rgb: [u8; 3]) {
+        let _ = (device, rgb);
+    }
+
+    /// Sets the zero-based player indicator, or switches the LEDs off.
+    fn set_player_leds(&mut self, device: DeviceKey, player: Option<u8>) {
+        let _ = (device, player);
+    }
+
+    /// Sets the left and right adaptive trigger effects together.
+    fn set_trigger_effects(&mut self, device: DeviceKey, effects: [TriggerEffect; 2]) {
+        let _ = (device, effects);
+    }
 }
 
 /// What a [`GamepadBackend`] reports during [`poll`](GamepadBackend::poll).
@@ -105,6 +121,7 @@ pub trait GamepadBackend: Send + 'static {
 pub struct GamepadEvents<'a> {
     input: &'a mut Input,
     slots: &'a mut Slots<MAX_GAMEPADS>,
+    sent_output: &'a mut [GamepadOutput; MAX_GAMEPADS],
     joystick_slots: &'a mut Slots<MAX_JOYSTICKS>,
 }
 
@@ -127,6 +144,7 @@ impl GamepadEvents<'_> {
     /// and its slot waits for it to come back.
     pub fn disconnected(&mut self, device: DeviceKey) {
         if let Some(slot) = self.slots.release(device) {
+            self.sent_output[slot] = GamepadOutput::default();
             self.input.disconnect_gamepad(Gamepad(slot as u8));
         }
     }
@@ -149,6 +167,13 @@ impl GamepadEvents<'_> {
     pub fn motion(&mut self, device: DeviceKey, motion: GamepadMotion) {
         if let Some(pad) = self.pad(device) {
             self.input.set_gamepad_motion(pad, motion);
+        }
+    }
+
+    /// A contact changed on the first touch surface of `device`.
+    pub fn touchpad_finger(&mut self, device: DeviceKey, finger: u8, contact: GamepadTouchpadFinger) {
+        if let Some(pad) = self.pad(device) {
+            self.input.set_gamepad_touchpad_finger(pad, finger, contact);
         }
     }
 
@@ -265,6 +290,7 @@ pub(crate) struct GamepadDriver {
     backend: Option<Mutex<Box<dyn GamepadBackend>>>,
     slots: Slots<MAX_GAMEPADS>,
     sent: [MotorLevels; MAX_GAMEPADS],
+    sent_output: [GamepadOutput; MAX_GAMEPADS],
     joystick_slots: Slots<MAX_JOYSTICKS>,
     /// The force feedback last sent to each joystick.
     sent_force_feedback: [ForceFeedback; MAX_JOYSTICKS],
@@ -301,6 +327,7 @@ impl GamepadDriver {
                 if !self.sent[slot].is_off() {
                     old.set_rumble(device, MotorLevels::OFF);
                 }
+                self.sent_output[slot].reset(&mut *old, device);
                 input.disconnect_gamepad(Gamepad(slot as u8));
             }
         }
@@ -314,6 +341,7 @@ impl GamepadDriver {
         }
         self.slots = Slots::default();
         self.sent = [MotorLevels::OFF; MAX_GAMEPADS];
+        self.sent_output = Default::default();
         self.joystick_slots = Slots::default();
         self.sent_force_feedback = [ForceFeedback::OFF; MAX_JOYSTICKS];
     }
@@ -326,6 +354,7 @@ impl GamepadDriver {
             return;
         }
         self.send_rumble(input);
+        self.send_gamepad_output(input);
         self.send_force_feedback(input);
         self.poll(input);
     }
@@ -347,6 +376,19 @@ impl GamepadDriver {
                 if let Some(mut backend) = self.backend() {
                     backend.set_rumble(device, want);
                 }
+            }
+        }
+    }
+
+    fn send_gamepad_output(&mut self, input: &Input) {
+        for slot in 0..MAX_GAMEPADS {
+            let want = input.controllers.output[slot];
+            let previous = std::mem::replace(&mut self.sent_output[slot], want);
+            if want != previous
+                && let Some(device) = self.slots.held[slot]
+                && let Some(mut backend) = self.backend()
+            {
+                want.send_changes(previous, &mut **backend, device);
             }
         }
     }
@@ -373,6 +415,7 @@ impl GamepadDriver {
         let mut events = GamepadEvents {
             input,
             slots: &mut self.slots,
+            sent_output: &mut self.sent_output,
             joystick_slots: &mut self.joystick_slots,
         };
         backend.poll(&mut events);
@@ -756,6 +799,7 @@ mod tests {
             rumble: true,
             trigger_rumble: false,
             motion: false,
+            ..Default::default()
         }));
         ctx.set_gamepad_backend(old.clone());
         let pad = ctx.input.gamepads()[0];

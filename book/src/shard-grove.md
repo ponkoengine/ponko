@@ -2,8 +2,10 @@
 
 > **Maturity: [tested](maturity.md).** Game: Shard Grove itself, played
 > headless. Tests: `tests/shard_grove.rs`. Platforms: Linux, macOS and
-> Windows, headless (the workspace tests in the list of checks). Graphics: not
-> involved. Missing: its package played on each OS.
+> Windows, headless (the workspace tests in the list of checks), and its
+> package, played headless from an unrelated folder (`package-smoke`). Graphics:
+> not involved. Missing: a frame-time baseline per GPU tier, and the game opened
+> in a WebGPU browser and in a window on each OS (#454).
 
 [`examples/shard_grove`](../../examples/shard_grove)
 is the engine's 3D reference game. The other 3D examples each show one
@@ -233,8 +235,9 @@ What the game found missing or awkward, and what is not covered yet:
 |---|---|
 | 3D physics had no pause like the 2D `ctx.physics.set_paused`; the game held the warden's velocity at zero on menus. | Fixed by `ctx.physics3d.set_paused` (#452) |
 | `NavAgent` had private fields, so it couldn't be built with `..Default::default()`; the game set fields on a default. | Fixed: its progress moved into `NavAgent::state`, so it builds with struct-update syntax (#453) |
-| A frame-rate performance baseline per GPU tier (`PONKO_BENCH`) needs runs on real GPUs with a window. | Desktop tier recorded on Windows, DirectX 12 and Vulkan (#454, [Performance baseline](#performance-baseline)); other tiers open |
-| The list of checks packages it and plays the package headless and in a window (`package-smoke`), as it does Ember Hop. | Listed; run on Windows (DirectX 12 and Vulkan), Linux and macOS open (#454) |
+| A frame-rate performance baseline per GPU tier (`PONKO_BENCH`) needs runs on real GPUs with a window. | Desktop tier recorded on Windows, DirectX 12 and Vulkan ([Performance baseline](#performance-baseline)); the other tiers need a person ([the sheet](../../scripts/checklists/shard-grove.md), #454) |
+| Opened once in a WebGPU browser and in a window on each OS. | Open: needs a person ([the sheet](../../scripts/checklists/shard-grove.md), #454) |
+| The list of checks packaged and played it on every OS, as it does Ember Hop. | Fixed: `package-smoke` packages it with `ponko package --example shard_grove` and plays the package headless from an unrelated folder (#454); its headless tests also run in the test job on Linux, macOS and Windows |
 | One level: level streaming isn't part of the game. | Open |
 | Rust only; no C or C++ counterpart. | No native port planned yet |
 

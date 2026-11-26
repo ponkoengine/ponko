@@ -1177,6 +1177,118 @@ fn reflection_gpu_cost(
     true
 }
 
+/// Offscreen timestamp measurement of `Post::ssr_transparent`, like
+/// [`reflection_gpu_cost_at_1080p`]; run with --ignored --nocapture. At
+/// 1920x1080 in the High preset, a glossy half see-through pane (water) over
+/// a dark floor fills the lower part of the screen
+/// under a glowing box; reflections on transparent surfaces alternate off
+/// and on in blocks of 20 frames. Prints the frame's GPU time both ways and
+/// every pass's span both ways (with the setting off the pane draws in the
+/// opaque pass, as without it; on, after the scene copy).
+#[test]
+#[ignore]
+fn transparent_reflection_gpu_cost_at_1080p() {
+    let Some(mut rig) = Rig::with_limits(1920, 1080, true) else {
+        return;
+    };
+    let Some(mut timer) = super::timer::GpuTimer::new(&rig.device, &rig.queue) else {
+        crate::render::render_test_support::skip("timestamp queries unavailable");
+        return;
+    };
+    let water = rig.mesh(
+        &MeshData::cube(1.0),
+        MaterialDesc {
+            color: Color::rgba(0.6, 0.7, 0.8, 0.6),
+            roughness: 0.05,
+            blend: crate::render::Blend::Transparent,
+            ..Default::default()
+        },
+    );
+    let ground = rig.mesh(
+        &MeshData::cube(1.0),
+        MaterialDesc {
+            color: Color::rgb(0.2, 0.2, 0.2),
+            roughness: 1.0,
+            ..Default::default()
+        },
+    );
+    let block = rig.mesh(
+        &MeshData::cube(1.0),
+        MaterialDesc {
+            color: Color::BLACK,
+            emissive: Color::rgb(4.0, 0.0, 0.0),
+            ..Default::default()
+        },
+    );
+    for (mesh, position, scale) in [
+        (water, vec3(0.0, -0.05, 0.0), vec3(40.0, 0.1, 40.0)),
+        (ground, vec3(0.0, -1.25, 0.0), vec3(40.0, 0.5, 40.0)),
+        (block, vec3(0.0, 1.0, 0.0), Vec3::ONE),
+    ] {
+        rig.ctx.world.spawn((
+            Transform3D {
+                position,
+                scale,
+                ..Default::default()
+            },
+            Model::new(mesh),
+        ));
+    }
+    rig.ctx.scene3d.camera.position = vec3(0.0, 2.0, 6.0);
+    rig.ctx.scene3d.camera.look_at(Vec3::ZERO);
+    rig.ctx.scene3d.set_quality(crate::render::GraphicsQuality::High);
+    assert!(rig.ctx.scene3d.post.ssr > 0.0, "the preset has reflections");
+    let busy = Busy::new(&rig.device);
+    let median = |samples: &mut Vec<f32>| {
+        samples.sort_by(f32::total_cmp);
+        samples[samples.len() / 2]
+    };
+    // [off, on]
+    let mut frames = [Vec::new(), Vec::new()];
+    let mut passes: Vec<(&'static str, [Vec<f32>; 2])> = Vec::new();
+    for frame in 0..840 {
+        let on = (frame / 20) % 2 == 1;
+        rig.ctx.scene3d.post.ssr_transparent = on;
+        busy.run(&rig.device, &rig.queue);
+        rig.draw_timed(Some(&mut timer));
+        if frame < 40 || frame % 20 < 8 {
+            continue;
+        }
+        frames[usize::from(on)].push(timer.last_frame.iter().map(|s| s.ms).sum::<f32>());
+        for span in &timer.last_frame {
+            let times = match passes.iter_mut().find(|(name, _)| *name == span.name) {
+                Some((_, times)) => times,
+                None => {
+                    passes.push((span.name, [Vec::new(), Vec::new()]));
+                    &mut passes.last_mut().unwrap().1
+                }
+            };
+            times[usize::from(on)].push(span.ms);
+        }
+    }
+    let [mut off, mut on] = frames;
+    let (off, on) = (median(&mut off), median(&mut on));
+    let spans: Vec<String> = passes
+        .iter_mut()
+        .map(|(name, [off, on])| {
+            let ms = |t: &mut Vec<f32>| {
+                if t.is_empty() {
+                    "-".to_string()
+                } else {
+                    format!("{:.4}", median(t))
+                }
+            };
+            format!("{name} {} / {}", ms(off), ms(on))
+        })
+        .collect();
+    eprintln!(
+        "1920x1080, High, transparent pane: frame median {off:.4} ms without reflections on transparent surfaces, \
+         {on:.4} ms with (+{:.4} ms); passes (off / on): {}",
+        on - off,
+        spans.join(", ")
+    );
+}
+
 /// The coarse depth of `Post::ssr_thin_objects` gets a GPU time of its own
 /// at 1280x720: a span above zero within the frame, not listed as not
 /// timed (Apple GPUs read 0 for it before the timer copied a frame's
@@ -2274,6 +2386,352 @@ fn thin_objects_gpu_cost_over_rails_at_1440p() {
         "2560x1440, rails: trace {off:.4} ms with thin objects off, {on:.4} ms on, coarse depth {coarse:.4} ms: \
          +{:.4} ms",
         on + coarse - off
+    );
+    stage.finish();
+}
+
+/// A 1x1 normal map (linear, three channels) that tilts every normal by
+/// `degrees` toward the surface's +u: on a cube's top face, +x.
+fn tilting_normal_map(stage: &mut Stage, degrees: f32) -> crate::texture::Texture {
+    let (sin, cos) = degrees.to_radians().sin_cos();
+    let unorm = |v: f32| ((v * 0.5 + 0.5) * 255.0).round() as u8;
+    let texture = stage.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("tilting normal map"),
+        size: wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    stage.queue.write_texture(
+        texture.as_image_copy(),
+        &[unorm(sin), 128, unorm(cos), 255],
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4),
+            rows_per_image: None,
+        },
+        texture.size(),
+    );
+    let id = stage.textures.len() as u32;
+    let bind_group = stage.textures[0].bind_group.clone();
+    stage.textures.push(GpuTexture {
+        texture,
+        nearest: false,
+        mips: None,
+        bind_group,
+    });
+    crate::texture::Texture::new(id, 1, 1)
+}
+
+/// How a mirror floor's normal leans toward +x, in degrees.
+#[derive(Clone, Copy)]
+enum Tilt {
+    Flat,
+    /// Flat, with a normal map that says this much toward +u (+x).
+    Map(f32),
+    /// Flat, with a material `surface` that sets the normal.
+    Surface(f32),
+    /// The floor itself turned.
+    Turned(f32),
+}
+
+/// What a mirror floor shows of a glowing red box above it, with
+/// reflections on: the red of the reflection (on minus off, linear) over
+/// the floor below the box, its total and its center of mass on screen.
+fn reflection_on_a_tilted_floor(tilt: Tilt) -> Option<(f32, Vec2, Image, Stage)> {
+    let mut stage = Stage::new()?;
+    if !crate::render::render_test_support::needs(&stage.device, GpuFeature::ScreenSpaceReflections) {
+        return None;
+    }
+    let (normal_map, shader, turn) = match tilt {
+        Tilt::Flat => (None, None, 0.0),
+        Tilt::Map(degrees) => (Some(tilting_normal_map(&mut stage, degrees)), None, 0.0),
+        Tilt::Surface(degrees) => {
+            let (sin, cos) = degrees.to_radians().sin_cos();
+            let source = format!(
+                "fn surface(s: Surface) -> Surface {{ var o = s; o.normal = normalize(vec3<f32>({sin}, {cos}, \
+                 0.0)); return o; }}"
+            );
+            (None, Some(stage.shader("tilted", &source).0), 0.0)
+        }
+        Tilt::Turned(degrees) => (None, None, degrees),
+    };
+    let floor = stage.mesh(
+        &MeshData::cube(1.0),
+        MaterialDesc {
+            color: Color::WHITE,
+            roughness: 0.0,
+            metallic: 1.0,
+            normal_map,
+            shader,
+            ..Default::default()
+        },
+    );
+    let glow = stage.mesh(
+        &MeshData::cube(1.0),
+        MaterialDesc {
+            color: Color::BLACK,
+            emissive: Color::rgb(4.0, 0.0, 0.0),
+            ..Default::default()
+        },
+    );
+    // Turned about the top's center, so the top still passes through the
+    // origin.
+    let rotation = Quat::from_rotation_z(-turn.to_radians());
+    stage.ctx.world.spawn((
+        Transform3D {
+            position: rotation * vec3(0.0, -0.5, 0.0),
+            rotation,
+            scale: vec3(20.0, 1.0, 20.0),
+        },
+        Model::new(floor),
+    ));
+    stage.block(glow, vec3(-0.5, 0.5, -0.5), vec3(0.5, 1.5, 0.5));
+    stage.ctx.scene3d.lighting.sun_intensity = 0.0;
+    stage.ctx.scene3d.lighting.ambient_intensity = 0.0;
+    stage.ctx.scene3d.post.exposure = -5.0;
+    stage.ctx.scene3d.camera.position = vec3(0.0, 2.0, 6.0);
+    stage.ctx.scene3d.camera.look_at(vec3(0.0, 0.5, 0.0));
+    let off = stage.settled(2);
+    stage.ctx.scene3d.post.ssr = 1.0;
+    let on = stage.settled(4);
+    crate::render::render_test_support::keep_image(&on);
+    // Below the box's foot on screen: only the floor.
+    let (_, foot) = stage.pixel(vec3(0.0, 0.5, 0.5));
+    let (mut total, mut at) = (0.0, Vec2::ZERO);
+    for y in foot + 2..on.height {
+        for x in 0..on.width {
+            let linear = |image: &Image| (f32::from(image.pixel(x, y)[0]) / 255.0).powf(2.2);
+            let red = (linear(&on) - linear(&off)).max(0.0);
+            total += red;
+            at += red * vec2(x as f32, y as f32);
+        }
+    }
+    Some((total, at / total.max(1e-6), on, stage))
+}
+
+/// A normal bends the reflection as it bends the light: a flat mirror
+/// floor whose material's `surface` tilts its normal 10 degrees toward +x
+/// reflects the box where a floor really turned 10 degrees toward +x does,
+/// and not where the flat floor does. The trace used the depth's normal
+/// before, so only the turned floor's reflection moved.
+#[test]
+fn a_tilted_normal_bends_the_reflection_as_a_turned_floor_does() {
+    let Some((flat, flat_at, _, stage)) = reflection_on_a_tilted_floor(Tilt::Flat) else {
+        return;
+    };
+    stage.finish();
+    let (tilted, tilted_at, _, stage) = reflection_on_a_tilted_floor(Tilt::Surface(10.0)).unwrap();
+    stage.finish();
+    let (turned, turned_at, _, stage) = reflection_on_a_tilted_floor(Tilt::Turned(10.0)).unwrap();
+    stage.finish();
+    eprintln!(
+        "reflection (red, center): flat {flat:.1} at {flat_at}, tilted normal {tilted:.1} at {tilted_at}, turned \
+         floor {turned:.1} at {turned_at}"
+    );
+    assert!(
+        flat > 5.0 && tilted > 5.0 && turned > 5.0,
+        "the box is reflected in all three"
+    );
+    assert!(
+        (turned_at.x - flat_at.x).abs() > 4.0,
+        "turning the floor moves the reflection: {flat_at} -> {turned_at}"
+    );
+    assert!(
+        // Across: turning the floor also moves its surface up and down a
+        // little.
+        (tilted_at.x - turned_at.x).abs() < 1.5,
+        "the tilted normal moves it there too: {tilted_at} against {turned_at}"
+    );
+}
+
+/// The same with a normal map, which every glTF model's floors and walls
+/// carry: the reflection moves as on a floor turned 15 degrees. (Which way
+/// a normal map's red turns a surface is the material shader's business,
+/// and lighting agrees with it; this checks the reflection follows it.)
+#[test]
+fn a_normal_map_bends_the_reflection_as_a_turned_floor_does() {
+    let Some((flat, flat_at, flat_image, stage)) = reflection_on_a_tilted_floor(Tilt::Flat) else {
+        return;
+    };
+    stage.finish();
+    let (mapped, mapped_at, image, stage) = reflection_on_a_tilted_floor(Tilt::Map(15.0)).unwrap();
+    // The map leans the normal toward +u, which is +x on the cube's top: as
+    // the floor turned that way does, and not as the floor turned the
+    // other way (the negative control).
+    let [toward, away] = [15.0, -15.0].map(|degrees| {
+        let (_, at, _, stage) = reflection_on_a_tilted_floor(Tilt::Turned(degrees)).unwrap();
+        stage.finish();
+        at
+    });
+    eprintln!(
+        "reflection (red, center): flat {flat:.1} at {flat_at}, normal map {mapped:.1} at {mapped_at}, floor \
+         turned toward +x at {toward}, toward -x at {away}"
+    );
+    assert!(mapped > 5.0, "the box is reflected");
+    assert!(
+        (mapped_at.x - flat_at.x).abs() > 4.0,
+        "the normal map moves the reflection: {flat_at} -> {mapped_at}"
+    );
+    // Across: turning the floor also moves its surface up and down a little.
+    assert!(
+        (mapped_at.x - toward.x).abs() < 1.5,
+        "to where the floor turned toward +x puts it: {mapped_at} against {toward}"
+    );
+    assert!(
+        (mapped_at.x - away.x).abs() > 4.0,
+        "not where the floor turned toward -x puts it: {mapped_at} against {away}"
+    );
+    check_reference(
+        "regression_ssr_normal_map",
+        &image,
+        EFFECT_REFERENCE,
+        "A glowing red unit box (emissive 4, 0, 0) standing on a white metal mirror floor (roughness 0) whose 1x1 \
+         normal map (rgb 160, 128, 251) tilts every normal 15 degrees toward +x (+u); nothing lit, exposure -5, screen-space \
+         reflections at 1.0, fourth frame; camera at (0, 2, 6) looking at (0, 0.5, 0); 128x128, 4x multisampling, \
+         no tonemapping.",
+        &stage.info,
+    );
+    reference_rejects(
+        "regression_ssr_normal_map",
+        &flat_image,
+        EFFECT_REFERENCE,
+        "the floor without its normal map",
+    );
+    stage.finish();
+}
+
+/// A mirror pane over a dark floor, under a glowing red bar.
+#[derive(Clone, Copy, PartialEq)]
+enum Pane {
+    /// Solid.
+    Opaque,
+    /// Half see-through, with or without reflections on transparent surfaces.
+    Transparent(bool),
+}
+
+/// What a mirror pane shows of the glowing red bar above it: the frame with
+/// reflections at 1.0, the red of the bar's reflection (linear, over the
+/// pane below the bar's foot) and its center on screen, and the frame
+/// without reflections.
+fn reflection_in_a_pane(pane: Pane) -> Option<(Image, f32, Vec2, Image, Stage)> {
+    let mut stage = Stage::new()?;
+    if !crate::render::render_test_support::needs(&stage.device, GpuFeature::ScreenSpaceReflections) {
+        return None;
+    }
+    let (alpha, blend) = match pane {
+        Pane::Opaque => (1.0, crate::render::Blend::Opaque),
+        Pane::Transparent(_) => (0.5, crate::render::Blend::Transparent),
+    };
+    let mirror = stage.mesh(
+        &MeshData::cube(1.0),
+        MaterialDesc {
+            color: Color::rgba(1.0, 1.0, 1.0, alpha),
+            roughness: 0.0,
+            metallic: 1.0,
+            blend,
+            ..Default::default()
+        },
+    );
+    let ground = stage.mesh(
+        &MeshData::cube(1.0),
+        MaterialDesc {
+            color: Color::rgb(0.2, 0.2, 0.2),
+            roughness: 1.0,
+            ..Default::default()
+        },
+    );
+    let glow = stage.mesh(
+        &MeshData::cube(1.0),
+        MaterialDesc {
+            color: Color::BLACK,
+            emissive: Color::rgb(4.0, 0.0, 0.0),
+            ..Default::default()
+        },
+    );
+    stage.block(mirror, vec3(-10.0, -0.1, -10.0), vec3(10.0, 0.0, 10.0));
+    stage.block(ground, vec3(-10.0, -1.5, -10.0), vec3(10.0, -1.0, 10.0));
+    stage.block(glow, vec3(-1.5, 0.5, -0.5), vec3(1.5, 1.5, 0.5));
+    stage.ctx.scene3d.lighting.sun_intensity = 0.0;
+    stage.ctx.scene3d.lighting.ambient_intensity = 0.0;
+    stage.ctx.scene3d.post.exposure = -5.0;
+    stage.ctx.scene3d.camera.position = vec3(0.0, 2.0, 6.0);
+    stage.ctx.scene3d.camera.look_at(vec3(0.0, 0.5, 0.0));
+    let off = stage.settled(2);
+    stage.ctx.scene3d.post.ssr = 1.0;
+    stage.ctx.scene3d.post.ssr_transparent = pane == Pane::Transparent(true);
+    let on = stage.settled(4);
+    crate::render::render_test_support::keep_image(&on);
+    let (_, foot) = stage.pixel(vec3(0.0, 0.5, 0.5));
+    let (mut red, mut at) = (0.0, Vec2::ZERO);
+    for y in foot + 2..on.height {
+        for x in 0..on.width {
+            let linear = |image: &Image| (f32::from(image.pixel(x, y)[0]) / 255.0).powf(2.2);
+            let more = (linear(&on) - linear(&off)).max(0.0);
+            red += more;
+            at += more * vec2(x as f32, y as f32);
+        }
+    }
+    Some((on, red, at / red.max(1e-6), off, stage))
+}
+
+/// Transparent surfaces reflect the scene on screen only with
+/// `Post::ssr_transparent`: a half see-through mirror pane shows the red bar
+/// with it, where a solid mirror pane shows it, and without it shows
+/// exactly what it shows without reflections (nothing: no sky, no ambient
+/// light).
+#[test]
+fn transparent_surfaces_reflect_the_scene_with_ssr_transparent() {
+    let Some((without, red_without, _, off, stage)) = reflection_in_a_pane(Pane::Transparent(false)) else {
+        return;
+    };
+    stage.finish();
+    let (_, _, mirror_at, _, stage) = reflection_in_a_pane(Pane::Opaque).unwrap();
+    stage.finish();
+    let (with, red, at, _, stage) = reflection_in_a_pane(Pane::Transparent(true)).unwrap();
+    eprintln!(
+        "reflection in a transparent pane (red): without {red_without:.1}, with {red:.1} at {at}; solid mirror's \
+         at {mirror_at}"
+    );
+    assert!(red_without < 0.5, "no reflection without the setting: {red_without}");
+    let mut most = 0;
+    for y in 0..off.height {
+        for x in 0..off.width {
+            let (a, b) = (without.pixel(x, y), off.pixel(x, y));
+            most = (0..3).map(|c| a[c].abs_diff(b[c])).fold(most, u8::max);
+        }
+    }
+    assert!(
+        most <= 1,
+        "the setting off, the pane draws as without reflections: {most} apart"
+    );
+    assert!(red > 5.0, "the bar is reflected in the pane: {red}");
+    assert!(
+        at.distance(mirror_at) < 1.5,
+        "where a solid mirror reflects it: {at} against {mirror_at}"
+    );
+    check_reference(
+        "regression_ssr_transparent",
+        &with,
+        EFFECT_REFERENCE,
+        "A glowing red 3x1x1 bar (emissive 4, 0, 0) standing on a half see-through white metal mirror pane \
+         (alpha 0.5, roughness 0) 1 unit above a dark grey floor; nothing lit, exposure -5, screen-space \
+         reflections at 1.0 on transparent surfaces too, fourth frame; camera at (0, 2, 6) looking at (0, 0.5, \
+         0); 128x128, 4x multisampling, no tonemapping.",
+        &stage.info,
+    );
+    reference_rejects(
+        "regression_ssr_transparent",
+        &without,
+        EFFECT_REFERENCE,
+        "the pane without reflections on transparent surfaces",
     );
     stage.finish();
 }

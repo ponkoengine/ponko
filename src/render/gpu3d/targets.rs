@@ -30,6 +30,17 @@ pub(super) struct RenderTargets {
     /// What compute passes need of the render targets they run on, made
     /// the first time one does, by texture id.
     pub(super) computes: Vec<(u32, ComputeState)>,
+    /// Mipmapped render targets' chains, by texture id: `None` until their
+    /// levels are first made (see `target_mips.rs`).
+    pub(super) mips: Vec<(u32, Option<super::target_mips::MipChain>)>,
+    /// What makes the chains, once a mipmapped target needs it.
+    pub(super) mip_maker: Option<super::target_mips::MipMaker>,
+    /// Mipmapped targets whose levels this frame's target camera stage
+    /// makes again (indices into `mips`).
+    pub(super) mips_due: Vec<usize>,
+    /// Mipmapped targets written after that stage (target effects, UI
+    /// panels): due next frame (texture ids).
+    pub(super) mips_late: Vec<u32>,
 }
 
 impl RenderTargets {
@@ -37,6 +48,67 @@ impl RenderTargets {
     /// cameras and compute passes.
     pub(super) fn add(&mut self, id: u32, texture: &wgpu::Texture) {
         self.textures.push((id, texture.clone()));
+        if texture.mip_level_count() > 1 {
+            self.mips.push((id, None));
+        }
+    }
+
+    /// Notes that render target `id` was written: a mipmapped one gets its
+    /// levels made again in this frame's target camera stage (`late`: in
+    /// the next frame's, it was written after that).
+    pub(super) fn wrote(&mut self, id: u32, late: bool) {
+        let Some(i) = self.mips.iter().position(|&(t, _)| t == id) else {
+            return;
+        };
+        if late {
+            if !self.mips_late.contains(&id) {
+                self.mips_late.push(id);
+            }
+        } else if !self.mips_due.contains(&i) {
+            self.mips_due.push(i);
+        }
+    }
+
+    /// Starts a frame's list of mipmapped targets to make: those written
+    /// late last frame.
+    pub(super) fn begin_mips(&mut self) {
+        self.mips_due.clear();
+        let late = std::mem::take(&mut self.mips_late);
+        for &id in &late {
+            self.wrote(id, false);
+        }
+        self.mips_late = late;
+        self.mips_late.clear();
+    }
+
+    /// Makes the chains of the targets due this frame that have none yet.
+    pub(super) fn prepare_mips(&mut self, device: &wgpu::Device) {
+        if self.mips_due.is_empty() {
+            return;
+        }
+        let maker = self
+            .mip_maker
+            .get_or_insert_with(|| super::target_mips::MipMaker::new(device));
+        for &i in &self.mips_due {
+            let (id, chain) = &mut self.mips[i];
+            if chain.is_none()
+                && let Some((_, texture)) = self.textures.iter().find(|(t, _)| t == id)
+            {
+                *chain = Some(maker.chain(device, texture));
+            }
+        }
+    }
+
+    /// Records the levels of every target due this frame.
+    pub(super) fn record_mips(&self, encoder: &mut wgpu::CommandEncoder, time: &super::PassTimer<'_, '_>) {
+        let Some(maker) = &self.mip_maker else {
+            return;
+        };
+        for &i in &self.mips_due {
+            if let Some(chain) = &self.mips[i].1 {
+                maker.record(encoder, chain, time);
+            }
+        }
     }
 
     /// Render target `id` was freed: target cameras and compute passes let
@@ -45,6 +117,9 @@ impl RenderTargets {
         self.textures.retain(|&(t, _)| t != id);
         self.views.retain(|&(t, _)| t != id);
         self.computes.retain(|&(t, _)| t != id);
+        self.mips.retain(|&(t, _)| t != id);
+        self.mips_due.clear();
+        self.mips_late.retain(|&t| t != id);
     }
 
     /// The index in `views` of render target `id`, made on first use.
@@ -60,20 +135,24 @@ impl RenderTargets {
             return Some(i);
         }
         let texture = &self.textures.iter().find(|&&(t, _)| t == id)?.1;
-        let target = |label, format| {
-            device
-                .create_texture(&wgpu::TextureDescriptor {
-                    label: Some(label),
-                    size: texture.size(),
-                    mip_level_count: 1,
-                    sample_count: samples,
-                    dimension: wgpu::TextureDimension::D2,
-                    format,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                    view_formats: &[],
-                })
-                .create_view(&Default::default())
+        let target = |label, format, usage| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: texture.size(),
+                mip_level_count: 1,
+                sample_count: samples,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | usage,
+                view_formats: &[],
+            })
         };
+        // Sampled by the camera's screen effects.
+        let depth = target(
+            "3d target camera depth",
+            depth_format,
+            wgpu::TextureUsages::TEXTURE_BINDING,
+        );
         let frame_buffer = device.new_buffer(&wgpu::BufferDescriptor {
             label: Some("3d target camera frame"),
             size: size_of::<FrameUniform>() as u64,
@@ -83,13 +162,22 @@ impl RenderTargets {
         let lights = LightTextures::new(device);
         let frame_bind_group = sources.bind_group(device, &frame_buffer, &lights);
         let view = ViewTarget {
-            color: target("3d target camera color", HDR_FORMAT),
-            depth: target("3d target camera depth", depth_format),
-            resolve: texture.create_view(&Default::default()),
+            color: target("3d target camera color", HDR_FORMAT, wgpu::TextureUsages::empty())
+                .create_view(&Default::default()),
+            depth: depth.create_view(&Default::default()),
+            depth_read: depth.create_view(&wgpu::TextureViewDescriptor {
+                aspect: wgpu::TextureAspect::DepthOnly,
+                ..Default::default()
+            }),
+            resolve: super::target_mips::first_level(texture),
+            image: texture.clone(),
             frame_buffer,
             frame_mirror: Mirror::default(),
             frame_bind_group,
             lights,
+            clear: None,
+            effects: Vec::new(),
+            effect_targets: None,
         };
         self.views.push((id, view));
         Some(self.views.len() - 1)
@@ -122,7 +210,7 @@ impl RenderTargets {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&texture.create_view(&Default::default())),
+                    resource: wgpu::BindingResource::TextureView(&super::target_mips::first_level(texture)),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -320,6 +408,7 @@ impl Renderer3D {
                 self.screen.ao_enabled,
                 self.no_spread.is_some(),
                 self.screen.ssr_thin,
+                self.samples,
             )
         });
         // With reflections, GTAO writes the first level of their image.
@@ -562,12 +651,71 @@ pub(super) fn decal_entries<'a>(
 pub(super) struct ViewTarget {
     pub(super) color: wgpu::TextureView,
     pub(super) depth: wgpu::TextureView,
+    /// `depth`'s depth alone, as its screen effects sample it.
+    pub(super) depth_read: wgpu::TextureView,
+    /// The first level of the render target's texture.
     pub(super) resolve: wgpu::TextureView,
+    /// The render target's texture.
+    pub(super) image: wgpu::Texture,
+    /// This frame's background: `None` for the frame's clear colour and
+    /// sky (`TargetCamera::clear`).
+    pub(super) clear: Option<wgpu::Color>,
+    /// This frame's screen effects, in order: (effect, material slot).
+    pub(super) effects: Vec<(u32, u32)>,
+    /// What its screen effects read and write, made the first time it has
+    /// some.
+    pub(super) effect_targets: Option<ViewEffects>,
     pub(super) frame_buffer: wgpu::Buffer,
     /// What `frame_buffer` holds (see `sync_frame`).
     pub(super) frame_mirror: Mirror,
     pub(super) frame_bind_group: wgpu::BindGroup,
     pub(super) lights: LightTextures,
+}
+
+/// What a target camera's screen effects swap its picture with: a scratch
+/// texture of its size, and the scene bind groups reading the picture or
+/// the scratch, each with the camera's depth.
+pub(super) struct ViewEffects {
+    pub(super) scratch: wgpu::Texture,
+    pub(super) scratch_view: wgpu::TextureView,
+    pub(super) of_image: wgpu::BindGroup,
+    pub(super) of_scratch: wgpu::BindGroup,
+}
+
+impl ViewEffects {
+    /// What `target`'s screen effects need: a scratch of its size, and the
+    /// scene bind groups (of `layout`) reading its picture or the scratch.
+    pub(super) fn new(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        target: &ViewTarget,
+        depth_sampler: Option<&wgpu::Sampler>,
+        spread: Option<&wgpu::TextureView>,
+    ) -> Self {
+        let scratch = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("3d target camera effect scratch"),
+            size: wgpu::Extent3d {
+                depth_or_array_layers: 1,
+                ..target.image.size()
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: HDR_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let scratch_view = scratch.create_view(&Default::default());
+        let of = |color| scene_bind_group(device, layout, color, &target.depth_read, depth_sampler, spread);
+        Self {
+            of_image: of(&target.resolve),
+            of_scratch: of(&scratch_view),
+            scratch,
+            scratch_view,
+        }
+    }
 }
 
 /// A render target compute passes run on: the scratch texture each pass
@@ -757,6 +905,9 @@ impl RenderTargets {
         for (_, view) in &self.views {
             t.view(C::FrameTargets, "target camera color", &view.color);
             t.view(C::FrameTargets, "target camera depth", &view.depth);
+            if let Some(effects) = &view.effect_targets {
+                t.texture(C::FrameTargets, "target camera effect scratch", &effects.scratch);
+            }
             t.buffer(C::Other, "target camera frame uniforms", &view.frame_buffer);
             view.lights.tally_memory(t, C::Other);
         }

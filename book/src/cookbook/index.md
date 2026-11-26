@@ -49,6 +49,7 @@ A recipe is a system or two and the components they use. Add the system with `.s
 - [A heads-up display](menus.md#a-heads-up-display)
 - [A volume slider](menus.md#a-volume-slider)
 - [A panel that slides in](menus.md#a-panel-that-slides-in)
+- [Add a developer console](menus.md#add-a-developer-console)
 
 ## [Cameras](camera.md)
 

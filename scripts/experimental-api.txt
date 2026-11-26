@@ -1,0 +1,75 @@
+# Experimental public items: outside the versions' promise.
+#
+# STABILITY.md, "Maturity levels" and "Unstable": a feature whose guide
+# chapter is experimental may change or be removed in any release, without
+# a deprecated step first. These are its public items. They keep their
+# names (no `unstable_` prefix): instead, scripts/semver-checks.py does not
+# count a break of them, and scripts/api-snapshots.py lists them apart, in
+# api/<crate>/experimental.txt. C functions among them carry a
+# `/* Unstable: ... */` note in include/ponko.h (book/src/c-cpp.md,
+# "Unstable functions").
+#
+# `python3 scripts/experimental-api.py check` keeps this list honest: every
+# experimental chapter has a section, every section names an experimental
+# chapter, every item still exists, no stable item hands out or takes an
+# experimental type, and the C header and C++ wrapper mark exactly the C
+# functions listed here. A chapter that becomes tested or proven leaves this
+# list in the same pull request (and its items become covered then).
+#
+# Format:
+#   [chapter.md] why the chapter is experimental
+#   <item path>    why this item is part of it
+#   feature <name> why the cargo feature is unstable
+#   web <path>     like an item, for a web-only item the x86_64 listing in
+#                  api/ can't show (its existence is not checked)
+#   none           the chapter has no public API (say why)
+# An item path names a public item as api/ lists it; it covers everything
+# under it (a type's fields, methods and impls, a module's items).
+
+[hdr.md] no HDR display has been looked at, on any system
+ponko::render::HdrOutput                 the HDR output settings
+ponko::render::HdrStatus                 what the window did with them
+ponko::render::HdrEncoding               the surface encoding HdrStatus reports
+ponko::render::HdrOffReason              why HDR is off, in HdrStatus
+ponko::render::HdrMetadata               the HDR10 metadata sent to the display
+ponko::game::Game::hdr_output            turns HDR output on at startup
+ponko::game::ConfiguredGame::hdr_output  the same on a configured game
+ponko::gfx::Graphics::hdr_output         reads the settings while the game runs
+ponko::gfx::Graphics::set_hdr_output     changes them while the game runs
+ponko::gfx::Graphics::hdr_status         reads HdrStatus
+ponko_ffi::PonkoHdrOutput                C: the settings (versioned descriptor)
+ponko_ffi::PonkoHdrStatus                C: the status (versioned descriptor)
+ponko_ffi::PonkoHdrEncoding              C: HdrEncoding
+ponko_ffi::PonkoHdrOffReason             C: HdrOffReason
+ponko_ffi::PONKO_HDR_OUTPUT_VERSION      C: PonkoHdrOutput's version
+ponko_ffi::PONKO_HDR_STATUS_VERSION      C: PonkoHdrStatus's version
+ponko_ffi::ponko_hdr_output_defaults     C: HdrOutput::default
+ponko_ffi::ponko_game_hdr_output         C: Game::hdr_output
+ponko_ffi::ponko_ctx_hdr_output          C: Graphics::hdr_output
+ponko_ffi::ponko_ctx_set_hdr_output      C: Graphics::set_hdr_output
+ponko_ffi::ponko_ctx_hdr_status          C: Graphics::hdr_status
+
+[webrtc.md] the browser side never ran in a browser
+feature webrtc                           turns on the WebRTC transport
+ponko::net::rtc                          the WebRTC settings and signaling (RtcConfig, Signaling)
+ponko::net::NetMessages::host_rtc        hosts a message endpoint over WebRTC
+ponko::net::NetMessages::join_rtc        joins one over WebRTC
+ponko::net::NetMessages::rtc_signal_peer the signaling id behind a WebRTC peer
+ponko::net::lobby::LobbyClient::signaling  hands out an rtc::Signaling relayed through the lobby
+ponko_ffi::ponko_net_messages_rtc_host   C: host_rtc through a lobby
+ponko_ffi::ponko_net_messages_rtc_join   C: join_rtc through a lobby
+ponko_ffi::ponko_net_messages_rtc_peer   C: the lobby member behind a WebRTC peer
+
+[hot-patching.md] no patch applied by `dx` has run in the list of checks
+feature hotpatch                         patches the running game's code; no API of its own
+
+[web-threads.md] the threaded web build needs nightly Rust and the thread-heaps build has not run in a browser since its last fix
+ponko::game::Game::web_threads           asks for worker threads in a threaded web build; does nothing elsewhere
+ponko::game::ConfiguredGame::web_threads the same on a configured game
+web ponko::web::threads                  how many worker threads a web build runs (0 without threads)
+
+[xr.md] a report and an offscreen prototype, no headset
+none                                     no public API: the prototype is a test, not part of the engine
+
+[ios.md] no device has run it: touch, interruptions, the silent switch and signing are unchecked
+none                                     what is iOS-only is the build and the package (ponko_cli), not engine API; the lifecycle events, keyboard inset and audio session category are platform-neutral and tested headlessly on every system
