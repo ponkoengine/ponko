@@ -9,8 +9,8 @@ asset cooker, packaging, crash reports), the systems most games need
 (hierarchies, game states, a widget set, localization, saves that migrate),
 and multiplayer from rollback to dedicated servers, while the simple path
 stays `Game::new()`, systems and `.run()`. Where it breaks the API, the
-[migration guide](migrating-to-0.2.md) lists each change with the code
-before and after.
+migration guide, "Migrating from 0.1 to 0.2", lists each change with the
+code before and after.
 
 **Highlights**
 
@@ -61,11 +61,11 @@ before and after.
   [Shard Grove](shard-grove.md) and [Legions](legions.md).
 <!-- release story end -->
 
-<!-- changelog.py --notes: generated from changelog.d/, do not edit by hand -->
+<!-- changelog.py --notes: generated from CHANGELOG.md and the migration chapter, do not edit by hand -->
 
 ## Every change, by area
 
-The [CHANGELOG](../../CHANGELOG.md) lists each of these 1322 changes under its area; the numbers count its entries.
+The [CHANGELOG](../../CHANGELOG.md) lists each of these 1331 changes under its area; the numbers count its entries.
 
 | Area | Breaking | Added | Changed | Fixed | Removed | Deprecated | Security |
 |---|---|---|---|---|---|---|---|
@@ -82,101 +82,101 @@ The [CHANGELOG](../../CHANGELOG.md) lists each of these 1322 changes under its a
 | Tools: editor, inspector and agents |  | 58 | 12 | 12 |  |  |  |
 | C and C++ | 1 | 41 | 5 | 2 |  |  |  |
 | Guide and examples |  | 24 | 22 | 8 |  |  |  |
-| Development and releases | 1 | 51 | 24 | 33 | 2 |  | 5 |
-| **All** | **57** | **789** | **296** | **162** | **2** | **8** | **8** |
+| Development and releases | 1 | 57 | 27 | 33 | 2 |  | 5 |
+| **All** | **57** | **795** | **299** | **162** | **2** | **8** | **8** |
 
 ## Breaking changes at a glance
 
-Each links to its entry, with the code before and after, in [Migrating from 0.1 to 0.2](migrating-to-0.2.md).
+The fold writes their entries, with the code before and after, to Migrating from 0.1 to 0.2; `changelog.py --notes 0.2.0` then links each one.
 
 **API and crate layout**
 
-- [`ponko_ffi::PonkoHandleKind` has three new values, `PONKO_HANDLE_SPRITE_SHADER`, `PONKO_HANDLE_SPRITE_MATERIAL` and `PONKO_HANDLE_RENDER_TARGET`](migrating-to-0.2.md#ponko_ffiponkohandlekind-has-three-new-values-ponko_handle_sprite_shader-ponko_handle_sprite_material-and-ponko_handle_render_target)
-- [The `ponko::physics` module is gone: 2D physics lives in `ponko::d2`](migrating-to-0.2.md#the-ponkophysics-module-is-gone-2d-physics-lives-in-ponkod2)
-- [The `ponko::physics3d` module is gone](migrating-to-0.2.md#the-ponkophysics3d-module-is-gone)
-- [`ponko::d3` no longer re-exports the types of topic modules](migrating-to-0.2.md#ponkod3-no-longer-re-exports-the-types-of-topic-modules)
-- [`ponko::d2` no longer re-exports the types of topic modules](migrating-to-0.2.md#ponkod2-no-longer-re-exports-the-types-of-topic-modules)
-- [Types of one dimension are no longer also public in a topic module under their suffixed name](migrating-to-0.2.md#types-of-one-dimension-are-no-longer-also-public-in-a-topic-module-under-their-suffixed-name)
-- [`ponko::nav` holds only the navigation-mesh baking types (`NavBakeSettings`, `NavBakeError`, `NavSource`)](migrating-to-0.2.md#ponkonav-holds-only-the-navigation-mesh-baking-types-navbakesettings-navbakeerror-navsource)
-- [`ponko::alloc_count` and `ponko::scope` are private](migrating-to-0.2.md#ponkoalloc_count-and-ponkoscope-are-private)
-- [The built-in systems are public only in `ponko::systems`](migrating-to-0.2.md#the-built-in-systems-are-public-only-in-ponkosystems)
-- [The Steam API takes and returns Ponko's own types](migrating-to-0.2.md#the-steam-api-takes-and-returns-ponkos-own-types)
-- [`ponko::net::steam`, the re-exported `steamworks` crate, is `ponko::net::unstable_steamworks` now](migrating-to-0.2.md#ponkonetsteam-the-re-exported-steamworks-crate-is-ponkonetunstable_steamworks-now)
-- [The prelude no longer exports `AssetSource`, `MemorySource`, `PackSource` and `SetupResult`](migrating-to-0.2.md#the-prelude-no-longer-exports-assetsource-memorysource-packsource-and-setupresult)
-- [`ponko_image_diff::compare`, `heatmap` and `compare_files` return `ponko_image_diff::Error`](migrating-to-0.2.md#ponko_image_diffcompare-heatmap-and-compare_files-return-ponko_image_differror)
-- [Render targets have their own handle type, `RenderTarget`, instead of `Texture`](migrating-to-0.2.md#render-targets-have-their-own-handle-type-rendertarget-instead-of-texture)
-- [C++: render targets are `ponko::render_target`, and the calls that draw into one take only that](migrating-to-0.2.md#c-render-targets-are-ponkorender_target-and-the-calls-that-draw-into-one-take-only-that)
+- `ponko_ffi::PonkoHandleKind` has three new values, `PONKO_HANDLE_SPRITE_SHADER`, `PONKO_HANDLE_SPRITE_MATERIAL` and `PONKO_HANDLE_RENDER_TARGET`
+- The `ponko::physics` module is gone: 2D physics lives in `ponko::d2`
+- The `ponko::physics3d` module is gone
+- `ponko::d3` no longer re-exports the types of topic modules
+- `ponko::d2` no longer re-exports the types of topic modules
+- Types of one dimension are no longer also public in a topic module under their suffixed name
+- `ponko::nav` holds only the navigation-mesh baking types (`NavBakeSettings`, `NavBakeError`, `NavSource`)
+- `ponko::alloc_count` and `ponko::scope` are private
+- The built-in systems are public only in `ponko::systems`
+- The Steam API takes and returns Ponko's own types
+- `ponko::net::steam`, the re-exported `steamworks` crate, is `ponko::net::unstable_steamworks` now
+- The prelude no longer exports `AssetSource`, `MemorySource`, `PackSource` and `SetupResult`
+- `ponko_image_diff::compare`, `heatmap` and `compare_files` return `ponko_image_diff::Error`
+- Render targets have their own handle type, `RenderTarget`, instead of `Texture`
+- C++: render targets are `ponko::render_target`, and the calls that draw into one take only that
 
 **ECS and systems**
 
-- [An index into `RawWorldRef::archetypes` is valid only until the next change](migrating-to-0.2.md#an-index-into-rawworldrefarchetypes-is-valid-only-until-the-next-change)
-- [`schedule::Stage::systems` returns `&[usize]` instead of a `Range<usize>`](migrating-to-0.2.md#schedulestagesystems-returns-usize-instead-of-a-rangeusize)
-- [`d2::Collider` has a `groups` field (its collision groups)](migrating-to-0.2.md#d2collider-has-a-groups-field-its-collision-groups)
-- [`d2::QueryFilter` has a `groups` field, as `d3::QueryFilter` does](migrating-to-0.2.md#d2queryfilter-has-a-groups-field-as-d3queryfilter-does)
-- [`Commands::spawn` returns the new `Entity` instead of `()`](migrating-to-0.2.md#commandsspawn-returns-the-new-entity-instead-of-)
-- [`Commands::spawn` on a buffer that isn't tied to a world panics](migrating-to-0.2.md#commandsspawn-on-a-buffer-that-isnt-tied-to-a-world-panics)
-- [`systems::follow_attachments` places only the subtrees whose root moved or whose attachments changed](migrating-to-0.2.md#systemsfollow_attachments-places-only-the-subtrees-whose-root-moved-or-whose-attachments-changed)
-- [Adding a plugin with the same name twice makes the game fail to start](migrating-to-0.2.md#adding-a-plugin-with-the-same-name-twice-makes-the-game-fail-to-start)
+- An index into `RawWorldRef::archetypes` is valid only until the next change
+- `schedule::Stage::systems` returns `&[usize]` instead of a `Range<usize>`
+- `d2::Collider` has a `groups` field (its collision groups)
+- `d2::QueryFilter` has a `groups` field, as `d3::QueryFilter` does
+- `Commands::spawn` returns the new `Entity` instead of `()`
+- `Commands::spawn` on a buffer that isn't tied to a world panics
+- `systems::follow_attachments` places only the subtrees whose root moved or whose attachments changed
+- Adding a plugin with the same name twice makes the game fail to start
 
 **Rendering**
 
-- [`PerfReport` has a new field, `gpu_memory`, and `Budget` a new field, `gpu_memory_mb`](migrating-to-0.2.md#perfreport-has-a-new-field-gpu_memory-and-budget-a-new-field-gpu_memory_mb)
-- [`Sprite` has two new public fields, `flip_x` and `flip_y`](migrating-to-0.2.md#sprite-has-two-new-public-fields-flip_x-and-flip_y)
-- [The 3D scene depth is reverse-Z: 1 at the camera's near plane, 0 at the far plane and the sky](migrating-to-0.2.md#the-3d-scene-depth-is-reverse-z-1-at-the-cameras-near-plane-0-at-the-far-plane-and-the-sky)
-- [`TargetCamera` is `#[non_exhaustive]` and no longer `Copy`](migrating-to-0.2.md#targetcamera-is-non_exhaustive-and-no-longer-copy)
-- [Material normal maps no longer lean surfaces the opposite way on both axes](migrating-to-0.2.md#material-normal-maps-no-longer-lean-surfaces-the-opposite-way-on-both-axes)
+- `PerfReport` has a new field, `gpu_memory`, and `Budget` a new field, `gpu_memory_mb`
+- `Sprite` has two new public fields, `flip_x` and `flip_y`
+- The 3D scene depth is reverse-Z: 1 at the camera's near plane, 0 at the far plane and the sky
+- `TargetCamera` is `#[non_exhaustive]` and no longer `Copy`
+- Material normal maps no longer lean surfaces the opposite way on both axes
 
 **Animation**
 
-- [`ponko::anim::AnimationState` is `#[non_exhaustive]`](migrating-to-0.2.md#ponkoanimanimationstate-is-non_exhaustive)
-- [`ponko::anim::MotionChild` is `#[non_exhaustive]`](migrating-to-0.2.md#ponkoanimmotionchild-is-non_exhaustive)
-- [`ponko::anim::AnimationEvent` is `#[non_exhaustive]`](migrating-to-0.2.md#ponkoanimanimationevent-is-non_exhaustive)
-- [`ponko::anim::Joint` is `#[non_exhaustive]`: struct literals outside the engine no longer compile](migrating-to-0.2.md#ponkoanimjoint-is-non_exhaustive-struct-literals-outside-the-engine-no-longer-compile)
-- [`ponko::anim::JointAnimation` is `#[non_exhaustive]`](migrating-to-0.2.md#ponkoanimjointanimation-is-non_exhaustive)
-- [`ponko::anim::MorphAnimation` is `#[non_exhaustive]`](migrating-to-0.2.md#ponkoanimmorphanimation-is-non_exhaustive)
-- [`ponko::anim::MorphTarget` is `#[non_exhaustive]`](migrating-to-0.2.md#ponkoanimmorphtarget-is-non_exhaustive)
-- [`ponko::anim::AttachToJoint` is `#[non_exhaustive]`](migrating-to-0.2.md#ponkoanimattachtojoint-is-non_exhaustive)
-- [The `Motion::Blend1D` and `Motion::Blend2D` variants are `#[non_exhaustive]`](migrating-to-0.2.md#the-motionblend1d-and-motionblend2d-variants-are-non_exhaustive)
+- `ponko::anim::AnimationState` is `#[non_exhaustive]`
+- `ponko::anim::MotionChild` is `#[non_exhaustive]`
+- `ponko::anim::AnimationEvent` is `#[non_exhaustive]`
+- `ponko::anim::Joint` is `#[non_exhaustive]`: struct literals outside the engine no longer compile
+- `ponko::anim::JointAnimation` is `#[non_exhaustive]`
+- `ponko::anim::MorphAnimation` is `#[non_exhaustive]`
+- `ponko::anim::MorphTarget` is `#[non_exhaustive]`
+- `ponko::anim::AttachToJoint` is `#[non_exhaustive]`
+- The `Motion::Blend1D` and `Motion::Blend2D` variants are `#[non_exhaustive]`
 
 **Assets, scenes and saves**
 
-- [`TileMap` is `#[non_exhaustive]` and has new fields (`parallax`, `parallax_origin`, `animations`, `flips`)](migrating-to-0.2.md#tilemap-is-non_exhaustive-and-has-new-fields-parallax-parallax_origin-animations-flips)
-- [The plain collision-mesh loaders panic instead of returning a `Result`](migrating-to-0.2.md#the-plain-collision-mesh-loaders-panic-instead-of-returning-a-result)
-- [`Assets::load_strings` panics instead of returning a `Result`](migrating-to-0.2.md#assetsload_strings-panics-instead-of-returning-a-result)
-- [`Assets::load_resource_json` and `load_component_json` are `load_reflected_resource_json` and `load_reflected_component_json`](migrating-to-0.2.md#assetsload_resource_json-and-load_component_json-are-load_reflected_resource_json-and-load_reflected_component_json)
-- [`ponko_unity::Error`'s public `message` field is the `message()` method now](migrating-to-0.2.md#ponko_unityerrors-public-message-field-is-the-message-method-now)
+- `TileMap` is `#[non_exhaustive]` and has new fields (`parallax`, `parallax_origin`, `animations`, `flips`)
+- The plain collision-mesh loaders panic instead of returning a `Result`
+- `Assets::load_strings` panics instead of returning a `Result`
+- `Assets::load_resource_json` and `load_component_json` are `load_reflected_resource_json` and `load_reflected_component_json`
+- `ponko_unity::Error`'s public `message` field is the `message()` method now
 
 **UI, text and input**
 
-- [`ScenarioCheck` is `#[non_exhaustive]` and has a new `Ui` variant](migrating-to-0.2.md#scenariocheck-is-non_exhaustive-and-has-a-new-ui-variant)
-- [`UiInput` has new fields](migrating-to-0.2.md#uiinput-has-new-fields)
-- [`GamepadCapabilities` has four new fields](migrating-to-0.2.md#gamepadcapabilities-has-four-new-fields)
-- [`ButtonBinding`, `AxisBinding`, `Axis2Binding`, `Action` and `InputEvent` are `#[non_exhaustive]`](migrating-to-0.2.md#buttonbinding-axisbinding-axis2binding-action-and-inputevent-are-non_exhaustive)
-- [`ActionMap::from_json` and `to_json` return the engine's `ponko::error::Error`](migrating-to-0.2.md#actionmapfrom_json-and-to_json-return-the-engines-ponkoerrorerror)
-- [`UiRole`, `UiAccessValue` and `UiAccessAction` are `#[non_exhaustive]`](migrating-to-0.2.md#uirole-uiaccessvalue-and-uiaccessaction-are-non_exhaustive)
-- [`UiTheme` has new fields](migrating-to-0.2.md#uitheme-has-new-fields)
-- [`UiAccessNode` has new fields: `selected`, `expanded` and `position`](migrating-to-0.2.md#uiaccessnode-has-new-fields-selected-expanded-and-position)
+- `ScenarioCheck` is `#[non_exhaustive]` and has a new `Ui` variant
+- `UiInput` has new fields
+- `GamepadCapabilities` has four new fields
+- `ButtonBinding`, `AxisBinding`, `Axis2Binding`, `Action` and `InputEvent` are `#[non_exhaustive]`
+- `ActionMap::from_json` and `to_json` return the engine's `ponko::error::Error`
+- `UiRole`, `UiAccessValue` and `UiAccessAction` are `#[non_exhaustive]`
+- `UiTheme` has new fields
+- `UiAccessNode` has new fields: `selected`, `expanded` and `position`
 
 **Audio**
 
-- [`ponko_ffi::PonkoBusEffectKind` has a new value, `PONKO_BUS_EFFECT_PITCH_SHIFT`](migrating-to-0.2.md#ponko_ffiponkobuseffectkind-has-a-new-value-ponko_bus_effect_pitch_shift)
+- `ponko_ffi::PonkoBusEffectKind` has a new value, `PONKO_BUS_EFFECT_PITCH_SHIFT`
 
 **Physics, navigation and AI**
 
-- [`d3::NavObstacle` has `yaw` and `shape` fields and is `#[non_exhaustive]`](migrating-to-0.2.md#d3navobstacle-has-yaw-and-shape-fields-and-is-non_exhaustive)
-- [Waves from a spectrum are drawn on the simulation's clock, where floating bodies ride them, instead of the frame's](migrating-to-0.2.md#waves-from-a-spectrum-are-drawn-on-the-simulations-clock-where-floating-bodies-ride-them-instead-of-the-frames)
+- `d3::NavObstacle` has `yaw` and `shape` fields and is `#[non_exhaustive]`
+- Waves from a spectrum are drawn on the simulation's clock, where floating bodies ride them, instead of the frame's
 
 **Networking**
 
-- [A networked event type that leaves fields out when serializing no longer arrives](migrating-to-0.2.md#a-networked-event-type-that-leaves-fields-out-when-serializing-no-longer-arrives)
-- [The message protocol is version 2: hosts and clients of 0.1 and 0.2 can't play together](migrating-to-0.2.md#the-message-protocol-is-version-2-hosts-and-clients-of-01-and-02-cant-play-together)
+- A networked event type that leaves fields out when serializing no longer arrives
+- The message protocol is version 2: hosts and clients of 0.1 and 0.2 can't play together
 
 **C and C++**
 
-- [C: `ponko_game_run` returns `PONKO_UNSUPPORTED` (was `PONKO_INVALID_ARGUMENT`) when the game can't start on this machine](migrating-to-0.2.md#c-ponko_game_run-returns-ponko_unsupported-was-ponko_invalid_argument-when-the-game-cant-start-on-this-machine)
+- C: `ponko_game_run` returns `PONKO_UNSUPPORTED` (was `PONKO_INVALID_ARGUMENT`) when the game can't start on this machine
 
 **Development and releases**
 
-- [`ScopeReport` has a new field, `allocs_per_frame`](migrating-to-0.2.md#scopereport-has-a-new-field-allocs_per_frame)
+- `ScopeReport` has a new field, `allocs_per_frame`
 
 <!-- changelog.py --notes: end -->

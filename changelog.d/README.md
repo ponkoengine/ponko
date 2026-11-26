@@ -114,6 +114,7 @@ release of a minor whose CHANGELOG lists breaking changes without that chapter.
 A minor also has a release page, `book/src/release-X.Y.md` ("What's new"): a
 story written by hand at the top, which the fold copies to the top of the
 CHANGELOG section, and below it a part `changelog.py --notes X.Y.Z`
-generates from the fragments (the counts by area and the breaking changes,
-linked to the migration chapter). The whole cut, command by command, is in
+generates from the release's CHANGELOG section and migration chapter (the
+counts by area and the breaking changes, linked to their entries once the
+fold has written the chapter; before it, it folds a scratch copy). The whole cut, command by command, is in
 [scripts/release-0.2.md](../scripts/release-0.2.md).
