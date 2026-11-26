@@ -1333,7 +1333,16 @@ typedef enum PonkoWindowEventKind {
   PONKO_WINDOW_EVENT_CLOSE_REQUESTED = 2,
   PONKO_WINDOW_EVENT_FILE_DROPPED = 3,
   PONKO_WINDOW_EVENT_SCALE_FACTOR_CHANGED = 4,
+  PONKO_WINDOW_EVENT_SUSPENDED = 5,
+  PONKO_WINDOW_EVENT_RESUMED = 6,
+  PONKO_WINDOW_EVENT_LOW_MEMORY = 7,
 } PonkoWindowEventKind;
+
+typedef enum PonkoAudioSessionCategory {
+  PONKO_AUDIO_SESSION_SOLO_AMBIENT = 0,
+  PONKO_AUDIO_SESSION_AMBIENT = 1,
+  PONKO_AUDIO_SESSION_PLAYBACK = 2,
+} PonkoAudioSessionCategory;
 
 typedef enum PonkoCursorIcon {
   PONKO_CURSOR_DEFAULT = 0,
@@ -5328,6 +5337,10 @@ enum PonkoStatus ponko_ctx_audio_output_devices(struct PonkoCtx *ctx,
                                                 char *buffer,
                                                 size_t capacity,
                                                 size_t *out_len);
+
+enum PonkoStatus ponko_ctx_audio_set_session_category(struct PonkoCtx *ctx, uint32_t category);
+
+enum PonkoStatus ponko_ctx_audio_session_category(struct PonkoCtx *ctx, uint32_t *category);
 
 enum PonkoStatus ponko_ctx_set_audio_output_device(struct PonkoCtx *ctx, const char *device);
 
@@ -11514,6 +11527,14 @@ enum PonkoStatus ponko_ctx_window_safe_insets(struct PonkoCtx *ctx, struct Ponko
 
 enum PonkoStatus ponko_ctx_window_feed_safe_insets(struct PonkoCtx *ctx,
                                                    struct PonkoSafeInsets insets);
+
+enum PonkoStatus ponko_ctx_window_suspended(struct PonkoCtx *ctx, bool *value);
+
+enum PonkoStatus ponko_ctx_window_feed_lifecycle(struct PonkoCtx *ctx, uint32_t kind);
+
+enum PonkoStatus ponko_ctx_window_keyboard_inset(struct PonkoCtx *ctx, float *inset);
+
+enum PonkoStatus ponko_ctx_window_feed_keyboard_inset(struct PonkoCtx *ctx, float inset);
 
 enum PonkoStatus ponko_ctx_window_monitor_count(struct PonkoCtx *ctx, size_t *count);
 

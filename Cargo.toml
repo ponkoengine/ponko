@@ -84,6 +84,14 @@ id = "dev.ponko.lantern-yard"
 assets = ["assets/tutorial_3d"]
 files = ["LICENSE-MIT", "LICENSE-APACHE", "NOTICE"]
 
+# The phone check (book/src/ios.md): what the engine reads from a phone,
+# on screen. `ponko package --example phone --target ios-sim`.
+[package.metadata.ponko.examples.phone]
+name = "Phone Check"
+id = "dev.ponko.phone-check"
+assets = []
+files = ["LICENSE-MIT", "LICENSE-APACHE", "NOTICE"]
+
 # The second reference game, a platformer (book/src/ember-hop.md):
 # `ponko package --example ember_hop --features physics`.
 [package.metadata.ponko.examples.ember_hop]
@@ -234,7 +242,6 @@ gilrs = { version = "0.11.2", optional = true }
 # (book/src/controllers.md, "Choosing the SDL backend", has the reasons).
 # Low-level bindings only; links the system's SDL 3 (pkg-config, vcpkg).
 sdl3-sys = { version = "0.7.3", optional = true }
-arboard = { version = "3.7", default-features = false, features = ["wayland-data-control"], optional = true }
 pollster = { version = "1.0.1", optional = true }
 # Key labels from an xkb keymap (Linux and the BSDs, feature `window`):
 # keysym names and their characters. Already in winit's tree there; built
@@ -312,6 +319,19 @@ objc2-metal = { version = "0.3.2", optional = true, default-features = false, fe
 # output. The release wgpu's Metal backend already uses: nothing new is built.
 objc2-quartz-core = { version = "0.3.2", optional = true, default-features = false, features = ["std", "CALayer", "CAMetalLayer", "CAEDRMetadata", "objc2-metal"] }
 
+# iOS: the window's scene, the general pasteboard for the clipboard and
+# the on-screen keyboard's frame (feature `window`), and the audio session's category
+# (feature `audio`). The releases winit's and cpal's iOS backends already
+# build: nothing new is built. `objc2` is renamed: the macOS accessibility
+# test uses an older one.
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2_06 = { package = "objc2", version = "0.6.3", optional = true }
+block2 = { version = "0.6.2", optional = true }
+objc2-core-foundation = { version = "0.3.2", optional = true, default-features = false, features = ["std", "CFCGTypes"] }
+objc2-foundation = { version = "0.3.2", optional = true, default-features = false, features = ["std", "block2", "NSDictionary", "NSNotification", "NSOperation", "NSSet", "NSString", "NSValue"] }
+objc2-ui-kit = { version = "0.3.2", optional = true, default-features = false, features = ["std", "objc2-core-foundation", "UIApplication", "UIGeometry", "UIPasteboard", "UIResponder", "UIScene", "UIScreen", "UIView", "UIWindow", "UIWindowScene"] }
+objc2-avf-audio = { version = "0.3.2", optional = true, default-features = false, features = ["std", "AVAudioSession", "AVAudioSessionTypes"] }
+
 # Windows: UI Automation (Narrator, NVDA, JAWS) on the window's HWND. Its
 # `windows` crate is the release wgpu already brings in.
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -330,6 +350,12 @@ accesskit_unix = { version = "0.24.1", optional = true }
 x11rb = { version = "0.13.2", default-features = false, features = ["xkb"], optional = true }
 wayland-client = { version = "0.31.15", optional = true }
 wayland-backend = { version = "0.3.17", default-features = false, features = ["client_system"], optional = true }
+
+# The desktop clipboard (feature `window`). Not on phones: arboard has no
+# iOS or Android backend (on iOS it would pull in Wayland); the iOS build
+# uses UIPasteboard instead (src/platform/ios.rs).
+[target.'cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))'.dependencies]
+arboard = { version = "3.7", default-features = false, features = ["wayland-data-control"], optional = true }
 
 # The standalone editor uses system file pickers on these desktop targets.
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
@@ -412,11 +438,12 @@ navmesh = ["3d", "dep:navmesh-rs", "dep:libm"]
 default = ["audio", "window", "inspector", "gamepad", "image-jpeg"]
 # A window and GPU rendering (winit + wgpu). Off: `Game::run_headless` only,
 # for simulation servers and CI; drawing calls do nothing, `Game::run` panics.
-window = ["dep:arboard", "dep:wgpu", "dep:winit", "dep:pollster", "dep:objc2-metal", "dep:objc2-quartz-core", "dep:windows", "dep:xkeysym", "dep:x11rb", "dep:wayland-client", "dep:wayland-backend"]
+window = ["dep:arboard", "dep:wgpu", "dep:winit", "dep:pollster", "dep:objc2-metal", "dep:objc2-quartz-core", "dep:windows", "dep:xkeysym", "dep:x11rb", "dep:wayland-client", "dep:wayland-backend", "dep:objc2_06", "dep:block2", "dep:objc2-core-foundation", "dep:objc2-foundation", "dep:objc2-ui-kit"]
 # Sound with kira. Off: the sound API stays and is silent (for servers).
 audio = [
     "dep:kira",
     "dep:symphonia",
+    "dep:objc2-avf-audio",
     "web-sys/AudioContext",
     "web-sys/AudioContextState",
     "web-sys/AudioDestinationNode",

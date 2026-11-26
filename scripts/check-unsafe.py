@@ -23,12 +23,14 @@ has one line in scripts/unsafe-inventory.txt:
 <test> is `<test file>::<test function>` (a Rust test, a check of a test
 program without the harness (`harness = false` in Cargo.toml: any function
 of the file), or a function of a C or C++ test program in examples/cpp;
-`<file>::<module>::<function>` for a test a macro makes in a module) or a
-browser runner (`web/smoke/*.mjs`), and must exist. <miri> is `miri` (the
+`<file>::<module>::<function>` for a test a macro makes in a module), a
+browser runner (`web/smoke/*.mjs`) or a device runner (`scripts/*.sh`, such
+as the iOS simulator check), and must exist. <miri> is `miri` (the
 test runs under Miri: no GPU, window, audio device or C library),
 `miri(<features>)` (the same, with those engine features on), or the reason
 it can't: `c-library` (it calls a C library), `gpu`, `os` (signals, sockets,
-processes), `windows`, `macos`, `wasm`, `window` (a real window) or
+processes), `windows`, `macos`, `wasm`, `ios` (it runs on the iOS
+simulator), `window` (a real window) or
 `sanitizers` (C API code, run under AddressSanitizer with the C and C++ test
 programs instead). `window` is a check a person runs, in a real window
 (the guide's "Unsafe code" lists them).
@@ -47,7 +49,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parent.parent
 INVENTORY = ROOT / 'scripts' / 'unsafe-inventory.txt'
-NO_MIRI = {'c-library', 'gpu', 'os', 'windows', 'macos', 'wasm', 'window', 'sanitizers'}
+NO_MIRI = {'c-library', 'gpu', 'os', 'windows', 'macos', 'wasm', 'ios', 'window', 'sanitizers'}
 TEST_DIRS = {'tests', 'examples', 'benches'}
 # The ECS has its own Miri jobs.
 SKIPPED_CRATES = {'ponko_ecs'}
@@ -487,7 +489,7 @@ def test_exists(test):
     In a Rust file the function is a `#[test]`, or one that a macro of the
     file turns into tests (it is named in the macro's call); in a C or C++
     test program it is a function of the program."""
-    if test.endswith('.mjs'):
+    if test.endswith('.mjs') or (test.startswith('scripts/') and test.endswith('.sh')):
         return None if (ROOT / test).is_file() else f'{test} does not exist'
     parts = split_test(test)
     if not parts:

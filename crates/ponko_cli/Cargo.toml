@@ -39,9 +39,11 @@ crc32fast = "1.5.0"
 # one Rust crate that binds both), the image decoders for PNG and JPEG
 # sources, and KTX2 headers and Zstandard written with the same pure-Rust
 # crates the engine reads them with. `--no-default-features` leaves them
-# out for a quicker `cargo install`.
+# out for a quicker `cargo install`. The PNG decoder is always in (the
+# image diff tool needs it anyway): `ponko package` scales the game's icon
+# to the sizes an iOS app holds.
 basis-universal = { version = "0.3.1", optional = true }
-image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"], optional = true }
+image = { version = "0.25.10", default-features = false, features = ["png"] }
 ktx2 = { version = "0.5.0", optional = true }
 ruzstd = { version = "0.9.1", default-features = false, features = ["std"], optional = true }
 # `ponko cook`: content hashes of the cache (SHA-256, the RustCrypto crate
@@ -63,10 +65,10 @@ symphonia = { version = "0.6.1", default-features = false, features = ["flac"] }
 
 [features]
 default = ["textures", "meshes", "shaders", "aseprite"]
-textures = ["dep:basis-universal", "dep:image", "dep:ktx2", "dep:ruzstd"]
+textures = ["dep:basis-universal", "image/jpeg", "dep:ktx2", "dep:ruzstd"]
 # `ponko cook` optimizes glTF meshes (vertex cache, overdraw, vertex fetch).
 meshes = ["dep:meshopt"]
 # `ponko cook` validates WGSL shaders as the engine composes them.
 shaders = ["dep:naga"]
 # `ponko cook` turns Aseprite files into the sheet and JSON the engine loads.
-aseprite = ["dep:ponko_aseprite", "dep:image", "image/png"]
+aseprite = ["dep:ponko_aseprite"]
