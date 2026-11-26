@@ -457,7 +457,9 @@ fn vs_main(input: VertexIn) -> VertexOut {
     out.clip = frame.view_proj * vec4<f32>(v.position, 1.0);
     out.world = v.position;
     out.normal = v.normal;
-    out.uv = v.uv;
+    // The multi-UV build interpolates the two input coordinate sets.
+    // The shared-transform build interpolates the final vertex UV.
+    out.uv = select(v.uv, in.uv, MATERIAL_MULTI_UV);
     out.color = v.color;
     out.uv1 = v.uv1;
     out.origin = v.origin;
@@ -476,7 +478,9 @@ fn vs_shadow(input: VertexIn) -> VertexOut {
     out.clip = frame.caster_view_proj * vec4<f32>(v.position, 1.0);
     out.world = v.position;
     out.normal = v.normal;
-    out.uv = v.uv;
+    // The multi-UV build interpolates the two input coordinate sets.
+    // The shared-transform build interpolates the final vertex UV.
+    out.uv = select(v.uv, in.uv, MATERIAL_MULTI_UV);
     out.color = v.color;
     out.uv1 = v.uv1;
     out.origin = v.origin;
@@ -505,12 +509,13 @@ fn fade_keeps(fade: f32, pixel: vec2<f32>) -> bool {
 
 // The surface from the material and its textures, then the shader's `surface`.
 fn surface_at(in: VertexOut, front: bool) -> Surface {
-    let base = textureSampleBias(base_texture, material_sampler, in.uv, texture_mip_bias()) * material.color * in.color;
+    let base_uv = map_uv(in.uv, in.uv1, UV_BASE);
+    let base = textureSampleBias(base_texture, material_sampler, base_uv, texture_mip_bias()) * material.color * in.color;
     var s: Surface;
     s.albedo = base.rgb;
     s.alpha = base.a;
     s.world = in.world;
-    s.uv = in.uv;
+    s.uv = base_uv;
     s.uv1 = in.uv1;
     s.origin = in.origin;
     s.color = in.color;
@@ -530,14 +535,15 @@ fn surface_at(in: VertexOut, front: bool) -> Surface {
         // way on both axes).
         let dp1 = dpdx(in.world);
         let dp2 = -dpdy(in.world);
-        let duv1 = dpdx(in.uv);
-        let duv2 = -dpdy(in.uv);
+        let normal_uv = map_uv(in.uv, in.uv1, UV_NORMAL);
+        let duv1 = dpdx(normal_uv);
+        let duv2 = -dpdy(normal_uv);
         let dp2perp = cross(dp2, n);
         let dp1perp = cross(n, dp1);
         let t = dp2perp * duv1.x + dp1perp * duv2.x;
         let b = dp2perp * duv1.y + dp1perp * duv2.y;
         let inv = inverseSqrt(max(max(dot(t, t), dot(b, b)), 1e-20));
-        let texel = textureSampleBias(normal_texture, material_sampler, in.uv, texture_mip_bias());
+        let texel = textureSampleBias(normal_texture, material_sampler, normal_uv, texture_mip_bias());
         var m = texel.xyz * 2.0 - 1.0;
         // Two-channel normal maps (BC5, EAC; 3: X and Y in red and alpha)
         // store no Z: it is the rest of the unit length.
@@ -557,18 +563,23 @@ fn surface_at(in: VertexOut, front: bool) -> Surface {
     s.metallic = material.params.y;
     s.occlusion = 1.0;
     if material.maps.y != 0u {
-        let orm = textureSampleBias(orm_texture, material_sampler, in.uv, texture_mip_bias());
+        let mr_uv = map_uv(in.uv, in.uv1, UV_METALLIC_ROUGHNESS);
+        let orm = textureSampleBias(orm_texture, material_sampler, mr_uv, texture_mip_bias());
         s.occlusion = orm.r;
+        if !same_map_uv(UV_METALLIC_ROUGHNESS, UV_OCCLUSION) {
+            let ao_uv = map_uv(in.uv, in.uv1, UV_OCCLUSION);
+            s.occlusion = textureSampleBias(orm_texture, material_sampler, ao_uv, texture_mip_bias()).r;
+        }
         s.roughness *= orm.g;
         s.metallic *= orm.b;
     }
     s.emissive = material.emissive.rgb;
     if material.maps.z != 0u {
-        s.emissive *= textureSampleBias(emissive_texture, material_sampler, in.uv, texture_mip_bias()).rgb;
+        s.emissive *= textureSampleBias(emissive_texture, material_sampler, map_uv(in.uv, in.uv1, UV_EMISSIVE), texture_mip_bias()).rgb;
     }
     s.unlit = material.emissive.w != 0.0;
     if MATERIAL_LAYERS {
-        fill_layers(s, in.uv, in.world, geometric, in.normal);
+        fill_layers(s, in.uv, in.uv1, in.world, geometric, in.normal);
     }
     s = surface(s);
     s.roughness = clamp(s.roughness, 0.03, 1.0);
