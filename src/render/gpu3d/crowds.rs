@@ -1289,8 +1289,10 @@ impl Renderer3D {
         if kind == Kind::VelocityStill || self.crowds.crowds.is_empty() {
             return n;
         }
+        // A target camera's culling box takes or leaves a crowd whole.
+        let slot = self.batching.slots.get(view);
         for crowd in self.crowds.crowds.iter().flatten() {
-            if crowd.count == 0 {
+            if crowd.count == 0 || slot.is_some_and(|s| !s.in_cull_box(crowd.min, crowd.max)) {
                 continue;
             }
             match &crowd.path {

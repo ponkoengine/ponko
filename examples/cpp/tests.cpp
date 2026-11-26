@@ -2546,6 +2546,8 @@ static void messages() {
     throws([] { ponko::net_messages::steam_host(480, 0); });
     throws([] { ponko::net_messages::steam_join(480, 0); });
     throws([] { ponko::net_messages::steam_host(480, 2); }); // no Steam support/client in native test
+    throws([] { ponko::net_messages::steam_sockets_host(480, ponko::steam_lobby_visibility::public_lobby, 0); });
+    throws([] { ponko::net_messages::steam_sockets_host(480, ponko::steam_lobby_visibility::public_lobby, 2); });
     throws([] { ponko::steam_lobby::create(480, ponko::steam_lobby_visibility::private_lobby, 0); });
     throws([] { ponko::steam_lobby::create(480, ponko::steam_lobby_visibility::friends_only, 2); });
     throws([] { ponko::steam_lobby::join(480, 0); });
@@ -5404,6 +5406,17 @@ static void controllers() {
         ctx.stop_rumble(ponko::gamepad{0});
         CHECK(ctx.rumble_levels(ponko::gamepad{0}).strong == 0.0f);
 
+        auto controller = ponko::gamepad{0};
+        const auto extras = ctx.gamepad_extras(controller);
+        CHECK(!extras.light && !extras.player_leds && !extras.touchpad && !extras.adaptive_triggers);
+        CHECK(!ctx.gamepad_touchpad(controller) && !ctx.gamepad_touchpad_event(0));
+        ctx.set_gamepad_light(controller, {1.0f, 0.5f, 0.0f, 1.0f});
+        ctx.set_gamepad_player_leds(controller, std::nullopt);
+        ctx.set_gamepad_trigger_effects(controller, ponko::trigger_effect::resistance(3, 4),
+                                       ponko::trigger_effect::off());
+        ctx.feed_input(ponko::input_event::button(controller, PONKO_GAMEPAD_TOUCHPAD, true));
+        CHECK(ctx.gamepad_pressed(controller, PONKO_GAMEPAD_TOUCHPAD));
+
         CHECK(!ctx.gamepad_motion(ponko::gamepad{0}));
         ctx.feed_gamepad_motion(ponko::gamepad{0}, {{0, 1, 0}, {0, 9.81f, 0}});
         CHECK(ctx.gamepad_motion(ponko::gamepad{0})->gyro.y == 1.0f);
@@ -5664,6 +5677,10 @@ static void native_parity_round5() {
     CHECK(crowd_stats.steps == 10 && crowd_stats.agent_steps == 30 && crowd_stats.work > 0);
 
     // This thread's allocations, and a PONKO_PROFILE_SCOPE counting the ones made inside it.
+    // Each block is stored through `alloc_sink`, a volatile pointer: an optimizing build may
+    // otherwise remove a new/delete pair nothing else reads, and count nothing (C++14 lets
+    // the compiler elide such an allocation; clang does in a Release build).
+    static void* volatile alloc_sink = nullptr;
     ponko::game("c++ allocs", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
         ctx.set_profiling(true);
         ponko::alloc_counts before{}, after{};
@@ -5671,6 +5688,7 @@ static void native_parity_round5() {
             PONKO_PROFILE_SCOPE("c++/alloc");
             before = ponko::thread_alloc_counts();
             auto* boxed = new int(7); // counted: PONKO_COUNT_CPP_ALLOCATIONS is on in this program
+            alloc_sink = boxed;
             after = ponko::thread_alloc_counts();
             delete boxed;
         }
@@ -5681,6 +5699,7 @@ static void native_parity_round5() {
         {
             const std::int64_t held = ponko::thread_net_alloc_bytes();
             auto* block = new char[4096];
+            alloc_sink = block;
             const std::int64_t holding = ponko::thread_net_alloc_bytes();
             delete[] block;
             const std::int64_t released = ponko::thread_net_alloc_bytes();

@@ -104,11 +104,38 @@ pointer, so the check makes `requestPointerLock` succeed without locking.
 
 ## Publishing
 
+**Decision (#481): the gallery lives on GitHub Pages, at the address the
+release notes already link, `https://<owner>.github.io/<repository>/` (for this
+repository <https://ponkoengine.github.io/ponko/>), and a maintainer publishes
+it by hand by pushing the `gh-pages` branch.** There is no CI to do it (see
+CONTRIBUTING.md), and there is no separate domain for the gallery. The address
+is not written in the tooling: `web/gallery/lib.mjs` and
+`scripts/release-check.py` derive it from the project's URL in
+[`PROJECT_URL`](../../PROJECT_URL), and `scripts/project-url.py check` covers
+both. If the project moves to another host, `project-url.py set` moves the
+repository links and the gallery's address needs a new decision (both refuse a
+host other than github.com until it is made).
+
 The maintainer who makes a release builds the gallery for the tag
 (`--ref vX.Y.Z`) and checks every page in headless Chromium on WebGL2 (the
 commands are in CONTRIBUTING.md, "Releasing"). After the release is
-published, they put the built folder on the repository's `gh-pages` branch,
-which GitHub Pages serves, for a release (not a candidate) that is the newest
-version, so a patch release of an older minor doesn't replace the newer
-gallery. GitHub Pages is set up once by a maintainer (CONTRIBUTING.md,
-"One-time setup").
+published, they put the built folder on the `gh-pages` branch, which GitHub
+Pages serves, for a release (not a candidate) that is the newest version, so
+a patch release of an older minor doesn't replace the newer gallery. GitHub
+Pages is set up once by a maintainer (CONTRIBUTING.md, "One-time setup").
+
+The branch holds one commit, the newest gallery (a site is hundreds of
+megabytes, so old galleries must not pile up in the history). From the
+repository root, with the site built into `target/web/gallery`:
+
+```sh
+git branch -D gh-pages 2>/dev/null           # the last publish, if still here
+git worktree add --orphan -b gh-pages target/gh-pages
+cp -R target/web/gallery/. target/gh-pages/  # includes .nojekyll
+git -C target/gh-pages add -A
+git -C target/gh-pages commit -m "Web gallery of vX.Y.Z"
+git -C target/gh-pages push --force origin gh-pages
+git worktree remove --force target/gh-pages && git branch -D gh-pages
+```
+
+Open the address afterwards and play one example.

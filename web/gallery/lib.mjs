@@ -3,10 +3,38 @@
 // build.mjs builds the examples and calls these; lib.test.mjs tests them
 // (`node --test web/gallery`). See README.md.
 
-export const REPO = "https://github.com/ponkoengine/ponko";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+/** The project's URL from the text of `PROJECT_URL` (one https URL: host, owner, repository). */
+export function parseProjectUrl(text) {
+  const url = text.trim();
+  if (!/^https:\/\/[^\s/]+(\/[^\s/]+)+$/.test(url)) {
+    throw new Error(`PROJECT_URL must be one https URL without a trailing slash, got ${JSON.stringify(url)}`);
+  }
+  return url;
+}
+
+/**
+ * Where GitHub Pages serves a repository's `gh-pages` branch:
+ * `https://<owner>.github.io/<repository>/`. Only github.com has a known
+ * Pages address; moving the project elsewhere means deciding the gallery's
+ * host again (CONTRIBUTING.md, "Releasing").
+ */
+export function pagesUrl(projectUrl) {
+  const m = /^https:\/\/github\.com\/([^/]+)\/([^/]+)$/.exec(projectUrl);
+  if (!m) throw new Error(`no GitHub Pages address for ${projectUrl}: PROJECT_URL is not https://github.com/<owner>/<repository>`);
+  return `https://${m[1].toLowerCase()}.github.io/${m[2]}/`;
+}
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+// The project's home, from PROJECT_URL (scripts/project-url.py moves it).
+export const REPO = parseProjectUrl(readFileSync(join(ROOT, "PROJECT_URL"), "utf8"));
 // Where the release publishes the gallery (GitHub Pages of the
 // repository); the README, the guide and the release notes link here.
-export const GALLERY_URL = "https://ponkoengine.github.io/ponko/";
+export const GALLERY_URL = pagesUrl(REPO);
 export const KINDS = { "2d": "2D", "3d": "3D" };
 export const WEBGPU = ["optional", "required"];
 

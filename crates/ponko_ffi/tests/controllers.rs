@@ -320,3 +320,53 @@ fn the_glyph_atlas_exposes_pixels_regions_a_texture_and_draws_prompts() {
     });
     unsafe { ponko_glyph_atlas_free(atlas) };
 }
+
+#[test]
+fn unsupported_touchpad_and_effects_have_defined_fallbacks() {
+    run_ctx(|ctx| unsafe {
+        connect(ctx, 0);
+        let mut caps = PonkoGamepadExtras {
+            light: true,
+            player_leds: true,
+            touchpad: true,
+            adaptive_triggers: true,
+        };
+        ok(ponko_ctx_gamepad_extras(ctx, 0, &mut caps));
+        assert_eq!(caps, PonkoGamepadExtras::default());
+        assert_eq!(ponko_ctx_gamepad_extras(ctx, 0, null_mut()), PONKO_INVALID_ARGUMENT);
+        let mut touchpad = PonkoGamepadTouchpad::default();
+        let mut has = true;
+        ok(ponko_ctx_gamepad_touchpad(ctx, 0, &mut touchpad, &mut has));
+        assert!(!has);
+        let mut event = PonkoGamepadTouchpadEvent::default();
+        ok(ponko_ctx_gamepad_touchpad_event(ctx, 0, &mut event, &mut has));
+        assert!(!has);
+        ok(ponko_ctx_set_gamepad_light(
+            ctx,
+            0,
+            PonkoColor {
+                r: 1.0,
+                g: 0.5,
+                b: 0.0,
+                a: 1.0,
+            },
+        ));
+        ok(ponko_ctx_set_gamepad_player_leds(ctx, 0, -1));
+        assert_eq!(ponko_ctx_set_gamepad_player_leds(ctx, 0, 256), PONKO_INVALID_ARGUMENT);
+        let off = PonkoTriggerEffect::default();
+        ok(ponko_ctx_set_gamepad_trigger_effects(ctx, 0, off, off));
+        assert_eq!(
+            ponko_ctx_set_gamepad_trigger_effects(ctx, 0, off, PonkoTriggerEffect { kind: 99, ..off }),
+            PONKO_INVALID_ARGUMENT
+        );
+        press(ctx, 0, PonkoGamepadButton::PONKO_GAMEPAD_TOUCHPAD as u32);
+        let mut down = false;
+        ok(ponko_ctx_gamepad_down(
+            ctx,
+            0,
+            PonkoGamepadButton::PONKO_GAMEPAD_TOUCHPAD as u32,
+            &mut down,
+        ));
+        assert!(down);
+    });
+}

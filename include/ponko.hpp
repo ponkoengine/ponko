@@ -3597,6 +3597,14 @@ public:
     static net_messages steam_host(std::uint32_t app_id, std::size_t max_clients) {
         PonkoNetMessages* p = nullptr; detail::check(ponko_net_messages_steam_host(app_id, max_clients, &p)); return net_messages(p);
     }
+    /// Like steam_host, over Steam Networking Sockets, in a lobby of that visibility: lobby members
+    /// connect to this host through Valve's relays. For dedicated hosts and games that want
+    /// connections; joiners use steam_join.
+    static net_messages steam_sockets_host(std::uint32_t app_id, steam_lobby_visibility visibility, std::size_t max_clients) {
+        PonkoNetMessages* p = nullptr;
+        detail::check(ponko_net_messages_steam_sockets_host(app_id, static_cast<std::uint32_t>(visibility), max_clients, &p));
+        return net_messages(p);
+    }
     /// Joins Steam lobby `lobby` of app `app_id` through Steam relays. Throws ponko::error without the
     /// `steam` feature or a running Steam.
     static net_messages steam_join(std::uint32_t app_id, std::uint64_t lobby) {
@@ -5987,6 +5995,37 @@ enum class controller_family : std::uint32_t { generic = 0, xbox = 1, playstatio
 /// What a connected controller is (Rust `GamepadInfo`, its name from ctx::gamepad_name): `family`,
 /// USB ids when `has_ids`, and what it can do (`rumble`, `trigger_rumble`, `motion`).
 using gamepad_info = PonkoGamepadInfo;
+/// Optional lights, touchpad and adaptive-trigger support for a controller.
+using gamepad_extras = PonkoGamepadExtras;
+/// The controller's first two finger slots.
+using gamepad_touchpad = PonkoGamepadTouchpad;
+/// One finger change in the current frame.
+using gamepad_touchpad_event = PonkoGamepadTouchpadEvent;
+/// Adaptive trigger requests. The positions are zones 0 through 9;
+/// strengths range from 0 (off) to 8.
+struct trigger_effect {
+    PonkoTriggerEffect raw{};
+    /// Clears any effect on this trigger.
+    static trigger_effect off() noexcept { return {}; }
+    /// Applies constant resistance from the start zone.
+    static trigger_effect resistance(std::uint8_t start, std::uint8_t strength) noexcept {
+        return {{PONKO_TRIGGER_EFFECT_RESISTANCE, start, 0, strength, 0, {}}};
+    }
+    /// Adds a break between start and end.
+    static trigger_effect weapon(std::uint8_t start, std::uint8_t end, std::uint8_t strength) noexcept {
+        return {{PONKO_TRIGGER_EFFECT_WEAPON, start, end, strength, 0, {}}};
+    }
+    /// Vibrates from the start zone at the given frequency in Hz.
+    static trigger_effect vibration(std::uint8_t start, std::uint8_t amplitude, std::uint8_t frequency) noexcept {
+        return {{PONKO_TRIGGER_EFFECT_VIBRATION, start, 0, amplitude, frequency, {}}};
+    }
+    /// Sets a separate resistance for each zone.
+    static trigger_effect resistance_profile(const std::array<std::uint8_t, 10>& profile) noexcept {
+        trigger_effect result{{PONKO_TRIGGER_EFFECT_RESISTANCE_PROFILE, 0, 0, 0, 0, {}}};
+        std::copy(profile.begin(), profile.end(), result.raw.profile);
+        return result;
+    }
+};
 /// How hard each motor runs, 0..1 (Rust `MotorLevels`).
 using motor_levels = PonkoMotorLevels;
 /// A rumble request for ctx::rumble (Rust `Rumble`): body motors `strong` (low frequency) and `weak`
@@ -7902,6 +7941,38 @@ public:
         detail::check(ponko_ctx_gamepad_info(raw_, p.slot, &i, &connected));
         return connected ? std::optional<ponko::gamepad_info>(i) : std::nullopt;
     }
+    /// Queries lights, touchpad and adaptive triggers. Empty slots return false capabilities.
+    ponko::gamepad_extras gamepad_extras(gamepad p) const {
+        ponko::gamepad_extras extras{};
+        detail::check(ponko_ctx_gamepad_extras(raw_, p.slot, &extras));
+        return extras;
+    }
+    /// Sets the RGB light bar when supported. Black turns it off.
+    void set_gamepad_light(gamepad p, color rgb) {
+        detail::check(ponko_ctx_set_gamepad_light(raw_, p.slot, rgb));
+    }
+    /// Sets the player indicator when supported. Zero is player one, nullopt switches it off.
+    void set_gamepad_player_leds(gamepad p, std::optional<std::uint8_t> player) {
+        detail::check(ponko_ctx_set_gamepad_player_leds(raw_, p.slot, player ? *player : -1));
+    }
+    /// Sets both adaptive triggers when supported.
+    void set_gamepad_trigger_effects(gamepad p, trigger_effect left, trigger_effect right) {
+        detail::check(ponko_ctx_set_gamepad_trigger_effects(raw_, p.slot, left.raw, right.raw));
+    }
+    /// The first touchpad's two finger slots, if supported.
+    std::optional<ponko::gamepad_touchpad> gamepad_touchpad(gamepad p) const {
+        ponko::gamepad_touchpad touchpad{};
+        bool has = false;
+        detail::check(ponko_ctx_gamepad_touchpad(raw_, p.slot, &touchpad, &has));
+        return has ? std::optional<ponko::gamepad_touchpad>(touchpad) : std::nullopt;
+    }
+    /// Reads the change at index in this frame's gamepad touchpad events.
+    std::optional<ponko::gamepad_touchpad_event> gamepad_touchpad_event(std::size_t index) const {
+        ponko::gamepad_touchpad_event event{};
+        bool has = false;
+        detail::check(ponko_ctx_gamepad_touchpad_event(raw_, index, &event, &has));
+        return has ? std::optional<ponko::gamepad_touchpad_event>(event) : std::nullopt;
+    }
     /// The name the system gives gamepad `p` ("" for none).
     std::string gamepad_name(gamepad p) const {
         return detail::read_text([&](char* b, std::size_t c, std::size_t* n) { return ponko_ctx_gamepad_name(raw_, p.slot, b, c, n); });
@@ -8684,6 +8755,12 @@ public:
     ponko::render_target create_render_target(std::uint32_t w, std::uint32_t h) {
         ponko::render_target t{}; detail::check(ponko_ctx_create_render_target(raw_, w, h, &t)); return t;
     }
+    /// A render target with a full chain of mip levels, made again from the first each frame something
+    /// wrote it, so materials sampling it from afar don't alias (Rust
+    /// `Graphics::create_mipmapped_render_target`). A third more memory.
+    ponko::render_target create_mipmapped_render_target(std::uint32_t w, std::uint32_t h) {
+        ponko::render_target t{}; detail::check(ponko_ctx_create_mipmapped_render_target(raw_, w, h, &t)); return t;
+    }
     /// `t` as the render target it is: the `target` of a target_camera,
     /// compute_pass or target_effect read back from the engine is a plain
     /// texture. Throws ponko::error (PONKO_ERROR_INVALID) if `t` isn't a live
@@ -8724,12 +8801,28 @@ public:
         return t;
     }
     /// Replaces the target cameras drawn each frame from their versioned forms (empty: none): as
-    /// set_target_cameras, each with its `particles` and `debug_draw`.
+    /// set_target_cameras, each with its `particles`, `debug_draw`, culling box (`has_cull_box`,
+    /// `cull_box_min`, `cull_box_max`) and background (`has_clear`, `clear`).
     void set_target_cameras_ex(const std::vector<ponko::target_camera_ex>& list) {
         std::vector<const PonkoTargetCameraEx*> pointers;
         pointers.reserve(list.size());
         for (const ponko::target_camera_ex& t : list) pointers.push_back(&t);
         detail::check(ponko_ctx_set_target_cameras_ex(raw_, pointers.data(), pointers.size()));
+    }
+    /// The screen effects of target camera `index`, run over its picture after it is drawn (Rust
+    /// `TargetCamera::effects`). Throws for an index past the end.
+    std::vector<screen_effect> target_camera_effects(std::size_t index) const {
+        std::size_t n = 0;
+        detail::check(ponko_ctx_target_camera_effects(raw_, index, nullptr, 0, &n));
+        std::vector<screen_effect> list(n);
+        detail::check(ponko_ctx_target_camera_effects(raw_, index, list.data(), list.size(), &n));
+        return list;
+    }
+    /// Replaces the screen effects of target camera `index` (empty: none); the main view's
+    /// (set_effects) never apply to it. Setting the target cameras again keeps them for a camera
+    /// drawing into the same render target at the same index. Throws for an index past the end.
+    void set_target_camera_effects(std::size_t index, const std::vector<screen_effect>& list) {
+        detail::check(ponko_ctx_set_target_camera_effects(raw_, index, list.data(), list.size()));
     }
     /// A plain white material, made once and shared.
     material default_material() { material m{}; detail::check(ponko_ctx_default_material(raw_, &m)); return m; }

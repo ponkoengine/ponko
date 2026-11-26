@@ -60,6 +60,7 @@ impl GilrsBackend {
                 rumble: pad.is_ff_supported(),
                 trigger_rumble: false,
                 motion: false,
+                ..Default::default()
             },
         }
     }
@@ -211,7 +212,7 @@ mod tests {
             Button::DPadRight,
         ];
         let mapped: std::collections::HashSet<_> = all.iter().filter_map(|&b| button(b)).collect();
-        assert_eq!(mapped.len(), GamepadButton::COUNT);
+        assert_eq!(mapped.len(), GamepadButton::COUNT - 1); // gilrs has no touchpad click
         assert_eq!(button(Button::Mode), None);
     }
 
