@@ -1,4 +1,4 @@
-use ponko::console::{ConsoleArg, ConsoleType, ConsoleValue};
+use ponko::console::{Console, ConsoleArg, ConsoleType, ConsoleValue};
 use ponko::prelude::*;
 
 // ANCHOR: developer_console
@@ -21,8 +21,8 @@ fn the_cookbook_console_registers_an_integer_command() {
     add_console(Game::new("Console", 1, 1))
         .developer_console(true)
         .run_headless(0, |ctx| {
-            assert_eq!(ctx.run_console("echo 42").unwrap(), "Count: 42");
-            assert_eq!(ctx.run_console("show_paths true").unwrap(), "true");
+            assert_eq!(Console::run(ctx, "echo 42").unwrap(), "Count: 42");
+            assert_eq!(Console::run(ctx, "show_paths true").unwrap(), "true");
         });
 }
 
@@ -47,20 +47,20 @@ fn commands_receive_validated_arguments_and_variables_keep_their_type() {
         )
         .console_variable("show_paths", "Show path debug lines", ConsoleValue::Bool(false))
         .run_headless(0, |ctx| {
-            let help = ctx.run_console("help").unwrap();
+            let help = Console::run(ctx, "help").unwrap();
             assert!(help.contains("give <item:text> <count:integer>"));
             assert!(help.contains("show_paths [value:bool]"));
-            assert!(ctx.run_console("give stone").unwrap_err().message().contains("count"));
-            let error = ctx.run_console("give stone many").unwrap_err();
+            assert!(Console::run(ctx, "give stone").unwrap_err().message().contains("count"));
+            let error = Console::run(ctx, "give stone many").unwrap_err();
             assert!(error.message().contains("count"));
             assert!(error.message().contains("integer"));
             assert!(ctx.world.get_resource::<(String, i64)>().is_none());
-            assert_eq!(ctx.run_console(r#"give "red gem" 2"#).unwrap(), "Gave 2 × red gem");
+            assert_eq!(Console::run(ctx, r#"give "red gem" 2"#).unwrap(), "Gave 2 × red gem");
             assert_eq!(ctx.world.resource::<(String, i64)>().0, "red gem");
-            assert_eq!(ctx.run_console("show_paths").unwrap(), "false");
-            assert_eq!(ctx.run_console("show_paths true").unwrap(), "true");
-            assert!(ctx.run_console("show_paths 123").is_err());
-            assert_eq!(ctx.console_value("show_paths"), Some(&ConsoleValue::Bool(true)));
+            assert_eq!(Console::run(ctx, "show_paths").unwrap(), "false");
+            assert_eq!(Console::run(ctx, "show_paths true").unwrap(), "true");
+            assert!(Console::run(ctx, "show_paths 123").is_err());
+            assert_eq!(ctx.console.value("show_paths"), Some(&ConsoleValue::Bool(true)));
         });
 }
 
@@ -83,8 +83,13 @@ fn disabling_the_console_blocks_execution_and_preserves_variable_defaults() {
         .developer_console(false)
         .console_variable("gravity", "Gravity scale", ConsoleValue::Float(1.0))
         .run_headless(0, |ctx| {
-            assert!(ctx.run_console("gravity 0").unwrap_err().message().contains("disabled"));
-            assert_eq!(ctx.console_value("gravity"), Some(&ConsoleValue::Float(1.0)));
+            assert!(
+                Console::run(ctx, "gravity 0")
+                    .unwrap_err()
+                    .message()
+                    .contains("disabled")
+            );
+            assert_eq!(ctx.console.value("gravity"), Some(&ConsoleValue::Float(1.0)));
         });
 }
 
@@ -138,19 +143,22 @@ fn parser_preserves_empty_unicode_and_escaped_text_arguments() {
         .developer_console(true)
         .console_variable("message", "A message", ConsoleValue::Text("Ready".into()))
         .run_headless(0, |ctx| {
-            assert_eq!(ctx.run_console(r#"message 'résumé 工作'"#).unwrap(), "résumé 工作");
-            assert_eq!(ctx.run_console(r#"message Résumé\ 1"#).unwrap(), "Résumé 1");
-            assert_eq!(ctx.run_console(r#"message "say \"hello\"""#).unwrap(), "say \"hello\"");
-            let error = ctx.run_console(r#"message "unclosed"#).unwrap_err();
+            assert_eq!(Console::run(ctx, r#"message 'résumé 工作'"#).unwrap(), "résumé 工作");
+            assert_eq!(Console::run(ctx, r#"message Résumé\ 1"#).unwrap(), "Résumé 1");
+            assert_eq!(
+                Console::run(ctx, r#"message "say \"hello\"""#).unwrap(),
+                "say \"hello\""
+            );
+            let error = Console::run(ctx, r#"message "unclosed"#).unwrap_err();
             assert!(error.message().contains("unclosed"));
             assert!(
-                ctx.run_console("message end\\")
+                Console::run(ctx, "message end\\")
                     .unwrap_err()
                     .message()
                     .contains("escape")
             );
-            assert_eq!(ctx.run_console("message").unwrap(), "say \"hello\"");
-            assert_eq!(ctx.run_console(r#"message """#).unwrap(), "");
+            assert_eq!(Console::run(ctx, "message").unwrap(), "say \"hello\"");
+            assert_eq!(Console::run(ctx, r#"message """#).unwrap(), "");
         });
 }
 
@@ -159,7 +167,7 @@ fn registration_enables_the_console_by_default_only_in_debug_builds() {
     Game::new("Console", 1, 1)
         .console_variable("scale", "Scale", ConsoleValue::Float(1.0))
         .run_headless(0, |ctx| {
-            assert_eq!(ctx.run_console("help").is_ok(), cfg!(debug_assertions));
-            assert_eq!(ctx.console_value("scale"), Some(&ConsoleValue::Float(1.0)));
+            assert_eq!(Console::run(ctx, "help").is_ok(), cfg!(debug_assertions));
+            assert_eq!(ctx.console.value("scale"), Some(&ConsoleValue::Float(1.0)));
         });
 }

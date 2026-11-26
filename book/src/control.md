@@ -296,7 +296,7 @@ next character. For example, `give "red gem" 2` passes a text value and an
 integer. Integers are signed 64-bit values, floats are finite 64-bit numbers,
 and booleans accept `true` and `false`. Enter a variable's name to read it or
 follow it with a value to assign it. Systems can read the typed value with
-`Ctx::console_value`, including its default when the console is disabled.
+`ctx.console.value(name)`, including its default when the console is disabled.
 Values live for the current game run.
 
 The console starts closed. Registering an entry enables it in debug builds.
@@ -305,7 +305,7 @@ Release builds require `Game::developer_console(true)`. Use
 
 ### Headless runs and tools
 
-Call `Ctx::run_console("help")` or pass a command line during a headless run.
+Call `Console::run(ctx, "help")` or pass a command line during a headless run.
 When the [control endpoint](#turning-it-on) is open, the same registry is
 available over native and browser control.
 
@@ -330,7 +330,7 @@ Read a variable with `ponko_ctx_console_value`, which lends a copy to a
 callback. The C++ builder exposes the same operations and its
 `ponko::console_value` is a variant of text, integer, float and bool.
 
-Direct execution from a running `Ctx` with `Ctx::run_console` is Rust-only.
+Direct execution through `Console::run` is Rust-only.
 Executing a command through a borrowed native context would call back into
 native code while the outer context remains borrowed, which the C context
 API does not support. The overlay and the control endpoint both dispatch

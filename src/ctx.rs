@@ -223,7 +223,6 @@ pub struct Ctx {
     /// The control methods the game and its plugins added, and the
     /// plugins' names, from the builder.
     pub(crate) extensions: crate::control::GameExtensions,
-    pub(crate) console_registry: crate::console::Registry,
     pub(crate) console_overlay: crate::console::Overlay,
     /// Where gamepads come from (`Game::gamepad_backend`, or gilrs in a
     /// window; the browser's gamepads on the web), polled in `begin_frame`.
@@ -385,6 +384,8 @@ pub struct Ctx {
     /// # }
     /// ```
     pub debug: crate::debug::DebugDraw,
+    /// Registered developer commands and variables.
+    pub console: crate::console::Console,
     /// The player's own files (saves, settings) in the per-user data folder,
     /// or the browser's storage on the web, with crash-safe writes. Needs an
     /// app id ([`Game::app_id`](crate::game::Game::app_id)). See
@@ -494,7 +495,7 @@ impl Ctx {
             crash: None,
             control_addr: None,
             extensions: crate::control::GameExtensions::default(),
-            console_registry: crate::console::Registry::default(),
+            console: crate::console::Console::default(),
             console_overlay: crate::console::Overlay::default(),
             in_setup: false,
             scene_loads: 0,

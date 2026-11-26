@@ -2104,10 +2104,10 @@ pub(crate) fn handle(ctx: &mut Ctx, method: &str, params: &Value) -> Result<Valu
             ctx.perf.set_hud(on);
             json!(on)
         }
-        "debug.console.help" => json!({ "help": ctx.run_console("help").map_err(String::from)? }),
+        "debug.console.help" => json!({ "help": crate::console::Console::run(ctx, "help").map_err(String::from)? }),
         "debug.console.run" => {
             let line = param(params, "line")?.as_str().ok_or("`line` must be a string")?;
-            json!({ "output": ctx.run_console(line).map_err(String::from)? })
+            json!({ "output": crate::console::Console::run(ctx, line).map_err(String::from)? })
         }
         "debug.draw" => crate::debug::control::handle(ctx, params)?,
         "quality.set" => quality_set(ctx, params)?,
@@ -2340,6 +2340,8 @@ mod tests {
     #[test]
     fn every_listed_method_is_handled() {
         let mut ctx = ctx();
+        // Exercise the console handlers. The capabilities tests cover their disabled replies.
+        ctx.console.enabled = Some(true);
         for (name, _) in METHODS {
             if *name == "game.quit" || *name == "screenshot" {
                 continue;

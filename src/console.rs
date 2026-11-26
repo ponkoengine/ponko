@@ -1,8 +1,10 @@
 //! Registered developer commands and variables, shared by the retained
 //! console, headless games and control tools.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fmt::{self, Write};
+use std::rc::Rc;
 
 use crate::ctx::Ctx;
 use crate::error::{Error, ErrorKind};
@@ -102,13 +104,10 @@ impl fmt::Display for ConsoleValue {
     }
 }
 
-type Handler = Box<dyn FnMut(&mut Ctx, &[ConsoleValue]) -> Result<String, Error>>;
+type Handler = Rc<RefCell<dyn FnMut(&mut Ctx, &[ConsoleValue]) -> Result<String, Error>>>;
 
 enum EntryKind {
-    Command {
-        args: Vec<ConsoleArg>,
-        run: Option<Handler>,
-    },
+    Command { args: Vec<ConsoleArg>, run: Handler },
     Variable(ConsoleValue),
 }
 
@@ -134,13 +133,17 @@ impl Entry {
     }
 }
 
+/// A game's developer console at `ctx.console`.
+///
+/// Register entries with [`Game::console_command`](crate::game::Game::console_command)
+/// and [`Game::console_variable`](crate::game::Game::console_variable).
 #[derive(Default)]
-pub(crate) struct Registry {
+pub struct Console {
     entries: BTreeMap<String, Entry>,
     pub(crate) enabled: Option<bool>,
 }
 
-impl Registry {
+impl Console {
     pub(crate) fn enabled(&self) -> bool {
         self.enabled
             .unwrap_or(cfg!(debug_assertions) && !self.entries.is_empty())
@@ -167,7 +170,7 @@ impl Registry {
         name: String,
         help: String,
         args: &[ConsoleArg],
-        run: Handler,
+        run: impl FnMut(&mut Ctx, &[ConsoleValue]) -> Result<String, Error> + 'static,
     ) -> Result<(), Error> {
         self.check_name(&name)?;
         for (i, arg) in args.iter().enumerate() {
@@ -184,7 +187,7 @@ impl Registry {
                 help,
                 kind: EntryKind::Command {
                     args: args.to_vec(),
-                    run: Some(run),
+                    run: Rc::new(RefCell::new(run)),
                 },
             },
         );
@@ -298,13 +301,15 @@ fn tokenize(line: &str) -> Result<Vec<String>, Error> {
     Ok(tokens)
 }
 
-impl Ctx {
+impl Console {
     /// Runs a console line on this thread and returns its text output.
     /// Use `help` to list entries, `help name` for one entry, and
     /// `name [value]` to read or set a variable. The console must be enabled.
     /// A syntax, argument or lookup error is reported before the handler runs.
-    pub fn run_console(&mut self, line: &str) -> Result<String, Error> {
-        if let Some(reason) = self.console_registry.unavailable() {
+    ///
+    /// Pass the whole context so a registered command can use any game service.
+    pub fn run(ctx: &mut Ctx, line: &str) -> Result<String, Error> {
+        if let Some(reason) = ctx.console.unavailable() {
             return Err(invalid(reason));
         }
         let mut tokens = tokenize(line)?.into_iter();
@@ -312,13 +317,9 @@ impl Ctx {
             .next()
             .ok_or_else(|| invalid("enter a console command or type `help`"))?;
         if name == "help" {
-            return self.console_registry.help(tokens.as_slice());
+            return ctx.console.help(tokens.as_slice());
         }
-        let entry = self
-            .console_registry
-            .entries
-            .get_mut(&name)
-            .ok_or_else(|| unknown(&name))?;
+        let entry = ctx.console.entries.get_mut(&name).ok_or_else(|| unknown(&name))?;
         let usage = entry.usage(&name);
         match &mut entry.kind {
             EntryKind::Variable(value) => {
@@ -343,27 +344,18 @@ impl Ctx {
                         parse_value(token, &arg.name, arg.kind, &usage)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                let mut handler = run
-                    .take()
-                    .ok_or_else(|| invalid(format!("console command `{name}` is already running")))?;
-                let result = handler(self, &values);
-                // The registry is installed once at startup. Nested calls can run
-                // other entries but this handler remains borrowed until it returns.
-                if let Some(Entry {
-                    kind: EntryKind::Command { run, .. },
-                    ..
-                }) = self.console_registry.entries.get_mut(&name)
-                {
-                    *run = Some(handler);
-                }
-                result
+                let handler = Rc::clone(run);
+                let mut handler = handler
+                    .try_borrow_mut()
+                    .map_err(|_| invalid(format!("console command `{name}` is already running")))?;
+                handler(ctx, &values)
             }
         }
     }
 
     /// Reads a registered variable, even when the developer console is disabled.
-    pub fn console_value(&self, name: &str) -> Option<&ConsoleValue> {
-        match &self.console_registry.entries.get(name)?.kind {
+    pub fn value(&self, name: &str) -> Option<&ConsoleValue> {
+        match &self.entries.get(name)?.kind {
             EntryKind::Variable(value) => Some(value),
             EntryKind::Command { .. } => None,
         }

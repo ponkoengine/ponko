@@ -677,19 +677,14 @@ fn developer_console_draws_and_clips_scrollback_above_the_game_ui() {
     screen.ctx.update_retained_ui();
     let before = draw(&painter, &mut screen, size);
     let ctx = &mut screen.ctx;
-    ctx.console_registry.enabled = Some(true);
-    ctx.console_registry
-        .command(
-            "dump".into(),
-            "Print a report".into(),
-            &[],
-            Box::new(|_, _| {
-                Ok((0..20)
-                    .map(|i| format!("Report line {i}"))
-                    .collect::<Vec<_>>()
-                    .join("\n"))
-            }),
-        )
+    ctx.console.enabled = Some(true);
+    ctx.console
+        .command("dump".into(), "Print a report".into(), &[], |_, _| {
+            Ok((0..20)
+                .map(|i| format!("Report line {i}"))
+                .collect::<Vec<_>>()
+                .join("\n"))
+        })
         .unwrap();
     ctx.input.set_key(Key::Backquote, true);
     ctx.update_retained_ui();

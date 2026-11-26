@@ -64,7 +64,7 @@ pub(super) const FEATURES: &[(&str, bool)] = &[
 /// `handle` checks this first, so the report and the behavior agree.
 pub(super) fn unavailable(ctx: &Ctx, method: &str) -> Option<String> {
     match method {
-        "debug.console.help" | "debug.console.run" => ctx.console_registry.unavailable().map(String::from),
+        "debug.console.help" | "debug.console.run" => ctx.console.unavailable().map(String::from),
         "screenshot" if ctx.headless => {
             Some("headless games have no window to capture; launch the game with a window".into())
         }

@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 
 use glam::Vec2;
 
-use super::{MAX_LINE_BYTES, Registry};
+use super::{Console, MAX_LINE_BYTES};
 use crate::color::Color;
 use crate::input::{Input, Key};
 use crate::ui::{Ui, UiEvent, UiId, UiInput, UiLayout};
@@ -101,7 +101,7 @@ impl Default for Overlay {
 }
 
 impl Overlay {
-    pub(crate) fn prepare(&mut self, registry: &Registry, ui: &mut Ui, keys: &Input, input: &mut UiInput) {
+    pub(crate) fn prepare(&mut self, registry: &Console, ui: &mut Ui, keys: &Input, input: &mut UiInput) {
         if !registry.enabled() {
             return;
         }
@@ -189,7 +189,7 @@ impl Overlay {
         }
     }
 
-    pub(crate) fn finish(&mut self, registry: &Registry, ui: &mut Ui, submitted: bool) -> Option<String> {
+    pub(crate) fn finish(&mut self, registry: &Console, ui: &mut Ui, submitted: bool) -> Option<String> {
         let view = self.view.filter(|view| ui.top_screen() == Some(view.root))?;
         // Read after the retained UI applies text typed in this pass.
         if submitted {
@@ -216,7 +216,7 @@ impl Overlay {
         None
     }
 
-    fn complete_input(&mut self, registry: &Registry, ui: &mut Ui, input: UiId) {
+    fn complete_input(&mut self, registry: &Console, ui: &mut Ui, input: UiId) {
         let line = ui.text(input).unwrap_or_default().trim_start();
         let (head, prefix) = if let Some(rest) = line.strip_prefix("help ") {
             ("help ", rest.trim_start())

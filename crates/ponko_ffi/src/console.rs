@@ -300,7 +300,8 @@ pub unsafe extern "C" fn ponko_ctx_console_value(
         let callback = callback.ok_or_else(|| invalid("console value callback is null"))?;
         let variable = name(variable)?;
         let value = ctx_access(ctx, |ctx| {
-            ctx.console_value(variable)
+            ctx.console
+                .value(variable)
                 .cloned()
                 .ok_or_else(|| error(PonkoStatus::PONKO_NOT_FOUND, "unknown console variable"))
         })?;

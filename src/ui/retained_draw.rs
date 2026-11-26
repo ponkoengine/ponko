@@ -74,22 +74,19 @@ impl Ctx {
         input.preedit_cursor = self.input.preedit_cursor();
         input.composing = self.input.composing();
         self.console_overlay
-            .prepare(&self.console_registry, &mut self.ui, &self.input, &mut input);
+            .prepare(&self.console, &mut self.ui, &self.input, &mut input);
         self.ui.pixels = self.gfx.scale_factor;
         self.ui.safe_area = Some(self.window.safe_area());
         self.ui.frame_with_text(self.window_size(), &input, &mut self.gfx.text);
-        if self.console_registry.enabled() {
+        if self.console.enabled() {
             let mut submitted = false;
             self.ui.events.retain(|event| {
                 let console = self.console_overlay.event(*event);
                 submitted |= console;
                 !console
             });
-            if let Some(line) = self
-                .console_overlay
-                .finish(&self.console_registry, &mut self.ui, submitted)
-            {
-                let result = self.run_console(&line);
+            if let Some(line) = self.console_overlay.finish(&self.console, &mut self.ui, submitted) {
+                let result = crate::console::Console::run(self, &line);
                 self.console_overlay.reply(&mut self.ui, result);
             }
         }

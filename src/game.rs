@@ -455,7 +455,7 @@ pub struct Game {
     states: Vec<(std::any::TypeId, Box<dyn std::any::Any>)>,
     /// The plugins added, their debug toggles and control methods.
     ext: plugin::Extensions,
-    console_registry: crate::console::Registry,
+    console_registry: crate::console::Console,
     console_key: crate::input::Key,
     /// From `gamepad_backend`: where pads come from instead of the default.
     gamepad_backend: Option<Box<dyn crate::input::GamepadBackend>>,
@@ -1526,7 +1526,7 @@ impl Game {
             data_dir: None,
             states: Vec::new(),
             ext: plugin::Extensions::default(),
-            console_registry: crate::console::Registry::default(),
+            console_registry: crate::console::Console::default(),
             console_key: crate::input::Key::Backquote,
             gamepad_backend: None,
             crash: crate::crash::CrashReports::default(),
@@ -2125,7 +2125,7 @@ impl Game {
     /// Enables or disables the developer console. The default is on in
     /// debug builds that register an entry and off in release builds.
     /// This switch gates both the overlay and command execution through
-    /// [`Ctx::run_console`] and control tools. It does not open the endpoint.
+    /// [`Console::run`](crate::console::Console::run) and control tools. It does not open the endpoint.
     pub fn developer_console(mut self, on: bool) -> Self {
         self.console_registry.enabled = Some(on);
         self
@@ -2147,10 +2147,7 @@ impl Game {
         args: &[crate::console::ConsoleArg],
         run: impl FnMut(&mut Ctx, &[crate::console::ConsoleValue]) -> Result<String, crate::error::Error> + 'static,
     ) -> Self {
-        match self
-            .console_registry
-            .command(name.into(), help.into(), args, Box::new(run))
-        {
+        match self.console_registry.command(name.into(), help.into(), args, run) {
             Ok(()) => self,
             Err(error) => self.fail_startup(error),
         }
@@ -2158,7 +2155,7 @@ impl Game {
 
     /// Registers a developer variable. Its initial value fixes its type.
     /// An invalid or duplicate name or a non-finite float fails at startup.
-    /// Read the current value in a system with [`Ctx::console_value`].
+    /// Read the current value in a system with [`ctx.console.value()`](crate::console::Console::value).
     pub fn console_variable(
         mut self,
         name: impl Into<String>,
@@ -3138,7 +3135,7 @@ impl Game {
         ctx.storage = crate::storage::Storage::for_game(self.app_id.as_deref(), self.data_dir.clone());
         ctx.crash = crate::crash::start(&self.crash, headless, &ctx.storage, &self.title, self.vsync);
         self.ext.install(&mut ctx);
-        ctx.console_registry = std::mem::take(&mut self.console_registry);
+        ctx.console = std::mem::take(&mut self.console_registry);
         ctx.console_overlay.key = self.console_key;
         if let Some(backend) = self.gamepad_backend.take() {
             ctx.gamepad_driver.install(&mut ctx.input, backend);

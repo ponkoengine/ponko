@@ -2146,6 +2146,12 @@ pub fn ponko::console::ConsoleValue::fmt(&self, &mut core::fmt::Formatter<'_>) -
 impl core::fmt::Display for ponko::console::ConsoleValue
 pub fn ponko::console::ConsoleValue::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for ponko::console::ConsoleValue
+pub struct ponko::console::Console
+impl ponko::console::Console
+pub fn ponko::console::Console::run(&mut ponko::prelude::Ctx, &str) -> core::result::Result<alloc::string::String, ponko::error::Error>
+pub fn ponko::console::Console::value(&self, &str) -> core::option::Option<&ponko::console::ConsoleValue>
+impl core::default::Default for ponko::console::Console
+pub fn ponko::console::Console::default() -> Self
 pub struct ponko::console::ConsoleArg
 impl ponko::console::ConsoleArg
 pub fn ponko::console::ConsoleArg::new(impl core::convert::Into<alloc::string::String>, ponko::console::ConsoleType) -> Self
@@ -9312,6 +9318,7 @@ pub ponko::prelude::Ctx::assets: ponko::assets::Assets
 pub ponko::prelude::Ctx::audio: ponko::audio::Audio
 pub ponko::prelude::Ctx::camera: ponko::d2::Camera
 pub ponko::prelude::Ctx::commands: ponko_ecs::commands::Commands
+pub ponko::prelude::Ctx::console: ponko::console::Console
 pub ponko::prelude::Ctx::debug: ponko::debug::DebugDraw
 pub ponko::prelude::Ctx::events: ponko::events::Events
 pub ponko::prelude::Ctx::gfx: ponko::gfx::Graphics
@@ -9352,9 +9359,6 @@ pub fn ponko::prelude::Ctx::random(&self) -> ponko::random::Random
 pub fn ponko::prelude::Ctx::window_size(&self) -> glam::f32::vec2::Vec2
 impl ponko::prelude::Ctx
 pub fn ponko::prelude::Ctx::check_old_saves(&mut self, impl core::convert::AsRef<std::path::Path>) -> core::result::Result<usize, ponko::error::Error>
-impl ponko::prelude::Ctx
-pub fn ponko::prelude::Ctx::console_value(&self, &str) -> core::option::Option<&ponko::console::ConsoleValue>
-pub fn ponko::prelude::Ctx::run_console(&mut self, &str) -> core::result::Result<alloc::string::String, ponko::error::Error>
 impl ponko::prelude::Ctx
 pub fn ponko::prelude::Ctx::despawn_level(&mut self, ponko_ecs::entity::Entity) -> bool
 pub fn ponko::prelude::Ctx::spawn_level(&mut self, &str, glam::f32::vec2::Vec2) -> core::result::Result<ponko_ecs::entity::Entity, ponko::error::Error>
