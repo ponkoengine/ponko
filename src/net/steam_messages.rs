@@ -18,12 +18,18 @@ use super::{NetMessages, PeerId, SteamClient, SteamLobbyId, SteamUserId};
 
 const CHANNEL: u32 = 12701; // independent of lockstep's channel zero
 const PACKET_LIMIT: usize = 1500; // renet's MTU plus our session envelope
+/// The `ponko_protocol` lobby metadata of a host: the message protocol and
+/// the Steam carrier under it. Messages keeps the value from before Sockets
+/// existed, so older joiners still join it; they refuse a Sockets host as
+/// an incompatible protocol instead of timing out on it.
 const PROTOCOL: &str = "ponko-messages-2";
-/// The lobby metadata key naming the host's carrier: [`MESSAGES`] or
-/// [`SOCKETS`]. A host from before the key existed uses Messages.
-const CARRIER_KEY: &str = "ponko_carrier";
+const SOCKETS_PROTOCOL: &str = "ponko-messages-2-sockets";
+/// The carriers: Steam Networking Messages and Steam Networking Sockets.
 pub(super) const MESSAGES: &str = "messages";
 pub(super) const SOCKETS: &str = "sockets";
+fn protocol(carrier: &str) -> &'static str {
+    if carrier == SOCKETS { SOCKETS_PROTOCOL } else { PROTOCOL }
+}
 /// The Sockets carrier's virtual port, beside lockstep's channel zero and
 /// the Messages carrier's channel.
 const SOCKETS_PORT: i32 = 12702;
@@ -404,11 +410,13 @@ impl SocketsApi for RealSockets {
     }
 }
 
+/// Builds a joiner's carrier once the host has named it.
+type MakeCarrier = Box<dyn FnMut(&str) -> Box<dyn Carrier> + Send>;
 /// Which carrier an endpoint uses: the host's choice, or a joiner's
 /// factory that follows the host once its lobby metadata says.
 enum Pick {
     Chosen(Box<dyn Carrier>),
-    Follow(Box<dyn FnMut(&str) -> Box<dyn Carrier> + Send>),
+    Follow(MakeCarrier),
 }
 
 /// An asynchronously created/joined Steam lobby. Call `poll` each frame;
@@ -664,25 +672,23 @@ impl Relay {
         self.lobby.poll()?;
         if let Some(id) = self.lobby.id() {
             if self.hosting && !self.published {
-                // The carrier first: a joiner waits for the protocol key.
-                self.lobby.set_metadata(CARRIER_KEY, self.carrier_name)?;
-                self.lobby.set_metadata("ponko_protocol", PROTOCOL)?;
+                self.lobby.set_metadata("ponko_protocol", protocol(self.carrier_name))?;
                 self.published = true;
             }
             if !self.hosting {
-                match self.lobby.metadata("ponko_protocol").as_deref() {
-                    Some(PROTOCOL) => self.owner = Some(self.lobby.api.owner(id)),
-                    Some(_) => return Err(io::Error::other("incompatible message protocol")),
-                    None => return Ok(()), // owner may still be publishing
-                }
-                if let Pick::Follow(make) = &mut self.carrier {
-                    let name = self.lobby.metadata(CARRIER_KEY).unwrap_or_else(|| MESSAGES.into());
-                    if name != MESSAGES && name != SOCKETS {
+                let carrier = match self.lobby.metadata("ponko_protocol").as_deref() {
+                    Some(PROTOCOL) => MESSAGES,
+                    Some(SOCKETS_PROTOCOL) => SOCKETS,
+                    Some(other) => {
                         return Err(io::Error::other(format!(
-                            "the host uses the Steam carrier {name:?}, which this version doesn't know"
+                            "incompatible message protocol: the host speaks {other:?}"
                         )));
                     }
-                    self.carrier = Pick::Chosen(make(&name));
+                    None => return Ok(()), // owner may still be publishing
+                };
+                self.owner = Some(self.lobby.api.owner(id));
+                if let Pick::Follow(make) = &mut self.carrier {
+                    self.carrier = Pick::Chosen(make(carrier));
                 }
             }
             let members = self.lobby.members();
@@ -768,9 +774,12 @@ impl NetMessages {
     }
     /// Host message traffic over Steam Networking Sockets: connections the
     /// host accepts from its lobby's members, relayed through Valve's network,
-    /// with the same friends-only lobby, invites and messages as
-    /// [`steam_host`](Self::steam_host). Players join with the same
-    /// [`steam_join`](Self::steam_join), which follows the host's choice.
+    /// with the same lobby, invites and messages as
+    /// [`steam_host`](Self::steam_host), in a lobby of the given
+    /// `visibility` (a host nobody plays on is usually `Public`, so players
+    /// who get its lobby id can join without being its friends). Players
+    /// join with the same [`steam_join`](Self::steam_join), which follows
+    /// the host's choice.
     ///
     /// [`steam_host`](Self::steam_host) (Steam Networking Messages, no
     /// connections) is the default for games among friends. Sockets suits a
@@ -787,15 +796,20 @@ impl NetMessages {
     /// ```no_run
     /// # use ponko::prelude::*;
     /// let client = ponko::net::SteamClient::init_app(480).unwrap();
-    /// let mut host = ponko::net::NetMessages::steam_sockets_host(&client, 8)?;
+    /// let public = ponko::net::SteamLobbyVisibility::Public;
+    /// let mut host = ponko::net::NetMessages::steam_sockets_host(&client, public, 8)?;
     /// host.poll()?;
     /// # Ok::<(), std::io::Error>(())
     /// ```
-    pub fn steam_sockets_host(client: &SteamClient, max_clients: usize) -> io::Result<Self> {
+    pub fn steam_sockets_host(
+        client: &SteamClient,
+        visibility: SteamLobbyVisibility,
+        max_clients: usize,
+    ) -> io::Result<Self> {
         if !(1..=249).contains(&max_clients) {
             return Err(input("max_clients must be 1..=249"));
         }
-        let lobby = SteamLobby::create(client, SteamLobbyVisibility::FriendsOnly, max_clients as u32 + 1)?;
+        let lobby = SteamLobby::create(client, visibility, max_clients as u32 + 1)?;
         let carrier = SocketsCarrier::new(Box::new(RealSockets::new(client)), true);
         Ok(Self::steam_endpoint(
             client,
@@ -1342,11 +1356,12 @@ mod tests {
             let (mut nets, state) = endpoints(2, carrier);
             poll(&mut nets, 30);
             let metadata = state.lock().unwrap().rooms[&1].metadata.clone();
-            assert_eq!(
-                metadata.get("ponko_protocol").map(String::as_str),
-                Some("ponko-messages-2")
-            );
-            assert_eq!(metadata.get(CARRIER_KEY).map(String::as_str), Some(carrier));
+            let published = if carrier == SOCKETS {
+                "ponko-messages-2-sockets"
+            } else {
+                "ponko-messages-2" // unchanged: older joiners still join it
+            };
+            assert_eq!(metadata.get("ponko_protocol").map(String::as_str), Some(published));
             state
                 .lock()
                 .unwrap()
@@ -1389,7 +1404,7 @@ mod tests {
         }
     }
     #[test]
-    fn a_host_without_a_carrier_key_is_a_messages_host_and_unknown_carriers_are_refused() {
+    fn a_joiner_refuses_a_host_whose_carrier_it_does_not_know() {
         let (mut nets, state) = endpoints(2, MESSAGES);
         state
             .lock()
@@ -1398,29 +1413,9 @@ mod tests {
             .get_mut(&1)
             .unwrap()
             .metadata
-            .insert("ponko_protocol".into(), PROTOCOL.into());
-        // An older host: the protocol key only.
-        state
-            .lock()
-            .unwrap()
-            .rooms
-            .get_mut(&1)
-            .unwrap()
-            .metadata
-            .remove(CARRIER_KEY);
-        nets[1].poll_elapsed(Duration::ZERO).unwrap();
-        poll(&mut nets, 30);
-        assert!(nets[1].events().any(|e| e == MessageEvent::Connected(PeerId::HOST)));
-
-        let (mut nets, state) = endpoints(2, MESSAGES);
-        {
-            let mut s = state.lock().unwrap();
-            let m = &mut s.rooms.get_mut(&1).unwrap().metadata;
-            m.insert("ponko_protocol".into(), PROTOCOL.into());
-            m.insert(CARRIER_KEY.into(), "carrier-pigeon".into());
-        }
+            .insert("ponko_protocol".into(), "ponko-messages-2-pigeons".into());
         let e = nets[1].poll_elapsed(Duration::ZERO).unwrap_err();
-        assert!(e.to_string().contains("carrier-pigeon"), "{e}");
+        assert!(e.to_string().contains("pigeons"), "{e}");
     }
     #[test]
     fn a_sockets_host_refuses_connections_from_outside_its_lobby() {

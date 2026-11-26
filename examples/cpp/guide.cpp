@@ -5421,6 +5421,17 @@ int main() {
     }
     // ANCHOR_END: steam_messages
 }
+[[maybe_unused]] static void steam_sockets_server() {
+    // ANCHOR: steam_sockets
+    // A host process nobody plays on, signed in to its own Steam account.
+    auto net = ponko::net_messages::steam_sockets_host(480, ponko::steam_lobby_visibility::public_lobby, 16);
+    for (;;) {
+        net.poll(); // players join with net_messages::steam_join(app_id, lobby id)
+        while (auto event = net.next_event()) { (void)event; /* run the game */ }
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    }
+    // ANCHOR_END: steam_sockets
+}
 [[maybe_unused]] static void general_steam_lobby() {
     // ANCHOR: general_steam_lobby
     auto lobby = ponko::steam_lobby::create(480, ponko::steam_lobby_visibility::public_lobby, 4);

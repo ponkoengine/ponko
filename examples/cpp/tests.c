@@ -1069,6 +1069,9 @@ static void steam_messages_validation(void) {
     CHECK(ponko_steam_lobby_create(480, 3, 2, &lobby) == PONKO_INVALID_ARGUMENT && !lobby);
     CHECK(ponko_steam_lobby_join(480, 0, &lobby) == PONKO_INVALID_ARGUMENT && !lobby);
     CHECK(ponko_net_messages_steam_host(480, 2, &endpoint) != PONKO_OK && !endpoint);
+    CHECK(ponko_net_messages_steam_sockets_host(480, 1, 250, &endpoint) == PONKO_INVALID_ARGUMENT && !endpoint);
+    CHECK(ponko_net_messages_steam_sockets_host(480, 3, 2, &endpoint) == PONKO_INVALID_ARGUMENT && !endpoint);
+    CHECK(ponko_net_messages_steam_sockets_host(480, 1, 2, &endpoint) != PONKO_OK && !endpoint);
     CHECK(ponko_steam_lobby_create(480, 0, 2, &lobby) != PONKO_OK && !lobby);
     CHECK(ponko_steam_lobby_poll(NULL) != PONKO_OK);
     CHECK(ponko_steam_lobby_leave(NULL) != PONKO_OK);

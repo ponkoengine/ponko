@@ -6356,6 +6356,11 @@ enum PonkoStatus ponko_net_messages_steam_host(uint32_t app_id,
                                                size_t max_clients,
                                                struct PonkoNetMessages **out_endpoint);
 
+enum PonkoStatus ponko_net_messages_steam_sockets_host(uint32_t app_id,
+                                                       uint32_t visibility,
+                                                       size_t max_clients,
+                                                       struct PonkoNetMessages **out_endpoint);
+
 enum PonkoStatus ponko_net_messages_steam_join(uint32_t app_id,
                                                uint64_t lobby,
                                                struct PonkoNetMessages **out_endpoint);
