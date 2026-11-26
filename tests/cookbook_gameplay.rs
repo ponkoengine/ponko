@@ -272,7 +272,7 @@ fn blink(ctx: &mut Ctx) {
             } else {
                 // Faint in every other phase of BLINK_SECS.
                 let phase = (protection.left / BLINK_SECS) as u32;
-                sprite.color.a = if phase % 2 == 0 { 1.0 } else { 0.25 };
+                sprite.color.a = if phase.is_multiple_of(2) { 1.0 } else { 0.25 };
             }
         });
 }
