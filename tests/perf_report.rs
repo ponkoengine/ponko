@@ -37,6 +37,7 @@ fn steering_stays_within_budget() {
     println!("{report}");
     report.assert_within(
         &Budget::new()
+            .frame_avg_ms(25.0)
             .frame_p99_ms(50.0)
             .system("steering", 10.0)
             .scope("steering/neighbors", 10.0),

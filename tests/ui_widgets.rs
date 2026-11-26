@@ -1170,3 +1170,58 @@ fn the_custom_theme_changes_tokens_and_colors() {
     assert_eq!(ui.theme().radius, 0.0);
     assert_eq!(ui.paint(g.reset).map(|p| p.border), Some(custom.accent));
 }
+
+#[test]
+fn an_edit_menu_of_the_games_own_cuts_the_selection() {
+    // A "Cut" entry in a context menu: copy what is selected, then cut it.
+    let (mut ui, root) = screen();
+    let field = ui
+        .text_input(root)
+        .text("hello")
+        .layout(UiLayout::fixed(200.0, 30.0))
+        .id();
+    assert!(ui.set_focus(field));
+    step(
+        &mut ui,
+        UiInput {
+            select_all: true,
+            ..Default::default()
+        },
+    );
+    let copied = ui.selected_text().map(str::to_owned);
+    ui.cut_selection();
+    assert_eq!(copied.as_deref(), Some("hello"));
+    assert_eq!(ui.text(field), Some(""));
+    assert!(ui.events().any(|e| e == UiEvent::Changed(field)));
+}
+
+#[test]
+fn a_screen_reports_how_it_was_built() {
+    // What an editor or a test of the game's own menus reads back.
+    let (mut ui, root) = screen();
+    let tabs = ui.tabs(root).id();
+    let audio = ui.tab(tabs, "Audio").id();
+    let video = ui.tab(tabs, "Video").id();
+    assert_eq!(
+        (ui.tab_page(tabs, 0), ui.tab_page(tabs, 1), ui.tab_page(tabs, 2)),
+        (Some(audio), Some(video), None)
+    );
+    let play = ui.button(root, "Play").focused().id();
+    assert!(ui.is_initial_focus(play) && !ui.is_initial_focus(tabs));
+    let card = ui.button(root, "Card").draggable().id();
+    ui.set_drop_target(root, true);
+    assert!(ui.is_draggable(card) && !ui.is_draggable(play));
+    assert!(ui.is_drop_target(root) && !ui.is_drop_target(card));
+
+    let half = UiLayout::row(30.0).height_fraction(0.5);
+    assert!(!half.is_hidden() && half.hidden().is_hidden());
+    let theme = UiTheme {
+        title: Color::YELLOW,
+        title_size: 30.0,
+        ..Default::default()
+    };
+    assert_eq!(theme.title_paint().font_size, 30.0);
+    // A key-binding row in a settings screen of the game's own drawing.
+    assert_eq!(ponko::ui::binding_label(&ButtonBinding::Key(Key::Space)), "Space");
+    assert_eq!(ponko::ui::binding_label(&ButtonBinding::Key(Key::Num1)), "1");
+}

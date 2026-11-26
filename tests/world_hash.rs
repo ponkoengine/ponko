@@ -250,3 +250,20 @@ fn a_deterministic_game_hashes_alike_run_after_run() {
     assert_eq!(run(1), run(1));
     assert_ne!(run(1), run(2));
 }
+
+#[test]
+fn split_hashes_name_the_part_that_diverged() {
+    use ponko::reflect::WorldHashParts;
+    // Two peers that should agree: one moved a unit a little further.
+    let a = built_directly();
+    let mut b = built_directly();
+    for v in b.query::<&mut Vel>().iter() {
+        v.0 += 0.5;
+    }
+    let (ha, hb) = (WorldHashParts::of(&a), WorldHashParts::of(&b));
+    assert_ne!(ha.total, hb.total);
+    let differing = ha.differing(&hb);
+    assert_eq!(differing.len(), 1, "{differing:?}");
+    assert!(differing[0].contains("Vel"), "{differing:?}");
+    assert!(ha.differing(&WorldHashParts::of(&built_directly())).is_empty());
+}

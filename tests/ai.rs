@@ -1392,3 +1392,36 @@ fn the_same_seed_and_inputs_give_the_same_decisions() {
     let other = decisions(4);
     assert_ne!(other, first, "another seed draws other random choices");
 }
+
+#[test]
+fn a_tree_built_as_a_value_compiles_without_text() {
+    use ponko::reflect::json::json;
+    // A tool that builds trees in code (an editor, a generator) skips the text.
+    let value = json!({"root": {"selector": [
+        {"sequence": [{"check": "alert"}, {"do": "chase"}]},
+        {"do": "patrol"}
+    ]}});
+    let t = Arc::new(BehaviorTree::from_value(&value).unwrap());
+    let (mut brain, mut bb) = (Brain::new("guard"), Blackboard::new());
+    assert_eq!(think(&mut brain, &t, &mut bb, 0), Some("patrol"));
+    bb.set(ALERT, true);
+    assert_eq!(think(&mut brain, &t, &mut bb, 1), Some("chase"));
+}
+
+#[test]
+fn considerations_and_checks_read_raw_values() {
+    use ponko::ai::{Consideration, Curve};
+    // Hunger matters from 20 (not at all) to 80 (fully), steeply near the top.
+    let hunger = Consideration::new(HUNGER, 20.0, 80.0).curve(Curve::Quadratic);
+    assert_eq!(hunger.score_value(10.0), 0.0);
+    assert!((hunger.score_value(50.0) - 0.25).abs() < 1e-6);
+    assert_eq!(hunger.score_value(95.0), 1.0);
+    // Health is wanted less the more there is of it.
+    let healing = Consideration::new(HEALTH, 0.0, 100.0).inverted();
+    assert!((healing.score_value(25.0) - 0.75).abs() < 1e-6);
+
+    // What a `check` without a comparison tests.
+    assert!(Value::Bool(true).truthy());
+    assert!(!Value::Num(0.0).truthy());
+    assert!(Value::Vec2(Vec2::ZERO).truthy(), "any point counts as set");
+}

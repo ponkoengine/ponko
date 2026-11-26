@@ -29,7 +29,7 @@ are written in `STABILITY.md`; here they are again:
   `python3 scripts/maturity.py` fails when a chapter or a top-level module
   has no level, and regenerates the list and the module docs (`--write`).
 
-Chapters: 21 proven, 61 tested, 5 experimental.
+Chapters: 21 proven, 62 tested, 5 experimental.
 
 ## Chapters
 
@@ -73,6 +73,7 @@ Chapters: 21 proven, 61 tested, 5 experimental.
 | [Dedicated servers](servers.md) | **tested** | none | a reference game and a deployed server |
 | [Lobbies, matchmaking and relays](lobby.md) | **tested** | none | a reference game and a public deployment |
 | [Peer to peer over WebRTC](webrtc.md) | **experimental** | none | the browser side never ran in a browser, and no real NAT, public STUN or TURN server was used (the chapter's "Not checked") |
+| [Putting a game online](online.md) | **tested** | none | a reference game and a public deployment |
 | [Drawing](drawing.md) | **proven** | Coin Dash and Ember Hop, packaged and played on Linux, macOS and Windows | — |
 | [Camera, text and UI](camera-ui.md) | **proven** | Coin Dash and Ember Hop, packaged and played on Linux, macOS and Windows (Ember Hop's following camera, both games' text) | — |
 | [Several cameras: split screen and minimaps](viewports.md) | **tested** | none | a reference game that uses it |
@@ -110,7 +111,7 @@ Chapters: 21 proven, 61 tested, 5 experimental.
 | [Ember Hop: a platformer, start to finish](ember-hop.md) | **proven** | Ember Hop itself, packaged and played on Linux, macOS and Windows | — |
 | [Shard Grove: a 3D game, start to finish](shard-grove.md) | **tested** | Shard Grove itself, played headless | its package played on each OS |
 | [Legions: 100,000 units that replay bit for bit](legions.md) | **tested** | Legions, a showcase rather than a reference game | a reference game that uses it |
-| [Web builds: games in the browser](web.md) | **tested** | Coin Dash in headless Chromium and WebKit; Ember Hop builds for the web | WebGPU in a recorded run, and Firefox (its headless build has no WebGL2) |
+| [Web builds: games in the browser](web.md) | **tested** | Coin Dash in headless Chromium and WebKit; Ember Hop builds for the web | WebGPU on Windows and Linux GPUs in a recorded run, and Firefox (its headless build has no WebGL2) |
 | [Threads on the web](web-threads.md) | **experimental** | none | the chapter calls it experimental; the thread-heaps build has not run in a browser since its last fix |
 | [C and C++](c-cpp.md) | **tested** | none | a reference game written in C or C++ |
 | [Reflection: components as JSON](reflection.md) | **tested** | none | a reference game that uses it |
