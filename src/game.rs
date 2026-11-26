@@ -313,10 +313,24 @@ fn builtin_id(name: &str) -> Option<(SystemId, &'static str)> {
         (builtin!(attach::follow_attachments), Systems::FOLLOW_ATTACHMENTS),
         #[cfg(feature = "physics")]
         (builtin!(step_physics), Systems::PHYSICS),
+        // Listed under their 0.1 paths, which the module that defines them
+        // no longer spells: names in plans and `remove_system` stay.
         #[cfg(feature = "physics3d")]
-        (builtin!(step_physics3d), Systems::PHYSICS3D),
+        (
+            [
+                "ponko::physics3d::step_physics3d",
+                std::any::type_name_of_val(&crate::systems::step_physics3d),
+            ],
+            Systems::PHYSICS3D,
+        ),
         #[cfg(feature = "physics3d")]
-        (builtin!(interpolate_physics3d), Systems::INTERPOLATE_PHYSICS3D),
+        (
+            [
+                "ponko::physics3d::interpolate_physics3d",
+                std::any::type_name_of_val(&crate::systems::interpolate_physics3d),
+            ],
+            Systems::INTERPOLATE_PHYSICS3D,
+        ),
         #[cfg(feature = "navmesh")]
         (builtin!(step_navmesh3d), Systems::STEP_NAVMESH3D),
         #[cfg(feature = "3d")]
@@ -2694,7 +2708,7 @@ impl Game {
     pub fn physics3d(mut self, gravity: glam::Vec3) -> Self {
         self.gravity3d = Some(gravity);
         if !self.fixed_hz_set {
-            self.fixed_hz = crate::physics3d::PHYSICS3D_HZ;
+            self.fixed_hz = crate::physics3d_impl::PHYSICS3D_HZ;
         }
         if !self.sim_systems.iter().any(|s| s.builtin == Some(Systems::PHYSICS3D)) {
             self = self.add(
@@ -3129,7 +3143,7 @@ impl Game {
         }
         #[cfg(feature = "physics3d")]
         if let Some(gravity) = self.gravity3d {
-            crate::physics3d::start(&mut ctx, gravity);
+            crate::physics3d_impl::start(&mut ctx, gravity);
         }
         self.start_networking(&mut ctx);
         ctx.storage = crate::storage::Storage::for_game(self.app_id.as_deref(), self.data_dir.clone());

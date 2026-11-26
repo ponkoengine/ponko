@@ -56,7 +56,7 @@ pub use crate::net::snapshots::apply_net_poses;
 #[cfg(feature = "physics")]
 pub use crate::physics::{step_physics, step_physics_access};
 #[cfg(feature = "physics3d")]
-pub use crate::physics3d::{
+pub use crate::physics3d_impl::{
     interpolate_physics3d, interpolate_physics3d_access, step_physics3d, step_physics3d_access,
 };
 
