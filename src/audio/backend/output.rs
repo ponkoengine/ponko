@@ -59,6 +59,37 @@ fn names(device: &AudioDevice, wanted: &str) -> bool {
 /// The system's devices, or the browser's one output.
 pub(in crate::audio) struct SystemOutputs;
 
+/// `PONKO_MUTE=1` (any value but empty or `0`): the device output plays
+/// silence, for automated runs on a machine or phone someone is using.
+/// Everything else runs as usual: the stream, the mixer, the meters, the
+/// music clock; offline mixing (`render_offline`) is not muted.
+#[cfg(not(target_arch = "wasm32"))]
+fn muted_by_environment() -> bool {
+    let muted = mute_asked(std::env::var_os("PONKO_MUTE").as_deref());
+    static SAID: std::sync::Once = std::sync::Once::new();
+    if muted {
+        SAID.call_once(|| eprintln!("ponko: PONKO_MUTE is set: the audio output plays silence"));
+    }
+    muted
+}
+
+/// The output's main track: silent when muted.
+#[cfg(any(test, not(target_arch = "wasm32")))]
+fn main_track(muted: bool) -> kira::track::MainTrackBuilder {
+    let track = kira::track::MainTrackBuilder::new();
+    if muted {
+        track.volume(kira::Decibels::SILENCE)
+    } else {
+        track
+    }
+}
+
+/// Whether a `PONKO_MUTE` value asks for silence.
+#[cfg(not(target_arch = "wasm32"))]
+fn mute_asked(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_some_and(|v| !v.is_empty() && v != "0")
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 impl Outputs for SystemOutputs {
     fn list(&mut self) -> Vec<AudioDevice> {
@@ -106,6 +137,7 @@ impl Outputs for SystemOutputs {
                 device: chosen,
                 config: None,
             },
+            main_track_builder: main_track(muted_by_environment()),
             ..Default::default()
         };
         let manager = kira::AudioManager::new(settings).ok()?;
@@ -461,6 +493,8 @@ pub(in crate::audio) mod fake {
         pub issues: std::collections::VecDeque<DeviceIssue>,
         /// The device each output was opened on, oldest first, and its buffer.
         pub opened: Vec<(String, Output)>,
+        /// Outputs open as `PONKO_MUTE` opens the device's.
+        pub muted: bool,
     }
     #[derive(Clone, Default)]
     pub(in crate::audio) struct FakeOutputs(pub Arc<Mutex<Devices>>);
@@ -483,7 +517,7 @@ pub(in crate::audio) mod fake {
                 Some(wanted) => devices.list.iter().find(|d| names(d, wanted))?.clone(),
                 None => devices.list.iter().find(|d| d.default)?.clone(),
             };
-            let (manager, buffer) = Manager::buffer(48_000)?;
+            let (manager, buffer) = Manager::buffer_with(48_000, main_track(devices.muted))?;
             let reader = super::super::super::dsp::buffer::Output {
                 renderer: buffer.renderer.clone(),
                 sample_rate: buffer.sample_rate,
@@ -498,5 +532,20 @@ pub(in crate::audio) mod fake {
         fn issue(&mut self, _manager: &mut Manager) -> Option<DeviceIssue> {
             self.0.lock().unwrap().issues.pop_front()
         }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod mute_tests {
+    use super::mute_asked;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn ponko_mute_is_on_for_any_value_but_empty_or_zero() {
+        assert!(!mute_asked(None));
+        assert!(!mute_asked(Some(OsStr::new(""))));
+        assert!(!mute_asked(Some(OsStr::new("0"))));
+        assert!(mute_asked(Some(OsStr::new("1"))));
+        assert!(mute_asked(Some(OsStr::new("yes"))));
     }
 }
