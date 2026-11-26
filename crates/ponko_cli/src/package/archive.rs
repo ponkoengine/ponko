@@ -306,6 +306,197 @@ pub fn ios_icons(png: &[u8]) -> Result<Vec<(&'static str, Vec<u8>)>, String> {
     Ok(out)
 }
 
+/// The icon scaled to each of [`ANDROID_ICONS`](super::layout::ANDROID_ICONS)'
+/// sizes, as PNGs, by their folder under `res/`. Android keeps the alpha
+/// channel.
+pub fn android_icons(png: &[u8]) -> Result<Vec<(&'static str, Vec<u8>)>, String> {
+    use image::imageops::FilterType;
+    check_icon(png)?;
+    let source = image::load_from_memory_with_format(png, image::ImageFormat::Png)
+        .map_err(|e| format!("can't read the icon: {e}"))?
+        .to_rgba8();
+    let mut out = Vec::new();
+    for &(dir, size) in super::layout::ANDROID_ICONS {
+        let scaled = image::imageops::resize(&source, size, size, FilterType::Lanczos3);
+        let mut bytes = Vec::new();
+        scaled
+            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+            .map_err(|e| format!("can't write the {size}-pixel icon: {e}"))?;
+        out.push((dir, bytes));
+    }
+    Ok(out)
+}
+
+// ---- apk ------------------------------------------------------------------
+
+/// A file of an apk: its name inside it and its contents.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ApkFile {
+    pub name: String,
+    pub bytes: Vec<u8>,
+}
+
+/// The files of a zip (the apk `aapt2 link` makes), in its order, without
+/// folders. Reads stored and deflated entries, all a zip without zip64 holds.
+pub fn unzip(zip: &[u8]) -> Result<Vec<ApkFile>, String> {
+    use flate2::read::DeflateDecoder;
+    use std::io::Read;
+    let bad = |what: &str| format!("not a zip file ({what})");
+    let u16_at = |at: usize| -> Result<usize, String> {
+        zip.get(at..at + 2)
+            .map(|b| usize::from(u16::from_le_bytes([b[0], b[1]])))
+            .ok_or_else(|| bad("cut short"))
+    };
+    let u32_at = |at: usize| -> Result<usize, String> {
+        zip.get(at..at + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
+            .ok_or_else(|| bad("cut short"))
+    };
+    // The end record: 22 bytes, then a comment of up to 65535.
+    let end = (0..=zip.len().saturating_sub(22))
+        .rev()
+        .take(22 + 65535)
+        .find(|&at| zip[at..].starts_with(&0x06054b50u32.to_le_bytes()))
+        .ok_or_else(|| bad("no end record"))?;
+    let count = u16_at(end + 10)?;
+    let mut at = u32_at(end + 16)?;
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
+        if u32_at(at)? != 0x02014b50 {
+            return Err(bad("broken central directory"));
+        }
+        let method = u16_at(at + 10)?;
+        let crc = u32_at(at + 16)? as u32;
+        let packed = u32_at(at + 20)?;
+        let size = u32_at(at + 24)?;
+        let (name_len, extra_len, comment_len) = (u16_at(at + 28)?, u16_at(at + 30)?, u16_at(at + 32)?);
+        let local = u32_at(at + 42)?;
+        let name = zip
+            .get(at + 46..at + 46 + name_len)
+            .map(|n| String::from_utf8_lossy(n).into_owned())
+            .ok_or_else(|| bad("cut short"))?;
+        at += 46 + name_len + extra_len + comment_len;
+        if name.ends_with('/') {
+            continue;
+        }
+        let start = local + 30 + u16_at(local + 26)? + u16_at(local + 28)?;
+        let data = zip.get(start..start + packed).ok_or_else(|| bad("cut short"))?;
+        let bytes = match method {
+            0 => data.to_vec(),
+            8 => {
+                let mut bytes = Vec::with_capacity(size);
+                DeflateDecoder::new(data)
+                    .read_to_end(&mut bytes)
+                    .map_err(|e| format!("{name}: {e}"))?;
+                bytes
+            }
+            other => return Err(format!("{name}: compression method {other} is not read")),
+        };
+        if bytes.len() != size || crc32fast::hash(&bytes) != crc {
+            return Err(format!("{name}: its size or checksum is wrong"));
+        }
+        out.push(ApkFile { name, bytes });
+    }
+    Ok(out)
+}
+
+/// How an apk entry is written: stored on a boundary of this many bytes,
+/// or deflated (`None`). Android reads native libraries in place, so they
+/// are stored on 16 KiB pages (`extractNativeLibs="false"`, and the page
+/// size of newer phones); `resources.arsc` must be stored on 4 bytes, as
+/// `zipalign` does it, and so are the asset pack (read in place) and the
+/// PNGs aapt2 already compressed.
+pub fn apk_alignment(name: &str) -> Option<usize> {
+    if name.ends_with(".so") {
+        Some(16384)
+    } else if name == "resources.arsc" || name.ends_with(".pack") || name.ends_with(".png") {
+        Some(4)
+    } else {
+        None
+    }
+}
+
+/// An unsigned apk of `files`, in their order, aligned per
+/// [`apk_alignment`] (padding in the local header's extra field, as
+/// `zipalign` pads), ready for `apksigner`.
+pub fn apk_bytes(files: &[ApkFile]) -> Result<Vec<u8>, String> {
+    let too_big = || "the apk is too big for a zip without zip64 (4 GB or 65535 files)".to_string();
+    let mut out = Vec::new();
+    let mut central = Vec::new();
+    for file in files {
+        let align = apk_alignment(&file.name);
+        let (data, method) = match align {
+            Some(_) => (std::borrow::Cow::Borrowed(&file.bytes[..]), 0u16),
+            None => {
+                let mut encoder = DeflateEncoder::new(Vec::new(), Compression::best());
+                encoder.write_all(&file.bytes).map_err(|e| e.to_string())?;
+                (std::borrow::Cow::Owned(encoder.finish().map_err(|e| e.to_string())?), 8)
+            }
+        };
+        let offset = u32::try_from(out.len()).map_err(|_| too_big())?;
+        let name = file.name.as_bytes();
+        let name_len = u16::try_from(name.len()).map_err(|_| format!("{}: name too long", file.name))?;
+        // Padding: an Android alignment field (0xd935: its boundary, then
+        // zeros) long enough to move the data onto the boundary.
+        let mut extra = Vec::new();
+        if let Some(align) = align {
+            let at = out.len() + 30 + name.len();
+            if at % align != 0 {
+                let mut len = 6;
+                while (at + len) % align != 0 {
+                    len += 1;
+                }
+                extra.extend_from_slice(&0xd935u16.to_le_bytes());
+                extra.extend_from_slice(&((len - 4) as u16).to_le_bytes());
+                extra.extend_from_slice(&(align as u16).to_le_bytes());
+                extra.resize(len, 0);
+            }
+        }
+        let crc = crc32fast::hash(&file.bytes);
+        let packed = u32::try_from(data.len()).map_err(|_| too_big())?;
+        let size = u32::try_from(file.bytes.len()).map_err(|_| too_big())?;
+        let common = |v: &mut Vec<u8>, extra_len: u16| {
+            v.extend_from_slice(&20u16.to_le_bytes()); // version needed: 2.0
+            v.extend_from_slice(&0x0800u16.to_le_bytes()); // names are UTF-8
+            v.extend_from_slice(&method.to_le_bytes());
+            v.extend_from_slice(&0u16.to_le_bytes()); // time 00:00
+            v.extend_from_slice(&ZIP_DATE.to_le_bytes());
+            v.extend_from_slice(&crc.to_le_bytes());
+            v.extend_from_slice(&packed.to_le_bytes());
+            v.extend_from_slice(&size.to_le_bytes());
+            v.extend_from_slice(&name_len.to_le_bytes());
+            v.extend_from_slice(&extra_len.to_le_bytes());
+        };
+        out.extend_from_slice(&0x04034b50u32.to_le_bytes());
+        common(&mut out, extra.len() as u16);
+        out.extend_from_slice(name);
+        out.extend_from_slice(&extra);
+        out.extend_from_slice(&data);
+
+        central.extend_from_slice(&0x02014b50u32.to_le_bytes());
+        central.extend_from_slice(&((3u16 << 8) | 20).to_le_bytes()); // made by: Unix, 2.0
+        common(&mut central, 0);
+        central.extend_from_slice(&0u16.to_le_bytes()); // no comment
+        central.extend_from_slice(&0u16.to_le_bytes()); // disk 0
+        central.extend_from_slice(&0u16.to_le_bytes()); // internal attributes
+        central.extend_from_slice(&((0o100644u32) << 16).to_le_bytes());
+        central.extend_from_slice(&offset.to_le_bytes());
+        central.extend_from_slice(name);
+    }
+    let count = u16::try_from(files.len()).map_err(|_| too_big())?;
+    let start = u32::try_from(out.len()).map_err(|_| too_big())?;
+    let length = u32::try_from(central.len()).map_err(|_| too_big())?;
+    out.extend_from_slice(&central);
+    out.extend_from_slice(&0x06054b50u32.to_le_bytes());
+    out.extend_from_slice(&[0; 4]);
+    out.extend_from_slice(&count.to_le_bytes());
+    out.extend_from_slice(&count.to_le_bytes());
+    out.extend_from_slice(&length.to_le_bytes());
+    out.extend_from_slice(&start.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -505,6 +696,78 @@ mod tests {
             assert!((126..=128).contains(&g) && g == b, "{g} {b}");
         }
         assert!(ios_icons(&png(100, 100)).is_err(), "not an icon size");
+    }
+
+    #[test]
+    fn android_icons_keep_their_alpha_at_each_launcher_density() {
+        let mut source = Vec::new();
+        image::RgbaImage::from_pixel(512, 512, image::Rgba([0, 255, 0, 64]))
+            .write_to(&mut std::io::Cursor::new(&mut source), image::ImageFormat::Png)
+            .unwrap();
+        let icons = android_icons(&source).unwrap();
+        let dirs: Vec<&str> = icons.iter().map(|(d, _)| *d).collect();
+        assert_eq!(
+            dirs,
+            [
+                "mipmap-mdpi",
+                "mipmap-hdpi",
+                "mipmap-xhdpi",
+                "mipmap-xxhdpi",
+                "mipmap-xxxhdpi"
+            ]
+        );
+        for ((_, bytes), size) in icons.iter().zip([48, 72, 96, 144, 192]) {
+            let icon = image::load_from_memory(bytes).unwrap().to_rgba8();
+            assert_eq!(icon.dimensions(), (size, size));
+            assert_eq!(icon.get_pixel(size / 2, size / 2).0, [0, 255, 0, 64]);
+        }
+    }
+
+    #[test]
+    fn an_apk_stores_libraries_on_pages_and_reads_back_what_it_holds() {
+        let files = vec![
+            ApkFile {
+                name: "AndroidManifest.xml".into(),
+                bytes: b"manifest ".repeat(50),
+            },
+            ApkFile {
+                name: "resources.arsc".into(),
+                bytes: vec![7; 333],
+            },
+            ApkFile {
+                name: "lib/arm64-v8a/libmain.so".into(),
+                bytes: vec![1; 5000],
+            },
+            ApkFile {
+                name: "assets/assets.pack".into(),
+                bytes: vec![2; 1001],
+            },
+            ApkFile {
+                name: "assets/THIRD-PARTY-NOTICES.txt".into(),
+                bytes: b"notice ".repeat(80),
+            },
+        ];
+        let apk = apk_bytes(&files).unwrap();
+        assert_eq!(unzip(&apk).unwrap(), files, "every file, in order, unchanged");
+        for (at, file) in [
+            (1, "resources.arsc"),
+            (2, "lib/arm64-v8a/libmain.so"),
+            (3, "assets/assets.pack"),
+        ] {
+            // Find the entry's data through the central directory.
+            let end = apk.len() - 22;
+            let mut entry = le32(&apk, end + 16) as usize;
+            for _ in 0..at {
+                entry += 46 + le16(&apk, entry + 28) + le16(&apk, entry + 30) + le16(&apk, entry + 32);
+            }
+            assert_eq!(le16(&apk, entry + 10), 0, "{file} is stored");
+            let local = le32(&apk, entry + 42) as usize;
+            let data = local + 30 + le16(&apk, local + 26) + le16(&apk, local + 28);
+            assert_eq!(data % apk_alignment(file).unwrap(), 0, "{file} at {data}");
+        }
+        assert_eq!(apk_alignment("lib/x86_64/libmain.so"), Some(16384));
+        assert_eq!(apk_alignment("AndroidManifest.xml"), None, "deflated");
+        assert!(unzip(b"not a zip at all, but long enough to look").is_err());
     }
 
     #[test]

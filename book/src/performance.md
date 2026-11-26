@@ -939,7 +939,10 @@ How to read it:
 - **Bevy is faster at skinned characters**: 3.86 ms against 6.06 ms a frame
   for 1,000 figures of 16 joints with a sun shadow. One of Bevy's three runs
   took 5.51 ms, still under Ponko's fastest. Bevy is the faster engine on
-  this workload.
+  this workload. This row was measured before skinning was batched; see
+  [Skinned characters: where the frame goes](#skinned-characters-where-the-frame-goes)
+  for what changed and the numbers since (the table is measured again on a
+  quiet machine).
 - **Sprites.** Bevy 0.20 draws each `Sprite` as a 2D mesh with a material,
   and equal sprites share one material. One color is therefore Bevy's fast
   path. A different tint for every sprite gives every sprite its own
@@ -994,6 +997,96 @@ features it doesn't use (the inspector, audio, gamepads). The
 The scoreboard compares the Rust APIs. The C and C++ API calls the same
 engine, but it has no rows here: a C or C++ program of these workloads has
 not been written yet.
+
+### Skinned characters: where the frame goes
+
+The skinned-characters row is the `animated` render scene at scale 2.5
+(`PONKO_RENDER_MATCHED=1 PONKO_RENDER_SCALE=2.5 cargo run --release -p
+ponko_bench --features render -- "render/scene animated"`): 1,000 figures
+of three meshes (204 corners each), 16,000 joints posed every frame, 4x
+MSAA, a sun shadow of 4 cascades. Its GPU pass timings and CPU steps, on the
+same Apple M4 Max, measured on a busy machine (1-minute load 27 to 28,
+other jobs compiling; the GPU pass timings move far less with load than
+the CPU steps), median of 300 frames:
+
+| | Before | After |
+|---|---:|---:|
+| GPU: skinning (compute) | 3.79 | 0.06 to 0.08 |
+| GPU: shadow cascades 0 to 3 | 0.02, 0.06, 0.13, 0.11 | 0.02, 0.09, 0.15, 0.14 |
+| GPU: opaque (the camera's skinned draws; no depth prepass when matched) | 1.73 | 2.31 to 2.39 |
+| GPU: post | 0.06 | 0.07 |
+| GPU: all passes | 5.96 | 2.86 to 3.01 |
+| CPU: collect (posing every skeleton, listing the draws) | 0.24 | 0.22 |
+| CPU: prepare (1.02 MB of joint matrices uploaded in at most 16 writes) | 0.40 | 0.34 |
+| CPU: encode (3,770 draws) | 0.99 | 0.31 to 0.38 |
+| Vertex and index buffer changes a frame | 2,862 and 2,847 | 37 and 22 |
+| Frame (CPU, then the wait for the GPU) | 8.17 | 4.04 to 4.27 |
+
+The time went into the compute pass that poses the corners. Ponko skins on
+the GPU before any pass draws, into a vertex buffer the camera and every
+shadow cascade then read, so each corner is skinned once a frame however
+many cascades see it. Until this change, it did so with one dispatch, one
+bind group and one vertex buffer per model: 1,000 dispatches of four
+workgroups each, which the GPU ran one after another (the work itself is a
+few microseconds). Now models of one mesh lie next to each other in shared
+vertex buffers, and one dispatch poses up to 512 of them (3 meshes: 3
+dispatches). The passes draw each model from the shared buffer at its first
+vertex (`base_vertex`), so models of one mesh drawn in a row keep the
+vertex and index buffers bound. The images are the same: every skinning,
+shadow and reference-image render test passes unchanged. The CPU fallback
+(no compute shaders, WebGL2) still poses each model into its own buffer.
+
+The other render scenes, run in turns with the old and the new build: their
+GPU pass totals are within 0.02 ms of each other (`game-like`, which has 80
+walkers, went from 2.05 to 1.99 ms), and the plain `animated` scene (400
+figures, the `high` preset) went from 4.62 to 2.96 ms.
+
+The cascades and the opaque pass got somewhat slower. That is the GPU's
+clock, not the shared buffers. The `post` pass, which draws no skinned
+model, slows by the same fraction (0.055 to 0.071 ms; in an unoptimized
+build, which leaves the GPU idle longer between frames, 0.057 to 0.131 ms
+and the opaque pass 1.9 to 4.3 ms). Before, a 4 ms compute pass ran right
+before them and kept the GPU at its highest clock. Drawing from per-model
+slices of the shared buffer instead of `base_vertex` changes nothing
+(5.17 against 5.18 ms). A quiet machine, which keeps the GPU busier, should
+show less of this.
+
+What Bevy 0.20.1 does for the same scene (`bevy_pbr`'s `render/skin.rs`,
+`skinning.wesl`, `prepass.wesl`):
+
+- **Joint buffers.** One buffer holds every skin's joint matrices
+  (`SkinUniforms`), and a twin holds the last frame's for motion vectors;
+  the two swap every frame, so the last frame's matrices are never uploaded
+  again. Matrices are recomputed only for joints whose transform changed and
+  uploaded with one write of the whole buffer. It is a storage buffer where
+  the device has them, and a uniform buffer with dynamic offsets on WebGL2.
+- **Skinning in the vertex shader.** Nothing is posed ahead of time: the
+  mesh vertex shader (and the prepass shader used for the shadows) blends
+  the four joint matrices of each corner, found through the instance's
+  `current_skin_index`. Every pass skins its corners again: the camera and
+  each of the 4 cascades.
+- **Batching.** With storage buffers, skinned meshes batch like any other
+  mesh: binned by mesh and material, and drawn by GPU preprocessing (a
+  compute pass culls the instances and writes indirect draws). 1,000 figures
+  of 3 meshes are a handful of draws a pass. Only where skins need uniform
+  buffers (WebGL2) does Bevy turn batching off for them
+  (`no_automatic_skin_batching`).
+- **Shadows** use the same prepass pipeline with skinning on, one pass per
+  cascade.
+- **Pipelined rendering** (the tuned table) renders a frame on its own
+  thread while the next one is simulated.
+
+So the two engines trade work differently. Ponko skins each corner once a
+frame and reads the result in every pass, but records one draw per model
+and pass (3,770 draws; encoding them now takes about 0.3 ms). Bevy skins
+each corner in every pass that draws it (5 times here) but draws a crowd
+in a few instanced draws. With the skinning pass down to under 0.1 ms, the
+frame is the opaque pass (about 2.3 ms, 4x MSAA, no depth prepass) and the
+CPU steps (about 1 ms on this busy machine). Bevy reports no GPU pass times
+on Metal, so the two GPUs cannot be compared pass by pass here. Under the
+same load (1-minute load 44 to 55, the scene run in turns), the frame took
+Ponko 4.45 to 4.56 ms and Bevy 6.28 to 12.94 ms (the old Ponko 8.98 to
+16.82 ms). The table above is measured again on a quiet machine.
 
 ### Windows desktop: Ryzen 5 3600, Radeon RX Vega (DirectX 12 and Vulkan)
 

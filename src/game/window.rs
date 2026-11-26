@@ -41,11 +41,23 @@ fn run_window(mut game: Game, setup: Setup<'_>) -> Result<(), Error> {
     #[cfg(target_arch = "wasm32")]
     crate::web::show_panics_in_console();
     connect_hotpatch();
-    #[cfg_attr(not(all(test, windows)), allow(unused_mut))]
+    #[cfg_attr(not(any(target_os = "android", all(test, windows))), allow(unused_mut))]
     let mut builder = EventLoop::<Ready>::with_user_event();
     // Tests run startup on a thread with a small stack (`startup_stack_tests`).
     #[cfg(all(test, windows))]
     winit::platform::windows::EventLoopBuilderExtWindows::with_any_thread(&mut builder, true);
+    // Android: the app android-activity started the game with.
+    #[cfg(target_os = "android")]
+    {
+        use winit::platform::android::EventLoopBuilderExtAndroid;
+        let Some(app) = crate::platform::android::app() else {
+            return Err(Error::new(
+                ErrorKind::Unsupported,
+                "no Android app to run in: package the game with `ponko package --target android`",
+            ));
+        };
+        builder.with_android_app(app.clone());
+    }
     let event_loop = builder.build().map_err(|e| {
         let error = Error::new(ErrorKind::Unsupported, format!("could not start the event loop: {e}"));
         #[cfg(target_arch = "wasm32")]
@@ -93,6 +105,8 @@ fn run_window(mut game: Game, setup: Setup<'_>) -> Result<(), Error> {
         access: None,
         #[cfg(feature = "accessibility")]
         access_gap_until: None,
+        #[cfg(target_os = "android")]
+        android: AndroidFollow::default(),
     };
 
     event_loop.run_app(&mut app).map_err(|e| {
@@ -165,6 +179,16 @@ fn print_mesh_costs(ctx: &Ctx) {
 /// The GPU is ready (with the assets, on the web): setup can run.
 struct Ready(Result<Renderer, Error>);
 
+/// What the window loop follows on Android between frames.
+#[cfg(target_os = "android")]
+#[derive(Default)]
+struct AndroidFollow {
+    /// Frames run, to space out the JNI reads.
+    frames: u32,
+    /// A call rings or is on: the game's sound waits.
+    in_call: bool,
+}
+
 struct App<'s> {
     /// Delivers [`Ready`] from the task that opens the GPU (web builds).
     #[cfg(target_arch = "wasm32")]
@@ -200,6 +224,9 @@ struct App<'s> {
     /// frame may start (see [`ACCESS_GAP`]).
     #[cfg(feature = "accessibility")]
     access_gap_until: Option<Instant>,
+    /// What the engine follows on Android between frames.
+    #[cfg(target_os = "android")]
+    android: AndroidFollow,
     /// Kept for the whole run: dropping it closes the endpoint. The last
     /// field, so it is dropped after `ctx`: a reply `ctx` still holds (a
     /// screenshot waiting for its frame) is let go first, its client is told
@@ -239,7 +266,67 @@ impl App<'_> {
             return false;
         }
         self.ctx.events.send(event);
+        #[cfg(target_os = "android")]
+        self.follow_android_audio();
         true
+    }
+
+    /// Android: the window's insets (system bars, the display cutout, the
+    /// on-screen keyboard), read through JNI, as the safe area and the
+    /// keyboard inset.
+    #[cfg(target_os = "android")]
+    fn follow_android_insets(&mut self) {
+        let Some(window) = &self.window else { return };
+        let Some((edges, keyboard)) = crate::platform::android::window_insets() else {
+            return;
+        };
+        let scale = window.scale_factor() as f32;
+        let [top, right, bottom, left] = edges.map(|px| px as f32 / scale);
+        self.ctx
+            .window
+            .feed_platform_safe_insets(crate::window::SafeInsets::new(top, right, bottom, left));
+        self.ctx.window.feed_keyboard_inset(keyboard as f32 / scale);
+    }
+
+    /// Android: the game's sound has the device while the app is in front
+    /// and no call is on; else the output closes (no stream runs in the
+    /// background). Audio focus follows the session category: every
+    /// category but `Ambient` asks for it, so the player's music pauses.
+    #[cfg(target_os = "android")]
+    fn follow_android_audio(&mut self) {
+        let away = self.ctx.window.suspended();
+        self.ctx.audio.hold_output(away || self.android.in_call);
+        let focus = !away && self.ctx.audio.session_category() != crate::audio::AudioSessionCategory::Ambient;
+        crate::platform::android::audio_focus(focus);
+    }
+
+    /// Android, once a frame: the insets (every frame while the keyboard
+    /// may be open, so it is followed as it slides; else twice a second)
+    /// and the phone's call state (each second).
+    #[cfg(target_os = "android")]
+    fn follow_android(&mut self) {
+        self.android.frames = self.android.frames.wrapping_add(1);
+        if self.ctx.input.ime_allowed()
+            || self.ctx.window.keyboard_inset() > 0.0
+            || self.android.frames.is_multiple_of(30)
+        {
+            self.follow_android_insets();
+        }
+        if self.android.frames.is_multiple_of(60) {
+            let in_call = crate::platform::android::in_call();
+            if in_call != self.android.in_call {
+                self.android.in_call = in_call;
+                eprintln!(
+                    "ponko: {}",
+                    if in_call {
+                        "a call has the audio"
+                    } else {
+                        "the call ended"
+                    }
+                );
+            }
+            self.follow_android_audio();
+        }
     }
 
     /// iOS reports its safe area as the window's inner frame (the outer
@@ -284,6 +371,8 @@ impl App<'_> {
         }
         #[cfg(target_os = "ios")]
         self.follow_ios_keyboard();
+        #[cfg(target_os = "android")]
+        self.follow_android();
 
         if let Some(control) = &self.control {
             control.poll(&mut self.ctx);
@@ -334,6 +423,11 @@ impl App<'_> {
         if self.ctx.quit_requested() || self.ctx.window.close_requested() {
             event_loop.exit();
             return;
+        }
+        // Back that no system canceled: the app leaves, as Android apps do.
+        #[cfg(target_os = "android")]
+        if self.ctx.window.take_back() {
+            crate::platform::android::leave();
         }
         if self.ctx.input.cursor_lock_changed
             && let Some(window) = &self.window
@@ -587,8 +681,13 @@ impl ApplicationHandler<Ready> for App<'_> {
             self.lifecycle(crate::window::WindowEvent::Resumed);
             #[cfg(target_os = "ios")]
             self.follow_ios_insets(&window);
+            #[cfg(target_os = "android")]
+            self.follow_android_insets();
             if let Some(renderer) = &mut self.ctx.gfx.renderer {
                 renderer.surface_event(crate::render::surface_lifecycle::SurfaceEvent::Suspended(false));
+                // Android made a new native surface for the window.
+                #[cfg(target_os = "android")]
+                renderer.restore_window_surface();
                 let size = crate::window::surface_size(&window);
                 renderer.resize(size.width, size.height);
             }
@@ -664,6 +763,11 @@ impl ApplicationHandler<Ready> for App<'_> {
             self.follow_ios_insets(&window);
             crate::platform::ios::watch_keyboard();
         }
+        #[cfg(target_os = "android")]
+        {
+            self.follow_android_insets();
+            self.follow_android_audio();
+        }
         #[cfg(target_arch = "wasm32")]
         crate::input::touch::prepare_canvas(&window);
         let display = event_loop.owned_display_handle();
@@ -735,6 +839,9 @@ impl ApplicationHandler<Ready> for App<'_> {
         let _ = event_loop;
         if let Some(renderer) = &mut self.ctx.gfx.renderer {
             renderer.surface_event(crate::render::surface_lifecycle::SurfaceEvent::Suspended(true));
+            // Its native surface is destroyed once this returns.
+            #[cfg(target_os = "android")]
+            renderer.release_window_surface();
         }
     }
 
@@ -849,6 +956,8 @@ impl ApplicationHandler<Ready> for App<'_> {
                     .feed_platform_safe_insets(crate::window::web_safe_insets(&window));
                 #[cfg(target_os = "ios")]
                 self.follow_ios_insets(&window);
+                #[cfg(target_os = "android")]
+                self.follow_android_insets();
                 window.request_redraw();
             }
 
@@ -877,6 +986,18 @@ impl ApplicationHandler<Ready> for App<'_> {
             }
 
             WindowEvent::Ime(ime) => self.ctx.input.feed_ime(crate::input::ImeEvent::from_winit(ime)),
+            // Android's Back (button or gesture), as winit names it.
+            #[cfg(target_os = "android")]
+            WindowEvent::KeyboardInput { event, .. }
+                if event.logical_key == winit::keyboard::Key::Named(winit::keyboard::NamedKey::BrowserBack) =>
+            {
+                if event.state == ElementState::Pressed && !event.repeat {
+                    let back = crate::window::WindowEvent::BackRequested;
+                    self.ctx.window.feed_event(&back);
+                    self.ctx.events.send(back);
+                    window.request_redraw();
+                }
+            }
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state == ElementState::Pressed
                     && let Some(text) = &event.text

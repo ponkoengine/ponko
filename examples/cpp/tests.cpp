@@ -3980,6 +3980,55 @@ static void gltf_scenes() {
     });
 }
 
+// glTF light units and HDR environments: a file's lights placed with an EV100, one light of our own, and the
+// scene's environment from a panorama, six faces or the studio.
+static std::string flat_hdr(int width, int height) {
+    std::string file = "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y " + std::to_string(height) + " +X " + std::to_string(width) + "\n";
+    for (int i = 0; i < width * height; ++i) file += std::string("\x80\x80\x80\x82", 4);
+    return file;
+}
+
+static void scene_lighting() {
+    ponko::game("c++ scene lighting", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
+        const ponko::transform3d origin = ponko::transform3d_at({0, 0, 0});
+        const std::size_t before = ctx.world().size();
+        const std::vector<ponko::entity> lamps = ctx.light_gltf("levels/courtyard.gltf", origin, 8.0f);
+        CHECK(lamps.size() == 1 && ctx.world().size() == before + 1);
+        CHECK(std::fabs(ctx.world().get<ponko::point_light3d>(lamps[0]).intensity - 2000.0f / (1.2f * 256.0f)) < 0.01f);
+        CHECK(ctx.post().tonemap == 4);
+        CHECK(ctx.has_environment()); // the preview's studio
+        throws_kind([&] { (void)ctx.light_gltf("levels/nowhere.gltf", origin, 8.0f); }, PONKO_ERROR_NOT_FOUND);
+
+        ponko::model_light sun = ponko::model_light_default();
+        CHECK(sun.kind == PONKO_MODEL_LIGHT_POINT);
+        sun.kind = PONKO_MODEL_LIGHT_SUN;
+        sun.sun_intensity = 512.0f;
+        CHECK(!ctx.place_light_exposed(sun, origin, 9.0f)); // the scene's sun spawns nothing
+        CHECK(std::fabs(ctx.lighting().sun_intensity - 512.0f / (1.2f * 512.0f)) < 1e-4f);
+        ponko::model_light lamp = ponko::model_light_default();
+        lamp.point.intensity = 2.0f;
+        const auto placed = ctx.place_light_exposed(lamp, ponko::transform3d_at({10, 0, 0}), 2.0f);
+        CHECK(placed && std::fabs(ctx.world().get<ponko::point_light3d>(*placed).intensity - 2.0f * 683.0f / (1.2f * 4.0f)) < 0.01f);
+
+        ctx.add_asset_source(ponko::memory_source("environments").with("sky.hdr", flat_hdr(4, 2)).with("face.hdr", flat_hdr(2, 2)));
+        ctx.clear_environment();
+        CHECK(!ctx.has_environment());
+        throws_kind([&] { ctx.load_environment("face.hdr"); }, PONKO_ERROR_INVALID); // not 2:1
+        throws_kind([&] { ctx.load_environment("nowhere.hdr"); }, PONKO_ERROR_NOT_FOUND);
+        CHECK(!ctx.has_environment());
+        ctx.load_environment("sky.hdr");
+        CHECK(ctx.has_environment());
+        ctx.clear_environment();
+        ctx.load_environment_cube({"face.hdr", "face.hdr", "face.hdr", "face.hdr", "face.hdr", "face.hdr"});
+        CHECK(ctx.has_environment());
+        throws_kind([&] { ctx.load_environment_cube({"face.hdr", "face.hdr", "sky.hdr", "face.hdr", "face.hdr", "face.hdr"}); },
+                    PONKO_ERROR_INVALID);
+        ctx.clear_environment();
+        ctx.set_studio_environment();
+        CHECK(ctx.has_environment());
+    });
+}
+
 // A terrain file (assets/terrain/bump.json) spawned as a tile with its corner where asked.
 static void terrain_files() {
     ponko::game("c++ terrain files", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
@@ -4350,6 +4399,12 @@ static void safe_area() {
             refused = true;
         }
         CHECK(refused);
+        // Back (Android): the app leaves after the frame unless the game cancels it.
+        CHECK(!ctx.window_back_requested());
+        ctx.window_feed_lifecycle(kind::back_requested);
+        CHECK(ctx.window_back_requested());
+        ctx.window_cancel_back();
+        CHECK(!ctx.window_back_requested());
         CHECK(ctx.window_keyboard_inset() == 0);
         ctx.window_feed_keyboard_inset(301);
         CHECK(ctx.window_keyboard_inset() == 301);
@@ -4687,6 +4742,14 @@ static void versioned_descriptors_retargeting_and_prediction() {
         d.stencil = ponko::stencil_mark(2);
         auto m = ctx.create_material(d);
         ctx.update_material(m, d);
+        // Version 2: a clear coat and a sheen, unlit refused out of range.
+        CHECK(!d.unlit && d.layers.ior == 1.5f && d.layers.clearcoat == 0.0f);
+        d.has_stencil = false;
+        d.layers.clearcoat = 1.0f;
+        d.layers.sheen_color = ponko::colors::white;
+        ctx.update_material(m, d);
+        d.layers.anisotropy = 2.0f;
+        throws_kind([&] { ctx.update_material(m, d); }, PONKO_ERROR_INVALID);
         // A collider and its groups in one call.
         auto world = ctx.world();
         auto e = world.spawn(ponko::transform_at({0, 0}), ponko::fixed_body());
@@ -5991,6 +6054,7 @@ int main() {
     sprite_flips();
     levels_and_tilemaps();
     gltf_scenes();
+    scene_lighting();
     terrain_files();
     abi_version_is_checked();
     declared_access();

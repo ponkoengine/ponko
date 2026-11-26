@@ -1063,6 +1063,87 @@ static void asset_streaming(void) {
     CHECK(ponko_world_free(w) == PONKO_OK);
 }
 
+/* A Radiance HDR image of width x height pixels of one finite color, in `out`; returns its size. */
+static size_t flat_hdr(uint8_t* out, int width, int height) {
+    int n = sprintf((char*)out, "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y %d +X %d\n", height, width);
+    for (int i = 0; i < width * height; ++i) { out[n++] = 128; out[n++] = 128; out[n++] = 128; out[n++] = 130; }
+    return (size_t)n;
+}
+
+/* glTF light units and HDR environments: a file's lights placed with an EV100, one light of our own, and the
+   scene's environment from a panorama, six faces or the studio. */
+static void scene_lighting_setup(PonkoCtx* ctx, void* user) {
+    (void)user;
+    PonkoWorld* w = ponko_ctx_world(ctx);
+    const PonkoTransform3D origin = ponko_transform3d_at((PonkoVec3){0, 0, 0});
+    size_t count = 99, written = 99, before = 0, after = 0;
+    CHECK(ponko_ctx_gltf_local_light_count(ctx, "levels/courtyard.gltf", &count) == PONKO_OK && count == 1);
+    CHECK(ponko_ctx_gltf_local_light_count(ctx, "levels/nowhere.gltf", &count) == PONKO_NOT_FOUND);
+    CHECK(ponko_world_len(w, &before) == PONKO_OK);
+    uint64_t lamps[1] = {0};
+    CHECK(ponko_ctx_light_gltf(ctx, "levels/courtyard.gltf", origin, 8, lamps, 0, &written) == PONKO_INVALID_ARGUMENT);
+    CHECK(ponko_ctx_light_gltf(ctx, "levels/courtyard.gltf", origin, 8, lamps, 1, &written) == PONKO_OK && written == 1);
+    CHECK(ponko_world_len(w, &after) == PONKO_OK && after == before + 1);
+    uint32_t point_id = 0;
+    PonkoPointLight3D lamp;
+    CHECK(ponko_point_light3d_component(w, &point_id) == PONKO_OK);
+    CHECK(ponko_get(w, lamps[0], point_id, &lamp, sizeof lamp) == PONKO_OK);
+    /* 2000 candela, divided by 1.2 * 2^8. */
+    CHECK(fabsf(lamp.intensity - 2000.0f / (1.2f * 256.0f)) < 0.01f && lamp.range == 10);
+    PonkoPost post;
+    CHECK(ponko_ctx_post(ctx, &post) == PONKO_OK && post.tonemap == 4);
+    bool has = false;
+    CHECK(ponko_ctx_has_environment(ctx, &has) == PONKO_OK && has); /* the preview's studio */
+    CHECK(ponko_ctx_light_gltf(ctx, "levels/nowhere.gltf", origin, 8, NULL, 0, &written) == PONKO_NOT_FOUND);
+
+    PonkoModelLight sun = ponko_model_light_default();
+    CHECK(sun.kind == PONKO_MODEL_LIGHT_POINT);
+    sun.kind = PONKO_MODEL_LIGHT_SUN;
+    sun.sun_intensity = 512;
+    uint64_t placed = 7;
+    bool spawned = true;
+    CHECK(ponko_ctx_place_light_exposed(ctx, &sun, origin, 9, &placed, &spawned) == PONKO_OK && !spawned && placed == 0);
+    PonkoLighting lighting;
+    CHECK(ponko_ctx_lighting(ctx, &lighting) == PONKO_OK && fabsf(lighting.sun_intensity - 512.0f / (1.2f * 512.0f)) < 1e-4f);
+    PonkoModelLight spot = ponko_model_light_default();
+    spot.kind = PONKO_MODEL_LIGHT_SPOT;
+    spot.spot = (PonkoSpotLight3D){{1, 1, 1, 1}, 1, 5, .2f, .5f, false, 0};
+    CHECK(ponko_ctx_place_light_exposed(ctx, &spot, origin, 0, &placed, &spawned) == PONKO_OK && spawned && placed != 0);
+    CHECK(ponko_ctx_place_light_exposed(ctx, NULL, origin, 0, &placed, &spawned) == PONKO_INVALID_ARGUMENT);
+
+    uint8_t panorama[256], face[256];
+    size_t panorama_len = flat_hdr(panorama, 4, 2), face_len = flat_hdr(face, 2, 2);
+    PonkoMemorySource* memory = ponko_memory_source_new("environments");
+    CHECK(ponko_memory_source_insert(memory, "sky.hdr", panorama, panorama_len) == PONKO_OK);
+    CHECK(ponko_memory_source_insert(memory, "face.hdr", face, face_len) == PONKO_OK);
+    CHECK(ponko_ctx_add_memory_source(ctx, memory) == PONKO_OK);
+    ponko_memory_source_free(memory);
+    CHECK(ponko_ctx_clear_environment(ctx) == PONKO_OK);
+    CHECK(ponko_ctx_has_environment(ctx, &has) == PONKO_OK && !has);
+    CHECK(ponko_ctx_load_environment(ctx, "face.hdr") == PONKO_INVALID_ARGUMENT); /* not 2:1 */
+    CHECK(ponko_ctx_load_environment(ctx, "nowhere.hdr") == PONKO_NOT_FOUND);
+    CHECK(ponko_ctx_has_environment(ctx, &has) == PONKO_OK && !has);
+    CHECK(ponko_ctx_load_environment(ctx, "sky.hdr") == PONKO_OK);
+    CHECK(ponko_ctx_has_environment(ctx, &has) == PONKO_OK && has);
+    CHECK(ponko_ctx_clear_environment(ctx) == PONKO_OK);
+    const char* faces[6] = {"face.hdr", "face.hdr", "face.hdr", "face.hdr", "face.hdr", "face.hdr"};
+    CHECK(ponko_ctx_load_environment_cube(ctx, faces) == PONKO_OK);
+    CHECK(ponko_ctx_has_environment(ctx, &has) == PONKO_OK && has);
+    faces[2] = "sky.hdr"; /* not the same size */
+    CHECK(ponko_ctx_load_environment_cube(ctx, faces) == PONKO_INVALID_ARGUMENT);
+    CHECK(ponko_ctx_load_environment_cube(ctx, NULL) == PONKO_INVALID_ARGUMENT);
+    CHECK(ponko_ctx_clear_environment(ctx) == PONKO_OK);
+    CHECK(ponko_ctx_set_studio_environment(ctx) == PONKO_OK);
+    CHECK(ponko_ctx_has_environment(ctx, &has) == PONKO_OK && has);
+}
+
+static void scene_lighting(void) {
+    PonkoGame* game = ponko_game_new("scene lighting", 1, 1); CHECK(game);
+    PonkoWorld* w = NULL;
+    CHECK(ponko_game_run_headless(game, 0, scene_lighting_setup, NULL, &w) == PONKO_OK);
+    CHECK(ponko_world_free(w) == PONKO_OK);
+}
+
 static void steam_messages_validation(void) {
     PonkoNetMessages* endpoint = NULL;
     PonkoSteamLobby* lobby = NULL;
@@ -2801,6 +2882,14 @@ static void descriptors_setup(PonkoCtx* ctx, void* user) {
     PonkoMaterial m;
     CHECK(ponko_ctx_create_material_ex(ctx, &d, &m) == PONKO_OK);
     CHECK(ponko_ctx_update_material_ex(ctx, m, &d) == PONKO_OK);
+    /* Version 3: unlit, and a clear coat (out of range refused). */
+    CHECK(!d.unlit && d.layers.ior == 1.5f && d.layers.specular == 1.0f);
+    d.has_stencil = false;
+    d.unlit = true;
+    d.layers.clearcoat = 1.0f;
+    CHECK(ponko_ctx_update_material_ex(ctx, m, &d) == PONKO_OK);
+    d.layers.clearcoat = 2.0f;
+    CHECK(ponko_ctx_update_material_ex(ctx, m, &d) == PONKO_INVALID_ARGUMENT);
     /* Retargeting between two humanoids, the second half the size. */
     static const char* const a[15] = {"Hips", "Spine", "Head", "LeftArm", "LeftForeArm", "LeftHand", "RightArm",
         "RightForeArm", "RightHand", "LeftUpLeg", "LeftLeg", "LeftFoot", "RightUpLeg", "RightLeg", "RightFoot"};
@@ -4259,6 +4348,7 @@ int main(void) {
     terrain_rebuild();
     model_material_overrides();
     asset_streaming();
+    scene_lighting();
     profiling_c();
     animation_graphs();
     crowds();

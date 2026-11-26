@@ -441,6 +441,40 @@ fn the_device_list_and_choice_reach_the_output() {
 }
 
 #[test]
+fn a_held_output_closes_and_its_sounds_go_on_from_where_they_were() {
+    let (mut audio, devices) = devices();
+    let tone = sine(&mut audio, 400.0, 0.4, 4.0);
+    let voice = audio.play_ex(tone, LOOP);
+    let (_, a) = latest(&devices);
+    run(&mut audio, &out_of(&a), 0.5);
+    // The app goes to the background: the output closes.
+    audio.hold_output(true);
+    assert!(audio.backend.output_held());
+    assert_eq!(audio.backend.device_state(), "failed", "no stream while held");
+    // Frames that still run (a call in front) open nothing, and a sound
+    // played meanwhile waits.
+    audio.advance_mixer(1.0 / 60.0);
+    audio.play_ex(tone, LOOP);
+    assert_eq!(devices.lock().unwrap().opened.len(), 1, "nothing opened while held");
+    // Back in front: opened again, the voice from where it was.
+    audio.hold_output(false);
+    assert!(!audio.backend.output_held());
+    assert_eq!(devices.lock().unwrap().opened.len(), 2);
+    let position = audio.backend.voice_position(voice.0).unwrap();
+    assert!((position - 0.5).abs() < 0.05, "from where it was: {position}");
+    let (_, again) = latest(&devices);
+    assert!(
+        amplitude(&run(&mut audio, &out_of(&again), 0.2), 400.0) > 0.35,
+        "heard again"
+    );
+    // Held before anything opened: it stays closed until used.
+    let (mut fresh, devices) = self::devices();
+    fresh.hold_output(true);
+    fresh.hold_output(false);
+    assert!(devices.lock().unwrap().opened.is_empty());
+}
+
+#[test]
 fn a_lost_device_moves_sound_to_the_default_and_back_when_it_returns() {
     let (mut audio, devices) = devices();
     audio.set_output_device(Some("B")).unwrap();

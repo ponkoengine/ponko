@@ -109,6 +109,20 @@ fn defaults_match_the_abi_2_defaults() {
         };
         assert_eq!(m.desc, ponko_material_desc(white));
         assert!(!m.has_stencil);
+        // Version 3: lit, and every layer off.
+        assert!(!m.unlit);
+        let l = m.layers;
+        assert_eq!((l.clearcoat, l.iridescence, l.anisotropy), (0.0, 0.0, 0.0));
+        assert_eq!((l.specular, l.ior, l.iridescence_ior), (1.0, 1.5, 1.3));
+        assert_eq!(l.iridescence_thickness, [100.0, 400.0]);
+        assert!(!l.has_clearcoat_map && !l.has_anisotropy_map);
+        // A version 2 caller's smaller struct: its fields only.
+        let mut v2: PonkoMaterialDescEx = header(2);
+        v2.struct_size = std::mem::offset_of!(PonkoMaterialDescEx, unlit) as u32;
+        v2.unlit = true;
+        assert_eq!(ponko_material_desc_ex_defaults(&mut v2), PONKO_OK);
+        assert_eq!(v2.desc.roughness, 0.6);
+        assert!(v2.unlit, "fields past version 2 are not written");
         assert_eq!(m.stencil, ponko_stencil_default());
         assert!(!m.masked_tint);
 
@@ -233,8 +247,26 @@ unsafe extern "C" fn three_d(ctx: *mut PonkoCtx, user: *mut c_void) {
         (v1.version, v1.struct_size) = (1, offset_of!(PonkoMaterialDescEx, masked_tint) as u32);
         expect!(seen, ponko_ctx_create_material_ex(ctx, &v1, &mut masked), PONKO_OK);
         d.masked_tint = false;
-        let foreign = PonkoMaterial { id: 9999 };
+        // Version 3: unlit, and layers (refused out of range).
         d.has_stencil = false;
+        d.unlit = true;
+        d.layers.clearcoat = 1.0;
+        d.layers.sheen_color = PonkoColor {
+            r: 0.5,
+            g: 0.2,
+            b: 0.2,
+            a: 1.0,
+        };
+        let mut layered = PonkoMaterial::default();
+        expect!(seen, ponko_ctx_create_material_ex(ctx, &d, &mut layered), PONKO_OK);
+        d.layers.ior = 0.5;
+        expect!(
+            seen,
+            ponko_ctx_update_material_ex(ctx, layered, &d),
+            PONKO_INVALID_ARGUMENT
+        );
+        d.layers.ior = 1.5;
+        let foreign = PonkoMaterial { id: 9999 };
         expect!(
             seen,
             ponko_ctx_update_material_ex(ctx, foreign, &d),

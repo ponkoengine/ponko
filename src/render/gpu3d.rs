@@ -2390,6 +2390,49 @@ mod tests {
     }
 
     #[test]
+    fn the_layered_build_is_valid_and_only_it_turns_the_layers_on() {
+        let layered = compose_shader(crate::three::LAYERED_SHADER);
+        check_shader("layered", &layered).unwrap();
+        assert!(layered.contains("const MATERIAL_LAYERS: bool = true;"));
+        // Every other material shader has the layers' code behind a false
+        // constant, which the shader compilers drop.
+        for user in ["", "fn surface(s: Surface) -> Surface { return s; }"] {
+            let plain = compose_shader(user);
+            assert!(plain.contains("const MATERIAL_LAYERS: bool = false;"), "{user}");
+            assert!(!plain.contains("MATERIAL_LAYERS: bool = true"), "{user}");
+        }
+        // The cook's copy of the prelude has them off too.
+        assert!(compose_effect("").contains("const MATERIAL_LAYERS: bool = false;"));
+    }
+
+    #[test]
+    fn material_uniform_matches_shader_layout() {
+        let module = wgpu::naga::front::wgsl::parse_str(&compose_shader("")).unwrap();
+        let (_, ty) = module
+            .types
+            .iter()
+            .find(|(_, t)| t.name.as_deref() == Some("MaterialData"))
+            .unwrap();
+        let wgpu::naga::TypeInner::Struct { members, span } = &ty.inner else {
+            panic!("MaterialData must be a struct");
+        };
+        type U = crate::three::MaterialUniform;
+        assert_eq!(*span as usize, size_of::<U>());
+        for (name, offset) in [
+            ("maps", std::mem::offset_of!(U, maps)),
+            ("custom", std::mem::offset_of!(U, custom)),
+            ("layer_info", std::mem::offset_of!(U, layer_info)),
+            ("layers", std::mem::offset_of!(U, layers)),
+        ] {
+            assert_eq!(
+                members.iter().find(|m| m.name.as_deref() == Some(name)).unwrap().offset as usize,
+                offset,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
     fn compute_passes_compose_into_valid_shaders() {
         let blur = "fn compute(c: Cell) -> vec4<f32> {
             let around = cell_at(c.pixel + vec2<i32>(1, 0)) + cell_at(c.pixel - vec2<i32>(1, 0));

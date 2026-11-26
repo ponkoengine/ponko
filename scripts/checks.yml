@@ -2051,6 +2051,33 @@ jobs:
         local-requires: [xcrun, target:stable/aarch64-apple-ios-sim]
         run: scripts/ios-simulator.sh target/ios-simulator
 
+  # Android (book/src/android.md): the engine and the C library linted for
+  # Android phones (with the NDK's compilers), then the phone check packaged
+  # with `ponko package --target android` and run on an emulated phone that
+  # opens no window: the unit tests, headless, with its window (frames on
+  # the GPU, safe area, audio focus, suspend and resume, rotation, Back) and
+  # with the keyboard open, and a reference game's assets from its apk.
+  # Needs the Android SDK with the NDK, the emulator and a system image (the
+  # guide lists them). What needs a real phone is the guide's verification
+  # matrix.
+  android:
+    local-tags: [test, lint]
+    name: Android (build for phones, the emulator check)
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: aarch64-linux-android
+      - name: Clippy for Android (needs the Android SDK and NDK)
+        local-requires: [env:ANDROID_HOME, target:stable/aarch64-linux-android]
+        run: scripts/android-emulator.sh --clippy
+      - name: The emulator check (needs the Android SDK, NDK, emulator and a system image)
+        local-requires: [env:ANDROID_HOME, target:stable/aarch64-linux-android]
+        run: scripts/android-emulator.sh target/android-emulator
+
   # The reference validation bundles (book/src/validation-bundles.md): the
   # deliberately broken game and the corrected one, run in-process and as a
   # launched game driven through the MCP tools, verified and compared, then
