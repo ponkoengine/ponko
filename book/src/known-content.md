@@ -245,7 +245,7 @@ Overlap and ΔE are after registration; a dash: not drawn.
 | IridescenceSuzanne | skipped: needs `KHR_materials_iridescence` | — | | | not drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)) |
 | IridescentDishWithOlives | yes | differs | 0.51 | 37.1 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)): the jug is missing (file camera) |
 | Lantern | yes | differs | 0.55 | 11.2 | view: the screenshot is from three quarters |
-| LightsPunctualLamp | yes | differs | 0.35 | 28.7 | the bulb lights up; the transmitted shade is missing ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
+| LightsPunctualLamp | yes | differs | 0.35 | 28.6 | the bulb lights up; the transmitted shade is missing ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
 | LightVisibility | skipped: needs `KHR_node_visibility` | — | | | not drawn ([#596](https://github.com/ponkoengine/ponko/issues/596)) |
 | MandarinOrange | yes | matches | 0.91 | 15.6 |  |
 | MaterialsVariantsShoe | yes | differs | 0.56 | 26.0 | view: the screenshot is from the side, above |
