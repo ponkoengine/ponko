@@ -3722,9 +3722,11 @@ impl core::marker::StructuralPartialEq for ponko_ffi::PonkoMaterialDesc
 #[repr(C)] pub struct ponko_ffi::PonkoMaterialDescEx
 pub ponko_ffi::PonkoMaterialDescEx::desc: ponko_ffi::PonkoMaterialDesc
 pub ponko_ffi::PonkoMaterialDescEx::has_stencil: bool
+pub ponko_ffi::PonkoMaterialDescEx::layers: ponko_ffi::PonkoMaterialLayers
 pub ponko_ffi::PonkoMaterialDescEx::masked_tint: bool
 pub ponko_ffi::PonkoMaterialDescEx::stencil: ponko_ffi::PonkoStencil
 pub ponko_ffi::PonkoMaterialDescEx::struct_size: u32
+pub ponko_ffi::PonkoMaterialDescEx::unlit: bool
 pub ponko_ffi::PonkoMaterialDescEx::version: u32
 impl core::clone::Clone for ponko_ffi::PonkoMaterialDescEx
 pub fn ponko_ffi::PonkoMaterialDescEx::clone(&self) -> Self
@@ -3734,6 +3736,48 @@ impl core::fmt::Debug for ponko_ffi::PonkoMaterialDescEx
 pub fn ponko_ffi::PonkoMaterialDescEx::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_ffi::PonkoMaterialDescEx
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoMaterialDescEx
+#[repr(C)] pub struct ponko_ffi::PonkoMaterialLayers
+pub ponko_ffi::PonkoMaterialLayers::anisotropy: f32
+pub ponko_ffi::PonkoMaterialLayers::anisotropy_map: ponko_ffi::PonkoTexture
+pub ponko_ffi::PonkoMaterialLayers::anisotropy_rotation: f32
+pub ponko_ffi::PonkoMaterialLayers::clearcoat: f32
+pub ponko_ffi::PonkoMaterialLayers::clearcoat_map: ponko_ffi::PonkoTexture
+pub ponko_ffi::PonkoMaterialLayers::clearcoat_normal_map: ponko_ffi::PonkoTexture
+pub ponko_ffi::PonkoMaterialLayers::clearcoat_normal_strength: f32
+pub ponko_ffi::PonkoMaterialLayers::clearcoat_roughness: f32
+pub ponko_ffi::PonkoMaterialLayers::clearcoat_roughness_map: ponko_ffi::PonkoTexture
+pub ponko_ffi::PonkoMaterialLayers::has_anisotropy_map: bool
+pub ponko_ffi::PonkoMaterialLayers::has_clearcoat_map: bool
+pub ponko_ffi::PonkoMaterialLayers::has_clearcoat_normal_map: bool
+pub ponko_ffi::PonkoMaterialLayers::has_clearcoat_roughness_map: bool
+pub ponko_ffi::PonkoMaterialLayers::has_iridescence_map: bool
+pub ponko_ffi::PonkoMaterialLayers::has_iridescence_thickness_map: bool
+pub ponko_ffi::PonkoMaterialLayers::has_sheen_color_map: bool
+pub ponko_ffi::PonkoMaterialLayers::has_sheen_roughness_map: bool
+pub ponko_ffi::PonkoMaterialLayers::has_specular_color_map: bool
+pub ponko_ffi::PonkoMaterialLayers::has_specular_map: bool
+pub ponko_ffi::PonkoMaterialLayers::ior: f32
+pub ponko_ffi::PonkoMaterialLayers::iridescence: f32
+pub ponko_ffi::PonkoMaterialLayers::iridescence_ior: f32
+pub ponko_ffi::PonkoMaterialLayers::iridescence_map: ponko_ffi::PonkoTexture
+pub ponko_ffi::PonkoMaterialLayers::iridescence_thickness: [f32; 2]
+pub ponko_ffi::PonkoMaterialLayers::iridescence_thickness_map: ponko_ffi::PonkoTexture
+pub ponko_ffi::PonkoMaterialLayers::sheen_color: ponko_ffi::PonkoColor
+pub ponko_ffi::PonkoMaterialLayers::sheen_color_map: ponko_ffi::PonkoTexture
+pub ponko_ffi::PonkoMaterialLayers::sheen_roughness: f32
+pub ponko_ffi::PonkoMaterialLayers::sheen_roughness_map: ponko_ffi::PonkoTexture
+pub ponko_ffi::PonkoMaterialLayers::specular: f32
+pub ponko_ffi::PonkoMaterialLayers::specular_color: ponko_ffi::PonkoColor
+pub ponko_ffi::PonkoMaterialLayers::specular_color_map: ponko_ffi::PonkoTexture
+pub ponko_ffi::PonkoMaterialLayers::specular_map: ponko_ffi::PonkoTexture
+impl core::clone::Clone for ponko_ffi::PonkoMaterialLayers
+pub fn ponko_ffi::PonkoMaterialLayers::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko_ffi::PonkoMaterialLayers
+pub fn ponko_ffi::PonkoMaterialLayers::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko_ffi::PonkoMaterialLayers
+pub fn ponko_ffi::PonkoMaterialLayers::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoMaterialLayers
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoMaterialLayers
 pub struct ponko_ffi::PonkoMemorySource(_)
 #[repr(C)] pub struct ponko_ffi::PonkoMesh
 pub ponko_ffi::PonkoMesh::id: u32

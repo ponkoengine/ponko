@@ -1304,8 +1304,13 @@ inline bool report_crash(const char* message) {
 // defaults; change the fields you need and pass the struct by reference.
 
 /// A material description that can grow (PonkoMaterialDescEx): `desc` is material_desc, plus a stencil and,
-/// from version 2, masked_tint (the model's colour tints only where the vertex colour's alpha is 1).
+/// from version 2, masked_tint (the model's colour tints only where the vertex colour's alpha is 1); from
+/// version 3, `unlit` and `layers` (a material_layers, all off by default).
 using material_desc_ex = PonkoMaterialDescEx;
+/// Layers over a material's surface (PonkoMaterialLayers, Rust `MaterialLayers`): clear coat, sheen,
+/// specular strength and color, index of refraction, anisotropy and iridescence, each map with its
+/// `has_*` flag. At most two distinct layer images per material, and only with the built-in shader.
+using material_layers = PonkoMaterialLayers;
 /// Navmesh bake settings that can grow (PonkoNavBakeSettingsEx): `settings` is nav_bake_settings.
 using nav_bake_settings_ex = PonkoNavBakeSettingsEx;
 /// Lighting that can grow (PonkoLightingEx): `lighting` is ponko::lighting, plus shadow_sun_size and
