@@ -40,8 +40,8 @@ mod three {
     use super::*;
     use ponko::d3::Camera as Camera3D;
     use ponko::render::{
-        Compute, ComputePass, Effect, GpuBuffer, InstanceBatch, InstanceCell, Material, Mesh, RenderTarget, Shader,
-        TargetCamera, TargetEffect,
+        Compute, ComputePass, Effect, GpuBuffer, InstanceBatch, InstanceCell, Material, Mesh, RenderTarget,
+        ScreenEffect, Shader, TargetCamera, TargetEffect,
     };
     use ponko::terrain::{TerrainTile, TextureArray};
 
@@ -76,7 +76,14 @@ mod three {
         assert_eq!(size_of::<Option<RenderTarget>>(), size_of::<Option<Texture>>());
         // And what holds one is as big as when it held the texture.
         #[allow(dead_code)]
-        struct CameraIntoATexture(Camera3D, Texture, Option<Vec4>);
+        struct CameraIntoATexture(
+            Camera3D,
+            Texture,
+            Option<Vec4>,
+            Option<(Vec3, Vec3)>,
+            Option<Color>,
+            Vec<ScreenEffect>,
+        );
         #[allow(dead_code)]
         struct PassIntoATexture(Compute, Texture, Option<GpuBuffer>, Option<Material>);
         #[allow(dead_code)]
