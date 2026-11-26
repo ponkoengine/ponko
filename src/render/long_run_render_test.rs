@@ -803,7 +803,7 @@ fn offscreen_soak_draws_a_mesh_before_and_after_surface_changes() {
         ctx.scene3d.camera.look_at(Vec3::ZERO);
     }) {
         Ok(world) => world,
-        Err(error) if error.kind() == crate::ErrorKind::Unsupported => {
+        Err(error) if error.kind() == crate::error::ErrorKind::Unsupported => {
             support::skip(error);
             return;
         }
