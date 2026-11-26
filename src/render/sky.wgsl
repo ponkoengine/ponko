@@ -147,10 +147,11 @@ fn drawing_background() -> bool {
 }
 
 // The direction from the camera through the far plane at `uv` (depth 0,
-// reverse-Z).
+// reverse-Z). Kept homogeneous: with an infinite far plane the far point is
+// at infinity (w = 0) and `far.xyz` is the direction itself.
 fn far_dir(uv: vec2<f32>) -> vec3<f32> {
     let far = frame.inv_view_proj * vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
-    return normalize(far.xyz / far.w - frame.camera.xyz);
+    return normalize(far.xyz - frame.camera.xyz * far.w);
 }
 
 // The sky behind everything: where nothing was drawn.

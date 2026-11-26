@@ -19,8 +19,11 @@ fn effect(p: Pixel) -> vec3<f32> {
     let camera = frame.camera.xyz;
     // The ray through this pixel (sky pixels have no position).
     let ndc = vec2<f32>(p.uv.x * 2.0 - 1.0, 1.0 - p.uv.y * 2.0);
-    let mid = frame.inv_view_proj * vec4<f32>(ndc, 0.5, 1.0);
-    let dir = normalize(mid.xyz / mid.w - camera);
+    // Through the far plane (depth 0, reverse-Z): depth 0.5 is only about
+    // two near planes away, too close to the camera for a steady direction
+    // with a small near plane. Homogeneous, for an infinite far plane too.
+    let far = frame.inv_view_proj * vec4<f32>(ndc, 0.0, 1.0);
+    let dir = normalize(far.xyz - camera * far.w);
     let start = camera + dir * 0.1;
     let surface_here = level + water_height(start.xz, t);
     if start.y >= surface_here {

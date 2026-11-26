@@ -14,3 +14,7 @@
   depth 0.5 is about two near planes from the camera, so a centimetre near
   plane far from the origin put the direction tenths of a degree off and
   made it wobble as the camera turned (0.055° off in the new test).
+- The water kit's under-water view builds its view ray through the far plane
+  instead of depth 0.5 (about two near planes from the camera under
+  reverse-Z), so it holds steady with a small near plane; it and the sky's
+  far direction stay homogeneous, so an infinite far plane works too.
