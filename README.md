@@ -227,11 +227,21 @@ AGENTS=1000000 TICKS=600 cargo run --release --example headless
 | [legions](examples/legions/) | 100,000 units on flow fields with spatial-grid targeting, arrows and instanced sprites; recorded battles replay to the same world hash (see [the guide](book/src/legions.md)) |
 | [headless](examples/headless.rs) | Simulation without window or GPU |
 | [coin_dash](examples/coin_dash/) | A small complete game: title, settings (UI scale, rebindable controls), play, pause and result screens, sound, saved best time with recovery from a damaged save, tested headlessly by `tests/coin_dash.rs`, packaged for the desktop and smoke-tested (`scripts/package-coin-dash.py`), and built for the web (see [the guide](book/src/packaging.md)) |
+| [ember_hop](examples/ember_hop/) | A 2D platformer: Tiled levels, prefabs, 2D physics, animated sprite sheets, particles, streamed music and save slots (see [the guide](book/src/ember-hop.md)) |
+| [shard_grove](examples/shard_grove/) | A third-person 3D game: a glTF level with PBR textures, skinned characters on an animation state machine, enemies on a navigation mesh, positional sound and saves (see [the guide](book/src/shard-grove.md)) |
 | [terrain](examples/terrain/main.rs) / [shaders](examples/shaders.rs) | 3D terrain with a water-kit lake, and custom materials |
 | [physics3d](examples/physics3d.rs) / [vehicle](examples/vehicle.rs) | Characters and raycast-wheel vehicles |
 | [C++ examples](examples/cpp) | Native wrapper usage |
 
 ![The battle example: two armies moving around terrain](book/src/images/battle.jpg)
+
+The three reference games, with CC0 art, sound and music by Kenney,
+Quaternius, Poly Haven and OpenGameArt artists (credits in each game's
+`CONTENT-NOTICES.txt`):
+
+| [Coin Dash](book/src/packaging.md) | [Ember Hop](book/src/ember-hop.md) | [Shard Grove](book/src/shard-grove.md) |
+|---|---|---|
+| ![Coin Dash: the player on a grass field among coins](book/src/images/coin-dash.jpg) | ![Ember Hop: the ember spirit in a cave](book/src/images/ember-hop.jpg) | ![Shard Grove: the warden and a crawler in the grove](book/src/images/shard-grove.jpg) |
 
 The browser demo sources are in `web/`; the [web build guide](https://ponko.dev/guide/web.html)
 shows how to build and serve them locally. The [website](https://ponko.dev/) has the

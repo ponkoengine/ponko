@@ -9,13 +9,15 @@
 > also runs in headless Chromium and WebKit on WebGL2.
 
 [`examples/ember_hop`](../../examples/ember_hop)
-is the engine's second reference game. [Coin Dash](packaging.md) draws
-everything in code; Ember Hop is built from the engine's content features:
+is the engine's second reference game. [Coin Dash](packaging.md) is a
+single screen of sprites; Ember Hop is built from the engine's content features:
 levels made in the [Tiled](https://www.mapeditor.org/) map editor, prefabs, a
 scene file, 2D physics, animated sprite sheets, particles, sound files and
 streamed music, a camera that follows the hero, saves in save slots, and the
 keyboard and a gamepad through named actions. It packages with `ponko
 package` and builds for the web, and the list of checks plays it from its package.
+
+![Ember Hop: the ember spirit in the Mossy Hollow, among sparks, a brazier and spikes](images/ember-hop.jpg)
 
 You carry an ember spirit through two caves: collect sparks, burn drips with
 a flare or stomp them, light braziers (each one saves the run) and reach the
@@ -172,7 +174,7 @@ stomps and losses throw short bursts (`ParticleEmitter` with additive
 blending). Sprites animate from sprite sheets (`Animation`); the hero's sheet
 has idle, run, jump and fall frames, and it turns around with
 `Sprite::flip_x`, which mirrors only the picture. Sound
-effects are WAV files loaded with `ctx.audio.load`; the music is an Ogg
+effects are Ogg Vorbis files loaded with `ctx.audio.load`; the music is an Ogg
 Vorbis loop streamed with `ctx.audio.load_stream`.
 
 ## Tests without a window
@@ -245,7 +247,13 @@ at the player's first click or key press ([Audio](audio.md#in-a-browser)).
 
 ## Assets and licenses
 
-Every picture, level, sound and the music were made for this game and are
-under the repository's MIT or Apache-2.0 license, like the code.
-`examples/ember_hop/CONTENT-NOTICES.txt` lists each file, and a test checks
-that the list matches what the package ships.
+The pictures, sounds and music are made by people and dedicated to the
+public domain under CC0 1.0: the tiles and sprites are from Kenney's 1-Bit
+Pack and 1-Bit Platformer Pack, the particles from Kenney's Particle Pack,
+the sound effects from Kenney's sound packs, and the music is "8-Bit Cave
+Loop" by Wolfgang_. The levels, prefabs and title scene were made for this
+game and are under the repository's MIT or Apache-2.0 license, like the
+code. `examples/ember_hop/CONTENT-NOTICES.txt` credits each file (pack,
+author, link, license), the package carries the CC0 text as
+`CC0-1.0.txt`, and a test checks that the list matches what the package
+ships.

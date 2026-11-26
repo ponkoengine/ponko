@@ -14,6 +14,8 @@ controller, enemies on a navigation mesh, positional sound, a sun with
 shadows and point lights, menus and a HUD, a UI panel in the world, quality
 presets, and saves. It packages with `ponko package` and builds for the web.
 
+![Shard Grove: the hooded warden walks past a crawler in the walled grove](images/shard-grove.jpg)
+
 You guide a warden through a walled grove. Six shards are hidden in its
 corners, on a platform and behind broken walls; crawlers patrol the grove and
 chase you when you come close. Their touch costs a heart (three and the run
@@ -52,7 +54,7 @@ window:
 4. `Screens`: the title, pause, settings and end menus and the HUD, built
    once with the [retained UI](ui.md) and shown as the game's `Screen`
    resource says, and the sign over the gate.
-5. `Ambience`: the wind, looping on its own mixer bus.
+5. `Ambience`: the wind and the music, looping on their own mixer bus.
 
 This is the layout of [Ember Hop](ember-hop.md), the 2D reference game; the
 3D parts are below.
@@ -91,7 +93,9 @@ Each warden and crawler gets its own `Animator` (sharing the graph through
 an `Arc`) and a clone of the skeleton; the engine advances the animators in
 the frame's animation step. A crawler's graph has idle, crawl and stunned,
 switched by two booleans. A glTF file's skeleton holds every node of the
-file, so the mesh's own node is the first of the warden's nine joints.
+file: the warden's 86 joints are its armature's bones and the nodes of its
+four meshes. The warden plays its pulse clip at twice its speed
+(`AnimationState::speed`), so the gesture is as quick as the pulse.
 
 ## The warden and the crawlers
 
@@ -124,8 +128,8 @@ still on the pause menu too:
 Each crawler carries an `AudioSource`, a looping hum that is loud close by
 and silent 14 m away ([Audio](audio.md)); the listener follows the camera.
 Shards, the pulse, hits, shrines and the gate play where they happen with
-`play_at`. The wind loops on an `ambience` bus; the volume setting turns
-both buses.
+`play_at`. The wind and the music loop on an `ambience` bus; the volume
+setting turns both buses.
 
 A low sun casts shadows over the grove; each shard and shrine has a point
 light (the shrines' cast shadows where the preset allows), and the gate
@@ -225,7 +229,15 @@ What the game found missing or awkward, and what is not covered yet:
 
 ## Assets and licenses
 
-The level, both characters with their clips and every sound were made for
-this game and are under the repository's MIT or Apache-2.0 license, like the
-code. `examples/shard_grove/CONTENT-NOTICES.txt` lists each file, and a test
-checks that the list matches what the package ships.
+The characters, textures, sounds and music are made by people and
+dedicated to the public domain under CC0 1.0: the warden and the crawler
+are Quaternius' "Hooded Adventurer" and "Crab Enemy" with their animation
+sets; the grove's PBR textures (base color, normal and ambient occlusion /
+roughness / metalness maps) are from Poly Haven by Rob Tuytel, Dimitrios
+Savva and Rico Cilliers; the sound effects are from Kenney's sound packs,
+the wind by IgnasD and the music, "Forest Whisper Theme", by Cleyton
+Kauffman. The grove's geometry was made for this game and is under the
+repository's MIT or Apache-2.0 license, like the code.
+`examples/shard_grove/CONTENT-NOTICES.txt` credits each file (pack, author,
+link, license), the package carries the CC0 text as `CC0-1.0.txt`, and a
+test checks that the list matches what the package ships.
