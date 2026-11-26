@@ -840,7 +840,11 @@ mod tests {
             PonkoMaterialDescEx::len_of(3),
             Some(offset_of!(PonkoMaterialDescEx, layers) + size_of::<PonkoMaterialLayers>())
         );
-        assert_eq!(PonkoMaterialDescEx::len_of(4), None);
+        assert_eq!(
+            PonkoMaterialDescEx::len_of(4),
+            Some(offset_of!(PonkoMaterialDescEx, transmission) + size_of::<PonkoMaterialTransmission>())
+        );
+        assert_eq!(PonkoMaterialDescEx::len_of(5), None);
         assert!(PonkoNavBakeSettingsEx::len_of(1).unwrap() <= size_of::<PonkoNavBakeSettingsEx>());
         assert_eq!(PonkoLightingEx::len_of(2), None);
     }
