@@ -4994,8 +4994,10 @@ pub fn ponko::gfx::Graphics::update_material(&mut self, ponko::render::Material,
 pub fn ponko::gfx::Graphics::warm_render_pipelines(&mut self)
 pub fn ponko::gfx::Graphics::write_animated_morphs(&mut self, &mut ponko_ecs::world::World)
 impl ponko::gfx::Graphics
+pub fn ponko::gfx::Graphics::create_mipmapped_render_target(&mut self, u32, u32) -> ponko::render::RenderTarget
 pub fn ponko::gfx::Graphics::create_render_target(&mut self, u32, u32) -> ponko::render::RenderTarget
 pub fn ponko::gfx::Graphics::is_render_target(&self, ponko::texture::Texture) -> bool
+pub fn ponko::gfx::Graphics::try_create_mipmapped_render_target(&mut self, u32, u32) -> core::result::Result<ponko::render::RenderTarget, ponko::error::Error>
 pub fn ponko::gfx::Graphics::try_create_render_target(&mut self, u32, u32) -> core::result::Result<ponko::render::RenderTarget, ponko::error::Error>
 impl ponko::gfx::Graphics
 pub fn ponko::gfx::Graphics::create_sky_shader(&mut self, &str, &str) -> ponko::render::SkyShader
@@ -14806,14 +14808,20 @@ impl core::fmt::Debug for ponko::render::StreamedLod
 pub fn ponko::render::StreamedLod::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for ponko::render::StreamedLod
 impl ponko_ecs::bundle::Component for ponko::render::StreamedLod
-pub struct ponko::render::TargetCamera
+#[non_exhaustive] pub struct ponko::render::TargetCamera
 pub ponko::render::TargetCamera::camera: ponko::d3::Camera
+pub ponko::render::TargetCamera::clear: core::option::Option<ponko::color::Color>
 pub ponko::render::TargetCamera::clip_plane: core::option::Option<glam::f32::sse2::vec4::Vec4>
+pub ponko::render::TargetCamera::cull_box: core::option::Option<(glam::f32::vec3::Vec3, glam::f32::vec3::Vec3)>
+pub ponko::render::TargetCamera::effects: alloc::vec::Vec<ponko::render::ScreenEffect>
 pub ponko::render::TargetCamera::target: ponko::render::RenderTarget
 impl ponko::render::TargetCamera
 pub fn ponko::render::TargetCamera::new(ponko::d3::Camera, ponko::render::RenderTarget) -> Self
 pub fn ponko::render::TargetCamera::reflection(ponko::d3::Camera, ponko::render::RenderTarget, f32) -> Self
+pub fn ponko::render::TargetCamera::with_clear(self, ponko::color::Color) -> Self
+pub fn ponko::render::TargetCamera::with_cull_box(self, glam::f32::vec3::Vec3, glam::f32::vec3::Vec3) -> Self
 pub fn ponko::render::TargetCamera::with_debug_draw(self, bool) -> Self
+pub fn ponko::render::TargetCamera::with_effect(self, ponko::render::ScreenEffect) -> Self
 pub fn ponko::render::TargetCamera::with_particles(self, bool) -> Self
 impl core::clone::Clone for ponko::render::TargetCamera
 pub fn ponko::render::TargetCamera::clone(&self) -> Self
@@ -14821,7 +14829,6 @@ impl core::cmp::PartialEq for ponko::render::TargetCamera
 pub fn ponko::render::TargetCamera::eq(&self, &Self) -> bool
 impl core::fmt::Debug for ponko::render::TargetCamera
 pub fn ponko::render::TargetCamera::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for ponko::render::TargetCamera
 impl core::marker::StructuralPartialEq for ponko::render::TargetCamera
 pub struct ponko::render::TargetEffect
 pub ponko::render::TargetEffect::effect: ponko::render::Effect
