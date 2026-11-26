@@ -475,6 +475,25 @@ fn a_held_output_closes_and_its_sounds_go_on_from_where_they_were() {
 }
 
 #[test]
+fn a_muted_output_plays_silence_and_everything_else_runs_as_usual() {
+    let (mut audio, devices) = devices();
+    devices.lock().unwrap().muted = true;
+    let tone = sine(&mut audio, 400.0, 0.4, 4.0);
+    let voice = audio.play_ex(tone, LOOP);
+    let (_, a) = latest(&devices);
+    let heard = run(&mut audio, &out_of(&a), 0.5);
+    assert!(amplitude(&heard, 400.0) < 1e-4, "muted: silence");
+    let position = audio.backend.voice_position(voice.0).unwrap();
+    assert!((position - 0.5).abs() < 0.05, "the voice plays on: {position}");
+    // The negative control: the same tone on an output that isn't muted.
+    devices.lock().unwrap().muted = false;
+    audio.hold_output(true);
+    audio.hold_output(false);
+    let (_, b) = latest(&devices);
+    assert!(amplitude(&run(&mut audio, &out_of(&b), 0.2), 400.0) > 0.35, "heard");
+}
+
+#[test]
 fn a_lost_device_moves_sound_to_the_default_and_back_when_it_returns() {
     let (mut audio, devices) = devices();
     audio.set_output_device(Some("B")).unwrap();
