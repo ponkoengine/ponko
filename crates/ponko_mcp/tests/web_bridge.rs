@@ -93,6 +93,37 @@ fn browser_bridge_registers_and_translates_the_existing_control_protocol() {
         .unwrap();
     assert_eq!(reply(step), json!({"id":2,"result":{"queued_ticks":3}}));
 
+    std::thread::scope(|scope| {
+        let client = scope.spawn(|| {
+            let mut mcp = ponko_mcp::Server::new(ponko_mcp::Config {
+                instances_dir: dir.path().to_owned(),
+                logs_dir: dir.path().join("logs"),
+                read_only: false,
+            });
+            mcp.handle(&json!({
+                "jsonrpc": "2.0",
+                "id": 5,
+                "method": "tools/call",
+                "params": { "name": "run_console", "arguments": { "line": "show_paths true" } }
+            }))
+            .unwrap()
+        });
+        let request: Value = serde_json::from_str(browser.read().unwrap().to_text().unwrap()).unwrap();
+        assert_eq!(request["method"], "debug.console.run");
+        assert_eq!(request["params"], json!({"line": "show_paths true"}));
+        browser
+            .send(
+                json!({"id": request["id"], "result": {"output": "true"}})
+                    .to_string()
+                    .into(),
+            )
+            .unwrap();
+        let result = client.join().unwrap();
+        assert_eq!(result["result"]["isError"], false);
+        let answer: Value = serde_json::from_str(result["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(answer, json!({"output": "true"}));
+    });
+
     let shot = call(3, token, "screenshot", json!({"max_size":1}));
     let request: Value = serde_json::from_str(browser.read().unwrap().to_text().unwrap()).unwrap();
     assert_eq!(request, json!({"id":3,"method":"screenshot","params":{"max_size":1}}));

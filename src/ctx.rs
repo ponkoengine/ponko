@@ -223,6 +223,8 @@ pub struct Ctx {
     /// The control methods the game and its plugins added, and the
     /// plugins' names, from the builder.
     pub(crate) extensions: crate::control::GameExtensions,
+    pub(crate) console_registry: crate::console::Registry,
+    pub(crate) console_overlay: crate::console::Overlay,
     /// Where gamepads come from (`Game::gamepad_backend`, or gilrs in a
     /// window; the browser's gamepads on the web), polled in `begin_frame`.
     pub(crate) gamepad_driver: crate::input::backend::GamepadDriver,
@@ -492,6 +494,8 @@ impl Ctx {
             crash: None,
             control_addr: None,
             extensions: crate::control::GameExtensions::default(),
+            console_registry: crate::console::Registry::default(),
+            console_overlay: crate::console::Overlay::default(),
             in_setup: false,
             scene_loads: 0,
             scene_file: None,
