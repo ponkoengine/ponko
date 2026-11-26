@@ -301,6 +301,9 @@ struct RealSockets {
 }
 impl RealSockets {
     fn new(client: &SteamClient) -> Self {
+        // Valve's advice: start the relay network early, so the first
+        // connection doesn't wait for its ping measurements.
+        client.inner.networking_utils().init_relay_network_access();
         Self {
             client: client.clone(),
             listen: None,
