@@ -78,3 +78,52 @@ fn a_model_thumbnail_is_drawn_by_the_renderer_and_kept_on_disk_by_its_content() 
     let _ = std::fs::remove_dir_all(&cache);
     assert_eq!(again, drawn);
 }
+
+/// The studio draws a model in one frame: the thumbnail from a fresh
+/// studio's first frame is the one a later, settled frame of the same
+/// studio makes (nothing is built once per view and missing from the first
+/// frame), and the studio draws one frame for each model it is asked for.
+#[test]
+fn a_model_thumbnail_is_right_after_a_single_frame() {
+    use crate::editor::thumb_studio::Studio;
+    let Some(ctx) = super::render_test_support::offscreen_ctx((64, 64)) else {
+        return;
+    };
+    let gpu = ctx.gfx.renderer.as_ref().unwrap();
+    let dir = std::env::temp_dir().join(format!("ponko-thumb-frames-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let mut studio = Studio::new(gpu);
+    let draw = |studio: &mut Studio, rel: &str, name: &str| {
+        let before = studio.frames_drawn();
+        let thumb = studio
+            .render(&fixtures(), rel, &dir.join(format!("{name}.png")))
+            .unwrap_or_else(|e| panic!("{rel}: {e}"));
+        assert_eq!(studio.frames_drawn() - before, 1, "{rel}: one frame");
+        thumb
+    };
+    let covered = |t: &crate::editor::thumbs::Thumb| {
+        let corner = t.rgba[..4].to_vec();
+        (0..SIZE * SIZE)
+            .filter(|i| apart(&t.rgba[i * 4..i * 4 + 4], &corner) > 24)
+            .count()
+    };
+    for rel in ["grid.glb", "level.glb", "panel.glb", "models/crate.glb"] {
+        let first = draw(&mut studio, rel, "first");
+        let covers = covered(&first);
+        assert!(
+            covers > SIZE * SIZE / 20 && covers < SIZE * SIZE * 9 / 10,
+            "{rel}: the model is on the background after one frame: {covers}"
+        );
+        // Settled: the same studio draws it again, and again the same.
+        let again = draw(&mut studio, rel, "again");
+        assert_eq!(first.rgba, again.rgba, "{rel}: the first frame is the settled picture");
+        // A fresh studio's first frame too (new targets, nothing warm).
+        let fresh = draw(&mut Studio::new(gpu), rel, "fresh");
+        assert_eq!(first.rgba, fresh.rgba, "{rel}: a fresh studio draws the same");
+    }
+    // Negative control: different models make different thumbnails.
+    let grid = draw(&mut studio, "grid.glb", "grid");
+    let level = draw(&mut studio, "level.glb", "level");
+    assert_ne!(grid.rgba, level.rgba);
+    let _ = std::fs::remove_dir_all(&dir);
+}
