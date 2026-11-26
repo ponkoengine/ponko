@@ -1467,6 +1467,18 @@ fn capsule_visible(planes: &[Vec4], a: Vec3, b: Vec3, radius: f32) -> bool {
 mod tests {
 
     #[test]
+    fn a_sphere_touches_a_box_when_its_nearest_point_is_within_reach() {
+        use super::{Vec3, sphere_touches_box};
+        let (min, max) = (Vec3::ZERO, Vec3::ONE);
+        assert!(sphere_touches_box(Vec3::splat(0.5), 0.1, min, max), "inside");
+        assert!(sphere_touches_box(Vec3::new(1.5, 0.5, 0.5), 0.6, min, max), "overlapping a face");
+        assert!(!sphere_touches_box(Vec3::new(1.5, 0.5, 0.5), 0.4, min, max), "short of a face");
+        // Near a corner the box is round-cornered for the test, not square.
+        assert!(!sphere_touches_box(Vec3::splat(1.5), 0.8, min, max), "0.87 from the corner");
+        assert!(sphere_touches_box(Vec3::splat(1.5), 0.9, min, max));
+    }
+
+    #[test]
     fn a_shared_cascade_covers_every_views_slice() {
         let window = glam::Vec2::new(640.0, 360.0);
         let mut a = Camera3D::new(window);

@@ -302,3 +302,44 @@ fn a_plain_render_target_has_one_level() {
         "no levels below the first"
     );
 }
+
+#[test]
+fn compute_passes_and_target_effects_get_a_mipmapped_targets_levels_made_too() {
+    let Some(mut scene) = Scene::new(false) else { return };
+    scene.ctx.scene3d.passes.target_cameras.clear();
+    let field = scene.ctx.gfx.create_mipmapped_render_target(32, 32);
+    let last = |scene: &Scene| {
+        let renderer = scene.ctx.gfx.renderer.as_ref().expect("an offscreen renderer");
+        let (bytes, w, _) = renderer.read_texture_level(field.texture().id, 5).expect("a 1x1 level");
+        assert_eq!(w, 1);
+        let c = |i: usize| half::f16::from_le_bytes([bytes[2 * i], bytes[2 * i + 1]]).to_f32();
+        [c(0), c(1), c(2)]
+    };
+    // A compute pass fills it; the levels follow in the same frame.
+    let fill = scene.ctx.gfx.create_compute(
+        "fill",
+        "fn compute(c: Cell) -> vec4<f32> { return vec4<f32>(select(0.0, 1.0, c.uv.x < 0.5), 0.25, 0.0, 1.0); }",
+    );
+    scene
+        .ctx
+        .scene3d
+        .passes
+        .compute
+        .push(crate::render::ComputePass::new(fill, field));
+    scene.frame();
+    let average = last(&scene);
+    assert!((average[0] - 0.5).abs() < 0.02 && (average[1] - 0.25).abs() < 0.01, "{average:?}");
+    // A target effect writes it instead: the levels follow by the next frame.
+    scene.ctx.scene3d.passes.compute.clear();
+    let blue = scene.ctx.gfx.create_effect("blue", "fn effect(p: Pixel) -> vec3<f32> { return vec3<f32>(0.0, 0.0, 0.75); }");
+    scene
+        .ctx
+        .scene3d
+        .passes
+        .target_effects
+        .push(crate::render::TargetEffect::new(blue, field));
+    scene.frame();
+    scene.frame();
+    let average = last(&scene);
+    assert!(average[0] < 0.01 && (average[2] - 0.75).abs() < 0.02, "the effect's blue: {average:?}");
+}

@@ -1091,7 +1091,12 @@ pub(crate) const FRAME_PASSES: [Pass; 8] = [
             step(
                 "mipmaps",
                 on(F::TARGET_MIPS),
-                &[u(TargetImage, A::Sample), u(TargetMips, A::Color)],
+                &[
+                    u(TargetImage, A::Sample).on(F::TARGET_CAMERAS),
+                    u(ComputeTargets, A::Sample).on(F::TEXTURE_COMPUTE),
+                    u(EffectTargets, A::SamplePrevious).on(F::TARGET_EFFECTS),
+                    u(TargetMips, A::Color),
+                ],
             ),
             step(
                 "probes",
