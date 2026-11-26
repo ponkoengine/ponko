@@ -34,6 +34,7 @@
   ```
   After:
   ```rust
+  # struct Level(&'static str);
   impl Plugin for Level {
       fn build(&self, game: Game) -> Game { game }
       fn name(&self) -> &str { self.0 }

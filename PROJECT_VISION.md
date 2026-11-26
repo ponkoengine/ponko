@@ -128,9 +128,10 @@ inspection and mutation, scenes/prefabs, tick control, logs, screenshots for
 windowed instances, profiling and traces. Reflection and headless execution
 support reproducible checks. See [the tool contracts and examples](book/src/agents.md).
 
-Broader capability discovery, consistent subsystem diagnostics, richer input
-scenario automation, and systematic agent acceptance tests require further
-work. Reliable autonomous development of complete games is an objective, not
+An [agent acceptance suite](book/src/agents.md#the-agent-acceptance-suite)
+scores real tasks done through these tools. Broader capability discovery,
+consistent subsystem diagnostics, richer input scenario automation, and
+acceptance runs with real agents require further work. Reliable autonomous development of complete games is an objective, not
 an existing guarantee. Agent usability must be tested through real tasks,
 actionable errors and reproducible evidence. Use the same public interfaces for
 humans and agents rather than building a separate engine architecture for AI.

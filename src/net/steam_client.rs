@@ -110,13 +110,15 @@ impl SteamClient {
     ///
     /// **Unstable**: its type is the `steamworks` crate's
     /// ([`unstable_steamworks`](super::unstable_steamworks)), whose version
-    /// may change in any Ponko release. Ids pass between the two as `u64`:
-    /// [`SteamLobbyId::raw`] and `LobbyId::from_raw`, [`SteamUserId::raw`]
-    /// and `SteamId::from_raw`.
+    /// may change in any Ponko release. Ids pass between the two with `From`
+    /// (as unstable as this method): [`SteamLobbyId`] and `LobbyId`,
+    /// [`SteamUserId`] and `SteamId`.
     ///
     /// ```no_run
     /// # let client = ponko::net::SteamClient::init_app(480)?;
+    /// # let lobby = ponko::net::SteamLobbyId::from_raw(1);
     /// let stats = client.unstable_steamworks().user_stats();
+    /// let owner: ponko::net::SteamUserId = client.unstable_steamworks().matchmaking().lobby_owner(lobby.into()).into();
     /// # Ok::<(), std::io::Error>(())
     /// ```
     #[must_use]
@@ -178,6 +180,27 @@ macro_rules! steam_id {
             }
             pub(super) fn to_unstable(self) -> $raw {
                 <$raw>::from_raw(self.0)
+            }
+        }
+
+        /// The `steamworks` crate's id, for calls through
+        /// [`SteamClient::unstable_steamworks`].
+        ///
+        /// **Unstable**: the target is the `steamworks` crate's type
+        /// ([`unstable_steamworks`](super::unstable_steamworks)), whose
+        /// version may change in any Ponko release.
+        impl From<$name> for $raw {
+            fn from(id: $name) -> $raw {
+                id.to_unstable()
+            }
+        }
+
+        /// Ponko's id, from one the `steamworks` crate handed out.
+        ///
+        /// **Unstable**, as the conversion the other way.
+        impl From<$raw> for $name {
+            fn from(id: $raw) -> $name {
+                $name::from_unstable(id)
             }
         }
 
@@ -247,6 +270,18 @@ mod tests {
         assert_eq!(SteamUserId::from_unstable(user.to_unstable()), user);
         assert_eq!("76561197960287930".parse(), Ok(user));
         assert!("lobby".parse::<SteamLobbyId>().is_err());
+    }
+
+    #[test]
+    fn ids_convert_to_and_from_the_steamworks_ids() {
+        let lobby = SteamLobbyId::from_raw(109_775_241_090_369_130);
+        let raw: steamworks::LobbyId = lobby.into();
+        assert_eq!(raw.raw(), lobby.raw());
+        assert_eq!(SteamLobbyId::from(raw), lobby);
+        let user = SteamUserId::from_raw(76_561_197_960_287_930);
+        let raw = steamworks::SteamId::from(user);
+        assert_eq!(raw.raw(), user.raw());
+        assert_eq!(SteamUserId::from(raw), user);
     }
 
     #[test]

@@ -10,7 +10,7 @@ fn protocol_describes_every_registered_builtin_without_sampling_instances() {
     #[cfg(feature = "physics")]
     crate::physics::start(&mut ctx, glam::Vec2::ZERO);
     #[cfg(feature = "physics3d")]
-    crate::physics3d::start(&mut ctx, glam::Vec3::ZERO);
+    crate::physics3d_impl::start(&mut ctx, glam::Vec3::ZERO);
     let response = crate::control::handle(&mut ctx, "capabilities", &json!({})).unwrap();
     let components = response["reflection"]["components"].as_array().unwrap();
     for component in components {

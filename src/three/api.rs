@@ -2095,7 +2095,7 @@ impl Ctx {
         {
             // Ragdolls pose their skeletons (after this frame's interpolation);
             // their animators wait, except while blending back.
-            crate::physics3d::pose_ragdolls(&mut self.world, &mut self.physics3d.ragdolls);
+            crate::physics3d_impl::pose_ragdolls(&mut self.world, &mut self.physics3d.ragdolls);
             self.world
                 .query::<(
                     ponko_ecs::Entity,
@@ -2108,7 +2108,7 @@ impl Ctx {
                         if !animator.manual {
                             animator.update(dt, skeleton);
                         }
-                        if crate::physics3d::blend_back(ragdoll, skeleton, dt) {
+                        if crate::physics3d_impl::blend_back(ragdoll, skeleton, dt) {
                             finished.push(e);
                         }
                     }
@@ -2117,7 +2117,7 @@ impl Ctx {
                 .query::<(ponko_ecs::Entity, &mut Skeleton, &mut crate::d3::Ragdoll)>()
                 .filter::<ponko_ecs::Without<super::Animator>>()
                 .for_each(|(e, skeleton, ragdoll)| {
-                    if ragdoll.is_blending() && crate::physics3d::blend_back(ragdoll, skeleton, dt) {
+                    if ragdoll.is_blending() && crate::physics3d_impl::blend_back(ragdoll, skeleton, dt) {
                         finished.push(e);
                     }
                 });

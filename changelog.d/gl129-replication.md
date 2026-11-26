@@ -1,3 +1,28 @@
+### Breaking changes
+- A networked event type that leaves fields out when serializing no longer arrives.
+  Events travel with their fields by position, so the receiver can't tell
+  which field `#[serde(skip_serializing_if = ...)]` left out, and drops the
+  event.
+  Instead: remove the attribute and send the field as it is (an `Option`
+  travels as `None`).
+  Before:
+  ```rust
+  #[derive(serde::Serialize, serde::Deserialize)]
+  struct Hit {
+      target: u32,
+      #[serde(skip_serializing_if = "Option::is_none")]
+      critical: Option<f32>,
+  }
+  ```
+  After:
+  ```rust
+  #[derive(serde::Serialize, serde::Deserialize)]
+  struct Hit {
+      target: u32,
+      critical: Option<f32>,
+  }
+  ```
+
 ### Added
 - `ponko::reflect::WorldHashParts`: `world_hash` part by part (each
   reflected component by name, each resource as `resource:Name`), with
@@ -32,11 +57,6 @@
   instead of 22 to 29. Maps with keys that aren't strings (a
   `HashMap<(u8, u8), u8>`), which JSON refused, now travel. Servers and
   clients of different builds refuse each other on join, as before.
-- **Breaking:** an event type that leaves fields out when serializing
-  (`#[serde(skip_serializing_if = ...)]`) no longer arrives: with fields by
-  position the receiver can't tell them apart and drops the event. Remove
-  the attribute and send the field as it is (an `Option` travels as
-  `None`).
 - Lockstep's desync check hashes the world with the public `world_hash`
   (through `WorldHashParts`), reading components in place, instead of
   making the world's JSON save every check; a `Desync` still names the

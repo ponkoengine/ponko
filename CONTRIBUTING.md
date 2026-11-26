@@ -774,20 +774,30 @@ three kinds of tag, all in the steps below: a release from `main`
 [Release candidates](#release-candidates)), and a patch release from a
 release branch (`v0.1.1` on `release-0.1`, see
 [Patch releases and backports](#patch-releases-and-backports)).
+[scripts/release-0.2.md](scripts/release-0.2.md) is the same procedure as
+one list of commands for the 0.2 cut (rc.1, a week, 0.2.0).
 
 1. Fold the fragments in: `python3 scripts/changelog.py --version X.Y.Z`
    (`--dry-run` shows the result first). If any fragment breaks the API, this
    also writes the migration chapter, `book/src/migrating-to-X.Y.md` (named
    after the minor: `migrating-to-0.2.md` for 0.2.0 and its candidates), from
    the same entries and lists it in `book/src/SUMMARY.md`; read it, then check
-   the book (`mdbook build book`). A patch release may not carry breaking
-   entries. In `CHANGELOG.md`,
+   the book (`mdbook build book`). The entries are grouped by area (`--areas`
+   lists them). For a minor, `python3 scripts/changelog.py --notes X.Y.Z`
+   regenerates the counts and the breaking list of the release page,
+   `book/src/release-X.Y.md`, below its hand-written story, which the fold
+   copies to the top of the CHANGELOG section; `python3 scripts/maturity.py
+   --write` adds the new chapters to the maturity list. A patch release may
+   not carry breaking entries. In `CHANGELOG.md`,
    add a fresh empty `## [Unreleased]` heading above the folded content and
    rename the folded one to `## [X.Y.Z] - YYYY-MM-DD`; point the
    `[Unreleased]` link at `compare/vX.Y.Z...HEAD` and add `[X.Y.Z]` beside it.
    The section becomes the GitHub release's notes, which hold at most
-   125,000 characters: summarize, and keep long lists in the guide.
-2. Set `version = "X.Y.Z"` in the root `Cargo.toml` and in every published
+   125,000 characters: a longer section is cut after its story and breaking
+   changes, with a link to the rest (`release-check.py notes`).
+2. `python3 scripts/release-check.py bump X.Y.Z` does this step and lists the
+   files it changed (`--dry-run` first); then `cargo update --workspace`.
+   Set `version = "X.Y.Z"` in the root `Cargo.toml` and in every published
    `crates/*/Cargo.toml` (`ponko_bench` is `publish = false`), including the
    `version = "..."` requirements the crates put on each other, and refresh
    `Cargo.lock` (`cargo check --workspace`).
@@ -867,14 +877,21 @@ release branch (`v0.1.1` on `release-0.1`, see
       ```sh
       python3 scripts/release-check.py notes vX.Y.Z notes.md
       ls dist   # ponko-vX.Y.Z-{linux,macos}-{x86_64,arm64}.tar.gz, ponko-vX.Y.Z-windows-{x86_64,arm64}.zip
-      gh release create vX.Y.Z dist/ponko-vX.Y.Z-* --title "Ponko X.Y.Z" --notes-file notes.md
+      (cd dist && shasum -a 256 ponko-vX.Y.Z-* > SHA256SUMS)
+      gh release create vX.Y.Z dist/ponko-vX.Y.Z-* dist/SHA256SUMS --title "Ponko X.Y.Z" --notes-file notes.md
       ```
 
       Add `--prerelease` for a candidate (`vX.Y.0-rc.N`).
    5. **Publish the crates**: `cargo publish --workspace`, with a crates.io
       API token of a crate owner (`cargo login`; scope it to publishing these
       crates, and revoke or let it expire afterwards). If it stops halfway,
-      run it again: crates already published are skipped.
+      run it again: crates already published are skipped. Then check, on
+      macOS, Linux and Windows, what a new user gets from crates.io:
+      `python3 scripts/first-run.py X.Y.Z` (installs `ponko_cli`, makes and
+      tests each template against exactly that version, builds the guide's
+      first program). Once per minor, the release-time matrix may run it and
+      the multi-OS checks on hosted runners instead
+      ([scripts/release-0.2.md](scripts/release-0.2.md#release-time-matrix)).
    6. **Redeploy the website** (https://ponko.dev/, which builds the guide
       from `main`; its own repository, `ponkoengine/ponko-website`): retry
       its latest deployment in Cloudflare Pages, or let its next deployment
@@ -993,9 +1010,12 @@ machine the same command runs them.
 ### One-time setup (a maintainer, in settings)
 
 1. **crates.io ownership**: every maintainer who publishes is an owner of
-   each of the six crates `ponko`, `ponko_ecs`, `ponko_ffi`, `ponko_macros`,
-   `ponko_mcp`, `ponko_unity` (and every crate added to the release later;
-   `cargo owner --add <user> <crate>`). Never store a registry token in the
+   each of the ten crates `ponko`, `ponko_aseprite`, `ponko_cli`,
+   `ponko_ecs`, `ponko_ffi`, `ponko_image_diff`, `ponko_lobby`,
+   `ponko_macros`, `ponko_mcp`, `ponko_unity` (and every crate added to the
+   release later; `cargo owner --add <user> <crate>`). A crate's first
+   publish makes only the publishing user its owner: add the others right
+   after it. Never store a registry token in the
    repository or a file.
 2. **GitHub Pages for the web gallery**: repository Settings, Pages,
    Source: "Deploy from a branch", branch `gh-pages`, folder `/` (the build
