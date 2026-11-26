@@ -46,10 +46,11 @@ fn base64(bytes: &[u8]) -> String {
 /// An 8 × 1 texture: black on the left half, white on the right (wide
 /// enough that filtering blurs only the edges between the halves).
 fn halves() -> String {
-    let image = image::RgbaImage::from_fn(8, 1, |x, _| {
-        let v = if x < 4 { 0 } else { 255 };
-        image::Rgba([v, v, v, 255])
-    });
+    two_texels([0, 0, 0, 255], [255; 4])
+}
+
+fn two_texels(left: [u8; 4], right: [u8; 4]) -> String {
+    let image = image::RgbaImage::from_fn(8, 1, |x, _| image::Rgba(if x < 4 { left } else { right }));
     let mut bytes = std::io::Cursor::new(Vec::new());
     image.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
     format!("data:image/png;base64,{}", base64(&bytes.into_inner()))
@@ -209,6 +210,84 @@ fn slid(offset: Option<f32>, du: f32) -> Vec<u8> {
     }))
 }
 
+/// Two maps share the image, with only emissive moved. The move comes
+/// either from an animation pointer or from the mesh's second UV set.
+fn independent_maps(secondary: bool) -> Vec<u8> {
+    let mut bin = Bin::default();
+    let mut primitive = square(&mut bin, 0.0);
+    primitive["material"] = json!(0);
+    let uv1 = bin.floats(&[0.5, 1.0, 1.5, 1.0, 1.5, 0.0, 0.5, 0.0], 2);
+    primitive["attributes"]["TEXCOORD_1"] = json!(uv1);
+    let times = bin.floats(&[0.0, 1.0], 1);
+    let offsets = bin.floats(&[0.0, 0.0, 0.5, 0.0], 2);
+    bin.finish(json!({
+        "extensionsUsed": ["KHR_materials_unlit", "KHR_texture_transform", "KHR_animation_pointer"],
+        "scene": 0,
+        "scenes": [{ "nodes": [0] }],
+        "nodes": [{ "mesh": 0, "translation": [SLIDE, 0.0, 0.0] }],
+        "meshes": [{ "primitives": [primitive] }],
+        "materials": [unlit([1.0, 0.0, 0.0, 1.0], true, json!({
+            "emissiveFactor": [0.0, 1.0, 0.0],
+            "emissiveTexture": { "index": 0, "extensions": { "KHR_texture_transform": {
+                "texCoord": u32::from(secondary), "offset": [0.0, 0.0]
+            } } }
+        }))],
+        "textures": [{ "source": 0, "sampler": 0 }],
+        "samplers": [{ "magFilter": 9728, "minFilter": 9728 }],
+        "images": [{ "uri": halves() }],
+        "animations": [{
+            "samplers": [{ "input": times, "output": offsets }],
+            "channels": [{ "sampler": 0, "target": pointer("/materials/0/emissiveTexture/extensions/KHR_texture_transform/offset") }]
+        }],
+    }))
+}
+
+/// Select one texel of a map, regardless of the mesh's UVs.
+fn at_texel(u: f32) -> Value {
+    json!({ "index": 0, "extensions": { "KHR_texture_transform": { "offset": [u, 0.5], "scale": [0.0, 0.0] } } })
+}
+
+fn square_with_maps(material: Value, image: String) -> Vec<u8> {
+    let mut bin = Bin::default();
+    let mut primitive = square(&mut bin, 0.0);
+    primitive["material"] = json!(0);
+    bin.finish(json!({
+        "extensionsUsed": ["KHR_texture_transform", "KHR_materials_specular"],
+        "scene": 0,
+        "scenes": [{ "nodes": [0] }],
+        "nodes": [{ "mesh": 0, "translation": [SLIDE, 0.0, 0.0] }],
+        "meshes": [{ "primitives": [primitive] }],
+        "materials": [material],
+        "textures": [{ "source": 0 }],
+        "images": [{ "uri": image }],
+    }))
+}
+
+fn specular_maps(color_u: f32, strength_u: f32) -> Vec<u8> {
+    square_with_maps(
+        json!({
+            "pbrMetallicRoughness": {
+                "baseColorFactor": [0.0, 0.0, 0.0, 1.0], "metallicFactor": 0.0, "roughnessFactor": 0.35
+            },
+            "extensions": { "KHR_materials_specular": {
+                "specularFactor": 0.9, "specularTexture": at_texel(strength_u),
+                "specularColorTexture": at_texel(color_u)
+            } }
+        }),
+        two_texels([255, 0, 0, 255], [0, 255, 0, 0]),
+    )
+}
+
+fn orm_maps(mr_u: f32, ao_u: f32, left: [u8; 4], right: [u8; 4]) -> Vec<u8> {
+    square_with_maps(
+        json!({
+            "pbrMetallicRoughness": { "metallicRoughnessTexture": at_texel(mr_u) },
+            "occlusionTexture": at_texel(ao_u)
+        }),
+        two_texels(left, right),
+    )
+}
+
 /// A game drawing offscreen on black, the files in memory, the camera in
 /// front of the squares; colors as they are (no curve, no glow).
 fn scene() -> Option<Ctx> {
@@ -218,7 +297,15 @@ fn scene() -> Option<Ctx> {
             .with("animated.gltf", animated())
             .with("static.gltf", slid(Some(0.5), 0.0))
             .with("plain.gltf", slid(None, 0.0))
-            .with("shifted.gltf", slid(None, 0.5)),
+            .with("shifted.gltf", slid(None, 0.5))
+            .with("independent.gltf", independent_maps(false))
+            .with("secondary.gltf", independent_maps(true))
+            .with("specular-red.gltf", specular_maps(0.25, 0.25))
+            .with("specular-green.gltf", specular_maps(0.75, 0.25))
+            .with("specular-off.gltf", specular_maps(0.25, 0.75))
+            .with("orm.gltf", orm_maps(0.25, 0.75, [0, 255, 0, 255], [255; 4]))
+            .with("orm-control.gltf", orm_maps(0.25, 0.25, [0, 255, 0, 255], [255; 4]))
+            .with("orm-expected.gltf", orm_maps(0.25, 0.25, [255, 255, 0, 255], [255; 4])),
     );
     ctx.scene3d.sky.atmosphere = false;
     ctx.scene3d.lighting.shadows = false;
@@ -243,6 +330,14 @@ enum Pose {
 /// another drawing) and reads the frame back.
 fn draw(file: &str, pose: Pose) -> Option<(image::RgbaImage, Ctx)> {
     let mut ctx = scene()?;
+    if file.starts_with("specular-") {
+        ctx.scene3d.lighting.sun_direction = Vec3::NEG_Z;
+        ctx.scene3d.lighting.sun_intensity = 4.0;
+    }
+    if file.starts_with("orm") {
+        ctx.scene3d.lighting.sun_intensity = 0.0;
+        ctx.scene3d.lighting.ambient_intensity = 1.0;
+    }
     let mesh = ctx.gfx.load_mesh(file);
     let model = ctx.world.spawn((Transform3D::default(), Model::new(mesh)));
     if let Ok(mut skeleton) = ctx.gfx.try_load_skeleton(file) {
@@ -384,4 +479,56 @@ fn a_static_texture_transform_draws_as_moved_texture_coordinates() {
         .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 2))
         .count();
     assert_eq!(different, 0, "pixels that differ from the shifted coordinates'");
+}
+
+#[test]
+fn emissive_moves_independently_of_base_color() {
+    let Some((keyed, ctx)) = draw("independent.gltf", Pose::At(1.0)) else {
+        return;
+    };
+    let (control, _) = draw("independent.gltf", Pose::Unkeyed(1.0)).unwrap();
+    let (secondary, _) = draw("secondary.gltf", Pose::Rest).unwrap();
+    let sides = |image: &image::RgbaImage| {
+        (
+            color(&ctx, image, SLIDE - 0.2, 0.0),
+            color(&ctx, image, SLIDE + 0.2, 0.0),
+        )
+    };
+    let (l, r) = sides(&control);
+    assert!(dark(l) && r[0] > 200.0 && r[1] > 200.0, "shared mapping: {l:?} | {r:?}");
+    for (label, image) in [("animated transform", keyed), ("second UV set", secondary)] {
+        let (l, r) = sides(&image);
+        assert!(l[0] < 30.0 && l[1] > 200.0, "{label}, left: {l:?}");
+        assert!(r[0] > 200.0 && r[1] < 30.0, "{label}, right: {r:?}");
+    }
+}
+
+#[test]
+fn layer_maps_sharing_an_image_can_sample_different_texels() {
+    let Some((red, ctx)) = draw("specular-red.gltf", Pose::Rest) else {
+        return;
+    };
+    let (green, _) = draw("specular-green.gltf", Pose::Rest).unwrap();
+    let (off, _) = draw("specular-off.gltf", Pose::Rest).unwrap();
+    let at = |image: &image::RgbaImage| color(&ctx, image, SLIDE, 0.0);
+    let (red, green, off) = (at(&red), at(&green), at(&off));
+    assert!(red[0] > 50.0 && red[1] < 20.0, "red highlight: {red:?}");
+    assert!(green[1] > 50.0 && green[0] < 20.0, "shifted color map: {green:?}");
+    assert!(dark(off), "shifted strength map: {off:?}");
+}
+
+#[test]
+fn occlusion_samples_its_own_uv_inside_the_packed_orm_image() {
+    let Some((mapped, ctx)) = draw("orm.gltf", Pose::Rest) else {
+        return;
+    };
+    let (control, _) = draw("orm-control.gltf", Pose::Rest).unwrap();
+    let (expected, _) = draw("orm-expected.gltf", Pose::Rest).unwrap();
+    let at = |image: &image::RgbaImage| color(&ctx, image, SLIDE, 0.0);
+    let (mapped, control, expected) = (at(&mapped), at(&control), at(&expected));
+    assert!(mapped[0] > control[0] + 30.0, "AO moved: {mapped:?} | {control:?}");
+    assert!(
+        mapped.iter().zip(expected).all(|(m, e)| (m - e).abs() < 3.0),
+        "MR kept, AO moved: {mapped:?} | {expected:?}"
+    );
 }

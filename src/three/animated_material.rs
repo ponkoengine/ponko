@@ -83,6 +83,9 @@ fn value_of(desc: &MaterialDesc, factors: &MaterialFactors, property: MaterialPr
         MaterialProperty::TextureOffset => xy(desc.texture_transform.offset),
         MaterialProperty::TextureRotation => x(desc.texture_transform.rotation),
         MaterialProperty::TextureScale => xy(desc.texture_transform.scale),
+        MaterialProperty::MapTextureOffset(map) => xy(desc.texture_transform_for(map).offset),
+        MaterialProperty::MapTextureRotation(map) => x(desc.texture_transform_for(map).rotation),
+        MaterialProperty::MapTextureScale(map) => xy(desc.texture_transform_for(map).scale),
         MaterialProperty::Clearcoat => x(layers.clearcoat),
         MaterialProperty::ClearcoatRoughness => x(layers.clearcoat_roughness),
         MaterialProperty::SheenColor => rgb(layers.sheen_color),
@@ -118,6 +121,17 @@ fn set(desc: &mut MaterialDesc, factors: &mut MaterialFactors, property: Materia
         MaterialProperty::TextureOffset => desc.texture_transform.offset = v.truncate().truncate(),
         MaterialProperty::TextureRotation => desc.texture_transform.rotation = v.x,
         MaterialProperty::TextureScale => desc.texture_transform.scale = v.truncate().truncate(),
+        MaterialProperty::MapTextureOffset(map)
+        | MaterialProperty::MapTextureRotation(map)
+        | MaterialProperty::MapTextureScale(map) => {
+            let mut transform = desc.texture_transform_for(map);
+            match property {
+                MaterialProperty::MapTextureOffset(_) => transform.offset = v.truncate().truncate(),
+                MaterialProperty::MapTextureRotation(_) => transform.rotation = v.x,
+                _ => transform.scale = v.truncate().truncate(),
+            }
+            desc.texture_transform_overrides.set(map, Some(transform));
+        }
         MaterialProperty::Clearcoat => layers.clearcoat = unit(v.x),
         MaterialProperty::ClearcoatRoughness => layers.clearcoat_roughness = unit(v.x),
         MaterialProperty::SheenColor => layers.sheen_color = color(v),

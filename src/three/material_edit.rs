@@ -81,6 +81,8 @@ impl Graphics {
                     unlit: m.unlit,
                     layers: m.layers.with_maps(m.layer_maps.map(texture)),
                     texture_transform: m.texture_transform,
+                    texture_transform_overrides: m.texture_transform_overrides,
+                    orm_maps: m.orm_maps,
                     alpha_cutoff: m.alpha_cutoff.max(0.0),
                     ..before
                 };

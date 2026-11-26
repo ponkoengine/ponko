@@ -166,7 +166,7 @@ Overlap and ΔE are after registration; a dash: not drawn.
 | AnimatedCube | yes | matches | 0.79 | 18.6 |  |
 | AnimatedMorphCube | yes | differs | 0.90 | 49.9 | light: lit from the front, the screenshot shows its shaded side mid-morph |
 | AnimatedTriangle | yes | differs | 0.33 | 50.5 | anim: the screenshot shows it turned mid-animation; drawn at rest |
-| AnimationPointerUVs | yes | differs | 0.41 | 31.6 | the file's camera; drawn at rest; the base color and other first-texture transforms play, the other maps' don't: a material has one transform ([#666](https://github.com/ponkoengine/ponko/issues/666)) |
+| AnimationPointerUVs | yes | differs | 0.40 | 28.8 | the file's camera; drawn at rest; each texture uses its own transform |
 | AnisotropyBarnLamp | yes | differs | 0.47 | 19.5 | view; the brushed copper reflects a flat studio sky ([#597](https://github.com/ponkoengine/ponko/issues/597)) |
 | AnisotropyDiscTest | yes | matches | 0.81 | 12.0 |  |
 | AnisotropyRotationTest | yes | differs | 0.64 | 26.8 | environment: the black plastic reflects a flat studio sky, so the stretched highlights stand out less ([#597](https://github.com/ponkoengine/ponko/issues/597)) |
@@ -335,7 +335,7 @@ adapter to `results/pointer/pointer.json`. On an Apple M4 Max (Metal):
 | CubeVisibility | 0.25, 0.75, 1.25 | the blue cube shows, hides, shows | hidden at 0.75: half the model's pixels go (8395 to 4196), mean difference from the control 8.0; shown: identical to it |
 | LightVisibility | 0.25, 0.75, 1.25 | the blue spot light shines, goes out, shines | out at 0.75: less blue, mean difference 1.7; on: identical |
 | AnimatedColorsCube | 0.75, 1.75, 2.75 | the moving cube is green over the green cube, blue over the blue one, red back over the red one | the changed pixels are green, then blue, where the control's are red; red again: identical |
-| AnimationPointerUVs | 0, 3, 6 | the keyed base color transforms (offset, scale, rotation) take their keyed values, and the textures move from time to time where the control's don't | every value exact; the other maps' channels warn ([#666](https://github.com/ponkoengine/ponko/issues/666)) |
+| AnimationPointerUVs | 0, 3, 6 | keyed offset, scale, and rotation for every map agree with the clip, and the textures move where the unkeyed control holds still | all 99 distinct paths play (103 source channels include four duplicates) |
 | PotOfCoalsAnimationPointer | 0, 1, 2 | the heat dome's normal map turns 0, a quarter and half a turn | exact; the dome is clear glass with no specular reflection and a 2 cm volume, so the turn doesn't change the picture |
 
 None of their screenshots matches at any of the times: the screenshots are

@@ -517,13 +517,7 @@ impl Resources {
         textures: &dyn TextureTable,
         shaders: u32,
     ) -> GpuMaterial {
-        let buffer = device
-            .uploading(Upload::Materials)
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("3d material"),
-                contents: bytemuck::bytes_of(&desc.uniform),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
+        let buffer = desc.with_uniform_bytes(|contents| material_buffer(device, contents));
         let bindings = self.material_bindings(desc, textures);
         let bind_group = self.material_bind_group(device, &buffer, &bindings);
         GpuMaterial {
@@ -575,13 +569,24 @@ impl Resources {
         let material = &self.materials[slot];
         self.refractors = self.refractors + usize::from(desc.refracts) - usize::from(material.refracts);
         let changed_blend = material.transparent != desc.transparent;
-        queue
-            .uploading(Upload::Materials)
-            .write_buffer(&material.buffer, 0, bytemuck::bytes_of(&desc.uniform));
-        if !self.material_bindings_match(&material.bindings, desc, textures) {
+        let new_buffer = desc.with_uniform_bytes(|bytes| {
+            if material.buffer.size() == bytes.len() as u64 {
+                queue
+                    .uploading(Upload::Materials)
+                    .write_buffer(&material.buffer, 0, bytes);
+                None
+            } else {
+                Some(material_buffer(device, bytes))
+            }
+        });
+        if new_buffer.is_some() || !self.material_bindings_match(&material.bindings, desc, textures) {
             let bindings = self.material_bindings(desc, textures);
-            let bind_group = self.material_bind_group(device, &material.buffer, &bindings);
+            let bind_group =
+                self.material_bind_group(device, new_buffer.as_ref().unwrap_or(&material.buffer), &bindings);
             let material = &mut self.materials[slot];
+            if let Some(buffer) = new_buffer {
+                material.buffer = buffer;
+            }
             material.bind_group = bind_group;
             material.bindings = bindings;
         }
@@ -907,6 +912,16 @@ pub(super) struct MaterialBindings {
     pub(super) layer: LayerBinding,
     pub(super) textures: [wgpu::Texture; 6],
     pub(super) arrays: [wgpu::TextureView; 3],
+}
+
+fn material_buffer(device: &wgpu::Device, contents: &[u8]) -> wgpu::Buffer {
+    device
+        .uploading(Upload::Materials)
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("3d material"),
+            contents,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        })
 }
 
 /// How a layered material reads its two layer images (custom texture

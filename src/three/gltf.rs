@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 
+use super::OrmMaps;
 use glam::{Mat3, Mat4, Quat, Vec2, Vec3};
 
 use super::gltf_ext::{self, ModelCamera, ModelLight, UvMapping};
@@ -191,6 +192,8 @@ pub(crate) struct LoadedMaterial {
     pub layer_maps: [Option<usize>; super::MAP_KINDS],
     /// `KHR_texture_transform` of the texture its maps follow.
     pub texture_transform: super::TextureTransform,
+    pub texture_transform_overrides: super::TextureTransformOverrides,
+    pub orm_maps: OrmMaps,
     /// glTF's `alphaCutoff` (0.5 by default).
     pub alpha_cutoff: f32,
 }
@@ -216,6 +219,8 @@ impl LoadedMaterial {
             layers: super::MaterialLayers::NONE,
             layer_maps: [None; super::MAP_KINDS],
             texture_transform: super::TextureTransform::IDENTITY,
+            texture_transform_overrides: super::TextureTransformOverrides::default(),
+            orm_maps: OrmMaps::Both,
             alpha_cutoff: 0.5,
         }
     }
@@ -1122,7 +1127,7 @@ fn read_materials(
         let layer_textures = extensions
             .as_ref()
             .map_or([None; super::MAP_KINDS], |e| e.layer_textures);
-        mappings.push(extensions.map_or(UvMapping::PLAIN, |e| e.mapping));
+
         let mut get = |t: Option<gltf::Texture>| match t {
             Some(t) => images.texture(&t, preferred_image, warnings, read).map(Some),
             None => Ok(None),
@@ -1166,6 +1171,22 @@ fn read_materials(
             }
         };
         let label = material.name().unwrap_or("");
+        let mut mapping = UvMapping::PLAIN;
+        let mut texture_transform_overrides = super::TextureTransformOverrides::default();
+        let mut orm_maps = OrmMaps::Both;
+        if let Some(e) = extensions {
+            mapping = e.mapping;
+            orm_maps = e.orm_maps;
+            if shader.is_none() {
+                mapping.set = e.primary_set;
+                texture_transform_overrides = e.overrides;
+            } else if e.overrides != texture_transform_overrides {
+                warnings.push(format!(
+                    "{name}: material {label:?} uses a custom shader; every map follows its first texture's mapping"
+                ));
+            }
+        }
+        mappings.push(mapping);
         if layers.is_on() && shader.is_some() {
             warnings.push(format!(
                 "{name}: material \"{label}\": its layers (clear coat, sheen, ...) are drawn by the \
@@ -1204,9 +1225,9 @@ fn read_materials(
             unlit,
             layers,
             layer_maps,
-            texture_transform: mappings
-                .last()
-                .map_or(super::TextureTransform::IDENTITY, |m| m.transform),
+            texture_transform: mapping.transform,
+            texture_transform_overrides,
+            orm_maps,
             alpha_cutoff: material.alpha_cutoff().unwrap_or(0.5),
         });
     }

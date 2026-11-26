@@ -4771,6 +4771,16 @@ static void versioned_descriptors_retargeting_and_prediction() {
         ctx.update_material(m, d);
         d.transmission.scatter_anisotropy = 2.0f;
         throws_kind([&] { ctx.update_material(m, d); }, PONKO_ERROR_INVALID);
+        // Version 5: a separate texture transform for the emissive map.
+        d = ponko::material_desc_ex_of(ponko::material_of(ponko::colors::white));
+        d.desc.has_emissive_map = true;
+        d.desc.emissive_map = image;
+        auto& uv = d.texture_transform_overrides;
+        uv.transform_mask = 1u << PONKO_TEXTURE_MAP_EMISSIVE;
+        uv.transforms[PONKO_TEXTURE_MAP_EMISSIVE].offset[0] = 0.5f;
+        ctx.update_material(m, d);
+        uv.uv1_mask = 1u << PONKO_TEXTURE_MAP_COUNT;
+        throws_kind([&] { ctx.update_material(m, d); }, PONKO_ERROR_INVALID);
         // A collider and its groups in one call.
         auto world = ctx.world();
         auto e = world.spawn(ponko::transform_at({0, 0}), ponko::fixed_body());

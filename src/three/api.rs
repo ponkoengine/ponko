@@ -5,9 +5,11 @@ use std::ops::Range;
 
 use glam::Vec3;
 
+use super::OrmMaps;
+use super::texture_transforms::{TransformTable, uv_rows};
 use super::{
     AnimationClip, Blend, Material, MaterialDesc, Mesh, MeshData, MeshMorph, MeshSkin, Shader, SharedImage, Skeleton,
-    gltf, linear,
+    TextureMap, gltf, linear,
 };
 use crate::gfx::Graphics;
 use crate::{assets, ctx::Ctx};
@@ -49,8 +51,25 @@ pub(crate) struct MaterialUniform {
     pub uv_transform: [[f32; 4]; 2],
 }
 
-/// The name the layered build of the built-in shader has in messages.
-const LAYERED_SHADER_NAME: &str = "built-in shader with material layers";
+/// Appended only for the multi-mapping built-in shader. The original
+/// matrix is entry zero, so ordinary uniforms keep their original layout.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct MaterialUvUniform {
+    additional: [[[f32; 4]; 2]; 3],
+    /// Two words of two-bit transform indices, then a bit per map for UV1.
+    indices: [u32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct MultiUvMaterialUniform {
+    base: MaterialUniform,
+    uv: MaterialUvUniform,
+}
+
+pub(crate) const MULTI_UV_SHADER: &str = "// ponko: the built-in shader with per-map UVs\n";
+pub(crate) const LAYERED_MULTI_UV_SHADER: &str = "// ponko: the layered built-in shader with per-map UVs\n";
 
 /// A material's textures, in binding order: base color, normal map, ORM
 /// map, emissive map and two for custom shaders. `None`: the default.
@@ -59,6 +78,7 @@ pub(crate) type MaterialTextures = [Option<u32>; 6];
 /// Everything the GPU needs to make or change a material.
 pub(crate) struct GpuMaterialDesc {
     pub uniform: MaterialUniform,
+    uv: Option<MaterialUvUniform>,
     pub textures: MaterialTextures,
     /// Texture arrays for custom shaders, by id (`None`: a white one).
     pub arrays: [Option<u32>; 3],
@@ -152,7 +172,69 @@ impl GpuMaterialDesc {
             ];
             gpu.layered = true;
         }
+        gpu.set_uvs(desc, live);
         gpu
+    }
+
+    fn set_uvs(&mut self, desc: &MaterialDesc, live: &dyn Fn(crate::texture::Texture) -> bool) {
+        use TextureMap as M;
+        if desc.texture_transform_overrides.is_empty() {
+            self.uniform.uv_transform = uv_rows(desc.texture_transform);
+            return;
+        }
+        let core = [
+            desc.texture,
+            desc.emissive_map,
+            desc.normal_map,
+            desc.orm_map,
+            desc.orm_map,
+        ];
+        let mut table = TransformTable::default();
+        let mut indices = [0; 4];
+        for (map, texture) in M::ALL
+            .into_iter()
+            .zip(core.into_iter().chain(desc.layers.maps().map(|(texture, _)| texture)))
+        {
+            let i = map as usize;
+            let present = match map {
+                M::MetallicRoughness => desc.orm_maps != OrmMaps::Occlusion,
+                M::Occlusion => desc.orm_maps != OrmMaps::MetallicRoughness,
+                _ if i >= M::CORE_COUNT => (self.uniform.layer_info[1] >> (2 * (i - M::CORE_COUNT))) & 3 != 0,
+                _ => true,
+            };
+            if !present || !texture.is_some_and(live) {
+                continue;
+            }
+            let entry = table.insert(desc.texture_transform_for(map));
+            indices[i / 16] |= (entry.unwrap_or(0) as u32) << (2 * (i % 16));
+            indices[2] |= u32::from(desc.texture_transform_overrides.uses_uv1(map)) << i;
+        }
+        // If one ORM channel is synthetic, share the present channel's UV.
+        let copy_orm = match desc.orm_maps {
+            OrmMaps::MetallicRoughness => Some((M::MetallicRoughness as u32, M::Occlusion as u32)),
+            OrmMaps::Occlusion => Some((M::Occlusion as u32, M::MetallicRoughness as u32)),
+            OrmMaps::Both => None,
+        };
+        if let Some((source, target)) = copy_orm {
+            indices[0] |= ((indices[0] >> (2 * source)) & 3) << (2 * target);
+            indices[2] |= ((indices[2] >> source) & 1) << target;
+        }
+        table.insert(desc.texture_transform);
+        self.uniform.uv_transform = table.rows(0);
+        if desc.shader.is_none() && (indices[0] != 0 || indices[1] != 0 || indices[2] != 0) {
+            self.uv = Some(MaterialUvUniform {
+                additional: [table.rows(1), table.rows(2), table.rows(3)],
+                indices,
+            });
+        }
+    }
+
+    pub(crate) fn with_uniform_bytes<T>(&self, use_bytes: impl FnOnce(&[u8]) -> T) -> T {
+        if let Some(uv) = self.uv {
+            use_bytes(bytemuck::bytes_of(&MultiUvMaterialUniform { base: self.uniform, uv }))
+        } else {
+            use_bytes(bytemuck::bytes_of(&self.uniform))
+        }
     }
 
     fn base(desc: &MaterialDesc) -> Self {
@@ -175,15 +257,9 @@ impl GpuMaterialDesc {
                     u32::from(desc.masked_tint),
                 ],
                 custom: desc.custom.map(|v| v.to_array()),
-                uv_transform: {
-                    let m = desc.texture_transform.matrix();
-                    [
-                        [m.x_axis.x, m.y_axis.x, m.z_axis.x, 0.0],
-                        [m.x_axis.y, m.y_axis.y, m.z_axis.y, 0.0],
-                    ]
-                },
                 ..MaterialUniform::default()
             },
+            uv: None,
             textures: [
                 id(desc.texture),
                 id(desc.normal_map),
@@ -271,8 +347,8 @@ impl Graphics {
         let id = self.assets3d.material_ids.make("material");
         self.assets3d.materials_live.insert(id);
         self.asset_ledger.made(crate::inventory::AssetClass::Material, id);
-        self.prepare_layers(&desc);
-        let gpu = self.gpu_material(&desc);
+        let mut gpu = self.gpu_material(&desc);
+        self.prepare_material_shader(&mut gpu);
         if let Some(renderer) = self.renderer.as_mut()
             && !self.headless
         {
@@ -342,8 +418,8 @@ impl Graphics {
             sources.material_set(material.id, &desc);
         }
         self.assets3d.material_descs.insert(material.id, desc);
-        self.prepare_layers(&desc);
-        let gpu = self.gpu_material(&desc);
+        let mut gpu = self.gpu_material(&desc);
+        self.prepare_material_shader(&mut gpu);
         if let Some(renderer) = self.renderer.as_mut()
             && !self.headless
         {
@@ -360,10 +436,15 @@ impl Graphics {
         if desc.shader.is_some_and(|s| !self.assets3d.shaders_live.contains(s.id)) {
             gpu.shader = 0;
         }
-        // Layers draw with the layered build of the built-in shader (see
-        // `prepare_layers`); without it they don't show.
-        if gpu.layered {
-            gpu.shader = self.assets3d.layered_shader.unwrap_or(0);
+        let cached = if gpu.uv.is_some() {
+            self.assets3d.multi_uv_shaders[usize::from(gpu.layered)]
+        } else if gpu.layered {
+            self.assets3d.layered_shader
+        } else {
+            None
+        };
+        if let Some(slot) = cached {
+            gpu.shader = slot;
         }
         for (slot, texture) in gpu.textures.iter_mut().enumerate() {
             if texture.is_some_and(freed) {
@@ -502,7 +583,11 @@ impl Graphics {
                 ),
             ));
         }
-        if !(desc.texture_transform.is_finite() && desc.alpha_cutoff.is_finite() && desc.alpha_cutoff >= 0.0) {
+        if !(desc.texture_transform.is_finite()
+            && desc.texture_transform_overrides.is_finite()
+            && desc.alpha_cutoff.is_finite()
+            && desc.alpha_cutoff >= 0.0)
+        {
             return Err(Error::new(
                 ErrorKind::Invalid,
                 format!(
@@ -561,10 +646,28 @@ impl Graphics {
         Ok(())
     }
 
-    /// Makes the layered build of the built-in shader the first time a
-    /// material with layers needs it (see [`MaterialLayers`](super::MaterialLayers)).
-    fn prepare_layers(&mut self, desc: &MaterialDesc) {
-        if self.assets3d.layered_shader.is_some() || !desc.layers.is_on() || desc.shader.is_some() {
+    /// Makes a specialized built-in shader when a material first needs it.
+    fn prepare_material_shader(&mut self, gpu: &mut GpuMaterialDesc) {
+        let (cached, name, source) = match (gpu.layered, gpu.uv.is_some()) {
+            (false, false) => return,
+            (true, false) => (
+                &mut self.assets3d.layered_shader,
+                "built-in shader with material layers",
+                super::LAYERED_SHADER,
+            ),
+            (false, true) => (
+                &mut self.assets3d.multi_uv_shaders[0],
+                "built-in shader with per-map UVs",
+                MULTI_UV_SHADER,
+            ),
+            (true, true) => (
+                &mut self.assets3d.multi_uv_shaders[1],
+                "layered built-in shader with per-map UVs",
+                LAYERED_MULTI_UV_SHADER,
+            ),
+        };
+        if let Some(slot) = *cached {
+            gpu.shader = slot;
             return;
         }
         // A handle of its own, which no game holds: never freed or reloaded.
@@ -572,13 +675,14 @@ impl Graphics {
         let slot = (id & INDEX_MASK) + 1;
         if let Some(renderer) = self.renderer.as_mut()
             && !self.headless
-            && let Err(e) = renderer.create_shader(slot, LAYERED_SHADER_NAME, super::LAYERED_SHADER)
+            && let Err(e) = renderer.create_shader(slot, name, source)
         {
-            // Only an engine bug gets here: the layers don't show.
-            super::gltf_ext::warn(&format!("material layers aren't drawn: {e}"));
+            super::gltf_ext::warn(&format!("{name} couldn't be compiled: {e}"));
+            gpu.uv = None;
             return;
         }
-        self.assets3d.layered_shader = Some(slot);
+        *cached = Some(slot);
+        gpu.shader = slot;
     }
 
     /// Loads a material shader (WGSL) from an [added asset
@@ -1605,6 +1709,8 @@ impl Graphics {
                     unlit: m.unlit,
                     layers: m.layers.with_maps(m.layer_maps.map(texture)),
                     texture_transform: m.texture_transform,
+                    texture_transform_overrides: m.texture_transform_overrides,
+                    orm_maps: m.orm_maps,
                     alpha_cutoff: m.alpha_cutoff.max(0.0),
                     ..Default::default()
                 };
@@ -2802,5 +2908,39 @@ mod clip_tests {
     fn missing_named_clip_panics_with_available_names() {
         let (mut ctx, path) = cached_clips();
         ctx.gfx.load_clip(&path, "run");
+    }
+}
+
+#[cfg(test)]
+mod texture_uv_tests {
+    use super::*;
+    use crate::texture::Texture;
+    use glam::Vec2;
+
+    #[test]
+    fn gpu_uniform_extends_only_for_independent_mappings() {
+        let image = Some(Texture::new(1, 1, 1));
+        let shared = MaterialDesc::default()
+            .with_texture(image)
+            .with_emissive_map(image)
+            .with_normal_map(image)
+            .with_orm_map(image);
+        let gpu = GpuMaterialDesc::new(&shared);
+        assert_eq!(gpu.with_uniform_bytes(|bytes| bytes.len()), 320);
+
+        let mut separate = shared;
+        for (i, map) in TextureMap::ALL.into_iter().skip(1).take(4).enumerate() {
+            separate = separate.with_map_texture_transform(
+                map,
+                super::super::TextureTransform::IDENTITY.with_offset(Vec2::new((i + 1) as f32, 0.0)),
+            );
+        }
+        let gpu = GpuMaterialDesc::new(&separate);
+        assert_eq!(gpu.with_uniform_bytes(|bytes| bytes.len()), 432);
+        let uv = gpu.uv.unwrap();
+        let entry = |map: TextureMap| (uv.indices[0] >> (2 * map as u32)) & 3;
+        assert_eq!(entry(TextureMap::MetallicRoughness), 3);
+        assert_eq!(entry(TextureMap::Occlusion), 0);
+        assert_eq!(gpu.uniform.uv_transform[0], [1.0, 0.0, 0.0, 0.0]);
     }
 }
