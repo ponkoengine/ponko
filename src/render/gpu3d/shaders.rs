@@ -708,7 +708,18 @@ impl Pipelines {
 }
 
 /// The built-in parts of every material shader.
-pub(super) const MESH_PRELUDE: &str = concat!(include_str!("../sky_sampling.wgsl"), "\n", include_str!("../mesh.wgsl"));
+pub(super) const MESH_PRELUDE: &str = concat!(
+    include_str!("../sky_sampling.wgsl"),
+    "\n",
+    include_str!("../mesh.wgsl"),
+    "\n",
+    include_str!("../material_layers.wgsl")
+);
+
+/// The line of [`MESH_PRELUDE`] that turns the material layers' code off,
+/// and what the layered build of the built-in shader has instead.
+const LAYERS_OFF: &str = "const MATERIAL_LAYERS: bool = false;";
+const LAYERS_ON: &str = "const MATERIAL_LAYERS: bool = true;";
 
 pub(super) const MESH_MAIN: &str = include_str!("../mesh_main.wgsl");
 
@@ -844,7 +855,13 @@ pub(super) fn compose_material(user: &str, decals: bool, gi: bool) -> String {
     let mut source = String::with_capacity(
         MESH_PRELUDE.len() + decal_code.len() + gi_code.len() + baked_code.len() + user.len() + MESH_MAIN.len() + 200,
     );
-    source.push_str(MESH_PRELUDE);
+    // The layered build of the built-in shader (`MaterialLayers`): the
+    // same, with the layers' code on.
+    if user == crate::three::LAYERED_SHADER {
+        source.push_str(&MESH_PRELUDE.replacen(LAYERS_OFF, LAYERS_ON, 1));
+    } else {
+        source.push_str(MESH_PRELUDE);
+    }
     source.push_str("@group(3) @binding(0) var<storage, read> items: array<vec4<f32>>;\n@group(3) @binding(1) var<storage, read> static_indices: array<u32>;\n");
     source.push_str(super::vertex_motion::ITEM_HELPER);
     source.push_str(decal_code);

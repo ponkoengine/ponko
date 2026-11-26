@@ -16,7 +16,7 @@
 use glam::{Mat3, Mat4, Vec2, Vec3};
 use serde_json::Value;
 
-use super::{PointLight3D, SpotLight3D, Transform3D};
+use super::{MAP_KINDS, MaterialLayers, PointLight3D, SpotLight3D, Transform3D};
 use crate::color::Color;
 
 /// Whether this build decompresses meshopt views (the C++ decoder isn't
@@ -31,6 +31,9 @@ enum Support {
     Always,
     /// Read when the named cargo feature is on.
     Feature(&'static str, bool),
+    /// Not read, but what it changes is drawn close enough without it: a
+    /// file that requires it loads, with a warning saying what is lost.
+    Approximated,
 }
 
 /// The extensions the loader reads, and when.
@@ -41,6 +44,14 @@ fn support(extension: &str) -> Option<Support> {
         | "KHR_materials_emissive_strength"
         | "KHR_mesh_quantization"
         | "KHR_materials_transmission"
+        | "KHR_materials_unlit"
+        | "KHR_materials_clearcoat"
+        | "KHR_materials_sheen"
+        | "KHR_materials_specular"
+        | "KHR_materials_ior"
+        | "KHR_materials_anisotropy"
+        | "KHR_materials_iridescence"
+        | "KHR_node_visibility"
         | SPECULAR_GLOSSINESS
         | INSTANCING
         | QUANTIZED_POSITIONS => Support::Always,
@@ -52,6 +63,8 @@ fn support(extension: &str) -> Option<Support> {
         "EXT_texture_webp" => Support::Feature("image-webp", cfg!(feature = "image-webp")),
         // DDS images of BCn blocks, as the KTX2 ones upload.
         "MSFT_texture_dds" => Support::Feature("compressed-textures", cfg!(feature = "compressed-textures")),
+        // Thickness and absorption of what transmission lets through.
+        "KHR_materials_volume" => Support::Approximated,
         _ => return None,
     })
 }
@@ -60,14 +73,7 @@ fn support(extension: &str) -> Option<Support> {
 /// without them (for the warning).
 fn ignored_because(extension: &str) -> &'static str {
     match extension {
-        "KHR_materials_clearcoat" => "the renderer has no clear coat layer; the base material shows",
-        "KHR_materials_ior" | "KHR_materials_volume" => {
-            "transmission is drawn as see-through blending, without refraction"
-        }
-        "KHR_materials_sheen" | "KHR_materials_specular" | "KHR_materials_iridescence" | "KHR_materials_anisotropy" => {
-            "the renderer has no such layer; the base material shows"
-        }
-        "KHR_materials_unlit" => "the material is lit like any other",
+        "KHR_materials_volume" => "transmission is drawn as see-through blending, without refraction or absorption",
         "KHR_draco_mesh_compression" => "Draco compressed meshes aren't read",
         _ => "the file loads as if it weren't there",
     }
@@ -157,6 +163,10 @@ impl Start {
         for extension in &required {
             match support(extension) {
                 Some(Support::Always | Support::Feature(_, true)) => {}
+                Some(Support::Approximated) => warnings.push(format!(
+                    "{name}: approximates the glTF extension {extension} it needs: {}",
+                    ignored_because(extension)
+                )),
                 Some(Support::Feature(feature, false)) => {
                     return Err(format!(
                         "{name}: needs the glTF extension {extension}, which this build of ponko doesn't read: \
@@ -181,7 +191,7 @@ impl Start {
                     "{name}: uses the glTF extension {extension} without the `{feature}` cargo feature; \
                      its uncompressed fallback loads instead"
                 )),
-                None => warnings.push(format!(
+                Some(Support::Approximated) | None => warnings.push(format!(
                     "{name}: ignores the optional glTF extension {extension}: {}",
                     ignored_because(&extension)
                 )),
@@ -980,6 +990,95 @@ pub(super) struct MaterialExtensions {
     pub emissive_strength: f32,
     /// `KHR_materials_transmission`'s factor: how much light passes through.
     pub transmission: f32,
+    /// `KHR_materials_unlit`: drawn without lighting.
+    pub unlit: bool,
+    /// Clear coat, sheen, specular, index of refraction, anisotropy and
+    /// iridescence (`KHR_materials_*`), without their maps.
+    pub layers: MaterialLayers,
+    /// The layers' maps, as the file's texture indices, in the shader's
+    /// order ([`MapKind`](super::MapKind)).
+    pub layer_textures: [Option<usize>; MAP_KINDS],
+}
+
+/// The texture infos of a material's layer maps (in the shader's order),
+/// and which extension's which field each is.
+fn layer_texture_infos(material: &Value) -> [&Value; MAP_KINDS] {
+    let ext = |name: &str, field: &str| extension(material, name).map_or(&Value::Null, |e| &e[field]);
+    [
+        ext("KHR_materials_clearcoat", "clearcoatTexture"),
+        ext("KHR_materials_clearcoat", "clearcoatRoughnessTexture"),
+        ext("KHR_materials_clearcoat", "clearcoatNormalTexture"),
+        ext("KHR_materials_sheen", "sheenColorTexture"),
+        ext("KHR_materials_sheen", "sheenRoughnessTexture"),
+        ext("KHR_materials_specular", "specularTexture"),
+        ext("KHR_materials_specular", "specularColorTexture"),
+        ext("KHR_materials_anisotropy", "anisotropyTexture"),
+        ext("KHR_materials_iridescence", "iridescenceTexture"),
+        ext("KHR_materials_iridescence", "iridescenceThicknessTexture"),
+    ]
+}
+
+/// A number field of an extension object, or `otherwise`.
+fn number(e: Option<&Value>, field: &str, otherwise: f32) -> f32 {
+    e.and_then(|e| e[field].as_f64()).map_or(otherwise, |v| v as f32)
+}
+
+/// A linear RGB field as an sRGB color (glTF's factors are linear).
+fn linear_rgb(e: Option<&Value>, field: &str, otherwise: [f32; 3]) -> Color {
+    let v = e.map_or(&Value::Null, |e| &e[field]);
+    let c = |i: usize| {
+        v.get(i)
+            .and_then(Value::as_f64)
+            .map_or(otherwise[i], |c| c as f32)
+            .max(0.0)
+    };
+    let srgb = super::gltf::to_srgb;
+    Color::rgb(srgb(c(0)), srgb(c(1)), srgb(c(2)))
+}
+
+/// Material `material`'s layers (`KHR_materials_clearcoat`, `_sheen`,
+/// `_specular`, `_ior`, `_anisotropy`, `_iridescence`), each value clamped
+/// to what the renderer takes.
+fn layers_of(material: &Value) -> MaterialLayers {
+    let clearcoat = extension(material, "KHR_materials_clearcoat");
+    let sheen = extension(material, "KHR_materials_sheen");
+    let specular = extension(material, "KHR_materials_specular");
+    let ior = extension(material, "KHR_materials_ior");
+    let anisotropy = extension(material, "KHR_materials_anisotropy");
+    let iridescence = extension(material, "KHR_materials_iridescence");
+    let unit = |v: f32| v.clamp(0.0, 1.0);
+    let mut layers = MaterialLayers::NONE
+        .with_clearcoat(
+            unit(number(clearcoat, "clearcoatFactor", 0.0)),
+            unit(number(clearcoat, "clearcoatRoughnessFactor", 0.0)),
+        )
+        .with_sheen(
+            linear_rgb(sheen, "sheenColorFactor", [0.0; 3]),
+            unit(number(sheen, "sheenRoughnessFactor", 0.0)),
+        )
+        .with_specular(
+            unit(number(specular, "specularFactor", 1.0)),
+            linear_rgb(specular, "specularColorFactor", [1.0; 3]),
+        )
+        // An index of refraction of 0 (allowed by the schema) is drawn as 1.
+        .with_ior(number(ior, "ior", 1.5).max(1.0))
+        .with_anisotropy(
+            number(anisotropy, "anisotropyStrength", 0.0).clamp(-1.0, 1.0),
+            number(anisotropy, "anisotropyRotation", 0.0),
+        );
+    if let Some(n) = clearcoat
+        .map(|c| &c["clearcoatNormalTexture"])
+        .filter(|n| n.is_object())
+    {
+        layers.clearcoat_normal_strength = n["scale"].as_f64().map_or(1.0, |s| s as f32);
+    }
+    layers.iridescence = unit(number(iridescence, "iridescenceFactor", 0.0));
+    layers.iridescence_ior = number(iridescence, "iridescenceIor", 1.3).max(1.0);
+    layers.iridescence_thickness = [
+        number(iridescence, "iridescenceThicknessMinimum", 100.0).max(0.0),
+        number(iridescence, "iridescenceThicknessMaximum", 400.0).max(0.0),
+    ];
+    layers
 }
 
 /// Reads material `index`'s extensions; warns (into `warnings`) when its
@@ -994,14 +1093,20 @@ pub(super) fn material_extensions(
     let material = &json["materials"][index];
     let pbr = &material["pbrMetallicRoughness"];
     // The base color's mapping wins: it's what shows most.
-    let infos = [
+    let core = [
         &pbr["baseColorTexture"],
         &material["emissiveTexture"],
         &material["normalTexture"],
         &pbr["metallicRoughnessTexture"],
         &material["occlusionTexture"],
     ];
-    let mappings: Vec<UvMapping> = infos.iter().filter(|i| i.is_object()).map(|i| mapping_of(i)).collect();
+    let layer_infos = layer_texture_infos(material);
+    let mappings: Vec<UvMapping> = core
+        .iter()
+        .chain(&layer_infos)
+        .filter(|i| i.is_object())
+        .map(|i| mapping_of(i))
+        .collect();
     let mapping = mappings.first().copied().unwrap_or(UvMapping::PLAIN);
     if mappings.iter().any(|m| *m != mapping) {
         let label = material["name"]
@@ -1020,7 +1125,18 @@ pub(super) fn material_extensions(
         transmission: extension(material, "KHR_materials_transmission")
             .and_then(|e| e["transmissionFactor"].as_f64())
             .map_or(0.0, |t| (t as f32).clamp(0.0, 1.0)),
+        unlit: extension(material, "KHR_materials_unlit").is_some(),
+        layers: layers_of(material),
+        layer_textures: layer_infos.map(|i| i["index"].as_u64().map(|i| i as usize)),
     }
+}
+
+/// Whether node `node` is visible (`KHR_node_visibility`): a node marked
+/// invisible hides itself and everything under it, meshes and lights.
+/// Visibility animated through `KHR_animation_pointer` isn't read; the
+/// file's initial visibility stays.
+pub(super) fn visible(json: &Value, node: usize) -> bool {
+    extension(&json["nodes"][node], "KHR_node_visibility").and_then(|v| v["visible"].as_bool()) != Some(false)
 }
 
 /// The light a file's punctual light gives at a distance where ponko's
@@ -1710,22 +1826,177 @@ mod tests {
             &mut file,
             None,
             json!({
-                "extensionsUsed": ["KHR_materials_transmission", "KHR_materials_ior"],
+                "extensionsUsed": ["KHR_materials_transmission", "KHR_materials_volume", "KHR_materials_ior"],
                 "materials": [{ "extensions": { "KHR_materials_transmission": { "transmissionFactor": 0.75 },
-                                                "KHR_materials_ior": { "ior": 1.5 } } }],
+                                                "KHR_materials_volume": { "thicknessFactor": 0.1 },
+                                                "KHR_materials_ior": { "ior": 1.33 } } }],
             }),
         );
         let loaded = load_str("glass.gltf", &text).unwrap();
         let m = &loaded.materials[0];
         assert_eq!(m.blend, super::super::Blend::Transparent);
         assert!((m.color.a - 0.25).abs() < 1e-6);
-        // Refraction isn't drawn: the warning says so and names it.
+        assert_eq!(m.layers.ior, 1.33, "the index of refraction sets its reflection");
+        // Refraction isn't drawn: the warning says so and names the volume.
         assert!(
             loaded
                 .warnings
                 .iter()
-                .any(|w| w.contains("KHR_materials_ior") && w.contains("refraction"))
+                .any(|w| w.contains("KHR_materials_volume") && w.contains("refraction")),
+            "{:?}",
+            loaded.warnings
         );
+    }
+
+    #[test]
+    fn a_required_approximated_extension_loads_with_a_warning() {
+        let mut file = File::default();
+        let text = triangle(
+            &mut file,
+            None,
+            json!({ "extensionsUsed": ["KHR_materials_volume"], "extensionsRequired": ["KHR_materials_volume"] }),
+        );
+        let loaded = load_str("thick.gltf", &text).unwrap();
+        assert!(
+            loaded
+                .warnings
+                .iter()
+                .any(|w| w.contains("approximates") && w.contains("KHR_materials_volume")),
+            "{:?}",
+            loaded.warnings
+        );
+    }
+
+    #[test]
+    fn material_extensions_are_read_as_layers() {
+        let mut file = File::default();
+        let text = triangle(
+            &mut file,
+            None,
+            json!({
+                "extensionsUsed": ["KHR_materials_clearcoat", "KHR_materials_sheen", "KHR_materials_specular",
+                                   "KHR_materials_ior", "KHR_materials_anisotropy", "KHR_materials_iridescence"],
+                "extensionsRequired": ["KHR_materials_clearcoat", "KHR_materials_sheen", "KHR_materials_specular",
+                                       "KHR_materials_ior", "KHR_materials_anisotropy", "KHR_materials_iridescence"],
+                "materials": [{ "extensions": {
+                    "KHR_materials_clearcoat": { "clearcoatFactor": 0.8, "clearcoatRoughnessFactor": 0.2 },
+                    "KHR_materials_sheen": { "sheenColorFactor": [1.0, 0.0, 0.0], "sheenRoughnessFactor": 0.5 },
+                    "KHR_materials_specular": { "specularFactor": 0.5, "specularColorFactor": [1.0, 1.0, 0.0] },
+                    "KHR_materials_ior": { "ior": 1.8 },
+                    "KHR_materials_anisotropy": { "anisotropyStrength": 2.0, "anisotropyRotation": 0.5 },
+                    "KHR_materials_iridescence": { "iridescenceFactor": 1.0, "iridescenceIor": 1.5,
+                                                   "iridescenceThicknessMaximum": 800 } } }],
+            }),
+        );
+        let loaded = load_str("layered.gltf", &text).unwrap();
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+        let m = &loaded.materials[0];
+        assert!(!m.unlit);
+        let l = m.layers;
+        assert_eq!((l.clearcoat, l.clearcoat_roughness), (0.8, 0.2));
+        assert_eq!((l.sheen_color, l.sheen_roughness), (Color::rgb(1.0, 0.0, 0.0), 0.5));
+        assert_eq!(
+            (l.specular, l.specular_color, l.ior),
+            (0.5, Color::rgb(1.0, 1.0, 0.0), 1.8)
+        );
+        assert_eq!(
+            (l.anisotropy, l.anisotropy_rotation),
+            (1.0, 0.5),
+            "strength clamped to 1"
+        );
+        assert_eq!(
+            (l.iridescence, l.iridescence_ior, l.iridescence_thickness),
+            (1.0, 1.5, [100.0, 800.0])
+        );
+        assert!(l.problem().is_none());
+        // Without the extensions: no layers, nothing extra to draw.
+        let plain = load_str("plain.gltf", &triangle(&mut File::default(), None, json!({}))).unwrap();
+        assert!(!plain.materials[0].layers.is_on() && !plain.materials[0].unlit);
+    }
+
+    #[test]
+    fn unlit_materials_are_read() {
+        let mut file = File::default();
+        let text = triangle(
+            &mut file,
+            None,
+            json!({ "extensionsUsed": ["KHR_materials_unlit"], "extensionsRequired": ["KHR_materials_unlit"],
+                    "materials": [{ "extensions": { "KHR_materials_unlit": {} } }] }),
+        );
+        let loaded = load_str("flat.gltf", &text).unwrap();
+        assert!(loaded.materials[0].unlit);
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+    }
+
+    #[test]
+    fn layer_maps_read_their_images_and_at_most_two_of_them() {
+        let mut file = File::default();
+        let uvs = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0];
+        let text = triangle(
+            &mut file,
+            Some(&uvs),
+            json!({
+                "materials": [{ "name": "busy", "extensions": {
+                    "KHR_materials_clearcoat": { "clearcoatFactor": 1.0, "clearcoatTexture": { "index": 0 },
+                                                 "clearcoatRoughnessTexture": { "index": 0 } },
+                    "KHR_materials_sheen": { "sheenColorFactor": [1.0, 1.0, 1.0], "sheenColorTexture": { "index": 1 } },
+                    "KHR_materials_iridescence": { "iridescenceFactor": 1.0, "iridescenceTexture": { "index": 2 } } } }],
+                "textures": [{ "source": 0 }, { "source": 1 }, { "source": 2 }],
+                "images": [{ "uri": png([255, 0, 0, 255]) }, { "uri": png([0, 255, 0, 255]) },
+                           { "uri": png([0, 0, 255, 255]) }],
+            }),
+        );
+        let loaded = load_str("busy.gltf", &text).unwrap();
+        let maps = loaded.materials[0].layer_maps;
+        assert!(
+            maps[0].is_some() && maps[0] == maps[1],
+            "one image for both clear coat maps"
+        );
+        assert!(maps[3].is_some() && maps[3] != maps[0], "the sheen's own image");
+        assert_eq!(maps[8], None, "a third image is left out");
+        assert!(
+            loaded
+                .warnings
+                .iter()
+                .any(|w| w.contains("\"busy\"") && w.contains("3 images")),
+            "{:?}",
+            loaded.warnings
+        );
+    }
+
+    #[test]
+    fn hidden_nodes_and_everything_under_them_are_left_out() {
+        let mut file = File::default();
+        let position = file.floats(&TRIANGLE, 3);
+        let text = file.gltf(json!({
+            "extensionsUsed": ["KHR_node_visibility", "KHR_lights_punctual"],
+            "extensionsRequired": ["KHR_node_visibility"],
+            "extensions": { "KHR_lights_punctual": { "lights": [{ "type": "point", "intensity": 10.0 }] } },
+            "scene": 0,
+            "scenes": [{ "nodes": [0, 1] }],
+            "nodes": [
+                { "mesh": 0 },
+                { "mesh": 0, "translation": [5.0, 0.0, 0.0], "children": [2],
+                  "extensions": { "KHR_node_visibility": { "visible": false } } },
+                { "mesh": 0, "extensions": { "KHR_lights_punctual": { "light": 0 },
+                                             "KHR_node_visibility": { "visible": true } } }
+            ],
+            "meshes": [{ "primitives": [{ "attributes": { "POSITION": position } }] }],
+        }));
+        let loaded = load_str("hidden.gltf", &text).unwrap();
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+        assert_eq!(loaded.data.positions.len(), 3, "only the visible node's triangle");
+        assert!(loaded.data.positions.iter().all(|p| p.x < 2.0));
+        assert!(
+            loaded.lights.is_empty(),
+            "the light under the hidden node is hidden too"
+        );
+        // Negative control: the same file without the hiding draws all three.
+        let shown = text.replace("\"visible\":false", "\"visible\":true");
+        assert_ne!(shown, text);
+        let loaded = load_str("shown.gltf", &shown).unwrap();
+        assert_eq!(loaded.data.positions.len(), 9);
+        assert_eq!(loaded.lights.len(), 1);
     }
 
     #[test]
@@ -1901,12 +2172,12 @@ mod tests {
         let text = triangle(
             &mut file,
             None,
-            json!({ "extensionsUsed": ["KHR_materials_clearcoat", "VENDOR_something"],
-                    "materials": [{ "extensions": { "KHR_materials_clearcoat": { "clearcoatFactor": 1.0 } } }] }),
+            json!({ "extensionsUsed": ["KHR_materials_volume", "VENDOR_something"],
+                    "materials": [{ "extensions": { "KHR_materials_volume": { "thicknessFactor": 1.0 } } }] }),
         );
-        let loaded = load_str("coated.gltf", &text).unwrap();
+        let loaded = load_str("thick.gltf", &text).unwrap();
         assert_eq!(loaded.warnings.len(), 2, "{:?}", loaded.warnings);
-        assert!(loaded.warnings[0].contains("KHR_materials_clearcoat") && loaded.warnings[0].contains("clear coat"));
+        assert!(loaded.warnings[0].contains("KHR_materials_volume") && loaded.warnings[0].contains("refraction"));
         assert!(loaded.warnings[1].contains("VENDOR_something"));
     }
 

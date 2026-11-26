@@ -105,6 +105,9 @@ pub(crate) mod autotune;
 mod extraction_test;
 #[cfg(test)]
 mod gltf_scene_test;
+mod material_layers;
+pub use material_layers::MaterialLayers;
+pub(crate) use material_layers::{LAYERED_SHADER, LayerSlots, MAP_KINDS, MapKind};
 mod quality;
 mod resident;
 mod retained;
@@ -479,6 +482,9 @@ pub enum Blend {
 /// for hidden pixels and shadows too (opaque skips it), `double_sided`
 /// rasterizes both faces, and each texture map is one more read per pixel.
 /// A custom `shader` runs your code for every pixel the material covers.
+/// [`unlit`](Self::unlit) skips the lighting; [`layers`](Self::layers)
+/// draw with a second build of the built-in shader, only for the materials
+/// that have them.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct MaterialDesc {
@@ -521,6 +527,14 @@ pub struct MaterialDesc {
     /// Stencil test and writes; `None` (the default) is none. See
     /// [`Stencil`] for when they happen and the drawing order they keep.
     pub stencil: Option<Stencil>,
+    /// Drawn without lighting: its color (times the texture and the vertex
+    /// colors) plus `emissive`, as glTF's `KHR_materials_unlit` has it.
+    /// Default false. Costs less than a lit material.
+    pub unlit: bool,
+    /// Layers over the surface: clear coat, sheen, specular strength and
+    /// color, index of refraction, anisotropy, iridescence. Default none;
+    /// see [`MaterialLayers`] for what they cost.
+    pub layers: MaterialLayers,
 }
 
 impl Default for MaterialDesc {
@@ -542,6 +556,8 @@ impl Default for MaterialDesc {
             custom_textures: [None; 2],
             custom_arrays: [None; 3],
             stencil: None,
+            unlit: false,
+            layers: MaterialLayers::NONE,
         }
     }
 }
@@ -595,6 +611,10 @@ impl MaterialDesc {
         custom_arrays: [Option<TextureArray>; 3] => with_custom_arrays;
         /// Sets [`stencil`](Self::stencil), the stencil test and writes.
         stencil: Option<Stencil> => with_stencil;
+        /// Sets [`unlit`](Self::unlit): drawn without lighting.
+        unlit: bool => with_unlit;
+        /// Sets [`layers`](Self::layers): clear coat, sheen, specular, anisotropy, iridescence.
+        layers: MaterialLayers => with_layers;
     }
 }
 
@@ -1396,6 +1416,9 @@ pub(crate) struct Assets3D {
     /// Meshes set to cast no shadow (`Graphics::set_mesh_shadows`), by id;
     /// shorter than `bounds` when the last ones cast.
     pub shadowless: Vec<bool>,
+    /// The renderer's slot of the layered build of the built-in shader
+    /// (`MaterialLayers`), once a material had layers.
+    pub layered_shader: Option<u32>,
     pub material_ids: crate::handle::SlotCounter,
     /// What each material was last made or updated with, for the editor's
     /// material windows.
@@ -1835,7 +1858,37 @@ mod c_api_mirror {
             custom_arrays: _,
             // C: `ponko_ctx_create_material_with_stencil` and `ponko_ctx_update_material_with_stencil`.
             stencil: _,
+            // C: `PonkoMaterialDescEx` version 2, `unlit` and `layers`
+            // (`PonkoMaterialLayers`, field for field).
+            unlit: _,
+            layers: _,
         } = MaterialDesc::default();
+        // C: `PonkoMaterialLayers`, with a `has_*` before each map.
+        let MaterialLayers {
+            clearcoat: _,
+            clearcoat_roughness: _,
+            clearcoat_map: _,
+            clearcoat_roughness_map: _,
+            clearcoat_normal_map: _,
+            clearcoat_normal_strength: _,
+            sheen_color: _,
+            sheen_roughness: _,
+            sheen_color_map: _,
+            sheen_roughness_map: _,
+            specular: _,
+            specular_color: _,
+            specular_map: _,
+            specular_color_map: _,
+            ior: _,
+            anisotropy: _,
+            anisotropy_rotation: _,
+            anisotropy_map: _,
+            iridescence: _,
+            iridescence_ior: _,
+            iridescence_thickness: _,
+            iridescence_map: _,
+            iridescence_thickness_map: _,
+        } = MaterialLayers::NONE;
         let ParticleSettings3D {
             rate: _,
             burst: _,

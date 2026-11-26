@@ -151,6 +151,7 @@ fn surface_at(in: VertexOut, front: bool) -> Surface {
     if !front {
         n = -n; // the back of a double-sided surface
     }
+    let geometric = n;
     if material.maps.x != 0u {
         // Tangent space from screen derivatives (Schüler's cotangent frame):
         // no tangents needed in the mesh. `t` and `b` point where u and v
@@ -195,6 +196,10 @@ fn surface_at(in: VertexOut, front: bool) -> Surface {
     s.emissive = material.emissive.rgb;
     if material.maps.z != 0u {
         s.emissive *= textureSampleBias(emissive_texture, material_sampler, in.uv, texture_mip_bias()).rgb;
+    }
+    s.unlit = material.maps.w != 0u;
+    if MATERIAL_LAYERS {
+        fill_layers(s, in.uv, in.world, geometric);
     }
     s = surface(s);
     s.roughness = clamp(s.roughness, 0.03, 1.0);

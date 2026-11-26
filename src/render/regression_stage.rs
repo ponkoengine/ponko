@@ -65,6 +65,8 @@ pub(super) struct Stage {
     pub textures: Vec<GpuTexture>,
     view_format: Option<wgpu::TextureFormat>,
     errors: Arc<Mutex<Vec<String>>>,
+    /// Whether the renderer has the layered build of the built-in shader.
+    layered: bool,
 }
 
 impl Stage {
@@ -146,6 +148,7 @@ impl Stage {
             textures,
             view_format: setup.view_format,
             errors,
+            layered: false,
         })
     }
 
@@ -213,8 +216,25 @@ impl Stage {
     pub fn mesh(&mut self, data: &MeshData, desc: MaterialDesc) -> Mesh {
         let material = self.ctx.gfx.create_material(desc);
         let mesh = self.ctx.gfx.create_mesh(data, material);
-        self.renderer
-            .create_material(&self.device, &GpuMaterialDesc::new(&desc), &self.textures);
+        let mut gpu = GpuMaterialDesc::new(&desc);
+        // Material layers: the layered build of the built-in shader, in the
+        // slot the context gave it (as a game's renderer does).
+        if gpu.layered {
+            let slot = self
+                .ctx
+                .gfx
+                .assets3d
+                .layered_shader
+                .expect("a layered material has the shader's slot");
+            if !self.layered {
+                self.renderer
+                    .create_shader_at(&self.device, slot, "layered", crate::three::LAYERED_SHADER)
+                    .unwrap_or_else(|e| panic!("the layered build: {e}"));
+                self.layered = true;
+            }
+            gpu.shader = slot;
+        }
+        self.renderer.create_material(&self.device, &gpu, &self.textures);
         self.renderer
             .create_mesh(&self.device, data, &[(0..data.indices.len() as u32, material)], true);
         mesh

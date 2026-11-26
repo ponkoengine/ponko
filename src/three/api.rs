@@ -23,13 +23,27 @@ pub(crate) struct MaterialUniform {
     pub emissive: [f32; 4],
     /// roughness, metallic, normal map strength, unused.
     pub params: [f32; 4],
-    /// Which maps it has (1/0): normal, ORM, emissive, unused. A
-    /// two-channel normal map is 2 (X and Y in red and green) or 3 (in red
-    /// and alpha): the shader rebuilds Z.
+    /// Which maps it has (1/0): normal, ORM, emissive, then whether it is
+    /// unlit (1/0). A two-channel normal map is 2 (X and Y in red and
+    /// green) or 3 (in red and alpha): the shader rebuilds Z.
     pub maps: [u32; 4],
     /// For custom shaders.
     pub custom: [[f32; 4]; 4],
+    /// Layers (read only by the layered build of the built-in shader):
+    /// which are on ([`super::layer_bits`]), each map's slot (two bits per
+    /// [`super::MapKind`]), which of the two slots are bound (bits 0 and 1),
+    /// unused.
+    pub layer_info: [u32; 4],
+    /// Clear coat (amount, roughness, normal map strength, unused), sheen
+    /// (linear RGB, roughness), specular (linear RGB color, strength),
+    /// optics (index of refraction, anisotropy, its rotation's cosine and
+    /// sine), iridescence (amount, index of refraction, thinnest and
+    /// thickest in nanometers).
+    pub layers: [[f32; 4]; 5],
 }
+
+/// The name the layered build of the built-in shader has in messages.
+const LAYERED_SHADER_NAME: &str = "built-in shader with material layers";
 
 /// A material's textures, in binding order: base color, normal map, ORM
 /// map, emissive map and two for custom shaders. `None`: the default.
@@ -47,10 +61,57 @@ pub(crate) struct GpuMaterialDesc {
     pub cutout: bool,
     pub double_sided: bool,
     pub stencil: Option<super::Stencil>,
+    /// Whether the two custom texture slots are read as data (no sRGB
+    /// decoding): they hold the layer maps of a layered material.
+    pub linear_custom: [bool; 2],
+    /// Whether it has layers on, to draw with the layered build of the
+    /// built-in shader (`shader` stays 0 here: the caller picks that build).
+    pub layered: bool,
 }
 
 impl GpuMaterialDesc {
     pub(crate) fn new(desc: &MaterialDesc) -> Self {
+        Self::of(desc, &|_| true)
+    }
+
+    /// [`new`](Self::new), with the layer maps `live` says are freed left out.
+    pub(crate) fn of(desc: &MaterialDesc, live: &dyn Fn(crate::texture::Texture) -> bool) -> Self {
+        let mut gpu = Self::base(desc);
+        gpu.uniform.maps[3] = u32::from(desc.unlit);
+        let bits = desc.layers.bits();
+        // Layers are the built-in shader's (`check_material` turns down a
+        // custom shader with them).
+        if bits != 0 && desc.shader.is_none() {
+            let layers = &desc.layers;
+            let (slots, _) = super::LayerSlots::of(layers, |t| live(t));
+            for (i, image) in slots.images.iter().enumerate() {
+                gpu.textures[4 + i] = image.map(|(id, _)| id);
+                gpu.linear_custom[i] = image.is_some_and(|(_, srgb)| !srgb);
+            }
+            let bound = u32::from(slots.images[0].is_some()) | u32::from(slots.images[1].is_some()) << 1;
+            gpu.uniform.layer_info = [bits, slots.packed, bound, 0];
+            let [sr, sg, sb, _] = linear(layers.sheen_color);
+            let [pr, pg, pb, _] = linear(layers.specular_color);
+            let (sin, cos) = layers.anisotropy_rotation.sin_cos();
+            let [thin, thick] = layers.iridescence_thickness;
+            gpu.uniform.layers = [
+                [
+                    layers.clearcoat,
+                    layers.clearcoat_roughness,
+                    layers.clearcoat_normal_strength,
+                    0.0,
+                ],
+                [sr, sg, sb, layers.sheen_roughness],
+                [pr, pg, pb, layers.specular],
+                [layers.ior, layers.anisotropy, cos, sin],
+                [layers.iridescence, layers.iridescence_ior, thin, thick],
+            ];
+            gpu.layered = true;
+        }
+        gpu
+    }
+
+    fn base(desc: &MaterialDesc) -> Self {
         let [r, g, b, _] = linear(desc.emissive);
         let id = |t: Option<crate::texture::Texture>| t.map(|t| t.id);
         Self {
@@ -65,6 +126,7 @@ impl GpuMaterialDesc {
                     0,
                 ],
                 custom: desc.custom.map(|v| v.to_array()),
+                ..MaterialUniform::default()
             },
             textures: [
                 id(desc.texture),
@@ -80,6 +142,8 @@ impl GpuMaterialDesc {
             cutout: desc.blend == Blend::Cutout,
             double_sided: desc.double_sided,
             stencil: desc.stencil,
+            linear_custom: [false; 2],
+            layered: false,
         }
     }
 }
@@ -150,6 +214,7 @@ impl Graphics {
         let id = self.assets3d.material_ids.make("material");
         self.assets3d.materials_live.insert(id);
         self.asset_ledger.made(crate::inventory::AssetClass::Material, id);
+        self.prepare_layers(&desc);
         let gpu = self.gpu_material(&desc);
         if let Some(renderer) = self.renderer.as_mut()
             && !self.headless
@@ -193,6 +258,7 @@ impl Graphics {
         }
         #[cfg(feature = "editor")]
         self.note_material_desc(material, &desc);
+        self.prepare_layers(&desc);
         let gpu = self.gpu_material(&desc);
         if let Some(renderer) = self.renderer.as_mut()
             && !self.headless
@@ -204,11 +270,16 @@ impl Graphics {
     /// What the GPU makes of `desc`: freed shaders, textures and arrays
     /// are left out, so it looks as it would without them.
     pub(crate) fn gpu_material(&self, desc: &MaterialDesc) -> GpuMaterialDesc {
-        let mut gpu = GpuMaterialDesc::new(desc);
+        let freed = |id: u32| self.textures_live.was_made(id) && !self.textures_live.contains(id);
+        let mut gpu = GpuMaterialDesc::of(desc, &|t| !freed(t.id));
         if desc.shader.is_some_and(|s| !self.assets3d.shaders_live.contains(s.id)) {
             gpu.shader = 0;
         }
-        let freed = |id: u32| self.textures_live.was_made(id) && !self.textures_live.contains(id);
+        // Layers draw with the layered build of the built-in shader (see
+        // `prepare_layers`); without it they don't show.
+        if gpu.layered {
+            gpu.shader = self.assets3d.layered_shader.unwrap_or(0);
+        }
         for (slot, texture) in gpu.textures.iter_mut().enumerate() {
             if texture.is_some_and(freed) {
                 *texture = None;
@@ -362,7 +433,57 @@ impl Graphics {
                 ));
             }
         }
+        Self::check_layers(desc)
+    }
+
+    /// Checks a material's layers: values in range, the built-in shader,
+    /// at most two layer images.
+    fn check_layers(desc: &MaterialDesc) -> Result<(), crate::error::Error> {
+        use crate::error::{Error, ErrorKind};
+        let layers = &desc.layers;
+        if let Some(problem) = layers.problem() {
+            return Err(Error::new(ErrorKind::Invalid, format!("material layers: {problem}")));
+        }
+        if !layers.is_on() {
+            return Ok(());
+        }
+        if desc.shader.is_some() {
+            return Err(Error::new(
+                ErrorKind::Invalid,
+                "material layers are drawn by the built-in shader; take the layers off, or leave `shader` None",
+            ));
+        }
+        let (_, images) = super::LayerSlots::of(layers, |_| true);
+        if images > 2 {
+            return Err(Error::new(
+                ErrorKind::Invalid,
+                format!(
+                    "a material reads at most two layer images, and these layer maps need {images} \
+                     (a sheen or specular color image used for another map counts twice); pack them into fewer"
+                ),
+            ));
+        }
         Ok(())
+    }
+
+    /// Makes the layered build of the built-in shader the first time a
+    /// material with layers needs it (see [`MaterialLayers`](super::MaterialLayers)).
+    fn prepare_layers(&mut self, desc: &MaterialDesc) {
+        if self.assets3d.layered_shader.is_some() || !desc.layers.is_on() || desc.shader.is_some() {
+            return;
+        }
+        // A handle of its own, which no game holds: never freed or reloaded.
+        let id = self.assets3d.shader_ids.make("shader");
+        let slot = (id & INDEX_MASK) + 1;
+        if let Some(renderer) = self.renderer.as_mut()
+            && !self.headless
+            && let Err(e) = renderer.create_shader(slot, LAYERED_SHADER_NAME, super::LAYERED_SHADER)
+        {
+            // Only an engine bug gets here: the layers don't show.
+            super::gltf_ext::warn(&format!("material layers aren't drawn: {e}"));
+            return;
+        }
+        self.assets3d.layered_shader = Some(slot);
     }
 
     /// Loads a material shader (WGSL) from an [added asset
@@ -1354,6 +1475,8 @@ impl Graphics {
                     double_sided: m.double_sided,
                     custom: m.custom.unwrap_or_default(),
                     shader: self.extras_shader(path, m),
+                    unlit: m.unlit,
+                    layers: m.layers.with_maps(m.layer_maps.map(texture)),
                     ..Default::default()
                 };
                 if let Some(old) = old {
