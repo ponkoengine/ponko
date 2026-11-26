@@ -4,10 +4,12 @@
 //! wgpu decides between the two when its instance is made (an instance is
 //! either the browser's WebGPU or wgpu's own WebGL2 backend), and a canvas
 //! keeps the first kind of context it hands out. So the WebGPU path asks
-//! for an adapter and a device, and checks that the device survived its
-//! first round trip to the GPU, before it touches the canvas. Anything that
-//! goes wrong before then leaves the canvas free for WebGL2, logs one line
-//! (`ponko: falling back to WebGL2: <why>`) and starts over on WebGL2.
+//! for an adapter and a device, presents one test frame on a small canvas
+//! of its own (never in the page), and checks that the device survived
+//! that frame's round trip to the GPU, before it touches the game's canvas.
+//! Anything that goes wrong before then leaves the canvas free for WebGL2,
+//! logs one line (`ponko: falling back to WebGL2: <why>`) and starts over
+//! on WebGL2.
 
 /// Why a browser build draws with WebGL2 instead of WebGPU.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
@@ -22,7 +24,10 @@ pub(super) enum WebGpuFallback {
     /// The device was lost before its first submission finished (the
     /// browser's words).
     LostAtStart(String),
-    /// The canvas gave no WebGPU context (the browser's words).
+    /// A canvas can't show WebGPU frames: the game's canvas gave no WebGPU
+    /// context, or the test frame on a canvas of its own failed (some
+    /// browsers offer an adapter, such as a software fallback one, that
+    /// opens devices but can't present). The browser's words.
     Surface(String),
 }
 
@@ -35,7 +40,7 @@ impl WebGpuFallback {
             WebGpuFallback::NoAdapter => "navigator.gpu.requestAdapter() found no adapter".to_owned(),
             WebGpuFallback::DeviceFailed(e) => format!("the WebGPU adapter could not open a device: {}", words(e)),
             WebGpuFallback::LostAtStart(e) => format!("the WebGPU device was lost as it opened: {}", words(e)),
-            WebGpuFallback::Surface(e) => format!("the canvas gave no WebGPU context: {}", words(e)),
+            WebGpuFallback::Surface(e) => format!("a canvas can't show WebGPU frames: {}", words(e)),
         };
         format!("ponko: falling back to WebGL2: {why}")
     }
@@ -128,7 +133,7 @@ mod web {
             .map_err(|e| WebGpuFallback::DeviceFailed(e.to_string()))?;
         // A device the browser loses right away (its GPU process is gone,
         // the driver refused) can't draw: wait for one round trip to the
-        // GPU and see whether it is still there.
+        // GPU, the test frame's, and see whether it is still there.
         let lost = Arc::new(Mutex::new(None::<String>));
         let lost_in_callback = lost.clone();
         device.set_device_lost_callback(move |_, message| {
@@ -136,6 +141,7 @@ mod web {
                 lost.get_or_insert(message);
             }
         });
+        let test_frame = present_test_frame(&instance, &adapter, &device, &queue);
         let done = Arc::new(AtomicBool::new(false));
         let done_in_callback = done.clone();
         queue.on_submitted_work_done(move || done_in_callback.store(true, Ordering::Relaxed));
@@ -152,6 +158,7 @@ mod web {
         if let Some(message) = lost_message() {
             return Err(WebGpuFallback::LostAtStart(message));
         }
+        test_frame.await.map_err(WebGpuFallback::Surface)?;
         let surface = instance
             .create_surface(window.clone())
             .map_err(|e| WebGpuFallback::Surface(e.to_string()))?;
@@ -193,6 +200,79 @@ mod web {
             device,
             queue,
         })
+    }
+
+    /// Clears and presents one frame on a small canvas of its own (an
+    /// `OffscreenCanvas`, so the game's canvas stays free for WebGL2),
+    /// inside error scopes; the returned future gives the first error.
+    /// Chromium's headless shell on macOS, for one, offers a fallback
+    /// adapter whose devices open but whose canvases never present: the
+    /// frame's texture is invalid, and drawing to it is a validation error.
+    /// The frame is submitted before this returns, so the caller's round
+    /// trip covers it.
+    fn present_test_frame(
+        instance: &wgpu::Instance,
+        adapter: &wgpu::Adapter,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> impl std::future::Future<Output = Result<(), String>> + use<> {
+        let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+        let drawn = draw_test_frame(instance, adapter, device, queue);
+        // Popped innermost first, before anything else is sent to the GPU.
+        let internal = internal.pop();
+        let validation = validation.pop();
+        async move {
+            let internal = internal.await;
+            let validation = validation.await;
+            drawn?;
+            match validation.or(internal) {
+                Some(error) => Err(format!("a test frame failed: {error}")),
+                None => Ok(()),
+            }
+        }
+    }
+
+    fn draw_test_frame(
+        instance: &wgpu::Instance,
+        adapter: &wgpu::Adapter,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Result<(), String> {
+        const SIZE: u32 = 4;
+        let canvas = web_sys::OffscreenCanvas::new(SIZE, SIZE)
+            .map_err(|e| format!("no OffscreenCanvas to draw a test frame on: {e:?}"))?;
+        let surface = instance
+            .create_surface(wgpu::SurfaceTarget::OffscreenCanvas(canvas))
+            .map_err(|e| format!("a test canvas gave no WebGPU context: {e}"))?;
+        let config = surface
+            .get_default_config(adapter, SIZE, SIZE)
+            .ok_or("a test canvas offers no format")?;
+        surface.configure(device, &config);
+        let frame = match surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(frame) | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
+            other => return Err(format!("a test canvas gave no frame ({other:?})")),
+        };
+        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("WebGPU test frame"),
+        });
+        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("WebGPU test frame"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::RED),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        queue.submit([encoder.finish()]);
+        queue.present(frame);
+        Ok(())
     }
 
     /// Whether the page has `navigator.gpu` (wgpu's own check isn't public).
