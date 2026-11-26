@@ -84,6 +84,14 @@ id = "dev.ponko.lantern-yard"
 assets = ["assets/tutorial_3d"]
 files = ["LICENSE-MIT", "LICENSE-APACHE", "NOTICE"]
 
+# The phone check (book/src/ios.md): what the engine reads from a phone,
+# on screen. `ponko package --example phone --target ios-sim`.
+[package.metadata.ponko.examples.phone]
+name = "Phone Check"
+id = "dev.ponko.phone-check"
+assets = []
+files = ["LICENSE-MIT", "LICENSE-APACHE", "NOTICE"]
+
 # The second reference game, a platformer (book/src/ember-hop.md):
 # `ponko package --example ember_hop --features physics`.
 [package.metadata.ponko.examples.ember_hop]
@@ -311,8 +319,8 @@ objc2-metal = { version = "0.3.2", optional = true, default-features = false, fe
 # output. The release wgpu's Metal backend already uses: nothing new is built.
 objc2-quartz-core = { version = "0.3.2", optional = true, default-features = false, features = ["std", "CALayer", "CAMetalLayer", "CAEDRMetadata", "objc2-metal"] }
 
-# iOS: the general pasteboard for the clipboard and the on-screen
-# keyboard's frame (feature `window`), and the audio session's category
+# iOS: the window's scene, the general pasteboard for the clipboard and
+# the on-screen keyboard's frame (feature `window`), and the audio session's category
 # (feature `audio`). The releases winit's and cpal's iOS backends already
 # build: nothing new is built. `objc2` is renamed: the macOS accessibility
 # test uses an older one.
@@ -320,8 +328,8 @@ objc2-quartz-core = { version = "0.3.2", optional = true, default-features = fal
 objc2_06 = { package = "objc2", version = "0.6.3", optional = true }
 block2 = { version = "0.6.2", optional = true }
 objc2-core-foundation = { version = "0.3.2", optional = true, default-features = false, features = ["std", "CFCGTypes"] }
-objc2-foundation = { version = "0.3.2", optional = true, default-features = false, features = ["std", "block2", "NSDictionary", "NSNotification", "NSOperation", "NSString", "NSValue"] }
-objc2-ui-kit = { version = "0.3.2", optional = true, default-features = false, features = ["std", "objc2-core-foundation", "UIGeometry", "UIPasteboard", "UIWindow"] }
+objc2-foundation = { version = "0.3.2", optional = true, default-features = false, features = ["std", "block2", "NSDictionary", "NSNotification", "NSOperation", "NSSet", "NSString", "NSValue"] }
+objc2-ui-kit = { version = "0.3.2", optional = true, default-features = false, features = ["std", "objc2-core-foundation", "UIApplication", "UIGeometry", "UIPasteboard", "UIResponder", "UIScene", "UIScreen", "UIView", "UIWindow", "UIWindowScene"] }
 objc2-avf-audio = { version = "0.3.2", optional = true, default-features = false, features = ["std", "AVAudioSession", "AVAudioSessionTypes"] }
 
 # Windows: UI Automation (Narrator, NVDA, JAWS) on the window's HWND. Its

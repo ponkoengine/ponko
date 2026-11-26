@@ -598,7 +598,10 @@ impl Renderer {
                     adapter.limits()
                 } else {
                     // One more sampled texture than the default 16, where
-                    // the adapter has it: projected decals' images.
+                    // the adapter has it: projected decals' images. No
+                    // limit better than the adapter's: the iOS simulator's
+                    // Metal device has 15 inter-stage variables, not 16
+                    // (the tier then follows the device's real limits).
                     wgpu::Limits {
                         max_sampled_textures_per_shader_stage: adapter
                             .limits()
@@ -606,6 +609,7 @@ impl Renderer {
                             .clamp(16, 24),
                         ..wgpu::Limits::default()
                     }
+                    .or_worse_values_from(&adapter.limits())
                 },
                 ..Default::default()
             }

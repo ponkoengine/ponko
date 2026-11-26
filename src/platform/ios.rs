@@ -1,7 +1,86 @@
-//! iOS: the general pasteboard (the clipboard), the on-screen keyboard's
-//! frame, and the audio session's category. winit gives the rest: touches,
+//! iOS: the window's scene, the general pasteboard (the clipboard), the
+//! on-screen keyboard's frame, and the audio session's category. winit
+//! gives the rest: touches,
 //! the safe area (as the window's inner frame), the keyboard itself
 //! (`set_ime_allowed`), the app's lifecycle and memory warnings.
+
+#[cfg(feature = "window")]
+thread_local! {
+    /// The game's UIWindow, until a scene takes it.
+    static GAME_WINDOW: std::cell::RefCell<Option<objc2_06::rc::Retained<objc2_ui_kit::UIWindow>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Puts the game's window in the app's window scene. Since iOS 27's SDK
+/// an app must use UIKit's scene life cycle or it isn't launched; the
+/// package's Info.plist declares one scene (`UIApplicationSceneManifest`),
+/// and winit 0.30 makes its window without one, so it is moved into the
+/// scene: at once if the scene is connected, else when it connects.
+#[cfg(feature = "window")]
+pub(crate) fn adopt_scene(window: &winit::window::Window) {
+    use block2::RcBlock;
+    use objc2_foundation::{NSNotification, NSNotificationCenter};
+    use objc2_ui_kit::{UIApplication, UIView, UIWindowScene};
+    use std::ptr::NonNull;
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let Some(mtm) = objc2_06::MainThreadMarker::new() else {
+        return;
+    };
+    let Ok(handle) = window.window_handle() else {
+        return;
+    };
+    let RawWindowHandle::UiKit(handle) = handle.as_raw() else {
+        return;
+    };
+    // SAFETY: winit's UiKit handle is the window's own view, alive as
+    // long as the window, which the caller holds; used on the main thread.
+    let view: &UIView = unsafe { handle.ui_view.cast::<UIView>().as_ref() };
+    let Some(ui_window) = view.window() else {
+        return;
+    };
+    let scene = UIApplication::sharedApplication(mtm)
+        .connectedScenes()
+        .anyObject()
+        .and_then(|scene| scene.downcast::<UIWindowScene>().ok());
+    if let Some(scene) = scene {
+        place_in_scene(&ui_window, &scene);
+        return;
+    }
+    GAME_WINDOW.with(|w| *w.borrow_mut() = Some(ui_window));
+    let connects = RcBlock::new(|note: NonNull<NSNotification>| {
+        // SAFETY: the center passes a live notification for the call.
+        let note = unsafe { note.as_ref() };
+        let Some(scene) = note.object().and_then(|o| o.downcast::<UIWindowScene>().ok()) else {
+            return;
+        };
+        if let Some(window) = GAME_WINDOW.with(|w| w.borrow_mut().take()) {
+            place_in_scene(&window, &scene);
+        }
+    });
+    // SAFETY: a UIKit constant name, no object filter, no queue (the block
+    // runs on UIKit's main thread, which posts it); the observer is kept
+    // for the run, as the app has one scene for its whole life.
+    unsafe {
+        let observer = NSNotificationCenter::defaultCenter().addObserverForName_object_queue_usingBlock(
+            Some(objc2_ui_kit::UISceneWillConnectNotification),
+            None,
+            None,
+            &connects,
+        );
+        std::mem::forget(observer);
+    }
+}
+
+#[cfg(feature = "window")]
+fn place_in_scene(window: &objc2_ui_kit::UIWindow, scene: &objc2_ui_kit::UIWindowScene) {
+    if window.windowScene().is_none() {
+        window.setWindowScene(Some(scene));
+    }
+    // Made before there was a scene, winit's window has a default size:
+    // it fills the scene's screen (the view's layout then reports it).
+    window.setFrame(scene.screen().bounds());
+    window.makeKeyAndVisible();
+}
 
 /// The general pasteboard's text, if it holds text.
 #[cfg(feature = "window")]

@@ -631,6 +631,7 @@ where
             .set_platform_touch(crate::input::touch::platform_has_touch());
         #[cfg(target_os = "ios")]
         {
+            crate::platform::ios::adopt_scene(&window);
             self.follow_ios_insets(&window);
             crate::platform::ios::watch_keyboard();
         }
