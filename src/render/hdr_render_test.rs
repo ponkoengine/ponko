@@ -333,6 +333,17 @@ fn tonemap_row(gpu: &TestGpu, input: &[[f32; 3]], post: &crate::render::Post, he
             },
         ],
     });
+    // Auto exposure's adapted exposure (off: the shader doesn't read it).
+    let exposure = texture(1, wgpu::TextureFormat::R32Float);
+    let exposure_view = view(&exposure);
+    let group3 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout: &pipeline.get_bind_group_layout(3),
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: wgpu::BindingResource::TextureView(&exposure_view),
+        }],
+    });
     let out = target(device, (width, 1), f16);
     let out_view = view(&out);
     let mut encoder = device.create_command_encoder(&Default::default());
@@ -350,6 +361,7 @@ fn tonemap_row(gpu: &TestGpu, input: &[[f32; 3]], post: &crate::render::Post, he
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &group0, &[]);
         pass.set_bind_group(1, &group1, &[]);
+        pass.set_bind_group(3, &group3, &[]);
         pass.draw(0..3, 0..1);
     }
     gpu.queue.submit([encoder.finish()]);

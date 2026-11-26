@@ -1302,8 +1302,10 @@ using query_filter_ex = PonkoQueryFilterEx;
 /// (split_toning_shadows, split_toning_highlights, split_toning_balance), depth of field (dof_enabled,
 /// dof_focus_distance, dof_focus_range, dof_blur), the sample count (msaa) and, from version 2, thin
 /// objects in screen-space reflections (ssr_thin_objects: whole without TAA, about 0.2 ms more at
-/// 2560x1440; the high and ultra presets turn it on) and, from version 3, the upscaler (a ponko::upscaler;
-/// set it with `static_cast<std::uint32_t>(...)`).
+/// 2560x1440; the high and ultra presets turn it on), from version 3, the upscaler (a ponko::upscaler;
+/// set it with `static_cast<std::uint32_t>(...)`) and, from version 4, auto exposure (auto_exposure,
+/// auto_exposure_min and _max in stops, _compensation, _brighten_speed and _darken_speed in stops a
+/// second, _center_weight, and a metering mask in _has_mask and _mask).
 using post_ex = PonkoPostEx;
 /// HDR display output settings that can grow (PonkoHdrOutput): enabled, paper_white_nits, peak_nits
 /// (0: the display's) and, from version 2, the HDR10 metadata max_content_light_nits and
@@ -9808,7 +9810,8 @@ public:
     }
     /// Changes the post-processing from its versioned form: the checks of set_post, plus split toning tints
     /// finite and its balance -1 to 1, dof_focus_distance and dof_focus_range not negative, dof_blur 0 to
-    /// 0.05 and msaa 2 or 4. Nothing changes when it throws.
+    /// 0.05, msaa 2 or 4, and auto exposure's min, max and compensation finite with min not above max, its
+    /// speeds not negative (infinity jumps) and its center weight 0 to 1. Nothing changes when it throws.
     void set_post(const ponko::post_ex& p) { detail::check(ponko_ctx_set_post_ex(raw_, &p)); }
     /// The HDR output settings (Rust `ctx.gfx.hdr_output()`).
     ponko::hdr_output hdr_output() const {
