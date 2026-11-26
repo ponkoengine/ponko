@@ -70,3 +70,6 @@ web ponko::web::threads                  how many worker threads a web build run
 
 [xr.md] a report and an offscreen prototype, no headset
 none                                     no public API: the prototype is a test, not part of the engine
+
+[ios.md] no device has run it: touch, interruptions, the silent switch and signing are unchecked
+none                                     what is iOS-only is the build and the package (ponko_cli), not engine API; the lifecycle events, keyboard inset and audio session category are platform-neutral and tested headlessly on every system

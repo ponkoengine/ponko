@@ -48,6 +48,13 @@ pub enum PonkoWindowEventKind {
     PONKO_WINDOW_EVENT_FILE_DROPPED = 3,
     /// The DPI scale changed; `scale_factor` is the new one.
     PONKO_WINDOW_EVENT_SCALE_FACTOR_CHANGED = 4,
+    /// The app lost the screen to the system (a phone: background, a call,
+    /// the app switcher): save now; no frames run until it resumes.
+    PONKO_WINDOW_EVENT_SUSPENDED = 5,
+    /// The app is in front again after a suspend.
+    PONKO_WINDOW_EVENT_RESUMED = 6,
+    /// The system is short of memory: free what can be loaded again.
+    PONKO_WINDOW_EVENT_LOW_MEMORY = 7,
 }
 /// System cursors (`ponko_ctx_window_set_cursor_icon`), the CSS cursor set. Unknown values are rejected.
 #[repr(C)]
@@ -971,6 +978,92 @@ pub unsafe extern "C" fn ponko_ctx_window_feed_safe_insets(ctx: *mut PonkoCtx, i
         })
     })
 }
+/// Writes whether the app is suspended (Rust `WindowService::suspended`):
+/// between `PONKO_WINDOW_EVENT_SUSPENDED` and `PONKO_WINDOW_EVENT_RESUMED`;
+/// always false on desktops and the web.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_window_suspended(std::ptr::null_mut(), std::ptr::null_mut()) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live outside queries; `value` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_window_suspended(ctx: *mut PonkoCtx, value: *mut bool) -> PonkoStatus {
+    // SAFETY: all pointer use follows the caller contract; inputs are checked before mutation.
+    boundary(|| unsafe {
+        if value.is_null() {
+            return Err(invalid("suspended output is null"));
+        }
+        ctx_access(ctx, |c| out(value, c.window.suspended()))
+    })
+}
+/// Feeds a phone's lifecycle event as the platform reports it, for tests
+/// (Rust `WindowService::feed_event` and `ctx.events`): `kind` is
+/// `PONKO_WINDOW_EVENT_SUSPENDED`, `_RESUMED` or `_LOW_MEMORY`. The event
+/// reaches the game's systems like the platform's own; a repeated suspend
+/// or resume changes nothing and sends nothing. Other kinds are
+/// `PONKO_INVALID_ARGUMENT`.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_window_feed_lifecycle(std::ptr::null_mut(), 5) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live outside queries.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_window_feed_lifecycle(ctx: *mut PonkoCtx, kind: u32) -> PonkoStatus {
+    // SAFETY: all pointer use follows the caller contract; inputs are checked before mutation.
+    boundary(|| unsafe {
+        let event = match kind {
+            5 => WindowEvent::Suspended,
+            6 => WindowEvent::Resumed,
+            7 => WindowEvent::LowMemory,
+            _ => {
+                return Err(invalid(
+                    "a lifecycle event is PONKO_WINDOW_EVENT_SUSPENDED, _RESUMED or _LOW_MEMORY",
+                ));
+            }
+        };
+        ctx_access(ctx, |c| {
+            if c.window.feed_event(&event) {
+                c.events.send(event);
+            }
+            Ok(())
+        })
+    })
+}
+/// Writes how far up from the window's bottom edge the on-screen keyboard
+/// covers it, in logical pixels (Rust `WindowService::keyboard_inset`); 0
+/// while it is hidden or floating, and on desktops.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_window_keyboard_inset(std::ptr::null_mut(), std::ptr::null_mut()) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live outside queries; `inset` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_window_keyboard_inset(ctx: *mut PonkoCtx, inset: *mut f32) -> PonkoStatus {
+    // SAFETY: all pointer use follows the caller contract; inputs are checked before mutation.
+    boundary(|| unsafe {
+        if inset.is_null() {
+            return Err(invalid("keyboard inset output is null"));
+        }
+        ctx_access(ctx, |c| out(inset, c.window.keyboard_inset()))
+    })
+}
+/// Feeds the keyboard's inset as the platform reports it, for tests (Rust
+/// `WindowService::feed_keyboard_inset`). Negative or not finite counts as 0.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_window_feed_keyboard_inset(std::ptr::null_mut(), 300.0) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live outside queries.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_window_feed_keyboard_inset(ctx: *mut PonkoCtx, inset: f32) -> PonkoStatus {
+    // SAFETY: all pointer use follows the caller contract; inputs are checked before mutation.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            c.window.feed_keyboard_inset(inset);
+            Ok(())
+        })
+    })
+}
 /// Writes the number of connected monitors (0 headless). Indices are valid until monitors change.
 /// # Safety
 /// Contexts must be null or live outside queries. Descriptor headers must be initialized;
@@ -1203,6 +1296,9 @@ pub unsafe extern "C" fn ponko_ctx_window_event_ex(
                     d.kind = 4;
                     d.scale_factor = *v;
                 }
+                WindowEvent::Suspended => d.kind = 5,
+                WindowEvent::Resumed => d.kind = 6,
+                WindowEvent::LowMemory => d.kind = 7,
                 _ => return Err(invalid("window event kind requires a newer native library")),
             }
             crate::write_text(path, capacity, length, dropped.as_deref().unwrap_or(""))?;

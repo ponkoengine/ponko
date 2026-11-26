@@ -279,6 +279,33 @@ pub fn icns(png: &[u8]) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// The icon scaled to each of [`IOS_ICONS`](super::layout::IOS_ICONS)'
+/// sizes, as PNGs, by their file names. iOS shows icons without an alpha
+/// channel (it would show transparent pixels black), so they are made
+/// opaque over white.
+pub fn ios_icons(png: &[u8]) -> Result<Vec<(&'static str, Vec<u8>)>, String> {
+    use image::imageops::FilterType;
+    check_icon(png)?;
+    let source = image::load_from_memory_with_format(png, image::ImageFormat::Png)
+        .map_err(|e| format!("can't read the icon: {e}"))?
+        .to_rgba8();
+    let mut out = Vec::new();
+    for &(name, size) in super::layout::IOS_ICONS {
+        let scaled = image::imageops::resize(&source, size, size, FilterType::Lanczos3);
+        let opaque = image::RgbImage::from_fn(size, size, |x, y| {
+            let [r, g, b, a] = scaled.get_pixel(x, y).0;
+            let over = |c: u8| ((u32::from(c) * u32::from(a) + 255 * (255 - u32::from(a)) + 127) / 255) as u8;
+            image::Rgb([over(r), over(g), over(b)])
+        });
+        let mut bytes = Vec::new();
+        opaque
+            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+            .map_err(|e| format!("can't write the {size}-pixel icon: {e}"))?;
+        out.push((name, bytes));
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -448,6 +475,36 @@ mod tests {
         p.extend_from_slice(&h.to_be_bytes());
         p.extend_from_slice(&[8, 6, 0, 0, 0]);
         p
+    }
+
+    #[test]
+    fn ios_icons_are_opaque_pngs_of_each_size_ios_looks_for() {
+        // A half-transparent red icon.
+        let mut source = Vec::new();
+        image::RgbaImage::from_pixel(256, 256, image::Rgba([255, 0, 0, 128]))
+            .write_to(&mut std::io::Cursor::new(&mut source), image::ImageFormat::Png)
+            .unwrap();
+        let icons = ios_icons(&source).unwrap();
+        let names: Vec<&str> = icons.iter().map(|(n, _)| *n).collect();
+        assert_eq!(
+            names,
+            [
+                "AppIcon60x60@2x.png",
+                "AppIcon60x60@3x.png",
+                "AppIcon76x76@2x~ipad.png",
+                "AppIcon83.5x83.5@2x~ipad.png"
+            ]
+        );
+        for ((_, bytes), size) in icons.iter().zip([120, 180, 152, 167]) {
+            let icon = image::load_from_memory(bytes).unwrap();
+            assert_eq!((icon.width(), icon.height()), (size, size));
+            assert!(!icon.color().has_alpha(), "iOS shows transparency as black");
+            // Red at half strength over white.
+            let [r, g, b] = icon.to_rgb8().get_pixel(size / 2, size / 2).0;
+            assert_eq!(r, 255);
+            assert!((126..=128).contains(&g) && g == b, "{g} {b}");
+        }
+        assert!(ios_icons(&png(100, 100)).is_err(), "not an icon size");
     }
 
     #[test]

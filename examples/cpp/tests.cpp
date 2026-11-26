@@ -4318,6 +4318,34 @@ static void safe_area() {
         const auto area = ctx.window_safe_area();
         CHECK(area.min.x == 47 && area.max.y == 369);
     });
+
+    // A phone's lifecycle, keyboard and audio session (#476).
+    ponko::game("c++ phone lifecycle", 844, 390).run_headless(0, [](ponko::ctx& ctx) {
+        using kind = ponko::window_event_kind;
+        CHECK(!ctx.window_suspended());
+        ctx.window_feed_lifecycle(kind::suspended);
+        ctx.window_feed_lifecycle(kind::suspended);
+        CHECK(ctx.window_suspended());
+        ctx.window_feed_lifecycle(kind::low_memory);
+        ctx.window_feed_lifecycle(kind::resumed);
+        CHECK(!ctx.window_suspended());
+        const auto events = ctx.window_events();
+        CHECK(events.size() == 3 && events[0].kind == kind::suspended && events[1].kind == kind::low_memory &&
+              events[2].kind == kind::resumed);
+        bool refused = false;
+        try {
+            ctx.window_feed_lifecycle(kind::focused);
+        } catch (const ponko::error&) {
+            refused = true;
+        }
+        CHECK(refused);
+        CHECK(ctx.window_keyboard_inset() == 0);
+        ctx.window_feed_keyboard_inset(301);
+        CHECK(ctx.window_keyboard_inset() == 301);
+        CHECK(ctx.audio_session_category() == ponko::audio_session_category::solo_ambient);
+        ctx.set_audio_session_category(ponko::audio_session_category::ambient);
+        CHECK(ctx.audio_session_category() == ponko::audio_session_category::ambient);
+    });
 }
 
 // IME composition (#410): a Japanese composition replayed into a text

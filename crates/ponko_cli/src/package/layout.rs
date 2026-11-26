@@ -14,7 +14,34 @@ pub enum Os {
     Linux,
     /// A browser: `wasm32-unknown-unknown`.
     Web,
+    /// iPhones and iPads: `aarch64-apple-ios`.
+    Ios,
+    /// The iOS simulator on a Mac: `aarch64-apple-ios-sim` (or
+    /// `x86_64-apple-ios` on an Intel Mac).
+    IosSimulator,
 }
+
+impl Os {
+    /// iOS, on a device or the simulator.
+    pub fn is_ios(self) -> bool {
+        matches!(self, Os::Ios | Os::IosSimulator)
+    }
+}
+
+/// `--target ios` and `--target ios-sim`: the triples they stand for.
+pub fn target_alias(target: &str) -> &str {
+    match target {
+        "ios" => "aarch64-apple-ios",
+        "ios-sim" | "ios-simulator" => "aarch64-apple-ios-sim",
+        other => other,
+    }
+}
+
+/// The oldest iOS a package runs on (`MinimumOSVersion`, and the
+/// `IPHONEOS_DEPLOYMENT_TARGET` it is built for): iOS 16 runs on every
+/// iPhone from the iPhone 8 and every iPad with an A9X or later, all with
+/// Metal.
+pub const IOS_MINIMUM: &str = "16.0";
 
 /// The platform a package is for, from a Rust target triple.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -34,11 +61,17 @@ impl Platform {
             Os::Windows
         } else if triple.contains("-apple-darwin") {
             Os::Mac
+        } else if triple.contains("-apple-ios") && !triple.contains("macabi") {
+            if triple.ends_with("-sim") || triple.starts_with("x86_64-") {
+                Os::IosSimulator
+            } else {
+                Os::Ios
+            }
         } else if triple.contains("-linux") && !triple.contains("android") {
             Os::Linux
         } else {
             return Err(format!(
-                "can't package for `{triple}`: packages are made for Windows, macOS, Linux and the web (wasm32-unknown-unknown)"
+                "can't package for `{triple}`: packages are made for Windows, macOS, Linux, iOS (`--target ios`, `--target ios-sim`) and the web (wasm32-unknown-unknown)"
             ));
         };
         Ok(Platform {
@@ -55,6 +88,8 @@ impl Platform {
             Os::Windows => format!("windows-{}", self.arch),
             Os::Mac => format!("macos-{}", self.arch),
             Os::Linux => format!("linux-{}", self.arch),
+            Os::Ios => format!("ios-{}", self.arch),
+            Os::IosSimulator => format!("ios-simulator-{}", self.arch),
         }
     }
 
@@ -64,7 +99,7 @@ impl Platform {
     pub fn library_name(&self, name: &str) -> Option<String> {
         match self.os {
             Os::Windows => Some(format!("{name}.dll")),
-            Os::Mac => Some(format!("lib{name}.dylib")),
+            Os::Mac | Os::Ios | Os::IosSimulator => Some(format!("lib{name}.dylib")),
             Os::Linux => Some(format!("lib{name}.so")),
             Os::Web => None,
         }
@@ -89,6 +124,9 @@ pub enum Format {
     TarGz,
     /// A macOS disk image (needs `hdiutil`, so a Mac).
     Dmg,
+    /// An iOS app archive: a zip of `Payload/Name.app`, what a device
+    /// installs (once signed).
+    Ipa,
 }
 
 impl Format {
@@ -100,15 +138,16 @@ impl Format {
                 "zip" => Format::Zip,
                 "tar.gz" | "tgz" => Format::TarGz,
                 "dmg" => Format::Dmg,
+                "ipa" => Format::Ipa,
                 other => {
                     return Err(format!(
-                        "unknown format `{other}`: use folder, zip, tar.gz or dmg (comma-separated)"
+                        "unknown format `{other}`: use folder, zip, tar.gz, dmg or ipa (comma-separated)"
                     ));
                 }
             });
         }
         if out.is_empty() {
-            return Err("--format needs at least one of folder, zip, tar.gz, dmg".into());
+            return Err("--format needs at least one of folder, zip, tar.gz, dmg, ipa".into());
         }
         Ok(out.into_iter().collect())
     }
@@ -122,6 +161,9 @@ impl Format {
             Os::Mac if can_dmg => vec![Format::Dmg],
             Os::Mac => vec![Format::Zip],
             Os::Web => vec![Format::Folder],
+            Os::Ios => vec![Format::Ipa],
+            // `xcrun simctl install` takes the app folder; the zip carries it.
+            Os::IosSimulator => vec![Format::Zip],
         }
     }
 
@@ -131,21 +173,36 @@ impl Format {
             Format::Zip => "zip",
             Format::TarGz => "tar.gz",
             Format::Dmg => "dmg",
+            Format::Ipa => "ipa",
         }
     }
 }
 
-/// Checks formats against the platform; returns whether the package is a
-/// macOS app bundle (the default for macOS) and the archives to make.
+/// Checks formats against the platform; returns whether the package is an
+/// app bundle (the default for macOS, always for iOS) and the archives to make.
 pub fn check_formats(platform: &Platform, formats: &[Format]) -> Result<(bool, Vec<Format>), String> {
     if formats.contains(&Format::Dmg) && platform.os != Os::Mac {
         return Err(format!("a dmg is for macOS, not {}", platform.triple));
+    }
+    match platform.os {
+        Os::Ios => {}
+        Os::IosSimulator if formats.contains(&Format::Ipa) => {
+            return Err("an ipa is for devices: the simulator installs the app folder (use folder or zip)".into());
+        }
+        _ if formats.contains(&Format::Ipa) => {
+            return Err(format!("an ipa is for iOS, not {}", platform.triple));
+        }
+        _ => {}
+    }
+    if platform.os.is_ios() && formats.contains(&Format::TarGz) {
+        return Err("iOS packages are zips (an ipa, or the app zipped for the simulator), not tar.gz".into());
     }
     let flat = formats.contains(&Format::Folder);
     if flat && formats.contains(&Format::Dmg) {
         return Err("a dmg holds the app bundle: don't combine it with `folder`".into());
     }
-    let app = platform.os == Os::Mac && !flat;
+    // An iOS app is always a bundle: `folder` keeps the folder holding it.
+    let app = (platform.os == Os::Mac && !flat) || platform.os.is_ios();
     let archives = formats.iter().copied().filter(|f| *f != Format::Folder).collect();
     Ok((app, archives))
 }
@@ -176,6 +233,53 @@ pub struct Game {
     pub assets: Vec<FileCopy>,
     /// Licenses, readmes and notices, at the package's top level.
     pub files: Vec<FileCopy>,
+    /// Which ways a phone or tablet may be held (iOS).
+    pub orientation: Orientation,
+}
+
+/// The `orientation` key: which ways an iOS device may be held while the
+/// game runs. Desktops and the web ignore it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Orientation {
+    /// Every way (upright, and sideways either way; iPads upside down too).
+    #[default]
+    Any,
+    /// Sideways only, either way.
+    Landscape,
+    /// Upright only (iPads upside down too).
+    Portrait,
+}
+
+impl Orientation {
+    fn parse(word: &str) -> Result<Orientation, String> {
+        match word {
+            "any" => Ok(Orientation::Any),
+            "landscape" => Ok(Orientation::Landscape),
+            "portrait" => Ok(Orientation::Portrait),
+            other => Err(format!(
+                "unknown orientation `{other}` (use any, landscape or portrait)"
+            )),
+        }
+    }
+
+    /// `UISupportedInterfaceOrientations` for an iPhone (no upside down)
+    /// or an iPad.
+    fn ios_values(self, ipad: bool) -> Vec<&'static str> {
+        let mut out = Vec::new();
+        if self != Orientation::Landscape {
+            out.push("UIInterfaceOrientationPortrait");
+            if ipad {
+                out.push("UIInterfaceOrientationPortraitUpsideDown");
+            }
+        }
+        if self != Orientation::Portrait {
+            out.extend([
+                "UIInterfaceOrientationLandscapeLeft",
+                "UIInterfaceOrientationLandscapeRight",
+            ]);
+        }
+        out
+    }
 }
 
 /// The `[package.metadata.ponko]` keys, before files are looked up.
@@ -190,6 +294,8 @@ pub struct Metadata {
     /// How the files under `assets/` ship: `pack = false` loose, else in
     /// one `assets.pack` (the default).
     pub pack: Option<PackMeta>,
+    /// `orientation`: `any` (the default), `landscape` or `portrait`.
+    pub orientation: Option<Orientation>,
 }
 
 /// The `pack` key: `true`, `false` or `{ exclude = [...], textures = true,
@@ -216,7 +322,16 @@ impl Default for PackMeta {
     }
 }
 
-const KEYS: &[&str] = &["name", "id", "icon", "assets", "files", "pack", "examples"];
+const KEYS: &[&str] = &[
+    "name",
+    "id",
+    "icon",
+    "assets",
+    "files",
+    "pack",
+    "orientation",
+    "examples",
+];
 
 impl Metadata {
     /// Reads the package's `metadata` value (from `cargo metadata`): the
@@ -241,7 +356,7 @@ impl Metadata {
         for key in object.keys() {
             if !KEYS.contains(&key.as_str()) || (key == "examples" && at.contains(".examples.")) {
                 return Err(format!(
-                    "{at}: unknown key `{key}` (the keys are name, id, icon, assets, files, pack{})",
+                    "{at}: unknown key `{key}` (the keys are name, id, icon, assets, files, pack, orientation{})",
                     if at.contains(".examples.") { "" } else { " and examples" }
                 ));
             }
@@ -262,6 +377,9 @@ impl Metadata {
         }
         if let Some(v) = string("icon")? {
             self.icon = Some(v);
+        }
+        if let Some(v) = string("orientation")? {
+            self.orientation = Some(Orientation::parse(&v).map_err(|e| format!("{at} orientation: {e}"))?);
         }
         if let Some(v) = object.get("assets") {
             let list = v
@@ -597,6 +715,38 @@ pub fn plan(
             docs(&mut entries, &folder);
             (program, None)
         }
+        // An iOS app: everything at the bundle's top, the program too.
+        (Built::Program(exe), true) if platform.os.is_ios() => {
+            let bundle = folder.join(format!("{}.app", file_safe(&game.name)));
+            let program = bundle.join(&game.target);
+            entries.push(Entry {
+                path: program.clone(),
+                source: Source::Copy(exe.to_path_buf()),
+                executable: true,
+            });
+            assets(&mut entries, &bundle);
+            let icon = match icon_png {
+                Some(png) => {
+                    for (name, bytes) in super::archive::ios_icons(png)? {
+                        entries.push(Entry {
+                            path: bundle.join(name),
+                            source: Source::Bytes(bytes),
+                            executable: false,
+                        });
+                    }
+                    true
+                }
+                None => false,
+            };
+            entries.push(Entry {
+                path: bundle.join("Info.plist"),
+                source: Source::Text(ios_info_plist(game, platform, icon)),
+                executable: false,
+            });
+            docs(&mut entries, &bundle);
+            docs(&mut entries, &folder);
+            (program, Some(bundle))
+        }
         (Built::Program(exe), true) => {
             let bundle = folder.join(format!("{}.app", file_safe(&game.name)));
             let contents = bundle.join("Contents");
@@ -755,6 +905,159 @@ pub fn info_plist(game: &Game, platform: &Platform, icon: bool) -> String {
     out
 }
 
+/// A property list value, for [`ios_info_plist`].
+enum Plist {
+    String(String),
+    Bool(bool),
+    Strings(Vec<String>),
+    Integers(Vec<i64>),
+    Array(Vec<Plist>),
+    Dict(Vec<(&'static str, Plist)>),
+}
+
+impl Plist {
+    fn text(s: impl Into<String>) -> Plist {
+        Plist::String(s.into())
+    }
+    fn write(&self, indent: usize, out: &mut String) {
+        let tabs = "\t".repeat(indent);
+        match self {
+            Plist::String(s) => out.push_str(&format!("{tabs}<string>{}</string>\n", xml(s))),
+            Plist::Bool(true) => out.push_str(&format!("{tabs}<true/>\n")),
+            Plist::Bool(false) => out.push_str(&format!("{tabs}<false/>\n")),
+            Plist::Strings(list) => {
+                out.push_str(&format!("{tabs}<array>\n"));
+                for s in list {
+                    Plist::text(s.clone()).write(indent + 1, out);
+                }
+                out.push_str(&format!("{tabs}</array>\n"));
+            }
+            Plist::Integers(list) => {
+                out.push_str(&format!("{tabs}<array>\n"));
+                for n in list {
+                    out.push_str(&format!("{tabs}\t<integer>{n}</integer>\n"));
+                }
+                out.push_str(&format!("{tabs}</array>\n"));
+            }
+            Plist::Array(list) => {
+                out.push_str(&format!("{tabs}<array>\n"));
+                for item in list {
+                    item.write(indent + 1, out);
+                }
+                out.push_str(&format!("{tabs}</array>\n"));
+            }
+            Plist::Dict(keys) => {
+                out.push_str(&format!("{tabs}<dict>\n"));
+                for (key, value) in keys {
+                    out.push_str(&format!("{tabs}\t<key>{key}</key>\n"));
+                    value.write(indent + 1, out);
+                }
+                out.push_str(&format!("{tabs}</dict>\n"));
+            }
+        }
+    }
+}
+
+/// The iPhone and iPad icon files an iOS app holds without an asset
+/// catalog, by the names `CFBundleIconFiles` finds them under, and their
+/// sizes in pixels.
+pub const IOS_ICONS: &[(&str, u32)] = &[
+    ("AppIcon60x60@2x.png", 120),
+    ("AppIcon60x60@3x.png", 180),
+    ("AppIcon76x76@2x~ipad.png", 152),
+    ("AppIcon83.5x83.5@2x~ipad.png", 167),
+];
+
+/// An iOS app's `Info.plist`: the program, id and version, the device
+/// families, Metal required, full screen with no status bar, a launch
+/// screen (without one iOS shows the game letterboxed at an old phone's
+/// size), one window scene (since iOS 27's SDK an app without UIKit's
+/// scene life cycle isn't launched; the engine puts its window in it), the
+/// orientations, and the icon files.
+pub fn ios_info_plist(game: &Game, platform: &Platform, icon: bool) -> String {
+    let (sdk, platform_name) = if platform.os == Os::IosSimulator {
+        ("iphonesimulator", "iPhoneSimulator")
+    } else {
+        ("iphoneos", "iPhoneOS")
+    };
+    let version = bundle_version(&game.version);
+    let strings = |list: Vec<&str>| Plist::Strings(list.into_iter().map(str::to_string).collect());
+    let mut keys: Vec<(&'static str, Plist)> = vec![
+        ("CFBundleDevelopmentRegion", Plist::text("en")),
+        ("CFBundleDisplayName", Plist::text(&game.name)),
+        ("CFBundleExecutable", Plist::text(&game.target)),
+        ("CFBundleIdentifier", Plist::text(&game.id)),
+        ("CFBundleInfoDictionaryVersion", Plist::text("6.0")),
+        ("CFBundleName", Plist::text(&game.name)),
+        ("CFBundlePackageType", Plist::text("APPL")),
+        ("CFBundleShortVersionString", Plist::text(version)),
+        ("CFBundleSupportedPlatforms", strings(vec![platform_name])),
+        ("CFBundleVersion", Plist::text(version)),
+        ("DTPlatformName", Plist::text(sdk)),
+        ("LSApplicationCategoryType", Plist::text("public.app-category.games")),
+        ("LSRequiresIPhoneOS", Plist::Bool(true)),
+        ("MinimumOSVersion", Plist::text(IOS_MINIMUM)),
+        (
+            "UIApplicationSceneManifest",
+            Plist::Dict(vec![
+                ("UIApplicationSupportsMultipleScenes", Plist::Bool(false)),
+                (
+                    "UISceneConfigurations",
+                    Plist::Dict(vec![(
+                        "UIWindowSceneSessionRoleApplication",
+                        Plist::Array(vec![Plist::Dict(vec![(
+                            "UISceneConfigurationName",
+                            Plist::text("Default"),
+                        )])]),
+                    )]),
+                ),
+            ]),
+        ),
+        ("UIDeviceFamily", Plist::Integers(vec![1, 2])),
+        ("UILaunchScreen", Plist::Dict(Vec::new())),
+        ("UIRequiredDeviceCapabilities", strings(vec!["arm64", "metal"])),
+        ("UIRequiresFullScreen", Plist::Bool(true)),
+        ("UIStatusBarHidden", Plist::Bool(true)),
+        (
+            "UISupportedInterfaceOrientations",
+            strings(game.orientation.ios_values(false)),
+        ),
+        (
+            "UISupportedInterfaceOrientations~ipad",
+            strings(game.orientation.ios_values(true)),
+        ),
+    ];
+    if icon {
+        let names = |sizes: &[&str]| strings(sizes.to_vec());
+        keys.push((
+            "CFBundleIcons",
+            Plist::Dict(vec![(
+                "CFBundlePrimaryIcon",
+                Plist::Dict(vec![("CFBundleIconFiles", names(&["AppIcon60x60"]))]),
+            )]),
+        ));
+        keys.push((
+            "CFBundleIcons~ipad",
+            Plist::Dict(vec![(
+                "CFBundlePrimaryIcon",
+                Plist::Dict(vec![(
+                    "CFBundleIconFiles",
+                    names(&["AppIcon60x60", "AppIcon76x76", "AppIcon83.5x83.5"]),
+                )]),
+            )]),
+        ));
+        keys.sort_by_key(|(k, _)| *k);
+    }
+    let mut out = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+         <plist version=\"1.0\">\n",
+    );
+    Plist::Dict(keys).write(0, &mut out);
+    out.push_str("</plist>\n");
+    out
+}
+
 /// The web page that starts the game: the engine's `web/index.html`
 /// (embedded; a test keeps the copies equal), titled, with the icon.
 pub fn web_index(name: &str, icon: bool) -> String {
@@ -883,6 +1186,7 @@ mod tests {
                     to: "README.txt".into(),
                 },
             ],
+            orientation: Orientation::Any,
         }
     }
 
@@ -908,12 +1212,19 @@ mod tests {
             ("aarch64-apple-darwin", Os::Mac, "macos-aarch64"),
             ("x86_64-unknown-linux-gnu", Os::Linux, "linux-x86_64"),
             ("wasm32-unknown-unknown", Os::Web, "web"),
+            ("aarch64-apple-ios", Os::Ios, "ios-aarch64"),
+            ("aarch64-apple-ios-sim", Os::IosSimulator, "ios-simulator-aarch64"),
+            ("x86_64-apple-ios", Os::IosSimulator, "ios-simulator-x86_64"),
         ];
         for (triple, os, label) in cases {
             let p = platform(triple);
             assert_eq!((p.os, p.label().as_str()), (os, label), "{triple}");
         }
-        for unsupported in ["aarch64-linux-android", "thumbv7em-none-eabihf", "aarch64-apple-ios"] {
+        for unsupported in [
+            "aarch64-linux-android",
+            "thumbv7em-none-eabihf",
+            "aarch64-apple-ios-macabi",
+        ] {
             assert!(Platform::from_triple(unsupported).is_err(), "{unsupported}");
         }
     }
@@ -1496,6 +1807,114 @@ mod tests {
         assert_eq!(check_formats(&mac, &[Format::Folder]).unwrap(), (false, vec![]));
         assert!(check_formats(&platform("x86_64-pc-windows-msvc"), &[Format::Dmg]).is_err());
         assert!(check_formats(&mac, &[Format::Folder, Format::Dmg]).is_err());
+    }
+
+    #[test]
+    fn ios_packages_are_app_bundles_in_an_ipa_or_a_zip_for_the_simulator() {
+        assert_eq!(Format::defaults(Os::Ios, true), [Format::Ipa]);
+        assert_eq!(Format::defaults(Os::IosSimulator, true), [Format::Zip]);
+        assert_eq!(Format::parse_list("ipa").unwrap(), [Format::Ipa]);
+        let device = platform("aarch64-apple-ios");
+        let simulator = platform("aarch64-apple-ios-sim");
+        assert_eq!(
+            check_formats(&device, &[Format::Ipa]).unwrap(),
+            (true, vec![Format::Ipa])
+        );
+        // `folder` keeps the folder: an iOS app is still a bundle in it.
+        assert_eq!(check_formats(&simulator, &[Format::Folder]).unwrap(), (true, vec![]));
+        assert!(
+            check_formats(&simulator, &[Format::Ipa])
+                .unwrap_err()
+                .contains("simulator")
+        );
+        assert!(check_formats(&platform("aarch64-apple-darwin"), &[Format::Ipa]).is_err());
+        assert!(check_formats(&device, &[Format::TarGz]).is_err());
+        assert!(check_formats(&device, &[Format::Dmg]).is_err());
+    }
+
+    #[test]
+    fn the_ios_package_is_a_flat_app_bundle_with_the_program_assets_and_notices() {
+        let mut icon = Vec::new();
+        image::RgbaImage::from_pixel(512, 512, image::Rgba([0, 0, 255, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut icon), image::ImageFormat::Png)
+            .unwrap();
+        let plan = plan(
+            &game(),
+            &platform("aarch64-apple-ios-sim"),
+            true,
+            Built::Program(Path::new("/t/coin_dash")),
+            "N",
+            Some(&icon),
+            Some(b"PACK"),
+        )
+        .unwrap();
+        let app = "coin-dash-1.2.3-ios-simulator-aarch64/Coin Dash.app";
+        let p = paths(&plan);
+        for want in [
+            format!("{app}/Info.plist"),
+            format!("{app}/coin_dash"),
+            format!("{app}/assets.pack"),
+            format!("{app}/AppIcon60x60@2x.png"),
+            format!("{app}/AppIcon83.5x83.5@2x~ipad.png"),
+            format!("{app}/LICENSE-MIT"),
+            format!("{app}/THIRD-PARTY-NOTICES.txt"),
+            "coin-dash-1.2.3-ios-simulator-aarch64/THIRD-PARTY-NOTICES.txt".to_string(),
+        ] {
+            assert!(p.contains(&want), "{want} missing from {p:#?}");
+        }
+        assert_eq!(plan.app.as_deref(), Some(Path::new(app)));
+        assert_eq!(plan.program, Path::new(&format!("{app}/coin_dash")));
+        assert!(plan.entries.iter().any(|e| e.executable && e.path == plan.program));
+        // The program finds the pack beside itself, as on Windows and Linux.
+        assert!(!p.iter().any(|f| f.contains("/Contents/")));
+    }
+
+    #[test]
+    fn the_ios_info_plist_asks_for_metal_full_screen_a_launch_screen_and_the_orientations() {
+        let mut g = game();
+        g.orientation = Orientation::Landscape;
+        let sim = ios_info_plist(&g, &platform("aarch64-apple-ios-sim"), false);
+        for want in [
+            "<key>CFBundleExecutable</key>\n\t<string>coin_dash</string>",
+            "<key>CFBundleIdentifier</key>\n\t<string>dev.example.coin-dash</string>",
+            "<key>CFBundleSupportedPlatforms</key>\n\t<array>\n\t\t<string>iPhoneSimulator</string>",
+            &format!("<key>MinimumOSVersion</key>\n\t<string>{IOS_MINIMUM}</string>"),
+            "<key>UIDeviceFamily</key>\n\t<array>\n\t\t<integer>1</integer>\n\t\t<integer>2</integer>",
+            "<key>UILaunchScreen</key>\n\t<dict>\n\t</dict>",
+            "<key>UIApplicationSupportsMultipleScenes</key>\n\t\t<false/>",
+            "<key>UIWindowSceneSessionRoleApplication</key>\n\t\t\t<array>\n\t\t\t\t<dict>\n\t\t\t\t\t<key>UISceneConfigurationName</key>",
+            "<string>metal</string>",
+            "<key>UIStatusBarHidden</key>\n\t<true/>",
+            "<key>UISupportedInterfaceOrientations</key>\n\t<array>\n\t\t<string>UIInterfaceOrientationLandscapeLeft</string>\n\t\t<string>UIInterfaceOrientationLandscapeRight</string>\n\t</array>",
+        ] {
+            assert!(sim.contains(want), "{want} missing from\n{sim}");
+        }
+        assert!(!sim.contains("Portrait"));
+        assert!(!sim.contains("CFBundleIcons"));
+        let device = ios_info_plist(&game(), &platform("aarch64-apple-ios"), true);
+        assert!(device.contains("<string>iPhoneOS</string>"));
+        assert!(device.contains("<string>iphoneos</string>"));
+        assert!(
+            device.contains("<string>UIInterfaceOrientationPortraitUpsideDown</string>"),
+            "iPads, any way up"
+        );
+        assert!(device.contains("<key>CFBundleIcons~ipad</key>"));
+        assert!(device.contains("<string>AppIcon83.5x83.5</string>"));
+    }
+
+    #[test]
+    fn the_orientation_key_is_read_and_checked() {
+        let meta = |v: serde_json::Value| Metadata::from_cargo(&json!({ "ponko": v }), None);
+        assert_eq!(
+            meta(json!({"orientation": "portrait"})).unwrap().orientation,
+            Some(Orientation::Portrait)
+        );
+        assert_eq!(meta(json!({})).unwrap().orientation, None);
+        assert!(
+            meta(json!({"orientation": "sideways"}))
+                .unwrap_err()
+                .contains("orientation")
+        );
     }
 
     #[test]
