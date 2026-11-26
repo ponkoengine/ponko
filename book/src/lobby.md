@@ -348,8 +348,8 @@ keyboard layout (`KeyLabels::system`) and macOS mapped at start even with
 no window (6.0 MiB at start, 1.9 MiB without it); 8 MiB were every
 endpoint's 2.6 KB budget for answering unknown addresses, which a client
 never uses (an endpoint was 2,976 bytes). Carbon is now linked only with the `window`
-feature and the budget is made at the first answer to a stranger (an
-endpoint 392 bytes): 108–111 MiB in three runs (2026-11-26, load average
+feature and only a host holds the budget (a client's endpoint is 392
+bytes): 108–111 MiB in three runs (2026-11-26, load average
 50–77; the heap's peak, counted, 99.5 → 91.3 MiB). Of the 4–6 MiB left
 over 104–105 MiB, 2 MiB of heap are what the cookie handshake added to
 every link and endpoint (an endpoint 272 → 392 bytes); the rest was not

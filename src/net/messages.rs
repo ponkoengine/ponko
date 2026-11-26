@@ -773,7 +773,9 @@ pub struct NetMessages {
     /// A UDP host's address check (`None` on other transports).
     cookies: Option<Cookies>,
     /// How many answers to strangers (challenges, version refusals) may
-    /// still be sent, in all and per network; made at the first answer.
+    /// still be sent, in all and per network. Only a host answers them, so
+    /// only a host has one (2.6 KB, made with it): a client endpoint is a
+    /// fraction of that.
     stranger_budget: Option<Box<StrangerBudget>>,
 }
 impl NetMessages {
@@ -834,7 +836,7 @@ impl NetMessages {
             stats: MessageStats::default(),
             scratch: Vec::with_capacity(1500),
             cookies: None,
-            stranger_budget: None,
+            stranger_budget: hosting.then(|| Box::new(StrangerBudget::new())),
         }
     }
     /// Bind a nonblocking UDP host. `max_clients` is 1..=1024, excluding host.
@@ -1354,12 +1356,10 @@ impl NetMessages {
             }
     }
     /// Takes one answer to `addr`, a stranger, from the budgets, if they
-    /// allow one.
+    /// allow one (a host's; an endpoint that isn't one answers none).
     fn may_answer_stranger(&mut self, addr: SocketAddr) -> bool {
         let now = self.now;
-        self.stranger_budget
-            .get_or_insert_with(|| Box::new(StrangerBudget::new()))
-            .take(now, addr)
+        self.stranger_budget.as_mut().is_some_and(|b| b.take(now, addr))
     }
     fn receive(&mut self, addr: SocketAddr, data: &[u8]) -> io::Result<()> {
         if data.len() < HEADER || &data[..3] != MAGIC_FAMILY {
@@ -2018,26 +2018,23 @@ mod tests {
         );
     }
 
-    /// Only an endpoint that answers strangers holds the budget: the
-    /// clients of a connection never make one, and an endpoint without it
-    /// is a fraction of its size.
+    /// Only a host, the one endpoint that answers strangers, holds the
+    /// budget: its clients never have one, and an endpoint without it is a
+    /// fraction of its size.
     #[test]
-    fn only_an_endpoint_that_answers_strangers_holds_a_stranger_budget() {
+    fn only_a_host_holds_a_stranger_budget() {
         let mut nets = NetMessages::loopback(2);
         assert!(hops_to_connect(&mut nets, 9).is_some(), "the client connects");
+        assert!(nets[0].stranger_budget.is_some(), "the host has its budget");
         assert!(
-            nets.iter().all(|n| n.stranger_budget.is_none()),
-            "a loopback connection answers no stranger"
+            nets[1..].iter().all(|n| n.stranger_budget.is_none()),
+            "a client answers no stranger"
         );
         assert!(std::mem::size_of::<NetMessages>() < std::mem::size_of::<StrangerBudget>());
         let mut host = cookie_host();
         host.receive(SocketAddr::from(([10, 0, 0, 1], 40_000)), &hello(1, &[0; COOKIE]))
             .unwrap();
-        assert!(
-            host.stranger_budget.is_some(),
-            "a UDP host made its budget for the stranger's challenge"
-        );
-        assert_eq!(host.stats().packets_sent, 1, "and answered");
+        assert_eq!(host.stats().packets_sent, 1, "a UDP host answers a stranger's hello");
     }
 
     #[test]

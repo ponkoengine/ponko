@@ -9,8 +9,9 @@
 - On macOS, `KeyLabels::system()` reads the layout only with the `window`
   feature (`None` without it): linking Carbon mapped 4 MiB at start in every
   headless process.
-- A network endpoint makes its budget for answering unknown addresses at
-  the first answer: a client endpoint is 392 bytes instead of 2,976. The
+- Only a hosting network endpoint holds the budget for answering unknown
+  addresses (only a host answers them): a client endpoint is 392 bytes
+  instead of 2,976. The
   lobby load test peaks at 108–111 MiB instead of 122–124 MiB.
 
 ### Added
