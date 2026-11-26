@@ -738,7 +738,20 @@ impl Renderer {
         // Browser canvases are never sRGB themselves; draw through an sRGB view.
         let view_format = config.format.add_srgb_suffix();
         if view_format != config.format {
-            config.view_formats.push(view_format);
+            if adapter
+                .get_downlevel_capabilities()
+                .flags
+                .contains(wgpu::DownlevelFlags::SURFACE_VIEW_FORMATS)
+            {
+                config.view_formats.push(view_format);
+            } else {
+                // Some OpenGL ES drivers (Android's without EGL's sRGB color
+                // space) offer neither: the window is drawn as it is.
+                eprintln!(
+                    "ponko: this GPU's window has no sRGB format ({:?}): colors are written without sRGB encoding",
+                    config.format
+                );
+            }
         }
         config.present_mode = if vsync {
             wgpu::PresentMode::AutoVsync
@@ -1006,7 +1019,14 @@ impl Renderer {
         image_view_formats: &'static [wgpu::TextureFormat],
         #[cfg(feature = "3d")] settings: Render3DSettings,
     ) -> Self {
-        let view_format = config.format.add_srgb_suffix();
+        // The sRGB view where the window's format is sRGB or it may be
+        // viewed as sRGB; else its own format.
+        let srgb = config.format.add_srgb_suffix();
+        let view_format = if srgb == config.format || config.view_formats.contains(&srgb) {
+            srgb
+        } else {
+            config.format
+        };
         let config_format = config.format;
         // --- pipeline ---
         let shader = device.create_shader_module(wgpu::include_wgsl!("sprite.wgsl"));

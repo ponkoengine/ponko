@@ -4339,6 +4339,12 @@ static void safe_area() {
             refused = true;
         }
         CHECK(refused);
+        // Back (Android): the app leaves after the frame unless the game cancels it.
+        CHECK(!ctx.window_back_requested());
+        ctx.window_feed_lifecycle(kind::back_requested);
+        CHECK(ctx.window_back_requested());
+        ctx.window_cancel_back();
+        CHECK(!ctx.window_back_requested());
         CHECK(ctx.window_keyboard_inset() == 0);
         ctx.window_feed_keyboard_inset(301);
         CHECK(ctx.window_keyboard_inset() == 301);

@@ -1336,6 +1336,7 @@ typedef enum PonkoWindowEventKind {
   PONKO_WINDOW_EVENT_SUSPENDED = 5,
   PONKO_WINDOW_EVENT_RESUMED = 6,
   PONKO_WINDOW_EVENT_LOW_MEMORY = 7,
+  PONKO_WINDOW_EVENT_BACK_REQUESTED = 8,
 } PonkoWindowEventKind;
 
 typedef enum PonkoAudioSessionCategory {
@@ -11514,6 +11515,10 @@ enum PonkoStatus ponko_ctx_window_set_cursor_grab(struct PonkoCtx *ctx, uint32_t
 enum PonkoStatus ponko_ctx_window_close_requested(struct PonkoCtx *ctx, bool *value);
 
 enum PonkoStatus ponko_ctx_window_cancel_close(struct PonkoCtx *ctx);
+
+enum PonkoStatus ponko_ctx_window_back_requested(struct PonkoCtx *ctx, bool *value);
+
+enum PonkoStatus ponko_ctx_window_cancel_back(struct PonkoCtx *ctx);
 
 enum PonkoStatus ponko_ctx_window_save_settings(struct PonkoCtx *ctx);
 

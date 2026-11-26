@@ -55,6 +55,10 @@ pub enum PonkoWindowEventKind {
     PONKO_WINDOW_EVENT_RESUMED = 6,
     /// The system is short of memory: free what can be loaded again.
     PONKO_WINDOW_EVENT_LOW_MEMORY = 7,
+    /// Back was pressed (Android's back button or gesture): the app leaves
+    /// to the background after this frame unless a system calls
+    /// `ponko_ctx_window_cancel_back` in it.
+    PONKO_WINDOW_EVENT_BACK_REQUESTED = 8,
 }
 /// System cursors (`ponko_ctx_window_set_cursor_icon`), the CSS cursor set. Unknown values are rejected.
 #[repr(C)]
@@ -847,6 +851,40 @@ pub unsafe extern "C" fn ponko_ctx_window_cancel_close(ctx: *mut PonkoCtx) -> Po
         })
     })
 }
+/// Whether Back was pressed (`PONKO_WINDOW_EVENT_BACK_REQUESTED`) and no
+/// system canceled it yet this frame: the app leaves after the frame.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_window_back_requested(std::ptr::null_mut(), std::ptr::null_mut()) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live outside queries; `value` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_window_back_requested(ctx: *mut PonkoCtx, value: *mut bool) -> PonkoStatus {
+    // SAFETY: all pointer use follows the caller contract; inputs are checked before mutation.
+    boundary(|| unsafe {
+        if value.is_null() {
+            return Err(invalid("back-request output is null"));
+        }
+        ctx_access(ctx, |c| out(value, c.window.back_requested()))
+    })
+}
+/// Keeps the app in front after a Back press: the game handles Back itself
+/// (closes a menu, pauses), in the frame that sees the event.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_window_cancel_back(std::ptr::null_mut()) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live outside queries.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_window_cancel_back(ctx: *mut PonkoCtx) -> PonkoStatus {
+    // SAFETY: all pointer use follows the caller contract; inputs are checked before mutation.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            c.window.cancel_back();
+            Ok(())
+        })
+    })
+}
 /// Saves the requested window settings (mode, size, position, title, limits, flags) to `window.json` in the game's player storage.
 /// # Safety
 /// Contexts must be null or live outside queries. Descriptor headers must be initialized;
@@ -998,7 +1036,8 @@ pub unsafe extern "C" fn ponko_ctx_window_suspended(ctx: *mut PonkoCtx, value: *
 }
 /// Feeds a phone's lifecycle event as the platform reports it, for tests
 /// (Rust `WindowService::feed_event` and `ctx.events`): `kind` is
-/// `PONKO_WINDOW_EVENT_SUSPENDED`, `_RESUMED` or `_LOW_MEMORY`. The event
+/// `PONKO_WINDOW_EVENT_SUSPENDED`, `_RESUMED`, `_LOW_MEMORY` or
+/// `_BACK_REQUESTED`. The event
 /// reaches the game's systems like the platform's own; a repeated suspend
 /// or resume changes nothing and sends nothing. Other kinds are
 /// `PONKO_INVALID_ARGUMENT`.
@@ -1015,9 +1054,10 @@ pub unsafe extern "C" fn ponko_ctx_window_feed_lifecycle(ctx: *mut PonkoCtx, kin
             5 => WindowEvent::Suspended,
             6 => WindowEvent::Resumed,
             7 => WindowEvent::LowMemory,
+            8 => WindowEvent::BackRequested,
             _ => {
                 return Err(invalid(
-                    "a lifecycle event is PONKO_WINDOW_EVENT_SUSPENDED, _RESUMED or _LOW_MEMORY",
+                    "a lifecycle event is PONKO_WINDOW_EVENT_SUSPENDED, _RESUMED, _LOW_MEMORY or _BACK_REQUESTED",
                 ));
             }
         };
@@ -1299,6 +1339,7 @@ pub unsafe extern "C" fn ponko_ctx_window_event_ex(
                 WindowEvent::Suspended => d.kind = 5,
                 WindowEvent::Resumed => d.kind = 6,
                 WindowEvent::LowMemory => d.kind = 7,
+                WindowEvent::BackRequested => d.kind = 8,
                 _ => return Err(invalid("window event kind requires a newer native library")),
             }
             crate::write_text(path, capacity, length, dropped.as_deref().unwrap_or(""))?;
