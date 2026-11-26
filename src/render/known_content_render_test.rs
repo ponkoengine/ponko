@@ -682,9 +682,11 @@ fn resident_memory() -> Option<u64> {
     Some(kib * 1024)
 }
 
-/// The two scenes: name, file, and the camera for a scene without one
-/// (position, a point looked at).
-const SCENES: [(&str, &str, Option<(Vec3, Vec3)>); 2] = [
+/// A scene's camera when its file has none: position, a point looked at.
+type Place = Option<(Vec3, Vec3)>;
+
+/// The two scenes: name, file, and the camera for a scene without one.
+const SCENES: [(&str, &str, Place); 2] = [
     // Down the length of the atrium, from one end at head height.
     (
         "Sponza",
