@@ -85,7 +85,7 @@ Chapters: 21 proven, 62 tested, 5 experimental.
 | [Localization](localization.md) | **proven** | Coin Dash, packaged and played on Linux, macOS and Windows | — |
 | [Sprite sheets, animation, tilemaps](tiles.md) | **proven** | Ember Hop's Tiled levels, autotiled ground and tile colliders, packaged and played on Linux, macOS and Windows | — |
 | [2D skeletons: bones, skinned sprites and blending](skeleton2d.md) | **tested** | none | a reference game that uses it |
-| [3D: meshes, materials and the sun](3d.md) | **tested** | Shard Grove, played headless by `tests/shard_grove.rs`; its package is not played in the list of checks | Shard Grove's package played on each OS |
+| [3D: meshes, materials and the sun](3d.md) | **tested** | Shard Grove, played headless by `tests/shard_grove.rs`; its package is played headless in the list of checks | Shard Grove's frame-time baseline per GPU tier, and its web build and window played on a real GPU of each OS (#454) |
 | [Crowds: thousands of animated characters](crowds.md) | **tested** | none | a reference game that uses it |
 | [3D physics: bodies, terrain, characters and vehicles](physics3d.md) | **tested** | Shard Grove (character controller), headless only | Shard Grove's package played on each OS |
 | [3D navigation meshes](navigation3d.md) | **tested** | Shard Grove (crawlers on the navmesh), headless only | Shard Grove's package played on each OS |
@@ -109,7 +109,7 @@ Chapters: 21 proven, 62 tested, 5 experimental.
 | [Shipping on Steam](steam.md) | **tested** | none | a recorded run against a real Steam client, and a released game that uses it |
 | [Crash reports](crash-reports.md) | **tested** | none | a reference game that uses it |
 | [Ember Hop: a platformer, start to finish](ember-hop.md) | **proven** | Ember Hop itself, packaged and played on Linux, macOS and Windows | — |
-| [Shard Grove: a 3D game, start to finish](shard-grove.md) | **tested** | Shard Grove itself, played headless | its package played on each OS |
+| [Shard Grove: a 3D game, start to finish](shard-grove.md) | **tested** | Shard Grove itself, played headless | a frame-time baseline per GPU tier, and the game opened in a WebGPU browser and in a window on each OS (#454) |
 | [Legions: 100,000 units that replay bit for bit](legions.md) | **tested** | Legions, a showcase rather than a reference game | a reference game that uses it |
 | [Web builds: games in the browser](web.md) | **tested** | Coin Dash in headless Chromium and WebKit; Ember Hop builds for the web | WebGPU on Windows and Linux GPUs in a recorded run, and Firefox (its headless build has no WebGL2) |
 | [Threads on the web](web-threads.md) | **experimental** | none | the chapter calls it experimental; the thread-heaps build has not run in a browser since its last fix |
