@@ -7605,6 +7605,7 @@ pub fn ponko::net::NetMessages::steam_host(&ponko::net::SteamClient, usize) -> c
 pub fn ponko::net::NetMessages::steam_join(&ponko::net::SteamClient, ponko::net::SteamLobbyId) -> core::io::error::Result<Self>
 pub fn ponko::net::NetMessages::steam_lobby(&self) -> core::option::Option<&ponko::net::SteamLobby>
 pub fn ponko::net::NetMessages::steam_peer(&self, ponko::net::PeerId) -> core::option::Option<ponko::net::SteamUserId>
+pub fn ponko::net::NetMessages::steam_sockets_host(&ponko::net::SteamClient, ponko::net::SteamLobbyVisibility, usize) -> core::io::error::Result<Self>
 pub struct ponko::net::NetPose
 pub ponko::net::NetPose::stream: ponko::net::SnapshotStream<ponko::net::Pose>
 impl core::clone::Clone for ponko::net::NetPose
