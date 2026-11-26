@@ -510,6 +510,15 @@ impl SceneBench {
         if std::env::var("PONKO_RENDER_TAA").is_ok_and(|v| v.trim() == "1") {
             bench.ctx.scene3d.post.anti_aliasing = crate::render::AntiAliasing::Taa;
         }
+        // Screen reflections' thin objects, against the preset's (High
+        // turns them on): for what they cost in time and allocations.
+        if let Ok(thin) = std::env::var("PONKO_RENDER_SSR_THIN") {
+            bench.ctx.scene3d.post.ssr_thin_objects = match thin.trim() {
+                "0" => false,
+                "1" => true,
+                other => return Err(format!("PONKO_RENDER_SSR_THIN={other} is not 0 or 1")),
+            };
+        }
         // The sun shadow filter, for comparing filters on one scene: 1
         // (sharp) to 4 (contact-hardening).
         if let Ok(filter) = std::env::var("PONKO_RENDER_SHADOW_FILTER") {
@@ -2376,5 +2385,98 @@ mod render_test {
         assert!((0..1000).all(|_| (-2.0..2.0).contains(&seq.around(2.0))));
         assert!((0..1000).all(|_| (3.0..5.0).contains(&seq.between(3.0, 5.0))));
         assert_eq!(mipped_bytes(4, 4), (16 + 4 + 1) * 4);
+    }
+
+    /// Heap allocations each frame on the thread that draws, over 24
+    /// frames after 32: the scene `kind` at `scale`, GPU
+    /// timing off (its read-back lands on whichever frame the GPU finishes).
+    /// `tweak` changes the scene's settings first.
+    fn allocations_per_frame(
+        kind: SceneKind,
+        scale: f32,
+        tweak: impl FnOnce(&mut SceneBench),
+    ) -> Option<(String, Vec<usize>)> {
+        let (warmup, frames) = (32, 24);
+        let setup = SceneSetup {
+            scale,
+            gpu_timing_every: 0,
+            ..small()
+        };
+        let mut bench = open(kind, setup)?.expect("the small setup fits any device");
+        tweak(&mut bench);
+        for _ in 0..warmup {
+            bench.frame();
+        }
+        let counts = (0..frames)
+            .map(|_| crate::three::lights::tests::count_allocations(|| bench.frame()).1)
+            .collect();
+        Some((format!("{} ({:?})", bench.info.name, bench.info.backend), counts))
+    }
+
+    /// The middle of `counts` (sorted in place).
+    fn median(counts: &mut [usize]) -> usize {
+        counts.sort_unstable();
+        counts[counts.len() / 2]
+    }
+
+    /// A steady frame's allocations on the drawing thread stay within what
+    /// they were when measured on Apple's GPUs (2026-11-26, wgpu's Metal
+    /// backend, the median of 24 frames after 32): 552 for `single-material`,
+    /// 984 for `game-like`, with the High preset's thin objects in screen
+    /// reflections on. Nearly all of them are wgpu's, recording passes (each
+    /// pass allocates in wgpu), so a new pass, or a new allocation of the
+    /// engine's own each frame, shows here: the budget leaves a few for
+    /// wgpu's bookkeeping to move by. Other backends allocate differently in
+    /// wgpu; there the counts are only logged. The control: without the two
+    /// passes of the thin objects' trace a frame allocates less.
+    #[test]
+    fn a_steady_frame_stays_within_its_allocation_budget() {
+        for (kind, budget) in [(SceneKind::SingleMaterial, 562), (SceneKind::GameLike, 1000)] {
+            let Some((adapter, mut counts)) = allocations_per_frame(kind, 0.004, |_| {}) else {
+                return;
+            };
+            let name = kind.name();
+            let median = median(&mut counts);
+            eprintln!("{name}: {median} allocations a frame (median) on {adapter}: {counts:?}");
+            if adapter.ends_with("(Metal)") {
+                assert!(
+                    median <= budget,
+                    "{name} allocates {median} times a frame on {adapter}, over its budget of {budget}: \
+                     find the new allocation with PONKO_ALLOC_SITES (crates/ponko_bench/RENDER_SCENES.md)"
+                );
+            }
+        }
+        let thin = |on: bool| {
+            let tweak = |bench: &mut SceneBench| bench.ctx.scene3d.post.ssr_thin_objects = on;
+            let (_, mut counts) =
+                allocations_per_frame(SceneKind::SingleMaterial, 0.004, tweak).expect("the GPU that drew the first");
+            median(&mut counts)
+        };
+        let (on, off) = (thin(true), thin(false));
+        eprintln!("single-material: {on} allocations a frame with thin objects in reflections, {off} without");
+        assert!(
+            off < on,
+            "the two passes of the thin objects' trace allocate in wgpu ({off} vs {on})"
+        );
+    }
+
+    /// What a frame allocates doesn't grow with what the scene holds: ten
+    /// times the moving models, every one collected and uploaded each frame,
+    /// cost no more allocations than a tenth of them (a per-model
+    /// allocation would add thousands). On any adapter.
+    #[test]
+    fn a_frame_allocates_no_more_for_more_models() {
+        let Some((adapter, mut few)) = allocations_per_frame(SceneKind::DynamicWorld, 0.05, |_| {}) else {
+            return;
+        };
+        let (_, mut many) =
+            allocations_per_frame(SceneKind::DynamicWorld, 0.5, |_| {}).expect("the GPU that drew the first");
+        let (few, many) = (median(&mut few), median(&mut many));
+        eprintln!("dynamic-world on {adapter}: {few} allocations a frame with 1,000 models, {many} with 10,000");
+        assert!(few > 0, "the counting allocator counts");
+        assert!(
+            many <= few + 16,
+            "10,000 models allocate {many} times a frame, 1,000 models {few}: something allocates per model"
+        );
     }
 }

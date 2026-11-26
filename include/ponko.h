@@ -642,6 +642,12 @@ enum PonkoPluralCategory
 typedef uint32_t PonkoPluralCategory;
 #endif // __cplusplus
 
+typedef enum PonkoModelLightKind {
+  PONKO_MODEL_LIGHT_POINT = 0,
+  PONKO_MODEL_LIGHT_SPOT = 1,
+  PONKO_MODEL_LIGHT_SUN = 2,
+} PonkoModelLightKind;
+
 enum PonkoTextAlign3D
 #ifdef __cplusplus
   : uint32_t
@@ -1338,6 +1344,7 @@ typedef enum PonkoWindowEventKind {
   PONKO_WINDOW_EVENT_SUSPENDED = 5,
   PONKO_WINDOW_EVENT_RESUMED = 6,
   PONKO_WINDOW_EVENT_LOW_MEMORY = 7,
+  PONKO_WINDOW_EVENT_BACK_REQUESTED = 8,
 } PonkoWindowEventKind;
 
 typedef enum PonkoAudioSessionCategory {
@@ -4154,6 +4161,15 @@ typedef struct PonkoSafeInsets {
   float bottom;
   float left;
 } PonkoSafeInsets;
+
+typedef struct PonkoModelLight {
+  enum PonkoModelLightKind kind;
+  struct PonkoTransform3D transform;
+  struct PonkoPointLight3D point;
+  struct PonkoSpotLight3D spot;
+  struct PonkoColor sun_color;
+  float sun_intensity;
+} PonkoModelLight;
 
 typedef struct PonkoSkyKit {
   uint32_t struct_size;
@@ -11373,6 +11389,37 @@ enum PonkoStatus ponko_input_scenario_safe_insets(struct PonkoInputScenario *sce
                                                   uint64_t tick,
                                                   struct PonkoSafeInsets insets);
 
+struct PonkoModelLight ponko_model_light_default(void);
+
+enum PonkoStatus ponko_ctx_gltf_local_light_count(struct PonkoCtx *ctx,
+                                                  const char *path,
+                                                  size_t *out_count);
+
+enum PonkoStatus ponko_ctx_light_gltf(struct PonkoCtx *ctx,
+                                      const char *path,
+                                      struct PonkoTransform3D at,
+                                      float ev100,
+                                      uint64_t *out_entities,
+                                      size_t capacity,
+                                      size_t *out_count);
+
+enum PonkoStatus ponko_ctx_place_light_exposed(struct PonkoCtx *ctx,
+                                               const struct PonkoModelLight *light,
+                                               struct PonkoTransform3D at,
+                                               float ev100,
+                                               uint64_t *out_entity,
+                                               bool *out_spawned);
+
+enum PonkoStatus ponko_ctx_load_environment(struct PonkoCtx *ctx, const char *path);
+
+enum PonkoStatus ponko_ctx_load_environment_cube(struct PonkoCtx *ctx, const char *const *paths);
+
+enum PonkoStatus ponko_ctx_set_studio_environment(struct PonkoCtx *ctx);
+
+enum PonkoStatus ponko_ctx_clear_environment(struct PonkoCtx *ctx);
+
+enum PonkoStatus ponko_ctx_has_environment(struct PonkoCtx *ctx, bool *out_has);
+
 enum PonkoStatus ponko_sky_kit_defaults(struct PonkoSkyKit *kit);
 
 enum PonkoStatus ponko_ctx_sky_kit(struct PonkoCtx *ctx, struct PonkoSkyKit *out_kit);
@@ -11563,6 +11610,10 @@ enum PonkoStatus ponko_ctx_window_set_cursor_grab(struct PonkoCtx *ctx, uint32_t
 enum PonkoStatus ponko_ctx_window_close_requested(struct PonkoCtx *ctx, bool *value);
 
 enum PonkoStatus ponko_ctx_window_cancel_close(struct PonkoCtx *ctx);
+
+enum PonkoStatus ponko_ctx_window_back_requested(struct PonkoCtx *ctx, bool *value);
+
+enum PonkoStatus ponko_ctx_window_cancel_back(struct PonkoCtx *ctx);
 
 enum PonkoStatus ponko_ctx_window_save_settings(struct PonkoCtx *ctx);
 

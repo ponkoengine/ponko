@@ -1,7 +1,9 @@
-// Skinning: poses one skinned model's corners into its own vertex buffer,
-// which every pass then draws like any mesh. A vertex is 12 words: position
-// (3), normal (3), uv (2), color (2, RGBA as half floats), uv1 (2). Morph targets are
-// added first, then the corner is skinned.
+// Skinning: poses skinned models' corners into a shared vertex buffer (a
+// page), which every pass then draws like any mesh. One dispatch poses up to
+// 512 models of one mesh: workgroup row y is the model, x its corners. A
+// vertex is 12 words: position (3), normal (3), uv (2), color (2, RGBA as
+// half floats), uv1 (2). Morph targets are added first, then the corner is
+// skinned.
 
 struct Params {
     // The model's first skin matrix in `joints`, and its corner count.
@@ -10,6 +12,12 @@ struct Params {
     // The model's first morph weight in `morph_weights`, and how many.
     morph_first: u32,
     morph_count: u32,
+    // Where its posed corners start in `posed`, in corners.
+    out_first: u32,
+    // 1 when its last frame's pose is posed too (`skin_positions`).
+    moving: u32,
+    pad0: u32,
+    pad1: u32,
 }
 
 @group(0) @binding(0) var<storage, read> rest: array<f32>;
@@ -17,16 +25,17 @@ struct Params {
 @group(0) @binding(1) var<storage, read> influences: array<u32>;
 @group(0) @binding(2) var<storage, read> joints: array<mat4x4<f32>>;
 @group(0) @binding(3) var<storage, read_write> posed: array<f32>;
-@group(0) @binding(4) var<uniform> params: Params;
+// The dispatch's models, from a dynamic offset (CHUNK in skinning.rs).
+@group(0) @binding(4) var<uniform> params: array<Params, 512>;
 @group(0) @binding(5) var<storage, read> morph_weights: array<f32>;
 // Per target, per corner: position offset (3 words), normal offset (3).
 @group(0) @binding(6) var<storage, read> deltas: array<f32>;
 
-// Corner `i`'s blended skin matrix.
-fn skin_matrix(i: u32) -> mat4x4<f32> {
+// Corner `i`'s blended skin matrix, from the model's first matrix `first`.
+fn skin_matrix(i: u32, first: u32) -> mat4x4<f32> {
     let s = i * 6u;
     let packed = vec2<u32>(influences[s], influences[s + 1u]);
-    let which = vec4<u32>(packed.x & 0xffffu, packed.x >> 16u, packed.y & 0xffffu, packed.y >> 16u) + params.first;
+    let which = vec4<u32>(packed.x & 0xffffu, packed.x >> 16u, packed.y & 0xffffu, packed.y >> 16u) + first;
     let w = vec4<f32>(
         bitcast<f32>(influences[s + 2u]),
         bitcast<f32>(influences[s + 3u]),
@@ -36,57 +45,66 @@ fn skin_matrix(i: u32) -> mat4x4<f32> {
     return joints[which.x] * w.x + joints[which.y] * w.y + joints[which.z] * w.z + joints[which.w] * w.w;
 }
 
+// Corner `i`'s rest position with the model's morph targets added.
+fn shaped_position(i: u32, p: Params) -> vec3<f32> {
+    let v = i * 12u;
+    var rp = vec3<f32>(rest[v], rest[v + 1u], rest[v + 2u]);
+    for (var t = 0u; t < p.morph_count; t++) {
+        let mw = morph_weights[p.morph_first + t];
+        if mw != 0.0 {
+            let d = (t * p.count + i) * 6u;
+            rp += mw * vec3<f32>(deltas[d], deltas[d + 1u], deltas[d + 2u]);
+        }
+    }
+    return rp;
+}
+
 @compute @workgroup_size(64)
-fn skin(@builtin(global_invocation_id) id: vec3<u32>) {
-    let i = id.x;
-    if i >= params.count {
+fn skin(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
+    let p = params[group.y];
+    let i = group.x * 64u + lane;
+    if i >= p.count {
         return;
     }
     let v = i * 12u;
-    let m = skin_matrix(i);
-    var rp = vec3<f32>(rest[v], rest[v + 1u], rest[v + 2u]);
+    let o = (p.out_first + i) * 12u;
+    let m = skin_matrix(i, p.first);
+    let rp = shaped_position(i, p);
     var rn = vec3<f32>(rest[v + 3u], rest[v + 4u], rest[v + 5u]);
-    for (var t = 0u; t < params.morph_count; t++) {
-        let mw = morph_weights[params.morph_first + t];
+    for (var t = 0u; t < p.morph_count; t++) {
+        let mw = morph_weights[p.morph_first + t];
         if mw != 0.0 {
-            let d = (t * params.count + i) * 6u;
-            rp += mw * vec3<f32>(deltas[d], deltas[d + 1u], deltas[d + 2u]);
+            let d = (t * p.count + i) * 6u;
             rn += mw * vec3<f32>(deltas[d + 3u], deltas[d + 4u], deltas[d + 5u]);
         }
     }
-    let p = m * vec4<f32>(rp, 1.0);
+    let q = m * vec4<f32>(rp, 1.0);
     let n0 = (m * vec4<f32>(rn, 0.0)).xyz;
     let n = select(vec3<f32>(0.0, 1.0, 0.0), normalize(n0), dot(n0, n0) > 1e-20);
-    posed[v] = p.x;
-    posed[v + 1u] = p.y;
-    posed[v + 2u] = p.z;
-    posed[v + 3u] = n.x;
-    posed[v + 4u] = n.y;
-    posed[v + 5u] = n.z;
+    posed[o] = q.x;
+    posed[o + 1u] = q.y;
+    posed[o + 2u] = q.z;
+    posed[o + 3u] = n.x;
+    posed[o + 4u] = n.y;
+    posed[o + 5u] = n.z;
     for (var k = 6u; k < 12u; k++) {
-        posed[v + k] = rest[v + k];
+        posed[o + k] = rest[v + k];
     }
 }
 
-// The same corners' positions only (normals and the rest are left as they
-// are): the last frame's pose, which only the motion-vector pass reads.
+// The moving models' corners' positions only (normals and the rest are left
+// as they are): the last frame's pose, which only the motion-vector pass
+// reads.
 @compute @workgroup_size(64)
-fn skin_positions(@builtin(global_invocation_id) id: vec3<u32>) {
-    let i = id.x;
-    if i >= params.count {
+fn skin_positions(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
+    let p = params[group.y];
+    let i = group.x * 64u + lane;
+    if p.moving == 0u || i >= p.count {
         return;
     }
-    let v = i * 12u;
-    var rp = vec3<f32>(rest[v], rest[v + 1u], rest[v + 2u]);
-    for (var t = 0u; t < params.morph_count; t++) {
-        let mw = morph_weights[params.morph_first + t];
-        if mw != 0.0 {
-            let d = (t * params.count + i) * 6u;
-            rp += mw * vec3<f32>(deltas[d], deltas[d + 1u], deltas[d + 2u]);
-        }
-    }
-    let p = skin_matrix(i) * vec4<f32>(rp, 1.0);
-    posed[v] = p.x;
-    posed[v + 1u] = p.y;
-    posed[v + 2u] = p.z;
+    let o = (p.out_first + i) * 12u;
+    let q = skin_matrix(i, p.first) * vec4<f32>(shaped_position(i, p), 1.0);
+    posed[o] = q.x;
+    posed[o + 1u] = q.y;
+    posed[o + 2u] = q.z;
 }

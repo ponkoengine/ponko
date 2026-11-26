@@ -1284,6 +1284,8 @@ mod os {
             return None;
         }
         let field = |chars: &[libc::c_char]| {
+            // `c_char` is i8 or u8, by platform.
+            #[allow(clippy::unnecessary_cast)]
             let bytes: Vec<u8> = chars.iter().take_while(|&&c| c != 0).map(|&c| c as u8).collect();
             String::from_utf8_lossy(&bytes).into_owned()
         };
@@ -1311,6 +1313,8 @@ mod os {
                 let mut name: libc::utsname = unsafe { std::mem::zeroed() };
                 // SAFETY: as in `kernel`.
                 assert_eq!(unsafe { libc::uname(&raw mut name) }, 0);
+                // `c_char` is i8 or u8, by platform.
+                #[allow(clippy::unnecessary_cast)]
                 let host: Vec<u8> = name
                     .nodename
                     .iter()

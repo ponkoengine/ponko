@@ -105,6 +105,62 @@ fn load(root: &Path, file: &str) -> Outcome {
     }
 }
 
+/// The glTF extensions that need a cargo feature, and whether this build
+/// has it (the same table as `support` in `src/three/gltf_ext.rs`). The
+/// outcomes are recorded with every feature on.
+fn feature_extensions() -> [(&'static str, bool); 5] {
+    let meshopt = cfg!(all(feature = "gltf-meshopt", not(target_arch = "wasm32")));
+    [
+        ("EXT_meshopt_compression", meshopt),
+        ("KHR_meshopt_compression", meshopt),
+        ("KHR_texture_basisu", cfg!(feature = "compressed-textures")),
+        ("MSFT_texture_dds", cfg!(feature = "compressed-textures")),
+        ("EXT_texture_webp", cfg!(feature = "image-webp")),
+    ]
+}
+
+/// Whether this build has every feature the outcomes were recorded with.
+fn has_every_feature() -> bool {
+    feature_extensions().iter().all(|(_, on)| *on)
+}
+
+/// The `extensionsRequired` of a `.gltf` or `.glb` file, in order.
+fn required_extensions(path: &Path) -> Vec<String> {
+    let Ok(bytes) = std::fs::read(path) else {
+        return Vec::new();
+    };
+    let json = if bytes.starts_with(b"glTF") {
+        let length = bytes
+            .get(12..16)
+            .map_or(0, |b| u32::from_le_bytes(b.try_into().unwrap()) as usize);
+        bytes.get(20..20 + length).unwrap_or_default().to_vec()
+    } else {
+        bytes
+    };
+    let value: Value = serde_json::from_slice(&json).unwrap_or_default();
+    value["extensionsRequired"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+        .unwrap_or_default()
+}
+
+/// The outcome this build should give for a sample recorded as `recorded`
+/// (with every feature on): the first extension the file requires that
+/// either needs a feature this build lacks or is the one the recording
+/// skipped decides; otherwise the recorded outcome stands.
+fn expected(recorded: &str, required: &[String]) -> String {
+    let recorded_extension = recorded
+        .strip_prefix("skipped ")
+        .map(|e| e.split(' ').next().unwrap_or(""));
+    for extension in required {
+        let missing = feature_extensions().iter().any(|(name, on)| name == extension && !on);
+        if missing || recorded_extension == Some(extension.as_str()) {
+            return format!("skipped {extension}");
+        }
+    }
+    recorded.to_string()
+}
+
 /// The recorded outcomes: the revision they are for, and each sample's.
 fn recorded() -> (String, BTreeMap<String, String>) {
     let text = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(OUTCOMES)).unwrap_or_default();
@@ -157,6 +213,7 @@ fn every_sample_loads_or_names_the_extension_it_needs() {
 
     let mut results = Vec::new();
     let mut found = BTreeMap::new();
+    let mut files = BTreeMap::new();
     for asset in &samples {
         let name = asset["name"].as_str().unwrap();
         let file = asset["file"].as_str().unwrap();
@@ -177,6 +234,7 @@ fn every_sample_loads_or_names_the_extension_it_needs() {
             "error": match &outcome { Outcome::Failed(m) => m.clone(), _ => String::new() },
         }));
         found.insert(name.to_string(), outcome);
+        files.insert(name.to_string(), file.to_string());
     }
     let out = root.join("results");
     std::fs::create_dir_all(&out).unwrap();
@@ -195,6 +253,10 @@ fn every_sample_loads_or_names_the_extension_it_needs() {
 
     let (recorded_revision, mut recorded) = recorded();
     if std::env::var_os("PONKO_UPDATE_KNOWN_CONTENT").is_some() {
+        assert!(
+            has_every_feature(),
+            "record the outcomes with every feature on: --features 3d,compressed-textures,gltf-meshopt,image-webp"
+        );
         for (name, outcome) in &found {
             recorded.insert(name.clone(), outcome.key());
         }
@@ -212,6 +274,13 @@ fn every_sample_loads_or_names_the_extension_it_needs() {
         .iter()
         .filter_map(|(name, outcome)| {
             let was = recorded.get(name).map_or("(not listed)", String::as_str);
+            // A build without a feature gives the outcome that build should,
+            // not the recorded one.
+            let was = if has_every_feature() || !recorded.contains_key(name) {
+                was.to_string()
+            } else {
+                expected(was, &required_extensions(&root.join(&files[name])))
+            };
             (was != outcome.key()).then(|| match outcome {
                 Outcome::Failed(message) => format!("{name}: {was} -> failed: {message}"),
                 _ => format!("{name}: {was} -> {}", outcome.key()),
@@ -234,4 +303,31 @@ fn an_unread_extension_is_told_apart_from_a_failure() {
         Some("KHR_draco_mesh_compression")
     );
     assert_eq!(missing_extension("Box.gltf: buffer 0 is shorter than it says"), None);
+}
+
+#[test]
+fn a_build_without_a_feature_expects_the_skip_that_feature_causes() {
+    let webp = vec!["EXT_texture_webp".to_string()];
+    let unlit_after_webp = vec!["EXT_texture_webp".to_string(), "KHR_materials_unlit".to_string()];
+    // What a file with no feature-gated requirement gives never depends on the build.
+    assert_eq!(expected("loaded", &[]), "loaded");
+    assert_eq!(expected("failed", &["KHR_materials_unlit".to_string()]), "failed");
+    assert_eq!(
+        expected("skipped KHR_materials_unlit", &["KHR_materials_unlit".to_string()]),
+        "skipped KHR_materials_unlit"
+    );
+    // A feature this build has changes nothing; one it lacks skips the sample, naming the extension.
+    let expected_webp = expected("loaded", &webp);
+    if cfg!(feature = "image-webp") {
+        assert_eq!(expected_webp, "loaded");
+        assert_eq!(expected("loaded", &unlit_after_webp), "loaded");
+    } else {
+        assert_eq!(expected_webp, "skipped EXT_texture_webp");
+        assert_eq!(expected("loaded", &unlit_after_webp), "skipped EXT_texture_webp");
+        // The first extension in the file's own order decides, as the loader reports it.
+        assert_eq!(
+            expected("skipped KHR_materials_unlit", &unlit_after_webp),
+            "skipped EXT_texture_webp"
+        );
+    }
 }

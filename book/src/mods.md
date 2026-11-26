@@ -331,7 +331,18 @@ ms: the cost came with the change that ties a mod's game pointer to its
 aligned to 128 bytes (`scripts/bench-aligned.sh`) the two still give
 0.057 and 0.046 ms, so it is not where the code landed in the binary.
 That change runs once a tick, not once a call, so why it costs about
-12 ns a call is not yet known.
+12 ns a call is not yet known. The check has since moved from every host
+function to every `ModCode::call`: a call reads the thread's call number
+once and only then hands its host functions the game, so code swapped out
+of its `with_code` call, or into one it wasn't handed, still can't reach
+the game (the tests `code_swapped_out_of_with_code_cannot_reach_the_game_afterwards`
+and `code_swapped_into_with_code_cannot_reach_the_game`). On a machine
+busy with other builds (2026-11-26, load average 61–65, three runs each,
+interleaved with the revision before), it cost nothing measurable and
+didn't bring the 46 ns back either: the call alone 0.056–0.058 ms against
+0.057 ms, `random` 0.069 ms against 0.068–0.070 ms and `get_field`
+0.379–0.386 ms against 0.379–0.387 ms. A run on an idle machine is still
+to place the 12 ns.
 
 `get_field` and `set_field` go through reflection's JSON (the component is
 read whole, and written back for a set), so they cost what `get_json` and

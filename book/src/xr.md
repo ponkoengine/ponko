@@ -194,7 +194,7 @@ Spatial audio already follows a listener; the head pose would drive it.
 |---|---|---|---|
 | Linux | Monado (open source) | Vulkan | yes, also without a headset: Monado has a simulated device, so a CI job could run a session |
 | Windows | SteamVR, Meta's PC runtime, others | Vulkan or Direct3D 12 | with a headset |
-| Standalone headsets (Android) | the vendor's OpenXR runtime | Vulkan | needs the Android target, which is not supported (the mobile decision is in the roadmap) |
+| Standalone headsets (Android) | the vendor's OpenXR runtime | Vulkan | with a headset: the engine builds for Android ([Android](android.md)), but an OpenXR app on a headset needs its loader and manifest entries, which the package doesn't have |
 | macOS | none | | no OpenXR runtime |
 | Apple's headset | its own API, not OpenXR | Metal | a separate backend; not covered by OpenXR |
 | Web | WebXR, in the browser | WebGL2 (WebGPU bindings are early) | a separate backend; the stereo drawing above applies |
