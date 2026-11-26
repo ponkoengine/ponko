@@ -2266,7 +2266,12 @@ mod tests {
             seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
             (seed >> 33) % n
         };
-        for (views, levels, span, characters) in [(1, 1, 126, 10_000), (6, 2, 40, 3_000), (3, 3, 1, 50), (2, 1, 1 << 15, 100)] {
+        for (views, levels, span, characters) in [
+            (1, 1, 126, 10_000),
+            (6, 2, 40, 3_000),
+            (3, 3, 1, 50),
+            (2, 1, 1 << 15, 100),
+        ] {
             let mut keys = Vec::new();
             for v in 0..views as u64 {
                 for i in 0..characters {
