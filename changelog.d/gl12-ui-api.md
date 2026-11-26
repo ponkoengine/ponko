@@ -38,5 +38,7 @@
   ```
   After:
   ```rust
+  use ponko::ui::UiRole;
+  # let role = UiRole::Button;
   let polite = matches!(role, UiRole::Button | UiRole::CheckBox | UiRole::Slider | UiRole::TextInput);
   ```

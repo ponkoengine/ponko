@@ -16,6 +16,8 @@
   ```
   After:
   ```rust
+  # #[derive(Component, Default)] struct Position(f32);
+  # let id = world.component_id::<Position>().unwrap();
   world.spawn((Position::default(),));
   let count = world.raw_ref().archetypes().iter().find(|a| a.has(id)).map_or(0, |a| a.len());
   ```

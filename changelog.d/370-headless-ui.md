@@ -13,6 +13,8 @@
   ```
   After:
   ```rust
+  use ponko::scenario::ScenarioCheck;
+  # let check: ScenarioCheck = todo!();
   match check {
       ScenarioCheck::Action { name, .. } => println!("action {name}"),
       ScenarioCheck::Resource { name, .. } => println!("resource {name}"),

@@ -19,6 +19,7 @@
   ```
   After:
   ```rust
+  # let options = ponko::d3::CollisionMeshOptions::default();
   let solid = ctx.load_collision_mesh("yard.glb"); // panics with a `ponko:` message if it fails
   let hull = ctx.try_load_collision_mesh_with("rock.glb", options)?;
   ```
@@ -43,6 +44,8 @@
   ```
   After:
   ```rust
+  # #[derive(Default)] struct Rules; #[derive(Default)] struct Stats;
+  # let entity: Entity = todo!();
   ctx.assets.load_reflected_resource_json::<Rules>(&mut ctx.world, "rules.json")?;
   ctx.assets.load_reflected_component_json::<Stats>(&mut ctx.world, "stats.json", entity)?;
   ```

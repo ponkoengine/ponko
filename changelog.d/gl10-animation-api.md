@@ -13,6 +13,8 @@
   ```
   After:
   ```rust
+  use ponko::anim::{AnimationState, Motion};
+  # let clip = todo!();
   let once = AnimationState::new(Motion::Clip(clip)).with_looping(false);
   ```
 - `ponko::anim::MotionChild` is `#[non_exhaustive]`: struct literals outside
@@ -25,6 +27,8 @@
   ```
   After:
   ```rust
+  use ponko::anim::{Motion, MotionChild};
+  # let walk = todo!();
   let child = MotionChild::new(Motion::Clip(walk)).with_time_scale(1.5);
   ```
 - `ponko::anim::AnimationEvent` is `#[non_exhaustive]`: struct literals
@@ -37,6 +41,8 @@
   ```
   After:
   ```rust
+  use ponko::anim::AnimationEvent;
+  # let mut state: ponko::anim::AnimationState = todo!();
   state.events.push(AnimationEvent::new(0.5, "step"));
   ```
 - `ponko::anim::Joint` is `#[non_exhaustive]`: struct literals outside the
@@ -49,6 +55,8 @@
   ```
   After:
   ```rust
+  use ponko::anim::Joint;
+  # use ponko::d3::Transform;
   let knee = Joint::new("knee", 0).with_rest(Transform::at(vec3(0.0, -0.4, 0.0)));
   ```
 - `ponko::anim::JointAnimation` is `#[non_exhaustive]`: struct literals
@@ -61,6 +69,8 @@
   ```
   After:
   ```rust
+  use ponko::anim::JointAnimation;
+  # let bend: ponko::anim::AnimationTrack = todo!();
   let knee = JointAnimation::new(1, "knee").with_rotation(bend);
   ```
 - `ponko::anim::MorphAnimation` is `#[non_exhaustive]`: struct literals
@@ -72,6 +82,8 @@
   ```
   After:
   ```rust
+  use ponko::anim::MorphAnimation;
+  # let track = todo!();
   let smile = MorphAnimation::new("smile", track);
   ```
 - `ponko::anim::MorphTarget` is `#[non_exhaustive]`: struct literals and
@@ -84,6 +96,9 @@
   ```
   After:
   ```rust
+  use ponko::anim::MorphTarget;
+  # let mut mesh: ponko::render::MeshData = todo!();
+  # let up = Vec::new();
   mesh.morph_targets.push(MorphTarget::new("raise", up));
   ```
 - `ponko::anim::AttachToJoint` is `#[non_exhaustive]`: struct literals
@@ -96,6 +111,8 @@
   ```
   After:
   ```rust
+  use ponko::anim::AttachToJoint;
+  # let (cup, person, hand, offset) = todo!();
   ctx.world.spawn((Model::new(cup), AttachToJoint::new(person, hand).with_offset(offset)));
   ```
 - The `Motion::Blend1D` and `Motion::Blend2D` variants are
@@ -109,6 +126,8 @@
   ```
   After:
   ```rust
+  use ponko::anim::Motion;
+  # let (speed, walk, run) = todo!();
   let tree = Motion::blend_1d(speed, vec![(0.0, walk), (1.0, run)]);
   ```
 

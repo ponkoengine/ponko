@@ -14,6 +14,8 @@
   ```
   After:
   ```rust
+  use ponko_ffi::PonkoBusEffectKind;
+  # let effect: ponko_ffi::PonkoBusEffect = todo!();
   match effect.kind {
       PonkoBusEffectKind::PONKO_BUS_EFFECT_FILTER => "filter",
       PonkoBusEffectKind::PONKO_BUS_EFFECT_REVERB => "reverb",

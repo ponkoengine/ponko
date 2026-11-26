@@ -35,5 +35,7 @@
   ```
   After:
   ```rust
+  use ponko_image_diff::{compare_files, Diff};
+  # let (a, b, tolerance) = todo!();
   let diff: Result<Diff, String> = compare_files(a, b, tolerance, None).map_err(String::from);
   ```

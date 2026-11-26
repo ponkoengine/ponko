@@ -20,6 +20,8 @@
   ```
   After:
   ```rust
+  use ponko::net::Net;
+  # let id: u64 = todo!();
   let client = ponko::net::SteamClient::init_app(480)?;
   let net = match ponko::net::steam_lobby_from_args() {
       Some(lobby) => Net::steam_join(&client, lobby),

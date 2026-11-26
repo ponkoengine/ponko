@@ -7,11 +7,15 @@
   the sky (standard depth `d` is `1.0 - d` now for the same near and far planes).
   Before:
   ```wgsl
-  let sky = textureLoad(scene_depth_texture, texel, 0) >= 1.0;
+  fn is_sky(texel: vec2<i32>) -> bool {
+      return textureLoad(scene_depth_texture, texel, 0) >= 1.0;
+  }
   ```
   After:
   ```wgsl
-  let sky = textureLoad(scene_depth_texture, texel, 0) <= 0.0;
+  fn is_sky(texel: vec2<i32>) -> bool {
+      return textureLoad(scene_depth_texture, texel, 0) <= 0.0;
+  }
   ```
 
 ### Changed

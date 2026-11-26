@@ -8,7 +8,6 @@
 - **Breaking:** `Graphics::create_render_target` and `try_create_render_target` return a `RenderTarget` instead of a `Texture`. `TargetCamera::new`, `TargetCamera::reflection`, `ComputePass::new`, `TargetEffect::new` and `d3::UiPanel::new` take a `RenderTarget`, and their `target` fields are one. Pass `target.texture()` where the target is read as a texture.
 - **Breaking:** `d3::UiPanel`'s `texture: Texture` field is `target: RenderTarget`.
 - **Breaking:** `ComputePass::for_buffer` sets `target` to `RenderTarget::NONE` (it was a zero-sized `Texture` with id 0).
-- **Breaking:** Rust code matching on `ponko_ffi::PonkoHandleKind` needs an arm for `PONKO_HANDLE_RENDER_TARGET`.
 - **Breaking:** C++: `ctx.create_render_target` and `ctx.create_ui_panel` return a `ponko::render_target`; `target_camera_of`, `compute_pass_of`, `target_effect_of` and `ctx.reflection_camera` take one and no longer accept a `ponko::texture`.
 - C: `ponko_ctx_reflection_camera` refuses a texture that isn't a render target of the game (`PONKO_INVALID_ARGUMENT`), as the target camera, compute pass and target effect lists already did when set.
 
@@ -26,7 +25,8 @@
   ```
   After:
   ```rust
-  use ponko::render::RenderTarget;
+  # let waves = todo!();
+  use ponko::render::{ComputePass, MaterialDesc, RenderTarget};
   let ripples: RenderTarget = ctx.gfx.create_render_target(256, 256);
   ctx.scene3d.passes.compute.push(ComputePass::new(waves, ripples));
   let water = MaterialDesc::default().with_custom_textures([Some(ripples.texture()), None]);
@@ -39,10 +39,12 @@
   Before:
   ```cpp
   ponko::texture screen = ctx.create_render_target(320, 180);
+  std::vector<ponko::target_camera> list = ctx.target_cameras();
   for (auto& t : list) t = ctx.reflection_camera(ctx.camera3d(), t.target, 0);
   ```
   After:
   ```cpp
   ponko::render_target screen = ctx.create_render_target(320, 180);
+  std::vector<ponko::target_camera> list = ctx.target_cameras();
   for (auto& t : list) t = ctx.reflection_camera(ctx.camera3d(), ctx.render_target_of(t.target), 0);
   ```

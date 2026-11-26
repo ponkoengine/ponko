@@ -43,6 +43,7 @@
   ```
   After:
   ```rust
+  # const TUNING: &[u8] = b"{}";
   use ponko::assets::MemorySource;
   use ponko::prelude::*;
   ctx.assets.add_source(MemorySource::new("embedded").with("tuning.json", TUNING));

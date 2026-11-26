@@ -21,6 +21,8 @@
   ```
   After:
   ```rust
+  use ponko::actions::Action;
+  # let action: Action = todo!();
   match action { Action::Button(_) => 0, Action::Axis(_) => 1, Action::Axis2(_) => 2, _ => 3 }
   ```
 - Action-map JSON methods return engine errors.
@@ -31,5 +33,6 @@
   ```
   After:
   ```rust
+  use ponko::actions::ActionMap;
   fn load(s: &str) -> Result<ActionMap, ponko::error::Error> { ActionMap::from_json(s) }
   ```

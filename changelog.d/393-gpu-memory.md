@@ -27,5 +27,6 @@
   ```
   After:
   ```rust
+  use ponko::perf::Budget;
   let budget = Budget { frame_p99_ms: Some(4.0), allocs_per_frame: Some(0.0), ..Default::default() };
   ```
