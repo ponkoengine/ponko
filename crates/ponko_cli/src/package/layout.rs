@@ -1028,7 +1028,7 @@ pub fn ios_info_plist(game: &Game, platform: &Platform, icon: bool) -> String {
         ),
     ];
     if icon {
-        let names = |sizes: &[&str]| strings(sizes.iter().map(|s| *s).collect());
+        let names = |sizes: &[&str]| strings(sizes.to_vec());
         keys.push((
             "CFBundleIcons",
             Plist::Dict(vec![(
