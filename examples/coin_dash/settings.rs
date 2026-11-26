@@ -723,8 +723,8 @@ fn drive(ctx: &mut Ctx, state: &mut SettingsUi, on_screen: bool) {
             UiEvent::Changed(id) if id == state.volume => {
                 let volume = ctx.ui.value(id).unwrap_or(0.8).clamp(0.0, 1.0);
                 ctx.world.resource_mut::<Settings>().volume = volume;
-                if let Some(sounds) = ctx.world.get_resource::<Sounds>().copied() {
-                    ctx.audio.set_bus_volume(sounds.music_bus, volume * MUSIC_VOLUME);
+                if let Some(Music(music)) = ctx.world.get_resource::<Music>().copied() {
+                    ctx.audio.set_volume(music, volume * MUSIC_VOLUME, 0.0);
                 }
             }
             UiEvent::ScreenPopped(id) if id == state.prompt => state.capture = None,

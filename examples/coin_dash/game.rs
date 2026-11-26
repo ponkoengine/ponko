@@ -36,7 +36,6 @@ pub mod settings;
 #[path = "smoke.rs"]
 pub mod smoke;
 
-use ponko::audio::AudioEffects;
 #[allow(unused_imports)]
 use ponko::d2::{Sprite, Transform};
 use ponko::locale::{Arg, Strings};
@@ -85,10 +84,11 @@ pub struct Sounds {
     win: Sound,
     lose: Sound,
     select: Sound,
-    music: Sound,
-    /// The bus the music plays on: its volume follows the settings.
-    music_bus: AudioBus,
 }
+
+/// The music while it plays: its volume follows the settings.
+#[derive(Clone, Copy)]
+pub struct Music(Playing);
 
 /// The music's share of the volume setting.
 const MUSIC_VOLUME: f32 = 0.4;
@@ -323,19 +323,17 @@ impl Plugin for Drawing {
             win: sound("win"),
             lose: sound("lose"),
             select: sound("select"),
-            // Music is long: streamed from the file rather than decoded whole.
-            music: ctx.audio.load_stream("coin_dash/music/dash.ogg"),
-            music_bus: ctx.audio.bus("music"),
         };
         ctx.world.insert_resource(sounds);
-        let volume = ctx.world.resource::<Settings>().volume;
-        ctx.audio.set_bus_volume(sounds.music_bus, volume * MUSIC_VOLUME);
-        let music = SoundParams {
+        // Music is long: streamed from the file rather than decoded whole.
+        let music = ctx.audio.load_stream("coin_dash/music/dash.ogg");
+        let params = SoundParams {
+            volume: ctx.world.resource::<Settings>().volume * MUSIC_VOLUME,
             looping: true,
             ..Default::default()
         };
-        ctx.audio
-            .play_on(sounds.music, music, sounds.music_bus, AudioEffects::default());
+        let playing = ctx.audio.play_ex(music, params);
+        ctx.world.insert_resource(Music(playing));
     }
 }
 // ANCHOR_END: plugins
