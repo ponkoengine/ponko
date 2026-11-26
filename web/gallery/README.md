@@ -23,8 +23,8 @@ target and `wasm-bindgen-cli` at the version in `Cargo.lock`, see the guide's
 | `--only <a,b>` | Build only these examples. |
 | `--pages-only` | Rewrite the pages without building (after editing `examples.json` or the page code). |
 
-The site is about 15 MB per example uncompressed (the game's `.wasm` and a
-copy of `assets/`); 30 examples come to about 400 MB.
+The site is about 20 MB per example uncompressed (the game's `.wasm` and a
+copy of `assets/`); the 49 examples come to about 1.1 GB.
 
 ## Adding an example: one line
 

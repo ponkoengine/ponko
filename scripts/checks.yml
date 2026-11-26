@@ -1812,8 +1812,8 @@ jobs:
   # then the 3D reference game, Shard Grove, played in the browser: its keys
   # (title, pause, resume) and its whole walk-through (`?smoke=walkthrough`:
   # shards, a save, back to the title, continue, the gate, the end screen),
-  # on WebGPU and WebGL2. Slow: the gallery's builds are about 40 release wasm
-  # builds (about an hour on a busy Mac, 600 MB of output in target/web). Run
+  # on WebGPU and WebGL2. Slow: 50 release wasm builds (1.1 GB of sites in
+  # target/web and 4.5 GB of build output; delete both afterwards). Run
   # on a Mac, where Chromium's new headless mode draws with the GPU through
   # Metal (`--require-gpu`); see book/src/check-results/macos.md.
   web-examples:
