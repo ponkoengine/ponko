@@ -79,7 +79,7 @@ impl Effects {
                         continue;
                     };
                     let texture = texture.clone();
-                    let view = texture.create_view(&Default::default());
+                    let view = super::target_mips::first_level(&texture);
                     self.targets.push((target, texture, view));
                     self.targets.len() - 1
                 }

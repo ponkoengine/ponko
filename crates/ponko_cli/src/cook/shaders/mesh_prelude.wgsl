@@ -394,7 +394,13 @@ fn direct_light(s: Surface, l: vec3<f32>, radiance: vec3<f32>) -> vec3<f32> {
     let n_l = max(dot(n, l), 0.0);
     let n_v = max(dot(n, v), 1e-4);
     let n_h = max(dot(n, h), 0.0);
-    let v_h = max(dot(v, h), 0.0);
+    // At most 1: with the light straight behind the viewer, `h` is `v` and
+    // the dot product can round past 1, and `pow` of the negative
+    // `1 - v_h` below is NaN where the GPU computes it as exp2(5 * log2(x))
+    // (AMD's Vulkan driver; Direct3D's compiler turns it into products).
+    // A probe of global illumination sees such a point behind every lamp,
+    // and its NaN spread to every probe through their light.
+    let v_h = clamp(dot(v, h), 0.0, 1.0);
 
     let a = s.roughness * s.roughness;
     let a2 = a * a;

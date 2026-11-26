@@ -2,8 +2,10 @@
 
 > **Maturity: [tested](maturity.md).** Game: Shard Grove itself, played
 > headless. Tests: `tests/shard_grove.rs`. Platforms: Linux, macOS and
-> Windows, headless (the workspace tests in the list of checks). Graphics: not
-> involved. Missing: its package played on each OS.
+> Windows, headless (the workspace tests in the list of checks), and its
+> package, played headless from an unrelated folder (`package-smoke`). Graphics:
+> not involved. Missing: a frame-time baseline per GPU tier, and the game opened
+> in a WebGPU browser and in a window on each OS (#454).
 
 [`examples/shard_grove`](../../examples/shard_grove)
 is the engine's 3D reference game. The other 3D examples each show one
@@ -214,6 +216,21 @@ shards, the quality, the storage), in the format of the
 `web/smoke` fixtures, and the [web gallery](web.md#the-gallery-of-examples)
 lists it.
 
+## Performance baseline
+
+`PONKO_BENCH=600` on the packaged game measures the title screen, the camera
+circling the whole grove at the High preset in a 1280 x 720 window. The
+recorded runs, with the hardware, the driver, the settings and the load of
+the machine, are in `bench/shard_grove/<machine>/`:
+
+| Machine | Backend | Frame (median of 3) | GPU | Spread |
+|---|---|---|---|---|
+| Windows 11, Ryzen 5 3600, Radeon RX Vega | DirectX 12 | 3.95 ms (253 fps) | 3.83 ms | 0.0% |
+| Windows 11, Ryzen 5 3600, Radeon RX Vega | Vulkan | 3.75 ms (266 fps) | 3.60 ms | 1.3% |
+
+The game is GPU-bound there; screen-space reflections are the slowest pass.
+Other GPU tiers (an integrated GPU, a browser) are still to be measured.
+
 ## Gap list
 
 What the game found missing or awkward, and what is not covered yet:
@@ -222,8 +239,9 @@ What the game found missing or awkward, and what is not covered yet:
 |---|---|
 | 3D physics had no pause like the 2D `ctx.physics.set_paused`; the game held the warden's velocity at zero on menus. | Fixed by `ctx.physics3d.set_paused` (#452) |
 | `NavAgent` had private fields, so it couldn't be built with `..Default::default()`; the game set fields on a default. | Fixed: its progress moved into `NavAgent::state`, so it builds with struct-update syntax (#453) |
-| A frame-rate performance baseline per GPU tier (`PONKO_BENCH`) needs runs on real GPUs with a window. | Open |
-| The list of checks doesn't package and play it on every OS yet, as it does Ember Hop; its headless tests run in the test job on Linux, macOS and Windows. | Open |
+| A frame-rate performance baseline per GPU tier (`PONKO_BENCH`) needs runs on real GPUs with a window. | Desktop tier recorded on Windows, DirectX 12 and Vulkan ([Performance baseline](#performance-baseline)); the other tiers need a person ([the sheet](../../scripts/checklists/shard-grove.md), #454) |
+| Opened once in a WebGPU browser and in a window on each OS. | Open: needs a person ([the sheet](../../scripts/checklists/shard-grove.md), #454) |
+| The list of checks packaged and played it on every OS, as it does Ember Hop. | Fixed: `package-smoke` packages it with `ponko package --example shard_grove` and plays the package headless from an unrelated folder (#454); its headless tests also run in the test job on Linux, macOS and Windows |
 | One level: level streaming isn't part of the game. | Open |
 | Rust only; no C or C++ counterpart. | No native port planned yet |
 

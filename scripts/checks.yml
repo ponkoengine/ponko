@@ -1869,6 +1869,60 @@ jobs:
             test -f "$work/data/ember-hop/progress.json"
             cd "$GITHUB_WORKSPACE"
           done
+      # The 3D reference game (examples/shard_grove, features navmesh and
+      # physics3d): its download with the command's own smoke run, then its
+      # walk-through from the package, started from an unrelated folder with
+      # a data folder of its own: three shards, a save at a shrine, quitting
+      # to the title, continuing the saved run, the gate and the title again;
+      # headless (no window, no GPU). Opening it in a window on each OS is a
+      # person's job (scripts/checklists/).
+      - name: The 3D game's download, with ponko package's own smoke run
+        if: ${{ !cancelled() }}
+        run: cargo run -p ponko_cli -- package --example shard_grove --features navmesh,physics3d --profile dev --out target/package-grove
+      - name: The 3D game's walk-through from its package (headless, from an unrelated folder)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir=$(find target/package-grove -maxdepth 1 -type d -name 'shard-grove-*' | head -n 1)
+          exe=$(find "$dir" -type f \( -name shard_grove -o -name shard_grove.exe \) | head -n 1)
+          test -n "$exe" || { echo "no shard_grove program in $dir"; exit 1; }
+          exe="$GITHUB_WORKSPACE/$exe"
+          work="$RUNNER_TEMP/grove headless"
+          mkdir -p "$work/elsewhere" "$work/data"
+          cd "$work/elsewhere"
+          PONKO_DATA_DIR="$work/data" "$exe" --smoke headless --report report.json
+          python -c "import json, sys; r = json.load(open(sys.argv[1])); print(json.dumps(r)); t = r['tally']; ok = r['finished'] and r['mode'] == 'headless' and t['saves'] >= 1 and t['loads'] >= 1 and t['wins'] == 1 and r['warden_joints'] > 0 and r['path_corners'] > 0; sys.exit(0 if ok else 1)" report.json
+          cd "$GITHUB_WORKSPACE"
+
+  # iOS (book/src/ios.md): the engine and the C library linted for devices
+  # and the simulator, then the phone check packaged with `ponko package
+  # --target ios-sim` and run on a fresh simulated iPhone: headless, with
+  # its window (frames, safe area, suspend and resume, the clipboard) and
+  # with the keyboard open. A Mac with Xcode only; the simulator runs
+  # without Simulator.app, so no window opens. What needs a real device and
+  # a person is the guide's verification matrix.
+  ios:
+    local-os: [macOS]
+    local-tags: [test, lint]
+    name: iOS (device and simulator builds, the simulator check)
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+      - name: Clippy for iOS devices
+        local-requires: [xcrun, target:stable/aarch64-apple-ios]
+        run: cargo clippy -p ponko -p ponko_ffi --target aarch64-apple-ios --all-targets
+      - name: Clippy for the iOS simulator
+        local-requires: [xcrun, target:stable/aarch64-apple-ios-sim]
+        run: cargo clippy -p ponko -p ponko_ffi --target aarch64-apple-ios-sim --all-targets
+      - name: The simulator check (needs Xcode and its iOS simulator runtime)
+        local-requires: [xcrun, target:stable/aarch64-apple-ios-sim]
+        run: scripts/ios-simulator.sh target/ios-simulator
 
   # The reference validation bundles (book/src/validation-bundles.md): the
   # deliberately broken game and the corrected one, run in-process and as a

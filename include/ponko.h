@@ -263,7 +263,7 @@
 
 #define PONKO_CAMERA3D_EX_VERSION 2
 
-#define PONKO_TARGET_CAMERA_EX_VERSION 2
+#define PONKO_TARGET_CAMERA_EX_VERSION 3
 
 #define PONKO_PREDICTION_DEFAULT_CAPACITY 256
 
@@ -1333,7 +1333,16 @@ typedef enum PonkoWindowEventKind {
   PONKO_WINDOW_EVENT_CLOSE_REQUESTED = 2,
   PONKO_WINDOW_EVENT_FILE_DROPPED = 3,
   PONKO_WINDOW_EVENT_SCALE_FACTOR_CHANGED = 4,
+  PONKO_WINDOW_EVENT_SUSPENDED = 5,
+  PONKO_WINDOW_EVENT_RESUMED = 6,
+  PONKO_WINDOW_EVENT_LOW_MEMORY = 7,
 } PonkoWindowEventKind;
+
+typedef enum PonkoAudioSessionCategory {
+  PONKO_AUDIO_SESSION_SOLO_AMBIENT = 0,
+  PONKO_AUDIO_SESSION_AMBIENT = 1,
+  PONKO_AUDIO_SESSION_PLAYBACK = 2,
+} PonkoAudioSessionCategory;
 
 typedef enum PonkoCursorIcon {
   PONKO_CURSOR_DEFAULT = 0,
@@ -3697,6 +3706,11 @@ typedef struct PonkoTargetCameraEx {
   struct PonkoTargetCamera target_camera;
   bool particles;
   uint32_t debug_draw;
+  bool has_cull_box;
+  struct PonkoVec3 cull_box_min;
+  struct PonkoVec3 cull_box_max;
+  bool has_clear;
+  struct PonkoColor clear;
 } PonkoTargetCameraEx;
 
 typedef bool (*PonkoPredictStepFn)(void *user,
@@ -5323,6 +5337,10 @@ enum PonkoStatus ponko_ctx_audio_output_devices(struct PonkoCtx *ctx,
                                                 char *buffer,
                                                 size_t capacity,
                                                 size_t *out_len);
+
+enum PonkoStatus ponko_ctx_audio_set_session_category(struct PonkoCtx *ctx, uint32_t category);
+
+enum PonkoStatus ponko_ctx_audio_session_category(struct PonkoCtx *ctx, uint32_t *category);
 
 enum PonkoStatus ponko_ctx_set_audio_output_device(struct PonkoCtx *ctx, const char *device);
 
@@ -8588,6 +8606,22 @@ enum PonkoStatus ponko_ctx_create_render_target(struct PonkoCtx *ctx,
                                                 uint32_t height,
                                                 struct PonkoTexture *out_texture);
 
+enum PonkoStatus ponko_ctx_create_mipmapped_render_target(struct PonkoCtx *ctx,
+                                                          uint32_t width,
+                                                          uint32_t height,
+                                                          struct PonkoTexture *out_texture);
+
+enum PonkoStatus ponko_ctx_set_target_camera_effects(struct PonkoCtx *ctx,
+                                                     size_t index,
+                                                     const struct PonkoScreenEffect *effects,
+                                                     size_t count);
+
+enum PonkoStatus ponko_ctx_target_camera_effects(struct PonkoCtx *ctx,
+                                                 size_t index,
+                                                 struct PonkoScreenEffect *out_effects,
+                                                 size_t capacity,
+                                                 size_t *out_count);
+
 enum PonkoStatus ponko_ctx_reflection_camera(struct PonkoCtx *ctx,
                                              const struct PonkoCamera3D *camera,
                                              struct PonkoTexture target,
@@ -11493,6 +11527,14 @@ enum PonkoStatus ponko_ctx_window_safe_insets(struct PonkoCtx *ctx, struct Ponko
 
 enum PonkoStatus ponko_ctx_window_feed_safe_insets(struct PonkoCtx *ctx,
                                                    struct PonkoSafeInsets insets);
+
+enum PonkoStatus ponko_ctx_window_suspended(struct PonkoCtx *ctx, bool *value);
+
+enum PonkoStatus ponko_ctx_window_feed_lifecycle(struct PonkoCtx *ctx, uint32_t kind);
+
+enum PonkoStatus ponko_ctx_window_keyboard_inset(struct PonkoCtx *ctx, float *inset);
+
+enum PonkoStatus ponko_ctx_window_feed_keyboard_inset(struct PonkoCtx *ctx, float inset);
 
 enum PonkoStatus ponko_ctx_window_monitor_count(struct PonkoCtx *ctx, size_t *count);
 

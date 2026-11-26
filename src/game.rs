@@ -3172,7 +3172,8 @@ impl Game {
 
     /// Names the game for [`ctx.storage`](crate::ctx::Ctx::storage): its files
     /// go in the folder `app_id` inside the player's data folder (Windows
-    /// `%APPDATA%`, macOS `~/Library/Application Support`, Linux
+    /// `%APPDATA%`, macOS `~/Library/Application Support`, iOS the same
+    /// in the app's container, Linux
     /// `$XDG_DATA_HOME` or `~/.local/share`), or in the browser database
     /// `ponko:<app_id>` on the web. Without one, the game keeps no files.
     ///

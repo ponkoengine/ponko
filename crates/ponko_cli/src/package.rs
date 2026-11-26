@@ -34,8 +34,8 @@ check it runs. The files under assets/ ship as one asset pack, assets.pack
 would be. The pack holds them cooked (as `ponko cook` makes them: textures
 compressed when the game reads KTX2, meshes optimized, sounds in FLAC,
 shaders checked), under the same names. What goes in comes from `[package.metadata.ponko]` in the game's
-Cargo.toml (name, id, icon, assets, files, pack); see the guide's packaging
-chapter.
+Cargo.toml (name, id, icon, assets, files, pack, orientation); see the guide's
+packaging chapter.
 
 What it makes, by platform (the host's unless --target or --web):
   Windows  a folder with the .exe, zipped                 (--format zip)
@@ -43,12 +43,19 @@ What it makes, by platform (the host's unless --target or --web):
            where there is no hdiutil)
   Linux    a folder, as a .tar.gz                         (--format tar.gz)
   Web      a folder to put on any static web host         (--web)
+  iOS      an app bundle (Name.app): for a device in an   (--target ios;
+           ipa, signed by your --sign program              --format ipa)
+           for the simulator, zipped                       (--target ios-sim;
+                                                            --format zip)
 
 Options:
   --bin <name>, --example <name>  The program (default: the package's binary)
   -p, --package <name>            The package, in a workspace
   --manifest-path <path>          The game's Cargo.toml (default: found from here)
-  --target <triple>               Build for another platform (cross-compiling)
+  --target <triple>               Build for another platform (cross-compiling);
+                                  `ios` is aarch64-apple-ios (devices),
+                                  `ios-sim` aarch64-apple-ios-sim (the
+                                  simulator on an Apple silicon Mac)
   --web                           Build for browsers (wasm32-unknown-unknown;
                                   needs wasm-bindgen, see the guide)
   --threads                       With --web: build with worker threads
@@ -76,7 +83,7 @@ Options:
                                   A pack the engine's defaults would refuse to
                                   read is refused unless you raise them, and
                                   then the game must too (`Game::pack_limits`)
-  --format <list>                 folder, zip, tar.gz, dmg (comma-separated);
+  --format <list>                 folder, zip, tar.gz, dmg, ipa (comma-separated);
                                   `folder` alone: the plain folder, no archive
                                   and no app bundle
   --out <dir>                     Where to put the package (default: target/package)
@@ -159,7 +166,7 @@ impl Options {
                 "--example" => o.example = Some(value()?),
                 "-p" | "--package" => o.package = Some(value()?),
                 "--manifest-path" => o.manifest_path = Some(value()?.into()),
-                "--target" => o.target = Some(value()?),
+                "--target" => o.target = Some(layout::target_alias(&value()?).to_string()),
                 "--web" => o.web = true,
                 "--threads" => o.threads = true,
                 "--isolation-worker" => o.isolation_worker = true,
@@ -511,6 +518,7 @@ fn game(
         icon: icon.as_ref().map(|i| i.0.clone()),
         assets,
         files,
+        orientation: meta.orientation.unwrap_or_default(),
     };
     Ok((game, icon.map(|i| i.1), meta.pack.unwrap_or_default()))
 }
@@ -693,6 +701,10 @@ fn build(
     if let Some(t) = options.target.as_deref().or(options.web.then_some(WASM)) {
         cmd.args(["--target", t]);
     }
+    // Built for the oldest iOS the Info.plist names, unless the game says.
+    if Platform::from_triple(triple)?.os.is_ios() && std::env::var_os("IPHONEOS_DEPLOYMENT_TARGET").is_none() {
+        cmd.env("IPHONEOS_DEPLOYMENT_TARGET", layout::IOS_MINIMUM);
+    }
     let mut child = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
@@ -793,10 +805,10 @@ fn engine_features(msg: &Value) -> Option<Vec<String>> {
 /// as they are).
 fn cook_settings(platform: &Platform, engine: Option<&[String]>, target_dir: &Path) -> crate::cook::Settings {
     crate::cook::Settings {
-        platform: if platform.os == Os::Web {
-            crate::cook::Platform::Web
-        } else {
-            crate::cook::Platform::Desktop
+        platform: match platform.os {
+            Os::Web => crate::cook::Platform::Web,
+            Os::Ios | Os::IosSimulator => crate::cook::Platform::Mobile,
+            Os::Windows | Os::Mac | Os::Linux => crate::cook::Platform::Desktop,
         },
         reads: crate::cook::Reads::from_features(engine.unwrap_or_default()),
         cache: Some(target_dir.join("cook-cache")),
@@ -1036,6 +1048,18 @@ fn dmg(out: &Path, plan: &layout::Plan, game: &Game, file: &Path) -> Result<(), 
     Ok(())
 }
 
+/// An iOS app archive: the app bundle as `Payload/Name.app`, zipped.
+fn ipa(out: &Path, plan: &layout::Plan, file: &Path) -> Result<(), String> {
+    let app = plan.app.as_ref().ok_or("an ipa holds an app bundle")?;
+    let name = app.file_name().ok_or("the app bundle has no name")?;
+    let stage = out.join(format!(".{}-ipa", plan.folder.display()));
+    let _ = std::fs::remove_dir_all(&stage);
+    let result = copy_tree(&out.join(app), &stage.join("Payload").join(name))
+        .and_then(|()| archive::zip(&stage, Path::new("Payload"), &BTreeSet::new(), file));
+    let _ = std::fs::remove_dir_all(&stage);
+    result
+}
+
 /// Copies a folder (files keep their permissions).
 pub(crate) fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
     std::fs::create_dir_all(to).map_err(|e| format!("{}: {e}", to.display()))?;
@@ -1181,6 +1205,17 @@ pub fn package_command(options: &Options, cwd: &Path) -> Result<String, String> 
         (Some(program), _) if platform.os != Os::Web => {
             sign_hook(program, "sign", &signed_path, &game, &platform, &dir)?;
         }
+        // A device installs only an app signed with the developer's
+        // certificate and provisioning profile: that is the hook's job.
+        (None, Some(_)) if platform.os == Os::Ios => notes.push(
+            "the app is not signed: a device installs it only once signed with your certificate and provisioning \
+             profile (pass --sign; see the guide's iOS chapter)"
+                .into(),
+        ),
+        // The simulator runs an app sealed ad hoc.
+        (None, Some(app)) if host.os == Os::Mac && platform.os == Os::IosSimulator => {
+            seal_ad_hoc(&out.join(app))?;
+        }
         (None, Some(app)) if host.os == Os::Mac => {
             seal_ad_hoc(&out.join(app))?;
             notes.push(
@@ -1196,6 +1231,16 @@ pub fn package_command(options: &Options, cwd: &Path) -> Result<String, String> 
     let runs_here = platform.os == host.os && platform.arch == host.arch && platform.os != Os::Web;
     if options.no_smoke {
         report.push("smoke run: skipped (--no-smoke)".into());
+    } else if platform.os.is_ios() {
+        report.push(format!(
+            "smoke run: skipped, an iOS app runs on {}; see the guide's iOS chapter",
+            if platform.os == Os::Ios {
+                "a device"
+            } else {
+                "the simulator: `xcrun simctl install booted <app>`, then \
+                 `SIMCTL_CHILD_PONKO_SMOKE=120 xcrun simctl launch --console booted <id>`"
+            }
+        ));
     } else if !runs_here {
         report.push(format!(
             "smoke run: skipped, a {} package does not run on {}",
@@ -1222,6 +1267,7 @@ pub fn package_command(options: &Options, cwd: &Path) -> Result<String, String> 
             Format::Zip => archive::zip(&out, &plan.folder, &executables, &file)?,
             Format::TarGz => archive::tar_gz(&out, &plan.folder, &executables, &file)?,
             Format::Dmg => dmg(&out, &plan, &game, &file)?,
+            Format::Ipa => ipa(&out, &plan, &file)?,
             Format::Folder => continue,
         }
         if let Some(program) = &options.sign {
@@ -1323,6 +1369,7 @@ mod tests {
                 copy("LICENSE"),
             ],
             files: Vec::new(),
+            orientation: Default::default(),
         };
         let settings = crate::cook::Settings {
             platform: crate::cook::Platform::Desktop,
@@ -1369,6 +1416,33 @@ mod tests {
         assert_eq!(o.out, Some(PathBuf::from("x")));
         assert!(o.no_smoke && o.no_build && o.no_pack);
         assert_eq!(parse(&["--smoke-ticks", "0"]).unwrap().smoke_ticks, Some(1));
+    }
+
+    #[test]
+    fn ios_and_ios_sim_stand_for_the_device_and_simulator_triples() {
+        assert_eq!(
+            parse(&["--target", "ios"]).unwrap().target.as_deref(),
+            Some("aarch64-apple-ios")
+        );
+        assert_eq!(
+            parse(&["--target=ios-sim"]).unwrap().target.as_deref(),
+            Some("aarch64-apple-ios-sim")
+        );
+        assert_eq!(
+            parse(&["--target", "x86_64-apple-ios"]).unwrap().target.as_deref(),
+            Some("x86_64-apple-ios")
+        );
+        let device = Platform::from_triple("aarch64-apple-ios").unwrap();
+        let simulator = Platform::from_triple("aarch64-apple-ios-sim").unwrap();
+        let path = Path::new("/t");
+        assert_eq!(
+            cook_settings(&device, None, path).platform,
+            crate::cook::Platform::Mobile
+        );
+        assert_eq!(
+            cook_settings(&simulator, None, path).platform,
+            crate::cook::Platform::Mobile
+        );
     }
 
     #[test]

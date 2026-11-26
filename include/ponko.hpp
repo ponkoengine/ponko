@@ -6920,6 +6920,16 @@ enum class window_event_kind : std::uint32_t {
     close_requested = PONKO_WINDOW_EVENT_CLOSE_REQUESTED,            ///< The OS asked to close the window.
     file_dropped = PONKO_WINDOW_EVENT_FILE_DROPPED,                  ///< A file was dropped (`path`).
     scale_factor_changed = PONKO_WINDOW_EVENT_SCALE_FACTOR_CHANGED,  ///< The DPI scale changed (`scale_factor`).
+    suspended = PONKO_WINDOW_EVENT_SUSPENDED,                        ///< The app lost the screen (a phone's background): save now.
+    resumed = PONKO_WINDOW_EVENT_RESUMED,                            ///< The app is in front again after a suspend.
+    low_memory = PONKO_WINDOW_EVENT_LOW_MEMORY,                      ///< The system is short of memory: free what can be reloaded.
+};
+/// How the game's sound shares the device with other apps and a phone's silent switch (Rust
+/// `AudioSessionCategory`): iOS's audio session categories; kept and without effect elsewhere.
+enum class audio_session_category : std::uint32_t {
+    solo_ambient = PONKO_AUDIO_SESSION_SOLO_AMBIENT,  ///< The default: stops other apps' audio; the silent switch mutes the game.
+    ambient = PONKO_AUDIO_SESSION_AMBIENT,            ///< Mixes with other apps' audio; the silent switch mutes the game.
+    playback = PONKO_AUDIO_SESSION_PLAYBACK,          ///< Heard with the silent switch on; stops other apps' audio.
 };
 /// One window event of this frame (Rust `WindowEvent`).
 struct window_event {
@@ -7314,6 +7324,19 @@ public:
     /// Feeds the safe area insets a phone would report (Rust `window.feed_safe_insets()`), as a test does; a
     /// negative or not finite inset counts as 0. The UI lays out with them from the next frame.
     void window_feed_safe_insets(safe_insets insets) { detail::check(ponko_ctx_window_feed_safe_insets(raw_, insets)); }
+    /// Whether the app is suspended (Rust `window.suspended()`): between window_event_kind::suspended and
+    /// resumed; always false on desktops and the web.
+    bool window_suspended() const { bool v = false; detail::check(ponko_ctx_window_suspended(raw_, &v)); return v; }
+    /// Feeds a phone's lifecycle event (suspended, resumed or low_memory) as the platform reports it, as a
+    /// test does; a repeated suspend or resume changes nothing and sends nothing.
+    void window_feed_lifecycle(window_event_kind kind) {
+        detail::check(ponko_ctx_window_feed_lifecycle(raw_, static_cast<std::uint32_t>(kind)));
+    }
+    /// How far up from the window's bottom edge the on-screen keyboard covers it, in logical pixels (Rust
+    /// `window.keyboard_inset()`); 0 while it is hidden or floating, and on desktops.
+    float window_keyboard_inset() const { float v = 0; detail::check(ponko_ctx_window_keyboard_inset(raw_, &v)); return v; }
+    /// Feeds the keyboard's inset (Rust `window.feed_keyboard_inset()`), as a test does; negative or not finite is 0.
+    void window_feed_keyboard_inset(float inset) { detail::check(ponko_ctx_window_feed_keyboard_inset(raw_, inset)); }
     /// Copies UTF-8 text to the clipboard.
     void clipboard_write(const char* value) { detail::check(ponko_ctx_clipboard_write(raw_, value)); }
     /// The clipboard's text; unset headless, with no text, or while a browser read is pending.
@@ -8755,6 +8778,12 @@ public:
     ponko::render_target create_render_target(std::uint32_t w, std::uint32_t h) {
         ponko::render_target t{}; detail::check(ponko_ctx_create_render_target(raw_, w, h, &t)); return t;
     }
+    /// A render target with a full chain of mip levels, made again from the first each frame something
+    /// wrote it, so materials sampling it from afar don't alias (Rust
+    /// `Graphics::create_mipmapped_render_target`). A third more memory.
+    ponko::render_target create_mipmapped_render_target(std::uint32_t w, std::uint32_t h) {
+        ponko::render_target t{}; detail::check(ponko_ctx_create_mipmapped_render_target(raw_, w, h, &t)); return t;
+    }
     /// `t` as the render target it is: the `target` of a target_camera,
     /// compute_pass or target_effect read back from the engine is a plain
     /// texture. Throws ponko::error (PONKO_ERROR_INVALID) if `t` isn't a live
@@ -8795,12 +8824,28 @@ public:
         return t;
     }
     /// Replaces the target cameras drawn each frame from their versioned forms (empty: none): as
-    /// set_target_cameras, each with its `particles` and `debug_draw`.
+    /// set_target_cameras, each with its `particles`, `debug_draw`, culling box (`has_cull_box`,
+    /// `cull_box_min`, `cull_box_max`) and background (`has_clear`, `clear`).
     void set_target_cameras_ex(const std::vector<ponko::target_camera_ex>& list) {
         std::vector<const PonkoTargetCameraEx*> pointers;
         pointers.reserve(list.size());
         for (const ponko::target_camera_ex& t : list) pointers.push_back(&t);
         detail::check(ponko_ctx_set_target_cameras_ex(raw_, pointers.data(), pointers.size()));
+    }
+    /// The screen effects of target camera `index`, run over its picture after it is drawn (Rust
+    /// `TargetCamera::effects`). Throws for an index past the end.
+    std::vector<screen_effect> target_camera_effects(std::size_t index) const {
+        std::size_t n = 0;
+        detail::check(ponko_ctx_target_camera_effects(raw_, index, nullptr, 0, &n));
+        std::vector<screen_effect> list(n);
+        detail::check(ponko_ctx_target_camera_effects(raw_, index, list.data(), list.size(), &n));
+        return list;
+    }
+    /// Replaces the screen effects of target camera `index` (empty: none); the main view's
+    /// (set_effects) never apply to it. Setting the target cameras again keeps them for a camera
+    /// drawing into the same render target at the same index. Throws for an index past the end.
+    void set_target_camera_effects(std::size_t index, const std::vector<screen_effect>& list) {
+        detail::check(ponko_ctx_set_target_camera_effects(raw_, index, list.data(), list.size()));
     }
     /// A plain white material, made once and shared.
     material default_material() { material m{}; detail::check(ponko_ctx_default_material(raw_, &m)); return m; }
@@ -10471,6 +10516,18 @@ public:
     /// The volume layer `layer` of the playing song is set to.
     float music_layer_volume(std::size_t layer) {
         float v = 0; detail::check(ponko_ctx_music_layer_volume(raw_, layer, &v)); return v;
+    }
+
+    // The audio session (iOS).
+    /// Sets the audio session's category from now on (Rust `audio.set_session_category()`); throws if the
+    /// system refuses it, and the old one stays.
+    void set_audio_session_category(ponko::audio_session_category category) {
+        detail::check(ponko_ctx_audio_set_session_category(raw_, static_cast<std::uint32_t>(category)));
+    }
+    /// The audio session's category (Rust `audio.session_category()`).
+    ponko::audio_session_category audio_session_category() const {
+        std::uint32_t v = 0; detail::check(ponko_ctx_audio_session_category(raw_, &v));
+        return static_cast<ponko::audio_session_category>(v);
     }
 
     // Output devices and the offline mix.

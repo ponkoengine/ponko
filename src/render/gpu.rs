@@ -543,6 +543,16 @@ impl Renderer {
         ))
     }
 
+    /// Tests: mip level `level` of texture `id` (a render target's: linear
+    /// RGBA16F), read back, with its width and height; `None` past its
+    /// last level.
+    #[cfg(all(test, feature = "3d"))]
+    pub(super) fn read_texture_level(&self, id: u32, level: u32) -> Option<(Vec<u8>, u32, u32)> {
+        let texture = &self.textures.get(id)?.texture;
+        (level < texture.mip_level_count())
+            .then(|| super::render_test_support::read_texture_level(&self.device, &self.queue, texture, level))
+    }
+
     /// Opens the GPU and sets up drawing to `window`, waiting for the GPU
     /// (desktop; the web build calls [`Self::new_async`]).
     #[cfg(not(target_arch = "wasm32"))]
@@ -598,7 +608,10 @@ impl Renderer {
                     adapter.limits()
                 } else {
                     // One more sampled texture than the default 16, where
-                    // the adapter has it: projected decals' images.
+                    // the adapter has it: projected decals' images. No
+                    // limit better than the adapter's: the iOS simulator's
+                    // Metal device has 15 inter-stage variables, not 16
+                    // (the tier then follows the device's real limits).
                     wgpu::Limits {
                         max_sampled_textures_per_shader_stage: adapter
                             .limits()
@@ -606,6 +619,7 @@ impl Renderer {
                             .clamp(16, 24),
                         ..wgpu::Limits::default()
                     }
+                    .or_worse_values_from(&adapter.limits())
                 },
                 ..Default::default()
             }
@@ -622,6 +636,9 @@ impl Renderer {
         } = browser_gpu::open(window.clone(), display, &device_descriptor).await?;
         #[cfg(not(target_arch = "wasm32"))]
         let (instance, surface, adapter, device, queue) = {
+            // A test takes one of the places GPU tests share (render_test_support).
+            #[cfg(all(test, feature = "window", feature = "3d"))]
+            crate::render::render_test_support::take_gpu_place();
             let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(
                 display,
             )));
@@ -698,7 +715,7 @@ impl Renderer {
         #[cfg(feature = "3d")]
         let tiled = adapter.get_info().backend == wgpu::Backend::Metal;
 
-        let size = window.inner_size();
+        let size = crate::window::surface_size(&window);
         let mut config = startup::config(surface.get_default_config(&adapter, size.width.max(1), size.height.max(1)))?;
         // Prefer an sRGB target so blending happens in linear light.
         let caps = surface.get_capabilities(&adapter);
@@ -826,6 +843,9 @@ impl Renderer {
     /// draws with. `Err` says why there is no GPU. Unstable (`bench-internals`).
     #[cfg(all(feature = "3d", feature = "bench-internals", not(target_arch = "wasm32")))]
     pub(crate) fn offscreen_bench(size: (u32, u32)) -> Result<Self, String> {
+        // A test takes one of the places GPU tests share (render_test_support).
+        #[cfg(all(test, feature = "window", feature = "3d"))]
+        crate::render::render_test_support::take_gpu_place();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
@@ -1743,7 +1763,9 @@ impl Renderer {
 
     /// A texture target cameras draw into (linear HDR); returns its id.
     #[cfg(feature = "3d")]
-    pub fn create_render_target(&mut self, width: u32, height: u32) -> u32 {
+    /// `mips`: with a full mip chain (made again after each write, see
+    /// `gpu3d/target_mips.rs`).
+    pub fn create_render_target(&mut self, width: u32, height: u32, mips: bool) -> u32 {
         // Made first: making the 3D renderer adds textures of its own, and
         // the id below must be this one's.
         self.three();
@@ -1754,7 +1776,7 @@ impl Renderer {
                 height,
                 depth_or_array_layers: 1,
             },
-            mip_level_count: 1,
+            mip_level_count: if mips { super::mips::levels(width, height) } else { 1 },
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: super::gpu3d::HDR_FORMAT,
@@ -1770,7 +1792,8 @@ impl Renderer {
             bind_group,
             texture: texture.clone(),
             nearest: false,
-            // Drawn fresh each frame: no mipmaps to make.
+            // Drawn fresh each frame: the renderer makes its levels (if
+            // it has any), not the texture uploader.
             mips: Some(false),
         });
         self.three().add_render_target(id, &texture);
@@ -1837,6 +1860,10 @@ impl Renderer {
     /// `id`, `width` x `height`: a field the CPU worked out.
     #[cfg(feature = "3d")]
     pub fn write_render_target(&mut self, id: u32, width: u32, height: u32, texels: &[u8]) {
+        if self.textures.live(id).is_none() {
+            return;
+        }
+        self.three().wrote_render_target(id);
         let Some(tex) = self.textures.live(id) else {
             return;
         };
@@ -2591,6 +2618,10 @@ impl Renderer {
         // Panels draw into render targets, which only 3D makes.
         #[cfg(feature = "3d")]
         let panel_format = super::gpu3d::HDR_FORMAT;
+        #[cfg(feature = "3d")]
+        for &(texture, _, _) in &panels {
+            self.three().wrote_render_target(texture);
+        }
         #[cfg(not(feature = "3d"))]
         let panel_format = self.view_format;
         // Fading UI groups' layers: the screen's, then each panel's.
@@ -2864,12 +2895,11 @@ impl Renderer {
                         layers: &[],
                     };
                     self.draw_ui_layers(&mut encoder, jobs, &layer_pass, panel_format);
-                    let view = self
-                        .textures
-                        .live(*texture)
-                        .expect("a live panel target")
-                        .texture
-                        .create_view(&wgpu::TextureViewDescriptor::default());
+                    // Its first level (a mipmapped target's levels are made
+                    // again in the next target camera stage).
+                    let view = super::gpu_textures::first_level(
+                        &self.textures.live(*texture).expect("a live panel target").texture,
+                    );
                     let layers = [(&self.panel_cameras[i].1, *batches, panel_starts[i])];
                     let pass = SpritePass {
                         viewport: *size,

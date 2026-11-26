@@ -986,6 +986,27 @@ impl serde_core::ser::Serialize for ponko::audio::AudioDeviceEvent
 pub fn ponko::audio::AudioDeviceEvent::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for ponko::audio::AudioDeviceEvent
 pub fn ponko::audio::AudioDeviceEvent::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+#[non_exhaustive] pub enum ponko::audio::AudioSessionCategory
+pub ponko::audio::AudioSessionCategory::Ambient
+pub ponko::audio::AudioSessionCategory::Playback
+pub ponko::audio::AudioSessionCategory::SoloAmbient
+impl core::clone::Clone for ponko::audio::AudioSessionCategory
+pub fn ponko::audio::AudioSessionCategory::clone(&self) -> Self
+impl core::cmp::Eq for ponko::audio::AudioSessionCategory
+impl core::cmp::PartialEq for ponko::audio::AudioSessionCategory
+pub fn ponko::audio::AudioSessionCategory::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::audio::AudioSessionCategory
+pub fn ponko::audio::AudioSessionCategory::default() -> Self
+impl core::fmt::Debug for ponko::audio::AudioSessionCategory
+pub fn ponko::audio::AudioSessionCategory::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for ponko::audio::AudioSessionCategory
+pub fn ponko::audio::AudioSessionCategory::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for ponko::audio::AudioSessionCategory
+impl core::marker::StructuralPartialEq for ponko::audio::AudioSessionCategory
+impl serde_core::ser::Serialize for ponko::audio::AudioSessionCategory
+pub fn ponko::audio::AudioSessionCategory::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::audio::AudioSessionCategory
+pub fn ponko::audio::AudioSessionCategory::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 #[non_exhaustive] pub enum ponko::audio::BusEffect
 pub ponko::audio::BusEffect::Compressor(ponko::audio::CompressorEffect)
 pub ponko::audio::BusEffect::Delay(ponko::audio::DelayEffect)
@@ -1126,6 +1147,9 @@ pub fn ponko::audio::Audio::set_music_bus(&mut self, ponko::prelude::AudioBus)
 pub fn ponko::audio::Audio::set_music_layer(&mut self, usize, f32, f32, ponko::audio::Quantize)
 pub fn ponko::audio::Audio::set_music_speed(&mut self, f32, f32)
 pub fn ponko::audio::Audio::stop_music(&mut self, f32, ponko::audio::Quantize)
+impl ponko::audio::Audio
+pub fn ponko::audio::Audio::session_category(&self) -> ponko::audio::AudioSessionCategory
+pub fn ponko::audio::Audio::set_session_category(&mut self, ponko::audio::AudioSessionCategory) -> core::result::Result<(), ponko::error::Error>
 impl core::default::Default for ponko::audio::Audio
 pub fn ponko::audio::Audio::default() -> Self
 #[repr(transparent)] pub struct ponko::audio::AudioBus(_)
@@ -11749,8 +11773,11 @@ pub fn ponko::window::CursorIcon::deserialize<__D>(__D) -> core::result::Result<
 pub ponko::window::WindowEvent::CloseRequested
 pub ponko::window::WindowEvent::FileDropped(std::path::PathBuf)
 pub ponko::window::WindowEvent::Focused(bool)
+pub ponko::window::WindowEvent::LowMemory
 pub ponko::window::WindowEvent::Minimized(bool)
+pub ponko::window::WindowEvent::Resumed
 pub ponko::window::WindowEvent::ScaleFactorChanged(f32)
+pub ponko::window::WindowEvent::Suspended
 impl core::clone::Clone for ponko::window::WindowEvent
 pub fn ponko::window::WindowEvent::clone(&self) -> Self
 impl core::cmp::PartialEq for ponko::window::WindowEvent
@@ -11900,13 +11927,16 @@ pub fn ponko::window::WindowService::clipboard_read(&mut self) -> core::result::
 pub fn ponko::window::WindowService::clipboard_write(&mut self, &str) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::window::WindowService::close_requested(&self) -> bool
 pub fn ponko::window::WindowService::feed_event(&mut self, &ponko::window::WindowEvent) -> bool
+pub fn ponko::window::WindowService::feed_keyboard_inset(&mut self, f32)
 pub fn ponko::window::WindowService::feed_safe_insets(&mut self, ponko::window::SafeInsets)
+pub fn ponko::window::WindowService::keyboard_inset(&self) -> f32
 pub fn ponko::window::WindowService::monitors(&self) -> alloc::vec::Vec<ponko::window::Monitor>
 pub fn ponko::window::WindowService::request(&mut self, ponko::window::WindowRequest) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::window::WindowService::safe_area(&self) -> ponko::camera::Rect
 pub fn ponko::window::WindowService::safe_insets(&self) -> ponko::window::SafeInsets
 pub fn ponko::window::WindowService::settings(&self) -> &ponko::window::WindowSettings
 pub fn ponko::window::WindowService::state(&self) -> ponko::window::WindowState
+pub fn ponko::window::WindowService::suspended(&self) -> bool
 pub fn ponko::window::WindowService::with_backend(impl ponko::window::WindowBackend + 'static) -> Self
 impl ponko::window::WindowService
 pub fn ponko::window::WindowService::current_monitor(&self) -> core::option::Option<usize>
