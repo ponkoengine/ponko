@@ -150,7 +150,7 @@ named by its path in the folder; see [Assets in one pack](packaging.md#assets-in
 | Option | Does |
 |---|---|
 | `--out <file>` | Where to write the pack (default: `target/assets.pack`) |
-| `--exclude <pattern>` | Leave out the files matching it (`*` within a folder name, `**` across folders); repeat for more |
+| `--exclude <pattern>` | Leave out the files matching it (`*` within a folder name, `**` across folders: `**/*.psd` is every `.psd`, at the top too); repeat for more |
 | `--textures` | Also convert the images per `textures.json` into `.ktx2` files in the pack |
 | `--cook` | Pack the files as `ponko cook` makes them |
 | `--platform <name>` | With `--cook`: `desktop` (default), `web` or `mobile` |
