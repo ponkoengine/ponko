@@ -7,28 +7,28 @@ test, binding or other crate. The freeze review (#478) reads it next to the name
 shapes. `scripts/api-usage.py`'s docstring says what counts as a call; matching is by
 name, so the list errs on the side of "called".
 
-6857 covered items (types, traits, functions, methods, constants, statics, macros;
+6925 covered items (types, traits, functions, methods, constants, statics, macros;
 not fields, variants or trait impls' methods):
 
 | Status | Items |
 |---|---|
-| called | 6458 |
-| reached: a type or trait no one names, but a called item takes or returns it | 126 |
-| a trait's method: part of its trait, which is called or reached | 11 |
-| ambiguous: only a name other types share is called | 181 |
+| called | 6527 |
+| reached: a type or trait no one names, but a called item takes or returns it | 125 |
+| a trait's method: part of its trait, which is called or reached | 14 |
+| ambiguous: only a name other types share is called | 178 |
 | not called | 81 |
 
 Items called from each kind of place (an item can count in several):
 
 | Place | Items |
 |---|---|
-| game | 460 |
-| example | 1552 |
-| cookbook | 387 |
-| guide | 3530 |
-| test | 5985 |
-| binding | 5016 |
-| tool | 1242 |
+| game | 457 |
+| example | 1594 |
+| cookbook | 395 |
+| guide | 3581 |
+| test | 6045 |
+| binding | 5083 |
+| tool | 1239 |
 
 54 more items are outside the promise already (experimental, or named `unstable_`) and are not listed.
 
@@ -109,13 +109,13 @@ one needs a decision before the freeze.
 | Item | Kind | Decision |
 |---|---|---|
 | `ponko::gfx::Graphics::load_system_font` | fn | **keep**: the panicking form of the called `try_load_system_font` (behind `system-fonts`), like every `load_*` |
-| `ponko::gfx::Graphics::try_load_cameras` | fn | **keep**: the error-returning form of the called `load_cameras`, like every `try_*` |
 | `ponko::gfx::Graphics::try_load_sky_shader` | fn | **keep**: the error-returning form of the called `load_sky_shader`, like every `try_*` |
 
 ### `ponko::input`
 
 | Item | Kind | Decision |
 |---|---|---|
+| `ponko::input::GamepadEvents::touchpad_finger` | fn | **undecided** |
 | `ponko::input::MAX_JOYSTICK_AXES` | const | **keep**: a documented limit of the joystick state |
 
 ### `ponko::mods`
@@ -248,7 +248,7 @@ one needs a decision before the freeze.
 | `ponko_ffi::PonkoCursorGrab` | type | **keep**: a constant or enum of the C header that the C examples and the C++ wrapper don't name (they pass the values); C games use them through `ponko.h` |
 | `ponko_ffi::PonkoGpuTier` | type | **keep**: a constant or enum of the C header that the C examples and the C++ wrapper don't name (they pass the values); C games use them through `ponko.h` |
 | `ponko_ffi::PonkoTextAlign3D` | type | **keep**: a constant or enum of the C header that the C examples and the C++ wrapper don't name (they pass the values); C games use them through `ponko.h` |
-| `ponko_ffi::PonkoWindowEventKind` | type | **keep**: a constant or enum of the C header that the C examples and the C++ wrapper don't name (they pass the values); C games use them through `ponko.h` |
+| `ponko_ffi::PonkoTriggerEffectKind` | type | **keep**: a constant or enum of the C header that the C examples and the C++ wrapper don't name (they pass the values); C games use them through `ponko.h` |
 | `ponko_ffi::PonkoWindowModeKind` | type | **keep**: a constant or enum of the C header that the C examples and the C++ wrapper don't name (they pass the values); C games use them through `ponko.h` |
 
 ### `ponko_lobby`
@@ -287,7 +287,7 @@ review can look at any it doubts with `api-usage.py item <path>`.
 - `ponko::hierarchy`: `EntityName::new`, `PrefabInstance::new`
 - `ponko::input`: `GamepadEvents::axis`, `GamepadEvents::button`, `Input::force_feedback`, `Input::joystick_axis`, `Input::joystick_hat`, `Input::set_force_feedback`, `Joystick::slot`, `Vibration::is_off`
 - `ponko::inventory`: `AssetInventory::get`
-- `ponko::net`: `ClockSync::offset`, `ClockSync::reset`, `Fields::f32`, `InputQueue::is_empty`, `LatestWins::is_empty`, `NetSnapshots::accept`, `NetSnapshots::clear`, `NetSnapshots::get`, `NetSnapshots::ids`, `NetSnapshots::is_empty`, `NetSnapshots::len`, `NetSnapshots::remove`, `NetSnapshots::sample`, `NetSnapshots::stream`, `Networking::desync`, `Networking::error`, `Networking::input_bytes`, `Networking::local_addr`, `Networking::player`, `Networking::players`, `Networking::set_input`, `Networking::set_input_bytes`, `Networking::state`, `Networking::stats`, `Smoothing::is_active`, `SnapshotBuffer::is_empty`, `SnapshotBuffer::with_config`, `SteamClient::app_id`, `WebPeer::new`
+- `ponko::net`: `ClockSync::offset`, `ClockSync::reset`, `Fields::f32`, `InputQueue::is_empty`, `LatestWins::is_empty`, `NetSnapshots::accept`, `NetSnapshots::clear`, `NetSnapshots::get`, `NetSnapshots::ids`, `NetSnapshots::is_empty`, `NetSnapshots::len`, `NetSnapshots::remove`, `NetSnapshots::sample`, `NetSnapshots::stream`, `Networking::desync`, `Networking::input_bytes`, `Networking::local_addr`, `Networking::player`, `Networking::players`, `Networking::set_input`, `Networking::set_input_bytes`, `Networking::stats`, `Smoothing::is_active`, `SnapshotBuffer::is_empty`, `SnapshotBuffer::with_config`, `SteamClient::app_id`, `WebPeer::new`
 - `ponko::particles`: `ParticleCurve::keys`, `ParticleCurve::sample`, `ParticleGradient::keys`, `ParticleGradient::sample`
 - `ponko::perf`: `GpuUntimed::message`, `ProfileScope::name`
 - `ponko::render`: `CloudQuality::steps`, `GltfBake::insert_lightmaps`, `GltfBake::nodes`, `InstanceCellData::is_empty`, `ModelCamera::apply`, `ModelCamera::placed`, `PostVolume::weight`, `SceneSettings::quality_autotune_status`, `WorldBake::entries`, `WorldBake::insert_lightmaps`
@@ -299,7 +299,7 @@ review can look at any it doubts with `api-usage.py item <path>`.
 - `ponko::terrain`: `TerrainFile::new`
 - `ponko::tilemap`: `Properties::bool`, `Properties::color`, `Properties::f32`, `Properties::is_empty`
 - `ponko::ui`: `UiAccessAdapter::set_title`, `UiAccessTree::focus`, `UiAccessTree::get`, `UiAccessTree::nodes`, `UiBuilder::accessible_description`, `UiBuilder::accessible_name`, `UiBuilder::background`, `UiBuilder::closes_screen`, `UiBuilder::color`, `UiBuilder::context_menu`, `UiBuilder::enabled`, `UiBuilder::focused`, `UiBuilder::ime_allowed`, `UiBuilder::inside_safe_area`, `UiBuilder::items`, `UiBuilder::live_region`, `UiBuilder::paint`, `UiBuilder::range`, `UiBuilder::selected`, `UiBuilder::size`, `UiBuilder::step`, `UiBuilder::text`, `UiBuilder::texture`, `UiBuilder::tooltip`, `UiBuilder::value`, `UiImmediate::button`, `UiImmediate::covers`, `UiImmediate::panel`, `UiImmediateFrame::button`, `UiImmediateFrame::covers`, `UiImmediateFrame::label`, `UiImmediateFrame::panel`, `UiImmediateFrame::progress_bar`, `UiImmediateFrame::slider`, `UiImmediateFrame::toggle`
-- `ponko::water`: `Water::free`, `WaterDesc::with_color`, `Wave::with_speed`
+- `ponko::water`: `WaterDesc::with_color`, `Wave::with_speed`
 - `ponko::window`: `WindowService::request`, `WindowService::safe_insets`
 - `ponko_ecs`: `QueryLookup::for_each`, `QueryRef::cached`, `QueryRef::count`, `QueryRef::filter`, `QueryRef::for_each`, `QueryRef::get`, `QueryRef::iter`, `QueryRef::since`, `QueryRef::single`, `QueryRef::uncached`, `QueryResources::for_each`, `QueryResources::resources`, `RawWorldRef::get_dynamic`, `ViewQuery::cached`, `ViewQuery::count`, `ViewQuery::for_each`, `ViewQuery::get`, `ViewQuery::iter`, `ViewQuery::since`, `ViewQuery::single`, `ViewQuery::uncached`, `WorldView::get_resource_mut`, `WorldView::has`, `WorldView::is_alive`, `WorldView::remove_resource`
 - `ponko_lobby`: `TrustedProxy::new`
