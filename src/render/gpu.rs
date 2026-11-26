@@ -608,7 +608,10 @@ impl Renderer {
                     adapter.limits()
                 } else {
                     // One more sampled texture than the default 16, where
-                    // the adapter has it: projected decals' images.
+                    // the adapter has it: projected decals' images. No
+                    // limit better than the adapter's: the iOS simulator's
+                    // Metal device has 15 inter-stage variables, not 16
+                    // (the tier then follows the device's real limits).
                     wgpu::Limits {
                         max_sampled_textures_per_shader_stage: adapter
                             .limits()
@@ -616,6 +619,7 @@ impl Renderer {
                             .clamp(16, 24),
                         ..wgpu::Limits::default()
                     }
+                    .or_worse_values_from(&adapter.limits())
                 },
                 ..Default::default()
             }
@@ -711,7 +715,7 @@ impl Renderer {
         #[cfg(feature = "3d")]
         let tiled = adapter.get_info().backend == wgpu::Backend::Metal;
 
-        let size = window.inner_size();
+        let size = crate::window::surface_size(&window);
         let mut config = startup::config(surface.get_default_config(&adapter, size.width.max(1), size.height.max(1)))?;
         // Prefer an sRGB target so blending happens in linear light.
         let caps = surface.get_capabilities(&adapter);

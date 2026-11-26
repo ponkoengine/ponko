@@ -1,6 +1,6 @@
 {
   "name": "regression_ssr_normal_map",
-  "scene": "A glowing red unit box (emissive 4, 0, 0) standing on a white metal mirror floor (roughness 0) whose 1x1 normal map (rgb 160, 128, 251) tilts every normal 15 degrees; nothing lit, exposure -5, screen-space reflections at 1.0, fourth frame; camera at (0, 2, 6) looking at (0, 0.5, 0); 128x128, 4x multisampling, no tonemapping.",
+  "scene": "A glowing red unit box (emissive 4, 0, 0) standing on a white metal mirror floor (roughness 0) whose 1x1 normal map (rgb 160, 128, 251) tilts every normal 15 degrees toward +x (+u); nothing lit, exposure -5, screen-space reflections at 1.0, fourth frame; camera at (0, 2, 6) looking at (0, 0.5, 0); 128x128, 4x multisampling, no tonemapping.",
   "width": 128,
   "height": 128,
   "format": "rgba8-srgb",
@@ -12,6 +12,6 @@
   "adapter": "Apple M4 Max",
   "backend": "Metal",
   "driver": "unknown",
-  "checksum": "5e1085cca057393f",
-  "reason": "New reference: a normal-mapped mirror floor reflecting a red box (screen-space reflections follow normal maps, #395)"
+  "checksum": "ffb8fa2985626e4e",
+  "reason": "Normal maps lean toward +u and up the image as glTF says (#567): the 15-degree map now leans the floor toward +x, so the reflection moves the other way, to where a floor turned toward +x puts it"
 }

@@ -4171,6 +4171,42 @@ static void safe_area_runs() {
     });
 }
 
+// ANCHOR: phone_lifecycle
+// On a phone: the player's music plays on, the game saves when it is sent
+// away, and the chat line keeps above the on-screen keyboard.
+static void phone_setup(ponko::ctx& ctx) {
+    ctx.set_audio_session_category(ponko::audio_session_category::ambient);
+}
+static float chat_line_bottom(ponko::ctx& ctx, const std::string& progress) {
+    for (const auto& event : ctx.window_events()) {
+        if (event.kind == ponko::window_event_kind::suspended) {
+            ctx.storage_write("progress.txt", progress);   // the system may end the app from here on
+        }
+    }
+    return std::min(ctx.window_safe_area().max.y, ctx.window_size().y - ctx.window_keyboard_inset());
+}
+// ANCHOR_END: phone_lifecycle
+
+static void phone_lifecycle_runs() {
+    auto expect = [](bool ok, const char* what) {
+        if (!ok) { std::fprintf(stderr, "phone lifecycle: %s\n", what); std::abort(); }
+    };
+    // A folder of its own: the storage example checks every file of guide-storage.
+    ponko::game("guide", 390, 844).data_dir("guide-phone-storage").run_headless(0, [&](ponko::ctx& ctx) {
+        phone_setup(ctx);
+        expect(ctx.audio_session_category() == ponko::audio_session_category::ambient, "the session category");
+        ctx.storage_delete("progress.txt");
+        ctx.window_feed_safe_insets({62, 0, 34, 0});
+        expect(chat_line_bottom(ctx, "level 3") == 810, "above the home bar");
+        expect(!ctx.storage_read_text("progress.txt"), "not sent away yet");
+        ctx.window_feed_lifecycle(ponko::window_event_kind::suspended);
+        ctx.window_feed_keyboard_inset(336);
+        expect(chat_line_bottom(ctx, "level 3") == 508, "above the keyboard");
+        expect(ctx.storage_read_text("progress.txt") == std::optional<std::string>("level 3"), "saved when sent away");
+        ctx.storage_delete("progress.txt");
+    });
+}
+
 static void touch_scenario_runs() {
     ponko::game game("Fingers", 640, 800);
     auto run = game.run_headless_scenario(touch_test());
@@ -5154,6 +5190,7 @@ int main() {
     sky_kit_runs();
     touch_scenario_runs();
     safe_area_runs();
+    phone_lifecycle_runs();
     states_guide();
     state_screen_guide();
     native_prediction_runs();

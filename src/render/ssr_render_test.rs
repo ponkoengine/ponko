@@ -2563,37 +2563,38 @@ fn a_normal_map_bends_the_reflection_as_a_turned_floor_does() {
     };
     stage.finish();
     let (mapped, mapped_at, image, stage) = reflection_on_a_tilted_floor(Tilt::Map(15.0)).unwrap();
-    let turned: Vec<_> = [15.0, -15.0]
-        .map(|degrees| {
-            let (_, at, _, stage) = reflection_on_a_tilted_floor(Tilt::Turned(degrees)).unwrap();
-            stage.finish();
-            at
-        })
-        .into();
-    // Across: turning the floor also moves its surface up and down a little.
-    let nearest = turned
-        .iter()
-        .map(|at| (mapped_at.x - at.x).abs())
-        .fold(f32::MAX, f32::min);
+    // The map leans the normal toward +u, which is +x on the cube's top: as
+    // the floor turned that way does, and not as the floor turned the
+    // other way (the negative control).
+    let [toward, away] = [15.0, -15.0].map(|degrees| {
+        let (_, at, _, stage) = reflection_on_a_tilted_floor(Tilt::Turned(degrees)).unwrap();
+        stage.finish();
+        at
+    });
     eprintln!(
-        "reflection (red, center): flat {flat:.1} at {flat_at}, normal map {mapped:.1} at {mapped_at}, turned \
-         floors at {turned:?}"
+        "reflection (red, center): flat {flat:.1} at {flat_at}, normal map {mapped:.1} at {mapped_at}, floor \
+         turned toward +x at {toward}, toward -x at {away}"
     );
     assert!(mapped > 5.0, "the box is reflected");
     assert!(
         (mapped_at.x - flat_at.x).abs() > 4.0,
         "the normal map moves the reflection: {flat_at} -> {mapped_at}"
     );
+    // Across: turning the floor also moves its surface up and down a little.
     assert!(
-        nearest < 1.5,
-        "to where a turned floor puts it: {mapped_at} against {turned:?}"
+        (mapped_at.x - toward.x).abs() < 1.5,
+        "to where the floor turned toward +x puts it: {mapped_at} against {toward}"
+    );
+    assert!(
+        (mapped_at.x - away.x).abs() > 4.0,
+        "not where the floor turned toward -x puts it: {mapped_at} against {away}"
     );
     check_reference(
         "regression_ssr_normal_map",
         &image,
         EFFECT_REFERENCE,
         "A glowing red unit box (emissive 4, 0, 0) standing on a white metal mirror floor (roughness 0) whose 1x1 \
-         normal map (rgb 160, 128, 251) tilts every normal 15 degrees; nothing lit, exposure -5, screen-space \
+         normal map (rgb 160, 128, 251) tilts every normal 15 degrees toward +x (+u); nothing lit, exposure -5, screen-space \
          reflections at 1.0, fourth frame; camera at (0, 2, 6) looking at (0, 0.5, 0); 128x128, 4x multisampling, \
          no tonemapping.",
         &stage.info,
