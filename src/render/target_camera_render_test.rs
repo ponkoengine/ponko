@@ -352,3 +352,97 @@ fn compute_passes_and_target_effects_get_a_mipmapped_targets_levels_made_too() {
         "the effect's blue: {average:?}"
     );
 }
+
+/// What the new per-frame work costs, offscreen at 1920x1080 with 400
+/// boxes in view: the GPU time of a mipmapped target's levels ("target
+/// mipmaps") at 512 and 1024 texels, of one and two target camera
+/// effects ("target camera effects") at 1024, and the target camera's
+/// passes ("target cameras") and the frame's CPU time with and without a
+/// culling box around a quarter of the boxes. For numbers, not a check:
+/// `cargo test --release -p ponko --lib --features 3d target_camera_costs -- --ignored --nocapture`.
+#[test]
+#[ignore = "offscreen GPU timestamps at 1080p; run in release with --ignored --nocapture"]
+fn target_camera_costs() {
+    const FRAMES: usize = 240;
+    let run = |side: u32, mipmapped: bool, effects: usize, cull: bool| -> Option<(f32, f32, f32, f64)> {
+        let gpu = super::render_test_support::gpu_with(|adapter| {
+            Ok(wgpu::DeviceDescriptor {
+                required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
+                ..Default::default()
+            })
+        })?;
+        let size = (1920, 1080);
+        let mut ctx = crate::ctx::Ctx::new(1.0 / 60.0, vec2(size.0 as f32, size.1 as f32));
+        ctx.audio.headless = true;
+        ctx.gfx.renderer = Some(super::gpu::Renderer::offscreen(gpu, size));
+        ctx.scene3d.lighting.shadows = false;
+        let mesh = {
+            let material = ctx.gfx.create_material(MaterialDesc::color(Color::rgb(0.8, 0.5, 0.3)));
+            ctx.gfx.create_mesh(&MeshData::cube(0.5), material)
+        };
+        for i in 0..400 {
+            let at = vec3((i % 20) as f32 - 9.5, (i / 20) as f32 * 0.6 - 6.0, -12.0);
+            ctx.world.spawn((crate::d3::Transform::at(at), Model::new(mesh)));
+        }
+        let target = if mipmapped {
+            ctx.gfx.create_mipmapped_render_target(side, side)
+        } else {
+            ctx.gfx.create_render_target(side, side)
+        };
+        let mut camera = TargetCamera::new(ctx.scene3d.camera, target);
+        if cull {
+            camera = camera.with_cull_box(vec3(-10.0, -6.5, -13.0), vec3(0.0, 0.0, -11.0));
+        }
+        for i in 0..effects {
+            let e = ctx.gfx.create_effect(
+                if i == 0 { "warm" } else { "cool" },
+                "fn effect(p: Pixel) -> vec3<f32> { return p.color.brg * 0.9; }",
+            );
+            camera = camera.with_effect(ScreenEffect::new(e));
+        }
+        ctx.scene3d.passes.target_cameras.push(camera);
+        ctx.gfx.renderer.as_mut()?.set_gpu_timing_every(1);
+        for _ in 0..30 {
+            ctx.render_frame();
+        }
+        let started = std::time::Instant::now();
+        for _ in 0..FRAMES {
+            ctx.render_frame();
+        }
+        let cpu = started.elapsed().as_secs_f64() * 1000.0 / FRAMES as f64;
+        let renderer = ctx.gfx.renderer.as_ref()?;
+        let pass = |n: &str| {
+            renderer
+                .gpu_passes()
+                .iter()
+                .filter(|p| p.name == n)
+                .map(|p| p.ms)
+                .sum::<f32>()
+        };
+        Some((
+            pass("target mipmaps"),
+            pass("target camera effects"),
+            pass("target cameras"),
+            cpu,
+        ))
+    };
+    let Some(_) = run(64, false, 0, false) else {
+        return;
+    };
+    for (name, side, mipmapped, effects, cull) in [
+        ("512 plain", 512, false, 0, false),
+        ("512 mipmapped", 512, true, 0, false),
+        ("1024 plain", 1024, false, 0, false),
+        ("1024 mipmapped", 1024, true, 0, false),
+        ("1024, 1 effect", 1024, false, 1, false),
+        ("1024, 2 effects", 1024, false, 2, false),
+        ("1024, culling box", 1024, false, 0, true),
+    ] {
+        for round in 1..=3 {
+            let (mips, fx, cameras, cpu) = run(side, mipmapped, effects, cull).expect("a GPU, as above");
+            eprintln!(
+                "{name} (run {round}): mipmaps {mips:.4} ms, effects {fx:.4} ms, target camera passes {cameras:.4} ms, frame on the CPU {cpu:.3} ms"
+            );
+        }
+    }
+}

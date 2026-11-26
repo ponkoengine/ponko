@@ -722,7 +722,7 @@ impl Renderer3D {
                 }
                 if !self.render_targets.mips_due.is_empty() {
                     passes::mark("mipmaps");
-                    self.render_targets.record_mips(encoder);
+                    self.render_targets.record_mips(encoder, time);
                 }
                 self.environment.probes(encoder, time);
             }
@@ -1299,7 +1299,7 @@ impl Renderer3D {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: time("target cameras"),
+                timestamp_writes: time("target camera effects"),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });

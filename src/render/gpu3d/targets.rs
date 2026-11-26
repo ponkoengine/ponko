@@ -100,13 +100,13 @@ impl RenderTargets {
     }
 
     /// Records the levels of every target due this frame.
-    pub(super) fn record_mips(&self, encoder: &mut wgpu::CommandEncoder) {
+    pub(super) fn record_mips(&self, encoder: &mut wgpu::CommandEncoder, time: &super::PassTimer<'_, '_>) {
         let Some(maker) = &self.mip_maker else {
             return;
         };
         for &i in &self.mips_due {
             if let Some(chain) = &self.mips[i].1 {
-                maker.record(encoder, chain);
+                maker.record(encoder, chain, time);
             }
         }
     }
