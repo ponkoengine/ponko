@@ -23,6 +23,7 @@ import {
   parseRetryPlace,
   parseMin,
   parsePress,
+  softwareGpuReason,
   startWatchdog,
   unsupportedReason,
   withDeadline,
@@ -275,6 +276,43 @@ test("launch options per browser", () => {
   assert.ok(!mac.args.includes("--enable-features=Vulkan"));
   assert.equal(launchConfig("firefox", "linux").options.firefoxUserPrefs["dom.webgpu.enabled"], true);
   assert.equal(launchConfig("webkit", "linux").options.headless, true);
+});
+
+test("a real GPU leaves out the software fallbacks", () => {
+  const real = launchConfig("chromium", "darwin", { chromiumMode: "new", requireGpu: true }).options;
+  assert.ok(!real.args.includes("--enable-unsafe-swiftshader"));
+  assert.ok(real.args.includes("--enable-unsafe-webgpu"));
+});
+
+test("--require-gpu goes with a Chromium run that may not be unsupported", () => {
+  assert.equal(parse("--fixture", "web_smoke_3d", "--backend", "webgpu", "--require-gpu").requireGpu, true);
+  assert.equal(parse("--fixture", "web_smoke_3d").requireGpu, false);
+  assert.throws(() => parse("--fixture", "web_smoke", "--require-gpu", "--allow-unsupported"), UsageError);
+  assert.throws(() => parse("--fixture", "web_smoke", "--require-gpu", "--browser", "webkit"), UsageError);
+  assert.throws(() => parse("--fixture", "web_smoke", "--require-gpu", "--case", "panic"), UsageError);
+});
+
+test("a real GPU: hardware adapters pass, software renderers and fallback adapters don't", () => {
+  // As probed in headless Chromium on an Apple GPU, and with SwiftShader.
+  const metal = {
+    webgpu: { vendor: "apple", architecture: "metal-3", description: "", fallback: false, canvas: true },
+    webgl2: { vendor: "Google Inc. (Apple)", renderer: "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Max, Unspecified Version)" },
+  };
+  const swiftshader = {
+    webgpu: { vendor: "google", architecture: "swiftshader", description: "", fallback: true, canvas: false },
+    webgl2: { vendor: "Google Inc. (Google)", renderer: "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (LLVM 10.0.0) (0x0000C0DE)), SwiftShader driver)" },
+  };
+  const engine = (backend, deviceType = "other", name = "") => ({ adapter: { backend, device_type: deviceType, name, driver: "", driver_info: "" } });
+  assert.equal(softwareGpuReason(metal, "webgpu", engine("webgpu")), null);
+  assert.equal(softwareGpuReason(metal, "webgl2", engine("gl", "other", "Apple M4 Max")), null);
+  assert.match(softwareGpuReason(swiftshader, "webgpu", engine("webgpu")), /fallback/);
+  assert.match(softwareGpuReason({ webgpu: { ...swiftshader.webgpu, fallback: false } }, "webgpu", engine("webgpu")), /software renderer \(google swiftshader\)/);
+  assert.match(softwareGpuReason(swiftshader, "webgl2", engine("gl")), /WebGL2 renderer is a software renderer/);
+  assert.match(softwareGpuReason(metal, "webgpu", engine("webgpu", "cpu")), /CPU one/);
+  assert.match(softwareGpuReason(metal, "webgl2", engine("gl", "other", "llvmpipe (LLVM 17)")), /engine's adapter is a software renderer/);
+  assert.match(softwareGpuReason(metal, "webgpu", null), /no GPU report/);
+  assert.match(softwareGpuReason({ webgpu: null }, "webgpu", engine("webgpu")), /no WebGPU adapter/);
+  assert.match(softwareGpuReason(metal, "unknown", engine("webgpu")), /no GPU backend/);
 });
 
 test("a browser that isn't installed is unsupported on a laptop and a failure in CI", () => {

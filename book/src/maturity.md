@@ -111,7 +111,7 @@ Chapters: 21 proven, 62 tested, 5 experimental.
 | [Ember Hop: a platformer, start to finish](ember-hop.md) | **proven** | Ember Hop itself, packaged and played on Linux, macOS and Windows | — |
 | [Shard Grove: a 3D game, start to finish](shard-grove.md) | **tested** | Shard Grove itself, played headless | its package played on each OS |
 | [Legions: 100,000 units that replay bit for bit](legions.md) | **tested** | Legions, a showcase rather than a reference game | a reference game that uses it |
-| [Web builds: games in the browser](web.md) | **tested** | Coin Dash in headless Chromium and WebKit; Ember Hop builds for the web | WebGPU in a recorded run, and Firefox (its headless build has no WebGL2) |
+| [Web builds: games in the browser](web.md) | **tested** | Coin Dash in headless Chromium and WebKit; Ember Hop builds for the web | WebGPU on Windows and Linux GPUs in a recorded run, and Firefox (its headless build has no WebGL2) |
 | [Threads on the web](web-threads.md) | **experimental** | none | the chapter calls it experimental; the thread-heaps build has not run in a browser since its last fix |
 | [C and C++](c-cpp.md) | **tested** | none | a reference game written in C or C++ |
 | [Reflection: components as JSON](reflection.md) | **tested** | none | a reference game that uses it |
