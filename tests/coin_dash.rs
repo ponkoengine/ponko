@@ -782,6 +782,27 @@ fn tap(scenario: InputScenario, tick: u64, key: Key) -> InputScenario {
         .at(tick + 1, InputEvent::Key(key, false))
 }
 
+/// The scenario file `name` in `examples/coin_dash/scenarios`, which the C++
+/// port (`examples/cpp/coin_dash/scenarios.cpp`) runs: it must hold exactly
+/// `scenario`, so both builds pass the same test. `PONKO_UPDATE_SCENARIOS=1`
+/// rewrites it.
+fn same_as_file(scenario: &InputScenario, name: &str) {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("examples/coin_dash/scenarios")
+        .join(name);
+    if std::env::var_os("PONKO_UPDATE_SCENARIOS").is_some() {
+        let text = serde_json::to_string_pretty(&scenario.to_json()).expect("a scenario is JSON");
+        std::fs::write(&path, text + "\n").expect("the scenarios folder is writable");
+    }
+    let file = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let read = InputScenario::from_json(&file).unwrap_or_else(|e| panic!("{}: {e:?}", path.display()));
+    assert_eq!(
+        read.to_json(),
+        scenario.to_json(),
+        "{name} is not this test's scenario: run it with PONKO_UPDATE_SCENARIOS=1"
+    );
+}
+
 #[test]
 fn a_whole_session_can_be_played_from_key_presses() {
     let dir = temp_dir("session");
@@ -803,6 +824,7 @@ fn a_whole_session_can_be_played_from_key_presses() {
     ] {
         scenario = tap(scenario, tick, key);
     }
+    same_as_file(&scenario, "session.json");
     let world = keyed(scenario, move |ctx| {
         // The "player's hands" for the chase: movement only while a round runs.
         if screen(&ctx.world) == Screen::Playing {

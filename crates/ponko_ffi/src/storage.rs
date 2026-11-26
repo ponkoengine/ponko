@@ -152,6 +152,26 @@ pub unsafe extern "C" fn ponko_ctx_storage_exists(
     })
 }
 
+/// Whether the game can keep files at all (Rust's `ctx.storage.is_available()`),
+/// to `out_available`: `false` without an app id or data folder, or on a
+/// desktop with no home folder; every other storage call then fails with
+/// kind `PONKO_ERROR_UNSUPPORTED`. A game that runs without saving checks
+/// this instead of treating that failure as a damaged file.
+/// # Safety
+/// `ctx` null or live; `out_available` writable.
+/// ```
+/// let mut a = true;
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_storage_is_available(std::ptr::null_mut(), &mut a) } as u32, 1);
+/// ```
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_storage_is_available(ctx: *mut PonkoCtx, out_available: *mut bool) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        let available = ctx_access(ctx, |c| Ok(c.storage.is_available()))?;
+        out(out_available, available)
+    })
+}
+
 /// Every stored file's name, sorted, one per line (`\n` between them), as
 /// NUL-terminated text: `*out_len` is always the length; the text is copied
 /// only when it fits.

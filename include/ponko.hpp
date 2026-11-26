@@ -2512,6 +2512,11 @@ public:
     sprite_flips sprite_flip(entity e) const { valid(); sprite_flips result; detail::check(ponko_sprite_flip(raw_, e, &result.x, &result.y)); return result; }
     /// How many entities are alive.
     std::size_t size() const { valid(); std::size_t result = 0; detail::check(ponko_world_len(raw_, &result)); return result; }
+    /// The state the world's game is in, as the game's enum `S` (Rust `world.resource::<State<S>>()`): where a
+    /// headless run ended. Throws ponko::error if the game has no state machine.
+    template<class S> S state() const { valid(); std::uint32_t s = 0; detail::check(ponko_world_state(raw_, &s)); return static_cast<S>(s); }
+    /// Despawns every entity (Rust `World::clear`); resources stay. Not inside a query.
+    void clear() { valid(); detail::check(ponko_world_clear(raw_)); }
     /// A copy of `e`'s `T`; throws if `e` is dead or has no `T` (see try_get).
     template<class T> T get(entity e) const {
         T result{}; detail::check(ponko_get(raw_, e, id<T>(), &result, sizeof(T))); return result;
@@ -4541,6 +4546,10 @@ public:
 class paint {
     PonkoUiPaint c_ = ponko_ui_paint_default();
 public:
+    /// The default paint.
+    paint() = default;
+    /// Starts from a C paint, such as `tree::resolved_paint(node)`, to change a few of its fields.
+    explicit paint(const PonkoUiPaint& c) : c_(c) {}
     /// Background color.
     paint& background(ponko::color c) { c_.background = c; return *this; }
     /// Background while hovered or focused.
@@ -8125,6 +8134,9 @@ public:
         if (!bytes) return std::nullopt;
         return std::string(bytes->begin(), bytes->end());
     }
+    /// Whether the game can keep files at all (Rust `storage.is_available`): false without an app id or
+    /// data folder, when every other storage call throws.
+    bool storage_is_available() { bool a = false; detail::check(ponko_ctx_storage_is_available(raw_, &a)); return a; }
     /// Whether the stored file `name` exists.
     bool storage_exists(const char* name) { bool e = false; detail::check(ponko_ctx_storage_exists(raw_, name, &e)); return e; }
     /// Every stored file's name, sorted (backups aren't listed).
@@ -10182,6 +10194,14 @@ public:
     /// Switches to `language` (a code with a table, or "en-XA", the pseudo-locale); false for an
     /// unknown code, which keeps the current language. Keyed UI text follows on the next frame.
     bool set_language(const char* language) { bool known = false; detail::check(ponko_ctx_strings_set_language(raw_, language, &known)); return known; }
+    /// `value` as the current language writes numbers (Rust `strings.number`): its separators and digits,
+    /// `decimals` digits after the point, or as few as show it exactly when negative.
+    std::string format_number(double value, int decimals = -1) const {
+        return detail::read_text([&](char* b, std::size_t c, std::size_t* l) { return ponko_ctx_strings_number(raw_, value, decimals, b, c, l); });
+    }
+    /// A number that changes whenever the string tables or the language change (Rust `strings.revision`):
+    /// text the game set itself is due again when it differs from the one it was written for.
+    std::uint64_t strings_revision() const { std::uint64_t r = 0; detail::check(ponko_ctx_strings_revision(raw_, &r)); return r; }
     /// The current language's code.
     std::string language() const {
         return detail::read_text([&](char* b, std::size_t c, std::size_t* l) { return ponko_ctx_strings_language(raw_, b, c, l); });

@@ -7404,6 +7404,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_storage_delete(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_storage_dir(*mut ponko_ffi::PonkoCtx, *mut core::ffi::primitives::c_char, usize, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_storage_exists(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, *mut bool) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_storage_is_available(*mut ponko_ffi::PonkoCtx, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_storage_is_persistent(*mut ponko_ffi::PonkoCtx, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_storage_is_saving(*mut ponko_ffi::PonkoCtx, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_storage_list(*mut ponko_ffi::PonkoCtx, *mut core::ffi::primitives::c_char, usize, *mut usize) -> ponko_ffi::PonkoStatus
@@ -7422,6 +7423,8 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_strings_language_at(*mut ponko_ffi::PonkoCtx, usize, *mut core::ffi::primitives::c_char, usize, *mut usize, *mut core::ffi::primitives::c_char, usize, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_strings_language_count(*mut ponko_ffi::PonkoCtx, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_strings_missing_report(*mut ponko_ffi::PonkoCtx, *mut core::ffi::primitives::c_char, usize, *mut usize) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_strings_number(*mut ponko_ffi::PonkoCtx, f64, i32, *mut core::ffi::primitives::c_char, usize, *mut usize) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_strings_revision(*mut ponko_ffi::PonkoCtx, *mut u64) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_strings_set_font(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, ponko_ffi::PonkoFont) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_strings_set_language(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_supports_decals(*mut ponko_ffi::PonkoCtx, *mut bool) -> ponko_ffi::PonkoStatus
@@ -8249,6 +8252,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_world_advance_change_tick(*mut ponko_ffi::PonkoWorld, *mut u64) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_world_change_tick(*mut ponko_ffi::PonkoWorld, *mut u64) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_world_changes_since(*mut ponko_ffi::PonkoWorld, *mut u64) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_world_clear(*mut ponko_ffi::PonkoWorld) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_world_describe_component(*mut ponko_ffi::PonkoWorld, *const core::ffi::primitives::c_char, *const core::ffi::primitives::c_char) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_world_describe_resource(*mut ponko_ffi::PonkoWorld, *const core::ffi::primitives::c_char, *const core::ffi::primitives::c_char) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_world_free(*mut ponko_ffi::PonkoWorld) -> ponko_ffi::PonkoStatus
@@ -8278,6 +8282,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_world_snapshot_len(*const ponko_ffi::PonkoWorldSnapshot, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub c fn ponko_ffi::ponko_world_snapshot_new() -> *mut ponko_ffi::PonkoWorldSnapshot
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_world_sort_spatial(*mut ponko_ffi::PonkoWorld, f32) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_world_state(*mut ponko_ffi::PonkoWorld, *mut u32) -> ponko_ffi::PonkoStatus
 pub type ponko_ffi::PonkoAssetContainsFn = core::option::Option<fn(*mut core::ffi::c_void, *const core::ffi::primitives::c_char) -> bool>
 pub type ponko_ffi::PonkoAssetDecodeFn = core::option::Option<fn(*mut core::ffi::c_void, *const u8, usize) -> u32>
 pub type ponko_ffi::PonkoAssetGroupBuildFn = core::option::Option<fn(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoAssetGroup, *mut core::ffi::c_void)>
