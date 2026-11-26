@@ -132,6 +132,8 @@ fn webgl2_shaders() -> Vec<(&'static str, String)> {
         ("depth copy", depth_copy::shader(1)),
         ("array mipmaps", crate::render::mips::ARRAY_SHADER.to_string()),
         ("mipmaps", crate::render::mips::SHADER.to_string()),
+        // The post chain, auto exposure's meter and adaptation included.
+        ("post", include_str!("../post.wgsl").to_string()),
     ]
 }
 

@@ -611,35 +611,6 @@ impl core::fmt::Debug for ponko_ffi::PonkoHandleKind
 pub fn ponko_ffi::PonkoHandleKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_ffi::PonkoHandleKind
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoHandleKind
-#[repr(C)] pub enum ponko_ffi::PonkoHdrEncoding
-pub ponko_ffi::PonkoHdrEncoding::PONKO_HDR_ENCODING_EXTENDED_SRGB = 2
-pub ponko_ffi::PonkoHdrEncoding::PONKO_HDR_ENCODING_PQ = 3
-pub ponko_ffi::PonkoHdrEncoding::PONKO_HDR_ENCODING_SCRGB = 1
-pub ponko_ffi::PonkoHdrEncoding::PONKO_HDR_ENCODING_SDR = 0
-impl core::clone::Clone for ponko_ffi::PonkoHdrEncoding
-pub fn ponko_ffi::PonkoHdrEncoding::clone(&self) -> Self
-impl core::cmp::Eq for ponko_ffi::PonkoHdrEncoding
-impl core::cmp::PartialEq for ponko_ffi::PonkoHdrEncoding
-pub fn ponko_ffi::PonkoHdrEncoding::eq(&self, &Self) -> bool
-impl core::fmt::Debug for ponko_ffi::PonkoHdrEncoding
-pub fn ponko_ffi::PonkoHdrEncoding::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for ponko_ffi::PonkoHdrEncoding
-impl core::marker::StructuralPartialEq for ponko_ffi::PonkoHdrEncoding
-#[repr(C)] pub enum ponko_ffi::PonkoHdrOffReason
-pub ponko_ffi::PonkoHdrOffReason::PONKO_HDR_OFF_HEADLESS = 1
-pub ponko_ffi::PonkoHdrOffReason::PONKO_HDR_OFF_NONE = 0
-pub ponko_ffi::PonkoHdrOffReason::PONKO_HDR_OFF_NOT_REQUESTED = 2
-pub ponko_ffi::PonkoHdrOffReason::PONKO_HDR_OFF_OFF = 3
-pub ponko_ffi::PonkoHdrOffReason::PONKO_HDR_OFF_UNSUPPORTED = 4
-impl core::clone::Clone for ponko_ffi::PonkoHdrOffReason
-pub fn ponko_ffi::PonkoHdrOffReason::clone(&self) -> Self
-impl core::cmp::Eq for ponko_ffi::PonkoHdrOffReason
-impl core::cmp::PartialEq for ponko_ffi::PonkoHdrOffReason
-pub fn ponko_ffi::PonkoHdrOffReason::eq(&self, &Self) -> bool
-impl core::fmt::Debug for ponko_ffi::PonkoHdrOffReason
-pub fn ponko_ffi::PonkoHdrOffReason::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for ponko_ffi::PonkoHdrOffReason
-impl core::marker::StructuralPartialEq for ponko_ffi::PonkoHdrOffReason
 #[repr(C)] pub enum ponko_ffi::PonkoHookKind
 pub ponko_ffi::PonkoHookKind::PONKO_HOOK_ADD = 0
 pub ponko_ffi::PonkoHookKind::PONKO_HOOK_REMOVE = 2
@@ -3017,47 +2988,6 @@ pub fn ponko_ffi::PonkoGridView::default() -> Self
 impl core::fmt::Debug for ponko_ffi::PonkoGridView
 pub fn ponko_ffi::PonkoGridView::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_ffi::PonkoGridView
-#[repr(C)] pub struct ponko_ffi::PonkoHdrOutput
-pub ponko_ffi::PonkoHdrOutput::enabled: bool
-pub ponko_ffi::PonkoHdrOutput::max_content_light_nits: f32
-pub ponko_ffi::PonkoHdrOutput::max_frame_average_nits: f32
-pub ponko_ffi::PonkoHdrOutput::paper_white_nits: f32
-pub ponko_ffi::PonkoHdrOutput::peak_nits: f32
-pub ponko_ffi::PonkoHdrOutput::struct_size: u32
-pub ponko_ffi::PonkoHdrOutput::version: u32
-impl core::clone::Clone for ponko_ffi::PonkoHdrOutput
-pub fn ponko_ffi::PonkoHdrOutput::clone(&self) -> Self
-impl core::cmp::PartialEq for ponko_ffi::PonkoHdrOutput
-pub fn ponko_ffi::PonkoHdrOutput::eq(&self, &Self) -> bool
-impl core::fmt::Debug for ponko_ffi::PonkoHdrOutput
-pub fn ponko_ffi::PonkoHdrOutput::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for ponko_ffi::PonkoHdrOutput
-impl core::marker::StructuralPartialEq for ponko_ffi::PonkoHdrOutput
-#[repr(C)] pub struct ponko_ffi::PonkoHdrStatus
-pub ponko_ffi::PonkoHdrStatus::active: bool
-pub ponko_ffi::PonkoHdrStatus::available: bool
-pub ponko_ffi::PonkoHdrStatus::display_headroom: f32
-pub ponko_ffi::PonkoHdrStatus::display_peak_nits: f32
-pub ponko_ffi::PonkoHdrStatus::encoding: ponko_ffi::PonkoHdrEncoding
-pub ponko_ffi::PonkoHdrStatus::headroom: f32
-pub ponko_ffi::PonkoHdrStatus::max_content_light_nits: f32
-pub ponko_ffi::PonkoHdrStatus::max_frame_average_nits: f32
-pub ponko_ffi::PonkoHdrStatus::max_mastering_nits: f32
-pub ponko_ffi::PonkoHdrStatus::metadata_sent: bool
-pub ponko_ffi::PonkoHdrStatus::min_mastering_nits: f32
-pub ponko_ffi::PonkoHdrStatus::paper_white_nits: f32
-pub ponko_ffi::PonkoHdrStatus::peak_nits: f32
-pub ponko_ffi::PonkoHdrStatus::reason: ponko_ffi::PonkoHdrOffReason
-pub ponko_ffi::PonkoHdrStatus::struct_size: u32
-pub ponko_ffi::PonkoHdrStatus::version: u32
-impl core::clone::Clone for ponko_ffi::PonkoHdrStatus
-pub fn ponko_ffi::PonkoHdrStatus::clone(&self) -> Self
-impl core::cmp::PartialEq for ponko_ffi::PonkoHdrStatus
-pub fn ponko_ffi::PonkoHdrStatus::eq(&self, &Self) -> bool
-impl core::fmt::Debug for ponko_ffi::PonkoHdrStatus
-pub fn ponko_ffi::PonkoHdrStatus::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for ponko_ffi::PonkoHdrStatus
-impl core::marker::StructuralPartialEq for ponko_ffi::PonkoHdrStatus
 pub struct ponko_ffi::PonkoHeightfield(_)
 #[repr(C)] pub struct ponko_ffi::PonkoHit3D
 pub ponko_ffi::PonkoHit3D::distance: f32
@@ -4196,6 +4126,15 @@ pub fn ponko_ffi::PonkoPost::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::
 impl core::marker::Copy for ponko_ffi::PonkoPost
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoPost
 #[repr(C)] pub struct ponko_ffi::PonkoPostEx
+pub ponko_ffi::PonkoPostEx::auto_exposure: bool
+pub ponko_ffi::PonkoPostEx::auto_exposure_brighten_speed: f32
+pub ponko_ffi::PonkoPostEx::auto_exposure_center_weight: f32
+pub ponko_ffi::PonkoPostEx::auto_exposure_compensation: f32
+pub ponko_ffi::PonkoPostEx::auto_exposure_darken_speed: f32
+pub ponko_ffi::PonkoPostEx::auto_exposure_has_mask: bool
+pub ponko_ffi::PonkoPostEx::auto_exposure_mask: ponko_ffi::PonkoTexture
+pub ponko_ffi::PonkoPostEx::auto_exposure_max: f32
+pub ponko_ffi::PonkoPostEx::auto_exposure_min: f32
 pub ponko_ffi::PonkoPostEx::dof_blur: f32
 pub ponko_ffi::PonkoPostEx::dof_enabled: bool
 pub ponko_ffi::PonkoPostEx::dof_focus_distance: f32
@@ -6297,8 +6236,6 @@ pub const ponko_ffi::PONKO_GPU_UNTIMED_NO_TIMESTAMPS: u32
 pub const ponko_ffi::PONKO_GPU_UNTIMED_OFF: u32
 pub const ponko_ffi::PONKO_GPU_UNTIMED_QUERY_SET_BUDGET: u32
 pub const ponko_ffi::PONKO_HANDLE_NONE: u32
-pub const ponko_ffi::PONKO_HDR_OUTPUT_VERSION: u32
-pub const ponko_ffi::PONKO_HDR_STATUS_VERSION: u32
 pub const ponko_ffi::PONKO_LEVEL_SHAPE_ELLIPSE: u32
 pub const ponko_ffi::PONKO_LEVEL_SHAPE_POINT: u32
 pub const ponko_ffi::PONKO_LEVEL_SHAPE_POLYGON: u32
@@ -6885,8 +6822,6 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_graphics_quality(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoGraphicsQuality) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_handle_free(*mut ponko_ffi::PonkoCtx, u32, u32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_handle_is_live(*mut ponko_ffi::PonkoCtx, u32, u32, *mut bool) -> ponko_ffi::PonkoStatus
-#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_hdr_output(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoHdrOutput) -> ponko_ffi::PonkoStatus
-#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_hdr_status(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoHdrStatus) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_held_item(*mut ponko_ffi::PonkoCtx, u64, *mut ponko_ffi::PonkoTransform3D) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_image_limits(*const ponko_ffi::PonkoCtx, *mut u32, *mut u64) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_ime_allowed(*mut ponko_ffi::PonkoCtx, *mut bool) -> ponko_ffi::PonkoStatus
@@ -7176,7 +7111,6 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_graphics_quality(*mut ponko_ffi::PonkoCtx, *const ponko_ffi::PonkoGraphicsQuality) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_gravity(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoVec2) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_gravity3d(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoVec3) -> ponko_ffi::PonkoStatus
-#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_hdr_output(*mut ponko_ffi::PonkoCtx, *const ponko_ffi::PonkoHdrOutput) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_held_item(*mut ponko_ffi::PonkoCtx, u64, *const ponko_ffi::PonkoTransform3D) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_image_limits(*mut ponko_ffi::PonkoCtx, u32, u64) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_ime_allowed(*mut ponko_ffi::PonkoCtx, bool) -> ponko_ffi::PonkoStatus
@@ -7696,7 +7630,6 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_game_follow_attachments(*mut ponko_ffi::PonkoGame) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_game_free(*mut ponko_ffi::PonkoGame)
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_game_fullscreen(*mut ponko_ffi::PonkoGame, bool) -> ponko_ffi::PonkoStatus
-#[no_mangle] pub unsafe c fn ponko_ffi::ponko_game_hdr_output(*mut ponko_ffi::PonkoGame, *const ponko_ffi::PonkoHdrOutput) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_game_headless_frames(*mut ponko_ffi::PonkoGame, bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_game_hot_reload(*mut ponko_ffi::PonkoGame, bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_game_image_limits(*mut ponko_ffi::PonkoGame, u32, u64) -> ponko_ffi::PonkoStatus
@@ -7759,7 +7692,6 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_grid_radius(*const ponko_ffi::PonkoGrid, ponko_ffi::PonkoVec2, f32, *mut ponko_ffi::PonkoGridItem, usize, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_grid_rebuild(*mut ponko_ffi::PonkoGrid, *const ponko_ffi::PonkoGridItem, usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_grid_view(*const ponko_ffi::PonkoGrid, *mut ponko_ffi::PonkoGridView) -> ponko_ffi::PonkoStatus
-#[no_mangle] pub unsafe c fn ponko_ffi::ponko_hdr_output_defaults(*mut ponko_ffi::PonkoHdrOutput) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_heightfield_at(*const ponko_ffi::PonkoHeightfield, f32, f32, *mut bool, *mut f32, *mut ponko_ffi::PonkoVec3) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_heightfield_free(*mut ponko_ffi::PonkoHeightfield)
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_heightfield_new(*const f32, usize, f32) -> *mut ponko_ffi::PonkoHeightfield
@@ -7920,9 +7852,6 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_net_messages_next_event(*mut ponko_ffi::PonkoNetMessages, *mut ponko_ffi::PonkoMessageEvent, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_net_messages_poll(*mut ponko_ffi::PonkoNetMessages) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_net_messages_poll_elapsed(*mut ponko_ffi::PonkoNetMessages, f64) -> ponko_ffi::PonkoStatus
-#[no_mangle] pub unsafe c fn ponko_ffi::ponko_net_messages_rtc_host(*mut ponko_ffi::PonkoLobby, *const core::ffi::primitives::c_char, *const core::ffi::primitives::c_char, usize, *mut *mut ponko_ffi::PonkoNetMessages) -> ponko_ffi::PonkoStatus
-#[no_mangle] pub unsafe c fn ponko_ffi::ponko_net_messages_rtc_join(*mut ponko_ffi::PonkoLobby, u32, *const core::ffi::primitives::c_char, *const core::ffi::primitives::c_char, *mut *mut ponko_ffi::PonkoNetMessages) -> ponko_ffi::PonkoStatus
-#[no_mangle] pub unsafe c fn ponko_ffi::ponko_net_messages_rtc_peer(*mut ponko_ffi::PonkoNetMessages, u64, *mut u32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_net_messages_send(*mut ponko_ffi::PonkoNetMessages, u64, ponko_ffi::PonkoLane, *const u8, usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_net_messages_send_to_all(*mut ponko_ffi::PonkoNetMessages, ponko_ffi::PonkoLane, *const u8, usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_net_messages_set_timeout(*mut ponko_ffi::PonkoNetMessages, u64) -> ponko_ffi::PonkoStatus

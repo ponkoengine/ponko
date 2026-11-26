@@ -336,13 +336,14 @@ impl Renderer3D {
             (0.1, 1000.0)
         };
         self.post.prepare(
-            queue,
+            (device, queue),
             post,
             lut,
             (size, window),
             planes,
             self.resources.white,
             self.screen.taa_supported,
+            (scene.time.1, frame.motion.reset),
         );
         self.post
             .prepare_depth_of_field(device, &self.scene_layout, self.samples, self.float_depth);

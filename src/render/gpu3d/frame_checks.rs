@@ -274,6 +274,12 @@ impl Renderer3D {
             Some((Resource::SceneCopy, &targets.scene_texture)),
             Some(view(Resource::EffectScratch, &targets.scene_view)),
             Some(view(Resource::BloomMips, targets.post.bloom_image())),
+            self.post
+                .metering()
+                .map(|m| view(Resource::ExposureMeter, m.images().0)),
+            self.post
+                .metering()
+                .map(|m| view(Resource::ExposureState, m.images().1)),
             Some((Resource::SkyTexture, &self.sky_texture)),
             targets.taa.as_ref().map(|t| (Resource::TaaInput, &t.input)),
             targets

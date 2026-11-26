@@ -4986,6 +4986,16 @@ static void versioned_render_descriptors() {
         CHECK(ctx.post_ex().ssr_thin_objects);
         ctx.set_graphics_quality(ponko::graphics_quality_preset(ponko::quality_level::medium));
         CHECK(!ctx.post_ex().ssr_thin_objects);
+        // Version 4: auto exposure, off by default; a min above its max is refused.
+        p = ctx.post_ex();
+        CHECK(!p.auto_exposure && p.auto_exposure_brighten_speed == 1 && p.auto_exposure_darken_speed == 3);
+        p.auto_exposure = true;
+        p.auto_exposure_center_weight = 1;
+        ctx.set_post(p);
+        CHECK(ctx.post_ex().auto_exposure && ctx.post_ex().auto_exposure_center_weight == 1);
+        p.auto_exposure_max = -5;
+        throws_kind([&] { ctx.set_post(p); }, PONKO_ERROR_INVALID);
+        CHECK(ctx.post_ex().auto_exposure_max == 4);
 
         auto e = ctx.world().spawn(ponko::transform3d_at({0, 1, 0}));
         ctx.set_particle_emitter3d(e, ponko::particle_settings().rate(40).softness(1.5f));
