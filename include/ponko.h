@@ -4342,6 +4342,8 @@ enum PonkoStatus ponko_spawn(struct PonkoWorld *world,
 
 enum PonkoStatus ponko_despawn(struct PonkoWorld *world, uint64_t entity);
 
+enum PonkoStatus ponko_world_clear(struct PonkoWorld *world);
+
 enum PonkoStatus ponko_is_alive(struct PonkoWorld *world, uint64_t entity, bool *out_alive);
 
 enum PonkoStatus ponko_world_len(struct PonkoWorld *world, size_t *out_len);
@@ -8200,6 +8202,8 @@ enum PonkoStatus ponko_ctx_storage_read_backup(struct PonkoCtx *ctx,
 
 enum PonkoStatus ponko_ctx_storage_exists(struct PonkoCtx *ctx, const char *name, bool *out_exists);
 
+enum PonkoStatus ponko_ctx_storage_is_available(struct PonkoCtx *ctx, bool *out_available);
+
 enum PonkoStatus ponko_ctx_storage_list(struct PonkoCtx *ctx,
                                         char *buffer,
                                         size_t capacity,
@@ -9933,6 +9937,15 @@ enum PonkoStatus ponko_ctx_strings_missing_report(struct PonkoCtx *ctx,
                                                   char *buffer,
                                                   size_t capacity,
                                                   size_t *out_len);
+
+enum PonkoStatus ponko_ctx_strings_number(struct PonkoCtx *ctx,
+                                          double value,
+                                          int32_t decimals,
+                                          char *buffer,
+                                          size_t capacity,
+                                          size_t *out_len);
+
+enum PonkoStatus ponko_ctx_strings_revision(struct PonkoCtx *ctx, uint64_t *out_revision);
 
 enum PonkoStatus ponko_plural_category(const char *language,
                                        double count,

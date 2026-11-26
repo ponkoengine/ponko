@@ -1173,6 +1173,33 @@ pub unsafe extern "C" fn ponko_despawn(world: *mut PonkoWorld, entity: u64) -> P
     boundary(|| unsafe { access(world, |w, _| present(w.despawn(Entity::from_bits(entity)))) })
 }
 
+/// Despawns every entity (Rust `World::clear`); resources stay. Component
+/// hooks run as they do for `ponko_despawn`. Not allowed while the world is
+/// busy (inside a query).
+/// # Safety
+/// `world` must be null or a live handle.
+/// ```
+/// use ponko_ffi::*;
+/// let w = ponko_world_new();
+/// unsafe {
+///     let mut len = 1;
+///     assert_eq!(ponko_world_clear(w), PonkoStatus::PONKO_OK);
+///     ponko_world_len(w, &mut len);
+///     assert_eq!(len, 0);
+///     ponko_world_free(w);
+/// }
+/// ```
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_world_clear(world: *mut PonkoWorld) -> PonkoStatus {
+    // SAFETY: caller guarantees live handle, access enforces exclusive use.
+    boundary(|| unsafe {
+        access(world, |w, _| {
+            w.clear();
+            Ok(())
+        })
+    })
+}
+
 /// Tests whether a generational entity handle is alive.
 /// # Safety
 /// Live world and valid writable output, or null pointers.
