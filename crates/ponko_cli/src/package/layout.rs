@@ -59,6 +59,17 @@ impl Platform {
     }
 
     /// The program's file name for a Cargo target called `name`.
+    /// The file of the dynamic library `name` (as `-l` names it) on this
+    /// platform: `libname.dylib`, `libname.so`, `name.dll`; none on the web.
+    pub fn library_name(&self, name: &str) -> Option<String> {
+        match self.os {
+            Os::Windows => Some(format!("{name}.dll")),
+            Os::Mac => Some(format!("lib{name}.dylib")),
+            Os::Linux => Some(format!("lib{name}.so")),
+            Os::Web => None,
+        }
+    }
+
     pub fn exe_name(&self, name: &str) -> String {
         match self.os {
             Os::Windows => format!("{name}.exe"),
@@ -647,6 +658,30 @@ pub fn plan(
     })
 }
 
+/// Adds the dynamic `libraries` the program links beside it (inside a macOS
+/// app, in `Contents/MacOS`), where it looks for them.
+pub fn with_libraries(mut plan: Plan, libraries: &[PathBuf]) -> Result<Plan, String> {
+    let dir = plan.program.parent().map(Path::to_path_buf).unwrap_or_default();
+    for lib in libraries {
+        let name = lib
+            .file_name()
+            .ok_or_else(|| format!("{} names no file", lib.display()))?;
+        let path = dir.join(name);
+        if plan.entries.iter().any(|e| e.path == path) {
+            return Err(format!(
+                "two files would be {} in the package: a library the program links, and one from [package.metadata.ponko]",
+                path.display()
+            ));
+        }
+        plan.entries.push(Entry {
+            path,
+            source: Source::Copy(lib.clone()),
+            executable: false,
+        });
+    }
+    Ok(plan)
+}
+
 /// The third-party notices' file name.
 pub const NOTICES: &str = "THIRD-PARTY-NOTICES.txt";
 
@@ -936,6 +971,59 @@ mod tests {
             "{p:?}"
         );
         assert!(p.contains(&"coin-dash-1.2.3-linux-x86_64/assets/coin_dash/coin.png".to_string()));
+    }
+
+    #[test]
+    fn linked_libraries_go_beside_the_program_on_every_platform() {
+        let lib = |p: &Platform| p.library_name("steam_api").unwrap();
+        for (triple, app, dir) in [
+            ("x86_64-pc-windows-msvc", false, "coin-dash-1.2.3-windows-x86_64"),
+            ("x86_64-unknown-linux-gnu", false, "coin-dash-1.2.3-linux-x86_64"),
+            (
+                "aarch64-apple-darwin",
+                true,
+                "coin-dash-1.2.3-macos-aarch64/Coin Dash.app/Contents/MacOS",
+            ),
+        ] {
+            let platform = platform(triple);
+            let name = lib(&platform);
+            let plan = plan(
+                &game(),
+                &platform,
+                app,
+                Built::Program(Path::new("/t/coin_dash")),
+                "N",
+                None,
+                None,
+            )
+            .unwrap();
+            let source = PathBuf::from("/t/build/out").join(&name);
+            let plan = with_libraries(plan, std::slice::from_ref(&source)).unwrap();
+            let entry = plan
+                .entries
+                .iter()
+                .find(|e| e.source == Source::Copy(source.clone()))
+                .unwrap();
+            assert_eq!(entry.path, Path::new(dir).join(&name), "{triple}");
+            assert!(!entry.executable);
+            assert!(
+                with_libraries(plan, &[source]).is_err(),
+                "the same file twice is an error"
+            );
+        }
+        assert_eq!(
+            platform("x86_64-pc-windows-msvc").library_name("steam_api64").unwrap(),
+            "steam_api64.dll"
+        );
+        assert_eq!(
+            platform("aarch64-apple-darwin").library_name("steam_api").unwrap(),
+            "libsteam_api.dylib"
+        );
+        assert_eq!(
+            platform("x86_64-unknown-linux-gnu").library_name("steam_api").unwrap(),
+            "libsteam_api.so"
+        );
+        assert_eq!(platform("wasm32-unknown-unknown").library_name("x"), None);
     }
 
     #[test]

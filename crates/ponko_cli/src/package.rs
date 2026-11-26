@@ -611,9 +611,20 @@ fn feature_args(options: &Options) -> Vec<String> {
     out
 }
 
-/// Builds the program; returns the executable (or the .wasm for the web)
-/// and the features the engine (the `ponko` library) was built with, when
-/// cargo said (not with `--no-build`).
+/// What `build` made.
+struct BuildOutput {
+    /// The executable (or the .wasm for the web).
+    program: PathBuf,
+    /// The features the engine (the `ponko` library) was built with, when
+    /// cargo said (not with `--no-build`).
+    engine: Option<Vec<String>>,
+    /// Dynamic libraries that build scripts placed in their output folder
+    /// and linked (Valve's `libsteam_api` for the `steam` feature): the
+    /// program needs them beside it.
+    libraries: Vec<PathBuf>,
+}
+
+/// Builds the program.
 fn build(
     options: &Options,
     project: &Project,
@@ -621,7 +632,7 @@ fn build(
     example: bool,
     triple: &str,
     explicit: bool,
-) -> Result<(PathBuf, Option<Vec<String>>), String> {
+) -> Result<BuildOutput, String> {
     let profile = options.profile.as_deref().unwrap_or("release");
     let package = project.package["name"].as_str().unwrap_or_default();
     let kind = if example { "example" } else { "bin" };
@@ -640,7 +651,11 @@ fn build(
         }
         let exe = dir.join(Platform::from_triple(triple)?.exe_name(target));
         return if exe.is_file() {
-            Ok((exe, None))
+            Ok(BuildOutput {
+                program: exe,
+                engine: None,
+                libraries: Vec::new(),
+            })
         } else {
             Err(format!(
                 "--no-build: {} does not exist; build the {kind} first",
@@ -685,6 +700,8 @@ fn build(
         .map_err(|e| format!("can't run cargo build: {e}"))?;
     let mut found = None;
     let mut engine = None;
+    let mut libraries = Vec::new();
+    let platform = Platform::from_triple(triple)?;
     let reader = BufReader::new(child.stdout.take().ok_or("cargo build has no output")?);
     for line in reader.lines() {
         let line = line.map_err(|e| e.to_string())?;
@@ -693,6 +710,11 @@ fn build(
         };
         if let Some(features) = engine_features(&msg) {
             engine = Some(features);
+        }
+        for lib in built_libraries(&msg, &platform) {
+            if !libraries.contains(&lib) {
+                libraries.push(lib);
+            }
         }
         let ours = msg["reason"] == "compiler-artifact"
             && msg["target"]["name"] == target
@@ -716,7 +738,37 @@ fn build(
         return Err(format!("cargo build failed ({status})"));
     }
     let found = found.ok_or_else(|| format!("cargo build made no program for `{target}`"))?;
-    Ok((found, engine))
+    Ok(BuildOutput {
+        program: found,
+        engine,
+        libraries,
+    })
+}
+
+/// The dynamic libraries a build script put in its output folder and linked,
+/// from cargo's message about running it: those ship beside the program.
+/// Libraries linked from anywhere else (the system's) don't.
+fn built_libraries(msg: &Value, platform: &Platform) -> Vec<PathBuf> {
+    if msg["reason"] != "build-script-executed" {
+        return Vec::new();
+    }
+    let Some(out) = msg["out_dir"].as_str().map(Path::new) else {
+        return Vec::new();
+    };
+    msg["linked_libs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter_map(|lib| match lib.split_once('=') {
+            Some(("dylib", name)) => Some(name),
+            Some(_) => None, // static, framework
+            None => Some(lib),
+        })
+        .filter_map(|name| platform.library_name(name.split(':').next().unwrap_or(name)))
+        .map(|file| out.join(file))
+        .filter(|path| path.is_file())
+        .collect()
 }
 
 /// The features of the engine library, from a cargo build message about it.
@@ -1030,7 +1082,11 @@ pub fn package_command(options: &Options, cwd: &Path) -> Result<String, String> 
             .unwrap_or_else(|| project.target_dir.join("package")),
     );
 
-    let (built, engine) = build(options, &project, &target, example, &triple, explicit)?;
+    let BuildOutput {
+        program: built,
+        engine,
+        libraries,
+    } = build(options, &project, &target, example, &triple, explicit)?;
     // Packed or cooked after the build: the cook asks what the engine was
     // built to read.
     let cook =
@@ -1089,6 +1145,7 @@ pub fn package_command(options: &Options, cwd: &Path) -> Result<String, String> 
             icon.as_deref(),
             pack.as_ref().map(|p| p.0.as_slice()),
         )
+        .and_then(|plan| layout::with_libraries(plan, &libraries))
     };
     let plan = plan.and_then(|plan| write_plan(&out, &plan).map(|()| plan));
     let _ = std::fs::remove_dir_all(&web_dir);
@@ -1099,6 +1156,18 @@ pub fn package_command(options: &Options, cwd: &Path) -> Result<String, String> 
         dir.display(),
         platform.triple
     )];
+    if !libraries.is_empty() {
+        let names: Vec<String> = libraries
+            .iter()
+            .filter_map(|l| l.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .collect();
+        report.push(format!("beside the program: {}", names.join(", ")));
+        if platform.os == Os::Linux {
+            notes.push(
+                "Linux finds a library beside the program only when the program was linked with `-Wl,-rpath,$ORIGIN` (see the guide's \"Shipping on Steam\")".into(),
+            );
+        }
+    }
     match &pack {
         Some((_, line)) => report.push(line.clone()),
         None if loose_line.is_some() => report.extend(loose_line.clone()),
@@ -1195,6 +1264,30 @@ mod tests {
 
     fn parse(args: &[&str]) -> Result<Options, String> {
         Options::parse(&args.iter().map(|a| a.to_string()).collect::<Vec<_>>(), USAGE)
+    }
+
+    #[test]
+    fn libraries_a_build_script_made_and_linked_ship_with_the_program() {
+        let out = std::env::temp_dir().join(format!("ponko-built-libs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&out);
+        std::fs::create_dir_all(&out).unwrap();
+        std::fs::write(out.join("libsteam_api.dylib"), b"lib").unwrap();
+        std::fs::write(out.join("libbundled.a"), b"lib").unwrap();
+        let mac = Platform::from_triple("aarch64-apple-darwin").unwrap();
+        let msg = serde_json::json!({
+            "reason": "build-script-executed",
+            "linked_libs": ["dylib=steam_api", "static=bundled", "dylib=z", "framework=Metal"],
+            "linked_paths": [out.to_str().unwrap(), "/usr/lib"],
+            "out_dir": out.to_str().unwrap(),
+        });
+        assert_eq!(
+            built_libraries(&msg, &mac),
+            [out.join("libsteam_api.dylib")],
+            "only dynamic libraries found in the script's own output folder"
+        );
+        let other = serde_json::json!({"reason": "compiler-artifact", "out_dir": out.to_str().unwrap()});
+        assert!(built_libraries(&other, &mac).is_empty());
+        let _ = std::fs::remove_dir_all(out);
     }
 
     #[test]

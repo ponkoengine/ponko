@@ -58,6 +58,9 @@ fn pixel_perfect_follows_the_window_size() {
         );
         let bars = pixels.screen_rect(ctx.camera.viewport());
         assert_eq!(bars.size(), vec2(1280.0, 720.0));
+        // A sprite placed by hand sits on the same grid.
+        let coin = pixels.snap_point(vec2(10.4, 3.6), ctx.camera.zoom);
+        assert_eq!(coin, vec2(10.0, 4.0));
     });
 }
 
@@ -81,6 +84,28 @@ fn a_shaken_camera_returns_to_rest_when_the_trauma_is_gone() {
             }
         })
         .run_headless(80, |_| {});
+}
+
+#[test]
+fn a_shake_can_drive_a_camera_of_the_games_own() {
+    // A game with its own camera code reads the offsets instead of `apply_2d`.
+    let mut shake = CameraShake::default();
+    assert_eq!(shake.offset_2d(), Vec2::ZERO);
+    shake.add_trauma(1.0);
+    let (mut moved, mut turned) = (0.0f32, 0.0f32);
+    for _ in 0..30 {
+        shake.update(1.0 / 60.0);
+        let (offset, angles) = (shake.offset_2d(), shake.angles());
+        assert!(offset.abs().cmple(shake.max_offset).all(), "{offset}");
+        assert!(angles.abs().cmple(shake.max_angles).all(), "{angles}");
+        moved = moved.max(offset.length());
+        turned = turned.max(angles.length());
+    }
+    assert!(moved > 0.0 && turned > 0.0);
+    for _ in 0..60 {
+        shake.update(1.0 / 60.0);
+    }
+    assert_eq!((shake.offset_2d(), shake.angles()), (Vec2::ZERO, Vec3::ZERO));
 }
 
 /// The hero: moved 2 units right every tick.
@@ -257,6 +282,33 @@ mod three {
             assert!(back.abs_diff_eq(vec2(640.0, 360.0), 1e-2));
             let p = cam.screen_to_world(vec2(100.0, 650.0), 5.0);
             assert!(cam.world_to_screen(p).unwrap().abs_diff_eq(vec2(100.0, 650.0), 1e-2));
+        });
+    }
+
+    #[test]
+    fn rigs_take_obstacles_and_panning_from_the_game() {
+        // An editor view: panned by the keyboard rather than the mouse.
+        let mut orbit = OrbitCamera::new(Vec3::ZERO, 8.0);
+        orbit.pan(2.0, 1.0);
+        // At yaw 0 right is +X; up is the view's, tilted by the pitch.
+        assert!((orbit.target.x - 2.0).abs() < 1e-5, "{}", orbit.target);
+        assert!((vec2(orbit.target.y, orbit.target.z).length() - 1.0).abs() < 1e-5 && orbit.target.y > 0.0);
+        // A game without 3D physics: the room's back wall, at z = 2, is the only obstacle.
+        let mut rig = ThirdPersonCamera::default();
+        rig.pitch = 0.0;
+        rig.follow_smoothing = 0.0;
+        Game::new("room", 800, 600).run_headless(0, move |ctx| {
+            let camera = &mut ctx.scene3d.camera;
+            for _ in 0..240 {
+                rig.update_with(camera, Vec3::ZERO, 1.0 / 60.0, |from, dir, max| {
+                    (dir.z > 0.0).then(|| (2.0 - from.z) / dir.z).filter(|&d| d < max)
+                });
+            }
+            assert!(
+                (camera.position.z - 2.0).abs() < 1e-3,
+                "stops at the wall: {}",
+                camera.position
+            );
         });
     }
 
