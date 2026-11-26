@@ -19,6 +19,106 @@ jobs written for macOS; the platform-neutral jobs written for `ubuntu-latest`
 (clippy, docs, Miri, the web build and the browser runs, templates and more)
 ran on this Mac by hand, as recorded below.
 
+## 2026-11-26: Playwright 1.65.1 (#601) and the fuzz targets (#528, section 3)
+
+`main` at `f308b7f6` plus the branch that moves `web/smoke` to
+playwright-core 1.65.1 (Chromium 159.0.8154.6 `chromium-1255`, Firefox 159.0
+`firefox-1572`, WebKit 27.2 `webkit-2388`), on the same Mac (Apple M4 Max,
+macOS 27.2.1, Node 26.13.1, wasm-bindgen 0.2.130, WASI SDK 34 arm64-macos).
+The machine was busy all the time (load average 60 to 92 on 14 cores: other
+agents were compiling). Linux is not covered here: the `web-smoke` job on
+Linux needs the Linux machine (#500).
+
+### The `web-smoke` and `web-gpu` jobs
+
+`scripts/run-checks.py` skips `web-smoke` on a Mac (its `runs-on` is
+Ubuntu), so its steps ran one by one, headless, as written in
+`scripts/checks.yml` (`RUSTFLAGS=-D warnings`), after
+`npm ci` and `playwright-core install chromium firefox webkit`; the `web-gpu`
+job ran from its own steps. Times are wall-clock.
+
+| Check | Result | Time |
+|---|---|---|
+| `web-smoke`: runner tests (`node --test web/smoke/*.test.mjs web/gallery/*.test.mjs`) | pass, 177 tests | 4 s |
+| `web-smoke`: build the fixtures | pass | 8 min 23 s |
+| `web-smoke`: Chromium WebGL2: 2D fixture, 3D fixture, 2D lights | pass | 5 s, 10 s, 13 s |
+| `web-smoke`: Chromium WebGL2: control endpoint (builds `ponko-mcp` and the web-control fixture) | pass | 1 min 22 s |
+| `web-smoke`: Chromium WebGL2: editor saves (kept, persistent storage granted, refused); a glTF scene that didn't load and its Retry | pass | 15 s, 15 s, 16 s, 13 s |
+| `web-smoke`: Chromium WebGL2: `coin_dash`; multiplayer (two tabs, two native players) | pass | 17 s; 24 s |
+| `web-smoke`: Chromium: failures after startup | **fail**, then pass after the fix below | 64 s; 6 s |
+| `web-smoke`: Chromium: key labels; a lost WebGPU device (new headless mode, SwiftShader); WebGPU first and each way back to WebGL2 | pass | 13 s; 4 s; 16 s |
+| `web-smoke`: Chromium WebGPU: headless shell (reported unsupported: a WebGPU canvas reads back black) | pass | 2 s |
+| `web-smoke`: Chromium WebGPU: new headless mode, SwiftShader | 2D fixture passes; the 3D fixture stalls (the known, accepted case, #609, `stall` as before, and the step passes on exactly that) | 12 s |
+| `web-smoke`: Chromium, whatever the engine picks | pass, on WebGL2 | 4 s |
+| `web-smoke`: **Firefox 159**, WebGL2 (2D and 3D fixtures; Apple GPU through WebGL2) | **pass**; it launches now | 13 s |
+| `web-smoke`: Firefox, WebGPU; Firefox, whatever the engine picks | pass: WebGPU unsupported ("headless firefox has no WebGPU adapter here"); `auto` passes on WebGL2 | 4 s; 5 s |
+| `web-smoke`: WebKit 27.2, WebGL2 (2D and 3D fixtures); WebGPU | pass; pass (drawn with WebGPU) | 15 s; 5 s |
+| `web-smoke`: WebKit audio: zero reported channels, rejected resume | **fail** (zero channels, in the first full run; it passed in three reruns before the fix), then pass after the fix below | 19 s; 13 s |
+| `web-smoke`: self-tests (missing asset, startup panic, stalled simulation) | pass | 6 s |
+| `web-smoke`: web gallery pages (Chromium, WebGL2) | pass | 1 min 6 s |
+| `web-smoke`: Chromium: replication; video through the AV1 decoder | pass | 2 s; 27 s |
+| `web-smoke`: Chromium: the guide's C++ game (`web/build-cpp.sh`, WASI SDK 34) | pass: started in 786 ms, 23 079 727 bytes of wasm | 4 min 37 s |
+| `web-smoke`: Chromium: threaded web build (all eight cases) | pass | 7 min 20 s |
+| `web-smoke`: Chromium: the water spectrum with and without WASM SIMD | pass | 4 min 1 s |
+| `web-gpu`: WebGPU on the GPU, 2D and 3D fixtures (`--require-gpu`, Apple M4 Max, Metal) | pass | 16 s |
+| `web-gpu`: WebGL2 on the GPU, 3D fixture (ANGLE on Metal) | pass | 5 s |
+| `web-gpu`: frame times, 3D fixture, `frame-times.mjs --repeat 1` | pass: WebGPU median 0.23 ms, p95 4.33 ms; WebGL2 median 2.66 ms, p95 9.92 ms (1000 frames each, load 64) | 7 s |
+
+Two things failed on the first pass with 1.65.1 and are fixed in the branch
+(neither is the Playwright move itself):
+
+- `runtime-failures.mjs`, the `device-lost` case, in the headless shell: since
+  #609 the engine falls back to WebGL2 when a WebGPU canvas can't present
+  (the shell's SwiftShader fallback adapter can't), so the device the runner
+  destroyed was the abandoned test device and the game ran on. The case now
+  needs the game to draw a WebGPU canvas and reads "unsupported" otherwise;
+  the new headless mode, with SwiftShader or on the Metal adapter, still
+  loses the game's device and passes.
+- WebKit, zero-channel audio: once, in the first full run, the runner's fake of
+  `maxChannelCount` (set on the context's destination object) was gone when it
+  read the channel count back, because WebKit may hand out a new wrapper for
+  `destination`; the runner sets it on the prototype now (six runs in a row
+  pass).
+
+The `web-gpu` 3D fixture on WebGPU stalled once in five runs at load 70 to
+90 (2 to 26 ticks in 3 s, 60 wanted), then passed in all four reruns and in
+the job's own run. Chromium 159's headless shell and new headless mode
+otherwise behave as Chromium 156 did.
+
+### Fuzz targets on the release revision (#528, section 3)
+
+`fuzz/seed-corpus.sh`, then `fuzz/run-all.sh 60` (every target of
+`fuzz/targets.txt`, 60 s each, nightly 1.102.0 (2026-11-24), cargo-fuzz 0.13.2, libFuzzer
+with `-rss_limit_mb=2048 -timeout=10`) on `main` at `f308b7f6`
+(the branch changes no engine code, only the web smoke runner). The machine was
+busy (load 60 to 90), so the numbers of executions are low and say nothing
+about the targets' speed. **No findings** (no crash, timeout, out-of-memory
+or slow unit) in any of the 17 targets. The whole run took 32 min 27 s with
+the builds.
+
+| Target | Seconds | Executions | New units | Peak RSS |
+|---|---|---|---|---|
+| `scene` | 60 | 5 678 | 314 | 485 MB |
+| `prefab` | 60 | 191 | 84 | 140 MB |
+| `gltf` | 60 | 40 | 27 | 148 MB |
+| `unity_yaml` | 60 | 883 | 156 | 114 MB |
+| `unity_binary` | 60 | 48 141 | 448 | 311 MB |
+| `action_map` | 60 | 487 | 108 | 101 MB |
+| `asset_pack` | 60 | 17 695 | 169 | 353 MB |
+| `lockstep` | 60 | 63 420 | 654 | 462 MB |
+| `messages` | 60 | 3 170 | 201 | 272 MB |
+| `replication` | 60 | 8 300 | 394 | 492 MB |
+| `lobby` | 60 | 13 | 10 | 106 MB |
+| `control` | 60 | 681 | 174 | 209 MB |
+| `aseprite` | 60 | 777 | 118 | 202 MB |
+| `levels` | 60 | 605 | 127 | 252 MB |
+| `cooked_texture` | 60 | 23 | 7 | 102 MB |
+| `sound` | 60 | 332 | 45 | 543 MB |
+| `webm_audio` | 60 | 54 | 24 | 177 MB |
+
+The fuzz build output and corpora were deleted afterwards (nothing of them is
+committed).
+
 ## 2026-11-26: the three failing web steps again (#546)
 
 The web steps that failed on 2026-11-25, run again on the branch that fixes

@@ -48,6 +48,32 @@ ctx.world.spawn((
   `sprite.flip_x` rather than a negative scale: a negative scale also
   mirrors what is attached to the entity and its offsets.
 
+<div class="lang-pair">
+<div>
+
+```rust
+# let crab = ctx.gfx.load_texture("crab.png");
+# let hero = ctx.world.spawn((ponko::d2::Transform::at(vec2(400.0, 300.0)), ponko::d2::Sprite::new(crab)));
+if let Some(sprite) = ctx.world.get_mut::<ponko::d2::Sprite>(hero) {
+    sprite.flip_x = true; // face left, in place
+}
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:sprite_flip}}
+```
+
+</div>
+</div>
+
+C programs call `ponko_sprite_set_flip` and `ponko_sprite_flip`: the
+`PonkoSprite` struct has a fixed layout and carries no flips, so writing one
+back with `ponko_set` keeps the flips the entity's sprite already has, and a
+new sprite starts unflipped.
+
 ## Immediate drawing
 
 For UI, effects and quick prototypes, draw directly every frame:

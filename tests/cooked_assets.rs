@@ -287,7 +287,7 @@ fn a_navmesh_baked_from_a_cooked_level_matches_the_source() {
 /// its eight sounds) from its source assets and from a cooked copy, timed.
 /// Not a test: run it in release to measure,
 /// `ponko cook assets/shard_grove --out <dir>`, then
-/// `PONKO_COOKED=<dir> cargo test --release --features 3d --test cooked_assets -- --ignored --nocapture`.
+/// `PONKO_COOKED=<dir> cargo test --release --features 3d,compressed-textures --test cooked_assets -- --ignored --nocapture`.
 #[cfg(feature = "3d")]
 #[test]
 #[ignore = "a measurement: needs PONKO_COOKED and a release build"]
@@ -302,7 +302,7 @@ fn measure_shard_grove_load_times() {
             memory.insert(format!("shard_grove/{name}"), std::fs::read(dir.join(name)).unwrap());
         }
         for name in ["hurt", "wind", "crawler", "gate", "select", "pulse", "shrine", "shard"] {
-            let file = format!("sounds/{name}.wav");
+            let file = format!("sounds/{name}.ogg");
             memory.insert(format!("shard_grove/{file}"), std::fs::read(dir.join(&file)).unwrap());
         }
         memory
@@ -316,7 +316,7 @@ fn measure_shard_grove_load_times() {
             .chain(
                 ["hurt", "wind", "crawler", "gate", "select", "pulse", "shrine", "shard"]
                     .iter()
-                    .map(|n| format!("shard_grove/sounds/{n}.wav")),
+                    .map(|n| format!("shard_grove/sounds/{n}.ogg")),
             )
             .map(|n| m.read(&n).unwrap().len())
             .sum()
@@ -334,7 +334,7 @@ fn measure_shard_grove_load_times() {
                 }
                 let level = ctx.gfx.load_mesh_data("shard_grove/grove.glb");
                 for name in ["hurt", "wind", "crawler", "gate", "select", "pulse", "shrine", "shard"] {
-                    ctx.audio.load(&format!("shard_grove/sounds/{name}.wav"));
+                    ctx.audio.load(&format!("shard_grove/sounds/{name}.ogg"));
                 }
                 times.push(start.elapsed().as_secs_f64() * 1000.0);
                 counts = (level.positions.len(), level.indices.len());
@@ -354,8 +354,8 @@ fn measure_shard_grove_load_times() {
 }
 
 /// Each of Shard Grove's eight sounds loaded (read and decoded) as its
-/// source WAV and as the cook's FLAC, timed one by one: whether short
-/// sounds load measurably slower as FLAC. The two kinds alternate in every
+/// source file and as the cook's output, timed one by one: whether short
+/// sounds load measurably slower cooked. The two kinds alternate in every
 /// round, and which goes first swaps each round, so a busy machine slows
 /// both alike. Not a test: run it in release to measure,
 /// `ponko cook assets/shard_grove --out <dir>`, then
@@ -377,9 +377,9 @@ fn measure_sound_load_times() {
     let mut sizes = [[0; 2]; SOUNDS.len()];
     for (kind, folder) in folders.iter().enumerate() {
         for (i, name) in SOUNDS.iter().enumerate() {
-            let bytes = std::fs::read(folder.join(format!("sounds/{name}.wav"))).unwrap();
+            let bytes = std::fs::read(folder.join(format!("sounds/{name}.ogg"))).unwrap();
             sizes[i][kind] = bytes.len();
-            memory.insert(format!("{kind}/{name}.wav"), bytes);
+            memory.insert(format!("{kind}/{name}.ogg"), bytes);
         }
     }
     // times[sound][kind][round], in microseconds.
@@ -392,7 +392,7 @@ fn measure_sound_load_times() {
                 ctx.assets.add_source(memory);
                 for (i, name) in SOUNDS.iter().enumerate() {
                     let start = std::time::Instant::now();
-                    let sound = ctx.audio.load(&format!("{kind}/{name}.wav"));
+                    let sound = ctx.audio.load(&format!("{kind}/{name}.ogg"));
                     times[i][kind].push(start.elapsed().as_secs_f64() * 1e6);
                     seconds[i] = sound.seconds();
                 }
@@ -406,11 +406,11 @@ fn measure_sound_load_times() {
     };
     println!("{ROUNDS} rounds; microseconds as median [quartiles] (min..max)");
     for (i, name) in SOUNDS.iter().enumerate() {
-        let [wav, flac] = &mut times[i];
-        let (w, f) = (quartiles(wav), quartiles(flac));
+        let [source, cooked] = &mut times[i];
+        let (w, f) = (quartiles(source), quartiles(cooked));
         let apart = if f.0 > w.2 || w.0 > f.2 { "apart" } else { "overlap" };
         println!(
-            "{name:8} {:.2} s  WAV {:6} B: {:7.1} [{:.1}, {:.1}] ({:.1}..{:.1})  FLAC {:6} B: {:7.1} [{:.1}, {:.1}] ({:.1}..{:.1})  quartiles {apart}",
+            "{name:8} {:.2} s  source {:6} B: {:7.1} [{:.1}, {:.1}] ({:.1}..{:.1})  cooked {:6} B: {:7.1} [{:.1}, {:.1}] ({:.1}..{:.1})  quartiles {apart}",
             seconds[i], sizes[i][0], w.1, w.0, w.2, w.3, w.4, sizes[i][1], f.1, f.0, f.2, f.3, f.4
         );
     }

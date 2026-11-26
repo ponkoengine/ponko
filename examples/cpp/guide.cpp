@@ -515,6 +515,12 @@ static void count_neighbors(ponko::ctx& ctx) {
     world.spawn(ponko::transform_at({400, 300}, 0.3f, {2, 2}),
                 ponko::sprite_of(crab, ponko::colors::red, 1));
     // ANCHOR_END: sprites
+    // ANCHOR: sprite_flip
+    auto hero = world.spawn(ponko::transform_at({400, 300}), ponko::sprite_of(crab));
+    world.set_sprite_flip(hero, true, false);   // face left, in place
+    bool facing_left = world.sprite_flip(hero).x;
+    // ANCHOR_END: sprite_flip
+    (void)facing_left;
     // ANCHOR: immediate
     ctx.clear(ponko::rgb(0.125f, 0.19f, 0.25f));
     ctx.draw(crab, {100, 100});

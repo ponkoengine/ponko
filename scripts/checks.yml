@@ -2058,3 +2058,28 @@ jobs:
           code=$(docker inspect -f '{{.State.ExitCode}}' "$container")
           echo "exit code: $code"
           test "$code" = 0
+
+  # Well-known content (book: "Well-known content"): fetches the Khronos glTF
+  # Sample Assets and two public scenes at pinned revisions into
+  # PONKO_KNOWN_CONTENT (about 2.8 GB, git-ignored, never committed), then
+  # the load sweep and the drawings compared with the samples' screenshots.
+  # Opt-in: it runs only when PONKO_KNOWN_CONTENT names the cache folder.
+  known-content:
+    local-tags: [test, gpu]
+    local-requires: [env:PONKO_KNOWN_CONTENT]
+    name: Well-known content
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: The fetch tool's own checks
+        run: python3 scripts/fetch-known-content.py --selftest
+      - name: Fetch (skips files already there)
+        run: python3 scripts/fetch-known-content.py --cache "$PONKO_KNOWN_CONTENT"
+      - name: Load sweep
+        if: ${{ !cancelled() }}
+        run: cargo test -p ponko --features 3d,compressed-textures,gltf-meshopt,image-webp --test known_content -- --nocapture
+      - name: Drawn against the screenshots (offscreen GPU)
+        if: ${{ !cancelled() }}
+        run: cargo test -p ponko --lib --features 3d,compressed-textures,gltf-meshopt,image-webp,image-gif known_samples_are_drawn -- --nocapture

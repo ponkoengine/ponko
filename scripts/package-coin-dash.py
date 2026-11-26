@@ -131,7 +131,7 @@ def pack_files(path):
 
 
 def check_package(package):
-    for rel in (EXE, PACK, *LICENSE_FILES, "CONTENT-NOTICES.txt", "THIRD-PARTY-NOTICES.txt", "README.txt"):
+    for rel in (EXE, PACK, *LICENSE_FILES, "CC0-1.0.txt", "CONTENT-NOTICES.txt", "THIRD-PARTY-NOTICES.txt", "README.txt"):
         check((package / rel).is_file(), f"the package has no {rel}")
     check(not (package / "assets").exists(), "the package has loose assets/ beside its pack")
     third = (package / "THIRD-PARTY-NOTICES.txt").read_text(encoding="utf-8")

@@ -201,6 +201,7 @@ The level each top-level module of `ponko` gives in its rustdoc.
 - [Migrating from 0.0.1 to 0.1.0](migrating-to-0.1.md): A migration guide for one release.
 - [Performance and benchmarks](performance.md): Benchmarks and how they were measured; the features measured carry their own levels.
 - [GPU regression tests](render-tests.md): How the GPU regression tests are written and run.
+- [Well-known content](known-content.md): How the 3D loader and renderer are checked against content other people made.
 - [Security: what reads untrusted bytes](security.md): Which code reads untrusted bytes and how it is guarded; the features it names carry their own levels.
 - [API reference](api.md): Where the API reference is.
 - [Contributing](contributing.md): How to contribute.
