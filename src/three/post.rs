@@ -22,6 +22,10 @@ pub enum Tonemap {
     Neutral = 2,
     /// No curve: everything above white clips.
     None = 3,
+    /// A soft highlight shoulder that preserves RGB ratios in bright
+    /// colors. Linear below 0.76, then compresses the highest channel
+    /// toward white and scales the other channels by the same amount.
+    HuePreserving = 4,
 }
 
 /// Post antialiasing of the 3D frame ([`Post::anti_aliasing`]). FXAA and

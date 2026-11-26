@@ -1040,7 +1040,7 @@ pub enum ModelLightKind {
     Sun {
         /// sRGB color.
         color: Color,
-        /// Intensity in lux, which is what [`Lighting::sun_intensity`](crate::render::Lighting::sun_intensity) means.
+        /// Illuminance in lux, before exposure.
         intensity: f32,
     },
 }
@@ -1080,8 +1080,57 @@ pub struct ModelLight {
 impl ModelLight {
     /// The luminous efficacy Blender's glTF exporter uses (683 lm/W): a
     /// point or spot light of `I` candela in a file is `I / 683` in ponko's
-    /// units, in which the sun's intensity is the file's lux as it is.
+    /// units on the legacy [`spawn`](Self::spawn) path. The directional
+    /// light's intensity is stored in lux.
     pub const CANDELA_PER_UNIT: f32 = 683.0;
+
+    /// Places this light at `model` with a camera exposure (EV100).
+    ///
+    /// Multiplies lux and candela by `1 / (1.2 * 2^ev100)` before shading.
+    /// One stop higher halves the light. The model uses metres, so one
+    /// candela at one metre gives the same incident light as one lux.
+    /// Local lights use inverse-square falloff (softened inside 1 cm)
+    /// and fade toward their loaded range. The directional light replaces
+    /// the scene sun and returns `None`. Point and spot lights spawn
+    /// entities and return their handles.
+    ///
+    /// Exposure is baked into the light's intensity when placed. Use the
+    /// same EV100 for all imported lights in a scene. For a camera-wide
+    /// brightness adjustment after placement, use [`Post::exposure`](crate::render::Post::exposure).
+    /// A non-finite EV100 uses 0, and finite values are limited to ±32.
+    pub fn place_exposed(
+        &self,
+        world: &mut ponko_ecs::World,
+        lighting: &mut super::Lighting,
+        model: &Transform3D,
+        ev100: f32,
+    ) -> Option<ponko_ecs::Entity> {
+        let ev100 = if ev100.is_finite() {
+            ev100.clamp(-32.0, 32.0)
+        } else {
+            0.0
+        };
+        let exposure = (-ev100).exp2() / 1.2;
+        let at = self.placed(model);
+        let local_scale = Self::CANDELA_PER_UNIT * exposure;
+        use super::lights::PhotometricLight;
+        match self.kind {
+            ModelLightKind::Sun { color, intensity } => {
+                lighting.sun_direction = at.forward();
+                lighting.sun_color = color;
+                lighting.sun_intensity = intensity * exposure;
+                None
+            }
+            ModelLightKind::Point(mut light) => {
+                light.intensity *= local_scale;
+                Some(world.spawn((at, light, PhotometricLight)))
+            }
+            ModelLightKind::Spot(mut light) => {
+                light.intensity *= local_scale;
+                Some(world.spawn((at, light, PhotometricLight)))
+            }
+        }
+    }
 
     /// Where it is in the world, for a model at `model`.
     #[must_use]

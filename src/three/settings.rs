@@ -81,6 +81,11 @@ pub struct SceneSettings {
     /// # }
     /// ```
     pub sky: Sky,
+    /// The scene-wide diffuse and specular environment. `None` (the
+    /// default) uses the sky. A map supplies the light wherever local
+    /// reflection probes don't cover the scene, leaving the visible sky
+    /// alone. [`Lighting::ambient_intensity`] scales the map's radiance.
+    pub environment: Option<super::EnvironmentMap>,
     /// What happens to the lit frame on its way to the screen: resolution,
     /// antialiasing, ambient occlusion, reflections, exposure, bloom, color
     /// grading, tone mapping.
@@ -153,6 +158,7 @@ impl SceneSettings {
             camera: Camera3D::new(viewport),
             lighting: Lighting::default(),
             sky: Sky::default(),
+            environment: None,
             post: Post::default(),
             lod: LodSettings::default(),
             passes: RenderPasses::default(),

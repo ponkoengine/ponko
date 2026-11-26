@@ -1252,6 +1252,8 @@ impl Renderer3D {
             }
             _ => [0.0; 4],
         };
+        self.environment
+            .prepare_map(queue, frame.environment.as_ref(), lighting.ambient_intensity);
         self.environment.prepare(
             queue,
             [

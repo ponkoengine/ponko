@@ -78,6 +78,7 @@ pub(crate) struct Frame3D {
     /// block's instances, where it has room to grow) are instances no run
     /// draws.
     pub instances: Vec<Instance3D>,
+    pub environment: Option<super::EnvironmentMap>,
     pub probes: [super::probe::ProbeUniform; 4],
     pub probe_uploads: Vec<(u32, std::sync::Arc<Vec<u16>>)>,
     pub probe_bakes: Vec<(u32, [u32; 6])>,
