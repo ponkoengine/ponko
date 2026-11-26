@@ -1,0 +1,90 @@
+{
+  "release_when_done": false,
+  "steps": [
+    {
+      "down": true,
+      "key": "Enter",
+      "tick": 5,
+      "type": "key"
+    },
+    {
+      "down": false,
+      "key": "Enter",
+      "tick": 6,
+      "type": "key"
+    },
+    {
+      "down": true,
+      "key": "Escape",
+      "tick": 30,
+      "type": "key"
+    },
+    {
+      "down": false,
+      "key": "Escape",
+      "tick": 31,
+      "type": "key"
+    },
+    {
+      "down": true,
+      "key": "P",
+      "tick": 60,
+      "type": "key"
+    },
+    {
+      "down": false,
+      "key": "P",
+      "tick": 61,
+      "type": "key"
+    },
+    {
+      "down": true,
+      "key": "Space",
+      "tick": 1500,
+      "type": "key"
+    },
+    {
+      "down": false,
+      "key": "Space",
+      "tick": 1501,
+      "type": "key"
+    },
+    {
+      "down": true,
+      "key": "R",
+      "tick": 1600,
+      "type": "key"
+    },
+    {
+      "down": false,
+      "key": "R",
+      "tick": 1601,
+      "type": "key"
+    },
+    {
+      "down": true,
+      "key": "Escape",
+      "tick": 1700,
+      "type": "key"
+    },
+    {
+      "down": false,
+      "key": "Escape",
+      "tick": 1701,
+      "type": "key"
+    },
+    {
+      "down": true,
+      "key": "Q",
+      "tick": 1710,
+      "type": "key"
+    },
+    {
+      "down": false,
+      "key": "Q",
+      "tick": 1711,
+      "type": "key"
+    }
+  ],
+  "version": 1
+}

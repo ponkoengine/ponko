@@ -370,7 +370,7 @@ wgpu = { version = "30.0.1", optional = true, features = ["webgl"] }
 wasm-bindgen = "0.2.130"
 wasm-bindgen-futures = "0.4.80"
 js-sys = "0.3.107"
-web-sys = { version = "0.3.107", features = ["Navigator", "Clipboard", "Window", "Document", "Element", "HtmlCanvasElement", "Location", "Request", "RequestInit", "Headers", "Response", "console", "Event", "HtmlElement", "HtmlTextAreaElement", "CssStyleDeclaration", "CompositionEvent", "InputEvent", "KeyboardEvent", "EventTarget", "Node", "DomRect", "IdbFactory", "IdbDatabase", "IdbObjectStore", "IdbOpenDbRequest", "IdbRequest", "IdbTransaction", "IdbTransactionMode", "WebSocket", "BinaryType", "MessageEvent", "CloseEvent", "Worker", "WorkerOptions", "WorkerType", "ErrorEvent", "Url", "CustomEvent", "CustomEventInit", "Storage", "Blob", "BlobPropertyBag", "HtmlAnchorElement"] }
+web-sys = { version = "0.3.107", features = ["Navigator", "Clipboard", "Window", "Document", "Element", "HtmlCanvasElement", "OffscreenCanvas", "Location", "Request", "RequestInit", "Headers", "Response", "console", "Event", "HtmlElement", "HtmlTextAreaElement", "CssStyleDeclaration", "CompositionEvent", "InputEvent", "KeyboardEvent", "EventTarget", "Node", "DomRect", "IdbFactory", "IdbDatabase", "IdbObjectStore", "IdbOpenDbRequest", "IdbRequest", "IdbTransaction", "IdbTransactionMode", "WebSocket", "BinaryType", "MessageEvent", "CloseEvent", "Worker", "WorkerOptions", "WorkerType", "ErrorEvent", "Url", "CustomEvent", "CustomEventInit", "Storage", "Blob", "BlobPropertyBag", "HtmlAnchorElement"] }
 
 # Web builds with threads and `--cfg ponko_web_thread_heaps`: one heap per
 # thread (src/web_alloc.rs), instead of the standard allocator's one lock.

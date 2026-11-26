@@ -214,6 +214,11 @@ static void scenes_and_prefabs() {
         CHECK(ctx.world().get<ponko::transform2d>(cart).position.x == 50);
         for (auto part : parts) CHECK(ctx.prefab_parts(part).empty());   // parts aren't roots
         CHECK(ctx.despawn_prefab(cart) == 5 && ctx.world().size() == 0);
+        // clear() despawns every entity at once; resources stay.
+        ctx.spawn_prefab("prefabs/cart.json", {0, 0});
+        ctx.world().set_resource(Tag{});
+        ctx.world().clear();
+        CHECK(ctx.world().size() == 0 && ctx.world().try_resource<Tag>());
     });
     // Offline, a lockstep load is a plain load; a failed one changes nothing.
     auto offline = ponko::game("scenes", 1, 1).run_headless(0, [&](ponko::ctx& ctx) {
@@ -2847,6 +2852,11 @@ static void retained_ui_presets() {
         ui.set_theme(theme);
         CHECK(ui.theme().title_size == 30 && ui.resolved_paint(title).font_size == 30);
         CHECK(ui.resolved_paint(buy).border.g == 1 && ctx.ui_style().accent.g == 1);
+        // A paint started from the node's own, one field changed.
+        PonkoUiPaint bigger = ui.resolved_paint(buy);
+        bigger.font_size = 40;
+        ui.set_paint(buy, ponko::ui::paint(bigger));
+        CHECK(ui.resolved_paint(buy).font_size == 40 && ui.resolved_paint(buy).border.g == 1);
         theme.border_width = -1;
         throws([&] { ui.set_theme(theme); });
 
@@ -4080,6 +4090,7 @@ static void remaining_bindings() {
         ctx.delete_world("a");
         CHECK((ctx.storage_world_slots() == std::vector<std::string>{"b"}));
         CHECK(ctx.storage_is_persistent() && !ctx.storage_is_saving());
+        CHECK(ctx.storage_is_available());
 
         // The immediate widgets.
         CHECK(ctx.ui_immediate_font().id == 0);
@@ -4479,6 +4490,7 @@ static void localization() {
     CHECK(ponko::plural("en", 1) == ponko::plural_category::one);
     CHECK(ponko::plural("ar", 11) == ponko::plural_category::many);
     ponko::game("c++ locale", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
+        CHECK(!ctx.storage_is_available());   // no app id: the game keeps no files
         bool threw = false;
         try { ctx.load_strings("lang/none.json"); } catch (const ponko::error&) { threw = true; }
         CHECK(threw);
@@ -4497,6 +4509,9 @@ static void localization() {
         CHECK(ctx.format("time", {ponko::arg("seconds", 2.25)}) == "Time 2.2 s");
         CHECK(ctx.format("hi", {ponko::arg("name", "Ada")}) == "Hi Ada");
         CHECK(ctx.format("lives", {ponko::arg("count", 1LL)}) == "1 life");
+        CHECK(ctx.format_number(125.0, 0) == "125" && ctx.format_number(0.25) == "0.25");
+        const auto revision = ctx.strings_revision();
+        CHECK(ctx.strings_revision() == revision);
         CHECK(!ctx.language_font());
         namespace u = ponko::ui;
         auto ui = ctx.ui_retained();
@@ -4506,7 +4521,7 @@ static void localization() {
         ui.localize();
         CHECK(ui.text(label) == "3 lives");
         CHECK(!ctx.set_language("xx") && ctx.set_language("ar"));
-        CHECK(ctx.language_is_rtl());
+        CHECK(ctx.language_is_rtl() && ctx.strings_revision() != revision);
         ctx.set_language_font("ar", ponko::font{0});
         CHECK(ctx.language_font() && ctx.language_font()->id == 0);
         CHECK(ctx.missing_strings().find("\"hi\" is missing") != std::string::npos);
@@ -4777,7 +4792,8 @@ static void game_states() {
              [&checked](ponko::ctx& ctx) { checked++; return ctx.sim_tick() % 2 == 0; },
              [&even](ponko::ctx&) { even++; }, "even");
     CHECK(g.schedule_plan().find("even") != std::string::npos);
-    g.run_headless(20);
+    auto ended = g.run_headless(20);
+    CHECK(ended.state<screen>() == screen::title);   // where the run ended
 
     const std::vector<entry> want{
         {'e', screen::title, 0},

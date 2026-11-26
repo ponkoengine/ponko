@@ -16,12 +16,17 @@
 // - device-fails: GPUAdapter.requestDevice() rejects.
 // - device-lost: GPUAdapter.requestDevice() gives a device the browser
 //   has already lost (destroyed before the game gets it).
+// - no-present: the adapter and its device work, but a canvas never shows
+//   a frame: every frame texture a WebGPU canvas hands out is invalid, as
+//   with the software fallback adapter of Chromium's headless shell on
+//   macOS. The engine's test frame (on a canvas of its own) must catch it.
 // Each failure case must end on WebGL2, not on a blank page: the game
 // ticks, the canvas has a WebGL2 context and shows something, the engine
 // reports backend "gl", there is no startup error, page error or panic,
 // and the console has exactly one "ponko: falling back to WebGL2: <why>"
-// line naming that failure. device-fails and device-lost need a real
-// WebGPU adapter to fake on: without one they are unsupported, not failed.
+// line naming that failure. device-fails, device-lost and no-present need
+// a real WebGPU adapter to fake on: without one they are unsupported, not
+// failed.
 //
 // --repeat <n> loads the webgpu and no-webgpu pages n times each (default
 // 3) and reports the median time to the first frame (the fixture's first
@@ -39,11 +44,11 @@ import { GAME_CANVAS, LAUNCHERS, canvasBackend, canvasStats, serve } from "./smo
 
 const USAGE =
   "usage: webgpu-fallback.mjs [--dir <site>] [--browser chromium|firefox|webkit]\n" +
-  "                           [--case webgpu|no-webgpu|no-adapter|device-fails|device-lost] [--repeat <n>]\n" +
+  "                           [--case webgpu|no-webgpu|no-adapter|device-fails|device-lost|no-present] [--repeat <n>]\n" +
   "                           [--out <dir>] [--timeout <s>] [--chromium-mode shell|new] [--browser-arg <flag>]...\n" +
   "                           [--allow-unsupported]";
 
-export const FALLBACK_CASES = ["webgpu", "no-webgpu", "no-adapter", "device-fails", "device-lost"];
+export const FALLBACK_CASES = ["webgpu", "no-webgpu", "no-adapter", "device-fails", "device-lost", "no-present"];
 
 /** The message a faked requestDevice() rejects with (device-fails). */
 export const REFUSAL = "webgpu-fallback: requestDevice refused by the runner";
@@ -59,6 +64,7 @@ export function expectedReason(fallbackCase) {
     case "no-adapter": return "requestAdapter() found no adapter";
     case "device-fails": return REFUSAL;
     case "device-lost": return "the WebGPU device was lost as it opened";
+    case "no-present": return "a canvas can't show WebGPU frames: a test frame failed";
     case "webgpu": return null;
     default: throw new UsageError(`unknown case ${fallbackCase} (${FALLBACK_CASES.join(", ")})`);
   }
@@ -66,7 +72,7 @@ export function expectedReason(fallbackCase) {
 
 /** Whether a case needs a real WebGPU adapter to fake its failure on. */
 export function needsAdapter(fallbackCase) {
-  return fallbackCase === "webgpu" || fallbackCase === "device-fails" || fallbackCase === "device-lost";
+  return ["webgpu", "device-fails", "device-lost", "no-present"].includes(fallbackCase);
 }
 
 /**
@@ -205,6 +211,21 @@ function fake([fallbackCase, refusal]) {
       const device = await requestDevice.apply(this, args);
       device.destroy();
       return device;
+    };
+  } else if (fallbackCase === "no-present" && globalThis.GPUCanvasContext) {
+    // Every frame texture is invalid (a 1D texture can't be drawn to), on
+    // every WebGPU canvas, the page's and any other.
+    const configure = GPUCanvasContext.prototype.configure;
+    const getCurrentTexture = GPUCanvasContext.prototype.getCurrentTexture;
+    const configs = new WeakMap();
+    GPUCanvasContext.prototype.configure = function (config) {
+      configs.set(this, config);
+      return configure.call(this, config);
+    };
+    GPUCanvasContext.prototype.getCurrentTexture = function () {
+      const config = configs.get(this);
+      if (!config) return getCurrentTexture.call(this);
+      return config.device.createTexture({ size: [1], dimension: "1d", format: config.format, usage: GPUTextureUsage.RENDER_ATTACHMENT });
     };
   }
 }

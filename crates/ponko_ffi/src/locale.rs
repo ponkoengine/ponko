@@ -380,6 +380,53 @@ pub unsafe extern "C" fn ponko_ctx_strings_missing_report(
     })
 }
 
+/// `value` written as the current language writes numbers (Rust's
+/// `strings.number`): its decimal and group separators and its digits, with
+/// `decimals` digits after the point, or as few as show it exactly when
+/// `decimals` is negative. Written as `ponko_ctx_ui_text` writes text.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_strings_number(std::ptr::null_mut(), 1.5, 0, std::ptr::null_mut(), 0, &mut 0) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `buffer` writable for `capacity` bytes (or null with
+/// capacity 0); `out_len` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_strings_number(
+    ctx: *mut PonkoCtx,
+    value: f64,
+    decimals: i32,
+    buffer: *mut c_char,
+    capacity: usize,
+    out_len: *mut usize,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        let decimals = usize::try_from(decimals).ok();
+        ctx_access(ctx, |c| {
+            let number = strings(c)?.number(value, decimals);
+            write_text(buffer, capacity, out_len, &number)
+        })
+    })
+}
+
+/// A number that changes whenever the string tables or the current language
+/// change (Rust's `strings.revision()`), to `out`: text a game set itself
+/// (an accessible name, a formatted label) is due again when it differs from
+/// the one it was written for.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_strings_revision(std::ptr::null_mut(), std::ptr::null_mut()) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `out_revision` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_strings_revision(ctx: *mut PonkoCtx, out_revision: *mut u64) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        let revision = ctx_access(ctx, |c| Ok(strings(c)?.revision()))?;
+        out(out_revision, revision)
+    })
+}
+
 /// The plural form `count` takes in `language` (Rust's
 /// `ponko::locale::plural_category`), to `out`.
 /// ```

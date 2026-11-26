@@ -1,0 +1,201 @@
+{
+  "duration": 60,
+  "id": "coin dash menus",
+  "release_when_done": false,
+  "steps": [
+    {
+      "exists": false,
+      "node": "settings",
+      "tick": 5,
+      "type": "expect_ui"
+    },
+    {
+      "down": true,
+      "key": "O",
+      "tick": 10,
+      "type": "key"
+    },
+    {
+      "down": false,
+      "key": "O",
+      "tick": 11,
+      "type": "key"
+    },
+    {
+      "node": "settings",
+      "shown": true,
+      "tick": 11,
+      "type": "expect_ui"
+    },
+    {
+      "focused": false,
+      "node": "settings.back",
+      "shown": true,
+      "text": "Back",
+      "tick": 11,
+      "type": "expect_ui"
+    },
+    {
+      "node": "settings.scale",
+      "text": "100%",
+      "tick": 11,
+      "type": "expect_ui"
+    },
+    {
+      "down": true,
+      "key": "Tab",
+      "tick": 14,
+      "type": "key"
+    },
+    {
+      "down": false,
+      "key": "Tab",
+      "tick": 15,
+      "type": "key"
+    },
+    {
+      "down": true,
+      "key": "Tab",
+      "tick": 16,
+      "type": "key"
+    },
+    {
+      "down": false,
+      "key": "Tab",
+      "tick": 17,
+      "type": "key"
+    },
+    {
+      "focused": true,
+      "node": "settings.scale_up",
+      "tick": 16,
+      "type": "expect_ui"
+    },
+    {
+      "node": "settings.scale_up",
+      "tick": 20,
+      "type": "ui_click"
+    },
+    {
+      "node": "settings.scale",
+      "text": "125%",
+      "tick": 20,
+      "type": "expect_ui"
+    },
+    {
+      "node": "settings.back",
+      "tick": 25,
+      "type": "ui_click"
+    },
+    {
+      "node": "settings",
+      "shown": true,
+      "tick": 25,
+      "type": "expect_ui"
+    },
+    {
+      "exists": true,
+      "node": "settings",
+      "shown": false,
+      "tick": 26,
+      "type": "expect_ui"
+    },
+    {
+      "down": true,
+      "key": "Enter",
+      "tick": 30,
+      "type": "key"
+    },
+    {
+      "down": false,
+      "key": "Enter",
+      "tick": 31,
+      "type": "key"
+    },
+    {
+      "node": "settings",
+      "shown": false,
+      "tick": 31,
+      "type": "expect_ui"
+    },
+    {
+      "down": true,
+      "key": "Escape",
+      "tick": 40,
+      "type": "key"
+    },
+    {
+      "down": false,
+      "key": "Escape",
+      "tick": 41,
+      "type": "key"
+    },
+    {
+      "node": "settings",
+      "shown": false,
+      "tick": 41,
+      "type": "expect_ui"
+    },
+    {
+      "down": true,
+      "key": "Q",
+      "tick": 45,
+      "type": "key"
+    },
+    {
+      "down": false,
+      "key": "Q",
+      "tick": 46,
+      "type": "key"
+    },
+    {
+      "down": true,
+      "key": "O",
+      "tick": 50,
+      "type": "key"
+    },
+    {
+      "down": false,
+      "key": "O",
+      "tick": 51,
+      "type": "key"
+    },
+    {
+      "node": "settings",
+      "shown": true,
+      "tick": 51,
+      "type": "expect_ui"
+    },
+    {
+      "node": "settings.scale",
+      "text": "125%",
+      "tick": 51,
+      "type": "expect_ui"
+    },
+    {
+      "down": true,
+      "key": "Escape",
+      "tick": 55,
+      "type": "key"
+    },
+    {
+      "down": false,
+      "key": "Escape",
+      "tick": 56,
+      "type": "key"
+    },
+    {
+      "node": "settings",
+      "shown": false,
+      "tick": 55,
+      "type": "expect_ui"
+    },
+    {
+      "node": "settings",
+      "shown": false,
+      "tick": 56,
+      "type": "expect_ui"
+    }
+  ],
+  "version": 1
+}
