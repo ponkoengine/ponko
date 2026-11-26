@@ -5857,8 +5857,25 @@ static void rollback_two_peers() {
     throws([&] { other.restore_snapshot(snapshot); });
 }
 
+// Steam's store-side services before steam::start: every call does nothing.
+static void steam_services_without_steam() {
+    CHECK(!ponko::steam::running());
+    ponko::steam::update();
+    CHECK(!ponko::steam::unlock_achievement("FIRST_WIN") && !ponko::steam::achievement("FIRST_WIN"));
+    CHECK(!ponko::steam::set_stat("wins", std::int32_t{1}) && !ponko::steam::stat_i32("wins"));
+    CHECK(!ponko::steam::set_stat("distance", 1.5f) && !ponko::steam::stat_f32("distance"));
+    CHECK(!ponko::steam::store_stats() && !ponko::steam::set_rich_presence("status", "Menu"));
+    ponko::steam::clear_rich_presence();
+    CHECK(!ponko::steam::overlay_open() && !ponko::steam::is_steam_deck() && !ponko::steam::is_big_picture());
+    CHECK(!ponko::steam::show_text_input(ponko::steam::text_mode::single_line, "Name", "", 16));
+    CHECK(ponko::steam::take_text_input().first == PONKO_STEAM_TEXT_NONE);
+    CHECK(!ponko::steam::show_floating_keyboard(ponko::steam::text_mode::numeric, 0, 0, 200, 30));
+    CHECK(!ponko::steam::cloud_enabled());
+}
+
 int main() {
     rollback_two_peers();
+    steam_services_without_steam();
     hdr_output();
     controllers();
     key_labels();
