@@ -405,7 +405,7 @@ to it. The full rule is in
 
 | Descriptor | Calls | What it adds to ABI 2 |
 |---|---|---|
-| `PonkoMaterialDescEx` | `ponko_ctx_create_material_ex`, `ponko_ctx_update_material_ex` | the stencil state, in the same description |
+| `PonkoMaterialDescEx` | `ponko_ctx_create_material_ex`, `ponko_ctx_update_material_ex` | the stencil state, in the same description; `masked_tint` (version 2) |
 | `PonkoNavBakeSettingsEx` | `ponko_ctx_bake_navmesh_ex` | nothing yet: the place new bake settings go |
 | `PonkoLightingEx` | `ponko_ctx_lighting_ex`, `ponko_ctx_set_lighting_ex` | `shadow_sun_size` (the sun's size for contact-hardening shadows) and `shadow_sun_step` |
 | `PonkoColliderEx` | `ponko_set_collider_ex`, `ponko_get_collider_ex` | a 2D collider's collision groups and polygon corners, in one call |

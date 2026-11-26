@@ -1910,6 +1910,24 @@ static void recolored(ponko::ctx& ctx, ponko::mesh house, ponko::material gold, 
 }
 // ANCHOR_END: model_material
 
+// ANCHOR: masked_tint
+/// Townsfolk from one mesh and one material, each in a shirt of their
+/// own: the body's vertex colours mark the shirt with alpha 1 and the
+/// rest with alpha 0, so the model's colour tints only the shirt.
+static std::vector<ponko::entity> townsfolk(ponko::ctx& ctx, const ponko::mesh_data& body) {
+    auto cloth_desc = ponko::material_desc_ex_of(ponko::material_of(ponko::colors::white));
+    cloth_desc.masked_tint = true;
+    auto person = ctx.create_mesh(body, ctx.create_material(cloth_desc));
+    const ponko::color shirts[] = {ponko::rgb(0.69f, 0.23f, 0.18f), ponko::rgb(0.16f, 0.45f, 0.65f), ponko::rgb(0.14f, 0.61f, 0.34f)};
+    std::vector<ponko::entity> people;
+    for (int i = 0; i < 3; ++i) {
+        auto at = ponko::transform3d_at({i * 1.5f, 0, 0});
+        people.push_back(ctx.world().spawn(at, ponko::model_of(person, shirts[i])));
+    }
+    return people;
+}
+// ANCHOR_END: masked_tint
+
 // ANCHOR: stencil
 /// Crossing glass strips that blend once where they overlap, and a crate
 /// with an outline only around it.
@@ -2757,6 +2775,21 @@ static void the_pond_mirrors_the_camera() {
         auto list = ctx.target_cameras();
         if (list.size() != 1 || list[0].camera.position.y != -5 || list[0].target.width != 32) {
             std::fprintf(stderr, "pond\n");
+            std::abort();
+        }
+    });
+}
+
+static void the_townsfolk_share_a_mesh_and_wear_their_own_shirts() {
+    ponko::game("town", 64, 64).run_headless(1, [](ponko::ctx& ctx) {
+        auto body = ponko::mesh_data::cube(1.0f);
+        std::vector<ponko::color> shirt(24, ponko::colors::white);
+        for (std::size_t i = 12; i < shirt.size(); ++i) shirt[i].a = 0;  // half of the faces: not the shirt
+        body.set_colors(shirt);
+        auto people = townsfolk(ctx, body);
+        if (people.size() != 3 || ctx.world().get<ponko::model>(people[1]).color.b <= 0.5f ||
+            ctx.world().get<ponko::model>(people[0]).mesh.id != ctx.world().get<ponko::model>(people[2]).mesh.id) {
+            std::fprintf(stderr, "townsfolk\n");
             std::abort();
         }
     });
@@ -5363,6 +5396,7 @@ int main() {
     the_pond_mirrors_the_camera();
     the_security_screen_sees_only_the_vault_in_green();
     the_inventory_draws_one_icon_per_item();
+    the_townsfolk_share_a_mesh_and_wear_their_own_shirts();
     the_debug_map_shows_what_the_window_leaves_out();
     the_hills_are_nine_tiles();
     tiles_are_solid_only_near_the_player_and_the_car();

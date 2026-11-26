@@ -1052,6 +1052,24 @@ fn the_guide_pond_mirrors_the_camera() {
 }
 
 #[test]
+fn the_guide_townsfolk_share_a_mesh_and_wear_their_own_shirts() {
+    Game::new("town", 64, 64).run_headless(0, |ctx| {
+        // A body whose top half is the shirt.
+        let mut body = MeshData::cube(1.0);
+        body.colors = body
+            .positions
+            .iter()
+            .map(|p| Color::rgba(1.0, 1.0, 1.0, if p.y > 0.0 { 1.0 } else { 0.0 }))
+            .collect();
+        let people = townsfolk(ctx, &body);
+        assert_eq!(people.len(), 3);
+        let models: Vec<Model> = people.iter().map(|&e| *ctx.world.get::<Model>(e).unwrap()).collect();
+        assert!(models.iter().all(|m| m.mesh == models[0].mesh), "one mesh");
+        assert_eq!(models[1].color, Color::hex(0x2874A6));
+    });
+}
+
+#[test]
 fn the_guide_inventory_draws_one_icon_per_item() {
     Game::new("bag", 64, 64).run_headless(0, |ctx| {
         let white = ctx.gfx.default_material();
@@ -1380,6 +1398,25 @@ fn recolored(ctx: &mut Ctx, house: Mesh, gold: Material, rust: Material) {
     ));
 }
 // ANCHOR_END: model_material
+
+// ANCHOR: masked_tint
+/// Townsfolk from one mesh and one material, each in a shirt of their
+/// own: the body's vertex colours mark the shirt with alpha 1 and the
+/// rest with alpha 0, so the model's colour tints only the shirt.
+fn townsfolk(ctx: &mut Ctx, body: &MeshData) -> Vec<Entity> {
+    let cloth = ctx
+        .gfx
+        .create_material(MaterialDesc::color(Color::WHITE).with_masked_tint(true));
+    let person = ctx.gfx.create_mesh(body, cloth);
+    let shirts = [Color::hex(0xB03A2E), Color::hex(0x2874A6), Color::hex(0x239B56)];
+    let mut people = Vec::new();
+    for (i, shirt) in shirts.into_iter().enumerate() {
+        let at = Transform::at(vec3(i as f32 * 1.5, 0.0, 0.0));
+        people.push(ctx.world.spawn((at, Model::new(person).with_color(shirt))));
+    }
+    people
+}
+// ANCHOR_END: masked_tint
 
 // ANCHOR: stencil
 /// Crossing glass strips that blend once where they overlap, and a crate

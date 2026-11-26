@@ -51,7 +51,7 @@ impl Scene {
             data.weights = vec![[1.0, 0.0, 0.0, 0.0]; data.positions.len()];
             self.ctx.gfx.create_skinned_mesh(&data, material, &self.skeleton)
         } else {
-            self.ctx.gfx.create_mesh(&data, material)
+            self.ctx.gfx.create_mesh(data, material)
         }
     }
 

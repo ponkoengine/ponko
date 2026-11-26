@@ -3260,8 +3260,9 @@ public:
     mesh_data(const mesh_data&) = delete;
     mesh_data& operator=(const mesh_data&) = delete;
     ///@}
-    /// One color per corner, multiplying the material's color; empty
-    /// removes them. Throws unless there's one per corner.
+    /// One color per corner, multiplying the material's color (red, green
+    /// and blue may go above 1); empty removes them. Throws unless there's
+    /// one per corner.
     void set_colors(const std::vector<color>& colors) {
         detail::check(ponko_mesh_data_set_colors(raw_, colors.empty() ? nullptr : colors.data(), colors.size()));
     }
