@@ -12,7 +12,9 @@
     release-check.py bump X.Y.Z [--dry-run]
                                     set every publishable crate, the requirements
                                     between them and the docs' and templates'
-                                    `ponko = "X.Y"` lines to that version
+                                    `ponko = "X.Y"` lines to that version (a
+                                    candidate's lines name the candidate,
+                                    `"X.Y.Z-rc.N"`, which Cargo needs)
     release-check.py published      every version of our crates on crates.io
                                     has a git tag
     release-check.py selftest       check the decisions with made-up input
@@ -317,8 +319,12 @@ def bumped(version, files, names):
     pins (pin_texts()); names: the publishable crates. A publishable crate's
     `[package] version` becomes `version`, every one-line requirement on a
     sibling (`ponko_ecs = { path = ..., version = "..." }`, in any manifest)
-    too, and each `ponko = "X.Y"` pin the version's minor."""
-    minor = ".".join(version.split("-")[0].split(".")[:2])
+    too, and each `ponko = "X.Y"` pin the version's minor. A candidate's pins
+    name the candidate itself (`ponko = "0.2.0-rc.1"`): Cargo never picks a
+    pre-release for `"0.2"`, so a project made by `ponko new` of the candidate,
+    or from the guide, would not build until the release. `"0.2.0-rc.1"`
+    still accepts later candidates and the release."""
+    pin = version if is_candidate(version) else ".".join(version.split("-")[0].split(".")[:2])
     sibling = re.compile(SIBLING.format(names="|".join(sorted(names))))
     out = {}
     for name, text in files.items():
@@ -330,7 +336,7 @@ def bumped(version, files, names):
                              lambda m: m.group(1) + version + m.group(2), new, count=1)
             new = sibling.sub(lambda m: m.group(1) + version + m.group(2), new)
         else:
-            new = PIN.sub(lambda m: re.sub(r'"[^"]+"$', f'"{minor}"', m.group(0)), new)
+            new = PIN.sub(lambda m: re.sub(r'"[^"]+"$', f'"{pin}"', m.group(0)), new)
         if new != text:
             out[name] = new
     return out
@@ -753,8 +759,13 @@ def selftest():
     assert 'version = "0.2.0-rc.1"\n' in out["Cargo.toml"] and 'version = "0.2.0-rc.1", features' in out["Cargo.toml"]
     assert 'serde = { version = "1.0.1" }' in out["Cargo.toml"], "other crates keep their requirement"
     assert out["crates/ponko_bench/Cargo.toml"].count('"0.1.0"') == 1, "an unpublished crate keeps its own version"
-    assert out["book/src/3d.md"] == 'x\nponko = { version = "0.2", features = ["3d"] }\nponko = "0.2"\n'
-    assert pin_problems("0.2.0", {k: v for k, v in out.items() if k.endswith(".md")}) == []
+    assert out["book/src/3d.md"] == 'x\nponko = { version = "0.2.0-rc.1", features = ["3d"] }\nponko = "0.2.0-rc.1"\n', \
+        "a candidate's pins name the candidate (Cargo never picks it for \"0.2\")"
+    assert pin_problems("0.2.0-rc.1", {k: v for k, v in out.items() if k.endswith(".md")}) == []
+    final = bumped("0.2.0", {**files, **out}, {"ponko", "ponko_ecs"})
+    assert final["book/src/3d.md"] == 'x\nponko = { version = "0.2", features = ["3d"] }\nponko = "0.2"\n', \
+        "the release puts the minor back"
+    assert pin_problems("0.2.0", {k: v for k, v in final.items() if k.endswith(".md")}) == []
     real = license_problems()
     assert real == [], f"the sub-crates' license files: {real}"
     names = {n for n, _, _ in crates()}
