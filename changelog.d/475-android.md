@@ -1,6 +1,6 @@
 ### Added
-- Android: the engine builds for `aarch64-linux-android` (and the other
-  Android ABIs) and runs full screen as a native activity, with Vulkan or,
+- Android: the engine builds for `aarch64-linux-android` (the other Android
+  ABIs package too, untested) and runs full screen as a native activity, with Vulkan or,
   where wgpu picks it or `WGPU_BACKEND=gl` asks for it, OpenGL ES.
   `ponko package --target android` makes an `.apk` (Android 11, API 30, or
   newer) with the game's library, its asset pack, notices and launcher icons,
