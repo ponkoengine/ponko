@@ -3098,6 +3098,22 @@ static void render_descriptors_setup(PonkoCtx* ctx, void* user) {
     CHECK(ponko_ctx_post_ex(ctx, &back) == PONKO_OK && back.upscaler == PONKO_UPSCALER_TEMPORAL);
     post.upscaler = PONKO_UPSCALER_BILINEAR;
     CHECK(ponko_ctx_set_post_ex(ctx, &post) == PONKO_OK);
+    /* Version 4: auto exposure, off by default. Out-of-range settings are refused; a version 3 caller
+       leaves it as it is. */
+    CHECK(!back.auto_exposure && back.auto_exposure_min == -4 && back.auto_exposure_max == 4);
+    post.auto_exposure = true;
+    post.auto_exposure_compensation = .5f;
+    post.auto_exposure_darken_speed = INFINITY; /* jumps down at once */
+    CHECK(ponko_ctx_set_post_ex(ctx, &post) == PONKO_OK);
+    post.auto_exposure_min = 5; /* above max */
+    CHECK(ponko_ctx_set_post_ex(ctx, &post) == PONKO_INVALID_ARGUMENT);
+    post.auto_exposure_min = -4;
+    PonkoPostEx v3 = {.struct_size = sizeof v3, .version = 3};
+    CHECK(ponko_ctx_post_ex(ctx, &v3) == PONKO_OK && !v3.auto_exposure); /* not written */
+    CHECK(ponko_ctx_set_post_ex(ctx, &v3) == PONKO_OK);
+    CHECK(ponko_ctx_post_ex(ctx, &back) == PONKO_OK && back.auto_exposure && back.auto_exposure_compensation == .5f);
+    post.auto_exposure = false;
+    CHECK(ponko_ctx_set_post_ex(ctx, &post) == PONKO_OK);
     /* Two looks blended, and volumes by where the camera is. */
     PonkoPostEx day = {.struct_size = sizeof day, .version = PONKO_POST_EX_VERSION};
     PonkoPostEx cave = day, blended = day;

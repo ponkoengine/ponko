@@ -48,6 +48,10 @@ fn io(e: std::io::Error) -> crate::Failure {
 /// caller's; free it with ponko_net_messages_free. (or give it to
 /// ponko_game_messages, which takes it over).
 ///
+/// Unstable: the guide's "Peer to peer over WebRTC" is experimental, so this may change
+/// or go in any release (STABILITY.md, "Unstable").
+/// cbindgen:prefix=/* Unstable: experimental (book/src/webrtc.md) */
+///
 /// # Safety
 /// `lobby` live or null; strings null or NUL-terminated; `out_endpoint`
 /// writable. On failure it is set to null.
@@ -96,6 +100,10 @@ pub unsafe extern "C" fn ponko_net_messages_rtc_host(
 /// caller's; free it with ponko_net_messages_free. (or give it to
 /// ponko_game_messages, which takes it over).
 ///
+/// Unstable: the guide's "Peer to peer over WebRTC" is experimental, so this may change
+/// or go in any release (STABILITY.md, "Unstable").
+/// cbindgen:prefix=/* Unstable: experimental (book/src/webrtc.md) */
+///
 /// # Safety
 /// As `ponko_net_messages_rtc_host`.
 /// ```
@@ -139,6 +147,11 @@ pub unsafe extern "C" fn ponko_net_messages_rtc_join(
 
 /// The lobby member id behind connected `peer` of a WebRTC endpoint, or
 /// zero for an unknown peer or another kind of endpoint.
+///
+/// Unstable: the guide's "Peer to peer over WebRTC" is experimental, so this may change
+/// or go in any release (STABILITY.md, "Unstable").
+/// cbindgen:prefix=/* Unstable: experimental (book/src/webrtc.md) */
+///
 /// # Safety
 /// Live/null endpoint; writable output.
 /// ```

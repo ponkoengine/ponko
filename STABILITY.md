@@ -64,7 +64,7 @@ here, once:
 |---|---|---|
 | **proven** | A reference game uses it, and the list of checks (`scripts/checks.yml`) plays that game on Linux, macOS and Windows: today Coin Dash and Ember Hop, from their packages, headless and in a window. The feature also has automated tests of its own there. | Everything the versions promise, and the reference games' runs guard it: a regression that breaks them shows up in the list of checks before a release. |
 | **tested** | Automated tests in the list of checks (headless, or the offscreen GPU tests) cover it, on at least one platform, but no reference game played on all three systems rests on it yet. | Everything the versions promise. What is missing is evidence, not a promise: it may fail in a game, on a platform or a GPU its tests don't reach, and such a failure is a bug. |
-| **experimental** | Its chapter calls it a prototype, a report or experimental, or the part that matters was never checked (on a device, a display, in a browser), whatever tests it has. | Less: it may change or be removed in any minor release, without a deprecated step first. Rely on it only with the gaps its chapter names in mind. |
+| **experimental** | Its chapter calls it a prototype, a report or experimental, or the part that matters was never checked (on a device, a display, in a browser), whatever tests it has. | Less: its public items are outside the versions' promise (STABILITY.md, "Unstable"): they may change or be removed in any release, without a deprecated step first. Rely on it only with the gaps its chapter names in mind. |
 
 - A level is assigned from what the repository records: the tests in the list
   of checks, which reference games use the feature, and the platforms and
@@ -80,22 +80,33 @@ here, once:
   has no level, and regenerates the list and the module docs (`--write`).
 <!-- maturity-levels:end -->
 
-Experimental items still have their ordinary names, so for now the versions
-cover them like every other public item: a patch release doesn't break them.
-Renaming them `unstable_`, or leaving them out of the semver checks, is an
-API change of its own (#529); from then on they belong under
-[Unstable](#unstable). They are:
+Experimental items keep their ordinary names, without an `unstable_`
+prefix, and are outside the versions' promise: they belong under
+[Unstable](#unstable). `scripts/experimental-api.txt` lists them, chapter
+by chapter, each with the reason; the semver check doesn't count a break of
+them, and the API snapshots list them apart (`api/<crate>/experimental.txt`).
+Today they are:
 
 - HDR output (the guide's "HDR displays"): `Game::hdr_output`,
   `ponko::render::HdrOutput`, `HdrStatus`, `HdrEncoding`, `HdrOffReason`,
-  `HdrMetadata`, `Graphics::hdr_output` and `hdr_status`, and their C
-  functions (`ponko_*hdr_output*`, `ponko_ctx_hdr_status`).
+  `HdrMetadata`, `Graphics::hdr_output`, `set_hdr_output` and `hdr_status`,
+  and their C functions (`ponko_*hdr_output*`, `ponko_ctx_hdr_status`) and
+  types (`PonkoHdr*`).
 - WebRTC (the `webrtc` feature, "Peer to peer over WebRTC"):
-  `ponko::net::rtc`, `NetMessages::host_rtc` and `join_rtc`, and
+  `ponko::net::rtc`, `NetMessages::host_rtc`, `join_rtc` and
+  `rtc_signal_peer`, `LobbyClient::signaling`, and
   `ponko_net_messages_rtc_host`, `_join` and `_peer`.
-- Hot patching (the `hotpatch` feature) and the threaded web build
-  ("Threads on the web"); neither has an API of its own.
-- VR and XR is a report and an offscreen prototype, with no public API.
+- The threaded web build ("Threads on the web"): `Game::web_threads` and
+  `ponko::web::threads`.
+- Hot patching (the `hotpatch` feature) has no API of its own, and VR and
+  XR is a report and an offscreen prototype, with no public API.
+
+`python3 scripts/experimental-api.py check` keeps the list and the levels
+together: it fails when an experimental chapter has no section in the list,
+when a listed chapter is no longer experimental, when a listed item is gone,
+or when a stable item takes or hands out an experimental type. A feature
+that becomes tested or proven leaves the list in the same pull request, and
+its items are covered from then on.
 
 ## Plugins
 
@@ -189,6 +200,15 @@ Not covered by the versions, and allowed to change in any release:
   `SteamClient::from_unstable_steamworks`. Ponko's own Steam types
   (`SteamClient`, `SteamLobbyId`, `SteamUserId`, `SteamLobby`, ...) are
   stable and don't change with it.
+- **Experimental items** (see [Maturity levels](#maturity-levels)): every
+  item `scripts/experimental-api.txt` lists, and the cargo features
+  `webrtc` (peer to peer over WebRTC) and `hotpatch` (changing code while
+  the game runs). They may change or go in any release, patch releases
+  included, without a deprecated step first. In C, an unstable function
+  says so in `ponko.h`, `/* Unstable: ... */` right above its declaration,
+  and the C++ wrapper's doc comment repeats it; the types only those
+  functions use (`PonkoHdrOutput`, ...) are unstable with them. Such a
+  function may change or go within an ABI version.
 - **Which version of a re-exported crate** (`glam`, `serde_json`) stands
   behind Ponko's names, before 1.0: see
   [Re-exported crates](#re-exported-crates).
@@ -379,7 +399,9 @@ in `ponko.h` (currently **2**). It changes whenever an existing function,
 struct layout or enum value changes incompatibly, which only happens in a
 minor release (0.y.0), never in a patch release; the CHANGELOG says so.
 Within an ABI version, releases only add functions and enum values, and
-existing struct layouts never change. Programs that load the library
+existing struct layouts never change, except for the functions `ponko.h`
+marks `/* Unstable: ... */` and the types only they use
+([Unstable](#unstable)). Programs that load the library
 dynamically check the version at startup:
 
 ```c
@@ -511,7 +533,8 @@ make a test pass.
 | C ABI header and layouts | `crates/ponko_ffi/tests/fixtures/abi/` | `crates/ponko_ffi/tests/abi_compat.rs`, `examples/cpp/abi_baseline.c` |
 
 Additions pass: new MCP tools and optional parameters, new C functions and enum
-constants. A removed or changed tool, parameter, function or struct layout, a
+constants. So do changes to the experimental C items that
+`scripts/experimental-api.txt` lists ([Unstable](#unstable)). A removed or changed tool, parameter, function or struct layout, a
 new required MCP parameter, or a parameter that accepts fewer values fails with
 a message naming it. Each fixture folder's README says how to retain a new
 baseline after an intentional breaking change.

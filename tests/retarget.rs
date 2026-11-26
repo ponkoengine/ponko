@@ -621,3 +621,93 @@ fn live_pose_retargeting_allocates_nothing_after_the_first_call() {
         "live and baked poses agree"
     );
 }
+
+/// The source rig turned to face -Z, its left at -X: the way a Unity rig
+/// comes out of the Unity importer.
+fn source_facing_back() -> Skeleton {
+    let s = source();
+    let names: Vec<String> = s.joints().iter().map(|j| j.name.clone()).collect();
+    let joints: Vec<(&str, Option<usize>, Vec3, Quat)> = s
+        .joints()
+        .iter()
+        .enumerate()
+        .map(|(i, j)| {
+            let p = at(&s, i);
+            (names[i].as_str(), j.parent, vec3(-p.x, p.y, -p.z), Quat::IDENTITY)
+        })
+        .collect();
+    rig(&joints)
+}
+
+/// A humanoid clip as `ponko_unity` imports it from Unity's muscle curves
+/// (its humanoid test writes `tests/fixtures/unity/humanoid_wave.glb`: a
+/// T-posed character whose left arm Down-Up muscle goes from its T-pose
+/// value to 1 over a second), played by the engine and retargeted.
+#[test]
+fn an_imported_unity_humanoid_clip_plays_and_retargets() {
+    use ponko::assets::MemorySource;
+    let bytes = include_bytes!("fixtures/unity/humanoid_wave.glb").to_vec();
+    Game::new("unity", 1, 1).run_headless(0, move |ctx| {
+        ctx.assets
+            .add_source(MemorySource::new("unity").with("wave.glb", bytes.clone()));
+        let rest = ctx.gfx.load_skeleton("wave.glb");
+        let wave = ctx.gfx.load_clip("wave.glb", "Wave");
+        assert!((wave.duration() - 1.0).abs() < 1e-5);
+        let joint = |name: &str| rest.find(name).unwrap_or_else(|| panic!("no joint {name}"));
+        let (shoulder, hand) = (joint("bone_leftupperarm"), joint("bone_lefthand"));
+        let arm = |s: &Skeleton| (at(s, hand) - at(s, shoulder)).normalize();
+        // Played: level at the start, 60 degrees up at the end, and on the
+        // way up halfway through an Animator.
+        let mut s = rest.clone();
+        wave.sample(0.0, &mut s);
+        assert!(arm(&s).y.abs() < 1e-3, "{}", arm(&s));
+        wave.sample(1.0, &mut s);
+        assert!((arm(&s).y - 60f32.to_radians().sin()).abs() < 1e-3, "{}", arm(&s));
+        let mut animator = Animator::new(graph(vec![AnimationState::new(Motion::Clip(wave.clone()))], vec![]));
+        animator.manual = true;
+        let mut played = rest.clone();
+        for _ in 0..60 {
+            animator.update(1.0 / 120.0, &mut played);
+        }
+        let halfway = arm(&played).y;
+        assert!(halfway > 0.2 && halfway < 0.8, "half a second in: {halfway}");
+        // Retargeted onto a rig of other names and proportions.
+        let mut map = HumanoidMap::new();
+        for (bone, name) in [
+            (HumanBone::Hips, "hips"),
+            (HumanBone::Spine, "spine"),
+            (HumanBone::Chest, "chest"),
+            (HumanBone::Neck, "neck"),
+            (HumanBone::Head, "head"),
+            (HumanBone::LeftShoulder, "leftshoulder"),
+            (HumanBone::LeftUpperArm, "leftupperarm"),
+            (HumanBone::LeftLowerArm, "leftlowerarm"),
+            (HumanBone::LeftHand, "lefthand"),
+            (HumanBone::RightShoulder, "rightshoulder"),
+            (HumanBone::RightUpperArm, "rightupperarm"),
+            (HumanBone::RightLowerArm, "rightlowerarm"),
+            (HumanBone::RightHand, "righthand"),
+            (HumanBone::LeftUpperLeg, "leftupperleg"),
+            (HumanBone::LeftLowerLeg, "leftlowerleg"),
+            (HumanBone::LeftFoot, "leftfoot"),
+            (HumanBone::LeftToes, "lefttoes"),
+            (HumanBone::RightUpperLeg, "rightupperleg"),
+            (HumanBone::RightLowerLeg, "rightlowerleg"),
+            (HumanBone::RightFoot, "rightfoot"),
+            (HumanBone::RightToes, "righttoes"),
+        ] {
+            map.set(bone, Some(joint(&format!("bone_{name}"))));
+        }
+        let target = source_facing_back();
+        let mut retarget = Retargeter::new(&rest, &map, &target, &HumanoidMap::detect(&target)).expect("both map");
+        let theirs = retarget.retarget(&wave);
+        let mut t = target.clone();
+        theirs.sample(1.0, &mut t);
+        let (shoulder, hand) = (
+            t.find("mixamorig:LeftArm").unwrap(),
+            t.find("mixamorig:LeftHand").unwrap(),
+        );
+        let up = (at(&t, hand) - at(&t, shoulder)).normalize();
+        assert!((up.y - 60f32.to_radians().sin()).abs() < 1e-2, "retargeted: {up}");
+    });
+}

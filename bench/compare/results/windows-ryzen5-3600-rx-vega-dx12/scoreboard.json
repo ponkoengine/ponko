@@ -1,0 +1,915 @@
+{
+  "machine": {
+    "cpu": "AMD Ryzen 5 3600 6-Core Processor",
+    "cores": "6 cores, 12 threads",
+    "memory_gb": 16,
+    "os": "Windows 11 IoT Enterprise LTSC 2024 24H2 (build 26100.9457)",
+    "power": "AC Power (no battery)",
+    "gpus": [
+      {
+        "name": "Radeon RX Vega",
+        "driver": "31.0.12027.9001"
+      }
+    ],
+    "backend": "dx12",
+    "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
+    "ponko_rev": "c9e3c526",
+    "ponko_dirty": true,
+    "bevy": "0.20.1",
+    "date": "2026-11-26"
+  },
+  "runs": 3,
+  "power": {
+    "ECS: spawn and despawn 100k in a world of 1M": "AC Power (no battery)",
+    "ECS: iterate 1M (one archetype)": "AC Power (no battery)",
+    "ECS: iterate 16k fragmented over 1,024 archetypes": "AC Power (no battery)",
+    "ECS: add and remove a component, 1M entities": "AC Power (no battery)",
+    "ECS: parallel iterate 1M (all cores)": "AC Power (no battery)",
+    "ECS: commands, 100k spawns and despawns in a world of 1M": "AC Power (no battery)",
+    "Sprites: 100k moving, one frame drawn": "AC Power (no battery)",
+    "Sprites: 100k moving, a different tint each, one frame drawn": "AC Power (no battery)",
+    "Sprites: 1M moving, one frame drawn": "AC Power (no battery)",
+    "3D: 100k moving meshes (16 kinds, instanced) with a 4-cascade sun shadow": "AC Power (no battery)",
+    "3D: 1,000 skinned characters (16 joints) with a sun shadow": "AC Power (no battery)",
+    "2D physics: 10k boxes falling into a pile, one tick": "AC Power (no battery)",
+    "UI: 10k nodes, still, one frame drawn": "AC Power (no battery)",
+    "UI: 10k nodes, all recolored every frame, one frame drawn": "AC Power (no battery)",
+    "Headless sim: 1M entities, one tick": "AC Power (no battery)",
+    "Time to first frame (process start to first offscreen frame done, process exit included)": "AC Power (no battery)"
+  },
+  "runtime": {
+    "ECS: spawn and despawn 100k in a world of 1M": {
+      "unit": "ms",
+      "ponko": {
+        "median": 4.158099999999999,
+        "min": 4.1292,
+        "max": 4.159000000000001,
+        "runs": [
+          4.158099999999999,
+          4.159000000000001,
+          4.1292
+        ]
+      },
+      "bevy": {
+        "median": 10.3368,
+        "min": 10.2935,
+        "max": 10.4482,
+        "runs": [
+          10.4482,
+          10.3368,
+          10.2935
+        ]
+      },
+      "loads": [
+        {
+          "side": "ponko",
+          "load": 1.07,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.07,
+          "under_load": false
+        },
+        {
+          "side": "ponko",
+          "load": 1.08,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.08,
+          "under_load": false
+        },
+        {
+          "side": "ponko",
+          "load": 1.08,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.08,
+          "under_load": false
+        }
+      ]
+    },
+    "ECS: iterate 1M (one archetype)": {
+      "unit": "ms",
+      "ponko": {
+        "median": 0.522,
+        "min": 0.5125000000000001,
+        "max": 0.6069,
+        "runs": [
+          0.5125000000000001,
+          0.6069,
+          0.522
+        ]
+      },
+      "bevy": {
+        "median": 1.1847999999999999,
+        "min": 1.1202,
+        "max": 1.2404,
+        "runs": [
+          1.2404,
+          1.1847999999999999,
+          1.1202
+        ]
+      },
+      "loads": [
+        {
+          "side": "ponko",
+          "load": 1.07,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.07,
+          "under_load": false
+        },
+        {
+          "side": "ponko",
+          "load": 1.08,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.08,
+          "under_load": false
+        },
+        {
+          "side": "ponko",
+          "load": 1.08,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.08,
+          "under_load": false
+        }
+      ]
+    },
+    "ECS: iterate 16k fragmented over 1,024 archetypes": {
+      "unit": "ms",
+      "ponko": {
+        "median": 0.0194,
+        "min": 0.0189,
+        "max": 0.022500000000000003,
+        "runs": [
+          0.0189,
+          0.022500000000000003,
+          0.0194
+        ]
+      },
+      "bevy": {
+        "median": 0.043000000000000003,
+        "min": 0.0426,
+        "max": 0.0494,
+        "runs": [
+          0.0426,
+          0.0494,
+          0.043000000000000003
+        ]
+      },
+      "loads": [
+        {
+          "side": "ponko",
+          "load": 1.07,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.07,
+          "under_load": false
+        },
+        {
+          "side": "ponko",
+          "load": 1.08,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.08,
+          "under_load": false
+        },
+        {
+          "side": "ponko",
+          "load": 1.08,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.08,
+          "under_load": false
+        }
+      ]
+    },
+    "ECS: add and remove a component, 1M entities": {
+      "unit": "ms",
+      "ponko": {
+        "median": 88.37639999999999,
+        "min": 86.6199,
+        "max": 95.4084,
+        "runs": [
+          95.4084,
+          86.6199,
+          88.37639999999999
+        ]
+      },
+      "bevy": {
+        "median": 167.8553,
+        "min": 167.1685,
+        "max": 170.7564,
+        "runs": [
+          170.7564,
+          167.1685,
+          167.8553
+        ]
+      },
+      "loads": [
+        {
+          "side": "ponko",
+          "load": 1.07,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.07,
+          "under_load": false
+        },
+        {
+          "side": "ponko",
+          "load": 1.08,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.08,
+          "under_load": false
+        },
+        {
+          "side": "ponko",
+          "load": 1.08,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.08,
+          "under_load": false
+        }
+      ]
+    },
+    "ECS: parallel iterate 1M (all cores)": {
+      "unit": "ms",
+      "ponko": {
+        "median": 4.2811,
+        "min": 4.1992,
+        "max": 4.2837,
+        "runs": [
+          4.1992,
+          4.2811,
+          4.2837
+        ]
+      },
+      "bevy": {
+        "median": 7.4392,
+        "min": 6.3343,
+        "max": 7.4751,
+        "runs": [
+          6.3343,
+          7.4751,
+          7.4392
+        ]
+      },
+      "loads": [
+        {
+          "side": "ponko",
+          "load": 1.07,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.07,
+          "under_load": false
+        },
+        {
+          "side": "ponko",
+          "load": 1.08,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.08,
+          "under_load": false
+        },
+        {
+          "side": "ponko",
+          "load": 1.08,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.08,
+          "under_load": false
+        }
+      ]
+    },
+    "ECS: commands, 100k spawns and despawns in a world of 1M": {
+      "unit": "ms",
+      "ponko": {
+        "median": 5.5053,
+        "min": 5.4215,
+        "max": 5.509799999999999,
+        "runs": [
+          5.5053,
+          5.4215,
+          5.509799999999999
+        ]
+      },
+      "bevy": {
+        "median": 14.2184,
+        "min": 13.341000000000001,
+        "max": 15.640500000000001,
+        "runs": [
+          15.640500000000001,
+          13.341000000000001,
+          14.2184
+        ]
+      },
+      "loads": [
+        {
+          "side": "ponko",
+          "load": 1.07,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.07,
+          "under_load": false
+        },
+        {
+          "side": "ponko",
+          "load": 1.08,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.08,
+          "under_load": false
+        },
+        {
+          "side": "ponko",
+          "load": 1.08,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.08,
+          "under_load": false
+        }
+      ]
+    },
+    "Sprites: 100k moving, one frame drawn": {
+      "unit": "ms",
+      "ponko": {
+        "median": 2.907,
+        "min": 2.7558,
+        "max": 3.0347,
+        "runs": [
+          2.907,
+          2.7558,
+          3.0347
+        ]
+      },
+      "bevy": {
+        "median": 29.2026,
+        "min": 28.6826,
+        "max": 29.9852,
+        "runs": [
+          28.6826,
+          29.2026,
+          29.9852
+        ]
+      },
+      "loads": [
+        {
+          "side": "ponko",
+          "load": 1.07,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.04,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.06,
+          "under_load": false
+        },
+        {
+          "side": "ponko",
+          "load": 1.09,
+          "under_load": false
+        },
+        {
+          "side": "ponko",
+          "load": 1.09,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.33,
+          "under_load": false
+        }
+      ]
+    },
+    "Sprites: 100k moving, a different tint each, one frame drawn": {
+      "unit": "ms",
+      "ponko": {
+        "median": 2.8443,
+        "min": 2.838,
+        "max": 2.9415,
+        "runs": [
+          2.9415,
+          2.8443,
+          2.838
+        ]
+      },
+      "bevy": {
+        "median": null,
+        "min": null,
+        "max": null,
+        "runs": []
+      },
+      "loads": [
+        {
+          "side": "ponko",
+          "load": 0.99,
+          "under_load": false
+        },
+        {
+          "side": "ponko",
+          "load": 1.01,
+          "under_load": false
+        },
+        {
+          "side": "ponko",
+          "load": 1.13,
+          "under_load": false
+        }
+      ],
+      "failures": {
+        "bevy": [
+          "2026-11-25T23:45:07.282589Z ERROR bevy_render::error_handler: Caught DeviceLost error: Unknown Out of memory",
+          "2026-11-25T23:52:00.919880Z ERROR bevy_render::error_handler: Caught DeviceLost error: Unknown Out of memory",
+          "2026-11-25T23:59:18.165595Z ERROR bevy_render::error_handler: Caught DeviceLost error: Unknown Out of memory"
+        ]
+      }
+    },
+    "Sprites: 1M moving, one frame drawn": {
+      "unit": "ms",
+      "ponko": {
+        "median": 27.8705,
+        "min": 27.1307,
+        "max": 28.0591,
+        "runs": [
+          27.1307,
+          28.0591,
+          27.8705
+        ]
+      },
+      "bevy": {
+        "median": 244.5804,
+        "min": 243.00730000000001,
+        "max": 246.0066,
+        "runs": [
+          244.5804,
+          243.00730000000001,
+          246.0066
+        ]
+      },
+      "loads": [
+        {
+          "side": "ponko",
+          "load": 1.08,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.28,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.06,
+          "under_load": false
+        },
+        {
+          "side": "ponko",
+          "load": 1.1,
+          "under_load": false
+        },
+        {
+          "side": "ponko",
+          "load": 0.97,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.37,
+          "under_load": false
+        }
+      ]
+    },
+    "3D: 100k moving meshes (16 kinds, instanced) with a 4-cascade sun shadow": {
+      "unit": "ms",
+      "ponko": {
+        "median": 15.5516,
+        "min": 15.4295,
+        "max": 15.862,
+        "runs": [
+          15.4295,
+          15.5516,
+          15.862
+        ]
+      },
+      "bevy": {
+        "median": 39.6519,
+        "min": 39.4879,
+        "max": 40.0706,
+        "runs": [
+          39.6519,
+          39.4879,
+          40.0706
+        ]
+      },
+      "loads": [
+        {
+          "side": "ponko",
+          "load": 1.53,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.13,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.07,
+          "under_load": false
+        },
+        {
+          "side": "ponko",
+          "load": 0.74,
+          "under_load": false
+        },
+        {
+          "side": "ponko",
+          "load": 1.11,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.06,
+          "under_load": false
+        }
+      ]
+    },
+    "3D: 1,000 skinned characters (16 joints) with a sun shadow": {
+      "unit": "ms",
+      "ponko": {
+        "median": 9.6476,
+        "min": 9.5692,
+        "max": 9.744,
+        "runs": [
+          9.5692,
+          9.6476,
+          9.744
+        ]
+      },
+      "bevy": {
+        "median": 15.4861,
+        "min": 15.2918,
+        "max": 15.7028,
+        "runs": [
+          15.7028,
+          15.2918,
+          15.4861
+        ]
+      },
+      "loads": [
+        {
+          "side": "ponko",
+          "load": 1.12,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.02,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.08,
+          "under_load": false
+        },
+        {
+          "side": "ponko",
+          "load": 0.94,
+          "under_load": false
+        },
+        {
+          "side": "ponko",
+          "load": 1.31,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.09,
+          "under_load": false
+        }
+      ]
+    },
+    "2D physics: 10k boxes falling into a pile, one tick": {
+      "unit": "ms",
+      "ponko": {
+        "median": 26.2421,
+        "min": 25.4416,
+        "max": 26.5115,
+        "runs": [
+          25.4416,
+          26.2421,
+          26.5115
+        ]
+      },
+      "bevy": {
+        "median": 34.2955,
+        "min": 32.8298,
+        "max": 35.1385,
+        "runs": [
+          32.8298,
+          35.1385,
+          34.2955
+        ]
+      },
+      "loads": [
+        {
+          "side": "ponko",
+          "load": 1.03,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.45,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.39,
+          "under_load": false
+        },
+        {
+          "side": "ponko",
+          "load": 1.04,
+          "under_load": false
+        },
+        {
+          "side": "ponko",
+          "load": 1.02,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.91,
+          "under_load": false
+        }
+      ]
+    },
+    "UI: 10k nodes, still, one frame drawn": {
+      "unit": "ms",
+      "ponko": {
+        "median": 5.341,
+        "min": 4.467,
+        "max": 6.1615,
+        "runs": [
+          4.467,
+          5.341,
+          6.1615
+        ]
+      },
+      "bevy": {
+        "median": 12.6579,
+        "min": 12.6562,
+        "max": 12.8677,
+        "runs": [
+          12.8677,
+          12.6562,
+          12.6579
+        ]
+      },
+      "loads": [
+        {
+          "side": "ponko",
+          "load": 1.11,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.34,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.13,
+          "under_load": false
+        },
+        {
+          "side": "ponko",
+          "load": 1.15,
+          "under_load": false
+        },
+        {
+          "side": "ponko",
+          "load": 0.64,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.27,
+          "under_load": false
+        }
+      ]
+    },
+    "UI: 10k nodes, all recolored every frame, one frame drawn": {
+      "unit": "ms",
+      "ponko": {
+        "median": 7.3954,
+        "min": 7.1365,
+        "max": 8.1392,
+        "runs": [
+          7.3954,
+          7.1365,
+          8.1392
+        ]
+      },
+      "bevy": {
+        "median": 21.7754,
+        "min": 21.2053,
+        "max": 21.982000000000003,
+        "runs": [
+          21.7754,
+          21.982000000000003,
+          21.2053
+        ]
+      },
+      "loads": [
+        {
+          "side": "ponko",
+          "load": 1.06,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.3,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.06,
+          "under_load": false
+        },
+        {
+          "side": "ponko",
+          "load": 1.39,
+          "under_load": false
+        },
+        {
+          "side": "ponko",
+          "load": 1.07,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.11,
+          "under_load": false
+        }
+      ]
+    },
+    "Headless sim: 1M entities, one tick": {
+      "unit": "ms",
+      "ponko": {
+        "median": 0.6187,
+        "min": 0.5032,
+        "max": 0.6324,
+        "runs": [
+          0.6187,
+          0.6324,
+          0.5032
+        ]
+      },
+      "bevy": {
+        "median": 1.2394,
+        "min": 1.1464999999999999,
+        "max": 1.32,
+        "runs": [
+          1.1464999999999999,
+          1.2394,
+          1.32
+        ]
+      },
+      "loads": [
+        {
+          "side": "ponko",
+          "load": 1.42,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.27,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.07,
+          "under_load": false
+        },
+        {
+          "side": "ponko",
+          "load": 0.98,
+          "under_load": false
+        },
+        {
+          "side": "ponko",
+          "load": 0.55,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 0.62,
+          "under_load": false
+        }
+      ]
+    },
+    "Time to first frame (process start to first offscreen frame done, process exit included)": {
+      "unit": "ms",
+      "ponko": {
+        "median": 260.6738000031328,
+        "min": 249.5864000011352,
+        "max": 1338.0928000005952,
+        "runs": [
+          260.6738000031328,
+          1338.0928000005952,
+          249.5864000011352
+        ]
+      },
+      "bevy": {
+        "median": 1356.280699998024,
+        "min": 1336.1359000009543,
+        "max": 1496.1586000026728,
+        "runs": [
+          1336.1359000009543,
+          1356.280699998024,
+          1496.1586000026728
+        ]
+      },
+      "loads": [
+        {
+          "side": "ponko",
+          "load": 1.05,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.1,
+          "under_load": false
+        },
+        {
+          "side": "ponko",
+          "load": 1.07,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 0.72,
+          "under_load": false
+        },
+        {
+          "side": "ponko",
+          "load": 1.15,
+          "under_load": false
+        },
+        {
+          "side": "bevy",
+          "load": 1.07,
+          "under_load": false
+        }
+      ]
+    }
+  },
+  "adapters": [
+    "Radeon RX Vega (Dx12)",
+    "{\"backend\": \"dx12\", \"device_type\": \"discrete_gpu\", \"driver\": \"31.0.12027.9001\", \"driver_info\": \"\", \"name\": \"Radeon RX Vega\"}",
+    "{\"backend\": \"dx12\", \"device_type\": \"discretegpu\", \"driver\": \"31.0.12027.9001\", \"driver_info\": \"\", \"name\": \"Radeon RX Vega\"}"
+  ]
+}

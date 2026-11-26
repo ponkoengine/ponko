@@ -74,7 +74,7 @@ A Unity `LODGroup` comes over as a [`LodGroup`](3d.md) on one entity placed
 at the group's object. Every level keeps its renderers (each placed
 relative to the group), its screen-relative height as the level's
 `screen_height`, and its `fadeTransitionWidth` as `fade_width` when the group's
-Fade Mode is on. The group's `m_Size` is the `size` and its reference point
+Fade Mode is on (and not animated, below). The group's `m_Size` is the `size` and its reference point
 the `center`. A renderer's Cast Shadows setting becomes the level's shadow:
 a level with a renderer set to Off or Shadows Only casts the shadow of
 the right meshes, not the ones it shows.
@@ -85,8 +85,18 @@ the right meshes, not the ones it shows.
 import.lod_groups(false); // LOD 0 only, the far levels left out
 ```
 
-Animated cross-fading (a fade over seconds) isn't supported: those groups
-fade over a band of screen heights instead, and the report counts them.
+A group with **Animate Cross-fading** on fades each change of level over
+time, as Unity does: it gets a [`LodFadeTime`](3d.md) of half a second,
+Unity's default `LODGroup.crossFadeAnimationDuration`. A game sets that
+duration from a script, for the whole project, so no file has it: if
+yours sets another, tell the importer.
+
+```rust
+# let project = ponko_unity::Project::open("Project")?;
+# let mut import = ponko_unity::Importer::new(&project, "out", "");
+import.lod_fade_time(0.3); // what the game's startup script sets
+```
+
 Skinned renderers can't be part of a group: one in LOD 0 stays an entity of
 its own, and the ones in far levels are left out (also counted).
 
@@ -228,14 +238,90 @@ Binary serialized clips (Unity's *Mixed* or *Binary* asset serialization,
 fields, so they behave like their text twins. `AnimationClip::read` picks
 the format; `parse` takes text and `parse_binary` bytes.
 
-What does not import: **humanoid** clips whose curves are muscles and root
-motion need retargeting, so a clip with only those is an error, and one that
-mixes them with transform curves imports the transform curves and reports the
-rest. Float curves on anything but blend shapes, object reference curves,
-weighted tangents (approximated), animation events and Animator controllers
-are skipped and reported or not imported yet. The compressed-curve tangent
-layout and the baked decoders are checked against synthetic data built from
-the formats' public descriptions, not against every Unity version's output.
+What does not import: float curves on anything but blend shapes and
+humanoid muscles, object reference curves, weighted tangents
+(approximated), animation events and Animator controllers are skipped and
+reported or not imported yet. The compressed-curve tangent layout and the
+baked decoders are checked against synthetic data built from the formats'
+public descriptions, not against every Unity version's output.
+
+### Humanoid clips
+
+A clip made for a humanoid Avatar (a model whose Rig is Humanoid) moves
+muscles, not bones: `Left Arm Down-Up`, `Spine Twist Left-Right`,
+`LeftHand.Index.1 Stretched` and the rest of Unity's 95, plus the body's
+position and rotation (`RootT`, `RootQ`). The importer turns them into
+rotations of the bones of the skeleton it exports them onto, so what comes
+out is an ordinary clip for that skeleton, which the engine's
+[retargeting](3d.md) can then move onto other humanoids.
+
+It needs an avatar: which of the skeleton's nodes plays each human bone
+(`Hips`, `LeftUpperArm`, `Left Index Proximal`, ...). For each skin it
+takes, in order:
+
+1. the avatar of the model the character's `Animator` names (`m_Avatar`):
+   the model's `.meta`, whose `humanDescription` Unity writes when its Rig
+   is Humanoid, with any limits changed in its Muscles & Settings and its
+   reference pose;
+2. the avatar of the model the mesh comes from, the same way;
+3. the one you give the importer, `importer.humanoid_avatar(avatar)`;
+4. one found by the nodes' names: Unity's own bone names, and the common
+   `LeftUpLeg`, `LeftForeArm`, `LeftToeBase`, `Spine1`, `LeftHandIndex1`
+   style, after any `prefix:`.
+
+Without one that has the required bones (hips, spine, head, and both arms
+and legs down to the hands and feet), the clip's humanoid curves are
+reported and left out.
+
+```rust
+# let project = ponko_unity::Project::open("Project")?;
+# let mut import = ponko_unity::Importer::new(&project, "out", "");
+use ponko_unity::HumanoidAvatar;
+let meta = std::fs::read_to_string("Project/Assets/Hero.fbx.meta")?;
+let mut avatar = HumanoidAvatar::from_meta(&meta)?.unwrap_or_default();
+avatar.set_bone("UpperChest", "spine_03")?; // one the Avatar left out
+import.humanoid_avatar(avatar);
+import.animation_clips([ponko_unity::AnimationClip::read("Assets/Wave.anim")?]);
+```
+
+`AnimationClip::append_to_skin_with_avatar` does the same for a skin of
+your own, and `is_humanoid` says whether a clip needs an avatar.
+
+How a muscle becomes a rotation:
+
+- A muscle's value, from -1 to 1, scales its limits: `value * max`
+  degrees above 0, `-value * min` below, with Unity's default limits or the
+  Avatar's own. Each bone turns about itself (twist) and across itself
+  (two swings), twist first.
+- The angles are measured from Unity's zero pose, which isn't a T-pose
+  (arms lowered and forward, elbows and knees bent). The importer takes the
+  skeleton's rest pose (or the Avatar's reference pose) as a T-pose, whose
+  muscle values it knows: arm down-up 0.4, arm front-back 0.3, forearm
+  stretch 1, upper leg front-back 0.6, lower leg stretch 1, the rest 0. A
+  rig that rests in another pose (an A-pose) says so with
+  `avatar.set_rest_muscle("Left Arm Down-Up", 0.0)`.
+- The axes come from the rest pose, the character facing +Z with +Y up
+  as Unity's avatars do: each bone's direction (towards the next human
+  bone, or its child), the body's sideways axis for bends to the front and
+  back, its forward axis for raising arms. So joint names and joint axes
+  may differ from Unity's own.
+- The body's position goes to the hips, scaled by the hips' rest height
+  (Unity's human scale); its rotation turns the hips from their rest. Set
+  the `Animator`'s `root_joint` to the hips for root motion.
+- A muscle without a curve is 0, as in Unity: that is the zero pose, not
+  the rest pose, for the bones listed above. Transform curves in the same
+  clip win on the nodes they animate.
+
+What doesn't come over: IK goal curves (`LeftFootT`, `LeftHandQ`, ...),
+motion curves and translation degrees of freedom (reported), an Avatar's
+per-bone center offsets and twist distribution (Arm Twist, Leg Twist,
+...), and humanoid curves found only in a clip's baked runtime data,
+which names muscles by index: such a clip is an error (or, next to
+transform curves, reported), so resave it from the editor. The muscle axes,
+limits and T-pose values follow Unity's published muscle names and default
+limits and are checked on synthetic skeletons and clips, not against
+Unity's own playback: compare a clip against Unity before relying on exact
+angles, and adjust with `set_limits` and `set_rest_muscle`.
 
 ## Terrain
 

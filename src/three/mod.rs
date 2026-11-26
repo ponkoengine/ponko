@@ -75,7 +75,7 @@ pub use gi::GlobalIllumination;
 #[cfg(feature = "window")]
 pub(crate) use gi::MAX_GI_PROBES_PER_FRAME;
 pub use ik::{look_at_joint, two_bone_ik};
-pub use lod::{LodGroup, LodHysteresis, LodLevel, LodPick, LodRenderer, LodSettings, LodShadow};
+pub use lod::{LodFadeTime, LodGroup, LodHysteresis, LodLevel, LodPick, LodRenderer, LodSettings, LodShadow};
 pub use retarget::{HumanBone, HumanoidMap, RetargetError, Retargeter};
 pub(crate) mod lights;
 #[cfg(feature = "editor")]
@@ -159,7 +159,7 @@ pub(crate) use gltf_scene::{GltfEntities, GltfOverride, GltfOverrideKind, Waitin
 pub use gltf_scene::{GltfNode, GltfOptions, GltfRoot, GltfScene, GltfSceneNode, SpawnPoint};
 pub use mesh::{MeshData, MorphFrame, MorphTarget};
 pub use post::Upscaler;
-pub use post::{AmbientOcclusion, AntiAliasing, DepthOfField, Post, PostVolume, SplitToning, Tonemap};
+pub use post::{AmbientOcclusion, AntiAliasing, AutoExposure, DepthOfField, Post, PostVolume, SplitToning, Tonemap};
 pub(crate) use post::{MAX_RENDER_SCALE, MIN_RENDER_SCALE};
 #[cfg(feature = "window")]
 pub(crate) use post::{PostUniform, scaled_size};

@@ -16,12 +16,15 @@
 # the target folder. The project's own files are put back as they were.
 #
 # Times are cargo's own ("Finished ... in"). Run nothing else meanwhile, and
-# report the median and range.
+# report the median and range. On Windows, run it with Git for Windows' bash
+# (it needs perl, which that bash has); there is no strip, so the "stripped"
+# size is the binary's (MSVC keeps debug info in a separate .pdb).
 #
 # BUILD_TIMES_CARGO_ARGS adds arguments to every build (for example
 # `--features bevy/dynamic_linking` for the scoreboard's tuned Bevy builds).
 set -euo pipefail
 
+here=$(cd "$(dirname "$0")" && pwd)
 dir=${1:?usage: build-times.sh <project> [dev|release] [clean runs]}
 profile=${2:-dev}
 runs=${3:-3}
@@ -36,7 +39,15 @@ esac
 # shellcheck disable=SC2206
 flags+=(${BUILD_TIMES_CARGO_ARGS:-})
 
-load() { uptime | sed 's/.*averages*: *//' | tr -s ', ' ' ' | cut -d' ' -f1; }
+# The 1-minute load average, or on Windows (no `uptime`) the busy logical
+# processors from scripts/cpu_load.py ($PYTHON, default python3).
+load() {
+  if command -v uptime >/dev/null 2>&1; then
+    uptime | sed 's/.*averages*: *//' | tr -s ', ' ' ' | cut -d' ' -f1
+  else
+    "${PYTHON:-python3}" "$here/cpu_load.py"
+  fi
+}
 finished() { grep 'Finished' | sed 's/.* in //'; }
 cp src/lib.rs src/lib.rs.build-times
 cp src/main.rs src/main.rs.build-times

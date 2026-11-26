@@ -282,7 +282,7 @@ def write_evidence(changes, folder: Path, base: str):
         rows = "".join(f"<dt>{html.escape(k)}</dt><dd>{html.escape(str(v))}</dd>" for k, v in facts)
         sections.append(f"<h2>{html.escape(name)}</h2><dl>{rows}</dl><div class=row>{''.join(figures)}</div>")
     (folder / "index.html").write_text(
-        PAGE.format(base=html.escape(base), sections="\n".join(sections)), encoding="utf-8"
+        PAGE.format(base=html.escape(base), sections="\n".join(sections)), encoding="utf-8", newline='\n'
     )
 
 
@@ -358,7 +358,7 @@ def self_test():
 
         def write(data=png, **changes):
             (folder / "sample.png").write_bytes(data)
-            (folder / "sample.json").write_text(meta(png, **changes), encoding="utf-8")
+            (folder / "sample.json").write_text(meta(png, **changes), encoding="utf-8", newline='\n')
 
         def expect(text):
             problems = check_folder(folder)
@@ -384,10 +384,10 @@ def self_test():
         (folder / "orphan.png").write_bytes(png)
         expect("orphan.png: its metadata (.json) is missing")
         (folder / "orphan.png").unlink()
-        (folder / "notes.txt").write_text("x")
+        (folder / "notes.txt").write_text("x", encoding='utf-8', newline='\n')
         expect("only reference images")
         (folder / "notes.txt").unlink()
-        (folder / "sample.json").write_text('{"name": "sample"}')
+        (folder / "sample.json").write_text('{"name": "sample"}', encoding='utf-8', newline='\n')
         expect("missing scene")
 
         # Changes against a git revision.
@@ -402,12 +402,12 @@ def self_test():
         # A new image with the old reason: not acceptable.
         other = png + b"\x01"
         (folder / "sample.png").write_bytes(other)
-        (folder / "sample.json").write_text(meta(other), encoding="utf-8")
+        (folder / "sample.json").write_text(meta(other), encoding="utf-8", newline='\n')
         changes = changed_references(root, "HEAD")
         assert [(n, kind(b, a)) for n, b, a in changes] == [("sample", "image changed")], changes
         assert any("reason on record is still the old one" in p for p in change_problems(changes))
         # With a new reason: fine, and the evidence is written.
-        (folder / "sample.json").write_text(meta(other, reason="Brighter light."), encoding="utf-8")
+        (folder / "sample.json").write_text(meta(other, reason="Brighter light."), encoding="utf-8", newline='\n')
         changes = changed_references(root, "HEAD")
         assert change_problems(changes) == []
         write_evidence(changes, root / "evidence", "HEAD")
@@ -417,12 +417,12 @@ def self_test():
         assert (root / "evidence" / "sample.after.png").read_bytes() == other
         assert "| `sample` | image changed | Brighter light." in summary(changes, [])
         # The image changed and the metadata did not.
-        (folder / "sample.json").write_text(meta(png), encoding="utf-8")
+        (folder / "sample.json").write_text(meta(png), encoding="utf-8", newline='\n')
         assert any("without its metadata" in p for p in change_problems(changed_references(root, "HEAD")))
         # Added and removed references are changes too.
         write()
         (folder / "new.png").write_bytes(png)
-        (folder / "new.json").write_text(meta(png, name="new"), encoding="utf-8")
+        (folder / "new.json").write_text(meta(png, name="new"), encoding="utf-8", newline='\n')
         (folder / "sample.png").unlink()
         (folder / "sample.json").unlink()
         kinds = {n: kind(b, a) for n, b, a in changed_references(root, "HEAD")}

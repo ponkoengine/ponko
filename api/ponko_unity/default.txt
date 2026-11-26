@@ -93,6 +93,8 @@ impl core::marker::StructuralPartialEq for ponko_unity::VertexFormat
 pub struct ponko_unity::AnimationClip
 impl ponko_unity::AnimationClip
 pub fn ponko_unity::AnimationClip::append_to_skin(&self, &mut ponko_unity::MeshSkin, usize) -> alloc::vec::Vec<alloc::string::String>
+pub fn ponko_unity::AnimationClip::append_to_skin_with_avatar(&self, &mut ponko_unity::MeshSkin, usize, &ponko_unity::HumanoidAvatar) -> alloc::vec::Vec<alloc::string::String>
+pub fn ponko_unity::AnimationClip::is_humanoid(&self) -> bool
 pub fn ponko_unity::AnimationClip::parse(&str) -> core::result::Result<Self, ponko_unity::Error>
 pub fn ponko_unity::AnimationClip::parse_binary(&[u8]) -> core::result::Result<Self, ponko_unity::Error>
 pub fn ponko_unity::AnimationClip::read(impl core::convert::AsRef<std::path::Path>) -> core::result::Result<Self, ponko_unity::Error>
@@ -179,12 +181,33 @@ impl core::default::Default for ponko_unity::Hierarchy
 pub fn ponko_unity::Hierarchy::default() -> Self
 impl core::fmt::Debug for ponko_unity::Hierarchy
 pub fn ponko_unity::Hierarchy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct ponko_unity::HumanoidAvatar
+impl ponko_unity::HumanoidAvatar
+pub fn ponko_unity::HumanoidAvatar::bone(&self, &str) -> core::option::Option<&str>
+pub fn ponko_unity::HumanoidAvatar::detect(&ponko_unity::MeshSkin) -> Self
+pub fn ponko_unity::HumanoidAvatar::from_meta(&str) -> core::result::Result<core::option::Option<Self>, ponko_unity::Error>
+pub fn ponko_unity::HumanoidAvatar::missing(&self) -> alloc::vec::Vec<&'static str>
+pub fn ponko_unity::HumanoidAvatar::new() -> Self
+pub fn ponko_unity::HumanoidAvatar::set_bone(&mut self, &str, &str) -> core::result::Result<(), ponko_unity::Error>
+pub fn ponko_unity::HumanoidAvatar::set_limits(&mut self, &str, f32, f32) -> core::result::Result<(), ponko_unity::Error>
+pub fn ponko_unity::HumanoidAvatar::set_rest_muscle(&mut self, &str, f32) -> core::result::Result<(), ponko_unity::Error>
+impl core::clone::Clone for ponko_unity::HumanoidAvatar
+pub fn ponko_unity::HumanoidAvatar::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko_unity::HumanoidAvatar
+pub fn ponko_unity::HumanoidAvatar::eq(&self, &Self) -> bool
+impl core::default::Default for ponko_unity::HumanoidAvatar
+pub fn ponko_unity::HumanoidAvatar::default() -> Self
+impl core::fmt::Debug for ponko_unity::HumanoidAvatar
+pub fn ponko_unity::HumanoidAvatar::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko_unity::HumanoidAvatar
 pub struct ponko_unity::Importer<'p>
 impl<'p> ponko_unity::Importer<'p>
 pub fn ponko_unity::Importer<'p>::animation_clips(&mut self, impl core::iter::traits::collect::IntoIterator<Item = ponko_unity::AnimationClip>)
 pub fn ponko_unity::Importer<'p>::colliders(&mut self, bool)
 pub fn ponko_unity::Importer<'p>::custom_shader(&mut self, &str)
 pub fn ponko_unity::Importer<'p>::finish(self) -> core::result::Result<ponko_unity::Report, ponko_unity::Error>
+pub fn ponko_unity::Importer<'p>::humanoid_avatar(&mut self, ponko_unity::HumanoidAvatar)
+pub fn ponko_unity::Importer<'p>::lod_fade_time(&mut self, f32)
 pub fn ponko_unity::Importer<'p>::lod_groups(&mut self, bool)
 pub fn ponko_unity::Importer<'p>::new(&'p ponko_unity::Project, impl core::convert::Into<std::path::PathBuf>, &str) -> Self
 pub fn ponko_unity::Importer<'p>::report(&self) -> &ponko_unity::Report

@@ -54,6 +54,8 @@ where
         #[cfg(target_arch = "wasm32")]
         startup_context: None,
         control,
+        #[cfg(all(target_arch = "wasm32", feature = "web-control"))]
+        browser_control: None,
         config: game,
         setup: Some(setup),
         started: false,
@@ -181,6 +183,8 @@ struct App<S> {
     /// the game is shutting down, and the endpoint's exit doesn't wait for
     /// an answer that can no longer come.
     control: Option<Control>,
+    #[cfg(all(target_arch = "wasm32", feature = "web-control"))]
+    browser_control: Option<crate::control::web::BrowserControl>,
 }
 
 impl<S, U> App<S>
@@ -206,6 +210,10 @@ where
         }
 
         if let Some(control) = &self.control {
+            control.poll(&mut self.ctx);
+        }
+        #[cfg(all(target_arch = "wasm32", feature = "web-control"))]
+        if let Some(control) = &self.browser_control {
             control.poll(&mut self.ctx);
         }
         let now = Instant::now();
@@ -267,6 +275,12 @@ where
         let render_start = Instant::now();
         let status = self.ctx.render_frame();
         let render_ms = render_start.elapsed().as_secs_f32() * 1000.0;
+        #[cfg(all(target_arch = "wasm32", feature = "web-control"))]
+        if let Some(control) = &self.browser_control {
+            use winit::platform::web::WindowExtWebSys;
+            let canvas = || self.window.as_ref().and_then(|window| window.canvas());
+            control.after_frame(canvas, status == FrameStatus::Presented);
+        }
         match status {
             FrameStatus::Presented | FrameStatus::Skipped | FrameStatus::Offscreen => self.occluded = false,
             FrameStatus::Occluded => self.occluded = true,
@@ -461,6 +475,10 @@ where
                 self.config.add_setup_closure(f);
             }
             self.started = true;
+            #[cfg(all(target_arch = "wasm32", feature = "web-control"))]
+            {
+                self.browser_control = crate::control::web::BrowserControl::from_page();
+            }
         }
 
         // Don't count setup time (e.g. asset loading) as the first frame's dt.
