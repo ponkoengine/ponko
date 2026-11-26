@@ -43,6 +43,12 @@
       "category": "deprecated compatibility",
       "reason": "Migration instructions and deprecation schedule for legacy names."
     },
+    "crates/ponko_aseprite/NOTICE": {
+      "occurrences": 1,
+      "path_occurrences": 0,
+      "category": "intentional history",
+      "reason": "Preserved project instructions, README text, release history or legal attribution."
+    },
     "crates/ponko_cli/NOTICE": {
       "occurrences": 1,
       "path_occurrences": 0,
@@ -74,6 +80,12 @@
       "reason": "Immutable historical ABI or saved-format baseline and its provenance/generator."
     },
     "crates/ponko_image_diff/NOTICE": {
+      "occurrences": 1,
+      "path_occurrences": 0,
+      "category": "intentional history",
+      "reason": "Preserved project instructions, README text, release history or legal attribution."
+    },
+    "crates/ponko_lobby/NOTICE": {
       "occurrences": 1,
       "path_occurrences": 0,
       "category": "intentional history",

@@ -174,7 +174,7 @@ unicode-script = { version = "0.5.9", optional = true }
 # Character coverage of system fonts (feature `system-fonts`); the font
 # parser harfrust is built on.
 read-fonts = { version = "0.41.0", default-features = false, features = ["std"], optional = true }
-kira = { version = "0.12.6", default-features = false, features = ["cpal", "ogg", "vorbis", "wav", "pcm", "mp3", "flac", "adpcm", "aiff"], optional = true }
+kira = { version = "0.12.6", default-features = false, features = ["ogg", "vorbis", "wav", "pcm", "mp3", "flac", "adpcm", "aiff"], optional = true }
 # Kira's decoders (its formats turn them on), used directly to stream on the
 # web, where Kira's decoder thread can't run: already built for Kira.
 symphonia = { version = "0.6.1", default-features = false, optional = true }
@@ -224,6 +224,8 @@ rav1d = { package = "re_rav1d", version = "0.1.3", optional = true, default-feat
 
 # Waits for the GPU on desktop (feature `window`); the web build awaits it.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Desktop audio uses Kira's CPAL backend. The browser uses Web Audio directly.
+kira = { version = "0.12.6", default-features = false, features = ["cpal"], optional = true }
 # The desktop's gamepads (feature `gamepad`); web builds read the browser's
 # themselves (src/gamepad_web.rs).
 gilrs = { version = "0.11.2", optional = true }
@@ -267,6 +269,13 @@ meshopt = { version = "0.7.0", optional = true }
 # Its DTLS needs aws-lc (a C library built with the system's C compiler);
 # the guide's "Peer to peer" section compares the alternatives.
 str0m = { version = "0.25.0", optional = true, default-features = false, features = ["aws-lc-rs"] }
+# The desktop TURN client's message integrity (feature `webrtc`): TURN's
+# long-term credentials are an HMAC-SHA1 under an MD5 key (RFC 8489,
+# section 9.2.2), fixed by the protocol. sha1 is already in the tree
+# (tungstenite's handshake); md-5 is its RustCrypto sibling on the same
+# `digest` crate. aws-lc, which str0m brings, has no MD5.
+sha1 = { version = "0.10.7", optional = true, default-features = false }
+md-5 = { version = "0.10.6", optional = true, default-features = false }
 
 # The system's fonts by family name and coverage (feature `system-fonts`):
 # desktop only, the web has no font files to read.
@@ -333,8 +342,6 @@ wgpu = { version = "30.0.1", optional = true, features = ["webgl"] }
 wasm-bindgen = "0.2.130"
 wasm-bindgen-futures = "0.4.80"
 js-sys = "0.3.107"
-# Sound through WebAudio (kira plays through cpal).
-cpal = { version = "0.18.2", features = ["wasm-bindgen"], optional = true }
 web-sys = { version = "0.3.107", features = ["Navigator", "Clipboard", "Window", "Document", "Element", "HtmlCanvasElement", "Location", "Request", "RequestInit", "Headers", "Response", "console", "Event", "HtmlElement", "HtmlTextAreaElement", "CssStyleDeclaration", "CompositionEvent", "InputEvent", "KeyboardEvent", "EventTarget", "Node", "DomRect", "IdbFactory", "IdbDatabase", "IdbObjectStore", "IdbOpenDbRequest", "IdbRequest", "IdbTransaction", "IdbTransactionMode", "WebSocket", "BinaryType", "MessageEvent", "CloseEvent", "Worker", "WorkerOptions", "WorkerType", "ErrorEvent", "Url", "CustomEvent", "CustomEventInit", "Storage", "Blob", "BlobPropertyBag", "HtmlAnchorElement"] }
 
 # Web builds with threads and `--cfg ponko_web_thread_heaps`: one heap per
@@ -407,7 +414,15 @@ default = ["audio", "window", "inspector", "gamepad", "image-jpeg"]
 # for simulation servers and CI; drawing calls do nothing, `Game::run` panics.
 window = ["dep:arboard", "dep:wgpu", "dep:winit", "dep:pollster", "dep:objc2-metal", "dep:objc2-quartz-core", "dep:windows", "dep:xkeysym", "dep:x11rb", "dep:wayland-client", "dep:wayland-backend"]
 # Sound with kira. Off: the sound API stays and is silent (for servers).
-audio = ["dep:kira", "dep:cpal", "dep:symphonia"]
+audio = [
+    "dep:kira",
+    "dep:symphonia",
+    "web-sys/AudioContext",
+    "web-sys/AudioContextState",
+    "web-sys/AudioDestinationNode",
+    "web-sys/AudioBuffer",
+    "web-sys/AudioBufferSourceNode",
+]
 # The runtime inspector (egui overlay, toggled with the ` key): entities and their
 # components with live editing, resources, system timings, sim controls.
 # Off: no egui in the build.
@@ -457,7 +472,8 @@ physics = ["dep:rapier2d"]
 # queries, a character controller. Off: no rapier3d in the build.
 physics3d = ["3d", "dep:rapier3d"]
 # Networking over Steam (`Net` and `NetMessages`): Steam's relays
-# and lobbies, so friends join from the overlay. Re-exports `steamworks`.
+# and lobbies, so friends join from the overlay. Ponko's own Steam types;
+# the raw `steamworks` crate is `net::unstable_steamworks` (unstable).
 # Ship the Steamworks redistributable (libsteam_api) next to the game.
 steam = ["dep:steamworks"]
 # Physics that gives bit-identical results on every platform (for lockstep
@@ -478,6 +494,8 @@ lobby = []
 # Off: no WebRTC code or crates in the build.
 webrtc = [
     "dep:str0m",
+    "dep:sha1",
+    "dep:md-5",
     "web-sys/RtcPeerConnection",
     "web-sys/RtcConfiguration",
     "web-sys/RtcIceServer",

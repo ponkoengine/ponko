@@ -43,6 +43,11 @@ fn point_at(ctx: &mut Ctx, world_point: Vec2) {
 #[derive(Component)]
 struct Player;
 
+/// The `move` action, resolved once when it is bound: systems read it by
+/// id, without looking its name up every tick.
+#[derive(Clone, Copy)]
+struct Move(ActionId);
+
 /// One name for the controls; keyboard, and other devices, are bound to it once.
 fn bind_move(ctx: &mut Ctx) {
     ctx.input.set_action(
@@ -62,11 +67,14 @@ fn bind_move(ctx: &mut Ctx) {
             },
         ]),
     );
+    let movement = ctx.input.action_id("move");
+    ctx.world.insert_resource(Move(movement));
 }
 
 fn walk(ctx: &mut Ctx) {
+    let Move(movement) = *ctx.world.resource::<Move>();
     // Up and right together is longer than 1: cap it so diagonals aren't faster.
-    let direction = ctx.input.action_axis2("move").clamp_length_max(1.0);
+    let direction = ctx.input.action_axis2(movement).clamp_length_max(1.0);
     let step = direction * 200.0 * ctx.time.dt(); // 200 pixels per second
     ctx.world
         .query::<(&Player, &mut Transform)>()
@@ -122,6 +130,8 @@ fn bind_move_for_everyone(ctx: &mut Ctx) {
             },
         ]),
     );
+    let movement = ctx.input.action_id("move");
+    ctx.world.insert_resource(Move(movement));
     // `walk` from the last recipe doesn't change: it reads "move", not a device.
 }
 // ANCHOR_END: gamepad
@@ -233,7 +243,8 @@ fn dash(ctx: &mut Ctx) {
         return;
     }
     let now = ctx.time.sim_time();
-    let aim = ctx.input.action_axis2("move").normalize_or_zero();
+    let Move(movement) = *ctx.world.resource::<Move>(); // from the first recipe
+    let aim = ctx.input.action_axis2(movement).normalize_or_zero();
     ctx.world.query::<(&mut Dash, &mut Transform)>().for_each(|(dash, t)| {
         if now >= dash.ready_at {
             t.position += aim * 120.0;

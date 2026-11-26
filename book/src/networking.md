@@ -166,8 +166,15 @@ game waits:
 
 While connecting, `ctx.net.steam_lobby()` is the lobby, and
 `ctx.net.steam_invite()` opens the overlay's invite dialog (the example
-does that on the I key). `steamworks` is re-exported, so the same `Client`
-also gives you achievements, stats and the rest of Steam.
+does that on the I key). The Steam calls take and return Ponko's own types:
+`SteamClient` (started once with `SteamClient::init_app`), `SteamLobbyId` and
+`SteamUserId` (64-bit numbers: `from_raw`, `raw`, and they print and parse as
+that number), so a new version of the `steamworks` crate doesn't change your
+code. For the parts of Steam Ponko doesn't wrap (achievements, stats, rich
+presence), `client.unstable_steamworks()` is the `steamworks` client
+underneath and `ponko::net::unstable_steamworks` the crate; those are
+[unstable](https://github.com/ponkoengine/ponko/blob/main/STABILITY.md#unstable),
+so their `steamworks` version may change in any Ponko release.
 
 Shipping: the game needs Steam running, its Steam app id (480, Valve's
 test app "Spacewar", works for development) and Valve's `libsteam_api`
@@ -627,6 +634,13 @@ Everything networking is behind `ctx.net` (and in the `ponko::net` module):
 Lockstep and messages are independent and can run side by side. A
 single-player game has an offline lockstep session and nothing else.
 
+Both run over UDP (`Net::host`, `NetMessages::host`), WebSocket for
+browsers (`accept_web`, `join_web`), Steam, or the lobby server's relay
+for players who can't reach each other (`Net::host_relay`,
+`NetMessages::host_relay`, see [Game sessions through the
+relay](lobby.md#game-sessions-through-the-relay)); messages also over
+[WebRTC](webrtc.md). The session works the same on each.
+
 ## Application messages (Rust)
 
 For client/server games with their own packet format, give the game a
@@ -763,7 +777,7 @@ at most 1,500 bytes, below Steam's message limit. `Lane::ReliableUnordered`
 Create one message endpoint per Steam client. The host creates a friends-only
 lobby (1–249 clients plus host); join with its lobby id. Poll every frame and
 drain the same events as UDP. Peer ids remain session-local; `steam_peer`
-returns the authenticated Steam identity. Hosts do not automatically forward
+returns the authenticated Steam identity (a `SteamUserId`). Hosts do not automatically forward
 client messages. The protocol metadata is checked before joining the message
 handshake; applications should check their own game version before accepting
 application messages. Host migration requires creating a new endpoint.
@@ -773,7 +787,7 @@ application messages. Host migration requires creating a new endpoint.
 
 ```rust,no_run
 use ponko::prelude::*;
-let client = ponko::net::steam::Client::init_app(480).unwrap();
+let client = ponko::net::SteamClient::init_app(480)?;
 let lobby_id = ponko::net::steam_lobby_from_args();
 let mut net = match lobby_id {
     Some(id) => ponko::net::NetMessages::steam_join(&client, id)?,
@@ -814,7 +828,7 @@ application (or the C API's first call with an app id), never by fake relay test
 
 ```rust,no_run
 use ponko::prelude::*;
-let client = ponko::net::steam::Client::init_app(480).unwrap();
+let client = ponko::net::SteamClient::init_app(480)?;
 let mut lobby = ponko::net::SteamLobby::create(&client, ponko::net::SteamLobbyVisibility::Public, 4)?;
 lobby.poll()?;
 if lobby.id().is_some() {

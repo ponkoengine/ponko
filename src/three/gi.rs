@@ -339,6 +339,19 @@ impl GiProbes {
     }
 }
 
+/// Tests: what the probes' views leave out (see `Frame3D::gi_leave_out`).
+/// Both off by default: they see everything they draw.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct GiLeaveOut {
+    /// Point and spot light shadows: the probes' views are lit by those
+    /// lights as if nothing stood in their way.
+    pub light_shadows: bool,
+    /// Instance batches and crowds: no batch views, so neither the probes'
+    /// faces nor their sun shadow map draw them.
+    pub instance_batches: bool,
+}
+
 /// This frame's global illumination, as the renderer gets it (see
 /// [`Frame3D::collect_gi`]).
 #[derive(Default)]
@@ -438,7 +451,13 @@ impl Frame3D {
         gi.capture.size_limit = self.size_limit;
         // Lit by the main view's point and spot light shadows (its atlas is
         // drawn before the probes' views): no shadow views of their own.
-        gi.capture.lights.share_shadows(&self.lights);
+        #[cfg(test)]
+        let shadowed = !self.gi_leave_out.light_shadows;
+        #[cfg(not(test))]
+        let shadowed = true;
+        if shadowed {
+            gi.capture.lights.share_shadows(&self.lights);
+        }
         gi.capture.collect(world, assets, skins, &eye, &inner);
         gi.capture_view_proj = eye.view_proj();
 
@@ -460,6 +479,10 @@ impl Frame3D {
 
         gi.cull_faces(assets);
         gi.plan_batch_views(lo, hi);
+        #[cfg(test)]
+        if self.gi_leave_out.instance_batches {
+            gi.batch_views.clear();
+        }
         self.gi = Some(gi);
     }
 }

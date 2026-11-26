@@ -208,6 +208,19 @@ Each frame the example plays, ducks and switches:
 Build it with `cargo build --example audio_mixer`; running it opens a window
 and plays sound.
 
+The example looks names up once, in setup, and keeps handles for the frame.
+`ctx.audio.bus(name)` makes a bus the first time it is asked for, so a typo
+there makes a new, unheard bus; for buses a mixer file declares,
+`ctx.audio.find_bus(name)` finds only an existing one, and a name no bus has
+is an error that lists the buses there are. Snapshots work the same way:
+`ctx.audio.snapshot_id(name)` resolves one into a `SnapshotId` (an error
+listing the snapshots for a typo), and `start_snapshot`, `stop_snapshot` and
+`snapshot_weight` take that id, with no lookup, as well as the name, for
+tools and one-off calls. An id stays valid when the snapshot is replaced by
+a reloaded mixer file. In C++, `ctx.find_audio_bus(name)` and
+`ctx.audio_snapshot_id(name)` return a `ponko::result`; the snapshot calls
+take the id too.
+
 ### The bus tree
 
 `ctx.audio.set_bus_parent(bus, Some(parent))` puts one bus under another
@@ -679,8 +692,8 @@ and `ponko_ctx_audio_device_events` (JSON, two-call buffer convention),
 
 Browsers let a page make sound only after the player has clicked, tapped or
 pressed a key. The engine opens its audio output at that first gesture, and
-until then `ctx.audio.unlocked()` is `false` (on the desktop it is always
-`true`). What the game plays before the gesture is not simply lost:
+`ctx.audio.unlocked()` becomes `true` when that output starts (on the desktop
+it is always `true`). Before the gesture:
 
 - Looping sounds (music, ambience) wait and start at the gesture, with the
   volume, bus and effects they were given. Their handles work meanwhile:
@@ -689,7 +702,7 @@ until then `ctx.audio.unlocked()` is `false` (on the desktop it is always
   out of place.
 
 So a game starts its music in setup as it does on the desktop. If the
-player should hear the opening, show a prompt until sound is allowed:
+player should hear the opening, show a prompt for the first gesture:
 
 ```rust
 # use ponko::prelude::*;
@@ -699,6 +712,12 @@ if !ctx.audio.unlocked() {
 }
 # }
 ```
+
+Some WebKit builds on Linux can report zero output channels while the
+sound device list is still being detected. The engine logs that once and
+tries stereo through the browser's default destination. If the browser
+cannot open or start the output, `ctx.audio.unlocked()` stays `false` and
+the engine logs one warning with the reason.
 
 Streamed sounds (`load_stream`) keep the fetched bytes encoded and decode a
 packet at a time as they play, on the page's thread. A three-minute stereo

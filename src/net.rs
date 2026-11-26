@@ -29,10 +29,12 @@
 //! single-player game has an offline lockstep session and nothing else.
 //! Feature `steam` adds Steam relays and lobbies for both transports.
 //! Feature `lobby` adds a client for a lobby server (the `lobby` module): rooms with
-//! codes, matchmaking, host migration and a relay, on any platform.
+//! codes, matchmaking, host migration and a relay, on any platform; lockstep
+//! sessions and message endpoints run through that relay with
+//! [`Net::host_relay`] and [`NetMessages::host_relay`].
 //! Feature `webrtc` adds peer-to-peer message endpoints over WebRTC data
 //! channels (module `rtc`): browser to browser and browser to desktop, through
-//! NATs with STUN.
+//! NATs with STUN, and through TURN servers when nothing else gets through.
 //!
 //! Browser players (a web build can't open UDP sockets) connect over
 //! WebSocket: the host adds a listener with [`Net::accept_web`] or
@@ -106,7 +108,10 @@ mod service;
 pub(crate) mod snapshots;
 #[cfg(any(feature = "lobby", feature = "webrtc"))]
 pub mod stun;
+#[cfg(all(feature = "webrtc", not(target_arch = "wasm32")))]
+mod turn;
 mod websocket;
+pub use websocket::WebPeer;
 #[cfg(target_arch = "wasm32")]
 mod websocket_browser;
 pub use game_rollback::GameRollback;
@@ -132,10 +137,14 @@ pub use snapshots::{
 };
 
 #[cfg(feature = "steam")]
+mod steam_client;
+#[cfg(feature = "steam")]
 mod steam_messages;
 #[cfg(feature = "steam")]
 #[path = "net/steam.rs"]
 mod steam_transport;
+#[cfg(feature = "steam")]
+pub use steam_client::{SteamClient, SteamLobbyId, SteamUserId};
 #[cfg(feature = "steam")]
 pub use steam_messages::{SteamLobby, SteamLobbyVisibility};
 #[cfg(feature = "steam")]
@@ -707,6 +716,7 @@ impl Net {
             return self.lose(e);
         }
         if !s.started {
+            s.transport.flush(now);
             return false;
         }
         self.state = NetState::Running;
@@ -720,6 +730,7 @@ impl Net {
             self.pending.clear();
         }
         s.flush(now, self.player, self.players);
+        s.transport.flush(now);
         if let Some(quiet) = s.silent_peer(now, self.timeout) {
             return self.lose(format!("player {quiet} stopped answering"));
         }
@@ -748,6 +759,7 @@ impl Net {
             return;
         }
         let check = Check::of(world, tick);
+        // Queued on a relay transport until the next tick's poll.
         s.send_check(&check);
         if self.desync.is_none() {
             self.desync = s.compare_stored(&check);
@@ -812,9 +824,11 @@ impl Net {
                 let addr = s.peers[i].addr;
                 s.send_simple(addr, BYE);
             }
+            s.transport.flush(now);
             return true;
         }
         s.flush(now, self.player, self.players);
+        s.transport.flush(now);
         false
     }
 }
@@ -1377,7 +1391,7 @@ trait Transport: Send {
     }
     /// The Steam client and lobby, for Steam sessions.
     #[cfg(feature = "steam")]
-    fn steam(&self) -> Option<(&steamworks::Client, Option<steamworks::LobbyId>)> {
+    fn steam(&self) -> Option<(&SteamClient, Option<SteamLobbyId>)> {
         None
     }
     /// Starts taking browser players over WebSocket on `addr` (hosts).
@@ -1390,6 +1404,17 @@ trait Transport: Send {
     }
     /// Where browser players connect, once [`accept_web`](Self::accept_web) ran.
     fn web_addr(&self) -> Option<SocketAddr> {
+        None
+    }
+    /// After the session's sends of one poll, at the session's `now`: for
+    /// transports that queue packets for a carrier of their own (the lobby
+    /// relay), which follows the session's clock.
+    fn flush(&mut self, now: Instant) {
+        let _ = now;
+    }
+    /// The lobby connection under a relay session.
+    #[cfg(feature = "lobby")]
+    fn lobby_mut(&mut self) -> Option<&mut lobby::LobbyClient> {
         None
     }
 }
@@ -1536,9 +1561,16 @@ impl Transport for Local {
     }
 }
 
-/// Steamworks SDK used by Steam transports.
+/// The `steamworks` crate behind the Steam transports, for the parts of Steam
+/// that Ponko doesn't wrap (feature `steam`).
+///
+/// **Unstable**: a Ponko release may move to another `steamworks` version,
+/// patch releases too, so code that names these types may stop compiling.
+/// Ponko's own Steam API ([`SteamClient`], [`SteamLobbyId`], [`SteamUserId`],
+/// [`SteamLobby`]) doesn't change with it. Reach the client underneath with
+/// [`SteamClient::unstable_steamworks`].
 #[cfg(feature = "steam")]
-pub use steamworks as steam;
+pub use steamworks as unstable_steamworks;
 
 #[cfg(test)]
 mod tests {

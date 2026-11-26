@@ -41,7 +41,7 @@ These failed on `de9557f5` and pass with the fix.
 | Check | What failed | Fix |
 |---|---|---|
 | `fmt`: Release scripts (`release-check.py selftest`) | `ponko_aseprite` and `ponko_lobby` had no `LICENSE-MIT`, `LICENSE-APACHE`, `NOTICE` | copies of the root files |
-| `fmt`: C ABI test coverage (`check-ffi-coverage.py`) | the maturity line of `web-threads.md` ("nightly Rust only") matched the Rust-only pattern | reworded |
+| `fmt`: C ABI test coverage (`check-ffi-coverage.py`) | the maturity line of `web-threads.md` ("nightly Rust only") matched the Rust-only pattern | reworded; fixed on `main` the same way meanwhile (#541) |
 | `api-snapshots` (`api-snapshots.py check`) | `World::insert_many`, `World::remove_many` missing; joystick items out of order | regenerated `api/` |
 | `test-features`: engine with every image format | `assets::group::tests::without_workers_other_assets_load_as_before` expected a GIF to be unsupported, which it is only without `image-gif` | the test expects `Decode` with the decoder, `Unsupported` without |
 | `docs`: every public feature | the step lacked `mods-wasm`, which docs.rs builds; the code-mod links in `ponko::mods` broke | `mods-wasm` added to the step |

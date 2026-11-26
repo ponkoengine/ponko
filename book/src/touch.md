@@ -122,7 +122,11 @@ is Coin Dash's set:
   so its buttons take taps (unless `over_screens(true)`); the first free
   finger presses UI buttons as the mouse does. A control that makes sense
   only on some screens is hidden with `ctx.input.set_touch_control_shown`: Coin
-  Dash shows its pause button only during a round.
+  Dash shows its pause button only during a round. It and
+  `touch_control_center` take the action's `ActionId` (no lookup, for a
+  system that runs every frame) or its name (C:
+  `ponko_ctx_set_touch_control_shown_id` and
+  `ponko_ctx_touch_control_center_id`; C++ takes a `ponko::action_id`).
 - **Assistive technology** sees each button as a button named by its label
   and each stick as a group named after its action, in the
   [accessibility tree](ui-accessibility.md).

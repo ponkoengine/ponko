@@ -46,21 +46,23 @@ pub fn build(ctx: &mut Ctx) {
 
 // ANCHOR: shop_events
 pub fn shop(ctx: &mut Ctx) {
-    // UI input and layout ran before this system. Nodes are found by name.
+    // UI input and layout ran before this system. Names are looked up only
+    // when something was clicked, not every frame.
     let ui = &mut ctx.ui;
-    let [title, buy, message, dialog] = ["title", "buy", "message", "dialog"].map(|name| ui.find(name).unwrap());
-    let clicked = ui.events().filter_map(UiEvent::clicked).last();
-    let clicked = clicked.and_then(|id| ui.name(id)).unwrap_or_default().to_owned();
-    if let Some(item) = clicked.strip_prefix("item.") {
-        ui.set_enabled(buy, true);
-        ui.set_text(buy, format!("Buy item {item}"));
-        ui.set_text(message, format!("Buy item {item}?"));
-    } else if clicked == "buy" {
-        ui.push_modal(dialog);
-    } else if clicked == "confirm" || clicked == "cancel" {
-        ui.pop_screen();
-        if clicked == "confirm" {
-            ui.set_text(title, "Purchase complete!");
+    if let Some(clicked) = ui.events().filter_map(UiEvent::clicked).last() {
+        let [title, buy, message, dialog] = ["title", "buy", "message", "dialog"].map(|n| ui.try_find(n).unwrap());
+        let clicked = ui.name(clicked).unwrap_or_default().to_owned();
+        if let Some(item) = clicked.strip_prefix("item.") {
+            ui.set_enabled(buy, true);
+            ui.set_text(buy, format!("Buy item {item}"));
+            ui.set_text(message, format!("Buy item {item}?"));
+        } else if clicked == "buy" {
+            ui.push_modal(dialog);
+        } else if clicked == "confirm" || clicked == "cancel" {
+            ui.pop_screen();
+            if clicked == "confirm" {
+                ui.set_text(title, "Purchase complete!");
+            }
         }
     }
     // Tab/arrows or d-pad navigate; Enter/South confirms; Escape/East

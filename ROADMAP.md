@@ -2,7 +2,7 @@
 
 Ponko aims to support complete 2D and 3D games through an integrated, high-performance, code-first engine with useful AI development tools. The direction is broad capability with low incidental complexity, preserving the custom archetype ECS, wgpu renderer, headless simulation and Rust/C++ workflows. See [PROJECT_VISION.md](PROJECT_VISION.md) and the current [ARCHITECTURE.md](ARCHITECTURE.md).
 
-This roadmap is directional. Ordering changes with correctness evidence, measurements and real developer needs; a release is defined by its scope, and any date here is a target. An issue describes intended work, not a delivery promise. P1 issues define a release; P2 issues ship when ready and otherwise move to the next one; P3 is research or lower-priority work that never holds a release and may end in rejection. [STABILITY.md](STABILITY.md#releases) says how releases are cut; the index issue (#433) lists every planned item.
+This roadmap is directional. Ordering changes with correctness evidence, measurements and real developer needs; a release is defined by its scope, and any date here is a target. An issue describes intended work, not a delivery promise. P1 issues define a release; P2 issues ship when ready and otherwise move to the next one; P3 is research or lower-priority work that never holds a release and may end in rejection. [STABILITY.md](STABILITY.md#releases) says how releases are cut; the index issue (#433) lists every planned item, and the [`0.2.0` milestone](https://github.com/ponkoengine/ponko/milestones) holds the live state.
 
 ## Current capability inventory
 
@@ -13,66 +13,96 @@ This roadmap is directional. Ordering changes with correctness evidence, measure
 | ECS and fixed-step simulation | Implemented | [ECS](crates/ponko_ecs/src), [game loop](src/game.rs), [determinism tests](tests/determinism.rs). Systems are sequential by default; view systems can opt into parallel batches ([schedule](src/schedule.rs)). |
 | World, scene and prefab management | Implemented | [scene.rs](src/scene.rs), [reflection](src/reflect.rs), [scene tests](tests/scenes.rs). [Ember Hop](examples/ember_hop) spawns its levels' objects as prefabs (one with children) and its title as a scene. Advanced world composition and complete service-state restoration need use-case validation. |
 | Asset importing and processing | Partial | [glTF](src/three/gltf.rs), [Unity tooling](crates/ponko_unity), [assets](src/assets.rs). Import support varies by format and feature; it is not source-engine runtime compatibility. |
-| Asset streaming and residency | Partial | [Job/CellStreamer](src/streaming.rs), [stream tests](tests/streaming.rs). Residency budgets for texture mips and meshes shipped in 0.1.0. Instance batches stream as a whole (#396); textures are uncompressed (#403). |
+| Asset streaming and residency | Partial | [Job/CellStreamer](src/streaming.rs), [stream tests](tests/streaming.rs). Residency budgets for texture mips and meshes shipped in 0.1.0. Instance batches stream by cell (#396) and textures can be GPU-compressed (#403). |
 | Meshes, materials, animation and skinning | Implemented | [mesh](src/three/mesh.rs), [clips](src/three/clip.rs), [animator](src/three/animator.rs), [skin](src/three/skin.rs), [morph tests](tests/morph3d.rs). Verify particular imported animation workflows; presence is not arbitrary asset parity. |
 | Terrain, vegetation, LOD and large worlds | Partial | [terrain](src/three/terrain.rs), [far terrain](src/three/far_terrain.rs), [instances](src/three/instances.rs), [LOD](src/three/lod.rs), [streaming example](examples/streaming.rs). Budgeted residency and broader incremental extraction remain work. |
 | Characters, collision, physics and navigation | Implemented | [physics3d](src/physics3d), [navigation](src/nav3d), [vehicle tests](tests/vehicle3d.rs), [navigation tests](tests/navmesh3d.rs). Features are optional; real game integration and target performance still need evidence. |
-| UI, text, actions and gamepads | Implemented | [retained UI](src/ui), [text](src/text.rs), [actions](src/actions.rs), [gamepads](src/gamepad.rs), [UI tests](tests/ui_retained.rs). Input backend and native API coverage vary by target. |
-| Accessibility | Requires verification | UI and input building blocks exist; no comprehensive assistive-technology, navigation or accessibility conformance claim is established here. Audit with a playable reference workflow before defining additions. |
+| UI, text, actions and gamepads | Implemented | [retained UI](src/ui), [text](src/text.rs), [actions](src/actions.rs), [gamepads](src/gamepad.rs), [UI tests](tests/ui_retained.rs). Input backend and native API coverage vary by target. Text shaping, right-to-left text, IME, localization and rich text (#409–#412) are in. |
+| Accessibility | Requires verification | UI and input building blocks exist, and screen readers are supported on macOS, Windows and Linux (#413); no comprehensive assistive-technology, navigation or accessibility conformance claim is established here, and the Windows and Linux readers need runs on real machines (#484). Audit with a playable reference workflow before defining additions. |
 | Audio and spatial audio | Implemented | [audio](src/audio.rs), [audio3d example](examples/audio3d.rs), [audio tests](tests/audio.rs). Live output/device behavior requires runtime checks. |
-| Multiplayer, synchronization and servers | Partial | [lockstep](src/net.rs), [snapshots](src/net/snapshots.rs), [messages](src/net/messages.rs), [replication tests](tests/net_replication.rs), headless runner. Live transport/relay behavior and a complete deployment/authority workflow require verification. |
+| Multiplayer, synchronization and servers | Partial | [lockstep](src/net.rs), [snapshots](src/net/snapshots.rs), [messages](src/net/messages.rs), [replication tests](tests/net_replication.rs), headless runner. Client prediction, rollback, browser multiplayer and dedicated servers shipped (#420–#424). Live transport/relay behavior, sessions over the relay (#486), Steam sockets (#477) and a complete deployment/authority workflow require verification on real networks (#484). |
 | Save/load and serialization | Implemented | [reflection](src/reflect.rs), [scenes](src/scene.rs), [stability contract](STABILITY.md). [Ember Hop](examples/ember_hop) saves and loads its runs as world save slots ([tests](tests/ember_hop.rs)). Applications own custom component migrations and external service persistence. |
-| GPU compute and custom graphics | Partial | [compute](src/three/compute.rs), [effects](src/three/effect.rs), [shader example](examples/shaders.rs). Named-stage custom passes shipped in 0.1.0. Stencil on materials (#397) and a custom sky hook (#398) are open. |
+| GPU compute and custom graphics | Partial | [compute](src/three/compute.rs), [effects](src/three/effect.rs), [shader example](examples/shaders.rs). Named-stage custom passes shipped in 0.1.0. Stencil state on materials (#397) and a custom sky hook (#398) are in. |
 | Build tooling, packaging and deployment | Partial | [Cargo manifest](Cargo.toml), [web tooling](web), [release steps](CONTRIBUTING.md#releasing). The release steps and scripts are not proof that a complete reference game has shipped through every path. |
-| Desktop and browser portability | Requires verification | Target-specific implementation and the [list of checks](scripts/checks.yml) exist; see [platform policy](STABILITY.md#platforms). Full visual/runtime parity and individual GPU feature fallbacks need adapter evidence; mobile is not a validated product commitment. |
+| Desktop and browser portability | Requires verification | Target-specific implementation and the [list of checks](scripts/checks.yml) exist; see [platform policy](STABILITY.md#platforms). Full visual/runtime parity and individual GPU feature fallbacks need adapter evidence. WebGPU on a real GPU and 3D on WebGL2 (#427), threads on the web (#425), HDR output (#429), Android (#475) and iOS (#476) are in 0.2.0's scope and are verified on devices by the maintainers; until a row of #484 is ticked, none of them is a validated commitment. |
 | Debugging, profiling and automated testing | Implemented | [tests](tests), [GPU tests](src/render), [performance reports](src/perf_report.rs), [inspector](src/inspector.rs). Broader reproducible matrices and diagnostics remain below. |
 | AI development and runtime control | Partial | [MCP](crates/ponko_mcp/src/lib.rs), [control](src/control.rs), [agent guide](book/src/agents.md): state, stepping, launch, screenshots, logs and profiling exist. Reliable autonomous complete-game production is not established. |
-| End-to-end shipping reference workflow | Partial | Two packaged, smoke-tested 2D reference games. [Coin Dash](examples/coin_dash): menus, rebinding, sound and its own saves ([packaging](book/src/packaging.md)). [Ember Hop](examples/ember_hop), a platformer: Tiled levels with autotiled ground and tile colliders, 2D physics with sensors as its rules, prefabs with children, a title scene, world save slots at checkpoints, sound files and streamed music, particles, a following camera, keyboard and gamepad ([its chapter](book/src/ember-hop.md)). Both are packaged by `ponko package`, and CI plays each package on Linux, macOS and Windows; both build for the web. [Shard Grove](examples/shard_grove), the 3D reference: a glTF level that is drawn, solid and baked into a navigation mesh, skinned glTF characters with animation state machines, a character controller, enemies on the navmesh, positional sound, menus, a world-space sign, quality presets and saves ([its chapter](book/src/shard-grove.md)); it packages and builds for the web, CI doesn't play its package yet. Open: the web gallery that publishes them (#373), the gaps the 3D reference found (#375), and the gaps the platformer found (#437–#440). |
+| End-to-end shipping reference workflow | Partial | Two packaged, smoke-tested 2D reference games. [Coin Dash](examples/coin_dash): menus, rebinding, sound and its own saves ([packaging](book/src/packaging.md)). [Ember Hop](examples/ember_hop), a platformer: Tiled levels with autotiled ground and tile colliders, 2D physics with sensors as its rules, prefabs with children, a title scene, world save slots at checkpoints, sound files and streamed music, particles, a following camera, keyboard and gamepad ([its chapter](book/src/ember-hop.md)). Both are packaged by `ponko package`, the list of checks plays each package, and both build for the web. [Shard Grove](examples/shard_grove), the 3D reference: a glTF level that is drawn, solid and baked into a navigation mesh, skinned glTF characters with animation state machines, a character controller, enemies on the navmesh, positional sound, menus, a world-space sign, quality presets and saves ([its chapter](book/src/shard-grove.md)); it packages and builds for the web; playing its package and recording its GPU baseline on each OS is #454. The web gallery that publishes the examples (#373), the 3D reference game (#375) and the gaps the platformer found (#437–#439) are closed; #440 (flipping sprites without a negative scale) is open. |
 
-## After 0.1.0
+## After 0.1.0: one release, 0.2.0
 
 0.1.0 closed the foundations backlog (#132 to #207): benchmarks and
 differential tests, the access-checked parallel scheduler, change detection,
 the renderer split into subsystems, incremental extraction, GPU tiers,
 residency budgets, custom passes, and the API reshaped around services and
 one prelude. What a review of 0.1.0 found missing is mostly what turns a
-game into a shipped product, and each release below is aimed at one such
-outcome. Each has a GitHub milestone with the live state.
+game into a shipped product.
 
-### 0.2.0: ship a small game
+That was first planned as four releases (0.2 for 2D, 0.3 for 3D and text,
+0.4 for multiplayer and platforms, and a "Later" list). On 2026-11-25 they
+were merged: **0.2.0 carries everything after 0.1.0 except the 1.0 freeze
+work.** A release candidate tests it as a whole, so what shipped in the
+middle of the plan is not left waiting for a second tag. Breaking changes are
+still allowed, each with its migration note, and 0.2.0 keeps the right to
+change the API: the freeze review comes after it.
+
+0.2.0 is meant to be a finished product, not a preview. Besides the scope
+below, the release is held to a bar (tracker #528): no open issue labelled
+`bug`; every check in [scripts/checks.yml](scripts/checks.yml) run and green
+on Windows, macOS and Linux; the numbers measured; the guide matching the
+crate; and the two 2D reference games, the 3D one, and localized text shown
+working from an empty project to a package and a web build. Tagging and
+publishing are done by a maintainer ([release steps](CONTRIBUTING.md#releasing)),
+and the mechanical cut is #474. Target: early 2027, when the scope is done.
+Each outcome below names its issues; the GitHub milestone has their state.
+
+### Ship a small game
 
 A complete 2D game goes from an empty project to a packaged download and a
-web build without engine-level code, and releases become routine. Target:
-early 2027.
+web build without engine-level code, and releases become routine.
 
 | Outcome | Issues |
 |---|---|
 | Start and learn | Project template and `new` command #371; 2D and 3D tutorials #372; a guide per release #246; web gallery #373 |
-| 2D essentials | Image formats #377; blend modes and sprite shaders #378; 2D particles #379; tilemap import, animation and colliders #381 |
-| Scenes and saves | Prefabs with children #367; user data folder, atomic saves, browser storage #365; pressed-this-frame input for rebinding #369 |
-| Test and ship | Headless UI and frame systems #370; `package` command #366; signed downloads #282; a second 2D reference game #374; agent acceptance suite #416; web audio #419 |
-| API | One path per type #383; `Ctx` shortcuts #384; typed handles, one type per handle kind (render targets, sprite shaders and materials included) #386; remaining C and C++ bindings #387; immediate UI scale and theme #414 |
+| 2D essentials | Image formats #377; blend modes and sprite shaders #378; 2D particles #379; tilemap import, animation and colliders #381; flipping sprites without a negative scale #440; 2D lights and shadows #380 |
+| Scenes and saves | Prefabs with children #367; user data folder, atomic saves, browser storage #365; pressed-this-frame input for rebinding #369; save migrations #368; a binary save format #430 |
+| Test and ship | Headless UI and frame systems #370; `package` command #366; signed downloads #282; a second 2D reference game #374; agent acceptance suite #416; web audio #419 and #458; soak runs of the reference games #509 |
+| API | One path per type #383; `Ctx` shortcuts #384; typed handles, one type per handle kind (render targets, sprite shaders and materials included) #386; remaining C and C++ bindings #387; immediate UI scale and theme #414; third-party types in the API #385; dependency-based system batches #388 |
 | Releases | Semver checks #355; API snapshots #356; trusted publishing #357; release candidates and patch branches #358; migration notes #359; dependency audit #360; benchmark tracking #361 |
 
-### 0.3.0: 3D production and text
+### 3D production and text
 
 A complete 3D game with imported content, text that can be localized, and
 scene editing in 3D.
 
 | Outcome | Issues |
 |---|---|
-| Content | Compressed textures #403; glTF extensions #404; asset packs #405; animation retargeting #408 |
-| Rendering | Motion vectors for animated meshes #391; and for custom vertex functions #392; GI coverage #394; stencil #397; custom sky #398; probe refresh #399; transparency and particles #400; post effects #401; instance batch streaming #396; GPU memory reports #393; 2D lighting #380 |
+| Content | Compressed textures #403; glTF extensions #404; asset packs #405; animation retargeting #408; Unity importer humanoid clips and cross-fade groups #431 |
+| Rendering | Motion vectors for animated meshes #391; and for custom vertex functions #392; GI coverage #394; stencil #397; custom sky #398; probe refresh #399; transparency and particles #400; post effects #401; instance batch streaming #396; GPU memory reports #393; contact-hardening soft shadows #402; screen-space reflections with cone blur, normal maps and transparents #395; GPU-driven skinned batches #406; skinned characters at the other engine's frame time #488 |
 | Text and UI | Shaping, fallback and right-to-left #409; IME #410; localization #411; rich text #412; screen readers on Windows and Linux #413 |
-| Tools | 3D scene editing #415; a 3D reference game #375; WebGPU checked on real GPUs #427 |
-| API and simulation | Third-party types in the API #385; dependency-based system batches #388; save migrations #368; navmesh carving #407 |
+| Tools | 3D scene editing #415; a 3D reference game #375, packaged and played with its GPU baseline recorded #454; WebGPU checked on a real GPU #427 |
+| Simulation | Navmesh carving #407 |
 
-### 0.4.0: multiplayer and platforms
+### Multiplayer and platforms
 
-Client prediction #420, rollback evaluation #421,
-multiplayer in the browser #422, Steam sockets #423,
-dedicated servers #424, threads on the web #425,
-the audio mixer #418, and the decision on iOS and Android #426.
+Prediction, browser multiplayer, servers, the mixer, and the platforms that
+are not desktop:
+
+- Client prediction #420, rollback evaluation #421, multiplayer in the
+  browser #422, Steam sockets #423 and the Networking Sockets backend #477,
+  dedicated servers #424, relay and WebRTC sessions, TURN on desktop and the
+  client's real address behind a proxy #486.
+- The audio mixer #418.
+- Threads on the web #425, HDR display output #429, inspecting and
+  controlling web builds #417, C and C++ games on the web #428, C library
+  downloads for Intel Mac, Linux arm64 and Windows arm64 #363, and a
+  reference game ported to C++ #376.
+- Android #475 and iOS #476: build, touch, lifecycle and packaging. The
+  evaluation #426 is closed.
+- The multiplayer lines of #484 (a browser joining a server, two machines with
+  a cable pulled, WebRTC across a real NAT, a Steam match between two
+  accounts) hold this release too. The maintainers run them on their own
+  devices and accounts.
 
 Rollback is decided: **shipped**. `ponko::net::Rollback` (input delay,
 prediction, re-simulation, packets over any transport, desync checks) runs
@@ -86,25 +116,36 @@ every tick, so about a thousand bodies fit a 60 Hz frame. The numbers and
 what is captured are in the guide's "Rollback" section
 (`book/src/networking.md`).
 
+### Research and lower-priority work, now in
+
+What was parked as "Later", and is now closed or in scope: fuzzing the loaders #362,
+2D skeletal animation #382 (evaluated), batched structural moves #349 and
+cached query columns #350, and the platform and rendering items listed above
+(#363, #376, #395, #402, #417, #429, #431, #440). P3 issues still never hold
+the release: one that is not done moves out of 0.2.0 in writing, in #528,
+with the reason. Signed downloads (#282) are the open case.
+
+### 0.3.0
+
+Removing what 0.2.0 deprecated (#485; 27 items are marked `since = "0.2.0"`).
+Nothing else is planned for 0.3.0 until 0.2.0 is out, so what a real game
+finds goes into its plan then.
+
 ### 1.0: the API freeze
 
-1.0 is declared when the readiness checklist #432 is complete, not
-on a date: the API has gone two minor releases with only mechanical breaks,
-reference games in 2D and 3D and games by other people have shipped on it,
-every named platform passes the list of checks, and the compatibility policy for after
-1.0 is written. Before it come the API freeze review #389 and the
-C ABI decision #390. The last 0.x release carries every remaining
-break; 1.0.0 breaks nothing.
+1.0 is declared when the readiness checklist is complete, not on a date: the
+API has gone two minor releases with only mechanical breaks, reference
+games in 2D and 3D and games by other people have shipped on it, every named
+platform passes the list of checks, and the compatibility policy for after
+1.0 is written. The work that stays out of 0.2.0, because 0.2.0 keeps the
+right to change the API: the C ABI decision #390, the second API freeze
+review #478, the compatibility policy after 1.0 #479 and the readiness
+checklist #480. The last 0.x release carries every remaining break; 1.0.0
+breaks nothing.
 
-### Later
+### Not scheduled
 
-Research and lower-priority work in the
-[Later milestone](https://github.com/ponkoengine/ponko/milestones) moves
-into a release when a real game needs it: fuzzing, more C library targets,
-2D skeletal animation, contact-hardening shadows, better screen-space
-reflections, skinned instance batches, a binary save format, C and C++ on
-the web, HDR output, web build inspection. Ray tracing and mesh shaders were
-evaluated for 0.1.0 and stay research.
+Ray tracing and mesh shaders were evaluated for 0.1.0 and stay research.
 
 VR and XR (#143) are decided: **later**, not a goal of any release yet.
 The renderer already draws two eyes as two views (shadows, skinning and

@@ -155,15 +155,16 @@ fn the_hero_runs_on_the_ground_and_faces_where_it_goes() {
     let at = hero_in(&mut world).expect("a hero");
     assert!(at.x > start.x + 50.0, "ran right: {start} -> {at}");
     assert!((at.y - start.y).abs() < 1.0, "stayed on the ground: {start} -> {at}");
-    let (player, scale) = world
-        .query::<(&Player, &Transform)>()
+    let (player, scale, flipped) = world
+        .query::<(&Player, &Transform, &Sprite)>()
         .iter()
-        .map(|(p, t)| (p.clone(), t.scale.x))
+        .map(|(p, t, s)| (p.clone(), t.scale.x, s.flip_x))
         .next()
         .unwrap();
     assert!(player.grounded);
     assert_eq!(player.facing, -1.0, "turned to run back left");
-    assert_eq!(scale, -1.0, "the sprite is mirrored");
+    assert!(flipped, "the sprite is mirrored");
+    assert_eq!(scale, 1.0, "with a flip, not a negative scale");
 }
 
 /// Highest point of a jump held for `hold` ticks, and where it landed.

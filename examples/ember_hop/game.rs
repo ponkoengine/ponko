@@ -461,8 +461,8 @@ pub fn touch_controls() -> ponko::ui::touch::TouchControls {
 pub fn read_input(ctx: &mut Ctx) {
     // Pause on the title would quit: the touch button is there in a run only.
     let in_run = matches!(screen(&ctx.world), Screen::Playing | Screen::Paused);
-    ctx.input.set_touch_control_shown("pause", in_run);
     let act = *ctx.world.resource::<Act>();
+    ctx.input.set_touch_control_shown(act.pause, in_run);
     let input = &ctx.input;
     let dpad =
         f32::from(u8::from(input.action_down(act.dpad_right))) - f32::from(u8::from(input.action_down(act.dpad_left)));
@@ -1051,8 +1051,9 @@ fn move_hero(ctx: &mut Ctx, hero: Entity, intent: &Intent, dt: f32) {
         vel.linear = v;
     }
     let facing = ctx.world.get::<Player>(hero).map_or(1.0, |p| p.facing);
-    if let Some(t) = ctx.world.get_mut::<Transform>(hero) {
-        t.scale.x = facing;
+    // Mirror the picture only: the trail and the collider stay as they are.
+    if let Some(sprite) = ctx.world.get_mut::<Sprite>(hero) {
+        sprite.flip_x = facing < 0.0;
     }
     if jumped {
         ctx.world.resource_mut::<Tally>().jumps += 1;
@@ -1123,7 +1124,10 @@ fn crawl_drips(ctx: &mut Ctx, dt: f32) {
         let step = drip.heading * drip.speed * dt;
         if let Some(t) = ctx.world.get_mut::<Transform>(e) {
             t.position.x += step;
-            t.scale.x = -drip.heading;
+        }
+        // The sheet faces left: mirror it when the drip walks right.
+        if let Some(sprite) = ctx.world.get_mut::<Sprite>(e) {
+            sprite.flip_x = drip.heading > 0.0;
         }
         ctx.world.insert(e, drip);
     }

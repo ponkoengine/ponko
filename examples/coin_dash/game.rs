@@ -374,10 +374,10 @@ pub fn bindings() -> ActionMap {
 /// Frame system: named actions to [`Intent`]. Runs once per rendered frame.
 pub fn read_input(ctx: &mut Ctx) {
     let on = screen(&ctx.world);
-    ctx.input
-        .set_touch_control_shown("pause", matches!(on, Screen::Playing | Screen::Paused));
-    ctx.input.set_touch_control_shown("settings", on == Screen::Title);
     let act = *ctx.world.resource::<Act>();
+    ctx.input
+        .set_touch_control_shown(act.pause, matches!(on, Screen::Playing | Screen::Paused));
+    ctx.input.set_touch_control_shown(act.settings, on == Screen::Title);
     let direction = ctx.input.action_axis2(act.movement);
     let confirm = ctx.input.action_pressed(act.confirm);
     let restart = ctx.input.action_pressed(act.restart);

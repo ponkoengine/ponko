@@ -87,7 +87,8 @@
 //!   (VoiceOver), Windows (UI Automation: Narrator, NVDA) and Linux (AT-SPI:
 //!   Orca). On the web it builds and does nothing. Needs `window`.
 //! - `steam`: lockstep and byte messages over Steam's relays and lobbies
-//!   (`Net::steam_host`), with the `steamworks` crate re-exported as `ponko::net::steam`.
+//!   (`Net::steam_host`, `net::SteamClient`); the raw `steamworks` crate is
+//!   `ponko::net::unstable_steamworks`, outside the versions.
 //! - `bench-internals`: **unstable** benchmark drivers for the engine's own
 //!   benchmark crate. Not part of the API; they change in any release.
 //!

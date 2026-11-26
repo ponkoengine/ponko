@@ -194,6 +194,11 @@ fn wgpu_own(report: &wgpu::AllocatorReport) -> (u64, usize) {
 /// target (3.5 MiB), so forgetting one fails.
 const REPORTED_SLACK: u64 = 3 << 20;
 
+/// Direct3D 12's placement alignment for a multisampled texture
+/// (`D3D12_DEFAULT_MSAA_RESOURCE_PLACEMENT_ALIGNMENT`): how far the
+/// allocator's placement of one can stray from a probe's.
+const D3D12_MSAA_PAGE: u64 = 4 << 20;
+
 /// The label of the textures [`placed_by_driver`] makes.
 const PROBE: &str = "gpu memory probe";
 
@@ -269,16 +274,25 @@ fn settled_adapter_bytes(device: &wgpu::Device) -> u64 {
 /// - wgpu's allocator (Direct3D 12, Vulkan): the report names each
 ///   allocation, so what wgpu makes for itself ([`wgpu_own`]) is taken
 ///   out, and the engine's resources are counted as the allocator places
-///   them: whole 64 KiB pages on Direct3D 12 ([`D3D12_PAGE`]), and a
-///   multisampled texture at the size the driver gives the same texture
-///   ([`placed_by_driver`]). The driver lays samples out in its own tiles:
-///   on the Windows runner's software adapter (WARP) a 4x 720p colour
-///   target takes 6 MiB more than its samples, and a 1x1 4x depth stand-in
-///   7.6 MiB; together about 17-21 MiB at every preset. What is left is
-///   small and fixed, so on a hardware adapter the two agree within
-///   [`REPORTED_SLACK`] as well as the 5% and 10%: a forgotten
-///   screen-sized target breaks it. A software adapter (WARP) places tiny
-///   multisampled textures erratically, so only the 5% and 10% hold there.
+///   them: buffers in whole 64 KiB pages on Direct3D 12 ([`D3D12_PAGE`]),
+///   and every texture at the size the allocator gives the same texture
+///   ([`placed_by_driver`]). Drivers lay textures out in their own tiles,
+///   with room for compression beside render targets and depth: on a
+///   Radeon RX Vega under Vulkan, counting texels alone left the count
+///   3.4 MB (Low) to 19 MB (Ultra) under the figure, and the probes bring
+///   it within 2.4 MB. On the Windows runner's software adapter (WARP) a 4x
+///   720p colour target takes 6 MiB more than its samples, and a 1x1 4x
+///   depth stand-in 7.6 MiB. What is left is small and fixed, so on a
+///   hardware adapter the two agree within [`REPORTED_SLACK`] as well as
+///   the 5% and 10%: a forgotten screen-sized target breaks it.
+/// - Direct3D 12 places multisampled textures in 4 MiB pages
+///   ([`D3D12_MSAA_PAGE`]) and not always the same way: a probe made like
+///   one can take a page more or less (on the Radeon under Direct3D 12 the
+///   1x1 4x depth stand-in took 7.3 MiB, its probe 4 MiB at Low and 7.7 MiB
+///   at High). So there each multisampled texture adds a page to the
+///   slack. Single-sampled textures and buffers place exactly as probed.
+///   A software adapter (WARP) places tiny multisampled textures
+///   erratically too, so only the 5% and 10% hold there.
 ///
 /// A resource the engine forgets to count (a missing 16 MB light atlas,
 /// a frame target) still breaks either comparison.
@@ -310,8 +324,10 @@ fn adapter_figure_child() {
         // What the draws dropped (the readback buffer) is freed by a poll.
         f.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         let t = tally(&f);
+        let mut multisampled = 0;
         let placed = t.placed_bytes(page, |t| {
-            (t.sample_count() > 1).then(|| placed_by_driver(&f.device, t)).flatten()
+            multisampled += u64::from(t.sample_count() > 1);
+            placed_by_driver(&f.device, t)
         });
         let m = t.finish();
         let raw = settled_adapter_bytes(&f.device);
@@ -330,7 +346,12 @@ fn adapter_figure_child() {
                 // erratically (a 1x1 4x depth stand-in takes 7.6 MiB on
                 // WARP, which a probe made the same way doesn't always
                 // reproduce): only the 5% and 10% bounds hold there.
-                let slack = (!f.software).then_some(REPORTED_SLACK);
+                let msaa = if f.backend == wgpu::Backend::Dx12 {
+                    multisampled * D3D12_MSAA_PAGE
+                } else {
+                    0
+                };
+                let slack = (!f.software).then_some(REPORTED_SLACK + msaa);
                 (placed, raw - own, slack)
             }
             None => (m.total, raw, None),

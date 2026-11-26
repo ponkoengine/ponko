@@ -324,6 +324,13 @@ impl Agent {
         .flatten()
     }
 
+    /// A failure of the agent's own (a desktop TURN allocation); a
+    /// browser reports none.
+    #[allow(clippy::unused_self)]
+    pub(in crate::net) fn take_error(&mut self) -> Option<String> {
+        None
+    }
+
     pub(in crate::net) fn take_signal(&mut self) -> Option<(u64, Signal)> {
         with(self.id, |s| s.signals.pop_front()).flatten()
     }

@@ -7,7 +7,9 @@ use glam::{Affine2, Vec2};
 use ponko_ecs::Component;
 
 use super::clip::{sample, sample_deform, step};
-use super::data::{Attachment, BonePose, Constraint, Named, SkeletonData, TransformConstraint, angle_delta};
+use super::data::{
+    Attachment, BonePose, ClipId, ClipRef, Constraint, Named, SkeletonData, TransformConstraint, angle_delta,
+};
 use super::graph::{SkeletonGraph, SkeletonMotion};
 use super::path::{PATH_VALUES, PathScratch};
 use super::physics::{PHYSICS_VALUES, Spring};
@@ -284,34 +286,60 @@ impl Skeleton {
         &self.data
     }
 
-    /// Plays clip `name` from its start, looping, cutting off what played.
+    /// The clip named `name` as a [`ClipId`] (see
+    /// [`SkeletonData::clip_id`]): resolve it once and pass the id to
+    /// [`play`](Self::play), [`play_once`](Self::play_once) and
+    /// [`crossfade`](Self::crossfade) every time after.
+    ///
+    /// # Errors
+    /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) for a name
+    /// no clip has; its message lists the clips.
+    pub fn clip_id(&self, name: &str) -> Result<ClipId, crate::error::Error> {
+        self.data.clip_id(name)
+    }
+
+    /// Plays a clip from its start, looping, cutting off what played.
     /// Returns `false` (and changes nothing) if there is no such clip.
     /// Takes effect at the next [`update`](Self::update).
-    pub fn play(&mut self, name: &str) -> bool {
-        self.crossfade(name, 0.0)
+    ///
+    /// `clip` is a [`ClipId`] from [`clip_id`](Self::clip_id) (no lookup:
+    /// the form for code that runs every frame) or the clip's name.
+    /// ```
+    /// use std::sync::Arc;
+    /// use ponko::skeleton2d::{Clip, Skeleton, SkeletonData};
+    /// let mut data = SkeletonData::new();
+    /// data.add_clip(Clip::new("walk", 1.0));
+    /// let mut s = Skeleton::new(Arc::new(data));
+    /// let walk = s.clip_id("walk").unwrap();
+    /// assert!(s.play(walk));
+    /// assert!(s.play("walk"));
+    /// assert!(!s.play("run"));
+    /// ```
+    pub fn play(&mut self, clip: impl ClipRef) -> bool {
+        self.crossfade(clip, 0.0)
     }
 
-    /// Plays clip `name` once from its start, then holds its last pose
-    /// ([`finished`](Self::finished) turns true).
-    pub fn play_once(&mut self, name: &str) -> bool {
-        self.command(name, 0.0, false)
+    /// Plays a clip ([`ClipId`] or name) once from its start, then holds
+    /// its last pose ([`finished`](Self::finished) turns true).
+    pub fn play_once(&mut self, clip: impl ClipRef) -> bool {
+        self.command(clip, 0.0, false)
     }
 
-    /// Fades from what plays now to clip `name` (looping) over `duration`
-    /// seconds. Returns `false` if there is no such clip.
+    /// Fades from what plays now to a clip ([`ClipId`] or name, looping)
+    /// over `duration` seconds. Returns `false` if there is no such clip.
     ///
     /// # Panics
     /// If `duration` is negative or not a number.
-    pub fn crossfade(&mut self, name: &str, duration: f32) -> bool {
-        self.command(name, duration, true)
+    pub fn crossfade(&mut self, clip: impl ClipRef, duration: f32) -> bool {
+        self.command(clip, duration, true)
     }
 
-    fn command(&mut self, name: &str, duration: f32, looping: bool) -> bool {
+    fn command(&mut self, clip: impl ClipRef, duration: f32, looping: bool) -> bool {
         assert!(
             duration.is_finite() && duration >= 0.0,
             "ponko: a crossfade's duration must be 0 or more"
         );
-        match self.data.clip(name) {
+        match clip.clip_index(&self.data) {
             Some(c) => {
                 self.pending = Some((Playing::Clip(c), duration, 0.0, looping));
                 true
@@ -449,6 +477,28 @@ impl Skeleton {
     #[must_use]
     pub fn parameter_id(&self, name: &str) -> Option<ParamId> {
         self.graph.as_ref()?.parameter(name)
+    }
+
+    /// [`parameter_id`](Self::parameter_id) for a name that must be there:
+    /// resolve it once (at setup) and keep the id for
+    /// [`set_float`](Self::set_float) and its kin.
+    ///
+    /// # Errors
+    /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) for a name
+    /// no parameter has (its message lists the parameters), or for a
+    /// skeleton without a state machine.
+    /// ```
+    /// use std::sync::Arc;
+    /// use ponko::skeleton2d::{Skeleton, SkeletonData};
+    /// let s = Skeleton::new(Arc::new(SkeletonData::new()));
+    /// let err = s.try_parameter_id("speed").unwrap_err();
+    /// assert_eq!(err.to_string(), r#"ponko: unknown animation parameter "speed" (there are no animation parameters)"#);
+    /// ```
+    pub fn try_parameter_id(&self, name: &str) -> Result<ParamId, crate::error::Error> {
+        match &self.graph {
+            Some(graph) => graph.try_parameter(name),
+            None => Err(crate::error::Error::unknown_name("animation parameter", name, [])),
+        }
     }
 
     /// A parameter's value, `None` for one that isn't there.

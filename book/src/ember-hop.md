@@ -170,8 +170,8 @@ cuts to it. The game has no camera system:
 The hero leaves a trail of embers, lit braziers burn, and sparks, flares,
 stomps and losses throw short bursts (`ParticleEmitter` with additive
 blending). Sprites animate from sprite sheets (`Animation`); the hero's sheet
-has idle, run, jump and fall frames, and it faces left with a negative
-x scale (#440). Sound
+has idle, run, jump and fall frames, and it turns around with
+`Sprite::flip_x`, which mirrors only the picture. Sound
 effects are WAV files loaded with `ctx.audio.load`; the music is an Ogg
 Vorbis loop streamed with `ctx.audio.load_stream`.
 
@@ -241,7 +241,6 @@ at the player's first click or key press ([Audio](audio.md#in-a-browser)).
 
 | Gap | Where it is tracked |
 |---|---|
-| Sprites have no flip; the hero uses a negative scale. | #440 |
 | Rust only; no C or C++ counterpart. | No native port planned yet |
 
 ## Assets and licenses

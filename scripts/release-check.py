@@ -35,6 +35,12 @@
   generates it with the fold), listed in book/src/SUMMARY.md and holding every
   breaking entry of the section. A candidate needs the same chapter, under
   the same name, as soon as its section lists a break (testers need it most);
+- the dependency lines the docs and the project templates tell people to write
+  (`ponko = "X.Y"` in getting-started.md, the two tutorials and
+  crates/ponko_cli/templates) name the tag's minor, so a release that is
+  published does not leave the guide pointing at the one before. The guide's
+  "which version" note needs no such step: it reads the root Cargo.toml and
+  changelog.d/ itself (scripts/guide-note.py);
 - every publishable crate under crates/ carries copies of the root
   LICENSE-MIT, LICENSE-APACHE and NOTICE (crates.io gets each crate's own
   folder), identical to the root ones; `selftest` checks this too;
@@ -73,7 +79,7 @@ def crates(root=ROOT):
     """(name, version, manifest dict) of every publishable crate of the workspace."""
     found = []
     for manifest in [root / "Cargo.toml", *sorted(root.glob("crates/*/Cargo.toml"))]:
-        data = tomllib.loads(manifest.read_text())
+        data = tomllib.loads(manifest.read_text(encoding='utf-8'))
         package = data.get("package")
         if package is None or package.get("publish") is False:
             continue
@@ -88,7 +94,7 @@ def license_problems(root=ROOT):
     """Publishable sub-crates whose license files are missing or differ from the root's."""
     out = []
     for manifest in sorted(root.glob("crates/*/Cargo.toml")):
-        package = tomllib.loads(manifest.read_text()).get("package")
+        package = tomllib.loads(manifest.read_text(encoding='utf-8')).get("package")
         if package is None or package.get("publish") is False:
             continue
         for name in LICENSE_FILES:
@@ -207,11 +213,38 @@ def migration_problems(version, section, chapter, summary):
     return out
 
 
-def problems(tag, crate_list, changelog_text, fragments, book=None):
+# Where the docs and templates write the engine's own version requirement.
+PIN_FILES = ("book/src/getting-started.md", "book/src/tutorial-2d.md", "book/src/tutorial-3d.md",
+             "crates/ponko_cli/templates/*/Cargo.toml.liquid")
+PIN = re.compile(r'^\s*ponko\s*=\s*(?:\{\s*version\s*=\s*)?"(\d+\.\d+)(?:\.\d+)?(?:-rc\.\d+)?"', re.M)
+
+
+def pin_problems(version, texts):
+    """Messages for each `ponko = "X.Y"` line in `texts` ({name: text}) that is not `version`'s minor."""
+    minor = ".".join(version.split("-")[0].split(".")[:2])
+    out = []
+    for name, text in sorted(texts.items()):
+        for found in PIN.finditer(text):
+            if found.group(1) != minor:
+                out.append(f'{name} tells people to depend on ponko "{found.group(1)}", not "{minor}"')
+    return out
+
+
+def pin_texts(root=ROOT):
+    """{name: text} of the files that carry the engine's version requirement."""
+    texts = {}
+    for pattern in PIN_FILES:
+        for path in sorted(root.glob(pattern)):
+            texts[str(path.relative_to(root))] = path.read_text(encoding='utf-8')
+    return texts
+
+
+def problems(tag, crate_list, changelog_text, fragments, book=None, pins=None):
     """What is wrong with releasing `tag`, as a list of messages (empty: fine).
 
     book: (the migration chapter's text or None, SUMMARY.md's text), or None
-    to skip the migration check.
+    to skip the migration check. pins: {name: text} of the files that carry
+    the engine's version requirement (`pin_texts()`), or None to skip that check.
     """
     found = TAG.match(tag)
     if not found:
@@ -247,6 +280,8 @@ def problems(tag, crate_list, changelog_text, fragments, book=None):
         out += migration_problems(version, section, *book)
     if not any(l.startswith("## [Unreleased]") for l in changelog_text.splitlines()):
         out.append("CHANGELOG.md lost its `## [Unreleased]` heading")
+    if pins is not None:
+        out += pin_problems(version, pins)
     if fragments:
         shown = ", ".join(sorted(fragments)[:3]) + (" ..." if len(fragments) > 3 else "")
         out.append(
@@ -262,7 +297,7 @@ def untagged(published, tags):
 
 
 def git(*args, repo=ROOT):
-    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
+    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, encoding='utf-8')
 
 
 def release_branch(version):
@@ -304,9 +339,9 @@ def check(tag, on_branch):
     book = None
     if found:
         chapter = ROOT / "book" / "src" / changelog.chapter_name(found.group(1))
-        book = (chapter.read_text() if chapter.is_file() else None,
-                (ROOT / "book" / "src" / "SUMMARY.md").read_text())
-    found = problems(tag, crates(), (ROOT / "CHANGELOG.md").read_text(), fragments, book) + license_problems()
+        book = (chapter.read_text(encoding='utf-8') if chapter.is_file() else None,
+                (ROOT / "book" / "src" / "SUMMARY.md").read_text(encoding='utf-8'))
+    found = problems(tag, crates(), (ROOT / "CHANGELOG.md").read_text(encoding='utf-8'), fragments, book, pin_texts()) + license_problems()
     if on_branch:
         found += branch_problems(tag)
     if found:
@@ -324,14 +359,14 @@ def notes(tag, out):
     if not found:
         sys.exit(f"`{tag}` is not {TAG_HELP}")
     version = found.group(1)
-    chosen = notes_section((ROOT / "CHANGELOG.md").read_text(), version)
+    chosen = notes_section((ROOT / "CHANGELOG.md").read_text(encoding='utf-8'), version)
     if chosen is None or not any(l.strip() for l in chosen[1]):
         sys.exit(f"CHANGELOG.md has no notes for {version}")
     text = (candidate_preamble(version) if is_candidate(version) else "") + release_notes(chosen[1])
     text += gallery_line(version) or ""
     if len(text) > MAX_NOTES:
         sys.exit(f"the notes for {version} have {len(text):,} characters; GitHub allows {MAX_NOTES:,}")
-    Path(out).write_text(text, encoding="utf-8")
+    Path(out).write_text(text, encoding="utf-8", newline='\n')
     print(f"wrote {out} ({len(text):,} characters)")
     return 0
 
@@ -552,15 +587,24 @@ def selftest():
     with tempfile.TemporaryDirectory(prefix="release-check-") as tmp:
         tmp = Path(tmp)
         (tmp / "crates" / "a").mkdir(parents=True)
-        (tmp / "crates" / "a" / "Cargo.toml").write_text('[package]\nname = "a"\nversion = "0.0.2"\n')
+        (tmp / "crates" / "a" / "Cargo.toml").write_text('[package]\nname = "a"\nversion = "0.0.2"\n', encoding='utf-8', newline='\n')
         for name in LICENSE_FILES:
-            (tmp / name).write_text(name)
-            (tmp / "crates" / "a" / name).write_text(name)
+            (tmp / name).write_text(name, encoding='utf-8', newline='\n')
+            (tmp / "crates" / "a" / name).write_text(name, encoding='utf-8', newline='\n')
         assert license_problems(tmp) == [], "identical copies pass"
-        (tmp / "crates" / "a" / "NOTICE").write_text("old")
+        (tmp / "crates" / "a" / "NOTICE").write_text("old", encoding='utf-8', newline='\n')
         assert "a/NOTICE differs" in license_problems(tmp)[0], "a stale copy is refused"
         (tmp / "crates" / "a" / "NOTICE").unlink()
         assert "a has no NOTICE" in license_problems(tmp)[0], "a missing copy is refused"
+    docs = {"a.md": 'ponko = "0.2"\n', "b.liquid": 'ponko = { version = "0.2", features = ["3d"] }\n',
+            "c.md": '    ponko = { version = "0.1" }\nserde = "0.1"\nponko_ecs = "0.1"\n'}
+    assert pin_problems("0.2.0", docs) == ['c.md tells people to depend on ponko "0.1", not "0.2"'], (
+        "only the engine's own line counts, and a stale minor is named")
+    assert pin_problems("0.2.0-rc.1", {"a.md": 'ponko = "0.2"\n'}) == [], "a candidate's pins are the minor too"
+    assert pin_problems("0.2.3", {"a.md": 'ponko = "0.2.1"\n'}) == [], "a full version of the minor is fine"
+    assert problems("v0.0.2", ok, log, [], None, {"a.md": 'ponko = "0.1"\n'}) == [
+        'a.md tells people to depend on ponko "0.1", not "0.0"'], "problems() runs the pin check"
+    assert len(pin_texts()) >= 5, "finds the real getting-started, tutorials and templates"
     real = license_problems()
     assert real == [], f"the sub-crates' license files: {real}"
     names = {n for n, _, _ in crates()}

@@ -197,6 +197,10 @@ pub(crate) struct Frame3D {
     /// Global illumination's probes and what they draw, when it's on (only
     /// the main frame has this).
     pub gi: Option<Box<super::gi::GiFrame>>,
+    /// Tests: what the probes' views leave out, as they did before they
+    /// saw it (for before/after images).
+    #[cfg(test)]
+    pub gi_leave_out: super::gi::GiLeaveOut,
     /// The meshes drawn with other materials than their own (a
     /// [`ModelMaterial`], [`ModelMaterials`] or both), each combination
     /// once, in the world's order. In `runs`, entry `k` is mesh id

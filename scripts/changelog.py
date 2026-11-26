@@ -203,9 +203,9 @@ def breaking_entries(name, sections):
 def parse(path, root=ROOT):
     """A fragment as [(heading, [lines])] with its breaking entries validated,
     or exits with a message."""
-    name = path.name if root is None else str(path.relative_to(root))
+    name = path.name if root is None else path.relative_to(root).as_posix()
     try:
-        sections = parse_text(name, path.read_text())
+        sections = parse_text(name, path.read_text(encoding='utf-8'))
         breaking_entries(name, sections)
     except FragmentError as error:
         sys.exit(str(error))
@@ -217,7 +217,7 @@ def has_breaking(path):
 
     Only the shape is read; `--check` is what validates the entries."""
     try:
-        return any(heading == BREAKING for heading, _ in parse_text(path.name, path.read_text()))
+        return any(heading == BREAKING for heading, _ in parse_text(path.name, path.read_text(encoding='utf-8')))
     except FragmentError as error:
         sys.exit(str(error))
 
@@ -381,8 +381,8 @@ def release(root, version, dry_run):
     files = fragment_files(root)
     parsed = []
     for path in files:
-        name = str(path.relative_to(root))
-        sections = parse_text(name, path.read_text())
+        name = path.relative_to(root).as_posix()
+        sections = parse_text(name, path.read_text(encoding='utf-8'))
         parsed.append((path, sections, breaking_entries(name, sections)))
     entries = [e for _, _, found in parsed for e in found]
     if entries:
@@ -394,7 +394,7 @@ def release(root, version, dry_run):
                                 '(STABILITY.md): release it as the next minor, or take the breaking '
                                 'fragments out')
     changelog = root / 'CHANGELOG.md'
-    lines = changelog.read_text().splitlines()
+    lines = changelog.read_text(encoding='utf-8').splitlines()
     start, end = unreleased_bounds(lines)
     body = lines[start + 1:end]
     for _, sections, _ in parsed:
@@ -413,17 +413,17 @@ def release(root, version, dry_run):
         book = root / 'book' / 'src'
         chapter = book / chapter_name(version)
         summary = book / 'SUMMARY.md'
-        text = (add_to_chapter(chapter.read_text(), entries) if chapter.exists()
+        text = (add_to_chapter(chapter.read_text(encoding='utf-8'), entries) if chapter.exists()
                 else chapter_text(version, entries))
-        new_summary = summary_with(summary.read_text(), version)
+        new_summary = summary_with(summary.read_text(encoding='utf-8'), version)
         out += ['', f'--- book/src/{chapter.name}', text.rstrip('\n'), '',
                 f'--- book/src/SUMMARY.md gets: - [{chapter_title(version)}]({chapter.name})']
         if not dry_run:
-            chapter.write_text(text)
-            summary.write_text(new_summary)
+            chapter.write_text(text, encoding='utf-8', newline='\n')
+            summary.write_text(new_summary, encoding='utf-8', newline='\n')
     if not dry_run:
         lines[start + 1:end] = body
-        changelog.write_text('\n'.join(lines) + '\n')
+        changelog.write_text('\n'.join(lines) + '\n', encoding='utf-8', newline='\n')
         for path in files:
             path.unlink()
     return out if dry_run else [f'Folded {len(files)} fragment(s) into CHANGELOG.md'
@@ -611,11 +611,11 @@ def selftest():
         tmp = Path(tmp)
         (tmp / 'changelog.d').mkdir()
         (tmp / 'book' / 'src').mkdir(parents=True)
-        (tmp / 'book' / 'src' / 'SUMMARY.md').write_text(book)
-        (tmp / 'CHANGELOG.md').write_text('# Changelog\n\n## [Unreleased]\n\n## [0.1.0] - x\n- old\n')
-        (tmp / 'changelog.d' / '1-break.md').write_text(GOOD)
-        (tmp / 'changelog.d' / '2-fix.md').write_text('### Fixed\n- A fix.\n')
-        (tmp / 'changelog.d' / 'README.md').write_text('not a fragment')
+        (tmp / 'book' / 'src' / 'SUMMARY.md').write_text(book, encoding='utf-8', newline='\n')
+        (tmp / 'CHANGELOG.md').write_text('# Changelog\n\n## [Unreleased]\n\n## [0.1.0] - x\n- old\n', encoding='utf-8', newline='\n')
+        (tmp / 'changelog.d' / '1-break.md').write_text(GOOD, encoding='utf-8', newline='\n')
+        (tmp / 'changelog.d' / '2-fix.md').write_text('### Fixed\n- A fix.\n', encoding='utf-8', newline='\n')
+        (tmp / 'changelog.d' / 'README.md').write_text('not a fragment', encoding='utf-8', newline='\n')
         try:
             release(tmp, None, True)
             raise AssertionError('a break needs --version')
@@ -631,17 +631,17 @@ def selftest():
             'a dry run changes nothing'
         assert not (tmp / 'book' / 'src' / 'migrating-to-0.2.md').exists()
         release(tmp, '0.2.0', False)
-        log = (tmp / 'CHANGELOG.md').read_text()
+        log = (tmp / 'CHANGELOG.md').read_text(encoding='utf-8')
         assert log.index('### Breaking changes') < log.index('### Fixed') < log.index('## [0.1.0]')
         assert '- `Qux` is gone.\n  Instead: use `Quux`.' in log and 'quux();' not in log
-        written = (tmp / 'book' / 'src' / 'migrating-to-0.2.md').read_text()
+        written = (tmp / 'book' / 'src' / 'migrating-to-0.2.md').read_text(encoding='utf-8')
         assert '```c\nquux();\n```' in written
-        assert '(migrating-to-0.2.md)' in (tmp / 'book' / 'src' / 'SUMMARY.md').read_text()
+        assert '(migrating-to-0.2.md)' in (tmp / 'book' / 'src' / 'SUMMARY.md').read_text(encoding='utf-8')
         assert [p.name for p in fragment_files(tmp)] == [], 'the fragments are deleted'
         # A fragment without breaks needs no version and writes no chapter.
-        (tmp / 'changelog.d' / '3-add.md').write_text('### Added\n- More.\n')
+        (tmp / 'changelog.d' / '3-add.md').write_text('### Added\n- More.\n', encoding='utf-8', newline='\n')
         release(tmp, None, False)
-        assert '- More.' in (tmp / 'CHANGELOG.md').read_text()
+        assert '- More.' in (tmp / 'CHANGELOG.md').read_text(encoding='utf-8')
     # The fragments of this repository are valid.
     for path in fragment_files():
         parse(path)

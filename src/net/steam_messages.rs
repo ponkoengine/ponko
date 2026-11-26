@@ -4,24 +4,24 @@ use std::io;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
+use steamworks::LobbyType;
 use steamworks::networking_types::{NetworkingIdentity, SendFlags};
-use steamworks::{Client, LobbyId, LobbyType, SteamId};
 
 use super::messages::PacketTransport;
 use super::steam_transport::{HOST, addr, steam_id};
-use super::{NetMessages, PeerId};
+use super::{NetMessages, PeerId, SteamClient, SteamLobbyId, SteamUserId};
 
 const CHANNEL: u32 = 12701; // independent of lockstep's channel zero
 const PACKET_LIMIT: usize = 1500; // renet's MTU plus our session envelope
 const PROTOCOL: &str = "ponko-messages-2";
 #[derive(Default)]
 struct LobbyResult {
-    result: Option<Result<LobbyId, String>>,
+    result: Option<Result<SteamLobbyId, String>>,
     cancelled: bool,
 }
 type Pending = Arc<Mutex<LobbyResult>>;
 
-fn complete(pending: &Pending, value: Result<LobbyId, String>, leave: impl FnOnce(LobbyId)) {
+fn complete(pending: &Pending, value: Result<SteamLobbyId, String>, leave: impl FnOnce(SteamLobbyId)) {
     let mut pending = pending.lock().expect("lobby result");
     if pending.cancelled {
         if let Ok(id) = value {
@@ -46,22 +46,22 @@ pub enum SteamLobbyVisibility {
     Private,
 }
 
-// No SDK initialization happens here: the application supplies a Client.
+// No SDK initialization happens here: the application supplies a SteamClient.
 // The same boundary covers lobby callbacks and packet I/O in fake tests.
 trait SteamApi: Send + Sync {
     fn pump(&self);
     fn create(&self, visibility: SteamLobbyVisibility, max: u32, result: Pending);
-    fn join(&self, lobby: LobbyId, result: Pending);
-    fn leave(&self, lobby: LobbyId);
-    fn owner(&self, lobby: LobbyId) -> SteamId;
-    fn members(&self, lobby: LobbyId) -> Vec<SteamId>;
-    fn metadata(&self, lobby: LobbyId, key: &str) -> Option<String>;
-    fn set_metadata(&self, lobby: LobbyId, key: &str, value: &str) -> bool;
-    fn invite(&self, lobby: LobbyId);
-    fn send(&self, peer: SteamId, bytes: &[u8]) -> io::Result<()>;
-    fn receive(&self) -> Vec<(SteamId, Vec<u8>)>;
+    fn join(&self, lobby: SteamLobbyId, result: Pending);
+    fn leave(&self, lobby: SteamLobbyId);
+    fn owner(&self, lobby: SteamLobbyId) -> SteamUserId;
+    fn members(&self, lobby: SteamLobbyId) -> Vec<SteamUserId>;
+    fn metadata(&self, lobby: SteamLobbyId, key: &str) -> Option<String>;
+    fn set_metadata(&self, lobby: SteamLobbyId, key: &str, value: &str) -> bool;
+    fn invite(&self, lobby: SteamLobbyId);
+    fn send(&self, peer: SteamUserId, bytes: &[u8]) -> io::Result<()>;
+    fn receive(&self) -> Vec<(SteamUserId, Vec<u8>)>;
 }
-struct Real(Client);
+struct Real(SteamClient);
 impl SteamApi for Real {
     fn pump(&self) {
         self.0.run_callbacks();
@@ -72,56 +72,77 @@ impl SteamApi for Real {
             SteamLobbyVisibility::Public => LobbyType::Public,
             SteamLobbyVisibility::Private => LobbyType::Private,
         };
-        let client = self.0.clone();
-        self.0.matchmaking().create_lobby(kind, max, move |r| {
-            complete(&result, r.map_err(|e| e.to_string()), |id| {
-                client.matchmaking().leave_lobby(id)
-            });
+        let client = self.0.inner.clone();
+        self.0.inner.matchmaking().create_lobby(kind, max, move |r| {
+            complete(
+                &result,
+                r.map(SteamLobbyId::from_unstable).map_err(|e| e.to_string()),
+                |id| client.matchmaking().leave_lobby(id.to_unstable()),
+            );
         });
     }
-    fn join(&self, lobby: LobbyId, result: Pending) {
-        let client = self.0.clone();
-        self.0.matchmaking().join_lobby(lobby, move |r| {
-            complete(&result, r.map_err(|()| "Steam lobby join failed".into()), |id| {
-                client.matchmaking().leave_lobby(id)
-            });
+    fn join(&self, lobby: SteamLobbyId, result: Pending) {
+        let client = self.0.inner.clone();
+        self.0.inner.matchmaking().join_lobby(lobby.to_unstable(), move |r| {
+            complete(
+                &result,
+                r.map(SteamLobbyId::from_unstable)
+                    .map_err(|()| "Steam lobby join failed".into()),
+                |id| client.matchmaking().leave_lobby(id.to_unstable()),
+            );
         });
     }
-    fn leave(&self, lobby: LobbyId) {
-        self.0.matchmaking().leave_lobby(lobby);
+    fn leave(&self, lobby: SteamLobbyId) {
+        self.0.inner.matchmaking().leave_lobby(lobby.to_unstable());
     }
-    fn owner(&self, lobby: LobbyId) -> SteamId {
-        self.0.matchmaking().lobby_owner(lobby)
+    fn owner(&self, lobby: SteamLobbyId) -> SteamUserId {
+        SteamUserId::from_unstable(self.0.inner.matchmaking().lobby_owner(lobby.to_unstable()))
     }
-    fn members(&self, lobby: LobbyId) -> Vec<SteamId> {
-        self.0.matchmaking().lobby_members(lobby)
-    }
-    fn metadata(&self, lobby: LobbyId, key: &str) -> Option<String> {
-        self.0.matchmaking().lobby_data(lobby, key)
-    }
-    fn set_metadata(&self, lobby: LobbyId, key: &str, value: &str) -> bool {
-        self.0.matchmaking().set_lobby_data(lobby, key, value)
-    }
-    fn invite(&self, lobby: LobbyId) {
-        self.0.friends().activate_invite_dialog(lobby);
-    }
-    fn send(&self, peer: SteamId, bytes: &[u8]) -> io::Result<()> {
+    fn members(&self, lobby: SteamLobbyId) -> Vec<SteamUserId> {
         self.0
+            .inner
+            .matchmaking()
+            .lobby_members(lobby.to_unstable())
+            .into_iter()
+            .map(SteamUserId::from_unstable)
+            .collect()
+    }
+    fn metadata(&self, lobby: SteamLobbyId, key: &str) -> Option<String> {
+        self.0.inner.matchmaking().lobby_data(lobby.to_unstable(), key)
+    }
+    fn set_metadata(&self, lobby: SteamLobbyId, key: &str, value: &str) -> bool {
+        self.0
+            .inner
+            .matchmaking()
+            .set_lobby_data(lobby.to_unstable(), key, value)
+    }
+    fn invite(&self, lobby: SteamLobbyId) {
+        self.0.inner.friends().activate_invite_dialog(lobby.to_unstable());
+    }
+    fn send(&self, peer: SteamUserId, bytes: &[u8]) -> io::Result<()> {
+        self.0
+            .inner
             .networking_messages()
             .send_message_to_user(
-                NetworkingIdentity::new_steam_id(peer),
+                NetworkingIdentity::new_steam_id(peer.to_unstable()),
                 SendFlags::UNRELIABLE_NO_NAGLE | SendFlags::AUTO_RESTART_BROKEN_SESSION,
                 bytes,
                 CHANNEL,
             )
             .map_err(|e| io::Error::other(format!("Steam send: {e}")))
     }
-    fn receive(&self) -> Vec<(SteamId, Vec<u8>)> {
+    fn receive(&self) -> Vec<(SteamUserId, Vec<u8>)> {
         self.0
+            .inner
             .networking_messages()
             .receive_messages_on_channel(CHANNEL, 256)
             .into_iter()
-            .filter_map(|m| Some((m.identity_peer().steam_id()?, m.data().to_vec())))
+            .filter_map(|m| {
+                Some((
+                    SteamUserId::from_unstable(m.identity_peer().steam_id()?),
+                    m.data().to_vec(),
+                ))
+            })
             .collect()
     }
 }
@@ -131,7 +152,7 @@ impl SteamApi for Real {
 /// Metadata is cached by Steam; remote changes become visible after callbacks.
 /// ```no_run
 /// use ponko::prelude::*;
-/// let client = steamworks::Client::init_app(480).unwrap();
+/// let client = ponko::net::SteamClient::init_app(480).unwrap();
 /// let mut lobby = ponko::net::SteamLobby::create(&client, ponko::net::SteamLobbyVisibility::FriendsOnly, 4).unwrap();
 /// lobby.poll().unwrap();
 /// if lobby.id().is_some() { lobby.set_metadata("version", "1").unwrap(); }
@@ -142,7 +163,7 @@ pub struct SteamLobby {
     left: bool,
 }
 impl SteamLobby {
-    fn start(api: Arc<dyn SteamApi>, join: Option<LobbyId>, visibility: SteamLobbyVisibility, max: u32) -> Self {
+    fn start(api: Arc<dyn SteamApi>, join: Option<SteamLobbyId>, visibility: SteamLobbyVisibility, max: u32) -> Self {
         let pending = Pending::default();
         if let Some(id) = join {
             api.join(id, pending.clone());
@@ -164,11 +185,11 @@ impl SteamLobby {
     ///
     /// ```no_run
     /// # use ponko::prelude::*;
-    /// # let client = steamworks::Client::init_app(480).unwrap();
+    /// # let client = ponko::net::SteamClient::init_app(480).unwrap();
     /// let lobby = ponko::net::SteamLobby::create(&client, ponko::net::SteamLobbyVisibility::Private, 2)?;
     /// # Ok::<(), std::io::Error>(())
     /// ```
-    pub fn create(client: &Client, visibility: SteamLobbyVisibility, max_members: u32) -> io::Result<Self> {
+    pub fn create(client: &SteamClient, visibility: SteamLobbyVisibility, max_members: u32) -> io::Result<Self> {
         if !(1..=250).contains(&max_members) {
             return Err(input("max_members must be 1..=250"));
         }
@@ -188,11 +209,11 @@ impl SteamLobby {
     ///
     /// ```no_run
     /// # use ponko::prelude::*;
-    /// # let client = steamworks::Client::init_app(480).unwrap();
-    /// let lobby = ponko::net::SteamLobby::join(&client, steamworks::LobbyId::from_raw(1))?;
+    /// # let client = ponko::net::SteamClient::init_app(480).unwrap();
+    /// let lobby = ponko::net::SteamLobby::join(&client, ponko::net::SteamLobbyId::from_raw(1))?;
     /// # Ok::<(), std::io::Error>(())
     /// ```
-    pub fn join(client: &Client, id: LobbyId) -> io::Result<Self> {
+    pub fn join(client: &SteamClient, id: SteamLobbyId) -> io::Result<Self> {
         if id.raw() == 0 {
             return Err(input("lobby id is zero"));
         }
@@ -223,7 +244,7 @@ impl SteamLobby {
     /// ```no_run
     /// # fn f(lobby: &ponko::net::SteamLobby) { let _ = lobby.id(); }
     /// ```
-    pub fn id(&self) -> Option<LobbyId> {
+    pub fn id(&self) -> Option<SteamLobbyId> {
         if self.left {
             return None;
         }
@@ -236,7 +257,7 @@ impl SteamLobby {
             .ok()
             .copied()
     }
-    fn ready(&self) -> io::Result<LobbyId> {
+    fn ready(&self) -> io::Result<SteamLobbyId> {
         self.id()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "lobby is not ready"))
     }
@@ -244,7 +265,7 @@ impl SteamLobby {
     /// ```no_run
     /// # fn f(lobby: &ponko::net::SteamLobby) { let _ = lobby.members(); }
     /// ```
-    pub fn members(&self) -> Vec<SteamId> {
+    pub fn members(&self) -> Vec<SteamUserId> {
         self.id().map_or_else(Vec::new, |id| self.api.members(id))
     }
     /// Read cached lobby metadata; missing keys return `None`.
@@ -339,8 +360,8 @@ fn input(s: &str) -> io::Error {
 struct Relay {
     lobby: SteamLobby,
     hosting: bool,
-    owner: Option<SteamId>,
-    inbox: VecDeque<(SteamId, Vec<u8>)>,
+    owner: Option<SteamUserId>,
+    inbox: VecDeque<(SteamUserId, Vec<u8>)>,
     published: bool,
 }
 impl Relay {
@@ -421,12 +442,12 @@ impl NetMessages {
     ///
     /// ```no_run
     /// # use ponko::prelude::*;
-    /// let client = steamworks::Client::init_app(480).unwrap();
+    /// let client = ponko::net::SteamClient::init_app(480).unwrap();
     /// let mut host = ponko::net::NetMessages::steam_host(&client, 3)?;
     /// host.poll()?;
     /// # Ok::<(), std::io::Error>(())
     /// ```
-    pub fn steam_host(client: &Client, max_clients: usize) -> io::Result<Self> {
+    pub fn steam_host(client: &SteamClient, max_clients: usize) -> io::Result<Self> {
         if !(1..=249).contains(&max_clients) {
             return Err(input("max_clients must be 1..=249"));
         }
@@ -442,17 +463,17 @@ impl NetMessages {
     ///
     /// ```no_run
     /// # use ponko::prelude::*;
-    /// # let client = steamworks::Client::init_app(480).unwrap();
-    /// let net = ponko::net::NetMessages::steam_join(&client, steamworks::LobbyId::from_raw(1))?;
+    /// # let client = ponko::net::SteamClient::init_app(480).unwrap();
+    /// let net = ponko::net::NetMessages::steam_join(&client, ponko::net::SteamLobbyId::from_raw(1))?;
     /// # Ok::<(), std::io::Error>(())
     /// ```
-    pub fn steam_join(client: &Client, lobby: LobbyId) -> io::Result<Self> {
+    pub fn steam_join(client: &SteamClient, lobby: SteamLobbyId) -> io::Result<Self> {
         Ok(Self::steam_endpoint(client, SteamLobby::join(client, lobby)?, false, 1))
     }
-    fn steam_endpoint(client: &Client, lobby: SteamLobby, hosting: bool, max: usize) -> Self {
+    fn steam_endpoint(client: &SteamClient, lobby: SteamLobby, hosting: bool, max: usize) -> Self {
         // Steam authenticates identities. Session membership and the normal
         // message handshake govern delivery; receiving also filters members.
-        client.networking_messages().session_request_callback(|r| {
+        client.inner.networking_messages().session_request_callback(|r| {
             r.accept();
         });
         Self::transported(
@@ -474,7 +495,7 @@ impl NetMessages {
     /// # use ponko::prelude::*;
     /// assert!(ponko::net::NetMessages::loopback(2)[0].steam_peer(ponko::net::PeerId::HOST).is_none());
     /// ```
-    pub fn steam_peer(&self, peer: PeerId) -> Option<SteamId> {
+    pub fn steam_peer(&self, peer: PeerId) -> Option<SteamUserId> {
         self.transport_peer_addr(peer).and_then(|a| {
             if a == HOST {
                 let lobby = self.steam_lobby()?;
@@ -506,7 +527,7 @@ mod tests {
     #[derive(Default)]
     struct State {
         rooms: BTreeMap<u64, Room>,
-        packets: BTreeMap<u64, VecDeque<(SteamId, Vec<u8>)>>,
+        packets: BTreeMap<u64, VecDeque<(SteamUserId, Vec<u8>)>>,
         invites: usize,
         largest: usize,
     }
@@ -527,9 +548,9 @@ mod tests {
                     ..Room::default()
                 },
             );
-            complete(&result, Ok(LobbyId::from_raw(self.me)), |id| self.leave(id));
+            complete(&result, Ok(SteamLobbyId::from_raw(self.me)), |id| self.leave(id));
         }
-        fn join(&self, lobby: LobbyId, result: Pending) {
+        fn join(&self, lobby: SteamLobbyId, result: Pending) {
             let mut s = self.state.lock().unwrap();
             let r = match s.rooms.get_mut(&lobby.raw()) {
                 Some(r) if r.members.len() < r.max as usize => {
@@ -541,28 +562,28 @@ mod tests {
             drop(s);
             complete(&result, r, |id| self.leave(id));
         }
-        fn leave(&self, lobby: LobbyId) {
+        fn leave(&self, lobby: SteamLobbyId) {
             if let Some(r) = self.state.lock().unwrap().rooms.get_mut(&lobby.raw()) {
                 r.members.retain(|&p| p != self.me);
             }
         }
-        fn owner(&self, lobby: LobbyId) -> SteamId {
-            SteamId::from_raw(self.state.lock().unwrap().rooms[&lobby.raw()].owner)
+        fn owner(&self, lobby: SteamLobbyId) -> SteamUserId {
+            SteamUserId::from_raw(self.state.lock().unwrap().rooms[&lobby.raw()].owner)
         }
-        fn members(&self, lobby: LobbyId) -> Vec<SteamId> {
+        fn members(&self, lobby: SteamLobbyId) -> Vec<SteamUserId> {
             self.state.lock().unwrap().rooms[&lobby.raw()]
                 .members
                 .iter()
-                .map(|&p| SteamId::from_raw(p))
+                .map(|&p| SteamUserId::from_raw(p))
                 .collect()
         }
-        fn metadata(&self, lobby: LobbyId, key: &str) -> Option<String> {
+        fn metadata(&self, lobby: SteamLobbyId, key: &str) -> Option<String> {
             self.state.lock().unwrap().rooms[&lobby.raw()]
                 .metadata
                 .get(key)
                 .cloned()
         }
-        fn set_metadata(&self, lobby: LobbyId, key: &str, value: &str) -> bool {
+        fn set_metadata(&self, lobby: SteamLobbyId, key: &str, value: &str) -> bool {
             let mut s = self.state.lock().unwrap();
             let r = s.rooms.get_mut(&lobby.raw()).unwrap();
             if r.owner != self.me {
@@ -571,19 +592,19 @@ mod tests {
             r.metadata.insert(key.into(), value.into());
             true
         }
-        fn invite(&self, _: LobbyId) {
+        fn invite(&self, _: SteamLobbyId) {
             self.state.lock().unwrap().invites += 1;
         }
-        fn send(&self, peer: SteamId, bytes: &[u8]) -> io::Result<()> {
+        fn send(&self, peer: SteamUserId, bytes: &[u8]) -> io::Result<()> {
             let mut s = self.state.lock().unwrap();
             s.largest = s.largest.max(bytes.len());
             s.packets
                 .entry(peer.raw())
                 .or_default()
-                .push_back((SteamId::from_raw(self.me), bytes.to_vec()));
+                .push_back((SteamUserId::from_raw(self.me), bytes.to_vec()));
             Ok(())
         }
-        fn receive(&self) -> Vec<(SteamId, Vec<u8>)> {
+        fn receive(&self) -> Vec<(SteamUserId, Vec<u8>)> {
             let mut s = self.state.lock().unwrap();
             let q = s.packets.entry(self.me).or_default();
             // Deliberate reordering, still bounded like the SDK batch.
@@ -602,7 +623,7 @@ mod tests {
             .map(|me| {
                 let lobby = SteamLobby::start(
                     api(&s, me as u64),
-                    if me == 1 { None } else { Some(LobbyId::from_raw(1)) },
+                    if me == 1 { None } else { Some(SteamLobbyId::from_raw(1)) },
                     SteamLobbyVisibility::FriendsOnly,
                     players as u32,
                 );
@@ -761,7 +782,7 @@ mod tests {
             .packets
             .entry(1)
             .or_default()
-            .push_back((SteamId::from_raw(99), hello));
+            .push_back((SteamUserId::from_raw(99), hello));
         poll(&mut nets, 1);
         assert!(nets[0].events().next().is_none());
         s.lock()
