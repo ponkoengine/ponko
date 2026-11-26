@@ -273,6 +273,69 @@ and the request's params and returns the answer. `methods` and
 tool calls them. Names are `namespace.method`, and the engine's
 namespaces are taken ([Plugins for other crates](plugins.md#control-methods)).
 
+## Developer console
+
+Register the game's commands with `Game::console_command` and typed variables
+with `Game::console_variable`. Commands receive the running `Ctx` and a slice
+of checked arguments. They return output text or an engine error. Each entry
+has a help line and a unique name. Names use lowercase ASCII letters, digits,
+underscores and dot-separated segments, such as `paths.show`. The name
+`help` is reserved. See the [developer console recipe](cookbook/menus.md#add-a-developer-console).
+
+Press **Backquote** to open or close the console, or pick another physical key
+with `Game::console_key`. Type `help` for the list or `help name` for one entry.
+Use Enter to submit, Tab to complete a name, Up and Down to recall past commands,
+and the mouse wheel or Page Up and Page Down to scroll the output. Escape
+closes the console. The console uses a modal retained screen. Systems that
+read gameplay input can check `ctx.ui.wants_keyboard()` and
+`ctx.ui.wants_pointer()` before acting on it.
+
+Arguments are positional. Separate them with whitespace, enclose text in
+single or double quotes to include spaces, and use a backslash to escape the
+next character. For example, `give "red gem" 2` passes a text value and an
+integer. Integers are signed 64-bit values, floats are finite 64-bit numbers,
+and booleans accept `true` and `false`. Enter a variable's name to read it or
+follow it with a value to assign it. Systems can read the typed value with
+`Ctx::console_value`, including its default when the console is disabled.
+Values live for the current game run.
+
+The console starts closed. Registering an entry enables it in debug builds.
+Release builds require `Game::developer_console(true)`. Use
+`Game::developer_console(false)` to disable it in any build.
+
+### Headless runs and tools
+
+Call `Ctx::run_console("help")` or pass a command line during a headless run.
+When the [control endpoint](#turning-it-on) is open, the same registry is
+available over native and browser control.
+
+| Method | Params | Result |
+|---|---|---|
+| `debug.console.help` | none | `{ "help": "..." }` with the signatures and help lines |
+| `debug.console.run` | `line` (string) | `{ "output": "..." }`, or a control error |
+
+In MCP, call `console_help` for signatures and `run_console` with a `line`.
+A read-only MCP server offers help and refuses execution. Console commands
+can mutate the game between frames or ticks, so register them for trusted
+developer builds. Enabling the console leaves control transport opt-in.
+
+### C and C++
+
+The C builder uses `ponko_game_developer_console`, `ponko_game_console_key`,
+`ponko_game_console_command` and `ponko_game_console_variable`. A command's
+callback receives a slice of `PonkoConsoleValue` with a type tag on each value.
+The context, argument array, any text bytes and the reply slot are borrowed
+for that call. Reply with `ponko_console_reply_text`, which copies the bytes.
+Read a variable with `ponko_ctx_console_value`, which lends a copy to a
+callback. The C++ builder exposes the same operations and its
+`ponko::console_value` is a variant of text, integer, float and bool.
+
+Direct execution from a running `Ctx` with `Ctx::run_console` is Rust-only.
+Executing a command through a borrowed native context would call back into
+native code while the outer context remains borrowed, which the C context
+API does not support. The overlay and the control endpoint both dispatch
+native commands through the engine.
+
 ## Capabilities
 
 `capabilities` answers, without changing anything, what this running build

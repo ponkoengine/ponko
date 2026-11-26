@@ -509,6 +509,7 @@ binding arrives:
 
 | Rust feature | Where | From C and C++ |
 |---|---|---|
+| `Ctx::run_console` | [Developer console](control.md#c-and-c) | The retained console and the control endpoint run registered native commands outside a borrowed native context |
 | `Assets::scene_asset_field` | [Asset sources](asset-sources.md) | C components have no text fields to name an asset in; load what a scene needs before `load_scene` |
 | `Assets::image_limit_sources` | [Image size limits](security.md#tighter-limits-for-a-source-you-dont-trust) | C and C++ read the limits of a source whose id they know (`ponko_ctx_source_image_limits`); the control endpoint's `assets.image_limits` lists every source that has limits |
 | `PackSource` | [Asset sources](asset-sources.md#packs) | C and C++ games read the default `assets.pack` like Rust games; a pack of their own can be read through `ponko_ctx_add_asset_source` |

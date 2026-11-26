@@ -38,6 +38,7 @@
 #include <typeindex>
 #include <unordered_map>
 #include <utility>
+#include <variant>
 #include <vector>
 
 // ---- math on the C types (global, so it works without `using namespace`) ----
@@ -6973,6 +6974,44 @@ struct day_night : PonkoDayNight {
     float moon_phase() const { float p = 0; detail::check(ponko_day_night_moon_phase(this, &p)); return p; }
 };
 
+/// A named, required developer console argument.
+using console_arg = PonkoConsoleArg;
+/// The typed value of a developer console argument or variable.
+using console_value = std::variant<std::string, std::int64_t, double, bool>;
+
+namespace detail {
+inline console_value console_from_c(const PonkoConsoleValue& value) {
+    switch (value.kind) {
+    case PONKO_CONSOLE_TEXT: return std::string(value.text, value.text_len);
+    case PONKO_CONSOLE_INTEGER: return value.integer;
+    case PONKO_CONSOLE_FLOAT: return value.number;
+    case PONKO_CONSOLE_BOOL: return value.flag;
+    default: throw std::invalid_argument("unknown console value type");
+    }
+}
+inline PonkoConsoleValue console_to_c(const console_value& value) {
+    PonkoConsoleValue raw{};
+    std::visit([&](const auto& v) {
+        using T = std::decay_t<decltype(v)>;
+        if constexpr (std::is_same_v<T, std::string>) {
+            raw.kind = PONKO_CONSOLE_TEXT;
+            raw.text = v.data();
+            raw.text_len = v.size();
+        } else if constexpr (std::is_same_v<T, std::int64_t>) {
+            raw.kind = PONKO_CONSOLE_INTEGER;
+            raw.integer = v;
+        } else if constexpr (std::is_same_v<T, double>) {
+            raw.kind = PONKO_CONSOLE_FLOAT;
+            raw.number = v;
+        } else {
+            raw.kind = PONKO_CONSOLE_BOOL;
+            raw.flag = v;
+        }
+    }, value);
+    return raw;
+}
+} // namespace detail
+
 /// What a system gets (Rust `Ctx`): the world, time, input, randomness, drawing, audio, physics and the other
 /// engine services. Valid only during the call; don't keep it. Calls throw ponko::error when the engine
 /// reports a failure.
@@ -8305,6 +8344,23 @@ public:
         detail::check(ponko_ctx_camera_target(raw_, &e, &found));
         if (!found) return std::nullopt;
         return e;
+    }
+    /// A registered developer variable's current typed value.
+    std::optional<ponko::console_value> console_value(const char* name) const {
+        struct result {
+            std::optional<ponko::console_value> value;
+            std::exception_ptr error;
+        } out;
+        const auto status = ponko_ctx_console_value(raw_, name,
+            [](const PonkoConsoleValue* value, void* user) noexcept {
+                auto& out = *static_cast<result*>(user);
+                try { out.value = detail::console_from_c(*value); }
+                catch (...) { out.error = std::current_exception(); }
+            }, &out);
+        if (status == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(status);
+        if (out.error) std::rethrow_exception(out.error);
+        return std::move(out.value);
     }
     /// The authenticated control endpoint's loopback port, when enabled.
     std::optional<std::uint16_t> control_port() const {
@@ -11480,6 +11536,31 @@ class game {
     std::vector<std::unique_ptr<control_holder>> control_methods_;
     std::unique_ptr<std::function<void(const crash_report&)>> crash_hook_;
 
+    struct console_holder {
+        std::function<std::string(ctx&, const std::vector<console_value>&)> fn;
+        shared_state* st;
+    };
+    std::vector<std::unique_ptr<console_holder>> console_commands_;
+
+    static void console_trampoline(PonkoCtx* raw, const PonkoConsoleValue* args, std::size_t count,
+                                   PonkoConsoleReply* reply, void* user) noexcept {
+        auto& h = *static_cast<console_holder*>(user);
+        try {
+            std::vector<console_value> values;
+            values.reserve(count);
+            for (std::size_t i = 0; i < count; ++i) values.push_back(detail::console_from_c(args[i]));
+            ctx c(raw, h.st->owner);
+            const auto answer = h.fn(c, values);
+            c.run_after_system();
+            detail::check(ponko_console_reply_text(reply, answer.data(), answer.size(), false));
+        } catch (const std::exception& e) {
+            (void)ponko_console_reply_text(reply, e.what(), std::strlen(e.what()), true);
+        } catch (...) {
+            constexpr std::string_view error = "native console command threw an exception";
+            (void)ponko_console_reply_text(reply, error.data(), error.size(), true);
+        }
+    }
+
     static void control_trampoline(PonkoCtx* raw, const char* params, PonkoControlReply* reply, void* user) noexcept {
         auto& h = *static_cast<control_holder*>(user);
         try {
@@ -11620,6 +11701,25 @@ public:
         const auto status = ponko_game_control_method(raw_, name, about, control_trampoline, control_methods_.back().get());
         if (status != PONKO_OK) control_methods_.pop_back();
         return check(status);
+    }
+    /// Enables the developer console in any build, or disables it.
+    game& developer_console(bool on) { return check(ponko_game_developer_console(raw_, on)); }
+    /// Chooses the physical key that opens and closes the console.
+    game& console_key(key k) { return check(ponko_game_console_key(raw_, k)); }
+    /// Registers a command with required typed arguments. Its return value or
+    /// exception message is shown in the console or sent to the control client.
+    game& console_command(const char* name, const char* help, std::initializer_list<console_arg> args,
+                          std::function<std::string(ctx&, const std::vector<console_value>&)> command) {
+        console_commands_.push_back(std::make_unique<console_holder>(console_holder{std::move(command), state_.get()}));
+        const auto status = ponko_game_console_command(raw_, name, help, args.begin(), args.size(),
+                                                       console_trampoline, console_commands_.back().get());
+        if (status != PONKO_OK) console_commands_.pop_back();
+        return check(status);
+    }
+    /// Registers a variable. Its initial value fixes its type.
+    game& console_variable(const char* name, const char* help, const console_value& initial) {
+        const auto raw = detail::console_to_c(initial);
+        return check(ponko_game_console_variable(raw_, name, help, &raw));
     }
     /// Registers a named debug toggle and its initial value.
     game& debug_toggle(const char* name, bool on) { return check(ponko_game_debug_toggle(raw_, name, on)); }
