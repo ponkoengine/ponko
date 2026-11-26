@@ -481,6 +481,12 @@ fn hits_near(area: HitArea, at: vec2<f32>) -> vec2<f32> {
     return vec4<f32>(0.0, 0.0, 1.0, spread);
 }
 
+// With a slot for the spread image: the first level only says that the
+// reflections are there, drawn once (see `SsrTargets::unmarked`).
+@fragment fn fs_first_mark(in: Full) -> @location(0) vec4<f32> {
+    return vec4<f32>(0.0, 0.0, 1.0, 0.0);
+}
+
 // This frame's opaque image, for the next frame's reflections.
 @fragment fn fs_copy(in: Full) -> @location(0) vec4<f32> {
     return textureLoad(image, vec2<i32>(in.at.xy), 0);
