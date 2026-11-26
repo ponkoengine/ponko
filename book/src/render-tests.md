@@ -51,7 +51,36 @@ There are two kinds of skip:
 | A capability is missing | The adapter (or the forced tier) has no compute shaders, too few texture slots, no 2x multisampling | It stays a skip: some adapters really lack the feature. The fallback has its own test |
 
 Set `PONKO_REQUIRE_GPU=1` on any machine that has a GPU, so that a broken
-driver or a missing adapter can't pass silently.
+driver or a missing adapter can't pass silently. Without it, a test that
+finds no adapter or device still fails once an earlier test of the same
+test process opened one: the GPU was there, so the device was lost on the
+way (a removed or reset device can take the adapter with it for a while),
+and a skip would hide the tests that never drew. Every skip, of either
+kind, is also appended to `target/render-test-output/skips.log`, so a run
+can count them whatever the test runner shows:
+
+```sh
+grep -c "no GPU" target/render-test-output/skips.log
+```
+
+### How many at once
+
+Each test that opens a device takes one of a few places, and gives it back
+when it ends; a test that wants one while all are taken waits.
+Tests that need no GPU run beside them on the runner's other threads. One
+device per test thread was too many for some drivers: on a Radeon RX Vega
+two at once already lost the device under Vulkan, and every test on it
+then failed with errors that looked like unrelated bugs (`BufferAsyncError`
+on readback, a buffer "is invalid", `DXGI_ERROR_DEVICE_REMOVED`). The
+default is one at a time; `PONKO_GPU_TESTS_AT_ONCE=<n>` allows more on a
+GPU that copes:
+
+```sh
+PONKO_GPU_TESTS_AT_ONCE=4 cargo test -p ponko --lib --features 3d render_test
+```
+
+The places are counted in one test process. A runner that starts a process
+per test (`cargo nextest`) limits GPU tests with its own `--test-threads`.
 
 ### GPU tiers
 
@@ -310,6 +339,7 @@ and why"). Read a failure by its kind:
 | A tier comparison ("the opaque scene on the webgl2 tier against the desktop device") | A fallback path draws something else than the main path | A regression in the fallback |
 | `the GPU reported errors` from `stage.finish()` | A validation error: a binding, format or limit the device rejects | A regression, usually on a lower tier. The message is wgpu's |
 | `no GPU adapter ..., and PONKO_REQUIRE_GPU is set` | The machine was expected to have a GPU and doesn't | Fix the runner or driver, not the test |
+| `no GPU adapter ...` or `no GPU device ...`, `and an earlier test of this run opened one` | The device was lost during the run | Look at the first test that failed with `BufferAsyncError`, an invalid resource or a removed device; run with fewer `PONKO_GPU_TESTS_AT_ONCE` |
 | Only under `PONKO_GPU_TIER=webgl2` or `baseline` | The lower tier's path is broken or the test assumes a feature | Guard the test with `needs`, or fix the fallback |
 
 When you report a failure from hardware the maintainers don't have, include

@@ -17,7 +17,13 @@
 //!
 //!   Set `PONKO_REQUIRE_GPU=1` on a machine (or CI runner) that has a GPU to
 //!   turn a missing adapter or device into a failure instead of a skip.
-//!   Capability skips stay skips: some adapters really lack a feature.
+//!   Without it, a missing adapter or device still fails once another test
+//!   of the process opened a device (it was lost, see [`no_gpu`]). Capability
+//!   skips stay skips: some adapters really lack a feature. Every skip is
+//!   also appended to `skips.log` in [`output_dir`], for a run to count.
+//! - **Devices at once.** Tests hold at most `PONKO_GPU_TESTS_AT_ONCE`
+//!   devices at once (default one; see [`at_once`]): more lose the device
+//!   on some drivers.
 //! - **GPU tiers.** Set `PONKO_GPU_TIER` to `webgl2` or `baseline` to run
 //!   every suite on a device opened with that tier's limits and without
 //!   timestamp queries ([`forced`]; `desktop` runs as usual), as CI does
@@ -161,18 +167,158 @@ fn env_set(name: &str) -> bool {
 }
 
 /// Logs that the running test skips because the adapter can't do something
-/// it needs. The caller returns early.
+/// it needs, and appends the line to `skips.log` in [`output_dir`], so a run
+/// can count its skips whatever the runner shows. The caller returns early.
 pub(super) fn skip(reason: impl std::fmt::Display) {
-    eprintln!("render test SKIPPED [{}]: {reason}", test_name());
+    let line = format!("render test SKIPPED [{}]: {reason}", test_name());
+    eprintln!("{line}");
+    append(&output_dir(), "skips.log", &line);
 }
 
-/// A missing adapter or device: a skip, or a failure under `PONKO_REQUIRE_GPU`.
+/// Appends `line` to `file` in `output`, or says why it couldn't.
+fn append(output: &std::path::Path, file: &str, line: &str) {
+    use std::io::Write;
+    let written = std::fs::create_dir_all(output).and_then(|()| {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(output.join(file))
+            .and_then(|mut log| writeln!(log, "{line}"))
+    });
+    if let Err(e) = written {
+        eprintln!("(not logged in {}: {e})", output.display());
+    }
+}
+
+/// Set once a test in this process has opened a device: from then on the
+/// GPU is known to be there, so a test that finds none lost it (a removed
+/// or reset device can take the adapter with it for a while) and fails.
+static OPENED_A_DEVICE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// What a test that gets no adapter or device does.
+#[derive(Debug, PartialEq, Eq)]
+enum NoGpu {
+    Skip,
+    /// Fails, with why the GPU was expected.
+    Fail(&'static str),
+}
+
+fn no_gpu_outcome(required: bool, opened_before: bool) -> NoGpu {
+    if required {
+        NoGpu::Fail("PONKO_REQUIRE_GPU is set")
+    } else if opened_before {
+        NoGpu::Fail(
+            "an earlier test of this run opened one, so the device was lost on the way (see \"How many at once\" in \
+             book/src/render-tests.md about PONKO_GPU_TESTS_AT_ONCE)",
+        )
+    } else {
+        NoGpu::Skip
+    }
+}
+
+/// A missing adapter or device: a skip on a machine without a GPU; a
+/// failure under `PONKO_REQUIRE_GPU`, or once another test of this run has
+/// opened a device (the device was lost, and a skip would pass silently).
 /// Every suite reports a failed adapter or device request through this.
 pub(super) fn no_gpu(reason: impl std::fmt::Display) {
-    if env_set("PONKO_REQUIRE_GPU") {
-        panic!("{reason}, and PONKO_REQUIRE_GPU is set");
+    let opened = OPENED_A_DEVICE.load(std::sync::atomic::Ordering::Relaxed);
+    match no_gpu_outcome(env_set("PONKO_REQUIRE_GPU"), opened) {
+        NoGpu::Fail(why) => panic!("{reason}, and {why}"),
+        NoGpu::Skip => skip(reason),
     }
-    skip(reason);
+}
+
+/// How many tests may hold a GPU device at once in this process.
+///
+/// One device per test thread exhausts some drivers: on a Radeon RX Vega
+/// the Vulkan and Direct3D 12 drivers lost the device, and every test on it
+/// then failed with errors that looked like unrelated bugs. A test takes a
+/// place when it first opens a device and gives it back when its thread
+/// ends, so a test that opens several devices, or hands one to a renderer,
+/// counts once. `PONKO_GPU_TESTS_AT_ONCE=<n>` sets the number; the default
+/// is [`DEFAULT_AT_ONCE`]. Tests that need no GPU still run beside them on
+/// the runner's other threads.
+mod at_once {
+    use std::sync::{Condvar, Mutex, PoisonError};
+    use std::time::Duration;
+
+    /// A counting semaphore.
+    pub(super) struct Limiter {
+        held: Mutex<usize>,
+        freed: Condvar,
+    }
+
+    /// A place taken from a [`Limiter`], given back on drop.
+    pub(super) struct Place(&'static Limiter);
+
+    impl Limiter {
+        pub(super) const fn new() -> Self {
+            Self {
+                held: Mutex::new(0),
+                freed: Condvar::new(),
+            }
+        }
+
+        /// Waits for one of `limit` places. After `patience` it takes one
+        /// anyway and says so: a test that waits on itself (a device opened
+        /// on a thread it spawned) runs late instead of hanging.
+        pub(super) fn take(&'static self, limit: usize, patience: Duration) -> Place {
+            let held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+            let (mut held, waited) = self
+                .freed
+                .wait_timeout_while(held, patience, |held| *held >= limit.max(1))
+                .unwrap_or_else(PoisonError::into_inner);
+            if waited.timed_out() {
+                eprintln!(
+                    "render test [{}] waited {patience:?} for one of {limit} GPU places; opening a device anyway",
+                    super::test_name()
+                );
+            }
+            *held += 1;
+            Place(self)
+        }
+
+        pub(super) fn held(&self) -> usize {
+            *self.held.lock().unwrap_or_else(PoisonError::into_inner)
+        }
+    }
+
+    impl Drop for Place {
+        fn drop(&mut self) {
+            *self.0.held.lock().unwrap_or_else(PoisonError::into_inner) -= 1;
+            self.0.freed.notify_one();
+        }
+    }
+
+    /// One at a time. Two at once already lost the device on a Radeon RX
+    /// Vega under Vulkan (`crowd_render_test`), and the suites spend most of
+    /// their time waiting for the GPU, so more buy little.
+    pub(super) const DEFAULT_AT_ONCE: usize = 1;
+
+    pub(super) fn limit() -> usize {
+        std::env::var("PONKO_GPU_TESTS_AT_ONCE")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(DEFAULT_AT_ONCE)
+    }
+
+    pub(super) static PROCESS: Limiter = Limiter::new();
+
+    thread_local! {
+        static HELD: std::cell::RefCell<Option<Place>> = const { std::cell::RefCell::new(None) };
+    }
+
+    /// Takes this test thread's place in `limiter`, unless it holds one
+    /// already. The place is given back when the thread ends.
+    pub(super) fn enter(limiter: &'static Limiter, limit: usize, patience: Duration) {
+        let _ = HELD.try_with(|held| {
+            let mut held = held.borrow_mut();
+            if held.is_none() {
+                *held = Some(limiter.take(limit, patience));
+            }
+        });
+    }
 }
 
 /// The tier `PONKO_GPU_TIER` forces on the suites, if any.
@@ -240,6 +386,7 @@ pub(super) fn gpu_adjusted(
     describe: impl FnOnce(&wgpu::Adapter) -> Result<wgpu::DeviceDescriptor<'static>, String>,
     adjust: impl FnOnce(&mut wgpu::DeviceDescriptor<'static>),
 ) -> Option<TestGpu> {
+    at_once::enter(&at_once::PROCESS, at_once::limit(), std::time::Duration::from_secs(300));
     // Like the engine's own instance, it follows wgpu's environment
     // variables: `WGPU_BACKEND=dx12` (or `vulkan`, `metal`, `gl`) picks the
     // backend, `WGPU_VALIDATION_INDIRECT_CALL=0` and the like set its flags.
@@ -271,6 +418,7 @@ pub(super) fn gpu_adjusted(
     if info.backend == wgpu::Backend::Dx12 {
         kept::keep(&device, &queue);
     }
+    OPENED_A_DEVICE.store(true, std::sync::atomic::Ordering::Relaxed);
     match forced_tier() {
         Some(tier) => eprintln!(
             "render test ran [{}] on {} as the {tier} tier",
@@ -554,18 +702,8 @@ pub(super) fn diff_within(a: &Image, b: &Image, tolerance: Tolerance) -> Diff {
 /// runners hide what a passing test prints, and the margins a comparison
 /// passed with are what a first run on other hardware is read for.
 pub(super) fn record(output: &std::path::Path, line: &str) {
-    use std::io::Write;
     eprintln!("{line}");
-    let written = std::fs::create_dir_all(output).and_then(|()| {
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(output.join("comparisons.log"))
-            .and_then(|mut log| writeln!(log, "[{}] {line}", test_name()))
-    });
-    if let Err(e) = written {
-        eprintln!("(not logged in {}: {e})", output.display());
-    }
+    append(output, "comparisons.log", &format!("[{}] {line}", test_name()));
 }
 
 /// A reference image's metadata, stored next to it as `<name>.json`.
@@ -1037,6 +1175,82 @@ fn a_test_thread_that_panics_is_marked_so_its_devices_are_left_alive() {
     .unwrap();
     assert_eq!(marked, (false, true), "unmarked before, marked after the panic");
     assert!(!kept::panicked(), "other threads stay unmarked");
+}
+
+#[test]
+fn a_test_without_a_device_fails_once_the_run_has_opened_one_or_one_is_required() {
+    assert_eq!(no_gpu_outcome(false, false), NoGpu::Skip, "a machine without a GPU skips");
+    assert!(
+        matches!(no_gpu_outcome(false, true), NoGpu::Fail(why) if why.contains("lost")),
+        "a device lost mid-run fails instead of passing silently"
+    );
+    assert!(matches!(no_gpu_outcome(true, false), NoGpu::Fail(why) if why.contains("PONKO_REQUIRE_GPU")));
+    assert!(matches!(no_gpu_outcome(true, true), NoGpu::Fail(_)));
+}
+
+#[test]
+fn every_skip_is_appended_to_the_log_a_run_counts() {
+    let output = std::env::temp_dir().join(format!("ponko-skips-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&output);
+    append(&output, "skips.log", "render test SKIPPED [a]: no GPU adapter");
+    append(&output, "skips.log", "render test SKIPPED [b]: needs Compute");
+    let log = std::fs::read_to_string(output.join("skips.log")).unwrap();
+    assert_eq!(log.lines().filter(|l| l.starts_with("render test SKIPPED [")).count(), 2, "{log}");
+    let _ = std::fs::remove_dir_all(&output);
+}
+
+#[test]
+fn no_more_tests_than_the_limit_hold_a_device_at_once() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+    static LIMITER: at_once::Limiter = at_once::Limiter::new();
+    static INSIDE: AtomicUsize = AtomicUsize::new(0);
+    static MOST: AtomicUsize = AtomicUsize::new(0);
+    let threads: Vec<_> = (0..8)
+        .map(|_| {
+            std::thread::spawn(|| {
+                for _ in 0..5 {
+                    let _place = LIMITER.take(2, Duration::from_secs(60));
+                    let now = INSIDE.fetch_add(1, Ordering::SeqCst) + 1;
+                    MOST.fetch_max(now, Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(2));
+                    INSIDE.fetch_sub(1, Ordering::SeqCst);
+                }
+            })
+        })
+        .collect();
+    for t in threads {
+        t.join().unwrap();
+    }
+    assert!(MOST.load(Ordering::SeqCst) <= 2, "eight threads, two places: at most two at once");
+    assert_eq!(LIMITER.held(), 0, "every place is given back");
+}
+
+#[test]
+fn a_test_threads_place_is_given_back_when_its_thread_ends() {
+    use std::time::Duration;
+    static LIMITER: at_once::Limiter = at_once::Limiter::new();
+    std::thread::spawn(|| {
+        at_once::enter(&LIMITER, 1, Duration::from_secs(60));
+        at_once::enter(&LIMITER, 1, Duration::from_secs(60)); // a second device: no second place
+        assert_eq!(LIMITER.held(), 1, "one place per test");
+    })
+    .join()
+    .unwrap();
+    assert_eq!(LIMITER.held(), 0, "the ended thread gave its place back");
+}
+
+#[test]
+fn a_test_that_waits_on_itself_opens_late_instead_of_hanging() {
+    use std::time::{Duration, Instant};
+    static LIMITER: at_once::Limiter = at_once::Limiter::new();
+    let first = LIMITER.take(1, Duration::from_secs(60));
+    let started = Instant::now();
+    let second = LIMITER.take(1, Duration::from_millis(50));
+    assert!(started.elapsed() >= Duration::from_millis(50), "it waited its patience out first");
+    assert_eq!(LIMITER.held(), 2);
+    drop((first, second));
+    assert_eq!(LIMITER.held(), 0);
 }
 
 /// A 4x4 grey image, and what a workflow test checks references with.

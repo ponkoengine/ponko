@@ -625,8 +625,13 @@ pub(crate) fn describe_frames(left: &Left) -> String {
 #[cfg(any(unix, windows))]
 fn resolve_here(address: usize) -> Vec<Symbol> {
     let mut found = Vec::new();
-    // `resolve` takes a return address and looks one byte back itself.
-    backtrace::resolve(address.wrapping_add(1) as *mut std::ffi::c_void, |symbol| {
+    // `resolve` takes a return address and looks one byte back itself. On
+    // Windows it looks back twice for an address (backtrace 0.3.77's dbghelp
+    // path subtracts one in `address_or_ip` and again in
+    // `resolve_with_inline`), so a function's first byte was looked up in
+    // the padding before it and named the nearest preceding symbol.
+    let back = if cfg!(windows) { 2 } else { 1 };
+    backtrace::resolve(address.wrapping_add(back) as *mut std::ffi::c_void, |symbol| {
         let name = symbol.name().map(|n| format!("{n:#}")).unwrap_or_default();
         let file = symbol.filename().map(|f| f.display().to_string());
         if !name.is_empty() || file.is_some() {
