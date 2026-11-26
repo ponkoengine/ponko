@@ -522,7 +522,7 @@ mod tests {
         );
         let named_program = program.to_string_lossy().into_owned();
         let env = |k: &str| (k == "BUNDLETOOL").then(|| named_program.clone());
-        assert_eq!(bundletool(&env).unwrap(), [program.clone()]);
+        assert_eq!(bundletool(&env).unwrap(), std::slice::from_ref(&program));
         let path = std::env::join_paths([root.join("nothing-here"), root.join("bin")])
             .unwrap()
             .to_string_lossy()
