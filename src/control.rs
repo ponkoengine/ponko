@@ -63,8 +63,13 @@ const REPLY_TIMEOUT: Duration = Duration::from_secs(30);
 /// hears that it did. A client that stopped reading costs at most this.
 const EXIT_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// How often the accept loop checks whether the game has shut down.
-const ACCEPT_POLL: Duration = Duration::from_millis(20);
+/// How long the accept loop rests after `accept` failed (out of file
+/// handles, say), so a lasting error doesn't spin.
+const ACCEPT_RETRY: Duration = Duration::from_millis(20);
+
+/// How long a closing endpoint tries to connect to itself, which wakes its
+/// accept loop (blocked in `accept`) to see that it should stop.
+const WAKE_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// The longest request line a connection may send. Reading stops there,
 /// before the token is checked, so a stranger can't make the game buffer
@@ -243,8 +248,9 @@ impl Control {
         capture_logs: bool,
         auth_timeout: Duration,
     ) -> std::io::Result<Self> {
+        // Blocking: a connection is served the moment it arrives. Dropping
+        // the endpoint wakes the loop with a connection of its own.
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
-        listener.set_nonblocking(true)?;
         let addr = listener.local_addr()?;
         let token: Arc<str> = random_token()?.into();
         let (tx, requests) = mpsc::channel();
@@ -338,7 +344,11 @@ impl Control {
 
 impl Drop for Control {
     fn drop(&mut self) {
-        self.shutdown.store(true, Ordering::Relaxed);
+        self.shutdown.store(true, Ordering::SeqCst);
+        // The accept loop is blocked in `accept`: a connection wakes it, it
+        // sees the flag and closes the listener. (Should this fail, the loop
+        // stops at the next connection instead.)
+        let _ = TcpStream::connect_timeout(&self.addr, WAKE_TIMEOUT);
         if let Some(path) = &self.registry_file {
             let _ = std::fs::remove_file(path);
         }
@@ -371,8 +381,12 @@ fn accept_loop(
     auth_timeout: Duration,
 ) {
     let open = Arc::new(AtomicUsize::new(0));
-    while !shutdown.load(Ordering::Relaxed) {
-        match listener.accept() {
+    loop {
+        let accepted = listener.accept();
+        if shutdown.load(Ordering::SeqCst) {
+            return; // woken by the endpoint closing; drops the listener
+        }
+        match accepted {
             Ok((mut stream, _)) => {
                 let Some(slot) = ConnectionSlot::take(&open) else {
                     let _ = stream.set_nonblocking(false);
@@ -391,8 +405,8 @@ fn accept_loop(
                     serve_connection(stream, &token, &tx, &owed, auth_timeout);
                 });
             }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => thread::sleep(ACCEPT_POLL),
-            Err(_) => thread::sleep(ACCEPT_POLL),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => thread::sleep(ACCEPT_RETRY),
         }
     }
 }
@@ -3544,6 +3558,37 @@ mod tests {
             );
             drop(c);
             thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn new_connections_are_served_without_waiting_for_a_poll() {
+        let control = Control::start_with("prompt", true, false).unwrap();
+        let begun = std::time::Instant::now();
+        for i in 0..200 {
+            let c = TcpStream::connect(control.addr()).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            assert_eq!(ask_with(&c, &control.token)["id"], 1, "connection {i}");
+        }
+        // 5 ms a connection: far above connecting and one reply, far below
+        // an accept loop that looks for connections every 20 ms.
+        let took = begun.elapsed();
+        assert!(took < Duration::from_secs(1), "200 connections took {took:?}");
+    }
+
+    #[test]
+    fn closing_the_endpoint_stops_its_accept_loop_at_once() {
+        let control = Control::start_with("closing", true, false).unwrap();
+        let addr = control.addr();
+        let begun = std::time::Instant::now();
+        drop(control);
+        // The listener is gone once the loop has stopped: connecting fails.
+        while TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok() {
+            assert!(
+                begun.elapsed() < Duration::from_secs(5),
+                "still accepting connections after the endpoint closed"
+            );
+            thread::sleep(Duration::from_millis(5));
         }
     }
 
