@@ -22,7 +22,7 @@
 //!
 //! Never regenerate the baseline to make a test pass.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use ponko_ffi::*;
@@ -432,9 +432,35 @@ fn current_header() -> String {
     read(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../include/ponko.h"))
 }
 
+/// The C items `scripts/experimental-api.txt` lists (`ponko_ffi::<name>`):
+/// experimental, outside the promise (STABILITY.md, "Unstable"), so they may
+/// change or go within an ABI version.
+fn unstable_c_items() -> BTreeSet<String> {
+    read(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts/experimental-api.txt"))
+        .lines()
+        .filter_map(|l| {
+            l.split_whitespace()
+                .next()?
+                .strip_prefix("ponko_ffi::")
+                .map(str::to_string)
+        })
+        .collect()
+}
+
+/// `header_incompatibilities` without the items in `unstable`.
+fn stable_incompatibilities(old: &str, new: &str, unstable: &BTreeSet<String>) -> Vec<String> {
+    header_incompatibilities(old, new)
+        .into_iter()
+        .filter(|m| {
+            let key = m.split(':').next().unwrap_or_default();
+            !key.split_once(' ').is_some_and(|(_, name)| unstable.contains(name))
+        })
+        .collect()
+}
+
 #[test]
 fn current_header_keeps_every_baseline_declaration() {
-    let found = header_incompatibilities(&baseline_header(), &current_header());
+    let found = stable_incompatibilities(&baseline_header(), &current_header(), &unstable_c_items());
     assert!(
         found.is_empty(),
         "include/ponko.h differs incompatibly from the retained ABI-2 header (STABILITY.md: existing \
@@ -556,6 +582,24 @@ fn changing_an_enum_constant_or_a_define_is_incompatible() {
         header_incompatibilities(MINI, &callback),
         "typedef PonkoCallback: changed",
     );
+}
+
+#[test]
+fn listed_unstable_items_may_change_and_the_rest_may_not() {
+    let unstable = BTreeSet::from(["ponko_thing_new".to_string(), "PonkoPoint".to_string()]);
+    let changed = MINI
+        .replace("struct PonkoThing *ponko_thing_new(const char *name, size_t len);", "")
+        .replace("  float y;\n", "");
+    assert!(stable_incompatibilities(MINI, &changed, &unstable).is_empty());
+    let moved = changed.replace("struct PonkoPoint by", "int by");
+    expect_one(
+        stable_incompatibilities(MINI, &moved, &unstable),
+        "fn ponko_thing_move: changed",
+    );
+    // The real list names the experimental C functions, which the header marks.
+    let listed = unstable_c_items();
+    assert!(listed.contains("ponko_ctx_hdr_status") && listed.contains("ponko_net_messages_rtc_host"));
+    assert!(current_header().contains("/* Unstable: experimental (book/src/hdr.md) */"));
 }
 
 #[test]

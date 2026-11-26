@@ -4683,7 +4683,6 @@ pub fn ponko::game::ConfiguredGame::fixed_hz(self, u32) -> Self
 pub fn ponko::game::ConfiguredGame::fullscreen(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::gamepad_backend(self, impl ponko::input::GamepadBackend) -> Self
 pub fn ponko::game::ConfiguredGame::has_plugin(&self, &str) -> bool
-pub fn ponko::game::ConfiguredGame::hdr_output(self, ponko::render::HdrOutput) -> Self
 pub fn ponko::game::ConfiguredGame::headless_frame_duration(self, core::time::Duration) -> Self
 pub fn ponko::game::ConfiguredGame::headless_frames(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::hot_reload(self, bool) -> Self
@@ -4721,7 +4720,6 @@ pub fn ponko::game::ConfiguredGame::try_run(self) -> core::result::Result<(), po
 pub fn ponko::game::ConfiguredGame::try_run_headless(self, u64) -> core::result::Result<ponko_ecs::world::World, ponko::error::Error>
 pub fn ponko::game::ConfiguredGame::try_setup(self, impl core::ops::function::FnOnce(&mut ponko::prelude::Ctx) -> core::result::Result<(), ponko::error::Error> + 'static) -> Self
 pub fn ponko::game::ConfiguredGame::vsync(self, bool) -> Self
-pub fn ponko::game::ConfiguredGame::web_threads(self, usize) -> Self
 impl ponko::game::ConfiguredGame
 pub fn ponko::game::ConfiguredGame::run_server(self, ponko::server::ServerConfig) -> ponko_ecs::world::World
 pub struct ponko::game::Game
@@ -4744,7 +4742,6 @@ pub fn ponko::game::Game::fullscreen(self, bool) -> Self
 pub fn ponko::game::Game::gamepad_backend(self, impl ponko::input::GamepadBackend) -> Self
 pub fn ponko::game::Game::has_plugin(&self, &str) -> bool
 pub fn ponko::game::Game::has_state<S: ponko::state::States>(&self) -> bool
-pub fn ponko::game::Game::hdr_output(self, ponko::render::HdrOutput) -> Self
 pub fn ponko::game::Game::headless_frame_duration(self, core::time::Duration) -> Self
 pub fn ponko::game::Game::headless_frames(self, bool) -> Self
 pub fn ponko::game::Game::hot_reload(self, bool) -> Self
@@ -4784,7 +4781,6 @@ pub fn ponko::game::Game::try_run<S, U>(self, S) -> core::result::Result<(), pon
 pub fn ponko::game::Game::try_run_headless<S, U>(self, u64, S) -> core::result::Result<ponko_ecs::world::World, ponko::error::Error> where S: core::ops::function::FnOnce(&mut ponko::prelude::Ctx) -> U, U: SetupResult
 pub fn ponko::game::Game::try_setup(self, impl core::ops::function::FnOnce(&mut ponko::prelude::Ctx) -> core::result::Result<(), ponko::error::Error> + 'static) -> ponko::game::ConfiguredGame
 pub fn ponko::game::Game::vsync(self, bool) -> Self
-pub fn ponko::game::Game::web_threads(self, usize) -> Self
 impl ponko::game::Game
 pub fn ponko::game::Game::loading_state<S: ponko::state::States>(self, S, impl core::ops::function::FnMut(&mut ponko::prelude::Ctx) -> ponko::assets::AssetGroup + 'static, S) -> Self
 impl ponko::game::Game
@@ -5036,9 +5032,6 @@ pub fn ponko::gfx::Graphics::free<H: ponko::handle::GfxHandle>(&mut self, H)
 pub fn ponko::gfx::Graphics::is_live<H: ponko::handle::GfxHandle>(&self, H) -> bool
 pub fn ponko::gfx::Graphics::live_counts(&self) -> ponko::handle::LiveCounts
 impl ponko::gfx::Graphics
-pub fn ponko::gfx::Graphics::hdr_output(&self) -> ponko::render::HdrOutput
-pub fn ponko::gfx::Graphics::hdr_status(&self) -> ponko::render::HdrStatus
-pub fn ponko::gfx::Graphics::set_hdr_output(&mut self, ponko::render::HdrOutput)
 impl ponko::gfx::Graphics
 pub fn ponko::gfx::Graphics::is_resident(&self, ponko::streaming::ResidencyKind, &str) -> bool
 pub fn ponko::gfx::Graphics::residency(&self, ponko::streaming::ResidencyKind) -> ponko::streaming::ResidencyStats
@@ -6964,7 +6957,6 @@ pub fn ponko::net::lobby::LobbyClient::relay(&mut self, core::option::Option<pon
 pub fn ponko::net::lobby::LobbyClient::room(&self) -> core::option::Option<&ponko::net::lobby::RoomInfo>
 pub fn ponko::net::lobby::LobbyClient::server_limits(&self) -> ponko::net::lobby::protocol::ServerLimits
 pub fn ponko::net::lobby::LobbyClient::set_meta(&mut self, &str) -> core::io::error::Result<()>
-pub fn ponko::net::lobby::LobbyClient::signaling(&mut self) -> ponko::net::rtc::Signaling
 impl core::fmt::Debug for ponko::net::lobby::LobbyClient
 pub fn ponko::net::lobby::LobbyClient::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct ponko::net::lobby::MemberId(_)
@@ -7014,39 +7006,6 @@ impl serde_core::ser::Serialize for ponko::net::lobby::RoomInfo
 pub fn ponko::net::lobby::RoomInfo::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for ponko::net::lobby::RoomInfo
 pub fn ponko::net::lobby::RoomInfo::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
-pub mod ponko::net::rtc
-pub struct ponko::net::rtc::RtcConfig
-impl ponko::net::rtc::RtcConfig
-pub fn ponko::net::rtc::RtcConfig::bind(self, core::net::socket_addr::SocketAddr) -> Self
-pub fn ponko::net::rtc::RtcConfig::host_address(self, core::net::ip_addr::IpAddr) -> Self
-pub fn ponko::net::rtc::RtcConfig::new() -> Self
-pub fn ponko::net::rtc::RtcConfig::relay_only(self) -> Self
-pub fn ponko::net::rtc::RtcConfig::stun(self, &str) -> Self
-pub fn ponko::net::rtc::RtcConfig::stun_urls(&self) -> impl core::iter::traits::iterator::Iterator<Item = &str>
-pub fn ponko::net::rtc::RtcConfig::turn(self, &str, &str, &str) -> Self
-pub fn ponko::net::rtc::RtcConfig::turn_servers(&self) -> impl core::iter::traits::iterator::Iterator<Item = (&str, &str, &str)>
-impl core::clone::Clone for ponko::net::rtc::RtcConfig
-pub fn ponko::net::rtc::RtcConfig::clone(&self) -> Self
-impl core::cmp::Eq for ponko::net::rtc::RtcConfig
-impl core::cmp::PartialEq for ponko::net::rtc::RtcConfig
-pub fn ponko::net::rtc::RtcConfig::eq(&self, &Self) -> bool
-impl core::default::Default for ponko::net::rtc::RtcConfig
-pub fn ponko::net::rtc::RtcConfig::default() -> Self
-impl core::fmt::Debug for ponko::net::rtc::RtcConfig
-pub fn ponko::net::rtc::RtcConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for ponko::net::rtc::RtcConfig
-pub struct ponko::net::rtc::Signaling(_)
-impl ponko::net::rtc::Signaling
-pub fn ponko::net::rtc::Signaling::deliver(&self, u64, &[u8]) -> bool
-pub fn ponko::net::rtc::Signaling::is_signal(&[u8]) -> bool
-pub fn ponko::net::rtc::Signaling::new() -> Self
-pub fn ponko::net::rtc::Signaling::next_outgoing(&self) -> core::option::Option<(u64, alloc::vec::Vec<u8>)>
-impl core::clone::Clone for ponko::net::rtc::Signaling
-pub fn ponko::net::rtc::Signaling::clone(&self) -> Self
-impl core::default::Default for ponko::net::rtc::Signaling
-pub fn ponko::net::rtc::Signaling::default() -> Self
-impl core::fmt::Debug for ponko::net::rtc::Signaling
-pub fn ponko::net::rtc::Signaling::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub mod ponko::net::stun
 pub const ponko::net::stun::DEFAULT_PORT: u16
 pub const ponko::net::stun::MAGIC_COOKIE: u32
@@ -7641,9 +7600,6 @@ pub fn ponko::net::NetMessages::host_relay(ponko::net::lobby::LobbyClient, usize
 pub fn ponko::net::NetMessages::join_relay(ponko::net::lobby::LobbyClient) -> core::io::error::Result<Self>
 pub fn ponko::net::NetMessages::relay_lobby(&mut self) -> core::option::Option<&mut ponko::net::lobby::LobbyClient>
 impl ponko::net::NetMessages
-pub fn ponko::net::NetMessages::host_rtc(ponko::net::rtc::Signaling, ponko::net::rtc::RtcConfig, usize) -> core::io::error::Result<Self>
-pub fn ponko::net::NetMessages::join_rtc(ponko::net::rtc::Signaling, u64, ponko::net::rtc::RtcConfig) -> core::io::error::Result<Self>
-pub fn ponko::net::NetMessages::rtc_signal_peer(&self, ponko::net::PeerId) -> core::option::Option<u64>
 impl ponko::net::NetMessages
 pub fn ponko::net::NetMessages::steam_host(&ponko::net::SteamClient, usize) -> core::io::error::Result<Self>
 pub fn ponko::net::NetMessages::steam_join(&ponko::net::SteamClient, ponko::net::SteamLobbyId) -> core::io::error::Result<Self>
@@ -11690,7 +11646,6 @@ pub fn ponko::game::ConfiguredGame::fixed_hz(self, u32) -> Self
 pub fn ponko::game::ConfiguredGame::fullscreen(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::gamepad_backend(self, impl ponko::input::GamepadBackend) -> Self
 pub fn ponko::game::ConfiguredGame::has_plugin(&self, &str) -> bool
-pub fn ponko::game::ConfiguredGame::hdr_output(self, ponko::render::HdrOutput) -> Self
 pub fn ponko::game::ConfiguredGame::headless_frame_duration(self, core::time::Duration) -> Self
 pub fn ponko::game::ConfiguredGame::headless_frames(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::hot_reload(self, bool) -> Self
@@ -11728,7 +11683,6 @@ pub fn ponko::game::ConfiguredGame::try_run(self) -> core::result::Result<(), po
 pub fn ponko::game::ConfiguredGame::try_run_headless(self, u64) -> core::result::Result<ponko_ecs::world::World, ponko::error::Error>
 pub fn ponko::game::ConfiguredGame::try_setup(self, impl core::ops::function::FnOnce(&mut ponko::prelude::Ctx) -> core::result::Result<(), ponko::error::Error> + 'static) -> Self
 pub fn ponko::game::ConfiguredGame::vsync(self, bool) -> Self
-pub fn ponko::game::ConfiguredGame::web_threads(self, usize) -> Self
 impl ponko::game::ConfiguredGame
 pub fn ponko::game::ConfiguredGame::run_server(self, ponko::server::ServerConfig) -> ponko_ecs::world::World
 pub struct ponko::prelude::Ctx
@@ -11934,7 +11888,6 @@ pub fn ponko::game::Game::fullscreen(self, bool) -> Self
 pub fn ponko::game::Game::gamepad_backend(self, impl ponko::input::GamepadBackend) -> Self
 pub fn ponko::game::Game::has_plugin(&self, &str) -> bool
 pub fn ponko::game::Game::has_state<S: ponko::state::States>(&self) -> bool
-pub fn ponko::game::Game::hdr_output(self, ponko::render::HdrOutput) -> Self
 pub fn ponko::game::Game::headless_frame_duration(self, core::time::Duration) -> Self
 pub fn ponko::game::Game::headless_frames(self, bool) -> Self
 pub fn ponko::game::Game::hot_reload(self, bool) -> Self
@@ -11974,7 +11927,6 @@ pub fn ponko::game::Game::try_run<S, U>(self, S) -> core::result::Result<(), pon
 pub fn ponko::game::Game::try_run_headless<S, U>(self, u64, S) -> core::result::Result<ponko_ecs::world::World, ponko::error::Error> where S: core::ops::function::FnOnce(&mut ponko::prelude::Ctx) -> U, U: SetupResult
 pub fn ponko::game::Game::try_setup(self, impl core::ops::function::FnOnce(&mut ponko::prelude::Ctx) -> core::result::Result<(), ponko::error::Error> + 'static) -> ponko::game::ConfiguredGame
 pub fn ponko::game::Game::vsync(self, bool) -> Self
-pub fn ponko::game::Game::web_threads(self, usize) -> Self
 impl ponko::game::Game
 pub fn ponko::game::Game::loading_state<S: ponko::state::States>(self, S, impl core::ops::function::FnMut(&mut ponko::prelude::Ctx) -> ponko::assets::AssetGroup + 'static, S) -> Self
 impl ponko::game::Game
@@ -13110,40 +13062,6 @@ impl core::hash::Hash for ponko::render::GraphicsQuality
 pub fn ponko::render::GraphicsQuality::hash<__H: core::hash::Hasher>(&self, &mut __H)
 impl core::marker::Copy for ponko::render::GraphicsQuality
 impl core::marker::StructuralPartialEq for ponko::render::GraphicsQuality
-#[non_exhaustive] #[repr(u32)] pub enum ponko::render::HdrEncoding
-pub ponko::render::HdrEncoding::ExtendedSrgb = 2
-pub ponko::render::HdrEncoding::Pq = 3
-pub ponko::render::HdrEncoding::ScRgb = 1
-pub ponko::render::HdrEncoding::Sdr = 0
-impl core::clone::Clone for ponko::render::HdrEncoding
-pub fn ponko::render::HdrEncoding::clone(&self) -> Self
-impl core::cmp::Eq for ponko::render::HdrEncoding
-impl core::cmp::PartialEq for ponko::render::HdrEncoding
-pub fn ponko::render::HdrEncoding::eq(&self, &Self) -> bool
-impl core::default::Default for ponko::render::HdrEncoding
-pub fn ponko::render::HdrEncoding::default() -> Self
-impl core::fmt::Debug for ponko::render::HdrEncoding
-pub fn ponko::render::HdrEncoding::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for ponko::render::HdrEncoding
-impl core::marker::StructuralPartialEq for ponko::render::HdrEncoding
-#[non_exhaustive] #[repr(u32)] pub enum ponko::render::HdrOffReason
-pub ponko::render::HdrOffReason::Headless = 1
-pub ponko::render::HdrOffReason::NotRequested = 2
-pub ponko::render::HdrOffReason::Off = 3
-pub ponko::render::HdrOffReason::Unsupported = 4
-impl ponko::render::HdrOffReason
-pub fn ponko::render::HdrOffReason::describe(self) -> &'static str
-impl core::clone::Clone for ponko::render::HdrOffReason
-pub fn ponko::render::HdrOffReason::clone(&self) -> Self
-impl core::cmp::Eq for ponko::render::HdrOffReason
-impl core::cmp::PartialEq for ponko::render::HdrOffReason
-pub fn ponko::render::HdrOffReason::eq(&self, &Self) -> bool
-impl core::fmt::Debug for ponko::render::HdrOffReason
-pub fn ponko::render::HdrOffReason::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::fmt::Display for ponko::render::HdrOffReason
-pub fn ponko::render::HdrOffReason::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for ponko::render::HdrOffReason
-impl core::marker::StructuralPartialEq for ponko::render::HdrOffReason
 pub enum ponko::render::LodPick
 pub ponko::render::LodPick::Culled
 pub ponko::render::LodPick::Fade
@@ -13839,59 +13757,6 @@ impl core::fmt::Debug for ponko::render::GpuUploads
 pub fn ponko::render::GpuUploads::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::render::GpuUploads
 impl core::marker::StructuralPartialEq for ponko::render::GpuUploads
-#[non_exhaustive] pub struct ponko::render::HdrMetadata
-pub ponko::render::HdrMetadata::max_content_light_nits: f32
-pub ponko::render::HdrMetadata::max_frame_average_nits: f32
-pub ponko::render::HdrMetadata::max_mastering_nits: f32
-pub ponko::render::HdrMetadata::min_mastering_nits: f32
-impl ponko::render::HdrMetadata
-pub fn ponko::render::HdrMetadata::for_output(&ponko::render::HdrOutput, f32) -> Self
-impl core::clone::Clone for ponko::render::HdrMetadata
-pub fn ponko::render::HdrMetadata::clone(&self) -> Self
-impl core::cmp::PartialEq for ponko::render::HdrMetadata
-pub fn ponko::render::HdrMetadata::eq(&self, &Self) -> bool
-impl core::fmt::Debug for ponko::render::HdrMetadata
-pub fn ponko::render::HdrMetadata::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for ponko::render::HdrMetadata
-impl core::marker::StructuralPartialEq for ponko::render::HdrMetadata
-#[non_exhaustive] pub struct ponko::render::HdrOutput
-pub ponko::render::HdrOutput::enabled: bool
-pub ponko::render::HdrOutput::max_content_light_nits: f32
-pub ponko::render::HdrOutput::max_frame_average_nits: f32
-pub ponko::render::HdrOutput::paper_white_nits: f32
-pub ponko::render::HdrOutput::peak_nits: f32
-impl ponko::render::HdrOutput
-pub fn ponko::render::HdrOutput::on() -> Self
-pub fn ponko::render::HdrOutput::paper_white(&self) -> f32
-impl core::clone::Clone for ponko::render::HdrOutput
-pub fn ponko::render::HdrOutput::clone(&self) -> Self
-impl core::cmp::PartialEq for ponko::render::HdrOutput
-pub fn ponko::render::HdrOutput::eq(&self, &Self) -> bool
-impl core::default::Default for ponko::render::HdrOutput
-pub fn ponko::render::HdrOutput::default() -> Self
-impl core::fmt::Debug for ponko::render::HdrOutput
-pub fn ponko::render::HdrOutput::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for ponko::render::HdrOutput
-impl core::marker::StructuralPartialEq for ponko::render::HdrOutput
-#[non_exhaustive] pub struct ponko::render::HdrStatus
-pub ponko::render::HdrStatus::active: bool
-pub ponko::render::HdrStatus::available: bool
-pub ponko::render::HdrStatus::display_headroom: core::option::Option<f32>
-pub ponko::render::HdrStatus::display_peak_nits: core::option::Option<f32>
-pub ponko::render::HdrStatus::encoding: ponko::render::HdrEncoding
-pub ponko::render::HdrStatus::headroom: f32
-pub ponko::render::HdrStatus::metadata: core::option::Option<ponko::render::HdrMetadata>
-pub ponko::render::HdrStatus::paper_white_nits: f32
-pub ponko::render::HdrStatus::peak_nits: f32
-pub ponko::render::HdrStatus::reason: core::option::Option<ponko::render::HdrOffReason>
-impl core::clone::Clone for ponko::render::HdrStatus
-pub fn ponko::render::HdrStatus::clone(&self) -> Self
-impl core::cmp::PartialEq for ponko::render::HdrStatus
-pub fn ponko::render::HdrStatus::eq(&self, &Self) -> bool
-impl core::fmt::Debug for ponko::render::HdrStatus
-pub fn ponko::render::HdrStatus::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for ponko::render::HdrStatus
-impl core::marker::StructuralPartialEq for ponko::render::HdrStatus
 #[repr(C)] pub struct ponko::render::InstanceBatch
 impl core::clone::Clone for ponko::render::InstanceBatch
 pub fn ponko::render::InstanceBatch::clone(&self) -> Self

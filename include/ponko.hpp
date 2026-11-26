@@ -1413,6 +1413,7 @@ inline query_filter_ex query_filter_ex_of(const filter3d& f) {
 }
 
 /// HDR output settings with their defaults (off, 200-nit paper white, the display's peak).
+/// Unstable: experimental (the guide's "HDR displays"); may change in any release.
 inline hdr_output hdr_output_defaults() {
     hdr_output h{};
     h.struct_size = sizeof(hdr_output);
@@ -3586,6 +3587,7 @@ public:
         return out;
     }
     /// The lobby member id behind connected `peer` of a WebRTC endpoint (lobby::rtc_host, lobby::rtc_join), or 0.
+    /// Unstable: experimental (the guide's "Peer to peer over WebRTC"); may change in any release.
     std::uint32_t rtc_peer(std::uint64_t peer) const { std::uint32_t m = 0; detail::check(ponko_net_messages_rtc_peer(raw_, peer, &m)); return m; }
     /// The Steam id of connected `peer`, or 0 for an unknown or non-Steam peer.
     std::uint64_t steam_peer(std::uint64_t peer) const { std::uint64_t id = 0; detail::check(ponko_net_messages_steam_peer(raw_, peer, &id)); return id; }
@@ -3745,12 +3747,14 @@ public:
     /// through this client's room. `stun_urls`: space-separated "stun:host:port" URLs, or null; `bind`: the UDP
     /// socket's address, or null for any port. Keep polling this client. Throws ponko::error without the `webrtc`
     /// feature.
+    /// Unstable: experimental (the guide's "Peer to peer over WebRTC"); may change in any release.
     net_messages rtc_host(const char* stun_urls, std::size_t max_clients, const char* bind = nullptr) {
         PonkoNetMessages* m = nullptr; detail::check(ponko_net_messages_rtc_host(raw_, stun_urls, bind, max_clients, &m));
         return net_messages(m);
     }
     /// A message endpoint joining the host that member `host` (the room's host) runs, over WebRTC signaled
     /// through this client. Settings as rtc_host.
+    /// Unstable: experimental (the guide's "Peer to peer over WebRTC"); may change in any release.
     net_messages rtc_join(std::uint32_t host, const char* stun_urls, const char* bind = nullptr) {
         PonkoNetMessages* m = nullptr; detail::check(ponko_net_messages_rtc_join(raw_, host, stun_urls, bind, &m));
         return net_messages(m);
@@ -9814,6 +9818,7 @@ public:
     /// speeds not negative (infinity jumps) and its center weight 0 to 1. Nothing changes when it throws.
     void set_post(const ponko::post_ex& p) { detail::check(ponko_ctx_set_post_ex(raw_, &p)); }
     /// The HDR output settings (Rust `ctx.gfx.hdr_output()`).
+    /// Unstable: experimental (the guide's "HDR displays"); may change in any release.
     ponko::hdr_output hdr_output() const {
         ponko::hdr_output h{};
         h.struct_size = sizeof(h);
@@ -9824,9 +9829,11 @@ public:
     /// Changes the HDR output settings from the next frame: `enabled` switches the window between HDR
     /// and SDR while the game runs (no restart); paper white, peak and HDR10 metadata follow.
     /// Throws, changing nothing, for a NaN or negative peak_nits or metadata value.
+    /// Unstable: experimental (the guide's "HDR displays"); may change in any release.
     void set_hdr_output(const ponko::hdr_output& h) { detail::check(ponko_ctx_set_hdr_output(raw_, &h)); }
     /// What the window does with the HDR settings: active, encoding, reason, paper white and peak as used,
     /// and the HDR10 metadata sent.
+    /// Unstable: experimental (the guide's "HDR displays"); may change in any release.
     ponko::hdr_status hdr_status() const {
         ponko::hdr_status s{};
         s.struct_size = sizeof(s);
@@ -11604,6 +11611,7 @@ public:
     /// HDR display output (Rust `Game::hdr_output`): with `h.enabled` the window opens in an HDR format
     /// and color space where the display system offers one; ctx::set_hdr_output switches it later.
     /// Off by default, and then nothing changes.
+    /// Unstable: experimental (the guide's "HDR displays"); may change in any release.
     game& hdr_output(const ponko::hdr_output& h) { return check(ponko_game_hdr_output(raw_, &h)); }
     /// Samples per pixel of the 3D frame: 4 (default) or 2.
     game& msaa(std::uint32_t samples) { return check(ponko_game_msaa(raw_, samples)); }

@@ -5907,15 +5907,24 @@ enum PonkoStatus ponko_ctx_streamed_assets(struct PonkoCtx *ctx,
                                            size_t *out_len,
                                            size_t *out_names_len);
 
+/* Unstable: experimental (book/src/hdr.md) */
 enum PonkoStatus ponko_hdr_output_defaults(struct PonkoHdrOutput *out_hdr);
 
-enum PonkoStatus ponko_game_hdr_output(struct PonkoGame *game, const struct PonkoHdrOutput *hdr);
+/* Unstable: experimental (book/src/hdr.md) */
+enum PonkoStatus ponko_game_hdr_output(struct PonkoGame *game,
+                                       const struct PonkoHdrOutput *hdr);
 
-enum PonkoStatus ponko_ctx_hdr_output(struct PonkoCtx *ctx, struct PonkoHdrOutput *out_hdr);
+/* Unstable: experimental (book/src/hdr.md) */
+enum PonkoStatus ponko_ctx_hdr_output(struct PonkoCtx *ctx,
+                                      struct PonkoHdrOutput *out_hdr);
 
-enum PonkoStatus ponko_ctx_set_hdr_output(struct PonkoCtx *ctx, const struct PonkoHdrOutput *hdr);
+/* Unstable: experimental (book/src/hdr.md) */
+enum PonkoStatus ponko_ctx_set_hdr_output(struct PonkoCtx *ctx,
+                                          const struct PonkoHdrOutput *hdr);
 
-enum PonkoStatus ponko_ctx_hdr_status(struct PonkoCtx *ctx, struct PonkoHdrStatus *out_status);
+/* Unstable: experimental (book/src/hdr.md) */
+enum PonkoStatus ponko_ctx_hdr_status(struct PonkoCtx *ctx,
+                                      struct PonkoHdrStatus *out_status);
 
 enum PonkoStatus ponko_game_headless_frames(struct PonkoGame *game, bool on);
 
@@ -7033,18 +7042,21 @@ enum PonkoStatus ponko_ctx_penetrations3d(struct PonkoCtx *ctx,
                                           size_t capacity,
                                           size_t *out_count);
 
+/* Unstable: experimental (book/src/webrtc.md) */
 enum PonkoStatus ponko_net_messages_rtc_host(struct PonkoLobby *lobby,
                                              const char *stun_urls,
                                              const char *bind,
                                              size_t max_clients,
                                              struct PonkoNetMessages **out_endpoint);
 
+/* Unstable: experimental (book/src/webrtc.md) */
 enum PonkoStatus ponko_net_messages_rtc_join(struct PonkoLobby *lobby,
                                              uint32_t host,
                                              const char *stun_urls,
                                              const char *bind,
                                              struct PonkoNetMessages **out_endpoint);
 
+/* Unstable: experimental (book/src/webrtc.md) */
 enum PonkoStatus ponko_net_messages_rtc_peer(struct PonkoNetMessages *endpoint,
                                              uint64_t peer,
                                              uint32_t *out_member);
