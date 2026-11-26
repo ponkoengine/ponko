@@ -33,7 +33,7 @@ use super::{
 /// | `post.ambient_occlusion` (slices, steps) | off | off | 2, 4 | 4, 8 |
 /// | `post.ao_half_resolution` / `ao_temporal` | off | off | on | on |
 /// | `post.ssr` | 0 | 0 | 1 | 1 |
-/// | `post.ssr_thin_objects` | off | off | on | on |
+/// | `post.ssr_thin_objects` | off | off | off | on |
 /// | `lighting.gi.enabled` | off | off | off | on |
 /// | `post.anti_aliasing` | none | FXAA | SMAA | SMAA |
 ///
@@ -64,8 +64,10 @@ pub enum GraphicsQuality {
     Medium,
     /// Four 2048² cascades reaching 80 units with contact-hardening edges,
     /// eight views of up to 1024² for point and spot lights in a 4096² atlas,
-    /// light AO (2 slices, 4 steps), screen-space reflections that keep
-    /// thin things whole without TAA ([`Post::ssr_thin_objects`]), SMAA.
+    /// light AO (2 slices, 4 steps), screen-space reflections, SMAA. It
+    /// leaves the thin-objects reflection trace ([`Post::ssr_thin_objects`])
+    /// off, as it costs 0.3 to 2.3 ms a frame in busy scenes; set it after
+    /// the preset where thin things in reflections matter.
     High,
     /// Four 4096² cascades (256 MB of shadow maps) reaching 120 units, all
     /// redrawn every frame, with contact-hardening edges, 24 views of up to 2048² for point and spot
@@ -148,7 +150,7 @@ impl GraphicsQuality {
                 ao_slices: 2,
                 ao_steps: 4,
                 ssr: 1.0,
-                ssr_thin_objects: true,
+                ssr_thin_objects: false,
                 gi: false,
                 anti_aliasing: AntiAliasing::Smaa,
             },
@@ -535,8 +537,8 @@ mod tests {
         assert_eq!((low.ssr, medium.ssr, high.ssr), (0.0, 0.0, 1.0));
         assert_eq!(
             [low, medium, high, ultra].map(|p| p.ssr_thin_objects),
-            [false, false, true, true],
-            "thin objects in reflections from High on"
+            [false, false, false, true],
+            "thin objects in reflections in Ultra only"
         );
         assert_eq!(
             (ultra.shadow_distance, ultra.shadow_cascades, ultra.shadow_resolution),

@@ -251,7 +251,7 @@
 
 #define PONKO_QUERY_FILTER_EX_VERSION 1
 
-#define PONKO_MATERIAL_DESC_EX_VERSION 2
+#define PONKO_MATERIAL_DESC_EX_VERSION 3
 
 #define PONKO_NAV_BAKE_SETTINGS_EX_VERSION 1
 
@@ -3638,6 +3638,42 @@ typedef struct PonkoQueryFilterEx {
   bool sensors;
 } PonkoQueryFilterEx;
 
+typedef struct PonkoMaterialLayers {
+  float clearcoat;
+  float clearcoat_roughness;
+  bool has_clearcoat_map;
+  struct PonkoTexture clearcoat_map;
+  bool has_clearcoat_roughness_map;
+  struct PonkoTexture clearcoat_roughness_map;
+  bool has_clearcoat_normal_map;
+  struct PonkoTexture clearcoat_normal_map;
+  float clearcoat_normal_strength;
+  struct PonkoColor sheen_color;
+  float sheen_roughness;
+  bool has_sheen_color_map;
+  struct PonkoTexture sheen_color_map;
+  bool has_sheen_roughness_map;
+  struct PonkoTexture sheen_roughness_map;
+  float specular;
+  struct PonkoColor specular_color;
+  bool has_specular_map;
+  struct PonkoTexture specular_map;
+  bool has_specular_color_map;
+  struct PonkoTexture specular_color_map;
+  float ior;
+  float anisotropy;
+  float anisotropy_rotation;
+  bool has_anisotropy_map;
+  struct PonkoTexture anisotropy_map;
+  float iridescence;
+  float iridescence_ior;
+  float iridescence_thickness[2];
+  bool has_iridescence_map;
+  struct PonkoTexture iridescence_map;
+  bool has_iridescence_thickness_map;
+  struct PonkoTexture iridescence_thickness_map;
+} PonkoMaterialLayers;
+
 typedef struct PonkoMaterialDescEx {
   uint32_t struct_size;
   uint32_t version;
@@ -3645,6 +3681,8 @@ typedef struct PonkoMaterialDescEx {
   bool has_stencil;
   struct PonkoStencil stencil;
   bool masked_tint;
+  bool unlit;
+  struct PonkoMaterialLayers layers;
 } PonkoMaterialDescEx;
 
 typedef struct PonkoNavBakeSettingsEx {

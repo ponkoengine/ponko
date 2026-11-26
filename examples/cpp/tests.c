@@ -2882,6 +2882,14 @@ static void descriptors_setup(PonkoCtx* ctx, void* user) {
     PonkoMaterial m;
     CHECK(ponko_ctx_create_material_ex(ctx, &d, &m) == PONKO_OK);
     CHECK(ponko_ctx_update_material_ex(ctx, m, &d) == PONKO_OK);
+    /* Version 3: unlit, and a clear coat (out of range refused). */
+    CHECK(!d.unlit && d.layers.ior == 1.5f && d.layers.specular == 1.0f);
+    d.has_stencil = false;
+    d.unlit = true;
+    d.layers.clearcoat = 1.0f;
+    CHECK(ponko_ctx_update_material_ex(ctx, m, &d) == PONKO_OK);
+    d.layers.clearcoat = 2.0f;
+    CHECK(ponko_ctx_update_material_ex(ctx, m, &d) == PONKO_INVALID_ARGUMENT);
     /* Retargeting between two humanoids, the second half the size. */
     static const char* const a[15] = {"Hips", "Spine", "Head", "LeftArm", "LeftForeArm", "LeftHand", "RightArm",
         "RightForeArm", "RightHand", "LeftUpLeg", "LeftLeg", "LeftFoot", "RightUpLeg", "RightLeg", "RightFoot"};

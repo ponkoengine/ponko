@@ -3044,8 +3044,8 @@ fn quality_from_c(q: &PonkoGraphicsQuality, settings: &mut SceneSettings) -> Res
     l.light_shadow_atlas = q.light_shadow_atlas;
     // The ABI 2 struct has no field for thin objects in reflections
     // (`PonkoPostEx::ssr_thin_objects`): it follows the preset the rest of
-    // the struct is, so a preset set from C is that preset (High and Ultra
-    // turn it on, Low and Medium off), and stays as it was for a custom struct.
+    // the struct is, so a preset set from C is that preset (Ultra turns
+    // it on, Low, Medium and High off), and stays as it was for a custom struct.
     let kept = settings.post.ssr_thin_objects;
     if settings.quality().is_none() {
         settings.post.ssr_thin_objects = !kept;

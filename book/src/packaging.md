@@ -583,8 +583,9 @@ setup, the signing steps and the emulator check. What the command doesn't do yet
 - **The smoke run** proves the program starts, finds its assets and runs its
   systems headless; it draws nothing. Coin Dash's window walk-through
   ([below](#the-smoke-test)) is what opens a window.
-- **Signing and notarization** are the hook above; the project's own release
-  signing is #282.
+- **Signing and notarization** are the hook above, with your own
+  certificates; the engine's own release downloads are not signed (they ship
+  with checksums).
 - A C or C++ game is not packaged by it (its program is not a Cargo target);
   see [C and C++](#c-and-c).
 

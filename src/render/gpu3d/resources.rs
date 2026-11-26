@@ -308,7 +308,7 @@ impl Resources {
                 continue;
             }
             let (maps, array_ids) = (material.bindings.maps, material.bindings.array_ids);
-            let bindings = self.bindings_for(maps, array_ids, textures);
+            let bindings = self.bindings_for(maps, array_ids, material.bindings.layer, textures);
             let bind_group = self.material_bind_group(device, &material.buffer, &bindings);
             let material = &mut self.materials[i];
             material.bind_group = bind_group;
@@ -317,18 +317,20 @@ impl Resources {
     }
 
     pub(super) fn material_bindings(&self, desc: &GpuMaterialDesc, textures: &dyn TextureTable) -> MaterialBindings {
-        self.bindings_for(desc.textures, desc.arrays, textures)
+        self.bindings_for(desc.textures, desc.arrays, LayerBinding::of(desc), textures)
     }
 
     pub(super) fn bindings_for(
         &self,
         maps: crate::three::MaterialTextures,
         array_ids: [Option<u32>; 3],
+        layer: LayerBinding,
         textures: &dyn TextureTable,
     ) -> MaterialBindings {
         MaterialBindings {
             maps,
             array_ids,
+            layer,
             textures: std::array::from_fn(|i| self.material_texture(maps[i], textures).clone()),
             arrays: std::array::from_fn(|i| self.material_slot_array(i, array_ids[i]).clone()),
         }
@@ -350,6 +352,7 @@ impl Resources {
             let material = &self.materials[i];
             let maps = material.bindings.maps;
             let mut array_ids = material.bindings.array_ids;
+            let mut layer = material.bindings.layer;
             let reads_texture = texture.is_some_and(|t| maps.contains(&Some(t)));
             if !reads_texture && !array.is_some_and(|a| array_ids.contains(&Some(a))) {
                 continue;
@@ -362,6 +365,21 @@ impl Resources {
                         queue.write_buffer(&material.buffer, offset as u64, &0u32.to_le_bytes());
                     }
                 }
+                // Slots 4 and 5 hold a layered material's layer images:
+                // the maps read from a freed one are switched off.
+                if layer.bound != 0 {
+                    for slot in [4, 5] {
+                        if maps[slot] == texture {
+                            layer.switch_off(slot as u32 - 3);
+                        }
+                    }
+                    let offset = std::mem::offset_of!(crate::three::MaterialUniform, layer_info) + 4;
+                    queue.write_buffer(
+                        &material.buffer,
+                        offset as u64,
+                        bytemuck::cast_slice(&[layer.packed, layer.bound]),
+                    );
+                }
             }
             if let Some(array) = array {
                 for id in &mut array_ids {
@@ -370,7 +388,7 @@ impl Resources {
                     }
                 }
             }
-            let bindings = self.bindings_for(maps, array_ids, textures);
+            let bindings = self.bindings_for(maps, array_ids, layer, textures);
             let bind_group = self.material_bind_group(device, &material.buffer, &bindings);
             let material = &mut self.materials[i];
             material.bind_group = bind_group;
@@ -388,7 +406,7 @@ impl Resources {
             if !maps.contains(&Some(texture)) {
                 continue;
             }
-            let bindings = self.bindings_for(maps, array_ids, textures);
+            let bindings = self.bindings_for(maps, array_ids, material.bindings.layer, textures);
             let bind_group = self.material_bind_group(device, &material.buffer, &bindings);
             let material = &mut self.materials[i];
             material.bind_group = bind_group;
@@ -404,6 +422,7 @@ impl Resources {
     ) -> bool {
         bindings.maps == desc.textures
             && bindings.array_ids == desc.arrays
+            && bindings.layer == LayerBinding::of(desc)
             && bindings
                 .textures
                 .iter()
@@ -423,8 +442,10 @@ impl Resources {
         buffer: &wgpu::Buffer,
         bindings: &MaterialBindings,
     ) -> wgpu::BindGroup {
-        // Normal and ORM maps hold data, not colors: read them without sRGB decoding.
-        let linear = [false, true, true, false, false, false];
+        // Normal and ORM maps hold data, not colors: read them without sRGB
+        // decoding; so do a layered material's layer images of data.
+        let [layer0, layer1] = bindings.layer.linear;
+        let linear = [false, true, true, false, layer0, layer1];
         let views: Vec<wgpu::TextureView> = bindings
             .textures
             .iter()
@@ -875,8 +896,41 @@ pub(super) struct GpuMaterial {
 pub(super) struct MaterialBindings {
     pub(super) maps: MaterialTextures,
     pub(super) array_ids: [Option<u32>; 3],
+    pub(super) layer: LayerBinding,
     pub(super) textures: [wgpu::Texture; 6],
     pub(super) arrays: [wgpu::TextureView; 3],
+}
+
+/// How a layered material reads its two layer images (custom texture
+/// slots 4 and 5, see `MaterialLayers`): each as data or as color, and
+/// which maps read which (as its uniform's `layer_info` has them).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub(super) struct LayerBinding {
+    pub(super) linear: [bool; 2],
+    /// Each map's slot (0 none, 1 or 2), two bits per map.
+    pub(super) packed: u32,
+    /// Which of the two slots are read (bits 0 and 1).
+    pub(super) bound: u32,
+}
+
+impl LayerBinding {
+    pub(super) fn of(desc: &GpuMaterialDesc) -> Self {
+        Self {
+            linear: desc.linear_custom,
+            packed: desc.uniform.layer_info[1],
+            bound: desc.uniform.layer_info[2],
+        }
+    }
+
+    /// The maps read from layer slot `slot` (1 or 2) are switched off.
+    pub(super) fn switch_off(&mut self, slot: u32) {
+        for kind in 0..16 {
+            if (self.packed >> (2 * kind)) & 3 == slot {
+                self.packed &= !(3 << (2 * kind));
+            }
+        }
+        self.bound &= !(1 << (slot - 1));
+    }
 }
 
 /// A view of a whole texture array, as materials read it.
