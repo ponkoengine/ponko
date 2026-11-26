@@ -1,5 +1,10 @@
 //! Steam adapter for the message protocol. Tests replace only the SDK boundary.
-use std::collections::VecDeque;
+//!
+//! Two carriers move the packets between lobby members: Steam Networking
+//! Messages (connectionless, the default) and Steam Networking Sockets
+//! (connections the host accepts, relayed through Valve's network). The host
+//! picks one and names it in the lobby's metadata; a joiner follows it.
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -14,6 +19,14 @@ use super::{NetMessages, PeerId, SteamClient, SteamLobbyId, SteamUserId};
 const CHANNEL: u32 = 12701; // independent of lockstep's channel zero
 const PACKET_LIMIT: usize = 1500; // renet's MTU plus our session envelope
 const PROTOCOL: &str = "ponko-messages-2";
+/// The lobby metadata key naming the host's carrier: [`MESSAGES`] or
+/// [`SOCKETS`]. A host from before the key existed uses Messages.
+const CARRIER_KEY: &str = "ponko_carrier";
+const MESSAGES: &str = "messages";
+const SOCKETS: &str = "sockets";
+/// The Sockets carrier's virtual port, beside lockstep's channel zero and
+/// the Messages carrier's channel.
+const SOCKETS_PORT: i32 = 12702;
 #[derive(Default)]
 struct LobbyResult {
     result: Option<Result<SteamLobbyId, String>>,
@@ -145,6 +158,257 @@ impl SteamApi for Real {
             })
             .collect()
     }
+}
+
+/// How packets travel between lobby members: Messages or Sockets. Peers are
+/// Steam identities; the relay has already filtered them by lobby membership.
+trait Carrier: Send {
+    /// Before each send and receive: a Sockets host accepts members' and
+    /// refuses others' connections and closes those of members who left; a
+    /// Sockets client connects to `host`. Messages needs nothing.
+    fn maintain(&mut self, _members: &[SteamUserId], _host: Option<SteamUserId>) -> io::Result<()> {
+        Ok(())
+    }
+    /// `Ok(false)`: not submitted (no open connection to `peer` yet), loss.
+    fn send(&mut self, peer: SteamUserId, bytes: &[u8]) -> io::Result<bool>;
+    fn receive(&mut self) -> Vec<(SteamUserId, Vec<u8>)>;
+}
+
+/// Steam Networking Messages: no connections, sessions Steam opens itself.
+struct MessagesCarrier(Arc<dyn SteamApi>);
+impl Carrier for MessagesCarrier {
+    fn send(&mut self, peer: SteamUserId, bytes: &[u8]) -> io::Result<bool> {
+        self.0.send(peer, bytes)?;
+        Ok(true)
+    }
+    fn receive(&mut self) -> Vec<(SteamUserId, Vec<u8>)> {
+        self.0.receive()
+    }
+}
+
+/// What a Sockets connection reports.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SocketEvent {
+    /// `peer` asks the listening host to connect; answer with `accept` or `close`.
+    Request(SteamUserId),
+    /// The connection with `peer` is open both ways.
+    Connected(SteamUserId),
+    /// The connection with `peer` closed (the other side, a timeout, a refusal).
+    Closed(SteamUserId),
+}
+
+/// The Steam Networking Sockets calls, which tests replace.
+trait SocketsApi: Send {
+    fn listen(&mut self) -> io::Result<()>;
+    fn connect(&mut self, host: SteamUserId) -> io::Result<()>;
+    fn events(&mut self) -> Vec<SocketEvent>;
+    /// Accepts the pending request of `peer`; `false` if there is none.
+    fn accept(&mut self, peer: SteamUserId) -> bool;
+    /// Refuses `peer`'s request or closes its connection.
+    fn close(&mut self, peer: SteamUserId);
+    fn send(&mut self, peer: SteamUserId, bytes: &[u8]) -> bool;
+    fn receive(&mut self) -> Vec<(SteamUserId, Vec<u8>)>;
+}
+
+/// Steam Networking Sockets: the host listens and accepts lobby members'
+/// connections; a client connects to the host. Packets go only over open
+/// connections; until one is open, sends are loss and the protocol resends.
+struct SocketsCarrier {
+    api: Box<dyn SocketsApi>,
+    hosting: bool,
+    listening: bool,
+    /// The host a client connected (or is connecting) to.
+    dialed: Option<SteamUserId>,
+    open: BTreeSet<SteamUserId>,
+}
+impl SocketsCarrier {
+    fn new(api: Box<dyn SocketsApi>, hosting: bool) -> Self {
+        Self {
+            api,
+            hosting,
+            listening: false,
+            dialed: None,
+            open: BTreeSet::new(),
+        }
+    }
+}
+impl Carrier for SocketsCarrier {
+    fn maintain(&mut self, members: &[SteamUserId], host: Option<SteamUserId>) -> io::Result<()> {
+        if self.hosting && !self.listening {
+            self.api.listen()?;
+            self.listening = true;
+        }
+        if !self.hosting
+            && let Some(host) = host
+            && self.dialed != Some(host)
+        {
+            self.api.connect(host)?;
+            self.dialed = Some(host);
+        }
+        for event in self.api.events() {
+            match event {
+                SocketEvent::Request(peer) if self.hosting && members.contains(&peer) => {
+                    self.api.accept(peer);
+                }
+                SocketEvent::Request(peer) => self.api.close(peer),
+                SocketEvent::Connected(peer) if self.hosting && !members.contains(&peer) => self.api.close(peer),
+                SocketEvent::Connected(peer) if self.hosting || Some(peer) == self.dialed => {
+                    self.open.insert(peer);
+                }
+                SocketEvent::Connected(peer) => self.api.close(peer),
+                SocketEvent::Closed(peer) => {
+                    self.open.remove(&peer);
+                    if Some(peer) == self.dialed {
+                        self.dialed = None; // dial again at the next maintain
+                    }
+                }
+            }
+        }
+        // Members who left the lobby lose their connection.
+        let gone: Vec<SteamUserId> = self.open.iter().filter(|p| !members.contains(p)).copied().collect();
+        for peer in gone {
+            self.api.close(peer);
+            self.open.remove(&peer);
+            if Some(peer) == self.dialed {
+                self.dialed = None;
+            }
+        }
+        Ok(())
+    }
+    fn send(&mut self, peer: SteamUserId, bytes: &[u8]) -> io::Result<bool> {
+        Ok(self.open.contains(&peer) && self.api.send(peer, bytes))
+    }
+    fn receive(&mut self) -> Vec<(SteamUserId, Vec<u8>)> {
+        let mut got = self.api.receive();
+        got.retain(|(peer, _)| self.open.contains(peer));
+        got
+    }
+}
+
+/// The real Steam Networking Sockets.
+struct RealSockets {
+    client: SteamClient,
+    listen: Option<steamworks::networking_sockets::ListenSocket>,
+    requests: BTreeMap<SteamUserId, steamworks::networking_types::ConnectionRequest>,
+    /// Open connections (the host's), or the one being opened (a client's).
+    connections: BTreeMap<SteamUserId, steamworks::networking_sockets::NetConnection>,
+}
+impl RealSockets {
+    fn new(client: &SteamClient) -> Self {
+        Self {
+            client: client.clone(),
+            listen: None,
+            requests: BTreeMap::new(),
+            connections: BTreeMap::new(),
+        }
+    }
+}
+fn peer_of(identity: &NetworkingIdentity) -> Option<SteamUserId> {
+    identity.steam_id().map(SteamUserId::from_unstable)
+}
+impl SocketsApi for RealSockets {
+    fn listen(&mut self) -> io::Result<()> {
+        let socket = self
+            .client
+            .inner
+            .networking_sockets()
+            .create_listen_socket_p2p(SOCKETS_PORT, Vec::new())
+            .map_err(|_| io::Error::other("Steam refused the listen socket"))?;
+        self.listen = Some(socket);
+        Ok(())
+    }
+    fn connect(&mut self, host: SteamUserId) -> io::Result<()> {
+        let connection = self
+            .client
+            .inner
+            .networking_sockets()
+            .connect_p2p(
+                NetworkingIdentity::new_steam_id(host.to_unstable()),
+                SOCKETS_PORT,
+                Vec::new(),
+            )
+            .map_err(|_| io::Error::other("Steam refused to connect to the host"))?;
+        self.connections.insert(host, connection);
+        Ok(())
+    }
+    fn events(&mut self) -> Vec<SocketEvent> {
+        use steamworks::networking_types::{ListenSocketEvent, NetworkingConnectionState as State};
+        let mut events = Vec::new();
+        if let Some(listen) = &self.listen {
+            while let Some(event) = listen.try_receive_event() {
+                match event {
+                    ListenSocketEvent::Connecting(request) => {
+                        if let Some(peer) = peer_of(&request.remote()) {
+                            self.requests.insert(peer, request);
+                            events.push(SocketEvent::Request(peer));
+                        }
+                    }
+                    ListenSocketEvent::Connected(connected) => {
+                        if let Some(peer) = peer_of(&connected.remote()) {
+                            self.connections.insert(peer, connected.take_connection());
+                            events.push(SocketEvent::Connected(peer));
+                        }
+                    }
+                    ListenSocketEvent::Disconnected(gone) => {
+                        if let Some(peer) = peer_of(&gone.remote()) {
+                            self.connections.remove(&peer);
+                            events.push(SocketEvent::Closed(peer));
+                        }
+                    }
+                }
+            }
+        } else {
+            let mut closed = Vec::new();
+            for (peer, connection) in &self.connections {
+                while let Some(event) = connection.try_receive_event() {
+                    match event.new_state {
+                        State::Connected => events.push(SocketEvent::Connected(*peer)),
+                        State::ClosedByPeer | State::ProblemDetectedLocally | State::None => closed.push(*peer),
+                        _ => {}
+                    }
+                }
+            }
+            for peer in closed {
+                self.connections.remove(&peer);
+                events.push(SocketEvent::Closed(peer));
+            }
+        }
+        events
+    }
+    fn accept(&mut self, peer: SteamUserId) -> bool {
+        self.requests.remove(&peer).is_some_and(|r| r.accept().is_ok())
+    }
+    fn close(&mut self, peer: SteamUserId) {
+        use steamworks::networking_types::{AppNetConnectionEnd, NetConnectionEnd};
+        if let Some(request) = self.requests.remove(&peer) {
+            request.reject(
+                NetConnectionEnd::App(AppNetConnectionEnd::generic_normal()),
+                Some("not in the lobby"),
+            );
+        }
+        self.connections.remove(&peer); // dropping closes it
+    }
+    fn send(&mut self, peer: SteamUserId, bytes: &[u8]) -> bool {
+        self.connections
+            .get(&peer)
+            .is_some_and(|c| c.send_message(bytes, SendFlags::UNRELIABLE_NO_NAGLE).is_ok())
+    }
+    fn receive(&mut self) -> Vec<(SteamUserId, Vec<u8>)> {
+        let mut got = Vec::new();
+        for (peer, connection) in &mut self.connections {
+            if let Ok(messages) = connection.receive_messages(256) {
+                got.extend(messages.into_iter().map(|m| (*peer, m.data().to_vec())));
+            }
+        }
+        got
+    }
+}
+
+/// Which carrier an endpoint uses: the host's choice, or a joiner's
+/// factory that follows the host once its lobby metadata says.
+enum Pick {
+    Chosen(Box<dyn Carrier>),
+    Follow(Box<dyn FnMut(&str) -> Box<dyn Carrier> + Send>),
 }
 
 /// An asynchronously created/joined Steam lobby. Call `poll` each frame;
@@ -363,21 +627,45 @@ struct Relay {
     owner: Option<SteamUserId>,
     inbox: VecDeque<(SteamUserId, Vec<u8>)>,
     published: bool,
+    carrier: Pick,
+    /// The carrier's name in the lobby's metadata (hosts publish it).
+    carrier_name: &'static str,
 }
 impl Relay {
-    fn new(lobby: SteamLobby, hosting: bool) -> Self {
+    /// A host with its carrier, named `name` in the lobby's metadata.
+    fn host(lobby: SteamLobby, name: &'static str, carrier: Box<dyn Carrier>) -> Self {
+        let mut relay = Self::new(lobby, true, Pick::Chosen(carrier));
+        relay.carrier_name = name;
+        relay
+    }
+    /// A joiner whose carrier follows the host's (`make` gets its name).
+    fn join(lobby: SteamLobby, make: impl FnMut(&str) -> Box<dyn Carrier> + Send + 'static) -> Self {
+        Self::new(lobby, false, Pick::Follow(Box::new(make)))
+    }
+    fn new(lobby: SteamLobby, hosting: bool, carrier: Pick) -> Self {
         Self {
             lobby,
             hosting,
             owner: None,
             inbox: VecDeque::new(),
             published: false,
+            carrier,
+            carrier_name: MESSAGES,
+        }
+    }
+    /// The open carrier, once the joiner knows which one the host uses.
+    fn carrier(&mut self) -> Option<&mut dyn Carrier> {
+        match &mut self.carrier {
+            Pick::Chosen(c) => Some(c.as_mut()),
+            Pick::Follow(_) => None,
         }
     }
     fn prepare(&mut self) -> io::Result<()> {
         self.lobby.poll()?;
         if let Some(id) = self.lobby.id() {
             if self.hosting && !self.published {
+                // The carrier first: a joiner waits for the protocol key.
+                self.lobby.set_metadata(CARRIER_KEY, self.carrier_name)?;
                 self.lobby.set_metadata("ponko_protocol", PROTOCOL)?;
                 self.published = true;
             }
@@ -387,6 +675,20 @@ impl Relay {
                     Some(_) => return Err(io::Error::other("incompatible message protocol")),
                     None => return Ok(()), // owner may still be publishing
                 }
+                if let Pick::Follow(make) = &mut self.carrier {
+                    let name = self.lobby.metadata(CARRIER_KEY).unwrap_or_else(|| MESSAGES.into());
+                    if name != MESSAGES && name != SOCKETS {
+                        return Err(io::Error::other(format!(
+                            "the host uses the Steam carrier {name:?}, which this version doesn't know"
+                        )));
+                    }
+                    self.carrier = Pick::Chosen(make(&name));
+                }
+            }
+            let members = self.lobby.members();
+            let owner = self.owner;
+            if let Some(carrier) = self.carrier() {
+                carrier.maintain(&members, owner)?;
             }
         }
         Ok(())
@@ -403,13 +705,18 @@ impl PacketTransport for Relay {
         if !self.lobby.members().contains(&peer) {
             return Ok(false);
         }
-        self.lobby.api.send(peer, bytes)?;
-        Ok(true)
+        match self.carrier() {
+            Some(carrier) => carrier.send(peer, bytes),
+            None => Ok(false),
+        }
     }
     fn recv(&mut self, buf: &mut [u8]) -> io::Result<Option<(SocketAddr, usize)>> {
         self.prepare()?;
-        if self.inbox.is_empty() {
-            self.inbox.extend(self.lobby.api.receive());
+        if self.inbox.is_empty()
+            && let Some(carrier) = self.carrier()
+        {
+            let got = carrier.receive();
+            self.inbox.extend(got);
         }
         while let Some((peer, bytes)) = self.inbox.pop_front() {
             if bytes.len() > buf.len()
@@ -452,10 +759,55 @@ impl NetMessages {
             return Err(input("max_clients must be 1..=249"));
         }
         let lobby = SteamLobby::create(client, SteamLobbyVisibility::FriendsOnly, max_clients as u32 + 1)?;
-        Ok(Self::steam_endpoint(client, lobby, true, max_clients))
+        let carrier = MessagesCarrier(lobby.api.clone());
+        Ok(Self::steam_endpoint(
+            client,
+            Relay::host(lobby, MESSAGES, Box::new(carrier)),
+            max_clients,
+        ))
+    }
+    /// Host message traffic over Steam Networking Sockets: connections the
+    /// host accepts from its lobby's members, relayed through Valve's network,
+    /// with the same friends-only lobby, invites and messages as
+    /// [`steam_host`](Self::steam_host). Players join with the same
+    /// [`steam_join`](Self::steam_join), which follows the host's choice.
+    ///
+    /// [`steam_host`](Self::steam_host) (Steam Networking Messages, no
+    /// connections) is the default for games among friends. Sockets suits a
+    /// host that runs on its own (a headless server process signed in to a
+    /// Steam account) and games that want a connection per player: the host
+    /// accepts or refuses each one, and a member who leaves the lobby loses
+    /// theirs at once.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidInput` if `max_clients` is outside 1..=249. Steam refusing
+    /// the listen socket arrives through `poll`.
+    ///
+    /// ```no_run
+    /// # use ponko::prelude::*;
+    /// let client = ponko::net::SteamClient::init_app(480).unwrap();
+    /// let mut host = ponko::net::NetMessages::steam_sockets_host(&client, 8)?;
+    /// host.poll()?;
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    pub fn steam_sockets_host(client: &SteamClient, max_clients: usize) -> io::Result<Self> {
+        if !(1..=249).contains(&max_clients) {
+            return Err(input("max_clients must be 1..=249"));
+        }
+        let lobby = SteamLobby::create(client, SteamLobbyVisibility::FriendsOnly, max_clients as u32 + 1)?;
+        let carrier = SocketsCarrier::new(Box::new(RealSockets::new(client)), true);
+        Ok(Self::steam_endpoint(
+            client,
+            Relay::host(lobby, SOCKETS, Box::new(carrier)),
+            max_clients,
+        ))
     }
     /// Join a message host by lobby id. Poll until `Connected`; lobby failures
-    /// are returned by `poll`. Host migration requires a new endpoint.
+    /// are returned by `poll`. Host migration requires a new endpoint. The
+    /// packets go the way the host chose: Steam Networking Messages
+    /// ([`steam_host`](Self::steam_host)) or a connection over Steam
+    /// Networking Sockets ([`steam_sockets_host`](Self::steam_sockets_host)).
     ///
     /// # Errors
     ///
@@ -468,19 +820,26 @@ impl NetMessages {
     /// # Ok::<(), std::io::Error>(())
     /// ```
     pub fn steam_join(client: &SteamClient, lobby: SteamLobbyId) -> io::Result<Self> {
-        Ok(Self::steam_endpoint(client, SteamLobby::join(client, lobby)?, false, 1))
+        let lobby = SteamLobby::join(client, lobby)?;
+        let api = lobby.api.clone();
+        let sockets = client.clone();
+        let relay = Relay::join(lobby, move |name| -> Box<dyn Carrier> {
+            if name == SOCKETS {
+                Box::new(SocketsCarrier::new(Box::new(RealSockets::new(&sockets)), false))
+            } else {
+                Box::new(MessagesCarrier(api.clone()))
+            }
+        });
+        Ok(Self::steam_endpoint(client, relay, 1))
     }
-    fn steam_endpoint(client: &SteamClient, lobby: SteamLobby, hosting: bool, max: usize) -> Self {
+    fn steam_endpoint(client: &SteamClient, relay: Relay, max: usize) -> Self {
+        let hosting = relay.hosting;
         // Steam authenticates identities. Session membership and the normal
         // message handshake govern delivery; receiving also filters members.
         client.inner.networking_messages().session_request_callback(|r| {
             r.accept();
         });
-        Self::transported(
-            Box::new(Relay::new(lobby, hosting)),
-            if hosting { None } else { Some(HOST) },
-            max,
-        )
+        Self::transported(Box::new(relay), if hosting { None } else { Some(HOST) }, max)
     }
     /// This endpoint's lobby, for metadata, membership and overlay invites.
     /// Returns `None` for UDP and loopback endpoints.
@@ -507,33 +866,98 @@ impl NetMessages {
     }
 }
 
+/// In-memory Steam for tests: lobbies, Messages and Sockets, with packets
+/// in memory or over the scripted network of the conformance tests.
 #[cfg(test)]
-mod tests {
+pub(super) mod testing {
     use super::*;
-    use crate::net::Lane;
-    use crate::net::MAX_MESSAGE_BYTES;
-    use crate::net::MessageEvent;
+    use crate::net::scripted::{Port, Shared};
     use std::collections::BTreeMap;
-    use std::time::Duration;
 
     #[derive(Default)]
-    struct Room {
-        owner: u64,
-        max: u32,
-        visibility: Option<SteamLobbyVisibility>,
-        members: Vec<u64>,
-        metadata: BTreeMap<String, String>,
+    pub(super) struct Room {
+        pub(super) owner: u64,
+        pub(super) max: u32,
+        pub(super) visibility: Option<SteamLobbyVisibility>,
+        pub(super) members: Vec<u64>,
+        pub(super) metadata: BTreeMap<String, String>,
     }
     #[derive(Default)]
-    struct State {
-        rooms: BTreeMap<u64, Room>,
-        packets: BTreeMap<u64, VecDeque<(SteamUserId, Vec<u8>)>>,
-        invites: usize,
-        largest: usize,
+    pub(super) struct State {
+        pub(super) rooms: BTreeMap<u64, Room>,
+        /// In-memory packets per receiver, Messages and Sockets alike.
+        pub(super) packets: BTreeMap<u64, VecDeque<(SteamUserId, Vec<u8>)>>,
+        pub(super) invites: usize,
+        pub(super) largest: usize,
+        /// Sockets: who listens, pending requests (host, client), open
+        /// connections (lower id first), events per user, dials made.
+        pub(super) listening: BTreeSet<u64>,
+        pub(super) requests: BTreeSet<(u64, u64)>,
+        pub(super) links: BTreeSet<(u64, u64)>,
+        pub(super) events: BTreeMap<u64, VecDeque<SocketEvent>>,
+        pub(super) dials: usize,
     }
-    struct Fake {
+    pub(super) type Steam = Arc<Mutex<State>>;
+
+    fn link(a: u64, b: u64) -> (u64, u64) {
+        (a.min(b), a.max(b))
+    }
+
+    /// Packets in memory, or over a scripted network port.
+    pub(super) struct Wire {
         me: u64,
-        state: Arc<Mutex<State>>,
+        state: Steam,
+        port: Option<Mutex<Port>>,
+    }
+    impl Wire {
+        pub(super) fn new(state: &Steam, me: u64, net: Option<&Shared>) -> Self {
+            Self {
+                me,
+                state: state.clone(),
+                port: net.map(|net| {
+                    Mutex::new(Port {
+                        net: net.clone(),
+                        me: addr(SteamUserId::from_raw(me)),
+                    })
+                }),
+            }
+        }
+        fn send(&self, peer: SteamUserId, bytes: &[u8]) -> io::Result<()> {
+            if let Some(port) = &self.port {
+                return port.lock().unwrap().send(addr(peer), bytes).map(drop);
+            }
+            let mut s = self.state.lock().unwrap();
+            s.largest = s.largest.max(bytes.len());
+            s.packets
+                .entry(peer.raw())
+                .or_default()
+                .push_back((SteamUserId::from_raw(self.me), bytes.to_vec()));
+            Ok(())
+        }
+        fn receive(&self) -> Vec<(SteamUserId, Vec<u8>)> {
+            if let Some(port) = &self.port {
+                let mut port = port.lock().unwrap();
+                let mut buf = [0; 1500];
+                let mut got = Vec::new();
+                while let Ok(Some((from, n))) = port.recv(&mut buf) {
+                    if let Some(peer) = steam_id(from) {
+                        got.push((peer, buf[..n].to_vec()));
+                    }
+                }
+                return got;
+            }
+            let mut s = self.state.lock().unwrap();
+            let q = s.packets.entry(self.me).or_default();
+            // Deliberate reordering, still bounded like the SDK batch.
+            (0..256).filter_map(|_| q.pop_back()).collect()
+        }
+    }
+
+    /// The lobby calls, and the Messages packets.
+    pub(super) struct Fake {
+        pub(super) me: u64,
+        pub(super) state: Steam,
+        pub(super) wire: Wire,
     }
     impl SteamApi for Fake {
         fn pump(&self) {}
@@ -596,45 +1020,155 @@ mod tests {
             self.state.lock().unwrap().invites += 1;
         }
         fn send(&self, peer: SteamUserId, bytes: &[u8]) -> io::Result<()> {
-            let mut s = self.state.lock().unwrap();
-            s.largest = s.largest.max(bytes.len());
-            s.packets
-                .entry(peer.raw())
-                .or_default()
-                .push_back((SteamUserId::from_raw(self.me), bytes.to_vec()));
-            Ok(())
+            self.wire.send(peer, bytes)
         }
         fn receive(&self) -> Vec<(SteamUserId, Vec<u8>)> {
-            let mut s = self.state.lock().unwrap();
-            let q = s.packets.entry(self.me).or_default();
-            // Deliberate reordering, still bounded like the SDK batch.
-            (0..256).filter_map(|_| q.pop_back()).collect()
+            self.wire.receive()
         }
     }
-    fn api(state: &Arc<Mutex<State>>, me: u64) -> Arc<dyn SteamApi> {
+
+    /// Steam Networking Sockets: requests, accepted connections, closes.
+    pub(super) struct FakeSockets {
+        pub(super) me: u64,
+        pub(super) state: Steam,
+        pub(super) wire: Wire,
+    }
+    impl FakeSockets {
+        fn tell(s: &mut State, who: u64, event: SocketEvent) {
+            s.events.entry(who).or_default().push_back(event);
+        }
+    }
+    impl SocketsApi for FakeSockets {
+        fn listen(&mut self) -> io::Result<()> {
+            self.state.lock().unwrap().listening.insert(self.me);
+            Ok(())
+        }
+        fn connect(&mut self, host: SteamUserId) -> io::Result<()> {
+            let mut s = self.state.lock().unwrap();
+            s.dials += 1;
+            let me = SteamUserId::from_raw(self.me);
+            if s.listening.contains(&host.raw()) {
+                s.requests.insert((host.raw(), self.me));
+                Self::tell(&mut s, host.raw(), SocketEvent::Request(me));
+            } else {
+                Self::tell(&mut s, self.me, SocketEvent::Closed(host));
+            }
+            Ok(())
+        }
+        fn events(&mut self) -> Vec<SocketEvent> {
+            let mut s = self.state.lock().unwrap();
+            s.events.remove(&self.me).map(Vec::from).unwrap_or_default()
+        }
+        fn accept(&mut self, peer: SteamUserId) -> bool {
+            let mut s = self.state.lock().unwrap();
+            if !s.requests.remove(&(self.me, peer.raw())) {
+                return false;
+            }
+            s.links.insert(link(self.me, peer.raw()));
+            Self::tell(&mut s, self.me, SocketEvent::Connected(peer));
+            Self::tell(
+                &mut s,
+                peer.raw(),
+                SocketEvent::Connected(SteamUserId::from_raw(self.me)),
+            );
+            true
+        }
+        fn close(&mut self, peer: SteamUserId) {
+            let mut s = self.state.lock().unwrap();
+            let refused = s.requests.remove(&(self.me, peer.raw()));
+            let closed = s.links.remove(&link(self.me, peer.raw()));
+            if refused || closed {
+                Self::tell(&mut s, peer.raw(), SocketEvent::Closed(SteamUserId::from_raw(self.me)));
+            }
+        }
+        fn send(&mut self, peer: SteamUserId, bytes: &[u8]) -> bool {
+            let open = self.state.lock().unwrap().links.contains(&link(self.me, peer.raw()));
+            open && self.wire.send(peer, bytes).is_ok()
+        }
+        fn receive(&mut self) -> Vec<(SteamUserId, Vec<u8>)> {
+            self.wire.receive()
+        }
+    }
+
+    pub(super) fn api(state: &Steam, me: u64) -> Arc<dyn SteamApi> {
+        api_on(state, me, None)
+    }
+    fn api_on(state: &Steam, me: u64, net: Option<&Shared>) -> Arc<dyn SteamApi> {
         Arc::new(Fake {
             me,
             state: state.clone(),
+            wire: Wire::new(state, me, net),
         })
     }
-    fn endpoints(players: usize) -> (Vec<NetMessages>, Arc<Mutex<State>>) {
-        let s = Arc::new(Mutex::new(State::default()));
-        let nets = (1..=players)
+    pub(super) fn sockets(state: &Steam, me: u64, net: Option<&Shared>, hosting: bool) -> Box<dyn Carrier> {
+        Box::new(SocketsCarrier::new(
+            Box::new(FakeSockets {
+                me,
+                state: state.clone(),
+                wire: Wire::new(state, me, net),
+            }),
+            hosting,
+        ))
+    }
+
+    /// `1 + clients` endpoints on one fake Steam: Steam user 1 hosts
+    /// with `carrier` ([`MESSAGES`] or [`SOCKETS`]) for up to `max_clients`;
+    /// users 2, 3, ... join its lobby. Packets cross `net` when given.
+    pub(super) fn endpoints_on(
+        carrier: &'static str,
+        clients: usize,
+        max_clients: usize,
+        net: Option<&Shared>,
+    ) -> (Vec<NetMessages>, Steam) {
+        let state = Steam::default();
+        let nets = (1..=clients as u64 + 1)
             .map(|me| {
-                let lobby = SteamLobby::start(
-                    api(&s, me as u64),
-                    if me == 1 { None } else { Some(SteamLobbyId::from_raw(1)) },
-                    SteamLobbyVisibility::FriendsOnly,
-                    players as u32,
-                );
-                NetMessages::transported(
-                    Box::new(Relay::new(lobby, me == 1)),
-                    if me == 1 { None } else { Some(HOST) },
-                    players - 1,
-                )
+                let api = api_on(&state, me, net);
+                if me == 1 {
+                    let lobby =
+                        SteamLobby::start(api.clone(), None, SteamLobbyVisibility::FriendsOnly, clients as u32 + 1);
+                    let c: Box<dyn Carrier> = if carrier == SOCKETS {
+                        sockets(&state, me, net, true)
+                    } else {
+                        Box::new(MessagesCarrier(api))
+                    };
+                    NetMessages::transported(Box::new(Relay::host(lobby, carrier, c)), None, max_clients)
+                } else {
+                    let lobby = SteamLobby::start(
+                        api.clone(),
+                        Some(SteamLobbyId::from_raw(1)),
+                        SteamLobbyVisibility::FriendsOnly,
+                        0,
+                    );
+                    let (state, net) = (state.clone(), net.cloned());
+                    let relay = Relay::join(lobby, move |name| -> Box<dyn Carrier> {
+                        if name == SOCKETS {
+                            sockets(&state, me, net.as_ref(), false)
+                        } else {
+                            Box::new(MessagesCarrier(api.clone()))
+                        }
+                    });
+                    NetMessages::transported(Box::new(relay), Some(HOST), 1)
+                }
             })
             .collect();
-        (nets, s)
+        (nets, state)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::testing::{State, api, endpoints_on};
+    use super::*;
+    use crate::net::Lane;
+    use crate::net::MAX_MESSAGE_BYTES;
+    use crate::net::MessageEvent;
+    use std::time::Duration;
+
+    const CARRIERS: [&str; 2] = [MESSAGES, SOCKETS];
+
+    fn endpoints(players: usize, carrier: &'static str) -> (Vec<NetMessages>, Arc<Mutex<State>>) {
+        endpoints_on(carrier, players - 1, players - 1, None)
     }
     fn poll(nets: &mut [NetMessages], steps: usize) {
         for _ in 0..steps {
@@ -660,80 +1194,87 @@ mod tests {
     #[test]
     fn replicates_over_the_steam_relay() {
         use crate::net::replication_conformance::{Session, declarations, exercise};
-        let (nets, _state) = endpoints(3);
-        exercise(Session::over(nets, declarations, false), 400, 200);
+        for carrier in CARRIERS {
+            let (nets, _state) = endpoints(3, carrier);
+            exercise(Session::over(nets, declarations, false), 400, 200);
+        }
     }
     #[test]
     fn two_and_three_peers_exchange_all_lanes_and_disconnect() {
-        for players in [2, 3] {
-            let (mut nets, state) = endpoints(players);
-            poll(&mut nets, 30);
-            let peers: Vec<_> = nets[0]
-                .events()
-                .filter_map(|e| {
-                    if let MessageEvent::Connected(p) = e {
-                        Some(p)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            assert_eq!(peers.len(), players - 1);
-            for n in &mut nets[1..] {
-                assert_eq!(
-                    n.events().collect::<Vec<_>>(),
-                    vec![MessageEvent::Connected(PeerId::HOST)]
-                );
-            }
-            for lane in [Lane::Reliable, Lane::ReliableUnordered, Lane::Unreliable] {
-                for peer in &peers {
-                    let id = nets[0].steam_peer(*peer).unwrap().raw();
-                    nets[0].send(*peer, lane, &[id as u8, 42]).unwrap();
-                }
-                for (i, n) in nets[1..].iter_mut().enumerate() {
-                    n.send(PeerId::HOST, lane, &[(i + 2) as u8, 24]).unwrap();
-                }
+        for carrier in CARRIERS {
+            for players in [2, 3] {
+                let (mut nets, state) = endpoints(players, carrier);
                 poll(&mut nets, 30);
-                let got: Vec<_> = nets[0].events().collect();
-                assert_eq!(got.len(), players - 1);
-                for e in got {
-                    let MessageEvent::Message { peer, lane: l, bytes } = e else {
-                        panic!("expected message");
-                    };
-                    assert_eq!(l, lane);
-                    assert_eq!(nets[0].steam_peer(peer).unwrap().raw(), u64::from(bytes[0]));
-                    assert_eq!(bytes[1], 24);
-                }
-                for (i, n) in nets[1..].iter_mut().enumerate() {
-                    assert!(
-                        matches!(n.next_event(), Some(MessageEvent::Message { lane: l, bytes, .. }) if l == lane && bytes == vec![(i + 2) as u8, 42])
+                let peers: Vec<_> = nets[0]
+                    .events()
+                    .filter_map(|e| {
+                        if let MessageEvent::Connected(p) = e {
+                            Some(p)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                assert_eq!(peers.len(), players - 1, "{carrier}");
+                for n in &mut nets[1..] {
+                    assert_eq!(
+                        n.events().collect::<Vec<_>>(),
+                        vec![MessageEvent::Connected(PeerId::HOST)]
                     );
                 }
+                for lane in [Lane::Reliable, Lane::ReliableUnordered, Lane::Unreliable] {
+                    for peer in &peers {
+                        let id = nets[0].steam_peer(*peer).unwrap().raw();
+                        nets[0].send(*peer, lane, &[id as u8, 42]).unwrap();
+                    }
+                    for (i, n) in nets[1..].iter_mut().enumerate() {
+                        n.send(PeerId::HOST, lane, &[(i + 2) as u8, 24]).unwrap();
+                    }
+                    poll(&mut nets, 30);
+                    let got: Vec<_> = nets[0].events().collect();
+                    assert_eq!(got.len(), players - 1);
+                    for e in got {
+                        let MessageEvent::Message { peer, lane: l, bytes } = e else {
+                            panic!("expected message");
+                        };
+                        assert_eq!(l, lane);
+                        assert_eq!(nets[0].steam_peer(peer).unwrap().raw(), u64::from(bytes[0]));
+                        assert_eq!(bytes[1], 24);
+                    }
+                    for (i, n) in nets[1..].iter_mut().enumerate() {
+                        assert!(
+                            matches!(n.next_event(), Some(MessageEvent::Message { lane: l, bytes, .. }) if l == lane && bytes == vec![(i + 2) as u8, 42])
+                        );
+                    }
+                }
+                nets[1].disconnect(PeerId::HOST).unwrap();
+                poll(&mut nets, 3);
+                assert!(nets[0].events().any(|e| matches!(e, MessageEvent::Disconnected(_, _))));
+                assert!(state.lock().unwrap().largest <= PACKET_LIMIT);
             }
-            nets[1].disconnect(PeerId::HOST).unwrap();
-            poll(&mut nets, 3);
-            assert!(nets[0].events().any(|e| matches!(e, MessageEvent::Disconnected(_, _))));
-            assert!(state.lock().unwrap().largest <= PACKET_LIMIT);
         }
     }
     #[test]
     fn fragmented_payload_crosses_fake_steam_relay() {
-        let (mut nets, s) = endpoints(2);
-        poll(&mut nets, 30);
-        for n in &mut nets {
-            n.events().for_each(drop);
+        for carrier in CARRIERS {
+            let (mut nets, s) = endpoints(2, carrier);
+            poll(&mut nets, 30);
+            for n in &mut nets {
+                n.events().for_each(drop);
+            }
+            for lane in [Lane::Reliable, Lane::ReliableUnordered, Lane::Unreliable] {
+                let bytes = vec![73; MAX_MESSAGE_BYTES];
+                nets[1].send(PeerId::HOST, lane, &bytes).unwrap();
+                poll(&mut nets, 150);
+                assert!(
+                    nets[0].events().any(
+                        |e| matches!(e, MessageEvent::Message { lane: l, bytes: b, .. } if l == lane && b == bytes)
+                    ),
+                    "{carrier}"
+                );
+            }
+            assert!(s.lock().unwrap().largest <= PACKET_LIMIT);
         }
-        for lane in [Lane::Reliable, Lane::ReliableUnordered, Lane::Unreliable] {
-            let bytes = vec![73; MAX_MESSAGE_BYTES];
-            nets[1].send(PeerId::HOST, lane, &bytes).unwrap();
-            poll(&mut nets, 150);
-            assert!(
-                nets[0]
-                    .events()
-                    .any(|e| matches!(e, MessageEvent::Message { lane: l, bytes: b, .. } if l == lane && b == bytes))
-            );
-        }
-        assert!(s.lock().unwrap().largest <= PACKET_LIMIT);
     }
     #[test]
     fn lobby_members_metadata_invites_and_leave() {
@@ -767,7 +1308,7 @@ mod tests {
     }
     #[test]
     fn incompatible_lobby_and_nonmembers_cannot_route() {
-        let (mut nets, s) = endpoints(3);
+        let (mut nets, s) = endpoints(3, MESSAGES);
         nets.pop(); // leave one host slot free: an outsider HELLO must still be rejected
         poll(&mut nets, 30);
         for n in &mut nets {
@@ -796,13 +1337,59 @@ mod tests {
     }
     #[test]
     fn protocol_metadata_is_published_and_unknown_versions_are_rejected() {
-        let (mut nets, state) = endpoints(2);
-        poll(&mut nets, 30);
-        let metadata = state.lock().unwrap().rooms[&1].metadata.clone();
-        assert_eq!(
-            metadata.get("ponko_protocol").map(String::as_str),
-            Some("ponko-messages-2")
-        );
+        for carrier in CARRIERS {
+            let (mut nets, state) = endpoints(2, carrier);
+            poll(&mut nets, 30);
+            let metadata = state.lock().unwrap().rooms[&1].metadata.clone();
+            assert_eq!(
+                metadata.get("ponko_protocol").map(String::as_str),
+                Some("ponko-messages-2")
+            );
+            assert_eq!(metadata.get(CARRIER_KEY).map(String::as_str), Some(carrier));
+            state
+                .lock()
+                .unwrap()
+                .rooms
+                .get_mut(&1)
+                .unwrap()
+                .metadata
+                .remove("ponko_protocol");
+            assert!(
+                nets[1].poll_elapsed(Duration::ZERO).is_ok(),
+                "a joiner waits while the host has not published yet"
+            );
+            {
+                let mut state = state.lock().unwrap();
+                let metadata = &mut state.rooms.get_mut(&1).unwrap().metadata;
+                metadata.insert("ponko_protocol".into(), "ponko-messages-3".into());
+            }
+            assert!(
+                nets[1].poll_elapsed(Duration::ZERO).is_err(),
+                "unknown protocol versions are rejected"
+            );
+        }
+    }
+
+    // Steam Networking Sockets.
+
+    /// The packets a joiner's carrier sends before and after its connection.
+    #[test]
+    fn a_joiner_uses_the_carrier_the_host_published() {
+        for carrier in CARRIERS {
+            let (mut nets, state) = endpoints(2, carrier);
+            poll(&mut nets, 30);
+            let s = state.lock().unwrap();
+            assert_eq!(
+                !s.links.is_empty(),
+                carrier == SOCKETS,
+                "{carrier}: connections only for Sockets"
+            );
+            assert_eq!(s.dials, usize::from(carrier == SOCKETS));
+        }
+    }
+    #[test]
+    fn a_host_without_a_carrier_key_is_a_messages_host_and_unknown_carriers_are_refused() {
+        let (mut nets, state) = endpoints(2, MESSAGES);
         state
             .lock()
             .unwrap()
@@ -810,19 +1397,121 @@ mod tests {
             .get_mut(&1)
             .unwrap()
             .metadata
-            .remove("ponko_protocol");
-        assert!(
-            nets[1].poll_elapsed(Duration::ZERO).is_ok(),
-            "a joiner waits while the host has not published yet"
-        );
+            .insert("ponko_protocol".into(), PROTOCOL.into());
+        // An older host: the protocol key only.
+        state
+            .lock()
+            .unwrap()
+            .rooms
+            .get_mut(&1)
+            .unwrap()
+            .metadata
+            .remove(CARRIER_KEY);
+        nets[1].poll_elapsed(Duration::ZERO).unwrap();
+        poll(&mut nets, 30);
+        assert!(nets[1].events().any(|e| e == MessageEvent::Connected(PeerId::HOST)));
+
+        let (mut nets, state) = endpoints(2, MESSAGES);
         {
-            let mut state = state.lock().unwrap();
-            let metadata = &mut state.rooms.get_mut(&1).unwrap().metadata;
-            metadata.insert("ponko_protocol".into(), "ponko-messages-3".into());
+            let mut s = state.lock().unwrap();
+            let m = &mut s.rooms.get_mut(&1).unwrap().metadata;
+            m.insert("ponko_protocol".into(), PROTOCOL.into());
+            m.insert(CARRIER_KEY.into(), "carrier-pigeon".into());
         }
+        let e = nets[1].poll_elapsed(Duration::ZERO).unwrap_err();
+        assert!(e.to_string().contains("carrier-pigeon"), "{e}");
+    }
+    #[test]
+    fn a_sockets_host_refuses_connections_from_outside_its_lobby() {
+        let (mut nets, state) = endpoints(2, SOCKETS);
+        poll(&mut nets, 30);
+        // Steam user 99 dials the host without joining the lobby.
+        let mut outsider = super::testing::FakeSockets {
+            me: 99,
+            state: state.clone(),
+            wire: super::testing::Wire::new(&state, 99, None),
+        };
+        outsider.connect(SteamUserId::from_raw(1)).unwrap();
+        poll(&mut nets, 2);
+        assert_eq!(outsider.events(), [SocketEvent::Closed(SteamUserId::from_raw(1))]);
+        assert!(!state.lock().unwrap().links.contains(&(1, 99)));
         assert!(
-            nets[1].poll_elapsed(Duration::ZERO).is_err(),
-            "unknown protocol versions are rejected"
+            !outsider.send(SteamUserId::from_raw(1), b"hello"),
+            "no connection, no packets"
+        );
+    }
+    #[test]
+    fn a_sockets_client_sends_nothing_until_the_host_accepts() {
+        let state = Arc::new(Mutex::new(State::default()));
+        let mut client = super::testing::sockets(&state, 2, None, false);
+        let host = SteamUserId::from_raw(1);
+        assert!(!client.send(host, b"early").unwrap(), "not connected: loss");
+        client.maintain(&[host, SteamUserId::from_raw(2)], Some(host)).unwrap();
+        assert!(!client.send(host, b"early").unwrap(), "nobody listens: the dial closed");
+        let mut server = super::testing::sockets(&state, 1, None, true);
+        let members = [host, SteamUserId::from_raw(2)];
+        server.maintain(&members, None).unwrap(); // listens
+        client.maintain(&members, Some(host)).unwrap(); // dials again after the close
+        server.maintain(&members, None).unwrap(); // accepts
+        client.maintain(&members, Some(host)).unwrap(); // connected
+        assert!(client.send(host, b"now").unwrap());
+        server.maintain(&members, None).unwrap(); // the host sees the connection open
+        assert_eq!(server.receive(), [(SteamUserId::from_raw(2), b"now".to_vec())]);
+        assert_eq!(state.lock().unwrap().dials, 2);
+    }
+    #[test]
+    fn leaving_the_lobby_closes_the_sockets_connection() {
+        let (mut nets, state) = endpoints(3, SOCKETS);
+        poll(&mut nets, 30);
+        assert_eq!(state.lock().unwrap().links.len(), 2);
+        let leaver = nets.pop().unwrap();
+        drop(leaver); // drops the lobby: leaves it
+        poll(&mut nets, 2);
+        assert_eq!(
+            state.lock().unwrap().links,
+            BTreeSet::from([(1, 2)]),
+            "only the member left is connected"
+        );
+        nets[0].events().for_each(drop);
+        nets[1].send(PeerId::HOST, Lane::Reliable, b"still here").unwrap();
+        poll(&mut nets, 10);
+        assert!(
+            nets[0]
+                .events()
+                .any(|e| matches!(e, MessageEvent::Message { bytes, .. } if bytes == b"still here"))
+        );
+    }
+    #[test]
+    fn a_dropped_sockets_connection_is_dialed_again_and_the_session_goes_on() {
+        let (mut nets, state) = endpoints(2, SOCKETS);
+        poll(&mut nets, 30);
+        for n in &mut nets {
+            n.events().for_each(drop);
+        }
+        {
+            // The route breaks: Steam closes the connection on both ends.
+            let mut s = state.lock().unwrap();
+            s.links.clear();
+            s.events
+                .entry(1)
+                .or_default()
+                .push_back(SocketEvent::Closed(SteamUserId::from_raw(2)));
+            s.events
+                .entry(2)
+                .or_default()
+                .push_back(SocketEvent::Closed(SteamUserId::from_raw(1)));
+        }
+        nets[1].send(PeerId::HOST, Lane::Reliable, b"after").unwrap();
+        poll(&mut nets, 40);
+        assert_eq!(state.lock().unwrap().dials, 2);
+        assert!(
+            nets[0]
+                .events()
+                .any(|e| matches!(e, MessageEvent::Message { bytes, .. } if bytes == b"after"))
+        );
+        assert!(
+            !nets[1].events().any(|e| matches!(e, MessageEvent::Disconnected(..))),
+            "the session survives"
         );
     }
 }
