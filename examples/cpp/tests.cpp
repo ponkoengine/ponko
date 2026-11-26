@@ -4041,6 +4041,13 @@ static void remaining_bindings() {
         ctx.set_lod_hysteresis(e, 0.1f);
         CHECK(ctx.lod_hysteresis(e) == 0.1f);
         throws_invalid([&] { ctx.set_lod_hysteresis(e, 2.0f); }, "between 0 and 1");
+        // LOD fade time.
+        CHECK(ctx.lod_fade_time(e) == 0.0f);
+        ctx.set_lod_fade_time(e, 0.5f);
+        CHECK(ctx.lod_fade_time(e) == 0.5f);
+        throws_invalid([&] { ctx.set_lod_fade_time(e, -1.0f); }, "0 or more seconds");
+        ctx.set_lod_fade_time(e, 0.0f);
+        CHECK(ctx.lod_fade_time(e) == 0.0f);
 
         // Scene compute passes and target effects.
         auto light = ctx.create_render_target(16, 9);

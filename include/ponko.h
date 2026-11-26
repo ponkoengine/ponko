@@ -9605,6 +9605,10 @@ enum PonkoStatus ponko_ctx_lod_hysteresis(struct PonkoCtx *ctx,
                                           uint64_t entity,
                                           float *out_fraction);
 
+enum PonkoStatus ponko_ctx_set_lod_fade_time(struct PonkoCtx *ctx, uint64_t entity, float seconds);
+
+enum PonkoStatus ponko_ctx_lod_fade_time(struct PonkoCtx *ctx, uint64_t entity, float *out_seconds);
+
 enum PonkoStatus ponko_lod_instance_levels(float size,
                                            struct PonkoVec3 center,
                                            const struct PonkoLodLevel *levels,

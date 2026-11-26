@@ -14066,6 +14066,22 @@ pub fn ponko::render::Lightmapped::fmt(&self, &mut core::fmt::Formatter<'_>) -> 
 impl core::marker::Copy for ponko::render::Lightmapped
 impl core::marker::StructuralPartialEq for ponko::render::Lightmapped
 impl ponko_ecs::bundle::Component for ponko::render::Lightmapped
+pub struct ponko::render::LodFadeTime(pub f32)
+impl core::clone::Clone for ponko::render::LodFadeTime
+pub fn ponko::render::LodFadeTime::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::render::LodFadeTime
+pub fn ponko::render::LodFadeTime::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::render::LodFadeTime
+pub fn ponko::render::LodFadeTime::default() -> Self
+impl core::fmt::Debug for ponko::render::LodFadeTime
+pub fn ponko::render::LodFadeTime::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::render::LodFadeTime
+impl core::marker::StructuralPartialEq for ponko::render::LodFadeTime
+impl ponko_ecs::bundle::Component for ponko::render::LodFadeTime
+impl serde_core::ser::Serialize for ponko::render::LodFadeTime
+pub fn ponko::render::LodFadeTime::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::render::LodFadeTime
+pub fn ponko::render::LodFadeTime::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct ponko::render::LodGroup
 pub ponko::render::LodGroup::center: glam::f32::vec3::Vec3
 pub ponko::render::LodGroup::levels: alloc::vec::Vec<ponko::render::LodLevel>

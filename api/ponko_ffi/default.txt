@@ -6915,6 +6915,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_load_video(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, *mut *mut ponko_ffi::PonkoVideo) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_load_world(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_loaded_materials(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, *mut ponko_ffi::PonkoMaterial, *mut ponko_ffi::PonkoMaterialDesc, usize, *mut usize) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_lod_fade_time(*mut ponko_ffi::PonkoCtx, u64, *mut f32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_lod_hysteresis(*mut ponko_ffi::PonkoCtx, u64, *mut f32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_lod_pick(*mut ponko_ffi::PonkoCtx, u64, *mut ponko_ffi::PonkoLodPick) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_lod_settings(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoLodSettings) -> ponko_ffi::PonkoStatus
@@ -7162,6 +7163,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_lighting(*mut ponko_ffi::PonkoCtx, *const ponko_ffi::PonkoLighting) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_lighting_ex(*mut ponko_ffi::PonkoCtx, *const ponko_ffi::PonkoLightingEx) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_line3d(*mut ponko_ffi::PonkoCtx, u64, *const ponko_ffi::PonkoLine3D) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_lod_fade_time(*mut ponko_ffi::PonkoCtx, u64, f32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_lod_group(*mut ponko_ffi::PonkoCtx, u64, f32, ponko_ffi::PonkoVec3, *const ponko_ffi::PonkoLodLevel, usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_lod_hysteresis(*mut ponko_ffi::PonkoCtx, u64, f32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_lod_settings(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoLodSettings) -> ponko_ffi::PonkoStatus

@@ -415,27 +415,37 @@ fn lod_levels_cast_the_shadows_their_renderers_ask_for() {
 }
 
 #[test]
-fn animated_and_unfaded_groups_fade_as_far_as_they_can() {
+fn unfaded_groups_switch_at_once() {
     let none = LOD_GROUP.replace("m_FadeMode: 1", "m_FadeMode: 0");
     let (_f, scene, _) = import_lod("lodnofade", &none, |_| {});
-    let levels = scene["entities"][0]["components"]["LodGroup"]["levels"]
-        .as_array()
-        .unwrap();
+    let c = &scene["entities"][0]["components"];
+    let levels = c["LodGroup"]["levels"].as_array().unwrap();
     assert!(
         levels.iter().all(|l| l["fade_width"] == 0.0),
         "no fade mode: switches at once"
     );
+    // Animate Cross-fading without a fade mode fades nothing either.
+    let still = none.replace("m_AnimateCrossFading: 0", "m_AnimateCrossFading: 1");
+    let (_f, scene, _) = import_lod("lodnofadeanim", &still, |_| {});
+    assert!(scene["entities"][0]["components"]["LodFadeTime"].is_null());
+}
 
+#[test]
+fn animated_cross_fades_fade_over_time() {
     let animated = LOD_GROUP.replace("m_AnimateCrossFading: 0", "m_AnimateCrossFading: 1");
     let (_f, scene, report) = import_lod("lodanim", &animated, |_| {});
-    let levels = scene["entities"][0]["components"]["LodGroup"]["levels"]
-        .as_array()
-        .unwrap();
-    assert!(levels.iter().all(|l| l["fade_width"].as_f64().unwrap() > 0.0));
-    assert_eq!(
-        report.skipped["an animated cross-fade (fades over a band of screen heights instead)"],
-        1
-    );
+    let c = &scene["entities"][0]["components"];
+    // Unity's default duration, and no band fades: the switch is what fades.
+    assert_eq!(c["LodFadeTime"], 0.5);
+    let levels = c["LodGroup"]["levels"].as_array().unwrap();
+    assert!(levels.iter().all(|l| l["fade_width"] == 0.0), "{levels:?}");
+    assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+    // The duration a game's script set for the project.
+    let (_f, scene, _) = import_lod("lodanimtime", &animated, |i| i.lod_fade_time(0.25));
+    assert_eq!(scene["entities"][0]["components"]["LodFadeTime"], 0.25);
+    // Not animated: no fade time.
+    let (_f, scene, _) = import_lod("lodnotanim", LOD_GROUP, |_| {});
+    assert!(scene["entities"][0]["components"]["LodFadeTime"].is_null());
 }
 
 #[test]

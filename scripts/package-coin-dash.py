@@ -202,7 +202,7 @@ def smoke_headless(package, work, timeout):
     print("  ok: second run (progress and settings reloaded)")
 
     # 3. A damaged file is set aside and the game starts over.
-    save.write_text("{ not a save", encoding="utf-8")
+    save.write_text("{ not a save", encoding="utf-8", newline='\n')
     code, out, err = play(exe, "headless", cwd, env, work / "report3.json", timeout)
     check(code == 0, f"run with a damaged save exited {code}:\n{err}{out}")
     check_report(read_report(work / "report3.json", "damaged save"), "damaged save", "headless", "Recovered", 1)
