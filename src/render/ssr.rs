@@ -65,8 +65,9 @@ pub(super) const HITS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg16Flo
 /// The copy of the scene depth the trace reads (see `ssr.wgsl`).
 pub(super) const DEPTH_COPY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 /// The reflections' normals (`reflection_normal` in `mesh_main.wgsl`):
-/// the normal in red, green and blue, and in alpha whether the surface is
-/// glossy enough to show reflections. Four bytes a pixel; renderable,
+/// the normal in red, green and blue, and in alpha whether anything was
+/// drawn there, whether the surface is glossy enough to show reflections
+/// and whether its normal is tilted from the mesh's. Four bytes a pixel; renderable,
 /// multisampled and resolved everywhere WebGPU runs.
 pub(super) const NORMALS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgb10a2Unorm;
 /// What the normals pass clears to: a zero normal (512 of 1023 on each

@@ -638,14 +638,15 @@ fn fs_fade(in: VertexOut) {
 // each axis -1 to 1 in 10 bits with 0 exact. Multisampling averages a
 // pixel's samples: two surfaces' normals, or one and the clear value (all
 // 0), average to shorter than 1, which the trace can tell. Alpha, in two
-// bits: 0 where the surface is too rough to show reflections (roughness
-// 0.7 and up, where `environment_light` has faded them out), 1 where it is
-// glossy and something tilted its normal from the mesh's (`geometric`),
-// 2/3 where it is glossy and nothing did: the trace keeps the depth's
-// normal there, as without this pass.
+// bits: 0 where nothing was drawn (crowds and solid stencil materials
+// aren't: the trace keeps the depth's normal and traces), 1/3 where the
+// surface is too rough to show reflections (roughness 0.7 and up, where
+// `environment_light` has faded them out: no ray), 2/3 where it is glossy
+// and nothing tilted its normal from the mesh's (`geometric`: the trace
+// keeps the depth's normal, as without this pass), 1 where something did.
 fn reflection_normal(n: vec3<f32>, geometric: vec3<f32>, roughness: f32) -> vec4<f32> {
     let tilted = dot(n, geometric) < 0.99996;
-    let alpha = select(select(2.0 / 3.0, 1.0, tilted), 0.0, roughness >= 0.7);
+    let alpha = select(select(2.0 / 3.0, 1.0, tilted), 1.0 / 3.0, roughness >= 0.7);
     return vec4<f32>((n * 511.0 + 512.0) / 1023.0, alpha);
 }
 

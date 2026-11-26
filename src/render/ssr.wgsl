@@ -100,8 +100,10 @@ fn safe_normalize(v: vec3<f32>, fallback: vec3<f32>) -> vec3<f32> {
 // tuned on.
 fn surface_normal(p: vec2<i32>, fallback: vec3<f32>) -> vec4<f32> {
     let e = textureLoad(surface_normals, coordinate(p), 0);
-    // Alpha, in two bits: 0 too rough, 2/3 glossy, 1 glossy and tilted.
-    let rough = select(0.0, 1.0, e.a < 0.17);
+    // Alpha, in two bits: 0 nothing drawn, 1/3 too rough, 2/3 glossy, 1
+    // glossy and tilted. Multisampling averages them at edges: an edge of a
+    // rough surface over nothing (1/6) or over a glossy one (1/2) traces.
+    let rough = select(0.0, 1.0, e.a > 0.17 && e.a < 0.5);
     let n = (e.xyz * 1023.0 - 512.0) / 511.0;
     let size = length(n);
     if e.a < 0.83 || size < 0.997 { return vec4<f32>(fallback, rough); }
