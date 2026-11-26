@@ -1059,6 +1059,77 @@ pub unsafe extern "C" fn ponko_sprite_component(world: *mut PonkoWorld, out_id: 
     unsafe { builtin::<Sprite>(world, out_id) }
 }
 
+/// Mirrors (`flip_x`) and/or flips (`flip_y`) the sprite of `entity` in
+/// place, like the Rust fields `Sprite::flip_x` and `Sprite::flip_y`: the
+/// sprite covers the same rectangle and shows its region mirrored left to
+/// right and/or top to bottom. `PonkoSprite` has a fixed layout and carries no
+/// flips, so this and `ponko_sprite_flip` are how C reads and sets them.
+/// Setting a `PonkoSprite` with `ponko_set` keeps the flips of the sprite
+/// already on the entity (a new sprite starts unflipped); scenes and prefabs
+/// loaded from C keep theirs.
+/// `PONKO_NOT_FOUND`: no such entity, or it has no sprite.
+/// Ownership: nothing is returned or retained.
+/// # Safety
+/// `world` null or a live handle.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_sprite_set_flip(std::ptr::null_mut(), 0, true, false) } as u32, 1);
+/// ```
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_sprite_set_flip(
+    world: *mut PonkoWorld,
+    entity: u64,
+    flip_x: bool,
+    flip_y: bool,
+) -> PonkoStatus {
+    // SAFETY: caller supplies null or a live handle.
+    boundary(|| unsafe {
+        access(world, |w, _| {
+            let sprite = w
+                .get_mut::<Sprite>(Entity::from_bits(entity))
+                .ok_or_else(|| error(PONKO_NOT_FOUND, "entity has no sprite"))?;
+            sprite.flip_x = flip_x;
+            sprite.flip_y = flip_y;
+            Ok(())
+        })
+    })
+}
+
+/// Reads whether the sprite of `entity` is mirrored left to right
+/// (`out_flip_x`) and top to bottom (`out_flip_y`); see `ponko_sprite_set_flip`.
+/// Either output may be null when you don't need it.
+/// `PONKO_NOT_FOUND`: no such entity, or it has no sprite; the outputs are
+/// then untouched.
+/// Ownership: nothing is returned or retained.
+/// # Safety
+/// `world` null or a live handle; each non-null output writable.
+/// ```
+/// let (mut x, mut y) = (false, false);
+/// assert_eq!(unsafe { ponko_ffi::ponko_sprite_flip(std::ptr::null_mut(), 0, &mut x, &mut y) } as u32, 1);
+/// ```
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_sprite_flip(
+    world: *mut PonkoWorld,
+    entity: u64,
+    out_flip_x: *mut bool,
+    out_flip_y: *mut bool,
+) -> PonkoStatus {
+    // SAFETY: caller supplies null or a live handle and writable outputs.
+    boundary(|| unsafe {
+        access(world, |w, _| {
+            let sprite = w
+                .get::<Sprite>(Entity::from_bits(entity))
+                .ok_or_else(|| error(PONKO_NOT_FOUND, "entity has no sprite"))?;
+            if !out_flip_x.is_null() {
+                out_flip_x.write(sprite.flip_x);
+            }
+            if !out_flip_y.is_null() {
+                out_flip_y.write(sprite.flip_y);
+            }
+            Ok(())
+        })
+    })
+}
+
 pub(crate) unsafe fn builtin<T: ponko_ecs::Component>(world: *mut PonkoWorld, out_id: *mut u32) -> PonkoStatus {
     boundary(|| {
         if out_id.is_null() {
@@ -1320,6 +1391,14 @@ pub(crate) unsafe fn insert_value(
             Kind::Mirror(m) => {
                 let mut slot = Slot::new();
                 let value = m.convert(data, &mut slot)?;
+                if std::ptr::eq(m, &SPRITE)
+                    && let Some(old) = w.get::<Sprite>(e).map(|s| (s.flip_x, s.flip_y))
+                {
+                    // `PonkoSprite` has no flips: writing one back keeps the
+                    // flips set with `ponko_sprite_set_flip`.
+                    let sprite = &mut *slot.0.as_mut_ptr().cast::<Sprite>();
+                    (sprite.flip_x, sprite.flip_y) = old;
+                }
                 w.raw().insert_dynamic(e, id, value)
             }
         })

@@ -1,0 +1,156 @@
+# What loading each Khronos glTF sample comes to (tests/known_content.rs).
+# Rewritten by PONKO_UPDATE_KNOWN_CONTENT=1 cargo test --features 3d,compressed-textures,gltf-meshopt,image-webp --test known_content
+# revision e124e8d8d7330a5372bc2b4d00d39a4a9d7997ea
+ABeautifulGame: loaded
+AlphaBlendModeTest: loaded
+AnimatedColorsCube: loaded
+AnimatedCube: loaded
+AnimatedMorphCube: loaded
+AnimatedTriangle: loaded
+AnimationPointerUVs: skipped KHR_materials_unlit
+AnisotropyBarnLamp: loaded
+AnisotropyDiscTest: loaded
+AnisotropyRotationTest: loaded
+AnisotropyStrengthTest: loaded
+AntiqueCamera: loaded
+AttenuationTest: loaded
+Avocado: loaded
+BarramundiFish: loaded
+BoomBox: loaded
+BoomBoxWithAxes: loaded
+Box: loaded
+Box With Spaces: loaded
+BoxAnimated: loaded
+BoxInterleaved: loaded
+BoxTextured: loaded
+BoxTexturedNonPowerOfTwo: loaded
+BoxVertexColors: loaded
+BrainStem: loaded
+Cameras: loaded
+CarConcept: loaded
+CarbonFibre: loaded
+CesiumMan: loaded
+CesiumMilkTruck: loaded
+ChairDamaskPurplegold: loaded
+ChronographWatch: loaded
+ClearCoatCarPaint: skipped KHR_materials_clearcoat
+ClearCoatTest: loaded
+ClearcoatWicker: loaded
+CommercialRefrigerator: loaded
+CompareAlphaCoverage: loaded
+CompareAmbientOcclusion: loaded
+CompareAnisotropy: loaded
+CompareBaseColor: loaded
+CompareClearcoat: loaded
+CompareDispersion: loaded
+CompareEmissiveStrength: loaded
+CompareIor: loaded
+CompareIridescence: loaded
+CompareMetallic: loaded
+CompareNormal: loaded
+CompareRoughness: loaded
+CompareSheen: loaded
+CompareSpecular: loaded
+CompareTransmission: loaded
+CompareVolume: loaded
+Corset: loaded
+Cube: loaded
+CubeVisibility: skipped KHR_node_visibility
+DamagedHelmet: loaded
+DiffuseTransmissionPlant: loaded
+DiffuseTransmissionTeacup: loaded
+DiffuseTransmissionTest: skipped KHR_materials_unlit
+DirectionalLight: loaded
+DispersionTest: loaded
+DragonAttenuation: loaded
+DragonDispersion: loaded
+Duck: loaded
+EmissiveStrengthTest: loaded
+EnvironmentTest: loaded
+FlightHelmet: loaded
+Fox: loaded
+GlamVelvetSofa: loaded
+GlassBrokenWindow: loaded
+GlassHurricaneCandleHolder: loaded
+GlassVaseFlowers: loaded
+IORTestGrid: loaded
+InterpolationTest: loaded
+IridescenceAbalone: loaded
+IridescenceDielectricSpheres: loaded
+IridescenceLamp: loaded
+IridescenceMetallicSpheres: loaded
+IridescenceSuzanne: skipped KHR_materials_iridescence
+IridescentDishWithOlives: loaded
+Lantern: loaded
+LightVisibility: skipped KHR_node_visibility
+LightsPunctualLamp: loaded
+MandarinOrange: loaded
+MaterialsVariantsShoe: loaded
+MeshPrimitiveModes: loaded
+MeshoptCubeTest: loaded
+MetalRoughSpheres: loaded
+MetalRoughSpheresNoTextures: loaded
+MorphPrimitivesTest: loaded
+MorphStressTest: loaded
+MosquitoInAmber: loaded
+MultiUVTest: loaded
+MultipleScenes: loaded
+NegativeScaleTest: loaded
+NodePerformanceTest: loaded
+NodeVisibilityTest: loaded
+NormalTangentMirrorTest: loaded
+NormalTangentTest: loaded
+OrientationTest: loaded
+PlaysetLightTest: loaded
+PointLightIntensityTest: loaded
+PotOfCoals: loaded
+PotOfCoalsAnimationPointer: skipped KHR_materials_specular
+PrimitiveModeNormalsTest: loaded
+RecursiveSkeletons: loaded
+RiggedFigure: loaded
+RiggedSimple: loaded
+ScatterAnemone: skipped KHR_materials_volume
+ScatterPlant: loaded
+ScatterTest: loaded
+ScatteringSkull: loaded
+SciFiHelmet: loaded
+SheenChair: loaded
+SheenCloth: loaded
+SheenTestGrid: skipped KHR_materials_sheen
+SheenWoodLeatherSofa: loaded
+SimpleInstancing: loaded
+SimpleMaterial: loaded
+SimpleMeshes: loaded
+SimpleMorph: loaded
+SimpleSkin: loaded
+SimpleSparseAccessor: loaded
+SimpleTexture: loaded
+SpecGlossVsMetalRough: loaded
+SpecularSilkPouf: skipped KHR_materials_specular
+SpecularTest: loaded
+Sponza: loaded
+StainedGlassLamp: loaded
+SunglassesKhronos: loaded
+Suzanne: loaded
+TextureCoordinateTest: loaded
+TextureEncodingTest: loaded
+TextureLinearInterpolationTest: loaded
+TextureSettingsTest: loaded
+TextureTransformMultiTest: loaded
+TextureTransformTest: loaded
+ToyCar: loaded
+TrafficCone: loaded
+TransmissionOrderTest: loaded
+TransmissionRoughnessTest: loaded
+TransmissionTest: loaded
+TransmissionThinwallTestGrid: loaded
+Triangle: loaded
+TriangleWithoutIndices: loaded
+TwoSidedPlane: loaded
+USDShaderBallForGltf: loaded
+Unicode❤♻Test: loaded
+UnlitTest: skipped KHR_materials_unlit
+VertexColorTest: loaded
+VirtualCity: loaded
+WaterBottle: loaded
+XmpMetadataRoundedCube: loaded

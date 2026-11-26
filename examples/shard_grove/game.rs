@@ -14,7 +14,7 @@
 //!    enemies' hum and the pulse's sparks. None of it changes the game.
 //! 4. [`Screens`]: the title, pause, settings and end menus and the HUD
 //!    (`ctx.ui`), and the panel over the gate (a `UiPanel` in the world).
-//! 5. [`Ambience`]: the wind, started once.
+//! 5. [`Ambience`]: the wind and the music, started once.
 //!
 //! What the engine does for it: the level is one glTF file
 //! (`assets/shard_grove/grove.glb`) that is drawn (`load_mesh`), solid
@@ -373,6 +373,8 @@ pub struct Sounds {
     pub select: Sound,
     pub crawler: Sound,
     pub wind: Sound,
+    /// Streamed from its file rather than decoded whole.
+    pub music: Sound,
 }
 
 /// The mixer buses the volume setting turns.
@@ -389,10 +391,13 @@ pub fn warden_graph(skeleton: &Skeleton, clip: &mut dyn FnMut(&str) -> Animation
     use warden_anim::*;
     let _ = skeleton;
     let once = |c: AnimationClip| AnimationState::new(Motion::Clip(c)).with_looping(false);
+    // The pulse is a quick gesture: its clip played at twice its speed.
+    let mut cast = once(clip("pulse"));
+    cast.speed = 2.0;
     let states = vec![
         AnimationState::new(Motion::Clip(clip("idle"))),
         AnimationState::new(Motion::Clip(clip("walk"))),
-        once(clip("pulse")),
+        cast,
         once(clip("hurt")),
     ];
     let transitions = vec![
@@ -467,7 +472,7 @@ fn load_assets(ctx: &mut Ctx) -> GroveAssets {
     let glow = MaterialDesc::color(Color::hex(0x9ff5ff)).with_emissive(Color::hex(0x49d8ff));
     let glow = ctx.gfx.create_material(glow);
     let shard = ctx.gfx.create_mesh(&MeshData::sphere(0.28, 4), glow);
-    let mut sound = |name: &str| ctx.audio.load(&format!("shard_grove/sounds/{name}.wav"));
+    let mut sound = |name: &str| ctx.audio.load(&format!("shard_grove/sounds/{name}.ogg"));
     let sounds = Sounds {
         shard: sound("shard"),
         pulse: sound("pulse"),
@@ -477,6 +482,7 @@ fn load_assets(ctx: &mut Ctx) -> GroveAssets {
         select: sound("select"),
         crawler: sound("crawler"),
         wind: sound("wind"),
+        music: ctx.audio.load_stream("shard_grove/music/grove.ogg"),
     };
     GroveAssets {
         warden: ctx.gfx.load_mesh(WARDEN),
@@ -1580,9 +1586,11 @@ fn build_screens(ctx: &mut Ctx) -> ScreenUi {
         .name("lost.title")
         .id();
 
+    // The HUD lies over the view: no panel behind its lines.
     let hud = ui
         .root()
         .layout(UiLayout::fill().padding(16.0).gap(4.0))
+        .background(Color::rgba(0.0, 0.0, 0.0, 0.0))
         .name("hud")
         .id();
     let health = ui
@@ -1744,7 +1752,7 @@ pub fn update_screens(ctx: &mut Ctx) {
 
 // ---- layer 5: ambience -------------------------------------------------------------
 
-/// Layer 5: the wind, looping on its own bus from the start.
+/// Layer 5: the wind and the music, looping on their own bus from the start.
 pub struct Ambience;
 
 impl Plugin for Ambience {
@@ -1752,17 +1760,15 @@ impl Plugin for Ambience {
         game
     }
     fn setup(&self, ctx: &mut Ctx) {
-        let wind = ctx.world.resource::<GroveAssets>().sounds.wind;
+        let sounds = ctx.world.resource::<GroveAssets>().sounds;
         let bus = ctx.world.resource::<Buses>().ambience;
-        ctx.audio.play_on(
-            wind,
-            SoundParams {
+        for (sound, volume) in [(sounds.wind, 0.5), (sounds.music, 0.6)] {
+            let params = SoundParams {
                 looping: true,
-                volume: 0.5,
+                volume,
                 ..Default::default()
-            },
-            bus,
-            AudioEffects::default(),
-        );
+            };
+            ctx.audio.play_on(sound, params, bus, AudioEffects::default());
+        }
     }
 }

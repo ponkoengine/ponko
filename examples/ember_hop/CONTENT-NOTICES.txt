@@ -1,13 +1,16 @@
 Ember Hop: content notices
 ==========================
 
-Ember Hop is a reference game for the Ponko engine, built only from content
-made for it. Nothing in it is taken from another work.
+Ember Hop is a reference game for the Ponko engine. Its pictures, sounds and
+music are made by the artists named below and dedicated to the public domain
+under Creative Commons CC0 1.0 Universal; the full text of that dedication is
+in CC0-1.0.txt in this package. CC0 needs no credit, and the credits are given
+here all the same.
 
-Everything below was made for this game (drawn and composed by short
-scripts) and is Copyright (c) 2026 Leon Mamić and Ponko contributors,
-licensed under the MIT license or the Apache License 2.0, at your option
-(see LICENSE-MIT and LICENSE-APACHE in this package).
+The levels, the prefabs and the title scene were made for this game and are
+Copyright (c) 2026 Leon Mamić and Ponko contributors, licensed under the MIT
+license or the Apache License 2.0, at your option (see LICENSE-MIT and
+LICENSE-APACHE in this package).
 
 Pictures
 --------
@@ -15,15 +18,22 @@ assets/ember_hop/sprites/hero.png       the ember spirit: 8 frames of 16 x 16
 assets/ember_hop/sprites/drip.png       the cave slime: 4 frames of 16 x 16
 assets/ember_hop/sprites/spark.png      the spark: 4 frames of 16 x 16
 assets/ember_hop/sprites/brazier.png    the brazier, unlit and lit: 3 frames
-assets/ember_hop/sprites/post.png       the post at the way out: 16 x 32
+assets/ember_hop/sprites/post.png       the flag at the way out: 16 x 32
 assets/ember_hop/sprites/lantern.png    its lantern: 2 frames of 16 x 16
-assets/ember_hop/sprites/ember.png      a soft dot for the particles
-assets/ember_hop/sprites/glow.png       a soft disc for the glows
 assets/ember_hop/levels/cave.png        the tileset: rock, cave wall, water,
                                         spikes, moss, crystals, mushrooms
+    Tiles from "1-Bit Pack" and "1-Bit Platformer Pack" by Kenney, CC0,
+    https://kenney.nl/assets/1-bit-pack and
+    https://kenney.nl/assets/1-bit-platformer-pack
+
+assets/ember_hop/sprites/ember.png      a soft dot for the particles
+assets/ember_hop/sprites/glow.png       a soft disc for the glows
+    "circle_05" from "Particle Pack" by Kenney, CC0,
+    https://kenney.nl/assets/particle-pack
 
 Levels, prefabs and the title scene
 -----------------------------------
+Made for this game (see above).
 assets/ember_hop/levels/cave.tsx        the tileset (Tiled)
 assets/ember_hop/levels/hollow.tmx      the first cave (Tiled)
 assets/ember_hop/levels/deep.tmx        the second cave (Tiled)
@@ -33,20 +43,27 @@ assets/ember_hop/prefabs/checkpoint.json
 assets/ember_hop/prefabs/exit.json
 assets/ember_hop/scenes/title.json
 
-Sound and music
----------------
-assets/ember_hop/sounds/jump.wav
-assets/ember_hop/sounds/spark.wav
-assets/ember_hop/sounds/flare.wav
-assets/ember_hop/sounds/stomp.wav
-assets/ember_hop/sounds/hurt.wav
-assets/ember_hop/sounds/checkpoint.wav
-assets/ember_hop/sounds/clear.wav
-assets/ember_hop/sounds/select.wav
-    Sound effects synthesized from square and triangle waves and noise.
+Sound (Ogg Vorbis)
+------------------
+assets/ember_hop/sounds/jump.ogg        "phaseJump1", Digital Audio
+assets/ember_hop/sounds/spark.ogg       "powerUp2", Digital Audio
+assets/ember_hop/sounds/flare.ogg       "phaserUp3", Digital Audio
+assets/ember_hop/sounds/stomp.ogg       "impactSoft_heavy_000", Impact Sounds
+assets/ember_hop/sounds/hurt.ogg        "lowDown", Digital Audio
+assets/ember_hop/sounds/checkpoint.ogg  "powerUp7", Digital Audio
+assets/ember_hop/sounds/clear.ogg       "jingles_NES00", Music Jingles
+assets/ember_hop/sounds/select.ogg      "select_001", Interface Sounds
+    From sound packs by Kenney, CC0:
+      Digital Audio      https://kenney.nl/assets/digital-audio
+      Impact Sounds      https://kenney.nl/assets/impact-sounds
+      Music Jingles      https://kenney.nl/assets/music-jingles
+      Interface Sounds   https://kenney.nl/assets/interface-sounds
+
+Music (Ogg Vorbis)
+------------------
 assets/ember_hop/music/cave.ogg
-    A 40-second loop composed and synthesized for the game, encoded as
-    Ogg Vorbis.
+    "8-Bit Cave Loop" by Wolfgang_, CC0,
+    https://opengameart.org/content/8-bit-cave-loop
 
 Text and fonts
 --------------

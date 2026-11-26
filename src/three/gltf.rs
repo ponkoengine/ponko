@@ -478,7 +478,7 @@ impl Walk {
                 continue;
             };
             node.next_primitive += 1;
-            if primitive.mode() != gltf::mesh::Mode::Triangles {
+            if !drawn(primitive.mode()) {
                 continue; // lines and points aren't drawn
             }
             // Positions `ponko cook` quantized: back to their size first.
@@ -880,7 +880,7 @@ pub(crate) fn load_nodes(
             let targets = target_names(&m);
             let mut by_material: Vec<(usize, MeshData)> = Vec::new();
             for primitive in m.primitives() {
-                if primitive.mode() != gltf::mesh::Mode::Triangles {
+                if !drawn(primitive.mode()) {
                     continue;
                 }
                 let material = primitive.material().index().unwrap_or(default_material);
@@ -1293,6 +1293,34 @@ struct Part<'a> {
 }
 
 /// Adds one primitive's triangles to `out`, moved by its part's matrix.
+/// Whether primitives of `mode` are drawn: triangles, as a list, a strip
+/// or a fan (lines and points aren't).
+fn drawn(mode: gltf::mesh::Mode) -> bool {
+    use gltf::mesh::Mode;
+    matches!(mode, Mode::Triangles | Mode::TriangleStrip | Mode::TriangleFan)
+}
+
+/// A primitive's `indices` as a triangle list, by glTF's rules for its
+/// `mode`: a strip's triangle `i` is `i, i+1, i+2` with the first two
+/// swapped on odd `i` (so every triangle keeps the strip's winding), a
+/// fan's is `i+1, i+2, 0`. A list stays as it is.
+fn triangle_list(mode: gltf::mesh::Mode, indices: Vec<u32>) -> Vec<u32> {
+    use gltf::mesh::Mode;
+    let triangles = indices.len().saturating_sub(2);
+    match mode {
+        Mode::TriangleStrip => (0..triangles)
+            .flat_map(|i| {
+                let (a, b, c) = (indices[i], indices[i + 1], indices[i + 2]);
+                if i % 2 == 0 { [a, b, c] } else { [b, a, c] }
+            })
+            .collect(),
+        Mode::TriangleFan => (0..triangles)
+            .flat_map(|i| [indices[i + 1], indices[i + 2], indices[0]])
+            .collect(),
+        _ => indices,
+    }
+}
+
 fn append(
     out: &mut MeshData,
     primitive: &gltf::Primitive,
@@ -1326,6 +1354,7 @@ fn append(
         Some(i) => i.into_u32().collect(),
         None => (0..count).collect(),
     };
+    let indices = triangle_list(primitive.mode(), indices);
     let part = MeshData {
         positions,
         // Quantized normals needn't be unit length.
@@ -2321,6 +2350,39 @@ mod tests {
                             "min": [0, 0, 0], "max": [1, 1, 0] }}]
         }}"#
         )
+    }
+
+    #[test]
+    fn strips_and_fans_become_triangle_lists_with_the_same_winding() {
+        use gltf::mesh::Mode;
+        // A strip of four triangles: every other one swaps its first two
+        // corners, so all of them face the same way.
+        assert_eq!(
+            triangle_list(Mode::TriangleStrip, vec![0, 1, 2, 3, 4, 5]),
+            [0, 1, 2, 2, 1, 3, 2, 3, 4, 4, 3, 5]
+        );
+        // A fan around corner 0.
+        assert_eq!(
+            triangle_list(Mode::TriangleFan, vec![0, 1, 2, 3, 4]),
+            [1, 2, 0, 2, 3, 0, 3, 4, 0]
+        );
+        assert_eq!(triangle_list(Mode::Triangles, vec![0, 1, 2]), [0, 1, 2]);
+        // Too few corners for a triangle: none.
+        assert!(triangle_list(Mode::TriangleStrip, vec![0, 1]).is_empty());
+        assert!(triangle_list(Mode::TriangleFan, Vec::new()).is_empty());
+    }
+
+    #[test]
+    fn strip_and_fan_primitives_are_drawn_and_points_are_not() {
+        for (mode, triangles) in [(5, 1), (6, 1), (4, 1), (0, 0), (1, 0)] {
+            let gltf = triangle_gltf(None).replace(
+                r#""attributes": { "POSITION": 0 }, "material": 0"#,
+                &format!(r#""attributes": {{ "POSITION": 0 }}, "material": 0, "mode": {mode}"#),
+            );
+            let loaded = load("modes.gltf", gltf.as_bytes(), &mut |f| Err(f.to_string()), &|_| false);
+            let indices = loaded.map_or(0, |l| l.data.indices.len());
+            assert_eq!(indices, triangles * 3, "mode {mode}");
+        }
     }
 
     #[test]
