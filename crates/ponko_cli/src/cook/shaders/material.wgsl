@@ -511,11 +511,15 @@ fn surface_at(in: VertexOut, front: bool) -> Surface {
     }
     if material.maps.x != 0u {
         // Tangent space from screen derivatives (Schüler's cotangent frame):
-        // no tangents needed in the mesh.
+        // no tangents needed in the mesh. `t` and `b` point where u and v
+        // grow. The frame takes screen y up, as OpenGL's derivatives have
+        // it: WGSL's `dpdy` runs down the screen, which taken as it is turns
+        // `t` and `b` around (a normal map would lean the surface the wrong
+        // way on both axes).
         let dp1 = dpdx(in.world);
-        let dp2 = dpdy(in.world);
+        let dp2 = -dpdy(in.world);
         let duv1 = dpdx(in.uv);
-        let duv2 = dpdy(in.uv);
+        let duv2 = -dpdy(in.uv);
         let dp2perp = cross(dp2, n);
         let dp1perp = cross(n, dp1);
         let t = dp2perp * duv1.x + dp1perp * duv2.x;
@@ -532,7 +536,8 @@ fn surface_at(in: VertexOut, front: bool) -> Surface {
             m.z = sqrt(max(1.0 - dot(m.xy, m.xy), 0.0));
         }
         m = vec3<f32>(m.xy * material.params.z, m.z);
-        // glTF's texture coordinates run down the image: flip the bitangent.
+        // glTF: the map's +X is along +u; its +Y is up the image, and glTF's
+        // v runs down the image, so +Y is along -v: minus the bitangent.
         n = normalize(t * inv * m.x - b * inv * m.y + n * m.z);
     }
     s.normal = n;
