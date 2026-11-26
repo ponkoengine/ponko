@@ -229,7 +229,7 @@ impl TouchControls {
 }
 
 /// The share of a button's width its label may take, across its middle.
-const LABEL_WIDTH: f32 = 0.85;
+const LABEL_WIDTH: f32 = 0.72;
 /// The smallest a button's label shrinks to, in UI units.
 const LABEL_MIN_SIZE: f32 = 6.0;
 
