@@ -129,7 +129,7 @@ Each run writes the drawing next to its screenshot in
 that matched and stops matching fails the test; a sample that starts
 matching is recorded with `PONKO_UPDATE_KNOWN_CONTENT=1`.
 
-At this revision **41 of the 153 drawings match** their screenshots. Most
+At this revision **45 of the 153 drawings match** their screenshots. Most
 of the others differ for reasons outside the renderer's correctness, which
 the table says in a word:
 
