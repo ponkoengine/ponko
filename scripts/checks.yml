@@ -1917,8 +1917,8 @@ jobs:
     steps:
       - name: Pass/fail calculation
         run: python3 scripts/test_soak.py
-      - name: Play each workload for ten minutes, sampling every ten seconds
-        run: python3 scripts/soak.py --seconds 600 --sample 10 --warmup 120
+      - name: Play each workload for ten minutes, sampling every twenty seconds
+        run: python3 scripts/soak.py --seconds 600 --sample 20 --warmup 120
 
   # iOS (book/src/ios.md): the engine and the C library linted for devices
   # and the simulator, then the phone check packaged with `ponko package

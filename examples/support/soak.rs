@@ -183,6 +183,7 @@ impl Run {
     fn resize(&mut self, ctx: &mut Ctx, elapsed: Duration) -> std::io::Result<()> {
         // Away from the sample boundaries, shrink, minimize and restore.
         // Start in the normal phase so setup gets the original dimensions.
+        // One cycle every 20 s: RESIZE_PERIOD in scripts/soak.py.
         let shifted = elapsed.as_secs() + 15;
         let phase = shifted / 20 * 3
             + match shifted % 20 {
@@ -238,6 +239,7 @@ impl Run {
             "audio_real": voices.real,
             "audio_virtual": voices.virtualized,
             "rss_bytes": rss_bytes(),
+            "load_average": load_average(),
             "gpu_bytes": memory.as_ref().map(|m| m.total),
             "wgpu_bytes": memory.as_ref().and_then(|m| m.adapter_bytes),
             "adapter_memory_source": memory.map(|m| m.adapter_note),
@@ -268,6 +270,34 @@ impl Run {
             "restores": self.restores,
         })
     }
+}
+
+/// The one-minute load average, recorded (not judged) to explain frame times
+/// on a busy machine. Windows has none.
+#[cfg(target_os = "linux")]
+fn load_average() -> Option<f64> {
+    std::fs::read_to_string("/proc/loadavg")
+        .ok()?
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()
+}
+
+#[cfg(target_os = "macos")]
+fn load_average() -> Option<f64> {
+    // "{ 1.23 4.56 7.89 }"
+    let output = std::process::Command::new("sysctl")
+        .args(["-n", "vm.loadavg"])
+        .output()
+        .ok()?;
+    let text = std::str::from_utf8(&output.stdout).ok()?;
+    text.split_whitespace().find_map(|word| word.parse().ok())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn load_average() -> Option<f64> {
+    None
 }
 
 #[cfg(target_os = "linux")]

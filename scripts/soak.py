@@ -9,12 +9,19 @@ import os
 from pathlib import Path
 import platform
 import subprocess
+from statistics import median
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 GAMES = ("coin_dash", "ember_hop", "shard_grove", "streaming")
 FEATURES = "bench-internals,physics,physics3d,navmesh,text-shaping"
 MIB = 1024 ** 2
+# A frame-time percentile may also change once by this share of its median.
+FRAME_SLACK = 0.5
+# The runner's resize, minimize and restore cycle (examples/support/soak.rs).
+# A sample interval that is a multiple of it covers whole cycles; at 10 s,
+# samples alternate between frames with and without a resize.
+RESIZE_PERIOD = 20
 # Each entry is (growth allowed per hour, one-time noise allowance).
 BOUNDS = {
     "rss_bytes": (16 * MIB, 24 * MIB),
@@ -27,6 +34,17 @@ BOUNDS = {
     "frame_ms_p95": (1, 5),
     "frame_ms_p99": (2, 10),
 }
+
+
+def option_error(seconds, sample, warmup):
+    """Why the timing options cannot give a fair trend, or None."""
+    if not (0 < sample <= seconds and warmup >= 0):
+        return "need 0 < --sample <= --seconds and --warmup >= 0"
+    if sample % RESIZE_PERIOD:
+        return f"--sample must be a multiple of {RESIZE_PERIOD} s, the resize and minimize cycle"
+    if seconds - warmup < 2 * sample:
+        return "need at least three post-warm-up samples (decrease --sample or --warmup)"
+    return None
 
 
 def trend(samples, metric, warmup, bound):
@@ -78,6 +96,11 @@ def evaluate(out, game, samples, args, code):
                 growth, slack = 1, noise
             elif name in BOUNDS:
                 growth, slack = BOUNDS[name]
+                if name.startswith("frame_ms_"):
+                    # Frame time follows the machine's other load: allow a
+                    # one-time change of half the typical frame as well.
+                    if post:
+                        slack = max(slack, FRAME_SLACK * median(row[name] for row in post))
             else:
                 continue
             results[name] = trend(samples, name, args.warmup, growth + slack / hours)
@@ -116,7 +139,7 @@ def evaluate(out, game, samples, args, code):
                 failures.append(f"no {event} exercised")
     summary = {
         "game": game, "mode": "windowed" if args.windowed else "headless" if args.headless else "offscreen",
-        "platform": platform.platform(), "revision": git_revision(), "warmup_seconds": args.warmup,
+        "platform": platform.platform(), "revision": args.revision, "warmup_seconds": args.warmup,
         "sample_seconds": args.sample, "pass": not failures, "failures": failures,
         "metrics": results, "samples": samples,
     }
@@ -128,7 +151,10 @@ def evaluate(out, game, samples, args, code):
 
 
 def git_revision():
-    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    """The checkout the examples are built from, marked when it has local changes."""
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    dirty = subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=no"], cwd=ROOT, text=True)
+    return head + ("-dirty" if dirty.strip() else "")
 
 
 def build(games, cargo):
@@ -193,9 +219,10 @@ def main():
     mode.add_argument("--windowed", action="store_true", help="open a real window (attended run)")
     mode.add_argument("--headless", action="store_true", help="omit GPU drawing for diagnostics")
     args = parser.parse_args()
-    if not (0 < args.sample <= args.seconds and args.warmup >= 0
-            and args.seconds - args.warmup >= 2 * args.sample):
-        parser.error("need at least three post-warm-up samples (decrease --sample or --warmup)")
+    # Read before building: the checkout may change while a long run plays.
+    args.revision = git_revision()
+    if error := option_error(args.seconds, args.sample, args.warmup):
+        parser.error(error)
     games = tuple(dict.fromkeys(args.game or GAMES))
     if args.evaluate:
         if args.out is None:

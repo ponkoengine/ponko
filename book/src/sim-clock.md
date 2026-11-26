@@ -293,7 +293,7 @@ audio mixer. It uses the same game processes from start to finish and keeps
 their saves in temporary folders.
 
 ```sh
-python3 scripts/soak.py --seconds 600 --sample 10 --warmup 120 --out target/soak-short
+python3 scripts/soak.py --seconds 600 --sample 20 --warmup 120 --out target/soak-short
 ```
 
 Set `PONKO_SOAK=1` to enable the slow `soak` job in
@@ -325,13 +325,24 @@ Linux and the working set on Windows. The renderer reports its own live GPU
 bytes plus the adapter figure when available. A backend that reports no
 adapter figure gets a null reading and an explicit unavailable status.
 Headless diagnostics also omit the GPU inventory. Handles are grouped by
-kind, and real and virtual voices are measured separately.
+kind, and real and virtual voices are measured separately. Each sample also
+records the machine's one-minute load average (macOS and Linux; empty on
+Windows). It is not judged: it shows when a change in frame time came from
+other programs. Frame time follows that load, which is why its noise
+allowance grows with the frame time itself; a leak shows first in memory,
+handles and allocations.
 
 For each quantity, the report fits a least-squares line through the samples
 at or after warm-up. The upper bound for its slope is the hourly allowance
 plus the noise allowance divided by the observed post-warm-up hours. This
 gives short checks room for the same one-time fluctuations as a long run.
 At least three post-warm-up readings are needed for each available metric.
+The sample interval must be a multiple of 20 seconds, the runner's resize and
+minimize cycle, so that every sample holds whole cycles: a cycle allocates
+(in Shard Grove about 450,000 times), and at 10-second samples the readings alternated between frames with and without one (about
+830 and 1,900 allocations per frame in Shard Grove). Keep at least four
+workload cycles after warm-up. Shorter runs are diagnostics: the phase of
+each game's loop then shows up as a slope.
 
 | Quantity | Hourly growth allowance | Noise allowance |
 |---|---:|---:|
@@ -341,9 +352,9 @@ At least three post-warm-up readings are needed for each available metric.
 | Live handles, each kind | 1/h | 2 (80 for the streaming example's tile meshes) |
 | Allocations per frame | 2/h | 4 |
 | Real and virtual voices, each | 1/h | 4 |
-| Frame p50 | 0.5 ms/h | 2 ms |
-| Frame p95 | 1 ms/h | 5 ms |
-| Frame p99 | 2 ms/h | 10 ms |
+| Frame p50 | 0.5 ms/h | 2 ms, or half its post-warm-up median if larger |
+| Frame p95 | 1 ms/h | 5 ms, or half its post-warm-up median if larger |
+| Frame p99 | 2 ms/h | 10 ms, or half its post-warm-up median if larger |
 
 A slope above its bound fails the command and writes a graph of that metric
 beside the report. To judge saved samples again (after a change to the
