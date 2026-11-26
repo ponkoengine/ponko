@@ -55,7 +55,8 @@ pub(super) fn config<T>(config: Option<T>) -> Result<T, Error> {
     config.ok_or_else(|| {
         Error::new(
             ErrorKind::Unsupported,
-            "the GPU can't draw to this window: its surface offers no format this adapter can show; \
+            "the GPU can't draw to this window: its surface offers no format this adapter can show \
+             (a software fallback adapter, such as a virtual machine's, may be all there is); \
              update the graphics driver, or try another backend (`WGPU_BACKEND`)",
         )
     })
