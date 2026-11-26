@@ -460,8 +460,10 @@ The scripted solutions, with the 0.2.0 tools:
 | **total** | **18/18, 6/6 tasks** | 51 | 22/22 |
 
 A step is one tool call, one file edit, or one wait for a hot reload. The
-steps are a known path, not a bound: a real agent also explores. No run of a
-real agent is recorded here yet; the next section is how to make one.
+steps are a known path, not a bound: a real agent also explores. Runs of
+real agents are recorded with the checks on each machine; the first, on
+2026-11-26, is in [Check results: macOS](check-results/macos.md) (an AI
+coding agent solved all six tasks on its first submission).
 
 ### Trying a real agent
 
@@ -488,10 +490,57 @@ the checkers and solutions, and ask it to do the task in the `ponko-suite`
 server's instructions. It edits files in the task's folder with its own
 tools. When it calls `submit_task`, or when its client disconnects, the
 result goes to `--out` (default `<dir>.result.json`): every check with what
-was seen, the last submission's score, the number of submissions, and every
-tool call with its arguments and error. The calls are the steps; the errors
-and the failed checks show where it got stuck. Run each task a few times:
-one run of a model says little.
+was seen, the last submission's score, the number of submissions, the
+seconds from connecting to the last submission (`seconds`), and every tool
+call with its arguments, its error and when it came (`at`, seconds). The
+calls are the steps; the errors and the failed checks show where it got
+stuck. Run each task a few times: one run of a model says little.
+
+`agent_suite scores` turns result files into the table a pull request
+shows:
+
+```sh
+target/debug/examples/agent_suite scores /tmp/suite/*.result.json
+```
+
+An agent with a shell but no MCP client (or one that can't add a server
+mid-session) drives the same server with `scripts/mcp-session.py`, which
+keeps it running behind a socket so that each tool call is one command:
+
+```sh
+S=/tmp/suite/s.sock
+python3 scripts/mcp-session.py start $S -- "$PWD/target/debug/examples/agent_suite" \
+    mcp tune-speed --dir /tmp/suite/tune-speed --agent shell-agent &
+python3 scripts/mcp-session.py instructions $S   # the goal and the folder
+python3 scripts/mcp-session.py tools $S          # every tool, one line each
+python3 scripts/mcp-session.py tools $S run_ticks  # one tool's input schema
+python3 scripts/mcp-session.py call $S get_resource '{"resource": "Settings"}'
+python3 scripts/mcp-session.py call $S submit_task
+python3 scripts/mcp-session.py stop $S           # writes the result file
+```
+
+### At a release
+
+CONTRIBUTING.md's "Releasing", step 3, asks for the suite at every release
+and a real agent for a minor. The whole procedure, on the release branch:
+
+1. `cargo test -p ponko_mcp --test agent_suite` and
+   `cargo run -p ponko_mcp --example agent_suite -- replay`: both pass, and
+   the replay's table equals "The 0.2.0 baseline" above (or the change is
+   explained in the pull request).
+2. `cargo build -p ponko_mcp --example agent_suite`, then for each task in
+   `agent_suite list`: start a fresh agent session outside this repository
+   with the task's server (as above, `--dir /tmp/suite/TASK --agent NAME`),
+   tell it only "do the task in the server's instructions", and let it run
+   until it submits. Don't help it, and don't let it read
+   `crates/ponko_mcp/tests/suite/`.
+3. `agent_suite scores /tmp/suite/*.result.json` into the pull request,
+   with the agent named generically (an AI coding agent, its client) and,
+   per task, where it got stuck: the tool errors, the failed checks, the
+   tools it misread. Add a dated section to the check results of the
+   machine.
+4. What misled it gets fixed or filed as below, before the release when
+   it is small.
 
 ### Turning failures into fixes
 
@@ -516,6 +565,12 @@ guide:
 - **What the player sees, headless:** a game with
   `Game::headless_frames(true)` runs its UI, and `expect_ui` steps check a
   node's `shown` and `text`, with no window.
+- **Key names in scenarios are the engine's:** `Right`, not `ArrowRight`.
+  The first real-agent run guessed the browser's name; the
+  `run_input_scenario` schema now lists the names and shows an `expect_ui`
+  step.
+- **Counting is a question about many entities:** `entity_stats` with only
+  `with` (no `fields`) answers how many match.
 
 ### Limits
 

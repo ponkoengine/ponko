@@ -1839,10 +1839,8 @@ pub(crate) fn handle(ctx: &mut Ctx, method: &str, params: &Value) -> Result<Valu
             json!({ "total": total, "offset": offset, "entities": out })
         }
         "entities.stats" => {
+            // No `fields`: just count the matching entities.
             let fields = query::list(params, "fields", FieldPath::parse)?;
-            if fields.is_empty() {
-                return Err("missing param `fields` (like [\"Health.current\", \"Team\"])".into());
-            }
             let mut stats: Vec<FieldStats> = fields.iter().map(|_| FieldStats::default()).collect();
             let mut count = 0u64;
             for_each_matching(&ctx.world, params, &fields, |_, _, found| {

@@ -185,7 +185,7 @@ headless game waits for requests and runs only the ticks you step.
 | `info` | | pid, headless, tick, sim time, paused, speed, fps, entity count, render stats (sprites, draw calls, CPU and GPU ms) |
 | `world.summary` | | entity count, reflected components and resources, archetypes and sizes |
 | `entities.list` | `with?`, `where?`, `limit?` (100), `offset?` | entities with reflected components as JSON, names of the others |
-| `entities.stats` | `fields`, `with?`, `where?` | `{entities, fields: {path: {count, min, max, mean} or {count, values}}}` (see below) |
+| `entities.stats` | `fields?`, `with?`, `where?` | `{entities, fields: {path: {count, min, max, mean} or {count, values}}}` (see below) |
 | `entity.get` | `entity` | `{component: value}` |
 | `entity.spawn` | `components` | `{entity}` |
 | `entity.despawn` | `entity` | `true` if it existed |
@@ -416,7 +416,8 @@ numbers (per axis for vectors like positions) and counts per value for
 names and enums (`"values": {"Red": 120, "Blue": 98}`). A field path is a
 component name, then fields, array elements by number:
 `Transform2D.position.0` is x. A bare component name (`Team`) is its whole
-value.
+value. Without `fields`, the answer is just how many entities match `with`
+and `where` (`{"entities": 5, "fields": {}}`).
 
 `where` takes conditions on field paths with `==`, `!=`, `<`, `<=`, `>`,
 `>=` and a JSON value (a bare word is a string: `Unit.team == Red`). It
