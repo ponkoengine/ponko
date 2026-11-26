@@ -43,10 +43,11 @@ fn base64(bytes: &[u8]) -> String {
     out
 }
 
-/// A 2 × 1 texture: black on the left, white on the right.
+/// An 8 × 1 texture: black on the left half, white on the right (wide
+/// enough that filtering blurs only the edges between the halves).
 fn halves() -> String {
-    let image = image::RgbaImage::from_fn(2, 1, |x, _| {
-        let v = if x == 0 { 0 } else { 255 };
+    let image = image::RgbaImage::from_fn(8, 1, |x, _| {
+        let v = if x < 4 { 0 } else { 255 };
         image::Rgba([v, v, v, 255])
     });
     let mut bytes = std::io::Cursor::new(Vec::new());

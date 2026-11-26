@@ -396,20 +396,21 @@ enum Pose {
 
 /// A light from the file hangs from its node's joint, when the model has
 /// a skeleton: it follows the node's animation and visibility.
-fn hang(ctx: &mut Ctx, model: Entity, light: Option<Entity>, joint: Option<usize>) {
-    if let (Some(light), Some(joint), true) = (light, joint, ctx.world.has::<crate::anim::Skeleton>(model)) {
-        ctx.world.insert(light, crate::anim::AttachToJoint::new(model, joint));
+fn hang(world: &mut World, model: Entity, light: Option<Entity>, joint: Option<usize>) {
+    if let (Some(light), Some(joint), true) = (light, joint, world.has::<crate::anim::Skeleton>(model)) {
+        world.insert(light, crate::anim::AttachToJoint::new(model, joint));
     }
 }
 
-/// Draws the sample through its first camera or frames its bounds, with
-/// the screenshot's background and the test's lighting for that sample.
+/// Draws the sample through its camera `camera_index` (else its first)
+/// or frames its bounds, with the screenshot's background and the test's
+/// lighting for that sample.
 fn draw_sample(
     name: &str,
     file: &str,
     size: (u32, u32),
     background: [u8; 3],
-    pose: Pose,
+    (pose, camera_index): (Pose, usize),
 ) -> Result<Option<(image::RgbaImage, bool)>, String> {
     let Some((mut ctx, _)) = game_ctx(size) else {
         return Ok(None);
@@ -440,7 +441,7 @@ fn draw_sample(
     let camera = &mut ctx.scene3d.camera;
     let aspect = size.0 as f32 / size.1 as f32;
     let cameras = ctx.gfx.try_load_cameras(file).map_err(|e| e.to_string())?;
-    let own_camera = if let Some(shot) = cameras.first() {
+    let own_camera = if let Some(shot) = cameras.get(camera_index).or(cameras.first()) {
         shot.apply(camera, &at);
         true
     } else {
@@ -457,7 +458,7 @@ fn draw_sample(
             .filter(|l| !matches!(l.kind, ModelLightKind::Sun { .. }))
             .map(|l| l.joint);
         for (light, joint) in placed.into_iter().zip(joints) {
-            hang(&mut ctx, model, Some(light), joint);
+            hang(&mut ctx.world, model, Some(light), joint);
         }
         if name == "DirectionalLight" {
             // The reference shows the direct BRDF of three spheres in isolation.
@@ -484,7 +485,7 @@ fn draw_sample(
                 (lighting.sun_color, lighting.sun_intensity) = (color, intensity);
             } else {
                 let light_entity = light.spawn(&mut ctx.world, &at);
-                hang(&mut ctx, model, light_entity, light.joint);
+                hang(&mut ctx.world, model, light_entity, light.joint);
             }
         }
     }
@@ -646,7 +647,7 @@ fn known_samples_are_drawn_like_their_screenshots() {
         let size = drawn_size(reference.dimensions());
         let reference = image::imageops::resize(&reference, size.0, size.1, image::imageops::FilterType::Triangle);
         let background = border_color(&reference);
-        let drawn = std::panic::catch_unwind(|| draw_sample(&name, file, size, background, Pose::Rest));
+        let drawn = std::panic::catch_unwind(|| draw_sample(&name, file, size, background, (Pose::Rest, 0)));
         let (drawn, own_camera) = match drawn {
             Ok(Ok(Some(drawn))) => drawn,
             Ok(Ok(None)) => return,
@@ -747,19 +748,39 @@ fn known_samples_are_drawn_like_their_screenshots() {
 }
 
 /// The samples whose `KHR_animation_pointer` animations play (#620), each
-/// with three times to draw it at.
-const POINTER_SAMPLES: [(&str, [f32; 3]); 5] = [
+/// with three times to draw it at and the file's camera to draw it with.
+const POINTER_SAMPLES: [(&str, [f32; 3], usize); 5] = [
     // The blue cube (light) shows from 0 to 0.5 s, hides to 1 s, shows again.
-    ("CubeVisibility", [0.25, 0.75, 1.25]),
-    ("LightVisibility", [0.25, 0.75, 1.25]),
+    ("CubeVisibility", [0.25, 0.75, 1.25], 0),
+    ("LightVisibility", [0.25, 0.75, 1.25], 0),
     // The cube above turns green over the green cube, blue over the blue
     // one, and red again back over the red one.
-    ("AnimatedColorsCube", [0.75, 1.75, 2.75]),
-    // Texture offsets, rotations and scales, from none at 0 s to most at 6 s.
-    ("AnimationPointerUVs", [0.0, 3.0, 6.0]),
-    // The coals' normal map turns: none at 0 s, a quarter at 1 s, half at 2 s.
-    ("PotOfCoalsAnimationPointer", [0.0, 1.0, 2.0]),
+    ("AnimatedColorsCube", [0.75, 1.75, 2.75], 0),
+    // Texture offsets, rotations and scales, from none at 0 s to most at
+    // 6 s; seen through the file's camera on the base color and emissive
+    // rows (its first sees all the rows, too small to tell).
+    ("AnimationPointerUVs", [0.0, 3.0, 6.0], 2),
+    // The heat dome's normal map turns: none at 0 s, a quarter at 1 s, half
+    // at 2 s.
+    ("PotOfCoalsAnimationPointer", [0.0, 1.0, 2.0], 0),
 ];
+
+/// The description of the file's material `material` after its clips are
+/// sampled at `time`, in a game without a GPU.
+fn animated_material(file: &str, material: &str, time: f32) -> crate::render::MaterialDesc {
+    let mut ctx = Ctx::new(1.0 / 60.0, Vec2::ONE);
+    ctx.gfx.headless = true;
+    ctx.assets.add_source(Folder(cache()));
+    let mesh = ctx.gfx.load_mesh(file);
+    let mut skeleton = ctx.gfx.load_skeleton(file);
+    for clip in ctx.gfx.load_clips(file) {
+        clip.sample(time.min(clip.duration()), &mut skeleton);
+    }
+    ctx.world.spawn((Transform3D::default(), Model::new(mesh), skeleton));
+    ctx.gfx.apply_animated_materials(&mut ctx.world);
+    let (id, _) = ctx.gfx.loaded_materials(material)[0];
+    ctx.gfx.assets3d.material_descs[&id.id]
+}
 
 /// How far apart two pictures of one size are: the mean difference of
 /// their RGB channels, 0 to 255.
@@ -817,7 +838,7 @@ fn known_pointer_animations_play() {
     let assets = manifest["assets"].as_array().unwrap();
     let mut rows = Vec::new();
     let mut failures = Vec::new();
-    for (name, times) in POINTER_SAMPLES {
+    for (name, times, camera) in POINTER_SAMPLES {
         let Some(asset) = assets.iter().find(|a| a["name"] == name) else {
             eprintln!("skipped: {name} isn't in the cache");
             continue;
@@ -833,7 +854,7 @@ fn known_pointer_animations_play() {
         let reference =
             reference.map(|r| image::imageops::resize(&r, size.0, size.1, image::imageops::FilterType::Triangle));
         let background = reference.as_ref().map_or([96, 96, 96], border_color);
-        let draw = |pose| match draw_sample(name, file, size, background, pose) {
+        let draw = |pose| match draw_sample(name, file, size, background, (pose, camera)) {
             Ok(Some((image, _))) => image,
             Ok(None) => panic!("the GPU went away"),
             Err(e) => panic!("{name} doesn't draw: {e}"),
@@ -911,14 +932,50 @@ fn known_pointer_animations_play() {
                     format!("{}: red again, yet drawn differently", times[2]),
                 );
             }
+            "AnimationPointerUVs" => {
+                // The three boxes whose base color textures are keyed: their
+                // material's transform takes the keyed offset, scale and
+                // rotation (the other channels key textures a material's
+                // one transform doesn't follow, and warn).
+                let transform =
+                    |material: &str, i: usize| animated_material(file, material, times[i]).texture_transform;
+                for (i, k) in [(1, 0.5f32), (2, 1.0)] {
+                    let offset = transform("Material #60", i).offset;
+                    let scale = transform("Material #61", i).scale;
+                    let rotation = transform("Material #62", i).rotation;
+                    check(
+                        offset.abs_diff_eq(vec2(-k, k), 1e-4)
+                            && scale.abs_diff_eq(Vec2::splat(1.0 + 2.0 * k), 1e-4)
+                            && (rotation - std::f32::consts::FRAC_PI_2 * k).abs() < 1e-4,
+                        format!("{}: offset {offset}, scale {scale}, rotation {rotation}", times[i]),
+                    );
+                    // The textures move from time to time; without the
+                    // tracks, nothing does (the control).
+                    let (moved, still) = (
+                        mean_difference(&drawn[i].0, &drawn[0].0),
+                        mean_difference(&drawn[i].1, &drawn[0].1),
+                    );
+                    check(
+                        moved > 0.02 && still < 0.005,
+                        format!("{}: {moved:.3} from the start, {still:.3} unkeyed", times[i]),
+                    );
+                }
+            }
             _ => {
-                // Nothing moved at the start; then the textures move.
-                check(
-                    difference(0) < 0.5,
-                    format!("{}: no transform yet, yet drawn differently", times[0]),
-                );
-                for i in [1, 2] {
-                    check(difference(i) > 0.05, format!("{}: the textures didn't move", times[i]));
+                // The turning normal map is the heat dome's, which is fully
+                // transmissive: drawn as see-through blending it shows
+                // nothing until refraction is drawn (#595). So the picture
+                // doesn't change, and the material's value is what plays.
+                for (i, turned) in [(0, 0.0), (1, std::f32::consts::FRAC_PI_2), (2, std::f32::consts::PI)] {
+                    let rotation = animated_material(file, "HeatDome", times[i]).texture_transform.rotation;
+                    check(
+                        (rotation - turned).abs() < 1e-3,
+                        format!("{}: the dome's normal map turned {rotation}, not {turned}", times[i]),
+                    );
+                    check(
+                        difference(i) < 0.05,
+                        format!("{}: the invisible dome changed the picture", times[i]),
+                    );
                 }
             }
         }
