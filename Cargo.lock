@@ -4010,10 +4010,14 @@ dependencies = [
 name = "ponko_mcp"
 version = "0.1.0"
 dependencies = [
+ "data-encoding",
+ "getrandom 0.4.3",
  "ponko",
  "ponko_image_diff",
  "serde",
  "serde_json",
+ "tempfile",
+ "tungstenite",
 ]
 
 [[package]]

@@ -273,9 +273,12 @@ build joins with `Net::join_web` or `NetMessages::join_web`, and the host
 takes browser players with `accept_web` next to its desktop players (see
 [In the browser](networking.md#in-the-browser)).
 
-**Not available on the web:** the [control endpoint](control.md) and
-[MCP](agents.md) tools, [hot reload](data-files.md) of files, [hot
-patching](hot-patching.md) of code, and anything that writes files
+**Developer control.** An opt-in build can connect to a local bridge so
+MCP tools can inspect the game, step it and capture its canvas. See
+[Controlling a browser tab](control.md#controlling-a-browser-tab).
+
+**Not available on the web:** [hot reload](data-files.md) of files, [hot
+patching](hot-patching.md) of code, and APIs that write native files
 (`ctx.gfx.save_screenshot`, saving the world to a path), and [video
 playback](video.md#in-a-browser) (the page's own `<video>` element plays
 intros instead). The player's own
