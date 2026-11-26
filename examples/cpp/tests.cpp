@@ -5681,7 +5681,7 @@ static void native_parity_round5() {
         {
             PONKO_PROFILE_SCOPE("c++/alloc");
             before = ponko::thread_alloc_counts();
-            auto* boxed = new int(7); // counted: PONKO_COUNT_CPP_ALLOCATIONS is on in this program
+            int* volatile boxed = new int(7); // counted (PONKO_COUNT_CPP_ALLOCATIONS); volatile: clang may drop a new/delete pair
             after = ponko::thread_alloc_counts();
             delete boxed;
         }
@@ -5691,7 +5691,7 @@ static void native_parity_round5() {
         // earlier game left) give back meanwhile isn't in it, so the counts are exact.
         {
             const std::int64_t held = ponko::thread_net_alloc_bytes();
-            auto* block = new char[4096];
+            char* volatile block = new char[4096];
             const std::int64_t holding = ponko::thread_net_alloc_bytes();
             delete[] block;
             const std::int64_t released = ponko::thread_net_alloc_bytes();
