@@ -241,7 +241,7 @@ fn surface(s: Surface) -> Surface {
             let hit = water_march(s.world, reflect(-view, smooth_n));
             mirror = mix(mirror, hit.rgb, hit.a);
         }
-        let facing = max(dot(n, view), 0.0);
+        let facing = clamp(dot(n, view), 0.0, 1.0);
         let fresnel = 0.02 + 0.98 * pow(1.0 - facing, 5.0);
         color = mix(under, mirror, fresnel);
 
@@ -266,7 +266,7 @@ fn surface(s: Surface) -> Surface {
         // Seen from below: the world above through Snell's window, the
         // water's own colour mirrored outside it.
         let down = -n;
-        let facing = max(dot(down, view), 0.0);
+        let facing = clamp(dot(down, view), 0.0, 1.0);
         let bent = refract(-view, down, 1.33);
         let window = select(0.0, 1.0 - pow(1.0 - facing, 3.0), dot(bent, bent) > 0.0);
         let above = scene_color(s.screen + down.xz * frame.screen.y * 0.02);

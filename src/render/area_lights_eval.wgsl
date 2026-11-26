@@ -60,7 +60,7 @@ fn diffuse_only() -> bool {
 fn direct_light(s: Surface, l: vec3<f32>, radiance: vec3<f32>) -> vec3<f32> {
     let f0 = mix(vec3<f32>(0.04), s.albedo, s.metallic);
     let h = (l + s.view) / max(length(l + s.view), 1e-6);
-    let f = f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - max(dot(s.view, h), 0.0), 5.0);
+    let f = f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - clamp(dot(s.view, h), 0.0, 1.0), 5.0);
     // Diffuse only is pure Lambert, as the area methods' form factors: the
     // engine's (1 - F) dims it by about 4 % more.
     let kept = select(vec3<f32>(1.0) - f, vec3<f32>(1.0), diffuse_only());
@@ -78,7 +78,8 @@ fn ggx_specular(s: Surface, l: vec3<f32>, norm: f32) -> vec3<f32> {
     let n_l = max(dot(n, l), 0.0);
     let n_v = max(dot(n, v), 1e-4);
     let n_h = max(dot(n, h), 0.0);
-    let v_h = max(dot(v, h), 0.0);
+    // At most 1, or `pow(1 - v_h, 5)` is NaN on some GPUs (see mesh.wgsl's direct_light).
+    let v_h = clamp(dot(v, h), 0.0, 1.0);
     let a = s.roughness * s.roughness;
     let a2 = a * a;
     let d_denom = n_h * n_h * (a2 - 1.0) + 1.0;

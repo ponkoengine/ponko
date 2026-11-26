@@ -632,6 +632,9 @@ impl Renderer {
         } = browser_gpu::open(window.clone(), display, &device_descriptor).await?;
         #[cfg(not(target_arch = "wasm32"))]
         let (instance, surface, adapter, device, queue) = {
+            // A test takes one of the places GPU tests share (render_test_support).
+            #[cfg(all(test, feature = "window", feature = "3d"))]
+            crate::render::render_test_support::take_gpu_place();
             let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(
                 display,
             )));
@@ -836,6 +839,9 @@ impl Renderer {
     /// draws with. `Err` says why there is no GPU. Unstable (`bench-internals`).
     #[cfg(all(feature = "3d", feature = "bench-internals", not(target_arch = "wasm32")))]
     pub(crate) fn offscreen_bench(size: (u32, u32)) -> Result<Self, String> {
+        // A test takes one of the places GPU tests share (render_test_support).
+        #[cfg(all(test, feature = "window", feature = "3d"))]
+        crate::render::render_test_support::take_gpu_place();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
