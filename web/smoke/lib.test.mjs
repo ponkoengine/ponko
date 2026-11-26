@@ -1,6 +1,7 @@
 // Tests for the browser-free parts of the runner: `node --test web/smoke`.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 import {
   BrowserHang,
@@ -172,7 +173,7 @@ test("reload steps: one from afterReload, several from reloads or --reload, each
 test("a play-through: --until fields and their time come from the fixture or the command line", () => {
   const walk = parse("--fixture", "shard_grove_walkthrough");
   assert.equal(walk.example, "shard_grove", "two fixtures share the game's one build");
-  assert.equal(walk.dir, "target/web/shard_grove");
+  assert.equal(walk.dir, join("target", "web", "shard_grove"));
   assert.equal(walk.query, "?smoke=walkthrough");
   assert.deepEqual(walk.until.map(({ field }) => field), ["walkthrough_over", "finished", "screen"]);
   assert.equal(walk.untilSeconds, 200);
