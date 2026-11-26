@@ -103,37 +103,36 @@ fn the_characters_are_skinned_gltf_files_with_named_clips() {
         .iter()
         .map(|j| j.name.as_str())
         .collect();
-    assert_eq!(
-        warden_joints,
-        [
-            "warden", "root", "hips", "chest", "head", "arm_l", "arm_r", "leg_l", "leg_r"
-        ]
-    );
-    assert_eq!(assets.crawler_skeleton.joints().len(), 7);
+    assert_eq!(warden_joints.len(), 86);
+    for bone in [
+        "Hips",
+        "Chest",
+        "Head",
+        "UpperArm.L",
+        "UpperArm.R",
+        "UpperLeg.L",
+        "UpperLeg.R",
+    ] {
+        assert!(warden_joints.contains(&bone), "{bone} in {warden_joints:?}");
+    }
+    assert_eq!(assets.crawler_skeleton.joints().len(), 14);
     // Four states for the warden, three for the crawlers, each a clip of its file.
     assert_eq!(Animator::new(assets.warden_graph.clone()).state_count(), 4);
     assert_eq!(Animator::new(assets.crawler_graph.clone()).state_count(), 3);
     Game::new("clips", 1, 1).run_headless(0, |ctx| {
-        let clips: Vec<String> = ctx
-            .gfx
-            .load_clips(WARDEN)
-            .iter()
-            .map(|c| c.name().to_string())
-            .collect();
-        assert_eq!(clips, ["idle", "walk", "pulse", "hurt"]);
+        let names = |ctx: &mut Ctx, file: &str| {
+            let mut names: Vec<String> = ctx.gfx.load_clips(file).iter().map(|c| c.name().to_string()).collect();
+            names.sort();
+            names
+        };
+        assert_eq!(names(ctx, WARDEN), ["hurt", "idle", "pulse", "walk"]);
         let walk = ctx.gfx.load_clip(WARDEN, "walk");
         assert!(
-            (walk.duration() - 0.8).abs() < 1e-4,
-            "a 0.8 s step: {}",
+            (walk.duration() - 1.6667).abs() < 1e-3,
+            "a 1.67 s walk cycle: {}",
             walk.duration()
         );
-        let clips: Vec<String> = ctx
-            .gfx
-            .load_clips(CRAWLER)
-            .iter()
-            .map(|c| c.name().to_string())
-            .collect();
-        assert_eq!(clips, ["idle", "crawl", "stunned"]);
+        assert_eq!(names(ctx, CRAWLER), ["crawl", "idle", "stunned"]);
     });
 }
 
@@ -759,7 +758,7 @@ fn the_autopilot_plays_the_whole_game() {
     assert!(smoke.finished(), "{report:#?}");
     assert!(report.tally.shards >= 6 && report.tally.wins == 1, "{report:#?}");
     assert!(report.tally.saves >= 1 && report.tally.loads >= 1, "{report:#?}");
-    assert_eq!(report.warden_joints, 9);
+    assert_eq!(report.warden_joints, 86);
     assert!(report.path_corners >= 2);
     let screens: Vec<&str> = report.screens.iter().map(String::as_str).collect();
     let first_play = screens.iter().position(|s| *s == "Playing").unwrap();

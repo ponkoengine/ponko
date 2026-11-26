@@ -1,33 +1,78 @@
 Shard Grove: content notices
 ============================
 
-Shard Grove is the 3D reference game for the Ponko engine, built only from
-content made for it. Nothing in it is taken from another work.
+Shard Grove is the 3D reference game for the Ponko engine. Its characters,
+textures, sounds and music are made by the artists named below and dedicated
+to the public domain under Creative Commons CC0 1.0 Universal; the full text
+of that dedication is in CC0-1.0.txt in this package. CC0 needs no credit,
+and the credits are given here all the same.
 
-Everything below was made for this game and is Copyright (c) 2026 Leon Mamić
-and Ponko contributors, licensed under the MIT license or the Apache License
-2.0, at your option (see LICENSE-MIT and LICENSE-APACHE in this package).
+The grove's geometry was made for this game and is Copyright (c) 2026 Leon
+Mamić and Ponko contributors, licensed under the MIT license or the Apache
+License 2.0, at your option (see LICENSE-MIT and LICENSE-APACHE in this
+package).
 
 Models (glTF 2.0, binary)
 -------------------------
-shard_grove/grove.glb        the walled grove: ground, walls, broken walls,
-                             pillars, a rock, the platform and its ramp, the
-                             gate's arch
-shard_grove/warden.glb       the warden: a skinned character of 8 joints with
-                             the clips idle, walk, pulse and hurt
-shard_grove/crawler.glb      the crawler: a skinned character of 6 joints with
-                             the clips idle, crawl and stunned
+shard_grove/grove.glb
+    The walled grove: ground, walls, broken walls, pillars, a rock, the
+    platform and its ramp, the gate's arch. Geometry made for this game.
+    Its textures (base color, normal and ambient occlusion / roughness /
+    metalness maps) are from Poly Haven, https://polyhaven.com, CC0:
+      the ground   "Forest Ground 01" by Rob Tuytel
+                   https://polyhaven.com/a/forrest_ground_01
+      the walls    "Castle Wall Slates" by Rob Tuytel
+                   https://polyhaven.com/a/castle_wall_slates
+      the ruins    "Stone Brick Wall 001" by Dimitrios Savva (photography)
+                   and Rico Cilliers (processing)
+                   https://polyhaven.com/a/stone_brick_wall_001
+      the rock     "Mossy Rock" by Rob Tuytel
+                   https://polyhaven.com/a/mossy_rock
 
-Sounds (WAV, mono, 22,050 Hz)
------------------------------
-shard_grove/sounds/shard.wav      a shard picked up
-shard_grove/sounds/pulse.wav      the pulse
-shard_grove/sounds/hurt.wav       a crawler's touch
-shard_grove/sounds/shrine.wav     a shrine saving the game
-shard_grove/sounds/gate.wav       the gate opening
-shard_grove/sounds/select.wav     a menu choice
-shard_grove/sounds/crawler.wav    a crawler's hum (a one-second loop)
-shard_grove/sounds/wind.wav       the wind in the grove (a loop)
+shard_grove/warden.glb
+    The warden: "Hooded Adventurer" by Quaternius, CC0,
+    https://poly.pizza/m/y9KWOVG21R (https://quaternius.com). A skinned
+    character with the clips idle, walk, pulse and hurt (named Idle, Walk,
+    Interact and HitRecieve in the original).
+
+shard_grove/crawler.glb
+    The crawler: "Crab Enemy" by Quaternius, CC0,
+    https://poly.pizza/m/Gs3yfsV5lB (https://quaternius.com). A skinned
+    character with the clips idle, crawl and stunned (named Idle, Walk and
+    HitRecieve in the original).
+
+Sound (Ogg Vorbis)
+------------------
+shard_grove/sounds/shard.ogg      a shard picked up: "powerUp11" from
+                                  Digital Audio by Kenney
+shard_grove/sounds/pulse.ogg      the pulse: "forceField_000" from
+                                  Sci-Fi Sounds by Kenney
+shard_grove/sounds/hurt.ogg       a crawler's touch: "impactPunch_medium_000"
+                                  from Impact Sounds by Kenney
+shard_grove/sounds/shrine.ogg     a shrine saving the game: "confirmation_002"
+                                  from Interface Sounds by Kenney
+shard_grove/sounds/gate.ogg       the gate opening: "doorOpen_000" from
+                                  Sci-Fi Sounds by Kenney
+shard_grove/sounds/select.ogg     a menu choice: "select_002" from
+                                  Interface Sounds by Kenney
+shard_grove/sounds/crawler.ogg    a crawler's hum (a loop):
+                                  "spaceEngineLow_000" from Sci-Fi Sounds
+                                  by Kenney
+    Kenney (https://kenney.nl), CC0:
+      Digital Audio      https://kenney.nl/assets/digital-audio
+      Sci-Fi Sounds      https://kenney.nl/assets/sci-fi-sounds
+      Impact Sounds      https://kenney.nl/assets/impact-sounds
+      Interface Sounds   https://kenney.nl/assets/interface-sounds
+
+shard_grove/sounds/wind.ogg
+    The wind in the grove (a loop): "Wind" by IgnasD, CC0,
+    https://opengameart.org/content/wind
+
+Music (Ogg Vorbis)
+------------------
+shard_grove/music/grove.ogg
+    "Forest Whisper Theme" by Cleyton Kauffman, CC0,
+    https://opengameart.org/content/forest-whisper-theme
 
 Fonts
 -----
