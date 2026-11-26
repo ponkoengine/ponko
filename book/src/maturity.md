@@ -141,6 +141,7 @@ The level each top-level module of `ponko` gives in its rustdoc.
 | `ponko::camera` | **tested** | [Several cameras: split screen and minimaps](viewports.md) |
 | `ponko::collision` | **tested** | [3D physics: bodies, terrain, characters and vehicles](physics3d.md) |
 | `ponko::color` | **proven** | [Drawing](drawing.md) |
+| `ponko::console` | **tested** | [Tools and agents: the control endpoint](control.md) |
 | `ponko::crash` | **tested** | [Crash reports](crash-reports.md) |
 | `ponko::d2` | **proven** | [Drawing](drawing.md) |
 | `ponko::d3` | **tested** | [3D: meshes, materials and the sun](3d.md) |
