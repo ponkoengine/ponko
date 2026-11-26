@@ -53,18 +53,36 @@ fn gpu_startup_errors_return_directly_without_panicking() {
     std::panic::set_hook(Box::new(move |_| {
         calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }));
-    for (context, detail) in [
-        ("could not create a GPU surface", "denied"),
-        ("no compatible GPU found", "none"),
-        ("could not open the GPU device", "denied"),
+    for (step, lead, detail) in [
+        (
+            startup::Step::Surface,
+            "could not create a GPU surface (denied):",
+            "denied",
+        ),
+        (startup::Step::Adapter, "no compatible GPU found (none):", "none"),
+        (
+            startup::Step::Device,
+            "could not open the GPU device (denied):",
+            "denied",
+        ),
     ] {
-        let error = startup::result(Err::<(), _>(detail), context).unwrap_err();
+        let error = startup::result(Err::<(), _>(detail), step).unwrap_err();
         assert_eq!(error.kind(), ErrorKind::Unsupported);
-        assert_eq!(error.to_string(), format!("ponko: {context}: {detail}"));
+        assert!(error.to_string().starts_with(&format!("ponko: {lead} ")), "{error}");
     }
+    // Each says what to try: the driver, the backend, a build without a window.
+    let message = |step| startup::result(Err::<(), _>("x"), step).unwrap_err().to_string();
+    assert!(message(startup::Step::Adapter).contains("update the graphics driver"));
+    assert!(message(startup::Step::Adapter).contains("`Game::run_headless`"));
+    assert!(message(startup::Step::Device).contains("`WGPU_BACKEND`"));
     let error = startup::config(None::<()>).unwrap_err();
-    assert_eq!(error.to_string(), "ponko: the GPU can't draw to this window");
-    assert_eq!(startup::result(Ok::<_, &str>(42), "device"), Ok(42));
+    assert!(
+        error
+            .to_string()
+            .starts_with("ponko: the GPU can't draw to this window: its surface offers no format"),
+        "{error}"
+    );
+    assert_eq!(startup::result(Ok::<_, &str>(42), startup::Step::Device), Ok(42));
     assert_eq!(startup::config(Some(42)), Ok(42));
     assert_eq!(hooks.load(std::sync::atomic::Ordering::Relaxed), 0);
 }

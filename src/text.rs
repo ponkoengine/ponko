@@ -241,15 +241,27 @@ pub(crate) struct Text {
     layouts: u64,
 }
 
+/// The error for bytes that aren't a font this engine reads: what they are
+/// instead, and the fix (see `assets::sniff`). Loaders put the path in front.
+fn not_a_font(bytes: &[u8], detail: impl std::fmt::Display) -> crate::error::Error {
+    use crate::assets::sniff;
+    crate::error::Error::new(
+        crate::error::ErrorKind::Decode,
+        sniff::not_a(
+            sniff::Class::Font,
+            "the file",
+            &sniff::Sniff::of(bytes),
+            Some(&format!(
+                "{detail}; ponko reads TrueType, OpenType and font collections"
+            )),
+        ),
+    )
+}
+
 /// The bytes of a font file as a font; not one this engine reads is
 /// [`ErrorKind::Decode`](crate::error::ErrorKind::Decode).
 fn decode_font(bytes: &[u8]) -> Result<fontdue::Font, crate::error::Error> {
-    fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default()).map_err(|e| {
-        crate::error::Error::new(
-            crate::error::ErrorKind::Decode,
-            format!("not a font file this engine can read: {e}"),
-        )
-    })
+    fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default()).map_err(|e| not_a_font(bytes, e))
 }
 
 impl Text {
@@ -325,12 +337,7 @@ impl Text {
                     ..Default::default()
                 },
             )
-            .map_err(|e| {
-                crate::error::Error::new(
-                    crate::error::ErrorKind::Decode,
-                    format!("not a font file this engine can read: {e}"),
-                )
-            })?
+            .map_err(|e| not_a_font(bytes, e))?
         };
         let id = self.ids.make(self.fonts.len(), "font");
         let slot = (id & crate::handle::INDEX_MASK) as usize;
