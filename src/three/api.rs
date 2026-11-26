@@ -23,7 +23,8 @@ pub(crate) struct MaterialUniform {
     pub emissive: [f32; 4],
     /// roughness, metallic, normal map strength, unused.
     pub params: [f32; 4],
-    /// Which maps it has (1/0): normal, ORM, emissive, unused. A
+    /// Which maps it has (1/0): normal, ORM, emissive; then whether the
+    /// model's tint is masked by the vertex colour's alpha (1/0). A
     /// two-channel normal map is 2 (X and Y in red and green) or 3 (in red
     /// and alpha): the shader rebuilds Z.
     pub maps: [u32; 4],
@@ -62,7 +63,7 @@ impl GpuMaterialDesc {
                     u32::from(desc.normal_map.is_some()),
                     u32::from(desc.orm_map.is_some()),
                     u32::from(desc.emissive_map.is_some()),
-                    0,
+                    u32::from(desc.masked_tint),
                 ],
                 custom: desc.custom.map(|v| v.to_array()),
             },

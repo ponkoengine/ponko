@@ -29,7 +29,7 @@ are written in `STABILITY.md`; here they are again:
   `python3 scripts/maturity.py` fails when a chapter or a top-level module
   has no level, and regenerates the list and the module docs (`--write`).
 
-Chapters: 21 proven, 62 tested, 7 experimental.
+Chapters: 21 proven, 63 tested, 7 experimental.
 
 ## Chapters
 
@@ -125,6 +125,7 @@ Chapters: 21 proven, 62 tested, 7 experimental.
 | [Working with AI agents (MCP)](agents.md) | **tested** | none | a complete game produced with the tools |
 | [Validation bundles](validation-bundles.md) | **tested** | none | a reference game that uses it |
 | [Performance and profiling](profiling.md) | **tested** | none | a reference game that uses it |
+| [The `ponko` command](cli.md) | **tested** | Coin Dash and Ember Hop are packaged with it | — |
 
 ## Modules
 

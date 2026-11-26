@@ -87,3 +87,5 @@ Assets::revert_browser_save      editor.md         # same
 Assets::browser_saves_persistent editor.md         # same
 
 Console::run                     control.md        # direct execution would re-enter native code with an already borrowed context; use overlay or control dispatch
+Color::hex_rgba                  drawing.md        # PonkoColor is four floats; C and C++ games set the channels themselves
+Color::lerp                      drawing.md        # same: mix the four floats yourself

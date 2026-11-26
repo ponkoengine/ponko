@@ -662,6 +662,14 @@ undo history, prefab comparison, play mode or settings), and
 
 ## Tests
 
+No entry is dead: a test opens every menu and compares its entries with a
+list (an entry added without a test fails), then uses each one on an editor
+where it has something to act on and checks that it did what its label
+says. The buttons of the menu bar and the gizmo row, each entry of a
+hierarchy row's menu and each shortcut in **Help → Shortcuts** are used
+the same way, and so are the sections and buttons of the
+[inspector](inspector.md) overlay, in an empty game too.
+
 Everything behind the panels is tested without a window: the history and
 its merged drags, the unsaved marker, scene and prefab round trips, the
 file watch, the gizmos' math, and the panels themselves driven by fake
@@ -728,8 +736,10 @@ picture without the edit.
 
 ## Checks for a person
 
-The tests feed the picker's answers and the focus events; these need a
-real desktop session or browser:
+How the menus, panels and dialogs look in a real window is a person's
+check: the list is `scripts/checklists/editor-and-inspector.md` in the
+repository. The tests feed the picker's answers and the focus events; these
+need a real desktop session or browser too:
 
 1. On macOS, Windows and Linux (with the desktop's portal, and with
    Zenity), **Open** and **Save as** show the system's picker in the

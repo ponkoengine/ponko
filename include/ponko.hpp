@@ -1295,7 +1295,8 @@ inline bool report_crash(const char* message) {
 // add fields at the end. The helpers below fill both header fields for this header's version and the
 // defaults; change the fields you need and pass the struct by reference.
 
-/// A material description that can grow (PonkoMaterialDescEx): `desc` is material_desc, plus a stencil.
+/// A material description that can grow (PonkoMaterialDescEx): `desc` is material_desc, plus a stencil and,
+/// from version 2, masked_tint (the model's colour tints only where the vertex colour's alpha is 1).
 using material_desc_ex = PonkoMaterialDescEx;
 /// Navmesh bake settings that can grow (PonkoNavBakeSettingsEx): `settings` is nav_bake_settings.
 using nav_bake_settings_ex = PonkoNavBakeSettingsEx;
@@ -3259,8 +3260,9 @@ public:
     mesh_data(const mesh_data&) = delete;
     mesh_data& operator=(const mesh_data&) = delete;
     ///@}
-    /// One color per corner, multiplying the material's color; empty
-    /// removes them. Throws unless there's one per corner.
+    /// One color per corner, multiplying the material's color (red, green
+    /// and blue may go above 1); empty removes them. Throws unless there's
+    /// one per corner.
     void set_colors(const std::vector<color>& colors) {
         detail::check(ponko_mesh_data_set_colors(raw_, colors.empty() ? nullptr : colors.data(), colors.size()));
     }

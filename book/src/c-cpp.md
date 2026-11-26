@@ -405,7 +405,7 @@ to it. The full rule is in
 
 | Descriptor | Calls | What it adds to ABI 2 |
 |---|---|---|
-| `PonkoMaterialDescEx` | `ponko_ctx_create_material_ex`, `ponko_ctx_update_material_ex` | the stencil state, in the same description |
+| `PonkoMaterialDescEx` | `ponko_ctx_create_material_ex`, `ponko_ctx_update_material_ex` | the stencil state, in the same description; `masked_tint` (version 2) |
 | `PonkoNavBakeSettingsEx` | `ponko_ctx_bake_navmesh_ex` | nothing yet: the place new bake settings go |
 | `PonkoLightingEx` | `ponko_ctx_lighting_ex`, `ponko_ctx_set_lighting_ex` | `shadow_sun_size` (the sun's size for contact-hardening shadows) and `shadow_sun_step` |
 | `PonkoColliderEx` | `ponko_set_collider_ex`, `ponko_get_collider_ex` | a 2D collider's collision groups and polygon corners, in one call |
@@ -641,6 +641,7 @@ binding arrives:
 | `SaveFormat`, `Storage::save_world_in_background` | [Saves and settings](storage.md#large-worlds) | Not bound yet: save slots are JSON, written on the game's thread by `ponko_ctx_save_world`; `ponko_ctx_load_world` reads binary slots too |
 | `UiAccessAdapter::for_ns_view` | [Retained game UI](ui.md#the-screen-reader-adapter) | It needs a Rust `Ui`; the engine's own window gets the adapter, and `ponko_ui_access_*` give a snapshot for one of your own |
 | `NavObstacleShape` | [3D navigation meshes](navigation3d.md#obstacle-shapes) | Obstacles are unturned boxes: `ponko_ctx_set_nav_obstacle` and `ponko_ctx_set_nav_carve_obstacle` |
+| `Color::hex_rgba`, `Color::lerp` (and parsing a color from hex text) | [Colors](drawing.md#colors) | `PonkoColor` is four floats: set the channels, mix and parse them in your own code |
 | `SkyShader` | [A sky of your own](3d.md#a-sky-of-your-own) | The built-in atmosphere or the flat sky (`PonkoSky`); sky shaders have no C binding yet |
 | `Graphics::stream_instance_cell` | [Streaming instance cells](3d.md#streaming-instance-cells) | Build a cell's matrices on your own threads, then `ponko_ctx_add_instance_cell` (`ctx::add_instance_cell`) on the game's |
 | `InstanceCellData` | [Streaming instance cells](3d.md#streaming-instance-cells) | The same: matrices and colours go straight to `ponko_ctx_add_instance_cell` |

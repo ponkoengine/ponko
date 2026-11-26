@@ -466,6 +466,13 @@ pub fn glob(pattern: &[u8], path: &[u8]) -> bool {
                 Some((b'*', rest)) => (true, rest),
                 _ => (false, rest),
             };
+            // `**/` also matches no folder: `**/*.psd` takes `art.psd` too.
+            if across
+                && let Some(after) = rest.strip_prefix(b"/")
+                && glob(after, path)
+            {
+                return true;
+            }
             (0..=path.len())
                 .take_while(|&i| across || i == 0 || path[i - 1] != b'/')
                 .any(|i| glob(rest, &path[i..]))
@@ -902,6 +909,9 @@ mod tests {
         assert!(glob(b"*.psd", b"art.psd"));
         assert!(!glob(b"*.psd", b"raw/art.psd"));
         assert!(glob(b"**/*.psd", b"raw/deep/art.psd"));
+        assert!(glob(b"**/*.psd", b"art.psd"), "`**/` matches no folder too");
+        assert!(glob(b"raw/**/*.png", b"raw/a.png"));
+        assert!(!glob(b"**/*.psd", b"art.png"));
         assert!(glob(b"raw/**", b"raw/a/b.png"));
     }
 

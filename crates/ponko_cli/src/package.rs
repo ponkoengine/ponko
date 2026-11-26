@@ -108,12 +108,21 @@ ponko notices: write THIRD-PARTY-NOTICES.txt for a crate
 
 Usage:
   ponko notices --out <file> [-p <package>] [--title <text>] [--manifest-path <path>]
-                [--target <triple>] [--features <list>] [--no-default-features]
+                [--target <triple>] [--features <list>] [--no-default-features] [--locked]
 
 Lists every library the crate's library links on the platform (its normal
 dependencies with the given features), with their licenses, the way
 `ponko package` writes them for a game. For shipping a library, such as a
-C library built from Rust.";
+C library built from Rust.
+
+Options:
+  --out <file>                 Where to write the notices
+  -p, --package <name>         The crate, in a workspace
+  --title <text>               The heading (default: the crate's name)
+  --manifest-path <path>       The crate's Cargo.toml (default: found from here)
+  --target <triple>            The platform it links for (default: this one)
+  --features <list>, --no-default-features   As for cargo build
+  --locked                     As for cargo build";
 
 /// The parsed arguments of `ponko package` (and `ponko notices`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -168,6 +177,17 @@ impl Options {
                 v.parse::<u64>()
                     .map_err(|_| format!("{flag} takes a number, not `{v}`"))
             };
+            // One parser serves both commands; a flag the other one uses
+            // would be accepted and do nothing.
+            let notices = usage == NOTICES_USAGE;
+            if notices && flag.starts_with('-') && !NOTICES_FLAGS.contains(&flag) {
+                return Err(format!(
+                    "`ponko notices` doesn't take {flag} (a `ponko package` option)\n\n{usage}"
+                ));
+            }
+            if !notices && flag == "--title" {
+                return Err("--title is for `ponko notices`; `ponko package` names the notices after the game".into());
+            }
             match flag {
                 "--bin" => o.bin = Some(value()?),
                 "--example" => o.example = Some(value()?),
@@ -211,6 +231,20 @@ impl Options {
         Ok(o)
     }
 }
+
+/// The options `ponko notices` uses (the rest are `ponko package`'s).
+const NOTICES_FLAGS: [&str; 10] = [
+    "--out",
+    "-p",
+    "--package",
+    "--title",
+    "--manifest-path",
+    "--target",
+    "--features",
+    "-F",
+    "--no-default-features",
+    "--locked",
+];
 
 const WASM: &str = "wasm32-unknown-unknown";
 
@@ -1376,6 +1410,26 @@ mod tests {
 
     fn parse(args: &[&str]) -> Result<Options, String> {
         Options::parse(&args.iter().map(|a| a.to_string()).collect::<Vec<_>>(), USAGE)
+    }
+
+    #[test]
+    fn each_command_refuses_the_options_only_the_other_uses() {
+        let args = |a: &[&str]| a.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+        let err = Options::parse(&args(&["--out", "n.txt", "--web"]), NOTICES_USAGE).unwrap_err();
+        assert!(err.starts_with("`ponko notices` doesn't take --web"), "{err}");
+        let err = Options::parse(&args(&["--no-smoke=1"]), NOTICES_USAGE).unwrap_err();
+        assert!(err.contains("--no-smoke"), "{err}");
+        let o = Options::parse(
+            &args(&["--out", "n.txt", "--title", "Lib", "-F", "a", "--locked", "--target=x"]),
+            NOTICES_USAGE,
+        )
+        .unwrap();
+        assert_eq!((o.title.as_deref(), o.target.as_deref()), (Some("Lib"), Some("x")));
+        assert!(
+            parse(&["--title", "Game"])
+                .unwrap_err()
+                .starts_with("--title is for `ponko notices`")
+        );
     }
 
     #[test]

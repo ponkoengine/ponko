@@ -7,6 +7,7 @@
 //! that record what they saw; the tests check afterwards.
 use ponko_ffi::*;
 use std::ffi::{CStr, c_void};
+use std::mem::offset_of;
 use std::ptr::{null, null_mut};
 
 use PonkoStatus::*;
@@ -109,6 +110,7 @@ fn defaults_match_the_abi_2_defaults() {
         assert_eq!(m.desc, ponko_material_desc(white));
         assert!(!m.has_stencil);
         assert_eq!(m.stencil, ponko_stencil_default());
+        assert!(!m.masked_tint);
 
         let mut s: PonkoNavBakeSettingsEx = header(PONKO_NAV_BAKE_SETTINGS_EX_VERSION);
         assert_eq!(ponko_nav_bake_settings_ex_defaults(&mut s), PONKO_OK);
@@ -220,6 +222,17 @@ unsafe extern "C" fn three_d(ctx: *mut PonkoCtx, user: *mut c_void) {
             ponko_ctx_create_material_ex(ctx, &d, null_mut()),
             PONKO_INVALID_ARGUMENT
         );
+        // Version 2: the model's colour masked by the vertex colour's alpha.
+        // A version 1 descriptor (shorter) still makes a material.
+        d.has_stencil = false;
+        d.masked_tint = true;
+        let mut masked = PonkoMaterial::default();
+        expect!(seen, ponko_ctx_create_material_ex(ctx, &d, &mut masked), PONKO_OK);
+        expect!(seen, ponko_ctx_update_material_ex(ctx, masked, &d), PONKO_OK);
+        let mut v1 = d;
+        (v1.version, v1.struct_size) = (1, offset_of!(PonkoMaterialDescEx, masked_tint) as u32);
+        expect!(seen, ponko_ctx_create_material_ex(ctx, &v1, &mut masked), PONKO_OK);
+        d.masked_tint = false;
         let foreign = PonkoMaterial { id: 9999 };
         d.has_stencil = false;
         expect!(
