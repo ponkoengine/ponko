@@ -1008,7 +1008,8 @@ impl Frame3D {
         // tile's bounds (the finest level's, which hold every coarser one).
         // Shadow cascade i draws at least level i: its texels are too big
         // for finer detail to show.
-        // A `ShadowMesh(None)` on the tile turns its shadow off.
+        // A `ShadowMesh(None)` on the tile turns its shadow off; a tile on
+        // none of the camera's layers casts its shadow only, as a model.
         world
             .query::<(
                 ponko_ecs::Entity,
@@ -1017,8 +1018,9 @@ impl Frame3D {
                 Option<&ShadowMesh>,
                 Option<&ModelMaterial>,
                 Option<&ModelMaterials>,
+                Option<&crate::camera::RenderLayers>,
             )>()
-            .for_each(|(e, t, tile, shadow, material, parts)| {
+            .for_each(|(e, t, tile, shadow, material, parts, layers)| {
                 let Some((center, radius)) = assets.live_bounds(tile.lods[0].id) else {
                     return;
                 };
@@ -1036,7 +1038,12 @@ impl Frame3D {
                 if meshes.iter().all(|&m| assets.live_bounds(m).is_some()) {
                     let meshes = meshes.map(|m| m & super::SLOT_MASK);
                     let casts = !matches!(shadow, Some(ShadowMesh(None)));
-                    let f = classify(t, (center, radius), casts.then_some((center, radius)));
+                    let caster = casts.then_some((center, radius));
+                    let f = if layers.copied().unwrap_or_default().intersects(camera.layers) {
+                        classify(t, (center, radius), caster)
+                    } else {
+                        classify_uncounted(t.matrix(), scale, (center, radius), caster) & !(1 | OCCLUDED)
+                    };
                     if f != 0 {
                         // Most tiles have no override: skip the lookup.
                         let meshes = if material.is_some() || parts.is_some() {
@@ -1664,6 +1671,35 @@ mod tests {
         let mut frame = Frame3D::default();
         frame.collect(&mut world, &assets, &SkinFrame::default(), &camera(), &lighting);
         assert_eq!(frame.runs, vec![(0, 0, 1), (1, 1, 1), (3, 2, 1)]);
+    }
+
+    #[test]
+    fn terrain_tiles_on_none_of_the_cameras_layers_are_left_out() {
+        // A first-person view-model camera draws only its own layer: the
+        // ground under the player must not be drawn over the world by it.
+        let mut world = World::new();
+        let assets = Assets3D {
+            bounds: vec![(Vec3::ZERO, 1.0); TERRAIN_LODS],
+            ..Default::default()
+        };
+        let tile = TerrainTile {
+            lods: std::array::from_fn(|id| Mesh { id: id as u32 }),
+            lod_distance: 5.0,
+        };
+        world.spawn((Transform3D::at(Vec3::new(0.0, 0.0, 7.0)), tile));
+        let lighting = Lighting {
+            shadows: false,
+            ..Default::default()
+        };
+        let mut eye = camera();
+        let mut frame = Frame3D::default();
+        frame.collect(&mut world, &assets, &SkinFrame::default(), &eye, &lighting);
+        assert_eq!(frame.visible, 1, "on the camera's layer: drawn");
+        eye.layers = crate::camera::RenderLayers::layer(31);
+        let mut frame = Frame3D::default();
+        frame.collect(&mut world, &assets, &SkinFrame::default(), &eye, &lighting);
+        assert_eq!(frame.visible, 0, "another layer's camera leaves it out");
+        assert!(frame.runs.is_empty());
     }
 
     #[test]
