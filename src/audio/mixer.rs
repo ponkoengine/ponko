@@ -621,16 +621,21 @@ impl Audio {
             Lookup::Found(found) => found,
         };
         let origin = found.origin.clone();
+        let mut sniff = None;
         let streamed = match &origin {
             Origin::File(file) => self.backend.stream(file.clone()),
             Origin::Source { .. } => {
                 let bytes = found.into_bytes().map_err(|e| e.with_path(path))?;
+                sniff = Some(crate::assets::sniff::Sniff::of(&bytes));
                 self.backend.stream_bytes(bytes)
             }
         };
-        let (id, seconds) = streamed.map_err(|e| match &origin {
-            Origin::File(file) => crate::error::Error::decode(path, format!("{}: {e}", file.display())),
-            Origin::Source { .. } => crate::error::Error::decode(path, format!("{}: {e}", origin.describe(path))),
+        let (id, seconds) = streamed.map_err(|e| {
+            let sniff = sniff.unwrap_or_else(|| match &origin {
+                Origin::File(file) => crate::assets::sniff::Sniff::of_file(file),
+                Origin::Source { .. } => crate::assets::sniff::Sniff::of(&[]),
+            });
+            crate::audio::sound_error(path, &origin, &sniff, &e)
         })?;
         let sound = Sound { id, seconds };
         self.sounds_live.insert(id);

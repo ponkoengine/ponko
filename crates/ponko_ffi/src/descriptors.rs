@@ -140,7 +140,7 @@ macro_rules! assert_header {
 // ---- material ---------------------------------------------------------------
 
 /// The version of `PonkoMaterialDescEx` this header describes.
-pub const PONKO_MATERIAL_DESC_EX_VERSION: u32 = 1;
+pub const PONKO_MATERIAL_DESC_EX_VERSION: u32 = 2;
 
 /// What a material is made from, in a layout that can grow (Rust
 /// `MaterialDesc`): `PonkoMaterialDesc` plus the fields added since ABI 2.
@@ -154,12 +154,13 @@ pub const PONKO_MATERIAL_DESC_EX_VERSION: u32 = 1;
 /// ponko_ctx_create_material_ex(ctx, &d, &material);
 /// ```
 ///
-/// Version 1: `desc`, `has_stencil`, `stencil`.
+/// Version 1: `desc`, `has_stencil`, `stencil`. Version 2 adds
+/// `masked_tint`.
 /// ```
 /// use ponko_ffi::*;
 /// let mut d = PonkoMaterialDescEx { struct_size: size_of::<PonkoMaterialDescEx>() as u32, version: PONKO_MATERIAL_DESC_EX_VERSION, ..unsafe { std::mem::zeroed() } };
 /// assert_eq!(unsafe { ponko_material_desc_ex_defaults(&mut d) }, PonkoStatus::PONKO_OK);
-/// assert_eq!((d.desc.roughness, d.has_stencil), (0.6, false));
+/// assert_eq!((d.desc.roughness, d.has_stencil, d.masked_tint), (0.6, false, false));
 /// ```
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -174,6 +175,10 @@ pub struct PonkoMaterialDescEx {
     pub has_stencil: bool,
     /// The stencil state, with `has_stencil`.
     pub stencil: PonkoStencil,
+    /// The model's colour tints only where the vertex colour's alpha is 1
+    /// (0: not at all); that alpha is then a mask, not opacity (Rust
+    /// `MaterialDesc::masked_tint`). Version 2.
+    pub masked_tint: bool,
 }
 assert_header!(PonkoMaterialDescEx);
 
@@ -183,6 +188,7 @@ impl Versioned for PonkoMaterialDescEx {
     fn len_of(version: u32) -> Option<usize> {
         match version {
             1 => Some(end_of!(Self, stencil: PonkoStencil)),
+            2 => Some(end_of!(Self, masked_tint: bool)),
             _ => None,
         }
     }
@@ -200,11 +206,13 @@ fn material_defaults() -> PonkoMaterialDescEx {
         }),
         has_stencil: false,
         stencil: ponko_stencil_default(),
+        masked_tint: false,
     }
 }
 
 /// Fills the fields of `desc`'s version with the defaults: a plain white
-/// material (as `ponko_material_desc` of white), no stencil. `struct_size`
+/// material (as `ponko_material_desc` of white), no stencil, the model's
+/// colour over all of it. `struct_size`
 /// and `version` must be set first.
 /// # Safety
 /// `desc` null or a writable descriptor with its header set.
@@ -221,7 +229,9 @@ fn material_ex(c: &ponko::prelude::Ctx, d: &PonkoMaterialDescEx) -> Result<ponko
     } else {
         None
     };
-    Ok(material_from_c(c, &d.desc)?.with_stencil(stencil))
+    Ok(material_from_c(c, &d.desc)?
+        .with_stencil(stencil)
+        .with_masked_tint(d.masked_tint))
 }
 
 /// Puts a material on the GPU, from a versioned description (as
@@ -527,6 +537,11 @@ mod tests {
             Some(offset_of!(PonkoLightingEx, shadow_sun_step) + 4)
         );
         assert!(PonkoMaterialDescEx::len_of(1).unwrap() <= size_of::<PonkoMaterialDescEx>());
+        assert_eq!(
+            PonkoMaterialDescEx::len_of(2),
+            Some(offset_of!(PonkoMaterialDescEx, masked_tint) + 1)
+        );
+        assert_eq!(PonkoMaterialDescEx::len_of(3), None);
         assert!(PonkoNavBakeSettingsEx::len_of(1).unwrap() <= size_of::<PonkoNavBakeSettingsEx>());
         assert_eq!(PonkoLightingEx::len_of(2), None);
     }

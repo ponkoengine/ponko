@@ -1910,6 +1910,24 @@ static void recolored(ponko::ctx& ctx, ponko::mesh house, ponko::material gold, 
 }
 // ANCHOR_END: model_material
 
+// ANCHOR: masked_tint
+/// Townsfolk from one mesh and one material, each in a shirt of their
+/// own: the body's vertex colours mark the shirt with alpha 1 and the
+/// rest with alpha 0, so the model's colour tints only the shirt.
+static std::vector<ponko::entity> townsfolk(ponko::ctx& ctx, const ponko::mesh_data& body) {
+    auto cloth_desc = ponko::material_desc_ex_of(ponko::material_of(ponko::colors::white));
+    cloth_desc.masked_tint = true;
+    auto person = ctx.create_mesh(body, ctx.create_material(cloth_desc));
+    const ponko::color shirts[] = {ponko::rgb(0.69f, 0.23f, 0.18f), ponko::rgb(0.16f, 0.45f, 0.65f), ponko::rgb(0.14f, 0.61f, 0.34f)};
+    std::vector<ponko::entity> people;
+    for (int i = 0; i < 3; ++i) {
+        auto at = ponko::transform3d_at({i * 1.5f, 0, 0});
+        people.push_back(ctx.world().spawn(at, ponko::model_of(person, shirts[i])));
+    }
+    return people;
+}
+// ANCHOR_END: masked_tint
+
 // ANCHOR: stencil
 /// Crossing glass strips that blend once where they overlap, and a crate
 /// with an outline only around it.
@@ -2458,6 +2476,27 @@ static ponko::render_target security_screen(ponko::ctx& ctx) {
 }
 // ANCHOR_END: security_screen
 
+// ANCHOR: item_icons
+/// The inventory's slots: one icon per item, drawn once when the bag
+/// opens, not every frame. Seen a little more from the side than the
+/// default, on a dark slot colour.
+static std::vector<ponko::render_target> inventory_slots(ponko::ctx& ctx, const std::vector<ponko::mesh>& items) {
+    auto look = ponko::icon_of(64);
+    look.from = {1.0f, 0.4f, 0.6f};
+    look.background = {0.08f, 0.08f, 0.1f, 1.0f};
+    namespace u = ponko::ui;
+    auto ui = ctx.ui_retained();
+    auto bag = ui.add_panel(u::none, u::fill());
+    std::vector<ponko::render_target> icons;
+    for (auto item : items) {
+        auto icon = ctx.render_icon(item, look);
+        ui.add_image(bag, icon, u::fixed(64, 64));
+        icons.push_back(icon);
+    }
+    return icons;
+}
+// ANCHOR_END: item_icons
+
 // ANCHOR: monitor
 /// A security monitor shows the room, but not the smoke.
 static void monitor(ponko::ctx& ctx, ponko::render_target screen) {
@@ -2736,6 +2775,35 @@ static void the_pond_mirrors_the_camera() {
         auto list = ctx.target_cameras();
         if (list.size() != 1 || list[0].camera.position.y != -5 || list[0].target.width != 32) {
             std::fprintf(stderr, "pond\n");
+            std::abort();
+        }
+    });
+}
+
+static void the_townsfolk_share_a_mesh_and_wear_their_own_shirts() {
+    ponko::game("town", 64, 64).run_headless(1, [](ponko::ctx& ctx) {
+        auto body = ponko::mesh_data::cube(1.0f);
+        std::vector<ponko::color> shirt(24, ponko::colors::white);
+        for (std::size_t i = 12; i < shirt.size(); ++i) shirt[i].a = 0;  // half of the faces: not the shirt
+        body.set_colors(shirt);
+        auto people = townsfolk(ctx, body);
+        if (people.size() != 3 || ctx.world().get<ponko::model>(people[1]).color.b <= 0.5f ||
+            ctx.world().get<ponko::model>(people[0]).mesh.id != ctx.world().get<ponko::model>(people[2]).mesh.id) {
+            std::fprintf(stderr, "townsfolk\n");
+            std::abort();
+        }
+    });
+}
+
+static void the_inventory_draws_one_icon_per_item() {
+    ponko::game("bag", 64, 64).run_headless(1, [](ponko::ctx& ctx) {
+        auto white = ctx.default_material();
+        auto sword = ctx.create_mesh(ponko::mesh_data::cube(1.0f), white);
+        auto shield = ctx.create_mesh(ponko::mesh_data::sphere(0.5f, 8), white);
+        auto icons = inventory_slots(ctx, {sword, shield});
+        if (icons.size() != 2 || icons[0].width != 64 || icons[1].height != 64 || icons[0].id == icons[1].id ||
+            !ctx.target_cameras().empty()) {
+            std::fprintf(stderr, "inventory icons\n");
             std::abort();
         }
     });
@@ -5327,6 +5395,8 @@ int main() {
     the_ripples_run_on_a_render_target();
     the_pond_mirrors_the_camera();
     the_security_screen_sees_only_the_vault_in_green();
+    the_inventory_draws_one_icon_per_item();
+    the_townsfolk_share_a_mesh_and_wear_their_own_shirts();
     the_debug_map_shows_what_the_window_leaves_out();
     the_hills_are_nine_tiles();
     tiles_are_solid_only_near_the_player_and_the_car();

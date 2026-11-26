@@ -103,6 +103,9 @@ pub use scene_bench::{SceneBench, SceneFrame, SceneKind, SceneSetup};
 #[cfg(test)]
 mod cook_shader_parts_test;
 mod resources;
+/// The bytes of one mesh corner on the GPU, for cost reports.
+#[cfg(test)]
+pub(crate) const VERTEX_SIZE: usize = size_of::<resources::Vertex>();
 mod screen_space;
 mod shader_checks;
 mod shaders;
@@ -2022,9 +2025,8 @@ impl Renderer3D {
     /// uses them (`Gpu::ensure_mips`). What is still read decoded there is the
     /// default white image (the same either way) and a texture that was first
     /// used as a color and then as data.
-    pub(super) fn without_linear_views(mut self) -> Self {
+    pub(super) fn without_linear_views(&mut self) {
         self.resources.linear_views = false;
-        self
     }
 
     /// The size the scene is drawn at (test hook).

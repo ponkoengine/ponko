@@ -124,7 +124,8 @@ impl fmt::Display for ReflectError {
         match self {
             Self::UnknownComponent(name) => write!(
                 f,
-                "no reflected component named `{name}` (register it with `world.reflect::<T>()`)"
+                "no reflected component named `{name}`: register the type with `world.reflect::<{name}>()` \
+                 in setup, or fix the name in the file (names are case-sensitive)"
             ),
             Self::NoSuchEntity(e) => write!(
                 f,
@@ -134,10 +135,13 @@ impl fmt::Display for ReflectError {
             Self::MissingComponent { entity, component } => {
                 write!(f, "entity {} has no `{component}`", entity.to_bits())
             }
+            // `<save>` and `<world>` stand for the file as a whole: no component to name.
+            Self::BadValue { component, message } if component.starts_with('<') => write!(f, "{message}"),
             Self::BadValue { component, message } => write!(f, "bad value for `{component}`: {message}"),
             Self::UnknownResource(name) => write!(
                 f,
-                "no reflected resource named `{name}` (register it with `world.reflect_resource::<T>()`)"
+                "no reflected resource named `{name}`: register the type with `world.reflect_resource::<{name}>()` \
+                 in setup, or fix the name in the file (names are case-sensitive)"
             ),
             Self::MissingResource(name) => write!(
                 f,
@@ -1017,6 +1021,86 @@ fn find(world: &World, name: &str) -> Result<Reflected, ReflectError> {
         .ok_or_else(|| ReflectError::UnknownComponent(name.to_string()))
 }
 
+/// The message for a file whose `"format"` isn't a world save's: what it
+/// is instead when that is known, and the call that reads it.
+fn not_a_world_save(file: &Value) -> String {
+    let what = match &file["format"] {
+        Value::String(f) if f == crate::scene::PREFAB_FORMAT => {
+            "it is a prefab: spawn it with `ctx.spawn_prefab` instead".to_string()
+        }
+        Value::String(f) => format!("its \"format\" is {f:?}"),
+        Value::Null => "it has no \"format\" field, so it isn't a file ponko wrote".to_string(),
+        other => format!("its \"format\" is {other}"),
+    };
+    format!(
+        "not a world save (expected \"format\": \"{SAVE_FORMAT}\"): {what}. \
+         A scene or save slot is written by `save_scene`, `Storage::save_world` or the editor"
+    )
+}
+
+/// The message for a save of a layout version this engine doesn't read.
+fn unsupported_version(version: &Value) -> String {
+    let cause = match version.as_u64() {
+        Some(v) if v > SAVE_VERSION => "the save was written by a newer ponko: update the engine, or load a save \
+             written by this version"
+            .to_string(),
+        _ => "the file's \"version\" is missing or damaged: restore it from a backup \
+             (`Storage::read_backup` for a save slot)"
+            .to_string(),
+    };
+    format!("unsupported save version {version} (this engine reads {SAVE_VERSION}): {cause}")
+}
+
+/// `error` from loading `save` into `world` as an [`Error`](crate::error::Error),
+/// told where in the file it happened: the first entity that names a
+/// component the game didn't register (with the closest registered names),
+/// or whose value doesn't fit its type.
+pub(crate) fn locate_load_error(world: &World, save: &Value, error: ReflectError) -> crate::error::Error {
+    let entities = save["entities"].as_array().map_or(&[][..], Vec::as_slice);
+    let first = |matches: &dyn Fn(&str, &Value) -> bool| {
+        entities.iter().find_map(|item| {
+            let components = item["components"].as_object()?;
+            let named = components.iter().any(|(n, v)| matches(n, v));
+            named.then(|| item["entity"].as_u64()).flatten()
+        })
+    };
+    let mut message = error.to_string();
+    match &error {
+        ReflectError::UnknownComponent(name) => {
+            if let Some(id) = first(&|n, _| n == name) {
+                message.push_str(&format!("; entity {id} is the first in the file to name it"));
+            }
+            let known = world.reflected_components();
+            let close = crate::suggest::suggestions(name, &known);
+            if !close.is_empty() {
+                let close: Vec<String> = close.iter().map(|c| format!("`{c}`")).collect();
+                message.push_str(&format!("; did you mean {}?", close.join(" or ")));
+            } else if known.is_empty() {
+                message.push_str("; the game has registered no component yet");
+            } else {
+                message.push_str("; `world.reflected_components()` lists the names registered");
+            }
+        }
+        ReflectError::BadValue {
+            component,
+            message: why,
+        } if !component.starts_with('<') => {
+            let fits = |n: &str, v: &Value| n == component && find(world, n).is_ok_and(|c| (c.check)(v).is_err());
+            if let Some(id) = first(&fits) {
+                message = format!("bad value for `{component}` on entity {id}: {why}");
+            }
+        }
+        _ => {}
+    }
+    crate::error::Error::new(crate::error::Error::from(error).kind(), message)
+}
+
+/// [`locate_load_error`] for a failure that isn't about a file's entities (a
+/// prefab's component): the hints without the entity.
+pub(crate) fn explain_error(world: &World, error: ReflectError) -> crate::error::Error {
+    locate_load_error(world, &Value::Null, error)
+}
+
 /// Whether `value` makes a whole component `name`, read without touching the
 /// world: the check [`WorldReflect::load`] runs first (mods check their
 /// files with it before anything is mounted).
@@ -1038,10 +1122,7 @@ pub(crate) fn check_world_save(world: &World, save: &Value) -> Result<(), Reflec
         message,
     };
     if save["version"].as_u64() != Some(SAVE_VERSION) {
-        return Err(bad(format!(
-            "unsupported save version {} (this engine reads {SAVE_VERSION})",
-            save["version"]
-        )));
+        return Err(bad(unsupported_version(&save["version"])));
     }
     let save = migrate::migrate(world, save)?;
     let list = save["entities"]
@@ -1438,15 +1519,10 @@ impl WorldReflect for World {
             message,
         };
         if save["format"] != SAVE_FORMAT {
-            return Err(bad(format!(
-                "not a world save (expected \"format\": \"{SAVE_FORMAT}\")"
-            )));
+            return Err(bad(not_a_world_save(save)));
         }
         if save["version"].as_u64() != Some(SAVE_VERSION) {
-            return Err(bad(format!(
-                "unsupported save version {} (this engine reads {SAVE_VERSION})",
-                save["version"]
-            )));
+            return Err(bad(unsupported_version(&save["version"])));
         }
         // The game's own changes: older saves are brought up to date first.
         let save = migrate::migrate(self, save)?;
@@ -2420,8 +2496,8 @@ pub(crate) fn reflect_model(world: &mut World) {
 #[cfg(feature = "physics3d")]
 #[derive(Default)]
 pub(crate) struct ColliderFiles {
-    pub(crate) by_mesh: HashMap<crate::physics3d::CollisionMesh, Value>,
-    pub(crate) by_file: HashMap<String, crate::physics3d::CollisionMesh>,
+    pub(crate) by_mesh: HashMap<crate::physics3d_impl::CollisionMesh, Value>,
+    pub(crate) by_file: HashMap<String, crate::physics3d_impl::CollisionMesh>,
 }
 
 /// A collider's mesh description as a lookup key: the same for every way
@@ -2493,7 +2569,7 @@ fn collider_json(world: &World, c: &crate::d3::Collider) -> Option<Result<Value,
 /// A mesh collider (plain or scaled) names its mesh file; only loaded
 /// files give a mesh.
 #[cfg(feature = "physics3d")]
-fn collider_mesh_json(world: &World, value: &Value) -> Result<Option<crate::physics3d::CollisionMesh>, String> {
+fn collider_mesh_json(world: &World, value: &Value) -> Result<Option<crate::physics3d_impl::CollisionMesh>, String> {
     let Some(mesh) = collider_mesh_pointer(value).and_then(|at| value.pointer(at)) else {
         return Ok(None);
     };

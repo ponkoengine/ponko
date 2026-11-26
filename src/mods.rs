@@ -437,7 +437,10 @@ impl ModPack {
             Some(name) => Err(ModError::new(
                 self.id(),
                 Some(name),
-                ModProblem::Code("this game was built without code mods (the feature `mods-wasm`)".into()),
+                ModProblem::Code(
+                    "this game was built without code mods: turn on the `mods-wasm` cargo feature, or remove the code from the mod's manifest"
+                        .into(),
+                ),
             )),
         }
     }
@@ -567,7 +570,7 @@ fn asset_references(ctx: &Ctx, json: &Value, out: &mut Vec<String>) {
     #[cfg(feature = "physics3d")]
     {
         let mut files = Vec::new();
-        crate::physics3d::collider_files(json, &mut files);
+        crate::physics3d_impl::collider_files(json, &mut files);
         out.extend(
             files
                 .into_iter()

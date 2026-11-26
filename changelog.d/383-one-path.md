@@ -25,30 +25,15 @@
   use ponko::d2::{Collider, Hit, RigidBody, Shape};
   let most = Shape::MAX_POLYGON_POINTS;
   ```
-- The `ponko::physics3d` module is gone: 3D physics lives in `ponko::d3`,
-  under the names `d3` already gave it (`Collider3D` is `d3::Collider`,
-  `RigidBody3D` is `d3::RigidBody`, `Physics3D` is `d3::Physics`, and so on
-  for `Character3D`, `ContactModifier3D`, `ContactPair3D`, `Hit3D`,
-  `Joint3D`, `JointAxis3D`, `JointDrive3D`, `JointMotion3D`,
-  `QueryFilter3D`, `Ragdoll3D`, `Shape3D`, `Vehicle3D`, `Velocity3D` and
-  `Wheel3D`). `CollisionGroups`, `CollisionMesh`, `CollisionMeshData`,
-  `CollisionMeshOptions`, `ColliderFocus`, `FrictionCurve`, `RagdollBone`
-  and `TerrainCollider` keep their names in `d3`; `PHYSICS3D_HZ` is
-  `d3::Physics::HZ`; the step and interpolation systems are in
-  `ponko::systems`. Saved component names (`RigidBody3D`, ...) don't change.
-  Instead: import from `ponko::d3`.
-  Before:
-  ```rust
-  use ponko::physics3d::{Collider3D, CollisionGroups, PHYSICS3D_HZ};
-  ```
-  After:
-  ```rust
-  use ponko::d3::{Collider, CollisionGroups, Physics};
-  let hz = Physics::HZ;
-  ```
 - `ponko::d3` no longer re-exports the types of topic modules, so each type
-  has one path: the render types (`AmbientOcclusion`, `AntiAliasing`,
-  `BatchCulling`, `Blend`, `Compute`, `ComputePass`, `Effect`,
+  has one path. Most of 0.1's `d3` names stay as deprecated aliases until
+  0.3.0 (see "Deprecated", and the removal list there); what breaks now is
+  `d3::Model` and `d3::{BodyKind, CollisionStarted, CollisionStopped}`
+  (the prelude has them), a tuple-struct constructor or pattern through an
+  alias (`ShadowMesh(None)`, `LayerId(0)`), and a module that glob-imports
+  `d3` together with `render`, `anim`, `particles` or `terrain`, where those
+  names are now ambiguous (E0659). The render types (`AmbientOcclusion`,
+  `AntiAliasing`, `BatchCulling`, `Blend`, `Compute`, `ComputePass`, `Effect`,
   `GlobalIllumination`, `GpuBuffer`, `GraphicsQuality`, `InstanceBatch`,
   `InstanceBatchOptions`, `InstanceLevel`, `Lighting`, `LodGroup`,
   `LodHysteresis`, `LodLevel`, `LodPick`, `LodRenderer`, `LodSettings`,
@@ -67,26 +52,28 @@
   `ParamId`, `RootMotion`, `Skeleton`, `SkinOf` and `StateId`) in
   `ponko::anim`, terrain types (`Heightfield`, `TerrainTile`,
   `TerrainTileData`, `TerrainMaterialDesc`, `TextureArray`, `TextureKind`,
-  `FarTerrain`) in `ponko::terrain` (its copy of `CellStreamer` is gone:
-  use `ponko::streaming::CellStreamer`), `ParticleCurve`, `ParticleGradient`
+  `FarTerrain`) in `ponko::terrain` (its `CellStreamer` is a deprecated
+  alias of `ponko::streaming::CellStreamer`), `ParticleCurve`, `ParticleGradient`
   and `ParticleSpace` in `ponko::particles`, and `BodyKind`, `CollisionStarted`
   and `CollisionStopped` in `ponko::collision`. `d3` keeps the types named
   after the dimension (`Transform`, `Camera`, lights, decals, text, trails,
   particle emitters, positional audio, navigation agents, `UiPanel`) and the
   3D physics. `Model` stays in the prelude.
-  Instead: import these types from their module next to `use ponko::d3::*;`.
+  Instead: import these types from their module next to `use ponko::d3::*;`
+  (by name, not with a second glob, while the aliases last), and build a
+  tuple struct through its new path.
   Before:
   ```rust
   use ponko::d3::*;
   let desc = MaterialDesc::color(Color::WHITE);
-  let cube = MeshData::cube(1.0);
+  let shadow = ShadowMesh(None);
   ```
   After:
   ```rust
   use ponko::d3::*;
-  use ponko::render::{MaterialDesc, MeshData};
+  use ponko::render::{MaterialDesc, ShadowMesh};
   let desc = MaterialDesc::color(Color::WHITE);
-  let cube = MeshData::cube(1.0);
+  let shadow = ShadowMesh(None);
   ```
 - `ponko::d2` no longer re-exports the types of topic modules: tile maps and
   levels (`TileMap`, `Tileset`, `Level`, `LevelOptions`, `LevelObject`,
@@ -107,6 +94,7 @@
   ```
   After:
   ```rust
+  # let (parent, tiles) = todo!();
   use ponko::d2::*;
   use ponko::{attach::Attached, tilemap::TileMap};
   let child = (Transform::default(), Attached::to(parent));
@@ -178,5 +166,6 @@
   ```
   After:
   ```rust
+  # let game = Game::new("g", 1, 1);
   game.add(Phase::SimLast, ponko::systems::follow_attachments)
   ```

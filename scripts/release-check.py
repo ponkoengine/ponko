@@ -9,6 +9,12 @@
                                     the GitHub release's notes, to FILE (a
                                     release's notes end with a link to the
                                     web gallery of the examples)
+    release-check.py bump X.Y.Z [--dry-run]
+                                    set every publishable crate, the requirements
+                                    between them and the docs' and templates'
+                                    `ponko = "X.Y"` lines to that version (a
+                                    candidate's lines name the candidate,
+                                    `"X.Y.Z-rc.N"`, which Cargo needs)
     release-check.py published      every version of our crates on crates.io
                                     has a git tag
     release-check.py selftest       check the decisions with made-up input
@@ -185,9 +191,32 @@ def gallery_line(version):
             f"release; each page links the example's source).\n")
 
 
-def release_notes(section):
-    """A changelog section's lines as the text of a GitHub release body."""
-    return "\n".join(section).strip() + "\n"
+def section_link(changelog_text, heading, version):
+    """Where a changelog section is read in full: CHANGELOG.md at the tag, at the section's anchor."""
+    line = next((l for l in changelog_text.splitlines() if l.startswith(f"## [{heading}]")), f"## [{heading}]")
+    slug = re.sub(r"[^\w\- ]", "", line[3:].strip().lower()).replace(" ", "-")
+    return f"{project_url()}/blob/v{version}/CHANGELOG.md#{slug}"
+
+
+def release_notes(section, link=None):
+    """A changelog section's lines as the text of a GitHub release body.
+
+    A section longer than a release body holds (MAX_NOTES) keeps what comes
+    before its first subsection (the release's story and highlights) and its
+    Breaking changes, and links the rest, which is read in CHANGELOG.md at
+    `link` and on the guide's release page. Without a link it is kept whole."""
+    full = "\n".join(section).strip() + "\n"
+    if len(full) <= MAX_NOTES or link is None:
+        return full
+    heads = [i for i, l in enumerate(section) if l.startswith("### ")]
+    breaking = [i for i in heads if section[i][4:].strip() == changelog.BREAKING]
+    cut = next((i for i in heads if i > breaking[0]), len(section)) if breaking else \
+        (heads[0] if heads else len(section))
+    left = sum(1 for l in section[cut:] if l.startswith("- "))
+    kept = "\n".join(section[:cut]).strip()
+    return (kept + f"\n\n### Everything else\n\nThe other {left:,} changes, grouped by area under "
+            f"Added, Changed, Deprecated, Removed, Fixed and Security, are in [CHANGELOG.md]({link}): "
+            "the whole list is longer than a GitHub release holds.\n")
 
 
 def breaking_headlines(section):
@@ -199,6 +228,22 @@ def breaking_headlines(section):
         elif inside and line.startswith("- "):
             found.append(line[2:].strip())
     return found
+
+
+def breaking_texts(section):
+    """What each bullet of `### Breaking changes` says changed: its lines up to `Instead:`, joined."""
+    found, inside = [], False
+    for line in section:
+        if line.startswith("### "):
+            inside = line[4:].strip() == changelog.BREAKING
+        elif inside and line.startswith("- "):
+            found.append([line[2:].strip()])
+        elif inside and found and line.startswith("  ") and len(found[-1]) and found[-1][-1] is not None:
+            if line.strip().startswith("Instead:"):
+                found[-1].append(None)
+            else:
+                found[-1].append(line.strip())
+    return [" ".join(l for l in parts if l is not None) for parts in found]
 
 
 def migration_problems(version, section, chapter, summary):
@@ -223,7 +268,10 @@ def migration_problems(version, section, chapter, summary):
     out = []
     if f"({name})" not in summary:
         out.append(f"book/src/SUMMARY.md has no line for {name}")
-    missing = [h for h in headlines if h.rstrip(".") not in chapter]
+    # An entry's heading in the chapter is its first sentence (cut short when
+    # long, changelog.split_title), so either that or its first line is there.
+    missing = [h for h, text in zip(headlines, breaking_texts(section))
+               if h.rstrip(".") not in chapter and changelog.title_of(text) not in chapter]
     if missing:
         shown = "; ".join(f"`{h[:50]}`" for h in missing[:3]) + (" ..." if len(missing) > 3 else "")
         out.append(f"book/src/{name} lacks {len(missing)} breaking change(s) of the CHANGELOG: {shown}")
@@ -231,8 +279,10 @@ def migration_problems(version, section, chapter, summary):
 
 
 # Where the docs and templates write the engine's own version requirement.
-PIN_FILES = ("book/src/getting-started.md", "book/src/tutorial-2d.md", "book/src/tutorial-3d.md",
+PIN_FILES = ("README.md", "book/src/*.md", "book/src/*/*.md",
              "crates/ponko_cli/templates/*/Cargo.toml.liquid")
+# The migration chapters and release pages quote old versions on purpose.
+PIN_SKIP = re.compile(r"(?:^|/)(?:migrating-to-|release-)[\w.-]*\.md$")
 PIN = re.compile(r'^\s*ponko\s*=\s*(?:\{\s*version\s*=\s*)?"(\d+\.\d+)(?:\.\d+)?(?:-rc\.\d+)?"', re.M)
 
 
@@ -252,8 +302,61 @@ def pin_texts(root=ROOT):
     texts = {}
     for pattern in PIN_FILES:
         for path in sorted(root.glob(pattern)):
-            texts[str(path.relative_to(root))] = path.read_text(encoding='utf-8')
+            name = path.relative_to(root).as_posix()
+            if not PIN_SKIP.search(name):
+                texts[name] = path.read_text(encoding='utf-8')
     return texts
+
+
+MANIFESTS = ("Cargo.toml", "crates/*/Cargo.toml")
+SIBLING = r'(?m)^(\s*(?:{names})\s*=\s*\{{[^}}\n]*?\bversion\s*=\s*")[^"]+(")'
+
+
+def bumped(version, files, names):
+    """{name: new text} for the files that change when the release is `version`.
+
+    files: {name: text} of the workspace manifests (MANIFESTS) and of the
+    pins (pin_texts()); names: the publishable crates. A publishable crate's
+    `[package] version` becomes `version`, every one-line requirement on a
+    sibling (`ponko_ecs = { path = ..., version = "..." }`, in any manifest)
+    too, and each `ponko = "X.Y"` pin the version's minor. A candidate's pins
+    name the candidate itself (`ponko = "0.2.0-rc.1"`): Cargo never picks a
+    pre-release for `"0.2"`, so a project made by `ponko new` of the candidate,
+    or from the guide, would not build until the release. `"0.2.0-rc.1"`
+    still accepts later candidates and the release."""
+    pin = version if is_candidate(version) else ".".join(version.split("-")[0].split(".")[:2])
+    sibling = re.compile(SIBLING.format(names="|".join(sorted(names))))
+    out = {}
+    for name, text in files.items():
+        new = text
+        if name.endswith("Cargo.toml"):
+            package = tomllib.loads(text).get("package")
+            if package and package.get("publish") is not False and package.get("name") in names:
+                new = re.sub(r'(?ms)^(\[package\][^\[]*?^version\s*=\s*")[^"]+(")',
+                             lambda m: m.group(1) + version + m.group(2), new, count=1)
+            new = sibling.sub(lambda m: m.group(1) + version + m.group(2), new)
+        else:
+            new = PIN.sub(lambda m: re.sub(r'"[^"]+"$', f'"{pin}"', m.group(0)), new)
+        if new != text:
+            out[name] = new
+    return out
+
+
+def bump(version, dry_run, root=ROOT):
+    """Sets the crates, their sibling requirements and the docs' pins to `version` (bumped())."""
+    if not re.fullmatch(r"\d+\.\d+\.\d+(?:-rc\.[1-9]\d*)?", version):
+        sys.exit(f"`{version}` is not X.Y.Z or X.Y.Z-rc.N")
+    files = {p.relative_to(root).as_posix(): p.read_text(encoding="utf-8")
+             for pattern in MANIFESTS for p in sorted(root.glob(pattern))}
+    files.update(pin_texts(root))
+    changed = bumped(version, files, {name for name, _, _ in crates(root)})
+    for name, text in sorted(changed.items()):
+        print(("would change " if dry_run else "changed ") + name)
+        if not dry_run:
+            (root / name).write_text(text, encoding="utf-8", newline="\n")
+    if not dry_run:
+        print("Now refresh Cargo.lock: cargo update --workspace")
+    return 0
 
 
 def problems(tag, crate_list, changelog_text, fragments, book=None, pins=None):
@@ -287,11 +390,12 @@ def problems(tag, crate_list, changelog_text, fragments, book=None, pins=None):
         heading, section = chosen
         if not any(l.strip() for l in section):
             out.append(f"CHANGELOG.md's `## [{heading}]` section is empty")
-        elif len(release_notes(section)) > MAX_NOTES:
+        elif len(release_notes(section, section_link(changelog_text, heading, version))) > MAX_NOTES:
             out.append(
-                f"CHANGELOG.md's `## [{heading}]` section has {len(release_notes(section)):,} characters; "
-                f"a GitHub release body holds at most {MAX_NOTES:,}. Shorten it (summarize, and link the "
-                "full lists in the guide)"
+                f"the release notes from CHANGELOG.md's `## [{heading}]` section have "
+                f"{len(release_notes(section, section_link(changelog_text, heading, version))):,} characters "
+                f"(its story and Breaking changes; the rest is linked); a GitHub release body holds at "
+                f"most {MAX_NOTES:,}. Shorten them (summarize, and keep long lists in the guide)"
             )
     if section and book is not None:
         out += migration_problems(version, section, *book)
@@ -379,7 +483,9 @@ def notes(tag, out):
     chosen = notes_section((ROOT / "CHANGELOG.md").read_text(encoding='utf-8'), version)
     if chosen is None or not any(l.strip() for l in chosen[1]):
         sys.exit(f"CHANGELOG.md has no notes for {version}")
-    text = (candidate_preamble(version) if is_candidate(version) else "") + release_notes(chosen[1])
+    changelog_text = (ROOT / "CHANGELOG.md").read_text(encoding='utf-8')
+    text = (candidate_preamble(version) if is_candidate(version) else "") + \
+        release_notes(chosen[1], section_link(changelog_text, chosen[0], version))
     text += gallery_line(version) or ""
     if len(text) > MAX_NOTES:
         sys.exit(f"the notes for {version} have {len(text):,} characters; GitHub allows {MAX_NOTES:,}")
@@ -510,7 +616,14 @@ def selftest():
     assert any("1 fragment(s)" in p for p in problems("v0.0.2", ok, log, ["12-x.md"]))
     assert changelog_section(log, "0.0.1") == ["- old"] or changelog_section(log, "0.0.1")[-1] == "- old"
     huge = log.replace("- thing\n", "- thing\n" + "- x\n" * (MAX_NOTES // 4 + 1))
-    assert any("a GitHub release body holds at most" in p for p in problems("v0.0.2", ok, huge, [])), (
+    assert not any("release body" in p for p in problems("v0.0.2", ok, huge, [])), (
+        "a long list of changes is linked, not put in the release body"
+    )
+    short = release_notes(changelog_section(huge, "0.0.2"), "https://example.com/CHANGELOG.md#002---x")
+    assert "- x" not in short and "The other 31,252 changes" in short and "#002---x)" in short, short[:300]
+    assert section_link("## [0.2.0] - 2026-12-03\n", "0.2.0", "0.2.0").endswith("/blob/v0.2.0/CHANGELOG.md#020---2026-12-03")
+    huge_breaks = log.replace("### Added\n- thing\n", "### Breaking changes\n" + "- `x` is gone.\n  Instead: y.\n" * (MAX_NOTES // 20) + "\n### Added\n- thing\n")
+    assert any("a GitHub release body holds at most" in p for p in problems("v0.0.2", ok, huge_breaks, [])), (
         "notes longer than a GitHub release body are refused before anything is built"
     )
     assert release_notes(changelog_section(log, "0.0.2")) == "### Added\n- thing\n"
@@ -631,6 +744,28 @@ def selftest():
     assert problems("v0.0.2", ok, log, [], None, {"a.md": 'ponko = "0.1"\n'}) == [
         'a.md tells people to depend on ponko "0.1", not "0.0"'], "problems() runs the pin check"
     assert len(pin_texts()) >= 5, "finds the real getting-started, tutorials and templates"
+    assert "book/src/3d.md" in pin_texts() and not any("migrating-to-" in n for n in pin_texts()), \
+        "every chapter's pins, but not the migration chapters' old code"
+    # The bump: package versions, sibling requirements anywhere, the docs' pins.
+    files = {
+        "Cargo.toml": '[package]\nname = "ponko"\nversion = "0.1.0"\n\n[dependencies]\n'
+                      'ponko_ecs = { path = "crates/ponko_ecs", version = "0.1.0", features = ["x"] }\n'
+                      'serde = { version = "1.0.1" }\n',
+        "crates/ponko_bench/Cargo.toml": '[package]\nname = "ponko_bench"\nversion = "0.1.0"\npublish = false\n'
+                                         '[dependencies]\nponko = { path = "../..", version = "0.1.0" }\n',
+        "book/src/3d.md": 'x\nponko = { version = "0.1", features = ["3d"] }\nponko = "0.1"\n',
+    }
+    out = bumped("0.2.0-rc.1", files, {"ponko", "ponko_ecs"})
+    assert 'version = "0.2.0-rc.1"\n' in out["Cargo.toml"] and 'version = "0.2.0-rc.1", features' in out["Cargo.toml"]
+    assert 'serde = { version = "1.0.1" }' in out["Cargo.toml"], "other crates keep their requirement"
+    assert out["crates/ponko_bench/Cargo.toml"].count('"0.1.0"') == 1, "an unpublished crate keeps its own version"
+    assert out["book/src/3d.md"] == 'x\nponko = { version = "0.2.0-rc.1", features = ["3d"] }\nponko = "0.2.0-rc.1"\n', \
+        "a candidate's pins name the candidate (Cargo never picks it for \"0.2\")"
+    assert pin_problems("0.2.0-rc.1", {k: v for k, v in out.items() if k.endswith(".md")}) == []
+    final = bumped("0.2.0", {**files, **out}, {"ponko", "ponko_ecs"})
+    assert final["book/src/3d.md"] == 'x\nponko = { version = "0.2", features = ["3d"] }\nponko = "0.2"\n', \
+        "the release puts the minor back"
+    assert pin_problems("0.2.0", {k: v for k, v in final.items() if k.endswith(".md")}) == []
     real = license_problems()
     assert real == [], f"the sub-crates' license files: {real}"
     names = {n for n, _, _ in crates()}
@@ -644,6 +779,8 @@ def main():
         return check(sys.argv[2], "--on-branch" in sys.argv)
     if command == "notes" and len(sys.argv) > 3:
         return notes(sys.argv[2], sys.argv[3])
+    if command == "bump" and len(sys.argv) > 2:
+        return bump(sys.argv[2], "--dry-run" in sys.argv)
     if command == "published":
         return published()
     if command == "selftest":

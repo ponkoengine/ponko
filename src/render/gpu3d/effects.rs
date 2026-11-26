@@ -24,6 +24,9 @@ pub(super) struct Effects {
     pub(super) modules: Vec<Option<wgpu::ShaderModule>>,
     /// Target effect pipelines, by effect id: built when first used.
     pub(super) target_pipelines: Vec<Option<wgpu::RenderPipeline>>,
+    /// Pipelines for target cameras' screen effects (which keep the
+    /// picture's alpha), by effect id: built when first used.
+    pub(super) view_pipelines: Vec<Option<wgpu::RenderPipeline>>,
     /// Render targets target effects write: (texture id, texture, its view),
     /// made on first use.
     pub(super) targets: Vec<(u32, wgpu::Texture, wgpu::TextureView)>,
@@ -227,6 +230,7 @@ impl Renderer3D {
         write_slot(&mut self.effects.pipelines, id, Some(pipeline));
         write_slot(&mut self.effects.modules, id, Some(module));
         write_slot(&mut self.effects.target_pipelines, id, None);
+        write_slot(&mut self.effects.view_pipelines, id, None);
         Ok(())
     }
 
@@ -236,6 +240,7 @@ impl Renderer3D {
             *pipeline = None;
             self.effects.modules[id as usize] = None;
             self.effects.target_pipelines[id as usize] = None;
+            self.effects.view_pipelines[id as usize] = None;
         }
     }
 
@@ -294,6 +299,7 @@ impl Renderer3D {
         let old_module = self.effects.modules[i].replace(module);
         // Rebuilt from the new shader when next used.
         self.effects.target_pipelines[i] = None;
+        self.effects.view_pipelines[i] = None;
         self.installed(ShaderKind::Effect, id);
         if let Some(verdict) = verdict {
             let swap = Swap::Effect {

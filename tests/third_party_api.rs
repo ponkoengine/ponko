@@ -1,7 +1,8 @@
 //! Which other crates' types Ponko's stable API may name (STABILITY.md,
 //! "Re-exported crates"). `glam` and `serde_json` are kept and pinned;
-//! `steamworks` and `taffy` are reachable only through `unstable_` names, so
-//! a new version of either is not a breaking Ponko release.
+//! `steamworks` and `taffy` are reachable only through `unstable_` names and
+//! the few unstable items listed below, so a new version of either is not a
+//! breaking Ponko release.
 //!
 //! The test reads the API listing in `api/ponko/docs-rs.txt` (every feature
 //! docs.rs builds, `steam` among them), which `scripts/api-snapshots.py check`
@@ -10,10 +11,26 @@
 const DOCS_RS_API: &str = include_str!("../api/ponko/docs-rs.txt");
 
 /// Crates whose types may appear only on items with `unstable_` in their name
-/// (`unstable_taffy`, `UiLayout::into_unstable_style`), and the stable
-/// items that still name them (with the reason).
+/// (`unstable_taffy`, `UiLayout::into_unstable_style`), and the other items
+/// that name them (an item's path, or an `impl` line as listed), with the
+/// reason.
 const WRAPPED: &[(&str, &[&str])] = &[
-    ("steamworks::", &[]),
+    (
+        "steamworks::",
+        // The `From` conversions between Ponko's Steam ids and the crate's,
+        // for calls through `SteamClient::unstable_steamworks`; STABILITY.md
+        // lists them under "Unstable".
+        &[
+            "impl core::convert::From<ponko::net::SteamLobbyId> for steamworks::matchmaking::LobbyId",
+            "steamworks::matchmaking::LobbyId::from",
+            "impl core::convert::From<steamworks::matchmaking::LobbyId> for ponko::net::SteamLobbyId",
+            "ponko::net::SteamLobbyId::from",
+            "impl core::convert::From<ponko::net::SteamUserId> for steamworks::SteamId",
+            "steamworks::SteamId::from",
+            "impl core::convert::From<steamworks::SteamId> for ponko::net::SteamUserId",
+            "ponko::net::SteamUserId::from",
+        ],
+    ),
     (
         "taffy::",
         // The deprecated old names of `UiLayout::unstable_*`, removed in the
@@ -73,8 +90,9 @@ fn leaks(listing: &str) -> Vec<String> {
             if !line.contains(krate) {
                 continue;
             }
-            let ok = item(line)
-                .is_some_and(|name| name.split("::").any(|s| s.contains("unstable_")) || allowed.contains(&name));
+            let ok = allowed.contains(&line)
+                || item(line)
+                    .is_some_and(|name| name.split("::").any(|s| s.contains("unstable_")) || allowed.contains(&name));
             if !ok {
                 found.push(line.to_owned());
             }
@@ -107,9 +125,11 @@ fn raw_crates_are_reexported_only_under_unstable_names() {
 
 #[test]
 fn the_check_catches_the_old_steam_api() {
-    // Negative control: lines from the 0.1 listing, before Steam was wrapped.
+    // Negative control: lines from the 0.1 listing, before Steam was wrapped,
+    // and a conversion that is not one of the listed unstable ones.
     let old = "pub fn ponko::net::Net::steam_lobby(&self) -> core::option::Option<steamworks::matchmaking::LobbyId>\n\
                pub fn ponko::net::SteamLobby::members(&self) -> alloc::vec::Vec<steamworks::SteamId>\n\
+               impl core::convert::From<steamworks::SteamId> for ponko::net::PeerId\n\
                impl core::convert::From<steamworks::SteamId> for ponko::net::SteamUserId\n\
                pub fn ponko::prelude::UiLayout::custom(taffy::style::Style) -> Self\n\
                pub fn ponko::net::SteamClient::unstable_steamworks(&self) -> &steamworks::Client";

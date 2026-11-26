@@ -200,6 +200,9 @@ pub struct Graphics {
     pub(crate) assets3d: crate::three::Assets3D,
     #[cfg(feature = "3d")]
     pub(crate) frame3d: crate::three::Frame3D,
+    /// Item icons waiting for their frame (`Graphics::render_icon`).
+    #[cfg(feature = "3d")]
+    pub(crate) icons: Vec<crate::three::PendingIcon>,
     /// Automatic quality's running controller, following the policy in
     /// `Ctx::scene3d` (`Ctx::update_quality_autotune`).
     #[cfg(feature = "3d")]
@@ -258,6 +261,8 @@ impl Graphics {
             assets3d: Default::default(),
             #[cfg(feature = "3d")]
             frame3d: Default::default(),
+            #[cfg(feature = "3d")]
+            icons: Vec::new(),
             #[cfg(feature = "3d")]
             autotune: None,
             #[cfg(feature = "compressed-textures")]

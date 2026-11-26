@@ -17,5 +17,6 @@
   ```
   After:
   ```rust
+  use ponko::input::GamepadCapabilities;
   let caps = GamepadCapabilities { rumble: true, ..Default::default() };
   ```

@@ -466,6 +466,8 @@ mod gpu_memory_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod handle_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
+mod icon_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
 mod legions_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod light_shadow_render_test;
@@ -507,6 +509,8 @@ mod reverse_z_render_test;
 mod stereo_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod target_camera_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod vertex_color_render_test;
 #[cfg(all(test, feature = "window", feature = "3d", feature = "video"))]
 mod video_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
@@ -648,12 +652,12 @@ pub use crate::three::bake_lighting_gpu;
 pub use crate::three::{
     AmbientOcclusion, AntiAliasing, AutoExposure, BatchCulling, Blend, Compute, ComputePass, Crowd, CrowdAnimation,
     CrowdClip, CrowdInstance, CrowdLevel, CrowdOptions, DepthOfField, Effect, EnvironmentMap, GlobalIllumination,
-    GpuBuffer, GraphicsQuality, InstanceBatch, InstanceBatchOptions, InstanceLevel, Lighting, LodFadeTime, LodGroup,
-    LodHysteresis, LodLevel, LodPick, LodRenderer, LodSettings, LodShadow, MAX_CROWD_INSTANCES, MAX_CROWD_LEVELS,
-    Material, MaterialDesc, Mesh, MeshCost, MeshData, Model, ModelCamera, ModelLight, ModelLightKind, ModelMaterial,
-    ModelMaterials, ModelProjection, Post, PostVolume, ReceivesDecals, RenderPasses, RenderTarget, SceneSettings,
-    ScreenEffect, Shader, ShadowFilter, ShadowMesh, ShadowOnly, Sky, SkyShader, SplitToning, Stencil, StencilCompare,
-    StencilFace, StencilOp, StreamedLod, TargetCamera, TargetEffect, Tonemap,
+    GpuBuffer, GraphicsQuality, Icon, InstanceBatch, InstanceBatchOptions, InstanceLevel, Lighting, LodFadeTime,
+    LodGroup, LodHysteresis, LodLevel, LodPick, LodRenderer, LodSettings, LodShadow, MAX_CROWD_INSTANCES,
+    MAX_CROWD_LEVELS, Material, MaterialDesc, Mesh, MeshCost, MeshData, Model, ModelCamera, ModelLight, ModelLightKind,
+    ModelMaterial, ModelMaterials, ModelProjection, Post, PostVolume, ReceivesDecals, RenderPasses, RenderTarget,
+    SceneSettings, ScreenEffect, Shader, ShadowFilter, ShadowMesh, ShadowOnly, Sky, SkyShader, SplitToning, Stencil,
+    StencilCompare, StencilFace, StencilOp, StreamedLod, TargetCamera, TargetEffect, Tonemap,
 };
 #[cfg(feature = "3d")]
 pub use crate::three::{

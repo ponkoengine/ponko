@@ -178,7 +178,7 @@ mod web {
     ) -> Result<Opened, Error> {
         use super::super::startup;
         let instance = instance(display, wgpu::Backends::GL);
-        let surface = startup::result(instance.create_surface(window), "could not create a GPU surface")?;
+        let surface = startup::result(instance.create_surface(window), startup::Step::Surface)?;
         let adapter = startup::result(
             instance
                 .request_adapter(&wgpu::RequestAdapterOptions {
@@ -187,11 +187,11 @@ mod web {
                     ..Default::default()
                 })
                 .await,
-            "no compatible GPU found",
+            startup::Step::Adapter,
         )?;
         let (device, queue) = startup::result(
             adapter.request_device(&device_descriptor(&adapter)).await,
-            "could not open the GPU device",
+            startup::Step::Device,
         )?;
         Ok(Opened {
             instance,

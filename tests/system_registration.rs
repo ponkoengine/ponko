@@ -157,6 +157,12 @@ fn a_wrong_order_is_a_typed_error() {
     let error = game.check_order().unwrap_err();
     assert_eq!((error.first, error.second), ("second", "first"));
     assert!(error.to_string().contains("`first` already runs before `second`"));
+    // The fix: which system moves, and how.
+    assert!(
+        error
+            .to_string()
+            .contains("to run `second` first, register it before `first` or put it in an earlier Phase")
+    );
 }
 
 #[test]

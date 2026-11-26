@@ -28,15 +28,17 @@ const USAGE: &str = "\
 ponko: the command-line tool for Ponko games
 
 Usage:
-  ponko new <path> [--2d | --3d | --headless | --server] [--path <engine> | --git <url>]
-  ponko editor [<project>] [--open <file>] [--bin <name> | --example <name>] [...]
+  ponko new <path> [--2d | --3d | --headless | --server | --plugin] [--path <engine> | --git <url>]
+  ponko editor [<project> | --last] [--open <file>] [--bin <name> | --example <name>] [...]
+  ponko editor --recent
   ponko package [--bin <name> | --example <name>] [--web [--threads]] [--format <list>] [...]
   ponko notices --out <file> [-p <package>] [...]
-  ponko pack [<folder>] [--out <file>] [--exclude <pattern>]... [--textures] [--cook]
-  ponko cook [<folder>] [--out <folder> | --pack <file>] [--platform <name>]
+  ponko pack [<folder>] [--out <file>] [--exclude <pattern>]... [--textures] [--cook] [...]
+  ponko pack --list <file>
+  ponko cook [<folder>] [--out <folder> | --pack <file>] [--platform <name>] [...]
   ponko textures [<folder>] [--out <folder>] [--force] [--check]
-  ponko image-diff a.png b.png [--tolerance <0..255>] [--threshold <percent>] [--heatmap out.png]
-  ponko schema [--out <file>] [--bin <name> | --example <name>]
+  ponko image-diff <a.png> <b.png> [--tolerance <0..255>] [--threshold <percent>] [--heatmap <out.png>]
+  ponko schema [--out <file>] [--bin <name> | --example <name>] [...]
   ponko help [<command>]
   ponko --version
 
@@ -48,11 +50,19 @@ Commands:
   pack     Pack a folder of assets into one asset pack (what games ship)
   cook     Turn source assets into runtime-ready ones (compressed textures,
            optimized meshes, FLAC sounds, checked shaders), cached
-  image-diff Compare PNG images and optionally write a difference heatmap
-  schema   Write the glTF custom properties schema of a game (for editors)
   textures Compress images into GPU textures (KTX2: BC7, BC5, BC4, UASTC)
+  image-diff
+           Compare two PNG images; optionally write where they differ
+  schema   Write the glTF custom properties schema of a game (for editors)
+  help     This text, or a command's options: `ponko help package`
 
-Guide: https://ponko.dev/guide/getting-started.html";
+`ponko <command> --help` shows a command's options too.
+Guide: https://ponko.dev/guide/cli.html";
+
+/// `ponko textures` in a build without its feature.
+#[cfg(not(feature = "textures"))]
+const WITHOUT_TEXTURES: &str = "this ponko was built without `ponko textures`: install it with its default \
+                                features (`cargo install ponko_cli`)";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -148,11 +158,7 @@ fn run(args: &[String]) -> Result<String, String> {
                 textures::textures_command(&options, &dir)
             }
             #[cfg(not(feature = "textures"))]
-            Err(
-                "this ponko was built without `ponko textures`: install it with its default features \
-                 (`cargo install ponko_cli`)"
-                    .into(),
-            )
+            Err(WITHOUT_TEXTURES.into())
         }
         "help" | "-h" | "--help" => match rest.first().map(String::as_str) {
             None => Ok(USAGE.to_string()),
@@ -166,6 +172,9 @@ fn run(args: &[String]) -> Result<String, String> {
             Some("schema") => Ok(schema::USAGE.to_string()),
             #[cfg(feature = "textures")]
             Some("textures") => Ok(textures::USAGE.to_string()),
+            #[cfg(not(feature = "textures"))]
+            Some("textures") => Err(WITHOUT_TEXTURES.into()),
+            Some("help") => Ok(USAGE.to_string()),
             Some(other) => Err(format!("no command `{other}`\n\n{USAGE}")),
         },
         "-V" | "--version" => Ok(format!("ponko {}", env!("CARGO_PKG_VERSION"))),

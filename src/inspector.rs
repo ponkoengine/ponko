@@ -497,6 +497,25 @@ impl Panels {
         self.report(undone);
     }
 
+    /// A menu entry with its shortcut, as bound now: "Save  (Ctrl+S)".
+    pub(crate) fn labelled(&self, text: &str, action: keys::Action) -> String {
+        match self.keys.keys(action).first() {
+            Some(key) => format!("{text}  ({})", keys::text(key)),
+            None => text.to_string(),
+        }
+    }
+
+    /// The keys bound to `action` now, for a tooltip: "Delete or Backspace",
+    /// or "no shortcut".
+    pub(crate) fn key_hint(&self, action: keys::Action) -> String {
+        let bound: Vec<String> = self.keys.keys(action).iter().map(keys::text).collect();
+        if bound.is_empty() {
+            "no shortcut".into()
+        } else {
+            bound.join(" or ")
+        }
+    }
+
     /// Undo, new entity, scenes, and the prefab palette.
     fn edit_tools(&mut self, ui: &mut Ui, ctx: &mut Ctx) {
         ui.horizontal(|ui| {
@@ -518,9 +537,13 @@ impl Panels {
             ui.label(RichText::new("Pause to edit in the world").weak());
         } else {
             ui.label(
-                RichText::new(
-                    "Click selects (Ctrl adds), drag moves, right-drag pans, wheel zooms. Del, Ctrl+D, Ctrl+Z.",
-                )
+                RichText::new(format!(
+                    "Click selects (Ctrl adds), drag moves, right-drag pans, wheel zooms. {} deletes, {} \
+                     duplicates, {} undoes.",
+                    self.key_hint(keys::Action::Delete),
+                    self.key_hint(keys::Action::Duplicate),
+                    self.key_hint(keys::Action::Undo),
+                ))
                 .weak(),
             );
         }
@@ -781,13 +804,17 @@ impl Panels {
             {
                 ctx.camera.look_at(at);
             }
-            if ui.button("Duplicate").on_hover_text("Ctrl+D").clicked() {
+            let (duplicate_keys, delete_keys) = (
+                self.key_hint(keys::Action::Duplicate),
+                self.key_hint(keys::Action::Delete),
+            );
+            if ui.button("Duplicate").on_hover_text(duplicate_keys).clicked() {
                 let copy = ctx.edit(|ed, ctx| ed.duplicate(ctx, e, DUPLICATE_OFFSET));
                 if let Some(copy) = self.report(copy) {
                     self.select(Some(copy), false);
                 }
             }
-            if ui.button("Despawn").on_hover_text("Del").clicked() {
+            if ui.button("Despawn").on_hover_text(delete_keys).clicked() {
                 let deleted = ctx.edit(|ed, ctx| ed.delete(ctx, e));
                 self.report(deleted);
                 self.select(None, false);
@@ -1626,5 +1653,255 @@ mod tests {
         assert_eq!(panels.frame_ms.len(), HISTORY);
         assert_eq!(panels.frame_at, 10);
         assert_eq!(panels.frame_ms[9], (HISTORY + 9) as f32);
+    }
+
+    // The overlay's sections and buttons, each used once: a section opens
+    // onto something (an empty game included), a button changes what a
+    // person sees. A section or button added without its effect fails.
+
+    /// A window tall enough for every section of the panel at once.
+    const TALL: egui::Vec2 = egui::vec2(1280.0, 2400.0);
+
+    /// One frame of the panels in a [`TALL`] window.
+    fn tall_frame(egui: &egui::Context, panels: &mut Panels, ctx: &mut Ctx, events: Vec<egui::Event>) {
+        // Sections open and close at once: no time passes between frames.
+        egui.all_styles_mut(|s| s.animation_time = 0.0);
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, TALL)),
+            events,
+            ..Default::default()
+        };
+        let mut out = egui.run_ui(input, |ui| panels.show(ui, ctx));
+        out.textures_delta.clear();
+    }
+
+    /// Every text drawn in a [`TALL`] window, with where it is.
+    fn overlay_texts(egui: &egui::Context, panels: &mut Panels, ctx: &mut Ctx) -> Vec<(String, egui::Pos2)> {
+        fn walk(shape: &egui::Shape, out: &mut Vec<(String, egui::Pos2)>) {
+            match shape {
+                egui::Shape::Text(t) => out.push((
+                    t.galley.text().to_string(),
+                    t.galley.rect.translate(t.pos.to_vec2()).center(),
+                )),
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, out)),
+                _ => {}
+            }
+        }
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, TALL)),
+            ..Default::default()
+        };
+        egui.all_styles_mut(|s| s.animation_time = 0.0);
+        let mut out = egui.run_ui(input, |ui| panels.show(ui, ctx));
+        out.textures_delta.clear();
+        let mut texts = Vec::new();
+        out.shapes.iter().for_each(|c| walk(&c.shape, &mut texts));
+        texts
+    }
+
+    /// Clicks the text `text` (a button's label, a section's heading).
+    fn click_on(egui: &egui::Context, panels: &mut Panels, ctx: &mut Ctx, text: &str) {
+        let texts = overlay_texts(egui, panels, ctx);
+        let at = texts
+            .iter()
+            .find(|(t, _)| t == text)
+            .unwrap_or_else(|| {
+                panic!(
+                    "\"{text}\" is drawn: {:?}",
+                    texts.iter().map(|t| &t.0).collect::<Vec<_>>()
+                )
+            })
+            .1;
+        tall_frame(egui, panels, ctx, vec![egui::Event::PointerMoved(at)]);
+        tall_frame(egui, panels, ctx, vec![button(at.x, at.y, true)]);
+        tall_frame(egui, panels, ctx, vec![button(at.x, at.y, false)]);
+        tall_frame(egui, panels, ctx, vec![]);
+    }
+
+    #[derive(Serialize, Deserialize)]
+    struct Score {
+        red: u32,
+    }
+
+    /// A paused game with two entities, the first selected and reflected,
+    /// and a reflected resource.
+    fn small_scene() -> (egui::Context, Panels, Ctx, Entity) {
+        let mut ctx = Ctx::new(1.0 / 60.0, Vec2::new(1280.0, 720.0));
+        ctx.world.reflect::<Health>();
+        ctx.world.reflect::<Transform2D>();
+        ctx.world.reflect_resource::<Score>();
+        ctx.world.insert_resource(Score { red: 3 });
+        let e = ctx.world.spawn((
+            Transform2D::at(Vec2::new(300.0, 300.0)),
+            Health { current: 1.0, max: 1 },
+        ));
+        ctx.world.spawn((Transform2D::at(Vec2::new(500.0, 300.0)),));
+        ctx.time.pause();
+        let egui = egui::Context::default();
+        let mut panels = Panels::default();
+        frame(&egui, &mut panels, &mut ctx, vec![]);
+        panels.select(Some(e), false);
+        frame(&egui, &mut panels, &mut ctx, vec![]);
+        (egui, panels, ctx, e)
+    }
+
+    /// What a person can see change after using a button.
+    fn overlay_state(panels: &Panels, ctx: &Ctx) -> String {
+        format!(
+            "status {:?} error {:?} selection {:?} picking {} prefabs {:?} undo {} playing {} paused {} \
+             camera {:?} world {:?}",
+            panels.status,
+            panels.error,
+            panels.selection(),
+            panels.picking,
+            panels.prefabs,
+            ctx.editor.can_undo(),
+            ctx.editor.playing(),
+            ctx.time.is_paused(),
+            ctx.camera.center(),
+            ctx.world.save(),
+        )
+    }
+
+    #[test]
+    fn every_section_opens_onto_something_even_in_an_empty_game() {
+        let sections = [
+            "Edit",
+            "Hierarchy",
+            "Assets",
+            "Entities",
+            "Resources",
+            "Systems",
+            "GPU passes",
+            "Debug drawing",
+        ];
+        for game in ["empty", "small"] {
+            for section in sections {
+                if game == "empty" && section == "Resources" {
+                    continue; // shown only for a game with reflected resources
+                }
+                // Each section from the panels' first frame, so the ones
+                // above it are as they start.
+                let (egui, mut panels, mut ctx) = if game == "empty" {
+                    let mut ctx = Ctx::new(1.0 / 60.0, Vec2::new(1280.0, 720.0));
+                    ctx.time.pause();
+                    (egui::Context::default(), Panels::default(), ctx)
+                } else {
+                    let (egui, panels, ctx, _) = small_scene();
+                    (egui, panels, ctx)
+                };
+                tall_frame(&egui, &mut panels, &mut ctx, vec![]);
+                let texts = |egui: &egui::Context, panels: &mut Panels, ctx: &mut Ctx| -> Vec<String> {
+                    overlay_texts(egui, panels, ctx).into_iter().map(|t| t.0).collect()
+                };
+                let before = texts(&egui, &mut panels, &mut ctx);
+                click_on(&egui, &mut panels, &mut ctx, section);
+                let after = texts(&egui, &mut panels, &mut ctx);
+                // Open or closed, one of the two shows the section's body.
+                let (open, closed) = if after.len() > before.len() {
+                    (after, before)
+                } else {
+                    (before, after)
+                };
+                let body: Vec<&String> = open.iter().filter(|t| !t.is_empty() && !closed.contains(t)).collect();
+                assert!(
+                    !body.is_empty(),
+                    "{game}: {section} opens onto nothing:\n{open:?}\n{closed:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_button_of_the_overlay_does_what_it_says() {
+        struct Removed(std::path::PathBuf);
+        impl Drop for Removed {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+        let scene = format!("ponko-test-overlay-{}.json", std::process::id());
+        let prefab = format!("{PREFAB_FOLDER}/ponko-test-overlay-{}.json", std::process::id());
+        let _files = (Removed(assets.join(&scene)), Removed(assets.join(&prefab)));
+
+        type Check = fn(&Panels, &mut Ctx, Entity, usize) -> bool;
+        let cases: [(&str, &[&str], Check); 13] = [
+            ("Play", &[], |_, ctx, _, _| {
+                ctx.editor.playing() && !ctx.time.is_paused()
+            }),
+            ("Pause", &["Play"], |_, ctx, _, _| ctx.time.is_paused()),
+            ("Stop", &["Play", "Pause"], |_, ctx, _, _| !ctx.editor.playing()),
+            ("Keep", &["Play", "Pause"], |_, ctx, _, _| !ctx.editor.playing()),
+            ("Step", &[], |_, ctx, _, _| ctx.take_pending_steps() == 1),
+            ("Undo", &["Duplicate"], |_, ctx, _, n| ctx.world.len() == n - 1),
+            ("New entity", &[], |_, ctx, _, n| ctx.world.len() == n + 1),
+            ("Look at", &[], |_, ctx, _, _| {
+                ctx.camera.center() == Vec2::new(300.0, 300.0)
+            }),
+            ("Duplicate", &[], |_, ctx, _, n| ctx.world.len() == n + 1),
+            ("Despawn", &[], |_, ctx, e, _| !ctx.world.is_alive(e)),
+            ("Pick", &[], |p, _, _, _| p.picking),
+            // The first component's Remove (the panel lists them in the
+            // world's order).
+            ("Remove", &[], |_, ctx, e, _| {
+                ctx.world.components_of(e).map(<[_]>::len) == Some(1)
+            }),
+            ("Save", &[], |_, _, _, _| true),
+        ];
+        for (name, first, check) in cases {
+            let (egui, mut panels, mut ctx, e) = small_scene();
+            for step in first {
+                click_on(&egui, &mut panels, &mut ctx, step);
+            }
+            let count = ctx.world.len();
+            if name == "Save" {
+                panels.scene_path = scene.clone();
+            }
+            let before = overlay_state(&panels, &ctx);
+            click_on(&egui, &mut panels, &mut ctx, name);
+            if name != "Step" {
+                // A step is waiting for the game's next tick: `check` sees it.
+                assert_ne!(before, overlay_state(&panels, &ctx), "{name} did nothing");
+            }
+            assert!(
+                check(&panels, &mut ctx, e, count),
+                "{name}: {}",
+                overlay_state(&panels, &ctx)
+            );
+        }
+        assert!(assets.join(&scene).is_file(), "Save wrote the scene");
+
+        // Load reads it back; the prefab row's Save writes the selection,
+        // and ⟳ lists the prefab folder again.
+        let (egui, mut panels, mut ctx, _) = small_scene();
+        panels.scene_path = scene.clone();
+        click_on(&egui, &mut panels, &mut ctx, "New entity");
+        click_on(&egui, &mut panels, &mut ctx, "Load");
+        assert_eq!(ctx.world.len(), 2, "the saved scene: {:?}", panels.error);
+        let (egui, mut panels, mut ctx, _) = small_scene();
+        let listed = panels.prefabs.clone().unwrap();
+        panels.prefab_path = prefab.clone();
+        let texts = overlay_texts(&egui, &mut panels, &mut ctx);
+        // The second Save on the panel is the prefab row's.
+        let at = texts
+            .iter()
+            .filter(|(t, _)| t == "Save")
+            .nth(1)
+            .expect("the prefab row's Save")
+            .1;
+        tall_frame(&egui, &mut panels, &mut ctx, vec![egui::Event::PointerMoved(at)]);
+        tall_frame(&egui, &mut panels, &mut ctx, vec![button(at.x, at.y, true)]);
+        tall_frame(&egui, &mut panels, &mut ctx, vec![button(at.x, at.y, false)]);
+        tall_frame(&egui, &mut panels, &mut ctx, vec![]);
+        assert!(assets.join(&prefab).is_file(), "{:?}", panels.error);
+        assert_eq!(
+            panels.prefabs.as_ref().map(Vec::len),
+            Some(listed.len() + 1),
+            "listed again after a save"
+        );
+        std::fs::remove_file(assets.join(&prefab)).unwrap();
+        click_on(&egui, &mut panels, &mut ctx, "⟳");
+        assert_eq!(panels.prefabs, Some(listed), "⟳ lists the folder again");
     }
 }

@@ -3279,6 +3279,89 @@ impl core::marker::Copy for ponko::d3::ViewModel
 impl core::marker::StructuralPartialEq for ponko::d3::ViewModel
 pub const ponko::d3::VIEW_MODEL_LAYER: u32
 pub fn ponko::d3::gltf_properties_schema(&ponko_ecs::world::World) -> serde_json::value::Value
+pub type ponko::d3::AmbientOcclusion = ponko::render::AmbientOcclusion
+pub type ponko::d3::AnimationClip = ponko::anim::AnimationClip
+pub type ponko::d3::AnimationCondition = ponko::anim::AnimationCondition
+pub type ponko::d3::AnimationEvent = ponko::anim::AnimationEvent
+pub type ponko::d3::AnimationGraph = ponko::anim::AnimationGraph
+pub type ponko::d3::AnimationGraphError = ponko::anim::AnimationGraphError
+pub type ponko::d3::AnimationLayer = ponko::anim::AnimationLayer
+pub type ponko::d3::AnimationParameter = ponko::anim::AnimationParameter
+pub type ponko::d3::AnimationState = ponko::anim::AnimationState
+pub type ponko::d3::AnimationTrack = ponko::anim::AnimationTrack
+pub type ponko::d3::AnimationTransition = ponko::anim::AnimationTransition
+pub type ponko::d3::Animator = ponko::anim::Animator
+pub type ponko::d3::AntiAliasing = ponko::render::AntiAliasing
+pub type ponko::d3::AttachToJoint = ponko::anim::AttachToJoint
+pub type ponko::d3::BatchCulling = ponko::render::BatchCulling
+pub type ponko::d3::Blend = ponko::render::Blend
+pub type ponko::d3::Compute = ponko::render::Compute
+pub type ponko::d3::ComputePass = ponko::render::ComputePass
+pub type ponko::d3::Effect = ponko::render::Effect
+pub type ponko::d3::FarTerrain = ponko::terrain::FarTerrain
+pub type ponko::d3::GlobalIllumination = ponko::render::GlobalIllumination
+pub type ponko::d3::GpuBuffer = ponko::render::GpuBuffer
+pub type ponko::d3::GraphicsQuality = ponko::render::GraphicsQuality
+pub type ponko::d3::Heightfield = ponko::terrain::Heightfield
+pub type ponko::d3::InstanceBatch = ponko::render::InstanceBatch
+pub type ponko::d3::InstanceBatchOptions = ponko::render::InstanceBatchOptions
+pub type ponko::d3::InstanceLevel = ponko::render::InstanceLevel
+pub type ponko::d3::Interpolation = ponko::anim::Interpolation
+pub type ponko::d3::JointAnimation = ponko::anim::JointAnimation
+pub type ponko::d3::JointMask = ponko::anim::JointMask
+pub type ponko::d3::LayerBlend = ponko::anim::LayerBlend
+pub type ponko::d3::LayerId = ponko::anim::LayerId
+pub type ponko::d3::Lighting = ponko::render::Lighting
+pub type ponko::d3::LodGroup = ponko::render::LodGroup
+pub type ponko::d3::LodHysteresis = ponko::render::LodHysteresis
+pub type ponko::d3::LodLevel = ponko::render::LodLevel
+pub type ponko::d3::LodPick = ponko::render::LodPick
+pub type ponko::d3::LodRenderer = ponko::render::LodRenderer
+pub type ponko::d3::LodSettings = ponko::render::LodSettings
+pub type ponko::d3::LodShadow = ponko::render::LodShadow
+pub type ponko::d3::Material = ponko::render::Material
+pub type ponko::d3::MaterialDesc = ponko::render::MaterialDesc
+pub type ponko::d3::Mesh = ponko::render::Mesh
+pub type ponko::d3::MeshCost = ponko::render::MeshCost
+pub type ponko::d3::MeshData = ponko::render::MeshData
+pub type ponko::d3::ModelMaterial = ponko::render::ModelMaterial
+pub type ponko::d3::ModelMaterials = ponko::render::ModelMaterials
+pub type ponko::d3::MorphAnimation = ponko::anim::MorphAnimation
+pub type ponko::d3::MorphFrame = ponko::anim::MorphFrame
+pub type ponko::d3::MorphTarget = ponko::anim::MorphTarget
+pub type ponko::d3::MorphWeights = ponko::anim::MorphWeights
+pub type ponko::d3::Motion = ponko::anim::Motion
+pub type ponko::d3::MotionChild = ponko::anim::MotionChild
+pub type ponko::d3::ParamId = ponko::anim::ParamId
+pub type ponko::d3::ParticleCurve = ponko::particles::ParticleCurve
+pub type ponko::d3::ParticleGradient = ponko::particles::ParticleGradient
+pub type ponko::d3::ParticleSpace = ponko::particles::ParticleSpace
+pub type ponko::d3::Post = ponko::render::Post
+pub type ponko::d3::ReceivesDecals = ponko::render::ReceivesDecals
+pub type ponko::d3::RenderPasses = ponko::render::RenderPasses
+pub type ponko::d3::RootMotion = ponko::anim::RootMotion
+pub type ponko::d3::SceneSettings = ponko::render::SceneSettings
+pub type ponko::d3::ScreenEffect = ponko::render::ScreenEffect
+pub type ponko::d3::Shader = ponko::render::Shader
+pub type ponko::d3::ShaderDiagnostic = ponko::render::ShaderDiagnostic
+pub type ponko::d3::ShaderKind = ponko::render::ShaderKind
+pub type ponko::d3::ShaderOutcome = ponko::render::ShaderOutcome
+pub type ponko::d3::ShaderStatus = ponko::render::ShaderStatus
+pub type ponko::d3::ShadowFilter = ponko::render::ShadowFilter
+pub type ponko::d3::ShadowMesh = ponko::render::ShadowMesh
+pub type ponko::d3::Skeleton = ponko::anim::Skeleton
+pub type ponko::d3::SkinOf = ponko::anim::SkinOf
+pub type ponko::d3::Sky = ponko::render::Sky
+pub type ponko::d3::StateId = ponko::anim::StateId
+pub type ponko::d3::StreamedLod = ponko::render::StreamedLod
+pub type ponko::d3::TargetCamera = ponko::render::TargetCamera
+pub type ponko::d3::TargetEffect = ponko::render::TargetEffect
+pub type ponko::d3::TerrainMaterialDesc = ponko::terrain::TerrainMaterialDesc
+pub type ponko::d3::TerrainTile = ponko::terrain::TerrainTile
+pub type ponko::d3::TerrainTileData = ponko::terrain::TerrainTileData
+pub type ponko::d3::TextureArray = ponko::terrain::TextureArray
+pub type ponko::d3::TextureKind = ponko::terrain::TextureKind
+pub type ponko::d3::Tonemap = ponko::render::Tonemap
 pub mod ponko::debug
 #[non_exhaustive] pub enum ponko::debug::DebugView
 pub ponko::debug::DebugView::Bounds
@@ -4173,6 +4256,9 @@ pub fn ponko::gfx::Graphics::try_resident_texture(&mut self, &str) -> core::resu
 pub fn ponko::gfx::Graphics::unpin_resident_texture(&mut self, &str)
 impl ponko::gfx::Graphics
 pub fn ponko::gfx::Graphics::pipeline_stats(&self) -> ponko::render::PipelineStats
+impl ponko::gfx::Graphics
+pub fn ponko::gfx::Graphics::render_icon(&mut self, ponko::render::Mesh, &ponko::render::Icon) -> ponko::render::RenderTarget
+pub fn ponko::gfx::Graphics::try_render_icon(&mut self, ponko::render::Mesh, &ponko::render::Icon) -> core::result::Result<ponko::render::RenderTarget, ponko::error::Error>
 impl ponko::gfx::Graphics
 pub fn ponko::gfx::Graphics::set_residency_budget(&mut self, ponko::streaming::ResidencyKind, core::option::Option<u64>)
 impl ponko::gfx::Graphics
@@ -8724,6 +8810,89 @@ impl core::marker::Copy for ponko::d3::ViewModel
 impl core::marker::StructuralPartialEq for ponko::d3::ViewModel
 pub const ponko::prelude::d3::VIEW_MODEL_LAYER: u32
 pub fn ponko::prelude::d3::gltf_properties_schema(&ponko_ecs::world::World) -> serde_json::value::Value
+pub type ponko::prelude::d3::AmbientOcclusion = ponko::render::AmbientOcclusion
+pub type ponko::prelude::d3::AnimationClip = ponko::anim::AnimationClip
+pub type ponko::prelude::d3::AnimationCondition = ponko::anim::AnimationCondition
+pub type ponko::prelude::d3::AnimationEvent = ponko::anim::AnimationEvent
+pub type ponko::prelude::d3::AnimationGraph = ponko::anim::AnimationGraph
+pub type ponko::prelude::d3::AnimationGraphError = ponko::anim::AnimationGraphError
+pub type ponko::prelude::d3::AnimationLayer = ponko::anim::AnimationLayer
+pub type ponko::prelude::d3::AnimationParameter = ponko::anim::AnimationParameter
+pub type ponko::prelude::d3::AnimationState = ponko::anim::AnimationState
+pub type ponko::prelude::d3::AnimationTrack = ponko::anim::AnimationTrack
+pub type ponko::prelude::d3::AnimationTransition = ponko::anim::AnimationTransition
+pub type ponko::prelude::d3::Animator = ponko::anim::Animator
+pub type ponko::prelude::d3::AntiAliasing = ponko::render::AntiAliasing
+pub type ponko::prelude::d3::AttachToJoint = ponko::anim::AttachToJoint
+pub type ponko::prelude::d3::BatchCulling = ponko::render::BatchCulling
+pub type ponko::prelude::d3::Blend = ponko::render::Blend
+pub type ponko::prelude::d3::Compute = ponko::render::Compute
+pub type ponko::prelude::d3::ComputePass = ponko::render::ComputePass
+pub type ponko::prelude::d3::Effect = ponko::render::Effect
+pub type ponko::prelude::d3::FarTerrain = ponko::terrain::FarTerrain
+pub type ponko::prelude::d3::GlobalIllumination = ponko::render::GlobalIllumination
+pub type ponko::prelude::d3::GpuBuffer = ponko::render::GpuBuffer
+pub type ponko::prelude::d3::GraphicsQuality = ponko::render::GraphicsQuality
+pub type ponko::prelude::d3::Heightfield = ponko::terrain::Heightfield
+pub type ponko::prelude::d3::InstanceBatch = ponko::render::InstanceBatch
+pub type ponko::prelude::d3::InstanceBatchOptions = ponko::render::InstanceBatchOptions
+pub type ponko::prelude::d3::InstanceLevel = ponko::render::InstanceLevel
+pub type ponko::prelude::d3::Interpolation = ponko::anim::Interpolation
+pub type ponko::prelude::d3::JointAnimation = ponko::anim::JointAnimation
+pub type ponko::prelude::d3::JointMask = ponko::anim::JointMask
+pub type ponko::prelude::d3::LayerBlend = ponko::anim::LayerBlend
+pub type ponko::prelude::d3::LayerId = ponko::anim::LayerId
+pub type ponko::prelude::d3::Lighting = ponko::render::Lighting
+pub type ponko::prelude::d3::LodGroup = ponko::render::LodGroup
+pub type ponko::prelude::d3::LodHysteresis = ponko::render::LodHysteresis
+pub type ponko::prelude::d3::LodLevel = ponko::render::LodLevel
+pub type ponko::prelude::d3::LodPick = ponko::render::LodPick
+pub type ponko::prelude::d3::LodRenderer = ponko::render::LodRenderer
+pub type ponko::prelude::d3::LodSettings = ponko::render::LodSettings
+pub type ponko::prelude::d3::LodShadow = ponko::render::LodShadow
+pub type ponko::prelude::d3::Material = ponko::render::Material
+pub type ponko::prelude::d3::MaterialDesc = ponko::render::MaterialDesc
+pub type ponko::prelude::d3::Mesh = ponko::render::Mesh
+pub type ponko::prelude::d3::MeshCost = ponko::render::MeshCost
+pub type ponko::prelude::d3::MeshData = ponko::render::MeshData
+pub type ponko::prelude::d3::ModelMaterial = ponko::render::ModelMaterial
+pub type ponko::prelude::d3::ModelMaterials = ponko::render::ModelMaterials
+pub type ponko::prelude::d3::MorphAnimation = ponko::anim::MorphAnimation
+pub type ponko::prelude::d3::MorphFrame = ponko::anim::MorphFrame
+pub type ponko::prelude::d3::MorphTarget = ponko::anim::MorphTarget
+pub type ponko::prelude::d3::MorphWeights = ponko::anim::MorphWeights
+pub type ponko::prelude::d3::Motion = ponko::anim::Motion
+pub type ponko::prelude::d3::MotionChild = ponko::anim::MotionChild
+pub type ponko::prelude::d3::ParamId = ponko::anim::ParamId
+pub type ponko::prelude::d3::ParticleCurve = ponko::particles::ParticleCurve
+pub type ponko::prelude::d3::ParticleGradient = ponko::particles::ParticleGradient
+pub type ponko::prelude::d3::ParticleSpace = ponko::particles::ParticleSpace
+pub type ponko::prelude::d3::Post = ponko::render::Post
+pub type ponko::prelude::d3::ReceivesDecals = ponko::render::ReceivesDecals
+pub type ponko::prelude::d3::RenderPasses = ponko::render::RenderPasses
+pub type ponko::prelude::d3::RootMotion = ponko::anim::RootMotion
+pub type ponko::prelude::d3::SceneSettings = ponko::render::SceneSettings
+pub type ponko::prelude::d3::ScreenEffect = ponko::render::ScreenEffect
+pub type ponko::prelude::d3::Shader = ponko::render::Shader
+pub type ponko::prelude::d3::ShaderDiagnostic = ponko::render::ShaderDiagnostic
+pub type ponko::prelude::d3::ShaderKind = ponko::render::ShaderKind
+pub type ponko::prelude::d3::ShaderOutcome = ponko::render::ShaderOutcome
+pub type ponko::prelude::d3::ShaderStatus = ponko::render::ShaderStatus
+pub type ponko::prelude::d3::ShadowFilter = ponko::render::ShadowFilter
+pub type ponko::prelude::d3::ShadowMesh = ponko::render::ShadowMesh
+pub type ponko::prelude::d3::Skeleton = ponko::anim::Skeleton
+pub type ponko::prelude::d3::SkinOf = ponko::anim::SkinOf
+pub type ponko::prelude::d3::Sky = ponko::render::Sky
+pub type ponko::prelude::d3::StateId = ponko::anim::StateId
+pub type ponko::prelude::d3::StreamedLod = ponko::render::StreamedLod
+pub type ponko::prelude::d3::TargetCamera = ponko::render::TargetCamera
+pub type ponko::prelude::d3::TargetEffect = ponko::render::TargetEffect
+pub type ponko::prelude::d3::TerrainMaterialDesc = ponko::terrain::TerrainMaterialDesc
+pub type ponko::prelude::d3::TerrainTile = ponko::terrain::TerrainTile
+pub type ponko::prelude::d3::TerrainTileData = ponko::terrain::TerrainTileData
+pub type ponko::prelude::d3::TextureArray = ponko::terrain::TextureArray
+pub type ponko::prelude::d3::TextureKind = ponko::terrain::TextureKind
+pub type ponko::prelude::d3::Tonemap = ponko::render::Tonemap
 pub mod ponko::prelude::systems
 pub fn ponko::prelude::systems::animate_sprites(&mut ponko::prelude::Ctx)
 pub fn ponko::prelude::systems::apply_net_poses(&mut ponko::prelude::Ctx)
@@ -11479,6 +11648,30 @@ impl core::fmt::Debug for ponko::render::GpuUploads
 pub fn ponko::render::GpuUploads::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::render::GpuUploads
 impl core::marker::StructuralPartialEq for ponko::render::GpuUploads
+#[non_exhaustive] pub struct ponko::render::Icon
+pub ponko::render::Icon::background: ponko::color::Color
+pub ponko::render::Icon::color: ponko::color::Color
+pub ponko::render::Icon::exposure: f32
+pub ponko::render::Icon::fov_y: f32
+pub ponko::render::Icon::from: glam::f32::vec3::Vec3
+pub ponko::render::Icon::materials: core::option::Option<ponko::render::ModelMaterials>
+pub ponko::render::Icon::size: u32
+impl ponko::render::Icon
+pub fn ponko::render::Icon::new(u32) -> Self
+pub fn ponko::render::Icon::with_background(self, ponko::color::Color) -> Self
+pub fn ponko::render::Icon::with_color(self, ponko::color::Color) -> Self
+pub fn ponko::render::Icon::with_exposure(self, f32) -> Self
+pub fn ponko::render::Icon::with_from(self, glam::f32::vec3::Vec3) -> Self
+pub fn ponko::render::Icon::with_materials(self, ponko::render::ModelMaterials) -> Self
+impl core::clone::Clone for ponko::render::Icon
+pub fn ponko::render::Icon::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::render::Icon
+pub fn ponko::render::Icon::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::render::Icon
+pub fn ponko::render::Icon::default() -> Self
+impl core::fmt::Debug for ponko::render::Icon
+pub fn ponko::render::Icon::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::render::Icon
 #[repr(C)] pub struct ponko::render::InstanceBatch
 impl core::clone::Clone for ponko::render::InstanceBatch
 pub fn ponko::render::InstanceBatch::clone(&self) -> Self
@@ -11797,6 +11990,7 @@ pub ponko::render::MaterialDesc::custom_textures: [core::option::Option<ponko::t
 pub ponko::render::MaterialDesc::double_sided: bool
 pub ponko::render::MaterialDesc::emissive: ponko::color::Color
 pub ponko::render::MaterialDesc::emissive_map: core::option::Option<ponko::texture::Texture>
+pub ponko::render::MaterialDesc::masked_tint: bool
 pub ponko::render::MaterialDesc::metallic: f32
 pub ponko::render::MaterialDesc::normal_map: core::option::Option<ponko::texture::Texture>
 pub ponko::render::MaterialDesc::normal_strength: f32
@@ -11815,6 +12009,7 @@ pub fn ponko::render::MaterialDesc::with_custom_textures(self, [core::option::Op
 pub fn ponko::render::MaterialDesc::with_double_sided(self, bool) -> Self
 pub fn ponko::render::MaterialDesc::with_emissive(self, ponko::color::Color) -> Self
 pub fn ponko::render::MaterialDesc::with_emissive_map(self, impl core::convert::Into<core::option::Option<ponko::texture::Texture>>) -> Self
+pub fn ponko::render::MaterialDesc::with_masked_tint(self, bool) -> Self
 pub fn ponko::render::MaterialDesc::with_metallic(self, f32) -> Self
 pub fn ponko::render::MaterialDesc::with_normal_map(self, impl core::convert::Into<core::option::Option<ponko::texture::Texture>>) -> Self
 pub fn ponko::render::MaterialDesc::with_normal_strength(self, f32) -> Self
@@ -14164,6 +14359,7 @@ impl core::marker::StructuralPartialEq for ponko::terrain::TextureArray
 impl ponko::handle::GfxHandle for ponko::terrain::TextureArray
 impl ponko::handle::Handle for ponko::terrain::TextureArray
 pub const ponko::terrain::TextureArray::NONE: Self
+pub type ponko::terrain::CellStreamer = ponko::streaming::CellStreamer
 pub mod ponko::text
 #[repr(u32)] pub enum ponko::text::TextShaping
 pub ponko::text::TextShaping::Always = 1

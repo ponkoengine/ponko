@@ -1311,7 +1311,8 @@ pub unsafe extern "C" fn ponko_mesh_data_heightfield(
 }
 
 /// Gives mesh data one color per corner (Rust `MeshData::colors`),
-/// multiplying its material's color; `count` must be its number of corners,
+/// multiplying its material's color (red, green and blue may go above 1,
+/// for corners brighter than white); `count` must be its number of corners,
 /// or 0 to remove them.
 /// # Safety
 /// `data` null or live; `colors` holds `count` colors (may be null when 0).

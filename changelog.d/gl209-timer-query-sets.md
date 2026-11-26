@@ -1,3 +1,4 @@
+<!-- area: Rendering -->
 ### Fixed
 - A game that makes many devices in one process (tools, previews, tests) no
   longer loses one to the GPU timers on Metal. Metal lets a process hold 32

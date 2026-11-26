@@ -10,6 +10,8 @@
   ```
   After:
   ```rust
+  use ponko::tilemap::TileMap;
+  # let (sheet, tiles) = todo!();
   let mut map = TileMap::new(sheet, 64, 64);
   map.tiles = tiles;
   ```

@@ -20,5 +20,6 @@
   ```
   After:
   ```rust
+  # let err: ponko_unity::Error = todo!();
   if err.kind() == ponko_unity::ErrorKind::Invalid { /* ... */ }
   ```

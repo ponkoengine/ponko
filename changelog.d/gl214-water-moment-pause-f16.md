@@ -1,3 +1,24 @@
+### Breaking changes
+- Waves from a spectrum are drawn on the simulation's clock, where floating bodies ride them, instead of the frame's.
+  The clock is `sim_time()` plus `fixed_alpha()` of a fixed step, not
+  `ctx.time.elapsed()`. Nothing changes until a game pauses or changes the
+  simulation's speed; after that the sea stands still while paused and runs
+  at the simulation's speed, and the drawn waves are the ones floating bodies
+  ride. Waves from the wave table stay on the frame's clock.
+  Instead: ask `height_at` or `sample` at `water.drawn_time(&ctx.time)` for
+  what is drawn; a shader that drew something in step with a spectrum's
+  waves from `frame.time.x` (still the frame's clock) takes the drawn time in
+  a material value instead.
+  Before:
+  ```rust
+  let h = water.height_at(xz, ctx.time.elapsed() as f32);
+  ```
+  After:
+  ```rust
+  # let (water, xz): (ponko::water::Water, Vec2) = todo!();
+  let h = water.height_at(xz, water.drawn_time(&ctx.time));
+  ```
+
 ### Added
 - `Water::drawn_time(&ctx.time)` (C `ponko_ctx_water_drawn_time`, C++
   `ctx.water_drawn_time(water)`): the time a water body is drawn at this
@@ -5,21 +26,10 @@
   player sees.
 
 ### Changed
-- **Breaking:** waves from a spectrum are drawn on the simulation's clock
-  (`sim_time()` plus `fixed_alpha()` of a fixed step), where floating bodies
-  ride them, instead of the frame's (`ctx.time.elapsed()`). Nothing changes
-  until a game pauses or changes the simulation's speed; after that the sea
-  stands still while paused and runs at the simulation's speed, and the
-  drawn waves are the ones floating bodies ride (on the frame's clock they
-  were off by as much as the waves move in the time paused). Migration: a
-  game that asked `height_at` or `sample` at `ctx.time.elapsed()` for what
-  is drawn asks at `water.drawn_time(&ctx.time)`; a game shader that drew
-  something in step with a spectrum's waves from `frame.time.x` (still the
-  frame's clock) takes the drawn time in a material value instead. Waves
-  from the wave table stay on the frame's clock. The WebGL2 upload now
-  shares the fixed steps' moments with floating bodies after a pause or
-  speed change too (at most one moment a step), and a paused game works
-  out and uploads nothing.
+- Waves from a spectrum are drawn on the simulation's clock (see Breaking
+  changes). The WebGL2 upload now shares the fixed steps' moments with
+  floating bodies after a pause or speed change too (at most one moment a
+  step), and a paused game works out and uploads nothing.
 - The WebGL2 upload's f32 to f16 conversion uses the CPU's own (F16C, ARM
   FP16, through `half`) where there is one, a chunk at a time, and is
   branch-free elsewhere, with the same bits for every float: one moment's
