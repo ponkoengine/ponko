@@ -351,6 +351,10 @@ pub(super) fn builtin<T: 'static>() -> Option<ValueSchema> {
         return Some(lodhysteresis());
     }
     #[cfg(feature = "3d")]
+    if id == std::any::TypeId::of::<crate::render::LodFadeTime>() {
+        return Some(Number);
+    }
+    #[cfg(feature = "3d")]
     if id == std::any::TypeId::of::<crate::render::ReceivesDecals>() {
         return Some(receivesdecals());
     }
@@ -763,6 +767,7 @@ pub(in crate::reflect) mod tests {
             check!(crate::d3::Decal, crate::d3::Decal::default());
             check!(crate::render::ReceivesDecals, crate::render::ReceivesDecals::default());
             check!(crate::render::LodHysteresis, crate::render::LodHysteresis::default());
+            check!(crate::render::LodFadeTime, crate::render::LodFadeTime::default());
             check!(crate::render::ShadowOnly, crate::render::ShadowOnly);
             check!(crate::d3::HeldItem, crate::d3::HeldItem::default());
             check!(

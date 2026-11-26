@@ -35,6 +35,9 @@ pub(crate) struct ModelFile {
     /// Whether textures are looked for in the whole project too
     /// (`searchTexturesGlobally`, or `materialSearch` Everywhere).
     search_everywhere: bool,
+    /// The humanoid avatar of a model whose Rig is Humanoid
+    /// (`humanDescription`).
+    pub(crate) avatar: Option<crate::HumanoidAvatar>,
 }
 
 /// A material of a model file, as Unity's model importer gives it.
@@ -106,6 +109,7 @@ impl ModelFile {
             import_materials: settings["materialImportMode"].as_i64() != Some(0),
             search_everywhere: settings["searchTexturesGlobally"].as_i64() == Some(1)
                 || settings["materialSearch"].as_i64() == Some(2),
+            avatar: crate::HumanoidAvatar::from_description(&importer["humanDescription"]),
         })
     }
 

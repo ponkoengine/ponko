@@ -1890,6 +1890,24 @@ fn lod_hysteresis_is_a_scene_component() {
     });
 }
 
+/// What the Unity importer writes for an animated cross-fade.
+#[test]
+fn lod_fade_time_is_a_scene_component() {
+    Game::new("t", 1, 1).run_headless(0, |ctx| {
+        let e = ctx.world.spawn((Transform::default(),));
+        ctx.world.set_json(e, "LodFadeTime", serde_json::json!(0.5)).unwrap();
+        assert_eq!(
+            ctx.world.get::<ponko::render::LodFadeTime>(e),
+            Some(&ponko::render::LodFadeTime(0.5))
+        );
+        let saved = ctx.world.save();
+        ctx.world.clear();
+        ctx.world.load(&saved).unwrap();
+        let back = ctx.world.query::<&ponko::render::LodFadeTime>().iter().next().copied();
+        assert_eq!(back, Some(ponko::render::LodFadeTime(0.5)));
+    });
+}
+
 #[test]
 fn shadow_only_survives_a_saved_and_loaded_world() {
     Game::new("t", 1, 1).run_headless(0, |ctx| {

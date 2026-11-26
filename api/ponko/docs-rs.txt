@@ -2675,6 +2675,8 @@ impl<'de> serde_core::de::Deserialize<'de> for ponko::d2::SpotLight where ponko:
 pub fn ponko::d2::SpotLight::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct ponko::d2::Sprite
 pub ponko::d2::Sprite::color: ponko::color::Color
+pub ponko::d2::Sprite::flip_x: bool
+pub ponko::d2::Sprite::flip_y: bool
 pub ponko::d2::Sprite::pivot: glam::f32::vec2::Vec2
 pub ponko::d2::Sprite::region: core::option::Option<ponko::camera::Rect>
 pub ponko::d2::Sprite::texture: ponko::texture::Texture
@@ -2682,6 +2684,8 @@ pub ponko::d2::Sprite::z: f32
 impl ponko::d2::Sprite
 pub fn ponko::d2::Sprite::new(ponko::texture::Texture) -> Self
 pub fn ponko::d2::Sprite::with_color(self, ponko::color::Color) -> Self
+pub fn ponko::d2::Sprite::with_flip_x(self, bool) -> Self
+pub fn ponko::d2::Sprite::with_flip_y(self, bool) -> Self
 pub fn ponko::d2::Sprite::with_pivot(self, glam::f32::vec2::Vec2) -> Self
 pub fn ponko::d2::Sprite::with_region(self, ponko::camera::Rect) -> Self
 pub fn ponko::d2::Sprite::with_z(self, f32) -> Self
@@ -9494,6 +9498,8 @@ impl<'de> serde_core::de::Deserialize<'de> for ponko::d2::SpotLight where ponko:
 pub fn ponko::d2::SpotLight::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct ponko::prelude::d2::Sprite
 pub ponko::prelude::d2::Sprite::color: ponko::color::Color
+pub ponko::prelude::d2::Sprite::flip_x: bool
+pub ponko::prelude::d2::Sprite::flip_y: bool
 pub ponko::prelude::d2::Sprite::pivot: glam::f32::vec2::Vec2
 pub ponko::prelude::d2::Sprite::region: core::option::Option<ponko::camera::Rect>
 pub ponko::prelude::d2::Sprite::texture: ponko::texture::Texture
@@ -9501,6 +9507,8 @@ pub ponko::prelude::d2::Sprite::z: f32
 impl ponko::d2::Sprite
 pub fn ponko::d2::Sprite::new(ponko::texture::Texture) -> Self
 pub fn ponko::d2::Sprite::with_color(self, ponko::color::Color) -> Self
+pub fn ponko::d2::Sprite::with_flip_x(self, bool) -> Self
+pub fn ponko::d2::Sprite::with_flip_y(self, bool) -> Self
 pub fn ponko::d2::Sprite::with_pivot(self, glam::f32::vec2::Vec2) -> Self
 pub fn ponko::d2::Sprite::with_region(self, ponko::camera::Rect) -> Self
 pub fn ponko::d2::Sprite::with_z(self, f32) -> Self
@@ -12127,6 +12135,8 @@ impl core::marker::Copy for ponko::audio::SoundParams
 impl core::marker::StructuralPartialEq for ponko::audio::SoundParams
 pub struct ponko::prelude::Sprite
 pub ponko::prelude::Sprite::color: ponko::color::Color
+pub ponko::prelude::Sprite::flip_x: bool
+pub ponko::prelude::Sprite::flip_y: bool
 pub ponko::prelude::Sprite::pivot: glam::f32::vec2::Vec2
 pub ponko::prelude::Sprite::region: core::option::Option<ponko::camera::Rect>
 pub ponko::prelude::Sprite::texture: ponko::texture::Texture
@@ -12134,6 +12144,8 @@ pub ponko::prelude::Sprite::z: f32
 impl ponko::d2::Sprite
 pub fn ponko::d2::Sprite::new(ponko::texture::Texture) -> Self
 pub fn ponko::d2::Sprite::with_color(self, ponko::color::Color) -> Self
+pub fn ponko::d2::Sprite::with_flip_x(self, bool) -> Self
+pub fn ponko::d2::Sprite::with_flip_y(self, bool) -> Self
 pub fn ponko::d2::Sprite::with_pivot(self, glam::f32::vec2::Vec2) -> Self
 pub fn ponko::d2::Sprite::with_region(self, ponko::camera::Rect) -> Self
 pub fn ponko::d2::Sprite::with_z(self, f32) -> Self
@@ -14054,6 +14066,22 @@ pub fn ponko::render::Lightmapped::fmt(&self, &mut core::fmt::Formatter<'_>) -> 
 impl core::marker::Copy for ponko::render::Lightmapped
 impl core::marker::StructuralPartialEq for ponko::render::Lightmapped
 impl ponko_ecs::bundle::Component for ponko::render::Lightmapped
+pub struct ponko::render::LodFadeTime(pub f32)
+impl core::clone::Clone for ponko::render::LodFadeTime
+pub fn ponko::render::LodFadeTime::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::render::LodFadeTime
+pub fn ponko::render::LodFadeTime::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::render::LodFadeTime
+pub fn ponko::render::LodFadeTime::default() -> Self
+impl core::fmt::Debug for ponko::render::LodFadeTime
+pub fn ponko::render::LodFadeTime::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::render::LodFadeTime
+impl core::marker::StructuralPartialEq for ponko::render::LodFadeTime
+impl ponko_ecs::bundle::Component for ponko::render::LodFadeTime
+impl serde_core::ser::Serialize for ponko::render::LodFadeTime
+pub fn ponko::render::LodFadeTime::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::render::LodFadeTime
+pub fn ponko::render::LodFadeTime::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct ponko::render::LodGroup
 pub ponko::render::LodGroup::center: glam::f32::vec3::Vec3
 pub ponko::render::LodGroup::levels: alloc::vec::Vec<ponko::render::LodLevel>

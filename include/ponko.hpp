@@ -8781,6 +8781,11 @@ public:
     void set_lod_hysteresis(entity e, float fraction) { detail::check(ponko_ctx_set_lod_hysteresis(raw_, e, fraction)); }
     /// `e`'s LOD hysteresis; 0 when it has none.
     float lod_hysteresis(entity e) const { float f = 0; detail::check(ponko_ctx_lod_hysteresis(raw_, e, &f)); return f; }
+    /// Makes each change of level of `e`'s LOD group crossfade over `seconds` (Rust `LodFadeTime`),
+    /// instead of over a band of screen heights. 0: none.
+    void set_lod_fade_time(entity e, float seconds) { detail::check(ponko_ctx_set_lod_fade_time(raw_, e, seconds)); }
+    /// `e`'s LOD fade time in seconds; 0 when it has none.
+    float lod_fade_time(entity e) const { float s = 0; detail::check(ponko_ctx_lod_fade_time(raw_, e, &s)); return s; }
     /// Puts a skeleton of `joints`, at rest, on `e` (Rust `Skeleton::new`).
     void set_skeleton(entity e, const std::vector<joint>& joints) {
         std::vector<PonkoJoint> raw;
