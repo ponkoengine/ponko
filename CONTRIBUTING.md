@@ -1,7 +1,14 @@
 # Contributing to Ponko
 
-Thanks for your interest! Bug reports, benchmarks on your hardware, docs
-fixes, examples and code are all welcome.
+Thanks for your interest! Everyone is welcome here, whether this is your
+first pull request ever or your hundredth. Bug reports, questions, benchmarks
+on your hardware, typo fixes, docs, examples and code all count as
+contributions, and none of them is too small.
+
+You don't need to know the whole engine, or C and C++, or every check below.
+If you get stuck anywhere, ask on the issue or in
+[Discussions](https://github.com/ponkoengine/ponko/discussions): there are no
+silly questions, and a maintainer will help you finish.
 
 ## Quick start
 
@@ -13,17 +20,22 @@ fixes, examples and code are all welcome.
    ```
 2. **Pick** an issue labelled
    [`good first issue`](https://github.com/ponkoengine/ponko/labels/good%20first%20issue)
-   (each names the files to read and how to test the change), and comment on it
-   so nobody else starts the same work. Not sure what to pick? Ask in
+   (each names the files to read and how to test the change) that has no
+   assignee, and comment that you'd like to take it. A maintainer assigns it
+   to you, usually within a couple of days ([Claiming an
+   issue](#claiming-an-issue)). Not sure what to pick? Ask in
    [Discussions](https://github.com/ponkoengine/ponko/discussions).
 3. **Branch** from `main` (`git switch -c fix/<topic>`), make one focused change
    with a test, and run the checks it needs ([Checks: start with your
    change](#checks-start-with-your-change)).
 4. **Open a pull request** to `main` (`gh pr create --base main`, or the
    button on GitHub). Say what changed and which checks you ran; a draft is
-   fine. Maintainers answer within a week.
+   fine, and so is a pull request that is not quite done or has a failing
+   check: say what you're unsure about and we'll help. Maintainers answer
+   within a week, usually sooner.
 
-The rest of this file is reference: read the part you need when you need it.
+That's all you need to start. The rest of this file is reference: read the
+part you need when you need it, and skip the rest.
 
 ## Start with what you know
 
@@ -90,6 +102,23 @@ contribute toward a large issue without claiming all of it.
 [ROADMAP.md](ROADMAP.md) explains the sequence; verify live issue status before
 starting. The 0.2.0 release is tracked in
 [#528](https://github.com/ponkoengine/ponko/issues/528).
+
+### Claiming an issue
+
+- **Ask on the issue.** Comment that you'd like to take it (or the slice you
+  want). An issue with no assignee and no open pull request is free.
+- **A maintainer assigns it to you**, usually within a couple of days. From
+  then on it is yours: nobody else starts it, and maintainers and their tools
+  don't take it or fold it into their own pull requests.
+- **Ask anything on the issue** while you work; a draft pull request early is
+  welcome.
+- **If you stop**, say so on the issue and you're unassigned; no explanation
+  needed. If an assigned issue sees no activity (a comment, a commit or a
+  draft pull request) for two weeks, a maintainer asks on the issue; with no
+  answer a week after that, the issue is free again.
+- **Issues assigned to a maintainer are taken.** Most open issues are; ask on
+  one if you'd like to help with it, and a maintainer can split off a slice for
+  you.
 
 ## Setting up
 
