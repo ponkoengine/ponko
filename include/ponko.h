@@ -866,7 +866,23 @@ typedef enum PonkoGamepadButton {
   PONKO_GAMEPAD_DPAD_DOWN,
   PONKO_GAMEPAD_DPAD_LEFT,
   PONKO_GAMEPAD_DPAD_RIGHT,
+  PONKO_GAMEPAD_TOUCHPAD,
 } PonkoGamepadButton;
+
+enum PonkoTriggerEffectKind
+#ifdef __cplusplus
+  : uint32_t
+#endif // __cplusplus
+ {
+  PONKO_TRIGGER_EFFECT_OFF = 0,
+  PONKO_TRIGGER_EFFECT_RESISTANCE = 1,
+  PONKO_TRIGGER_EFFECT_WEAPON = 2,
+  PONKO_TRIGGER_EFFECT_VIBRATION = 3,
+  PONKO_TRIGGER_EFFECT_RESISTANCE_PROFILE = 4,
+};
+#ifndef __cplusplus
+typedef uint32_t PonkoTriggerEffectKind;
+#endif // __cplusplus
 
 typedef enum PonkoGamepadAxis {
   PONKO_GAMEPAD_LEFT_STICK_X,
@@ -1876,6 +1892,39 @@ typedef struct PonkoColor {
   float b;
   float a;
 } PonkoColor;
+
+typedef struct PonkoGamepadExtras {
+  bool light;
+  bool player_leds;
+  bool touchpad;
+  bool adaptive_triggers;
+} PonkoGamepadExtras;
+
+typedef struct PonkoTriggerEffect {
+  uint32_t kind;
+  uint8_t start;
+  uint8_t end;
+  uint8_t strength;
+  uint8_t frequency;
+  uint8_t profile[10];
+} PonkoTriggerEffect;
+
+typedef struct PonkoGamepadTouchpadFinger {
+  float x;
+  float y;
+  float pressure;
+  bool down;
+} PonkoGamepadTouchpadFinger;
+
+typedef struct PonkoGamepadTouchpad {
+  struct PonkoGamepadTouchpadFinger fingers[2];
+} PonkoGamepadTouchpad;
+
+typedef struct PonkoGamepadTouchpadEvent {
+  uint32_t pad;
+  uint8_t finger;
+  struct PonkoGamepadTouchpadFinger contact;
+} PonkoGamepadTouchpadEvent;
 
 typedef struct PonkoDrawParams {
   struct PonkoVec2 scale;
@@ -5508,6 +5557,33 @@ enum PonkoStatus ponko_glyph_atlas_draw_prompt(struct PonkoGlyphAtlas *atlas,
                                                const char *label,
                                                struct PonkoColor color,
                                                float *out_width);
+
+enum PonkoStatus ponko_ctx_gamepad_extras(struct PonkoCtx *ctx,
+                                          uint32_t pad_slot,
+                                          struct PonkoGamepadExtras *out_extras);
+
+enum PonkoStatus ponko_ctx_set_gamepad_light(struct PonkoCtx *ctx,
+                                             uint32_t pad_slot,
+                                             struct PonkoColor color);
+
+enum PonkoStatus ponko_ctx_set_gamepad_player_leds(struct PonkoCtx *ctx,
+                                                   uint32_t pad_slot,
+                                                   int32_t player);
+
+enum PonkoStatus ponko_ctx_set_gamepad_trigger_effects(struct PonkoCtx *ctx,
+                                                       uint32_t pad_slot,
+                                                       struct PonkoTriggerEffect left,
+                                                       struct PonkoTriggerEffect right);
+
+enum PonkoStatus ponko_ctx_gamepad_touchpad(struct PonkoCtx *ctx,
+                                            uint32_t pad_slot,
+                                            struct PonkoGamepadTouchpad *out_touchpad,
+                                            bool *out_has);
+
+enum PonkoStatus ponko_ctx_gamepad_touchpad_event(struct PonkoCtx *ctx,
+                                                  size_t index,
+                                                  struct PonkoGamepadTouchpadEvent *out_event,
+                                                  bool *out_has);
 
 float ponko_ctx_dt(const struct PonkoCtx *ctx);
 

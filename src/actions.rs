@@ -869,6 +869,8 @@ pub enum InputEvent {
     /// A gyro and accelerometer reading of a gamepad
     /// (`ctx.input.gamepad_motion(pad)`).
     GamepadMotion(Gamepad, crate::input::GamepadMotion),
+    /// One finger changed on a gamepad touchpad. Finger slots are 0 and 1.
+    GamepadTouchpad(Gamepad, u8, crate::input::GamepadTouchpadFinger),
     /// A finger went down, moved, lifted or was cancelled, at `position`
     /// in window pixels (`ctx.input.touches()`). `id` tells fingers apart
     /// and stays the same from a touch's start to its end. Touches make

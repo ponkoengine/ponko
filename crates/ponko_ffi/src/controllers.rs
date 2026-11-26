@@ -8,8 +8,8 @@ use crate::three::PonkoVec3;
 use crate::types::{PonkoColor, PonkoRect, PonkoTexture, PonkoVec2, texture_to_c, to_c};
 use crate::{Failure, PonkoCtx, PonkoStatus, boundary, invalid, write_text};
 use ponko::input::{
-    ControllerFamily, Gamepad, GamepadAxis, GamepadButton, GamepadMotion, GamepadStick, Glyph, GlyphAtlas, Glyphs,
-    InputDevice, Key, MouseButton, Rumble,
+    ControllerFamily, Gamepad, GamepadAxis, GamepadButton, GamepadMotion, GamepadStick, GamepadTouchpadFinger, Glyph,
+    GlyphAtlas, Glyphs, InputDevice, Key, MouseButton, Rumble, TriggerEffect,
 };
 use std::ffi::c_char;
 
@@ -874,3 +874,278 @@ const _: () = {
     assert!(MouseButton::Left as u32 == 0);
     assert!(GamepadAxis::LeftStickX as u32 == 0);
 };
+
+/// Additional capabilities outside the stable `PonkoGamepadInfo` layout.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PonkoGamepadExtras {
+    /// The RGB light bar can be set.
+    pub light: bool,
+    /// Player indicator LEDs can be set.
+    pub player_leds: bool,
+    /// The controller reports touchpad contacts.
+    pub touchpad: bool,
+    /// The controller accepts adaptive trigger effects.
+    pub adaptive_triggers: bool,
+}
+
+/// An adaptive trigger effect's kind. Passed as a `uint32_t`.
+#[repr(u32)]
+#[allow(non_camel_case_types)]
+pub enum PonkoTriggerEffectKind {
+    /// Free trigger travel.
+    PONKO_TRIGGER_EFFECT_OFF = 0,
+    /// Constant resistance from `start`.
+    PONKO_TRIGGER_EFFECT_RESISTANCE = 1,
+    /// A break between `start` and `end`.
+    PONKO_TRIGGER_EFFECT_WEAPON = 2,
+    /// Vibration with the given `frequency` in Hz and amplitude in `strength`.
+    PONKO_TRIGGER_EFFECT_VIBRATION = 3,
+    /// Independent strengths in `profile`.
+    PONKO_TRIGGER_EFFECT_RESISTANCE_PROFILE = 4,
+}
+
+/// An adaptive trigger effect. A zeroed value means off. Zone positions
+/// are 0–9 and strengths are 0–8. Weapon start is 2–7 and end is start+1–8.
+/// Parameters outside those ranges are clamped.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PonkoTriggerEffect {
+    /// One of `PonkoTriggerEffectKind`.
+    pub kind: u32,
+    /// First active zone, when used by this effect.
+    pub start: u8,
+    /// Break position for the weapon effect.
+    pub end: u8,
+    /// Resistance or vibration amplitude.
+    pub strength: u8,
+    /// Frequency in Hz for vibration. Zero switches vibration off.
+    pub frequency: u8,
+    /// Strength per zone for the resistance profile.
+    pub profile: [u8; 10],
+}
+
+impl PonkoTriggerEffect {
+    fn to_rust(self) -> Result<TriggerEffect, Failure> {
+        use TriggerEffect as Effect;
+        let effect = self;
+        use PonkoTriggerEffectKind::*;
+        let PonkoTriggerEffect {
+            kind,
+            start,
+            end,
+            strength,
+            frequency,
+            profile,
+        } = effect;
+        match kind {
+            k if k == PONKO_TRIGGER_EFFECT_OFF as u32 => Ok(Effect::Off),
+            k if k == PONKO_TRIGGER_EFFECT_RESISTANCE as u32 => Ok(Effect::Resistance { start, strength }),
+            k if k == PONKO_TRIGGER_EFFECT_WEAPON as u32 => Ok(Effect::Weapon { start, end, strength }),
+            k if k == PONKO_TRIGGER_EFFECT_VIBRATION as u32 => Ok(Effect::Vibration {
+                start,
+                amplitude: strength,
+                frequency,
+            }),
+            k if k == PONKO_TRIGGER_EFFECT_RESISTANCE_PROFILE as u32 => Ok(Effect::ResistanceProfile(profile)),
+            _ => Err(invalid("invalid adaptive trigger effect kind")),
+        }
+    }
+}
+
+/// A finger slot on a gamepad's first touchpad.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct PonkoGamepadTouchpadFinger {
+    /// Horizontal position from 0 (left) to 1 (right).
+    pub x: f32,
+    /// Vertical position from 0 (top) to 1 (bottom).
+    pub y: f32,
+    /// Pressure from 0 to 1.
+    pub pressure: f32,
+    /// Whether a finger is on the surface.
+    pub down: bool,
+}
+
+impl From<GamepadTouchpadFinger> for PonkoGamepadTouchpadFinger {
+    fn from(value: GamepadTouchpadFinger) -> Self {
+        Self {
+            x: value.x,
+            y: value.y,
+            pressure: value.pressure,
+            down: value.down,
+        }
+    }
+}
+
+/// Both finger slots on the first touchpad.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct PonkoGamepadTouchpad {
+    /// Slots 0 and 1. Inspect `down` before using a position.
+    pub fingers: [PonkoGamepadTouchpadFinger; 2],
+}
+
+/// A change to a touchpad finger this frame.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct PonkoGamepadTouchpadEvent {
+    /// Gamepad slot.
+    pub pad: u32,
+    /// Finger slot, 0 or 1.
+    pub finger: u8,
+    /// The finger state after the change.
+    pub contact: PonkoGamepadTouchpadFinger,
+}
+
+/// Reads the extra controller capabilities. All fields are false for an
+/// empty slot or on a backend without these features.
+/// # Safety
+/// Context must be live or null. `out_extras` must be writable by the
+/// caller. No pointer is retained.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_gamepad_extras(
+    ctx: *mut PonkoCtx,
+    pad_slot: u32,
+    out_extras: *mut PonkoGamepadExtras,
+) -> PonkoStatus {
+    // SAFETY: caller supplies the callback context and writable output.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            let caps = c
+                .input
+                .gamepad_info(pad(pad_slot)?)
+                .map_or_else(Default::default, |i| i.capabilities);
+            out(
+                out_extras,
+                PonkoGamepadExtras {
+                    light: caps.light,
+                    player_leds: caps.player_leds,
+                    touchpad: caps.touchpad,
+                    adaptive_triggers: caps.adaptive_triggers,
+                },
+            )
+        })
+    })
+}
+
+/// Sets the light bar RGB. Alpha is ignored. Black turns the light off.
+/// Unsupported or empty slots within range are ignored.
+/// # Safety
+/// Context must be live or null. No pointer is retained.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_set_gamepad_light(
+    ctx: *mut PonkoCtx,
+    pad_slot: u32,
+    color: PonkoColor,
+) -> PonkoStatus {
+    // SAFETY: caller supplies the callback context.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            c.input.set_gamepad_light(pad(pad_slot)?, to_c(color));
+            Ok(())
+        })
+    })
+}
+
+/// Sets the player indicator (0 is player one). Pass -1 to switch it off.
+/// Unsupported or empty slots within range are ignored.
+/// # Safety
+/// Context must be live or null. No pointer is retained.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_set_gamepad_player_leds(
+    ctx: *mut PonkoCtx,
+    pad_slot: u32,
+    player: i32,
+) -> PonkoStatus {
+    // SAFETY: caller supplies the callback context.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            let player = if player == -1 {
+                None
+            } else {
+                Some(u8::try_from(player).map_err(|_| invalid("player LED index must be -1 or 0..=255"))?)
+            };
+            c.input.set_gamepad_player_leds(pad(pad_slot)?, player);
+            Ok(())
+        })
+    })
+}
+
+/// Sets both adaptive triggers. Unsupported or empty slots within range are ignored.
+/// # Safety
+/// Context must be live or null. No pointer is retained.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_set_gamepad_trigger_effects(
+    ctx: *mut PonkoCtx,
+    pad_slot: u32,
+    left: PonkoTriggerEffect,
+    right: PonkoTriggerEffect,
+) -> PonkoStatus {
+    // SAFETY: caller supplies the callback context.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            c.input
+                .set_gamepad_trigger_effects(pad(pad_slot)?, left.to_rust()?, right.to_rust()?);
+            Ok(())
+        })
+    })
+}
+
+/// Reads the first touchpad's slots. `out_has` is false and `out_touchpad`
+/// is zeroed if the backend cannot read a touchpad for this gamepad.
+/// # Safety
+/// Context must be live or null. Outputs must be writable by the caller.
+/// No pointer is retained.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_gamepad_touchpad(
+    ctx: *mut PonkoCtx,
+    pad_slot: u32,
+    out_touchpad: *mut PonkoGamepadTouchpad,
+    out_has: *mut bool,
+) -> PonkoStatus {
+    // SAFETY: caller supplies the callback context and writable outputs.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            let touchpad = c.input.gamepad_touchpad(pad(pad_slot)?);
+            out(out_has, touchpad.is_some())?;
+            out(
+                out_touchpad,
+                PonkoGamepadTouchpad {
+                    fingers: touchpad.unwrap_or_default().map(Into::into),
+                },
+            )
+        })
+    })
+}
+
+/// Reads the change at `index` from this frame's touchpad events. Start at
+/// index zero. At the end, `out_has` is false and `out_event` is zeroed.
+/// # Safety
+/// Context must be live or null. Outputs must be writable by the caller.
+/// No pointer is retained.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_gamepad_touchpad_event(
+    ctx: *mut PonkoCtx,
+    index: usize,
+    out_event: *mut PonkoGamepadTouchpadEvent,
+    out_has: *mut bool,
+) -> PonkoStatus {
+    // SAFETY: caller supplies the callback context and writable outputs.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            let event = c.input.gamepad_touchpad_events().get(index);
+            out(out_has, event.is_some())?;
+            out(
+                out_event,
+                event.map_or_else(PonkoGamepadTouchpadEvent::default, |&(pad, finger, contact)| {
+                    PonkoGamepadTouchpadEvent {
+                        pad: pad.slot() as u32,
+                        finger,
+                        contact: contact.into(),
+                    }
+                }),
+            )
+        })
+    })
+}

@@ -5404,6 +5404,17 @@ static void controllers() {
         ctx.stop_rumble(ponko::gamepad{0});
         CHECK(ctx.rumble_levels(ponko::gamepad{0}).strong == 0.0f);
 
+        auto controller = ponko::gamepad{0};
+        const auto extras = ctx.gamepad_extras(controller);
+        CHECK(!extras.light && !extras.player_leds && !extras.touchpad && !extras.adaptive_triggers);
+        CHECK(!ctx.gamepad_touchpad(controller) && !ctx.gamepad_touchpad_event(0));
+        ctx.set_gamepad_light(controller, {1.0f, 0.5f, 0.0f, 1.0f});
+        ctx.set_gamepad_player_leds(controller, std::nullopt);
+        ctx.set_gamepad_trigger_effects(controller, ponko::trigger_effect::resistance(3, 4),
+                                       ponko::trigger_effect::off());
+        ctx.feed_input(ponko::input_event::button(controller, PONKO_GAMEPAD_TOUCHPAD, true));
+        CHECK(ctx.gamepad_pressed(controller, PONKO_GAMEPAD_TOUCHPAD));
+
         CHECK(!ctx.gamepad_motion(ponko::gamepad{0}));
         ctx.feed_gamepad_motion(ponko::gamepad{0}, {{0, 1, 0}, {0, 9.81f, 0}});
         CHECK(ctx.gamepad_motion(ponko::gamepad{0})->gyro.y == 1.0f);
