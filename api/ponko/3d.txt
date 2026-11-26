@@ -9485,6 +9485,9 @@ pub fn ponko::prelude::Ctx::set_state<S: ponko::state::States>(&mut self, S)
 pub fn ponko::prelude::Ctx::state<S: ponko::state::States>(&self) -> &S
 impl ponko::prelude::Ctx
 pub fn ponko::prelude::Ctx::quality_autotune_status(&self) -> core::option::Option<ponko::render::QualityAutotuneStatus>
+impl ponko::prelude::Ctx
+pub fn ponko::prelude::Ctx::render_icon(&mut self, ponko::render::Mesh, &ponko::render::Icon) -> ponko::render::RenderTarget
+pub fn ponko::prelude::Ctx::try_render_icon(&mut self, ponko::render::Mesh, &ponko::render::Icon) -> core::result::Result<ponko::render::RenderTarget, ponko::error::Error>
 impl<F: core::ops::function::FnMut(&mut ponko::prelude::Ctx) + 'static> ponko::prelude::IntoSystem<ponko::prelude::Ctx> for F
 pub fn F::access(self, ponko::access::SystemAccess) -> ponko::game::SystemConfig
 pub fn F::every(self, u32) -> ponko::game::SystemConfig
@@ -11468,6 +11471,30 @@ impl core::fmt::Debug for ponko::render::GpuUploads
 pub fn ponko::render::GpuUploads::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::render::GpuUploads
 impl core::marker::StructuralPartialEq for ponko::render::GpuUploads
+#[non_exhaustive] pub struct ponko::render::Icon
+pub ponko::render::Icon::background: ponko::color::Color
+pub ponko::render::Icon::color: ponko::color::Color
+pub ponko::render::Icon::exposure: f32
+pub ponko::render::Icon::fov_y: f32
+pub ponko::render::Icon::from: glam::f32::vec3::Vec3
+pub ponko::render::Icon::materials: core::option::Option<ponko::render::ModelMaterials>
+pub ponko::render::Icon::size: u32
+impl ponko::render::Icon
+pub fn ponko::render::Icon::new(u32) -> Self
+pub fn ponko::render::Icon::with_background(self, ponko::color::Color) -> Self
+pub fn ponko::render::Icon::with_color(self, ponko::color::Color) -> Self
+pub fn ponko::render::Icon::with_exposure(self, f32) -> Self
+pub fn ponko::render::Icon::with_from(self, glam::f32::vec3::Vec3) -> Self
+pub fn ponko::render::Icon::with_materials(self, ponko::render::ModelMaterials) -> Self
+impl core::clone::Clone for ponko::render::Icon
+pub fn ponko::render::Icon::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::render::Icon
+pub fn ponko::render::Icon::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::render::Icon
+pub fn ponko::render::Icon::default() -> Self
+impl core::fmt::Debug for ponko::render::Icon
+pub fn ponko::render::Icon::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::render::Icon
 #[repr(C)] pub struct ponko::render::InstanceBatch
 impl core::clone::Clone for ponko::render::InstanceBatch
 pub fn ponko::render::InstanceBatch::clone(&self) -> Self

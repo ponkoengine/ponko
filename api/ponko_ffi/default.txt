@@ -3100,6 +3100,23 @@ pub fn ponko_ffi::PonkoHookEvent::fmt(&self, &mut core::fmt::Formatter<'_>) -> c
 impl core::marker::Copy for ponko_ffi::PonkoHookEvent
 pub struct ponko_ffi::PonkoHookWorld
 pub struct ponko_ffi::PonkoHumanoidMap(_)
+#[repr(C)] pub struct ponko_ffi::PonkoIcon
+pub ponko_ffi::PonkoIcon::background: ponko_ffi::PonkoColor
+pub ponko_ffi::PonkoIcon::color: ponko_ffi::PonkoColor
+pub ponko_ffi::PonkoIcon::exposure: f32
+pub ponko_ffi::PonkoIcon::fov_y: f32
+pub ponko_ffi::PonkoIcon::from: ponko_ffi::PonkoVec3
+pub ponko_ffi::PonkoIcon::size: u32
+pub ponko_ffi::PonkoIcon::struct_size: u32
+pub ponko_ffi::PonkoIcon::version: u32
+impl core::clone::Clone for ponko_ffi::PonkoIcon
+pub fn ponko_ffi::PonkoIcon::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko_ffi::PonkoIcon
+pub fn ponko_ffi::PonkoIcon::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko_ffi::PonkoIcon
+pub fn ponko_ffi::PonkoIcon::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoIcon
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoIcon
 #[repr(C)] pub struct ponko_ffi::PonkoImeEvent
 pub ponko_ffi::PonkoImeEvent::cursor_end: usize
 pub ponko_ffi::PonkoImeEvent::cursor_start: usize
@@ -6338,6 +6355,7 @@ pub const ponko_ffi::PONKO_GPU_UNTIMED_NO_TIMESTAMPS: u32
 pub const ponko_ffi::PONKO_GPU_UNTIMED_OFF: u32
 pub const ponko_ffi::PONKO_GPU_UNTIMED_QUERY_SET_BUDGET: u32
 pub const ponko_ffi::PONKO_HANDLE_NONE: u32
+pub const ponko_ffi::PONKO_ICON_VERSION: u32
 pub const ponko_ffi::PONKO_LEVEL_SHAPE_ELLIPSE: u32
 pub const ponko_ffi::PONKO_LEVEL_SHAPE_POINT: u32
 pub const ponko_ffi::PONKO_LEVEL_SHAPE_POLYGON: u32
@@ -7125,6 +7143,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_remove_view2d(*mut ponko_ffi::PonkoCtx, usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_remove_view3d(*mut ponko_ffi::PonkoCtx, usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_render_audio_offline(*mut ponko_ffi::PonkoCtx, f32, *mut f32, usize, *mut usize) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_render_icon(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoMesh, *const ponko_ffi::PonkoIcon, *const u32, *const ponko_ffi::PonkoMaterial, usize, *mut ponko_ffi::PonkoTexture) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_replace_instance_cell(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoInstanceCell, *const [f32; 16], usize, *const ponko_ffi::PonkoColor, usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_replica(*mut ponko_ffi::PonkoCtx, u64, *mut ponko_ffi::PonkoReplica) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_replicate(*mut ponko_ffi::PonkoCtx, u64, *const ponko_ffi::PonkoReplicated) -> ponko_ffi::PonkoStatus
@@ -7831,6 +7850,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_humanoid_map_missing(*const ponko_ffi::PonkoHumanoidMap, *mut u32, usize, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_humanoid_map_new(*mut *mut ponko_ffi::PonkoHumanoidMap) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_humanoid_map_set(*mut ponko_ffi::PonkoHumanoidMap, u32, i32) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_icon_defaults(u32, *mut ponko_ffi::PonkoIcon) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_input_queue_ack(*const ponko_ffi::PonkoInputQueue, *mut bool, *mut u16) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_input_queue_free(*mut ponko_ffi::PonkoInputQueue)
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_input_queue_new(usize, usize, *mut *mut ponko_ffi::PonkoInputQueue) -> ponko_ffi::PonkoStatus
