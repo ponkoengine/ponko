@@ -963,7 +963,11 @@ mod tests {
             Some(offset_of!(PonkoPostEx, ssr_thin_objects) + 1)
         );
         assert_eq!(PonkoPostEx::len_of(3), Some(offset_of!(PonkoPostEx, upscaler) + 4));
-        assert_eq!(PonkoPostEx::len_of(4), None);
+        assert_eq!(
+            PonkoPostEx::len_of(4),
+            Some(offset_of!(PonkoPostEx, auto_exposure_mask) + size_of::<PonkoTexture>())
+        );
+        assert_eq!(PonkoPostEx::len_of(5), None);
     }
 
     /// A descriptor with its header set for version 1.
