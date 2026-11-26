@@ -52,11 +52,12 @@ COMPANIONS = ("ponko-extras",)
 # Strings of the hosts the project left; no doc may name them.
 DEAD = ("gitlab.com/ponkoengine",)
 
-# Files that talk about hosts on purpose (release tooling, the gallery's own
-# build, the GitHub templates) and this script.
-EXCLUDED_PREFIXES = (".github/", "web/", "api/", "target/")
-EXCLUDED_FILES = {"scripts/project-url.py", "scripts/release-check.py", "Cargo.lock"}
-DOC_SUFFIXES = (".md", ".txt", ".toml", ".liquid", ".rs")
+# Files that talk about hosts on purpose (the GitHub templates) and this script.
+# The gallery (web/) and the release tooling (scripts/release-check.py) read
+# the project's URL from PROJECT_URL, so the check covers them.
+EXCLUDED_PREFIXES = (".github/", "api/", "target/")
+EXCLUDED_FILES = {"scripts/project-url.py", "Cargo.lock"}
+DOC_SUFFIXES = (".md", ".txt", ".toml", ".liquid", ".rs", ".mjs", ".py")
 
 
 def project_url():
@@ -265,6 +266,10 @@ def selftest():
         text = replace_url(text, companion_url(old, companion), companion_url(new, companion))
     text = replace_url(text, old, new)
     assert text == f"[e]({new}) [p](https://example.test/org/ponko-extras)", text
+    covered = set(doc_files())
+    for name in ("web/gallery/README.md", "web/gallery/lib.mjs", "web/gallery/lib.test.mjs", "scripts/release-check.py"):
+        assert name in covered, f"{name} reads PROJECT_URL, so the check covers it"
+    assert "scripts/project-url.py" not in covered and "Cargo.lock" not in covered
     print("project-url.py: self-test passed")
     return 0
 
