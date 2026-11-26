@@ -830,13 +830,17 @@ fn time_each(samples: usize, mut prepare: impl FnMut(), mut f: impl FnMut() -> u
 /// `lookup-*` rows are the two column lookups alone over the same archetypes
 /// (no rows visited), to show the share of the lookup.
 fn query_level(filter: Option<&str>) {
-    let flush = vec![1u64; FLUSH_BYTES / 8];
+    // Made (and written: 128 MiB resident) only once a case runs, before
+    // its world: every other benchmark of the binary, the render scenes'
+    // peak memory included, would carry it otherwise.
+    let mut flush: Option<Vec<u64>> = None;
     for place in [Place::First, Place::Last] {
         for width in QUERY_WIDTHS {
             let tag = format!("n{width}-{}", place.name());
             if skips(filter, &format!("membership/query/{tag}")) {
                 continue;
             }
+            let flush = &*flush.get_or_insert_with(|| vec![1u64; FLUSH_BYTES / 8]);
             let (mut w, p, v) = query_world(width, place);
             let w = std::cell::RefCell::new(&mut w);
             type Run<'a> = (&'static str, Box<dyn FnMut() -> usize + 'a>);
