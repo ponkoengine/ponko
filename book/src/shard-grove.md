@@ -2,10 +2,12 @@
 
 > **Maturity: [tested](maturity.md).** Game: Shard Grove itself, played
 > headless. Tests: `tests/shard_grove.rs`. Platforms: Linux, macOS and
-> Windows, headless (the workspace tests in the list of checks), and its
-> package, played headless from an unrelated folder (`package-smoke`). Graphics:
-> not involved. Missing: a frame-time baseline per GPU tier, and the game opened
-> in a WebGPU browser and in a window on each OS (#454).
+> Windows, headless (the workspace tests in the list of checks), its
+> package, played headless from an unrelated folder (`package-smoke`), and
+> its web build, played in headless Chromium on WebGPU and WebGL2 on a Mac's
+> GPU (`web-examples`). Graphics: not involved. Missing: a frame-time baseline
+> per GPU tier, and the game opened in a visible WebGPU browser and in a
+> window on each OS (#454).
 
 [`examples/shard_grove`](../../examples/shard_grove)
 is the engine's 3D reference game. The other 3D examples each show one
@@ -211,10 +213,27 @@ web/build.sh --features navmesh,physics3d shard_grove && python3 -m http.server 
 ```
 
 builds it for the browser at the `Low` preset. The game publishes its state
-on `<html data-smoke>` (ticks, frames, the warden's joints, the screen, the
-shards, the quality, the storage), in the format of the
-`web/smoke` fixtures, and the [web gallery](web.md#the-gallery-of-examples)
-lists it.
+on `<html data-smoke>` (ticks, frames, clicks, the warden's joints, the
+screen, the focused menu button, the shards, the tally, the quality, the
+storage), in the format of the `web/smoke` fixtures, and the
+[web gallery](web.md#the-gallery-of-examples) lists it.
+
+`?smoke=walkthrough` in the page's address makes the game play the
+walk-through of `--smoke` by itself in the browser (a page can't quit, so it
+stays on the title at the end and reports `finished`). The list of checks
+plays the web build in headless Chromium on WebGPU and on WebGL2 (the
+`web-examples` job, with the fixtures `shard_grove` and
+`shard_grove_walkthrough` of `web/smoke/fixtures.json`):
+
+```sh
+node web/smoke/smoke.mjs --fixture shard_grove --chromium-mode new --backend webgl2 --require-gpu
+node web/smoke/smoke.mjs --fixture shard_grove_walkthrough --chromium-mode new --backend webgpu --require-gpu
+```
+
+The first presses the menus' keys (title to a game, pause, resume, pause);
+the second waits for the whole walk-through: three shards, a save at a
+shrine, back to the title, "continue", the other shards, the gate, the end
+screen and the title again.
 
 ## Performance baseline
 
@@ -240,7 +259,7 @@ What the game found missing or awkward, and what is not covered yet:
 | 3D physics had no pause like the 2D `ctx.physics.set_paused`; the game held the warden's velocity at zero on menus. | Fixed by `ctx.physics3d.set_paused` (#452) |
 | `NavAgent` had private fields, so it couldn't be built with `..Default::default()`; the game set fields on a default. | Fixed: its progress moved into `NavAgent::state`, so it builds with struct-update syntax (#453) |
 | A frame-rate performance baseline per GPU tier (`PONKO_BENCH`) needs runs on real GPUs with a window. | Desktop tier recorded on Windows, DirectX 12 and Vulkan ([Performance baseline](#performance-baseline)); the other tiers need a person ([the sheet](../../scripts/checklists/shard-grove.md), #454) |
-| Opened once in a WebGPU browser and in a window on each OS. | Open: needs a person ([the sheet](../../scripts/checklists/shard-grove.md), #454) |
+| Opened once in a WebGPU browser and in a window on each OS. | The web build is played headless in Chromium on WebGPU and WebGL2 by the list of checks (`web-examples`: its keys and the whole walk-through, [The web build](#the-web-build)). Open: a person opening it in a visible browser and in a window on each OS ([the sheet](../../scripts/checklists/shard-grove.md), #454) |
 | The list of checks packaged and played it on every OS, as it does Ember Hop. | Fixed: `package-smoke` packages it with `ponko package --example shard_grove` and plays the package headless from an unrelated folder (#454); its headless tests also run in the test job on Linux, macOS and Windows |
 | One level: level streaming isn't part of the game. | Open |
 | Rust only; no C or C++ counterpart. | No native port planned yet |

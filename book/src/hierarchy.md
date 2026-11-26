@@ -177,6 +177,20 @@ can take milliseconds to wake. In a [web build with threads](web-threads.md)
 a pass worth sharing runs on the workers, as parallel queries do; the
 page's thread waits without blocking. A deep chain is placed a link at a time.
 
+A flat update skips the levels: when no link changed since the last one
+and no attached entity has children of its own, every parent is a root,
+so one pass over the roots marks those that moved and, when they have four
+children each or fewer on average, passes over the attached entities place
+each child from its root's new transforms, all on all cores. The levels
+would index the moved roots and gather what they placed on the calling
+thread. A few roots with many children (the wide tree) are still placed as
+runs of children. With 100,000 root and child pairs all moving, on a
+machine busy with other builds (2026-11-26, load average 18–20, four runs
+each interleaved with the revision before), an update took 0.39–0.41 ms
+at best against 0.42–0.47 ms (medians 0.45–0.62 against 0.47–0.53 ms), and
+a tick of `attach/100k-spawn+10-ticks` (the move system and the update)
+1.00–1.02 ms against 1.02–1.08 ms.
+
 Linking 100,000 new children to 100,000 parents costs 4.5–4.6 ms in the
 first update and about 116 allocations in all: a children list keeps its first
 four entries in the component itself. Steady updates allocate nothing (a

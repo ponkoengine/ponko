@@ -8,6 +8,7 @@ import {
   expectedPage,
   parseGalleryArgs,
   selectExamples,
+  webglErrorOf,
 } from "./gallery-lib.mjs";
 
 const withWebgpu = { webgpu: { canvas: true }, webgl2: { renderer: "x" } };
@@ -56,3 +57,15 @@ test("--only picks examples of the built gallery, in its order, and refuses othe
   assert.deepEqual(selectExamples(gallery, ["c", "a"]).map((e) => e.example), ["a", "c"]);
   assert.throws(() => selectExamples(gallery, ["d"]), /not in this gallery: d/);
 });
+
+test("a WebGL error the browser logs fails the page; its performance notes don't", () => {
+  assert.equal(
+    webglErrorOf("[.WebGL-0x10400adc800] GL_INVALID_OPERATION: glDrawElementsInstanced: Mismatch between texture format and sampler type (signed/unsigned/float/shadow)."),
+    "GL_INVALID_OPERATION: glDrawElementsInstanced: Mismatch between texture format and sampler type (signed/unsigned/float/shadow).",
+  );
+  assert.equal(webglErrorOf("[.WebGL-0x1] GL_OUT_OF_MEMORY: glTexStorage2D: out of memory"), "GL_OUT_OF_MEMORY: glTexStorage2D: out of memory");
+  assert.equal(webglErrorOf("[.WebGL-0x1]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels"), null);
+  assert.equal(webglErrorOf("ponko: falling back to WebGL2: this browser has no WebGPU"), null);
+  assert.equal(webglErrorOf(undefined), null);
+});
+

@@ -112,9 +112,7 @@ fn an_icon_shows_the_model_alone_on_a_see_through_background() {
     let entities = scene.ctx.world.len();
     let icon = scene.ctx.gfx.render_icon(scene.red, &Icon::new(ICON));
     assert_eq!(scene.ctx.world.len(), entities, "nothing spawned in the game's world");
-    // The game's first frame draws no 3D picture: an icon asked for in
-    // setup is drawn again in the second.
-    scene.frame();
+    // Asked for in setup: drawn with the game's first frame.
     let window = scene.frame();
     let texels = scene.read(icon);
     assert_eq!(texels.len(), (ICON * ICON) as usize);
@@ -150,32 +148,32 @@ fn an_icon_shows_the_model_alone_on_a_see_through_background() {
 }
 
 #[test]
-fn an_icon_is_drawn_in_two_frames_and_kept() {
+fn an_icon_is_drawn_in_one_frame_and_kept() {
     let Some(mut scene) = Scene::new() else { return };
     let materials = scene.ctx.gfx.assets3d.materials_live.ids().count();
-    // The game's first frame, which draws no 3D picture, behind it.
-    scene.frame();
+    // Asked for in setup, before the game's first frame.
     let icon = scene.ctx.gfx.render_icon(scene.red, &Icon::new(ICON));
     scene.frame();
     let first = scene.read(icon);
-    assert!(count(&first, 0) > first.len() / 4, "drawn with the next frame");
+    assert!(count(&first, 0) > first.len() / 4, "drawn with the first frame");
     assert_eq!(scene.ctx.gfx.frame3d.views.len(), 1, "one view: the icon");
-    // Drawn again in the second frame (see ICON_FRAMES), then no more: the
-    // next frames draw no view and keep the picture.
-    scene.frame();
-    assert_eq!(scene.ctx.gfx.frame3d.views.len(), 1, "drawn in its second frame");
-    let second = scene.read(icon);
-    assert_eq!(second, first, "the same picture");
-    scene.frame();
+    // No more after it: the next frames draw no view and keep the picture.
     scene.frame();
     assert!(scene.ctx.gfx.icons.is_empty(), "nothing left to draw");
     assert!(scene.ctx.gfx.frame3d.views.is_empty(), "no view in later frames");
-    assert_eq!(scene.read(icon), second, "the picture is kept");
     assert_eq!(
         scene.ctx.gfx.assets3d.materials_live.ids().count(),
         materials,
         "its tone mapping material is freed"
     );
+    scene.frame();
+    assert_eq!(scene.read(icon), first, "the picture is kept");
+    // Asked for later in the game: drawn with the next frame, the same.
+    let later = scene.ctx.gfx.render_icon(scene.red, &Icon::new(ICON));
+    scene.frame();
+    assert_eq!(scene.read(later), first, "drawn with the next frame");
+    scene.frame();
+    assert!(scene.ctx.gfx.icons.is_empty() && scene.ctx.gfx.frame3d.views.is_empty());
     // Negative control: a target camera drawing into it every frame
     // replaces the picture (here with the game's green box).
     let camera = crate::render::TargetCamera::new(scene.ctx.scene3d.camera, icon);
@@ -197,7 +195,6 @@ fn an_icons_light_is_tone_mapped() {
     let bright = glowing(&mut scene.ctx, Color::rgb(20.0, 2.0, 0.0));
     let icon = scene.ctx.gfx.render_icon(bright, &Icon::new(ICON));
     let dim = scene.ctx.gfx.render_icon(bright, &Icon::new(ICON).with_exposure(0.02));
-    scene.frame();
     scene.frame();
     let texels = scene.read(icon);
     let center = texels[(ICON / 2 * ICON + ICON / 2) as usize];
@@ -227,7 +224,6 @@ fn an_icon_follows_the_main_views_tone_mapping_curve() {
     // curve. No curve clips both red and green to white; the film curve
     // (the other test, the control) keeps green below red.
     scene.ctx.scene3d.post.tonemap = crate::render::Tonemap::None;
-    scene.frame();
     scene.frame();
     let center = scene.read(icon)[(ICON / 2 * ICON + ICON / 2) as usize];
     assert!(
@@ -264,7 +260,6 @@ fn an_icon_takes_no_shadow_from_the_games_world() {
     let top = |t: &[[f32; 4]]| t[(ICON / 2 * ICON + ICON / 2) as usize][0];
     let open = scene.ctx.gfx.render_icon(cube, &from_above);
     scene.frame();
-    scene.frame();
     let (icon_open, world_open) = (top(&scene.read(open)), top(&scene.read(seen)));
     assert!(
         icon_open > 0.1 && world_open > 0.1,
@@ -280,7 +275,6 @@ fn an_icon_takes_no_shadow_from_the_games_world() {
         Model::new(roof),
     ));
     let roofed = scene.ctx.gfx.render_icon(cube, &from_above);
-    scene.frame();
     scene.frame();
     // Negative control: the world's cube is in the roof's shadow.
     let world_roofed = top(&scene.read(seen));

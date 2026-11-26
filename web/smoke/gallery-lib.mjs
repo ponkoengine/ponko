@@ -91,3 +91,15 @@ export function selectExamples(gallery, only) {
   if (unknown.length) throw new UsageError(`--only: not in this gallery: ${unknown.join(", ")}`);
   return examples.filter((e) => only.includes(e.example));
 }
+
+/**
+ * A WebGL error the browser logged for the page (`GL_INVALID_OPERATION`,
+ * `GL_INVALID_ENUM`, ..., `GL_OUT_OF_MEMORY`): the call was refused, so a
+ * draw that logs one drew nothing, even when the canvas isn't quite blank.
+ * The message without the context's address, or null for any other line
+ * (the driver's performance notes, "GPU stall due to ReadPixels", are not errors).
+ */
+export function webglErrorOf(text) {
+  const match = /\b(GL_(?:INVALID_[A-Z_]+|OUT_OF_MEMORY)\b.*)$/m.exec(text ?? "");
+  return match ? match[1].trim() : null;
+}
