@@ -375,6 +375,19 @@ impl Storage {
         }
     }
 
+    /// When the file `name` was last written: `None` when it isn't there,
+    /// and on the web (the browser keeps no times). For syncing with a
+    /// cloud copy ([`Steam::sync_cloud`](crate::steam::Steam::sync_cloud)).
+    #[cfg_attr(not(feature = "steam"), allow(dead_code))]
+    pub(crate) fn modified(&self, name: &str) -> Option<std::time::SystemTime> {
+        check_name(name).ok()?;
+        self.queue.wait_for(|n| n == name);
+        match &self.backend {
+            Backend::Folder(dir) => std::fs::metadata(dir.join(name)).and_then(|m| m.modified()).ok(),
+            _ => None,
+        }
+    }
+
     /// Every file's name, in sorted order, including those in folders
     /// (`"saves/slot1.json"`). Backups and unfinished writes aren't listed.
     ///
@@ -833,7 +846,7 @@ impl Drop for Ticket {
 
 /// Checks a file name: relative parts with safe characters, no reserved
 /// suffix.
-fn check_name(name: &str) -> Result<(), Error> {
+pub(crate) fn check_name(name: &str) -> Result<(), Error> {
     let bad = |why: &str| Err(Error::new(ErrorKind::Invalid, format!("file name {name:?} {why}")).with_path(name));
     if name.is_empty() {
         return bad("is empty");

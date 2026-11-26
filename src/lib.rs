@@ -87,7 +87,9 @@
 //!   (VoiceOver), Windows (UI Automation: Narrator, NVDA) and Linux (AT-SPI:
 //!   Orca). On the web it builds and does nothing. Needs `window`.
 //! - `steam`: lockstep and byte messages over Steam's relays and lobbies
-//!   (`Net::steam_host`, `net::SteamClient`); the raw `steamworks` crate is
+//!   (`Net::steam_host`, `net::SteamClient`), and the store's services:
+//!   achievements, stats, cloud saves, rich presence, the overlay and the
+//!   Deck's text input (`steam::Steam`); the raw `steamworks` crate is
 //!   `ponko::net::unstable_steamworks`, outside the versions.
 //! - `bench-internals`: **unstable** benchmark drivers for the engine's own
 //!   benchmark crate. Not part of the API; they change in any release.
@@ -307,6 +309,8 @@ pub mod skeleton2d;
 pub mod spatial;
 mod sprite_material;
 pub mod state;
+#[cfg(feature = "steam")]
+pub mod steam;
 pub mod storage;
 /// Deprecated: [`Job`](crate::streaming::Job) and `CellStreamer` moved to
 /// [`streaming`], next to the asset streaming they work with.

@@ -3,9 +3,10 @@
 > **Maturity: [tested](maturity.md).** Game: Coin Dash in headless Chromium
 > and WebKit; Ember Hop builds for the web. Tests: the browser smoke runs
 > (`web/smoke`). Platforms: the web, through headless Chromium and WebKit.
-> Graphics: WebGL2 in both browsers; WebGPU is tried but verified only by hand
-> on real GPUs. Missing: WebGPU in a recorded run, and Firefox (its headless
-> build has no WebGL2).
+> Graphics: WebGL2 in both browsers; WebGPU and WebGL2 on a real GPU in the
+> local check run's `web-gpu` job (headless Chromium on macOS, Metal).
+> Missing: WebGPU on Windows and Linux GPUs in a recorded run, and Firefox
+> (its headless build has no WebGL2).
 
 The same game code runs in a browser tab. **Try it:** the examples build
 into a gallery (below), with a page for each: what it shows, its controls,
@@ -184,6 +185,60 @@ On a busy machine (load average about 100) the same runs gave 200 and
 browser, faking the failure in the page before the game starts (see the
 [runner's README](../../web/smoke/README.md#webgpu-first)).
 
+### Frame times
+
+The 3D smoke fixture (`web_smoke_3d`: a glTF house, seven spheres with
+different materials, one with a normal map, a ground plane, a sun with
+shadows; about 4,100 triangles at 800 × 600) on each backend, in
+Chromium 156's new headless mode on an Apple M4 Max, on its GPU through
+Metal (WebGL2 through ANGLE's Metal renderer), measured by
+`web/smoke/frame-times.mjs` on 2026-11-26 (revision `9cbc953f`, release
+build). The machine was busy: other builds ran throughout, with a load
+average of 34 to 46 on its 14 cores.
+
+**Method.** A page script notes `performance.now()` each time the fixture
+publishes a new frame count (once per engine frame), on a cross-origin
+isolated page, where that clock has a resolution of a few microseconds. A
+frame time is the gap from one engine frame to the next. Each page load
+waits 120 frames, then times the next 1,000 (600 at the display's rate);
+three loads per backend, one browser. *Uncapped* turns Chromium's vsync
+and frame-rate limit off (`--disable-gpu-vsync --disable-frame-rate-limit`),
+so a frame starts as soon as the last is done: its time is the frame's
+cost. *At the display's rate* keeps the browser's pacing (60 Hz headless).
+The engine's own split (`ctx.perf.frame_stats()`, published by the fixture)
+is read at the end of each load.
+
+| Backend | Pacing | Median frame (ms) | p95 frame (ms) | Engine: systems / drawing (CPU, ms) | GPU (ms) |
+|---|---|---|---|---|---|
+| WebGPU | uncapped | 0.19 (0.19 to 0.20) | 0.66 (0.52 to 0.76) | 0.02 to 0.03 / 0.12 to 0.16 | 0.20 to 0.23 |
+| WebGL2 | uncapped | 1.19 (1.19 to 1.23) | 3.27 (3.25 to 3.28) | 0.05 / 1.44 to 1.47 | not timed |
+| WebGPU | 60 Hz | 16.67 (16.66 to 16.67) | 18.11 (17.87 to 18.17) | 0.10 / 0.33 | 0.97 to 3.16 |
+| WebGL2 | 60 Hz | 16.66 (16.66 to 16.67) | 18.12 (17.99 to 18.13) | 0.10 / 0.56 to 0.60 | not timed |
+
+The first number is the median over the three loads, the range the
+lowest and highest load. What they say:
+
+- Both backends hold 60 Hz with a wide margin: at the display's rate the
+  median frame is 16.7 ms and the slowest of 3,600 is 18.8 ms, the
+  browser's own pacing jitter.
+- Uncapped, a WebGL2 frame costs about six times a WebGPU frame, and
+  nearly all of it is the engine's drawing on the CPU (1.45 ms against
+  0.14): WebGL2 is many small GL calls from WebAssembly into the browser,
+  and the work of translating them, where WebGPU records a few command
+  buffers. The scene is small, so this is the per-frame overhead of each
+  path more than the cost of drawing; a heavier scene adds GPU time on
+  both.
+- WebGPU's GPU time comes from timestamp queries (the browser exposes
+  them; WebGL2 can't time the GPU). Paced at 60 Hz it reads higher (about
+  1 ms, once 3 ms) than uncapped (0.2 ms): the GPU clocks down between
+  frames when it has little to do, so this is not extra work.
+
+`node web/smoke/frame-times.mjs` repeats the measurement (`--pacing display`
+for the paced rows; the [runner's
+README](../../web/smoke/README.md#frame-times) has the options); the local
+check run's `web-gpu` job runs it once per backend. Record it again for each
+release, with the machine's load. Firefox and Safari are not measured here.
+
 ## What's different in a browser
 
 **Assets are fetched before setup.** There's no file system, so the build
@@ -273,9 +328,12 @@ build joins with `Net::join_web` or `NetMessages::join_web`, and the host
 takes browser players with `accept_web` next to its desktop players (see
 [In the browser](networking.md#in-the-browser)).
 
-**Not available on the web:** the [control endpoint](control.md) and
-[MCP](agents.md) tools, [hot reload](data-files.md) of files, [hot
-patching](hot-patching.md) of code, and anything that writes files
+**Developer control.** An opt-in build can connect to a local bridge so
+MCP tools can inspect the game, step it and capture its canvas. See
+[Controlling a browser tab](control.md#controlling-a-browser-tab).
+
+**Not available on the web:** [hot reload](data-files.md) of files, [hot
+patching](hot-patching.md) of code, and APIs that write native files
 (`ctx.gfx.save_screenshot`, saving the world to a path), and [video
 playback](video.md#in-a-browser) (the page's own `<video>` element plays
 intros instead). The player's own
@@ -411,7 +469,12 @@ the complete-game reference `coin_dash` ([A complete game,
 packaged](packaging.md#the-web-build)) are built and checked there. The
 list of checks runs WebGL2 in all three browsers; WebGPU is tried too, and a
 browser that can't show a WebGPU canvas is reported as unsupported, with the
-reason, never as a pass. The 2D fixture's startup failure cases check both
+reason, never as a pass. Its `web-gpu` job is the gate for WebGPU: on a
+machine with a GPU (a Mac), it runs the 2D and 3D fixtures on WebGPU and the
+3D one on WebGL2 with `--require-gpu`, which fails, instead of reporting,
+when WebGPU is unsupported, when the browser or the engine is on a software
+renderer such as SwiftShader or a fallback adapter, or when the engine fell
+back to WebGL2; then it measures the [frame times](#frame-times). The 2D fixture's startup failure cases check both
 the callback's error and the message shown on the page. Each run leaves a
 report, a trace and a screenshot.
 See its

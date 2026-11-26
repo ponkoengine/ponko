@@ -803,6 +803,7 @@ fn the_guide_tiles_are_solid_only_near_the_player_and_the_car() {
                 Collider::cuboid(vec3(2.0, 1.0, 4.0)),
             ));
             solid_near(ctx, player, car);
+            assert_eq!(ctx.physics3d.collider_streaming(), Some(4));
         });
     let active = seen.take().unwrap();
     // The player's 150 m reaches tiles 0 and 1; the car's 300 m tiles 4 to 7.

@@ -4041,6 +4041,13 @@ static void remaining_bindings() {
         ctx.set_lod_hysteresis(e, 0.1f);
         CHECK(ctx.lod_hysteresis(e) == 0.1f);
         throws_invalid([&] { ctx.set_lod_hysteresis(e, 2.0f); }, "between 0 and 1");
+        // LOD fade time.
+        CHECK(ctx.lod_fade_time(e) == 0.0f);
+        ctx.set_lod_fade_time(e, 0.5f);
+        CHECK(ctx.lod_fade_time(e) == 0.5f);
+        throws_invalid([&] { ctx.set_lod_fade_time(e, -1.0f); }, "0 or more seconds");
+        ctx.set_lod_fade_time(e, 0.0f);
+        CHECK(ctx.lod_fade_time(e) == 0.0f);
 
         // Scene compute passes and target effects.
         auto light = ctx.create_render_target(16, 9);
@@ -4979,6 +4986,16 @@ static void versioned_render_descriptors() {
         CHECK(ctx.post_ex().ssr_thin_objects);
         ctx.set_graphics_quality(ponko::graphics_quality_preset(ponko::quality_level::medium));
         CHECK(!ctx.post_ex().ssr_thin_objects);
+        // Version 4: auto exposure, off by default; a min above its max is refused.
+        p = ctx.post_ex();
+        CHECK(!p.auto_exposure && p.auto_exposure_brighten_speed == 1 && p.auto_exposure_darken_speed == 3);
+        p.auto_exposure = true;
+        p.auto_exposure_center_weight = 1;
+        ctx.set_post(p);
+        CHECK(ctx.post_ex().auto_exposure && ctx.post_ex().auto_exposure_center_weight == 1);
+        p.auto_exposure_max = -5;
+        throws_kind([&] { ctx.set_post(p); }, PONKO_ERROR_INVALID);
+        CHECK(ctx.post_ex().auto_exposure_max == 4);
 
         auto e = ctx.world().spawn(ponko::transform3d_at({0, 1, 0}));
         ctx.set_particle_emitter3d(e, ponko::particle_settings().rate(40).softness(1.5f));
@@ -5863,8 +5880,25 @@ static void rollback_two_peers() {
     throws([&] { other.restore_snapshot(snapshot); });
 }
 
+// Steam's store-side services before steam::start: every call does nothing.
+static void steam_services_without_steam() {
+    CHECK(!ponko::steam::running());
+    ponko::steam::update();
+    CHECK(!ponko::steam::unlock_achievement("FIRST_WIN") && !ponko::steam::achievement("FIRST_WIN"));
+    CHECK(!ponko::steam::set_stat("wins", std::int32_t{1}) && !ponko::steam::stat_i32("wins"));
+    CHECK(!ponko::steam::set_stat("distance", 1.5f) && !ponko::steam::stat_f32("distance"));
+    CHECK(!ponko::steam::store_stats() && !ponko::steam::set_rich_presence("status", "Menu"));
+    ponko::steam::clear_rich_presence();
+    CHECK(!ponko::steam::overlay_open() && !ponko::steam::is_steam_deck() && !ponko::steam::is_big_picture());
+    CHECK(!ponko::steam::show_text_input(ponko::steam::text_mode::single_line, "Name", "", 16));
+    CHECK(ponko::steam::take_text_input().first == PONKO_STEAM_TEXT_NONE);
+    CHECK(!ponko::steam::show_floating_keyboard(ponko::steam::text_mode::numeric, 0, 0, 200, 30));
+    CHECK(!ponko::steam::cloud_enabled());
+}
+
 int main() {
     rollback_two_peers();
+    steam_services_without_steam();
     hdr_output();
     controllers();
     key_labels();

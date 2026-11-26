@@ -3,8 +3,10 @@
 > **Maturity: not a feature.** Benchmarks and how they were measured; the
 > features measured carry their own levels.
 
-Numbers from a MacBook Pro (M4 Max), release builds. Reproduce them yourself;
-every number here has a command next to it.
+Numbers from a MacBook Pro (M4 Max), release builds, unless a section names
+another machine (the [scoreboard](#ponko-vs-bevy-the-scoreboard) also has a
+Windows desktop with a discrete GPU). Reproduce them yourself; every number
+here has a command next to it.
 
 The ECS, simulation and example numbers in this chapter were measured again
 on 2026-11-20 on an idle machine, at revision `e60e15a8`, one benchmark at a
@@ -896,6 +898,10 @@ there and printed in every result. `bench/compare/README.md` names the Bevy
 API each workload uses (its recommended fast path, with links) and lists
 everything that is and is not the same on both sides.
 
+Each machine has its own table: this one, and
+[a Windows desktop](#windows-desktop-ryzen-5-3600-radeon-rx-vega-directx-12-and-vulkan)
+on DirectX 12 and Vulkan below.
+
 **Machine and build.** MacBook Pro, Apple M4 Max (10 performance + 4
 efficiency cores, 36 GB), macOS 27.2.1, rustc 1.100.0, Ponko at
 `5e5af4ee` plus this change, Bevy 0.20.1 (bevy_rapier2d 0.37.0, rapier
@@ -952,7 +958,9 @@ How to read it:
   first launch after a build took Ponko 487 ms. Bevy exits with
   `process::exit` right after its frame. Ponko returns from `main` and drops
   its world.
-- These are specific workloads on one machine. They are not a ranking of
+- These are specific workloads on two machines so far (this one and
+  [a Windows desktop](#windows-desktop-ryzen-5-3600-radeon-rx-vega-directx-12-and-vulkan)).
+  They are not a ranking of
   the engines (see [the engine comparison](comparison.md)).
 
 **Builds and sizes.** A hello world (an empty window) and a small game (Ponko's
@@ -986,6 +994,100 @@ features it doesn't use (the inspector, audio, gamepads). The
 The scoreboard compares the Rust APIs. The C and C++ API calls the same
 engine, but it has no rows here: a C or C++ program of these workloads has
 not been written yet.
+
+### Windows desktop: Ryzen 5 3600, Radeon RX Vega (DirectX 12 and Vulkan)
+
+The first table again, run-time rows only, on a second machine: a desktop
+with a mid-range discrete GPU. The tuned table and the build rows were not run here.
+
+```sh
+python bench/compare/scoreboard.py --runtime --backend dx12 --machine windows-ryzen5-3600-rx-vega-dx12
+python bench/compare/scoreboard.py --runtime --backend vulkan --machine windows-ryzen5-3600-rx-vega-vulkan
+```
+
+**Machine and build.** AMD Ryzen 5 3600 (6 cores, 12 threads), 16 GB,
+Radeon RX Vega (AMD driver 31.0.12027.9001, which reports itself on Vulkan as
+22.20.27.09), Windows 11 IoT Enterprise LTSC 2024 (build 26100), mains power,
+rustc 1.100.0, Bevy 0.20.1. Ponko at `c9e3c526`. The only uncommitted change
+was the scoreboard script's handling of failed runs, which changes no
+workload. Release builds with Cargo's default release profile on both sides.
+`--backend` sets `WGPU_BACKEND` for both engines, and the adapter each program
+reported is in the result files (`bench/compare/results/windows-ryzen5-3600-rx-vega-dx12/`
+and `-vulkan/`). Measured 2026-11-26, three runs per engine, one process at a
+time.
+
+**A shared machine.** Another job was building and running GPU tests on this
+machine on the same day. None was running when each table started. The load
+figure (busy logical processors, averaged over 5 seconds, out of 12) stayed
+between 0.04 and 3.07 during the runs, and one run (Bevy's headless sim on
+Vulkan, 1.26 ms against 0.75 and 0.94 ms) was taken above 3. The system disk is a
+hard disk: that slows builds and the first launch after a build, not the
+frame times below.
+
+**DirectX 12.** The median of three runs, the range in brackets.
+
+| Workload | Ponko (ms) | Bevy (ms) | Bevy / Ponko | |
+|---|---:|---:|---:|---|
+| ECS: spawn and despawn 100k in a world of 1M | 4.16 (4.13–4.16) | 10.3 (10.3–10.4) | 2.5× | Ponko faster |
+| ECS: iterate 1M (one archetype) | 0.522 (0.513–0.607) | 1.19 (1.12–1.24) | 2.3× | Ponko faster |
+| ECS: iterate 16k fragmented over 1,024 archetypes | 0.019 (0.019–0.023) | 0.043 (0.043–0.049) | 2.2× | Ponko faster |
+| ECS: add and remove a component, 1M entities | 88.4 (86.6–95.4) | 167.9 (167.2–170.8) | 1.9× | Ponko faster |
+| ECS: parallel iterate 1M (all cores) | 4.28 (4.20–4.28) | 7.44 (6.33–7.48) | 1.7× | Ponko faster |
+| ECS: commands, 100k spawns and despawns in a world of 1M | 5.51 (5.42–5.51) | 14.2 (13.3–15.6) | 2.6× | Ponko faster |
+| Sprites: 100k moving, one frame drawn | 2.91 (2.76–3.03) | 29.2 (28.7–30.0) | 10× | Ponko faster |
+| Sprites: 100k moving, a different tint each | 2.84 (2.84–2.94) | failed, 3 of 3 runs | – | **Bevy failed** |
+| Sprites: 1M moving, one frame drawn | 27.9 (27.1–28.1) | 244.6 (243.0–246.0) | 8.8× | Ponko faster |
+| 3D: 100k moving meshes (16 kinds) with a 4-cascade sun shadow | 15.6 (15.4–15.9) | 39.7 (39.5–40.1) | 2.5× | Ponko faster |
+| 3D: 1,000 skinned characters (16 joints) with a sun shadow | 9.65 (9.57–9.74) | 15.5 (15.3–15.7) | 1.6× | Ponko faster |
+| 2D physics: 10k boxes falling into a pile, one tick | 26.2 (25.4–26.5) | 34.3 (32.8–35.1) | 1.3× | Ponko faster |
+| UI: 10k nodes, still, one frame drawn | 5.34 (4.47–6.16) | 12.7 (12.7–12.9) | 2.4× | Ponko faster |
+| UI: 10k nodes, all recolored every frame | 7.40 (7.14–8.14) | 21.8 (21.2–22.0) | 2.9× | Ponko faster |
+| Headless sim: 1M entities, one tick | 0.619 (0.503–0.632) | 1.24 (1.15–1.32) | 2.0× | Ponko faster |
+| Time to first frame (process start to first frame done on the GPU, exit included) | 260.7 (249.6–1338.1) | 1356.3 (1336.1–1496.2) | 5.2× | within noise |
+
+**Vulkan.**
+
+| Workload | Ponko (ms) | Bevy (ms) | Bevy / Ponko | |
+|---|---:|---:|---:|---|
+| ECS: spawn and despawn 100k in a world of 1M | 4.20 (4.11–4.21) | 10.5 (10.3–10.7) | 2.5× | Ponko faster |
+| ECS: iterate 1M (one archetype) | 0.426 (0.368–0.516) | 0.962 (0.827–0.981) | 2.3× | Ponko faster |
+| ECS: iterate 16k fragmented over 1,024 archetypes | 0.019 (0.019–0.019) | 0.043 (0.043–0.047) | 2.3× | Ponko faster |
+| ECS: add and remove a component, 1M entities | 87.5 (87.1–87.6) | 164.4 (162.3–165.8) | 1.9× | Ponko faster |
+| ECS: parallel iterate 1M (all cores) | 3.98 (3.94–4.26) | 6.41 (4.50–7.09) | 1.6× | Ponko faster |
+| ECS: commands, 100k spawns and despawns in a world of 1M | 5.80 (5.39–5.88) | 13.5 (13.2–13.9) | 2.3× | Ponko faster |
+| Sprites: 100k moving, one frame drawn | 2.48 (2.47–2.64) | 30.2 (30.2–33.5) | 12× | Ponko faster |
+| Sprites: 100k moving, a different tint each | 2.53 (2.48–3.63) | 90.3 (90.2–93.0) | 36× | Ponko faster |
+| Sprites: 1M moving, one frame drawn | 29.1 (29.0–29.7) | 265.0 (264.5–289.0) | 9.1× | Ponko faster |
+| 3D: 100k moving meshes (16 kinds) with a 4-cascade sun shadow | 14.8 (14.5–14.9) | 31.2 (30.9–31.6) | 2.1× | Ponko faster |
+| 3D: 1,000 skinned characters (16 joints) with a sun shadow | 8.72 (8.63–8.73) | 8.35 (8.32–8.55) | 0.96× | **Bevy faster** |
+| 2D physics: 10k boxes falling into a pile, one tick | 25.6 (24.7–26.1) | 31.5 (31.3–33.0) | 1.2× | Ponko faster |
+| UI: 10k nodes, still, one frame drawn | 4.35 (4.10–4.81) | 12.1 (12.0–12.2) | 2.8× | Ponko faster |
+| UI: 10k nodes, all recolored every frame | 7.05 (6.72–7.25) | 20.9 (20.7–21.6) | 3.0× | Ponko faster |
+| Headless sim: 1M entities, one tick | 0.357 (0.354–0.396) | 0.935 (0.752–1.256) | 2.6× | Ponko faster |
+| Time to first frame (process start to first frame done on the GPU, exit included) | 187.8 (184.1–189.5) | 329.1 (324.2–334.2) | 1.8× | Ponko faster |
+
+How to read it:
+
+- **Bevy is faster at skinned characters on Vulkan**: 8.35 ms against
+  8.72 ms, and the ranges don't overlap. On DirectX 12 Ponko is faster
+  (9.65 ms against 15.5 ms). On the M4 Max Bevy was faster too. The
+  workload is tracked in #488.
+- **Bevy failed the tinted sprites on DirectX 12.** All three runs ended
+  with `DeviceLost: Out of memory` from Bevy's renderer: a material for each
+  of 100k sprites. The same program runs on Vulkan (90.3 ms).
+- **DirectX 12 against Vulkan, Ponko.** Most GPU rows are 5 to 23 % slower
+  on DirectX 12 (100k moving meshes 15.6 against 14.8 ms, skinned characters
+  9.65 against 8.72, UI 5.34 against 4.35), and 1M sprites is 4 % faster
+  (27.9 against 29.1 ms). None is far slower on one backend. The rows without a GPU move
+  between the tables by up to about 70 % (the headless sim, 0.62 against
+  0.36 ms) on a shared machine, so read single CPU rows with that spread in
+  mind. One DirectX 12 first frame took 1.34 s, against 0.25 and 0.26 s for
+  the other two, and Bevy's first frame takes 1.3 to 1.5 s on DirectX 12
+  against 0.33 s on Vulkan. Shader compilation on DirectX 12 is the likely
+  cost, but this run doesn't show it.
+- **Compared with the M4 Max**, every frame is slower here, and the ratios
+  between the engines are similar. 100k tinted sprites: 36× on Vulkan, 41× on
+  the M4 Max. 1M sprites: 9× against 13×. 2D physics: 1.2× against 1.3×.
 
 ### Both engines tuned
 

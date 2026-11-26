@@ -199,7 +199,33 @@ fn a_river_current_follows_its_flow_map() {
         assert!(bank.z < 0.5, "slow at the bank: {bank}");
         assert_eq!(water.height_at(vec2(10.0, 3.0), 5.0), 2.0, "a river has no waves");
         assert!(!water.contains(vec2(0.0, 0.0)));
+        // The same current, asked of the desc before anything is spawned (a
+        // boat placed by a level tool), and the depth test a swimmer makes.
+        assert!((water.desc().flow_at(vec2(10.0, 0.0)).y - middle.z).abs() < 1e-4);
+        assert_eq!(water.desc().flow_map.as_ref().unwrap().max_speed(), 3.0);
+        assert!(water.is_under(vec3(10.0, 1.5, 0.0), 0.0));
+        assert!(!water.is_under(vec3(10.0, 2.5, 0.0), 0.0));
     });
+}
+
+#[test]
+fn a_floating_point_finds_the_water_above_it_through_the_sway() {
+    // Deep water: ω² = g k.
+    let wave = Wave::new(Vec2::X, 20.0, 0.6).with_phase(1.0);
+    let k = wave.wave_number();
+    assert!((k - std::f32::consts::TAU / 20.0).abs() < 1e-6);
+    assert!((wave.angular_speed().powi(2) - ponko::water::WAVE_GRAVITY * k).abs() < 1e-4);
+    let sea = Waves::new(&[wave, Wave::new(vec2(0.3, 1.0), 9.0, 0.3)]);
+    // The surface sways sideways at most this far: a float looks that far around.
+    assert!(sea.max_sway() > 0.0 && sea.max_sway() < 2.0, "{}", sea.max_sway());
+    for i in 0..20 {
+        let at = vec2(i as f32 * 1.7 - 15.0, i as f32 * 0.9);
+        let t = i as f32 * 0.3;
+        let rest = sea.rest_point(at, t);
+        let moved = sea.displace(rest, t);
+        assert!((vec2(moved.x, moved.z) - at).length() < 1e-3, "at {at}: {moved}");
+        assert!((rest - at).length() <= sea.max_sway() + 1e-4);
+    }
 }
 
 #[test]

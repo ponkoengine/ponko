@@ -16,14 +16,22 @@ struct Post {
     split_highlights: vec4<f32>, // highlights' tint, 1 on (0 off)
     dof: vec4<f32>,     // depth of field: focus distance, sharp range, largest blur (0 off)
     camera: vec4<f32>,  // near and far planes; z: HDR output's headroom over SDR white
+    meter: vec4<f32>,   // auto exposure: min, max (stops), compensation, center weight
+    adapt: vec4<f32>,   // auto exposure: most stops to brighten, to darken this frame
+    auto_mode: vec4<u32>, // auto exposure: on, jump to the target this frame
 };
 
 @group(0) @binding(0) var source: texture_2d<f32>;
 @group(0) @binding(1) var linear_clamp: sampler;
 @group(0) @binding(2) var<uniform> post: Post;
 @group(0) @binding(3) var bloom: texture_2d<f32>;
+// The lookup table; the auto exposure meter reads its mask in this slot.
 @group(1) @binding(0) var lut: texture_2d<f32>;
 @group(1) @binding(1) var lut_sampler: sampler;
+// Auto exposure's adapted exposure, in stops (one texel, the sum of its red
+// and green: see `exposure_texel`). The adaptation pass reads last frame's
+// here; bloom and tone mapping this frame's.
+@group(3) @binding(0) var exposure_state: texture_2d<f32>;
 
 struct Full {
     @builtin(position) at: vec4<f32>,
@@ -82,10 +90,34 @@ fn downsample13(uv: vec2<f32>, karis: bool) -> vec3<f32> {
     return sum / total;
 }
 
+// The exposure multiplier: the fixed exposure, times the adapted one with
+// auto exposure on.
+fn exposure() -> f32 {
+    if post.auto_mode.x == 0u {
+        return post.grade.x;
+    }
+    return post.grade.x * exp2(adapted());
+}
+
+// The adapted exposure in `exposure_state`, in stops.
+fn adapted() -> f32 {
+    let s = textureLoad(exposure_state, vec2<i32>(0, 0), 0);
+    return s.r + s.g;
+}
+
+// Stops as a texel of the 16-bit float image that holds them: rounded to
+// 1/64 of a stop in red (exact in 16 bits up to 32 stops), what that left
+// over in green (to about 1e-5 stops), so a slow adaptation's small steps
+// aren't lost. Any device that draws the 3D frame renders to this format.
+fn exposure_texel(stops: f32) -> vec4<f32> {
+    let high = round(stops * 64.0) / 64.0;
+    return vec4<f32>(high, stops - high, 0.0, 1.0);
+}
+
 // First step: only light above the threshold, with a soft knee.
 @fragment
 fn fs_bloom_prefilter(in: Full) -> @location(0) vec4<f32> {
-    let c = downsample13(in.uv, true) * post.grade.x;
+    let c = downsample13(in.uv, true) * exposure();
     let threshold = post.bloom.x;
     let knee = max(threshold * post.bloom.y, 1e-4);
     let brightness = max(c.r, max(c.g, c.b));
@@ -114,6 +146,84 @@ fn fs_bloom_up(in: Full) -> @location(0) vec4<f32> {
     sum += textureSample(source, linear_clamp, in.uv + t * vec2<f32>(-1.0, 1.0)).rgb;
     sum += textureSample(source, linear_clamp, in.uv + t * vec2<f32>(1.0, 1.0)).rgb;
     return vec4<f32>(sum / 16.0, 1.0);
+}
+
+// ---- Auto exposure ----
+// A meter of the frame's log luminance, reduced to one value, then the
+// exposure adapted toward what brings it to middle grey. Each image of the
+// meter holds (weighted log luminance, weight), each texel the sum over the
+// pixels it covers divided by the same constant for every texel of its
+// image, so the next image's sums weigh partial edge texels rightly and the
+// ratio of the last one's channels is the weighted mean.
+
+// How much a point of the picture counts: toward the middle by the center
+// weight, and by the mask's red channel (white without a mask).
+fn meter_weight(uv: vec2<f32>) -> f32 {
+    let d = length(uv - 0.5) * 1.41421356;
+    let center = 1.0 - post.meter.w * smoothstep(0.0, 1.0, d);
+    return center * textureSampleLevel(lut, lut_sampler, uv, 0.0).r;
+}
+
+// The first image: each texel covers 8x8 pixels of the frame, read as 16
+// bilinear taps at the middles of 2x2 blocks. Only what the 3D frame drew
+// counts (alpha 1); the background color is left as it is by the post pass.
+@fragment
+fn fs_meter(in: Full) -> @location(0) vec4<f32> {
+    let size = vec2<f32>(textureDimensions(source));
+    let base = floor(in.at.xy) * 8.0;
+    let weight = meter_weight((base + 4.0) / size);
+    var sum = vec2<f32>(0.0);
+    for (var j = 0; j < 4; j++) {
+        for (var i = 0; i < 4; i++) {
+            let texel = base + vec2<f32>(f32(i), f32(j)) * 2.0;
+            if texel.x < size.x && texel.y < size.y {
+                let c = textureSampleLevel(source, linear_clamp, (texel + 1.0) / size, 0.0);
+                let l = clamp(log2(max(luma(c.rgb), 1e-6)), -16.0, 16.0);
+                let w = c.a * weight;
+                sum += vec2<f32>(w * l, w);
+            }
+        }
+    }
+    return vec4<f32>(sum / 16.0, 0.0, 1.0);
+}
+
+// The next images: each texel sums 4x4 of the image before.
+@fragment
+fn fs_meter_reduce(in: Full) -> @location(0) vec4<f32> {
+    let size = vec2<i32>(textureDimensions(source));
+    let base = vec2<i32>(in.at.xy) * 4;
+    var sum = vec2<f32>(0.0);
+    for (var j = 0; j < 4; j++) {
+        for (var i = 0; i < 4; i++) {
+            let p = base + vec2<i32>(i, j);
+            if p.x < size.x && p.y < size.y {
+                sum += textureLoad(source, p, 0).rg;
+            }
+        }
+    }
+    return vec4<f32>(sum / 16.0, 0.0, 1.0);
+}
+
+// The adapted exposure: last frame's (in `exposure_state`) moved toward
+// the target by at most this frame's steps; the target at once on a jump.
+// A frame with nothing metered keeps it.
+@fragment
+fn fs_adapt(in: Full) -> @location(0) vec4<f32> {
+    let m = textureLoad(source, vec2<i32>(0, 0), 0).rg;
+    let last = adapted();
+    var goal = last;
+    if m.y > 1e-7 {
+        let metered = clamp(m.x / m.y, -16.0, 16.0);
+        goal = clamp(log2(0.18) - metered + post.meter.z, post.meter.x, post.meter.y);
+    } else if post.auto_mode.y != 0u {
+        goal = clamp(0.0, post.meter.x, post.meter.y);
+    }
+    if post.auto_mode.y != 0u {
+        return exposure_texel(goal);
+    }
+    let held = clamp(last, post.meter.x, post.meter.y);
+    let step = clamp(goal - held, -post.adapt.y, post.adapt.x);
+    return exposure_texel(held + step);
 }
 
 // ---- Tone mapping ----
@@ -300,7 +410,7 @@ fn fs_tonemap(in: Full) -> @location(0) vec4<f32> {
     }
     // Alpha is 1 where models were drawn and 0 on the background, which
     // keeps the game's clear color as it is (averaged at the edges).
-    var c = texel.rgb * post.grade.x;
+    var c = texel.rgb * exposure();
     if post.mode.z != 0u {
         c += textureSampleLevel(bloom, linear_clamp, bloom_uv, 0.0).rgb * post.grade.y;
     }

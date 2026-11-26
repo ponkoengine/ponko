@@ -14,7 +14,7 @@ are written in `STABILITY.md`; here they are again:
 |---|---|---|
 | **proven** | A reference game uses it, and the list of checks (`scripts/checks.yml`) plays that game on Linux, macOS and Windows: today Coin Dash and Ember Hop, from their packages, headless and in a window. The feature also has automated tests of its own there. | Everything the versions promise, and the reference games' runs guard it: a regression that breaks them shows up in the list of checks before a release. |
 | **tested** | Automated tests in the list of checks (headless, or the offscreen GPU tests) cover it, on at least one platform, but no reference game played on all three systems rests on it yet. | Everything the versions promise. What is missing is evidence, not a promise: it may fail in a game, on a platform or a GPU its tests don't reach, and such a failure is a bug. |
-| **experimental** | Its chapter calls it a prototype, a report or experimental, or the part that matters was never checked (on a device, a display, in a browser), whatever tests it has. | Less: it may change or be removed in any minor release, without a deprecated step first. Rely on it only with the gaps its chapter names in mind. |
+| **experimental** | Its chapter calls it a prototype, a report or experimental, or the part that matters was never checked (on a device, a display, in a browser), whatever tests it has. | Less: its public items are outside the versions' promise (STABILITY.md, "Unstable"): they may change or be removed in any release, without a deprecated step first. Rely on it only with the gaps its chapter names in mind. |
 
 - A level is assigned from what the repository records: the tests in the list
   of checks, which reference games use the feature, and the platforms and
@@ -29,7 +29,7 @@ are written in `STABILITY.md`; here they are again:
   `python3 scripts/maturity.py` fails when a chapter or a top-level module
   has no level, and regenerates the list and the module docs (`--write`).
 
-Chapters: 21 proven, 60 tested, 5 experimental.
+Chapters: 21 proven, 62 tested, 5 experimental.
 
 ## Chapters
 
@@ -73,6 +73,7 @@ Chapters: 21 proven, 60 tested, 5 experimental.
 | [Dedicated servers](servers.md) | **tested** | none | a reference game and a deployed server |
 | [Lobbies, matchmaking and relays](lobby.md) | **tested** | none | a reference game and a public deployment |
 | [Peer to peer over WebRTC](webrtc.md) | **experimental** | none | the browser side never ran in a browser, and no real NAT, public STUN or TURN server was used (the chapter's "Not checked") |
+| [Putting a game online](online.md) | **tested** | none | a reference game and a public deployment |
 | [Drawing](drawing.md) | **proven** | Coin Dash and Ember Hop, packaged and played on Linux, macOS and Windows | — |
 | [Camera, text and UI](camera-ui.md) | **proven** | Coin Dash and Ember Hop, packaged and played on Linux, macOS and Windows (Ember Hop's following camera, both games' text) | — |
 | [Several cameras: split screen and minimaps](viewports.md) | **tested** | none | a reference game that uses it |
@@ -105,11 +106,12 @@ Chapters: 21 proven, 60 tested, 5 experimental.
 | [Headless runs and testing](headless.md) | **proven** | Coin Dash and Ember Hop, packaged and played on Linux, macOS and Windows, headless from their packages | — |
 | [When something fails: reading the message](errors.md) | **tested** | none | a reference game that uses it |
 | [A complete game, packaged](packaging.md) | **proven** | Coin Dash and Ember Hop, packaged and played on Linux, macOS and Windows; Shard Grove packages, but its package is not played | — |
+| [Shipping on Steam](steam.md) | **tested** | none | a recorded run against a real Steam client, and a released game that uses it |
 | [Crash reports](crash-reports.md) | **tested** | none | a reference game that uses it |
 | [Ember Hop: a platformer, start to finish](ember-hop.md) | **proven** | Ember Hop itself, packaged and played on Linux, macOS and Windows | — |
 | [Shard Grove: a 3D game, start to finish](shard-grove.md) | **tested** | Shard Grove itself, played headless | its package played on each OS |
 | [Legions: 100,000 units that replay bit for bit](legions.md) | **tested** | Legions, a showcase rather than a reference game | a reference game that uses it |
-| [Web builds: games in the browser](web.md) | **tested** | Coin Dash in headless Chromium and WebKit; Ember Hop builds for the web | WebGPU in a recorded run, and Firefox (its headless build has no WebGL2) |
+| [Web builds: games in the browser](web.md) | **tested** | Coin Dash in headless Chromium and WebKit; Ember Hop builds for the web | WebGPU on Windows and Linux GPUs in a recorded run, and Firefox (its headless build has no WebGL2) |
 | [Threads on the web](web-threads.md) | **experimental** | none | the chapter calls it experimental; the thread-heaps build has not run in a browser since its last fix |
 | [C and C++](c-cpp.md) | **tested** | none | a reference game written in C or C++ |
 | [Reflection: components as JSON](reflection.md) | **tested** | none | a reference game that uses it |
@@ -171,6 +173,7 @@ The level each top-level module of `ponko` gives in its rustdoc.
 | `ponko::skeleton2d` | **tested** | [2D skeletons: bones, skinned sprites and blending](skeleton2d.md) |
 | `ponko::spatial` | **tested** | [Spatial queries](spatial.md) |
 | `ponko::state` | **proven** | [Game states: menus, loading, playing, paused](states.md) |
+| `ponko::steam` | **tested** | [Shipping on Steam](steam.md) |
 | `ponko::storage` | **proven** | [Saves and settings](storage.md) |
 | `ponko::streaming` | **tested** | [Streaming: memory budgets and loading without waiting](streaming.md) |
 | `ponko::system_view` | **tested** | [Declared system access](system-access.md) |

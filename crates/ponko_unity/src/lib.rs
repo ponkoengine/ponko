@@ -23,6 +23,7 @@ mod builtin;
 mod fbx;
 mod glb;
 mod hierarchy;
+mod humanoid;
 mod import;
 mod material;
 mod mesh;
@@ -33,6 +34,7 @@ mod value;
 
 pub use animation::AnimationClip;
 pub use hierarchy::{GameObject, Hierarchy};
+pub use humanoid::HumanoidAvatar;
 pub use import::{Importer, Report};
 pub use material::{Surface, TextureProperty, UnityMaterial};
 pub use mesh::{BlendShape, Channel, MeshSkin, SkinAnimation, SkinNode, UnityMesh, VertexFormat};

@@ -23,7 +23,7 @@ use ponko::render::{
 };
 #[allow(unused_imports)]
 #[cfg(feature = "3d")]
-use ponko::render::{DepthOfField, PostVolume};
+use ponko::render::{AutoExposure, DepthOfField, PostVolume};
 #[allow(unused_imports)]
 use ponko::render::{GpuFeature, GpuTier};
 #[allow(unused_imports)]
@@ -430,6 +430,22 @@ fn close_up(ctx: &mut Ctx, speaker: Vec3) {
 }
 // ANCHOR_END: depth_of_field
 
+// ANCHOR: auto_exposure
+/// The exposure follows the scene: a dark cave brightens over a few
+/// seconds, the sun outside darkens it faster.
+fn eye_adaptation(ctx: &mut Ctx) {
+    ctx.scene3d.post.auto_exposure = AutoExposure {
+        enabled: true,
+        min: -2.0,           // stops: at most 4x darker than without it...
+        max: 3.0,            // ...and 8x brighter
+        compensation: 0.5,   // a little brighter than middle grey
+        brighten_speed: 1.0, // stops a second
+        darken_speed: 3.0,
+        ..Default::default()
+    };
+}
+// ANCHOR_END: auto_exposure
+
 // ANCHOR: post_volumes
 /// The looks of a level: outdoors everywhere, a cave and a sunset garden.
 struct Looks {
@@ -478,6 +494,19 @@ fn split_toning_and_depth_of_field_stay_as_set() {
         assert_eq!(dof.focus_distance, 3.0);
         assert_eq!(dof.blur_at(3.4), 0.0, "the speaker is sharp");
         assert_eq!(dof.blur_at(30.0), 0.015, "the background is not");
+    });
+}
+
+#[test]
+fn auto_exposure_stays_as_set() {
+    Game::new("t", 1, 1).run_headless(1, |ctx| {
+        assert!(!ctx.scene3d.post.auto_exposure.enabled, "off by default");
+        eye_adaptation(ctx);
+        let auto = ctx.scene3d.post.auto_exposure;
+        assert!(auto.enabled);
+        assert_eq!((auto.min, auto.max, auto.center_weight), (-2.0, 3.0, 0.5));
+        assert_eq!(auto.target(0.18), 0.5, "middle grey, half a stop brighter");
+        assert_eq!(auto.target(100.0), -2.0, "held at min");
     });
 }
 
@@ -1887,6 +1916,24 @@ fn lod_hysteresis_is_a_scene_component() {
         let e = ctx.world.spawn((Transform::default(),));
         ctx.world.set_json(e, "LodHysteresis", serde_json::json!(0.1)).unwrap();
         assert_eq!(ctx.world.get::<LodHysteresis>(e), Some(&LodHysteresis(0.1)));
+    });
+}
+
+/// What the Unity importer writes for an animated cross-fade.
+#[test]
+fn lod_fade_time_is_a_scene_component() {
+    Game::new("t", 1, 1).run_headless(0, |ctx| {
+        let e = ctx.world.spawn((Transform::default(),));
+        ctx.world.set_json(e, "LodFadeTime", serde_json::json!(0.5)).unwrap();
+        assert_eq!(
+            ctx.world.get::<ponko::render::LodFadeTime>(e),
+            Some(&ponko::render::LodFadeTime(0.5))
+        );
+        let saved = ctx.world.save();
+        ctx.world.clear();
+        ctx.world.load(&saved).unwrap();
+        let back = ctx.world.query::<&ponko::render::LodFadeTime>().iter().next().copied();
+        assert_eq!(back, Some(ponko::render::LodFadeTime(0.5)));
     });
 }
 
