@@ -349,6 +349,14 @@ fn agents_drive_several_games_through_mcp() {
         stats["fields"]["Health.current"],
         json!({ "count": 2, "min": 2.0, "max": 6.0, "mean": 4.0 })
     );
+    // Without fields: only how many match.
+    let counted = agent
+        .tool(
+            "entity_stats",
+            json!({ "instance": "alpha", "with": ["Health"], "where": ["Health.current < 4"] }),
+        )
+        .unwrap();
+    assert_eq!(counted, json!({ "entities": 1, "fields": {} }));
     let err = agent
         .tool(
             "entity_stats",

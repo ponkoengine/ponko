@@ -9,6 +9,8 @@
 //!                                       one task for a real agent: an MCP
 //!                                       server over stdio, with every
 //!                                       ponko-mcp tool and `submit_task`
+//!   agent_suite scores FILE...          a Markdown table of `mcp` result
+//!                                       files, for a pull request
 //!
 //! `replay` exits 1 when a solution doesn't score full marks or a control
 //! isn't caught; `cargo test -p ponko_mcp --test agent_suite` runs the same
@@ -31,7 +33,7 @@ use std::process::ExitCode;
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage: agent_suite list | goal TASK | replay [TASK...] | mcp TASK [--dir DIR] [--out FILE] [--agent NAME]"
+        "usage: agent_suite list | goal TASK | replay [TASK...] | mcp TASK [--dir DIR] [--out FILE] [--agent NAME] | scores FILE..."
     );
     ExitCode::from(2)
 }
@@ -54,6 +56,7 @@ fn main() -> ExitCode {
             None => unknown(id),
         },
         ["replay", ids @ ..] => replay(ids),
+        ["scores", files @ ..] if !files.is_empty() => scores(files),
         ["host", id] => match suite::task(id) {
             Some(t) => {
                 suite::run_game(t, None);
@@ -125,6 +128,45 @@ fn replay(ids: &[&str]) -> ExitCode {
         .iter()
         .all(|r| r.solution.solved() && r.controls_caught() == r.controls.len());
     if ok { ExitCode::SUCCESS } else { ExitCode::FAILURE }
+}
+
+/// The result files of real-agent runs as one Markdown table.
+fn scores(files: &[&str]) -> ExitCode {
+    println!("| Task | Agent | Solved | Checks | Tool calls | Tool errors | Submissions | Seconds |");
+    println!("|---|---|---|---|---|---|---|---|");
+    let (mut solved, mut runs) = (0, 0);
+    for file in files {
+        let result: Value = match std::fs::read_to_string(file)
+            .map_err(|e| e.to_string())
+            .and_then(|t| serde_json::from_str(&t).map_err(|e| e.to_string()))
+        {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("agent_suite: {file}: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let total = result["checks"].as_array().map_or(0, Vec::len);
+        runs += 1;
+        solved += usize::from(result["solved"] == true);
+        let seconds = result["seconds"]
+            .as_f64()
+            .map_or("-".to_string(), |s| format!("{s:.0}"));
+        println!(
+            "| `{}` | {} | {} | {}/{} | {} | {} | {} | {} |",
+            result["task"].as_str().unwrap_or("?"),
+            result["agent"].as_str().unwrap_or("-"),
+            if result["solved"] == true { "yes" } else { "no" },
+            result["passed"],
+            total,
+            result["tool_calls"],
+            result["tool_errors"],
+            result["submissions"],
+            seconds
+        );
+    }
+    println!("\n{solved}/{runs} runs solved");
+    ExitCode::SUCCESS
 }
 
 #[derive(Default)]

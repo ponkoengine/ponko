@@ -5,6 +5,7 @@
 use super::{Check, Session, Task};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 /// What a real agent did, for the result file.
 pub struct Record {
@@ -14,6 +15,10 @@ pub struct Record {
     calls: Vec<Value>,
     errors: usize,
     submissions: Vec<Vec<Check>>,
+    /// When the record began (the agent's client connected).
+    started: Instant,
+    /// Seconds from `started` to the last submission.
+    submitted_at: Option<f64>,
 }
 
 impl Record {
@@ -26,13 +31,25 @@ impl Record {
             calls: Vec::new(),
             errors: 0,
             submissions: Vec::new(),
+            started: Instant::now(),
+            submitted_at: None,
         }
+    }
+
+    /// Seconds since the record began, to a tenth.
+    fn elapsed(&self) -> f64 {
+        (self.started.elapsed().as_secs_f64() * 10.0).round() / 10.0
+    }
+
+    fn submitted(&mut self, checks: Vec<Check>) {
+        self.submissions.push(checks);
+        self.submitted_at = Some(self.elapsed());
     }
 
     /// The agent never submitted: score what is there.
     pub fn submit_if_never(&mut self, session: &mut Session) {
         if self.submissions.is_empty() {
-            self.submissions.push(session.check());
+            self.submitted(session.check());
         }
     }
 
@@ -75,6 +92,7 @@ impl Record {
             "tool_calls": self.calls.len(),
             "tool_errors": self.errors,
             "submissions": self.submissions.len(),
+            "seconds": self.submitted_at,
             "calls": self.calls,
         })
     }
@@ -118,7 +136,7 @@ pub fn answer(session: &mut Session, record: &mut Record, message: &Value) -> Op
             "total": checks.len(),
             "checks": checks.iter().map(|c| json!({ "name": c.name, "passed": c.passed, "detail": c.detail })).collect::<Vec<_>>(),
         });
-        record.submissions.push(checks);
+        record.submitted(checks);
         return Some(json!({
             "jsonrpc": "2.0",
             "id": message["id"],
@@ -131,9 +149,10 @@ pub fn answer(session: &mut Session, record: &mut Record, message: &Value) -> Op
             params["name"].as_str().unwrap_or_default()
         );
         record.errors += 1;
+        let at = record.elapsed();
         record
             .calls
-            .push(json!({ "tool": params["name"], "arguments": params["arguments"], "error": text }));
+            .push(json!({ "tool": params["name"], "arguments": params["arguments"], "error": text, "at": at }));
         return Some(json!({
             "jsonrpc": "2.0",
             "id": message["id"],
@@ -157,10 +176,12 @@ pub fn answer(session: &mut Session, record: &mut Record, message: &Value) -> Op
                 None => super::tool_result(&reply["result"]).err(),
             };
             record.errors += usize::from(error.is_some());
+            let at = record.elapsed();
             record.calls.push(json!({
                 "tool": params["name"],
                 "arguments": params["arguments"],
                 "error": error,
+                "at": at,
             }));
         }
         _ => {}
