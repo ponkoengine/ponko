@@ -47,6 +47,8 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Map, Value};
@@ -258,6 +260,8 @@ impl Config {
 struct Instance {
     info: Value,
     file: PathBuf,
+    /// Where its connection is kept between calls.
+    connections: Connections,
 }
 
 impl Instance {
@@ -287,19 +291,161 @@ impl Instance {
         v
     }
 
+    /// Which connection is this game's: a restarted game registers with
+    /// another port and token, so it never gets its old one's.
+    fn connection_key(&self) -> ConnectionKey {
+        (self.port(), self.info["token"].as_str().unwrap_or("").to_string())
+    }
+
+    /// Sends one request and waits for its reply, on the connection kept
+    /// from the last call when it is still open.
     fn call(&self, method: &str, params: Value) -> Result<Value, String> {
-        let unreachable = |e: std::io::Error| format!("instance `{}` is not reachable: {e}", self.name());
-        let stream = TcpStream::connect_timeout(&self.addr(), CONNECT_TIMEOUT).map_err(unreachable)?;
-        stream.set_read_timeout(Some(CALL_TIMEOUT)).map_err(unreachable)?;
-        let mut writer = stream.try_clone().map_err(unreachable)?;
-        let msg = json!({ "id": 1, "token": self.info["token"], "method": method, "params": params });
-        writeln!(writer, "{msg}").map_err(unreachable)?;
-        let mut line = String::new();
-        BufReader::new(stream).read_line(&mut line).map_err(unreachable)?;
-        let reply: Value = serde_json::from_str(&line).map_err(|e| format!("bad reply from the game: {e}"))?;
+        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        let msg = json!({ "id": id, "token": self.info["token"], "method": method, "params": params });
+        let request = format!("{msg}\n");
+        let unreachable = |e: String| format!("instance `{}` is not reachable: {e}", self.name());
+        let key = self.connection_key();
+        let kept = self.connections.take(&key).filter(Connection::is_open);
+        let reused = kept.is_some();
+        let mut connection = match kept {
+            Some(c) => c,
+            None => Connection::open(self.addr()).map_err(|e| unreachable(e.to_string()))?,
+        };
+        let reply = match connection.exchange(&request, id) {
+            // A kept connection the game closed before it read the request
+            // (it served only one, say): the request never arrived, so it
+            // is sent once more, on a new connection.
+            Err(Failure::Closed(_)) if reused => {
+                connection = Connection::open(self.addr()).map_err(|e| unreachable(e.to_string()))?;
+                connection.exchange(&request, id)
+            }
+            reply => reply,
+        };
+        // On any failure the connection is dropped, so a late reply can't
+        // be taken for the next call's.
+        let reply = reply.map_err(|f| match f {
+            Failure::Closed(e) => unreachable(e.to_string()),
+            Failure::Refused(e) | Failure::Bad(e) => e,
+        })?;
+        self.connections.put(key, connection);
         match reply.get("error") {
             Some(e) => Err(e.as_str().unwrap_or("unknown error").to_string()),
             None => Ok(reply["result"].clone()),
+        }
+    }
+}
+
+/// A game's connection key: its port and token.
+type ConnectionKey = (u16, String);
+
+/// Open connections to games, one per game, kept between calls: a call
+/// costs a round trip, not a new connection and its token check.
+#[derive(Debug, Clone, Default)]
+struct Connections(Arc<Mutex<HashMap<ConnectionKey, Connection>>>);
+
+impl Connections {
+    fn map(&self) -> std::sync::MutexGuard<'_, HashMap<ConnectionKey, Connection>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The kept connection, taken out while a call uses it.
+    fn take(&self, key: &ConnectionKey) -> Option<Connection> {
+        self.map().remove(key)
+    }
+
+    fn put(&self, key: ConnectionKey, connection: Connection) {
+        self.map().insert(key, connection);
+    }
+
+    /// Whether the connection kept for `key` is still open.
+    fn has_open(&self, key: &ConnectionKey) -> bool {
+        self.map().get(key).is_some_and(Connection::is_open)
+    }
+
+    /// Closes the connections to games that are gone.
+    fn keep_only(&self, running: &[Instance]) {
+        self.map()
+            .retain(|key, _| running.iter().any(|i| i.connection_key() == *key));
+    }
+}
+
+/// How a request failed.
+enum Failure {
+    /// The connection was closed before any of the reply came back.
+    Closed(std::io::Error),
+    /// The game hung up with an error for the whole connection (too many
+    /// connections, a wrong token).
+    Refused(String),
+    /// Anything else: a timeout, a cut-off or malformed reply.
+    Bad(String),
+}
+
+/// One connection to a game's control endpoint.
+#[derive(Debug)]
+struct Connection {
+    reader: BufReader<TcpStream>,
+    writer: TcpStream,
+}
+
+impl Connection {
+    fn open(addr: SocketAddr) -> std::io::Result<Self> {
+        let stream = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT)?;
+        stream.set_read_timeout(Some(CALL_TIMEOUT))?;
+        // Requests are single writes that need an answer before the next:
+        // nothing to gain from holding them back.
+        stream.set_nodelay(true)?;
+        Ok(Self {
+            writer: stream.try_clone()?,
+            reader: BufReader::new(stream),
+        })
+    }
+
+    /// Whether the game still has this connection open and nothing unasked
+    /// for is waiting on it. Looks without waiting.
+    fn is_open(&self) -> bool {
+        if !self.reader.buffer().is_empty() {
+            return false;
+        }
+        let stream = self.reader.get_ref();
+        if stream.set_nonblocking(true).is_err() {
+            return false;
+        }
+        let waiting = matches!(stream.peek(&mut [0u8; 1]), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock);
+        stream.set_nonblocking(false).is_ok() && waiting
+    }
+
+    /// Writes `request` (one line) and reads the reply with `id`.
+    fn exchange(&mut self, request: &str, id: u64) -> Result<Value, Failure> {
+        use std::io::ErrorKind::{BrokenPipe, ConnectionAborted, ConnectionReset, UnexpectedEof};
+        self.writer.write_all(request.as_bytes()).map_err(Failure::Closed)?;
+        let mut line = String::new();
+        match self.reader.read_line(&mut line) {
+            Ok(0) => return Err(Failure::Closed(UnexpectedEof.into())),
+            Err(e) if line.is_empty() && matches!(e.kind(), ConnectionReset | ConnectionAborted | BrokenPipe) => {
+                return Err(Failure::Closed(e));
+            }
+            Err(e) => return Err(Failure::Bad(format!("no reply from the game: {e}"))),
+            Ok(_) if !line.ends_with('\n') => {
+                return Err(Failure::Bad(
+                    "the game closed the connection in the middle of a reply".into(),
+                ));
+            }
+            Ok(_) => {}
+        }
+        let reply: Value =
+            serde_json::from_str(&line).map_err(|e| Failure::Bad(format!("bad reply from the game: {e}")))?;
+        if reply["id"] == id {
+            Ok(reply)
+        } else if reply["id"].is_null() && reply["error"].is_string() {
+            Err(Failure::Refused(
+                reply["error"].as_str().unwrap_or_default().to_string(),
+            ))
+        } else {
+            Err(Failure::Bad(format!(
+                "the game answered request {} instead of {id}",
+                reply["id"]
+            )))
         }
     }
 }
@@ -316,7 +462,14 @@ fn registry_name(path: &Path) -> Option<(u64, u16)> {
 /// are registry entries (named `<pid>-<port>.json`, with a matching pid,
 /// port and a token inside) are ever touched; anything else in the
 /// directory is left alone.
-fn discover(dir: &Path) -> Vec<Instance> {
+fn discover(dir: &Path, connections: &Connections) -> Vec<Instance> {
+    let found = discover_in(dir, connections);
+    connections.keep_only(&found);
+    found
+}
+
+/// [`discover`], before the connections to games that are gone are closed.
+fn discover_in(dir: &Path, connections: &Connections) -> Vec<Instance> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -338,8 +491,16 @@ fn discover(dir: &Path) -> Vec<Instance> {
         {
             continue; // not a registry entry after all
         }
-        let inst = Instance { info, file: path };
-        if TcpStream::connect_timeout(&inst.addr(), Duration::from_millis(300)).is_err() {
+        let inst = Instance {
+            info,
+            file: path,
+            connections: connections.clone(),
+        };
+        // A game whose kept connection is open is running; others are
+        // asked with a new connection.
+        if !connections.has_open(&inst.connection_key())
+            && TcpStream::connect_timeout(&inst.addr(), Duration::from_millis(300)).is_err()
+        {
             let _ = std::fs::remove_file(&inst.file);
             continue;
         }
@@ -1201,6 +1362,8 @@ pub struct Server {
     config: Config,
     /// Log files of games this server launched, by launch id.
     launched: HashMap<String, PathBuf>,
+    /// The connections to games, kept between tool calls.
+    connections: Connections,
 }
 
 impl Server {
@@ -1210,6 +1373,7 @@ impl Server {
         Self {
             config,
             launched: HashMap::new(),
+            connections: Connections::default(),
         }
     }
 
@@ -1284,7 +1448,7 @@ impl Server {
 
     /// Finds the instance an agent means.
     fn instance(&self, args: &Value) -> Result<Instance, String> {
-        let all = discover(&self.config.instances_dir);
+        let all = discover(&self.config.instances_dir, &self.connections);
         let wanted = match args.get("instance") {
             None | Some(Value::Null) => None,
             Some(Value::String(s)) => Some(s.clone()),
@@ -1330,7 +1494,7 @@ impl Server {
         match name {
             "compare_images" => self.compare_images(args),
             "list_instances" => Ok(Value::Array(
-                discover(&self.config.instances_dir)
+                discover(&self.config.instances_dir, &self.connections)
                     .iter()
                     .map(Instance::public)
                     .collect(),
@@ -1780,7 +1944,7 @@ impl Server {
 
         let deadline = deadline_after(args["timeout_secs"].as_u64().unwrap_or(600));
         loop {
-            if let Some(i) = discover(&self.config.instances_dir)
+            if let Some(i) = discover(&self.config.instances_dir, &self.connections)
                 .into_iter()
                 .find(|i| i.info["launch_id"] == json!(launch_id))
             {
@@ -1954,6 +2118,115 @@ fn step_and_wait(i: &Instance, start: u64, ticks: u64, deadline: Instant) -> Res
 mod tests {
     use super::*;
 
+    /// A stand-in endpoint on its own thread. `serve(connection, request)`
+    /// answers the `request`-th request (from 0) on the `connection`-th
+    /// connection (from 0): a reply line, or `None` to close the connection
+    /// without one. It closes a connection after `per_connection` replies.
+    /// Returns the instance and the thread, which ends after `connections`
+    /// connections and says how many requests it read.
+    fn fake_game(
+        connections: usize,
+        per_connection: usize,
+        serve: impl Fn(usize, usize, &Value) -> Option<Value> + Send + 'static,
+    ) -> (Instance, std::thread::JoinHandle<usize>) {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let game = std::thread::spawn(move || {
+            let mut requests = 0;
+            for connection in 0..connections {
+                let (stream, _) = listener.accept().unwrap();
+                let mut writer = stream.try_clone().unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                for request in 0..per_connection {
+                    line.clear();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                        break;
+                    }
+                    requests += 1;
+                    let msg: Value = serde_json::from_str(&line).unwrap();
+                    match serve(connection, request, &msg) {
+                        Some(reply) => writeln!(writer, "{reply}").unwrap(),
+                        None => break,
+                    }
+                }
+            }
+            requests
+        });
+        let instance = Instance {
+            info: json!({ "pid": 1, "port": port, "token": "t", "name": "fake" }),
+            file: PathBuf::new(),
+            connections: Connections::default(),
+        };
+        (instance, game)
+    }
+
+    fn answer(msg: &Value, result: Value) -> Option<Value> {
+        Some(json!({ "id": msg["id"], "result": result }))
+    }
+
+    #[test]
+    fn calls_share_one_connection() {
+        let (game, server) = fake_game(1, usize::MAX, |connection, request, msg| {
+            answer(msg, json!({ "connection": connection, "request": request }))
+        });
+        for i in 0..5 {
+            assert_eq!(
+                game.call("info", json!({})).unwrap(),
+                json!({ "connection": 0, "request": i })
+            );
+        }
+        game.connections.keep_only(&[]); // closes it, so the game's thread ends
+        assert_eq!(server.join().unwrap(), 5);
+    }
+
+    #[test]
+    fn a_connection_the_game_closed_is_replaced_without_an_error() {
+        // Like the browser bridge: one request per connection, then it hangs up.
+        let (game, server) = fake_game(3, 1, |connection, _, msg| answer(msg, json!(connection)));
+        for i in 0..3 {
+            assert_eq!(game.call("info", json!({})).unwrap(), json!(i));
+        }
+        game.connections.keep_only(&[]);
+        assert_eq!(server.join().unwrap(), 3);
+    }
+
+    #[test]
+    fn a_connection_that_breaks_under_a_request_is_retried_once() {
+        // The game reads the second request on the kept connection and
+        // closes it without a reply; the call asks again on a new one.
+        let (game, server) = fake_game(2, usize::MAX, |connection, request, msg| {
+            (connection == 1 || request == 0)
+                .then(|| answer(msg, json!(connection)))
+                .flatten()
+        });
+        assert_eq!(game.call("info", json!({})).unwrap(), json!(0));
+        assert_eq!(game.call("info", json!({})).unwrap(), json!(1));
+        game.connections.keep_only(&[]);
+        assert_eq!(server.join().unwrap(), 3);
+
+        // Only once: a game that hangs up on every request is an error.
+        let (game, server) = fake_game(2, usize::MAX, |_, _, _| None);
+        let error = game.call("info", json!({})).unwrap_err();
+        assert!(error.contains("not reachable"), "{error}");
+        assert!(game.connections.map().is_empty(), "a failed connection isn't kept");
+        drop(TcpStream::connect(game.addr()).unwrap()); // the second connection it waits for
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn a_reply_to_another_request_is_an_error_and_ends_the_connection() {
+        let (game, server) = fake_game(2, usize::MAX, |connection, _, msg| match connection {
+            0 => Some(json!({ "id": msg["id"].as_u64().unwrap() + 1000, "result": "stale" })),
+            _ => answer(msg, json!("fresh")),
+        });
+        let error = game.call("info", json!({})).unwrap_err();
+        assert!(error.contains("instead of"), "{error}");
+        assert_eq!(game.call("info", json!({})).unwrap(), json!("fresh"));
+        game.connections.keep_only(&[]);
+        assert_eq!(server.join().unwrap(), 2);
+    }
+
     #[test]
     fn a_huge_timeout_is_clamped_instead_of_overflowing_the_clock() {
         let now = Instant::now();
@@ -1995,7 +2268,7 @@ mod tests {
         let note = dir.join("notes.txt");
         std::fs::write(&note, "hi").unwrap();
 
-        assert!(discover(&dir).is_empty());
+        assert!(discover(&dir, &Connections::default()).is_empty());
         assert!(!dead.exists(), "dead registry entries are cleaned up");
         assert!(
             mismatch.exists() && save.exists() && note.exists(),
@@ -2202,11 +2475,13 @@ mod tests {
                 answered += 1;
                 let req: Value = serde_json::from_str(&line).unwrap();
                 let reply = match req["method"].as_str().unwrap() {
-                    "methods" => json!({ "id": 1, "result": [
+                    "methods" => json!({ "id": req["id"], "result": [
                         { "name": "info", "about": "status" },
                         { "name": "screenshot", "about": "a frame" },
                     ] }),
-                    m => json!({ "id": 1, "error": format!("unknown method `{m}` (call `methods` for the list)") }),
+                    m => {
+                        json!({ "id": req["id"], "error": format!("unknown method `{m}` (call `methods` for the list)") })
+                    }
                 };
                 writeln!(&stream, "{reply}").unwrap();
             }

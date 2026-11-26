@@ -268,6 +268,8 @@ impl App<'_> {
         self.ctx.events.send(event);
         #[cfg(target_os = "android")]
         self.follow_android_audio();
+        #[cfg(target_os = "ios")]
+        hold_audio_while_away(&mut self.ctx, false);
         true
     }
 
@@ -295,7 +297,7 @@ impl App<'_> {
     #[cfg(target_os = "android")]
     fn follow_android_audio(&mut self) {
         let away = self.ctx.window.suspended();
-        self.ctx.audio.hold_output(away || self.android.in_call);
+        hold_audio_while_away(&mut self.ctx, self.android.in_call);
         let focus = !away && self.ctx.audio.session_category() != crate::audio::AudioSessionCategory::Ambient;
         crate::platform::android::audio_focus(focus);
     }
@@ -329,10 +331,18 @@ impl App<'_> {
         }
     }
 
-    /// iOS reports its safe area as the window's inner frame (the outer
-    /// one is the screen's).
+    /// iOS: the safe area for the way the phone is turned now, from a
+    /// window in the game's scene (`platform::ios::safe_insets`; winit's
+    /// own window keeps its upright safe area). Until the game's window is
+    /// in its scene, winit's inner frame (the outer one is the screen's).
     #[cfg(target_os = "ios")]
     fn follow_ios_insets(&mut self, window: &Window) {
+        if let Some([top, right, bottom, left]) = crate::platform::ios::safe_insets() {
+            self.ctx
+                .window
+                .feed_platform_safe_insets(crate::window::SafeInsets::new(top, right, bottom, left));
+            return;
+        }
         let (Ok(outer), Ok(inner)) = (window.outer_position(), window.inner_position()) else {
             return;
         };
@@ -370,7 +380,12 @@ impl App<'_> {
             return;
         }
         #[cfg(target_os = "ios")]
-        self.follow_ios_keyboard();
+        if let Some(window) = self.window.clone() {
+            // UIKit updates the safe area after the turn's resize, so it is
+            // read each frame (one property read).
+            self.follow_ios_insets(&window);
+            self.follow_ios_keyboard();
+        }
         #[cfg(target_os = "android")]
         self.follow_android();
 
@@ -1170,6 +1185,15 @@ impl ApplicationHandler<Ready> for App<'_> {
     }
 }
 
+/// iOS and Android: no audio stream runs while the app is away, or (on
+/// Android) while a phone call has the audio. The output closes, and opens
+/// again on return with every sound and the music going on from where they
+/// were.
+#[cfg_attr(not(any(test, target_os = "ios", target_os = "android")), allow(dead_code))]
+fn hold_audio_while_away(ctx: &mut Ctx, in_call: bool) {
+    ctx.audio.hold_output(ctx.window.suspended() || in_call);
+}
+
 /// Hides the cursor and holds it in place (or in the window, where the
 /// system can't hold it still), or frees it.
 fn apply_cursor_lock(window: &Window, locked: bool) {
@@ -1205,5 +1229,29 @@ fn is_user_gesture(event: &WindowEvent) -> bool {
         }
         WindowEvent::Touch(touch) => touch.phase == winit::event::TouchPhase::Ended,
         _ => false,
+    }
+}
+
+#[cfg(all(test, feature = "audio"))]
+mod audio_away_tests {
+    use super::*;
+    use crate::window::WindowEvent;
+
+    #[test]
+    fn the_audio_output_closes_while_the_app_is_away_and_opens_on_its_return() {
+        let mut ctx = Ctx::new(1.0 / 60.0, Vec2::new(402.0, 874.0));
+        hold_audio_while_away(&mut ctx, false);
+        assert!(!ctx.audio.backend.output_held(), "in front: open");
+        assert!(ctx.window.feed_event(&WindowEvent::Suspended));
+        hold_audio_while_away(&mut ctx, false);
+        assert!(ctx.audio.backend.output_held(), "away: closed");
+        assert!(ctx.window.feed_event(&WindowEvent::Resumed));
+        hold_audio_while_away(&mut ctx, false);
+        assert!(!ctx.audio.backend.output_held(), "back: open again");
+        // Android: a call holds it in front too.
+        hold_audio_while_away(&mut ctx, true);
+        assert!(ctx.audio.backend.output_held(), "a call has the audio");
+        hold_audio_while_away(&mut ctx, false);
+        assert!(!ctx.audio.backend.output_held());
     }
 }

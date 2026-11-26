@@ -103,11 +103,11 @@ impl Audio {
         Ok(())
     }
 
-    /// Closes the output while the app is in the background or a phone
-    /// call has the audio (`true`), and opens it again after (Android):
-    /// nothing plays and no stream runs meanwhile; every sound and the
-    /// music go on from where they were.
-    #[cfg_attr(not(any(test, target_os = "android")), allow(dead_code))]
+    /// Closes the output while the app is in the background (iOS and
+    /// Android) or a phone call has the audio (Android) (`true`), and
+    /// opens it again after: nothing plays and no stream runs meanwhile;
+    /// every sound and the music go on from where they were.
+    #[cfg_attr(not(any(test, target_os = "android", target_os = "ios")), allow(dead_code))]
     pub(crate) fn hold_output(&mut self, held: bool) {
         self.backend.hold_output(held);
     }

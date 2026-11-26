@@ -325,6 +325,12 @@ adb shell input tap 540 1200          # a touch
 adb emu kill
 ```
 
+**Muting a check.** The script's emulator runs without audio. On an
+emulator with audio, or a phone, pass `-e PONKO_MUTE 1` to `am start` (a
+debuggable apk) and the game's output plays silence
+([Audio](audio.md#muting-automated-runs-ponko_mute)):
+`adb shell am start -n <package>/android.app.NativeActivity -e PONKO_MUTE 1`.
+
 ## On a phone, and signing for players
 
 A phone with developer options and USB debugging on installs the debug

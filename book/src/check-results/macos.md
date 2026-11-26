@@ -87,6 +87,14 @@ What each run used, and what it ran into:
   39 s). That doesn't slow an agent, but a checker that reads a position
   every tick has to keep to a few windows (`stuck-guard` reads 60
   positions, not 400).
+  - Fixed since in #665: the game accepts connections without polling and
+    `ponko-mcp` keeps one connection per game, so a call to a paused
+    headless game takes 0.15 to 0.34 ms instead of 24 ms (release builds,
+    200 calls of `instance_info`, three runs each, `cargo test --release
+    -p ponko_mcp --test latency -- --nocapture`, before: 23.5, 24.2 and
+    24.3 ms; the same Mac, busy: load average 20 to 40). A debug build
+    takes 0.11 ms (26 ms before). The replay
+    (`cargo test -p ponko_mcp --test agent_suite`) took 48 s.
 
 ## 2026-11-26: the agent acceptance suite, replayed and tried by a real agent (#528, section 7)
 

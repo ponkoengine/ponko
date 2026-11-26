@@ -7,8 +7,10 @@
 #   2. starts it with its window: it must draw frames, read the safe area,
 #      use the clipboard, keep a file in its storage folder, be suspended
 #      when another app comes to the front and resumed after,
-#   3. starts it with the keyboard open: the keyboard's inset must show,
-# saving a screenshot of 2 and 3. The simulated iPhone is shut down and
+#   3. starts it turned (`PONKO_IOS_ORIENTATION=landscape`): the safe area
+#      must follow the turn,
+#   4. starts it with the keyboard open: the keyboard's inset must show,
+# saving a screenshot of 2, 3 and 4. Every run is muted (`PONKO_MUTE`). The simulated iPhone is shut down and
 # deleted at the end, also when a step fails. No window opens on the Mac:
 # the simulator runs without Simulator.app.
 #
@@ -74,7 +76,7 @@ grep -q "test result: ok. [1-9]" "$out/unit.log" || fail "no unit test ran: $(ca
 start() {
     local log=$1
     shift
-    env "$@" xcrun simctl launch --console-pty --terminate-running-process "$udid" "$id" >"$log" 2>&1 &
+    env SIMCTL_CHILD_PONKO_MUTE=1 "$@" xcrun simctl launch --console-pty --terminate-running-process "$udid" "$id" >"$log" 2>&1 &
     console=$!
 }
 stop() {
@@ -85,7 +87,7 @@ stop() {
 }
 
 echo "ios-simulator: 1. headless smoke run"
-SIMCTL_CHILD_PONKO_SMOKE=120 xcrun simctl launch --console-pty "$udid" "$id" >"$out/smoke.log" 2>&1
+SIMCTL_CHILD_PONKO_MUTE=1 SIMCTL_CHILD_PONKO_SMOKE=120 xcrun simctl launch --console-pty "$udid" "$id" >"$out/smoke.log" 2>&1
 grep -q "ponko: smoke run passed" "$out/smoke.log" || fail "smoke run: $(cat "$out/smoke.log")"
 
 echo "ios-simulator: 2. windowed: frames, safe area, suspend and resume"
@@ -94,7 +96,7 @@ sleep 12
 xcrun simctl io "$udid" screenshot "$out/phone.png" >/dev/null
 xcrun simctl launch "$udid" com.apple.Preferences >/dev/null
 sleep 4
-xcrun simctl launch "$udid" "$id" >/dev/null
+SIMCTL_CHILD_PONKO_MUTE=1 xcrun simctl launch "$udid" "$id" >/dev/null
 sleep 6
 stop
 cat "$out/window.log"
@@ -106,11 +108,23 @@ grep -q 'clipboard holds Some("ponko phone check")' "$out/window.log" || fail "t
 grep -q "storage kept a file in .*Library/Application Support/dev.ponko.phone-check" "$out/window.log" ||
     fail "storage in the app's Application Support folder"
 
-echo "ios-simulator: 3. the on-screen keyboard"
+echo "ios-simulator: 3. started turned: the safe area follows"
+start "$out/turned.log" SIMCTL_CHILD_PONKO_IOS_ORIENTATION=landscape
+sleep 8
+xcrun simctl io "$udid" screenshot "$out/turned.png" >/dev/null
+stop
+cat "$out/turned.log"
+# "phone: window 874 x 402, safe insets top 0 right 62 bottom 20 left 62, ...":
+# wider than tall, and the sides (not the top) keep clear of the island.
+awk '/phone: window/ { w = $3 + 0; h = $5 + 0; r = $11 + 0; l = $15 + 0 }
+    END { exit !(w > h && (r > 0 || l > 0)) }' "$out/turned.log" ||
+    fail "turned: the safe area kept its upright edges"
+
+echo "ios-simulator: 4. the on-screen keyboard"
 start "$out/keyboard.log" SIMCTL_CHILD_PONKO_PHONE_KEYBOARD=1
 sleep 8
 xcrun simctl io "$udid" screenshot "$out/keyboard.png" >/dev/null
 stop
 grep -Eq "keyboard [1-9]" "$out/keyboard.log" || fail "no keyboard inset: $(cat "$out/keyboard.log")"
 
-echo "ios-simulator: passed; screenshots in $out (phone.png, keyboard.png)"
+echo "ios-simulator: passed; screenshots in $out (phone.png, turned.png, keyboard.png)"
