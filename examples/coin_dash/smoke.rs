@@ -46,6 +46,12 @@ pub struct Smoke {
     report: Report,
     step: Step,
     /// The tick the current step began on.
+    looping: bool,
+    cycle_start: u64,
+    /// Completed walk-throughs, with a fresh per-cycle timeout.
+    pub cycles: u64,
+    pub deaths: u64,
+    pub loads: u64,
     since: u64,
 }
 
@@ -99,6 +105,11 @@ pub fn setup_smoke(ctx: &mut Ctx, report_path: Option<PathBuf>, mode: &str) {
         report_path,
         report,
         step: Step::OpenSettings,
+        looping: mode == "soak",
+        cycle_start: 0,
+        cycles: 0,
+        deaths: 0,
+        loads: 0,
         since: 0,
     });
 }
@@ -120,12 +131,22 @@ pub fn autoplay(ctx: &mut Ctx) {
     let screen = screen(&ctx.world);
     let (step, since) = {
         let smoke = ctx.world.resource_mut::<Smoke>();
-        let name = screen_name(screen);
-        if smoke.report.screens.last() != Some(&name) {
-            smoke.report.screens.push(name);
+        if !smoke.looping {
+            let name = screen_name(screen);
+            if smoke.report.screens.last() != Some(&name) {
+                smoke.report.screens.push(name);
+            }
         }
         (smoke.step, smoke.since)
     };
+    let (looping, cycle_start) = {
+        let smoke = ctx.world.resource::<Smoke>();
+        (smoke.looping, smoke.cycle_start)
+    };
+    if tick - cycle_start >= MAX_TICKS {
+        finish(ctx, tick, false);
+        return;
+    }
     let waited = tick - since >= DWELL;
     let mut next = step;
     match step {
@@ -142,19 +163,26 @@ pub fn autoplay(ctx: &mut Ctx) {
             next = Step::Play;
         }
         Step::Play => match screen {
-            Screen::Playing => chase(ctx),
-            Screen::Result(_) => next = Step::Leave,
+            // Every other round stands still and lets the clock run out.
+            Screen::Playing if !looping || ctx.world.resource::<Smoke>().cycles % 2 == 1 => chase(ctx),
+            Screen::Result(outcome) => {
+                if looping && outcome == Outcome::Lost {
+                    ctx.world.resource_mut::<Smoke>().deaths += 1;
+                }
+                next = Step::Leave;
+            }
+            Screen::Playing => {}
             _ => {}
         },
         Step::Leave if waited => {
             ctx.world.resource_mut::<Intent>().back = true;
             next = Step::Done;
         }
-        Step::Done if screen == Screen::Title => finish(ctx, tick, true),
+        Step::Done if screen == Screen::Title => {
+            finish(ctx, tick, true);
+            return;
+        }
         _ => {}
-    }
-    if tick >= MAX_TICKS {
-        finish(ctx, tick, false);
     }
     if next != step {
         let smoke = ctx.world.resource_mut::<Smoke>();
@@ -185,6 +213,21 @@ pub fn count_frames(ctx: &mut Ctx) {
 
 fn finish(ctx: &mut Ctx, tick: u64, completed: bool) {
     let progress = ctx.world.resource::<Progress>().clone();
+    if completed && ctx.world.resource::<Smoke>().looping {
+        let (saved, _) = Progress::load(&mut ctx.storage);
+        if saved.rounds_played != progress.rounds_played {
+            eprintln!("coin_dash soak: saved progress failed to round-trip");
+            ctx.quit();
+            return;
+        }
+        let smoke = ctx.world.resource_mut::<Smoke>();
+        smoke.loads += 1;
+        smoke.cycles += 1;
+        smoke.cycle_start = tick;
+        smoke.since = tick;
+        smoke.step = Step::OpenSettings;
+        return;
+    }
     let smoke = ctx.world.resource_mut::<Smoke>();
     let report = &mut smoke.report;
     report.rounds_played = progress.rounds_played;

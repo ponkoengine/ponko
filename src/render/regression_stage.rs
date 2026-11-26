@@ -261,6 +261,7 @@ impl Stage {
         let post = &ctx.scene3d.post;
         ctx.gfx.frame3d.motion.enabled = post.anti_aliasing == crate::render::AntiAliasing::Taa
             || (post.ao_temporal && post.ambient_occlusion.enabled);
+        ctx.gfx.frame3d.environment.clone_from(&ctx.scene3d.environment);
         ctx.gfx.frame3d.lod = ctx.scene3d.lod;
         let mut skins = std::mem::take(&mut ctx.gfx.frame3d.skins);
         skins.motion = ctx.gfx.frame3d.motion.enabled;

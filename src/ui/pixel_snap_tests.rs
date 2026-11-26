@@ -450,3 +450,134 @@ fn a_vertically_centered_label_centers_text_taller_than_its_clip() {
     assert_eq!(top_aligned.len(), centered.len());
     assert!(centered[0].0.y < top_aligned[0].0.y);
 }
+
+/// The widest horizontal extent of `quads`, in physical pixels.
+fn span(quads: &[(Vec2, Vec2)]) -> f32 {
+    let left = quads.iter().map(|(at, _)| at.x).fold(f32::INFINITY, f32::min);
+    let right = quads
+        .iter()
+        .map(|(at, size)| at.x + size.x)
+        .fold(f32::NEG_INFINITY, f32::max);
+    right - left
+}
+
+/// A 60-wide, 40-high box (at 10, 5) holding a long plain label of size 17, built with `style`,
+/// drawn; the label's glyph quads and its node.
+fn styled_label(
+    ctx: &mut Ctx,
+    style: impl FnOnce(crate::ui::UiBuilder<'_>) -> crate::ui::UiBuilder<'_>,
+) -> (Vec<(Vec2, Vec2)>, crate::ui::UiId) {
+    let root = ctx
+        .ui
+        .root()
+        .layout(UiLayout::fill())
+        .background(Color::TRANSPARENT)
+        .id();
+    let label = style(
+        ctx.ui
+            .label(root, "Wave 12: ready")
+            .size(17.0)
+            .align(UiTextAlign::Center)
+            .background(Color::TRANSPARENT)
+            .layout(UiLayout::fixed(60.0, 40.0).left(10.0).top(5.0)),
+    )
+    .id();
+    ctx.ui.push_modeless(root);
+    ctx.draw_retained_ui();
+    (quads(ctx, ATLAS), label)
+}
+
+#[test]
+fn a_label_built_with_label_fit_shrinks_to_its_box_and_never_below_the_minimum() {
+    let (plain, _) = styled_label(&mut ctx(1.0), |b| b);
+    let rect_of = |ctx: &Ctx, id| ctx.ui.rect(id).unwrap();
+    let mut with_ctx = ctx(1.0);
+    let (hard, hard_id) = styled_label(&mut with_ctx, |b| b.label_fit(6.0));
+    let box_right = rect_of(&with_ctx, hard_id).max.x;
+    let right = |q: &[(Vec2, Vec2)]| {
+        q.iter()
+            .map(|(at, size)| at.x + size.x)
+            .fold(f32::NEG_INFINITY, f32::max)
+    };
+    assert_eq!(plain.len(), hard.len());
+    assert!(span(&hard) < span(&plain), "the font shrank");
+    assert!(right(&hard) <= box_right + 1.0, "and the label now fits its box");
+
+    // The minimum is a floor: at the font's own size nothing shrinks, at 12 it shrinks no further.
+    let (at_size, _) = styled_label(&mut ctx(1.0), |b| b.label_fit(17.0));
+    assert_eq!(at_size, plain, "a minimum equal to the size changes nothing");
+    let (at_twelve, _) = styled_label(&mut ctx(1.0), |b| b.label_fit(12.0));
+    assert!(span(&at_twelve) > span(&hard), "a larger minimum shrinks less");
+    assert!(
+        span(&at_twelve) >= span(&plain) * 12.0 / 17.0 - 2.0,
+        "never below the minimum: {} of {}",
+        span(&at_twelve),
+        span(&plain)
+    );
+}
+
+#[test]
+fn a_label_built_with_vertical_centering_sits_in_the_middle_of_its_box() {
+    let (top, _) = styled_label(&mut ctx(1.0), |b| b);
+    let (middle, _) = styled_label(&mut ctx(1.0), |b| b.label_vertical_center(true));
+    assert_eq!(top.len(), middle.len());
+    assert!(
+        middle[0].0.y > top[0].0.y,
+        "the lines moved down from the top of the box"
+    );
+    assert_eq!(middle[0].0.x, top[0].0.x, "and not sideways");
+    let (off, _) = styled_label(&mut ctx(1.0), |b| {
+        b.label_vertical_center(true).label_vertical_center(false)
+    });
+    assert_eq!(off, top, "`false` is the default again");
+}
+
+#[test]
+fn a_texture_built_with_state_tint_follows_hover_and_a_plain_one_does_not() {
+    use crate::ui::{UiInput, UiPaint};
+    const BUTTON_TEXTURE: u32 = 42;
+
+    let hovered_tint = |tinted: bool| -> [u8; 4] {
+        let mut ctx = ctx(1.0);
+        ctx.ui.set_reduced_motion(true);
+        let root = ctx.ui.root().layout(UiLayout::fill()).id();
+        let mut button = ctx
+            .ui
+            .button(root, "")
+            .layout(UiLayout::fixed(80.0, 40.0))
+            .paint(UiPaint {
+                background: Color::WHITE,
+                hover: Color::RED,
+                pressed: Color::GREEN,
+                texture: Some(Texture::new(BUTTON_TEXTURE, 32, 32)),
+                color: Color::rgb(0.5, 1.0, 1.0),
+                ..UiPaint::default()
+            });
+        if tinted {
+            button = button.texture_state_tint(true);
+        }
+        let _ = button.id();
+        ctx.ui.push_modeless(root);
+        ctx.ui.frame(
+            vec2(400.0, 200.0),
+            &UiInput {
+                pointer: vec2(20.0, 10.0),
+                ..UiInput::default()
+            },
+        );
+        ctx.draw_retained_ui();
+        let (sprites, batches) = ctx.gfx.ui_list.finish();
+        let batch = batches.iter().find(|batch| batch.texture == BUTTON_TEXTURE).unwrap();
+        sprites[batch.start as usize].color
+    };
+    assert_eq!(
+        hovered_tint(true),
+        Color::rgb(0.5, 0.0, 0.0).to_rgba8(),
+        "hover red times the tint"
+    );
+    assert_eq!(
+        hovered_tint(false),
+        Color::rgb(0.5, 1.0, 1.0).to_rgba8(),
+        "without it the tint stays"
+    );
+}

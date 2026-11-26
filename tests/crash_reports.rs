@@ -347,3 +347,120 @@ fn the_last_lines_the_game_printed_are_in_the_report() {
     assert!(!log.contains("loading level part 4\n"), "only the last lines:\n{text}");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Runs `game`, whose setup panics after `before_panic`; hands back the report its hook got
+/// (the engine's own default hook has run by then) and how long the whole run took.
+fn report_from_a_run(dir: &Path, before_panic: impl FnOnce() + 'static) -> (CrashReport, std::time::Duration) {
+    let seen: Arc<Mutex<Vec<CrashReport>>> = Arc::default();
+    let into = seen.clone();
+    let game = Game::new("t", 1, 1)
+        .data_dir(dir)
+        .crash_reports(CrashReports::on().on_crash(move |report| into.lock().unwrap().push(report.clone())));
+    let started = std::time::Instant::now();
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        game.run_headless(1, move |_ctx: &mut Ctx| -> () {
+            before_panic();
+            panic!("for the report");
+        });
+    }));
+    let wall = started.elapsed();
+    assert!(result.is_err(), "the game panicked");
+    let mut seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 1);
+    (seen.remove(0), wall)
+}
+
+#[test]
+fn uptime_is_the_time_the_run_took_and_the_saved_text_says_the_same() {
+    let _turn = take_turn();
+    let dir = temp_dir("uptime");
+    let (report, wall) = report_from_a_run(&dir, || std::thread::sleep(std::time::Duration::from_millis(60)));
+    let uptime = report.uptime_secs();
+    assert!(uptime >= 0.06, "the run slept 60 ms before it crashed: {uptime}");
+    assert!(
+        uptime <= wall.as_secs_f64(),
+        "never more than the wall-clock time around the run: {uptime} against {wall:?}"
+    );
+    // The text file, and the report's own text, print it to one decimal.
+    let saved = read(&dir, report.file().unwrap());
+    let line = saved
+        .lines()
+        .find_map(|l| l.strip_prefix("uptime: "))
+        .unwrap_or_else(|| panic!("an uptime line:\n{saved}"));
+    assert_eq!(line, format!("{uptime:.1} s"));
+    assert_eq!(saved, report.text());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The numbers of the `loading level part N` lines in a log, in the order they appear.
+fn level_parts(log: &[String]) -> Vec<usize> {
+    log.iter()
+        .filter_map(|line| {
+            line.rsplit("loading level part ")
+                .next()
+                .filter(|_| line.contains("loading level part "))
+        })
+        .map(|n| n.trim().parse().unwrap_or_else(|_| panic!("a number in {n:?}")))
+        .collect()
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn the_log_keeps_only_the_newest_lines_oldest_first() {
+    let _turn = take_turn();
+    let dir = temp_dir("log-accessor");
+    let extra = 7;
+    let (report, _) = report_from_a_run(&dir, move || {
+        // Straight to the process's standard error, as the test above does.
+        let mut err = std::io::stderr();
+        for i in 0..crash::LOG_LINES + extra {
+            writeln!(err, "loading level part {i}").unwrap();
+        }
+    });
+    let Some(log) = report.log() else {
+        eprintln!("skipped: this system did not let the game keep its log");
+        return;
+    };
+    assert!(log.len() <= crash::LOG_LINES, "at most LOG_LINES lines: {}", log.len());
+    let parts = level_parts(log);
+    let newest = crash::LOG_LINES + extra - 1;
+    assert_eq!(parts.last(), Some(&newest), "the newest line we printed is kept");
+    assert!(
+        parts.windows(2).all(|w| w[1] == w[0] + 1),
+        "oldest first, with no gaps: {parts:?}"
+    );
+    assert!(
+        parts[0] >= extra,
+        "the oldest lines were dropped, the first kept is part {}",
+        parts[0]
+    );
+    assert!(
+        !log.iter().any(|l| l.ends_with("loading level part 0")),
+        "the very first line is gone"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn a_few_lines_are_all_kept_and_the_last_one_printed_is_among_the_last() {
+    let _turn = take_turn();
+    let dir = temp_dir("log-short");
+    let (report, _) = report_from_a_run(&dir, || {
+        let mut err = std::io::stderr();
+        for i in 0..3 {
+            writeln!(err, "loading level part {i}").unwrap();
+        }
+    });
+    let Some(log) = report.log() else {
+        eprintln!("skipped: this system did not let the game keep its log");
+        return;
+    };
+    let tail = &log[log.len().saturating_sub(5)..];
+    assert_eq!(
+        level_parts(tail),
+        [0, 1, 2],
+        "all three, in order, near the end: {tail:?}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}

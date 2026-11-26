@@ -33,6 +33,16 @@
 
 mod game;
 
+#[cfg(all(
+    feature = "bench-internals",
+    feature = "window",
+    feature = "3d",
+    feature = "audio",
+    not(target_arch = "wasm32")
+))]
+#[path = "../support/soak.rs"]
+mod soak;
+
 #[cfg(target_arch = "wasm32")]
 fn main() {
     // Everything, startup included, is in the game's plugins.
@@ -42,6 +52,32 @@ fn main() {
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    #[cfg(all(
+        feature = "bench-internals",
+        feature = "window",
+        feature = "3d",
+        feature = "audio",
+        not(target_arch = "wasm32")
+    ))]
+    if args.first().is_some_and(|arg| arg == "--soak") {
+        soak::run(
+            &args[1..],
+            |base| game::smoke::smoke_game(base).configured(),
+            |ctx| game::smoke::setup_smoke(ctx, None, "soak"),
+            |ctx| {
+                let smoke = ctx.world.resource::<game::smoke::Smoke>();
+                soak::Work {
+                    cycles: smoke.cycles,
+                    saves: u64::from(ctx.world.resource::<game::Progress>().rounds_played),
+                    loads: smoke.loads,
+                    deaths: smoke.deaths,
+                }
+            },
+            "coin_dash soak",
+            (game::ARENA.x as u32, game::ARENA.y as u32),
+        );
+        return;
+    }
     match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         // Everything, startup included, is in the game's plugins.
         [] => game::build().configured().run(),

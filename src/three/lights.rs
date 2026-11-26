@@ -124,6 +124,10 @@ pub(crate) const GRID: [usize; 3] = [16, 9, 24];
 const CELLS: usize = GRID[0] * GRID[1] * GRID[2];
 pub(crate) const LIST_WIDTH: usize = 1024;
 
+/// An imported local light using glTF attenuation.
+#[derive(Clone, Copy, Component)]
+pub(super) struct PhotometricLight;
+
 /// Four RGBA32Float texels, one row per light.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -215,11 +219,17 @@ impl LightGrid {
         self.depth = [near, GRID[2] as f32 / (far / near).ln(), 0.0, 0.0];
         let view = camera.view();
         let proj = camera.view_proj() * view.inverse();
-        for (t, p) in world.query::<(&Transform3D, &PointLight3D)>().iter() {
+        for (t, p, physical) in world
+            .query::<(&Transform3D, &PointLight3D, Option<&PhotometricLight>)>()
+            .iter()
+        {
             let first = first_views.next().unwrap_or(-1);
-            self.add(t, *p, None, first, view, proj, far);
+            self.add(t, *p, None, physical.is_some(), first, view, proj, far);
         }
-        for (t, s) in world.query::<(&Transform3D, &SpotLight3D)>().iter() {
+        for (t, s, physical) in world
+            .query::<(&Transform3D, &SpotLight3D, Option<&PhotometricLight>)>()
+            .iter()
+        {
             let first = first_views.next().unwrap_or(-1);
             if !s.inner_angle.is_finite()
                 || !s.outer_angle.is_finite()
@@ -239,6 +249,7 @@ impl LightGrid {
                     shadow_resolution: s.shadow_resolution,
                 },
                 Some(*s),
+                physical.is_some(),
                 first,
                 view,
                 proj,
@@ -406,6 +417,7 @@ impl LightGrid {
         t: &Transform3D,
         p: PointLight3D,
         spot: Option<SpotLight3D>,
+        physical: bool,
         first_view: i32,
         view: Mat4,
         proj: Mat4,
@@ -477,7 +489,7 @@ impl LightGrid {
                 spot.map_or(1.0, |s| s.inner_angle.cos()),
                 first_view as f32,
                 2.0 * (shadow_fov(spot.map(|s| s.outer_angle)) * 0.5).tan() / side as f32,
-                0.0,
+                f32::from(physical),
             ],
         });
         self.bounds.push((lo, hi));
