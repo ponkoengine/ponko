@@ -1302,8 +1302,9 @@ using query_filter_ex = PonkoQueryFilterEx;
 /// (split_toning_shadows, split_toning_highlights, split_toning_balance), depth of field (dof_enabled,
 /// dof_focus_distance, dof_focus_range, dof_blur), the sample count (msaa) and, from version 2, thin
 /// objects in screen-space reflections (ssr_thin_objects: whole without TAA, about 0.2 ms more at
-/// 2560x1440; the high and ultra presets turn it on) and, from version 3, the upscaler (a ponko::upscaler;
-/// set it with `static_cast<std::uint32_t>(...)`).
+/// 2560x1440; the high and ultra presets turn it on), from version 3, the upscaler (a ponko::upscaler;
+/// set it with `static_cast<std::uint32_t>(...)`) and, from version 4, screen-space reflections on
+/// transparent surfaces (ssr_transparent: off by default and in every preset).
 using post_ex = PonkoPostEx;
 /// HDR display output settings that can grow (PonkoHdrOutput): enabled, paper_white_nits, peak_nits
 /// (0: the display's) and, from version 2, the HDR10 metadata max_content_light_nits and

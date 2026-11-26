@@ -229,6 +229,30 @@ fn the_upscaler_reaches_the_engine_in_version_3_and_older_callers_keep_it() {
     });
 }
 
+/// Version 4 adds reflections on transparent surfaces
+/// (`Post::ssr_transparent`): they reach the engine and come back, and an
+/// older caller neither reads nor changes them.
+#[test]
+fn transparent_reflections_reach_the_engine_in_version_4_and_older_callers_keep_them() {
+    run_ctx(|ctx| unsafe {
+        let mut p: PonkoPostEx = header(PONKO_POST_EX_VERSION);
+        assert_eq!(ponko_ctx_post_ex(ctx, &mut p), PONKO_OK);
+        assert!(!p.ssr_transparent, "off by default");
+        p.ssr_transparent = true;
+        assert_eq!(ponko_ctx_set_post_ex(ctx, &p), PONKO_OK, "{}", last_error());
+        let mut back: PonkoPostEx = header(PONKO_POST_EX_VERSION);
+        assert_eq!(ponko_ctx_post_ex(ctx, &mut back), PONKO_OK);
+        assert!(back.ssr_transparent);
+
+        let mut v3: PonkoPostEx = header(3);
+        assert_eq!(ponko_ctx_post_ex(ctx, &mut v3), PONKO_OK);
+        assert!(!v3.ssr_transparent, "a field past version 3 isn't written");
+        assert_eq!(ponko_ctx_set_post_ex(ctx, &v3), PONKO_OK, "{}", last_error());
+        assert_eq!(ponko_ctx_post_ex(ctx, &mut back), PONKO_OK);
+        assert!(back.ssr_transparent, "nor read: it keeps its value");
+    });
+}
+
 /// `PonkoGraphicsQuality` (ABI 2) has no field for thin objects: they follow
 /// the preset the struct is, so ultra set from C is ultra, as in Rust.
 #[test]

@@ -410,7 +410,7 @@ pub struct Post {
     /// and glass (roughness below about 0.7) reflect the opaque scene on
     /// screen, as opaque surfaces do with [`ssr`](Self::ssr), instead of only
     /// the sky and reflection probes. Each such pixel marches its reflected
-    /// ray across the depth behind it in its own fragment shader (32 steps,
+    /// ray across the depth behind it in its own fragment shader (24 steps,
     /// then 4 to find the surface), up to
     /// [`ssr_max_distance`](Self::ssr_max_distance), and shows this frame's
     /// opaque scene, sharp: other transparent surfaces aren't in it. Any

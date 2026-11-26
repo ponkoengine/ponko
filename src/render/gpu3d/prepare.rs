@@ -1153,12 +1153,12 @@ impl Renderer3D {
                 None => [[0.0; 4]; 4],
             },
             sky_kit: self.kit_uniform(device, queue, (sun, camera, sky.stars), size, unjittered),
-            reflections: if self.screen.ssr_transparent {
-                [post.ssr.min(1.0), post.ssr_max_distance, 0.0, 0.0]
-            } else {
-                [0.0; 4]
-            },
         };
+        if self.screen.ssr_transparent {
+            // Reflections on transparent surfaces: their strength and reach.
+            uniform.fog_color[3] = post.ssr.min(1.0);
+            uniform.night[3] = post.ssr_max_distance;
+        }
         if let (Some(g), Some(gi)) = (gi_frame, &self.gi) {
             let (n, origin) = (g.grid.counts.as_vec3(), g.grid.origin.as_vec3());
             uniform.gi = [
@@ -1245,7 +1245,8 @@ impl Renderer3D {
         // Reflections on transparent surfaces march the main view's scene
         // depth: the other views (held items, target cameras, probe views)
         // draw without them.
-        uniform.reflections = [0.0; 4];
+        uniform.fog_color[3] = 0.0;
+        uniform.night[3] = 0.0;
         self.upload_view_model(queue, frame, &uniform, view_proj * unjittered.inverse());
         if self.extra {
             // A window view: its frame alone; the probes, target cameras

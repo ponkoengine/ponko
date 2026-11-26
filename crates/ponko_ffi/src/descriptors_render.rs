@@ -41,19 +41,21 @@ macro_rules! assert_header {
 // ---- post-processing --------------------------------------------------------
 
 /// The version of `PonkoPostEx` this header describes.
-pub const PONKO_POST_EX_VERSION: u32 = 3;
+pub const PONKO_POST_EX_VERSION: u32 = 4;
 
 /// What happens to the lit 3D frame on its way to the screen, in a layout
 /// that can grow (Rust `ctx.scene3d.post`): `PonkoPost` plus the fields it
 /// couldn't hold, split toning, depth of field, the sample count and thin
-/// objects in reflections and the upscaler. Read it
+/// objects in reflections, the upscaler and reflections on transparent
+/// surfaces. Read it
 /// with `ponko_ctx_post_ex` (set `struct_size` and `version` first), change
 /// it, and give it back with `ponko_ctx_set_post_ex`.
 ///
 /// Version 1: `post`, `split_toning_*`, `dof_*`, `msaa`. Version 2 adds
 /// `ssr_thin_objects`; a version 1 caller leaves it as it is (off, unless
 /// Rust or a newer caller turned it on). Version 3 adds `upscaler` (a
-/// `PonkoUpscaler`); an older caller leaves it as it is.
+/// `PonkoUpscaler`); version 4 adds `ssr_transparent`. An older caller
+/// leaves the newer fields as they are.
 /// ```
 /// use ponko_ffi::*;
 /// let mut p: PonkoPostEx = unsafe { std::mem::zeroed() };
@@ -62,6 +64,7 @@ pub const PONKO_POST_EX_VERSION: u32 = 3;
 /// assert_eq!((p.dof_enabled, p.dof_focus_distance, p.msaa), (false, 10.0, 4));
 /// assert!(!p.ssr_thin_objects);
 /// assert_eq!(p.upscaler, PonkoUpscaler::PONKO_UPSCALER_BILINEAR as u32);
+/// assert!(!p.ssr_transparent);
 /// ```
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -110,6 +113,12 @@ pub struct PonkoPostEx {
     /// needs `post.anti_aliasing` 3, TAA; otherwise it stretches). Another
     /// value fails with `PONKO_INVALID_ARGUMENT`.
     pub upscaler: u32,
+    /// Version 4. Screen-space reflections on transparent surfaces too:
+    /// glossy water and glass reflect the opaque scene on screen, each pixel
+    /// marching its ray in its own shader (Rust `Post::ssr_transparent`).
+    /// Default false, in every preset too. Only matters where `post.ssr` is
+    /// above 0.
+    pub ssr_transparent: bool,
 }
 assert_header!(PonkoPostEx);
 
@@ -151,6 +160,7 @@ impl Versioned for PonkoPostEx {
             1 => Some(end_of!(Self, msaa: u32)),
             2 => Some(end_of!(Self, ssr_thin_objects: bool)),
             3 => Some(end_of!(Self, upscaler: u32)),
+            4 => Some(end_of!(Self, ssr_transparent: bool)),
             _ => None,
         }
     }
@@ -172,6 +182,7 @@ fn post_ex_of(p: &Post) -> PonkoPostEx {
         msaa: p.msaa,
         ssr_thin_objects: p.ssr_thin_objects,
         upscaler: upscaler_to_c(p.upscaler),
+        ssr_transparent: p.ssr_transparent,
     }
 }
 
@@ -221,6 +232,7 @@ fn post_of_ex(base: Post, ex: &PonkoPostEx) -> Result<Post, Failure> {
     post.msaa = ex.msaa;
     post.ssr_thin_objects = ex.ssr_thin_objects;
     post.upscaler = upscaler;
+    post.ssr_transparent = ex.ssr_transparent;
     Ok(post)
 }
 
@@ -885,7 +897,11 @@ mod tests {
             Some(offset_of!(PonkoPostEx, ssr_thin_objects) + 1)
         );
         assert_eq!(PonkoPostEx::len_of(3), Some(offset_of!(PonkoPostEx, upscaler) + 4));
-        assert_eq!(PonkoPostEx::len_of(4), None);
+        assert_eq!(
+            PonkoPostEx::len_of(4),
+            Some(offset_of!(PonkoPostEx, ssr_transparent) + 1)
+        );
+        assert_eq!(PonkoPostEx::len_of(5), None);
     }
 
     /// A descriptor with its header set for version 1.

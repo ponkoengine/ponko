@@ -12,6 +12,6 @@
   "adapter": "Apple M4 Max",
   "backend": "Metal",
   "driver": "unknown",
-  "checksum": "59e2c39791466bb7",
+  "checksum": "6ff30927c04840cc",
   "reason": "New reference: screen-space reflections on transparent surfaces (Post::ssr_transparent)"
 }

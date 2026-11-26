@@ -3098,6 +3098,16 @@ static void render_descriptors_setup(PonkoCtx* ctx, void* user) {
     CHECK(ponko_ctx_post_ex(ctx, &back) == PONKO_OK && back.upscaler == PONKO_UPSCALER_TEMPORAL);
     post.upscaler = PONKO_UPSCALER_BILINEAR;
     CHECK(ponko_ctx_set_post_ex(ctx, &post) == PONKO_OK);
+    /* Version 4: reflections on transparent surfaces; a version 3 caller leaves them as they are. */
+    CHECK(!back.ssr_transparent);
+    post.ssr_transparent = true;
+    CHECK(ponko_ctx_set_post_ex(ctx, &post) == PONKO_OK);
+    PonkoPostEx v3 = {.struct_size = sizeof v3, .version = 3};
+    CHECK(ponko_ctx_post_ex(ctx, &v3) == PONKO_OK && !v3.ssr_transparent); /* not written */
+    CHECK(ponko_ctx_set_post_ex(ctx, &v3) == PONKO_OK);
+    CHECK(ponko_ctx_post_ex(ctx, &back) == PONKO_OK && back.ssr_transparent);
+    post.ssr_transparent = false;
+    CHECK(ponko_ctx_set_post_ex(ctx, &post) == PONKO_OK);
     /* Two looks blended, and volumes by where the camera is. */
     PonkoPostEx day = {.struct_size = sizeof day, .version = PONKO_POST_EX_VERSION};
     PonkoPostEx cave = day, blended = day;

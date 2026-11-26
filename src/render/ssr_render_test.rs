@@ -1177,6 +1177,118 @@ fn reflection_gpu_cost(
     true
 }
 
+/// Offscreen timestamp measurement of `Post::ssr_transparent`, like
+/// [`reflection_gpu_cost_at_1080p`]; run with --ignored --nocapture. At
+/// 1920x1080 in the High preset, a glossy half see-through pane (water) over
+/// a dark floor fills the lower part of the screen
+/// under a glowing box; reflections on transparent surfaces alternate off
+/// and on in blocks of 20 frames. Prints the frame's GPU time both ways and
+/// every pass's span both ways (with the setting off the pane draws in the
+/// opaque pass, as without it; on, after the scene copy).
+#[test]
+#[ignore]
+fn transparent_reflection_gpu_cost_at_1080p() {
+    let Some(mut rig) = Rig::with_limits(1920, 1080, true) else {
+        return;
+    };
+    let Some(mut timer) = super::timer::GpuTimer::new(&rig.device, &rig.queue) else {
+        crate::render::render_test_support::skip("timestamp queries unavailable");
+        return;
+    };
+    let water = rig.mesh(
+        &MeshData::cube(1.0),
+        MaterialDesc {
+            color: Color::rgba(0.6, 0.7, 0.8, 0.6),
+            roughness: 0.05,
+            blend: crate::render::Blend::Transparent,
+            ..Default::default()
+        },
+    );
+    let ground = rig.mesh(
+        &MeshData::cube(1.0),
+        MaterialDesc {
+            color: Color::rgb(0.2, 0.2, 0.2),
+            roughness: 1.0,
+            ..Default::default()
+        },
+    );
+    let block = rig.mesh(
+        &MeshData::cube(1.0),
+        MaterialDesc {
+            color: Color::BLACK,
+            emissive: Color::rgb(4.0, 0.0, 0.0),
+            ..Default::default()
+        },
+    );
+    for (mesh, position, scale) in [
+        (water, vec3(0.0, -0.05, 0.0), vec3(40.0, 0.1, 40.0)),
+        (ground, vec3(0.0, -1.25, 0.0), vec3(40.0, 0.5, 40.0)),
+        (block, vec3(0.0, 1.0, 0.0), Vec3::ONE),
+    ] {
+        rig.ctx.world.spawn((
+            Transform3D {
+                position,
+                scale,
+                ..Default::default()
+            },
+            Model::new(mesh),
+        ));
+    }
+    rig.ctx.scene3d.camera.position = vec3(0.0, 2.0, 6.0);
+    rig.ctx.scene3d.camera.look_at(Vec3::ZERO);
+    rig.ctx.scene3d.set_quality(crate::render::GraphicsQuality::High);
+    assert!(rig.ctx.scene3d.post.ssr > 0.0, "the preset has reflections");
+    let busy = Busy::new(&rig.device);
+    let median = |samples: &mut Vec<f32>| {
+        samples.sort_by(f32::total_cmp);
+        samples[samples.len() / 2]
+    };
+    // [off, on]
+    let mut frames = [Vec::new(), Vec::new()];
+    let mut passes: Vec<(&'static str, [Vec<f32>; 2])> = Vec::new();
+    for frame in 0..840 {
+        let on = (frame / 20) % 2 == 1;
+        rig.ctx.scene3d.post.ssr_transparent = on;
+        busy.run(&rig.device, &rig.queue);
+        rig.draw_timed(Some(&mut timer));
+        if frame < 40 || frame % 20 < 8 {
+            continue;
+        }
+        frames[usize::from(on)].push(timer.last_frame.iter().map(|s| s.ms).sum::<f32>());
+        for span in &timer.last_frame {
+            let times = match passes.iter_mut().find(|(name, _)| *name == span.name) {
+                Some((_, times)) => times,
+                None => {
+                    passes.push((span.name, [Vec::new(), Vec::new()]));
+                    &mut passes.last_mut().unwrap().1
+                }
+            };
+            times[usize::from(on)].push(span.ms);
+        }
+    }
+    let [mut off, mut on] = frames;
+    let (off, on) = (median(&mut off), median(&mut on));
+    let spans: Vec<String> = passes
+        .iter_mut()
+        .map(|(name, [off, on])| {
+            let ms = |t: &mut Vec<f32>| {
+                if t.is_empty() {
+                    "-".to_string()
+                } else {
+                    format!("{:.4}", median(t))
+                }
+            };
+            format!("{name} {} / {}", ms(off), ms(on))
+        })
+        .collect();
+    eprintln!(
+        "1920x1080, High, transparent pane: frame median {off:.4} ms without reflections on transparent surfaces, \
+         {on:.4} ms with (+{:.4} ms); passes (off / on): {}",
+        on - off,
+        spans.join(", ")
+    );
+}
+
 /// The coarse depth of `Post::ssr_thin_objects` gets a GPU time of its own
 /// at 1280x720: a span above zero within the frame, not listed as not
 /// timed (Apple GPUs read 0 for it before the timer copied a frame's

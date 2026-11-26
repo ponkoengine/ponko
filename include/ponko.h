@@ -251,7 +251,7 @@
 
 #define PONKO_LIGHTING_EX_VERSION 1
 
-#define PONKO_POST_EX_VERSION 3
+#define PONKO_POST_EX_VERSION 4
 
 #define PONKO_PARTICLE_SETTINGS3D_EX_VERSION 1
 
@@ -3570,6 +3570,7 @@ typedef struct PonkoPostEx {
   uint32_t msaa;
   bool ssr_thin_objects;
   uint32_t upscaler;
+  bool ssr_transparent;
 } PonkoPostEx;
 
 typedef struct PonkoPostVolume {

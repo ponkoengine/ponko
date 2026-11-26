@@ -30,8 +30,8 @@ struct Frame {
     atmosphere: vec4<f32>, // x: a physical sky (1) or not (0), y: haze, z: cos of the sun's radius, w: stars
     sky_light: vec4<f32>,  // rgb: the sunlight the sky is lit by, w: camera height in km
     fog: vec4<f32>,        // x: density per unit, y: fog height, z: 1 / falloff, w: light shafts
-    fog_color: vec4<f32>,  // rgb: linear, without an atmosphere
-    night: vec4<f32>,      // rgb: light at night
+    fog_color: vec4<f32>,  // rgb: linear, without an atmosphere; w: screen-space reflections on transparent surfaces, their strength (0: off)
+    night: vec4<f32>,      // rgb: light at night; w: how far those reflections look
     fog_far: vec4<f32>,    // x: distance fog start, y: its end (0: none), z: sun glow, w: sun focus
     cluster_depth: vec4<f32>,
     cluster_view_proj: mat4x4<f32>,
@@ -54,7 +54,6 @@ struct Frame {
     gi: array<vec4<f32>, 3>, // global illumination's probe grid (see gi.wgsl)
     sky_params: array<vec4<f32>, 4>, // a sky shader's values (`Sky::shader_params`)
     sky_kit: array<vec4<f32>, 6>, // the sky kit's clouds, moon and cloud shadows (zero without it)
-    reflections: vec4<f32>, // screen-space reflections on transparent surfaces: x strength (0: off), y how far a ray looks
 };
 
 struct MaterialData {
