@@ -204,10 +204,10 @@ fn a_masked_tint_colours_only_where_the_vertex_alpha_says() {
 }
 
 /// What the vertex colour's size costs, offscreen at 1920x1080: 400
-/// dense spheres (about 6.6 million corners a frame), small on screen so
-/// the vertices, not the pixels, take the time, with shadows on (each
-/// cascade reads the vertices again). The GPU time of every pass and the
-/// whole frame's, and the bytes of one corner. For numbers, not a check:
+/// dense spheres (about 3.4 million corners and 19 million index reads a
+/// frame), small on screen so the vertices, not the pixels, take the time
+/// (the shadows are on, but cached: nothing moves). The GPU time of every
+/// pass and the bytes of one corner. For numbers, not a check:
 /// `cargo test --release -p ponko --lib --features 3d vertex_color_costs -- --ignored --nocapture`.
 #[test]
 #[ignore = "offscreen GPU timestamps at 1080p; run in release with --ignored --nocapture"]
