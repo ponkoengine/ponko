@@ -260,9 +260,103 @@ mod tests {
         let mut factors = MaterialFactors::of(&desc);
         set(&mut desc, &mut factors, MaterialProperty::Roughness, Vec4::X * 3.0);
         set(&mut desc, &mut factors, MaterialProperty::Ior, Vec4::X * 0.5);
-        set(&mut desc, &mut factors, MaterialProperty::Color, Vec4::new(1.0, 1.0, 1.0, 2.0));
+        set(
+            &mut desc,
+            &mut factors,
+            MaterialProperty::Color,
+            Vec4::new(1.0, 1.0, 1.0, 2.0),
+        );
         assert_eq!((desc.roughness, desc.layers.ior, desc.color.a), (1.0, 1.0, 1.0));
         assert!(desc.layers.problem().is_none());
+    }
+
+    /// A clip tinting `material` from white to blue over a second.
+    fn tint(material: Material) -> crate::anim::AnimationClip {
+        use crate::anim::{AnimationClip, AnimationTrack, Interpolation, PropertyAnimation};
+        let track = AnimationTrack::new(
+            vec![0.0, 1.0],
+            vec![Vec4::ONE, Vec4::new(0.0, 0.0, 1.0, 1.0)],
+            Interpolation::Linear,
+        );
+        AnimationClip::new("tint", &Skeleton::new(vec![]), vec![]).with_property_tracks(vec![PropertyAnimation::new(
+            AnimatedProperty::Material(material, MaterialProperty::Color),
+            track,
+        )])
+    }
+
+    #[test]
+    fn sampled_material_values_reach_the_material_and_go_back_after() {
+        crate::game::Game::new("tint", 1, 1).run_headless(0, |ctx| {
+            let red = Color::rgb(1.0, 0.0, 0.0);
+            let material = ctx
+                .gfx
+                .create_material(MaterialDesc::default().with_color(red).with_roughness(0.25));
+            let clip = tint(material);
+            let mut skeleton = Skeleton::new(vec![]);
+            clip.sample(1.0, &mut skeleton);
+            let body = ctx.world.spawn((skeleton,));
+            let desc = |ctx: &crate::ctx::Ctx| ctx.gfx.assets3d.material_descs[&material.id];
+            ctx.gfx.apply_animated_materials(&mut ctx.world);
+            assert_eq!(desc(ctx).color, Color::rgb(0.0, 0.0, 1.0));
+            assert_eq!(desc(ctx).roughness, 0.25, "what isn't keyed stays");
+            // Half way, in linear light: half of white's.
+            ctx.world.get_mut::<Skeleton>(body).unwrap().reset_pose();
+            clip.sample(0.5, ctx.world.get_mut::<Skeleton>(body).unwrap());
+            ctx.gfx.apply_animated_materials(&mut ctx.world);
+            let [r, _, b, _] = linear(desc(ctx).color);
+            assert!((r - 0.5).abs() < 1e-3 && (b - 1.0).abs() < 1e-3, "{r} {b}");
+            // Half the weight: halfway between that and the base's red.
+            ctx.world.get_mut::<Skeleton>(body).unwrap().reset_pose();
+            clip.sample_blended(1.0, 0.5, ctx.world.get_mut::<Skeleton>(body).unwrap());
+            ctx.gfx.apply_animated_materials(&mut ctx.world);
+            let [r, g, b, _] = linear(desc(ctx).color);
+            assert!(
+                (r - 0.5).abs() < 1e-3 && g.abs() < 1e-3 && (b - 0.5).abs() < 1e-3,
+                "{r} {g} {b}"
+            );
+            // Nothing keys it: back to the base, and no state kept.
+            ctx.world.get_mut::<Skeleton>(body).unwrap().reset_pose();
+            ctx.gfx.apply_animated_materials(&mut ctx.world);
+            assert_eq!(desc(ctx).color, red);
+            assert!(ctx.gfx.assets3d.animated_materials.is_empty());
+        });
+    }
+
+    #[test]
+    fn a_material_the_game_changes_meanwhile_is_the_new_base() {
+        crate::game::Game::new("tint", 1, 1).run_headless(0, |ctx| {
+            let material = ctx.gfx.create_material(MaterialDesc::default());
+            let clip = tint(material);
+            let mut skeleton = Skeleton::new(vec![]);
+            clip.sample_blended(1.0, 0.0, &mut skeleton);
+            let body = ctx.world.spawn((skeleton,));
+            ctx.gfx.apply_animated_materials(&mut ctx.world);
+            let green = MaterialDesc::default().with_color(Color::rgb(0.0, 1.0, 0.0));
+            ctx.gfx.update_material(material, green);
+            ctx.gfx.apply_animated_materials(&mut ctx.world);
+            assert_eq!(
+                ctx.gfx.assets3d.material_descs[&material.id].color,
+                Color::rgb(0.0, 1.0, 0.0)
+            );
+            ctx.world.get_mut::<Skeleton>(body).unwrap().reset_pose();
+            ctx.gfx.apply_animated_materials(&mut ctx.world);
+            assert_eq!(ctx.gfx.assets3d.material_descs[&material.id], green);
+        });
+    }
+
+    #[test]
+    fn a_freed_material_is_left_alone() {
+        crate::game::Game::new("tint", 1, 1).run_headless(0, |ctx| {
+            let material = ctx.gfx.create_material(MaterialDesc::default());
+            let clip = tint(material);
+            let mut skeleton = Skeleton::new(vec![]);
+            clip.sample(1.0, &mut skeleton);
+            ctx.world.spawn((skeleton,));
+            ctx.free(material);
+            ctx.gfx.apply_animated_materials(&mut ctx.world);
+            assert!(ctx.gfx.assets3d.animated_materials.is_empty());
+            assert!(!ctx.gfx.assets3d.material_descs.contains_key(&material.id));
+        });
     }
 
     #[test]
@@ -274,6 +368,9 @@ mod tests {
         };
         let desc = AnimatedMaterial::finished(MaterialDesc::default(), &factors);
         let [r, g, b, _] = linear(desc.emissive);
-        assert!((r - 1.0).abs() < 1e-4 && (g - 0.5).abs() < 1e-4 && b == 0.0, "{r} {g} {b}");
+        assert!(
+            (r - 1.0).abs() < 1e-4 && (g - 0.5).abs() < 1e-4 && b == 0.0,
+            "{r} {g} {b}"
+        );
     }
 }

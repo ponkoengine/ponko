@@ -679,7 +679,9 @@ impl AnimationClip {
     /// Samples the property tracks into `skeleton` at `time`, by `weight`.
     fn sample_properties(&self, time: f32, weight: f32, skeleton: &mut Skeleton) {
         for p in &self.0.properties {
-            skeleton.morphs.set_property(p.target, p.track.sample(time, false), weight);
+            skeleton
+                .morphs
+                .set_property(p.target, p.track.sample(time, false), weight);
         }
     }
     /// Named morph tracks, in weight units (1 is full weight).
@@ -928,6 +930,82 @@ mod tests {
         let mut missing = skeleton(&["other"]);
         c.sample(0.0, &mut missing);
         assert_eq!(missing.pose[0], Transform3D::default());
+    }
+
+    fn visible(joint: usize, values: Vec<Vec4>) -> PropertyAnimation {
+        PropertyAnimation::new(
+            AnimatedProperty::JointVisible(joint),
+            AnimationTrack::new(vec![0.0, 1.0], values, Interpolation::Step),
+        )
+    }
+
+    #[test]
+    fn property_tracks_sample_into_the_skeleton_and_blend_by_weight() {
+        let mut s = skeleton(&["root", "lamp"]);
+        let blink = clip(&s).with_property_tracks(vec![visible(1, vec![Vec4::X, Vec4::ZERO])]);
+        assert_eq!(blink.duration(), 2.0, "the joint track is longer");
+        assert_eq!(blink.property_tracks().len(), 1);
+        let target = AnimatedProperty::JointVisible(1);
+        assert_eq!(s.property(target), None, "nothing keyed yet");
+        blink.sample(0.5, &mut s);
+        assert_eq!(s.property(target), Some(Vec4::X));
+        assert!(s.joint_visible(1));
+        s.reset_pose();
+        blink.sample(1.5, &mut s);
+        assert_eq!(s.property(target), Some(Vec4::ZERO));
+        assert!(!s.joint_visible(1) && s.joint_visible(0));
+        // Half of a hidden key over a shown rest: the value is the key, the
+        // rest makes up the other half, and 0.5 still shows.
+        s.reset_pose();
+        blink.sample_blended(1.5, 0.5, &mut s);
+        assert_eq!(s.property(target), Some(Vec4::ZERO));
+        assert!(s.joint_visible(1));
+        s.reset_pose();
+        blink.sample_blended(1.5, 0.75, &mut s);
+        assert!(!s.joint_visible(1));
+        // Reset forgets it.
+        s.reset_pose();
+        assert_eq!(s.property(target), None);
+        assert!(s.joint_visible(1));
+    }
+
+    #[test]
+    fn property_tracks_alone_set_the_duration() {
+        let s = skeleton(&["lamp"]);
+        let blink = AnimationClip::new("blink", &s, vec![]).with_property_tracks(vec![visible(0, vec![Vec4::X; 2])]);
+        assert_eq!(blink.duration(), 1.0);
+    }
+
+    #[test]
+    fn two_tracks_for_one_property_are_refused() {
+        let s = skeleton(&["lamp"]);
+        let err = AnimationClip::new("blink", &s, vec![])
+            .try_with_property_tracks(vec![visible(0, vec![Vec4::X; 2]), visible(0, vec![Vec4::ZERO; 2])])
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Invalid);
+        assert!(err.message().contains("JointVisible(0)"), "{}", err.message());
+    }
+
+    #[test]
+    fn replacing_tracks_on_a_shared_clip_leaves_the_other_clone_alone() {
+        let s = skeleton(&["lamp"]);
+        let color = PropertyAnimation::new(
+            AnimatedProperty::Material(Material { id: 3 }, MaterialProperty::Color),
+            AnimationTrack::new(vec![0.0], vec![Vec4::ONE], Interpolation::Step),
+        );
+        let tinted = AnimationClip::new("tint", &s, vec![]).with_property_tracks(vec![color]);
+        assert!(tinted.0.materials && any_material_clips());
+        let plain = tinted.clone().with_property_tracks(vec![visible(0, vec![Vec4::X; 2])]);
+        assert!(!plain.0.materials);
+        assert_eq!(tinted.property_tracks().len(), 1);
+        assert!(matches!(
+            tinted.property_tracks()[0].target,
+            AnimatedProperty::Material(..)
+        ));
+        // The copy has its own name binding cache, still empty.
+        let mut other = skeleton(&["other", "lamp"]);
+        plain.sample(0.0, &mut other);
+        assert!(tinted.0.bindings.lock().unwrap().is_empty());
     }
 
     #[test]

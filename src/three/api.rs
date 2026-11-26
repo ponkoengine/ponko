@@ -137,7 +137,10 @@ impl GpuMaterialDesc {
                 custom: desc.custom.map(|v| v.to_array()),
                 uv_transform: {
                     let m = desc.texture_transform.matrix();
-                    [[m.x_axis.x, m.y_axis.x, m.z_axis.x, 0.0], [m.x_axis.y, m.y_axis.y, m.z_axis.y, 0.0]]
+                    [
+                        [m.x_axis.x, m.y_axis.x, m.z_axis.x, 0.0],
+                        [m.x_axis.y, m.y_axis.y, m.z_axis.y, 0.0],
+                    ]
                 },
                 ..MaterialUniform::default()
             },
@@ -1421,7 +1424,12 @@ impl Graphics {
         let clips = loaded
             .clips
             .into_iter()
-            .zip(loaded.clip_materials.into_iter().chain(std::iter::repeat_with(Vec::new)))
+            .zip(
+                loaded
+                    .clip_materials
+                    .into_iter()
+                    .chain(std::iter::repeat_with(Vec::new)),
+            )
             .map(|(clip, animated)| {
                 if animated.is_empty() {
                     return clip;

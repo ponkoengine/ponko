@@ -78,8 +78,8 @@ pub(crate) use gi::MAX_GI_PROBES_PER_FRAME;
 pub use ik::{look_at_joint, two_bone_ik};
 pub use lod::{LodFadeTime, LodGroup, LodHysteresis, LodLevel, LodPick, LodRenderer, LodSettings, LodShadow};
 pub use retarget::{HumanBone, HumanoidMap, RetargetError, Retargeter};
-pub(crate) mod lights;
 mod animated_material;
+pub(crate) mod lights;
 #[cfg(feature = "editor")]
 mod material_edit;
 pub(crate) mod material_extras;

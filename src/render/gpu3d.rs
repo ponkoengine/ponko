@@ -2423,6 +2423,7 @@ mod tests {
             ("custom", std::mem::offset_of!(U, custom)),
             ("layer_info", std::mem::offset_of!(U, layer_info)),
             ("layers", std::mem::offset_of!(U, layers)),
+            ("uv_transform", std::mem::offset_of!(U, uv_transform)),
         ] {
             assert_eq!(
                 members.iter().find(|m| m.name.as_deref() == Some(name)).unwrap().offset as usize,

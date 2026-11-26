@@ -1129,6 +1129,60 @@ mod tests {
     }
 
     #[test]
+    fn a_hidden_joint_zeroes_its_matrix_and_those_under_it() {
+        let mut s = Skeleton::new(vec![
+            Joint::new("root", None),
+            Joint::new("arm", 0).with_rest(Transform3D::at(vec3(0.0, 1.0, 0.0))),
+            Joint::new("hand", 1),
+            Joint::new("other", 0),
+        ]);
+        s.update();
+        assert!(s.matrices().iter().all(|m| *m != Mat4::ZERO));
+        s.set_property(AnimatedProperty::JointVisible(1), glam::Vec4::ZERO);
+        assert!(!s.joint_visible(1) && s.joint_visible(2), "the hand itself is shown");
+        s.update();
+        assert_eq!(s.matrices()[1], Mat4::ZERO);
+        assert_eq!(s.matrices()[2], Mat4::ZERO, "under a hidden joint");
+        assert_ne!(s.matrices()[0], Mat4::ZERO);
+        assert_ne!(s.matrices()[3], Mat4::ZERO);
+        // Next frame nothing keys it: shown again.
+        s.reset_pose();
+        s.update();
+        assert!(s.matrices().iter().all(|m| *m != Mat4::ZERO));
+    }
+
+    #[test]
+    fn a_joint_hidden_at_rest_stays_hidden_until_a_clip_shows_it() {
+        let mut s = Skeleton::new(vec![Joint::new("root", None), Joint::new("lid", 0).with_visible(false)]);
+        s.update();
+        assert_eq!(s.matrices()[1], Mat4::ZERO);
+        s.set_property(AnimatedProperty::JointVisible(1), glam::Vec4::X);
+        assert!(s.joint_visible(1));
+        s.update();
+        assert_eq!(s.matrices()[1], s.joint_matrix(1));
+    }
+
+    #[test]
+    fn what_hangs_from_a_hidden_joint_is_scaled_to_nothing_in_place() {
+        let mut world = World::new();
+        let owner = world.spawn((Transform3D::at(vec3(2.0, 0.0, 0.0)), arm()));
+        let lamp = world.spawn((Transform3D::default(), AttachToJoint::new(owner, 1)));
+        let shown = world.spawn((Transform3D::default(), AttachToJoint::new(owner, 0)));
+        let mut frame = SkinFrame::default();
+        frame.collect(&mut world, &Assets3D::default());
+        assert_eq!(world.get::<Transform3D>(lamp).unwrap().scale, Vec3::ONE);
+        world
+            .get_mut::<Skeleton>(owner)
+            .unwrap()
+            .set_property(AnimatedProperty::JointVisible(1), glam::Vec4::ZERO);
+        frame.collect(&mut world, &Assets3D::default());
+        let t = *world.get::<Transform3D>(lamp).unwrap();
+        assert_eq!(t.scale, Vec3::ZERO);
+        assert_eq!(t.position, vec3(2.0, 1.0, 0.0), "it stays where it hangs");
+        assert_eq!(world.get::<Transform3D>(shown).unwrap().scale, Vec3::ONE);
+    }
+
+    #[test]
     fn update_matches_joint_matrix() {
         let mut s = arm();
         s.pose[0].rotation = Quat::from_rotation_x(0.7);
@@ -1371,7 +1425,10 @@ mod tests {
 /// Morph weights by name, and the clips' other values
 /// ([`AnimatedProperty`]), blended the same way.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct MorphPose(Vec<(Arc<str>, f32, f32, bool)>, Vec<(AnimatedProperty, glam::Vec4, f32, bool)>);
+pub(crate) struct MorphPose(
+    Vec<(Arc<str>, f32, f32, bool)>,
+    Vec<(AnimatedProperty, glam::Vec4, f32, bool)>,
+);
 impl MorphPose {
     pub fn clear(&mut self) {
         for (_, v, coverage, active) in &mut self.0 {

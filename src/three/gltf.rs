@@ -1189,7 +1189,9 @@ fn read_materials(
             unlit,
             layers,
             layer_maps,
-            texture_transform: mappings.last().map_or(super::TextureTransform::IDENTITY, |m| m.transform),
+            texture_transform: mappings
+                .last()
+                .map_or(super::TextureTransform::IDENTITY, |m| m.transform),
             alpha_cutoff: material.alpha_cutoff().unwrap_or(0.5),
         });
     }
@@ -1322,7 +1324,9 @@ fn read_clips(
     pointers: &Pointers<'_>,
     (name, warnings): (&str, &mut Vec<String>),
 ) -> Result<(Vec<super::AnimationClip>, Vec<ClipMaterials>), String> {
-    use super::{AnimatedProperty, AnimationClip, AnimationTrack, Interpolation, JointAnimation, PropertyAnimation, Skeleton};
+    use super::{
+        AnimatedProperty, AnimationClip, AnimationTrack, Interpolation, JointAnimation, PropertyAnimation, Skeleton,
+    };
     use gltf::animation::util::ReadOutputs;
     let source = Skeleton::try_new(rig.joints.clone())?;
     let mut materials_of = Vec::new();

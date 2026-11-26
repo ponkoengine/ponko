@@ -426,6 +426,8 @@ pub(crate) struct Screenshot {
 }
 
 #[cfg(all(test, feature = "window", feature = "3d"))]
+mod animation_pointer_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
 mod area_lights_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod atlas_render_test;
