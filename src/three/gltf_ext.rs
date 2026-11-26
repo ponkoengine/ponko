@@ -41,6 +41,8 @@ fn support(extension: &str) -> Option<Support> {
         | "KHR_materials_emissive_strength"
         | "KHR_mesh_quantization"
         | "KHR_materials_transmission"
+        | SPECULAR_GLOSSINESS
+        | INSTANCING
         | QUANTIZED_POSITIONS => Support::Always,
         "EXT_meshopt_compression" | "KHR_meshopt_compression" => Support::Feature("gltf-meshopt", MESHOPT),
         // KTX2 images: block formats upload as they are; Basis Universal
@@ -48,6 +50,8 @@ fn support(extension: &str) -> Option<Support> {
         // it, and the texture's core image loads instead if it has one).
         "KHR_texture_basisu" => Support::Feature("compressed-textures", cfg!(feature = "compressed-textures")),
         "EXT_texture_webp" => Support::Feature("image-webp", cfg!(feature = "image-webp")),
+        // DDS images of BCn blocks, as the KTX2 ones upload.
+        "MSFT_texture_dds" => Support::Feature("compressed-textures", cfg!(feature = "compressed-textures")),
         _ => return None,
     })
 }
@@ -245,12 +249,27 @@ impl Start {
         let Self {
             mut json,
             mut buffers,
-            warnings,
+            mut warnings,
             ..
         } = self;
         decompress_views(name, &mut json, &mut buffers)?;
+        if specular_glossiness_as_metal_rough(&mut json) {
+            warnings.push(format!(
+                "{name}: approximates its {SPECULAR_GLOSSINESS} materials: the diffuse color and texture \
+                 show as the base color and the glossiness as roughness; the specular color and the \
+                 specular-glossiness texture are left out"
+            ));
+        }
         let preferred_image = texture_sources(name, &mut json)?;
         let dequantize = fold_quantized_positions(&mut json);
+        let unread = instances_as_nodes(&mut json, &buffers);
+        if unread > 0 {
+            warnings.push(format!(
+                "{name}: draws the mesh of {unread} {INSTANCING} node(s) once, at the node: their instance \
+                 transforms aren't readable (a sparse accessor, or a type the extension doesn't allow)"
+            ));
+        }
+        drop_channels_without_nodes(&mut json);
 
         // The `gltf` crate checks required extensions against its own list,
         // which doesn't know these; they were checked above.
@@ -267,6 +286,184 @@ impl Start {
             dequantize,
             warnings,
         })
+    }
+}
+
+/// The retired specular-glossiness workflow of glTF materials, which
+/// older exporters still write (often with no metallic-roughness block).
+const SPECULAR_GLOSSINESS: &str = "KHR_materials_pbrSpecularGlossiness";
+
+/// Gives every material of the retired specular-glossiness workflow
+/// ([`SPECULAR_GLOSSINESS`]) without a metallic-roughness block of its own
+/// one made from it, which the rest of the loader reads: the diffuse color
+/// and texture as the base color, no metalness, and one minus the
+/// glossiness as the roughness. The specular color and the
+/// specular-glossiness texture have no counterpart there (`true`: some
+/// material was converted, so the caller warns that it is approximated).
+pub(super) fn specular_glossiness_as_metal_rough(json: &mut Value) -> bool {
+    let Some(materials) = json.get_mut("materials").and_then(Value::as_array_mut) else {
+        return false;
+    };
+    let mut converted = false;
+    for material in materials {
+        if material.get("pbrMetallicRoughness").is_some() {
+            continue;
+        }
+        let Some(sg) = extension(material, SPECULAR_GLOSSINESS).cloned() else {
+            continue;
+        };
+        let mut pbr = serde_json::Map::new();
+        if let Some(factor) = sg.get("diffuseFactor") {
+            pbr.insert("baseColorFactor".into(), factor.clone());
+        }
+        if let Some(texture) = sg.get("diffuseTexture") {
+            pbr.insert("baseColorTexture".into(), texture.clone());
+        }
+        pbr.insert("metallicFactor".into(), Value::from(0.0));
+        let glossiness = sg["glossinessFactor"].as_f64().unwrap_or(1.0).clamp(0.0, 1.0);
+        pbr.insert("roughnessFactor".into(), Value::from(1.0 - glossiness));
+        material["pbrMetallicRoughness"] = Value::Object(pbr);
+        converted = true;
+    }
+    converted
+}
+
+/// glTF's GPU instancing extension: a node that draws its mesh once per
+/// instance, each instance with the translation, rotation and scale its
+/// accessors give (in the node's space).
+const INSTANCING: &str = "EXT_mesh_gpu_instancing";
+
+/// Gives every instance of each [`INSTANCING`] node a child node of its
+/// own that shows the node's mesh with the instance's transform, and the
+/// node itself shows nothing: the loader draws nodes, so each instance
+/// draws (as a copy of the mesh in the loaded model). A node with a skin
+/// is left as it is. Returns how many nodes' instances couldn't be read
+/// (their mesh draws once, at the node, as without the extension).
+pub(super) fn instances_as_nodes(json: &mut Value, buffers: &[Vec<u8>]) -> usize {
+    let mut unread = 0;
+    let mut added = Vec::new();
+    for (n, node) in json["nodes"].as_array().into_iter().flatten().enumerate() {
+        let Some(attributes) = node["extensions"][INSTANCING]["attributes"].as_object() else {
+            continue;
+        };
+        if node.get("mesh").is_none() || node.get("skin").is_some() {
+            continue;
+        }
+        let read = |name: &str, components: usize| {
+            attributes
+                .get(name)
+                .map(|accessor| accessor_floats(json, buffers, accessor, components))
+        };
+        let parts = [read("TRANSLATION", 3), read("ROTATION", 4), read("SCALE", 3)];
+        if parts.iter().any(|p| matches!(p, Some(None))) {
+            unread += 1;
+            continue;
+        }
+        let parts: Vec<(usize, Vec<f32>)> = [("translation", 3), ("rotation", 4), ("scale", 3)]
+            .iter()
+            .zip(parts)
+            .filter_map(|(&(_, n), p)| Some((n, p.flatten()?)))
+            .collect();
+        let Some(count) = parts.first().map(|(n, values)| values.len() / n) else {
+            continue;
+        };
+        if parts.iter().any(|(n, values)| values.len() != count * n) {
+            unread += 1;
+            continue;
+        }
+        let names: Vec<&str> = ["TRANSLATION", "ROTATION", "SCALE"]
+            .iter()
+            .zip(["translation", "rotation", "scale"])
+            .filter(|(attribute, _)| attributes.contains_key(**attribute))
+            .map(|(_, path)| path)
+            .collect();
+        let children: Vec<Value> = (0..count)
+            .map(|i| {
+                let mut child = serde_json::json!({ "mesh": node["mesh"] });
+                if let Some(weights) = node.get("weights") {
+                    child["weights"] = weights.clone();
+                }
+                for (path, (components, values)) in names.iter().zip(&parts) {
+                    child[*path] = values[i * components..(i + 1) * components].into();
+                }
+                child
+            })
+            .collect();
+        added.push((n, children));
+    }
+    for (n, children) in added {
+        let Some(nodes) = json["nodes"].as_array_mut() else {
+            break;
+        };
+        let first = nodes.len();
+        nodes.extend(children);
+        let last = nodes.len();
+        let node = &mut nodes[n];
+        let mut list = node["children"].as_array().cloned().unwrap_or_default();
+        list.extend((first..last).map(Value::from));
+        node["children"] = Value::Array(list);
+        if let Some(node) = node.as_object_mut() {
+            node.remove("mesh");
+            node.remove("weights");
+        }
+    }
+    unread
+}
+
+/// The values of a `components`-wide accessor (VEC3 or VEC4) as floats:
+/// float components as they are, normalized integer ones scaled to 0..1 or
+/// -1..1. `None` when it can't be read here: sparse, another type, or
+/// pointing past its buffer.
+fn accessor_floats(json: &Value, buffers: &[Vec<u8>], index: &Value, components: usize) -> Option<Vec<f32>> {
+    let accessor = &json["accessors"][usize::try_from(index.as_u64()?).ok()?];
+    let ty = ["", "SCALAR", "VEC2", "VEC3", "VEC4"].get(components)?;
+    if accessor["type"] != *ty || accessor.get("sparse").is_some() {
+        return None;
+    }
+    let field = |value: &Value, key: &str| value[key].as_u64().and_then(|v| usize::try_from(v).ok());
+    let count = field(accessor, "count")?;
+    let view = &json["bufferViews"][field(accessor, "bufferView")?];
+    let data = buffers.get(field(view, "buffer")?)?;
+    let (size, read): (usize, fn(&[u8]) -> f32) = match accessor["componentType"].as_u64()? {
+        5126 => (4, |b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])),
+        5120 => (1, |b| (f32::from(b[0] as i8) / 127.0).max(-1.0)),
+        5121 => (1, |b| f32::from(b[0]) / 255.0),
+        5122 => (2, |b| (f32::from(i16::from_le_bytes([b[0], b[1]])) / 32767.0).max(-1.0)),
+        5123 => (2, |b| f32::from(u16::from_le_bytes([b[0], b[1]])) / 65535.0),
+        _ => return None,
+    };
+    let start = field(view, "byteOffset").unwrap_or(0) + field(accessor, "byteOffset").unwrap_or(0);
+    let stride = field(view, "byteStride").unwrap_or(size * components);
+    let mut out = Vec::with_capacity(count * components);
+    for i in 0..count {
+        for c in 0..components {
+            let at = start + i * stride + c * size;
+            out.push(read(data.get(at..at + size)?));
+        }
+    }
+    Some(out)
+}
+
+/// Takes out the animation channels that animate no node: those of
+/// `KHR_animation_pointer` (a material's color, a texture's offset), whose
+/// target has a pointer instead of a node. The engine doesn't play them
+/// (the extension is optional, so loading it warned already), and the
+/// `gltf` crate refuses a target without a node, which would fail the
+/// whole file. The node channels play as they would without the others.
+pub(super) fn drop_channels_without_nodes(json: &mut Value) {
+    let Some(animations) = json.get_mut("animations").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for animation in animations {
+        if let Some(channels) = animation.get_mut("channels").and_then(Value::as_array_mut) {
+            channels.retain(|c| {
+                c["target"]["node"].is_u64()
+                    && matches!(
+                        c["target"]["path"].as_str(),
+                        Some("translation" | "rotation" | "scale" | "weights")
+                    )
+            });
+        }
     }
 }
 
@@ -601,18 +798,22 @@ fn decode_meshopt(_: &[u8], _: usize, _: usize, _: &str, _: &str) -> Result<Vec<
     unreachable!("meshopt views are only decompressed with the `gltf-meshopt` feature")
 }
 
+/// The extensions that give a texture an image in another format than
+/// its core PNG or JPEG one.
+const IMAGE_EXTENSIONS: [&str; 3] = ["KHR_texture_basisu", "EXT_texture_webp", "MSFT_texture_dds"];
+
 /// Texture images given by extensions (`KHR_texture_basisu`'s KTX2,
-/// `EXT_texture_webp`'s WebP) the build reads. A texture with only such an
-/// image gets it as its source (the core image is required by the `gltf`
-/// crate); one with both gets it as its preferred image, its core image
-/// staying the fallback.
+/// `EXT_texture_webp`'s WebP, `MSFT_texture_dds`'s DDS) the build reads. A
+/// texture with only such an image gets it as its source (the core image is
+/// required by the `gltf` crate); one with both gets it as its preferred
+/// image, its core image staying the fallback.
 fn texture_sources(name: &str, json: &mut Value) -> Result<Vec<Option<usize>>, String> {
     let Some(textures) = json.get_mut("textures").and_then(Value::as_array_mut) else {
         return Ok(Vec::new());
     };
     let mut preferred = Vec::with_capacity(textures.len());
     for (i, texture) in textures.iter_mut().enumerate() {
-        let readable = ["KHR_texture_basisu", "EXT_texture_webp"].into_iter().find_map(|ext| {
+        let readable = IMAGE_EXTENSIONS.into_iter().find_map(|ext| {
             let source = extension(texture, ext)?["source"].as_u64()? as usize;
             matches!(support(ext), Some(Support::Feature(_, true))).then_some(source)
         });
@@ -625,7 +826,7 @@ fn texture_sources(name: &str, json: &mut Value) -> Result<Vec<Option<usize>>, S
             (Some(source), true) => preferred.push(Some(source)),
             (None, true) => preferred.push(None),
             (None, false) => {
-                let wanted = ["KHR_texture_basisu", "EXT_texture_webp"]
+                let wanted = IMAGE_EXTENSIONS
                     .into_iter()
                     .find(|ext| extension(texture, ext).is_some());
                 return Err(match wanted.and_then(|ext| Some((ext, support(ext)?))) {
@@ -1524,6 +1725,158 @@ mod tests {
                 .warnings
                 .iter()
                 .any(|w| w.contains("KHR_materials_ior") && w.contains("refraction"))
+        );
+    }
+
+    #[test]
+    fn specular_glossiness_materials_show_their_diffuse_as_base_color() {
+        let mut file = File::default();
+        let text = triangle(
+            &mut file,
+            None,
+            json!({
+                "extensionsUsed": ["KHR_materials_pbrSpecularGlossiness"],
+                "extensionsRequired": ["KHR_materials_pbrSpecularGlossiness"],
+                "materials": [{ "extensions": { "KHR_materials_pbrSpecularGlossiness": {
+                    "diffuseFactor": [0.5, 0.25, 1.0, 1.0], "glossinessFactor": 0.8,
+                    "specularFactor": [0.1, 0.1, 0.1] } } }],
+            }),
+        );
+        let loaded = load_str("old.gltf", &text).unwrap();
+        let m = &loaded.materials[0];
+        let [r, g, b, a] = super::super::linear(m.color);
+        assert!(
+            (r - 0.5).abs() < 1e-3 && (g - 0.25).abs() < 1e-3 && (b - 1.0).abs() < 1e-3 && a == 1.0,
+            "{r} {g} {b} {a}"
+        );
+        assert!((m.roughness - 0.2).abs() < 1e-5, "{}", m.roughness);
+        assert_eq!(m.metallic, 0.0);
+        assert!(
+            loaded
+                .warnings
+                .iter()
+                .any(|w| w.contains("old.gltf") && w.contains("approximates")),
+            "{:?}",
+            loaded.warnings
+        );
+        // A material with a metallic-roughness block of its own keeps it.
+        let mut both = serde_json::from_str::<Value>(&text).unwrap();
+        both["materials"][0]["pbrMetallicRoughness"] =
+            json!({ "baseColorFactor": [0, 1, 0, 1], "roughnessFactor": 0.5 });
+        let loaded = load_str("both.gltf", &both.to_string()).unwrap();
+        assert_eq!(loaded.materials[0].roughness, 0.5);
+        let [r, g, _, _] = super::super::linear(loaded.materials[0].color);
+        assert!(r.abs() < 1e-3 && (g - 1.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_dds_image_is_the_preferred_image_of_its_texture() {
+        let mut json = json!({
+            "textures": [
+                { "source": 0, "extensions": { "MSFT_texture_dds": { "source": 1 } } },
+                { "source": 2 }
+            ]
+        });
+        let preferred = texture_sources("dds.gltf", &mut json).unwrap();
+        if cfg!(feature = "compressed-textures") {
+            assert_eq!(preferred, [Some(1), None]);
+        } else {
+            assert_eq!(preferred, [None, None], "without the feature the core image loads");
+        }
+    }
+
+    #[test]
+    fn animation_pointer_channels_are_left_out_and_node_channels_still_load() {
+        let mut file = File::default();
+        // One key: at time 0, the node at the origin.
+        let times = file.floats(&[0.0], 1);
+        let places = file.floats(&[0.0, 0.0, 0.0], 3);
+        let text = triangle(
+            &mut file,
+            None,
+            json!({
+                "extensionsUsed": ["KHR_animation_pointer"],
+                "animations": [{
+                    "name": "pulse",
+                    "samplers": [{ "input": times, "output": places }],
+                    "channels": [
+                        { "sampler": 0, "target": { "node": 0, "path": "translation" } },
+                        { "sampler": 0, "target": { "path": "pointer", "extensions": { "KHR_animation_pointer":
+                            { "pointer": "/materials/0/pbrMetallicRoughness/baseColorFactor" } } } }
+                    ]
+                }],
+            }),
+        );
+        let value: Value = serde_json::from_str(&text).unwrap();
+        let mut channels = value.clone();
+        drop_channels_without_nodes(&mut channels);
+        assert_eq!(
+            channels["animations"][0]["channels"].as_array().map(Vec::len),
+            Some(1),
+            "only the node's channel is kept"
+        );
+        assert_eq!(channels["animations"][0]["channels"][0]["target"]["node"], 0);
+        // The whole file loads (the gltf crate refuses a target without a
+        // node), and says it ignores the extension.
+        let loaded = load_str("pointer.gltf", &value.to_string()).unwrap();
+        assert!(
+            loaded.warnings.iter().any(|w| w.contains("KHR_animation_pointer")),
+            "{:?}",
+            loaded.warnings
+        );
+    }
+
+    #[test]
+    fn each_gpu_instance_draws_the_mesh_with_its_own_transform() {
+        let mut file = File::default();
+        let places = file.floats(&[0.0, 0.0, 0.0, 5.0, 0.0, 0.0, 0.0, 5.0, 0.0], 3);
+        let sizes = file.floats(&[1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 1.0, 1.0, 1.0], 3);
+        let text = triangle(
+            &mut file,
+            None,
+            json!({
+                "extensionsUsed": [INSTANCING],
+                "extensionsRequired": [INSTANCING],
+                "nodes": [{ "mesh": 0, "translation": [0.0, 0.0, 10.0],
+                    "extensions": { INSTANCING: { "attributes": { "TRANSLATION": places, "SCALE": sizes } } } }],
+            }),
+        );
+        let loaded = load_str("instances.gltf", &text).unwrap();
+        let p = &loaded.data.positions;
+        assert_eq!(p.len(), 9, "three instances of a triangle: {p:?}");
+        for corner in [
+            Vec3::new(1.0, 0.0, 10.0),
+            Vec3::new(7.0, 0.0, 10.0),
+            Vec3::new(5.0, 2.0, 10.0),
+            Vec3::new(0.0, 6.0, 10.0),
+        ] {
+            assert!(
+                p.iter().any(|q| (*q - corner).length() < 1e-5),
+                "no corner at {corner}: {p:?}"
+            );
+        }
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+    }
+
+    #[test]
+    fn unreadable_instances_draw_the_mesh_once_and_warn() {
+        let mut file = File::default();
+        // A scale that isn't a VEC3: the extension doesn't allow it.
+        let sizes = file.floats(&[1.0, 2.0], 1);
+        let text = triangle(
+            &mut file,
+            None,
+            json!({
+                "extensionsUsed": [INSTANCING],
+                "nodes": [{ "mesh": 0, "extensions": { INSTANCING: { "attributes": { "SCALE": sizes } } } }],
+            }),
+        );
+        let loaded = load_str("instances.gltf", &text).unwrap();
+        assert_eq!(loaded.data.positions.len(), 3);
+        assert!(
+            loaded.warnings.iter().any(|w| w.contains(INSTANCING)),
+            "{:?}",
+            loaded.warnings
         );
     }
 
