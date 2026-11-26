@@ -492,39 +492,38 @@ fixture's `boids` workload spawns the flock, runs the system in the
 fixed-step simulation (60 Hz) and times each call; the first 20 ticks are
 not counted, the next 60 are.
 
-Measured on 2026-11-26 (revision `e319e566`), headless Chromium 156 (the
-headless shell, as the bench always runs), an Apple M4 Max with 14 cores,
-**busy**: other agents were building, with a 1-minute load average of 46
-to 62 during the runs. Each flavor three page loads; the table gives the
-median of the loads' medians and the lowest and highest load. Two sets,
-taken a minute apart:
+Measured on 2026-11-26 (revision `060b5cf4`), headless Chromium 156 (the
+headless shell, as the bench always runs), an Apple M4 Max (10 performance
+and 4 efficiency cores, 36 GB, macOS 27.2, on mains power), **idle**: a
+1-minute load average of 2.6 to 2.8 and no compiler running. Each run is
+three page loads of each flavor; the table gives the median of the loads'
+medians for each run, two or three runs per row, and in the second column
+the same with one other core kept busy (the next section says why):
 
-| Build | Threads | Tick, set 1 (ms) | Tick, set 2 (ms) |
+| Build | Threads | Tick, idle (ms) | Tick, one core busy (ms) |
 |---|---|---|---|
-| Ordinary build (`web/build.sh web_threads`) | the page's thread | 9.70 (9.61 to 9.93) | 9.80 (9.78 to 9.80) |
-| Build with threads, `?threads=1` | the page's thread | 9.94 (9.90 to 9.98) | 9.71 (9.65 to 9.78) |
-| Build with threads, default | 13 workers | **1.39** (1.38 to 1.40) | **1.34** (1.33 to 1.36) |
+| Ordinary build (`web/build.sh web_threads`) | the page's thread | 9.33, 9.38 | 9.51, 9.54 |
+| Build with threads, `?threads=1` | the page's thread | 9.35, 9.33, 9.34 | 9.53, 9.51 |
+| Build with threads, default | 13 workers | **1.31, 1.30, 1.30** | **1.30, 1.30** |
 
-So a tick takes **7.2× less** with threads than without (7.18× and 7.24×
-against the same build on one thread, about 7.1× against the ordinary
-build). That is far beyond the noise: the loads of each row are within 3%
-of each other, and both sets agree within 4%. It falls short of the 13
-workers because the grid's rebuild and the sorting stay on the page's
-thread, and the parallel part is a little over a millisecond, so waking
-the workers and waiting for the last weighs in (the `par` row below shows
-the same). The few slow ticks (up to 11 ms with threads) are the ones that
-sort. The ordinary build and the build with threads on one thread are the
-same within the noise of this machine (2 to 3%, in either direction across
-the two sets): having threads costs nothing measurable where they aren't
-used.
+So a tick takes **7.2× less** with threads than without (7.14× to 7.19×
+idle, 7.3× with a core busy, against the same build on one thread). That
+is far beyond the noise: the page loads of each run are within 2% of each
+other, and the runs within 0.5%. It falls short of the 13 workers because
+the grid's rebuild and the sorting stay on the page's thread, and the
+parallel part is a little over a millisecond, so waking the workers and
+waiting for the last weighs in (the `par` row below shows the same). The
+ordinary build and the build with threads on one thread are the same
+within the noise (0.5%): having threads costs nothing measurable where
+they aren't used. On the busy machine of the earlier measurement (a load
+of 46 to 62, revision `e319e566`) the same rows were 9.70, 9.94 and 1.39
+ms.
 
-Not measured here: Firefox and Safari, and a quiet machine (the next
-section says why the idle runs of the other workloads were not trusted
-either).
+Not measured here: Firefox and Safari.
 
 ```sh
 node web/smoke/threads.mjs --build --bench --workloads boids --repeat 3
-web/build.sh web_threads target/web/web_threads_plain
+web/build.sh --features 3d,physics3d,bench-internals web_threads target/web/web_threads_plain
 node web/smoke/threads.mjs --bench --dir target/web/web_threads_plain --workloads boids --threads 1 --repeat 3
 ```
 
@@ -532,38 +531,56 @@ node web/smoke/threads.mjs --bench --dir target/web/web_threads_plain --workload
 
 The engine's simulation benchmarks (the workloads of `crates/ponko_bench`),
 in headless Chromium 156, one thread (`?threads=1`) against the default (13
-frame threads, 6 for jobs). The machine was an Apple M4 Max (14 cores) with
-other builds running: a load average of about 100. These are medians of
-three page loads, 60 timed runs each after 20 untimed ones.
+frame threads, 6 for jobs): medians of three page loads per run, 60 timed
+runs each after 20 untimed ones. Same machine, revision and date as the
+boids table, idle (1-minute load 2.6 to 2.8), in two ways: as it is, and
+with one other process spinning on a core (`yes > /dev/null`) while the
+bench runs. The table gives the median of the runs (two or three each)
+and, in brackets, the lowest and highest:
 
-Run again on the same machine while it was idle (2026-11-22, revision
-`9235ea05`, 1-minute load 1.3, `--build --bench --repeat 3`), every
-workload came out **slower**, the one-thread runs too: `par` 4.10 and
-1.73 ms, `sweep` 16.06 and 4.39, `interleaved` 8.87 and 4.11, `jobs` 2.92
-and 1.96 (one thread, then the default threads), speed-ups 1.5× to 3.7×.
-The one-thread `par` run takes three times what it took on the busy
-machine, which load alone can't explain; the likeliest cause is that macOS
-runs the headless browser's threads on the slower efficiency cores when
-nothing else asks for the fast ones, which was not confirmed. Until it is,
-neither set is a clean measurement: the table keeps the busy machine's.
+| Workload | One thread, idle (ms) | Default threads, idle (ms) | One thread, a core busy (ms) | Default threads, a core busy (ms) | Speed-up, a core busy | What limits it |
+|---|---|---|---|---|---|---|
+| `par`: `par_for_each` over 100,000 entities | 1.90 (1.90 to 1.91) | 0.48 (0.47 to 0.48) | 1.26 | 0.36 (0.35 to 0.36) | 3.5× | probably the cost of waking 13 threads and waiting for them, next to 1.3 ms of work |
+| `sweep`: eight independent view systems, one batch | 15.91 (15.84 to 16.00) | 2.98 (2.97 to 2.98) | 16.24 (16.16 to 16.24) | 2.24 | 7.3× | eight systems, each on one thread: at most 8× |
+| `interleaved`: producers and consumers in two batches | 8.00 (7.99 to 8.01) | 2.96 (2.95 to 2.96) | 8.17 | 2.16 | 3.8× | four systems per batch: at most 4× |
+| `jobs`: 16 jobs, from spawning to the last result | 1.95 (1.79 to 1.96) | 0.49 (0.49 to 0.53) | 1.29 (1.29 to 1.30) | 0.33 (0.32 to 0.33) | 3.9× | six job workers, so three rounds: at most 5.3× |
 
-| Workload | One thread (ms) | Default threads (ms) | Speed-up | What limits it |
-|---|---|---|---|---|
-| `par`: `par_for_each` over 100,000 entities | 1.29 | 0.36 (0.35 to 0.37) | 3.5× | probably the cost of waking 13 threads and waiting for them, next to 1.3 ms of work |
-| `sweep`: eight independent view systems, one batch | 16.66 | 2.28 (2.28 to 3.18) | 7.3× | eight systems, each on one thread: at most 8× |
-| `interleaved`: producers and consumers in two batches | 8.37 | 2.25 | 3.7× | four systems per batch: at most 4× |
-| `jobs`: 16 jobs, from spawning to the last result | 1.32 | 0.33 (0.32 to 0.34) | 4.0× | six job workers, so three rounds: at most 5.3× |
+Every speed-up is far beyond the noise: with a core busy, the runs agree
+within 1%.
 
-The ranges are the lowest and highest median of the three page loads.
-Every speed-up is far beyond the noise: the one-thread runs varied by 2% at
-most from load to load, and the threaded ones by up to 40% (`sweep`, which
-a busy machine disturbs most).
+**Why one busy core changes the numbers.** The work that is short next to
+the 16.7 ms frame (`par`, `jobs`, and the workers' share of `sweep` and
+`interleaved`) runs a third faster when some other core is busy; the work
+that fills most of the frame (`sweep` and `boids` on one thread) runs 2%
+*slower*. Both fit the processor's power management, not the code: a core
+that idles for most of each frame is woken at a low clock and has not
+sped up before its millisecond of work is done, unless another busy core
+keeps its cluster's clock up, while a core that stays busy reaches a
+higher single-core clock when the others are idle. The browser's threads
+were not pushed to the efficiency cores: sampled with `ps -M` during an
+idle run, the page's thread ran at the default priority (31) and the
+workers at 37, none at the background priority (4) that macOS keeps on
+those cores. A busy machine does what the spinning process does, which is
+why the measurement taken while other builds ran (a load of about 100,
+revision `9235ea05`: `par` 1.29 and 0.36 ms, `sweep` 16.66 and 2.28,
+`interleaved` 8.37 and 2.25, `jobs` 1.32 and 0.33) agrees with the
+busy-core columns within 4%. An earlier idle run (2026-11-22, `par` 4.10
+ms on one thread) was not reproduced: three idle runs today gave 1.90 to
+1.91. So for numbers that don't depend on how idle the machine is, keep
+one core busy; for what a player's mostly idle machine does with a small
+amount of work per frame, read the idle columns.
+
+```sh
+yes > /dev/null & node web/smoke/threads.mjs --bench --repeat 3; kill %1
+```
 
 **What a build with threads costs without them.** The same workloads
-on one thread give 1.29, 16.65, 8.36 and 1.31 ms in the ordinary
-build, and 1.29, 16.69, 8.39 and 1.31 ms in the build with threads, on a
-page that runs it on one thread. That is the same within 0.5%, from runs
-taken one after the other.
+on one thread, with a core busy, give 1.26, 16.23, 8.16 and 1.29 ms in the
+ordinary build (two runs, the same to 0.01 ms but `jobs`), and 1.26, 16.24,
+8.17 and 1.29 ms in the build with threads, on a page that runs it on one
+thread: the same within 0.1%. Idle, the ordinary build gave 1.90, 15.81 to
+15.88, 8.00 and 1.80 to 1.96 ms, the same as the build with threads within
+the idle runs' noise.
 
 The fixture, `examples/web_threads.rs`, has the workloads;
 `node web/smoke/threads.mjs --bench` runs them (`--dir` and `--threads 1`

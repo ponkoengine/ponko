@@ -667,8 +667,17 @@ def table(doc, first=None):
     build = ("the shipping profile (fat LTO, one codegen unit, panic = abort) on both sides" if tuned
              else "release builds")
     cores = m["cores"] if "cores" in str(m["cores"]) else f"{m['cores']} cores"
+    # Rows (and build rows) measured by an earlier run than the last, by when.
+    now = when(m)
+    older = {}
+    for title, row in doc.get("runtime", {}).items():
+        w = row.get("measured", now)
+        if w != now:
+            older.setdefault(measured_at(w), []).append(title)
+    builds_at = doc.get("builds_measured", now) if doc.get("builds") else now
+    some = " (the rows named below were measured earlier)" if older or builds_at != now else ""
     lines.append(
-        f"Measured {m['date']} at `{m['ponko_rev']}`{' (with uncommitted changes)' if m['ponko_dirty'] else ''} "
+        f"Measured {measured_at(now)}{some} "
         f"on {m['cpu']} ({cores}, {m['memory_gb']} GB), {m['os']}, {m['rustc']}, "
         f"Bevy {m['bevy']}; {build}, {doc['runs']} runs per engine, one process at a time.\n"
     )
@@ -723,10 +732,14 @@ def table(doc, first=None):
                     notes.append(f"- {title}, {side.capitalize()}: `{reason}`")
         loads = [l["load"] for row in doc["runtime"].values() for l in row["loads"]]
         lines.append(f"\nMedians of {doc['runs']} runs, the range in brackets; 1-minute load {min(loads):.2f} to {max(loads):.2f}.")
+        for at, titles in older.items():
+            lines.append(f"\nMeasured {at}: " + "; ".join(titles) + ".")
         if notes:
             lines.append("\nFailed runs:\n\n" + "\n".join(notes))
     if doc.get("builds"):
         b = doc["builds"]
+        if builds_at != now:
+            lines.append(f"\nThe build rows were measured {measured_at(builds_at)}.")
         med = lambda v: statistics.median(v) if v else float("nan")
         mb = lambda v: f"{v / 1e6:.1f} MB" if v else "–"
         stripped = lambda r: (f"{mb(r['release_binary_bytes'])} / {mb(r['release_stripped_bytes'])}"
@@ -759,6 +772,15 @@ def table(doc, first=None):
     return "\n".join(lines) + "\n"
 
 
+def when(m):
+    """When and at what revision a machine document's run was measured."""
+    return {k: m.get(k) for k in ("date", "ponko_rev", "ponko_dirty")}
+
+
+def measured_at(w):
+    return f"{w['date']} at `{w['ponko_rev']}`{' (with uncommitted changes)' if w.get('ponko_dirty') else ''}"
+
+
 def load_json(path):
     with open(path, encoding="utf-8") as f:
         return json.load(f)
@@ -770,6 +792,7 @@ def make_table(args, only, tuned):
     path = os.path.join(results, f"{name}.json")
     doc = load_json(path) if os.path.exists(path) else {}
     ADAPTERS.clear()
+    earlier = doc.get("machine")
     doc["machine"] = machine()
     doc["runs"] = args.runs
     if tuned:
@@ -783,6 +806,15 @@ def make_table(args, only, tuned):
         else:
             build()
         fresh = runtime(args.runs, only, Binaries(tuned))
+        if only and earlier:
+            # Rows kept from an earlier run keep when and at what revision
+            # they were measured: the table says so instead of dating them
+            # with this run.
+            for title, row in doc.get("runtime", {}).items():
+                if title not in fresh:
+                    row.setdefault("measured", when(earlier))
+        for row in fresh.values():
+            row["measured"] = when(doc["machine"])
         doc["runtime"] = {**doc.get("runtime", {}), **fresh} if only else fresh
         for title in fresh:
             power[title] = doc["machine"]["power"]
@@ -790,6 +822,9 @@ def make_table(args, only, tuned):
     if not args.runtime and not only:
         os.makedirs(args.work, exist_ok=True)
         doc["builds"] = builds(args.work, TUNED_BUILDS) if tuned else builds(args.work)
+        doc["builds_measured"] = when(doc["machine"])
+    elif doc.get("builds") and earlier:
+        doc.setdefault("builds_measured", when(earlier))
         power["builds"] = doc["machine"]["power"]
     write(path, json.dumps(doc, indent=2, ensure_ascii=False) + "\n")
     first = None

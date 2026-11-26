@@ -517,11 +517,14 @@ writes the same static site as `web/build.sh`: the page, `game.js`,
 `game_bg.wasm` and a copy of your `assets/`. `--features` picks
 `ponko_ffi`'s features, and flags after `--` go to the compiler
 (`-- -DNDEBUG -Isrc`). The guide's first game
-([Getting started](getting-started.md)), built this way, is 21.9 MB of
-WebAssembly (7.5 MB compressed with gzip) and reaches its first frame 0.5 s
-after the page is opened, in headless Chromium on WebGL2 on an Apple
-Silicon laptop (measured while other builds were running, so take the time
-as an upper bound). That is more than a Rust game's build, because the
+([Getting started](getting-started.md)), built this way, is 23.2 MB of
+WebAssembly (7.9 MB compressed with gzip) and reaches its first frame
+**0.2 s** after the page is opened (198 ms, 195 to 201 in five page loads),
+in headless Chromium 156 on WebGL2 on an Apple M4 Max laptop, idle (a
+1-minute load of 2.6 to 2.9), WASI SDK 34, on 2026-11-26 at revision
+`060b5cf4` (`node web/smoke/cpp.mjs --build`, then five runs without
+`--build`). The earlier 0.5 s was measured while other builds were
+running. That is more than a Rust game's build, because the
 library's C API reaches the engine's 3D renderer and navigation whatever
 the game calls, and `ponko_ffi`'s default features (2D and 3D physics, the
 inspector, text shaping, sound) are all in it.

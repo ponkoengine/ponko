@@ -1,4 +1,6 @@
-Measured 2026-11-22 at `5e5af4ee` (with uncommitted changes) on Apple M4 Max (10 performance + 4 efficiency cores, 36 GB), macOS 27.2.1, rustc 1.100.0 (0ef1bc386 2026-11-09), Bevy 0.20.1; release builds, 3 runs per engine, one process at a time.
+Measured 2026-11-26 at `431fae00` (the rows named below were measured earlier) on Apple M4 Max (10 performance + 4 efficiency cores, 36 GB), macOS 27.2.1, rustc 1.100.0 (0ef1bc386 2026-11-09), Bevy 0.20.1; release builds, 3 runs per engine, one process at a time.
+
+Adapters the programs reported: `{"backend": "metal", "device_type": "integrated_gpu", "driver": "", "driver_info": "", "name": "Apple M4 Max"}`; `{"backend": "metal", "device_type": "integratedgpu", "driver": "", "driver_info": "", "name": "Apple M4 Max"}`.
 
 Power: AC Power, except Time to first frame (process start to first offscreen frame done, process exit included), builds on Battery Power.
 
@@ -13,15 +15,19 @@ Power: AC Power, except Time to first frame (process start to first offscreen fr
 | Sprites: 100k moving, one frame drawn | 1.103 (1.088–1.131) | 11.6 (11.1–15.0) | 10.49× | Ponko faster |
 | Sprites: 100k moving, a different tint each, one frame drawn | 1.093 (1.087–1.094) | 44.8 (42.9–45.1) | 40.95× | Ponko faster |
 | Sprites: 1M moving, one frame drawn | 8.324 (8.177–8.345) | 105.7 (104.4–106.5) | 12.70× | Ponko faster |
-| 3D: 100k moving meshes (16 kinds, instanced) with a 4-cascade sun shadow | 4.632 (4.612–4.638) | 15.8 (15.8–15.9) | 3.42× | Ponko faster |
-| 3D: 1,000 skinned characters (16 joints) with a sun shadow | 6.064 (6.022–6.108) | 3.857 (3.855–5.508) | 0.64× | **Bevy faster** |
+| 3D: 100k moving meshes (16 kinds, instanced) with a 4-cascade sun shadow | 4.645 (4.623–4.654) | 15.9 (15.7–16.3) | 3.42× | Ponko faster |
+| 3D: 1,000 skinned characters (16 joints) with a sun shadow | 2.382 (2.379–2.408) | 3.831 (3.830–3.833) | 1.61× | Ponko faster |
 | 2D physics: 10k boxes falling into a pile, one tick | 6.394 (6.367–6.486) | 8.108 (7.996–8.281) | 1.27× | Ponko faster |
 | UI: 10k nodes, still, one frame drawn | 1.630 (1.250–2.088) | 4.580 (4.570–4.808) | 2.81× | Ponko faster |
 | UI: 10k nodes, all recolored every frame, one frame drawn | 2.494 (2.468–2.549) | 6.732 (6.699–6.931) | 2.70× | Ponko faster |
 | Headless sim: 1M entities, one tick | 0.166 (0.165–0.167) | 0.407 (0.406–0.443) | 2.46× | Ponko faster |
 | Time to first frame (process start to first offscreen frame done, process exit included) | 28.9 (27.7–41.2) | 198.7 (197.9–244.6) | 6.87× | Ponko faster |
 
-Medians of 3 runs, the range in brackets; 1-minute load 1.47 to 2.73.
+Medians of 3 runs, the range in brackets; 1-minute load 1.53 to 2.73.
+
+Measured 2026-11-22 at `5e5af4ee` (with uncommitted changes): ECS: spawn and despawn 100k in a world of 1M; ECS: iterate 1M (one archetype); ECS: iterate 16k fragmented over 1,024 archetypes; ECS: add and remove a component, 1M entities; ECS: parallel iterate 1M (all cores); ECS: commands, 100k spawns and despawns in a world of 1M; Sprites: 100k moving, one frame drawn; Sprites: 100k moving, a different tint each, one frame drawn; Sprites: 1M moving, one frame drawn; 2D physics: 10k boxes falling into a pile, one tick; UI: 10k nodes, still, one frame drawn; UI: 10k nodes, all recolored every frame, one frame drawn; Headless sim: 1M entities, one tick; Time to first frame (process start to first offscreen frame done, process exit included).
+
+The build rows were measured 2026-11-22 at `5e5af4ee` (with uncommitted changes).
 
 | | Ponko hello | Bevy hello | Ponko small game | Bevy small game |
 |---|---:|---:|---:|---:|

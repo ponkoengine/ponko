@@ -192,19 +192,21 @@ percentiles and both runs' `env.load_average`.
 
 ## The committed baseline
 
-`baselines/render.json` and `baselines/render.csv`, recorded 2026-11-22 at
-`9235ea05` (the engine's sources as at that revision; the files record
-`git_dirty` because only these two baseline files differed) on an Apple M4
-Max (14 cores), Metal, wgpu 30.0.1, Rust 1.100.0, release profile, features
-`physics`, `physics3d`, `navmesh`, `window`; 1280×720, 4× MSAA, `high`,
-scale 1, 120 warm-up and 600 measured frames. Peak resident memory of the
-run: 225 MB. The files hold the memory sizes computed for render targets
-and shadow maps (`render_target_bytes`, `shadow_map_bytes`,
+`baselines/render.json` and `baselines/render.csv`, recorded 2026-11-26 at
+`431fae00` (clean tree) on an Apple M4 Max (10 performance and 4
+efficiency cores, 36 GB, macOS 27.2.1, on mains power), Metal, wgpu
+30.0.1, Rust 1.100.0, release profile, features `physics`, `physics3d`,
+`navmesh`, `window`; 1280×720, 4× MSAA, `high`, scale 1, 120 warm-up and
+600 measured frames. Peak resident memory of the run: 380 MB (see below).
+The files hold the memory sizes computed for render targets and shadow
+maps (`render_target_bytes`, `shadow_map_bytes`,
 `light_shadow_atlas_bytes`, `computed_bytes`).
 
-The machine was idle (load averages 1.64 3.23 3.37 when the run started).
-Two more runs right before it gave frame medians within 0.1 ms of these in
-every scene except `dynamic-world` (6.33 to 6.54 ms). Re-record it with:
+The machine was idle (1-minute load 2.6 to 3.0, no compiler running). The
+files are the third of three runs taken one after another; the other two
+gave frame medians within 0.1 ms of these in every scene except
+`dynamic-world` (5.95 to 6.23 ms), and GPU totals within 0.06 ms in every
+scene. Re-record it with:
 
 ```sh
 PONKO_BENCH_JSON=crates/ponko_bench/baselines/render.json \
@@ -216,58 +218,74 @@ Milliseconds, medians unless a percentile is named:
 
 | Scene | CPU | Frame | Frame p95 | Frame p99 | GPU passes | Draw calls | Triangles (camera / shadows) |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| `single-material` | 0.299 | 1.634 | 1.850 | 1.941 | 1.018 | 25 | 1,200 / 2,220 |
-| `static-world` | 0.421 | 4.886 | 5.681 | 5.793 | 4.151 | 26 | 2 / 6 |
-| `dynamic-world` | 2.876 | 6.457 | 6.733 | 6.915 | 2.892 | 107 | 721,530 / 241,252 |
-| `multi-material` | 1.740 | 5.513 | 5.975 | 6.260 | 2.966 | 2,079 | 219,480 / 314,276 |
-| `shadow-heavy` | 1.186 | 6.353 | 6.568 | 6.743 | 4.890 | 259 | 133,686 / 614,002 |
-| `alpha-heavy` | 2.554 | 17.731 | 19.027 | 21.169 | 14.247 | 87 | 142,866 / 339,270 |
-| `animated` | 1.440 | 6.670 | 7.507 | 7.616 | 4.852 | 2,139 | 145,922 / 373,256 |
-| `game-like` | 0.640 | 3.411 | 3.648 | 3.870 | 2.484 | 112 | 38,280 / 319,360 |
+| `single-material` | 0.302 | 1.476 | 1.737 | 1.847 | 0.895 | 26 | 1,200 / 2,220 |
+| `static-world` | 0.437 | 5.165 | 5.835 | 5.920 | 4.425 | 27 | 2 / 6 |
+| `dynamic-world` | 2.990 | 6.128 | 6.352 | 6.572 | 2.421 | 124 | 721,530 / 241,252 |
+| `multi-material` | 2.281 | 5.270 | 5.649 | 6.438 | 2.278 | 2,592 | 219,480 / 314,276 |
+| `shadow-heavy` | 1.219 | 5.333 | 5.546 | 5.654 | 3.847 | 268 | 133,686 / 614,002 |
+| `alpha-heavy` | 2.667 | 16.675 | 17.862 | 18.696 | 13.073 | 97 | 142,866 / 339,270 |
+| `animated` | 1.123 | 3.656 | 3.913 | 4.475 | 2.220 | 2,520 | 145,922 / 373,256 |
+| `game-like` | 0.659 | 2.801 | 3.218 | 3.521 | 1.831 | 126 | 38,280 / 319,360 |
 
 `static-world` shows 2 triangles because its 200,000 instances are in static
 batches (see the counts note above).
 
 | Scene | Collect | Prepare | Encode | Submit | Allocations a frame | Counted GPU bytes |
 |---|---:|---:|---:|---:|---:|---:|
-| `single-material` | 0.010 | 0.023 | 0.227 | 0.039 | 542.0 | 2,308 |
-| `static-world` | 0.008 | 0.074 | 0.299 | 0.041 | 563.4 | 24,580 |
-| `dynamic-world` | 1.429 | 0.959 | 0.410 | 0.050 | 661.0 | 49,156 |
-| `multi-material` | 0.152 | 0.229 | 1.223 | 0.120 | 901.9 | 2,271,876 |
-| `shadow-heavy` | 0.371 | 0.434 | 0.347 | 0.056 | 764.9 | 40,964 |
-| `alpha-heavy` | 0.465 | 1.044 | 0.980 | 0.065 | 731.6 | 42,328 |
-| `animated` | 0.123 | 0.224 | 0.994 | 0.096 | 951.1 | 41,044 |
-| `game-like` | 0.098 | 0.133 | 0.348 | 0.050 | 772.3 | 1,630,140 |
+| `single-material` | 0.011 | 0.023 | 0.228 | 0.040 | 546.7 | 2,308 |
+| `static-world` | 0.009 | 0.075 | 0.313 | 0.040 | 571.6 | 40,964 |
+| `dynamic-world` | 1.471 | 0.993 | 0.434 | 0.051 | 664.0 | 81,924 |
+| `multi-material` | 0.159 | 0.233 | 1.747 | 0.123 | 917.9 | 2,271,876 |
+| `shadow-heavy` | 0.372 | 0.447 | 0.365 | 0.053 | 767.9 | 40,964 |
+| `alpha-heavy` | 0.506 | 1.060 | 1.039 | 0.063 | 735.4 | 42,328 |
+| `animated` | 0.127 | 0.219 | 0.678 | 0.081 | 918.7 | 43,492 |
+| `game-like` | 0.121 | 0.139 | 0.336 | 0.048 | 763.1 | 1,630,956 |
 
-Against the baseline of 2026-11-20 (`e60e15a8`, also idle), the CPU got
-faster in every scene (by 3 to 35%: `alpha-heavy` 3.91 → 2.55 ms, its
-encode step 2.67 → 0.98 ms), but **the GPU got slower in every scene and
-the frames with it**: GPU passes 0.75 → 1.02 (`single-material`), 3.70 →
-4.15, 2.13 → 2.89, 2.23 → 2.97, 3.40 → 4.89, 12.65 → 14.25, 3.63 → 4.85
-and 1.87 → 2.48 ms; frame medians up by 1 to 27% (`shadow-heavy` 5.02 →
-6.35, `animated` 5.81 → 6.67, `dynamic-world` 5.84 → 6.46). Draw calls and
-triangles are unchanged. The cause is one setting: the `high` preset now
-turns on screen reflections' thin objects (`ssr_thin_objects`, the only
-quality field that differs between the two files). The screen reflections
-pass went from 0.24 to 0.47 ms to 0.34 to 2.31 ms (`shadow-heavy` 0.47 →
-1.88, `static-world` 0.43 → 1.15, `animated` 0.38 → 1.33, `alpha-heavy`
-from none to 2.31), plus the coarse depth and reflection depth passes
-(0.01 to 0.03 ms each). That is far over the 0.2 ms the setting was
+Against the baseline of 2026-11-22 (also idle), beyond the three runs'
+spread:
+
+- **Faster in seven scenes, from two changes.** The `high` preset no longer
+  turns on screen reflections' thin objects (#647): the screen reflections
+  pass is 0.1 to 1.6 ms shorter in every scene (`alpha-heavy` 2.31 → 0.72,
+  `shadow-heavy` 1.88 → 0.84). And skinning is batched (#637): `animated`'s
+  skinning pass 1.95 → 0.03 ms. Frame medians: `single-material` 1.63 →
+  1.48, `dynamic-world` 6.46 → 6.13, `multi-material` 5.51 → 5.27,
+  `shadow-heavy` 6.35 → 5.33, `alpha-heavy` 17.73 → 16.68, `animated`
+  6.67 → 3.66, `game-like` 3.41 → 2.80.
+- **Slower: `static-world`, 4.89 → 5.17 ms** (GPU 4.15 → 4.43). A new
+  pass, `reflection normals`, came with screen reflections of normal maps
+  (#585): it draws the solid surfaces again to give the reflections their
+  normals, and costs 0.86 ms here (0.07 to 0.23 ms in the other scenes).
+  Shadow cascades 2 and 3 also take longer here (0.08 → 0.19 and 1.05 →
+  1.30 ms; 277 → 365 recorded draws). The shorter screen reflections pass
+  (1.15 → 0.55 ms) pays for part of it.
+- **More CPU in `multi-material`: 1.74 → 2.28 ms**, its encode step 1.22 →
+  1.75 ms, from the same pass: 513 more draw calls (2,079 → 2,592). Its
+  GPU total still fell (2.97 → 2.28 ms). Every scene draws more for it
+  (`animated` +381, the others +1 to +17).
+- **Peak resident memory 225 → 380 MB** (three runs: 379 to 386 MB) for the
+  whole run, not explained here. The render targets and shadow maps
+  computed from their sizes are unchanged (130 MB). One scene alone peaks
+  at 276 MB (`single-material`; 266 MB with the build of `24b58431`, before
+  skinning was batched), so most of the rise came before that revision.
+- Allocations a frame are within 10 of the old ones in every scene but
+  `multi-material` (+16) and `animated` (−32).
+
+The rows of 2026-11-20 to 2026-11-22, for the history: against the
+baseline of 2026-11-20 (`e60e15a8`, also idle), the CPU got faster in
+every scene (by 3 to 35%) but the GPU got slower in every scene, from one
+setting: the `high` preset then turned on screen reflections' thin
+objects (`ssr_thin_objects`). The screen reflections pass went from 0.24
+to 0.47 ms to 0.34 to 2.31 ms, far over the 0.2 ms the setting was
 measured at over a floor and rails in the guide: these scenes have edges
-everywhere. Allocations a frame rose by 14 to 34 in every scene, from the
-same setting: with `PONKO_RENDER_SSR_THIN=0` the same build allocates 20
-to 23 fewer a frame in every scene (`single-material` 565 → 545,
-`game-like` 816 → 793 on 2026-11-26). They are wgpu's, not the engine's:
-recording the thin-object trace's two passes (barriers, the trackers its
-`finish` builds, one more compute pass); the engine's own code allocates
-one a timed frame (the `GpuTimer` callback, a boxed closure wgpu asks for)
-and nothing per model or pass. They went when `high` stopped turning thin
-objects on (2026-11-26: `single-material` 552 → 524, `game-like` 984 → 956;
-the baseline files below were recorded with it on and need recording again
-on a quiet machine). `a_steady_frame_stays_within_its_allocation_budget` (a GPU
-test, enforced on Metal) holds a steady frame's count to its budget, with
-the setting off as control, and `a_frame_allocates_no_more_for_more_models`
-holds a scene drawn with ten times the models to the same count.
+everywhere. It also added 14 to 34 allocations a frame, all wgpu's
+(recording the thin-object trace's two passes); the engine's own code
+allocates one a timed frame (the `GpuTimer` callback, a boxed closure wgpu
+asks for) and nothing per model or pass.
+`a_steady_frame_stays_within_its_allocation_budget` (a GPU test, enforced
+on Metal) holds a steady frame's count to its budget, with the setting off
+as control, and `a_frame_allocates_no_more_for_more_models` holds a scene
+drawn with ten times the models to the same count.
 
 On 2026-11-20, against the heavily loaded baseline of 2026-11-11, frame
 medians moved like
@@ -366,30 +384,46 @@ described above. That is the extent of the image match: the two renderers'
 images are close, not equal.
 
 Recorded together with the baseline, minutes apart, on the same idle
-machine at `e60e15a8` (`baselines/render-matched.json`, `render-matched.csv`,
-`render-bevy.json`, `render-bevy.csv`, 2026-11-20; load averages 1.56 4.99 4.82
-and 2.08 5.04 4.83 when each started). Milliseconds:
+machine at `431fae00` on 2026-11-26 (`baselines/render-matched.json`,
+`render-matched.csv`, `render-bevy.json`, `render-bevy.csv`; 1-minute load
+2.4 to 2.8 when each run started, no compiler running), three runs of each
+engine taken in turns, scale 1. The files are each engine's third run; the
+table gives the median of the three runs and, in brackets for the frame
+median, the lowest and highest. Milliseconds:
 
 | Scene | CPU p50 Ponko | CPU p50 Bevy | Frame p50 Ponko | Frame p50 Bevy | Frame p95 Ponko | Frame p95 Bevy | Frame p99 Ponko | Frame p99 Bevy |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| `static-world` | 0.220 | 7.006 | 3.042 | 10.303 | 3.247 | 12.374 | 3.324 | 14.039 |
-| `dynamic-world` | 0.858 | 4.468 | 2.163 | 6.791 | 2.397 | 8.252 | 2.479 | 9.125 |
-| `multi-material` | 1.634 | 2.079 | 3.394 | 3.779 | 3.781 | 4.437 | 3.976 | 5.647 |
+| `static-world` | 0.221 | 7.429 | 3.065 (3.054–3.065) | 10.722 (10.671–10.771) | 3.289 | 13.180 | 3.351 | 15.642 |
+| `dynamic-world` | 0.886 | 4.886 | 2.201 (2.197–2.204) | 7.116 (7.022–7.153) | 2.435 | 8.599 | 2.516 | 9.250 |
+| `multi-material` | 1.529 | 2.126 | 3.274 (3.260–3.349) | 3.852 (3.837–3.859) | 3.623 | 4.272 | 4.053 | 5.622 |
+| `animated` | 0.509 | 1.878 | 1.668 (1.665–1.668) | 3.405 (3.399–3.409) | 1.796 | 3.756 | 1.901 | 4.372 |
+
+(`animated` at scale 1 is 400 figures; the cross-engine scoreboard's row
+runs it at scale 2.5, 1,000 figures.) Against the matched runs of
+2026-11-20 (`e60e15a8`, one run each), Ponko's frame medians are within
+2% in the first two scenes and 3.5% lower in `multi-material` (3.39 →
+3.27 ms); Bevy's are 4% and 5% higher in the first two and 2% higher in
+`multi-material` (the same Bevy 0.20.1).
 
 What these numbers support, and what they do not:
 
-- They are three generated scenes on one Apple GPU, one run each, on a quiet
-  machine. They are not a claim that either engine is faster in general.
+- They are four generated scenes on one Apple GPU, three runs each, on a
+  quiet machine. They are not a claim that either engine is faster in
+  general.
 - `static-world` mostly measures that Ponko has an API for instances that
   never move and this Bevy scene does not use an equivalent. It is not a
-  like-for-like comparison, and the 3.4× gap in frame time (3.04 against
-  10.30 ms) should not be read as one engine drawing the same scene faster.
-- `dynamic-world` is the like-for-like scene where Ponko is ahead: 2.16
-  against 6.79 ms (3.1×), with a CPU step of 0.86 against 4.47 ms.
-- `multi-material` is close: Ponko's frame median is 3.39 ms against
-  Bevy's 3.78 ms (about 10% less), its CPU step 1.63 against 2.08 ms, and its
-  95th and 99th percentiles (3.78 and 3.98 ms) are below Bevy's (4.44 and
-  5.65 ms). One run each is not enough to call a winner.
+  like-for-like comparison, and the 3.5× gap in frame time (3.07 against
+  10.72 ms) should not be read as one engine drawing the same scene faster.
+- `dynamic-world` is the like-for-like scene where Ponko is furthest
+  ahead: 2.20 against 7.12 ms (3.2×), with a CPU step of 0.89 against 4.89
+  ms.
+- `multi-material` is close: Ponko's frame median is 3.27 ms against
+  Bevy's 3.85 ms (15% less), its CPU step 1.53 against 2.13 ms, and its 95th
+  and 99th percentiles (3.62 and 4.05 ms) are below Bevy's (4.27 and 5.62
+  ms). The three runs of each engine don't overlap (3.26 to 3.35 against
+  3.84 to 3.86 ms).
+- `animated` (skinned figures, the poses set every frame on both sides):
+  1.67 against 3.41 ms (2.0×), the CPU step 0.51 against 1.88 ms.
 - Bevy's pipelined rendering is off for both, so neither engine's CPU step
   overlaps the GPU as it would in a shipped game.
 - Each engine is used in its plain, documented way. Neither side is tuned;

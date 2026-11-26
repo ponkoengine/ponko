@@ -346,6 +346,9 @@ struct CpuPath {
     view_runs: Vec<(u32, u32)>,
     /// (view, level, dithered, frame) as a key, the character, its dither.
     keys: Vec<(u64, u32, f32)>,
+    /// [`group_keys`]' scratch: the keys in order, and a count per key.
+    grouped: Vec<(u64, u32, f32)>,
+    key_counts: Vec<u32>,
     frames: Vec<u32>,
     out: Vec<Instance3D>,
 }
@@ -557,6 +560,49 @@ impl GpuCrowd {
 /// fps, looping) that shows, from now on, what `time` shows `seconds` later
 /// at `speed`: wrapped into a looping clip, held at the end a held clip
 /// plays towards (as `crowd_advance.wgsl` does on the GPU).
+/// Puts the CPU path's draw keys (see [`CpuPath::cull`]) in the order
+/// `sort_unstable_by_key(|&(key, i, _)| (key, i))` gives, by counting how
+/// many characters each key has: linear in their number, where sorting
+/// 10,000 characters took about 40% of the cull. `keys` must hold each
+/// key's characters in increasing order, as the cull pushes them (a view
+/// at a time, its characters in order). A key is (view, level, dithered,
+/// posed frame); `shape` is (views, levels, posed frames) and bounds them.
+/// More possible keys than four per character (or 65,536) are sorted
+/// instead. Allocates only to grow `grouped` and `counts`.
+fn group_keys(
+    keys: &mut Vec<(u64, u32, f32)>,
+    grouped: &mut Vec<(u64, u32, f32)>,
+    counts: &mut Vec<u32>,
+    (views, levels, span): (usize, usize, usize),
+) {
+    let buckets = views * levels * 2 * span;
+    if buckets > (keys.len() * 4).max(1 << 16) {
+        keys.sort_unstable_by_key(|&(key, i, _)| (key, i));
+        return;
+    }
+    let bucket = |key: u64| {
+        let (v, l) = ((key >> 40) as usize, (key >> 32) as usize & 0xff);
+        let (dithered, frame) = ((key >> 31) as usize & 1, (key & 0x7fff_ffff) as usize);
+        ((v * levels + l) * 2 + dithered) * span + frame
+    };
+    counts.clear();
+    counts.resize(buckets + 1, 0);
+    for &(key, ..) in keys.iter() {
+        counts[bucket(key) + 1] += 1;
+    }
+    for b in 1..=buckets {
+        counts[b] += counts[b - 1];
+    }
+    grouped.clear();
+    grouped.resize(keys.len(), (0, 0, 0.0));
+    for &entry in keys.iter() {
+        let at = &mut counts[bucket(entry.0)];
+        grouped[*at as usize] = entry;
+        *at += 1;
+    }
+    std::mem::swap(keys, grouped);
+}
+
 pub(super) fn advance_time(time: f32, speed: f32, seconds: f64, clip: [f32; 4]) -> f32 {
     if speed == 0.0 {
         return time;
@@ -1008,6 +1054,8 @@ impl Renderer3D {
             runs: Vec::new(),
             view_runs: Vec::new(),
             keys: Vec::new(),
+            grouped: Vec::new(),
+            key_counts: Vec::new(),
             frames: Vec::new(),
             out: Vec::new(),
         }
@@ -2052,7 +2100,13 @@ impl CpuPath {
                 }
             }
         }
-        self.keys.sort_unstable_by_key(|&(key, i, _)| (key, i));
+        let span = self.frames.iter().max().map_or(0, |&f| f as usize + 1);
+        group_keys(
+            &mut self.keys,
+            &mut self.grouped,
+            &mut self.key_counts,
+            (views, levels.len(), span),
+        );
         self.out.clear();
         self.runs.clear();
         self.view_runs.clear();
@@ -2200,6 +2254,41 @@ mod tests {
             slots: 0,
             fade_out,
             fade_in,
+        }
+    }
+
+    #[test]
+    fn grouped_keys_come_out_as_sorting_them_orders_them() {
+        // Keys pushed as the cull pushes them: a view at a time, each
+        // view's characters in order, a key per level that shows them.
+        let mut seed = 7u64;
+        let mut next = |n: u64| {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 33) % n
+        };
+        for (views, levels, span, characters) in [
+            (1, 1, 126, 10_000),
+            (6, 2, 40, 3_000),
+            (3, 3, 1, 50),
+            (2, 1, 1 << 15, 100),
+        ] {
+            let mut keys = Vec::new();
+            for v in 0..views as u64 {
+                for i in 0..characters {
+                    for l in 0..levels as u64 {
+                        if next(3) == 0 {
+                            continue;
+                        }
+                        let key = v << 40 | l << 32 | next(2) << 31 | next(span as u64);
+                        keys.push((key, i, next(100) as f32 / 100.0));
+                    }
+                }
+            }
+            let mut expected = keys.clone();
+            expected.sort_unstable_by_key(|&(key, i, _)| (key, i));
+            let (mut grouped, mut counts) = (Vec::new(), Vec::new());
+            group_keys(&mut keys, &mut grouped, &mut counts, (views, levels, span));
+            assert_eq!(keys, expected, "{views} views, {levels} levels, {span} frames");
         }
     }
 
