@@ -31,8 +31,8 @@ enum Support {
     Always,
     /// Read when the named cargo feature is on.
     Feature(&'static str, bool),
-    /// Not read, but what it changes is drawn close enough without it: a
-    /// file that requires it loads, with a warning saying what is lost.
+    /// Drawn with an approximation. A file that requires it loads, with a
+    /// warning about the rendering difference.
     Approximated,
 }
 
@@ -44,6 +44,9 @@ fn support(extension: &str) -> Option<Support> {
         | "KHR_materials_emissive_strength"
         | "KHR_mesh_quantization"
         | "KHR_materials_transmission"
+        | "KHR_materials_volume"
+        | "KHR_materials_dispersion"
+        | "KHR_materials_diffuse_transmission"
         | "KHR_materials_unlit"
         | "KHR_materials_clearcoat"
         | "KHR_materials_sheen"
@@ -63,8 +66,7 @@ fn support(extension: &str) -> Option<Support> {
         "EXT_texture_webp" => Support::Feature("image-webp", cfg!(feature = "image-webp")),
         // DDS images of BCn blocks, as the KTX2 ones upload.
         "MSFT_texture_dds" => Support::Feature("compressed-textures", cfg!(feature = "compressed-textures")),
-        // Thickness and absorption of what transmission lets through.
-        "KHR_materials_volume" => Support::Approximated,
+        "KHR_materials_volume_scatter" | "KHR_materials_scatter" => Support::Approximated,
         _ => return None,
     })
 }
@@ -73,7 +75,9 @@ fn support(extension: &str) -> Option<Support> {
 /// without them (for the warning).
 fn ignored_because(extension: &str) -> &'static str {
     match extension {
-        "KHR_materials_volume" => "transmission is drawn as see-through blending, without refraction or absorption",
+        "KHR_materials_volume_scatter" | "KHR_materials_scatter" => {
+            "uses approximate surface lighting for scattering without tracing paths through the medium"
+        }
         "KHR_draco_mesh_compression" => "Draco compressed meshes aren't read",
         _ => "the file loads as if it weren't there",
     }
@@ -191,7 +195,11 @@ impl Start {
                     "{name}: uses the glTF extension {extension} without the `{feature}` cargo feature; \
                      its uncompressed fallback loads instead"
                 )),
-                Some(Support::Approximated) | None => warnings.push(format!(
+                Some(Support::Approximated) => warnings.push(format!(
+                    "{name}: approximates the glTF extension {extension}: {}",
+                    ignored_because(&extension)
+                )),
+                None => warnings.push(format!(
                     "{name}: ignores the optional glTF extension {extension}: {}",
                     ignored_because(&extension)
                 )),
@@ -988,8 +996,6 @@ pub(super) struct MaterialExtensions {
     pub mapping: UvMapping,
     /// `KHR_materials_emissive_strength`: multiplies the emissive color.
     pub emissive_strength: f32,
-    /// `KHR_materials_transmission`'s factor: how much light passes through.
-    pub transmission: f32,
     /// `KHR_materials_unlit`: drawn without lighting.
     pub unlit: bool,
     /// Clear coat, sheen, specular, index of refraction, anisotropy and
@@ -1004,6 +1010,7 @@ pub(super) struct MaterialExtensions {
 /// and which extension's which field each is.
 fn layer_texture_infos(material: &Value) -> [&Value; MAP_KINDS] {
     let ext = |name: &str, field: &str| extension(material, name).map_or(&Value::Null, |e| &e[field]);
+    let scatter = |field| ext("KHR_materials_scatter", field);
     [
         ext("KHR_materials_clearcoat", "clearcoatTexture"),
         ext("KHR_materials_clearcoat", "clearcoatRoughnessTexture"),
@@ -1015,6 +1022,14 @@ fn layer_texture_infos(material: &Value) -> [&Value; MAP_KINDS] {
         ext("KHR_materials_anisotropy", "anisotropyTexture"),
         ext("KHR_materials_iridescence", "iridescenceTexture"),
         ext("KHR_materials_iridescence", "iridescenceThicknessTexture"),
+        ext("KHR_materials_transmission", "transmissionTexture"),
+        ext("KHR_materials_volume", "thicknessTexture"),
+        ext("KHR_materials_diffuse_transmission", "diffuseTransmissionColorTexture"),
+        ext("KHR_materials_diffuse_transmission", "diffuseTransmissionTexture"),
+        extension(material, "KHR_materials_scatter")
+            .or_else(|| extension(material, "KHR_materials_volume_scatter"))
+            .map_or(&Value::Null, |e| &e["multiscatterColorTexture"]),
+        scatter("scatterStrengthTexture"),
     ]
 }
 
@@ -1078,7 +1093,43 @@ fn layers_of(material: &Value) -> MaterialLayers {
         number(iridescence, "iridescenceThicknessMinimum", 100.0).max(0.0),
         number(iridescence, "iridescenceThicknessMaximum", 400.0).max(0.0),
     ];
+    layers.transmission = transmission_of(material);
     layers
+}
+
+/// Transmission factors are independent of the material's alpha coverage.
+fn transmission_of(material: &Value) -> super::Transmission {
+    let ext = |name| extension(material, name);
+    let unit = |x: f32| x.clamp(0.0, 1.0);
+    let transmission = ext("KHR_materials_transmission");
+    let volume = ext("KHR_materials_volume");
+    let dispersion = ext("KHR_materials_dispersion");
+    let diffuse = ext("KHR_materials_diffuse_transmission");
+    let scatter = ext("KHR_materials_scatter");
+    let volume_scatter = ext("KHR_materials_volume_scatter");
+    let scatter_settings = scatter.or(volume_scatter);
+    let nonnegative = |value: f32| value.clamp(0.0, f32::MAX);
+    super::Transmission {
+        factor: unit(number(transmission, "transmissionFactor", 0.0)),
+        thickness: nonnegative(number(volume, "thicknessFactor", 0.0)),
+        attenuation_distance: number(volume, "attenuationDistance", f32::INFINITY).max(f32::MIN_POSITIVE),
+        attenuation_color: linear_rgb(volume, "attenuationColor", [1.0; 3]),
+        dispersion: nonnegative(number(dispersion, "dispersion", 0.0)),
+        diffuse: unit(number(diffuse, "diffuseTransmissionFactor", 0.0)),
+        diffuse_color: linear_rgb(diffuse, "diffuseTransmissionColorFactor", [1.0; 3]),
+        scatter: unit(number(
+            scatter,
+            "scatterStrengthFactor",
+            f32::from(volume_scatter.is_some()),
+        )),
+        scatter_color: if scatter.is_some() {
+            linear_rgb(scatter, "multiscatterColorFactor", [1.0; 3])
+        } else {
+            linear_rgb(volume_scatter, "multiscatterColor", [0.0; 3])
+        },
+        scatter_anisotropy: number(scatter_settings, "scatterAnisotropy", 0.0).clamp(-1.0, 1.0),
+        ..super::Transmission::NONE
+    }
 }
 
 /// Reads material `index`'s extensions; warns (into `warnings`) when its
@@ -1122,9 +1173,6 @@ pub(super) fn material_extensions(
         emissive_strength: extension(material, "KHR_materials_emissive_strength")
             .and_then(|e| e["emissiveStrength"].as_f64())
             .map_or(1.0, |s| s as f32),
-        transmission: extension(material, "KHR_materials_transmission")
-            .and_then(|e| e["transmissionFactor"].as_f64())
-            .map_or(0.0, |t| (t as f32).clamp(0.0, 1.0)),
         unlit: extension(material, "KHR_materials_unlit").is_some(),
         layers: layers_of(material),
         layer_textures: layer_infos.map(|i| i["index"].as_u64().map(|i| i as usize)),
@@ -1891,32 +1939,43 @@ mod tests {
     }
 
     #[test]
-    fn transmission_draws_as_see_through_blending() {
+    fn transmission_preserves_alpha_coverage() {
         let mut file = File::default();
         let text = triangle(
             &mut file,
             None,
             json!({
-                "extensionsUsed": ["KHR_materials_transmission", "KHR_materials_volume", "KHR_materials_ior"],
-                "materials": [{ "extensions": { "KHR_materials_transmission": { "transmissionFactor": 0.75 },
-                                                "KHR_materials_volume": { "thicknessFactor": 0.1 },
-                                                "KHR_materials_ior": { "ior": 1.33 } } }],
+                "extensionsUsed": ["KHR_materials_transmission", "KHR_materials_volume",
+                    "KHR_materials_ior", "KHR_materials_dispersion"],
+                "extensionsRequired": ["KHR_materials_volume"],
+                "materials": [{ "extensions": {
+                    "KHR_materials_transmission": { "transmissionFactor": 0.75, "transmissionTexture": { "index": 0 } },
+                    "KHR_materials_volume": { "thicknessFactor": 0.1, "thicknessTexture": { "index": 0 },
+                        "attenuationDistance": 0.5, "attenuationColor": [0.25, 0.5, 1.0] },
+                    "KHR_materials_ior": { "ior": 1.33 },
+                    "KHR_materials_dispersion": { "dispersion": 2.0 }
+                } }],
+                "textures": [{ "source": 0 }],
+                "images": [{ "uri": png([255, 127, 0, 255]) }],
+                // Baked into the merged mesh: the thickness follows it.
+                "nodes": [{ "mesh": 0, "scale": [0.5, 0.5, 0.5] }]
             }),
         );
         let loaded = load_str("glass.gltf", &text).unwrap();
         let m = &loaded.materials[0];
-        assert_eq!(m.blend, super::super::Blend::Transparent);
-        assert!((m.color.a - 0.25).abs() < 1e-6);
-        assert_eq!(m.layers.ior, 1.33, "the index of refraction sets its reflection");
-        // Refraction isn't drawn: the warning says so and names the volume.
+        let t = m.layers.transmission;
+        assert_eq!(m.blend, super::super::Blend::Opaque);
+        assert_eq!(m.color.a, 1.0);
+        assert_eq!(m.layers.ior, 1.33);
+        assert_eq!((t.factor, t.attenuation_distance, t.dispersion), (0.75, 0.5, 2.0));
         assert!(
-            loaded
-                .warnings
-                .iter()
-                .any(|w| w.contains("KHR_materials_volume") && w.contains("refraction")),
-            "{:?}",
-            loaded.warnings
+            (t.thickness - 0.05).abs() < 1e-6,
+            "mesh units times the node's scale: {}",
+            t.thickness
         );
+        assert!((super::super::linear(t.attenuation_color)[0] - 0.25).abs() < 1e-6);
+        assert_eq!(m.layer_maps[10..12], [Some(0), Some(0)]);
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
     }
 
     #[test]
@@ -1925,14 +1984,14 @@ mod tests {
         let text = triangle(
             &mut file,
             None,
-            json!({ "extensionsUsed": ["KHR_materials_volume"], "extensionsRequired": ["KHR_materials_volume"] }),
+            json!({ "extensionsUsed": ["KHR_materials_scatter"], "extensionsRequired": ["KHR_materials_scatter"] }),
         );
-        let loaded = load_str("thick.gltf", &text).unwrap();
+        let loaded = load_str("misty.gltf", &text).unwrap();
         assert!(
             loaded
                 .warnings
                 .iter()
-                .any(|w| w.contains("approximates") && w.contains("KHR_materials_volume")),
+                .any(|w| w.contains("approximates") && w.contains("KHR_materials_scatter")),
             "{:?}",
             loaded.warnings
         );
@@ -2247,9 +2306,9 @@ mod tests {
                     "materials": [{ "extensions": { "KHR_materials_volume": { "thicknessFactor": 1.0 } } }] }),
         );
         let loaded = load_str("thick.gltf", &text).unwrap();
-        assert_eq!(loaded.warnings.len(), 2, "{:?}", loaded.warnings);
-        assert!(loaded.warnings[0].contains("KHR_materials_volume") && loaded.warnings[0].contains("refraction"));
-        assert!(loaded.warnings[1].contains("VENDOR_something"));
+        // The volume is read; only the unknown extension is named.
+        assert_eq!(loaded.warnings.len(), 1, "{:?}", loaded.warnings);
+        assert!(loaded.warnings[0].contains("VENDOR_something"));
     }
 
     /// A file with a point, a spot and a directional light, the spot on a

@@ -654,8 +654,6 @@ pub use crate::three::Upscaler;
 pub use crate::three::bake_lighting_gpu;
 // Layers over a material's surface (glTF's material extensions).
 #[cfg(feature = "3d")]
-pub use crate::three::MaterialLayers;
-#[cfg(feature = "3d")]
 pub use crate::three::{
     AmbientOcclusion, AntiAliasing, AutoExposure, BatchCulling, Blend, Compute, ComputePass, Crowd, CrowdAnimation,
     CrowdClip, CrowdInstance, CrowdLevel, CrowdOptions, DepthOfField, Effect, EnvironmentMap, GlobalIllumination,
@@ -679,6 +677,8 @@ pub use crate::three::{CloudQuality, Clouds, DayNight, Moon, SkyKit};
 pub use crate::three::{ExtractionBench, ExtractionSample};
 #[cfg(feature = "3d")]
 pub use crate::three::{InstanceCell, InstanceCellData};
+#[cfg(feature = "3d")]
+pub use crate::three::{MaterialLayers, Transmission};
 
 /// Shared additive JSON shape for the inspector and frame benchmarks.
 pub(crate) fn state_changes_json(changes: Option<[u32; 5]>) -> serde_json::Value {

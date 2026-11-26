@@ -2564,3 +2564,7 @@ mod skin_motion_render_test;
 #[cfg(test)]
 #[path = "vertex_motion_render_test.rs"]
 mod vertex_motion_render_test;
+
+#[cfg(test)]
+#[path = "transmission_render_test.rs"]
+mod transmission_render_test;

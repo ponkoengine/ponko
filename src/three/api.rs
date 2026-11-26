@@ -33,14 +33,17 @@ pub(crate) struct MaterialUniform {
     /// Layers (read only by the layered build of the built-in shader):
     /// which are on ([`super::layer_bits`]), each map's slot (two bits per
     /// [`super::MapKind`]), which of the two slots are bound (bits 0 and 1),
-    /// unused.
+    /// and alpha coverage for the transparent transmission pass.
     pub layer_info: [u32; 4],
     /// Clear coat (amount, roughness, normal map strength, unused), sheen
     /// (linear RGB, roughness), specular (linear RGB color, strength),
     /// optics (index of refraction, anisotropy, its rotation's cosine and
     /// sine), iridescence (amount, index of refraction, thinnest and
-    /// thickest in nanometers).
-    pub layers: [[f32; 4]; 5],
+    /// thickest in nanometers), then transmission (factor, thickness,
+    /// attenuation distance or zero for infinite, dispersion), linear
+    /// attenuation tint and diffuse factor, diffuse tint and scatter
+    /// anisotropy, and scatter tint and amount.
+    pub layers: [[f32; 4]; 9],
 }
 
 /// The name the layered build of the built-in shader has in messages.
@@ -91,7 +94,29 @@ impl GpuMaterialDesc {
                 gpu.linear_custom[i] = image.is_some_and(|(_, srgb)| !srgb);
             }
             let bound = u32::from(slots.images[0].is_some()) | u32::from(slots.images[1].is_some()) << 1;
-            gpu.uniform.layer_info = [bits, slots.packed, bound, 0];
+            let transmission = layers.transmission;
+            gpu.refracts = transmission.factor > 0.0 && !desc.unlit;
+            let coverage = match desc.blend {
+                Blend::Opaque => 0,
+                Blend::Transparent => 1,
+                Blend::Cutout => 2,
+            };
+            gpu.uniform.layer_info = [bits, slots.packed, bound, coverage];
+            if gpu.refracts {
+                gpu.transparent = true;
+                gpu.cutout = false;
+                // A volume has an entry boundary only in the screen-space
+                // approximation. A thin sheet can still be double sided.
+                gpu.double_sided = desc.double_sided && transmission.thickness == 0.0;
+            }
+            let [ar, ag, ab, _] = linear(transmission.attenuation_color);
+            let [dr, dg, db, _] = linear(transmission.diffuse_color);
+            let [cr, cg, cb, _] = linear(transmission.scatter_color);
+            let distance = if transmission.attenuation_distance.is_finite() {
+                transmission.attenuation_distance
+            } else {
+                0.0
+            };
             let [sr, sg, sb, _] = linear(layers.sheen_color);
             let [pr, pg, pb, _] = linear(layers.specular_color);
             let (sin, cos) = layers.anisotropy_rotation.sin_cos();
@@ -107,6 +132,20 @@ impl GpuMaterialDesc {
                 [pr, pg, pb, layers.specular],
                 [layers.ior, layers.anisotropy, cos, sin],
                 [layers.iridescence, layers.iridescence_ior, thin, thick],
+                [
+                    transmission.factor,
+                    transmission.thickness,
+                    distance,
+                    transmission.dispersion,
+                ],
+                [
+                    ar.clamp(0.0, 1.0),
+                    ag.clamp(0.0, 1.0),
+                    ab.clamp(0.0, 1.0),
+                    transmission.diffuse,
+                ],
+                [dr, dg, db, transmission.scatter_anisotropy],
+                [cr, cg, cb, transmission.scatter],
             ];
             gpu.layered = true;
         }

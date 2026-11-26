@@ -1383,18 +1383,19 @@ impl Renderer3D {
         self.targets.as_ref().is_some_and(|t| t.refraction_active) || self.needs_scene() || self.particles.soft()
     }
 
-    /// Whether any camera-visible run or batch level needs the opaque image.
-    /// GPU-culled batches are conservatively included while their view is live.
+    /// Whether any camera-visible run, batch level or crowd needs the opaque
+    /// image. GPU-culled batches and crowds count before their culling.
     pub(super) fn needs_refraction(&self) -> bool {
         if self.resources.refractors == 0 {
             return false;
         }
         let refracts = |mesh| {
-            self.resources.meshes[self.base(mesh) as usize]
-                .parts
-                .iter()
-                .enumerate()
-                .any(|(part, &(_, m))| self.resources.material(self.part_material(mesh, part, m)).refracts)
+            self.resources.meshes.get(self.base(mesh) as usize).is_some_and(|m| {
+                m.parts
+                    .iter()
+                    .enumerate()
+                    .any(|(part, &(_, own))| self.resources.material(self.part_material(mesh, part, own)).refracts)
+            })
         };
         self.lists
             .blended_runs
@@ -1407,6 +1408,7 @@ impl Renderer3D {
                     .enumerate()
                     .any(|(level, l)| batch.draws(0, level) && refracts(l.mesh.slot()))
             })
+            || self.crowds.camera_meshes().any(refracts)
     }
 
     /// Whether a transparent surface this frame reads the scene behind it.
