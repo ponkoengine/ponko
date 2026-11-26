@@ -29,23 +29,34 @@ impl View {
             .root()
             .layout(UiLayout::anchored(0.0, 0.0, 1.0, 0.55).padding(8.0).gap(6.0))
             .background(Color::rgb(0.06, 0.08, 0.11))
+            .pointer_events(false)
             .name("ponko.console")
             .id();
         ui.label(
             root,
-            "Developer Console · help · Tab completes · ↑/↓ history · Esc closes",
+            "Developer console · help · Tab completes · Up/Down history · Esc closes",
         )
         .layout(UiLayout::row(22.0))
         .color(Color::rgb(0.65, 0.78, 0.88))
+        .pointer_events(false)
         .size(14.0);
         let scroll = ui
             .scroll_area(root)
             .layout(UiLayout::row(0.0).vertical().grow(1.0))
             .name("ponko.console.scroll")
             .id();
+        if let Some(mut paint) = ui.paint(scroll) {
+            // Keep the output readable over the console in every game theme.
+            let background = Color::rgb(0.09, 0.11, 0.15);
+            paint.background = background;
+            paint.hover = background;
+            paint.pressed = background;
+            ui.set_paint(scroll, paint);
+        }
         let output = ui
             .label(scroll, "")
             .color(Color::WHITE)
+            .pointer_events(false)
             .size(15.0)
             .wrap()
             .name("ponko.console.output")
