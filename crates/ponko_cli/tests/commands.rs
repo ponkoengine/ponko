@@ -150,22 +150,26 @@ fn every_command_has_its_help_its_options_and_its_guide_section() {
                 "book/src/cli.md, section `ponko {command}`, doesn't name {flag}"
             );
             // Two images first for image-diff, so the option is what's judged.
-            let mut args = vec![command.as_str()];
-            if command == "image-diff" {
-                args.extend(["missing-a.png", "missing-b.png"]);
-            }
-            args.push(&flag);
-            if takes_value {
-                args.push(value_for(&flag));
-            }
-            let (_, _, err) = ponko(&args, &dir.0);
-            for refusal in ["unknown option", "unknown argument", "doesn't take", "no command"] {
-                assert!(
-                    !err.contains(refusal),
-                    "`ponko {}` refuses an option its help lists:\n{err}",
-                    args.join(" ")
-                );
-            }
+            let run = |flag: &str| {
+                let mut args = vec![command.as_str()];
+                if command == "image-diff" {
+                    args.extend(["missing-a.png", "missing-b.png"]);
+                }
+                args.push(flag);
+                if takes_value {
+                    args.push(value_for(flag));
+                }
+                (args.join(" "), ponko(&args, &dir.0).2)
+            };
+            // What an option the command doesn't know gets, whatever its
+            // wording, with this option's name in it.
+            let unknown = "--zz-no-such-option";
+            let refused = run(unknown).1.replace(unknown, &flag);
+            let (line, err) = run(&flag);
+            assert!(
+                err != refused && !err.contains("doesn't take"),
+                "`ponko {line}` refuses an option its help lists:\n{err}"
+            );
         }
     }
     let (ok, _, err) = ponko(&["help", "unpack"], &dir.0);
