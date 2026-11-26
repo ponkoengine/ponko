@@ -611,7 +611,7 @@ table.
 | Apple Silicon Mac, `multiplayer.mjs` | Chromium 159 headless shell | Passes: two tabs, a native host and a native UDP client agree on the world at tick 300 | Not tried (WebGPU is hidden) |
 | Apple Silicon Mac, WebKit (Playwright build) | WebKit 27.2 | Passes | Passes on its own adapter |
 | Apple Silicon Mac, Firefox (Playwright build) | Firefox 159.0 (`firefox-1572`, playwright-core 1.65.1) | Passes for the 2D and 3D fixtures (Apple GPU through WebGL2); `--backend auto` passes on WebGL2 | Unsupported: headless Firefox has no WebGPU adapter there |
-| Apple Silicon Mac, `cpp.mjs` | Chromium 159 headless shell | Passes: the guide's C++ game starts in 0.5 s (a busy machine), draws its crab and moves it 200 px in the second ArrowRight is held | Not tried (WebGPU is hidden: the headless shell can't present it) |
+| Apple Silicon Mac, `cpp.mjs` | Chromium 159 headless shell | Passes: the guide's C++ game starts in 0.8 s (a busy machine), draws its crab and moves it 200 px in the second ArrowRight is held | Not tried (WebGPU is hidden: the headless shell can't present it) |
 | Apple Silicon Mac, `threads.mjs` | Chromium 159 headless shell | Passes on whichever backend the page picks (the check is about threads, not drawing): workers on the isolated page, one thread without the headers, the same world; a worker's panic stops the game | Not tried on its own |
 
 Not covered yet: Firefox on a GPU-less Linux machine (no WebGL2), WebGPU on
