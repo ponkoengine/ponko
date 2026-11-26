@@ -9488,8 +9488,6 @@ pub fn ponko::prelude::Ctx::set_state<S: ponko::state::States>(&mut self, S)
 pub fn ponko::prelude::Ctx::state<S: ponko::state::States>(&self) -> &S
 impl ponko::prelude::Ctx
 pub fn ponko::prelude::Ctx::quality_autotune_status(&self) -> core::option::Option<ponko::render::QualityAutotuneStatus>
-impl ponko::prelude::Ctx
-pub fn ponko::prelude::Ctx::try_light_gltf(&mut self, &str, &ponko::d3::Transform, f32) -> core::result::Result<alloc::vec::Vec<ponko_ecs::entity::Entity>, ponko::error::Error>
 impl<F: core::ops::function::FnMut(&mut ponko::prelude::Ctx) + 'static> ponko::prelude::IntoSystem<ponko::prelude::Ctx> for F
 pub fn F::access(self, ponko::access::SystemAccess) -> ponko::game::SystemConfig
 pub fn F::every(self, u32) -> ponko::game::SystemConfig
@@ -12219,6 +12217,7 @@ pub ponko::render::SceneSettings::view_model: core::option::Option<ponko::d3::Vi
 pub ponko::render::SceneSettings::views: alloc::vec::Vec<ponko::d3::View>
 impl ponko::render::SceneSettings
 pub fn ponko::render::SceneSettings::camera_at(&self, glam::f32::vec2::Vec2) -> &ponko::d3::Camera
+pub fn ponko::render::SceneSettings::light_gltf(&mut self, &mut ponko_ecs::world::World, &[ponko::render::ModelLight], &ponko::d3::Transform, f32) -> alloc::vec::Vec<ponko_ecs::entity::Entity>
 impl ponko::render::SceneSettings
 pub fn ponko::render::SceneSettings::clamp_quality(&mut self)
 pub fn ponko::render::SceneSettings::fit_quality_to(&mut self, &ponko::render::GpuCapabilities)

@@ -299,7 +299,8 @@ fn gltf_preview_keeps_a_supplied_cube_and_falls_back_to_studio() {
     let cube = ctx.gfx.try_load_environment_cube(["face.hdr"; 6]).unwrap();
     ctx.scene3d.environment = Some(cube.clone());
     let at = Transform3D::default();
-    let lights = ctx.try_light_gltf("lamp.gltf", &at, 8.0).unwrap();
+    let loaded = ctx.gfx.try_load_lights("lamp.gltf").unwrap();
+    let lights = ctx.scene3d.light_gltf(&mut ctx.world, &loaded, &at, 8.0);
     assert_eq!(lights.len(), 1);
     assert!(ctx.world.get::<PointLight>(lights[0]).is_some());
     assert!(Arc::ptr_eq(&ctx.scene3d.environment.as_ref().unwrap().0, &cube.0));
@@ -307,7 +308,7 @@ fn gltf_preview_keeps_a_supplied_cube_and_falls_back_to_studio() {
     assert_eq!(ctx.scene3d.post.tonemap, Tonemap::HuePreserving);
     ctx.world.despawn(lights[0]);
     ctx.scene3d.environment = None;
-    ctx.try_light_gltf("lamp.gltf", &at, 8.0).unwrap();
+    ctx.scene3d.light_gltf(&mut ctx.world, &loaded, &at, 8.0);
     assert!(Arc::ptr_eq(
         &ctx.scene3d.environment.as_ref().unwrap().0,
         &EnvironmentMap::studio().0

@@ -101,7 +101,7 @@ curve and often its own camera. So:
   the narrower field of view.
 - **Lights.** The eleven light, emission and environment samples in
   [#597](https://github.com/ponkoengine/ponko/issues/597) use
-  `Ctx::try_light_gltf`: the file's lights with EV100 exposure, a neutral
+  `SceneSettings::light_gltf`: the file's lights with EV100 exposure, a neutral
   studio environment and a hue-preserving highlight curve. The harness
   pins EV100 and ambient strength for the four punctual-light shots, and
   lowers picture exposure for EmissiveStrengthTest so its five strengths

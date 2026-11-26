@@ -1930,35 +1930,6 @@ impl Graphics {
 }
 
 impl Ctx {
-    /// Set up the lighting of a glTF preview. Uses the file's punctual
-    /// lights at `ev100` (see [`ModelLight::place_exposed`](crate::render::ModelLight::place_exposed)),
-    /// a hue-preserving tone curve, and a neutral studio environment if
-    /// [`scene3d.environment`](super::SceneSettings::environment) is empty.
-    ///
-    /// Call once per loaded scene. Clears the scene sun before applying
-    /// the file's directional light, if any. Returns the spawned local
-    /// lights so a viewer can despawn them when changing models.
-    ///
-    /// # Errors
-    ///
-    /// Those of [`Graphics::try_load_lights`].
-    pub fn try_light_gltf(
-        &mut self,
-        path: &str,
-        model: &super::Transform3D,
-        ev100: f32,
-    ) -> Result<Vec<ponko_ecs::Entity>, crate::error::Error> {
-        let lights = self.gfx.try_load_lights(path)?;
-        let scene = &mut self.scene3d;
-        scene.environment.get_or_insert_with(super::EnvironmentMap::studio);
-        scene.post.tonemap = super::Tonemap::HuePreserving;
-        scene.lighting.sun_intensity = 0.0;
-        Ok(lights
-            .iter()
-            .filter_map(|light| light.place_exposed(&mut self.world, &mut scene.lighting, model, ev100))
-            .collect())
-    }
-
     /// Engine side, before drawing: collect the visible models and hand
     /// them, the camera and the light to the renderer.
     /// What each target camera into a real render target sees.

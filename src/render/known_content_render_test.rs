@@ -418,7 +418,8 @@ fn draw_sample(
     };
     if let Some((ev100, ambient)) = sample_lighting(name) {
         ctx.scene3d.lighting.ambient_intensity = ambient;
-        ctx.try_light_gltf(file, &at, ev100).map_err(|e| e.to_string())?;
+        let lights = ctx.gfx.try_load_lights(file).map_err(|e| e.to_string())?;
+        ctx.scene3d.light_gltf(&mut ctx.world, &lights, &at, ev100);
         if name == "DirectionalLight" {
             // The reference shows the direct BRDF of three spheres in isolation.
             ctx.scene3d.lighting.shadows = false;

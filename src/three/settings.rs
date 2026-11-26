@@ -168,6 +168,41 @@ impl SceneSettings {
         }
     }
 
+    /// Set up the lighting of a glTF preview from the file's punctual
+    /// `lights` (from [`Graphics::try_load_lights`](crate::gfx::Graphics::try_load_lights)),
+    /// placed at `model` with exposure `ev100` (see
+    /// [`ModelLight::place_exposed`](super::ModelLight::place_exposed)). Also
+    /// chooses the hue-preserving tone curve and, if [`environment`](Self::environment)
+    /// is empty, a neutral [studio](super::EnvironmentMap::studio).
+    ///
+    /// Call once per loaded scene. Clears the scene sun before applying
+    /// the file's directional light, if any. Returns the spawned local
+    /// lights so a viewer can despawn them when changing models.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # fn f(ctx: &mut Ctx) -> Result<(), Error> {
+    /// let at = ponko::d3::Transform::default();
+    /// let lights = ctx.gfx.try_load_lights("models/house.glb")?;
+    /// let spawned = ctx.scene3d.light_gltf(&mut ctx.world, &lights, &at, 8.0);
+    /// # Ok(()) }
+    /// ```
+    pub fn light_gltf(
+        &mut self,
+        world: &mut ponko_ecs::World,
+        lights: &[super::ModelLight],
+        model: &super::Transform3D,
+        ev100: f32,
+    ) -> Vec<ponko_ecs::Entity> {
+        self.environment.get_or_insert_with(super::EnvironmentMap::studio);
+        self.post.tonemap = super::Tonemap::HuePreserving;
+        self.lighting.sun_intensity = 0.0;
+        lights
+            .iter()
+            .filter_map(|light| light.place_exposed(world, &mut self.lighting, model, ev100))
+            .collect()
+    }
+
     /// The camera that draws the window at `screen` (logical pixels, as
     /// [`mouse_pos`](crate::input::Input::mouse_pos)): the last of the
     /// [`views`](Self::views) whose rectangle holds it (they draw on top),
