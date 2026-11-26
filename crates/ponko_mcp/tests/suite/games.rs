@@ -721,7 +721,13 @@ pub struct Bat;
 
 fn cave_setup(ctx: &mut Ctx) {
     ctx.assets.load_resource::<Spawner>(&mut ctx.world, "spawner.json");
-    ctx.world.insert_resource(Spawning::default());
+    let spawner = ctx.world.resource::<Spawner>();
+    let spawning = Spawning {
+        secs: 0.0,
+        every_secs: spawner.every_secs,
+        health_scale: spawner.health_scale,
+    };
+    ctx.world.insert_resource(spawning);
     ctx.world.reflect::<Player>();
     ctx.world.reflect::<Bat>();
     ctx.world.reflect::<Health>();
