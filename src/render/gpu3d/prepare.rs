@@ -284,7 +284,20 @@ impl Renderer3D {
     /// have run.
     fn prepare_targets(&mut self, device: &wgpu::Device, view: &FrameView, rebuild: bool) {
         if rebuild {
-            self.targets = Some(self.make_targets(device, view.size, (view.upscaled, view.window)));
+            let targets = self.make_targets(device, view.size, (view.upscaled, view.window));
+            if targets.samples > 1 {
+                // The opaque, motion and reflection normal passes resolve
+                // into these.
+                self.clear_before_resolving(targets.lit_view(true));
+                self.clear_before_resolving(&targets.hdr);
+                if let Some(velocity) = &targets.velocity {
+                    self.clear_before_resolving(velocity.velocity());
+                }
+                if let Some((_, Some(normals))) = targets.ssr.as_ref().map(|s| s.normals()) {
+                    self.clear_before_resolving(normals);
+                }
+            }
+            self.targets = Some(targets);
         }
         self.prepare_refraction_copy(device);
     }
@@ -443,6 +456,7 @@ impl Renderer3D {
         // Global illumination: the probes are made when first on, and their
         // atlas bound to every frame (again when it's remade).
         if let Some(g) = gi_frame {
+            let made = self.gi.is_none();
             let gi = self.gi.get_or_insert_with(|| {
                 crate::render::gi::Gi::new(
                     device,
@@ -451,6 +465,13 @@ impl Renderer3D {
                     size_of::<FrameUniform>() as u64,
                 )
             });
+            if made {
+                // The probes' views resolve into it (see `clear_before_resolving`).
+                let unresolved = self.unresolved.get_mut();
+                unresolved
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(gi.resolve.clone());
+            }
             let mut remade = gi.prepare(device, queue, g) || gi.face_groups.is_empty();
             remade |= gi.lights.upload(device, queue, &g.capture.lights, &g.capture.decals);
             if remade {
@@ -820,6 +841,7 @@ impl Renderer3D {
             self.particles.begin_targets();
         }
         for (camera_index, view) in frame.views.iter().enumerate().filter(|_| !extra) {
+            let made = self.render_targets.views.len();
             let Some(target) = self.render_targets.view_target(
                 device,
                 view.target,
@@ -829,6 +851,10 @@ impl Renderer3D {
             ) else {
                 continue;
             };
+            if self.samples > 1 && self.render_targets.views.len() > made {
+                // A new target camera resolves into its render target.
+                self.clear_before_resolving(&self.render_targets.views[target].1.resolve);
+            }
             self.prepare_view_effects(device, target, (view.clear, &view.effects));
             self.render_targets.wrote(view.target, false);
             // Debug labels are drawn with the particles' text.

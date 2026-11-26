@@ -452,9 +452,11 @@ impl Renderer3D {
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some(parts[start].label()),
             });
-            // The prepared frame's buffer writes land first.
+            // The prepared frame's buffer writes land first, then the
+            // clears of new images only ever resolved into.
             if group == 0 {
                 self.record_pending_writes(&mut encoder);
+                self.record_resolve_target_clears(&mut encoder);
             }
             for part in &parts[start..ends[group]] {
                 let outer = checks.begin(part.pass());
@@ -480,6 +482,48 @@ impl Renderer3D {
         }
         *self.parts.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = parts;
         slots.into_iter().flatten().collect()
+    }
+
+    /// Clears `view` once, first in the next drawn frame. For an image whose
+    /// first write is a multisample resolve: Direct3D 12 places textures in
+    /// shared heaps, and a placed render target must be cleared, copied
+    /// into or discarded before anything else uses it. wgpu counts a resolve
+    /// as writing the whole image and issues none of those, so without the
+    /// clear the GPU can keep the heap's earlier compression metadata, and
+    /// the resolved image shows blocks of old memory (NaN and infinity
+    /// among them, which bloom then spreads over the whole picture).
+    pub(super) fn clear_before_resolving(&self, view: &wgpu::TextureView) {
+        self.unresolved
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(view.clone());
+    }
+
+    /// Records the clears asked for by
+    /// [`clear_before_resolving`](Self::clear_before_resolving).
+    fn record_resolve_target_clears(&self, encoder: &mut wgpu::CommandEncoder) {
+        let mut views = self
+            .unresolved
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for view in views.drain(..) {
+            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("3d clear before first resolve"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        }
     }
 
     /// [`frame_parts_into`](Self::frame_parts_into) a new list (tests).
