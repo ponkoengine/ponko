@@ -434,18 +434,21 @@ impl Frame3D {
     /// the frame its target had when it last drew, so what that frame
     /// collected and keeps between frames carries over. A camera that draws
     /// every few frames (a reflection on a cadence) would otherwise collect
-    /// its whole view from nothing each time. Frames of cameras not drawing
-    /// now wait in `spare_views`, at most `live_targets` of them.
-    pub(crate) fn reuse_views(&mut self, targets: impl Iterator<Item = u32>, live_targets: usize) {
+    /// its whole view from nothing each time. A target drawing for the first
+    /// time gets a fresh frame, never another target's: that one may have
+    /// collected another world (an icon's) or another camera. Frames of
+    /// cameras not drawing now wait in `spare_views` while `live` says
+    /// their target still exists.
+    pub(crate) fn reuse_views(&mut self, targets: impl Iterator<Item = u32>, live: impl Fn(u32) -> bool) {
         self.spare_views.append(&mut self.views);
         for target in targets {
             let view = match self.spare_views.iter().position(|v| v.target == target) {
                 Some(at) => self.spare_views.swap_remove(at),
-                None => self.spare_views.pop().unwrap_or_default(),
+                None => ViewFrame::default(),
             };
             self.views.push(view);
         }
-        self.spare_views.truncate(live_targets);
+        self.spare_views.retain(|v| live(v.target));
     }
 
     /// Fills the frame with what the camera sees and, with shadows on,
@@ -2325,8 +2328,8 @@ mod view_reuse_tests {
     }
 
     /// A frame with views for `ids`, each marked with its own target.
-    fn drawing(frame: &mut Frame3D, ids: &[u32], live: usize) {
-        frame.reuse_views(ids.iter().copied(), live);
+    fn drawing(frame: &mut Frame3D, ids: &[u32], live: &[u32]) {
+        frame.reuse_views(ids.iter().copied(), |id| live.contains(&id));
         for (view, &id) in frame.views.iter_mut().zip(ids) {
             view.target = id;
         }
@@ -2335,22 +2338,22 @@ mod view_reuse_tests {
     #[test]
     fn a_camera_that_skips_frames_gets_its_frame_back() {
         let mut frame = Frame3D::default();
-        drawing(&mut frame, &[7], 1);
+        drawing(&mut frame, &[7], &[7]);
         frame.views[0].size = (64, 32); // stands for what it collected
-        drawing(&mut frame, &[], 1);
+        drawing(&mut frame, &[], &[7]);
         assert!(frame.views.is_empty(), "not drawn this frame");
         assert_eq!(frame.spare_views.len(), 1, "kept for the next time");
-        drawing(&mut frame, &[7], 1);
+        drawing(&mut frame, &[7], &[7]);
         assert_eq!(frame.views[0].size, (64, 32), "the same frame as before");
     }
 
     #[test]
     fn frames_follow_their_targets_when_cameras_reorder() {
         let mut frame = Frame3D::default();
-        drawing(&mut frame, &[1, 2], 2);
+        drawing(&mut frame, &[1, 2], &[1, 2]);
         frame.views[0].size = (1, 1);
         frame.views[1].size = (2, 2);
-        drawing(&mut frame, &[2, 1], 2);
+        drawing(&mut frame, &[2, 1], &[1, 2]);
         assert_eq!(targets(&frame), vec![2, 1]);
         assert_eq!(frame.views[0].size, (2, 2));
         assert_eq!(frame.views[1].size, (1, 1));
@@ -2359,8 +2362,21 @@ mod view_reuse_tests {
     #[test]
     fn spares_of_freed_targets_are_dropped() {
         let mut frame = Frame3D::default();
-        drawing(&mut frame, &[1, 2, 3], 3);
-        drawing(&mut frame, &[], 1);
-        assert_eq!(frame.spare_views.len(), 1);
+        drawing(&mut frame, &[1, 2, 3], &[1, 2, 3]);
+        // Targets 1 and 3 freed: only 2's frame is kept, whatever its place.
+        drawing(&mut frame, &[], &[2]);
+        let kept: Vec<u32> = frame.spare_views.iter().map(|v| v.target).collect();
+        assert_eq!(kept, vec![2]);
+    }
+
+    #[test]
+    fn a_new_target_never_takes_another_targets_frame() {
+        // An icon (its own world) must not inherit what a reflection collected.
+        let mut frame = Frame3D::default();
+        drawing(&mut frame, &[1], &[1, 9]);
+        frame.views[0].size = (64, 32);
+        drawing(&mut frame, &[9], &[1, 9]);
+        assert_eq!(frame.views[0].size, (0, 0), "a fresh frame");
+        assert_eq!(frame.spare_views.len(), 1, "1's frame still waits for it");
     }
 }
