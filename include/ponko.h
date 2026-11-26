@@ -4390,6 +4390,16 @@ enum PonkoStatus ponko_transform_component(struct PonkoWorld *world, uint32_t *o
 
 enum PonkoStatus ponko_sprite_component(struct PonkoWorld *world, uint32_t *out_id);
 
+enum PonkoStatus ponko_sprite_set_flip(struct PonkoWorld *world,
+                                       uint64_t entity,
+                                       bool flip_x,
+                                       bool flip_y);
+
+enum PonkoStatus ponko_sprite_flip(struct PonkoWorld *world,
+                                   uint64_t entity,
+                                   bool *out_flip_x,
+                                   bool *out_flip_y);
+
 enum PonkoStatus ponko_spawn(struct PonkoWorld *world,
                              const struct PonkoValue *values,
                              size_t count,

@@ -4831,6 +4831,29 @@ static void camera_rigs() {
     });
 }
 
+// A sprite's flips: the `sprite` struct has no fields for them; world_view reads and sets them.
+static void sprite_flips() {
+    ponko::world w;
+    auto e = w.spawn(ponko::sprite_of(ponko::texture{}));
+    CHECK(!w.sprite_flip(e).x && !w.sprite_flip(e).y);   // new sprites are unflipped
+    w.set_sprite_flip(e, true, false);
+    CHECK(w.sprite_flip(e).x && !w.sprite_flip(e).y);
+    // Writing a sprite back keeps the flips.
+    auto s = w.get<ponko::sprite>(e);
+    s.z = 3;
+    w.set(e, s);
+    CHECK(w.get<ponko::sprite>(e).z == 3 && w.sprite_flip(e).x);
+    w.set_sprite_flip(e, false, true);
+    CHECK(!w.sprite_flip(e).x && w.sprite_flip(e).y);
+    // No sprite, or a dead entity, throws.
+    auto bare = w.spawn();
+    throws([&] { w.set_sprite_flip(bare, true, true); });
+    throws([&] { (void)w.sprite_flip(bare); });
+    w.despawn(e);
+    throws([&] { w.set_sprite_flip(e, true, true); });
+    throws([&] { (void)w.sprite_flip(e); });
+}
+
 // Several cameras: split screens, a minimap's layers, picking through the camera under a point.
 static void viewports() {
     CHECK(ponko::split_viewport(2, 1).x == 0.5f && ponko::render_layer(3) == 8u);
@@ -5920,6 +5943,7 @@ int main() {
     draw_space_names_the_coordinates();
     localization();
     viewports();
+    sprite_flips();
     levels_and_tilemaps();
     gltf_scenes();
     terrain_files();

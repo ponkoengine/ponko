@@ -122,6 +122,13 @@ using attached = PonkoAttached;
 /// transform2d. Get and set it like any component; it can't be a query column (the engine stores it in a Rust
 /// layout).
 using sprite = PonkoSprite;
+/// Which ways a sprite is mirrored (Rust `Sprite::flip_x`, `Sprite::flip_y`): `x` left to right, `y` top to
+/// bottom. `sprite` has no such fields; read them with world_view::sprite_flip and set them with
+/// world_view::set_sprite_flip.
+struct sprite_flips {
+    bool x = false;
+    bool y = false;
+};
 // ---- 2D lights (Rust `d2::PointLight`, `d2::SpotLight`, `d2::DirectionalLight`, `d2::Occluder`).
 /// The built-in `PointLight2D` component: light from the entity's 2D transform, fading to nothing at
 /// `radius` pixels; `shadows` makes occluders in reach cast shadows. Start from point_light2d_default().
@@ -2496,6 +2503,13 @@ public:
     void set_render_layers(entity e, std::uint32_t layers) { valid(); detail::check(ponko_world_set_render_layers(raw_, e, layers)); }
     /// The render layers `e` is on (render_layers_default without any). Throws if `e` is dead.
     std::uint32_t render_layers(entity e) const { valid(); std::uint32_t result = 0; detail::check(ponko_world_render_layers(raw_, e, &result)); return result; }
+    /// Mirrors `e`'s sprite left to right (`flip_x`) and/or top to bottom (`flip_y`), in place (Rust
+    /// `Sprite::flip_x`, `Sprite::flip_y`): it covers the same rectangle and shows its region flipped. The
+    /// `sprite` struct has no flips: setting a `sprite` keeps the flips already on the entity, and a new
+    /// sprite starts unflipped. Throws if `e` is dead or has no sprite.
+    void set_sprite_flip(entity e, bool flip_x, bool flip_y) { valid(); detail::check(ponko_sprite_set_flip(raw_, e, flip_x, flip_y)); }
+    /// Which ways `e`'s sprite is mirrored (see set_sprite_flip). Throws if `e` is dead or has no sprite.
+    sprite_flips sprite_flip(entity e) const { valid(); sprite_flips result; detail::check(ponko_sprite_flip(raw_, e, &result.x, &result.y)); return result; }
     /// How many entities are alive.
     std::size_t size() const { valid(); std::size_t result = 0; detail::check(ponko_world_len(raw_, &result)); return result; }
     /// A copy of `e`'s `T`; throws if `e` is dead or has no `T` (see try_get).
