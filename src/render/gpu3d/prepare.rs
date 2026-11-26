@@ -1357,6 +1357,18 @@ impl Renderer3D {
             if self.environment.is_capture(view.target) {
                 theirs.probes.fill(Default::default());
             }
+            // An icon, of a world of its own: none of the game world's
+            // shadows, fog, probes or global illumination.
+            if view.isolated {
+                theirs.probes.fill(Default::default());
+                theirs.shadow[0] = 0.0;
+                theirs.fog[0] = 0.0;
+                theirs.fog[3] = 0.0;
+                theirs.fog_far[1] = 0.0;
+                theirs.fog_far[2] = 0.0;
+                theirs.gi[1][3] = 0.0;
+                theirs.sky_kit[4][3] = 0.0;
+            }
             theirs.cluster_depth = cluster_depth(&view.frame);
             theirs.cluster_view_proj = view.frame.view_proj.to_cols_array_2d();
             theirs.view_proj = view.view_proj.to_cols_array_2d();

@@ -414,6 +414,11 @@ pub(crate) struct ViewFrame {
     pub clear: Option<crate::color::Color>,
     /// Its screen effects, in order: (effect, material).
     pub effects: Vec<(u32, u32)>,
+    /// An item icon's view (`Ctx::render_icon`): of a world of its own, so
+    /// the main view's sun shadows, fog, cloud shadows, reflection probes
+    /// and global illumination, which belong to the game's world, are left
+    /// out of its light.
+    pub isolated: bool,
     /// Its models, without shadow casters (it uses the main view's).
     pub frame: Frame3D,
 }
