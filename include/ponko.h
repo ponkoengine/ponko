@@ -265,6 +265,8 @@
 
 #define PONKO_TARGET_CAMERA_EX_VERSION 3
 
+#define PONKO_ICON_VERSION 1
+
 #define PONKO_PREDICTION_DEFAULT_CAPACITY 256
 
 #define PONKO_CAMERA_SHAKE_VERSION 1
@@ -3703,6 +3705,17 @@ typedef struct PonkoTargetCameraEx {
   bool has_clear;
   struct PonkoColor clear;
 } PonkoTargetCameraEx;
+
+typedef struct PonkoIcon {
+  uint32_t struct_size;
+  uint32_t version;
+  uint32_t size;
+  struct PonkoVec3 from;
+  float fov_y;
+  float exposure;
+  struct PonkoColor background;
+  struct PonkoColor color;
+} PonkoIcon;
 
 typedef bool (*PonkoPredictStepFn)(void *user,
                                    void *state,
@@ -10532,6 +10545,16 @@ enum PonkoStatus ponko_ctx_set_target_cameras_ex(struct PonkoCtx *ctx,
 enum PonkoStatus ponko_ctx_target_camera_ex(struct PonkoCtx *ctx,
                                             size_t index,
                                             struct PonkoTargetCameraEx *out_camera);
+
+enum PonkoStatus ponko_icon_defaults(uint32_t size, struct PonkoIcon *out_icon);
+
+enum PonkoStatus ponko_ctx_render_icon(struct PonkoCtx *ctx,
+                                       struct PonkoMesh mesh,
+                                       const struct PonkoIcon *icon,
+                                       const uint32_t *parts,
+                                       const struct PonkoMaterial *materials,
+                                       size_t count,
+                                       struct PonkoTexture *out_texture);
 
 enum PonkoStatus ponko_prediction_new(const void *state,
                                       size_t state_size,

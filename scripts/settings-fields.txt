@@ -64,6 +64,9 @@ TargetCamera.cull_box             has_cull_box           # has_cull_box, cull_bo
 TargetCamera.clear                has_clear              # has_clear and clear (version 3)
 TargetCamera.effects              ponko_ctx_set_target_camera_effects # a list: set and read apart, by camera index
 
+struct Icon Icon src/three/icon.rs PonkoIcon
+Icon.materials                    ponko_ctx_render_icon  # the parts and materials arguments
+
 struct Lighting Lighting src/three/mod.rs PonkoLighting,PonkoLightingEx
 Lighting.gi                       gi_enabled             # GlobalIllumination's fields are the gi_* fields
 Lighting.shadow_lag               -                      # not bound yet: C far cascades are exact, the default
