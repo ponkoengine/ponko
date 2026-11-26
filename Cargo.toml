@@ -52,6 +52,7 @@ files = [
     "LICENSE-APACHE",
     "NOTICE",
     "examples/coin_dash/CONTENT-NOTICES.txt",
+    { from = "assets/CC0-1.0.txt", to = "CC0-1.0.txt" },
     { from = "examples/coin_dash/PACKAGE-README.txt", to = "README.txt" },
 ]
 
@@ -66,6 +67,7 @@ files = [
     "LICENSE-APACHE",
     "NOTICE",
     "examples/shard_grove/CONTENT-NOTICES.txt",
+    { from = "assets/CC0-1.0.txt", to = "CC0-1.0.txt" },
     { from = "examples/shard_grove/PACKAGE-README.txt", to = "README.txt" },
 ]
 
@@ -95,6 +97,7 @@ files = [
     "LICENSE-APACHE",
     "NOTICE",
     "examples/ember_hop/CONTENT-NOTICES.txt",
+    { from = "assets/CC0-1.0.txt", to = "CC0-1.0.txt" },
     { from = "examples/ember_hop/PACKAGE-README.txt", to = "README.txt" },
 ]
 

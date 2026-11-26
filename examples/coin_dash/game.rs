@@ -36,6 +36,7 @@ pub mod settings;
 #[path = "smoke.rs"]
 pub mod smoke;
 
+use ponko::audio::AudioEffects;
 #[allow(unused_imports)]
 use ponko::d2::{Sprite, Transform};
 use ponko::locale::{Arg, Strings};
@@ -64,26 +65,33 @@ pub struct Player;
 #[derive(Component)]
 pub struct Coin;
 
-/// The pictures, made or loaded once at startup: a procedural disc (the
-/// player) and the coin, the one file the game loads from `assets/`.
+/// The pictures, loaded once at startup from `assets/coin_dash`: the player,
+/// the coin and the grass field. Pixel art, drawn at twice its size.
 #[derive(Clone, Copy)]
 pub struct Art {
-    disc: Texture,
+    player: Texture,
     pub coin: Texture,
+    field: Texture,
 }
 
 /// The coin's file, relative to `assets/`. The packaged game finds it next to
 /// the executable, wherever it was unpacked.
 pub const COIN_ASSET: &str = "coin_dash/coin.png";
 
-/// The sound effects, made from sine tones at startup (no sound files).
+/// The sound effects and the music, loaded once at startup.
 #[derive(Clone, Copy)]
 pub struct Sounds {
     pickup: Sound,
     win: Sound,
     lose: Sound,
     select: Sound,
+    music: Sound,
+    /// The bus the music plays on: its volume follows the settings.
+    music_bus: AudioBus,
 }
+
+/// The music's share of the volume setting.
+const MUSIC_VOLUME: f32 = 0.4;
 
 /// Which screen the game is on: the game's state, so tests and tools can
 /// read it ([`screen`]).
@@ -298,35 +306,39 @@ impl Plugin for Drawing {
     fn setup(&self, ctx: &mut Ctx) {
         ctx.world.insert_resource(MenuFade::default());
         ctx.gfx.clear(Color::hex(0x14181f));
-        let disc = disc(ctx);
-        let coin = ctx.gfx.load_texture(COIN_ASSET);
-        ctx.world.insert_resource(Art { disc, coin });
+        let mut picture = |path: &str| {
+            let texture = ctx.gfx.load_texture(path);
+            ctx.gfx.set_texture_filter(texture, TextureFilter::Nearest);
+            texture
+        };
+        let art = Art {
+            player: picture("coin_dash/player.png"),
+            coin: picture(COIN_ASSET),
+            field: picture("coin_dash/field.png"),
+        };
+        ctx.world.insert_resource(art);
+        let mut sound = |name: &str| ctx.audio.load(&format!("coin_dash/sounds/{name}.ogg"));
         let sounds = Sounds {
-            pickup: tone(ctx, 880.0, 1320.0, 0.10),
-            win: tone(ctx, 523.0, 1047.0, 0.45),
-            lose: tone(ctx, 330.0, 140.0, 0.45),
-            select: tone(ctx, 660.0, 660.0, 0.05),
+            pickup: sound("pickup"),
+            win: sound("win"),
+            lose: sound("lose"),
+            select: sound("select"),
+            // Music is long: streamed from the file rather than decoded whole.
+            music: ctx.audio.load_stream("coin_dash/music/dash.ogg"),
+            music_bus: ctx.audio.bus("music"),
         };
         ctx.world.insert_resource(sounds);
+        let volume = ctx.world.resource::<Settings>().volume;
+        ctx.audio.set_bus_volume(sounds.music_bus, volume * MUSIC_VOLUME);
+        let music = SoundParams {
+            looping: true,
+            ..Default::default()
+        };
+        ctx.audio
+            .play_on(sounds.music, music, sounds.music_bus, AudioEffects::default());
     }
 }
 // ANCHOR_END: plugins
-
-/// A short sine tone gliding from `from` to `to` Hz, fading out: a sound
-/// effect made in code, so the game needs no sound files.
-fn tone(ctx: &mut Ctx, from: f32, to: f32, seconds: f32) -> Sound {
-    const RATE: u32 = 44_100;
-    let count = (RATE as f32 * seconds) as usize;
-    let mut phase = 0.0f32;
-    let samples: Vec<f32> = (0..count)
-        .map(|i| {
-            let t = i as f32 / count as f32;
-            phase += (from + (to - from) * t) * std::f32::consts::TAU / RATE as f32;
-            phase.sin() * (1.0 - t) * 0.25
-        })
-        .collect();
-    ctx.audio.create(RATE, &samples)
-}
 
 /// Plays one of the sound effects at the saved volume. Silent without audio.
 fn sfx(ctx: &mut Ctx, pick: fn(&Sounds) -> Sound) {
@@ -341,27 +353,6 @@ fn sfx(ctx: &mut Ctx, pick: fn(&Sounds) -> Sound) {
             },
         );
     }
-}
-
-/// A white 32x32 disc, generated here so the game needs no image files. Sprites
-/// tint and scale it into the player and the coins.
-fn disc(ctx: &mut Ctx) -> Texture {
-    const SIZE: u32 = 32;
-    let mut rgba = Vec::with_capacity((SIZE * SIZE * 4) as usize);
-    for y in 0..SIZE {
-        for x in 0..SIZE {
-            let d = vec2(x as f32 + 0.5, y as f32 + 0.5).distance(Vec2::splat(SIZE as f32 / 2.0));
-            let alpha = (SIZE as f32 / 2.0 - d).clamp(0.0, 1.0); // soft 1 px edge
-            rgba.extend([255, 255, 255, (alpha * 255.0) as u8]);
-        }
-    }
-    ctx.gfx.create_texture(SIZE, SIZE, &rgba)
-}
-
-/// A disc sprite with a radius in world units.
-fn ball(art: Art, at: Vec2, radius: f32, color: Color) -> (Transform, Sprite) {
-    let scale = Vec2::splat(radius / 16.0); // the disc is 16 units in radius
-    (Transform::at(at).scaled(scale), Sprite::new(art.disc).with_color(color))
 }
 
 /// Keyboard and gamepad, bound to the same names: the default controls, see
@@ -408,13 +399,14 @@ pub fn new_round(ctx: &mut Ctx) {
     ctx.world.clear();
     let art = *ctx.world.resource::<Art>();
     let mut rng = ctx.random().stream(u64::from(number));
-    let (transform, sprite) = ball(art, ARENA / 2.0, PLAYER_RADIUS, Color::hex(0x3a86ff));
-    ctx.world.spawn((transform, sprite, Player));
+    // The field: 400 x 300 pixels, doubled like every picture, under the rest.
+    let field = Transform::at(ARENA / 2.0).scaled(Vec2::splat(2.0));
+    ctx.world.spawn((field, Sprite::new(art.field).with_z(-1.0)));
+    ctx.world
+        .spawn((Transform::at(ARENA / 2.0), Sprite::new(art.player), Player));
     for _ in 0..COINS {
         let at = vec2(rng.range(40.0, ARENA.x - 40.0), rng.range(40.0, ARENA.y - 40.0));
-        let scale = Vec2::splat(COIN_RADIUS / 16.0); // the coin picture is 16 units in radius
-        ctx.world
-            .spawn((Transform::at(at).scaled(scale), Sprite::new(art.coin), Coin));
+        ctx.world.spawn((Transform::at(at), Sprite::new(art.coin), Coin));
     }
     ctx.world.insert_resource(Round {
         collected: 0,
