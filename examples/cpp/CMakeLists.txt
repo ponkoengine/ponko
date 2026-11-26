@@ -95,3 +95,11 @@ ponko_native(ponko_c_guide guide.c)
 add_test(NAME c_guide COMMAND ponko_c_guide)
 ponko_native(ponko_cpp_window window.cpp)
 add_test(NAME cpp_window_headless COMMAND ponko_cpp_window)
+# Coin Dash, the complete reference game (examples/coin_dash) ported to C++.
+# Its scenario test runs the same input scenarios as the Rust game's tests,
+# from the files they check against; the smoke run plays it through once.
+ponko_native(ponko_cpp_coin_dash coin_dash/main.cpp)
+ponko_native(ponko_cpp_coin_dash_scenarios coin_dash/scenarios.cpp)
+add_test(NAME cpp_coin_dash_scenarios COMMAND ponko_cpp_coin_dash_scenarios "${CMAKE_CURRENT_LIST_DIR}/../coin_dash/scenarios")
+add_test(NAME cpp_coin_dash_smoke COMMAND ponko_cpp_coin_dash --smoke headless)
+set_tests_properties(cpp_coin_dash_smoke PROPERTIES ENVIRONMENT "PONKO_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/coin-dash-data")

@@ -13,7 +13,7 @@ use ponko::state::{Condition, State};
 
 use crate::ctx::{ctx_access, out, with_ctx};
 use crate::game::{build, ok, phase, system, system_name};
-use crate::{PonkoCtx, PonkoGame, PonkoStatus, PonkoSystemFn, boundary, invalid};
+use crate::{PonkoCtx, PonkoGame, PonkoStatus, PonkoSystemFn, PonkoWorld, boundary, invalid};
 
 /// A run condition: whether the system runs this time. `ctx` is valid
 /// until it returns; read what you need, change nothing.
@@ -380,6 +380,29 @@ pub unsafe extern "C" fn ponko_ctx_state(ctx: *mut PonkoCtx, out_state: *mut u32
     // SAFETY: forwarded caller contract.
     boundary(|| unsafe {
         let state = with_state(ctx, |s| *s.get())?;
+        out(out_state, state)
+    })
+}
+
+/// Writes the state the game of `world` is in (Rust's
+/// `world.resource::<State<S>>().get()`), to `*out_state`: for a world a
+/// headless run returned, to check where the game ended.
+/// `PONKO_INVALID_ARGUMENT` when the world has no state machine.
+/// # Safety
+/// `world` must be null or live, outside query callbacks; `out_state` writable.
+/// ```
+/// let w = ponko_ffi::ponko_world_new();
+/// let mut s = 0;
+/// assert_eq!(unsafe { ponko_ffi::ponko_world_state(w, &mut s) } as u32, 1);
+/// unsafe { ponko_ffi::ponko_world_free(w) };
+/// ```
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_world_state(world: *mut PonkoWorld, out_state: *mut u32) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        let state = crate::access(world, |w, _| {
+            Ok(*w.get_resource::<State<u32>>().ok_or_else(no_state)?.get())
+        })?;
         out(out_state, state)
     })
 }

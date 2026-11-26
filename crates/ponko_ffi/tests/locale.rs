@@ -235,3 +235,58 @@ fn plural_categories_from_c() {
         PONKO_INVALID_ARGUMENT
     );
 }
+
+#[derive(Default)]
+struct Numbers {
+    en: Vec<String>,
+    ar: Vec<String>,
+    revisions: Vec<u64>,
+    without_tables: Option<PonkoStatus>,
+}
+
+unsafe extern "C" fn numbers(ctx: *mut PonkoCtx, user: *mut c_void) {
+    let seen = unsafe { &mut *user.cast::<Numbers>() };
+    unsafe {
+        let mut len = 0;
+        seen.without_tables = Some(ponko_ctx_strings_number(ctx, 1.0, 0, null_mut(), 0, &mut len));
+        assert_eq!(ponko_ctx_strings_insert_json(ctx, EN.as_ptr()), PONKO_OK);
+        let mut revision = 0;
+        assert_eq!(ponko_ctx_strings_revision(ctx, &mut revision), PONKO_OK);
+        seen.revisions.push(revision);
+        assert_eq!(ponko_ctx_strings_insert_json(ctx, AR.as_ptr()), PONKO_OK);
+        assert_eq!(ponko_ctx_strings_revision(ctx, &mut revision), PONKO_OK);
+        seen.revisions.push(revision);
+        for (value, decimals) in [(125.0, 0), (1234.5, 2), (0.25, -1)] {
+            seen.en
+                .push(read(|b, c, l| ponko_ctx_strings_number(ctx, value, decimals, b, c, l)));
+        }
+        let mut known = false;
+        assert_eq!(
+            ponko_ctx_strings_set_language(ctx, c"ar".as_ptr(), &mut known),
+            PONKO_OK
+        );
+        assert_eq!(ponko_ctx_strings_revision(ctx, &mut revision), PONKO_OK);
+        seen.revisions.push(revision);
+        // Asking again changes nothing.
+        assert_eq!(ponko_ctx_strings_revision(ctx, &mut revision), PONKO_OK);
+        seen.revisions.push(revision);
+        seen.ar
+            .push(read(|b, c, l| ponko_ctx_strings_number(ctx, 125.0, 0, b, c, l)));
+        assert_eq!(ponko_ctx_strings_revision(ctx, null_mut()), PONKO_INVALID_ARGUMENT);
+    }
+}
+
+#[test]
+fn numbers_follow_the_language_and_the_revision_counts_changes_from_c() {
+    let mut seen = Numbers::default();
+    run(Some(numbers), (&raw mut seen).cast());
+    assert_eq!(seen.without_tables, Some(PONKO_NOT_FOUND), "no tables yet");
+    assert_eq!(seen.en, ["125", "1234.50", "0.25"]);
+    assert_eq!(seen.ar, ["١٢٥"], "the table's digits");
+    let r = &seen.revisions;
+    assert!(
+        r[0] != r[1] && r[1] != r[2],
+        "a new table and a new language each change it: {r:?}"
+    );
+    assert_eq!(r[2], r[3], "reading it changes nothing");
+}
