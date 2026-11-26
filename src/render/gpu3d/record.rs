@@ -817,7 +817,7 @@ impl Renderer3D {
                 });
                 let multisampled = self.samples > 1;
                 let coverage_target =
-                    (multisampled && normal_target.is_some()).then(|| wgpu::RenderPassColorAttachment {
+                    (multisampled && normal_target.is_some()).then_some(wgpu::RenderPassColorAttachment {
                         view: &targets.color,
                         depth_slice: None,
                         resolve_target: None,
