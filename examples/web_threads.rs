@@ -72,7 +72,10 @@
 //! - `interleaved`: `schedule/interleaved/4x16000/heavy`, producers and
 //!   consumers in two batches;
 //! - `jobs`: 16 jobs of about the same work, from spawning the first to
-//!   having all results.
+//!   having all results;
+//! - `boids`: one tick of `examples/boids.rs` (its flocking system, the
+//!   same code, over the same 20,000 boids in 1280 × 720): a spatial grid
+//!   rebuilt on the page's thread, then `par_for_each` over every boid.
 //!
 //! On the desktop it opens a window like any other example (`cargo run
 //! --example web_threads`) and prints its state once a second.
@@ -97,6 +100,16 @@ use web_time::Instant;
 
 #[path = "common/web_smoke.rs"]
 mod smoke;
+
+/// `examples/boids.rs` itself, for the `boids` workload: its flocking
+/// system and its boids (its `main` goes unused here).
+#[allow(dead_code)]
+#[path = "boids.rs"]
+mod boids;
+
+/// The `boids` workload's flock: the boids example's default count and world.
+const BOIDS: usize = 20_000;
+const BOIDS_BOUNDS: Vec2 = Vec2::new(1280.0, 720.0);
 
 const DT: f32 = 1.0 / 60.0;
 
@@ -993,13 +1006,14 @@ fn bench(game: Game, workload: String) {
     let mut game = game.parallel_systems(true);
     let entities = match workload.as_str() {
         "par" => 100_000,
-        "jobs" => 0,
+        "jobs" | "boids" => 0,
         _ => 16_000,
     };
     // A tick's time, from its first phase to its last (as `schedule.rs`).
     let start = timings.clone();
     let end = timings.clone();
     let tick_timed = matches!(workload.as_str(), "sweep" | "interleaved");
+    let boids_flock = workload == "boids";
     if tick_timed {
         game = game
             .add(Phase::Input, move |_ctx: &mut Ctx| {
@@ -1054,7 +1068,17 @@ fn bench(game: Game, workload: String) {
                 t.borrow_mut().record(started.elapsed().as_secs_f64() * 1e3);
             });
         }
-        other => panic!("web_threads: unknown workload `{other}` (par, sweep, interleaved or jobs)"),
+        "boids" => {
+            // One tick of the boids example: its whole flocking system.
+            let t = timings.clone();
+            let mut flocking = boids::flocking(BOIDS_BOUNDS);
+            game = game.sim_system(move |ctx| {
+                let started = Instant::now();
+                flocking(ctx);
+                t.borrow_mut().record(started.elapsed().as_secs_f64() * 1e3);
+            });
+        }
+        other => panic!("web_threads: unknown workload `{other}` (par, sweep, interleaved, jobs or boids)"),
     }
     let frame = timings.clone();
     let mut smoke = None;
@@ -1078,6 +1102,7 @@ fn bench(game: Game, workload: String) {
         ctx.gfx.clear(Color::rgb(0.08, 0.09, 0.11));
     })
     .setup(move |ctx| match entities {
+        0 if boids_flock => boids::spawn_boids(ctx, BOIDS, BOIDS_BOUNDS),
         0 => {}
         100_000 => spawn_agents(ctx, entities),
         _ => spawn_vals::<8>(ctx, entities),
