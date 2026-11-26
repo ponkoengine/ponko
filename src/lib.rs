@@ -314,6 +314,7 @@ pub mod state;
 #[cfg(feature = "steam")]
 pub mod steam;
 pub mod storage;
+mod suggest;
 /// Deprecated: [`Job`](crate::streaming::Job) and `CellStreamer` moved to
 /// [`streaming`], next to the asset streaming they work with.
 pub mod stream {

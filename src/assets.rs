@@ -75,6 +75,7 @@ use crate::scene::{PREFAB_FORMAT, PREFAB_VERSION};
 
 pub(crate) mod group;
 mod pack;
+pub(crate) mod sniff;
 pub use group::{
     AssetGroup, DEFAULT_GROUP_FRAME_BUDGET_MS, GroupId, GroupProgress, GroupState, GroupStats, SliceLoader,
 };
@@ -871,8 +872,32 @@ pub(crate) fn resolve(name: &str) -> Result<PathBuf, String> {
     let searched: Vec<String> = roots.iter().map(|r| format!("  {}", r.display())).collect();
     Err(format!(
         "\"{name}\" not found in assets/. Looked in:\n{}",
-        searched.join("\n") + &nearby_assets(name, &roots)
+        searched.join("\n") + &nearby_assets(name, &roots) + &path_hint(name, &roots)
     ))
+}
+
+/// A line for the two slips that spelling and case checks can't see: a name
+/// that starts with the `assets/` folder itself (names are relative to it)
+/// and one written with Windows separators (names use `/` everywhere).
+#[cfg(not(target_arch = "wasm32"))]
+fn path_hint(name: &str, roots: &[PathBuf]) -> String {
+    let fixed = name.replace('\\', "/");
+    let relative = fixed.strip_prefix("assets/").unwrap_or(&fixed);
+    let exists = |n: &str| roots.iter().any(|r| r.join(n).is_file());
+    if relative == name {
+        return String::new();
+    }
+    let found = if exists(relative) {
+        "it exists there"
+    } else {
+        "check it exists"
+    };
+    let why = if fixed.starts_with("assets/") {
+        "names are relative to the assets/ folder, so drop the leading `assets/`"
+    } else {
+        "names use `/` as the separator on every platform"
+    };
+    format!("\nHint: {why}: try \"{relative}\" ({found})")
 }
 
 /// Suggestions are bounded to the requested folder, only on lookup failure.
@@ -1486,9 +1511,17 @@ pub(crate) fn decode_image(bytes: &[u8], path: &str, what: &str) -> Result<Image
     match format {
         Some(format) => reader.set_format(format),
         None => {
-            reader = reader
-                .with_guessed_format()
-                .map_err(|e| crate::error::Error::decode(path, e.to_string()))?
+            reader = reader.with_guessed_format().map_err(|e| {
+                crate::error::Error::decode(
+                    path,
+                    sniff::not_a(
+                        sniff::Class::Image,
+                        what,
+                        &sniff::Sniff::of(bytes),
+                        Some(&e.to_string()),
+                    ),
+                )
+            })?
         }
     }
     // The size in the header first: a few bytes can claim an image of
@@ -1509,7 +1542,15 @@ pub(crate) fn decode_image(bytes: &[u8], path: &str, what: &str) -> Result<Image
             ),
         )
         .with_path(path),
-        e => crate::error::Error::decode(path, format!("{what} is not a valid image: {e}")),
+        e => crate::error::Error::decode(
+            path,
+            sniff::not_a(
+                sniff::Class::Image,
+                what,
+                &sniff::Sniff::of(bytes),
+                Some(&e.to_string()),
+            ),
+        ),
     })?;
     check_image_size(u64::from(decoded.width()), u64::from(decoded.height()), path, what)?;
     let rgba = decoded.into_rgba8();
