@@ -382,13 +382,35 @@ fn sample_lighting(name: &str) -> Option<(f32, f32)> {
     Some(lighting)
 }
 
-/// Draws the sample through its first camera or frames its bounds, with
-/// the screenshot's background and the test's lighting for that sample.
+/// What pose to draw a sample in.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Pose {
+    /// At rest, as the file starts.
+    Rest,
+    /// Its clips sampled at this time (in seconds, clamped to each clip).
+    At(f32),
+    /// The same without the clips' property tracks (visibility, materials):
+    /// the negative control, drawn as they were before they played.
+    Unkeyed(f32),
+}
+
+/// A light from the file hangs from its node's joint, when the model has
+/// a skeleton: it follows the node's animation and visibility.
+fn hang(world: &mut World, model: Entity, light: Option<Entity>, joint: Option<usize>) {
+    if let (Some(light), Some(joint), true) = (light, joint, world.has::<crate::anim::Skeleton>(model)) {
+        world.insert(light, crate::anim::AttachToJoint::new(model, joint));
+    }
+}
+
+/// Draws the sample through its camera `camera_index` (else its first)
+/// or frames its bounds, with the screenshot's background and the test's
+/// lighting for that sample.
 fn draw_sample(
     name: &str,
     file: &str,
     size: (u32, u32),
     background: [u8; 3],
+    (pose, camera_index): (Pose, usize),
 ) -> Result<Option<(image::RgbaImage, bool)>, String> {
     let Some((mut ctx, _)) = game_ctx(size) else {
         return Ok(None);
@@ -399,7 +421,17 @@ fn draw_sample(
     // A file with skins stands in its rest pose with its skeleton, as the
     // guide spawns one ("Skinned meshes"); without it, a skinned mesh
     // stays in the space it was bound in.
-    if let Ok(skeleton) = ctx.gfx.try_load_skeleton(file) {
+    if let Ok(mut skeleton) = ctx.gfx.try_load_skeleton(file) {
+        if let Pose::At(time) | Pose::Unkeyed(time) = pose {
+            for clip in ctx.gfx.try_load_clips(file).map_err(|e| e.to_string())? {
+                let clip = if matches!(pose, Pose::Unkeyed(_)) {
+                    clip.with_property_tracks(Vec::new())
+                } else {
+                    clip
+                };
+                clip.sample(time.min(clip.duration()), &mut skeleton);
+            }
+        }
         ctx.world.insert(model, skeleton);
     }
     let bg = |c: u8| f32::from(c) / 255.0;
@@ -409,7 +441,7 @@ fn draw_sample(
     let camera = &mut ctx.scene3d.camera;
     let aspect = size.0 as f32 / size.1 as f32;
     let cameras = ctx.gfx.try_load_cameras(file).map_err(|e| e.to_string())?;
-    let own_camera = if let Some(shot) = cameras.first() {
+    let own_camera = if let Some(shot) = cameras.get(camera_index).or(cameras.first()) {
         shot.apply(camera, &at);
         true
     } else {
@@ -420,7 +452,14 @@ fn draw_sample(
     if let Some((ev100, ambient)) = sample_lighting(name) {
         ctx.scene3d.lighting.ambient_intensity = ambient;
         let lights = ctx.gfx.try_load_lights(file).map_err(|e| e.to_string())?;
-        ctx.scene3d.light_gltf(&mut ctx.world, &lights, &at, ev100);
+        let placed = ctx.scene3d.light_gltf(&mut ctx.world, &lights, &at, ev100);
+        let joints = lights
+            .iter()
+            .filter(|l| !matches!(l.kind, ModelLightKind::Sun { .. }))
+            .map(|l| l.joint);
+        for (light, joint) in placed.into_iter().zip(joints) {
+            hang(&mut ctx.world, model, Some(light), joint);
+        }
         if name == "DirectionalLight" {
             // The reference shows the direct BRDF of three spheres in isolation.
             ctx.scene3d.lighting.shadows = false;
@@ -445,7 +484,8 @@ fn draw_sample(
                 lighting.sun_direction = light.placed(&at).forward();
                 (lighting.sun_color, lighting.sun_intensity) = (color, intensity);
             } else {
-                light.spawn(&mut ctx.world, &at);
+                let light_entity = light.spawn(&mut ctx.world, &at);
+                hang(&mut ctx.world, model, light_entity, light.joint);
             }
         }
     }
@@ -607,7 +647,7 @@ fn known_samples_are_drawn_like_their_screenshots() {
         let size = drawn_size(reference.dimensions());
         let reference = image::imageops::resize(&reference, size.0, size.1, image::imageops::FilterType::Triangle);
         let background = border_color(&reference);
-        let drawn = std::panic::catch_unwind(|| draw_sample(&name, file, size, background));
+        let drawn = std::panic::catch_unwind(|| draw_sample(&name, file, size, background, (Pose::Rest, 0)));
         let (drawn, own_camera) = match drawn {
             Ok(Ok(Some(drawn))) => drawn,
             Ok(Ok(None)) => return,
@@ -705,6 +745,248 @@ fn known_samples_are_drawn_like_their_screenshots() {
         "samples drawn worse than {DRAWS} records (see results/draw in the cache):\n{}",
         worse.join("\n")
     );
+}
+
+/// The samples whose `KHR_animation_pointer` animations play (#620), each
+/// with three times to draw it at and the file's camera to draw it with.
+const POINTER_SAMPLES: [(&str, [f32; 3], usize); 5] = [
+    // The blue cube (light) shows from 0 to 0.5 s, hides to 1 s, shows again.
+    ("CubeVisibility", [0.25, 0.75, 1.25], 0),
+    ("LightVisibility", [0.25, 0.75, 1.25], 0),
+    // The cube above turns green over the green cube, blue over the blue
+    // one, and red again back over the red one.
+    ("AnimatedColorsCube", [0.75, 1.75, 2.75], 0),
+    // Texture offsets, rotations and scales, from none at 0 s to most at
+    // 6 s; seen through the file's camera on the base color and emissive
+    // rows (its first sees all the rows, too small to tell).
+    ("AnimationPointerUVs", [0.0, 3.0, 6.0], 2),
+    // The heat dome's normal map turns: none at 0 s, a quarter at 1 s, half
+    // at 2 s.
+    ("PotOfCoalsAnimationPointer", [0.0, 1.0, 2.0], 0),
+];
+
+/// The description of the file's material `material` after its clips are
+/// sampled at `time`, in a game without a GPU.
+fn animated_material(file: &str, material: &str, time: f32) -> crate::render::MaterialDesc {
+    let mut ctx = Ctx::new(1.0 / 60.0, Vec2::ONE);
+    ctx.gfx.headless = true;
+    ctx.assets.add_source(Folder(cache()));
+    let mesh = ctx.gfx.load_mesh(file);
+    let mut skeleton = ctx.gfx.load_skeleton(file);
+    for clip in ctx.gfx.load_clips(file) {
+        clip.sample(time.min(clip.duration()), &mut skeleton);
+    }
+    ctx.world.spawn((Transform3D::default(), Model::new(mesh), skeleton));
+    ctx.gfx.apply_animated_materials(&mut ctx.world);
+    let (id, _) = ctx.gfx.loaded_materials(material)[0];
+    ctx.gfx.assets3d.material_descs[&id.id]
+}
+
+/// How far apart two pictures of one size are: the mean difference of
+/// their RGB channels, 0 to 255.
+fn mean_difference(a: &image::RgbaImage, b: &image::RgbaImage) -> f32 {
+    let total: u64 = a
+        .pixels()
+        .zip(b.pixels())
+        .map(|(p, q)| (0..3).map(|c| u64::from(p[c].abs_diff(q[c]))).sum::<u64>())
+        .sum();
+    total as f32 / (a.pixels().len() * 3) as f32
+}
+
+/// The pixels where `a` and `b` differ clearly, and their mean color in
+/// each: what changed between the two.
+fn changed(a: &image::RgbaImage, b: &image::RgbaImage) -> (usize, [f32; 3], [f32; 3]) {
+    let (mut n, mut in_a, mut in_b) = (0, [0.0f32; 3], [0.0f32; 3]);
+    for (p, q) in a.pixels().zip(b.pixels()) {
+        if (0..3).map(|c| p[c].abs_diff(q[c])).max().unwrap_or(0) > FOREGROUND {
+            n += 1;
+            for c in 0..3 {
+                in_a[c] += f32::from(p[c]);
+                in_b[c] += f32::from(q[c]);
+            }
+        }
+    }
+    let mean = |v: [f32; 3]| v.map(|c| c / n.max(1) as f32);
+    (n, mean(in_a), mean(in_b))
+}
+
+/// The pixels that aren't the background, and their mean color.
+fn foreground(image: &image::RgbaImage, background: [u8; 3]) -> (usize, [f32; 3]) {
+    let bg = image::RgbaImage::from_pixel(
+        image.width(),
+        image.height(),
+        image::Rgba([background[0], background[1], background[2], 255]),
+    );
+    let (n, color, _) = changed(image, &bg);
+    (n, color)
+}
+
+/// The brightest channel of a color: 0 red, 1 green, 2 blue.
+fn strongest(color: [f32; 3]) -> usize {
+    (0..3).max_by(|&a, &b| color[a].total_cmp(&color[b])).unwrap_or(0)
+}
+
+#[test]
+fn known_pointer_animations_play() {
+    let root = cache();
+    let Some(manifest) = manifest(&root) else { return };
+    let Some((_, adapter)) = game_ctx((16, 16)) else {
+        return;
+    };
+    let out = root.join("results").join("pointer");
+    std::fs::create_dir_all(&out).unwrap();
+    let assets = manifest["assets"].as_array().unwrap();
+    let mut rows = Vec::new();
+    let mut failures = Vec::new();
+    for (name, times, camera) in POINTER_SAMPLES {
+        let Some(asset) = assets.iter().find(|a| a["name"] == name) else {
+            eprintln!("skipped: {name} isn't in the cache");
+            continue;
+        };
+        let file = asset["file"].as_str().unwrap();
+        // Against the screenshot where this build reads it (some are
+        // animated GIFs or WebP), else on grey at 256 × 256.
+        let reference = asset["screenshot"]
+            .as_str()
+            .and_then(|s| image::open(root.join(s)).ok())
+            .map(|i| i.to_rgba8());
+        let size = reference.as_ref().map_or((256, 256), |r| drawn_size(r.dimensions()));
+        let reference =
+            reference.map(|r| image::imageops::resize(&r, size.0, size.1, image::imageops::FilterType::Triangle));
+        let background = reference.as_ref().map_or([96, 96, 96], border_color);
+        let draw = |pose| match draw_sample(name, file, size, background, (pose, camera)) {
+            Ok(Some((image, _))) => image,
+            Ok(None) => panic!("the GPU went away"),
+            Err(e) => panic!("{name} doesn't draw: {e}"),
+        };
+        let mut drawn = Vec::new();
+        for time in times {
+            let (played, unkeyed) = (draw(Pose::At(time)), draw(Pose::Unkeyed(time)));
+            side_by_side(&unkeyed, &played, 256)
+                .save(out.join(format!("{name}-{time}.png")))
+                .unwrap();
+            let similar = reference.as_ref().map(|r| similarity(r, &played));
+            let (pixels, color) = foreground(&played, background);
+            let row = json!({
+                "name": name, "time": time,
+                "difference_from_unkeyed": mean_difference(&played, &unkeyed),
+                "foreground_pixels": pixels, "foreground_color": color,
+                "screenshot": similar.as_ref().map(|s| json!({
+                    "matches": s.matches(), "overlap": s.overlap, "color": s.color,
+                })),
+            });
+            eprintln!("{row}");
+            rows.push(row);
+            drawn.push((played, unkeyed));
+        }
+        let difference = |i: usize| mean_difference(&drawn[i].0, &drawn[i].1);
+        let mut check = |ok: bool, what: String| {
+            if !ok {
+                failures.push(format!("{name}: {what}"));
+            }
+        };
+        match name {
+            "CubeVisibility" | "LightVisibility" => {
+                // Shown as at rest at the first and last time: nothing
+                // changes. Hidden in between: the cube's pixels go, or the
+                // blue light's.
+                for i in [0, 2] {
+                    check(
+                        difference(i) < 0.5,
+                        format!("{}: shown, yet drawn differently", times[i]),
+                    );
+                }
+                check(difference(1) > 0.5, format!("{}: hidden, yet drawn the same", times[1]));
+                let (shown, hidden) = (foreground(&drawn[0].0, background), foreground(&drawn[1].0, background));
+                if name == "CubeVisibility" {
+                    check(
+                        hidden.0 * 10 < shown.0 * 9,
+                        format!("hidden, {} pixels of model; shown, {}", hidden.0, shown.0),
+                    );
+                } else {
+                    let blue = |image: &image::RgbaImage| {
+                        image.pixels().map(|p| f32::from(p[2])).sum::<f32>() / image.pixels().len() as f32
+                    };
+                    let (on, off) = (blue(&drawn[0].0), blue(&drawn[1].0));
+                    check(
+                        off + 0.5 < on,
+                        format!("blue light hidden, blue {off:.2}; shown, {on:.2}"),
+                    );
+                }
+            }
+            "AnimatedColorsCube" => {
+                // The moving cube in the keyed color where the control's
+                // stays red; back over the red cube, red in both.
+                for (i, channel) in [(0, 1), (1, 2)] {
+                    let (n, played, unkeyed) = changed(&drawn[i].0, &drawn[i].1);
+                    check(
+                        n > 50 && strongest(played) == channel && strongest(unkeyed) == 0,
+                        format!(
+                            "{}: {n} pixels changed, now {played:?} (wanted channel {channel}), unkeyed {unkeyed:?}",
+                            times[i]
+                        ),
+                    );
+                }
+                check(
+                    difference(2) < 0.5,
+                    format!("{}: red again, yet drawn differently", times[2]),
+                );
+            }
+            "AnimationPointerUVs" => {
+                // The three boxes whose base color textures are keyed: their
+                // material's transform takes the keyed offset, scale and
+                // rotation (the other channels key textures a material's
+                // one transform doesn't follow, and warn).
+                let transform =
+                    |material: &str, i: usize| animated_material(file, material, times[i]).texture_transform;
+                for (i, k) in [(1, 0.5f32), (2, 1.0)] {
+                    let offset = transform("Material #60", i).offset;
+                    let scale = transform("Material #61", i).scale;
+                    let rotation = transform("Material #62", i).rotation;
+                    check(
+                        offset.abs_diff_eq(vec2(-k, k), 1e-4)
+                            && scale.abs_diff_eq(Vec2::splat(1.0 + 2.0 * k), 1e-4)
+                            && (rotation - std::f32::consts::FRAC_PI_2 * k).abs() < 1e-4,
+                        format!("{}: offset {offset}, scale {scale}, rotation {rotation}", times[i]),
+                    );
+                    // The textures move from time to time; without the
+                    // tracks, nothing does (the control).
+                    let (moved, still) = (
+                        mean_difference(&drawn[i].0, &drawn[0].0),
+                        mean_difference(&drawn[i].1, &drawn[0].1),
+                    );
+                    check(
+                        moved > 0.02 && still < 0.005,
+                        format!("{}: {moved:.3} from the start, {still:.3} unkeyed", times[i]),
+                    );
+                }
+            }
+            _ => {
+                // The turning normal map is the heat dome's: clear glass
+                // with no specular reflection and a 2 cm volume, so a
+                // turned normal barely bends what is seen through it. The
+                // picture doesn't change, and the material's value is what
+                // plays.
+                for (i, turned) in [(0, 0.0), (1, std::f32::consts::FRAC_PI_2), (2, std::f32::consts::PI)] {
+                    let rotation = animated_material(file, "HeatDome", times[i]).texture_transform.rotation;
+                    check(
+                        (rotation - turned).abs() < 1e-3,
+                        format!("{}: the dome's normal map turned {rotation}, not {turned}", times[i]),
+                    );
+                    check(
+                        difference(i) < 0.05,
+                        format!("{}: the turned dome changed the picture", times[i]),
+                    );
+                }
+            }
+        }
+    }
+    std::fs::write(
+        out.join("pointer.json"),
+        serde_json::to_string_pretty(&json!({ "adapter": describe_adapter(&adapter), "draws": rows })).unwrap(),
+    )
+    .unwrap();
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 /// The process's resident memory now, in bytes, as `ps` reports it (no

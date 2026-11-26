@@ -59,14 +59,28 @@ struct Frame {
 struct MaterialData {
     color: vec4<f32>,      // linear RGBA
     emissive: vec4<f32>,   // linear RGB; w: unlit (1)
-    params: vec4<f32>,     // roughness, metallic, normal map strength
+    params: vec4<f32>,     // roughness, metallic, normal map strength, alpha cutoff
     maps: vec4<u32>,       // has: normal map, ORM map, emissive map; w: masked tint
     custom: array<vec4<f32>, 4>,
     // Layers over the surface (see material_layers.wgsl): which are on,
     // where their maps are, and their values. Read only where they're on.
     layer_info: vec4<u32>,
     layers: array<vec4<f32>, 9>,
+    // The texture coordinates' transform (KHR_texture_transform): the
+    // first two rows of its matrix, (a, b, offset) each.
+    uv_transform: array<vec4<f32>, 2>,
 };
+
+// Texture coordinates moved by the material's texture transform.
+fn material_uv(uv: vec2<f32>) -> vec2<f32> {
+    let t = material.uv_transform;
+    return vec2<f32>(dot(t[0].xyz, vec3<f32>(uv, 1.0)), dot(t[1].xyz, vec3<f32>(uv, 1.0)));
+}
+
+// Where a cut-out material's alpha cuts (Blend::Cutout).
+fn alpha_cutoff() -> f32 {
+    return material.params.w;
+}
 
 @group(0) @binding(0) var<uniform> frame: Frame;
 @group(0) @binding(1) var shadow_map: texture_depth_2d_array;

@@ -57,7 +57,7 @@ fn world_vertex(input: VertexIn) -> Vertex {
     v.instance_index = in.instance_index;
     v.position = (model * vec4<f32>(in.position, 1.0)).xyz;
     v.normal = normal;
-    v.uv = in.uv;
+    v.uv = material_uv(in.uv);
     v.color = tinted(in.color, in.vertex_color);
     v.uv1 = in.uv1;
     v.origin = in.m3.xyz;
@@ -223,7 +223,7 @@ fn surface_at(in: VertexOut, front: bool) -> Surface {
 // fragment shader there.
 @fragment
 fn fs_depth(in: VertexOut, @builtin(front_facing) front: bool) {
-    if surface_at(in, front).alpha < 0.5 {
+    if surface_at(in, front).alpha < alpha_cutoff() {
         discard;
     }
 }
@@ -234,7 +234,7 @@ fn fs_depth_fade(in: VertexOut, @builtin(front_facing) front: bool) {
     if !fade_keeps(in.fade, in.clip.xy) {
         discard;
     }
-    if surface_at(in, front).alpha < 0.5 {
+    if surface_at(in, front).alpha < alpha_cutoff() {
         discard;
     }
 }
@@ -243,7 +243,7 @@ fn fs_depth_fade(in: VertexOut, @builtin(front_facing) front: bool) {
 // sharpened to a ramp about a pixel wide around the cutoff, so the edge gets
 // partial coverage instead of a hard cut. Called in uniform control flow.
 fn coverage(alpha: f32) -> f32 {
-    return clamp((alpha - 0.5) / max(fwidth(alpha), 0.0001) + 0.5, 0.0, 1.0);
+    return clamp((alpha - alpha_cutoff()) / max(fwidth(alpha), 0.0001) + 0.5, 0.0, 1.0);
 }
 
 // The depth prepass of cut-out materials with multisampling: the alpha goes
@@ -390,7 +390,7 @@ fn fs_main_fade(in: VertexOut, @builtin(front_facing) front: bool) -> @location(
 fn fs_main_cutout(in: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     let dp_x = dpdx(in.world);
     let dp_y = dpdy(in.world);
-    if surface_at(in, front).alpha < 0.5 {
+    if surface_at(in, front).alpha < alpha_cutoff() {
         discard;
     }
     return opaque_color(in, front, dp_x, dp_y);
@@ -403,7 +403,7 @@ fn fs_main_cutout_fade(in: VertexOut, @builtin(front_facing) front: bool) -> @lo
     // Sampled before the branch: `a || f()` only calls f where a is false,
     // non-uniform control flow, where WebGPU's WGSL forbids textureSample.
     let alpha = surface_at(in, front).alpha;
-    if !fade_keeps(in.fade, in.clip.xy) || alpha < 0.5 {
+    if !fade_keeps(in.fade, in.clip.xy) || alpha < alpha_cutoff() {
         discard;
     }
     return opaque_color(in, front, dp_x, dp_y);

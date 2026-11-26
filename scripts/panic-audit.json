@@ -2981,17 +2981,11 @@
     "reason": "Preserves setup/runtime policy; displays the checked operation error. /// assert_eq!(clip.duration(), 0.0);     /// ```     pub fn new(name: impl Into<String>, source: &Skeleton, tracks: Vec<JointAnimation>) -> Self {         Self::try_new(name, source, tracks).unwrap_or_else(|e| panic!(\"AnimationClip::new: {}\", e.message()))",
     "site": "src/three/clip.rs:313"
   },
-  "src/three/clip.rs:240c3defba6a5d86": {
+  "src/three/clip.rs:25c2ecad1eac0473": {
     "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "Internal invariant: bindings: Mutex::new(Vec::new()),             });         }         let data = Arc::get_mut(&mut self.0).unwrap();",
-    "site": "src/three/clip.rs:415"
-  },
-  "src/three/clip.rs:3fbc58f478dc269a": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "Internal invariant: .iter()                     .flat_map(|t| [&t.translation, &t.rotation, &t.scale])                     .flatten()                     .map(|t| *t.times.last().unwrap()),",
-    "site": "src/three/clip.rs:424"
+    "construction": ".expect(\"invariant: the clip's data was just copied, so no other clone shares it\")",
+    "reason": "data_mut replaces the Arc with a fresh copy just above when it is shared, so get_mut succeeds",
+    "site": "src/three/clip.rs:608"
   },
   "src/three/clip.rs:5814d565f1fed055": {
     "classification": "invariant",
@@ -3005,12 +2999,6 @@
     "reason": "Preserves setup/runtime policy; displays the checked operation error. /// ```     pub fn with_morph_tracks(self, tracks: Vec<MorphAnimation>) -> Self {         self.try_with_morph_tracks(tracks)             .unwrap_or_else(|e| panic!(\"AnimationClip::with_morph_tracks: {}\", e.message()))",
     "site": "src/three/clip.rs:376"
   },
-  "src/three/clip.rs:7768160ec85a337c": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "Internal invariant: let data = Arc::get_mut(&mut self.0).unwrap();         data.duration = tracks             .iter()             .map(|t| *t.track.times.last().unwrap())",
-    "site": "src/three/clip.rs:418"
-  },
   "src/three/clip.rs:94db1be4c46a91b6": {
     "classification": "forwarded-error",
     "construction": "panic!(\"AnimationTrack::new: {}\", e.message())",
@@ -3022,6 +3010,12 @@
     "construction": ".unwrap()",
     "reason": "Internal invariant: if skeleton.shares_joints(&self.0.joints) {             self.apply(time, weight, skeleton, None);         } else {             let mut bindings = self.0.bindings.lock().unwrap();",
     "site": "src/three/clip.rs:498"
+  },
+  "src/three/clip.rs:aacf8fcdfddaf392": {
+    "classification": "forwarded-error",
+    "construction": "panic!(\"AnimationClip::with_property_tracks: {}\", e.message())",
+    "reason": "with_property_tracks re-raises try_with_property_tracks' Error, which names the target with two tracks; documented under Panics",
+    "site": "src/three/clip.rs:634"
   },
   "src/three/collect.rs:329b2b4a9e432677": {
     "classification": "caller-contract",

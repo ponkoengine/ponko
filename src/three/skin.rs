@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use glam::{Mat4, Vec3};
 
+use super::AnimatedProperty;
 use super::collect::Instance3D;
 use super::{Assets3D, LodGroup, LodShadow, MeshData, Model, ModelMaterial, ModelMaterials, Transform3D, linear};
 use ponko_ecs::{Component, Entity, Without, World};
@@ -34,6 +35,10 @@ pub struct Joint {
     pub parent: Option<usize>,
     /// Where it sits relative to its parent at rest.
     pub rest: Transform3D,
+    /// Whether it shows at rest (glTF's `KHR_node_visibility`). Default
+    /// true. A hidden joint hides everything under it; clips can show it
+    /// ([`AnimatedProperty::JointVisible`](crate::anim::AnimatedProperty::JointVisible)).
+    pub visible: bool,
 }
 
 impl Joint {
@@ -52,6 +57,7 @@ impl Joint {
             name: name.into(),
             parent: parent.into(),
             rest: Transform3D::default(),
+            visible: true,
         }
     }
 
@@ -59,6 +65,8 @@ impl Joint {
         /// Sets [`rest`](Self::rest), where it sits relative to its parent
         /// at rest.
         rest: Transform3D => with_rest;
+        /// Sets [`visible`](Self::visible), whether it shows at rest.
+        visible: bool => with_visible;
     }
 }
 
@@ -94,8 +102,10 @@ pub struct Skeleton {
     /// draws it; starts at the rest pose. Joints past its end stay at rest.
     pub pose: Vec<Transform3D>,
     /// Each joint's matrix in the entity's space, worked out from `pose`
-    /// just before drawing.
+    /// just before drawing (zero for a hidden joint and what hangs from it).
     matrices: Vec<Mat4>,
+    /// Whether a joint is hidden at rest.
+    rest_hidden: bool,
 }
 
 impl Skeleton {
@@ -160,11 +170,13 @@ impl Skeleton {
 
     pub(crate) fn from_shared(joints: Arc<[Joint]>) -> Self {
         let pose = joints.iter().map(|j| j.rest).collect();
+        let rest_hidden = joints.iter().any(|j| !j.visible);
         let mut s = Self {
             joints,
             morphs: MorphPose::default(),
             pose,
             matrices: Vec::new(),
+            rest_hidden,
         };
         s.update();
         s
@@ -256,9 +268,72 @@ impl Skeleton {
         self.pose.get(joint).unwrap_or(&self.joints[joint].rest).matrix()
     }
 
-    /// Works out every joint's matrix from the pose, for drawing.
+    /// The value the clips sampled this frame for `target` (a joint's
+    /// visibility, a material's value), in the components it reads; `None`
+    /// when no clip keys it. With weights below 1 (a crossfade, a layer)
+    /// this is the clips' weighted mean: the engine mixes it with the
+    /// target's own value by the weight they leave over.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::anim::{AnimatedProperty, AnimationClip, AnimationTrack, Interpolation, Joint, PropertyAnimation, Skeleton};
+    /// let mut s = Skeleton::new(vec![Joint::new("lamp", None)]);
+    /// let off = AnimationTrack::new(vec![0.0, 1.0], vec![Vec4::X, Vec4::ZERO], Interpolation::Step);
+    /// let blink = AnimationClip::new("blink", &s, vec![])
+    ///     .with_property_tracks(vec![PropertyAnimation::new(AnimatedProperty::JointVisible(0), off)]);
+    /// blink.sample(1.0, &mut s);
+    /// assert_eq!(s.property(AnimatedProperty::JointVisible(0)), Some(Vec4::ZERO));
+    /// assert!(!s.joint_visible(0));
+    /// ```
+    #[must_use]
+    pub fn property(&self, target: AnimatedProperty) -> Option<glam::Vec4> {
+        self.morphs.property(target).map(|(v, c)| v / c)
+    }
+
+    /// Sets `target` to `value` for this frame, as a clip sampled at full
+    /// weight would: hide a joint by hand with
+    /// `set_property(AnimatedProperty::JointVisible(j), Vec4::ZERO)`.
+    /// Cleared by [`reset_pose`](Self::reset_pose) (an
+    /// [`Animator`](crate::anim::Animator) resets every frame).
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::anim::{AnimatedProperty, Joint, Skeleton};
+    /// let mut s = Skeleton::new(vec![Joint::new("lamp", None)]);
+    /// s.set_property(AnimatedProperty::JointVisible(0), Vec4::ZERO);
+    /// assert!(!s.joint_visible(0));
+    /// ```
+    pub fn set_property(&mut self, target: AnimatedProperty, value: glam::Vec4) {
+        self.morphs.set_property(target, value, 1.0);
+    }
+
+    /// Whether joint `joint` itself shows this frame: its rest visibility
+    /// ([`Joint::visible`]) unless a clip keys it. A shown joint under a
+    /// hidden one still isn't drawn. Joints past the end show.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// let s = ponko::anim::Skeleton::new(vec![ponko::anim::Joint::new("lid", None).with_visible(false)]);
+    /// assert!(!s.joint_visible(0));
+    /// assert!(s.joint_visible(7));
+    /// ```
+    #[must_use]
+    pub fn joint_visible(&self, joint: usize) -> bool {
+        let Some(j) = self.joints.get(joint) else {
+            return true;
+        };
+        let rest = if j.visible { 1.0 } else { 0.0 };
+        match self.morphs.property(AnimatedProperty::JointVisible(joint)) {
+            Some((v, c)) => v.x + (1.0 - c) * rest >= 0.5,
+            None => j.visible,
+        }
+    }
+
+    /// Works out every joint's matrix from the pose, for drawing. A hidden
+    /// joint's matrix is zero, and so are those of the joints under it.
     pub(crate) fn update(&mut self) {
         self.matrices.clear();
+        let hides = self.rest_hidden || self.morphs.keys_visibility();
         for (i, j) in self.joints.iter().enumerate() {
             let local = self.pose.get(i).unwrap_or(&j.rest).matrix();
             let m = match j.parent {
@@ -266,6 +341,9 @@ impl Skeleton {
                 None => local,
             };
             self.matrices.push(m);
+            if hides && !self.joint_visible(i) {
+                self.matrices[i] = Mat4::ZERO;
+            }
         }
     }
 
@@ -612,6 +690,20 @@ impl SkinFrame {
             let Some(joint) = s.matrices().get(a.joint) else {
                 continue;
             };
+            if *joint == Mat4::ZERO {
+                // A hidden joint: what hangs from it has no size (and a
+                // light no light) until it shows again.
+                if let Some(&mine) = world.get::<Transform3D>(e) {
+                    self.moved.push((
+                        e,
+                        Transform3D {
+                            scale: Vec3::ZERO,
+                            ..mine
+                        },
+                    ));
+                }
+                continue;
+            }
             let (scale, rotation, position) = (t.matrix() * *joint * a.offset.matrix()).to_scale_rotation_translation();
             self.moved.push((
                 e,
@@ -1037,6 +1129,60 @@ mod tests {
     }
 
     #[test]
+    fn a_hidden_joint_zeroes_its_matrix_and_those_under_it() {
+        let mut s = Skeleton::new(vec![
+            Joint::new("root", None),
+            Joint::new("arm", 0).with_rest(Transform3D::at(vec3(0.0, 1.0, 0.0))),
+            Joint::new("hand", 1),
+            Joint::new("other", 0),
+        ]);
+        s.update();
+        assert!(s.matrices().iter().all(|m| *m != Mat4::ZERO));
+        s.set_property(AnimatedProperty::JointVisible(1), glam::Vec4::ZERO);
+        assert!(!s.joint_visible(1) && s.joint_visible(2), "the hand itself is shown");
+        s.update();
+        assert_eq!(s.matrices()[1], Mat4::ZERO);
+        assert_eq!(s.matrices()[2], Mat4::ZERO, "under a hidden joint");
+        assert_ne!(s.matrices()[0], Mat4::ZERO);
+        assert_ne!(s.matrices()[3], Mat4::ZERO);
+        // Next frame nothing keys it: shown again.
+        s.reset_pose();
+        s.update();
+        assert!(s.matrices().iter().all(|m| *m != Mat4::ZERO));
+    }
+
+    #[test]
+    fn a_joint_hidden_at_rest_stays_hidden_until_a_clip_shows_it() {
+        let mut s = Skeleton::new(vec![Joint::new("root", None), Joint::new("lid", 0).with_visible(false)]);
+        s.update();
+        assert_eq!(s.matrices()[1], Mat4::ZERO);
+        s.set_property(AnimatedProperty::JointVisible(1), glam::Vec4::X);
+        assert!(s.joint_visible(1));
+        s.update();
+        assert_eq!(s.matrices()[1], s.joint_matrix(1));
+    }
+
+    #[test]
+    fn what_hangs_from_a_hidden_joint_is_scaled_to_nothing_in_place() {
+        let mut world = World::new();
+        let owner = world.spawn((Transform3D::at(vec3(2.0, 0.0, 0.0)), arm()));
+        let lamp = world.spawn((Transform3D::default(), AttachToJoint::new(owner, 1)));
+        let shown = world.spawn((Transform3D::default(), AttachToJoint::new(owner, 0)));
+        let mut frame = SkinFrame::default();
+        frame.collect(&mut world, &Assets3D::default());
+        assert_eq!(world.get::<Transform3D>(lamp).unwrap().scale, Vec3::ONE);
+        world
+            .get_mut::<Skeleton>(owner)
+            .unwrap()
+            .set_property(AnimatedProperty::JointVisible(1), glam::Vec4::ZERO);
+        frame.collect(&mut world, &Assets3D::default());
+        let t = *world.get::<Transform3D>(lamp).unwrap();
+        assert_eq!(t.scale, Vec3::ZERO);
+        assert_eq!(t.position, vec3(2.0, 1.0, 0.0), "it stays where it hangs");
+        assert_eq!(world.get::<Transform3D>(shown).unwrap().scale, Vec3::ONE);
+    }
+
+    #[test]
     fn update_matches_joint_matrix() {
         let mut s = arm();
         s.pose[0].rotation = Quat::from_rotation_x(0.7);
@@ -1276,8 +1422,13 @@ mod tests {
 }
 
 /// Sparse affine pose: value + (1 - coverage) * current entity weight.
+/// Morph weights by name, and the clips' other values
+/// ([`AnimatedProperty`]), blended the same way.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct MorphPose(Vec<(Arc<str>, f32, f32, bool)>);
+pub(crate) struct MorphPose(
+    Vec<(Arc<str>, f32, f32, bool)>,
+    Vec<(AnimatedProperty, glam::Vec4, f32, bool)>,
+);
 impl MorphPose {
     pub fn clear(&mut self) {
         for (_, v, coverage, active) in &mut self.0 {
@@ -1285,6 +1436,46 @@ impl MorphPose {
             *coverage = 0.;
             *active = false;
         }
+        for (_, v, coverage, active) in &mut self.1 {
+            *v = glam::Vec4::ZERO;
+            *coverage = 0.;
+            *active = false;
+        }
+    }
+    pub fn set_property(&mut self, target: AnimatedProperty, value: glam::Vec4, weight: f32) {
+        if let Some((_, v, c, active)) = self.1.iter_mut().find(|(t, _, _, _)| *t == target) {
+            *v += (value - *v) * weight;
+            *c += (1. - *c) * weight;
+            *active = true;
+        } else {
+            self.1.push((target, value * weight, weight, true));
+        }
+    }
+    /// `target`'s value sum and coverage, when a clip keyed it.
+    pub fn property(&self, target: AnimatedProperty) -> Option<(glam::Vec4, f32)> {
+        self.1
+            .iter()
+            .find(|(t, _, c, active)| *active && *c > 0. && *t == target)
+            .map(|&(_, v, c, _)| (v, c))
+    }
+    /// The keyed properties: target, value sum and coverage.
+    pub fn properties(&self) -> impl Iterator<Item = (AnimatedProperty, glam::Vec4, f32)> + '_ {
+        self.1
+            .iter()
+            .filter(|(_, _, c, active)| *active && *c > 0.)
+            .map(|&(t, v, c, _)| (t, v, c))
+    }
+    /// Whether a clip keyed a joint's visibility.
+    pub fn keys_visibility(&self) -> bool {
+        self.1
+            .iter()
+            .any(|(t, _, _, active)| *active && matches!(t, AnimatedProperty::JointVisible(_)))
+    }
+    /// Whether a clip keyed a material.
+    pub fn keys_materials(&self) -> bool {
+        self.1
+            .iter()
+            .any(|(t, _, _, active)| *active && matches!(t, AnimatedProperty::Material(..)))
     }
     pub fn set(&mut self, name: &str, value: f32, weight: f32) {
         if let Some((_, v, c, active)) = self.0.iter_mut().find(|(n, _, _, _)| &**n == name) {
@@ -1296,6 +1487,24 @@ impl MorphPose {
         }
     }
     pub fn mix(&mut self, source: &Self, weight: f32) {
+        for (_, v, c, active) in &mut self.1 {
+            if *active {
+                *v *= 1. - weight;
+                *c *= 1. - weight;
+            }
+        }
+        for &(target, value, coverage, active) in &source.1 {
+            if !active {
+                continue;
+            }
+            if let Some((_, v, c, a)) = self.1.iter_mut().find(|(t, _, _, _)| *t == target) {
+                *v += value * weight;
+                *c += coverage * weight;
+                *a = true;
+            } else {
+                self.1.push((target, value * weight, coverage * weight, true));
+            }
+        }
         for (_, v, c, active) in &mut self.0 {
             if *active {
                 *v *= 1. - weight;
@@ -1316,6 +1525,27 @@ impl MorphPose {
         }
     }
     pub fn layer(&mut self, source: &Self, weight: f32, additive: bool) {
+        for &(target, value, coverage, active) in &source.1 {
+            if !active {
+                continue;
+            }
+            if let Some((_, v, c, a)) = self.1.iter_mut().find(|(t, _, _, _)| *t == target) {
+                if additive {
+                    *v += value * weight;
+                } else {
+                    *v = *v * (1. - coverage * weight) + value * weight;
+                    *c += (1. - *c) * coverage * weight;
+                }
+                *a = true;
+            } else {
+                self.1.push((
+                    target,
+                    value * weight,
+                    if additive { 0. } else { coverage * weight },
+                    true,
+                ));
+            }
+        }
         for (name, value, coverage, active) in &source.0 {
             if !active {
                 continue;

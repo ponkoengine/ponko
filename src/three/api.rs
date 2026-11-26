@@ -21,7 +21,7 @@ pub(crate) struct MaterialUniform {
     pub color: [f32; 4],
     /// Linear RGB, then whether it is unlit (1/0).
     pub emissive: [f32; 4],
-    /// roughness, metallic, normal map strength, unused.
+    /// roughness, metallic, normal map strength, alpha cutoff.
     pub params: [f32; 4],
     /// Which maps it has (1/0): normal, ORM, emissive; then whether the
     /// model's tint is masked by the vertex colour's alpha (1/0). A
@@ -44,6 +44,9 @@ pub(crate) struct MaterialUniform {
     /// attenuation tint and diffuse factor, diffuse tint and scatter
     /// anisotropy, and scatter tint and amount.
     pub layers: [[f32; 4]; 9],
+    /// The texture coordinates' transform ([`super::TextureTransform`]):
+    /// its matrix's first two rows, (a, b, offset, unused) each.
+    pub uv_transform: [[f32; 4]; 2],
 }
 
 /// The name the layered build of the built-in shader has in messages.
@@ -159,7 +162,12 @@ impl GpuMaterialDesc {
             uniform: MaterialUniform {
                 color: linear(desc.color),
                 emissive: [r, g, b, 0.0],
-                params: [desc.roughness.max(0.03), desc.metallic, desc.normal_strength, 0.0],
+                params: [
+                    desc.roughness.max(0.03),
+                    desc.metallic,
+                    desc.normal_strength,
+                    desc.alpha_cutoff,
+                ],
                 maps: [
                     u32::from(desc.normal_map.is_some()),
                     u32::from(desc.orm_map.is_some()),
@@ -167,6 +175,13 @@ impl GpuMaterialDesc {
                     u32::from(desc.masked_tint),
                 ],
                 custom: desc.custom.map(|v| v.to_array()),
+                uv_transform: {
+                    let m = desc.texture_transform.matrix();
+                    [
+                        [m.x_axis.x, m.y_axis.x, m.z_axis.x, 0.0],
+                        [m.x_axis.y, m.y_axis.y, m.z_axis.y, 0.0],
+                    ]
+                },
                 ..MaterialUniform::default()
             },
             textures: [
@@ -266,8 +281,7 @@ impl Graphics {
         if let Some(sources) = self.assets3d.bake_sources.as_mut() {
             sources.material_set(id, &desc);
         }
-        #[cfg(feature = "editor")]
-        self.note_material_desc(Material { id }, &desc);
+        self.assets3d.material_descs.insert(id, desc);
         Ok(Material { id })
     }
 
@@ -327,8 +341,7 @@ impl Graphics {
         if let Some(sources) = self.assets3d.bake_sources.as_mut() {
             sources.material_set(material.id, &desc);
         }
-        #[cfg(feature = "editor")]
-        self.note_material_desc(material, &desc);
+        self.assets3d.material_descs.insert(material.id, desc);
         self.prepare_layers(&desc);
         let gpu = self.gpu_material(&desc);
         if let Some(renderer) = self.renderer.as_mut()
@@ -411,8 +424,9 @@ impl Graphics {
         }
         self.assets3d.material_ids.release(id);
         self.asset_ledger.freed(crate::inventory::AssetClass::Material, id);
-        #[cfg(feature = "editor")]
         self.assets3d.material_descs.remove(&id);
+        self.assets3d.animated_materials.remove(&id);
+        self.assets3d.material_factors.remove(&id);
         if self.assets3d.default_material == Some(Material { id }) {
             self.assets3d.default_material = None;
         }
@@ -485,6 +499,15 @@ impl Graphics {
                 format!(
                     "material roughness and metallic go from 0 to 1 (got {} and {})",
                     desc.roughness, desc.metallic
+                ),
+            ));
+        }
+        if !(desc.texture_transform.is_finite() && desc.alpha_cutoff.is_finite() && desc.alpha_cutoff >= 0.0) {
+            return Err(Error::new(
+                ErrorKind::Invalid,
+                format!(
+                    "a material's texture transform must be finite and its alpha cutoff finite and not negative                      (got {:?} and {})",
+                    desc.texture_transform, desc.alpha_cutoff
                 ),
             ));
         }
@@ -1432,7 +1455,39 @@ impl Graphics {
             .iter()
             .map(|(range, m)| (range.clone(), materials[*m]))
             .collect();
-        self.assets3d.loaded_clips.insert(file.clone(), loaded.clips);
+        // Clips that animate the file's materials (`KHR_animation_pointer`)
+        // now name the materials just made.
+        for (m, factors) in &loaded.material_factors {
+            if let Some(material) = materials.get(*m) {
+                self.assets3d.material_factors.insert(material.id, *factors);
+            }
+        }
+        let clips = loaded
+            .clips
+            .into_iter()
+            .zip(
+                loaded
+                    .clip_materials
+                    .into_iter()
+                    .chain(std::iter::repeat_with(Vec::new)),
+            )
+            .map(|(clip, animated)| {
+                if animated.is_empty() {
+                    return clip;
+                }
+                let mut tracks = clip.property_tracks().to_vec();
+                tracks.extend(animated.into_iter().filter_map(|(m, property, track)| {
+                    let material = *materials.get(m)?;
+                    Some(super::PropertyAnimation::new(
+                        super::AnimatedProperty::Material(material, property),
+                        track,
+                    ))
+                }));
+                // The loader keyed each value once, so this doesn't fail.
+                clip.clone().try_with_property_tracks(tracks).unwrap_or(clip)
+            })
+            .collect();
+        self.assets3d.loaded_clips.insert(file.clone(), clips);
         self.assets3d
             .loaded_placed
             .insert(file.clone(), (loaded.lights, loaded.cameras));
@@ -1549,6 +1604,8 @@ impl Graphics {
                     shader: self.extras_shader(path, m),
                     unlit: m.unlit,
                     layers: m.layers.with_maps(m.layer_maps.map(texture)),
+                    texture_transform: m.texture_transform,
+                    alpha_cutoff: m.alpha_cutoff.max(0.0),
                     ..Default::default()
                 };
                 if let Some(old) = old {
@@ -2433,6 +2490,7 @@ impl Ctx {
         {
             return; // no drawable 3D scene
         }
+        self.gfx.apply_animated_materials(&mut self.world);
         let time = (self.time.elapsed(), self.time.dt());
         self.gfx.assets3d.decals_supported = self.gfx.supports_decals();
         self.gfx.assets3d.gi_supported = self.gfx.renderer.as_ref().is_some_and(|r| r.supports_gi());

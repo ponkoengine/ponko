@@ -78,6 +78,7 @@ pub(crate) use gi::MAX_GI_PROBES_PER_FRAME;
 pub use ik::{look_at_joint, two_bone_ik};
 pub use lod::{LodFadeTime, LodGroup, LodHysteresis, LodLevel, LodPick, LodRenderer, LodSettings, LodShadow};
 pub use retarget::{HumanBone, HumanoidMap, RetargetError, Retargeter};
+mod animated_material;
 pub(crate) mod lights;
 #[cfg(feature = "editor")]
 mod material_edit;
@@ -149,7 +150,10 @@ pub use animator::{
 pub(crate) use api::GpuMaterialDesc;
 #[cfg(feature = "window")]
 pub(crate) use api::{MaterialTextures, MaterialUniform};
-pub use clip::{AnimationClip, AnimationTrack, Interpolation, JointAnimation, MorphAnimation};
+pub use clip::{
+    AnimatedProperty, AnimationClip, AnimationTrack, Interpolation, JointAnimation, MaterialProperty, MorphAnimation,
+    PropertyAnimation,
+};
 pub(crate) mod motion;
 pub use autotune::{QualityAutotune, QualityAutotuneReason, QualityAutotuneStatus, QualityChange};
 #[cfg(feature = "window")]
@@ -462,8 +466,9 @@ pub enum Blend {
     /// models of different meshes are not sorted against each other, so
     /// one may show over another that is in front of it.
     Transparent = 1,
-    /// Solid, with pixels whose alpha is below 0.5 cut out (leaves,
-    /// fences, grass cards). Their shadows have the same holes.
+    /// Solid, with pixels whose alpha is below the material's
+    /// [`alpha_cutoff`](MaterialDesc::alpha_cutoff) (0.5 unless set) cut
+    /// out (leaves, fences, grass cards). Their shadows have the same holes.
     Cutout = 2,
 }
 
@@ -550,6 +555,95 @@ pub struct MaterialDesc {
     /// color, index of refraction, anisotropy, iridescence. Default none;
     /// see [`MaterialLayers`] for what they cost.
     pub layers: MaterialLayers,
+    /// Moves, turns and scales the texture coordinates every map of the
+    /// material is read with, as glTF's `KHR_texture_transform` does.
+    /// Default [`TextureTransform::IDENTITY`] (the mesh's coordinates as
+    /// they are). One more multiply per corner; it costs nothing per pixel.
+    pub texture_transform: TextureTransform,
+    /// The alpha below which a [`Blend::Cutout`] material's pixels are cut
+    /// out (glTF's `alphaCutoff`). Default 0.5. Other blend modes ignore it.
+    pub alpha_cutoff: f32,
+}
+
+/// How a material's texture coordinates are moved before its maps are
+/// read ([`MaterialDesc::texture_transform`]): scaled first, then turned,
+/// then moved, as glTF's `KHR_texture_transform` has it. New fields may be
+/// added in any release: build one from [`IDENTITY`](Self::IDENTITY) with
+/// the `with_*` methods.
+///
+/// ```
+/// # use ponko::prelude::*;
+/// use ponko::render::TextureTransform;
+/// let scrolled = TextureTransform::IDENTITY.with_offset(vec2(0.5, 0.0));
+/// assert_eq!(scrolled.apply(vec2(0.25, 0.25)), vec2(0.75, 0.25));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub struct TextureTransform {
+    /// Added to the coordinates last.
+    pub offset: Vec2,
+    /// Radians, counter-clockwise in texture space (u right, v down),
+    /// about the coordinates' origin, after scaling.
+    pub rotation: f32,
+    /// Multiplies the coordinates first.
+    pub scale: Vec2,
+}
+
+impl TextureTransform {
+    /// Leaves the coordinates as they are.
+    pub const IDENTITY: Self = Self {
+        offset: Vec2::ZERO,
+        rotation: 0.0,
+        scale: Vec2::ONE,
+    };
+
+    /// This transform with [`offset`](Self::offset) set.
+    #[must_use]
+    pub fn with_offset(self, offset: Vec2) -> Self {
+        Self { offset, ..self }
+    }
+
+    /// This transform with [`rotation`](Self::rotation) set.
+    #[must_use]
+    pub fn with_rotation(self, rotation: f32) -> Self {
+        Self { rotation, ..self }
+    }
+
+    /// This transform with [`scale`](Self::scale) set.
+    #[must_use]
+    pub fn with_scale(self, scale: Vec2) -> Self {
+        Self { scale, ..self }
+    }
+
+    /// The transform as a matrix on `(u, v, 1)`.
+    #[must_use]
+    pub fn matrix(&self) -> glam::Mat3 {
+        // KHR_texture_transform: translation * rotation * scale, the
+        // rotation [cos sin; -sin cos] by rows.
+        let (sin, cos) = self.rotation.sin_cos();
+        let rotate = glam::Mat3::from_cols(Vec3::new(cos, -sin, 0.0), Vec3::new(sin, cos, 0.0), Vec3::Z);
+        glam::Mat3::from_translation(self.offset) * rotate * glam::Mat3::from_scale(self.scale)
+    }
+
+    /// Texture coordinates `uv` moved by this transform.
+    #[must_use]
+    pub fn apply(&self, uv: Vec2) -> Vec2 {
+        if *self == Self::IDENTITY {
+            return uv;
+        }
+        self.matrix().transform_point2(uv)
+    }
+
+    /// Whether every value is finite.
+    pub(crate) fn is_finite(&self) -> bool {
+        self.offset.is_finite() && self.rotation.is_finite() && self.scale.is_finite()
+    }
+}
+
+impl Default for TextureTransform {
+    fn default() -> Self {
+        Self::IDENTITY
+    }
 }
 
 impl Default for MaterialDesc {
@@ -574,6 +668,8 @@ impl Default for MaterialDesc {
             masked_tint: false,
             unlit: false,
             layers: MaterialLayers::NONE,
+            texture_transform: TextureTransform::IDENTITY,
+            alpha_cutoff: 0.5,
         }
     }
 }
@@ -634,6 +730,12 @@ impl MaterialDesc {
         unlit: bool => with_unlit;
         /// Sets [`layers`](Self::layers): clear coat, sheen, specular, anisotropy, iridescence.
         layers: MaterialLayers => with_layers;
+        /// Sets [`texture_transform`](Self::texture_transform): how the
+        /// texture coordinates are moved, turned and scaled.
+        texture_transform: TextureTransform => with_texture_transform;
+        /// Sets [`alpha_cutoff`](Self::alpha_cutoff): where a cut-out
+        /// material's alpha cuts.
+        alpha_cutoff: f32 => with_alpha_cutoff;
     }
 }
 
@@ -1439,10 +1541,16 @@ pub(crate) struct Assets3D {
     /// (`MaterialLayers`), once a material had layers.
     pub layered_shader: Option<u32>,
     pub material_ids: crate::handle::SlotCounter,
-    /// What each material was last made or updated with, for the editor's
-    /// material windows.
-    #[cfg(feature = "editor")]
+    /// What each material was last made or updated with: what clips that
+    /// animate a material start from, and the editor's material windows.
     pub material_descs: std::collections::HashMap<u32, MaterialDesc>,
+    /// The materials clips animate (`AnimatedProperty::Material`), by id.
+    pub animated_materials: std::collections::HashMap<u32, animated_material::AnimatedMaterial>,
+    /// What glTF files say of the materials their clips animate, beyond
+    /// the description (emissive strength apart from its color), by id.
+    pub material_factors: std::collections::HashMap<u32, animated_material::MaterialFactors>,
+    /// The animated materials' new descriptions this frame (reused).
+    pub animated_writes: Vec<(Material, MaterialDesc)>,
     pub shader_ids: crate::handle::SlotCounter,
     pub compute_ids: crate::handle::SlotCounter,
     pub effect_ids: crate::handle::SlotCounter,
@@ -1886,6 +1994,10 @@ mod c_api_mirror {
             // (`PonkoMaterialLayers`, field for field).
             unlit: _,
             layers: _,
+            // Not in C yet: `texture_transform` and `alpha_cutoff` (glTF
+            // files set them as they load; see the 3D chapter's coverage note).
+            texture_transform: _,
+            alpha_cutoff: _,
         } = MaterialDesc::default();
         // C: `PonkoMaterialLayers`, with a `has_*` before each map.
         let MaterialLayers {

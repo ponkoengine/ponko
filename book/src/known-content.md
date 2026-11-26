@@ -106,7 +106,8 @@ curve and often its own camera. So:
   (0.6 above, 0.3 below), with file lights where available.
 - **Background.** The screenshot's border color, so the outlines compare.
 - **Skins** stand in their rest pose with their skeleton, as a game spawns
-  them; nothing is animated.
+  them; nothing is animated here (the pointer animations are drawn by a test
+  of their own, [below](#animations-through-pointers)).
 
 The comparison finds each picture's foreground (pixels away from its own
 border color), crops both to it and scales them to the same size, so a
@@ -143,9 +144,8 @@ the table says in a word:
   the shapes and materials are right.
 
 The rest are missing features, each with its issue:
-[#620](https://github.com/ponkoengine/ponko/issues/620)
-`KHR_animation_pointer` animations of anything but nodes (colors, texture
-coordinates, visibility) don't play. Points and lines aren't drawn either
+[#666](https://github.com/ponkoengine/ponko/issues/666): a material has one
+texture transform for all its maps. Points and lines aren't drawn either
 (MeshPrimitiveModes, PrimitiveModeNormalsTest).
 
 Fixed while making this list: triangle strips and fans are drawn (they were
@@ -161,12 +161,12 @@ Overlap and ΔE are after registration; a dash: not drawn.
 | Asset | Loaded | Picture | Overlap | ΔE | Difference |
 |---|---|---|---:|---:|---|
 | ABeautifulGame | yes | differs | 0.12 | 18.7 | view: the screenshot looks across the board from a low corner; the framing rule sees it edge-on |
-| AlphaBlendModeTest | yes | matches | 0.93 | 8.5 |  |
-| AnimatedColorsCube | yes | differs | 0.91 | 24.0 | its colors are animated with `KHR_animation_pointer`, which doesn't play ([#620](https://github.com/ponkoengine/ponko/issues/620)) |
+| AlphaBlendModeTest | yes | matches | 0.93 | 8.2 |  |
+| AnimatedColorsCube | yes | differs | 0.91 | 24.0 | anim: drawn at rest (the cube red, at the left); its colors play ([pointer animations](#animations-through-pointers)); the screenshot is an animated GIF of the cube moving over the others |
 | AnimatedCube | yes | matches | 0.79 | 18.6 |  |
 | AnimatedMorphCube | yes | differs | 0.90 | 49.9 | light: lit from the front, the screenshot shows its shaded side mid-morph |
 | AnimatedTriangle | yes | differs | 0.33 | 50.5 | anim: the screenshot shows it turned mid-animation; drawn at rest |
-| AnimationPointerUVs | yes | differs | 0.41 | 31.6 | the file's camera; its texture coordinates are animated with `KHR_animation_pointer`, which doesn't play ([#620](https://github.com/ponkoengine/ponko/issues/620)) |
+| AnimationPointerUVs | yes | differs | 0.41 | 31.6 | the file's camera; drawn at rest; the base color and other first-texture transforms play, the other maps' don't: a material has one transform ([#666](https://github.com/ponkoengine/ponko/issues/666)) |
 | AnisotropyBarnLamp | yes | differs | 0.47 | 19.5 | view; the brushed copper reflects a flat studio sky ([#597](https://github.com/ponkoengine/ponko/issues/597)) |
 | AnisotropyDiscTest | yes | matches | 0.81 | 12.0 |  |
 | AnisotropyRotationTest | yes | differs | 0.64 | 26.8 | environment: the black plastic reflects a flat studio sky, so the stretched highlights stand out less ([#597](https://github.com/ponkoengine/ponko/issues/597)) |
@@ -214,7 +214,7 @@ Overlap and ΔE are after registration; a dash: not drawn.
 | CompareVolume | yes | differs | 0.49 | 11.5 | view: drawn smaller than the screenshot |
 | Corset | yes | matches | 0.84 | 17.5 |  |
 | Cube | yes | matches | 0.79 | 18.2 |  |
-| CubeVisibility | yes | differs | 0.15 | 69.5 | view; the second cube's visibility is animated with `KHR_animation_pointer`, which doesn't play ([#620](https://github.com/ponkoengine/ponko/issues/620)) |
+| CubeVisibility | yes | differs | 0.15 | 69.5 | view; drawn at rest; the blue cube blinks ([pointer animations](#animations-through-pointers)) |
 | DamagedHelmet | yes | differs | 0.43 | 18.1 | view: the screenshot is from three quarters |
 | DiffuseTransmissionPlant | yes | differs | 0.44 | 27.6 | the file's camera isn't the screenshot's: a close-up of the pot |
 | DiffuseTransmissionTeacup | yes | differs | 0.27 | 14.1 | view; the sun lights the cup from the front, so little light comes through |
@@ -242,7 +242,7 @@ Overlap and ΔE are after registration; a dash: not drawn.
 | IridescentDishWithOlives | yes | differs | 0.84 | 20.9 | light: the dish is brighter and the jug reflects a flat studio sky (file camera) |
 | Lantern | yes | differs | 0.55 | 11.2 | view: the screenshot is from three quarters |
 | LightsPunctualLamp | yes | matches | 0.76 | 14.9 | the bulb lights up behind the transmitting shade |
-| LightVisibility | yes | differs | 0.73 | 34.1 | light: the file's spot lights are a few candela, dark in engine units ([#597](https://github.com/ponkoengine/ponko/issues/597)); the blinking light's `KHR_animation_pointer` doesn't play ([#620](https://github.com/ponkoengine/ponko/issues/620)) |
+| LightVisibility | yes | differs | 0.73 | 34.1 | light: the file's spot lights are a few candela, dark in engine units ([#597](https://github.com/ponkoengine/ponko/issues/597)); drawn at rest, with the blue light on; it blinks ([pointer animations](#animations-through-pointers)) |
 | MandarinOrange | yes | matches | 0.91 | 15.6 |  |
 | MaterialsVariantsShoe | yes | differs | 0.56 | 26.0 | view: the screenshot is from the side, above |
 | MeshoptCubeTest | yes | differs | 0.11 | 20.7 | view: the cubes are drawn, the screenshot looks from above |
@@ -263,7 +263,7 @@ Overlap and ΔE are after registration; a dash: not drawn.
 | PlaysetLightTest | yes | matches | 0.80 | 18.6 | the 512 lux sun and 1500 candela point light use EV100 11 (file camera) |
 | PointLightIntensityTest | yes | differs | 0.55 | 17.1 | the red, green, blue and neutral pools of light are visible; the reference is a closer crop with unlit labels |
 | PotOfCoals | yes | differs | 0.79 | 36.0 | view: the screenshot looks down into the pot and shows hotter coals and different studio reflections |
-| PotOfCoalsAnimationPointer | yes | differs | 0.76 | 28.5 | view; its animated colors don't play ([#620](https://github.com/ponkoengine/ponko/issues/620)) |
+| PotOfCoalsAnimationPointer | yes | differs | 0.76 | 28.5 | view; the heat dome's normal map turns ([pointer animations](#animations-through-pointers)) |
 | PrimitiveModeNormalsTest | yes | differs | 0.38 | 14.8 | points and lines aren't drawn; view |
 | RecursiveSkeletons | yes | differs | 0.13 | 22.0 | anim: rest pose against a pose of its animation; framed differently |
 | RiggedFigure | yes | differs | 0.50 | 10.1 | anim: rest pose against a pose of its animation |
@@ -313,6 +313,34 @@ Overlap and ΔE are after registration; a dash: not drawn.
 | VirtualCity | yes | differs | 0.17 | 54.6 | the file’s camera looks down onto the city; the reference shows a different view and orange sunset surroundings |
 | WaterBottle | yes | differs | 0.35 | 25.3 | background: the screenshot has a backdrop behind it; view |
 | XmpMetadataRoundedCube | yes | differs | 0.27 | 27.4 | view; light |
+
+### Animations through pointers
+
+```sh
+cargo test -p ponko --lib --features 3d,compressed-textures,gltf-meshopt,image-webp,image-gif \
+  known_pointer_animations_play -- --nocapture
+```
+
+`known_pointer_animations_play` draws the five samples with
+`KHR_animation_pointer` animations at three times each, sampling their clips
+into the model's skeleton as a game's animator does, with the file's lights
+hung from their nodes' joints (`ModelLight::joint`). Each drawing has its
+negative control: the same time with the clip's property tracks taken out,
+as they were drawn before they played. The pairs (control left) go to
+`results/pointer/<Name>-<time>.png` in the cache, the numbers and the
+adapter to `results/pointer/pointer.json`. On an Apple M4 Max (Metal):
+
+| Sample | Times (s) | What the test checks | Measured |
+|---|---|---|---|
+| CubeVisibility | 0.25, 0.75, 1.25 | the blue cube shows, hides, shows | hidden at 0.75: half the model's pixels go (8395 to 4196), mean difference from the control 8.0; shown: identical to it |
+| LightVisibility | 0.25, 0.75, 1.25 | the blue spot light shines, goes out, shines | out at 0.75: less blue, mean difference 1.7; on: identical |
+| AnimatedColorsCube | 0.75, 1.75, 2.75 | the moving cube is green over the green cube, blue over the blue one, red back over the red one | the changed pixels are green, then blue, where the control's are red; red again: identical |
+| AnimationPointerUVs | 0, 3, 6 | the keyed base color transforms (offset, scale, rotation) take their keyed values, and the textures move from time to time where the control's don't | every value exact; the other maps' channels warn ([#666](https://github.com/ponkoengine/ponko/issues/666)) |
+| PotOfCoalsAnimationPointer | 0, 1, 2 | the heat dome's normal map turns 0, a quarter and half a turn | exact; the dome is clear glass with no specular reflection and a 2 cm volume, so the turn doesn't change the picture |
+
+None of their screenshots matches at any of the times: the screenshots are
+taken from other views, and the GIF and WebP ones are animated (the first
+frame is compared).
 
 ## The two scenes
 

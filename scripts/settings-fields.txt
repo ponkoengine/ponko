@@ -85,6 +85,8 @@ Sky.authored_ambient              rust-only:SkyShader    # same
 Sky.kit                           ponko_ctx_set_sky_kit  # PonkoSkyKit, a versioned descriptor of its own
 
 struct Material MaterialDesc src/three/mod.rs PonkoMaterialDesc,PonkoMaterialDescEx
+Material.texture_transform  -  # not bound yet: a file's texture transform plays from C; set by hand from Rust
+Material.alpha_cutoff       -  # not bound yet: C cutout materials cut at a file's alphaCutoff, or 0.5
 
 struct NavBakeSettings NavBakeSettings src/nav3d/mod.rs PonkoNavBakeSettings,PonkoNavBakeSettingsEx
 
