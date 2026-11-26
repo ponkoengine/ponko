@@ -3,8 +3,10 @@
 //! The message protocol (session handshake + renet lanes) sits on a packet
 //! transport: UDP, the in-memory loopback, the Steam relay or the lobby
 //! server's relay (feature `lobby`) through the internal `PacketTransport`
-//! seam. The tests that loop over `EVERY_VIA` also run through an
-//! in-memory lobby relay server, with the same API as directly. These tests drive that seam with a
+//! seam. The tests that loop over `EVERY_MESSAGE_VIA` also run through an
+//! in-memory lobby relay server and over a fake Steam with both Steam
+//! carriers (Networking Messages and Networking Sockets), with the same API
+//! as directly. These tests drive that seam with a
 //! deterministic scripted transport and simulated time (`poll_elapsed`), so they
 //! need no sockets, no Steam installation and no renderer, and they pin what
 //! the protocol does when the transport delays, loses, duplicates, reorders,
@@ -15,20 +17,20 @@
 //! What a packet transport must do, and what each existing transport does.
 //! "Scripted" is the test transport below; it does each of these on request.
 //!
-//! | Contract | UDP | Loopback (`loopback_lossy`) | Steam relay | Lobby relay | Scripted |
+//! | Contract | UDP | Loopback (`loopback_lossy`) | Steam (Messages / Sockets carrier) | Lobby relay | Scripted |
 //! |---|---|---|---|---|---|
 //! | `recv` never blocks; `Ok(None)` means no packet | `WouldBlock` → `None` | yes | yes | yes (reads the lobby's inbox) | yes |
 //! | Other errors are returned from `poll` and don't end sessions | socket errors | never errors | lobby/protocol-mismatch errors | a failed or closed lobby connection, or leaving the room, once | one-shot injection |
-//! | `send` `Ok(false)` = not submitted, treated as loss | `WouldBlock` | never (a full inbox drops silently) | peer not (yet) a lobby member | out of the room or the lobby lane is full | refusal window |
+//! | `send` `Ok(false)` = not submitted, treated as loss | `WouldBlock` | never (a full inbox drops silently) | peer not (yet) a lobby member; Sockets: no accepted connection to that peer yet | out of the room or the lobby lane is full | refusal window |
 //! | Never deliver more than the receive buffer (1500 bytes) | OS-dependent | no check; only engine packets enter | drops > 1500 | whole relay frames; refused at creation if the server relays less than 1504 bytes | drops > 1500 |
 //! | Reject outgoing datagrams above 1500 bytes | OS limit | no | `InvalidInput` | the server's `max_relay_bytes` | `InvalidInput` |
 //! | May reorder | yes | always (newest first) | per Steam | per the lobby's links | on request |
 //! | May lose / duplicate | yes / yes | every nth send / no | per Steam | yes / no (the lobby's unreliable lane drops duplicates) | on request |
-//! | Address identity | socket address | `127.0.0.1:(i + 1)` | synthetic address per Steam ID; non-members filtered | synthetic IPv6 per member id; a client only hears its host | synthetic |
+//! | Address identity | socket address | `127.0.0.1:(i + 1)` | synthetic address per Steam ID; non-members filtered (Sockets: their connections refused) | synthetic IPv6 per member id; a client only hears its host | synthetic |
 //! | Clock | none; protocol time comes from `poll`/`poll_elapsed` | same | same | the lobby follows the protocol time (`advance`) | same |
-//! | Disconnect | none; protocol `BYE` + silence timeout | same | same (lobby leave is separate) | same (leaving the room is an error from `poll`) | link cut on request |
+//! | Disconnect | none; protocol `BYE` + silence timeout | same | same (lobby leave is separate; Sockets: leaving closes the connection, a dropped one is dialed again) | same (leaving the room is an error from `poll`) | link cut on request |
 //! | `local_addr()` | `Some` | `None` | `None` | `None` | `None` |
-//! | Covered on CI by | `tests/net_messages.rs` (localhost) | `tests/net_messages.rs` | fake Steam API (`--features steam`) | this module (`Via::Relay`), `net/lobby/relay.rs`, `ponko_lobby`'s `tests/relay_sessions.rs` | this module |
+//! | Covered on CI by | `tests/net_messages.rs` (localhost) | `tests/net_messages.rs` | fake Steam API (`--features steam`): `net/steam_messages.rs` and this module (`Via::SteamMessages`, `Via::SteamSockets`) | this module (`Via::Relay`), `net/lobby/relay.rs`, `ponko_lobby`'s `tests/relay_sessions.rs` | this module |
 //! | Replication on top, covered by | `net/replication_conformance.rs` (with WebSocket) | `net/replication_conformance.rs` | `net/steam_messages.rs` (`--features steam`) | `net/lobby/relay.rs` | `net/replication_conformance.rs` |
 //!
 //! Protocol guarantees pinned here, given any transport that keeps the
@@ -64,7 +66,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use super::scripted::{EVERY_VIA, MTU, Network, Port, Shared, Via, addr, port};
+use super::scripted::{EVERY_MESSAGE_VIA, MTU, Network, Port, Shared, Via, addr, port};
 use crate::net::{Lane, MAX_MESSAGE_BYTES, MessageEvent, NetMessages, PeerId};
 
 /// One scripted step: the network advances one tick, then every endpoint polls.
@@ -102,6 +104,25 @@ impl Session {
                     nets,
                     logs,
                     relay: Some(server),
+                }
+            }
+            #[cfg(feature = "steam")]
+            Via::SteamMessages | Via::SteamSockets => {
+                let net: Shared = Default::default();
+                script(&mut net.lock().unwrap());
+                let carrier = if via == Via::SteamSockets {
+                    super::steam_messages::testing::SOCKETS
+                } else {
+                    super::steam_messages::testing::MESSAGES
+                };
+                let (nets, _) = super::steam_messages::testing::endpoints_on(carrier, clients, max_clients, Some(&net));
+                let logs = nets.iter().map(|_| Vec::new()).collect();
+                Self {
+                    net,
+                    nets,
+                    logs,
+                    #[cfg(feature = "lobby")]
+                    relay: None,
                 }
             }
         }
@@ -200,15 +221,15 @@ fn is_strictly_increasing(v: &[u32]) -> bool {
 
 #[test]
 fn delivers_every_lane_through_latency() {
-    for via in EVERY_VIA {
+    for &via in EVERY_MESSAGE_VIA {
         let instant = Session::via(via, 1, 1, |_| {}).connect();
         let mut s = Session::via(via, 1, 1, |n| n.delay = 5);
         let delayed = s.connect();
-        if via == Via::Direct {
+        if via.hops() == 1 {
             // The handshake is one round trip: two one-way delays. Without
             // delay the host already polls one step after the client (poll
             // order), hence 9.
-            assert_eq!(delayed, instant + 9);
+            assert_eq!(delayed, instant + 9, "{via:?}");
         } else {
             // Through the relay each way is two hops.
             assert!(delayed >= instant + 18, "{via:?}: {delayed} vs {instant}");
@@ -233,7 +254,7 @@ fn delivers_every_lane_through_latency() {
 
 #[test]
 fn reliable_lanes_survive_loss_duplication_and_reordering() {
-    for via in EVERY_VIA {
+    for &via in EVERY_MESSAGE_VIA {
         let mut s = Session::via(via, 1, 1, |n| {
             n.delay = 2;
             via.drop_one_in(n, 3);
@@ -266,7 +287,7 @@ fn reliable_lanes_survive_loss_duplication_and_reordering() {
 
 #[test]
 fn several_clients_get_every_reliable_message_through_random_loss_and_jitter() {
-    for via in EVERY_VIA {
+    for &via in EVERY_MESSAGE_VIA {
         let mut s = Session::via(via, 3, 3, |n| {
             n.delay = 3;
             n.jitter = 5;
@@ -662,7 +683,7 @@ fn peer_ids_follow_handshake_order_and_full_hosts_refuse() {
 
 #[test]
 fn same_script_gives_the_same_traffic() {
-    for via in EVERY_VIA {
+    for &via in EVERY_MESSAGE_VIA {
         let run = || {
             let mut s = Session::via(via, 1, 1, |n| {
                 n.delay = 1;

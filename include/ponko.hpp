@@ -3597,6 +3597,14 @@ public:
     static net_messages steam_host(std::uint32_t app_id, std::size_t max_clients) {
         PonkoNetMessages* p = nullptr; detail::check(ponko_net_messages_steam_host(app_id, max_clients, &p)); return net_messages(p);
     }
+    /// Like steam_host, over Steam Networking Sockets, in a lobby of that visibility: lobby members
+    /// connect to this host through Valve's relays. For dedicated hosts and games that want
+    /// connections; joiners use steam_join.
+    static net_messages steam_sockets_host(std::uint32_t app_id, steam_lobby_visibility visibility, std::size_t max_clients) {
+        PonkoNetMessages* p = nullptr;
+        detail::check(ponko_net_messages_steam_sockets_host(app_id, static_cast<std::uint32_t>(visibility), max_clients, &p));
+        return net_messages(p);
+    }
     /// Joins Steam lobby `lobby` of app `app_id` through Steam relays. Throws ponko::error without the
     /// `steam` feature or a running Steam.
     static net_messages steam_join(std::uint32_t app_id, std::uint64_t lobby) {

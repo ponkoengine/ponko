@@ -126,6 +126,8 @@ impl Session {
             Via::Direct => Self::new(players, tune, script),
             #[cfg(feature = "lobby")]
             Via::Relay => Self::relayed(players, tune, script),
+            #[cfg(feature = "steam")]
+            Via::SteamMessages | Via::SteamSockets => unreachable!("Steam carriers are message-protocol only"),
         }
     }
     /// `players` peers through a relay server: the room forms first (on
