@@ -65,11 +65,11 @@ code before and after.
 
 ## Every change, by area
 
-The [CHANGELOG](../../CHANGELOG.md) lists each of these 1331 changes under its area; the numbers count its entries.
+The [CHANGELOG](../../CHANGELOG.md) lists each of these 1336 changes under its area; the numbers count its entries.
 
 | Area | Breaking | Added | Changed | Fixed | Removed | Deprecated | Security |
 |---|---|---|---|---|---|---|---|
-| API and crate layout | 15 | 28 | 15 | 2 |  | 6 |  |
+| API and crate layout | 15 | 29 | 16 | 2 |  | 6 |  |
 | ECS and systems | 8 | 39 | 32 | 8 |  |  |  |
 | Rendering | 5 | 127 | 66 | 45 |  |  |  |
 | Animation | 9 | 35 | 11 | 2 |  |  |  |
@@ -78,12 +78,12 @@ The [CHANGELOG](../../CHANGELOG.md) lists each of these 1331 changes under its a
 | Audio | 1 | 24 | 4 | 5 |  |  |  |
 | Physics, navigation and AI | 2 | 46 | 15 | 8 |  |  |  |
 | Networking | 2 | 60 | 9 | 3 |  |  | 3 |
-| Web, mobile and platforms |  | 49 | 10 | 13 |  |  |  |
+| Web, mobile and platforms |  | 49 | 11 | 15 |  |  |  |
 | Tools: editor, inspector and agents |  | 58 | 12 | 12 |  |  |  |
 | C and C++ | 1 | 41 | 5 | 2 |  |  |  |
 | Guide and examples |  | 24 | 22 | 8 |  |  |  |
 | Development and releases | 1 | 57 | 27 | 33 | 2 |  | 5 |
-| **All** | **57** | **795** | **299** | **162** | **2** | **8** | **8** |
+| **All** | **57** | **796** | **301** | **164** | **2** | **8** | **8** |
 
 ## Breaking changes at a glance
 
