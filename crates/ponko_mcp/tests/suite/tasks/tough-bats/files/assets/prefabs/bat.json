@@ -1,0 +1,9 @@
+{
+  "format": "ponko-prefab",
+  "version": 1,
+  "components": {
+    "Transform2D": {},
+    "Bat": null,
+    "Health": { "current": 20.0 }
+  }
+}

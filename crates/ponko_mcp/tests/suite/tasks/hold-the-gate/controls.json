@@ -1,0 +1,195 @@
+[
+ {
+  "name": "nothing",
+  "why": "no towers",
+  "steps": [],
+  "fails": [
+   "the wave is held"
+  ]
+ },
+ {
+  "name": "most road covered",
+  "why": "the two pads that see the most road, without trying them: two walkers get through",
+  "steps": [
+   {
+    "write": "assets/defense.json",
+    "text": "{\n  \"towers\": [\"north\", \"bend\"]\n}\n"
+   },
+   {
+    "until": {
+     "call": "list_entities",
+     "args": {
+      "with": [
+       "Tower"
+      ],
+      "where": [
+       "Tower.pad == north"
+      ],
+      "limit": 0
+     },
+     "pointer": "/total",
+     "equals": 1
+    },
+    "each": {
+     "call": "run_ticks",
+     "args": {
+      "ticks": 1
+     }
+    }
+   }
+  ],
+  "fails": [
+   "the wave is held"
+  ]
+ },
+ {
+  "name": "nearest the gate",
+  "why": "the two pads closest to the gate",
+  "steps": [
+   {
+    "write": "assets/defense.json",
+    "text": "{\n  \"towers\": [\"east\", \"cliff\"]\n}\n"
+   },
+   {
+    "until": {
+     "call": "list_entities",
+     "args": {
+      "with": [
+       "Tower"
+      ],
+      "where": [
+       "Tower.pad == east"
+      ],
+      "limit": 0
+     },
+     "pointer": "/total",
+     "equals": 1
+    },
+    "each": {
+     "call": "run_ticks",
+     "args": {
+      "ticks": 1
+     }
+    }
+   }
+  ],
+  "fails": [
+   "the wave is held"
+  ]
+ },
+ {
+  "name": "three towers",
+  "why": "holds the wave over the budget of two",
+  "steps": [
+   {
+    "write": "assets/defense.json",
+    "text": "{\n  \"towers\": [\"bend\", \"corner\", \"south\"]\n}\n"
+   },
+   {
+    "until": {
+     "call": "list_entities",
+     "args": {
+      "with": [
+       "Tower"
+      ],
+      "where": [
+       "Tower.pad == south"
+      ],
+      "limit": 0
+     },
+     "pointer": "/total",
+     "equals": 1
+    },
+    "each": {
+     "call": "run_ticks",
+     "args": {
+      "ticks": 1
+     }
+    }
+   }
+  ],
+  "fails": [
+   "defense file is valid"
+  ]
+ },
+ {
+  "name": "towers by hand",
+  "why": "towers spawned in the running game; the file has none, so the wave from its start meets no tower",
+  "steps": [
+   {
+    "call": "spawn_entity",
+    "args": {
+     "components": {
+      "Tower": {
+       "pad": "bend",
+       "reload": 0
+      },
+      "Transform2D": {
+       "position": [
+        178,
+        377
+       ]
+      }
+     }
+    }
+   },
+   {
+    "call": "spawn_entity",
+    "args": {
+     "components": {
+      "Tower": {
+       "pad": "corner",
+       "reload": 0
+      },
+      "Transform2D": {
+       "position": [
+        65,
+        301
+       ]
+      }
+     }
+    }
+   }
+  ],
+  "fails": [
+   "the wave is held"
+  ]
+ },
+ {
+  "name": "misspelled pad",
+  "why": "a pad name the game doesn't have: only one tower is built",
+  "steps": [
+   {
+    "write": "assets/defense.json",
+    "text": "{\n  \"towers\": [\"bend\", \"Corner\"]\n}\n"
+   },
+   {
+    "until": {
+     "call": "list_entities",
+     "args": {
+      "with": [
+       "Tower"
+      ],
+      "where": [
+       "Tower.pad == bend"
+      ],
+      "limit": 0
+     },
+     "pointer": "/total",
+     "equals": 1
+    },
+    "each": {
+     "call": "run_ticks",
+     "args": {
+      "ticks": 1
+     }
+    }
+   }
+  ],
+  "fails": [
+   "defense file is valid",
+   "the file's towers stand",
+   "the wave is held"
+  ]
+ }
+]

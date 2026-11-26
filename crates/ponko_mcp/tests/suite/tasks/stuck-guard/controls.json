@@ -1,0 +1,69 @@
+[
+ {
+  "name": "nothing",
+  "why": "the guard still dithers at the first corner",
+  "steps": [],
+  "fails": [
+   "guard walks laps",
+   "turns at the waypoints"
+  ]
+ },
+ {
+  "name": "tolerance without snapping",
+  "why": "turns when within a pixel, but from where it stands: its turns miss the waypoints",
+  "steps": [
+   {
+    "edit": "src/main.rs",
+    "old": "            if to.length() == 0.0 {\n",
+    "new": "            if to.length() < 1.0 {\n"
+   }
+  ],
+  "fails": [
+   "turns at the waypoints"
+  ]
+ },
+ {
+  "name": "jump to the corner",
+  "why": "jumps onto the waypoint from up to 10 pixels away: faster than its speed",
+  "steps": [
+   {
+    "edit": "src/main.rs",
+    "old": "            if to.length() == 0.0 {\n",
+    "new": "            if to.length() < 10.0 {\n                t.position = target;\n"
+   }
+  ],
+  "fails": [
+   "never faster than its speed"
+  ]
+ },
+ {
+  "name": "data instead of code",
+  "why": "a speed whose steps land exactly on the corners: the route file must not change",
+  "steps": [
+   {
+    "write": "assets/patrol.json",
+    "text": "{\n  \"speed\": 120,\n  \"waypoints\": [[100, 100], [300, 100], [300, 300], [100, 300]]\n}\n"
+   }
+  ],
+  "fails": [
+   "route file unchanged"
+  ]
+ },
+ {
+  "name": "doesn't build",
+  "why": "a fix that doesn't compile",
+  "steps": [
+   {
+    "edit": "src/main.rs",
+    "old": "            if to.length() == 0.0 {\n",
+    "new": "            if to.length() <= step {\n                t.position = target\n"
+   }
+  ],
+  "fails": [
+   "game builds",
+   "guard walks laps",
+   "turns at the waypoints",
+   "never faster than its speed"
+  ]
+ }
+]

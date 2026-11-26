@@ -1,0 +1,19 @@
+{
+  "steps": [
+    { "call": "get_resource", "args": { "resource": "CannonSettings" } },
+    { "call": "subscribe_events", "args": { "types": ["Landed"] } },
+    { "call": "set_resource", "args": { "resource": "Trigger", "value": { "fire": true } } },
+    { "call": "run_ticks", "args": { "ticks": 200 } },
+    { "call": "take_events" },
+    { "write": "assets/cannon.json", "text": "{\n  \"muzzle_speed\": 600,\n  \"angle_degrees\": 45\n}\n" },
+    { "until": { "call": "get_resource", "args": { "resource": "CannonSettings" }, "pointer": "/muzzle_speed", "equals": 600.0 }, "each": { "call": "run_ticks", "args": { "ticks": 1 } } },
+    { "call": "set_resource", "args": { "resource": "Trigger", "value": { "fire": true } } },
+    { "call": "run_ticks", "args": { "ticks": 200 } },
+    { "call": "take_events" },
+    { "write": "assets/cannon.json", "text": "{\n  \"muzzle_speed\": 650,\n  \"angle_degrees\": 45\n}\n" },
+    { "until": { "call": "get_resource", "args": { "resource": "CannonSettings" }, "pointer": "/muzzle_speed", "equals": 650.0 }, "each": { "call": "run_ticks", "args": { "ticks": 1 } } },
+    { "call": "set_resource", "args": { "resource": "Trigger", "value": { "fire": true } } },
+    { "call": "run_ticks", "args": { "ticks": 200 } },
+    { "call": "take_events" }
+  ]
+}
