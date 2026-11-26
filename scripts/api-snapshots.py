@@ -211,7 +211,7 @@ def summary_text(changes):
 # Side effects: cargo and the file system.
 
 def run(cmd, **kw):
-    return subprocess.run(cmd, cwd=ROOT, text=True, **kw)
+    return subprocess.run(cmd, cwd=ROOT, text=True, encoding='utf-8', **kw)
 
 
 def packages():
@@ -295,7 +295,7 @@ def committed():
     """{relative path: text} of the files in api/ now."""
     if not API.is_dir():
         return {}
-    return {str(p.relative_to(API)): p.read_text() for p in sorted(API.glob('*/*.txt'))}
+    return {p.relative_to(API).as_posix(): p.read_text(encoding='utf-8') for p in sorted(API.glob('*/*.txt'))}
 
 
 def main_update():
@@ -306,7 +306,7 @@ def main_update():
     for path, text in files.items():
         target = API / path
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(text)
+        target.write_text(text, encoding='utf-8', newline='\n')
     for crate_dir in API.glob('*'):
         if crate_dir.is_dir() and not any(crate_dir.iterdir()):
             crate_dir.rmdir()
@@ -339,7 +339,7 @@ def main_check():
         for rel, text in files.items():
             target = Path(out) / rel
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(text)
+            target.write_text(text, encoding='utf-8', newline='\n')
     return 1
 
 

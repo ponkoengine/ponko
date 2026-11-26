@@ -39,6 +39,7 @@ export const USAGE =
   "                 [--click <x>,<y>=<field>:<value> | @retry=<field>:<value>]... [--query <?a=b>] [--persist granted|refused]\n" +
   "                 [--after-reload <field>:<value>]... [--reload [--after-reload <field>:<value>]...]...\n" +
   "                 [--engine-gpu required|optional] [--music required|none]\n" +
+  "                 [--audio-output normal|zero-channels|resume-rejected]\n" +
   "                 [--no-trace] [--chrome-trace]\n" +
   "                 [--chromium-mode shell|new] [--browser-arg <flag>]...";
 
@@ -172,6 +173,7 @@ export function parseFixtures(text) {
 export function parseArgs(argv, fixtures = {}) {
   const args = {
     browser: "chromium",
+    audioOutput: "normal",
     backend: "auto",
     case: "ok",
     timeout: 90,
@@ -214,6 +216,7 @@ export function parseArgs(argv, fixtures = {}) {
       case "--asset-source": given.assetSource = value(); break;
       case "--engine-gpu": given.engineGpu = value(); break;
       case "--music": given.music = value(); break;
+      case "--audio-output": args.audioOutput = value(); break;
       case "--press": (given.presses ??= []).push(parsePress(value())); break;
       case "--click": (given.clicks ??= []).push(parseClick(value())); break;
       case "--query": given.query = value(); break;
@@ -275,8 +278,15 @@ export function parseArgs(argv, fixtures = {}) {
   if (args.query && args.case !== "ok") fail("--query and --case can't go together (a case sets the query)");
   if (!["required", "optional"].includes(args.engineGpu)) fail("--engine-gpu must be required or optional");
   if (!["required", "none"].includes(args.music)) fail("--music must be required or none");
+  if (!["normal", "zero-channels", "resume-rejected"].includes(args.audioOutput)) {
+    fail("--audio-output must be normal, zero-channels or resume-rejected");
+  }
+  if (args.audioOutput !== "normal" && (args.music !== "required" || args.case !== "ok")) {
+    fail("--audio-output needs a successful fixture run with --music required");
+  }
   const browserLabel = args.browser === "chromium" && args.chromiumMode === "new" ? "chromium-new" : args.browser;
   const parts = [args.fixture ?? "site", browserLabel, args.backend, args.case];
+  if (args.audioOutput !== "normal") parts.push(args.audioOutput);
   if (args.persist) parts.push(`persist-${args.persist}`);
   args.out ??= join("target", "web-smoke", parts.join("-"));
   return args;

@@ -56,7 +56,7 @@ fn names(device: &AudioDevice, wanted: &str) -> bool {
     device.id == wanted || device.name == wanted
 }
 
-/// The system's devices, through cpal (on the web: the browser's one output).
+/// The system's devices, or the browser's one output.
 pub(in crate::audio) struct SystemOutputs;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -131,16 +131,28 @@ impl Outputs for SystemOutputs {
     }
 }
 
-/// The web: one output, the browser's, which never goes away.
+/// The web: one output, with device routing managed by the browser.
 #[cfg(target_arch = "wasm32")]
 impl Outputs for SystemOutputs {
     fn list(&mut self) -> Vec<AudioDevice> {
         vec![browser()]
     }
     fn open(&mut self, _device: Option<&str>) -> Option<Opened> {
-        let manager = kira::AudioManager::new(kira::AudioManagerSettings::default()).ok()?;
+        use super::super::web_output::{BrowserOutput, BrowserStatus, warn_unavailable};
+        let status = BrowserStatus::default();
+        let settings = kira::AudioManagerSettings {
+            backend_settings: status.clone(),
+            ..Default::default()
+        };
+        let manager = match kira::AudioManager::<BrowserOutput>::new(settings) {
+            Ok(manager) => manager,
+            Err(error) => {
+                warn_unavailable(&error);
+                return None;
+            }
+        };
         Some(Opened {
-            manager: Manager::Device(manager),
+            manager: Manager::Browser(manager, status),
             device: Some(browser()),
             buffer: None,
         })

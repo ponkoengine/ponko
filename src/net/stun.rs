@@ -8,7 +8,8 @@
 //! itself, so a game needs no STUN server of its own beyond the lobby.
 //!
 //! Only the binding method, without authentication: what public STUN servers
-//! and browsers use for address discovery. No TURN.
+//! and browsers use for address discovery. The desktop's TURN client is
+//! `net/turn.rs`.
 //!
 //! ```
 //! use ponko::net::stun;

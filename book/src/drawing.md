@@ -43,7 +43,10 @@ ctx.world.spawn((
 - `d2::Transform`: `position`, `rotation` (radians, clockwise on screen),
   `scale` (negative flips).
 - `Sprite`: `texture`, `color` (tint), `z` (higher is on top), `pivot`
-  (`(0.5, 0.5)` is the center).
+  (`(0.5, 0.5)` is the center), `region`, and `flip_x` / `flip_y`, which
+  mirror the picture in place. To turn a character around, set
+  `sprite.flip_x` rather than a negative scale: a negative scale also
+  mirrors what is attached to the entity and its offsets.
 
 ## Immediate drawing
 
