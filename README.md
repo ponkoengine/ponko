@@ -255,6 +255,26 @@ run again; the ECS row was run again on 2026-11-22 at `9235ea05`); web builds ru
 | 3D, 100k spinning cubes with shadows: Ponko / Unity 6 ([details](book/src/performance.md#3d-ponko-vs-unity)) | **402** / 54 FPS (7.5x) |
 | Memory per entity, 1M agents | 96 bytes |
 
+### Ponko vs Bevy on two machines
+
+The [scoreboard](book/src/performance.md#ponko-vs-bevy-the-scoreboard) runs
+the same workloads on Ponko and Bevy 0.20.1, release builds, the median of three
+runs. It has been run on a MacBook Pro (M4 Max, Metal) and on a Windows 11
+desktop (Ryzen 5 3600, Radeon RX Vega, DirectX 12 and Vulkan; run-time rows
+only, on a machine that other jobs were also using). A selection, in ms per frame or tick:
+
+| Workload | M4 Max, Metal: Ponko / Bevy | Windows, DX12: Ponko / Bevy | Windows, Vulkan: Ponko / Bevy |
+|---|---|---|---|
+| Sprites, 100k moving | **1.10** / 11.6 | **2.91** / 29.2 | **2.48** / 30.2 |
+| Sprites, 100k with a tint each | **1.09** / 44.8 | **2.84** / Bevy failed (GPU out of memory) | **2.53** / 90.3 |
+| 3D, 100k moving meshes with a sun shadow | **4.63** / 15.8 | **15.6** / 39.7 | **14.8** / 31.2 |
+| 3D, 1,000 skinned characters | 6.06 / **3.86** (Bevy faster) | **9.65** / 15.5 | 8.72 / **8.35** (Bevy faster) |
+| 2D physics, 10k boxes | **6.39** / 8.11 | **26.2** / 34.3 | **25.6** / 31.5 |
+| UI, 10k nodes | **1.63** / 4.58 | **5.34** / 12.7 | **4.35** / 12.1 |
+| ECS, iterate 1M | **0.165** / 0.390 | **0.522** / 1.19 | **0.426** / 0.962 |
+
+Linux and an integrated GPU are not measured yet (#501).
+
 ### 3D: Ponko vs Unity 6
 
 The documented workload uses N spinning, tinted cubes, 12 PBR spheres, a sun

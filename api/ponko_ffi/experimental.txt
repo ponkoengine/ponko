@@ -1,0 +1,80 @@
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_hdr_output(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoHdrOutput) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_hdr_status(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoHdrStatus) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_hdr_output(*mut ponko_ffi::PonkoCtx, *const ponko_ffi::PonkoHdrOutput) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_game_hdr_output(*mut ponko_ffi::PonkoGame, *const ponko_ffi::PonkoHdrOutput) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_hdr_output_defaults(*mut ponko_ffi::PonkoHdrOutput) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_net_messages_rtc_host(*mut ponko_ffi::PonkoLobby, *const core::ffi::primitives::c_char, *const core::ffi::primitives::c_char, usize, *mut *mut ponko_ffi::PonkoNetMessages) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_net_messages_rtc_join(*mut ponko_ffi::PonkoLobby, u32, *const core::ffi::primitives::c_char, *const core::ffi::primitives::c_char, *mut *mut ponko_ffi::PonkoNetMessages) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_net_messages_rtc_peer(*mut ponko_ffi::PonkoNetMessages, u64, *mut u32) -> ponko_ffi::PonkoStatus
+#[repr(C)] pub enum ponko_ffi::PonkoHdrEncoding
+#[repr(C)] pub enum ponko_ffi::PonkoHdrOffReason
+#[repr(C)] pub struct ponko_ffi::PonkoHdrOutput
+#[repr(C)] pub struct ponko_ffi::PonkoHdrStatus
+impl core::clone::Clone for ponko_ffi::PonkoHdrEncoding
+impl core::clone::Clone for ponko_ffi::PonkoHdrOffReason
+impl core::clone::Clone for ponko_ffi::PonkoHdrOutput
+impl core::clone::Clone for ponko_ffi::PonkoHdrStatus
+impl core::cmp::Eq for ponko_ffi::PonkoHdrEncoding
+impl core::cmp::Eq for ponko_ffi::PonkoHdrOffReason
+impl core::cmp::PartialEq for ponko_ffi::PonkoHdrEncoding
+impl core::cmp::PartialEq for ponko_ffi::PonkoHdrOffReason
+impl core::cmp::PartialEq for ponko_ffi::PonkoHdrOutput
+impl core::cmp::PartialEq for ponko_ffi::PonkoHdrStatus
+impl core::fmt::Debug for ponko_ffi::PonkoHdrEncoding
+impl core::fmt::Debug for ponko_ffi::PonkoHdrOffReason
+impl core::fmt::Debug for ponko_ffi::PonkoHdrOutput
+impl core::fmt::Debug for ponko_ffi::PonkoHdrStatus
+impl core::marker::Copy for ponko_ffi::PonkoHdrEncoding
+impl core::marker::Copy for ponko_ffi::PonkoHdrOffReason
+impl core::marker::Copy for ponko_ffi::PonkoHdrOutput
+impl core::marker::Copy for ponko_ffi::PonkoHdrStatus
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoHdrEncoding
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoHdrOffReason
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoHdrOutput
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoHdrStatus
+pub const ponko_ffi::PONKO_HDR_OUTPUT_VERSION: u32
+pub const ponko_ffi::PONKO_HDR_STATUS_VERSION: u32
+pub fn ponko_ffi::PonkoHdrEncoding::clone(&self) -> Self
+pub fn ponko_ffi::PonkoHdrEncoding::eq(&self, &Self) -> bool
+pub fn ponko_ffi::PonkoHdrEncoding::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn ponko_ffi::PonkoHdrOffReason::clone(&self) -> Self
+pub fn ponko_ffi::PonkoHdrOffReason::eq(&self, &Self) -> bool
+pub fn ponko_ffi::PonkoHdrOffReason::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn ponko_ffi::PonkoHdrOutput::clone(&self) -> Self
+pub fn ponko_ffi::PonkoHdrOutput::eq(&self, &Self) -> bool
+pub fn ponko_ffi::PonkoHdrOutput::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn ponko_ffi::PonkoHdrStatus::clone(&self) -> Self
+pub fn ponko_ffi::PonkoHdrStatus::eq(&self, &Self) -> bool
+pub fn ponko_ffi::PonkoHdrStatus::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub ponko_ffi::PonkoHdrEncoding::PONKO_HDR_ENCODING_EXTENDED_SRGB = 2
+pub ponko_ffi::PonkoHdrEncoding::PONKO_HDR_ENCODING_PQ = 3
+pub ponko_ffi::PonkoHdrEncoding::PONKO_HDR_ENCODING_SCRGB = 1
+pub ponko_ffi::PonkoHdrEncoding::PONKO_HDR_ENCODING_SDR = 0
+pub ponko_ffi::PonkoHdrOffReason::PONKO_HDR_OFF_HEADLESS = 1
+pub ponko_ffi::PonkoHdrOffReason::PONKO_HDR_OFF_NONE = 0
+pub ponko_ffi::PonkoHdrOffReason::PONKO_HDR_OFF_NOT_REQUESTED = 2
+pub ponko_ffi::PonkoHdrOffReason::PONKO_HDR_OFF_OFF = 3
+pub ponko_ffi::PonkoHdrOffReason::PONKO_HDR_OFF_UNSUPPORTED = 4
+pub ponko_ffi::PonkoHdrOutput::enabled: bool
+pub ponko_ffi::PonkoHdrOutput::max_content_light_nits: f32
+pub ponko_ffi::PonkoHdrOutput::max_frame_average_nits: f32
+pub ponko_ffi::PonkoHdrOutput::paper_white_nits: f32
+pub ponko_ffi::PonkoHdrOutput::peak_nits: f32
+pub ponko_ffi::PonkoHdrOutput::struct_size: u32
+pub ponko_ffi::PonkoHdrOutput::version: u32
+pub ponko_ffi::PonkoHdrStatus::active: bool
+pub ponko_ffi::PonkoHdrStatus::available: bool
+pub ponko_ffi::PonkoHdrStatus::display_headroom: f32
+pub ponko_ffi::PonkoHdrStatus::display_peak_nits: f32
+pub ponko_ffi::PonkoHdrStatus::encoding: ponko_ffi::PonkoHdrEncoding
+pub ponko_ffi::PonkoHdrStatus::headroom: f32
+pub ponko_ffi::PonkoHdrStatus::max_content_light_nits: f32
+pub ponko_ffi::PonkoHdrStatus::max_frame_average_nits: f32
+pub ponko_ffi::PonkoHdrStatus::max_mastering_nits: f32
+pub ponko_ffi::PonkoHdrStatus::metadata_sent: bool
+pub ponko_ffi::PonkoHdrStatus::min_mastering_nits: f32
+pub ponko_ffi::PonkoHdrStatus::paper_white_nits: f32
+pub ponko_ffi::PonkoHdrStatus::peak_nits: f32
+pub ponko_ffi::PonkoHdrStatus::reason: ponko_ffi::PonkoHdrOffReason
+pub ponko_ffi::PonkoHdrStatus::struct_size: u32
+pub ponko_ffi::PonkoHdrStatus::version: u32

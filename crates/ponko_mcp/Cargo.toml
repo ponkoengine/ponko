@@ -23,6 +23,12 @@ path = "src/main.rs"
 [dependencies]
 ponko_image_diff = { path = "../ponko_image_diff", version = "0.1.0" }
 serde_json = "1.0.154"
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# The local browser bridge uses the same WebSocket implementation as the engine.
+tungstenite = { version = "0.28.0", default-features = false, features = ["handshake"] }
+data-encoding = "2.11.1"
+getrandom = "0.4"
+tempfile = "3.27.0"
 
 [dev-dependencies]
 # `3d` for the scene editing session (tests/scene_editing.rs).

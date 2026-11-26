@@ -265,6 +265,11 @@ fn status_to_c(s: &HdrStatus) -> PonkoHdrStatus {
 /// Fills the fields of `out_hdr`'s version with the defaults (HDR off,
 /// 200-nit paper white, the display's peak). `struct_size` and `version`
 /// must be set first.
+///
+/// Unstable: the guide's "HDR displays" is experimental, so this may change
+/// or go in any release (STABILITY.md, "Unstable").
+/// cbindgen:prefix=/* Unstable: experimental (book/src/hdr.md) */
+///
 /// # Safety
 /// `out_hdr` null or a writable descriptor with its header set.
 #[unsafe(no_mangle)]
@@ -280,6 +285,11 @@ pub unsafe extern "C" fn ponko_hdr_output_defaults(out_hdr: *mut PonkoHdrOutput)
 /// ```
 /// assert_eq!(unsafe { ponko_ffi::ponko_game_hdr_output(std::ptr::null_mut(), std::ptr::null()) } as u32, 1);
 /// ```
+///
+/// Unstable: the guide's "HDR displays" is experimental, so this may change
+/// or go in any release (STABILITY.md, "Unstable").
+/// cbindgen:prefix=/* Unstable: experimental (book/src/hdr.md) */
+///
 /// # Safety
 /// `game` null or a live game; `hdr` null or a readable descriptor (read
 /// during the call only).
@@ -302,6 +312,11 @@ pub unsafe extern "C" fn ponko_game_hdr_output(game: *mut PonkoGame, hdr: *const
 /// let s = unsafe { ponko_ffi::ponko_ctx_hdr_output(std::ptr::null_mut(), std::ptr::null_mut()) };
 /// assert_eq!(s, ponko_ffi::PonkoStatus::PONKO_INVALID_ARGUMENT);
 /// ```
+///
+/// Unstable: the guide's "HDR displays" is experimental, so this may change
+/// or go in any release (STABILITY.md, "Unstable").
+/// cbindgen:prefix=/* Unstable: experimental (book/src/hdr.md) */
+///
 /// # Safety
 /// `ctx` null or live; `out_hdr` null or a writable descriptor with its
 /// header set (written during the call only).
@@ -321,6 +336,11 @@ pub unsafe extern "C" fn ponko_ctx_hdr_output(ctx: *mut PonkoCtx, out_hdr: *mut 
 /// let s = unsafe { ponko_ffi::ponko_ctx_set_hdr_output(std::ptr::null_mut(), std::ptr::null()) };
 /// assert_eq!(s, ponko_ffi::PonkoStatus::PONKO_INVALID_ARGUMENT);
 /// ```
+///
+/// Unstable: the guide's "HDR displays" is experimental, so this may change
+/// or go in any release (STABILITY.md, "Unstable").
+/// cbindgen:prefix=/* Unstable: experimental (book/src/hdr.md) */
+///
 /// # Safety
 /// `ctx` null or live; `hdr` null or a readable descriptor (read during the
 /// call only).
@@ -338,6 +358,11 @@ pub unsafe extern "C" fn ponko_ctx_set_hdr_output(ctx: *mut PonkoCtx, hdr: *cons
 
 /// Reads what the window does with the HDR settings into the fields of
 /// `out_status`'s version (set its `struct_size` and `version` first).
+///
+/// Unstable: the guide's "HDR displays" is experimental, so this may change
+/// or go in any release (STABILITY.md, "Unstable").
+/// cbindgen:prefix=/* Unstable: experimental (book/src/hdr.md) */
+///
 /// # Safety
 /// `ctx` null or live; `out_status` null or a writable descriptor with its
 /// header set (written during the call only).

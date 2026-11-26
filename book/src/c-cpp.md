@@ -92,7 +92,8 @@ the library yourself, make the same check at startup:
 ```
 
 Within a version, existing functions and struct layouts never change and new
-releases only add functions and enum values. The version stays 2 for 0.1.0: the
+releases only add functions and enum values, except for the
+[unstable functions](#unstable-functions). The version stays 2 for 0.1.0: the
 old C spellings were removed before any native artifact was released,
 and every `ponko_*` function, layout and numeric value is unchanged.
 
@@ -437,6 +438,28 @@ this complete: every public field of a Rust settings struct (`Post`,
 the same name in its C struct or descriptor, or a line in
 `scripts/settings-fields.txt` that names where C sets it, or a Rust-only entry
 with its reason.
+
+## Unstable functions
+
+A few C functions belong to experimental features (the guide's
+[maturity levels](maturity.md)): HDR output and WebRTC today. They are outside
+the ABI's promise and may change or go in any release, even within an ABI
+version. The header says so on the line above each one, and the C++ wrapper's
+doc comment repeats it:
+
+```text
+/* Unstable: experimental (book/src/hdr.md) */
+enum PonkoStatus ponko_ctx_hdr_status(struct PonkoCtx *ctx,
+                                      struct PonkoHdrStatus *out_status);
+```
+
+The types only they use (`PonkoHdrOutput`, `PonkoHdrStatus`, ...) are unstable
+with them. The names keep the `ponko_` prefix: when a feature becomes tested or
+proven, its functions lose the note and are covered from then on, without a
+rename. `grep -n "Unstable:" ponko.h` lists them;
+`scripts/experimental-api.txt` in the repository has each one with its reason.
+In Rust the same items keep their names too; STABILITY.md, "Unstable", lists
+them.
 
 ## C functions without a C++ wrapper
 

@@ -251,7 +251,7 @@
 
 #define PONKO_LIGHTING_EX_VERSION 1
 
-#define PONKO_POST_EX_VERSION 3
+#define PONKO_POST_EX_VERSION 4
 
 #define PONKO_PARTICLE_SETTINGS3D_EX_VERSION 1
 
@@ -3570,6 +3570,15 @@ typedef struct PonkoPostEx {
   uint32_t msaa;
   bool ssr_thin_objects;
   uint32_t upscaler;
+  bool auto_exposure;
+  float auto_exposure_min;
+  float auto_exposure_max;
+  float auto_exposure_compensation;
+  float auto_exposure_brighten_speed;
+  float auto_exposure_darken_speed;
+  float auto_exposure_center_weight;
+  bool auto_exposure_has_mask;
+  struct PonkoTexture auto_exposure_mask;
 } PonkoPostEx;
 
 typedef struct PonkoPostVolume {
@@ -5898,15 +5907,24 @@ enum PonkoStatus ponko_ctx_streamed_assets(struct PonkoCtx *ctx,
                                            size_t *out_len,
                                            size_t *out_names_len);
 
+/* Unstable: experimental (book/src/hdr.md) */
 enum PonkoStatus ponko_hdr_output_defaults(struct PonkoHdrOutput *out_hdr);
 
-enum PonkoStatus ponko_game_hdr_output(struct PonkoGame *game, const struct PonkoHdrOutput *hdr);
+/* Unstable: experimental (book/src/hdr.md) */
+enum PonkoStatus ponko_game_hdr_output(struct PonkoGame *game,
+                                       const struct PonkoHdrOutput *hdr);
 
-enum PonkoStatus ponko_ctx_hdr_output(struct PonkoCtx *ctx, struct PonkoHdrOutput *out_hdr);
+/* Unstable: experimental (book/src/hdr.md) */
+enum PonkoStatus ponko_ctx_hdr_output(struct PonkoCtx *ctx,
+                                      struct PonkoHdrOutput *out_hdr);
 
-enum PonkoStatus ponko_ctx_set_hdr_output(struct PonkoCtx *ctx, const struct PonkoHdrOutput *hdr);
+/* Unstable: experimental (book/src/hdr.md) */
+enum PonkoStatus ponko_ctx_set_hdr_output(struct PonkoCtx *ctx,
+                                          const struct PonkoHdrOutput *hdr);
 
-enum PonkoStatus ponko_ctx_hdr_status(struct PonkoCtx *ctx, struct PonkoHdrStatus *out_status);
+/* Unstable: experimental (book/src/hdr.md) */
+enum PonkoStatus ponko_ctx_hdr_status(struct PonkoCtx *ctx,
+                                      struct PonkoHdrStatus *out_status);
 
 enum PonkoStatus ponko_game_headless_frames(struct PonkoGame *game, bool on);
 
@@ -7024,18 +7042,21 @@ enum PonkoStatus ponko_ctx_penetrations3d(struct PonkoCtx *ctx,
                                           size_t capacity,
                                           size_t *out_count);
 
+/* Unstable: experimental (book/src/webrtc.md) */
 enum PonkoStatus ponko_net_messages_rtc_host(struct PonkoLobby *lobby,
                                              const char *stun_urls,
                                              const char *bind,
                                              size_t max_clients,
                                              struct PonkoNetMessages **out_endpoint);
 
+/* Unstable: experimental (book/src/webrtc.md) */
 enum PonkoStatus ponko_net_messages_rtc_join(struct PonkoLobby *lobby,
                                              uint32_t host,
                                              const char *stun_urls,
                                              const char *bind,
                                              struct PonkoNetMessages **out_endpoint);
 
+/* Unstable: experimental (book/src/webrtc.md) */
 enum PonkoStatus ponko_net_messages_rtc_peer(struct PonkoNetMessages *endpoint,
                                              uint64_t peer,
                                              uint32_t *out_member);
@@ -9540,6 +9561,10 @@ enum PonkoStatus ponko_ctx_set_lod_hysteresis(struct PonkoCtx *ctx,
 enum PonkoStatus ponko_ctx_lod_hysteresis(struct PonkoCtx *ctx,
                                           uint64_t entity,
                                           float *out_fraction);
+
+enum PonkoStatus ponko_ctx_set_lod_fade_time(struct PonkoCtx *ctx, uint64_t entity, float seconds);
+
+enum PonkoStatus ponko_ctx_lod_fade_time(struct PonkoCtx *ctx, uint64_t entity, float *out_seconds);
 
 enum PonkoStatus ponko_lod_instance_levels(float size,
                                            struct PonkoVec3 center,
