@@ -5886,3 +5886,28 @@ struct wall_count {
     });
     // ANCHOR_END: rollback_session
 }
+[[maybe_unused]] static void gltf_preview_lighting(ponko::ctx& ctx) {
+    // ANCHOR: gltf_preview
+    const ponko::transform3d at = ponko::transform3d_at({0, 0, -10});
+    const char* path = "models/house.glb";
+    ctx.world().spawn(at, ponko::model_of(ctx.load_mesh(path)));
+    // Choose EV100 for the photographed lighting. glTF stores no camera exposure.
+    // The point and spot lights come back so a viewer can despawn them with the model.
+    std::vector<ponko::entity> lamps = ctx.light_gltf(path, at, 8.0f);
+    (void)lamps;
+
+    // A light of your own, placed the same way (candela for point and spot lights, lux for the sun):
+    ponko::model_light sun = ponko::model_light_default();
+    sun.kind = PONKO_MODEL_LIGHT_SUN;
+    sun.sun_intensity = 512.0f;
+    ctx.place_light_exposed(sun, at, 9.0f); // the scene's sun, about 0.83 in engine units
+    // ANCHOR_END: gltf_preview
+}
+[[maybe_unused]] static void environment_map_guide(ponko::ctx& ctx) {
+    // ANCHOR: environment_map
+    ctx.load_environment("studio.hdr");                     // a 2:1 panorama, +Y up, +X at the center
+    ctx.load_environment_cube({"px.hdr", "nx.hdr", "py.hdr", "ny.hdr", "pz.hdr", "nz.hdr"});
+    ctx.set_studio_environment();                           // the neutral generated studio
+    ctx.clear_environment();                                // back to lighting from the sky
+    // ANCHOR_END: environment_map
+}

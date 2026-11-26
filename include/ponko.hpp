@@ -301,6 +301,14 @@ inline reflection_probe3d reflection_probe3d_default() { return ponko_reflection
 /// The built-in `SpotLight3D` component (Rust `SpotLight3D`): a cone of light along the entity's local -Z;
 /// angles are half angles in radians, range in meters (transform scale ignored).
 using spot_light3d = PonkoSpotLight3D;
+/// A light as a glTF file places it (Rust `ModelLight`), for ctx::place_light_exposed: set `kind` and fill the
+/// matching field (`point`, `spot`, or `sun_color` and `sun_intensity`). Intensities are the file's: candela
+/// for point and spot lights, lux for the sun. Start from model_light_default().
+using model_light = PonkoModelLight;
+/// Which kind of light a model_light is (Rust `ModelLightKind`).
+using model_light_kind = PonkoModelLightKind;
+/// A white point light of intensity 1 at the model's origin (Rust `ModelLight` with `PointLight3D::default()`).
+inline model_light model_light_default() { return ponko_model_light_default(); }
 /// A box that paints an image onto the opaque surfaces inside it (Rust
 /// `Decal3D`); start from decal3d_default(). Projected along its -Z.
 using decal3d = PonkoDecal3D;
@@ -10035,6 +10043,52 @@ public:
     /// sun_size and fog_falloff must be above 0; fog_sun_focus is 0 to under 1;
     /// light_shafts is 0 to 1.
     void set_sky(const ponko::sky& s) { detail::check(ponko_ctx_set_sky(raw_, &s)); }
+    /// Sets up the lighting of a glTF preview from the file at `path` (Rust `SceneSettings::light_gltf`): its
+    /// point, spot and directional lights placed at `at` with exposure `ev100` (lux and candela are multiplied by
+    /// `1 / (1.2 * 2^ev100)`; a non-finite `ev100` is 0, the rest is limited to +-32), the hue-preserving tone
+    /// curve (post.tonemap 4), and the neutral studio environment if the scene has none. The file's directional
+    /// light replaces the scene's sun. Call once per loaded scene. Returns the spawned point and spot lights, so a
+    /// viewer can despawn them when changing models. Throws (not found, or what's wrong with the file).
+    std::vector<entity> light_gltf(const char* path, transform3d at, float ev100) {
+        std::size_t count = 0;
+        detail::check(ponko_ctx_gltf_local_light_count(raw_, path, &count));
+        std::vector<entity> spawned(count);
+        std::size_t written = 0;
+        detail::check(ponko_ctx_light_gltf(raw_, path, at, ev100, spawned.data(), spawned.size(), &written));
+        spawned.resize(written);
+        return spawned;
+    }
+    /// Places one light as a glTF file places it, with exposure `ev100` (Rust `ModelLight::place_exposed`):
+    /// lux and candela are multiplied by `1 / (1.2 * 2^ev100)`. A point or spot light spawns an entity, which
+    /// this returns; the sun sets the scene's sun direction, color and intensity and returns an empty optional.
+    /// Use one `ev100` for all the lights of a scene.
+    std::optional<entity> place_light_exposed(const model_light& light, transform3d at, float ev100) {
+        entity e = 0;
+        bool spawned = false;
+        detail::check(ponko_ctx_place_light_exposed(raw_, &light, at, ev100, &e, &spawned));
+        if (!spawned) return std::nullopt;
+        return e;
+    }
+    /// Lights the scene with a linear HDR or EXR panorama (Rust `Graphics::try_load_environment`): a 2:1
+    /// latitude-longitude image with +Y at the top and +X at the center. The renderer filters it into the lighting
+    /// atlas the first frame it is drawn; the visible sky and fog stay the sky's. Throws (and keeps the old
+    /// environment) if it can't be read, isn't 2:1 or has non-finite radiance.
+    void load_environment(const char* path) { detail::check(ponko_ctx_load_environment(raw_, path)); }
+    /// Lights the scene with six equal-size square HDR or EXR images, in the order +X, -X, +Y, -Y, +Z, -Z (Rust
+    /// `Graphics::try_load_environment_cube`). Throws (and keeps the old environment) like load_environment.
+    void load_environment_cube(const std::array<const char*, 6>& faces) {
+        detail::check(ponko_ctx_load_environment_cube(raw_, faces.data()));
+    }
+    /// Lights the scene with the neutral procedural studio (Rust `EnvironmentMap::studio`).
+    void set_studio_environment() { detail::check(ponko_ctx_set_studio_environment(raw_)); }
+    /// Goes back to lighting the scene from the sky.
+    void clear_environment() { detail::check(ponko_ctx_clear_environment(raw_)); }
+    /// Whether the scene has an environment map set.
+    bool has_environment() const {
+        bool has = false;
+        detail::check(ponko_ctx_has_environment(raw_, &has));
+        return has;
+    }
     /// Exposure, bloom, color grading and tone mapping of the 3D frame.
     ponko::post post() const { ponko::post p{}; detail::check(ponko_ctx_post(raw_, &p)); return p; }
     /// GTAO ao_half_resolution uses bilateral upsampling; ao_temporal accumulates
