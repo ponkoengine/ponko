@@ -145,22 +145,6 @@ impl Graphics {
                 layer.len()
             )));
         }
-        // The texture mip limit: every layer without its largest levels.
-        let drop = crate::mip_limit::levels_to_drop(width, height, self.texture_mip_limit);
-        let reduced: Vec<Vec<u8>> = if drop > 0 {
-            layers
-                .iter()
-                .map(|layer| crate::mip_limit::reduce(width, height, layer, drop).2)
-                .collect()
-        } else {
-            Vec::new()
-        };
-        let reduced_layers: Vec<&[u8]> = reduced.iter().map(Vec::as_slice).collect();
-        let (layers, width, height) = if drop > 0 {
-            (&reduced_layers[..], (width >> drop).max(1), (height >> drop).max(1))
-        } else {
-            (layers, width, height)
-        };
         let id = self.assets3d.array_ids.next("texture array");
         let slot = id & INDEX_MASK;
         if let Some(renderer) = self.renderer.as_mut()
@@ -297,6 +281,17 @@ impl Graphics {
             )
             .with_path(paths[i]));
         }
+        // The texture mip limit: image files drop their largest levels.
+        // Arrays made from pixels in code (`create_texture_array`) keep
+        // their size: they are often lookup data read by texel.
+        let drop = crate::mip_limit::levels_to_drop(width, height, self.texture_mip_limit);
+        if drop > 0 {
+            for image in &mut images {
+                let (w, h, rgba) = crate::mip_limit::reduce(image.width, image.height, &image.rgba, drop);
+                (image.width, image.height, image.rgba) = (w, h, rgba);
+            }
+        }
+        let (width, height) = images.first().map_or((width, height), |im| (im.width, im.height));
         let layers: Vec<&[u8]> = images.iter().map(|im| im.rgba.as_slice()).collect();
         self.try_create_texture_array(width, height, &layers, kind)
     }

@@ -320,13 +320,17 @@ impl Graphics {
     /// that doesn't fit spills into system memory and every frame waits on
     /// it. 0 (the default) keeps full resolution; at most 4.
     ///
-    /// It applies to the images of model files (`load_mesh`, scenes and
-    /// their materials) and to texture arrays (`create_texture_array`,
-    /// `load_texture_array`), RGBA and block-compressed alike. Textures keep
-    /// at least 32 pixels on each side, so small masks and lookup strips
-    /// don't change. Textures loaded with `load_texture` (sprites, UI) and
-    /// render targets never do. Already loaded textures keep their size:
-    /// set it before loading the world, or reload what should change.
+    /// It applies to images loaded from files for 3D: the images of model
+    /// files (`load_mesh`, scenes and their materials) and texture arrays
+    /// loaded with `load_texture_array`, RGBA and block-compressed alike.
+    /// Textures keep at least 32 pixels on each side, so small masks and
+    /// lookup strips don't change. Never changed: textures and arrays made
+    /// from pixels in code (`create_texture`, `create_texture_array`),
+    /// which are often data a shader reads texel by texel at the size it
+    /// was made (a weight map, a packed table), textures loaded with
+    /// `load_texture` (sprites, UI) and render targets. Already loaded
+    /// textures keep their size: set it before loading the world, or reload
+    /// what should change.
     ///
     /// ```
     /// # use ponko::prelude::*;
