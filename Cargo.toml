@@ -202,7 +202,9 @@ subsecond = { version = "0.7.10", optional = true }
 dioxus-devtools = { version = "0.7.10", default-features = false, optional = true }
 # `Instant` that also works in browsers; on desktop it is std's own type.
 web-time = "1.1.0"
-steamworks = { version = "0.13.1", optional = true }
+# `raw-bindings`: the SDK calls `steamworks` has no safe wrapper for
+# (inviting one user to a lobby), wrapped by `net::SteamLobby`.
+steamworks = { version = "0.13.1", optional = true, features = ["raw-bindings"] }
 gltf = { version = "1.4.1", default-features = false, features = ["utils", "names", "extras"], optional = true }
 # Level files from level editors (`ponko::tilemap`): `quick-xml` reads
 # Tiled's XML maps (`.tmx`) and tilesets; `flate2` unpacks their zlib and
