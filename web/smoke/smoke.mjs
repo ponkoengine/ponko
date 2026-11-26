@@ -11,6 +11,7 @@
 //   0  passed (for a --case self-test: the expected failure was detected)
 //   1  the game failed (a panic, a failed asset fetch, a stall, ...)
 //   2  unsupported: the browser could not start, or lacks the backend asked for
+//      (with --require-gpu that is a failure, 1, as is a software renderer)
 //   3  bad arguments or a missing build
 //
 // Every run writes report.json (browser, backend, adapter, timings, console),
@@ -51,6 +52,7 @@ import {
   parseArgs,
   parseFixtures,
   parseRetryPlace,
+  softwareGpuReason,
   startWatchdog,
   unsupportedReason,
   withDeadline,
@@ -666,6 +668,13 @@ async function main() {
     }
     const mismatch = checkEngineGpu(snapshot.gpu, report.backend, args.engineGpu === "required");
     if (mismatch) throw new Failure("backend", mismatch);
+    // 1c. On a machine with a GPU (--require-gpu): the browser and the
+    //     engine must both be on it, not on a software renderer.
+    if (args.requireGpu) {
+      const software = softwareGpuReason(report.capabilities, report.backend, snapshot.gpu);
+      if (software) throw new Failure("no-gpu", `a real GPU is required (--require-gpu), but ${software}`);
+      report.realGpu = true;
+    }
 
     // 2. Assets: the index and the file were fetched (and a texture decoded).
     for (const path of ["/assets/index.json", `/assets/${args.asset}`]) {
@@ -924,7 +933,10 @@ async function main() {
         await withDeadline(page.screenshot({ path: join(args.out, "page.png") }), CALL_TIMEOUT_MS, "the failure screenshot").catch(() => {});
       }
     }
-    if (kind === "unsupported") {
+    if (kind === "unsupported" && args.requireGpu) {
+      // Where a real GPU is required, a browser without the backend fails.
+      await finish(EXIT.app, "no-gpu", `a real GPU is required (--require-gpu), but ${message}`);
+    } else if (kind === "unsupported") {
       await finish(args.allowUnsupported ? EXIT.pass : EXIT.unsupported, kind, message);
     } else if (CASES[args.case]) {
       const expected = CASES[args.case] === kind;

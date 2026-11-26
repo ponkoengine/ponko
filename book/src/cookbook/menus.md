@@ -132,3 +132,31 @@ Move a panel's layout from off the left edge to its place in 0.4 seconds, easing
 
 </div>
 </div>
+
+
+## Add a developer console
+
+Register `echo` with a required integer argument and give the game a
+`show_paths` switch. Press Backquote, enter `echo 42`, then try
+`show_paths true`. Read the switch from a drawing system before drawing
+debug paths. The [console guide](../control.md#developer-console) shows how
+to enable the console in a release build and call it through MCP.
+
+<div class="lang-pair">
+<div>
+
+```rust
+# use ponko::prelude::*;
+# use ponko::console::{ConsoleArg, ConsoleType, ConsoleValue};
+{{#include ../../../tests/console.rs:developer_console}}
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../../examples/cpp/cookbook.cpp:developer_console}}
+```
+
+</div>
+</div>

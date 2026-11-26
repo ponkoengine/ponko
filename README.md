@@ -12,7 +12,8 @@ No large visual editor is required.
 [**Examples in the browser**](https://ponko.dev/guide/web.html) ·
 [**API**](https://docs.rs/ponko/) · [**Project vision**](PROJECT_VISION.md) ·
 [**Roadmap**](ROADMAP.md) · [**Architecture**](ARCHITECTURE.md) ·
-[**Contribute**](CONTRIBUTING.md)
+[**Contribute**](CONTRIBUTING.md) ·
+[**Discussions**](https://github.com/ponkoengine/ponko/discussions)
 
 Formerly Crabby Engine; the [naming chapter](https://ponko.dev/guide/naming.html)
 maps the old names to the new ones. Ponko is at 0.x: read
@@ -315,6 +316,11 @@ and [coding-agent rules](AGENTS.md). Performance changes need representative
 measurements; correctness and compatibility come first. The
 [stability policy](STABILITY.md) covers the API and ABI, saved worlds,
 MCP contracts and determinism within its stated scope.
+
+Questions, ideas and things you made go to
+[GitHub Discussions](https://github.com/ponkoengine/ponko/discussions);
+maintainers answer new issues and discussions within a week. How decisions are
+made is in [GOVERNANCE.md](GOVERNANCE.md).
 
 Follow the [code of conduct](CODE_OF_CONDUCT.md). Report vulnerabilities through
 [SECURITY.md](SECURITY.md).

@@ -62,7 +62,7 @@ pub unsafe extern "C" fn ponko_game_free(game: *mut PonkoGame) {
     }
 }
 
-unsafe fn name<'a>(ptr: *const c_char) -> Result<&'a str, Failure> {
+pub(crate) unsafe fn name<'a>(ptr: *const c_char) -> Result<&'a str, Failure> {
     if ptr.is_null() {
         return Err(invalid("string is null"));
     }

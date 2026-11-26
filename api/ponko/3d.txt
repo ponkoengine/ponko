@@ -2139,6 +2139,54 @@ impl serde_core::ser::Serialize for ponko::color::Color
 pub fn ponko::color::Color::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for ponko::color::Color
 pub fn ponko::color::Color::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub mod ponko::console
+#[non_exhaustive] pub enum ponko::console::ConsoleType
+pub ponko::console::ConsoleType::Bool
+pub ponko::console::ConsoleType::Float
+pub ponko::console::ConsoleType::Integer
+pub ponko::console::ConsoleType::Text
+impl core::clone::Clone for ponko::console::ConsoleType
+pub fn ponko::console::ConsoleType::clone(&self) -> Self
+impl core::cmp::Eq for ponko::console::ConsoleType
+impl core::cmp::PartialEq for ponko::console::ConsoleType
+pub fn ponko::console::ConsoleType::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::console::ConsoleType
+pub fn ponko::console::ConsoleType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for ponko::console::ConsoleType
+pub fn ponko::console::ConsoleType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::console::ConsoleType
+impl core::marker::StructuralPartialEq for ponko::console::ConsoleType
+#[non_exhaustive] pub enum ponko::console::ConsoleValue
+pub ponko::console::ConsoleValue::Bool(bool)
+pub ponko::console::ConsoleValue::Float(f64)
+pub ponko::console::ConsoleValue::Integer(i64)
+pub ponko::console::ConsoleValue::Text(alloc::string::String)
+impl core::clone::Clone for ponko::console::ConsoleValue
+pub fn ponko::console::ConsoleValue::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::console::ConsoleValue
+pub fn ponko::console::ConsoleValue::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::console::ConsoleValue
+pub fn ponko::console::ConsoleValue::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for ponko::console::ConsoleValue
+pub fn ponko::console::ConsoleValue::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::console::ConsoleValue
+pub struct ponko::console::Console
+impl ponko::console::Console
+pub fn ponko::console::Console::run(&mut ponko::prelude::Ctx, &str) -> core::result::Result<alloc::string::String, ponko::error::Error>
+pub fn ponko::console::Console::value(&self, &str) -> core::option::Option<&ponko::console::ConsoleValue>
+impl core::default::Default for ponko::console::Console
+pub fn ponko::console::Console::default() -> Self
+pub struct ponko::console::ConsoleArg
+impl ponko::console::ConsoleArg
+pub fn ponko::console::ConsoleArg::new(impl core::convert::Into<alloc::string::String>, ponko::console::ConsoleType) -> Self
+impl core::clone::Clone for ponko::console::ConsoleArg
+pub fn ponko::console::ConsoleArg::clone(&self) -> Self
+impl core::cmp::Eq for ponko::console::ConsoleArg
+impl core::cmp::PartialEq for ponko::console::ConsoleArg
+pub fn ponko::console::ConsoleArg::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::console::ConsoleArg
+pub fn ponko::console::ConsoleArg::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::console::ConsoleArg
 pub mod ponko::crash
 #[non_exhaustive] pub enum ponko::crash::CrashKind
 pub ponko::crash::CrashKind::Error
@@ -3731,12 +3779,16 @@ impl ponko::game::ConfiguredGame
 pub fn ponko::game::ConfiguredGame::add<T>(self, ponko::game::Phase, impl ponko::prelude::IntoSystem<T>) -> Self
 pub fn ponko::game::ConfiguredGame::app_id(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn ponko::game::ConfiguredGame::barrier(self, ponko::game::Phase) -> Self
+pub fn ponko::game::ConfiguredGame::console_command(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, &[ponko::console::ConsoleArg], impl core::ops::function::FnMut(&mut ponko::prelude::Ctx, &[ponko::console::ConsoleValue]) -> core::result::Result<alloc::string::String, ponko::error::Error> + 'static) -> Self
+pub fn ponko::game::ConfiguredGame::console_key(self, ponko::input::Key) -> Self
+pub fn ponko::game::ConfiguredGame::console_variable(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, ponko::console::ConsoleValue) -> Self
 pub fn ponko::game::ConfiguredGame::control_endpoint(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::control_method(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::ops::function::FnMut(&mut ponko::prelude::Ctx, &ponko::reflect::JsonValue) -> core::result::Result<ponko::reflect::JsonValue, ponko::error::Error> + 'static) -> Self
 pub fn ponko::game::ConfiguredGame::crash_reports(self, impl core::convert::Into<ponko::crash::CrashReports>) -> Self
 pub fn ponko::game::ConfiguredGame::data_dir(self, impl core::convert::Into<std::path::PathBuf>) -> Self
 pub fn ponko::game::ConfiguredGame::debug_draw(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::debug_toggle(self, impl core::convert::Into<alloc::string::String>, bool) -> Self
+pub fn ponko::game::ConfiguredGame::developer_console(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::fixed_hz(self, u32) -> Self
 pub fn ponko::game::ConfiguredGame::fullscreen(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::gamepad_backend(self, impl ponko::input::GamepadBackend) -> Self
@@ -3787,12 +3839,16 @@ pub fn ponko::game::Game::app_id(self, impl core::convert::Into<alloc::string::S
 pub fn ponko::game::Game::barrier(self, ponko::game::Phase) -> Self
 pub fn ponko::game::Game::check_order(&self) -> core::result::Result<(), ponko::schedule::OrderError>
 pub fn ponko::game::Game::configured(self) -> ponko::game::ConfiguredGame
+pub fn ponko::game::Game::console_command(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, &[ponko::console::ConsoleArg], impl core::ops::function::FnMut(&mut ponko::prelude::Ctx, &[ponko::console::ConsoleValue]) -> core::result::Result<alloc::string::String, ponko::error::Error> + 'static) -> Self
+pub fn ponko::game::Game::console_key(self, ponko::input::Key) -> Self
+pub fn ponko::game::Game::console_variable(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, ponko::console::ConsoleValue) -> Self
 pub fn ponko::game::Game::control_endpoint(self, bool) -> Self
 pub fn ponko::game::Game::control_method(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::ops::function::FnMut(&mut ponko::prelude::Ctx, &ponko::reflect::JsonValue) -> core::result::Result<ponko::reflect::JsonValue, ponko::error::Error> + 'static) -> Self
 pub fn ponko::game::Game::crash_reports(self, impl core::convert::Into<ponko::crash::CrashReports>) -> Self
 pub fn ponko::game::Game::data_dir(self, impl core::convert::Into<std::path::PathBuf>) -> Self
 pub fn ponko::game::Game::debug_draw(self, bool) -> Self
 pub fn ponko::game::Game::debug_toggle(self, impl core::convert::Into<alloc::string::String>, bool) -> Self
+pub fn ponko::game::Game::developer_console(self, bool) -> Self
 pub fn ponko::game::Game::fixed_hz(self, u32) -> Self
 pub fn ponko::game::Game::fullscreen(self, bool) -> Self
 pub fn ponko::game::Game::gamepad_backend(self, impl ponko::input::GamepadBackend) -> Self
@@ -9230,12 +9286,16 @@ impl ponko::game::ConfiguredGame
 pub fn ponko::game::ConfiguredGame::add<T>(self, ponko::game::Phase, impl ponko::prelude::IntoSystem<T>) -> Self
 pub fn ponko::game::ConfiguredGame::app_id(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn ponko::game::ConfiguredGame::barrier(self, ponko::game::Phase) -> Self
+pub fn ponko::game::ConfiguredGame::console_command(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, &[ponko::console::ConsoleArg], impl core::ops::function::FnMut(&mut ponko::prelude::Ctx, &[ponko::console::ConsoleValue]) -> core::result::Result<alloc::string::String, ponko::error::Error> + 'static) -> Self
+pub fn ponko::game::ConfiguredGame::console_key(self, ponko::input::Key) -> Self
+pub fn ponko::game::ConfiguredGame::console_variable(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, ponko::console::ConsoleValue) -> Self
 pub fn ponko::game::ConfiguredGame::control_endpoint(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::control_method(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::ops::function::FnMut(&mut ponko::prelude::Ctx, &ponko::reflect::JsonValue) -> core::result::Result<ponko::reflect::JsonValue, ponko::error::Error> + 'static) -> Self
 pub fn ponko::game::ConfiguredGame::crash_reports(self, impl core::convert::Into<ponko::crash::CrashReports>) -> Self
 pub fn ponko::game::ConfiguredGame::data_dir(self, impl core::convert::Into<std::path::PathBuf>) -> Self
 pub fn ponko::game::ConfiguredGame::debug_draw(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::debug_toggle(self, impl core::convert::Into<alloc::string::String>, bool) -> Self
+pub fn ponko::game::ConfiguredGame::developer_console(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::fixed_hz(self, u32) -> Self
 pub fn ponko::game::ConfiguredGame::fullscreen(self, bool) -> Self
 pub fn ponko::game::ConfiguredGame::gamepad_backend(self, impl ponko::input::GamepadBackend) -> Self
@@ -9282,6 +9342,7 @@ pub ponko::prelude::Ctx::assets: ponko::assets::Assets
 pub ponko::prelude::Ctx::audio: ponko::audio::Audio
 pub ponko::prelude::Ctx::camera: ponko::d2::Camera
 pub ponko::prelude::Ctx::commands: ponko_ecs::commands::Commands
+pub ponko::prelude::Ctx::console: ponko::console::Console
 pub ponko::prelude::Ctx::debug: ponko::debug::DebugDraw
 pub ponko::prelude::Ctx::events: ponko::events::Events
 pub ponko::prelude::Ctx::gfx: ponko::gfx::Graphics
@@ -9457,12 +9518,16 @@ pub fn ponko::game::Game::app_id(self, impl core::convert::Into<alloc::string::S
 pub fn ponko::game::Game::barrier(self, ponko::game::Phase) -> Self
 pub fn ponko::game::Game::check_order(&self) -> core::result::Result<(), ponko::schedule::OrderError>
 pub fn ponko::game::Game::configured(self) -> ponko::game::ConfiguredGame
+pub fn ponko::game::Game::console_command(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, &[ponko::console::ConsoleArg], impl core::ops::function::FnMut(&mut ponko::prelude::Ctx, &[ponko::console::ConsoleValue]) -> core::result::Result<alloc::string::String, ponko::error::Error> + 'static) -> Self
+pub fn ponko::game::Game::console_key(self, ponko::input::Key) -> Self
+pub fn ponko::game::Game::console_variable(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, ponko::console::ConsoleValue) -> Self
 pub fn ponko::game::Game::control_endpoint(self, bool) -> Self
 pub fn ponko::game::Game::control_method(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::ops::function::FnMut(&mut ponko::prelude::Ctx, &ponko::reflect::JsonValue) -> core::result::Result<ponko::reflect::JsonValue, ponko::error::Error> + 'static) -> Self
 pub fn ponko::game::Game::crash_reports(self, impl core::convert::Into<ponko::crash::CrashReports>) -> Self
 pub fn ponko::game::Game::data_dir(self, impl core::convert::Into<std::path::PathBuf>) -> Self
 pub fn ponko::game::Game::debug_draw(self, bool) -> Self
 pub fn ponko::game::Game::debug_toggle(self, impl core::convert::Into<alloc::string::String>, bool) -> Self
+pub fn ponko::game::Game::developer_console(self, bool) -> Self
 pub fn ponko::game::Game::fixed_hz(self, u32) -> Self
 pub fn ponko::game::Game::fullscreen(self, bool) -> Self
 pub fn ponko::game::Game::gamepad_backend(self, impl ponko::input::GamepadBackend) -> Self

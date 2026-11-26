@@ -8,7 +8,13 @@
 //! `common/web_smoke.rs`) adds the triangles and models drawn last frame, so a
 //! scene that loaded but draws nothing is caught:
 //!
-//! `{"fixture":"web_smoke_3d","ticks":120,"frames":118,"clicks":1,"size":[800,600],"triangles":1234,"models_drawn":8}`
+//! `{"fixture":"web_smoke_3d","ticks":120,"frames":118,"clicks":1,"size":[800,600],"triangles":1234,"models_drawn":8,"frame_stats":{...}}`
+//!
+//! `frame_stats` is the engine's own account of the last few seconds
+//! (`ctx.perf.frame_stats()`: median and 95th-percentile frame time, CPU
+//! time in systems and in drawing, display wait, and GPU time where the
+//! browser times GPU passes), which `web/smoke/frame-times.mjs` reports
+//! beside the frame times it measures in the page.
 //!
 //! The failure cases are `web_smoke`'s. On the desktop it opens a window
 //! (`cargo run --example web_smoke_3d --features 3d`).
@@ -98,10 +104,29 @@ fn frame(ticks: Rc<Cell<u64>>) -> impl FnMut(&mut Ctx) {
         fixture.0.frame(
             ctx,
             ticks.get(),
-            json!({ "triangles": ctx.perf.render_stats().triangles, "models_drawn": ctx.gfx.models_drawn() }),
+            json!({
+                "triangles": ctx.perf.render_stats().triangles,
+                "models_drawn": ctx.gfx.models_drawn(),
+                "frame_stats": frame_stats(ctx),
+            }),
         );
         ctx.world.insert_resource(fixture);
     }
+}
+
+/// The engine's frame statistics, for the frame-times runner.
+#[cfg(feature = "3d")]
+fn frame_stats(ctx: &Ctx) -> serde_json::Value {
+    let s = ctx.perf.frame_stats();
+    json!({
+        "frames": s.frames,
+        "p50_ms": s.p50_ms,
+        "p95_ms": s.p95_ms,
+        "systems_ms": s.systems_ms,
+        "render_cpu_ms": s.render_cpu_ms,
+        "display_wait_ms": s.display_wait_ms,
+        "gpu_ms": s.gpu_ms,
+    })
 }
 
 /// A 16x16 tangent-space normal map of a grid of round bumps, and an ORM map

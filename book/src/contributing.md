@@ -2,13 +2,20 @@
 
 > **Maturity: not a feature.** How to contribute.
 
-Start with [`CONTRIBUTING.md`](../../CONTRIBUTING.md).
-The detailed maintainer/agent integration checklist is in
-[`AGENTS.md`](../../AGENTS.md).
+Start with the quick start at the top of
+[`CONTRIBUTING.md`](../../CONTRIBUTING.md): clone, run
+`python3 scripts/run-checks.py --quick`, pick a `good first issue`, open a pull
+request. The detailed maintainer/agent integration checklist is in
+[`AGENTS.md`](../../AGENTS.md); how decisions are made and who can merge is in
+[`GOVERNANCE.md`](../../GOVERNANCE.md).
 In short:
 
-- Work on a branch, open a pull request to `main`, and run the checks your
-  change needs locally (there is no CI).
+- Talk in [GitHub Discussions](https://github.com/ponkoengine/ponko/discussions)
+  (there is no chat room for now); maintainers answer new issues and
+  discussions within a week.
+- Work on a branch from `main` (there is no other integration branch), open a
+  pull request to `main`, and run the checks your change needs locally (there
+  is no CI).
 - Add relevant tests for changed behavior and helpful nearby API comments.
   You do not need a doctest for every item or unrelated local toolchains.
 - Performance claims need release-build numbers in the PR.

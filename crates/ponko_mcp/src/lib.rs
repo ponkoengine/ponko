@@ -540,6 +540,24 @@ fn tools() -> Vec<Tool> {
             required: &[],
         },
         Tool {
+            name: "console_help",
+            description: "List the game's developer console commands and variables with their argument types and help text.",
+            writes: false,
+            params: no_params,
+            required: &[],
+        },
+        Tool {
+            name: "run_console",
+            description: "Run one line in the game's developer console and return its text output. Use console_help to see commands and variables. Commands can change the game, so read-only servers refuse this tool.",
+            writes: true,
+            params: || {
+                json!({
+                    "line": { "type": "string", "description": "A command with positional arguments, or a variable name with an optional new value" }
+                })
+            },
+            required: &["line"],
+        },
+        Tool {
             name: "call_game_method",
             description: "Call a method the game or one of its plugins added to its control endpoint (Rust `Game::control_method`): game-specific tools such as `weather.set_rain`. instance_capabilities lists them in `methods`, marked `added: true`, with what each takes; engine methods are reached through this server's other tools. Returns the method's answer, or its error.",
             writes: true,
@@ -1050,6 +1068,8 @@ fn tool_methods(name: &str) -> Option<&'static [&'static str]> {
         "record_trace" => &["perf.trace"],
         "perf_hud" => &["perf.hud"],
         "debug_draw" => &["debug.draw"],
+        "console_help" => &["debug.console.help"],
+        "run_console" => &["debug.console.run"],
         // Methods the game added; checked against its list when called.
         "call_game_method" => &[],
         "set_graphics_quality" => &["quality.set"],
@@ -1341,6 +1361,8 @@ impl Server {
             "debug_draw" => self
                 .instance(args)?
                 .call("debug.draw", pass(&["on", "views", "toggles", "clear"])),
+            "console_help" => self.instance(args)?.call("debug.console.help", json!({})),
+            "run_console" => self.instance(args)?.call("debug.console.run", pass(&["line"])),
             "call_game_method" => {
                 let method = args
                     .get("method")

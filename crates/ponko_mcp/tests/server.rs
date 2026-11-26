@@ -52,6 +52,28 @@ fn start_game_with(name: &'static str, injection: bool) -> (u16, thread::JoinHan
         Game::new(name, 1, 1)
             .control_endpoint(true)
             .input_injection(injection)
+            .developer_console(true)
+            .console_variable(
+                "round_scale",
+                "Scale the round",
+                ponko::console::ConsoleValue::Float(1.0),
+            )
+            .console_command(
+                "bump_round",
+                "Advance the round",
+                &[ponko::console::ConsoleArg::new(
+                    "by",
+                    ponko::console::ConsoleType::Integer,
+                )],
+                |ctx, args| {
+                    let [ponko::console::ConsoleValue::Integer(by)] = args else {
+                        unreachable!("arguments are validated before dispatch");
+                    };
+                    let rules = ctx.world.resource_mut::<Rules>();
+                    rules.round += *by as u32;
+                    Ok(rules.round.to_string())
+                },
+            )
             .sim_system(regen)
             // What a plugin adds for tools: a debug toggle and a method.
             .debug_toggle("rules.regen", false)
@@ -717,10 +739,55 @@ fn agents_drive_several_games_through_mcp() {
     agent.tool("quit_instance", json!({ "instance": "pad" })).unwrap();
     pad.join().unwrap();
 
+    console_tools_share_headless_game_state_and_enforce_read_only(&mut agent, &dir);
     agent.tool("quit_instance", json!({ "instance": "alpha" })).unwrap();
     agent.tool("quit_instance", json!({ "instance": b })).unwrap();
     game_a.join().unwrap();
     game_b.join().unwrap();
     assert_eq!(agent.tool("list_instances", json!({})).unwrap(), json!([]));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn console_tools_share_headless_game_state_and_enforce_read_only(agent: &mut Agent, dir: &Path) {
+    let mut readonly = Agent::new(dir, true);
+    let instance = "alpha";
+    let list = readonly.tool("console_help", json!({ "instance": instance })).unwrap();
+    assert!(list["help"].as_str().unwrap().contains("bump_round <by:integer>"));
+    assert!(list["help"].as_str().unwrap().contains("round_scale [value:float]"));
+    assert!(!readonly.tool_names().contains(&"run_console".to_string()));
+    let refused = readonly
+        .tool("run_console", json!({ "instance": instance, "line": "bump_round 2" }))
+        .unwrap_err();
+    assert!(refused.contains("read-only"));
+    let bad = agent
+        .tool(
+            "run_console",
+            json!({ "instance": instance, "line": "bump_round several" }),
+        )
+        .unwrap_err();
+    assert!(bad.contains("by") && bad.contains("integer"));
+    let before = agent
+        .tool("get_resource", json!({"instance": instance, "resource": "Rules"}))
+        .unwrap()["round"]
+        .as_u64()
+        .unwrap();
+    let result = agent
+        .tool("run_console", json!({ "instance": instance, "line": "bump_round 3" }))
+        .unwrap();
+    assert_eq!(result["output"], (before + 3).to_string());
+    let after = agent
+        .tool("get_resource", json!({"instance": instance, "resource": "Rules"}))
+        .unwrap();
+    assert_eq!(after["round"], before + 3);
+    let result = agent
+        .tool(
+            "run_console",
+            json!({ "instance": instance, "line": "round_scale 1.5" }),
+        )
+        .unwrap();
+    assert_eq!(result["output"], "1.5");
+    let result = agent
+        .tool("run_console", json!({ "instance": instance, "line": "round_scale" }))
+        .unwrap();
+    assert_eq!(result["output"], "1.5");
 }

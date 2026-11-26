@@ -1761,6 +1761,42 @@ static void walking_two_hundred_pixels_takes_five_steps() {
     check(as_asked && varied, "footsteps: at 0.6 volume, each a little different");
 }
 
+// ANCHOR: developer_console
+static ponko::game& add_console(ponko::game& game) {
+    return game.console_variable("show_paths", "Show path debug lines", false)
+        .console_command("echo", "Print a count", {{"count", PONKO_CONSOLE_INTEGER}},
+            [](ponko::ctx&, const std::vector<ponko::console_value>& args) {
+                return "Count: " + std::to_string(std::get<std::int64_t>(args.at(0)));
+            });
+}
+// ANCHOR_END: developer_console
+
+static void the_cookbook_console_runs_a_native_command() {
+    const auto press = [](ponko::ctx& ctx, ponko::key key) {
+        ctx.feed_input(ponko::input_event::key(key, true));
+        ctx.feed_input(ponko::input_event::key(key, false));
+    };
+    ponko::game game("c++ console", 640, 480);
+    add_console(game)
+        .headless_frames(true)
+        .developer_console(true)
+        .console_key(PONKO_KEY_F8)
+        .system([&](ponko::ctx& ctx) {
+            if (ctx.sim_tick() == 1) {
+                const auto paths = ctx.console_value("show_paths");
+                check(paths && !std::get<bool>(*paths), "console: variable starts false");
+                check(!ctx.console_value("missing"), "console: missing variable");
+                ctx.ui_retained().insert_text("echo 42");
+                press(ctx, PONKO_KEY_ENTER);
+            } else if (ctx.sim_tick() == 2) {
+                auto ui = ctx.ui_retained();
+                const auto output = ui.find("ponko.console.output");
+                check(output && ui.text(*output).find("Count: 42") != std::string::npos, "console: typed command returns output");
+            }
+        })
+        .run_headless(2, [&](ponko::ctx& ctx) { press(ctx, PONKO_KEY_F8); });
+}
+
 int main() {
     wasd_moves_the_player();
     a_stick_and_keys_move_the_same_action();
@@ -1813,6 +1849,7 @@ int main() {
     the_hero_walks_where_the_camera_looks_and_the_camera_stays_behind();
     three_crabs_from_one_prefab_file_share_a_speed_and_differ_in_heading();
     walking_two_hundred_pixels_takes_five_steps();
+    the_cookbook_console_runs_a_native_command();
     if (failures != 0) return 1;
     std::puts("cookbook: all recipes ran");
     return 0;
