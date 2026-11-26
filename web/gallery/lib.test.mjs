@@ -1,7 +1,7 @@
 // The gallery's manifest and pages, without a build or a browser:
 // `node --test web/gallery`.
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -47,6 +47,19 @@ test("every listed example exists and asks for the features Cargo.toml requires"
       assert.ok(e.features.includes(feature), `${e.example} needs the ${feature} feature`);
     }
   }
+});
+
+test("every example is in the gallery or named in the README with why it isn't", () => {
+  const listed = new Set(parseManifest(manifestText).map((e) => e.example));
+  const readme = readFileSync(join(HERE, "README.md"), "utf8");
+  const start = readme.indexOf("### Which examples are in, and why the rest aren't");
+  const why = readme.slice(start, readme.indexOf("\n## ", start));
+  const examples = readdirSync(join(ROOT, "examples"), { withFileTypes: true })
+    .filter((d) => (d.isFile() && d.name.endsWith(".rs")) || (d.isDirectory() && existsSync(join(ROOT, "examples", d.name, "main.rs"))))
+    .map((d) => d.name.replace(/\.rs$/, ""));
+  assert.ok(examples.length > listed.size);
+  const unexplained = examples.filter((name) => !listed.has(name) && !why.includes(`\`${name}\``));
+  assert.deepEqual(unexplained, [], "add each to examples.json, or name it in the README's \"Which examples are in\" with the reason");
 });
 
 test("the gallery has 2D examples, a 3D scene and a demo that needs WebGPU", () => {

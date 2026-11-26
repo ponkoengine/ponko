@@ -1805,6 +1805,73 @@ jobs:
         if: ${{ !cancelled() }}
         run: node web/smoke/frame-times.mjs --repeat 1
 
+  # Every example that claims the web (the gallery's list,
+  # web/gallery/examples.json; the fixtures and the multiplayer, replication,
+  # video, threads and spectrum examples have their own steps in web-smoke),
+  # built for wasm and played in headless Chromium on WebGL2 and on WebGPU,
+  # then the 3D reference game, Shard Grove, played in the browser: its keys
+  # (title, pause, resume) and its whole walk-through (`?smoke=walkthrough`:
+  # shards, a save, back to the title, continue, the gate, the end screen),
+  # on WebGPU and WebGL2. Slow: 50 release wasm builds (1.1 GB of sites in
+  # target/web and 4.5 GB of build output; delete both afterwards). Run
+  # on a Mac, where Chromium's new headless mode draws with the GPU through
+  # Metal (`--require-gpu`); see book/src/check-results/macos.md.
+  web-examples:
+    local-tags: [web, gpu, slow]
+    local-requires: [node, npm, wasm-bindgen]
+    name: Every web example (headless Chromium and WebKit, WebGPU and WebGL2)
+    runs-on: macos-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Install the runner, Chromium and WebKit
+        local-skip: Install the browsers and npm dependencies before the run (see CONTRIBUTING.md).
+        run: |
+          npm ci --prefix web/smoke --no-audit --no-fund
+          node web/smoke/node_modules/playwright-core/cli.js install chromium webkit
+      - name: Build every gallery example and Shard Grove
+        timeout-minutes: 150
+        run: |
+          node web/gallery/build.mjs
+          web/build.sh --features navmesh,physics3d shard_grove
+      # The headless shell: WebGL2 on its software renderer (SwiftShader).
+      - name: Every gallery page, Chromium, WebGL2 (software)
+        timeout-minutes: 20
+        if: ${{ !cancelled() }}
+        run: node web/smoke/gallery.mjs --browser chromium --backend webgl2
+      # The full browser's new headless mode: the Mac's own GPU, through
+      # ANGLE on Metal for WebGL2 and the Metal adapter for WebGPU.
+      - name: Every gallery page, Chromium, WebGL2 on the GPU
+        timeout-minutes: 20
+        if: ${{ !cancelled() }}
+        run: node web/smoke/gallery.mjs --browser chromium --chromium-mode new --backend webgl2
+      - name: Every gallery page, Chromium, WebGPU on the GPU
+        timeout-minutes: 20
+        if: ${{ !cancelled() }}
+        run: node web/smoke/gallery.mjs --browser chromium --chromium-mode new --backend webgpu
+      - name: Every gallery page, WebKit
+        timeout-minutes: 20
+        if: ${{ !cancelled() }}
+        run: node web/smoke/gallery.mjs --browser webkit
+      - name: Shard Grove played in Chromium on the GPU (keys and walk-through; WebGPU and WebGL2)
+        timeout-minutes: 20
+        if: ${{ !cancelled() }}
+        run: |
+          status=0
+          for backend in webgpu webgl2; do
+            for fixture in shard_grove shard_grove_walkthrough; do
+              node web/smoke/smoke.mjs --fixture "$fixture" --browser chromium --chromium-mode new --backend "$backend" \
+                --require-gpu --out "target/web-smoke/gpu-$fixture-$backend" || status=1
+            done
+          done
+          exit $status
+      - name: Summary of every run
+        if: ${{ !cancelled() }}
+        run: node web/smoke/summary.mjs target/web-smoke
+
   # The complete-game reference, packaged the way a player gets it and played
   # from an unrelated folder (`ponko package`, through
   # scripts/package-coin-dash.py for the walk-through; book/src/packaging.md):

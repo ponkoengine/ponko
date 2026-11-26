@@ -26,6 +26,12 @@ order:
    `AudioContext` and `AudioBufferSourceNode.start` to see this.
 5. **State minimums** (`--min`): fields the fixture must report at least
    (the 3D fixture's models and triangles drawn).
+   **Play-through** (`--until <field>:<value>`, `--until-timeout <s>`,
+   default 180 s): a game that plays itself must reach these fields in
+   that time, still running, with no failure on the way (Shard Grove's
+   walk-through: `walkthrough_over:true`, `finished:true`, `screen:Title`).
+   The run logs the state every 10 s while it waits, and `report.json` has
+   how long it took (`until`).
    **Storage** (`--after-reload`, `--reload`): once the game's writes are
    stored (its `saving` field is no longer `true`), the page is reloaded, and
    the new page must report the given fields (`coin_dash`: the settings it
@@ -68,14 +74,19 @@ runner needs to know about each one, so `--fixture <name>` is all a run takes:
 | `web_editor_save` | `examples/web_editor_save.rs` | `editor` | `crab.png` fetched and decoded 32x32; three page loads: a new scene and one over a file the build ships are saved and read back at once from the browser's storage (`read_back` 1, `listed` 2); after a reload both come back over the fetched files and the one over the build's file is reverted, read again at once (`found` `Saved`, `reverted` 1); after another reload the revert held and the other save is still there (`found` `Build`, `kept` `Loaded`). It also reports the browser's answer to its request for persistent storage (`persistent`) |
 | `web_editor_unloaded` | `examples/web_editor_unloaded.rs` | `editor`, `3d` | the page opens in edit mode (`query`: `?editor=smoke/unloaded/scene.json`, `editMode`: time is paused, so frames must keep coming instead of ticks, and the editor takes the clicks); the scene's post doesn't load (setup saved a broken copy of its file in the browser), the fixture reverts the copy, and a click on **Retry** in the editor's panel of scenes that didn't load (`clicks`: `@retry`, the place the page reports) spawns it and hangs the yard's wall off it again (`failed` 1, then `linked` 1) |
 | `lights2d` | `examples/lights2d.rs` | none | `crab.png` fetched and decoded 32x32; 2D lights with stencil shadows and normal maps drawing on the page's backend (WebGL2 in the listed check); at least 7 lights
+| `shard_grove` | `examples/shard_grove` | `navmesh`, `physics3d` | the 3D reference game: `shard_grove/grove.glb` fetched, the warden's skeleton loaded (`joints`); after the click (which leaves no menu button focused), Tab focuses "New game", Enter starts a game, Escape pauses, Enter resumes, Escape pauses again |
+| `shard_grove_walkthrough` | `examples/shard_grove` (`?smoke=walkthrough`) | `navmesh`, `physics3d` | the same build playing its walk-through by itself (`--until`, 200 s): three shards, a save at a shrine, back to the title, continue, the other shards, the gate, the end screen and the title again (`finished:true`) |
 
 To add one: publish the state with the helper (or the same attributes by hand),
 add an entry to `fixtures.json` (`example`, `features`, `asset`, `assetSize`
-or none, `assetSource` or none, `presses`, `min`, `afterReload` (one reload)
+or none, `assetSource` or none, `presses`, `min`, `until` and `untilSeconds`
+(a play-through), `afterReload` (one reload)
 or `reloads` (several: a list of steps, each a list of `<field>:<value>`),
 `persist` (per `--persist` answer, the fields of the first page load and of
 each reload), `clicks`, `query` (the page's address after `/`, like
-`?editor=levels/a.json`), `editMode`, `engineGpu`, `music`), and name it in the `web-smoke` job of `scripts/checks.yml`. Every
+`?editor=levels/a.json`), `editMode`, `engineGpu`, `music`), and name it in the `web-smoke` job of `scripts/checks.yml`
+(or, for one that needs a GPU, in `web-gpu` or `web-examples`, as Shard Grove's two are).
+Two fixtures may share one example and its build (`target/web/<example>`). Every
 fixture needs `?smoke_case=panic` and `?smoke_case=stall` handled if it is to
 run the self-tests; the helper does that.
 
@@ -603,7 +614,9 @@ table.
 | The list of checks (`web-smoke-runner`) | none | the runner's own tests only (and the gallery's) | |
 | The list of checks (`web-gpu` job, a Mac with its GPU) | Chromium new headless mode | Must pass on the GPU for the 3D fixture (`--require-gpu`: ANGLE on Metal, no software renderer) | **Must pass** on the GPU for the 2D and 3D fixtures (`--require-gpu`); unsupported, a fallback to WebGL2 or a software adapter fails; then `frame-times.mjs` once per backend |
 | A release (the gallery check, Ubuntu, no GPU) | Chromium headless shell | Every gallery page must pass (software GL) | Not tried; the demos that need WebGPU must show their message |
-| Apple Silicon Mac, the gallery (`gallery.mjs`) | Chromium 159 | Every page passes in the headless shell; the 2 demos that need WebGPU (compute passes) show their message | Every page passes in new headless mode on the Metal adapter |
+| The list of checks (`web-examples` job, a Mac with its GPU) | Chromium (headless shell and new headless mode), WebKit | Every gallery page must pass, in the headless shell (software GL) and on the GPU (ANGLE on Metal); Shard Grove's keys and walk-through must pass on the GPU (`--require-gpu`) | Every gallery page and both Shard Grove fixtures **must pass** on the GPU's Metal adapter; every page in WebKit |
+| Apple Silicon Mac, the gallery (`gallery.mjs`, 49 examples, `book/src/check-results/macos.md`) | Chromium 159, WebKit 27.2 | Every page passes in the headless shell and in new headless mode on ANGLE's Metal renderer; the 2 demos that need WebGPU (compute passes) show their message | Every page passes in new headless mode on the Metal adapter, and in WebKit |
+| Apple Silicon Mac, Shard Grove (`shard_grove`, `shard_grove_walkthrough`) | Chromium 159, WebKit 27.2 | Both pass on the GPU (ANGLE on Metal); the walk-through also in the headless shell (SwiftShader, about 22 frames a second) | Both pass on the Metal adapter; the walk-through also in WebKit |
 | Apple Silicon Mac, Chromium new headless mode | Chromium 159 | Passes (ANGLE on Metal) | **Passes** on the Metal adapter: the engine reports `webgpu`, the canvas draws |
 | Apple Silicon Mac, `webgpu-fallback.mjs` (3D fixture) | Chromium 159 new headless mode | Each of the five faked failures ends on WebGL2 and draws the scene, with its one console line | Passes on the Metal adapter and on SwiftShader (`--use-webgpu-adapter=swiftshader`): the same scene, `ponko: drawing with WebGPU` |
 | Apple Silicon Mac, Chromium headless shell | same | Passes (ANGLE on SwiftShader) | Unsupported: a SwiftShader fallback adapter exists, but a WebGPU canvas can't be shown. With `--backend auto` the engine's test frame fails and the game draws with WebGL2 |

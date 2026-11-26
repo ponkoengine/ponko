@@ -19,6 +19,8 @@ import {
   reloadStepsOf,
   checkAfterReload,
   checkExpects,
+  checkUntil,
+  UNTIL_SECONDS,
   parseClick,
   parseRetryPlace,
   parseMin,
@@ -165,6 +167,31 @@ test("reload steps: one from afterReload, several from reloads or --reload, each
   assert.equal(checkAfterReload({ kept: "Saved" }, [kept], 2), 'after reload 2, kept is "Saved", not Loaded');
   assert.equal(checkAfterReload(undefined, [kept], 1), "after reload 1, kept is undefined, not Loaded");
   assert.equal(checkAfterReload({}, [], 3), null, "a step without fields only has to run");
+});
+
+test("a play-through: --until fields and their time come from the fixture or the command line", () => {
+  const walk = parse("--fixture", "shard_grove_walkthrough");
+  assert.equal(walk.example, "shard_grove", "two fixtures share the game's one build");
+  assert.equal(walk.dir, "target/web/shard_grove");
+  assert.equal(walk.query, "?smoke=walkthrough");
+  assert.deepEqual(walk.until.map(({ field }) => field), ["walkthrough_over", "finished", "screen"]);
+  assert.equal(walk.untilSeconds, 200);
+  assert.deepEqual(parse("--fixture", "shard_grove").until, [], "the keys fixture waits for nothing");
+  assert.equal(parse("--fixture", "shard_grove").untilSeconds, UNTIL_SECONDS);
+  const given = parse("--dir", "d", "--until", "won:1", "--until-timeout", "30");
+  assert.deepEqual(given.until, [{ field: "won", value: "1" }]);
+  assert.equal(given.untilSeconds, 30);
+  assert.throws(() => parse("--dir", "d", "--until", "won"), /--until wants/);
+  assert.throws(() => parse("--dir", "d", "--until", "won:1", "--until-timeout", "0"), /--until-timeout must be a positive/);
+  assert.throws(() => parse("--dir", "d", "--until", "won:1", "--until-timeout", "400"), /shorter than --run-timeout/);
+  assert.throws(() => parseFixtures('{"a":{"example":"a","until":["x"]}}'), /--until wants/);
+  assert.throws(() => parseFixtures('{"a":{"example":"a","untilSeconds":-1}}'), /"untilSeconds" is a positive/);
+
+  const until = [{ field: "finished", value: "true" }, { field: "screen", value: "Title" }];
+  assert.equal(checkUntil({ finished: true, screen: "Title" }, until), null);
+  assert.equal(checkUntil({ finished: false, screen: "Title" }, until), "finished is false, not true");
+  assert.equal(checkUntil({ finished: true, screen: "Won" }, until), 'screen is "Won", not Title');
+  assert.equal(checkUntil(undefined, until), "finished is undefined, not true");
 });
 
 test("clicks and the page's query come from the fixture or the command line", () => {
