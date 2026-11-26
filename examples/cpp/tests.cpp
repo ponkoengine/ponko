@@ -5675,6 +5675,10 @@ static void native_parity_round5() {
     CHECK(crowd_stats.steps == 10 && crowd_stats.agent_steps == 30 && crowd_stats.work > 0);
 
     // This thread's allocations, and a PONKO_PROFILE_SCOPE counting the ones made inside it.
+    // Each block is stored through `alloc_sink`, a volatile pointer: an optimizing build may
+    // otherwise remove a new/delete pair nothing else reads, and count nothing (C++14 lets
+    // the compiler elide such an allocation; clang does in a Release build).
+    static void* volatile alloc_sink = nullptr;
     ponko::game("c++ allocs", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
         ctx.set_profiling(true);
         ponko::alloc_counts before{}, after{};
@@ -5682,6 +5686,7 @@ static void native_parity_round5() {
             PONKO_PROFILE_SCOPE("c++/alloc");
             before = ponko::thread_alloc_counts();
             auto* boxed = new int(7); // counted: PONKO_COUNT_CPP_ALLOCATIONS is on in this program
+            alloc_sink = boxed;
             after = ponko::thread_alloc_counts();
             delete boxed;
         }
@@ -5692,6 +5697,7 @@ static void native_parity_round5() {
         {
             const std::int64_t held = ponko::thread_net_alloc_bytes();
             auto* block = new char[4096];
+            alloc_sink = block;
             const std::int64_t holding = ponko::thread_net_alloc_bytes();
             delete[] block;
             const std::int64_t released = ponko::thread_net_alloc_bytes();
