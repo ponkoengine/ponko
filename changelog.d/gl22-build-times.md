@@ -1,3 +1,4 @@
+<!-- area: Development and releases -->
 ### Added
 - Build times and download sizes in the performance chapter: clean,
   one-line-change and link times of the 2D template and the 3D tutorial

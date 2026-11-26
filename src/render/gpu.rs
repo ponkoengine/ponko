@@ -150,8 +150,10 @@ pub(crate) struct Renderer {
     hidden_in_flight: std::collections::VecDeque<wgpu::SubmissionIndex>,
     stats: RenderStats,
     /// The 3D pass, made when the game first creates a mesh or material.
+    /// Boxed: it is tens of kilobytes, and the renderer is moved through
+    /// the windowed startup's stack frames (see `game/window.rs`).
     #[cfg(feature = "3d")]
-    three: Option<super::gpu3d::Renderer3D>,
+    three: Option<Box<super::gpu3d::Renderer3D>>,
     /// Samples per pixel of the 3D frame.
     #[cfg(feature = "3d")]
     msaa: u32,
@@ -646,10 +648,7 @@ impl Renderer {
             let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(
                 display,
             )));
-            let surface = startup::result(
-                instance.create_surface(window.clone()),
-                "could not create a GPU surface",
-            )?;
+            let surface = startup::result(instance.create_surface(window.clone()), startup::Step::Surface)?;
             let adapter = startup::result(
                 instance
                     .request_adapter(&wgpu::RequestAdapterOptions {
@@ -658,11 +657,11 @@ impl Renderer {
                         ..Default::default()
                     })
                     .await,
-                "no compatible GPU found",
+                startup::Step::Adapter,
             )?;
             let (device, queue) = startup::result(
                 adapter.request_device(&device_descriptor(&adapter)).await,
-                "could not open the GPU device",
+                startup::Step::Device,
             )?;
             (instance, surface, adapter, device, queue)
         };
@@ -1275,26 +1274,35 @@ impl Renderer {
     /// The 3D pass, made on first use (with its white texture).
     #[cfg(feature = "3d")]
     fn three(&mut self) -> &mut super::gpu3d::Renderer3D {
-        if self.three.is_none() {
-            let white = self.create_texture(1, 1, &[255; 4]);
-            let white_array = self.upload_texture_array(1, 1, &[&[255; 4]], false);
-            let renderer = super::gpu3d::Renderer3D::new(
-                &self.device,
-                &self.texture_layout,
-                self.view_format,
-                white,
-                &white_array,
-                self.msaa,
-                !self.tiled,
-            );
-            // No view formats (WebGL2): sprite textures can't be read through a linear view.
-            self.three = Some(if self.image_view_formats.is_empty() {
-                renderer.without_linear_views()
-            } else {
-                renderer
-            });
+        let three = match self.three.take() {
+            Some(three) => three,
+            None => self.make_three(),
+        };
+        self.three.insert(three)
+    }
+
+    /// Makes the 3D pass on the heap. Out of line and cold: its frame holds
+    /// a whole `Renderer3D`, and it runs once.
+    #[cfg(feature = "3d")]
+    #[cold]
+    #[inline(never)]
+    fn make_three(&mut self) -> Box<super::gpu3d::Renderer3D> {
+        let white = self.create_texture(1, 1, &[255; 4]);
+        let white_array = self.upload_texture_array(1, 1, &[&[255; 4]], false);
+        let mut renderer = Box::new(super::gpu3d::Renderer3D::new(
+            &self.device,
+            &self.texture_layout,
+            self.view_format,
+            white,
+            &white_array,
+            self.msaa,
+            !self.tiled,
+        ));
+        // No view formats (WebGL2): sprite textures can't be read through a linear view.
+        if self.image_view_formats.is_empty() {
+            renderer.without_linear_views();
         }
-        self.three.as_mut().expect("just made")
+        renderer
     }
 
     #[cfg(feature = "3d")]
@@ -2546,7 +2554,7 @@ impl Renderer {
     pub(super) fn formats_for_test(&self) -> (wgpu::TextureFormat, Option<wgpu::TextureFormat>, wgpu::TextureFormat) {
         (
             self.view_format,
-            self.three.as_ref().map(super::gpu3d::Renderer3D::output_format),
+            self.three.as_deref().map(super::gpu3d::Renderer3D::output_format),
             self.output_format(),
         )
     }

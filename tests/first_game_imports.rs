@@ -292,7 +292,8 @@ fn item_path(path: &str) -> String {
 }
 
 /// Names a module source brings with `pub use` (aliases as aliased) and
-/// `pub` items.
+/// `pub` items, without `#[deprecated]` ones (0.1 paths kept for a minor,
+/// which games should not use).
 fn exported_names(source: &str) -> BTreeSet<String> {
     let code = code(source);
     let mut names = BTreeSet::new();
@@ -314,8 +315,20 @@ fn exported_names(source: &str) -> BTreeSet<String> {
         }
         rest = &stmt[end..];
     }
+    let mut deprecated = false;
     for line in code.lines() {
         let line = line.trim_start();
+        if line.starts_with("#[deprecated") {
+            deprecated = true;
+            continue;
+        }
+        if line.starts_with("#[") || line.is_empty() {
+            continue;
+        }
+        let skip = std::mem::take(&mut deprecated);
+        if skip {
+            continue;
+        }
         for kind in [
             "pub type ",
             "pub struct ",
@@ -430,7 +443,10 @@ fn the_path_reader_expands_braces_aliases_and_item_paths() {
         engine_paths(source),
         ["ponko::a::B", "ponko::a::c::D", "ponko::a::c::E", "ponko::h::I"]
     );
-    let names = exported_names("pub use crate::a::{B, C as D};\npub use crate::e::F as G;\npub struct H;\n");
+    let names = exported_names(
+        "pub use crate::a::{B, C as D};\npub use crate::e::F as G;\npub struct H;\n\
+         #[deprecated(note = \"use `a::B`\")]\n#[doc(hidden)]\npub type Old = crate::a::B;\n",
+    );
     assert_eq!(names.into_iter().collect::<Vec<_>>(), ["B", "D", "G", "H"]);
 }
 

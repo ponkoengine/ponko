@@ -185,7 +185,7 @@ pub mod bench_sharing {
     /// The fewest 3D characters whose moves are shared out.
     #[cfg(feature = "physics3d")]
     pub fn characters_from() -> usize {
-        crate::physics3d::CHARACTERS_PARALLEL_FROM
+        crate::physics3d_impl::CHARACTERS_PARALLEL_FROM
     }
 }
 pub mod game;
@@ -289,7 +289,13 @@ mod perf_report;
 #[cfg(feature = "physics")]
 mod physics;
 #[cfg(feature = "physics3d")]
-mod physics3d;
+#[path = "physics3d_moved.rs"]
+pub mod physics3d;
+// The 3D physics itself; its public names are in `d3` (`physics3d` keeps
+// 0.1's names as deprecated aliases until 0.3.0).
+#[cfg(feature = "physics3d")]
+#[path = "physics3d/mod.rs"]
+mod physics3d_impl;
 #[cfg(any(feature = "physics", feature = "physics3d"))]
 mod physics_links;
 mod platform;
@@ -314,6 +320,7 @@ pub mod state;
 #[cfg(feature = "steam")]
 pub mod steam;
 pub mod storage;
+mod suggest;
 /// Deprecated: [`Job`](crate::streaming::Job) and `CellStreamer` moved to
 /// [`streaming`], next to the asset streaming they work with.
 pub mod stream {

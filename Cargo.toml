@@ -13,10 +13,13 @@ repository.workspace = true
 homepage.workspace = true
 documentation = "https://docs.rs/ponko/"
 # What the published crate holds: the engine's sources and build script, the
-# Rust examples with the assets they load, and the license and policy files.
-# Not the guide, CI, scripts, tests (they need the workspace), the web shell,
-# the C/C++ side (the headers ship with the release archives), the benchmark
-# scenes or the logo.
+# Rust examples with the small assets they load, and the license and policy
+# files. Not the guide, CI, scripts, tests (they need the workspace), the web
+# shell, the C/C++ side (the headers ship with the release archives), the
+# benchmark scenes, the logo or the three reference games' art, sound and
+# music: nothing builds from them (the examples load them when they run, and
+# their sources stay, so the crate compiles), and Shard Grove's alone was
+# 2.7 MiB of a 10 MB upload limit. Get the games from the repository.
 include = [
     "/src/**",
     "/build.rs",
@@ -24,6 +27,9 @@ include = [
     "!/examples/cpp/**",
     "/assets/**",
     "!/assets/branding/**",
+    "!/assets/coin_dash/**",
+    "!/assets/ember_hop/**",
+    "!/assets/shard_grove/**",
     "/README.md",
     "/CHANGELOG.md",
     "/STABILITY.md",
@@ -52,6 +58,7 @@ files = [
     "LICENSE-APACHE",
     "NOTICE",
     "examples/coin_dash/CONTENT-NOTICES.txt",
+    { from = "assets/CC0-1.0.txt", to = "CC0-1.0.txt" },
     { from = "examples/coin_dash/PACKAGE-README.txt", to = "README.txt" },
 ]
 
@@ -66,6 +73,7 @@ files = [
     "LICENSE-APACHE",
     "NOTICE",
     "examples/shard_grove/CONTENT-NOTICES.txt",
+    { from = "assets/CC0-1.0.txt", to = "CC0-1.0.txt" },
     { from = "examples/shard_grove/PACKAGE-README.txt", to = "README.txt" },
 ]
 
@@ -103,6 +111,7 @@ files = [
     "LICENSE-APACHE",
     "NOTICE",
     "examples/ember_hop/CONTENT-NOTICES.txt",
+    { from = "assets/CC0-1.0.txt", to = "CC0-1.0.txt" },
     { from = "examples/ember_hop/PACKAGE-README.txt", to = "README.txt" },
 ]
 
@@ -193,7 +202,9 @@ subsecond = { version = "0.7.10", optional = true }
 dioxus-devtools = { version = "0.7.10", default-features = false, optional = true }
 # `Instant` that also works in browsers; on desktop it is std's own type.
 web-time = "1.1.0"
-steamworks = { version = "0.13.1", optional = true }
+# `raw-bindings`: the SDK calls `steamworks` has no safe wrapper for
+# (inviting one user to a lobby), wrapped by `net::SteamLobby`.
+steamworks = { version = "0.13.1", optional = true, features = ["raw-bindings"] }
 gltf = { version = "1.4.1", default-features = false, features = ["utils", "names", "extras"], optional = true }
 # Level files from level editors (`ponko::tilemap`): `quick-xml` reads
 # Tiled's XML maps (`.tmx`) and tilesets; `flate2` unpacks their zlib and

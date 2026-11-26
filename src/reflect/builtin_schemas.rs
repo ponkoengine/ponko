@@ -409,13 +409,13 @@ pub(super) fn builtin<T: 'static>() -> Option<ValueSchema> {
         return Some(vehicle3d());
     }
     #[cfg(feature = "physics3d")]
-    if id == std::any::TypeId::of::<crate::physics3d::ColliderFocus>()
-        || id == std::any::TypeId::of::<crate::physics3d::SquareColliderFocus>()
+    if id == std::any::TypeId::of::<crate::physics3d_impl::ColliderFocus>()
+        || id == std::any::TypeId::of::<crate::physics3d_impl::SquareColliderFocus>()
     {
         return Some(colliderfocus());
     }
     #[cfg(feature = "physics3d")]
-    if id == std::any::TypeId::of::<crate::physics3d::TerrainCollider>() {
+    if id == std::any::TypeId::of::<crate::physics3d_impl::TerrainCollider>() {
         return Some(terraincollider());
     }
     None
@@ -836,7 +836,7 @@ pub(in crate::reflect) mod tests {
             check!(crate::d3::RigidBody, body);
             use crate::d3::Collider as Collider3D;
             use crate::handle::Handle;
-            use crate::physics3d::CollisionMesh;
+            use crate::physics3d_impl::CollisionMesh;
             for collider in [
                 Collider3D::sphere(1.0),
                 Collider3D::cuboid(glam::Vec3::ONE),
@@ -882,12 +882,12 @@ pub(in crate::reflect) mod tests {
             );
             check!(crate::d3::Vehicle, crate::d3::Vehicle::default());
             check!(
-                crate::physics3d::ColliderFocus,
-                crate::physics3d::ColliderFocus::default()
+                crate::physics3d_impl::ColliderFocus,
+                crate::physics3d_impl::ColliderFocus::default()
             );
             check!(
-                crate::physics3d::TerrainCollider,
-                crate::physics3d::TerrainCollider::new(CollisionMesh { id: 3 }).friction(0.2)
+                crate::physics3d_impl::TerrainCollider,
+                crate::physics3d_impl::TerrainCollider::new(CollisionMesh { id: 3 }).friction(0.2)
             );
         }
     }

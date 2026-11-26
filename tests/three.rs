@@ -956,6 +956,27 @@ fn security_screen(ctx: &mut Ctx) -> RenderTarget {
 }
 // ANCHOR_END: security_screen
 
+// ANCHOR: item_icons
+/// The inventory's slots: one icon per item, drawn once when the bag
+/// opens, not every frame. Seen a little more from the side than the
+/// default, on a dark slot colour.
+fn inventory_slots(ctx: &mut Ctx, items: &[Mesh]) -> Vec<RenderTarget> {
+    let look = ponko::render::Icon::new(64)
+        .with_from(vec3(1.0, 0.4, 0.6))
+        .with_background(Color::rgb(0.08, 0.08, 0.1));
+    let bag = ctx.ui.root().id();
+    let mut icons = Vec::new();
+    for &item in items {
+        let icon = ctx.gfx.render_icon(item, &look);
+        ctx.ui
+            .image(bag, icon.texture())
+            .layout(ponko::ui::UiLayout::fixed(64.0, 64.0));
+        icons.push(icon);
+    }
+    icons
+}
+// ANCHOR_END: item_icons
+
 // ANCHOR: compute
 /// Ripples: each texel moves toward the average of its neighbours,
 /// overshooting like water. Red is the height now, green the height a
@@ -1027,6 +1048,21 @@ fn the_guide_pond_mirrors_the_camera() {
         assert_eq!(below.target.width(), 32);
         assert_eq!(below.camera.position, vec3(3.0, -5.0, 1.0));
         assert_eq!(below.clip_plane, Some(vec4(0.0, 1.0, 0.0, 0.0)));
+    });
+}
+
+#[test]
+fn the_guide_inventory_draws_one_icon_per_item() {
+    Game::new("bag", 64, 64).run_headless(0, |ctx| {
+        let white = ctx.gfx.default_material();
+        let sword = ctx.gfx.create_mesh(&MeshData::cube(1.0), white);
+        let shield = ctx.gfx.create_mesh(&MeshData::sphere(0.5, 8), white);
+        let icons = inventory_slots(ctx, &[sword, shield]);
+        assert_eq!(icons.len(), 2);
+        assert!(icons.iter().all(|i| ctx.is_live(*i) && i.width() == 64));
+        assert_ne!(icons[0], icons[1]);
+        assert!(ctx.world.is_empty(), "nothing is spawned for an icon");
+        assert!(ctx.scene3d.passes.target_cameras.is_empty(), "nor a target camera");
     });
 }
 

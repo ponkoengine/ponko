@@ -1360,6 +1360,21 @@ pub fn fuzz_webm_audio(bytes: &[u8]) {
     chunked::fuzz_stream(bytes);
 }
 
+/// The error for a sound file that didn't decode: the decoder's words, what
+/// the file looks like instead, and the formats that load.
+pub(crate) fn sound_error(
+    path: &str,
+    origin: &crate::assets::Origin,
+    sniff: &crate::assets::sniff::Sniff,
+    detail: &str,
+) -> crate::error::Error {
+    let what = match origin {
+        crate::assets::Origin::File(file) => format!("{:?}", file.display().to_string()),
+        crate::assets::Origin::Source { .. } => origin.describe(path),
+    };
+    crate::error::Error::decode(path, crate::assets::sniff::not_a_sound(&what, sniff, detail))
+}
+
 /// A sound decoded on a worker thread, for [`Audio::adopt_decoded`].
 pub(crate) type DecodedSound = backend::Decoded;
 
@@ -1419,12 +1434,11 @@ impl Audio {
         };
         let origin = found.origin.clone();
         let bytes = found.into_bytes().map_err(|e| e.with_path(path))?;
-        let (id, seconds) = self.backend.load(bytes).map_err(|e| match &origin {
-            crate::assets::Origin::File(file) => crate::error::Error::decode(path, format!("{}: {e}", file.display())),
-            crate::assets::Origin::Source { .. } => {
-                crate::error::Error::decode(path, format!("{}: {e}", origin.describe(path)))
-            }
-        })?;
+        let sniff = crate::assets::sniff::Sniff::of(&bytes);
+        let (id, seconds) = self
+            .backend
+            .load(bytes)
+            .map_err(|e| sound_error(path, &origin, &sniff, &e))?;
         let sound = Sound { id, seconds };
         self.sounds_live.insert(id);
         self.ledger.own(crate::inventory::AssetClass::Sound, id, path);

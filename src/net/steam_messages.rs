@@ -77,6 +77,7 @@ trait SteamApi: Send + Sync {
     fn metadata(&self, lobby: SteamLobbyId, key: &str) -> Option<String>;
     fn set_metadata(&self, lobby: SteamLobbyId, key: &str, value: &str) -> bool;
     fn invite(&self, lobby: SteamLobbyId);
+    fn invite_user(&self, lobby: SteamLobbyId, user: SteamUserId) -> bool;
     fn send(&self, peer: SteamUserId, bytes: &[u8]) -> io::Result<()>;
     fn receive(&self) -> Vec<(SteamUserId, Vec<u8>)>;
 }
@@ -138,6 +139,9 @@ impl SteamApi for Real {
     fn invite(&self, lobby: SteamLobbyId) {
         self.0.inner.friends().activate_invite_dialog(lobby.to_unstable());
     }
+    fn invite_user(&self, lobby: SteamLobbyId, user: SteamUserId) -> bool {
+        invite_user_to_lobby(lobby, user)
+    }
     fn send(&self, peer: SteamUserId, bytes: &[u8]) -> io::Result<()> {
         self.0
             .inner
@@ -164,6 +168,23 @@ impl SteamApi for Real {
             })
             .collect()
     }
+}
+
+/// `ISteamMatchmaking::InviteUserToLobby`, which `steamworks` 0.13 doesn't
+/// wrap. False when the Steam API isn't running (there is no matchmaking
+/// interface) or Steam doesn't send the invite.
+fn invite_user_to_lobby(lobby: SteamLobbyId, user: SteamUserId) -> bool {
+    use steamworks::sys;
+    // SAFETY: the accessor takes no arguments; it returns the process's
+    // matchmaking interface, or null while the Steam API isn't initialized.
+    let matchmaking = unsafe { sys::SteamAPI_SteamMatchmaking_v009() };
+    if matchmaking.is_null() {
+        return false;
+    }
+    // SAFETY: `matchmaking` is the live interface checked above (Steam keeps
+    // it for the life of the process once initialized), and both ids are
+    // plain 64-bit numbers that Steam validates itself.
+    unsafe { sys::SteamAPI_ISteamMatchmaking_InviteUserToLobby(matchmaking, lobby.raw(), user.raw()) }
 }
 
 /// How packets travel between lobby members: Messages or Sockets. Peers are
@@ -590,6 +611,36 @@ impl SteamLobby {
         self.api.invite(self.ready()?);
         Ok(())
     }
+    /// Invite one Steam user, usually a friend, without the overlay: for a
+    /// lobby screen with its own friend list. Steam shows them the invite;
+    /// when they accept it, their game gets the lobby as with
+    /// [`invite`](Self::invite) ([`steam_wait_for_invite`](super::steam_wait_for_invite)
+    /// while it runs, [`steam_lobby_from_args`](super::steam_lobby_from_args)
+    /// when Steam starts it). For a [`Private`](SteamLobbyVisibility::Private)
+    /// lobby an invite is the only way in.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidInput` for the user id zero, `NotConnected` while the lobby
+    /// is still being created or joined (or after leaving), and an error if
+    /// Steam doesn't send the invite.
+    ///
+    /// ```no_run
+    /// # fn f(lobby: &ponko::net::SteamLobby, friend: ponko::net::SteamUserId) -> std::io::Result<()> {
+    /// lobby.invite_user(friend)?;
+    /// # Ok(()) }
+    /// ```
+    pub fn invite_user(&self, user: SteamUserId) -> io::Result<()> {
+        if user.raw() == 0 {
+            return Err(input("user id is zero"));
+        }
+        if !self.api.invite_user(self.ready()?, user) {
+            return Err(io::Error::other(format!(
+                "Steam did not send the lobby invite to {user}"
+            )));
+        }
+        Ok(())
+    }
     /// Leave once. A pending request must finish first.
     ///
     /// # Errors
@@ -751,6 +802,7 @@ impl NetMessages {
     /// Host message traffic through Steam relays, creating a friends-only
     /// lobby. `max_clients` is 1..=249 (Steam permits 250 lobby members).
     /// Use one message endpoint per Steam client; lockstep uses a separate channel.
+    /// [`steam_host_with`](Self::steam_host_with) picks another visibility.
     ///
     /// # Errors
     ///
@@ -764,10 +816,40 @@ impl NetMessages {
     /// # Ok::<(), std::io::Error>(())
     /// ```
     pub fn steam_host(client: &SteamClient, max_clients: usize) -> io::Result<Self> {
+        Self::steam_host_with(client, SteamLobbyVisibility::FriendsOnly, max_clients)
+    }
+    /// [`steam_host`](Self::steam_host) in a lobby of the given
+    /// `visibility`, the argument [`steam_sockets_host`](Self::steam_sockets_host)
+    /// takes too. A [`Private`](SteamLobbyVisibility::Private) lobby is
+    /// invite-only: invite each player with
+    /// [`SteamLobby::invite_user`] (or the overlay's
+    /// [`invite`](SteamLobby::invite)).
+    ///
+    /// # Errors
+    ///
+    /// `InvalidInput` if `max_clients` is outside 1..=249.
+    ///
+    /// ```no_run
+    /// # use ponko::prelude::*;
+    /// # let friend = ponko::net::SteamUserId::from_raw(76_561_197_960_287_930);
+    /// let client = ponko::net::SteamClient::init_app(480).unwrap();
+    /// let private = ponko::net::SteamLobbyVisibility::Private;
+    /// let mut host = ponko::net::NetMessages::steam_host_with(&client, private, 1)?;
+    /// host.poll()?;
+    /// if let Some(lobby) = host.steam_lobby().filter(|l| l.id().is_some()) {
+    ///     lobby.invite_user(friend)?;
+    /// }
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    pub fn steam_host_with(
+        client: &SteamClient,
+        visibility: SteamLobbyVisibility,
+        max_clients: usize,
+    ) -> io::Result<Self> {
         if !(1..=249).contains(&max_clients) {
             return Err(input("max_clients must be 1..=249"));
         }
-        let lobby = SteamLobby::create(client, SteamLobbyVisibility::FriendsOnly, max_clients as u32 + 1)?;
+        let lobby = SteamLobby::create(client, visibility, max_clients as u32 + 1)?;
         let carrier = MessagesCarrier(lobby.api.clone());
         Ok(Self::steam_endpoint(
             client,
@@ -906,6 +988,8 @@ pub(in crate::net) mod testing {
         /// In-memory packets per receiver, Messages and Sockets alike.
         pub(super) packets: BTreeMap<u64, VecDeque<(SteamUserId, Vec<u8>)>>,
         pub(super) invites: usize,
+        /// Invites sent to one user: (lobby, user).
+        pub(super) invited: Vec<(u64, u64)>,
         pub(super) largest: usize,
         /// Sockets: who listens, pending requests (host, client), open
         /// connections (lower id first), events per user, dials made.
@@ -1037,6 +1121,15 @@ pub(in crate::net) mod testing {
         fn invite(&self, _: SteamLobbyId) {
             self.state.lock().unwrap().invites += 1;
         }
+        fn invite_user(&self, lobby: SteamLobbyId, user: SteamUserId) -> bool {
+            // Steam refuses an invite to a lobby that doesn't exist.
+            let mut s = self.state.lock().unwrap();
+            let exists = s.rooms.contains_key(&lobby.raw());
+            if exists {
+                s.invited.push((lobby.raw(), user.raw()));
+            }
+            exists
+        }
         fn send(&self, peer: SteamUserId, bytes: &[u8]) -> io::Result<()> {
             self.wire.send(peer, bytes)
         }
@@ -1138,13 +1231,23 @@ pub(in crate::net) mod testing {
         max_clients: usize,
         net: Option<&Shared>,
     ) -> (Vec<NetMessages>, Steam) {
+        endpoints_in(SteamLobbyVisibility::FriendsOnly, carrier, clients, max_clients, net)
+    }
+
+    /// [`endpoints_on`] with the host's lobby of the given `visibility`.
+    pub(super) fn endpoints_in(
+        visibility: SteamLobbyVisibility,
+        carrier: &'static str,
+        clients: usize,
+        max_clients: usize,
+        net: Option<&Shared>,
+    ) -> (Vec<NetMessages>, Steam) {
         let state = Steam::default();
         let nets = (1..=clients as u64 + 1)
             .map(|me| {
                 let api = api_on(&state, me, net);
                 if me == 1 {
-                    let lobby =
-                        SteamLobby::start(api.clone(), None, SteamLobbyVisibility::FriendsOnly, clients as u32 + 1);
+                    let lobby = SteamLobby::start(api.clone(), None, visibility, clients as u32 + 1);
                     let c: Box<dyn Carrier> = if carrier == SOCKETS {
                         sockets(&state, me, net, true)
                     } else {
@@ -1323,6 +1426,54 @@ mod tests {
             host.leave().unwrap();
             assert!(s.lock().unwrap().rooms[&1].members.is_empty());
         }
+    }
+    #[test]
+    fn a_private_lobby_invites_one_friend_who_joins_and_talks() {
+        // The host's endpoint is made before the friend's, as a lobby screen
+        // would: create, invite, and the friend joins with the lobby id
+        // the invite carries.
+        let (mut nets, s) = super::testing::endpoints_in(SteamLobbyVisibility::Private, MESSAGES, 1, 1, None);
+        let host = nets[0].steam_lobby().unwrap();
+        assert_eq!(
+            s.lock().unwrap().rooms[&1].visibility,
+            Some(SteamLobbyVisibility::Private)
+        );
+        let friend = SteamUserId::from_raw(2);
+        host.invite_user(friend).unwrap();
+        assert_eq!(s.lock().unwrap().invited, [(1, 2)]);
+        assert_eq!(s.lock().unwrap().invites, 0, "no overlay was opened");
+        poll(&mut nets, 30);
+        assert_eq!(nets[0].connected_peers(), 1);
+        nets[1].send(PeerId::HOST, Lane::Reliable, b"hi").unwrap();
+        poll(&mut nets, 10);
+        assert!(
+            nets[0]
+                .events()
+                .any(|e| matches!(e, MessageEvent::Message { bytes, .. } if bytes == b"hi"))
+        );
+    }
+    #[test]
+    fn inviting_one_user_needs_a_ready_lobby_and_a_user() {
+        let s = Arc::new(Mutex::new(State::default()));
+        let mut lobby = SteamLobby::start(api(&s, 1), None, SteamLobbyVisibility::Private, 2);
+        let zero = lobby.invite_user(SteamUserId::from_raw(0)).unwrap_err();
+        assert_eq!(zero.kind(), io::ErrorKind::InvalidInput);
+        // Steam refuses (here: the lobby is gone underneath).
+        s.lock().unwrap().rooms.clear();
+        assert!(lobby.invite_user(SteamUserId::from_raw(2)).is_err());
+        lobby.leave().unwrap();
+        let left = lobby.invite_user(SteamUserId::from_raw(2)).unwrap_err();
+        assert_eq!(left.kind(), io::ErrorKind::NotConnected);
+        assert!(s.lock().unwrap().invited.is_empty());
+    }
+    #[test]
+    fn the_real_invite_is_refused_without_a_running_steam() {
+        // No `SteamClient` here, so the Steam API has no matchmaking
+        // interface: the call reports that instead of touching a null one.
+        assert!(!invite_user_to_lobby(
+            SteamLobbyId::from_raw(1),
+            SteamUserId::from_raw(2)
+        ));
     }
     #[test]
     fn incompatible_lobby_and_nonmembers_cannot_route() {

@@ -1,3 +1,4 @@
+<!-- area: Guide and examples -->
 ### Changed
 - Every public item of the rendering, 3D, 2D drawing, particle, lighting,
   post-processing, terrain and streaming modules must now be documented:

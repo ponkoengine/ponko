@@ -68,16 +68,22 @@ jobs:
       - name: Naming inventory
         run: python3 scripts/check-naming.py
       # The fragments (a breaking entry needs what to write instead and a
-      # before/after snippet) and the script's own rules.
+      # before/after snippet) and the script's own rules. The `After:` code
+      # compiles in the book job (`changelog.py --check --compile` alone).
       - name: Changelog fragments
         run: |
           python3 scripts/changelog.py --check
           python3 scripts/changelog.py --selftest
-      # The release guard (CONTRIBUTING.md "Releasing") and the guide's note.
+      # The release guard (CONTRIBUTING.md "Releasing") and the guide's note,
+      # the first run from crates.io, and the release-time OS matrix
+      # (scripts/release-matrix.yml, not enabled) still made from this file.
       - name: Release scripts
         run: |
           python3 scripts/release-check.py selftest
           python3 scripts/c-library.py selftest
+          python3 scripts/first-run.py selftest
+          python3 scripts/release-matrix.py selftest
+          python3 scripts/release-matrix.py check
           python3 scripts/guide-note.py selftest
       # Every C export needs a test, or a reasoned entry in the allowlist.
       - name: C ABI test coverage
@@ -549,6 +555,33 @@ jobs:
           path: target/render-test-output
           if-no-files-found: ignore
           retention-days: 14
+
+  windows-startup-stack:
+    local-requires: [cargo-nextest]
+    local-tags: [test, gpu]
+    name: Windowed startup on half of a main thread's stack (windows-latest)
+    needs: windows-unit-build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/nextest
+      - uses: actions/download-artifact@v8
+        with:
+          name: windows-unit-tests
+          path: target/ci-unit
+      # Windows gives a program's main thread 1 MB of stack. The whole
+      # windowed startup (event loop, window, GPU device, setup with a 3D
+      # mesh, three frames) runs on a thread with 512 KB
+      # (`src/game/startup_stack_tests.rs`). It opens a window, and a
+      # process makes one event loop: nextest runs it in its own process.
+      - name: Windowed startup in 512 KB of stack
+        local-tags: [windowed]
+        env:
+          PONKO_REQUIRE_GPU: 1
+        run: >-
+          cargo nextest run --archive-file target/windows-unit.tar.zst
+          --workspace-remap . --run-ignored only
+          -E 'test(windowed_startup_fits_in_half_of_a_windows_main_thread_stack)'
 
   windows-gpu-tiers:
     local-requires: [cargo-nextest]
@@ -1026,7 +1059,9 @@ jobs:
       - run: mdbook build book
         local-requires: [mdbook]
       # The guide's inline Rust snippets: one `cargo check` of every block as a
-      # module of a scratch crate (see book/src/contributing.md).
+      # module of a scratch crate (see book/src/contributing.md). The same run
+      # compiles the `After:` code of every breaking changelog fragment (Rust,
+      # C, C++, WGSL, TOML), as `changelog.py --check --compile` does alone.
       - name: Install ALSA and udev headers (audio, gamepads)
         local-skip: Install system headers before the run (see CONTRIBUTING.md).
         run: sudo apt-get install -y libasound2-dev libudev-dev

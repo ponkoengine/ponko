@@ -1,23 +1,44 @@
 Coin Dash: content notices
 ==========================
 
-Coin Dash is a reference game for the Ponko engine, built from content made
-for it, and one font under the SIL Open Font License (see "Text and fonts").
+Coin Dash is a reference game for the Ponko engine. Its pictures, sounds and
+music are made by the artists named below and dedicated to the public domain
+under Creative Commons CC0 1.0 Universal; the full text of that dedication is
+in CC0-1.0.txt in this package. CC0 needs no credit, and the credits are given
+here all the same. One font is under the SIL Open Font License (see "Text and
+fonts").
 
 Pictures
 --------
 assets/coin_dash/coin.png
-    The coin: a 32 x 32 picture drawn by a short script for this example.
-    Copyright (c) 2026 Leon Mamić and Ponko contributors.
-    Licensed under the MIT license or the Apache License 2.0, at your option
-    (see LICENSE-MIT and LICENSE-APACHE in this package).
+    The coin, 32 x 32: a tile from "Tiny Town" by Kenney, CC0,
+    https://kenney.nl/assets/tiny-town
+assets/coin_dash/field.png
+    The grass field, 400 x 300: tiles from "Tiny Town" by Kenney, CC0.
+assets/coin_dash/player.png
+    The player, 32 x 32: a tile from "Tiny Dungeon" by Kenney, CC0,
+    https://kenney.nl/assets/tiny-dungeon
 
-The player's disc is drawn in code when the game starts; it is not a file.
+Sound (Ogg Vorbis)
+------------------
+assets/coin_dash/sounds/pickup.ogg   a coin: "handleCoins2", RPG Audio
+assets/coin_dash/sounds/win.ogg      a round won: "jingles_PIZZI01",
+                                     Music Jingles
+assets/coin_dash/sounds/lose.ogg     a round lost: "jingles_PIZZI04",
+                                     Music Jingles
+assets/coin_dash/sounds/select.ogg   a menu choice: "click_001",
+                                     Interface Sounds
+    From sound packs by Kenney, CC0:
+      RPG Audio          https://kenney.nl/assets/rpg-audio
+      Music Jingles      https://kenney.nl/assets/music-jingles
+      Interface Sounds   https://kenney.nl/assets/interface-sounds
 
-Sound
------
-There are no sound files. Every sound effect is a sine tone that the game
-synthesizes when it starts.
+Music (Ogg Vorbis)
+------------------
+assets/coin_dash/music/dash.ogg
+    "Stage Select" from "4 Chiptunes (Adventure)" by Juhani Junkala
+    (SubspaceAudio), CC0,
+    https://opengameart.org/content/4-chiptunes-adventure
 
 Text and fonts
 --------------
@@ -33,8 +54,10 @@ assets/coin_dash/fonts/NotoSansArabic-UI.ttf
     description in assets/coin_dash/fonts/OFL.txt.
 
 assets/coin_dash/lang/en.json, assets/coin_dash/lang/ar.json
-    The game's text in English and Arabic, written for this example, under
-    the same terms as the coin picture.
+    The game's text in English and Arabic, written for this example.
+    Copyright (c) 2026 Leon Mamić and Ponko contributors.
+    Licensed under the MIT license or the Apache License 2.0, at your option
+    (see LICENSE-MIT and LICENSE-APACHE in this package).
 
 The engine
 ----------

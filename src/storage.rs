@@ -345,7 +345,18 @@ impl Storage {
     fn read_raw(&self, name: &str) -> Result<Vec<u8>, Error> {
         match &self.backend {
             Backend::Off => Err(off(name)),
-            Backend::Folder(dir) => std::fs::read(dir.join(name)).map_err(|e| io(name, &e)),
+            Backend::Folder(dir) => std::fs::read(dir.join(name)).map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    // Where it looked, so a wrong app id or folder shows.
+                    Error::new(
+                        ErrorKind::NotFound,
+                        format!("no stored file {name:?} in {}", dir.display()),
+                    )
+                    .with_path(name)
+                } else {
+                    io(name, &e)
+                }
+            }),
             #[cfg(target_arch = "wasm32")]
             Backend::Browser => web::read(name).ok_or_else(|| missing(name)),
         }
@@ -488,7 +499,12 @@ impl Storage {
     /// for a `T`.
     pub fn read_json<T: serde::de::DeserializeOwned>(&self, name: &str) -> Result<T, Error> {
         let bytes = self.read(name)?;
-        serde_json::from_slice(&bytes).map_err(|e| Error::from(e).context(name).with_path(name))
+        serde_json::from_slice(&bytes).map_err(|e| {
+            Error::from(e)
+                .context(format!("the file doesn't fit `{}`", std::any::type_name::<T>()))
+                .context(name)
+                .with_path(name)
+        })
     }
 
     /// Saves the world's reflected components and resources (as
@@ -689,8 +705,15 @@ impl crate::ctx::Ctx {
         } else {
             file
         };
-        let bytes = self.storage.read(&name)?;
-        let save = SaveFormat::decode(&bytes).map_err(|e| e.context(&name).with_path(&name))?;
+        let which = format!("save slot {slot:?} ({name})");
+        let bytes = self.storage.read(&name).map_err(|e| {
+            if e.kind() == ErrorKind::NotFound {
+                no_such_slot(slot, &name, &self.storage)
+            } else {
+                e
+            }
+        })?;
+        let save = SaveFormat::decode(&bytes).map_err(|e| damaged_slot(&which, &name, &bytes, &e))?;
         self.replace_world(&save).map_err(|e| {
             if e.kind() == ErrorKind::Unsupported {
                 Error::new(
@@ -699,10 +722,44 @@ impl crate::ctx::Ctx {
                 )
                 .with_path(&name)
             } else {
-                e.context(&name).with_path(&name)
+                e.context(&which).with_path(&name)
             }
         })
     }
+}
+
+/// The error of loading a slot nobody saved: the slots there are, and the
+/// call that makes one.
+fn no_such_slot(slot: &str, file: &str, storage: &Storage) -> Error {
+    let slots = storage.world_slots().unwrap_or_default();
+    let there = if slots.is_empty() {
+        "no slot has been saved yet; save one with `Storage::save_world`".to_string()
+    } else {
+        format!("saved slots: {}", slots.join(", "))
+    };
+    Error::new(
+        ErrorKind::NotFound,
+        format!("there is no save in slot {slot:?} (looked for {file}); {there}"),
+    )
+    .with_path(file)
+}
+
+/// The error of a slot file that doesn't read as a save: what is wrong with
+/// it (`why` is the decoder's) and how to get on.
+fn damaged_slot(which: &str, file: &str, bytes: &[u8], why: &Error) -> Error {
+    let problem = if bytes.is_empty() {
+        "is empty (0 bytes)".to_string()
+    } else {
+        format!("is damaged or isn't a ponko save: {}", why.message())
+    };
+    Error::new(
+        why.kind(),
+        format!(
+            "{which} {problem}; restore its previous copy if there is one (`Storage::read_backup({file:?})`) \
+             or delete the slot with `Storage::delete_world`"
+        ),
+    )
+    .with_path(file)
 }
 
 /// The name of slot `slot`'s file in `format`.

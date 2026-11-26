@@ -4,7 +4,9 @@
 
 Ponko aims to provide the power of a serious game engine through clear APIs,
 measured performance, and first-class support for AI-assisted development.
-Large simulations are a strength, alongside ordinary 2D and 3D games.
+Large simulations are a strength, alongside ordinary 2D and 3D games: a
+million entities iterate in 0.16 ms and a million units fight in 19 ms a tick
+(the [numbers and how to reproduce them](#performance)).
 Rust is the primary API; C and C++ bindings support native integrations.
 No large visual editor is required.
 
@@ -24,7 +26,8 @@ maps the old names to the new ones. Ponko is at 0.x: read
 The difference is the combination of choices and workflow. Individual features
 such as parallel ECS queries, inspection, or AI integration are not exclusive.
 The words in **bold** are [maturity levels](book/src/maturity.md): **proven**
-(a reference game played on Linux, macOS and Windows uses it), **tested**
+(a reference game that the list of checks plays on Linux, macOS and Windows
+uses it; [which runs are recorded](#where-the-checks-have-run)), **tested**
 (automated tests, no such game yet) and **experimental** ([STABILITY.md](STABILITY.md#maturity-levels)).
 
 | Area | Ponko today and direction | Bevy | Unity |
@@ -141,7 +144,8 @@ Each feature's level is at the top of its guide chapter, and the
 [maturity levels](book/src/maturity.md) page lists them all.
 
 - **Proven** (a reference game that the list of checks plays on Linux, macOS
-  and Windows uses it): the ECS, systems, game states, the fixed-step clock,
+  and Windows uses it; the [runs recorded so far](#where-the-checks-have-run)
+  are fewer than that): the ECS, systems, game states, the fixed-step clock,
   events, 2D drawing, sprite sheets and Tiled tilemaps, text and the camera,
   retained UI, named input actions, 2D physics (`physics`), scenes and
   prefabs, saves, localization, headless runs and packaging.
@@ -150,15 +154,34 @@ Each feature's level is at the top of its guide chapter, and the
   materials, shadows, clustered lights, terrain, water, post effects), 3D
   physics and navigation meshes, sound, input devices, controllers and touch,
   networking (lockstep, rollback, replication, servers and lobbies, on
-  loopback), web builds (WebGL2 in headless Chromium and WebKit), streaming,
+  loopback), web builds (WebGL2 in headless Chromium, Firefox and WebKit, and
+  WebGPU on a real GPU; [the browser checks](web/smoke/README.md), their
+  [record on a Mac](book/src/check-results/macos.md)), streaming,
   data files and asset reload,
   the inspector and editor, reflection, the control endpoint and MCP,
   profiling, and the C and C++ API.
 - **Experimental:** HDR output, WebRTC, code hot patching, threaded web builds,
-  and VR/XR (a report and a prototype).
+  and VR/XR (a [report](book/src/xr.md) and a prototype).
 - **Build choices:** Cargo features select windowing, audio, inspection,
   gamepads, 3D, physics and other optional integrations. The list of checks
-  covers Windows, macOS and Linux; web builds target WebGPU/WebGL2 with feature limits.
+  ([`scripts/checks.yml`](scripts/checks.yml)) is written for Windows, macOS
+  and Linux; web builds target WebGPU/WebGL2 with feature limits.
+
+### Where the checks have run
+
+There is no CI: a maintainer or an agent runs the list on a machine and
+records the result. What is recorded today:
+
+| System | What is recorded |
+|---|---|
+| macOS, Apple silicon (M4 Max, Metal) | The whole list that applies to a Mac, with the package smoke runs of the reference games and the browser checks: [check results: macOS](book/src/check-results/macos.md) |
+| Windows 11, AMD (Ryzen 5 3600, Radeon RX Vega; DirectX 12 and Vulkan) | The render and example fixes found there (#494, #496, #600, #606), [Shard Grove's frame-time baseline](bench/shard_grove/windows-ryzen5-3600-rx-vega/README.md) and the [scoreboard against Bevy](book/src/performance.md#windows-desktop-ryzen-5-3600-radeon-rx-vega-directx-12-and-vulkan). A record of the whole list on Windows is not in the repository yet. |
+| Linux | Nothing recorded yet: [#500](https://github.com/ponkoengine/ponko/issues/500) |
+
+A level in this README is what the repository's tests and reference games
+support; it is not a claim that every row above ran on every system. The
+checks that need a person and real hardware are in
+[#484](https://github.com/ponkoengine/ponko/issues/484).
 
 The renderer already exists. Clearer resource, pipeline, scene and pass
 boundaries, incremental updates, and broader validation are planned evolution,
@@ -182,17 +205,25 @@ headless instances do not produce screenshots. Use `perf_report` and
 `record_trace` to investigate frame cost, then rerun the same scenario.
 Reflected components/resources and explicit seeds make that loop useful.
 
-These runtime tools exist today. Reliable autonomous creation of complete
-games, broader machine-readable capability discovery, and systematic agent
-acceptance suites remain development goals. See
-[Working with AI agents](book/src/agents.md), [control](book/src/control.md),
-and [profiling](book/src/profiling.md).
+These runtime tools exist today, with an
+[agent acceptance suite](book/src/agents.md#the-agent-acceptance-suite): six
+game-development tasks (tuning, content, a bug, performance, a shader, UI),
+each with a checker and negative controls, whose scripted solutions are
+replayed through the MCP tools by `cargo test -p ponko_mcp --test agent_suite`
+(18 of 18 checks in the [0.2.0 baseline](book/src/agents.md#the-020-baseline))
+and again at each release ([release steps](CONTRIBUTING.md#releasing)). No run
+of a real agent is recorded yet. Reliable autonomous creation of complete
+games and broader machine-readable capability discovery remain development
+goals. See [Working with AI agents](book/src/agents.md),
+[control](book/src/control.md), and [profiling](book/src/profiling.md).
 
 ## Cookbook
 
 [Fifty small recipes](book/src/cookbook/index.md) for what most games do. Each
 is a few lines to copy, shown in Rust and C++ (two are Rust only, and say why), and each is compiled and
-run headless by a test, so it cannot rot. By task:
+run headless by a test, so it cannot rot: the Rust halves by the
+[`tests/cookbook_*.rs`](tests) files (one per chapter), the C++ halves by
+[`examples/cpp/cookbook.cpp`](examples/cpp/cookbook.cpp) in the native check. By task:
 
 | I want to... | Recipes |
 |---|---|
@@ -227,11 +258,21 @@ AGENTS=1000000 TICKS=600 cargo run --release --example headless
 | [legions](examples/legions/) | 100,000 units on flow fields with spatial-grid targeting, arrows and instanced sprites; recorded battles replay to the same world hash (see [the guide](book/src/legions.md)) |
 | [headless](examples/headless.rs) | Simulation without window or GPU |
 | [coin_dash](examples/coin_dash/) | A small complete game: title, settings (UI scale, rebindable controls), play, pause and result screens, sound, saved best time with recovery from a damaged save, tested headlessly by `tests/coin_dash.rs`, packaged for the desktop and smoke-tested (`scripts/package-coin-dash.py`), and built for the web (see [the guide](book/src/packaging.md)) |
+| [ember_hop](examples/ember_hop/) | A 2D platformer: Tiled levels, prefabs, 2D physics, animated sprite sheets, particles, streamed music and save slots (see [the guide](book/src/ember-hop.md)) |
+| [shard_grove](examples/shard_grove/) | A third-person 3D game: a glTF level with PBR textures, skinned characters on an animation state machine, enemies on a navigation mesh, positional sound and saves (see [the guide](book/src/shard-grove.md)) |
 | [terrain](examples/terrain/main.rs) / [shaders](examples/shaders.rs) | 3D terrain with a water-kit lake, and custom materials |
 | [physics3d](examples/physics3d.rs) / [vehicle](examples/vehicle.rs) | Characters and raycast-wheel vehicles |
 | [C++ examples](examples/cpp) | Native wrapper usage |
 
 ![The battle example: two armies moving around terrain](book/src/images/battle.jpg)
+
+The three reference games, with CC0 art, sound and music by Kenney,
+Quaternius, Poly Haven and OpenGameArt artists (credits in each game's
+`CONTENT-NOTICES.txt`):
+
+| [Coin Dash](book/src/packaging.md) | [Ember Hop](book/src/ember-hop.md) | [Shard Grove](book/src/shard-grove.md) |
+|---|---|---|
+| ![Coin Dash: the player on a grass field among coins](book/src/images/coin-dash.jpg) | ![Ember Hop: the ember spirit in a cave](book/src/images/ember-hop.jpg) | ![Shard Grove: the warden and a crawler in the grove](book/src/images/shard-grove.jpg) |
 
 The browser demo sources are in `web/`; the [web build guide](https://ponko.dev/guide/web.html)
 shows how to build and serve them locally. The [website](https://ponko.dev/) has the
@@ -244,24 +285,25 @@ at revision `e60e15a8` (the sprite and Unity rows below are older and were not
 run again; the ECS row was run again on 2026-11-22 at `9235ea05`); web builds run on one thread and are slower. Reproduction commands and workload context are on the
 [benchmarks page](book/src/performance.md).
 
-| Workload | Time |
-|---|---|
-| ECS iteration, 1M entities: Ponko / bevy_ecs / hecs | **0.16** / 0.36 / 0.70 ms |
-| Headless simulation, 10M agents | 7.2 ms per tick |
-| Battle, 1M units: flow fields, spatial grids, fighting | 19.3 ms per tick |
-| Ant colonies, 1M ants | 16 ms per tick |
-| Boids, 1M, with neighbor search | ~33 ms per tick |
-| 100k events sent and read | 0.44 ms per tick |
-| 1M moving sprites (1.6 px), rendered | 120 FPS (display cap) |
-| 3D, 100k spinning cubes with shadows: Ponko / Unity 6 ([details](book/src/performance.md#3d-ponko-vs-unity)) | **402** / 54 FPS (7.5x) |
-| Memory per entity, 1M agents | 96 bytes |
+| Workload | Time | Details and how to rerun |
+|---|---|---|
+| ECS iteration, 1M entities: Ponko / bevy_ecs / hecs | **0.16** / 0.36 / 0.70 ms | [ECS iteration](book/src/performance.md#ecs-iteration) (rerun 2026-11-22) |
+| Headless simulation, 10M agents | 7.2 ms per tick | [Headless simulation](book/src/performance.md#headless-simulation) |
+| Battle, 1M units: flow fields, spatial grids, fighting | 19.3 ms per tick | [Battle](book/src/performance.md#battle-the-flagship-demo) |
+| Ant colonies, 1M ants | 16 ms per tick | [Ant colonies](book/src/performance.md#ant-colonies-whole-game-loop) |
+| Boids, 1M, with neighbor search | ~33 ms per tick | [Boids](book/src/performance.md#boids-neighbor-search) |
+| 100k events sent and read | 0.44 ms per tick | [Events](book/src/performance.md#events-and-attachments) |
+| 1M moving sprites (1.6 px), rendered | 120 FPS (display cap) | [Rendering a million sprites](book/src/performance.md#rendering-a-million-sprites) (an older run) |
+| 3D, 100k spinning cubes with shadows: Ponko / Unity 6 | **402** / 54 FPS (7.5x) | [3D: Ponko vs Unity](book/src/performance.md#3d-ponko-vs-unity) (an older run, shown again below) |
+| Memory per entity, 1M agents | 96 bytes | [Memory](book/src/performance.md#memory) |
 
 ### Ponko vs Bevy on two machines
 
 The [scoreboard](book/src/performance.md#ponko-vs-bevy-the-scoreboard) runs
 the same workloads on Ponko and Bevy 0.20.1, release builds, the median of three
-runs. It has been run on a MacBook Pro (M4 Max, Metal) and on a Windows 11
-desktop (Ryzen 5 3600, Radeon RX Vega, DirectX 12 and Vulkan; run-time rows
+runs. It has been run on a MacBook Pro (M4 Max, Metal) and on a [Windows 11
+desktop](book/src/performance.md#windows-desktop-ryzen-5-3600-radeon-rx-vega-directx-12-and-vulkan)
+(Ryzen 5 3600, Radeon RX Vega, DirectX 12 and Vulkan; run-time rows
 only, on a machine that other jobs were also using). A selection, in ms per frame or tick:
 
 | Workload | M4 Max, Metal: Ponko / Bevy | Windows, DX12: Ponko / Bevy | Windows, Vulkan: Ponko / Bevy |
@@ -318,9 +360,9 @@ measurements; correctness and compatibility come first. The
 MCP contracts and determinism within its stated scope.
 
 Questions, ideas and things you made go to
-[GitHub Discussions](https://github.com/ponkoengine/ponko/discussions);
-maintainers answer new issues and discussions within a week. How decisions are
-made is in [GOVERNANCE.md](GOVERNANCE.md).
+[GitHub Discussions](https://github.com/ponkoengine/ponko/discussions). How
+decisions are made, and how quickly the maintainers aim to answer, is in
+[GOVERNANCE.md](GOVERNANCE.md).
 
 Follow the [code of conduct](CODE_OF_CONDUCT.md). Report vulnerabilities through
 [SECURITY.md](SECURITY.md).

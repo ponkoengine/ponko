@@ -23,5 +23,6 @@
   ```
   After:
   ```rust
+  # let (texture, color): (Texture, Color) = todo!();
   let s = Sprite::new(texture).with_color(color);
   ```

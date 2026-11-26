@@ -1,3 +1,4 @@
+<!-- area: Guide and examples -->
 ### Changed
 - Missing documentation is now a compile error (`#![deny(missing_docs)]`)
   in `ponko_ecs`, `ponko_macros` and the engine's core modules (game, ctx,

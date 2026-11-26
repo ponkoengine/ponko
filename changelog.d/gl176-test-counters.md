@@ -28,5 +28,7 @@
   ```
   After:
   ```rust
+  use ponko::perf::ScopeReport;
+  # let (name, avg_ms, max_ms, calls_per_frame) = todo!();
   let s = ScopeReport { name, avg_ms, max_ms, calls_per_frame, ..Default::default() };
   ```

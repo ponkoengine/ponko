@@ -21,9 +21,11 @@
   images as exported (glTF and OpenGL style, green up).
   Before:
   ```rust
-  let bumps = MaterialDesc { normal_map: Some(normals), normal_strength: -1.0, ..Default::default() };
+  let bumps = MaterialDesc::default().with_normal_map(normals).with_normal_strength(-1.0);
   ```
   After:
   ```rust
-  let bumps = MaterialDesc { normal_map: Some(normals), normal_strength: 1.0, ..Default::default() };
+  use ponko::render::MaterialDesc;
+  # let normals: Texture = todo!();
+  let bumps = MaterialDesc::default().with_normal_map(normals).with_normal_strength(1.0);
   ```

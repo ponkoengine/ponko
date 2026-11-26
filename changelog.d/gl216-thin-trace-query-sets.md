@@ -1,3 +1,4 @@
+<!-- area: Rendering -->
 ### Changed
 - `GraphicsQuality::High` now turns on `Post::ssr_thin_objects` (thin
   things stay whole in screen-space reflections without TAA), as `Ultra`

@@ -82,7 +82,7 @@ fn an_unreflected_component_names_the_registration_call() {
             .unwrap_err();
         assert!(
             err.message()
-                .contains("no reflected component named `Health` (register it with `world.reflect::<T>()`)"),
+                .contains("no reflected component named `Health`: register the type with `world.reflect::<Health>()`"),
             "{err}"
         );
         // After the call the message names, the same load works.
@@ -99,7 +99,7 @@ fn an_unreflected_resource_names_the_registration_call() {
     let err = ponko::reflect::ReflectError::UnknownResource("Tuning".into());
     assert!(
         err.to_string()
-            .contains("register it with `world.reflect_resource::<T>()`"),
+            .contains("register the type with `world.reflect_resource::<Tuning>()`"),
         "{err}"
     );
 }

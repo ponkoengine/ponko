@@ -1992,7 +1992,6 @@ impl Ctx {
             }
         }
         self.gfx.frame3d.probe_refresh = steps;
-        let targets = &self.gfx.assets3d.render_targets;
         self.gfx.frame3d.probes.fill(Default::default());
         for (t, p) in self
             .world
@@ -2007,16 +2006,31 @@ impl Ctx {
                 };
             }
         }
+        // Icons drawn in all their frames are done: their materials go.
+        let done = |i: &mut super::PendingIcon| i.frames >= super::ICON_FRAMES;
+        for icon in self.gfx.icons.extract_if(.., done).collect::<Vec<_>>() {
+            self.gfx.free(icon.material);
+        }
+        // Tone mapped as the main view is now.
+        for i in 0..self.gfx.icons.len() {
+            let (material, exposure) = (self.gfx.icons[i].material, self.gfx.icons[i].exposure);
+            let desc = super::icon::icon_material(exposure, self.scene3d.post.tonemap);
+            self.gfx.update_material(material, desc);
+        }
+        let targets = &self.gfx.assets3d.render_targets;
+        let live = |c: &super::TargetCamera| targets.iter().any(|t| t.id == c.target.texture.id);
+        // An icon whose target was freed before its frame is dropped.
+        let dropped: Vec<_> = self.gfx.icons.extract_if(.., |i| !live(&i.camera)).collect();
         let cameras = self
             .scene3d
             .passes
             .target_cameras
             .iter()
             .chain(capture_cameras.iter())
-            .filter(|c| targets.iter().any(|t| t.id == c.target.texture.id));
+            .filter(|c| live(c));
         let count = cameras.clone().count();
         let views = &mut self.gfx.frame3d.views;
-        views.resize_with(count, Default::default);
+        views.resize_with(count + self.gfx.icons.len(), Default::default);
         let lighting = super::Lighting {
             shadows: false,
             gi: super::GlobalIllumination {
@@ -2025,37 +2039,30 @@ impl Ctx {
             },
             ..self.scene3d.lighting
         };
-        for (view, camera) in views.iter_mut().zip(cameras) {
-            let size = (camera.target.width(), camera.target.height());
-            let mut eye = camera.camera;
-            eye.set_viewport(glam::Vec2::new(size.0 as f32, size.1 as f32));
-            view.frame.lod = self.scene3d.lod;
-            view.frame.lod_dt = Some(self.time.frame_dt());
-            view.frame.cull_box = camera.cull_box;
-            view.frame
-                .collect(&mut self.world, &self.gfx.assets3d, skins, &eye, &lighting);
-            view.target = camera.target.texture.id;
-            view.size = size;
-            view.camera = eye.position;
-            view.particles = eye.particles;
-            view.debug = eye.draws_debug(true);
-            view.eye = Some(eye);
-            view.cull_box = camera.cull_box;
-            view.clear = camera.clear;
-            let effects_live = &self.gfx.assets3d.effects_live;
-            view.effects.clear();
-            view.effects.extend(camera.effects.iter().filter_map(|e| {
-                // A freed effect is skipped, as in the main view's list.
-                if !effects_live.contains(e.effect.id) {
-                    return None;
-                }
-                let material = e.material.or(fallback)?;
-                Some((e.effect.id, material.id))
-            }));
-            view.view_proj = match camera.clip_plane {
-                Some(plane) => super::target::oblique(eye.view_proj(), eye.view(), plane),
-                None => eye.view_proj(),
-            };
+        let fill = FillView {
+            assets: &self.gfx.assets3d,
+            skins,
+            lighting: &lighting,
+            lod: self.scene3d.lod,
+            dt: self.time.frame_dt(),
+            fallback,
+        };
+        let (cameras_views, icon_views) = views.split_at_mut(count);
+        for (view, camera) in cameras_views.iter_mut().zip(cameras) {
+            fill.view(view, camera, &mut self.world, false);
+        }
+        // Icons: each from its own world, with no skinned models.
+        let no_skins = super::SkinFrame::default();
+        let fill = FillView {
+            skins: &no_skins,
+            ..fill
+        };
+        for (view, icon) in icon_views.iter_mut().zip(&mut self.gfx.icons) {
+            fill.view(view, &icon.camera, &mut icon.world, true);
+            icon.sent = true;
+        }
+        for icon in dropped {
+            self.gfx.free(icon.material);
         }
     }
 
@@ -2087,7 +2094,7 @@ impl Ctx {
         {
             // Ragdolls pose their skeletons (after this frame's interpolation);
             // their animators wait, except while blending back.
-            crate::physics3d::pose_ragdolls(&mut self.world, &mut self.physics3d.ragdolls);
+            crate::physics3d_impl::pose_ragdolls(&mut self.world, &mut self.physics3d.ragdolls);
             self.world
                 .query::<(
                     ponko_ecs::Entity,
@@ -2100,7 +2107,7 @@ impl Ctx {
                         if !animator.manual {
                             animator.update(dt, skeleton);
                         }
-                        if crate::physics3d::blend_back(ragdoll, skeleton, dt) {
+                        if crate::physics3d_impl::blend_back(ragdoll, skeleton, dt) {
                             finished.push(e);
                         }
                     }
@@ -2109,7 +2116,7 @@ impl Ctx {
                 .query::<(ponko_ecs::Entity, &mut Skeleton, &mut crate::d3::Ragdoll)>()
                 .filter::<ponko_ecs::Without<super::Animator>>()
                 .for_each(|(e, skeleton, ragdoll)| {
-                    if ragdoll.is_blending() && crate::physics3d::blend_back(ragdoll, skeleton, dt) {
+                    if ragdoll.is_blending() && crate::physics3d_impl::blend_back(ragdoll, skeleton, dt) {
                         finished.push(e);
                     }
                 });
@@ -2420,6 +2427,59 @@ pub(crate) fn collect_window_views(
         }
     }
     main.window_views = frames;
+}
+
+/// What every target camera's view is collected with (`Ctx::collect_views`).
+#[derive(Clone, Copy)]
+struct FillView<'a> {
+    assets: &'a super::Assets3D,
+    skins: &'a super::SkinFrame,
+    lighting: &'a super::Lighting,
+    lod: super::LodSettings,
+    dt: f32,
+    fallback: Option<Material>,
+}
+
+impl FillView<'_> {
+    /// Collects `camera`'s view of `world` into `view`.
+    fn view(
+        &self,
+        view: &mut super::collect::ViewFrame,
+        camera: &super::TargetCamera,
+        world: &mut World,
+        isolated: bool,
+    ) {
+        let size = (camera.target.width(), camera.target.height());
+        let mut eye = camera.camera;
+        eye.set_viewport(glam::Vec2::new(size.0 as f32, size.1 as f32));
+        view.frame.lod = self.lod;
+        view.frame.lod_dt = Some(self.dt);
+        view.frame.cull_box = camera.cull_box;
+        view.frame.collect(world, self.assets, self.skins, &eye, self.lighting);
+        view.target = camera.target.texture.id;
+        view.size = size;
+        view.camera = eye.position;
+        view.particles = eye.particles;
+        view.debug = eye.draws_debug(true);
+        view.eye = Some(eye);
+        view.cull_box = camera.cull_box;
+        view.clear = camera.clear;
+        view.isolated = isolated;
+        let effects_live = &self.assets.effects_live;
+        view.effects.clear();
+        view.effects.extend(camera.effects.iter().filter_map(|e| {
+            // A freed effect is skipped, as in the main view's list.
+            if !effects_live.contains(e.effect.id) {
+                return None;
+            }
+            let material = e.material.or(self.fallback)?;
+            Some((e.effect.id, material.id))
+        }));
+        view.view_proj = match camera.clip_plane {
+            Some(plane) => super::target::oblique(eye.view_proj(), eye.view(), plane),
+            None => eye.view_proj(),
+        };
+    }
 }
 
 #[cfg(test)]

@@ -200,7 +200,9 @@ impl Ctx {
         self.load_scene_assets(&save)?;
         #[cfg(feature = "3d")]
         let terrain = crate::three::prepare_scene_terrain(self, &save)?;
-        self.world.load(&save)?;
+        self.world
+            .load(&save)
+            .map_err(|e| crate::reflect::locate_load_error(&self.world, &save, e))?;
         self.commands = self.world.commands();
         self.scene_loads += 1;
         #[cfg(feature = "3d")]
@@ -452,7 +454,9 @@ impl Ctx {
         Entity::with_remap(&map, || {
             for (entry, &e) in file.entries.iter().zip(&entities) {
                 for (name, value) in &entry.components {
-                    self.world.set_json(e, name, value.clone())?;
+                    self.world
+                        .set_json(e, name, value.clone())
+                        .map_err(|err| crate::reflect::explain_error(&self.world, err))?;
                 }
                 self.world.remove::<Spawning>(e);
                 if entry.prefab.is_some() {
@@ -500,7 +504,9 @@ impl Ctx {
                 )));
             };
             for (name, value) in &change.components {
-                self.world.set_json(part, name, value.clone())?;
+                self.world
+                    .set_json(part, name, value.clone())
+                    .map_err(|err| crate::reflect::explain_error(&self.world, err))?;
             }
             for name in &change.remove {
                 self.world.remove_json(part, name)?;
@@ -626,7 +632,18 @@ impl PrefabFile {
     /// Reads a version-1 file (one entity) or a version-2 file (a tree).
     pub(crate) fn parse(prefab: &Value) -> Result<Self, String> {
         if prefab["format"] != PREFAB_FORMAT {
-            return Err(format!("not a prefab (expected \"format\": \"{PREFAB_FORMAT}\")"));
+            let what = match &prefab["format"] {
+                Value::String(f) if f == "ponko-world" => {
+                    "it is a scene or save: load it with `ctx.load_scene`, or `Ctx::load_world` for a save slot"
+                        .to_string()
+                }
+                Value::String(f) => format!("its \"format\" is {f:?}"),
+                Value::Null => "it has no \"format\" field, so it isn't a file ponko wrote".to_string(),
+                other => format!("its \"format\" is {other}"),
+            };
+            return Err(format!(
+                "not a prefab (expected \"format\": \"{PREFAB_FORMAT}\"): {what}. A prefab is written by `save_prefab` or the editor"
+            ));
         }
         match prefab["version"].as_u64() {
             Some(PREFAB_VERSION) => match &prefab["components"] {
@@ -683,10 +700,18 @@ impl PrefabFile {
                     .collect::<Result<_, String>>()?;
                 Ok(Self { entries })
             }
-            _ => Err(format!(
-                "unsupported prefab version {} (this engine reads {PREFAB_VERSION} and {PREFAB_TREE_VERSION})",
-                prefab["version"]
-            )),
+            version => {
+                let cause = match version {
+                    Some(v) if v > PREFAB_TREE_VERSION => {
+                        "the prefab was written by a newer ponko: update the engine, or save it again from this version"
+                    }
+                    _ => "the file's \"version\" is missing or damaged: restore the prefab from version control",
+                };
+                Err(format!(
+                    "unsupported prefab version {} (this engine reads {PREFAB_VERSION} and {PREFAB_TREE_VERSION}): {cause}",
+                    prefab["version"]
+                ))
+            }
         }
     }
 
@@ -989,7 +1014,9 @@ fn spawn_at(world: &mut ponko_ecs::World, mut components: Value, at: Placement) 
             components["Transform3D"] = serde_json::to_value(at)?;
         }
     }
-    Ok(world.spawn_json(components)?)
+    world
+        .spawn_json(components)
+        .map_err(|e| crate::reflect::explain_error(world, e))
 }
 
 /// Where [`Ctx::spawn_prefab`](crate::ctx::Ctx::spawn_prefab) puts a prefab: a

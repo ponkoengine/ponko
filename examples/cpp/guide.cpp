@@ -2458,6 +2458,27 @@ static ponko::render_target security_screen(ponko::ctx& ctx) {
 }
 // ANCHOR_END: security_screen
 
+// ANCHOR: item_icons
+/// The inventory's slots: one icon per item, drawn once when the bag
+/// opens, not every frame. Seen a little more from the side than the
+/// default, on a dark slot colour.
+static std::vector<ponko::render_target> inventory_slots(ponko::ctx& ctx, const std::vector<ponko::mesh>& items) {
+    auto look = ponko::icon_of(64);
+    look.from = {1.0f, 0.4f, 0.6f};
+    look.background = {0.08f, 0.08f, 0.1f, 1.0f};
+    namespace u = ponko::ui;
+    auto ui = ctx.ui_retained();
+    auto bag = ui.add_panel(u::none, u::fill());
+    std::vector<ponko::render_target> icons;
+    for (auto item : items) {
+        auto icon = ctx.render_icon(item, look);
+        ui.add_image(bag, icon, u::fixed(64, 64));
+        icons.push_back(icon);
+    }
+    return icons;
+}
+// ANCHOR_END: item_icons
+
 // ANCHOR: monitor
 /// A security monitor shows the room, but not the smoke.
 static void monitor(ponko::ctx& ctx, ponko::render_target screen) {
@@ -2736,6 +2757,20 @@ static void the_pond_mirrors_the_camera() {
         auto list = ctx.target_cameras();
         if (list.size() != 1 || list[0].camera.position.y != -5 || list[0].target.width != 32) {
             std::fprintf(stderr, "pond\n");
+            std::abort();
+        }
+    });
+}
+
+static void the_inventory_draws_one_icon_per_item() {
+    ponko::game("bag", 64, 64).run_headless(1, [](ponko::ctx& ctx) {
+        auto white = ctx.default_material();
+        auto sword = ctx.create_mesh(ponko::mesh_data::cube(1.0f), white);
+        auto shield = ctx.create_mesh(ponko::mesh_data::sphere(0.5f, 8), white);
+        auto icons = inventory_slots(ctx, {sword, shield});
+        if (icons.size() != 2 || icons[0].width != 64 || icons[1].height != 64 || icons[0].id == icons[1].id ||
+            !ctx.target_cameras().empty()) {
+            std::fprintf(stderr, "inventory icons\n");
             std::abort();
         }
     });
@@ -5350,6 +5385,7 @@ int main() {
     the_ripples_run_on_a_render_target();
     the_pond_mirrors_the_camera();
     the_security_screen_sees_only_the_vault_in_green();
+    the_inventory_draws_one_icon_per_item();
     the_debug_map_shows_what_the_window_leaves_out();
     the_hills_are_nine_tiles();
     tiles_are_solid_only_near_the_player_and_the_car();

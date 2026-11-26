@@ -220,6 +220,7 @@ impl Renderer3D {
                 self.effects.pipelines[id] = Some(pipeline);
                 self.effects.modules[id] = Some(module);
                 self.effects.target_pipelines[id] = None;
+                self.effects.view_pipelines[id] = None;
             }
             Swap::Compute { new, old } => {
                 if self.compute_pipelines.get(id) != Some(&Some(new)) {

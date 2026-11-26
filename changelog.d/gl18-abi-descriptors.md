@@ -1,3 +1,23 @@
+### Breaking changes
+- C: `ponko_game_run` returns `PONKO_UNSUPPORTED` (was `PONKO_INVALID_ARGUMENT`) when the game can't start on this machine.
+  That is: no usable GPU or graphics device, no window or event loop, or a
+  library built without the `window` feature. Other statuses are unchanged,
+  and C++'s `game::run` still throws a `ponko::error` of kind
+  `PONKO_ERROR_UNSUPPORTED`.
+  Instead: code that checks `!= PONKO_OK` needs nothing; code that compared
+  the result with `PONKO_INVALID_ARGUMENT` to detect a missing GPU compares
+  it with `PONKO_UNSUPPORTED`.
+  Before:
+  ```c
+  if (ponko_game_run(game, setup, NULL) == PONKO_INVALID_ARGUMENT)
+      fprintf(stderr, "this game needs a GPU\n");
+  ```
+  After:
+  ```c
+  if (ponko_game_run(game, setup, NULL) == PONKO_UNSUPPORTED)
+      fprintf(stderr, "this game needs a GPU\n");
+  ```
+
 ### Added
 - Versioned C descriptors: settings structs that can gain fields within an
   ABI version. Each starts with `struct_size` and `version`, holds its ABI 2
@@ -26,13 +46,3 @@
   comes out of it. A steady predict-and-reconcile loop allocates nothing.
 - `PONKO_UNSUPPORTED`, a `PonkoStatus` for "this machine or build can't do
   it".
-
-### Changed
-- **Breaking:** `ponko_game_run` returns `PONKO_UNSUPPORTED` (was
-  `PONKO_INVALID_ARGUMENT`) when the game can't start on this machine: no
-  usable GPU or graphics device, no window or event loop, or a library built
-  without the `window` feature. Other statuses are unchanged. Migration: code
-  that checks `!= PONKO_OK` needs nothing; code that compared the result with
-  `PONKO_INVALID_ARGUMENT` to detect a missing GPU checks `PONKO_UNSUPPORTED`
-  instead. C++'s `game::run` still throws a `ponko::error` of kind
-  `PONKO_ERROR_UNSUPPORTED`.

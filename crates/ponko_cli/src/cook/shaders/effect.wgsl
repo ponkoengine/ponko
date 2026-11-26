@@ -25,17 +25,32 @@ fn vs_effect(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
     return vec4<f32>(uv * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0), 0.0, 1.0);
 }
 
-@fragment
-fn fs_effect(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
+// The game's effect at a pixel of the screen (named so no game effect
+// function clashes with it).
+fn engine_effect_at(at: vec2<f32>) -> vec3<f32> {
     var p: Pixel;
-    p.screen = at.xy;
-    p.uv = at.xy * frame.screen.zw;
-    p.color = scene_color(at.xy);
-    p.world = scene_position(at.xy);
+    p.screen = at;
+    p.uv = at * frame.screen.zw;
+    p.color = scene_color(at);
+    p.world = scene_position(at);
     p.distance = distance(p.world, frame.camera.xyz);
     let size = vec2<i32>(textureDimensions(scene_depth_texture));
-    p.sky = textureLoad(scene_depth_texture, clamp(vec2<i32>(at.xy), vec2<i32>(0), size - 1), 0) <= 0.0; // reverse-Z: the sky is at 0
-    return vec4<f32>(effect(p), 1.0);
+    p.sky = textureLoad(scene_depth_texture, clamp(vec2<i32>(at), vec2<i32>(0), size - 1), 0) <= 0.0; // reverse-Z: the sky is at 0
+    return effect(p);
+}
+
+@fragment
+fn fs_effect(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
+    return vec4<f32>(engine_effect_at(at.xy), 1.0);
+}
+
+// A target camera's effects: the same, keeping the picture's alpha (a
+// see-through background stays see-through).
+@fragment
+fn fs_effect_view(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
+    let size = vec2<i32>(textureDimensions(scene_color_texture));
+    let alpha = textureLoad(scene_color_texture, clamp(vec2<i32>(at.xy), vec2<i32>(0), size - 1), 0).a;
+    return vec4<f32>(engine_effect_at(at.xy), alpha);
 }
 
 // Target effects: the same `effect`, written into a render target of any

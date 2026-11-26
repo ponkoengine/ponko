@@ -629,7 +629,7 @@ fn a_mod_with_code_is_refused_by_a_game_built_without_code_mods() {
     let err = mount_err(ModSet::new().with(pack));
     assert_eq!(err.file(), Some("code.wasm"));
     assert!(
-        matches!(err.problem(), ModProblem::Code(why) if why.contains("mods-wasm")),
+        matches!(err.problem(), ModProblem::Code(why) if why.contains("turn on the `mods-wasm` cargo feature")),
         "{err}"
     );
 }

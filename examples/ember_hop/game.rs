@@ -567,7 +567,7 @@ fn load_art(ctx: &mut Ctx) -> Art {
 }
 
 fn load_sounds(ctx: &mut Ctx) -> Sounds {
-    let mut sound = |name: &str| ctx.audio.load(&format!("ember_hop/sounds/{name}.wav"));
+    let mut sound = |name: &str| ctx.audio.load(&format!("ember_hop/sounds/{name}.ogg"));
     Sounds {
         jump: sound("jump"),
         spark: sound("spark"),

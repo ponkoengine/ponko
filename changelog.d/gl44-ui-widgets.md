@@ -1,3 +1,35 @@
+### Breaking changes
+- `UiTheme` has new fields: `spacing`, `radius` and `tooltip_delay` for the widgets, and `transition` and `press_scale` for animated controls.
+  Every built-in theme has a radius of 0, no transition and a press scale
+  of 1, so it draws exactly as before.
+  Instead: build themes with `..UiTheme::default()`, `UiTheme::dark()` or
+  `UiTheme::light()` after the fields you set.
+  Before:
+  ```rust
+  let theme = UiTheme { panel, control, hover, pressed, disabled, accent, text, title, font,
+      text_size: 18.0, title_size: 28.0, border_width: 1.0 };
+  ```
+  After:
+  ```rust
+  use ponko::ui::UiTheme;
+  # let UiTheme { panel, control, hover, pressed, disabled, accent, text, title, font, .. } = UiTheme::default();
+  let theme = UiTheme { panel, control, hover, pressed, disabled, accent, text, title, font,
+      text_size: 18.0, title_size: 28.0, border_width: 1.0, ..UiTheme::default() };
+  ```
+- `UiAccessNode` has new fields: `selected`, `expanded` and `position`.
+  A struct literal or a pattern that names every field no longer compiles.
+  Instead: end the pattern with `..` (or name the new fields).
+  Before:
+  ```rust
+  let UiAccessNode { id, role, name, value, rect, /* ... every other field */ } = node;
+  ```
+  After:
+  ```rust
+  use ponko::ui::UiAccessNode;
+  # let node: UiAccessNode = todo!();
+  let UiAccessNode { id, role, name, value, rect, .. } = node;
+  ```
+
 ### Added
 - The retained UI's widget set: `Ui::dropdown`, `tabs` and `tab`,
   `radio_group` and `radio`, `progress_bar`, `spinner`, `number_field`,
@@ -47,14 +79,6 @@
   the list's flat cost.
 
 ### Changed
-- **Breaking:** `UiInput` has the new fields `dt`, `secondary`, `menu` and
-  `captured`. A struct literal without `..Default::default()` must add them.
-  The engine fills them itself when it runs the UI.
-- **Breaking:** `UiTheme` has the new fields `spacing`, `radius` and
-  `tooltip_delay`. Build themes with `..UiTheme::default()`, `dark()` or
-  `light()`. The default theme draws exactly as before (radius 0).
-- **Breaking:** `UiAccessNode` has the new fields `selected`, `expanded` and
-  `position`. A literal or exhaustive pattern must add them (or `..`).
 - Controls draw their text in the middle of their height, at least three
   quarters of the theme's `spacing` in from their left and right edges, and buttons,
   number fields and key-binding fields centre it across too

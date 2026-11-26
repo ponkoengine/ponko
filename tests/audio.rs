@@ -154,7 +154,7 @@ fn ima_adpcm_wav_files_load_and_play() {
 
 #[cfg(feature = "audio")]
 #[test]
-#[should_panic(expected = "could not decode the sound")]
+#[should_panic(expected = "is not a valid sound: it is a text file, not a sound")]
 fn files_that_are_not_sound_say_so() {
     let path = temp_file("bad.ogg", b"this is not audio");
     Game::new("audio", 1, 1).run_headless(0, move |ctx| {

@@ -298,13 +298,20 @@ async function runCase(browser, server, runtimeCase, args) {
         if (!lost) return { problems: ["the canvas has no WebGL2 context to lose"], lines };
       }
       if (runtimeCase === "device-lost" && !lost && seen.ticks > 0) {
+        // The game's device, if the game draws with WebGPU: a canvas that
+        // has a WebGPU context hands the same one back. A browser whose
+        // WebGPU canvas can't present (Chromium's headless shell on a Mac)
+        // opens a device for the engine's test frame, and the game then
+        // runs on WebGL2; destroying that device would stop nothing.
         lost = await call(page.evaluate(() => {
           const device = globalThis.__smokeDevices?.at(-1);
+          const canvas = document.getElementById("ponko");
+          if (!device || !canvas?.getContext("webgpu")) return false;
           globalThis.__smokeDestroying = true;
-          device?.destroy();
-          return Boolean(device);
+          device.destroy();
+          return true;
         }), "destroying the WebGPU device");
-        if (!lost) return { unsupported: "the game opened no WebGPU device here (it runs on WebGL2)", problems: [], lines };
+        if (!lost) return { unsupported: "the game draws no WebGPU canvas here (it runs on WebGL2)", problems: [], lines };
       }
       await sleep(200);
       seen = await look(page);
