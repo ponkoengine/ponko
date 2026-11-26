@@ -2275,6 +2275,7 @@ impl Ctx {
             return;
         };
         self.gfx.frame3d.size_limit = renderer.max_texture_size();
+        self.gfx.frame3d.environment.clone_from(&self.scene3d.environment);
         self.gfx.frame3d.lod = self.scene3d.lod;
         self.gfx.frame3d.lod_dt = Some(self.time.frame_dt());
         self.gfx.frame3d.motion.enabled = motion;
@@ -2420,6 +2421,7 @@ pub(crate) fn collect_window_views(
         frame.cascade_texel = main.cascade_texel;
         frame.shadow_size = main.shadow_size;
         frame.probes = main.probes;
+        frame.environment.clone_from(&main.environment);
         frame.effects.clone_from(&main.effects);
         let lines = &mut frame.debug_lines;
         lines.clear();

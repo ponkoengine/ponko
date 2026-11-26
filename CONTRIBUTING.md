@@ -840,6 +840,17 @@ one list of commands for the 0.2 cut (rc.1, a week, 0.2.0).
      compare crates/ponko_bench/releases/<previous>/$m crates/ponko_bench/releases/$v/$m
    ```
 
+   Before a minor release, run the four-hour reference-game soaks in a
+   real window on macOS, Windows and Linux. Run this from the release
+   checkout on each machine (use a fresh output directory per revision):
+
+   ```sh
+   python3 scripts/soak.py --windowed --seconds 14400 --sample 60 --warmup 600 --out target/soak-release
+   ```
+
+   Follow the [soak checklist](scripts/checklists/soak.md) and link the three
+   machines' reports and any growth issues in the release pull request.
+
    Link the folder and the comparison in the CHANGELOG section (the release
    notes). Run the checks of [scripts/checks.yml](scripts/checks.yml) on the
    release branch (all of them for a minor; on every OS the matrix names, as

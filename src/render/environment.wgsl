@@ -81,6 +81,11 @@ fn ggx(xi: vec2<f32>, roughness: f32) -> vec3<f32> {
 }
 // A slot's maps start at row 128 + 256 * slot of the atlas; params.w moves
 // them up by that many rows (a refresh's copy starts at row 0).
+// Scene maps carry unscaled radiance. Other sources were already scaled
+// when their cubes were generated.
+fn map_radiance(c: vec3<f32>) -> vec3<f32> {
+    return min(c * select(1.0, config.params.z, config.ground.w != 0.0), vec3<f32>(65504.0));
+}
 fn maps_row() -> f32 {
     return 128.0 + config.params.x * 256.0 - config.params.w;
 }
@@ -92,14 +97,14 @@ fn maps_row() -> f32 {
     }
     if p.x >= size * 6.0 || p.y >= 255.0 { discard; }
     let n = cube_dir(u32(p.x / size), vec2<f32>(p.x % size, y) / size);
-    if mip == 0.0 { return vec4<f32>(source(n), 1.0); }
+    if mip == 0.0 { return vec4<f32>(map_radiance(source(n)), 1.0); }
     let tangent = basis(n); var color = vec3<f32>(0.0); var weight = 0.0;
     for (var i = 0u; i < 64u; i++) {
         let h = tangent * ggx(sequence(i), mip / 7.0);
         let l = reflect(-n, h); let w = max(dot(n, l), 0.0);
         if w > 0.0 { color += source(l) * w; weight += w; }
     }
-    return vec4<f32>(color / max(weight, 0.001), 1.0);
+    return vec4<f32>(map_radiance(color / max(weight, 0.001)), 1.0);
 }
 // The nine order-2 spherical harmonics at unit direction `d`.
 fn sh_basis(d: vec3<f32>, i: u32) -> f32 {
@@ -167,7 +172,7 @@ const SH_PARTS: u32 = 6u * SH_BANDS;
         color += c * band[i] * sh_basis(n, i);
     }
     // A bright sun can ring below zero on the far side.
-    return vec4<f32>(max(color, vec3<f32>(0.0)), 1.0);
+    return vec4<f32>(map_radiance(max(color, vec3<f32>(0.0))), 1.0);
 }
 @fragment fn brdf(in: Out) -> @location(0) vec4<f32> {
     let uv = (in.position.xy - vec2<f32>(800.0, 0.0)) / 128.0;

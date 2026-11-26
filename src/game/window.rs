@@ -84,6 +84,8 @@ fn run_window(mut game: Game, setup: Setup<'_>) -> Result<(), Error> {
         ctx,
         clock,
         last_frame: Instant::now(),
+        #[cfg(all(feature = "bench-internals", not(target_arch = "wasm32")))]
+        bench_restore_at: None,
         occluded: false,
         #[cfg(feature = "inspector")]
         inspector: None,
@@ -184,6 +186,8 @@ struct App<'s> {
     ctx: Box<Ctx>,
     clock: Clock,
     last_frame: Instant,
+    #[cfg(all(feature = "bench-internals", not(target_arch = "wasm32")))]
+    bench_restore_at: Option<Instant>,
     /// Window hidden/minimized: stop drawing, poll slowly instead of spinning.
     occluded: bool,
     /// inspector overlay, when the game has it on.
@@ -372,6 +376,21 @@ impl App<'_> {
             print_mesh_costs(&self.ctx);
             event_loop.exit();
             return;
+        }
+        #[cfg(all(feature = "bench-internals", not(target_arch = "wasm32")))]
+        if let Some(observe) = &mut self.config.bench_after_frame {
+            observe(&mut self.ctx, now.elapsed());
+            if self.ctx.quit_requested() {
+                event_loop.exit();
+                return;
+            }
+        }
+        #[cfg(all(feature = "bench-internals", not(target_arch = "wasm32")))]
+        if let Some(duration) = self.ctx.bench_minimize.take()
+            && let Some(window) = &self.window
+        {
+            self.bench_restore_at = Some(Instant::now() + duration);
+            window.set_minimized(true);
         }
         if !self.occluded
             && !self.unpaced()
@@ -978,6 +997,18 @@ impl ApplicationHandler<Ready> for App<'_> {
             eprintln!("{error}");
             crate::crash::report_error(error);
             std::process::exit(1);
+        }
+        #[cfg(all(feature = "bench-internals", not(target_arch = "wasm32")))]
+        if let Some(at) = self.bench_restore_at {
+            if Instant::now() < at {
+                event_loop.set_control_flow(ControlFlow::WaitUntil(at));
+                return;
+            }
+            self.bench_restore_at = None;
+            if let Some(window) = &self.window {
+                window.set_minimized(false);
+                window.request_redraw();
+            }
         }
         // Suspended: nothing to draw or simulate until the system resumes it.
         if self.ctx.window.suspended() {
