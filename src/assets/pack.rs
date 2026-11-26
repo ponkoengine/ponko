@@ -446,37 +446,55 @@ impl PackSource {
 
     fn open_as(path: &Path, id: String, limits: PackLimits) -> Result<PackSource, Error> {
         let shown = path.display().to_string();
-        let io =
-            |e: std::io::Error| Error::new(ErrorKind::Io, format!("could not read {shown}: {e}")).with_path(&shown);
-        let mut file = std::fs::File::open(path).map_err(io)?;
+        let file = std::fs::File::open(path)
+            .map_err(|e| Error::new(ErrorKind::Io, format!("could not read {shown}: {e}")).with_path(&shown))?;
+        Self::open_region(file, None, &shown, id, limits)
+    }
+
+    /// A pack stored in `file`: all of it, or (`Some((start, len))`) the
+    /// `len` bytes from `start`, as an Android app's uncompressed
+    /// `assets.pack` is inside its APK. `shown` names it in errors.
+    fn open_region(
+        mut file: std::fs::File,
+        region: Option<(u64, u64)>,
+        shown: &str,
+        id: String,
+        limits: PackLimits,
+    ) -> Result<PackSource, Error> {
+        let io = |e: std::io::Error| Error::new(ErrorKind::Io, format!("could not read {shown}: {e}")).with_path(shown);
+        let base = region.map_or(0, |(start, _)| start);
+        file.seek(SeekFrom::Start(base)).map_err(io)?;
         let mut head = [0u8; HEADER_LEN];
         let read = read_up_to(&mut file, &mut head).map_err(io)?;
         let header = match parse_header(&head[..read]) {
             Ok(Some(header)) => header,
-            Ok(None) => return Err(Error::decode(&shown, format!("{shown} is not an asset pack"))),
-            Err(e) => return Err(Error::decode(&shown, format!("{shown}: {e}"))),
+            Ok(None) => return Err(Error::decode(shown, format!("{shown} is not an asset pack"))),
+            Err(e) => return Err(Error::decode(shown, format!("{shown}: {e}"))),
         };
-        let len = file.metadata().map_err(io)?.len();
+        let len = match region {
+            Some((_, len)) => len,
+            None => file.metadata().map_err(io)?.len(),
+        };
         if len < header.total_len() {
             return Err(Error::decode(
-                &shown,
+                shown,
                 format!(
                     "{shown} is cut short: {len} bytes, its header says {}",
                     header.total_len()
                 ),
             ));
         }
-        let index_len = usize::try_from(header.index_len).map_err(|_| Error::decode(&shown, "index too large"))?;
+        let index_len = usize::try_from(header.index_len).map_err(|_| Error::decode(shown, "index too large"))?;
         let mut index = vec![0u8; index_len];
         file.read_exact(&mut index).map_err(io)?;
         let entries =
-            parse_index(&header, &index, &limits).map_err(|e| Error::decode(&shown, format!("{shown}: {e}")))?;
+            parse_index(&header, &index, &limits).map_err(|e| Error::decode(shown, format!("{shown}: {e}")))?;
         Ok(PackSource {
             id,
             entries,
             data: Data::File {
                 file: Mutex::new(file),
-                start: header.data_start(),
+                start: base + header.data_start(),
             },
             limits,
         })
@@ -621,11 +639,26 @@ static DEFAULT_PACKS: OnceLock<Vec<PackSource>> = OnceLock::new();
 pub(crate) fn default_packs() -> &'static [PackSource] {
     DEFAULT_PACKS.get_or_init(|| {
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            discover(&crate::assets::asset_roots())
-        }
+        #[cfg_attr(not(all(target_os = "android", feature = "window")), allow(unused_mut))]
+        let mut packs = discover(&crate::assets::asset_roots());
         #[cfg(target_arch = "wasm32")]
-        Vec::new()
+        let packs = Vec::new();
+        // An Android app's pack is inside its APK, stored uncompressed.
+        #[cfg(all(target_os = "android", feature = "window"))]
+        if let Some((file, start, len)) = crate::platform::android::apk_asset(c"assets.pack") {
+            let shown = format!("{DEFAULT_PACK} in the APK");
+            match PackSource::open_region(
+                file,
+                Some((start, len)),
+                &shown,
+                DEFAULT_PACK.into(),
+                PackLimits::current(),
+            ) {
+                Ok(pack) => packs.push(pack),
+                Err(e) => eprintln!("ponko: skipping asset pack: {e}"),
+            }
+        }
+        packs
     })
 }
 
@@ -748,6 +781,37 @@ mod tests {
             );
             assert_eq!(pack.len(), 3);
         }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_pack_inside_a_larger_file_reads_from_its_own_region() {
+        // As Android's APK holds `assets.pack`: other bytes before and after.
+        let pack = sample();
+        let mut apk = b"PK-before-".repeat(7);
+        let start = apk.len() as u64;
+        apk.extend_from_slice(&pack);
+        apk.extend_from_slice(b"after");
+        let dir = temp("region");
+        let path = dir.join("app.apk");
+        std::fs::write(&path, &apk).unwrap();
+        let open = |region| {
+            let file = std::fs::File::open(&path).unwrap();
+            PackSource::open_region(
+                file,
+                region,
+                "assets.pack in the APK",
+                "assets.pack".into(),
+                PackLimits::current(),
+            )
+        };
+        let inside = open(Some((start, pack.len() as u64))).unwrap();
+        assert_eq!(inside.read("rules.json").unwrap(), br#"{"speed": 30}"#);
+        assert_eq!(inside.read("notes/long.txt").unwrap(), "abc ".repeat(100).as_bytes());
+        let short = open(Some((start, pack.len() as u64 - 1))).err().unwrap();
+        assert!(short.to_string().contains("cut short"), "{short}");
+        let elsewhere = open(Some((0, apk.len() as u64)));
+        assert!(elsewhere.is_err(), "the file's start is not a pack");
         let _ = std::fs::remove_dir_all(dir);
     }
 

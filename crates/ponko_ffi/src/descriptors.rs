@@ -24,7 +24,7 @@
 
 use std::mem::{offset_of, size_of};
 
-use ponko::render::{Lighting, Sky};
+use ponko::render::{Lighting, MaterialLayers, Sky};
 
 use crate::ctx::{ctx_access, out};
 use crate::nav3d::{PonkoNavBakeSettings, PonkoNavSources, ponko_ctx_bake_navmesh, ponko_nav_bake_settings_default};
@@ -33,7 +33,7 @@ use crate::three::{
     PonkoLighting, PonkoMaterial, PonkoMaterialDesc, lighting_to_c, material_from_c, ponko_ctx_set_lighting,
     ponko_material_desc,
 };
-use crate::types::{PonkoColor, to_c};
+use crate::types::{PonkoColor, PonkoTexture, texture_from_c, texture_to_c, to_c};
 use crate::{Failure, PonkoCtx, PonkoStatus, boundary, invalid, invalid_owned};
 
 /// A struct with the versioned-descriptor header (`struct_size`, `version`
@@ -140,7 +140,166 @@ macro_rules! assert_header {
 // ---- material ---------------------------------------------------------------
 
 /// The version of `PonkoMaterialDescEx` this header describes.
-pub const PONKO_MATERIAL_DESC_EX_VERSION: u32 = 2;
+pub const PONKO_MATERIAL_DESC_EX_VERSION: u32 = 3;
+
+/// Layers over a material's surface (Rust `MaterialLayers`): clear coat,
+/// sheen, specular strength and color, index of refraction, anisotropy and
+/// iridescence, as glTF's material extensions describe them.
+/// `ponko_material_desc_ex_defaults` sets every layer off. Each `has_*`
+/// says whether the map after it is used. Maps are read in glTF's channels
+/// (see the Rust docs); a material reads at most two distinct layer images,
+/// and layers need the built-in shader (`has_shader` false).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PonkoMaterialLayers {
+    /// Clear coat amount, 0 (none) to 1.
+    pub clearcoat: f32,
+    /// Clear coat roughness, 0 to 1.
+    pub clearcoat_roughness: f32,
+    /// Whether `clearcoat_map` is used.
+    pub has_clearcoat_map: bool,
+    /// Multiplies `clearcoat` by its red channel.
+    pub clearcoat_map: PonkoTexture,
+    /// Whether `clearcoat_roughness_map` is used.
+    pub has_clearcoat_roughness_map: bool,
+    /// Multiplies `clearcoat_roughness` by its green channel.
+    pub clearcoat_roughness_map: PonkoTexture,
+    /// Whether `clearcoat_normal_map` is used.
+    pub has_clearcoat_normal_map: bool,
+    /// The clear coat's own normal map.
+    pub clearcoat_normal_map: PonkoTexture,
+    /// How strong the clear coat's normal map is (1).
+    pub clearcoat_normal_strength: f32,
+    /// Sheen color (sRGB); black is none.
+    pub sheen_color: PonkoColor,
+    /// Sheen roughness, 0 to 1.
+    pub sheen_roughness: f32,
+    /// Whether `sheen_color_map` is used.
+    pub has_sheen_color_map: bool,
+    /// Multiplies `sheen_color` by its red, green and blue.
+    pub sheen_color_map: PonkoTexture,
+    /// Whether `sheen_roughness_map` is used.
+    pub has_sheen_roughness_map: bool,
+    /// Multiplies `sheen_roughness` by its alpha.
+    pub sheen_roughness_map: PonkoTexture,
+    /// A non-metal's reflection strength, 0 to 1 (1).
+    pub specular: f32,
+    /// Tints a non-metal's reflection (white).
+    pub specular_color: PonkoColor,
+    /// Whether `specular_map` is used.
+    pub has_specular_map: bool,
+    /// Multiplies `specular` by its alpha.
+    pub specular_map: PonkoTexture,
+    /// Whether `specular_color_map` is used.
+    pub has_specular_color_map: bool,
+    /// Multiplies `specular_color` by its red, green and blue.
+    pub specular_color_map: PonkoTexture,
+    /// Index of refraction, 1 or more (1.5).
+    pub ior: f32,
+    /// Highlight stretch, -1 to 1 (0: none).
+    pub anisotropy: f32,
+    /// Turns the stretch from the texture's u direction, in radians.
+    pub anisotropy_rotation: f32,
+    /// Whether `anisotropy_map` is used.
+    pub has_anisotropy_map: bool,
+    /// Direction (red, green) and strength (blue).
+    pub anisotropy_map: PonkoTexture,
+    /// Thin-film amount, 0 (none) to 1.
+    pub iridescence: f32,
+    /// The film's index of refraction (1.3).
+    pub iridescence_ior: f32,
+    /// The film's thickness in nanometers: where the thickness map is
+    /// black, and where it is white (100, 400).
+    pub iridescence_thickness: [f32; 2],
+    /// Whether `iridescence_map` is used.
+    pub has_iridescence_map: bool,
+    /// Multiplies `iridescence` by its red channel.
+    pub iridescence_map: PonkoTexture,
+    /// Whether `iridescence_thickness_map` is used.
+    pub has_iridescence_thickness_map: bool,
+    /// Places the thickness by its green channel.
+    pub iridescence_thickness_map: PonkoTexture,
+}
+
+fn layers_to_c(l: &MaterialLayers) -> PonkoMaterialLayers {
+    let map = |t: Option<ponko::prelude::Texture>| (t.is_some(), t.map_or(NO_TEXTURE, texture_to_c));
+    let (has_clearcoat_map, clearcoat_map) = map(l.clearcoat_map);
+    let (has_clearcoat_roughness_map, clearcoat_roughness_map) = map(l.clearcoat_roughness_map);
+    let (has_clearcoat_normal_map, clearcoat_normal_map) = map(l.clearcoat_normal_map);
+    let (has_sheen_color_map, sheen_color_map) = map(l.sheen_color_map);
+    let (has_sheen_roughness_map, sheen_roughness_map) = map(l.sheen_roughness_map);
+    let (has_specular_map, specular_map) = map(l.specular_map);
+    let (has_specular_color_map, specular_color_map) = map(l.specular_color_map);
+    let (has_anisotropy_map, anisotropy_map) = map(l.anisotropy_map);
+    let (has_iridescence_map, iridescence_map) = map(l.iridescence_map);
+    let (has_iridescence_thickness_map, iridescence_thickness_map) = map(l.iridescence_thickness_map);
+    PonkoMaterialLayers {
+        clearcoat: l.clearcoat,
+        clearcoat_roughness: l.clearcoat_roughness,
+        has_clearcoat_map,
+        clearcoat_map,
+        has_clearcoat_roughness_map,
+        clearcoat_roughness_map,
+        has_clearcoat_normal_map,
+        clearcoat_normal_map,
+        clearcoat_normal_strength: l.clearcoat_normal_strength,
+        sheen_color: to_c(l.sheen_color),
+        sheen_roughness: l.sheen_roughness,
+        has_sheen_color_map,
+        sheen_color_map,
+        has_sheen_roughness_map,
+        sheen_roughness_map,
+        specular: l.specular,
+        specular_color: to_c(l.specular_color),
+        has_specular_map,
+        specular_map,
+        has_specular_color_map,
+        specular_color_map,
+        ior: l.ior,
+        anisotropy: l.anisotropy,
+        anisotropy_rotation: l.anisotropy_rotation,
+        has_anisotropy_map,
+        anisotropy_map,
+        iridescence: l.iridescence,
+        iridescence_ior: l.iridescence_ior,
+        iridescence_thickness: l.iridescence_thickness,
+        has_iridescence_map,
+        iridescence_map,
+        has_iridescence_thickness_map,
+        iridescence_thickness_map,
+    }
+}
+
+fn layers_from_c(l: &PonkoMaterialLayers) -> MaterialLayers {
+    let map = |has: bool, t: PonkoTexture| has.then(|| texture_from_c(t));
+    let mut out = MaterialLayers::NONE
+        .with_clearcoat(l.clearcoat, l.clearcoat_roughness)
+        .with_clearcoat_map(map(l.has_clearcoat_map, l.clearcoat_map))
+        .with_clearcoat_roughness_map(map(l.has_clearcoat_roughness_map, l.clearcoat_roughness_map))
+        .with_clearcoat_normal_map(map(l.has_clearcoat_normal_map, l.clearcoat_normal_map))
+        .with_sheen(to_c(l.sheen_color), l.sheen_roughness)
+        .with_sheen_color_map(map(l.has_sheen_color_map, l.sheen_color_map))
+        .with_sheen_roughness_map(map(l.has_sheen_roughness_map, l.sheen_roughness_map))
+        .with_specular(l.specular, to_c(l.specular_color))
+        .with_specular_map(map(l.has_specular_map, l.specular_map))
+        .with_specular_color_map(map(l.has_specular_color_map, l.specular_color_map))
+        .with_ior(l.ior)
+        .with_anisotropy(l.anisotropy, l.anisotropy_rotation)
+        .with_anisotropy_map(map(l.has_anisotropy_map, l.anisotropy_map))
+        .with_iridescence_map(map(l.has_iridescence_map, l.iridescence_map))
+        .with_iridescence_thickness_map(map(l.has_iridescence_thickness_map, l.iridescence_thickness_map));
+    out.clearcoat_normal_strength = l.clearcoat_normal_strength;
+    out.iridescence = l.iridescence;
+    out.iridescence_ior = l.iridescence_ior;
+    out.iridescence_thickness = l.iridescence_thickness;
+    out
+}
+
+const NO_TEXTURE: PonkoTexture = PonkoTexture {
+    id: 0,
+    width: 0,
+    height: 0,
+};
 
 /// What a material is made from, in a layout that can grow (Rust
 /// `MaterialDesc`): `PonkoMaterialDesc` plus the fields added since ABI 2.
@@ -155,12 +314,13 @@ pub const PONKO_MATERIAL_DESC_EX_VERSION: u32 = 2;
 /// ```
 ///
 /// Version 1: `desc`, `has_stencil`, `stencil`. Version 2 adds
-/// `masked_tint`.
+/// `masked_tint`, version 3 `unlit` and `layers`.
 /// ```
 /// use ponko_ffi::*;
 /// let mut d = PonkoMaterialDescEx { struct_size: size_of::<PonkoMaterialDescEx>() as u32, version: PONKO_MATERIAL_DESC_EX_VERSION, ..unsafe { std::mem::zeroed() } };
 /// assert_eq!(unsafe { ponko_material_desc_ex_defaults(&mut d) }, PonkoStatus::PONKO_OK);
-/// assert_eq!((d.desc.roughness, d.has_stencil, d.masked_tint), (0.6, false, false));
+/// assert_eq!((d.desc.roughness, d.has_stencil, d.masked_tint, d.unlit), (0.6, false, false, false));
+/// assert_eq!((d.layers.clearcoat, d.layers.ior, d.layers.specular), (0.0, 1.5, 1.0));
 /// ```
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -179,6 +339,10 @@ pub struct PonkoMaterialDescEx {
     /// (0: not at all); that alpha is then a mask, not opacity (Rust
     /// `MaterialDesc::masked_tint`). Version 2.
     pub masked_tint: bool,
+    /// Version 3: drawn without lighting (`KHR_materials_unlit`).
+    pub unlit: bool,
+    /// Version 3: layers over the surface (all off by default).
+    pub layers: PonkoMaterialLayers,
 }
 assert_header!(PonkoMaterialDescEx);
 
@@ -189,6 +353,7 @@ impl Versioned for PonkoMaterialDescEx {
         match version {
             1 => Some(end_of!(Self, stencil: PonkoStencil)),
             2 => Some(end_of!(Self, masked_tint: bool)),
+            3 => Some(end_of!(Self, layers: PonkoMaterialLayers)),
             _ => None,
         }
     }
@@ -207,6 +372,8 @@ fn material_defaults() -> PonkoMaterialDescEx {
         has_stencil: false,
         stencil: ponko_stencil_default(),
         masked_tint: false,
+        unlit: false,
+        layers: layers_to_c(&MaterialLayers::NONE),
     }
 }
 
@@ -231,11 +398,16 @@ fn material_ex(c: &ponko::prelude::Ctx, d: &PonkoMaterialDescEx) -> Result<ponko
     };
     Ok(material_from_c(c, &d.desc)?
         .with_stencil(stencil)
-        .with_masked_tint(d.masked_tint))
+        .with_masked_tint(d.masked_tint)
+        .with_unlit(d.unlit)
+        .with_layers(layers_from_c(&d.layers)))
 }
 
 /// Puts a material on the GPU, from a versioned description (as
-/// `ponko_ctx_create_material`, plus a stencil state with `has_stencil`).
+/// `ponko_ctx_create_material`, plus a stencil state with `has_stencil`,
+/// from version 2 `masked_tint`, and from version 3 `unlit` and `layers`). Layers out of range, with a
+/// custom shader or reading more than two images are refused with
+/// `PONKO_INVALID_ARGUMENT`.
 /// # Safety
 /// `ctx` null or live; `desc` null or a readable descriptor; output writable.
 /// ```
@@ -256,7 +428,8 @@ pub unsafe extern "C" fn ponko_ctx_create_material_ex(
                 return Err(invalid("output is null"));
             }
             let desc = material_ex(c, &d)?;
-            out(out_material, to_c(c.gfx.create_material(desc)))
+            let material = c.gfx.try_create_material(desc).map_err(crate::engine_error)?;
+            out(out_material, to_c(material))
         })
     })
 }
@@ -285,8 +458,7 @@ pub unsafe extern "C" fn ponko_ctx_update_material_ex(
                 return Err(invalid("that material wasn't made by this game"));
             }
             let desc = material_ex(c, &d)?;
-            c.gfx.update_material(material, desc);
-            Ok(())
+            c.gfx.try_update_material(material, desc).map_err(crate::engine_error)
         })
     })
 }
@@ -541,7 +713,11 @@ mod tests {
             PonkoMaterialDescEx::len_of(2),
             Some(offset_of!(PonkoMaterialDescEx, masked_tint) + 1)
         );
-        assert_eq!(PonkoMaterialDescEx::len_of(3), None);
+        assert_eq!(
+            PonkoMaterialDescEx::len_of(3),
+            Some(offset_of!(PonkoMaterialDescEx, layers) + size_of::<PonkoMaterialLayers>())
+        );
+        assert_eq!(PonkoMaterialDescEx::len_of(4), None);
         assert!(PonkoNavBakeSettingsEx::len_of(1).unwrap() <= size_of::<PonkoNavBakeSettingsEx>());
         assert_eq!(PonkoLightingEx::len_of(2), None);
     }

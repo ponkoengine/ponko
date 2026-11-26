@@ -2217,7 +2217,7 @@ static void screen_reflections(ponko::ctx& ctx) {
 static void thin_reflections(ponko::ctx& ctx) {
     auto post = ctx.post_ex(); // version 2 has ssr_thin_objects
     post.post.anti_aliasing = uint32_t(ponko::anti_aliasing::smaa);
-    post.ssr_thin_objects = true; // about 0.2 ms more at 1440p
+    post.ssr_thin_objects = true; // 0.2 ms and more at 1440p; only the ultra preset has it on
     ctx.set_post(post);
 }
 // ANCHOR_END: ssr_thin
@@ -4281,6 +4281,28 @@ static void phone_lifecycle_runs() {
     });
 }
 
+// ANCHOR: phone_back
+// Back (Android) closes the pause menu when it is open; otherwise the app
+// leaves to the background, as the player expects.
+static void handle_back(ponko::ctx& ctx, bool& menu_open) {
+    for (const auto& event : ctx.window_events()) {
+        if (event.kind == ponko::window_event_kind::back_requested && menu_open) {
+            menu_open = false;
+            ctx.window_cancel_back();
+        }
+    }
+}
+// ANCHOR_END: phone_back
+
+static void phone_back_runs() {
+    ponko::game("guide", 390, 844).run_headless(0, [](ponko::ctx& ctx) {
+        bool menu_open = true;
+        ctx.window_feed_lifecycle(ponko::window_event_kind::back_requested);
+        handle_back(ctx, menu_open);
+        if (menu_open || ctx.window_back_requested()) std::abort();
+    });
+}
+
 static void touch_scenario_runs() {
     ponko::game game("Fingers", 640, 800);
     auto run = game.run_headless_scenario(touch_test());
@@ -5265,6 +5287,7 @@ int main() {
     touch_scenario_runs();
     safe_area_runs();
     phone_lifecycle_runs();
+    phone_back_runs();
     states_guide();
     state_screen_guide();
     native_prediction_runs();
@@ -5885,4 +5908,29 @@ struct wall_count {
         ctx.rollback_start(config);
     });
     // ANCHOR_END: rollback_session
+}
+[[maybe_unused]] static void gltf_preview_lighting(ponko::ctx& ctx) {
+    // ANCHOR: gltf_preview
+    const ponko::transform3d at = ponko::transform3d_at({0, 0, -10});
+    const char* path = "models/house.glb";
+    ctx.world().spawn(at, ponko::model_of(ctx.load_mesh(path)));
+    // Choose EV100 for the photographed lighting. glTF stores no camera exposure.
+    // The point and spot lights come back so a viewer can despawn them with the model.
+    std::vector<ponko::entity> lamps = ctx.light_gltf(path, at, 8.0f);
+    (void)lamps;
+
+    // A light of your own, placed the same way (candela for point and spot lights, lux for the sun):
+    ponko::model_light sun = ponko::model_light_default();
+    sun.kind = PONKO_MODEL_LIGHT_SUN;
+    sun.sun_intensity = 512.0f;
+    ctx.place_light_exposed(sun, at, 9.0f); // the scene's sun, about 0.83 in engine units
+    // ANCHOR_END: gltf_preview
+}
+[[maybe_unused]] static void environment_map_guide(ponko::ctx& ctx) {
+    // ANCHOR: environment_map
+    ctx.load_environment("studio.hdr");                     // a 2:1 panorama, +Y up, +X at the center
+    ctx.load_environment_cube({"px.hdr", "nx.hdr", "py.hdr", "ny.hdr", "pz.hdr", "nz.hdr"});
+    ctx.set_studio_environment();                           // the neutral generated studio
+    ctx.clear_environment();                                // back to lighting from the sky
+    // ANCHOR_END: environment_map
 }

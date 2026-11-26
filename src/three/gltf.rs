@@ -174,6 +174,13 @@ pub(crate) struct LoadedMaterial {
     pub custom: Option<[glam::Vec4; 4]>,
     /// The custom shader its extras name (`ponko:shader`), as an asset name.
     pub shader: Option<String>,
+    /// `KHR_materials_unlit`.
+    pub unlit: bool,
+    /// Its layers (glTF's material extensions), without their maps.
+    pub layers: super::MaterialLayers,
+    /// The layers' maps, as indices into `Loaded::images`, in the shader's
+    /// order (`MapKind`).
+    pub layer_maps: [Option<usize>; super::MAP_KINDS],
 }
 
 impl LoadedMaterial {
@@ -193,6 +200,9 @@ impl LoadedMaterial {
             double_sided: false,
             custom: None,
             shader: None,
+            unlit: false,
+            layers: super::MaterialLayers::NONE,
+            layer_maps: [None; super::MAP_KINDS],
         }
     }
 }
@@ -516,6 +526,9 @@ impl Walk {
             .nodes()
             .nth(index)
             .ok_or_else(|| format!("{name}: a node isn't in the file"))?;
+        if !gltf_ext::visible(&self.prepared.json, index) {
+            return Ok(()); // it and everything under it is hidden
+        }
         let mut matrix = parent * Mat4::from_cols_array_2d(&node.transform().matrix());
         let children = matrix;
         self.lights.extend(gltf_ext::light_of(
@@ -848,9 +861,13 @@ pub(crate) fn load_nodes(
     // The first node of each glTF mesh (with its node's own morph weights,
     // which override the mesh's): later nodes copy its mesh.
     let mut first_of_mesh: HashMap<(usize, Option<Vec<u32>>), usize> = HashMap::new();
-    let mut stack: Vec<(gltf::Node, Option<usize>)> = scene.nodes().map(|n| (n, None)).collect();
+    // Each node with its parent, and whether it is hidden
+    // (`KHR_node_visibility`, here or above): a hidden node keeps its place
+    // in the tree, without its mesh and light.
+    let mut stack: Vec<(gltf::Node, Option<usize>, bool)> = scene.nodes().map(|n| (n, None, false)).collect();
     stack.reverse();
-    while let Some((node, parent)) = stack.pop() {
+    while let Some((node, parent, hidden_above)) = stack.pop() {
+        let hidden = hidden_above || !gltf_ext::visible(&json, node.index());
         let (t, r, s) = node.transform().decomposed();
         let local = Transform3D {
             position: Vec3::from(t),
@@ -863,7 +880,7 @@ pub(crate) fn load_nodes(
             .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw.get()).ok());
         let mut mesh = None;
         let mut same_mesh_as = None;
-        let key = node.mesh().map(|m| {
+        let key = node.mesh().filter(|_| !hidden).map(|m| {
             (
                 m.index(),
                 node.weights().map(|w| w.iter().map(|x| x.to_bits()).collect()),
@@ -876,7 +893,7 @@ pub(crate) fn load_nodes(
                 morph_defaults: m.morph_defaults.clone(),
             });
             same_mesh_as = mesh.as_ref().map(|_| first);
-        } else if let Some(m) = node.mesh() {
+        } else if let Some(m) = node.mesh().filter(|_| !hidden) {
             let targets = target_names(&m);
             let mut by_material: Vec<(usize, MeshData)> = Vec::new();
             for primitive in m.primitives() {
@@ -926,7 +943,7 @@ pub(crate) fn load_nodes(
             local,
             extras,
             mesh,
-            light: gltf_ext::light_of(&json, node.index(), Mat4::IDENTITY, node.name()),
+            light: gltf_ext::light_of(&json, node.index(), Mat4::IDENTITY, node.name()).filter(|_| !hidden),
             skinned: node.skin().is_some(),
             same_mesh_as,
         });
@@ -935,7 +952,7 @@ pub(crate) fn load_nodes(
             first_of_mesh.entry(key).or_insert(at);
         }
         let children: Vec<_> = node.children().collect();
-        stack.extend(children.into_iter().rev().map(|c| (c, Some(at))));
+        stack.extend(children.into_iter().rev().map(|c| (c, Some(at), hidden)));
     }
     if uses_default {
         materials.push(LoadedMaterial::plain());
@@ -1031,6 +1048,11 @@ fn read_materials(
         let strength = extensions.as_ref().map_or(1.0, |e| e.emissive_strength);
         let [er, eg, eb] = material.emissive_factor().map(|c| c * strength);
         let transmission = extensions.as_ref().map_or(0.0, |e| e.transmission);
+        let unlit = extensions.as_ref().is_some_and(|e| e.unlit);
+        let mut layers = extensions.as_ref().map_or(super::MaterialLayers::NONE, |e| e.layers);
+        let layer_textures = extensions
+            .as_ref()
+            .map_or([None; super::MAP_KINDS], |e| e.layer_textures);
         mappings.push(extensions.map_or(UvMapping::PLAIN, |e| e.mapping));
         let mut get = |t: Option<gltf::Texture>| match t {
             Some(t) => images.texture(&t, preferred_image, warnings, read).map(Some),
@@ -1077,6 +1099,27 @@ fn read_materials(
                 (None, None)
             }
         };
+        let label = material.name().unwrap_or("");
+        if layers.is_on() && shader.is_some() {
+            warnings.push(format!(
+                "{name}: material \"{label}\": its layers (clear coat, sheen, ...) are drawn by the \
+                 built-in shader, not its custom one; they are left out"
+            ));
+            layers = super::MaterialLayers::NONE;
+        }
+        let layer_maps = if layers.is_on() {
+            layer_maps(
+                &layer_textures,
+                gltf,
+                &mut images,
+                preferred_image,
+                read,
+                warnings,
+                (name, label),
+            )?
+        } else {
+            [None; super::MAP_KINDS]
+        };
         materials.push(LoadedMaterial {
             name: material.name().unwrap_or("").to_string(),
             color: Color::rgba(to_srgb(r), to_srgb(g), to_srgb(b), a * (1.0 - transmission)),
@@ -1092,6 +1135,9 @@ fn read_materials(
             double_sided: material.double_sided(),
             custom,
             shader,
+            unlit,
+            layers,
+            layer_maps,
         });
     }
     Ok(FileMaterials {
@@ -1101,6 +1147,53 @@ fn read_materials(
         images: images.decoded,
         blocks: images.blocks,
     })
+}
+
+/// A material's layer maps (`textures`, the file's texture indices) read
+/// as images: at most two distinct images, as the renderer binds (more are
+/// left out, with a warning). `(file, label)` name the material.
+fn layer_maps(
+    textures: &[Option<usize>; super::MAP_KINDS],
+    gltf: &gltf::Document,
+    images: &mut Images,
+    preferred_image: &[Option<usize>],
+    read: Read,
+    warnings: &mut Vec<String>,
+    (file, label): (&str, &str),
+) -> Result<[Option<usize>; super::MAP_KINDS], String> {
+    use super::{LayerSlots, MapKind as K};
+    const KINDS: [K; super::MAP_KINDS] = [
+        K::Clearcoat,
+        K::ClearcoatRoughness,
+        K::ClearcoatNormal,
+        K::SheenColor,
+        K::SheenRoughness,
+        K::Specular,
+        K::SpecularColor,
+        K::Anisotropy,
+        K::Iridescence,
+        K::IridescenceThickness,
+    ];
+    let mut out = [None; super::MAP_KINDS];
+    for (slot, texture) in out.iter_mut().zip(textures) {
+        let Some(texture) = texture.and_then(|t| gltf.textures().nth(t)) else {
+            continue;
+        };
+        *slot = Some(images.texture(&texture, preferred_image, warnings, read)?);
+    }
+    let (slots, needed) = LayerSlots::place(std::array::from_fn(|k| (out[k].map(|i| i as u32), KINDS[k])));
+    if needed > 2 {
+        warnings.push(format!(
+            "{file}: material \"{label}\" reads {needed} images for its layers; the renderer binds two, \
+             so the maps in the others are left out"
+        ));
+        for (k, map) in out.iter_mut().enumerate() {
+            if (slots.packed >> (2 * k)) & 3 == 0 {
+                *map = None;
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// The names of `mesh`'s morph targets: from its extras' `targetNames`

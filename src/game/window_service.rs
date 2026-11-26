@@ -252,9 +252,8 @@ impl WindowBackend for Backend {
         }
         #[cfg(target_os = "android")]
         {
-            Err(unsupported(
-                "cannot read the clipboard on Android yet; keep the text in the game",
-            ))
+            crate::platform::android::clipboard_text()
+                .ok_or_else(|| unsupported("cannot read the clipboard: Android refused (see the log); retry"))
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -292,10 +291,13 @@ impl WindowBackend for Backend {
         }
         #[cfg(target_os = "android")]
         {
-            let _ = text;
-            Err(unsupported(
-                "cannot write the clipboard on Android yet; keep the text in the game",
-            ))
+            if crate::platform::android::set_clipboard_text(text) {
+                Ok(())
+            } else {
+                Err(unsupported(
+                    "cannot write the clipboard: Android refused (see the log); retry",
+                ))
+            }
         }
         #[cfg(target_arch = "wasm32")]
         {

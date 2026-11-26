@@ -73,3 +73,6 @@ none                                     no public API: the prototype is a test,
 
 [ios.md] no device has run it: touch, interruptions, the silent switch and signing are unchecked
 none                                     what is iOS-only is the build and the package (ponko_cli), not engine API; the lifecycle events, keyboard inset and audio session category are platform-neutral and tested headlessly on every system
+
+[android.md] no phone has run it: multi-touch, calls, memory pressure, performance and release signing are unchecked
+none                                     what is Android-only is the build and the package (ponko_cli), not engine API; Back (`WindowEvent::BackRequested`, `cancel_back`, `back_requested`) is platform-neutral and tested headlessly on every system

@@ -50,6 +50,10 @@ struct Render3DSettings {
 
 pub(crate) struct Renderer {
     window_surface: Option<WindowSurface>,
+    /// Android: the window's surface was destroyed with its native window
+    /// while the app is in the background; what makes it again.
+    #[cfg(target_os = "android")]
+    released_surface: Option<(Arc<Window>, wgpu::Instance, wgpu::Adapter)>,
     lifecycle: super::surface_lifecycle::SurfaceLifecycle,
     /// The surface changed (see [`surface_event`](Self::surface_event)):
     /// the next 3D frame prepared makes its scene targets and history anew.
@@ -744,7 +748,20 @@ impl Renderer {
         // Browser canvases are never sRGB themselves; draw through an sRGB view.
         let view_format = config.format.add_srgb_suffix();
         if view_format != config.format {
-            config.view_formats.push(view_format);
+            if adapter
+                .get_downlevel_capabilities()
+                .flags
+                .contains(wgpu::DownlevelFlags::SURFACE_VIEW_FORMATS)
+            {
+                config.view_formats.push(view_format);
+            } else {
+                // Some OpenGL ES drivers (Android's without EGL's sRGB color
+                // space) offer neither: the window is drawn as it is.
+                eprintln!(
+                    "ponko: this GPU's window has no sRGB format ({:?}): colors are written without sRGB encoding",
+                    config.format
+                );
+            }
         }
         config.present_mode = if vsync {
             wgpu::PresentMode::AutoVsync
@@ -1012,7 +1029,14 @@ impl Renderer {
         image_view_formats: &'static [wgpu::TextureFormat],
         #[cfg(feature = "3d")] settings: Render3DSettings,
     ) -> Self {
-        let view_format = config.format.add_srgb_suffix();
+        // The sRGB view where the window's format is sRGB or it may be
+        // viewed as sRGB; else its own format.
+        let srgb = config.format.add_srgb_suffix();
+        let view_format = if srgb == config.format || config.view_formats.contains(&srgb) {
+            srgb
+        } else {
+            config.format
+        };
         let config_format = config.format;
         // --- pipeline ---
         let shader = device.create_shader_module(wgpu::include_wgsl!("sprite.wgsl"));
@@ -1106,6 +1130,8 @@ impl Renderer {
 
         Self {
             window_surface,
+            #[cfg(target_os = "android")]
+            released_surface: None,
             lifecycle: Default::default(),
             #[cfg(feature = "3d")]
             targets_stale: false,
@@ -2383,6 +2409,49 @@ impl Renderer {
             #[cfg(feature = "3d")]
             {
                 self.targets_stale = true;
+            }
+        }
+    }
+
+    /// Android destroys the window's native surface when the app goes to
+    /// the background: the GPU surface made on it goes first (the device,
+    /// textures and pipelines stay).
+    #[cfg(target_os = "android")]
+    pub(crate) fn release_window_surface(&mut self) {
+        if let Some(WindowSurface {
+            window,
+            instance,
+            surface,
+            adapter,
+        }) = self.window_surface.take()
+        {
+            drop(surface);
+            self.released_surface = Some((window, instance, adapter));
+        }
+    }
+
+    /// Back in front with a new native surface: a GPU surface on it,
+    /// configured as the last one was. A surface that can't be made is
+    /// reported, and frames are drawn to nothing until the next resume.
+    #[cfg(target_os = "android")]
+    pub(crate) fn restore_window_surface(&mut self) {
+        let Some((window, instance, adapter)) = self.released_surface.take() else {
+            return;
+        };
+        match instance.create_surface(window.clone()) {
+            Ok(surface) => {
+                self.window_surface = Some(WindowSurface {
+                    window,
+                    instance,
+                    surface,
+                    adapter,
+                });
+                self.surface_event(super::surface_lifecycle::SurfaceEvent::Recreated);
+                self.configure_surface();
+            }
+            Err(e) => {
+                eprintln!("ponko: could not make the GPU surface again: {e}");
+                self.released_surface = Some((window, instance, adapter));
             }
         }
     }

@@ -50,9 +50,10 @@ packaged copy once to check it runs (the [smoke run](#the-smoke-run-of-any-packa
 | Linux | a folder, like Windows' | `.tar.gz` |
 | Web (`--web`) | a folder: `index.html`, `game.js`, `game_bg.wasm`, `assets.pack`, the licenses and notices | none: upload the folder |
 | iOS (`--target ios`, `--target ios-sim`) | `My Game.app`, a flat iOS bundle: the program, `assets.pack`, the icons, an `Info.plist`, the licenses and notices (see [iOS](ios.md)) | `.ipa` for a device, `.zip` for the simulator |
+| Android (`--target android`) | the files of the apk in `apk/`: `AndroidManifest.xml`, the program as `lib/arm64-v8a/libmain.so`, `assets/assets.pack`, the icons, the licenses and notices; the licenses and notices also beside it (see [Android](android.md)) | `.apk`, signed with the debug key (or by the signing hook) |
 
 `--format` picks others (comma-separated `zip`, `tar.gz`, `dmg`, `ipa` (iOS
-devices), or `folder`: the plain folder without archive, and on macOS without
+devices), `apk` (Android), or `folder`: the plain folder without archive, and on macOS without
 app bundle). The zip and
 tar.gz files are written by the command itself, so no `zip` or `tar` program is
 needed on any OS, and they are reproducible: entries sorted, owned by root,
@@ -71,9 +72,9 @@ table already; every key is optional:
 ```toml
 [package.metadata.ponko]
 name = "My Game"              # the name players see: the app, the web page's title, the file names (my-game-...)
-id = "com.example.my-game"    # a reverse-DNS id you own: the macOS bundle identifier
+id = "com.example.my-game"    # a reverse-DNS id you own: the macOS and iOS bundle identifier, the Android package
 icon = "assets/icon.png"      # a square PNG of 16 to 1024 pixels (a power of two; 512 or 1024 looks best)
-orientation = "any"           # iOS: any, landscape or portrait
+orientation = "any"           # phones (iOS, Android): any, landscape or portrait
 assets = ["assets"]           # folders or files, shipped at the same path next to the program
 pack = { exclude = ["**/*.psd"] }  # how files under assets/ go into assets.pack (or pack = false: loose)
 files = [                     # put at the package's top: licenses, a readme for players, notices
@@ -88,7 +89,7 @@ files = [                     # put at the package's top: licenses, a readme for
 | `name` | the package's name (an example's name for `--example`) |
 | `id` | `local.<name>`, with a note to set one |
 | `icon` | none: macOS shows the generic app icon |
-| `orientation` | `any`: an iOS app turns every way the device does (iPhones not upside down) |
+| `orientation` | `any`: an iOS or Android app turns every way the device does (iPhones not upside down), within the player's rotation lock |
 | `assets` | `["assets"]` if that folder exists, else nothing; hidden files (`.DS_Store`) are left out |
 | `files` | the `LICENSE*`, `LICENCE*`, `COPYING*`, `NOTICE*` files beside `Cargo.toml`; a path is put at the package's top under its file name, `{ from, to }` at `to`: a file name or a path inside the package such as `docs/README.txt` (`/`-separated, no `..`), made in each place the package has its files (on macOS inside the app's `Resources` and beside the app) |
 | `pack` | `true`: the files under `assets/` in one `assets.pack`, [cooked](#cooking-assets-ponko-cook); `false` ships them loose; a table sets packing up: `exclude` (patterns of files left out), `textures = true` (images converted to KTX2 per `textures.json`, as `ponko pack --textures`) and `cook = false` (the source files as they are) |
@@ -557,7 +558,9 @@ for it (`rustup target add <triple>` and a linker for it, such as MinGW for
 `x86_64-pc-windows-gnu`): the layout and archive are the target's, the smoke
 run is skipped, a macOS app made elsewhere is not sealed, and a dmg needs a
 Mac. `--target ios` and `--target ios-sim` make an iOS app; [iOS](ios.md)
-has its signing steps and the simulator check. What the command doesn't do yet:
+has its signing steps and the simulator check. `--target android` makes an
+Android apk with the Android SDK and NDK; [Android](android.md) has their
+setup, the signing steps and the emulator check. What the command doesn't do yet:
 
 - **Verified on macOS (Apple silicon) only.** There `ponko package` was run on
   a fresh `ponko new` project and on Coin Dash for every format, the archives
@@ -580,8 +583,9 @@ has its signing steps and the simulator check. What the command doesn't do yet:
 - **The smoke run** proves the program starts, finds its assets and runs its
   systems headless; it draws nothing. Coin Dash's window walk-through
   ([below](#the-smoke-test)) is what opens a window.
-- **Signing and notarization** are the hook above; the project's own release
-  signing is #282.
+- **Signing and notarization** are the hook above, with your own
+  certificates; the engine's own release downloads are not signed (they ship
+  with checksums).
 - A C or C++ game is not packaged by it (its program is not a Cargo target);
   see [C and C++](#c-and-c).
 
