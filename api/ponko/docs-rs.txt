@@ -14315,6 +14315,7 @@ pub ponko::render::Post::split_toning: ponko::render::SplitToning
 pub ponko::render::Post::ssr: f32
 pub ponko::render::Post::ssr_max_distance: f32
 pub ponko::render::Post::ssr_thin_objects: bool
+pub ponko::render::Post::ssr_transparent: bool
 pub ponko::render::Post::taa_sharpness: f32
 pub ponko::render::Post::temperature: f32
 pub ponko::render::Post::tint: f32
