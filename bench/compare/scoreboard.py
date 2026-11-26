@@ -136,13 +136,35 @@ def log(msg):
     print(msg, flush=True)
 
 
+class Failed(SystemExit):
+    """A command that exited with an error; `reason` is its telling line."""
+
+    def __init__(self, message, reason):
+        super().__init__(message)
+        self.reason = reason
+
+
+def failure_reason(output):
+    """The most telling line of a failed program's output: its first error
+    or panic message, without terminal colors."""
+    lines = [re.sub(r"\x1b\[[0-9;]*m", "", line).strip() for line in output.splitlines()]
+    for marker in ("ERROR", "panicked at", "error:"):
+        for i, line in enumerate(lines):
+            if marker in line:
+                # A panic's message is on the line after "panicked at".
+                text = lines[i + 1] if marker == "panicked at" and i + 1 < len(lines) else line
+                return text[-200:]
+    return (lines[-1] if lines else "")[-200:]
+
+
 def sh(cmd, cwd=ROOT, env=None, check=True, capture=True):
     full_env = dict(os.environ)
     full_env.update(env or {})
     r = subprocess.run(cmd, cwd=cwd, env=full_env, text=True, capture_output=capture)
     if check and r.returncode != 0:
-        sys.stderr.write((r.stdout or "") + (r.stderr or ""))
-        raise SystemExit(f"failed ({r.returncode}): {' '.join(cmd)}")
+        output = (r.stdout or "") + (r.stderr or "")
+        sys.stderr.write(output)
+        raise Failed(f"failed ({r.returncode}): {' '.join(cmd)}", failure_reason(output))
     return r
 
 
@@ -415,6 +437,8 @@ def first_frame(cmd, cwd, env=None):
 
 
 def summary(values):
+    if not values:  # every run failed
+        return {"median": None, "min": None, "max": None, "runs": []}
     return {"median": statistics.median(values), "min": min(values), "max": max(values), "runs": values}
 
 
@@ -441,7 +465,15 @@ def runtime(runs, only, bins):
             # Alternate which engine goes first, so a slow minute hits both.
             order = [("ponko", ponko), ("bevy", bevy)] if i % 2 == 0 else [("bevy", bevy), ("ponko", ponko)]
             for side, f in order:
-                value, state = f()
+                try:
+                    value, state = f()
+                except Failed as e:
+                    # One engine failing a workload (a crash, the GPU out of
+                    # memory) is a result too: record it and go on.
+                    row = results.setdefault(title, {"unit": "ms", "ponko": [], "bevy": [], "loads": []})
+                    row.setdefault("failures", {}).setdefault(side, []).append(e.reason)
+                    log(f"  {side}: FAILED: {e.reason}")
+                    continue
                 add(title, side, value, state)
                 log(f"  {side}: {value:.3f} ms (load {state['load']})")
         if not only or "first-frame" in only:
@@ -662,18 +694,36 @@ def table(doc, first=None):
         else:
             lines.append("| Workload | Ponko (ms) | Bevy (ms) | Bevy / Ponko | |")
             lines.append("|---|---:|---:|---:|---|")
+        notes = []
         for title, row in doc["runtime"].items():
             p, b = row["ponko"], row["bevy"]
-            line = (
-                f"| {title} | {fmt(p['median'])} ({fmt(p['min'])}–{fmt(p['max'])}) | "
-                f"{fmt(b['median'])} ({fmt(b['min'])}–{fmt(b['max'])}) | {b['median'] / p['median']:.2f}× | {verdict(p, b)} |"
-            )
+            failures = row.get("failures", {})
+
+            def cell(side, v):
+                failed = len(failures.get(side, []))
+                if v["median"] is None:
+                    return f"failed ({failed} of {failed} runs)"
+                text = f"{fmt(v['median'])} ({fmt(v['min'])}–{fmt(v['max'])})"
+                return text + (f", {failed} run{'s' if failed > 1 else ''} failed" if failed else "")
+
+            if p["median"] is None or b["median"] is None:
+                who = " and ".join(n for n, v in (("Ponko", p), ("Bevy", b)) if v["median"] is None)
+                ratio, said = "–", f"**{who} failed**"
+            else:
+                ratio, said = f"{b['median'] / p['median']:.2f}×", verdict(p, b)
+            line = f"| {title} | {cell('ponko', p)} | {cell('bevy', b)} | {ratio} | {said} |"
             if tuned:
                 old = first.get("runtime", {}).get(title)
-                line += f" {old['bevy']['median'] / old['ponko']['median']:.2f}×, {verdict(old['ponko'], old['bevy'])} |" if old else " – |"
+                ok = old and old["ponko"]["median"] is not None and old["bevy"]["median"] is not None
+                line += f" {old['bevy']['median'] / old['ponko']['median']:.2f}×, {verdict(old['ponko'], old['bevy'])} |" if ok else " – |"
             lines.append(line)
+            for side, reasons in failures.items():
+                for reason in sorted(set(reasons)):
+                    notes.append(f"- {title}, {side.capitalize()}: `{reason}`")
         loads = [l["load"] for row in doc["runtime"].values() for l in row["loads"]]
         lines.append(f"\nMedians of {doc['runs']} runs, the range in brackets; 1-minute load {min(loads):.2f} to {max(loads):.2f}.")
+        if notes:
+            lines.append("\nFailed runs:\n\n" + "\n".join(notes))
     if doc.get("builds"):
         b = doc["builds"]
         med = lambda v: statistics.median(v) if v else float("nan")
