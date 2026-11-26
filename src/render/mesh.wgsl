@@ -58,10 +58,14 @@ struct Frame {
 
 struct MaterialData {
     color: vec4<f32>,      // linear RGBA
-    emissive: vec4<f32>,   // linear RGB
+    emissive: vec4<f32>,   // linear RGB; w: unlit (1)
     params: vec4<f32>,     // roughness, metallic, normal map strength
-    maps: vec4<u32>,       // has: normal map, ORM map, emissive map
+    maps: vec4<u32>,       // has: normal map, ORM map, emissive map; w: masked tint
     custom: array<vec4<f32>, 4>,
+    // Layers over the surface (see material_layers.wgsl): which are on,
+    // where their maps are, and their values. Read only where they're on.
+    layer_info: vec4<u32>,
+    layers: array<vec4<f32>, 5>,
 };
 
 @group(0) @binding(0) var<uniform> frame: Frame;
@@ -371,6 +375,11 @@ fn fbm2(p: vec2<f32>) -> f32 {
 }
 
 fn direct_light(s: Surface, l: vec3<f32>, radiance: vec3<f32>) -> vec3<f32> {
+    // Materials with layers (see material_layers.wgsl); a constant, so
+    // the plain build has none of their code.
+    if MATERIAL_LAYERS {
+        return layered_light(s, l, radiance);
+    }
     let n = s.normal;
     let v = s.view;
     let h = (l + v) / max(length(l + v), 1e-6);
@@ -551,7 +560,10 @@ var<private> screen_reflection: vec4<f32> = vec4<f32>(0.0);
 var<private> bounced_light: vec4<f32> = vec4<f32>(0.0);
 
 fn environment_light(s: Surface, f0: vec3<f32>) -> vec3<f32> {
-    let ray = reflect(-s.view, s.normal);
+    var ray = reflect(-s.view, s.normal);
+    if MATERIAL_LAYERS {
+        ray = layered_reflection(s, ray);
+    }
     // The two smallest volumes around this pixel: a room inside a bigger one
     // comes first. Each takes its fade's share of what is left; the sky gets the rest.
     var first = 4u; var second = 4u; var size1 = 1.0e30; var size2 = 1.0e30;
@@ -592,7 +604,34 @@ fn environment_light(s: Surface, f0: vec3<f32>) -> vec3<f32> {
     let nv = max(dot(s.normal, s.view), 0.0);
     let uv = (vec2<f32>(800.0, 0.0) + clamp(vec2<f32>(nv, s.roughness) * 128.0, vec2<f32>(0.5), vec2<f32>(127.5))) / vec2<f32>(1024.0, 1536.0);
     let brdf = textureSampleLevel(sky_texture, sky_sampler, uv, 0.0).rg;
+    if MATERIAL_LAYERS {
+        return layered_ambient(s, diffuse, specular, brdf);
+    }
     return (diffuse * s.albedo * (1.0 - s.metallic) + specular * (f0 * brdf.x + brdf.y)) * s.occlusion;
+}
+
+// The environment's light from `ray` for a surface of `roughness` at
+// `world`: the reflection volumes around it, then the sky, as
+// `environment_light` reflects (without screen-space reflections or
+// global illumination). For a second reflection, a clear coat's.
+fn environment_reflection(world: vec3<f32>, ray: vec3<f32>, roughness: f32) -> vec3<f32> {
+    var remaining = 1.0;
+    var specular = vec3<f32>(0.0);
+    for (var i = 0u; i < 4u; i++) {
+        let p = frame.probes[i];
+        let weight = probe_weight(p, world);
+        if weight > 0.0 {
+            specular += environment_sample(p.center.w, probe_direction(p, world, ray), roughness, false) * remaining * weight * p.params.x;
+            remaining *= 1.0 - weight;
+        }
+    }
+    return specular + environment_sample(0.0, ray, roughness, false) * remaining;
+}
+
+// The split-sum lookup (scale, bias of f0) for `n_v` and `roughness`.
+fn environment_brdf(n_v: f32, roughness: f32) -> vec2<f32> {
+    let uv = (vec2<f32>(800.0, 0.0) + clamp(vec2<f32>(n_v, roughness) * 128.0, vec2<f32>(0.5), vec2<f32>(127.5))) / vec2<f32>(1024.0, 1536.0);
+    return textureSampleLevel(sky_texture, sky_sampler, uv, 0.0).rg;
 }
 
 // The sun's shadow, for material shaders, screen effects and compute passes.

@@ -164,6 +164,7 @@ pub(crate) fn surface(desc: &WaterDesc, planar: bool, ripples: bool) -> String {
     let _ = writeln!(out, "const WATER_RIPPLES: bool = {ripples};");
     let _ = writeln!(out, "const WATER_FLOW_MAP: bool = {};", desc.flow_map.is_some());
     let _ = writeln!(out, "const WATER_CREST_FOAM: bool = {};", !desc.waves.is_empty());
+    let _ = writeln!(out, "const WATER_WAVE_REACH: f32 = {};", lit(desc.waves.max_height()));
     let _ = writeln!(
         out,
         "const WATER_FLOW_AREA = vec4<f32>({}, {}, {}, {});",

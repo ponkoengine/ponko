@@ -2885,11 +2885,11 @@
     "reason": "Preserves setup/runtime policy; displays the checked operation error. ///     /// As [`load_mesh`](Self::load_mesh) does.     pub fn load_cameras(&mut self, path: &str) -> Vec<crate::render::ModelCamera> {         self.try_load_cameras(path).unwrap_or_else(|e| panic!(\"{e}\"))",
     "site": "src/three/api.rs:883"
   },
-  "src/three/api.rs:af8895b914e3919d": {
+  "src/three/api.rs:9855000f3c8ef510": {
     "classification": "forwarded-error",
     "construction": "panic!(\"{e}\")",
-    "reason": "Re-raises the material check's Error message, which names the bad value.",
-    "site": "src/three/api.rs:157"
+    "reason": "update_material re-raises try_update_material's Error (the documented panic of update_material); try_update_material is the non-panicking form",
+    "site": "src/three/api.rs:253"
   },
   "src/three/api.rs:b4616a5740e935ae": {
     "classification": "forwarded-error",

@@ -84,6 +84,8 @@ impl Graphics {
                     emissive_map: texture(m.emissive_map),
                     blend: m.blend,
                     double_sided: m.double_sided,
+                    unlit: m.unlit,
+                    layers: m.layers.with_maps(m.layer_maps.map(texture)),
                     ..before
                 };
                 // Custom values and shader from the extras; a material
