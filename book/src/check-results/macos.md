@@ -19,6 +19,64 @@ jobs written for macOS; the platform-neutral jobs written for `ubuntu-latest`
 (clippy, docs, Miri, the web build and the browser runs, templates and more)
 ran on this Mac by hand, as recorded below.
 
+## 2026-11-26: the agent acceptance suite, replayed and tried by a real agent (#528, section 7)
+
+A rehearsal of the cut's step ("The agent acceptance suite", "At a
+release", in [Working with AI agents](../agents.md)), on `main` at
+`4957c566`, on the same Mac (Apple M4 Max, macOS 27.2.1), debug build
+(`cargo build -p ponko_mcp --example agent_suite`), busy (load average 12
+to 30 on 14 cores: other agents were compiling).
+
+**Replay.** `cargo run -p ponko_mcp --example agent_suite -- replay`: 6/6
+tasks solved, 18/18 checks, 22/22 negative controls caught, equal to the
+0.2.0 baseline (34 s). `cargo test -p ponko_mcp --test agent_suite`: passed
+(35 s). Nothing had to be fixed: no tool change since the suite was
+written broke a scripted solution.
+
+**A real agent.** An AI coding agent (a CLI coding agent with a shell, no
+MCP client of its own) did each task through `agent_suite mcp TASK`,
+driven with `scripts/mcp-session.py`, headless, no window. It read each
+task's goal from the server's instructions only, and opened the scripted
+solutions only after all six were scored. Seconds are wall-clock from
+starting the server to the submission, the agent's own thinking included.
+
+| Task | Solved | Checks | Tool calls | Tool errors | Submissions | Seconds | Scripted steps |
+|---|---|---|---|---|---|---|---|
+| `tune-speed` | yes | 3/3 | 18 | 1 | 1 | 28 | 7 |
+| `coin-level` | yes | 4/4 | 13 | 1 | 1 | 24 | 11 |
+| `immortal-enemy` | yes | 3/3 | 15 | 0 | 1 | 28 | 14 |
+| `slow-crowd` | yes | 4/4 | 9 | 0 | 1 | 16 | 8 |
+| `broken-shader` | yes | 2/2 | 3 | 0 | 1 | 14 | 5 |
+| `hidden-score` | yes | 2/2 | 9 | 0 | 1 | 17 | 6 |
+| **total** | **6/6** | **18/18** | 67 | 2 | 6 | 127 | 51 |
+
+Where it got stuck, and what changed for it in the same pull request:
+
+- `tune-speed`: its first scenario held `ArrowRight`, the browser's key
+  name; the error listed the engine's names and the next call used
+  `Right`. The `run_input_scenario` schema now lists the key names. Eight
+  of its 18 calls were a hot-reload poll that went on after the value had
+  changed (the agent's loop, not a tool).
+- `coin-level`: `entity_stats` with only `with`, to count the coins,
+  was refused for a missing `fields`. `fields` is optional now: without it
+  the tool counts the matches.
+- `hidden-score`: `expect_ui`'s fields (`node`, `shown`, `text`) were not
+  in the tool's schema; the agent guessed them right from the guide. The
+  schema now shows an `expect_ui` step.
+- `broken-shader`: `shader_status` gave the right line, column and source
+  line, but naga's message names IR handles, not types ("the `return`
+  expression Some([10]) does not match the declared return type
+  Some([5])"); the agent fixed it from the source line. Filed as an issue.
+- `immortal-enemy`, `slow-crowd`: no friction.
+
+Compared with the scripted solutions, the agent made the same fix in every
+task, mostly with the same values (speed 350 where the script writes 340;
+the same five coin positions, armor 0.25, cell size 24, shader and HUD
+fixes). The agent is the same kind of model that wrote the tasks and had
+read the suite's chapter before it started, so this run shows the tasks can
+be finished with the tools as documented; it is weak evidence of how hard
+they are. Harder tasks are filed as an issue.
+
 ## 2026-11-26: Playwright 1.65.1 (#601) and the fuzz targets (#528, section 3)
 
 `main` at `f308b7f6` plus the branch that moves `web/smoke` to
