@@ -8106,8 +8106,10 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub c fn ponko_ffi::ponko_spot_light2d_default() -> ponko_ffi::PonkoSpotLight2D
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_spot_light3d_component(*mut ponko_ffi::PonkoWorld, *mut u32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_sprite_component(*mut ponko_ffi::PonkoWorld, *mut u32) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_sprite_flip(*mut ponko_ffi::PonkoWorld, u64, *mut bool, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_sprite_material_component(*mut ponko_ffi::PonkoWorld, *mut u32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub c fn ponko_ffi::ponko_sprite_material_desc_default() -> ponko_ffi::PonkoSpriteMaterialDesc
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_sprite_set_flip(*mut ponko_ffi::PonkoWorld, u64, bool, bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_sprite_sheet(ponko_ffi::PonkoTexture, u32, u32, *mut ponko_ffi::PonkoSpriteSheet) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub c fn ponko_ffi::ponko_sprite_sheet_frame(ponko_ffi::PonkoSpriteSheet, u32) -> ponko_ffi::PonkoRect
 #[no_mangle] pub c fn ponko_ffi::ponko_stamp_newer(ponko_ffi::PonkoUpdateStamp, ponko_ffi::PonkoUpdateStamp) -> bool
