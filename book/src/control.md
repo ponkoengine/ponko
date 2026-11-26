@@ -174,6 +174,13 @@ TCP, one JSON object per line in each direction.
 
 Errors come back as `{"id": 1, "error": "entity 999 does not exist"}`.
 
+Keep the connection open and send the next request on it: a request is
+then one round trip, well under a millisecond on the same machine, instead
+of a new connection and its token check. Replies come in the order of the
+requests and carry their `id`. `ponko-mcp` keeps one connection per game
+and opens a new one when the game closed it or restarted (a restarted
+game registers with a new port and token).
+
 Requests are applied by the game loop between frames (between ticks when
 headless), so they never race the simulation or each other. A paused
 headless game waits for requests and runs only the ticks you step.
