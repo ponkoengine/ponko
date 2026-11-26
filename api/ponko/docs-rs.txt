@@ -14626,6 +14626,7 @@ pub ponko::render::MaterialLayers::specular: f32
 pub ponko::render::MaterialLayers::specular_color: ponko::color::Color
 pub ponko::render::MaterialLayers::specular_color_map: core::option::Option<ponko::texture::Texture>
 pub ponko::render::MaterialLayers::specular_map: core::option::Option<ponko::texture::Texture>
+pub ponko::render::MaterialLayers::transmission: ponko::render::Transmission
 impl ponko::render::MaterialLayers
 pub const ponko::render::MaterialLayers::NONE: Self
 pub fn ponko::render::MaterialLayers::is_on(&self) -> bool
@@ -14645,6 +14646,7 @@ pub fn ponko::render::MaterialLayers::with_sheen_roughness_map(self, impl core::
 pub fn ponko::render::MaterialLayers::with_specular(self, f32, ponko::color::Color) -> Self
 pub fn ponko::render::MaterialLayers::with_specular_color_map(self, impl core::convert::Into<core::option::Option<ponko::texture::Texture>>) -> Self
 pub fn ponko::render::MaterialLayers::with_specular_map(self, impl core::convert::Into<core::option::Option<ponko::texture::Texture>>) -> Self
+pub fn ponko::render::MaterialLayers::with_transmission(self, ponko::render::Transmission) -> Self
 impl core::clone::Clone for ponko::render::MaterialLayers
 pub fn ponko::render::MaterialLayers::clone(&self) -> Self
 impl core::cmp::PartialEq for ponko::render::MaterialLayers
@@ -15414,6 +15416,37 @@ impl core::fmt::Debug for ponko::render::TextureTransform
 pub fn ponko::render::TextureTransform::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::render::TextureTransform
 impl core::marker::StructuralPartialEq for ponko::render::TextureTransform
+#[non_exhaustive] pub struct ponko::render::Transmission
+pub ponko::render::Transmission::attenuation_color: ponko::color::Color
+pub ponko::render::Transmission::attenuation_distance: f32
+pub ponko::render::Transmission::diffuse: f32
+pub ponko::render::Transmission::diffuse_color: ponko::color::Color
+pub ponko::render::Transmission::diffuse_color_map: core::option::Option<ponko::texture::Texture>
+pub ponko::render::Transmission::diffuse_map: core::option::Option<ponko::texture::Texture>
+pub ponko::render::Transmission::dispersion: f32
+pub ponko::render::Transmission::factor: f32
+pub ponko::render::Transmission::map: core::option::Option<ponko::texture::Texture>
+pub ponko::render::Transmission::scatter: f32
+pub ponko::render::Transmission::scatter_anisotropy: f32
+pub ponko::render::Transmission::scatter_color: ponko::color::Color
+pub ponko::render::Transmission::scatter_color_map: core::option::Option<ponko::texture::Texture>
+pub ponko::render::Transmission::scatter_map: core::option::Option<ponko::texture::Texture>
+pub ponko::render::Transmission::thickness: f32
+pub ponko::render::Transmission::thickness_map: core::option::Option<ponko::texture::Texture>
+impl ponko::render::Transmission
+pub const ponko::render::Transmission::NONE: Self
+pub fn ponko::render::Transmission::new(f32) -> Self
+pub fn ponko::render::Transmission::with_volume(self, f32, f32, ponko::color::Color) -> Self
+impl core::clone::Clone for ponko::render::Transmission
+pub fn ponko::render::Transmission::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::render::Transmission
+pub fn ponko::render::Transmission::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::render::Transmission
+pub fn ponko::render::Transmission::default() -> Self
+impl core::fmt::Debug for ponko::render::Transmission
+pub fn ponko::render::Transmission::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::render::Transmission
+impl core::marker::StructuralPartialEq for ponko::render::Transmission
 pub struct ponko::render::Unbaked
 impl core::clone::Clone for ponko::render::Unbaked
 pub fn ponko::render::Unbaked::clone(&self) -> Self

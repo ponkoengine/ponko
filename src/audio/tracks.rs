@@ -38,6 +38,14 @@ impl Manager {
 
     /// A manager mixing into memory; `None` if Kira can't make one.
     pub(super) fn buffer(sample_rate: u32) -> Option<(Self, super::dsp::buffer::Output)> {
+        Self::buffer_with(sample_rate, Default::default())
+    }
+
+    /// [`buffer`](Self::buffer) with its main track as given.
+    pub(super) fn buffer_with(
+        sample_rate: u32,
+        main_track_builder: kira::track::MainTrackBuilder,
+    ) -> Option<(Self, super::dsp::buffer::Output)> {
         use super::dsp::buffer::{BufferSettings, Output};
         let renderer = super::dsp::buffer::Shared::default();
         let settings = AudioManagerSettings {
@@ -46,7 +54,7 @@ impl Manager {
                 renderer: renderer.clone(),
             },
             capacities: Default::default(),
-            main_track_builder: Default::default(),
+            main_track_builder,
             internal_buffer_size: 128,
         };
         let manager = AudioManager::new(settings).ok()?;

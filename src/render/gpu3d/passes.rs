@@ -122,6 +122,8 @@ pub(crate) enum Resource {
     Hdr,
     /// The copy of the opaque scene that transparent surfaces read.
     SceneCopy,
+    /// The levels below the first in the refraction copy.
+    RefractionMips,
     /// What screen effects swap with the lit frame. It is the scene copy's
     /// texture, free once the transparent surfaces are drawn.
     EffectScratch,
@@ -263,7 +265,7 @@ pub(crate) struct Desc {
 
 impl Resource {
     /// Every resource, in declaration order.
-    pub(crate) const ALL: [Resource; 58] = {
+    pub(crate) const ALL: [Resource; 59] = {
         use Resource::*;
         [
             VisibleDraws,
@@ -296,6 +298,7 @@ impl Resource {
             TaaInput,
             Hdr,
             SceneCopy,
+            RefractionMips,
             EffectScratch,
             VelocityColor,
             Velocity,
@@ -371,6 +374,7 @@ impl Resource {
             Resource::TaaInput => desc("taa input", Frame, F::Hdr, One),
             Resource::Hdr => desc("lit frame", Frame, F::Hdr, One),
             Resource::SceneCopy => desc("scene copy", Frame, F::Hdr, One),
+            Resource::RefractionMips => desc("refraction mips", Frame, F::Hdr, One),
             Resource::EffectScratch => Desc {
                 shares: Some(Resource::SceneCopy),
                 ..desc("effect scratch", Frame, F::Hdr, One)
@@ -552,6 +556,7 @@ features! {
     TARGET_CAMERA_EFFECTS_ODD = 52, "odd target camera effects";
     /// Mipmapped render targets get their levels made again.
     TARGET_MIPS = 53, "render target mipmaps";
+    REFRACTION_MIPS = 54, "refraction mips";
 }
 
 impl Features {
@@ -568,6 +573,7 @@ impl Features {
         (Features::TARGET_CAMERA_EFFECTS_BACK, Features::TARGET_CAMERA_EFFECTS),
         (Features::TARGET_CAMERA_EFFECTS_ODD, Features::TARGET_CAMERA_EFFECTS),
         (Features::TARGET_MIPS, Features::VIEWS),
+        (Features::REFRACTION_MIPS, Features::SPLIT),
         (Features::VIEW_MODEL_SEE_THROUGH, Features::SPLIT),
         (Features::TARGET_CUTOUTS, Features::MSAA),
         (Features::CUTOUTS, Features::MSAA),
@@ -1366,6 +1372,11 @@ pub(crate) const FRAME_PASSES: [Pass; 8] = [
                 ],
             ),
             step(
+                "refraction mips",
+                on(F::REFRACTION_MIPS),
+                &[u(SceneCopy, A::Sample), u(RefractionMips, A::Color)],
+            ),
+            step(
                 "depth copy",
                 on(F::DEPTH_COPY),
                 &[u(SceneDepth, A::SampleMs), u(SceneDepthCopy, A::Depth)],
@@ -1377,6 +1388,7 @@ pub(crate) const FRAME_PASSES: [Pass; 8] = [
                     u(TargetImage, A::Sample),
                     u(GiProbes, A::Sample),
                     u(SceneCopy, A::Sample),
+                    u(RefractionMips, A::Sample).on(F::REFRACTION_MIPS),
                     // Read-only depth: the shaders sample it at the same
                     // time (or, with the depth copy, the copy).
                     u(SceneDepth, A::DepthRead),

@@ -210,7 +210,7 @@ fn surface_at(in: VertexOut, front: bool) -> Surface {
     }
     s.unlit = material.emissive.w != 0.0;
     if MATERIAL_LAYERS {
-        fill_layers(s, in.uv, in.world, geometric);
+        fill_layers(s, in.uv, in.world, geometric, in.normal);
     }
     s = surface(s);
     s.roughness = clamp(s.roughness, 0.03, 1.0);
@@ -347,7 +347,10 @@ fn shade(s: Surface) -> vec3<f32> {
     let n = s.normal;
     let f0 = mix(vec3<f32>(0.04), s.albedo, s.metallic);
     var sun = 0.0;
-    if dot(n, frame.sun_dir.xyz) > 0.0 { sun = sunlight(s.world, n) * (1.0 - contact_shadow); }
+    let facing_sun = dot(n, frame.sun_dir.xyz) > 0.0;
+    if facing_sun || (MATERIAL_LAYERS && (transmission.diffuse > 0.0 || transmission.scatter > 0.0)) {
+        sun = sunlight(s.world, select(-n, n, facing_sun)) * (1.0 - contact_shadow);
+    }
     let direct = direct_light(s, frame.sun_dir.xyz, frame.sun_color.rgb * sun) + punctual_light(s);
 
     bounced_light = gi_light(s.world, n, s.view);
@@ -455,6 +458,15 @@ fn transparent_color(in: VertexOut, front: bool) -> vec4<f32> {
     baked_face = select(-1.0, 1.0, front) * normalize(in.normal);
     if frame.fog_color.w > 0.0 && s.roughness < 0.7 {
         screen_reflection = transparent_reflection(s);
+    }
+    if MATERIAL_LAYERS && !s.unlit && material.layers[5].x > 0.0 {
+        let coverage = material.layer_info.w;
+        if coverage == 2u && s.alpha < 0.5 {
+            discard;
+        }
+        let alpha = select(1.0, s.alpha, coverage == 1u);
+        let lit = fog(shade(s), s.world) + specular_transmission(s);
+        return vec4<f32>(lit * alpha, alpha);
     }
     return vec4<f32>(fog(shade(s), s.world) * s.alpha, s.alpha);
 }

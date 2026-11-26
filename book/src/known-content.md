@@ -73,8 +73,8 @@ stops loading is a regression. Without the cache the test says so and
 passes: nothing is downloaded by a test.
 
 At this revision **all 153 samples load, none are skipped, none fail**.
-ScatterAnemone and PotOfCoalsAnimationPointer require `KHR_materials_volume`,
-which is approximated (transmission without refraction), with a warning.
+ScatterAnemone and PotOfCoalsAnimationPointer load with volume materials.
+ScatterAnemone uses approximate surface lighting for scattering.
 
 ## Drawn against the screenshots
 
@@ -95,7 +95,7 @@ curve and often its own camera. So:
   field of view, the camera on the +Z side of the center of the model's
   bounds, looking down -Z, as far away as the bounding sphere needs to fit
   the narrower field of view.
-- **Lights.** The twelve light, emission and environment samples in
+- **Lights.** The eleven light, emission and environment samples in
   [#597](https://github.com/ponkoengine/ponko/issues/597) use
   `SceneSettings::light_gltf`: the file's lights with EV100 exposure, a neutral
   studio environment and a hue-preserving highlight curve. The harness
@@ -130,7 +130,7 @@ Each run writes the drawing next to its screenshot in
 that matched and stops matching fails the test; a sample that starts
 matching is recorded with `PONKO_UPDATE_KNOWN_CONTENT=1`.
 
-At this revision **42 of the 153 drawings match** their screenshots. Most
+At this revision **45 of the 153 drawings match** their screenshots. Most
 of the others differ for reasons outside the renderer's correctness, which
 the table says in a word:
 
@@ -144,10 +144,9 @@ the table says in a word:
   the shapes and materials are right.
 
 The rest are missing features, each with its issue:
-[#595](https://github.com/ponkoengine/ponko/issues/595) transmissive
-materials vanish, and a material has one texture transform for all its
-maps ([#666](https://github.com/ponkoengine/ponko/issues/666)). Points and
-lines aren't drawn either (MeshPrimitiveModes, PrimitiveModeNormalsTest).
+[#666](https://github.com/ponkoengine/ponko/issues/666): a material has one
+texture transform for all its maps. Points and lines aren't drawn either
+(MeshPrimitiveModes, PrimitiveModeNormalsTest).
 
 Fixed while making this list: triangle strips and fans are drawn (they were
 left out), `EXT_mesh_gpu_instancing` is read (SimpleInstancing drew one cube
@@ -168,12 +167,12 @@ Overlap and ΔE are after registration; a dash: not drawn.
 | AnimatedMorphCube | yes | differs | 0.90 | 49.9 | light: lit from the front, the screenshot shows its shaded side mid-morph |
 | AnimatedTriangle | yes | differs | 0.33 | 50.5 | anim: the screenshot shows it turned mid-animation; drawn at rest |
 | AnimationPointerUVs | yes | differs | 0.41 | 31.6 | the file's camera; drawn at rest; the base color and other first-texture transforms play, the other maps' don't: a material has one transform ([#666](https://github.com/ponkoengine/ponko/issues/666)) |
-| AnisotropyBarnLamp | yes | differs | 0.47 | 19.5 | view; the brushed copper reflects the comparison rig's flat studio sky |
-| AnisotropyDiscTest | yes | matches | 0.81 | 12.6 |  |
-| AnisotropyRotationTest | yes | differs | 0.64 | 26.8 | environment: the black plastic reflects a flat studio sky of the comparison rig, so the stretched highlights stand out less |
-| AnisotropyStrengthTest | yes | differs | 0.36 | 21.1 | environment: the spheres reflect a flat studio sky of the comparison rig, not a dark room; the labels are smaller |
+| AnisotropyBarnLamp | yes | differs | 0.47 | 19.5 | view; the brushed copper reflects a flat studio sky ([#597](https://github.com/ponkoengine/ponko/issues/597)) |
+| AnisotropyDiscTest | yes | matches | 0.81 | 12.0 |  |
+| AnisotropyRotationTest | yes | differs | 0.64 | 26.8 | environment: the black plastic reflects a flat studio sky, so the stretched highlights stand out less ([#597](https://github.com/ponkoengine/ponko/issues/597)) |
+| AnisotropyStrengthTest | yes | differs | 0.36 | 21.1 | environment: the spheres reflect a flat studio sky, not a dark room ([#597](https://github.com/ponkoengine/ponko/issues/597)); the labels are smaller |
 | AntiqueCamera | yes | differs | 0.44 | 9.8 | view: the screenshot is from three quarters, the rule from the front |
-| AttenuationTest | yes | differs | 0.06 | 19.3 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
+| AttenuationTest | yes | differs | 0.25 | 15.3 | view: the rule frames the whole board, smaller than the screenshot; the cubes are tinted by thickness and distance |
 | Avocado | yes | differs | 0.80 | 31.3 | light: brighter, the sun lights the side the camera sees |
 | BarramundiFish | yes | differs | 0.45 | 17.9 | view: drawn head-on, the screenshot is from the side |
 | BoomBox | yes | matches | 0.77 | 12.9 |  |
@@ -187,63 +186,63 @@ Overlap and ΔE are after registration; a dash: not drawn.
 | BoxVertexColors | yes | differs | 0.75 | 46.0 | view: as Box |
 | BrainStem | yes | differs | 0.30 | 12.4 | anim: drawn in its rest pose, the screenshot shows a pose of its animation |
 | Cameras | yes | differs | 0.97 | 34.1 | light: the file's camera frames it as the screenshot, but it is lit fully where the screenshot shades it |
-| CarbonFibre | yes | matches | 0.78 | 17.5 |  |
-| CarConcept | yes | differs | 0.51 | 24.1 | view: the screenshot shows a three-quarter angle, with other reflections |
+| CarbonFibre | yes | matches | 0.78 | 17.9 |  |
+| CarConcept | yes | differs | 0.54 | 24.8 | view: the screenshot shows a three-quarter angle, with other reflections |
 | CesiumMan | yes | differs | 0.42 | 15.2 | anim: rest pose against a walking pose |
 | CesiumMilkTruck | yes | differs | 0.71 | 26.6 | view: the screenshot is from three quarters |
 | ChairDamaskPurplegold | yes | differs | 0.74 | 21.1 | view: the screenshot is closer; the fabric's sheen is drawn |
 | ChronographWatch | yes | differs | 0.70 | 23.4 | crop: the screenshot is a close-up of the dial |
-| ClearCoatCarPaint | yes | differs | 0.83 | 27.8 | environment: the coat reflects a flat studio sky of the comparison rig, not the screenshot's street |
-| ClearCoatTest | yes | differs | 0.52 | 18.0 | environment: the comparison rig's flat studio sky; the labels are smaller |
-| ClearcoatWicker | yes | matches | 0.94 | 13.9 |  |
+| ClearCoatCarPaint | yes | differs | 0.83 | 27.8 | environment: the coat reflects a flat studio sky, not the screenshot's street ([#597](https://github.com/ponkoengine/ponko/issues/597)) |
+| ClearCoatTest | yes | differs | 0.52 | 18.0 | environment ([#597](https://github.com/ponkoengine/ponko/issues/597)); the labels are smaller |
+| ClearcoatWicker | yes | matches | 0.95 | 15.3 |  |
 | CommercialRefrigerator | yes | differs | 0.70 | 18.3 | view: the screenshot is from three quarters |
 | CompareAlphaCoverage | yes | matches | 0.85 | 13.9 |  |
 | CompareAmbientOcclusion | yes | matches | 0.79 | 15.6 |  |
-| CompareAnisotropy | yes | differs | 0.90 | 21.3 | environment: the comparison rig's flat studio sky; view |
+| CompareAnisotropy | yes | differs | 0.90 | 21.3 | environment ([#597](https://github.com/ponkoengine/ponko/issues/597)); view |
 | CompareBaseColor | yes | matches | 0.96 | 13.5 |  |
-| CompareClearcoat | yes | matches | 0.93 | 13.9 |  |
-| CompareDispersion | yes | differs | 0.51 | 18.9 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
+| CompareClearcoat | yes | matches | 0.94 | 14.6 |  |
+| CompareDispersion | yes | differs | 0.48 | 17.3 | view: drawn smaller; dispersion is three refracted samples, one per channel |
 | CompareEmissiveStrength | yes | differs | 0.60 | 14.7 | both logos keep their color and the stronger one glows more; crop and reflected surroundings differ |
-| CompareIor | yes | differs | 0.31 | 12.6 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
-| CompareIridescence | yes | matches | 0.92 | 14.7 |  |
+| CompareIor | yes | differs | 0.44 | 10.3 | view: drawn smaller than the screenshot |
+| CompareIridescence | yes | matches | 0.92 | 17.9 |  |
 | CompareMetallic | yes | matches | 0.95 | 16.2 |  |
 | CompareNormal | yes | matches | 0.98 | 15.0 |  |
 | CompareRoughness | yes | matches | 0.96 | 13.0 |  |
 | CompareSheen | yes | matches | 0.96 | 19.9 | |
 | CompareSpecular | yes | matches | 0.95 | 14.5 |  |
-| CompareTransmission | yes | differs | 0.44 | 11.1 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
-| CompareVolume | yes | differs | 0.48 | 13.5 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
+| CompareTransmission | yes | differs | 0.44 | 10.8 | view: drawn smaller than the screenshot |
+| CompareVolume | yes | differs | 0.49 | 11.5 | view: drawn smaller than the screenshot |
 | Corset | yes | matches | 0.84 | 17.5 |  |
 | Cube | yes | matches | 0.79 | 18.2 |  |
 | CubeVisibility | yes | differs | 0.15 | 69.5 | view; drawn at rest; the blue cube blinks ([pointer animations](#animations-through-pointers)) |
 | DamagedHelmet | yes | differs | 0.43 | 18.1 | view: the screenshot is from three quarters |
-| DiffuseTransmissionPlant | yes | differs | 0.41 | 27.4 | the file's camera isn't the screenshot's; diffuse transmission isn't drawn ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
-| DiffuseTransmissionTeacup | yes | differs | 0.33 | 14.1 | view; diffuse transmission isn't drawn ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
-| DiffuseTransmissionTest | yes | differs | 0.61 | 24.0 | view: the framing rule sees the plane edge-on; diffuse transmission isn't drawn (`KHR_materials_diffuse_transmission`) |
+| DiffuseTransmissionPlant | yes | differs | 0.44 | 27.6 | the file's camera isn't the screenshot's: a close-up of the pot |
+| DiffuseTransmissionTeacup | yes | differs | 0.27 | 14.1 | view; the sun lights the cup from the front, so little light comes through |
+| DiffuseTransmissionTest | yes | differs | 0.61 | 15.9 | view: drawn smaller; the backlit tiles keep their colors |
 | DirectionalLight | yes | differs | 0.15 | 35.1 | the spheres pick up the yellow sun; the screenshot’s toolbar enters the silhouette comparison and its specular highlights are broader |
-| DispersionTest | yes | differs | 0.23 | 14.8 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
-| DragonAttenuation | yes | differs | 0.30 | 26.0 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
-| DragonDispersion | yes | differs | 0.30 | 11.6 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
+| DispersionTest | yes | differs | 0.22 | 14.8 | view: drawn smaller and from further back |
+| DragonAttenuation | yes | differs | 0.33 | 24.6 | view: the rule frames the backdrop too, so the dragon is small |
+| DragonDispersion | yes | differs | 0.29 | 11.3 | view: the rule frames the backdrop too, so the dragon is small |
 | Duck | yes | differs | 0.75 | 33.6 | light: more saturated and brighter (file camera) |
 | EmissiveStrengthTest | yes | differs | 0.12 | 17.6 | the panels stay blue as strength rises; the screenshot is angled down and has brighter bloom and a brighter backdrop |
 | EnvironmentTest | yes | differs | 0.13 | 13.3 | the first row reflects the studio panels across roughnesses; the reference has a different environment and a gradient background |
 | FlightHelmet | yes | differs | 0.36 | 19.6 | crop: the screenshot is a close-up |
 | Fox | yes | differs | 0.21 | 36.7 | view: drawn from the front, the screenshot is from the side |
-| GlamVelvetSofa | yes | matches | 0.94 | 9.7 |  |
-| GlassBrokenWindow | yes | differs | 0.28 | 19.5 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
-| GlassHurricaneCandleHolder | yes | differs | 0.39 | 18.5 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
-| GlassVaseFlowers | yes | differs | 0.16 | 18.7 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
+| GlamVelvetSofa | yes | matches | 0.94 | 15.2 |  |
+| GlassBrokenWindow | yes | differs | 0.36 | 17.5 | background: the screenshot has a photographed landscape behind the glass |
+| GlassHurricaneCandleHolder | yes | differs | 0.43 | 14.7 | background: the screenshot has a photograph behind it |
+| GlassVaseFlowers | yes | differs | 0.22 | 19.5 | background: the screenshot has a photograph behind it |
 | InterpolationTest | yes | matches | 0.93 | 9.1 |  |
-| IORTestGrid | yes | differs | 0.80 | 20.9 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)): the grid is dark |
-| IridescenceAbalone | yes | matches | 0.97 | 15.1 |  |
+| IORTestGrid | yes | differs | 0.80 | 20.3 | view: drawn smaller; the grid behind is darker |
+| IridescenceAbalone | yes | matches | 0.97 | 13.8 |  |
 | IridescenceDielectricSpheres | yes | differs | 0.15 | 7.3 | view; the films are faint on the dielectric spheres in both |
-| IridescenceLamp | yes | differs | 0.71 | 20.8 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
+| IridescenceLamp | yes | matches | 0.89 | 19.2 |  |
 | IridescenceMetallicSpheres | yes | differs | 0.36 | 12.2 | view |
-| IridescenceSuzanne | yes | differs | 0.09 | 14.1 | view; transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
-| IridescentDishWithOlives | yes | differs | 0.51 | 37.1 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)): the jug is missing (file camera) |
+| IridescenceSuzanne | yes | differs | 0.25 | 8.3 | view: drawn smaller |
+| IridescentDishWithOlives | yes | differs | 0.84 | 20.9 | light: the dish is brighter and the jug reflects a flat studio sky (file camera) |
 | Lantern | yes | differs | 0.55 | 11.2 | view: the screenshot is from three quarters |
-| LightsPunctualLamp | yes | differs | 0.35 | 28.6 | the bulb lights up; the transmitted shade is missing ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
-| LightVisibility | yes | differs | 0.73 | 24.6 | view: the drawing faces the wall; drawn at rest, with the blue light on; it blinks ([pointer animations](#animations-through-pointers)) |
+| LightsPunctualLamp | yes | matches | 0.76 | 14.9 | the bulb lights up behind the transmitting shade |
+| LightVisibility | yes | differs | 0.73 | 34.1 | light: the file's spot lights are a few candela, dark in engine units ([#597](https://github.com/ponkoengine/ponko/issues/597)); drawn at rest, with the blue light on; it blinks ([pointer animations](#animations-through-pointers)) |
 | MandarinOrange | yes | matches | 0.91 | 15.6 |  |
 | MaterialsVariantsShoe | yes | differs | 0.56 | 26.0 | view: the screenshot is from the side, above |
 | MeshoptCubeTest | yes | differs | 0.11 | 20.7 | view: the cubes are drawn, the screenshot looks from above |
@@ -252,7 +251,7 @@ Overlap and ΔE are after registration; a dash: not drawn.
 | MetalRoughSpheresNoTextures | yes | matches | 0.81 | 6.9 |  |
 | MorphPrimitivesTest | yes | differs | 0.14 | 22.6 | view: both primitives and the morph are right, the screenshot is from an angle |
 | MorphStressTest | yes | differs | 0.29 | 30.1 | anim: the screenshot shows other morph weights |
-| MosquitoInAmber | yes | differs | 0.35 | 23.9 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)): the amber is missing |
+| MosquitoInAmber | yes | differs | 0.75 | 47.5 | the amber's blotchy base color tints what is seen through it, as glTF specifies, so the insect is hard to see; the screenshot is lighter, with a bright backdrop |
 | MultipleScenes | yes | matches | 0.75 | 17.8 |  |
 | MultiUVTest | yes | matches | 0.74 | 18.7 |  |
 | NegativeScaleTest | yes | differs | 0.91 | 22.7 | light: lighter; the mirrored shapes are right |
@@ -262,17 +261,17 @@ Overlap and ΔE are after registration; a dash: not drawn.
 | NormalTangentTest | yes | matches | 0.91 | 8.6 |  |
 | OrientationTest | yes | differs | 0.72 | 31.4 | view: the screenshot is from an angle |
 | PlaysetLightTest | yes | matches | 0.80 | 18.6 | the 512 lux sun and 1500 candela point light use EV100 11 (file camera) |
-| PointLightIntensityTest | yes | differs | 0.56 | 15.2 | the red, green, blue and neutral pools of light are visible; the reference is a closer crop with unlit labels |
-| PotOfCoals | yes | differs | 0.79 | 36.1 | view: the screenshot looks down into the pot and shows hotter coals and different studio reflections |
-| PotOfCoalsAnimationPointer | yes | differs | 0.76 | 28.5 | view; transmission ([#595](https://github.com/ponkoengine/ponko/issues/595)): the heat dome whose normal map turns isn't seen ([pointer animations](#animations-through-pointers)) |
+| PointLightIntensityTest | yes | differs | 0.55 | 17.1 | the red, green, blue and neutral pools of light are visible; the reference is a closer crop with unlit labels |
+| PotOfCoals | yes | differs | 0.79 | 36.0 | view: the screenshot looks down into the pot and shows hotter coals and different studio reflections |
+| PotOfCoalsAnimationPointer | yes | differs | 0.76 | 28.5 | view; the heat dome's normal map turns ([pointer animations](#animations-through-pointers)) |
 | PrimitiveModeNormalsTest | yes | differs | 0.38 | 14.8 | points and lines aren't drawn; view |
 | RecursiveSkeletons | yes | differs | 0.13 | 22.0 | anim: rest pose against a pose of its animation; framed differently |
 | RiggedFigure | yes | differs | 0.50 | 10.1 | anim: rest pose against a pose of its animation |
 | RiggedSimple | yes | differs | 0.85 | 25.3 | anim: drawn straight, the screenshot bent |
-| ScatterAnemone | yes | differs | 0.37 | 33.9 | transmission, volume and scattering aren't drawn ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
-| ScatteringSkull | yes | differs | 0.00 | 26.8 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)): nothing is drawn |
-| ScatterPlant | yes | differs | 0.28 | 25.2 | the file's camera is far from the screenshot's: drawn small |
-| ScatterTest | yes | differs | 0.39 | 24.5 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
+| ScatterAnemone | yes | differs | 0.32 | 21.9 | view: the file's camera looks down between the tentacles; scattering is a surface approximation |
+| ScatteringSkull | yes | differs | 0.55 | 21.1 | view; scattering is a surface approximation, without light bleeding through thin parts |
+| ScatterPlant | yes | differs | 0.17 | 26.1 | the file's camera is far from the screenshot's: drawn small |
+| ScatterTest | yes | differs | 0.57 | 15.9 | view: drawn smaller; scattering is a surface approximation |
 | SciFiHelmet | yes | differs | 0.46 | 19.9 | background: the screenshot has a photograph behind it, so the outlines don't line up; view |
 | SheenChair | yes | differs | 0.51 | 26.0 | view |
 | SheenCloth | yes | differs | 0.56 | 20.5 | its occlusion map has a texture transform of its own, which follows the base color's; darker in the screenshot |
@@ -287,29 +286,29 @@ Overlap and ΔE are after registration; a dash: not drawn.
 | SimpleTexture | yes | differs | 0.75 | 42.0 | view: the screenshot is tilted; light |
 | SpecGlossVsMetalRough | yes | matches | 0.97 | 14.9 |  |
 | SpecularSilkPouf | yes | differs | 0.57 | 19.8 | view: the screenshot is closer |
-| SpecularTest | yes | matches | 0.87 | 6.2 |  |
+| SpecularTest | yes | matches | 0.87 | 6.3 |  |
 | Sponza | yes | differs | 0.20 | 17.8 | view: the rule frames the building from outside, the screenshot is inside the atrium |
-| StainedGlassLamp | yes | differs | 0.49 | 23.6 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)): the glass shade is missing |
-| SunglassesKhronos | yes | differs | 0.09 | 30.6 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)): the lenses are missing |
+| StainedGlassLamp | yes | matches | 0.81 | 15.0 |  |
+| SunglassesKhronos | yes | differs | 0.28 | 42.2 | view: drawn from the front; the tinted lenses are darker and reflect a flat studio sky ([#597](https://github.com/ponkoengine/ponko/issues/597)) |
 | Suzanne | yes | differs | 0.54 | 16.5 | background: the screenshot has a photograph behind it |
 | TextureCoordinateTest | yes | matches | 1.00 | 14.7 |  |
 | TextureEncodingTest | yes | differs | 0.31 | 23.5 | crop: the screenshot shows part of the panel |
 | TextureLinearInterpolationTest | yes | differs | 0.30 | 38.8 | view |
 | TextureSettingsTest | yes | matches | 0.96 | 14.8 |  |
-| TextureTransformMultiTest | yes | matches | 0.91 | 19.7 |  |
+| TextureTransformMultiTest | yes | matches | 0.91 | 19.9 |  |
 | TextureTransformTest | yes | differs | 0.78 | 21.3 | light: darker; the transforms are right |
-| ToyCar | yes | differs | 0.73 | 39.5 | the file's camera is closer than the screenshot's; environment: the comparison rig's flat studio sky |
+| ToyCar | yes | differs | 0.73 | 39.5 | the file's camera is closer than the screenshot's; environment ([#597](https://github.com/ponkoengine/ponko/issues/597)) |
 | TrafficCone | yes | differs | 0.57 | 25.2 | background: the screenshot has a photographed floor (file camera) |
-| TransmissionOrderTest | yes | differs | 0.27 | 16.7 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
-| TransmissionRoughnessTest | yes | differs | 0.37 | 16.9 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
-| TransmissionTest | yes | matches | 0.72 | 17.8 |  |
-| TransmissionThinwallTestGrid | yes | differs | 0.44 | 23.0 | transmissive materials vanish ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
+| TransmissionOrderTest | yes | differs | 0.27 | 15.2 | view: drawn smaller; glass sees only opaque surfaces behind it, not other glass |
+| TransmissionRoughnessTest | yes | differs | 0.41 | 14.5 | view: drawn smaller than the screenshot |
+| TransmissionTest | yes | matches | 0.72 | 15.8 |  |
+| TransmissionThinwallTestGrid | yes | differs | 0.46 | 23.2 | view: drawn smaller than the screenshot |
 | Triangle | yes | differs | 0.98 | 26.6 | light: the sun lights the white triangle fully, the screenshot shows it grey |
 | TriangleWithoutIndices | yes | differs | 0.98 | 26.6 | light: as Triangle |
 | TwoSidedPlane | yes | differs | 0.00 | 15.0 | view: the plane lies flat and the rule sees it edge-on |
 | Unicode❤♻Test | yes | matches | 0.85 | 19.5 |  |
 | UnlitTest | yes | differs | 0.87 | 30.2 | view |
-| USDShaderBallForGltf | yes | differs | 0.34 | 43.6 | the screenshot combines two views and shows transmission ([#595](https://github.com/ponkoengine/ponko/issues/595)) |
+| USDShaderBallForGltf | yes | differs | 0.59 | 40.2 | the screenshot combines two views; the core is darker under the flat studio sky ([#597](https://github.com/ponkoengine/ponko/issues/597)) |
 | VertexColorTest | yes | matches | 0.82 | 14.9 |  |
 | VirtualCity | yes | differs | 0.17 | 54.6 | the file’s camera looks down onto the city; the reference shows a different view and orange sunset surroundings |
 | WaterBottle | yes | differs | 0.35 | 25.3 | background: the screenshot has a backdrop behind it; view |

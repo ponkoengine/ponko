@@ -90,6 +90,7 @@ pub(super) const WEBGL2: glsl::Version = glsl::Version::Embedded {
 fn webgl2_shaders() -> Vec<(&'static str, String)> {
     vec![
         ("built-in material", webgl2_material("")),
+        ("layered transmission", webgl2_material(crate::three::LAYERED_SHADER)),
         ("scene-reading material", webgl2_material(SCENE_READER)),
         ("material loading the depth", webgl2_material(DIRECT_LOAD)),
         (
@@ -158,6 +159,9 @@ fn depth_binding_shaders_fail_to_translate_to_glsl() {
             for_samples(&compose_effect(DEPTH_EFFECT), 1, false).into_owned(),
         ),
     ] {
+        // The refraction mip count taken out as on GL, so the depth reads
+        // are what fails to translate.
+        let source = source.replace("textureNumLevels(scene_color_texture)", "1u");
         let e = translate(name, &source, WEBGL2).expect_err(name);
         assert!(e.contains("textureLoad` from depth textures"), "{name}: {e}");
     }

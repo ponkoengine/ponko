@@ -11,6 +11,10 @@
 //! 3. [`Presentation`]: the glows, the fade between levels and the text.
 //!    None of it changes the game. The camera that follows the hero is the
 //!    engine's: a `FollowCamera` resource and a `CameraTarget` on the hero.
+//!    The title scene is fitted into the window, and the text placed in
+//!    its safe area, every frame: a phone upright or turned, with a notch
+//!    or a home bar, shows the whole scene and every line (see `fit2d`).
+//!    On a touch screen the hints name taps and the on-screen buttons.
 //! 4. [`Music`]: the music, started once.
 //!
 //! What the engine does for it: levels are Tiled maps (`assets/ember_hop/levels`)
@@ -34,6 +38,9 @@
 // Next to this file, whichever crate includes it (`main.rs` or `tests/ember_hop.rs`).
 #[path = "smoke.rs"]
 pub mod smoke;
+// Shared with Coin Dash: the title scene and the text for any window.
+#[path = "../common/fit2d.rs"]
+pub mod fit2d;
 
 use ponko::d2::{
     Collider, FollowCamera, ParticleEmitter, ParticleSettings, ParticleShape, PixelPerfect, QueryFilter, RigidBody,
@@ -440,8 +447,16 @@ impl Plugin for Controls {
         ctx.input.set_actions(bindings());
         ctx.world.insert_resource(Act::resolve(ctx));
         ctx.world.insert_resource(Intent::default());
+        ctx.world.insert_resource(Hints::default());
         ctx.input.set_touch_controls(touch_controls());
     }
+}
+
+/// Which hints the screens show: taps and the on-screen buttons while the
+/// on-screen controls are up, else keys. Kept by `read_input`.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Hints {
+    pub touch: bool,
 }
 
 // ANCHOR: touch
@@ -463,6 +478,7 @@ pub fn read_input(ctx: &mut Ctx) {
     let in_run = matches!(screen(&ctx.world), Screen::Playing | Screen::Paused);
     let act = *ctx.world.resource::<Act>();
     ctx.input.set_touch_control_shown(act.pause, in_run);
+    ctx.world.resource_mut::<Hints>().touch = ctx.input.touch_controls_shown();
     let input = &ctx.input;
     let dpad =
         f32::from(u8::from(input.action_down(act.dpad_right))) - f32::from(u8::from(input.action_down(act.dpad_left)));
@@ -1293,8 +1309,31 @@ impl Plugin for Presentation {
 /// The camera's pixel grid: 320 x 180 art pixels at a whole zoom.
 const PIXELS: PixelPerfect = PixelPerfect::new(WINDOW.x / ZOOM, WINDOW.y / ZOOM);
 
-/// Frame system: additive glows, the fade between levels and the text.
+/// The title scene, in world units.
+pub const TITLE_VIEW: Rect = Rect {
+    min: Vec2::ZERO,
+    max: vec2(WINDOW.x / ZOOM, WINDOW.y / ZOOM),
+};
+
+/// Whether the title scene is what the camera shows: on the title and end
+/// screens, and in the second half of the fade to the end.
+pub fn title_shown(ctx: &Ctx) -> bool {
+    match screen(&ctx.world) {
+        Screen::Title | Screen::Finished => true,
+        Screen::Transition { to: None } => screen_seconds(ctx) >= FADE,
+        _ => false,
+    }
+}
+
+/// Frame system: the title scene's camera, additive glows, the fade between
+/// levels and the text.
 pub fn draw_overlay(ctx: &mut Ctx) {
+    // The whole title scene, as large as fits the window (3 times in the
+    // window the game starts with); a run's camera is the `FollowCamera`.
+    if title_shown(ctx) {
+        let window = Rect::new(0.0, 0.0, ctx.window_size().x, ctx.window_size().y);
+        fit2d::fit_camera(&mut ctx.camera, TITLE_VIEW, window);
+    }
     let art = *ctx.world.resource::<Art>();
     // Light around the hero, the sparks, lit braziers and the lantern.
     let mut glows: Vec<(Vec2, f32, Color)> = Vec::new();
@@ -1362,18 +1401,35 @@ pub fn screen_lines(world: &World, storage: &Storage) -> Vec<Line> {
     let text = Color::hex(0xe8dcc8);
     let dim = Color::hex(0x9a8fb0);
     let progress = world.resource::<Progress>();
+    let touch = world.get_resource::<Hints>().is_some_and(|h| h.touch);
     match screen(world) {
         Screen::Title => {
             let mut lines = vec![
                 line("Ember Hop", 64.0, title),
                 line("Carry the light through the caves.", 24.0, text),
                 line("", 16.0, text),
-                line("Enter / Space / A: new run", 22.0, text),
+                line(
+                    if touch {
+                        "Tap: new run"
+                    } else {
+                        "Enter / Space / A: new run"
+                    },
+                    22.0,
+                    text,
+                ),
             ];
             if has_saved_run(storage) {
-                lines.push(line("C / Y: continue the saved run", 22.0, text));
+                let hint = if touch {
+                    "Hold: continue the saved run"
+                } else {
+                    "C / Y: continue the saved run"
+                };
+                lines.push(line(hint, 22.0, text));
             }
-            lines.push(line("Esc: quit", 18.0, dim));
+            // A phone's system closes apps: no quit there.
+            if !touch {
+                lines.push(line("Esc: quit", 18.0, dim));
+            }
             if let Some(best) = progress.best_time {
                 lines.push(line(
                     format!("Best run {:.1} s, most sparks {}", best, progress.most_sparks),
@@ -1389,7 +1445,11 @@ pub fn screen_lines(world: &World, storage: &Storage) -> Vec<Line> {
         Screen::Paused => vec![
             line("Paused", 48.0, title),
             line(
-                "Esc / Start: resume    Q / B: to the title (the run is saved)",
+                if touch {
+                    "Tap or II: resume"
+                } else {
+                    "Esc / Start: resume    Q / B: to the title (the run is saved)"
+                },
                 20.0,
                 text,
             ),
@@ -1413,7 +1473,12 @@ pub fn screen_lines(world: &World, storage: &Storage) -> Vec<Line> {
             if progress.last_new_best {
                 lines.push(line("A new best!", 24.0, title));
             }
-            lines.push(line("Press any key or button", 18.0, dim));
+            let hint = if touch {
+                "Tap to go on"
+            } else {
+                "Press any key or button"
+            };
+            lines.push(line(hint, 18.0, dim));
             lines
         }
         _ => Vec::new(),
@@ -1455,8 +1520,33 @@ fn menu_fade(ctx: &mut Ctx) -> f32 {
 }
 
 fn hud(ctx: &mut Ctx) {
+    for p in hud_text(ctx) {
+        ctx.gfx.draw_text(&p.text, p.at, p.size, p.color);
+    }
+}
+
+/// The text `hud` draws this frame, where it draws it: the status line in
+/// the top corner of the window's safe area (clear of the on-screen pause
+/// button), the keys along its bottom (not on a touch screen, whose
+/// controls are there), a notice and the screen's lines centred in it,
+/// each made smaller only where it wouldn't fit.
+pub fn hud_text(ctx: &mut Ctx) -> Vec<fit2d::Placed> {
     let shown = menu_fade(ctx);
     let screen = screen(&ctx.world);
+    let room = ctx.window.safe_area();
+    let touch = ctx.world.resource::<Hints>().touch;
+    let mut placed = Vec::new();
+    let mut fitted_line = |ctx: &mut Ctx, text: String, at: Vec2, size: f32, room_x: f32, color: Color| {
+        let width = ctx.gfx.measure_text(&text, size).x;
+        let fitted = fit2d::fit_size(size, width, room_x);
+        placed.push(fit2d::Placed {
+            text,
+            at,
+            size: fitted,
+            width: width * fitted / size,
+            color,
+        });
+    };
     if matches!(
         screen,
         Screen::Playing | Screen::Paused | Screen::Dying | Screen::Transition { .. }
@@ -1467,34 +1557,59 @@ fn hud(ctx: &mut Ctx) {
             "{}   Sparks {}/{}   {:.0} s",
             level, run.level_sparks, run.level_total, run.time
         );
-        ctx.gfx.draw_text(&status, vec2(14.0, 10.0), 22.0, Color::hex(0xe8dcc8));
-        ctx.gfx.draw_text(
-            "Move: arrows / A D / stick   Jump: Space / A   Flare: X / Shift / X button   Pause: Esc",
-            vec2(14.0, WINDOW.y - 26.0),
-            14.0,
-            Color::hex(0x9a8fb0),
-        );
+        // The on-screen pause button sits in the top right corner (its rect
+        // is in window pixels).
+        let mut right = room.max.x;
+        if touch && let Some(button) = ctx.ui.find("touch.pause").and_then(|id| ctx.ui.rect(id)) {
+            right = right.min(button.min.x - 8.0);
+        }
+        let at = room.min + vec2(14.0, 10.0);
+        fitted_line(ctx, status, at, 22.0, right - at.x - 14.0, Color::hex(0xe8dcc8));
+        if !touch {
+            fitted_line(
+                ctx,
+                "Move: arrows / A D / stick   Jump: Space / A   Flare: X / Shift / X button   Pause: Esc".into(),
+                vec2(room.min.x + 14.0, room.max.y - 26.0),
+                14.0,
+                room.size().x - 28.0,
+                Color::hex(0x9a8fb0),
+            );
+        }
     }
     let notice = ctx.world.resource::<Notice>().clone();
     if notice.seconds > 0.0 {
         let width = ctx.gfx.measure_text(&notice.text, 18.0).x;
-        ctx.gfx.draw_text(
-            &notice.text,
-            vec2((WINDOW.x - width) / 2.0, 44.0),
-            18.0,
-            Color::hex(0xffd35a),
-        );
+        let size = fit2d::fit_size(18.0, width, room.size().x - 28.0);
+        let width = width * size / 18.0;
+        placed.push(fit2d::Placed {
+            text: notice.text,
+            at: vec2(room.center().x - width / 2.0, room.min.y + 44.0),
+            size,
+            width,
+            color: Color::hex(0xffd35a),
+        });
     }
-    let lines = screen_lines(&ctx.world, &ctx.storage);
-    let height: f32 = lines.iter().map(|l| l.size * 1.4).sum();
-    let mut y = (WINDOW.y - height) / 2.0 - 40.0 + MENU_RISE * (1.0 - shown);
-    for l in lines {
-        let width = ctx.gfx.measure_text(&l.text, l.size).x;
-        let color = l.color.with_alpha(l.color.a * shown);
-        ctx.gfx
-            .draw_text(&l.text, vec2((WINDOW.x - width) / 2.0, y), l.size, color);
-        y += l.size * 1.4;
+    let lines: Vec<_> = screen_lines(&ctx.world, &ctx.storage)
+        .into_iter()
+        .map(|l| {
+            let width = ctx.gfx.measure_text(&l.text, l.size).x;
+            (l.text, l.size, width, l.color.with_alpha(l.color.a * shown))
+        })
+        .collect();
+    let height: f32 = lines.iter().map(|l| l.1 * 1.4).sum();
+    let mut top = room.min.y + (room.size().y - height) / 2.0 - 40.0;
+    // A tall window (a phone held upright) has room above the title scene:
+    // the text goes there, not over the scene.
+    let window = Rect::new(0.0, 0.0, ctx.window_size().x, ctx.window_size().y);
+    if title_shown(ctx)
+        && let Some(scene) = fit2d::fitted(TITLE_VIEW, window)
+        && scene.min.y - room.min.y >= height + 28.0
+    {
+        top = room.min.y + (scene.min.y - room.min.y - height) / 2.0;
     }
+    let top = top + MENU_RISE * (1.0 - shown);
+    placed.extend(fit2d::stack_lines(lines, 1.4, room, 14.0, Some(top)));
+    placed
 }
 
 // ---- layer 4: music -------------------------------------------------------------------

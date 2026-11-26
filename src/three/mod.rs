@@ -109,7 +109,9 @@ mod extraction_test;
 mod gltf_scene_test;
 mod material_layers;
 pub use material_layers::MaterialLayers;
+mod transmission;
 pub(crate) use material_layers::{LAYERED_SHADER, LayerSlots, MAP_KINDS, MapKind};
+pub use transmission::Transmission;
 mod quality;
 mod resident;
 mod retained;
@@ -2022,6 +2024,9 @@ mod c_api_mirror {
             iridescence_thickness: _,
             iridescence_map: _,
             iridescence_thickness_map: _,
+            // Imported glTF transmission works from native code as well;
+            // authoring it in the native descriptor is #636.
+            transmission: _,
         } = MaterialLayers::NONE;
         let ParticleSettings3D {
             rate: _,

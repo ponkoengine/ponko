@@ -286,6 +286,7 @@ impl Renderer3D {
         if rebuild {
             self.targets = Some(self.make_targets(device, view.size, (view.upscaled, view.window)));
         }
+        self.prepare_refraction_copy(device);
     }
 
     /// Step 11: what occlusion culling takes from this frame: the count of

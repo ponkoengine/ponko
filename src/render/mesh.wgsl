@@ -65,7 +65,7 @@ struct MaterialData {
     // Layers over the surface (see material_layers.wgsl): which are on,
     // where their maps are, and their values. Read only where they're on.
     layer_info: vec4<u32>,
-    layers: array<vec4<f32>, 5>,
+    layers: array<vec4<f32>, 9>,
     // The texture coordinates' transform (KHR_texture_transform): the
     // first two rows of its matrix, (a, b, offset) each.
     uv_transform: array<vec4<f32>, 2>,
@@ -462,7 +462,10 @@ fn punctual_light(s: Surface) -> vec3<f32> {
         let window = max(1.0 - (d2 / (pr.w * pr.w)) * (d2 / (pr.w * pr.w)), 0.0);
         attenuation *= select(window * window / max(d2, 1.0), window / max(d2, 1e-4), physical);
         if shadow_info.y >= 0.0 && attenuation > 0.0 {
-            attenuation *= punctual_shadow(i32(shadow_info.y), shadow_info.z, pr.xyz, s.world, s.normal, cone.w <= -1.0);
+            let backlight = MATERIAL_LAYERS && (transmission.diffuse > 0.0 || transmission.scatter > 0.0)
+                && dot(s.normal, l) < 0.0;
+            let bias_normal = select(s.normal, -s.normal, backlight);
+            attenuation *= punctual_shadow(i32(shadow_info.y), shadow_info.z, pr.xyz, s.world, bias_normal, cone.w <= -1.0);
         }
         let radiance = textureLoad(punctual_records, vec2<i32>(1, id), 0).rgb * attenuation;
         sum += direct_light(s, l, radiance);

@@ -49,7 +49,8 @@ What it makes, by platform (the host's unless --target or --web):
            for the simulator, zipped                       (--target ios-sim;
                                                             --format zip)
   Android  an apk, signed with the debug key for testing, (--target android;
-           or by your --sign program                       --format apk)
+           or by your --sign program; an app bundle for    --format apk,
+           Google Play (needs bundletool)                  --format aab)
 
 Options:
   --bin <name>, --example <name>  The program (default: the package's binary)
@@ -88,7 +89,7 @@ Options:
                                   A pack the engine's defaults would refuse to
                                   read is refused unless you raise them, and
                                   then the game must too (`Game::pack_limits`)
-  --format <list>                 folder, zip, tar.gz, dmg, ipa, apk (comma-separated);
+  --format <list>                 folder, zip, tar.gz, dmg, ipa, apk, aab (comma-separated);
                                   `folder` alone: the plain folder, no archive
                                   and no app bundle
   --out <dir>                     Where to put the package (default: target/package)
@@ -100,8 +101,8 @@ Options:
                                   `<program> archive <path>` for each archive
                                   (see the guide; without it a macOS app is
                                   sealed ad hoc, which is not a trusted signature,
-                                  and an apk is signed with the debug key; with
-                                  it an apk comes unsigned to `archive`)";
+                                  and an apk or aab is signed with the debug key;
+                                  with it they come unsigned to `archive`)";
 
 pub const NOTICES_USAGE: &str = "\
 ponko notices: write THIRD-PARTY-NOTICES.txt for a crate
@@ -1155,6 +1156,11 @@ pub fn package_command(options: &Options, cwd: &Path) -> Result<String, String> 
         Os::Android => Some(android::find(&|k| std::env::var(k).ok())?),
         _ => None,
     };
+    let bundletool = if archives.contains(&Format::Aab) {
+        android::bundletool(&|k| std::env::var(k).ok())?
+    } else {
+        Vec::new()
+    };
     if platform.os == Os::Android && (options.no_pack || !pack_meta.enabled) && !game.assets.is_empty() {
         return Err(
             "an Android game reads its assets from assets.pack inside the apk: leave out --no-pack and `pack = false`"
@@ -1288,9 +1294,9 @@ pub fn package_command(options: &Options, cwd: &Path) -> Result<String, String> 
         (Some(program), _) if platform.os != Os::Web && platform.os != Os::Android => {
             sign_hook(program, "sign", &signed_path, &game, &platform, &dir)?;
         }
-        (None, _) if platform.os == Os::Android && archives.contains(&Format::Apk) => notes.push(
-            "the apk is signed with the debug key and debuggable, for testing: app stores take one signed with your \
-             release key (pass --sign; see the guide's Android chapter)"
+        (None, _) if platform.os == Os::Android && !archives.is_empty() => notes.push(
+            "the package is signed with the debug key and debuggable, for testing: app stores take one signed with \
+             your release (upload) key (pass --sign; see the guide's Android chapter)"
                 .into(),
         ),
         // A device installs only an app signed with the developer's
@@ -1367,6 +1373,14 @@ pub fn package_command(options: &Options, cwd: &Path) -> Result<String, String> 
                 let tools = android_tools.as_ref().ok_or("an apk is for Android")?;
                 let app = plan.app.as_ref().ok_or("an apk is made of the package's apk folder")?;
                 android::apk(tools, &out.join(app), &file, options.sign.is_none())?;
+            }
+            Format::Aab => {
+                let tools = android_tools.as_ref().ok_or("an app bundle is for Android")?;
+                let app = plan
+                    .app
+                    .as_ref()
+                    .ok_or("an app bundle is made of the package's apk folder")?;
+                android::aab(tools, &bundletool, &out.join(app), &file, options.sign.is_none())?;
             }
             Format::Folder => continue,
         }

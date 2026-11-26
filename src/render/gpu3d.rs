@@ -1097,6 +1097,7 @@ impl Renderer3D {
                 meshes: Vec::new(),
                 mesh_arena: Default::default(),
                 materials: Vec::new(),
+                refractors: 0,
                 material_ids: Default::default(),
                 material_layout,
                 material_sampler,
@@ -2564,3 +2565,7 @@ mod skin_motion_render_test;
 #[cfg(test)]
 #[path = "vertex_motion_render_test.rs"]
 mod vertex_motion_render_test;
+
+#[cfg(test)]
+#[path = "transmission_render_test.rs"]
+mod transmission_render_test;

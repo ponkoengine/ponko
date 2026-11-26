@@ -12,6 +12,7 @@ const LAYER_CLEARCOAT: u32 = 1u;
 const LAYER_SHEEN: u32 = 2u;
 const LAYER_ANISOTROPY: u32 = 8u;
 const LAYER_IRIDESCENCE: u32 = 16u;
+const LAYER_TRANSMISSION: u32 = 32u;
 
 // The layer maps, in `material.layer_info.y`'s order (two bits each: 0
 // none, 1 or 2 the slot it is bound in).
@@ -75,7 +76,7 @@ fn layer_max3(v: vec3<f32>) -> f32 {
 // Fills `layers` for a pixel of surface `s` at texture coordinates `uv`
 // (and `world`), whose mesh normal (facing the viewer) is `geometric`.
 // Called in uniform control flow (screen derivatives).
-fn fill_layers(s: Surface, uv: vec2<f32>, world: vec3<f32>, geometric: vec3<f32>) {
+fn fill_layers(s: Surface, uv: vec2<f32>, world: vec3<f32>, geometric: vec3<f32>, transformed_normal: vec3<f32>) {
     let info = material.layer_info;
     // The texture directions at this pixel (Schüler's cotangent frame, as
     // the normal map's in `surface_at`): `t` along u, `b` along v.
@@ -159,6 +160,9 @@ fn fill_layers(s: Surface, uv: vec2<f32>, world: vec3<f32>, geometric: vec3<f32>
         l.film = thin_film(1.0, values[4].y, n_v, thickness, base);
     }
     layers = l;
+    if (l.on & LAYER_TRANSMISSION) != 0u {
+        fill_transmission(transformed_normal);
+    }
 }
 
 // ---- Direct light ----
@@ -247,6 +251,11 @@ fn layered_light(s: Surface, l: vec3<f32>, radiance: vec3<f32>) -> vec3<f32> {
     let v_h = clamp(dot(v, h), 0.0, 1.0);
     let schlick = pow(1.0 - v_h, 5.0);
     var color = vec3<f32>(0.0);
+    if transmission.diffuse > 0.0 || transmission.scatter > 0.0 {
+        let exit_fresnel = pow(1.0 - clamp(n_v, 0.0, 1.0), 5.0);
+        let reflected = layers.specular * layer_max3(layers.f0 + (1.0 - layers.f0) * exit_fresnel);
+        color = transmitted_light(s, l, reflected);
+    }
     if n_l > 0.0 {
         var specular = 0.0;
         if (layers.on & LAYER_ANISOTROPY) != 0u {
@@ -263,7 +272,8 @@ fn layered_light(s: Surface, l: vec3<f32>, radiance: vec3<f32>) -> vec3<f32> {
             metal_f = mix(metal_f, layers.film, layers.iridescence);
         }
         // A non-metal: diffuse under a reflection as strong as `specular`.
-        let dielectric = s.albedo / PI * (1.0 - layers.specular * layer_max3(dielectric_f))
+        let diffuse_share = (1.0 - transmission.factor) * (1.0 - transmission.diffuse);
+        let dielectric = diffuse_share * s.albedo / PI * (1.0 - layers.specular * layer_max3(dielectric_f))
             + dielectric_f * (layers.specular * specular);
         var base = mix(dielectric, metal_f * specular, s.metallic);
         if (layers.on & LAYER_SHEEN) != 0u {
@@ -272,7 +282,7 @@ fn layered_light(s: Surface, l: vec3<f32>, radiance: vec3<f32>) -> vec3<f32> {
             let under = min(1.0 - strongest * sheen_albedo(n_v, r), 1.0 - strongest * sheen_albedo(n_l, r));
             base = base * under + layers.sheen * (sheen_distribution(r, max(dot(n, h), 0.0)) * sheen_visibility(n_l, n_v, r));
         }
-        color = base * n_l;
+        color += base * n_l;
     }
     if (layers.on & LAYER_CLEARCOAT) != 0u {
         let c = layers.clearcoat_normal;
@@ -321,8 +331,19 @@ fn layered_ambient(s: Surface, diffuse: vec3<f32>, specular: vec3<f32>, brdf: ve
         metal = mix(metal, layers.film, layers.iridescence);
     }
     let dielectric_f = f0 * brdf.x + brdf.y;
-    let dielectric = diffuse * s.albedo * (1.0 - layers.specular * layer_max3(dielectric_f))
-        + specular * dielectric_f * layers.specular;
+    let through = (1.0 - transmission.factor) * transmission.diffuse;
+    let diffuse_share = (1.0 - transmission.factor) * (1.0 - transmission.diffuse);
+    var transmitted = vec3<f32>(0.0);
+    if through > 0.0 || transmission.scatter > 0.0 {
+        let behind = environment_sample(0.0, -s.normal, 0.0, true);
+        let clear = volume_transmittance(transmission.thickness);
+        let thin = transmission.thickness <= 0.0;
+        let scattered = mix(diffuse, behind, 0.5 + select(0.0, 0.5 * transmission.anisotropy, thin));
+        transmitted = through * behind * transmission.diffuse_color * clear
+            + transmission.scatter * transmission.scatter_color * scatter_extinction() * scattered;
+    }
+    let dielectric = (diffuse_share * diffuse * s.albedo + transmitted) *
+        (1.0 - layers.specular * layer_max3(dielectric_f)) + specular * dielectric_f * layers.specular;
     var base = mix(dielectric, specular * (metal * brdf.x + brdf.y), s.metallic);
     if (layers.on & LAYER_SHEEN) != 0u {
         // The sheen's lobe is wide: lit by the light around the normal.
