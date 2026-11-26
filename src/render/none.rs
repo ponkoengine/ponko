@@ -62,6 +62,9 @@ impl Renderer {
     pub fn gpu_memory(&self) -> Option<crate::perf::GpuMemory> {
         match *self {}
     }
+    pub fn video_memory(&self) -> Option<crate::perf::VideoMemory> {
+        match *self {}
+    }
     pub fn texture_alpha_memory(&self) -> Option<crate::inventory::TextureAlphaMemory> {
         match *self {}
     }

@@ -142,6 +142,10 @@ fn nodes_of_one_gltf_mesh_hold_one_mesh_on_the_gpu_and_draw_it_for_each_node() {
     assert_eq!(apart_models, vec![1; NODES], "each mesh drawn once");
     assert_eq!(meshes, 1, "one GPU mesh for the nodes of one glTF mesh");
     assert_eq!(models, [NODES], "the one mesh drawn for every node");
-    assert_eq!(bytes * NODES as u64, apart_bytes, "an eighth of the GPU memory");
+    // The arena's buffers keep a quarter spare, rounded for alignment.
+    assert!(
+        (bytes * NODES as u64).abs_diff(apart_bytes) * 100 < apart_bytes,
+        "an eighth of the GPU memory: {bytes} bytes, {apart_bytes} apart"
+    );
     assert_eq!((left, apart_left), (0, 0), "freed with the scene");
 }

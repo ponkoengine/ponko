@@ -258,6 +258,8 @@ pub mod input;
 pub mod inventory;
 pub mod locale;
 pub mod math;
+#[cfg(feature = "3d")]
+mod mip_limit;
 pub mod mods;
 
 #[cfg(feature = "inspector")]
