@@ -1,5 +1,12 @@
 # Putting a game online
 
+> **Maturity: [tested](maturity.md).** Game: none. Tests: the relay sessions
+> through the lobby server, the proxy-header tests and the TURN client against
+> an in-process TURN server; the one-machine walkthrough below was run as
+> written, against coturn 4.19.2 on macOS. Platforms: Linux, macOS and Windows,
+> headless. Graphics: not involved. Missing: a reference game and a public
+> deployment.
+
 This page is one complete setup, from an empty server to players in a
 match: the [lobby server](lobby.md) for rooms and its relay, a TLS proxy
 so browsers can reach it over `wss://`, and a TURN server so

@@ -399,3 +399,26 @@ fn a_tables_font_file_is_loaded_for_its_language_with_the_built_in_font_behind_i
 fn load_strings_panics_with_the_engine_message_for_a_missing_table() {
     Game::new("t", 1, 1).run_headless(0, |ctx| ctx.assets.load_strings(&mut ctx.world, "lang/none.json"));
 }
+
+#[test]
+fn a_table_built_in_code_has_plural_forms_by_category_name() {
+    // Forms come from somewhere other than a table file (a spreadsheet
+    // export, say) by their CLDR names.
+    let mut table = StringTable::new("pl");
+    let rows = [
+        ("one", "{count} moneta"),
+        ("few", "{count} monety"),
+        ("many", "{count} monet"),
+    ];
+    for (name, text) in rows {
+        table.set_plural("hud.coins", PluralCategory::from_name(name).unwrap(), text);
+    }
+    assert_eq!(PluralCategory::from_name("lots"), None);
+    let mut strings = Strings::default();
+    strings.insert(table);
+    assert!(strings.set_language("pl"));
+    let coins = |n: i64| strings.format("hud.coins", &[("count", Arg::from(n))]);
+    assert_eq!(coins(1), "1 moneta");
+    assert_eq!(coins(3), "3 monety");
+    assert_eq!(coins(5), "5 monet");
+}

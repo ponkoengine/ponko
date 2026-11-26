@@ -481,6 +481,55 @@ whose only code is an unused function behind
 
 ## Numbers
 
+### The boids example
+
+One tick of `examples/boids.rs` with its default flock: 20,000 boids in
+1280 × 720. It is the example's own flocking system, the same code
+(`web_threads` includes the example's file): it sorts the boids by place
+every few ticks and rebuilds a spatial grid of them on the page's thread,
+then updates every boid from its neighbours with `par_for_each`. The
+fixture's `boids` workload spawns the flock, runs the system in the
+fixed-step simulation (60 Hz) and times each call; the first 20 ticks are
+not counted, the next 60 are.
+
+Measured on 2026-11-26 (revision `e319e566`), headless Chromium 156 (the
+headless shell, as the bench always runs), an Apple M4 Max with 14 cores,
+**busy**: other agents were building, with a 1-minute load average of 46
+to 62 during the runs. Each flavor three page loads; the table gives the
+median of the loads' medians and the lowest and highest load. Two sets,
+taken a minute apart:
+
+| Build | Threads | Tick, set 1 (ms) | Tick, set 2 (ms) |
+|---|---|---|---|
+| Ordinary build (`web/build.sh web_threads`) | the page's thread | 9.70 (9.61 to 9.93) | 9.80 (9.78 to 9.80) |
+| Build with threads, `?threads=1` | the page's thread | 9.94 (9.90 to 9.98) | 9.71 (9.65 to 9.78) |
+| Build with threads, default | 13 workers | **1.39** (1.38 to 1.40) | **1.34** (1.33 to 1.36) |
+
+So a tick takes **7.2× less** with threads than without (7.18× and 7.24×
+against the same build on one thread, about 7.1× against the ordinary
+build). That is far beyond the noise: the loads of each row are within 3%
+of each other, and both sets agree within 4%. It falls short of the 13
+workers because the grid's rebuild and the sorting stay on the page's
+thread, and the parallel part is a little over a millisecond, so waking
+the workers and waiting for the last weighs in (the `par` row below shows
+the same). The few slow ticks (up to 11 ms with threads) are the ones that
+sort. The ordinary build and the build with threads on one thread are the
+same within the noise of this machine (2 to 3%, in either direction across
+the two sets): having threads costs nothing measurable where they aren't
+used.
+
+Not measured here: Firefox and Safari, and a quiet machine (the next
+section says why the idle runs of the other workloads were not trusted
+either).
+
+```sh
+node web/smoke/threads.mjs --build --bench --workloads boids --repeat 3
+web/build.sh web_threads target/web/web_threads_plain
+node web/smoke/threads.mjs --bench --dir target/web/web_threads_plain --workloads boids --threads 1 --repeat 3
+```
+
+### The engine's workloads
+
 The engine's simulation benchmarks (the workloads of `crates/ponko_bench`),
 in headless Chromium 156, one thread (`?threads=1`) against the default (13
 frame threads, 6 for jobs). The machine was an Apple M4 Max (14 cores) with

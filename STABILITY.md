@@ -580,6 +580,10 @@ builds the web (wasm32, WebGPU with a WebGL2 fallback); small web builds (2D,
 3D and the complete-game reference) are also run in headless Chromium and
 WebKit with WebGL2 (`web/smoke/`; Firefox is tried there too, but headless
 Firefox on a GPU-less Linux machine has no WebGL2, so it is reported, not
-verified). WebGPU is tried there too and reported, but a machine without a
-GPU usually can't show it, so WebGPU is verified on real GPUs by hand. Other
-targets that wgpu and winit support usually work but aren't tested.
+verified). WebGPU is gated on a real GPU: the list's `web-gpu` job runs the
+2D and 3D builds in headless Chromium on a Mac's GPU (Metal) and fails when
+WebGPU is unsupported, falls back to WebGL2, or runs on a software renderer
+(SwiftShader) or a fallback adapter; it also records the 3D build's frame
+times on WebGPU and WebGL2 (`book/src/web.md`, "Frame times"). WebGPU on
+Windows and Linux GPUs, and in Firefox and Safari, is still checked by hand.
+Other targets that wgpu and winit support usually work but aren't tested.
