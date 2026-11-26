@@ -203,6 +203,10 @@ pub(crate) struct Renderer {
     /// and when the window opened with HDR on, the frame image everything is
     /// drawn into and the pass encoding it for the window.
     hdr: super::hdr_output::Hdr,
+    /// A window that can't be drawn as sRGB (`srgb_output.rs`): the frame
+    /// image everything is drawn into and the pass encoding it into the
+    /// window.
+    srgb_encode: Option<super::srgb_output::SrgbEncode>,
 }
 
 /// The sprite pipeline, drawing into `format`.
@@ -746,22 +750,17 @@ impl Renderer {
             config.color_space = choice.color_space;
         }
         // Browser canvases are never sRGB themselves; draw through an sRGB view.
+        let views_allowed = adapter
+            .get_downlevel_capabilities()
+            .flags
+            .contains(wgpu::DownlevelFlags::SURFACE_VIEW_FORMATS);
+        // Some OpenGL ES drivers (EGL without its sRGB color space, as on
+        // the Android emulator) offer neither: the frame is drawn into an
+        // sRGB image and encoded into the window by a last pass.
+        let encode_srgb = open_hdr.is_none() && super::srgb_output::needed(config.format, views_allowed);
         let view_format = config.format.add_srgb_suffix();
-        if view_format != config.format {
-            if adapter
-                .get_downlevel_capabilities()
-                .flags
-                .contains(wgpu::DownlevelFlags::SURFACE_VIEW_FORMATS)
-            {
-                config.view_formats.push(view_format);
-            } else {
-                // Some OpenGL ES drivers (Android's without EGL's sRGB color
-                // space) offer neither: the window is drawn as it is.
-                eprintln!(
-                    "ponko: this GPU's window has no sRGB format ({:?}): colors are written without sRGB encoding",
-                    config.format
-                );
-            }
+        if view_format != config.format && views_allowed {
+            config.view_formats.push(view_format);
         }
         config.present_mode = if vsync {
             wgpu::PresentMode::AutoVsync
@@ -802,6 +801,13 @@ impl Renderer {
             },
         );
         renderer.device_lost = device_lost;
+        if encode_srgb {
+            eprintln!(
+                "ponko: this GPU's window has no sRGB format ({:?}): the frame is drawn into an sRGB image and encoded into it",
+                renderer.config.format
+            );
+            renderer = renderer.with_srgb_encode();
+        }
         Ok(renderer.with_hdr(hdr_state, open_hdr.is_some()))
     }
 
@@ -820,6 +826,18 @@ impl Renderer {
         }
         self.hdr = hdr;
         self.query_display();
+        self
+    }
+
+    /// Draws into an sRGB frame image that the encode pass copies into the
+    /// window ([`srgb_output`](super::srgb_output)), for a window whose
+    /// format isn't sRGB and has no sRGB view. As with HDR output, only the
+    /// sprite pipeline was made for the window's format yet.
+    fn with_srgb_encode(mut self) -> Self {
+        let format = super::srgb_output::FRAME_FORMAT;
+        self.srgb_encode = Some(super::srgb_output::SrgbEncode::new(&self.device, self.config.format));
+        self.view_format = format;
+        self.pipeline = sprite_pipeline(&self.device, &self.sprite_layout, &self.sprite_shader, format);
         self
     }
 
@@ -957,6 +975,19 @@ impl Renderer {
         renderer.config.color_space = choice.color_space;
         let sdr = wgpu::TextureFormat::Rgba8UnormSrgb;
         renderer.with_hdr(super::hdr_output::Hdr::plain(settings, Some(choice), sdr), true)
+    }
+
+    /// Tests: [`offscreen`](Self::offscreen) as a window with no sRGB
+    /// format and no views (OpenGL ES without EGL's sRGB color space): the
+    /// frame is drawn into the sRGB frame image and encoded into the
+    /// offscreen `Rgba8Unorm` frame, which [`read_output`](Self::read_output)
+    /// reads back.
+    #[cfg(all(test, feature = "3d"))]
+    pub(super) fn offscreen_without_srgb(gpu: super::render_test_support::TestGpu, size: (u32, u32)) -> Self {
+        let mut renderer = Self::offscreen(gpu, size);
+        renderer.config.format = wgpu::TextureFormat::Rgba8Unorm;
+        renderer.hdr = super::hdr_output::Hdr::plain(super::HdrOutput::default(), None, renderer.config.format);
+        renderer.with_srgb_encode()
     }
 
     /// Tests: [`offscreen`](Self::offscreen) as a window offering `choice`
@@ -1211,6 +1242,7 @@ impl Renderer {
             #[cfg(feature = "inspector")]
             egui_free: Vec::new(),
             hdr: super::hdr_output::Hdr::plain(super::HdrOutput::default(), None, config_format),
+            srgb_encode: None,
         }
     }
 
@@ -1770,6 +1802,13 @@ impl Renderer {
             .and_then(super::hdr_output::HdrPass::frame_texture)
         {
             t.texture(C::FrameTargets, "hdr frame", frame);
+        }
+        if let Some(frame) = self
+            .srgb_encode
+            .as_ref()
+            .and_then(super::srgb_output::SrgbEncode::frame_texture)
+        {
+            t.texture(C::FrameTargets, "srgb frame", frame);
         }
         if let Some(overlay) = self
             .hdr
@@ -2496,6 +2535,8 @@ impl Renderer {
     fn output_format(&self) -> wgpu::TextureFormat {
         if self.hdr.pass.is_some() {
             self.hdr.surface_target().2
+        } else if let Some(encode) = &self.srgb_encode {
+            encode.target()
         } else {
             self.view_format
         }
@@ -3061,6 +3102,15 @@ impl Renderer {
             }
             None => (view, None),
         };
+        // A window that can't be sRGB: everything is drawn into the sRGB
+        // frame image, which the encode pass writes into the window last.
+        let (view, encode_target) = match (self.srgb_encode.as_mut(), view) {
+            (Some(encode), Some(target)) => (
+                Some(encode.frame_view(&self.device, (self.config.width, self.config.height))),
+                Some(target),
+            ),
+            (_, view) => (view, None),
+        };
         // The 3D passes come in command buffers of their own (recorded in
         // parallel), submitted before `encoder`'s sprites go on top.
         let mut buffers_3d = Vec::new();
@@ -3124,6 +3174,10 @@ impl Renderer {
         if let (Some(pass), Some((target, format))) = (&self.hdr.pass, &hdr_target) {
             let timestamps = self.timer.as_ref().and_then(|t| t.pass("hdr output"));
             pass.record(&mut encoder, target, *format, false, timestamps);
+        }
+        if let (Some(encode), Some(target)) = (&self.srgb_encode, &encode_target) {
+            let timestamps = self.timer.as_ref().and_then(|t| t.pass("srgb encode"));
+            encode.record(&mut encoder, target, timestamps);
         }
         if let Some(timer) = &mut self.timer {
             timer.resolve(&mut encoder);

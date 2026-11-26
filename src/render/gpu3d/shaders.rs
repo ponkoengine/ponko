@@ -321,7 +321,10 @@ impl Shaders {
 /// scene depth is declared as a float texture instead (see [`depth_as_float`]).
 pub(in crate::render) fn for_samples(source: &str, samples: u32, float_depth: bool) -> std::borrow::Cow<'_, str> {
     if float_depth {
-        std::borrow::Cow::Owned(depth_as_float(&without_contact_shadows(source), samples))
+        // OpenGL ES 3.0 has no textureQueryLevels, and its refraction
+        // image has only the base level (see prepare_refraction_copy).
+        let source = without_contact_shadows(source).replace("textureNumLevels(scene_color_texture)", "1u");
+        std::borrow::Cow::Owned(depth_as_float(&source, samples))
     } else if samples > 1 {
         std::borrow::Cow::Borrowed(source)
     } else {
@@ -713,7 +716,9 @@ pub(super) const MESH_PRELUDE: &str = concat!(
     "\n",
     include_str!("../mesh.wgsl"),
     "\n",
-    include_str!("../material_layers.wgsl")
+    include_str!("../material_layers.wgsl"),
+    "\n",
+    include_str!("../transmission.wgsl")
 );
 
 /// The line of [`MESH_PRELUDE`] that turns the material layers' code off,

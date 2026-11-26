@@ -71,6 +71,8 @@ mod shader_status;
 mod smaa;
 #[cfg(feature = "window")]
 mod sprite_pipelines;
+#[cfg(feature = "window")]
+mod srgb_output;
 #[cfg(all(feature = "window", feature = "3d"))]
 mod ssr;
 #[cfg(feature = "window")]
@@ -565,6 +567,8 @@ mod skin_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod sprite_material_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
+mod srgb_output_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
 mod ssr_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod static_batch_bench;
@@ -654,8 +658,6 @@ pub use crate::three::Upscaler;
 pub use crate::three::bake_lighting_gpu;
 // Layers over a material's surface (glTF's material extensions).
 #[cfg(feature = "3d")]
-pub use crate::three::MaterialLayers;
-#[cfg(feature = "3d")]
 pub use crate::three::{
     AmbientOcclusion, AntiAliasing, AutoExposure, BatchCulling, Blend, Compute, ComputePass, Crowd, CrowdAnimation,
     CrowdClip, CrowdInstance, CrowdLevel, CrowdOptions, DepthOfField, Effect, EnvironmentMap, GlobalIllumination,
@@ -679,6 +681,8 @@ pub use crate::three::{CloudQuality, Clouds, DayNight, Moon, SkyKit};
 pub use crate::three::{ExtractionBench, ExtractionSample};
 #[cfg(feature = "3d")]
 pub use crate::three::{InstanceCell, InstanceCellData};
+#[cfg(feature = "3d")]
+pub use crate::three::{MaterialLayers, Transmission};
 
 /// Shared additive JSON shape for the inspector and frame benchmarks.
 pub(crate) fn state_changes_json(changes: Option<[u32; 5]>) -> serde_json::Value {

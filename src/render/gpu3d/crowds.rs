@@ -425,6 +425,16 @@ impl Crowds {
         self.crowds.iter().flatten().any(|c| c.count > 0)
     }
 
+    /// The meshes of the camera levels of every crowd with characters
+    /// (culled or not: the refraction copy is decided before culling).
+    pub(super) fn camera_meshes(&self) -> impl Iterator<Item = u32> + '_ {
+        self.crowds
+            .iter()
+            .flatten()
+            .filter(|c| c.count > 0)
+            .flat_map(|c| c.levels.iter().filter(|l| l.camera).map(|l| l.mesh))
+    }
+
     /// Whether the frame's cull pass runs (see `Renderer3D::cull_crowds`).
     pub(super) fn culls(&self) -> bool {
         self.shared.is_some()

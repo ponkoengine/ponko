@@ -11,11 +11,11 @@
 > Platforms: the Android 16 (API 36) emulator, arm64, on an Apple silicon
 > Mac. Graphics: Vulkan (the emulator's SwiftShader), and OpenGL ES through
 > ANGLE when asked for. Missing: a run on a phone (touch with fingers,
-> multi-touch, calls, memory pressure, performance, heat and power),
-> release signing, Google Play (an app bundle).
+> multi-touch, calls, memory pressure, performance, heat and power), an
+> upload to Google Play.
 
 The same game runs on Android phones and tablets. `ponko package --target
-android` builds it as an apk; the window is the screen, the renderer draws
+android` builds it as an apk, or as the app bundle Google Play takes; the window is the screen, the renderer draws
 with Vulkan (or OpenGL ES), fingers are [touches](touch.md), and the engine
 tells the game when the system sends it away, when the keyboard covers part
 of the screen and when the player presses Back. This chapter is what is
@@ -44,13 +44,19 @@ below were run on a Mac):
    ```
 
 4. The Rust target: `rustup target add aarch64-linux-android`.
+5. For app bundles (Google Play) only: Google's `bundletool`, which the SDK
+   doesn't include. Download `bundletool-all-<version>.jar` from
+   [its releases](https://github.com/google/bundletool/releases) and set
+   `BUNDLETOOL` to the jar (it runs on the JDK above), or put a
+   `bundletool` program on the `PATH` (`brew install bundletool`).
 
 What this chapter was checked with: Temurin JDK 21.0.13, command-line tools
 13114758, platform-tools 37.0.3, platform android-36, build-tools 36.1.0,
-NDK r29 (29.0.14206865), emulator 37.3.10 and the android-36 Google APIs
-arm64 image. Newer ones should do; `ponko package` takes the newest build
-tools, platform and NDK it finds (`ANDROID_NDK_HOME` names another NDK).
-No Gradle, no Android Studio project and no Java code are involved.
+NDK r29 (29.0.14206865), emulator 37.3.10, the android-36 Google APIs
+arm64 image and bundletool 1.18.3. Newer ones should do; `ponko package`
+takes the newest build tools, platform and NDK it finds
+(`ANDROID_NDK_HOME` names another NDK). No Gradle, no Android Studio
+project and no Java code are involved.
 
 ## Building and packaging
 
@@ -58,7 +64,9 @@ In the game's folder:
 
 ```sh
 ponko package --target android              # an apk, signed with the debug key
-ponko package --target android --format folder   # only the files it is made of
+ponko package --target android --format aab # an app bundle, for Google Play
+ponko package --target android --format apk,aab  # both
+ponko package --target android --format folder   # only the files they are made of
 ```
 
 `android` stands for `aarch64-linux-android`, the 64-bit ARM every phone
@@ -76,6 +84,15 @@ of:
 | `assets/assets.pack` | the files under `assets/`, [cooked](packaging.md#cooking-assets-ponko-cook) for `mobile` | stored, read from the apk as it is |
 | `assets/THIRD-PARTY-NOTICES.txt`, the licenses | the crate | |
 | `res/mipmap-*/ic_launcher.png` | `icon` | 48, 72, 96, 144 and 192 pixels |
+
+An app bundle (`.aab`) holds the same files, as the `base` module: aapt2
+links the manifest and icons in the bundle's protocol buffer form and
+`bundletool build-bundle` makes it. A bundle isn't installed as it is: the
+store (or `bundletool build-apks`) makes the apks a phone gets from it,
+here the base apk and one with the arm64 library. The bundle's settings
+keep what the apk keeps: the library and `assets.pack` stored, the library
+on 16 KiB pages. The phone check's bundle is 9 MB (the library compressed
+inside it); what a phone downloads is the 20 MB of the apk.
 
 An Android game reads its assets only from the pack: `--no-pack`,
 `pack = false` and asset folders outside `assets/` are refused for Android.
@@ -99,7 +116,14 @@ The manifest:
 | `glEsVersion` 3.0 required | the engine | the least the renderer draws with |
 
 The smoke run is skipped (it would need a phone); the command prints how
-to run one on the emulator instead.
+to run one on the emulator instead. An app bundle is installed through the
+apks made from it:
+
+```sh
+bundletool build-apks --bundle target/package/<name>-<version>-android-aarch64.aab --output game.apks \
+    --ks ~/.android/debug.keystore --ks-pass pass:android --ks-key-alias androiddebugkey --key-pass pass:android
+bundletool install-apks --apks game.apks   # on the phone or emulator adb sees
+```
 
 ## How the game starts and ends
 
@@ -232,10 +256,16 @@ doesn't. On the emulator Vulkan is SwiftShader, a CPU renderer: the
 phone check draws 30 to 50 frames a second there, the
 [tier](3d.md#gpu-tiers) is `desktop`. With `WGPU_BACKEND=gl` it draws
 through OpenGL ES (ANGLE over the same SwiftShader), tier `baseline`.
-That OpenGL ES window has no sRGB format, so the colors are written without
-sRGB encoding there and look darker (the engine says so in the log); a
-driver with EGL's sRGB color space doesn't have that problem. Which tier
-real phones reach, and how fast, needs phones.
+
+The renderer draws into an sRGB image, which blends in linear light and
+encodes what it writes. An OpenGL ES window offers one only where EGL has
+its sRGB color space (EGL 1.5, or `EGL_KHR_gl_colorspace`); the emulator's
+EGL has neither, so wgpu offers its window only as `Rgba8Unorm`, with no
+sRGB view. There the engine draws the frame into an sRGB image of the
+window's size and a last pass writes it into the window with the sRGB
+curve applied (the log says so once): the colors are the same as with
+Vulkan, at the cost of one full-screen copy a frame. Which tier real
+phones reach, and how fast, needs phones.
 
 Debug builds on the emulator crash in its Vulkan driver, which fails on
 the names wgpu gives its objects in debug builds; packages are release
@@ -260,8 +290,10 @@ scripts/android-emulator.sh            # results and screenshots in target/andro
 scripts/android-emulator.sh --clippy   # only clippy for Android
 ```
 
-It packages the phone check, boots a fresh emulated Pixel 7 (Android 16,
-arm64; `PONKO_ANDROID_AVD` boots one of yours instead), and:
+It packages the phone check as an apk and an app bundle, boots a fresh
+emulated Pixel 7 (Android 16, arm64; `PONKO_ANDROID_AVD` boots one of
+yours instead), installs the phone check from its bundle (`bundletool
+build-apks` and `install-apks`, so a phone's split apks), and:
 
 0. builds the engine's library tests for Android and runs them on the
    emulator (`adb shell`), all but those that read this checkout's files
@@ -276,7 +308,10 @@ arm64; `PONKO_ANDROID_AVD` boots one of yours instead), and:
 3. starts it with the keyboard open and requires its inset, typed text,
    a tap closing it, and a Back the game cancels keeping it in front;
 4. packages Coin Dash and runs it headless from its apk, its assets read
-   from the pack inside it.
+   from the pack inside it;
+5. draws the phone check with OpenGL ES (`WGPU_BACKEND=gl`) and with
+   Vulkan, and requires the two screenshots to show the same colors
+   (`ponko image-diff`).
 
 The emulator is stopped at the end, also when a step fails. By hand (an
 emulated phone with a window: leave out `-no-window`):
@@ -290,6 +325,12 @@ adb shell input tap 540 1200          # a touch
 adb emu kill
 ```
 
+**Muting a check.** The script's emulator runs without audio. On an
+emulator with audio, or a phone, pass `-e PONKO_MUTE 1` to `am start` (a
+debuggable apk) and the game's output plays silence
+([Audio](audio.md#muting-automated-runs-ponko_mute)):
+`adb shell am start -n <package>/android.app.NativeActivity -e PONKO_MUTE 1`.
+
 ## On a phone, and signing for players
 
 A phone with developer options and USB debugging on installs the debug
@@ -300,14 +341,16 @@ it when it is missing); an apk signed with it is for testing only.
 A release is signed with the developer's own key, which only they hold:
 
 1. Once, make the key (and keep it safe: an app's updates must be signed
-   with the same key):
+   with the same key, and for Google Play it is the upload key):
 
    ```sh
    keytool -genkeypair -keystore release.jks -alias game -keyalg RSA -keysize 4096 -validity 10000
    ```
 
-2. A signing program, which `ponko package` calls with the aligned,
-   unsigned apk (`archive <path>`); with `--sign` the apk is not debuggable:
+2. A signing program, which `ponko package` calls with each unsigned
+   archive (`archive <path>`): the aligned apk, which `apksigner` signs,
+   and the app bundle, which `jarsigner` (the JDK's) signs, as Gradle does.
+   With `--sign` the package is not debuggable:
 
    ```sh
    #!/bin/sh
@@ -315,18 +358,40 @@ A release is signed with the developer's own key, which only they hold:
    # passwords come from the environment, never the command line.
    set -e
    [ "$1" = archive ] || exit 0
-   "$ANDROID_HOME/build-tools/36.1.0/apksigner" sign --ks "$KEYSTORE" --ks-key-alias "$KEY_ALIAS" \
-       --ks-pass env:KEYSTORE_PASS --key-pass env:KEY_PASS "$2"
-   "$ANDROID_HOME/build-tools/36.1.0/apksigner" verify "$2"
+   case $2 in
+   *.apk)
+       "$ANDROID_HOME/build-tools/36.1.0/apksigner" sign --ks "$KEYSTORE" --ks-key-alias "$KEY_ALIAS" \
+           --ks-pass env:KEYSTORE_PASS --key-pass env:KEY_PASS "$2"
+       "$ANDROID_HOME/build-tools/36.1.0/apksigner" verify "$2"
+       ;;
+   *.aab)
+       jarsigner -keystore "$KEYSTORE" -storepass:env KEYSTORE_PASS -keypass:env KEY_PASS \
+           -sigalg SHA256withRSA "$2" "$KEY_ALIAS"
+       jarsigner -verify "$2" >/dev/null
+       ;;
+   esac
    ```
 
-3. `ponko package --target android --sign ./sign-android.sh`
+3. `ponko package --target android --format apk,aab --sign ./sign-android.sh`
 
-Google Play takes Android App Bundles (`.aab`), not apks, for new apps,
-and re-signs them with a key it keeps (Play App Signing, with the key
-above as the upload key). `ponko package` makes apks only: an app bundle
-needs Google's `bundletool`, which the SDK doesn't include. Other stores
-and direct downloads take the signed apk.
+**Google Play** takes app bundles, not apks, for new apps. Its first
+upload, once, in the Play Console (an account, which costs a one-time fee):
+
+1. Create the app, and in its *App integrity* settings keep **Play App
+   Signing** on: Google makes and keeps the key that signs what phones
+   install, and the key above becomes the *upload key*, which only proves
+   to Google that an upload is yours. (A lost upload key can be replaced
+   through Google's support; a lost app signing key could not.)
+2. Upload the signed `.aab` to a testing track (internal testing first),
+   with the store listing, content rating and data safety forms the
+   console asks for.
+3. Every update: raise the crate's version (the `versionCode` follows it),
+   package, sign with the same upload key, upload.
+
+`bundletool build-apks --bundle <aab> --output <apks> --ks release.jks
+--ks-key-alias game` makes the apks the store would, signed with your key,
+to try a release bundle on a phone first. Other stores and direct
+downloads take the signed apk.
 
 ## C and C++
 
@@ -347,10 +412,12 @@ tried.
 |---|---|---|
 | Builds for Android | yes | clippy for `aarch64-linux-android` (engine and C API) |
 | The package, its manifest and alignment | yes | unit tests (`cargo test -p ponko_cli package`); `zipalign -c -P 16 4` and `apksigner verify` pass; Android installs it |
+| The app bundle | emulator | `bundletool validate` and `jarsigner -verify` pass; the apks made from it (`build-apks`) are aligned for 16 KiB pages, store the library and the pack, install and run the phone check and Coin Dash |
+| Release signing | emulator | apk and bundle signed by the hook above with a release key: not debuggable, installed from the bundle's apks and run |
 | The project template and a reference game (Coin Dash) | emulator | packaged, installed and started; Coin Dash draws its coins from the apk's pack, and a swipe on its on-screen stick moves the player |
 | The engine's unit tests | emulator | 1156 pass on Android (18 skipped: they read the checkout's files) |
 | Vulkan rendering, full screen | emulator | the phone check draws its frame around the safe area; screenshots |
-| OpenGL ES | emulator | with `WGPU_BACKEND=gl`: draws, without sRGB encoding |
+| OpenGL ES | emulator | with `WGPU_BACKEND=gl`: the same colors as Vulkan, through the encode pass. Screenshots compared: identical with `-gpu swiftshader_indirect` (the check); with `-gpu auto`, a mean channel difference of 0.001 of 255 (text edges), against 26 before the pass |
 | Steady frames | emulator | 30 to 50 frames a second on the CPU renderer |
 | Safe area, rotation | emulator | 52 / 0 / 24 / 0 upright on a Pixel 7; turned, 52 on the left |
 | Suspend and resume, the surface made again | emulator | home, then the game again: one event each, frames go on |
@@ -364,7 +431,7 @@ tried.
 | A call taking the audio, other apps taking the focus | **needs a phone** | the call check reads the system's audio mode once a second |
 | Memory warnings | **needs a phone** | recent Android rarely sends them |
 | Performance, power, heat, the GPU tier of real GPUs | **needs phones** | the emulator draws on the CPU |
-| Release signing, Google Play | **needs the developer's key and account** | the steps above; no app bundle yet |
+| An upload to Google Play | **needs the developer's account** | the steps above |
 
 ## Notes for other platforms
 

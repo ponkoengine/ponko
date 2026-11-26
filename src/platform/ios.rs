@@ -80,6 +80,70 @@ fn place_in_scene(window: &objc2_ui_kit::UIWindow, scene: &objc2_ui_kit::UIWindo
     // it fills the scene's screen (the view's layout then reports it).
     window.setFrame(scene.screen().bounds());
     window.makeKeyAndVisible();
+    make_insets_probe(scene);
+    turn_for_check(scene);
+}
+
+#[cfg(feature = "window")]
+thread_local! {
+    /// A window made in the game's scene, behind the game's window, that
+    /// UIKit gives the scene's safe area: see [`safe_insets`].
+    static INSETS_PROBE: std::cell::RefCell<Option<objc2_06::rc::Retained<objc2_ui_kit::UIWindow>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// winit 0.30 makes its UIWindow with a frame (`initWithFrame:`), and
+/// UIKit keeps a window made that way at its upright safe area for good,
+/// even once it is in a scene and turned with it. A window made in the
+/// scene (`initWithWindowScene:`) follows each turn, so an empty one is
+/// kept under the game's window, where it is never seen and takes no
+/// touches: its safe area is the game's. It needs a view controller of its
+/// own to turn with the scene.
+#[cfg(feature = "window")]
+fn make_insets_probe(scene: &objc2_ui_kit::UIWindowScene) {
+    use objc2_06::MainThreadOnly;
+    use objc2_ui_kit::{UIViewController, UIWindow};
+    let mtm = scene.mtm();
+    let probe = UIWindow::initWithWindowScene(UIWindow::alloc(mtm), scene);
+    probe.setRootViewController(Some(&UIViewController::new(mtm)));
+    // Under the game's window, at `UIWindowLevelNormal` (0).
+    probe.setWindowLevel(-1.0);
+    probe.setUserInteractionEnabled(false);
+    // A hidden window doesn't turn.
+    probe.setHidden(false);
+    INSETS_PROBE.with(|p| *p.borrow_mut() = Some(probe));
+}
+
+/// The scene's safe area as `[top, right, bottom, left]` in points, for
+/// the way the phone is turned now; `None` until the game's window is in
+/// its scene. Cheap: read once a frame.
+#[cfg(feature = "window")]
+pub(crate) fn safe_insets() -> Option<[f32; 4]> {
+    INSETS_PROBE.with(|p| {
+        let probe = p.borrow();
+        let i = probe.as_ref()?.safeAreaInsets();
+        Some([i.top, i.right, i.bottom, i.left].map(|v| v as f32))
+    })
+}
+
+/// For the simulator check (`scripts/ios-simulator.sh`), which can't turn
+/// the simulator: `PONKO_IOS_ORIENTATION=landscape` (or `portrait`) asks
+/// the scene to turn that way as the game starts.
+#[cfg(feature = "window")]
+fn turn_for_check(scene: &objc2_ui_kit::UIWindowScene) {
+    use objc2_ui_kit::{UIInterfaceOrientationMask, UIWindowSceneGeometryPreferencesIOS};
+    let mask = match std::env::var("PONKO_IOS_ORIENTATION").as_deref() {
+        Ok("landscape") => UIInterfaceOrientationMask::Landscape,
+        Ok("portrait") => UIInterfaceOrientationMask::Portrait,
+        _ => return,
+    };
+    use objc2_06::AnyThread;
+    let preferences = UIWindowSceneGeometryPreferencesIOS::initWithInterfaceOrientations(
+        UIWindowSceneGeometryPreferencesIOS::alloc(),
+        mask,
+    );
+    // A refused turn leaves the check's turned step failing.
+    scene.requestGeometryUpdateWithPreferences_errorHandler(&preferences, None);
 }
 
 /// The general pasteboard's text, if it holds text.

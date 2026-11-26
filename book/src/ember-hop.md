@@ -169,6 +169,12 @@ cuts to it. The game has no camera system:
 {{#include ../../examples/ember_hop/game.rs:camera}}
 ```
 
+On the title and end screens no hero is followed: `draw_overlay` shows the
+whole title scene, as large as fits the window (three times in 960 x 540),
+and on a phone held upright puts the title's text in the room above it. The
+text is placed in the window's safe area; see
+[A fixed play area on any screen](touch.md#a-fixed-play-area-on-any-screen).
+
 The hero leaves a trail of embers, lit braziers burn, and sparks, flares,
 stomps and losses throw short bursts (`ParticleEmitter` with additive
 blending). Sprites animate from sprite sheets (`Animation`); the hero's sheet

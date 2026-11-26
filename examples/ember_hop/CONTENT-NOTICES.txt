@@ -27,7 +27,8 @@ assets/ember_hop/levels/cave.png        the tileset: rock, cave wall, water,
     https://kenney.nl/assets/1-bit-platformer-pack
 
 assets/ember_hop/sprites/ember.png      a soft dot for the particles
-assets/ember_hop/sprites/glow.png       a soft disc for the glows
+assets/ember_hop/sprites/glow.png       a soft disc for the glows (scaled down,
+                                        its edge faded to clear)
     "circle_05" from "Particle Pack" by Kenney, CC0,
     https://kenney.nl/assets/particle-pack
 
