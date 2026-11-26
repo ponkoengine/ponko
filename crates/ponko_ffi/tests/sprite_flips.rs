@@ -72,12 +72,18 @@ fn writing_a_ponko_sprite_back_keeps_the_flips() {
         // Read, change, write back: the other fields change, the flips stay.
         let mut read = PonkoSprite::default();
         let id = sprite_id(w);
-        assert_eq!(ponko_get(w, e, id, (&mut read as *mut PonkoSprite).cast(), SIZE), PONKO_OK);
+        assert_eq!(
+            ponko_get(w, e, id, (&mut read as *mut PonkoSprite).cast(), SIZE),
+            PONKO_OK
+        );
         read.z = 4.0;
         assert_eq!(write_back(w, e, &read), PONKO_OK);
         assert_eq!(flips(w, e), (true, true));
         let mut again = PonkoSprite::default();
-        assert_eq!(ponko_get(w, e, id, (&mut again as *mut PonkoSprite).cast(), SIZE), PONKO_OK);
+        assert_eq!(
+            ponko_get(w, e, id, (&mut again as *mut PonkoSprite).cast(), SIZE),
+            PONKO_OK
+        );
         assert_eq!(again.z, 4.0);
         // Another value over a flipped sprite keeps them too.
         sprite.z = 9.0;
