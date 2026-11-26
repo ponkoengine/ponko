@@ -19,7 +19,8 @@ a reference lobby server for that, in three pieces:
 
 It is a *reference* server: small, readable, limited against abuse, meant to
 run as it is for a small game or to start your own from. Read
-[what it is not](#what-it-is-not) before you put it on the internet.
+[what it is not](#what-it-is-not) before you put it on the internet, and
+[Putting a game online](online.md) for a whole setup with TLS and TURN.
 
 ## Run the server
 
@@ -33,6 +34,7 @@ LOBBY_WEB=0.0.0.0:7701 cargo run -p ponko_lobby   # and browsers on ws://
 | `LOBBY_UDP` | `0.0.0.0:7700` | Where clients connect over UDP |
 | `LOBBY_WEB` | empty: off | Browser clients over WebSocket (`ws://`; put a TLS proxy in front for `wss://`, as in [the browser chapter](networking.md#in-the-browser)) |
 | `LOBBY_STUN` | empty: off | Answers STUN requests on this UDP address (usually `0.0.0.0:3478`), for [WebRTC peers](webrtc.md#stun-turn-and-nats) |
+| `LOBBY_TRUSTED_PROXIES` | empty: none | Reverse proxies in front of `LOBBY_WEB` (addresses or ranges, such as `127.0.0.1,10.0.0.0/8`) whose `X-Forwarded-For` header the server believes, so browsers' limits count per player (see [Behind a proxy](#behind-a-proxy)) |
 | `LOBBY_MAX_CLIENTS` | 1024 | Clients the UDP endpoint takes |
 | `LOBBY_HZ` | 100 | Polls per second; a relayed message waits at most one poll |
 | `LOBBY_REPORT_SECS` | 10 | How often it logs a `lobby_report` line; 0: never |
@@ -142,8 +144,10 @@ The lobby only introduces players. Once in a room they can play:
   or a [lockstep session](networking.md#host-and-join), puts its public
   address in the room's text, and the others join it. Fastest, but the
   host's port must be reachable (port forwarding, no strict NAT);
-- **through the relay**: `relay(to, lane, bytes)` sends the game's own bytes
-  to one member (`Some(id)`) or to every other member (`None`); they arrive
+- **through the relay**: a [relay session](#game-sessions-through-the-relay)
+  runs a lockstep or message session through the server with the same
+  API as over UDP; or `relay(to, lane, bytes)` sends the game's own bytes
+  to one member (`Some(id)`) or to every other member (`None`), arriving
   as `LobbyEvent::Relayed` with the sender's id and lane. Works from behind
   any NAT, costs a trip through the server;
 - **peer to peer over WebRTC** (feature `webrtc`): the lobby carries the
@@ -155,6 +159,72 @@ The relay forwards **opaque bytes**: the server never reads, checks or
 keeps them. It only checks that sender and receiver are in the same room,
 the size cap and the sender's rate limit. Whatever the game sends, its
 receiver has to check, as with any network input.
+
+### Game sessions through the relay
+
+A lockstep session or a message endpoint (and so [replication](replication.md)
+on top of it) can run through the relay instead of UDP: the same session,
+with the same settings, events, lanes and timeouts, between the members of
+one room. Once the room is complete, the room's host hosts and the others
+join it:
+
+```rust
+use ponko::net::Net;
+use ponko::net::lobby::LobbyClient;
+use ponko::prelude::*;
+
+# fn run(lobby: LobbyClient) -> std::io::Result<()> {
+// Every member, once in the room (LobbyEvent::Joined) and it is full:
+let players = lobby.room().map_or(2, |room| room.members.len());
+let net = if lobby.is_host() {
+    Net::host_relay(lobby, players)?.input_delay(6)
+} else {
+    Net::join_relay(lobby)? // joins the room's host
+};
+let game = Game::new("arena", 640, 360).lockstep(net);
+# let _ = game;
+# Ok(())
+# }
+```
+
+`NetMessages::host_relay(lobby, max_clients)` and
+`NetMessages::join_relay(lobby)` are the same for message endpoints.
+The session takes the lobby client and polls it itself, also while a
+lockstep tick waits for inputs; `relay_lobby()` on the session gives it
+back for its state and events (the newest 256 are kept). The game's own
+`relay` messages still arrive there as `LobbyEvent::Relayed`, next to the
+session.
+
+Each session packet is one relay message to one member, on the lobby's
+unreliable lane, and the session protocols resend what is lost, exactly
+as over UDP. What that costs:
+
+- **Latency**: every packet crosses the server, so a trip is the two
+  players' distances to the server, plus at most one server poll
+  (10 ms at `LOBBY_HZ=100`). Give a lockstep session a larger
+  `input_delay` than on a local network.
+- **The relay budget**: session traffic counts towards the sender's relay
+  limit (256 KiB a second per address by default). A lockstep host sends
+  every input to every member, so a full 8-player session at 60 Hz with
+  large inputs may need a larger `relay_bytes_per_second`.
+- **Host migration**: if the room's host leaves, its session ends like a
+  lost UDP host (a lockstep session is lost, message clients see
+  `Disconnected`). Start a new session with the new host.
+- **Leaving the room** or losing the lobby connection ends the session at
+  once: a lockstep session is lost with the reason, and a message
+  endpoint's `poll` returns `ConnectionAborted`.
+- **Packet size**: a session sends up to 1504 bytes at once through the
+  relay, so the server's `max_relay_bytes` must be at least that (4096 by
+  default); below it, `host_relay` and `join_relay` return `InvalidInput`.
+
+Tested through the real server with in-memory links that delay, reorder
+and lose packets, and over UDP on this machine
+(`crates/ponko_lobby/tests/relay_sessions.rs`). The scripted latency and
+loss tests of both protocols (`net/lockstep_conformance.rs`,
+`net/message_conformance.rs`) run directly and through a relay, with the
+same API; replication's conformance run through a relay is
+`replicates_over_the_lobby_relay_through_loss_and_latency`.
+[Putting a game online](online.md) checks a relay with two terminals.
 
 ## Your own rules
 
@@ -201,12 +271,32 @@ Every limit is a field of `LobbyLimits`; each one has a test in
 
 An **address** is an IP address, whatever the port, so every player behind
 one home router shares the budgets; that is why the budgets are per second
-and generous. A browser connection is an address of its own: the server
-sees the WebSocket connection, not the browser's IP (behind a proxy it
-would only see the proxy). `AddressKey::Connection` gives every connection
-its own budgets instead, for a server behind such a proxy or for load
-tests. Malformed requests are refused with `BadRequest` and don't close
-the connection.
+and generous. A browser connection is an address of its own, unless the
+server is told which proxies to trust (below). `AddressKey::Connection`
+gives every connection its own budgets instead, for load tests. Malformed
+requests are refused with `BadRequest` and don't close the connection.
+
+### Behind a proxy
+
+Browsers usually reach the lobby through a TLS proxy (Caddy, nginx) for
+`wss://`, so every browser connection comes from the proxy's address. The
+proxy writes the browser's address into the request's `X-Forwarded-For`
+header. `LobbyLimits::trusted_proxies` (`LOBBY_TRUSTED_PROXIES`) names the
+proxies whose header the server believes:
+
+| Browser connection from | `trusted_proxies` empty (default) | `trusted_proxies` set |
+|---|---|---|
+| A trusted proxy | its own address | the client address the proxies wrote: the header's last entry that isn't a trusted proxy |
+| A trusted proxy that sent no readable header | its own address | its own address |
+| Anywhere else | its own address | the connection's IP address; the header is ignored |
+
+So a player can't pick an address by sending the header themselves: only
+what a trusted proxy appended counts. The limits per address then use the
+client's address. `ponko::net::WebPeer` (`NetMessages::web_peer`) gives a
+game server of your own the same: the TCP address, the header, and
+`client_ip(trusted)`. Desktop players' UDP packets carry their real
+address and need none of this. The test is `crates/ponko_lobby/tests/proxy.rs`,
+through a small reverse proxy that adds the header.
 
 ## What it is not
 
@@ -223,7 +313,8 @@ the connection.
   rate); a private game needs a check of its own after joining.
 - **No TURN.** With `LOBBY_STUN` the server helps players behind most
   home routers connect [peer to peer over WebRTC](webrtc.md); players who
-  still can't reach the host use the relay.
+  still can't reach the host use a TURN server of their own
+  ([coturn](online.md#3-coturn-for-stun-and-turn)) or the relay.
 
 ## Under load
 
@@ -291,5 +382,7 @@ and the opaque payload), over the engine's message endpoint.
 `_members`, `_room_meta`, `_disconnect` and `_free`, and `ponko::lobby` in
 C++, are the client. A native game joins over UDP only:
 `LobbyClient::join_web` is Rust-only, so a C or C++ game built for the
-web has no lobby client. The server is Rust: a native game talks to `ponko-lobby`
-as it is.
+web has no lobby client. Relay sessions (`Net::host_relay`, `join_relay`,
+`NetMessages::host_relay`, `join_relay`) are Rust-only for now: a C or
+C++ game relays its own packets with `ponko_lobby_relay`. The server is
+Rust: a native game talks to `ponko-lobby` as it is.

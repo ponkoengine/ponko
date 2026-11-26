@@ -7016,9 +7016,11 @@ impl ponko::net::rtc::RtcConfig
 pub fn ponko::net::rtc::RtcConfig::bind(self, core::net::socket_addr::SocketAddr) -> Self
 pub fn ponko::net::rtc::RtcConfig::host_address(self, core::net::ip_addr::IpAddr) -> Self
 pub fn ponko::net::rtc::RtcConfig::new() -> Self
+pub fn ponko::net::rtc::RtcConfig::relay_only(self) -> Self
 pub fn ponko::net::rtc::RtcConfig::stun(self, &str) -> Self
 pub fn ponko::net::rtc::RtcConfig::stun_urls(&self) -> impl core::iter::traits::iterator::Iterator<Item = &str>
 pub fn ponko::net::rtc::RtcConfig::turn(self, &str, &str, &str) -> Self
+pub fn ponko::net::rtc::RtcConfig::turn_servers(&self) -> impl core::iter::traits::iterator::Iterator<Item = (&str, &str, &str)>
 impl core::clone::Clone for ponko::net::rtc::RtcConfig
 pub fn ponko::net::rtc::RtcConfig::clone(&self) -> Self
 impl core::cmp::Eq for ponko::net::rtc::RtcConfig
@@ -7549,6 +7551,10 @@ pub fn ponko::net::Net::stats(&self) -> ponko::net::NetStats
 pub fn ponko::net::Net::timeout(self, core::time::Duration) -> Self
 pub fn ponko::net::Net::web_addr(&self) -> core::option::Option<core::net::socket_addr::SocketAddr>
 impl ponko::net::Net
+pub fn ponko::net::Net::host_relay(ponko::net::lobby::LobbyClient, usize) -> core::io::error::Result<ponko::net::Net>
+pub fn ponko::net::Net::join_relay(ponko::net::lobby::LobbyClient) -> core::io::error::Result<ponko::net::Net>
+pub fn ponko::net::Net::relay_lobby(&mut self) -> core::option::Option<&mut ponko::net::lobby::LobbyClient>
+impl ponko::net::Net
 pub fn ponko::net::Net::steam_host(&ponko::net::SteamClient, usize) -> ponko::net::Net
 pub fn ponko::net::Net::steam_invite(&self)
 pub fn ponko::net::Net::steam_join(&ponko::net::SteamClient, ponko::net::SteamLobbyId) -> ponko::net::Net
@@ -7625,6 +7631,11 @@ pub fn ponko::net::NetMessages::send_to_all(&mut self, ponko::net::Lane, &[u8]) 
 pub fn ponko::net::NetMessages::stats(&self) -> ponko::net::MessageStats
 pub fn ponko::net::NetMessages::timeout(self, core::time::Duration) -> Self
 pub fn ponko::net::NetMessages::web_addr(&self) -> core::option::Option<core::net::socket_addr::SocketAddr>
+pub fn ponko::net::NetMessages::web_peer(&self, ponko::net::PeerId) -> core::option::Option<ponko::net::WebPeer>
+impl ponko::net::NetMessages
+pub fn ponko::net::NetMessages::host_relay(ponko::net::lobby::LobbyClient, usize) -> core::io::error::Result<Self>
+pub fn ponko::net::NetMessages::join_relay(ponko::net::lobby::LobbyClient) -> core::io::error::Result<Self>
+pub fn ponko::net::NetMessages::relay_lobby(&mut self) -> core::option::Option<&mut ponko::net::lobby::LobbyClient>
 impl ponko::net::NetMessages
 pub fn ponko::net::NetMessages::host_rtc(ponko::net::rtc::Signaling, ponko::net::rtc::RtcConfig, usize) -> core::io::error::Result<Self>
 pub fn ponko::net::NetMessages::join_rtc(ponko::net::rtc::Signaling, u64, ponko::net::rtc::RtcConfig) -> core::io::error::Result<Self>
@@ -8170,6 +8181,20 @@ impl core::hash::Hash for ponko::net::UpdateStamp
 pub fn ponko::net::UpdateStamp::hash<__H: core::hash::Hasher>(&self, &mut __H)
 impl core::marker::Copy for ponko::net::UpdateStamp
 impl core::marker::StructuralPartialEq for ponko::net::UpdateStamp
+pub struct ponko::net::WebPeer
+impl ponko::net::WebPeer
+pub fn ponko::net::WebPeer::client_ip(&self, impl core::ops::function::Fn(core::net::ip_addr::IpAddr) -> bool) -> core::option::Option<core::net::ip_addr::IpAddr>
+pub fn ponko::net::WebPeer::forwarded_for(&self) -> core::option::Option<&str>
+pub fn ponko::net::WebPeer::new(core::net::socket_addr::SocketAddr, core::option::Option<&str>) -> Self
+pub fn ponko::net::WebPeer::remote(&self) -> core::net::socket_addr::SocketAddr
+impl core::clone::Clone for ponko::net::WebPeer
+pub fn ponko::net::WebPeer::clone(&self) -> Self
+impl core::cmp::Eq for ponko::net::WebPeer
+impl core::cmp::PartialEq for ponko::net::WebPeer
+pub fn ponko::net::WebPeer::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::net::WebPeer
+pub fn ponko::net::WebPeer::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::net::WebPeer
 pub const ponko::net::DEFAULT_BUDGET: u32
 pub const ponko::net::MAX_INPUT_BYTES: usize
 pub const ponko::net::MAX_INTEREST_TIERS: usize

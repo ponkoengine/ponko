@@ -12,7 +12,7 @@ import sys
 
 root = Path(__file__).resolve().parent.parent
 library = ctypes.CDLL(str(Path(sys.argv[1]).resolve()))
-header = (root / 'include/ponko.h').read_text()
+header = (root / 'include/ponko.h').read_text(encoding='utf-8')
 names = sorted(set(re.findall(r'\b(ponko_\w+)\s*\(', header)))
 assert names
 for name in names:

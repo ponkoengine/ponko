@@ -36,7 +36,7 @@ def references():
         if not name or name == INVENTORY.name or not path.is_file():
             continue
         try:
-            count = len(LEGACY.findall(path.read_text()))
+            count = len(LEGACY.findall(path.read_text(encoding='utf-8')))
         except UnicodeDecodeError:
             count = 0
         path_count = len(LEGACY.findall(name))
@@ -187,7 +187,7 @@ def main_paths():
         path = Path(sys.argv[sys.argv.index('--json') + 1])
     else:
         path = build_json()
-    problems = duplicates(json.loads(path.read_text()))
+    problems = duplicates(json.loads(path.read_text(encoding='utf-8')))
     if problems:
         sys.exit('Items with more than one public path (STABILITY.md, "The crate root and '
                  'globs"; scripts/check-naming.py --paths):\n  ' + '\n  '.join(problems))
@@ -240,9 +240,9 @@ def main():
         for name, counts in current.items():
             category, reason = classify(name)
             entries[name] = dict(counts, category=category, reason=reason)
-        INVENTORY.write_text(json.dumps({'description': 'Reviewed legacy references; see book/src/naming.md. Decreases are allowed; increases require review.', 'files': entries}, indent=2) + '\n')
+        INVENTORY.write_text(json.dumps({'description': 'Reviewed legacy references; see book/src/naming.md. Decreases are allowed; increases require review.', 'files': entries}, indent=2) + '\n', encoding='utf-8', newline='\n')
         return
-    errors = check(current, json.loads(INVENTORY.read_text())['files'])
+    errors = check(current, json.loads(INVENTORY.read_text(encoding='utf-8'))['files'])
     if errors:
         sys.exit('\n'.join(errors))
     print(f'Naming inventory passed ({len(current)} legacy-bearing files).')
