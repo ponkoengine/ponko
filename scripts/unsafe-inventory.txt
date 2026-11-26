@@ -321,6 +321,8 @@ crates/ponko_ffi/src/rollback.rs | session | crates/ponko_ffi/tests/rollback.rs:
 src/mods/code.rs | Host::with_ctx | src/mods/code.rs::host_functions_reach_the_game_only_during_with_code | miri(mods-wasm)
 src/mods/code.rs | impl Send for CtxPtr | src/mods/code.rs::host_functions_reach_the_game_only_during_with_code | miri(mods-wasm)
 src/mods/code.rs | impl Sync for CtxPtr | src/mods/code.rs::host_functions_reach_the_game_only_during_with_code | miri(mods-wasm)
+src/mods/code.rs | impl Send for GamePtr | src/mods/code.rs::code_swapped_into_with_code_cannot_reach_the_game | miri(mods-wasm)
+src/mods/code.rs | impl Sync for GamePtr | src/mods/code.rs::code_swapped_into_with_code_cannot_reach_the_game | miri(mods-wasm)
 
 # iOS: Rust tests of this module run on the simulator, and the simulator
 # check runs the phone check, which needs an app (its scene and pasteboard).
