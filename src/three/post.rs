@@ -547,10 +547,12 @@ pub struct Post {
     /// this on, the trace walks a coarse copy of the depth instead (the
     /// nearest depth of 8 to 64 pixel blocks): it skips blocks the ray stays
     /// in front of and reads the depth closely where something could be in
-    /// front of it. It costs about 0.2 ms more at 2560x1440 on a fast GPU
+    /// front of it. It costs about 0.2 ms more at 2560x1440 on a fast GPU over a
+    /// floor and rails, and 0.3 to 2.3 ms in scenes with edges everywhere
     /// (the guide's reflections section has the numbers), and is off by
-    /// default and on in [`GraphicsQuality::High`](crate::render::GraphicsQuality::High)
-    /// and [`GraphicsQuality::Ultra`](crate::render::GraphicsQuality::Ultra).
+    /// default and on in [`GraphicsQuality::Ultra`](crate::render::GraphicsQuality::Ultra)
+    /// only (not in [`GraphicsQuality::High`](crate::render::GraphicsQuality::High):
+    /// set it after the preset).
     /// With TAA the gaps are filled anyway. Off, the reflections are
     /// exactly as without the setting. Only matters where [`ssr`](Self::ssr)
     /// is on.

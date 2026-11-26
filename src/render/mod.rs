@@ -541,6 +541,8 @@ mod instance_cells_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod known_content_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
+mod material_layers_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
 mod normal_map_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod prompt_row_render_test;
@@ -650,6 +652,9 @@ mod ray_tracing_probe_render_test;
 pub use crate::three::Upscaler;
 #[cfg(all(feature = "3d", feature = "window", not(target_arch = "wasm32")))]
 pub use crate::three::bake_lighting_gpu;
+// Layers over a material's surface (glTF's material extensions).
+#[cfg(feature = "3d")]
+pub use crate::three::MaterialLayers;
 #[cfg(feature = "3d")]
 pub use crate::three::{
     AmbientOcclusion, AntiAliasing, AutoExposure, BatchCulling, Blend, Compute, ComputePass, Crowd, CrowdAnimation,

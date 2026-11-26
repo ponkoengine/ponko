@@ -510,8 +510,8 @@ impl SceneBench {
         if std::env::var("PONKO_RENDER_TAA").is_ok_and(|v| v.trim() == "1") {
             bench.ctx.scene3d.post.anti_aliasing = crate::render::AntiAliasing::Taa;
         }
-        // Screen reflections' thin objects, against the preset's (High
-        // turns them on): for what they cost in time and allocations.
+        // Screen reflections' thin objects, against the preset's (only
+        // Ultra turns them on): for what they cost in time and allocations.
         if let Ok(thin) = std::env::var("PONKO_RENDER_SSR_THIN") {
             bench.ctx.scene3d.post.ssr_thin_objects = match thin.trim() {
                 "0" => false,
@@ -2421,17 +2421,17 @@ mod render_test {
 
     /// A steady frame's allocations on the drawing thread stay within what
     /// they were when measured on Apple's GPUs (2026-11-26, wgpu's Metal
-    /// backend, the median of 24 frames after 32): 552 for `single-material`,
-    /// 984 for `game-like`, with the High preset's thin objects in screen
-    /// reflections on. Nearly all of them are wgpu's, recording passes (each
+    /// backend, the median of 24 frames after 32): 524 for `single-material`,
+    /// 956 for `game-like`, in the High preset, which leaves thin objects in
+    /// screen reflections off (with them on, 552 and 984). Nearly all of them are wgpu's, recording passes (each
     /// pass allocates in wgpu), so a new pass, or a new allocation of the
     /// engine's own each frame, shows here: the budget leaves a few for
     /// wgpu's bookkeeping to move by. Other backends allocate differently in
-    /// wgpu; there the counts are only logged. The control: without the two
-    /// passes of the thin objects' trace a frame allocates less.
+    /// wgpu; there the counts are only logged. The control: with the two
+    /// passes of the thin objects' trace on, a frame allocates more.
     #[test]
     fn a_steady_frame_stays_within_its_allocation_budget() {
-        for (kind, budget) in [(SceneKind::SingleMaterial, 562), (SceneKind::GameLike, 1000)] {
+        for (kind, budget) in [(SceneKind::SingleMaterial, 534), (SceneKind::GameLike, 972)] {
             let Some((adapter, mut counts)) = allocations_per_frame(kind, 0.004, |_| {}) else {
                 return;
             };
