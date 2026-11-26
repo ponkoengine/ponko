@@ -723,14 +723,20 @@ fn frames_text(left: &Left, current: &[Module], resolve: &mut dyn FnMut(usize) -
 }
 
 /// A build id as hex digits.
-#[cfg_attr(not(any(target_vendor = "apple", target_os = "linux", target_os = "android")), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_vendor = "apple", target_os = "linux", target_os = "android")),
+    allow(dead_code)
+)]
 fn hex_id(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// For a module without a build id: its file's size and modification time,
 /// or `-` (never the same) when the file can't be read.
-#[cfg_attr(not(any(target_vendor = "apple", target_os = "linux", target_os = "android", windows)), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_vendor = "apple", target_os = "linux", target_os = "android", windows)),
+    allow(dead_code)
+)]
 fn file_id(path: &str) -> String {
     let Ok(meta) = std::fs::metadata(path) else {
         return "-".to_string();

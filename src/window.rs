@@ -517,6 +517,8 @@ impl WindowService {
         Ok(())
     }
     /// Read clipboard text; None means unavailable headless or pending on web.
+    /// Android gives it only to the app in front with the input focus: a
+    /// read before the window has it (in the first frames) is None.
     pub fn clipboard_read(&mut self) -> Result<Option<String>, Error> {
         self.backend.clipboard_read()
     }

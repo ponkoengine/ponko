@@ -81,7 +81,9 @@ fn main() {
                 next_report += 5.0;
                 println!("phone: {frames} frames in {:.1} s", ctx.time.elapsed());
             }
-            if !clipboard_read {
+            // Android lets only the app in front, with the input focus,
+            // read the clipboard: not before its window has it.
+            if !clipboard_read && ctx.time.elapsed() >= 1.0 {
                 clipboard_read = true;
                 match ctx.window.clipboard_read() {
                     Ok(text) => println!("phone: clipboard holds {text:?}"),
@@ -116,9 +118,13 @@ fn main() {
                 let open = !ctx.input.ime_allowed();
                 ctx.input.set_ime_allowed(open);
             }
+            let before = typed.len();
             typed.push_str(ctx.input.typed_text());
             if ctx.input.key_pressed(Key::Backspace) {
                 typed.pop();
+            }
+            if typed.len() != before {
+                println!("phone: typed {typed:?}");
             }
 
             ctx.gfx.clear(Color::hex(0x1d2733));

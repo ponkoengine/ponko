@@ -48,20 +48,24 @@ pub fn android_main(app: AndroidApp) {
     finish_and_exit(&app, code);
 }
 
-/// Finishes the activity, waits (up to two seconds) until Android has
-/// destroyed it, and ends the process with `code`.
+/// Finishes the activity, waits (up to ten seconds: a game that ends at
+/// once, such as a smoke run, ends before its activity has settled) until
+/// Android has destroyed it, and ends the process with `code`.
 fn finish_and_exit(app: &AndroidApp, code: c_int) -> ! {
     use winit::platform::android::activity::{MainEvent, PollEvent};
-    // SAFETY: the activity pointer is android-activity's, valid until its
-    // destruction, which this waits for; `ANativeActivity_finish` may be
-    // called from any thread (it posts to the main thread).
-    unsafe { ndk_sys::ANativeActivity_finish(app.activity_as_ptr().cast()) };
-    let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    // `Activity.finish` may be called from any thread.
+    with_activity_of(app, "finishing the activity", |env, activity| {
+        env.call_method(activity, jni_str!("finish"), jni_sig!("()V"), &[])?.v()
+    });
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let mut destroyed = false;
     while !destroyed && std::time::Instant::now() < until {
         app.poll_events(Some(std::time::Duration::from_millis(50)), |event| {
             destroyed |= matches!(event, PollEvent::Main(MainEvent::Destroy));
         });
+    }
+    if !destroyed {
+        eprintln!("ponko: Android did not end the activity in 10 s; ending the process anyway");
     }
     std::process::exit(code);
 }
@@ -166,7 +170,15 @@ fn with_activity<R>(
     what: &str,
     f: impl for<'local> FnOnce(&mut jni::Env<'local>, &JObject<'local>) -> jni::errors::Result<R>,
 ) -> Option<R> {
-    let app = app()?;
+    with_activity_of(app()?, what, f)
+}
+
+/// [`with_activity`] for the activity of `app`.
+fn with_activity_of<R>(
+    app: &AndroidApp,
+    what: &str,
+    f: impl for<'local> FnOnce(&mut jni::Env<'local>, &JObject<'local>) -> jni::errors::Result<R>,
+) -> Option<R> {
     // SAFETY: android-activity's pointers: the process's Java VM, and a
     // global reference to the activity it keeps for the app's life.
     let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) };

@@ -9,6 +9,7 @@
 # Format: <path> | <item> | <test file>::<test fn> | <miri>
 # <miri>: miri (the test runs under Miri), miri(<features>), or why it can't:
 # c-library, gpu, os, windows, macos, wasm, ios (on the iOS simulator),
+# android (in an app on the Android emulator),
 # window (a check a person runs, in a real window), sanitizers. A check of a test program without the harness
 # (`harness = false`) is named like a test; a browser or device runner by its
 # path (`web/smoke/*.mjs`, `scripts/*.sh`). The Miri commands come from this
@@ -325,3 +326,8 @@ src/platform/ios.rs | set_pasteboard_text | scripts/ios-simulator.sh | ios
 src/platform/ios.rs | watch_keyboard | src/platform/ios.rs::the_keyboard_frame_follows_its_notifications_and_hiding_keeps_only_its_top | ios
 src/platform/ios.rs | keyboard_end_frame | src/platform/ios.rs::the_keyboard_frame_follows_its_notifications_and_hiding_keeps_only_its_top | ios
 src/platform/ios.rs | set_audio_category | src/platform/ios.rs::every_audio_session_category_is_accepted_by_the_system | ios
+src/platform/android.rs | run_main | scripts/android-emulator.sh | android
+src/platform/android.rs | with_activity_of | scripts/android-emulator.sh | android
+src/platform/android.rs | send_output_to_logcat | scripts/android-emulator.sh | android
+src/platform/android.rs | use_app_folders | scripts/android-emulator.sh | android
+src/platform/android.rs | environment_from_intent | scripts/android-emulator.sh | android

@@ -992,7 +992,9 @@ fn keep_backup(path: &Path) -> std::io::Result<()> {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
         _ => {}
     }
-    if std::fs::hard_link(path, &backup).is_ok() {
+    // Android refuses apps hard links in their own folders (and logs each
+    // refusal): a copy there.
+    if !cfg!(target_os = "android") && std::fs::hard_link(path, &backup).is_ok() {
         return Ok(());
     }
     let temp = with_suffix(&backup, TEMP);
