@@ -50,6 +50,7 @@ mod clip;
 mod collect;
 mod compute;
 mod effect;
+mod environment_map;
 #[cfg(any(test, feature = "bench-internals"))]
 mod extraction_bench;
 #[cfg(any(test, feature = "bench-internals"))]
@@ -153,6 +154,7 @@ pub(crate) use collect::{
 pub(crate) use collect::{Frame3D, MAX_SHADOW_RESOLUTION, MIN_SHADOW_RESOLUTION, SHADOW_MAP_SIZE};
 pub use compute::{Compute, ComputePass, GpuBuffer};
 pub use effect::{Effect, ScreenEffect, TargetEffect};
+pub use environment_map::EnvironmentMap;
 pub use gltf_ext::{ModelCamera, ModelLight, ModelLightKind, ModelProjection};
 pub use gltf_props::{NodeBody, NodeCollider, NodeProperties, gltf_properties_schema};
 #[cfg(all(test, feature = "editor"))]

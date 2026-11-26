@@ -1,0 +1,17 @@
+{
+  "name": "gltf_hdr_environment",
+  "scene": "Matte and rough metal cubes lit only by a blue HDR panorama, with a black sky and no sun.",
+  "width": 128,
+  "height": 128,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 12,
+    "outliers": 0.0075,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "b2dfee80b53d00c4",
+  "reason": "HDR panorama lights the scene's matte and rough metallic materials (#597)."
+}
