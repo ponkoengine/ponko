@@ -91,6 +91,8 @@ ponko::net::stun::DEFAULT_PORT **keep**: STUN's wire format, for a server sharin
 ponko::net::stun::MAGIC_COOKIE **keep**: STUN's wire format, for a server sharing its port (#486 area)
 ponko::net::stun::is_binding_request **keep**: lets a game server answer STUN on its own port (#486 area)
 ponko::net::stun::is_stun **keep**: lets a game server tell STUN from game packets on one port (#486 area)
+ponko::net::WebPeer::forwarded_for **keep**: reads back the proxy's `X-Forwarded-For`, for a server that checks or logs it (#486 area)
+ponko::net::WebPeer::remote **keep**: reads back the connection's address, for a server that checks or logs it (#486 area)
 
 # ---- the C ABI: constants and enums C callers use -------------------------
 ponko_ffi **keep**: a constant or enum of the C header that the C examples and the C++ wrapper don't name (they pass the values); C games use them through `ponko.h`

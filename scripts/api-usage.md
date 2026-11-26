@@ -7,28 +7,28 @@ test, binding or other crate. The freeze review (#478) reads it next to the name
 shapes. `scripts/api-usage.py`'s docstring says what counts as a call; matching is by
 name, so the list errs on the side of "called".
 
-6767 covered items (types, traits, functions, methods, constants, statics, macros;
+6785 covered items (types, traits, functions, methods, constants, statics, macros;
 not fields, variants or trait impls' methods):
 
 | Status | Items |
 |---|---|
-| called | 6371 |
+| called | 6385 |
 | reached: a type or trait no one names, but a called item takes or returns it | 125 |
 | a trait's method: part of its trait, which is called or reached | 11 |
-| ambiguous: only a name other types share is called | 177 |
-| not called | 83 |
+| ambiguous: only a name other types share is called | 179 |
+| not called | 85 |
 
 Items called from each kind of place (an item can count in several):
 
 | Place | Items |
 |---|---|
 | game | 460 |
-| example | 1553 |
-| cookbook | 382 |
-| guide | 3505 |
-| test | 5884 |
-| binding | 4971 |
-| tool | 1227 |
+| example | 1568 |
+| cookbook | 383 |
+| guide | 3519 |
+| test | 5900 |
+| binding | 4973 |
+| tool | 1234 |
 
 6 more items are outside the promise already (experimental, or named `unstable_`) and are not listed.
 
@@ -133,6 +133,8 @@ one needs a decision before the freeze.
 | `ponko::net::Replicated::is_global` | fn | **keep**: reads back `global` |
 | `ponko::net::Replication::to_client` | fn | **keep**: the one-client form of the called `to_clients`; the server's reply to one player |
 | `ponko::net::SteamClient::run_callbacks` | fn | **keep**: the Steam pump, for a game that drives Steam itself (#385 area) |
+| `ponko::net::WebPeer::forwarded_for` | fn | **keep**: reads back the proxy's `X-Forwarded-For`, for a server that checks or logs it (#486 area) |
+| `ponko::net::WebPeer::remote` | fn | **keep**: reads back the connection's address, for a server that checks or logs it (#486 area) |
 
 ### `ponko::net::lobby::protocol`
 
@@ -294,7 +296,7 @@ review can look at any it doubts with `api-usage.py item <path>`.
 - `ponko::hierarchy`: `EntityName::new`, `PrefabInstance::new`
 - `ponko::input`: `GamepadEvents::axis`, `GamepadEvents::button`, `Input::force_feedback`, `Input::joystick_axis`, `Input::joystick_hat`, `Input::set_force_feedback`, `Joystick::slot`, `Vibration::is_off`
 - `ponko::inventory`: `AssetInventory::get`
-- `ponko::net`: `ClockSync::offset`, `ClockSync::reset`, `Fields::f32`, `InputQueue::is_empty`, `LatestWins::is_empty`, `NetSnapshots::accept`, `NetSnapshots::clear`, `NetSnapshots::get`, `NetSnapshots::ids`, `NetSnapshots::is_empty`, `NetSnapshots::len`, `NetSnapshots::remove`, `NetSnapshots::sample`, `NetSnapshots::stream`, `Networking::desync`, `Networking::error`, `Networking::input_bytes`, `Networking::local_addr`, `Networking::player`, `Networking::players`, `Networking::set_input`, `Networking::set_input_bytes`, `Networking::state`, `Networking::stats`, `Smoothing::is_active`, `SnapshotBuffer::is_empty`, `SnapshotBuffer::with_config`, `SteamClient::app_id`
+- `ponko::net`: `ClockSync::offset`, `ClockSync::reset`, `Fields::f32`, `InputQueue::is_empty`, `LatestWins::is_empty`, `NetSnapshots::accept`, `NetSnapshots::clear`, `NetSnapshots::get`, `NetSnapshots::ids`, `NetSnapshots::is_empty`, `NetSnapshots::len`, `NetSnapshots::remove`, `NetSnapshots::sample`, `NetSnapshots::stream`, `Networking::desync`, `Networking::error`, `Networking::input_bytes`, `Networking::local_addr`, `Networking::player`, `Networking::players`, `Networking::set_input`, `Networking::set_input_bytes`, `Networking::state`, `Networking::stats`, `Smoothing::is_active`, `SnapshotBuffer::is_empty`, `SnapshotBuffer::with_config`, `SteamClient::app_id`, `WebPeer::new`
 - `ponko::particles`: `ParticleCurve::keys`, `ParticleCurve::sample`, `ParticleGradient::keys`, `ParticleGradient::sample`
 - `ponko::perf`: `GpuUntimed::message`, `ProfileScope::name`
 - `ponko::render`: `CloudQuality::steps`, `GltfBake::insert_lightmaps`, `GltfBake::nodes`, `InstanceCellData::is_empty`, `ModelCamera::apply`, `ModelCamera::placed`, `PostVolume::weight`, `SceneSettings::quality_autotune_status`, `WorldBake::entries`, `WorldBake::insert_lightmaps`
@@ -309,3 +311,4 @@ review can look at any it doubts with `api-usage.py item <path>`.
 - `ponko::water`: `Water::free`, `WaterDesc::with_color`, `Wave::with_speed`
 - `ponko::window`: `WindowService::request`, `WindowService::safe_insets`
 - `ponko_ecs`: `QueryLookup::for_each`, `QueryRef::cached`, `QueryRef::count`, `QueryRef::filter`, `QueryRef::for_each`, `QueryRef::get`, `QueryRef::iter`, `QueryRef::since`, `QueryRef::single`, `QueryRef::uncached`, `QueryResources::for_each`, `QueryResources::resources`, `RawWorldRef::get_dynamic`, `ViewQuery::cached`, `ViewQuery::count`, `ViewQuery::for_each`, `ViewQuery::get`, `ViewQuery::iter`, `ViewQuery::since`, `ViewQuery::single`, `ViewQuery::uncached`, `WorldView::get_resource_mut`, `WorldView::has`, `WorldView::is_alive`, `WorldView::remove_resource`
+- `ponko_lobby`: `TrustedProxy::new`
