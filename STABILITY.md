@@ -197,7 +197,10 @@ Not covered by the versions, and allowed to change in any release:
 - `ponko::net::unstable_steamworks`, a re-export of the `steamworks` crate
   (feature `steam`), and the two `SteamClient` methods that hand out or take
   its client: `SteamClient::unstable_steamworks` and
-  `SteamClient::from_unstable_steamworks`. Ponko's own Steam types
+  `SteamClient::from_unstable_steamworks`, and the `From` conversions
+  between Ponko's Steam ids and its ids (`SteamLobbyId` and
+  `steamworks::LobbyId`, `SteamUserId` and `steamworks::SteamId`, both
+  ways). Ponko's own Steam types
   (`SteamClient`, `SteamLobbyId`, `SteamUserId`, `SteamLobby`, ...) are
   stable and don't change with it.
 - **Experimental items** (see [Maturity levels](#maturity-levels)): every
