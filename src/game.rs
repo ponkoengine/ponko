@@ -16,6 +16,8 @@ use ponko_ecs::World;
 mod batch;
 mod plugin;
 mod server;
+#[cfg(test)]
+mod startup_stack_tests;
 mod system;
 #[cfg(feature = "window")]
 mod window;
@@ -3105,9 +3107,9 @@ impl Game {
     /// Window and headless runs differ only in what `ctx.gfx` and
     /// `ctx.audio` do with a missing device; every other service is built
     /// the same way in both.
-    fn build_ctx(&mut self, headless: bool) -> Ctx {
+    fn build_ctx(&mut self, headless: bool) -> Box<Ctx> {
         let fixed_dt = Clock::new(self.fixed_hz).fixed_dt();
-        let mut ctx = Ctx::new(fixed_dt, Vec2::new(self.width as f32, self.height as f32));
+        let mut ctx = Ctx::boxed(fixed_dt, Vec2::new(self.width as f32, self.height as f32));
         ctx.seed = self.seed;
         ctx.gfx.hdr_output = self.hdr_output;
         if headless {

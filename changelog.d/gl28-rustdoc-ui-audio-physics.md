@@ -1,3 +1,4 @@
+<!-- area: Guide and examples -->
 ### Changed
 - Every public item of the UI, text, locale, audio, 2D and 3D physics,
   navigation, networking and server modules, and of the `ponko-mcp`,

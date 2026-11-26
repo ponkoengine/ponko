@@ -228,7 +228,8 @@ impl fmt::Display for OrderError {
         write!(
             f,
             "Game::order: `{second}` already runs before `{first}` (an earlier phase, or registered first in \
-             the same phase); order can keep two systems apart, not swap them"
+             the same phase); order can keep two systems apart, not swap them: to run `{first}` first, \
+             register it before `{second}` or put it in an earlier Phase"
         )
     }
 }

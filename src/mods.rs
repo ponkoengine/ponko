@@ -437,7 +437,10 @@ impl ModPack {
             Some(name) => Err(ModError::new(
                 self.id(),
                 Some(name),
-                ModProblem::Code("this game was built without code mods (the feature `mods-wasm`)".into()),
+                ModProblem::Code(
+                    "this game was built without code mods: turn on the `mods-wasm` cargo feature, or remove the code from the mod's manifest"
+                        .into(),
+                ),
             )),
         }
     }

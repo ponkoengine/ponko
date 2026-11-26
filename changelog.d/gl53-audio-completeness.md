@@ -14,6 +14,8 @@
   ```
   After:
   ```rust
+  use ponko_ffi::PonkoBusEffectKind;
+  # let effect: ponko_ffi::PonkoBusEffect = todo!();
   match effect.kind {
       PonkoBusEffectKind::PONKO_BUS_EFFECT_FILTER => "filter",
       PonkoBusEffectKind::PONKO_BUS_EFFECT_REVERB => "reverb",
@@ -61,7 +63,6 @@
   the game side of a frame and the mix.
 
 ### Changed
-- **Breaking:** a new `PonkoBusEffectKind` value (see Breaking changes).
 - At most 64 sounds are heard at once unless `Audio::set_voice_limit`
   raises it; past that the quietest, lowest-priority sounds go virtual
   instead of each bus failing to start sounds past 128.

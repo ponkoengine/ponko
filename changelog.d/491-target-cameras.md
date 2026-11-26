@@ -30,6 +30,8 @@
   ```
   After:
   ```rust
+  use ponko::render::TargetCamera;
+  # let (camera, target) = todo!();
   let mirror = &ctx.scene3d.passes.target_cameras[0];
   let camera = TargetCamera::new(camera, target);
   ```

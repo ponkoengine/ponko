@@ -977,6 +977,144 @@ pub unsafe extern "C" fn ponko_ctx_target_camera_ex(
     })
 }
 
+// ---- item icons ---------------------------------------------------------------
+
+/// The version of `PonkoIcon` this header describes.
+pub const PONKO_ICON_VERSION: u32 = 1;
+
+/// How `ponko_ctx_render_icon` draws a model (Rust `Icon`): the icon's
+/// size, where it is seen from, how bright, on what background. Set the
+/// header, fill it with `ponko_icon_defaults`, change what you want.
+/// ```
+/// use ponko_ffi::*;
+/// let mut icon: PonkoIcon = unsafe { std::mem::zeroed() };
+/// (icon.struct_size, icon.version) = (size_of::<PonkoIcon>() as u32, PONKO_ICON_VERSION);
+/// assert_eq!(unsafe { ponko_icon_defaults(64, &mut icon) }, PonkoStatus::PONKO_OK);
+/// assert_eq!((icon.size, icon.exposure, icon.background.a), (64, 1.0, 0.0));
+/// ```
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PonkoIcon {
+    /// `sizeof(PonkoIcon)` as the caller compiled it.
+    pub struct_size: u32,
+    /// `PONKO_ICON_VERSION` as the caller compiled it.
+    pub version: u32,
+    /// Width and height in pixels. Default 128.
+    pub size: u32,
+    /// Where the camera is, seen from the model's center (only the
+    /// direction counts). Default from the front-right and above.
+    pub from: PonkoVec3,
+    /// The camera's vertical field of view, in radians. Default 0.5.
+    pub fov_y: f32,
+    /// Multiplies the light before tone mapping. Default 1.
+    pub exposure: f32,
+    /// Behind the model. Default transparent (alpha 0).
+    pub background: PonkoColor,
+    /// Multiplied with the materials' colours. Default white.
+    pub color: PonkoColor,
+}
+assert_header!(PonkoIcon);
+
+impl Versioned for PonkoIcon {
+    const NAME: &'static str = "PonkoIcon";
+    const VERSION: u32 = PONKO_ICON_VERSION;
+    fn len_of(version: u32) -> Option<usize> {
+        match version {
+            1 => Some(end_of!(Self, color: PonkoColor)),
+            _ => None,
+        }
+    }
+}
+
+fn icon_to_c(icon: &ponko::render::Icon) -> PonkoIcon {
+    PonkoIcon {
+        struct_size: size_of::<PonkoIcon>() as u32,
+        version: PONKO_ICON_VERSION,
+        size: icon.size,
+        from: to_c(icon.from),
+        fov_y: icon.fov_y,
+        exposure: icon.exposure,
+        background: to_c(icon.background),
+        color: to_c(icon.color),
+    }
+}
+
+/// Fills the fields of `out_icon`'s version with the defaults (Rust
+/// `Icon::new(size)`). `struct_size` and `version` must be set first.
+/// # Safety
+/// `out_icon` null or a writable descriptor with its header set.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_icon_defaults(size: u32, out_icon: *mut PonkoIcon) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe { write_desc(out_icon, &icon_to_c(&ponko::render::Icon::new(size))) })
+}
+
+/// Draws `mesh` into a new square render target that keeps the picture,
+/// for a UI image: an item icon (Rust `Graphics::render_icon`). The mesh is
+/// framed to fill it, seen from `icon->from`, lit by the scene's sun and
+/// sky light only and tone mapped as the main view is, on
+/// `icon->background`; nothing of the game's world is in it and nothing is
+/// added to the world. It is drawn in the next two frames, then keeps the
+/// picture. `parts` and `materials` (`count`
+/// pairs, as `ponko_ctx_set_model_part_materials` takes) draw chosen parts
+/// with other materials; `count` 0 draws the mesh's own. Fields newer than
+/// the caller's version take their defaults. A mesh that isn't live, a
+/// size of 0, a `from` that isn't a direction or a field of view outside 0
+/// to pi is an error.
+/// # Safety
+/// `ctx` null or live; `icon` null or a readable descriptor; `parts` and
+/// `materials` hold `count` values each; `out_texture` writable.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_render_icon(std::ptr::null_mut(), ponko_ffi::PonkoMesh { id: 0 }, std::ptr::null(), std::ptr::null(), std::ptr::null(), 0, std::ptr::null_mut()) } as u32, 1);
+/// ```
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_render_icon(
+    ctx: *mut PonkoCtx,
+    mesh: crate::three::PonkoMesh,
+    icon: *const PonkoIcon,
+    parts: *const u32,
+    materials: *const crate::three::PonkoMaterial,
+    count: usize,
+    out_texture: *mut PonkoTexture,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            if out_texture.is_null() {
+                return Err(invalid("output is null"));
+            }
+            let d = read_desc(icon, icon_to_c(&ponko::render::Icon::default()))?;
+            let mut settings = ponko::render::Icon::new(d.size)
+                .with_from(to_c(d.from))
+                .with_exposure(d.exposure)
+                .with_background(to_c(d.background))
+                .with_color(to_c(d.color));
+            settings.fov_y = d.fov_y;
+            if count > 0 {
+                if parts.is_null() || materials.is_null() {
+                    return Err(invalid("parts or materials is null"));
+                }
+                let parts = std::slice::from_raw_parts(parts, count);
+                let materials = std::slice::from_raw_parts(materials, count);
+                if materials.iter().any(|&m| !c.gfx.is_live(to_c(m))) {
+                    return Err(invalid("a material wasn't made by this game"));
+                }
+                let list: Vec<(usize, ponko::render::Material)> = parts
+                    .iter()
+                    .zip(materials)
+                    .map(|(&part, &m)| (part as usize, to_c(m)))
+                    .collect();
+                settings = settings.with_materials(ponko::render::ModelMaterials::new(&list));
+            }
+            let target = c
+                .gfx
+                .try_render_icon(to_c(mesh), &settings)
+                .map_err(crate::invalid_owned)?;
+            crate::ctx::out(out_texture, texture_to_c(target.texture()))
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1018,6 +1156,11 @@ mod tests {
             Some(offset_of!(PonkoTargetCameraEx, clear) + size_of::<PonkoColor>())
         );
         assert_eq!(PonkoTargetCameraEx::len_of(4), None);
+        assert_eq!(
+            PonkoIcon::len_of(1),
+            Some(offset_of!(PonkoIcon, color) + size_of::<PonkoColor>())
+        );
+        assert_eq!(PonkoIcon::len_of(2), None);
         assert_eq!(
             PonkoPostEx::len_of(5),
             Some(offset_of!(PonkoPostEx, ssr_transparent) + 1)

@@ -243,6 +243,33 @@ fn a_target_cameras_effects_run_over_its_picture_and_not_the_main_views() {
 }
 
 #[test]
+fn a_target_cameras_effects_keep_its_see_through_background() {
+    let Some(mut scene) = Scene::new(false) else { return };
+    let rotate = scene.ctx.gfx.create_effect("rotate", ROTATE);
+    // Negative control: drawn on an opaque background, an effect's
+    // picture is opaque everywhere.
+    scene.camera().clear = Some(Color::rgb(0.0, 0.0, 0.0));
+    scene.camera().effects.push(ScreenEffect::new(rotate));
+    scene.frame();
+    assert!(scene.target()[0][3] > 0.99, "opaque: {:?}", scene.target()[0]);
+    // See-through: one effect (ends in the scratch, copied back) and two
+    // (ends in the target) keep alpha 0 around the boxes and 1 on them.
+    scene.camera().clear = Some(Color::TRANSPARENT);
+    for effects in 1..=2 {
+        scene.frame();
+        let picture = scene.target();
+        assert!(
+            picture[0][3] < 1e-3,
+            "{effects} effect(s): see-through: {:?}",
+            picture[0]
+        );
+        let center = picture[(SIZE.1 / 2 * SIZE.0 + SIZE.0 / 2 - 12) as usize];
+        assert!(center[3] > 0.99, "{effects} effect(s): the box is opaque: {center:?}");
+        scene.camera().effects.push(ScreenEffect::new(rotate));
+    }
+}
+
+#[test]
 fn a_mipmapped_render_target_gets_its_levels_made_after_each_draw() {
     let Some(mut scene) = Scene::new(true) else { return };
     scene.frame();
