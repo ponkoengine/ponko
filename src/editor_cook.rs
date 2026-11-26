@@ -104,6 +104,13 @@ pub(crate) fn glob(pattern: &[u8], path: &[u8]) -> bool {
                 Some((b'*', rest)) => (true, rest),
                 _ => (false, rest),
             };
+            // `**/` also matches no folder: `**/*.psd` takes `art.psd` too.
+            if across
+                && let Some(after) = rest.strip_prefix(b"/")
+                && glob(after, path)
+            {
+                return true;
+            }
             (0..=path.len())
                 .take_while(|&i| across || i == 0 || path[i - 1] != b'/')
                 .any(|i| glob(rest, &path[i..]))
@@ -231,6 +238,14 @@ mod tests {
         );
         assert_eq!(s.rule_for("ui/big/heart.png").0, "keep");
         assert_eq!(s.rule_for("art/tree.png").1, Source::Defaults);
+    }
+
+    #[test]
+    fn a_folder_wildcard_matches_files_at_the_top_too() {
+        assert!(glob(b"**/*.png", b"tree.png"));
+        assert!(glob(b"**/*.png", b"art/tree.png"));
+        assert!(glob(b"art/**/*.png", b"art/tree.png"));
+        assert!(!glob(b"art/**/*.png", b"tree.png"));
     }
 
     #[test]

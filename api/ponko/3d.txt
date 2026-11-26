@@ -11989,6 +11989,7 @@ pub ponko::render::MaterialDesc::custom_textures: [core::option::Option<ponko::t
 pub ponko::render::MaterialDesc::double_sided: bool
 pub ponko::render::MaterialDesc::emissive: ponko::color::Color
 pub ponko::render::MaterialDesc::emissive_map: core::option::Option<ponko::texture::Texture>
+pub ponko::render::MaterialDesc::masked_tint: bool
 pub ponko::render::MaterialDesc::metallic: f32
 pub ponko::render::MaterialDesc::normal_map: core::option::Option<ponko::texture::Texture>
 pub ponko::render::MaterialDesc::normal_strength: f32
@@ -12007,6 +12008,7 @@ pub fn ponko::render::MaterialDesc::with_custom_textures(self, [core::option::Op
 pub fn ponko::render::MaterialDesc::with_double_sided(self, bool) -> Self
 pub fn ponko::render::MaterialDesc::with_emissive(self, ponko::color::Color) -> Self
 pub fn ponko::render::MaterialDesc::with_emissive_map(self, impl core::convert::Into<core::option::Option<ponko::texture::Texture>>) -> Self
+pub fn ponko::render::MaterialDesc::with_masked_tint(self, bool) -> Self
 pub fn ponko::render::MaterialDesc::with_metallic(self, f32) -> Self
 pub fn ponko::render::MaterialDesc::with_normal_map(self, impl core::convert::Into<core::option::Option<ponko::texture::Texture>>) -> Self
 pub fn ponko::render::MaterialDesc::with_normal_strength(self, f32) -> Self

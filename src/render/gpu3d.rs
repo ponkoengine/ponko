@@ -103,6 +103,9 @@ pub use scene_bench::{SceneBench, SceneFrame, SceneKind, SceneSetup};
 #[cfg(test)]
 mod cook_shader_parts_test;
 mod resources;
+/// The bytes of one mesh corner on the GPU, for cost reports.
+#[cfg(test)]
+pub(crate) const VERTEX_SIZE: usize = size_of::<resources::Vertex>();
 mod screen_space;
 mod shader_checks;
 mod shaders;
