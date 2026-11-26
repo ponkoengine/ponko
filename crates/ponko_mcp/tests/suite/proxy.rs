@@ -2,7 +2,7 @@
 //! the two that would replace the task's game, plus `submit_task`, which
 //! runs the checker. `examples/agent_suite.rs mcp` serves it over stdio.
 
-use super::{Check, Session, Task};
+use super::{Check, Run, Session, Task};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -19,6 +19,9 @@ pub struct Record {
     started: Instant,
     /// Seconds from `started` to the last submission.
     submitted_at: Option<f64>,
+    /// Tools the agent doesn't get: [`HIDDEN`] (none in a code task, whose
+    /// agent restarts its game), and any hidden with [`Record::hide`].
+    hidden: Vec<String>,
 }
 
 impl Record {
@@ -33,7 +36,25 @@ impl Record {
             submissions: Vec::new(),
             started: Instant::now(),
             submitted_at: None,
+            hidden: match task.game {
+                Run::Game(_) => HIDDEN.iter().map(|t| (*t).to_string()).collect(),
+                Run::Crate { .. } => Vec::new(),
+            },
         }
+    }
+
+    /// Takes `tools` away from the agent too: a run with a poorer tool
+    /// surface, to see what a tool is worth on a task.
+    pub fn hide(&mut self, tools: &[String]) {
+        for t in tools {
+            if !self.hidden.contains(t) {
+                self.hidden.push(t.clone());
+            }
+        }
+    }
+
+    fn hides(&self, tool: &str) -> bool {
+        self.hidden.iter().any(|t| t == tool)
     }
 
     /// Seconds since the record began, to a tenth.
@@ -85,6 +106,7 @@ impl Record {
             "task": self.task.id,
             "kind": self.task.kind,
             "agent": self.agent,
+            "hidden_tools": self.hidden,
             "folder": self.dir,
             "solved": last.is_some_and(|c| c.iter().all(|c| c.passed)),
             "passed": last.map_or(0, |c| c.iter().filter(|c| c.passed).count()),
@@ -98,8 +120,8 @@ impl Record {
     }
 }
 
-/// ponko-mcp tools the suite hides: they would start a second game or stop
-/// the task's.
+/// ponko-mcp tools the suite hides, except in code tasks: they would start
+/// a second game or stop the task's.
 pub const HIDDEN: &[&str] = &["launch", "quit_instance"];
 
 /// The `submit_task` tool the suite adds to ponko-mcp's.
@@ -112,11 +134,19 @@ pub fn submit_tool() -> Value {
     })
 }
 
-pub fn instructions(task: &Task, dir: &Path) -> String {
+pub fn instructions(task: &Task, dir: &Path, hidden: &[String]) -> String {
+    let off = if hidden.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " (off in this run: {})",
+            hidden.iter().map(|t| format!("`{t}`")).collect::<Vec<_>>().join(", ")
+        )
+    };
     format!(
         "Task `{}` of the Ponko agent acceptance suite.\n\n{}\nThe game's folder is {} (its files are under assets/). \
-         The game is already running; every tool reaches it without `instance` \
-         (`launch` and `quit_instance` are off). When you are done, call `submit_task`.\n",
+         The game is already running; every tool reaches it without `instance` while one game runs{off}. \
+         When you are done, call `submit_task`.\n",
         task.id,
         task.goal,
         dir.display()
@@ -143,11 +173,13 @@ pub fn answer(session: &mut Session, record: &mut Record, message: &Value) -> Op
             "result": { "content": [{ "type": "text", "text": result.to_string() }], "isError": false },
         }));
     }
-    if method == "tools/call" && HIDDEN.contains(&params["name"].as_str().unwrap_or_default()) {
-        let text = format!(
-            "`{}` is off in the suite: the task's game is already running and must stay up",
-            params["name"].as_str().unwrap_or_default()
-        );
+    if method == "tools/call" && record.hides(params["name"].as_str().unwrap_or_default()) {
+        let name = params["name"].as_str().unwrap_or_default();
+        let text = if HIDDEN.contains(&name) {
+            format!("`{name}` is off in the suite: the task's game is already running and must stay up")
+        } else {
+            format!("`{name}` is off in this run of the suite")
+        };
         record.errors += 1;
         let at = record.elapsed();
         record
@@ -162,11 +194,11 @@ pub fn answer(session: &mut Session, record: &mut Record, message: &Value) -> Op
     let mut reply = session.agent.handle(message)?;
     match method {
         "initialize" => {
-            reply["result"]["instructions"] = json!(instructions(session.task, &session.dir));
+            reply["result"]["instructions"] = json!(instructions(session.task, &session.dir, &record.hidden));
         }
         "tools/list" => {
             if let Some(tools) = reply["result"]["tools"].as_array_mut() {
-                tools.retain(|t| !HIDDEN.contains(&t["name"].as_str().unwrap_or_default()));
+                tools.retain(|t| !record.hides(t["name"].as_str().unwrap_or_default()));
                 tools.push(submit_tool());
             }
         }

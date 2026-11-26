@@ -1,0 +1,49 @@
+[
+  { "name": "nothing", "why": "no coin is collected", "steps": [],
+    "fails": ["a run scores 5"] },
+  { "name": "visible cause only", "why": "a pickup radius that reaches the coins, but the spikes still take every point at the end",
+    "steps": [
+      { "write": "assets/dash.json", "text": "{\n  \"speed\": 300,\n  \"pickup_radius\": 24\n}\n" },
+      { "until": { "call": "get_resource", "args": { "resource": "DashSettings" }, "pointer": "/pickup_radius", "equals": 24.0 }, "each": { "call": "run_ticks", "args": { "ticks": 1 } } }
+    ],
+    "fails": ["a run scores 5"] },
+  { "name": "spikes only", "why": "the spikes go, but no coin is collected",
+    "steps": [
+      { "call": "list_entities", "args": { "with": ["Spikes"] }, "save": { "spikes": "/entities/0/entity" } },
+      { "call": "despawn_entity", "args": { "entity": "$spikes" } },
+      { "call": "save_scene", "args": { "path": "levels/run.json" } }
+    ],
+    "fails": ["a run scores 5"] },
+  { "name": "live only", "why": "both causes fixed, but the spikes only in the running game: the level loaded fresh has them",
+    "steps": [
+      { "write": "assets/dash.json", "text": "{\n  \"speed\": 300,\n  \"pickup_radius\": 24\n}\n" },
+      { "until": { "call": "get_resource", "args": { "resource": "DashSettings" }, "pointer": "/pickup_radius", "equals": 24.0 }, "each": { "call": "run_ticks", "args": { "ticks": 1 } } },
+      { "call": "list_entities", "args": { "with": ["Spikes"] }, "save": { "spikes": "/entities/0/entity" } },
+      { "call": "despawn_entity", "args": { "entity": "$spikes" } }
+    ],
+    "fails": ["a run scores 5"] },
+  { "name": "level saved with the old radius", "why": "the level was saved before the radius was fixed, and a scene keeps the game's reflected settings: loading it brings the old radius back",
+    "steps": [
+      { "call": "list_entities", "args": { "with": ["Spikes"] }, "save": { "spikes": "/entities/0/entity" } },
+      { "call": "despawn_entity", "args": { "entity": "$spikes" } },
+      { "call": "save_scene", "args": { "path": "levels/run.json" } },
+      { "write": "assets/dash.json", "text": "{\n  \"speed\": 300,\n  \"pickup_radius\": 24\n}\n" },
+      { "until": { "call": "get_resource", "args": { "resource": "DashSettings" }, "pointer": "/pickup_radius", "equals": 24.0 }, "each": { "call": "run_ticks", "args": { "ticks": 1 } } }
+    ],
+    "fails": ["game uses the file", "a run scores 5"] },
+  { "name": "coins moved", "why": "puts the coins on the player's path instead of fixing the radius",
+    "steps": [
+      { "write": "assets/levels/run.json", "text": "{\n  \"format\": \"ponko-world\",\n  \"version\": 1,\n  \"entities\": [\n    { \"entity\": 0, \"components\": { \"Player\": null, \"Transform2D\": { \"position\": [100.0, 300.0] } } },\n    { \"entity\": 1, \"components\": { \"Coin\": { \"value\": 1 }, \"Transform2D\": { \"position\": [200.0, 300.0] } } },\n    { \"entity\": 2, \"components\": { \"Coin\": { \"value\": 1 }, \"Transform2D\": { \"position\": [280.0, 300.0] } } },\n    { \"entity\": 3, \"components\": { \"Coin\": { \"value\": 1 }, \"Transform2D\": { \"position\": [360.0, 300.0] } } },\n    { \"entity\": 4, \"components\": { \"Coin\": { \"value\": 1 }, \"Transform2D\": { \"position\": [440.0, 300.0] } } },\n    { \"entity\": 5, \"components\": { \"Coin\": { \"value\": 1 }, \"Transform2D\": { \"position\": [520.0, 300.0] } } }\n  ]\n}\n" }
+    ],
+    "fails": ["level keeps its coins"] },
+  { "name": "huge radius", "why": "collects the coins from afar: the radius must stay at most 32",
+    "steps": [
+      { "write": "assets/dash.json", "text": "{\n  \"speed\": 300,\n  \"pickup_radius\": 400\n}\n" },
+      { "until": { "call": "get_resource", "args": { "resource": "DashSettings" }, "pointer": "/pickup_radius", "equals": 400.0 }, "each": { "call": "run_ticks", "args": { "ticks": 1 } } },
+      { "call": "load_scene", "args": { "path": "levels/run.json" } },
+      { "call": "list_entities", "args": { "with": ["Spikes"] }, "save": { "spikes": "/entities/0/entity" } },
+      { "call": "despawn_entity", "args": { "entity": "$spikes" } },
+      { "call": "save_scene", "args": { "path": "levels/run.json" } }
+    ],
+    "fails": ["settings file is valid"] }
+]

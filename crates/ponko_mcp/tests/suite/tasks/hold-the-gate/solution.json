@@ -1,0 +1,105 @@
+{
+ "steps": [
+  {
+   "call": "world_summary"
+  },
+  {
+   "call": "list_entities",
+   "args": {
+    "with": [
+     "Pad"
+    ]
+   }
+  },
+  {
+   "call": "save_world",
+   "args": {
+    "path": "saves/start.json"
+   }
+  },
+  {
+   "write": "assets/defense.json",
+   "text": "{\n  \"towers\": [\"north\", \"bend\"]\n}\n"
+  },
+  {
+   "until": {
+    "call": "list_entities",
+    "args": {
+     "with": [
+      "Tower"
+     ],
+     "where": [
+      "Tower.pad == north"
+     ],
+     "limit": 0
+    },
+    "pointer": "/total",
+    "equals": 1
+   },
+   "each": {
+    "call": "run_ticks",
+    "args": {
+     "ticks": 1
+    }
+   }
+  },
+  {
+   "call": "load_world",
+   "args": {
+    "path": "saves/start.json"
+   }
+  },
+  {
+   "call": "watch",
+   "args": {
+    "ticks": 3600,
+    "every": 600,
+    "resources": [
+     "Gate"
+    ]
+   }
+  },
+  {
+   "write": "assets/defense.json",
+   "text": "{\n  \"towers\": [\"bend\", \"corner\"]\n}\n"
+  },
+  {
+   "until": {
+    "call": "list_entities",
+    "args": {
+     "with": [
+      "Tower"
+     ],
+     "where": [
+      "Tower.pad == corner"
+     ],
+     "limit": 0
+    },
+    "pointer": "/total",
+    "equals": 1
+   },
+   "each": {
+    "call": "run_ticks",
+    "args": {
+     "ticks": 1
+    }
+   }
+  },
+  {
+   "call": "load_world",
+   "args": {
+    "path": "saves/start.json"
+   }
+  },
+  {
+   "call": "watch",
+   "args": {
+    "ticks": 3600,
+    "every": 600,
+    "resources": [
+     "Gate"
+    ]
+   }
+  }
+ ]
+}

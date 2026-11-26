@@ -210,7 +210,7 @@ headless game waits for requests and runs only the ticks you step.
 | `systems.timings` | | each system's last and average ms |
 | `ecs.diagnostics` | `with?`, `limit?` (100) | archetypes, component storage, every system's declared access, the schedule's stages and dependencies, and the query index's counters (see [ECS diagnostics](agents.md#ecs-diagnostics)); with `with`, also `matching` |
 | `events.list` | | reflected [event](events.md) types and how many are kept now |
-| `events.subscribe` | `types?` (all), `capacity?` (1000) | starts collecting new events between frames; the newest `capacity` are kept |
+| `events.subscribe` | `types?` (all), `capacity?` (1000) | starts collecting new events between frames; the newest `capacity` are kept. Replies with the `types` collected (all the game's when none were named), `all`, and, for a name the game has no event type of, `unknown` with a `hint` that lists the types it has |
 | `events.take` | | `{events: [{tick, type, data}], dropped}` since the last take |
 | `events.unsubscribe` | | `true` if there was a subscription |
 | `logs.get` | `lines?` (100), `since?` | `{lines, next, missed}`: the game's recent stdout and stderr (see below) |

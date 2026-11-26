@@ -888,7 +888,7 @@ impl StaticBatch {
     }
 
     /// Whether the level has anything to draw in the view.
-    fn draws(&self, slot: usize, level: usize) -> bool {
+    pub(super) fn draws(&self, slot: usize, level: usize) -> bool {
         if self.compute {
             self.view(slot, level).is_some()
         } else {

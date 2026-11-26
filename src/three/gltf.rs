@@ -287,6 +287,10 @@ struct Walk {
     default_material: usize,
     rig: Option<Rig>,
     by_material: Vec<(usize, MeshData)>,
+    /// For each of `by_material`, the sum of its primitives' node scales
+    /// and their count: a volume's thickness is in mesh units, and the
+    /// node's scale is baked into the merged mesh.
+    node_scales: Vec<(f32, u32)>,
     /// Morph targets' default weights, by name.
     defaults: Vec<(String, f32)>,
     lights: Vec<ModelLight>,
@@ -451,6 +455,7 @@ impl Walk {
             default_material,
             rig,
             by_material: Vec::new(),
+            node_scales: Vec::new(),
             defaults: Vec::new(),
             lights: Vec::new(),
             cameras: Vec::new(),
@@ -498,6 +503,7 @@ impl Walk {
                 Some(i) => i,
                 None => {
                     self.by_material.push((material, MeshData::default()));
+                    self.node_scales.push((0.0, 0));
                     self.by_material.len() - 1
                 }
             };
@@ -507,6 +513,10 @@ impl Walk {
                 targets: &node.targets,
                 mapping: self.mappings.get(material).copied().unwrap_or(UvMapping::PLAIN),
             };
+            // The volume's scale along its surface: exact for uniform scaling.
+            let scales = &mut self.node_scales[at];
+            scales.0 += node.matrix.determinant().abs().cbrt();
+            scales.1 += 1;
             let out = &mut self.by_material[at].1;
             let before = out.positions.len();
             append(out, &primitive, &self.prepared.buffers, &part, name)?;
@@ -605,6 +615,7 @@ impl Walk {
             default_material,
             rig,
             by_material,
+            node_scales,
             defaults,
             lights,
             cameras,
@@ -621,6 +632,14 @@ impl Walk {
         }
         if by_material.iter().any(|(m, _)| *m == default_material) {
             materials.push(LoadedMaterial::plain());
+        }
+        // Volume thickness from the material's mesh units to the merged
+        // mesh's (the average node scale where nodes of different sizes
+        // share the material).
+        for ((m, _), (sum, count)) in by_material.iter().zip(&node_scales) {
+            if let Some(material) = materials.get_mut(*m).filter(|_| *count > 0) {
+                material.layers.transmission.thickness *= sum / *count as f32;
+            }
         }
 
         let (mut data, parts) = merge_by_material(by_material);
@@ -1047,7 +1066,6 @@ fn read_materials(
             .map(|i| gltf_ext::material_extensions(json, i, name, warnings));
         let strength = extensions.as_ref().map_or(1.0, |e| e.emissive_strength);
         let [er, eg, eb] = material.emissive_factor().map(|c| c * strength);
-        let transmission = extensions.as_ref().map_or(0.0, |e| e.transmission);
         let unlit = extensions.as_ref().is_some_and(|e| e.unlit);
         let mut layers = extensions.as_ref().map_or(super::MaterialLayers::NONE, |e| e.layers);
         let layer_textures = extensions
@@ -1072,11 +1090,8 @@ fn read_materials(
             (Some(m), Some(o)) if m == o => Some(images.get(m, read)?),
             (m, o) => Some(images.orm(m, o, read)?),
         };
-        // glTF factors are linear; Color is sRGB. Transmission
-        // (`KHR_materials_transmission`) is drawn as see-through blending:
-        // what passes through isn't covered.
+        // glTF alpha is coverage, independent of optical transmission.
         let blend = match material.alpha_mode() {
-            _ if transmission > 0.0 => Blend::Transparent,
             gltf::material::AlphaMode::Opaque => Blend::Opaque,
             gltf::material::AlphaMode::Mask => Blend::Cutout,
             gltf::material::AlphaMode::Blend => Blend::Transparent,
@@ -1122,7 +1137,7 @@ fn read_materials(
         };
         materials.push(LoadedMaterial {
             name: material.name().unwrap_or("").to_string(),
-            color: Color::rgba(to_srgb(r), to_srgb(g), to_srgb(b), a * (1.0 - transmission)),
+            color: Color::rgba(to_srgb(r), to_srgb(g), to_srgb(b), a),
             roughness: pbr.roughness_factor(),
             metallic: pbr.metallic_factor(),
             emissive: Color::rgb(to_srgb(er), to_srgb(eg), to_srgb(eb)),
@@ -1173,6 +1188,12 @@ fn layer_maps(
         K::Anisotropy,
         K::Iridescence,
         K::IridescenceThickness,
+        K::Transmission,
+        K::Thickness,
+        K::DiffuseTransmissionColor,
+        K::DiffuseTransmission,
+        K::ScatterColor,
+        K::Scatter,
     ];
     let mut out = [None; super::MAP_KINDS];
     for (slot, texture) in out.iter_mut().zip(textures) {

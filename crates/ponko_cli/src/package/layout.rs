@@ -163,6 +163,9 @@ pub enum Format {
     /// An Android package: what a phone installs, signed with the debug
     /// key or by the `--sign` program.
     Apk,
+    /// An Android App Bundle: what Google Play takes, made with Google's
+    /// `bundletool`; signed like the apk.
+    Aab,
 }
 
 impl Format {
@@ -176,15 +179,16 @@ impl Format {
                 "dmg" => Format::Dmg,
                 "ipa" => Format::Ipa,
                 "apk" => Format::Apk,
+                "aab" => Format::Aab,
                 other => {
                     return Err(format!(
-                        "unknown format `{other}`: use folder, zip, tar.gz, dmg, ipa or apk (comma-separated)"
+                        "unknown format `{other}`: use folder, zip, tar.gz, dmg, ipa, apk or aab (comma-separated)"
                     ));
                 }
             });
         }
         if out.is_empty() {
-            return Err("--format needs at least one of folder, zip, tar.gz, dmg, ipa, apk".into());
+            return Err("--format needs at least one of folder, zip, tar.gz, dmg, ipa, apk, aab".into());
         }
         Ok(out.into_iter().collect())
     }
@@ -213,6 +217,7 @@ impl Format {
             Format::Dmg => "dmg",
             Format::Ipa => "ipa",
             Format::Apk => "apk",
+            Format::Aab => "aab",
         }
     }
 }
@@ -237,14 +242,21 @@ pub fn check_formats(platform: &Platform, formats: &[Format]) -> Result<(bool, V
         return Err("iOS packages are zips (an ipa, or the app zipped for the simulator), not tar.gz".into());
     }
     if platform.os == Os::Android {
-        if let Some(other) = formats.iter().find(|f| !matches!(f, Format::Apk | Format::Folder)) {
+        if let Some(other) = formats
+            .iter()
+            .find(|f| !matches!(f, Format::Apk | Format::Aab | Format::Folder))
+        {
             return Err(format!(
-                "an Android package is an apk (or `folder`, the files it is made of), not {}",
+                "an Android package is an apk or an app bundle, aab (or `folder`, the files they are made of), not {}",
                 other.extension()
             ));
         }
-    } else if formats.contains(&Format::Apk) {
-        return Err(format!("an apk is for Android, not {}", platform.triple));
+    } else if let Some(android) = formats.iter().find(|f| matches!(f, Format::Apk | Format::Aab)) {
+        return Err(format!(
+            "an {} is for Android, not {}",
+            android.extension(),
+            platform.triple
+        ));
     }
     let flat = formats.contains(&Format::Folder);
     if flat && formats.contains(&Format::Dmg) {
@@ -2122,7 +2134,7 @@ mod tests {
     }
 
     #[test]
-    fn android_packages_are_apks_or_the_folder_they_are_made_of() {
+    fn android_packages_are_apks_app_bundles_or_the_folder_they_are_made_of() {
         assert_eq!(target_alias("android"), "aarch64-linux-android");
         assert_eq!(Format::defaults(Os::Android, true), [Format::Apk]);
         assert_eq!(Format::parse_list("apk").unwrap(), [Format::Apk]);
@@ -2132,6 +2144,17 @@ mod tests {
             (true, vec![Format::Apk])
         );
         assert_eq!(check_formats(&android, &[Format::Folder]).unwrap(), (true, vec![]));
+        assert_eq!(Format::parse_list("apk,aab").unwrap(), [Format::Apk, Format::Aab]);
+        assert_eq!(
+            check_formats(&android, &[Format::Apk, Format::Aab]).unwrap(),
+            (true, vec![Format::Apk, Format::Aab])
+        );
+        assert_eq!(Format::Aab.extension(), "aab");
+        assert!(
+            check_formats(&platform("aarch64-apple-ios"), &[Format::Aab])
+                .unwrap_err()
+                .contains("an aab is for Android")
+        );
         for other in [Format::Zip, Format::TarGz, Format::Dmg, Format::Ipa] {
             assert!(check_formats(&android, &[other]).is_err(), "{other:?}");
         }

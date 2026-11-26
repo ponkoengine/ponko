@@ -261,6 +261,47 @@ fn debug_keystore(env: &dyn Fn(&str) -> Option<String>) -> Result<PathBuf, Strin
     Ok(keystore)
 }
 
+/// The files `aapt2` makes of the package files in `app` (the compiled
+/// manifest and icons, `resources.arsc` or, with `proto`, the protocol
+/// buffer `resources.pb` an app bundle holds), then `lib/` and `assets/`
+/// as they are. `parts` is a scratch folder.
+fn package_files(tools: &Tools, app: &Path, parts: &Path, proto: bool) -> Result<Vec<ApkFile>, String> {
+    let aapt2 = tools.build_tools.join(format!("aapt2{EXE}"));
+    let base = parts.join("base.apk");
+    let mut link = Command::new(&aapt2);
+    link.arg("link")
+        .arg("-o")
+        .arg(&base)
+        .arg("-I")
+        .arg(&tools.android_jar)
+        .arg("--manifest")
+        .arg(app.join("AndroidManifest.xml"));
+    if proto {
+        link.arg("--proto-format");
+    }
+    let res = app.join("res");
+    if res.is_dir() {
+        let compiled = parts.join("res.zip");
+        let mut compile = Command::new(&aapt2);
+        compile.arg("compile").arg("--dir").arg(&res).arg("-o").arg(&compiled);
+        run(compile, "aapt2 compile")?;
+        link.arg(&compiled);
+    }
+    run(link, "aapt2 link")?;
+    let mut files = archive::unzip(&std::fs::read(&base).map_err(|e| format!("{}: {e}", base.display()))?)?;
+    for dir in ["lib", "assets"] {
+        let mut found = Vec::new();
+        if app.join(dir).is_dir() {
+            files_below(&app.join(dir), &format!("{dir}/"), &mut found)?;
+        }
+        for (name, path) in found {
+            let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            files.push(ApkFile { name, bytes });
+        }
+    }
+    Ok(files)
+}
+
 /// Makes the apk `file` of the package files in `app` (the manifest,
 /// `lib/`, `assets/`, `res/`): aapt2 compiles the manifest and icons, the
 /// rest goes in as it is, aligned. Signed with the debug key when
@@ -270,36 +311,7 @@ pub fn apk(tools: &Tools, app: &Path, file: &Path, debug_sign: bool) -> Result<(
     let _ = std::fs::remove_dir_all(&parts);
     std::fs::create_dir_all(&parts).map_err(|e| format!("{}: {e}", parts.display()))?;
     let result = (|| {
-        let aapt2 = tools.build_tools.join(format!("aapt2{EXE}"));
-        let base = parts.join("base.apk");
-        let mut link = Command::new(&aapt2);
-        link.arg("link")
-            .arg("-o")
-            .arg(&base)
-            .arg("-I")
-            .arg(&tools.android_jar)
-            .arg("--manifest")
-            .arg(app.join("AndroidManifest.xml"));
-        let res = app.join("res");
-        if res.is_dir() {
-            let compiled = parts.join("res.zip");
-            let mut compile = Command::new(&aapt2);
-            compile.arg("compile").arg("--dir").arg(&res).arg("-o").arg(&compiled);
-            run(compile, "aapt2 compile")?;
-            link.arg(&compiled);
-        }
-        run(link, "aapt2 link")?;
-        let mut files = archive::unzip(&std::fs::read(&base).map_err(|e| format!("{}: {e}", base.display()))?)?;
-        for dir in ["lib", "assets"] {
-            let mut found = Vec::new();
-            if app.join(dir).is_dir() {
-                files_below(&app.join(dir), &format!("{dir}/"), &mut found)?;
-            }
-            for (name, path) in found {
-                let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-                files.push(ApkFile { name, bytes });
-            }
-        }
+        let files = package_files(tools, app, &parts, false)?;
         let unsigned = if debug_sign {
             parts.join("unsigned.apk")
         } else {
@@ -330,6 +342,121 @@ pub fn apk(tools: &Tools, app: &Path, file: &Path, debug_sign: bool) -> Result<(
     })();
     let _ = std::fs::remove_dir_all(&parts);
     let _ = std::fs::remove_file(file.with_extension("apk.idsig"));
+    result
+}
+
+/// How to run Google's `bundletool`, which the SDK doesn't include:
+/// `BUNDLETOOL` names its jar (run with the JDK's `java`) or a program,
+/// else `bundletool` on the `PATH` (Homebrew's, for one).
+pub fn bundletool(env: &dyn Fn(&str) -> Option<String>) -> Result<Vec<PathBuf>, String> {
+    let java = || {
+        env("JAVA_HOME")
+            .map(|j| Path::new(&j).join("bin").join(format!("java{EXE}")))
+            .filter(|j| j.is_file())
+            .unwrap_or_else(|| "java".into())
+    };
+    if let Some(named) = env("BUNDLETOOL").filter(|b| !b.is_empty()) {
+        let named = PathBuf::from(named);
+        if !named.is_file() {
+            return Err(format!("BUNDLETOOL is {}, which is not a file", named.display()));
+        }
+        return Ok(if named.extension().is_some_and(|e| e.eq_ignore_ascii_case("jar")) {
+            vec![java(), "-jar".into(), named]
+        } else {
+            vec![named]
+        });
+    }
+    let on_path = env("PATH").and_then(|path| {
+        std::env::split_paths(&path)
+            .map(|dir| dir.join(format!("bundletool{EXE}")))
+            .find(|p| p.is_file())
+    });
+    on_path.map(|p| vec![p]).ok_or_else(|| {
+        "an app bundle (aab) needs Google's bundletool: download bundletool-all-<version>.jar from \
+         github.com/google/bundletool/releases and set BUNDLETOOL to it (the guide's Android chapter)"
+            .to_string()
+    })
+}
+
+/// bundletool's settings for the bundle: the native library and the asset
+/// pack stored, as in the apk (Android loads the one and the engine reads
+/// the other from the installed apk as they are), the library on 16 KiB
+/// pages.
+pub const BUNDLE_CONFIG: &str = r#"{
+  "optimizations": {
+    "uncompressNativeLibraries": { "enabled": true, "alignment": "PAGE_ALIGNMENT_16K" }
+  },
+  "compression": { "uncompressedGlob": ["assets/**.pack", "lib/**.so"] }
+}
+"#;
+
+/// The files of the bundle's `base` module, from the proto-format files of
+/// [`package_files`]: the manifest under `manifest/`, the rest where it is.
+pub fn module_files(files: Vec<ApkFile>) -> Vec<ApkFile> {
+    files
+        .into_iter()
+        .map(|f| ApkFile {
+            name: if f.name == "AndroidManifest.xml" {
+                "manifest/AndroidManifest.xml".into()
+            } else {
+                f.name
+            },
+            bytes: f.bytes,
+        })
+        .collect()
+}
+
+/// Makes the Android App Bundle `file` (what Google Play takes) of the
+/// package files in `app`: aapt2 links them in protocol buffer form, they
+/// become the `base` module, and `bundletool` (`run`, from [`bundletool`])
+/// builds the bundle. Signed with the debug key (`jarsigner`, as Gradle
+/// signs a debug bundle) when `debug_sign`, else left unsigned for the
+/// `--sign` program.
+pub fn aab(tools: &Tools, run_bundletool: &[PathBuf], app: &Path, file: &Path, debug_sign: bool) -> Result<(), String> {
+    let (program, args) = run_bundletool.split_first().ok_or("no bundletool to run")?;
+    let parts = file.with_extension("aab-parts");
+    let _ = std::fs::remove_dir_all(&parts);
+    std::fs::create_dir_all(&parts).map_err(|e| format!("{}: {e}", parts.display()))?;
+    let result = (|| {
+        let files = module_files(package_files(tools, app, &parts, true)?);
+        let module = parts.join("base.zip");
+        std::fs::write(&module, archive::apk_bytes(&files)?).map_err(|e| format!("{}: {e}", module.display()))?;
+        let config = parts.join("BundleConfig.json");
+        std::fs::write(&config, BUNDLE_CONFIG).map_err(|e| format!("{}: {e}", config.display()))?;
+        let _ = std::fs::remove_file(file);
+        let mut build = Command::new(program);
+        build
+            .args(args)
+            .arg("build-bundle")
+            .arg(format!("--modules={}", module.display()))
+            .arg(format!("--config={}", config.display()))
+            .arg(format!("--output={}", file.display()));
+        run(build, "bundletool build-bundle (needs a JDK, 17 or later)")?;
+        if debug_sign {
+            let env = |k: &str| std::env::var(k).ok();
+            let keystore = debug_keystore(&env)?;
+            let jarsigner = env("JAVA_HOME")
+                .map(|j| Path::new(&j).join("bin").join(format!("jarsigner{EXE}")))
+                .filter(|j| j.is_file())
+                .unwrap_or_else(|| "jarsigner".into());
+            let mut sign = Command::new(jarsigner);
+            sign.args(["-keystore"])
+                .arg(&keystore)
+                .args([
+                    "-storepass",
+                    "android",
+                    "-keypass",
+                    "android",
+                    "-sigalg",
+                    "SHA256withRSA",
+                ])
+                .arg(file)
+                .arg("androiddebugkey");
+            run(sign, "jarsigner (a JDK, 17 or later)")?;
+        }
+        Ok(())
+    })();
+    let _ = std::fs::remove_dir_all(&parts);
     result
 }
 
@@ -376,6 +503,65 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         let nothing = |_: &str| None;
         assert!(find(&nothing).unwrap_err().contains("ANDROID_HOME"));
+    }
+
+    #[test]
+    fn bundletool_is_the_named_jar_or_program_else_the_one_on_the_path() {
+        let root = std::env::temp_dir().join(format!("ponko-bundletool-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        let jar = root.join("bundletool-all-1.18.3.jar");
+        std::fs::write(&jar, b"").unwrap();
+        let program = root.join("bin").join(format!("bundletool{EXE}"));
+        std::fs::write(&program, b"").unwrap();
+        let named = jar.to_string_lossy().into_owned();
+        let env = |k: &str| (k == "BUNDLETOOL").then(|| named.clone());
+        assert_eq!(
+            bundletool(&env).unwrap(),
+            [PathBuf::from("java"), "-jar".into(), jar.clone()]
+        );
+        let named_program = program.to_string_lossy().into_owned();
+        let env = |k: &str| (k == "BUNDLETOOL").then(|| named_program.clone());
+        assert_eq!(bundletool(&env).unwrap(), std::slice::from_ref(&program));
+        let path = std::env::join_paths([root.join("nothing-here"), root.join("bin")])
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let env = |k: &str| (k == "PATH").then(|| path.clone());
+        assert_eq!(bundletool(&env).unwrap(), [program]);
+        let missing = |k: &str| (k == "BUNDLETOOL").then(|| "/no/such/bundletool.jar".to_string());
+        assert!(bundletool(&missing).unwrap_err().contains("not a file"));
+        let nothing = |_: &str| None;
+        assert!(bundletool(&nothing).unwrap_err().contains("BUNDLETOOL"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_bundle_module_has_its_manifest_under_manifest_and_stores_the_pack_and_library() {
+        let file = |name: &str| ApkFile {
+            name: name.into(),
+            bytes: vec![1],
+        };
+        let module = module_files(vec![
+            file("AndroidManifest.xml"),
+            file("resources.pb"),
+            file("res/mipmap-mdpi-v4/ic_launcher.png"),
+            file("lib/arm64-v8a/libmain.so"),
+            file("assets/assets.pack"),
+        ]);
+        let names: Vec<&str> = module.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "manifest/AndroidManifest.xml",
+                "resources.pb",
+                "res/mipmap-mdpi-v4/ic_launcher.png",
+                "lib/arm64-v8a/libmain.so",
+                "assets/assets.pack"
+            ]
+        );
+        assert!(BUNDLE_CONFIG.contains("\"assets/**.pack\""));
+        assert!(BUNDLE_CONFIG.contains("PAGE_ALIGNMENT_16K"));
     }
 
     #[test]

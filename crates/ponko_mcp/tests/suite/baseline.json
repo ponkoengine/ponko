@@ -235,6 +235,266 @@
         "passed": 2,
         "steps": 6
       }
+    },
+    {
+      "checks": [
+        "settings file is valid",
+        "level keeps its coins",
+        "game uses the file",
+        "a run scores 5"
+      ],
+      "controls": [
+        {
+          "failed": [
+            "a run scores 5"
+          ],
+          "name": "nothing"
+        },
+        {
+          "failed": [
+            "a run scores 5"
+          ],
+          "name": "visible cause only"
+        },
+        {
+          "failed": [
+            "a run scores 5"
+          ],
+          "name": "spikes only"
+        },
+        {
+          "failed": [
+            "a run scores 5"
+          ],
+          "name": "live only"
+        },
+        {
+          "failed": [
+            "game uses the file",
+            "a run scores 5"
+          ],
+          "name": "level saved with the old radius"
+        },
+        {
+          "failed": [
+            "level keeps its coins"
+          ],
+          "name": "coins moved"
+        },
+        {
+          "failed": [
+            "settings file is valid"
+          ],
+          "name": "huge radius"
+        }
+      ],
+      "id": "lost-points",
+      "kind": "bug",
+      "solution": {
+        "passed": 4,
+        "steps": 18
+      }
+    },
+    {
+      "checks": [
+        "cannon file is valid",
+        "game uses the file",
+        "a shot lands on the target"
+      ],
+      "controls": [
+        {
+          "failed": [
+            "a shot lands on the target"
+          ],
+          "name": "nothing"
+        },
+        {
+          "failed": [
+            "a shot lands on the target"
+          ],
+          "name": "vacuum formula"
+        },
+        {
+          "failed": [
+            "a shot lands on the target"
+          ],
+          "name": "overshoot"
+        },
+        {
+          "failed": [
+            "cannon file is valid",
+            "a shot lands on the target"
+          ],
+          "name": "angle changed"
+        },
+        {
+          "failed": [
+            "game uses the file"
+          ],
+          "name": "live only"
+        }
+      ],
+      "id": "cannon-range",
+      "kind": "measure",
+      "solution": {
+        "passed": 3,
+        "steps": 15
+      }
+    },
+    {
+      "checks": [
+        "spawner file is right",
+        "level bats have 30 health",
+        "spawned bats have 30 health"
+      ],
+      "controls": [
+        {
+          "failed": [
+            "spawner file is right",
+            "level bats have 30 health",
+            "spawned bats have 30 health"
+          ],
+          "name": "nothing"
+        },
+        {
+          "failed": [
+            "spawned bats have 30 health"
+          ],
+          "name": "difficulty scale missed"
+        },
+        {
+          "failed": [
+            "level bats have 30 health",
+            "spawned bats have 30 health"
+          ],
+          "name": "level copies missed"
+        },
+        {
+          "failed": [
+            "spawner file is right",
+            "spawned bats have 30 health"
+          ],
+          "name": "twice as often"
+        },
+        {
+          "failed": [
+            "spawner file is right",
+            "level bats have 30 health",
+            "spawned bats have 30 health"
+          ],
+          "name": "live only"
+        }
+      ],
+      "id": "tough-bats",
+      "kind": "content",
+      "solution": {
+        "passed": 3,
+        "steps": 21
+      }
+    },
+    {
+      "checks": [
+        "defense file is valid",
+        "the file's towers stand",
+        "the wave is held"
+      ],
+      "controls": [
+        {
+          "failed": [
+            "the wave is held"
+          ],
+          "name": "nothing"
+        },
+        {
+          "failed": [
+            "the wave is held"
+          ],
+          "name": "most road covered"
+        },
+        {
+          "failed": [
+            "the wave is held"
+          ],
+          "name": "nearest the gate"
+        },
+        {
+          "failed": [
+            "defense file is valid"
+          ],
+          "name": "three towers"
+        },
+        {
+          "failed": [
+            "the wave is held"
+          ],
+          "name": "towers by hand"
+        },
+        {
+          "failed": [
+            "defense file is valid",
+            "the file's towers stand",
+            "the wave is held"
+          ],
+          "name": "misspelled pad"
+        }
+      ],
+      "id": "hold-the-gate",
+      "kind": "experiment",
+      "solution": {
+        "passed": 3,
+        "steps": 11
+      }
+    },
+    {
+      "checks": [
+        "game builds",
+        "route file unchanged",
+        "guard walks laps",
+        "turns at the waypoints",
+        "never faster than its speed"
+      ],
+      "controls": [
+        {
+          "failed": [
+            "guard walks laps",
+            "turns at the waypoints"
+          ],
+          "name": "nothing"
+        },
+        {
+          "failed": [
+            "turns at the waypoints"
+          ],
+          "name": "tolerance without snapping"
+        },
+        {
+          "failed": [
+            "never faster than its speed"
+          ],
+          "name": "jump to the corner"
+        },
+        {
+          "failed": [
+            "route file unchanged"
+          ],
+          "name": "data instead of code"
+        },
+        {
+          "failed": [
+            "game builds",
+            "guard walks laps",
+            "turns at the waypoints",
+            "never faster than its speed"
+          ],
+          "name": "doesn't build"
+        }
+      ],
+      "id": "stuck-guard",
+      "kind": "code",
+      "solution": {
+        "passed": 5,
+        "steps": 14
+      }
     }
   ]
 }

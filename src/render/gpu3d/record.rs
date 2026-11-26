@@ -960,16 +960,18 @@ impl Renderer3D {
                     let held_own_pass = self.view_model_see_through_pass();
                     let lit = targets.lit_texture(self.screen.taa_on);
                     passes::mark("scene copy");
-                    passes::mark("color");
-                    encoder.copy_texture_to_texture(
-                        lit.as_image_copy(),
-                        targets.scene_texture.as_image_copy(),
-                        lit.size(),
-                    );
+                    let refraction = targets.refraction();
+                    let copy = refraction.map_or(&targets.scene_texture, |r| &r.texture);
+                    encoder.copy_texture_to_texture(lit.as_image_copy(), copy.as_image_copy(), lit.size());
+                    if let (Some(image), Some(maker)) = (refraction, &self.render_targets.mip_maker) {
+                        passes::mark("refraction mips");
+                        maker.record_named(encoder, &image.mips, time, "refraction mips");
+                    }
                     if let Some(copy) = &targets.depth_copy {
                         passes::mark("depth copy");
                         copy.record(encoder);
                     }
+                    passes::mark("color");
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("3d transparent"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1001,7 +1003,7 @@ impl Renderer3D {
                         multiview_mask: None,
                     });
                     pass.set_bind_group(0, &self.frame_bind_group, &[]);
-                    pass.set_bind_group(2, &targets.scene, &[]);
+                    pass.set_bind_group(2, refraction.map_or(&targets.scene, |r| &r.scene), &[]);
                     self.draw_see_through(&mut pass, textures);
                     self.draw_debug_lines(&mut pass);
                     // Held see-through items that use the stencil draw in a
@@ -1378,7 +1380,35 @@ impl Renderer3D {
     /// a transparent surface reads the scene behind it, or a soft particle
     /// its depth.
     pub(super) fn splits_transparent(&self) -> bool {
-        self.needs_scene() || self.particles.soft()
+        self.targets.as_ref().is_some_and(|t| t.refraction_active) || self.needs_scene() || self.particles.soft()
+    }
+
+    /// Whether any camera-visible run, batch level or crowd needs the opaque
+    /// image. GPU-culled batches and crowds count before their culling.
+    pub(super) fn needs_refraction(&self) -> bool {
+        if self.resources.refractors == 0 {
+            return false;
+        }
+        let refracts = |mesh| {
+            self.resources.meshes.get(self.base(mesh) as usize).is_some_and(|m| {
+                m.parts
+                    .iter()
+                    .enumerate()
+                    .any(|(part, &(_, own))| self.resources.material(self.part_material(mesh, part, own)).refracts)
+            })
+        };
+        self.lists
+            .blended_runs
+            .iter()
+            .any(|&(mesh, _, count)| count > 0 && refracts(mesh))
+            || self.static_batches.iter().flatten().any(|batch| {
+                batch
+                    .levels
+                    .iter()
+                    .enumerate()
+                    .any(|(level, l)| batch.draws(0, level) && refracts(l.mesh.slot()))
+            })
+            || self.crowds.camera_meshes().any(refracts)
     }
 
     /// Whether a transparent surface this frame reads the scene behind it.

@@ -1,12 +1,13 @@
 //! Layers over a material's base surface: clear coat, sheen, specular
-//! strength and color, index of refraction, anisotropy and iridescence, as
+//! strength and color, index of refraction, anisotropy, iridescence and transmission, as
 //! glTF's material extensions describe them (`KHR_materials_clearcoat`,
-//! `_sheen`, `_specular`, `_ior`, `_anisotropy`, `_iridescence`).
+//! `_sheen`, `_specular`, `_ior`, `_anisotropy`, `_iridescence`, `_transmission`).
 //!
 //! A material with any layer on is drawn by a second build of the built-in
 //! shader that has the layers' code; every other material keeps the plain
 //! build, which has none of it, so layers cost nothing where they're off.
 
+use super::Transmission;
 use crate::color::Color;
 use crate::texture::Texture;
 
@@ -42,7 +43,8 @@ use crate::texture::Texture;
 /// blue (sRGB) and its strength from alpha; the anisotropy direction from
 /// red and green (-1 to 1, in the surface's texture directions) and its
 /// strength from blue; the iridescence amount from red and its thickness
-/// from green. One image may serve several maps (glTF files often pack
+/// from green. See [`Transmission`] for the transmission map channels.
+/// One image may serve several maps (glTF files often pack
 /// them). A material reads **at most two distinct layer images**
 /// ([`Graphics::try_create_material`](crate::gfx::Graphics::try_create_material)
 /// says so otherwise); the same image as a sheen or specular color and as
@@ -115,6 +117,8 @@ pub struct MaterialLayers {
     /// Places the thickness between the two of
     /// [`iridescence_thickness`](Self::iridescence_thickness) by its green channel.
     pub iridescence_thickness_map: Option<Texture>,
+    /// Specular and diffuse transmission, with optional volume attenuation.
+    pub transmission: Transmission,
 }
 
 impl Default for MaterialLayers {
@@ -149,6 +153,7 @@ impl MaterialLayers {
         iridescence_thickness: [100.0, 400.0],
         iridescence_map: None,
         iridescence_thickness_map: None,
+        transmission: Transmission::NONE,
     };
 
     /// A clear coat of `amount` (0 to 1) and `roughness` (0 to 1).
@@ -203,6 +208,8 @@ impl MaterialLayers {
     }
 
     with_fields! {
+        /// Sets the specular and diffuse [`transmission`](Self::transmission) layer.
+        transmission: Transmission => with_transmission;
         /// Sets [`clearcoat_map`](Self::clearcoat_map).
         clearcoat_map: Option<Texture> => with_clearcoat_map;
         /// Sets [`clearcoat_roughness_map`](Self::clearcoat_roughness_map).
@@ -256,6 +263,9 @@ impl MaterialLayers {
         if self.iridescence > 0.0 {
             bits |= layer_bits::IRIDESCENCE;
         }
+        if self.transmission.factor > 0.0 || self.transmission.diffuse > 0.0 {
+            bits |= layer_bits::TRANSMISSION;
+        }
         bits
     }
 
@@ -274,12 +284,35 @@ impl MaterialLayers {
             (self.anisotropy_map, K::Anisotropy),
             (self.iridescence_map, K::Iridescence),
             (self.iridescence_thickness_map, K::IridescenceThickness),
+            (self.transmission.map, K::Transmission),
+            (self.transmission.thickness_map, K::Thickness),
+            (self.transmission.diffuse_color_map, K::DiffuseTransmissionColor),
+            (self.transmission.diffuse_map, K::DiffuseTransmission),
+            (self.transmission.scatter_color_map, K::ScatterColor),
+            (self.transmission.scatter_map, K::Scatter),
         ]
     }
 
     /// Sets every layer map, in the shader's order ([`MapKind`]).
     pub(crate) fn with_maps(mut self, maps: [Option<Texture>; MAP_KINDS]) -> Self {
-        let [a, b, c, d, e, f, g, h, i, j] = maps;
+        let [
+            a,
+            b,
+            c,
+            d,
+            e,
+            f,
+            g,
+            h,
+            i,
+            j,
+            transmission,
+            thickness,
+            diffuse_color,
+            diffuse,
+            scatter_color,
+            scatter,
+        ] = maps;
         self.clearcoat_map = a;
         self.clearcoat_roughness_map = b;
         self.clearcoat_normal_map = c;
@@ -290,6 +323,12 @@ impl MaterialLayers {
         self.anisotropy_map = h;
         self.iridescence_map = i;
         self.iridescence_thickness_map = j;
+        self.transmission.map = transmission;
+        self.transmission.thickness_map = thickness;
+        self.transmission.diffuse_map = diffuse;
+        self.transmission.diffuse_color_map = diffuse_color;
+        self.transmission.scatter_map = scatter;
+        self.transmission.scatter_color_map = scatter_color;
         self
     }
 
@@ -297,7 +336,9 @@ impl MaterialLayers {
     pub(crate) fn problem(&self) -> Option<String> {
         let unit =
             |name: &str, v: f32| (!(0.0..=1.0).contains(&v)).then(|| format!("{name} goes from 0 to 1 (got {v})"));
-        unit("clear coat", self.clearcoat)
+        self.transmission
+            .problem()
+            .or_else(|| unit("clear coat", self.clearcoat))
             .or_else(|| unit("clear coat roughness", self.clearcoat_roughness))
             .or_else(|| unit("sheen roughness", self.sheen_roughness))
             .or_else(|| unit("specular", self.specular))
@@ -339,10 +380,11 @@ pub(crate) mod layer_bits {
     pub const SPECULAR: u32 = 4;
     pub const ANISOTROPY: u32 = 8;
     pub const IRIDESCENCE: u32 = 16;
+    pub const TRANSMISSION: u32 = 32;
 }
 
 /// How many kinds of layer map there are.
-pub(crate) const MAP_KINDS: usize = 10;
+pub(crate) const MAP_KINDS: usize = 16;
 
 /// A kind of layer map, in the shader's order: map `k`'s slot is bits
 /// `2k..2k + 2` of `MaterialData.layer_info.y`.
@@ -358,6 +400,12 @@ pub(crate) enum MapKind {
     Anisotropy,
     Iridescence,
     IridescenceThickness,
+    Transmission,
+    Thickness,
+    DiffuseTransmissionColor,
+    DiffuseTransmission,
+    ScatterColor,
+    Scatter,
 }
 
 impl MapKind {
@@ -366,8 +414,11 @@ impl MapKind {
     /// which sRGB leaves alone).
     pub(crate) fn srgb(self) -> Option<bool> {
         match self {
-            MapKind::SheenColor | MapKind::SpecularColor => Some(true),
-            MapKind::SheenRoughness | MapKind::Specular => None,
+            MapKind::SheenColor
+            | MapKind::SpecularColor
+            | MapKind::DiffuseTransmissionColor
+            | MapKind::ScatterColor => Some(true),
+            MapKind::SheenRoughness | MapKind::Specular | MapKind::DiffuseTransmission | MapKind::Scatter => None,
             _ => Some(false),
         }
     }

@@ -589,7 +589,7 @@ fn tools() -> Vec<Tool> {
         },
         Tool {
             name: "subscribe_events",
-            description: "Start collecting a game's events (messages between systems, e.g. Died or Scored) as they happen, so take_events can show what happened while ticks ran. Starts fresh; the newest `capacity` are kept.",
+            description: "Start collecting a game's events (messages between systems, e.g. Died or Scored) as they happen, so take_events can show what happened while ticks ran. Starts fresh; the newest `capacity` are kept. The reply's `types` are the types collected (every type list_events has, when none were named); a name the game has no event type of comes back under `unknown`, with a hint.",
             writes: false,
             params: || {
                 json!({
