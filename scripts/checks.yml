@@ -1837,12 +1837,17 @@ jobs:
         run: |
           node web/gallery/build.mjs
           web/build.sh --features navmesh,physics3d shard_grove
-      # The headless shell: WebGL2 on its software renderer.
-      - name: Every gallery page, Chromium, WebGL2
+      # The headless shell: WebGL2 on its software renderer (SwiftShader).
+      - name: Every gallery page, Chromium, WebGL2 (software)
         timeout-minutes: 20
         if: ${{ !cancelled() }}
         run: node web/smoke/gallery.mjs --browser chromium --backend webgl2
-      # The full browser's new headless mode: WebGPU on the Mac's own adapter.
+      # The full browser's new headless mode: the Mac's own GPU, through
+      # ANGLE on Metal for WebGL2 and the Metal adapter for WebGPU.
+      - name: Every gallery page, Chromium, WebGL2 on the GPU
+        timeout-minutes: 20
+        if: ${{ !cancelled() }}
+        run: node web/smoke/gallery.mjs --browser chromium --chromium-mode new --backend webgl2
       - name: Every gallery page, Chromium, WebGPU on the GPU
         timeout-minutes: 20
         if: ${{ !cancelled() }}

@@ -182,8 +182,10 @@ async function checkExample(browser, url, entry, args, caps, report) {
     }
     report.progress = { before, after: state.draws };
 
-    // A click on the game doesn't break it.
-    const box = await page.locator(GAME_CANVAS).boundingBox();
+    // A click on the game doesn't break it. A heavy demo on software GL
+    // (the headless shell) on a busy machine can hold the page's thread for
+    // longer than the 30 s default, as for the screenshot below.
+    const box = await page.locator(GAME_CANVAS).boundingBox({ timeout: 60_000 });
     await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
     await sleep(1000);
     state = await pageState(page);

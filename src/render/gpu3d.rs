@@ -218,7 +218,8 @@ pub(crate) fn browser_gl_has_no_multisampled_textures(backend: wgpu::Backend) ->
 /// every draw that binds it ("Mismatch between texture format and sampler
 /// type"), so a scene without shadows drew nothing. There such an array gets
 /// a second layer that nothing reads, as `stored_layers` in `gpu.rs` does
-/// for texture arrays made from data.
+/// for texture arrays made from data. (A sun with one shadow cascade so
+/// costs a second, unused map on GL; every preset has two or more.)
 pub(super) fn array_layers(backend: wgpu::Backend, layers: u32) -> u32 {
     if backend == wgpu::Backend::Gl {
         layers.max(2)
