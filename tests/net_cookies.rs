@@ -64,21 +64,26 @@ fn hellos_from_addresses_that_never_answer_leave_no_connection_and_no_memory() {
     host.poll_elapsed(Duration::ZERO).unwrap();
     // 32 "forged" addresses, 40 hellos each, every one with a new nonce.
     let senders: Vec<UdpSocket> = (0..32).map(|_| UdpSocket::bind("127.0.0.1:0").unwrap()).collect();
+    let hellos: Vec<Vec<u8>> = (0..40u64)
+        .flat_map(|round| (0..32u64).map(move |i| hello(round * 100 + i + 1)))
+        .collect();
+    // Send a round, then poll until the host has taken it in, counting
+    // what this thread allocates meanwhile. The host reads between rounds:
+    // all 1280 hellos at once (80 KB) overflow Windows' default 64 KB
+    // receive buffer, which drops the rest.
     let mut sent = 0usize;
-    for round in 0..40u64 {
-        for (i, s) in senders.iter().enumerate() {
-            s.send_to(&hello(round * 100 + i as u64 + 1), to).unwrap();
-            sent += 1;
-        }
-    }
-    // Poll until the host has taken every hello in, counting what its
-    // thread allocates meanwhile.
     let started = Instant::now();
     let deadline = started + Duration::from_secs(10);
     ALLOCS.with(|n| n.set(0));
     TRACK.with(|t| t.set(true));
-    while host.stats().packets_received < sent as u64 && Instant::now() < deadline {
-        host.poll_elapsed(Duration::from_millis(1)).unwrap();
+    for round in hellos.chunks(senders.len()) {
+        for (s, packet) in senders.iter().zip(round) {
+            s.send_to(packet, to).unwrap();
+            sent += 1;
+        }
+        while host.stats().packets_received < sent as u64 && Instant::now() < deadline {
+            host.poll_elapsed(Duration::from_millis(1)).unwrap();
+        }
     }
     TRACK.with(|t| t.set(false));
     let polling = started.elapsed();
