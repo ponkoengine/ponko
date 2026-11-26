@@ -973,9 +973,9 @@ pub fn android_package(id: &str) -> Result<String, String> {
     }
 }
 
-/// The `versionCode` of a Cargo version: `major * 1000000 + minor * 1000
-/// + patch` (`1.2.3` -> `1002003`), so a later version always has a
-/// larger code, as app stores require. A pre-release has its release's code.
+/// The `versionCode` of a Cargo version:
+/// `major * 1000000 + minor * 1000 + patch` (`1.2.3` -> `1002003`), so a
+/// later version always has a larger code, as app stores require. A pre-release has its release's code.
 pub fn android_version_code(version: &str) -> Result<u32, String> {
     let numbers: Vec<u64> = bundle_version(version)
         .split('.')

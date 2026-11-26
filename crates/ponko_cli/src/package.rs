@@ -1217,10 +1217,10 @@ pub fn package_command(options: &Options, cwd: &Path) -> Result<String, String> 
     let plan = plan.and_then(|plan| write_plan(&out, &plan).map(|()| plan));
     let _ = std::fs::remove_dir_all(&web_dir);
     let plan = plan?;
-    if let Some(tools) = &android_tools {
-        if !android::strip(tools, &out.join(&plan.program))? {
-            notes.push("the library is not stripped: no Android NDK for llvm-strip".into());
-        }
+    if let Some(tools) = &android_tools
+        && !android::strip(tools, &out.join(&plan.program))?
+    {
+        notes.push("the library is not stripped: no Android NDK for llvm-strip".into());
     }
     let dir = out.join(&plan.folder);
     let mut report = vec![format!(
