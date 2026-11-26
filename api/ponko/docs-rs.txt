@@ -220,6 +220,7 @@ pub ponko::actions::InputEvent::GamepadButton(ponko::input::Gamepad, ponko::inpu
 pub ponko::actions::InputEvent::GamepadConnected(ponko::input::Gamepad)
 pub ponko::actions::InputEvent::GamepadDisconnected(ponko::input::Gamepad)
 pub ponko::actions::InputEvent::GamepadMotion(ponko::input::Gamepad, ponko::input::GamepadMotion)
+pub ponko::actions::InputEvent::GamepadTouchpad(ponko::input::Gamepad, u8, ponko::input::GamepadTouchpadFinger)
 pub ponko::actions::InputEvent::Key(ponko::input::Key, bool)
 pub ponko::actions::InputEvent::Mouse(ponko::input::MouseButton, bool)
 pub ponko::actions::InputEvent::MouseMove(glam::f32::vec2::Vec2)
@@ -5374,6 +5375,7 @@ pub ponko::input::GamepadButton::RightTrigger
 pub ponko::input::GamepadButton::Select
 pub ponko::input::GamepadButton::South
 pub ponko::input::GamepadButton::Start
+pub ponko::input::GamepadButton::Touchpad
 pub ponko::input::GamepadButton::West
 impl core::clone::Clone for ponko::input::GamepadButton
 pub fn ponko::input::GamepadButton::clone(&self) -> Self
@@ -5699,6 +5701,31 @@ impl serde_core::ser::Serialize for ponko::input::TouchPhase
 pub fn ponko::input::TouchPhase::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for ponko::input::TouchPhase
 pub fn ponko::input::TouchPhase::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+#[non_exhaustive] pub enum ponko::input::TriggerEffect
+pub ponko::input::TriggerEffect::Off
+pub ponko::input::TriggerEffect::Resistance
+pub ponko::input::TriggerEffect::Resistance::start: u8
+pub ponko::input::TriggerEffect::Resistance::strength: u8
+pub ponko::input::TriggerEffect::ResistanceProfile([u8; 10])
+pub ponko::input::TriggerEffect::Vibration
+pub ponko::input::TriggerEffect::Vibration::amplitude: u8
+pub ponko::input::TriggerEffect::Vibration::frequency: u8
+pub ponko::input::TriggerEffect::Vibration::start: u8
+pub ponko::input::TriggerEffect::Weapon
+pub ponko::input::TriggerEffect::Weapon::end: u8
+pub ponko::input::TriggerEffect::Weapon::start: u8
+pub ponko::input::TriggerEffect::Weapon::strength: u8
+impl core::clone::Clone for ponko::input::TriggerEffect
+pub fn ponko::input::TriggerEffect::clone(&self) -> Self
+impl core::cmp::Eq for ponko::input::TriggerEffect
+impl core::cmp::PartialEq for ponko::input::TriggerEffect
+pub fn ponko::input::TriggerEffect::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::input::TriggerEffect
+pub fn ponko::input::TriggerEffect::default() -> Self
+impl core::fmt::Debug for ponko::input::TriggerEffect
+pub fn ponko::input::TriggerEffect::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::input::TriggerEffect
+impl core::marker::StructuralPartialEq for ponko::input::TriggerEffect
 pub struct ponko::input::DeviceKey(pub u64)
 impl core::clone::Clone for ponko::input::DeviceKey
 pub fn ponko::input::DeviceKey::clone(&self) -> Self
@@ -5738,7 +5765,10 @@ pub fn ponko::input::FakeGamepads::fmt(&self, &mut core::fmt::Formatter<'_>) -> 
 impl ponko::input::GamepadBackend for ponko::input::FakeGamepads
 pub fn ponko::input::FakeGamepads::poll(&mut self, &mut ponko::input::GamepadEvents<'_>)
 pub fn ponko::input::FakeGamepads::set_force_feedback(&mut self, ponko::input::DeviceKey, ponko::input::ForceFeedback)
+pub fn ponko::input::FakeGamepads::set_light(&mut self, ponko::input::DeviceKey, [u8; 3])
+pub fn ponko::input::FakeGamepads::set_player_leds(&mut self, ponko::input::DeviceKey, core::option::Option<u8>)
 pub fn ponko::input::FakeGamepads::set_rumble(&mut self, ponko::input::DeviceKey, ponko::input::MotorLevels)
+pub fn ponko::input::FakeGamepads::set_trigger_effects(&mut self, ponko::input::DeviceKey, [ponko::input::TriggerEffect; 2])
 pub struct ponko::input::ForceFeedback
 pub ponko::input::ForceFeedback::autocenter: f32
 pub ponko::input::ForceFeedback::constant: f32
@@ -5807,8 +5837,12 @@ pub fn ponko::input::Gamepad::serialize<__S>(&self, __S) -> core::result::Result
 impl<'de> serde_core::de::Deserialize<'de> for ponko::input::Gamepad
 pub fn ponko::input::Gamepad::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct ponko::input::GamepadCapabilities
+pub ponko::input::GamepadCapabilities::adaptive_triggers: bool
+pub ponko::input::GamepadCapabilities::light: bool
 pub ponko::input::GamepadCapabilities::motion: bool
+pub ponko::input::GamepadCapabilities::player_leds: bool
 pub ponko::input::GamepadCapabilities::rumble: bool
+pub ponko::input::GamepadCapabilities::touchpad: bool
 pub ponko::input::GamepadCapabilities::trigger_rumble: bool
 impl core::clone::Clone for ponko::input::GamepadCapabilities
 pub fn ponko::input::GamepadCapabilities::clone(&self) -> Self
@@ -5833,6 +5867,7 @@ pub fn ponko::input::GamepadEvents<'_>::joystick_connected(&mut self, ponko::inp
 pub fn ponko::input::GamepadEvents<'_>::joystick_disconnected(&mut self, ponko::input::DeviceKey)
 pub fn ponko::input::GamepadEvents<'_>::joystick_hat(&mut self, ponko::input::DeviceKey, usize, glam::i32::ivec2::IVec2)
 pub fn ponko::input::GamepadEvents<'_>::motion(&mut self, ponko::input::DeviceKey, ponko::input::GamepadMotion)
+pub fn ponko::input::GamepadEvents<'_>::touchpad_finger(&mut self, ponko::input::DeviceKey, u8, ponko::input::GamepadTouchpadFinger)
 pub struct ponko::input::GamepadInfo
 pub ponko::input::GamepadInfo::capabilities: ponko::input::GamepadCapabilities
 pub ponko::input::GamepadInfo::family: ponko::input::ControllerFamily
@@ -5868,6 +5903,25 @@ impl core::fmt::Debug for ponko::input::GamepadMotion
 pub fn ponko::input::GamepadMotion::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::input::GamepadMotion
 impl core::marker::StructuralPartialEq for ponko::input::GamepadMotion
+pub struct ponko::input::GamepadTouchpadFinger
+pub ponko::input::GamepadTouchpadFinger::down: bool
+pub ponko::input::GamepadTouchpadFinger::pressure: f32
+pub ponko::input::GamepadTouchpadFinger::x: f32
+pub ponko::input::GamepadTouchpadFinger::y: f32
+impl core::clone::Clone for ponko::input::GamepadTouchpadFinger
+pub fn ponko::input::GamepadTouchpadFinger::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::input::GamepadTouchpadFinger
+pub fn ponko::input::GamepadTouchpadFinger::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::input::GamepadTouchpadFinger
+pub fn ponko::input::GamepadTouchpadFinger::default() -> Self
+impl core::fmt::Debug for ponko::input::GamepadTouchpadFinger
+pub fn ponko::input::GamepadTouchpadFinger::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::input::GamepadTouchpadFinger
+impl core::marker::StructuralPartialEq for ponko::input::GamepadTouchpadFinger
+impl serde_core::ser::Serialize for ponko::input::GamepadTouchpadFinger
+pub fn ponko::input::GamepadTouchpadFinger::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::input::GamepadTouchpadFinger
+pub fn ponko::input::GamepadTouchpadFinger::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct ponko::input::GestureEvent
 pub ponko::input::GestureEvent::gesture: ponko::prelude::Gesture
 pub ponko::input::GestureEvent::position: glam::f32::vec2::Vec2
@@ -6046,6 +6100,12 @@ pub fn ponko::input::Input::mouse_released(&self, ponko::input::MouseButton) -> 
 pub fn ponko::input::Input::mouse_wheel(&self) -> glam::f32::vec2::Vec2
 pub fn ponko::input::Input::typed_text(&self) -> &str
 impl ponko::input::Input
+pub fn ponko::input::Input::gamepad_touchpad(&self, ponko::input::Gamepad) -> core::option::Option<[ponko::input::GamepadTouchpadFinger; 2]>
+pub fn ponko::input::Input::gamepad_touchpad_events(&self) -> &[(ponko::input::Gamepad, u8, ponko::input::GamepadTouchpadFinger)]
+pub fn ponko::input::Input::set_gamepad_light(&mut self, ponko::input::Gamepad, ponko::color::Color)
+pub fn ponko::input::Input::set_gamepad_player_leds(&mut self, ponko::input::Gamepad, core::option::Option<u8>)
+pub fn ponko::input::Input::set_gamepad_trigger_effects(&mut self, ponko::input::Gamepad, ponko::input::TriggerEffect, ponko::input::TriggerEffect)
+impl ponko::input::Input
 pub fn ponko::input::Input::is_recording(&self) -> bool
 pub fn ponko::input::Input::start_recording(&mut self)
 pub fn ponko::input::Input::stop_recording(&mut self) -> core::option::Option<ponko::scenario::InputScenario>
@@ -6197,11 +6257,17 @@ pub const ponko::input::MAX_PLAYERS: usize
 pub trait ponko::input::GamepadBackend: core::marker::Send + 'static
 pub fn ponko::input::GamepadBackend::poll(&mut self, &mut ponko::input::GamepadEvents<'_>)
 pub fn ponko::input::GamepadBackend::set_force_feedback(&mut self, ponko::input::DeviceKey, ponko::input::ForceFeedback)
+pub fn ponko::input::GamepadBackend::set_light(&mut self, ponko::input::DeviceKey, [u8; 3])
+pub fn ponko::input::GamepadBackend::set_player_leds(&mut self, ponko::input::DeviceKey, core::option::Option<u8>)
 pub fn ponko::input::GamepadBackend::set_rumble(&mut self, ponko::input::DeviceKey, ponko::input::MotorLevels)
+pub fn ponko::input::GamepadBackend::set_trigger_effects(&mut self, ponko::input::DeviceKey, [ponko::input::TriggerEffect; 2])
 impl ponko::input::GamepadBackend for ponko::input::FakeGamepads
 pub fn ponko::input::FakeGamepads::poll(&mut self, &mut ponko::input::GamepadEvents<'_>)
 pub fn ponko::input::FakeGamepads::set_force_feedback(&mut self, ponko::input::DeviceKey, ponko::input::ForceFeedback)
+pub fn ponko::input::FakeGamepads::set_light(&mut self, ponko::input::DeviceKey, [u8; 3])
+pub fn ponko::input::FakeGamepads::set_player_leds(&mut self, ponko::input::DeviceKey, core::option::Option<u8>)
 pub fn ponko::input::FakeGamepads::set_rumble(&mut self, ponko::input::DeviceKey, ponko::input::MotorLevels)
+pub fn ponko::input::FakeGamepads::set_trigger_effects(&mut self, ponko::input::DeviceKey, [ponko::input::TriggerEffect; 2])
 pub fn ponko::input::hat_from_bits(u8) -> glam::i32::ivec2::IVec2
 pub mod ponko::inventory
 #[non_exhaustive] pub enum ponko::inventory::AssetClass
@@ -7661,6 +7727,7 @@ pub fn ponko::net::NetMessages::steam_host(&ponko::net::SteamClient, usize) -> c
 pub fn ponko::net::NetMessages::steam_join(&ponko::net::SteamClient, ponko::net::SteamLobbyId) -> core::io::error::Result<Self>
 pub fn ponko::net::NetMessages::steam_lobby(&self) -> core::option::Option<&ponko::net::SteamLobby>
 pub fn ponko::net::NetMessages::steam_peer(&self, ponko::net::PeerId) -> core::option::Option<ponko::net::SteamUserId>
+pub fn ponko::net::NetMessages::steam_sockets_host(&ponko::net::SteamClient, ponko::net::SteamLobbyVisibility, usize) -> core::io::error::Result<Self>
 pub struct ponko::net::NetPose
 pub ponko::net::NetPose::stream: ponko::net::SnapshotStream<ponko::net::Pose>
 impl core::clone::Clone for ponko::net::NetPose
@@ -8958,6 +9025,7 @@ pub ponko::prelude::actions::InputEvent::GamepadButton(ponko::input::Gamepad, po
 pub ponko::prelude::actions::InputEvent::GamepadConnected(ponko::input::Gamepad)
 pub ponko::prelude::actions::InputEvent::GamepadDisconnected(ponko::input::Gamepad)
 pub ponko::prelude::actions::InputEvent::GamepadMotion(ponko::input::Gamepad, ponko::input::GamepadMotion)
+pub ponko::prelude::actions::InputEvent::GamepadTouchpad(ponko::input::Gamepad, u8, ponko::input::GamepadTouchpadFinger)
 pub ponko::prelude::actions::InputEvent::Key(ponko::input::Key, bool)
 pub ponko::prelude::actions::InputEvent::Mouse(ponko::input::MouseButton, bool)
 pub ponko::prelude::actions::InputEvent::MouseMove(glam::f32::vec2::Vec2)
@@ -11203,6 +11271,7 @@ pub ponko::prelude::GamepadButton::RightTrigger
 pub ponko::prelude::GamepadButton::Select
 pub ponko::prelude::GamepadButton::South
 pub ponko::prelude::GamepadButton::Start
+pub ponko::prelude::GamepadButton::Touchpad
 pub ponko::prelude::GamepadButton::West
 impl core::clone::Clone for ponko::input::GamepadButton
 pub fn ponko::input::GamepadButton::clone(&self) -> Self
@@ -14380,6 +14449,7 @@ pub ponko::render::Post::split_toning: ponko::render::SplitToning
 pub ponko::render::Post::ssr: f32
 pub ponko::render::Post::ssr_max_distance: f32
 pub ponko::render::Post::ssr_thin_objects: bool
+pub ponko::render::Post::ssr_transparent: bool
 pub ponko::render::Post::taa_sharpness: f32
 pub ponko::render::Post::temperature: f32
 pub ponko::render::Post::tint: f32

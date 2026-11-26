@@ -492,6 +492,7 @@ pub ponko_ffi::PonkoGamepadButton::PONKO_GAMEPAD_RIGHT_TRIGGER
 pub ponko_ffi::PonkoGamepadButton::PONKO_GAMEPAD_SELECT
 pub ponko_ffi::PonkoGamepadButton::PONKO_GAMEPAD_SOUTH
 pub ponko_ffi::PonkoGamepadButton::PONKO_GAMEPAD_START
+pub ponko_ffi::PonkoGamepadButton::PONKO_GAMEPAD_TOUCHPAD
 pub ponko_ffi::PonkoGamepadButton::PONKO_GAMEPAD_WEST
 impl core::clone::Clone for ponko_ffi::PonkoGamepadButton
 pub fn ponko_ffi::PonkoGamepadButton::clone(&self) -> Self
@@ -1392,6 +1393,12 @@ impl core::fmt::Debug for ponko_ffi::PonkoTouchShow
 pub fn ponko_ffi::PonkoTouchShow::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_ffi::PonkoTouchShow
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoTouchShow
+#[repr(u32)] pub enum ponko_ffi::PonkoTriggerEffectKind
+pub ponko_ffi::PonkoTriggerEffectKind::PONKO_TRIGGER_EFFECT_OFF = 0
+pub ponko_ffi::PonkoTriggerEffectKind::PONKO_TRIGGER_EFFECT_RESISTANCE = 1
+pub ponko_ffi::PonkoTriggerEffectKind::PONKO_TRIGGER_EFFECT_RESISTANCE_PROFILE = 4
+pub ponko_ffi::PonkoTriggerEffectKind::PONKO_TRIGGER_EFFECT_VIBRATION = 3
+pub ponko_ffi::PonkoTriggerEffectKind::PONKO_TRIGGER_EFFECT_WEAPON = 2
 #[repr(C)] pub enum ponko_ffi::PonkoUiAccessActionKind
 pub ponko_ffi::PonkoUiAccessActionKind::PONKO_UI_ACCESS_ACTION_ACTIVATE
 pub ponko_ffi::PonkoUiAccessActionKind::PONKO_UI_ACCESS_ACTION_DECREMENT
@@ -2809,6 +2816,22 @@ pub fn ponko_ffi::PonkoFrictionCurve::fmt(&self, &mut core::fmt::Formatter<'_>) 
 impl core::marker::Copy for ponko_ffi::PonkoFrictionCurve
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoFrictionCurve
 pub struct ponko_ffi::PonkoGame
+#[repr(C)] pub struct ponko_ffi::PonkoGamepadExtras
+pub ponko_ffi::PonkoGamepadExtras::adaptive_triggers: bool
+pub ponko_ffi::PonkoGamepadExtras::light: bool
+pub ponko_ffi::PonkoGamepadExtras::player_leds: bool
+pub ponko_ffi::PonkoGamepadExtras::touchpad: bool
+impl core::clone::Clone for ponko_ffi::PonkoGamepadExtras
+pub fn ponko_ffi::PonkoGamepadExtras::clone(&self) -> Self
+impl core::cmp::Eq for ponko_ffi::PonkoGamepadExtras
+impl core::cmp::PartialEq for ponko_ffi::PonkoGamepadExtras
+pub fn ponko_ffi::PonkoGamepadExtras::eq(&self, &Self) -> bool
+impl core::default::Default for ponko_ffi::PonkoGamepadExtras
+pub fn ponko_ffi::PonkoGamepadExtras::default() -> Self
+impl core::fmt::Debug for ponko_ffi::PonkoGamepadExtras
+pub fn ponko_ffi::PonkoGamepadExtras::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoGamepadExtras
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoGamepadExtras
 #[repr(C)] pub struct ponko_ffi::PonkoGamepadInfo
 pub ponko_ffi::PonkoGamepadInfo::family: u32
 pub ponko_ffi::PonkoGamepadInfo::has_ids: bool
@@ -2828,6 +2851,49 @@ impl core::fmt::Debug for ponko_ffi::PonkoGamepadInfo
 pub fn ponko_ffi::PonkoGamepadInfo::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_ffi::PonkoGamepadInfo
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoGamepadInfo
+#[repr(C)] pub struct ponko_ffi::PonkoGamepadTouchpad
+pub ponko_ffi::PonkoGamepadTouchpad::fingers: [ponko_ffi::PonkoGamepadTouchpadFinger; 2]
+impl core::clone::Clone for ponko_ffi::PonkoGamepadTouchpad
+pub fn ponko_ffi::PonkoGamepadTouchpad::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko_ffi::PonkoGamepadTouchpad
+pub fn ponko_ffi::PonkoGamepadTouchpad::eq(&self, &Self) -> bool
+impl core::default::Default for ponko_ffi::PonkoGamepadTouchpad
+pub fn ponko_ffi::PonkoGamepadTouchpad::default() -> Self
+impl core::fmt::Debug for ponko_ffi::PonkoGamepadTouchpad
+pub fn ponko_ffi::PonkoGamepadTouchpad::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoGamepadTouchpad
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoGamepadTouchpad
+#[repr(C)] pub struct ponko_ffi::PonkoGamepadTouchpadEvent
+pub ponko_ffi::PonkoGamepadTouchpadEvent::contact: ponko_ffi::PonkoGamepadTouchpadFinger
+pub ponko_ffi::PonkoGamepadTouchpadEvent::finger: u8
+pub ponko_ffi::PonkoGamepadTouchpadEvent::pad: u32
+impl core::clone::Clone for ponko_ffi::PonkoGamepadTouchpadEvent
+pub fn ponko_ffi::PonkoGamepadTouchpadEvent::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko_ffi::PonkoGamepadTouchpadEvent
+pub fn ponko_ffi::PonkoGamepadTouchpadEvent::eq(&self, &Self) -> bool
+impl core::default::Default for ponko_ffi::PonkoGamepadTouchpadEvent
+pub fn ponko_ffi::PonkoGamepadTouchpadEvent::default() -> Self
+impl core::fmt::Debug for ponko_ffi::PonkoGamepadTouchpadEvent
+pub fn ponko_ffi::PonkoGamepadTouchpadEvent::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoGamepadTouchpadEvent
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoGamepadTouchpadEvent
+#[repr(C)] pub struct ponko_ffi::PonkoGamepadTouchpadFinger
+pub ponko_ffi::PonkoGamepadTouchpadFinger::down: bool
+pub ponko_ffi::PonkoGamepadTouchpadFinger::pressure: f32
+pub ponko_ffi::PonkoGamepadTouchpadFinger::x: f32
+pub ponko_ffi::PonkoGamepadTouchpadFinger::y: f32
+impl core::clone::Clone for ponko_ffi::PonkoGamepadTouchpadFinger
+pub fn ponko_ffi::PonkoGamepadTouchpadFinger::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko_ffi::PonkoGamepadTouchpadFinger
+pub fn ponko_ffi::PonkoGamepadTouchpadFinger::eq(&self, &Self) -> bool
+impl core::convert::From<ponko::input::gamepad_extras::GamepadTouchpadFinger> for ponko_ffi::PonkoGamepadTouchpadFinger
+pub fn ponko_ffi::PonkoGamepadTouchpadFinger::from(ponko::input::gamepad_extras::GamepadTouchpadFinger) -> Self
+impl core::default::Default for ponko_ffi::PonkoGamepadTouchpadFinger
+pub fn ponko_ffi::PonkoGamepadTouchpadFinger::default() -> Self
+impl core::fmt::Debug for ponko_ffi::PonkoGamepadTouchpadFinger
+pub fn ponko_ffi::PonkoGamepadTouchpadFinger::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoGamepadTouchpadFinger
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoGamepadTouchpadFinger
 #[repr(C)] pub struct ponko_ffi::PonkoGestureEvent
 pub ponko_ffi::PonkoGestureEvent::gesture: u32
 pub ponko_ffi::PonkoGestureEvent::position: ponko_ffi::PonkoVec2
@@ -4145,6 +4211,7 @@ pub ponko_ffi::PonkoPostEx::split_toning_balance: f32
 pub ponko_ffi::PonkoPostEx::split_toning_highlights: ponko_ffi::PonkoColor
 pub ponko_ffi::PonkoPostEx::split_toning_shadows: ponko_ffi::PonkoColor
 pub ponko_ffi::PonkoPostEx::ssr_thin_objects: bool
+pub ponko_ffi::PonkoPostEx::ssr_transparent: bool
 pub ponko_ffi::PonkoPostEx::struct_size: u32
 pub ponko_ffi::PonkoPostEx::upscaler: u32
 pub ponko_ffi::PonkoPostEx::version: u32
@@ -5300,6 +5367,20 @@ impl core::fmt::Debug for ponko_ffi::PonkoTransform3D
 pub fn ponko_ffi::PonkoTransform3D::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_ffi::PonkoTransform3D
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoTransform3D
+#[repr(C)] pub struct ponko_ffi::PonkoTriggerEffect
+pub ponko_ffi::PonkoTriggerEffect::end: u8
+pub ponko_ffi::PonkoTriggerEffect::frequency: u8
+pub ponko_ffi::PonkoTriggerEffect::kind: u32
+pub ponko_ffi::PonkoTriggerEffect::profile: [u8; 10]
+pub ponko_ffi::PonkoTriggerEffect::start: u8
+pub ponko_ffi::PonkoTriggerEffect::strength: u8
+impl core::clone::Clone for ponko_ffi::PonkoTriggerEffect
+pub fn ponko_ffi::PonkoTriggerEffect::clone(&self) -> Self
+impl core::default::Default for ponko_ffi::PonkoTriggerEffect
+pub fn ponko_ffi::PonkoTriggerEffect::default() -> Self
+impl core::fmt::Debug for ponko_ffi::PonkoTriggerEffect
+pub fn ponko_ffi::PonkoTriggerEffect::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoTriggerEffect
 #[repr(C)] pub struct ponko_ffi::PonkoTurns
 pub ponko_ffi::PonkoTurns::dt: f32
 pub ponko_ffi::PonkoTurns::every: u32
@@ -6803,6 +6884,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_gamepad_axis(*mut ponko_ffi::PonkoCtx, u32, u32, *mut f32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_gamepad_count(*mut ponko_ffi::PonkoCtx, *mut u32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_gamepad_down(*mut ponko_ffi::PonkoCtx, u32, u32, *mut bool) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_gamepad_extras(*mut ponko_ffi::PonkoCtx, u32, *mut ponko_ffi::PonkoGamepadExtras) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_gamepad_info(*mut ponko_ffi::PonkoCtx, u32, *mut ponko_ffi::PonkoGamepadInfo, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_gamepad_motion(*mut ponko_ffi::PonkoCtx, u32, *mut ponko_ffi::PonkoVec3, *mut ponko_ffi::PonkoVec3, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_gamepad_name(*mut ponko_ffi::PonkoCtx, u32, *mut core::ffi::primitives::c_char, usize, *mut usize) -> ponko_ffi::PonkoStatus
@@ -6811,6 +6893,8 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_gamepad_rumble(*mut ponko_ffi::PonkoCtx, u32, f32, f32, f32, f32, f32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_gamepad_rumble_levels(*mut ponko_ffi::PonkoCtx, u32, *mut ponko_ffi::PonkoMotorLevels) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_gamepad_stop_rumble(*mut ponko_ffi::PonkoCtx, u32) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_gamepad_touchpad(*mut ponko_ffi::PonkoCtx, u32, *mut ponko_ffi::PonkoGamepadTouchpad, *mut bool) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_gamepad_touchpad_event(*mut ponko_ffi::PonkoCtx, usize, *mut ponko_ffi::PonkoGamepadTouchpadEvent, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_gamepads_changed(*mut ponko_ffi::PonkoCtx, bool, *mut u32, usize, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_gesture_deltas(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoVec2, *mut f32, *mut f32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_gesture_events(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoGestureEvent, usize, *mut usize) -> ponko_ffi::PonkoStatus
@@ -7108,6 +7192,9 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_follow_camera2d_rig(*mut ponko_ffi::PonkoCtx, *const ponko_ffi::PonkoFollowCamera2D) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_font_fallbacks(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoFont, *const ponko_ffi::PonkoFont, usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_gamepad_family(*mut ponko_ffi::PonkoCtx, u32, u32) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_gamepad_light(*mut ponko_ffi::PonkoCtx, u32, ponko_ffi::PonkoColor) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_gamepad_player_leds(*mut ponko_ffi::PonkoCtx, u32, i32) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_gamepad_trigger_effects(*mut ponko_ffi::PonkoCtx, u32, ponko_ffi::PonkoTriggerEffect, ponko_ffi::PonkoTriggerEffect) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_gesture_settings(*mut ponko_ffi::PonkoCtx, *const ponko_ffi::PonkoGestureSettings) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_gpu_buffer_motion(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoGpuBuffer, bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_gpu_timing(*mut ponko_ffi::PonkoCtx, u32, u32) -> ponko_ffi::PonkoStatus
@@ -7869,6 +7956,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_net_messages_steam_lobby_metadata(*mut ponko_ffi::PonkoNetMessages, *const core::ffi::primitives::c_char, *mut core::ffi::primitives::c_char, usize, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_net_messages_steam_lobby_set_metadata(*mut ponko_ffi::PonkoNetMessages, *const core::ffi::primitives::c_char, *const core::ffi::primitives::c_char) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_net_messages_steam_peer(*mut ponko_ffi::PonkoNetMessages, u64, *mut u64) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_net_messages_steam_sockets_host(u32, u32, usize, *mut *mut ponko_ffi::PonkoNetMessages) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub c fn ponko_ffi::ponko_note_allocation(usize)
 #[no_mangle] pub c fn ponko_ffi::ponko_note_deallocation(usize)
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_orbit_camera_defaults(*mut ponko_ffi::PonkoOrbitCamera) -> ponko_ffi::PonkoStatus

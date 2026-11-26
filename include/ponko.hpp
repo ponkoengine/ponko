@@ -1306,7 +1306,8 @@ using query_filter_ex = PonkoQueryFilterEx;
 /// 2560x1440; the high and ultra presets turn it on), from version 3, the upscaler (a ponko::upscaler;
 /// set it with `static_cast<std::uint32_t>(...)`) and, from version 4, auto exposure (auto_exposure,
 /// auto_exposure_min and _max in stops, _compensation, _brighten_speed and _darken_speed in stops a
-/// second, _center_weight, and a metering mask in _has_mask and _mask).
+/// second, _center_weight, and a metering mask in _has_mask and _mask) and, from version 5,
+/// screen-space reflections on transparent surfaces (ssr_transparent: off by default and in every preset).
 using post_ex = PonkoPostEx;
 /// HDR display output settings that can grow (PonkoHdrOutput): enabled, paper_white_nits, peak_nits
 /// (0: the display's) and, from version 2, the HDR10 metadata max_content_light_nits and
@@ -3595,6 +3596,14 @@ public:
     /// Steam relays plus a friends-only lobby, for 1..=249 clients.
     static net_messages steam_host(std::uint32_t app_id, std::size_t max_clients) {
         PonkoNetMessages* p = nullptr; detail::check(ponko_net_messages_steam_host(app_id, max_clients, &p)); return net_messages(p);
+    }
+    /// Like steam_host, over Steam Networking Sockets, in a lobby of that visibility: lobby members
+    /// connect to this host through Valve's relays. For dedicated hosts and games that want
+    /// connections; joiners use steam_join.
+    static net_messages steam_sockets_host(std::uint32_t app_id, steam_lobby_visibility visibility, std::size_t max_clients) {
+        PonkoNetMessages* p = nullptr;
+        detail::check(ponko_net_messages_steam_sockets_host(app_id, static_cast<std::uint32_t>(visibility), max_clients, &p));
+        return net_messages(p);
     }
     /// Joins Steam lobby `lobby` of app `app_id` through Steam relays. Throws ponko::error without the
     /// `steam` feature or a running Steam.
@@ -5986,6 +5995,37 @@ enum class controller_family : std::uint32_t { generic = 0, xbox = 1, playstatio
 /// What a connected controller is (Rust `GamepadInfo`, its name from ctx::gamepad_name): `family`,
 /// USB ids when `has_ids`, and what it can do (`rumble`, `trigger_rumble`, `motion`).
 using gamepad_info = PonkoGamepadInfo;
+/// Optional lights, touchpad and adaptive-trigger support for a controller.
+using gamepad_extras = PonkoGamepadExtras;
+/// The controller's first two finger slots.
+using gamepad_touchpad = PonkoGamepadTouchpad;
+/// One finger change in the current frame.
+using gamepad_touchpad_event = PonkoGamepadTouchpadEvent;
+/// Adaptive trigger requests. The positions are zones 0 through 9;
+/// strengths range from 0 (off) to 8.
+struct trigger_effect {
+    PonkoTriggerEffect raw{};
+    /// Clears any effect on this trigger.
+    static trigger_effect off() noexcept { return {}; }
+    /// Applies constant resistance from the start zone.
+    static trigger_effect resistance(std::uint8_t start, std::uint8_t strength) noexcept {
+        return {{PONKO_TRIGGER_EFFECT_RESISTANCE, start, 0, strength, 0, {}}};
+    }
+    /// Adds a break between start and end.
+    static trigger_effect weapon(std::uint8_t start, std::uint8_t end, std::uint8_t strength) noexcept {
+        return {{PONKO_TRIGGER_EFFECT_WEAPON, start, end, strength, 0, {}}};
+    }
+    /// Vibrates from the start zone at the given frequency in Hz.
+    static trigger_effect vibration(std::uint8_t start, std::uint8_t amplitude, std::uint8_t frequency) noexcept {
+        return {{PONKO_TRIGGER_EFFECT_VIBRATION, start, 0, amplitude, frequency, {}}};
+    }
+    /// Sets a separate resistance for each zone.
+    static trigger_effect resistance_profile(const std::array<std::uint8_t, 10>& profile) noexcept {
+        trigger_effect result{{PONKO_TRIGGER_EFFECT_RESISTANCE_PROFILE, 0, 0, 0, 0, {}}};
+        std::copy(profile.begin(), profile.end(), result.raw.profile);
+        return result;
+    }
+};
 /// How hard each motor runs, 0..1 (Rust `MotorLevels`).
 using motor_levels = PonkoMotorLevels;
 /// A rumble request for ctx::rumble (Rust `Rumble`): body motors `strong` (low frequency) and `weak`
@@ -7900,6 +7940,38 @@ public:
         ponko::gamepad_info i{}; bool connected = false;
         detail::check(ponko_ctx_gamepad_info(raw_, p.slot, &i, &connected));
         return connected ? std::optional<ponko::gamepad_info>(i) : std::nullopt;
+    }
+    /// Queries lights, touchpad and adaptive triggers. Empty slots return false capabilities.
+    ponko::gamepad_extras gamepad_extras(gamepad p) const {
+        ponko::gamepad_extras extras{};
+        detail::check(ponko_ctx_gamepad_extras(raw_, p.slot, &extras));
+        return extras;
+    }
+    /// Sets the RGB light bar when supported. Black turns it off.
+    void set_gamepad_light(gamepad p, color rgb) {
+        detail::check(ponko_ctx_set_gamepad_light(raw_, p.slot, rgb));
+    }
+    /// Sets the player indicator when supported. Zero is player one, nullopt switches it off.
+    void set_gamepad_player_leds(gamepad p, std::optional<std::uint8_t> player) {
+        detail::check(ponko_ctx_set_gamepad_player_leds(raw_, p.slot, player ? *player : -1));
+    }
+    /// Sets both adaptive triggers when supported.
+    void set_gamepad_trigger_effects(gamepad p, trigger_effect left, trigger_effect right) {
+        detail::check(ponko_ctx_set_gamepad_trigger_effects(raw_, p.slot, left.raw, right.raw));
+    }
+    /// The first touchpad's two finger slots, if supported.
+    std::optional<ponko::gamepad_touchpad> gamepad_touchpad(gamepad p) const {
+        ponko::gamepad_touchpad touchpad{};
+        bool has = false;
+        detail::check(ponko_ctx_gamepad_touchpad(raw_, p.slot, &touchpad, &has));
+        return has ? std::optional<ponko::gamepad_touchpad>(touchpad) : std::nullopt;
+    }
+    /// Reads the change at index in this frame's gamepad touchpad events.
+    std::optional<ponko::gamepad_touchpad_event> gamepad_touchpad_event(std::size_t index) const {
+        ponko::gamepad_touchpad_event event{};
+        bool has = false;
+        detail::check(ponko_ctx_gamepad_touchpad_event(raw_, index, &event, &has));
+        return has ? std::optional<ponko::gamepad_touchpad_event>(event) : std::nullopt;
     }
     /// The name the system gives gamepad `p` ("" for none).
     std::string gamepad_name(gamepad p) const {

@@ -202,7 +202,12 @@ fn a_c_game_makes_joins_and_plays_in_a_room() {
     // The host leaves: B, there longest, hosts.
     let old_host = state(a).me;
     assert_eq!(unsafe { ponko_lobby_leave_room(a) }, PONKO_OK);
-    w.until(|w| w.events[2].iter().any(|e| e.kind == PONKO_LOBBY_HOST_CHANGED));
+    // Both sides: the server's word reaches the one leaving and the others
+    // in no set order (a slow machine, or a sanitizer build, shows it).
+    w.until(|w| {
+        w.events[2].iter().any(|e| e.kind == PONKO_LOBBY_HOST_CHANGED)
+            && w.events[0].iter().any(|e| e.kind == PONKO_LOBBY_LEFT)
+    });
     let events = w.take(2);
     assert!(
         events

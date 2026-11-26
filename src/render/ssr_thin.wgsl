@@ -180,7 +180,11 @@ const TURNS: i32 = 320;
     // product of two short steps would fall under `safe_normalize`'s floor.
     var normal = safe_normalize(cross(safe_normalize(dx, view), safe_normalize(dy, view)), view);
     normal *= select(-1.0, 1.0, dot(normal, view) >= 0.0);
-    let ray = reflect(-view, normal);
+    let surface = surface_normal(p, normal);
+    // Too rough for the opaque pass to show a reflection
+    // (`environment_light` in mesh.wgsl fades them out by 0.7): no ray.
+    if surface.w > 0.5 { return missed; }
+    let ray = reflected(view, normal, surface.xyz);
     // Off the surface a little, so the ray doesn't find where it starts; the
     // depth buffer's precision falls with distance, and so does the offset.
     let eye = distance(center, settings.camera.xyz);

@@ -7,9 +7,12 @@ use std::ptr::NonNull;
 use sdl3_sys::events::{SDL_Event, SDL_EventType, SDL_PollEvent};
 use sdl3_sys::gamepad::{
     SDL_CloseGamepad, SDL_Gamepad, SDL_GamepadHasSensor, SDL_GetGamepadGUIDForID, SDL_GetGamepadName,
-    SDL_GetGamepadProduct, SDL_GetGamepadProperties, SDL_GetGamepadSerial, SDL_GetGamepadType, SDL_GetGamepadVendor,
-    SDL_GetGamepads, SDL_OpenGamepad, SDL_PROP_GAMEPAD_CAP_RUMBLE_BOOLEAN, SDL_PROP_GAMEPAD_CAP_TRIGGER_RUMBLE_BOOLEAN,
-    SDL_RumbleGamepad, SDL_RumbleGamepadTriggers, SDL_SetGamepadSensorEnabled,
+    SDL_GetGamepadProduct, SDL_GetGamepadProperties, SDL_GetGamepadSerial, SDL_GetGamepadTouchpadFinger,
+    SDL_GetGamepadType, SDL_GetGamepadVendor, SDL_GetGamepads, SDL_GetNumGamepadTouchpadFingers,
+    SDL_GetRealGamepadType, SDL_OpenGamepad, SDL_PROP_GAMEPAD_CAP_PLAYER_LED_BOOLEAN,
+    SDL_PROP_GAMEPAD_CAP_RGB_LED_BOOLEAN, SDL_PROP_GAMEPAD_CAP_RUMBLE_BOOLEAN,
+    SDL_PROP_GAMEPAD_CAP_TRIGGER_RUMBLE_BOOLEAN, SDL_RumbleGamepad, SDL_RumbleGamepadTriggers, SDL_SendGamepadEffect,
+    SDL_SetGamepadLED, SDL_SetGamepadPlayerIndex, SDL_SetGamepadSensorEnabled,
 };
 use sdl3_sys::haptic::{
     SDL_CloseHaptic, SDL_CreateHapticEffect, SDL_GetHapticFeatures, SDL_HAPTIC_CONSTANT, SDL_HAPTIC_DAMPER,
@@ -22,12 +25,19 @@ use sdl3_sys::init::{SDL_INIT_GAMEPAD, SDL_INIT_HAPTIC, SDL_InitSubSystem, SDL_Q
 use sdl3_sys::joystick::{
     SDL_CloseJoystick, SDL_GetJoystickGUID, SDL_GetJoystickName, SDL_GetJoystickProduct, SDL_GetJoystickSerial,
     SDL_GetJoystickType, SDL_GetJoystickTypeForID, SDL_GetJoystickVendor, SDL_GetJoysticks, SDL_GetNumJoystickAxes,
-    SDL_GetNumJoystickButtons, SDL_GetNumJoystickHats, SDL_Joystick, SDL_JoystickID, SDL_OpenJoystick,
+    SDL_GetNumJoystickButtons, SDL_GetNumJoystickHats, SDL_IsJoystickVirtual, SDL_Joystick, SDL_JoystickID,
+    SDL_OpenJoystick,
 };
 use sdl3_sys::properties::SDL_GetBooleanProperty;
 use sdl3_sys::sensor::{SDL_SENSOR_ACCEL, SDL_SENSOR_GYRO};
 
-use crate::gamepad_sdl::{EFFECT_SLOTS, Effect, Opened, OpenedJoystick, PadEvent, PadSystem, raw};
+use crate::gamepad_sdl::{EFFECT_SLOTS, Effect, Opened, OpenedJoystick, PadEvent, PadSystem, dualsense, raw};
+use crate::input::{GamepadTouchpadFinger, TriggerEffect};
+
+fn send_dualsense_effect(pad: NonNull<SDL_Gamepad>, effect: dualsense::Payload) -> bool {
+    // SAFETY: callers supply a live gamepad. SDL copies the bytes before returning.
+    unsafe { SDL_SendGamepadEffect(pad.as_ptr(), effect.as_ptr().cast(), dualsense::PAYLOAD_SIZE as i32) }
+}
 
 /// A joystick opened through SDL, its force-feedback device, and the
 /// effect in each slot (SDL's id, and whether it is playing).
@@ -203,6 +213,22 @@ impl PadSystem for Sdl {
                     SDL_EventType::GAMEPAD_AXIS_MOTION => {
                         PadEvent::Axis(event.gaxis.which.0, i32::from(event.gaxis.axis), event.gaxis.value)
                     }
+                    SDL_EventType::GAMEPAD_TOUCHPAD_DOWN
+                    | SDL_EventType::GAMEPAD_TOUCHPAD_MOTION
+                    | SDL_EventType::GAMEPAD_TOUCHPAD_UP => {
+                        let touch = event.gtouchpad;
+                        PadEvent::Touchpad(
+                            touch.which.0,
+                            touch.touchpad,
+                            touch.finger,
+                            GamepadTouchpadFinger {
+                                x: touch.x,
+                                y: touch.y,
+                                pressure: touch.pressure,
+                                down: kind != SDL_EventType::GAMEPAD_TOUCHPAD_UP,
+                            },
+                        )
+                    }
                     SDL_EventType::GAMEPAD_SENSOR_UPDATE => {
                         PadEvent::Sensor(event.gsensor.which.0, event.gsensor.sensor, event.gsensor.data)
                     }
@@ -256,17 +282,49 @@ impl PadSystem for Sdl {
                 identity.push('/');
                 identity.push_str(&serial);
             }
+            let vendor_id = SDL_GetGamepadVendor(p);
+            let product_id = SDL_GetGamepadProduct(p);
+            // SDL has no adaptive-trigger property. Check the real layout,
+            // Sony's DualSense/Edge IDs and whether the driver accepts an
+            // neutral trigger report. This also clears any resistance left
+            // behind by a link loss. MFI and virtual pads can have the same
+            // IDs without speaking this HID report format.
+            let adaptive_triggers = SDL_GetRealGamepadType(p).0 == raw::TYPE_PS5
+                && vendor_id == 0x054c
+                && matches!(product_id, 0x0ce6 | 0x0df2)
+                && !SDL_IsJoystickVirtual(instance)
+                && send_dualsense_effect(pad, dualsense::trigger_report([TriggerEffect::Off; 2]));
             let props = SDL_GetGamepadProperties(p);
+            let fingers = SDL_GetNumGamepadTouchpadFingers(p, 0).clamp(0, 2);
+            let touchpad = (fingers > 0).then(|| {
+                let mut contacts = [GamepadTouchpadFinger::default(); 2];
+                for (finger, contact) in (0..fingers).zip(&mut contacts) {
+                    SDL_GetGamepadTouchpadFinger(
+                        p,
+                        0,
+                        finger,
+                        &mut contact.down,
+                        &mut contact.x,
+                        &mut contact.y,
+                        &mut contact.pressure,
+                    );
+                }
+                contacts
+            });
             Opened {
                 name: text(SDL_GetGamepadName(p)),
-                vendor_id: SDL_GetGamepadVendor(p),
-                product_id: SDL_GetGamepadProduct(p),
+                vendor_id,
+                product_id,
                 kind: SDL_GetGamepadType(p).0,
                 identity,
                 rumble: SDL_GetBooleanProperty(props, SDL_PROP_GAMEPAD_CAP_RUMBLE_BOOLEAN, false),
                 trigger_rumble: SDL_GetBooleanProperty(props, SDL_PROP_GAMEPAD_CAP_TRIGGER_RUMBLE_BOOLEAN, false),
                 gyro: SDL_GamepadHasSensor(p, SDL_SENSOR_GYRO),
                 accel: SDL_GamepadHasSensor(p, SDL_SENSOR_ACCEL),
+                light: SDL_GetBooleanProperty(props, SDL_PROP_GAMEPAD_CAP_RGB_LED_BOOLEAN, false),
+                player_leds: SDL_GetBooleanProperty(props, SDL_PROP_GAMEPAD_CAP_PLAYER_LED_BOOLEAN, false),
+                touchpad,
+                adaptive_triggers,
             }
         };
         self.open.push((id, pad));
@@ -303,6 +361,26 @@ impl PadSystem for Sdl {
         if let Some(p) = self.pad(id) {
             // SAFETY: `p` is an open gamepad. A pad without trigger motors says no.
             unsafe { SDL_RumbleGamepadTriggers(p, left, right, ms) };
+        }
+    }
+
+    fn set_light(&mut self, id: u32, [r, g, b]: [u8; 3]) {
+        if let Some(pad) = self.pad(id) {
+            // SAFETY: pad is owned by Sdl and stays open through the call.
+            unsafe { SDL_SetGamepadLED(pad, r, g, b) };
+        }
+    }
+
+    fn set_player_leds(&mut self, id: u32, player: Option<u8>) {
+        if let Some(pad) = self.pad(id) {
+            // SAFETY: pad is open and -1 is SDL's unassigned index.
+            unsafe { SDL_SetGamepadPlayerIndex(pad, player.map_or(-1, i32::from)) };
+        }
+    }
+
+    fn set_trigger_effects(&mut self, id: u32, effects: [TriggerEffect; 2]) {
+        if let Some(pad) = self.pad(id).and_then(NonNull::new) {
+            send_dualsense_effect(pad, dualsense::trigger_report(effects));
         }
     }
 
@@ -447,6 +525,24 @@ mod tests {
     use crate::gamepad_sdl::{PadSystem, SdlGamepads, raw};
     use crate::input::{ControllerFamily, GamepadAxis, GamepadButton, Rumble};
 
+    static COLOR: AtomicU32 = AtomicU32::new(0);
+    static EFFECT: std::sync::Mutex<Option<super::dualsense::Payload>> = std::sync::Mutex::new(None);
+
+    unsafe extern "C" fn set_led(_: *mut std::ffi::c_void, r: u8, g: u8, b: u8) -> bool {
+        COLOR.store(u32::from_be_bytes([0, r, g, b]), Ordering::SeqCst);
+        true
+    }
+
+    unsafe extern "C" fn send_effect(_: *mut std::ffi::c_void, data: *const std::ffi::c_void, size: i32) -> bool {
+        if data.is_null() || size != super::dualsense::PAYLOAD_SIZE as i32 {
+            return false;
+        }
+        // SAFETY: SDL supplies a readable buffer of size bytes for this callback.
+        let payload = unsafe { data.cast::<super::dualsense::Payload>().read() };
+        *EFFECT.lock().unwrap() = Some(payload);
+        true
+    }
+
     static LOW: AtomicU32 = AtomicU32::new(0);
     static RIGHT_TRIGGER: AtomicU32 = AtomicU32::new(0);
 
@@ -574,8 +670,14 @@ mod tests {
                 },
             ];
             // `default()` fills in the version (SDL_INIT_INTERFACE).
+            let touchpad = SDL_VirtualJoystickTouchpadDesc {
+                nfingers: 2,
+                ..Default::default()
+            };
             let desc = SDL_VirtualJoystickDesc {
                 r#type: SDL_JOYSTICK_TYPE_GAMEPAD.0 as u16,
+                ntouchpads: 1,
+                touchpads: &touchpad,
                 vendor_id: 0x045e,
                 product_id: 0x0b13,
                 naxes: SDL_GAMEPAD_AXIS_COUNT.0 as u16,
@@ -583,6 +685,8 @@ mod tests {
                 nsensors: 2,
                 sensors: sensors.as_ptr(),
                 name: c"Virtual Test Pad".as_ptr(),
+                SetLED: Some(set_led),
+                SendEffect: Some(send_effect),
                 Rumble: Some(rumble),
                 RumbleTriggers: Some(rumble_triggers),
                 ..SDL_VirtualJoystickDesc::default()
@@ -602,7 +706,12 @@ mod tests {
             assert_eq!(info.family, ControllerFamily::Xbox);
             assert!(info.capabilities.rumble && info.capabilities.trigger_rumble && info.capabilities.motion);
 
+            assert!(info.capabilities.light && info.capabilities.touchpad);
+            assert!(!info.capabilities.adaptive_triggers && !info.capabilities.player_leds);
             SDL_SetJoystickVirtualButton(joystick, SDL_GAMEPAD_BUTTON_SOUTH.0, true);
+            SDL_SetJoystickVirtualButton(joystick, SDL_GAMEPAD_BUTTON_TOUCHPAD.0, true);
+            assert!(SDL_SetJoystickVirtualTouchpad(joystick, 0, 0, true, 0.25, 0.75, 0.5));
+            assert!(SDL_SetJoystickVirtualTouchpad(joystick, 0, 1, true, 0.5, 0.25, 0.75));
             SDL_SetJoystickVirtualAxis(joystick, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER.0, i16::MAX);
             let gyro = [0.5f32, -1.0, 2.0];
             let accel = [0.0f32, 9.81, 0.0];
@@ -611,12 +720,27 @@ mod tests {
             ctx.input.begin_frame(0.0);
             ctx.poll_gamepads(1.0 / 60.0);
             assert!(ctx.input.gamepad_down(pad, GamepadButton::South));
+            assert!(ctx.input.gamepad_pressed(pad, GamepadButton::Touchpad));
+            let [first, second] = ctx.input.gamepad_touchpad(pad).unwrap();
+            assert_eq!((first.x, first.y, first.pressure, first.down), (0.25, 0.75, 0.5, true));
+            assert_eq!(
+                (second.x, second.y, second.pressure, second.down),
+                (0.5, 0.25, 0.75, true)
+            );
+            assert_eq!(
+                ctx.input.gamepad_touchpad_events(),
+                &[(pad, 0, first), (pad, 1, second)]
+            );
             assert!(ctx.input.gamepad_down(pad, GamepadButton::RightTrigger));
             assert_eq!(ctx.input.gamepad_axis(pad, GamepadAxis::RightTrigger), 1.0);
             let motion = ctx.input.gamepad_motion(pad).expect("motion arrived");
             assert_eq!(motion.gyro, glam::Vec3::from(gyro));
             assert_eq!(motion.accel, glam::Vec3::from(accel));
 
+            ctx.input.set_gamepad_light(pad, crate::color::Color::hex(0xff8000));
+            ctx.input.end_frame();
+            assert!(SDL_SetJoystickVirtualTouchpad(joystick, 0, 0, false, 0.0, 0.0, 0.0));
+            ctx.input.begin_frame(0.0);
             ctx.input
                 .rumble(pad, Rumble::new(1.0, 0.0).triggers(0.0, 0.5).seconds(10.0));
             ctx.poll_gamepads(1.0 / 60.0);
@@ -624,6 +748,23 @@ mod tests {
             SDL_UpdateJoysticks();
             assert_eq!(LOW.load(Ordering::SeqCst), 65535, "the body motor");
             assert_eq!(RIGHT_TRIGGER.load(Ordering::SeqCst), 32768, "the trigger motor");
+
+            assert_eq!(COLOR.load(Ordering::SeqCst), 0xff8000);
+            assert!(!ctx.input.gamepad_touchpad(pad).unwrap()[0].down);
+            assert_eq!(ctx.input.gamepad_touchpad_events().len(), 1);
+
+            // Exercise the send call without advertising DualSense support
+            // on a virtual controller. It receives the common payload.
+            let mut effect_layer = Sdl::start().unwrap();
+            effect_layer.open(id.0).unwrap();
+            let sample = super::dualsense::trigger_report([crate::input::TriggerEffect::Off; 2]);
+            effect_layer.set_trigger_effects(id.0, [crate::input::TriggerEffect::Off; 2]);
+            assert_eq!(*EFFECT.lock().unwrap(), Some(sample));
+            effect_layer.set_player_leds(id.0, Some(2));
+            assert_eq!(SDL_GetJoystickPlayerIndex(joystick), 2);
+            effect_layer.set_player_leds(id.0, None);
+            assert_eq!(SDL_GetJoystickPlayerIndex(joystick), -1);
+            drop(effect_layer);
 
             SDL_CloseJoystick(joystick);
             SDL_DetachVirtualJoystick(id);

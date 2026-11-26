@@ -2198,6 +2198,19 @@ static void thin_reflections(ponko::ctx& ctx) {
 }
 // ANCHOR_END: ssr_thin
 
+// ANCHOR: ssr_transparent
+/// Water and glass reflect the scene too (each such pixel marches its own ray).
+static void transparent_reflections(ponko::ctx& ctx) {
+    auto post = ctx.post_ex(); // version 5 has ssr_transparent
+    post.ssr_transparent = true;
+    ctx.set_post(post);
+    auto pond = ponko::material_of(ponko::rgba(.2f, .35f, .4f, .6f));
+    pond.roughness = 0.05f;
+    pond.blend = 1; // transparent
+    (void)pond;
+}
+// ANCHOR_END: ssr_transparent
+
 // ANCHOR: upscaler
 /// Two thirds of the pixels across, rebuilt to the window's resolution over frames.
 static void temporal_upscaling(ponko::ctx& ctx) {
@@ -2592,6 +2605,8 @@ static void the_village_has_five_spinning_houses() {
         if (ctx.post().ssr != 1.0f) { std::fprintf(stderr, "ssr\n"); std::abort(); }
         thin_reflections(ctx);
         if (!ctx.post_ex().ssr_thin_objects || ctx.post().ssr != 1.0f) { std::fprintf(stderr, "ssr thin\n"); std::abort(); }
+        transparent_reflections(ctx);
+        if (!ctx.post_ex().ssr_transparent) { std::fprintf(stderr, "ssr transparent\n"); std::abort(); }
         temporal_upscaling(ctx);
         if (ctx.post_ex().upscaler != uint32_t(ponko::upscaler::temporal) || ctx.post().render_scale != 0.67f) { std::fprintf(stderr, "upscaler\n"); std::abort(); }
         eye_adaptation(ctx);
@@ -5420,6 +5435,17 @@ int main() {
         net.steam_invite(); // normally in response to the player's invite button
     }
     // ANCHOR_END: steam_messages
+}
+[[maybe_unused]] static void steam_sockets_server() {
+    // ANCHOR: steam_sockets
+    // A host process nobody plays on, signed in to its own Steam account.
+    auto net = ponko::net_messages::steam_sockets_host(480, ponko::steam_lobby_visibility::public_lobby, 16);
+    for (;;) {
+        net.poll(); // players join with net_messages::steam_join(app_id, lobby id)
+        while (auto event = net.next_event()) { (void)event; /* run the game */ }
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    }
+    // ANCHOR_END: steam_sockets
 }
 [[maybe_unused]] static void general_steam_lobby() {
     // ANCHOR: general_steam_lobby

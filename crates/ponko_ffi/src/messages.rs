@@ -608,7 +608,8 @@ pub unsafe extern "C" fn ponko_net_messages_stats(
     })
 }
 
-/// Host a message endpoint over Steam; requires the `steam` feature.
+/// Host a message endpoint over Steam (the Networking Messages carrier);
+/// requires the `steam` feature.
 ///
 /// Ownership: on success `out_endpoint` receives an owned endpoint, the
 /// caller's; free it with ponko_net_messages_free. (or give it to
@@ -625,6 +626,47 @@ pub unsafe extern "C" fn ponko_net_messages_steam_host(
     max_clients: usize,
     out_endpoint: *mut *mut PonkoNetMessages,
 ) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { steam_host(app_id, max_clients, None, out_endpoint) }
+}
+
+/// Host a message endpoint over Steam Networking Sockets: lobby members
+/// open a connection to the host, relayed through Valve's network. For
+/// dedicated hosts and games that want connections; joiners use
+/// ponko_net_messages_steam_join as for any Steam host. `visibility` is
+/// that of ponko_steam_lobby_create (0 friends-only, 1 public, 2 private).
+/// Requires the `steam` feature.
+///
+/// Ownership: on success `out_endpoint` receives an owned endpoint, the
+/// caller's; free it with ponko_net_messages_free. (or give it to
+/// ponko_game_messages, which takes it over).
+///
+/// # Safety
+/// `out_endpoint` writable. On failure it is set to null.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_net_messages_steam_sockets_host(480, 1, 0, std::ptr::null_mut()) } as u32, 1);
+/// ```
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_net_messages_steam_sockets_host(
+    app_id: u32,
+    visibility: u32,
+    max_clients: usize,
+    out_endpoint: *mut *mut PonkoNetMessages,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { steam_host(app_id, max_clients, Some(visibility), out_endpoint) }
+}
+
+/// Messages without a visibility, Sockets with one.
+///
+/// # Safety
+/// `out_endpoint` null or writable.
+unsafe fn steam_host(
+    app_id: u32,
+    max_clients: usize,
+    sockets: Option<u32>,
+    out_endpoint: *mut *mut PonkoNetMessages,
+) -> PonkoStatus {
     boundary(|| {
         if out_endpoint.is_null() {
             return Err(invalid("output is null"));
@@ -636,16 +678,31 @@ pub unsafe extern "C" fn ponko_net_messages_steam_host(
         if !(1..=249).contains(&max_clients) {
             return Err(invalid("max_clients must be 1..=249"));
         }
+        if sockets.is_some_and(|v| v > 2) {
+            return Err(invalid(
+                "visibility must be 0 (friends-only), 1 (public) or 2 (private)",
+            ));
+        }
         #[cfg(feature = "steam")]
         {
             let client = crate::steam::client::get(app_id)?;
-            let net = NetMessages::steam_host(&client, max_clients).map_err(io)?;
+            let net = match sockets {
+                Some(visibility) => {
+                    let visibility = match visibility {
+                        0 => ponko::net::SteamLobbyVisibility::FriendsOnly,
+                        1 => ponko::net::SteamLobbyVisibility::Public,
+                        _ => ponko::net::SteamLobbyVisibility::Private,
+                    };
+                    NetMessages::steam_sockets_host(&client, visibility, max_clients)
+                }
+                None => NetMessages::steam_host(&client, max_clients),
+            };
             // SAFETY: forwarded caller contract.
-            unsafe { out(out_endpoint, wrap(net)) }
+            unsafe { out(out_endpoint, wrap(net.map_err(io)?)) }
         }
         #[cfg(not(feature = "steam"))]
         {
-            let _ = (app_id, max_clients);
+            let _ = (app_id, max_clients, sockets);
             Err(invalid("ponko_ffi was built without the `steam` feature"))
         }
     })

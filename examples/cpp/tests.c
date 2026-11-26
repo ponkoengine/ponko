@@ -1069,6 +1069,9 @@ static void steam_messages_validation(void) {
     CHECK(ponko_steam_lobby_create(480, 3, 2, &lobby) == PONKO_INVALID_ARGUMENT && !lobby);
     CHECK(ponko_steam_lobby_join(480, 0, &lobby) == PONKO_INVALID_ARGUMENT && !lobby);
     CHECK(ponko_net_messages_steam_host(480, 2, &endpoint) != PONKO_OK && !endpoint);
+    CHECK(ponko_net_messages_steam_sockets_host(480, 1, 250, &endpoint) == PONKO_INVALID_ARGUMENT && !endpoint);
+    CHECK(ponko_net_messages_steam_sockets_host(480, 3, 2, &endpoint) == PONKO_INVALID_ARGUMENT && !endpoint);
+    CHECK(ponko_net_messages_steam_sockets_host(480, 1, 2, &endpoint) != PONKO_OK && !endpoint);
     CHECK(ponko_steam_lobby_create(480, 0, 2, &lobby) != PONKO_OK && !lobby);
     CHECK(ponko_steam_lobby_poll(NULL) != PONKO_OK);
     CHECK(ponko_steam_lobby_leave(NULL) != PONKO_OK);
@@ -3131,6 +3134,16 @@ static void render_descriptors_setup(PonkoCtx* ctx, void* user) {
     CHECK(ponko_ctx_set_post_ex(ctx, &v3) == PONKO_OK);
     CHECK(ponko_ctx_post_ex(ctx, &back) == PONKO_OK && back.auto_exposure && back.auto_exposure_compensation == .5f);
     post.auto_exposure = false;
+    CHECK(ponko_ctx_set_post_ex(ctx, &post) == PONKO_OK);
+    /* Version 5: reflections on transparent surfaces; a version 4 caller leaves them as they are. */
+    CHECK(!back.ssr_transparent);
+    post.ssr_transparent = true;
+    CHECK(ponko_ctx_set_post_ex(ctx, &post) == PONKO_OK);
+    PonkoPostEx v4 = {.struct_size = sizeof v4, .version = 4};
+    CHECK(ponko_ctx_post_ex(ctx, &v4) == PONKO_OK && !v4.ssr_transparent); /* not written */
+    CHECK(ponko_ctx_set_post_ex(ctx, &v4) == PONKO_OK);
+    CHECK(ponko_ctx_post_ex(ctx, &back) == PONKO_OK && back.ssr_transparent);
+    post.ssr_transparent = false;
     CHECK(ponko_ctx_set_post_ex(ctx, &post) == PONKO_OK);
     /* Two looks blended, and volumes by where the camera is. */
     PonkoPostEx day = {.struct_size = sizeof day, .version = PONKO_POST_EX_VERSION};

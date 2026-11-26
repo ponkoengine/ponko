@@ -1,5 +1,10 @@
 //! Registered developer commands and variables, shared by the retained
 //! console, headless games and control tools.
+//!
+//! **Maturity: tested**, from the guide chapter `control.md`. Game: none. Tests:
+//! `tests/control.rs`, `tests/console.rs`. Platforms: Linux, macOS and Windows, headless (the
+//! workspace tests in the list of checks). Graphics: not involved. Missing: a reference game that
+//! uses it.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;

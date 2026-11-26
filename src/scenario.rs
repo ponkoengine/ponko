@@ -624,9 +624,12 @@ impl InputScenario {
     /// `gamepad_connected` (`pad`, and an optional `info` object: `name`,
     /// `family` one of `Generic`, `Xbox`, `PlayStation`, `Nintendo`,
     /// `vendor_id`, `product_id`, and the capabilities `rumble`,
-    /// `trigger_rumble`, `motion`; see [`connect_gamepad`](Self::connect_gamepad)),
-    /// `gamepad_motion` (`pad`, `gyro` and
-    /// `accel` as `[x, y, z]`), `mouse_move` (`position`, window pixels as `[x, y]`), `mouse_wheel`
+    /// `trigger_rumble`, `motion`, `light`, `player_leds`, `touchpad`, and
+    /// `adaptive_triggers`. See [`connect_gamepad`](Self::connect_gamepad).
+    /// `gamepad_motion` takes `pad`, `gyro` and `accel` as `[x, y, z]`.
+    /// `gamepad_touchpad` takes `pad`, `finger` (0 or 1) and `contact`
+    /// (`x`, `y`, `pressure`, `down`). Other steps include
+    /// `mouse_move` (`position`, window pixels as `[x, y]`), `mouse_wheel`
     /// (`delta`, lines as `[x, y]`) and `touch` (`id`, `phase` one of
     /// `started`, `moved`, `ended`, `cancelled`, and `position`).
     /// UI steps are `ui_click` (`node`) and `ui_type` (`node`, `text`), see
@@ -1624,6 +1627,12 @@ enum StepWire {
         gyro: [f32; 3],
         accel: [f32; 3],
     },
+    GamepadTouchpad {
+        tick: u64,
+        pad: Gamepad,
+        finger: u8,
+        contact: crate::input::GamepadTouchpadFinger,
+    },
     MouseMove {
         tick: u64,
         position: [f32; 2],
@@ -1734,6 +1743,14 @@ struct PadInfoWire {
     trigger_rumble: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     motion: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    light: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    player_leds: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    touchpad: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    adaptive_triggers: bool,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -1750,6 +1767,10 @@ impl From<&GamepadInfo> for PadInfoWire {
             rumble: info.capabilities.rumble,
             trigger_rumble: info.capabilities.trigger_rumble,
             motion: info.capabilities.motion,
+            light: info.capabilities.light,
+            player_leds: info.capabilities.player_leds,
+            touchpad: info.capabilities.touchpad,
+            adaptive_triggers: info.capabilities.adaptive_triggers,
         }
     }
 }
@@ -1765,6 +1786,10 @@ impl From<PadInfoWire> for GamepadInfo {
                 rumble: w.rumble,
                 trigger_rumble: w.trigger_rumble,
                 motion: w.motion,
+                light: w.light,
+                player_leds: w.player_leds,
+                touchpad: w.touchpad,
+                adaptive_triggers: w.adaptive_triggers,
             },
         }
     }
@@ -1781,6 +1806,7 @@ impl StepWire {
             | Self::GamepadDisconnected { tick, .. }
             | Self::GamepadConnected { tick, .. }
             | Self::GamepadMotion { tick, .. }
+            | Self::GamepadTouchpad { tick, .. }
             | Self::MouseMove { tick, .. }
             | Self::MouseWheel { tick, .. }
             | Self::Touch { tick, .. }
@@ -1818,6 +1844,9 @@ impl StepWire {
                     accel: accel.into(),
                 },
             )),
+            Self::GamepadTouchpad {
+                pad, finger, contact, ..
+            } => Step::Input(InputEvent::GamepadTouchpad(pad, finger, contact)),
             Self::MouseMove { position, .. } => Step::Input(InputEvent::MouseMove(position.into())),
             Self::MouseWheel { delta, .. } => Step::Input(InputEvent::MouseWheel(delta.into())),
             Self::Touch {
@@ -1909,6 +1938,12 @@ impl StepWire {
                 pad,
                 gyro: motion.gyro.into(),
                 accel: motion.accel.into(),
+            },
+            InputEvent::GamepadTouchpad(pad, finger, contact) => Self::GamepadTouchpad {
+                tick,
+                pad,
+                finger,
+                contact,
             },
             InputEvent::MouseMove(at) => Self::MouseMove {
                 tick,

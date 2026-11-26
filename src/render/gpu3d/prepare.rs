@@ -409,6 +409,7 @@ impl Renderer3D {
             self.screen.ssr = Some(crate::render::ssr::Ssr::new(device));
         }
         self.screen.ssr_thin = self.screen.ssr_on && post.ssr_thin_objects;
+        self.screen.ssr_transparent = self.screen.ssr_on && post.ssr_transparent;
         if self.screen.ssr_thin
             && let Some(ssr) = &mut self.screen.ssr
         {
@@ -1042,6 +1043,7 @@ impl Renderer3D {
             light,
             camera,
             time,
+            post,
             ..
         } = scene;
         let FrameView {
@@ -1153,6 +1155,11 @@ impl Renderer3D {
             },
             sky_kit: self.kit_uniform(device, queue, (sun, camera, sky.stars), size, unjittered),
         };
+        if self.screen.ssr_transparent {
+            // Reflections on transparent surfaces: their strength and reach.
+            uniform.fog_color[3] = post.ssr.min(1.0);
+            uniform.night[3] = post.ssr_max_distance;
+        }
         if let (Some(g), Some(gi)) = (gi_frame, &self.gi) {
             let (n, origin) = (g.grid.counts.as_vec3(), g.grid.origin.as_vec3());
             uniform.gi = [
@@ -1236,6 +1243,11 @@ impl Renderer3D {
             [uniform.sky, uniform.ground, equator],
         );
         sync_frame(queue, &self.frame_buffer, 0, &mut self.frame_mirror, &uniform);
+        // Reflections on transparent surfaces march the main view's scene
+        // depth: the other views (held items, target cameras, probe views)
+        // draw without them.
+        uniform.fog_color[3] = 0.0;
+        uniform.night[3] = 0.0;
         self.upload_view_model(queue, frame, &uniform, view_proj * unjittered.inverse());
         if self.extra {
             // A window view: its frame alone; the probes, target cameras

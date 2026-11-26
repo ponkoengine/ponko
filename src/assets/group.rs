@@ -2049,14 +2049,17 @@ mod tests {
             steps_until_done(ctx, id);
             assert_eq!(ctx.assets.take_group_value::<usize>(id, "n.txt"), Some(1));
             assert_eq!(ctx.gfx.load_texture("small.png").width(), 4);
-            // A texture it can't split decodes in one piece, failing as before.
+            // A texture it can't split decodes in one piece, failing as before:
+            // without the GIF decoder the format is unsupported, with it (the
+            // `image-gif` feature) the six-byte header is a broken GIF.
             let id = ctx.assets.start_group(AssetGroup::new("bad").texture("not-png.png"));
             steps_until_done(ctx, id);
-            assert_eq!(
-                ctx.assets.group_error(id).unwrap().kind(),
-                ErrorKind::Unsupported,
-                "GIF is not built in"
-            );
+            let expected = if cfg!(feature = "image-gif") {
+                ErrorKind::Decode
+            } else {
+                ErrorKind::Unsupported
+            };
+            assert_eq!(ctx.assets.group_error(id).unwrap().kind(), expected);
         });
     }
 

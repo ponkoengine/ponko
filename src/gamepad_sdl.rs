@@ -18,10 +18,13 @@
 //! system, and the second with SDL's own virtual gamepads.
 
 use crate::input::backend::{stick_dead_zone, trigger_dead_zone};
+use crate::input::gamepad_extras::GamepadOutput;
+
+pub(crate) mod dualsense;
 use crate::input::{
     ControllerFamily, DeviceKey, ForceFeedback, ForceFeedbackSupport, GamepadAxis, GamepadBackend, GamepadButton,
-    GamepadCapabilities, GamepadEvents, GamepadInfo, GamepadMotion, JoystickInfo, JoystickKind, MotorLevels,
-    hat_from_bits,
+    GamepadCapabilities, GamepadEvents, GamepadInfo, GamepadMotion, GamepadTouchpadFinger, JoystickInfo, JoystickKind,
+    MotorLevels, TriggerEffect, hat_from_bits,
 };
 
 /// SDL's numbers for gamepad buttons, axes, types and sensors
@@ -44,6 +47,7 @@ pub(crate) mod raw {
     pub(crate) const BUTTON_DPAD_DOWN: i32 = 12;
     pub(crate) const BUTTON_DPAD_LEFT: i32 = 13;
     pub(crate) const BUTTON_DPAD_RIGHT: i32 = 14;
+    pub(crate) const BUTTON_TOUCHPAD: i32 = 20;
 
     pub(crate) const AXIS_LEFTX: i32 = 0;
     pub(crate) const AXIS_LEFTY: i32 = 1;
@@ -103,6 +107,7 @@ pub(crate) enum PadEvent {
     /// Gyro in rad/s or accelerometer in m/s², on the pad's axes (x right,
     /// y up, z toward the player): the engine's own convention.
     Sensor(u32, i32, [f32; 3]),
+    Touchpad(u32, i32, i32, GamepadTouchpadFinger),
     /// A joystick (any device, gamepads too) was plugged in or out.
     JoyAdded(u32),
     JoyRemoved(u32),
@@ -177,6 +182,10 @@ pub(crate) struct Opened {
     pub(crate) trigger_rumble: bool,
     pub(crate) gyro: bool,
     pub(crate) accel: bool,
+    pub(crate) light: bool,
+    pub(crate) player_leds: bool,
+    pub(crate) adaptive_triggers: bool,
+    pub(crate) touchpad: Option<[GamepadTouchpadFinger; 2]>,
 }
 
 /// What the backend asks of SDL: `gamepad_sdl_sys::Sdl`, or a script in tests.
@@ -196,6 +205,9 @@ pub(crate) trait PadSystem: Send + 'static {
     fn rumble_triggers(&mut self, id: u32, left: u16, right: u16, ms: u32);
     /// Milliseconds since some fixed start.
     fn now_ms(&self) -> u64;
+    fn set_light(&mut self, id: u32, rgb: [u8; 3]);
+    fn set_player_leds(&mut self, id: u32, player: Option<u8>);
+    fn set_trigger_effects(&mut self, id: u32, effects: [TriggerEffect; 2]);
 
     /// The joysticks already there when the backend starts (gamepads too).
     fn present_joysticks(&mut self, into: &mut Vec<u32>);
@@ -309,6 +321,7 @@ pub(crate) fn button(b: i32) -> Option<GamepadButton> {
         raw::BUTTON_DPAD_DOWN => G::DPadDown,
         raw::BUTTON_DPAD_LEFT => G::DPadLeft,
         raw::BUTTON_DPAD_RIGHT => G::DPadRight,
+        raw::BUTTON_TOUCHPAD => G::Touchpad,
         _ => return None,
     })
 }
@@ -348,6 +361,7 @@ fn motor(level: f32) -> u16 {
 struct Pad {
     id: u32,
     key: DeviceKey,
+    output: GamepadOutput,
     trigger_rumble: bool,
     /// SDL's axes in the last event, as `-1..=1` (triggers `0..=1`).
     axes: [f32; 6],
@@ -443,6 +457,10 @@ impl<S: PadSystem> SdlGamepads<S> {
                 rumble: opened.rumble,
                 trigger_rumble: opened.trigger_rumble,
                 motion,
+                light: opened.light,
+                player_leds: opened.player_leds,
+                touchpad: opened.touchpad.is_some(),
+                adaptive_triggers: opened.adaptive_triggers,
             },
         };
         let key = self.key_for(opened.identity);
@@ -454,9 +472,14 @@ impl<S: PadSystem> SdlGamepads<S> {
             }
             return;
         }
+        if let Some([first, second]) = opened.touchpad {
+            events.touchpad_finger(key, 0, first);
+            events.touchpad_finger(key, 1, second);
+        }
         self.pads.push(Pad {
             id,
             key,
+            output: GamepadOutput::default(),
             trigger_rumble: opened.trigger_rumble,
             axes: [0.0; 6],
             sent: [0.0; 6],
@@ -472,6 +495,8 @@ impl<S: PadSystem> SdlGamepads<S> {
         let Some(at) = self.pads.iter().position(|p| p.id == id) else {
             return;
         };
+        let (output, key) = (self.pads[at].output, self.pads[at].key);
+        output.reset(self, key);
         let pad = self.pads.swap_remove(at);
         self.system.close(id);
         if let Some(entry) = self.known.iter_mut().find(|(_, k, _)| *k == pad.key) {
@@ -624,6 +649,12 @@ impl<S: PadSystem> GamepadBackend for SdlGamepads<S> {
                         pad.motion_new = true;
                     }
                 }
+                PadEvent::Touchpad(id, 0, finger, contact) => {
+                    if let (Some(pad), Ok(finger)) = (self.pads.iter().find(|p| p.id == id), u8::try_from(finger)) {
+                        events.touchpad_finger(pad.key, finger, contact);
+                    }
+                }
+                PadEvent::Touchpad(..) => {}
                 PadEvent::JoyAdded(id) => self.joystick_added(id, events),
                 PadEvent::JoyRemoved(id) => self.joystick_removed(id, events),
                 PadEvent::JoyAxis(id, axis, value) => {
@@ -667,6 +698,27 @@ impl<S: PadSystem> GamepadBackend for SdlGamepads<S> {
         Self::play(&mut self.system, pad);
     }
 
+    fn set_light(&mut self, device: DeviceKey, rgb: [u8; 3]) {
+        if let Some(pad) = self.pads.iter_mut().find(|p| p.key == device) {
+            self.system.set_light(pad.id, rgb);
+            pad.output.light = Some(rgb);
+        }
+    }
+
+    fn set_player_leds(&mut self, device: DeviceKey, player: Option<u8>) {
+        if let Some(pad) = self.pads.iter_mut().find(|p| p.key == device) {
+            self.system.set_player_leds(pad.id, player);
+            pad.output.player = Some(player.map_or(-1, i16::from));
+        }
+    }
+
+    fn set_trigger_effects(&mut self, device: DeviceKey, effects: [TriggerEffect; 2]) {
+        if let Some(pad) = self.pads.iter_mut().find(|p| p.key == device) {
+            self.system.set_trigger_effects(pad.id, effects);
+            pad.output.triggers = Some(effects);
+        }
+    }
+
     fn set_force_feedback(&mut self, device: DeviceKey, effects: ForceFeedback) {
         let Some(joy) = self.joysticks.iter_mut().find(|j| j.key == device) else {
             return;
@@ -697,8 +749,11 @@ impl<S: PadSystem> GamepadBackend for SdlGamepads<S> {
 impl<S: PadSystem> Drop for SdlGamepads<S> {
     /// Closing a pad stops its rumble, and a joystick its effects.
     fn drop(&mut self) {
-        for pad in self.pads.drain(..) {
-            self.system.close(pad.id);
+        while let Some(pad) = self.pads.last() {
+            let (output, key, id) = (pad.output, pad.key, pad.id);
+            output.reset(self, key);
+            self.pads.pop();
+            self.system.close(id);
         }
         for joy in self.joysticks.drain(..) {
             self.system.close_joystick(joy.id);
@@ -725,6 +780,9 @@ mod tests {
         motion_on: Vec<u32>,
         rumble: Vec<(u32, u16, u16)>,
         triggers: Vec<(u32, u16, u16)>,
+        lights: Vec<(u32, [u8; 3])>,
+        player_leds: Vec<(u32, Option<u8>)>,
+        adaptive: Vec<(u32, [TriggerEffect; 2])>,
         now: u64,
         /// Joysticks: their types, which SDL reads as gamepads, what opening says.
         types: Vec<(u32, i32)>,
@@ -774,6 +832,24 @@ mod tests {
         }
         fn rumble_triggers(&mut self, id: u32, left: u16, right: u16, _ms: u32) {
             self.with(|s| s.triggers.push((id, left, right)));
+        }
+        fn set_light(&mut self, id: u32, rgb: [u8; 3]) {
+            self.with(|s| {
+                assert!(s.open.contains(&id));
+                s.lights.push((id, rgb));
+            });
+        }
+        fn set_player_leds(&mut self, id: u32, player: Option<u8>) {
+            self.with(|s| {
+                assert!(s.open.contains(&id));
+                s.player_leds.push((id, player));
+            });
+        }
+        fn set_trigger_effects(&mut self, id: u32, effects: [TriggerEffect; 2]) {
+            self.with(|s| {
+                assert!(s.open.contains(&id));
+                s.adaptive.push((id, effects));
+            });
         }
         fn now_ms(&self) -> u64 {
             self.0.lock().unwrap().now
@@ -1016,6 +1092,10 @@ mod tests {
             trigger_rumble: false,
             gyro: true,
             accel: true,
+            light: true,
+            player_leds: true,
+            adaptive_triggers: true,
+            touchpad: Some(Default::default()),
         }
     }
 
@@ -1030,6 +1110,7 @@ mod tests {
             trigger_rumble: true,
             gyro: false,
             accel: false,
+            ..Opened::default()
         }
     }
 
@@ -1044,6 +1125,85 @@ mod tests {
     fn frame(ctx: &mut Ctx) {
         ctx.input.begin_frame(0.0);
         ctx.poll_gamepads(1.0 / 60.0);
+    }
+
+    #[test]
+    fn touchpad_click_and_two_finger_events_reach_input() {
+        let (mut ctx, fake) = setup(&[(7, dualsense())]);
+        fake.send(PadEvent::Added(7));
+        fake.send(PadEvent::Button(7, raw::BUTTON_TOUCHPAD, true));
+        let first = GamepadTouchpadFinger {
+            x: 0.25,
+            y: 0.75,
+            pressure: 0.5,
+            down: true,
+        };
+        let second = GamepadTouchpadFinger { x: 0.75, ..first };
+        fake.send(PadEvent::Touchpad(7, 0, 0, first));
+        fake.send(PadEvent::Touchpad(7, 0, 1, second));
+        fake.send(PadEvent::Touchpad(7, 1, 0, second));
+        frame(&mut ctx);
+        let pad = ctx.input.gamepads()[0];
+        assert!(ctx.input.gamepad_pressed(pad, GamepadButton::Touchpad));
+        assert_eq!(ctx.input.gamepad_touchpad(pad).unwrap(), [first, second]);
+        assert_eq!(ctx.input.gamepad_touchpad_events().len(), 2);
+
+        let up = GamepadTouchpadFinger {
+            down: false,
+            pressure: 0.0,
+            ..first
+        };
+        ctx.input.end_frame();
+        fake.send(PadEvent::Touchpad(7, 0, 0, up));
+        frame(&mut ctx);
+        assert_eq!(ctx.input.gamepad_touchpad(pad).unwrap(), [up, second]);
+        assert_eq!(ctx.input.gamepad_touchpad_events(), &[(pad, 0, up)]);
+        fake.send(PadEvent::Removed(7));
+        frame(&mut ctx);
+        assert!(ctx.input.gamepad_touchpad(pad).is_none());
+    }
+
+    #[test]
+    fn controller_outputs_follow_capabilities_and_reset_before_close() {
+        let (mut ctx, fake) = setup(&[(7, dualsense()), (8, xbox())]);
+        fake.send(PadEvent::Added(7));
+        fake.send(PadEvent::Added(8));
+        frame(&mut ctx);
+        let pad = ctx.input.gamepads()[0];
+        let other = ctx.input.gamepads()[1];
+        let effect = TriggerEffect::Resistance { start: 2, strength: 4 };
+        for device in [pad, other] {
+            ctx.input.set_gamepad_light(device, crate::color::Color::hex(0xff8000));
+            ctx.input.set_gamepad_player_leds(device, Some(2));
+            ctx.input
+                .set_gamepad_trigger_effects(device, effect, TriggerEffect::Off);
+        }
+        frame(&mut ctx);
+        frame(&mut ctx);
+        assert_eq!(fake.with(|s| s.lights.clone()), [(7, [255, 128, 0])]);
+        assert_eq!(fake.with(|s| s.player_leds.clone()), [(7, Some(2))]);
+        assert_eq!(fake.with(|s| s.adaptive.clone()), [(7, [effect, TriggerEffect::Off])]);
+        fake.send(PadEvent::Removed(7));
+        frame(&mut ctx);
+        assert_eq!(fake.with(|s| s.lights.last().copied()), Some((7, [0; 3])));
+        assert_eq!(fake.with(|s| s.player_leds.last().copied()), Some((7, None)));
+        assert_eq!(
+            fake.with(|s| s.adaptive.last().copied()),
+            Some((7, [TriggerEffect::Off; 2]))
+        );
+
+        fake.send(PadEvent::Added(7));
+        frame(&mut ctx);
+        ctx.input.set_gamepad_light(pad, crate::color::Color::WHITE);
+        ctx.input.set_gamepad_trigger_effects(pad, effect, effect);
+        frame(&mut ctx);
+        drop(ctx);
+        assert_eq!(fake.with(|s| s.lights.last().copied()), Some((7, [0; 3])));
+        assert_eq!(
+            fake.with(|s| s.adaptive.last().copied()),
+            Some((7, [TriggerEffect::Off; 2]))
+        );
+        assert!(fake.with(|s| s.open.is_empty()));
     }
 
     #[test]
@@ -1065,7 +1225,11 @@ mod tests {
             GamepadCapabilities {
                 rumble: true,
                 trigger_rumble: false,
-                motion: true
+                motion: true,
+                light: true,
+                player_leds: true,
+                touchpad: true,
+                adaptive_triggers: true,
             }
         );
         assert_eq!(fake.with(|s| s.motion_on.clone()), [7], "its sensors were turned on");
