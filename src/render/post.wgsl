@@ -276,10 +276,20 @@ fn neutral(c_in: vec3<f32>) -> vec3<f32> {
     return mix(c, vec3<f32>(new_peak), g);
 }
 
+fn hue_preserving(c: vec3<f32>) -> vec3<f32> {
+    let peak = max(c.r, max(c.g, c.b));
+    let knee = 0.76;
+    if peak <= knee { return c; }
+    let headroom = 1.0 - knee;
+    let new_peak = 1.0 - headroom * headroom / (peak - knee + headroom);
+    return c * (new_peak / peak);
+}
+
 fn tonemap(c: vec3<f32>) -> vec3<f32> {
     switch post.mode.x {
         case 0u: { return aces(c); }
         case 1u: { return agx(c); }
+        case 4u: { return hue_preserving(c); }
         case 2u: { return clamp(neutral(c), vec3<f32>(0.0), vec3<f32>(1.0)); }
         default: { return clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)); }
     }

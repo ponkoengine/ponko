@@ -155,6 +155,8 @@ command-line limit ("The filename or extension is too long (os error 206)").
 `python3 scripts/fmt-workspace.py --check` checks the same files in batches
 and works everywhere; the format check in `scripts/checks.yml` uses it.
 
+On a card with little memory the renderer's GPU tests can fail with `Not enough memory left`: add `-- --test-threads=4` (see [A card with little memory](book/src/render-tests.md#a-card-with-little-memory)).
+
 For guide changes, run `mdbook build book` if mdBook is available. You do not
 need a C++ toolchain for an unrelated Rust change. Report checks you could not
 run; maintainers cover the broader matrix before merging.
@@ -837,6 +839,17 @@ one list of commands for the 0.2 cut (rc.1, a week, 0.2.0).
    cargo run --release -p ponko_bench --bin bench_track -- \
      compare crates/ponko_bench/releases/<previous>/$m crates/ponko_bench/releases/$v/$m
    ```
+
+   Before a minor release, run the four-hour reference-game soaks in a
+   real window on macOS, Windows and Linux. Run this from the release
+   checkout on each machine (use a fresh output directory per revision):
+
+   ```sh
+   python3 scripts/soak.py --windowed --seconds 14400 --sample 60 --warmup 600 --out target/soak-release
+   ```
+
+   Follow the [soak checklist](scripts/checklists/soak.md) and link the three
+   machines' reports and any growth issues in the release pull request.
 
    Link the folder and the comparison in the CHANGELOG section (the release
    notes). Run the checks of [scripts/checks.yml](scripts/checks.yml) on the

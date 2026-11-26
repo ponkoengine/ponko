@@ -1395,3 +1395,72 @@ fn try_find_resolves_a_name_once_and_lists_the_names_on_a_typo() {
         r#"unknown UI node name "menu" (there are no UI node names)"#
     );
 }
+
+#[test]
+fn a_node_with_pointer_events_off_passes_the_click_through() {
+    let click = |ui: &mut Ui, at: Vec2| -> Vec<UiEvent> {
+        let viewport = vec2(300.0, 200.0);
+        for input in [
+            UiInput {
+                pointer: at,
+                pressed: true,
+                held: true,
+                ..Default::default()
+            },
+            UiInput {
+                pointer: at,
+                released: true,
+                ..Default::default()
+            },
+        ] {
+            ui.frame(viewport, &input);
+        }
+        ui.events().collect()
+    };
+    // The same screen twice: a decoration over a button, with and without the builder call.
+    let build = |through: bool| {
+        let (mut ui, root) = scene();
+        let button = ui.button(root, "Behind").layout(UiLayout::fixed(80.0, 40.0)).id();
+        let mut overlay = ui.panel(button).layout(UiLayout::anchored(0.0, 0.0, 1.0, 1.0));
+        if through {
+            overlay = overlay.pointer_events(false);
+        }
+        let overlay = overlay.id();
+        ui.layout(vec2(300.0, 200.0));
+        (ui, button, overlay)
+    };
+
+    let (mut ui, button, overlay) = build(false);
+    assert_eq!(
+        ui.hit_test(vec2(50.0, 10.0)),
+        Some(overlay),
+        "by default the overlay takes the pointer"
+    );
+    assert!(!click(&mut ui, vec2(50.0, 10.0)).contains(&UiEvent::Clicked(button)));
+
+    let (mut ui, button, overlay) = build(true);
+    assert_eq!(
+        ui.hit_test(vec2(50.0, 10.0)),
+        Some(button),
+        "with pointer events off it is skipped"
+    );
+    assert_ne!(ui.hit_test(vec2(50.0, 10.0)), Some(overlay));
+    assert_eq!(
+        click(&mut ui, vec2(50.0, 10.0)),
+        vec![UiEvent::Clicked(button)],
+        "the click goes to the control under it"
+    );
+
+    // And back on: the same builder method with `true` is the default again.
+    let (mut ui, root) = scene();
+    let button = ui.button(root, "Behind").layout(UiLayout::fixed(80.0, 40.0)).id();
+    let overlay = ui
+        .panel(button)
+        .layout(UiLayout::anchored(0.0, 0.0, 1.0, 1.0))
+        .pointer_events(false)
+        .pointer_events(true)
+        .id();
+    ui.layout(vec2(300.0, 200.0));
+    assert_eq!(ui.hit_test(vec2(50.0, 10.0)), Some(overlay));
+    let _ = button;
+}

@@ -23,6 +23,16 @@
 
 mod game;
 
+#[cfg(all(
+    feature = "bench-internals",
+    feature = "window",
+    feature = "3d",
+    feature = "audio",
+    not(target_arch = "wasm32")
+))]
+#[path = "../support/soak.rs"]
+mod soak;
+
 #[cfg(target_arch = "wasm32")]
 fn main() {
     game::build()
@@ -34,6 +44,33 @@ fn main() {
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    #[cfg(all(
+        feature = "bench-internals",
+        feature = "window",
+        feature = "3d",
+        feature = "audio",
+        not(target_arch = "wasm32")
+    ))]
+    if args.first().is_some_and(|arg| arg == "--soak") {
+        soak::run(
+            &args[1..],
+            |base| game::smoke::smoke_game(base).configured(),
+            |ctx| game::smoke::setup_smoke(ctx, None, "soak"),
+            |ctx| {
+                let smoke = ctx.world.resource::<game::smoke::Smoke>();
+                let tally = ctx.world.resource::<game::Tally>();
+                soak::Work {
+                    cycles: smoke.cycles,
+                    saves: u64::from(tally.saves),
+                    loads: u64::from(tally.loads),
+                    deaths: smoke.deaths,
+                }
+            },
+            "ember_hop soak",
+            (game::WINDOW.x as u32, game::WINDOW.y as u32),
+        );
+        return;
+    }
     match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         [] => game::build().configured().run(),
         ["--smoke", mode, rest @ ..] if matches!(*mode, "headless" | "window") => {

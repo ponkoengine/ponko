@@ -425,3 +425,95 @@ fn a_background_save_without_storage_or_with_a_bad_slot_fails_at_once() {
     });
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// How many entities the save file `saves/<slot>.json` in `dir` holds, read straight from the
+/// disk: storage's own reads wait for a save in flight, which would hide a `finish_saves` that
+/// returned early.
+fn entities_on_disk(dir: &std::path::Path, slot: &str) -> Option<usize> {
+    let bytes = std::fs::read(dir.join("saves").join(format!("{slot}.json"))).ok()?;
+    let save: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    Some(save["entities"].as_array()?.len())
+}
+
+#[test]
+fn finish_saves_waits_for_saves_of_different_slots_and_both_files_load_back() {
+    let dir = temp_dir("finish-two-slots");
+    let mut world = Game::new("t", 1, 1).data_dir(&dir).run_headless(0, |ctx| {
+        ctx.world.reflect::<Health>();
+        for i in 0..3000 {
+            ctx.world.spawn((Health(i),));
+        }
+        ctx.storage.save_world_in_background(&ctx.world, "big").unwrap();
+        ctx.world.clear();
+        ctx.world.spawn((Health(-7),));
+        ctx.storage.save_world_in_background(&ctx.world, "small").unwrap();
+        ctx.storage.finish_saves();
+        assert!(!ctx.storage.is_saving(), "nothing is left in flight");
+        assert_eq!(entities_on_disk(&dir, "big"), Some(3000), "the first slot is on disk");
+        assert_eq!(entities_on_disk(&dir, "small"), Some(1), "so is the second");
+        ctx.load_world("small").unwrap();
+        assert_eq!(
+            ctx.world.query::<&Health>().iter().map(|h| h.0).collect::<Vec<_>>(),
+            [-7]
+        );
+        ctx.load_world("big").unwrap(); // loading replaces the world
+    });
+    assert_eq!(healths(&mut world).len(), 3000, "the first slot loads back whole");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn finish_saves_leaves_the_last_of_several_saves_to_one_slot_on_disk() {
+    let dir = temp_dir("finish-same-slot");
+    Game::new("t", 1, 1).data_dir(&dir).run_headless(0, |ctx| {
+        ctx.world.reflect::<Health>();
+        // Big worlds first and a small one last, so a later save would finish encoding
+        // first if nothing kept them in the order they were made.
+        for i in 0..2000 {
+            ctx.world.spawn((Health(i),));
+        }
+        for _ in 0..3 {
+            ctx.storage.save_world_in_background(&ctx.world, "slot").unwrap();
+        }
+        ctx.world.clear();
+        ctx.world.spawn((Health(-1),));
+        ctx.storage.save_world_in_background(&ctx.world, "slot").unwrap();
+        ctx.storage.finish_saves();
+        assert!(!ctx.storage.is_saving());
+        assert_eq!(entities_on_disk(&dir, "slot"), Some(1), "the file holds the last save");
+        ctx.world.clear();
+        ctx.load_world("slot").unwrap();
+        assert_eq!(
+            ctx.world.query::<&Health>().iter().map(|h| h.0).collect::<Vec<_>>(),
+            [-1]
+        );
+    });
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn finish_saves_with_nothing_queued_returns_at_once() {
+    let dir = temp_dir("finish-nothing");
+    // On a thread, so that a call that waits for ever fails the test instead of hanging it.
+    let (done, finished) = std::sync::mpsc::channel();
+    let folder = dir.clone();
+    std::thread::spawn(move || {
+        let storage = Storage::in_folder(&folder);
+        storage.finish_saves();
+        storage.finish_saves(); // and again: still nothing to wait for
+        assert!(!storage.is_saving());
+        let _ = done.send(());
+    });
+    finished
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("finish_saves did not return");
+    Game::new("t", 1, 1).data_dir(&dir).run_headless(0, |ctx| {
+        ctx.storage.finish_saves();
+        ctx.storage.finish_saves();
+        assert!(!ctx.storage.is_saving());
+    });
+    Game::new("t", 1, 1).run_headless(0, |ctx| {
+        ctx.storage.finish_saves(); // storage off: nothing to wait for either
+    });
+    let _ = std::fs::remove_dir_all(dir);
+}
