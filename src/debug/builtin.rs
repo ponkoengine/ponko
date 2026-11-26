@@ -171,7 +171,7 @@ fn colliders(ctx: &mut Ctx) {
     }
     #[cfg(feature = "physics3d")]
     {
-        use crate::physics3d::Shape3D;
+        use crate::physics3d_impl::Shape3D;
         let (debug, physics) = (&mut ctx.debug, &ctx.physics3d);
         let eye = (ctx.scene3d.camera.position, debug.collider_distance());
         ctx.world
@@ -213,9 +213,9 @@ fn colliders(ctx: &mut Ctx) {
 #[cfg(feature = "physics3d")]
 fn mesh_edges(
     debug: &mut DebugDraw,
-    physics: &crate::physics3d::Physics3D,
+    physics: &crate::physics3d_impl::Physics3D,
     (at, rotation, scale): (Vec3, Quat, Vec3),
-    mesh: crate::physics3d::CollisionMesh,
+    mesh: crate::physics3d_impl::CollisionMesh,
     (eye, reach): (Vec3, f32),
     color: Color,
 ) {

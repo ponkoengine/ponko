@@ -2496,8 +2496,8 @@ pub(crate) fn reflect_model(world: &mut World) {
 #[cfg(feature = "physics3d")]
 #[derive(Default)]
 pub(crate) struct ColliderFiles {
-    pub(crate) by_mesh: HashMap<crate::physics3d::CollisionMesh, Value>,
-    pub(crate) by_file: HashMap<String, crate::physics3d::CollisionMesh>,
+    pub(crate) by_mesh: HashMap<crate::physics3d_impl::CollisionMesh, Value>,
+    pub(crate) by_file: HashMap<String, crate::physics3d_impl::CollisionMesh>,
 }
 
 /// A collider's mesh description as a lookup key: the same for every way
@@ -2569,7 +2569,7 @@ fn collider_json(world: &World, c: &crate::d3::Collider) -> Option<Result<Value,
 /// A mesh collider (plain or scaled) names its mesh file; only loaded
 /// files give a mesh.
 #[cfg(feature = "physics3d")]
-fn collider_mesh_json(world: &World, value: &Value) -> Result<Option<crate::physics3d::CollisionMesh>, String> {
+fn collider_mesh_json(world: &World, value: &Value) -> Result<Option<crate::physics3d_impl::CollisionMesh>, String> {
     let Some(mesh) = collider_mesh_pointer(value).and_then(|at| value.pointer(at)) else {
         return Ok(None);
     };

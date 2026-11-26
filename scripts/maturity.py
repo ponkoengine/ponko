@@ -44,8 +44,9 @@ LEVELS = ("proven", "tested", "experimental")
 NOT_A_FEATURE = "not a feature"
 FIELDS = ("Game:", "Platforms:", "Graphics:")
 # Top-level modules that are not features of their own: the prelude
-# re-exports, the deprecated `stream` alias and the hidden internals.
-SKIP_MODULES = {"prelude", "stream", "bench_sharing", "__ffi", "__fuzz"}
+# re-exports, the deprecated `stream` and `physics3d` aliases and the hidden
+# internals.
+SKIP_MODULES = {"prelude", "stream", "physics3d", "bench_sharing", "__ffi", "__fuzz"}
 
 CHAPTER_START = re.compile(r"^> \*\*Maturity: (?:\[([a-z ]+)\]\([^)]*\)|([a-z ]+))\.\*\*\s*(.*)$")
 MODULE_START = re.compile(

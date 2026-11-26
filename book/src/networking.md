@@ -170,7 +170,8 @@ does that on the I key). The Steam calls take and return Ponko's own types:
 `SteamClient` (started once with `SteamClient::init_app`), `SteamLobbyId` and
 `SteamUserId` (64-bit numbers: `from_raw`, `raw`, and they print and parse as
 that number), so a new version of the `steamworks` crate doesn't change your
-code. Achievements, stats, cloud saves, rich presence, the overlay and the
+code. With the `steamworks` client (below), they convert to and from its
+`LobbyId` and `SteamId` with `From`/`into()`, as unstable as that client. Achievements, stats, cloud saves, rich presence, the overlay and the
 Deck's text input are `ponko::steam::Steam` ([Shipping on Steam](steam.md);
 `Steam::with_client` shares this client). For the parts of Steam Ponko
 doesn't wrap (Workshop, inventory, leaderboards), `client.unstable_steamworks()`
@@ -784,6 +785,23 @@ returns the authenticated Steam identity (a `SteamUserId`). Hosts do not automat
 client messages. The protocol metadata is checked before joining the message
 handshake; applications should check their own game version before accepting
 application messages. Host migration requires creating a new endpoint.
+`NetMessages::steam_host_with` takes the lobby's visibility, as
+`steam_sockets_host` does: a `Private` lobby is invite-only, and
+`SteamLobby::invite_user` invites one player by `SteamUserId` (from your
+own friend list) without the overlay (Rust-only for now; C and C++ use the
+overlay's invite).
+
+```rust,no_run
+use ponko::net::{NetMessages, SteamLobbyVisibility, SteamUserId};
+let client = ponko::net::SteamClient::init_app(480)?;
+let friend = SteamUserId::from_raw(76_561_197_960_287_930); // picked from the game's friend list
+let mut net = NetMessages::steam_host_with(&client, SteamLobbyVisibility::Private, 1)?;
+net.poll()?;
+if let Some(lobby) = net.steam_lobby().filter(|l| l.id().is_some()) {
+    lobby.invite_user(friend)?; // the friend joins as from an overlay invite
+}
+# Ok::<(), std::io::Error>(())
+```
 
 <div class="lang-pair">
 <div class="lang-rust">
@@ -830,7 +848,7 @@ headless server process) and for games that want a connection per player.
 |---|---|---|
 | Transport | connectionless messages to a Steam user | one connection per client, to the host |
 | Relayed by Valve | yes | yes |
-| Lobby | friends-only | the visibility you pass (`Public` for a host nobody plays on) |
+| Lobby | friends-only (`steam_host_with`: the visibility you pass) | the visibility you pass (`Public` for a host nobody plays on) |
 | Joining | `steam_join` | the same `steam_join`: it reads the host's choice from the lobby |
 | Who can send to the host | lobby members (others are filtered) | lobby members; the host refuses other connections |
 | Leaving the lobby | the host stops hearing that player | the host closes that player's connection at once |
@@ -886,8 +904,9 @@ Creation and joining are asynchronous: `poll` runs callbacks and reports
 errors, and `id` remains absent until ready. Metadata writes require ownership;
 reads use Steam's callback-updated cache. Drop/free leaves the lobby, including
 when a pending request completes after the handle was dropped. The existing
-`steam_lobby_from_args` and `steam_wait_for_invite` helpers cover overlay invites
-accepted before launch or while running. Steam is initialized only by the
+`steam_lobby_from_args` and `steam_wait_for_invite` helpers cover invites
+(the overlay's, or one user's from `invite_user`) accepted before launch or
+while running. Steam is initialized only by the
 application (or the C API's first call with an app id), never by fake relay tests.
 
 <div class="lang-pair">
