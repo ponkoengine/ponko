@@ -91,6 +91,11 @@ fn c_games_change_state_at_the_end_of_the_tick_that_asks() {
             PONKO_OK
         );
         assert_eq!(ponko_game_run_headless(g, 20, None, null_mut(), &mut world), PONKO_OK);
+        // The returned world says where the game ended.
+        let mut ended = 0;
+        assert_eq!(ponko_world_state(world, &mut ended), PONKO_OK);
+        assert_eq!(ended, PLAYING);
+        assert_eq!(ponko_world_state(world, null_mut()), PONKO_INVALID_ARGUMENT);
         ponko_world_free(world);
     }
     assert_eq!(
@@ -159,6 +164,13 @@ fn state_calls_without_a_state_machine_fail_with_a_hint() {
             ponko_game_run_headless(g, 0, Some(ask_without_state), user, &mut world),
             PONKO_OK
         );
+        let mut ended = 0;
+        assert_eq!(
+            ponko_world_state(world, &mut ended),
+            PONKO_INVALID_ARGUMENT,
+            "no state machine"
+        );
+        assert_eq!(ponko_world_state(null_mut(), &mut ended), PONKO_INVALID_ARGUMENT);
         ponko_world_free(world);
         assert_eq!(statuses, [PONKO_INVALID_ARGUMENT; 3]);
         assert_eq!(ponko_ctx_push_state(null_mut(), 0), PONKO_INVALID_ARGUMENT);

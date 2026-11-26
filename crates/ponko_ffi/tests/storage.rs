@@ -100,6 +100,10 @@ unsafe extern "C" fn read_files(ctx: *mut PonkoCtx, _: *mut c_void) {
 
         assert_eq!(ponko_ctx_storage_dir(ctx, null_mut(), 0, &mut len), PONKO_OK);
         assert!(len > 0, "a folder on the desktop");
+        let mut available = false;
+        assert_eq!(ponko_ctx_storage_is_available(ctx, &mut available), PONKO_OK);
+        assert!(available, "a data folder keeps files");
+        assert_eq!(ponko_ctx_storage_is_available(ctx, null_mut()), PONKO_INVALID_ARGUMENT);
         assert_eq!(ponko_ctx_load_world(ctx, c"slot1".as_ptr()), PONKO_OK);
         assert_eq!(ponko_ctx_load_world(ctx, c"nothing".as_ptr()), PONKO_NOT_FOUND);
     }
@@ -118,6 +122,9 @@ unsafe extern "C" fn without_app_id(ctx: *mut PonkoCtx, _: *mut c_void) {
         let mut len = 7;
         assert_eq!(ponko_ctx_storage_dir(ctx, null_mut(), 0, &mut len), PONKO_OK);
         assert_eq!(len, 0, "no folder");
+        let mut available = true;
+        assert_eq!(ponko_ctx_storage_is_available(ctx, &mut available), PONKO_OK);
+        assert!(!available, "no app id, no files");
         assert_eq!(
             ponko_ctx_storage_write(ctx, c"a".as_ptr(), null(), 0),
             PONKO_INVALID_ARGUMENT

@@ -43,6 +43,9 @@ test("a fallback must say why, once", () => {
   // The line for another failure doesn't count.
   assert.match(checkCase("device-lost", fellBack("no-adapter")).join(), /should say/);
   assert.ok(expectedReason("device-fails").includes(REFUSAL));
+  // A canvas that never presents names the engine's test frame.
+  assert.match(expectedReason("no-present"), /test frame failed/);
+  assert.match(checkCase("no-present", fellBack("device-lost")).join(), /should say/);
 });
 
 test("WebGPU failing silently or the engine disagreeing with the canvas fails", () => {
@@ -54,7 +57,7 @@ test("WebGPU failing silently or the engine disagreeing with the canvas fails", 
 });
 
 test("only the cases that fake on a real adapter need one", () => {
-  assert.deepEqual(FALLBACK_CASES.filter(needsAdapter), ["webgpu", "device-fails", "device-lost"]);
+  assert.deepEqual(FALLBACK_CASES.filter(needsAdapter), ["webgpu", "device-fails", "device-lost", "no-present"]);
 });
 
 test("arguments and outcomes", () => {

@@ -33,6 +33,54 @@ fn components_round_trip_and_stale_entities_stay_dead() {
 }
 
 #[test]
+fn clearing_a_world_despawns_every_entity_and_keeps_its_resources() {
+    unsafe {
+        let w = ponko_world_new();
+        let mut id = 0;
+        assert_eq!(
+            ponko_component_register(w, c"position".as_ptr(), 4, 4, &mut id),
+            PonkoStatus::PONKO_OK
+        );
+        let value = 7u32;
+        let v = PonkoValue {
+            component: id,
+            data: (&value as *const u32).cast(),
+            size: 4,
+        };
+        let mut spawned = [0u64; 3];
+        for e in &mut spawned {
+            assert_eq!(ponko_spawn(w, &v, 1, e), PonkoStatus::PONKO_OK);
+        }
+        let score = 12u32;
+        assert_eq!(
+            ponko_resource_set(w, c"Score".as_ptr(), (&score as *const u32).cast(), 4, 4),
+            PonkoStatus::PONKO_OK
+        );
+        assert_eq!(ponko_world_clear(w), PonkoStatus::PONKO_OK);
+        let mut len = 9;
+        assert_eq!(ponko_world_len(w, &mut len), PonkoStatus::PONKO_OK);
+        assert_eq!(len, 0);
+        for e in spawned {
+            let mut alive = true;
+            assert_eq!(ponko_is_alive(w, e, &mut alive), PonkoStatus::PONKO_OK);
+            assert!(!alive);
+        }
+        let mut kept = 0u32;
+        assert_eq!(
+            ponko_resource_get(w, c"Score".as_ptr(), (&mut kept as *mut u32).cast(), 4),
+            PonkoStatus::PONKO_OK
+        );
+        assert_eq!(kept, 12, "resources stay");
+        // A new entity after the clear gets a fresh id.
+        let mut again = 0;
+        assert_eq!(ponko_spawn(w, &v, 1, &mut again), PonkoStatus::PONKO_OK);
+        assert!(!spawned.contains(&again));
+        assert_eq!(ponko_world_clear(null_mut()), PonkoStatus::PONKO_INVALID_ARGUMENT);
+        assert_eq!(ponko_world_free(w), PonkoStatus::PONKO_OK);
+    }
+}
+
+#[test]
 fn invalid_arguments_are_errors() {
     unsafe {
         let w = ponko_world_new();
@@ -144,6 +192,7 @@ unsafe extern "C" fn update(chunk: *const PonkoChunk, user: *mut std::ffi::c_voi
         visit.reentry.push(ponko_world_len(visit.world, &mut 0));
         visit.reentry.push(ponko_world_free(visit.world));
         visit.reentry.push(ponko_despawn(visit.world, visit.entities[0]));
+        visit.reentry.push(ponko_world_clear(visit.world));
         visit
             .reentry
             .push(ponko_query(visit.world, null(), 0, Some(update), user));

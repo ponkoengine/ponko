@@ -1,0 +1,199 @@
+{
+  "collect_ms": 0.033900000154972076,
+  "cpu_ms": {
+    "display_wait": 2.6553895473480225,
+    "render": 1.207732081413269,
+    "systems": 0.0679343193769455
+  },
+  "draw_calls": 58,
+  "fps": 253.33694458007812,
+  "frame_ms": {
+    "avg": 3.947312116622925,
+    "max": 5.356799602508545,
+    "p50": 3.9388997554779053,
+    "p95": 4.097700119018555,
+    "p99": 4.178899765014648
+  },
+  "frames": 600,
+  "gpu_ms": 3.833320379257202,
+  "gpu_passes": [
+    {
+      "ms": 1.2323575236399968,
+      "name": "screen reflections"
+    },
+    {
+      "ms": 0.634785182873408,
+      "name": "GTAO bilateral"
+    },
+    {
+      "ms": 0.5380392563343048,
+      "name": "opaque"
+    },
+    {
+      "ms": 0.3557476533949375,
+      "name": "GTAO horizons"
+    },
+    {
+      "ms": 0.23359580101522928,
+      "name": "bloom"
+    },
+    {
+      "ms": 0.2277869127690792,
+      "name": "reflection blur"
+    },
+    {
+      "ms": 0.06416617285460234,
+      "name": "post"
+    },
+    {
+      "ms": 0.06162493809436758,
+      "name": "reflection depth"
+    },
+    {
+      "ms": 0.036557777610917885,
+      "name": "reflection coarse depth"
+    },
+    {
+      "ms": 0.0224701234480987,
+      "name": "sprites"
+    },
+    {
+      "ms": 0.020963703660915295,
+      "name": "reflection spread"
+    },
+    {
+      "ms": 0.018150617256760596,
+      "name": "depth prepass"
+    },
+    {
+      "ms": 0.015725432063918562,
+      "name": "shadows 0"
+    },
+    {
+      "ms": 0.012501234486699105,
+      "name": "shadows 1"
+    },
+    {
+      "ms": 0.0036501234086851277,
+      "name": "shadows 2"
+    },
+    {
+      "ms": 0.0010575308650732041,
+      "name": "shadows 3"
+    },
+    {
+      "ms": 0.00021999999880790712,
+      "name": "sky texture"
+    },
+    {
+      "ms": 0.00006592592690140009,
+      "name": "light shadows"
+    }
+  ],
+  "instances": 7,
+  "record_ms": 0.9108999967575073,
+  "see_through_changes": {
+    "bind_groups": 2,
+    "draws": 1,
+    "index_buffers": 1,
+    "pipelines": 1,
+    "vertex_buffers": 2
+  },
+  "shadow_instances": 7,
+  "shadow_triangles": 662,
+  "state_changes": {
+    "bind_groups": 32,
+    "draws": 25,
+    "index_buffers": 5,
+    "pipelines": 5,
+    "vertex_buffers": 12
+  },
+  "submit_ms": 0.09629999846220016,
+  "systems": [
+    {
+      "ms": 0.03632333342606823,
+      "name": "shard_grove::game::update_screens"
+    },
+    {
+      "ms": 0.003722333384988209,
+      "name": "ponko::ecs::draw_sprites"
+    },
+    {
+      "ms": 0.003215333336653809,
+      "name": "shard_grove::game::present"
+    },
+    {
+      "ms": 0.002479666721774265,
+      "name": "ponko::systems::update_particles"
+    },
+    {
+      "ms": 0.0024563333950936793,
+      "name": "ponko::systems::update_animators"
+    },
+    {
+      "ms": 0.001037166677415371,
+      "name": "ponko::systems::update_camera_rigs"
+    },
+    {
+      "ms": 0.0010051666815221931,
+      "name": "ponko::systems::update_skeletons2d"
+    },
+    {
+      "ms": 0.0008546666777692736,
+      "name": "ponko::sheet::animate_sprites"
+    },
+    {
+      "ms": 0.000700000013942675,
+      "name": "ponko::tilemap::draw_tilemaps"
+    },
+    {
+      "ms": 0.000680666681631313,
+      "name": "ponko::systems::update_audio3d"
+    },
+    {
+      "ms": 0.00042000001762062313,
+      "name": "shard_grove::game::read_input"
+    },
+    {
+      "ms": 0.00029883334723611674,
+      "name": "ponko::systems::draw_particles"
+    },
+    {
+      "ms": 0.00021366667574814833,
+      "name": "ponko::physics3d::interpolate_physics3d"
+    },
+    {
+      "ms": 0.00013566667291646203,
+      "name": "shard_grove::game::menus"
+    },
+    {
+      "ms": 0.00012383333678978186,
+      "name": "shard_grove::game::rules"
+    },
+    {
+      "ms": 0.00010650000486445302,
+      "name": "shard_grove::game::step_crawlers"
+    },
+    {
+      "ms": 0.00006066666945116594,
+      "name": "ponko::physics3d::step_physics3d"
+    }
+  ],
+  "triangles": 476,
+  "uploads": {
+    "buffer_bytes_created": 0,
+    "buffers_created": 0,
+    "bytes": 34656,
+    "instances": 0,
+    "lights": 0,
+    "materials": 0,
+    "meshes": 0,
+    "other": 0,
+    "reallocations": 0,
+    "skins": 0,
+    "sprites": 0,
+    "static_batches": 0,
+    "textures": 0,
+    "uniforms": 34656
+  }
+}

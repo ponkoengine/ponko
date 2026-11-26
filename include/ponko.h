@@ -4400,12 +4400,24 @@ enum PonkoStatus ponko_transform_component(struct PonkoWorld *world, uint32_t *o
 
 enum PonkoStatus ponko_sprite_component(struct PonkoWorld *world, uint32_t *out_id);
 
+enum PonkoStatus ponko_sprite_set_flip(struct PonkoWorld *world,
+                                       uint64_t entity,
+                                       bool flip_x,
+                                       bool flip_y);
+
+enum PonkoStatus ponko_sprite_flip(struct PonkoWorld *world,
+                                   uint64_t entity,
+                                   bool *out_flip_x,
+                                   bool *out_flip_y);
+
 enum PonkoStatus ponko_spawn(struct PonkoWorld *world,
                              const struct PonkoValue *values,
                              size_t count,
                              uint64_t *out_entity);
 
 enum PonkoStatus ponko_despawn(struct PonkoWorld *world, uint64_t entity);
+
+enum PonkoStatus ponko_world_clear(struct PonkoWorld *world);
 
 enum PonkoStatus ponko_is_alive(struct PonkoWorld *world, uint64_t entity, bool *out_alive);
 
@@ -7271,6 +7283,8 @@ enum PonkoStatus ponko_game_add_system_if(struct PonkoGame *game,
 
 enum PonkoStatus ponko_ctx_state(struct PonkoCtx *ctx, uint32_t *out_state);
 
+enum PonkoStatus ponko_world_state(struct PonkoWorld *world, uint32_t *out_state);
+
 enum PonkoStatus ponko_ctx_state_ticks(struct PonkoCtx *ctx, uint64_t *out_ticks);
 
 enum PonkoStatus ponko_ctx_state_in_stack(struct PonkoCtx *ctx, uint32_t state, bool *out_in_stack);
@@ -8300,6 +8314,8 @@ enum PonkoStatus ponko_ctx_storage_read_backup(struct PonkoCtx *ctx,
                                                size_t *out_len);
 
 enum PonkoStatus ponko_ctx_storage_exists(struct PonkoCtx *ctx, const char *name, bool *out_exists);
+
+enum PonkoStatus ponko_ctx_storage_is_available(struct PonkoCtx *ctx, bool *out_available);
 
 enum PonkoStatus ponko_ctx_storage_list(struct PonkoCtx *ctx,
                                         char *buffer,
@@ -10050,6 +10066,15 @@ enum PonkoStatus ponko_ctx_strings_missing_report(struct PonkoCtx *ctx,
                                                   char *buffer,
                                                   size_t capacity,
                                                   size_t *out_len);
+
+enum PonkoStatus ponko_ctx_strings_number(struct PonkoCtx *ctx,
+                                          double value,
+                                          int32_t decimals,
+                                          char *buffer,
+                                          size_t capacity,
+                                          size_t *out_len);
+
+enum PonkoStatus ponko_ctx_strings_revision(struct PonkoCtx *ctx, uint64_t *out_revision);
 
 enum PonkoStatus ponko_plural_category(const char *language,
                                        double count,

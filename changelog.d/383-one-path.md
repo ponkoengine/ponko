@@ -47,15 +47,29 @@
   let hz = Physics::HZ;
   ```
 - `ponko::d3` no longer re-exports the types of topic modules, so each type
-  has one path: render types (`Material`, `MaterialDesc`, `Mesh`,
-  `MeshData`, `Model`, `ModelMaterial(s)`, `Shader*`, `Lod*`, `Post`, `Sky`,
-  `ComputePass`, `ScreenEffect`, `TargetCamera`, `StreamedLod`, ...) are in
-  `ponko::render`, animation types (`Animator`, `AnimationClip`,
-  `AnimationGraph`, `Skeleton`, `SkinOf`, `MorphWeights`, ...) in
+  has one path: the render types (`AmbientOcclusion`, `AntiAliasing`,
+  `BatchCulling`, `Blend`, `Compute`, `ComputePass`, `Effect`,
+  `GlobalIllumination`, `GpuBuffer`, `GraphicsQuality`, `InstanceBatch`,
+  `InstanceBatchOptions`, `InstanceLevel`, `Lighting`, `LodGroup`,
+  `LodHysteresis`, `LodLevel`, `LodPick`, `LodRenderer`, `LodSettings`,
+  `LodShadow`, `Material`, `MaterialDesc`, `Mesh`, `MeshCost`, `MeshData`,
+  `Model`, `ModelMaterial`, `ModelMaterials`, `Post`, `ReceivesDecals`,
+  `RenderPasses`, `SceneSettings`, `ScreenEffect`, `Shader`,
+  `ShaderDiagnostic`, `ShaderKind`, `ShaderOutcome`, `ShaderStatus`,
+  `ShadowFilter`, `ShadowMesh`, `Sky`, `StreamedLod`, `TargetCamera`,
+  `TargetEffect` and `Tonemap`) are in `ponko::render`, the animation types
+  (`AnimationClip`, `AnimationCondition`, `AnimationEvent`,
+  `AnimationGraph`, `AnimationGraphError`, `AnimationLayer`,
+  `AnimationParameter`, `AnimationState`, `AnimationTrack`,
+  `AnimationTransition`, `Animator`, `AttachToJoint`, `Interpolation`,
+  `JointAnimation`, `JointMask`, `LayerBlend`, `LayerId`, `MorphAnimation`,
+  `MorphFrame`, `MorphTarget`, `MorphWeights`, `Motion`, `MotionChild`,
+  `ParamId`, `RootMotion`, `Skeleton`, `SkinOf` and `StateId`) in
   `ponko::anim`, terrain types (`Heightfield`, `TerrainTile`,
   `TerrainTileData`, `TerrainMaterialDesc`, `TextureArray`, `TextureKind`,
-  `FarTerrain`) in `ponko::terrain`, `ParticleCurve`, `ParticleGradient` and
-  `ParticleSpace` in `ponko::particles`, and `BodyKind`, `CollisionStarted`
+  `FarTerrain`) in `ponko::terrain` (its copy of `CellStreamer` is gone:
+  use `ponko::streaming::CellStreamer`), `ParticleCurve`, `ParticleGradient`
+  and `ParticleSpace` in `ponko::particles`, and `BodyKind`, `CollisionStarted`
   and `CollisionStopped` in `ponko::collision`. `d3` keeps the types named
   after the dimension (`Transform`, `Camera`, lights, decals, text, trails,
   particle emitters, positional audio, navigation agents, `UiPanel`) and the

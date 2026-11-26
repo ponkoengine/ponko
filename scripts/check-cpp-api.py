@@ -19,7 +19,7 @@ Two checks on include/ponko.hpp:
    destructors and macros are skipped.
 
 3. Book snippets. Every ```c and ```cpp block in book/src holds only
-   `{{#include}}` lines of files in examples/cpp (guide.cpp and guide.c hold the
+   `{{#include}}` lines of files under examples/cpp (guide.cpp and guide.c hold the
    guide's own), by an anchor that exists there, so the native check
    compiles and runs every C and C++ example the guide shows.
 
@@ -177,8 +177,8 @@ def book_problems():
             for line in lines:
                 found = include.fullmatch(line)
                 source = (chapter.parent / found.group(1)).resolve()
-                if source.parent != NATIVE or not source.is_file():
-                    problems.append(f'{where}: includes {found.group(1)}, which is not a file in examples/cpp.')
+                if not source.is_relative_to(NATIVE) or not source.is_file():
+                    problems.append(f'{where}: includes {found.group(1)}, which is not a file under examples/cpp.')
                     continue
                 anchor = found.group(2)
                 if anchor and not re.search(rf'ANCHOR:\s*{re.escape(anchor)}\s*$', source.read_text(encoding='utf-8'),
