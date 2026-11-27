@@ -216,7 +216,7 @@ impl Graphics {
 impl Graphics {
     /// Draws `mesh` into a new square render target that keeps the picture,
     /// for a UI image: an item icon (feature `3d`). Show it with `target.texture()`, as
-    /// [`UiBuilder::image`](crate::ui::UiBuilder::image) or any texture.
+    /// [`Ui::image`](crate::ui::Ui::image) or any texture.
     ///
     /// The mesh is framed to fill the icon, seen from [`Icon::from`]
     /// through a camera of [`Icon::fov_y`], lit by the scene's sun and sky

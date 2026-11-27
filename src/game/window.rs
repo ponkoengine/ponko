@@ -1189,7 +1189,10 @@ impl ApplicationHandler<Ready> for App<'_> {
 /// Android) while a phone call has the audio. The output closes, and opens
 /// again on return with every sound and the music going on from where they
 /// were.
-#[cfg_attr(not(any(test, target_os = "ios", target_os = "android")), allow(dead_code))]
+#[cfg_attr(
+    not(any(all(test, feature = "audio"), target_os = "ios", target_os = "android")),
+    allow(dead_code)
+)]
 fn hold_audio_while_away(ctx: &mut Ctx, in_call: bool) {
     ctx.audio.hold_output(ctx.window.suspended() || in_call);
 }

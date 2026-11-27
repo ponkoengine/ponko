@@ -1254,6 +1254,8 @@ mod backend {
             &[]
         }
         pub fn open_offline(&mut self, _sample_rate: u32) {}
+        // Called only by the iOS and Android window loops.
+        #[cfg_attr(not(any(target_os = "android", target_os = "ios")), allow(dead_code))]
         pub fn hold_output(&mut self, _held: bool) {}
         /// Silence: nothing is mixed without the `audio` feature.
         pub fn render_offline(&mut self, seconds: f32, sample_rate: u32) -> Vec<[f32; 2]> {
