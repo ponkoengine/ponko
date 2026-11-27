@@ -528,7 +528,11 @@ fn the_shared_cook_fixture_is_what_cook_makes_of_its_source() {
             // So are the Aseprite file's sheet (kept as PNG: 14 x 10
             // isn't a multiple of 4) and its JSON.
             // The occlusion image merged into the crate's ORM is kept.
-            "beep.wav" | "hero.json" | "hero.png" | "maps/crate_ao.png" => assert_eq!(now, then, "{name}"),
+            "beep.wav" | "hero.png" | "maps/crate_ao.png" => assert_eq!(now, then, "{name}"),
+            "hero.json" => {
+                let (now, then) = (unstamped_sheet(now), unstamped_sheet(then));
+                assert_eq!(now, then, "{name}, apart from the version that cooked it");
+            }
             _ if name.ends_with(".png") => assert_eq!(now[..48], then[..48], "{name}: the same KTX2 header"),
             _ => assert_eq!(
                 gltf_json(now).unwrap()["accessors"],
@@ -537,6 +541,41 @@ fn the_shared_cook_fixture_is_what_cook_makes_of_its_source() {
             ),
         }
     }
+}
+
+/// A cooked Aseprite sheet's JSON without `meta.version`, the version of
+/// the cook that wrote it (checked here to be this one's): a committed
+/// fixture keeps the version it was made with.
+fn unstamped_sheet(bytes: &[u8]) -> serde_json::Value {
+    let mut json: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+    let version = json["meta"]["version"].take();
+    assert!(
+        version.is_string(),
+        "the sheet names the version that cooked it: {version}"
+    );
+    json
+}
+
+/// A glTF's buffer views, with only the `buffer` of those that hold images.
+#[cfg(all(feature = "textures", feature = "meshes"))]
+fn views_apart_from_images(json: &serde_json::Value) -> Vec<serde_json::Value> {
+    let images: Vec<u64> = json["images"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|image| image["bufferView"].as_u64().unwrap())
+        .collect();
+    let views = json["bufferViews"].as_array().unwrap();
+    (0..views.len() as u64)
+        .zip(views)
+        .map(|(i, view)| {
+            if images.contains(&i) {
+                view["buffer"].clone()
+            } else {
+                view.clone()
+            }
+        })
+        .collect()
 }
 
 /// A rule as `cook.json` writes it (only what it sets).
@@ -1068,9 +1107,19 @@ fn the_kept_geometry_fixture_is_what_cook_makes_of_its_source() {
     let (now_json, then_json) = (gltf_json(now).unwrap(), gltf_json(then).unwrap());
     // Texture encoders use floats, so another CPU may round a last bit
     // differently: the same layout and geometry.
-    assert_eq!(now_json["bufferViews"], then_json["bufferViews"]);
+    // Each image's KTX2 file names the cook that wrote it (`KTXwriter`),
+    // version included, so its length follows the release: the image views
+    // are compared by buffer only, every other view whole.
+    assert_eq!(views_apart_from_images(&now_json), views_apart_from_images(&then_json));
+    assert_eq!(now_json["images"], then_json["images"]);
+    let stamp = concat!("ponko textures ", env!("CARGO_PKG_VERSION"));
+    let stamps = now.windows(stamp.len()).filter(|w| *w == stamp.as_bytes()).count();
+    assert_eq!(
+        stamps,
+        now_json["images"].as_array().unwrap().len(),
+        "each image says {stamp:?}"
+    );
     assert_eq!(now_json["accessors"], gltf_json(&source[0].1).unwrap()["accessors"]);
-    assert_eq!(now.len(), then.len());
     // The replaced PNGs are dropped, not only zeroed: the cooked file is
     // smaller on disk than its source (6,128 bytes against 7,116).
     assert!(

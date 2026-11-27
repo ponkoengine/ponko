@@ -174,17 +174,35 @@ mod tests {
         }
     }
 
-    #[test]
-    fn templates_depend_on_this_release_of_the_engine() {
-        // `ponko_cli` is released with the engine, at the same version.
-        let version = env!("CARGO_PKG_VERSION");
+    /// The `ponko = "..."` requirement a template of this release carries
+    /// (`release-check.py bump` writes it): the minor (`0.2`, after 1.0 the
+    /// major), or for a release candidate the candidate itself, since Cargo
+    /// never picks a pre-release for `"0.2"`.
+    fn engine_pin(version: &str) -> String {
+        if version.contains('-') {
+            return version.to_string();
+        }
         let mut parts = version.split('.');
         let (major, minor) = (parts.next().unwrap(), parts.next().unwrap());
-        let wanted = if major == "0" {
+        if major == "0" {
             format!("{major}.{minor}")
         } else {
             major.to_string()
-        };
+        }
+    }
+
+    #[test]
+    fn engine_pin_is_the_minor_or_the_candidate() {
+        assert_eq!(engine_pin("0.1.0"), "0.1");
+        assert_eq!(engine_pin("0.2.3"), "0.2");
+        assert_eq!(engine_pin("0.2.0-rc.1"), "0.2.0-rc.1");
+        assert_eq!(engine_pin("1.4.0"), "1");
+    }
+
+    #[test]
+    fn templates_depend_on_this_release_of_the_engine() {
+        // `ponko_cli` is released with the engine, at the same version.
+        let wanted = engine_pin(env!("CARGO_PKG_VERSION"));
         for kind in Kind::ALL {
             let manifest = kind.files()[0].1;
             let line = manifest.lines().find(|l| l.starts_with("ponko = ")).unwrap();
