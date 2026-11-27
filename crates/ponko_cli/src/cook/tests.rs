@@ -546,6 +546,7 @@ fn the_shared_cook_fixture_is_what_cook_makes_of_its_source() {
 /// A cooked Aseprite sheet's JSON without `meta.version`, the version of
 /// the cook that wrote it (checked here to be this one's): a committed
 /// fixture keeps the version it was made with.
+#[cfg(all(feature = "textures", feature = "meshes", feature = "aseprite"))]
 fn unstamped_sheet(bytes: &[u8]) -> serde_json::Value {
     let mut json: serde_json::Value = serde_json::from_slice(bytes).unwrap();
     let version = json["meta"]["version"].take();
