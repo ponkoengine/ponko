@@ -1,3 +1,4 @@
+<!-- area: C and C++ -->
 ### Added
 
 - C and C++: a brain row in a query loop (also a parallel one) can be signalled with a value, as Rust's `Brain::signal_with`: `ponko_ai_brain_signal_num`, `_entity`, `_vec2` and `_vec3` (C++ `ai::brain_row::signal_num`, `signal_entity`, `signal_vec2`, `signal_vec3`).

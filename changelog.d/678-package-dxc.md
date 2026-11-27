@@ -1,3 +1,4 @@
+<!-- area: Web, mobile and platforms -->
 ### Changed
 - Windows game packages bundle Microsoft's DirectX Shader Compiler
   (`dxcompiler.dll`) beside the executable and include its licence in

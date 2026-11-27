@@ -1,3 +1,4 @@
+<!-- area: API and crate layout -->
 ### Added
 - `NetMessages::steam_host_with(client, visibility, max_clients)`: the
   Steam Networking Messages host in a lobby of the given visibility, as

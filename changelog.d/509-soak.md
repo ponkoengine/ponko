@@ -1,3 +1,4 @@
+<!-- area: Development and releases -->
 ### Added
 - Timed reference-game and terrain-streaming soaks (`scripts/soak.py`) with
   repeated play, save and restart paths, resize and minimize/restore cycles,
