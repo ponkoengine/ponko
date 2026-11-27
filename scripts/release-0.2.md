@@ -313,10 +313,10 @@ with 4 slower vCPUs, so the estimates above are these times scaled up):
   for the AT-SPI step), cbindgen, cmake/ctest, the C++ validation bundle,
   the templates and the packaged games all work. 831 render tests skipped
   for want of an adapter, as intended. Failures found, all outside the
-  workflow: the native crash tests without line tables (#693), a UDP test
+  workflow: the native crash tests without line tables (#693, fixed since), a UDP test
   that overflowed Linux's default receive buffer (#694; #692 has since
   sent it in rounds, not re-run on Linux), and `ponko_ffi`
-  with `video` not linking on aarch64 (#695; x86_64 should not be affected). The run also
+  with `video` not linking on aarch64 (#695, fixed since). The run also
   found a bug in the workflow itself, fixed since: `package-smoke`'s apt
   step ran only if nothing had failed before it;
 - `linux-native+linux-package` again from the marker workflow: only those

@@ -348,7 +348,12 @@ it does to any handler that was there before. The child exits with 42 and
 never dies of the signal: no core file, no system crash report, no crash
 dialog. The next start in the test reads the report: its signal, its log,
 and its backtrace, whose frame 0 is named after the function that crashed
-(and, on macOS, whose chain reaches the test's own function).
+(and, on macOS, whose chain reaches the test's own function). Where the test
+binary keeps line tables, as a game's dev build does, each of those frames
+must also give `native_crash.rs:<line>`; a build without debug info (the
+project's checks) names the functions only, so there the frames are matched
+by their full path. The Linux run with frame pointers keeps line tables and
+requires them.
 
 One test lets the child really die of the signal, to show the process still
 ends as a crash after the report (the hand-on to the system's default). It

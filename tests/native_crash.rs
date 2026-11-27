@@ -27,12 +27,16 @@
 //! `RUSTFLAGS="-C force-frame-pointers=yes"` (the workspace's flags stay as
 //! they are). Windows walks with the system's unwinder and checks it always.
 //!
+//! The frames are matched at `native_crash.rs:<line>` where the binary
+//! keeps line tables (any dev build of a game), and by the symbol's path
+//! where it doesn't (the checks build without debug info).
+//!
 //! No window opens: the games run headless.
 #![cfg(any(unix, windows))]
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use ponko::crash::{self, CrashKind, CrashReport, CrashReports};
@@ -169,12 +173,38 @@ fn frames(backtrace: &str) -> Vec<String> {
     frames
 }
 
-/// Some frame of `backtrace` is in `function`, in this test's file. (Names
-/// from line-table debug info are short: `segfault`, not its whole path.)
+/// Whether this binary keeps line tables: a backtrace taken here with the
+/// standard library names this file. A game's dev build has them, so there
+/// the report must give the file and line; the checks build without debug
+/// info (`CARGO_PROFILE_DEV_DEBUG=0`), and there it names the function
+/// alone. `PONKO_CRASH_TESTS_LINE_TABLES=1` (a run built with them) makes
+/// their absence a failure, so the probe can't quietly skip the lines.
+fn has_line_tables() -> bool {
+    static LINES: OnceLock<bool> = OnceLock::new();
+    *LINES.get_or_init(|| {
+        let here = std::backtrace::Backtrace::force_capture().to_string();
+        let lines = here.contains("native_crash.rs:");
+        if std::env::var("PONKO_CRASH_TESTS_LINE_TABLES").as_deref() == Ok("1") {
+            assert!(lines, "the build should keep line tables:\n{here}");
+        }
+        lines
+    })
+}
+
+/// Some frame of `backtrace` is in `function`, in this test's code: at
+/// `native_crash.rs:<line>` where the binary keeps line tables (names from
+/// them are short: `segfault`, not its whole path), else by the symbol's
+/// whole path (`native_crash::child::segfault`), which a system library's
+/// `abort` doesn't have.
 fn has_frame(backtrace: &str, function: &str) -> bool {
+    let place = if has_line_tables() {
+        "native_crash.rs:"
+    } else {
+        "native_crash::"
+    };
     frames(backtrace)
         .iter()
-        .any(|f| f.contains(function) && f.contains("native_crash.rs:"))
+        .any(|f| f.contains(function) && f.contains(place))
 }
 
 /// The backtrace names the function that crashed in frame 0, in the test's

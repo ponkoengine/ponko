@@ -267,6 +267,16 @@ and sound. In C++ it is `ponko::video`:
 the video changes. A file in another codec is `PONKO_UNSUPPORTED`, with
 `ponko_last_error` naming the encoder settings to use instead.
 
+On arm64 Linux and Android the shared library (`libponko_ffi.so`) with
+`video` is linked with `-Wl,-Bsymbolic`, which `ponko_ffi`'s build script
+adds. The decoder's [assembly](#the-decoders-assembly) reads its tables with
+PC-relative addresses, and a shared library may only do that for symbols it
+keeps to itself; the flag binds the library's references to its own
+definitions, so the assembly (and its speed) stays. A shared library of your
+own that takes in the static library (`libponko_ffi.a`) with `video` there
+needs the same flag, or a version script that keeps the decoder's symbols
+local (as `ponko package` does for an Android game); a program doesn't.
+
 ## Testing
 
 Everything above runs headless: `Video` decodes without a GPU (the texture

@@ -451,12 +451,17 @@ jobs:
       # Linux keeps no frame pointers by default, so the native crash
       # backtrace tests check the whole chain only in a build that has them
       # (`tests/native_crash.rs`, the guide's "Backtraces of a native crash").
-      # Its own target directory: the flag rebuilds everything.
+      # Its own target directory: the flag rebuilds everything. The build
+      # keeps line tables too, as a game's dev build does, so the frames'
+      # files and lines are checked here (the other runs, without debug
+      # info, match the frames by name).
       - name: Native crash backtraces with frame pointers (Linux)
         if: ${{ !cancelled() && runner.os == 'Linux' }}
         env:
           RUSTFLAGS: -D warnings -C force-frame-pointers=yes
+          CARGO_PROFILE_DEV_DEBUG: line-tables-only
           PONKO_CRASH_TESTS_FRAME_POINTERS: 1
+          PONKO_CRASH_TESTS_LINE_TABLES: 1
           CARGO_TARGET_DIR: target/frame-pointers
         run: cargo test -p ponko --no-fail-fast --test native_crash
       # Linux and macOS run the render tests only where the runner has a
