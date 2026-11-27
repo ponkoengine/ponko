@@ -43,6 +43,7 @@ Usage: scripts/check-book-snippets.py [--features a,b] [--no-compile] [--keep] [
 import argparse
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -521,18 +522,26 @@ def compile_native(crate, others):
         old.unlink()
     errors = []
     for n, (lang, rel, source) in enumerate(o for o in others if o[0] in ("c", "cpp")):
-        ext, compiler, std = (".c", os.environ.get("CC", "cc"), "-std=c11") if lang == "c" else \
-            (".cpp", os.environ.get("CXX", "c++"), "-std=c++17")
+        var = "CC" if lang == "c" else "CXX"
+        ext, compiler, std = (".c", os.environ.get(var, "cc"), "c11") if lang == "c" else \
+            (".cpp", os.environ.get(var, "c++"), "c++17")
         path = folder / f"after{n}{ext}"
         path.write_text(source, encoding='utf-8', newline='\n')
-        cmd = [compiler, std, "-fsyntax-only", "-I", str(ROOT / "include"), str(path)]
+        # Windows has no `cc`: use MSVC's `cl` (from a Developer PowerShell).
+        if var not in os.environ and not shutil.which(compiler) and shutil.which("cl"):
+            compiler = "cl"
+        if Path(compiler).stem.lower() in ("cl", "clang-cl"):
+            cmd = [compiler, "/nologo", f"/std:{std}", "/EHsc", "/Zs", "/I", str(ROOT / "include"), str(path)]
+        else:
+            cmd = [compiler, f"-std={std}", "-fsyntax-only", "-I", str(ROOT / "include"), str(path)]
         try:
             result = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, encoding='utf-8')
         except FileNotFoundError:
-            errors.append(f"{rel}: no {lang} compiler (`{compiler}`; set {'CC' if lang == 'c' else 'CXX'})")
+            errors.append(f"{rel}: no {lang} compiler (`{compiler}`; set {var}, or on Windows run from a Developer PowerShell for `cl`)")
             continue
         if result.returncode != 0:
-            errors.append(result.stderr.rstrip())
+            # cl reports errors on stdout.
+            errors.append((result.stderr + result.stdout).rstrip())
     return "\n".join(errors)
 
 
