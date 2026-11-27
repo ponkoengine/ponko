@@ -68,9 +68,11 @@ fn distance_slope(p: vec2<i32>) -> f32 {
     let y = min(abs(view_distance(p + vec2<i32>(0, 1)) - w), abs(view_distance(p - vec2<i32>(0, 1)) - w));
     return max(x, y);
 }
-// The normal at pixel `p` (at `center`), facing the camera (`view`),
-// from the less discontinuous neighbour on either side of each axis.
-fn surface_normal(p: vec2<i32>, center: vec3<f32>, view: vec3<f32>) -> vec3<f32> {
+// The surface at pixel `p` (at `center`): its normal, facing the camera
+// (`view`), from the less discontinuous neighbour on either side of each
+// axis, and how far apart neighbouring pixels lie on it (the larger axis).
+struct Surface { normal: vec3<f32>, footprint: f32 };
+fn surface_at(p: vec2<i32>, center: vec3<f32>, view: vec3<f32>) -> Surface {
     let left = center - position(p - vec2<i32>(1, 0));
     let right = position(p + vec2<i32>(1, 0)) - center;
     let up = center - position(p - vec2<i32>(0, 1));
@@ -78,7 +80,7 @@ fn surface_normal(p: vec2<i32>, center: vec3<f32>, view: vec3<f32>) -> vec3<f32>
     let dx = select(left, right, dot(right, right) < dot(left, left));
     let dy = select(up, down, dot(down, down) < dot(up, up));
     let normal = safe_normalize(cross(dx, dy), view);
-    return normal * select(-1.0, 1.0, dot(normal, view) >= 0.0);
+    return Surface(normal * select(-1.0, 1.0, dot(normal, view) >= 0.0), sqrt(max(dot(dx, dx), dot(dy, dy))));
 }
 // Steps of the march toward the sun for contact shadows.
 const CONTACT_STEPS: i32 = 12;
@@ -136,7 +138,7 @@ fn interleave(p: vec2<i32>) -> f32 {
         return vec4<f32>(0.0, contact, 0.0, 1.0);
     }
     let view = normalize(settings.camera.xyz - center);
-    let normal = surface_normal(p, center, view);
+    let normal = surface_at(p, center, view).normal;
     let radius = settings.params.x;
     // Projection of a world-space radius at this pixel (perspective).
     let clip = settings.projection * vec4<f32>(center, 1.0);
@@ -194,7 +196,8 @@ fn resolve_ao(in: Full) -> Resolved {
     let p = vec2<i32>(in.at.xy);
     if is_sky(z_at(p)) { return Resolved(vec4<f32>(0.0, 0.0, 1.0, 0.0), vec4<f32>(0.0)); }
     let center = position(p);
-    let normal = surface_normal(p, center, normalize(settings.camera.xyz - center));
+    let surface = surface_at(p, center, normalize(settings.camera.xyz - center));
+    let near = max(settings.params.x * settings.params.x * 0.01, 0.000001);
     var sum = vec2<f32>(0.0);
     var total = 0.0;
     let scale = select(1, 2, settings.temporal.z > 0.0);
@@ -206,12 +209,15 @@ fn resolve_ao(in: Full) -> Resolved {
             let q = clamp(base + vec2<i32>(x, y), vec2<i32>(0), vec2<i32>(textureDimensions(image))-1);
             let at = coordinate(q * scale + vec2<i32>(scale / 2));
             if is_sky(z_at(at)) { continue; }
-            // Neighbours count by their distance off this pixel's plane, not
-            // along it: on ground seen at a grazing angle far away, the next
-            // pixel up is metres along the ground, and weighting by that
-            // distance left the far field unfiltered.
-            let off_plane = dot(position(at) - center, normal);
-            let w = exp(-dot(vec2<f32>(at-p) / f32(scale), vec2<f32>(at-p) / f32(scale)) * 0.25) * exp(-off_plane * off_plane / max(settings.params.x * settings.params.x * 0.01, 0.000001));
+            // Neighbours count by their distance off this pixel's plane, and
+            // along it only as far as the pixels themselves lie apart: on
+            // ground seen at a grazing angle far away, the next pixel up is
+            // metres along the ground, and weighting by that distance alone
+            // left the far field unfiltered (and its turns unaveraged).
+            let delta = position(at) - center;
+            let off_plane = dot(delta, surface.normal);
+            let along = max(near, f32(scale * scale) * surface.footprint * surface.footprint);
+            let w = exp(-dot(vec2<f32>(at-p) / f32(scale), vec2<f32>(at-p) / f32(scale)) * 0.25) * exp(-off_plane * off_plane / near - dot(delta, delta) / along);
             sum += textureLoad(image, q, 0).rg * w;
             total += w;
         }
