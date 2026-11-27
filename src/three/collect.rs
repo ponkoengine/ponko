@@ -779,10 +779,13 @@ impl Frame3D {
             if d.bounds.1 < 0.0 || d.lod != super::skin::NOT_LOD {
                 continue;
             }
-            let caster = assets.casts_shadows(d.mesh).then_some(d.bounds);
+            let e = ponko_ecs::Entity::from_bits(d.entity);
+            // `ShadowMesh(None)` turns its shadow off, as on any model (a
+            // stand-in mesh can't follow the pose: the posed mesh casts).
+            let shadow_off = matches!(world.get::<ShadowMesh>(e), Some(ShadowMesh(None)));
+            let caster = (!shadow_off && assets.casts_shadows(d.mesh)).then_some(d.bounds);
             // A `ShadowOnly` model: only the shadow maps (not counted as
             // hidden from the camera, which never draws it).
-            let e = ponko_ecs::Entity::from_bits(d.entity);
             // On none of the camera's layers: only its shadows are drawn.
             let off_layers = !world
                 .get::<crate::camera::RenderLayers>(e)
@@ -1700,6 +1703,55 @@ mod tests {
         frame.collect(&mut world, &assets, &SkinFrame::default(), &eye, &lighting);
         assert_eq!(frame.visible, 0, "another layer's camera leaves it out");
         assert!(frame.runs.is_empty());
+    }
+
+    #[test]
+    fn a_skinned_model_with_no_shadow_mesh_casts_no_shadow() {
+        // A first-person arm: skinned, seen, and casting nothing.
+        let mut world = World::new();
+        let assets = Assets3D {
+            bounds: vec![(Vec3::ZERO, 1.0)],
+            ..Default::default()
+        };
+        let mut camera = camera();
+        camera.position = Vec3::new(0.0, 5.0, 10.0);
+        camera.look_at(Vec3::ZERO);
+        let lighting = Lighting {
+            sun_direction: Vec3::new(0.0, -1.0, -0.2),
+            shadow_distance: 30.0,
+            shadow_cascades: 1,
+            ..Default::default()
+        };
+        let arm = world.spawn((ShadowMesh(None),));
+        let mut skins = SkinFrame::default();
+        let matrix = Mat4::IDENTITY;
+        skins.draws.push(super::super::skin::SkinDraw {
+            mesh: 0,
+            instance: Instance3D {
+                model: matrix.to_cols_array_2d(),
+                color: [1.0; 4],
+            },
+            entity: arm.to_bits(),
+            matrix,
+            scale: 1.0,
+            bounds: (Vec3::ZERO, 1.0),
+            first: 0,
+            morph_first: 0,
+            morph_count: 0,
+            material: u32::MAX,
+            parts: (0, 0),
+            lod: super::super::skin::NOT_LOD,
+            posed_motion: false,
+        });
+        let mut frame = Frame3D::default();
+        frame.collect(&mut world, &assets, &skins, &camera, &lighting);
+        assert_eq!(frame.visible, 1, "the camera draws it");
+        assert!(frame.shadow_runs[0].is_empty(), "no shadow: {:?}", frame.shadow_runs[0]);
+        // Without the ShadowMesh it casts (the negative control).
+        world.remove::<ShadowMesh>(arm);
+        let mut frame = Frame3D::default();
+        frame.collect(&mut world, &assets, &skins, &camera, &lighting);
+        assert!(!frame.shadow_runs[0].is_empty(), "its own posed mesh casts");
     }
 
     #[test]

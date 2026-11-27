@@ -801,6 +801,9 @@ pub struct Model {
 /// An entity with a `ShadowMesh` and no [`Model`] casts only the shadow: a
 /// stand-in for the shadow of several models around it that cast none. On
 /// a [`TerrainTile`], `ShadowMesh(None)` turns the ground's shadow off.
+/// A skinned model always casts with its posed mesh (a stand-in can't
+/// follow the pose); `ShadowMesh(None)` turns its shadow off, as on a
+/// first-person arm whose shadow the body casts.
 ///
 /// In scene files it's `"ShadowMesh": { "mesh": "tree_shadow.glb" }`, or
 /// `{ "mesh": null }` for no shadow.
