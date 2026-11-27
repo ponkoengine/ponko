@@ -107,7 +107,10 @@ impl Audio {
     /// Android) or a phone call has the audio (Android) (`true`), and
     /// opens it again after: nothing plays and no stream runs meanwhile;
     /// every sound and the music go on from where they were.
-    #[cfg_attr(not(any(test, target_os = "android", target_os = "ios")), allow(dead_code))]
+    #[cfg_attr(
+        not(any(all(test, feature = "audio"), target_os = "android", target_os = "ios")),
+        allow(dead_code)
+    )]
     pub(crate) fn hold_output(&mut self, held: bool) {
         self.backend.hold_output(held);
     }
