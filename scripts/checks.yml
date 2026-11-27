@@ -75,7 +75,7 @@ jobs:
           python3 scripts/changelog.py --check
           python3 scripts/changelog.py --selftest
       # The release guard (CONTRIBUTING.md "Releasing") and the guide's note,
-      # the first run from crates.io, and the release-time OS matrix
+      # the first run from crates.io, and the release-time CI
       # (scripts/release-matrix.yml, not enabled) still made from this file.
       - name: Release scripts
         run: |

@@ -79,10 +79,11 @@ suite, one fresh session per task, and put
 pull request: "At a release" in `book/src/agents.md` has the steps, and
 `book/src/check-results/macos.md` the 2026-11-26 rehearsal to compare with.
 
-The checks that need other operating systems: run `run-checks.py` on the
-Linux and Windows machines, or, once per minor, on hosted runners with the
-release-time matrix (`scripts/release-matrix.yml`, not enabled; see
-"Release-time matrix" below). For `rc.1` also record the coverage numbers and
+The checks on the other machines: `run-checks.py` on the Windows PCs
+(Windows x64, DirectX 12 and Vulkan, AMD and NVIDIA), and the Linux x86_64
+checks on a Linux machine, or in one run of the release-time CI with the
+markers of what changed since the last candidate (for `rc.1` of a minor,
+`linux-all`; see "Release-time CI" below). For `rc.1` also record the coverage numbers and
 the benchmark baseline (CONTRIBUTING.md, step 3) in the pull request. Open
 the pull request and merge it.
 
@@ -108,11 +109,12 @@ python3 scripts/c-library.py smoke target/c-library/ponko-vV-linux-arm64.tar.gz 
 ```
 
 `windows-arm64` is built on a hosted Windows on Arm runner (no maintainer
-machine has the ARM64 tools): push the `release-matrix/c-library-V` branch
-of the release-time matrix (below), then fetch the archive into `dist/`:
+machine has the ARM64 tools): push the `release-matrix/windows-arm64/V`
+branch of the release-time CI (below), then fetch the archive into `dist/`
+(the artifact is kept 7 days):
 
 ```sh
-gh run list --branch release-matrix/c-library-V --workflow "Release matrix"   # the run's id, once it is green
+gh run list --branch release-matrix/windows-arm64/V --workflow "Release CI"   # the run's id, once it is green
 gh run download <id> -n ponko-c-library-windows-arm64 -D dist
 ```
 
@@ -134,10 +136,11 @@ python3 scripts/release-check.py published      # every crates.io version has it
 ## 3. After publishing
 
 ```sh
-python3 scripts/first-run.py V                 # on macOS, Linux and Windows: what a new user does, from crates.io
+python3 scripts/first-run.py V                 # on the Mac and a Windows PC: what a new user does, from crates.io
 ```
 
-Or push the first-run branch of the release-time matrix (below). Then
+Linux: push the `release-matrix/first-run/V` branch of the release-time CI
+(below), or run the same command on a Linux machine. Then
 redeploy the website (its latest Cloudflare Pages deployment, retried) so
 https://ponko.dev/guide/ shows the release page and the migration chapter.
 For `0.2.0` (not a candidate) publish the web gallery to `gh-pages`
@@ -156,27 +159,172 @@ For `0.2.0` (not a candidate) publish the web gallery to `gh-pages`
   section rename and `--notes 0.2.0`), then steps 2 and 3 without
   `--prerelease`.
 
-## Release-time matrix
+## Release-time CI
 
-`scripts/release-matrix.yml` is a GitHub Actions workflow made from the
-multi-OS jobs of `scripts/checks.yml` (`python3 scripts/release-matrix.py
-write`; the checks job fails if it is out of date). It is not enabled:
-GitHub never reads `scripts/`. It may run once per minor, at the cut. A
-maintainer turns Actions on in the repository settings, then:
+There is no CI, and GitHub Actions is off for the repository. Hosted runners
+run only at a release, and only for what the maintainers' own machines can't
+test:
+
+| What | Where |
+|---|---|
+| macOS (arm64, x86_64): checks, C library archives, first run | the Mac |
+| Windows x64 (DirectX 12 and Vulkan, AMD and NVIDIA): checks, C library archive, first run | the Windows PCs |
+| Linux arm64 C library archive and its C/C++ tests | the Mac, in Docker (`c-library.py smoke --docker`) |
+| Linux x86_64 checks | hosted `ubuntu-24.04`, job `linux`, when marked |
+| Windows on Arm C library archive | hosted `windows-11-arm`, job `windows-arm64`, when marked |
+| Linux first run from crates.io | hosted `ubuntu-24.04`, job `first-run`, when marked |
+
+The workflow is `scripts/release-matrix.yml`, generated from
+`scripts/checks.yml` by `python3 scripts/release-matrix.py write`; the
+checks job ("Release scripts") fails if it is out of date, so a step added
+to one of those `checks.yml` jobs reaches it by itself. It is not enabled:
+GitHub never reads `scripts/`.
+
+### Markers
+
+**Nothing runs by default.** The branch it is pushed on,
+`release-matrix/<markers>/<version>`, names what to test, markers joined by
+`+`: `release-matrix/linux-native+windows-arm64/0.2.0-rc.1`. A branch
+without a known marker runs no job. No marker is part of another, so a
+marker can't select something by accident (`release-matrix.py selftest`
+checks that, and that each marker selects exactly its steps).
+
+| Marker | What it tests | Runner | Estimate |
+|---|---|---|---|
+| `linux-tests` | `checks.yml` `test`: the workspace tests (unit, integration, doc), the examples build, the native crash test with frame pointers | `ubuntu-24.04` | 35–45 min |
+| `linux-templates` | `templates`: the command line tool's tests, each `ponko new` template generated and tested | `ubuntu-24.04` | about 15 min |
+| `linux-features` | `test-features`: the feature sets (no default features, editor, video, WebRTC, Steam, accessibility over AT-SPI, ...) | `ubuntu-24.04` | 45–55 min |
+| `linux-native` | `native`: the C header, the C library's exports, the C and C++ test programs (cmake, ctest), the C++ validation bundle | `ubuntu-24.04` | about 15 min |
+| `linux-package` | `package-smoke`: the packaged reference games, headless and in a window under Xvfb with software Vulkan | `ubuntu-24.04` | about 20 min |
+| `linux-all` | all five above | `ubuntu-24.04` | 80–100 min |
+| `windows-arm64` | the Windows on Arm C library: `c-library.py build --target aarch64-pc-windows-msvc` and its smoke (the C and C++ tests run); artifact `ponko-c-library-windows-arm64`, kept 7 days | `windows-11-arm` | 30–45 min |
+| `first-run` | after `cargo publish`: `scripts/first-run.py V` against crates.io | `ubuntu-24.04` | about 15 min |
+
+The Linux markers share ONE job and one build tree: the job runs when any of
+them is there, and each group of steps only with its own marker (or
+`linux-all`), so `linux-tests+linux-native` builds once. The timeouts are
+150 minutes (`linux`: above the `linux-all` estimate, since a timeout loses
+the whole run), 60 (`windows-arm64`) and 30 (`first-run`).
+
+**Rust version.** `linux` and `windows-arm64` use the Rust release the
+maintainers' machines checked the release revision with (`RUST` in
+`release-matrix.py`, set at each cut and regenerated), not a floating
+`stable`: with `-D warnings`, a lint added by a newer compiler would fail
+every build step of a run. `first-run` uses `stable`, what a new user
+installs.
+
+**Mark only what changed or what the release needs.** For `rc.1` of a minor
+that is `linux-all` once, plus `windows-arm64` from the tag and `first-run`
+after publishing. A later candidate marks only the parts its fixes touched
+(a C API fix: `linux-native+windows-arm64`). Never `linux-all` to "just
+check". GitHub restricted the maintainer's account once for hours of
+Actions a day, and warned that bulk or near-continuous runs bring the
+restriction back: one `rc.1` costs about 150 runner minutes (`linux-all`
+about 90, `windows-arm64` about 40, `first-run` about 15), and that is
+the budget.
+
+### Rules
+
+- **The maintainer turns Actions on and off**, in the repository settings
+  (Actions, General), for that one run, and off again as soon as it
+  finished (or an agent the maintainer asked to do exactly that). Nobody
+  else enables it, adds anything to `.github/workflows/` on `main`, or
+  pushes a `release-matrix/**` branch.
+- **One run per release candidate** and marker set.
+- **No re-runs to see if it passes.** A red step is reproduced locally
+  (for Linux, the step's commands in an `ubuntu:24.04` container, as
+  below), fixed on `main` through a pull request, and checked by the next
+  candidate's run. A run that died of the runner itself (a network or
+  runner outage, not a test) may be pushed once more, with the reason in
+  the release pull request.
+- No caches are saved (a run's cache would never be read again), the
+  artifacts are kept 3 days (the failed render images) and 7 days (the
+  archive), `concurrency` cancels a run that a newer push on the same
+  branch replaces, the workflow can only read the repository, and its
+  third-party actions are pinned to full commits.
+
+### A run
 
 ```sh
+# the maintainer: Settings, Actions, General: allow actions
 git switch --detach vV          # or the release branch, before tagging
 mkdir -p .github/workflows && cp scripts/release-matrix.yml .github/workflows/
-git switch -c release-matrix/checks-V
-git add .github/workflows/release-matrix.yml && git commit -m "Release matrix for V"
-git push origin release-matrix/checks-V
+git switch -c release-matrix/linux-all/V
+git add .github/workflows/release-matrix.yml && git commit -m "Release CI for V"
+git push origin release-matrix/linux-all/V
+# once it finished:
+git push origin --delete release-matrix/linux-all/V
+# the maintainer: Settings, Actions, General: disable actions
 ```
 
-The branch `release-matrix/c-library-V` (made from the tag, before the
-release is created) runs only the `windows-arm64` C library job, whose
-archive step 2 above downloads. After `cargo publish`, the same with the
-branch `release-matrix/first-run-V` runs `scripts/first-run.py V` on the
-three operating systems. When they are done: delete the branches
-(`git push origin --delete release-matrix/checks-V`), turn Actions off again,
-and write in the release pull request which jobs ran where. The workflow file
-never goes to `main`.
+`windows-arm64` is pushed from the tag, before the release is created;
+`first-run` after `cargo publish`. Write in the release pull request which
+markers ran, their result and their minutes. The workflow file never goes
+to `main`.
+
+### The Linux job
+
+One job, one build tree (`CARGO_TARGET_DIR` is the checkout's `target/`),
+every step named `<checks.yml job> / <step>`. `release-matrix.py` takes each
+step of the five jobs, evaluates its `if:` for Linux (the macOS and Windows
+steps go), drops the `local-*` keys, the checkout, toolchain and cache
+steps, installs each apt package once and turns the cached `cbindgen`
+install into `cargo install --locked`. A step it can't place (an `if:` it
+can't evaluate, a local action, an action without a pinned commit, a
+`local-requires` it doesn't know how to install) stops it, so the job can't
+silently lose a check.
+
+- **Order.** `test` (the workspace with default features) first, then
+  `templates` (the command line tool, same build), the `test-features`
+  feature sets, `native` (the C library in release, cmake and ctest), then
+  `package-smoke`. The frame-pointer crash test (a second build tree), the
+  image margins and the failed images come last.
+- **Failures.** Every check step runs `if: !cancelled() &&
+  steps.setup.outcome == 'success'` and its marker: one failing step
+  doesn't stop the others, but a failed checkout, apt install or toolchain
+  (the `setup` step) stops the job at once instead of letting every step
+  fail until the timeout.
+- **GPU.** The runner has no GPU. The render tests find no adapter and skip
+  with a logged reason (`target/render-test-output/skips.log`), and the last
+  step lists them: a skip is not a pass. Mesa's software Vulkan (lavapipe)
+  is not installed for them: the reference images and tolerances are kept on
+  real GPUs (Metal on the Mac, DirectX 12 and Vulkan on AMD and NVIDIA on the
+  Windows PCs), and a lavapipe run of the render tests was not verified.
+  `package-smoke` needs lavapipe for its window runs under Xvfb, so its apt
+  step installs it and the job runs it after every test step.
+- **Disk.** Every part in one build tree came to about 45 GB of `target/`
+  in the container (arm64; x86_64 should be close), more than a runner's
+  system disk has free. The first step, "Free disk space", removes SDKs the job never uses
+  (Android, .NET, GHC, CodeQL, Swift: about 25 GB) and puts `target/` on the
+  runner's second disk when `/mnt` has more room; it prints `df` before and
+  after, so the run shows the margin. Not yet seen on a real runner.
+
+### Checked without Actions
+
+Changes to the workflow are checked without spending runner time:
+`python3 scripts/release-matrix.py selftest` and `check`, `actionlint
+scripts/release-matrix.yml`, and the Linux job's steps run in an
+`ubuntu:24.04` container. What that covered on 2026-11-27 (Docker on an
+Apple Silicon Mac, so `linux/arm64`, 5 build jobs; the runner is x86_64
+with 4 slower vCPUs, so the estimates above are these times scaled up):
+
+- every step of `linux-all` once, in order: 54 minutes (some dependencies
+  were already built by an earlier attempt), `target/` 45 GB. The apt packages (including `dbus` and `at-spi2-core`
+  for the AT-SPI step), cbindgen, cmake/ctest, the C++ validation bundle,
+  the templates and the packaged games all work. 831 render tests skipped
+  for want of an adapter, as intended. Failures found, all outside the
+  workflow: the native crash tests without line tables (#693), a UDP test
+  that overflowed Linux's default receive buffer (#694; #692 has since
+  sent it in rounds, not re-run on Linux), and `ponko_ffi`
+  with `video` not linking on aarch64 (#695; x86_64 should not be affected). The run also
+  found a bug in the workflow itself, fixed since: `package-smoke`'s apt
+  step ran only if nothing had failed before it;
+- `linux-native+linux-package` again from the marker workflow: only those
+  steps ran (7.8 minutes on the warm tree), all green, including both
+  window runs under Xvfb with lavapipe and the free-disk step.
+
+Not covered: the hosted runner image itself (what it preinstalls, its real
+disk and speed), the `windows-arm64` job (no Windows on Arm machine; its
+commands are those of "The C library archives") and `first-run` (needs a
+published release). The first real run of each is the check; its minutes
+go in the release pull request.
