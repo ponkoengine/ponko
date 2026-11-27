@@ -1,7 +1,7 @@
 ### Added
 - The release builds and tests the C library for Windows on Arm on a
-  GitHub-hosted Windows on Arm runner (`release-matrix/c-library-<version>` in
-  the release-time matrix), and `c-library.py smoke --docker` runs a Linux
+  GitHub-hosted Windows on Arm runner (`release-matrix/windows-arm64/<version>`
+  in the release-time CI), and `c-library.py smoke --docker` runs a Linux
   archive's C and C++ tests in a container whose glibc is the archives' 2.28
   floor, so the `linux-arm64` library is checked by running it.
 

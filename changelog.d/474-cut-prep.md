@@ -17,9 +17,10 @@
   (install the CLI, make and test each template, build the guide's first
   program), for each OS after a release.
 - `scripts/release-0.2.md`: the 0.2 cut as one list of commands, and
-  `scripts/release-matrix.yml`, a release-time OS matrix made from the check
-  list that is not enabled (it runs only from a branch a maintainer pushes
-  at the cut).
+  `scripts/release-matrix.yml`, a release-time CI workflow made from the
+  check list that is not enabled (it runs only from a branch a maintainer
+  pushes at a release, for the Linux checks, the Windows on Arm C library
+  and the Linux first run).
 
 ### Changed
 - A GitHub release whose CHANGELOG section is too long for its notes keeps the

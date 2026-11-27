@@ -882,9 +882,10 @@ one list of commands for the 0.2 cut (rc.1, a week, 0.2.0).
 
    Link the folder and the comparison in the CHANGELOG section (the release
    notes). Run the checks of [scripts/checks.yml](scripts/checks.yml) on the
-   release branch (all of them for a minor; on every OS the matrix names, as
-   far as the maintainers have the machines; say in the pull request which
-   ran where), then open the pull request and merge it.
+   release branch (all of them for a minor; on every OS the matrix names:
+   macOS on the Mac, Windows x64 on the Windows PCs, Linux x86_64 on a Linux
+   machine or in a run of the [release-time CI](#release-time-ci); say in
+   the pull request which ran where), then open the pull request and merge it.
 4. Tag the merge commit on `main` (on `release-X.Y` for a patch release) and
    push the tag:
 
@@ -912,7 +913,7 @@ one list of commands for the 0.2 cut (rc.1, a week, 0.2.0).
       `python3 scripts/c-library.py build --target <triple>`, and check
       each with `python3 scripts/c-library.py smoke <archive>` (`--docker`
       for `linux-arm64`; `windows-arm64` is built by the
-      `release-matrix/c-library-X.Y.Z` branch on a hosted Windows on Arm
+      `release-matrix/windows-arm64/X.Y.Z` branch on a hosted Windows on Arm
       runner, see below).
    3. **Package the crates**: `cargo publish --workspace --dry-run`.
    4. **Create the GitHub release** from the CHANGELOG section, with the
@@ -934,9 +935,8 @@ one list of commands for the 0.2 cut (rc.1, a week, 0.2.0).
       macOS, Linux and Windows, what a new user gets from crates.io:
       `python3 scripts/first-run.py X.Y.Z` (installs `ponko_cli`, makes and
       tests each template against exactly that version, builds the guide's
-      first program). Once per minor, the release-time matrix may run it and
-      the multi-OS checks on hosted runners instead
-      ([scripts/release-0.2.md](scripts/release-0.2.md#release-time-matrix)).
+      first program). Linux may be the `first-run` marker of the
+      [release-time CI](#release-time-ci).
    6. **Redeploy the website** (https://ponko.dev/, which builds the guide
       from `main`; its own repository, `ponkoengine/ponko-website`): retry
       its latest deployment in Cloudflare Pages, or let its next deployment
@@ -1069,15 +1069,48 @@ machine the same command runs them.
 
 No maintainer machine has the ARM64 tools, so the release builds
 `windows-arm64` on a GitHub-hosted Windows on Arm runner (`windows-11-arm`)
-instead: the job `c-library-windows-arm64` of the release-time matrix
-(`scripts/release-matrix.yml`, made by `scripts/release-matrix.py`), run by
-pushing the branch `release-matrix/c-library-X.Y.Z` from the tag (the
-commands are in [scripts/release-0.2.md](scripts/release-0.2.md#release-time-matrix)).
+instead: the job `windows-arm64` of the [release-time CI](#release-time-ci),
+run by pushing the branch `release-matrix/windows-arm64/X.Y.Z` from the tag.
 It runs the two commands above for `aarch64-pc-windows-msvc`, so the archive
 is smoke-tested by running the tests, and uploads it as the workflow artifact
 `ponko-c-library-windows-arm64`. Download it into `dist/` with
-`gh run download <run> -n ponko-c-library-windows-arm64 -D dist`, delete the
-branch, and attach it with the other five.
+`gh run download <run> -n ponko-c-library-windows-arm64 -D dist` (it is
+kept 7 days), delete the branch, and attach it with the other five.
+
+### Release-time CI
+
+There is no CI, and GitHub Actions stays off. At a release, hosted runners
+may do what the maintainers' machines can't: the Linux x86_64 checks
+(`ubuntu-24.04`), the Windows on Arm C library archive (`windows-11-arm`)
+and the Linux first run from crates.io. The workflow,
+`scripts/release-matrix.yml`, is generated from `scripts/checks.yml` by
+`scripts/release-matrix.py`. Nothing in it runs by default: the branch it is
+pushed on, `release-matrix/<markers>/<version>` (markers joined by `+`),
+marks each part to run.
+
+| Marker | What it tests | Estimate |
+|---|---|---|
+| `linux-tests` | the workspace tests (`checks.yml` `test`) | E_TESTS |
+| `linux-templates` | the `ponko new` templates (`templates`) | E_TEMPLATES |
+| `linux-features` | the feature sets (`test-features`) | E_FEATURES |
+| `linux-native` | the C and C++ library and programs (`native`) | E_NATIVE |
+| `linux-package` | the packaged games (`package-smoke`) | E_PACKAGE |
+| `linux-all` | all five, in one build | E_ALL |
+| `windows-arm64` | the Windows on Arm C library archive and its smoke | 30–45 min |
+| `first-run` | `scripts/first-run.py` on Linux, after publishing | about 15 min |
+
+The rules ([scripts/release-0.2.md](scripts/release-0.2.md#release-time-ci)
+has the commands and the details):
+
+- Only the maintainer turns Actions on, for that one run, and off again
+  right after it. The workflow never goes to `main`.
+- Mark only what changed or what the release needs (`linux-all` once for
+  the first candidate of a minor; afterwards only the parts a fix touched).
+  Never `linux-all` to "just check".
+- One run per release candidate and marker set. No re-runs to see if a run
+  passes: reproduce a failure locally (the Linux steps in an `ubuntu:24.04`
+  container), fix it through a pull request, and let the next candidate's
+  run check it.
 
 ### One-time setup (a maintainer, in settings)
 

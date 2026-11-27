@@ -6,43 +6,55 @@
     release-matrix.py selftest
 
 The project has no CI (CONTRIBUTING.md, "Releasing"). The maintainers' own
-machines cover macOS, Windows x64 and the arm64 Linux C library. At a release
-candidate, hosted runners do only what those machines cannot:
+machines cover macOS, Windows x64 and the arm64 Linux C library. At a release,
+hosted runners may do what those machines cannot, and only what the branch
+name marks:
 
-- `linux` (ubuntu-24.04, x86_64): the Linux steps of the checks.yml jobs
-  `test`, `templates`, `test-features`, `native` and `package-smoke`, as
-  named steps of ONE job in one build tree;
-- `windows-arm64` (windows-11-arm): the Windows on Arm C library archive,
-  built and smoke-tested;
-- `first-run` (ubuntu-24.04): scripts/first-run.py against crates.io, after
-  `cargo publish`.
+    release-matrix/<markers>/<version>     markers joined by `+`
+    release-matrix/linux-native+windows-arm64/0.2.0-rc.1
+
+| marker            | runs                                                       |
+|-------------------|------------------------------------------------------------|
+| `linux-tests`     | checks.yml `test` (Linux steps), in the `linux` job        |
+| `linux-templates` | checks.yml `templates`, in the `linux` job                 |
+| `linux-features`  | checks.yml `test-features` (Linux steps), in `linux`       |
+| `linux-native`    | checks.yml `native` (C and C++), in `linux`                |
+| `linux-package`   | checks.yml `package-smoke` (Linux steps), in `linux`       |
+| `linux-all`       | all five above                                             |
+| `windows-arm64`   | job `windows-arm64`: the Windows on Arm C library + smoke  |
+| `first-run`       | job `first-run`: scripts/first-run.py against crates.io    |
+
+Nothing runs by default: a branch without a known marker runs no job. The
+`linux` job (ubuntu-24.04) runs when any `linux-*` marker is there, in ONE
+build tree, and each of its step groups only with its own marker (or
+`linux-all`), so two markers never build twice. No marker is a substring of
+another (the selftest checks it), so `contains()` on the branch name is
+exact.
 
 This script writes that workflow, `scripts/release-matrix.yml`, from
 `scripts/checks.yml`, so the two cannot drift apart: a step added to one of
-those jobs lands in the Linux job by itself, and a step this script does not
-understand (an unknown `if:`, a local action, a requirement it cannot install)
-stops it. The file is NOT enabled: it lives under scripts/, which GitHub
-never reads, and Actions is off for the repository. The maintainer turns
-Actions on for one run, puts the file on a branch of its own and pushes it:
+those jobs lands in the Linux job by itself, under its job's marker, and a
+step this script does not understand (an unknown `if:`, a local action, a
+requirement it cannot install) stops it. The file is NOT enabled: it lives
+under scripts/, which GitHub never reads, and Actions is off for the
+repository. The maintainer turns Actions on for one run, puts the file on a
+branch of its own and pushes it:
 
     git switch --detach v0.2.0-rc.1
     mkdir -p .github/workflows && cp scripts/release-matrix.yml .github/workflows/
-    git switch -c release-matrix/checks-0.2.0-rc.1
+    git switch -c release-matrix/linux-native/0.2.0-rc.1
     git add .github/workflows/release-matrix.yml && git commit -m "Release CI"
-    git push origin release-matrix/checks-0.2.0-rc.1
+    git push origin release-matrix/linux-native/0.2.0-rc.1
 
-The branch name picks the one job that runs: `release-matrix/checks-<version>`
-the Linux checks, `release-matrix/c-library-<version>` (from the tag) the
-Windows on Arm archive, `release-matrix/first-run-<version>` (after
-`cargo publish`) the first run. Then the branch is deleted and Actions turned
-off again. scripts/release-0.2.md, "Release-time CI", has the rules.
+Then the branch is deleted and Actions turned off again.
+scripts/release-0.2.md, "Release-time CI", has the rules.
 
 How a checks.yml step becomes a Linux step:
 - its `if:` is evaluated for Linux: a `runner.os` test that is false drops
   the step, one that is true is removed; every step then also gets
-  `!cancelled() && steps.setup.outcome == 'success'` (unless it is a
-  `failure()` step), so one failure still reports the rest but a broken setup
-  stops the job;
+  `!cancelled() && steps.setup.outcome == 'success'` and its job's marker
+  (unless it is a `failure()` step), so one failure still reports the rest
+  but a broken setup stops the job;
 - its name becomes `<job> / <name>` (a step without one is named by its
   command);
 - `local-*` keys go (only run-checks.py reads them), checkout, toolchain and
@@ -70,13 +82,27 @@ OUT = os.path.join(HERE, "release-matrix.yml")
 # skips with a logged reason (scripts/release-0.2.md says why).
 SOURCES = ("test", "templates", "test-features", "native", "package-smoke")
 
+# The marker that runs each part. `linux-all` runs every Linux part.
+MARKERS = {
+    "test": "linux-tests",
+    "templates": "linux-templates",
+    "test-features": "linux-features",
+    "native": "linux-native",
+    "package-smoke": "linux-package",
+}
+LINUX_ALL = "linux-all"
+WINDOWS_ARM64 = "windows-arm64"
+FIRST_RUN_MARKER = "first-run"
+ALL_MARKERS = (*MARKERS.values(), LINUX_ALL, WINDOWS_ARM64, FIRST_RUN_MARKER)
+
 # Steps moved to the end of the job: the frame-pointer build is a second
-# build tree of its own, and the image margins and the failed images are read
-# once every render test has run.
+# build tree of its own (marker of its job), and the image margins and the
+# failed images are read once every render test has run, whichever group ran
+# them (no marker: they only read what is there).
 LAST = (
-    ("test", "Native crash backtraces with frame pointers (Linux)"),
-    ("test", "Margins of the image comparisons"),
-    ("test", "Keep the images of failed render tests"),
+    ("test", "Native crash backtraces with frame pointers (Linux)", True),
+    ("test", "Margins of the image comparisons", False),
+    ("test", "Keep the images of failed render tests", False),
 )
 
 # How the runner gets what a Linux step's `local-requires` names. A
@@ -92,6 +118,16 @@ REQUIRES = {
 # build tree (CARGO_TARGET_DIR below).
 JOB_ENV_DROPPED = ("CARGO_TARGET_DIR",)
 
+# Third-party actions, pinned to a full commit (the comment names the
+# version). `uses:` lines from checks.yml are pinned too; one whose action or
+# major version isn't here stops the script: pin it here.
+PINS = {
+    "actions/checkout@v7": ("3d3c42e5aac5ba805825da76410c181273ba90b1", "v7.0.1"),
+    "actions/upload-artifact@v7": ("cf430e030ddbb5b0abf93d22962f4752f3646cd9", "v7.0.2"),
+    # A pinned rust-toolchain needs `toolchain:` set (the templates set it).
+    "dtolnay/rust-toolchain@stable": ("39008827e6b4319a349e9a42dfc90579dd25f1ca", "stable, 2026-11-27"),
+}
+
 ARTIFACT_DAYS = 3
 SETUP_IF = "steps.setup.outcome == 'success'"
 
@@ -106,15 +142,18 @@ STATUS = ("!cancelled()", "failure()", "always()", "success()")
 HEADER = """\
 # GENERATED by scripts/release-matrix.py from scripts/checks.yml: do not edit.
 #
-# NOT ENABLED. The release-time CI: one run per release candidate, only for
-# what the maintainers' machines can't test (scripts/release-0.2.md,
-# "Release-time CI"). GitHub never reads scripts/; the maintainer turns
-# Actions on, copies this file to .github/workflows/ on a branch of its own,
-# pushes it, then deletes the branch and turns Actions off. The branch picks
-# the one job that runs:
-#   release-matrix/checks-<version>     linux          ubuntu-24.04
-#   release-matrix/c-library-<version>  windows-arm64  windows-11-arm
-#   release-matrix/first-run-<version>  first-run      ubuntu-24.04
+# NOT ENABLED. The release-time CI, only for what the maintainers' machines
+# can't test (scripts/release-0.2.md, "Release-time CI"). GitHub never reads
+# scripts/; the maintainer turns Actions on, copies this file to
+# .github/workflows/ on a branch `release-matrix/<markers>/<version>`
+# (markers joined by `+`), pushes it, then deletes the branch and turns
+# Actions off. Nothing runs without a marker; each marker runs one part:
+#   linux-tests, linux-templates, linux-features, linux-native,
+#   linux-package (linux-all: all five)
+#                    their steps of job linux (ubuntu-24.04, one build tree)
+#   windows-arm64    job windows-arm64 (windows-11-arm)
+#   first-run        job first-run (ubuntu-24.04)
+# Example: release-matrix/linux-native+windows-arm64/0.2.0-rc.1
 # Never merge it into main. No re-runs: reproduce a failure locally.
 name: Release CI
 
@@ -126,34 +165,60 @@ concurrency:
   group: release-matrix-${{ github.ref }}
   cancel-in-progress: true
 
+# Least privilege: the jobs only read the repository (artifacts need no
+# token permission).
 permissions:
   contents: read
+
+defaults:
+  run:
+    shell: bash
 """
 
 LINUX_HEAD = """\
   # The Linux steps of the checks.yml jobs test, templates, test-features,
-  # native and package-smoke, in one build tree. Each step is named
-  # `<checks.yml job> / <step>`; one failing step doesn't stop the others.
+  # native and package-smoke, in one build tree, each group only with its
+  # marker (or linux-all). Each step is named `<checks.yml job> / <step>`;
+  # one failing step doesn't stop the others.
   linux:
-    if: startsWith(github.ref_name, 'release-matrix/checks-')
+    if: ${{ LINUX_IF }}
     name: Linux checks
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
     steps:
-      - uses: actions/checkout@v7
+      - name: Check out the repository
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
+      # Every part in one build tree is big (scripts/release-0.2.md, "Disk"):
+      # remove SDKs this job never uses, and put target/ on the runner's
+      # second disk when it has a bigger one at /mnt.
+      - name: Free disk space
+        run: |
+          df -h / /mnt 2>/dev/null || true
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup \\
+            /opt/hostedtoolcache/CodeQL /usr/share/swift
+          if [ -d /mnt ] && [ "$(df --output=avail /mnt | tail -1)" -gt "$(df --output=avail / | tail -1)" ]; then
+            sudo mkdir -p /mnt/target && sudo chown "$(id -u):$(id -g)" /mnt/target
+            ln -s /mnt/target target
+            echo "target/ is on /mnt"
+          fi
+          df -h / /mnt 2>/dev/null || true
 """
 
 LINUX_TOOLCHAIN = """\
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (stable)
         id: setup
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
 """
 
 LINUX_SKIPS = """\
-      - name: Render tests skipped on this runner (no GPU adapter before package-smoke)
+      - name: Render tests skipped on this runner (no GPU adapter before linux-package)
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: |
           log=target/render-test-output/skips.log
@@ -169,28 +234,33 @@ C_LIBRARY = """\
   # From the tag: the C library archive for Windows on Arm, built and
   # smoke-tested (the C and C++ tests run) on a hosted Windows on Arm runner
   # (scripts/c-library.py; CONTRIBUTING.md, "The C library archives"). The
-  # maintainer downloads the artifact into dist/ with the other five.
+  # version is the branch name's last part. The maintainer downloads the
+  # artifact into dist/ with the other five.
   windows-arm64:
-    if: startsWith(github.ref_name, 'release-matrix/c-library-')
+    if: ${{ WINDOWS_IF }}
     name: C library (windows-arm64)
     runs-on: windows-11-arm
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Check out the repository
+        uses: actions/checkout@v7
         with:
+          persist-credentials: false
+      - name: Install Rust (stable, with the ARM64 Windows target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
           targets: aarch64-pc-windows-msvc
       - name: Build the archive
-        shell: bash
         run: |
-          version="v${GITHUB_REF_NAME#release-matrix/c-library-}"
+          version="v${GITHUB_REF_NAME##*/}"
           python scripts/c-library.py build --target aarch64-pc-windows-msvc --version "$version"
       - name: Smoke test (builds examples/cpp against the archive and runs its tests)
-        shell: bash
         run: |
-          version="v${GITHUB_REF_NAME#release-matrix/c-library-}"
+          version="v${GITHUB_REF_NAME##*/}"
           python scripts/c-library.py smoke "target/c-library/ponko-$version-windows-arm64.zip"
-      - uses: actions/upload-artifact@v7
+      - name: Upload the archive
+        uses: actions/upload-artifact@v7
         with:
           name: ponko-c-library-windows-arm64
           path: target/c-library/ponko-*-windows-arm64.zip
@@ -200,29 +270,34 @@ C_LIBRARY = """\
 
 FIRST_RUN = """\
   # After `cargo publish`: a new user's first run from crates.io
-  # (scripts/first-run.py; the version is the branch name's suffix). macOS
+  # (scripts/first-run.py; the version is the branch name's last part). macOS
   # and Windows run it on the maintainers' machines. One target folder for
   # its projects: each would otherwise build the engine again.
   first-run:
-    if: startsWith(github.ref_name, 'release-matrix/first-run-')
+    if: ${{ FIRST_RUN_IF }}
     name: First run from crates.io (Linux)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - name: Check out the first-run script
+        uses: actions/checkout@v7
         with:
+          persist-credentials: false
           sparse-checkout: |
             scripts/first-run.py
             book/src/getting-started.md
           sparse-checkout-cone-mode: false
       - name: Install ALSA and udev headers (audio, gamepads)
         run: sudo apt-get update -q && sudo apt-get install -y libasound2-dev libudev-dev
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
       - name: First run
         env:
           CARGO_TARGET_DIR: ${{ runner.temp }}/first-run-target
         run: |
-          version="${GITHUB_REF_NAME#release-matrix/first-run-}"
+          version="${GITHUB_REF_NAME##*/}"
           cp scripts/first-run.py "$RUNNER_TEMP/"
           cd "$RUNNER_TEMP"
           python3 first-run.py "$version" --dir "$RUNNER_TEMP/first-run"
@@ -344,7 +419,17 @@ def linux_if(expression, where):
     return terms
 
 
-def convert_step(job, step, seen_packages, job_env):
+def flag(job):
+    """The Linux job's env value that says whether `job`'s marker is there."""
+    return MARKERS[job].upper().replace("-", "_")
+
+
+def marked(*markers):
+    """The expression that holds when the branch name has one of `markers`."""
+    return " || ".join(f"contains(github.ref_name, '{m}')" for m in markers)
+
+
+def convert_step(job, step, seen_packages, job_env, gate=None):
     """The step as Linux job lines, or [] when it doesn't run on Linux."""
     f = fields(step)
     where = f"{job}: {(f.get('name') or f.get('uses') or f.get('run') or (0, '?'))[1]}"
@@ -371,7 +456,7 @@ def convert_step(job, step, seen_packages, job_env):
         step = [line for line in step if not line.startswith("        if:")]
         i = fields(step)["run"][0]
         step[i] = f"        run: sudo apt-get install -y {' '.join(new)}"
-        terms = None  # a setup step: plain success() gating
+        terms = []
     body = [line for line in step if not LOCAL_KEY.match(line)]
     if uses and uses.startswith("taiki-e/cache-cargo-install-action@"):
         tool = next((line.split("tool:", 1)[1].strip() for line in body if "tool:" in line), None)
@@ -402,17 +487,16 @@ def convert_step(job, step, seen_packages, job_env):
     else:
         fail(f"{where}: a step with neither a name nor a command")
     # The condition: the step's own Linux terms, run unless cancelled or the
-    # setup failed. Setup steps (apt) keep the default.
+    # setup failed, and only with its job's marker.
     body = [line for line in body if not re.match(r"^      (- |  )if:", line)]
-    if terms is not None:
-        if "failure()" in terms:
-            condition = "failure()"
-        else:
-            rest = [t for t in terms if t not in STATUS]
-            condition = " && ".join(["!cancelled()", SETUP_IF] + rest)
-        name_line = next(i for i, line in enumerate(body) if '  name: "' in line or '- name: "' in line)
-        body.insert(name_line + 1, f"        if: ${{{{ {condition} }}}}")
-    if job_env and terms is not None:
+    if "failure()" in terms:
+        condition = "failure()"
+    else:
+        rest = [t for t in terms if t not in STATUS]
+        condition = " && ".join(["!cancelled()", SETUP_IF] + rest + ([gate] if gate else []))
+    name_line = next(i for i, line in enumerate(body) if '  name: "' in line or '- name: "' in line)
+    body.insert(name_line + 1, f"        if: ${{{{ {condition} }}}}")
+    if job_env:
         body = with_env(body, job_env)
     return body, requires
 
@@ -447,22 +531,21 @@ def linux_job(found):
         env, job_requires, steps = parse_job(job, found[job])
         requires += job_requires
         job_env = {k: v for k, v in env.items() if k not in JOB_ENV_DROPPED}
+        gate = f"env.{flag(job)} == 'true'"
         for step in steps:
-            body, step_requires = convert_step(job, step, seen, job_env)
+            name = fields(step).get("name", (0, None))[1]
+            late = next((g for j, n, g in LAST if (j, n) == (job, name)), None)
+            body, step_requires = convert_step(job, step, seen, job_env, gate if late is not False else None)
             requires += step_requires
             if not body:
                 continue
-            name = fields(step).get("name", (0, None))[1]
-            if (job, name) in LAST:
+            if late is not None:
                 last[(job, name)] = body
-            elif any(re.match(r"^        run: sudo apt-get install", line) for line in body):
-                # The first install also updates the package lists; packages
-                # a later job adds stay at that job's place.
-                apt_steps.append(len(checks))
-                checks.append(body)
             else:
+                if any(re.match(r"^        run: sudo apt-get install", line) for line in body):
+                    apt_steps.append(len(checks))
                 checks.append(body)
-    missing = [f"{job} / {name}" for job, name in LAST if (job, name) not in last]
+    missing = [f"{job} / {name}" for job, name, _ in LAST if (job, name) not in last]
     if missing:
         fail(f"checks.yml has no step {', '.join(missing)} (LAST)")
     unknown = sorted({r for r in requires if r not in REQUIRES})
@@ -471,18 +554,37 @@ def linux_job(found):
     extra = [p for r in dict.fromkeys(requires) for p in REQUIRES[r] if p not in seen]
     if not apt_steps:
         fail("no apt-get install step in the Linux jobs")
-    first = checks.pop(apt_steps[0])
+    # The first install is setup, for every marker: it also updates the
+    # package lists and installs what the steps' requirements need. Packages
+    # a later job adds stay at that job's place, under its marker.
+    first = [line for line in checks.pop(apt_steps[0]) if not line.startswith("        if:")]
+    first = [re.sub(r'^(      - name: ")[a-z-]+ / ', r"\1", line) for line in first]
     i = next(i for i, line in enumerate(first) if line.startswith("        run: sudo apt-get install"))
     packages = first[i].split("install -y ", 1)[1].split() + extra
     first[i] = f"        run: sudo apt-get update -q && sudo apt-get install -y {' '.join(packages)}"
     if extra:
         first.insert(i, f"        # And what the steps need (REQUIRES in the script): {' '.join(extra)}.")
-    out = LINUX_HEAD.splitlines() + first + LINUX_TOOLCHAIN.splitlines()
+    head = LINUX_HEAD.replace("LINUX_IF", marked(*MARKERS.values(), LINUX_ALL)).splitlines()
+    at = head.index("    steps:")
+    head[at:at] = ["      # The parts the branch name marks (release-matrix/<markers>/<version>)."] + [
+        f"      {flag(job)}: ${{{{ {marked(MARKERS[job], LINUX_ALL)} }}}}" for job in SOURCES]
+    out = head + first + LINUX_TOOLCHAIN.splitlines()
     for body in checks:
         out += body
-    for key in LAST:
-        out += last[key]
+    for job, name, _ in LAST:
+        out += last[(job, name)]
     return out + LINUX_SKIPS.splitlines()
+
+
+def pin(text):
+    """Every `uses:` pinned to its commit, with the version as a comment."""
+    def one(m):
+        ref = m.group(2)
+        if ref not in PINS:
+            fail(f"{ref} has no pinned commit: add it to PINS")
+        sha, version = PINS[ref]
+        return f"{m.group(1)}{ref.split('@')[0]}@{sha} # {version}"
+    return re.sub(r"^(\s+(?:- )?uses: )(\S+)$", one, text, flags=re.M)
 
 
 def generate(text):
@@ -495,7 +597,52 @@ def generate(text):
     parts += ['  # One run per candidate: an incremental cache would never be reused.',
               '  CARGO_INCREMENTAL: "0"', "", "jobs:"]
     parts += linux_job(found) + [""]
-    return "\n".join(parts) + "\n" + C_LIBRARY + "\n" + FIRST_RUN
+    windows = C_LIBRARY.replace("WINDOWS_IF", marked(WINDOWS_ARM64))
+    first_run = FIRST_RUN.replace("FIRST_RUN_IF", marked(FIRST_RUN_MARKER))
+    return pin("\n".join(parts) + "\n" + windows + "\n" + first_run)
+
+
+def selected(workflow, branch):
+    """{job: [step names]} that a push of `branch` runs, by evaluating the
+    workflow's `if:` lines as GitHub does for a run where nothing fails."""
+    def holds(expression):
+        e = expression.strip()
+        m = re.match(r"^\$\{\{(.*)\}\}$", e)
+        e = (m.group(1) if m else e).strip()
+        e = re.sub(r"contains\(github\.ref_name, '([^']*)'\)",
+                   lambda m: str(m.group(1).lower() in branch.lower()), e)
+        e = re.sub(r"env\.([A-Z_]+) == 'true'", lambda m: str(flags[m.group(1)]), e)
+        e = e.replace("!cancelled()", "True").replace(SETUP_IF, "True").replace("failure()", "False")
+        e = e.replace("&&", " and ").replace("||", " or ")
+        if re.search(r"[a-z_]+\(|github\.|steps\.", e):
+            fail(f"selftest can't evaluate: {expression}")
+        return eval(e, {"__builtins__": {}}, {})
+    runs, job, job_on, flags = {}, None, False, {}
+    for line in workflow.split("\njobs:", 1)[1].splitlines():
+        m = re.match(r"^      ([A-Z_]+): (\$\{\{.*\}\})$", line)
+        if m and job_on:
+            flags[m.group(1)] = holds(m.group(2))
+            continue
+        m = re.match(r"^  ([a-z0-9-]+):$", line)
+        if m:
+            job, job_on, step = m.group(1), True, None
+            continue
+        m = re.match(r"^    if: (.*)$", line)
+        if m:
+            job_on = holds(m.group(1))
+            if job_on:
+                runs[job] = []
+            continue
+        if not job_on:
+            continue
+        if STEP_START.match(line):
+            m = re.match(r'^      - (?:name: "?(.*?)"?|uses: (\S+))$', line)
+            step = (m.group(1) or m.group(2)) if m else line.strip()
+            runs[job].append(step)
+        m = re.match(r"^        if: (.*)$", line)
+        if m and not holds(m.group(1)):
+            runs[job].pop()
+    return runs
 
 
 def selftest():
@@ -551,17 +698,17 @@ jobs:
     assert len(steps) == 10 and steps[5][0] == "      # A comment that goes with its step.", steps[5]
     seen, out = set(), []
     for step in steps:
-        body, _ = convert_step("one", step, seen, {"KEEP": '"1"'})
+        body, _ = convert_step("one", step, seen, {"KEEP": '"1"'}, "env.ONE == 'true'")
         out.append(body)
     text = "\n".join(line for body in out for line in body)
     assert "local-" not in text and "checkout" not in text and "rust-cache" not in text, text
     assert "windows-linker" not in text and "echo mac" not in text, text
-    assert out[1][0] == '      - name: "one / Install headers"' and "        if:" not in "\n".join(out[1]), out[1]
+    assert out[1][0] == '      - name: "one / Install headers"', out[1]
     assert seen == {"liba", "libb"}, seen
     assert out[5] == [
         "      # A comment that goes with its step.",
         '      - name: "one / Tests"',
-        "        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}",
+        "        if: ${{ !cancelled() && steps.setup.outcome == 'success' && env.ONE == 'true' }}",
         "        env:",
         '          KEEP: "1"',
         "        run: cargo test",
@@ -571,7 +718,7 @@ jobs:
     assert short('cmake -S a -B b -DX=ON "-DDIR=${{ github.workspace }}/t"') == "cmake -S a -B b -DX=ON"
     assert short("x " * 40).endswith(" ...") and len(short("x " * 40)) <= 64
     assert out[8][:2] == ['      - name: "one / cmake --build x"',
-                          "        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}"], out[8]
+                          "        if: ${{ !cancelled() && steps.setup.outcome == 'success' && env.ONE == 'true' }}"], out[8]
     assert "        if: ${{ failure() }}" in out[9] and "          name: out-linux" in out[9], out[9]
     assert "          retention-days: 3" in out[9], out[9]
     # A second install of the same packages disappears; a new one stays.
@@ -597,15 +744,65 @@ jobs:
     assert runners == ["ubuntu-24.04", "windows-11-arm"], runners
     assert re.findall(r"^  ([a-z0-9-]+):$", real.split("\njobs:", 1)[1], re.M) == ["linux", "windows-arm64", "first-run"]
     assert "rust-cache" not in real and "cache-cargo-install-action" not in real
+    uses = re.findall(r"uses: (\S+)(.*)$", real, re.M)
+    assert uses and all(re.fullmatch(r"[\w-]+/[\w-]+@[0-9a-f]{40}", u) and c.startswith(" # ") for u, c in uses), uses
+    assert real.count("persist-credentials: false") == real.count("uses: actions/checkout@") == 3
+    assert real.count("toolchain: stable") == real.count("uses: dtolnay/rust-toolchain@") == 3
+    try:
+        pin("      - uses: someone/else@v1")
+        raise AssertionError("an unpinned action passed")
+    except SystemExit as e:
+        assert "PINS" in str(e)
     assert real.count("timeout-minutes:") == 3 and "matrix" not in real.split("jobs:", 1)[1].replace("release-matrix", "")
     assert real.count("sudo apt-get update") == 2, "one package list update per job"
     names = re.findall(r'^      - name: "([a-z-]+) / ', real, re.M)
     assert set(names) == set(SOURCES), set(names)
+    assert 'version="v${GITHUB_REF_NAME##*/}"' in real and 'version="${GITHUB_REF_NAME##*/}"' in real
     assert "c-library.py build --target aarch64-pc-windows-msvc" in real and "c-library.py smoke" in real
     assert "first-run.py \"$version\"" in real
     # package-smoke's install (lavapipe) comes after every test step.
     lavapipe = real.index("mesa-vulkan-drivers")
     assert lavapipe > real.rindex('name: "test-features / ') and lavapipe > real.rindex('name: "native / ')
+    # Markers: none is a substring of another, so `contains()` is exact.
+    for a in ALL_MARKERS:
+        for b in ALL_MARKERS:
+            assert a == b or a not in b, f"marker {a} is part of {b}"
+        assert re.fullmatch(r"[a-z][a-z0-9-]*", a) and not re.search(r"\d+\.\d+", a), a
+    assert len(set(ALL_MARKERS)) == len(ALL_MARKERS)
+    # Each marker selects exactly its steps; nothing runs without one.
+    setup = ["Check out the repository", "Free disk space", "Install ALSA and udev headers (audio, gamepads)",
+             "Install Rust (stable)"]
+    always = [f"{j} / {n}" for j, n, gated in LAST if not gated] + [
+        "Render tests skipped on this runner (no GPU adapter before linux-package)"]
+    steps_of = {job: re.findall(rf'^      - name: "({job} / [^"]*)"', real, re.M) for job in SOURCES}
+    assert all(steps_of.values()), steps_of
+
+    def expect(*jobs_marked):
+        """The steps of `jobs_marked`, the setup and the unmarked ones, in
+        order, without those that run only after a failure."""
+        names, lines = [], real.split("\n  linux:", 1)[1].split("\n  windows-arm64:", 1)[0].splitlines()
+        for i, line in enumerate(lines):
+            m = re.match(r'^      - (?:name: "?(.*?)"?|uses: (\S+))$', line)
+            if not m or (i + 1 < len(lines) and lines[i + 1] == "        if: ${{ failure() }}"):
+                continue
+            n = m.group(1) or m.group(2)
+            if n in setup or n in always or any(n.startswith(f"{j} / ") for j in jobs_marked):
+                names.append(n)
+        return names
+
+    v = "0.2.0-rc.1"
+    for branch in (f"release-matrix/{v}", f"release-matrix/checks/{v}", f"release-matrix/linux/{v}",
+                   f"release-matrix/c-library/{v}", f"release-matrix/all/{v}"):
+        assert selected(real, branch) == {}, (branch, selected(real, branch))
+    for job, marker in MARKERS.items():
+        got = selected(real, f"release-matrix/{marker}/{v}")
+        assert got == {"linux": expect(job)}, (marker, got)
+    assert selected(real, f"release-matrix/{LINUX_ALL}/{v}") == {"linux": expect(*SOURCES)}
+    assert list(selected(real, f"release-matrix/{WINDOWS_ARM64}/{v}")) == ["windows-arm64"]
+    assert list(selected(real, f"release-matrix/{FIRST_RUN_MARKER}/{v}")) == ["first-run"]
+    both = selected(real, f"release-matrix/linux-native+linux-package+windows-arm64/{v}")
+    assert list(both) == ["linux", "windows-arm64"] and both["linux"] == expect("native", "package-smoke"), both
+    assert len(selected(real, f"release-matrix/{WINDOWS_ARM64}/{v}")["windows-arm64"]) == 5
     print("release-matrix.py selftest: ok")
 
 
