@@ -1090,12 +1090,12 @@ marks each part to run.
 
 | Marker | What it tests | Estimate |
 |---|---|---|
-| `linux-tests` | the workspace tests (`checks.yml` `test`) | E_TESTS |
-| `linux-templates` | the `ponko new` templates (`templates`) | E_TEMPLATES |
-| `linux-features` | the feature sets (`test-features`) | E_FEATURES |
-| `linux-native` | the C and C++ library and programs (`native`) | E_NATIVE |
-| `linux-package` | the packaged games (`package-smoke`) | E_PACKAGE |
-| `linux-all` | all five, in one build | E_ALL |
+| `linux-tests` | the workspace tests (`checks.yml` `test`) | 35–45 min |
+| `linux-templates` | the `ponko new` templates (`templates`) | about 15 min |
+| `linux-features` | the feature sets (`test-features`) | 45–55 min |
+| `linux-native` | the C and C++ library and programs (`native`) | about 15 min |
+| `linux-package` | the packaged games (`package-smoke`) | about 20 min |
+| `linux-all` | all five, in one build | 80–100 min |
 | `windows-arm64` | the Windows on Arm C library archive and its smoke | 30–45 min |
 | `first-run` | `scripts/first-run.py` on Linux, after publishing | about 15 min |
 

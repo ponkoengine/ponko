@@ -191,12 +191,12 @@ checks that, and that each marker selects exactly its steps).
 
 | Marker | What it tests | Runner | Estimate |
 |---|---|---|---|
-| `linux-tests` | `checks.yml` `test`: the workspace tests (unit, integration, doc), the examples build, the native crash test with frame pointers | `ubuntu-24.04` | E_TESTS |
-| `linux-templates` | `templates`: the command line tool's tests, each `ponko new` template generated and tested | `ubuntu-24.04` | E_TEMPLATES |
-| `linux-features` | `test-features`: the feature sets (no default features, editor, video, WebRTC, Steam, accessibility over AT-SPI, ...) | `ubuntu-24.04` | E_FEATURES |
-| `linux-native` | `native`: the C header, the C library's exports, the C and C++ test programs (cmake, ctest), the C++ validation bundle | `ubuntu-24.04` | E_NATIVE |
-| `linux-package` | `package-smoke`: the packaged reference games, headless and in a window under Xvfb with software Vulkan | `ubuntu-24.04` | E_PACKAGE |
-| `linux-all` | all five above | `ubuntu-24.04` | E_ALL |
+| `linux-tests` | `checks.yml` `test`: the workspace tests (unit, integration, doc), the examples build, the native crash test with frame pointers | `ubuntu-24.04` | 35–45 min |
+| `linux-templates` | `templates`: the command line tool's tests, each `ponko new` template generated and tested | `ubuntu-24.04` | about 15 min |
+| `linux-features` | `test-features`: the feature sets (no default features, editor, video, WebRTC, Steam, accessibility over AT-SPI, ...) | `ubuntu-24.04` | 45–55 min |
+| `linux-native` | `native`: the C header, the C library's exports, the C and C++ test programs (cmake, ctest), the C++ validation bundle | `ubuntu-24.04` | about 15 min |
+| `linux-package` | `package-smoke`: the packaged reference games, headless and in a window under Xvfb with software Vulkan | `ubuntu-24.04` | about 20 min |
+| `linux-all` | all five above | `ubuntu-24.04` | 80–100 min |
 | `windows-arm64` | the Windows on Arm C library: `c-library.py build --target aarch64-pc-windows-msvc` and its smoke (the C and C++ tests run); artifact `ponko-c-library-windows-arm64`, kept 7 days | `windows-11-arm` | 30–45 min |
 | `first-run` | after `cargo publish`: `scripts/first-run.py V` against crates.io | `ubuntu-24.04` | about 15 min |
 
@@ -211,7 +211,8 @@ after publishing. A later candidate marks only the parts its fixes touched
 (a C API fix: `linux-native+windows-arm64`). Never `linux-all` to "just
 check". GitHub restricted the maintainer's account once for hours of
 Actions a day, and warned that bulk or near-continuous runs bring the
-restriction back: one `rc.1` costs about E_RC1 runner minutes, and that is
+restriction back: one `rc.1` costs about 150 runner minutes (`linux-all`
+about 90, `windows-arm64` about 40, `first-run` about 15), and that is
 the budget.
 
 ### Rules
@@ -283,11 +284,38 @@ silently lose a check.
   Windows PCs), and a lavapipe run of the render tests was not verified.
   `package-smoke` needs lavapipe for its window runs under Xvfb, so its apt
   step installs it and the job runs it after every test step.
-- **Disk.** DISK_NOTE
+- **Disk.** Every part in one build tree came to about 45 GB of `target/`
+  in the container (arm64; x86_64 should be close), more than a runner's
+  system disk has free. The first step, "Free disk space", removes SDKs the job never uses
+  (Android, .NET, GHC, CodeQL, Swift: about 25 GB) and puts `target/` on the
+  runner's second disk when `/mnt` has more room; it prints `df` before and
+  after, so the run shows the margin. Not yet seen on a real runner.
 
 ### Checked without Actions
 
 Changes to the workflow are checked without spending runner time:
 `python3 scripts/release-matrix.py selftest` and `check`, `actionlint
 scripts/release-matrix.yml`, and the Linux job's steps run in an
-`ubuntu:24.04` container. DOCKER_NOTE
+`ubuntu:24.04` container. What that covered on 2026-11-27 (Docker on an
+Apple Silicon Mac, so `linux/arm64`, 5 build jobs; the runner is x86_64
+with 4 slower vCPUs, so the estimates above are these times scaled up):
+
+- every step of `linux-all` once, in order: 54 minutes (some dependencies
+  were already built by an earlier attempt), `target/` 45 GB. The apt packages (including `dbus` and `at-spi2-core`
+  for the AT-SPI step), cbindgen, cmake/ctest, the C++ validation bundle,
+  the templates and the packaged games all work. 831 render tests skipped
+  for want of an adapter, as intended. Failures found, all outside the
+  workflow: the native crash tests without line tables (#693), a UDP test
+  that overflows Linux's default receive buffer (#694), and `ponko_ffi`
+  with `video` not linking on aarch64 (#695; x86_64 should not be affected). The run also
+  found a bug in the workflow itself, fixed since: `package-smoke`'s apt
+  step ran only if nothing had failed before it;
+- `linux-native+linux-package` again from the marker workflow: only those
+  steps ran (7.8 minutes on the warm tree), all green, including both
+  window runs under Xvfb with lavapipe and the free-disk step.
+
+Not covered: the hosted runner image itself (what it preinstalls, its real
+disk and speed), the `windows-arm64` job (no Windows on Arm machine; its
+commands are those of "The C library archives") and `first-run` (needs a
+published release). The first real run of each is the check; its minutes
+go in the release pull request.
