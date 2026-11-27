@@ -31,10 +31,10 @@ impl Os {
     }
 }
 
-/// `--target ios`, `--target ios-sim` and `--target android`: the triples
-/// they stand for.
+/// The triples that `--target` platform aliases stand for.
 pub fn target_alias(target: &str) -> &str {
     match target {
+        "windows" => "x86_64-pc-windows-msvc",
         "ios" => "aarch64-apple-ios",
         "ios-sim" | "ios-simulator" => "aarch64-apple-ios-sim",
         "android" => "aarch64-linux-android",
@@ -298,6 +298,8 @@ pub struct Game {
     pub files: Vec<FileCopy>,
     /// Which ways a phone or tablet may be held (iOS and Android).
     pub orientation: Orientation,
+    /// Include the DX12 shader compiler in Windows packages.
+    pub windows_dxc: bool,
 }
 
 /// The `orientation` key: which ways a phone or tablet (iOS, Android) may
@@ -369,6 +371,8 @@ pub struct Metadata {
     pub pack: Option<PackMeta>,
     /// `orientation`: `any` (the default), `landscape` or `portrait`.
     pub orientation: Option<Orientation>,
+    /// Windows packages bundle DXC unless explicitly disabled.
+    pub windows_dxc: Option<bool>,
 }
 
 /// The `pack` key: `true`, `false` or `{ exclude = [...], textures = true,
@@ -403,6 +407,7 @@ const KEYS: &[&str] = &[
     "files",
     "pack",
     "orientation",
+    "windows-dxc",
     "examples",
 ];
 
@@ -429,7 +434,7 @@ impl Metadata {
         for key in object.keys() {
             if !KEYS.contains(&key.as_str()) || (key == "examples" && at.contains(".examples.")) {
                 return Err(format!(
-                    "{at}: unknown key `{key}` (the keys are name, id, icon, assets, files, pack, orientation{})",
+                    "{at}: unknown key `{key}` (the keys are name, id, icon, assets, files, pack, orientation, windows-dxc{})",
                     if at.contains(".examples.") { "" } else { " and examples" }
                 ));
             }
@@ -453,6 +458,12 @@ impl Metadata {
         }
         if let Some(v) = string("orientation")? {
             self.orientation = Some(Orientation::parse(&v).map_err(|e| format!("{at} orientation: {e}"))?);
+        }
+        if let Some(v) = object.get("windows-dxc") {
+            self.windows_dxc = Some(
+                v.as_bool()
+                    .ok_or_else(|| format!("{at} windows-dxc: expected true or false"))?,
+            );
         }
         if let Some(v) = object.get("assets") {
             let list = v
@@ -1416,6 +1427,7 @@ mod tests {
                 },
             ],
             orientation: Orientation::Any,
+            windows_dxc: true,
         }
     }
 
@@ -1431,6 +1443,27 @@ mod tests {
             .collect();
         out.sort();
         out
+    }
+
+    #[test]
+    fn windows_alias_selects_the_x64_msvc_target() {
+        assert_eq!(target_alias("windows"), "x86_64-pc-windows-msvc");
+    }
+
+    #[test]
+    fn windows_dxc_accepts_booleans_and_example_overrides() {
+        let meta = json!({"ponko": {
+            "windows-dxc": false,
+            "examples": {"demo": {"windows-dxc": true}}
+        }});
+        assert_eq!(Metadata::from_cargo(&json!({}), None).unwrap().windows_dxc, None);
+        assert_eq!(Metadata::from_cargo(&meta, None).unwrap().windows_dxc, Some(false));
+        assert_eq!(
+            Metadata::from_cargo(&meta, Some("demo")).unwrap().windows_dxc,
+            Some(true)
+        );
+        let bad = json!({"ponko": {"windows-dxc": "false"}});
+        assert!(Metadata::from_cargo(&bad, None).unwrap_err().contains("windows-dxc"));
     }
 
     #[test]
@@ -1462,16 +1495,31 @@ mod tests {
 
     #[test]
     fn the_windows_package_is_a_folder_with_the_exe_assets_and_notices() {
+        use super::super::dxc::Dxc;
+
+        let dir = std::env::temp_dir().join(format!("ponko-windows-layout-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("coin_dash.exe");
+        std::fs::write(&input, b"game").unwrap();
+        let mut game = game();
+        for file in game.assets.iter_mut().chain(&mut game.files) {
+            file.from = input.clone();
+        }
         let plan = plan(
-            &game(),
+            &game,
             &platform("x86_64-pc-windows-msvc"),
             false,
-            Built::Program(Path::new("/t/coin_dash.exe")),
+            Built::Program(&input),
             "N",
             None,
             None,
         )
         .unwrap();
+        let dxc = Dxc {
+            dll: b"x64 compiler".to_vec(),
+            license: "Fake DXC license".into(),
+        };
+        let plan = dxc.add_to_plan(plan).unwrap();
         assert_eq!(
             paths(&plan),
             [
@@ -1480,13 +1528,23 @@ mod tests {
                 "coin-dash-1.2.3-windows-x86_64/THIRD-PARTY-NOTICES.txt",
                 "coin-dash-1.2.3-windows-x86_64/assets/coin_dash/coin.png",
                 "coin-dash-1.2.3-windows-x86_64/coin_dash.exe",
+                "coin-dash-1.2.3-windows-x86_64/dxcompiler.dll",
             ]
         );
         assert_eq!(plan.program, Path::new("coin-dash-1.2.3-windows-x86_64/coin_dash.exe"));
         assert!(plan.app.is_none());
         let exe = plan.entries.iter().find(|e| e.path == plan.program).unwrap();
         assert!(exe.executable);
-        assert_eq!(exe.source, Source::Copy("/t/coin_dash.exe".into()));
+        assert_eq!(exe.source, Source::Copy(input));
+
+        super::super::write_plan(&dir, &plan).unwrap();
+        let package = dir.join(&plan.folder);
+        assert_eq!(std::fs::read(package.join("dxcompiler.dll")).unwrap(), b"x64 compiler");
+        let notice = std::fs::read_to_string(package.join("THIRD-PARTY-NOTICES.txt")).unwrap();
+        assert!(notice.starts_with("N\n"), "{notice}");
+        assert!(notice.contains("dxcompiler.dll"), "{notice}");
+        assert!(notice.contains("LICENSE-LLVM.txt\nFake DXC license"), "{notice}");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

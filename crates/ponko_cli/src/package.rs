@@ -8,6 +8,7 @@
 
 mod android;
 mod archive;
+mod dxc;
 mod layout;
 mod notices;
 mod smoke;
@@ -35,11 +36,11 @@ check it runs. The files under assets/ ship as one asset pack, assets.pack
 would be. The pack holds them cooked (as `ponko cook` makes them: textures
 compressed when the game reads KTX2, meshes optimized, sounds in FLAC,
 shaders checked), under the same names. What goes in comes from `[package.metadata.ponko]` in the game's
-Cargo.toml (name, id, icon, assets, files, pack, orientation); see the guide's
+Cargo.toml (name, id, icon, assets, files, pack, orientation, windows-dxc); see the guide's
 packaging chapter.
 
 What it makes, by platform (the host's unless --target or --web):
-  Windows  a folder with the .exe, zipped                 (--format zip)
+  Windows  a folder with the .exe and DXC, zipped         (--format zip)
   macOS    an app bundle (Name.app) in a disk image       (--format dmg; zip
            where there is no hdiutil)
   Linux    a folder, as a .tar.gz                         (--format tar.gz)
@@ -57,6 +58,7 @@ Options:
   -p, --package <name>            The package, in a workspace
   --manifest-path <path>          The game's Cargo.toml (default: found from here)
   --target <triple>               Build for another platform (cross-compiling);
+                                  `windows` is x86_64-pc-windows-msvc,
                                   `ios` is aarch64-apple-ios (devices),
                                   `ios-sim` aarch64-apple-ios-sim (the
                                   simulator on an Apple silicon Mac),
@@ -561,6 +563,7 @@ fn game(
         assets,
         files,
         orientation: meta.orientation.unwrap_or_default(),
+        windows_dxc: meta.windows_dxc.unwrap_or(true),
     };
     Ok((game, icon.map(|i| i.1), meta.pack.unwrap_or_default()))
 }
@@ -1216,6 +1219,7 @@ pub fn package_command(options: &Options, cwd: &Path) -> Result<String, String> 
         ));
     }
 
+    let dxc = dxc::for_package(&platform, game.windows_dxc, &project.target_dir)?;
     let folder = layout::folder_name(&game, &platform);
     std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
     let _ = std::fs::remove_dir_all(out.join(&folder));
@@ -1254,7 +1258,12 @@ pub fn package_command(options: &Options, cwd: &Path) -> Result<String, String> 
         )
         .and_then(|plan| layout::with_libraries(plan, &libraries))
     };
-    let plan = plan.and_then(|plan| write_plan(&out, &plan).map(|()| plan));
+    let plan = plan
+        .and_then(|plan| match dxc {
+            Some(dxc) => dxc.add_to_plan(plan),
+            None => Ok(plan),
+        })
+        .and_then(|plan| write_plan(&out, &plan).map(|()| plan));
     let _ = std::fs::remove_dir_all(&web_dir);
     let plan = plan?;
     if let Some(tools) = &android_tools
@@ -1504,6 +1513,7 @@ mod tests {
             ],
             files: Vec::new(),
             orientation: Default::default(),
+            windows_dxc: true,
         };
         let settings = crate::cook::Settings {
             platform: crate::cook::Platform::Desktop,
