@@ -910,7 +910,10 @@ one list of commands for the 0.2 cut (rc.1, a week, 0.2.0).
       `linux-x86_64`, `linux-arm64`, `macos-arm64`, `macos-x86_64`,
       `windows-x86_64` and `windows-arm64`, with
       `python3 scripts/c-library.py build --target <triple>`, and check
-      each with `python3 scripts/c-library.py smoke <archive>`.
+      each with `python3 scripts/c-library.py smoke <archive>` (`--docker`
+      for `linux-arm64`; `windows-arm64` is built by the
+      `release-matrix/c-library-X.Y.Z` branch on a hosted Windows on Arm
+      runner, see below).
    3. **Package the crates**: `cargo publish --workspace --dry-run`.
    4. **Create the GitHub release** from the CHANGELOG section, with the
       six archives gathered in one folder (`dist/`, from each machine's
@@ -1024,9 +1027,24 @@ python3 scripts/c-library.py build --target aarch64-unknown-linux-gnu --zig --sy
 python3 scripts/c-library.py smoke target/c-library/ponko-vX.Y.Z-linux-arm64.tar.gz --zig
 ```
 
-The smoke compiles and links the C and C++ programs for arm64 with zig; it
-runs them only on an arm64 Linux machine (copy the archive there, install
-`cmake g++ libasound2 libudev1` and run `smoke` without `--zig`).
+The `--zig` smoke compiles and links the C and C++ programs for arm64 with
+zig, which proves the link only. To run them, use an arm64 Linux machine
+(copy the archive there, install `cmake g++ libasound2 libudev1` and run
+`smoke` without `--zig`) or Docker, which runs arm64 Linux natively on an
+Apple silicon Mac:
+
+```sh
+python3 scripts/c-library.py smoke target/c-library/ponko-vX.Y.Z-linux-arm64.tar.gz --docker
+```
+
+`--docker` unpacks the archive in a `rockylinux:8` container (arm64, glibc
+2.28: the floor of the archive, so a library that needs a newer glibc fails
+here), installs CMake, a newer GCC, ALSA and udev, builds `examples/cpp`
+against the archive and runs its ctest programs. The container has no GPU:
+the programs ctest runs are headless (no window, no GPU) and none is
+skipped. It needs the network and Docker running (`open -a Docker`);
+stop it afterwards and remove the image (`docker rmi rockylinux:8`). The
+`linux-x86_64` archive takes the same flag (`--image` picks another image).
 
 **Windows x64: `windows-x86_64` and `windows-arm64`**, in PowerShell, with
 Python, CMake and Visual Studio 2022 (or its Build Tools) with the "Desktop
@@ -1048,6 +1066,18 @@ python scripts/c-library.py smoke target/c-library/ponko-vX.Y.Z-windows-arm64.zi
 On an x64 machine the arm64 smoke builds the programs (`cmake -A ARM64`,
 the Visual Studio generator) without running them; on a Windows on Arm
 machine the same command runs them.
+
+No maintainer machine has the ARM64 tools, so the release builds
+`windows-arm64` on a GitHub-hosted Windows on Arm runner (`windows-11-arm`)
+instead: the job `c-library-windows-arm64` of the release-time matrix
+(`scripts/release-matrix.yml`, made by `scripts/release-matrix.py`), run by
+pushing the branch `release-matrix/c-library-X.Y.Z` from the tag (the
+commands are in [scripts/release-0.2.md](scripts/release-0.2.md#release-time-matrix)).
+It runs the two commands above for `aarch64-pc-windows-msvc`, so the archive
+is smoke-tested by running the tests, and uploads it as the workflow artifact
+`ponko-c-library-windows-arm64`. Download it into `dist/` with
+`gh run download <run> -n ponko-c-library-windows-arm64 -D dist`, delete the
+branch, and attach it with the other five.
 
 ### One-time setup (a maintainer, in settings)
 

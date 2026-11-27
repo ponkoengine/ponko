@@ -102,9 +102,24 @@ library archives"), gathered in `dist/`:
 python3 scripts/c-library.py build --target aarch64-apple-darwin          # and x86_64-apple-darwin, on the Mac
 python3 scripts/c-library.py build --target aarch64-unknown-linux-gnu --zig --sysroot target/sysroot-arm64
 python3 scripts/c-library.py build                                        # linux-x86_64, on Linux
-python scripts/c-library.py build --target x86_64-pc-windows-msvc         # and aarch64-pc-windows-msvc, on Windows
+python scripts/c-library.py build --target x86_64-pc-windows-msvc         # on Windows
 python3 scripts/c-library.py smoke target/c-library/<archive>             # each one
+python3 scripts/c-library.py smoke target/c-library/ponko-vV-linux-arm64.tar.gz --docker   # arm64 Linux, in a glibc 2.28 container (Docker)
 ```
+
+`windows-arm64` is built on a hosted Windows on Arm runner (no maintainer
+machine has the ARM64 tools): push the `release-matrix/c-library-V` branch
+of the release-time matrix (below), then fetch the archive into `dist/`:
+
+```sh
+gh run list --branch release-matrix/c-library-V --workflow "Release matrix"   # the run's id, once it is green
+gh run download <id> -n ponko-c-library-windows-arm64 -D dist
+```
+
+The job builds the archive (`c-library.py build --target
+aarch64-pc-windows-msvc`) and runs its smoke on the Arm runner, which runs
+the C and C++ tests; a red job means no archive. (A Windows machine with the
+ARM64 build tools makes the same archive with the same two commands.)
 
 Checksums and the GitHub release (`--prerelease` for a candidate):
 
@@ -157,9 +172,11 @@ git add .github/workflows/release-matrix.yml && git commit -m "Release matrix fo
 git push origin release-matrix/checks-V
 ```
 
-After `cargo publish`, the same with the branch
-`release-matrix/first-run-V` runs `scripts/first-run.py V` on the three
-operating systems. When both are done: delete the branches
+The branch `release-matrix/c-library-V` (made from the tag, before the
+release is created) runs only the `windows-arm64` C library job, whose
+archive step 2 above downloads. After `cargo publish`, the same with the
+branch `release-matrix/first-run-V` runs `scripts/first-run.py V` on the
+three operating systems. When they are done: delete the branches
 (`git push origin --delete release-matrix/checks-V`), turn Actions off again,
 and write in the release pull request which jobs ran where. The workflow file
 never goes to `main`.
