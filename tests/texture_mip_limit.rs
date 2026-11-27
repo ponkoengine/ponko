@@ -79,18 +79,34 @@ fn small_model_images_keep_their_size() {
 }
 
 #[test]
-fn texture_arrays_drop_their_largest_levels() {
+fn texture_arrays_loaded_from_files_drop_their_largest_levels() {
     game().run_headless(0, |ctx| {
         ctx.gfx.set_texture_mip_limit(1);
-        let layer = [255u8, 0, 0, 255].repeat(128 * 64);
-        let array = ctx
-            .gfx
-            .create_texture_array(128, 64, &[&layer, &layer], TextureKind::Color);
-        assert_eq!((array.width(), array.height(), array.layers()), (64, 32, 2));
-        // Too small to lose a level: as made.
-        let mask = [255u8; 32 * 32 * 4];
-        let small = ctx.gfx.create_texture_array(32, 32, &[&mask], TextureKind::Data);
+        ctx.assets.add_source(
+            MemorySource::new("layers")
+                .with("a.png", png(128))
+                .with("b.png", png(128))
+                .with("mask.png", png(32)),
+        );
+        let array = ctx.gfx.load_texture_array(&["a.png", "b.png"], TextureKind::Color);
+        assert_eq!((array.width(), array.height(), array.layers()), (64, 64, 2));
+        // Too small to lose a level: as loaded.
+        let small = ctx.gfx.load_texture_array(&["mask.png"], TextureKind::Data);
         assert_eq!((small.width(), small.height()), (32, 32));
+    });
+}
+
+#[test]
+fn texture_arrays_made_in_code_keep_their_size() {
+    // Lookup data a shader reads texel by texel at the size it was made: a
+    // weight map, a table packed into pixels.
+    game().run_headless(0, |ctx| {
+        ctx.gfx.set_texture_mip_limit(2);
+        let layer = [255u8, 0, 0, 255].repeat(256 * 128);
+        let table = ctx
+            .gfx
+            .create_texture_array(256, 128, &[&layer, &layer], TextureKind::Data);
+        assert_eq!((table.width(), table.height(), table.layers()), (256, 128, 2));
     });
 }
 

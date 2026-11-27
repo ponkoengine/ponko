@@ -2420,7 +2420,7 @@ impl Ctx {
                 .clone()
                 .map(|c| c.target.texture.id)
                 .chain(self.gfx.icons.iter().map(|i| i.camera.target.texture.id)),
-            targets.len(),
+            |id| targets.iter().any(|t| t.id == id),
         );
         let views = &mut frame3d.views;
         let lighting = super::Lighting {

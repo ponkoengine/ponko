@@ -801,6 +801,9 @@ pub struct Model {
 /// An entity with a `ShadowMesh` and no [`Model`] casts only the shadow: a
 /// stand-in for the shadow of several models around it that cast none. On
 /// a [`TerrainTile`], `ShadowMesh(None)` turns the ground's shadow off.
+/// A skinned model always casts with its posed mesh (a stand-in can't
+/// follow the pose); `ShadowMesh(None)` turns its shadow off, as on a
+/// first-person arm whose shadow the body casts.
 ///
 /// In scene files it's `"ShadowMesh": { "mesh": "tree_shadow.glb" }`, or
 /// `{ "mesh": null }` for no shadow.
@@ -1184,12 +1187,15 @@ impl Camera3D {
             screen.x / self.viewport().x.max(1.0) * 2.0 - 1.0,
             1.0 - screen.y / self.viewport().y.max(1.0) * 2.0,
         );
-        let inverse = self.view_proj().inverse();
-        // Any point along the ray will do: halfway in depth (reverse-Z,
-        // so 1 would be the near plane and 0 the far one).
-        let along = inverse * Vec4::new(ndc.x, ndc.y, 0.5, 1.0);
-        let along = along.truncate() / along.w;
-        (self.position, (along - self.position).normalize_or(self.forward()))
+        // The ray in the camera's own space, from the projection's slopes,
+        // turned into the world. Unprojecting a depth instead put the point
+        // a near plane or two from the camera (reverse-Z: depth 0.5 is about
+        // twice the near distance), so with a centimetre near plane far from
+        // the origin the direction wobbled by tenths of a degree.
+        let aspect = (self.viewport().x / self.viewport().y.max(1.0)).max(1e-3);
+        let slope = (self.fov_y * 0.5).tan();
+        let local = Vec3::new(ndc.x * slope * aspect, ndc.y * slope, -1.0);
+        (self.position, (self.rotation * local).normalize_or(self.forward()))
     }
 }
 
@@ -1835,6 +1841,32 @@ mod tests {
         let (_, left) = camera.screen_ray(Vec2::new(0.0, 300.0));
         let right_axis = camera.rotation * Vec3::X;
         assert!(left.dot(right_axis) < 0.0);
+    }
+
+    #[test]
+    fn screen_rays_hold_still_with_a_tiny_near_plane_far_from_the_origin() {
+        // A first-person camera holding a gun: near 1 cm, hundreds of metres
+        // out, turning a hair each frame. Each ray must be the one the
+        // projection gives, within a thousandth of a degree of the exact one, so it
+        // turns exactly as the camera does.
+        let mut camera = Camera3D::new(Vec2::new(1920.0, 1080.0));
+        camera.position = Vec3::new(106.0, 185.2, -420.0);
+        camera.near = 0.01;
+        camera.far = 16000.0;
+        let pointer = Vec2::new(1400.0, 300.0);
+        for i in 0..400 {
+            camera.rotation = Quat::from_rotation_y(0.3 + i as f32 * 2e-5) * Quat::from_rotation_x(0.05);
+            let (from, dir) = camera.screen_ray(pointer);
+            // Exact: the slopes of the projection, in f64.
+            let aspect = 1920.0f64 / 1080.0;
+            let slope = (camera.fov_y as f64 * 0.5).tan();
+            let ndc = (1400.0f64 / 1920.0 * 2.0 - 1.0, 1.0 - 300.0f64 / 1080.0 * 2.0);
+            let local = glam::DVec3::new(ndc.0 * slope * aspect, ndc.1 * slope, -1.0).normalize();
+            let exact = camera.rotation.as_dquat() * local;
+            let off = dir.as_dvec3().angle_between(exact).to_degrees();
+            assert!(off < 1e-3, "frame {i}: {off} degrees off");
+            assert_eq!(from, camera.position);
+        }
     }
 
     /// The reverse-Z depth of a point `distance` in front of a camera with

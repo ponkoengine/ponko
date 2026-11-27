@@ -434,18 +434,21 @@ impl Frame3D {
     /// the frame its target had when it last drew, so what that frame
     /// collected and keeps between frames carries over. A camera that draws
     /// every few frames (a reflection on a cadence) would otherwise collect
-    /// its whole view from nothing each time. Frames of cameras not drawing
-    /// now wait in `spare_views`, at most `live_targets` of them.
-    pub(crate) fn reuse_views(&mut self, targets: impl Iterator<Item = u32>, live_targets: usize) {
+    /// its whole view from nothing each time. A target drawing for the first
+    /// time gets a fresh frame, never another target's: that one may have
+    /// collected another world (an icon's) or another camera. Frames of
+    /// cameras not drawing now wait in `spare_views` while `live` says
+    /// their target still exists.
+    pub(crate) fn reuse_views(&mut self, targets: impl Iterator<Item = u32>, live: impl Fn(u32) -> bool) {
         self.spare_views.append(&mut self.views);
         for target in targets {
             let view = match self.spare_views.iter().position(|v| v.target == target) {
                 Some(at) => self.spare_views.swap_remove(at),
-                None => self.spare_views.pop().unwrap_or_default(),
+                None => ViewFrame::default(),
             };
             self.views.push(view);
         }
-        self.spare_views.truncate(live_targets);
+        self.spare_views.retain(|v| live(v.target));
     }
 
     /// Fills the frame with what the camera sees and, with shadows on,
@@ -776,10 +779,13 @@ impl Frame3D {
             if d.bounds.1 < 0.0 || d.lod != super::skin::NOT_LOD {
                 continue;
             }
-            let caster = assets.casts_shadows(d.mesh).then_some(d.bounds);
+            let e = ponko_ecs::Entity::from_bits(d.entity);
+            // `ShadowMesh(None)` turns its shadow off, as on any model (a
+            // stand-in mesh can't follow the pose: the posed mesh casts).
+            let shadow_off = matches!(world.get::<ShadowMesh>(e), Some(ShadowMesh(None)));
+            let caster = (!shadow_off && assets.casts_shadows(d.mesh)).then_some(d.bounds);
             // A `ShadowOnly` model: only the shadow maps (not counted as
             // hidden from the camera, which never draws it).
-            let e = ponko_ecs::Entity::from_bits(d.entity);
             // On none of the camera's layers: only its shadows are drawn.
             let off_layers = !world
                 .get::<crate::camera::RenderLayers>(e)
@@ -1005,7 +1011,8 @@ impl Frame3D {
         // tile's bounds (the finest level's, which hold every coarser one).
         // Shadow cascade i draws at least level i: its texels are too big
         // for finer detail to show.
-        // A `ShadowMesh(None)` on the tile turns its shadow off.
+        // A `ShadowMesh(None)` on the tile turns its shadow off; a tile on
+        // none of the camera's layers casts its shadow only, as a model.
         world
             .query::<(
                 ponko_ecs::Entity,
@@ -1014,8 +1021,9 @@ impl Frame3D {
                 Option<&ShadowMesh>,
                 Option<&ModelMaterial>,
                 Option<&ModelMaterials>,
+                Option<&crate::camera::RenderLayers>,
             )>()
-            .for_each(|(e, t, tile, shadow, material, parts)| {
+            .for_each(|(e, t, tile, shadow, material, parts, layers)| {
                 let Some((center, radius)) = assets.live_bounds(tile.lods[0].id) else {
                     return;
                 };
@@ -1033,7 +1041,12 @@ impl Frame3D {
                 if meshes.iter().all(|&m| assets.live_bounds(m).is_some()) {
                     let meshes = meshes.map(|m| m & super::SLOT_MASK);
                     let casts = !matches!(shadow, Some(ShadowMesh(None)));
-                    let f = classify(t, (center, radius), casts.then_some((center, radius)));
+                    let caster = casts.then_some((center, radius));
+                    let f = if layers.copied().unwrap_or_default().intersects(camera.layers) {
+                        classify(t, (center, radius), caster)
+                    } else {
+                        classify_uncounted(t.matrix(), scale, (center, radius), caster) & !(1 | OCCLUDED)
+                    };
                     if f != 0 {
                         // Most tiles have no override: skip the lookup.
                         let meshes = if material.is_some() || parts.is_some() {
@@ -1661,6 +1674,84 @@ mod tests {
         let mut frame = Frame3D::default();
         frame.collect(&mut world, &assets, &SkinFrame::default(), &camera(), &lighting);
         assert_eq!(frame.runs, vec![(0, 0, 1), (1, 1, 1), (3, 2, 1)]);
+    }
+
+    #[test]
+    fn terrain_tiles_on_none_of_the_cameras_layers_are_left_out() {
+        // A first-person view-model camera draws only its own layer: the
+        // ground under the player must not be drawn over the world by it.
+        let mut world = World::new();
+        let assets = Assets3D {
+            bounds: vec![(Vec3::ZERO, 1.0); TERRAIN_LODS],
+            ..Default::default()
+        };
+        let tile = TerrainTile {
+            lods: std::array::from_fn(|id| Mesh { id: id as u32 }),
+            lod_distance: 5.0,
+        };
+        world.spawn((Transform3D::at(Vec3::new(0.0, 0.0, 7.0)), tile));
+        let lighting = Lighting {
+            shadows: false,
+            ..Default::default()
+        };
+        let mut eye = camera();
+        let mut frame = Frame3D::default();
+        frame.collect(&mut world, &assets, &SkinFrame::default(), &eye, &lighting);
+        assert_eq!(frame.visible, 1, "on the camera's layer: drawn");
+        eye.layers = crate::camera::RenderLayers::layer(31);
+        let mut frame = Frame3D::default();
+        frame.collect(&mut world, &assets, &SkinFrame::default(), &eye, &lighting);
+        assert_eq!(frame.visible, 0, "another layer's camera leaves it out");
+        assert!(frame.runs.is_empty());
+    }
+
+    #[test]
+    fn a_skinned_model_with_no_shadow_mesh_casts_no_shadow() {
+        // A first-person arm: skinned, seen, and casting nothing.
+        let mut world = World::new();
+        let assets = Assets3D {
+            bounds: vec![(Vec3::ZERO, 1.0)],
+            ..Default::default()
+        };
+        let mut camera = camera();
+        camera.position = Vec3::new(0.0, 5.0, 10.0);
+        camera.look_at(Vec3::ZERO);
+        let lighting = Lighting {
+            sun_direction: Vec3::new(0.0, -1.0, -0.2),
+            shadow_distance: 30.0,
+            shadow_cascades: 1,
+            ..Default::default()
+        };
+        let arm = world.spawn((ShadowMesh(None),));
+        let mut skins = SkinFrame::default();
+        let matrix = Mat4::IDENTITY;
+        skins.draws.push(super::super::skin::SkinDraw {
+            mesh: 0,
+            instance: Instance3D {
+                model: matrix.to_cols_array_2d(),
+                color: [1.0; 4],
+            },
+            entity: arm.to_bits(),
+            matrix,
+            scale: 1.0,
+            bounds: (Vec3::ZERO, 1.0),
+            first: 0,
+            morph_first: 0,
+            morph_count: 0,
+            material: u32::MAX,
+            parts: (0, 0),
+            lod: super::super::skin::NOT_LOD,
+            posed_motion: false,
+        });
+        let mut frame = Frame3D::default();
+        frame.collect(&mut world, &assets, &skins, &camera, &lighting);
+        assert_eq!(frame.visible, 1, "the camera draws it");
+        assert!(frame.shadow_runs[0].is_empty(), "no shadow: {:?}", frame.shadow_runs[0]);
+        // Without the ShadowMesh it casts (the negative control).
+        world.remove::<ShadowMesh>(arm);
+        let mut frame = Frame3D::default();
+        frame.collect(&mut world, &assets, &skins, &camera, &lighting);
+        assert!(!frame.shadow_runs[0].is_empty(), "its own posed mesh casts");
     }
 
     #[test]
@@ -2325,8 +2416,8 @@ mod view_reuse_tests {
     }
 
     /// A frame with views for `ids`, each marked with its own target.
-    fn drawing(frame: &mut Frame3D, ids: &[u32], live: usize) {
-        frame.reuse_views(ids.iter().copied(), live);
+    fn drawing(frame: &mut Frame3D, ids: &[u32], live: &[u32]) {
+        frame.reuse_views(ids.iter().copied(), |id| live.contains(&id));
         for (view, &id) in frame.views.iter_mut().zip(ids) {
             view.target = id;
         }
@@ -2335,22 +2426,22 @@ mod view_reuse_tests {
     #[test]
     fn a_camera_that_skips_frames_gets_its_frame_back() {
         let mut frame = Frame3D::default();
-        drawing(&mut frame, &[7], 1);
+        drawing(&mut frame, &[7], &[7]);
         frame.views[0].size = (64, 32); // stands for what it collected
-        drawing(&mut frame, &[], 1);
+        drawing(&mut frame, &[], &[7]);
         assert!(frame.views.is_empty(), "not drawn this frame");
         assert_eq!(frame.spare_views.len(), 1, "kept for the next time");
-        drawing(&mut frame, &[7], 1);
+        drawing(&mut frame, &[7], &[7]);
         assert_eq!(frame.views[0].size, (64, 32), "the same frame as before");
     }
 
     #[test]
     fn frames_follow_their_targets_when_cameras_reorder() {
         let mut frame = Frame3D::default();
-        drawing(&mut frame, &[1, 2], 2);
+        drawing(&mut frame, &[1, 2], &[1, 2]);
         frame.views[0].size = (1, 1);
         frame.views[1].size = (2, 2);
-        drawing(&mut frame, &[2, 1], 2);
+        drawing(&mut frame, &[2, 1], &[1, 2]);
         assert_eq!(targets(&frame), vec![2, 1]);
         assert_eq!(frame.views[0].size, (2, 2));
         assert_eq!(frame.views[1].size, (1, 1));
@@ -2359,8 +2450,21 @@ mod view_reuse_tests {
     #[test]
     fn spares_of_freed_targets_are_dropped() {
         let mut frame = Frame3D::default();
-        drawing(&mut frame, &[1, 2, 3], 3);
-        drawing(&mut frame, &[], 1);
-        assert_eq!(frame.spare_views.len(), 1);
+        drawing(&mut frame, &[1, 2, 3], &[1, 2, 3]);
+        // Targets 1 and 3 freed: only 2's frame is kept, whatever its place.
+        drawing(&mut frame, &[], &[2]);
+        let kept: Vec<u32> = frame.spare_views.iter().map(|v| v.target).collect();
+        assert_eq!(kept, vec![2]);
+    }
+
+    #[test]
+    fn a_new_target_never_takes_another_targets_frame() {
+        // An icon (its own world) must not inherit what a reflection collected.
+        let mut frame = Frame3D::default();
+        drawing(&mut frame, &[1], &[1, 9]);
+        frame.views[0].size = (64, 32);
+        drawing(&mut frame, &[9], &[1, 9]);
+        assert_eq!(frame.views[0].size, (0, 0), "a fresh frame");
+        assert_eq!(frame.spare_views.len(), 1, "1's frame still waits for it");
     }
 }
