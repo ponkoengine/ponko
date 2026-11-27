@@ -193,20 +193,24 @@ percentiles and both runs' `env.load_average`.
 ## The committed baseline
 
 `baselines/render.json` and `baselines/render.csv`, recorded 2026-11-26 at
-`431fae00` (clean tree) on an Apple M4 Max (10 performance and 4
+`211cc766` (clean tree) on an Apple M4 Max (10 performance and 4
 efficiency cores, 36 GB, macOS 27.2.1, on mains power), Metal, wgpu
 30.0.1, Rust 1.100.0, release profile, features `physics`, `physics3d`,
 `navmesh`, `window`; 1280×720, 4× MSAA, `high`, scale 1, 120 warm-up and
-600 measured frames. Peak resident memory of the run: 380 MB (see below).
+600 measured frames. Peak resident memory of the run: 236 MB (see below).
 The files hold the memory sizes computed for render targets and shadow
 maps (`render_target_bytes`, `shadow_map_bytes`,
 `light_shadow_atlas_bytes`, `computed_bytes`).
 
-The machine was idle (1-minute load 2.6 to 3.0, no compiler running). The
+The machine was idle (1-minute load 2.0 to 2.7, no compiler running). The
 files are the third of three runs taken one after another; the other two
 gave frame medians within 0.1 ms of these in every scene except
-`dynamic-world` (5.95 to 6.23 ms), and GPU totals within 0.06 ms in every
-scene. Re-record it with:
+`static-world` (4.53 to 4.87 ms) and `alpha-heavy` (16.18 to 16.56 ms), and
+GPU totals within 0.06 ms in every scene except `static-world` (3.80 to
+4.14 ms) and `alpha-heavy` (12.98 to 13.10 ms). A set of three taken two
+minutes earlier was noisier in the GPU-bound scenes (`static-world` GPU
+4.18 to 5.66 ms); the three runs of an alternating comparison against
+`main` gave 3.83 to 4.53 ms. Re-record it with:
 
 ```sh
 PONKO_BENCH_JSON=crates/ponko_bench/baselines/render.json \
@@ -218,58 +222,79 @@ Milliseconds, medians unless a percentile is named:
 
 | Scene | CPU | Frame | Frame p95 | Frame p99 | GPU passes | Draw calls | Triangles (camera / shadows) |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| `single-material` | 0.302 | 1.476 | 1.737 | 1.847 | 0.895 | 26 | 1,200 / 2,220 |
-| `static-world` | 0.437 | 5.165 | 5.835 | 5.920 | 4.425 | 27 | 2 / 6 |
-| `dynamic-world` | 2.990 | 6.128 | 6.352 | 6.572 | 2.421 | 124 | 721,530 / 241,252 |
-| `multi-material` | 2.281 | 5.270 | 5.649 | 6.438 | 2.278 | 2,592 | 219,480 / 314,276 |
-| `shadow-heavy` | 1.219 | 5.333 | 5.546 | 5.654 | 3.847 | 268 | 133,686 / 614,002 |
-| `alpha-heavy` | 2.667 | 16.675 | 17.862 | 18.696 | 13.073 | 97 | 142,866 / 339,270 |
-| `animated` | 1.123 | 3.656 | 3.913 | 4.475 | 2.220 | 2,520 | 145,922 / 373,256 |
-| `game-like` | 0.659 | 2.801 | 3.218 | 3.521 | 1.831 | 126 | 38,280 / 319,360 |
+| `single-material` | 0.294 | 1.428 | 1.624 | 1.835 | 0.853 | 25 | 1,200 / 2,220 |
+| `static-world` | 0.411 | 4.527 | 5.224 | 5.295 | 3.804 | 26 | 2 / 6 |
+| `dynamic-world` | 2.947 | 6.071 | 6.357 | 7.193 | 2.407 | 107 | 721,530 / 241,252 |
+| `multi-material` | 1.853 | 4.794 | 5.165 | 5.619 | 2.242 | 2,079 | 219,480 / 314,276 |
+| `shadow-heavy` | 1.188 | 5.299 | 5.508 | 5.589 | 3.839 | 259 | 133,686 / 614,002 |
+| `alpha-heavy` | 2.580 | 16.498 | 17.723 | 18.859 | 12.992 | 87 | 142,866 / 339,270 |
+| `animated` | 1.043 | 3.523 | 3.745 | 3.832 | 2.182 | 2,139 | 145,922 / 373,256 |
+| `game-like` | 0.612 | 2.563 | 2.735 | 2.884 | 1.667 | 112 | 38,280 / 319,360 |
 
 `static-world` shows 2 triangles because its 200,000 instances are in static
 batches (see the counts note above).
 
 | Scene | Collect | Prepare | Encode | Submit | Allocations a frame | Counted GPU bytes |
 |---|---:|---:|---:|---:|---:|---:|
-| `single-material` | 0.011 | 0.023 | 0.228 | 0.040 | 546.7 | 2,308 |
-| `static-world` | 0.009 | 0.075 | 0.313 | 0.040 | 571.6 | 40,964 |
-| `dynamic-world` | 1.471 | 0.993 | 0.434 | 0.051 | 664.0 | 81,924 |
-| `multi-material` | 0.159 | 0.233 | 1.747 | 0.123 | 917.9 | 2,271,876 |
-| `shadow-heavy` | 0.372 | 0.447 | 0.365 | 0.053 | 767.9 | 40,964 |
-| `alpha-heavy` | 0.506 | 1.060 | 1.039 | 0.063 | 735.4 | 42,328 |
-| `animated` | 0.127 | 0.219 | 0.678 | 0.081 | 918.7 | 43,492 |
-| `game-like` | 0.121 | 0.139 | 0.336 | 0.048 | 763.1 | 1,630,956 |
+| `single-material` | 0.011 | 0.023 | 0.219 | 0.041 | 530.7 | 1,624 |
+| `static-world` | 0.009 | 0.075 | 0.289 | 0.039 | 552.3 | 27,396 |
+| `dynamic-world` | 1.470 | 0.976 | 0.411 | 0.049 | 650.0 | 54,516 |
+| `multi-material` | 0.155 | 0.231 | 1.331 | 0.118 | 871.9 | 2,263,664 |
+| `shadow-heavy` | 0.372 | 0.441 | 0.341 | 0.053 | 753.9 | 29,016 |
+| `alpha-heavy` | 0.479 | 1.032 | 1.007 | 0.062 | 705.6 | 42,580 |
+| `animated` | 0.117 | 0.212 | 0.619 | 0.075 | 900.7 | 43,476 |
+| `game-like` | 0.101 | 0.132 | 0.311 | 0.047 | 746.2 | 1,636,092 |
 
-Against the baseline of 2026-11-22 (also idle), beyond the three runs'
-spread:
+Against the baseline recorded earlier the same day (`431fae00`, also
+idle), beyond the runs' spread:
 
-- **Faster in seven scenes, from two changes.** The `high` preset no longer
-  turns on screen reflections' thin objects (#647): the screen reflections
-  pass is 0.1 to 1.6 ms shorter in every scene (`alpha-heavy` 2.31 → 0.72,
-  `shadow-heavy` 1.88 → 0.84). And skinning is batched (#637): `animated`'s
-  skinning pass 1.95 → 0.03 ms. Frame medians: `single-material` 1.63 →
-  1.48, `dynamic-world` 6.46 → 6.13, `multi-material` 5.51 → 5.27,
-  `shadow-heavy` 6.35 → 5.33, `alpha-heavy` 17.73 → 16.68, `animated`
-  6.67 → 3.66, `game-like` 3.41 → 2.80.
-- **Slower: `static-world`, 4.89 → 5.17 ms** (GPU 4.15 → 4.43). A new
-  pass, `reflection normals`, came with screen reflections of normal maps
-  (#585): it draws the solid surfaces again to give the reflections their
-  normals, and costs 0.86 ms here (0.07 to 0.23 ms in the other scenes).
-  Shadow cascades 2 and 3 also take longer here (0.08 → 0.19 and 1.05 →
-  1.30 ms; 277 → 365 recorded draws). The shorter screen reflections pass
-  (1.15 → 0.55 ms) pays for part of it.
-- **More CPU in `multi-material`: 1.74 → 2.28 ms**, its encode step 1.22 →
-  1.75 ms, from the same pass: 513 more draw calls (2,079 → 2,592). Its
-  GPU total still fell (2.97 → 2.28 ms). Every scene draws more for it
-  (`animated` +381, the others +1 to +17).
-- **Peak resident memory 225 → 380 MB** (three runs: 379 to 386 MB) for the
-  whole run, not explained here. The render targets and shadow maps
-  computed from their sizes are unchanged (130 MB). One scene alone peaks
-  at 276 MB (`single-material`; 266 MB with the build of `24b58431`, before
-  skinning was batched), so most of the rise came before that revision.
-- Allocations a frame are within 10 of the old ones in every scene but
-  `multi-material` (+16) and `animated` (−32).
+- **The reflection normals pass is gone (#683).** Screen reflections take
+  their normals from the depth prepass, which writes them as a second
+  color target, instead of from a pass of their own that drew every solid
+  surface again. The prepass grows (`static-world` 0.98 → 1.27 ms,
+  `dynamic-world` 0.15 → 0.28) by less than the pass it replaces cost
+  (0.86 and 0.23 ms). `static-world` frame 5.17 → 4.53 ms (GPU 4.43 →
+  3.80), `multi-material` 5.27 → 4.79 (CPU 2.28 → 1.85, encode 1.75 →
+  1.33: 2,592 → 2,079 draw calls), `game-like` 2.80 → 2.56 (GPU 1.83 →
+  1.67), `animated` 3.66 → 3.52 (2,520 → 2,139 draw calls). Every scene
+  makes fewer draw calls (1 to 513 fewer) and 14 to 46 fewer allocations a
+  frame. The
+  rendered images are byte for byte the same in all eight scenes.
+- **Screen reflections pass in `multi-material` 0.39 → 0.15 ms and
+  `alpha-heavy` 0.72 → 0.39 ms**, with GPU totals unchanged beyond the
+  normals pass: on this tiled GPU the passes' timestamps overlap, and with
+  one pass fewer before it, time moved between neighbours. Compare GPU
+  totals, not single passes.
+- **Shadow cascades 2 and 3** (`static-world` 0.19 / 1.30 ms in the old
+  file, 0.10 / 0.91 here) are not a change: their per-run medians are
+  bimodal. Three runs of one build (`main` before #683) gave 0.015 / 1.05, 0.20 / 1.31 and
+  0.20 / 1.30 ms; their means stay near 0.10 and 1.13 to 1.25 ms. The
+  "277 → 365 recorded draws" of the old file were all the reflection
+  normals pass's static-batch draws, and are back at 277.
+- **Peak resident memory 363 → 236 MB** (three runs: 236 to 241 MB; the
+  old text gave 380 MB, from runs of 379 to 386 MB). The
+  rise from 225 MB came with #521 (`01718c9b`, bisected: 223 / 230 MB
+  before, 354 / 352 MB after), and was not the renderer's: the bench's
+  bloom-filter membership benchmark filled its 128 MiB cache-flush buffer
+  with ones before checking whether it would run, so it was resident in
+  every run of `ponko_bench`, filtered or not. It is now made only when the
+  benchmark runs. The rest, about 10 MB, grew in small steps across later
+  renderer changes (bisect points 350 to 363 MB before this fix), each
+  within the ±5 MB between runs. The render targets and shadow maps
+  computed from their sizes are unchanged (130 MB).
+- **Counted GPU bytes fell** in most scenes (`static-world` 40,964 →
+  27,396, `dynamic-world` 81,924 → 54,516) because #676 grows the mesh
+  arena's buffers to a quarter more than they hold instead of to the next
+  power of two.
+
+The rows of 2026-11-22 to 2026-11-26 (`431fae00`), for the history: the
+`high` preset stopped turning on screen reflections' thin objects (#647;
+the screen reflections pass 0.1 to 1.6 ms shorter in every scene) and
+skinning was batched (#637; `animated`'s skinning pass 1.95 → 0.03 ms), so
+seven scenes got faster (`animated` 6.67 → 3.66 ms, `shadow-heavy` 6.35 →
+5.33). `static-world` got slower (4.89 → 5.17 ms) from the reflection
+normals pass that came with reflections of normal maps (#585), which also
+cost `multi-material` 513 draw calls (CPU 1.74 → 2.28 ms); #683 removed it.
 
 The rows of 2026-11-20 to 2026-11-22, for the history: against the
 baseline of 2026-11-20 (`e60e15a8`, also idle), the CPU got faster in

@@ -286,8 +286,8 @@ impl Renderer3D {
         if rebuild {
             let targets = self.make_targets(device, view.size, (view.upscaled, view.window));
             if targets.samples > 1 {
-                // The opaque, motion and reflection normal passes resolve
-                // into these.
+                // The opaque and motion passes and the prepass's
+                // reflection normals resolve into these.
                 self.clear_before_resolving(targets.lit_view(true));
                 self.clear_before_resolving(&targets.hdr);
                 if let Some(velocity) = &targets.velocity {

@@ -304,50 +304,179 @@ fn fs_fade(in: VertexOut) {
 }
 
 // ---- Screen-space reflections' normals ----
-// With reflections on, solid surfaces are drawn once more over the
-// finished prepass depth (equal depths only, so each pixel once) to say
-// which way each faces: the normal the opaque pass lights it with, normal
-// maps, `surface` and decals included, so the trace's rays leave as the
-// opaque pass reflects (see ssr.wgsl). Red, green and blue: the normal,
-// each axis -1 to 1 in 10 bits with 0 exact. Multisampling averages a
-// pixel's samples: two surfaces' normals, or one and the clear value (all
-// 0), average to shorter than 1, which the trace can tell. Alpha, in two
-// bits: 0 where nothing was drawn (crowds and solid stencil materials
-// aren't: the trace keeps the depth's normal and traces), 1/3 where the
-// surface is too rough to show reflections (roughness 0.7 and up, where
-// `environment_light` has faded them out: no ray), 2/3 where it is glossy
-// and nothing tilted its normal from the mesh's (`geometric`: the trace
-// keeps the depth's normal, as without this pass), 1 where something did.
+// With reflections on, the depth prepass also says which way each pixel
+// faces, in a color target of its own (location 1 with multisampling,
+// beside the cut-outs' coverage target; location 0 without): the normal
+// the opaque pass lights it with, normal maps, `surface` and decals
+// included, so the trace's rays leave as the opaque pass reflects (see
+// ssr.wgsl). Each surface is drawn once: the prepass writes the depth and
+// the normal together, and the nearest surface's normal is what is left.
+// Red, green and blue: the normal, each axis -1 to 1 in 10 bits with 0
+// exact. Multisampling averages a pixel's samples: two surfaces' normals,
+// or one and the clear value (all 0), average to shorter than 1, which the
+// trace can tell. Alpha, in two bits: 0 where nothing was drawn (and where
+// a GPU-path crowd or a solid stencil material is: the trace keeps the
+// depth's normal and traces), 1/3 where the surface is too rough to show
+// reflections (roughness 0.7 and up, where `environment_light` has faded
+// them out: no ray), 2/3 where it is glossy and nothing tilted its normal
+// from the mesh's (`geometric`: the trace keeps the depth's normal, as
+// without this pass), 1 where something did.
 fn reflection_normal(n: vec3<f32>, geometric: vec3<f32>, roughness: f32) -> vec4<f32> {
     let tilted = dot(n, geometric) < 0.99996;
     let alpha = select(select(2.0 / 3.0, 1.0, tilted), 1.0 / 3.0, roughness >= 0.7);
     return vec4<f32>((n * 511.0 + 512.0) / 1023.0, alpha);
 }
 
-fn reflection_surface(in: VertexOut, front: bool, dp_x: vec3<f32>, dp_y: vec3<f32>) -> vec4<f32> {
-    var s = surface_at(in, front);
+// The reflections' normal of surface `s` (`surface_at(in, front)`).
+fn reflection_of(s_in: Surface, in: VertexOut, front: bool, dp_x: vec3<f32>, dp_y: vec3<f32>) -> vec4<f32> {
     var geometric = normalize(in.normal);
     if !front {
         geometric = -geometric;
     }
-    s = apply_decals(s, geometric, in.decal_layers, dp_x, dp_y);
+    let s = apply_decals(s_in, geometric, in.decal_layers, dp_x, dp_y);
     return reflection_normal(s.normal, geometric, clamp(s.roughness, 0.03, 1.0));
 }
 
+// What the prepass writes where nothing tells the trace a normal (see
+// `NO_NORMAL` in ssr.rs).
+const NO_NORMAL: vec4<f32> = vec4<f32>(512.0 / 1023.0, 512.0 / 1023.0, 512.0 / 1023.0, 0.0);
+
+// With multisampling: the cut-outs' coverage (only its alpha, which alpha
+// to coverage reads; nothing is written there) and the normal.
+struct PrepassNormals {
+    @location(0) coverage: vec4<f32>,
+    @location(1) normal: vec4<f32>,
+};
+
+// Solid surfaces, one sample a pixel.
 @fragment
 fn fs_normals(in: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    return reflection_surface(in, front, dpdx(in.world), dpdy(in.world));
+    return reflection_of(surface_at(in, front), in, front, dpdx(in.world), dpdy(in.world));
 }
 
 @fragment
 fn fs_normals_fade(in: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    let dp_x = dpdx(in.world);
-    let dp_y = dpdy(in.world);
-    let n = reflection_surface(in, front, dp_x, dp_y);
+    let n = reflection_of(surface_at(in, front), in, front, dpdx(in.world), dpdy(in.world));
     if !fade_keeps(in.fade, in.clip.xy) {
         discard;
     }
     return n;
+}
+
+// Cut-out surfaces, one sample a pixel: as `fs_depth`.
+@fragment
+fn fs_depth_normals(in: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    let s = surface_at(in, front);
+    let n = reflection_of(s, in, front, dpdx(in.world), dpdy(in.world));
+    if s.alpha < alpha_cutoff() {
+        discard;
+    }
+    return n;
+}
+
+@fragment
+fn fs_depth_normals_fade(in: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    let s = surface_at(in, front);
+    let n = reflection_of(s, in, front, dpdx(in.world), dpdy(in.world));
+    if !fade_keeps(in.fade, in.clip.xy) || s.alpha < alpha_cutoff() {
+        discard;
+    }
+    return n;
+}
+
+// Solid surfaces with multisampling.
+@fragment
+fn fs_normals_ms(in: VertexOut, @builtin(front_facing) front: bool) -> PrepassNormals {
+    let n = reflection_of(surface_at(in, front), in, front, dpdx(in.world), dpdy(in.world));
+    return PrepassNormals(vec4<f32>(0.0), n);
+}
+
+@fragment
+fn fs_normals_ms_fade(in: VertexOut, @builtin(front_facing) front: bool) -> PrepassNormals {
+    let n = reflection_of(surface_at(in, front), in, front, dpdx(in.world), dpdy(in.world));
+    if !fade_keeps(in.fade, in.clip.xy) {
+        discard;
+    }
+    return PrepassNormals(vec4<f32>(0.0), n);
+}
+
+// Cut-out surfaces with multisampling: as `fs_depth_coverage`.
+@fragment
+fn fs_depth_coverage_normals(in: VertexOut, @builtin(front_facing) front: bool) -> PrepassNormals {
+    let s = surface_at(in, front);
+    let n = reflection_of(s, in, front, dpdx(in.world), dpdy(in.world));
+    return PrepassNormals(vec4<f32>(0.0, 0.0, 0.0, coverage(s.alpha)), n);
+}
+
+@fragment
+fn fs_depth_coverage_normals_fade(in: VertexOut, @builtin(front_facing) front: bool) -> PrepassNormals {
+    let s = surface_at(in, front);
+    let n = reflection_of(s, in, front, dpdx(in.world), dpdy(in.world));
+    let a = coverage(s.alpha);
+    if !fade_keeps(in.fade, in.clip.xy) {
+        discard;
+    }
+    return PrepassNormals(vec4<f32>(0.0, 0.0, 0.0, a), n);
+}
+
+// GPU-path crowds: no normal (the trace keeps the depth's), over whatever
+// they hide: solid ones, cut-out ones as `fs_depth`, and with
+// multisampling as `fs_depth_coverage`.
+@fragment
+fn fs_no_normal() -> @location(0) vec4<f32> {
+    return NO_NORMAL;
+}
+
+@fragment
+fn fs_no_normal_fade(in: VertexOut) -> @location(0) vec4<f32> {
+    if !fade_keeps(in.fade, in.clip.xy) {
+        discard;
+    }
+    return NO_NORMAL;
+}
+
+@fragment
+fn fs_depth_no_normal(in: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    if surface_at(in, front).alpha < alpha_cutoff() {
+        discard;
+    }
+    return NO_NORMAL;
+}
+
+@fragment
+fn fs_depth_no_normal_fade(in: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    let alpha = surface_at(in, front).alpha;
+    if !fade_keeps(in.fade, in.clip.xy) || alpha < alpha_cutoff() {
+        discard;
+    }
+    return NO_NORMAL;
+}
+
+@fragment
+fn fs_no_normal_ms() -> PrepassNormals {
+    return PrepassNormals(vec4<f32>(0.0), NO_NORMAL);
+}
+
+@fragment
+fn fs_no_normal_ms_fade(in: VertexOut) -> PrepassNormals {
+    if !fade_keeps(in.fade, in.clip.xy) {
+        discard;
+    }
+    return PrepassNormals(vec4<f32>(0.0), NO_NORMAL);
+}
+
+@fragment
+fn fs_depth_coverage_no_normal(in: VertexOut, @builtin(front_facing) front: bool) -> PrepassNormals {
+    return PrepassNormals(vec4<f32>(0.0, 0.0, 0.0, coverage(surface_at(in, front).alpha)), NO_NORMAL);
+}
+
+@fragment
+fn fs_depth_coverage_no_normal_fade(in: VertexOut, @builtin(front_facing) front: bool) -> PrepassNormals {
+    let a = coverage(surface_at(in, front).alpha);
+    if !fade_keeps(in.fade, in.clip.xy) {
+        discard;
+    }
+    return PrepassNormals(vec4<f32>(0.0, 0.0, 0.0, a), NO_NORMAL);
 }
 
 // The opaque pass's contact shadow at this pixel (see opaque_color).

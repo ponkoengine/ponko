@@ -390,6 +390,11 @@ struct CrowdSet {
     targets: TargetKey,
     /// `None`: the crowd module didn't build; its crowds draw nothing.
     pipelines: Option<Pipelines>,
+    /// What builds the prepass pipelines with the reflections' normals
+    /// (`None` with `pipelines`), and those, solid and cut-out, built the
+    /// first time a prepass with reflections draws the crowd.
+    builder: Option<super::shaders::SideBuilder>,
+    prepass_normals: [std::sync::OnceLock<wgpu::RenderPipeline>; 2],
 }
 
 /// The renderer's crowds (see the module's docs).
@@ -1228,13 +1233,15 @@ impl Renderer3D {
                         if self.crowds.set(&set, sides, fade).is_some() {
                             continue;
                         }
-                        let pipelines = self.build_crowd_pipelines(device, &set, sides, fade);
+                        let (pipelines, builder) = self.build_crowd_pipelines(device, &set, sides, fade).unzip();
                         self.crowds.sets.push(CrowdSet {
                             set: Arc::downgrade(&set),
                             sides,
                             fade,
                             targets,
                             pipelines,
+                            builder,
+                            prepass_normals: Default::default(),
                         });
                     }
                 }
@@ -1251,7 +1258,7 @@ impl Renderer3D {
         set: &Arc<ShaderPipelines>,
         sides: Sides,
         fade: bool,
-    ) -> Option<Pipelines> {
+    ) -> Option<(Pipelines, super::shaders::SideBuilder)> {
         let shared = self.crowds.shared.as_ref()?;
         let source = self.shaders.compose_like(set, compose_crowd)?;
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
@@ -1269,14 +1276,13 @@ impl Renderer3D {
         let instancing = if fade { Instancing::Crossfade } else { Instancing::Plain };
         let pipelines = builder.build(ShaderVariant::new(sides, instancing));
         match super::end_scope(scope, false) {
-            Ok(None) => Some(pipelines),
+            Ok(None) | Err(_) => Some((pipelines, builder)),
             Ok(Some(error)) => {
                 traffic::warn(&format!(
                     "a crowd's material shader doesn't build with the crowd's vertex code (its crowds draw nothing): {error}"
                 ));
                 None
             }
-            Err(_) => Some(pipelines),
         }
     }
 
@@ -1410,11 +1416,26 @@ impl Renderer3D {
                         continue;
                     };
                     let shader = &self.shaders.sets[m.shader as usize];
-                    let Some(pipeline) = self
-                        .crowds
-                        .pipelines(shader, Sides::of(m.double_sided), fade)
-                        .and_then(|p| p.for_kind(kind, role))
-                    else {
+                    let sides = Sides::of(m.double_sided);
+                    let pipeline = if kind.writes_normals() {
+                        // The prepass with reflections: a crowd writes no
+                        // normal (see `fs_no_normal`).
+                        self.crowds.set(shader, sides, fade).and_then(|set| {
+                            let instancing = if fade { Instancing::Crossfade } else { Instancing::Plain };
+                            super::shaders::prepass_normals(
+                                &set.prepass_normals,
+                                set.builder.as_ref()?,
+                                ShaderVariant::new(sides, instancing),
+                                role,
+                                None,
+                            )
+                        })
+                    } else {
+                        self.crowds
+                            .pipelines(shader, sides, fade)
+                            .and_then(|p| p.for_kind(kind, role))
+                    };
+                    let Some(pipeline) = pipeline else {
                         continue;
                     };
                     pass.set_pipeline(pipeline);

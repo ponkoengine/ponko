@@ -5141,6 +5141,7 @@ pub fn ponko::gfx::Graphics::draw_text(&mut self, &str, glam::f32::vec2::Vec2, f
 pub fn ponko::gfx::Graphics::draw_text_ex(&mut self, &str, glam::f32::vec2::Vec2, ponko::text::TextParams)
 pub fn ponko::gfx::Graphics::font_fallbacks(&self, ponko::text::Font) -> &[ponko::text::Font]
 pub fn ponko::gfx::Graphics::gpu_capabilities(&self) -> core::option::Option<&ponko::render::GpuCapabilities>
+pub fn ponko::gfx::Graphics::gpu_memory(&self) -> core::option::Option<ponko::perf::GpuMemory>
 pub fn ponko::gfx::Graphics::load_font(&mut self, &str) -> ponko::text::Font
 pub fn ponko::gfx::Graphics::load_system_font(&mut self, &str) -> ponko::text::Font
 pub fn ponko::gfx::Graphics::load_texture(&mut self, &str) -> ponko::texture::Texture
@@ -5152,14 +5153,17 @@ pub fn ponko::gfx::Graphics::set_layers(&mut self, ponko::camera::RenderLayers)
 pub fn ponko::gfx::Graphics::set_system_font_fallback(&mut self, bool) -> bool
 pub fn ponko::gfx::Graphics::set_text_shaping(&mut self, ponko::text::TextShaping)
 pub fn ponko::gfx::Graphics::set_texture_filter(&mut self, ponko::texture::Texture, ponko::texture::TextureFilter)
+pub fn ponko::gfx::Graphics::set_texture_mip_limit(&mut self, u32)
 pub fn ponko::gfx::Graphics::sprite_count(&self) -> usize
 pub fn ponko::gfx::Graphics::text_shaping(&self) -> ponko::text::TextShaping
+pub fn ponko::gfx::Graphics::texture_mip_limit(&self) -> u32
 pub fn ponko::gfx::Graphics::try_decode_texture(&mut self, &[u8], &str, ponko::assets::ImageLimits) -> core::result::Result<ponko::texture::Texture, ponko::error::Error>
 pub fn ponko::gfx::Graphics::try_load_font(&mut self, &str) -> core::result::Result<ponko::text::Font, ponko::error::Error>
 pub fn ponko::gfx::Graphics::try_load_system_font(&mut self, &str) -> core::result::Result<ponko::text::Font, ponko::error::Error>
 pub fn ponko::gfx::Graphics::try_load_texture(&mut self, &str) -> core::result::Result<ponko::texture::Texture, ponko::error::Error>
 pub fn ponko::gfx::Graphics::try_update_texture(&mut self, ponko::texture::Texture, &[u8]) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::gfx::Graphics::update_texture(&mut self, ponko::texture::Texture, &[u8])
+pub fn ponko::gfx::Graphics::video_memory(&self) -> core::option::Option<ponko::perf::VideoMemory>
 impl ponko::gfx::Graphics
 pub fn ponko::gfx::Graphics::create_compute(&mut self, &str, &str) -> ponko::render::Compute
 pub fn ponko::gfx::Graphics::load_compute(&mut self, &str) -> ponko::render::Compute
@@ -9070,6 +9074,23 @@ pub fn ponko::perf::SystemTiming::eq(&self, &Self) -> bool
 impl core::fmt::Debug for ponko::perf::SystemTiming
 pub fn ponko::perf::SystemTiming::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for ponko::perf::SystemTiming
+#[non_exhaustive] pub struct ponko::perf::VideoMemory
+pub ponko::perf::VideoMemory::budget: u64
+pub ponko::perf::VideoMemory::total: u64
+pub ponko::perf::VideoMemory::used: u64
+impl core::clone::Clone for ponko::perf::VideoMemory
+pub fn ponko::perf::VideoMemory::clone(&self) -> Self
+impl core::cmp::Eq for ponko::perf::VideoMemory
+impl core::cmp::PartialEq for ponko::perf::VideoMemory
+pub fn ponko::perf::VideoMemory::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::perf::VideoMemory
+pub fn ponko::perf::VideoMemory::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::perf::VideoMemory
+impl core::marker::StructuralPartialEq for ponko::perf::VideoMemory
+impl serde_core::ser::Serialize for ponko::perf::VideoMemory
+pub fn ponko::perf::VideoMemory::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::perf::VideoMemory
+pub fn ponko::perf::VideoMemory::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct ponko::perf::WorstFrame
 pub ponko::perf::WorstFrame::allocs: u32
 pub ponko::perf::WorstFrame::frame: u64

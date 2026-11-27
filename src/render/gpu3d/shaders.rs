@@ -148,7 +148,7 @@ impl Shaders {
                 fade: Default::default(),
                 shared: Default::default(),
                 view_model_cutout: Default::default(),
-                normals: Default::default(),
+                prepass_normals: Default::default(),
                 builder,
                 counters: cache.counters.clone(),
                 in_use: true,
@@ -540,10 +540,11 @@ pub(super) struct ShaderPipelines {
     /// their own depth. Built the first time one is drawn; never without
     /// a view model.
     pub(super) view_model_cutout: [std::sync::OnceLock<wgpu::RenderPipeline>; ShaderVariant::ALL.len()],
-    /// The reflections' normals pass (see [`SideBuilder::build_normals`]),
-    /// one per [`ShaderVariant::ALL`]. Built the first time one is drawn;
-    /// never without screen-space reflections.
-    pub(super) normals: [std::sync::OnceLock<wgpu::RenderPipeline>; ShaderVariant::ALL.len()],
+    /// The depth prepass that also writes the reflections' normals (see
+    /// [`SideBuilder::build_prepass_normals`]), one per
+    /// [`ShaderVariant::ALL`], solid and cut-out (`[0]`, `[1]`). Built the
+    /// first time one is drawn; never without screen-space reflections.
+    pub(super) prepass_normals: [[std::sync::OnceLock<wgpu::RenderPipeline>; 2]; ShaderVariant::ALL.len()],
     pub(super) builder: SideBuilder,
     /// The cache's counters: builds, misses, and the sets this one drops.
     pub(super) counters: Arc<pipeline_cache::Counters>,
@@ -596,17 +597,18 @@ impl ShaderPipelines {
         })
     }
 
-    /// The reflections' normals pipeline of `variant`, built now the
-    /// first time (counted as a build).
-    pub(super) fn normals(&self, variant: ShaderVariant) -> &wgpu::RenderPipeline {
+    /// The prepass pipeline of `variant` and prepass `role` that also
+    /// writes the reflections' normals, built now the first time (counted
+    /// as a build); `None` for a role that isn't the prepass's.
+    pub(super) fn prepass_normals(&self, variant: ShaderVariant, role: PipelineRole) -> Option<&wgpu::RenderPipeline> {
         let at = ShaderVariant::ALL.iter().position(|&v| v == variant).unwrap_or(0);
-        self.normals[at].get_or_init(|| {
-            self.counters.missed();
-            let start = crate::perf::Instant::now();
-            let pipeline = self.builder.build_normals(variant);
-            self.counters.built(start.elapsed());
-            pipeline
-        })
+        prepass_normals(
+            &self.prepass_normals[at],
+            &self.builder,
+            variant,
+            role,
+            Some(&self.counters),
+        )
     }
 
     /// Whether `variant` is built.
@@ -683,9 +685,9 @@ impl Pipelines {
     pub(super) fn for_kind(&self, kind: super::record::Kind, role: PipelineRole) -> Option<&wgpu::RenderPipeline> {
         if kind == super::record::Kind::VelocityStill {
             self.velocity_still.as_ref()
-        } else if kind == super::record::Kind::Normals {
+        } else if kind.writes_normals() {
             // Only a shader's own lazily built set has them (see
-            // `ShaderPipelines::normals`); crowds draw none.
+            // `ShaderPipelines::prepass_normals`), and a crowd's.
             None
         } else {
             self.role(role)
@@ -708,6 +710,32 @@ impl Pipelines {
             PipelineRole::Velocity => &self.velocity,
         })
     }
+}
+
+/// The prepass pipeline of `role` with the reflections' normals from
+/// `slots` (solid, cut-out), built by `builder` the first time; counted in
+/// `counters` when given. `None` for a role that isn't the prepass's.
+pub(super) fn prepass_normals<'a>(
+    slots: &'a [std::sync::OnceLock<wgpu::RenderPipeline>; 2],
+    builder: &SideBuilder,
+    variant: ShaderVariant,
+    role: PipelineRole,
+    counters: Option<&pipeline_cache::Counters>,
+) -> Option<&'a wgpu::RenderPipeline> {
+    let cutout = match role {
+        PipelineRole::Prepass => false,
+        PipelineRole::PrepassCutout | PipelineRole::PrepassCoverage => true,
+        _ => return None,
+    };
+    Some(slots[usize::from(cutout)].get_or_init(|| {
+        let start = crate::perf::Instant::now();
+        let pipeline = builder.build_prepass_normals(variant, cutout);
+        if let Some(counters) = counters {
+            counters.missed();
+            counters.built(start.elapsed());
+        }
+        pipeline
+    }))
 }
 
 /// The built-in parts of every material shader.
@@ -1087,7 +1115,7 @@ pub(super) fn build_pipelines(
         fade: Default::default(),
         shared: Default::default(),
         view_model_cutout: Default::default(),
-        normals: Default::default(),
+        prepass_normals: Default::default(),
         builder,
         counters: counters.clone(),
         in_use: false,
@@ -1264,13 +1292,19 @@ impl SideBuilder {
         })
     }
 
-    /// The reflections' normals pass of `variant` (see `fs_normals` in
-    /// `mesh_main.wgsl`): solid and cut-out surfaces drawn again over the
-    /// finished prepass depth, where it is equal (so each pixel once, and
-    /// cut-outs only where they kept it), writing the normal and roughness
-    /// the opaque pass will light them with.
-    pub(super) fn build_normals(&self, variant: ShaderVariant) -> wgpu::RenderPipeline {
-        let shared = variant.instancing.shared();
+    /// The depth prepass of `variant` with the reflections' normals (see
+    /// `fs_normals` in `mesh_main.wgsl`), for solid or `cutout` surfaces:
+    /// the prepass's pipeline with a color target more, so the prepass writes each
+    /// pixel's normal and roughness as it draws it, and no surface is drawn
+    /// again for them. With multisampling the normals are the second
+    /// target, after the coverage target cut-outs need (written by none);
+    /// without, the only one. Nearer or equal: of surfaces at the same
+    /// depth the last drawn leaves its normal, as the opaque pass (equal
+    /// depths) leaves its color. A crowd's set writes no normal there.
+    pub(super) fn build_prepass_normals(&self, variant: ShaderVariant, cutout: bool) -> wgpu::RenderPipeline {
+        let shared = variant.instancing.shared() || self.crowd;
+        let fade = variant.instancing.fades();
+        let msaa = self.samples > 1;
         let buffers = [
             Some(wgpu::VertexBufferLayout {
                 array_stride: size_of::<Vertex>() as u64,
@@ -1282,20 +1316,53 @@ impl SideBuilder {
                 step_mode: wgpu::VertexStepMode::Instance,
                 attributes: &INSTANCE_ATTRIBUTES,
             }),
+            self.crowd.then_some(super::crowds::INFLUENCE_LAYOUT),
         ];
-        let targets = [Some(wgpu::ColorTargetState {
+        let buffers = if self.crowd { &buffers[..] } else { &buffers[..2] };
+        let normals = Some(wgpu::ColorTargetState {
             format: crate::render::ssr::NORMALS_FORMAT,
             blend: None,
             write_mask: wgpu::ColorWrites::ALL,
-        })];
+        });
+        let coverage = Some(wgpu::ColorTargetState {
+            format: HDR_FORMAT,
+            blend: None,
+            write_mask: wgpu::ColorWrites::empty(),
+        });
+        let targets_ms = [coverage, normals.clone()];
+        let targets_one = [normals];
+        let targets: &[Option<wgpu::ColorTargetState>] = if msaa { &targets_ms } else { &targets_one };
+        let pick = |plain: &'static str, faded: &'static str| if fade { faded } else { plain };
+        let (solid, cut) = match (self.crowd, msaa) {
+            (false, false) => (
+                pick("fs_normals", "fs_normals_fade"),
+                pick("fs_depth_normals", "fs_depth_normals_fade"),
+            ),
+            (false, true) => (
+                pick("fs_normals_ms", "fs_normals_ms_fade"),
+                pick("fs_depth_coverage_normals", "fs_depth_coverage_normals_fade"),
+            ),
+            (true, false) => (
+                pick("fs_no_normal", "fs_no_normal_fade"),
+                pick("fs_depth_no_normal", "fs_depth_no_normal_fade"),
+            ),
+            (true, true) => (
+                pick("fs_no_normal_ms", "fs_no_normal_ms_fade"),
+                pick("fs_depth_coverage_no_normal", "fs_depth_coverage_no_normal_fade"),
+            ),
+        };
         self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("3d reflection normals"),
+            label: Some(if cutout {
+                "3d depth prepass with normals, cut-out"
+            } else {
+                "3d depth prepass with normals"
+            }),
             layout: Some(&self.layout),
             vertex: wgpu::VertexState {
                 module: &self.module,
-                entry_point: Some(PipelineRole::Opaque.vertex_entry()),
+                entry_point: Some(PipelineRole::Prepass.vertex_entry()),
                 compilation_options: Default::default(),
-                buffers: &buffers,
+                buffers,
             },
             primitive: wgpu::PrimitiveState {
                 cull_mode: variant.sides.cull(),
@@ -1303,24 +1370,23 @@ impl SideBuilder {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: self.depth,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::Equal),
+                depth_write_enabled: Some(true),
+                depth_compare: Some(super::SCENE_DEPTH_NEARER_OR_EQUAL),
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
             multisample: wgpu::MultisampleState {
                 count: self.samples,
+                // Cut-outs with multisampling: alpha to coverage, as
+                // `PipelineRole::PrepassCoverage`.
+                alpha_to_coverage_enabled: cutout && msaa,
                 ..Default::default()
             },
             fragment: Some(wgpu::FragmentState {
                 module: &self.module,
-                entry_point: Some(if variant.instancing.fades() {
-                    "fs_normals_fade"
-                } else {
-                    "fs_normals"
-                }),
+                entry_point: Some(if cutout { cut } else { solid }),
                 compilation_options: Default::default(),
-                targets: &targets,
+                targets,
             }),
             multiview_mask: None,
             cache: None,
