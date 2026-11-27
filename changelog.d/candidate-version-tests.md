@@ -5,7 +5,9 @@
   picks a candidate for `"0.y"`), and the cook fixture tests compare the
   cooked Aseprite sheet and the kept-geometry model apart from the version
   the cook stamps into them (`meta.version`, each KTX2 image's
-  `KTXwriter`), checking that stamp is the current version.
+  `KTXwriter`), checking that stamp is the current version. The helper
+  builds only with the features of the test that uses it, so the tool's
+  feature subsets still build their tests with warnings denied.
 - The workspace docs build again with warnings denied (a broken link to
   `Ui::image` in the docs of `render_icon`), and the engine's tests
   build without warnings with a window but no audio (the clippy lines
