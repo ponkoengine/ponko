@@ -13,3 +13,9 @@
   reading a few values. C API: `ponko_ctx_read_gpu_buffer`,
   `ponko_ctx_read_render_target`, `ponko_ctx_readback`; C++:
   `ctx::read_gpu_buffer`, `ctx::read_render_target`, `ctx::readback`.
+
+### Fixed
+- Compute passes now run in a 3D frame that has nothing else to draw (no
+  models, particles or target cameras). Such a frame used to skip the
+  whole 3D frame, compute passes included, so a simulation alone on the
+  GPU (drawn only in 2D, or only read back) never ran.

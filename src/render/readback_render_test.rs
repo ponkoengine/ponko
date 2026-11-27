@@ -4,7 +4,9 @@
 //! values come back a few frames later, while an untouched buffer and an
 //! untouched render target read back what they were made with (the
 //! negative controls). On a device with WebGL2's limits, a buffer read
-//! fails and a render target read still works. Skips without a GPU.
+//! fails and a render target read still works. The scenes hold nothing
+//! but compute passes, so they also check that such a frame runs them.
+//! Skips without a GPU.
 use super::render_test_support::{TestGpu, gpu, gpu_with, needs};
 use crate::prelude::*;
 use crate::render::{ComputePass, GpuFeature, Readback};
