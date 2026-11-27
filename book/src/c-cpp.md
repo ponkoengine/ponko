@@ -41,7 +41,10 @@ the first three; from 0.2.0 on there are six, named like
 | `windows-arm64.zip` | `aarch64-pc-windows-msvc` | Windows on Arm |
 
 The Linux libraries also need ALSA (`libasound2`) and udev (`libudev1`),
-which desktop distributions have. The two macOS archives are separate: for a
+which desktop distributions have. The Linux archives are built for glibc 2.28
+(Debian 10, Ubuntu 18.10, RHEL 8 and newer); each release runs the C and C++
+test programs against the `linux-arm64` one on glibc 2.28 itself, and
+the Windows on Arm one on a Windows on Arm machine. The two macOS archives are separate: for a
 universal library, join them with `lipo -create`. Each archive holds
 
 - `include/`: `ponko.h` and `ponko.hpp`, matching the library next to them;

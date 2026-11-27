@@ -19,6 +19,10 @@ endif()
 add_library(ponko_ffi INTERFACE)
 target_include_directories(ponko_ffi INTERFACE "${PONKO_INCLUDE_DIR}")
 target_link_libraries(ponko_ffi INTERFACE "${PONKO_LIBRARY}")
+# glibc before 2.34 keeps pthread_create in libpthread: programs that start
+# threads (the guide's, the tests) must link it.
+find_package(Threads REQUIRED)
+target_link_libraries(ponko_ffi INTERFACE Threads::Threads)
 set(CMAKE_BUILD_RPATH "${PONKO_LIBRARY_DIR}")
 # AddressSanitizer and UndefinedBehaviorSanitizer on the C and C++ programs
 # (Clang or GCC): -DPONKO_SANITIZE=ON. Every heap block the library hands out
