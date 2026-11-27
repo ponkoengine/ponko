@@ -8,7 +8,7 @@
   plays it headlessly (moving, jumping, collecting, the attack, losing,
   saving and loading, the level transition, the end of a run, the input
   mapping through headless frames) and its autopilot plays the whole game.
-  CI packages it with `ponko package` and plays the package on Linux, macOS
-  and Windows; it builds for the web (`web/build.sh --features physics
+  The check list packages it with `ponko package` and plays the package on
+  Linux, macOS and Windows; it builds for the web (`web/build.sh --features physics
   ember_hop`). The guide's chapter "Ember Hop: a platformer, start to
   finish" walks through it.

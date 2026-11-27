@@ -7,4 +7,4 @@
   overlay, traces, `PONKO_BENCH` runs and automatic quality still get every
   frame's times while they are on, whatever it says. A game that wants fresh
   `gpu_passes()` every frame no longer has to turn profiling on, which also
-  times scopes and counts allocations (issue #188). Rust-only for now.
+  times scopes and counts allocations. Rust-only for now.

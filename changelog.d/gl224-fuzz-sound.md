@@ -5,7 +5,7 @@
   stream played a little, from a small seed corpus (`fuzz/seeds/sound/`) and
   the example sounds.
 - `fuzz/targets.txt` is the written fuzz list: every target with the seconds
-  the weekly job runs it (`fuzz/run-all.sh` uses them). `python3
+  `fuzz/run-all.sh` runs it (`fuzz/run-all.sh` uses them). `python3
   scripts/check-fuzz-list.py` fails when a target has a file, a `[[bin]]` or
   a README row that the list doesn't name, or the reverse.
 

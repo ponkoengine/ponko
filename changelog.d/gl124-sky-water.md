@@ -1,6 +1,6 @@
 <!-- area: Rendering -->
 ### Added
-- Waves from a spectrum for the water kit (issue #124): `Waves::spectrum`
+- Waves from a spectrum for the water kit: `Waves::spectrum`
   with `WaveSpectrum` (wind, significant height, a repeating square of 64,
   128 or 256 cells, choppiness, seed) draws an FFT ocean. Compute passes
   work it out on the GPU; without compute shaders (WebGL2) the CPU runs the

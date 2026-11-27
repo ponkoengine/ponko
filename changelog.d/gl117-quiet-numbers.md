@@ -1,6 +1,6 @@
 ### Changed
 - Numbers taken on a busy machine were measured again on an idle one
-  (issue #117; Apple M4 Max, 2026-11-22, revision `9235ea05`, three runs
+  (Apple M4 Max, 2026-11-22, revision `9235ea05`, three runs
   each, load average recorded): the ECS baseline
   (`crates/ponko_bench/baselines/ecs.json`) and the render baseline
   (`baselines/render.json`, `render.csv`), both re-recorded with their

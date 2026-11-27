@@ -1,7 +1,7 @@
 ### Added
 
 - `scripts/check-feature-coverage.py` fails when a cargo feature of a workspace
-  crate has no clippy or test line in `.github/workflows/ci.yml` (or no doc
+  crate has no clippy or test line in the check list (`scripts/checks.yml`) (or no doc
   line, when docs.rs builds the crate with it), or when a browser runner in
   `web/smoke` or `web/gallery` is not run there. What may lack a line is
   listed with a reason in `scripts/feature-checks.txt`, and the check fails

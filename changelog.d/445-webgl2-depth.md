@@ -11,4 +11,4 @@
   read as arrays, and every array's mipmaps are made right, so terrain
   materials show their layers instead of white.
 - The `terrain`, `shaders` and `target_effect` examples run on WebGL2. The web
-  gallery no longer marks them as needing WebGPU, and CI runs them on WebGL2.
+  gallery no longer marks them as needing WebGPU, and the gallery check runs them on WebGL2.

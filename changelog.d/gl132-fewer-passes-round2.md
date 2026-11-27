@@ -2,7 +2,7 @@
 - A window's 3D views go to the GPU in one submission with the main camera
   instead of one each: every frame's small buffer and texture writes are
   copied into place by its own first command buffer, so each view still
-  reads its own camera, lights and culling data (issue #132). Growing an
+  reads its own camera, lights and culling data. Growing an
   instance pool or the shared mesh arena joins that submission too. The
   render benchmark prints command buffers and submissions a frame and writes
   `submits` to its JSON.

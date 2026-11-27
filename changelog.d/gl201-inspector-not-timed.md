@@ -7,4 +7,4 @@
   could be timed.
 - The runtime inspector and the editor's Performance section list each GPU
   pass's time, and show a pass that ran but couldn't be timed as "not timed"
-  instead of 0 ms (issue #201).
+  instead of 0 ms.

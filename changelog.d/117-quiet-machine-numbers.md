@@ -1,6 +1,6 @@
 ### Changed
 - Benchmark baselines and the numbers quoted in the docs were measured again
-  on an idle machine (issue #117): `crates/ponko_bench/baselines/` (the ECS
+  on an idle machine: `crates/ponko_bench/baselines/` (the ECS
   matrix, the render scenes, and the matched Ponko and Bevy runs), the ECS and
   render-scene write-ups, `README.md`, the performance chapter and the
   chapters on crowds, replication, rollback costs, saves and 3D audio. The

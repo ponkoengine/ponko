@@ -1,7 +1,7 @@
 ### Fixed
 - Compute passes (culling, skinning, global illumination, reflections) and
-  passes run alongside them read 0 ms in the GPU pass timer on Metal
-  (issue #189). Metal writes a compute pass's timestamps, and sometimes the
+  passes run alongside them read 0 ms in the GPU pass timer on Metal.
+  Metal writes a compute pass's timestamps, and sometimes the
   last pass's end, after a copy in the same command buffer has read them,
   so the timer read the previous frame's values and dropped them. A
   frame's timestamps are now copied out by a later frame, once the GPU has

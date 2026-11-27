@@ -1,2 +1,7 @@
 ### Added
-- A dependency audit with cargo-deny (`deny.toml`, `.github/workflows/deny.yml`): licenses (the set the C library's third-party notices carry), RustSec advisories, duplicate crate versions (each accepted one listed with a reason), banned crates and allowed sources. It runs on pull requests that change `Cargo.toml`, `Cargo.lock` or `deny.toml` and weekly on `main`, where a new advisory opens or updates an issue. CONTRIBUTING.md has "Dependency audit" for what to do when it fails.
+- A dependency audit with cargo-deny (`deny.toml`, `cargo deny check`, in
+  the check list and every release's checks): licenses (the set the C
+  library's third-party notices carry), RustSec advisories, duplicate crate
+  versions (each accepted one listed with a reason), banned crates and
+  allowed sources. CONTRIBUTING.md has "Dependency audit" for what to do when
+  it fails.

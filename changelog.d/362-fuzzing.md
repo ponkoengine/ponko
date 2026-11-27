@@ -2,8 +2,8 @@
 - Fuzz targets (`fuzz/`, run with `cargo fuzz`) for the loaders that read
   untrusted data: scenes and world saves, prefabs, glTF models, the Unity
   importer's text and binary readers, action maps, asset packs, and lockstep
-  and message packets. A weekly workflow runs each for a few minutes and
-  opens an issue for a crash, hang or out-of-memory input. See
+  and message packets. `fuzz/run-all.sh` runs each for the time
+  `fuzz/targets.txt` gives it. See
   `fuzz/README.md` and CONTRIBUTING.md, "Fuzzing".
 
 ### Fixed
